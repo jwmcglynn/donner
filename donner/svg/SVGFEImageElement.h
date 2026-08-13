@@ -32,6 +32,11 @@ namespace donner::svg {
  *   document, e.g. `href="#myShape"`. The referenced element is rendered to its own bounding
  *   box, and the resulting pixels are handed to the filter as if they were an image.
  *
+ * Non-`data:` external URLs are loaded through the
+ * \ref SVGDocument::Settings::resourceLoader supplied by the embedding application. Without a
+ * resource loader, Donner emits a parse warning and leaves the filter image empty. Same-document
+ * fragment references and `data:` URLs do not require an external resource loader.
+ *
  * ## How preserveAspectRatio works
  *
  * When the source image's aspect ratio doesn't match the destination rectangle (the filter
@@ -181,7 +186,7 @@ namespace donner::svg {
  *     <text x="30" y="70" fill="steelblue">Warp</text>
  *     <text x="30" y="122" font-size="12" font-weight="normal" fill="#444">original</text>
  *     <text x="150" y="70" fill="steelblue" filter="url(#xml_feImage_ex3_f)">Warp</text>
- *     <text x="150" y="122" font-size="12" font-weight="normal" fill="#444">displaced by feImage</text>
+ *     <text x="150" y="122" font-size="12" font-weight="normal" fill="#444">displacement map</text>
  *   </g>
  * </svg>
  * \endhtmlonly

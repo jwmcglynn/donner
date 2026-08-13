@@ -21,7 +21,8 @@ namespace donner::svg {
  * original text content in the SVG DOM. Text scales with the rest of the SVG scene and accepts
  * normal SVG presentation attributes - `fill`, `stroke`, `opacity`, `transform`, gradients via
  * `url(#id)`, filters, clip paths, and so on. Fonts are loaded through standard CSS `@font-face`
- * rules (TTF, OTF, WOFF, WOFF2) or fall back to a built-in typeface when no match is available.
+ * rules (TTF, OTF, WOFF, and WOFF2 when built with `--config=text-full`) or fall back to a
+ * built-in typeface when no match is available.
  *
  * Use `<text>` for labels, titles, axis tick marks, captions, and any other readable content.
  * Substrings inside a `<text>` can be re-styled or repositioned with \ref xml_tspan, and text
@@ -61,8 +62,9 @@ namespace donner::svg {
  * DOM object for a \ref xml_text element.
  *
  * Text rendering supports `<text>`, \ref xml_tspan for sub-spans, and \ref xml_textPath for text
- * along a path. Fonts are loaded from `@font-face` rules (TTF, OTF, WOFF, WOFF2) or a built-in
- * fallback. With the `text_full` build config, HarfBuzz provides complex script shaping.
+ * along a path. Fonts are loaded from `@font-face` rules (TTF, OTF, WOFF, and WOFF2 when built
+ * with `--config=text-full`) or a built-in fallback. With the `text_full` build config, HarfBuzz
+ * provides complex script shaping.
  *
  * \htmlonly
  * <svg width="300" height="120" style="background-color: white">
@@ -121,9 +123,10 @@ public:
 
   /**
    * Convert this text element to positioned glyph outlines paired with the element that painted
-   * each glyph. Unlike \ref convertToPath, this retains the per-glyph painting source (the `<text>`
-   * or `<tspan>` whose computed style colors the glyph), so callers can preserve per-span paint
-   * when the geometry is detached from the text tree. See \ref TextGlyphOutline.
+   * each glyph. Unlike \ref convertToPath, this retains the per-glyph painting source (the
+   * `<text>`, `<tspan>`, `<a>`, or `<textPath>` whose computed style colors the glyph), so callers
+   * can preserve per-span paint when the geometry is detached from the text tree. See
+   * \ref donner::svg::TextGlyphOutline.
    */
   std::vector<TextGlyphOutline> convertToOutlineGlyphs() const;
 

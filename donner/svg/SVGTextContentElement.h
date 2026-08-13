@@ -16,15 +16,14 @@ namespace donner::svg {
 /**
  * A single placed glyph outline paired with the element that painted it.
  *
- * `source` is the `<text>` or `<tspan>` whose computed style (fill, stroke,
- * opacity, paint-server reference, currentColor, ...) colors this glyph. Callers
- * that must preserve per-span paint - such as "Convert Text to Outlines" -
- * resolve paint from `source.getComputedStyle()` rather than from the text
- * root's attributes alone.
+ * `source` is the text-content element (`<text>`, `<tspan>`, `<a>`, or `<textPath>`) whose
+ * computed style (fill, stroke, opacity, paint-server reference, currentColor, ...) colors this
+ * glyph. Callers that must preserve per-span paint - such as "Convert Text to Outlines" - resolve
+ * paint from `source.getComputedStyle()` rather than from the text root's attributes alone.
  */
 struct TextGlyphOutline {
   Path path;          ///< Glyph outline in text-element local coordinates.
-  SVGElement source;  ///< Element (text/tspan) whose computed style paints this glyph.
+  SVGElement source;  ///< Text-content element whose computed style paints this glyph.
 };
 
 /**
@@ -54,7 +53,7 @@ protected:
 
   /**
    * Return glyph outlines with their painting source elements for this text
-   * subtree, in local coordinates. See \ref TextGlyphOutline.
+   * subtree, in local coordinates. See \ref donner::svg::TextGlyphOutline.
    */
   std::vector<TextGlyphOutline> computedGlyphOutlines() const;
 
@@ -160,7 +159,7 @@ public:
   long getCharNumAtPosition(const Vector2d& point) const;
 
   /**
-   * Select a substring of characters for user operations (e.g. text highlight).
+   * Selection highlighting is not currently implemented; this function is a no-op.
    * \see https://www.w3.org/TR/SVG2/text.html#__svg__SVGTextContentElement__selectSubString
    */
   void selectSubString(std::size_t charnum, std::size_t nchars);

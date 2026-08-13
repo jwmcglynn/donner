@@ -24,16 +24,20 @@ namespace donner::svg {
  * per-glyph positioning attributes `x`, `y`, `dx`, `dy`, and `rotate`. When it appears outside of
  * text it behaves like a \ref xml_g, grouping arbitrary graphics elements.
  *
- * The link target is given by `href` (or the legacy `xlink:href`). Donner has no interactive
- * navigation, so the target is parsed and retained but does not affect rendering.
+ * The link target is given by `href` (or the legacy `xlink:href`). An embedding application can
+ * call \ref DonnerController::hitTestLink to map a pointer position to the enclosing link, then
+ * decide whether and how to navigate; Donner returns the authored target and never navigates on
+ * its own. Hit testing operates at text-element granularity, so an `<a>` wrapping a whole
+ * `<text>` is detected, while an inline `<a>` nested inside `<text>` is not returned as a separate
+ * inline link.
  *
  * ## Attributes
  *
  * | Attribute      | Default | Description |
  * | -------------: | :-----: | :---------- |
  * | `href`         | (none)  | Link target retained on the DOM element. `xlink:href` is accepted as an alias. |
- * | `x`            | `0`     | Absolute X position(s) when the link participates in SVG text layout. |
- * | `y`            | `0`     | Absolute Y position(s) when the link participates in SVG text layout. |
+ * | `x`            | (none)  | Absolute X position(s) in text layout; if omitted, the surrounding text position continues. |
+ * | `y`            | (none)  | Absolute Y position(s) in text layout; if omitted, the surrounding text position continues. |
  * | `dx`           | (none)  | Relative X shift(s) for linked text glyphs. |
  * | `dy`           | (none)  | Relative Y shift(s) for linked text glyphs. |
  * | `rotate`       | (none)  | Rotation values for linked text glyphs, in degrees. |

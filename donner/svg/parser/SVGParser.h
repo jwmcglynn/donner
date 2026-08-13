@@ -54,9 +54,8 @@ public:
      * `static constexpr bool IsExperimental = true` are parsed as their concrete type; when false,
      * they are treated as unknown elements.
      *
-     * As of v0.5, all shipping features (text, filters) have had their `IsExperimental`
-     * declarations removed, so this flag currently has no effect. It is retained for future
-     * experimental features.
+     * The SVG animation elements (`animate`, `animateTransform`, and `set`) are currently
+     * experimental and require this option. Text and filters are enabled independently.
      */
     bool enableExperimental = false;
 

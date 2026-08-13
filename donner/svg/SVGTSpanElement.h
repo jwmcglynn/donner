@@ -59,8 +59,8 @@ namespace donner::svg {
  *
  * | Attribute | Default | Description                                          |
  * | --------: | :-----: | :--------------------------------------------------- |
- * | `x`       | `0`     | Absolute X position(s) for the first (or each) glyph |
- * | `y`       | `0`     | Absolute Y position(s) for the first (or each) glyph |
+ * | `x`       | (none)  | Absolute X position(s); if omitted, the surrounding text position continues |
+ * | `y`       | (none)  | Absolute Y position(s); if omitted, the surrounding text position continues |
  * | `dx`      | (none)  | Relative X shift(s) for glyphs                       |
  * | `dy`      | (none)  | Relative Y shift(s) for glyphs                       |
  * | `rotate`  | (none)  | Rotation(s) for each glyph in degrees                |

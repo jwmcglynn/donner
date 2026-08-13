@@ -53,22 +53,26 @@ From `docs/release_checklist.md` (each gate exists because a past release shippe
   the build (no `-Werror` in `.bazelrc`) and Bazel does not re-emit warnings for cached actions,
   so an incremental build hides them. Verify with a full recompile:
   `bazel clean && bazel build //donner/... 2>&1 | grep -i warning` must print nothing.
-- **Doxygen warning-free**: `doxygen Doxyfile 2>&1 | grep warning` prints nothing. Common causes:
-  unescaped `@font-face` in comments (use backticks), broken `\ref` targets, undocumented public
-  compounds. The gate was waived once, for v0.5, by explicit operator decision (0011
-  §Retrospective) — treat it as a hard gate; only the operator can waive it, per release.
-- **Tests green**: `bazel test //...` — the single validation command. The `donner_cc_test`
+- **Doxygen warning-free**: run `tools/doxygen.sh > /tmp/donner-doxygen.log 2>&1`, verify the wrapper
+  succeeds, then verify `grep -i warning /tmp/donner-doxygen.log` prints nothing. The wrapper keeps
+  local QA aligned with the deployed version stamp and Doxygen binary. Common causes: unescaped
+  `@font-face` in comments (use backticks), broken `\ref` targets, undocumented public compounds.
+  The gate was waived once, for v0.5, by explicit operator decision (0011 §Retrospective) - treat it
+  as a hard gate; only the operator can waive it, per release.
+- **Tests green**: `bazel test //...` - the single validation command. The `donner_cc_test`
   variant wrappers (`*_tiny` / `*_text_full` / `*_geode`; `build_defs/rules.bzl`) make it cover
-  the tiny / text-full / Geode lanes with no `--config=` flag. `docs/release_checklist.md` still
-  says `bazel test //donner/...` plus `--config=text-full` — that predates the variant-lane
-  consolidation; `bazel test //...` supersedes it.
+  the TinySkia / text-full / Geode lanes with no separate `--config=` invocation.
 - **Fuzzers run** with no new crashes. Precedent (v0.5, 0011 §"Phase 2: Fuzzer Run"): all 21
   fuzzers for 10 minutes each under `--config=asan-fuzzer` — see donner-fuzzing.
 - **CMake build verified** — `python3 tools/cmake/gen_cmakelists.py --check --build` plus a CMake
   build/test pass. See donner-build-test.
-- **Showcase asset loads and renders** (v0.8 onward): `//donner/editor/tests:showcase_asset_tests`
-  (defined in `donner/editor/tests/BUILD.bazel`) fails if the checked-in showcase SVG is missing
-  or invalid.
+- **Showcase demo generates and renders** (v0.8 onward):
+  `//donner/editor/tests:showcase_asset_tests` (defined in `donner/editor/tests/BUILD.bazel`)
+  generates the derived SVG from `donner_splash.svg` and fails if generation, parsing, or
+  rendering is invalid. `//donner/editor/tests:editor_sample_catalog_tests` verifies that the
+  built-in Donner Showcase entry generates the same kind of derived output at runtime.
+  `//donner/editor/tools:generate_showcase_asset_cli_tests` rejects same-path, symlink, and hard-link
+  output aliases so the generator cannot overwrite the canonical input.
 - **Experimental gates removed from shipped features**: delete
   `static constexpr bool IsExperimental = true` declarations entirely (absence is the
   non-experimental default — do not set to `false`).

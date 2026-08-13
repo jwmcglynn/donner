@@ -4,16 +4,18 @@
 
 ## Overview
 
-`//donner/editor` is Donner's in-tree SVG editor: a GLFW + Dear ImGui desktop
-application that presents one document as two synchronized views — an interactive
-canvas and an editable XML source pane. The shipped `editor` binary is built with
-the Geode GPU backend and full text support.
+`//donner/editor` is Donner's in-tree SVG editor. The native GLFW host and the
+WebAssembly browser host share one Dear ImGui application that presents a document
+as synchronized interactive canvas and XML source views. Native and Wasm release
+targets use the Geode GPU backend and the basic text tier.
 
 Two properties shape the whole design:
 
-- **Rendering runs on a background worker thread.** The UI thread never blocks on a
-  render. Document edits are queued and applied only when the worker is idle, and
-  finished renders are polled back as composited tiles.
+- **Rendering runs on a background worker thread.** Canvas, tool, and application commands queue
+  without waiting for a render and apply when the worker is idle; finished renders are polled back
+  as composited tiles. Incremental source-pane edits are the exception: they take the document's
+  exclusive write guard immediately and can briefly block the UI thread until an in-flight render
+  releases that guard.
 - **The frame loop is event-driven, not free-running.** `main()` blocks in
   `waitEvents`/`waitEventsTimeout` until input arrives, the worker signals
   completion, or a timed UI task is due; only then does it produce a frame. No
@@ -21,15 +23,199 @@ Two properties shape the whole design:
 
 Guarantees callers can rely on:
 
-- **One mutation funnel.** Every editor-initiated DOM write goes through
-  `EditorApp::applyMutation(EditorCommand)`; tools never touch `SVGElement` /
-  `SVGDocument` directly.
-- **Edits never race the renderer.** Queued commands are flushed only while the
-  async renderer reports `!isBusy()`; a render in flight defers the flush to the
-  next idle frame.
+- **Two guarded write seams.** Canvas, tool, and application commands enter through
+  `EditorApp::applyMutation(EditorCommand)` and its command queue. Incremental source-pane edits
+  enter through `AsyncSVGDocument::applySourceEdit()` so the XML source store and live SVG
+  projection change together. Tools may configure detached elements while constructing a command,
+  but never mutate an element already attached to the live document.
+- **Edits cannot race the renderer.** Queued commands are flushed only while the async renderer
+  reports `!isBusy()`. Structured source edits acquire the SVG document's concurrent-DOM write
+  guard. A render in flight therefore either defers a queued flush or makes source dispatch wait
+  until guarded access is available. That blocking source-edit handoff is a known contention point,
+  not an asynchronous queue.
 - **The interactive editor renders in-process.** The removed process-isolation
   prototype is no longer a layer the GUI editor can route through; v1.0 sandboxing
   is expected to be a replacement design.
+
+## C4 Architecture Views
+
+These views use the C4 progression from system context to containers and components. The
+boundaries are logical ownership boundaries; most containers compile into one native or Wasm
+application.
+
+### Level 1: System context
+
+An SVG author interacts with Donner Editor through either a desktop window or a browser tab. The
+editor reads and writes SVG documents through its host, delegates SVG semantics and rendering to
+the Donner engine, and presents pixels through the host graphics runtime.
+
+```mermaid
+flowchart TB
+  author["SVG author"]
+  files["SVG documents<br/>local files or browser-provided bytes"]
+  host["Native window or browser host<br/>input, lifecycle, file bridge"]
+  editor["Donner Editor<br/>visual SVG authoring system"]
+  engine["Donner SVG Engine<br/>DOM, CSS, layout, rendering, compositing"]
+  graphics["Graphics runtime<br/>OpenGL and WebGPU"]
+
+  author -->|"edits and commands"| host
+  files <-->|"open and save bytes"| host
+  host -->|"normalized input and lifecycle"| editor
+  host <-->|"document bytes and save requests"| editor
+  editor -->|"document operations and render requests"| engine
+  engine -->|"tiles and texture snapshots"| editor
+  editor -->|"present frame"| graphics
+  graphics -->|"interactive canvas and UI"| author
+
+  classDef person fill:lemonchiffon,stroke:darkorange,color:black
+  classDef system fill:lightblue,stroke:royalblue,color:black
+  classDef external fill:whitesmoke,stroke:slategray,color:black
+  class author person
+  class editor,engine system
+  class files,host,graphics external
+```
+
+The browser host serves static package bytes and passes browser capabilities into the Wasm
+bootstrap. It is not a server-side editing service, and the editor does not require a network
+service for document processing.
+
+### Level 2: Application containers
+
+```mermaid
+flowchart TB
+  subgraph hostBoundary["Host boundary"]
+    native["Native bootstrap<br/>EditorWindow and main loop"]
+    wasm["Wasm bootstrap<br/>HTML, JavaScript, Emscripten"]
+  end
+
+  subgraph editorBoundary["Donner Editor application"]
+    shell["EditorShell<br/>frame orchestration and UI ownership"]
+    model["Document and command model<br/>EditorApp, AsyncSVGDocument, CommandQueue"]
+    sync["Source synchronization<br/>TextEditor, DocumentSyncController"]
+    annotation["Annotation worker<br/>isolated parse and cascade metadata"]
+    render["Render worker<br/>AsyncRenderer, svg::Renderer, compositor"]
+    presentation["Presentation<br/>RenderCoordinator, tile and texture caches, presenters"]
+  end
+
+  native -->|"events and frame lifecycle"| shell
+  wasm -->|"events, resize, lifecycle, file bytes"| shell
+  shell --> model
+  shell --> sync
+  sync --> model
+  sync -->|"immutable source snapshot"| annotation
+  annotation -->|"revision-tagged annotations"| sync
+  model -->|"live document and version"| render
+  shell -->|"non-blocking request"| render
+  render -->|"composited preview"| presentation
+  presentation -->|"textures and overlays"| shell
+
+  classDef host fill:whitesmoke,stroke:slategray,color:black
+  classDef container fill:lightcyan,stroke:steelblue,color:black
+  class native,wasm host
+  class shell,model,sync,annotation,render,presentation container
+```
+
+The UI thread owns `EditorShell`, the command queue, and all ImGui state. The render worker owns
+renderer and compositor execution. The annotation worker parses an immutable source copy and
+cannot return live DOM handles.
+
+### Level 3: Editor components and data flow
+
+```mermaid
+flowchart TB
+  input["Input controllers and presenters<br/>canvas, layers, and inspector"]
+  sourceSync["TextEditor and DocumentSyncController<br/>source reconciliation"]
+  commandSeam["EditorApp::applyMutation<br/>canvas and application command seam"]
+  queue["CommandQueue<br/>coalesce and preserve order"]
+  sourceSeam["AsyncSVGDocument::applySourceEdit<br/>incremental source seam"]
+  document["AsyncSVGDocument<br/>live DOM, source store, versions"]
+
+  input -->|"canvas and tool commands"| commandSeam
+  sourceSync -->|"incremental source edit"| sourceSeam
+  sourceSync -.->|"fallback ReplaceDocument<br/>and writeback reparse"| commandSeam
+  commandSeam --> queue
+  queue -->|"idle-frame flush"| document
+  sourceSeam -->|"immediate update under<br/>document write guard"| document
+  sourceSync <-->|"revision-gated reconciliation"| document
+  document -->|"snapshots and selection state"| input
+
+  classDef ui fill:lemonchiffon,stroke:darkorange,color:black
+  classDef model fill:honeydew,stroke:seagreen,color:black
+  class input ui
+  class commandSeam,queue,sourceSeam,document,sourceSync model
+```
+
+```mermaid
+flowchart TB
+  panes["Render pane<br/>viewport and dirty state"]
+  coordinator["RenderCoordinator<br/>scheduling and presentation state"]
+  worker["AsyncRenderer<br/>worker state machine"]
+  renderer["svg::Renderer and<br/>CompositorController"]
+  preview["CompositedPreview<br/>paint-ordered tiles"]
+  presenter["GlTextureCache and RenderPanePresenter<br/>upload changed tiles and draw overlays"]
+  document["AsyncSVGDocument<br/>guarded live registry"]
+
+  panes --> coordinator
+  coordinator -->|"request when dirty and idle"| worker
+  document -->|"read under access guard"| renderer
+  worker --> renderer --> preview
+  preview --> coordinator
+  coordinator --> presenter --> panes
+
+  classDef ui fill:lemonchiffon,stroke:darkorange,color:black
+  classDef model fill:honeydew,stroke:seagreen,color:black
+  classDef async fill:lavender,stroke:indigo,color:black
+  class panes,presenter ui
+  class document model
+  class coordinator,worker,renderer,preview async
+```
+
+The component boundaries enforce two invariants: attached-DOM writes use one of the two guarded
+seams above, and a command-queue mutation is not flushed while a render result is in flight or
+waiting to be polled.
+
+### Dynamic view: one edit-to-pixel cycle
+
+```mermaid
+sequenceDiagram
+  participant User
+  participant Host as Host event loop
+  participant Shell as EditorShell
+  participant Model as EditorApp and document
+  participant Worker as AsyncRenderer
+  participant Output as Renderer, compositor, and presenter
+
+  User->>Host: pointer, keyboard, or source edit
+  Host->>Shell: wake and runFrame
+  alt canvas/tool command or source fallback
+    Shell->>Model: applyMutation(command)
+    Model-->>Shell: command queued, document dirty
+  else incremental source edit
+    Shell->>Model: applySourceEdit(intent), acquire write guard
+    Model-->>Shell: guarded source and DOM update, version advanced
+  end
+  alt renderer is idle
+    opt a command is queued
+      Shell->>Model: flushFrame
+      Model-->>Shell: updated document version
+    end
+    Shell->>Worker: requestRender(version, viewport)
+    Worker->>Output: render guarded live document
+    Output-->>Worker: composited tile preview
+    Worker-->>Host: wake callback after completion
+    Host->>Shell: wake and runFrame
+    Shell->>Worker: pollResult
+    Worker-->>Shell: latest completed preview
+    Shell->>Output: upload changed tiles and present
+    Output-->>User: updated canvas
+  else renderer is busy
+    Shell-->>Host: retain queued command or dirty version until the next idle frame
+  end
+```
+
+Completion signals wake the event-driven host loop, so a result can be presented without a
+free-running redraw loop. Cancellation replaces stale in-flight requests at compositor safe
+points.
 
 ## Architecture Snapshot
 
@@ -65,19 +251,28 @@ cache separate from Layers previews prevents the live-row retention sweep from e
 Generation advances by at most one catalog entry per UI frame and explicitly wakes the event loop
 until the bounded cache is complete.
 
-### The mutation seam
+### The document write seams
 
-All edits converge on **`EditorApp::applyMutation(EditorCommand)`**, which pushes
-onto the document's command queue and marks the document dirty — nothing is applied
-immediately.
+Attached live-DOM writes enter through two explicit, guarded paths:
 
-- **`AsyncSVGDocument`** (`donner/editor/AsyncSVGDocument.h`) wraps
-  `svg::SVGDocument` and gates writes through a single-threaded per-frame
-  `CommandQueue`. `flushFrame()` drains and applies the queue once per frame and
-  bumps a `frameVersion` counter; full document replacements bump a separate
-  `documentGeneration`. Both are atomics the render worker can poll.
-  `applySourceEdit()` routes incremental XML-source edits through
-  `donner/base/xml` for structured editing.
+- **Canvas, tool, and application commands** call `EditorApp::applyMutation(EditorCommand)`. The
+  method pushes onto the document's command queue and marks the document dirty; nothing is applied
+  immediately. Tools can build and configure detached elements as command payloads, but do not call
+  mutation methods on attached live elements.
+- **Incremental source-pane edits** flow from `DocumentSyncController` through the source-sync
+  helpers to `AsyncSVGDocument::applySourceEdit()`. That path updates XML source bytes and the SVG
+  semantic projection together under `SVGDocument`'s concurrent-DOM write guard, then advances the
+  frame version. Because source dispatch is immediate rather than queued, it can block the UI thread
+  while an in-flight render holds the document guard. If an edit cannot be handled incrementally,
+  source sync falls back to a queued `ReplaceDocument` command through
+  `EditorApp::applyMutation()`.
+
+- **`AsyncSVGDocument`** (`donner/editor/AsyncSVGDocument.h`) wraps `svg::SVGDocument`, queues
+  command-based writes in a UI-thread-only per-frame `CommandQueue`, and exposes the guarded
+  incremental-source seam. `flushFrame()` drains and applies the queue once per frame and bumps a
+  `frameVersion` counter; full document replacements bump a separate `documentGeneration`. Both are
+  atomics the render worker can poll. `applySourceEdit()` routes incremental XML-source edits
+  through `donner/base/xml` for structured editing.
 - **`CommandQueue`** (`donner/editor/CommandQueue.h`) is UI-thread-only and
   coalesces on flush: `ReplaceDocument` is exclusive and drops earlier commands;
   repeated `SetTransform` on the same entity collapse to the latest (a 60 fps drag
@@ -108,6 +303,10 @@ immediately.
   releases it before touching its own mutex to avoid lock-order inversion.
   UI-thread DOM reads take their own read-access guard. This is the editor-side
   application of the DOM lifetime ownership model (see \ref Multithreading).
+- **Source-edit contention.** The source-pane structured-edit path requests a blocking
+  `DocumentWriteAccess` from the UI thread even when the renderer is busy. This is race-safe, but a
+  long render can delay source typing until the worker releases its guard. Moving this path onto an
+  idle-frame queue is a future responsiveness improvement, not a current invariant.
 - **`RenderCoordinator`** (`donner/editor/RenderCoordinator.h`) owns the
   renderer-side orchestration: the `RenderWorkerBundle` (renderer + `AsyncRenderer`,
   destroyed in reverse order so the worker joins before the renderer it references),
@@ -148,12 +347,13 @@ describes the editor's consumption of it.
   idle; `LayerInspectorPanel` is the separate compositor diagnostics view; the
   **menu bar** (`MenuBarPresenter`) returns a semantic `MenuBarActions` struct the
   shell acts on; **dialogs** (Open/Save/About/Licenses) are `DialogPresenter`.
-- **Tools** implement the `Tool` interface (`onMouseDown`/`onMouseMove`/`onMouseUp`
-  in document-space coordinates) and only ever call `EditorApp::applyMutation` —
-  never the DOM directly. `SelectTool` handles select / marquee / move / resize /
-  rotate (emitting `SetTransform` commands); `PenTool` is a prototype path-authoring
-  tool. Input is dispatched inside the render pane, mapping ImGui mouse state
-  through `ViewportInteractionController::screenToDocument` to the active tool.
+- **Tools** implement the `Tool` interface (`onMouseDown`/`onMouseMove`/`onMouseUp` in
+  document-space coordinates). They submit attached-document changes through
+  `EditorApp::applyMutation`; a tool may configure a detached element before placing it in an
+  `InsertElement` command, but never mutates an attached live element directly. `SelectTool`
+  handles select / marquee / move / resize / rotate (emitting `SetTransform` commands); `PenTool`
+  is a prototype path-authoring tool. Input is dispatched inside the render pane, mapping ImGui
+  mouse state through `ViewportInteractionController::screenToDocument` to the active tool.
 - **Source ↔ canvas sync** is handled by `DocumentSyncController` and documented in
   \ref StructuredSourceEditing.
 - **Source style annotations** are computed from an immutable source copy on a
@@ -188,12 +388,26 @@ one captured touch pointer into the ordinary ImGui mouse stream for taps and dir
 drags. Browser code remains responsible for resize, virtual-keyboard, lifecycle, and
 future multi-touch gesture integration.
 
+## Code-level landmarks
+
+| Responsibility           | Primary code                                                              | Focused verification                                                                              |
+| :----------------------- | :------------------------------------------------------------------------ | :------------------------------------------------------------------------------------------------ |
+| Host and frame lifecycle | `donner/editor/main.cc`, `gui/EditorWindow.h`, `wasm/editor-bootstrap.js` | `EditorShellLayout_tests.cc`, browser smoke and lifecycle tests                                   |
+| UI orchestration         | `EditorShell.h`, `EditorShell.cc`                                         | `EditorDockLayout_tests.cc`, presenter and frame-budget tests                                     |
+| Document write seams     | `EditorApp.h`, `CommandQueue.h`, `AsyncSVGDocument.h`, `SourceSync.h`     | `EditorApp_tests.cc`, `CommandQueue_tests.cc`, `AsyncSVGDocument_tests.cc`, `EditorSync_tests.cc` |
+| Source synchronization   | `DocumentSyncController.h`, `TextEditorCore.h`                            | `DocumentSyncController_tests.cc`, `EditorSync_tests.cc`                                          |
+| Background annotations   | `StyleSourceAnnotations.h`                                                | `StyleSourceAnnotations_tests.cc`                                                                 |
+| Render scheduling        | `RenderCoordinator.h`, `AsyncRenderer.h`                                  | `RenderCoordinator_tests.cc`, `AsyncRenderer_tests.cc`                                            |
+| Composited presentation  | `CompositedPresentation.h`, `GlTextureCache.h`, `RenderPanePresenter.h`   | `CompositedPresentation_tests.cc`, `GlTextureCache_tests.cc`, browser compositing tests           |
+| Interaction tools        | `Tool.h`, `SelectTool.h`, `PenTool.h`                                     | tool, gesture, click, and drag-coalescing tests                                                   |
+
 ## API Surface
 
 The editor is an application, not a reusable library API, but the load-bearing
 entry points are:
 
-- `EditorApp::applyMutation(EditorCommand)` — the single DOM-write funnel.
+- `EditorApp::applyMutation(EditorCommand)` - queued canvas, tool, and application commands.
+- `AsyncSVGDocument::applySourceEdit(XMLEditIntent)` - guarded incremental source-pane edits.
 - `EditorApp::loadFromString(std::string_view)` / `AsyncSVGDocument::flushFrame()`
   / `currentFrameVersion()` — document lifecycle used by the frame loop.
 - `EditorShell::runFrame()` / `nextIdleWakeSeconds()` — the per-frame tick.

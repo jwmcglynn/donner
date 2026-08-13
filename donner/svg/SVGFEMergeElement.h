@@ -45,7 +45,7 @@ namespace donner::svg {
  * offset it down and to the right, then merge that shadow *underneath* the original graphic.
  *
  * \htmlonly
- * <svg xmlns="http://www.w3.org/2000/svg" width="300" height="140"
+ * <svg xmlns="http://www.w3.org/2000/svg" width="360" height="140"
  *      style="background-color: white" font-family="sans-serif" font-size="12">
  *   <defs>
  *     <filter id="xml_feMerge_dropShadow" x="-30%" y="-30%" width="160%" height="160%">
@@ -92,7 +92,7 @@ namespace donner::svg {
  * a two-tone glow effect.
  *
  * \htmlonly
- * <svg xmlns="http://www.w3.org/2000/svg" width="300" height="140"
+ * <svg xmlns="http://www.w3.org/2000/svg" width="360" height="140"
  *      style="background-color: white" font-family="sans-serif" font-size="12">
  *   <defs>
  *     <filter id="xml_feMerge_halo" x="-50%" y="-50%" width="200%" height="200%">

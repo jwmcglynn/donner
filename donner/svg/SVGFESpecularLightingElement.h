@@ -44,6 +44,7 @@ namespace donner::svg {
  *       </feSpecularLighting>
  *     </filter>
  *   </defs>
+ *   <rect x="10" y="10" width="120" height="120" rx="12" fill="#1f2937"/>
  *   <circle cx="70" cy="70" r="50" fill="black" filter="url(#xml_feSpecularLighting_ex1)"/>
  * </svg>
  * \endhtmlonly
@@ -58,8 +59,8 @@ namespace donner::svg {
  * </filter>
  * ```
  *
- * Everything outside the small bright hotspot is black - that's the empty (RGBA=0) background
- * `feSpecularLighting` emits. In real use you'd composite this over something.
+ * Everything outside the small bright hotspot is transparent black (RGBA=0). In real use you
+ * composite the `feSpecularLighting` output over something.
  *
  * \par Example 2: same bump, point light
  *
@@ -78,6 +79,7 @@ namespace donner::svg {
  *       </feSpecularLighting>
  *     </filter>
  *   </defs>
+ *   <rect x="10" y="10" width="120" height="120" rx="12" fill="#1f2937"/>
  *   <circle cx="70" cy="70" r="50" fill="black" filter="url(#xml_feSpecularLighting_ex2)"/>
  * </svg>
  * \endhtmlonly
@@ -125,14 +127,17 @@ namespace donner::svg {
  *     </filter>
  *   </defs>
  *   <g>
+ *     <rect x="20" y="20" width="80" height="80" rx="12" fill="#1f2937"/>
  *     <circle cx="60" cy="60" r="40" fill="black" filter="url(#xml_feSpecularLighting_exp1)"/>
  *     <text x="60" y="120" text-anchor="middle">specularExponent=1</text>
  *   </g>
  *   <g transform="translate(140,0)">
+ *     <rect x="20" y="20" width="80" height="80" rx="12" fill="#1f2937"/>
  *     <circle cx="60" cy="60" r="40" fill="black" filter="url(#xml_feSpecularLighting_exp20)"/>
  *     <text x="60" y="120" text-anchor="middle">20</text>
  *   </g>
  *   <g transform="translate(280,0)">
+ *     <rect x="20" y="20" width="80" height="80" rx="12" fill="#1f2937"/>
  *     <circle cx="60" cy="60" r="40" fill="black" filter="url(#xml_feSpecularLighting_exp80)"/>
  *     <text x="60" y="120" text-anchor="middle">80</text>
  *   </g>
@@ -171,14 +176,17 @@ namespace donner::svg {
  *     </filter>
  *   </defs>
  *   <g>
+ *     <rect x="20" y="20" width="80" height="80" rx="12" fill="#1f2937"/>
  *     <circle cx="60" cy="60" r="40" fill="black" filter="url(#xml_feSpecularLighting_ks03)"/>
  *     <text x="60" y="120" text-anchor="middle">specularConstant=0.3</text>
  *   </g>
  *   <g transform="translate(140,0)">
+ *     <rect x="20" y="20" width="80" height="80" rx="12" fill="#1f2937"/>
  *     <circle cx="60" cy="60" r="40" fill="black" filter="url(#xml_feSpecularLighting_ks10)"/>
  *     <text x="60" y="120" text-anchor="middle">1.0</text>
  *   </g>
  *   <g transform="translate(280,0)">
+ *     <rect x="20" y="20" width="80" height="80" rx="12" fill="#1f2937"/>
  *     <circle cx="60" cy="60" r="40" fill="black" filter="url(#xml_feSpecularLighting_ks20)"/>
  *     <text x="60" y="120" text-anchor="middle">2.0</text>
  *   </g>

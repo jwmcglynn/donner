@@ -7,7 +7,7 @@
 namespace donner::svg {
 
 /**
- * @page xml_title "<title>"
+ * @page xml_title &lt;title&gt;
  *
  * Provides a human-readable, accessible name for its parent element or for the document as a
  * whole. The `<title>` element and its contents are never rendered as part of the graphic.

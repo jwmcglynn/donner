@@ -87,7 +87,7 @@ namespace donner::svg {
  *   <rect x="220" y="25" width="60"  height="60"  fill="url(#xml_pattern_units_uso)" stroke="#555" />
  *   <rect x="290" y="25" width="120" height="60"  fill="url(#xml_pattern_units_uso)" stroke="#555" />
  *   <text x="315" y="105" text-anchor="middle">20px tiles; bigger shape = more tiles</text>
- *   <text x="200" y="140" text-anchor="middle" fill="#555">(same pattern definition, different patternUnits)</text>
+ *   <text x="200" y="140" text-anchor="middle" fill="#555">(same geometry, different units)</text>
  * </svg>
  * \endhtmlonly
  *

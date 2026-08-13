@@ -1,4 +1,21 @@
 /**
+@page DonnerDesignDocs Design Documents
+
+\details Historical decisions, active designs, and implementation plans, grouped by subsystem.
+
+The [complete design-document index](docs/design_docs/README.md) records every document's status
+and summary.
+
+- \subpage DesignDocsCoreArchitecture
+- \subpage DesignDocsRendering
+- \subpage DesignDocsText
+- \subpage DesignDocsEditor
+- \subpage DesignDocsTesting
+- \subpage DesignDocsReleases
+- \subpage DesignDocsTooling
+*/
+
+/**
 @page DesignDocsCoreArchitecture Core Architecture and DOM
 
 \details Core runtime architecture, DOM behavior, parsing, resource loading, and scripting designs.
@@ -8,6 +25,7 @@
 - \subpage md_docs_2design__docs_20019-css__token__stream
 - \subpage md_docs_2design__docs_20027-2-scripting
 - \subpage md_docs_2design__docs_20033-multithreading__and__dom__lifetime
+- \subpage md_docs_2design__docs_2animation
 */
 
 /**
@@ -18,6 +36,7 @@ investigations.
 
 - \subpage md_docs_2design__docs_20003-renderer__interface__design
 - \subpage md_docs_2design__docs_20014-filter__performance
+- \subpage md_docs_2design__docs_20015-skia__filter__conformance
 - \subpage md_docs_2design__docs_20017-geode__renderer
 - \subpage md_docs_2design__docs_20025-composited__rendering
 - \subpage md_docs_2design__docs_20027-tight__bounded__segments
@@ -69,6 +88,8 @@ investigations.
 - \subpage md_docs_2design__docs_20049-structured__text__editing
 - \subpage md_docs_2design__docs_20050-text__editor__behavior
 - \subpage md_docs_2design__docs_20051-text__editor__refactor
+- \subpage md_docs_2design__docs_20054-editor__design__language
+- \subpage md_docs_2design__docs_20056-geode__only__web__editor__runtime
 */
 
 /**
@@ -103,6 +124,7 @@ planning.
 - \subpage md_docs_2design__docs_20024-proposed__issues__2026q2
 - \subpage md_docs_2design__docs_20028-v1__0__release
 - \subpage md_docs_2design__docs_20047-v0__8__showcase
+- \subpage md_docs_2design__docs_20058-svg__static__subset__roadmap
 */
 
 /**
@@ -114,5 +136,5 @@ planning.
 - \subpage md_docs_2design__docs_20032-sandbox__branch__split
 - \subpage md_docs_2design__docs_20036-composited__presentation__retrospective
 - \subpage md_docs_2design__docs_20048-design__doc__hygiene
-- \subpage md_docs_2design__docs_2retrospective__template
+- \subpage md_docs_2design__docs_20055-binary__size
 */

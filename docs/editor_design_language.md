@@ -178,7 +178,8 @@ or moved to an isolated worker:
   deduplicated element locators in one document traversal.
 
 Source reveal and annotation application should each remain within a 16.7 ms UI-frame budget on the
-checked-in showcase document. Steady source-pane rendering should remain below that budget as well.
+canonical `donner_splash.svg` workload. Steady source-pane rendering should remain below that budget
+as well.
 
 ## Source Palette
 

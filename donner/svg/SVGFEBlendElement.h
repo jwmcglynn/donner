@@ -32,7 +32,7 @@ namespace donner::svg {
  *       snippet further down is what Donner executes.
  *
  * \htmlonly
- * <svg xmlns="http://www.w3.org/2000/svg" width="340" height="360"
+ * <svg xmlns="http://www.w3.org/2000/svg" width="340" height="380"
  *      style="background-color: white" font-family="sans-serif" font-size="9">
  *   <defs>
  *     <style>
@@ -79,51 +79,51 @@ namespace donner::svg {
  *   </g>
  *   <g transform="translate(10,100)">
  *     <g class="xml_feBlend_darken"><use href="#xml_feBlend_cell" /></g>
- *     <text x="40" y="184" text-anchor="middle">darken</text>
+ *     <text x="40" y="94" text-anchor="middle">darken</text>
  *   </g>
  *   <g transform="translate(90,100)">
  *     <g class="xml_feBlend_lighten"><use href="#xml_feBlend_cell" /></g>
- *     <text x="40" y="184" text-anchor="middle">lighten</text>
+ *     <text x="40" y="94" text-anchor="middle">lighten</text>
  *   </g>
  *   <g transform="translate(170,100)">
  *     <g class="xml_feBlend_colordodge"><use href="#xml_feBlend_cell" /></g>
- *     <text x="40" y="184" text-anchor="middle">color-dodge</text>
+ *     <text x="40" y="94" text-anchor="middle">color-dodge</text>
  *   </g>
  *   <g transform="translate(250,100)">
  *     <g class="xml_feBlend_colorburn"><use href="#xml_feBlend_cell" /></g>
- *     <text x="40" y="184" text-anchor="middle">color-burn</text>
+ *     <text x="40" y="94" text-anchor="middle">color-burn</text>
  *   </g>
  *   <g transform="translate(10,190)">
  *     <g class="xml_feBlend_hardlight"><use href="#xml_feBlend_cell" /></g>
- *     <text x="40" y="274" text-anchor="middle">hard-light</text>
+ *     <text x="40" y="94" text-anchor="middle">hard-light</text>
  *   </g>
  *   <g transform="translate(90,190)">
  *     <g class="xml_feBlend_softlight"><use href="#xml_feBlend_cell" /></g>
- *     <text x="40" y="274" text-anchor="middle">soft-light</text>
+ *     <text x="40" y="94" text-anchor="middle">soft-light</text>
  *   </g>
  *   <g transform="translate(170,190)">
  *     <g class="xml_feBlend_difference"><use href="#xml_feBlend_cell" /></g>
- *     <text x="40" y="274" text-anchor="middle">difference</text>
+ *     <text x="40" y="94" text-anchor="middle">difference</text>
  *   </g>
  *   <g transform="translate(250,190)">
  *     <g class="xml_feBlend_exclusion"><use href="#xml_feBlend_cell" /></g>
- *     <text x="40" y="274" text-anchor="middle">exclusion</text>
+ *     <text x="40" y="94" text-anchor="middle">exclusion</text>
  *   </g>
  *   <g transform="translate(10,280)">
  *     <g class="xml_feBlend_hue"><use href="#xml_feBlend_cell" /></g>
- *     <text x="40" y="364" text-anchor="middle">hue</text>
+ *     <text x="40" y="94" text-anchor="middle">hue</text>
  *   </g>
  *   <g transform="translate(90,280)">
  *     <g class="xml_feBlend_saturation"><use href="#xml_feBlend_cell" /></g>
- *     <text x="40" y="364" text-anchor="middle">saturation</text>
+ *     <text x="40" y="94" text-anchor="middle">saturation</text>
  *   </g>
  *   <g transform="translate(170,280)">
  *     <g class="xml_feBlend_color"><use href="#xml_feBlend_cell" /></g>
- *     <text x="40" y="364" text-anchor="middle">color</text>
+ *     <text x="40" y="94" text-anchor="middle">color</text>
  *   </g>
  *   <g transform="translate(250,280)">
  *     <g class="xml_feBlend_luminosity"><use href="#xml_feBlend_cell" /></g>
- *     <text x="40" y="364" text-anchor="middle">luminosity</text>
+ *     <text x="40" y="94" text-anchor="middle">luminosity</text>
  *   </g>
  * </svg>
  * \endhtmlonly
@@ -160,7 +160,7 @@ namespace donner::svg {
  * | Attribute | Default    | Description |
  * | --------: | :--------: | :---------- |
  * | `in`      | *previous* | First (top) input, named filter result or one of `SourceGraphic`, `SourceAlpha`, `FillPaint`, `StrokePaint`. |
- * | `in2`     | *(none)*   | Second (bottom) input. Required. |
+ * | `in2`     | *previous* | Second (bottom) input; defaults to the previous primitive result. |
  * | `mode`    | `normal`   | One of `normal`, `multiply`, `screen`, `overlay`, `darken`, `lighten`, `color-dodge`, `color-burn`, `hard-light`, `soft-light`, `difference`, `exclusion`, `hue`, `saturation`, `color`, `luminosity`. |
  *
  * Inherits standard filter primitive attributes from \ref SVGFilterPrimitiveStandardAttributes

@@ -830,7 +830,7 @@ test("WGPU diagnostics do not block the first carousel interaction", async ({ pa
 
 for (
   const sample of [
-    { id: "donner-splash", name: "Donner Splash", xFraction: 0.24, y: 282 },
+    { id: "donner-splash", name: "Donner Showcase", xFraction: 0.24, y: 282 },
     { id: "basic-shapes", name: "Basic Shapes", xFraction: 0.5, y: 282 },
     { id: "text-style", name: "Text and Style", xFraction: 0.76, y: 282 },
     { id: "gradients-clip", name: "Gradients and Clip", xFraction: 0.24, y: 390 },
@@ -903,9 +903,9 @@ for (
       }).toBe(true);
     } finally {
       console.log(
-        `carousel-presentation sample=${sample.id} timings=${
-          JSON.stringify(phaseTimings)
-        } worker=${JSON.stringify(completedWorkerStats)}`,
+        `carousel-presentation sample=${sample.id} timings=${JSON.stringify(phaseTimings)} worker=${
+          JSON.stringify(completedWorkerStats)
+        }`,
       );
     }
     expect(phaseTimings.presentedMs).toBeLessThan(carouselDeadlineMs);
@@ -1213,8 +1213,7 @@ test("Firefox keeps Basic Shapes resize pixels and outline synchronized", async 
       const verticalGap = Math.abs(teal.maxY - blue.maxY);
       return reachedFinalPointer && horizontalGap <= 8 && verticalGap <= 8;
     }, {
-      message:
-        "expected the final resized pixels and selection outline from one document render",
+      message: "expected the final resized pixels and selection outline from one document render",
       // The pointer is resting at its final position while this polls, so the
       // window only bounds how long presentation plus the Gecko readback
       // cadence may take to converge; the pixel claim itself is unchanged.

@@ -1,0 +1,10 @@
+/**
+@page elements_animation Animation Elements
+
+\details Experimental SVG animation elements. Parsing these concrete element types requires
+`SVGParser::Options::enableExperimental`; otherwise they are represented as unknown elements.
+
+- \subpage xml_animate
+- \subpage xml_animateTransform
+- \subpage xml_set
+*/

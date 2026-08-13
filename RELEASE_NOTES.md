@@ -2,11 +2,12 @@
 
 ## v0.8 — Donner SVG Editor & Engine
 
-*Date: 2026-07-06*
+_Date: <unreleased>_
 
-v0.8 rebrands Donner as **Donner SVG Editor & Engine**: an editor application plus a reusable SVG
-rendering, geometry, and DOM engine. It releases the accumulated editor, Geode, and path work
-and ships a showcase asset authored in the editor itself.
+v0.8 positions Donner as **Donner SVG Editor & Engine**: an editor application plus a reusable SVG
+rendering, geometry, and DOM engine. The planned release brings together the accumulated editor,
+Geode, and path work and provides an on-demand showcase demo generated through the editor's own
+authoring paths.
 
 ### Highlights
 
@@ -40,11 +41,12 @@ and ships a showcase asset authored in the editor itself.
   that updates the live DOM tree in place, preserving entity identity, selection, and references
   across the keystroke. A structural-fingerprint guard prevents the whole-document diff fallback from
   desyncing the DOM and source on similar-sibling edits.
-- **v0.8 showcase asset** — the new Donner splash, authored and exported in Donner Editor and checked
-  in as SVG.
+- **v0.8 showcase demo** — the built-in sample catalog generates an outlined, overlay-enabled
+  showcase from the canonical `donner_splash.svg` at runtime; derived splash variants are not
+  checked in.
 
-See the [Project Roadmap](ProjectRoadmap.md) and
-[v0.8 Showcase design doc](design_docs/0047-v0_8_showcase.md) for details.
+See the [Project Roadmap](docs/ProjectRoadmap.md) and
+[v0.8 Showcase design doc](docs/design_docs/0047-v0_8_showcase.md) for details.
 
 ### Fixes and Internals
 
@@ -61,15 +63,15 @@ See the [Project Roadmap](ProjectRoadmap.md) and
 - Full-Skia renderer backend removed. `tiny-skia` remains the default backend and Geode remains
   available.
 
-**Full Changelog**: https://github.com/jwmcglynn/donner/compare/v0.5.0...v0.8.0
+**Full Changelog:** generated when the `v0.8.0` tag is cut.
 
-### What's Included
+### Planned Release Contents
 
-- The Donner SVG Editor, shipping as both a native desktop application and a WebAssembly edition.
+- The Donner SVG Editor as both a native desktop application and a WebAssembly edition.
 - `donner-svg`, a CLI tool for rendering and previewing SVG files.
 - An embeddable C++ API for parsing, inspecting, modifying, and rendering SVGs.
-- Prebuilt `donner-svg_linux_x86_64` and `donner-svg_darwin_arm64` binaries, attached to the
-  release by release automation.
+- Prebuilt `donner-svg_linux_x86_64` and `donner-svg_darwin_arm64` binaries, to be attached by
+  release automation.
 
 ## v0.5.0
 

@@ -10,8 +10,8 @@ namespace donner::svg {
  * @page xml_mask &lt;mask&gt;
  *
  * Defines a mask, which is used to apply image-based visibility to graphical elements. Compared to
- * \ref xml_clipPath, which requires the contents to be paths, "<mask>" masking is performed based
- * on the white and black values of the mask contents.
+ * \ref xml_clipPath, which clips against geometry from paths and shapes, `<mask>` visibility is
+ * computed from the luminance of rendered mask content.
  *
  * - DOM object: SVGMaskElement
  * - SVG2 spec: https://drafts.fxtf.org/css-masking-1/#MaskElement
@@ -22,6 +22,9 @@ namespace donner::svg {
  * masked element. White pixels in the mask leave the target fully visible, black pixels hide
  * it completely, and gray pixels produce partial transparency, so you can author smooth fades
  * and soft edges that \ref xml_clipPath cannot express.
+ *
+ * @note Donner currently implements luminance masks. The CSS `mask-type: alpha` mode is not yet
+ * supported.
  *
  * Declare a `<mask>` inside \ref xml_defs with an `id`, then apply it to any shape via the
  * `mask="url(#id)"` attribute or CSS property. Reach for `<mask>` when you need soft edges,
@@ -138,64 +141,56 @@ public:
   void setMaskContentUnits(MaskContentUnits value);
 
   /**
-   * Get the top-left X coordinate of the mask region. If this is not specified and at least one of
-   * the attributes `y`, `width`, or `height` is specified the effect is as if the initial value is
-   * '-10%'. If no attributes are specified, the effect will fill the canvas.
+   * Get the top-left X coordinate of the mask region. If omitted, rendering uses the initial value
+   * `-10%`; this accessor returns `std::nullopt`.
    */
   std::optional<Lengthd> x() const;
 
   /**
-   * Get the top-left Y coordinate of the mask region. If this is not specified and at least one of
-   * the attributes `x`, `width`, or `height` is specified the effect is as if the initial value is
-   * '-10%'. If no attributes are specified, the effect will fill the canvas.
+   * Get the top-left Y coordinate of the mask region. If omitted, rendering uses the initial value
+   * `-10%`; this accessor returns `std::nullopt`.
    */
   std::optional<Lengthd> y() const;
 
   /**
-   * Get the width of the mask region. If this is not specified and at least one of the attributes
-   * `x`, `y`, or `height` is specified the effect is as if the initial value is '120%'. If no
-   * attributes are specified, the effect will fill the canvas.
+   * Get the width of the mask region. If omitted, rendering uses the initial value `120%`; this
+   * accessor returns `std::nullopt`.
    */
   std::optional<Lengthd> width() const;
 
   /**
-   * Get the height of the mask region. If this is not specified and at least one of the attributes
-   * `x`, `y`, or `width` is specified the effect is as if the initial value is '120%'. If no
-   * attributes are specified, the effect will fill the canvas.
+   * Get the height of the mask region. If omitted, rendering uses the initial value `120%`; this
+   * accessor returns `std::nullopt`.
    */
   std::optional<Lengthd> height() const;
 
   /**
-   * Set the top-left X coordinate of the mask region. If this is not specified and at least one of
-   * the attributes `y`, `width`, or `height` is specified the effect is as if the initial value is
-   * '-10%'. If no attributes are specified, the effect will fill the canvas.
+   * Set the top-left X coordinate of the mask region. Passing `std::nullopt` removes the attribute,
+   * so rendering uses the initial value `-10%`.
    *
    * @param value Coordinate value.
    */
   void setX(std::optional<Lengthd> value);
 
   /**
-   * Set the top-left Y coordinate of the mask region. If this is not specified and at least one of
-   * the attributes `x`, `width`, or `height` is specified the effect is as if the initial value is
-   * '-10%'. If no attributes are specified, the effect will fill the canvas.
+   * Set the top-left Y coordinate of the mask region. Passing `std::nullopt` removes the attribute,
+   * so rendering uses the initial value `-10%`.
    *
    * @param value Coordinate value.
    */
   void setY(std::optional<Lengthd> value);
 
   /**
-   * Set the width of the mask region. If this is not specified and at least one of the attributes
-   * `x`, `y`, or `height` is specified the effect is as if the initial value is '120%'. If no
-   * attributes are specified, the effect will fill the canvas.
+   * Set the width of the mask region. Passing `std::nullopt` removes the attribute, so rendering
+   * uses the initial value `120%`.
    *
    * @param value Dimension value.
    */
   void setWidth(std::optional<Lengthd> value);
 
   /**
-   * Set the height of the mask region. If this is not specified and at least one of the attributes
-   * `x`, `y`, or `width` is specified the effect is as if the initial value is '120%'. If no
-   * attributes are specified, the effect will fill the canvas.
+   * Set the height of the mask region. Passing `std::nullopt` removes the attribute, so rendering
+   * uses the initial value `120%`.
    *
    * @param value Dimension value.
    */

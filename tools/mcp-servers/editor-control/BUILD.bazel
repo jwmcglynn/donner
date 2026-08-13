@@ -99,7 +99,7 @@ py_test(
     srcs = ["editor_control_gl_readback_tests.py"],
     data = [
         ":editor_control_mcp_server",
-        "//:donner_splash_v0_8.svg",
+        "//:donner_splash.svg",
         "//:zoom-out-drag-jump.rnr",
     ],
     # This test intentionally exercises the raw bazel-bin MCP launch path, which

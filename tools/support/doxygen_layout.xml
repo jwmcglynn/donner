@@ -1,0 +1,532 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Keep the documentation hierarchy explicit here. Doxygen 1.15 omits the
+  Related Pages branch when every page is reachable from the main page, so
+  page/subpage relationships alone do not make the manual browsable from the
+  tree view. User groups preserve that hierarchy in the left sidebar.
+
+  The page-body layouts below are Doxygen 1.15 defaults; only the navigation
+  index is customized.
+-->
+<doxygenlayout version="2.0">
+  <navindex>
+    <tab type="mainpage" visible="yes" title="Introduction"/>
+
+    <tab type="usergroup" title="Documentation" url="Documentation.html">
+      <tab type="usergroup" title="User Guides" url="UserGuides.html">
+        <tab type="user" title="Getting Started" url="GettingStarted.html"/>
+        <tab type="user" title="Frequently Asked Questions" url="faq.html"/>
+        <tab type="user" title="SVG DOM Threading and Lifetime"
+             url="SvgDomThreadingAndLifetime.html"/>
+        <tab type="user" title="Unsupported SVG 1.1 Features"
+             url="UnsupportedSvg1Features.html"/>
+      </tab>
+
+      <tab type="usergroup" title="API Reference" url="ApiReference.html">
+        <tab type="user" title="API Overview" url="DonnerAPI.html"/>
+        <tab type="user" title="CSS" url="CssArchitecture.html"/>
+        <tab type="usergroup" title="SVG Element Reference" url="SvgElementReference.html">
+          <tab type="user" title="Structural" url="elements_structural.html"/>
+          <tab type="user" title="Basic Shapes" url="elements_basic_shapes.html"/>
+          <tab type="user" title="Text" url="elements_text.html"/>
+          <tab type="user" title="Painting" url="elements_painting.html"/>
+          <tab type="user" title="Masking and Clipping"
+               url="elements_masking_clipping.html"/>
+          <tab type="user" title="Filters" url="elements_filters.html"/>
+          <tab type="user" title="Media and Styling" url="elements_media_and_style.html"/>
+          <tab type="user" title="Animation" url="elements_animation.html"/>
+          <tab type="user" title="Symbol Usage" url="SymbolElementUsage.html"/>
+        </tab>
+      </tab>
+
+      <tab type="usergroup" title="Developer Docs" url="DeveloperDocs.html">
+        <tab type="usergroup" title="Architecture and Runtime"
+             url="DeveloperArchitectureDocs.html">
+          <tab type="user" title="System Architecture" url="SystemArchitecture.html"/>
+          <tab type="user" title="Entity Component System" url="EcsArchitecture.html"/>
+          <tab type="user" title="ECS Systems" url="group__ecs__systems.html"/>
+          <tab type="user" title="Multithreading" url="Multithreading.html"/>
+          <tab type="user" title="DOM Element Lifetime" url="DomElementLifetime.html"/>
+          <tab type="user" title="Data Formats" url="DataFormats.html"/>
+          <tab type="user" title="SVG Filter Effects" url="FilterEffectsGuide.html"/>
+          <tab type="user" title="CompileTimeMap" url="CompileTimeMap.html"/>
+          <tab type="user" title="Embedding Geode" url="EmbeddingGeode.html"/>
+        </tab>
+
+        <tab type="usergroup" title="Build and Maintenance" url="BuildAndMaintenanceDocs.html">
+          <tab type="user" title="Coding Style" url="CodingStyle.html"/>
+          <tab type="user" title="Test Diagnosability" url="TestDiagnosability.html"/>
+          <tab type="user" title="Building Donner" url="BuildingDonner.html"/>
+          <tab type="user" title="Updating Dependencies" url="UpdatingDependencies.html"/>
+          <tab type="user" title="Fuzzing" url="Fuzzing.html"/>
+          <tab type="user" title="Maintenance" url="Maintenance.html"/>
+        </tab>
+
+        <tab type="usergroup" title="Developer Tools" url="DeveloperToolsDocs.html">
+          <tab type="user" title="Devtools" url="Devtools.html"/>
+          <tab type="user" title="Parser Diagnostics" url="ParserDiagnostics.html"/>
+          <tab type="user" title="Agent Roster" url="AgentRoster.html"/>
+          <tab type="user" title="Deterministic Replay Testing"
+               url="DeterministicReplayTesting.html"/>
+          <tab type="usergroup" title="Tools and Test Suites" url="ToolDocs.html">
+            <tab type="user" title="Donner SVG Tool" url="DonnerSvgTool.html"/>
+            <tab type="user" title="Terminal Image Previews"
+                 url="TerminalImageViewerGuide.html"/>
+            <tab type="user" title="Resvg Test Suite" url="ReSvgTestSuite.html"/>
+          </tab>
+          <tab type="usergroup" title="Editor" url="EditorDocs.html">
+            <tab type="user" title="Editor Architecture" url="EditorArchitecture.html"/>
+            <tab type="user" title="Structured Source Editing"
+                 url="StructuredSourceEditing.html"/>
+            <tab type="user" title="Editor Source Focus" url="EditorSourceFocus.html"/>
+            <tab type="user" title="Editor Design Language" url="EditorDesignLanguage.html"/>
+            <tab type="user" title="Editor Visual Debugging" url="EditorVisualDebugging.html"/>
+            <tab type="user" title="Editor Art Style" url="md_donner_2editor_2art_2STYLE.html"/>
+          </tab>
+        </tab>
+
+        <tab type="usergroup" title="Project Planning" url="ProjectPlanningDocs.html">
+          <tab type="user" title="Project Roadmap" url="DonnerProjectRoadmap.html"/>
+          <tab type="usergroup" title="Project Reports" url="ProjectReports.html">
+            <tab type="user" title="Build Report" url="DonnerBuildReport.html"/>
+          </tab>
+          <tab type="usergroup" title="Design Documents" url="DonnerDesignDocs.html">
+            <tab type="usergroup" title="Core Architecture and DOM"
+                 url="DesignDocsCoreArchitecture.html">
+              <tab type="user" title="External SVG References"
+                   url="md_docs_2design__docs_20004-external__svg__references.html"/>
+              <tab type="user" title="Incremental Invalidation"
+                   url="md_docs_2design__docs_20005-incremental__invalidation.html"/>
+              <tab type="user" title="CSS Token Stream"
+                   url="md_docs_2design__docs_20019-css__token__stream.html"/>
+              <tab type="user" title="Scripting"
+                   url="md_docs_2design__docs_20027-2-scripting.html"/>
+              <tab type="user" title="Multithreading and DOM Lifetime"
+                   url="md_docs_2design__docs_20033-multithreading__and__dom__lifetime.html"/>
+              <tab type="user" title="SVG Animation"
+                   url="md_docs_2design__docs_2animation.html"/>
+            </tab>
+
+            <tab type="usergroup" title="Rendering, Filters, and Backends"
+                 url="DesignDocsRendering.html">
+              <tab type="user" title="Renderer Interface"
+                   url="md_docs_2design__docs_20003-renderer__interface__design.html"/>
+              <tab type="user" title="Filter Performance"
+                   url="md_docs_2design__docs_20014-filter__performance.html"/>
+              <tab type="user" title="Skia Filter Conformance"
+                   url="md_docs_2design__docs_20015-skia__filter__conformance.html"/>
+              <tab type="user" title="Geode Renderer"
+                   url="md_docs_2design__docs_20017-geode__renderer.html"/>
+              <tab type="user" title="Composited Rendering"
+                   url="md_docs_2design__docs_20025-composited__rendering.html"/>
+              <tab type="user" title="Tight Bounded Segments"
+                   url="md_docs_2design__docs_20027-tight__bounded__segments.html"/>
+              <tab type="user" title="TinySkia Premultiplied Internals"
+                   url="md_docs_2design__docs_20028-2-tinyskia__premul__internal.html"/>
+              <tab type="user" title="Geode Performance"
+                   url="md_docs_2design__docs_20030-geode__performance.html"/>
+              <tab type="user" title="Progressive Rendering"
+                   url="md_docs_2design__docs_20034-progressive__rendering.html"/>
+              <tab type="user" title="Filter Layer Compose-Offset Bug"
+                   url="md_docs_2design__docs_20035-filter__layer__compose__offset__bug.html"/>
+              <tab type="user" title="Geode Presentation Glitch Investigation"
+                   url="md_docs_2design__docs_20037-geode__presentation__glitch__investigation.html"/>
+              <tab type="user" title="Geode Analytical AA"
+                   url="md_docs_2design__docs_20041-geode__analytical__aa.html"/>
+              <tab type="user" title="Geode Slug Conformance"
+                   url="md_docs_2design__docs_20042-geode__slug__conformance.html"/>
+              <tab type="user" title="Native GPU HAL"
+                   url="md_docs_2design__docs_20053-native__gpu__hal.html"/>
+            </tab>
+
+            <tab type="usergroup" title="Text, CSS, and Fonts" url="DesignDocsText.html">
+              <tab type="user" title="Color Emoji"
+                   url="md_docs_2design__docs_20006-color__emoji.html"/>
+              <tab type="user" title="CSS Fonts"
+                   url="md_docs_2design__docs_20008-css__fonts.html"/>
+              <tab type="user" title="Text Rendering"
+                   url="md_docs_2design__docs_20010-text__rendering.html"/>
+              <tab type="user" title="Geode and TinySkia Text Parity"
+                   url="md_docs_2design__docs_20038-geode__tinyskia__text__parity.html"/>
+              <tab type="user" title="Text Overview"
+                   url="md_docs_2design__docs_2text_20052-overview.html"/>
+              <tab type="user" title="Text Architecture"
+                   url="md_docs_2design__docs_2text_20052-2-architecture.html"/>
+              <tab type="user" title="RTL and Complex Scripts"
+                   url="md_docs_2design__docs_2text_20052-3-rtl__and__complex__scripts.html"/>
+              <tab type="user" title="Text Testing"
+                   url="md_docs_2design__docs_2text_20052-4-testing.html"/>
+              <tab type="user" title="Text Backend Refactor"
+                   url="md_docs_2design__docs_2text_20052-5-text__backend__refactor.html"/>
+              <tab type="user" title="Text v1 Release"
+                   url="md_docs_2design__docs_2text_20052-6-text__v1__release.html"/>
+              <tab type="user" title="TextPath"
+                   url="md_docs_2design__docs_2text_20052-7-textpath.html"/>
+            </tab>
+
+            <tab type="usergroup" title="Editor and Interaction" url="DesignDocsEditor.html">
+              <tab type="user" title="Editor"
+                   url="md_docs_2design__docs_20020-editor.html"/>
+              <tab type="user" title="Editor Sandbox"
+                   url="md_docs_2design__docs_20023-editor__sandbox.html"/>
+              <tab type="user" title="Editor UX"
+                   url="md_docs_2design__docs_20025-2-editor__ux.html"/>
+              <tab type="user" title="Drag-End Latency"
+                   url="md_docs_2design__docs_20026-2-drag__end__latency.html"/>
+              <tab type="user" title="UI Input Reproduction"
+                   url="md_docs_2design__docs_20029-ui__input__repro.html"/>
+              <tab type="user" title="Design Tool Responsiveness"
+                   url="md_docs_2design__docs_20033-2-editor__design__tool__responsiveness.html"/>
+              <tab type="user" title="Text Editor Focus and Flash"
+                   url="md_docs_2design__docs_20039-text__editor__focus__and__flash.html"/>
+              <tab type="user" title="Semantic Text Completion"
+                   url="md_docs_2design__docs_20040-semantic__text__completion.html"/>
+              <tab type="user" title="Path Authoring and Boolean Operations"
+                   url="md_docs_2design__docs_20041-2-path__authoring__and__boolean__operations.html"/>
+              <tab type="user" title="Fluid Canvas Rendering"
+                   url="md_docs_2design__docs_20044-2-editor__fluid__canvas__rendering.html"/>
+              <tab type="user" title="Geode Chrome Migration"
+                   url="md_docs_2design__docs_20045-editor__geode__chrome__migration.html"/>
+              <tab type="user" title="Group Layers"
+                   url="md_docs_2design__docs_20046-editor__group__layers.html"/>
+              <tab type="user" title="Structured Text Editing"
+                   url="md_docs_2design__docs_20049-structured__text__editing.html"/>
+              <tab type="user" title="Text Editor Behavior"
+                   url="md_docs_2design__docs_20050-text__editor__behavior.html"/>
+              <tab type="user" title="Text Editor Refactor"
+                   url="md_docs_2design__docs_20051-text__editor__refactor.html"/>
+              <tab type="user" title="Editor Design Language"
+                   url="md_docs_2design__docs_20054-editor__design__language.html"/>
+              <tab type="user" title="Geode-Only Web Editor Runtime"
+                   url="md_docs_2design__docs_20056-geode__only__web__editor__runtime.html"/>
+            </tab>
+
+            <tab type="usergroup" title="Testing, CI, and Conformance"
+                 url="DesignDocsTesting.html">
+              <tab type="user" title="MCP Test Triage Server"
+                   url="md_docs_2design__docs_20002-mcp__test__triage__server.html"/>
+              <tab type="user" title="Coverage Improvement Plan"
+                   url="md_docs_2design__docs_20007-coverage__improvement__plan.html"/>
+              <tab type="user" title="Resvg Test Suite Bugs"
+                   url="md_docs_2design__docs_20009-resvg__test__suite__bugs.html"/>
+              <tab type="user" title="Continuous Fuzzing"
+                   url="md_docs_2design__docs_20012-continuous__fuzzing.html"/>
+              <tab type="user" title="Coverage Improvement"
+                   url="md_docs_2design__docs_20013-coverage__improvement.html"/>
+              <tab type="user" title="CI Escape Prevention"
+                   url="md_docs_2design__docs_20016-ci__escape__prevention.html"/>
+              <tab type="user" title="Resvg Feature Gaps"
+                   url="md_docs_2design__docs_20021-resvg__feature__gaps.html"/>
+              <tab type="user" title="Resvg Test Suite Upgrade"
+                   url="md_docs_2design__docs_20022-resvg__test__suite__upgrade.html"/>
+              <tab type="user" title="SVG Conformance Testing"
+                   url="md_docs_2design__docs_20026-svg__conformance__testing.html"/>
+              <tab type="user" title="CI Runtime"
+                   url="md_docs_2design__docs_20029-2-ci__runtime.html"/>
+              <tab type="user" title="CI Hardening"
+                   url="md_docs_2design__docs_20031-ci__hardening__2026q2.html"/>
+              <tab type="user" title="Deterministic Replay Testing"
+                   url="md_docs_2design__docs_20043-deterministic__replay__testing.html"/>
+              <tab type="user" title="Coverage Improvement 2026 Q2"
+                   url="md_docs_2design__docs_20044-coverage__improvement__2026q2.html"/>
+              <tab type="user" title="Donner SVG2 Test Suite"
+                   url="md_docs_2design__docs_20057-donner__svg2__test__suite.html"/>
+            </tab>
+
+            <tab type="usergroup" title="Releases and Planning" url="DesignDocsReleases.html">
+              <tab type="user" title="v0.5 Release"
+                   url="md_docs_2design__docs_20011-v0__5__release.html"/>
+              <tab type="user" title="BCR Release"
+                   url="md_docs_2design__docs_20018-bcr__release.html"/>
+              <tab type="user" title="Proposed Issues 2026 Q2"
+                   url="md_docs_2design__docs_20024-proposed__issues__2026q2.html"/>
+              <tab type="user" title="v1.0 Release"
+                   url="md_docs_2design__docs_20028-v1__0__release.html"/>
+              <tab type="user" title="v0.8 Showcase"
+                   url="md_docs_2design__docs_20047-v0__8__showcase.html"/>
+              <tab type="user" title="SVG Static-Subset Roadmap"
+                   url="md_docs_2design__docs_20058-svg__static__subset__roadmap.html"/>
+            </tab>
+
+            <tab type="usergroup" title="Tooling, Process, and Retrospectives"
+                 url="DesignDocsTooling.html">
+              <tab type="user" title="Terminal Image Viewer" url="TerminalImageViewerDesign.html"/>
+              <tab type="user" title="Sandbox Branch Split"
+                   url="md_docs_2design__docs_20032-sandbox__branch__split.html"/>
+              <tab type="user" title="Composited Presentation Retrospective"
+                   url="md_docs_2design__docs_20036-composited__presentation__retrospective.html"/>
+              <tab type="user" title="Design Doc Hygiene"
+                   url="md_docs_2design__docs_20048-design__doc__hygiene.html"/>
+              <tab type="user" title="Binary Size"
+                   url="md_docs_2design__docs_20055-binary__size.html"/>
+            </tab>
+          </tab>
+          <tab type="user" title="Release Checklist" url="ReleaseChecklist.html"/>
+          <tab type="user" title="v0.8 Showcase Checklist"
+               url="md_docs_2release__checklists_2v0__8__showcase__checklist.html"/>
+        </tab>
+      </tab>
+    </tab>
+
+    <tab type="pages" visible="no" title="" intro=""/>
+    <tab type="topics" visible="yes" title="" intro=""/>
+    <tab type="modules" visible="yes" title="" intro="">
+      <tab type="modulelist" visible="yes" title="" intro=""/>
+      <tab type="modulemembers" visible="yes" title="" intro=""/>
+    </tab>
+    <tab type="namespaces" visible="yes" title="">
+      <tab type="namespacelist" visible="yes" title="" intro=""/>
+      <tab type="namespacemembers" visible="yes" title="" intro=""/>
+    </tab>
+    <tab type="concepts" visible="yes" title=""/>
+    <tab type="interfaces" visible="yes" title="">
+      <tab type="interfacelist" visible="yes" title="" intro=""/>
+      <tab type="interfaceindex" visible="$ALPHABETICAL_INDEX" title=""/>
+      <tab type="interfacehierarchy" visible="yes" title="" intro=""/>
+    </tab>
+    <tab type="classes" visible="yes" title="">
+      <tab type="classlist" visible="yes" title="" intro=""/>
+      <tab type="classindex" visible="$ALPHABETICAL_INDEX" title=""/>
+      <tab type="hierarchy" visible="yes" title="" intro=""/>
+      <tab type="classmembers" visible="yes" title="" intro=""/>
+    </tab>
+    <tab type="structs" visible="yes" title="">
+      <tab type="structlist" visible="yes" title="" intro=""/>
+      <tab type="structindex" visible="$ALPHABETICAL_INDEX" title=""/>
+    </tab>
+    <tab type="exceptions" visible="yes" title="">
+      <tab type="exceptionlist" visible="yes" title="" intro=""/>
+      <tab type="exceptionindex" visible="$ALPHABETICAL_INDEX" title=""/>
+      <tab type="exceptionhierarchy" visible="yes" title="" intro=""/>
+    </tab>
+    <tab type="files" visible="yes" title="">
+      <tab type="filelist" visible="yes" title="" intro=""/>
+      <tab type="globals" visible="yes" title="" intro=""/>
+    </tab>
+    <tab type="examples" visible="yes" title="" intro=""/>
+  </navindex>
+
+<!-- Layout definition for a class page -->
+  <class>
+    <briefdescription visible="yes"/>
+    <includes visible="$SHOW_HEADERFILE"/>
+    <inheritancegraph visible="yes"/>
+    <collaborationgraph visible="yes"/>
+    <memberdecl>
+      <nestedclasses visible="yes" title=""/>
+      <publictypes visible="yes" title=""/>
+      <services visible="yes" title=""/>
+      <interfaces visible="yes" title=""/>
+      <publicslots visible="yes" title=""/>
+      <signals visible="yes" title=""/>
+      <publicmethods visible="yes" title=""/>
+      <publicstaticmethods visible="yes" title=""/>
+      <publicattributes visible="yes" title=""/>
+      <publicstaticattributes visible="yes" title=""/>
+      <protectedtypes visible="yes" title=""/>
+      <protectedslots visible="yes" title=""/>
+      <protectedmethods visible="yes" title=""/>
+      <protectedstaticmethods visible="yes" title=""/>
+      <protectedattributes visible="yes" title=""/>
+      <protectedstaticattributes visible="yes" title=""/>
+      <packagetypes visible="yes" title=""/>
+      <packagemethods visible="yes" title=""/>
+      <packagestaticmethods visible="yes" title=""/>
+      <packageattributes visible="yes" title=""/>
+      <packagestaticattributes visible="yes" title=""/>
+      <properties visible="yes" title=""/>
+      <events visible="yes" title=""/>
+      <privatetypes visible="yes" title=""/>
+      <privateslots visible="yes" title=""/>
+      <privatemethods visible="yes" title=""/>
+      <privatestaticmethods visible="yes" title=""/>
+      <privateattributes visible="yes" title=""/>
+      <privatestaticattributes visible="yes" title=""/>
+      <friends visible="yes" title=""/>
+      <related visible="yes" title="" subtitle=""/>
+      <membergroups visible="yes"/>
+    </memberdecl>
+    <detaileddescription visible="yes" title=""/>
+    <memberdef>
+      <inlineclasses visible="yes" title=""/>
+      <typedefs visible="yes" title=""/>
+      <enums visible="yes" title=""/>
+      <services visible="yes" title=""/>
+      <interfaces visible="yes" title=""/>
+      <constructors visible="yes" title=""/>
+      <functions visible="yes" title=""/>
+      <related visible="yes" title=""/>
+      <variables visible="yes" title=""/>
+      <properties visible="yes" title=""/>
+      <events visible="yes" title=""/>
+    </memberdef>
+    <allmemberslink visible="yes"/>
+    <usedfiles visible="$SHOW_USED_FILES"/>
+    <authorsection visible="yes"/>
+  </class>
+
+  <!-- Layout definition for a namespace page -->
+  <namespace>
+    <briefdescription visible="yes"/>
+    <memberdecl>
+      <nestednamespaces visible="yes" title=""/>
+      <constantgroups visible="yes" title=""/>
+      <interfaces visible="yes" title=""/>
+      <classes visible="yes" title=""/>
+      <concepts visible="yes" title=""/>
+      <structs visible="yes" title=""/>
+      <exceptions visible="yes" title=""/>
+      <typedefs visible="yes" title=""/>
+      <sequences visible="yes" title=""/>
+      <dictionaries visible="yes" title=""/>
+      <enums visible="yes" title=""/>
+      <functions visible="yes" title=""/>
+      <variables visible="yes" title=""/>
+      <properties visible="yes" title=""/>
+      <membergroups visible="yes"/>
+    </memberdecl>
+    <detaileddescription visible="yes" title=""/>
+    <memberdef>
+      <inlineclasses visible="yes" title=""/>
+      <typedefs visible="yes" title=""/>
+      <sequences visible="yes" title=""/>
+      <dictionaries visible="yes" title=""/>
+      <enums visible="yes" title=""/>
+      <functions visible="yes" title=""/>
+      <variables visible="yes" title=""/>
+      <properties visible="yes" title=""/>
+    </memberdef>
+    <authorsection visible="yes"/>
+  </namespace>
+
+  <!-- Layout definition for a concept page -->
+  <concept>
+    <briefdescription visible="yes"/>
+    <includes visible="$SHOW_HEADERFILE"/>
+    <definition visible="yes" title=""/>
+    <detaileddescription visible="yes" title=""/>
+    <authorsection visible="yes"/>
+  </concept>
+
+  <!-- Layout definition for a file page -->
+  <file>
+    <briefdescription visible="yes"/>
+    <includes visible="$SHOW_INCLUDE_FILES"/>
+    <includegraph visible="yes"/>
+    <includedbygraph visible="yes"/>
+    <sourcelink visible="yes"/>
+    <memberdecl>
+      <interfaces visible="yes" title=""/>
+      <classes visible="yes" title=""/>
+      <structs visible="yes" title=""/>
+      <exceptions visible="yes" title=""/>
+      <namespaces visible="yes" title=""/>
+      <concepts visible="yes" title=""/>
+      <constantgroups visible="yes" title=""/>
+      <defines visible="yes" title=""/>
+      <typedefs visible="yes" title=""/>
+      <sequences visible="yes" title=""/>
+      <dictionaries visible="yes" title=""/>
+      <enums visible="yes" title=""/>
+      <functions visible="yes" title=""/>
+      <variables visible="yes" title=""/>
+      <properties visible="yes" title=""/>
+      <membergroups visible="yes"/>
+    </memberdecl>
+    <detaileddescription visible="yes" title=""/>
+    <memberdef>
+      <inlineclasses visible="yes" title=""/>
+      <defines visible="yes" title=""/>
+      <typedefs visible="yes" title=""/>
+      <sequences visible="yes" title=""/>
+      <dictionaries visible="yes" title=""/>
+      <enums visible="yes" title=""/>
+      <functions visible="yes" title=""/>
+      <variables visible="yes" title=""/>
+      <properties visible="yes" title=""/>
+    </memberdef>
+    <authorsection/>
+  </file>
+
+  <!-- Layout definition for a group page -->
+  <group>
+    <briefdescription visible="yes"/>
+    <groupgraph visible="yes"/>
+    <memberdecl>
+      <nestedgroups visible="yes" title=""/>
+      <modules visible="yes" title=""/>
+      <dirs visible="yes" title=""/>
+      <files visible="yes" title=""/>
+      <namespaces visible="yes" title=""/>
+      <concepts visible="yes" title=""/>
+      <classes visible="yes" title=""/>
+      <defines visible="yes" title=""/>
+      <typedefs visible="yes" title=""/>
+      <sequences visible="yes" title=""/>
+      <dictionaries visible="yes" title=""/>
+      <enums visible="yes" title=""/>
+      <enumvalues visible="yes" title=""/>
+      <functions visible="yes" title=""/>
+      <variables visible="yes" title=""/>
+      <signals visible="yes" title=""/>
+      <publicslots visible="yes" title=""/>
+      <protectedslots visible="yes" title=""/>
+      <privateslots visible="yes" title=""/>
+      <events visible="yes" title=""/>
+      <properties visible="yes" title=""/>
+      <friends visible="yes" title=""/>
+      <membergroups visible="yes"/>
+    </memberdecl>
+    <detaileddescription visible="yes" title=""/>
+    <memberdef>
+      <pagedocs/>
+      <inlineclasses visible="yes" title=""/>
+      <defines visible="yes" title=""/>
+      <typedefs visible="yes" title=""/>
+      <sequences visible="yes" title=""/>
+      <dictionaries visible="yes" title=""/>
+      <enums visible="yes" title=""/>
+      <enumvalues visible="yes" title=""/>
+      <functions visible="yes" title=""/>
+      <variables visible="yes" title=""/>
+      <signals visible="yes" title=""/>
+      <publicslots visible="yes" title=""/>
+      <protectedslots visible="yes" title=""/>
+      <privateslots visible="yes" title=""/>
+      <events visible="yes" title=""/>
+      <properties visible="yes" title=""/>
+      <friends visible="yes" title=""/>
+    </memberdef>
+    <authorsection visible="yes"/>
+  </group>
+
+  <!-- Layout definition for a C++20 module page -->
+  <module>
+    <briefdescription visible="yes"/>
+    <exportedmodules visible="yes"/>
+    <memberdecl>
+      <concepts visible="yes" title=""/>
+      <classes visible="yes" title=""/>
+      <enums visible="yes" title=""/>
+      <typedefs visible="yes" title=""/>
+      <functions visible="yes" title=""/>
+      <variables visible="yes" title=""/>
+      <membergroups visible="yes" title=""/>
+    </memberdecl>
+    <detaileddescription visible="yes" title=""/>
+    <memberdecl>
+      <files visible="yes"/>
+    </memberdecl>
+  </module>
+
+  <!-- Layout definition for a directory page -->
+  <directory>
+    <briefdescription visible="yes"/>
+    <directorygraph visible="yes"/>
+    <memberdecl>
+      <dirs visible="yes"/>
+      <files visible="yes"/>
+    </memberdecl>
+    <detaileddescription visible="yes" title=""/>
+  </directory>
+</doxygenlayout>

@@ -65,6 +65,16 @@ namespace donner::svg {
  * | `y`              | `-10%`               | Y position of the filter region. |
  * | `width`          | `120%`               | Width of the filter region. |
  * | `height`         | `120%`               | Height of the filter region. |
+ * | `href`           | (none)               | Reference to another `<filter>` whose attributes and primitive children may be inherited. |
+ *
+ * ## Template inheritance
+ *
+ * `href` can reference another `<filter>` as a template. Unspecified region and units attributes
+ * are inherited along the reference chain, with values on the referencing filter taking
+ * precedence. Filter primitive children are not merged: Donner uses the first filter in the chain
+ * that contains primitive children. A missing target, a target that is not a `<filter>`, or a
+ * circular reference emits a parse warning and stops inheritance at that point; any valid prefix
+ * of the chain is still used.
  */
 
 /**
@@ -138,8 +148,8 @@ public:
   Lengthd height() const;
 
   /**
-   * Get the value of the `href` attribute, if specified, which is a reference to another filter
-   * element to use as a template.
+   * Get the value of the `href` attribute, if specified, which references another filter element
+   * whose attributes and primitive children may be inherited.
    */
   std::optional<RcString> href() const;
 
@@ -176,8 +186,8 @@ public:
   void setHeight(const Lengthd& value);
 
   /**
-   * Set the `href` attribute, which is a reference to another filter element to use as a
-   * template.
+   * Set the `href` attribute, which references another filter element whose attributes and
+   * primitive children may be inherited.
    *
    * @param value The href value to set.
    */

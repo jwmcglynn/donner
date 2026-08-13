@@ -5,7 +5,7 @@
 **Drafted by:** unknown (historical provenance debt)
 **Reviewed by:** GPT-5.6 Sol
 **Created:** 2026-05-30
-**Updated:** 2026-07-10
+**Updated:** 2026-08-13
 **Related:** [0010-text_rendering](0010-text_rendering.md),
 [0033-2-editor_design_tool_responsiveness](0033-2-editor_design_tool_responsiveness.md),
 [0041-2-path_authoring_and_boolean_operations](0041-2-path_authoring_and_boolean_operations.md),
@@ -14,35 +14,35 @@
 ## Summary
 
 v0.8 is the next Donner release. It combines the accumulated editor, Geode, path, and performance
-work with a rebrand to **Donner SVG Editor & Toolkit**.
+work with a rebrand to **Donner SVG Editor & Engine**.
 
-The v0.8 showcase should be a new Donner splash SVG produced with the Donner Editor itself. The
-showcase image is not just a refreshed logo; it is proof that the editor can author visible SVG
-content, convert text into editable vector outlines, preserve selection chrome, and export the
-current editor viewport as a static SVG "screenshot".
+The v0.8 showcase is a derived Donner splash SVG produced on demand with Donner Editor code paths.
+The output is not just a refreshed logo; it proves that the editor can author visible SVG content,
+convert text into editable vector outlines, preserve selection chrome, and export the current
+editor viewport as a static SVG "screenshot".
 
 The editor also needs the everyday authoring affordances required to make that workflow credible:
 shape cut/copy/paste and a tuned Pen tool. The showcase should not require source-pane surgery,
 external duplication, or a fragile path-authoring workflow to place and refine the new artwork.
 
-The target artifact is a cropped SVG export of the editor viewport showing the new Donner splash
+The target demo output is a cropped SVG export of the editor viewport showing the Donner splash
 with the letters `SVG` added to the design, converted to outlines, selected, and rendered with the
-editor's path overlay UI visible. The final public splash is therefore both artwork and product
-demo: it shows Donner editing Donner's own logo.
+editor's path overlay UI visible. The output is generated on demand from the canonical
+`donner_splash.svg`; it is not a second checked-in splash asset.
 
-## Implementation Status — 2026-05-30
+## Implementation Status — 2026-08-13
 
-**All nine milestones (M1–M9) are implemented and merged on branch `v0_8_drive`.** The Implementation
-Plan checkboxes below are checked, with parenthetical notes where an item shipped with a caveat or
-simplification. This section is the factual "what really happened" record; the design narrative,
-Non-Goals, Architecture, and milestone specs below are preserved as the original spec and historical
-context.
+**All nine milestones (M1–M9) were implemented by the v0.8 showcase work and merged to `main` in PR
+#635 on 2026-07-03.** The Implementation Plan checkboxes below are checked, with parenthetical notes
+where an item shipped with a caveat or simplification. This section is the factual "what really
+happened" record; the design narrative, Non-Goals, Architecture, and milestone specs below are
+preserved as the original spec and historical context.
 
 Per-milestone outcome:
 
-- **M1 — Showcase asset plan and provenance:** shipped `donner_splash_v0_8_editable.svg` (editable
-  intermediate), `donner_splash_v0_8.provenance.md`, a release checklist, and the
-  `//donner/editor/tests:showcase_asset_tests` fixture guarding the asset files.
+- **M1 — Showcase generation plan and provenance:** shipped a release checklist, the canonical
+  `donner_splash.svg` input, and the `//donner/editor/tests:showcase_asset_tests` fixture guarding
+  the on-demand generation workflow.
 - **M2 — Core shape authoring affordances:**
   - Clipboard: `ShapeClipboardPayload` / `ShapeClipboardCommands`, `EditorCommand::Kind::CutShapes`
     and `PasteShapes`, Cmd+X/C/V plus Cmd+F Paste-in-Front, covered by
@@ -69,12 +69,18 @@ Per-milestone outcome:
   `<g id="donner-editor-overlay">` from `OverlayRenderer::SelectionChromeSnapshot`, with deterministic
   stroke `#1ea7fd` / handle `#fff`, reusing the M6 clipPath.
 - **M8 — Produce the v0.8 showcase:** the runnable tool
-  `//donner/editor/tools:generate_showcase_asset` produced `donner_splash_v0_8.svg` (outlined `SVG`
-  letters, no live `<text>`, `donner-editor-overlay` chrome). _Repro mechanism:_ the final asset was
-  produced **programmatically** via the merged `convertTextToOutlines` (M5) + `ExportViewportAsSvg`
-  (M6) code paths, not by driving the editor GUI — the editor GUI cannot run headless in CI.
+  `//donner/editor/tools:generate_showcase_asset` creates a temporary SVG from
+  `donner_splash.svg` with outlined `SVG` letters, no live `<text>`, and
+  `donner-editor-overlay` chrome. _Repro mechanism:_ the output is produced **programmatically**
+  via the merged `convertTextToOutlines` (M5) + `ExportViewportAsSvg` (M6) code paths, not by
+  driving the editor GUI. The editor GUI cannot run headlessly in CI. The built-in Donner Showcase
+  sample calls the same generator on first catalog access, so the editor demo never depends on a
+  committed derived splash.
 - **M9 — Rebrand and release packaging:** README / RELEASE_NOTES / docs / About updated to
-  "Donner SVG Editor & Toolkit"; the native editor app name stays "Donner SVG Editor".
+  "Donner SVG Editor & Engine"; the native editor app name stays "Donner SVG Editor".
+
+The repository keeps only the unchanged `donner_splash.svg`. The generator, automated test, and
+manual checklist preserve reproducibility without storing derived root assets.
 
 ### What shipped beyond the original plan
 
@@ -151,24 +157,24 @@ branch since 2026-06-12:
   `Transform2d delta` locals renamed to `canvasFromBitmap`, and the orphaned
   `ToolKeybinding_tests.cc` wired into a real test target.
 
-Known remaining (not gating this PR): the `--config=geode` runs of five
+Historical stabilization note (recorded before PR #635 merged): the `--config=geode` runs of five
 `gl_rnr_replay_tests` zoom/drag lockstep cases plus
-`PenClosePathClickRefreshesOverlayOnFlushFrame` are red in this local
-remote-exec environment independent of these changes (verified base-red before
-the pass); they are not part of the default `bazel test //...` gate.
+`PenClosePathClickRefreshesOverlayOnFlushFrame` were red in that local remote-exec environment
+independent of the branch changes. This paragraph records the pre-merge checkpoint and is not
+current release-gate evidence.
 
-## Implementation Status — 2026-05-31
+## Historical Stabilization Status — 2026-05-31
 
-All nine milestones plus the manual-QA polish are implemented and merged into the integration
-branch **`v0_8_drive`**, which has been rebased onto `main` and pushed; the editor-showcase changes
-are up for review in **PR #635** (draft — pending a manual QA pass before merge). Note this branch is
-the **editor showcase for v0.8, not the full v0.8 release**: `MODULE.bazel` stays on the `0.8.0-pre`
-line and the final version stamp, build-report commit, and BCR publish are cut separately.
+At this checkpoint, all nine milestones plus the manual-QA polish were implemented on the
+`v0_8_drive` integration branch. That work subsequently merged to `main` in PR #635 on 2026-07-03.
+It remains the **editor showcase foundation for v0.8, not the full v0.8 release**:
+`MODULE.bazel` stays on the `0.8.0-pre` line until the final version stamp, build-report commit, and
+BCR publish are completed separately.
 
 Full `bazel test //...` is green (659 pass / 58 skipped / 0 fail), including the compositor
 `rnr_replay` / `gl_rnr_replay` cases that were the last red targets during the drive.
 
-Shipped on the branch since the milestone work: the six Layers-panel QA items (checkerboard preview
+The merged work included the six Layers-panel QA items (checkerboard preview
 backdrop, `<g>` group previews, back-to-front order, default-expanded top-level groups, **lock** +
 **show/hide** icons); Donner-rendered Layers thumbnails (replacing the ImGui-vector silhouette — the
 "No Rendering Vector Graphics With ImGui" rule); Pen-as-inline-style; layer-row hover highlight; the
@@ -230,7 +236,7 @@ starts clean instead of re-learning them.
 
 ## Goals
 
-- Rebrand the release around **Donner SVG Editor & Toolkit**: an editor application plus reusable SVG
+- Rebrand the release around **Donner SVG Editor & Engine**: an editor application plus reusable SVG
   rendering/geometry/toolkit libraries.
 - Treat v0.8 as the next release, not a side quest after v1.0 work.
 - Include all completed work since the previous release plus the showcase-specific editor
@@ -252,8 +258,8 @@ starts clean instead of re-learning them.
   closure, preview, undo, and same-frame bounds/overlay updates.
 - Complete the user-facing Layers panel so the showcase can navigate the splash by document,
   groups, subgroups, and shapes with previews at every tier.
-- Produce a final showcase SVG where the outlined `SVG` letters are selected and the overlay UI is
-  visible.
+- Produce a generated showcase SVG where the outlined `SVG` letters are selected and the overlay
+  UI is visible.
 - Keep the showcase reproducible enough that future releases can update it without guessing which
   manual steps were used.
 
@@ -267,7 +273,7 @@ starts clean instead of re-learning them.
   vector overlay chrome only.
 - PNG screenshot export. The v0.8 showcase is an SVG output.
 - Replacing the normal Save / Save As document path. Viewport export is a separate Export command.
-- Making the final showcase depend on installed system fonts.
+- Making the generated showcase depend on installed system fonts.
 - Full advanced design-tool parity for path editing. V0.8 needs a dependable Pen tool for authored
   showcase paths, not every advanced path editing mode.
 - Cross-application rich clipboard interoperability beyond sensible SVG/text payloads. Internal
@@ -275,27 +281,27 @@ starts clean instead of re-learning them.
 
 ## Next Steps
 
-- Update public copy and release metadata for the **Donner SVG Editor & Toolkit** rebrand.
+- Update public copy and release metadata for the **Donner SVG Editor & Engine** rebrand.
 - Add shape clipboard and Pen tool polish to the editor implementation plan.
 - Make the group-aware Layers panel a showcase-gating editor deliverable.
 - Add the text authoring and text-to-outline design slice to the editor plan.
 - Implement viewport SVG export with an overlay inclusion option.
-- Use the editor to create and export the v0.8 showcase asset, then check in the final SVG and its
-  provenance notes.
+- Generate and review the v0.8 showcase from `donner_splash.svg`, keeping the derived output outside
+  the repository root.
 
 ## Implementation Plan
 
-> **Status: all milestones implemented and merged on branch `v0_8_drive`.** Boxes below are checked
-> with caveat notes where an item shipped simplified. See "Implementation Status — 2026-05-30" above
-> for the full outcome record, including work added beyond this plan.
+> **Status: all milestones implemented and merged to `main` in PR #635.** Boxes below are checked
+> with caveat notes where an item shipped simplified. See "Implementation Status — 2026-08-13"
+> above for the full outcome record, including work added beyond this plan.
 
-- [x] **Milestone 1: Showcase asset plan and provenance**
-  - [x] Add target asset names and locations for the editable source, final outlined splash, viewport
-        export, and optional repro/provenance log.
+- [x] **Milestone 1: Showcase generation plan and provenance**
+  - [x] Define the canonical `donner_splash.svg` input, caller-selected temporary output, viewport
+        export, and reproducible operation flow.
   - [x] Add a manual release checklist describing the editor-only operations used to create the
         asset.
-  - [x] Add a test fixture that loads the planned source asset and fails if it is missing or invalid.
-        (`//donner/editor/tests:showcase_asset_tests`)
+  - [x] Add a test fixture that generates the showcase in memory and fails if the canonical input,
+        generation, parsing, or rendering is invalid. (`//donner/editor/tests:showcase_asset_tests`)
 - [x] **Milestone 2: Core shape authoring affordances**
   - [x] Add Edit -> Cut / Copy / Paste behavior for selected shapes, groups, and compound paths.
   - [x] Use an SVG-native clipboard payload for copied elements, with plain text fallback where
@@ -377,18 +383,18 @@ starts clean instead of re-learning them.
   - [x] Convert the `SVG` text to outlines.
   - [x] Select the outlined `SVG` letters and frame the viewport.
   - [x] Export the viewport SVG with overlay enabled.
-  - [x] Check in the final asset and provenance notes. (Caveat: M8 was produced programmatically via
-        the merged `convertTextToOutlines` + `ExportViewportAsSvg` code paths through the runnable
-        `//donner/editor/tools:generate_showcase_asset`, since the editor GUI cannot run headless in
-        CI.)
+  - [x] Keep the derived output temporary and make the generation path reproducible through the
+        merged `convertTextToOutlines` + `ExportViewportAsSvg` code paths in the runnable
+        `//donner/editor/tools:generate_showcase_asset`.
 - [x] **Milestone 9: Rebrand and release packaging**
   - [x] Update public docs, README text, release notes, and app labels to use
-        `Donner SVG Editor & Toolkit`. (Native editor app name stays "Donner SVG Editor".)
+        `Donner SVG Editor & Engine`. (Native editor app name stays "Donner SVG Editor".)
   - [x] Audit places that describe Donner only as a rendering library and update them to reflect
         the editor/toolkit scope.
   - [x] Update roadmap status so v0.8 is the next release and v1.0 remains the later production
         release.
-  - [x] Add release validation that the checked-in showcase asset loads and renders in Donner.
+  - [x] Add release validation that the showcase can be generated from `donner_splash.svg` and
+        rendered in Donner.
 
 ## User Stories
 
@@ -408,19 +414,16 @@ starts clean instead of re-learning them.
 
 ## Showcase Artifacts
 
-The exact filenames can change during implementation, but the release should distinguish:
+The repository has one root splash asset:
 
-- `donner_splash.svg`: current stable splash, kept until the new asset is ready.
-- `donner_splash_v0_8_editable.svg`: optional intermediate editor-authored source before viewport
-  export. It may contain editable text while the asset is in progress.
-- `donner_splash_v0_8.svg`: final public splash. It contains outlined `SVG` letters, no dependency
-  on system fonts, and optional exported editor overlay chrome.
-- `donner_splash_v0_8.provenance.md` or `.donner-repro`: concise record of the editor operations
-  used to produce the final asset.
+- `donner_splash.svg`: canonical input used by the editor, examples, documentation, and showcase
+  generator.
 
-The final public asset should not require live text shaping to render as intended. Text support is
-showcased by the creation workflow and text-to-outline conversion, while the checked-in final splash
-is stable path geometry.
+The showcase generator returns a derived SVG with outlined `SVG` letters and optional editor
+overlay chrome. Callers may display it in memory or write it to a temporary path for review. These
+outputs are generated artifacts and must not be committed as root `donner_splash_*` variants.
+The built-in sample catalog generates the editor's Donner Showcase entry at runtime. The generator
+source, automated tests, and release checklist record the reproducible operation flow.
 
 ## Release Scope
 
@@ -438,7 +441,7 @@ additional work needed to make the showcase honest and reproducible:
 - Text authoring UI for placing `SVG`.
 - Convert Text to Outlines.
 - Viewport SVG export with optional selection overlay chrome.
-- The v0.8 splash/showcase asset and provenance.
+- The on-demand v0.8 showcase generator and provenance workflow.
 
 The release intentionally does not claim full design-tool parity. It should demonstrate a credible
 SVG editor and a solid SVG toolkit foundation, with v1.0 remaining the broader production-quality
@@ -456,7 +459,7 @@ milestone.
   frame.
 - The Layers panel is complete enough for the showcase workflow: expandable groups, row previews,
   stable names, canvas/source selection sync, and visible distinction from Compositor Debug.
-- The final asset is an SVG file, not a raster image embedded in SVG.
+- The generated output is an SVG file, not a raster image embedded in SVG.
 - The final `SVG` lettering is path geometry, not live `<text>`.
 - Text-to-outline output is deterministic for the same text, font, style, and transform.
 - Viewport export uses `ViewportState` as the source of truth for crop and scale.
@@ -736,13 +739,13 @@ the editor theme changed locally.
 
 ### Provenance
 
-The showcase should carry lightweight proof that it was made in Donner Editor:
+The showcase workflow carries lightweight, reviewable proof that it uses Donner Editor code paths:
 
-- The final SVG metadata records `created-by="Donner Editor"` and the Donner version/commit.
-- The release commit includes either an `.rnr` replay or a short provenance Markdown file listing
-  the editor commands used.
-- Tests validate the final asset loads in Donner and does not contain live `<text>` for the `SVG`
-  letters.
+- `//donner/editor/tools:generate_showcase_asset` calls the production text-to-outlines and viewport
+  SVG export implementations.
+- The manual release checklist records the equivalent interactive editor commands.
+- `//donner/editor/tests:showcase_asset_tests` generates the output in memory, parses and renders it,
+  and verifies that the `SVG` letters are paths rather than live `<text>`.
 
 ## Error Handling
 
@@ -844,8 +847,8 @@ CI targets for core invariants:
   - Overlay paths align with selected document geometry in the exported coordinate space.
   - Export does not mutate the source document.
 - `//donner/editor/tests:showcase_asset_tests`
-  - The final v0.8 showcase SVG parses and renders in Donner.
-  - The final v0.8 showcase contains outlined `SVG` paths and no live `SVG` text element.
+  - The generated v0.8 showcase SVG parses and renders in Donner.
+  - The generated v0.8 showcase contains outlined `SVG` paths and no live `SVG` text element.
   - The exported overlay group exists and is clipped when the showcase overlay variant is used.
 
 Manual validation:
@@ -860,7 +863,7 @@ Manual validation:
   each tier has a useful preview and selection syncs with canvas/source.
 - Select the outlined `SVG` letters and export the viewport with overlay enabled.
 - Open the exported showcase in Donner and a browser to verify the crop, overlay, and transparency.
-- Confirm the final asset still looks correct when system fonts are unavailable.
+- Confirm the generated output still looks correct when system fonts are unavailable.
 
 ## Dependencies
 
@@ -883,15 +886,15 @@ Manual validation:
 5. Land text-to-outline conversion with tests.
 6. Land viewport SVG export content-only.
 7. Land overlay SVG export.
-8. Create the v0.8 showcase asset in the editor and check it in with provenance.
-9. Update docs and release notes to use the new splash.
+8. Generate the v0.8 showcase on demand from the canonical splash and verify its provenance.
+9. Update docs and release notes to describe the generated demo workflow.
 
 ## Alternatives Considered
 
 - **Draw `SVG` directly as paths by hand.** Rejected because it would not demonstrate text UI or
   text-to-outline conversion.
 - **Export a PNG screenshot.** Rejected because the showcase should remain SVG-native and inspectable.
-- **Embed live `<text>` in the final splash.** Rejected because the release asset would depend on
+- **Embed live `<text>` in the generated showcase.** Rejected because the demo output would depend on
   font resolution and would not exercise outline conversion.
 - **Capture the entire ImGui window.** Rejected because the requested artifact is an SVG viewport
   screenshot of the artwork and path overlay, not a full app UI screenshot.
@@ -900,9 +903,8 @@ Manual validation:
 
 ## Open Questions
 
-- Should the final checked-in splash be only the overlay screenshot, or should we also check in a
-  clean content-only v0.8 splash? **Resolved:** ships both — the editable intermediate
-  `donner_splash_v0_8_editable.svg` and the final outlined `donner_splash_v0_8.svg`.
+- **Showcase storage:** `donner_splash.svg` remains the only canonical root asset. The overlay
+  showcase is generated on demand and derivative splash files are not checked in.
 - Should text-to-outline output one path per glyph, one path per contour, or one compound path for
   the whole text element? **Resolved:** shipped one `<path>` per glyph under a group.
 - Should viewport export embed external image/font resources or fail unless the document is already
@@ -911,7 +913,8 @@ Manual validation:
   path outlines, bounds, and handles for v0.8? **Resolved:** v0.8 serializes path outlines, bounds,
   and handles (the `donner-editor-overlay` group); richer chips/ropes remain future work.
 - Where should showcase provenance live: `.rnr`, Markdown checklist, SVG metadata, or all three?
-  **Resolved:** provenance lives in `donner_splash_v0_8.provenance.md` plus the release checklist.
+  **Resolved:** provenance lives in the generator source, its automated test, and the release
+  checklist. Generated demo SVGs are disposable outputs.
   (Item 5 from the task — web editor default document — is recorded under Implementation Status
   above: the wasm/web editor now embeds `donner_splash` by default instead of the icon.)
 
@@ -925,7 +928,7 @@ Manual validation:
 
 ## Open Items / QA-Polish Backlog (2026-05-31)
 
-Captured after the stabilization pass that took `v0_8_drive` green (segfault, gl_rnr
+Captured after the pre-merge stabilization pass that took `v0_8_drive` green (segfault, gl_rnr
 selection-loss, the #633 paint-leak compose bug, and the deterministic immediate
 heuristic all landed). The v0.8 _functional_ milestones shipped, but the following
 UX/polish gaps remain before the showcase feels finished — plus one milestone that

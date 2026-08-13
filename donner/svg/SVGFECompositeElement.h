@@ -76,7 +76,7 @@ namespace donner::svg {
  *   </g>
  *   <g transform="translate(150,150)" />
  * </svg>
- * <svg xmlns="http://www.w3.org/2000/svg" width="560" height="160"
+ * <svg xmlns="http://www.w3.org/2000/svg" width="560" height="170"
  *      style="background-color: white" font-family="sans-serif" font-size="11">
  *   <g transform="translate(10,10)">
  *     <text x="40" y="12" text-anchor="middle" font-weight="bold">xor</text>
@@ -169,7 +169,7 @@ namespace donner::svg {
  * | Attribute  | Default    | Description |
  * | ---------: | :--------: | :---------- |
  * | `in`       | *previous* | First input (A). |
- * | `in2`      | *(none)*   | Second input (B). Required. |
+ * | `in2`      | *previous* | Second input (B); defaults to the previous primitive result. |
  * | `operator` | `over`     | One of `over`, `in`, `out`, `atop`, `xor`, `lighter`, `arithmetic`. |
  * | `k1`       | `0`        | Arithmetic coefficient. Only used when `operator="arithmetic"`. |
  * | `k2`       | `0`        | Arithmetic coefficient. Only used when `operator="arithmetic"`. |

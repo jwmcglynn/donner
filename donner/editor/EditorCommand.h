@@ -6,11 +6,11 @@
 /// this variant in their own follow-up milestones - one new case per logical
 /// operation, NOT one per ECS write.
 ///
-/// All editor-side DOM writes flow through `EditorApp::applyMutation()` which
-/// builds an `EditorCommand` and pushes it onto the per-frame
-/// `CommandQueue`. The queue drains and coalesces at frame boundaries; see
-/// `CommandQueue.h` and the "AsyncSVGDocument: single-threaded command queue"
-/// section of `docs/design_docs/0020-editor.md`.
+/// Canvas, tool, and application writes flow through
+/// `EditorApp::applyMutation()`, which pushes an `EditorCommand` onto the
+/// per-frame `CommandQueue`. The queue drains and coalesces at frame
+/// boundaries. Incremental source-pane edits use the separate guarded
+/// `AsyncSVGDocument::applySourceEdit()` seam; see \ref EditorArchitecture.
 
 #include <cstdint>
 #include <optional>
@@ -21,9 +21,9 @@
 
 namespace donner::editor {
 
-/// Discriminated union of every editor-initiated DOM mutation in the M2
-/// scope. Coalescing rules in `CommandQueue` are keyed off `kind` plus the
-/// command's payload.
+/// Discriminated union of queued editor DOM mutations. Coalescing rules in
+/// `CommandQueue` are keyed off `kind` plus the command's payload. Immediate
+/// structured source edits are not represented by this type.
 ///
 /// Commands carry `svg::SVGElement` handles rather than raw ECS entities
 /// so the editor never has to touch the registry directly - every

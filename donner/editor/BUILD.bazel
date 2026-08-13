@@ -1293,7 +1293,11 @@ donner_cc_library(
     name = "editor_sample_catalog",
     srcs = ["EditorSampleCatalog.cc"],
     hdrs = ["EditorSampleCatalog.h"],
-    deps = [":editor_splash"],
+    deps = [
+        ":editor_splash",
+        "//donner/base",
+        "//donner/editor/tools:showcase_asset_generator",
+    ],
 )
 
 donner_cc_library(

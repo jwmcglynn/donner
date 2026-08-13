@@ -18,7 +18,9 @@
 
 cd "$(dirname "$0")/.."
 
-doxygen Doxyfile
+# Use the same wrapper as local documentation QA so the deployed site receives
+# the MODULE.bazel version and the same Doxygen binary-selection behavior.
+tools/doxygen.sh
 
 OUT_DIR="generated-doxygen/html"
 REPORTS_SRC="docs/reports"

@@ -46,11 +46,9 @@ namespace donner::svg {
  * </svg>
  * \endhtmlonly
  *
- * @note The `image-rendering: pixelated` style is used to render the image in a pixelated style in
- * this example. This is not yet supported by Donner.
- *
- * @todo Add support for `image-rendering` property,
- * https://drafts.csswg.org/css-images/#the-image-rendering
+ * @note The `image-rendering: pixelated` style selects nearest-neighbor sampling in this example.
+ * Donner also accepts `auto`, `smooth`, `crisp-edges`, and the legacy SVG aliases
+ * `optimizeSpeed` and `optimizeQuality`.
  *
  * | Attribute | Default | Description  |
  * | --------: | :-----: | :----------- |

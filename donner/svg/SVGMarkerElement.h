@@ -62,8 +62,8 @@ namespace donner::svg {
  * | `markerWidth`  | `3`     | Width of the marker viewport. |
  * | `markerHeight` | `3`     | Height of the marker viewport. |
  * | `markerUnits`  | `strokeWidth` | Coordinate system for marker size and contents: `strokeWidth` or `userSpaceOnUse`. |
- * | `refX`         | `0`     | X coordinate for the reference point of the marker, where the marker is centered. |
- * | `refY`         | `0`     | Y coordinate for the reference point of the marker, where the marker is centered. |
+ * | `refX`         | `0`     | X coordinate of the marker reference point aligned to the marked vertex. |
+ * | `refY`         | `0`     | Y coordinate of the marker reference point aligned to the marked vertex. |
  * | `orient`       | `0`     | Orientation of the marker relative to the path. Supported values: `auto`, `auto-start-reverse`, or an angle for a fixed rotation such as `45deg` or `3.14rad`. |
  */
 
@@ -105,7 +105,7 @@ public:
 
   /**
    * Set the `viewBox` attribute, which defines a rectangle in userspace that should be mapped to
-   * the SVG viewport bounds established by the pattern.
+   * the SVG viewport bounds established by the marker.
    *
    * @param viewBox The viewBox value to set.
    */
@@ -113,7 +113,7 @@ public:
 
   /**
    * Get the parsed value of the `viewBox` attribute, if specified, which defines a rectangle in
-   * userspace that should be mapped to the SVG viewport bounds established by the pattern.
+   * userspace that should be mapped to the SVG viewport bounds established by the marker.
    */
   std::optional<Box2d> viewBox() const;
 
@@ -160,8 +160,8 @@ public:
   Lengthd markerHeight() const;
 
   /**
-   * Set the reference point X coordinate. Percentage units resolve against the viewport width at
-   * render time.
+   * Set the reference point X coordinate that is aligned to the marked vertex. Percentage units
+   * resolve against the viewport width at render time.
    *
    * @param value X coordinate for the reference point of the marker.
    */
@@ -175,8 +175,8 @@ public:
   Lengthd refX() const;
 
   /**
-   * Set the reference point Y coordinate. Percentage units resolve against the viewport height at
-   * render time.
+   * Set the reference point Y coordinate that is aligned to the marked vertex. Percentage units
+   * resolve against the viewport height at render time.
    *
    * @param value Y coordinate for the reference point of the marker.
    */

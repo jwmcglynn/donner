@@ -1,7 +1,7 @@
-# Donner SVG Editor & Engine Project Roadmap {#DonnerProjectRoadmap}
+# Project Roadmap {#DonnerProjectRoadmap}
 
 **Status:** Active
-**Updated:** 2026-05-30
+**Updated:** 2026-08-13
 
 ## Summary
 
@@ -14,8 +14,8 @@ collected as **v0.5**, skipping intermediate milestones that were overtaken by t
 development.
 
 The next release target is **v0.8: Donner SVG Editor & Engine**. Its scope is everything completed
-since v0.5, plus the editor showcase work needed to honestly demonstrate Donner authoring its own
-new splash: a complete Layers panel, shape cut/copy/paste, a tuned Pen tool, text creation,
+since v0.5, plus the editor showcase work needed to honestly demonstrate Donner deriving a new
+composition from its own splash: a complete Layers panel, shape cut/copy/paste, a tuned Pen tool, text creation,
 text-to-outline conversion, viewport SVG export, and optional editor overlay export. The broader
 production-quality v1.0 milestone remains the follow-up release for animation, scripting,
 conformance completion, parser hardening, and ecosystem integration.
@@ -70,16 +70,16 @@ Renderer abstraction, software rasterizer, text rendering, and filter effects.
 
 ## v0.8 — Donner SVG Editor & Engine (next release)
 
-Focus: rebrand Donner around the editor and toolkit, release the accumulated editor/Geode/path work,
-and ship a self-authored SVG showcase.
+Focus: rebrand Donner around the editor and engine, release the accumulated editor/Geode/path work,
+and ship a reproducible SVG showcase workflow.
 
 ### Release Positioning
 
 - Product name: **Donner SVG Editor & Engine**.
-- Public story: Donner is both a native SVG editor and a reusable C++ SVG toolkit.
-- Showcase story: the v0.8 splash is made in Donner Editor, exported by Donner Editor, and checked
-  in as SVG.
-- Compatibility story: the final splash does not depend on system fonts because the visible `SVG`
+- Public story: Donner is both a native SVG editor and a reusable C++ SVG engine.
+- Showcase story: a derived v0.8 composition is generated on demand from `donner_splash.svg`
+  through Donner's text-to-outlines and viewport-export paths.
+- Compatibility story: the generated showcase does not depend on system fonts because the visible `SVG`
   lettering is converted to path outlines.
 - Usability story: the editor can perform the basic shape authoring operations needed to create the
   splash without source-pane surgery or external design tools.
@@ -102,8 +102,8 @@ The release collects all completed editor/toolkit work since v0.5, including:
 
 ### Showcase-Gating Scope
 
-These items were required before the v0.8 release can be cut. All are implemented in the editor-
-showcase branch `v0_8_drive` (PR #635, pending a manual QA pass + merge):
+These items were required before the v0.8 release can be cut. All were implemented by the v0.8
+showcase work and merged to `main` in PR #635 on 2026-07-03. Release QA and packaging remain:
 
 - [x] **Shape cut/copy/paste** — duplicate, cut, and paste selected SVG shapes/groups with source
       sync, undo, selection restoration, default paste offset, Paste in Front, and deterministic ID
@@ -118,23 +118,25 @@ showcase branch `v0_8_drive` (PR #635, pending a manual QA pass + merge):
 - [x] **Viewport SVG export** — export the current editor viewport as cropped SVG.
 - [x] **Overlay SVG export** — optional export of selected path outlines, bounds, and handles as
       vector editor chrome.
-- [x] **v0.8 splash asset** — create the new Donner splash in the editor, add `SVG`, convert it to
-      outlines, select the outlined letters, and export the viewport with overlay enabled.
-- [x] **Provenance** — include a concise record of the editor operations used to create the final
-      showcase asset.
+- [x] **v0.8 showcase demo** — generate a derived splash from `donner_splash.svg`, add `SVG`,
+      convert it to outlines, select the outlined letters, and export the viewport with overlay
+      enabled without checking generated variants into the repository root.
+- [x] **Reproducibility** — preserve the generator, automated test, and manual checklist needed to
+      recreate the temporary showcase output on demand.
 - [x] **Rebrand updates** — update public docs, release notes, and user-facing labels to
       **Donner SVG Editor & Engine**.
 
 ### v0.8 Release Criteria
 
-- The checked-in v0.8 showcase SVG parses and renders in Donner.
+- The v0.8 showcase generates from the canonical `donner_splash.svg`, then parses and renders in
+  Donner.
 - The editor can cut/copy/paste representative showcase shapes without losing source/canvas sync or
   selection/undo state.
 - The Pen tool can author and close a path for the showcase with bounds and overlay matching the
   rendered path in the same visible frame.
 - The complete Layers panel can navigate the splash from document to groups to individual shapes
   with previews, names, expansion state, and synchronized canvas/source selection.
-- The visible `SVG` lettering in the final showcase is path geometry, not live `<text>`.
+- The visible `SVG` lettering in the generated showcase is path geometry, not live `<text>`.
 - The showcase export includes the selected outlined `SVG` letters and editor overlay chrome when
   the overlay variant is requested.
 - The editor can reproduce the showcase workflow without external design tools.
@@ -363,6 +365,6 @@ flowchart TD
 | [Filter Performance](design_docs/0014-filter_performance.md)                         | Shipped (all 17 primitives, within 1.5×) |
 | [v0.5 Release](design_docs/0011-v0_5_release.md)                                     | Shipped                                  |
 | [Editor Fluid Canvas Rendering](design_docs/0044-2-editor_fluid_canvas_rendering.md) | v0.8 scope                               |
-| [Editor Group Layers](design_docs/0046-editor_group_layers.md)                       | v0.8 showcase scope                       |
+| [Editor Group Layers](design_docs/0046-editor_group_layers.md)                       | v0.8 showcase scope                      |
 | [v0.8 Showcase](design_docs/0047-v0_8_showcase.md)                                   | Next release                             |
 | [External SVG References](design_docs/0004-external_svg_references.md)               | Design                                   |

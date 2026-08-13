@@ -30,7 +30,7 @@ namespace donner::svg {
  * ```
  *
  * \htmlonly
- * <svg id="xml_feComponentTransfer_diagram" width="320" height="160" viewBox="0 0 320 160" style="background-color: white" font-family="sans-serif" font-size="12">
+ * <svg id="xml_feComponentTransfer_diagram" width="360" height="160" viewBox="0 0 360 160" style="background-color: white" font-family="sans-serif" font-size="12">
  *   <defs>
  *     <linearGradient id="xml_feComponentTransfer_grad" x1="0" y1="0" x2="1" y2="0">
  *       <stop offset="0%" stop-color="black" />

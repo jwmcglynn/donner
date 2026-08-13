@@ -42,6 +42,8 @@ kept separate from project-internal developer notes, design history, tooling, an
 - \subpage elements_masking_clipping
 - \subpage elements_filters
 - \subpage elements_media_and_style
+- \subpage elements_animation
+- \subpage SymbolElementUsage
 */
 
 /**
@@ -68,6 +70,8 @@ kept separate from project-internal developer notes, design history, tooling, an
 - \subpage CodingStyle
 - \subpage TestDiagnosability
 - \subpage BuildingDonner
+- \subpage UpdatingDependencies
+- \subpage Fuzzing
 - \subpage Maintenance
 */
 
@@ -79,6 +83,7 @@ kept separate from project-internal developer notes, design history, tooling, an
 - \subpage Devtools
 - \subpage ParserDiagnostics
 - \subpage AgentRoster
+- \subpage DeterministicReplayTesting
 - \subpage ToolDocs
 - \subpage EditorDocs
 */
@@ -98,11 +103,12 @@ kept separate from project-internal developer notes, design history, tooling, an
 
 \details Donner editor application documentation and visual debugging workflows.
 
-- \subpage md_donner_2editor_2README
-- \subpage md_donner_2editor_2repro_2README
+- \subpage EditorArchitecture
+- \subpage StructuredSourceEditing
 - \subpage EditorSourceFocus
 - \subpage EditorDesignLanguage
 - \subpage EditorVisualDebugging
+- \subpage md_donner_2editor_2art_2STYLE
 */
 
 /**
@@ -113,6 +119,8 @@ kept separate from project-internal developer notes, design history, tooling, an
 - \subpage DonnerProjectRoadmap
 - \subpage ProjectReports
 - \subpage DonnerDesignDocs
+- \subpage ReleaseChecklist
+- \subpage md_docs_2release__checklists_2v0__8__showcase__checklist
 */
 
 /**

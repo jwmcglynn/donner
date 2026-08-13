@@ -36,15 +36,14 @@ namespace donner::svg {
  * amplifies local differences (sharpen); a kernel that subtracts opposite neighbours highlights
  * intensity gradients (edge detect).
  *
- * ## A critical gotcha: always set divisor explicitly
+ * ## Default divisor
  *
- * If you omit the `divisor` attribute, the default is the **sum of the kernel values**.
- * For a Laplacian-style edge-detect kernel like `0 -1 0 / -1 4 -1 / 0 -1 0`, that sum is
- * `0`, and dividing by zero produces an undefined / broken render (in many implementations
- * the output is simply white or all opaque).
+ * If you omit the `divisor` attribute, the effective divisor is the **sum of the kernel values**,
+ * or `1` when that sum is zero. A Laplacian-style edge-detect kernel like
+ * `0 -1 0 / -1 4 -1 / 0 -1 0` therefore works without an explicit divisor.
  *
- * **Always set `divisor` explicitly** when your kernel sums to zero, and set a `bias` of
- * `0.5` for edge-detect / emboss kernels so negative results are remapped into the visible
+ * Setting `divisor="1"` explicitly can make the intended normalization clear. A `bias` of `0.5`
+ * is useful for edge-detect / emboss kernels so negative results are remapped into the visible
  * [0, 1] range instead of being clamped to black.
  *
  * ## Example 1: box blur
@@ -129,9 +128,9 @@ namespace donner::svg {
  * ## Example 3: edge detect (Laplacian)
  *
  * The kernel sums to `0`, so flat regions produce zero and only rapid changes in intensity
- * (edges) produce non-zero output. Note that we set `divisor="1"` explicitly (the default
- * would be `0` → division by zero → broken render) and `bias="0.5"` to re-centre negative
- * responses into the visible range:
+ * (edges) produce non-zero output. The omitted-divisor fallback would also use `1`; this example
+ * sets `divisor="1"` explicitly and uses `bias="0.5"` to re-centre negative responses into the
+ * visible range:
  *
  * \htmlonly
  * <svg width="340" height="160" viewBox="0 0 340 160" style="background-color: white" font-family="sans-serif" font-size="12">
@@ -170,8 +169,8 @@ namespace donner::svg {
  * ## Example 4: emboss
  *
  * An asymmetric kernel lights one diagonal and darkens the other, simulating a raised surface
- * lit from the upper-left. Again `divisor="1"` and `bias="0.5"` are required for correct
- * output because the kernel sums to zero:
+ * lit from the upper-left. This zero-sum kernel defaults to an effective divisor of `1`; the
+ * example states it explicitly and uses `bias="0.5"` to keep negative responses visible:
  *
  * \htmlonly
  * <svg width="340" height="160" viewBox="0 0 340 160" style="background-color: white" font-family="sans-serif" font-size="12">
@@ -213,7 +212,7 @@ namespace donner::svg {
  * | --------------: | :----------------------: | :---------- |
  * | `order`         | `3`                      | Size of the kernel matrix. One or two integers (`N` or `cols rows`). A `3` means a 3×3 kernel. |
  * | `kernelMatrix`  | (required)               | `order.x * order.y` numbers, row-major. Whitespace- or comma-separated. |
- * | `divisor`       | sum of kernel values     | Final sum is divided by this. **Always set explicitly** if the kernel sums to zero, otherwise you get a division by zero. |
+ * | `divisor`       | sum, or `1` if sum is `0` | Final sum is divided by this value. |
  * | `bias`          | `0`                      | Added to the result after division. Use `0.5` for edge-detect / emboss kernels so negative responses map into the visible range. |
  * | `targetX`       | `floor(order.x / 2)`     | Which column of the kernel aligns with the output pixel. |
  * | `targetY`       | `floor(order.y / 2)`     | Which row of the kernel aligns with the output pixel. |

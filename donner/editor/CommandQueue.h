@@ -1,10 +1,11 @@
 #pragma once
 /// @file
 ///
-/// `CommandQueue` is the per-frame `EditorCommand` queue described in the
-/// "AsyncSVGDocument: single-threaded command queue" section of
-/// `docs/design_docs/0020-editor.md`. It accumulates editor-initiated DOM
-/// mutations on the UI thread and coalesces them at flush time.
+/// `CommandQueue` is the per-frame queued-command seam described in
+/// \ref EditorArchitecture. It accumulates canvas, tool, application, and
+/// full-document-replacement commands on the UI thread and coalesces them at
+/// flush time. Incremental source-pane edits use
+/// `AsyncSVGDocument::applySourceEdit()` instead of this queue.
 ///
 /// Coalescing rules (applied in `flush()`):
 ///
@@ -22,9 +23,8 @@
 /// 4. No reordering across commands targeting different entities.
 ///    Coalescing only collapses redundant writes.
 ///
-/// The queue is **single-threaded** - it must only be touched from the UI
-/// thread. The render thread reads document state via the snapshot hand-off
-/// in `AsyncSVGDocument`, never via the queue directly.
+/// The queue is **UI-thread-only**. The render thread reads the shared live
+/// document under ConcurrentDom access guards, never through this queue.
 
 #include <deque>
 #include <vector>

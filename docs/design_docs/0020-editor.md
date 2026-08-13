@@ -7,9 +7,11 @@
 This design brought `jwmcglynn/donner-editor` in-tree as `//donner/editor` — a
 supervised rewrite rather than a code drop — establishing the editor as Donner's
 interactive-mutation proving ground (mutate the DOM at 60 fps while a user drags
-handles). It set the load-bearing architecture the editor still uses: the
-single-funnel mutation seam (`EditorApp::applyMutation` → `AsyncSVGDocument` +
-`CommandQueue`), a background render worker, and an ImGui + GLFW shell.
+handles). It set the load-bearing architecture the editor still uses: the queued
+canvas/tool command seam (`EditorApp::applyMutation` → `AsyncSVGDocument` +
+`CommandQueue`), a background render worker, and an ImGui + GLFW shell. The later
+structured-source work added the guarded incremental-source seam documented in
+[Editor Architecture](../editor_architecture.md).
 
 The editor has since grown well beyond this doc's original M1–M6 scope. Its current
 architecture — frame loop, mutation seam, async rendering and threading, compositor
