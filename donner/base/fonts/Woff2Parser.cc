@@ -12,8 +12,12 @@ namespace {
 
 constexpr size_t kWoff2HeaderSize = 48;
 // Bound work delegated to woff2 for untrusted compressed input.
-constexpr size_t kMaxWoff2InputSize = 64u * 1024u * 1024u;
+constexpr size_t kMaxWoff2InputSize = 16u * 1024u * 1024u;
 constexpr size_t kMaxDecompressedSize = 64u * 1024u * 1024u;
+// The pinned decoder can retain a 12-byte Point plus up to five glyph bytes for every transformed
+// glyf-stream byte. Keeping that stream to 4 MiB bounds those table-derived scratch buffers to
+// about 68 MiB before the decoder allocates them.
+constexpr size_t kMaxIntermediateSize = 4u * 1024u * 1024u;
 constexpr size_t kMaxWoff2Tables = 4096;
 constexpr size_t kMaxCollectionFonts = 256;
 constexpr size_t kMaxCollectionTableReferences = 16384;
@@ -171,7 +175,7 @@ std::optional<std::string_view> ValidateDecoderResourceBounds(std::span<const ui
       return "WOFF2: invalid table directory";
     }
 
-    if (transformLength > kMaxDecompressedSize - intermediateBytes) {
+    if (transformLength > kMaxIntermediateSize - intermediateBytes) {
       return "WOFF2: intermediate decompressed size exceeds limit";
     }
     intermediateBytes += transformLength;

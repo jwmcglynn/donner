@@ -62,7 +62,7 @@ size_t writeBase128(std::span<uint8_t> data, size_t offset, uint32_t value) {
 }
 
 std::vector<uint8_t> woff2WithIntermediateSize(uint32_t intermediateSize) {
-  constexpr size_t kInputSize = 1024u * 1024u;
+  constexpr size_t kInputSize = 64u * 1024u;
   std::vector<uint8_t> data(kInputSize, 0);
   data[0] = 0x77;
   data[1] = 0x4F;
@@ -205,13 +205,13 @@ TEST(Woff2ParserTest, RejectsLinuxTimeoutSeedAtTableCountPreflight) {
 }
 
 TEST(Woff2ParserTest, RejectsOversizedIntermediateBufferBeforeDecoderEntry) {
-  auto result = Woff2Parser::Decompress(woff2WithIntermediateSize(64u * 1024u * 1024u + 1u));
+  auto result = Woff2Parser::Decompress(woff2WithIntermediateSize(4u * 1024u * 1024u + 1u));
   ASSERT_TRUE(result.hasError());
   EXPECT_EQ(result.error().reason, "WOFF2: intermediate decompressed size exceeds limit");
 }
 
 TEST(Woff2ParserTest, AllowsIntermediateBufferAtLimitIntoDecoder) {
-  auto result = Woff2Parser::Decompress(woff2WithIntermediateSize(64u * 1024u * 1024u));
+  auto result = Woff2Parser::Decompress(woff2WithIntermediateSize(4u * 1024u * 1024u));
   ASSERT_TRUE(result.hasError());
   EXPECT_NE(result.error().reason, "WOFF2: intermediate decompressed size exceeds limit");
 }

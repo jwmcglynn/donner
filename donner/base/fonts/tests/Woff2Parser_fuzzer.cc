@@ -59,7 +59,7 @@ void ReplayLinuxTimeoutRegressionSeed() {
 
 void ReplayIntermediateAllocationRegressionSeed() {
   static const auto kResult = [] {
-    constexpr size_t kInputSize = 1024u * 1024u;
+    constexpr size_t kInputSize = 64u * 1024u;
     std::vector<uint8_t> data(kInputSize, 0);
     data[0] = 0x77;
     data[1] = 0x4F;
@@ -75,7 +75,7 @@ void ReplayIntermediateAllocationRegressionSeed() {
 
     size_t directoryEnd = 48;
     data[directoryEnd++] = 0;
-    std::array<uint8_t, 4> encodedLength = {0xA0, 0x80, 0x80, 0x01};
+    std::array<uint8_t, 4> encodedLength = {0x82, 0x80, 0x80, 0x01};
     for (uint8_t byte : encodedLength) {
       data[directoryEnd++] = byte;
     }
