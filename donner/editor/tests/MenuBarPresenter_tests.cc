@@ -204,6 +204,10 @@ TEST(MenuBarPresenterActionsTest, ApplyMenuBarCommandMapsSimpleCommandsToActions
   EXPECT_TRUE(actions.openAbout);
 
   actions = MenuBarActions{};
+  ApplyMenuBarCommand(true, MenuBarCommand::NewDocument, state, &actions);
+  EXPECT_TRUE(actions.newDocument);
+
+  actions = MenuBarActions{};
   ApplyMenuBarCommand(true, MenuBarCommand::OpenFile, state, &actions);
   EXPECT_TRUE(actions.openFile);
 

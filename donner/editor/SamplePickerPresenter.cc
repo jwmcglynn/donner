@@ -141,6 +141,7 @@ void ApplySamplePickerCommand(bool activated, SamplePickerCommand command,
 
   switch (command) {
     case SamplePickerCommand::Dismiss: actions->dismiss = true; return;
+    case SamplePickerCommand::NewDocument: return;
     case SamplePickerCommand::OpenFile: actions->openFile = true; return;
     case SamplePickerCommand::LoadSample:
       if (FindEditorSample(sampleId) != nullptr) {

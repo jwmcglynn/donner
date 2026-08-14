@@ -15,6 +15,7 @@ void ApplyMenuBarCommand(bool activated, MenuBarCommand command, const MenuBarSt
 
   switch (command) {
     case MenuBarCommand::OpenAbout: actions->openAbout = true; return;
+    case MenuBarCommand::NewDocument: return;
     case MenuBarCommand::OpenFile: actions->openFile = true; return;
     case MenuBarCommand::OpenSamples: actions->openSamples = true; return;
     case MenuBarCommand::SaveFile: actions->saveFile = true; return;

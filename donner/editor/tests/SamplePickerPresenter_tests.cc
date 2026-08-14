@@ -82,6 +82,10 @@ TEST(SamplePickerPresenter, CommandsProduceSemanticActions) {
   EXPECT_TRUE(actions.dismiss);
 
   actions = SamplePickerActions{};
+  ApplySamplePickerCommand(true, SamplePickerCommand::NewDocument, {}, &actions);
+  EXPECT_TRUE(actions.newDocument);
+
+  actions = SamplePickerActions{};
   ApplySamplePickerCommand(true, SamplePickerCommand::OpenFile, {}, &actions);
   EXPECT_TRUE(actions.openFile);
 

@@ -4314,6 +4314,26 @@ TEST(EditorShellTest, MenuActionsRouteDialogAndExportRequestsWithoutCurrentPath)
   EXPECT_TRUE(shell.valid());
 }
 
+TEST(EditorShellTest, NewDocumentMenuActionReplacesTheCurrentFileWithAnUntitledCanvas) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
+
+  EditorShell shell(window, OptionsWithSource(kInitialSvg, "initial.svg"));
+  ASSERT_TRUE(shell.valid());
+
+  MenuBarActions actions;
+  actions.newDocument = true;
+  EditorShellTestAccess::ApplyMenuActions(shell, actions);
+
+  EXPECT_FALSE(EditorShellTestAccess::App(shell).currentFilePath().has_value());
+  EXPECT_FALSE(EditorShellTestAccess::App(shell).document().document().querySelector("#target"));
+  EXPECT_NE(EditorShellTestAccess::Source(shell).getText().find("viewBox=\"0 0 640 400\""),
+            std::string::npos);
+  EXPECT_FALSE(EditorShellTestAccess::App(shell).isDirty());
+}
+
 TEST(EditorShellTest, ShapeClipboardCopyCutAndPasteUseCanvasSelection) {
   gui::EditorWindow window = MakeHiddenWindow();
   if (!window.valid()) {
