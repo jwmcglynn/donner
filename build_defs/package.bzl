@@ -48,18 +48,22 @@ _DEFAULT_GPU_INVENTORY_GLOBS = [
     "BUILD.bazel",
 ]
 
-# Directories that are build output or fetched dependencies, not package
-# sources. Bazel's convenience symlinks (`bazel-bin`, `bazel-out`,
-# `bazel-testlogs`, `bazel-<workspace>`) and `external` live in the workspace
-# root and `**` globs follow them, so without this the root package's glob walks
-# the whole output base. It re-collects staged copies of real sources under
-# runfiles paths, and because runfiles trees nest, it collects the same file at
-# exponentially many depths: measured at 27010 matches against 1353 real files.
+# Output-shaped matches are not package sources. Bazel applies excludes after
+# it has traversed every include glob, so these filters cannot make a recursive
+# workspace-root glob safe: such a glob follows the Bazel convenience symlinks
+# before the matching output paths are removed from the result. The macro below
+# therefore rejects recursive root overrides separately.
 _OUTPUT_TREE_EXCLUDES = [
     "bazel-*/**",
     "external/**",
     "**/*.runfiles/**",
 ]
+
+def _reject_recursive_workspace_root_globs(patterns):
+    if native.package_name() == "":
+        for pattern in patterns:
+            if pattern == "**" or pattern.startswith("**/"):
+                fail("donner_package() cannot use a recursive glob from the workspace root: %s" % pattern)
 
 def donner_package(gpu_inventory_globs = None):
     """Declares the repo-wide per-package rules for this BUILD file.
@@ -78,10 +82,13 @@ def donner_package(gpu_inventory_globs = None):
         this file as a new Rust-built archive site and failed the ratchet, which
         is the scan working correctly on the wrong input.
     """
+    inventory_globs = gpu_inventory_globs if gpu_inventory_globs != None else _DEFAULT_GPU_INVENTORY_GLOBS
+    _reject_recursive_workspace_root_globs(inventory_globs)
+
     native.filegroup(
         name = "gpu_inventory_srcs",
         srcs = native.glob(
-            gpu_inventory_globs if gpu_inventory_globs != None else _DEFAULT_GPU_INVENTORY_GLOBS,
+            inventory_globs,
             exclude = _OUTPUT_TREE_EXCLUDES,
             allow_empty = True,
         ),

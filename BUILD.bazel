@@ -107,5 +107,4 @@ filegroup(
 donner_package(gpu_inventory_globs = [
     "MODULE.bazel",
     ".bazelrc",
-    "**/*.bzl",
 ])
