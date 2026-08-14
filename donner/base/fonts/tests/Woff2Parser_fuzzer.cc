@@ -21,7 +21,7 @@ void ReplayInvalidSignatureRegressionSeed() {
 }
 
 void ReplayDeclaredSizeAllocationRegressionSeed() {
-  static const auto kResult = [] {
+  const auto result = [] {
     std::array<uint8_t, 50> data{};
     data[0] = 0x77;
     data[1] = 0x4F;
@@ -37,7 +37,7 @@ void ReplayDeclaredSizeAllocationRegressionSeed() {
     data[31] = 8;
     return Woff2Parser::Decompress(data);
   }();
-  if (!kResult.hasError() || kResult.error().reason != "WOFF2: decompression failed") {
+  if (!result.hasError() || result.error().reason != "WOFF2: decompression failed") {
     std::abort();
   }
 }
