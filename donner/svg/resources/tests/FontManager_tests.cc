@@ -220,21 +220,23 @@ TEST(FontManagerTest, ContextOwnedManagerSharesBudgetAcrossManagerLifetimes) {
   const size_t charge = RetainedCharge(data);
 
   FontManager& contextManager = registry.ctx().emplace<FontManager>(registry, charge, 1);
+  FontManager peerManager(registry, charge * 2, 2);
   const FontHandle handle = contextManager.loadFontData(data);
   ASSERT_TRUE(static_cast<bool>(handle));
   EXPECT_EQ(contextManager.loadedFontBytes(), charge);
   EXPECT_EQ(contextManager.numLoadedFonts(), 1u);
+  EXPECT_EQ(peerManager.loadedFontBytes(), charge);
+  EXPECT_EQ(peerManager.numLoadedFonts(), 1u);
+  EXPECT_FALSE(static_cast<bool>(peerManager.loadFontData(data)));
 
   registry.ctx().erase<FontManager>();
-  FontManager replacement(registry, charge * 2, 2);
-  EXPECT_EQ(replacement.loadedFontBytes(), charge);
-  EXPECT_EQ(replacement.numLoadedFonts(), 1u);
-  EXPECT_FALSE(static_cast<bool>(replacement.loadFontData(data)));
+  EXPECT_EQ(peerManager.loadedFontBytes(), charge);
+  EXPECT_EQ(peerManager.numLoadedFonts(), 1u);
 
   registry.destroy(handle.entity());
-  EXPECT_EQ(replacement.loadedFontBytes(), 0u);
-  EXPECT_EQ(replacement.numLoadedFonts(), 0u);
-  EXPECT_TRUE(static_cast<bool>(replacement.loadFontData(data)));
+  EXPECT_EQ(peerManager.loadedFontBytes(), 0u);
+  EXPECT_EQ(peerManager.numLoadedFonts(), 0u);
+  EXPECT_TRUE(static_cast<bool>(peerManager.loadFontData(data)));
 }
 
 TEST(FontManagerTest, LoadWoff1Data) {

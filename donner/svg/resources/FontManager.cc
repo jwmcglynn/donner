@@ -221,15 +221,10 @@ const FontFamilyProvider* FontManager::DefaultFontProvider() {
 
 FontManager::FontManager(Registry& registry, size_t maximumLoadedFontBytes,
                          size_t maximumLoadedFonts)
-    : registry_(registry), provider_(g_defaultFontProvider.load(std::memory_order_acquire)) {
-  if (auto* context = registry_.ctx().find<FontBudgetContext>()) {
-    budgetState_ = context->state;
-  } else {
-    budgetState_ = std::make_shared<FontBudgetState>(
-        FontBudgetState{maximumLoadedFontBytes, maximumLoadedFonts, 0, 0});
-    registry_.ctx().emplace<FontBudgetContext>(FontBudgetContext{budgetState_});
-  }
-}
+    : registry_(registry),
+      provider_(g_defaultFontProvider.load(std::memory_order_acquire)),
+      budgetState_(std::make_shared<FontBudgetState>(
+          FontBudgetState{maximumLoadedFontBytes, maximumLoadedFonts, 0, 0})) {}
 FontManager::~FontManager() = default;
 
 void FontManager::addFontFace(const css::FontFace& face) {
@@ -451,11 +446,11 @@ bool FontManager::isValidatedFont(FontHandle handle) const {
 }
 
 size_t FontManager::loadedFontBytes() const {
-  return budgetState_->usedBytes;
+  return sharedBudgetState()->usedBytes;
 }
 
 size_t FontManager::numLoadedFonts() const {
-  return budgetState_->usedFonts;
+  return sharedBudgetState()->usedFonts;
 }
 
 FontHandle FontManager::fallbackFont() {
@@ -506,6 +501,16 @@ bool FontManager::setRawFontData(Entity entity,
   return storeLoadedFont(entity, std::move(font));
 }
 
+const std::shared_ptr<FontManager::FontBudgetState>& FontManager::sharedBudgetState() const {
+  if (const auto* context = registry_.ctx().find<FontBudgetContext>()) {
+    assert(context->state);
+    budgetState_ = context->state;
+  } else {
+    registry_.ctx().emplace<FontBudgetContext>(FontBudgetContext{budgetState_});
+  }
+  return budgetState_;
+}
+
 bool FontManager::storeLoadedFont(Entity entity, LoadedFontComponent font) {
   const size_t rawBytes = font.fontData().size();
   const size_t indexBytes = font.sfnt.retainedBytes();
@@ -517,29 +522,30 @@ bool FontManager::storeLoadedFont(Entity entity, LoadedFontComponent font) {
   if (registry_.all_of<LoadedFontComponent>(entity)) {
     registry_.remove<LoadedFontComponent>(entity);
   }
-  font.reservation = FontBudgetReservation(budgetState_, chargeBytes);
+  font.reservation = FontBudgetReservation(sharedBudgetState(), chargeBytes);
   registry_.emplace<LoadedFontComponent>(entity, std::move(font));
   return true;
 }
 
 bool FontManager::canStoreLoadedFont(Entity entity, size_t rawBytes, size_t indexBytes) const {
-  if (rawBytes > budgetState_->maximumBytes || indexBytes > budgetState_->maximumBytes - rawBytes) {
+  const std::shared_ptr<FontBudgetState>& budgetState = sharedBudgetState();
+  if (rawBytes > budgetState->maximumBytes || indexBytes > budgetState->maximumBytes - rawBytes) {
     return false;
   }
   const size_t chargeBytes = rawBytes + indexBytes;
 
   const auto* previous = registry_.try_get<LoadedFontComponent>(entity);
-  if (previous && previous->reservation.state != budgetState_) {
+  if (previous && previous->reservation.state != budgetState) {
     return false;
   }
   const size_t previousBytes = previous ? previous->reservation.bytes : 0;
   const size_t previousFonts = previous ? 1 : 0;
-  assert(budgetState_->usedBytes >= previousBytes);
-  assert(budgetState_->usedFonts >= previousFonts);
-  const size_t retainedBytes = budgetState_->usedBytes - previousBytes;
-  const size_t retainedFonts = budgetState_->usedFonts - previousFonts;
-  if (chargeBytes > budgetState_->maximumBytes - retainedBytes ||
-      retainedFonts >= budgetState_->maximumFonts) {
+  assert(budgetState->usedBytes >= previousBytes);
+  assert(budgetState->usedFonts >= previousFonts);
+  const size_t retainedBytes = budgetState->usedBytes - previousBytes;
+  const size_t retainedFonts = budgetState->usedFonts - previousFonts;
+  if (chargeBytes > budgetState->maximumBytes - retainedBytes ||
+      retainedFonts >= budgetState->maximumFonts) {
     return false;
   }
   return true;
@@ -547,7 +553,7 @@ bool FontManager::canStoreLoadedFont(Entity entity, size_t rawBytes, size_t inde
 
 bool FontManager::loadWoff1(Entity entity, std::span<const uint8_t> data) {
   fonts::WoffParser::Options options;
-  options.maximumSfntSize = std::min(options.maximumSfntSize, budgetState_->maximumBytes);
+  options.maximumSfntSize = std::min(options.maximumSfntSize, sharedBudgetState()->maximumBytes);
   auto maybeFont = fonts::WoffParser::Parse(data, options);
   if (maybeFont.hasError()) {
     std::cerr << "FontManager: WOFF1 parsing failed: " << maybeFont.error().reason << "\n";
@@ -598,7 +604,8 @@ bool FontManager::loadFontDataIntoEntity(Entity entity, std::span<const uint8_t>
 #ifdef DONNER_TEXT_WOFF2_ENABLED
 bool FontManager::loadWoff2(Entity entity, std::span<const uint8_t> data) {
   fonts::Woff2Parser::Options options;
-  options.maximumOutputSize = std::min(options.maximumOutputSize, budgetState_->maximumBytes);
+  options.maximumOutputSize =
+      std::min(options.maximumOutputSize, sharedBudgetState()->maximumBytes);
   auto result = fonts::Woff2Parser::Decompress(data, options);
   if (result.hasError()) {
     std::cerr << "FontManager: WOFF2 decompression failed: " << result.error().reason << "\n";

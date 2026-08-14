@@ -83,9 +83,12 @@ public:
   /**
    * Construct a FontManager tied to the provided ECS @p registry.
    *
-   * The first manager for a registry establishes its aggregate byte and item limits. Later manager
-   * instances for the same registry share that state so loaded components remain accounted across
-   * manager lifetimes.
+   * The first manager to access a registry's font budget establishes its aggregate byte and item
+   * limits. Later manager instances for the same registry share that state so loaded components
+   * remain accounted across manager lifetimes.
+   *
+   * Construction does not access the registry context, so a FontManager can itself be safely
+   * constructed by `registry.ctx().emplace<FontManager>(registry)`.
    */
   explicit FontManager(Registry& registry,
                        size_t maximumLoadedFontBytes = kDefaultMaximumLoadedFontBytes,
@@ -254,6 +257,14 @@ private:
    */
   bool setRawFontData(Entity entity, std::vector<uint8_t> data);
   bool setRawFontData(Entity entity, std::shared_ptr<const std::vector<uint8_t>> sharedData);
+
+  /**
+   * Adopt the registry's persistent aggregate budget, or install this manager's candidate.
+   *
+   * This must only run after construction because a FontManager can itself be under construction
+   * inside the registry context's container.
+   */
+  const std::shared_ptr<FontBudgetState>& sharedBudgetState() const;
   bool canStoreLoadedFont(Entity entity, size_t rawBytes, size_t indexBytes) const;
   bool storeLoadedFont(Entity entity, LoadedFontComponent font);
   bool loadFontDataSharedIntoEntity(Entity entity,
@@ -309,7 +320,7 @@ private:
   const FontFamilyProvider* provider_ = nullptr;
 
   /// Aggregate budget shared with loaded-font components so their destruction safely releases it.
-  std::shared_ptr<FontBudgetState> budgetState_;
+  mutable std::shared_ptr<FontBudgetState> budgetState_;
 };
 
 }  // namespace donner::svg
