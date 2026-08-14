@@ -812,6 +812,10 @@ public:
   static TextEditor& Source(EditorShell& shell) { return shell.textEditor_; }
   static const TextEditor& Source(const EditorShell& shell) { return shell.textEditor_; }
 
+  static FormatBarState ComputeFormatBarState(EditorShell& shell) {
+    return shell.computeFormatBarState();
+  }
+
   static bool TryOpenPath(EditorShell& shell, std::string_view path, std::string* error) {
     return shell.tryOpenPath(path, error);
   }
@@ -3183,6 +3187,28 @@ TEST(EditorShellTest, ShellGeometryHelpersClampToViewportAndSelectionCache) {
       ImVec2(844.0f, 390.0f - compactLandscape.topBarHeight));
   EXPECT_LE(compactPalette.bottomRight.x, compactLandscape.panelX);
   EXPECT_FLOAT_EQ(compactPalette.width(), 156.0f);
+}
+
+TEST(EditorShellTest, TextFormatBarPreviewsEveryCatalogFamilyInItsOwnFace) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
+
+  EditorShell shell(window, OptionsWithSource(R"(<svg xmlns="http://www.w3.org/2000/svg">
+    <text id="target" x="10" y="30">Preview</text>
+  </svg>)"));
+  ASSERT_TRUE(shell.valid());
+  auto target = EditorShellTestAccess::App(shell).document().document().querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  EditorShellTestAccess::App(shell).setSelection(*target);
+
+  const FormatBarState state = EditorShellTestAccess::ComputeFormatBarState(shell);
+  ASSERT_TRUE(state.visible);
+  ASSERT_EQ(state.families.size(), shell.fontCatalog().families().size());
+  for (const FormatBarFontFamily& family : state.families) {
+    EXPECT_NE(family.previewFont, nullptr) << family.name;
+  }
 }
 
 TEST(EditorShellTest, PrivateUiRenderHelpersCoverPaneToolbarAndPanelStates) {
