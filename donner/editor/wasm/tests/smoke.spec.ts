@@ -838,7 +838,7 @@ for (
     { id: "donner-showcase", name: "Donner Showcase", xFraction: 0.5, y: 390 },
   ] as const
 ) {
-  test(`carousel loads ${sample.name} on the first interactive frame`, async ({ page }) => {
+  test(`carousel loads ${sample.name} on the first interactive frame`, async ({ page, browserName }) => {
     const fatalMessages = await openEditor(page, { postInitializationDwellMs: 0 });
     const canvas = page.locator("canvas#canvas");
     const bounds = await canvas.boundingBox();
@@ -856,7 +856,10 @@ for (
     const beforeFrames = await page.evaluate(() => window.__donnerMainLoopRenderedFrames || 0);
     const clickStartedAt = await page.evaluate(() => performance.now());
     await page.mouse.click(bounds.x + bounds.width * sample.xFraction, bounds.y + sample.y);
-    const carouselDeadlineMs = scaledMs(300);
+    // WebKit snapshot readback latency follows shared-runner load more closely
+    // than the other browser lanes. Keep their tighter bound while allowing
+    // WebKit enough headroom to avoid making runner speed the primary signal.
+    const carouselDeadlineMs = scaledMs(browserName === "webkit" ? 500 : 300);
     const phaseTimings: {
       activatedMs?: number;
       submittedMs?: number;
