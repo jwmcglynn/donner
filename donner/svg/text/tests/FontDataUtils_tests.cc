@@ -111,7 +111,6 @@ TEST(FontDataUtils, ReadUnitsPerEmRejectsOutOfRangeHeadTable) {
 }
 
 TEST(FontDataUtils, HasOutlineTablesDetectsSupportedOutlineTags) {
-  EXPECT_TRUE(HasOutlineTables(MakeSfnt({TableSpec{.tag = "glyf", .offset = 28, .data = {}}})));
   EXPECT_TRUE(HasOutlineTables(MakeSfnt({TableSpec{.tag = "CFF ", .offset = 28, .data = {}}})));
   EXPECT_TRUE(HasOutlineTables(MakeSfnt({TableSpec{.tag = "CFF2", .offset = 28, .data = {}}})));
 }

@@ -127,7 +127,7 @@ filegroup(
         "//donner/base/fonts:testdata/valid-001.woff",
         "//donner/base/fonts:testdata/valid-001.woff2",
         "//third_party/public-sans:PublicSans-Medium.otf",
-    ],
+    ] + glob(["tests/font_decoder_structured_corpus/*"]),
 )
 
 donner_cc_fuzzer(

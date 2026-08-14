@@ -1,8 +1,6 @@
 #include "donner/svg/text/TextBackendSimple.h"
 
 #include "donner/base/Utf8.h"
-#include "donner/svg/text/FontDataUtils.h"
-
 #define STBTT_DEF extern
 #include <stb/stb_truetype.h>
 
@@ -23,6 +21,12 @@ uint32_t decodeUtf8(std::string_view str, size_t& i) {
 
 constexpr float kSmallCapScale = 0.8f;
 
+bool HasCachedOutlineTables(const FontManager& fontManager, FontHandle font) {
+  return fontManager.sfntTable(font, "glyf").has_value() ||
+         fontManager.sfntTable(font, "CFF ").has_value() ||
+         fontManager.sfntTable(font, "CFF2").has_value();
+}
+
 /// Cached stb_truetype parse state attached to a font entity.
 struct StbFontComponent {
   stbtt_fontinfo fontInfo{};
@@ -39,15 +43,14 @@ const stbtt_fontinfo* TextBackendSimple::getFontInfo(FontHandle font) const {
     return nullptr;
   }
 
-  const auto fontData = fontManager_.fontData(font);
-  if (!ValidateSfnt(fontData) || !HasOutlineTables(fontData)) {
-    return nullptr;
-  }
-
   if (const auto* cached = registry_.try_get<StbFontComponent>(font.entity())) {
     return cached->valid ? &cached->fontInfo : nullptr;
   }
 
+  if (!fontManager_.isValidatedFont(font) || !HasCachedOutlineTables(fontManager_, font)) {
+    return nullptr;
+  }
+  const auto fontData = fontManager_.fontData(font);
   auto& cached = registry_.emplace<StbFontComponent>(font.entity());
   if (stbtt_InitFont(&cached.fontInfo, fontData.data(), 0)) {
     cached.valid = true;
@@ -64,9 +67,8 @@ FontVMetrics TextBackendSimple::fontVMetrics(FontHandle font) const {
   FontVMetrics metrics;
   stbtt_GetFontVMetrics(info, &metrics.ascent, &metrics.descent, &metrics.lineGap);
 
-  const auto fontData = fontManager_.fontData(font);
   // x-height from the OS/2 table (`sxHeight`, offset 86), present in version >= 2.
-  if (const auto os2 = FindSfntTable(fontData, "OS/2"); os2 && os2->size() >= 88) {
+  if (const auto os2 = fontManager_.sfntTable(font, "OS/2"); os2 && os2->size() >= 88) {
     const uint16_t version = static_cast<uint16_t>(ReadInt16Be(*os2, 0));
     if (version >= 2) {
       metrics.xHeight = ReadInt16Be(*os2, 86);
@@ -81,8 +83,9 @@ float TextBackendSimple::scaleForPixelHeight(FontHandle font, float pixelHeight)
     return stbtt_ScaleForMappingEmToPixels(info, pixelHeight);
   }
 
-  const auto fontData = fontManager_.fontData(font);
-  const uint16_t upem = ReadUnitsPerEm(fontData);
+  const auto head = fontManager_.sfntTable(font, "head");
+  const uint16_t upem =
+      head && head->size() >= 20 ? static_cast<uint16_t>(((*head)[18] << 8) | (*head)[19]) : 0;
   return upem > 0 ? pixelHeight / static_cast<float>(upem) : 0.0f;
 }
 
@@ -100,7 +103,7 @@ std::optional<UnderlineMetrics> TextBackendSimple::underlineMetrics(FontHandle f
     return std::nullopt;
   }
 
-  const auto table = FindSfntTable(fontManager_.fontData(font), "post");
+  const auto table = fontManager_.sfntTable(font, "post");
   if (!table || table->size() < 12) {
     return std::nullopt;
   }
@@ -117,7 +120,7 @@ std::optional<UnderlineMetrics> TextBackendSimple::strikeoutMetrics(FontHandle f
     return std::nullopt;
   }
 
-  const auto table = FindSfntTable(fontManager_.fontData(font), "OS/2");
+  const auto table = fontManager_.sfntTable(font, "OS/2");
   if (!table || table->size() < 30) {
     return std::nullopt;
   }
@@ -134,7 +137,7 @@ std::optional<SubSuperMetrics> TextBackendSimple::subSuperMetrics(FontHandle fon
     return std::nullopt;
   }
 
-  const auto table = FindSfntTable(fontManager_.fontData(font), "OS/2");
+  const auto table = fontManager_.sfntTable(font, "OS/2");
   if (!table || table->size() < 26) {
     return std::nullopt;
   }
@@ -213,8 +216,7 @@ Path TextBackendSimple::glyphOutline(FontHandle font, int glyphIndex, float scal
 }
 
 bool TextBackendSimple::isBitmapOnly(FontHandle font) const {
-  const auto fontData = fontManager_.fontData(font);
-  return !fontData.empty() && !HasOutlineTables(fontData);
+  return fontManager_.isValidatedFont(font) && !HasCachedOutlineTables(fontManager_, font);
 }
 
 bool TextBackendSimple::isCursive(uint32_t /*codepoint*/) const {

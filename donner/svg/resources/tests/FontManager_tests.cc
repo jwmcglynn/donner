@@ -4,11 +4,20 @@
 #include <gtest/gtest.h>
 
 #include <fstream>
+#include <memory>
 #include <vector>
 
+#include "donner/base/fonts/SfntUtils.h"
 #include "embed_resources/PublicSansFont.h"
 
 namespace donner::svg {
+
+struct FontManagerTestAccess {
+  static bool ReplaceFontData(FontManager& manager, FontHandle handle,
+                              std::span<const uint8_t> data) {
+    return manager.loadFontDataIntoEntity(handle.entity(), data);
+  }
+};
 
 namespace {
 
@@ -61,6 +70,12 @@ private:
   std::vector<std::string> families_;
 };
 
+size_t RetainedCharge(std::span<const uint8_t> data) {
+  auto sfnt = fonts::SfntFont::Validate(data);
+  EXPECT_TRUE(sfnt.has_value());
+  return data.size() + (sfnt ? sfnt->retainedBytes() : 0);
+}
+
 }  // namespace
 
 TEST(FontManagerTest, FallbackFontLoads) {
@@ -98,10 +113,104 @@ TEST(FontManagerTest, EnforcesAggregateLoadedFontBudget) {
   Registry registry;
   std::vector<uint8_t> data(embedded::kPublicSansMediumOtf.begin(),
                             embedded::kPublicSansMediumOtf.end());
-  FontManager mgr(registry, data.size());
+  FontManager mgr(registry, RetainedCharge(data));
 
   EXPECT_TRUE(static_cast<bool>(mgr.loadFontData(data)));
   EXPECT_FALSE(static_cast<bool>(mgr.loadFontData(data)));
+}
+
+TEST(FontManagerTest, AccountsExactFontAndCachedIndexBytes) {
+  Registry registry;
+  const std::vector<uint8_t> data(embedded::kPublicSansMediumOtf.begin(),
+                                  embedded::kPublicSansMediumOtf.end());
+  const size_t charge = RetainedCharge(data);
+  FontManager mgr(registry, charge * 2);
+
+  EXPECT_EQ(mgr.loadedFontBytes(), 0u);
+  EXPECT_EQ(mgr.numLoadedFonts(), 0u);
+  ASSERT_TRUE(static_cast<bool>(mgr.loadFontData(data)));
+  EXPECT_EQ(mgr.loadedFontBytes(), charge);
+  EXPECT_EQ(mgr.numLoadedFonts(), 1u);
+  ASSERT_TRUE(static_cast<bool>(mgr.loadFontData(data)));
+  EXPECT_EQ(mgr.loadedFontBytes(), charge * 2);
+  EXPECT_EQ(mgr.numLoadedFonts(), 2u);
+}
+
+TEST(FontManagerTest, EnforcesLoadedFontCountWithoutLeakingBudget) {
+  Registry registry;
+  const std::vector<uint8_t> data(embedded::kPublicSansMediumOtf.begin(),
+                                  embedded::kPublicSansMediumOtf.end());
+  FontManager mgr(registry, RetainedCharge(data) * 2, 1);
+
+  ASSERT_TRUE(static_cast<bool>(mgr.loadFontData(data)));
+  EXPECT_FALSE(static_cast<bool>(mgr.loadFontData(data)));
+  EXPECT_EQ(mgr.numLoadedFonts(), 1u);
+  EXPECT_EQ(mgr.loadedFontBytes(), RetainedCharge(data));
+}
+
+TEST(FontManagerTest, RejectedFontDoesNotConsumeAggregateBudget) {
+  Registry registry;
+  FontManager mgr(registry);
+  const std::vector<uint8_t> invalid = {0x00, 0x01, 0x00, 0x00};
+
+  EXPECT_FALSE(static_cast<bool>(mgr.loadFontData(invalid)));
+  EXPECT_EQ(mgr.loadedFontBytes(), 0u);
+  EXPECT_EQ(mgr.numLoadedFonts(), 0u);
+}
+
+TEST(FontManagerTest, ReplacementUpdatesExactAggregateCharge) {
+  Registry registry;
+  const std::vector<uint8_t> original(embedded::kPublicSansMediumOtf.begin(),
+                                      embedded::kPublicSansMediumOtf.end());
+  std::vector<uint8_t> replacement = original;
+  replacement.resize(replacement.size() + 17, 0);
+  FontManager mgr(registry, RetainedCharge(replacement));
+
+  const FontHandle handle = mgr.loadFontData(original);
+  ASSERT_TRUE(static_cast<bool>(handle));
+  ASSERT_TRUE(FontManagerTestAccess::ReplaceFontData(mgr, handle, replacement));
+  EXPECT_EQ(mgr.fontData(handle).size(), replacement.size());
+  EXPECT_EQ(mgr.loadedFontBytes(), RetainedCharge(replacement));
+  EXPECT_EQ(mgr.numLoadedFonts(), 1u);
+}
+
+TEST(FontManagerTest, RejectedReplacementPreservesOriginalReservation) {
+  Registry registry;
+  const std::vector<uint8_t> original(embedded::kPublicSansMediumOtf.begin(),
+                                      embedded::kPublicSansMediumOtf.end());
+  std::vector<uint8_t> oversized = original;
+  oversized.resize(oversized.size() + 1, 0);
+  const size_t originalCharge = RetainedCharge(original);
+  FontManager mgr(registry, originalCharge);
+
+  const FontHandle handle = mgr.loadFontData(original);
+  ASSERT_TRUE(static_cast<bool>(handle));
+  EXPECT_FALSE(FontManagerTestAccess::ReplaceFontData(mgr, handle, oversized));
+  EXPECT_EQ(mgr.fontData(handle).size(), original.size());
+  EXPECT_EQ(mgr.loadedFontBytes(), originalCharge);
+  EXPECT_EQ(mgr.numLoadedFonts(), 1u);
+}
+
+TEST(FontManagerTest, EntityDestructionAndManagerLifecycleReleaseReservations) {
+  Registry registry;
+  const std::vector<uint8_t> data(embedded::kPublicSansMediumOtf.begin(),
+                                  embedded::kPublicSansMediumOtf.end());
+  const size_t charge = RetainedCharge(data);
+  FontHandle handle;
+  {
+    FontManager first(registry, charge);
+    handle = first.loadFontData(data);
+    ASSERT_TRUE(static_cast<bool>(handle));
+    EXPECT_EQ(first.loadedFontBytes(), charge);
+  }
+
+  FontManager second(registry, charge * 2);
+  EXPECT_EQ(second.loadedFontBytes(), charge);
+  EXPECT_EQ(second.numLoadedFonts(), 1u);
+  registry.destroy(handle.entity());
+  EXPECT_EQ(second.loadedFontBytes(), 0u);
+  EXPECT_EQ(second.numLoadedFonts(), 0u);
+  EXPECT_TRUE(static_cast<bool>(second.loadFontData(data)));
 }
 
 TEST(FontManagerTest, LoadWoff1Data) {

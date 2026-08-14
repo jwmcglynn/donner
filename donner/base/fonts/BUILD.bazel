@@ -4,8 +4,25 @@ load("//build_defs:visibility.bzl", "donner_internal_visibility")
 
 donner_cc_library(
     name = "sfnt_utils",
+    srcs = ["SfntUtils.cc"],
     hdrs = ["SfntUtils.h"],
     visibility = ["//donner:__subpackages__"],
+)
+
+donner_cc_test(
+    name = "sfnt_utils_tests",
+    srcs = ["tests/SfntUtils_tests.cc"],
+    deps = [
+        ":sfnt_utils",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_fuzzer(
+    name = "sfnt_utils_fuzzer",
+    srcs = ["tests/SfntUtils_fuzzer.cc"],
+    corpus = "tests/sfnt_utils_corpus",
+    deps = [":sfnt_utils"],
 )
 
 exports_files(

@@ -138,17 +138,17 @@ std::vector<uint8_t> HmtxTable(const std::vector<uint16_t>& advances) {
 /// on-curve, decoding to a quadratic curve segment. Padded to 24 bytes.
 std::vector<uint8_t> QuadGlyphData() {
   std::vector<uint8_t> glyph;
-  AppendBE16(&glyph, 1);  // numberOfContours.
-  AppendBE16(&glyph, 0);  // xMin.
-  AppendBE16(&glyph, 0);  // yMin.
+  AppendBE16(&glyph, 1);    // numberOfContours.
+  AppendBE16(&glyph, 0);    // xMin.
+  AppendBE16(&glyph, 0);    // yMin.
   AppendBE16(&glyph, 100);  // xMax.
   AppendBE16(&glyph, 100);  // yMax.
-  AppendBE16(&glyph, 2);  // endPtsOfContours[0]: last point index.
-  AppendBE16(&glyph, 0);  // instructionLength.
+  AppendBE16(&glyph, 2);    // endPtsOfContours[0]: last point index.
+  AppendBE16(&glyph, 0);    // instructionLength.
   // Flags: bit0 on-curve, bit1 x-short, bit2 y-short, bits 4/5 positive deltas.
-  glyph.push_back(0x37);  // (0,0) on-curve.
-  glyph.push_back(0x36);  // (+50,+100) off-curve control.
-  glyph.push_back(0x17);  // (+50,-100) on-curve.
+  glyph.push_back(0x37);                     // (0,0) on-curve.
+  glyph.push_back(0x36);                     // (+50,+100) off-curve control.
+  glyph.push_back(0x17);                     // (+50,-100) on-curve.
   glyph.insert(glyph.end(), {0, 50, 50});    // x deltas.
   glyph.insert(glyph.end(), {0, 100, 100});  // y deltas (signs from flags).
   while (glyph.size() < 24) {
@@ -178,7 +178,7 @@ std::vector<uint8_t> CmapTable(
   AppendBE16(&table, 12);  // Format 12.
   AppendBE16(&table, 0);   // Reserved.
   AppendBE32(&table, static_cast<uint32_t>(16 + groups.size() * 12));  // Length.
-  AppendBE32(&table, 0);  // Language.
+  AppendBE32(&table, 0);                                               // Language.
   AppendBE32(&table, static_cast<uint32_t>(groups.size()));
   for (const auto& [start, end, startGlyph] : groups) {
     AppendBE32(&table, start);
@@ -191,9 +191,9 @@ std::vector<uint8_t> CmapTable(
 /// Format-0 kern table with (left glyph, right glyph, value) pairs sorted by key.
 std::vector<uint8_t> KernTable(const std::vector<std::tuple<uint16_t, uint16_t, int16_t>>& pairs) {
   std::vector<uint8_t> table;
-  AppendBE16(&table, 0);  // Table version.
-  AppendBE16(&table, 1);  // Number of subtables.
-  AppendBE16(&table, 0);  // Subtable version.
+  AppendBE16(&table, 0);                                             // Table version.
+  AppendBE16(&table, 1);                                             // Number of subtables.
+  AppendBE16(&table, 0);                                             // Subtable version.
   AppendBE16(&table, static_cast<uint16_t>(14 + pairs.size() * 6));  // Subtable length.
   AppendBE16(&table, 1);  // Coverage: horizontal kerning.
   AppendBE16(&table, static_cast<uint16_t>(pairs.size()));
@@ -282,9 +282,9 @@ TEST_F(TextBackendSimpleTest, NullFontHandleYieldsEmptyResults) {
   EXPECT_FALSE(backend_.subSuperMetrics(nullFont).has_value());
   EXPECT_TRUE(backend_.glyphOutline(nullFont, 1, 1.0f).empty());
   EXPECT_FALSE(backend_.isBitmapOnly(nullFont));
-  EXPECT_THAT(backend_.shapeRun(nullFont, 16.0f, "AV", 0, 2, false, FontVariant::Normal, false)
-                  .glyphs,
-              IsEmpty());
+  EXPECT_THAT(
+      backend_.shapeRun(nullFont, 16.0f, "AV", 0, 2, false, FontVariant::Normal, false).glyphs,
+      IsEmpty());
   EXPECT_DOUBLE_EQ(backend_.crossSpanKern(nullFont, 16.0f, nullFont, 16.0f, 'A', 'V', false), 0.0);
 }
 
@@ -301,8 +301,9 @@ TEST_F(TextBackendSimpleTest, NonOutlineFontFallsBackToHeadUnitsPerEm) {
 }
 
 TEST_F(TextBackendSimpleTest, UnparseableOutlineFontFailsInitOnceAndCachesFailure) {
-  // A glyf tag makes HasOutlineTables() pass, but without cmap stbtt_InitFont fails.
-  const FontHandle font = loadFont(MakeSfnt({{"glyf", {0, 0, 0, 0}}, {"head", HeadTable(1000)}}));
+  // A CFF tag passes bounded container validation, but malformed CFF data makes stb initialization
+  // fail and exercise the cached invalid-backend state.
+  const FontHandle font = loadFont(MakeSfnt({{"CFF ", {0, 0, 0, 0}}, {"head", HeadTable(1000)}}));
 
   EXPECT_EQ(backend_.fontVMetrics(font).ascent, 0);
   // Second call hits the cached invalid parse state.
@@ -368,36 +369,33 @@ TEST_F(TextBackendSimpleTest, ShapeRunAppliesHorizontalKerning) {
   // 100px at 1000 units/em scales design units by 0.1 (as a float).
   const auto shaped =
       backend_.shapeRun(font, 100.0f, "AV", 0, 2, false, FontVariant::Normal, false);
-  EXPECT_THAT(shaped.glyphs,
-              ElementsAre(AllOf(GlyphIndexIs(1), GlyphXAdvanceIs(DoubleNear(50.0, 1e-4)),
-                                GlyphXKernIs(DoubleEq(0.0))),
-                          AllOf(GlyphIndexIs(2), GlyphXAdvanceIs(DoubleNear(60.0, 1e-4)),
-                                GlyphXKernIs(DoubleNear(-10.0, 1e-4)),
-                                GlyphYKernIs(DoubleEq(0.0)))));
+  EXPECT_THAT(
+      shaped.glyphs,
+      ElementsAre(AllOf(GlyphIndexIs(1), GlyphXAdvanceIs(DoubleNear(50.0, 1e-4)),
+                        GlyphXKernIs(DoubleEq(0.0))),
+                  AllOf(GlyphIndexIs(2), GlyphXAdvanceIs(DoubleNear(60.0, 1e-4)),
+                        GlyphXKernIs(DoubleNear(-10.0, 1e-4)), GlyphYKernIs(DoubleEq(0.0)))));
 }
 
 TEST_F(TextBackendSimpleTest, ShapeRunVerticalLatinUsesSidewaysAdvancesAndVerticalKern) {
   const FontHandle font = fullFont();
 
   const auto shaped = backend_.shapeRun(font, 100.0f, "AV", 0, 2, true, FontVariant::Normal, false);
-  EXPECT_THAT(shaped.glyphs,
-              ElementsAre(AllOf(GlyphXAdvanceIs(DoubleEq(0.0)),
-                                GlyphYAdvanceIs(DoubleNear(50.0, 1e-4))),
-                          AllOf(GlyphXAdvanceIs(DoubleEq(0.0)),
-                                GlyphYAdvanceIs(DoubleNear(60.0, 1e-4)),
-                                GlyphYKernIs(DoubleNear(-10.0, 1e-4)),
-                                GlyphXKernIs(DoubleEq(0.0)))));
+  EXPECT_THAT(
+      shaped.glyphs,
+      ElementsAre(AllOf(GlyphXAdvanceIs(DoubleEq(0.0)), GlyphYAdvanceIs(DoubleNear(50.0, 1e-4))),
+                  AllOf(GlyphXAdvanceIs(DoubleEq(0.0)), GlyphYAdvanceIs(DoubleNear(60.0, 1e-4)),
+                        GlyphYKernIs(DoubleNear(-10.0, 1e-4)), GlyphXKernIs(DoubleEq(0.0)))));
 }
 
 TEST_F(TextBackendSimpleTest, ShapeRunVerticalCjkAdvancesByEmHeight) {
   const FontHandle font = fullFont();
 
   // U+4E00 in vertical mode: upright glyph, advance equals the font size.
-  const auto shaped = backend_.shapeRun(font, 100.0f, "\xE4\xB8\x80", 0, 3, true,
-                                        FontVariant::Normal, false);
-  EXPECT_THAT(shaped.glyphs,
-              ElementsAre(AllOf(GlyphIndexIs(3), GlyphXAdvanceIs(DoubleEq(0.0)),
-                                GlyphYAdvanceIs(DoubleEq(100.0)))));
+  const auto shaped =
+      backend_.shapeRun(font, 100.0f, "\xE4\xB8\x80", 0, 3, true, FontVariant::Normal, false);
+  EXPECT_THAT(shaped.glyphs, ElementsAre(AllOf(GlyphIndexIs(3), GlyphXAdvanceIs(DoubleEq(0.0)),
+                                               GlyphYAdvanceIs(DoubleEq(100.0)))));
 }
 
 TEST_F(TextBackendSimpleTest, ShapeRunZeroFontSizeReturnsEmpty) {
@@ -413,12 +411,11 @@ TEST_F(TextBackendSimpleTest, SmallCapsSynthesisUppercasesAndScalesLowercase) {
   const auto shaped =
       backend_.shapeRun(font, 100.0f, "aV", 0, 2, false, FontVariant::SmallCaps, false);
   // 'a' maps to the 'A' glyph at 80% scale; kerning still uses the full-size scale.
-  EXPECT_THAT(shaped.glyphs,
-              ElementsAre(AllOf(GlyphIndexIs(1), GlyphFontSizeScaleIs(FloatEq(0.8f)),
-                                GlyphXAdvanceIs(DoubleNear(40.0, 1e-4))),
-                          AllOf(GlyphIndexIs(2), GlyphFontSizeScaleIs(FloatEq(1.0f)),
-                                GlyphXAdvanceIs(DoubleNear(60.0, 1e-4)),
-                                GlyphXKernIs(DoubleNear(-10.0, 1e-4)))));
+  EXPECT_THAT(shaped.glyphs, ElementsAre(AllOf(GlyphIndexIs(1), GlyphFontSizeScaleIs(FloatEq(0.8f)),
+                                               GlyphXAdvanceIs(DoubleNear(40.0, 1e-4))),
+                                         AllOf(GlyphIndexIs(2), GlyphFontSizeScaleIs(FloatEq(1.0f)),
+                                               GlyphXAdvanceIs(DoubleNear(60.0, 1e-4)),
+                                               GlyphXKernIs(DoubleNear(-10.0, 1e-4)))));
 }
 
 // -- Cross-span kerning -------------------------------------------------------
@@ -455,15 +452,14 @@ TEST_F(TextBackendSimpleTest, GlyphOutlineDecodesQuadraticSegmentsWithFlippedY) 
   ASSERT_FALSE(path.empty());
 
   const bool hasQuad =
-      std::any_of(path.commands().begin(), path.commands().end(), [](const auto& command) {
-        return command.verb == Path::Verb::QuadTo;
-      });
+      std::any_of(path.commands().begin(), path.commands().end(),
+                  [](const auto& command) { return command.verb == Path::Verb::QuadTo; });
   EXPECT_TRUE(hasQuad);
 
   const Box2d bounds = path.bounds();
   EXPECT_NEAR(bounds.topLeft.x, 0.0, 1e-4);
   EXPECT_NEAR(bounds.bottomRight.x, 10.0, 1e-4);
-  EXPECT_LT(bounds.topLeft.y, 0.0);        // Above the baseline in SVG coordinates.
+  EXPECT_LT(bounds.topLeft.y, 0.0);  // Above the baseline in SVG coordinates.
   EXPECT_NEAR(bounds.bottomRight.y, 0.0, 1e-4);
 }
 
@@ -474,8 +470,7 @@ TEST_F(TextBackendSimpleTest, GlyphOutlineDecodesCurveSegmentsFromRealFont) {
   const auto shaped = backend_.shapeRun(font, 100.0f, "O", 0, 1, false, FontVariant::Normal, false);
   ASSERT_THAT(shaped.glyphs, ElementsAre(GlyphIndexIs(testing::Gt(0))));
 
-  const Path path =
-      backend_.glyphOutline(font, shaped.glyphs[0].glyphIndex, 0.1f);
+  const Path path = backend_.glyphOutline(font, shaped.glyphs[0].glyphIndex, 0.1f);
   ASSERT_FALSE(path.empty());
 
   // The letter 'O' must contain curve segments (quadratic for TrueType outlines,

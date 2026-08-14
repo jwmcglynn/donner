@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
 #include <unordered_map>
@@ -76,9 +77,19 @@ public:
   /// Default aggregate byte budget for font data loaded into one registry.
   static constexpr size_t kDefaultMaximumLoadedFontBytes = 64 * 1024 * 1024;
 
-  /// Construct a FontManager tied to the provided ECS \p registry.
+  /// Default maximum number of font byte streams retained in one registry.
+  static constexpr size_t kDefaultMaximumLoadedFonts = 1024;
+
+  /**
+   * Construct a FontManager tied to the provided ECS @p registry.
+   *
+   * The first manager for a registry establishes its aggregate byte and item limits. Later manager
+   * instances for the same registry share that state so loaded components remain accounted across
+   * manager lifetimes.
+   */
   explicit FontManager(Registry& registry,
-                       size_t maximumLoadedFontBytes = kDefaultMaximumLoadedFontBytes);
+                       size_t maximumLoadedFontBytes = kDefaultMaximumLoadedFontBytes,
+                       size_t maximumLoadedFonts = kDefaultMaximumLoadedFonts);
   /// Destructor.
   ~FontManager();
 
@@ -164,6 +175,24 @@ public:
   std::span<const uint8_t> fontData(FontHandle handle) const;
 
   /**
+   * Get a table from the cached, validated sfnt directory for a handle.
+   *
+   * @param handle A valid FontHandle.
+   * @param tag Four-byte sfnt table tag.
+   * @return A bounded table span, or std::nullopt if the handle or tag is invalid or absent.
+   */
+  std::optional<std::span<const uint8_t>> sfntTable(FontHandle handle, std::string_view tag) const;
+
+  /// Return true when @p handle has a cached validated sfnt directory.
+  bool isValidatedFont(FontHandle handle) const;
+
+  /// Exact font-data and cached-index bytes currently charged to this registry's budget.
+  size_t loadedFontBytes() const;
+
+  /// Number of loaded font components currently charged to this registry's budget.
+  size_t numLoadedFonts() const;
+
+  /**
    * Get the number of registered `@font-face` rules.
    */
   size_t numFaces() const;
@@ -211,6 +240,10 @@ public:
 private:
   struct FontFaceComponent;
   struct LoadedFontComponent;
+  struct FontBudgetContext;
+  struct FontBudgetState;
+  struct FontBudgetReservation;
+  friend struct FontManagerTestAccess;
 
   /**
    * Internal: load raw TTF/OTF data (not WOFF) from an owned buffer.
@@ -221,7 +254,8 @@ private:
    */
   bool setRawFontData(Entity entity, std::vector<uint8_t> data);
   bool setRawFontData(Entity entity, std::shared_ptr<const std::vector<uint8_t>> sharedData);
-  bool canStoreFontData(Entity entity, size_t size) const;
+  bool canStoreLoadedFont(Entity entity, size_t rawBytes, size_t indexBytes) const;
+  bool storeLoadedFont(Entity entity, LoadedFontComponent font);
   bool loadFontDataSharedIntoEntity(Entity entity,
                                     const std::shared_ptr<const std::vector<uint8_t>>& data);
 
@@ -274,8 +308,8 @@ private:
   /// Optional external provider (embedded/system catalog), borrowed. May be nullptr.
   const FontFamilyProvider* provider_ = nullptr;
 
-  /// Maximum total font bytes retained by loaded-font components in this registry.
-  size_t maximumLoadedFontBytes_;
+  /// Aggregate budget shared with loaded-font components so their destruction safely releases it.
+  std::shared_ptr<FontBudgetState> budgetState_;
 };
 
 }  // namespace donner::svg

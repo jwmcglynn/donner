@@ -14,7 +14,6 @@
 #include <hb.h>
 
 #include "donner/base/Utf8.h"
-#include "donner/svg/text/FontDataUtils.h"
 
 namespace donner::svg {
 
@@ -63,6 +62,12 @@ bool isCursiveScript(uint32_t cp) {
     return true;
   }
   return false;
+}
+
+bool HasCachedOutlineTables(const FontManager& fontManager, FontHandle font) {
+  return fontManager.sfntTable(font, "glyf").has_value() ||
+         fontManager.sfntTable(font, "CFF ").has_value() ||
+         fontManager.sfntTable(font, "CFF2").has_value();
 }
 
 /// Small-caps synthesis scale factor.
@@ -165,6 +170,10 @@ hb_font_t* TextBackendFull::getOrCreateHbFont(FontHandle handle) const {
     return entry->font;
   }
 
+  if (!fontManager_.isValidatedFont(handle)) {
+    return nullptr;
+  }
+
   // Create a FreeType face from the raw font data, then wrap it with HarfBuzz.
   const auto data = fontManager_.fontData(handle);
   if (data.empty()) {
@@ -212,12 +221,11 @@ hb_font_t* TextBackendFull::getOrCreateHbFont(FontHandle handle) const {
 FontVMetrics TextBackendFull::fontVMetrics(FontHandle font) const {
   // Read from the raw font data's hhea table to match stb_truetype's behavior.
   // FreeType's FT_Face->ascender may come from OS/2 instead of hhea, causing mismatches.
-  const auto data = fontManager_.fontData(font);
-  if (!ValidateSfnt(data)) {
+  if (!fontManager_.isValidatedFont(font)) {
     return {};
   }
 
-  const auto hhea = FindSfntTable(data, "hhea");
+  const auto hhea = fontManager_.sfntTable(font, "hhea");
   if (hhea && hhea->size() >= 10) {
     FontVMetrics metrics;
     metrics.ascent = ReadInt16Be(*hhea, 4);
@@ -225,7 +233,7 @@ FontVMetrics TextBackendFull::fontVMetrics(FontHandle font) const {
     metrics.lineGap = ReadInt16Be(*hhea, 8);
 
     // x-height from the OS/2 table (`sxHeight`, offset 86), present in version >= 2.
-    const auto os2 = FindSfntTable(data, "OS/2");
+    const auto os2 = fontManager_.sfntTable(font, "OS/2");
     if (os2 && os2->size() >= 88) {
       const uint16_t os2Version = static_cast<uint16_t>(ReadInt16Be(*os2, 0));
       if (os2Version >= 2) {
@@ -281,12 +289,11 @@ float TextBackendFull::scaleForEmToPixels(FontHandle font, float pixelHeight) co
 std::optional<UnderlineMetrics> TextBackendFull::underlineMetrics(FontHandle font) const {
   // Read from the raw 'post' table to match TextBackendSimple's behavior exactly.
   // FreeType's FT_Face->underline_position may differ from the raw table values.
-  const auto data = fontManager_.fontData(font);
-  if (!ValidateSfnt(data)) {
+  if (!fontManager_.isValidatedFont(font)) {
     return std::nullopt;
   }
 
-  const auto post = FindSfntTable(data, "post");
+  const auto post = fontManager_.sfntTable(font, "post");
   if (!post || post->size() < 12) {
     return std::nullopt;
   }
@@ -456,8 +463,7 @@ Path TextBackendFull::glyphOutline(FontHandle font, int glyphIndex, float scale)
 // ---------------------------------------------------------------------------
 
 bool TextBackendFull::isBitmapOnly(FontHandle font) const {
-  const auto data = fontManager_.fontData(font);
-  return !data.empty() && !HasOutlineTables(data);
+  return fontManager_.isValidatedFont(font) && !HasCachedOutlineTables(fontManager_, font);
 }
 
 std::optional<TextBackend::BitmapGlyph> TextBackendFull::bitmapGlyph(FontHandle font,

@@ -201,6 +201,7 @@ donner_cc_test(
     deps = [
         ":font_catalog_types",
         ":font_manager",
+        "//donner/base/fonts:sfnt_utils",
         "//third_party/public-sans",
         "@com_google_gtest//:gtest_main",
         "@stb//:truetype",
