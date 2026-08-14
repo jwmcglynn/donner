@@ -3,6 +3,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <array>
 #include <fstream>
 #include <vector>
 
@@ -68,6 +69,17 @@ TEST(Woff2ParserTest, InvalidMagic) {
   data[3] = 0x00;
   auto result = Woff2Parser::Decompress(data);
   EXPECT_TRUE(result.hasError());
+}
+
+TEST(Woff2ParserTest, RejectsCiTimeoutInputBeforeDecompression) {
+  constexpr std::array<uint8_t, 21> data = {
+      0x00, 0xFF, 0xFF, 0xFF, 0xD0, 0xFF, 0xFF, 0x5D, 0xFF, 0xFF, 0xFF,
+      0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x02, 0xFF, 0xFF, 0xFF, 0xFF,
+  };
+
+  auto result = Woff2Parser::Decompress(data);
+  ASSERT_TRUE(result.hasError());
+  EXPECT_EQ(result.error().reason, "WOFF2: invalid signature");
 }
 
 TEST(Woff2ParserTest, RejectsOversizedDeclaredSize) {
