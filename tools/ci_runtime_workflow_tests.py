@@ -1,6 +1,12 @@
 """Pins the self-hosted CI runtime boundaries that keep full runs viable."""
 
+import os
+from pathlib import Path
 import re
+import subprocess
+import tempfile
+import textwrap
+import time
 import unittest
 
 from python.runfiles import runfiles
@@ -27,6 +33,32 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         end = re.search(r"^  [A-Za-z0-9_-]+:\s*$", rest, re.MULTILINE)
         return rest[: end.start()] if end else rest
 
+    def _heartbeat_script(self):
+        match = re.search(
+            r"cat > \"\$DIAG_DIR/run_bazel_with_heartbeat\.sh\" <<'EOF'\n"
+            r"(?P<body>.*?)^\s+EOF$",
+            self.main,
+            re.MULTILINE | re.DOTALL,
+        )
+        self.assertIsNotNone(match, "heartbeat wrapper heredoc not found")
+        return textwrap.dedent(match.group("body"))
+
+    def _run_script(self, text, args, env=None, timeout=5):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            script = Path(temp_dir) / "fixture.sh"
+            script.write_text(text)
+            script.chmod(0o755)
+            started = time.monotonic()
+            result = subprocess.run(
+                [str(script), *args],
+                check=False,
+                capture_output=True,
+                text=True,
+                env=env,
+                timeout=timeout,
+            )
+            return result, time.monotonic() - started
+
     def test_coverage_does_not_expand_ci_config_twice(self):
         """The coverage command inherits its CI config from the runner rc."""
         flag_line = re.search(
@@ -37,19 +69,66 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         self.assertIsNotNone(flag_line)
         self.assertNotIn("--config=ci", flag_line.group(1))
 
-    def test_heartbeat_process_tree_does_not_require_awk(self):
-        """Failure cleanup uses procps already present on the runner."""
+    def test_heartbeat_cleanup_is_prompt_without_ps(self):
+        """A finished command cannot leave the heartbeat sleeper holding the pipe."""
         job = self._job_body("linux-self-hosted")
         self.assertNotIn("awk -v p=", job)
-        self.assertIn('ps -o pid= --ppid "$root"', job)
+        self.assertNotIn('ps -o pid= --ppid "$root"', job)
 
-    def test_coverage_process_tree_does_not_require_awk(self):
-        """Coverage failure cleanup uses procps already present on the runner."""
-        self.assertNotIn("awk -v p=", self.coverage_script)
+        script = self._heartbeat_script()
         self.assertIn(
-            'ps -o pid= --ppid "$root"',
-            self.coverage_script,
+            'heartbeat_interval="${BAZEL_HEARTBEAT_INTERVAL_SECONDS:-60}"',
+            script,
         )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            fake_bin = Path(temp_dir) / "bin"
+            fake_bin.mkdir()
+            fake_ps = fake_bin / "ps"
+            fake_ps.write_text("#!/bin/sh\nexit 127\n")
+            fake_ps.chmod(0o755)
+            log = Path(temp_dir) / "command.log"
+            wrapper = Path(temp_dir) / "wrapper.sh"
+            wrapper.write_text(script)
+            wrapper.chmod(0o755)
+            env = os.environ.copy()
+            env["BAZEL_HEARTBEAT_INTERVAL_SECONDS"] = "5"
+            env["PATH"] = f"{fake_bin}:{env['PATH']}"
+
+            started = time.monotonic()
+            result = subprocess.run(
+                [str(wrapper), str(log), "bash", "-c", "exit 17"],
+                check=False,
+                capture_output=True,
+                text=True,
+                env=env,
+                timeout=3,
+            )
+            elapsed = time.monotonic() - started
+
+        self.assertEqual(17, result.returncode, result.stderr)
+        self.assertLess(elapsed, 2.0, "heartbeat sleeper delayed wrapper exit")
+
+    def test_coverage_cleanup_is_portable_and_prompt_without_ps(self):
+        """Coverage remains portable to macOS and owns its heartbeat sleeper."""
+        self.assertNotIn("awk -v p=", self.coverage_script)
+        self.assertNotIn('ps -o pid= --ppid "$root"', self.coverage_script)
+        self.assertIn("ps -A -o pid=,ppid=", self.coverage_script)
+
+        functions = self.coverage_script.split("\nTARGETS=()", 1)[0]
+        fixture = functions + """
+
+ps() { return 127; }
+DONNER_COVERAGE_PROGRESS_INTERVAL_SECONDS=5
+export DONNER_COVERAGE_PROGRESS_INTERVAL_SECONDS
+run_quiet_with_progress "fixture" "$1" bash -c 'exit 23'
+"""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            log = str(Path(temp_dir) / "coverage.log")
+            result, elapsed = self._run_script(fixture, [log], timeout=3)
+
+        self.assertEqual(23, result.returncode, result.stderr)
+        self.assertLess(elapsed, 2.0, "coverage heartbeat sleeper delayed wrapper exit")
 
 
 if __name__ == "__main__":
