@@ -38,6 +38,62 @@ std::array<uint8_t, 48> minimalWoff2Header() {
   return data;
 }
 
+void writeBigEndianU32(std::span<uint8_t> data, size_t offset, uint32_t value) {
+  data[offset] = static_cast<uint8_t>(value >> 24);
+  data[offset + 1] = static_cast<uint8_t>(value >> 16);
+  data[offset + 2] = static_cast<uint8_t>(value >> 8);
+  data[offset + 3] = static_cast<uint8_t>(value);
+}
+
+size_t writeBase128(std::span<uint8_t> data, size_t offset, uint32_t value) {
+  size_t encodedSize = 1;
+  for (uint32_t remaining = value; remaining >= 128; remaining >>= 7) {
+    ++encodedSize;
+  }
+
+  for (size_t i = 0; i < encodedSize; ++i) {
+    const size_t shift = 7 * (encodedSize - i - 1);
+    data[offset + i] = static_cast<uint8_t>((value >> shift) & 0x7F);
+    if (i + 1 != encodedSize) {
+      data[offset + i] |= 0x80;
+    }
+  }
+  return offset + encodedSize;
+}
+
+std::vector<uint8_t> woff2WithIntermediateSize(uint32_t intermediateSize) {
+  constexpr size_t kInputSize = 1024u * 1024u;
+  std::vector<uint8_t> data(kInputSize, 0);
+  data[0] = 0x77;
+  data[1] = 0x4F;
+  data[2] = 0x46;
+  data[3] = 0x32;
+  writeBigEndianU32(data, 4, 0x00010000u);
+  writeBigEndianU32(data, 8, static_cast<uint32_t>(data.size()));
+  data[13] = 1;
+  writeBigEndianU32(data, 16, 64u * 1024u * 1024u);
+
+  size_t directoryEnd = 48;
+  data[directoryEnd++] = 0;
+  directoryEnd = writeBase128(data, directoryEnd, intermediateSize);
+  writeBigEndianU32(data, 20, static_cast<uint32_t>(data.size() - directoryEnd));
+  return data;
+}
+
+std::vector<uint8_t> malformedOneTableWoff2WithDeclaredOutput(uint32_t outputSize) {
+  std::vector<uint8_t> data(50, 0);
+  data[0] = 0x77;
+  data[1] = 0x4F;
+  data[2] = 0x46;
+  data[3] = 0x32;
+  writeBigEndianU32(data, 4, 0x00010000u);
+  writeBigEndianU32(data, 8, static_cast<uint32_t>(data.size()));
+  data[13] = 1;
+  writeBigEndianU32(data, 16, outputSize);
+  writeBigEndianU32(data, 28, 0x08080808u);
+  return data;
+}
+
 }  // namespace
 
 TEST(Woff2ParserTest, DecompressValid) {
@@ -129,6 +185,13 @@ TEST(Woff2ParserTest, RejectsNonzeroReservedFieldBeforeDecompression) {
 }
 
 TEST(Woff2ParserTest, RejectsMalformedStreamWithoutAllocatingDeclaredOutput) {
+  auto result =
+      Woff2Parser::Decompress(malformedOneTableWoff2WithDeclaredOutput(32u * 1024u * 1024u));
+  ASSERT_TRUE(result.hasError());
+  EXPECT_EQ(result.error().reason, "WOFF2: decompression failed");
+}
+
+TEST(Woff2ParserTest, RejectsLinuxTimeoutSeedAtTableCountPreflight) {
   constexpr std::array<uint8_t, 48> data = {
       0x77, 0x4F, 0x46, 0x32, 0x08, 0x08, 0x08, 0x08, 0x00, 0x00, 0x00, 0x30,
       0x3A, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x08, 0x08, 0x08, 0x08,
@@ -138,7 +201,48 @@ TEST(Woff2ParserTest, RejectsMalformedStreamWithoutAllocatingDeclaredOutput) {
 
   auto result = Woff2Parser::Decompress(data);
   ASSERT_TRUE(result.hasError());
-  EXPECT_EQ(result.error().reason, "WOFF2: decompression failed");
+  EXPECT_EQ(result.error().reason, "WOFF2: table count exceeds limit");
+}
+
+TEST(Woff2ParserTest, RejectsOversizedIntermediateBufferBeforeDecoderEntry) {
+  auto result = Woff2Parser::Decompress(woff2WithIntermediateSize(64u * 1024u * 1024u + 1u));
+  ASSERT_TRUE(result.hasError());
+  EXPECT_EQ(result.error().reason, "WOFF2: intermediate decompressed size exceeds limit");
+}
+
+TEST(Woff2ParserTest, AllowsIntermediateBufferAtLimitIntoDecoder) {
+  auto result = Woff2Parser::Decompress(woff2WithIntermediateSize(64u * 1024u * 1024u));
+  ASSERT_TRUE(result.hasError());
+  EXPECT_NE(result.error().reason, "WOFF2: intermediate decompressed size exceeds limit");
+}
+
+TEST(Woff2ParserTest, RejectsExcessiveTableCountBeforeDirectoryAllocation) {
+  auto data = minimalWoff2Header();
+  data[12] = 0x10;
+  data[13] = 0x01;
+  data[19] = 1;
+
+  auto result = Woff2Parser::Decompress(data);
+  ASSERT_TRUE(result.hasError());
+  EXPECT_EQ(result.error().reason, "WOFF2: table count exceeds limit");
+}
+
+TEST(Woff2ParserTest, RejectsExcessiveCollectionFontCountBeforeAllocation) {
+  const auto header = minimalWoff2Header();
+  std::vector<uint8_t> data(header.begin(), header.end());
+  data.resize(56, 0);
+  writeBigEndianU32(data, 4, 0x74746366u);
+  writeBigEndianU32(data, 8, static_cast<uint32_t>(data.size()));
+  data[19] = 1;
+  data[48] = 0;
+  data[49] = 0;
+  writeBigEndianU32(data, 50, 0x00010000u);
+  data[54] = 255;
+  data[55] = 4;
+
+  auto result = Woff2Parser::Decompress(data);
+  ASSERT_TRUE(result.hasError());
+  EXPECT_EQ(result.error().reason, "WOFF2: collection font count exceeds limit");
 }
 
 TEST(Woff2ParserTest, RejectsOversizedDeclaredSize) {
