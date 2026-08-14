@@ -3,6 +3,7 @@ name: "CodeQL"
 on:
   push:
     branches: ["main"]
+  pull_request:
   schedule:
     - cron: "34 6 * * 2"
 
@@ -49,6 +50,22 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v7
 
+      - name: Install system dependencies
+        if: matrix.build-mode == 'manual'
+        uses: nick-fields/retry@v4
+        with:
+          timeout_minutes: 5
+          max_attempts: 3
+          retry_wait_seconds: 15
+          command: |
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends \
+              pkg-config libfontconfig1-dev libfreetype6-dev \
+              mesa-vulkan-drivers libvulkan1 libvulkan-dev \
+              libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev \
+              libgl1-mesa-dev libosmesa6
+            sudo apt-get clean
+
       # Initializes the CodeQL tools for scanning.
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v4
@@ -58,6 +75,8 @@ jobs:
           config: |
             paths-ignore:
               - 'third_party/**'
+            queries:
+              - uses: security-extended
           # If you wish to specify custom queries, you can do so here or in a config file.
           # By default, queries listed here will override any specified in a config file.
           # Prefix the list here with "+" to use these queries and those in the config file.
@@ -74,7 +93,25 @@ jobs:
       - if: matrix.build-mode == 'manual'
         shell: bash
         run: |
-          bazel build --spawn_strategy=local --nouse_action_cache --noremote_accept_cached --noremote_upload_local_results --disk_cache= //donner/svg/tool
+          bazel build --spawn_strategy=local --nouse_action_cache --noremote_accept_cached --noremote_upload_local_results --disk_cache= \
+            //donner/base/xml:xml_tool \
+            //donner/editor:editor \
+            //donner/editor/app:render_repl \
+            //donner/editor/repro:gl_rnr_replay \
+            //donner/svg/parser:svg_parser_tool \
+            //donner/svg/tool \
+            //examples:svg_to_png \
+            //examples:svg_viewer \
+            //tools/mcp-servers/editor-control:editor_control_mcp_server
+          bazel build --config=text-full --spawn_strategy=local --nouse_action_cache --noremote_accept_cached --noremote_upload_local_results --disk_cache= \
+            //donner/editor/repro:gl_rnr_replay \
+            //donner/svg/tool \
+            //examples:svg_to_png \
+            //tools/mcp-servers/editor-control:editor_control_mcp_server
+          bazel build --config=geode --spawn_strategy=local --nouse_action_cache --noremote_accept_cached --noremote_upload_local_results --disk_cache= \
+            //examples:geode_embed
+          bazel build --config=wasm-size --spawn_strategy=local --nouse_action_cache --noremote_accept_cached --noremote_upload_local_results --disk_cache= //donner/svg/renderer/wasm:donner_wasm
+          bazel build --config=wasm-geode --spawn_strategy=local --nouse_action_cache --noremote_accept_cached --noremote_upload_local_results --disk_cache= //donner/svg/renderer/wasm:donner_wasm_geode
 
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@v4
