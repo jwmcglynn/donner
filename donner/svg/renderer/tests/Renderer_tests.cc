@@ -172,7 +172,8 @@ protected:
     const std::filesystem::path resourceDir = filePath.parent_path();
 
     SVGDocument::Settings settings;
-    settings.resourceLoader = std::make_unique<SandboxedFileResourceLoader>(resourceDir, filePath);
+    settings.resourceLoader = std::make_unique<SandboxedFileResourceLoader>(
+        ResolveRunfilesResourceRootForTesting(resourceDir, filePath), filePath);
 
     ParseWarningSink disabled = ParseWarningSink::Disabled();
     auto maybeResult =
