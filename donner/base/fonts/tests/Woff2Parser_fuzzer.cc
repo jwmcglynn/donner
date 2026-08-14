@@ -21,24 +21,29 @@ void ReplayInvalidSignatureRegressionSeed() {
 }
 
 void ReplayDeclaredSizeAllocationRegressionSeed() {
-  const auto result = [] {
-    std::array<uint8_t, 50> data{};
-    data[0] = 0x77;
-    data[1] = 0x4F;
-    data[2] = 0x46;
-    data[3] = 0x32;
-    data[5] = 1;
-    data[11] = data.size();
-    data[13] = 1;
-    data[16] = 2;
-    data[28] = 8;
-    data[29] = 8;
-    data[30] = 8;
-    data[31] = 8;
-    return Woff2Parser::Decompress(data);
-  }();
-  if (!result.hasError() || result.error().reason != "WOFF2: decompression failed") {
-    std::abort();
+  // Repeat inside one callback so restoring the former eager 32 MiB output allocation reliably
+  // exceeds libFuzzer's per-input timeout instead of merely reducing fixed-duration soak
+  // throughput.
+  for (size_t i = 0; i < 8; ++i) {
+    const auto result = [] {
+      std::array<uint8_t, 50> data{};
+      data[0] = 0x77;
+      data[1] = 0x4F;
+      data[2] = 0x46;
+      data[3] = 0x32;
+      data[5] = 1;
+      data[11] = data.size();
+      data[13] = 1;
+      data[16] = 2;
+      data[28] = 8;
+      data[29] = 8;
+      data[30] = 8;
+      data[31] = 8;
+      return Woff2Parser::Decompress(data);
+    }();
+    if (!result.hasError() || result.error().reason != "WOFF2: decompression failed") {
+      std::abort();
+    }
   }
 }
 
