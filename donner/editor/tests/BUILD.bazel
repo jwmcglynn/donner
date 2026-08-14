@@ -470,6 +470,7 @@ donner_cc_test(
         "//donner/editor:async_svg_document",
         "//donner/editor:command_queue",
         "//donner/editor:editor_app",
+        "//donner/editor:gl_texture_cache",
         "//donner/editor:overlay_renderer",
         "//donner/editor:presented_frame_composer",
         "//donner/editor:render_coordinator",

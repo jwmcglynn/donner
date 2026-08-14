@@ -22,6 +22,7 @@
 #include "donner/editor/AttributeWriteback.h"
 #include "donner/editor/EditorApp.h"
 #include "donner/editor/EditorCommand.h"
+#include "donner/editor/GlTextureCache.h"
 #include "donner/editor/OverlayRenderer.h"
 #include "donner/editor/PresentationRenderScheduler.h"
 #include "donner/editor/PresentedFrameComposer.h"
@@ -615,6 +616,70 @@ TEST(AsyncRendererTest, FullCanvasFallbackCarriesBoundedRasterViewportGeometry) 
   EXPECT_EQ(tile.rasterCanvasSize, Vector2i(400, 320));
   EXPECT_EQ(tile.canvasOffsetDoc, Vector2d(50.0, 50.0));
   EXPECT_EQ(tile.bitmapDimsDoc, Vector2d(100.0, 80.0));
+}
+
+TEST(AsyncRendererTest, FreshFullCanvasFallbacksHaveDistinctTextureIdentity) {
+  svg::SVGDocument document = svg::instantiateSubtree(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 100">
+      <rect x="0" y="0" width="100" height="100" fill="red"/>
+      <rect x="100" y="0" width="100" height="100" fill="blue"/>
+    </svg>
+  )svg");
+  document.setCanvasSize(200, 100);
+
+  svg::Renderer renderer;
+  AsyncRenderer asyncRenderer;
+  RenderRequest request(renderer, document);
+  request.version = 7;
+  request.documentGeneration = 1;
+  request.rasterViewport = EditorRasterViewport{
+      .documentRect = Box2d::FromXYWH(0.0, 0.0, 100.0, 100.0),
+      .outputSizePx = Vector2i(64, 64),
+      .semanticCanvasSizePx = Vector2i(200, 100),
+      .outputFromDocument = Transform2d::Scale(0.64),
+      .viewportBounded = true,
+  };
+  asyncRenderer.requestRender(request);
+  const std::optional<RenderResult> first = WaitForRenderResult(asyncRenderer);
+
+  request.rasterViewport.documentRect = Box2d::FromXYWH(100.0, 0.0, 100.0, 100.0);
+  request.rasterViewport.outputFromDocument =
+      Transform2d::Translate(Vector2d(-100.0, 0.0)) * Transform2d::Scale(0.64);
+  asyncRenderer.requestRender(request);
+  const std::optional<RenderResult> second = WaitForRenderResult(asyncRenderer);
+
+  ASSERT_TRUE(first.has_value());
+  ASSERT_TRUE(second.has_value());
+  ASSERT_TRUE(first->compositedPreview.has_value());
+  ASSERT_TRUE(second->compositedPreview.has_value());
+  ASSERT_EQ(first->compositedPreview->tiles.size(), 1u);
+  ASSERT_EQ(second->compositedPreview->tiles.size(), 1u);
+  const RenderResult::CompositedTile& firstTile = first->compositedPreview->tiles.front();
+  const RenderResult::CompositedTile& secondTile = second->compositedPreview->tiles.front();
+  ASSERT_EQ(firstTile.id, "full-canvas");
+  ASSERT_EQ(secondTile.id, "full-canvas");
+  ASSERT_EQ(firstTile.rasterCanvasSize, secondTile.rasterCanvasSize);
+  EXPECT_NE(TextureIdentityForCompositedTile(firstTile),
+            TextureIdentityForCompositedTile(secondTile))
+      << "A fresh viewport-bounded payload must replace the cached full-canvas texture even when "
+         "the document version and output dimensions are unchanged.";
+
+  const auto centerPixel = [](const svg::RendererBitmap& bitmap) {
+    const int x = bitmap.dimensions.x / 2;
+    const int y = bitmap.dimensions.y / 2;
+    const std::size_t offset =
+        static_cast<std::size_t>(y) * bitmap.rowBytes + static_cast<std::size_t>(x) * 4u;
+    return std::array<uint8_t, 4>{bitmap.pixels[offset], bitmap.pixels[offset + 1u],
+                                  bitmap.pixels[offset + 2u], bitmap.pixels[offset + 3u]};
+  };
+  const svg::RendererBitmap firstBitmap = MaterializeTileBitmap(firstTile);
+  const svg::RendererBitmap secondBitmap = MaterializeTileBitmap(secondTile);
+  ASSERT_FALSE(firstBitmap.empty());
+  ASSERT_FALSE(secondBitmap.empty());
+  EXPECT_THAT(centerPixel(firstBitmap),
+              Rgba(Gt(200), ::testing::Lt(80), ::testing::Lt(80), Gt(200)));
+  EXPECT_THAT(centerPixel(secondBitmap),
+              Rgba(::testing::Lt(80), ::testing::Lt(80), Gt(200), Gt(200)));
 }
 
 TEST(AsyncRendererTest, ProductionRendererCachesStaticSpansAcrossPublishedFrames) {
