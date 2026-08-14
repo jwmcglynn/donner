@@ -213,6 +213,30 @@ TEST(FontManagerTest, EntityDestructionAndManagerLifecycleReleaseReservations) {
   EXPECT_TRUE(static_cast<bool>(second.loadFontData(data)));
 }
 
+TEST(FontManagerTest, ContextOwnedManagerSharesBudgetAcrossManagerLifetimes) {
+  Registry registry;
+  const std::vector<uint8_t> data(embedded::kPublicSansMediumOtf.begin(),
+                                  embedded::kPublicSansMediumOtf.end());
+  const size_t charge = RetainedCharge(data);
+
+  FontManager& contextManager = registry.ctx().emplace<FontManager>(registry, charge, 1);
+  const FontHandle handle = contextManager.loadFontData(data);
+  ASSERT_TRUE(static_cast<bool>(handle));
+  EXPECT_EQ(contextManager.loadedFontBytes(), charge);
+  EXPECT_EQ(contextManager.numLoadedFonts(), 1u);
+
+  registry.ctx().erase<FontManager>();
+  FontManager replacement(registry, charge * 2, 2);
+  EXPECT_EQ(replacement.loadedFontBytes(), charge);
+  EXPECT_EQ(replacement.numLoadedFonts(), 1u);
+  EXPECT_FALSE(static_cast<bool>(replacement.loadFontData(data)));
+
+  registry.destroy(handle.entity());
+  EXPECT_EQ(replacement.loadedFontBytes(), 0u);
+  EXPECT_EQ(replacement.numLoadedFonts(), 0u);
+  EXPECT_TRUE(static_cast<bool>(replacement.loadFontData(data)));
+}
+
 TEST(FontManagerTest, LoadWoff1Data) {
   Registry registry;
   FontManager mgr(registry);
