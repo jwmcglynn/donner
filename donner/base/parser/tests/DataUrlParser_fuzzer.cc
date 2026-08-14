@@ -1,4 +1,4 @@
-#include <cassert>
+#include <cstdlib>
 
 #include "donner/base/parser/DataUrlParser.h"
 
@@ -17,20 +17,23 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
   if (std::holds_alternative<DataUrlParser::Result>(result)) {
     const DataUrlParser::Result& parsed = std::get<DataUrlParser::Result>(result);
     if (parsed.kind == DataUrlParser::Result::Kind::Data) {
-      assert(std::holds_alternative<std::vector<uint8_t>>(parsed.payload) &&
-             "Data URL result should carry a byte payload");
+      if (!std::holds_alternative<std::vector<uint8_t>>(parsed.payload)) {
+        std::abort();
+      }
     } else {
-      assert(std::holds_alternative<RcString>(parsed.payload) &&
-             "External URL result should carry a string payload");
+      if (!std::holds_alternative<RcString>(parsed.payload)) {
+        std::abort();
+      }
     }
   }
 
   DataUrlParser::Options limitedOptions;
   limitedOptions.maximumInputSize = size / 2;
   auto limitedResult = DataUrlParser::Parse(buffer, limitedOptions);
-  if (size > limitedOptions.maximumInputSize) {
-    assert(std::holds_alternative<DataUrlParserError>(limitedResult) &&
-           std::get<DataUrlParserError>(limitedResult) == DataUrlParserError::InputTooLarge);
+  if (size > limitedOptions.maximumInputSize &&
+      (!std::holds_alternative<DataUrlParserError>(limitedResult) ||
+       std::get<DataUrlParserError>(limitedResult) != DataUrlParserError::InputTooLarge)) {
+    std::abort();
   }
 
   return 0;

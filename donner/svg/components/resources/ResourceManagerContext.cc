@@ -1,11 +1,13 @@
 #include "donner/svg/components/resources/ResourceManagerContext.h"
 
+#include <algorithm>
 #include <memory>
 
 #include "donner/base/EcsRegistry.h"
 #include "donner/base/ParseDiagnostic.h"
 #include "donner/base/ParseWarningSink.h"
 #include "donner/base/Utils.h"
+#include "donner/base/encoding/Decompress.h"
 #include "donner/css/FontFace.h"
 #include "donner/svg/components/SVGDocumentContext.h"
 #include "donner/svg/components/resources/ImageComponent.h"
@@ -44,11 +46,31 @@ private:
 };
 
 SubDocumentCache::ParseCallback GuardSvgParseCallback(
-    Registry& registry, const SubDocumentCache::ParseCallback& callback) {
-  return [&registry, &callback](const std::vector<uint8_t>& svgContent,
-                                ParseWarningSink& warningSink) -> std::optional<SVGDocumentHandle> {
+    Registry& registry, const SubDocumentCache::ParseCallback& callback,
+    size_t& remainingResourceBytes) {
+  return [&registry, &callback, &remainingResourceBytes](
+             const std::vector<uint8_t>& svgContent,
+             ParseWarningSink& warningSink) -> std::optional<SVGDocumentHandle> {
     AssertNoDocumentWriteAccessForUserCallback(
         registry, "SVG parse callback must not run while document write access is held");
+
+    if (svgContent.size() >= 2 && svgContent[0] == 0x1f && svgContent[1] == 0x8b) {
+      const size_t expandedLimit =
+          std::min(Decompress::kDefaultMaximumOutputSize, remainingResourceBytes);
+      const std::string_view compressedSvg(
+          reinterpret_cast<const char*>(svgContent.data()),  // NOLINT, allow reinterpret_cast.
+          svgContent.size());
+      auto maybeExpandedSvg = Decompress::Gzip(compressedSvg, expandedLimit);
+      if (maybeExpandedSvg.hasError()) {
+        warningSink.add(std::move(maybeExpandedSvg).error());
+        return std::nullopt;
+      }
+
+      std::vector<uint8_t> expandedSvg = std::move(maybeExpandedSvg).result();
+      remainingResourceBytes -= expandedSvg.size();
+      return callback(expandedSvg, warningSink);
+    }
+
     return callback(svgContent, warningSink);
   };
 }
@@ -126,6 +148,13 @@ void ResourceManagerContext::loadResources(ParseWarningSink& warningSink) {
       continue;
     }
 
+    if (auto* cache = registry_.ctx().find<SubDocumentCache>()) {
+      if (auto cachedDocument = cache->get(image.href)) {
+        registry_.emplace<LoadedSVGImageComponent>(entity, std::move(*cachedDocument));
+        continue;
+      }
+    }
+
     ImageLoader imageLoader(loader, UrlLoader::kDefaultMaximumResourceSize,
                             &remainingResourceBytes_);
 
@@ -156,7 +185,7 @@ void ResourceManagerContext::loadResources(ParseWarningSink& warningSink) {
       auto& cache = registry_.ctx().get<SubDocumentCache>();
 
       SubDocumentCache::ParseCallback guardedParseCallback =
-          GuardSvgParseCallback(registry_, svgParseCallback_);
+          GuardSvgParseCallback(registry_, svgParseCallback_, remainingResourceBytes_);
       auto subDoc =
           cache.getOrParse(image.href, svgContent.data, guardedParseCallback, warningSink);
       if (subDoc) {
@@ -255,7 +284,7 @@ std::optional<SVGDocumentHandle> ResourceManagerContext::loadExternalSVG(
 
   auto& data = std::get<UrlLoader::Result>(fetchResult).data;
   SubDocumentCache::ParseCallback guardedParseCallback =
-      GuardSvgParseCallback(registry_, svgParseCallback_);
+      GuardSvgParseCallback(registry_, svgParseCallback_, remainingResourceBytes_);
   return cache.getOrParse(url, data, guardedParseCallback, warningSink);
 }
 

@@ -1,5 +1,5 @@
-load("//build_defs:rules.bzl", "donner_cc_library")
 load("//build_defs:package.bzl", "donner_package")
+load("//build_defs:rules.bzl", "donner_cc_library")
 
 donner_cc_library(
     name = "components",
@@ -39,6 +39,7 @@ donner_cc_library(
     ],
     deps = [
         ":components",
+        "//donner/base/encoding:decompress",
         "//donner/css:core",
         "//donner/svg:svg_document_handle",
         "//donner/svg/resources:image_loader",

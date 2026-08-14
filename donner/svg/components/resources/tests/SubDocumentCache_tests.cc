@@ -512,6 +512,33 @@ TEST(ResourceManagerContextAggregateBudgetTest,
   EXPECT_TRUE(warnings.hasWarnings());
 }
 
+TEST(ResourceManagerContextAggregateBudgetTest,
+     ExternalSvgzChargesSuccessfulExpansionWhenParserRejectsDocument) {
+  constexpr size_t kExactBudget = kGzipSvg.size() + kExpandedSvg.size();
+  Registry registry;
+  auto& resourceManager = registry.ctx().emplace<ResourceManagerContext>(registry, kExactBudget);
+  auto loader = std::make_unique<TestResourceLoader>();
+  loader->addFile("rejected.svgz", GzipSvgBytes());
+  resourceManager.setResourceLoader(std::move(loader));
+
+  int parseCount = 0;
+  resourceManager.setSvgParseCallback(
+      [&parseCount](const std::vector<uint8_t>& data,
+                    ParseWarningSink&) -> std::optional<SVGDocumentHandle> {
+        ++parseCount;
+        EXPECT_EQ(data, std::vector<uint8_t>(kExpandedSvg.begin(), kExpandedSvg.end()));
+        return std::nullopt;
+      });
+
+  ParseWarningSink warnings;
+  const auto result = resourceManager.loadExternalSVG("rejected.svgz", warnings);
+
+  EXPECT_FALSE(result.has_value());
+  EXPECT_EQ(parseCount, 1);
+  EXPECT_EQ(resourceManager.remainingResourceBytes_, 0u);
+  EXPECT_EQ(registry.ctx().get<SubDocumentCache>().size(), 0u);
+}
+
 TEST_F(ResourceManagerContextTest, UserCallbacksRunOutsideDocumentWriteAccess) {
   SVGDocument document;
   document.setThreadingMode(ThreadingMode::ConcurrentDom);
