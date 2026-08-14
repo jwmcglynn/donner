@@ -3,8 +3,10 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <atomic>
 #include <fstream>
 #include <memory>
+#include <thread>
 #include <vector>
 
 #include "donner/base/fonts/SfntUtils.h"
@@ -16,6 +18,10 @@ struct FontManagerTestAccess {
   static bool ReplaceFontData(FontManager& manager, FontHandle handle,
                               std::span<const uint8_t> data) {
     return manager.loadFontDataIntoEntity(handle.entity(), data);
+  }
+
+  static bool HasPersistentBudgetState(const Registry& registry) {
+    return registry.ctx().contains<FontManager::FontBudgetContext>();
   }
 };
 
@@ -237,6 +243,62 @@ TEST(FontManagerTest, ContextOwnedManagerSharesBudgetAcrossManagerLifetimes) {
   EXPECT_EQ(peerManager.loadedFontBytes(), 0u);
   EXPECT_EQ(peerManager.numLoadedFonts(), 0u);
   EXPECT_TRUE(static_cast<bool>(peerManager.loadFontData(data)));
+}
+
+TEST(FontManagerTest, ConstBudgetQueriesDoNotInstallContextOrSelectCaps) {
+  Registry registry;
+  const std::vector<uint8_t> data(embedded::kPublicSansMediumOtf.begin(),
+                                  embedded::kPublicSansMediumOtf.end());
+  const size_t charge = RetainedCharge(data);
+  FontManager smallerBudget(registry, charge, 1);
+  FontManager largerBudget(registry, charge * 2, 2);
+
+  EXPECT_FALSE(FontManagerTestAccess::HasPersistentBudgetState(registry));
+  EXPECT_EQ(smallerBudget.loadedFontBytes(), 0u);
+  EXPECT_EQ(smallerBudget.numLoadedFonts(), 0u);
+  EXPECT_EQ(largerBudget.loadedFontBytes(), 0u);
+  EXPECT_EQ(largerBudget.numLoadedFonts(), 0u);
+  EXPECT_FALSE(FontManagerTestAccess::HasPersistentBudgetState(registry));
+
+  ASSERT_TRUE(static_cast<bool>(largerBudget.loadFontData(data)));
+  ASSERT_TRUE(static_cast<bool>(largerBudget.loadFontData(data)));
+  EXPECT_FALSE(static_cast<bool>(smallerBudget.loadFontData(data)));
+  EXPECT_EQ(smallerBudget.loadedFontBytes(), charge * 2);
+  EXPECT_EQ(smallerBudget.numLoadedFonts(), 2u);
+}
+
+TEST(FontManagerTest, ConcurrentBudgetQueriesAreReadOnly) {
+  Registry registry;
+  const std::vector<uint8_t> data(embedded::kPublicSansMediumOtf.begin(),
+                                  embedded::kPublicSansMediumOtf.end());
+  const size_t charge = RetainedCharge(data);
+  FontManager manager(registry, charge, 1);
+  FontManager peerManager(registry, charge * 2, 2);
+  ASSERT_TRUE(static_cast<bool>(manager.loadFontData(data)));
+
+  constexpr int kThreadCount = 4;
+  constexpr int kReadsPerThread = 1000;
+  std::atomic<bool> start{false};
+  std::atomic<bool> sawMismatch{false};
+  std::vector<std::thread> threads;
+  threads.reserve(kThreadCount);
+  for (int i = 0; i < kThreadCount; ++i) {
+    threads.emplace_back([&] {
+      while (!start.load(std::memory_order_acquire)) {}
+      for (int read = 0; read < kReadsPerThread; ++read) {
+        if (manager.loadedFontBytes() != charge || manager.numLoadedFonts() != 1u ||
+            peerManager.loadedFontBytes() != charge || peerManager.numLoadedFonts() != 1u) {
+          sawMismatch.store(true, std::memory_order_relaxed);
+        }
+      }
+    });
+  }
+
+  start.store(true, std::memory_order_release);
+  for (std::thread& thread : threads) {
+    thread.join();
+  }
+  EXPECT_FALSE(sawMismatch.load(std::memory_order_relaxed));
 }
 
 TEST(FontManagerTest, LoadWoff1Data) {
