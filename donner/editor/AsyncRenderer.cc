@@ -3,9 +3,9 @@
 #include <algorithm>
 #include <cassert>
 #include <chrono>
+#include <limits>
 #include <thread>
 #include <utility>
-
 
 #include "donner/base/MemoryAttribution.h"
 #include "donner/base/Utils.h"
@@ -1367,9 +1367,12 @@ void AsyncRenderer::workerLoop() {
       const svg::compositor::InteractionHint interactionKind =
           request.dragPreview.has_value() ? request.dragPreview->interactionKind
                                           : svg::compositor::InteractionHint::Selection;
+      UTILS_RELEASE_ASSERT_MSG(
+          fullCanvasPayloadGeneration_ != std::numeric_limits<std::uint64_t>::max(),
+          "Full-canvas payload generation exhausted; refusing to alias a fresh raster payload.");
       compositedPreview = BuildFullCanvasCompositedPreview(
-          documentViewBox, bitmap, std::move(fullCanvasTexture), request.version, previewEntity,
-          interactionKind, rasterViewport, request.dragPreview);
+          documentViewBox, bitmap, std::move(fullCanvasTexture), ++fullCanvasPayloadGeneration_,
+          previewEntity, interactionKind, rasterViewport, request.dragPreview);
     }
 
     // Attribute what this render iteration is holding, before the result leaves
