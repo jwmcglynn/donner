@@ -128,6 +128,19 @@ TEST(Woff2ParserTest, RejectsNonzeroReservedFieldBeforeDecompression) {
   EXPECT_EQ(result.error().reason, "WOFF2: reserved header field must be zero");
 }
 
+TEST(Woff2ParserTest, RejectsMalformedStreamWithoutAllocatingDeclaredOutput) {
+  constexpr std::array<uint8_t, 48> data = {
+      0x77, 0x4F, 0x46, 0x32, 0x08, 0x08, 0x08, 0x08, 0x00, 0x00, 0x00, 0x30,
+      0x3A, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x08, 0x08, 0x08, 0x08,
+      0x08, 0x25, 0x08, 0x08, 0x08, 0x08, 0x08, 0xFA, 0xF7, 0xF7, 0xF7, 0xF7,
+      0xF7, 0xF7, 0xF7, 0x08, 0x08, 0x08, 0x08, 0x08, 0x77, 0x0A, 0x4F, 0x32,
+  };
+
+  auto result = Woff2Parser::Decompress(data);
+  ASSERT_TRUE(result.hasError());
+  EXPECT_EQ(result.error().reason, "WOFF2: decompression failed");
+}
+
 TEST(Woff2ParserTest, RejectsOversizedDeclaredSize) {
   // Regression: a complete WOFF2 header whose totalSfntSize field (bytes 16-19)
   // declares ~4 GiB. ComputeWOFF2FinalSize returns that value verbatim, so without

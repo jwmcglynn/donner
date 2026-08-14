@@ -3,6 +3,8 @@
 #include <woff2/decode.h>
 #include <woff2/output.h>
 
+#include <string>
+
 namespace donner::fonts {
 namespace {
 
@@ -85,9 +87,12 @@ ParseResult<std::vector<uint8_t>> Woff2Parser::Decompress(std::span<const uint8_
     return err;
   }
 
-  // Decompress into a pre-allocated buffer.
-  std::vector<uint8_t> output(outSize);
-  woff2::WOFF2MemoryOut out(output.data(), output.size());
+  // Treat the declared size as a ceiling, not work that must happen before the stream is
+  // validated. WOFF2StringOut grows only for bytes the decoder actually writes, while still
+  // supporting the arbitrary-offset updates required for sfnt checksums and table metadata.
+  std::string output;
+  woff2::WOFF2StringOut out(&output);
+  out.SetMaxSize(outSize);
 
   if (!woff2::ConvertWOFF2ToTTF(woff2Data.data(), woff2Data.size(), &out)) {
     ParseDiagnostic err;
@@ -95,9 +100,7 @@ ParseResult<std::vector<uint8_t>> Woff2Parser::Decompress(std::span<const uint8_
     return err;
   }
 
-  // The actual output may be smaller than the header-declared size.
-  output.resize(out.Size());
-  return output;
+  return std::vector<uint8_t>(output.begin(), output.end());
 }
 
 }  // namespace donner::fonts
