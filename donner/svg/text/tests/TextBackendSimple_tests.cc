@@ -253,7 +253,7 @@ std::vector<uint8_t> MakeTestFontData(bool withKern, int os2Version, bool withPo
 class TextBackendSimpleTest : public testing::Test {
 protected:
   FontHandle loadFont(const std::vector<uint8_t>& data) {
-    const FontHandle font = fontManager_.loadFontData(data);
+    const FontHandle font = fontManager_.loadFontData(data, FontDataTrust::Trusted);
     EXPECT_TRUE(static_cast<bool>(font));
     return font;
   }
@@ -288,6 +288,37 @@ TEST_F(TextBackendSimpleTest, NullFontHandleYieldsEmptyResults) {
   EXPECT_DOUBLE_EQ(backend_.crossSpanKern(nullFont, 16.0f, nullFont, 16.0f, 'A', 'V', false), 0.0);
 }
 
+TEST_F(TextBackendSimpleTest, UntrustedValidGlyfFontNeverReachesLengthUnawareStbParser) {
+  const FontHandle font = fontManager_.loadFontData(MakeTestFontData(true, 2, true));
+  ASSERT_TRUE(static_cast<bool>(font));
+  EXPECT_FALSE(fontManager_.isTrustedFont(font));
+
+  const FontVMetrics metrics = backend_.fontVMetrics(font);
+  EXPECT_EQ(metrics.ascent, 0);
+  EXPECT_EQ(metrics.descent, 0);
+  EXPECT_EQ(metrics.lineGap, 0);
+  EXPECT_EQ(metrics.xHeight, 0);
+  EXPECT_THAT(backend_.shapeRun(font, 16.0f, "A", 0, 1, false, FontVariant::Normal, false).glyphs,
+              IsEmpty());
+  EXPECT_TRUE(backend_.glyphOutline(font, 1, 1.0f).empty());
+}
+
+TEST_F(TextBackendSimpleTest, UntrustedValidCffFontNeverReachesLengthUnawareStbParser) {
+  const FontHandle fallback = fontManager_.fallbackFont();
+  ASSERT_TRUE(static_cast<bool>(fallback));
+  const std::span<const uint8_t> fallbackData = fontManager_.fontData(fallback);
+  const std::vector<uint8_t> data(fallbackData.begin(), fallbackData.end());
+  const FontHandle font = fontManager_.loadFontData(data);
+  ASSERT_TRUE(static_cast<bool>(font));
+  ASSERT_TRUE(fontManager_.sfntTable(font, "CFF ").has_value());
+  EXPECT_FALSE(fontManager_.isTrustedFont(font));
+
+  EXPECT_EQ(backend_.fontVMetrics(font).ascent, 0);
+  EXPECT_THAT(backend_.shapeRun(font, 100.0f, "O", 0, 1, false, FontVariant::Normal, false).glyphs,
+              IsEmpty());
+  EXPECT_TRUE(backend_.glyphOutline(font, 1, 0.1f).empty());
+}
+
 TEST_F(TextBackendSimpleTest, NonOutlineFontFallsBackToHeadUnitsPerEm) {
   // Only a head table: no glyf/CFF outlines, so stb parsing is skipped entirely.
   const FontHandle font = loadFont(MakeSfnt({{"head", HeadTable(2048)}}));
@@ -303,8 +334,8 @@ TEST_F(TextBackendSimpleTest, NonOutlineFontFallsBackToHeadUnitsPerEm) {
 TEST_F(TextBackendSimpleTest, RejectsMalformedFinalCffBeforeStbInitialization) {
   // All tables stb requires before entering its CFF parser are present, and the malformed CFF
   // table is the final allocation. Calling stb on this font would give its parser a synthetic
-  // 512 MiB span beyond the actual four bytes; the simple backend must cache refusal first.
-  const FontHandle font = loadFont(MakeSfnt({
+  // 512 MiB span beyond the actual four bytes; untrusted provenance must refuse it first.
+  const FontHandle font = fontManager_.loadFontData(MakeSfnt({
       {"cmap", CmapTable({{'A', 'A', 0}})},
       {"head", HeadTable(1000)},
       {"hhea", HheaTable(800, -200, 0, 1)},
@@ -312,9 +343,11 @@ TEST_F(TextBackendSimpleTest, RejectsMalformedFinalCffBeforeStbInitialization) {
       {"maxp", MaxpTable(1)},
       {"CFF ", {1, 0, 4, 4}},
   }));
+  ASSERT_TRUE(static_cast<bool>(font));
+  EXPECT_FALSE(fontManager_.isTrustedFont(font));
 
   EXPECT_EQ(backend_.fontVMetrics(font).ascent, 0);
-  // Second call hits the cached refusal without reconsidering the untrusted bytes.
+  // Repeated calls must remain outside the length-unaware parser.
   EXPECT_EQ(backend_.fontVMetrics(font).ascent, 0);
   EXPECT_TRUE(backend_.glyphOutline(font, 1, 1.0f).empty());
   EXPECT_FLOAT_EQ(backend_.scaleForPixelHeight(font, 100.0f), 0.1f);
@@ -471,14 +504,20 @@ TEST_F(TextBackendSimpleTest, GlyphOutlineDecodesQuadraticSegmentsWithFlippedY) 
   EXPECT_NEAR(bounds.bottomRight.y, 0.0, 1e-4);
 }
 
-TEST_F(TextBackendSimpleTest, CffFallbackIsRejectedBeforeStbInitialization) {
+TEST_F(TextBackendSimpleTest, TrustedCffFallbackDecodesCurveSegments) {
   const FontHandle font = fontManager_.fallbackFont();
   ASSERT_TRUE(static_cast<bool>(font));
   ASSERT_TRUE(fontManager_.sfntTable(font, "CFF ").has_value());
+  ASSERT_TRUE(fontManager_.isTrustedFont(font));
 
   const auto shaped = backend_.shapeRun(font, 100.0f, "O", 0, 1, false, FontVariant::Normal, false);
-  EXPECT_THAT(shaped.glyphs, IsEmpty());
-  EXPECT_TRUE(backend_.glyphOutline(font, 1, 0.1f).empty());
+  ASSERT_THAT(shaped.glyphs, ElementsAre(GlyphIndexIs(testing::Gt(0))));
+
+  const Path path = backend_.glyphOutline(font, shaped.glyphs[0].glyphIndex, 0.1f);
+  ASSERT_FALSE(path.empty());
+  EXPECT_TRUE(std::any_of(path.commands().begin(), path.commands().end(), [](const auto& command) {
+    return command.verb == Path::Verb::QuadTo || command.verb == Path::Verb::CurveTo;
+  }));
 }
 
 // -- Capability contracts -----------------------------------------------------

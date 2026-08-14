@@ -39,6 +39,7 @@ FontHandle LoadNotoSans(FontManager& fontManager) {
   css::FontFaceSource source;
   source.kind = css::FontFaceSource::Kind::Data;
   source.payload = fontData;
+  source.trusted = true;
 
   css::FontFace face;
   face.familyName = RcString("Noto Sans");

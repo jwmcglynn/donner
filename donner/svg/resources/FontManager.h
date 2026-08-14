@@ -16,6 +16,12 @@
 
 namespace donner::svg {
 
+/// Declares whether font bytes come from a trusted local source.
+enum class FontDataTrust {
+  Untrusted,  ///< Document-provided or otherwise attacker-controlled bytes.
+  Trusted,    ///< Embedded, system, or explicitly trusted application bytes.
+};
+
 /**
  * Opaque handle to a loaded font, used to reference fonts in the FontManager.
  */
@@ -166,10 +172,16 @@ public:
    * The data is copied internally. The font is not associated with any family name; callers
    * should use `findFont()` for name-based lookup.
    *
+   * The default treats the bytes as untrusted. The simple text backend refuses to pass untrusted
+   * bytes to stb_truetype because that parser does not accept a buffer length. Use @ref
+   * FontDataTrust::Trusted only for application-controlled embedded or local-system fonts.
+   *
    * @param data Raw font file bytes (TTF, OTF, or WOFF 1.0).
+   * @param trust Whether the source is trusted enough for length-unaware font backends.
    * @return A valid FontHandle on success, or an invalid handle on failure.
    */
-  FontHandle loadFontData(std::span<const uint8_t> data);
+  FontHandle loadFontData(std::span<const uint8_t> data,
+                          FontDataTrust trust = FontDataTrust::Untrusted);
 
   /**
    * Get the raw font data bytes for a handle.
@@ -181,6 +193,9 @@ public:
    * @return Span of the raw font data, or empty span if the handle is invalid.
    */
   std::span<const uint8_t> fontData(FontHandle handle) const;
+
+  /// Returns whether @p handle was loaded from an explicitly trusted source.
+  bool isTrustedFont(FontHandle handle) const;
 
   /**
    * Get a table from the cached, validated sfnt directory for a handle.
@@ -260,8 +275,9 @@ private:
    * @param data Owned font data buffer. Must remain valid for the lifetime of the FontManager.
    * @return True on success.
    */
-  bool setRawFontData(Entity entity, std::vector<uint8_t> data);
-  bool setRawFontData(Entity entity, std::shared_ptr<const std::vector<uint8_t>> sharedData);
+  bool setRawFontData(Entity entity, std::vector<uint8_t> data, FontDataTrust trust);
+  bool setRawFontData(Entity entity, std::shared_ptr<const std::vector<uint8_t>> sharedData,
+                      FontDataTrust trust);
 
   /** Return the registry budget when installed, otherwise this manager's private candidate. */
   std::shared_ptr<const FontBudgetState> budgetStateForRead() const;
@@ -278,7 +294,8 @@ private:
                           const std::shared_ptr<FontBudgetState>& budgetState) const;
   bool storeLoadedFont(Entity entity, LoadedFontComponent font);
   bool loadFontDataSharedIntoEntity(Entity entity,
-                                    const std::shared_ptr<const std::vector<uint8_t>>& data);
+                                    const std::shared_ptr<const std::vector<uint8_t>>& data,
+                                    FontDataTrust trust);
 
   /**
    * Internal: load a WOFF 1.0 font by parsing and reconstructing the sfnt byte stream.
@@ -287,7 +304,7 @@ private:
    * @param data Raw WOFF data.
    * @return True on success.
    */
-  bool loadWoff1(Entity entity, std::span<const uint8_t> data);
+  bool loadWoff1(Entity entity, std::span<const uint8_t> data, FontDataTrust trust);
 
 #ifdef DONNER_TEXT_WOFF2_ENABLED
   /**
@@ -299,7 +316,7 @@ private:
    * @param data Raw WOFF2 data.
    * @return True on success.
    */
-  bool loadWoff2(Entity entity, std::span<const uint8_t> data);
+  bool loadWoff2(Entity entity, std::span<const uint8_t> data, FontDataTrust trust);
 #endif
 
   /**
@@ -309,7 +326,7 @@ private:
    * @param data Raw font file bytes.
    * @return True on success.
    */
-  bool loadFontDataIntoEntity(Entity entity, std::span<const uint8_t> data);
+  bool loadFontDataIntoEntity(Entity entity, std::span<const uint8_t> data, FontDataTrust trust);
 
   /// Returns true if \p handle refers to a live font entity in the registry.
   bool isValidHandle(FontHandle handle) const;

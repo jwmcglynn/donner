@@ -193,6 +193,7 @@ struct FontManager::LoadedFontComponent {
   std::vector<uint8_t> ownedData;                          // Owns reconstructed sfnt bytes.
   std::shared_ptr<const std::vector<uint8_t>> sharedData;  // Shares raw TTF/OTF bytes.
   fonts::SfntFont sfnt;
+  FontDataTrust trust = FontDataTrust::Untrusted;
   FontBudgetReservation reservation;
 
   std::span<const uint8_t> fontData() const {
@@ -348,7 +349,9 @@ FontHandle FontManager::findFont(std::string_view family, int weight, int style,
     for (const auto& source : face.sources) {
       if (source.kind == css::FontFaceSource::Kind::Data) {
         const auto& dataPtr = std::get<std::shared_ptr<const std::vector<uint8_t>>>(source.payload);
-        if (loadFontDataSharedIntoEntity(bestEntity, dataPtr)) {
+        const FontDataTrust trust =
+            source.trusted ? FontDataTrust::Trusted : FontDataTrust::Untrusted;
+        if (loadFontDataSharedIntoEntity(bestEntity, dataPtr, trust)) {
           FontHandle handle(bestEntity);
           cache_[cacheKey] = handle;
           return handle;
@@ -363,7 +366,7 @@ FontHandle FontManager::findFont(std::string_view family, int weight, int style,
     std::vector<uint8_t> data = provider_->loadFamilyData(family);
     if (!data.empty()) {
       const Entity entity = registry_.create();
-      if (loadFontDataIntoEntity(entity, data)) {
+      if (loadFontDataIntoEntity(entity, data, FontDataTrust::Trusted)) {
         FontHandle handle(entity);
         cache_[cacheKey] = handle;
         return handle;
@@ -378,9 +381,9 @@ FontHandle FontManager::findFont(std::string_view family, int weight, int style,
   return fallback;
 }
 
-FontHandle FontManager::loadFontData(std::span<const uint8_t> data) {
+FontHandle FontManager::loadFontData(std::span<const uint8_t> data, FontDataTrust trust) {
   const Entity entity = registry_.create();
-  if (!loadFontDataIntoEntity(entity, data)) {
+  if (!loadFontDataIntoEntity(entity, data, trust)) {
     registry_.destroy(entity);
     return FontHandle();
   }
@@ -389,7 +392,7 @@ FontHandle FontManager::loadFontData(std::span<const uint8_t> data) {
 }
 
 bool FontManager::loadFontDataSharedIntoEntity(
-    Entity entity, const std::shared_ptr<const std::vector<uint8_t>>& data) {
+    Entity entity, const std::shared_ptr<const std::vector<uint8_t>>& data, FontDataTrust trust) {
   if (!data) {
     return false;
   }
@@ -402,12 +405,12 @@ bool FontManager::loadFontDataSharedIntoEntity(
 
   // WOFF fonts need decompression/reconstruction, so they create new owned buffers.
   if (magic == kWoffMagic) {
-    return loadWoff1(entity, *data);
+    return loadWoff1(entity, *data, trust);
   }
 
   if (magic == kWoff2Magic) {
 #ifdef DONNER_TEXT_WOFF2_ENABLED
-    return loadWoff2(entity, *data);
+    return loadWoff2(entity, *data, trust);
 #else
     std::cerr << "FontManager: WOFF2 font encountered but WOFF2 support not enabled. "
                  "Build with --config=text-full to enable.\n";
@@ -420,7 +423,7 @@ bool FontManager::loadFontDataSharedIntoEntity(
   }
 
   // Raw TTF/OTF: share the data via shared_ptr (no copy).
-  return setRawFontData(entity, data);
+  return setRawFontData(entity, data, trust);
 }
 
 std::span<const uint8_t> FontManager::fontData(FontHandle handle) const {
@@ -430,6 +433,15 @@ std::span<const uint8_t> FontManager::fontData(FontHandle handle) const {
 
   const auto* font = registry_.try_get<LoadedFontComponent>(handle.entity());
   return font ? font->fontData() : std::span<const uint8_t>();
+}
+
+bool FontManager::isTrustedFont(FontHandle handle) const {
+  if (!isValidHandle(handle)) {
+    return false;
+  }
+
+  const auto* font = registry_.try_get<LoadedFontComponent>(handle.entity());
+  return font != nullptr && font->trust == FontDataTrust::Trusted;
 }
 
 std::optional<std::span<const uint8_t>> FontManager::sfntTable(FontHandle handle,
@@ -463,7 +475,7 @@ FontHandle FontManager::fallbackFont() {
   // Load the embedded Public Sans font.
   std::vector<uint8_t> data(embedded::kPublicSansMediumOtf.begin(),
                             embedded::kPublicSansMediumOtf.end());
-  if (!setRawFontData(entity, std::move(data))) {
+  if (!setRawFontData(entity, std::move(data), FontDataTrust::Trusted)) {
     registry_.destroy(entity);
     std::cerr << "FontManager: Failed to load embedded fallback font (Public Sans)\n";
     return FontHandle();
@@ -473,7 +485,7 @@ FontHandle FontManager::fallbackFont() {
   return fallbackHandle_;
 }
 
-bool FontManager::setRawFontData(Entity entity, std::vector<uint8_t> data) {
+bool FontManager::setRawFontData(Entity entity, std::vector<uint8_t> data, FontDataTrust trust) {
   auto sfnt = fonts::SfntFont::Validate(data);
   if (!sfnt) {
     return false;
@@ -482,11 +494,13 @@ bool FontManager::setRawFontData(Entity entity, std::vector<uint8_t> data) {
   LoadedFontComponent font;
   font.ownedData = std::move(data);
   font.sfnt = std::move(*sfnt);
+  font.trust = trust;
   return storeLoadedFont(entity, std::move(font));
 }
 
 bool FontManager::setRawFontData(Entity entity,
-                                 std::shared_ptr<const std::vector<uint8_t>> sharedData) {
+                                 std::shared_ptr<const std::vector<uint8_t>> sharedData,
+                                 FontDataTrust trust) {
   if (!sharedData) {
     return false;
   }
@@ -498,6 +512,7 @@ bool FontManager::setRawFontData(Entity entity,
   LoadedFontComponent font;
   font.sharedData = std::move(sharedData);
   font.sfnt = std::move(*sfnt);
+  font.trust = trust;
   return storeLoadedFont(entity, std::move(font));
 }
 
@@ -561,7 +576,7 @@ bool FontManager::canStoreLoadedFont(Entity entity, size_t rawBytes, size_t inde
   return true;
 }
 
-bool FontManager::loadWoff1(Entity entity, std::span<const uint8_t> data) {
+bool FontManager::loadWoff1(Entity entity, std::span<const uint8_t> data, FontDataTrust trust) {
   const std::shared_ptr<FontBudgetState> budgetState = budgetStateForWrite();
   fonts::WoffParser::Options options;
   options.maximumSfntSize = std::min(options.maximumSfntSize, budgetState->maximumBytes);
@@ -573,10 +588,11 @@ bool FontManager::loadWoff1(Entity entity, std::span<const uint8_t> data) {
 
   // Reconstruct sfnt byte stream from decompressed WOFF tables.
   std::vector<uint8_t> sfntData = reconstructSfnt(maybeFont.result());
-  return setRawFontData(entity, std::move(sfntData));
+  return setRawFontData(entity, std::move(sfntData), trust);
 }
 
-bool FontManager::loadFontDataIntoEntity(Entity entity, std::span<const uint8_t> data) {
+bool FontManager::loadFontDataIntoEntity(Entity entity, std::span<const uint8_t> data,
+                                         FontDataTrust trust) {
   if (data.size() < 4) {
     return false;
   }
@@ -584,12 +600,12 @@ bool FontManager::loadFontDataIntoEntity(Entity entity, std::span<const uint8_t>
   const uint32_t magic = readBE32(data.data());
 
   if (magic == kWoffMagic) {
-    return loadWoff1(entity, data);
+    return loadWoff1(entity, data, trust);
   }
 
   if (magic == kWoff2Magic) {
 #ifdef DONNER_TEXT_WOFF2_ENABLED
-    return loadWoff2(entity, data);
+    return loadWoff2(entity, data, trust);
 #else
     std::cerr << "FontManager: WOFF2 font encountered but WOFF2 support not enabled. "
                  "Build with --config=text-full to enable.\n";
@@ -613,11 +629,12 @@ bool FontManager::loadFontDataIntoEntity(Entity entity, std::span<const uint8_t>
   LoadedFontComponent font;
   font.ownedData.assign(data.begin(), data.end());
   font.sfnt = std::move(*sfnt);
+  font.trust = trust;
   return storeLoadedFont(entity, std::move(font));
 }
 
 #ifdef DONNER_TEXT_WOFF2_ENABLED
-bool FontManager::loadWoff2(Entity entity, std::span<const uint8_t> data) {
+bool FontManager::loadWoff2(Entity entity, std::span<const uint8_t> data, FontDataTrust trust) {
   const std::shared_ptr<FontBudgetState> budgetState = budgetStateForWrite();
   fonts::Woff2Parser::Options options;
   options.maximumOutputSize = std::min(options.maximumOutputSize, budgetState->maximumBytes);
@@ -627,7 +644,7 @@ bool FontManager::loadWoff2(Entity entity, std::span<const uint8_t> data) {
     return false;
   }
 
-  return setRawFontData(entity, std::move(result.result()));
+  return setRawFontData(entity, std::move(result.result()), trust);
 }
 #endif
 

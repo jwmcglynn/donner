@@ -264,7 +264,6 @@ StructuredFont MakeStructuredFont(uint8_t selector) {
     case 'X': return MakeRepeatedWorkFont(true);
     case 'M': return MakeNestedSharedWorkFont(false);
     case 'N': return MakeNestedSharedWorkFont(true);
-    case 'C': return MakeMalformedFinalCff();
     default: return {};
   }
 }
@@ -302,13 +301,13 @@ void ExerciseAccounting(std::span<const uint8_t> fontBytes) {
   const size_t charge = fontBytes.size() + sfnt->retainedBytes();
   Registry registry;
   FontManager fontManager(registry, charge, 1);
-  const FontHandle first = fontManager.loadFontData(fontBytes);
+  const FontHandle first = fontManager.loadFontData(fontBytes, FontDataTrust::Trusted);
   if (!first) {
     return;
   }
-  (void)fontManager.loadFontData(fontBytes);
+  (void)fontManager.loadFontData(fontBytes, FontDataTrust::Trusted);
   registry.destroy(first.entity());
-  const FontHandle replacement = fontManager.loadFontData(fontBytes);
+  const FontHandle replacement = fontManager.loadFontData(fontBytes, FontDataTrust::Trusted);
   if (replacement) {
     ExerciseLoadedFont(fontManager, registry, replacement);
   }
@@ -317,15 +316,24 @@ void ExerciseAccounting(std::span<const uint8_t> fontBytes) {
 }  // namespace
 
 extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
-  // Single-byte corpus seeds select deterministic synthetic fonts through the normal FontManager
-  // path. Every other input is passed through unchanged as untrusted document-provided font data.
+  // Single-byte corpus seeds select trusted synthetic fonts. The malformed CFF sentinel and every
+  // arbitrary input remain untrusted document-equivalent bytes.
+  constexpr std::string_view kMalformedFinalCffSeed = "MALFORMED_FINAL_CFF\n";
   StructuredFont structured;
   std::span<const uint8_t> fontBytes(data, size);
+  FontDataTrust trust = FontDataTrust::Untrusted;
   const bool isStructuredSeed = size == 1 || (size == 2 && data[1] == '\n');
-  if (isStructuredSeed) {
+  const bool isMalformedFinalCffSeed =
+      size == kMalformedFinalCffSeed.size() &&
+      std::equal(kMalformedFinalCffSeed.begin(), kMalformedFinalCffSeed.end(), data);
+  if (isMalformedFinalCffSeed) {
+    structured = MakeMalformedFinalCff();
+    fontBytes = structured.bytes;
+  } else if (isStructuredSeed) {
     structured = MakeStructuredFont(data[0]);
     if (!structured.bytes.empty()) {
       fontBytes = structured.bytes;
+      trust = FontDataTrust::Trusted;
     }
   }
 
@@ -336,7 +344,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
 
   Registry registry;
   FontManager fontManager(registry);
-  const FontHandle font = fontManager.loadFontData(fontBytes);
+  const FontHandle font = fontManager.loadFontData(fontBytes, trust);
   if (font) {
     ExerciseLoadedFont(fontManager, registry, font, structured.outlineGlyph);
   }

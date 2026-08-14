@@ -16,8 +16,9 @@ namespace donner::svg {
 
 struct FontManagerTestAccess {
   static bool ReplaceFontData(FontManager& manager, FontHandle handle,
-                              std::span<const uint8_t> data) {
-    return manager.loadFontDataIntoEntity(handle.entity(), data);
+                              std::span<const uint8_t> data,
+                              FontDataTrust trust = FontDataTrust::Untrusted) {
+    return manager.loadFontDataIntoEntity(handle.entity(), data, trust);
   }
 
   static bool HasPersistentBudgetState(const Registry& registry) {
@@ -89,6 +90,7 @@ TEST(FontManagerTest, FallbackFontLoads) {
   FontManager mgr(registry);
   FontHandle handle = mgr.fallbackFont();
   EXPECT_TRUE(static_cast<bool>(handle));
+  EXPECT_TRUE(mgr.isTrustedFont(handle));
 
   auto data = mgr.fontData(handle);
   EXPECT_FALSE(data.empty());
@@ -111,6 +113,7 @@ TEST(FontManagerTest, LoadRawOtfData) {
                             embedded::kPublicSansMediumOtf.end());
   FontHandle handle = mgr.loadFontData(data);
   EXPECT_TRUE(static_cast<bool>(handle));
+  EXPECT_FALSE(mgr.isTrustedFont(handle));
 
   EXPECT_FALSE(mgr.fontData(handle).empty());
 }
@@ -315,7 +318,34 @@ TEST(FontManagerTest, LoadWoff1Data) {
 
   FontHandle handle = mgr.loadFontData(woffData);
   EXPECT_TRUE(static_cast<bool>(handle));
+  EXPECT_FALSE(mgr.isTrustedFont(handle));
   EXPECT_FALSE(mgr.fontData(handle).empty());
+
+  FontHandle trustedHandle = mgr.loadFontData(woffData, FontDataTrust::Trusted);
+  EXPECT_TRUE(static_cast<bool>(trustedHandle));
+  EXPECT_TRUE(mgr.isTrustedFont(trustedHandle));
+}
+
+TEST(FontManagerTest, ReplacementUsesNewTrustAndRejectedReplacementPreservesOldTrust) {
+  Registry registry;
+  const std::vector<uint8_t> data(embedded::kPublicSansMediumOtf.begin(),
+                                  embedded::kPublicSansMediumOtf.end());
+  FontManager mgr(registry);
+
+  const FontHandle handle = mgr.loadFontData(data, FontDataTrust::Trusted);
+  ASSERT_TRUE(static_cast<bool>(handle));
+  ASSERT_TRUE(mgr.isTrustedFont(handle));
+
+  ASSERT_TRUE(FontManagerTestAccess::ReplaceFontData(mgr, handle, data, FontDataTrust::Untrusted));
+  EXPECT_FALSE(mgr.isTrustedFont(handle));
+
+  ASSERT_TRUE(FontManagerTestAccess::ReplaceFontData(mgr, handle, data, FontDataTrust::Trusted));
+  EXPECT_TRUE(mgr.isTrustedFont(handle));
+
+  const std::vector<uint8_t> invalid = {0x00, 0x01, 0x00, 0x00};
+  EXPECT_FALSE(
+      FontManagerTestAccess::ReplaceFontData(mgr, handle, invalid, FontDataTrust::Untrusted));
+  EXPECT_TRUE(mgr.isTrustedFont(handle));
 }
 
 TEST(FontManagerTest, InvalidDataReturnsInvalidHandle) {
@@ -337,6 +367,7 @@ TEST(FontManagerTest, InvalidHandleReturnsEmptyMeasurements) {
   FontManager mgr(registry);
   FontHandle invalid;
   EXPECT_TRUE(mgr.fontData(invalid).empty());
+  EXPECT_FALSE(mgr.isTrustedFont(invalid));
 }
 
 TEST(FontManagerTest, FontDataReturnsNonEmpty) {
@@ -423,6 +454,7 @@ TEST(FontManagerTest, AddFontFaceWithDataSource) {
   FontHandle secondHandle = mgr.findFont("TestFont");
   EXPECT_TRUE(static_cast<bool>(handle));
   EXPECT_EQ(secondHandle, handle);
+  EXPECT_FALSE(mgr.isTrustedFont(handle));
 
   // The loaded font should be different from the fallback (separate allocation).
   FontHandle fallback = mgr.fallbackFont();
@@ -459,6 +491,7 @@ TEST(FontManagerTest, ProviderResolvesFamilyMissingFromFontFaces) {
 
   const FontHandle handle = mgr.findFont("ProviderFamily");
   ASSERT_TRUE(static_cast<bool>(handle));
+  EXPECT_TRUE(mgr.isTrustedFont(handle));
   // Resolved through the provider, not the Public Sans fallback entity.
   EXPECT_NE(handle, mgr.fallbackFont());
   EXPECT_EQ(provider.loadCalls, 1);

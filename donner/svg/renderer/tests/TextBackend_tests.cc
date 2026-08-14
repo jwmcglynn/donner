@@ -51,6 +51,7 @@ FontHandle LoadResvgFont(FontManager& fontManager, const std::string& fontFilena
   css::FontFaceSource source;
   source.kind = css::FontFaceSource::Kind::Data;
   source.payload = fontData;
+  source.trusted = true;
 
   css::FontFace face;
   face.familyName = RcString(familyName);
