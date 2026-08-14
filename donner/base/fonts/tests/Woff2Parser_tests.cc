@@ -27,6 +27,17 @@ std::vector<uint8_t> readFile(const std::string& path) {
   return data;
 }
 
+std::array<uint8_t, 48> minimalWoff2Header() {
+  std::array<uint8_t, 48> data{};
+  data[0] = 0x77;
+  data[1] = 0x4F;
+  data[2] = 0x46;
+  data[3] = 0x32;
+  data[11] = 48;
+  data[13] = 1;
+  return data;
+}
+
 }  // namespace
 
 TEST(Woff2ParserTest, DecompressValid) {
@@ -71,7 +82,7 @@ TEST(Woff2ParserTest, InvalidMagic) {
   EXPECT_TRUE(result.hasError());
 }
 
-TEST(Woff2ParserTest, RejectsCiTimeoutInputBeforeDecompression) {
+TEST(Woff2ParserTest, RejectsInvalidSignatureBeforeDecompression) {
   constexpr std::array<uint8_t, 21> data = {
       0x00, 0xFF, 0xFF, 0xFF, 0xD0, 0xFF, 0xFF, 0x5D, 0xFF, 0xFF, 0xFF,
       0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x02, 0xFF, 0xFF, 0xFF, 0xFF,
@@ -82,12 +93,46 @@ TEST(Woff2ParserTest, RejectsCiTimeoutInputBeforeDecompression) {
   EXPECT_EQ(result.error().reason, "WOFF2: invalid signature");
 }
 
+TEST(Woff2ParserTest, RejectsIncompleteHeaderBeforeDecompression) {
+  constexpr std::array<uint8_t, 4> data = {0x77, 0x4F, 0x46, 0x32};
+
+  auto result = Woff2Parser::Decompress(data);
+  ASSERT_TRUE(result.hasError());
+  EXPECT_EQ(result.error().reason, "WOFF2: incomplete header");
+}
+
+TEST(Woff2ParserTest, RejectsMismatchedInputLengthBeforeDecompression) {
+  auto data = minimalWoff2Header();
+  data[11] = 47;
+
+  auto result = Woff2Parser::Decompress(data);
+  ASSERT_TRUE(result.hasError());
+  EXPECT_EQ(result.error().reason, "WOFF2: declared input length does not match data");
+}
+
+TEST(Woff2ParserTest, RejectsMissingTablesBeforeDecompression) {
+  auto data = minimalWoff2Header();
+  data[13] = 0;
+
+  auto result = Woff2Parser::Decompress(data);
+  ASSERT_TRUE(result.hasError());
+  EXPECT_EQ(result.error().reason, "WOFF2: header declares no tables");
+}
+
+TEST(Woff2ParserTest, RejectsNonzeroReservedFieldBeforeDecompression) {
+  auto data = minimalWoff2Header();
+  data[15] = 1;
+
+  auto result = Woff2Parser::Decompress(data);
+  ASSERT_TRUE(result.hasError());
+  EXPECT_EQ(result.error().reason, "WOFF2: reserved header field must be zero");
+}
+
 TEST(Woff2ParserTest, RejectsOversizedDeclaredSize) {
-  // Regression: a 20-byte input whose total_length header field (bytes 16-19)
-  // declares ~4 GiB. ComputeWOFF2FinalSize returns that value verbatim, so
-  // without the size guard this attempts a multi-gigabyte allocation before any
-  // real decompression work (hang / OOM DoS).
-  std::vector<uint8_t> data(20, 0);
+  // Regression: a complete WOFF2 header whose totalSfntSize field (bytes 16-19)
+  // declares ~4 GiB. ComputeWOFF2FinalSize returns that value verbatim, so without
+  // the size guard this attempts a multi-gigabyte allocation before decompression.
+  auto data = minimalWoff2Header();
   data[16] = 0xFF;
   data[17] = 0xFF;
   data[18] = 0xFF;
