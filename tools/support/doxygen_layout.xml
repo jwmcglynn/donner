@@ -26,15 +26,116 @@
         <tab type="user" title="API Overview" url="DonnerAPI.html"/>
         <tab type="user" title="CSS" url="CssArchitecture.html"/>
         <tab type="usergroup" title="SVG Element Reference" url="SvgElementReference.html">
-          <tab type="user" title="Structural" url="elements_structural.html"/>
-          <tab type="user" title="Basic Shapes" url="elements_basic_shapes.html"/>
-          <tab type="user" title="Text" url="elements_text.html"/>
-          <tab type="user" title="Painting" url="elements_painting.html"/>
-          <tab type="user" title="Masking and Clipping"
-               url="elements_masking_clipping.html"/>
-          <tab type="user" title="Filters" url="elements_filters.html"/>
-          <tab type="user" title="Media and Styling" url="elements_media_and_style.html"/>
-          <tab type="user" title="Animation" url="elements_animation.html"/>
+          <!-- XML and Doxygen each decode one entity layer before navtree.js
+               inserts labels as HTML. Keep both layers so angle brackets render
+               as text instead of disappearing as custom HTML elements. -->
+          <tab type="usergroup" title="Structural" url="elements_structural.html">
+            <tab type="user" title="&amp;amp;lt;svg&amp;amp;gt;" url="xml_svg.html"/>
+            <tab type="user" title="&amp;amp;lt;a&amp;amp;gt;" url="xml_a.html"/>
+            <tab type="user" title="&amp;amp;lt;g&amp;amp;gt;" url="xml_g.html"/>
+            <tab type="user" title="&amp;amp;lt;defs&amp;amp;gt;" url="xml_defs.html"/>
+            <tab type="user" title="&amp;amp;lt;use&amp;amp;gt;" url="xml_use.html"/>
+            <tab type="user" title="&amp;amp;lt;switch&amp;amp;gt;" url="xml_switch.html"/>
+            <tab type="user" title="&amp;amp;lt;symbol&amp;amp;gt;" url="xml_symbol.html"/>
+            <tab type="user" title="&amp;amp;lt;title&amp;amp;gt;" url="xml_title.html"/>
+            <tab type="user" title="&amp;amp;lt;desc&amp;amp;gt;" url="xml_desc.html"/>
+            <tab type="user" title="&amp;amp;lt;metadata&amp;amp;gt;" url="xml_metadata.html"/>
+          </tab>
+
+          <tab type="usergroup" title="Basic Shapes" url="elements_basic_shapes.html">
+            <tab type="user" title="&amp;amp;lt;circle&amp;amp;gt;" url="xml_circle.html"/>
+            <tab type="user" title="&amp;amp;lt;ellipse&amp;amp;gt;" url="xml_ellipse.html"/>
+            <tab type="user" title="&amp;amp;lt;line&amp;amp;gt;" url="xml_line.html"/>
+            <tab type="user" title="&amp;amp;lt;path&amp;amp;gt;" url="xml_path.html"/>
+            <tab type="user" title="&amp;amp;lt;polygon&amp;amp;gt;" url="xml_polygon.html"/>
+            <tab type="user" title="&amp;amp;lt;polyline&amp;amp;gt;" url="xml_polyline.html"/>
+            <tab type="user" title="&amp;amp;lt;rect&amp;amp;gt;" url="xml_rect.html"/>
+          </tab>
+
+          <tab type="usergroup" title="Text" url="elements_text.html">
+            <tab type="user" title="&amp;amp;lt;text&amp;amp;gt;" url="xml_text.html"/>
+            <tab type="user" title="&amp;amp;lt;tspan&amp;amp;gt;" url="xml_tspan.html"/>
+            <tab type="user" title="&amp;amp;lt;textPath&amp;amp;gt;" url="xml_textPath.html"/>
+          </tab>
+
+          <tab type="usergroup" title="Painting" url="elements_painting.html">
+            <tab type="user" title="&amp;amp;lt;linearGradient&amp;amp;gt;" url="xml_linearGradient.html"/>
+            <tab type="user" title="&amp;amp;lt;radialGradient&amp;amp;gt;" url="xml_radialGradient.html"/>
+            <tab type="user" title="&amp;amp;lt;pattern&amp;amp;gt;" url="xml_pattern.html"/>
+            <tab type="user" title="&amp;amp;lt;stop&amp;amp;gt;" url="xml_stop.html"/>
+            <tab type="user" title="&amp;amp;lt;marker&amp;amp;gt;" url="xml_marker.html"/>
+          </tab>
+
+          <tab type="usergroup" title="Masking and Clipping"
+               url="elements_masking_clipping.html">
+            <tab type="user" title="&amp;amp;lt;mask&amp;amp;gt;" url="xml_mask.html"/>
+            <tab type="user" title="&amp;amp;lt;clipPath&amp;amp;gt;" url="xml_clipPath.html"/>
+          </tab>
+
+          <tab type="usergroup" title="Filters" url="elements_filters.html">
+            <tab type="user" title="&amp;amp;lt;filter&amp;amp;gt;" url="xml_filter.html"/>
+
+            <tab type="usergroup" title="Blur, Shadow, and Geometry"
+                 url="elements_filters.html#blur-shadow-and-geometry">
+              <tab type="user" title="&amp;amp;lt;feGaussianBlur&amp;amp;gt;" url="xml_feGaussianBlur.html"/>
+              <tab type="user" title="&amp;amp;lt;feDropShadow&amp;amp;gt;" url="xml_feDropShadow.html"/>
+              <tab type="user" title="&amp;amp;lt;feOffset&amp;amp;gt;" url="xml_feOffset.html"/>
+              <tab type="user" title="&amp;amp;lt;feMorphology&amp;amp;gt;" url="xml_feMorphology.html"/>
+              <tab type="user" title="&amp;amp;lt;feDisplacementMap&amp;amp;gt;" url="xml_feDisplacementMap.html"/>
+              <tab type="user" title="&amp;amp;lt;feTile&amp;amp;gt;" url="xml_feTile.html"/>
+            </tab>
+
+            <tab type="usergroup" title="Color and Component Transforms"
+                 url="elements_filters.html#color-and-component-transforms">
+              <tab type="user" title="&amp;amp;lt;feColorMatrix&amp;amp;gt;" url="xml_feColorMatrix.html"/>
+              <tab type="usergroup" title="&amp;amp;lt;feComponentTransfer&amp;amp;gt;"
+                   url="xml_feComponentTransfer.html">
+                <tab type="user" title="&amp;amp;lt;feFuncR&amp;amp;gt;" url="xml_feFuncR.html"/>
+                <tab type="user" title="&amp;amp;lt;feFuncG&amp;amp;gt;" url="xml_feFuncG.html"/>
+                <tab type="user" title="&amp;amp;lt;feFuncB&amp;amp;gt;" url="xml_feFuncB.html"/>
+                <tab type="user" title="&amp;amp;lt;feFuncA&amp;amp;gt;" url="xml_feFuncA.html"/>
+              </tab>
+            </tab>
+
+            <tab type="usergroup" title="Compositing and Merging"
+                 url="elements_filters.html#compositing-and-merging">
+              <tab type="user" title="&amp;amp;lt;feBlend&amp;amp;gt;" url="xml_feBlend.html"/>
+              <tab type="user" title="&amp;amp;lt;feComposite&amp;amp;gt;" url="xml_feComposite.html"/>
+              <tab type="usergroup" title="&amp;amp;lt;feMerge&amp;amp;gt;" url="xml_feMerge.html">
+                <tab type="user" title="&amp;amp;lt;feMergeNode&amp;amp;gt;" url="xml_feMergeNode.html"/>
+              </tab>
+            </tab>
+
+            <tab type="usergroup" title="Sources"
+                 url="elements_filters.html#sources-flood-image-turbulence-convolution">
+              <tab type="user" title="&amp;amp;lt;feFlood&amp;amp;gt;" url="xml_feFlood.html"/>
+              <tab type="user" title="&amp;amp;lt;feImage&amp;amp;gt;" url="xml_feImage.html"/>
+              <tab type="user" title="&amp;amp;lt;feTurbulence&amp;amp;gt;" url="xml_feTurbulence.html"/>
+              <tab type="user" title="&amp;amp;lt;feConvolveMatrix&amp;amp;gt;" url="xml_feConvolveMatrix.html"/>
+            </tab>
+
+            <tab type="usergroup" title="Lighting" url="elements_filters.html#lighting">
+              <tab type="user" title="&amp;amp;lt;feDiffuseLighting&amp;amp;gt;" url="xml_feDiffuseLighting.html"/>
+              <tab type="user" title="&amp;amp;lt;feSpecularLighting&amp;amp;gt;"
+                   url="xml_feSpecularLighting.html"/>
+              <tab type="user" title="&amp;amp;lt;feDistantLight&amp;amp;gt;" url="xml_feDistantLight.html"/>
+              <tab type="user" title="&amp;amp;lt;fePointLight&amp;amp;gt;" url="xml_fePointLight.html"/>
+              <tab type="user" title="&amp;amp;lt;feSpotLight&amp;amp;gt;" url="xml_feSpotLight.html"/>
+            </tab>
+          </tab>
+
+          <tab type="usergroup" title="Media and Styling"
+               url="elements_media_and_style.html">
+            <tab type="user" title="&amp;amp;lt;image&amp;amp;gt;" url="xml_image.html"/>
+            <tab type="user" title="&amp;amp;lt;style&amp;amp;gt;" url="xml_style.html"/>
+          </tab>
+
+          <tab type="usergroup" title="Animation" url="elements_animation.html">
+            <tab type="user" title="&amp;amp;lt;animate&amp;amp;gt;" url="xml_animate.html"/>
+            <tab type="user" title="&amp;amp;lt;animateTransform&amp;amp;gt;" url="xml_animateTransform.html"/>
+            <tab type="user" title="&amp;amp;lt;set&amp;amp;gt;" url="xml_set.html"/>
+          </tab>
+
           <tab type="user" title="Symbol Usage" url="SymbolElementUsage.html"/>
         </tab>
       </tab>
