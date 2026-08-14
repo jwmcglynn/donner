@@ -21,15 +21,40 @@ EOF
   exit 0
 }
 
+# Print the direct children of a process without requiring awk or GNU ps.
+# Linux runners expose the relationship directly in procfs. Darwin has no
+# equivalent file, but its ps supports the POSIX-wide pid/ppid table below.
+function child_processes() {
+  local root="$1"
+  local children=""
+  local child
+  local parent
+
+  if [[ -r "/proc/$root/task/$root/children" ]]; then
+    IFS= read -r children < "/proc/$root/task/$root/children" || true
+    for child in $children; do
+      printf '%s\n' "$child"
+    done
+    return
+  fi
+
+  while read -r child parent; do
+    if [[ "$parent" == "$root" ]]; then
+      printf '%s\n' "$child"
+    fi
+  done < <(ps -A -o pid=,ppid= 2> /dev/null)
+}
+
 # Signal a process and every descendant. Killing only the launcher leaves the
 # Bazel client alive, still writing to the log the caller is about to report on.
 function kill_process_tree() {
   local signal="$1"
   local root="$2"
   local child
-  for child in $(ps -A -o pid=,ppid= 2> /dev/null | awk -v p="$root" '$2 == p {print $1}'); do
+  while IFS= read -r child; do
+    [[ -n "$child" ]] || continue
     kill_process_tree "$signal" "$child"
-  done
+  done < <(child_processes "$root")
   kill "-$signal" "$root" 2> /dev/null || true
 }
 
@@ -60,8 +85,24 @@ function run_quiet_with_progress() {
   (
     local last_line=""
     local last_change
+    local sleep_pid=""
+
+    stop_progress_watcher() {
+      if [[ -n "$sleep_pid" ]]; then
+        kill "$sleep_pid" 2> /dev/null || true
+        wait "$sleep_pid" 2> /dev/null || true
+      fi
+      exit 0
+    }
+    trap stop_progress_watcher TERM INT
+
     last_change=$(date +%s)
-    while sleep "$progress_interval"; do
+    while true; do
+      sleep "$progress_interval" &
+      sleep_pid=$!
+      wait "$sleep_pid" || exit 0
+      sleep_pid=""
+
       if ! kill -0 "$command_pid" 2> /dev/null; then
         exit 0
       fi
@@ -98,9 +139,9 @@ function run_quiet_with_progress() {
 
   local status=0
   wait "$command_pid" || status=$?
-  # kill_process_tree, not plain kill: the watcher is normally parked in
-  # `sleep`, and killing only the subshell leaves that sleep running.
-  kill_process_tree TERM "$progress_pid"
+  # The watcher owns and traps its sleeper, so terminating it cannot leave an
+  # orphan holding the caller's output pipe until the interval expires.
+  kill -TERM "$progress_pid" 2> /dev/null || true
   wait "$progress_pid" 2> /dev/null || true
 
   local end_time

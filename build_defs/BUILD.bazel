@@ -31,6 +31,16 @@ py_test(
     ],
 )
 
+py_test(
+    name = "package_glob_safety_tests",
+    size = "small",
+    srcs = ["package_glob_safety_tests.py"],
+    data = [
+        ":package.bzl",
+        "//:BUILD.bazel",
+    ],
+)
+
 string_flag(
     name = "llvm_latest",
     build_setting_default = "0",

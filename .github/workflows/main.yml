@@ -572,7 +572,6 @@ jobs:
         with:
           name: bazel-test-failure-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}
 
-
   # Non-lld linker canary, split into its own always-on hosted job so it runs
   # regardless of Linux runner routing. The hosted `linux` lane is suppressed
   # for small operator PRs when self-hosted routing is active, and the
@@ -630,7 +629,6 @@ jobs:
           bazelisk build --config=ci --linkopt=-fuse-ld=gold \
             //donner/svg/tool:donner-svg \
             //donner/svg/renderer/tests:filter_graph_executor_tests
-
 
   # Admit the operator's ARM64 Linux job from a hosted runner. The FIFO wait
   # cannot run on the constrained self-hosted pool itself: newer runs could
@@ -766,6 +764,7 @@ jobs:
           shift
           started=$SECONDS
           stall_limit="${BAZEL_STALL_LIMIT_SECONDS:-900}"
+          heartbeat_interval="${BAZEL_HEARTBEAT_INTERVAL_SECONDS:-60}"
           stall_report="$(dirname "$log_path")/stall.txt"
 
           # Killing only the launcher is not enough: bazelisk forks the Bazel
@@ -775,11 +774,28 @@ jobs:
           # (Process-group signalling is not reliable here: this block already
           # runs as one stage of a pipeline, so `set -m` does not consistently
           # give the background job a group of its own.)
+          child_processes() {
+            local root="$1" children="" child parent
+            if [[ -r "/proc/$root/task/$root/children" ]]; then
+              IFS= read -r children < "/proc/$root/task/$root/children" || true
+              for child in $children; do
+                printf '%s\n' "$child"
+              done
+              return
+            fi
+            while read -r child parent; do
+              if [[ "$parent" == "$root" ]]; then
+                printf '%s\n' "$child"
+              fi
+            done < <(ps -A -o pid=,ppid= 2>/dev/null)
+          }
+
           kill_tree() {
             local signal="$1" root="$2" child
-            for child in $(ps -A -o pid=,ppid= 2>/dev/null | awk -v p="$root" '$2 == p {print $1}'); do
+            while IFS= read -r child; do
+              [[ -n "$child" ]] || continue
               kill_tree "$signal" "$child"
-            done
+            done < <(child_processes "$root")
             kill "-$signal" "$root" 2>/dev/null || true
           }
 
@@ -790,8 +806,22 @@ jobs:
             (
               last_progress=""
               last_change=$SECONDS
+              sleep_pid=""
+
+              stop_heartbeat() {
+                if [[ -n "$sleep_pid" ]]; then
+                  kill "$sleep_pid" 2>/dev/null || true
+                  wait "$sleep_pid" 2>/dev/null || true
+                fi
+                exit 0
+              }
+              trap stop_heartbeat TERM INT
+
               while kill -0 "$command_pid" 2>/dev/null; do
-                sleep 60
+                sleep "$heartbeat_interval" &
+                sleep_pid=$!
+                wait "$sleep_pid" || exit 0
+                sleep_pid=""
                 kill -0 "$command_pid" 2>/dev/null || break
 
                 # Ignore our own annotations so the watchdog cannot see its own
@@ -829,12 +859,9 @@ jobs:
             status=$?
             set -e
 
-            # kill_tree, not plain kill: the watcher is usually parked in
-            # `sleep`, and killing only the subshell leaves that sleep holding
-            # the write end of this pipeline, so `tee` waits out the remainder
-            # of the poll interval. That added up to a minute to the end of
-            # every Build and Test step.
-            kill_tree TERM "$heartbeat_pid"
+            # The watcher owns and traps its sleeper, so terminating it cannot
+            # leave an orphan holding this pipeline until the interval expires.
+            kill -TERM "$heartbeat_pid" 2>/dev/null || true
             wait "$heartbeat_pid" 2>/dev/null || true
             exit "$status"
           } 2>&1 | tee "$log_path"
@@ -969,7 +996,6 @@ jobs:
         with:
           name: bazel-test-failure-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}
 
-
   macos:
     runs-on: macos-26
     needs: [gatekeeper, determine-targets]
@@ -1064,7 +1090,6 @@ jobs:
         uses: ./.github/actions/upload-bazel-test-artifacts
         with:
           name: bazel-test-failure-${{ github.job }}-${{ runner.os }}-${{ runner.arch }}
-
 
   # Operator's ARM64 macOS runs on the operator's self-hosted runner.
   # Replaces `macos` for trusted operator PRs and main pushes. Renovate and

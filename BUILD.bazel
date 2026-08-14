@@ -58,8 +58,10 @@ exports_files(
     [
         "donner_icon.svg",
         "donner_splash.svg",
+        "BUILD.bazel",
         "MODULE.bazel",
         ".github/workflows/coverage.yml",
+        ".github/workflows/main.yml",
         ".bazelversion",
         ".bazelrc",
         "zoom-out-drag-jump.rnr",
@@ -105,5 +107,4 @@ filegroup(
 donner_package(gpu_inventory_globs = [
     "MODULE.bazel",
     ".bazelrc",
-    "**/*.bzl",
 ])

@@ -586,7 +586,6 @@
         "wgpuInstanceRequestAdapter"
       ],
       "wgpuCTypes": [
-        "WGPUAdapter",
         "WGPUAdapterInfo",
         "WGPUAdapterType_CPU",
         "WGPUAdapterType_DiscreteGPU",
@@ -616,6 +615,8 @@
         "WGPUInstanceBackend_Metal",
         "WGPUInstanceBackend_Vulkan",
         "WGPUInstanceDescriptor",
+        "WGPUInstanceFeatureName",
+        "WGPUInstanceFeatureName_TimedWaitAny",
         "WGPUQueueWorkDoneStatus",
         "WGPUStatus_Success",
         "WGPUStringView"
@@ -660,11 +661,6 @@
       ],
       "wgpuCFunctions": [
         "wgpuDevicePoll"
-      ],
-      "wgpuCTypes": [
-        "WGPUAdapter",
-        "WGPUDevice",
-        "WGPUInstance"
       ],
       "wgpuCppTokens": [
         "Adapter",

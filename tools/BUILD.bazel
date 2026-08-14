@@ -113,6 +113,18 @@ py_test(
 )
 
 py_test(
+    name = "ci_runtime_workflow_tests",
+    size = "small",
+    srcs = ["ci_runtime_workflow_tests.py"],
+    data = [
+        "//:.github/workflows/coverage.yml",
+        "//:.github/workflows/main.yml",
+        "//tools:coverage.sh",
+    ],
+    deps = ["@rules_python//python/runfiles"],
+)
+
+py_test(
     name = "coverage_lane_routing_tests",
     size = "small",
     srcs = ["coverage_lane_routing_tests.py"],
