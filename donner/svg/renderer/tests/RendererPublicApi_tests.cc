@@ -179,6 +179,12 @@ TEST(RendererPublicApiTest, ContextOwnedFontManagerSurvivesRendererLifecycle) {
   FontManager& contextManager = registry.ctx().emplace<FontManager>(registry);
   FontManager peerManager(registry);
 
+  // No-text variants do not ask the renderer for a font, so seed the same persistent budget before
+  // exercising renderer teardown. Text-enabled variants continue to cover renderer-driven loading.
+  if (!ActiveRendererSupportsFeature(RendererBackendFeature::Text)) {
+    ASSERT_TRUE(static_cast<bool>(contextManager.fallbackFont()));
+  }
+
   {
     Renderer renderer;
     renderer.draw(document);
