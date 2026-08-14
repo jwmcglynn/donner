@@ -160,6 +160,35 @@ test("worker WebGPU startup imports one browser Promise chain and keeps pending 
   assert.match(emscriptenBranch[1], /WaitForSubmittedWork/);
 });
 
+test("worker WebGPU startup enables event-driven timed readback waits", () => {
+  const asyncStartup = geodeDeviceSource.match(
+    /void GeodeDevice::CreateHeadlessAsync\([\s\S]*?\n}\n#endif/,
+  );
+  assert.ok(asyncStartup, "expected the browser async device startup path");
+  assert.match(
+    asyncStartup[0],
+    /WGPUInstanceFeatureName_TimedWaitAny/,
+    "the raster worker instance must support the timed wait used by snapshot readback",
+  );
+  assert.match(asyncStartup[0], /requiredFeatureCount\s*=\s*1/);
+  assert.match(asyncStartup[0], /requiredFeatures\s*=\s*&timedWaitFeature/);
+
+  const blockingStartup = geodeDeviceSource.match(
+    /std::unique_ptr<GeodeDevice> GeodeDevice::CreateHeadless\([\s\S]*?\n}/,
+  );
+  assert.ok(blockingStartup, "expected the renderer's headless device entry point");
+  const browserStartup = blockingStartup[0].match(
+    /#ifdef __EMSCRIPTEN__([\s\S]*?)#else/,
+  );
+  assert.ok(browserStartup, "expected a browser-specific headless device path");
+  assert.match(
+    browserStartup[1],
+    /CreateHeadlessAsync\(/,
+    "the renderer entry point must use the timed-wait-enabled browser import",
+  );
+  assert.match(browserStartup[1], /emscripten_sleep\(1\)/);
+});
+
 test("renderer thread startup waits for cursor setup and wake wiring", () => {
   const constructor = workerRendererSource.match(
     /AsyncRenderer::AsyncRenderer\([^)]*\)([\s\S]*?)\n}\n\nvoid AsyncRenderer::start/,

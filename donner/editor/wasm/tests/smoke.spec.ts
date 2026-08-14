@@ -911,6 +911,9 @@ for (
       );
     }
     expect(phaseTimings.presentedMs).toBeLessThan(carouselDeadlineMs);
+    if (kBackend === "geode" && (completedWorkerStats?.readbackCount || 0) > 0) {
+      expect(completedWorkerStats?.readbackWaitStrategy).toBe("timed-wait-any");
+    }
     if (kBackend === "geode") {
       expect(await page.evaluate(() => window.__donnerHeadlessDeviceCreations)).toBe(
         deviceCreationsBeforeClick,
