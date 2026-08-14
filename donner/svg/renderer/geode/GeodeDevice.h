@@ -13,11 +13,6 @@
 
 namespace donner::geode {
 
-#ifdef __EMSCRIPTEN__
-extern "C" void donnerGeodeCompleteHeadlessImport(void* userdata, WGPUInstance instance,
-                                                  WGPUAdapter adapter, WGPUDevice device);
-#endif
-
 // Forward declarations - GeodeDevice exposes accessors for the pipeline
 // objects it owns (see "Shared render / compute pipelines" section below).
 // The full class definitions live in their own headers; including them
@@ -108,20 +103,6 @@ public:
   static std::unique_ptr<GeodeDevice> CreateHeadless(
       wgpu::TextureFormat textureFormat = wgpu::TextureFormat::RGBA8Unorm);
 
-#ifdef __EMSCRIPTEN__
-  /// Completion for callback-driven browser device acquisition. The callback runs on the
-  /// requesting pthread and owns the returned device, if any.
-  using CreateHeadlessAsyncCallback = void (*)(std::unique_ptr<GeodeDevice> device, void* userdata);
-
-  /// Create a browser WebGPU device without suspending the pthread through Asyncify.
-  ///
-  /// Safari can re-enter Wasm with a spontaneous requestAdapter/requestDevice completion while
-  /// Emscripten's synchronous convenience wrapper is unwinding a stack-local continuation. Keep
-  /// all partial state on the heap and advance acquisition only from browser callbacks instead.
-  static void CreateHeadlessAsync(wgpu::TextureFormat textureFormat,
-                                  CreateHeadlessAsyncCallback callback, void* userdata);
-#endif
-
   /**
    * Create a GeodeDevice wrapping a host-provided device and queue.
    *
@@ -163,10 +144,10 @@ public:
   /// Under Emscripten, emdawnwebgpu implements `poll` by yielding the
   /// Asyncify-enabled thread for roughly one browser task regardless of
   /// @p wait, so every poll unwinds and later rewinds the wasm stack. With the
-  /// whole application on one thread (single-canvas presenter architecture) that wall time is UI frame
-  /// time, so it has to be attributable. Route every poll through here rather
-  /// than calling `device().poll` directly; the probe is a pair of clock reads
-  /// on native builds, where `poll` does not suspend at all.
+  /// whole application on one thread (single-canvas presenter architecture) that wall time is UI
+  /// frame time, so it has to be attributable. Route every poll through here rather than calling
+  /// `device().poll` directly; the probe is a pair of clock reads on native builds, where `poll`
+  /// does not suspend at all.
   void pollSuspending(bool wait) const;
 
   /// Instance that created the headless device. Null for externally-owned devices.
@@ -187,8 +168,8 @@ public:
   /// Consume aggregate readback diagnostics for all renderers sharing this device.
   [[nodiscard]] ReadbackStats consumeReadbackStats();
 
-  /// Returns the adapter backing this device. May be null in embedded mode if
-  /// the host did not provide an adapter.
+  /// Returns the adapter backing this device. May be null when the host does
+  /// not provide one, including embedded mode and browser headless imports.
   const wgpu::Adapter& adapter() const { return adapter_; }
 
   /// Render-target texture format. Defaults to RGBA8Unorm for headless devices;
@@ -432,13 +413,6 @@ public:
 
 private:
   GeodeDevice();
-
-#ifdef __EMSCRIPTEN__
-  struct AsyncCreateContext;
-  static void completeAsyncCreate(AsyncCreateContext* context, std::unique_ptr<GeodeDevice> device);
-  friend void donnerGeodeCompleteHeadlessImport(void* userdata, WGPUInstance instance,
-                                                WGPUAdapter adapter, WGPUDevice device);
-#endif
 
   /// Allocate the shared pipelines and filter engine after `device_`,
   /// `queue_`, and `textureFormat_` are finalised. Called from both

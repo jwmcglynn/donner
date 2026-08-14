@@ -8,19 +8,17 @@
 #include "donner/svg/renderer/geode/GeodeDevice.h"
 
 #include <atomic>
-#include <cassert>
 #include <chrono>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <string_view>
 #include <thread>
 
 #include "donner/base/AsyncifySuspendProbe.h"
-
 #ifdef __EMSCRIPTEN__
 #include <emscripten/emscripten.h>
 #endif
-
 #include "donner/base/StringUtils.h"
 #include "donner/svg/renderer/geode/GeodeCallbackState.h"
 #include "donner/svg/renderer/geode/GeodeCheckerboardPipeline.h"
@@ -30,55 +28,13 @@
 
 #ifdef __EMSCRIPTEN__
 // clang-format off: EM_JS contains JavaScript, whose arrow syntax clang-format corrupts.
-EM_JS(void, BeginGeodeHeadlessDeviceImport, (void* userdata, WGPUInstance instance), {
-  (async () => {
-    let adapterPtr = 0;
-    let devicePtr = 0;
-    try {
-      const adapter = await navigator.gpu.requestAdapter();
-      if (!adapter) {
-        throw new Error("navigator.gpu.requestAdapter returned null");
-      }
-
-      const device = await adapter.requestDevice({ label: "GeodeDevice" });
-      device.addEventListener("uncapturederror", (event) => {
-        const error = event && event.error;
-        const message = error && error.message ? error.message : String(error || "unknown error");
-        console.error("[Geode/emscripten] Uncaptured WebGPU error: " + message);
-      });
-      device.lost.then((info) => {
-        const reason = info && info.reason ? info.reason : "unknown";
-        const message = info && info.message ? info.message : "";
-        console.error("[Geode/emscripten] WebGPU device lost (" + reason + "): " + message);
-      }).catch((error) => {
-        console.error(
-          "[Geode/emscripten] WebGPU device-lost handler failed: " +
-            (error && error.stack ? error.stack : String(error)),
-        );
-      });
-
-      adapterPtr = WebGPU.importJsAdapter(adapter, instance);
-      devicePtr = WebGPU.importJsDevice(device, adapterPtr);
-    } catch (error) {
-      console.error(
-        "[Geode/emscripten] Direct WebGPU import failed: " +
-          (error && error.stack ? error.stack : String(error)),
-      );
-    }
-    // Do not include the C continuation in the acquisition catch. A C++ throw or Wasm trap must
-    // never re-enter this callback with an already-consumed heap context. Cross one worker event
-    // task before creating pipelines so Safari fully settles requestDevice and the imported roots.
-    setTimeout(() => {
-      callUserCallback(() => {
-        Module["_donnerGeodeCompleteHeadlessImport"](
-          userdata,
-          instance,
-          adapterPtr,
-          devicePtr,
-        );
-      });
-    }, 0);
-  })();
+// Keep this internal import name compact: EM_JS function names survive Closure in editor.js.
+EM_JS(void, G, (void* deviceOut, WGPUInstance instance), {
+  navigator.gpu.requestAdapter()
+    .then((adapter) => adapter.requestDevice())
+    .then((device) => WebGPU.importJsDevice(device, instance))
+    .catch(() => 1)
+    .then((devicePtr) => setTimeout(() => Atomics.store(HEAP32, deviceOut >> 2, devicePtr)));
 });
 // clang-format on
 #endif
@@ -335,113 +291,62 @@ namespace {
 /// Process-wide count of CreateHeadless calls, for tests that pin device
 /// sharing. Monotonic; never reset.
 std::atomic<int> gHeadlessCreationCount{0};
+
+#ifdef __EMSCRIPTEN__
+struct BrowserImportState {
+  std::atomic<WGPUDevice> device = nullptr;
+};
+static_assert(sizeof(BrowserImportState) == sizeof(WGPUDevice));
+static_assert(alignof(BrowserImportState) == alignof(WGPUDevice));
+static_assert(std::atomic<WGPUDevice>::is_always_lock_free);
+#endif
 }  // namespace
 
 int GeodeDevice::headlessCreationCountForTesting() {
   return gHeadlessCreationCount.load(std::memory_order_relaxed);
 }
 
+std::unique_ptr<GeodeDevice> GeodeDevice::CreateHeadless(wgpu::TextureFormat textureFormat) {
 #ifdef __EMSCRIPTEN__
-struct GeodeDevice::AsyncCreateContext {
-  std::unique_ptr<GeodeDevice> result;
-  CreateHeadlessAsyncCallback callback = nullptr;
-  void* userdata = nullptr;
-};
-
-void GeodeDevice::completeAsyncCreate(AsyncCreateContext* context,
-                                      std::unique_ptr<GeodeDevice> device) {
-  const CreateHeadlessAsyncCallback callback = context->callback;
-  void* userdata = context->userdata;
-  delete context;
-  callback(std::move(device), userdata);
-}
-
-extern "C" EMSCRIPTEN_KEEPALIVE void donnerGeodeCompleteHeadlessImport(void* userdata,
-                                                                       WGPUInstance instance,
-                                                                       WGPUAdapter adapter,
-                                                                       WGPUDevice device) {
-  auto* context = static_cast<GeodeDevice::AsyncCreateContext*>(userdata);
-
-  if (adapter != nullptr) {
-    context->result->adapter_ = wgpu::Adapter(adapter);
-  }
-  if (device != nullptr) {
-    context->result->device_ = wgpu::Device(device);
-  }
-  if (instance == nullptr || adapter == nullptr || device == nullptr) {
-    std::fprintf(stderr, "[Geode/emscripten] Browser WebGPU import returned incomplete handles.\n");
-    GeodeDevice::completeAsyncCreate(context, nullptr);
-    return;
-  }
-
-  context->result->queue_ = context->result->device_.getQueue();
-  if (!context->result->queue_) {
-    std::fprintf(stderr, "[Geode/emscripten] Imported WebGPU device returned no queue.\n");
-    GeodeDevice::completeAsyncCreate(context, nullptr);
-    return;
-  }
-
-  context->result->initSharedResources();
-  context->result->initSharedPipelines();
-  GeodeDevice::completeAsyncCreate(context, std::move(context->result));
-}
-
-void GeodeDevice::CreateHeadlessAsync(wgpu::TextureFormat textureFormat,
-                                      CreateHeadlessAsyncCallback callback, void* userdata) {
-  assert(callback != nullptr);
   gHeadlessCreationCount.fetch_add(1, std::memory_order_relaxed);
+  auto result = std::unique_ptr<GeodeDevice>(new GeodeDevice());
+  result->textureFormat_ = textureFormat;
 
-  auto* context = new AsyncCreateContext{
-      .result = std::unique_ptr<GeodeDevice>(new GeodeDevice()),
-      .callback = callback,
-      .userdata = userdata,
-  };
-  context->result->textureFormat_ = textureFormat;
-  // This instance never drives adapter or device acquisition through the C++ future API:
-  // BeginGeodeHeadlessDeviceImport imports one direct navigator.gpu Promise chain instead. It is
-  // therefore safe to enable TimedWaitAny here even though enabling it on CreateHeadlessInstance's
-  // synchronous request path prevents requestDevice from completing in Chromium. Snapshot
-  // readback uses this feature to await mapAsync directly instead of repeatedly suspending through
-  // the wgpuDevicePoll compatibility stub.
   const WGPUInstanceFeatureName timedWaitFeature = WGPUInstanceFeatureName_TimedWaitAny;
   WGPUInstanceDescriptor instanceDescriptor = WGPU_INSTANCE_DESCRIPTOR_INIT;
   instanceDescriptor.requiredFeatureCount = 1;
   instanceDescriptor.requiredFeatures = &timedWaitFeature;
-  WGPUInstance instance = wgpuCreateInstance(&instanceDescriptor);
-  context->result->impl_->instance = wgpu::Instance(instance);
-  if (instance == nullptr) {
+  result->impl_->instance = wgpu::Instance(wgpuCreateInstance(&instanceDescriptor));
+  if (!result->impl_->instance) {
     std::fprintf(stderr, "[Geode/emscripten] wgpuCreateInstance returned null.\n");
-    completeAsyncCreate(context, nullptr);
-    return;
+    return nullptr;
   }
-  BeginGeodeHeadlessDeviceImport(context, instance);
-}
-#endif
 
-std::unique_ptr<GeodeDevice> GeodeDevice::CreateHeadless(wgpu::TextureFormat textureFormat) {
-#ifdef __EMSCRIPTEN__
-  struct BlockingCreateState {
-    std::atomic<bool> done = false;
-    std::unique_ptr<GeodeDevice> result;
-  } state;
-
-  // The browser adapter and device are JavaScript Promise objects. Import them through the
-  // asynchronous path so the instance can enable TimedWaitAny without trying to drive those
-  // Promises through WebGPU's synchronous C++ future wrappers. This method is called on the
-  // renderer pthread, so emscripten_sleep suspends only that worker while its event loop delivers
-  // the import callback.
-  CreateHeadlessAsync(
-      textureFormat,
-      [](std::unique_ptr<GeodeDevice> result, void* userdata) {
-        auto* state = static_cast<BlockingCreateState*>(userdata);
-        state->result = std::move(result);
-        state->done.store(true, std::memory_order_release);
-      },
-      &state);
-  while (!state.done.load(std::memory_order_acquire)) {
+  // WebKit cannot drive Emdawn's adapter/device futures through WaitAnyOnly from this transferred
+  // renderer pthread. Import one direct Promise chain, then cross a task boundary before the C
+  // continuation initializes pipelines. The adapter stays JavaScript-only because Emdawn accepts
+  // the instance as an imported device's future parent. Snapshot map futures still use
+  // TimedWaitAny below.
+  BrowserImportState state;
+  WGPUDevice importedDevice = nullptr;
+  G(&state.device, result->impl_->instance);
+  while ((importedDevice = state.device.load(std::memory_order_acquire)) == nullptr) {
     emscripten_sleep(1);
   }
-  return std::move(state.result);
+  if (reinterpret_cast<std::uintptr_t>(importedDevice) == 1) {
+    std::fprintf(stderr, "[Geode/emscripten] Browser WebGPU device request failed.\n");
+    return nullptr;
+  }
+  result->device_ = wgpu::Device(importedDevice);
+  result->queue_ = result->device_.getQueue();
+  if (!result->queue_) {
+    std::fprintf(stderr, "[Geode/emscripten] Browser WebGPU device returned no queue.\n");
+    return nullptr;
+  }
+
+  result->initSharedResources();
+  result->initSharedPipelines();
+  return result;
 #else
   gHeadlessCreationCount.fetch_add(1, std::memory_order_relaxed);
   auto result = std::unique_ptr<GeodeDevice>(new GeodeDevice());

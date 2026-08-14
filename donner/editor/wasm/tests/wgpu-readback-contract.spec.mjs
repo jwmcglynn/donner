@@ -116,28 +116,11 @@ test("pre-map diagnostic setup failures use the same bounded completion policy",
   assert.doesNotMatch(source, /struct AsyncSmokeReadbackRetry/);
 });
 
-test("worker WebGPU startup imports one browser Promise chain and keeps pending work off the proxy queue", () => {
-  assert.match(geodeDeviceHeader, /CreateHeadlessAsync/);
-  assert.match(geodeDeviceSource, /\(async \(\) =>/);
-  assert.doesNotMatch(geodeDeviceSource, /= >/);
-  assert.match(geodeDeviceSource, /navigator\.gpu\.requestAdapter/);
-  assert.match(geodeDeviceSource, /adapter\.requestDevice/);
-  assert.match(geodeDeviceSource, /WebGPU\.importJsAdapter\(adapter, instance\)/);
-  assert.match(geodeDeviceSource, /WebGPU\.importJsDevice\(device, adapterPtr\)/);
-  assert.match(geodeDeviceSource, /Module\["_donnerGeodeCompleteHeadlessImport"\]/);
-  assert.match(
-    geodeDeviceSource,
-    /setTimeout\(\(\) => \{\s*callUserCallback\(\(\) => \{\s*Module\["_donnerGeodeCompleteHeadlessImport"\]/,
-    "normal pthread unwind must be consumed without hiding real Wasm traps",
-  );
-  assert.equal(
-    [...geodeDeviceSource.matchAll(/Module\["_donnerGeodeCompleteHeadlessImport"\]/g)].length,
-    1,
-    "the exported C continuation must be invoked exactly once, outside the acquisition catch",
-  );
-  assert.match(geodeDeviceSource, /EMSCRIPTEN_KEEPALIVE void donnerGeodeCompleteHeadlessImport/);
-  assert.doesNotMatch(geodeDeviceSource, /RequestAdapterCallbackInfo/);
-  assert.doesNotMatch(geodeDeviceSource, /RequestDeviceCallbackInfo/);
+test("worker WebGPU startup keeps its browser Promise bridge private and single-purpose", () => {
+  assert.doesNotMatch(geodeDeviceHeader, /CreateHeadlessAsync/);
+  assert.doesNotMatch(geodeDeviceHeader, /donnerGeodeCompleteHeadlessImport/);
+  assert.doesNotMatch(geodeDeviceSource, /donnerGeodeCompleteHeadlessImport/);
+  assert.match(geodeDeviceSource, /EM_JS\(void, G,/);
   assert.equal(
     [...geodeDeviceSource.matchAll(/navigator\.gpu\.requestAdapter\(\)/g)].length,
     1,
@@ -148,6 +131,35 @@ test("worker WebGPU startup imports one browser Promise chain and keeps pending 
     1,
     "browser device acquisition must continue from that adapter exactly once",
   );
+  assert.doesNotMatch(geodeDeviceSource, /WebGPU\.importJsAdapter/);
+  assert.match(geodeDeviceSource, /WebGPU\.importJsDevice\(device, instance\)/);
+  assert.match(geodeDeviceSource, /\.catch\(\(\) => 1\)/);
+  assert.doesNotMatch(geodeDeviceSource, /Module\["_.*Geode.*"\]/);
+  assert.match(
+    geodeDeviceSource,
+    /Atomics\.store\(HEAP32, deviceOut >> 2, devicePtr\)/,
+  );
+  assert.match(
+    geodeDeviceSource,
+    /setTimeout\([\s\S]*Atomics\.store\(HEAP32, deviceOut >> 2, devicePtr\)/,
+    "the result store must cross a browser task before releasing the waiting pthread",
+  );
+
+  const blockingStartup = geodeDeviceSource.match(
+    /std::unique_ptr<GeodeDevice> GeodeDevice::CreateHeadless\([\s\S]*?\n}/,
+  );
+  assert.ok(blockingStartup, "expected the renderer's headless device entry point");
+  const browserStartup = blockingStartup[0].match(
+    /#ifdef __EMSCRIPTEN__([\s\S]*?)#else/,
+  );
+  assert.ok(browserStartup, "expected a browser-specific headless device path");
+  assert.match(
+    browserStartup[1],
+    /G\(&state\.device, result->impl_->instance\)/,
+  );
+  assert.match(browserStartup[1], /emscripten_sleep\(1\)/);
+  assert.doesNotMatch(browserStartup[1], /RequestAdapterCallbackInfo/);
+  assert.doesNotMatch(browserStartup[1], /RequestDeviceCallbackInfo/);
 
   const deviceDestructor = geodeDeviceSource.match(
     /GeodeDevice::~GeodeDevice\(\)([\s\S]*?)\n}/,
@@ -161,18 +173,6 @@ test("worker WebGPU startup imports one browser Promise chain and keeps pending 
 });
 
 test("worker WebGPU startup enables event-driven timed readback waits", () => {
-  const asyncStartup = geodeDeviceSource.match(
-    /void GeodeDevice::CreateHeadlessAsync\([\s\S]*?\n}\n#endif/,
-  );
-  assert.ok(asyncStartup, "expected the browser async device startup path");
-  assert.match(
-    asyncStartup[0],
-    /WGPUInstanceFeatureName_TimedWaitAny/,
-    "the raster worker instance must support the timed wait used by snapshot readback",
-  );
-  assert.match(asyncStartup[0], /requiredFeatureCount\s*=\s*1/);
-  assert.match(asyncStartup[0], /requiredFeatures\s*=\s*&timedWaitFeature/);
-
   const blockingStartup = geodeDeviceSource.match(
     /std::unique_ptr<GeodeDevice> GeodeDevice::CreateHeadless\([\s\S]*?\n}/,
   );
@@ -183,10 +183,12 @@ test("worker WebGPU startup enables event-driven timed readback waits", () => {
   assert.ok(browserStartup, "expected a browser-specific headless device path");
   assert.match(
     browserStartup[1],
-    /CreateHeadlessAsync\(/,
-    "the renderer entry point must use the timed-wait-enabled browser import",
+    /WGPUInstanceFeatureName_TimedWaitAny/,
+    "the raster worker instance must support the timed wait used by snapshot readback",
   );
-  assert.match(browserStartup[1], /emscripten_sleep\(1\)/);
+  assert.match(browserStartup[1], /requiredFeatureCount\s*=\s*1/);
+  assert.match(browserStartup[1], /requiredFeatures\s*=\s*&timedWaitFeature/);
+  assert.match(browserStartup[1], /G\(&state\.device/);
 });
 
 test("renderer thread startup waits for cursor setup and wake wiring", () => {
