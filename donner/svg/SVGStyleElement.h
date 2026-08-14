@@ -14,22 +14,24 @@ namespace donner::svg {
  * single document, and the aggregate document style is computed from that using CSS cascading
  * rules.
  *
- * Stylesheets support CSS Level 3: https://www.w3.org/TR/css-syntax-3/
+ * Stylesheet syntax is parsed using CSS Syntax Level 3:
+ * https://www.w3.org/TR/css-syntax-3/
  *
  * - DOM object: SVGStyleElement
  * - SVG2 spec: https://www.w3.org/TR/SVG2/styling.html#StyleElement
  *
  * The `<style>` element is SVG's native way to embed a CSS stylesheet directly in the document
- * - the exact counterpart of HTML's `<style>` tag. Rules inside it use normal CSS selectors
- * (by element name, class, id, attribute, pseudo-class, and so on) and can set any SVG
- * presentation property: `fill`, `stroke`, `stroke-width`, `opacity`, `font-family`,
- * `transform`, and the rest. A single document may contain multiple `<style>` elements; the
- * browser combines them with the regular CSS cascade, so later rules and more specific
- * selectors override earlier ones just as they do in HTML.
+ * - the counterpart of HTML's `<style>` tag. Rules inside it use supported CSS selectors,
+ * including element, class, id, attribute, and structural pseudo-class selectors such as
+ * `:nth-child`. They can set supported SVG presentation properties such as `fill`, `stroke`,
+ * `stroke-width`, `opacity`, `font-family`, and `transform`. A single document may contain
+ * multiple `<style>` elements; Donner combines them using the CSS cascade, so later rules and
+ * more specific selectors can override earlier ones.
  *
- * Use `<style>` to share visual properties across many shapes, apply hover or animation
- * effects, or keep presentation separate from structure. For one-off styling, the inline
- * `style="..."` attribute on an individual element is usually simpler.
+ * Use `<style>` to share static visual properties across many shapes or keep presentation
+ * separate from structure. User-action pseudo-classes such as `:hover` and CSS keyframe
+ * animations are not currently supported. For one-off styling, the inline `style="..."`
+ * attribute on an individual element is usually simpler.
  *
  * \htmlonly
  * <svg xmlns="http://www.w3.org/2000/svg" viewBox="20 20 750 290">

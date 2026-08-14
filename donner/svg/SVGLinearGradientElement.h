@@ -59,7 +59,7 @@ namespace donner::svg {
  * | `x1`      | `0%`    | Start X coordinate. |
  * | `y1`      | `0%`    | Start Y coordinate. |
  * | `x2`      | `100%`  | End X coordinate. |
- * | `y2`      | `100%`  | End Y coordinate. |
+ * | `y2`      | `0%`    | End Y coordinate. |
  * | `gradientUnits` | `objectBoundingBox` | The coordinate system for the gradient, either `userSpaceOnUse` or `objectBoundingBox`. |
  * | `gradientTransform` | (none) | A transform to apply to the gradient. |
  * | `spreadMethod` | `pad` | How to handle colors outside the gradient. Either `pad`, `reflect`, or `repeat`. |
@@ -124,7 +124,7 @@ namespace donner::svg {
  * | `x1`      | `0%`    | Start X coordinate. |
  * | `y1`      | `0%`    | Start Y coordinate. |
  * | `x2`      | `100%`  | End X coordinate. |
- * | `y2`      | `100%`  | End Y coordinate. |
+ * | `y2`      | `0%`    | End Y coordinate. |
  * | `gradientUnits` | `objectBoundingBox` | The coordinate system for the gradient, either `userSpaceOnUse` or `objectBoundingBox`. |
  * | `gradientTransform` | (none) | A transform to apply to the gradient. |
  * | `spreadMethod` | `pad` | How to handle colors outside the gradient. Either `pad`, `reflect`, or `repeat`. |
@@ -195,7 +195,7 @@ public:
   void setY2(std::optional<Lengthd> value);
 
   /**
-   * Get the start Y coordinate. Note that at render-time, this will default to `0%` if not set.
+   * Get the start X coordinate. Note that at render-time, this will default to `0%` if not set.
    */
   std::optional<Lengthd> x1() const;
 
@@ -210,7 +210,7 @@ public:
   std::optional<Lengthd> x2() const;
 
   /**
-   * Get the end Y coordinate. Note that at render-time, this will default to `100%` if not set.
+   * Get the end Y coordinate. Note that at render-time, this will default to `0%` if not set.
    */
   std::optional<Lengthd> y2() const;
 };

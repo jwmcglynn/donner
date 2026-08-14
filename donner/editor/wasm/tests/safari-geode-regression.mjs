@@ -361,22 +361,22 @@ function assertThumbnailDiagnostic(state, initialDeviceState) {
       resultReady: thumbnails.resultReady,
     },
     {
-      requested: 4,
-      started: 4,
-      completed: 4,
-      rendered: 4,
-      ready: 4,
+      requested: 5,
+      started: 5,
+      completed: 5,
+      rendered: 5,
+      ready: 5,
       pending: false,
       active: false,
       resultReady: false,
     },
-    "four SVG thumbnails did not settle cleanly",
+    "five SVG thumbnails did not settle cleanly",
   );
   assert.ok(
     thumbnails.firstRequestFrame > thumbnails.carouselFrame,
     "thumbnail rendering did not start asynchronously after the carousel frame",
   );
-  assert.equal(thumbnails.publicationFrames?.length, 4, "expected four publication epochs");
+  assert.equal(thumbnails.publicationFrames?.length, 5, "expected five publication epochs");
   for (let index = 1; index < thumbnails.publicationFrames.length; ++index) {
     assert.ok(
       thumbnails.publicationFrames[index] > thumbnails.publicationFrames[index - 1],
@@ -390,7 +390,7 @@ function assertThumbnailDiagnostic(state, initialDeviceState) {
   );
 
   const diagnostics = state.wgpuReadback?.carouselThumbnails;
-  assert.equal(diagnostics?.length, 4, "expected final readback diagnostics for four thumbnails");
+  assert.equal(diagnostics?.length, 5, "expected final readback diagnostics for five thumbnails");
   const fingerprints = new Set();
   for (const [index, stats] of diagnostics.entries()) {
     assert.ok(stats.maxChannel > 80, `thumbnail ${index} had no visible source pixels`);
@@ -401,7 +401,7 @@ function assertThumbnailDiagnostic(state, initialDeviceState) {
     );
     fingerprints.add(stats.fingerprint);
   }
-  assert.equal(fingerprints.size, 4, "the four SVG thumbnail fingerprints were not distinct");
+  assert.equal(fingerprints.size, 5, "the five SVG thumbnail fingerprints were not distinct");
   assert.ok(diagnostics[2].backgroundPixels > 1000, "text thumbnail lacked its background");
   assert.ok(diagnostics[2].glyphPixels > 20, "text thumbnail lacked rendered glyphs");
 }
@@ -621,7 +621,7 @@ async function runRegression(driver, editorUrl, result) {
     async () => {
       const state = await readState(driver);
       assertNoFatal("asynchronous SVG thumbnails", [state]);
-      return state.thumbnailStats?.ready === 4 ? state : null;
+      return state.thumbnailStats?.ready === 5 ? state : null;
     },
     Math.max(kTimeoutMs, 20_000),
     25,
@@ -1154,7 +1154,7 @@ async function runRegression(driver, editorUrl, result) {
       const state = await readState(driver);
       assertNoFatal("Safari reload thumbnails", [state]);
       assertFlatHeap("Safari reload thumbnails", state, initialHeapBytes);
-      return state.thumbnailStats?.ready === 4 ? state : null;
+      return state.thumbnailStats?.ready === 5 ? state : null;
     },
     Math.max(kTimeoutMs, 20_000),
     25,

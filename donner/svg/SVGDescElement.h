@@ -7,7 +7,7 @@
 namespace donner::svg {
 
 /**
- * @page xml_desc "<desc>"
+ * @page xml_desc &lt;desc&gt;
  *
  * Provides an extended, human-readable description of its parent element or of the document as a
  * whole. The `<desc>` element and its contents are never rendered as part of the graphic.

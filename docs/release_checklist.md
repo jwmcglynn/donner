@@ -5,40 +5,52 @@ the version number.
 
 ## Pre-Release: Code Quality
 
-- [ ] **Warning-clean build** — `bazel build //donner/...` produces zero warnings. Fix all
-  `-Wunused-variable`, `-Wswitch`, `-Winconsistent-missing-override`, etc.
-- [ ] **Doxygen warning-free** — `doxygen Doxyfile 2>&1 | grep warning` produces zero output.
-  Common issues: unescaped `@font-face` (use backticks), broken `\ref` targets, undocumented
-  public compounds.
-- [ ] **Tests pass** — `bazel test //donner/...` is green across all configurations:
-  - Default (tiny-skia)
-  - `--config=text-full`
+- [ ] **Warning-clean build** — Run `bazel clean`, then
+      `bazel build //donner/... > /tmp/donner-build.log 2>&1`. Verify that the build succeeds before
+      verifying that `grep -Ei '(^|: )warning:' /tmp/donner-build.log` produces zero output. A cached
+      incremental build can hide compiler warnings. Fix all `-Wunused-variable`, `-Wswitch`,
+      `-Winconsistent-missing-override`, etc.
+- [ ] **Doxygen warning-free** — Run `tools/doxygen.sh > /tmp/donner-doxygen.log 2>&1`, verify that
+      the command succeeds, then verify
+      `grep -Ei '(^|: )warning:' /tmp/donner-doxygen.log` produces zero output. The wrapper selects
+      the release Doxygen binary when available and stamps the version from `MODULE.bazel`. Common
+      issues: unescaped `@font-face` (use backticks), broken `\ref` targets, undocumented public
+      compounds.
+- [ ] **Tests pass** — `bazel test //...` is green. The `donner_cc_test` variants cover TinySkia,
+      text-full, and Geode lanes without separate `--config` invocations.
 - [ ] **Fuzzers run** — Execute all fuzz targets for a reasonable duration. Check for new crashes.
 - [ ] **CMake build verified** — Build and test with the CMake path.
-- [ ] **Showcase asset loads and renders** — The checked-in v0.8 showcase SVG must parse and render
-  in Donner. This is gated by the reference test target
-  `//donner/editor/tests:showcase_asset_tests`, which loads the showcase fixture and fails if it is
-  missing or invalid. (Applies from the v0.8 "Donner SVG Editor & Engine" release onward.)
+- [ ] **Showcase demo generates and renders** — The v0.8 showcase must generate on demand from
+      `donner_splash.svg`, parse, and render in Donner. This is gated by
+      `//donner/editor/tests:showcase_asset_tests`, which exercises the generator and validates the
+      derived SVG, plus `//donner/editor/tests:editor_sample_catalog_tests`, which verifies that the
+      editor's built-in Donner Showcase entry uses generated output, and
+      `//donner/editor/tools:generate_showcase_asset_cli_tests`, which protects the canonical input
+      against same-path, symlink, and hard-link output aliases. No checked-in variant is required.
+      (Applies from the v0.8 "Donner SVG Editor & Engine" release onward.)
+- [ ] **Live showcase styled and recorded** — Complete the interactive walkthrough and recording
+      review in `docs/release_checklists/v0_8_showcase_checklist.md`. The automated fixture is a
+      workflow smoke test and does not prescribe the release-facing composition. (Applies to v0.8.)
 
 ## Pre-Release: Documentation
 
 - [ ] **Audit doc comments** — Review public API Doxygen from a doc writer's perspective. Focus on
-  user readability: are descriptions clear, are parameters documented, do code examples work?
+      user readability: are descriptions clear, are parameters documented, do code examples work?
 - [ ] **Update examples and code snippets** — Ensure examples in docs and README cover all major
-  features (text, filters, animation, interactivity). Update any stale code snippets.
+      features (text, filters, animation, interactivity). Update any stale code snippets.
 - [ ] **Update Doxygen pages** — Regenerate and review the HTML output. Check navigation, ensure
-  all element pages render correctly, verify cross-references resolve.
+      all element pages render correctly, verify cross-references resolve.
 - [ ] **Update markdown docs** — Review all `docs/*.md` and `docs/design_docs/*.md` for:
   - Stale status markers ("In Progress" on shipped features)
   - Accurate feature descriptions
   - Working internal links
   - Up-to-date build commands
 - [ ] **Update README.md** — Ensure the supported elements list, feature descriptions, and "not yet
-  supported" list are current.
+      supported" list are current.
 - [ ] **Remove experimental gates on shipped features** — If any elements have
-  `static constexpr bool IsExperimental = true` that are now shipped, remove the declaration
-  entirely (do not set to `false` — absence is the default non-experimental state). Update
-  corresponding tests that assert experimental gating behavior.
+      `static constexpr bool IsExperimental = true` that are now shipped, remove the declaration
+      entirely (do not set to `false` — absence is the default non-experimental state). Update
+      corresponding tests that assert experimental gating behavior.
 
 ## Pre-Release: Release Notes
 
@@ -53,23 +65,23 @@ the version number.
 ## Final Commit
 
 The build report commit is **the commit that gets tagged**. It must land
-*after* every other release-blocking code change and *after* the
+_after_ every other release-blocking code change and _after_ the
 `RELEASE_NOTES.md` update, and it must be its own dedicated commit — nothing
 else goes in it. Any code fix discovered after the tag is a point-release
 concern; the tag never moves retroactively.
 
 - [ ] **All other blocking changes are already on `main`** — every release-blocking
-  code change, plus the final `RELEASE_NOTES.md` update, has merged before you
-  prepare the build-report commit.
+      code change, plus the final `RELEASE_NOTES.md` update, has merged before you
+      prepare the build-report commit.
 - [ ] **Generate build report** — Run `docs/build_report.md` generation against a clean tree and
-  commit it as a dedicated release commit (e.g. `Release vX.Y.Z: regenerate build report`).
-  Nothing else in this commit. This step also refreshes
-  `docs/reports/coverage.zip` (lcov HTML, repacked as a single archive to keep
-  the working tree small) and `docs/reports/binary-size/`, which
-  `tools/build_docs.sh` extracts/copies into the Doxygen site — commit those
-  with the build report.
+      commit it as a dedicated release commit (e.g. `Release vX.Y.Z: regenerate build report`).
+      Nothing else in this commit. This step also refreshes
+      `docs/reports/coverage.zip` (lcov HTML, repacked as a single archive to keep
+      the working tree small) and `docs/reports/binary-size/`, which
+      `tools/build_docs.sh` extracts/copies into the Doxygen site — commit those
+      with the build report.
 - [ ] **CI green** — Verify the build-report commit passes all CI checks. This is the commit
-  that will be tagged, so it must be green end-to-end.
+      that will be tagged, so it must be green end-to-end.
 
 ## Release
 
@@ -85,10 +97,10 @@ concern; the tag never moves retroactively.
   - Attach binary artifacts (e.g., `donner-svg_darwin_arm64`, `donner-svg_linux_x86_64`)
     — these are built by the release CI workflow triggered by the tag push
 - [ ] **Verify release artifacts** — Check that the GitHub release page shows the correct tag,
-  binaries are attached, and the release body renders correctly.
+      binaries are attached, and the release body renders correctly.
 
 ## Post-Release
 
 - [ ] **Update ProjectRoadmap.md** — Mark the released milestone as "shipped" and update the
-  design documents table.
+      design documents table.
 - [ ] **Announce** — Post to relevant channels.

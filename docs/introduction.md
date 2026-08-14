@@ -8,8 +8,8 @@ SVG2 with CSS3 styling through either Geode (a GPU renderer built on WebGPU) or 
 CPU backend, tracks conformance against the resvg test suite, and treats all input as
 untrusted: fuzzing runs continuously across the parser, style, and text subsystems.
 
-These pages document the engine API. Start with the core document model below; the editor
-is documented separately in the repository.
+These pages document both the embeddable engine and the editor. Start with the core document model
+below, or browse \ref EditorDocs and \ref EditorArchitecture for the editor application.
 
 \htmlonly <style>img[src="donner_splash.svg"]{max-width:800px;}</style> \endhtmlonly
 ![Donner splash image](donner_splash.svg)

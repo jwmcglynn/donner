@@ -569,7 +569,7 @@ private:
   /// shares the editor's Geode device but is never bound to the live framebuffer,
   /// so row previews cannot inherit presentation state from the main renderer.
   svg::Renderer layerThumbnailRenderer_;
-  /// Owned bitmaps for the four built-in sample cards. Their offscreen renderer lives on the
+  /// Owned bitmaps for the built-in sample cards. Their offscreen renderer lives on the
   /// existing asynchronous render worker and shares its production renderer/device.
   std::vector<std::optional<svg::RendererBitmap>> sampleThumbnailBitmaps_;
   std::size_t sampleThumbnailGenerationCursor_ = 0;

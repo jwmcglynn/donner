@@ -42,7 +42,7 @@ namespace donner::svg {
  *
  * | Attribute    | Default | Description  |
  * | -----------: | :-----: | :----------- |
- * | `scale`      | `0`     | Maximum displacement in user units. |
+ * | `scale`      | `0`     | Displacement scale factor in user units; normalized channel values map to offsets from `-scale/2` through `+scale/2`. |
  * | `xChannelSelector` | `A` | Channel (`R`, `G`, `B`, `A`) of `in2` used for x displacement. |
  * | `yChannelSelector` | `A` | Channel (`R`, `G`, `B`, `A`) of `in2` used for y displacement. |
  *
@@ -54,9 +54,10 @@ namespace donner::svg {
  * DOM object for a \ref xml_feDisplacementMap element.
  *
  * Spatially displaces pixels from the first input using channel values from the second input
- * as a displacement map. The displacement at each pixel is:
- * `dst[x,y] = src[x + scale*(map[x,y].xChannel/255 - 0.5), y + scale*(map[x,y].yChannel/255 -
- * 0.5)]`
+ * as a displacement map. `scale` is the full displacement range, not the maximum magnitude: a
+ * normalized channel value of `0` offsets by `-scale/2`, while `1` offsets by `+scale/2`. The
+ * displacement at each pixel is: `dst[x,y] = src[x + scale*(map[x,y].xChannel - 0.5), y +
+ * scale*(map[x,y].yChannel - 0.5)]`.
  */
 class SVGFEDisplacementMapElement : public SVGFilterPrimitiveStandardAttributes {
   friend class parser::SVGParserImpl;

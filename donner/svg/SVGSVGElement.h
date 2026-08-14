@@ -50,16 +50,20 @@ class SVGParser;
  *
  * The `width` and `height` attributes define the size of the SVG on the page, while `viewBox`
  * defines the user coordinate system that child elements are drawn in. The diagram below shows
- * a `<svg width="280" height="180" viewBox="0 0 100 100">` where the user-coordinate `viewBox`
- * (the `0,0` to `100,100` square) is stretched to fill the outer canvas.
+ * a `<svg width="280" height="180" viewBox="0 0 100 100">`. With the default
+ * `preserveAspectRatio="xMidYMid meet"`, the square `viewBox` scales uniformly into a centered
+ * 180-by-180 region, leaving 50 pixels of horizontal space on each side.
  *
  * \htmlonly
- * <svg id="xml_svg" width="320" height="220" style="background-color: white">
+ * <svg id="xml_svg" width="320" height="220" viewBox="0 -6 320 226"
+ *      style="background-color: white">
  *   <style>
  *     #xml_svg text { font-size: 13px; font-weight: bold; fill: black }
  *     #xml_svg line { stroke: black; stroke-width: 1.5; stroke-dasharray: 5,3 }
  *     #xml_svg .axis { stroke: #c33; stroke-width: 1.5; stroke-dasharray: 0 }
  *     #xml_svg rect.canvas { fill: none; stroke: black; stroke-width: 2 }
+ *     #xml_svg rect.viewbox { fill: none; stroke: #2563eb; stroke-width: 1.5; stroke-dasharray: 5,3
+ * }
  *   </style>
  *   <defs>
  *     <marker id="xml_svg_arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
@@ -68,6 +72,7 @@ class SVGParser;
  *   </defs>
  *
  *   <rect class="canvas" x="20" y="20" width="280" height="180" />
+ *   <rect class="viewbox" x="70" y="20" width="180" height="180" />
  *   <circle cx="160" cy="110" r="72" fill="crimson" fill-opacity="0.8" />
  *
  *   <line x1="20" y1="10" x2="300" y2="10" />
@@ -75,12 +80,11 @@ class SVGParser;
  *   <line x1="10" y1="20" x2="10" y2="200" />
  *   <text x="14" y="115" transform="rotate(-90 14 115)">height</text>
  *
- *   <line class="axis" x1="20" y1="20" x2="60" y2="20" marker-end="url(#xml_svg_arrow)" />
- *   <line class="axis" x1="20" y1="20" x2="20" y2="60" marker-end="url(#xml_svg_arrow)" />
- *   <text x="28" y="35" fill="#c33">x</text>
- *   <text x="28" y="60" fill="#c33">y</text>
- *   <text x="24" y="15" fill="#c33">viewBox (0,0)</text>
- *   <text x="240" y="195" fill="#c33">(100,100)</text>
+ *   <line class="axis" x1="70" y1="20" x2="110" y2="20" marker-end="url(#xml_svg_arrow)" />
+ *   <line class="axis" x1="70" y1="20" x2="70" y2="60" marker-end="url(#xml_svg_arrow)" />
+ *   <text x="78" y="35" fill="#c33">x</text>
+ *   <text x="78" y="60" fill="#c33">y</text>
+ *   <text x="205" y="195" fill="#2563eb">(100,100)</text>
  * </svg>
  * \endhtmlonly
  *
@@ -88,8 +92,8 @@ class SVGParser;
  * | --------: | :-----: | :----------- |
  * | `x`       | `0`     | Top-left X coordinate of the SVG viewport. |
  * | `y`       | `0`     | Top-left Y coordinate of the SVG viewport. |
- * | `width`   | `0`     | Width of the SVG viewport. |
- * | `height`  | `0`     | Height of the SVG viewport. |
+ * | `width`   | unspecified | Optional viewport width. The DOM returns `std::nullopt` when absent; layout uses the CSS default sizing algorithm. |
+ * | `height`  | unspecified | Optional viewport height. The DOM returns `std::nullopt` when absent; layout uses the CSS default sizing algorithm. |
  * | `viewBox` | (none)  | Rectangle in userspace that the SVG viewport is mapped to. |
  * | `preserveAspectRatio` | `xMidYMid meet` | How to scale the SVG viewport to fit the SVG content. |
  * | `transform` | (none) | Transformation matrix to apply to SVG content. |
@@ -108,8 +112,8 @@ class SVGParser;
  * | --------: | :-----: | :----------- |
  * | `x`       | `0`     | Top-left X coordinate of the SVG viewport. |
  * | `y`       | `0`     | Top-left Y coordinate of the SVG viewport. |
- * | `width`   | `0`     | Width of the SVG viewport. |
- * | `height`  | `0`     | Height of the SVG viewport. |
+ * | `width`   | unspecified | Optional viewport width. The DOM returns `std::nullopt` when absent; layout uses the CSS default sizing algorithm. |
+ * | `height`  | unspecified | Optional viewport height. The DOM returns `std::nullopt` when absent; layout uses the CSS default sizing algorithm. |
  * | `viewBox` | (none)  | Rectangle in userspace that the SVG viewport is mapped to. |
  * | `preserveAspectRatio` | `xMidYMid meet` | How to scale the SVG viewport to fit the SVG content. |
  * | `transform` | (none) | Transformation matrix to apply to SVG content. |

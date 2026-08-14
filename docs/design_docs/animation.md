@@ -3,7 +3,7 @@
 **Status:** Design
 **Author:** Claude Opus 4.6
 **Created:** 2026-03-12
-**Tracking:** v0.4 milestone ([ProjectRoadmap](ProjectRoadmap.md))
+**Tracking:** v0.4 milestone ([ProjectRoadmap](../ProjectRoadmap.md))
 
 ## Summary
 
@@ -53,12 +53,12 @@ SMIL animation (97%+ global coverage), and Chrome reversed its 2015 deprecation 
 
 Four animation elements are defined:
 
-| Element | Purpose | Default calcMode |
-|---------|---------|-----------------|
-| `<animate>` | Animate scalar attributes/properties with interpolation | `linear` |
-| `<set>` | Set attribute to discrete value for a duration | `discrete` (only) |
-| `<animateTransform>` | Animate `transform` attribute by type | `linear` |
-| `<animateMotion>` | Move element along a path | `paced` |
+| Element              | Purpose                                                 | Default calcMode  |
+| -------------------- | ------------------------------------------------------- | ----------------- |
+| `<animate>`          | Animate scalar attributes/properties with interpolation | `linear`          |
+| `<set>`              | Set attribute to discrete value for a duration          | `discrete` (only) |
+| `<animateTransform>` | Animate `transform` attribute by type                   | `linear`          |
+| `<animateMotion>`    | Move element along a path                               | `paced`           |
 
 `<mpath>` is a child of `<animateMotion>` referencing a `<path>` element as the motion source.
 
@@ -85,12 +85,14 @@ Document time (t)
 Default metric is seconds.
 
 **Active duration** computation:
+
 1. Simple duration from `dur` (or `indefinite`)
 2. Repeat duration = `min(dur × repeatCount, repeatDur)`
 3. Constrain with `end` attribute
 4. Clamp to `[min, max]` bounds
 
 **`begin` value types** (semicolon-separated list):
+
 - Offset: `2s`, `-1s` (relative to document start)
 - Syncbase: `other.begin+0.5s`, `other.end` (synchronized to another animation)
 - Repeat: `other.repeat(3)` (triggered on Nth repeat of another animation)
@@ -105,13 +107,13 @@ Default metric is seconds.
 
 Values are specified via `from`/`to`/`by` pairs or a `values` list (which takes precedence):
 
-| Specification | Meaning |
-|--------------|---------|
-| `from`/`to` | Interpolate from start to end |
-| `from`/`by` | Interpolate from start to start+offset |
-| `to` only | "To-animation": interpolate from underlying value to target |
-| `by` only | "By-animation": add offset to underlying value |
-| `values` | Keyframe list (semicolon-separated) |
+| Specification | Meaning                                                     |
+| ------------- | ----------------------------------------------------------- |
+| `from`/`to`   | Interpolate from start to end                               |
+| `from`/`by`   | Interpolate from start to start+offset                      |
+| `to` only     | "To-animation": interpolate from underlying value to target |
+| `by` only     | "By-animation": add offset to underlying value              |
+| `values`      | Keyframe list (semicolon-separated)                         |
 
 **calcMode** controls interpolation between keyframes:
 
@@ -131,13 +133,13 @@ Only used when `calcMode="spline"`.
 
 ### Distance Functions (for paced mode)
 
-| Type | Distance |
-|------|----------|
-| Number/length | `\|a - b\|` |
-| Color (RGB) | `sqrt(dR² + dG² + dB²)` |
-| translate | `sqrt(dx² + dy²)` |
-| scale | `sqrt(dsx² + dsy²)` |
-| rotate/skew | `\|dAngle\|` |
+| Type          | Distance                |
+| ------------- | ----------------------- |
+| Number/length | `\|a - b\|`             |
+| Color (RGB)   | `sqrt(dR² + dG² + dB²)` |
+| translate     | `sqrt(dx² + dy²)`       |
+| scale         | `sqrt(dsx² + dsy²)`     |
+| rotate/skew   | `\|dAngle\|`            |
 
 Types without a defined distance function fall back to `discrete`.
 
@@ -167,13 +169,13 @@ When multiple animations target the same attribute, they compose via a layered s
 
 The `type` attribute selects the transform function:
 
-| type | values format | result |
-|------|--------------|--------|
-| `translate` | `tx [ty]` | `translate(tx, ty)` |
-| `scale` | `sx [sy]` | `scale(sx, sy)` |
-| `rotate` | `angle [cx cy]` | `rotate(angle, cx, cy)` |
-| `skewX` | `angle` | `skewX(angle)` |
-| `skewY` | `angle` | `skewY(angle)` |
+| type        | values format   | result                  |
+| ----------- | --------------- | ----------------------- |
+| `translate` | `tx [ty]`       | `translate(tx, ty)`     |
+| `scale`     | `sx [sy]`       | `scale(sx, sy)`         |
+| `rotate`    | `angle [cx cy]` | `rotate(angle, cx, cy)` |
+| `skewX`     | `angle`         | `skewX(angle)`          |
+| `skewY`     | `angle`         | `skewY(angle)`          |
 
 By default, `<animateTransform>` replaces the entire `transform` attribute. With
 `additive="sum"`, it post-multiplies with the underlying transform.
@@ -182,12 +184,14 @@ By default, `<animateTransform>` replaces the entire `transform` attribute. With
 
 `<animateMotion>` creates a **supplemental transform matrix** applied on top of the element's
 existing `transform`. The motion path is specified via:
+
 - `path` attribute (SVG path data)
 - `<mpath>` child element (reference to a `<path>`)
 - `from`/`to`/`by` as point pairs (implicit linear path)
 - `values` as point list
 
 The `rotate` attribute controls orientation along the path:
+
 - `auto`: tangent direction
 - `auto-reverse`: tangent + 180°
 - `<number>`: fixed angle in degrees
@@ -463,6 +467,7 @@ Add fuzzers for new parsers introduced by animation support. Follow existing pat
 ## Verification
 
 Each phase:
+
 1. Unit tests for timing computation, interpolation, sandwich composition
 2. Integration tests with golden image comparison at specific time points
 3. `bazel test //donner/svg/renderer/tests:renderer_tests` (static rendering unaffected)
@@ -472,7 +477,7 @@ Each phase:
 
 For performant animation of complex SVGs, a **composited rendering** system caches
 static portions of the render tree as pixmaps and only re-renders layers containing
-animated elements. See [composited_rendering.md](composited_rendering.md) for the
+animated elements. See [composited_rendering](0025-composited_rendering.md) for the
 full design.
 
 Key idea: the flat render tree is sliced into contiguous layers. Animated elements

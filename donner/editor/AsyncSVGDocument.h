@@ -1,16 +1,16 @@
 #pragma once
 /// @file
 ///
-/// `AsyncSVGDocument` is the editor-owned wrapper around `svg::SVGDocument`
-/// that gates DOM mutations through the `CommandQueue` and provides the
-/// snapshot hand-off to the render thread described in the M1.5 design note
-/// in `docs/design_docs/0020-editor.md`.
+/// `AsyncSVGDocument` is the editor-owned wrapper around `svg::SVGDocument`.
+/// It gates canvas, tool, and application mutations through the `CommandQueue`,
+/// applies incremental source-pane edits through a separate guarded seam, and
+/// provides the snapshot hand-off to the render thread described in the M1.5
+/// design note in `docs/design_docs/0020-editor.md`.
 ///
-/// The current M2 implementation is **single-threaded**: there is no real
-/// render thread yet, so the snapshot hand-off is just a pointer to the
-/// live document. The frame version counter is in place so the render
-/// thread coordination can be wired up incrementally without changing the
-/// public surface.
+/// The editor now renders on a dedicated `AsyncRenderer` worker. The worker
+/// shares the live document registry under ConcurrentDom access guards, while
+/// frame-version and document-generation counters let the UI discard stale
+/// results and preserve valid compositor state across structural reparses.
 
 #include <atomic>
 #include <cstdint>

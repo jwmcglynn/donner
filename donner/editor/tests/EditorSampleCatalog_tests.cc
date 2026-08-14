@@ -12,17 +12,21 @@
 #include "donner/svg/SVGSVGElement.h"
 #include "donner/svg/parser/SVGParser.h"
 #include "donner/svg/renderer/Renderer.h"
+#include "gmock/gmock.h"
 #include "gtest/gtest.h"
 
 namespace donner::editor {
 namespace {
 
+using ::testing::HasSubstr;
+using ::testing::Not;
+
 TEST(EditorSampleCatalog, HasStableUniqueAsciiIdsInDisplayOrder) {
   const std::span<const EditorSample> samples = GetEditorSampleCatalog();
-  ASSERT_EQ(samples.size(), 4u);
+  ASSERT_EQ(samples.size(), 5u);
 
-  constexpr std::array<std::string_view, 4> kExpectedIds = {"donner-splash", "basic-shapes",
-                                                            "text-style", "gradients-clip"};
+  constexpr std::array<std::string_view, 5> kExpectedIds = {
+      "donner-splash", "basic-shapes", "text-style", "gradients-clip", "donner-showcase"};
   std::unordered_set<std::string_view> ids;
   for (std::size_t i = 0; i < samples.size(); ++i) {
     EXPECT_EQ(samples[i].id, kExpectedIds[i]);
@@ -43,6 +47,16 @@ TEST(EditorSampleCatalog, EntriesHaveTitlesAndSources) {
     EXPECT_EQ(FindEditorSample(sample.id), &sample);
   }
   EXPECT_EQ(FindEditorSample("missing-sample"), nullptr);
+}
+
+TEST(EditorSampleCatalog, GeneratesShowcaseFromCanonicalSplashOnDemand) {
+  const EditorSample* showcase = FindEditorSample("donner-showcase");
+  ASSERT_NE(showcase, nullptr);
+  EXPECT_EQ(showcase->title, "Donner Showcase");
+  EXPECT_THAT(showcase->source, HasSubstr("id=\"showcase_svg_label_outlines\""));
+  EXPECT_THAT(showcase->source, HasSubstr("data-donner-converted-from=\"text\""));
+  EXPECT_THAT(showcase->source, HasSubstr("id=\"donner-editor-overlay\""));
+  EXPECT_THAT(showcase->source, Not(HasSubstr("<text")));
 }
 
 TEST(EditorSampleCatalog, SourcesParseWithUsableRootDimensions) {

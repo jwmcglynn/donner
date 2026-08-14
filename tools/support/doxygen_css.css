@@ -3,6 +3,52 @@
   color: var(--page-background-color);
 }
 
+/* Scale diagrams that define their own coordinate system. Fixed-coordinate
+ * inline diagrams without a viewBox keep their authored size and scroll in
+ * their paragraph instead of shrinking their viewport and clipping content. */
+.contents svg[viewBox],
+.contents object[type="image/svg+xml"],
+.contents .mermaid svg {
+  max-width: 100%;
+  height: auto;
+}
+
+.contents .textblock p:has(> svg:not([viewBox])) {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.contents .mermaid {
+  overflow-x: auto;
+  text-align: center;
+}
+
+/* Doxygen's stock outline forces long headings onto one unbroken line. Keep
+ * the rail useful at desktop widths where it is visible. */
+#page-nav ul.page-outline li {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+#page-nav ul.page-outline li a {
+  display: block;
+  line-height: 1.35;
+  padding: 0.35em 0.5em;
+}
+
+/* The fixed navigation rail already consumes substantial laptop width.  Drop
+ * the secondary, in-page table of contents before it squeezes diagrams and
+ * prose into an unreadably narrow center column. */
+@media screen and (max-width: 1400px) {
+  #page-nav {
+    display: none !important;
+  }
+
+  #container {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+}
+
 @media screen and (max-width: 767px) {
   .github-corner svg {
     width: 50px;

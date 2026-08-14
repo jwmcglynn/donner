@@ -1,19 +1,21 @@
-load("@rules_cc//cc:defs.bzl", "cc_binary")
+load("@rules_python//python:defs.bzl", "py_test")
 load("//build_defs:package.bzl", "donner_package")
+load("//build_defs:rules.bzl", "donner_cc_binary", "donner_cc_library")
 
 # Tools for producing release assets through the editor's merged code paths.
 #
 # `generate_showcase_asset` is the reproducible, headless generator for the v0.8
-# Donner showcase splash.
-# It drives the same `convertTextToOutlines` + `ExportViewportAsSvg` code paths the
-# editor GUI uses to author and export the final outlined `donner_splash_v0_8.svg`.
+# Donner showcase. It drives the same `convertTextToOutlines` +
+# `ExportViewportAsSvg` code paths as the editor GUI and writes only to the
+# caller-selected output path.
 #
 # Run:
 #   bazel run //donner/editor/tools:generate_showcase_asset -- \
-#       $PWD/donner_splash_v0_8_editable.svg $PWD/donner_splash_v0_8.svg
-cc_binary(
-    name = "generate_showcase_asset",
+#       $PWD/donner_splash.svg /tmp/donner-showcase.svg
+donner_cc_library(
+    name = "showcase_asset_generator",
     srcs = ["GenerateShowcaseAsset.cc"],
+    hdrs = ["GenerateShowcaseAsset.h"],
     visibility = ["//visibility:public"],
     deps = [
         "//donner/base",
@@ -23,6 +25,24 @@ cc_binary(
         "//donner/editor:viewport_svg_export",
         "//donner/svg",
         "//donner/svg/parser",
+    ],
+)
+
+donner_cc_binary(
+    name = "generate_showcase_asset",
+    srcs = ["GenerateShowcaseAssetMain.cc"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":showcase_asset_generator",
+    ],
+)
+
+py_test(
+    name = "generate_showcase_asset_cli_tests",
+    srcs = ["generate_showcase_asset_cli_tests.py"],
+    data = [
+        ":generate_showcase_asset",
+        "//:donner_splash.svg",
     ],
 )
 

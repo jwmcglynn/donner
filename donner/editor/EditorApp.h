@@ -5,10 +5,12 @@
 /// that tools and the main loop interact with. Owns the `AsyncSVGDocument`,
 /// the active selection, and (eventually) the active tool dispatcher.
 ///
-/// Per `docs/design_docs/0020-editor.md`, all editor-initiated DOM writes flow
-/// through `EditorApp::applyMutation()`. Tools never call
-/// `SVGElement::setTransform()` directly - they build `EditorCommand`s and
-/// hand them to the editor.
+/// Per `docs/design_docs/0020-editor.md`, canvas, tool, and application writes
+/// flow through `EditorApp::applyMutation()`. Tools never call mutation methods
+/// such as `SVGElement::setTransform()` on attached live elements directly -
+/// they build `EditorCommand`s and hand them to the editor. Incremental
+/// source-pane edits use the separate guarded `AsyncSVGDocument::applySourceEdit()`
+/// seam so XML source and the SVG projection stay synchronized.
 ///
 /// This is deliberately **smaller** than the prototype's `SVGState` /
 /// `EditorApp` aggregates: no path-tool wiring, no overlay document, no
@@ -167,9 +169,10 @@ public:
   // Mutation seam
   // ---------------------------------------------------------------------------
 
-  /// The single entry point for editor-initiated DOM writes. Tools and the
-  /// text pane both flow through here. Pushes the command onto the
-  /// document's command queue; nothing is applied until `flushFrame()`.
+  /// Entry point for canvas, tool, and application DOM commands. Pushes the
+  /// command onto the document's command queue; nothing is applied until
+  /// `flushFrame()`. Incremental source-pane edits instead use
+  /// `AsyncSVGDocument::applySourceEdit()`.
   void applyMutation(EditorCommand command) {
     // Edit-gating: locked layers (`data-donner-locked="true"` on the element or
     // an ancestor) are protected from geometry-changing edits and deletion.

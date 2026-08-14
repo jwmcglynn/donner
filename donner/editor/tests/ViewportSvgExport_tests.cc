@@ -981,6 +981,75 @@ TEST(ViewportSvgExportTest, OverlayStyleIsDeterministic) {
   EXPECT_THAT(overlay, HasSubstr("stroke=\"#1ea7fd\""));
 }
 
+TEST(ViewportSvgExportTest, OverlayPaintResistsSourceStylesheet) {
+  const SVGDocument doc = ParseOrDie(R"svg(
+<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100" viewBox="0 0 100 100">
+  <style>* { fill: red !important; stroke: none !important; stroke-width: 0 !important; }</style>
+</svg>
+)svg");
+  const ViewportState viewport = IdentityViewport();
+  const Recti renderPaneRect(Vector2i(0, 0), Vector2i(100, 100));
+
+  ViewportExportOptions options;
+  options.includeSelectionOverlay = true;
+  const SelectionChromeSnapshot snapshot = MakeAabbSnapshot();
+  const Result<std::string, std::string> result =
+      ExportViewportAsSvg(doc, viewport, renderPaneRect, options, &snapshot);
+  ASSERT_TRUE(result.ok()) << result.error;
+
+  SVGDocument exported = ParseOrDie(result.value);
+  const std::optional<svg::SVGElement> overlayRect =
+      exported.querySelector("#donner-editor-overlay rect");
+  ASSERT_TRUE(overlayRect.has_value()) << result.value;
+  const auto& style = overlayRect->getComputedStyle();
+  EXPECT_THAT(style.fill.get(), ::testing::Optional(svg::PaintServer(svg::PaintServer::None{})));
+  EXPECT_THAT(style.stroke.get(), ::testing::Optional(svg::PaintServer(svg::PaintServer::Solid(
+                                      css::Color(css::RGBA(0x1e, 0xa7, 0xfd, 0xff))))));
+  ASSERT_THAT(style.strokeWidth.get(), ::testing::Optional(::testing::_));
+  EXPECT_DOUBLE_EQ(style.strokeWidth.get()->value, 1.0);
+}
+
+TEST(ViewportSvgExportTest, OverlayScopeIsUniquifiedAgainstSourceIds) {
+  const SVGDocument doc = ParseOrDie(R"svg(
+<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100" viewBox="0 0 100 100">
+  <g id = "donner-editor-overla&#x79;">
+    <rect id="source-collision" class="donner-editor-overlay-line"
+          x="0" y="0" width="10" height="10" fill="red" stroke="green" stroke-width="7"/>
+  </g>
+</svg>
+)svg");
+  const ViewportState viewport = IdentityViewport();
+  const Recti renderPaneRect(Vector2i(0, 0), Vector2i(100, 100));
+
+  ViewportExportOptions options;
+  options.includeSelectionOverlay = true;
+  const SelectionChromeSnapshot snapshot = MakeAabbSnapshot();
+  const Result<std::string, std::string> result =
+      ExportViewportAsSvg(doc, viewport, renderPaneRect, options, &snapshot);
+  ASSERT_TRUE(result.ok()) << result.error;
+
+  SVGDocument exported = ParseOrDie(result.value);
+  const std::optional<svg::SVGElement> sourceRect = exported.querySelector("#source-collision");
+  ASSERT_TRUE(sourceRect.has_value()) << result.value;
+  const auto& sourceStyle = sourceRect->getComputedStyle();
+  EXPECT_THAT(sourceStyle.fill.get(), ::testing::Optional(svg::PaintServer(svg::PaintServer::Solid(
+                                          css::Color(css::RGBA(0xff, 0x00, 0x00, 0xff))))));
+  EXPECT_THAT(sourceStyle.stroke.get(),
+              ::testing::Optional(svg::PaintServer(
+                  svg::PaintServer::Solid(css::Color(css::RGBA(0x00, 0x80, 0x00, 0xff))))));
+  ASSERT_THAT(sourceStyle.strokeWidth.get(), ::testing::Optional(::testing::_));
+  EXPECT_DOUBLE_EQ(sourceStyle.strokeWidth.get()->value, 7.0);
+
+  EXPECT_THAT(result.value, HasSubstr("#donner-editor-overlay-2 .donner-editor-overlay-line"));
+  const std::optional<svg::SVGElement> generatedOverlayRect =
+      exported.querySelector("#donner-editor-overlay-2 rect");
+  ASSERT_TRUE(generatedOverlayRect.has_value()) << result.value;
+  const auto& generatedStyle = generatedOverlayRect->getComputedStyle();
+  EXPECT_THAT(generatedStyle.stroke.get(),
+              ::testing::Optional(svg::PaintServer(
+                  svg::PaintServer::Solid(css::Color(css::RGBA(0x1e, 0xa7, 0xfd, 0xff))))));
+}
+
 TEST(ViewportSvgExportTest, OverlayExportDoesNotMutateSourceDocument) {
   const SVGDocument doc = ParseOrDie(kSelfContainedSvg);
   const std::string sourceBefore(doc.source());

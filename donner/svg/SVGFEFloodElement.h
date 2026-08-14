@@ -95,7 +95,7 @@ namespace donner::svg {
  *   <circle cx="65" cy="60" r="35" fill="steelblue"/>
  *   <text x="65" y="110" text-anchor="middle" fill="#444">original</text>
  *   <circle cx="195" cy="60" r="35" fill="steelblue" filter="url(#xml_feFlood_ex2_f)"/>
- *   <text x="195" y="110" text-anchor="middle" fill="#444">tinted via flood+composite</text>
+ *   <text x="195" y="110" text-anchor="middle" fill="#444">flood + composite</text>
  * </svg>
  * \endhtmlonly
  *

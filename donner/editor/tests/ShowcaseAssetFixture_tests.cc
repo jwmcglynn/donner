@@ -1,31 +1,26 @@
 /// @file
-/// Fixture tests for the v0.8 showcase assets.
+/// End-to-end tests for the on-demand v0.8 showcase generator.
 ///
-/// Two assets are validated:
-///
-///   - `donner_splash_v0_8_editable.svg`: the editable intermediate.
-///     This test (`EditableSplashParsesWithNonEmptyViewBox`) is the original
-///     "fails loudly if the planned source asset is missing or invalid" gate.
-///   - `donner_splash_v0_8.svg`: the FINAL outlined splash, produced
-///     by `//donner/editor/tools:generate_showcase_asset` from the editable
-///     intermediate (add `<text>SVG</text>` → Convert Text to Outlines → Export
-///     Viewport as SVG with overlay enabled). These tests assert the
-///     final-asset invariants: it parses + renders in Donner, contains
-///     outlined `<path>` geometry (the `showcase_svg_label_outlines` group with
-///     the `data-donner-converted-from="text"` marker), contains NO live `<text>`
-///     for the `SVG` letters, and carries the exported `id="donner-editor-overlay"`
-///     chrome (the showcase overlay variant).
+/// The repository keeps only `donner_splash.svg`. These tests generate the
+/// derived showcase in memory through the same text-to-outlines and viewport
+/// export paths as the editor, then assert the generated-output invariants. The
+/// visual golden uses a flat synthetic base so it covers only the generator's
+/// added badge and overlay rather than platform-sensitive curved splash art.
 
 #include <fstream>
 #include <optional>
 #include <sstream>
 #include <string>
+#include <string_view>
 
 #include "donner/base/Box.h"
 #include "donner/base/ParseWarningSink.h"
+#include "donner/editor/tests/BitmapGoldenCompare.h"
+#include "donner/editor/tools/GenerateShowcaseAsset.h"
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/SVGSVGElement.h"
 #include "donner/svg/parser/SVGParser.h"
+#include "donner/svg/renderer/Renderer.h"
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
 
@@ -35,8 +30,9 @@ namespace {
 using ::testing::HasSubstr;
 using ::testing::Not;
 
-constexpr const char* kEditableSplashPath = "donner_splash_v0_8_editable.svg";
-constexpr const char* kFinalSplashPath = "donner_splash_v0_8.svg";
+constexpr const char* kSplashPath = "donner_splash.svg";
+constexpr const char* kShowcaseGoldenPath =
+    "donner/editor/tests/testdata/showcase_asset_tiny_skia.png";
 
 std::string ReadRunfile(const char* path) {
   std::ifstream stream(path);
@@ -48,89 +44,155 @@ std::string ReadRunfile(const char* path) {
   return buf.str();
 }
 
-TEST(ShowcaseAssetFixture, EditableSplashParsesWithNonEmptyViewBox) {
-  const std::string source = ReadRunfile(kEditableSplashPath);
+TEST(ShowcaseAssetFixture, CanonicalSplashParsesWithNonEmptyViewBox) {
+  const std::string source = ReadRunfile(kSplashPath);
   ASSERT_FALSE(source.empty())
-      << kEditableSplashPath
-      << " not found in runfiles or empty. The showcase requires the editable "
-         "intermediate to ship alongside the provenance notes.";
+      << kSplashPath
+      << " not found in runfiles or empty. The showcase generator requires the "
+         "canonical splash as its input.";
 
   ParseWarningSink warningSink = ParseWarningSink::Disabled();
   auto result = parser::SVGParser::ParseSVG(source, warningSink);
-  ASSERT_FALSE(result.hasError()) << "SVGParser rejected " << kEditableSplashPath << ": "
-                                  << result.error();
+  ASSERT_FALSE(result.hasError()) << "SVGParser rejected " << kSplashPath << ": " << result.error();
 
   SVGDocument document = std::move(result).result();
   const std::optional<Box2d> viewBox = document.svgElement().viewBox();
   ASSERT_TRUE(viewBox.has_value())
-      << "Root <svg> in " << kEditableSplashPath << " is missing a viewBox attribute.";
+      << "Root <svg> in " << kSplashPath << " is missing a viewBox attribute.";
   EXPECT_GT(viewBox->width(), 0.0) << "viewBox width must be positive: " << viewBox->width();
   EXPECT_GT(viewBox->height(), 0.0) << "viewBox height must be positive: " << viewBox->height();
 }
 
-// The final v0.8 showcase SVG parses in Donner and exposes a non-empty viewBox.
-TEST(ShowcaseAssetFixture, FinalSplashParsesWithNonEmptyViewBox) {
-  const std::string source = ReadRunfile(kFinalSplashPath);
-  ASSERT_FALSE(source.empty()) << kFinalSplashPath
-                               << " not found in runfiles or empty. Milestone 8 requires the final "
-                                  "outlined showcase asset to be checked in. Regenerate it with "
-                                  "//donner/editor/tools:generate_showcase_asset.";
+TEST(ShowcaseAssetFixture, GeneratesOutlinedOverlayShowcaseOnDemand) {
+  const std::string baseSource = ReadRunfile(kSplashPath);
+  ASSERT_FALSE(baseSource.empty()) << kSplashPath << " not found in runfiles or empty.";
+
+  const auto generated = editor::GenerateShowcaseAsset(baseSource);
+  ASSERT_TRUE(generated.ok()) << generated.error;
+  const std::string& source = generated.value;
 
   ParseWarningSink warningSink = ParseWarningSink::Disabled();
   auto result = parser::SVGParser::ParseSVG(source, warningSink);
-  ASSERT_FALSE(result.hasError()) << "SVGParser rejected " << kFinalSplashPath << ": "
+  ASSERT_FALSE(result.hasError()) << "SVGParser rejected the generated showcase: "
                                   << result.error();
 
   SVGDocument document = std::move(result).result();
   const std::optional<Box2d> viewBox = document.svgElement().viewBox();
-  ASSERT_TRUE(viewBox.has_value())
-      << "Root <svg> in " << kFinalSplashPath << " is missing a viewBox attribute.";
+  ASSERT_TRUE(viewBox.has_value()) << "Generated root <svg> is missing a viewBox attribute.";
   EXPECT_GT(viewBox->width(), 0.0) << "viewBox width must be positive: " << viewBox->width();
   EXPECT_GT(viewBox->height(), 0.0) << "viewBox height must be positive: " << viewBox->height();
-}
-
-// The final showcase contains the outlined `SVG` lettering (the converted
-// outline group with `<path>` glyph geometry) and NO live `<text>` element.
-TEST(ShowcaseAssetFixture, FinalSplashHasOutlinedLettersAndNoLiveText) {
-  const std::string source = ReadRunfile(kFinalSplashPath);
-  ASSERT_FALSE(source.empty()) << kFinalSplashPath << " not found in runfiles or empty.";
-
   // Convert Text to Outlines markers from the generator's conversion step.
   EXPECT_THAT(source, HasSubstr("id=\"showcase_svg_label_outlines\""))
-      << "final asset must contain the converted outline group";
+      << "generated showcase must contain the converted outline group";
   EXPECT_THAT(source, HasSubstr("data-donner-converted-from=\"text\""))
-      << "final asset must carry the text-to-outline conversion marker";
-  EXPECT_THAT(source, HasSubstr("<path")) << "final asset must contain outline <path> geometry";
+      << "generated showcase must carry the text-to-outline conversion marker";
+  EXPECT_THAT(source, HasSubstr("id=\"showcase_svg_label_outlines_0\""))
+      << "generated showcase must contain a path inside the outline group";
 
-  // No live <text> remains anywhere: the editable splash had no text of its own,
+  // No live <text> remains anywhere: the canonical splash has no text of its own,
   // and the inserted `SVG` label was converted to outlines.
   EXPECT_THAT(source, Not(HasSubstr("<text")))
-      << "final asset must not contain any live <text> element";
+      << "generated showcase must not contain any live <text> element";
 
-  // Parsed DOM confirms: outline group present, no <text> element.
-  ParseWarningSink warningSink = ParseWarningSink::Disabled();
-  auto result = parser::SVGParser::ParseSVG(source, warningSink);
-  ASSERT_FALSE(result.hasError()) << result.error();
-  SVGDocument document = std::move(result).result();
+  // Parsed DOM confirms the outline and overlay groups are present, with no
+  // live <text> element.
   EXPECT_TRUE(document.querySelector("#showcase_svg_label_outlines").has_value());
   EXPECT_FALSE(document.querySelector("text").has_value())
-      << "final asset must contain no live <text> in the parsed DOM";
-}
-
-// The exported overlay group is present (the showcase overlay variant).
-TEST(ShowcaseAssetFixture, FinalSplashHasExportedOverlayGroup) {
-  const std::string source = ReadRunfile(kFinalSplashPath);
-  ASSERT_FALSE(source.empty()) << kFinalSplashPath << " not found in runfiles or empty.";
-
+      << "generated showcase must contain no live <text> in the parsed DOM";
   EXPECT_THAT(source, HasSubstr("id=\"donner-editor-overlay\""))
-      << "final asset must carry the exported editor overlay chrome group";
-
-  ParseWarningSink warningSink = ParseWarningSink::Disabled();
-  auto result = parser::SVGParser::ParseSVG(source, warningSink);
-  ASSERT_FALSE(result.hasError()) << result.error();
-  SVGDocument document = std::move(result).result();
+      << "generated showcase must carry the exported editor overlay chrome group";
   EXPECT_TRUE(document.querySelector("#donner-editor-overlay").has_value())
       << "overlay group must be a resolvable element in the parsed DOM";
+
+  // Render through the deterministic CPU facade as the final end-to-end gate.
+  constexpr Vector2i kRenderSize(223, 128);
+  document.setCanvasSize(kRenderSize.x, kRenderSize.y);
+  Renderer renderer;
+  renderer.draw(document);
+  const RendererBitmap bitmap = renderer.takeSnapshot();
+  ASSERT_FALSE(bitmap.empty()) << "generated showcase produced no renderer snapshot";
+  EXPECT_EQ(bitmap.dimensions.x, kRenderSize.x);
+  EXPECT_EQ(bitmap.dimensions.y, kRenderSize.y);
+  ASSERT_GE(bitmap.rowBytes, static_cast<std::size_t>(bitmap.dimensions.x) * 4u);
+}
+
+TEST(ShowcaseAssetFixture, GeneratedBadgeAndOverlayMatchGolden) {
+  // Keep the visual baseline focused on the pixels this generator adds. The
+  // canonical splash contains curved antialiased edges whose final channel
+  // rounding differs across toolchains, while this flat base remains identical
+  // and still exercises text-to-outlines plus selection-overlay export.
+  constexpr std::string_view kDeterministicBase =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 892 512">
+  <rect width="892" height="512" fill="#0b0d1d"/>
+</svg>)";
+
+  const auto generated = editor::GenerateShowcaseAsset(kDeterministicBase);
+  ASSERT_TRUE(generated.ok()) << generated.error;
+
+  ParseWarningSink warningSink = ParseWarningSink::Disabled();
+  auto result = parser::SVGParser::ParseSVG(generated.value, warningSink);
+  ASSERT_FALSE(result.hasError()) << "SVGParser rejected the generated visual fixture: "
+                                  << result.error();
+
+  SVGDocument document = std::move(result).result();
+  constexpr Vector2i kRenderSize(223, 128);
+  document.setCanvasSize(kRenderSize.x, kRenderSize.y);
+  Renderer renderer;
+  renderer.draw(document);
+  const RendererBitmap bitmap = renderer.takeSnapshot();
+  editor::tests::CompareBitmapToGolden(bitmap, kShowcaseGoldenPath, "generated_showcase_tiny_skia",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
+TEST(ShowcaseAssetFixture, RejectsInputWithLiveText) {
+  constexpr std::string_view kInput =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <text x="10" y="20">existing</text>
+</svg>)";
+
+  const auto generated = editor::GenerateShowcaseAsset(kInput);
+  ASSERT_FALSE(generated.ok());
+  EXPECT_THAT(generated.error, HasSubstr("must not contain live <text>"));
+}
+
+TEST(ShowcaseAssetFixture, RejectsReservedGeneratorIds) {
+  constexpr std::string_view kInput =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <g id="showcase_svg_label_outlines"/>
+</svg>)";
+
+  const auto generated = editor::GenerateShowcaseAsset(kInput);
+  ASSERT_FALSE(generated.ok());
+  EXPECT_THAT(generated.error, HasSubstr("reserved id #showcase_svg_label_outlines"));
+}
+
+TEST(ShowcaseAssetFixture, RejectsGeneratedOutlinePathIdCollision) {
+  constexpr std::string_view kInput =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <path id="showcase_svg_label_outlines_0" d="M0 0h1v1z"/>
+</svg>)";
+
+  const auto generated = editor::GenerateShowcaseAsset(kInput);
+  ASSERT_FALSE(generated.ok());
+  EXPECT_THAT(generated.error, HasSubstr("reserved id #showcase_svg_label_outlines_0"));
+}
+
+TEST(ShowcaseAssetFixture, RejectsNonFiniteViewBox) {
+  constexpr std::string_view kInput =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="1e308 0 1e308 100"/>)";
+
+  const auto generated = editor::GenerateShowcaseAsset(kInput);
+  ASSERT_FALSE(generated.ok());
+  EXPECT_THAT(generated.error, HasSubstr("finite coordinates and dimensions"));
+}
+
+TEST(ShowcaseAssetFixture, RejectsViewBoxLargerThanViewportIntegerRange) {
+  constexpr std::string_view kInput =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 2147483648 100"/>)";
+
+  const auto generated = editor::GenerateShowcaseAsset(kInput);
+  ASSERT_FALSE(generated.ok());
+  EXPECT_THAT(generated.error, HasSubstr("supported viewport dimension range"));
 }
 
 }  // namespace

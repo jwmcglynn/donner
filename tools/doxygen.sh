@@ -13,11 +13,9 @@ if [ -d "/workspace/doxygen" ]; then
 fi
 
 DONNER_VERSION=$(
-  sed -n '/^[[:space:]]*module(/{
-    s/.*version[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/
-    p
-    q
-  }' MODULE.bazel
+  sed -n '/^[[:space:]]*module(/,/^[[:space:]]*)/ {
+    s/^[[:space:]]*version[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p
+  }' MODULE.bazel | head -n1
 )
 if [ -z "$DONNER_VERSION" ]; then
   echo "Unable to read Donner version from MODULE.bazel" >&2

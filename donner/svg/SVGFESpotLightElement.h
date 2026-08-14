@@ -52,7 +52,7 @@ namespace donner::svg {
  *   <text x="10" y="36" fill="#a80">(x,y,z)</text>
  *   <!-- target -->
  *   <circle cx="120" cy="150" r="4" fill="#c33"/>
- *   <text x="126" y="166" fill="#c33">(pointsAtX, pointsAtY, pointsAtZ)</text>
+ *   <text x="126" y="166" fill="#c33">target (pointsAtX/Y/Z)</text>
  *   <!-- angle arc -->
  *   <path d="M 96,75 A 20,20 0 0,0 110,73" fill="none" stroke="#c80"/>
  *   <text x="112" y="72" fill="#c80">limitingConeAngle</text>

@@ -309,8 +309,9 @@ public:
   /**
    * Get the underlying \ref donner::EntityHandle.
    *
-   * This is an unsafe advanced escape hatch. In \ref ThreadingMode::ConcurrentDom, callers must
-   * hold an explicit document access guard while reading or mutating the returned handle.
+   * This is an unsafe advanced escape hatch. In
+   * \ref donner::svg::ThreadingMode::ConcurrentDom, callers must hold an explicit document access
+   * guard while reading or mutating the returned handle.
    */
   EntityHandle unsafeEntityHandle() const { return handle_.unsafeResolve(); }
 
@@ -324,8 +325,8 @@ public:
   /**
    * Run a callback with scoped read access to this element's document and resolved entity handle.
    *
-   * In \ref ThreadingMode::ConcurrentDom, use this to batch repeated reads such as sibling
-   * traversal or descendant scans under one document read lock.
+   * In \ref donner::svg::ThreadingMode::ConcurrentDom, use this to batch repeated reads such as
+   * sibling traversal or descendant scans under one document read lock.
    *
    * @param callback Callable invoked as `callback(DocumentReadAccess&, EntityHandle)`.
    */
@@ -508,7 +509,7 @@ public:
   /**
    * Get the next sibling of this element, if it exists.
    *
-   * For tight traversal loops in \ref ThreadingMode::ConcurrentDom, wrap the loop in
+   * For tight traversal loops in \ref donner::svg::ThreadingMode::ConcurrentDom, wrap the loop in
    * \ref withReadAccess so each step can reuse the same read access.
    *
    * @return The next sibling element, or \c std::nullopt if the element has no next sibling.
@@ -666,8 +667,8 @@ public:
    * Find the first element in the tree that matches the given CSS selector.
    *
    * This method performs its own scoped read. For repeated DOM reads in
-   * \ref ThreadingMode::ConcurrentDom, wrap the surrounding scan in \ref withReadAccess so nested
-   * reads reuse the same document access.
+   * \ref donner::svg::ThreadingMode::ConcurrentDom, wrap the surrounding scan in
+   * \ref withReadAccess so nested reads reuse the same document access.
    *
    * ```
    * auto element = document.svgElement().querySelector("#elementId");
@@ -715,9 +716,10 @@ public:
    * `std::nullopt` when the render tree has not been built or this element has no rendering
    * instance.
    *
-   * Resolved paint-server references are reported as \ref PaintServer::ElementReference carrying
-   * the referenced element's `#id` href (empty href if the target has no id) and the resolved
-   * fallback color. Never computes anything; diagnostics-safe.
+   * Resolved paint-server references are reported as
+   * \ref donner::svg::PaintServer::ElementReference carrying the referenced element's `#id` href
+   * (empty href if the target has no id) and the resolved fallback color. Never computes anything;
+   * diagnostics-safe.
    */
   std::optional<PaintServer> resolvedFillPaint() const;
 
@@ -732,6 +734,12 @@ protected:
   template <typename InvalidateCallback>
   class ScopedMutation {
   public:
+    /**
+     * Begin a mutation batch and retain the cleanup callback for scope exit.
+     *
+     * @param handle Element anchor whose document owns the mutation batch.
+     * @param invalidateOnScopeExit Cleanup invoked before the batch commits its revision.
+     */
     ScopedMutation(const ElementAnchor& handle, InvalidateCallback invalidateOnScopeExit)
         : mutation_(handle.mutationBatch()),
           invalidateOnScopeExit_(std::move(invalidateOnScopeExit)) {}

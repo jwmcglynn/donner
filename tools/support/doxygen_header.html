@@ -33,7 +33,11 @@
     $darkmode
     <link href="$relpath^$stylesheet" rel="stylesheet" type="text/css" />
     $extrastylesheet
-    <script src="https://cdn.jsdelivr.net/npm/mermaid@11.6.0/dist/mermaid.min.js"></script>
+    <script
+      src="https://cdn.jsdelivr.net/npm/mermaid@11.6.0/dist/mermaid.min.js"
+      integrity="sha384-zkWMJO4sgpPUzyuOgDx8HB/K55glbAwajEpk1Go2NWRuPkPA/wIhoEJTuSkmOYrV"
+      crossorigin="anonymous"
+    ></script>
     <script type="text/javascript" src="$relpath^doxygen-awesome-fragment-copy-button.js"></script>
     <script type="text/javascript" src="$relpath^doxygen-awesome-darkmode-toggle.js"></script>
     <script type="text/javascript" src="$relpath^doxygen-awesome-paragraph-link.js"></script>
@@ -53,7 +57,9 @@
           .replace(/&amp;/g, "&");
       }
 
-      mermaid.startOnLoad = false;
+      if (window.mermaid) {
+        window.mermaid.startOnLoad = false;
+      }
 
       $(document).ready(function () {
         const elementCode = ".mermaid";
@@ -64,24 +70,27 @@
         });
 
         const loadMermaid = function (theme) {
+          if (!window.mermaid) {
+            return Promise.resolve();
+          }
           window.mermaid.initialize({ theme });
-          window.mermaid.init({ theme }, document.querySelectorAll(elementCode));
+          return window.mermaid.init({ theme }, document.querySelectorAll(elementCode));
         };
 
         const resetProcessed = function () {
-          return new Promise(() => {
-            $(elementCode).each(function () {
-              $(this).removeAttr("data-processed");
-              $(this).html($(this).attr("data-original-code") || "");
-            });
+          $(elementCode).each(function () {
+            $(this).removeAttr("data-processed");
+            $(this).html($(this).attr("data-original-code") || "");
           });
         };
 
         const observer = new MutationObserver(() => {
           if (document.documentElement.classList.contains("dark-mode")) {
-            resetProcessed().then(loadMermaid("dark")).catch(console.error);
+            resetProcessed();
+            loadMermaid("dark").catch(console.error);
           } else if (document.documentElement.classList.contains("light-mode")) {
-            resetProcessed().then(loadMermaid("default")).catch(console.error);
+            resetProcessed();
+            loadMermaid("default").catch(console.error);
           }
         });
         observer.observe(document.documentElement, {

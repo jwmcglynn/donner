@@ -2,8 +2,12 @@
 
 #include <array>
 #include <span>
+#include <string>
+#include <utility>
 
+#include "donner/base/Utils.h"
 #include "donner/editor/EditorSplash.h"
+#include "donner/editor/tools/GenerateShowcaseAsset.h"
 
 namespace donner::editor {
 namespace {
@@ -66,21 +70,40 @@ std::string_view SourceFromEmbedded(std::span<const unsigned char> bytes) noexce
   return {reinterpret_cast<const char*>(bytes.data()), bytes.size()};
 }
 
-const std::array<EditorSample, 4> kEditorSamples = {{
-    {"donner-splash", "Donner Splash", SourceFromEmbedded(embedded::kEditorSplashSvg)},
-    {"basic-shapes", "Basic Shapes", kBasicShapesSvg},
-    {"text-style", "Text and Style", kTextStyleSvg},
-    {"gradients-clip", "Gradients and Clip", kGradientsClipSvg},
-}};
+std::string GenerateShowcaseSource() {
+  const std::string_view canonicalSplash = SourceFromEmbedded(embedded::kEditorSplashSvg);
+  auto generated = GenerateShowcaseAsset(canonicalSplash);
+  UTILS_RELEASE_ASSERT_MSG(generated.ok(), generated.error.c_str());
+  return std::move(generated.value);
+}
+
+struct EditorSampleCatalogStorage {
+  EditorSampleCatalogStorage()
+      : showcaseSource(GenerateShowcaseSource()),
+        samples(
+            {{{"donner-splash", "Donner Splash", SourceFromEmbedded(embedded::kEditorSplashSvg)},
+              {"basic-shapes", "Basic Shapes", kBasicShapesSvg},
+              {"text-style", "Text and Style", kTextStyleSvg},
+              {"gradients-clip", "Gradients and Clip", kGradientsClipSvg},
+              {"donner-showcase", "Donner Showcase", showcaseSource}}}) {}
+
+  std::string showcaseSource;
+  std::array<EditorSample, 5> samples;
+};
+
+const EditorSampleCatalogStorage& CatalogStorage() {
+  static const EditorSampleCatalogStorage storage;
+  return storage;
+}
 
 }  // namespace
 
 std::span<const EditorSample> GetEditorSampleCatalog() noexcept {
-  return kEditorSamples;
+  return CatalogStorage().samples;
 }
 
 const EditorSample* FindEditorSample(std::string_view id) noexcept {
-  for (const EditorSample& sample : kEditorSamples) {
+  for (const EditorSample& sample : CatalogStorage().samples) {
     if (sample.id == id) {
       return &sample;
     }

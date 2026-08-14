@@ -39,7 +39,7 @@ namespace donner::svg {
  * either page stand-alone.)
  *
  * \htmlonly
- * <svg xmlns="http://www.w3.org/2000/svg" width="300" height="140"
+ * <svg xmlns="http://www.w3.org/2000/svg" width="360" height="140"
  *      style="background-color: white" font-family="sans-serif" font-size="12">
  *   <defs>
  *     <filter id="xml_feMergeNode_dropShadow" x="-30%" y="-30%" width="160%" height="160%">

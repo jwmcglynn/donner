@@ -6,22 +6,63 @@
 namespace donner::svg {
 
 /**
- * @defgroup xml_animateTransform "<animateTransform>"
+ * @page xml_animateTransform &lt;animateTransform&gt;
  *
- * Animates a transform attribute of an element over time.
+ * Animates a target element's transform over time.
  *
  * - DOM object: SVGAnimateTransformElement
  * - SVG Animations spec: https://svgwg.org/specs/animations/#AnimateTransformElement
  *
- * The `type` attribute selects the transform function (translate, scale, rotate, skewX, skewY).
+ * @warning Animation support is experimental. Parse with
+ * `SVGParser::Options::enableExperimental = true` to create an SVGAnimateTransformElement.
  *
- * Example usage:
+ * The `type` attribute selects `translate`, `scale`, `rotate`, `skewX`, or `skewY`.
+ * Donner interpolates `from`/`to`, `from`/`by`, `by`, and semicolon-separated
+ * `values` forms.
+ *
+ * ## Example
+ *
  * ```xml
- * <rect width="100" height="100" fill="blue">
+ * <rect x="20" y="20" width="70" height="40" fill="#0f766e">
  *   <animateTransform attributeName="transform" type="rotate"
- *                     from="0 50 50" to="360 50 50" dur="3s" />
+ *                     from="0 55 40" to="90 55 40"
+ *                     dur="2s" fill="freeze" />
  * </rect>
  * ```
+ *
+ * \htmlonly
+ * <svg width="360" height="140" viewBox="0 0 360 140"
+ *      style="background-color:white" font-family="sans-serif" font-size="12"
+ *      role="img" aria-label="Rotation animation snapshots">
+ *   <g transform="translate(20,20)">
+ *     <rect width="70" height="40" rx="4" fill="#0f766e"/>
+ *     <text x="35" y="76" text-anchor="middle" fill="#334155">0 s</text>
+ *   </g>
+ *   <g transform="translate(180,40) rotate(45)">
+ *     <rect x="-35" y="-20" width="70" height="40" rx="4" fill="#0f766e"/>
+ *   </g>
+ *   <text x="180" y="116" text-anchor="middle" fill="#334155">1 s</text>
+ *   <g transform="translate(320,55) rotate(90)">
+ *     <rect x="-35" y="-20" width="70" height="40" rx="4" fill="#0f766e"/>
+ *   </g>
+ *   <text x="320" y="116" text-anchor="middle" fill="#334155">2 s</text>
+ *   <path d="M100 50H137M222 50H267" stroke="#94a3b8" stroke-width="2"/>
+ *   <path d="M131 45l10 5-10 5M261 45l10 5-10 5" fill="none"
+ *         stroke="#94a3b8" stroke-width="2"/>
+ * </svg>
+ * \endhtmlonly
+ *
+ * ## Supported attributes
+ *
+ * | Attribute | Support |
+ * | :-------- | :------ |
+ * | `type` | `translate`, `scale`, `rotate`, `skewX`, or `skewY`. |
+ * | `from`, `to`, `by`, `values` | Transform keyframes in the selected type's number format. |
+ * | `href`, `xlink:href` | Optional target; otherwise the parent element is targeted. |
+ * | Shared timing | `begin`, `dur`, `end`, `fill`, `repeatCount`, `repeatDur`, `restart`, `min`, and `max`. |
+ *
+ * Event and syncbase begin/end expressions are not resolved yet. See \ref xml_animate for shared
+ * timing behavior and limitations.
  */
 
 /**

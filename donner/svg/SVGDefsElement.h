@@ -43,7 +43,7 @@ namespace donner::svg {
  * by the rectangle (right) via `fill="url(#MyGradient)"`.
  *
  * \htmlonly
- * <svg id="xml_defs" width="320" height="160" style="background-color: white">
+ * <svg id="xml_defs" width="380" height="160" style="background-color: white">
  *   <style>
  *     #xml_defs text { font-family: monospace; font-size: 12px; fill: black }
  *     #xml_defs text.label { font-family: sans-serif; font-size: 12px; font-weight: bold; fill:
