@@ -1283,6 +1283,13 @@ public:
     return shell.selectTool_.isMarqueeing();
   }
 
+  static bool BeginSelectedShapeDrag(EditorShell& shell, const Vector2d& documentPoint,
+                                     const Box2d& selectionBounds) {
+    const std::array<Box2d, 1> bounds = {selectionBounds};
+    return shell.selectTool_.tryStartRedragOnSelected(shell.app_, documentPoint, MouseModifiers{},
+                                                      bounds);
+  }
+
   static void BufferPendingClick(EditorShell& shell, const Vector2d& documentPoint,
                                  MouseModifiers modifiers = MouseModifiers{}) {
     shell.interactionController_.bufferPendingClick(documentPoint, modifiers);
@@ -3459,6 +3466,48 @@ TEST(EditorShellTest, FillStrokeToolbarKeepsChosenPaintVisibleWhileRendererIsBus
       << "The selected element's fill swatch must not change while its render is in flight";
   EXPECT_FALSE(DrawDataContainsColor(IM_COL32(0xff, 0x00, 0xaa, 0xff)))
       << "A busy frame must not replace the selected fill with the authoring fill";
+
+  renderer.cancelInFlight();
+  EXPECT_TRUE(renderer.waitUntilNoRenderInFlightForTesting(std::chrono::steady_clock::now() +
+                                                           std::chrono::seconds(2)));
+  std::ignore = renderer.pollResult();
+  renderer.setReplayRenderDelayForTesting(std::chrono::milliseconds(0));
+}
+
+TEST(EditorShellTest, FillStrokeToolbarStaysVisuallyStableAcrossDragRenderHandoffs) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
+
+  EditorShell shell(window, OptionsWithSource(kStyledSvg, "styled.svg"));
+  ASSERT_TRUE(shell.valid());
+  EditorShellTestAccess::ConfigureViewport(shell, Box2d::FromXYWH(0.0, 0.0, 120.0, 80.0));
+  std::optional<svg::SVGElement> target =
+      EditorShellTestAccess::App(shell).document().document().querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  EditorShellTestAccess::App(shell).setSelection(*target);
+  ASSERT_TRUE(EditorShellTestAccess::BeginSelectedShapeDrag(
+      shell, Vector2d(20.0, 20.0), Box2d::FromXYWH(10.0, 12.0, 40.0, 24.0)));
+
+  constexpr ImVec2 kCursor(20.0f, 40.0f);
+  constexpr ImU32 kEnabledSwap = IM_COL32(215, 222, 232, 255);
+  constexpr ImU32 kDisabledSwap = IM_COL32(120, 126, 134, 255);
+  const auto expectStableDragChrome = [&]() {
+    EXPECT_TRUE(DrawDataContainsColor(kDisabledSwap));
+    EXPECT_FALSE(DrawDataContainsColor(kEnabledSwap));
+    EXPECT_TRUE(DrawDataContainsColor(IM_COL32(255, 0, 0, 255))) << "Fill swatch changed";
+    EXPECT_TRUE(DrawDataContainsColor(IM_COL32(0, 0, 255, 255))) << "Stroke swatch changed";
+  };
+
+  RenderToolbarFrame(window, shell, kCursor, ImVec2(-100.0f, -100.0f), /*mouseDown=*/false);
+  expectStableDragChrome();
+
+  AsyncRenderer& renderer =
+      EditorShellTestAccess::BeginDelayedRender(shell, std::chrono::milliseconds(500));
+  ASSERT_TRUE(renderer.isBusy());
+  RenderToolbarFrame(window, shell, kCursor, ImVec2(-100.0f, -100.0f), /*mouseDown=*/false);
+  expectStableDragChrome();
 
   renderer.cancelInFlight();
   EXPECT_TRUE(renderer.waitUntilNoRenderInFlightForTesting(std::chrono::steady_clock::now() +
