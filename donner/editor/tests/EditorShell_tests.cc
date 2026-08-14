@@ -4236,7 +4236,8 @@ TEST(EditorShellTest, SamplePickerAppearsBeforeGeneratingThumbnailsAcrossFrames)
   // Later frames may start bounded background work and publish one result at a time. Drive them
   // exactly as `RunEditorFrame` does: prepare, then begin/run/end the ImGui frame.
   std::size_t previousGeneratedCount = 0u;
-  for (std::size_t frame = 0; frame < 500u; ++frame) {
+  const auto completionDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+  while (std::chrono::steady_clock::now() < completionDeadline) {
     shell.prepareFrame();
     window.beginFrame();
     shell.runFrame();
@@ -4248,6 +4249,9 @@ TEST(EditorShellTest, SamplePickerAppearsBeforeGeneratingThumbnailsAcrossFrames)
     if (generatedCount >= sampleCount) {
       break;
     }
+    // Completion is worker-event driven, not frame-count driven. Under parallel macOS test load a
+    // thumbnail may legitimately take longer than the former fixed 500-frame/500-ms polling
+    // window even though the worker is making progress.
     std::this_thread::sleep_for(std::chrono::milliseconds(1));
   }
 

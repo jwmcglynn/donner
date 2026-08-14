@@ -142,19 +142,18 @@ void PublishSampleThumbnailStats(int requested, int started, int completed, int 
 }
 
 void PublishInteractionStats(int selectedCount, int pendingClick, int workerBusy, int dragging,
-                             int dragHasVisualChange, double frame) {
+                             int dragHasVisualChange) {
   MAIN_THREAD_ASYNC_EM_ASM(
       {
         window['__donnerInteractionStats'] = ({
           'selectedCount' : $0,
-          'pendingClick' : Boolean($1),
-          'workerBusy' : Boolean($2),
-          'dragging' : Boolean($3),
-          'dragHasVisualChange' : Boolean($4),
-          'publishedAtFrame' : Number($5),
+          'pendingClick' : !!$1,
+          'workerBusy' : !!$2,
+          'dragging' : !!$3,
+          moved : !!$4,
         });
       },
-      selectedCount, pendingClick, workerBusy, dragging, dragHasVisualChange, frame);
+      selectedCount, pendingClick, workerBusy, dragging, dragHasVisualChange);
 }
 
 /**
@@ -6589,11 +6588,11 @@ void EditorShell::recordFrameTelemetry(
       static_cast<double>(presentationResources.retiredFrameCount),
       static_cast<double>(presentationResources.wgpuLifetimeTextureCreates),
       static_cast<double>(presentationResources.wgpuLifetimeBufferCreates));
-  PublishInteractionStats(
-      static_cast<int>(app_.selectedElements().size()),
-      interactionController_.pendingClick().has_value() ? 1 : 0,
-      renderCoordinator_.asyncRenderer().isBusy() ? 1 : 0, selectTool_.isDragging() ? 1 : 0,
-      selectTool_.dragHasVisualChange() ? 1 : 0, static_cast<double>(frameTelemetryFrame_));
+  PublishInteractionStats(static_cast<int>(app_.selectedElements().size()),
+                          interactionController_.pendingClick().has_value() ? 1 : 0,
+                          renderCoordinator_.asyncRenderer().isBusy() ? 1 : 0,
+                          selectTool_.isDragging() ? 1 : 0,
+                          selectTool_.dragHasVisualChange() ? 1 : 0);
   {
     const ViewportState& viewport = interactionController_.viewport();
     const Box2d documentRect = viewport.imageScreenRect();

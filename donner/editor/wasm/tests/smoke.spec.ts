@@ -67,8 +67,7 @@ declare global {
       pendingClick: boolean;
       workerBusy: boolean;
       dragging: boolean;
-      dragHasVisualChange: boolean;
-      publishedAtFrame: number;
+      moved: boolean;
     };
     __donnerViewportStats?: {
       paneX: number;
@@ -1349,8 +1348,7 @@ test("Geode WASM selects through the overlay with one prewarm render and no recu
   await page.mouse.move(dragStart.x + 32, dragStart.y + 20);
   await expect
     .poll(
-      async () =>
-        page.evaluate(() => window.__donnerInteractionStats?.dragHasVisualChange ?? false),
+      async () => page.evaluate(() => window.__donnerInteractionStats?.moved ?? false),
       {
         message: "expected pointer movement to produce a nonzero drag preview",
         timeout: scaledMs(1000),
@@ -1380,7 +1378,7 @@ test("Geode WASM selects through the overlay with one prewarm render and no recu
     scaledMs(1000),
     (accounting) =>
       accounting.interaction?.dragging === true
-      && accounting.interaction.dragHasVisualChange === true,
+      && accounting.interaction.moved === true,
   );
   const beforeMouseUpResults = beforeMouseUpAccounting.completedResults;
   expect(
@@ -1389,7 +1387,7 @@ test("Geode WASM selects through the overlay with one prewarm render and no recu
       + `${JSON.stringify(beforeMouseUpAccounting)}`,
   ).toBe(true);
   expect(
-    beforeMouseUpAccounting.interaction?.dragHasVisualChange ?? false,
+    beforeMouseUpAccounting.interaction?.moved ?? false,
     `expected the live shape drag to have a nonzero preview at mouse-up: `
       + `${JSON.stringify(beforeMouseUpAccounting)}`,
   ).toBe(true);

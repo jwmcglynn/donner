@@ -38,7 +38,6 @@ declare global {
     __donnerInteractionStats?: {
       dragging: boolean;
       pendingClick: boolean;
-      publishedAtFrame: number;
       selectedCount: number;
       workerBusy: boolean;
     };

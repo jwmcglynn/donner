@@ -86,6 +86,31 @@ void GlfwErrorCallback(int error, const char* description) {
   std::fprintf(stderr, "GLFW error %d: %s\n", error, description);
 }
 
+bool InitializeGlfw() {
+  if (glfwInit() == GLFW_FALSE) {
+    return false;
+  }
+#ifdef __APPLE__
+  // Cocoa defers some NSWindow destruction onto AppKit queues. Repeated glfwTerminate/glfwInit
+  // cycles can release those objects after the next window is already live, which races teardown
+  // and has produced object_cxxDestructFromClass crashes in window-heavy test processes. Keep the
+  // process-wide GLFW runtime alive until exit; individual EditorWindow instances still destroy
+  // their own windows synchronously.
+  static const bool registeredTermination = [] {
+    std::atexit([] { glfwTerminate(); });
+    return true;
+  }();
+  (void)registeredTermination;
+#endif
+  return true;
+}
+
+void TerminateGlfw() {
+#ifndef __APPLE__
+  glfwTerminate();
+#endif
+}
+
 #ifdef DONNER_EDITOR_WGPU
 void OnEditorWgpuUncapturedError(WGPUDevice const* /*device*/, WGPUErrorType type,
                                  WGPUStringView message, void* /*userdata1*/, void* /*userdata2*/) {
@@ -919,7 +944,7 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
   }
 #endif
 #endif
-  if (glfwInit() == GLFW_FALSE) {
+  if (!InitializeGlfw()) {
     std::fprintf(stderr, "EditorWindow: glfwInit() failed\n");
     return;
   }
@@ -994,7 +1019,7 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
         glfwErrorCode == GLFW_VERSION_UNAVAILABLE || glfwErrorCode == GLFW_PLATFORM_ERROR;
     std::fprintf(stderr, "EditorWindow: glfwCreateWindow() failed (GLFW error %d: %s)\n",
                  glfwErrorCode, glfwErrorDesc != nullptr ? glfwErrorDesc : "");
-    glfwTerminate();
+    TerminateGlfw();
     return;
   }
 
@@ -1009,7 +1034,7 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
     std::fprintf(stderr, "EditorWindow: wgpuCreateInstance failed\n");
     glfwDestroyWindow(window_);
     window_ = nullptr;
-    glfwTerminate();
+    TerminateGlfw();
     return;
   }
   // The browser readback-stats lane keeps the real canvas surface: pixel
@@ -1022,7 +1047,7 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
       std::fprintf(stderr, "EditorWindow: failed to create WebGPU surface\n");
       glfwDestroyWindow(window_);
       window_ = nullptr;
-      glfwTerminate();
+      TerminateGlfw();
       return;
     }
   }
@@ -1036,7 +1061,7 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
     std::fprintf(stderr, "EditorWindow: no WebGPU adapter available\n");
     glfwDestroyWindow(window_);
     window_ = nullptr;
-    glfwTerminate();
+    TerminateGlfw();
     return;
   }
   wgpu::DeviceDescriptor deviceDesc = {};
@@ -1049,7 +1074,7 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
     std::fprintf(stderr, "EditorWindow: failed to create WebGPU device\n");
     glfwDestroyWindow(window_);
     window_ = nullptr;
-    glfwTerminate();
+    TerminateGlfw();
     return;
   }
   wgpuState_->queue = wgpuState_->device.getQueue();
@@ -1123,7 +1148,7 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
       std::fprintf(stderr, "EditorWindow: failed to create offscreen WebGPU target\n");
       glfwDestroyWindow(window_);
       window_ = nullptr;
-      glfwTerminate();
+      TerminateGlfw();
       return;
     }
   }
@@ -1146,7 +1171,7 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
     }
     glfwDestroyWindow(window_);
     window_ = nullptr;
-    glfwTerminate();
+    TerminateGlfw();
     return;
   }
 #ifdef __EMSCRIPTEN__
@@ -1171,7 +1196,7 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
     }
     glfwDestroyWindow(window_);
     window_ = nullptr;
-    glfwTerminate();
+    TerminateGlfw();
     return;
   }
 #endif
@@ -1184,7 +1209,7 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
     std::fprintf(stderr, "EditorWindow: glad failed to load GL symbols\n");
     glfwDestroyWindow(window_);
     window_ = nullptr;
-    glfwTerminate();
+    TerminateGlfw();
     return;
   }
 
@@ -1324,7 +1349,7 @@ EditorWindow::~EditorWindow() {
     glfwDestroyWindow(window_);
     window_ = nullptr;
   }
-  glfwTerminate();
+  TerminateGlfw();
 }
 
 bool EditorWindow::shouldClose() const {
