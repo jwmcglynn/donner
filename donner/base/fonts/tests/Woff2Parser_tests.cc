@@ -80,6 +80,26 @@ std::vector<uint8_t> woff2WithIntermediateSize(uint32_t intermediateSize) {
   return data;
 }
 
+std::vector<uint8_t> woff2WithTransformedGlyfSize(uint32_t transformedSize) {
+  constexpr size_t kInputSize = 64u * 1024u;
+  std::vector<uint8_t> data(kInputSize, 0);
+  data[0] = 0x77;
+  data[1] = 0x4F;
+  data[2] = 0x46;
+  data[3] = 0x32;
+  writeBigEndianU32(data, 4, 0x00010000u);
+  writeBigEndianU32(data, 8, static_cast<uint32_t>(data.size()));
+  data[13] = 1;
+  writeBigEndianU32(data, 16, 64u * 1024u * 1024u);
+
+  size_t directoryEnd = 48;
+  data[directoryEnd++] = 10;  // Known-tag index for transformed glyf, transform version zero.
+  directoryEnd = writeBase128(data, directoryEnd, transformedSize);
+  directoryEnd = writeBase128(data, directoryEnd, transformedSize);
+  writeBigEndianU32(data, 20, static_cast<uint32_t>(data.size() - directoryEnd));
+  return data;
+}
+
 std::vector<uint8_t> malformedOneTableWoff2WithDeclaredOutput(uint32_t outputSize) {
   std::vector<uint8_t> data(50, 0);
   data[0] = 0x77;
@@ -205,15 +225,39 @@ TEST(Woff2ParserTest, RejectsLinuxTimeoutSeedAtTableCountPreflight) {
 }
 
 TEST(Woff2ParserTest, RejectsOversizedIntermediateBufferBeforeDecoderEntry) {
-  auto result = Woff2Parser::Decompress(woff2WithIntermediateSize(4u * 1024u * 1024u + 1u));
+  auto result = Woff2Parser::Decompress(woff2WithIntermediateSize(16u * 1024u * 1024u + 1u));
   ASSERT_TRUE(result.hasError());
   EXPECT_EQ(result.error().reason, "WOFF2: intermediate decompressed size exceeds limit");
 }
 
 TEST(Woff2ParserTest, AllowsIntermediateBufferAtLimitIntoDecoder) {
-  auto result = Woff2Parser::Decompress(woff2WithIntermediateSize(4u * 1024u * 1024u));
+  auto result = Woff2Parser::Decompress(woff2WithIntermediateSize(16u * 1024u * 1024u));
   ASSERT_TRUE(result.hasError());
   EXPECT_NE(result.error().reason, "WOFF2: intermediate decompressed size exceeds limit");
+}
+
+TEST(Woff2ParserTest, AcceptsLargeUntransformedTableAboveGlyfScratchLimit) {
+  // Generated from the bundled Roboto-Regular.ttf by appending a 5 MiB opaque gvar table and
+  // encoding with the pinned Google WOFF2 encoder. The large table is ordinary Brotli output, not
+  // the transformed glyf stream whose decoder scratch work needs the tighter limit.
+  auto data = readFile("donner/base/fonts/testdata/large-untransformed-table.woff2");
+  ASSERT_FALSE(data.empty());
+
+  auto result = Woff2Parser::Decompress(data);
+  ASSERT_FALSE(result.hasError()) << result.error().reason;
+  EXPECT_GE(result.result().size(), 5u * 1024u * 1024u);
+}
+
+TEST(Woff2ParserTest, RejectsOversizedTransformedGlyfBeforeDecoderScratchAllocation) {
+  auto result = Woff2Parser::Decompress(woff2WithTransformedGlyfSize(4u * 1024u * 1024u + 1u));
+  ASSERT_TRUE(result.hasError());
+  EXPECT_EQ(result.error().reason, "WOFF2: transformed glyf size exceeds limit");
+}
+
+TEST(Woff2ParserTest, AllowsTransformedGlyfAtScratchLimitIntoDecoder) {
+  auto result = Woff2Parser::Decompress(woff2WithTransformedGlyfSize(4u * 1024u * 1024u));
+  ASSERT_TRUE(result.hasError());
+  EXPECT_NE(result.error().reason, "WOFF2: transformed glyf size exceeds limit");
 }
 
 TEST(Woff2ParserTest, RejectsExcessiveTableCountBeforeDirectoryAllocation) {

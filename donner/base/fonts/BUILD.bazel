@@ -60,7 +60,10 @@ donner_cc_library(
 donner_cc_test(
     name = "woff2_parser_tests",
     srcs = ["tests/Woff2Parser_tests.cc"],
-    data = ["testdata/valid-001.woff2"],
+    data = [
+        "testdata/large-untransformed-table.woff2",
+        "testdata/valid-001.woff2",
+    ],
     target_compatible_with = select({
         "//donner/svg/renderer:text_full_enabled": [],
         "//conditions:default": ["@platforms//:incompatible"],

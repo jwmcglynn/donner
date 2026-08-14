@@ -75,7 +75,7 @@ void ReplayIntermediateAllocationRegressionSeed() {
 
     size_t directoryEnd = 48;
     data[directoryEnd++] = 0;
-    std::array<uint8_t, 4> encodedLength = {0x82, 0x80, 0x80, 0x01};
+    std::array<uint8_t, 4> encodedLength = {0x88, 0x80, 0x80, 0x01};
     for (uint8_t byte : encodedLength) {
       data[directoryEnd++] = byte;
     }
@@ -93,6 +93,44 @@ void ReplayIntermediateAllocationRegressionSeed() {
   }
 }
 
+void ReplayTransformedGlyfAllocationRegressionSeed() {
+  static const auto kResult = [] {
+    constexpr size_t kInputSize = 64u * 1024u;
+    std::vector<uint8_t> data(kInputSize, 0);
+    data[0] = 0x77;
+    data[1] = 0x4F;
+    data[2] = 0x46;
+    data[3] = 0x32;
+    data[5] = 1;
+    data[8] = static_cast<uint8_t>(kInputSize >> 24);
+    data[9] = static_cast<uint8_t>(kInputSize >> 16);
+    data[10] = static_cast<uint8_t>(kInputSize >> 8);
+    data[11] = static_cast<uint8_t>(kInputSize);
+    data[13] = 1;
+    data[16] = 4;
+
+    size_t directoryEnd = 48;
+    data[directoryEnd++] = 10;
+    constexpr std::array<uint8_t, 4> kOversizedGlyfLength = {0x82, 0x80, 0x80, 0x01};
+    for (size_t i = 0; i < 2; ++i) {
+      for (uint8_t byte : kOversizedGlyfLength) {
+        data[directoryEnd++] = byte;
+      }
+    }
+    const uint32_t compressedLength = static_cast<uint32_t>(data.size() - directoryEnd);
+    data[20] = static_cast<uint8_t>(compressedLength >> 24);
+    data[21] = static_cast<uint8_t>(compressedLength >> 16);
+    data[22] = static_cast<uint8_t>(compressedLength >> 8);
+    data[23] = static_cast<uint8_t>(compressedLength);
+
+    return Woff2Parser::Decompress(data);
+  }();
+  if (!kResult.hasError() ||
+      kResult.error().reason != "WOFF2: transformed glyf size exceeds limit") {
+    std::abort();
+  }
+}
+
 }  // namespace
 
 /// Fuzzer entry point, see https://llvm.org/docs/LibFuzzer.html
@@ -102,6 +140,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
   ReplayDeclaredSizeAllocationRegressionSeed();
   ReplayLinuxTimeoutRegressionSeed();
   ReplayIntermediateAllocationRegressionSeed();
+  ReplayTransformedGlyfAllocationRegressionSeed();
 
   auto result = Woff2Parser::Decompress(std::span<const uint8_t>(data, size));
   (void)result;
