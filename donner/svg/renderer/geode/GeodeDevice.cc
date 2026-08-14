@@ -87,6 +87,7 @@ namespace donner::geode {
 
 namespace {
 
+#ifndef __EMSCRIPTEN__
 /// Error callback wired onto the WebGPU device via
 /// `DeviceDescriptor::uncapturedErrorCallbackInfo`. Any driver-level
 /// validation errors (missing bindings, bad draw parameters, etc.)
@@ -146,7 +147,6 @@ wgpu::BackendType RequestedHeadlessBackend() {
 #endif
 }
 
-#ifndef __EMSCRIPTEN__
 WGPUInstanceBackend InstanceBackendsFor(wgpu::BackendType backendType) {
   switch (static_cast<WGPUBackendType>(backendType)) {
     case WGPUBackendType_Vulkan: return WGPUInstanceBackend_Vulkan;
@@ -159,17 +159,8 @@ WGPUInstanceBackend InstanceBackendsFor(wgpu::BackendType backendType) {
     default: return WGPUInstanceBackend_All;
   }
 }
-#endif
 
 wgpu::Instance CreateHeadlessInstance(wgpu::BackendType backendType) {
-#ifdef __EMSCRIPTEN__
-  // Browser adapter/device acquisition uses spontaneous Promise callbacks.
-  // Requiring TimedWaitAny here prevents requestDevice from completing in a
-  // transferred-canvas pthread on Chromium. Direct surface presentation does
-  // not need CPU readback, so keep the instance on the browser's default
-  // callback contract.
-  return wgpu::createInstance();
-#else
   const WGPUInstanceBackend instanceBackends = InstanceBackendsFor(backendType);
   if (instanceBackends != WGPUInstanceBackend_All) {
     wgpu::InstanceExtras instanceExtras = wgpu::Default;
@@ -180,8 +171,8 @@ wgpu::Instance CreateHeadlessInstance(wgpu::BackendType backendType) {
     return wgpu::createInstance(instanceDesc);
   }
   return wgpu::createInstance();
-#endif
 }
+#endif
 
 #ifndef __EMSCRIPTEN__
 void WaitForSubmittedWork(const wgpu::Device& device, const wgpu::Queue& queue) {
@@ -406,7 +397,16 @@ void GeodeDevice::CreateHeadlessAsync(wgpu::TextureFormat textureFormat,
       .userdata = userdata,
   };
   context->result->textureFormat_ = textureFormat;
-  const WGPUInstanceDescriptor instanceDescriptor = WGPU_INSTANCE_DESCRIPTOR_INIT;
+  // This instance never drives adapter or device acquisition through the C++ future API:
+  // BeginGeodeHeadlessDeviceImport imports one direct navigator.gpu Promise chain instead. It is
+  // therefore safe to enable TimedWaitAny here even though enabling it on CreateHeadlessInstance's
+  // synchronous request path prevents requestDevice from completing in Chromium. Snapshot
+  // readback uses this feature to await mapAsync directly instead of repeatedly suspending through
+  // the wgpuDevicePoll compatibility stub.
+  const WGPUInstanceFeatureName timedWaitFeature = WGPUInstanceFeatureName_TimedWaitAny;
+  WGPUInstanceDescriptor instanceDescriptor = WGPU_INSTANCE_DESCRIPTOR_INIT;
+  instanceDescriptor.requiredFeatureCount = 1;
+  instanceDescriptor.requiredFeatures = &timedWaitFeature;
   WGPUInstance instance = wgpuCreateInstance(&instanceDescriptor);
   context->result->impl_->instance = wgpu::Instance(instance);
   if (instance == nullptr) {
@@ -419,6 +419,30 @@ void GeodeDevice::CreateHeadlessAsync(wgpu::TextureFormat textureFormat,
 #endif
 
 std::unique_ptr<GeodeDevice> GeodeDevice::CreateHeadless(wgpu::TextureFormat textureFormat) {
+#ifdef __EMSCRIPTEN__
+  struct BlockingCreateState {
+    std::atomic<bool> done = false;
+    std::unique_ptr<GeodeDevice> result;
+  } state;
+
+  // The browser adapter and device are JavaScript Promise objects. Import them through the
+  // asynchronous path so the instance can enable TimedWaitAny without trying to drive those
+  // Promises through WebGPU's synchronous C++ future wrappers. This method is called on the
+  // renderer pthread, so emscripten_sleep suspends only that worker while its event loop delivers
+  // the import callback.
+  CreateHeadlessAsync(
+      textureFormat,
+      [](std::unique_ptr<GeodeDevice> result, void* userdata) {
+        auto* state = static_cast<BlockingCreateState*>(userdata);
+        state->result = std::move(result);
+        state->done.store(true, std::memory_order_release);
+      },
+      &state);
+  while (!state.done.load(std::memory_order_acquire)) {
+    emscripten_sleep(1);
+  }
+  return std::move(state.result);
+#else
   gHeadlessCreationCount.fetch_add(1, std::memory_order_relaxed);
   auto result = std::unique_ptr<GeodeDevice>(new GeodeDevice());
   result->textureFormat_ = textureFormat;
@@ -596,6 +620,7 @@ std::unique_ptr<GeodeDevice> GeodeDevice::CreateHeadless(wgpu::TextureFormat tex
   result->initSharedPipelines();
 
   return result;
+#endif
 }
 
 const wgpu::Texture& GeodeDevice::dummyPatternTexture() const {
