@@ -490,11 +490,11 @@ test("welcome picker paints before asynchronously rendering real SVG thumbnails"
 
   await expect
     .poll(async () => page.evaluate(() => window.__donnerSampleThumbnailStats?.ready || 0), {
-      message: "expected all four catalog SVGs to publish real Donner-rendered thumbnails",
+      message: "expected all five catalog SVGs to publish real Donner-rendered thumbnails",
       timeout: 15000,
       intervals: [0, 25, 50, 100],
     })
-    .toBe(4);
+    .toBe(5);
 
   let geodeThumbnailStats: WgpuCarouselThumbnailStats[] | undefined;
   if (kBackend === "geode") {
@@ -523,16 +523,16 @@ test("welcome picker paints before asynchronously rendering real SVG thumbnails"
     settled.thumbnails?.carouselFrame || 0,
   );
   expect(settled.thumbnails).toMatchObject({
-    requested: 4,
-    started: 4,
-    completed: 4,
-    rendered: 4,
-    ready: 4,
+    requested: 5,
+    started: 5,
+    completed: 5,
+    rendered: 5,
+    ready: 5,
     pending: false,
     active: false,
     resultReady: false,
   });
-  expect(settled.thumbnails?.publicationFrames).toHaveLength(4);
+  expect(settled.thumbnails?.publicationFrames).toHaveLength(5);
   const publicationFrames = settled.thumbnails?.publicationFrames || [];
   for (let index = 1; index < publicationFrames.length; ++index) {
     expect(publicationFrames[index]).toBeGreaterThan(publicationFrames[index - 1]);
@@ -544,6 +544,7 @@ test("welcome picker paints before asynchronously rendering real SVG thumbnails"
     { id: "basic-shapes", column: 1, row: 0 },
     { id: "text-style", column: 2, row: 0 },
     { id: "gradients-clip", column: 0, row: 1 },
+    { id: "donner-showcase", column: 1, row: 1 },
   ] as const;
   if (kBackend === "geode") {
     expect(geodeThumbnailStats).toHaveLength(thumbnailSamples.length);
@@ -563,7 +564,7 @@ test("welcome picker paints before asynchronously rendering real SVG thumbnails"
         .toBeLessThan(stats.samples - 32);
       fingerprints.add(stats.fingerprint);
     }
-    expect(fingerprints.size, "all four card interiors should contain distinct source art").toBe(4);
+    expect(fingerprints.size, "all five card interiors should contain distinct source art").toBe(5);
     expect(geodeThumbnailStats?.[2].backgroundPixels).toBeGreaterThan(1000);
     expect(geodeThumbnailStats?.[2].glyphPixels).toBeGreaterThan(20);
   } else {
@@ -702,7 +703,7 @@ test("WGPU diagnostics do not block the first carousel interaction", async ({ pa
     .toEqual({
       active: false,
       pending: false,
-      ready: 4,
+      ready: 5,
       resultReady: false,
     });
   await expect
@@ -830,10 +831,11 @@ test("WGPU diagnostics do not block the first carousel interaction", async ({ pa
 
 for (
   const sample of [
-    { id: "donner-splash", name: "Donner Showcase", xFraction: 0.24, y: 282 },
+    { id: "donner-splash", name: "Donner Splash", xFraction: 0.24, y: 282 },
     { id: "basic-shapes", name: "Basic Shapes", xFraction: 0.5, y: 282 },
     { id: "text-style", name: "Text and Style", xFraction: 0.76, y: 282 },
     { id: "gradients-clip", name: "Gradients and Clip", xFraction: 0.24, y: 390 },
+    { id: "donner-showcase", name: "Donner Showcase", xFraction: 0.5, y: 390 },
   ] as const
 ) {
   test(`carousel loads ${sample.name} on the first interactive frame`, async ({ page }) => {

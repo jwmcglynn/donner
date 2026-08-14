@@ -33,6 +33,10 @@ constexpr std::string_view kOverlayGroupId = "donner-editor-overlay";
 constexpr std::string_view kOverlayStroke = "#1ea7fd";
 /// Resize-handle fill color.
 constexpr std::string_view kOverlayHandleFill = "#ffffff";
+constexpr std::string_view kOverlayOutlineClass = "donner-editor-overlay-outline";
+constexpr std::string_view kOverlayLineClass = "donner-editor-overlay-line";
+constexpr std::string_view kOverlayPointClass = "donner-editor-overlay-point";
+constexpr std::string_view kOverlayHandleClass = "donner-editor-overlay-handle";
 
 /// Format a double for SVG attribute output, trimming trailing zeros so
 /// `100.0` becomes `100` and `12.50` becomes `12.5`. Determinism matters: the
@@ -303,14 +307,43 @@ std::string FindExternalReference(std::string_view source) {
   return std::string();
 }
 
+std::string OverlayPaintDeclarations(std::string_view fill, std::string_view stroke,
+                                     std::string_view strokeWidth) {
+  return "fill: " + std::string(fill) + " !important; stroke: " + std::string(stroke) +
+         " !important; stroke-width: " + std::string(strokeWidth) +
+         " !important; fill-opacity: 1 !important; stroke-opacity: 1 !important;";
+}
+
+std::string OverlayPaintStyle(std::string_view fill, std::string_view stroke,
+                              std::string_view strokeWidth) {
+  return " style=\"" + OverlayPaintDeclarations(fill, stroke, strokeWidth) + "\"";
+}
+
+std::string OverlayStylesheet(std::string_view overlayGroupId) {
+  std::string out = "<style>";
+  const auto appendRule = [&out, overlayGroupId](std::string_view className, std::string_view fill,
+                                                 std::string_view stroke,
+                                                 std::string_view strokeWidth) {
+    out += "#" + std::string(overlayGroupId) + " ." + std::string(className) + "{" +
+           OverlayPaintDeclarations(fill, stroke, strokeWidth) + "}";
+  };
+  appendRule(kOverlayOutlineClass, "none", kOverlayStroke, "1.5");
+  appendRule(kOverlayLineClass, "none", kOverlayStroke, "1");
+  appendRule(kOverlayPointClass, kOverlayStroke, "none", "0");
+  appendRule(kOverlayHandleClass, kOverlayHandleFill, kOverlayStroke, "1");
+  out += "</style>";
+  return out;
+}
+
 /// Append a `<rect>` element for a document-space box with explicit fill/stroke.
 void AppendRect(std::string* out, const Box2d& boxDoc, std::string_view fill,
-                std::string_view stroke, std::string_view strokeWidth) {
+                std::string_view stroke, std::string_view strokeWidth, std::string_view className) {
   *out += "<rect x=\"" + FormatNumber(boxDoc.topLeft.x) + "\" y=\"" +
           FormatNumber(boxDoc.topLeft.y) + "\" width=\"" + FormatNumber(boxDoc.width()) +
           "\" height=\"" + FormatNumber(boxDoc.height()) + "\" fill=\"" + std::string(fill) +
           "\" stroke=\"" + std::string(stroke) + "\" stroke-width=\"" + std::string(strokeWidth) +
-          "\"/>";
+          "\" class=\"" + std::string(className) + "\"" +
+          OverlayPaintStyle(fill, stroke, strokeWidth) + "/>";
 }
 
 /// Append a closed `<path>` element tracing the four corners of an oriented box.
@@ -321,7 +354,8 @@ void AppendOrientedBox(std::string* out, const std::array<Vector2d, 4>& cornersD
   }
   d += " Z";
   *out += "<path d=\"" + EscapeXml(d) + "\" fill=\"none\" stroke=\"" + std::string(kOverlayStroke) +
-          "\" stroke-width=\"1\"/>";
+          "\" stroke-width=\"1\" class=\"" + std::string(kOverlayLineClass) + "\"" +
+          OverlayPaintStyle("none", kOverlayStroke, "1") + "/>";
 }
 
 /// Append an open line path for a path control-handle guide.
@@ -330,35 +364,30 @@ void AppendControlLine(std::string* out, const SelectionChromeSnapshot::PathCont
       "M " + FormatNumber(lineDoc.anchorDoc.x) + " " + FormatNumber(lineDoc.anchorDoc.y) + " L " +
       FormatNumber(lineDoc.controlDoc.x) + " " + FormatNumber(lineDoc.controlDoc.y);
   *out += "<path d=\"" + EscapeXml(d) + "\" fill=\"none\" stroke=\"" + std::string(kOverlayStroke) +
-          "\" stroke-width=\"1\" vector-effect=\"non-scaling-stroke\"/>";
+          "\" stroke-width=\"1\" class=\"" + std::string(kOverlayLineClass) + "\"" +
+          OverlayPaintStyle("none", kOverlayStroke, "1") +
+          " vector-effect=\"non-scaling-stroke\"/>";
 }
 
-/// Returns true if \p source appears to declare an element with the given
-/// \p id. This is a conservative textual scan over the raw source (matching
-/// `id="<id>"` and `id='<id>'`), so it can report a false positive for text
-/// that merely looks like an id attribute (e.g. inside a comment); that only
-/// causes an unnecessary suffix on the injected id, which is harmless.
-bool SourceDeclaresId(std::string_view source, std::string_view id) {
-  for (const char quote : {'"', '\''}) {
-    std::string needle = "id=";
-    needle += quote;
-    needle += id;
-    needle += quote;
-    if (source.find(needle) != std::string_view::npos) {
-      return true;
-    }
+/// Returns true if \p document declares an element with the given \p id.
+/// Querying the parsed DOM handles legal XML whitespace and character
+/// references that a raw-source substring scan would miss.
+bool DocumentDeclaresId(const svg::SVGDocument& document, std::string_view id) {
+  svg::SVGSVGElement root = document.svgElement();
+  if (const std::optional<RcString> rootId = root.getAttribute("id"); rootId == id) {
+    return true;
   }
-  return false;
+
+  return root.querySelector("#" + std::string(id)).has_value();
 }
 
-/// Pick an id for the injected viewport clip path that does not collide with
-/// any id already declared in the source document. Prefers \ref kClipPathId
-/// and appends an increasing numeric suffix ("donner-viewport-clip-2", ...)
-/// until the id is unused.
-std::string UniqueClipPathId(std::string_view source) {
-  std::string id(kClipPathId);
-  for (int suffix = 2; SourceDeclaresId(source, id); ++suffix) {
-    id = std::string(kClipPathId) + "-" + std::to_string(suffix);
+/// Pick an injected id that does not collide with any id already declared in
+/// the source document. Prefers \p baseId and appends an increasing numeric
+/// suffix (`-2`, `-3`, ...) until the id is unused.
+std::string UniqueInjectedId(const svg::SVGDocument& document, std::string_view baseId) {
+  std::string id(baseId);
+  for (int suffix = 2; DocumentDeclaresId(document, id); ++suffix) {
+    id = std::string(baseId) + "-" + std::to_string(suffix);
   }
   return id;
 }
@@ -376,8 +405,10 @@ std::string SerializeOverlaySnapshotToSvg(const SelectionChromeSnapshot& snapsho
       continue;
     }
     out += "<path d=\"" + EscapeXml(pathData.str()) + "\" fill=\"none\" stroke=\"" +
-           std::string(kOverlayStroke) +
-           "\" stroke-width=\"1.5\" vector-effect=\"non-scaling-stroke\"/>";
+           std::string(kOverlayStroke) + "\" stroke-width=\"1.5\" class=\"" +
+           std::string(kOverlayOutlineClass) + "\"" +
+           OverlayPaintStyle("none", kOverlayStroke, "1.5") +
+           " vector-effect=\"non-scaling-stroke\"/>";
   }
 
   // Selected path Bezier control lines and points.
@@ -389,18 +420,18 @@ std::string SerializeOverlaySnapshotToSvg(const SelectionChromeSnapshot& snapsho
     AppendRect(&out,
                OverlayRenderer::ChromeSquareForPoint(
                    snapshot, OverlayRenderer::ChromeSquare::PathControlPoint, controlPointDoc),
-               kOverlayStroke, "none", "0");
+               kOverlayStroke, "none", "0", kOverlayPointClass);
   }
   for (const Vector2d& anchorDoc : snapshot.pathAnchorPointsDoc) {
     AppendRect(&out,
                OverlayRenderer::ChromeSquareForPoint(
                    snapshot, OverlayRenderer::ChromeSquare::PathAnchor, anchorDoc),
-               kOverlayStroke, "none", "0");
+               kOverlayStroke, "none", "0", kOverlayPointClass);
   }
 
   // Selection AABBs.
   for (const Box2d& aabbDoc : snapshot.aabbsDoc) {
-    AppendRect(&out, aabbDoc, "none", kOverlayStroke, "1");
+    AppendRect(&out, aabbDoc, "none", kOverlayStroke, "1", kOverlayLineClass);
   }
 
   // Oriented rotation box (drawn instead of axis-aligned AABBs during rotation).
@@ -413,12 +444,12 @@ std::string SerializeOverlaySnapshotToSvg(const SelectionChromeSnapshot& snapsho
     AppendRect(&out,
                OverlayRenderer::ChromeSquareForPoint(
                    snapshot, OverlayRenderer::ChromeSquare::TransformHandle, handleAnchorDoc),
-               kOverlayHandleFill, kOverlayStroke, "1");
+               kOverlayHandleFill, kOverlayStroke, "1", kOverlayHandleClass);
   }
 
   // Marquee rect.
   if (snapshot.marqueeDoc.has_value()) {
-    AppendRect(&out, *snapshot.marqueeDoc, "none", kOverlayStroke, "1");
+    AppendRect(&out, *snapshot.marqueeDoc, "none", kOverlayStroke, "1", kOverlayLineClass);
   }
 
   return out;
@@ -451,7 +482,8 @@ Result<std::string, std::string> ExportViewportAsSvg(
   // Id for the injected clip path, uniquified against ids already declared in
   // the source so a document that defines "donner-viewport-clip" itself does
   // not collide with the injected definition.
-  const std::string clipPathId = UniqueClipPathId(source);
+  const std::string clipPathId = UniqueInjectedId(doc, kClipPathId);
+  const std::string overlayGroupId = UniqueInjectedId(doc, kOverlayGroupId);
 
   // Compute the document-space viewport rect from the screen-space pane rect.
   // `ViewportState` is the single source of truth for crop and scale.
@@ -543,6 +575,16 @@ Result<std::string, std::string> ExportViewportAsSvg(
               FormatNumber(viewBoxHeight) + "\" fill=\"#ffffff\"/>\n";
   }
 
+  // Source stylesheets remain active in the exported SVG. Define the editor
+  // chrome rules before the imported content so Donner's stylesheet traversal
+  // applies them last, while the scoped selector and !important declarations
+  // also give them the intended precedence in standards-compliant browsers.
+  if (options.includeSelectionOverlay && overlaySnapshot != nullptr) {
+    output += "  ";
+    output += OverlayStylesheet(overlayGroupId);
+    output += "\n";
+  }
+
   // Document content: source children verbatim, wrapped in a clipped group.
   output += "  <g clip-path=\"url(#";
   output += clipPathId;
@@ -558,7 +600,7 @@ Result<std::string, std::string> ExportViewportAsSvg(
   // chrome never spills outside the exported crop.
   if (options.includeSelectionOverlay) {
     output += "  <g id=\"";
-    output += kOverlayGroupId;
+    output += overlayGroupId;
     output +=
         "\" data-donner-export-role=\"editor-overlay\" pointer-events=\"none\" clip-path=\"url(#";
     output += clipPathId;

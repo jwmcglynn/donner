@@ -13,9 +13,10 @@
 /// \ref ViewportExportOptions::includeSelectionOverlay is set and a
 /// \ref SelectionChromeSnapshot is supplied, the editor selection chrome
 /// (path outlines, AABBs, resize handles, marquee) is serialized into the
-/// `id="donner-editor-overlay"` group via \ref SerializeOverlaySnapshotToSvg.
-/// The overlay group is clipped to the same `donner-viewport-clip` clipPath as
-/// the content and uses deterministic, theme-independent styling.
+/// preferred `id="donner-editor-overlay"` group via \ref SerializeOverlaySnapshotToSvg. If the
+/// source already declares that id, the exporter appends a numeric suffix. The overlay group is
+/// clipped to the same `donner-viewport-clip` clipPath as the content and uses deterministic,
+/// theme-independent styling.
 
 #include <string>
 
@@ -56,10 +57,10 @@ struct ViewportExportOptions {
   /// When true, the exported SVG preserves transparency (no background rect).
   /// When false, a covering background rect is prepended (white fallback).
   bool transparentBackground = true;
-  /// When true, an `id="donner-editor-overlay"` group is emitted. If a
-  /// \ref SelectionChromeSnapshot is supplied to \ref ExportViewportAsSvg the
-  /// group is populated with serialized overlay primitives; otherwise it is
-  /// emitted empty (M6 back-compat).
+  /// When true, a group with the preferred id `donner-editor-overlay` is emitted. If the source
+  /// already declares that id, the exporter appends a numeric suffix. If a \ref
+  /// SelectionChromeSnapshot is supplied to \ref ExportViewportAsSvg the group is populated with
+  /// serialized overlay primitives; otherwise it is emitted empty (M6 back-compat).
   bool includeSelectionOverlay = false;
 };
 

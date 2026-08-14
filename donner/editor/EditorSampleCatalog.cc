@@ -80,13 +80,15 @@ std::string GenerateShowcaseSource() {
 struct EditorSampleCatalogStorage {
   EditorSampleCatalogStorage()
       : showcaseSource(GenerateShowcaseSource()),
-        samples({{{"donner-splash", "Donner Showcase", showcaseSource},
-                  {"basic-shapes", "Basic Shapes", kBasicShapesSvg},
-                  {"text-style", "Text and Style", kTextStyleSvg},
-                  {"gradients-clip", "Gradients and Clip", kGradientsClipSvg}}}) {}
+        samples(
+            {{{"donner-splash", "Donner Splash", SourceFromEmbedded(embedded::kEditorSplashSvg)},
+              {"basic-shapes", "Basic Shapes", kBasicShapesSvg},
+              {"text-style", "Text and Style", kTextStyleSvg},
+              {"gradients-clip", "Gradients and Clip", kGradientsClipSvg},
+              {"donner-showcase", "Donner Showcase", showcaseSource}}}) {}
 
   std::string showcaseSource;
-  std::array<EditorSample, 4> samples;
+  std::array<EditorSample, 5> samples;
 };
 
 const EditorSampleCatalogStorage& CatalogStorage() {

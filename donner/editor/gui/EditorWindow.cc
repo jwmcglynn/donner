@@ -395,10 +395,9 @@ void PublishWgpuReadbackStats(int renderSamples, int renderColored, int renderNo
                               int renderMaxChannel, int layerSamples, int layerColored,
                               int layerNonBlack, int layerMaxChannel, int selectionChromePixels,
                               int requestId) {
-  whole_app_worker::PublishReadbackStats(renderSamples, renderColored, renderNonBlack,
-                                         renderMaxChannel, layerSamples, layerColored,
-                                         layerNonBlack, layerMaxChannel, selectionChromePixels,
-                                         requestId);
+  whole_app_worker::PublishReadbackStats(
+      renderSamples, renderColored, renderNonBlack, renderMaxChannel, layerSamples, layerColored,
+      layerNonBlack, layerMaxChannel, selectionChromePixels, requestId);
 }
 void PublishWgpuCarouselThumbnailStats(const int* values, int count) {
   whole_app_worker::PublishCarouselThumbnailStats(values, count);
@@ -693,11 +692,9 @@ void PublishWgpuReadbackStatsForSmokeTests(const WgpuReadbackView& view, int req
         rowCenter - kThumbnailHeight * 0.5 + kProbeInset, kThumbnailWidth - kProbeInset * 2.0,
         kThumbnailHeight - kProbeInset * 2.0);
   };
-  const std::array<WgpuReadbackStats, 4> carouselStats = {
-      thumbnailStats(0, 282.0),
-      thumbnailStats(1, 282.0),
-      thumbnailStats(2, 282.0),
-      thumbnailStats(0, 390.0),
+  const std::array<WgpuReadbackStats, 5> carouselStats = {
+      thumbnailStats(0, 282.0), thumbnailStats(1, 282.0), thumbnailStats(2, 282.0),
+      thumbnailStats(0, 390.0), thumbnailStats(1, 390.0),
   };
   constexpr int kPublishedStatStride = 7;
   std::array<int, carouselStats.size() * kPublishedStatStride> packedCarouselStats{};

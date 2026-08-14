@@ -118,6 +118,9 @@ std::string_view SamplePickerDescription(std::string_view sampleId) noexcept {
   if (sampleId == "donner-splash") {
     return "A quick look at Donner";
   }
+  if (sampleId == "donner-showcase") {
+    return "Generated in Donner";
+  }
   if (sampleId == "basic-shapes") {
     return "Shapes, fills, and strokes";
   }

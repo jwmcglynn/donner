@@ -67,8 +67,8 @@ TEST(SamplePickerPresenter, EmptyCatalogLayoutHasNoRowsOrColumns) {
 }
 
 TEST(SamplePickerPresenter, DescriptionsCoverCatalogAndFallback) {
-  constexpr std::array<std::string_view, 4> kSampleIds = {"donner-splash", "basic-shapes",
-                                                          "text-style", "gradients-clip"};
+  constexpr std::array<std::string_view, 5> kSampleIds = {
+      "donner-splash", "basic-shapes", "text-style", "gradients-clip", "donner-showcase"};
   for (const std::string_view id : kSampleIds) {
     EXPECT_FALSE(SamplePickerDescription(id).empty());
   }
