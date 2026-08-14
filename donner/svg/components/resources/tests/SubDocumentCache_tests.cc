@@ -13,6 +13,7 @@
 #define private public
 #include "donner/svg/components/resources/ResourceManagerContext.h"
 #undef private
+#include "donner/svg/parser/SVGParser.h"
 #include "donner/svg/resources/NullResourceLoader.h"
 #include "donner/svg/resources/UrlLoader.h"
 
@@ -42,6 +43,23 @@ SubDocumentCache::ParseCallback MakeFailingCallback() {
   };
 }
 
+SubDocumentCache::ParseCallback MakeProductionSvgParseCallback(int& parseCount) {
+  return [&parseCount](const std::vector<uint8_t>& data,
+                       ParseWarningSink& warnings) -> std::optional<SVGDocumentHandle> {
+    ++parseCount;
+    SVGDocument::Settings settings;
+    settings.processingMode = ProcessingMode::SecureStatic;
+    const std::string_view source(reinterpret_cast<const char*>(data.data()), data.size());
+    auto result = parser::SVGParser::ParseSVG(source, warnings, parser::SVGParser::Options(),
+                                              std::move(settings));
+    if (result.hasError()) {
+      warnings.add(ParseDiagnostic(result.error()));
+      return std::nullopt;
+    }
+    return result.result().handle();
+  };
+}
+
 constexpr std::string_view kTinyPngDataUrl =
     "data:image/png;base64,"
     "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAEUlEQVR42mP4z8DwH4QZYAwAR8oH+"
@@ -55,6 +73,15 @@ constexpr std::array<uint8_t, 62> kGzipSvg = {
     0xb7, 0xb3, 0x01, 0x51, 0x76, 0x00, 0xf7, 0xa3, 0x84, 0x65, 0x2e, 0x00, 0x00, 0x00};
 
 constexpr std::string_view kExpandedSvg = "<svg xmlns='http://www.w3.org/2000/svg'></svg>";
+
+// gzip-compressed kGzipSvg. The outer layer expands to another gzip stream, not XML.
+constexpr std::array<uint8_t, 81> kNestedGzipSvg = {
+    0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xff, 0x93, 0xef, 0xe6, 0x60,
+    0x00, 0x01, 0x26, 0xe6, 0xcd, 0x9a, 0x7a, 0xde, 0xe1, 0x2b, 0x4e, 0x9c, 0x3d, 0xa9,
+    0xbd, 0x2d, 0xf4, 0xbc, 0x86, 0xa6, 0xe6, 0x86, 0x4b, 0xd7, 0xf5, 0xf5, 0xf5, 0xaf,
+    0x6b, 0x9b, 0x5f, 0x3b, 0xad, 0xef, 0x75, 0xdd, 0xdc, 0xc8, 0xc0, 0xe0, 0x02, 0xfb,
+    0xaa, 0x80, 0xed, 0x9b, 0x19, 0x03, 0xcb, 0x18, 0xbe, 0x2f, 0x6e, 0x49, 0xd5, 0x03,
+    0xea, 0x02, 0x00, 0xe6, 0x0f, 0x43, 0x99, 0x3e, 0x00, 0x00, 0x00};
 
 std::vector<uint8_t> GzipSvgBytes() {
   return {kGzipSvg.begin(), kGzipSvg.end()};
@@ -537,6 +564,55 @@ TEST(ResourceManagerContextAggregateBudgetTest,
   EXPECT_EQ(parseCount, 1);
   EXPECT_EQ(resourceManager.remainingResourceBytes_, 0u);
   EXPECT_EQ(registry.ctx().get<SubDocumentCache>().size(), 0u);
+}
+
+TEST(ResourceManagerContextAggregateBudgetTest,
+     NestedSvgzRejectsBeforeProductionParserCanExpandAnUnchargedSecondLayer) {
+  constexpr size_t kBudget = kNestedGzipSvg.size() + kGzipSvg.size();
+  Registry registry;
+  auto& resourceManager = registry.ctx().emplace<ResourceManagerContext>(registry, kBudget);
+  auto loader = std::make_unique<TestResourceLoader>();
+  loader->addFile("nested.svgz",
+                  std::vector<uint8_t>(kNestedGzipSvg.begin(), kNestedGzipSvg.end()));
+  resourceManager.setResourceLoader(std::move(loader));
+
+  int parseCount = 0;
+  resourceManager.setSvgParseCallback(MakeProductionSvgParseCallback(parseCount));
+
+  ParseWarningSink warnings;
+  const auto result = resourceManager.loadExternalSVG("nested.svgz", warnings);
+
+  EXPECT_FALSE(result.has_value());
+  EXPECT_EQ(parseCount, 0);
+  EXPECT_EQ(resourceManager.remainingResourceBytes_, 0u);
+  EXPECT_EQ(registry.ctx().get<SubDocumentCache>().size(), 0u);
+  EXPECT_TRUE(warnings.hasWarnings());
+}
+
+TEST(ResourceManagerContextAggregateBudgetTest,
+     NestedSvgzImageRejectsBeforeProductionParserCanExpandAnUnchargedSecondLayer) {
+  constexpr size_t kBudget = kNestedGzipSvg.size() + kGzipSvg.size();
+  Registry registry;
+  auto& resourceManager = registry.ctx().emplace<ResourceManagerContext>(registry, kBudget);
+  auto loader = std::make_unique<TestResourceLoader>();
+  loader->addFile("nested-image.svgz",
+                  std::vector<uint8_t>(kNestedGzipSvg.begin(), kNestedGzipSvg.end()));
+  resourceManager.setResourceLoader(std::move(loader));
+
+  int parseCount = 0;
+  resourceManager.setSvgParseCallback(MakeProductionSvgParseCallback(parseCount));
+  const Entity image = registry.create();
+  registry.emplace<ImageComponent>(image, ImageComponent{RcString("nested-image.svgz")});
+
+  ParseWarningSink warnings;
+  resourceManager.loadResources(warnings);
+
+  EXPECT_EQ(parseCount, 0);
+  EXPECT_EQ(resourceManager.remainingResourceBytes_, 0u);
+  EXPECT_TRUE(registry.all_of<LoadedImageComponent>(image));
+  EXPECT_FALSE(registry.all_of<LoadedSVGImageComponent>(image));
+  EXPECT_EQ(registry.ctx().get<SubDocumentCache>().size(), 0u);
+  EXPECT_TRUE(warnings.hasWarnings());
 }
 
 TEST_F(ResourceManagerContextTest, UserCallbacksRunOutsideDocumentWriteAccess) {

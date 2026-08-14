@@ -68,6 +68,16 @@ SubDocumentCache::ParseCallback GuardSvgParseCallback(
 
       std::vector<uint8_t> expandedSvg = std::move(maybeExpandedSvg).result();
       remainingResourceBytes -= expandedSvg.size();
+
+      // The production SVG parser also recognizes gzip input. Reject another gzip layer here so
+      // the callback cannot expand bytes that were never charged to this document's aggregate
+      // resource budget.
+      if (expandedSvg.size() >= 2 && expandedSvg[0] == 0x1f && expandedSvg[1] == 0x8b) {
+        warningSink.add(ParseDiagnostic::Error("Nested gzip-compressed SVG is not supported",
+                                               FileOffset::Offset(0)));
+        return std::nullopt;
+      }
+
       return callback(expandedSvg, warningSink);
     }
 
