@@ -67,6 +67,7 @@ declare global {
       pendingClick: boolean;
       workerBusy: boolean;
       dragging: boolean;
+      dragHasVisualChange: boolean;
       publishedAtFrame: number;
     };
     __donnerViewportStats?: {
@@ -1330,15 +1331,33 @@ test("Geode WASM selects through the overlay with one prewarm render and no recu
   ).toBe(beforeSelection + 1);
   await page.mouse.move(dragStart.x, dragStart.y);
   await page.mouse.down();
+  await expect
+    .poll(async () => page.evaluate(() => window.__donnerInteractionStats?.dragging ?? false), {
+      message: "expected the app to consume mouse-down before moving the drag pointer",
+      timeout: scaledMs(1000),
+      intervals: [16, 25, 50, 100],
+    })
+    .toBe(true);
   // An active drag presents by transforming the prewarmed selected-layer texture inside UI
   // frames; the worker does not re-rasterize until the pointer releases. The live signal for
-  // "the drag is visibly presenting" is therefore the UI frame counter, and the document
-  // counter staying flat through the drag is the architecture's own contract.
+  // "the drag is visibly presenting" is a changed drag preview, and the document counter staying
+  // flat through the drag is the architecture's own contract.
   const beforeDragFrames = await page.evaluate(
     () => window.__donnerMainLoopRenderedFrames || 0,
   );
   await page.mouse.move(dragStart.x + 18, dragStart.y + 12);
   await page.mouse.move(dragStart.x + 32, dragStart.y + 20);
+  await expect
+    .poll(
+      async () =>
+        page.evaluate(() => window.__donnerInteractionStats?.dragHasVisualChange ?? false),
+      {
+        message: "expected pointer movement to produce a nonzero drag preview",
+        timeout: scaledMs(1000),
+        intervals: [16, 25, 50, 100],
+      },
+    )
+    .toBe(true);
   await expect
     .poll(async () => page.evaluate(() => window.__donnerMainLoopRenderedFrames || 0), {
       message: "expected drag-preview frames while the shape drag is active",
@@ -1359,12 +1378,19 @@ test("Geode WASM selects through the overlay with one prewarm render and no recu
   const beforeMouseUpAccounting = await pollRenderAccounting(
     page,
     scaledMs(1000),
-    (accounting) => accounting.interaction?.dragging === true,
+    (accounting) =>
+      accounting.interaction?.dragging === true
+      && accounting.interaction.dragHasVisualChange === true,
   );
   const beforeMouseUpResults = beforeMouseUpAccounting.completedResults;
   expect(
     beforeMouseUpAccounting.interaction?.dragging ?? false,
     `expected the shape drag to still be live at mouse-up: `
+      + `${JSON.stringify(beforeMouseUpAccounting)}`,
+  ).toBe(true);
+  expect(
+    beforeMouseUpAccounting.interaction?.dragHasVisualChange ?? false,
+    `expected the live shape drag to have a nonzero preview at mouse-up: `
       + `${JSON.stringify(beforeMouseUpAccounting)}`,
   ).toBe(true);
   await page.mouse.up();
