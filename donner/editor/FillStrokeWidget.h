@@ -38,6 +38,17 @@ struct FillStrokeWidgetLayout {
   ImVec2 strokeChipMin, strokeChipMax;  ///< Stroke custom-paint label chip.
 };
 
+/// Stable interaction policy for one fill/stroke toolbar frame.
+struct FillStrokeWidgetInteractionState {
+  bool canEdit = false;
+  bool refreshPaintSnapshot = false;
+};
+
+/// Resolve editability and snapshot refresh without keying drag chrome to a
+/// renderer busy bit that can alternate between adjacent preview frames.
+[[nodiscard]] FillStrokeWidgetInteractionState ResolveFillStrokeWidgetInteractionState(
+    bool hasDocument, bool rendererBusy, bool canvasInteractionActive, bool hasPaintSnapshot);
+
 /// Compute widget sub-rectangles from the widget's outer bounds.
 [[nodiscard]] FillStrokeWidgetLayout ComputeFillStrokeWidgetLayout(const ImVec2& widgetMin,
                                                                    const ImVec2& widgetMax);

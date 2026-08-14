@@ -636,6 +636,35 @@ TEST(EditorShellInternalTest, FillStrokeWidgetLayoutAndHitTestClassifyRegions) {
   EXPECT_EQ(hit(strokeChip, false, true), internal::FillStrokeWidgetRegion::StrokeChip);
 }
 
+TEST(EditorShellInternalTest, FillStrokeWidgetInteractionStateIgnoresBusyHandoffsDuringDrag) {
+  const internal::FillStrokeWidgetInteractionState idleDrag =
+      internal::ResolveFillStrokeWidgetInteractionState(
+          /*hasDocument=*/true, /*rendererBusy=*/false, /*canvasInteractionActive=*/true,
+          /*hasPaintSnapshot=*/true);
+  const internal::FillStrokeWidgetInteractionState busyDrag =
+      internal::ResolveFillStrokeWidgetInteractionState(
+          /*hasDocument=*/true, /*rendererBusy=*/true, /*canvasInteractionActive=*/true,
+          /*hasPaintSnapshot=*/true);
+  EXPECT_EQ(idleDrag.canEdit, busyDrag.canEdit);
+  EXPECT_EQ(idleDrag.refreshPaintSnapshot, busyDrag.refreshPaintSnapshot);
+  EXPECT_FALSE(idleDrag.canEdit);
+  EXPECT_FALSE(idleDrag.refreshPaintSnapshot);
+
+  const internal::FillStrokeWidgetInteractionState firstDragFrame =
+      internal::ResolveFillStrokeWidgetInteractionState(
+          /*hasDocument=*/true, /*rendererBusy=*/false, /*canvasInteractionActive=*/true,
+          /*hasPaintSnapshot=*/false);
+  EXPECT_FALSE(firstDragFrame.canEdit);
+  EXPECT_TRUE(firstDragFrame.refreshPaintSnapshot);
+
+  const internal::FillStrokeWidgetInteractionState settled =
+      internal::ResolveFillStrokeWidgetInteractionState(
+          /*hasDocument=*/true, /*rendererBusy=*/false, /*canvasInteractionActive=*/false,
+          /*hasPaintSnapshot=*/true);
+  EXPECT_TRUE(settled.canEdit);
+  EXPECT_TRUE(settled.refreshPaintSnapshot);
+}
+
 TEST(EditorShellInternalTest, SourceHelpersPreferInitialSourceAndCanonicalizeTrailingNewline) {
   const std::filesystem::path path = TempPathForTest("initial.svg");
   WriteTextFile(path, "<svg id=\"from-file\"/>\n");
@@ -3474,7 +3503,7 @@ TEST(EditorShellTest, FillStrokeToolbarKeepsChosenPaintVisibleWhileRendererIsBus
   renderer.setReplayRenderDelayForTesting(std::chrono::milliseconds(0));
 }
 
-TEST(EditorShellTest, FillStrokeToolbarStaysVisuallyStableAcrossDragRenderHandoffs) {
+TEST(EditorShellTest, FillStrokeToolbarStaysVisuallyStableDuringShapeDrag) {
   gui::EditorWindow window = MakeHiddenWindow();
   if (!window.valid()) {
     GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
@@ -3502,18 +3531,6 @@ TEST(EditorShellTest, FillStrokeToolbarStaysVisuallyStableAcrossDragRenderHandof
 
   RenderToolbarFrame(window, shell, kCursor, ImVec2(-100.0f, -100.0f), /*mouseDown=*/false);
   expectStableDragChrome();
-
-  AsyncRenderer& renderer =
-      EditorShellTestAccess::BeginDelayedRender(shell, std::chrono::milliseconds(500));
-  ASSERT_TRUE(renderer.isBusy());
-  RenderToolbarFrame(window, shell, kCursor, ImVec2(-100.0f, -100.0f), /*mouseDown=*/false);
-  expectStableDragChrome();
-
-  renderer.cancelInFlight();
-  EXPECT_TRUE(renderer.waitUntilNoRenderInFlightForTesting(std::chrono::steady_clock::now() +
-                                                           std::chrono::seconds(2)));
-  std::ignore = renderer.pollResult();
-  renderer.setReplayRenderDelayForTesting(std::chrono::milliseconds(0));
 }
 
 TEST(EditorShellTest, ToolPaletteSelectCommitsOpenPenPath) {

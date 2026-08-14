@@ -48,6 +48,14 @@ constexpr float kFillChipBottom = 29.0f;
 
 }  // namespace
 
+FillStrokeWidgetInteractionState ResolveFillStrokeWidgetInteractionState(
+    bool hasDocument, bool rendererBusy, bool canvasInteractionActive, bool hasPaintSnapshot) {
+  return FillStrokeWidgetInteractionState{
+      .canEdit = hasDocument && !rendererBusy && !canvasInteractionActive,
+      .refreshPaintSnapshot = !rendererBusy && (!canvasInteractionActive || !hasPaintSnapshot),
+  };
+}
+
 FillStrokeWidgetLayout ComputeFillStrokeWidgetLayout(const ImVec2& widgetMin,
                                                      const ImVec2& widgetMax) {
   const float x = widgetMin.x;
