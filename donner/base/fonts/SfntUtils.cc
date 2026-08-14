@@ -26,6 +26,10 @@ constexpr uint16_t kScaledComponentOffset = 0x0800;
 constexpr uint16_t kUnscaledComponentOffset = 0x1000;
 constexpr uint16_t kKnownCompoundFlags = 0x1FEF;
 
+static_assert(kMaximumCompoundGlyphDepth <= std::numeric_limits<uint8_t>::max());
+static_assert(kMaximumExpandedGlyphVertices <= std::numeric_limits<uint32_t>::max());
+static_assert(kMaximumGlyphOutlineWork <= std::numeric_limits<uint32_t>::max());
+
 struct DependencyRange {
   uint32_t begin = 0;
   uint32_t count = 0;
@@ -34,6 +38,12 @@ struct DependencyRange {
 struct DfsFrame {
   uint16_t glyph = 0;
   uint32_t nextDependency = 0;
+};
+
+struct GlyphComplexity {
+  uint32_t vertices = 0;
+  uint32_t work = 1;
+  uint8_t depth = 1;
 };
 
 bool IsSfntMagic(uint32_t magic) {
@@ -52,8 +62,8 @@ bool AddWithin(size_t value, size_t increment, size_t limit, size_t* result) {
   return true;
 }
 
-bool ValidateSimpleGlyph(std::span<const uint8_t> glyph, uint16_t contourCount,
-                         size_t* totalPoints) {
+bool ValidateSimpleGlyph(std::span<const uint8_t> glyph, uint16_t contourCount, size_t* totalPoints,
+                         GlyphComplexity* complexity) {
   const size_t endpointBytes = static_cast<size_t>(contourCount) * 2;
   if (!HasBytes(glyph, 10, endpointBytes + 2)) {
     return false;
@@ -110,7 +120,27 @@ bool ValidateSimpleGlyph(std::span<const uint8_t> glyph, uint16_t contourCount,
     decodedPoints += runLength;
   }
 
-  return HasBytes(glyph, cursor, coordinateBytes);
+  if (!HasBytes(glyph, cursor, coordinateBytes)) {
+    return false;
+  }
+
+  // stb allocates n + 2 * contours vertices for a simple glyph. Its decode makes three passes
+  // over the points followed by one conversion pass; include the allocation/output bound as a
+  // fifth unit of work so both CPU and memory are explicitly capped.
+  size_t maximumVertices = 0;
+  if (!AddWithin(pointCount, static_cast<size_t>(contourCount) * 2, kMaximumExpandedGlyphVertices,
+                 &maximumVertices)) {
+    return false;
+  }
+  size_t work = maximumVertices;
+  for (int pass = 0; pass < 4; ++pass) {
+    if (!AddWithin(work, pointCount, kMaximumGlyphOutlineWork, &work)) {
+      return false;
+    }
+  }
+  *complexity =
+      GlyphComplexity{static_cast<uint32_t>(maximumVertices), static_cast<uint32_t>(work), 1};
+  return true;
 }
 
 bool ParseCompoundGlyph(std::span<const uint8_t> glyph, size_t numGlyphs,
@@ -171,10 +201,19 @@ bool ParseCompoundGlyph(std::span<const uint8_t> glyph, size_t numGlyphs,
 }
 
 bool ValidateDependencyGraph(std::span<const DependencyRange> ranges,
-                             std::span<const uint16_t> dependencies) {
+                             std::span<const uint16_t> dependencies,
+                             std::span<GlyphComplexity> complexities) {
   std::vector<uint8_t> colors(ranges.size(), 0);
-  std::vector<uint32_t> expandedComponents(ranges.size(), 0);
   std::array<DfsFrame, kMaximumCompoundGlyphDepth> stack{};
+
+  // Empty and simple glyphs have no dependency range and already carry their parsed complexity.
+  // Mark them complete so a compound parent consumes that memoized value instead of overwriting it
+  // with the no-dependency defaults during DFS finalization.
+  for (size_t glyph = 0; glyph < ranges.size(); ++glyph) {
+    if (ranges[glyph].count == 0) {
+      colors[glyph] = 2;
+    }
+  }
 
   for (size_t root = 0; root < ranges.size(); ++root) {
     if (colors[root] != 0) {
@@ -202,15 +241,42 @@ bool ValidateDependencyGraph(std::span<const DependencyRange> ranges,
         continue;
       }
 
-      size_t expanded = 0;
+      size_t longestDepth = 1;
+      size_t vertices = 0;
+      size_t work = 1;
       for (size_t i = 0; i < range.count; ++i) {
         const uint16_t child = dependencies[range.begin + i];
-        const size_t childWork = static_cast<size_t>(expandedComponents[child]) + 1;
-        if (!AddWithin(expanded, childWork, kMaximumCompoundComponentRecords, &expanded)) {
+        const GlyphComplexity childComplexity = complexities[child];
+
+        // Memoized depth is required even for an already-black/shared child: physical DFS stack
+        // depth alone misses a new parent attached to a previously completed depth-32 tail.
+        const size_t childDepth = static_cast<size_t>(childComplexity.depth) + 1;
+        longestDepth = std::max(longestDepth, childDepth);
+        if (longestDepth > kMaximumCompoundGlyphDepth) {
           return false;
         }
+
+        size_t newVertices = 0;
+        if (!AddWithin(vertices, childComplexity.vertices, kMaximumExpandedGlyphVertices,
+                       &newVertices)) {
+          return false;
+        }
+
+        // stb recursively decodes the child for every component occurrence, transforms every
+        // child vertex, then allocates and copies the entire accumulated prefix plus that child.
+        // Applying the memoized child cost for every dependency also captures nested/shared DAG
+        // multiplication without recursively traversing it here.
+        if (!AddWithin(work, childComplexity.work, kMaximumGlyphOutlineWork, &work) ||
+            !AddWithin(work, childComplexity.vertices, kMaximumGlyphOutlineWork, &work) ||
+            !AddWithin(work, newVertices, kMaximumGlyphOutlineWork, &work) ||
+            !AddWithin(work, 1, kMaximumGlyphOutlineWork, &work)) {
+          return false;
+        }
+        vertices = newVertices;
       }
-      expandedComponents[frame.glyph] = static_cast<uint32_t>(expanded);
+      complexities[frame.glyph] =
+          GlyphComplexity{static_cast<uint32_t>(vertices), static_cast<uint32_t>(work),
+                          static_cast<uint8_t>(longestDepth)};
       colors[frame.glyph] = 2;
       --depth;
     }
@@ -308,6 +374,7 @@ std::optional<SfntFont> SfntFont::Validate(std::span<const uint8_t> data) {
   }
 
   std::vector<DependencyRange> ranges(font.numGlyphs_);
+  std::vector<GlyphComplexity> complexities(font.numGlyphs_);
   std::vector<uint16_t> dependencies;
   dependencies.reserve(std::min(glyf->size() / 4, kMaximumCompoundComponentRecords));
   size_t totalComponents = 0;
@@ -325,8 +392,8 @@ std::optional<SfntFont> SfntFont::Validate(std::span<const uint8_t> data) {
     }
     const int16_t contourCount = static_cast<int16_t>(ReadBe16(glyph.data()));
     if (contourCount >= 0) {
-      if (contourCount != 0 &&
-          !ValidateSimpleGlyph(glyph, static_cast<uint16_t>(contourCount), &totalPoints)) {
+      if (contourCount != 0 && !ValidateSimpleGlyph(glyph, static_cast<uint16_t>(contourCount),
+                                                    &totalPoints, &complexities[glyphIndex])) {
         return std::nullopt;
       }
       continue;
@@ -344,7 +411,7 @@ std::optional<SfntFont> SfntFont::Validate(std::span<const uint8_t> data) {
                         static_cast<uint32_t>(dependencies.size() - dependencyStart)};
   }
 
-  if (!ValidateDependencyGraph(ranges, dependencies)) {
+  if (!ValidateDependencyGraph(ranges, dependencies, complexities)) {
     return std::nullopt;
   }
   return font;

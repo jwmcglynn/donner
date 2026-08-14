@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <string>
 
 #include FT_FREETYPE_H
@@ -174,9 +175,11 @@ hb_font_t* TextBackendFull::getOrCreateHbFont(FontHandle handle) const {
     return nullptr;
   }
 
-  // Create a FreeType face from the raw font data, then wrap it with HarfBuzz.
+  // Create a FreeType face from the raw font data, then wrap it with HarfBuzz. This exact
+  // whole-font span is also the safe CFF boundary; unlike stb_truetype, FreeType does not invent a
+  // larger CFF table span past the caller-owned allocation.
   const auto data = fontManager_.fontData(handle);
-  if (data.empty()) {
+  if (data.empty() || data.size() > static_cast<size_t>(std::numeric_limits<FT_Long>::max())) {
     return nullptr;
   }
 
@@ -187,7 +190,6 @@ hb_font_t* TextBackendFull::getOrCreateHbFont(FontHandle handle) const {
   FT_Error err = FT_New_Memory_Face(getFtLibrary(), data.data(), static_cast<FT_Long>(data.size()),
                                     0, &entry.ftFace);
   if (err != 0) {
-    registry_.remove<HbFontEntry>(handle.entity());
     return nullptr;
   }
 
@@ -203,7 +205,6 @@ hb_font_t* TextBackendFull::getOrCreateHbFont(FontHandle handle) const {
   // Create HarfBuzz font backed by FreeType for GSUB/GPOS shaping.
   entry.font = hb_ft_font_create_referenced(entry.ftFace);
   if (!entry.font) {
-    registry_.remove<HbFontEntry>(handle.entity());
     return nullptr;
   }
 

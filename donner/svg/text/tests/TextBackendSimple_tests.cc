@@ -300,13 +300,21 @@ TEST_F(TextBackendSimpleTest, NonOutlineFontFallsBackToHeadUnitsPerEm) {
               IsEmpty());
 }
 
-TEST_F(TextBackendSimpleTest, UnparseableOutlineFontFailsInitOnceAndCachesFailure) {
-  // A CFF tag passes bounded container validation, but malformed CFF data makes stb initialization
-  // fail and exercise the cached invalid-backend state.
-  const FontHandle font = loadFont(MakeSfnt({{"CFF ", {0, 0, 0, 0}}, {"head", HeadTable(1000)}}));
+TEST_F(TextBackendSimpleTest, RejectsMalformedFinalCffBeforeStbInitialization) {
+  // All tables stb requires before entering its CFF parser are present, and the malformed CFF
+  // table is the final allocation. Calling stb on this font would give its parser a synthetic
+  // 512 MiB span beyond the actual four bytes; the simple backend must cache refusal first.
+  const FontHandle font = loadFont(MakeSfnt({
+      {"cmap", CmapTable({{'A', 'A', 0}})},
+      {"head", HeadTable(1000)},
+      {"hhea", HheaTable(800, -200, 0, 1)},
+      {"hmtx", HmtxTable({500})},
+      {"maxp", MaxpTable(1)},
+      {"CFF ", {1, 0, 4, 4}},
+  }));
 
   EXPECT_EQ(backend_.fontVMetrics(font).ascent, 0);
-  // Second call hits the cached invalid parse state.
+  // Second call hits the cached refusal without reconsidering the untrusted bytes.
   EXPECT_EQ(backend_.fontVMetrics(font).ascent, 0);
   EXPECT_TRUE(backend_.glyphOutline(font, 1, 1.0f).empty());
   EXPECT_FLOAT_EQ(backend_.scaleForPixelHeight(font, 100.0f), 0.1f);
@@ -463,23 +471,14 @@ TEST_F(TextBackendSimpleTest, GlyphOutlineDecodesQuadraticSegmentsWithFlippedY) 
   EXPECT_NEAR(bounds.bottomRight.y, 0.0, 1e-4);
 }
 
-TEST_F(TextBackendSimpleTest, GlyphOutlineDecodesCurveSegmentsFromRealFont) {
+TEST_F(TextBackendSimpleTest, CffFallbackIsRejectedBeforeStbInitialization) {
   const FontHandle font = fontManager_.fallbackFont();
   ASSERT_TRUE(static_cast<bool>(font));
+  ASSERT_TRUE(fontManager_.sfntTable(font, "CFF ").has_value());
 
   const auto shaped = backend_.shapeRun(font, 100.0f, "O", 0, 1, false, FontVariant::Normal, false);
-  ASSERT_THAT(shaped.glyphs, ElementsAre(GlyphIndexIs(testing::Gt(0))));
-
-  const Path path = backend_.glyphOutline(font, shaped.glyphs[0].glyphIndex, 0.1f);
-  ASSERT_FALSE(path.empty());
-
-  // The letter 'O' must contain curve segments (quadratic for TrueType outlines,
-  // cubic for CFF outlines).
-  const bool hasCurves =
-      std::any_of(path.commands().begin(), path.commands().end(), [](const auto& command) {
-        return command.verb == Path::Verb::QuadTo || command.verb == Path::Verb::CurveTo;
-      });
-  EXPECT_TRUE(hasCurves);
+  EXPECT_THAT(shaped.glyphs, IsEmpty());
+  EXPECT_TRUE(backend_.glyphOutline(font, 1, 0.1f).empty());
 }
 
 // -- Capability contracts -----------------------------------------------------

@@ -4,6 +4,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <string_view>
@@ -64,6 +65,26 @@ std::vector<uint8_t> CompoundGlyph(std::span<const uint16_t> dependencies) {
   return glyph;
 }
 
+std::vector<uint8_t> SimpleGlyph(size_t pointCount) {
+  EXPECT_GT(pointCount, 0u);
+  EXPECT_LE(pointCount, 65536u);
+  std::vector<uint8_t> glyph(14, 0);
+  WriteBe16(&glyph, 0, 1);
+  WriteBe16(&glyph, 10, static_cast<uint16_t>(pointCount - 1));
+
+  // All points are on-curve at (0, 0), encoded in bounded repeat runs with no coordinate bytes.
+  size_t remaining = pointCount;
+  while (remaining != 0) {
+    const size_t runLength = std::min(remaining, size_t{256});
+    glyph.push_back(runLength == 1 ? 0x31 : 0x39);
+    if (runLength != 1) {
+      glyph.push_back(static_cast<uint8_t>(runLength - 1));
+    }
+    remaining -= runLength;
+  }
+  return glyph;
+}
+
 std::vector<uint8_t> MakeTrueType(std::vector<std::vector<uint8_t>> glyphs) {
   std::vector<uint8_t> head(54, 0);
   WriteBe16(&head, 50, 1);
@@ -90,6 +111,32 @@ std::vector<uint8_t> MakeDependencyChain(size_t depth) {
     glyphs[i] = CompoundGlyph({&child, 1});
   }
   return MakeTrueType(std::move(glyphs));
+}
+
+std::vector<uint8_t> MakeSharedTail(bool appendTooDeepRoot) {
+  const size_t tailDepth = kMaximumCompoundGlyphDepth - 1;
+  std::vector<std::vector<uint8_t>> glyphs(tailDepth, std::vector<uint8_t>(10, 0));
+  for (size_t i = 0; i + 1 < tailDepth; ++i) {
+    const uint16_t child = static_cast<uint16_t>(i + 1);
+    glyphs[i] = CompoundGlyph({&child, 1});
+  }
+
+  const uint16_t tail = 0;
+  glyphs.push_back(CompoundGlyph({&tail, 1}));
+  glyphs.push_back(CompoundGlyph({&tail, 1}));
+  if (appendTooDeepRoot) {
+    const uint16_t completedDepth32Root = static_cast<uint16_t>(tailDepth);
+    glyphs.push_back(CompoundGlyph({&completedDepth32Root, 1}));
+  }
+  return MakeTrueType(std::move(glyphs));
+}
+
+uint64_t RepeatedComponentWork(size_t componentCount, size_t childPoints) {
+  const uint64_t childVertices = childPoints + 2;
+  const uint64_t childWork = childVertices + 4 * childPoints;
+  const uint64_t components = componentCount;
+  return 1 + components * (childWork + childVertices + 1) +
+         childVertices * components * (components + 1) / 2;
 }
 
 TEST(SfntUtils, SortsDirectoryForBoundedLookup) {
@@ -134,6 +181,11 @@ TEST(SfntUtils, AcceptsDepth32AndRejectsDepth33) {
   EXPECT_FALSE(SfntFont::Validate(MakeDependencyChain(kMaximumCompoundGlyphDepth + 1)).has_value());
 }
 
+TEST(SfntUtils, IncludesCompletedSharedTailInMemoizedDepth) {
+  EXPECT_TRUE(SfntFont::Validate(MakeSharedTail(false)).has_value());
+  EXPECT_FALSE(SfntFont::Validate(MakeSharedTail(true)).has_value());
+}
+
 TEST(SfntUtils, RejectsComponentRecordWorkAboveCap) {
   std::vector<uint16_t> dependencies(kMaximumCompoundComponentRecords, 1);
   EXPECT_TRUE(
@@ -144,6 +196,55 @@ TEST(SfntUtils, RejectsComponentRecordWorkAboveCap) {
   EXPECT_FALSE(
       SfntFont::Validate(MakeTrueType({CompoundGlyph(dependencies), std::vector<uint8_t>(10, 0)}))
           .has_value());
+}
+
+TEST(SfntUtils, CapsRepeatedMultipointDecodeAndPrefixCopyWork) {
+  constexpr size_t kChildPoints = 64;
+  size_t acceptedComponents = 0;
+  while (acceptedComponents < kMaximumCompoundComponentRecords &&
+         RepeatedComponentWork(acceptedComponents + 1, kChildPoints) <= kMaximumGlyphOutlineWork) {
+    ++acceptedComponents;
+  }
+  ASSERT_GT(acceptedComponents, 0u);
+  ASSERT_LT(acceptedComponents, kMaximumCompoundComponentRecords);
+
+  std::vector<uint16_t> dependencies(acceptedComponents, 1);
+  EXPECT_TRUE(
+      SfntFont::Validate(MakeTrueType({CompoundGlyph(dependencies), SimpleGlyph(kChildPoints)}))
+          .has_value());
+
+  dependencies.push_back(1);
+  EXPECT_FALSE(
+      SfntFont::Validate(MakeTrueType({CompoundGlyph(dependencies), SimpleGlyph(kChildPoints)}))
+          .has_value());
+}
+
+TEST(SfntUtils, CapsNestedSharedOutlineExpansion) {
+  constexpr size_t kLeafPoints = 64;
+  std::vector<std::vector<uint8_t>> glyphs;
+  glyphs.push_back(SimpleGlyph(kLeafPoints));
+
+  uint64_t vertices = kLeafPoints + 2;
+  uint64_t work = vertices + 4 * kLeafPoints;
+  while (glyphs.size() < kMaximumCompoundGlyphDepth) {
+    const uint64_t nextVertices = vertices * 2;
+    const uint64_t nextWork = 2 * work + 5 * vertices + 3;
+    if (nextVertices > kMaximumExpandedGlyphVertices || nextWork > kMaximumGlyphOutlineWork) {
+      break;
+    }
+    const uint16_t sharedChild = static_cast<uint16_t>(glyphs.size() - 1);
+    const std::array<uint16_t, 2> dependencies{sharedChild, sharedChild};
+    glyphs.push_back(CompoundGlyph(dependencies));
+    vertices = nextVertices;
+    work = nextWork;
+  }
+  ASSERT_GT(glyphs.size(), 1u);
+  EXPECT_TRUE(SfntFont::Validate(MakeTrueType(glyphs)).has_value());
+
+  const uint16_t sharedChild = static_cast<uint16_t>(glyphs.size() - 1);
+  const std::array<uint16_t, 2> dependencies{sharedChild, sharedChild};
+  glyphs.push_back(CompoundGlyph(dependencies));
+  EXPECT_FALSE(SfntFont::Validate(MakeTrueType(std::move(glyphs))).has_value());
 }
 
 TEST(SfntUtils, RejectsMalformedCompoundRecords) {

@@ -22,6 +22,12 @@ inline constexpr size_t kMaximumCompoundComponentRecords = 65536;
 /// Maximum simple-glyph points examined while validating one TrueType font.
 inline constexpr size_t kMaximumSimpleGlyphPoints = 16 * 1024 * 1024;
 
+/// Maximum vertices that stb_truetype may allocate while expanding one TrueType glyph.
+inline constexpr size_t kMaximumExpandedGlyphVertices = 1024 * 1024;
+
+/// Maximum decode, transform, and prefix-copy work allowed for one TrueType glyph outline.
+inline constexpr size_t kMaximumGlyphOutlineWork = 16 * 1024 * 1024;
+
 /// Read a 16-bit big-endian unsigned integer from @p p.
 inline uint16_t ReadBe16(const uint8_t* p) {
   return static_cast<uint16_t>((static_cast<uint16_t>(p[0]) << 8) | p[1]);
@@ -41,9 +47,13 @@ uint32_t SfntTag(std::string_view tag);
  *
  * Table records are sorted once, making lookup O(log T). TrueType `glyf` fonts also retain a
  * validated `loca` index and are accepted only when every compound dependency is acyclic, at most
- * @ref kMaximumCompoundGlyphDepth frames deep, and within the aggregate component-work cap.
- * CFF/CFF2 outlines have no `glyf` dependency graph; stb_truetype separately limits its Type 2
- * charstring subroutine stack to 10 entries.
+ * @ref kMaximumCompoundGlyphDepth frames deep, and within the expanded vertex and outline-work
+ * caps. The work model includes repeated and shared descendants, simple point decoding, component
+ * transforms, and stb_truetype's repeated prefix copies.
+ *
+ * CFF/CFF2 tables receive bounded directory validation only. They must be consumed by an
+ * exact-span parser such as FreeType; stb_truetype's CFF parser uses a synthetic 512 MiB span and
+ * must not be initialized for these fonts.
  */
 class SfntFont {
 public:

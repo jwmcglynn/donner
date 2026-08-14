@@ -27,6 +27,11 @@ bool HasCachedOutlineTables(const FontManager& fontManager, FontHandle font) {
          fontManager.sfntTable(font, "CFF2").has_value();
 }
 
+bool HasCachedCffTables(const FontManager& fontManager, FontHandle font) {
+  return fontManager.sfntTable(font, "CFF ").has_value() ||
+         fontManager.sfntTable(font, "CFF2").has_value();
+}
+
 /// Cached stb_truetype parse state attached to a font entity.
 struct StbFontComponent {
   stbtt_fontinfo fontInfo{};
@@ -47,11 +52,19 @@ const stbtt_fontinfo* TextBackendSimple::getFontInfo(FontHandle font) const {
     return cached->valid ? &cached->fontInfo : nullptr;
   }
 
-  if (!fontManager_.isValidatedFont(font) || !HasCachedOutlineTables(fontManager_, font)) {
+  if (!fontManager_.isValidatedFont(font)) {
     return nullptr;
   }
-  const auto fontData = fontManager_.fontData(font);
   auto& cached = registry_.emplace<StbFontComponent>(font.entity());
+
+  // stb_truetype gives its CFF parser a synthetic 512 MiB span instead of the directory's exact
+  // table length. Refuse any CFF/CFF2-bearing font before passing its bytes to stb; the text-full
+  // backend may still use FreeType, whose face constructor receives the exact font span.
+  if (HasCachedCffTables(fontManager_, font) || !fontManager_.sfntTable(font, "glyf").has_value()) {
+    return nullptr;
+  }
+
+  const auto fontData = fontManager_.fontData(font);
   if (stbtt_InitFont(&cached.fontInfo, fontData.data(), 0)) {
     cached.valid = true;
   }
