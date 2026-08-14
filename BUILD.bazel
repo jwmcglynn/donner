@@ -58,6 +58,7 @@ exports_files(
     [
         "donner_icon.svg",
         "donner_splash.svg",
+        "BUILD.bazel",
         "MODULE.bazel",
         ".github/workflows/coverage.yml",
         ".github/workflows/main.yml",
