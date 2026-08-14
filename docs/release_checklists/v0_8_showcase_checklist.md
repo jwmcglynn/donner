@@ -5,6 +5,10 @@ Generated variants are temporary demo outputs and are not committed at the
 repository root. This checklist mirrors the end-to-end flow in
 [`docs/design_docs/0047-v0_8_showcase.md`](../design_docs/0047-v0_8_showcase.md).
 
+The automated output is a reproducible smoke fixture, not the final art direction. The actual
+showcase is styled live in Donner Editor and screen recorded; it does not need to match the
+automated sample.
+
 ## Automated Reproduction
 
 - [ ] Generate a temporary showcase through the editor's production code paths:
@@ -18,7 +22,8 @@ repository root. This checklist mirrors the end-to-end flow in
       generates the derived SVG in memory and verifies parsing, text-to-outline
       conversion, overlay serialization, and rendering.
 - [ ] Open the editor's sample picker and select **Donner Showcase**. Confirm it
-      contains the generated outlined `SVG` badge and selection overlay.
+      contains the generated outlined `SVG` badge and selection overlay. Treat
+      this as a starting sample, not a prescribed final composition.
 - [ ] Open `/tmp/donner-showcase.svg` in Donner and a browser. Confirm the
       crop, overlay, transparency, and outlined `SVG` lettering are correct.
 - [ ] Confirm the canonical input is unchanged and no generated
@@ -37,8 +42,8 @@ and inspector.
   shapes. Exercise Cut, Copy, Paste, and Paste in Front on representative
   artwork.
 - [ ]
-  3. Insert a `<text>` element containing `SVG`, then style and position it
-  through the inspector.
+  3. Add, style, and position the desired showcase artwork through the editor.
+  Use the generated `SVG` label only if it fits the intended composition.
 - [ ]
   4. Run Convert Text to Outlines. Confirm the result is a deterministic
   group of `<path>` elements with no remaining live `<text>`.
@@ -46,9 +51,9 @@ and inspector.
   5. Select the outlined letter group and frame the viewport on the
   showcase composition.
 - [ ]
-  6. Export the viewport as SVG with content plus selection overlay,
-  transparent background, and clipping enabled. Save it outside the
-  repository root as a temporary demo artifact.
+  6. Screen record the live authoring session. If a still artifact is useful,
+  export the viewport as SVG with the desired content and overlay settings and
+  save it outside the repository root.
 - [ ]
-  7. Compare the interactive export with the automated output, then discard
-  both generated files when the review is complete.
+  7. Review the recording for legibility, pacing, composition, and editor UI
+  clarity. Discard temporary generated files when the review is complete.

@@ -71,16 +71,18 @@ Renderer abstraction, software rasterizer, text rendering, and filter effects.
 ## v0.8 — Donner SVG Editor & Engine (next release)
 
 Focus: rebrand Donner around the editor and engine, release the accumulated editor/Geode/path work,
-and ship a reproducible SVG showcase workflow.
+and use the editor live to style and record the v0.8 showcase.
 
 ### Release Positioning
 
 - Product name: **Donner SVG Editor & Engine**.
 - Public story: Donner is both a native SVG editor and a reusable C++ SVG engine.
-- Showcase story: a derived v0.8 composition is generated on demand from `donner_splash.svg`
-  through Donner's text-to-outlines and viewport-export paths.
-- Compatibility story: the generated showcase does not depend on system fonts because the visible `SVG`
-  lettering is converted to path outlines.
+- Showcase story: the canonical `donner_splash.svg` is styled live in Donner Editor and the authoring
+  session is screen recorded under operator direction.
+- Reproducibility story: an automated composition generated through Donner's text-to-outlines and
+  viewport-export paths is a CI smoke fixture and starting sample, not the final art direction.
+- Compatibility story: the generated fixture does not depend on system fonts because its visible
+  `SVG` lettering is converted to path outlines.
 - Usability story: the editor can perform the basic shape authoring operations needed to create the
   splash without source-pane surgery or external design tools.
 
@@ -102,8 +104,8 @@ The release collects all completed editor/toolkit work since v0.5, including:
 
 ### Showcase-Gating Scope
 
-These items were required before the v0.8 release can be cut. All were implemented by the v0.8
-showcase work and merged to `main` in PR #635 on 2026-07-03. Release QA and packaging remain:
+The editor capabilities and automated fixture needed for the v0.8 showcase are implemented. Release
+QA, operator-directed styling, screen recording, and packaging remain:
 
 - [x] **Shape cut/copy/paste** — duplicate, cut, and paste selected SVG shapes/groups with source
       sync, undo, selection restoration, default paste offset, Paste in Front, and deterministic ID
@@ -118,33 +120,42 @@ showcase work and merged to `main` in PR #635 on 2026-07-03. Release QA and pack
 - [x] **Viewport SVG export** — export the current editor viewport as cropped SVG.
 - [x] **Overlay SVG export** — optional export of selected path outlines, bounds, and handles as
       vector editor chrome.
-- [x] **v0.8 showcase demo** — generate a derived splash from `donner_splash.svg`, add `SVG`,
+- [x] **Automated showcase fixture** — generate a derived splash from `donner_splash.svg`, add `SVG`,
       convert it to outlines, select the outlined letters, and export the viewport with overlay
-      enabled without checking generated variants into the repository root.
+      enabled without checking generated variants into the repository root. This proves the workflow,
+      not the final composition.
 - [x] **Reproducibility** — preserve the generator, automated test, and manual checklist needed to
       recreate the temporary showcase output on demand.
 - [x] **Rebrand updates** — update public docs, release notes, and user-facing labels to
       **Donner SVG Editor & Engine**.
+- [ ] **Live showcase recording** — style the release-facing composition in Donner Editor under
+      operator direction, screen record the authoring session, and review its legibility, pacing,
+      composition, and editor UI clarity.
 
 ### v0.8 Release Criteria
 
-- The v0.8 showcase generates from the canonical `donner_splash.svg`, then parses and renders in
-  Donner.
+- The automated fixture generates from the canonical `donner_splash.svg`, then parses and renders in
+  Donner without changing the canonical source or adding root-level derivatives.
 - The editor can cut/copy/paste representative showcase shapes without losing source/canvas sync or
   selection/undo state.
 - The Pen tool can author and close a path for the showcase with bounds and overlay matching the
   rendered path in the same visible frame.
 - The complete Layers panel can navigate the splash from document to groups to individual shapes
   with previews, names, expansion state, and synchronized canvas/source selection.
-- The visible `SVG` lettering in the generated showcase is path geometry, not live `<text>`.
-- The showcase export includes the selected outlined `SVG` letters and editor overlay chrome when
+- The visible `SVG` lettering in the generated fixture is path geometry, not live `<text>`.
+- The fixture export includes the selected outlined `SVG` letters and editor overlay chrome when
   the overlay variant is requested.
-- The editor can reproduce the showcase workflow without external design tools.
+- The release-facing showcase is styled live in the editor and screen recorded under operator
+  direction; it is not required to match the automated fixture.
+- The editor can perform the live showcase workflow without external design tools or source-pane
+  surgery.
 - Existing editor responsiveness regressions for zoom, drag, selection, and overlay lockstep remain
   covered by tests.
 - The roadmap, README/release notes, and Doxygen-facing docs use the new product positioning.
 
-See [v0_8_showcase](design_docs/0047-v0_8_showcase.md) for the detailed execution plan.
+See [v0_8_showcase](design_docs/0047-v0_8_showcase.md) for the current implementation summary and
+[v0_8_showcase_retrospective](design_docs/0059-v0_8_showcase_retrospective.md) for the implementation
+retrospective.
 
 ---
 
@@ -320,11 +331,6 @@ Production editor scope: a hybrid structured/freeform SVG editor workflow beyond
 
 ## Future Work (post-v1.0)
 
-- **"Geode" GPU-accelerated renderer** — Custom GPU rendering backend targeting modern graphics
-  APIs for high-performance and embedded use cases.
-- **Multithreading** — Thread-safe access to documents and rendering. Define ownership and
-  concurrency model for ECS registry access, enable parallel rendering and background parsing.
-- Boolean path operations and geometry mutation APIs for graphical editors.
 - Multi-user collaboration patch protocol.
 - Game-runtime suitability profile (latency, frame pacing, memory budgets).
 

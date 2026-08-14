@@ -259,6 +259,8 @@
                    url="md_docs_2design__docs_20048-design__doc__hygiene.html"/>
               <tab type="user" title="Binary Size"
                    url="md_docs_2design__docs_20055-binary__size.html"/>
+              <tab type="user" title="v0.8 Showcase Retrospective"
+                   url="md_docs_2design__docs_20059-v0__8__showcase__retrospective.html"/>
             </tab>
           </tab>
           <tab type="user" title="Release Checklist" url="ReleaseChecklist.html"/>

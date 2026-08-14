@@ -5,13 +5,17 @@ the version number.
 
 ## Pre-Release: Code Quality
 
-- [ ] **Warning-clean build** — `bazel build //donner/...` produces zero warnings. Fix all
-      `-Wunused-variable`, `-Wswitch`, `-Winconsistent-missing-override`, etc.
+- [ ] **Warning-clean build** — Run `bazel clean`, then
+      `bazel build //donner/... > /tmp/donner-build.log 2>&1`. Verify that the build succeeds before
+      verifying that `grep -Ei '(^|: )warning:' /tmp/donner-build.log` produces zero output. A cached
+      incremental build can hide compiler warnings. Fix all `-Wunused-variable`, `-Wswitch`,
+      `-Winconsistent-missing-override`, etc.
 - [ ] **Doxygen warning-free** — Run `tools/doxygen.sh > /tmp/donner-doxygen.log 2>&1`, verify that
-      the command succeeds, then verify `grep -i warning /tmp/donner-doxygen.log` produces zero
-      output. The wrapper selects the release Doxygen binary when available and stamps the version
-      from `MODULE.bazel`. Common issues: unescaped `@font-face` (use backticks), broken `\ref`
-      targets, undocumented public compounds.
+      the command succeeds, then verify
+      `grep -Ei '(^|: )warning:' /tmp/donner-doxygen.log` produces zero output. The wrapper selects
+      the release Doxygen binary when available and stamps the version from `MODULE.bazel`. Common
+      issues: unescaped `@font-face` (use backticks), broken `\ref` targets, undocumented public
+      compounds.
 - [ ] **Tests pass** — `bazel test //...` is green. The `donner_cc_test` variants cover TinySkia,
       text-full, and Geode lanes without separate `--config` invocations.
 - [ ] **Fuzzers run** — Execute all fuzz targets for a reasonable duration. Check for new crashes.
@@ -24,6 +28,9 @@ the version number.
       `//donner/editor/tools:generate_showcase_asset_cli_tests`, which protects the canonical input
       against same-path, symlink, and hard-link output aliases. No checked-in variant is required.
       (Applies from the v0.8 "Donner SVG Editor & Engine" release onward.)
+- [ ] **Live showcase styled and recorded** — Complete the interactive walkthrough and recording
+      review in `docs/release_checklists/v0_8_showcase_checklist.md`. The automated fixture is a
+      workflow smoke test and does not prescribe the release-facing composition. (Applies to v0.8.)
 
 ## Pre-Release: Documentation
 

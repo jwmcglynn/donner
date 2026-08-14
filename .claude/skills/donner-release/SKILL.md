@@ -51,12 +51,14 @@ From `docs/release_checklist.md` (each gate exists because a past release shippe
 
 - **Warning-clean build**: `bazel build //donner/...` with zero warnings. Warnings do NOT fail
   the build (no `-Werror` in `.bazelrc`) and Bazel does not re-emit warnings for cached actions,
-  so an incremental build hides them. Verify with a full recompile:
-  `bazel clean && bazel build //donner/... 2>&1 | grep -i warning` must print nothing.
+  so an incremental build hides them. Run `bazel clean`, then run
+  `bazel build //donner/... > /tmp/donner-build.log 2>&1`. Verify that the build succeeds before
+  checking that `grep -Ei '(^|: )warning:' /tmp/donner-build.log` prints nothing.
 - **Doxygen warning-free**: run `tools/doxygen.sh > /tmp/donner-doxygen.log 2>&1`, verify the wrapper
-  succeeds, then verify `grep -i warning /tmp/donner-doxygen.log` prints nothing. The wrapper keeps
-  local QA aligned with the deployed version stamp and Doxygen binary. Common causes: unescaped
-  `@font-face` in comments (use backticks), broken `\ref` targets, undocumented public compounds.
+  succeeds, then verify `grep -Ei '(^|: )warning:' /tmp/donner-doxygen.log` prints nothing. The
+  wrapper keeps local QA aligned with the deployed version stamp and Doxygen binary. Common causes:
+  unescaped `@font-face` in comments (use backticks), broken `\ref` targets, undocumented public
+  compounds.
   The gate was waived once, for v0.5, by explicit operator decision (0011 §Retrospective) - treat it
   as a hard gate; only the operator can waive it, per release.
 - **Tests green**: `bazel test //...` - the single validation command. The `donner_cc_test`
@@ -73,6 +75,9 @@ From `docs/release_checklist.md` (each gate exists because a past release shippe
   built-in Donner Showcase entry generates the same kind of derived output at runtime.
   `//donner/editor/tools:generate_showcase_asset_cli_tests` rejects same-path, symlink, and hard-link
   output aliases so the generator cannot overwrite the canonical input.
+- **Live showcase is styled and recorded** (v0.8): complete the interactive walkthrough and recording
+  review in `docs/release_checklists/v0_8_showcase_checklist.md`. The automated fixture is a workflow
+  smoke test and does not prescribe the release-facing composition.
 - **Experimental gates removed from shipped features**: delete
   `static constexpr bool IsExperimental = true` declarations entirely (absence is the
   non-experimental default — do not set to `false`).
