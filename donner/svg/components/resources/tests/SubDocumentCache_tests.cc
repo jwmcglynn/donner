@@ -47,6 +47,19 @@ constexpr std::string_view kTinyPngDataUrl =
     "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAEUlEQVR42mP4z8DwH4QZYAwAR8oH+"
     "Rq28akAAAAASUVORK5CYII=";
 
+// gzip-compressed "<svg xmlns='http://www.w3.org/2000/svg'></svg>"
+constexpr std::array<uint8_t, 62> kGzipSvg = {
+    0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x03, 0xb3, 0x29, 0x2e, 0x4b, 0x57, 0xa8,
+    0xc8, 0xcd, 0xc9, 0x2b, 0xb6, 0x55, 0xcf, 0x28, 0x29, 0x29, 0xb0, 0xd2, 0xd7, 0x2f, 0x2f, 0x2f,
+    0xd7, 0x2b, 0x37, 0xd6, 0xcb, 0x2f, 0x4a, 0xd7, 0x37, 0x32, 0x30, 0x30, 0xd0, 0x07, 0xaa, 0x50,
+    0xb7, 0xb3, 0x01, 0x51, 0x76, 0x00, 0xf7, 0xa3, 0x84, 0x65, 0x2e, 0x00, 0x00, 0x00};
+
+constexpr std::string_view kExpandedSvg = "<svg xmlns='http://www.w3.org/2000/svg'></svg>";
+
+std::vector<uint8_t> GzipSvgBytes() {
+  return {kGzipSvg.begin(), kGzipSvg.end()};
+}
+
 constexpr std::string_view kValidWoffBase64 =
     "d09GRk9UVE8AAAVAAAkAAAAAB0AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABDRkYgAAADXAAAAdEAAAIu"
     "idw6/09TLzIAAAFAAAAARQAAAGB9nYChY21hcAAAAvwAAABMAAAA5gCvAdxoZWFkAAAA4AAAADYAAAA2"
@@ -391,6 +404,111 @@ TEST(ResourceManagerContextAggregateBudgetTest, IncludesDecodedImageBytes) {
   const auto* image = registry.try_get<LoadedImageComponent>(imageEntity);
   ASSERT_NE(image, nullptr);
   EXPECT_FALSE(image->image.has_value());
+  EXPECT_TRUE(warnings.hasWarnings());
+}
+
+TEST(ResourceManagerContextAggregateBudgetTest,
+     SvgzImageSucceedsAtExactRawAndExpandedBoundaryAndCachesWithoutRecharging) {
+  constexpr size_t kExactBudget = kGzipSvg.size() + kExpandedSvg.size();
+  Registry registry;
+  auto& resourceManager = registry.ctx().emplace<ResourceManagerContext>(registry, kExactBudget);
+
+  int fetchCount = 0;
+  auto loader = std::make_unique<TestResourceLoader>([&fetchCount]() { ++fetchCount; });
+  loader->addFile("image.svgz", GzipSvgBytes());
+  resourceManager.setResourceLoader(std::move(loader));
+
+  int parseCount = 0;
+  resourceManager.setSvgParseCallback(
+      [&parseCount](const std::vector<uint8_t>& data,
+                    ParseWarningSink&) -> std::optional<SVGDocumentHandle> {
+        ++parseCount;
+        EXPECT_EQ(data, std::vector<uint8_t>(kExpandedSvg.begin(), kExpandedSvg.end()));
+        return MakeDocumentWithCanvas(1001).handle();
+      });
+
+  const Entity firstImage = registry.create();
+  registry.emplace<ImageComponent>(firstImage, ImageComponent{RcString("image.svgz")});
+  ParseWarningSink warnings;
+  resourceManager.loadResources(warnings);
+
+  ASSERT_TRUE(registry.all_of<LoadedSVGImageComponent>(firstImage));
+  EXPECT_EQ(resourceManager.remainingResourceBytes_, 0u);
+
+  const Entity cachedImage = registry.create();
+  registry.emplace<ImageComponent>(cachedImage, ImageComponent{RcString("image.svgz")});
+  resourceManager.loadResources(warnings);
+
+  ASSERT_TRUE(registry.all_of<LoadedSVGImageComponent>(cachedImage));
+  EXPECT_EQ(registry.get<LoadedSVGImageComponent>(cachedImage).subDocument,
+            registry.get<LoadedSVGImageComponent>(firstImage).subDocument);
+  EXPECT_EQ(fetchCount, 1);
+  EXPECT_EQ(parseCount, 1);
+  EXPECT_EQ(resourceManager.remainingResourceBytes_, 0u);
+  EXPECT_FALSE(warnings.hasWarnings());
+}
+
+TEST(ResourceManagerContextAggregateBudgetTest,
+     ExternalSvgzRejectsOneByteBelowExpandedBoundaryBeforeParserCallback) {
+  constexpr size_t kBudget = kGzipSvg.size() + kExpandedSvg.size() - 1;
+  Registry registry;
+  auto& resourceManager = registry.ctx().emplace<ResourceManagerContext>(registry, kBudget);
+  auto loader = std::make_unique<TestResourceLoader>();
+  loader->addFile("external.svgz", GzipSvgBytes());
+  resourceManager.setResourceLoader(std::move(loader));
+
+  int parseCount = 0;
+  resourceManager.setSvgParseCallback(
+      [&parseCount](const std::vector<uint8_t>&,
+                    ParseWarningSink&) -> std::optional<SVGDocumentHandle> {
+        ++parseCount;
+        return MakeDocumentWithCanvas(1002).handle();
+      });
+
+  ParseWarningSink warnings;
+  const auto result = resourceManager.loadExternalSVG("external.svgz", warnings);
+
+  EXPECT_FALSE(result.has_value());
+  EXPECT_EQ(parseCount, 0);
+  EXPECT_EQ(resourceManager.remainingResourceBytes_, kExpandedSvg.size() - 1);
+  const auto& cache = registry.ctx().get<SubDocumentCache>();
+  EXPECT_EQ(cache.size(), 0u);
+  EXPECT_FALSE(cache.isLoading("external.svgz"));
+  EXPECT_FALSE(cache.get("external.svgz").has_value());
+  EXPECT_TRUE(warnings.hasWarnings());
+}
+
+TEST(ResourceManagerContextAggregateBudgetTest,
+     DistinctSvgzExpansionSharesAggregateBudgetAndPreservesFirstDocumentOnRejection) {
+  constexpr size_t kBudget = 2 * (kGzipSvg.size() + kExpandedSvg.size()) - 1;
+  Registry registry;
+  auto& resourceManager = registry.ctx().emplace<ResourceManagerContext>(registry, kBudget);
+  auto loader = std::make_unique<TestResourceLoader>();
+  loader->addFile("first.svgz", GzipSvgBytes());
+  loader->addFile("second.svgz", GzipSvgBytes());
+  resourceManager.setResourceLoader(std::move(loader));
+
+  int parseCount = 0;
+  resourceManager.setSvgParseCallback(
+      [&parseCount](const std::vector<uint8_t>& data,
+                    ParseWarningSink&) -> std::optional<SVGDocumentHandle> {
+        ++parseCount;
+        EXPECT_EQ(data, std::vector<uint8_t>(kExpandedSvg.begin(), kExpandedSvg.end()));
+        return MakeDocumentWithCanvas(1003).handle();
+      });
+
+  ParseWarningSink warnings;
+  const auto first = resourceManager.loadExternalSVG("first.svgz", warnings);
+  ASSERT_TRUE(first.has_value());
+  const auto second = resourceManager.loadExternalSVG("second.svgz", warnings);
+
+  EXPECT_FALSE(second.has_value());
+  EXPECT_EQ(parseCount, 1);
+  EXPECT_EQ(resourceManager.remainingResourceBytes_, kExpandedSvg.size() - 1);
+  const auto& cache = registry.ctx().get<SubDocumentCache>();
+  EXPECT_EQ(cache.size(), 1u);
+  EXPECT_EQ(cache.get("first.svgz"), first);
+  EXPECT_FALSE(cache.get("second.svgz").has_value());
   EXPECT_TRUE(warnings.hasWarnings());
 }
 
