@@ -71,6 +71,10 @@ namespace donner::svg {
  * FontManager uses entt entities to store font data, with one entity per registered `@font-face`
  * rule or directly-loaded font. Text backends can cache parsed backend objects directly on the same
  * entity.
+ *
+ * FontManager follows the registry's access discipline rather than providing internal locking.
+ * Const queries may run in parallel while the registry is held for reading; loads and other
+ * mutations require serialized write access. The registry must outlive every stack-local manager.
  */
 class FontManager {
 public:
@@ -83,9 +87,10 @@ public:
   /**
    * Construct a FontManager tied to the provided ECS @p registry.
    *
-   * The first manager to access a registry's font budget establishes its aggregate byte and item
-   * limits. Later manager instances for the same registry share that state so loaded components
-   * remain accounted across manager lifetimes.
+   * The first manager to perform a serialized font load for a registry establishes its aggregate
+   * byte and item limits. Read-only queries never establish or replace that state. Later manager
+   * instances for the same registry share it so loaded components remain accounted across manager
+   * lifetimes.
    *
    * Construction does not access the registry context, so a FontManager can itself be safely
    * constructed by `registry.ctx().emplace<FontManager>(registry)`.
@@ -258,14 +263,19 @@ private:
   bool setRawFontData(Entity entity, std::vector<uint8_t> data);
   bool setRawFontData(Entity entity, std::shared_ptr<const std::vector<uint8_t>> sharedData);
 
+  /** Return the registry budget when installed, otherwise this manager's private candidate. */
+  std::shared_ptr<const FontBudgetState> budgetStateForRead() const;
+
   /**
    * Adopt the registry's persistent aggregate budget, or install this manager's candidate.
    *
-   * This must only run after construction because a FontManager can itself be under construction
-   * inside the registry context's container.
+   * This is restricted to serialized load paths. It must never run during construction or from a
+   * const/read path because a FontManager can itself live in the registry context, and
+   * ConcurrentDom permits parallel readers of a registry.
    */
-  const std::shared_ptr<FontBudgetState>& sharedBudgetState() const;
-  bool canStoreLoadedFont(Entity entity, size_t rawBytes, size_t indexBytes) const;
+  std::shared_ptr<FontBudgetState> budgetStateForWrite();
+  bool canStoreLoadedFont(Entity entity, size_t rawBytes, size_t indexBytes,
+                          const std::shared_ptr<FontBudgetState>& budgetState) const;
   bool storeLoadedFont(Entity entity, LoadedFontComponent font);
   bool loadFontDataSharedIntoEntity(Entity entity,
                                     const std::shared_ptr<const std::vector<uint8_t>>& data);
@@ -319,8 +329,13 @@ private:
   /// Optional external provider (embedded/system catalog), borrowed. May be nullptr.
   const FontFamilyProvider* provider_ = nullptr;
 
-  /// Aggregate budget shared with loaded-font components so their destruction safely releases it.
-  mutable std::shared_ptr<FontBudgetState> budgetState_;
+  /**
+   * Candidate aggregate budget installed by this manager if it performs the registry's first load.
+   *
+   * This pointer is immutable after construction. The registry context and loaded-font reservations
+   * own independent shared_ptr copies, so registry teardown order cannot invalidate reservations.
+   */
+  const std::shared_ptr<FontBudgetState> candidateBudgetState_;
 };
 
 }  // namespace donner::svg

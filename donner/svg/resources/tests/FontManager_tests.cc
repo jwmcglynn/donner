@@ -252,12 +252,14 @@ TEST(FontManagerTest, ConstBudgetQueriesDoNotInstallContextOrSelectCaps) {
   const size_t charge = RetainedCharge(data);
   FontManager smallerBudget(registry, charge, 1);
   FontManager largerBudget(registry, charge * 2, 2);
+  const FontManager& constSmallerBudget = smallerBudget;
+  const FontManager& constLargerBudget = largerBudget;
 
   EXPECT_FALSE(FontManagerTestAccess::HasPersistentBudgetState(registry));
-  EXPECT_EQ(smallerBudget.loadedFontBytes(), 0u);
-  EXPECT_EQ(smallerBudget.numLoadedFonts(), 0u);
-  EXPECT_EQ(largerBudget.loadedFontBytes(), 0u);
-  EXPECT_EQ(largerBudget.numLoadedFonts(), 0u);
+  EXPECT_EQ(constSmallerBudget.loadedFontBytes(), 0u);
+  EXPECT_EQ(constSmallerBudget.numLoadedFonts(), 0u);
+  EXPECT_EQ(constLargerBudget.loadedFontBytes(), 0u);
+  EXPECT_EQ(constLargerBudget.numLoadedFonts(), 0u);
   EXPECT_FALSE(FontManagerTestAccess::HasPersistentBudgetState(registry));
 
   ASSERT_TRUE(static_cast<bool>(largerBudget.loadFontData(data)));
@@ -275,6 +277,8 @@ TEST(FontManagerTest, ConcurrentBudgetQueriesAreReadOnly) {
   FontManager manager(registry, charge, 1);
   FontManager peerManager(registry, charge * 2, 2);
   ASSERT_TRUE(static_cast<bool>(manager.loadFontData(data)));
+  const FontManager& constManager = manager;
+  const FontManager& constPeerManager = peerManager;
 
   constexpr int kThreadCount = 4;
   constexpr int kReadsPerThread = 1000;
@@ -286,8 +290,9 @@ TEST(FontManagerTest, ConcurrentBudgetQueriesAreReadOnly) {
     threads.emplace_back([&] {
       while (!start.load(std::memory_order_acquire)) {}
       for (int read = 0; read < kReadsPerThread; ++read) {
-        if (manager.loadedFontBytes() != charge || manager.numLoadedFonts() != 1u ||
-            peerManager.loadedFontBytes() != charge || peerManager.numLoadedFonts() != 1u) {
+        if (constManager.loadedFontBytes() != charge || constManager.numLoadedFonts() != 1u ||
+            constPeerManager.loadedFontBytes() != charge ||
+            constPeerManager.numLoadedFonts() != 1u) {
           sawMismatch.store(true, std::memory_order_relaxed);
         }
       }
