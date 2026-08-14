@@ -83,7 +83,7 @@ jobs:
           path: ${{ runner.temp }}/editor-wasm-package-geode
 
       - name: Setup Node
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           node-version: 24
 
