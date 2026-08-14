@@ -1005,6 +1005,9 @@ std::string InitialDocumentSyncSource(const EditorShellOptions& options) {
   return LoadFile(options.svgPath).value_or("");
 }
 
+constexpr std::string_view kNewDocumentSvg =
+    R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="640" height="400" viewBox="0 0 640 400"/>)svg";
+
 std::string CanonicalizeForTextEditor(std::string_view source) {
   std::string result(source);
   if (!result.empty() && result.back() == '\n') {
@@ -1806,7 +1809,7 @@ void EditorShell::maybeLogFrameMissTelemetry(const FrameCostBreakdown& frameCost
 }
 
 bool EditorShell::tryOpenPath(std::string_view path, std::string* error) {
-  cancelPendingSampleLoad();
+  cancelPendingDocumentReplacement();
   auto contents = LoadFile(std::string(path));
   if (!contents.has_value()) {
     *error = "Could not open file.";
@@ -1840,56 +1843,70 @@ bool EditorShell::tryLoadSource(std::string_view source, std::optional<std::stri
   return true;
 }
 
-void EditorShell::queuePendingSampleLoad(std::string sampleId) {
-  pendingSampleLoadId_ = std::move(sampleId);
-  pendingSampleLoadNeedsConfirmation_ = false;
-  pendingSampleLoadDiscardConfirmed_ = false;
-  // The selected sample supersedes the current document frame. Start cancellation in the click
-  // frame so the next UI frame can claim the DOM as soon as SVG traversal reaches a safe point.
+void EditorShell::requestNewDocument() {
+  queuePendingDocumentReplacement(PendingDocumentReplacementKind::NewDocument);
+  showSamplePicker_ = true;
+  processPendingDocumentReplacement();
+  window_.wakeEventLoop();
+}
+
+void EditorShell::queuePendingDocumentReplacement(PendingDocumentReplacementKind kind,
+                                                  std::string sampleId) {
+  pendingDocumentReplacement_ = PendingDocumentReplacement{
+      .kind = kind,
+      .sampleId = std::move(sampleId),
+      .pickerWasVisible = showSamplePicker_,
+  };
+  // A replacement supersedes the current document frame. Start cancellation in the request frame
+  // so the next UI frame can claim the DOM as soon as SVG traversal reaches a safe point.
   cancelSampleThumbnailGeneration();
   renderCoordinator_.asyncRenderer().cancelInFlight();
 }
 
-void EditorShell::cancelPendingSampleLoad() {
-  pendingSampleLoadId_.clear();
-  pendingSampleLoadNeedsConfirmation_ = false;
-  pendingSampleLoadDiscardConfirmed_ = false;
+void EditorShell::queuePendingSampleLoad(std::string sampleId) {
+  queuePendingDocumentReplacement(PendingDocumentReplacementKind::Sample, std::move(sampleId));
 }
 
-void EditorShell::confirmPendingSampleLoadDiscard() {
-  if (pendingSampleLoadId_.empty()) {
+void EditorShell::cancelPendingDocumentReplacement() {
+  pendingDocumentReplacement_.reset();
+}
+
+void EditorShell::confirmPendingDocumentReplacementDiscard() {
+  if (!pendingDocumentReplacement_.has_value()) {
     return;
   }
-  pendingSampleLoadNeedsConfirmation_ = false;
-  pendingSampleLoadDiscardConfirmed_ = true;
+  pendingDocumentReplacement_->needsConfirmation = false;
+  pendingDocumentReplacement_->discardConfirmed = true;
   window_.wakeEventLoop();
 }
 
-void EditorShell::processPendingSampleLoad() {
-  if (pendingSampleLoadId_.empty()) {
+void EditorShell::processPendingDocumentReplacement() {
+  if (!pendingDocumentReplacement_.has_value()) {
     return;
   }
   const bool hasDocument = app_.hasDocument();
   std::optional<svg::DocumentWriteAccess> documentAccess =
       hasDocument ? app_.document().document().tryWriteAccess() : std::nullopt;
   const bool documentWriteAvailable = !hasDocument || documentAccess.has_value();
-  if (!internal::PendingDocumentReplacementCanProcess(!pendingSampleLoadId_.empty(),
+  if (!internal::PendingDocumentReplacementCanProcess(pendingDocumentReplacement_.has_value(),
                                                       documentWriteAvailable,
                                                       app_.document().hasPendingMutations())) {
     return;
   }
 
-  if (!pendingSampleLoadDiscardConfirmed_ && (app_.isDirty() || textEditor_.isTextChanged())) {
-    pendingSampleLoadNeedsConfirmation_ = true;
+  if (!pendingDocumentReplacement_->discardConfirmed &&
+      (app_.isDirty() || textEditor_.isTextChanged())) {
+    pendingDocumentReplacement_->needsConfirmation = true;
     showSamplePicker_ = true;
     return;
   }
 
-  const std::string sampleId = std::exchange(pendingSampleLoadId_, {});
-  pendingSampleLoadNeedsConfirmation_ = false;
-  pendingSampleLoadDiscardConfirmed_ = false;
-  const EditorSample* sample = FindEditorSample(sampleId);
-  if (sample == nullptr) {
+  PendingDocumentReplacement replacement = std::move(*pendingDocumentReplacement_);
+  pendingDocumentReplacement_.reset();
+  const EditorSample* sample = replacement.kind == PendingDocumentReplacementKind::Sample
+                                   ? FindEditorSample(replacement.sampleId)
+                                   : nullptr;
+  if (replacement.kind == PendingDocumentReplacementKind::Sample && sample == nullptr) {
     showSamplePicker_ = true;
     return;
   }
@@ -1903,20 +1920,22 @@ void EditorShell::processPendingSampleLoad() {
   // dropped instead of landing over the replacement document.
   renderCoordinator_.asyncRenderer().cancelInFlight();
   std::string error;
-  if (tryLoadSource(sample->source, std::nullopt, &error)) {
-    activeSampleId_ = sampleId;
+  const std::string_view source = sample != nullptr ? sample->source : kNewDocumentSvg;
+  if (tryLoadSource(source, std::nullopt, &error)) {
+    activeSampleId_ = sample != nullptr ? replacement.sampleId : std::string();
 #ifdef __EMSCRIPTEN__
     PublishActiveSampleId(activeSampleId_.c_str());
 #endif
-    samplePresentationPending_ = true;
-    showSamplePicker_ = true;
-    // The picker click runs after the render pane has already laid out this frame. Defer the first
-    // sample request until the next frame has fitted the new intrinsic viewBox.
-    requestRenderAtEndOfFrame_ = false;
+    if (sample != nullptr) {
+      samplePresentationPending_ = true;
+      showSamplePicker_ = true;
+      // The picker click runs after the render pane has already laid out this frame. Defer the
+      // first sample request until the next frame has fitted the new intrinsic viewBox.
+      requestRenderAtEndOfFrame_ = false;
+    }
   } else {
     showSamplePicker_ = true;
-    std::fprintf(stderr, "[editor] failed to load built-in sample %s: %s\n", sampleId.c_str(),
-                 error.c_str());
+    std::fprintf(stderr, "[editor] failed to create replacement document: %s\n", error.c_str());
   }
 }
 
@@ -2118,7 +2137,7 @@ void EditorShell::requestRevert() {
     return;
   }
 
-  cancelPendingSampleLoad();
+  cancelPendingDocumentReplacement();
 
   const std::string source(app_.cleanSourceText());
   if (!app_.revertToCleanSource()) {
@@ -2223,9 +2242,12 @@ void EditorShell::applyMenuActions(const MenuBarActions& menuActions) {
   if (menuActions.openAbout) {
     dialogPresenter_.requestAbout();
   }
+  if (menuActions.newDocument) {
+    requestNewDocument();
+  }
   if (menuActions.openFile) {
     cancelSampleThumbnailGeneration();
-    cancelPendingSampleLoad();
+    cancelPendingDocumentReplacement();
     dialogPresenter_.requestOpenFile(app_.currentFilePath());
   }
   if (menuActions.openSamples) {
@@ -2402,6 +2424,10 @@ void EditorShell::handleGlobalShortcuts() {
 
   if (!anyPopupOpen && cmd && !shift && ImGui::IsKeyPressed(ImGuiKey_O, /*repeat=*/false)) {
     dialogPresenter_.requestOpenFile(app_.currentFilePath());
+  }
+
+  if (!anyPopupOpen && cmd && !shift && ImGui::IsKeyPressed(ImGuiKey_N, /*repeat=*/false)) {
+    requestNewDocument();
   }
 
   if (!anyPopupOpen && cmd && !shift && ImGui::IsKeyPressed(ImGuiKey_Q, /*repeat=*/false)) {
@@ -4479,20 +4505,29 @@ void EditorShell::renderSamplePicker(const ImVec2& paneOrigin, const ImVec2& con
       SamplePickerState{.visible = true, .selectedSampleId = activeSampleId_}, thumbnailProvider);
   ImGui::EndChild();
 
-  if (pendingSampleLoadNeedsConfirmation_) {
+  if (pendingDocumentReplacement_.has_value() && pendingDocumentReplacement_->needsConfirmation) {
+    const bool creatingNewDocument =
+        pendingDocumentReplacement_->kind == PendingDocumentReplacementKind::NewDocument;
     if (!ImGui::IsPopupOpen("Discard changes?")) {
       ImGui::OpenPopup("Discard changes?");
     }
     if (ImGui::BeginPopupModal("Discard changes?", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-      ImGui::TextUnformatted("Loading a sample replaces the current document.");
+      ImGui::TextUnformatted(creatingNewDocument
+                                 ? "Creating a new document replaces the current document."
+                                 : "Loading a sample replaces the current document.");
       ImGui::Spacing();
       if (ImGui::Button("Cancel", ImVec2(112.0f, 40.0f))) {
-        cancelPendingSampleLoad();
+        const bool restorePicker = pendingDocumentReplacement_->pickerWasVisible;
+        cancelPendingDocumentReplacement();
+        if (!restorePicker && !welcomePlaceholderActive_) {
+          showSamplePicker_ = false;
+        }
         ImGui::CloseCurrentPopup();
       }
       ImGui::SameLine();
-      if (ImGui::Button("Discard & Load", ImVec2(148.0f, 40.0f))) {
-        confirmPendingSampleLoadDiscard();
+      const char* confirmLabel = creatingNewDocument ? "Discard & Create" : "Discard & Load";
+      if (ImGui::Button(confirmLabel, ImVec2(148.0f, 40.0f))) {
+        confirmPendingDocumentReplacementDiscard();
         ImGui::CloseCurrentPopup();
       }
       ImGui::EndPopup();
@@ -4504,7 +4539,7 @@ void EditorShell::renderSamplePicker(const ImVec2& paneOrigin, const ImVec2& con
 
   if (actions.dismiss) {
     cancelSampleThumbnailGeneration();
-    cancelPendingSampleLoad();
+    cancelPendingDocumentReplacement();
     if (welcomePlaceholderActive_) {
       queuePendingSampleLoad("donner-splash");
     } else {
@@ -4513,7 +4548,7 @@ void EditorShell::renderSamplePicker(const ImVec2& paneOrigin, const ImVec2& con
   }
   if (actions.openFile) {
     cancelSampleThumbnailGeneration();
-    cancelPendingSampleLoad();
+    cancelPendingDocumentReplacement();
     if (!welcomePlaceholderActive_) {
       showSamplePicker_ = false;
     }
@@ -4538,10 +4573,13 @@ void EditorShell::renderSamplePicker(const ImVec2& paneOrigin, const ImVec2& con
     ImGui::SetClipboardText(kSamplePickerGitHubUrl.data());
 #endif
   }
+  if (actions.newDocument) {
+    requestNewDocument();
+  }
   if (actions.loadSample) {
     queuePendingSampleLoad(actions.sampleId);
     // Start a clean, idle replacement after this frame's document UI work has already finished.
-    processPendingSampleLoad();
+    processPendingDocumentReplacement();
     window_.wakeEventLoop();
   }
 }
@@ -4843,7 +4881,7 @@ void EditorShell::renderCompactTopBar() {
 
   ImGui::SetCursorPos(ImVec2(controlsX, 4.0f));
   if (button("##compact_open", CompactIcon::Open, "Open or sample", true, false)) {
-    pendingSampleLoadId_.clear();
+    cancelPendingDocumentReplacement();
     compactPanelVisible_ = false;
     showSamplePicker_ = true;
     window_.wakeEventLoop();
@@ -6863,7 +6901,7 @@ void EditorShell::runFrame() {
       requestRenderAtEndOfFrame_ = !showSamplePicker_ || samplePresentationPending_;
     }
   }
-  processPendingSampleLoad();
+  processPendingDocumentReplacement();
   const bool documentUiSnapshotRendererBusy = renderCoordinator_.asyncRenderer().isBusy();
   cachedCanvasHasSelectableElements_ = internal::ResolveCachedDocumentBoolForFrame(
       documentUiSnapshotRendererBusy, cachedCanvasHasSelectableElements_,

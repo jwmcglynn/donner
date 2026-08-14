@@ -876,18 +876,43 @@ public:
     shell.showSamplePicker_ = true;
   }
 
-  static void ProcessPendingSampleLoad(EditorShell& shell) { shell.processPendingSampleLoad(); }
+  static void ProcessPendingSampleLoad(EditorShell& shell) {
+    shell.processPendingDocumentReplacement();
+  }
 
   static std::string_view PendingSampleLoad(const EditorShell& shell) {
-    return shell.pendingSampleLoadId_;
+    if (!shell.pendingDocumentReplacement_.has_value() ||
+        shell.pendingDocumentReplacement_->kind !=
+            EditorShell::PendingDocumentReplacementKind::Sample) {
+      return {};
+    }
+    return shell.pendingDocumentReplacement_->sampleId;
   }
 
   static bool PendingSampleLoadNeedsConfirmation(const EditorShell& shell) {
-    return shell.pendingSampleLoadNeedsConfirmation_;
+    return shell.pendingDocumentReplacement_.has_value() &&
+           shell.pendingDocumentReplacement_->kind ==
+               EditorShell::PendingDocumentReplacementKind::Sample &&
+           shell.pendingDocumentReplacement_->needsConfirmation;
+  }
+
+  static bool PendingNewDocumentNeedsConfirmation(const EditorShell& shell) {
+    return shell.pendingDocumentReplacement_.has_value() &&
+           shell.pendingDocumentReplacement_->kind ==
+               EditorShell::PendingDocumentReplacementKind::NewDocument &&
+           shell.pendingDocumentReplacement_->needsConfirmation;
+  }
+
+  static void ConfirmPendingDocumentReplacementDiscard(EditorShell& shell) {
+    shell.confirmPendingDocumentReplacementDiscard();
+  }
+
+  static void ProcessPendingDocumentReplacement(EditorShell& shell) {
+    shell.processPendingDocumentReplacement();
   }
 
   static void ConfirmPendingSampleLoadDiscard(EditorShell& shell) {
-    shell.confirmPendingSampleLoadDiscard();
+    shell.confirmPendingDocumentReplacementDiscard();
   }
 
   static void RequestSave(EditorShell& shell) { shell.requestSave(); }
@@ -4070,6 +4095,21 @@ TEST(EditorShellTest, GlobalShortcutsRouteFileDialogsSaveAndQuit) {
   EXPECT_NE(glfwWindowShouldClose(window.rawHandle()), 0);
 }
 
+TEST(EditorShellTest, GlobalNewDocumentShortcutUsesTheSharedReplacementCommand) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
+
+  EditorShell shell(window, OptionsWithSource(kInitialSvg, "initial.svg"));
+  ASSERT_TRUE(shell.valid());
+
+  DriveGlobalShortcut(shell, {ImGuiKey_N}, /*ctrl=*/true);
+
+  EXPECT_FALSE(EditorShellTestAccess::App(shell).currentFilePath().has_value());
+  EXPECT_FALSE(EditorShellTestAccess::App(shell).document().document().querySelector("#target"));
+}
+
 TEST(EditorShellTest, GlobalShortcutsRouteCanvasSelectionAndShapeClipboard) {
   gui::EditorWindow window = MakeHiddenWindow();
   if (!window.valid()) {
@@ -4332,6 +4372,31 @@ TEST(EditorShellTest, NewDocumentMenuActionReplacesTheCurrentFileWithAnUntitledC
   EXPECT_NE(EditorShellTestAccess::Source(shell).getText().find("viewBox=\"0 0 640 400\""),
             std::string::npos);
   EXPECT_FALSE(EditorShellTestAccess::App(shell).isDirty());
+}
+
+TEST(EditorShellTest, NewDocumentWaitsForDirtyDocumentDiscardConfirmation) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
+
+  EditorShell shell(window, OptionsWithSource(kInitialSvg, "initial.svg"));
+  ASSERT_TRUE(shell.valid());
+  EditorShellTestAccess::Source(shell).setText("<svg>unsaved edits</svg>");
+  EditorShellTestAccess::App(shell).markDirty();
+
+  MenuBarActions actions;
+  actions.newDocument = true;
+  EditorShellTestAccess::ApplyMenuActions(shell, actions);
+
+  EXPECT_TRUE(EditorShellTestAccess::PendingNewDocumentNeedsConfirmation(shell));
+  EXPECT_TRUE(EditorShellTestAccess::App(shell).document().document().querySelector("#target"));
+
+  EditorShellTestAccess::ConfirmPendingDocumentReplacementDiscard(shell);
+  EditorShellTestAccess::ProcessPendingDocumentReplacement(shell);
+  EXPECT_FALSE(EditorShellTestAccess::PendingNewDocumentNeedsConfirmation(shell));
+  EXPECT_FALSE(EditorShellTestAccess::App(shell).document().document().querySelector("#target"));
+  EXPECT_FALSE(EditorShellTestAccess::App(shell).currentFilePath().has_value());
 }
 
 TEST(EditorShellTest, ShapeClipboardCopyCutAndPasteUseCanvasSelection) {
@@ -4679,7 +4744,7 @@ TEST(EditorShellTest, SamplePickerRendersDiscardConfirmationForDirtyDocument) {
   EditorShellTestAccess::QueueSampleLoad(shell, "basic-shapes");
   EXPECT_TRUE(EditorShellTestAccess::ShowSamplePicker(shell));
 
-  // Driving frames runs processPendingSampleLoad(), which flags the load as
+  // Driving frames processes the pending replacement, which flags the load as
   // needing confirmation, and renderSamplePicker() then draws the modal. The
   // pending load and picker both survive because nothing has confirmed yet.
   for (int frame = 0; frame < 3; ++frame) {

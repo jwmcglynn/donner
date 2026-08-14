@@ -141,7 +141,7 @@ void ApplySamplePickerCommand(bool activated, SamplePickerCommand command,
 
   switch (command) {
     case SamplePickerCommand::Dismiss: actions->dismiss = true; return;
-    case SamplePickerCommand::NewDocument: return;
+    case SamplePickerCommand::NewDocument: actions->newDocument = true; return;
     case SamplePickerCommand::OpenFile: actions->openFile = true; return;
     case SamplePickerCommand::LoadSample:
       if (FindEditorSample(sampleId) != nullptr) {
@@ -178,13 +178,23 @@ SamplePickerActions SamplePickerPresenter::render(
   ImGui::TextWrapped("Edit SVG graphics and source together.");
   ImGui::Dummy(ImVec2(0.0f, kHeadingSpacing));
 
+  const float newWidth =
+      std::max(132.0f, ImGui::CalcTextSize("New Document").x + 2.0f * theme.space4);
   const float openWidth = std::max(112.0f, ImGui::CalcTextSize("Open SVG").x + 2.0f * theme.space4);
+  const float githubWidth =
+      std::max(128.0f, ImGui::CalcTextSize(kGitHubActionLabel.data()).x + 2.0f * theme.space4);
+  if (ImGui::Button("New Document", ImVec2(newWidth, kSamplePickerMinTouchTarget))) {
+    ApplySamplePickerCommand(true, SamplePickerCommand::NewDocument, {}, &actions);
+  }
+  if (newWidth + theme.space2 + openWidth <= availableWidth) {
+    ImGui::SameLine(0.0f, theme.space2);
+  }
   if (ImGui::Button("Open SVG", ImVec2(openWidth, kSamplePickerMinTouchTarget))) {
     ApplySamplePickerCommand(true, SamplePickerCommand::OpenFile, {}, &actions);
   }
-  ImGui::SameLine(0.0f, theme.space2);
-  const float githubWidth =
-      std::max(128.0f, ImGui::CalcTextSize(kGitHubActionLabel.data()).x + 2.0f * theme.space4);
+  if (newWidth + openWidth + githubWidth + 2.0f * theme.space2 <= availableWidth) {
+    ImGui::SameLine(0.0f, theme.space2);
+  }
   if (ImGui::Button(kGitHubActionLabel.data(), ImVec2(githubWidth, kSamplePickerMinTouchTarget))) {
     ApplySamplePickerCommand(true, SamplePickerCommand::OpenGitHub, {}, &actions);
   }
