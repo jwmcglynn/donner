@@ -3,7 +3,9 @@
 ///
 /// The repository keeps only `donner_splash.svg`. These tests generate the
 /// derived showcase in memory through the same text-to-outlines and viewport
-/// export paths as the editor, then assert the generated-output invariants.
+/// export paths as the editor, then assert the generated-output invariants. The
+/// visual golden uses a flat synthetic base so it covers only the generator's
+/// added badge and overlay rather than platform-sensitive curved splash art.
 
 #include <fstream>
 #include <optional>
@@ -112,6 +114,32 @@ TEST(ShowcaseAssetFixture, GeneratesOutlinedOverlayShowcaseOnDemand) {
   EXPECT_EQ(bitmap.dimensions.x, kRenderSize.x);
   EXPECT_EQ(bitmap.dimensions.y, kRenderSize.y);
   ASSERT_GE(bitmap.rowBytes, static_cast<std::size_t>(bitmap.dimensions.x) * 4u);
+}
+
+TEST(ShowcaseAssetFixture, GeneratedBadgeAndOverlayMatchGolden) {
+  // Keep the visual baseline focused on the pixels this generator adds. The
+  // canonical splash contains curved antialiased edges whose final channel
+  // rounding differs across toolchains, while this flat base remains identical
+  // and still exercises text-to-outlines plus selection-overlay export.
+  constexpr std::string_view kDeterministicBase =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 892 512">
+  <rect width="892" height="512" fill="#0b0d1d"/>
+</svg>)";
+
+  const auto generated = editor::GenerateShowcaseAsset(kDeterministicBase);
+  ASSERT_TRUE(generated.ok()) << generated.error;
+
+  ParseWarningSink warningSink = ParseWarningSink::Disabled();
+  auto result = parser::SVGParser::ParseSVG(generated.value, warningSink);
+  ASSERT_FALSE(result.hasError()) << "SVGParser rejected the generated visual fixture: "
+                                  << result.error();
+
+  SVGDocument document = std::move(result).result();
+  constexpr Vector2i kRenderSize(223, 128);
+  document.setCanvasSize(kRenderSize.x, kRenderSize.y);
+  Renderer renderer;
+  renderer.draw(document);
+  const RendererBitmap bitmap = renderer.takeSnapshot();
   editor::tests::CompareBitmapToGolden(bitmap, kShowcaseGoldenPath, "generated_showcase_tiny_skia",
                                        editor::tests::PixelmatchIdentityParams());
 }

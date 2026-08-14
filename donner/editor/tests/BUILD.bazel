@@ -1066,8 +1066,9 @@ donner_cc_test(
 # Showcase generator fixture for the v0.8 release. Generates the showcase in
 # memory from the canonical splash, then verifies that it parses, contains
 # outlined <path> geometry and the converted-from-text marker, has no live
-# <text>, carries the exported donner-editor-overlay chrome group, and matches
-# the reviewed TinySkia composition golden.
+# <text>, and carries the exported donner-editor-overlay chrome group. A flat
+# deterministic input isolates the reviewed TinySkia badge-and-overlay golden
+# from cross-toolchain rounding along the splash's curved antialiased edges.
 donner_cc_test(
     name = "showcase_asset_tests",
     srcs = ["ShowcaseAssetFixture_tests.cc"],
