@@ -23,6 +23,12 @@
   text-align: center;
 }
 
+/* Long specification URLs must remain readable in the narrow content column
+ * immediately above the mobile-navigation breakpoint. */
+.contents a[href^="http"] {
+  overflow-wrap: anywhere;
+}
+
 /* Doxygen's stock outline forces long headings onto one unbroken line. Keep
  * the rail useful at desktop widths where it is visible. */
 #page-nav ul.page-outline li {
@@ -34,6 +40,39 @@
   display: block;
   line-height: 1.35;
   padding: 0.35em 0.5em;
+}
+
+/* The branded header is five title lines high. Reserve one additional row for
+ * Doxygen's client-side search without moving page content downward. */
+@media screen and (min-width: 768px) {
+  html {
+    --top-height: calc(
+      var(--title-font-size) * 5 + 2 * var(--spacing-medium) + var(--searchbar-height) +
+        var(--spacing-small)
+    );
+  }
+
+  #main-nav {
+    box-sizing: border-box;
+    float: none;
+    height: calc(var(--searchbar-height) + var(--spacing-small));
+    padding: 0 var(--spacing-medium) var(--spacing-small);
+  }
+
+  #main-menu {
+    height: var(--searchbar-height);
+  }
+
+  #main-menu > li:last-child {
+    display: flex;
+    float: none !important;
+    height: var(--searchbar-height);
+    margin: 0;
+  }
+
+  #doc-content {
+    padding-top: 40px;
+  }
 }
 
 /* The fixed navigation rail already consumes substantial laptop width.  Drop
