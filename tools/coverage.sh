@@ -27,7 +27,7 @@ function kill_process_tree() {
   local signal="$1"
   local root="$2"
   local child
-  for child in $(ps -A -o pid=,ppid= 2> /dev/null | awk -v p="$root" '$2 == p {print $1}'); do
+  for child in $(ps -o pid= --ppid "$root" 2> /dev/null); do
     kill_process_tree "$signal" "$child"
   done
   kill "-$signal" "$root" 2> /dev/null || true
