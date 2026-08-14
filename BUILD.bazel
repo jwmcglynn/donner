@@ -60,6 +60,7 @@ exports_files(
         "donner_splash.svg",
         "MODULE.bazel",
         ".github/workflows/coverage.yml",
+        ".github/workflows/main.yml",
         ".bazelversion",
         ".bazelrc",
         "zoom-out-drag-jump.rnr",
