@@ -145,11 +145,9 @@ class CoverageLaneRoutingTest(unittest.TestCase):
     def test_every_coverage_job_gates_on_runs_coverage(self):
         """All three lanes, including the hosted one.
 
-        `build` is the hosted lane, and it is not a fallback nobody exercises:
-        it is what carries coverage for every PR over the changed-file cap,
-        which is exactly when the self-hosted lane and its turnstile skip. If it
-        ever stopped consuming `runs_coverage`, a large-change PR would land in
-        the same shape the routing fix removed - all lanes skipped, run green.
+        `build` is the hosted lane used when trusted self-hosted routing is not
+        available. It must consume the same coverage decision as the two
+        self-hosted jobs so every selected lane measures the same target set.
         """
         for job in ("build", "coverage-self-hosted", "coverage-self-hosted-turnstile"):
             self.assertIn(
@@ -158,18 +156,19 @@ class CoverageLaneRoutingTest(unittest.TestCase):
                 "job %s does not gate on the single routing output" % job,
             )
 
-    def test_large_change_routes_to_the_hosted_lane_rather_than_nowhere(self):
-        """The cap moves coverage between lanes; it must never cancel it.
+    def test_runner_gate_selects_exactly_one_coverage_lane(self):
+        """The trusted-runner gate, not change size, selects the coverage lane.
 
-        `large_change` sends a PR to the hosted lane instead of the constrained
-        self-hosted one. The two gates have to be exact complements on that
-        flag, or a large-change PR falls through both and reports green having
-        measured nothing.
+        Hosted and self-hosted conditions must remain exact complements so a
+        coverage decision cannot fall through both lane families.
         """
         hosted = self._job_body("build")
-        self.assertIn("outputs.large_change == 'true'", hosted)
+        self.assertIn("outputs.use_self_hosted_linux != 'true'", hosted)
         for job in ("coverage-self-hosted", "coverage-self-hosted-turnstile"):
-            self.assertIn("outputs.large_change != 'true'", self._job_body(job))
+            self.assertIn(
+                "outputs.use_self_hosted_linux == 'true'",
+                self._job_body(job),
+            )
 
     def test_build_defs_and_bazelrc_do_not_escalate_to_a_full_fallback(self):
         """The regression itself.
