@@ -124,6 +124,7 @@ donner_cc_library(
     visibility = [
         "//donner/editor:__subpackages__",
         "//donner/svg:__subpackages__",
+        "//tools/mcp-servers/editor-control:__pkg__",
     ],
     deps = [
         ":font_catalog_types",
@@ -172,6 +173,7 @@ donner_cc_library(
     visibility = [
         "//donner/editor:__subpackages__",
         "//donner/svg:__subpackages__",
+        "//tools/mcp-servers/editor-control:__pkg__",
     ],
     deps = [
         ":font_catalog_types",

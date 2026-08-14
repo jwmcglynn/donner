@@ -209,6 +209,7 @@ SampleThumbnailRenderResult RenderSampleThumbnail(
     SampleThumbnailRenderRequest request, svg::RendererInterface& renderer,
     const svg::compositor::CancellationToken& cancellation, std::chrono::milliseconds delay) {
   SampleThumbnailRenderResult result{
+      .kind = request.kind,
       .key = request.key,
       .outcome = SampleThumbnailRenderOutcome::RenderError,
   };
@@ -736,6 +737,7 @@ void AsyncRenderer::workerLoop() {
 
       SampleThumbnailRenderResult result;
       if (offscreenRenderer == nullptr) {
+        result.kind = sampleThumbnailStorage->kind;
         result.key = sampleThumbnailStorage->key;
         result.outcome = SampleThumbnailRenderOutcome::RendererUnavailable;
       } else {

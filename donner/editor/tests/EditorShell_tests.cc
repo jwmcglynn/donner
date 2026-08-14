@@ -812,8 +812,20 @@ public:
   static TextEditor& Source(EditorShell& shell) { return shell.textEditor_; }
   static const TextEditor& Source(const EditorShell& shell) { return shell.textEditor_; }
 
-  static FormatBarState ComputeFormatBarState(EditorShell& shell) {
-    return shell.computeFormatBarState();
+  static void RequestFontPreviews(EditorShell& shell, std::vector<std::string> families) {
+    shell.requestFontPreviews(families);
+  }
+
+  static void AdvanceFontPreviewGeneration(EditorShell& shell) {
+    shell.advanceFontPreviewGeneration();
+  }
+
+  static FormatBarFontPreview FontPreviewForFamily(EditorShell& shell, std::string_view family) {
+    return shell.fontPreviewForFamily(family);
+  }
+
+  static std::size_t CachedFontPreviewCount(const EditorShell& shell) {
+    return shell.fontPreviewBitmaps_.size();
   }
 
   static bool TryOpenPath(EditorShell& shell, std::string_view path, std::string* error) {
@@ -3189,26 +3201,30 @@ TEST(EditorShellTest, ShellGeometryHelpersClampToViewportAndSelectionCache) {
   EXPECT_FLOAT_EQ(compactPalette.width(), 156.0f);
 }
 
-TEST(EditorShellTest, TextFormatBarPreviewsEveryCatalogFamilyInItsOwnFace) {
+TEST(EditorShellTest, TextFormatBarLazilyRendersCatalogFamilyInItsOwnFace) {
   gui::EditorWindow window = MakeHiddenWindow();
   if (!window.valid()) {
     GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
   }
 
-  EditorShell shell(window, OptionsWithSource(R"(<svg xmlns="http://www.w3.org/2000/svg">
-    <text id="target" x="10" y="30">Preview</text>
-  </svg>)"));
+  EditorShell shell(window, OptionsWithSource(R"(<svg xmlns="http://www.w3.org/2000/svg"/>)"));
   ASSERT_TRUE(shell.valid());
-  auto target = EditorShellTestAccess::App(shell).document().document().querySelector("#target");
-  ASSERT_TRUE(target.has_value());
-  EditorShellTestAccess::App(shell).setSelection(*target);
+  EXPECT_EQ(EditorShellTestAccess::CachedFontPreviewCount(shell), 0u)
+      << "Constructing the editor must not eagerly materialize the desktop font catalog";
 
-  const FormatBarState state = EditorShellTestAccess::ComputeFormatBarState(shell);
-  ASSERT_TRUE(state.visible);
-  ASSERT_EQ(state.families.size(), shell.fontCatalog().families().size());
-  for (const FormatBarFontFamily& family : state.families) {
-    EXPECT_NE(family.previewFont, nullptr) << family.name;
+  EditorShellTestAccess::RequestFontPreviews(shell, {"Bebas Neue"});
+  FormatBarFontPreview preview;
+  for (int attempt = 0; attempt < 500 && !preview.available(); ++attempt) {
+    EditorShellTestAccess::AdvanceFontPreviewGeneration(shell);
+    preview = EditorShellTestAccess::FontPreviewForFamily(shell, "Bebas Neue");
+    if (!preview.available()) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
   }
+  EXPECT_TRUE(preview.available());
+  EXPECT_EQ(EditorShellTestAccess::CachedFontPreviewCount(shell), 1u);
+  EXPECT_EQ(preview.width, 196.0f);
+  EXPECT_EQ(preview.height, 24.0f);
 }
 
 TEST(EditorShellTest, PrivateUiRenderHelpersCoverPaneToolbarAndPanelStates) {

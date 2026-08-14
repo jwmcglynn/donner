@@ -9,6 +9,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <vector>
 
 #include "donner/editor/CanvasScrollbars.h"
@@ -442,6 +443,9 @@ private:
   void renderSidebars();
   void ensureSampleThumbnails();
   void cancelSampleThumbnailGeneration();
+  void requestFontPreviews(const std::vector<std::string>& families);
+  void advanceFontPreviewGeneration();
+  [[nodiscard]] FormatBarFontPreview fontPreviewForFamily(std::string_view family);
   void renderSamplePicker(const ImVec2& paneOrigin, const ImVec2& contentRegion);
   void renderSourcePaneSplitter(float windowWidth, float paneOriginY, float paneHeight,
                                 float sourcePaneWidth);
@@ -560,6 +564,9 @@ private:
   /// Dedicated cache for the bounded welcome catalog. It is intentionally
   /// separate from row thumbnails, whose retention sweep follows live layers.
   GlTextureCache sampleThumbnailTextures_;
+  /// Lazily rendered family-name previews. Only visible dropdown rows enter
+  /// this dedicated cache, so desktop system-font enumeration stays cheap.
+  GlTextureCache fontPreviewTextures_;
   /// Toolbar tool-icon texture cache. Holds the Donner-rendered white-mask
   /// bitmaps for the palette icons, keyed by a stable per-icon id. Never
   /// retention-swept (unlike `thumbnailTextures_`), so the four icons upload
@@ -579,6 +586,9 @@ private:
   /// still initializing. Nothing else wakes the on-demand loop for that, so the
   /// picker arms its own short idle retry. @see nextIdleWakeSeconds
   bool sampleThumbnailRetryPending_ = false;
+  std::unordered_map<std::string, std::optional<svg::RendererBitmap>> fontPreviewBitmaps_;
+  std::deque<std::string> pendingFontPreviews_;
+  std::optional<std::string> fontPreviewInFlight_;
   /// Embedded + system font catalog. It is declared before the render coordinator so it outlives
   /// every worker-side FontManager and offscreen renderer during reverse-order destruction.
   svg::FontCatalog fontCatalog_;

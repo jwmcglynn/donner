@@ -288,10 +288,16 @@ TEST(TextFormatBarPresenterActionsTest, NoActionsQueueNoMutation) {
 // ---------------------------------------------------------------------------
 
 TEST(TextFormatBarPresenterActionsTest, BuildFormatBarFamiliesGroupsEmbeddedThenSystem) {
-  // Distinct sentinel pointers stand in for loaded ImGui faces; the builder only
-  // stores them, never dereferences them.
-  ImFont* const robotoFace = reinterpret_cast<ImFont*>(0x10);
-  ImFont* const codeFace = reinterpret_cast<ImFont*>(0x20);
+  const FormatBarFontPreview robotoPreview{
+      .texture = 0x10,
+      .width = 100.0f,
+      .height = 20.0f,
+  };
+  const FormatBarFontPreview codePreview{
+      .texture = 0x20,
+      .width = 100.0f,
+      .height = 20.0f,
+  };
 
   // Mirror FontCatalog::families(): the Embedded group first, then System, each
   // already sorted within its group.
@@ -302,14 +308,14 @@ TEST(TextFormatBarPresenterActionsTest, BuildFormatBarFamiliesGroupsEmbeddedThen
   };
 
   const std::vector<FormatBarFontFamily> built =
-      BuildFormatBarFamilies(catalog, [&](const svg::FontFamilyInfo& info) -> ImFont* {
+      BuildFormatBarFamilies(catalog, [&](const svg::FontFamilyInfo& info) {
         if (info.family == "Roboto") {
-          return robotoFace;
+          return robotoPreview;
         }
         if (info.family == "Fira Code") {
-          return codeFace;
+          return codePreview;
         }
-        return nullptr;
+        return FormatBarFontPreview{};
       });
 
   ASSERT_EQ(built.size(), 3u);
@@ -317,14 +323,14 @@ TEST(TextFormatBarPresenterActionsTest, BuildFormatBarFamiliesGroupsEmbeddedThen
   // the right rows.
   EXPECT_EQ(built[0].name, "Fira Code");
   EXPECT_EQ(built[0].source, svg::FontSource::Embedded);
-  EXPECT_EQ(built[0].previewFont, codeFace);
+  EXPECT_EQ(built[0].preview.texture, codePreview.texture);
   EXPECT_EQ(built[1].name, "Roboto");
   EXPECT_EQ(built[1].source, svg::FontSource::Embedded);
-  EXPECT_EQ(built[1].previewFont, robotoFace);
+  EXPECT_EQ(built[1].preview.texture, robotoPreview.texture);
   EXPECT_EQ(built[2].name, "Helvetica");
   EXPECT_EQ(built[2].source, svg::FontSource::System);
   // A System family with no loaded face previews in the default UI font (null).
-  EXPECT_EQ(built[2].previewFont, nullptr);
+  EXPECT_FALSE(built[2].preview.available());
 }
 
 TEST(TextFormatBarPresenterActionsTest, BuildFormatBarFamiliesToleratesNullPreviewResolver) {
@@ -334,7 +340,7 @@ TEST(TextFormatBarPresenterActionsTest, BuildFormatBarFamiliesToleratesNullPrevi
   const std::vector<FormatBarFontFamily> built = BuildFormatBarFamilies(catalog, {});
   ASSERT_EQ(built.size(), 1u);
   EXPECT_EQ(built[0].name, "Roboto");
-  EXPECT_EQ(built[0].previewFont, nullptr);
+  EXPECT_FALSE(built[0].preview.available());
 }
 
 // ---------------------------------------------------------------------------
@@ -399,7 +405,10 @@ TEST_F(TextFormatBarPresenterTest, VisibleBarRendersControlsWithoutImplicitActio
   state.hasFontSize = true;
   state.bold = true;
   state.boldToggleFont = face;
-  state.families = {FormatBarFontFamily{"Roboto", face}, FormatBarFontFamily{"serif", nullptr}};
+  state.families = {
+      FormatBarFontFamily{.name = "Roboto"},
+      FormatBarFontFamily{.name = "serif"},
+  };
 
   // Two frames: the first seeds internal buffers, the second exercises the
   // steady state. Neither involves user input, so no actions should fire.
@@ -429,6 +438,9 @@ void MergeActions(FormatBarActions& merged, const FormatBarActions& frame) {
   merged.toggleBold = merged.toggleBold || frame.toggleBold;
   merged.toggleItalic = merged.toggleItalic || frame.toggleItalic;
   merged.toggleUnderline = merged.toggleUnderline || frame.toggleUnderline;
+  merged.requestFontPreviews.insert(merged.requestFontPreviews.end(),
+                                    frame.requestFontPreviews.begin(),
+                                    frame.requestFontPreviews.end());
 }
 
 class TextFormatBarPresenterInputTest : public ::testing::Test {
@@ -469,9 +481,9 @@ protected:
     // Two Embedded families followed by one System family: the picker prints
     // one header per group and no header between same-group rows.
     state.families = {
-        FormatBarFontFamily{"Roboto", face, svg::FontSource::Embedded},
-        FormatBarFontFamily{"Fira Code", face, svg::FontSource::Embedded},
-        FormatBarFontFamily{"Zilla Slab", nullptr, svg::FontSource::System},
+        FormatBarFontFamily{.name = "Roboto", .source = svg::FontSource::Embedded},
+        FormatBarFontFamily{.name = "Fira Code", .source = svg::FontSource::Embedded},
+        FormatBarFontFamily{.name = "Zilla Slab", .source = svg::FontSource::System},
     };
     return state;
   }
@@ -614,6 +626,16 @@ TEST_F(TextFormatBarPresenterInputTest, ControlsRemainClickableAfterCanvasTakesF
 
   const FormatBarActions actions = ClickOverCanvas(state, ToggleCenter(BoldLeft()));
   EXPECT_TRUE(actions.toggleBold);
+}
+
+TEST_F(TextFormatBarPresenterInputTest, OpenFamilyMenuRequestsVisibleMissingPreviews) {
+  const FormatBarState state = MakeState();
+  Frame(state);
+  OpenComboPopup(state, ToggleCenter(FamilyArrowLeft()));
+
+  const FormatBarActions actions = Frame(state);
+  EXPECT_EQ(actions.requestFontPreviews,
+            (std::vector<std::string>{"Roboto", "Fira Code", "Zilla Slab"}));
 }
 
 TEST_F(TextFormatBarPresenterInputTest, DraggingSizeControlCommitsNewFontSize) {

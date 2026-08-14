@@ -351,6 +351,56 @@ TEST(EditorControlSessionTest, ToolListExposesSelectorDragAndRenderTools) {
   EXPECT_TRUE((*replayTool)["inputSchema"]["properties"].contains("gl_drive_document_input"));
 }
 
+TEST(EditorControlSessionTest, CatalogFontFamilyMutationChangesRenderedGlyphs) {
+  constexpr std::string_view kScene = R"svg(
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 100">
+  <text id="label" x="10" y="60" font-size="48">Font selection</text>
+</svg>)svg";
+
+  EditorControlSession session;
+  const ToolCallResult load =
+      session.handleToolCall("load_svg", json{{"svg_source", std::string(kScene)},
+                                              {"canvas_width", 300},
+                                              {"canvas_height", 100},
+                                              {"render_after_load", false}});
+  ASSERT_TRUE(load.body.value("ok", false)) << load.body.dump(2);
+
+  const ToolCallResult selected =
+      session.handleToolCall("select_by_selector", json{{"selector", "#label"}, {"render", true}});
+  ASSERT_TRUE(selected.body.value("ok", false)) << selected.body.dump(2);
+  const ToolCallResult changed = session.handleToolCall(
+      "set_style_property",
+      json{{"property", "font-family"}, {"value", "Bebas Neue"}, {"render_after_set", true}});
+  ASSERT_TRUE(changed.body.value("ok", false)) << changed.body.dump(2);
+
+  ASSERT_FALSE(selected.body["render_stages"].empty());
+  ASSERT_FALSE(changed.body["render_stages"].empty());
+  const json& selectedTiles = selected.body["render_stages"].back()["display_preview"]["tiles"];
+  const json& changedTiles = changed.body["render_stages"].back()["display_preview"]["tiles"];
+  ASSERT_TRUE(selectedTiles.is_array()) << selected.body.dump(2);
+  ASSERT_TRUE(changedTiles.is_array()) << changed.body.dump(2);
+  ASSERT_FALSE(selectedTiles.empty()) << selected.body.dump(2);
+  ASSERT_FALSE(changedTiles.empty()) << changed.body.dump(2);
+
+  std::vector<std::string> selectedHashes;
+  for (const json& tile : selectedTiles) {
+    ASSERT_TRUE(tile["content_hash"].is_string()) << tile.dump(2);
+    selectedHashes.push_back(tile["content_hash"].get<std::string>());
+  }
+  std::vector<std::string> changedHashes;
+  for (const json& tile : changedTiles) {
+    ASSERT_TRUE(tile["content_hash"].is_string()) << tile.dump(2);
+    changedHashes.push_back(tile["content_hash"].get<std::string>());
+  }
+  EXPECT_NE(selectedHashes, changedHashes);
+  EXPECT_TRUE(changed.body.value("queued_selection_mutation", false));
+  EXPECT_TRUE(changed.body.value("flushed_mutation", false));
+
+  const ToolCallResult source = session.handleToolCall("get_svg_source", json::object());
+  ASSERT_TRUE(source.body.value("ok", false));
+  EXPECT_NE(source.body.value("text", "").find("font-family: Bebas Neue"), std::string::npos);
+}
+
 TEST(EditorControlSessionTest, ClickLayerVisibilityButtonCapturesImmediateAndSettledFrames) {
   constexpr std::string_view kScene =
       R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 20">
