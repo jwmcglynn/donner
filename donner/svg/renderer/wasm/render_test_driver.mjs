@@ -21,20 +21,20 @@
 //   BYTES=<total>
 // Any failure prints a line beginning with "ERROR:" and exits non-zero.
 
-import { readFileSync } from 'node:fs';
-import { pathToFileURL } from 'node:url';
+import { readFileSync } from "node:fs";
+import { pathToFileURL } from "node:url";
 
 function fail(message) {
-  console.error('ERROR: ' + message);
+  console.error("ERROR: " + message);
   process.exit(2);
 }
 
 const [, , gluePath, wasmPath, widthArg, heightArg] = process.argv;
 if (!gluePath || !wasmPath) {
-  fail('usage: render_test_driver.mjs <glue.mjs> <module.wasm> [width] [height]');
+  fail("usage: render_test_driver.mjs <glue.mjs> <module.wasm> [width] [height]");
 }
-const width = Number.parseInt(widthArg ?? '64', 10);
-const height = Number.parseInt(heightArg ?? '64', 10);
+const width = Number.parseInt(widthArg ?? "64", 10);
+const height = Number.parseInt(heightArg ?? "64", 10);
 
 const SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
   <defs>
@@ -52,81 +52,81 @@ let wasmBinary;
 try {
   wasmBinary = readFileSync(wasmPath);
 } catch (err) {
-  fail('could not read wasm file ' + wasmPath + ': ' + err.message);
+  fail("could not read wasm file " + wasmPath + ": " + err.message);
 }
 
 let createModule;
 try {
   createModule = (await import(pathToFileURL(gluePath).href)).default;
 } catch (err) {
-  fail('could not import glue module ' + gluePath + ': ' + err.message);
+  fail("could not import glue module " + gluePath + ": " + err.message);
 }
-if (typeof createModule !== 'function') {
-  fail('glue module default export is not a factory function');
+if (typeof createModule !== "function") {
+  fail("glue module default export is not a factory function");
 }
 
 let Module;
 try {
   Module = await createModule({ wasmBinary, print: () => {}, printErr: () => {} });
 } catch (err) {
-  fail('module instantiation failed: ' + err.message);
+  fail("module instantiation failed: " + err.message);
 }
 
-for (const name of ['cwrap', 'HEAPU8', '_malloc', '_free']) {
+for (const name of ["cwrap", "HEAPU8", "_malloc", "_free"]) {
   if (Module[name] === undefined) {
-    fail('runtime method/view "' + name + '" is missing from the module (glue regression?)');
+    fail("runtime method/view \"" + name + "\" is missing from the module (glue regression?)");
   }
 }
 
-const donnerInit = Module.cwrap('donner_init', null, []);
-const donnerRenderSvg = Module.cwrap('donner_render_svg', 'number', ['string', 'number', 'number']);
+const donnerInit = Module.cwrap("donner_init", null, []);
+const donnerRenderSvg = Module.cwrap("donner_render_svg", "number", ["string", "number", "number"]);
 const donnerRenderSvgLen = Module.cwrap(
-  'donner_render_svg_len',
-  'number',
-  ['number', 'number', 'number', 'number'],
+  "donner_render_svg_len",
+  "number",
+  ["number", "number", "number", "number"],
 );
-const donnerFreePixels = Module.cwrap('donner_free_pixels', null, ['number']);
-const donnerGetError = Module.cwrap('donner_get_last_error', 'string', []);
+const donnerFreePixels = Module.cwrap("donner_free_pixels", null, ["number"]);
+const donnerGetError = Module.cwrap("donner_get_last_error", "string", []);
 
 donnerInit();
 
 const oversizedInput = Module._malloc(1);
 if (oversizedInput === 0) {
-  fail('could not allocate oversized-input sentinel');
+  fail("could not allocate oversized-input sentinel");
 }
 Module.HEAPU8[oversizedInput] = 0;
 const oversizedResult = donnerRenderSvgLen(oversizedInput, 16 * 1024 * 1024 + 1, 1, 1);
 Module._free(oversizedInput);
-if (oversizedResult !== 0 || !donnerGetError().includes('maximum input size')) {
-  fail('length-aware API did not reject oversized SVG before reading it: ' + donnerGetError());
+if (oversizedResult !== 0 || !donnerGetError().includes("maximum input size")) {
+  fail("length-aware API did not reject oversized SVG before reading it: " + donnerGetError());
 }
 
 const invalidRangeResult = donnerRenderSvgLen(Module.HEAPU8.byteLength - 1, 2, 1, 1);
-if (invalidRangeResult !== 0 || !donnerGetError().includes('outside WebAssembly memory')) {
-  fail('length-aware API did not reject an out-of-bounds input range: ' + donnerGetError());
+if (invalidRangeResult !== 0 || !donnerGetError().includes("outside WebAssembly memory")) {
+  fail("length-aware API did not reject an out-of-bounds input range: " + donnerGetError());
 }
 
-const oversizedPixels = donnerRenderSvg('<svg/>', 8192, 8192);
-if (oversizedPixels !== 0 || !donnerGetError().toLowerCase().includes('pixel buffer')) {
-  fail('render API did not reject an oversized pixel buffer: ' + donnerGetError());
+const oversizedPixels = donnerRenderSvg("<svg/>", 8192, 8192);
+if (oversizedPixels !== 0 || !donnerGetError().toLowerCase().includes("pixel buffer")) {
+  fail("render API did not reject an oversized pixel buffer: " + donnerGetError());
 }
 
 const svgBytes = new TextEncoder().encode(SVG);
 const svgPtr = Module._malloc(svgBytes.byteLength);
 if (svgPtr === 0) {
-  fail('could not allocate SVG input');
+  fail("could not allocate SVG input");
 }
 Module.HEAPU8.set(svgBytes, svgPtr);
 const ptr = donnerRenderSvgLen(svgPtr, svgBytes.byteLength, width, height);
 Module._free(svgPtr);
 if (ptr === 0) {
-  fail('donner_render_svg returned null: ' + donnerGetError());
+  fail("donner_render_svg returned null: " + donnerGetError());
 }
 
 const total = width * height * 4;
 const pixels = Module.HEAPU8.subarray(ptr, ptr + total);
 if (pixels.length !== total) {
-  fail('pixel view has wrong length: ' + pixels.length + ' != ' + total);
+  fail("pixel view has wrong length: " + pixels.length + " != " + total);
 }
 
 let hash = 0x811c9dc5;
@@ -138,6 +138,6 @@ for (let i = 0; i < pixels.length; i++) {
 }
 donnerFreePixels(ptr);
 
-console.log('HASH=' + hash.toString(16).padStart(8, '0'));
-console.log('NONZERO=' + nonZero + '/' + total);
-console.log('BYTES=' + total);
+console.log("HASH=" + hash.toString(16).padStart(8, "0"));
+console.log("NONZERO=" + nonZero + "/" + total);
+console.log("BYTES=" + total);
