@@ -21,6 +21,21 @@ test("Bazel owns a hermetic no-window Chromium browser lane", () => {
     /browsers_json = "\/\/donner\/editor\/wasm\/tests:browsers\.1\.62\.1\.json"/,
     "the browser revisions must come from the Playwright version in package-lock.json",
   );
+  assert.match(
+    moduleFile,
+    /builds\/cft\/151\.0\.7922\.34\/mac-arm64\/chrome-mac-arm64\.zip/,
+    "macOS remote tests must use Playwright's Chrome-for-Testing artifact path",
+  );
+  assert.match(
+    moduleFile,
+    /"playwright-chromium-mac14-arm64": "playwright_chromium_mac_arm64"/,
+    "the default rules_playwright macOS archive must be replaced hermetically",
+  );
+  assert.match(
+    moduleFile,
+    /"playwright-chromium-mac15-arm64": "playwright_chromium_mac_arm64"/,
+    "the latest supported rules_playwright macOS archive must be replaced hermetically",
+  );
 
   const buildFilePath = path.join(testDirectory, "BUILD.bazel");
   assert.ok(existsSync(buildFilePath), "Wasm browser tests need a Bazel package");
@@ -32,6 +47,11 @@ test("Bazel owns a hermetic no-window Chromium browser lane", () => {
   assert.match(
     buildFile,
     /"PLAYWRIGHT_BROWSERS_PATH": "\$\(rootpath @playwright\/\/:chromium\)\/\.\.\/"/,
+  );
+  assert.doesNotMatch(
+    buildFile,
+    /"@platforms\/\/os:linux"/,
+    "the headless browser test must remain runnable on macOS remote execution",
   );
 
   const chromiumConfig = readFileSync(path.join(testDirectory, "playwright.config.js"), "utf8");
