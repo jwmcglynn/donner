@@ -23,12 +23,12 @@ playwright_bin.playwright_test(
         "remote-webserver.mjs",
         "smoke.spec.ts",
         ":node_modules/@playwright/test",
-        "//donner/editor/wasm:wasm_web_package",
+        "//donner/editor/wasm:_wasm_web_package_for_serve",
         "@playwright//:chromium",
     ],
     env = {
         "CI": "1",
-        "DONNER_WASM_PACKAGE_DIR": "$(rootpath //donner/editor/wasm:wasm_web_package)",
+        "DONNER_WASM_PACKAGE_DIR": "$(rootpath //donner/editor/wasm:_wasm_web_package_for_serve)",
         "DONNER_WASM_REQUIRE_WEBGPU": "1",
         "DONNER_WASM_TEST_SERVER": "$(rootpath :remote-webserver.mjs)",
         # The repo-wide remote Emscripten workaround disables Node's WebAssembly
