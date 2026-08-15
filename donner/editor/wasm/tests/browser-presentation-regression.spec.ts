@@ -997,10 +997,22 @@ test("Firefox never exposes the checkerboard while dragging a Splash letter", as
 
   // One selected element is not yet proof that it is the RIGHT element: a press
   // that misses the letter and lands on the artboard behind it also reports
-  // one. The letter window held no outline pixels before the press, so an
-  // outline in it now, hugging the letter's own left edge, is the selection
-  // this drag is about to move.
-  const pressFrame = await captureSplashDragFrame(page, documentRegion, letterWindow, "press");
+  // one. Nor does the completed prewarm render prove its selection chrome has
+  // reached the browser composite: the overlay refresh is an idle follow-up
+  // after that worker result. Wait on the actual visible outline, bounded. A
+  // genuinely wrong selection still never puts an outline in the letter
+  // corridor and fails below with the final full-document capture attached.
+  let pressFrame = await captureSplashDragFrame(page, documentRegion, letterWindow, "press");
+  const pressOutlineDeadline = Date.now() + scaledMs(750);
+  while (pressFrame.outline === null && Date.now() < pressOutlineDeadline) {
+    await waitForBrowserComposite(page);
+    pressFrame = await captureSplashDragFrame(
+      page,
+      documentRegion,
+      letterWindow,
+      "press outline",
+    );
+  }
   expect(pressFrame.letter, "the press lost the Splash letter").not.toBeNull();
   if (pressFrame.outline === null) {
     // The letter window is a corridor a few dozen pixels wide, so "no outline

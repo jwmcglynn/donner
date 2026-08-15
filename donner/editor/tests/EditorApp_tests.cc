@@ -1389,6 +1389,20 @@ TEST(EditorAppTest, PathOperationConvertsDocumentResultThroughRootViewBox) {
   EXPECT_FALSE(spline->isInside({35, 25}));
 }
 
+TEST(EditorAppTest, HitTestFindsDonnerLetterAtSolidStem) {
+  const std::optional<std::string> splashSource = ReadDonnerSplash();
+  if (!splashSource.has_value()) {
+    GTEST_SKIP() << "donner_splash.svg not found in runfiles";
+  }
+
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(*splashSource));
+
+  const std::optional<svg::SVGGraphicsElement> hit = app.hitTest(Vector2d(281.0, 395.0));
+  ASSERT_TRUE(hit.has_value());
+  EXPECT_EQ(hit->id(), "Donner_D");
+}
+
 TEST(EditorAppTest, PathOperationsHandleOverlappingDonnerLetters) {
   const std::optional<std::string> splashSource = ReadDonnerSplash();
   if (!splashSource.has_value()) {

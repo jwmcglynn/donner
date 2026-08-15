@@ -34,7 +34,7 @@ namespace donner::geode {
 
 /// GPU-resident geometry for one cached `EncodedPath` (a fill slot or a
 /// stroke slot). Owns a single combined-usage GPU buffer that holds the
-/// path's vertex quad, the six analytic dual-ray SSBO regions, and the
+/// path's vertex quad, the eight analytic dual-ray SSBO regions, and the
 /// per-draw uniform block, plus the cached fill bind group. The buffer
 /// and bind group are built once by `GeoEncoder` on first residence and
 /// reused every subsequent unchanged frame.
@@ -44,10 +44,11 @@ namespace donner::geode {
 struct GeodeResidentSlot {
   /// Combined Vertex|Storage|Uniform|CopyDst buffer. Layout (each region
   /// offset satisfies the binding's alignment requirement):
-  ///   [ vertex quad | bands | curves | vBands | vCurves | hGrid | vGrid | uniform ]
+  ///   [ vertex quad | bands | curves | hRefs | vBands | vCurves | vRefs |
+  ///     hGrid | vGrid | uniform ]
   ScopedWgpuHandle<wgpu::Buffer> buffer;
 
-  /// Cached fill bind group. All twelve bindings reference stable
+  /// Cached fill bind group. All fourteen bindings reference stable
   /// objects (this slot's `buffer` sub-ranges + device-owned dummy
   /// texture/sampler/identity-instance handles), so it survives frames
   /// and encoders. Rebuilt only when the geometry buffer is
@@ -66,8 +67,10 @@ struct GeodeResidentSlot {
   Region vertex;   ///< Vertex quad range (4-byte aligned offset).
   Region bands;    ///< Horizontal band SSBO (binding 1).
   Region curves;   ///< Horizontal curve SSBO (binding 2).
+  Region hRefs;    ///< Horizontal curve-reference SSBO (binding 12).
   Region vBands;   ///< Vertical band SSBO (binding 8).
   Region vCurves;  ///< Vertical curve SSBO (binding 9).
+  Region vRefs;    ///< Vertical curve-reference SSBO (binding 13).
   Region hGrid;    ///< Horizontal band grid (binding 10).
   Region vGrid;    ///< Vertical band grid (binding 11).
   Region uniform;  ///< Per-draw uniform block (binding 0, 256-aligned).
@@ -134,8 +137,10 @@ struct GeodeResidentSlot {
       vertex = other.vertex;
       bands = other.bands;
       curves = other.curves;
+      hRefs = other.hRefs;
       vBands = other.vBands;
       vCurves = other.vCurves;
+      vRefs = other.vRefs;
       hGrid = other.hGrid;
       vGrid = other.vGrid;
       uniform = other.uniform;

@@ -285,8 +285,9 @@ std::vector<CurveWithRange> omitRayParallelCurves(std::vector<CurveWithRange> cu
 /// boundaries and `yMin`/`yMax` are the curves' Y-extent.
 void bandCurves(const std::vector<CurveWithRange>& allCurves, const Box2d& bounds, BandAxis axis,
                 std::vector<EncodedPath::Band>& outBands,
-                std::vector<EncodedPath::Curve>& outCurves, uint16_t bandCount,
-                std::vector<uint32_t>& outGrid) {
+                std::vector<EncodedPath::Curve>& outCurves, std::vector<uint32_t>& outCurveIndices,
+                uint16_t bandCount, std::vector<uint32_t>& outGrid,
+                EncodedPath::AxisStats& outStats) {
   // Dense cell → band-slot map (kNoBand for empty cells). Sized to the full grid even when
   // some cells are empty, so the fragment shader can index it directly by position.
   outGrid.assign(bandCount, EncodedPath::kNoBand);
@@ -294,11 +295,14 @@ void bandCurves(const std::vector<CurveWithRange>& allCurves, const Box2d& bound
     return;
   }
 
+  UTILS_RELEASE_ASSERT_MSG(allCurves.size() <= std::numeric_limits<uint32_t>::max(),
+                           "Geode path has too many canonical curves for 32-bit references");
+  outCurves.reserve(outCurves.size() + allCurves.size());
+  for (const CurveWithRange& curve : allCurves) {
+    outCurves.push_back(curve.curve);
+  }
+
   const bool byY = (axis == BandAxis::Y);
-  const float spanBase =
-      byY ? static_cast<float>(bounds.topLeft.y) : static_cast<float>(bounds.topLeft.x);
-  const float span = byY ? static_cast<float>(bounds.height()) : static_cast<float>(bounds.width());
-  const float bandStride = span / static_cast<float>(bandCount);
 
   // Sort the canonical curve indexes once. Appending them to every overlapping
   // band in this order preserves descending cross-axis maxima without an O(B)
@@ -328,7 +332,7 @@ void bandCurves(const std::vector<CurveWithRange>& allCurves, const Box2d& bound
   }
 
   outBands.reserve(outBands.size() + bandCount);
-  outCurves.reserve(outCurves.size() + allCurves.size() * 2);
+  outCurveIndices.reserve(outCurveIndices.size() + allCurves.size() * 2u);
 
   for (uint16_t b = 0; b < bandCount; ++b) {
     const auto& indices = bandCurveIndices[b];
@@ -340,34 +344,29 @@ void bandCurves(const std::vector<CurveWithRange>& allCurves, const Box2d& bound
     outGrid[b] = static_cast<uint32_t>(outBands.size());
 
     EncodedPath::Band band = {};
-    band.curveStart = static_cast<uint32_t>(outCurves.size());
+    UTILS_RELEASE_ASSERT_MSG(outCurveIndices.size() <= std::numeric_limits<uint32_t>::max(),
+                             "Geode path has too many band references for 32-bit offsets");
+    UTILS_RELEASE_ASSERT_MSG(
+        indices.size() <= std::numeric_limits<uint32_t>::max() - outCurveIndices.size(),
+        "Geode path band references overflow 32-bit storage");
+    band.curveStart = static_cast<uint32_t>(outCurveIndices.size());
     band.curveCount = static_cast<uint32_t>(indices.size());
-
-    const float stripLo = spanBase + static_cast<float>(b) * bandStride;
-    const float stripHi = spanBase + static_cast<float>(b + 1) * bandStride;
-
-    // Cross-axis extent of curves in this band.
-    float crossMin = std::numeric_limits<float>::max();
-    float crossMax = std::numeric_limits<float>::lowest();
     for (size_t ci : indices) {
-      const auto& curve = allCurves[ci];
-      outCurves.push_back(curve.curve);
-      crossMin = std::min(crossMin, byY ? curve.range.xMin : curve.range.yMin);
-      crossMax = std::max(crossMax, byY ? curve.range.xMax : curve.range.yMax);
-    }
-
-    if (byY) {
-      band.yMin = stripLo;
-      band.yMax = stripHi;
-      band.xMin = crossMin;
-      band.xMax = crossMax;
-    } else {
-      band.xMin = stripLo;
-      band.xMax = stripHi;
-      band.yMin = crossMin;
-      band.yMax = crossMax;
+      outCurveIndices.push_back(static_cast<uint32_t>(ci));
     }
     outBands.push_back(band);
+  }
+
+  const BandMetrics metrics = evaluateBandCount(allCurves, bounds, axis, bandCount);
+  outStats.canonicalCurveCount = static_cast<uint32_t>(allCurves.size());
+  outStats.curveReferenceCount = static_cast<uint32_t>(outCurveIndices.size());
+  outStats.gridBandCount = bandCount;
+  outStats.nonemptyBandCount = static_cast<uint32_t>(outBands.size());
+  outStats.maxCurvesPerBand = metrics.maxCurves;
+  outStats.p95CurvesPerBand = metrics.p95Curves;
+  if (!outBands.empty()) {
+    outStats.meanCurvesPerBand =
+        static_cast<double>(outCurveIndices.size()) / static_cast<double>(outBands.size());
   }
 }
 
@@ -396,6 +395,9 @@ EncodedPath GeodePathEncoder::encode(const Path& path, FillRule /*fillRule*/, do
     return result;
   }
   result.pathBounds = bounds;
+  result.stats.aabbArea = bounds.width() * bounds.height();
+  result.stats.boundingGeometryArea = result.stats.aabbArea;
+  result.stats.boundingGeometryVertexCount = 4u;
 
   const float pathHeight = static_cast<float>(bounds.height());
   const float pathWidth = static_cast<float>(bounds.width());
@@ -404,14 +406,16 @@ EncodedPath GeodePathEncoder::encode(const Path& path, FillRule /*fillRule*/, do
   }
 
   // Horizontal bands (Y-monotonic curves) for the horizontal ray.
-  const std::vector<CurveWithRange> hCurves =
-      omitRayParallelCurves(extractCurves(monoPathY), BandAxis::Y);
+  const std::vector<CurveWithRange> hAll = extractCurves(monoPathY);
+  const std::vector<CurveWithRange> hCurves = omitRayParallelCurves(hAll, BandAxis::Y);
+  result.stats.horizontal.omittedParallelCurves =
+      static_cast<uint32_t>(hAll.size() - hCurves.size());
   if (hCurves.empty()) {
     return result;
   }
   const uint16_t hBandCount = chooseBandCount(hCurves, bounds, BandAxis::Y);
-  bandCurves(hCurves, bounds, BandAxis::Y, result.bands, result.curves, hBandCount,
-             result.hBandGrid);
+  bandCurves(hCurves, bounds, BandAxis::Y, result.bands, result.curves, result.curveIndices,
+             hBandCount, result.hBandGrid, result.stats.horizontal);
   if (result.bands.empty()) {
     return result;
   }
@@ -424,12 +428,14 @@ EncodedPath GeodePathEncoder::encode(const Path& path, FillRule /*fillRule*/, do
   // horizontal ray alone covers them.
   if (!NearZero(pathWidth)) {
     const Path monoPathX = quadPath.toMonotonic(Path::MonotonicAxis::X);
-    const std::vector<CurveWithRange> vAll =
-        omitRayParallelCurves(extractCurves(monoPathX), BandAxis::X);
+    const std::vector<CurveWithRange> vExtracted = extractCurves(monoPathX);
+    const std::vector<CurveWithRange> vAll = omitRayParallelCurves(vExtracted, BandAxis::X);
+    result.stats.vertical.omittedParallelCurves =
+        static_cast<uint32_t>(vExtracted.size() - vAll.size());
     if (!vAll.empty()) {
       const uint16_t vBandCount = chooseBandCount(vAll, bounds, BandAxis::X);
-      bandCurves(vAll, bounds, BandAxis::X, result.vBands, result.vCurves, vBandCount,
-                 result.vBandGrid);
+      bandCurves(vAll, bounds, BandAxis::X, result.vBands, result.vCurves, result.vCurveIndices,
+                 vBandCount, result.vBandGrid, result.stats.vertical);
       result.xBase = static_cast<float>(bounds.topLeft.x);
       result.vStride = pathWidth / static_cast<float>(vBandCount);
       result.vBandCount = vBandCount;
