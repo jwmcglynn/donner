@@ -38,5 +38,9 @@ playwright_bin.playwright_test(
     },
     target_compatible_with = [
         "@platforms//cpu:aarch64",
-    ],
+    ] + select({
+        "@platforms//os:macos": [],
+        "@platforms//os:linux": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
 )

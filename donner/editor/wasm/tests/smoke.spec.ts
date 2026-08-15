@@ -281,15 +281,20 @@ async function openEditor(page: Page, options: OpenEditorOptions = {}): Promise<
     url.searchParams.set("wgpuReadbackStats", "1");
   }
   const fatalMessages: string[] = [];
+  const recordFatalMessage = (message: string) => {
+    const boundedMessage = message.replace(/\s+/g, " ").slice(0, 2000);
+    fatalMessages.push(boundedMessage);
+    console.error(`browser fatal: ${boundedMessage}`);
+  };
 
   page.on("console", (message) => {
     const text = message.text();
     if (kFatalRuntimePattern.test(text)) {
-      fatalMessages.push(`[console:${message.type()}] ${text}`);
+      recordFatalMessage(`[console:${message.type()}] ${text}`);
     }
   });
   page.on("pageerror", (error) => {
-    fatalMessages.push(`[pageerror] ${error.stack || error.message}`);
+    recordFatalMessage(`[pageerror] ${error.stack || error.message}`);
   });
 
   await page.goto(url.toString(), { waitUntil: "domcontentloaded" });

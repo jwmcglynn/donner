@@ -37,6 +37,16 @@ function resolveRequestPath(requestUrl) {
   return candidate;
 }
 
+function describeServerError(error) {
+  const code = typeof error?.code === "string" ? error.code : "UNKNOWN";
+  const message = (error instanceof Error ? error.message : String(error))
+    .replaceAll(root, "<package>")
+    .replace(/(?:\/[^\s/:]+){2,}/g, "<path>")
+    .replace(/\s+/g, " ")
+    .slice(0, 512);
+  return `${code}: ${message}`;
+}
+
 const server = createServer(async (request, response) => {
   response.setHeader("Cross-Origin-Embedder-Policy", "require-corp");
   response.setHeader("Cross-Origin-Opener-Policy", "same-origin");
@@ -65,6 +75,9 @@ const server = createServer(async (request, response) => {
     }
     await pipeline(createReadStream(filePath), response);
   } catch (error) {
+    if (error?.code !== "ENOENT") {
+      console.error(`remote-webserver request failed: ${describeServerError(error)}`);
+    }
     if (!response.headersSent) {
       response.writeHead(error?.code === "ENOENT" ? 404 : 500);
     }
