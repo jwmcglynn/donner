@@ -117,6 +117,7 @@ struct Sample {
   double parseMs = 0.0;
   double drawMs = 0.0;
   double snapshotMs = 0.0;
+  double settledMs = 0.0;
   double gpuRenderPassMs = 0.0;
   double gpuTotalMs = 0.0;
 };
@@ -187,6 +188,7 @@ struct PhaseStats {
   Stats parse;
   Stats draw;
   Stats snapshot;
+  Stats settled;
   Stats gpuRenderPass;
   Stats gpuTotal;
 };
@@ -214,8 +216,9 @@ PhaseStats benchmarkWorkload(const Workload& workload, donner::svg::RendererGeod
     }
     donner::svg::SVGDocument doc = std::move(result.result());
 
-    // -- Draw (CPU wall-clock) --
-    t0 = Clock::now();
+    // -- Draw through snapshot readback (settled wall-clock) --
+    const auto settledStart = Clock::now();
+    t0 = settledStart;
     renderer.draw(doc);
     t1 = Clock::now();
     s.drawMs = toMs(t1 - t0);
@@ -230,17 +233,19 @@ PhaseStats benchmarkWorkload(const Workload& workload, donner::svg::RendererGeod
     auto bitmap = renderer.takeSnapshot();
     t1 = Clock::now();
     s.snapshotMs = toMs(t1 - t0);
+    s.settledMs = toMs(t1 - settledStart);
     (void)bitmap;  // Discard - we only care about timing.
 
     samples.push_back(s);
   }
 
   // Discard warmup samples.
-  std::vector<double> parseVals, drawVals, snapVals, gpuRpVals, gpuTotVals;
+  std::vector<double> parseVals, drawVals, snapVals, settledVals, gpuRpVals, gpuTotVals;
   const auto reserve = static_cast<size_t>(cfg.iterations);
   parseVals.reserve(reserve);
   drawVals.reserve(reserve);
   snapVals.reserve(reserve);
+  settledVals.reserve(reserve);
   gpuRpVals.reserve(reserve);
   gpuTotVals.reserve(reserve);
 
@@ -249,12 +254,13 @@ PhaseStats benchmarkWorkload(const Workload& workload, donner::svg::RendererGeod
     parseVals.push_back(s.parseMs);
     drawVals.push_back(s.drawMs);
     snapVals.push_back(s.snapshotMs);
+    settledVals.push_back(s.settledMs);
     gpuRpVals.push_back(s.gpuRenderPassMs);
     gpuTotVals.push_back(s.gpuTotalMs);
   }
 
-  return {computeStats(parseVals), computeStats(drawVals), computeStats(snapVals),
-          computeStats(gpuRpVals), computeStats(gpuTotVals)};
+  return {computeStats(parseVals),   computeStats(drawVals),  computeStats(snapVals),
+          computeStats(settledVals), computeStats(gpuRpVals), computeStats(gpuTotVals)};
 }
 
 void printPhase(const char* label, const Stats& stats) {
@@ -327,6 +333,7 @@ int main(int argc, char* argv[]) {
     printPhase("Parse:", ps.parse);
     printPhase("Draw:", ps.draw);
     printPhase("Snapshot:", ps.snapshot);
+    printPhase("Settled:", ps.settled);
     if (sharedDevice->supportsTimestamps()) {
       printPhase("GPU-RP:", ps.gpuRenderPass);
       printPhase("GPU-Tot:", ps.gpuTotal);
