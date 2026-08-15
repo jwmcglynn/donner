@@ -9,6 +9,9 @@ std::optional<SVGDocumentHandle> SubDocumentCache::getOrParse(
   if (auto it = cache_.find(resolvedUrl); it != cache_.end()) {
     return it->second;
   }
+  if (isRejected(resolvedUrl)) {
+    return std::nullopt;
+  }
 
   // Detect circular references.
   if (loading_.contains(resolvedUrl)) {
@@ -26,11 +29,32 @@ std::optional<SVGDocumentHandle> SubDocumentCache::getOrParse(
   loading_.erase(resolvedUrl);
 
   if (!maybeDocument) {
+    rememberFailure(resolvedUrl);
     return std::nullopt;
   }
 
   auto [it, inserted] = cache_.emplace(resolvedUrl, std::move(*maybeDocument));
   return it->second;
+}
+
+void SubDocumentCache::rememberFailure(const RcString& resolvedUrl) {
+  if (cache_.contains(resolvedUrl) || isRejected(resolvedUrl)) {
+    return;
+  }
+  if (rejected_.size() >= kMaximumRejectedEntries) {
+    rejectAll_ = true;
+    return;
+  }
+  rejected_.insert(resolvedUrl);
+}
+
+bool SubDocumentCache::isRejected(const RcString& resolvedUrl) const {
+  return rejectAll_ || rejected_.contains(resolvedUrl);
+}
+
+void SubDocumentCache::clearFailures() {
+  rejected_.clear();
+  rejectAll_ = false;
 }
 
 std::optional<SVGDocumentHandle> SubDocumentCache::get(const RcString& resolvedUrl) const {

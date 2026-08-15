@@ -66,6 +66,9 @@ std::string MimeTypeFromUrl(std::string_view url) {
 bool UrlLoader::consumeResourceBytes(size_t size) {
   if (size > maximumResourceSize_ ||
       (remainingResourceBytes_ != nullptr && size > *remainingResourceBytes_)) {
+    if (remainingResourceBytes_ != nullptr) {
+      *remainingResourceBytes_ = 0;
+    }
     return false;
   }
 
@@ -76,13 +79,21 @@ bool UrlLoader::consumeResourceBytes(size_t size) {
 }
 
 std::variant<UrlLoader::Result, UrlLoaderError> UrlLoader::fromUri(std::string_view uri) {
+  if (remainingResourceBytes_ != nullptr && *remainingResourceBytes_ == 0) {
+    return UrlLoaderError::ResourceTooLarge;
+  }
+
   Result result;
 
   std::variant<DataUrlParser::Result, DataUrlParserError> maybeParsedUrl =
       DataUrlParser::Parse(uri);
 
   if (std::holds_alternative<DataUrlParserError>(maybeParsedUrl)) {
-    return MapError(std::get<DataUrlParserError>(maybeParsedUrl));
+    const UrlLoaderError error = MapError(std::get<DataUrlParserError>(maybeParsedUrl));
+    if (error == UrlLoaderError::ResourceTooLarge && remainingResourceBytes_ != nullptr) {
+      *remainingResourceBytes_ = 0;
+    }
+    return error;
   }
 
   DataUrlParser::Result& parsedUrl = std::get<DataUrlParser::Result>(maybeParsedUrl);
@@ -100,7 +111,11 @@ std::variant<UrlLoader::Result, UrlLoaderError> UrlLoader::fromUri(std::string_v
     // It's an external URL, fetch it.
     auto maybeLoadedData = resourceLoader_.fetchExternalResource(url);
     if (std::holds_alternative<ResourceLoaderError>(maybeLoadedData)) {
-      return MapError(std::get<ResourceLoaderError>(maybeLoadedData));
+      const UrlLoaderError error = MapError(std::get<ResourceLoaderError>(maybeLoadedData));
+      if (error == UrlLoaderError::ResourceTooLarge && remainingResourceBytes_ != nullptr) {
+        *remainingResourceBytes_ = 0;
+      }
+      return error;
     }
 
     result.data = std::get<std::vector<uint8_t>>(std::move(maybeLoadedData));

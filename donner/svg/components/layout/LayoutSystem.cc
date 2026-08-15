@@ -298,7 +298,7 @@ Vector2i LayoutSystem::calculateCanvasScaledDocumentSize(Registry& registry,
       return RoundSize(documentSize);
     } else {
       const auto clampDimension = [](double dimension) {
-        return dimension >= kMaxDimension ? kMaxDimension : static_cast<int>(dimension);
+        return std::min(kMaxDimension, RoundDimension(dimension));
       };
       maybeCanvasSize = Vector2i(clampDimension(documentSize.x), clampDimension(documentSize.y));
     }

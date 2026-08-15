@@ -439,6 +439,18 @@ TEST_F(LayoutSystemTest, CanvasScaledDocumentSizeClampsValuesBeyondIntegerRange)
             Vector2i(8192, 4096));
 }
 
+TEST_F(LayoutSystemTest, CanvasScaledDocumentSizeRoundsFractionalAxisWhenOtherAxisClamps) {
+  auto document = ParseSVG(R"(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 9000 0.6">
+    </svg>
+  )");
+
+  auto& registry = document.registry();
+  EXPECT_EQ(layoutSystem.calculateCanvasScaledDocumentSize(
+                registry, LayoutSystem::InvalidSizeBehavior::ReturnDefault),
+            Vector2i(8192, 1));
+}
+
 // --- Intrinsic aspect ratio ---
 
 TEST_F(LayoutSystemTest, IntrinsicAspectRatioWithViewBox) {

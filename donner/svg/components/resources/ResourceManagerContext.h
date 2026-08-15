@@ -3,6 +3,7 @@
 
 #include <memory>
 #include <span>
+#include <unordered_set>
 #include <vector>
 
 #include "donner/base/EcsRegistry_fwd.h"
@@ -25,6 +26,9 @@ public:
   /// Default aggregate byte budget for raw and decoded document resources.
   static constexpr size_t kDefaultMaximumAggregateResourceSize = 64 * 1024 * 1024;
 
+  /// Maximum number of application resource-loader calls for one document.
+  static constexpr size_t kMaximumResourceFetchAttempts = 256;
+
   /// Constructor.
   explicit ResourceManagerContext(Registry& registry, size_t maximumAggregateResourceSize =
                                                           kDefaultMaximumAggregateResourceSize);
@@ -44,9 +48,7 @@ public:
    * @param loader Resource loader interface, which will be held until overridden. Call this API
    * again with \c nullptr to unset.
    */
-  void setResourceLoader(std::unique_ptr<ResourceLoaderInterface>&& loader) {
-    loader_ = std::move(loader);
-  }
+  void setResourceLoader(std::unique_ptr<ResourceLoaderInterface>&& loader);
 
   /**
    * Set the processing mode for this document. In secure modes (\ref ProcessingMode::SecureStatic,
@@ -128,6 +130,12 @@ private:
 
   /// Remaining raw and decoded resource bytes available to this document.
   mutable size_t remainingResourceBytes_;
+
+  /// Bounded negative cache for image fetch, parse, and decode failures.
+  mutable std::unordered_set<RcString> failedImageUrls_;
+
+  /// Remaining application fetch calls before external loading latches closed.
+  mutable size_t remainingResourceFetchAttempts_ = kMaximumResourceFetchAttempts;
 };
 
 }  // namespace donner::svg::components

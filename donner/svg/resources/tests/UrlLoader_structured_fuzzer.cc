@@ -63,8 +63,12 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
           remainingResourceBytes != before - loaded->data.size()) {
         std::abort();
       }
-    } else if (remainingResourceBytes != before) {
-      std::abort();
+    } else {
+      const UrlLoaderError error = std::get<UrlLoaderError>(result);
+      if ((error == UrlLoaderError::ResourceTooLarge && remainingResourceBytes != 0) ||
+          (error != UrlLoaderError::ResourceTooLarge && remainingResourceBytes != before)) {
+        std::abort();
+      }
     }
   }
   return 0;

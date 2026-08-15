@@ -227,7 +227,7 @@ TEST(ImageLoader, ChargesRawAndDecodedBytesToSharedBudget) {
     ImageLoader imageLoader(resourceLoader, UrlLoader::kDefaultMaximumResourceSize,
                             &remainingBytes);
     ExpectImageLoaderError(imageLoader.fromUri("one-pixel.png"), UrlLoaderError::ResourceTooLarge);
-    EXPECT_EQ(remainingBytes, 3u);
+    EXPECT_EQ(remainingBytes, 0u);
   }
 
   {

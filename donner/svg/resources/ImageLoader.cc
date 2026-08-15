@@ -172,7 +172,11 @@ ImageLoader::Result ImageLoader::fromUri(std::string_view uri) {
   const size_t decodedLimit = std::min(maximumDecodedImageSize_, remainingDecodedBytes);
   auto rasterResult = LoadImage(urlResult.mimeType, urlResult.data, decodedLimit);
   if (std::holds_alternative<UrlLoaderError>(rasterResult)) {
-    return std::get<UrlLoaderError>(rasterResult);
+    const UrlLoaderError error = std::get<UrlLoaderError>(rasterResult);
+    if (error == UrlLoaderError::ResourceTooLarge && remainingResourceBytes_ != nullptr) {
+      *remainingResourceBytes_ = 0;
+    }
+    return error;
   }
 
   ImageResource result = std::get<ImageResource>(std::move(rasterResult));
