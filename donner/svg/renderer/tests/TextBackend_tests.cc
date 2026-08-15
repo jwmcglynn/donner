@@ -32,7 +32,7 @@ using ::testing::Pointwise;
 using ::testing::SizeIs;
 
 FontHandle LoadResvgFont(FontManager& fontManager, const std::string& fontFilename,
-                         const std::string& familyName) {
+                         const std::string& familyName, bool trusted = true) {
   const std::string fontsDir = Runfiles::instance().Rlocation("third_party/resvg-test-suite/fonts");
   const std::string fontPath = fontsDir + "/" + fontFilename;
 
@@ -51,7 +51,7 @@ FontHandle LoadResvgFont(FontManager& fontManager, const std::string& fontFilena
   css::FontFaceSource source;
   source.kind = css::FontFaceSource::Kind::Data;
   source.payload = fontData;
-  source.trusted = true;
+  source.trusted = trusted;
 
   css::FontFace face;
   face.familyName = RcString(familyName);
@@ -500,6 +500,25 @@ TEST(TextBackendFullCapabilities, BitmapGlyphReturnsEmojiBitmap) {
   EXPECT_GT(bitmap->height, 0);
   EXPECT_THAT(bitmap->rgbaPixels, SizeIs(static_cast<size_t>(bitmap->width * bitmap->height * 4)));
   EXPECT_GT(bitmap->scale, 0.0);
+}
+
+TEST(TextBackendFullCapabilities, UntrustedBitmapFontIsRejectedBeforeFreeTypeShaping) {
+  Registry registry;
+  FontManager fontManager(registry);
+  TextBackendFull backend(fontManager, registry);
+
+  const FontHandle font =
+      LoadResvgFont(fontManager, "NotoColorEmoji.ttf", "Untrusted Color Emoji", false);
+  ASSERT_TRUE(static_cast<bool>(font));
+  EXPECT_FALSE(fontManager.isTrustedFont(font));
+  EXPECT_FALSE(backend.isBitmapOnly(font));
+
+  constexpr std::string_view kEmoji = "\xF0\x9F\x98\x81";
+  EXPECT_THAT(
+      backend.shapeRun(font, 32.0f, kEmoji, 0, kEmoji.size(), false, FontVariant::Normal, false)
+          .glyphs,
+      IsEmpty());
+  EXPECT_FALSE(backend.bitmapGlyph(font, 1, 1.0f).has_value());
 }
 
 }  // namespace
