@@ -114,6 +114,7 @@ public:
   struct CapturedRenderResult {
     RenderResult renderResult;
     DisplayFrameSnapshot displayFrame;
+    std::optional<svg::RendererBitmap> presentedBitmap;
   };
 
 private:

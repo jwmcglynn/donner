@@ -559,9 +559,11 @@ bool EditorControlSession::renderCurrentFrame(std::vector<CapturedRenderResult>*
   while (std::chrono::steady_clock::now() < deadline) {
     if (auto result = asyncRenderer_.pollResult(); result.has_value()) {
       DisplayFrameSnapshot displayFrame = recordDisplayFrame(*result);
+      std::optional<svg::RendererBitmap> presentedBitmap = composeDisplayFrameBitmap(displayFrame);
       results->push_back(CapturedRenderResult{
           .renderResult = std::move(*result),
           .displayFrame = std::move(displayFrame),
+          .presentedBitmap = std::move(presentedBitmap),
       });
       // A completed render can leave a deferred first-frame cache warmup queued on the
       // worker. That warmup traverses the document from the worker thread, while the next
