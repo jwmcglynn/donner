@@ -21,6 +21,8 @@ public:
   /// Construct a simple text backend using the provided font manager and ECS registry.
   TextBackendSimple(FontManager& fontManager, Registry& registry);
 
+  bool requiresTrustedFontData() const override { return true; }
+
   FontVMetrics fontVMetrics(FontHandle font) const override;
   float scaleForPixelHeight(FontHandle font, float pixelHeight) const override;
   float scaleForEmToPixels(FontHandle font, float pixelHeight) const override;
