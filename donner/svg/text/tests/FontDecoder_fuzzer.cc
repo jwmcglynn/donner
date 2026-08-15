@@ -2,6 +2,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <span>
 #include <string_view>
 #include <utility>
@@ -258,6 +259,7 @@ StructuredFont MakeStructuredFont(uint8_t selector) {
       return {std::move(data), 0};
     }
     case 'A': return {MakeDependencyChain(1), 0};
+    case 'B': return {MakeSfnt({TableSpec{"CBDT", std::vector<uint8_t>(4, 0)}}), 0};
     case 'H': return MakeSharedTail(false);
     case 'J': return MakeSharedTail(true);
     case 'R': return MakeRepeatedWorkFont(false);
@@ -279,6 +281,7 @@ void ExerciseLoadedFont(FontManager& fontManager, Registry& registry, FontHandle
   (void)backend.subSuperMetrics(font);
   (void)backend.isBitmapOnly(font);
   (void)backend.hasSmallCapsFeature(font);
+  (void)backend.bitmapGlyph(font, outlineGlyph, 1.0f);
 
   // Exercise the selected compound root directly even when cmap has no mapping for it. The
   // shared-tail seed deliberately selects a high glyph index at the exact depth-32 boundary.
@@ -333,7 +336,9 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
     structured = MakeStructuredFont(data[0]);
     if (!structured.bytes.empty()) {
       fontBytes = structured.bytes;
-      trust = FontDataTrust::Trusted;
+      if (data[0] != 'B') {
+        trust = FontDataTrust::Trusted;
+      }
     }
   }
 
@@ -346,6 +351,14 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
   FontManager fontManager(registry);
   const FontHandle font = fontManager.loadFontData(fontBytes, trust);
   if (font) {
+    if (isStructuredSeed && data[0] == 'B') {
+      FuzzTextBackend backend(fontManager, registry);
+      if (fontManager.isTrustedFont(font) || backend.isBitmapOnly(font) ||
+          backend.bitmapGlyph(font, 0, 1.0f).has_value()) {
+        std::abort();
+      }
+      return 0;
+    }
     ExerciseLoadedFont(fontManager, registry, font, structured.outlineGlyph);
   }
   return 0;
