@@ -489,6 +489,10 @@ std::string RenderTerminalComparisonGridForTesting(
 /// Maps a runfiles-tree resource root onto the canonical tree containing @p documentPath.
 std::filesystem::path ResolveRunfilesResourceRootForTesting(
     const std::filesystem::path& runfilesRoot, const std::filesystem::path& documentPath);
+
+/// Marks font bytes embedded in a committed golden-test document as trusted test data.
+void TrustDocumentFontFacesForTesting(SVGDocument& document);
+
 /**
  * @brief A Google Test fixture for tests that compare rendered SVG output against golden images.
  *

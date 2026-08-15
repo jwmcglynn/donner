@@ -7,8 +7,6 @@
 namespace donner::fonts {
 namespace {
 
-constexpr uint32_t kMaxTableSize = 30 * 1024 * 1024;  // 30MB
-
 uint32_t ReadBE32(const uint8_t* p) {
   return (static_cast<uint32_t>(p[0]) << 24) | (static_cast<uint32_t>(p[1]) << 16) |
          (static_cast<uint32_t>(p[2]) << 8) | static_cast<uint32_t>(p[3]);
@@ -137,6 +135,13 @@ struct TableRecord {
 }  // namespace
 
 ParseResult<WoffFont> WoffParser::Parse(std::span<const uint8_t> bytes) {
+  return Parse(bytes, Options{});
+}
+
+ParseResult<WoffFont> WoffParser::Parse(std::span<const uint8_t> bytes, const Options& options) {
+  if (bytes.size() > options.maximumInputSize) {
+    return ParseDiagnostic::Error("WOFF input exceeds limit", FileOffset::Offset(0));
+  }
   if (bytes.size() < 44) {
     return ParseDiagnostic::Error("WOFF data too short", FileOffset::Offset(0));
   }
@@ -158,7 +163,9 @@ ParseResult<WoffFont> WoffParser::Parse(std::span<const uint8_t> bytes) {
   p += 2;  // reserved
   const uint32_t totalSfntSize = ReadBE32(p);
   p += 4;
-  (void)totalSfntSize;
+  if (totalSfntSize > options.maximumSfntSize) {
+    return ParseDiagnostic::Error("WOFF total sfnt size exceeds limit", FileOffset::Offset(0));
+  }
   p += 2;  // majorVersion
   p += 2;  // minorVersion
   const uint32_t metaOffset = ReadBE32(p);
@@ -207,10 +214,19 @@ ParseResult<WoffFont> WoffParser::Parse(std::span<const uint8_t> bytes) {
   }
 
   font.tables.reserve(numTables);
+  size_t reconstructedSize = 12 + static_cast<size_t>(numTables) * 16;
+  if (reconstructedSize > options.maximumSfntSize) {
+    return ParseDiagnostic::Error("WOFF total sfnt size exceeds limit", FileOffset::Offset(0));
+  }
   for (const auto& rec : records) {
-    if (rec.origLength > kMaxTableSize) {
+    if (rec.origLength > options.maximumTableSize) {
       return ParseDiagnostic::Error("Table size is too large", FileOffset::Offset(0));
     }
+    const size_t paddedLength = (static_cast<size_t>(rec.origLength) + 3) & ~size_t{3};
+    if (paddedLength > options.maximumSfntSize - reconstructedSize) {
+      return ParseDiagnostic::Error("WOFF total sfnt size exceeds limit", FileOffset::Offset(0));
+    }
+    reconstructedSize += paddedLength;
 
     std::vector<uint8_t> table;
 

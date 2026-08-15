@@ -1,8 +1,10 @@
 #pragma once
 /// @file
 
+#include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
 #include <unordered_map>
@@ -13,6 +15,12 @@
 #include "donner/svg/resources/FontCatalogTypes.h"
 
 namespace donner::svg {
+
+/// Declares whether font bytes come from a trusted local source.
+enum class FontDataTrust {
+  Untrusted,  ///< Document-provided or otherwise attacker-controlled bytes.
+  Trusted,    ///< Embedded, system, or explicitly trusted application bytes.
+};
 
 /**
  * Opaque handle to a loaded font, used to reference fonts in the FontManager.
@@ -69,11 +77,33 @@ namespace donner::svg {
  * FontManager uses entt entities to store font data, with one entity per registered `@font-face`
  * rule or directly-loaded font. Text backends can cache parsed backend objects directly on the same
  * entity.
+ *
+ * FontManager follows the registry's access discipline rather than providing internal locking.
+ * Const queries may run in parallel while the registry is held for reading; loads and other
+ * mutations require serialized write access. The registry must outlive every stack-local manager.
  */
 class FontManager {
 public:
-  /// Construct a FontManager tied to the provided ECS \p registry.
-  explicit FontManager(Registry& registry);
+  /// Default aggregate byte budget for font data loaded into one registry.
+  static constexpr size_t kDefaultMaximumLoadedFontBytes = 64 * 1024 * 1024;
+
+  /// Default maximum number of font byte streams retained in one registry.
+  static constexpr size_t kDefaultMaximumLoadedFonts = 1024;
+
+  /**
+   * Construct a FontManager tied to the provided ECS @p registry.
+   *
+   * The first manager to perform a serialized font load for a registry establishes its aggregate
+   * byte and item limits. Read-only queries never establish or replace that state. Later manager
+   * instances for the same registry share it so loaded components remain accounted across manager
+   * lifetimes.
+   *
+   * Construction does not access the registry context, so a FontManager can itself be safely
+   * constructed by `registry.ctx().emplace<FontManager>(registry)`.
+   */
+  explicit FontManager(Registry& registry,
+                       size_t maximumLoadedFontBytes = kDefaultMaximumLoadedFontBytes,
+                       size_t maximumLoadedFonts = kDefaultMaximumLoadedFonts);
   /// Destructor.
   ~FontManager();
 
@@ -142,10 +172,16 @@ public:
    * The data is copied internally. The font is not associated with any family name; callers
    * should use `findFont()` for name-based lookup.
    *
+   * The default treats the bytes as untrusted. The simple text backend refuses to pass untrusted
+   * bytes to stb_truetype because that parser does not accept a buffer length. Use @ref
+   * FontDataTrust::Trusted only for application-controlled embedded or local-system fonts.
+   *
    * @param data Raw font file bytes (TTF, OTF, or WOFF 1.0).
+   * @param trust Whether the source is trusted enough for length-unaware font backends.
    * @return A valid FontHandle on success, or an invalid handle on failure.
    */
-  FontHandle loadFontData(std::span<const uint8_t> data);
+  FontHandle loadFontData(std::span<const uint8_t> data,
+                          FontDataTrust trust = FontDataTrust::Untrusted);
 
   /**
    * Get the raw font data bytes for a handle.
@@ -157,6 +193,27 @@ public:
    * @return Span of the raw font data, or empty span if the handle is invalid.
    */
   std::span<const uint8_t> fontData(FontHandle handle) const;
+
+  /// Returns whether @p handle was loaded from an explicitly trusted source.
+  bool isTrustedFont(FontHandle handle) const;
+
+  /**
+   * Get a table from the cached, validated sfnt directory for a handle.
+   *
+   * @param handle A valid FontHandle.
+   * @param tag Four-byte sfnt table tag.
+   * @return A bounded table span, or std::nullopt if the handle or tag is invalid or absent.
+   */
+  std::optional<std::span<const uint8_t>> sfntTable(FontHandle handle, std::string_view tag) const;
+
+  /// Return true when @p handle has a cached validated sfnt directory.
+  bool isValidatedFont(FontHandle handle) const;
+
+  /// Exact font-data and cached-index bytes currently charged to this registry's budget.
+  size_t loadedFontBytes() const;
+
+  /// Number of loaded font components currently charged to this registry's budget.
+  size_t numLoadedFonts() const;
 
   /**
    * Get the number of registered `@font-face` rules.
@@ -206,6 +263,10 @@ public:
 private:
   struct FontFaceComponent;
   struct LoadedFontComponent;
+  struct FontBudgetContext;
+  struct FontBudgetState;
+  struct FontBudgetReservation;
+  friend struct FontManagerTestAccess;
 
   /**
    * Internal: load raw TTF/OTF data (not WOFF) from an owned buffer.
@@ -214,10 +275,27 @@ private:
    * @param data Owned font data buffer. Must remain valid for the lifetime of the FontManager.
    * @return True on success.
    */
-  bool setRawFontData(Entity entity, std::vector<uint8_t> data);
-  bool setRawFontData(Entity entity, std::shared_ptr<const std::vector<uint8_t>> sharedData);
+  bool setRawFontData(Entity entity, std::vector<uint8_t> data, FontDataTrust trust);
+  bool setRawFontData(Entity entity, std::shared_ptr<const std::vector<uint8_t>> sharedData,
+                      FontDataTrust trust);
+
+  /** Return the registry budget when installed, otherwise this manager's private candidate. */
+  std::shared_ptr<const FontBudgetState> budgetStateForRead() const;
+
+  /**
+   * Adopt the registry's persistent aggregate budget, or install this manager's candidate.
+   *
+   * This is restricted to serialized load paths. It must never run during construction or from a
+   * const/read path because a FontManager can itself live in the registry context, and
+   * ConcurrentDom permits parallel readers of a registry.
+   */
+  std::shared_ptr<FontBudgetState> budgetStateForWrite();
+  bool canStoreLoadedFont(Entity entity, size_t rawBytes, size_t indexBytes,
+                          const std::shared_ptr<FontBudgetState>& budgetState) const;
+  bool storeLoadedFont(Entity entity, LoadedFontComponent font);
   bool loadFontDataSharedIntoEntity(Entity entity,
-                                    const std::shared_ptr<const std::vector<uint8_t>>& data);
+                                    const std::shared_ptr<const std::vector<uint8_t>>& data,
+                                    FontDataTrust trust);
 
   /**
    * Internal: load a WOFF 1.0 font by parsing and reconstructing the sfnt byte stream.
@@ -226,7 +304,7 @@ private:
    * @param data Raw WOFF data.
    * @return True on success.
    */
-  bool loadWoff1(Entity entity, std::span<const uint8_t> data);
+  bool loadWoff1(Entity entity, std::span<const uint8_t> data, FontDataTrust trust);
 
 #ifdef DONNER_TEXT_WOFF2_ENABLED
   /**
@@ -238,7 +316,7 @@ private:
    * @param data Raw WOFF2 data.
    * @return True on success.
    */
-  bool loadWoff2(Entity entity, std::span<const uint8_t> data);
+  bool loadWoff2(Entity entity, std::span<const uint8_t> data, FontDataTrust trust);
 #endif
 
   /**
@@ -248,7 +326,7 @@ private:
    * @param data Raw font file bytes.
    * @return True on success.
    */
-  bool loadFontDataIntoEntity(Entity entity, std::span<const uint8_t> data);
+  bool loadFontDataIntoEntity(Entity entity, std::span<const uint8_t> data, FontDataTrust trust);
 
   /// Returns true if \p handle refers to a live font entity in the registry.
   bool isValidHandle(FontHandle handle) const;
@@ -267,6 +345,14 @@ private:
 
   /// Optional external provider (embedded/system catalog), borrowed. May be nullptr.
   const FontFamilyProvider* provider_ = nullptr;
+
+  /**
+   * Candidate aggregate budget installed by this manager if it performs the registry's first load.
+   *
+   * This pointer is immutable after construction. The registry context and loaded-font reservations
+   * own independent shared_ptr copies, so registry teardown order cannot invalidate reservations.
+   */
+  const std::shared_ptr<FontBudgetState> candidateBudgetState_;
 };
 
 }  // namespace donner::svg

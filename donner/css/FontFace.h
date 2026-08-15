@@ -34,6 +34,9 @@ struct FontFaceSource {
 
   /// Technology hints, if provided, e.g. {"variations","color-COLRv1"}.
   std::vector<RcString> techHints;
+
+  /// True only for application-controlled font bytes, never parsed document sources.
+  bool trusted = false;
 };
 
 /**

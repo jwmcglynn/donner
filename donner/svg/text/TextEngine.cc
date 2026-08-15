@@ -85,6 +85,15 @@ FontHandle findCoverageFallbackFont(const TextBackend& backend, FontManager& fon
   return currentFont;
 }
 
+/// Substitute the trusted embedded fallback before a backend can see unsupported font bytes.
+FontHandle selectBackendSafeFont(const TextBackend& backend, FontManager& fontManager,
+                                 FontHandle font) {
+  if (font && backend.requiresTrustedFontData() && !fontManager.isTrustedFont(font)) {
+    return fontManager.fallbackFont();
+  }
+  return font;
+}
+
 /**
  * Returns true if the codepoint is a non-spacing character that does not start a new
  * addressable character (grapheme cluster) for SVG per-character attributes.
@@ -219,8 +228,7 @@ TextLayoutParams buildTextLayoutParams(Registry& registry, EntityHandle handle,
   // wrapping area. inline-size is non-inherited and applies to the <text> root, so it is read from
   // the root element's computed style here.
   const Lengthd inlineSize = properties.inlineSize.get().value();
-  params.inlineSizePx =
-      inlineSize.toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::X);
+  params.inlineSizePx = inlineSize.toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::X);
   return params;
 }
 
@@ -703,8 +711,7 @@ double computeSpanBaselineShiftPx(const TextBackend& backend,
   return spanBaselineShiftPx;
 }
 
-bool applyInlineSizeWrap(std::vector<TextRun>& runs,
-                         const components::ComputedTextComponent& text,
+bool applyInlineSizeWrap(std::vector<TextRun>& runs, const components::ComputedTextComponent& text,
                          const TextLayoutParams& params, double measurePx, double lineHeightPx) {
   if (measurePx <= 0.0) {
     return false;
@@ -1022,6 +1029,7 @@ std::vector<TextRun> TextEngine::layout(const components::ComputedTextComponent&
             : fontSizePx;
 
     const uint32_t spanTestCodepoint = firstNonAsciiCodepoint(spanText);
+    spanFont = selectBackendSafeFont(*backend_, fontManager_, spanFont);
     spanFont = findCoverageFallbackFont(*backend_, fontManager_, spanFont, spanFontSizePx,
                                         spanTestCodepoint);
     run.font = spanFont;
@@ -1647,6 +1655,7 @@ std::optional<double> TextEngine::measureChUnitInEm(std::span<const RcString> fo
   }
 
   TextBackendSimple measurementBackend(fontManager_, registry_);
+  font = selectBackendSafeFont(measurementBackend, fontManager_, font);
   const auto shaped =
       measurementBackend.shapeRun(font, 1.0f, "0", 0, 1, false, FontVariant::Normal, false);
   if (shaped.glyphs.empty()) {

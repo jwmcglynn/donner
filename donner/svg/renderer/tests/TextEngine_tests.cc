@@ -79,6 +79,7 @@ FontHandle LoadResvgFont(FontManager& fontManager, const std::string& fontFilena
   css::FontFaceSource source;
   source.kind = css::FontFaceSource::Kind::Data;
   source.payload = fontData;
+  source.trusted = true;
 
   css::FontFace face;
   face.familyName = RcString(familyName);
@@ -316,6 +317,7 @@ css::FontFace LoadResvgFontFace(const std::string& fontFilename, const std::stri
   css::FontFaceSource source;
   source.kind = css::FontFaceSource::Kind::Data;
   source.payload = fontData;
+  source.trusted = true;
 
   css::FontFace face;
   face.familyName = RcString(familyName);

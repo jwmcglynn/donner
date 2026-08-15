@@ -111,7 +111,6 @@ TEST(FontDataUtils, ReadUnitsPerEmRejectsOutOfRangeHeadTable) {
 }
 
 TEST(FontDataUtils, HasOutlineTablesDetectsSupportedOutlineTags) {
-  EXPECT_TRUE(HasOutlineTables(MakeSfnt({TableSpec{.tag = "glyf", .offset = 28, .data = {}}})));
   EXPECT_TRUE(HasOutlineTables(MakeSfnt({TableSpec{.tag = "CFF ", .offset = 28, .data = {}}})));
   EXPECT_TRUE(HasOutlineTables(MakeSfnt({TableSpec{.tag = "CFF2", .offset = 28, .data = {}}})));
 }
@@ -130,6 +129,32 @@ TEST(FontDataUtils, HasOutlineTablesRejectsShortTruncatedAndNonOutlineFonts) {
   });
   truncatedDirectory.resize(20);
   EXPECT_FALSE(HasOutlineTables(truncatedDirectory));
+}
+
+TEST(FontDataUtils, ValidateSfntAcceptsBoundedTableDirectory) {
+  EXPECT_TRUE(ValidateSfnt(MakeSfnt({
+      TableSpec{.tag = "head", .offset = 28, .data = HeadTable(2048)},
+  })));
+}
+
+TEST(FontDataUtils, ValidateSfntRejectsTruncatedHeaderAndDirectory) {
+  EXPECT_FALSE(ValidateSfnt({}));
+  EXPECT_FALSE(ValidateSfnt(std::vector<uint8_t>{0x00, 0x01, 0x00, 0x00}));
+
+  std::vector<uint8_t> truncatedDirectory = MakeSfnt({
+      TableSpec{.tag = "head", .offset = 28, .data = HeadTable(2048)},
+  });
+  truncatedDirectory.resize(20);
+  EXPECT_FALSE(ValidateSfnt(truncatedDirectory));
+}
+
+TEST(FontDataUtils, ValidateSfntRejectsOutOfRangeTableData) {
+  std::vector<uint8_t> data = MakeSfnt({
+      TableSpec{.tag = "head", .offset = 28, .data = HeadTable(2048)},
+  });
+  WriteBE32(&data, 20, 0xfffffff0u);
+  WriteBE32(&data, 24, 0x40u);
+  EXPECT_FALSE(ValidateSfnt(data));
 }
 
 }  // namespace

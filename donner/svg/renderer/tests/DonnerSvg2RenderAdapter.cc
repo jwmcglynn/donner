@@ -83,6 +83,7 @@ std::vector<css::FontFace> loadFontsFromDirectory(const std::filesystem::path& f
     css::FontFaceSource source;
     source.kind = css::FontFaceSource::Kind::Data;
     source.payload = std::make_shared<const std::vector<uint8_t>>(std::move(fontData));
+    source.trusted = true;
 
     css::FontFace face;
     face.familyName = RcString(metadata->familyName);
@@ -146,7 +147,8 @@ int runRender(const std::string& requestPath, const std::string& responsePath) {
 
   // Exceptions are disabled in this build, so parse without throwing and check
   // every field explicitly rather than relying on json::at().
-  const nlohmann::json request = nlohmann::json::parse(*requestText, nullptr, /*allow_exceptions=*/false);
+  const nlohmann::json request =
+      nlohmann::json::parse(*requestText, nullptr, /*allow_exceptions=*/false);
   auto requestError = [&](const std::string& message) {
     nlohmann::json response;
     response["status"] = "error";
@@ -189,9 +191,9 @@ int runRender(const std::string& requestPath, const std::string& responsePath) {
 
   // Resource lookups (external images, etc.) are rooted at the runner-provided
   // resource root, matching the resvg fixture's SandboxedFileResourceLoader.
-  const std::filesystem::path resourceDir =
-      resourceRoot.empty() ? std::filesystem::path(inputPath).parent_path()
-                           : std::filesystem::path(resourceRoot);
+  const std::filesystem::path resourceDir = resourceRoot.empty()
+                                                ? std::filesystem::path(inputPath).parent_path()
+                                                : std::filesystem::path(resourceRoot);
 
   SVGDocument::Settings settings;
   settings.resourceLoader =

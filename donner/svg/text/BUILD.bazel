@@ -1,5 +1,5 @@
-load("//build_defs:rules.bzl", "donner_cc_library", "donner_cc_test")
 load("//build_defs:package.bzl", "donner_package")
+load("//build_defs:rules.bzl", "donner_cc_fuzzer", "donner_cc_library", "donner_cc_test")
 
 donner_cc_library(
     name = "text_types",
@@ -19,6 +19,7 @@ donner_cc_library(
     visibility = ["//donner/svg:__subpackages__"],
     deps = [
         ":text_types",
+        "//donner/base/fonts:sfnt_utils",
         "//donner/svg/core",
         "//donner/svg/resources:font_manager",
     ],
@@ -111,6 +112,45 @@ donner_cc_test(
         ":text_backend",
         "@com_google_gtest//:gtest_main",
     ],
+)
+
+donner_cc_fuzzer(
+    name = "font_data_utils_fuzzer",
+    srcs = ["tests/FontDataUtils_fuzzer.cc"],
+    corpus = "tests/font_data_utils_corpus",
+    deps = [":text_backend"],
+)
+
+filegroup(
+    name = "font_decoder_fuzzer_corpus",
+    srcs = [
+        "//donner/base/fonts:testdata/valid-001.woff",
+        "//donner/base/fonts:testdata/valid-001.woff2",
+        "//third_party/public-sans:PublicSans-Medium.otf",
+    ] + glob(["tests/font_decoder_structured_corpus/*"]),
+)
+
+donner_cc_fuzzer(
+    name = "font_decoder_fuzzer",
+    srcs = ["tests/FontDecoder_fuzzer.cc"],
+    corpus = ":font_decoder_fuzzer_corpus",
+    defines = select({
+        "//donner/svg/renderer:text_full_enabled": ["DONNER_TEXT_FULL"],
+        "//conditions:default": [],
+    }),
+    deps = [
+        ":text_backend",
+        "//donner/base",
+        "//donner/base/fonts",
+        "//donner/base/fonts:sfnt_utils",
+        "//donner/svg/resources:font_manager",
+    ] + select({
+        "//donner/svg/renderer:text_full_enabled": [
+            ":text_backend_full",
+            "//donner/base/fonts:woff2_parser",
+        ],
+        "//conditions:default": [":text_backend_simple"],
+    }),
 )
 
 donner_cc_test(

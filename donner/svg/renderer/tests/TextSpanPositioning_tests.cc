@@ -21,7 +21,7 @@ namespace {
 using ::testing::ElementsAre;
 using ::testing::SizeIs;
 
-FontHandle LoadNotoSans(FontManager& fontManager) {
+FontHandle LoadNotoSans(FontManager& fontManager, bool trusted = true) {
   const std::string fontPath =
       Runfiles::instance().Rlocation("third_party/resvg-test-suite/fonts/NotoSans-Regular.ttf");
   std::ifstream file(fontPath, std::ios::binary);
@@ -39,6 +39,7 @@ FontHandle LoadNotoSans(FontManager& fontManager) {
   css::FontFaceSource source;
   source.kind = css::FontFaceSource::Kind::Data;
   source.payload = fontData;
+  source.trusted = trusted;
 
   css::FontFace face;
   face.familyName = RcString("Noto Sans");
@@ -63,6 +64,33 @@ TextLayoutParams MakeParams() {
   params.viewBox = Box2d(Vector2d::Zero(), Vector2d(200, 200));
   params.fontMetrics = FontMetrics();
   return params;
+}
+
+TEST(TextSpanPositioningTest, SimpleBackendFallsBackFromUntrustedDocumentFont) {
+  Registry registry;
+  FontManager fontManager(registry);
+  auto backend = std::make_unique<TextBackendSimple>(fontManager, registry);
+  TextEngine engine(fontManager, registry, std::move(backend));
+
+  const FontHandle documentFont = LoadNotoSans(fontManager, false);
+  ASSERT_TRUE(static_cast<bool>(documentFont));
+  ASSERT_FALSE(fontManager.isTrustedFont(documentFont));
+
+  const FontHandle fallback = fontManager.fallbackFont();
+  ASSERT_TRUE(static_cast<bool>(fallback));
+  ASSERT_TRUE(fontManager.isTrustedFont(fallback));
+
+  components::ComputedTextComponent text;
+  text.spans.push_back(MakeSpan("A", true));
+
+  const auto runs = engine.layout(text, MakeParams());
+
+  ASSERT_THAT(runs, ElementsAre(testing::Field(&TextRun::glyphs, SizeIs(1))));
+  EXPECT_EQ(runs[0].font, fallback);
+  const TextGlyph& glyph = runs[0].glyphs.front();
+  const Path outline = engine.glyphOutline(runs[0].font, glyph.glyphIndex,
+                                           engine.scaleForEmToPixels(runs[0].font, 64.0f));
+  EXPECT_THAT(outline.commands(), testing::Not(testing::IsEmpty()));
 }
 
 // This exact Latin case preserves the e-x kerning result across a paint-only tspan boundary.

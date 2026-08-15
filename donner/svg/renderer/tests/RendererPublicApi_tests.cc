@@ -12,6 +12,7 @@
 #include "donner/svg/renderer/Renderer.h"
 #include "donner/svg/renderer/tests/MockRendererInterface.h"
 #include "donner/svg/renderer/tests/RendererTestBackend.h"
+#include "donner/svg/resources/FontManager.h"
 
 namespace donner::svg {
 namespace {
@@ -166,6 +167,34 @@ TEST(RendererPublicApiTest, DrawProducesSnapshotAndPng) {
   EXPECT_TRUE(renderer.save(outputPath.c_str()));
   ASSERT_TRUE(std::filesystem::exists(outputPath));
   EXPECT_GT(std::filesystem::file_size(outputPath), 0u);
+}
+
+TEST(RendererPublicApiTest, ContextOwnedFontManagerSurvivesRendererLifecycle) {
+  SVGDocument document = ParseDocument(R"svg(
+      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="8">
+        <text x="1" y="7">text</text>
+      </svg>
+    )svg");
+  Registry& registry = document.registry();
+  FontManager& contextManager = registry.ctx().emplace<FontManager>(registry);
+  FontManager peerManager(registry);
+
+  // No-text variants do not ask the renderer for a font, so seed the same persistent budget before
+  // exercising renderer teardown. Text-enabled variants continue to cover renderer-driven loading.
+  if (!ActiveRendererSupportsFeature(RendererBackendFeature::Text)) {
+    ASSERT_TRUE(static_cast<bool>(contextManager.fallbackFont()));
+  }
+
+  {
+    Renderer renderer;
+    renderer.draw(document);
+    EXPECT_GT(contextManager.loadedFontBytes(), 0u);
+    EXPECT_EQ(contextManager.loadedFontBytes(), peerManager.loadedFontBytes());
+    EXPECT_EQ(contextManager.numLoadedFonts(), peerManager.numLoadedFonts());
+  }
+
+  EXPECT_GT(peerManager.loadedFontBytes(), 0u);
+  EXPECT_EQ(peerManager.numLoadedFonts(), 1u);
 }
 
 // An atlas pass draws several independent documents into one frame. Nothing

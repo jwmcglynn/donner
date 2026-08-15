@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <string>
 
 #include FT_FREETYPE_H
@@ -14,11 +15,15 @@
 #include <hb.h>
 
 #include "donner/base/Utf8.h"
-#include "donner/svg/text/FontDataUtils.h"
 
 namespace donner::svg {
 
 namespace {
+
+int16_t ReadInt16Be(std::span<const uint8_t> data, size_t offset) {
+  return static_cast<int16_t>(
+      static_cast<uint16_t>((static_cast<uint16_t>(data[offset]) << 8) | data[offset + 1]));
+}
 
 /// Lazily-initialized FreeType library (process-global, never destroyed).
 FT_Library getFtLibrary() {
@@ -58,6 +63,12 @@ bool isCursiveScript(uint32_t cp) {
     return true;
   }
   return false;
+}
+
+bool HasCachedOutlineTables(const FontManager& fontManager, FontHandle font) {
+  return fontManager.sfntTable(font, "glyf").has_value() ||
+         fontManager.sfntTable(font, "CFF ").has_value() ||
+         fontManager.sfntTable(font, "CFF2").has_value();
 }
 
 /// Small-caps synthesis scale factor.
@@ -147,6 +158,20 @@ TextBackendFull::TextBackendFull(FontManager& fontManager, Registry& registry)
 
 TextBackendFull::~TextBackendFull() = default;
 
+bool TextBackendFull::embeddedBitmapLoadingDisabledForTesting(FontHandle font) const {
+  hb_font_t* hbFont = getOrCreateHbFont(font);
+  return hbFont && (hb_ft_font_get_load_flags(hbFont) & FT_LOAD_NO_BITMAP) != 0;
+}
+
+namespace {
+
+FT_Int32 FreeTypeLoadFlags(const FontManager& fontManager, FontHandle font) {
+  return FT_LOAD_NO_HINTING |
+         (fontManager.isTrustedFont(font) ? FT_Int32{0} : FT_Int32{FT_LOAD_NO_BITMAP});
+}
+
+}  // namespace
+
 // ---------------------------------------------------------------------------
 // Font cache
 // ---------------------------------------------------------------------------
@@ -160,9 +185,20 @@ hb_font_t* TextBackendFull::getOrCreateHbFont(FontHandle handle) const {
     return entry->font;
   }
 
-  // Create a FreeType face from the raw font data, then wrap it with HarfBuzz.
+  if (!fontManager_.isValidatedFont(handle)) {
+    return nullptr;
+  }
+  if (!fontManager_.isTrustedFont(handle) && !HasCachedOutlineTables(fontManager_, handle)) {
+    // Bitmap-only fonts can cause FreeType to decompress embedded PNG strikes from HarfBuzz
+    // metric callbacks. Reject document-provided bitmap fonts before constructing an FT_Face.
+    return nullptr;
+  }
+
+  // Create a FreeType face from the raw font data, then wrap it with HarfBuzz. This exact
+  // whole-font span is also the safe CFF boundary; unlike stb_truetype, FreeType does not invent a
+  // larger CFF table span past the caller-owned allocation.
   const auto data = fontManager_.fontData(handle);
-  if (data.empty()) {
+  if (data.empty() || data.size() > static_cast<size_t>(std::numeric_limits<FT_Long>::max())) {
     return nullptr;
   }
 
@@ -173,7 +209,6 @@ hb_font_t* TextBackendFull::getOrCreateHbFont(FontHandle handle) const {
   FT_Error err = FT_New_Memory_Face(getFtLibrary(), data.data(), static_cast<FT_Long>(data.size()),
                                     0, &entry.ftFace);
   if (err != 0) {
-    registry_.remove<HbFontEntry>(handle.entity());
     return nullptr;
   }
 
@@ -189,14 +224,13 @@ hb_font_t* TextBackendFull::getOrCreateHbFont(FontHandle handle) const {
   // Create HarfBuzz font backed by FreeType for GSUB/GPOS shaping.
   entry.font = hb_ft_font_create_referenced(entry.ftFace);
   if (!entry.font) {
-    registry_.remove<HbFontEntry>(handle.entity());
     return nullptr;
   }
 
   // Disable hinting for glyph outline extraction so outlines match raw font data
   // (consistent with stb_truetype and resvg's ttf-parser). Hinting changes glyph
   // proportions, causing width/height mismatches against reference renderers.
-  hb_ft_font_set_load_flags(entry.font, FT_LOAD_NO_HINTING);
+  hb_ft_font_set_load_flags(entry.font, FreeTypeLoadFlags(fontManager_, handle));
   return entry.font;
 }
 
@@ -207,39 +241,23 @@ hb_font_t* TextBackendFull::getOrCreateHbFont(FontHandle handle) const {
 FontVMetrics TextBackendFull::fontVMetrics(FontHandle font) const {
   // Read from the raw font data's hhea table to match stb_truetype's behavior.
   // FreeType's FT_Face->ascender may come from OS/2 instead of hhea, causing mismatches.
-  const auto data = fontManager_.fontData(font);
-  if (data.empty()) {
+  if (!fontManager_.isValidatedFont(font)) {
     return {};
   }
 
-  // Search for the 'hhea' and 'OS/2' tables in the TrueType table directory.
-  const auto* d = data.data();
-  const int numTables = (d[4] << 8) | d[5];
-  int hheaOffset = 0;
-  int os2Offset = 0;
-  for (int i = 0; i < numTables; ++i) {
-    const int loc = 12 + 16 * i;
-    const int offset = static_cast<int>(
-        (static_cast<unsigned>(d[loc + 8]) << 24) | (static_cast<unsigned>(d[loc + 9]) << 16) |
-        (static_cast<unsigned>(d[loc + 10]) << 8) | static_cast<unsigned>(d[loc + 11]));
-    if (d[loc] == 'h' && d[loc + 1] == 'h' && d[loc + 2] == 'e' && d[loc + 3] == 'a') {
-      hheaOffset = offset;
-    } else if (d[loc] == 'O' && d[loc + 1] == 'S' && d[loc + 2] == '/' && d[loc + 3] == '2') {
-      os2Offset = offset;
-    }
-  }
-
-  if (hheaOffset != 0) {
+  const auto hhea = fontManager_.sfntTable(font, "hhea");
+  if (hhea && hhea->size() >= 10) {
     FontVMetrics metrics;
-    metrics.ascent = static_cast<int16_t>((d[hheaOffset + 4] << 8) | d[hheaOffset + 5]);
-    metrics.descent = static_cast<int16_t>((d[hheaOffset + 6] << 8) | d[hheaOffset + 7]);
-    metrics.lineGap = static_cast<int16_t>((d[hheaOffset + 8] << 8) | d[hheaOffset + 9]);
+    metrics.ascent = ReadInt16Be(*hhea, 4);
+    metrics.descent = ReadInt16Be(*hhea, 6);
+    metrics.lineGap = ReadInt16Be(*hhea, 8);
 
     // x-height from the OS/2 table (`sxHeight`, offset 86), present in version >= 2.
-    if (os2Offset != 0) {
-      const uint16_t os2Version = static_cast<uint16_t>((d[os2Offset] << 8) | d[os2Offset + 1]);
+    const auto os2 = fontManager_.sfntTable(font, "OS/2");
+    if (os2 && os2->size() >= 88) {
+      const uint16_t os2Version = static_cast<uint16_t>(ReadInt16Be(*os2, 0));
       if (os2Version >= 2) {
-        metrics.xHeight = static_cast<int16_t>((d[os2Offset + 86] << 8) | d[os2Offset + 87]);
+        metrics.xHeight = ReadInt16Be(*os2, 86);
       }
     }
     return metrics;
@@ -291,29 +309,19 @@ float TextBackendFull::scaleForEmToPixels(FontHandle font, float pixelHeight) co
 std::optional<UnderlineMetrics> TextBackendFull::underlineMetrics(FontHandle font) const {
   // Read from the raw 'post' table to match TextBackendSimple's behavior exactly.
   // FreeType's FT_Face->underline_position may differ from the raw table values.
-  const auto data = fontManager_.fontData(font);
-  if (data.empty()) {
+  if (!fontManager_.isValidatedFont(font)) {
     return std::nullopt;
   }
 
-  const auto* d = data.data();
-  const int numTables = (d[4] << 8) | d[5];
-  for (int i = 0; i < numTables; ++i) {
-    const int loc = 12 + 16 * i;
-    if (d[loc] == 'p' && d[loc + 1] == 'o' && d[loc + 2] == 's' && d[loc + 3] == 't') {
-      const int offset = static_cast<int>(
-          (static_cast<unsigned>(d[loc + 8]) << 24) | (static_cast<unsigned>(d[loc + 9]) << 16) |
-          (static_cast<unsigned>(d[loc + 10]) << 8) | static_cast<unsigned>(d[loc + 11]));
-      UnderlineMetrics metrics;
-      metrics.position =
-          static_cast<double>(static_cast<int16_t>((d[offset + 8] << 8) | d[offset + 9]));
-      metrics.thickness =
-          static_cast<double>(static_cast<int16_t>((d[offset + 10] << 8) | d[offset + 11]));
-      return metrics;
-    }
+  const auto post = fontManager_.sfntTable(font, "post");
+  if (!post || post->size() < 12) {
+    return std::nullopt;
   }
 
-  return std::nullopt;
+  UnderlineMetrics metrics;
+  metrics.position = static_cast<double>(ReadInt16Be(*post, 8));
+  metrics.thickness = static_cast<double>(ReadInt16Be(*post, 10));
+  return metrics;
 }
 
 std::optional<UnderlineMetrics> TextBackendFull::strikeoutMetrics(FontHandle font) const {
@@ -385,7 +393,8 @@ Path TextBackendFull::glyphOutline(FontHandle font, int glyphIndex, float scale)
   // Use NO_HINTING to match the HarfBuzz font configuration (set in getOrCreateHbFont).
   // Hinted outlines differ from unhinted metrics, causing shape/position mismatches
   // especially for composite glyphs (precomposed accented characters like e).
-  if (FT_Load_Glyph(ftFace, static_cast<FT_UInt>(glyphIndex), FT_LOAD_NO_HINTING) != 0) {
+  if (FT_Load_Glyph(ftFace, static_cast<FT_UInt>(glyphIndex),
+                    FreeTypeLoadFlags(fontManager_, font)) != 0) {
     return {};
   }
 
@@ -475,13 +484,19 @@ Path TextBackendFull::glyphOutline(FontHandle font, int glyphIndex, float scale)
 // ---------------------------------------------------------------------------
 
 bool TextBackendFull::isBitmapOnly(FontHandle font) const {
-  const auto data = fontManager_.fontData(font);
-  return !data.empty() && !HasOutlineTables(data);
+  // FreeType may decompress embedded PNG bitmap strikes while loading a glyph, before Donner can
+  // inspect the decoded dimensions. Only application-controlled fonts may enter that decoder path.
+  return fontManager_.isTrustedFont(font) && fontManager_.isValidatedFont(font) &&
+         !HasCachedOutlineTables(fontManager_, font);
 }
 
 std::optional<TextBackend::BitmapGlyph> TextBackendFull::bitmapGlyph(FontHandle font,
                                                                      int glyphIndex,
                                                                      float requestedScale) const {
+  if (!fontManager_.isTrustedFont(font) || glyphIndex < 0) {
+    return std::nullopt;
+  }
+
   hb_font_t* hbFont = getOrCreateHbFont(font);
   if (!hbFont) {
     return std::nullopt;
@@ -521,14 +536,34 @@ std::optional<TextBackend::BitmapGlyph> TextBackendFull::bitmapGlyph(FontHandle 
     return std::nullopt;
   }
 
+  constexpr size_t kMaximumBitmapGlyphRgbaBytes = 16 * 1024 * 1024;
+  if (bitmap.width > static_cast<unsigned long>(std::numeric_limits<int>::max()) ||
+      bitmap.rows > static_cast<unsigned long>(std::numeric_limits<int>::max()) ||
+      bitmap.pitch <= 0) {
+    return std::nullopt;
+  }
+
+  const size_t width = bitmap.width;
+  const size_t height = bitmap.rows;
+  if (width > kMaximumBitmapGlyphRgbaBytes / 4 ||
+      height > kMaximumBitmapGlyphRgbaBytes / (width * 4)) {
+    return std::nullopt;
+  }
+
+  const size_t rowBytes = width * 4;
+  const size_t rgbaBytes = rowBytes * height;
+  if (static_cast<size_t>(bitmap.pitch) < rowBytes || bitmap.buffer == nullptr) {
+    return std::nullopt;
+  }
+
   // Convert BGRA to RGBA.
-  const int w = static_cast<int>(bitmap.width);
-  const int h = static_cast<int>(bitmap.rows);
-  std::vector<uint8_t> rgba(static_cast<size_t>(w) * h * 4);
+  const int w = static_cast<int>(width);
+  const int h = static_cast<int>(height);
+  std::vector<uint8_t> rgba(rgbaBytes);
 
   for (int row = 0; row < h; ++row) {
-    const uint8_t* src = bitmap.buffer + row * bitmap.pitch;
-    uint8_t* dst = rgba.data() + row * w * 4;
+    const uint8_t* src = bitmap.buffer + static_cast<size_t>(row) * bitmap.pitch;
+    uint8_t* dst = rgba.data() + static_cast<size_t>(row) * rowBytes;
     for (int col = 0; col < w; ++col) {
       dst[col * 4 + 0] = src[col * 4 + 2];  // R <- B
       dst[col * 4 + 1] = src[col * 4 + 1];  // G <- G

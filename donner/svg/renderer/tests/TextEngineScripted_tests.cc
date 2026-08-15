@@ -688,11 +688,11 @@ public:
   FontHandle coveringFont;
 
   ShapedRun shapeRun(FontHandle font, float fontSizePx, std::string_view spanText,
-                     size_t byteOffset, size_t byteLength, bool isVertical,
-                     FontVariant fontVariant, bool forceLogicalOrder) const override {
-    ShapedRun run = ScriptedTextBackend::shapeRun(font, fontSizePx, spanText, byteOffset,
-                                                  byteLength, isVertical, fontVariant,
-                                                  forceLogicalOrder);
+                     size_t byteOffset, size_t byteLength, bool isVertical, FontVariant fontVariant,
+                     bool forceLogicalOrder) const override {
+    ShapedRun run =
+        ScriptedTextBackend::shapeRun(font, fontSizePx, spanText, byteOffset, byteLength,
+                                      isVertical, fontVariant, forceLogicalOrder);
     for (auto& glyph : run.glyphs) {
       const auto [codepoint, codepointLength] =
           Utf8::NextCodepointLenient(spanText.substr(glyph.cluster));
@@ -757,6 +757,7 @@ FontHandle RegisterFallbackBackedFace(FontManager& fontManager, const std::strin
   css::FontFaceSource source;
   source.kind = css::FontFaceSource::Kind::Data;
   source.payload = payload;
+  source.trusted = true;
 
   css::FontFace face;
   face.familyName = RcString(familyName);
@@ -765,17 +766,17 @@ FontHandle RegisterFallbackBackedFace(FontManager& fontManager, const std::strin
   return fontManager.findFont(RcString(familyName));
 }
 
-/// Minimal sfnt bytes that pass the outline-table check but fail stb_truetype parsing
-/// (no cmap table), so shaping produces no glyphs.
+/// Minimal CFF sfnt bytes that pass the bounded directory check but fail stb_truetype parsing.
 std::shared_ptr<const std::vector<uint8_t>> MakeUnparseableOutlineFontData() {
-  std::vector<uint8_t> data = {0x00, 0x01, 0x00, 0x00,  // sfnt version 1.0
-                               0x00, 0x01,              // numTables = 1
+  std::vector<uint8_t> data = {'O',  'T',  'T',  'O',  // OpenType CFF magic.
+                               0x00, 0x01,             // numTables = 1
                                0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
-  const char tag[4] = {'g', 'l', 'y', 'f'};
+  const char tag[4] = {'C', 'F', 'F', ' '};
   data.insert(data.end(), tag, tag + 4);
-  for (int i = 0; i < 4; ++i) data.push_back(0);         // Checksum.
-  data.insert(data.end(), {0x00, 0x00, 0x00, 0x1C});     // Offset = 28.
-  for (int i = 0; i < 4; ++i) data.push_back(0);         // Length = 0.
+  for (int i = 0; i < 4; ++i) data.push_back(0);      // Checksum.
+  data.insert(data.end(), {0x00, 0x00, 0x00, 0x1C});  // Offset = 28.
+  data.insert(data.end(), {0x00, 0x00, 0x00, 0x01});  // Length = 1.
+  data.push_back(0);
   return std::make_shared<const std::vector<uint8_t>>(std::move(data));
 }
 
@@ -949,8 +950,7 @@ TEST(TextEngineScriptedTest, ResolvePerSpanLayoutStylesResolvesKeywordsAncestors
 
   auto makeChild = [&](Entity parent, std::optional<Lengthd> baselineShift) {
     const Entity entity = registry.create();
-    registry.emplace<donner::components::TreeComponent>(entity,
-                                                        xml::XMLQualifiedNameRef("tspan"));
+    registry.emplace<donner::components::TreeComponent>(entity, xml::XMLQualifiedNameRef("tspan"));
     registry.get<donner::components::TreeComponent>(parent).appendChild(registry, entity);
     if (baselineShift.has_value()) {
       auto style = MakeStyle();
@@ -1129,11 +1129,10 @@ TEST(TextEngineScriptedTest, VerticalCjkRotateListRepeatsLastValue) {
   const auto runs = engine.layout(text, params);
 
   // The single rotate value repeats for the second glyph per the SVG spec.
-  EXPECT_THAT(runs, ElementsAre(RunGlyphsAre(ElementsAre(
-                        AllOf(GlyphRotateDegreesIs(DoubleEq(7.0)),
-                              GlyphYPositionIs(DoubleEq(3.0))),
-                        AllOf(GlyphRotateDegreesIs(DoubleEq(7.0)),
-                              GlyphYPositionIs(DoubleEq(17.0)))))));
+  EXPECT_THAT(runs,
+              ElementsAre(RunGlyphsAre(ElementsAre(
+                  AllOf(GlyphRotateDegreesIs(DoubleEq(7.0)), GlyphYPositionIs(DoubleEq(3.0))),
+                  AllOf(GlyphRotateDegreesIs(DoubleEq(7.0)), GlyphYPositionIs(DoubleEq(17.0)))))));
 }
 
 TEST(TextEngineScriptedTest, PerSpanTextLengthSpacingAdjustsVerticalGaps) {
@@ -1200,8 +1199,8 @@ TEST(TextEngineScriptedTest, InlineSizeIgnoresSingleGlyphContent) {
   params.inlineSizePx = 5.0;  // Smaller than the glyph; still nothing to wrap.
   const auto runs = engine.layout(text, params);
 
-  EXPECT_THAT(runs, ElementsAre(RunGlyphsAre(ElementsAre(AllOf(
-                        GlyphXPositionIs(DoubleEq(0.0)), GlyphYPositionIs(DoubleEq(0.0)))))));
+  EXPECT_THAT(runs, ElementsAre(RunGlyphsAre(ElementsAre(
+                        AllOf(GlyphXPositionIs(DoubleEq(0.0)), GlyphYPositionIs(DoubleEq(0.0)))))));
 }
 
 TEST(TextEngineScriptedTest, InlineSizeLineHeightFallsBackWhenFontMetricsAreEmpty) {
@@ -1266,12 +1265,11 @@ TEST(TextEngineScriptedTest, TextAnchorSkipsOnPathRunsInsideChunks) {
   const auto runs = engine.layout(text, MakeTextParams(20.0));
 
   // Flat glyphs shift by the chunk width (21px); on-path glyphs stay path-positioned.
-  EXPECT_THAT(runs,
-              ElementsAre(RunGlyphsAre(ElementsAre(GlyphXPositionIs(DoubleEq(-21.0)),
-                                                   GlyphXPositionIs(DoubleEq(-10.0)))),
-                          RunGlyphsAre(ElementsAre(GlyphXPositionIs(DoubleEq(0.0)))),
-                          RunGlyphsAre(IsEmpty()),
-                          RunGlyphsAre(ElementsAre(GlyphXPositionIs(DoubleEq(70.0))))));
+  EXPECT_THAT(runs, ElementsAre(RunGlyphsAre(ElementsAre(GlyphXPositionIs(DoubleEq(-21.0)),
+                                                         GlyphXPositionIs(DoubleEq(-10.0)))),
+                                RunGlyphsAre(ElementsAre(GlyphXPositionIs(DoubleEq(0.0)))),
+                                RunGlyphsAre(IsEmpty()),
+                                RunGlyphsAre(ElementsAre(GlyphXPositionIs(DoubleEq(70.0))))));
 }
 
 TEST(TextEngineScriptedTest, GeometryCacheFallsBackToBitmapGlyphExtents) {
@@ -1395,6 +1393,7 @@ TEST(TextEngineScriptedTest, MeasureChUnitFailsWhenFontCannotBeShaped) {
   css::FontFaceSource source;
   source.kind = css::FontFaceSource::Kind::Data;
   source.payload = MakeUnparseableOutlineFontData();
+  source.trusted = true;
   css::FontFace face;
   face.familyName = RcString("BrokenFont");
   face.sources.push_back(std::move(source));

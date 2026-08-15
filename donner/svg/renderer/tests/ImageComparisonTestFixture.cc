@@ -11,6 +11,7 @@
 #include <fstream>
 #include <map>
 #include <optional>
+#include <span>
 #include <sstream>
 #include <string>
 #include <tuple>
@@ -19,6 +20,7 @@
 #include "donner/base/ParseWarningSink.h"
 #include "donner/base/tests/TestTempDir.h"
 #include "donner/css/FontFace.h"
+#include "donner/svg/components/StylesheetComponent.h"
 #include "donner/svg/components/resources/ResourceManagerContext.h"
 #include "donner/svg/parser/SVGParser.h"
 #include "donner/svg/renderer/RendererImageIO.h"
@@ -111,6 +113,7 @@ const std::vector<css::FontFace>& loadFontsFromDirectory(const std::filesystem::
     css::FontFaceSource source;
     source.kind = css::FontFaceSource::Kind::Data;
     source.payload = std::make_shared<const std::vector<uint8_t>>(std::move(fontData));
+    source.trusted = true;
 
     css::FontFace face;
     face.familyName = RcString(metadata->familyName);
@@ -564,6 +567,26 @@ std::filesystem::path ResolveRunfilesResourceRootForTesting(
     const std::filesystem::path& runfilesRoot, const std::filesystem::path& documentPath) {
   return ResolveRunfilesResourceRoot(runfilesRoot, documentPath);
 }
+
+void TrustDocumentFontFacesForTesting(SVGDocument& document) {
+  auto trustFaces = [](std::span<const css::FontFace> faces) {
+    for (const css::FontFace& constFace : faces) {
+      auto& face = const_cast<css::FontFace&>(constFace);
+      for (css::FontFaceSource& source : face.sources) {
+        source.trusted = true;
+      }
+    }
+  };
+
+  for (auto view = document.registry().view<components::StylesheetComponent>();
+       const Entity entity : view) {
+    trustFaces(view.get<components::StylesheetComponent>(entity).stylesheet.fontFaces());
+  }
+
+  auto& resourceManager = document.registry().ctx().get<components::ResourceManagerContext>();
+  trustFaces(resourceManager.fontFaces());
+}
+
 std::optional<TerminalPreviewConfig> PreviewConfigFromEnv(const ImageComparisonParams& params) {
   if (!params.showTerminalPreview) {
     return std::nullopt;
@@ -781,6 +804,7 @@ SVGDocument ImageComparisonTestFixture::loadSVG(
   }
 
   SVGDocument document = std::move(maybeResult.result());
+  TrustDocumentFontFacesForTesting(document);
 
   // If a resource directory is provided, load any fonts from its fonts/ subdirectory.
   if (resourceDir) {

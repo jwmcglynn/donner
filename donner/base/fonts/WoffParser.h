@@ -1,6 +1,7 @@
 #pragma once
 /// @file
 
+#include <cstddef>
 #include <cstdint>
 #include <span>
 
@@ -22,6 +23,12 @@ namespace donner::fonts {
  */
 class WoffParser {
 public:
+  struct Options {
+    size_t maximumInputSize = 16 * 1024 * 1024;
+    size_t maximumTableSize = 30 * 1024 * 1024;
+    size_t maximumSfntSize = 64 * 1024 * 1024;
+  };
+
   /**
    * Parse the given WOFF data.
    *
@@ -30,6 +37,9 @@ public:
    * failure.
    */
   static ParseResult<WoffFont> Parse(std::span<const uint8_t> bytes);
+
+  /// Parse using explicit resource limits, primarily for embedding policies and fuzzing.
+  static ParseResult<WoffFont> Parse(std::span<const uint8_t> bytes, const Options& options);
 };
 
 }  // namespace donner::fonts

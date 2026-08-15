@@ -283,6 +283,7 @@ donner_cc_test(
         ":mock_renderer_interface",
         ":renderer_test_backend",
         "//donner/svg/renderer",
+        "//donner/svg/resources:font_manager",
         "@com_google_gtest//:gtest_main",
     ],
 )

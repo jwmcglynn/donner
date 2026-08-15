@@ -128,6 +128,7 @@ donner_cc_library(
         ":font_catalog_types",
         "//donner/base",
         "//donner/base/fonts",
+        "//donner/base/fonts:sfnt_utils",
         "//donner/css:core",
         "//third_party/public-sans",
         "@stb//:truetype",
@@ -200,6 +201,7 @@ donner_cc_test(
     deps = [
         ":font_catalog_types",
         ":font_manager",
+        "//donner/base/fonts:sfnt_utils",
         "//third_party/public-sans",
         "@com_google_gtest//:gtest_main",
         "@stb//:truetype",

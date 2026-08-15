@@ -46,6 +46,9 @@ class TextBackend {
 public:
   virtual ~TextBackend() = default;
 
+  /// Whether this backend may consume only fonts whose byte provenance is trusted.
+  virtual bool requiresTrustedFontData() const { return false; }
+
   // ── Font metrics ──────────────────────────────────────────────
 
   /// Vertical metrics (ascent, descent, lineGap) in font design units.

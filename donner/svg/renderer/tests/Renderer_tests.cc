@@ -141,7 +141,9 @@ protected:
       return SVGDocument();
     }
 
-    return std::move(maybeResult.result());
+    SVGDocument document = std::move(maybeResult.result());
+    TrustDocumentFontFacesForTesting(document);
+    return document;
   }
 
   void compareWithGolden(
@@ -183,7 +185,9 @@ protected:
       return SVGDocument();
     }
 
-    return std::move(maybeResult.result());
+    SVGDocument document = std::move(maybeResult.result());
+    TrustDocumentFontFacesForTesting(document);
+    return document;
   }
 
   void compareWithGoldenAndResources(
@@ -644,8 +648,7 @@ TEST_F(RendererTests, DashSeamDistinguishesZeroGapBoundaryFromContinuousStroke) 
   ASSERT_FALSE(continuousDash.empty());
   ASSERT_FALSE(solidPath.empty());
 
-  EXPECT_EQ(greenInOuterCorner(rectEl), 0)
-      << "a zero-gap dash boundary should cap the <rect> seam";
+  EXPECT_EQ(greenInOuterCorner(rectEl), 0) << "a zero-gap dash boundary should cap the <rect> seam";
   EXPECT_EQ(greenInOuterCorner(closedPath), 0)
       << "a zero-gap dash boundary should cap the closed-path seam";
   EXPECT_EQ(greenInOuterCorner(openPath), 0) << "open dashed path should butt-cap its start corner";

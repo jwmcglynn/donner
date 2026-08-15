@@ -42,6 +42,12 @@ public:
                        uint32_t prevCodepoint, uint32_t curCodepoint,
                        bool isVertical) const override;
 
+  /// Whether the HarfBuzz/FreeType glyph-load flags suppress embedded bitmap strikes.
+  ///
+  /// This narrow test seam verifies that document-provided fonts cannot make HarfBuzz metric
+  /// callbacks decode embedded bitmap strikes.
+  [[nodiscard]] bool embeddedBitmapLoadingDisabledForTesting(FontHandle font) const;
+
 private:
   FontManager& fontManager_;
   Registry& registry_;
