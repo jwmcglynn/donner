@@ -279,6 +279,10 @@ fn accumulateHoriz(slot: u32, sample: vec2f, ppemX: f32) -> RayCoverage {
   let band = bands[slot];
   for (var i = 0u; i < band.curveCount; i = i + 1u) {
     let curve = load_h_curve(band.curveStart + i);
+    let curve_max_x = max(curve.p0.x, max(curve.p1.x, curve.p2.x));
+    if ((curve_max_x - sample.x) * ppemX <= -0.5) {
+      break;
+    }
     if (!owns_axis_sample(curve.p0.y, curve.p2.y, sample.y)) {
       continue;
     }
@@ -317,6 +321,10 @@ fn accumulateVert(slot: u32, sample: vec2f, ppemY: f32) -> RayCoverage {
   let band = vBands[slot];
   for (var i = 0u; i < band.curveCount; i = i + 1u) {
     let curve = load_v_curve(band.curveStart + i);
+    let curve_max_y = max(curve.p0.y, max(curve.p1.y, curve.p2.y));
+    if ((curve_max_y - sample.y) * ppemY <= -0.5) {
+      break;
+    }
     if (!owns_axis_sample(curve.p0.x, curve.p2.x, sample.x)) {
       continue;
     }

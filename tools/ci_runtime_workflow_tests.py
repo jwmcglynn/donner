@@ -89,6 +89,18 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
                 job = self._job_body(job_name)
                 self.assertEqual(1, job.count("--test_tag_filters=-manual,-perf"))
 
+    def test_linker_canary_uses_bounded_native_apt_retries(self):
+        """The hosted canary must not ask an unprivileged action to kill apt."""
+        job = self._job_body("linker-canary")
+        install = job.split("- name: Install system dependencies", 1)[1].split(
+            "- name: Setup Bazel", 1
+        )[0]
+
+        self.assertNotIn("nick-fields/retry", install)
+        self.assertIn("timeout-minutes: 15", install)
+        self.assertEqual(2, install.count("Acquire::Retries=3"))
+        self.assertNotIn("clang-tidy", install)
+
     def test_heartbeat_cleanup_is_prompt_without_ps(self):
         """A finished command cannot leave the heartbeat sleeper holding the pipe."""
         job = self._job_body("linux-self-hosted")
