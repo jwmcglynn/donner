@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import test from "node:test";
@@ -8,6 +8,39 @@ import { fileURLToPath } from "node:url";
 const require = createRequire(import.meta.url);
 const testDirectory = path.dirname(fileURLToPath(import.meta.url));
 const repositoryRoot = path.resolve(testDirectory, "../../../..");
+
+test("Bazel owns a hermetic no-window Chromium browser lane", () => {
+  const moduleFile = readFileSync(path.join(repositoryRoot, "MODULE.bazel"), "utf8");
+  assert.match(
+    moduleFile,
+    /bazel_dep\(name = "rules_playwright", version = "0\.5\.3"/,
+    "MODULE.bazel must pin the browser repository rule",
+  );
+  assert.match(
+    moduleFile,
+    /browsers_json = "\/\/donner\/editor\/wasm\/tests:browsers\.1\.62\.1\.json"/,
+    "the browser revisions must come from the Playwright version in package-lock.json",
+  );
+
+  const buildFilePath = path.join(testDirectory, "BUILD.bazel");
+  assert.ok(existsSync(buildFilePath), "Wasm browser tests need a Bazel package");
+  const buildFile = readFileSync(buildFilePath, "utf8");
+  assert.match(buildFile, /playwright_bin\.playwright_test\(/);
+  assert.match(buildFile, /name = "chromium_remote_smoke"/);
+  assert.match(buildFile, /"@playwright\/\/:chromium"/);
+  assert.match(buildFile, /"\/\/donner\/editor\/wasm:wasm_web_package"/);
+  assert.match(
+    buildFile,
+    /"PLAYWRIGHT_BROWSERS_PATH": "\$\(rootpath @playwright\/\/:chromium\)\/\.\.\/"/,
+  );
+
+  const chromiumConfig = readFileSync(path.join(testDirectory, "playwright.config.js"), "utf8");
+  assert.match(
+    chromiumConfig,
+    /channel:\s*"chromium"/,
+    "the regular Chromium build preserves WebGPU presentation without opening a window",
+  );
+});
 
 test("CI discovers Firefox, WebKit, and real Safari compatibility regressions", () => {
   const config = require("./playwright.compatibility.config.js");
