@@ -55,6 +55,13 @@ constexpr std::string_view kStyledSvg = R"svg(
 </svg>
 )svg";
 
+constexpr std::string_view kPaintSnapshotSelectionChangeSvg = R"svg(
+<svg xmlns="http://www.w3.org/2000/svg" width="120" height="80" viewBox="0 0 120 80">
+  <rect id="first" x="10" y="12" width="40" height="24" fill="#ff0000"/>
+  <rect id="second" x="65" y="12" width="40" height="24" fill="#0000ff"/>
+</svg>
+)svg";
+
 constexpr std::string_view kReferencedSvg = R"svg(
 <svg xmlns="http://www.w3.org/2000/svg" width="120" height="80" viewBox="0 0 120 80">
   <defs>
@@ -3531,6 +3538,38 @@ TEST(EditorShellTest, FillStrokeToolbarStaysVisuallyStableDuringShapeDrag) {
 
   RenderToolbarFrame(window, shell, kCursor, ImVec2(-100.0f, -100.0f), /*mouseDown=*/false);
   expectStableDragChrome();
+}
+
+TEST(EditorShellTest, FillStrokeToolbarCapturesNewSelectionBeforeFreezingShapeDrag) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
+
+  EditorShell shell(window,
+                    OptionsWithSource(kPaintSnapshotSelectionChangeSvg, "paint_selection.svg"));
+  ASSERT_TRUE(shell.valid());
+  EditorShellTestAccess::ConfigureViewport(shell, Box2d::FromXYWH(0.0, 0.0, 120.0, 80.0));
+  svg::SVGDocument& document = EditorShellTestAccess::App(shell).document().document();
+  std::optional<svg::SVGElement> first = document.querySelector("#first");
+  std::optional<svg::SVGElement> second = document.querySelector("#second");
+  ASSERT_TRUE(first.has_value());
+  ASSERT_TRUE(second.has_value());
+
+  constexpr ImVec2 kCursor(20.0f, 40.0f);
+  EditorShellTestAccess::App(shell).setSelection(*first);
+  RenderToolbarFrame(window, shell, kCursor, ImVec2(-100.0f, -100.0f), /*mouseDown=*/false);
+  ASSERT_TRUE(DrawDataContainsColor(IM_COL32(255, 0, 0, 255)));
+
+  EditorShellTestAccess::App(shell).setSelection(*second);
+  ASSERT_TRUE(EditorShellTestAccess::BeginSelectedShapeDrag(
+      shell, Vector2d(75.0, 20.0), Box2d::FromXYWH(65.0, 12.0, 40.0, 24.0)));
+  RenderToolbarFrame(window, shell, kCursor, ImVec2(-100.0f, -100.0f), /*mouseDown=*/false);
+
+  EXPECT_TRUE(DrawDataContainsColor(IM_COL32(0, 0, 255, 255)))
+      << "The drag must freeze the newly selected element's fill";
+  EXPECT_FALSE(DrawDataContainsColor(IM_COL32(255, 0, 0, 255)))
+      << "The drag must not replay the previous selection's fill";
 }
 
 TEST(EditorShellTest, ToolPaletteSelectCommitsOpenPenPath) {
