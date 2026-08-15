@@ -58,10 +58,10 @@ test("Bazel owns a hermetic no-window Chromium browser lane", () => {
     buildFile,
     /"PLAYWRIGHT_BROWSERS_PATH": "\$\(rootpath @playwright\/\/:chromium\)\/\.\.\/"/,
   );
-  assert.doesNotMatch(
+  assert.match(
     buildFile,
-    /"@platforms\/\/os:linux"/,
-    "the headless browser test must remain runnable on macOS remote execution",
+    /target_compatible_with = \[[\s\S]*?"@platforms\/\/cpu:aarch64"[\s\S]*?\] \+ select\(\{[\s\S]*?"@platforms\/\/os:macos": \[\][\s\S]*?"@platforms\/\/os:linux": \[\][\s\S]*?"\/\/conditions:default": \["@platforms\/\/:incompatible"\]/,
+    "the headless browser test must allow only macOS and Linux ARM64 execution",
   );
 
   const chromiumConfig = readFileSync(path.join(testDirectory, "playwright.config.js"), "utf8");
@@ -78,6 +78,35 @@ test("browser diagnostics do not manufacture fatal adapter failures", () => {
     smokeTest,
     /requestAdapter\(\{ forceFallbackAdapter: true \}\)/,
     "an optional fallback-adapter probe must not emit a fatal-class browser warning",
+  );
+  assert.match(
+    smokeTest,
+    /const recordFatalMessage[\s\S]*?fatalMessages\.push[\s\S]*?console\.error[\s\S]*?page\.on\("console"[\s\S]*?recordFatalMessage[\s\S]*?page\.on\("pageerror"[\s\S]*?recordFatalMessage/,
+    "startup failures must be emitted while they are captured, before openEditor can time out",
+  );
+});
+
+test("remote browser server preserves bounded request failures", () => {
+  const server = readFileSync(path.join(testDirectory, "remote-webserver.mjs"), "utf8");
+  assert.match(
+    server,
+    /function describeServerError[\s\S]*?replaceAll\(root, "<package>"\)[\s\S]*?if \(error\?\.code !== "ENOENT"\) \{[\s\S]*?console\.error/,
+    "the remote webserver must preserve bounded package and request failures in test.log",
+  );
+  assert.match(
+    server,
+    /\.replace\(\/\(\?:\\\/\[\^\\s\/:\]\+\)\{2,\}\/g, "<path>"\)/,
+    "server diagnostics must scrub absolute paths outside the package root",
+  );
+  assert.match(
+    server,
+    /\.slice\(0, 512\)/,
+    "server diagnostics must stay bounded in remote test logs",
+  );
+  assert.match(
+    server,
+    /console\.error\(`remote-webserver request failed: \$\{describeServerError\(error\)\}`\)/,
+    "non-ENOENT failures must emit the sanitized diagnostic",
   );
 });
 
