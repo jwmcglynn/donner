@@ -80,6 +80,13 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         self.assertIsNotNone(flag_line)
         self.assertNotIn("--config=ci", flag_line.group(1))
 
+    def test_pr_test_lanes_exclude_manual_targets_at_the_command_line(self):
+        """Runner bazelrcs cannot re-enable opt-in tests during full fallbacks."""
+        for job_name in ("linux", "linux-self-hosted", "macos", "macos-self-hosted"):
+            with self.subTest(job=job_name):
+                job = self._job_body(job_name)
+                self.assertEqual(1, job.count("--test_tag_filters=-manual,-perf"))
+
     def test_heartbeat_cleanup_is_prompt_without_ps(self):
         """A finished command cannot leave the heartbeat sleeper holding the pipe."""
         job = self._job_body("linux-self-hosted")
