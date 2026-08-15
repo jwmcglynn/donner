@@ -42,6 +42,15 @@ test("Bazel owns a hermetic no-window Chromium browser lane", () => {
   );
 });
 
+test("browser diagnostics do not manufacture fatal adapter failures", () => {
+  const smokeTest = readFileSync(path.join(testDirectory, "smoke.spec.ts"), "utf8");
+  assert.doesNotMatch(
+    smokeTest,
+    /requestAdapter\(\{ forceFallbackAdapter: true \}\)/,
+    "an optional fallback-adapter probe must not emit a fatal-class browser warning",
+  );
+});
+
 test("CI discovers Firefox, WebKit, and real Safari compatibility regressions", () => {
   const config = require("./playwright.compatibility.config.js");
   const projects = new Map(config.projects.map((project) => [project.name, project]));
