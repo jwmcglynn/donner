@@ -2620,6 +2620,13 @@ TEST(EditorShellTest, FullDesktopFrameLoopPresentsShapeDragBeforeMouseUp) {
 
   EditorShell shell(window, OptionsWithSource(kInitialSvg, "initial.svg"));
   ASSERT_TRUE(shell.valid());
+  std::optional<svg::SVGElement> target =
+      EditorShellTestAccess::App(shell).document().document().querySelector("#target");
+  ASSERT_THAT(target, ::testing::Optional(::testing::_));
+  // Establish the selected-layer cache before measuring the drag handoff. The contract below is
+  // same-frame rebasing of already-promoted pixels, not completion within a fixed number of
+  // back-to-back frames by the asynchronous worker that creates those pixels.
+  EditorShellTestAccess::App(shell).setSelection(*target);
   const auto runFrameWithMouse = [&](const ImVec2& mouse, bool mouseDown) {
     ImGuiIO& io = ImGui::GetIO();
     io.AddMousePosEvent(mouse.x, mouse.y);
@@ -2635,6 +2642,9 @@ TEST(EditorShellTest, FullDesktopFrameLoopPresentsShapeDragBeforeMouseUp) {
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(2));
   }
+  ASSERT_THAT(shell.layerInspectorStatusForReadback().displayedDragPreview,
+              ::testing::Optional(::testing::_))
+      << "The drag assertion requires a promoted selected-layer cache";
 
   const auto screenPoint = [&](const Vector2d& documentPoint) {
     const Vector2d screen = shell.viewportForReadback().documentToScreen(documentPoint);
