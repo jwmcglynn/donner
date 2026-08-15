@@ -67,6 +67,10 @@ cc_library(
 cc_binary(
     name = "editor_control_mcp_server",
     srcs = ["EditorControlMcpServer.cc"],
+    tags = [
+        "codeql_default",
+        "codeql_text_full",
+    ],
     target_compatible_with = EDITOR_CONTROL_COMPATIBLE_WITH,
     deps = [
         ":editor_control_session",

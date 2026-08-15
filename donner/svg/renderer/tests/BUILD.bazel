@@ -1,3 +1,4 @@
+load("//build_defs:package.bzl", "donner_package")
 load(
     "//build_defs:rules.bzl",
     "donner_cc_binary",
@@ -9,7 +10,6 @@ load(
     "donner_variant_cc_test",
     "renderer_backend_compatible_with",
 )
-load("//build_defs:package.bzl", "donner_package")
 
 donner_cc_library(
     name = "rgba_test_matchers",
@@ -690,6 +690,13 @@ donner_cc_fuzzer(
         "SVGDocumentRender_fuzzer.cc",
     ],
     corpus = "svg_document_render_corpus",
+    tags = [
+        "fuzz_geode",
+        "fuzz_text_full",
+        "fuzz_ubsan",
+        "fuzz_ubsan_geode",
+        "fuzz_ubsan_text_full",
+    ],
     deps = [
         "//donner/svg",
         "//donner/svg/renderer:renderer_utils",

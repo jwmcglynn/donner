@@ -545,6 +545,7 @@ jobs:
             echo "${{ needs.determine-targets.outputs.affected }}"
           fi)
           bazelisk test --config=ci --test_output=errors \
+            --test_tag_filters=-manual,-perf \
             $TARGETS
 
       - name: Upload Bazel test failure artifacts
@@ -787,6 +788,11 @@ jobs:
               last_progress=""
               last_change=$SECONDS
               sleep_pid=""
+              stop_requested=false
+
+              request_heartbeat_stop() {
+                stop_requested=true
+              }
 
               stop_heartbeat() {
                 if [[ -n "$sleep_pid" ]]; then
@@ -795,11 +801,17 @@ jobs:
                 fi
                 exit 0
               }
-              trap stop_heartbeat TERM INT
+              trap request_heartbeat_stop TERM INT
 
               while kill -0 "$command_pid" 2>/dev/null; do
+                # Defer exit until the newly forked sleeper's PID is published below.
+                trap request_heartbeat_stop TERM INT
                 sleep "$heartbeat_interval" &
                 sleep_pid=$!
+                trap stop_heartbeat TERM INT
+                if [[ "$stop_requested" == true ]]; then
+                  stop_heartbeat
+                fi
                 wait "$sleep_pid" || exit 0
                 sleep_pid=""
                 kill -0 "$command_pid" 2>/dev/null || break
@@ -942,6 +954,7 @@ jobs:
             bazelisk test --config=ci --config=latest_llvm --test_output=errors \
             $BAZEL_SELF_HOSTED_REMOTE_FALLBACK_FLAGS \
             $DIAG_TEST_FLAGS \
+            --test_tag_filters=-manual,-perf \
             --profile="$DIAG_DIR/test/profile.gz" \
             --build_event_json_file="$DIAG_DIR/test/bep.json" \
             --nobuild_event_json_file_path_conversion \
@@ -1052,10 +1065,10 @@ jobs:
             echo "${{ needs.determine-targets.outputs.affected }}"
           fi)
           bazelisk test --config=ci --test_output=errors \
+            --test_tag_filters=-manual,-perf \
             $BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS $TARGETS
-        # Fuzzer regression suite runs in `.github/workflows/fuzz.yml` on a
-        # nightly cron so it doesn't gate every main push. PRs touching
-        # fuzzer code re-trigger that workflow via path filter.
+        # Deterministic fuzzer corpus replay remains in this Bazel suite. Sanitizer-backed mutation
+        # runs nightly or on demand in `.github/workflows/fuzz.yml`.
 
       - name: Test (Geode editor lane)
         id: geode_test
@@ -1143,10 +1156,10 @@ jobs:
             echo "${{ needs.determine-targets.outputs.affected }}"
           fi)
           bazelisk --nohome_rc test --config=ci --test_output=errors \
+            --test_tag_filters=-manual,-perf \
             $BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS $TARGETS
-        # Fuzzer regression suite runs in `.github/workflows/fuzz.yml` on a
-        # nightly cron so it doesn't gate every main push. PRs touching
-        # fuzzer code re-trigger that workflow via path filter.
+        # Deterministic fuzzer corpus replay remains in this Bazel suite. Sanitizer-backed mutation
+        # runs nightly or on demand in `.github/workflows/fuzz.yml`.
 
       - name: Test (Geode editor lane)
         id: geode_test

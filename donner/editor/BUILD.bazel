@@ -14,8 +14,8 @@ graphs via `dev_dependency = True` in `MODULE.bazel`.
 
 load("@bazel_skylib//lib:selects.bzl", "selects")
 load("//build_defs:embed_resources.bzl", "embed_resources")
-load("//build_defs:rules.bzl", "donner_cc_binary", "donner_cc_library", "donner_multi_transitioned_binary")
 load("//build_defs:package.bzl", "donner_package")
+load("//build_defs:rules.bzl", "donner_cc_binary", "donner_cc_library", "donner_multi_transitioned_binary")
 
 #Editor libraries are public so the  // examples:svg_viewer target (in the
 #separate examples Bazel module) can depend on `: text_editor`.BCR
@@ -1359,6 +1359,7 @@ donner_multi_transitioned_binary(
     name = "editor",
     dep = ":editor_impl",
     renderer_backend = "geode",
+    tags = ["codeql_default"],
     target_compatible_with = select({
         "@platforms//os:macos": [],
         "@platforms//os:linux": [],

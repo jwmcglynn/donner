@@ -754,7 +754,7 @@ def donner_cc_library(name, srcs = [], hdrs = [], copts = [], tags = [], visibil
         tags = tags,
     )
 
-def donner_cc_fuzzer(name, corpus, deps = [], per_input_timeout_seconds = 2, **kwargs):
+def donner_cc_fuzzer(name, corpus, deps = [], per_input_timeout_seconds = 2, tags = [], **kwargs):
     """
     Create a libfuzzer-based fuzz target.
 
@@ -763,6 +763,7 @@ def donner_cc_fuzzer(name, corpus, deps = [], per_input_timeout_seconds = 2, **k
       corpus: Path to a corpus directory, or a filegroup rule for the corpus.
       deps: List of dependencies.
       per_input_timeout_seconds: Maximum time for one generated input in the timed fuzz test.
+      tags: Additional Bazel tags used to select configuration-specific corpus and soak lanes.
       **kwargs: Additional arguments, matching the implementation of cc_test.
 
     Generated targets:
@@ -827,7 +828,7 @@ def donner_cc_fuzzer(name, corpus, deps = [], per_input_timeout_seconds = 2, **k
             "@platforms//os:macos": ["@llvm_toolchain//:linker-components-aarch64-darwin"],
             "//conditions:default": [],
         }),
-        tags = ["fuzz_target"],
+        tags = ["fuzz_target"] + tags,
         **kwargs
     )
 
@@ -844,7 +845,7 @@ def donner_cc_fuzzer(name, corpus, deps = [], per_input_timeout_seconds = 2, **k
             "//conditions:default": [],
         }),
         target_compatible_with = fuzzer_compatible_with(),
-        tags = ["fuzz_target"],
+        tags = ["fuzz_target"] + tags,
         **kwargs
     )
 

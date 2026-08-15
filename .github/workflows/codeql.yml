@@ -1,11 +1,14 @@
 name: "CodeQL"
 
+# CodeQL's cross-file dataflow checks complement compiler warnings, sanitizers, and fuzzing. Keep
+# that depth after merge and on the weekly schedule without adding another build to PR latency.
+
 on:
   push:
     branches: ["main"]
-  pull_request:
   schedule:
     - cron: "34 6 * * 2"
+  workflow_dispatch:
 
 jobs:
   analyze:
@@ -90,28 +93,16 @@ jobs:
       # to build your code.
       # ℹ️ Command-line programs to run using the OS shell.
       # 📚 See https://docs.github.com/en/actions/using-workflows/workflow-syntax-for-github-actions#jobsjob_idstepsrun
-      - if: matrix.build-mode == 'manual'
+      - name: Build tagged C++ entry points
+        if: matrix.build-mode == 'manual'
         shell: bash
         run: |
-          bazel build --spawn_strategy=local --nouse_action_cache --noremote_accept_cached --noremote_upload_local_results --disk_cache= \
-            //donner/base/xml:xml_tool \
-            //donner/editor:editor \
-            //donner/editor/app:render_repl \
-            //donner/editor/repro:gl_rnr_replay \
-            //donner/svg/parser:svg_parser_tool \
-            //donner/svg/tool \
-            //examples:svg_to_png \
-            //examples:svg_viewer \
-            //tools/mcp-servers/editor-control:editor_control_mcp_server
-          bazel build --config=text-full --spawn_strategy=local --nouse_action_cache --noremote_accept_cached --noremote_upload_local_results --disk_cache= \
-            //donner/editor/repro:gl_rnr_replay \
-            //donner/svg/tool \
-            //examples:svg_to_png \
-            //tools/mcp-servers/editor-control:editor_control_mcp_server
-          bazel build --config=geode --spawn_strategy=local --nouse_action_cache --noremote_accept_cached --noremote_upload_local_results --disk_cache= \
-            //examples:geode_embed
-          bazel build --config=wasm-size --spawn_strategy=local --nouse_action_cache --noremote_accept_cached --noremote_upload_local_results --disk_cache= //donner/svg/renderer/wasm:donner_wasm
-          bazel build --config=wasm-geode --spawn_strategy=local --nouse_action_cache --noremote_accept_cached --noremote_upload_local_results --disk_cache= //donner/svg/renderer/wasm:donner_wasm_geode
+          common_flags="--spawn_strategy=local --nouse_action_cache --noremote_accept_cached --noremote_upload_local_results --disk_cache="
+          bazel build $common_flags --build_tag_filters=codeql_default //...
+          bazel build --config=text-full $common_flags --build_tag_filters=codeql_text_full //...
+          bazel build --config=geode $common_flags --build_tag_filters=codeql_geode //...
+          bazel build --config=wasm-size $common_flags --build_tag_filters=codeql_wasm //...
+          bazel build --config=wasm-geode $common_flags --build_tag_filters=codeql_wasm_geode //...
 
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@v4

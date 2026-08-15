@@ -1,5 +1,5 @@
-load("//build_defs:rules.bzl", "donner_cc_binary", "donner_cc_library", "donner_cc_test")
 load("//build_defs:package.bzl", "donner_package")
+load("//build_defs:rules.bzl", "donner_cc_binary", "donner_cc_library", "donner_cc_test")
 
 alias(
     name = "tool",
@@ -21,6 +21,10 @@ donner_cc_library(
 donner_cc_binary(
     name = "donner-svg",
     srcs = ["donner_svg_tool.cc"],
+    tags = [
+        "codeql_default",
+        "codeql_text_full",
+    ],
     deps = [
         ":donner_svg_tool_lib",
         "//donner/base:failure_signal_handler",

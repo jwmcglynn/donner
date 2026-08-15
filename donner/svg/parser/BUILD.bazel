@@ -1,5 +1,5 @@
-load("//build_defs:rules.bzl", "donner_cc_binary", "donner_cc_fuzzer", "donner_cc_library", "donner_cc_test")
 load("//build_defs:package.bzl", "donner_package")
+load("//build_defs:rules.bzl", "donner_cc_binary", "donner_cc_fuzzer", "donner_cc_library", "donner_cc_test")
 
 #
 # Parses SVG XML files into an SVGDocument.
@@ -24,6 +24,7 @@ donner_cc_library(
 donner_cc_binary(
     name = "svg_parser_tool",
     srcs = ["svg_parser_tool.cc"],
+    tags = ["codeql_default"],
     deps = [":parser"],
 )
 
@@ -180,6 +181,11 @@ donner_cc_fuzzer(
         "tests/SVGParser_structured_fuzzer.cc",
     ],
     corpus = "tests/svg_parser_structured_corpus",
+    tags = [
+        "fuzz_text_full",
+        "fuzz_ubsan",
+        "fuzz_ubsan_text_full",
+    ],
     deps = [
         ":parser",
     ],

@@ -3,11 +3,12 @@
 ##
 ## Named target platforms for local and remote Bazel builds.
 
+load("//build_defs:package.bzl", "donner_package")
+
 ##
 ## Main library
 ##
 load("//build_defs:rules.bzl", "donner_cc_library")
-load("//build_defs:package.bzl", "donner_package")
 
 platform(
     name = "linux_aarch64",
@@ -60,8 +61,11 @@ exports_files(
         "donner_splash.svg",
         "BUILD.bazel",
         "MODULE.bazel",
+        ".github/workflows/codeql.yml",
         ".github/workflows/coverage.yml",
+        ".github/workflows/fuzz.yml",
         ".github/workflows/main.yml",
+        ".github/workflows/sanitizers.yml",
         ".bazelversion",
         ".bazelrc",
         "zoom-out-drag-jump.rnr",

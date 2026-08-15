@@ -224,6 +224,32 @@ TEST(Woff2ParserTest, RejectsLinuxTimeoutSeedAtTableCountPreflight) {
   EXPECT_EQ(result.error().reason, "WOFF2: table count exceeds limit");
 }
 
+TEST(Woff2ParserTest, CorpusRegressionSeedsRetainExpectedPreflightFailures) {
+  struct CorpusExpectation {
+    const char* filename;
+    const char* reason;
+  };
+  constexpr std::array kExpectations = {
+      CorpusExpectation{"regression-declared-size-allocation.woff2", "WOFF2: decompression failed"},
+      CorpusExpectation{"regression-intermediate-allocation.woff2",
+                        "WOFF2: intermediate decompressed size exceeds limit"},
+      CorpusExpectation{"regression-invalid-signature.woff2", "WOFF2: invalid signature"},
+      CorpusExpectation{"regression-linux-timeout.woff2", "WOFF2: table count exceeds limit"},
+      CorpusExpectation{"regression-transformed-glyf-allocation.woff2",
+                        "WOFF2: transformed glyf size exceeds limit"},
+  };
+
+  for (const auto& expectation : kExpectations) {
+    SCOPED_TRACE(expectation.filename);
+    const auto data =
+        readFile(std::string("donner/base/fonts/tests/woff2_corpus/") + expectation.filename);
+    ASSERT_FALSE(data.empty());
+    const auto result = Woff2Parser::Decompress(data);
+    ASSERT_TRUE(result.hasError());
+    EXPECT_EQ(result.error().reason, expectation.reason);
+  }
+}
+
 TEST(Woff2ParserTest, RejectsOversizedIntermediateBufferBeforeDecoderEntry) {
   auto result = Woff2Parser::Decompress(woff2WithIntermediateSize(16u * 1024u * 1024u + 1u));
   ASSERT_TRUE(result.hasError());
