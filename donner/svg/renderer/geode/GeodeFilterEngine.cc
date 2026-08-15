@@ -17,7 +17,8 @@
 namespace donner::geode {
 
 struct FilterResourceArena {
-  explicit FilterResourceArena(GeodeDevice& device) : device_(device) {}
+  FilterResourceArena(GeodeDevice& device, wgpu::CommandEncoder& commandEncoder)
+      : device_(device), commandEncoder_(commandEncoder) {}
   ~FilterResourceArena() {
     for (ScopedWgpuHandle<wgpu::Buffer>& buffer : buffers_) {
       device_.deferDestroy(buffer.take());
@@ -64,8 +65,11 @@ struct FilterResourceArena {
     return texture;
   }
 
+  wgpu::CommandEncoder& commandEncoder() { return commandEncoder_; }
+
 private:
   GeodeDevice& device_;
+  wgpu::CommandEncoder& commandEncoder_;
   std::vector<ScopedWgpuHandle<wgpu::Texture>> textures_;
   std::vector<ScopedWgpuHandle<wgpu::Buffer>> buffers_;
 };
@@ -576,7 +580,8 @@ TwoInputUniformPipeline createTwoInputUniformPipeline(const wgpu::Device& dev, c
 }
 
 /// Dispatch a compute shader with a two-input (in1, in2, output, uniform) bind group.
-void dispatchTwoInputUniform(GeodeDevice& device, const wgpu::BindGroupLayout& bgl,
+void dispatchTwoInputUniform(FilterResourceArena& arena, GeodeDevice& device,
+                             const wgpu::BindGroupLayout& bgl,
                              const wgpu::ComputePipeline& pipeline, const wgpu::Texture& in1,
                              const wgpu::Texture& in2, const wgpu::Texture& output,
                              const wgpu::Buffer& uniformBuffer, size_t uniformSize,
@@ -609,13 +614,10 @@ void dispatchTwoInputUniform(GeodeDevice& device, const wgpu::BindGroupLayout& b
   ScopedWgpuHandle<wgpu::BindGroup> bindGroup(dev.createBindGroup(bgDesc));
   device.countBindGroup();
 
-  wgpu::CommandEncoderDescriptor ceDesc{};
-  ceDesc.label = wgpuLabel(label);
-  ScopedWgpuHandle<wgpu::CommandEncoder> encoder(dev.createCommandEncoder(ceDesc));
-
   wgpu::ComputePassDescriptor passDesc{};
   passDesc.label = wgpuLabel(label);
-  ScopedWgpuHandle<wgpu::ComputePassEncoder> pass(encoder.get().beginComputePass(passDesc));
+  ScopedWgpuHandle<wgpu::ComputePassEncoder> pass(
+      arena.commandEncoder().beginComputePass(passDesc));
   pass.get().setPipeline(pipeline);
   pass.get().setBindGroup(0, bindGroup.get(), 0, nullptr);
 
@@ -624,24 +626,11 @@ void dispatchTwoInputUniform(GeodeDevice& device, const wgpu::BindGroupLayout& b
   pass.get().dispatchWorkgroups(workgroupsX, workgroupsY, 1);
   pass.get().end();
   pass.reset();
-
-  ScopedWgpuHandle<wgpu::CommandBuffer> cmdBuf(encoder.get().finish());
-  device.queue().submit(1, &cmdBuf.get());
-  device.countSubmit();
-  // [Vulkan filter-sync] Force each filter compute pass to fully complete
-  // before the next pass samples its storage-texture output. On hardware
-  // Vulkan (Intel Arc) the automatic cross-submit storage-write ->
-  // sampled-read barrier races the async queue, producing nondeterministic
-  // large-area filter corruption. Serialize on Vulkan; Metal is unaffected.
-  // Interim workaround; superseded by the single-encoder filter refactor
-  // (design 0030 M3).
-  if (device.isVulkan()) {
-    device.pollSuspending(true);
-  }
 }
 
 /// Dispatch a compute shader with a standard (input, output, uniform) bind group.
-void dispatchInputOutputUniform(GeodeDevice& device, const wgpu::BindGroupLayout& bgl,
+void dispatchInputOutputUniform(FilterResourceArena& arena, GeodeDevice& device,
+                                const wgpu::BindGroupLayout& bgl,
                                 const wgpu::ComputePipeline& pipeline, const wgpu::Texture& input,
                                 const wgpu::Texture& output, const wgpu::Buffer& uniformBuffer,
                                 size_t uniformSize, const char* label) {
@@ -670,13 +659,10 @@ void dispatchInputOutputUniform(GeodeDevice& device, const wgpu::BindGroupLayout
   ScopedWgpuHandle<wgpu::BindGroup> bindGroup(dev.createBindGroup(bgDesc));
   device.countBindGroup();
 
-  wgpu::CommandEncoderDescriptor ceDesc{};
-  ceDesc.label = wgpuLabel(label);
-  ScopedWgpuHandle<wgpu::CommandEncoder> encoder(dev.createCommandEncoder(ceDesc));
-
   wgpu::ComputePassDescriptor passDesc{};
   passDesc.label = wgpuLabel(label);
-  ScopedWgpuHandle<wgpu::ComputePassEncoder> pass(encoder.get().beginComputePass(passDesc));
+  ScopedWgpuHandle<wgpu::ComputePassEncoder> pass(
+      arena.commandEncoder().beginComputePass(passDesc));
   pass.get().setPipeline(pipeline);
   pass.get().setBindGroup(0, bindGroup.get(), 0, nullptr);
 
@@ -685,20 +671,6 @@ void dispatchInputOutputUniform(GeodeDevice& device, const wgpu::BindGroupLayout
   pass.get().dispatchWorkgroups(workgroupsX, workgroupsY, 1);
   pass.get().end();
   pass.reset();
-
-  ScopedWgpuHandle<wgpu::CommandBuffer> cmdBuf(encoder.get().finish());
-  device.queue().submit(1, &cmdBuf.get());
-  device.countSubmit();
-  // [Vulkan filter-sync] Force each filter compute pass to fully complete
-  // before the next pass samples its storage-texture output. On hardware
-  // Vulkan (Intel Arc) the automatic cross-submit storage-write ->
-  // sampled-read barrier races the async queue, producing nondeterministic
-  // large-area filter corruption. Serialize on Vulkan; Metal is unaffected.
-  // Interim workaround; superseded by the single-encoder filter refactor
-  // (design 0030 M3).
-  if (device.isVulkan()) {
-    device.pollSuspending(true);
-  }
 }
 
 /// Create a uniform buffer and upload data to it.
@@ -1318,10 +1290,11 @@ GeodeFilterEngine::~GeodeFilterEngine() = default;
 wgpu::Texture GeodeFilterEngine::execute(const svg::components::FilterGraph& graph,
                                          const wgpu::Texture& sourceGraphic,
                                          const Box2d& filterRegion,
-                                         const Transform2d& deviceFromFilter) {
+                                         const Transform2d& deviceFromFilter,
+                                         wgpu::CommandEncoder& commandEncoder) {
   using namespace svg::components;
 
-  FilterResourceArena arena(device_);
+  FilterResourceArena arena(device_, commandEncoder);
   std::unordered_map<std::string, wgpu::Texture> namedBuffers;
   wgpu::Texture currentBuffer = sourceGraphic;
   std::optional<wgpu::Texture> sourceAlpha;
@@ -2010,8 +1983,9 @@ wgpu::Texture GeodeFilterEngine::runBlurPass(FilterResourceArena& arena, const w
   wgpu::Buffer uniformBuffer =
       createUniformBuffer(arena, device_, &params, sizeof(params), "BlurParamsUniform");
 
-  dispatchInputOutputUniform(device_, blurBindGroupLayout_.get(), gaussianBlurPipeline_.get(),
-                             input, output, uniformBuffer, sizeof(BlurParams), "GaussianBlurPass");
+  dispatchInputOutputUniform(arena, device_, blurBindGroupLayout_.get(),
+                             gaussianBlurPipeline_.get(), input, output, uniformBuffer,
+                             sizeof(BlurParams), "GaussianBlurPass");
   return output;
 }
 
@@ -2036,8 +2010,9 @@ wgpu::Texture GeodeFilterEngine::runBoxBlurPass(FilterResourceArena& arena,
   wgpu::Buffer uniformBuffer =
       createUniformBuffer(arena, device_, &params, sizeof(params), "BlurParamsUniform");
 
-  dispatchInputOutputUniform(device_, blurBindGroupLayout_.get(), gaussianBlurPipeline_.get(),
-                             input, output, uniformBuffer, sizeof(BlurParams), "BoxBlurPass");
+  dispatchInputOutputUniform(arena, device_, blurBindGroupLayout_.get(),
+                             gaussianBlurPipeline_.get(), input, output, uniformBuffer,
+                             sizeof(BlurParams), "BoxBlurPass");
   return output;
 }
 
@@ -2064,8 +2039,9 @@ wgpu::Texture GeodeFilterEngine::applyOffset(
   wgpu::Buffer uniformBuffer =
       createUniformBuffer(arena, device_, &params, sizeof(params), "OffsetParamsUniform");
 
-  dispatchInputOutputUniform(device_, offsetBindGroupLayout_.get(), offsetPipeline_.get(), input,
-                             output, uniformBuffer, sizeof(OffsetParams), "FilterOffsetPass");
+  dispatchInputOutputUniform(arena, device_, offsetBindGroupLayout_.get(), offsetPipeline_.get(),
+                             input, output, uniformBuffer, sizeof(OffsetParams),
+                             "FilterOffsetPass");
   return output;
 }
 
@@ -2091,9 +2067,9 @@ wgpu::Texture GeodeFilterEngine::applyColorMatrix(
   wgpu::Buffer uniformBuffer =
       createUniformBuffer(arena, device_, &params, sizeof(params), "ColorMatrixParamsUniform");
 
-  dispatchInputOutputUniform(device_, colorMatrixBindGroupLayout_.get(), colorMatrixPipeline_.get(),
-                             input, output, uniformBuffer, sizeof(ColorMatrixParams),
-                             "FilterColorMatrixPass");
+  dispatchInputOutputUniform(arena, device_, colorMatrixBindGroupLayout_.get(),
+                             colorMatrixPipeline_.get(), input, output, uniformBuffer,
+                             sizeof(ColorMatrixParams), "FilterColorMatrixPass");
   return output;
 }
 
@@ -2112,9 +2088,9 @@ wgpu::Texture GeodeFilterEngine::applySourceAlpha(FilterResourceArena& arena,
   wgpu::Buffer uniformBuffer =
       createUniformBuffer(arena, device_, &params, sizeof(params), "SourceAlphaParamsUniform");
 
-  dispatchInputOutputUniform(device_, colorMatrixBindGroupLayout_.get(), colorMatrixPipeline_.get(),
-                             input, output, uniformBuffer, sizeof(ColorMatrixParams),
-                             "FilterSourceAlphaPass");
+  dispatchInputOutputUniform(arena, device_, colorMatrixBindGroupLayout_.get(),
+                             colorMatrixPipeline_.get(), input, output, uniformBuffer,
+                             sizeof(ColorMatrixParams), "FilterSourceAlphaPass");
   return output;
 }
 
@@ -2160,13 +2136,11 @@ wgpu::Texture GeodeFilterEngine::applyFlood(
   ScopedWgpuHandle<wgpu::BindGroup> bindGroup(dev.createBindGroup(bgDesc));
   device_.countBindGroup();
 
-  wgpu::CommandEncoderDescriptor ceDesc{};
-  ceDesc.label = wgpuLabel("FilterFloodEncoder");
-  ScopedWgpuHandle<wgpu::CommandEncoder> encoder(dev.createCommandEncoder(ceDesc));
+  wgpu::CommandEncoder& encoder = arena.commandEncoder();
 
   wgpu::ComputePassDescriptor passDesc{};
   passDesc.label = wgpuLabel("FilterFloodPass");
-  ScopedWgpuHandle<wgpu::ComputePassEncoder> pass(encoder.get().beginComputePass(passDesc));
+  ScopedWgpuHandle<wgpu::ComputePassEncoder> pass(encoder.beginComputePass(passDesc));
   pass.get().setPipeline(floodPipeline_.get());
   pass.get().setBindGroup(0, bindGroup.get(), 0, nullptr);
 
@@ -2175,20 +2149,6 @@ wgpu::Texture GeodeFilterEngine::applyFlood(
   pass.get().dispatchWorkgroups(workgroupsX, workgroupsY, 1);
   pass.get().end();
   pass.reset();
-
-  ScopedWgpuHandle<wgpu::CommandBuffer> cmdBuf(encoder.get().finish());
-  device_.queue().submit(1, &cmdBuf.get());
-  device_.countSubmit();
-  // [Vulkan filter-sync] Force each filter compute pass to fully complete
-  // before the next pass samples its storage-texture output. On hardware
-  // Vulkan (Intel Arc) the automatic cross-submit storage-write ->
-  // sampled-read barrier races the async queue, producing nondeterministic
-  // large-area filter corruption. Serialize on Vulkan; Metal is unaffected.
-  // Interim workaround; superseded by the single-encoder filter refactor
-  // (design 0030 M3).
-  if (device_.isVulkan()) {
-    device_.pollSuspending(true);
-  }
 
   return output;
 }
@@ -2262,13 +2222,11 @@ wgpu::Texture GeodeFilterEngine::runMergePass(FilterResourceArena& arena, const 
   ScopedWgpuHandle<wgpu::BindGroup> bindGroup(dev.createBindGroup(bgDesc));
   device_.countBindGroup();
 
-  wgpu::CommandEncoderDescriptor ceDesc{};
-  ceDesc.label = wgpuLabel("FilterMergeEncoder");
-  ScopedWgpuHandle<wgpu::CommandEncoder> encoder(dev.createCommandEncoder(ceDesc));
+  wgpu::CommandEncoder& encoder = arena.commandEncoder();
 
   wgpu::ComputePassDescriptor passDesc{};
   passDesc.label = wgpuLabel("FilterMergePass");
-  ScopedWgpuHandle<wgpu::ComputePassEncoder> pass(encoder.get().beginComputePass(passDesc));
+  ScopedWgpuHandle<wgpu::ComputePassEncoder> pass(encoder.beginComputePass(passDesc));
   pass.get().setPipeline(mergePipeline_.get());
   pass.get().setBindGroup(0, bindGroup.get(), 0, nullptr);
 
@@ -2277,20 +2235,6 @@ wgpu::Texture GeodeFilterEngine::runMergePass(FilterResourceArena& arena, const 
   pass.get().dispatchWorkgroups(workgroupsX, workgroupsY, 1);
   pass.get().end();
   pass.reset();
-
-  ScopedWgpuHandle<wgpu::CommandBuffer> cmdBuf(encoder.get().finish());
-  device_.queue().submit(1, &cmdBuf.get());
-  device_.countSubmit();
-  // [Vulkan filter-sync] Force each filter compute pass to fully complete
-  // before the next pass samples its storage-texture output. On hardware
-  // Vulkan (Intel Arc) the automatic cross-submit storage-write ->
-  // sampled-read barrier races the async queue, producing nondeterministic
-  // large-area filter corruption. Serialize on Vulkan; Metal is unaffected.
-  // Interim workaround; superseded by the single-encoder filter refactor
-  // (design 0030 M3).
-  if (device_.isVulkan()) {
-    device_.pollSuspending(true);
-  }
 
   return output;
 }
@@ -2331,8 +2275,8 @@ wgpu::Texture GeodeFilterEngine::applyComposite(
   wgpu::Buffer uniformBuffer =
       createUniformBuffer(arena, device_, &params, sizeof(params), "CompositeParamsUniform");
 
-  dispatchTwoInputUniform(device_, compositeBindGroupLayout_.get(), compositePipeline_.get(), in1,
-                          in2, output, uniformBuffer, sizeof(CompositeParams),
+  dispatchTwoInputUniform(arena, device_, compositeBindGroupLayout_.get(), compositePipeline_.get(),
+                          in1, in2, output, uniformBuffer, sizeof(CompositeParams),
                           "FilterCompositePass");
   return output;
 }
@@ -2355,8 +2299,8 @@ wgpu::Texture GeodeFilterEngine::applyBlend(
   wgpu::Buffer uniformBuffer =
       createUniformBuffer(arena, device_, &params, sizeof(params), "BlendParamsUniform");
 
-  dispatchTwoInputUniform(device_, blendBindGroupLayout_.get(), blendPipeline_.get(), in1, in2,
-                          output, uniformBuffer, sizeof(BlendParams), "FilterBlendPass");
+  dispatchTwoInputUniform(arena, device_, blendBindGroupLayout_.get(), blendPipeline_.get(), in1,
+                          in2, output, uniformBuffer, sizeof(BlendParams), "FilterBlendPass");
   return output;
 }
 
@@ -2398,9 +2342,9 @@ wgpu::Texture GeodeFilterEngine::applyMorphology(
     wgpu::Buffer uniformBuffer =
         createUniformBuffer(arena, device_, &params, sizeof(params), "MorphologyParamsUniform");
 
-    dispatchInputOutputUniform(device_, morphologyBindGroupLayout_.get(), morphologyPipeline_.get(),
-                               current, output, uniformBuffer, sizeof(MorphologyParams),
-                               "FilterMorphologyPassX");
+    dispatchInputOutputUniform(arena, device_, morphologyBindGroupLayout_.get(),
+                               morphologyPipeline_.get(), current, output, uniformBuffer,
+                               sizeof(MorphologyParams), "FilterMorphologyPassX");
     current = output;
     remainX -= passX;
   }
@@ -2423,9 +2367,9 @@ wgpu::Texture GeodeFilterEngine::applyMorphology(
     wgpu::Buffer uniformBuffer =
         createUniformBuffer(arena, device_, &params, sizeof(params), "MorphologyParamsUniform");
 
-    dispatchInputOutputUniform(device_, morphologyBindGroupLayout_.get(), morphologyPipeline_.get(),
-                               current, output, uniformBuffer, sizeof(MorphologyParams),
-                               "FilterMorphologyPassY");
+    dispatchInputOutputUniform(arena, device_, morphologyBindGroupLayout_.get(),
+                               morphologyPipeline_.get(), current, output, uniformBuffer,
+                               sizeof(MorphologyParams), "FilterMorphologyPassY");
     current = output;
     remainY -= passY;
   }
@@ -2482,13 +2426,11 @@ wgpu::Texture GeodeFilterEngine::applyComponentTransfer(
   ScopedWgpuHandle<wgpu::BindGroup> bindGroup(dev.createBindGroup(bgDesc));
   device_.countBindGroup();
 
-  wgpu::CommandEncoderDescriptor ceDesc{};
-  ceDesc.label = wgpuLabel("FilterComponentTransferEncoder");
-  ScopedWgpuHandle<wgpu::CommandEncoder> encoder(dev.createCommandEncoder(ceDesc));
+  wgpu::CommandEncoder& encoder = arena.commandEncoder();
 
   wgpu::ComputePassDescriptor passDesc{};
   passDesc.label = wgpuLabel("FilterComponentTransferPass");
-  ScopedWgpuHandle<wgpu::ComputePassEncoder> pass(encoder.get().beginComputePass(passDesc));
+  ScopedWgpuHandle<wgpu::ComputePassEncoder> pass(encoder.beginComputePass(passDesc));
   pass.get().setPipeline(componentTransferPipeline_.get());
   pass.get().setBindGroup(0, bindGroup.get(), 0, nullptr);
 
@@ -2498,19 +2440,6 @@ wgpu::Texture GeodeFilterEngine::applyComponentTransfer(
   pass.get().end();
   pass.reset();
 
-  ScopedWgpuHandle<wgpu::CommandBuffer> cmdBuf(encoder.get().finish());
-  device_.queue().submit(1, &cmdBuf.get());
-  device_.countSubmit();
-  // [Vulkan filter-sync] Force each filter compute pass to fully complete
-  // before the next pass samples its storage-texture output. On hardware
-  // Vulkan (Intel Arc) the automatic cross-submit storage-write ->
-  // sampled-read barrier races the async queue, producing nondeterministic
-  // large-area filter corruption. Serialize on Vulkan; Metal is unaffected.
-  // Interim workaround; superseded by the single-encoder filter refactor
-  // (design 0030 M3).
-  if (device_.isVulkan()) {
-    device_.pollSuspending(true);
-  }
   return output;
 }
 
@@ -2609,13 +2538,11 @@ wgpu::Texture GeodeFilterEngine::applyConvolveMatrix(
   ScopedWgpuHandle<wgpu::BindGroup> bindGroup(dev.createBindGroup(bgDesc));
   device_.countBindGroup();
 
-  wgpu::CommandEncoderDescriptor ceDesc{};
-  ceDesc.label = wgpuLabel("FilterConvolveMatrixEncoder");
-  ScopedWgpuHandle<wgpu::CommandEncoder> encoder(dev.createCommandEncoder(ceDesc));
+  wgpu::CommandEncoder& encoder = arena.commandEncoder();
 
   wgpu::ComputePassDescriptor passDesc{};
   passDesc.label = wgpuLabel("FilterConvolveMatrixPass");
-  ScopedWgpuHandle<wgpu::ComputePassEncoder> pass(encoder.get().beginComputePass(passDesc));
+  ScopedWgpuHandle<wgpu::ComputePassEncoder> pass(encoder.beginComputePass(passDesc));
   pass.get().setPipeline(convolveMatrixPipeline_.get());
   pass.get().setBindGroup(0, bindGroup.get(), 0, nullptr);
 
@@ -2625,19 +2552,6 @@ wgpu::Texture GeodeFilterEngine::applyConvolveMatrix(
   pass.get().end();
   pass.reset();
 
-  ScopedWgpuHandle<wgpu::CommandBuffer> cmdBuf(encoder.get().finish());
-  device_.queue().submit(1, &cmdBuf.get());
-  device_.countSubmit();
-  // [Vulkan filter-sync] Force each filter compute pass to fully complete
-  // before the next pass samples its storage-texture output. On hardware
-  // Vulkan (Intel Arc) the automatic cross-submit storage-write ->
-  // sampled-read barrier races the async queue, producing nondeterministic
-  // large-area filter corruption. Serialize on Vulkan; Metal is unaffected.
-  // Interim workaround; superseded by the single-encoder filter refactor
-  // (design 0030 M3).
-  if (device_.isVulkan()) {
-    device_.pollSuspending(true);
-  }
   return output;
 }
 
@@ -2728,13 +2642,11 @@ wgpu::Texture GeodeFilterEngine::applyTurbulence(
   ScopedWgpuHandle<wgpu::BindGroup> bindGroup(dev.createBindGroup(bgDesc));
   device_.countBindGroup();
 
-  wgpu::CommandEncoderDescriptor ceDesc{};
-  ceDesc.label = wgpuLabel("FilterTurbulenceEncoder");
-  ScopedWgpuHandle<wgpu::CommandEncoder> encoder(dev.createCommandEncoder(ceDesc));
+  wgpu::CommandEncoder& encoder = arena.commandEncoder();
 
   wgpu::ComputePassDescriptor passDesc{};
   passDesc.label = wgpuLabel("FilterTurbulencePass");
-  ScopedWgpuHandle<wgpu::ComputePassEncoder> pass(encoder.get().beginComputePass(passDesc));
+  ScopedWgpuHandle<wgpu::ComputePassEncoder> pass(encoder.beginComputePass(passDesc));
   pass.get().setPipeline(turbulencePipeline_.get());
   pass.get().setBindGroup(0, bindGroup.get(), 0, nullptr);
 
@@ -2744,19 +2656,6 @@ wgpu::Texture GeodeFilterEngine::applyTurbulence(
   pass.get().end();
   pass.reset();
 
-  ScopedWgpuHandle<wgpu::CommandBuffer> cmdBuf(encoder.get().finish());
-  device_.queue().submit(1, &cmdBuf.get());
-  device_.countSubmit();
-  // [Vulkan filter-sync] Force each filter compute pass to fully complete
-  // before the next pass samples its storage-texture output. On hardware
-  // Vulkan (Intel Arc) the automatic cross-submit storage-write ->
-  // sampled-read barrier races the async queue, producing nondeterministic
-  // large-area filter corruption. Serialize on Vulkan; Metal is unaffected.
-  // Interim workaround; superseded by the single-encoder filter refactor
-  // (design 0030 M3).
-  if (device_.isVulkan()) {
-    device_.pollSuspending(true);
-  }
   return output;
 }
 
@@ -2790,7 +2689,7 @@ wgpu::Texture GeodeFilterEngine::applyDisplacementMap(
   wgpu::Buffer uniformBuffer =
       createUniformBuffer(arena, device_, &params, sizeof(params), "DisplacementMapParamsUniform");
 
-  dispatchTwoInputUniform(device_, displacementMapBindGroupLayout_.get(),
+  dispatchTwoInputUniform(arena, device_, displacementMapBindGroupLayout_.get(),
                           displacementMapPipeline_.get(), in1, in2, output, uniformBuffer,
                           sizeof(DisplacementParams), "FilterDisplacementMapPass");
   return output;
@@ -2983,13 +2882,11 @@ wgpu::Texture GeodeFilterEngine::applyDiffuseLighting(
   ScopedWgpuHandle<wgpu::BindGroup> bindGroup(dev.createBindGroup(bgDesc));
   device_.countBindGroup();
 
-  wgpu::CommandEncoderDescriptor ceDesc{};
-  ceDesc.label = wgpuLabel("FilterDiffuseLightingEncoder");
-  ScopedWgpuHandle<wgpu::CommandEncoder> encoder(dev.createCommandEncoder(ceDesc));
+  wgpu::CommandEncoder& encoder = arena.commandEncoder();
 
   wgpu::ComputePassDescriptor passDesc{};
   passDesc.label = wgpuLabel("FilterDiffuseLightingPass");
-  ScopedWgpuHandle<wgpu::ComputePassEncoder> pass(encoder.get().beginComputePass(passDesc));
+  ScopedWgpuHandle<wgpu::ComputePassEncoder> pass(encoder.beginComputePass(passDesc));
   pass.get().setPipeline(diffuseLightingPipeline_.get());
   pass.get().setBindGroup(0, bindGroup.get(), 0, nullptr);
 
@@ -2999,19 +2896,6 @@ wgpu::Texture GeodeFilterEngine::applyDiffuseLighting(
   pass.get().end();
   pass.reset();
 
-  ScopedWgpuHandle<wgpu::CommandBuffer> cmdBuf(encoder.get().finish());
-  device_.queue().submit(1, &cmdBuf.get());
-  device_.countSubmit();
-  // [Vulkan filter-sync] Force each filter compute pass to fully complete
-  // before the next pass samples its storage-texture output. On hardware
-  // Vulkan (Intel Arc) the automatic cross-submit storage-write ->
-  // sampled-read barrier races the async queue, producing nondeterministic
-  // large-area filter corruption. Serialize on Vulkan; Metal is unaffected.
-  // Interim workaround; superseded by the single-encoder filter refactor
-  // (design 0030 M3).
-  if (device_.isVulkan()) {
-    device_.pollSuspending(true);
-  }
   if (linearRGB) {
     output = applyColorSpaceConversion(arena, output, /*srgbToLinear=*/false);
   }
@@ -3113,13 +2997,11 @@ wgpu::Texture GeodeFilterEngine::applySpecularLighting(
   ScopedWgpuHandle<wgpu::BindGroup> bindGroup(dev.createBindGroup(bgDesc));
   device_.countBindGroup();
 
-  wgpu::CommandEncoderDescriptor ceDesc{};
-  ceDesc.label = wgpuLabel("FilterSpecularLightingEncoder");
-  ScopedWgpuHandle<wgpu::CommandEncoder> encoder(dev.createCommandEncoder(ceDesc));
+  wgpu::CommandEncoder& encoder = arena.commandEncoder();
 
   wgpu::ComputePassDescriptor passDesc{};
   passDesc.label = wgpuLabel("FilterSpecularLightingPass");
-  ScopedWgpuHandle<wgpu::ComputePassEncoder> pass(encoder.get().beginComputePass(passDesc));
+  ScopedWgpuHandle<wgpu::ComputePassEncoder> pass(encoder.beginComputePass(passDesc));
   pass.get().setPipeline(specularLightingPipeline_.get());
   pass.get().setBindGroup(0, bindGroup.get(), 0, nullptr);
 
@@ -3129,19 +3011,6 @@ wgpu::Texture GeodeFilterEngine::applySpecularLighting(
   pass.get().end();
   pass.reset();
 
-  ScopedWgpuHandle<wgpu::CommandBuffer> cmdBuf(encoder.get().finish());
-  device_.queue().submit(1, &cmdBuf.get());
-  device_.countSubmit();
-  // [Vulkan filter-sync] Force each filter compute pass to fully complete
-  // before the next pass samples its storage-texture output. On hardware
-  // Vulkan (Intel Arc) the automatic cross-submit storage-write ->
-  // sampled-read barrier races the async queue, producing nondeterministic
-  // large-area filter corruption. Serialize on Vulkan; Metal is unaffected.
-  // Interim workaround; superseded by the single-encoder filter refactor
-  // (design 0030 M3).
-  if (device_.isVulkan()) {
-    device_.pollSuspending(true);
-  }
   if (linearRGB) {
     output = applyColorSpaceConversion(arena, output, /*srgbToLinear=*/false);
   }
@@ -3184,9 +3053,9 @@ wgpu::Texture GeodeFilterEngine::applyDropShadow(
   wgpu::Buffer uniformBuffer =
       createUniformBuffer(arena, device_, &params, sizeof(params), "DropShadowParamsUniform");
 
-  dispatchTwoInputUniform(device_, dropShadowBindGroupLayout_.get(), dropShadowPipeline_.get(),
-                          input, blurred, output, uniformBuffer, sizeof(DropShadowParams),
-                          "FilterDropShadowPass");
+  dispatchTwoInputUniform(arena, device_, dropShadowBindGroupLayout_.get(),
+                          dropShadowPipeline_.get(), input, blurred, output, uniformBuffer,
+                          sizeof(DropShadowParams), "FilterDropShadowPass");
   return output;
 }
 
@@ -3228,8 +3097,8 @@ wgpu::Texture GeodeFilterEngine::applyImage(
     params.m12 = -1000.0f;
     wgpu::Buffer ub =
         createUniformBuffer(arena, device_, &params, sizeof(params), "ImageParamsEmpty");
-    dispatchInputOutputUniform(device_, imageBindGroupLayout_.get(), imagePipeline_.get(), emptyTex,
-                               output, ub, sizeof(ImageParams), "FilterImageEmptyPass");
+    dispatchInputOutputUniform(arena, device_, imageBindGroupLayout_.get(), imagePipeline_.get(),
+                               emptyTex, output, ub, sizeof(ImageParams), "FilterImageEmptyPass");
     return output;
   }
 
@@ -3302,8 +3171,8 @@ wgpu::Texture GeodeFilterEngine::applyImage(
 
     wgpu::Buffer uniformBuffer =
         createUniformBuffer(arena, device_, &params, sizeof(params), "ImageParamsFragRef");
-    dispatchInputOutputUniform(device_, imageBindGroupLayout_.get(), imagePipeline_.get(), imgTex,
-                               output, uniformBuffer, sizeof(ImageParams),
+    dispatchInputOutputUniform(arena, device_, imageBindGroupLayout_.get(), imagePipeline_.get(),
+                               imgTex, output, uniformBuffer, sizeof(ImageParams),
                                "FilterImageFragRefPass");
     return output;
   }
@@ -3328,8 +3197,8 @@ wgpu::Texture GeodeFilterEngine::applyImage(
 
     wgpu::Buffer uniformBuffer =
         createUniformBuffer(arena, device_, &params, sizeof(params), "ImageParamsFragRef");
-    dispatchInputOutputUniform(device_, imageBindGroupLayout_.get(), imagePipeline_.get(), imgTex,
-                               output, uniformBuffer, sizeof(ImageParams),
+    dispatchInputOutputUniform(arena, device_, imageBindGroupLayout_.get(), imagePipeline_.get(),
+                               imgTex, output, uniformBuffer, sizeof(ImageParams),
                                "FilterImageFragRefPass");
     return output;
   }
@@ -3452,8 +3321,8 @@ wgpu::Texture GeodeFilterEngine::applyImage(
   wgpu::Buffer uniformBuffer =
       createUniformBuffer(arena, device_, &params, sizeof(params), "ImageParamsUniform");
 
-  dispatchInputOutputUniform(device_, imageBindGroupLayout_.get(), imagePipeline_.get(), imgTex,
-                             output, uniformBuffer, sizeof(ImageParams), "FilterImagePass");
+  dispatchInputOutputUniform(arena, device_, imageBindGroupLayout_.get(), imagePipeline_.get(),
+                             imgTex, output, uniformBuffer, sizeof(ImageParams), "FilterImagePass");
   return output;
 }
 
@@ -3474,7 +3343,7 @@ wgpu::Texture GeodeFilterEngine::applyTile(FilterResourceArena& arena, const wgp
   wgpu::Buffer uniformBuffer =
       createUniformBuffer(arena, device_, &params, sizeof(params), "TileParamsUniform");
 
-  dispatchInputOutputUniform(device_, tileBindGroupLayout_.get(), tilePipeline_.get(), input,
+  dispatchInputOutputUniform(arena, device_, tileBindGroupLayout_.get(), tilePipeline_.get(), input,
                              output, uniformBuffer, sizeof(TileParams), "FilterTilePass");
   return output;
 }
@@ -3508,7 +3377,7 @@ wgpu::Texture GeodeFilterEngine::applySubregionClip(FilterResourceArena& arena,
   wgpu::Buffer uniformBuffer =
       createUniformBuffer(arena, device_, &params, sizeof(params), "SubregionClipParamsUniform");
 
-  dispatchInputOutputUniform(device_, subregionClipBindGroupLayout_.get(),
+  dispatchInputOutputUniform(arena, device_, subregionClipBindGroupLayout_.get(),
                              subregionClipPipeline_.get(), input, output, uniformBuffer,
                              sizeof(SubregionClipParams), "FilterSubregionClipPass");
   return output;
@@ -3530,7 +3399,7 @@ wgpu::Texture GeodeFilterEngine::applyColorSpaceConversion(FilterResourceArena& 
   wgpu::Buffer uniformBuffer = createUniformBuffer(arena, device_, &params, sizeof(params),
                                                    "ColorSpaceConvertParamsUniform");
 
-  dispatchInputOutputUniform(device_, colorSpaceConvertBindGroupLayout_.get(),
+  dispatchInputOutputUniform(arena, device_, colorSpaceConvertBindGroupLayout_.get(),
                              colorSpaceConvertPipeline_.get(), input, output, uniformBuffer,
                              sizeof(ColorSpaceConvertParams), "FilterColorSpaceConvertPass");
   return output;

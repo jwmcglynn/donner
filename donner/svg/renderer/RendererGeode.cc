@@ -1068,28 +1068,6 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink {
   // `endFrame`.
   geode::ScopedWgpuHandle<wgpu::CommandEncoder> frameCommandEncoder;
 
-  /// Finish + submit the current `frameCommandEncoder` and open a fresh
-  /// one. Callers must have ended any open render pass (via
-  /// `encoder->finish()`) before invoking this.
-  ///
-  /// Used when we need prior GPU work to be visible to a subsystem that
-  /// uses its own CommandEncoder + submit (the filter engine). Incurs
-  /// one extra submit per flush; most frames don't need it.
-  void flushFrameCommandEncoder() {
-    if (!frameCommandEncoder) {
-      return;
-    }
-    {
-      geode::ScopedWgpuHandle<wgpu::CommandBuffer> cb(frameCommandEncoder.get().finish());
-      device->queue().submit(1, &cb.get());
-      device->countSubmit();
-    }
-    frameFinishedEncoders.clear();
-    wgpu::CommandEncoderDescriptor desc = {};
-    desc.label = wgpuLabel("RendererGeodeFrameCE");
-    frameCommandEncoder.reset(device->device().createCommandEncoder(desc));
-  }
-
   std::unique_ptr<geode::GeoEncoder> encoder;
   std::vector<std::unique_ptr<geode::GeoEncoder>> frameFinishedEncoders;
 
@@ -3402,13 +3380,6 @@ void RendererGeode::popFilterLayer() {
   }
   impl_->retireFinishedEncoder(std::move(frame.savedEncoder));
 
-  // The filter engine runs on its own CommandEncoder + submit, so the
-  // layer-texture writes we just recorded into `frameCommandEncoder`
-  // must be submitted to the GPU BEFORE the filter engine tries to
-  // sample from `layerTexture`. Flush the shared encoder (1 extra
-  // submit, paid only on frames that use a filter).
-  impl_->flushFrameCommandEncoder();
-
   // When the filter buffer was expanded to capture negative-coordinate content, adjust
   // deviceFromFilter to include the offset so the filter engine interprets coordinates correctly.
   const Transform2d bufferDeviceFromFilter =
@@ -3477,12 +3448,12 @@ void RendererGeode::popFilterLayer() {
             Transform2d::Translate(-paddedRegion.topLeft.x, -paddedRegion.topLeft.y) *
             Transform2d::Scale(scaleX, scaleY);
 
-        // Resample the captured device content into the local raster with a
-        // self-contained encoder (owns its CommandEncoder + submits on finish).
+        // Resample the captured device content into the local raster in the
+        // shared frame command stream.
         {
           geode::GeoEncoder resampleEncoder(*impl_->device, *impl_->pipeline,
                                             *impl_->gradientPipeline, *impl_->imagePipeline,
-                                            localTexture);
+                                            localTexture, impl_->frameCommandEncoder.get());
           impl_->configureEncoder(resampleEncoder);
           resampleEncoder.setTransform(localFromDevice);
           resampleEncoder.drawTexture(
@@ -3499,8 +3470,9 @@ void RendererGeode::popFilterLayer() {
         const Box2d localFilterRegion(
             Vector2d(blurPadding, blurPadding),
             Vector2d(blurPadding + filterRegion.width(), blurPadding + filterRegion.height()));
-        wgpu::Texture localFiltered = impl_->filterEngine->execute(
-            frame.filterGraph, localTexture, localFilterRegion, localDeviceFromFilter);
+        wgpu::Texture localFiltered =
+            impl_->filterEngine->execute(frame.filterGraph, localTexture, localFilterRegion,
+                                         localDeviceFromFilter, impl_->frameCommandEncoder.get());
 
         // Restore the outer target + encoder, then composite the local result back
         // through the CTM. Transform chain (left factor first): local raster pixels
@@ -3545,8 +3517,9 @@ void RendererGeode::popFilterLayer() {
   // Run the filter graph on the captured layer texture.
   wgpu::Texture filteredTexture = frame.layerTexture;
   if (impl_->filterEngine && !frame.filterGraph.empty()) {
-    filteredTexture = impl_->filterEngine->execute(frame.filterGraph, frame.layerTexture,
-                                                   frame.filterRegion, bufferDeviceFromFilter);
+    filteredTexture =
+        impl_->filterEngine->execute(frame.filterGraph, frame.layerTexture, frame.filterRegion,
+                                     bufferDeviceFromFilter, impl_->frameCommandEncoder.get());
   }
 
   // Restore outer target and create a fresh encoder that preserves its
@@ -3581,8 +3554,6 @@ void RendererGeode::popFilterLayer() {
     }
 
     if (viewportTexture) {
-      geode::ScopedWgpuHandle<wgpu::CommandEncoder> copyEncoder(
-          impl_->device->device().createCommandEncoder());
       wgpu::TexelCopyTextureInfo src = {};
       src.texture = filteredTexture;
       src.origin = {static_cast<uint32_t>(frame.filterBufferOffsetX),
@@ -3590,20 +3561,7 @@ void RendererGeode::popFilterLayer() {
       wgpu::TexelCopyTextureInfo dst = {};
       dst.texture = viewportTexture.get();
       const wgpu::Extent3D extent = {vpW, vpH, 1u};
-      copyEncoder.get().copyTextureToTexture(src, dst, extent);
-      geode::ScopedWgpuHandle<wgpu::CommandBuffer> copyCmd(copyEncoder.get().finish());
-      impl_->device->queue().submit(1, &copyCmd.get());
-      impl_->device->countSubmit();
-
-      // [Vulkan filter-sync] This copy is its own submit, but the blit below
-      // records a sample of `viewportTexture` into the frame encoder, which
-      // submits later - the same cross-submit copy-write -> sampled-read race
-      // class as the filter engine's per-pass submits. Serialize on Vulkan.
-      // Interim workaround; superseded by the single-encoder filter refactor
-      // (design 0030 M3).
-      if (impl_->device->isVulkan()) {
-        impl_->device->pollSuspending(true);
-      }
+      impl_->frameCommandEncoder.get().copyTextureToTexture(src, dst, extent);
 
       impl_->encoder->blitFullTarget(viewportTexture.get(), 1.0);
       impl_->device->deferDestroy(viewportTexture.take());

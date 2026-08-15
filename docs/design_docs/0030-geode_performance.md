@@ -299,11 +299,9 @@ algorithm.
   - [x] Blend-mode snapshot copy now records directly into
     `frameCommandEncoder` via `copyTextureToTexture` — the side
     CommandEncoder + submit pair is gone.
-  - [x] Filter engine still runs its own CommandEncoder / submit
-    (self-contained subsystem). `popFilterLayer` calls a new
-    `flushFrameCommandEncoder()` helper so the layer-texture writes
-    are visible to the filter engine. Pays one extra submit on
-    filter-using frames only; non-filter frames see the full M3 win.
+  - [x] Filter render, compute, copy, and composite work now records in
+    `frameCommandEncoder`. The former filter-only flush and per-pass
+    submissions are gone. This completed the filter portion on 2026-08-15.
   - [x] Counter delta: Moderate (1 `<g opacity>` layer) drops from
     `submits=4` → `submits=2` (frame + readback). Ceiling tightened
     in `GeodePerf_tests.cc`.
@@ -343,9 +341,10 @@ algorithm.
     `.str()` copies per result lookup.
   - [ ] Route `createIntermediateTexture` (`GeodeFilterEngine.cc:192-204`)
     through the pool from Milestone 4.
-  - [ ] Merge the per-primitive `CommandEncoder` + `queue().submit()` pairs
-    (10+ sites, e.g. `:376`, `:425`, `:1156`, `:1313`, `:1383`, `:1556`,
-    `:1664`, `:1735`, `:1890`, `:1973`) into the outer frame encoder.
+  - [x] Merge the per-primitive `CommandEncoder` + `queue().submit()` pairs
+    into the outer frame encoder. A Gaussian-blur counter regression records
+    the filter source render, compute passes, and composite in one frame
+    submission, plus the independent snapshot-readback submission.
 - [ ] Milestone 6: Batch draws sharing pipeline state (0017 Phase 5
   bullet 6).
   - [x] **M6-A: instrumentation.** `drawCalls` + `pipelineSwitches`
