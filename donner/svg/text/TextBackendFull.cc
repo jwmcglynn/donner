@@ -174,6 +174,11 @@ hb_font_t* TextBackendFull::getOrCreateHbFont(FontHandle handle) const {
   if (!fontManager_.isValidatedFont(handle)) {
     return nullptr;
   }
+  if (!fontManager_.isTrustedFont(handle) && !HasCachedOutlineTables(fontManager_, handle)) {
+    // Bitmap-only fonts can cause FreeType to decompress embedded PNG strikes from HarfBuzz
+    // metric callbacks. Reject document-provided bitmap fonts before constructing an FT_Face.
+    return nullptr;
+  }
 
   // Create a FreeType face from the raw font data, then wrap it with HarfBuzz. This exact
   // whole-font span is also the safe CFF boundary; unlike stb_truetype, FreeType does not invent a
