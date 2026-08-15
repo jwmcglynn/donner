@@ -9,28 +9,9 @@
 namespace donner::svg {
 
 namespace {
-
-/// Find an OpenType/TrueType table by 4-char tag in raw font data.
-/// Returns the byte offset of the table, or 0 if not found.
-int findFontTable(const unsigned char* data, int fontstart, const char* tag) {
-  const int numTables = (data[fontstart + 4] << 8) | data[fontstart + 5];
-  const int tabledir = fontstart + 12;
-  for (int i = 0; i < numTables; ++i) {
-    const int loc = tabledir + 16 * i;
-    if (data[loc] == tag[0] && data[loc + 1] == tag[1] && data[loc + 2] == tag[2] &&
-        data[loc + 3] == tag[3]) {
-      return static_cast<int>((static_cast<unsigned>(data[loc + 8]) << 24) |
-                              (static_cast<unsigned>(data[loc + 9]) << 16) |
-                              (static_cast<unsigned>(data[loc + 10]) << 8) |
-                              static_cast<unsigned>(data[loc + 11]));
-    }
-  }
-  return 0;
-}
-
-/// Read a big-endian int16 from raw font data.
-int16_t readInt16BE(const unsigned char* data, int offset) {
-  return static_cast<int16_t>(static_cast<uint16_t>(data[offset] << 8) | data[offset + 1]);
+int16_t ReadInt16Be(std::span<const uint8_t> data, size_t offset) {
+  return static_cast<int16_t>(
+      static_cast<uint16_t>((static_cast<uint16_t>(data[offset]) << 8) | data[offset + 1]));
 }
 
 /// Decode one UTF-8 codepoint from \p str starting at \p i. Advances \p i past the codepoint.
@@ -59,7 +40,7 @@ const stbtt_fontinfo* TextBackendSimple::getFontInfo(FontHandle font) const {
   }
 
   const auto fontData = fontManager_.fontData(font);
-  if (fontData.empty() || !HasOutlineTables(fontData)) {
+  if (!ValidateSfnt(fontData) || !HasOutlineTables(fontData)) {
     return nullptr;
   }
 
@@ -83,12 +64,12 @@ FontVMetrics TextBackendSimple::fontVMetrics(FontHandle font) const {
   FontVMetrics metrics;
   stbtt_GetFontVMetrics(info, &metrics.ascent, &metrics.descent, &metrics.lineGap);
 
+  const auto fontData = fontManager_.fontData(font);
   // x-height from the OS/2 table (`sxHeight`, offset 86), present in version >= 2.
-  if (const int os2 = findFontTable(info->data, info->fontstart, "OS/2")) {
-    const uint16_t version =
-        static_cast<uint16_t>(readInt16BE(info->data, os2));  // USHORT version at offset 0.
+  if (const auto os2 = FindSfntTable(fontData, "OS/2"); os2 && os2->size() >= 88) {
+    const uint16_t version = static_cast<uint16_t>(ReadInt16Be(*os2, 0));
     if (version >= 2) {
-      metrics.xHeight = readInt16BE(info->data, os2 + 86);
+      metrics.xHeight = ReadInt16Be(*os2, 86);
     }
   }
   return metrics;
@@ -119,14 +100,14 @@ std::optional<UnderlineMetrics> TextBackendSimple::underlineMetrics(FontHandle f
     return std::nullopt;
   }
 
-  const int tab = findFontTable(info->data, info->fontstart, "post");
-  if (!tab) {
+  const auto table = FindSfntTable(fontManager_.fontData(font), "post");
+  if (!table || table->size() < 12) {
     return std::nullopt;
   }
 
   UnderlineMetrics metrics;
-  metrics.position = static_cast<double>(readInt16BE(info->data, tab + 8));
-  metrics.thickness = static_cast<double>(readInt16BE(info->data, tab + 10));
+  metrics.position = static_cast<double>(ReadInt16Be(*table, 8));
+  metrics.thickness = static_cast<double>(ReadInt16Be(*table, 10));
   return metrics;
 }
 
@@ -136,14 +117,14 @@ std::optional<UnderlineMetrics> TextBackendSimple::strikeoutMetrics(FontHandle f
     return std::nullopt;
   }
 
-  const int tab = findFontTable(info->data, info->fontstart, "OS/2");
-  if (!tab) {
+  const auto table = FindSfntTable(fontManager_.fontData(font), "OS/2");
+  if (!table || table->size() < 30) {
     return std::nullopt;
   }
 
   UnderlineMetrics metrics;
-  metrics.thickness = static_cast<double>(readInt16BE(info->data, tab + 26));
-  metrics.position = static_cast<double>(readInt16BE(info->data, tab + 28));
+  metrics.thickness = static_cast<double>(ReadInt16Be(*table, 26));
+  metrics.position = static_cast<double>(ReadInt16Be(*table, 28));
   return metrics;
 }
 
@@ -153,15 +134,15 @@ std::optional<SubSuperMetrics> TextBackendSimple::subSuperMetrics(FontHandle fon
     return std::nullopt;
   }
 
-  const int tab = findFontTable(info->data, info->fontstart, "OS/2");
-  if (!tab) {
+  const auto table = FindSfntTable(fontManager_.fontData(font), "OS/2");
+  if (!table || table->size() < 26) {
     return std::nullopt;
   }
 
   SubSuperMetrics metrics;
   // OS/2 table: ySubscriptYOffset at offset 16, ySuperscriptYOffset at offset 24 (int16 BE).
-  metrics.subscriptYOffset = readInt16BE(info->data, tab + 16);
-  metrics.superscriptYOffset = readInt16BE(info->data, tab + 24);
+  metrics.subscriptYOffset = ReadInt16Be(*table, 16);
+  metrics.superscriptYOffset = ReadInt16Be(*table, 24);
   return metrics;
 }
 

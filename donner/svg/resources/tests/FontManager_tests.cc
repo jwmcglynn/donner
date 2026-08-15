@@ -94,6 +94,16 @@ TEST(FontManagerTest, LoadRawOtfData) {
   EXPECT_FALSE(mgr.fontData(handle).empty());
 }
 
+TEST(FontManagerTest, EnforcesAggregateLoadedFontBudget) {
+  Registry registry;
+  std::vector<uint8_t> data(embedded::kPublicSansMediumOtf.begin(),
+                            embedded::kPublicSansMediumOtf.end());
+  FontManager mgr(registry, data.size());
+
+  EXPECT_TRUE(static_cast<bool>(mgr.loadFontData(data)));
+  EXPECT_FALSE(static_cast<bool>(mgr.loadFontData(data)));
+}
+
 TEST(FontManagerTest, LoadWoff1Data) {
   Registry registry;
   FontManager mgr(registry);
@@ -135,6 +145,14 @@ TEST(FontManagerTest, FontDataReturnsNonEmpty) {
 
   auto data = mgr.fontData(handle);
   EXPECT_FALSE(data.empty());
+}
+
+TEST(FontManagerTest, RejectsTruncatedRawSfnt) {
+  Registry registry;
+  FontManager mgr(registry);
+  const std::vector<uint8_t> truncatedSfnt = {0x00, 0x01, 0x00, 0x00};
+
+  EXPECT_FALSE(static_cast<bool>(mgr.loadFontData(truncatedSfnt)));
 }
 
 TEST(FontManagerTest, FindFontFallsBackToPublicSans) {

@@ -147,6 +147,14 @@ TEST(Woff2ParserTest, EmptyData) {
   EXPECT_TRUE(result.hasError());
 }
 
+TEST(Woff2ParserTest, RejectsInputLargerThanLimit) {
+  Woff2Parser::Options options;
+  options.maximumInputSize = 3;
+  auto result = Woff2Parser::Decompress(std::vector<uint8_t>(4), options);
+  ASSERT_TRUE(result.hasError());
+  EXPECT_THAT(result.error().reason, testing::HasSubstr("input exceeds limit"));
+}
+
 TEST(Woff2ParserTest, InvalidMagic) {
   // Valid size but wrong magic bytes.
   std::vector<uint8_t> data(100, 0);

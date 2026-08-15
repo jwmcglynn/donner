@@ -227,12 +227,16 @@ std::optional<std::string_view> ValidateDecoderResourceBounds(std::span<const ui
 }  // namespace
 
 ParseResult<std::vector<uint8_t>> Woff2Parser::Decompress(std::span<const uint8_t> woff2Data) {
-  if (woff2Data.size() > kMaxWoff2InputSize) {
+  return Decompress(woff2Data, Options{});
+}
+
+ParseResult<std::vector<uint8_t>> Woff2Parser::Decompress(std::span<const uint8_t> woff2Data,
+                                                          const Options& options) {
+  if (woff2Data.size() > kMaxWoff2InputSize || woff2Data.size() > options.maximumInputSize) {
     ParseDiagnostic err;
-    err.reason = "WOFF2: compressed input exceeds limit";
+    err.reason = "WOFF2 input exceeds limit";
     return err;
   }
-
   if (woff2Data.size() < 4) {
     ParseDiagnostic err;
     err.reason = "WOFF2 data too short";
@@ -281,7 +285,7 @@ ParseResult<std::vector<uint8_t>> Woff2Parser::Decompress(std::span<const uint8_
   // field verbatim. Guard it before allocating: without this, a complete header
   // declaring a 4 GiB output triggers a multi-gigabyte allocation before any
   // decompression work. A legitimate decompressed font is far under this bound.
-  if (outSize > kMaxDecompressedSize) {
+  if (outSize > kMaxDecompressedSize || outSize > options.maximumOutputSize) {
     ParseDiagnostic err;
     err.reason = "WOFF2: declared decompressed size exceeds limit";
     return err;

@@ -232,6 +232,24 @@ TEST(WoffParser, RejectsInvalidTableRangesAndSizes) {
   EXPECT_THAT(tooLargeResult.error().reason, testing::HasSubstr("too large"));
 }
 
+TEST(WoffParser, RejectsInputLargerThanLimit) {
+  const std::vector<uint8_t> woff = MakeWoff({});
+  WoffParser::Options options;
+  options.maximumInputSize = woff.size() - 1;
+  auto result = WoffParser::Parse(woff, options);
+  ASSERT_TRUE(result.hasError());
+  EXPECT_THAT(result.error().reason, testing::HasSubstr("input exceeds limit"));
+}
+
+TEST(WoffParser, RejectsOversizedAggregateSfnt) {
+  std::vector<uint8_t> oversized = MakeWoff({});
+  WriteBE32(&oversized, 16, 64u * 1024u * 1024u + 1u);
+
+  auto result = WoffParser::Parse(oversized);
+  ASSERT_TRUE(result.hasError());
+  EXPECT_THAT(result.error().reason, testing::HasSubstr("total sfnt size"));
+}
+
 TEST(WoffParser, ParsesSyntheticUncompressedTables) {
   const std::vector<uint8_t> woff = MakeWoff({
       TableSpec{

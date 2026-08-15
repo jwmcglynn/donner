@@ -1,6 +1,7 @@
 #pragma once
 /// @file
 
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <span>
@@ -72,8 +73,12 @@ namespace donner::svg {
  */
 class FontManager {
 public:
+  /// Default aggregate byte budget for font data loaded into one registry.
+  static constexpr size_t kDefaultMaximumLoadedFontBytes = 64 * 1024 * 1024;
+
   /// Construct a FontManager tied to the provided ECS \p registry.
-  explicit FontManager(Registry& registry);
+  explicit FontManager(Registry& registry,
+                       size_t maximumLoadedFontBytes = kDefaultMaximumLoadedFontBytes);
   /// Destructor.
   ~FontManager();
 
@@ -216,6 +221,7 @@ private:
    */
   bool setRawFontData(Entity entity, std::vector<uint8_t> data);
   bool setRawFontData(Entity entity, std::shared_ptr<const std::vector<uint8_t>> sharedData);
+  bool canStoreFontData(Entity entity, size_t size) const;
   bool loadFontDataSharedIntoEntity(Entity entity,
                                     const std::shared_ptr<const std::vector<uint8_t>>& data);
 
@@ -267,6 +273,9 @@ private:
 
   /// Optional external provider (embedded/system catalog), borrowed. May be nullptr.
   const FontFamilyProvider* provider_ = nullptr;
+
+  /// Maximum total font bytes retained by loaded-font components in this registry.
+  size_t maximumLoadedFontBytes_;
 };
 
 }  // namespace donner::svg

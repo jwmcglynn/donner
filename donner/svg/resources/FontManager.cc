@@ -8,6 +8,7 @@
 #include <limits>
 
 #include "donner/base/StringUtils.h"
+#include "donner/base/fonts/SfntUtils.h"
 #include "donner/base/fonts/WoffFont.h"
 #include "donner/base/fonts/WoffParser.h"
 #ifdef DONNER_TEXT_WOFF2_ENABLED
@@ -159,8 +160,10 @@ const FontFamilyProvider* FontManager::DefaultFontProvider() {
   return g_defaultFontProvider.load(std::memory_order_acquire);
 }
 
-FontManager::FontManager(Registry& registry)
-    : registry_(registry), provider_(g_defaultFontProvider.load(std::memory_order_acquire)) {}
+FontManager::FontManager(Registry& registry, size_t maximumLoadedFontBytes)
+    : registry_(registry),
+      provider_(g_defaultFontProvider.load(std::memory_order_acquire)),
+      maximumLoadedFontBytes_(maximumLoadedFontBytes) {}
 FontManager::~FontManager() = default;
 
 void FontManager::addFontFace(const css::FontFace& face) {
@@ -389,6 +392,10 @@ FontHandle FontManager::fallbackFont() {
 }
 
 bool FontManager::setRawFontData(Entity entity, std::vector<uint8_t> data) {
+  if (!fonts::ValidateSfnt(data) || !canStoreFontData(entity, data.size())) {
+    return false;
+  }
+
   LoadedFontComponent font;
   font.ownedData = std::move(data);
   registry_.emplace_or_replace<LoadedFontComponent>(entity, std::move(font));
@@ -397,7 +404,8 @@ bool FontManager::setRawFontData(Entity entity, std::vector<uint8_t> data) {
 
 bool FontManager::setRawFontData(Entity entity,
                                  std::shared_ptr<const std::vector<uint8_t>> sharedData) {
-  if (!sharedData) {
+  if (!sharedData || !fonts::ValidateSfnt(*sharedData) ||
+      !canStoreFontData(entity, sharedData->size())) {
     return false;
   }
 
@@ -405,6 +413,23 @@ bool FontManager::setRawFontData(Entity entity,
   font.sharedData = std::move(sharedData);
   registry_.emplace_or_replace<LoadedFontComponent>(entity, std::move(font));
   return true;
+}
+
+bool FontManager::canStoreFontData(Entity entity, size_t size) const {
+  size_t usedBytes = 0;
+  for (const Entity loadedEntity : registry_.view<LoadedFontComponent>()) {
+    if (loadedEntity == entity) {
+      continue;
+    }
+
+    const size_t loadedSize = registry_.get<LoadedFontComponent>(loadedEntity).fontData().size();
+    if (loadedSize > maximumLoadedFontBytes_ - usedBytes) {
+      return false;
+    }
+    usedBytes += loadedSize;
+  }
+
+  return size <= maximumLoadedFontBytes_ - usedBytes;
 }
 
 bool FontManager::loadWoff1(Entity entity, std::span<const uint8_t> data) {
@@ -445,6 +470,9 @@ bool FontManager::loadFontDataIntoEntity(Entity entity, std::span<const uint8_t>
   }
 
   // Treat as raw TTF/OTF.
+  if (!canStoreFontData(entity, data.size())) {
+    return false;
+  }
   std::vector<uint8_t> owned(data.begin(), data.end());
   return setRawFontData(entity, std::move(owned));
 }

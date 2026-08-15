@@ -13,7 +13,10 @@ embed_resources(
 
 exports_files(
     ["PublicSans-Medium.otf"],
-    visibility = ["//tools:__pkg__"],
+    visibility = [
+        "//donner/svg/text:__pkg__",
+        "//tools:__pkg__",
+    ],
 )
 
 filegroup(

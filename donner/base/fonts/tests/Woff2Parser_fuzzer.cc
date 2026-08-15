@@ -28,6 +28,17 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
     (void)result;
   }
 
+  Woff2Parser::Options options;
+  options.maximumInputSize = size / 2;
+  options.maximumOutputSize = size;
+  auto limitedResult = Woff2Parser::Decompress(std::span<const uint8_t>(data, size), options);
+  if (size > options.maximumInputSize && limitedResult.hasResult()) {
+    std::abort();
+  }
+  if (limitedResult.hasResult() && limitedResult.result().size() > options.maximumOutputSize) {
+    std::abort();
+  }
+
   return 0;
 }
 

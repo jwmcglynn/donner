@@ -1,6 +1,7 @@
 #pragma once
 /// @file
 
+#include <cstddef>
 #include <cstdint>
 #include <span>
 #include <vector>
@@ -20,6 +21,11 @@ namespace donner::fonts {
  */
 class Woff2Parser {
 public:
+  struct Options {
+    size_t maximumInputSize = 16 * 1024 * 1024;
+    size_t maximumOutputSize = 64 * 1024 * 1024;
+  };
+
   /**
    * Decompress WOFF2 data into a flat TTF/OTF byte stream.
    *
@@ -28,6 +34,10 @@ public:
    *         or a ParseDiagnostic on failure.
    */
   static ParseResult<std::vector<uint8_t>> Decompress(std::span<const uint8_t> woff2Data);
+
+  /// Decompress using explicit compressed and expanded byte limits.
+  static ParseResult<std::vector<uint8_t>> Decompress(std::span<const uint8_t> woff2Data,
+                                                      const Options& options);
 };
 
 }  // namespace donner::fonts
