@@ -72,6 +72,15 @@ public:
    */
   std::optional<SVGDocumentHandle> get(const RcString& resolvedUrl) const;
 
+  /// Record a failed fetch or parse so the URL is not retried.
+  void rememberFailure(const RcString& resolvedUrl);
+
+  /// Return true when the URL has a negative cache entry.
+  bool isRejected(const RcString& resolvedUrl) const;
+
+  /// Clear failed-URL entries when the application replaces its resource loader.
+  void clearFailures();
+
   /// Returns true if the given URL is currently being loaded (for recursion detection).
   bool isLoading(const RcString& resolvedUrl) const;
 
@@ -79,11 +88,19 @@ public:
   size_t size() const { return cache_.size(); }
 
 private:
+  static constexpr size_t kMaximumRejectedEntries = 256;
+
   /// Cached sub-documents keyed by resolved URL.
   std::unordered_map<RcString, SVGDocumentHandle> cache_;
 
   /// URLs currently being loaded, used to detect circular references.
   std::unordered_set<RcString> loading_;
+
+  /// URLs whose fetch or parse failed.
+  std::unordered_set<RcString> rejected_;
+
+  /// True after the bounded negative cache fills, rejecting every uncached URL.
+  bool rejectAll_ = false;
 };
 
 }  // namespace donner::svg::components

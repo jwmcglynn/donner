@@ -188,6 +188,7 @@ donner_cc_fuzzer(
     ],
     deps = [
         ":parser",
+        "//donner/svg/components/layout:layout_system",
     ],
 )
 

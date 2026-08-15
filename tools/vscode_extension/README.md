@@ -98,4 +98,4 @@ script-capable parser inside the webview.
 - Dark / Light / High Contrast theme support
 - Checkerboard transparency background
 - Error overlay for parse failures
-- 32 MiB file size guard
+- 16 MiB file size guard

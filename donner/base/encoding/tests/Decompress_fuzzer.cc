@@ -1,3 +1,5 @@
+#include <cstdlib>
+
 #include "donner/base/encoding/Decompress.h"
 
 namespace donner {
@@ -7,8 +9,11 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
   const std::string_view strView(reinterpret_cast<const char*>(data), size);
 
   // Fuzz Gzip decompression
-  auto resultGzip = Decompress::Gzip(strView);
-  (void)resultGzip;
+  const size_t gzipLimit = size % 32;
+  auto resultGzip = Decompress::Gzip(strView, gzipLimit);
+  if (resultGzip.hasResult() && resultGzip.result().size() > gzipLimit) {
+    std::abort();
+  }
 
   // Fuzz Zlib decompression
   if (size > 0) {

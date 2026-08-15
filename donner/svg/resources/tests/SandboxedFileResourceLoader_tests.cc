@@ -79,4 +79,35 @@ TEST_F(SandboxedFileResourceLoaderTests, AccessOutsideSandbox) {
               testing::VariantWith<ResourceLoaderError>(ResourceLoaderError::SandboxViolation));
 }
 
+TEST_F(SandboxedFileResourceLoaderTests, RejectsSiblingWhoseNameSharesRootPrefix) {
+  const std::filesystem::path prefixSibling = root_.parent_path() / "root-backup";
+  std::filesystem::create_directories(prefixSibling);
+  createTestFileUnder(prefixSibling, "secret.txt");
+
+  SandboxedFileResourceLoader loader(root_, root_ / "doc.svg");
+  EXPECT_THAT(loader.fetchExternalResource((prefixSibling / "secret.txt").string()),
+              testing::VariantWith<ResourceLoaderError>(ResourceLoaderError::SandboxViolation));
+}
+
+TEST_F(SandboxedFileResourceLoaderTests, RejectsSymlinkThatEscapesRoot) {
+  createTestFileUnder(secondaryDir_, "secret.txt");
+  std::error_code error;
+  std::filesystem::create_directory_symlink(secondaryDir_, root_ / "escape", error);
+  if (error) {
+    GTEST_SKIP() << "Could not create test symlink: " << error.message();
+  }
+
+  SandboxedFileResourceLoader loader(root_, root_ / "doc.svg");
+  EXPECT_THAT(loader.fetchExternalResource("escape/secret.txt"),
+              testing::VariantWith<ResourceLoaderError>(ResourceLoaderError::SandboxViolation));
+}
+
+TEST_F(SandboxedFileResourceLoaderTests, RejectsResourceLargerThanConfiguredLimit) {
+  createTestFileUnder(root_, "test.txt");
+
+  SandboxedFileResourceLoader loader(root_, root_ / "doc.svg", 4);
+  EXPECT_THAT(loader.fetchExternalResource("test.txt"),
+              testing::VariantWith<ResourceLoaderError>(ResourceLoaderError::TooLarge));
+}
+
 }  // namespace donner::svg

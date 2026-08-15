@@ -3,7 +3,11 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <filesystem>
+#include <fstream>
 #include <string>
+
+#include "donner/base/tests/TestTempDir.h"
 
 namespace donner::svg {
 namespace {
@@ -32,6 +36,29 @@ TEST(ImageComparisonTestFixtureTests, GeodeMaxPixelsOnlyAppliesToGeodeModes) {
   EXPECT_EQ(params.effectiveMaxMismatchedPixels(ComparisonMode::TinyGolden), 150);
   EXPECT_EQ(params.effectiveMaxMismatchedPixels(ComparisonMode::GeodeGolden), 500);
   EXPECT_EQ(params.effectiveMaxMismatchedPixels(ComparisonMode::GeodeTinyParity), 500);
+}
+
+TEST(ImageComparisonTestFixtureTests, ResolvesSymlinkedRunfilesRootToCanonicalDocumentTree) {
+  const std::filesystem::path testRoot = TestTempDir() / "runfiles-resource-root";
+  const std::filesystem::path canonicalRoot = testRoot / "canonical";
+  const std::filesystem::path runfilesRoot = testRoot / "runfiles";
+  const std::filesystem::path canonicalDocument = canonicalRoot / "document.svg";
+  std::filesystem::create_directories(canonicalRoot);
+  {
+    std::ofstream file(canonicalDocument);
+    ASSERT_TRUE(file.good());
+    file << "<svg/>";
+  }
+
+  std::error_code error;
+  std::filesystem::create_directory_symlink(canonicalRoot, runfilesRoot, error);
+  if (error) {
+    GTEST_SKIP() << "Could not create test symlink: " << error.message();
+  }
+
+  EXPECT_EQ(ResolveRunfilesResourceRootForTesting(runfilesRoot, runfilesRoot / "document.svg"),
+            canonicalRoot);
+  EXPECT_EQ(ResolveRunfilesResourceRootForTesting(runfilesRoot, canonicalDocument), runfilesRoot);
 }
 
 #ifndef DONNER_TEXT_FULL

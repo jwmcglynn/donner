@@ -1,3 +1,5 @@
+#include <cstdlib>
+
 #include "donner/base/ParseWarningSink.h"
 #include "donner/svg/parser/SVGParser.h"
 
@@ -14,10 +16,13 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
   // Try again with options set.
   SVGParser::Options options;
   options.disableUserAttributes = false;
+  options.maximumInputSize = size / 2;
 
   ParseWarningSink disabled2 = ParseWarningSink::Disabled();
   auto result2 = SVGParser::ParseSVG(buffer, disabled2, options);
-  (void)result2;
+  if (size > options.maximumInputSize && result2.hasResult()) {
+    std::abort();
+  }
 
   return 0;
 }

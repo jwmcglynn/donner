@@ -4,8 +4,8 @@ const vscode = acquireVsCodeApi();
 // DOM elements.
 const canvasContainer = document.getElementById("canvas-container") as HTMLDivElement;
 const canvas = document.getElementById("preview-canvas") as HTMLCanvasElement;
-const ctx = canvas.getContext("2d");
-if (!ctx) {
+const maybeCtx = canvas.getContext("2d");
+if (!maybeCtx) {
   const msg = document.createElement("p");
   msg.textContent = "Error: Unable to create canvas 2D context. The preview cannot render.";
   msg.style.color = "red";
@@ -13,6 +13,7 @@ if (!ctx) {
   canvasContainer.replaceChildren(msg);
   throw new Error("Canvas 2D context unavailable");
 }
+const ctx = maybeCtx;
 const errorOverlay = document.getElementById("error-overlay") as HTMLDivElement;
 const errorMessage = document.getElementById("error-message") as HTMLParagraphElement;
 const dirtyBadge = document.getElementById("dirty-badge") as HTMLSpanElement;
@@ -51,10 +52,13 @@ declare function acquireVsCodeApi(): {
 interface DonnerWasmModule {
   cwrap: (name: string, returnType: string | null, argTypes: string[]) => Function;
   HEAPU8: Uint8Array;
+  _malloc: (size: number) => number;
+  _free: (ptr: number) => void;
 }
 
 let wasmModule: DonnerWasmModule | null = null;
-let wasmRenderSvg: ((svgText: string, w: number, h: number) => number) | null = null;
+let wasmRenderSvg: ((svgPtr: number, byteLength: number, w: number, h: number) => number) | null =
+  null;
 let wasmFreePixels: ((ptr: number) => void) | null = null;
 let wasmGetLastError: (() => string) | null = null;
 
@@ -89,11 +93,12 @@ async function tryLoadWasm(): Promise<boolean> {
     wasmModule = await createModule();
 
     const init = wasmModule.cwrap("donner_init", null, []) as () => void;
-    wasmRenderSvg = wasmModule.cwrap("donner_render_svg", "number", [
-      "string",
+    wasmRenderSvg = wasmModule.cwrap("donner_render_svg_len", "number", [
       "number",
       "number",
-    ]) as (svgText: string, w: number, h: number) => number;
+      "number",
+      "number",
+    ]) as (svgPtr: number, byteLength: number, w: number, h: number) => number;
     wasmFreePixels = wasmModule.cwrap("donner_free_pixels", null, ["number"]) as (
       ptr: number,
     ) => void;
@@ -131,7 +136,28 @@ async function renderSvg(
     };
   }
 
-  const ptr = wasmRenderSvg(svgText, cappedWidth, cappedHeight);
+  const MAX_SVG_BYTES = 16 * 1024 * 1024;
+  if (svgText.length > MAX_SVG_BYTES) {
+    return { imageData: null, error: "SVG exceeds maximum input size" };
+  }
+
+  const svgBytes = new TextEncoder().encode(svgText);
+  if (svgBytes.byteLength > MAX_SVG_BYTES) {
+    return { imageData: null, error: "SVG exceeds maximum input size" };
+  }
+
+  const svgPtr = wasmModule._malloc(Math.max(1, svgBytes.byteLength));
+  if (svgPtr === 0) {
+    return { imageData: null, error: "Failed to allocate SVG input buffer" };
+  }
+
+  let ptr = 0;
+  try {
+    wasmModule.HEAPU8.set(svgBytes, svgPtr);
+    ptr = wasmRenderSvg(svgPtr, svgBytes.byteLength, cappedWidth, cappedHeight);
+  } finally {
+    wasmModule._free(svgPtr);
+  }
   if (ptr === 0) {
     return { imageData: null, error: wasmGetLastError() || "Unknown rendering error" };
   }

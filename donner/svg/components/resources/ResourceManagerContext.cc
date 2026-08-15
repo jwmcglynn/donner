@@ -1,11 +1,13 @@
 #include "donner/svg/components/resources/ResourceManagerContext.h"
 
+#include <algorithm>
 #include <memory>
 
 #include "donner/base/EcsRegistry.h"
 #include "donner/base/ParseDiagnostic.h"
 #include "donner/base/ParseWarningSink.h"
 #include "donner/base/Utils.h"
+#include "donner/base/encoding/Decompress.h"
 #include "donner/css/FontFace.h"
 #include "donner/svg/components/SVGDocumentContext.h"
 #include "donner/svg/components/resources/ImageComponent.h"
@@ -43,19 +45,85 @@ private:
   ResourceLoaderInterface& loader_;
 };
 
+class BoundedResourceLoader : public ResourceLoaderInterface {
+public:
+  BoundedResourceLoader(ResourceLoaderInterface& loader, size_t& remainingAttempts,
+                        size_t& remainingResourceBytes)
+      : loader_(loader),
+        remainingAttempts_(remainingAttempts),
+        remainingResourceBytes_(remainingResourceBytes) {}
+
+  std::variant<std::vector<uint8_t>, ResourceLoaderError> fetchExternalResource(
+      std::string_view url) override {
+    if (remainingAttempts_ == 0 || remainingResourceBytes_ == 0) {
+      remainingResourceBytes_ = 0;
+      return ResourceLoaderError::TooLarge;
+    }
+
+    --remainingAttempts_;
+    return loader_.fetchExternalResource(url);
+  }
+
+private:
+  ResourceLoaderInterface& loader_;
+  size_t& remainingAttempts_;
+  size_t& remainingResourceBytes_;
+};
+
 SubDocumentCache::ParseCallback GuardSvgParseCallback(
-    Registry& registry, const SubDocumentCache::ParseCallback& callback) {
-  return [&registry, &callback](const std::vector<uint8_t>& svgContent,
-                                ParseWarningSink& warningSink) -> std::optional<SVGDocumentHandle> {
+    Registry& registry, const SubDocumentCache::ParseCallback& callback,
+    size_t& remainingResourceBytes) {
+  return [&registry, &callback, &remainingResourceBytes](
+             const std::vector<uint8_t>& svgContent,
+             ParseWarningSink& warningSink) -> std::optional<SVGDocumentHandle> {
     AssertNoDocumentWriteAccessForUserCallback(
         registry, "SVG parse callback must not run while document write access is held");
+
+    if (svgContent.size() >= 2 && svgContent[0] == 0x1f && svgContent[1] == 0x8b) {
+      const size_t expandedLimit =
+          std::min(Decompress::kDefaultMaximumOutputSize, remainingResourceBytes);
+      const std::string_view compressedSvg(
+          reinterpret_cast<const char*>(svgContent.data()),  // NOLINT, allow reinterpret_cast.
+          svgContent.size());
+      auto maybeExpandedSvg = Decompress::Gzip(compressedSvg, expandedLimit);
+      if (maybeExpandedSvg.hasError()) {
+        remainingResourceBytes = 0;
+        warningSink.add(std::move(maybeExpandedSvg).error());
+        return std::nullopt;
+      }
+
+      std::vector<uint8_t> expandedSvg = std::move(maybeExpandedSvg).result();
+      remainingResourceBytes -= expandedSvg.size();
+
+      // The production SVG parser also recognizes gzip input. Reject another gzip layer here so
+      // the callback cannot expand bytes that were never charged to this document's aggregate
+      // resource budget.
+      if (expandedSvg.size() >= 2 && expandedSvg[0] == 0x1f && expandedSvg[1] == 0x8b) {
+        warningSink.add(ParseDiagnostic::Error("Nested gzip-compressed SVG is not supported",
+                                               FileOffset::Offset(0)));
+        return std::nullopt;
+      }
+
+      return callback(expandedSvg, warningSink);
+    }
+
     return callback(svgContent, warningSink);
   };
 }
 
 }  // namespace
 
-ResourceManagerContext::ResourceManagerContext(Registry& registry) : registry_(registry) {}
+ResourceManagerContext::ResourceManagerContext(Registry& registry,
+                                               size_t maximumAggregateResourceSize)
+    : registry_(registry), remainingResourceBytes_(maximumAggregateResourceSize) {}
+
+void ResourceManagerContext::setResourceLoader(std::unique_ptr<ResourceLoaderInterface>&& loader) {
+  failedImageUrls_.clear();
+  if (auto* cache = registry_.ctx().find<SubDocumentCache>()) {
+    cache->clearFailures();
+  }
+  loader_ = std::move(loader);
+}
 
 void ResourceManagerContext::loadResources(ParseWarningSink& warningSink) {
   // In SecureStatic mode, sub-documents are not allowed to load external resources (SVG2 §2.7.1).
@@ -69,8 +137,12 @@ void ResourceManagerContext::loadResources(ParseWarningSink& warningSink) {
   NullResourceLoader nullLoader;
   WriteAccessGuardedResourceLoader guardedLoader(
       registry_, loader_ ? *loader_ : static_cast<ResourceLoaderInterface&>(nullLoader));
-  ResourceLoaderInterface& loader = loader_ ? static_cast<ResourceLoaderInterface&>(guardedLoader)
-                                            : static_cast<ResourceLoaderInterface&>(nullLoader);
+  ResourceLoaderInterface& uncappedLoader =
+      loader_ ? static_cast<ResourceLoaderInterface&>(guardedLoader)
+              : static_cast<ResourceLoaderInterface&>(nullLoader);
+  BoundedResourceLoader boundedLoader(uncappedLoader, remainingResourceFetchAttempts_,
+                                      remainingResourceBytes_);
+  ResourceLoaderInterface& loader = boundedLoader;
 
   // Only warn about a missing loader if we actually have something that
   // would need one. `data:` URLs are decoded inline in `UrlLoader::fromUri`
@@ -124,13 +196,30 @@ void ResourceManagerContext::loadResources(ParseWarningSink& warningSink) {
       continue;
     }
 
-    ImageLoader imageLoader(loader);
+    if (failedImageUrls_.contains(image.href)) {
+      registry_.emplace<LoadedImageComponent>(entity);
+      continue;
+    }
+
+    if (auto* cache = registry_.ctx().find<SubDocumentCache>()) {
+      if (auto cachedDocument = cache->get(image.href)) {
+        registry_.emplace<LoadedSVGImageComponent>(entity, std::move(*cachedDocument));
+        continue;
+      }
+    }
+
+    ImageLoader imageLoader(loader, UrlLoader::kDefaultMaximumResourceSize,
+                            &remainingResourceBytes_);
 
     auto imageResult = imageLoader.fromUri(image.href);
     if (std::holds_alternative<UrlLoaderError>(imageResult)) {
       ParseDiagnostic err;
       err.reason = std::string(ToString(std::get<UrlLoaderError>(imageResult)));
       warningSink.add(std::move(err));
+
+      if (failedImageUrls_.size() < kMaximumResourceFetchAttempts) {
+        failedImageUrls_.insert(image.href);
+      }
 
       // Create an empty LoadedImageComponent to prevent loading again.
       registry_.emplace<LoadedImageComponent>(entity);
@@ -140,6 +229,9 @@ void ResourceManagerContext::loadResources(ParseWarningSink& warningSink) {
         ParseDiagnostic err;
         err.reason = "SVG image references require an SVG parse callback";
         warningSink.add(std::move(err));
+        if (failedImageUrls_.size() < kMaximumResourceFetchAttempts) {
+          failedImageUrls_.insert(image.href);
+        }
         registry_.emplace<LoadedImageComponent>(entity);
         continue;
       }
@@ -153,24 +245,28 @@ void ResourceManagerContext::loadResources(ParseWarningSink& warningSink) {
       auto& cache = registry_.ctx().get<SubDocumentCache>();
 
       SubDocumentCache::ParseCallback guardedParseCallback =
-          GuardSvgParseCallback(registry_, svgParseCallback_);
+          GuardSvgParseCallback(registry_, svgParseCallback_, remainingResourceBytes_);
       auto subDoc =
           cache.getOrParse(image.href, svgContent.data, guardedParseCallback, warningSink);
       if (subDoc) {
         registry_.emplace<LoadedSVGImageComponent>(entity, std::move(*subDoc));
       } else {
         // Parse failed - create an empty LoadedImageComponent to prevent retrying.
+        if (failedImageUrls_.size() < kMaximumResourceFetchAttempts) {
+          failedImageUrls_.insert(image.href);
+        }
         registry_.emplace<LoadedImageComponent>(entity);
       }
     } else {
-      registry_.emplace<LoadedImageComponent>(entity, std::get<ImageResource>(imageResult));
+      ImageResource imageResource = std::get<ImageResource>(std::move(imageResult));
+      registry_.emplace<LoadedImageComponent>(entity, std::move(imageResource));
     }
   }
 
   // Hydrate URL font sources into data sources. FontManager owns parsing and caches decoded font
   // handles on demand; ResourceManager only resolves bytes while the document resource loader is
   // available.
-  UrlLoader urlLoader(loader);
+  UrlLoader urlLoader(loader, UrlLoader::kDefaultMaximumResourceSize, &remainingResourceBytes_);
   for (const size_t fontFaceIndex : fontFaceIndexesToLoad_) {
     css::FontFace& fontFace = fontFaces_[fontFaceIndex];
     for (css::FontFaceSource& source : fontFace.sources) {
@@ -234,22 +330,30 @@ std::optional<SVGDocumentHandle> ResourceManagerContext::loadExternalSVG(
   if (auto cached = cache.get(url)) {
     return cached;
   }
-
-  // Fetch the file content.
-  WriteAccessGuardedResourceLoader guardedLoader(registry_, *loader_);
-  auto fetchResult = guardedLoader.fetchExternalResource(std::string_view(url));
-  if (std::holds_alternative<ResourceLoaderError>(fetchResult)) {
-    ParseDiagnostic err;
-    const auto loaderError = std::get<ResourceLoaderError>(fetchResult);
-    err.reason = std::string("Failed to load external SVG '") + std::string(url) + "': " +
-                 (loaderError == ResourceLoaderError::NotFound ? "not found" : "sandbox violation");
-    warningSink.add(std::move(err));
+  if (cache.isRejected(url)) {
     return std::nullopt;
   }
 
-  auto& data = std::get<std::vector<uint8_t>>(fetchResult);
+  // Fetch the file content using the same per-resource and aggregate budgets as images and fonts.
+  WriteAccessGuardedResourceLoader guardedLoader(registry_, *loader_);
+  BoundedResourceLoader boundedLoader(guardedLoader, remainingResourceFetchAttempts_,
+                                      remainingResourceBytes_);
+  UrlLoader urlLoader(boundedLoader, UrlLoader::kDefaultMaximumResourceSize,
+                      &remainingResourceBytes_);
+  auto fetchResult = urlLoader.fromUri(url);
+  if (std::holds_alternative<UrlLoaderError>(fetchResult)) {
+    ParseDiagnostic err;
+    const auto loaderError = std::get<UrlLoaderError>(fetchResult);
+    err.reason = std::string("Failed to load external SVG '") + std::string(url) +
+                 "': " + std::string(ToString(loaderError));
+    warningSink.add(std::move(err));
+    cache.rememberFailure(url);
+    return std::nullopt;
+  }
+
+  auto& data = std::get<UrlLoader::Result>(fetchResult).data;
   SubDocumentCache::ParseCallback guardedParseCallback =
-      GuardSvgParseCallback(registry_, svgParseCallback_);
+      GuardSvgParseCallback(registry_, svgParseCallback_, remainingResourceBytes_);
   return cache.getOrParse(url, data, guardedParseCallback, warningSink);
 }
 
@@ -280,17 +384,28 @@ const LoadedImageComponent* ResourceManagerContext::getLoadedImageComponent(Enti
   if (!image) {
     return nullptr;
   }
+  if (failedImageUrls_.contains(image->href)) {
+    return nullptr;
+  }
 
   NullResourceLoader nullLoader;
   WriteAccessGuardedResourceLoader guardedLoader(
       registry_, loader_ ? *loader_ : static_cast<ResourceLoaderInterface&>(nullLoader));
-  ResourceLoaderInterface& loader = loader_ ? static_cast<ResourceLoaderInterface&>(guardedLoader)
-                                            : static_cast<ResourceLoaderInterface&>(nullLoader);
-  ImageLoader imageLoader(loader);
+  ResourceLoaderInterface& uncappedLoader =
+      loader_ ? static_cast<ResourceLoaderInterface&>(guardedLoader)
+              : static_cast<ResourceLoaderInterface&>(nullLoader);
+  BoundedResourceLoader boundedLoader(uncappedLoader, remainingResourceFetchAttempts_,
+                                      remainingResourceBytes_);
+  ResourceLoaderInterface& loader = boundedLoader;
+  ImageLoader imageLoader(loader, UrlLoader::kDefaultMaximumResourceSize, &remainingResourceBytes_);
 
   auto imageResult = imageLoader.fromUri(image->href);
   if (std::holds_alternative<ImageResource>(imageResult)) {
     return &registry_.emplace<LoadedImageComponent>(entity, std::get<ImageResource>(imageResult));
+  }
+
+  if (failedImageUrls_.size() < kMaximumResourceFetchAttempts) {
+    failedImageUrls_.insert(image->href);
   }
 
   // TODO(jwm): Plumb loading error out, and handle SvgImageContent once sub-document

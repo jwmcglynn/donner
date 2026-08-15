@@ -24,6 +24,14 @@ using testing::Field;
 
 namespace donner::xml {
 
+TEST(XMLParserLimits, RejectsInputLargerThanLimit) {
+  XMLParser::Options options;
+  options.maximumInputSize = 3;
+  auto result = XMLParser::Parse("<a/>", options);
+  ASSERT_TRUE(result.hasError());
+  EXPECT_THAT(std::string_view(result.error().reason), testing::HasSubstr("maximum input size"));
+}
+
 auto MutationKindIs(XMLMutation::Kind kind) {
   return Field("kind", &XMLMutation::kind, kind);
 }

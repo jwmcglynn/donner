@@ -10,6 +10,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <iomanip>
 #include <iostream>
 #include <string>
@@ -240,6 +241,13 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
 
   // 1. Construct a structured XML payload.
   const std::string xml = BuildXmlString(provider);
+
+  XMLParser::Options limitedOptions;
+  limitedOptions.maximumInputSize = xml.size() / 2;
+  auto limitedResult = XMLParser::Parse(xml, limitedOptions);
+  if (xml.size() > limitedOptions.maximumInputSize && limitedResult.hasResult()) {
+    std::abort();
+  }
 
   if (std::getenv("DUMP")) {
     // Print the generated XML for debugging purposes.

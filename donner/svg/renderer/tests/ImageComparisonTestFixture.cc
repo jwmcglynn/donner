@@ -32,6 +32,34 @@ namespace donner::svg {
 
 namespace {
 
+std::filesystem::path ResolveRunfilesResourceRoot(const std::filesystem::path& runfilesRoot,
+                                                  const std::filesystem::path& documentPath) {
+  const std::filesystem::path absoluteRoot =
+      std::filesystem::absolute(runfilesRoot).lexically_normal();
+  const std::filesystem::path absoluteDocument =
+      std::filesystem::absolute(documentPath).lexically_normal();
+  const std::filesystem::path relativeDocument = absoluteDocument.lexically_relative(absoluteRoot);
+  if (relativeDocument.empty() || relativeDocument.is_absolute()) {
+    return runfilesRoot;
+  }
+  for (const auto& component : relativeDocument) {
+    if (component == "..") {
+      return runfilesRoot;
+    }
+  }
+
+  std::error_code error;
+  std::filesystem::path resolvedRoot = std::filesystem::canonical(documentPath, error);
+  if (error) {
+    return runfilesRoot;
+  }
+  for (const auto& component : relativeDocument) {
+    static_cast<void>(component);
+    resolvedRoot = resolvedRoot.parent_path();
+  }
+  return resolvedRoot;
+}
+
 /// Load all TTF/OTF fonts from a directory and register them as @font-face rules on the document.
 /// Cache of font faces loaded from a directory, keyed by directory path.
 /// Prevents re-reading 14MB of font files for every test in a shard, which causes glibc
@@ -532,6 +560,10 @@ RendererBitmap NormalizeSnapshot(RendererBitmap snapshot) {
 
 }  // namespace
 
+std::filesystem::path ResolveRunfilesResourceRootForTesting(
+    const std::filesystem::path& runfilesRoot, const std::filesystem::path& documentPath) {
+  return ResolveRunfilesResourceRoot(runfilesRoot, documentPath);
+}
 std::optional<TerminalPreviewConfig> PreviewConfigFromEnv(const ImageComparisonParams& params) {
   if (!params.showTerminalPreview) {
     return std::nullopt;
@@ -737,7 +769,8 @@ SVGDocument ImageComparisonTestFixture::loadSVG(
   SVGDocument::Settings settings;
   if (resourceDir) {
     settings.resourceLoader = std::make_unique<SandboxedFileResourceLoader>(
-        *resourceDir, std::filesystem::path(filename));
+        ResolveRunfilesResourceRootForTesting(*resourceDir, filename),
+        std::filesystem::path(filename));
   }
 
   ParseWarningSink disabled = ParseWarningSink::Disabled();

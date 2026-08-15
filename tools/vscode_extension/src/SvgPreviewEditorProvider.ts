@@ -1,6 +1,9 @@
+import { Buffer } from "node:buffer";
+import { randomUUID } from "node:crypto";
+
 import * as vscode from "vscode";
 
-const MAX_FILE_SIZE = 32 * 1024 * 1024; // 32 MiB
+const MAX_FILE_SIZE = 16 * 1024 * 1024;
 
 export class SvgPreviewEditorProvider implements vscode.CustomTextEditorProvider {
   public static readonly viewType = "donner.svgPreview";
@@ -30,7 +33,7 @@ export class SvgPreviewEditorProvider implements vscode.CustomTextEditorProvider
     const sendDocument = () => {
       const text = document.getText();
       if (Buffer.byteLength(text, "utf-8") > MAX_FILE_SIZE) {
-        postMessage("error", "File too large (>32 MiB). Rendering disabled.");
+        postMessage("error", "File too large (>16 MiB). Rendering disabled.");
         return;
       }
       postMessage("initDocument", { svgText: text });
@@ -55,7 +58,7 @@ export class SvgPreviewEditorProvider implements vscode.CustomTextEditorProvider
       if (saved.uri.toString() === document.uri.toString()) {
         const text = saved.getText();
         if (Buffer.byteLength(text, "utf-8") > MAX_FILE_SIZE) {
-          postMessage("error", "File too large (>32 MiB). Rendering disabled.");
+          postMessage("error", "File too large (>16 MiB). Rendering disabled.");
           return;
         }
         postMessage("replaceDocumentSnapshot", { svgText: text });
@@ -113,5 +116,5 @@ export class SvgPreviewEditorProvider implements vscode.CustomTextEditorProvider
 }
 
 function getNonce(): string {
-  return crypto.randomUUID();
+  return randomUUID();
 }

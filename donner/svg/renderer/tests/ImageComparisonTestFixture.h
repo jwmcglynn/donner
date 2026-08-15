@@ -486,6 +486,9 @@ std::string RenderTerminalComparisonGridForTesting(
     const TerminalImageView& diff, int maxTerminalWidth, TerminalPixelMode pixelMode,
     const TerminalImageViewerConfig& viewerConfig = {});
 
+/// Maps a runfiles-tree resource root onto the canonical tree containing @p documentPath.
+std::filesystem::path ResolveRunfilesResourceRootForTesting(
+    const std::filesystem::path& runfilesRoot, const std::filesystem::path& documentPath);
 /**
  * @brief A Google Test fixture for tests that compare rendered SVG output against golden images.
  *

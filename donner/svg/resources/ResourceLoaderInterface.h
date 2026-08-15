@@ -13,7 +13,19 @@ enum class ResourceLoaderError : uint8_t {
   NotFound,          //!< File not found.
   SandboxViolation,  //!< File access violation, such as attempting to access a file outside the
                      //!< sandbox.
+  TooLarge,          //!< Resource exceeds the configured byte limit.
 };
+
+/// Convert a resource-loader error to a stable human-readable string.
+inline std::string_view ToString(ResourceLoaderError error) {
+  switch (error) {
+    case ResourceLoaderError::NotFound: return "not found";
+    case ResourceLoaderError::SandboxViolation: return "sandbox violation";
+    case ResourceLoaderError::TooLarge: return "resource too large";
+  }
+
+  return "unknown resource error";
+}
 
 /**
  * Interface for loading external resources, such as images. To load files from the local

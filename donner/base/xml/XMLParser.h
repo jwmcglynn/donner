@@ -1,6 +1,7 @@
 #pragma once
 /// @file
 
+#include <cstddef>
 #include <cstdint>
 #include <string_view>
 
@@ -23,6 +24,9 @@ public:
   struct Options {
     /// Default options.
     constexpr Options() {}
+
+    /// Maximum encoded XML input bytes accepted before parsing.
+    size_t maximumInputSize = 16 * 1024 * 1024;
 
     /**
      * Parse all nodes in the XML document, including comments, the doctype node, and processing

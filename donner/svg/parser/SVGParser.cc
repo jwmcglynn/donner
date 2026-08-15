@@ -478,6 +478,10 @@ public:
 ParseResult<SVGDocument> SVGParser::ParseSVG(std::string_view source, ParseWarningSink& warningSink,
                                              SVGParser::Options options,
                                              SVGDocument::Settings settings) noexcept {
+  if (source.size() > options.maximumInputSize) {
+    return ParseDiagnostic::Error("SVG source exceeds maximum input size", FileOffset::Offset(0));
+  }
+
   // Inject the SVG parse callback for sub-document loading, unless we're already in secure mode
   // (sub-documents cannot load their own sub-documents).
   if (!settings.svgParseCallback && settings.processingMode == ProcessingMode::DynamicInteractive) {
@@ -500,11 +504,12 @@ ParseResult<SVGDocument> SVGParser::ParseSVG(std::string_view source, ParseWarni
 
   xml::XMLParser::Options xmlOptions;
   xmlOptions.parseCustomEntities = true;
+  xmlOptions.maximumInputSize = options.maximumInputSize;
 
   std::vector<uint8_t> decompressedData;
   if (source.size() >= 2 && static_cast<unsigned char>(source[0]) == 0x1F &&
       static_cast<unsigned char>(source[1]) == 0x8B) {
-    auto maybeDecompressedData = Decompress::Gzip(source);
+    auto maybeDecompressedData = Decompress::Gzip(source, options.maximumInputSize);
     if (maybeDecompressedData.hasError()) {
       return std::move(maybeDecompressedData.error());
     }

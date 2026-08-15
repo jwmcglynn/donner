@@ -80,7 +80,7 @@
 
       // Wrap exported C functions.
       donnerInit       = Module.cwrap('donner_init', null, []);
-      donnerRenderSvg  = Module.cwrap('donner_render_svg', 'number', ['string', 'number', 'number']);
+      donnerRenderSvg  = Module.cwrap('donner_render_svg_len', 'number', ['number', 'number', 'number', 'number']);
       donnerFreePixels = Module.cwrap('donner_free_pixels', null, ['number']);
       donnerGetError   = Module.cwrap('donner_get_last_error', 'string', []);
 
@@ -102,7 +102,23 @@
     canvas.height = h;
 
     const t0 = performance.now();
-    const ptr = donnerRenderSvg(svgText, w, h);
+    if (svgText.length > 16 * 1024 * 1024) {
+      status.textContent = 'SVG exceeds maximum input size';
+      return;
+    }
+    const svgBytes = new TextEncoder().encode(svgText);
+    if (svgBytes.byteLength > 16 * 1024 * 1024) {
+      status.textContent = 'SVG exceeds maximum input size';
+      return;
+    }
+    const svgPtr = Module._malloc(Math.max(1, svgBytes.byteLength));
+    if (svgPtr === 0) {
+      status.textContent = 'Failed to allocate SVG input buffer';
+      return;
+    }
+    Module.HEAPU8.set(svgBytes, svgPtr);
+    const ptr = donnerRenderSvg(svgPtr, svgBytes.byteLength, w, h);
+    Module._free(svgPtr);
     const elapsed = (performance.now() - t0).toFixed(1);
 
     if (ptr === 0) {

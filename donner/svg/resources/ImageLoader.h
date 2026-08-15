@@ -22,6 +22,9 @@ struct SvgImageContent {
  */
 class ImageLoader {
 public:
+  /// Default maximum number of decoded RGBA bytes for one raster image.
+  static constexpr size_t kDefaultMaximumDecodedImageSize = 64 * 1024 * 1024;
+
   /// Result type returned by \ref fromUri. Contains either decoded raster pixels, raw SVG content,
   /// or an error.
   using Result = std::variant<ImageResource, SvgImageContent, UrlLoaderError>;
@@ -31,7 +34,13 @@ public:
    *
    * @param resourceLoader Resource loader to use for fetching external resources.
    */
-  explicit ImageLoader(ResourceLoaderInterface& resourceLoader) : urlLoader_(resourceLoader) {}
+  explicit ImageLoader(ResourceLoaderInterface& resourceLoader,
+                       size_t maximumResourceSize = UrlLoader::kDefaultMaximumResourceSize,
+                       size_t* remainingResourceBytes = nullptr,
+                       size_t maximumDecodedImageSize = kDefaultMaximumDecodedImageSize)
+      : urlLoader_(resourceLoader, maximumResourceSize, remainingResourceBytes),
+        remainingResourceBytes_(remainingResourceBytes),
+        maximumDecodedImageSize_(maximumDecodedImageSize) {}
 
   /// Destructor.
   ~ImageLoader() = default;
@@ -57,6 +66,12 @@ public:
 private:
   /// Loader used for decoding the data URL or fetching the external resources.
   UrlLoader urlLoader_;
+
+  /// Optional shared byte budget for raw and decoded resources in one document.
+  size_t* remainingResourceBytes_;
+
+  /// Maximum decoded RGBA bytes returned for one raster image.
+  size_t maximumDecodedImageSize_;
 };
 
 }  // namespace donner::svg

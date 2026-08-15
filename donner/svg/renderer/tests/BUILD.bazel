@@ -70,7 +70,7 @@ donner_cc_library(
     visibility = ["//donner/svg:__subpackages__"],
     deps = [
         ":renderer_test_backend",
-        "//donner/svg/renderer",
+        "//donner/svg/renderer:renderer_utils",
         "//donner/svg/tests:parser_test_utils",
         "@com_google_gtest//:gtest",
     ],
@@ -156,6 +156,7 @@ donner_cc_test(
     ],
     deps = [
         ":image_comparison_test_fixture",
+        "//donner/base:base_test_utils",
         "@com_google_gtest//:gtest_main",
     ],
 )
@@ -699,7 +700,7 @@ donner_cc_fuzzer(
     ],
     deps = [
         "//donner/svg",
-        "//donner/svg/renderer:renderer_utils",
+        "//donner/svg/renderer",
     ],
 )
 

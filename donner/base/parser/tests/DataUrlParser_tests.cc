@@ -18,6 +18,13 @@ TEST(DataUrlParser, Invalid) {
               VariantWith<DataUrlParserError>(Eq(DataUrlParserError::InvalidDataUrl)));
 }
 
+TEST(DataUrlParser, RejectsInputLargerThanLimit) {
+  DataUrlParser::Options options;
+  options.maximumInputSize = 3;
+  EXPECT_THAT(DataUrlParser::Parse("data:,x", options),
+              VariantWith<DataUrlParserError>(Eq(DataUrlParserError::InputTooLarge)));
+}
+
 TEST(DataUrlParser, ExternalUrl) {
   auto result = DataUrlParser::Parse("http://example.com/foo.png");
   ASSERT_TRUE(std::holds_alternative<DataUrlParser::Result>(result));

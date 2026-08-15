@@ -1,6 +1,7 @@
 #pragma once
 /// @file
 
+#include <cstddef>
 #include <cstdint>
 #include <string_view>
 #include <variant>
@@ -16,12 +17,14 @@ namespace donner::parser {
  */
 enum class DataUrlParserError : uint8_t {
   InvalidDataUrl,  ///< The data URL is invalid.
+  InputTooLarge,   ///< The URI exceeds the configured input limit.
 };
 
 /// Returns a human-readable description of a \ref DataUrlParserError.
 inline std::string_view ToString(DataUrlParserError err) {
   switch (err) {
     case DataUrlParserError::InvalidDataUrl: return "Invalid data URL";
+    case DataUrlParserError::InputTooLarge: return "Data URL input too large";
   }
 
   UTILS_UNREACHABLE();
@@ -35,6 +38,14 @@ inline std::string_view ToString(DataUrlParserError err) {
  */
 class DataUrlParser {
 public:
+  /// Default maximum URI length accepted from untrusted input.
+  static constexpr size_t kDefaultMaximumInputSize = 16 * 1024 * 1024;
+
+  struct Options {
+    /// Maximum number of encoded URI bytes accepted before decoding.
+    size_t maximumInputSize = kDefaultMaximumInputSize;
+  };
+
   /**
    * Result of parsing a data URL or external URL.
    */
@@ -65,6 +76,10 @@ public:
    * valid.
    */
   static std::variant<Result, DataUrlParserError> Parse(std::string_view uri);
+
+  /// Parse with an explicit encoded-input limit.
+  static std::variant<Result, DataUrlParserError> Parse(std::string_view uri,
+                                                        const Options& options);
 };
 
 }  // namespace donner::parser
