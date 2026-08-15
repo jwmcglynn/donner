@@ -4,8 +4,11 @@
 #include <gtest/gtest.h>
 
 #include <cmath>
+#include <cstdint>
 #include <fstream>
+#include <span>
 #include <tuple>
+#include <vector>
 
 #include "donner/base/tests/Runfiles.h"
 #include "donner/css/FontFace.h"
@@ -59,6 +62,94 @@ FontHandle LoadResvgFont(FontManager& fontManager, const std::string& fontFilena
 
   fontManager.addFontFace(face);
   return fontManager.findFont(RcString(familyName));
+}
+
+uint16_t ReadBe16(std::span<const uint8_t> data, size_t offset) {
+  return static_cast<uint16_t>((static_cast<uint16_t>(data[offset]) << 8) | data[offset + 1]);
+}
+
+uint32_t ReadBe32(std::span<const uint8_t> data, size_t offset) {
+  return (static_cast<uint32_t>(data[offset]) << 24) |
+         (static_cast<uint32_t>(data[offset + 1]) << 16) |
+         (static_cast<uint32_t>(data[offset + 2]) << 8) | data[offset + 3];
+}
+
+void WriteBe16(std::vector<uint8_t>* data, size_t offset, uint16_t value) {
+  (*data)[offset] = static_cast<uint8_t>(value >> 8);
+  (*data)[offset + 1] = static_cast<uint8_t>(value);
+}
+
+void WriteBe32(std::vector<uint8_t>* data, size_t offset, uint32_t value) {
+  (*data)[offset] = static_cast<uint8_t>(value >> 24);
+  (*data)[offset + 1] = static_cast<uint8_t>(value >> 16);
+  (*data)[offset + 2] = static_cast<uint8_t>(value >> 8);
+  (*data)[offset + 3] = static_cast<uint8_t>(value);
+}
+
+std::vector<uint8_t> ReadResvgFontBytes(const std::string& fontFilename) {
+  const std::string fontsDir = Runfiles::instance().Rlocation("third_party/resvg-test-suite/fonts");
+  std::ifstream file(fontsDir + "/" + fontFilename, std::ios::binary);
+  if (!file) {
+    return {};
+  }
+  file.seekg(0, std::ios::end);
+  const auto size = file.tellg();
+  file.seekg(0);
+  std::vector<uint8_t> result(static_cast<size_t>(size));
+  file.read(reinterpret_cast<char*>(result.data()), size);
+  return result;
+}
+
+std::vector<uint8_t> AddEmptyBitmapTables(std::span<const uint8_t> input) {
+  if (input.size() < 12) {
+    return {};
+  }
+  const uint16_t oldTableCount = ReadBe16(input, 4);
+  const size_t oldDirectorySize = 12u + static_cast<size_t>(oldTableCount) * 16u;
+  if (oldDirectorySize > input.size() || oldTableCount > UINT16_MAX - 2u) {
+    return {};
+  }
+
+  constexpr size_t kAddedDirectoryBytes = 32;
+  const uint16_t newTableCount = static_cast<uint16_t>(oldTableCount + 2u);
+  const size_t newDirectorySize = oldDirectorySize + kAddedDirectoryBytes;
+  std::vector<uint8_t> result(newDirectorySize + input.size() - oldDirectorySize, 0);
+  std::copy_n(input.begin(), 12, result.begin());
+  WriteBe16(&result, 4, newTableCount);
+  uint16_t powerOfTwo = 1;
+  uint16_t entrySelector = 0;
+  while (static_cast<uint32_t>(powerOfTwo) * 2u <= newTableCount) {
+    powerOfTwo = static_cast<uint16_t>(powerOfTwo * 2u);
+    ++entrySelector;
+  }
+  WriteBe16(&result, 6, static_cast<uint16_t>(powerOfTwo * 16u));
+  WriteBe16(&result, 8, entrySelector);
+  WriteBe16(&result, 10, static_cast<uint16_t>(newTableCount * 16u - powerOfTwo * 16u));
+
+  for (uint16_t i = 0; i < oldTableCount; ++i) {
+    const size_t recordOffset = 12u + static_cast<size_t>(i) * 16u;
+    std::copy_n(input.begin() + recordOffset, 16, result.begin() + recordOffset);
+    WriteBe32(&result, recordOffset + 8u,
+              ReadBe32(input, recordOffset + 8u) + kAddedDirectoryBytes);
+  }
+  std::copy(input.begin() + oldDirectorySize, input.end(), result.begin() + newDirectorySize);
+
+  const auto appendTable = [&](size_t recordOffset, std::string_view tag,
+                               std::span<const uint8_t> bytes) {
+    while (result.size() % 4u != 0) {
+      result.push_back(0);
+    }
+    const size_t tableOffset = result.size();
+    result.insert(result.end(), bytes.begin(), bytes.end());
+    std::copy(tag.begin(), tag.end(), result.begin() + recordOffset);
+    WriteBe32(&result, recordOffset + 8u, static_cast<uint32_t>(tableOffset));
+    WriteBe32(&result, recordOffset + 12u, static_cast<uint32_t>(bytes.size()));
+  };
+  constexpr std::array<uint8_t, 4> kCbdtHeader{0, 3, 0, 0};
+  constexpr std::array<uint8_t, 8> kCblcHeader{0, 3, 0, 0, 0, 0, 0, 0};
+  appendTable(12u + static_cast<size_t>(oldTableCount) * 16u, "CBDT", kCbdtHeader);
+  appendTable(12u + static_cast<size_t>(oldTableCount + 1u) * 16u, "CBLC", kCblcHeader);
+  return result;
 }
 
 auto GlyphIndexIs(auto matcher) {
@@ -519,6 +610,42 @@ TEST(TextBackendFullCapabilities, UntrustedBitmapFontIsRejectedBeforeFreeTypeSha
           .glyphs,
       IsEmpty());
   EXPECT_FALSE(backend.bitmapGlyph(font, 1, 1.0f).has_value());
+}
+
+TEST(TextBackendFullCapabilities, UntrustedOutlineFontDisablesEmbeddedBitmapLoading) {
+  Registry registry;
+  FontManager fontManager(registry);
+  TextBackendFull backend(fontManager, registry);
+
+  const FontHandle untrusted =
+      LoadResvgFont(fontManager, "NotoSans-Regular.ttf", "Untrusted Noto Sans", false);
+  ASSERT_TRUE(static_cast<bool>(untrusted));
+  EXPECT_FALSE(fontManager.isTrustedFont(untrusted));
+  EXPECT_TRUE(backend.embeddedBitmapLoadingDisabledForTesting(untrusted));
+
+  const FontHandle trusted =
+      LoadResvgFont(fontManager, "NotoSans-Regular.ttf", "Trusted Noto Sans");
+  ASSERT_TRUE(static_cast<bool>(trusted));
+  EXPECT_FALSE(backend.embeddedBitmapLoadingDisabledForTesting(trusted));
+}
+
+TEST(TextBackendFullCapabilities, UntrustedMixedOutlineBitmapFontDisablesBitmapLoading) {
+  Registry registry;
+  FontManager fontManager(registry);
+  TextBackendFull backend(fontManager, registry);
+
+  const std::vector<uint8_t> outlineFont = ReadResvgFontBytes("NotoSans-Regular.ttf");
+  ASSERT_FALSE(outlineFont.empty());
+  const std::vector<uint8_t> mixedFont = AddEmptyBitmapTables(outlineFont);
+  ASSERT_FALSE(mixedFont.empty());
+  const FontHandle font = fontManager.loadFontData(mixedFont, FontDataTrust::Untrusted);
+  ASSERT_TRUE(static_cast<bool>(font));
+  ASSERT_TRUE(fontManager.sfntTable(font, "glyf").has_value());
+  ASSERT_TRUE(fontManager.sfntTable(font, "CBDT").has_value());
+  ASSERT_TRUE(fontManager.sfntTable(font, "CBLC").has_value());
+  EXPECT_TRUE(backend.embeddedBitmapLoadingDisabledForTesting(font));
+  EXPECT_THAT(backend.shapeRun(font, 16.0f, "A", 0, 1, false, FontVariant::Normal, false).glyphs,
+              Not(IsEmpty()));
 }
 
 }  // namespace

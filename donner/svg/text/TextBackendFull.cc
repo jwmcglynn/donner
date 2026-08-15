@@ -158,6 +158,11 @@ TextBackendFull::TextBackendFull(FontManager& fontManager, Registry& registry)
 
 TextBackendFull::~TextBackendFull() = default;
 
+bool TextBackendFull::embeddedBitmapLoadingDisabledForTesting(FontHandle font) const {
+  hb_font_t* hbFont = getOrCreateHbFont(font);
+  return hbFont && (hb_ft_font_get_load_flags(hbFont) & FT_LOAD_NO_BITMAP) != 0;
+}
+
 // ---------------------------------------------------------------------------
 // Font cache
 // ---------------------------------------------------------------------------
