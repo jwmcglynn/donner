@@ -15,41 +15,24 @@ name: Fuzz
 #
 # - Schedule: 06:00 UTC daily — catches new corpus regressions within 24h.
 # - workflow_dispatch — manual trigger for ad-hoc runs.
-# - pull_request paths — re-runs on PRs that touch fuzz-relevant code.
+# Pull requests retain deterministic corpus replay through the normal Bazel test suite. The
+# sanitizer-backed mutation lane runs after merge or on demand so it does not delay PR signal.
 #
 # macOS uses the LLVM 21 toolchain (--config=asan-fuzzer activates
 # --config=latest_llvm) because Apple Clang lacks libclang_rt.fuzzer_osx.a.
-# Linux fuzzers also run here so PRs touching fuzz code get a single signal
-# from one workflow rather than two.
+# Linux fuzzers also run here so scheduled mutation covers both supported host toolchains.
 
 on:
   schedule:
     - cron: "0 6 * * *"
   workflow_dispatch:
-  pull_request:
-    paths:
-      - ".bazelrc"
-      - "MODULE.bazel"
-      - "MODULE.bazel.lock"
-      - "**/*_fuzzer.cc"
-      - "**/*_fuzzer.cpp"
-      - "**/*_fuzzer.h"
-      - "**/corpus/**"
-      - "build_defs/**"
-      - "donner/base/**"
-      - "donner/css/**"
-      - "donner/editor/**"
-      - "donner/svg/**"
-      - "tools/mcp-servers/editor-control/**"
-      - "third_party/**"
-      - ".github/workflows/fuzz.yml"
 
 permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.event_name == 'pull_request' && format('pr-{0}-{1}', github.workflow, github.event.pull_request.number) || format('run-{0}-{1}', github.workflow, github.run_id) }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: run-${{ github.workflow }}-${{ github.run_id }}
+  cancel-in-progress: false
 
 jobs:
   linux:
@@ -100,22 +83,20 @@ jobs:
             --config=fuzz-soak \
             --config=text-full \
             --test_output=errors \
-            //donner/base/fonts:woff2_parser_fuzzer \
-            //donner/base/fonts:woff2_parser_fuzzer_soak \
-            //donner/svg/parser:svg_parser_structured_fuzzer \
-            //donner/svg/parser:svg_parser_structured_fuzzer_soak \
-            //donner/svg/renderer/tests:svg_document_render_fuzzer \
-            //donner/svg/renderer/tests:svg_document_render_fuzzer_soak
+            --test_tag_filters=fuzz_text_full \
+            --build_tag_filters=fuzz_text_full \
+            //...
 
-      - name: Test Geode render fuzzer
+      - name: Test Geode render fuzzers
         run: |
           bazelisk test \
             --config=geode \
             --config=asan-fuzzer \
             --config=fuzz-soak \
             --test_output=errors \
-            //donner/svg/renderer/tests:svg_document_render_fuzzer \
-            //donner/svg/renderer/tests:svg_document_render_fuzzer_soak
+            --test_tag_filters=fuzz_geode \
+            --build_tag_filters=fuzz_geode \
+            //...
 
   macos:
     runs-on: macos-26
@@ -152,9 +133,6 @@ jobs:
             --config=fuzz-soak \
             --config=text-full \
             --test_output=errors \
-            //donner/base/fonts:woff2_parser_fuzzer \
-            //donner/base/fonts:woff2_parser_fuzzer_soak \
-            //donner/svg/parser:svg_parser_structured_fuzzer \
-            //donner/svg/parser:svg_parser_structured_fuzzer_soak \
-            //donner/svg/renderer/tests:svg_document_render_fuzzer \
-            //donner/svg/renderer/tests:svg_document_render_fuzzer_soak
+            --test_tag_filters=fuzz_text_full \
+            --build_tag_filters=fuzz_text_full \
+            //...

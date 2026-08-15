@@ -1,6 +1,6 @@
-load("//build_defs:rules.bzl", "donner_cc_binary")
 load("@emsdk//emscripten_toolchain:wasm_rules.bzl", "wasm_cc_binary")
 load("//build_defs:package.bzl", "donner_package")
+load("//build_defs:rules.bzl", "donner_cc_binary")
 
 donner_cc_binary(
     name = "custom_css_parser",
@@ -15,6 +15,10 @@ donner_cc_binary(
 donner_cc_binary(
     name = "svg_to_png",
     srcs = ["svg_to_png.cc"],
+    tags = [
+        "codeql_default",
+        "codeql_text_full",
+    ],
     deps = [
         "@donner",
     ],
@@ -62,6 +66,7 @@ wasm_cc_binary(
 donner_cc_binary(
     name = "svg_viewer",
     srcs = ["svg_viewer.cc"],
+    tags = ["codeql_default"],
     target_compatible_with = select({
         "@platforms//os:macos": [],
         "@platforms//os:linux": [],
@@ -149,6 +154,7 @@ cc_library(
 donner_cc_binary(
     name = "geode_embed",
     srcs = ["geode_embed.cc"],
+    tags = ["codeql_geode"],
     target_compatible_with = select({
         "@platforms//os:macos": [],
         "@platforms//os:linux": [],

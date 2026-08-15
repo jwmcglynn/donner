@@ -1,5 +1,5 @@
-load("//build_defs:rules.bzl", "donner_cc_library", "donner_cc_test")
 load("//build_defs:package.bzl", "donner_package")
+load("//build_defs:rules.bzl", "donner_cc_library", "donner_cc_test")
 
 donner_cc_library(
     name = "repro_file",
@@ -16,6 +16,10 @@ donner_cc_library(
     name = "gl_rnr_replay",
     srcs = ["GlRnrReplay.cc"],
     hdrs = ["GlRnrReplay.h"],
+    tags = [
+        "codeql_default",
+        "codeql_text_full",
+    ],
     target_compatible_with = select({
         "@platforms//os:macos": [],
         "@platforms//os:linux": [],

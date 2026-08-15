@@ -63,6 +63,7 @@ donner_cc_test(
     data = [
         "testdata/large-untransformed-table.woff2",
         "testdata/valid-001.woff2",
+        ":woff2_parser_fuzzer_corpus",
     ],
     target_compatible_with = select({
         "//donner/svg/renderer:text_full_enabled": [],
@@ -94,6 +95,7 @@ donner_cc_fuzzer(
     name = "woff2_parser_fuzzer",
     srcs = ["tests/Woff2Parser_fuzzer.cc"],
     corpus = "tests/woff2_corpus",
+    tags = ["fuzz_text_full"],
     deps = [
         ":woff2_parser",
     ],

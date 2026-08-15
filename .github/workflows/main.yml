@@ -1053,9 +1053,8 @@ jobs:
           fi)
           bazelisk test --config=ci --test_output=errors \
             $BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS $TARGETS
-        # Fuzzer regression suite runs in `.github/workflows/fuzz.yml` on a
-        # nightly cron so it doesn't gate every main push. PRs touching
-        # fuzzer code re-trigger that workflow via path filter.
+        # Deterministic fuzzer corpus replay remains in this Bazel suite. Sanitizer-backed mutation
+        # runs nightly or on demand in `.github/workflows/fuzz.yml`.
 
       - name: Test (Geode editor lane)
         id: geode_test
@@ -1144,9 +1143,8 @@ jobs:
           fi)
           bazelisk --nohome_rc test --config=ci --test_output=errors \
             $BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS $TARGETS
-        # Fuzzer regression suite runs in `.github/workflows/fuzz.yml` on a
-        # nightly cron so it doesn't gate every main push. PRs touching
-        # fuzzer code re-trigger that workflow via path filter.
+        # Deterministic fuzzer corpus replay remains in this Bazel suite. Sanitizer-backed mutation
+        # runs nightly or on demand in `.github/workflows/fuzz.yml`.
 
       - name: Test (Geode editor lane)
         id: geode_test
