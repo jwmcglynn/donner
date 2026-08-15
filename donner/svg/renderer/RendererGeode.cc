@@ -1648,7 +1648,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink {
 
   /// Capture the exact post-vertex Slug triangles at the GPU submission
   /// boundary. This reproduces `slug_fill.wgsl`'s half-pixel miter dilation
-  /// before mapping the vertices into root-target device pixels.
+  /// and its ill-conditioned-transform AABB fallbacks before mapping the
+  /// vertices into root-target device pixels.
   void recordSlugDraw(const geode::EncodedPath& encoded, const Transform2d& targetFromPath,
                       const Transform2d& rootFromTarget,
                       std::span<const float> instanceTransforms) override {
@@ -1677,42 +1678,139 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink {
     };
     for (size_t instanceIndex = 0; instanceIndex < instanceCount; ++instanceIndex) {
       const Transform2d instance = instanceAt(instanceIndex);
-      const double determinant = targetFromPath.determinant() * instance.determinant();
-      if (std::abs(determinant) < 1e-8) {
-        continue;
+      const auto targetVector = [&](const Vector2d& vector) {
+        return targetFromPath.transformVector(instance.transformVector(vector));
+      };
+      const Vector2d xAxis = targetVector(Vector2d(1.0, 0.0));
+      const Vector2d yAxis = targetVector(Vector2d(0.0, 1.0));
+      const double determinant = xAxis.x * yAxis.y - xAxis.y * yAxis.x;
+      const double axisScale = xAxis.length() * yAxis.length();
+      const bool axesWellConditioned =
+          axisScale > 0.0 && axisScale < 1e30 && std::abs(determinant) > axisScale * 1e-6;
+
+      std::vector<Vector2d> pathVertices;
+      std::vector<Vector2d> targetVertices;
+      pathVertices.reserve(encoded.boundingVertexCount);
+      targetVertices.reserve(encoded.boundingVertexCount);
+      for (uint32_t index = 0; index < encoded.boundingVertexCount; ++index) {
+        const auto& vertex = encoded.boundingVertices[index];
+        pathVertices.emplace_back(vertex.x, vertex.y);
+        targetVertices.push_back(
+            targetFromPath.transformPosition(instance.transformPosition(pathVertices.back())));
       }
 
-      std::vector<Vector2d> dilatedVertices;
-      dilatedVertices.reserve(encoded.boundingVertexCount);
-      const auto targetPosition = [&](uint32_t index) {
-        const auto& vertex = encoded.boundingVertices[index];
-        return targetFromPath.transformPosition(
-            instance.transformPosition(Vector2d(vertex.x, vertex.y)));
-      };
-      const double orientation = determinant > 0.0 ? 1.0 : -1.0;
-      for (uint32_t index = 0; index < encoded.boundingVertexCount; ++index) {
-        const uint32_t previousIndex =
-            (index + encoded.boundingVertexCount - 1u) % encoded.boundingVertexCount;
-        const uint32_t nextIndex = (index + 1u) % encoded.boundingVertexCount;
-        const Vector2d previous = targetPosition(previousIndex);
-        const Vector2d position = targetPosition(index);
-        const Vector2d next = targetPosition(nextIndex);
-        const Vector2d previousDelta = position - previous;
-        const Vector2d nextDelta = next - position;
-        const double previousLength = previousDelta.length();
-        const double nextLength = nextDelta.length();
-        if (previousLength <= 1e-8 || nextLength <= 1e-8) {
-          dilatedVertices.push_back(rootFromTarget.transformPosition(position));
-          continue;
+      double pathAabbExpansion = 0.0;
+      const double maxAxisComponent =
+          std::max({std::abs(xAxis.x), std::abs(xAxis.y), std::abs(yAxis.x), std::abs(yAxis.y)});
+      if (maxAxisComponent > 0.0 && maxAxisComponent < 1e30) {
+        const Vector2d scaledX = xAxis / maxAxisComponent;
+        const Vector2d scaledY = yAxis / maxAxisComponent;
+        const double scaledDeterminant = std::abs(scaledX.x * scaledY.y - scaledX.y * scaledY.x);
+        if (scaledDeterminant > 0.0) {
+          const double scaledFrobenius = std::sqrt(scaledX.dot(scaledX) + scaledY.dot(scaledY));
+          const double expansion =
+              0.7071068 * scaledFrobenius / (maxAxisComponent * scaledDeterminant);
+          if (expansion > 0.0 && expansion < 1e30) {
+            pathAabbExpansion = expansion;
+          }
         }
+      }
 
-        const Vector2d previousEdge = previousDelta / previousLength;
-        const Vector2d nextEdge = nextDelta / nextLength;
-        const Vector2d previousNormal(orientation * previousEdge.y, -orientation * previousEdge.x);
-        const Vector2d nextNormal(orientation * nextEdge.y, -orientation * nextEdge.x);
-        const double miterDenominator = std::max(1.0 + previousNormal.dot(nextNormal), 1e-6);
-        const Vector2d pixelDelta = (previousNormal + nextNormal) * (0.5 / miterDenominator);
-        dilatedVertices.push_back(rootFromTarget.transformPosition(position + pixelDelta));
+      bool useDeviceAabb = false;
+      if (axesWellConditioned) {
+        const double orientation = determinant > 0.0 ? 1.0 : -1.0;
+        for (uint32_t index = 0; index < encoded.boundingVertexCount; ++index) {
+          const uint32_t previousIndex =
+              (index + encoded.boundingVertexCount - 1u) % encoded.boundingVertexCount;
+          const uint32_t nextIndex = (index + 1u) % encoded.boundingVertexCount;
+          const Vector2d incoming = targetVertices[index] - targetVertices[previousIndex];
+          const Vector2d outgoing = targetVertices[nextIndex] - targetVertices[index];
+          const double incomingLength = incoming.length();
+          const double outgoingLength = outgoing.length();
+          if (!(incomingLength > 1e-6 && incomingLength < 1e30 && outgoingLength > 1e-6 &&
+                outgoingLength < 1e30)) {
+            useDeviceAabb = true;
+            break;
+          }
+
+          const Vector2d incomingEdge = incoming / incomingLength;
+          const Vector2d outgoingEdge = outgoing / outgoingLength;
+          const Vector2d incomingNormal(orientation * incomingEdge.y,
+                                        -orientation * incomingEdge.x);
+          const Vector2d outgoingNormal(orientation * outgoingEdge.y,
+                                        -orientation * outgoingEdge.x);
+          const double denominator = 1.0 + incomingNormal.dot(outgoingNormal);
+          if (!(denominator > 1e-6)) {
+            useDeviceAabb = true;
+            break;
+          }
+          const Vector2d miter = (incomingNormal + outgoingNormal) * (0.5 / denominator);
+          if (!(miter.length() <= 2.0)) {
+            useDeviceAabb = true;
+            break;
+          }
+        }
+      }
+
+      const bool usePathAabb = !axesWellConditioned && pathAabbExpansion > 0.0;
+      std::vector<Vector2d> effectiveVertices;
+      if (usePathAabb) {
+        Vector2d pathMin(1e30, 1e30);
+        Vector2d pathMax(-1e30, -1e30);
+        for (const Vector2d& vertex : pathVertices) {
+          pathMin.x = std::min(pathMin.x, vertex.x);
+          pathMin.y = std::min(pathMin.y, vertex.y);
+          pathMax.x = std::max(pathMax.x, vertex.x);
+          pathMax.y = std::max(pathMax.y, vertex.y);
+        }
+        effectiveVertices = {
+            {pathMin.x - pathAabbExpansion, pathMin.y - pathAabbExpansion},
+            {pathMax.x + pathAabbExpansion, pathMin.y - pathAabbExpansion},
+            {pathMax.x + pathAabbExpansion, pathMax.y + pathAabbExpansion},
+            {pathMin.x - pathAabbExpansion, pathMax.y + pathAabbExpansion},
+        };
+        for (Vector2d& vertex : effectiveVertices) {
+          vertex = targetFromPath.transformPosition(instance.transformPosition(vertex));
+        }
+      } else if (useDeviceAabb) {
+        Vector2d targetMin(1e30, 1e30);
+        Vector2d targetMax(-1e30, -1e30);
+        for (const Vector2d& vertex : targetVertices) {
+          targetMin.x = std::min(targetMin.x, vertex.x);
+          targetMin.y = std::min(targetMin.y, vertex.y);
+          targetMax.x = std::max(targetMax.x, vertex.x);
+          targetMax.y = std::max(targetMax.y, vertex.y);
+        }
+        effectiveVertices = {
+            {targetMin.x - 0.5, targetMin.y - 0.5},
+            {targetMax.x + 0.5, targetMin.y - 0.5},
+            {targetMax.x + 0.5, targetMax.y + 0.5},
+            {targetMin.x - 0.5, targetMax.y + 0.5},
+        };
+      } else if (!axesWellConditioned) {
+        effectiveVertices = targetVertices;
+      } else {
+        effectiveVertices.reserve(encoded.boundingVertexCount);
+        const double orientation = determinant > 0.0 ? 1.0 : -1.0;
+        for (uint32_t index = 0; index < encoded.boundingVertexCount; ++index) {
+          const uint32_t previousIndex =
+              (index + encoded.boundingVertexCount - 1u) % encoded.boundingVertexCount;
+          const uint32_t nextIndex = (index + 1u) % encoded.boundingVertexCount;
+          const Vector2d previousDelta = targetVertices[index] - targetVertices[previousIndex];
+          const Vector2d nextDelta = targetVertices[nextIndex] - targetVertices[index];
+          const Vector2d previousEdge = previousDelta / previousDelta.length();
+          const Vector2d nextEdge = nextDelta / nextDelta.length();
+          const Vector2d previousNormal(orientation * previousEdge.y,
+                                        -orientation * previousEdge.x);
+          const Vector2d nextNormal(orientation * nextEdge.y, -orientation * nextEdge.x);
+          const double denominator = 1.0 + previousNormal.dot(nextNormal);
+          effectiveVertices.push_back(targetVertices[index] +
+                                      (previousNormal + nextNormal) * (0.5 / denominator));
+        }
+      }
+
+      for (Vector2d& vertex : effectiveVertices) {
+        vertex = rootFromTarget.transformPosition(vertex);
       }
 
       std::vector<GeometryDebugEdge> submissionEdges;
@@ -1726,10 +1824,22 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink {
         }
       };
 
-      for (uint32_t triangle = 0; triangle + 2u < encoded.boundingVertexCount; ++triangle) {
-        addUniqueEdge(dilatedVertices[0], dilatedVertices[triangle + 1u]);
-        addUniqueEdge(dilatedVertices[triangle + 1u], dilatedVertices[triangle + 2u]);
-        addUniqueEdge(dilatedVertices[triangle + 2u], dilatedVertices[0]);
+      const auto polygonIndex = [&](uint32_t vertexIndex) {
+        const uint32_t triangle = vertexIndex / 3u;
+        if (triangle >= effectiveVertices.size() - 2u) {
+          return 0u;
+        }
+        const uint32_t corner = vertexIndex % 3u;
+        return corner == 0u ? 0u : triangle + corner;
+      };
+      for (uint32_t triangleStart = 0; triangleStart < encoded.boundingDrawVertexCount();
+           triangleStart += 3u) {
+        const Vector2d& p0 = effectiveVertices[polygonIndex(triangleStart)];
+        const Vector2d& p1 = effectiveVertices[polygonIndex(triangleStart + 1u)];
+        const Vector2d& p2 = effectiveVertices[polygonIndex(triangleStart + 2u)];
+        addUniqueEdge(p0, p1);
+        addUniqueEdge(p1, p2);
+        addUniqueEdge(p2, p0);
       }
       geometryDebugEdges.insert(geometryDebugEdges.end(), submissionEdges.begin(),
                                 submissionEdges.end());

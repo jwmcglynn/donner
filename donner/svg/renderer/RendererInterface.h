@@ -615,10 +615,9 @@ public:
    * Enable or disable the backend's geometry debug overlay.
    *
    * Geode observes geometry at the actual Slug GPU submission boundary and
-   * renders the two dynamically-dilated post-vertex triangles represented by
-   * each six-entry `EncodedPath::quadVertices` as one frame-final root-target
-   * wireframe pass. Default off. Backends without a debug overlay ignore the
-   * call.
+   * renders the dynamically-dilated post-vertex convex fan represented by
+   * each `EncodedPath::boundingVertices` array as one frame-final root-target
+   * wireframe pass. Default off. Backends without a debug overlay ignore the call.
    */
   virtual void setDebugGeometryOverlay(bool /*enabled*/) {}
 

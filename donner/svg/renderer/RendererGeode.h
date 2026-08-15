@@ -342,10 +342,10 @@ public:
    *
    * When enabled, an observer on every path-capable `GeoEncoder` records at
    * the four actual Slug GPU submission paths (gradient, mask, resident fill,
-   * and transient/instanced fill). For each instance it reconstructs the two
-   * submitted triangles from the six `EncodedPath::quadVertices`, including
-   * the shader's dynamic pixel dilation and all submitted transforms. Text,
-   * strokes, clips, masks, and instanced paths are therefore included.
+   * and transient/instanced fill). For each instance it reconstructs the
+   * submitted convex-fan triangles from `EncodedPath::boundingVertices`,
+   * including the shader's dynamic pixel dilation, transform fallbacks, and all submitted
+   * transforms. Text, strokes, clips, masks, and instanced paths are therefore included.
    * Pattern-tile resource internals are deliberately excluded; the consuming
    * pattern fill's path submission is captured instead.
    *
