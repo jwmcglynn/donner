@@ -43,7 +43,17 @@ test("Bazel owns a hermetic no-window Chromium browser lane", () => {
   assert.match(buildFile, /playwright_bin\.playwright_test\(/);
   assert.match(buildFile, /name = "chromium_remote_smoke"/);
   assert.match(buildFile, /"@playwright\/\/:chromium"/);
-  assert.match(buildFile, /"\/\/donner\/editor\/wasm:wasm_web_package"/);
+  assert.match(
+    buildFile,
+    /"\/\/donner\/editor\/wasm:_wasm_web_package_for_serve"/,
+    "the browser lane must own the editor-Wasm transition instead of requiring caller flags",
+  );
+  const editorBuildFile = readFileSync(path.join(testDirectory, "..", "BUILD.bazel"), "utf8");
+  assert.match(
+    editorBuildFile,
+    /editor_wasm_geode_transitioned_target\([\s\S]*?name = "_wasm_web_package_for_serve"[\s\S]*?visibility = \["\/\/donner\/editor\/wasm\/tests:__pkg__"\]/,
+    "only the browser-test package should be able to consume the transitioned web package",
+  );
   assert.match(
     buildFile,
     /"PLAYWRIGHT_BROWSERS_PATH": "\$\(rootpath @playwright\/\/:chromium\)\/\.\.\/"/,
