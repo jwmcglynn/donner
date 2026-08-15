@@ -86,6 +86,11 @@ function run_quiet_with_progress() {
     local last_line=""
     local last_change
     local sleep_pid=""
+    local stop_requested=false
+
+    request_progress_stop() {
+      stop_requested=true
+    }
 
     stop_progress_watcher() {
       if [[ -n "$sleep_pid" ]]; then
@@ -94,12 +99,18 @@ function run_quiet_with_progress() {
       fi
       exit 0
     }
-    trap stop_progress_watcher TERM INT
+    trap request_progress_stop TERM INT
 
     last_change=$(date +%s)
     while true; do
+      # Defer exit until the newly forked sleeper's PID is published below.
+      trap request_progress_stop TERM INT
       sleep "$progress_interval" &
       sleep_pid=$!
+      trap stop_progress_watcher TERM INT
+      if [[ "$stop_requested" == true ]]; then
+        stop_progress_watcher
+      fi
       wait "$sleep_pid" || exit 0
       sleep_pid=""
 

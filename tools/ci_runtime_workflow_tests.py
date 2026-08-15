@@ -66,9 +66,9 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
 
     def _write_parent_signal_hook(self, directory):
         hook = directory / "signal-parent.sh"
-        hook.write_text('#!/bin/sh\nkill -TERM "$PPID"\n')
+        hook.write_text('#!/bin/sh\nprintf x >> "$0.count"\nkill -TERM "$PPID"\n')
         hook.chmod(0o755)
-        return hook
+        return hook, Path(f"{hook}.count")
 
     def test_coverage_does_not_expand_ci_config_twice(self):
         """The coverage command inherits its CI config from the runner rc."""
@@ -94,7 +94,7 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
-            hook = self._write_parent_signal_hook(temp_path)
+            hook, hook_count = self._write_parent_signal_hook(temp_path)
             script = self._inject_pre_publish_signal(
                 script, 'sleep "$heartbeat_interval" &', hook
             )
@@ -127,6 +127,7 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
                 self.assertLess(
                     elapsed, 2.0, f"iteration {iteration}: heartbeat sleeper delayed wrapper exit"
                 )
+                self.assertEqual("x" * (iteration + 1), hook_count.read_text())
 
     def test_coverage_cleanup_is_portable_and_prompt_without_ps(self):
         """Coverage remains portable to macOS and owns its heartbeat sleeper."""
@@ -136,7 +137,7 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
-            hook = self._write_parent_signal_hook(temp_path)
+            hook, hook_count = self._write_parent_signal_hook(temp_path)
             functions = self._inject_pre_publish_signal(
                 self.coverage_script.split("\nTARGETS=()", 1)[0],
                 'sleep "$progress_interval" &',
@@ -158,6 +159,7 @@ run_quiet_with_progress "fixture" "$1" bash -c 'exit 23'
                     2.0,
                     f"iteration {iteration}: coverage heartbeat sleeper delayed wrapper exit",
                 )
+                self.assertEqual("x" * (iteration + 1), hook_count.read_text())
 
 
 if __name__ == "__main__":

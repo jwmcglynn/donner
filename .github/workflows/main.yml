@@ -787,6 +787,11 @@ jobs:
               last_progress=""
               last_change=$SECONDS
               sleep_pid=""
+              stop_requested=false
+
+              request_heartbeat_stop() {
+                stop_requested=true
+              }
 
               stop_heartbeat() {
                 if [[ -n "$sleep_pid" ]]; then
@@ -795,11 +800,17 @@ jobs:
                 fi
                 exit 0
               }
-              trap stop_heartbeat TERM INT
+              trap request_heartbeat_stop TERM INT
 
               while kill -0 "$command_pid" 2>/dev/null; do
+                # Defer exit until the newly forked sleeper's PID is published below.
+                trap request_heartbeat_stop TERM INT
                 sleep "$heartbeat_interval" &
                 sleep_pid=$!
+                trap stop_heartbeat TERM INT
+                if [[ "$stop_requested" == true ]]; then
+                  stop_heartbeat
+                fi
                 wait "$sleep_pid" || exit 0
                 sleep_pid=""
                 kill -0 "$command_pid" 2>/dev/null || break
