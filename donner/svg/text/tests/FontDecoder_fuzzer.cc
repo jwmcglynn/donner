@@ -353,8 +353,13 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
   if (font) {
     if (isStructuredSeed && data[0] == 'B') {
       FuzzTextBackend backend(fontManager, registry);
-      if (fontManager.isTrustedFont(font) || backend.isBitmapOnly(font) ||
-          backend.bitmapGlyph(font, 0, 1.0f).has_value()) {
+      bool admitsBitmapDecoder = backend.bitmapGlyph(font, 0, 1.0f).has_value();
+#ifdef DONNER_TEXT_FULL
+      // Full uses this renderer-facing predicate as an additional bitmap decoder capability gate;
+      // Simple uses it only to classify fonts that lack vector outline tables.
+      admitsBitmapDecoder = admitsBitmapDecoder || backend.isBitmapOnly(font);
+#endif
+      if (fontManager.isTrustedFont(font) || admitsBitmapDecoder) {
         std::abort();
       }
       return 0;

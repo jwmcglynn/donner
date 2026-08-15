@@ -319,6 +319,20 @@ TEST_F(TextBackendSimpleTest, UntrustedValidCffFontNeverReachesLengthUnawareStbP
   EXPECT_TRUE(backend_.glyphOutline(font, 1, 0.1f).empty());
 }
 
+TEST_F(TextBackendSimpleTest, UntrustedBitmapOnlyFontIsClassifiedWithoutDecoderAccess) {
+  const FontHandle font =
+      fontManager_.loadFontData(MakeSfnt({{"CBDT", std::vector<uint8_t>(4, 0)}}));
+  ASSERT_TRUE(static_cast<bool>(font));
+  ASSERT_TRUE(fontManager_.isValidatedFont(font));
+  EXPECT_FALSE(fontManager_.isTrustedFont(font));
+
+  EXPECT_TRUE(backend_.isBitmapOnly(font));
+  EXPECT_FALSE(backend_.bitmapGlyph(font, 0, 1.0f).has_value());
+  EXPECT_THAT(backend_.shapeRun(font, 16.0f, "A", 0, 1, false, FontVariant::Normal, false).glyphs,
+              IsEmpty());
+  EXPECT_TRUE(backend_.glyphOutline(font, 0, 1.0f).empty());
+}
+
 TEST_F(TextBackendSimpleTest, NonOutlineFontFallsBackToHeadUnitsPerEm) {
   // Only a head table: no glyf/CFF outlines, so stb parsing is skipped entirely.
   const FontHandle font = loadFont(MakeSfnt({{"head", HeadTable(2048)}}));
