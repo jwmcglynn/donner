@@ -2997,8 +2997,19 @@ void EditorShell::renderFillStrokeToolbarWidget() {
   const bool canvasInteractionActive = selectTool_.isDragging() || selectTool_.isMarqueeing() ||
                                        penTool_.isDraggingAnchor() || textTool_.isDraggingBox() ||
                                        textTool_.isAdjustingFrame();
+  svg::SVGDocumentHandle currentPaintDocument;
+  std::optional<Entity> currentPaintSelection;
+  if (app_.hasDocument()) {
+    currentPaintDocument = app_.document().document().handle();
+    if (!app_.selectedElements().empty()) {
+      currentPaintSelection = app_.selectedElements().front().unsafeEntityHandle().entity();
+    }
+  }
+  const bool paintSnapshotMatchesSelection =
+      toolbarPaintSnapshot_ != nullptr && toolbarPaintSnapshotDocument_ == currentPaintDocument &&
+      toolbarPaintSnapshotSelection_ == currentPaintSelection;
   const FillStrokeWidgetInteractionState interactionState = ResolveFillStrokeWidgetInteractionState(
-      app_.hasDocument(), rendererBusy, canvasInteractionActive, toolbarPaintSnapshot_ != nullptr);
+      app_.hasDocument(), rendererBusy, canvasInteractionActive, paintSnapshotMatchesSelection);
   const bool canEditPaint = interactionState.canEdit;
   std::string editorSource;
   std::string documentSource;
@@ -3018,7 +3029,9 @@ void EditorShell::renderFillStrokeToolbarWidget() {
   if (interactionState.refreshPaintSnapshot) {
     paintState = ToolbarPaintStateForApp(app_, sourceForRanges);
     toolbarPaintSnapshot_ = std::make_unique<ToolbarPaintState>(paintState);
-  } else if (toolbarPaintSnapshot_ != nullptr) {
+    toolbarPaintSnapshotDocument_ = std::move(currentPaintDocument);
+    toolbarPaintSnapshotSelection_ = currentPaintSelection;
+  } else if (paintSnapshotMatchesSelection) {
     paintState = *toolbarPaintSnapshot_;
   } else {
     paintState = ToolbarPaintStateForActivePaint(app_.activePaintStyle());

@@ -647,11 +647,11 @@ TEST(EditorShellInternalTest, FillStrokeWidgetInteractionStateIgnoresBusyHandoff
   const internal::FillStrokeWidgetInteractionState idleDrag =
       internal::ResolveFillStrokeWidgetInteractionState(
           /*hasDocument=*/true, /*rendererBusy=*/false, /*canvasInteractionActive=*/true,
-          /*hasPaintSnapshot=*/true);
+          /*paintSnapshotMatchesSelection=*/true);
   const internal::FillStrokeWidgetInteractionState busyDrag =
       internal::ResolveFillStrokeWidgetInteractionState(
           /*hasDocument=*/true, /*rendererBusy=*/true, /*canvasInteractionActive=*/true,
-          /*hasPaintSnapshot=*/true);
+          /*paintSnapshotMatchesSelection=*/true);
   EXPECT_EQ(idleDrag.canEdit, busyDrag.canEdit);
   EXPECT_EQ(idleDrag.refreshPaintSnapshot, busyDrag.refreshPaintSnapshot);
   EXPECT_FALSE(idleDrag.canEdit);
@@ -660,14 +660,14 @@ TEST(EditorShellInternalTest, FillStrokeWidgetInteractionStateIgnoresBusyHandoff
   const internal::FillStrokeWidgetInteractionState firstDragFrame =
       internal::ResolveFillStrokeWidgetInteractionState(
           /*hasDocument=*/true, /*rendererBusy=*/false, /*canvasInteractionActive=*/true,
-          /*hasPaintSnapshot=*/false);
+          /*paintSnapshotMatchesSelection=*/false);
   EXPECT_FALSE(firstDragFrame.canEdit);
   EXPECT_TRUE(firstDragFrame.refreshPaintSnapshot);
 
   const internal::FillStrokeWidgetInteractionState settled =
       internal::ResolveFillStrokeWidgetInteractionState(
           /*hasDocument=*/true, /*rendererBusy=*/false, /*canvasInteractionActive=*/false,
-          /*hasPaintSnapshot=*/true);
+          /*paintSnapshotMatchesSelection=*/true);
   EXPECT_TRUE(settled.canEdit);
   EXPECT_TRUE(settled.refreshPaintSnapshot);
 }

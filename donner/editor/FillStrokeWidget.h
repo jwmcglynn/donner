@@ -45,9 +45,12 @@ struct FillStrokeWidgetInteractionState {
 };
 
 /// Resolve editability and snapshot refresh without keying drag chrome to a
-/// renderer busy bit that can alternate between adjacent preview frames.
+/// renderer busy bit that can alternate between adjacent preview frames. The
+/// caller must report whether its snapshot belongs to the current document
+/// and first selected element, not merely whether any snapshot exists.
 [[nodiscard]] FillStrokeWidgetInteractionState ResolveFillStrokeWidgetInteractionState(
-    bool hasDocument, bool rendererBusy, bool canvasInteractionActive, bool hasPaintSnapshot);
+    bool hasDocument, bool rendererBusy, bool canvasInteractionActive,
+    bool paintSnapshotMatchesSelection);
 
 /// Compute widget sub-rectangles from the widget's outer bounds.
 [[nodiscard]] FillStrokeWidgetLayout ComputeFillStrokeWidgetLayout(const ImVec2& widgetMin,
