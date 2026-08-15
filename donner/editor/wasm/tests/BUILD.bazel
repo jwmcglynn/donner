@@ -1,0 +1,42 @@
+load("@npm//donner/editor/wasm/tests:@playwright/test/package_json.bzl", playwright_bin = "bin")
+load("@npm//:defs.bzl", "npm_link_all_packages")
+
+package(default_visibility = ["//visibility:public"])
+
+npm_link_all_packages(name = "node_modules")
+
+playwright_bin.playwright_test(
+    name = "chromium_remote_smoke",
+    size = "large",
+    args = [
+        "test",
+        "$(rootpath :smoke.spec.ts)",
+        "--config=$(rootpath :playwright.bazel.config.js)",
+        "--grep=production Geode wasm presents visible editor pixels",
+    ],
+    copy_data_to_bin = False,
+    data = [
+        "canvas-color-stats.ts",
+        "package.json",
+        "playwright.bazel.config.js",
+        "playwright.config.js",
+        "remote-webserver.mjs",
+        "smoke.spec.ts",
+        ":node_modules/@playwright/test",
+        "//donner/editor/wasm:wasm_web_package",
+        "@playwright//:chromium",
+    ],
+    env = {
+        "CI": "1",
+        "DONNER_WASM_PACKAGE_DIR": "$(rootpath //donner/editor/wasm:wasm_web_package)",
+        "DONNER_WASM_REQUIRE_WEBGPU": "1",
+        "DONNER_WASM_TEST_SERVER": "$(rootpath :remote-webserver.mjs)",
+        # The repo-wide remote Emscripten workaround disables Node's WebAssembly
+        # runtime, but Playwright's HTTP client uses its bundled llhttp Wasm.
+        "NODE_OPTIONS": "",
+        "PLAYWRIGHT_BROWSERS_PATH": "$(rootpath @playwright//:chromium)/../",
+    },
+    target_compatible_with = [
+        "@platforms//cpu:aarch64",
+    ],
+)

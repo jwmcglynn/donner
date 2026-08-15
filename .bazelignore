@@ -1,6 +1,7 @@
 .git
 examples/bazel-examples
 tools/python
+donner/editor/wasm/tests/node_modules
 
 # Ignore subtree repos with their own Bazel workspace
 third_party/tiny-skia-cpp

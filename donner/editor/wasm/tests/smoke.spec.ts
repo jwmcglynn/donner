@@ -207,26 +207,14 @@ test.use({
 });
 
 async function readWebGpuDiagnostics(page: Page) {
-  const browser = await page.evaluate(async () => {
+  const browser = await page.evaluate(() => {
     const gpu = navigator.gpu;
-    let fallbackAdapterAvailable = false;
-    let adapterRequestError: string | null = null;
-    if (gpu) {
-      try {
-        fallbackAdapterAvailable =
-          (await gpu.requestAdapter({ forceFallbackAdapter: true })) !== null;
-      } catch (error) {
-        adapterRequestError = String(error);
-      }
-    }
 
     return {
       isSecureContext,
       crossOriginIsolated,
       hasSharedArrayBuffer: typeof SharedArrayBuffer !== "undefined",
       hasNavigatorGpu: Boolean(gpu),
-      fallbackAdapterAvailable,
-      adapterRequestError,
       selectedBackend: window.__donnerBackend,
       userAgent: navigator.userAgent,
     };
