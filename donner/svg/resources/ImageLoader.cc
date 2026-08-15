@@ -2,6 +2,7 @@
 
 #include <stb/stb_image.h>
 
+#include <algorithm>
 #include <limits>
 #include <optional>
 
@@ -10,7 +11,6 @@ namespace donner::svg {
 namespace {
 
 constexpr int kMaxImageDimension = 16384;
-constexpr size_t kMaxDecodedImageBytes = 256u * 1024u * 1024u;
 
 /// Detect if file contents look like SVG (XML starting with '<') or SVGZ (gzip magic bytes).
 bool LooksLikeSvgContent(const std::vector<uint8_t>& data) {
@@ -76,7 +76,7 @@ std::optional<size_t> RgbaByteSize(int width, int height) {
   const size_t widthSize = static_cast<size_t>(width);
   const size_t heightSize = static_cast<size_t>(height);
 
-  if (widthSize > kMaxDecodedImageBytes / heightSize / kRgbaChannels) {
+  if (widthSize > std::numeric_limits<size_t>::max() / heightSize / kRgbaChannels) {
     return std::nullopt;
   }
 
@@ -84,7 +84,8 @@ std::optional<size_t> RgbaByteSize(int width, int height) {
 }
 
 std::variant<ImageResource, UrlLoaderError> LoadImage(std::string_view mimeType,
-                                                      const std::vector<uint8_t>& fileContents) {
+                                                      const std::vector<uint8_t>& fileContents,
+                                                      size_t maximumDecodedImageSize) {
   // Allow known formats and an empty mime type (stb_image will auto-detect)
   if (mimeType != "" && mimeType != "image/png" && mimeType != "image/jpeg" &&
       mimeType != "image/jpg" && mimeType != "image/gif") {
@@ -118,6 +119,9 @@ std::variant<ImageResource, UrlLoaderError> LoadImage(std::string_view mimeType,
   if (!dataSize.has_value()) {
     return UrlLoaderError::DataCorrupt;
   }
+  if (*dataSize > maximumDecodedImageSize) {
+    return UrlLoaderError::ResourceTooLarge;
+  }
 
   uint8_t* data =
       stbi_load_from_memory(reinterpret_cast<const unsigned char*>(
@@ -130,6 +134,10 @@ std::variant<ImageResource, UrlLoaderError> LoadImage(std::string_view mimeType,
   if (!loadedDataSize.has_value()) {
     stbi_image_free(data);
     return UrlLoaderError::DataCorrupt;
+  }
+  if (*loadedDataSize > maximumDecodedImageSize) {
+    stbi_image_free(data);
+    return UrlLoaderError::ResourceTooLarge;
   }
 
   ImageResource result;
@@ -159,11 +167,20 @@ ImageLoader::Result ImageLoader::fromUri(std::string_view uri) {
     return SvgImageContent{std::move(urlResult.data)};
   }
 
-  auto rasterResult = LoadImage(urlResult.mimeType, urlResult.data);
+  const size_t remainingDecodedBytes =
+      remainingResourceBytes_ != nullptr ? *remainingResourceBytes_ : maximumDecodedImageSize_;
+  const size_t decodedLimit = std::min(maximumDecodedImageSize_, remainingDecodedBytes);
+  auto rasterResult = LoadImage(urlResult.mimeType, urlResult.data, decodedLimit);
   if (std::holds_alternative<UrlLoaderError>(rasterResult)) {
     return std::get<UrlLoaderError>(rasterResult);
   }
-  return std::get<ImageResource>(std::move(rasterResult));
+
+  ImageResource result = std::get<ImageResource>(std::move(rasterResult));
+  if (remainingResourceBytes_ != nullptr) {
+    // LoadImage checked this against the current budget before asking stb_image to allocate.
+    *remainingResourceBytes_ -= result.data.size();
+  }
+  return result;
 }
 
 }  // namespace donner::svg

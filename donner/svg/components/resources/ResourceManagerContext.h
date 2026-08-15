@@ -22,8 +22,12 @@ namespace donner::svg::components {
  */
 class ResourceManagerContext {
 public:
+  /// Default aggregate byte budget for raw and decoded document resources.
+  static constexpr size_t kDefaultMaximumAggregateResourceSize = 64 * 1024 * 1024;
+
   /// Constructor.
-  explicit ResourceManagerContext(Registry& registry);
+  explicit ResourceManagerContext(Registry& registry, size_t maximumAggregateResourceSize =
+                                                          kDefaultMaximumAggregateResourceSize);
 
   /**
    * Load resources such as images. Note that this doesn't issue network calls directly, but relies
@@ -121,6 +125,9 @@ private:
 
   /// Callback to parse SVG content into sub-documents (injected to avoid circular deps).
   SubDocumentCache::ParseCallback svgParseCallback_;
+
+  /// Remaining raw and decoded resource bytes available to this document.
+  mutable size_t remainingResourceBytes_;
 };
 
 }  // namespace donner::svg::components

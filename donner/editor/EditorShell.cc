@@ -925,9 +925,21 @@ std::optional<std::string> LoadFile(const std::string& filename) {
   if (!file) {
     return std::nullopt;
   }
-  std::ostringstream out;
-  out << file.rdbuf();
-  return std::move(out).str();
+
+  file.seekg(0, std::ios::end);
+  const std::streamsize length = file.tellg();
+  if (length < 0 ||
+      static_cast<uint64_t>(length) > svg::parser::SVGParser::kDefaultMaximumInputSize) {
+    return std::nullopt;
+  }
+
+  std::string result(static_cast<size_t>(length), '\0');
+  file.seekg(0, std::ios::beg);
+  file.read(result.data(), length);
+  if (file.bad() || file.gcount() != length) {
+    return std::nullopt;
+  }
+  return result;
 }
 
 std::string InitialDocumentSyncSource(const EditorShellOptions& options) {

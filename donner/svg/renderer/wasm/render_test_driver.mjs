@@ -72,7 +72,7 @@ try {
   fail('module instantiation failed: ' + err.message);
 }
 
-for (const name of ['cwrap', 'HEAPU8']) {
+for (const name of ['cwrap', 'HEAPU8', '_malloc', '_free']) {
   if (Module[name] === undefined) {
     fail('runtime method/view "' + name + '" is missing from the module (glue regression?)');
   }
@@ -80,12 +80,45 @@ for (const name of ['cwrap', 'HEAPU8']) {
 
 const donnerInit = Module.cwrap('donner_init', null, []);
 const donnerRenderSvg = Module.cwrap('donner_render_svg', 'number', ['string', 'number', 'number']);
+const donnerRenderSvgLen = Module.cwrap(
+  'donner_render_svg_len',
+  'number',
+  ['number', 'number', 'number', 'number'],
+);
 const donnerFreePixels = Module.cwrap('donner_free_pixels', null, ['number']);
 const donnerGetError = Module.cwrap('donner_get_last_error', 'string', []);
 
 donnerInit();
 
-const ptr = donnerRenderSvg(SVG, width, height);
+const oversizedInput = Module._malloc(1);
+if (oversizedInput === 0) {
+  fail('could not allocate oversized-input sentinel');
+}
+Module.HEAPU8[oversizedInput] = 0;
+const oversizedResult = donnerRenderSvgLen(oversizedInput, 16 * 1024 * 1024 + 1, 1, 1);
+Module._free(oversizedInput);
+if (oversizedResult !== 0 || !donnerGetError().includes('maximum input size')) {
+  fail('length-aware API did not reject oversized SVG before reading it: ' + donnerGetError());
+}
+
+const invalidRangeResult = donnerRenderSvgLen(Module.HEAPU8.byteLength - 1, 2, 1, 1);
+if (invalidRangeResult !== 0 || !donnerGetError().includes('outside WebAssembly memory')) {
+  fail('length-aware API did not reject an out-of-bounds input range: ' + donnerGetError());
+}
+
+const oversizedPixels = donnerRenderSvg('<svg/>', 8192, 8192);
+if (oversizedPixels !== 0 || !donnerGetError().toLowerCase().includes('pixel buffer')) {
+  fail('render API did not reject an oversized pixel buffer: ' + donnerGetError());
+}
+
+const svgBytes = new TextEncoder().encode(SVG);
+const svgPtr = Module._malloc(svgBytes.byteLength);
+if (svgPtr === 0) {
+  fail('could not allocate SVG input');
+}
+Module.HEAPU8.set(svgBytes, svgPtr);
+const ptr = donnerRenderSvgLen(svgPtr, svgBytes.byteLength, width, height);
+Module._free(svgPtr);
 if (ptr === 0) {
   fail('donner_render_svg returned null: ' + donnerGetError());
 }

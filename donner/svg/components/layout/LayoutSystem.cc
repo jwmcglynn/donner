@@ -1,6 +1,8 @@
 #include "donner/svg/components/layout/LayoutSystem.h"
 
 #include <array>
+#include <cmath>
+#include <limits>
 #include <string_view>
 
 #include "donner/base/CompileTimeMap.h"
@@ -85,8 +87,20 @@ constexpr std::array<std::pair<std::string_view, SizedElementPresentationAttribu
 
 DONNER_CONSTEXPR_MAP auto kProperties = makeCompileTimeMap(kPropertyEntries);
 
-Vector2i RoundSize(Vector2f size) {
-  return Vector2i(static_cast<int>(Round(size.x)), static_cast<int>(Round(size.y)));
+int RoundDimension(double dimension) {
+  if (std::isnan(dimension)) {
+    return 0;
+  } else if (dimension >= std::numeric_limits<int>::max()) {
+    return std::numeric_limits<int>::max();
+  } else if (dimension <= std::numeric_limits<int>::min()) {
+    return std::numeric_limits<int>::min();
+  }
+
+  return static_cast<int>(Round(dimension));
+}
+
+Vector2i RoundSize(Vector2d size) {
+  return Vector2i(RoundDimension(size.x), RoundDimension(size.y));
 }
 
 PreserveAspectRatio GetPreserveAspectRatio(EntityHandle entity) {
@@ -266,11 +280,12 @@ bool LayoutSystem::overridesViewBox(EntityHandle entity) const {
 
 Vector2i LayoutSystem::calculateCanvasScaledDocumentSize(Registry& registry,
                                                          InvalidSizeBehavior behavior) const {
-  const Vector2d documentSize = calculateDocumentSize(registry);
+  const Vector2d documentSize = calculateRawDocumentSize(registry);
   const auto& ctx = registry.ctx().get<SVGDocumentContext>();
 
   std::optional<Vector2i> maybeCanvasSize = ctx.canvasSize;
-  if (documentSize.x <= 0.0 || documentSize.y <= 0.0) {
+  if (!std::isfinite(documentSize.x) || !std::isfinite(documentSize.y) || documentSize.x <= 0.0 ||
+      documentSize.y <= 0.0) {
     if (behavior == InvalidSizeBehavior::ReturnDefault) {
       return maybeCanvasSize.value_or(Vector2i(kDefaultWidth, kDefaultHeight));
     } else {
@@ -282,8 +297,10 @@ Vector2i LayoutSystem::calculateCanvasScaledDocumentSize(Registry& registry,
     if (documentSize.x <= kMaxDimension && documentSize.y <= kMaxDimension) {
       return RoundSize(documentSize);
     } else {
-      maybeCanvasSize = Vector2i(Min<int>(static_cast<int>(documentSize.x), kMaxDimension),
-                                 Min<int>(static_cast<int>(documentSize.y), kMaxDimension));
+      const auto clampDimension = [](double dimension) {
+        return dimension >= kMaxDimension ? kMaxDimension : static_cast<int>(dimension);
+      };
+      maybeCanvasSize = Vector2i(clampDimension(documentSize.x), clampDimension(documentSize.y));
     }
   }
 

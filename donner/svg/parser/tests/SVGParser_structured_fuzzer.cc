@@ -10,6 +10,7 @@
 #include "donner/base/xml/XMLNode.h"
 #include "donner/base/xml/XMLQualifiedName.h"
 #include "donner/svg/SVGElementNames.h"
+#include "donner/svg/components/layout/LayoutSystem.h"
 #include "donner/svg/parser/SVGParser.h"
 
 using namespace donner::xml;
@@ -54,6 +55,22 @@ XMLQualifiedName CreateRandomAttributeName(FuzzedDataProvider& provider) {
   } else {
     // Generate a random attribute name
     return CreateQualifiedName(provider);
+  }
+}
+
+void AddEdgeCaseSizingAttributes(XMLNode& svgElement, FuzzedDataProvider& provider) {
+  constexpr std::string_view kEdgeNumbers[] = {
+      "0", "-1", "1e-300", "1e300", "8192", "2147483648", "4294967296", "inf", "nan",
+  };
+
+  if (provider.ConsumeBool()) {
+    svgElement.setAttribute("width", provider.PickValueInArray(kEdgeNumbers));
+    svgElement.setAttribute("height", provider.PickValueInArray(kEdgeNumbers));
+  }
+  if (provider.ConsumeBool()) {
+    const std::string viewBox = "0 0 " + std::string(provider.PickValueInArray(kEdgeNumbers)) +
+                                " " + std::string(provider.PickValueInArray(kEdgeNumbers));
+    svgElement.setAttribute("viewBox", viewBox);
   }
 }
 
@@ -176,6 +193,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
     // Create an SVG element
     XMLNode svgElement = XMLNode::CreateElementNode(document, "svg");
     svgElement.setAttribute("xmlns", "http://www.w3.org/2000/svg");
+    AddEdgeCaseSizingAttributes(svgElement, provider);
     root.appendChild(svgElement);
 
     // Set the SVG element as the new root for further processing
@@ -188,7 +206,13 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
   // Pass the constructed document to the SVG parser
   donner::ParseWarningSink disabled = donner::ParseWarningSink::Disabled();
   auto result = donner::svg::parser::SVGParser::ParseXMLDocument(std::move(document), disabled);
-  (void)result;  // Suppress unused variable warning
+  if (result.hasResult()) {
+    auto svgDocument = std::move(result).result();
+    donner::svg::components::LayoutSystem layoutSystem;
+    (void)layoutSystem.calculateCanvasScaledDocumentSize(
+        svgDocument.unsafeRegistry(),
+        donner::svg::components::LayoutSystem::InvalidSizeBehavior::ReturnDefault);
+  }
 
   return 0;
 }

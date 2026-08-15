@@ -1,6 +1,7 @@
 #pragma once
 /// @file
 
+#include <cstddef>
 #include <string>
 
 #include "donner/base/Utils.h"
@@ -17,6 +18,7 @@ enum class UrlLoaderError : uint8_t {
                       ///< "image/png" or "image/jpeg").
   InvalidDataUrl,     ///< The data URL is invalid.
   DataCorrupt,        ///< The loaded data is corrupt and cannot be decoded.
+  ResourceTooLarge,   ///< The loaded or decoded resource exceeds the byte limit.
 };
 
 /// Converts a \ref UrlLoaderError to a human-readable string.
@@ -26,6 +28,7 @@ inline std::string_view ToString(UrlLoaderError err) {
     case UrlLoaderError::UnsupportedFormat: return "Unsupported format";
     case UrlLoaderError::InvalidDataUrl: return "Invalid data URL";
     case UrlLoaderError::DataCorrupt: return "Data corrupted";
+    case UrlLoaderError::ResourceTooLarge: return "Resource too large";
   }
 
   UTILS_UNREACHABLE();
@@ -41,6 +44,9 @@ inline std::ostream& operator<<(std::ostream& os, UrlLoaderError err) {
  */
 class UrlLoader {
 public:
+  /// Default maximum decoded or fetched resource size.
+  static constexpr size_t kDefaultMaximumResourceSize = 16 * 1024 * 1024;
+
   /**
    * Result of loading a URI or decoding a data URL.
    */
@@ -57,7 +63,12 @@ public:
    *
    * @param resourceLoader Resource loader to use for fetching external resources.
    */
-  explicit UrlLoader(ResourceLoaderInterface& resourceLoader) : resourceLoader_(resourceLoader) {}
+  explicit UrlLoader(ResourceLoaderInterface& resourceLoader,
+                     size_t maximumResourceSize = kDefaultMaximumResourceSize,
+                     size_t* remainingResourceBytes = nullptr)
+      : resourceLoader_(resourceLoader),
+        maximumResourceSize_(maximumResourceSize),
+        remainingResourceBytes_(remainingResourceBytes) {}
 
   /// Destructor.
   ~UrlLoader() = default;
@@ -78,8 +89,16 @@ public:
   std::variant<Result, UrlLoaderError> fromUri(std::string_view uri);
 
 private:
+  bool consumeResourceBytes(size_t size);
+
   /// Resource loader to use for fetching external resources.
   ResourceLoaderInterface& resourceLoader_;  // NOLINT
+
+  /// Maximum decoded or fetched bytes returned to the caller.
+  size_t maximumResourceSize_;
+
+  /// Optional shared byte budget across multiple loaders in one document.
+  size_t* remainingResourceBytes_;
 };
 
 }  // namespace donner::svg

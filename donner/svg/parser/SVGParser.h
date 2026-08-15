@@ -16,6 +16,9 @@ namespace donner::svg::parser {
  */
 class SVGParser {
 public:
+  /// Default maximum number of source or expanded SVG bytes accepted from untrusted input.
+  static constexpr size_t kDefaultMaximumInputSize = 16 * 1024 * 1024;
+
   /**
    * Options to modify the parsing behavior.
    */
@@ -75,6 +78,12 @@ public:
      * ```
      */
     bool parseAsInlineSVG = false;
+
+    /**
+     * Maximum source size accepted by ParseSVG. For SVGZ input the same limit applies to both the
+     * compressed and expanded forms, preventing decompression bombs.
+     */
+    size_t maximumInputSize = kDefaultMaximumInputSize;
   };
 
   /**

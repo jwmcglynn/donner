@@ -1,3 +1,5 @@
+#include <cassert>
+
 #include "donner/base/parser/DataUrlParser.h"
 
 namespace donner::parser {
@@ -21,6 +23,14 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
       assert(std::holds_alternative<RcString>(parsed.payload) &&
              "External URL result should carry a string payload");
     }
+  }
+
+  DataUrlParser::Options limitedOptions;
+  limitedOptions.maximumInputSize = size / 2;
+  auto limitedResult = DataUrlParser::Parse(buffer, limitedOptions);
+  if (size > limitedOptions.maximumInputSize) {
+    assert(std::holds_alternative<DataUrlParserError>(limitedResult) &&
+           std::get<DataUrlParserError>(limitedResult) == DataUrlParserError::InputTooLarge);
   }
 
   return 0;

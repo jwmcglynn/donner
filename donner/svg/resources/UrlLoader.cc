@@ -10,14 +10,20 @@ using parser::DataUrlParserError;
 
 namespace {
 
-UrlLoaderError MapError([[maybe_unused]] ResourceLoaderError error) {
-  // Map all errors to NotFound for now.
-  return UrlLoaderError::NotFound;
+UrlLoaderError MapError(ResourceLoaderError error) {
+  switch (error) {
+    case ResourceLoaderError::TooLarge: return UrlLoaderError::ResourceTooLarge;
+    case ResourceLoaderError::NotFound:
+    case ResourceLoaderError::SandboxViolation: return UrlLoaderError::NotFound;
+  }
+
+  UTILS_UNREACHABLE();
 }
 
 UrlLoaderError MapError(DataUrlParserError error) {
   switch (error) {
     case DataUrlParserError::InvalidDataUrl: return UrlLoaderError::InvalidDataUrl;
+    case DataUrlParserError::InputTooLarge: return UrlLoaderError::ResourceTooLarge;
   }
 
   UTILS_UNREACHABLE();
@@ -57,6 +63,18 @@ std::string MimeTypeFromUrl(std::string_view url) {
 
 }  // namespace
 
+bool UrlLoader::consumeResourceBytes(size_t size) {
+  if (size > maximumResourceSize_ ||
+      (remainingResourceBytes_ != nullptr && size > *remainingResourceBytes_)) {
+    return false;
+  }
+
+  if (remainingResourceBytes_ != nullptr) {
+    *remainingResourceBytes_ -= size;
+  }
+  return true;
+}
+
 std::variant<UrlLoader::Result, UrlLoaderError> UrlLoader::fromUri(std::string_view uri) {
   Result result;
 
@@ -71,6 +89,9 @@ std::variant<UrlLoader::Result, UrlLoaderError> UrlLoader::fromUri(std::string_v
 
   if (parsedUrl.kind == DataUrlParser::Result::Kind::Data) {
     result.data = std::move(std::get<std::vector<uint8_t>>(parsedUrl.payload));
+    if (!consumeResourceBytes(result.data.size())) {
+      return UrlLoaderError::ResourceTooLarge;
+    }
     result.mimeType = parsedUrl.mimeType;
     return result;
   } else {
@@ -82,7 +103,10 @@ std::variant<UrlLoader::Result, UrlLoaderError> UrlLoader::fromUri(std::string_v
       return MapError(std::get<ResourceLoaderError>(maybeLoadedData));
     }
 
-    result.data = std::get<std::vector<uint8_t>>(maybeLoadedData);
+    result.data = std::get<std::vector<uint8_t>>(std::move(maybeLoadedData));
+    if (!consumeResourceBytes(result.data.size())) {
+      return UrlLoaderError::ResourceTooLarge;
+    }
     result.mimeType = MimeTypeFromUrl(url);
   }
 

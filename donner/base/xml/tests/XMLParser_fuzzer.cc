@@ -126,6 +126,15 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
     logLimitHits(XMLParser::Parse(str, options));
   }
 
+  {
+    XMLParser::Options options;
+    options.maximumInputSize = size / 2;
+    auto limitedResult = XMLParser::Parse(str, options);
+    if (size > options.maximumInputSize && limitedResult.hasResult()) {
+      std::abort();
+    }
+  }
+
   // Exercise GetAttributeLocation - M−1 prerequisite for structured
   // editing. The inner helper previously release-asserted on malformed
   // input; this arm of the fuzzer is the regression net for that fix.

@@ -50,6 +50,17 @@ TEST(DecompressTest, GzipTooShort) {
   EXPECT_THAT(maybeResult, ParseErrorIs("Gzip data is too short"));
 }
 
+TEST(DecompressTest, GzipRejectsOutputLargerThanLimit) {
+  // 128 repeated 'A' bytes compressed with gzip -n.
+  const std::vector<uint8_t> compressed = {
+      0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03, 0x73, 0x74,
+      0x1c, 0x58, 0x00, 0x00, 0xde, 0x8a, 0x18, 0x04, 0x80, 0x00, 0x00, 0x00,
+  };
+  auto maybeResult = Decompress::Gzip(
+      std::string_view(reinterpret_cast<const char*>(compressed.data()), compressed.size()), 64);
+  EXPECT_THAT(maybeResult, ParseErrorIs(HasSubstr("maximum decompressed size")));
+}
+
 TEST(DecompressTest, ZlibInvalidData) {
   const std::vector<uint8_t> compressed = {0x00, 0x00};
   auto maybeResult = Decompress::Zlib(

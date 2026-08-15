@@ -243,6 +243,9 @@ std::optional<std::string> ReadFile(std::string_view filename) {
   if (length <= 0) {
     return std::string();
   }
+  if (static_cast<uint64_t>(length) > parser::SVGParser::kDefaultMaximumInputSize) {
+    return std::nullopt;
+  }
 
   std::string data(static_cast<size_t>(length), '\0');
   file.read(data.data(), length);

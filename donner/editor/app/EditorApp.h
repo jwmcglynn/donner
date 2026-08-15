@@ -39,7 +39,7 @@ struct SourceLoadOptions {
   /// Directory used to resolve relative paths. Defaults to the current working directory.
   std::filesystem::path baseDirectory = std::filesystem::current_path();
   /// Maximum number of bytes the loader will read from a single file.
-  std::size_t maxFileBytes = 100u * 1024u * 1024u;
+  std::size_t maxFileBytes = 16u * 1024u * 1024u;
 };
 
 struct RenderSessionOptions {

@@ -1691,6 +1691,10 @@ private:
 }  // namespace
 
 ParseResult<XMLDocument> XMLParser::Parse(std::string_view str, const Options& options) {
+  if (str.size() > options.maximumInputSize) {
+    return ParseDiagnostic::Error("XML source exceeds maximum input size", FileOffset::Offset(0));
+  }
+
   XMLParserImpl parser(str, options);
   return parser.parse();
 }

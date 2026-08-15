@@ -7,6 +7,15 @@
 namespace donner::parser {
 
 std::variant<DataUrlParser::Result, DataUrlParserError> DataUrlParser::Parse(std::string_view uri) {
+  return Parse(uri, Options{});
+}
+
+std::variant<DataUrlParser::Result, DataUrlParserError> DataUrlParser::Parse(
+    std::string_view uri, const Options& options) {
+  if (uri.size() > options.maximumInputSize) {
+    return DataUrlParserError::InputTooLarge;
+  }
+
   Result result;
 
   // If the URI is of format "data:image/png;base64,...", it is a data URL.

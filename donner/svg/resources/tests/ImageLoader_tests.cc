@@ -70,9 +70,9 @@ TEST(ImageLoader, RejectsMagiclessTgaDecodeBomb) {
   // bytes, so stb auto-detects it and its decoder iterates the full declared
   // pixel grid regardless of input size (CPU-exhaustion decode-bomb). Only
   // PNG/JPEG/GIF are supported, so this must be rejected before any decode.
-  StaticResourceLoader resourceLoader(std::vector<uint8_t>{0x00, 0x00, 0x03, 0x00, 0x00, 0x00,
-                                                           0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-                                                           0x40, 0x1F, 0x40, 0x1F, 0x08, 0x00});
+  StaticResourceLoader resourceLoader(std::vector<uint8_t>{0x00, 0x00, 0x03, 0x00, 0x00, 0x00, 0x00,
+                                                           0x00, 0x00, 0x00, 0x00, 0x00, 0x40, 0x1F,
+                                                           0x40, 0x1F, 0x08, 0x00});
   ImageLoader imageLoader(resourceLoader);
 
   ImageLoader::Result result = imageLoader.fromUri("bomb");
@@ -184,7 +184,7 @@ TEST(ImageLoader, RejectsPngHeadersWithInvalidDimensions) {
   {
     StaticResourceLoader resourceLoader(PngHeaderWithDimensions(16384, 16384));
     ImageLoader imageLoader(resourceLoader);
-    ExpectImageLoaderError(imageLoader.fromUri("too-large.png"), UrlLoaderError::DataCorrupt);
+    ExpectImageLoaderError(imageLoader.fromUri("too-large.png"), UrlLoaderError::ResourceTooLarge);
   }
   {
     StaticResourceLoader resourceLoader(PngHeaderWithDimensions(0, 1));
@@ -195,6 +195,48 @@ TEST(ImageLoader, RejectsPngHeadersWithInvalidDimensions) {
     StaticResourceLoader resourceLoader(PngHeaderWithDimensions(1, 0));
     ImageLoader imageLoader(resourceLoader);
     ExpectImageLoaderError(imageLoader.fromUri("zero-height.png"), UrlLoaderError::DataCorrupt);
+  }
+}
+
+TEST(ImageLoader, RejectsDecodedImageBeforeAllocationWhenOverConfiguredLimit) {
+  const std::vector<uint8_t> png = {
+      0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48,
+      0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x04, 0x00, 0x00,
+      0x00, 0xB5, 0x1C, 0x0C, 0x02, 0x00, 0x00, 0x00, 0x0B, 0x49, 0x44, 0x41, 0x54, 0x78,
+      0xDA, 0x63, 0xFC, 0xFF, 0x1F, 0x00, 0x03, 0x03, 0x02, 0x00, 0xEF, 0xBF, 0xA7, 0xDB,
+      0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+  };
+  StaticResourceLoader resourceLoader(png);
+  ImageLoader imageLoader(resourceLoader, UrlLoader::kDefaultMaximumResourceSize, nullptr, 3);
+
+  ExpectImageLoaderError(imageLoader.fromUri("one-pixel.png"), UrlLoaderError::ResourceTooLarge);
+}
+
+TEST(ImageLoader, ChargesRawAndDecodedBytesToSharedBudget) {
+  const std::vector<uint8_t> png = {
+      0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48,
+      0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x04, 0x00, 0x00,
+      0x00, 0xB5, 0x1C, 0x0C, 0x02, 0x00, 0x00, 0x00, 0x0B, 0x49, 0x44, 0x41, 0x54, 0x78,
+      0xDA, 0x63, 0xFC, 0xFF, 0x1F, 0x00, 0x03, 0x03, 0x02, 0x00, 0xEF, 0xBF, 0xA7, 0xDB,
+      0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+  };
+
+  {
+    StaticResourceLoader resourceLoader(png);
+    size_t remainingBytes = png.size() + 3;
+    ImageLoader imageLoader(resourceLoader, UrlLoader::kDefaultMaximumResourceSize,
+                            &remainingBytes);
+    ExpectImageLoaderError(imageLoader.fromUri("one-pixel.png"), UrlLoaderError::ResourceTooLarge);
+    EXPECT_EQ(remainingBytes, 3u);
+  }
+
+  {
+    StaticResourceLoader resourceLoader(png);
+    size_t remainingBytes = png.size() + 4;
+    ImageLoader imageLoader(resourceLoader, UrlLoader::kDefaultMaximumResourceSize,
+                            &remainingBytes);
+    ASSERT_TRUE(std::holds_alternative<ImageResource>(imageLoader.fromUri("one-pixel.png")));
+    EXPECT_EQ(remainingBytes, 0u);
   }
 }
 

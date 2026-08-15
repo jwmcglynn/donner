@@ -44,13 +44,16 @@ _WASM_GEODE_COMPATIBLE_WITH = select({
 # Internal cc_binary that Emscripten's wasm_cc_binary transitions to WASM.
 cc_binary(
     name = "donner_wasm_bin",
-    srcs = ["wasm_bridge.cc"],
+    srcs = [
+        "WasmBridgeUtils.h",
+        "wasm_bridge.cc",
+    ],
     linkopts = [
         "-sMODULARIZE=1",
         "-sEXPORT_ES6=1",
         "-sENVIRONMENT=web",
         "-sALLOW_MEMORY_GROWTH=1",
-        "-sEXPORTED_FUNCTIONS=_donner_init,_donner_render_svg,_donner_free_pixels,_donner_get_last_error,_malloc,_free",
+        "-sEXPORTED_FUNCTIONS=_donner_init,_donner_render_svg,_donner_render_svg_len,_donner_free_pixels,_donner_get_last_error,_malloc,_free",
         # Smaller allocator than the default dlmalloc; safe with USE_PTHREADS=0.
         "-sMALLOC=emmalloc",
         "-sEXPORTED_RUNTIME_METHODS=ccall,cwrap,UTF8ToString,HEAPU8",
@@ -121,7 +124,10 @@ py_test(
 # the browser's async WebGPU implementation.
 cc_binary(
     name = "donner_wasm_geode_bin",
-    srcs = ["wasm_bridge_geode.cc"],
+    srcs = [
+        "WasmBridgeUtils.h",
+        "wasm_bridge_geode.cc",
+    ],
     additional_linker_inputs = [
         "//third_party/emdawnwebgpu:webgpu/src/library_webgpu_enum_tables.js",
         "//third_party/emdawnwebgpu:webgpu/src/library_webgpu_generated_struct_info.js",
@@ -135,7 +141,7 @@ cc_binary(
         "-sALLOW_MEMORY_GROWTH=1",
         "-sASYNCIFY=1",
         "-sASYNCIFY_STACK_SIZE=131072",
-        "-sEXPORTED_FUNCTIONS=_donner_geode_init,_donner_geode_render_svg,_donner_free_pixels,_donner_get_last_error,_malloc,_free",
+        "-sEXPORTED_FUNCTIONS=_donner_geode_init,_donner_geode_render_svg,_donner_geode_render_svg_len,_donner_free_pixels,_donner_get_last_error,_malloc,_free",
         "-sEXPORTED_RUNTIME_METHODS=ccall,cwrap,UTF8ToString,HEAPU8",
         "-sUSE_PTHREADS=0",
         "-sSTACK_SIZE=1048576",

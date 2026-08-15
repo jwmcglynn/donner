@@ -1,5 +1,5 @@
-load("//build_defs:rules.bzl", "donner_cc_fuzzer", "donner_cc_library", "donner_cc_test")
 load("//build_defs:package.bzl", "donner_package")
+load("//build_defs:rules.bzl", "donner_cc_fuzzer", "donner_cc_library", "donner_cc_test")
 
 donner_cc_library(
     name = "sandboxed_file_resource_loader",
@@ -10,6 +10,13 @@ donner_cc_library(
         ":resource_loader_interface",
         "//donner/base",
     ],
+)
+
+donner_cc_fuzzer(
+    name = "sandboxed_file_resource_loader_structured_fuzzer",
+    srcs = ["tests/SandboxedFileResourceLoader_structured_fuzzer.cc"],
+    corpus = "tests/sandboxed_file_resource_loader_structured_corpus",
+    deps = [":sandboxed_file_resource_loader"],
 )
 
 donner_cc_library(
@@ -233,6 +240,13 @@ donner_cc_test(
         "//donner/base:base_test_utils",
         "@com_google_gtest//:gtest_main",
     ],
+)
+
+donner_cc_fuzzer(
+    name = "url_loader_structured_fuzzer",
+    srcs = ["tests/UrlLoader_structured_fuzzer.cc"],
+    corpus = "tests/url_loader_structured_corpus",
+    deps = [":url_loader"],
 )
 
 donner_cc_test(

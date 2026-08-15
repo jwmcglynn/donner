@@ -10,20 +10,25 @@
  * to the browser event loop).
  */
 
+#include <cstddef>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
 #include <string>
+#include <string_view>
 
 #include "donner/base/ParseWarningSink.h"
 #include "donner/svg/SVG.h"
 #include "donner/svg/renderer/RendererGeode.h"
+#include "donner/svg/renderer/wasm/WasmBridgeUtils.h"
 
 namespace {
 
 /// Stores the last error message for retrieval via donner_get_last_error().
 std::string gLastError;
+
+constexpr size_t kMaximumPixelBufferSize = 64 * 1024 * 1024;
 
 }  // namespace
 
@@ -35,7 +40,8 @@ void donner_geode_init() {
   // and requires ASYNCIFY yield.
 }
 
-uint8_t* donner_geode_render_svg(const char* svgText, int width, int height) {
+uint8_t* donner_geode_render_svg_len(const char* svgText, size_t svgTextSize, int width,
+                                     int height) {
   using namespace donner;
   using namespace donner::svg;
   using namespace donner::svg::parser;
@@ -46,6 +52,14 @@ uint8_t* donner_geode_render_svg(const char* svgText, int width, int height) {
 
   if (svgText == nullptr) {
     gLastError = "SVG text is null";
+    return nullptr;
+  }
+  if (svgTextSize > SVGParser::kDefaultMaximumInputSize) {
+    gLastError = "SVG exceeds maximum input size";
+    return nullptr;
+  }
+  if (!donner::svg::wasm::IsValidInputRange(svgText, svgTextSize)) {
+    gLastError = "SVG text is outside WebAssembly memory";
     return nullptr;
   }
 
@@ -62,16 +76,17 @@ uint8_t* donner_geode_render_svg(const char* svgText, int width, int height) {
   }
 
   const size_t area = static_cast<size_t>(width) * static_cast<size_t>(height);
-  if (area > SIZE_MAX / 4) {
-    gLastError = "Pixel buffer too large";
+  if (area > kMaximumPixelBufferSize / 4) {
+    gLastError = "Pixel buffer exceeds maximum size";
     return nullptr;
   }
   const size_t expectedBytes = area * 4;
 
   // Parse the SVG document.
-  std::cerr << "[wasm] parsing SVG (" << std::strlen(svgText) << " bytes)" << std::endl;
+  std::cerr << "[wasm] parsing SVG (" << svgTextSize << " bytes)" << std::endl;
   ParseWarningSink warnings;
-  ParseResult<SVGDocument> maybeDocument = SVGParser::ParseSVG(svgText, warnings);
+  ParseResult<SVGDocument> maybeDocument =
+      SVGParser::ParseSVG(std::string_view(svgText, svgTextSize), warnings);
 
   if (maybeDocument.hasError()) {
     gLastError = "Parse error: " + maybeDocument.error().reason.str();
@@ -97,8 +112,11 @@ uint8_t* donner_geode_render_svg(const char* svgText, int width, int height) {
   RendererBitmap bitmap = renderer.takeSnapshot();
   std::cerr << "[wasm] takeSnapshot() returned; pixels.size=" << bitmap.pixels.size()
             << " rowBytes=" << bitmap.rowBytes << std::endl;
-  if (bitmap.empty()) {
-    gLastError = "Rendering produced an empty bitmap";
+  const size_t dstRowBytes = static_cast<size_t>(width) * 4;
+  if (bitmap.empty() || bitmap.dimensions != Vector2i(width, height) ||
+      bitmap.rowBytes < dstRowBytes || bitmap.rowBytes > bitmap.pixels.size() ||
+      static_cast<size_t>(height) > bitmap.pixels.size() / bitmap.rowBytes) {
+    gLastError = "Rendering produced an invalid bitmap";
     return nullptr;
   }
 
@@ -111,17 +129,28 @@ uint8_t* donner_geode_render_svg(const char* svgText, int width, int height) {
 
   // Copy rows, handling potential stride differences between the renderer's
   // rowBytes and the tightly-packed output expected by the caller.
-  const size_t dstRowBytes = static_cast<size_t>(width) * 4;
   for (int y = 0; y < height; ++y) {
     const size_t srcOffset = static_cast<size_t>(y) * bitmap.rowBytes;
     const size_t dstOffset = static_cast<size_t>(y) * dstRowBytes;
-    if (srcOffset + dstRowBytes > bitmap.pixels.size()) {
-      break;
-    }
     std::memcpy(pixels + dstOffset, bitmap.pixels.data() + srcOffset, dstRowBytes);
   }
 
   return pixels;
+}
+
+uint8_t* donner_geode_render_svg(const char* svgText, int width, int height) {
+  if (svgText == nullptr) {
+    gLastError = "SVG text is null";
+    return nullptr;
+  }
+
+  const auto length = donner::svg::wasm::BoundedCStringLength(
+      svgText, donner::svg::parser::SVGParser::kDefaultMaximumInputSize);
+  if (!length.has_value()) {
+    gLastError = "SVG text is outside WebAssembly memory";
+    return nullptr;
+  }
+  return donner_geode_render_svg_len(svgText, *length, width, height);
 }
 
 void donner_free_pixels(uint8_t* pixels) {

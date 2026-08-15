@@ -63,6 +63,30 @@ TEST(SVGParser, Svgz) {
   EXPECT_THAT(warnings.warnings(), ElementsAre());
 }
 
+TEST(SVGParser, RejectsInputLargerThanConfiguredLimit) {
+  SVGParser::Options options;
+  options.maximumInputSize = 64;
+
+  ParseWarningSink warnings;
+  EXPECT_THAT(SVGParser::ParseSVG(std::string(65, ' '), warnings, options),
+              ParseErrorIs(testing::HasSubstr("maximum input size")));
+}
+
+TEST(SVGParser, RejectsSvgzWhoseExpandedSizeExceedsConfiguredLimit) {
+  // 128 repeated 'A' bytes compressed with gzip -n. The compressed input is 24 bytes.
+  static const uint8_t kGzipData[] = {
+      0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x03, 0x73, 0x74,
+      0x1c, 0x58, 0x00, 0x00, 0xde, 0x8a, 0x18, 0x04, 0x80, 0x00, 0x00, 0x00,
+  };
+  SVGParser::Options options;
+  options.maximumInputSize = 64;
+
+  ParseWarningSink warnings;
+  const std::string_view gzipStr(reinterpret_cast<const char*>(kGzipData), sizeof(kGzipData));
+  EXPECT_THAT(SVGParser::ParseSVG(gzipStr, warnings, options),
+              ParseErrorIs(testing::HasSubstr("maximum decompressed size")));
+}
+
 TEST(SVGParser, WithoutNamespace) {
   const std::string_view simpleXml("<svg></svg>");
 

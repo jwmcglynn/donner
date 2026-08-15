@@ -52,6 +52,7 @@ TEST(UrlLoader, UrlLoaderErrorToString) {
   EXPECT_EQ(ToString(UrlLoaderError::UnsupportedFormat), "Unsupported format");
   EXPECT_EQ(ToString(UrlLoaderError::InvalidDataUrl), "Invalid data URL");
   EXPECT_EQ(ToString(UrlLoaderError::DataCorrupt), "Data corrupted");
+  EXPECT_EQ(ToString(UrlLoaderError::ResourceTooLarge), "Resource too large");
 }
 
 /// @test that a valid file URI is correctly fetched.
@@ -84,6 +85,32 @@ TEST(UrlLoader, FetchDataUrlBase64) {
   EXPECT_THAT(result, VariantWith<UrlLoader::Result>(
                           AllOf(Field(&UrlLoader::Result::mimeType, Eq("text/plain")),
                                 Field(&UrlLoader::Result::data, ElementsAre('t', 'e', 's', 't')))));
+}
+
+TEST(UrlLoader, RejectsDecodedDataUrlLargerThanConfiguredLimit) {
+  InProcResourceLoader loader;
+  UrlLoader urlLoader(loader, 3);
+  EXPECT_THAT(urlLoader.fromUri("data:text/plain;base64,dGVzdA=="),
+              VariantWith<UrlLoaderError>(UrlLoaderError::ResourceTooLarge));
+}
+
+TEST(UrlLoader, RejectsExternalResourceLargerThanConfiguredLimit) {
+  InProcResourceLoader loader;
+  UrlLoader urlLoader(loader, 3);
+  EXPECT_THAT(urlLoader.fromUri("test.txt"),
+              VariantWith<UrlLoaderError>(UrlLoaderError::ResourceTooLarge));
+}
+
+TEST(UrlLoader, EnforcesSharedAggregateResourceBudget) {
+  InProcResourceLoader loader;
+  size_t remainingResourceBytes = 7;
+  UrlLoader urlLoader(loader, UrlLoader::kDefaultMaximumResourceSize, &remainingResourceBytes);
+
+  EXPECT_THAT(urlLoader.fromUri("test.txt"), VariantWith<UrlLoader::Result>(testing::_));
+  EXPECT_EQ(remainingResourceBytes, 3);
+  EXPECT_THAT(urlLoader.fromUri("data:text/plain;base64,dGVzdA=="),
+              VariantWith<UrlLoaderError>(UrlLoaderError::ResourceTooLarge));
+  EXPECT_EQ(remainingResourceBytes, 3);
 }
 
 /// @test that a valid URL-encoded data URL with an explicit MIME type is decoded.

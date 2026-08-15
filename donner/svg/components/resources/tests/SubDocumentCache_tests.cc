@@ -13,6 +13,8 @@
 #define private public
 #include "donner/svg/components/resources/ResourceManagerContext.h"
 #undef private
+#include "donner/svg/resources/NullResourceLoader.h"
+#include "donner/svg/resources/UrlLoader.h"
 
 namespace donner::svg::components {
 namespace {
@@ -353,6 +355,43 @@ TEST_F(ResourceManagerContextTest, LoadExternalSVGSuccess) {
   ASSERT_TRUE(result.has_value());
   EXPECT_EQ(SVGDocument::CreateFromHandle(*result).canvasSize(), Vector2i(705, 705));
   EXPECT_FALSE(warnings.hasWarnings());
+}
+
+TEST(ResourceManagerContextAggregateBudgetTest, AppliesBudgetAcrossExternalSvgLoads) {
+  Registry registry;
+  auto& resourceManager = registry.ctx().emplace<ResourceManagerContext>(registry, 7);
+  auto loader = std::make_unique<TestResourceLoader>();
+  loader->addFile("first.svg", {'<', 's', 'v', 'g'});
+  loader->addFile("second.svg", {'<', 's', 'v', 'g'});
+  resourceManager.setResourceLoader(std::move(loader));
+  resourceManager.setSvgParseCallback(MakeDocumentCallback(704));
+
+  ParseWarningSink warnings;
+  EXPECT_TRUE(resourceManager.loadExternalSVG("first.svg", warnings).has_value());
+  EXPECT_FALSE(resourceManager.loadExternalSVG("second.svg", warnings).has_value());
+  EXPECT_TRUE(warnings.hasWarnings());
+}
+
+TEST(ResourceManagerContextAggregateBudgetTest, IncludesDecodedImageBytes) {
+  NullResourceLoader nullLoader;
+  UrlLoader urlLoader(nullLoader);
+  auto loaded = urlLoader.fromUri(kTinyPngDataUrl);
+  ASSERT_TRUE(std::holds_alternative<UrlLoader::Result>(loaded));
+  const size_t encodedResourceBytes = std::get<UrlLoader::Result>(loaded).data.size();
+
+  Registry registry;
+  auto& resourceManager =
+      registry.ctx().emplace<ResourceManagerContext>(registry, encodedResourceBytes);
+  const Entity imageEntity = registry.create();
+  registry.emplace<ImageComponent>(imageEntity, ImageComponent{RcString(kTinyPngDataUrl)});
+
+  ParseWarningSink warnings;
+  resourceManager.loadResources(warnings);
+
+  const auto* image = registry.try_get<LoadedImageComponent>(imageEntity);
+  ASSERT_NE(image, nullptr);
+  EXPECT_FALSE(image->image.has_value());
+  EXPECT_TRUE(warnings.hasWarnings());
 }
 
 TEST_F(ResourceManagerContextTest, UserCallbacksRunOutsideDocumentWriteAccess) {

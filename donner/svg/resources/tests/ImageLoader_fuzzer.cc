@@ -1,11 +1,13 @@
-#include "donner/svg/resources/ImageLoader.h"
-
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
+#include <limits>
 #include <string_view>
 #include <utility>
 #include <variant>
 #include <vector>
+
+#include "donner/svg/resources/ImageLoader.h"
 
 namespace donner::svg {
 
@@ -33,14 +35,29 @@ private:
 extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
   std::vector<uint8_t> bytes(data, data + size);
 
-  FuzzResourceLoader loader(bytes);
-  ImageLoader imageLoader(loader);
+  size_t maximumDecodedImageSize = ImageLoader::kDefaultMaximumDecodedImageSize;
+  if (size >= 2 && (data[size - 1] & 1u) != 0) {
+    maximumDecodedImageSize = 4u * (static_cast<size_t>(data[size - 2]) + 1u);
+  }
 
-  // Use a fixed URL with a raster image extension. stb_image auto-detects the actual format
-  // from the file's magic bytes regardless of the extension hint, so this exercises PNG, JPEG,
-  // GIF, BMP, and other stb-supported decoders on arbitrary fuzz bytes.
+  FuzzResourceLoader loader(bytes);
+  const bool canAccountInput = size <= UrlLoader::kDefaultMaximumResourceSize &&
+                               size <= std::numeric_limits<size_t>::max() - maximumDecodedImageSize;
+  size_t remainingResourceBytes =
+      canAccountInput ? size + maximumDecodedImageSize : maximumDecodedImageSize;
+  ImageLoader imageLoader(loader, UrlLoader::kDefaultMaximumResourceSize, &remainingResourceBytes,
+                          maximumDecodedImageSize);
+
+  // Use a fixed URL with a raster image extension. The parser gates supported magic bytes before
+  // stb_image, so this exercises the PNG, JPEG, and GIF decoders on arbitrary fuzz bytes.
   auto result = imageLoader.fromUri("fuzz-input.png");
-  (void)result;
+  if (std::holds_alternative<ImageResource>(result)) {
+    const ImageResource& image = std::get<ImageResource>(result);
+    if (image.data.size() > maximumDecodedImageSize || !canAccountInput ||
+        remainingResourceBytes != maximumDecodedImageSize - image.data.size()) {
+      std::abort();
+    }
+  }
 
   return 0;
 }

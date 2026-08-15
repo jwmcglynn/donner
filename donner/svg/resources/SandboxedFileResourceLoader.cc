@@ -15,22 +15,29 @@ namespace {
 
 bool IsPathUnderRoot(const std::filesystem::path& root, const std::filesystem::path& path) {
   assert(root.is_absolute());
-  const std::filesystem::path absRoot = root.lexically_normal();
-  const std::filesystem::path absPath = std::filesystem::absolute(path).lexically_normal();
+  assert(path.is_absolute());
 
-  return absPath.string().find(absRoot.string()) == 0;
+  auto rootIt = root.begin();
+  auto pathIt = path.begin();
+  for (; rootIt != root.end() && pathIt != path.end(); ++rootIt, ++pathIt) {
+    if (*rootIt != *pathIt) {
+      return false;
+    }
+  }
+  return rootIt == root.end();
 }
 
 }  // namespace
 
 SandboxedFileResourceLoader::SandboxedFileResourceLoader(const std::filesystem::path& root,
-                                                         const std::filesystem::path& documentPath)
-    : root_(root), documentPath_(documentPath) {
+                                                         const std::filesystem::path& documentPath,
+                                                         size_t maximumResourceSize)
+    : root_(root), documentPath_(documentPath), maximumResourceSize_(maximumResourceSize) {
   UTILS_RELEASE_ASSERT_MSG(std::filesystem::is_directory(root_), "Root directory does not exist");
 
-  root_ = std::filesystem::absolute(root_);
-  documentPath_ = std::filesystem::absolute(documentPath);
-  documentPath_ = documentPath_.parent_path();
+  root_ = std::filesystem::canonical(root_);
+  documentPath_ =
+      std::filesystem::weakly_canonical(std::filesystem::absolute(documentPath)).parent_path();
 }
 
 std::variant<std::vector<uint8_t>, ResourceLoaderError>
@@ -41,31 +48,44 @@ SandboxedFileResourceLoader::fetchExternalResource(std::string_view url) {
     path = documentPath_ / path;
   }
 
+  std::error_code canonicalError;
+  path = std::filesystem::canonical(path, canonicalError);
+  if (canonicalError) {
+    return ResourceLoaderError::NotFound;
+  }
+
   if (!IsPathUnderRoot(root_, path)) {
     return ResourceLoaderError::SandboxViolation;
   }
 
-  // Validated, now read the file.
-  std::ifstream file(path, std::ios::binary);
-  if (!file.is_open() || !std::filesystem::is_regular_file(path)) {
+  std::error_code statusError;
+  if (!std::filesystem::is_regular_file(path, statusError) || statusError) {
     return ResourceLoaderError::NotFound;
   }
 
-  // Read the file into a vector.
-  file.seekg(0, std::ios::end);
+  const uintmax_t fileSize = std::filesystem::file_size(path, statusError);
+  if (statusError || fileSize > std::numeric_limits<size_t>::max()) {
+    return ResourceLoaderError::NotFound;
+  }
+  if (fileSize > maximumResourceSize_) {
+    return ResourceLoaderError::TooLarge;
+  }
+
+  // Open the canonical path rather than the attacker-controlled symlink path.
+  std::ifstream file(path, std::ios::binary);
+  if (!file.is_open()) {
+    return ResourceLoaderError::NotFound;
+  }
 
   std::vector<uint8_t> data;
-  const std::streamsize fileSize = file.tellg();
-  if (fileSize < 0 ||
-      static_cast<uint64_t>(fileSize) > static_cast<uint64_t>(std::numeric_limits<size_t>::max())) {
+  data.resize(static_cast<size_t>(fileSize));
+  file.read(reinterpret_cast<char*>(data.data()),
+            static_cast<std::streamsize>(fileSize));  // NOLINT
+  if (file.bad() || file.gcount() != static_cast<std::streamsize>(fileSize)) {
     return ResourceLoaderError::NotFound;
   }
-
-  data.resize(static_cast<size_t>(fileSize));
-  file.seekg(0, std::ios::beg);
-  file.read(reinterpret_cast<char*>(data.data()), fileSize);  // NOLINT, allow reinterpret_cast.
-  if (file.bad() || file.gcount() != fileSize) {
-    return ResourceLoaderError::NotFound;
+  if (file.peek() != std::char_traits<char>::eof()) {
+    return ResourceLoaderError::TooLarge;
   }
 
   return data;

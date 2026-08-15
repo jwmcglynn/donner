@@ -55,7 +55,9 @@ SubDocumentCache::ParseCallback GuardSvgParseCallback(
 
 }  // namespace
 
-ResourceManagerContext::ResourceManagerContext(Registry& registry) : registry_(registry) {}
+ResourceManagerContext::ResourceManagerContext(Registry& registry,
+                                               size_t maximumAggregateResourceSize)
+    : registry_(registry), remainingResourceBytes_(maximumAggregateResourceSize) {}
 
 void ResourceManagerContext::loadResources(ParseWarningSink& warningSink) {
   // In SecureStatic mode, sub-documents are not allowed to load external resources (SVG2 §2.7.1).
@@ -124,7 +126,8 @@ void ResourceManagerContext::loadResources(ParseWarningSink& warningSink) {
       continue;
     }
 
-    ImageLoader imageLoader(loader);
+    ImageLoader imageLoader(loader, UrlLoader::kDefaultMaximumResourceSize,
+                            &remainingResourceBytes_);
 
     auto imageResult = imageLoader.fromUri(image.href);
     if (std::holds_alternative<UrlLoaderError>(imageResult)) {
@@ -163,14 +166,15 @@ void ResourceManagerContext::loadResources(ParseWarningSink& warningSink) {
         registry_.emplace<LoadedImageComponent>(entity);
       }
     } else {
-      registry_.emplace<LoadedImageComponent>(entity, std::get<ImageResource>(imageResult));
+      ImageResource imageResource = std::get<ImageResource>(std::move(imageResult));
+      registry_.emplace<LoadedImageComponent>(entity, std::move(imageResource));
     }
   }
 
   // Hydrate URL font sources into data sources. FontManager owns parsing and caches decoded font
   // handles on demand; ResourceManager only resolves bytes while the document resource loader is
   // available.
-  UrlLoader urlLoader(loader);
+  UrlLoader urlLoader(loader, UrlLoader::kDefaultMaximumResourceSize, &remainingResourceBytes_);
   for (const size_t fontFaceIndex : fontFaceIndexesToLoad_) {
     css::FontFace& fontFace = fontFaces_[fontFaceIndex];
     for (css::FontFaceSource& source : fontFace.sources) {
@@ -235,19 +239,21 @@ std::optional<SVGDocumentHandle> ResourceManagerContext::loadExternalSVG(
     return cached;
   }
 
-  // Fetch the file content.
+  // Fetch the file content using the same per-resource and aggregate budgets as images and fonts.
   WriteAccessGuardedResourceLoader guardedLoader(registry_, *loader_);
-  auto fetchResult = guardedLoader.fetchExternalResource(std::string_view(url));
-  if (std::holds_alternative<ResourceLoaderError>(fetchResult)) {
+  UrlLoader urlLoader(guardedLoader, UrlLoader::kDefaultMaximumResourceSize,
+                      &remainingResourceBytes_);
+  auto fetchResult = urlLoader.fromUri(url);
+  if (std::holds_alternative<UrlLoaderError>(fetchResult)) {
     ParseDiagnostic err;
-    const auto loaderError = std::get<ResourceLoaderError>(fetchResult);
-    err.reason = std::string("Failed to load external SVG '") + std::string(url) + "': " +
-                 (loaderError == ResourceLoaderError::NotFound ? "not found" : "sandbox violation");
+    const auto loaderError = std::get<UrlLoaderError>(fetchResult);
+    err.reason = std::string("Failed to load external SVG '") + std::string(url) +
+                 "': " + std::string(ToString(loaderError));
     warningSink.add(std::move(err));
     return std::nullopt;
   }
 
-  auto& data = std::get<std::vector<uint8_t>>(fetchResult);
+  auto& data = std::get<UrlLoader::Result>(fetchResult).data;
   SubDocumentCache::ParseCallback guardedParseCallback =
       GuardSvgParseCallback(registry_, svgParseCallback_);
   return cache.getOrParse(url, data, guardedParseCallback, warningSink);
@@ -286,7 +292,7 @@ const LoadedImageComponent* ResourceManagerContext::getLoadedImageComponent(Enti
       registry_, loader_ ? *loader_ : static_cast<ResourceLoaderInterface&>(nullLoader));
   ResourceLoaderInterface& loader = loader_ ? static_cast<ResourceLoaderInterface&>(guardedLoader)
                                             : static_cast<ResourceLoaderInterface&>(nullLoader);
-  ImageLoader imageLoader(loader);
+  ImageLoader imageLoader(loader, UrlLoader::kDefaultMaximumResourceSize, &remainingResourceBytes_);
 
   auto imageResult = imageLoader.fromUri(image->href);
   if (std::holds_alternative<ImageResource>(imageResult)) {
