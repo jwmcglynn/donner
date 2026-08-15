@@ -679,16 +679,13 @@
         "createBindGroup",
         "createBindGroupLayout",
         "createBuffer",
-        "createCommandEncoder",
         "createComputePipeline",
         "createPipelineLayout",
         "createTexture",
         "createView",
         "dispatchWorkgroups",
-        "finish",
         "setBindGroup",
         "setPipeline",
-        "submit",
         "writeBuffer",
         "writeTexture"
       ],
@@ -709,9 +706,7 @@
         "BufferBindingType",
         "BufferDescriptor",
         "BufferUsage",
-        "CommandBuffer",
         "CommandEncoder",
-        "CommandEncoderDescriptor",
         "ComputePassDescriptor",
         "ComputePassEncoder",
         "ComputePipeline",
@@ -738,6 +733,7 @@
     "donner/svg/renderer/geode/GeodeFilterEngine.h": {
       "wgpuCppTokens": [
         "BindGroupLayout",
+        "CommandEncoder",
         "ComputePipeline",
         "Device",
         "Texture"
