@@ -125,6 +125,18 @@ py_test(
 )
 
 py_test(
+    name = "security_workflow_policy_tests",
+    size = "small",
+    srcs = ["security_workflow_policy_tests.py"],
+    data = [
+        "//:.github/workflows/codeql.yml",
+        "//:.github/workflows/fuzz.yml",
+        "//:.github/workflows/sanitizers.yml",
+    ],
+    deps = ["@rules_python//python/runfiles"],
+)
+
+py_test(
     name = "coverage_lane_routing_tests",
     size = "small",
     srcs = ["coverage_lane_routing_tests.py"],
