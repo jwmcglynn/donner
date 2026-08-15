@@ -163,6 +163,15 @@ bool TextBackendFull::embeddedBitmapLoadingDisabledForTesting(FontHandle font) c
   return hbFont && (hb_ft_font_get_load_flags(hbFont) & FT_LOAD_NO_BITMAP) != 0;
 }
 
+namespace {
+
+FT_Int32 FreeTypeLoadFlags(const FontManager& fontManager, FontHandle font) {
+  return FT_LOAD_NO_HINTING |
+         (fontManager.isTrustedFont(font) ? FT_Int32{0} : FT_Int32{FT_LOAD_NO_BITMAP});
+}
+
+}  // namespace
+
 // ---------------------------------------------------------------------------
 // Font cache
 // ---------------------------------------------------------------------------
@@ -221,7 +230,7 @@ hb_font_t* TextBackendFull::getOrCreateHbFont(FontHandle handle) const {
   // Disable hinting for glyph outline extraction so outlines match raw font data
   // (consistent with stb_truetype and resvg's ttf-parser). Hinting changes glyph
   // proportions, causing width/height mismatches against reference renderers.
-  hb_ft_font_set_load_flags(entry.font, FT_LOAD_NO_HINTING);
+  hb_ft_font_set_load_flags(entry.font, FreeTypeLoadFlags(fontManager_, handle));
   return entry.font;
 }
 
@@ -384,7 +393,8 @@ Path TextBackendFull::glyphOutline(FontHandle font, int glyphIndex, float scale)
   // Use NO_HINTING to match the HarfBuzz font configuration (set in getOrCreateHbFont).
   // Hinted outlines differ from unhinted metrics, causing shape/position mismatches
   // especially for composite glyphs (precomposed accented characters like e).
-  if (FT_Load_Glyph(ftFace, static_cast<FT_UInt>(glyphIndex), FT_LOAD_NO_HINTING) != 0) {
+  if (FT_Load_Glyph(ftFace, static_cast<FT_UInt>(glyphIndex),
+                    FreeTypeLoadFlags(fontManager_, font)) != 0) {
     return {};
   }
 
