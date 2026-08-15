@@ -28,12 +28,24 @@ on:
   workflow_dispatch:
   pull_request:
     paths:
+      - ".bazelrc"
+      - "MODULE.bazel"
+      - "MODULE.bazel.lock"
       - "**/*_fuzzer.cc"
       - "**/*_fuzzer.cpp"
       - "**/*_fuzzer.h"
       - "**/corpus/**"
-      - "build_defs/rules.bzl"
+      - "build_defs/**"
+      - "donner/base/**"
+      - "donner/css/**"
+      - "donner/editor/**"
+      - "donner/svg/**"
+      - "tools/mcp-servers/editor-control/**"
+      - "third_party/**"
       - ".github/workflows/fuzz.yml"
+
+permissions:
+  contents: read
 
 concurrency:
   group: ${{ github.event_name == 'pull_request' && format('pr-{0}-{1}', github.workflow, github.event.pull_request.number) || format('run-{0}-{1}', github.workflow, github.run_id) }}
@@ -81,6 +93,30 @@ jobs:
             --build_tag_filters=fuzz_target \
             //...
 
+      - name: Test text-full fuzzers
+        run: |
+          bazelisk test \
+            --config=asan-fuzzer \
+            --config=fuzz-soak \
+            --config=text-full \
+            --test_output=errors \
+            //donner/base/fonts:woff2_parser_fuzzer \
+            //donner/base/fonts:woff2_parser_fuzzer_soak \
+            //donner/svg/parser:svg_parser_structured_fuzzer \
+            //donner/svg/parser:svg_parser_structured_fuzzer_soak \
+            //donner/svg/renderer/tests:svg_document_render_fuzzer \
+            //donner/svg/renderer/tests:svg_document_render_fuzzer_soak
+
+      - name: Test Geode render fuzzer
+        run: |
+          bazelisk test \
+            --config=geode \
+            --config=asan-fuzzer \
+            --config=fuzz-soak \
+            --test_output=errors \
+            //donner/svg/renderer/tests:svg_document_render_fuzzer \
+            //donner/svg/renderer/tests:svg_document_render_fuzzer_soak
+
   macos:
     runs-on: macos-26
     timeout-minutes: 60
@@ -108,3 +144,17 @@ jobs:
             --test_tag_filters=fuzz_target \
             --build_tag_filters=fuzz_target \
             //...
+
+      - name: Test text-full fuzzers
+        run: |
+          bazelisk test \
+            --config=asan-fuzzer \
+            --config=fuzz-soak \
+            --config=text-full \
+            --test_output=errors \
+            //donner/base/fonts:woff2_parser_fuzzer \
+            //donner/base/fonts:woff2_parser_fuzzer_soak \
+            //donner/svg/parser:svg_parser_structured_fuzzer \
+            //donner/svg/parser:svg_parser_structured_fuzzer_soak \
+            //donner/svg/renderer/tests:svg_document_render_fuzzer \
+            //donner/svg/renderer/tests:svg_document_render_fuzzer_soak

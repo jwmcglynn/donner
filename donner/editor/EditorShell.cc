@@ -142,18 +142,18 @@ void PublishSampleThumbnailStats(int requested, int started, int completed, int 
 }
 
 void PublishInteractionStats(int selectedCount, int pendingClick, int workerBusy, int dragging,
-                             double frame) {
+                             int dragHasVisualChange) {
   MAIN_THREAD_ASYNC_EM_ASM(
       {
         window['__donnerInteractionStats'] = ({
           'selectedCount' : $0,
-          'pendingClick' : Boolean($1),
-          'workerBusy' : Boolean($2),
-          'dragging' : Boolean($3),
-          'publishedAtFrame' : Number($4),
+          'pendingClick' : !!$1,
+          'workerBusy' : !!$2,
+          'dragging' : !!$3,
+          moved : !!$4,
         });
       },
-      selectedCount, pendingClick, workerBusy, dragging, frame);
+      selectedCount, pendingClick, workerBusy, dragging, dragHasVisualChange);
 }
 
 /**
@@ -1602,10 +1602,7 @@ void EditorShell::applyPendingDocumentSpaceReplayInputForTesting() {
     }
 
     const auto previewBeforeRelease = selectTool_.activeDragPreview();
-    const bool previewHadVisualChange =
-        previewBeforeRelease.has_value() &&
-        (!previewBeforeRelease->documentFromCachedDocument.isIdentity() ||
-         previewBeforeRelease->translation != Vector2d::Zero());
+    const bool previewHadVisualChange = selectTool_.dragHasVisualChange();
     selectTool_.onMouseUp(app_, input.documentPoint);
     lastPostedScreenPoint_.reset();
     if (previewBeforeRelease.has_value() && previewHadVisualChange) {
@@ -3573,10 +3570,7 @@ void EditorShell::updateRenderPaneSelectionDrag(bool spaceHeld,
     }
     if (ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
       const auto previewBeforeRelease = selectTool_.activeDragPreview();
-      const bool previewHadVisualChange =
-          previewBeforeRelease.has_value() &&
-          (!previewBeforeRelease->documentFromCachedDocument.isIdentity() ||
-           previewBeforeRelease->translation != Vector2d::Zero());
+      const bool previewHadVisualChange = selectTool_.dragHasVisualChange();
       selectTool_.onMouseUp(app_, screenToDocument(ImGui::GetMousePos()));
       lastPostedScreenPoint_.reset();
       if (previewBeforeRelease.has_value()) {
@@ -6598,7 +6592,7 @@ void EditorShell::recordFrameTelemetry(
                           interactionController_.pendingClick().has_value() ? 1 : 0,
                           renderCoordinator_.asyncRenderer().isBusy() ? 1 : 0,
                           selectTool_.isDragging() ? 1 : 0,
-                          static_cast<double>(frameTelemetryFrame_));
+                          selectTool_.dragHasVisualChange() ? 1 : 0);
   {
     const ViewportState& viewport = interactionController_.viewport();
     const Box2d documentRect = viewport.imageScreenRect();

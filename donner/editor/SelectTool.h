@@ -167,6 +167,12 @@ public:
   /// successful hit-test on mouse-down).
   [[nodiscard]] bool isDragging() const { return dragState_.has_value(); }
 
+  /// Whether the active drag preview has moved away from its captured placement.
+  [[nodiscard]] bool dragHasVisualChange() const {
+    return dragState_.has_value() && (!dragState_->currentDocumentFromStartDocument.isIdentity() ||
+                                      dragState_->currentDocumentDelta != Vector2d::Zero());
+  }
+
   /// Whether a marquee selection is currently in progress (button is
   /// held after a `onMouseDown` that hit empty space).
   [[nodiscard]] bool isMarqueeing() const { return marqueeState_.has_value(); }

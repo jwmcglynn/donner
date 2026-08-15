@@ -825,6 +825,11 @@ private:
   /// invalidates entity handles.
   std::uint64_t compositorDocumentGeneration_ = 0;
 
+  /// Worker-owned identity for freshly captured full-canvas fallback payloads. Unlike document
+  /// frame versions, this advances when zoom or pan captures different pixels without a DOM edit.
+  /// It intentionally survives compositor resets and document replacement within this renderer.
+  std::uint64_t fullCanvasPayloadGeneration_ = 0;
+
   struct PublishedCompositedTile {
     RenderResult::CompositedTile::Kind kind = RenderResult::CompositedTile::Kind::Segment;
     std::uint64_t generation = 0;

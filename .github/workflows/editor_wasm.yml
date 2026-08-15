@@ -2,7 +2,6 @@ name: Editor WASM
 
 on:
   pull_request:
-    branches: [main]
     paths:
       - ".bazelignore"
       - ".bazelrc"
@@ -48,6 +47,8 @@ jobs:
           bazelisk test --test_output=errors \
             //donner/editor/wasm:editor_wasm_transition_tests \
             //donner/svg/renderer:geode_excludes_tiny_skia_audit
+          bazelisk test --config=wasm-size --test_output=errors \
+            //donner/svg/renderer/wasm:render_test
           bazelisk test --config=editor-wasm --test_output=errors --remote_download_outputs=all //donner/editor/wasm:wasm_geode_package_size_tests
 
       - name: Stage package for handoff

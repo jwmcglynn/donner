@@ -313,10 +313,13 @@ TEST_F(SelectToolTest, DragTranslatesSelectedElement) {
 
 TEST_F(SelectToolTest, DragPreviewTracksLatestDeltaBeforeMouseUp) {
   app.setSelection(elementById("#r1"));
+  EXPECT_FALSE(tool.dragHasVisualChange());
   tool.onMouseDown(app, Vector2d(15.0, 15.0), MouseModifiers{});
+  EXPECT_FALSE(tool.dragHasVisualChange());
   tool.onMouseMove(app, Vector2d(50.0, 35.0), /*buttonHeld=*/true);
 
   ASSERT_TRUE(tool.activeDragPreview().has_value());
+  EXPECT_TRUE(tool.dragHasVisualChange());
   EXPECT_DOUBLE_EQ(tool.activeDragPreview()->translation.x, 35.0);
   EXPECT_DOUBLE_EQ(tool.activeDragPreview()->translation.y, 20.0);
   // DOM is source of truth during drag - `onMouseMove` queues a

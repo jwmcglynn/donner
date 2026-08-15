@@ -69,6 +69,7 @@ build --copt=-fno-rtti
 build --per_file_copt=external/google_benchmark[+]/.*@-Wno-thread-safety-analysis
 build --per_file_copt=external/glfw[+]/.*@-Wno-enum-enum-conversion
 build --per_file_copt=external/freetype[+]/.*@-Wno-macro-redefined
+build --per_file_copt=external/brotli[+]/.*@-Wno-macro-redefined
 build --per_file_copt=external/imgui[+]/.*@-Wno-missing-braces
 
 # Use registered clang toolchain.
