@@ -117,6 +117,7 @@ py_test(
     size = "small",
     srcs = ["ci_runtime_workflow_tests.py"],
     data = [
+        "//:.bazelrc",
         "//:.github/workflows/coverage.yml",
         "//:.github/workflows/main.yml",
         "//tools:coverage.sh",

@@ -545,6 +545,7 @@ jobs:
             echo "${{ needs.determine-targets.outputs.affected }}"
           fi)
           bazelisk test --config=ci --test_output=errors \
+            --test_tag_filters=-manual,-perf \
             $TARGETS
 
       - name: Upload Bazel test failure artifacts
@@ -953,6 +954,7 @@ jobs:
             bazelisk test --config=ci --config=latest_llvm --test_output=errors \
             $BAZEL_SELF_HOSTED_REMOTE_FALLBACK_FLAGS \
             $DIAG_TEST_FLAGS \
+            --test_tag_filters=-manual,-perf \
             --profile="$DIAG_DIR/test/profile.gz" \
             --build_event_json_file="$DIAG_DIR/test/bep.json" \
             --nobuild_event_json_file_path_conversion \
@@ -1063,6 +1065,7 @@ jobs:
             echo "${{ needs.determine-targets.outputs.affected }}"
           fi)
           bazelisk test --config=ci --test_output=errors \
+            --test_tag_filters=-manual,-perf \
             $BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS $TARGETS
         # Deterministic fuzzer corpus replay remains in this Bazel suite. Sanitizer-backed mutation
         # runs nightly or on demand in `.github/workflows/fuzz.yml`.
@@ -1153,6 +1156,7 @@ jobs:
             echo "${{ needs.determine-targets.outputs.affected }}"
           fi)
           bazelisk --nohome_rc test --config=ci --test_output=errors \
+            --test_tag_filters=-manual,-perf \
             $BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS $TARGETS
         # Deterministic fuzzer corpus replay remains in this Bazel suite. Sanitizer-backed mutation
         # runs nightly or on demand in `.github/workflows/fuzz.yml`.

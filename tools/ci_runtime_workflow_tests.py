@@ -22,6 +22,7 @@ def _workflow_text(path):
 class CiRuntimeWorkflowTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
+        cls.bazelrc = _workflow_text(".bazelrc")
         cls.main = _workflow_text(".github/workflows/main.yml")
         cls.coverage = _workflow_text(".github/workflows/coverage.yml")
         cls.coverage_script = _workflow_text("tools/coverage.sh")
@@ -82,6 +83,7 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
 
     def test_pr_test_lanes_exclude_manual_targets_at_the_command_line(self):
         """Runner bazelrcs cannot re-enable opt-in tests during full fallbacks."""
+        self.assertIn("test:ci --test_tag_filters=-manual,-perf", self.bazelrc)
         for job_name in ("linux", "linux-self-hosted", "macos", "macos-self-hosted"):
             with self.subTest(job=job_name):
                 job = self._job_body(job_name)
