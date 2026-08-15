@@ -3593,6 +3593,7 @@ void RendererGeode::popFilterLayer() {
       copyEncoder.get().copyTextureToTexture(src, dst, extent);
       geode::ScopedWgpuHandle<wgpu::CommandBuffer> copyCmd(copyEncoder.get().finish());
       impl_->device->queue().submit(1, &copyCmd.get());
+      impl_->device->countSubmit();
 
       // [Vulkan filter-sync] This copy is its own submit, but the blit below
       // records a sample of `viewportTexture` into the frame encoder, which

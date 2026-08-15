@@ -89,6 +89,19 @@ constexpr std::string_view kModerateSvg = R"SVG(
 </svg>
 )SVG";
 
+/// One sRGB Gaussian blur. Sigma 4 selects six box-blur compute passes.
+constexpr std::string_view kFilteredBlurSvg = R"SVG(
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <defs>
+    <filter id="blur" x="0" y="0" width="100" height="100"
+            filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feGaussianBlur stdDeviation="4"/>
+    </filter>
+  </defs>
+  <rect x="20" y="20" width="60" height="60" fill="red" filter="url(#blur)"/>
+</svg>
+)SVG";
+
 /// Dump counters to stderr so the observed values are visible in normal
 /// test output (RecordProperty only surfaces in XML). Format keeps each
 /// counter on its own column for easy diffing across milestones.
@@ -245,6 +258,22 @@ TEST_F(GeodePerfTest, Moderate_BaselineCeilings) {
   EXPECT_LE(c.submits, 3u);           // M3: target = 2 steady-state (frame + readback).
   EXPECT_LE(c.drawCalls, 6u);         // 2 fills + blit composites.
   EXPECT_LE(c.pipelineSwitches, 6u);  // Solid / gradient / image pipelines + mask if any.
+}
+
+TEST_F(GeodePerfTest, GaussianBlur_UsesSingleFrameSubmission) {
+  auto device = sharedDevice();
+  ASSERT_TRUE(device) << "GeodeDevice::CreateHeadless failed";
+
+  const geode::GeodeCounters c = renderAndGetCounters(kFilteredBlurSvg, device);
+
+  RecordProperty("submits", std::to_string(c.submits));
+  RecordProperty("bufferCreates", std::to_string(c.bufferCreates));
+  RecordProperty("textureCreates", std::to_string(c.textureCreates));
+  printCounters(::testing::UnitTest::GetInstance()->current_test_info()->name(), c);
+
+  EXPECT_LE(c.submits, 2u)
+      << "The filter layer, all Gaussian passes, composite, and readback should require only the "
+         "shared frame submission plus the snapshot submission.";
 }
 
 // ---------------------------------------------------------------------------
@@ -516,8 +545,7 @@ TEST_F(GeodePerfTest, Lion_NoDirtyPath_ZeroEncodes) {
   // M1 (GeodeBufferPool): pre-pool this was 12 creates/frame (arena
   // re-growth in the per-frame encoder); pooled steady state is the
   // readback buffer only.
-  EXPECT_LE(c.bufferCreates, 3u)
-      << "Arena buffer churn on an unchanged second render of lion.svg.";
+  EXPECT_LE(c.bufferCreates, 3u) << "Arena buffer churn on an unchanged second render of lion.svg.";
   // Wave 2 (GPU residence) - the headline steady-state win. All 132 solid
   // fills are GPU-resident from frame 1, so an unchanged second render
   // re-uploads zero geometry bytes and creates zero bind groups. Wave-1

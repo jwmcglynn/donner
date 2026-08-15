@@ -627,6 +627,7 @@ void dispatchTwoInputUniform(GeodeDevice& device, const wgpu::BindGroupLayout& b
 
   ScopedWgpuHandle<wgpu::CommandBuffer> cmdBuf(encoder.get().finish());
   device.queue().submit(1, &cmdBuf.get());
+  device.countSubmit();
   // [Vulkan filter-sync] Force each filter compute pass to fully complete
   // before the next pass samples its storage-texture output. On hardware
   // Vulkan (Intel Arc) the automatic cross-submit storage-write ->
@@ -687,6 +688,7 @@ void dispatchInputOutputUniform(GeodeDevice& device, const wgpu::BindGroupLayout
 
   ScopedWgpuHandle<wgpu::CommandBuffer> cmdBuf(encoder.get().finish());
   device.queue().submit(1, &cmdBuf.get());
+  device.countSubmit();
   // [Vulkan filter-sync] Force each filter compute pass to fully complete
   // before the next pass samples its storage-texture output. On hardware
   // Vulkan (Intel Arc) the automatic cross-submit storage-write ->
@@ -2176,6 +2178,7 @@ wgpu::Texture GeodeFilterEngine::applyFlood(
 
   ScopedWgpuHandle<wgpu::CommandBuffer> cmdBuf(encoder.get().finish());
   device_.queue().submit(1, &cmdBuf.get());
+  device_.countSubmit();
   // [Vulkan filter-sync] Force each filter compute pass to fully complete
   // before the next pass samples its storage-texture output. On hardware
   // Vulkan (Intel Arc) the automatic cross-submit storage-write ->
@@ -2277,6 +2280,7 @@ wgpu::Texture GeodeFilterEngine::runMergePass(FilterResourceArena& arena, const 
 
   ScopedWgpuHandle<wgpu::CommandBuffer> cmdBuf(encoder.get().finish());
   device_.queue().submit(1, &cmdBuf.get());
+  device_.countSubmit();
   // [Vulkan filter-sync] Force each filter compute pass to fully complete
   // before the next pass samples its storage-texture output. On hardware
   // Vulkan (Intel Arc) the automatic cross-submit storage-write ->
@@ -2496,6 +2500,7 @@ wgpu::Texture GeodeFilterEngine::applyComponentTransfer(
 
   ScopedWgpuHandle<wgpu::CommandBuffer> cmdBuf(encoder.get().finish());
   device_.queue().submit(1, &cmdBuf.get());
+  device_.countSubmit();
   // [Vulkan filter-sync] Force each filter compute pass to fully complete
   // before the next pass samples its storage-texture output. On hardware
   // Vulkan (Intel Arc) the automatic cross-submit storage-write ->
@@ -2622,6 +2627,7 @@ wgpu::Texture GeodeFilterEngine::applyConvolveMatrix(
 
   ScopedWgpuHandle<wgpu::CommandBuffer> cmdBuf(encoder.get().finish());
   device_.queue().submit(1, &cmdBuf.get());
+  device_.countSubmit();
   // [Vulkan filter-sync] Force each filter compute pass to fully complete
   // before the next pass samples its storage-texture output. On hardware
   // Vulkan (Intel Arc) the automatic cross-submit storage-write ->
@@ -2740,6 +2746,7 @@ wgpu::Texture GeodeFilterEngine::applyTurbulence(
 
   ScopedWgpuHandle<wgpu::CommandBuffer> cmdBuf(encoder.get().finish());
   device_.queue().submit(1, &cmdBuf.get());
+  device_.countSubmit();
   // [Vulkan filter-sync] Force each filter compute pass to fully complete
   // before the next pass samples its storage-texture output. On hardware
   // Vulkan (Intel Arc) the automatic cross-submit storage-write ->
@@ -2994,6 +3001,7 @@ wgpu::Texture GeodeFilterEngine::applyDiffuseLighting(
 
   ScopedWgpuHandle<wgpu::CommandBuffer> cmdBuf(encoder.get().finish());
   device_.queue().submit(1, &cmdBuf.get());
+  device_.countSubmit();
   // [Vulkan filter-sync] Force each filter compute pass to fully complete
   // before the next pass samples its storage-texture output. On hardware
   // Vulkan (Intel Arc) the automatic cross-submit storage-write ->
@@ -3123,6 +3131,7 @@ wgpu::Texture GeodeFilterEngine::applySpecularLighting(
 
   ScopedWgpuHandle<wgpu::CommandBuffer> cmdBuf(encoder.get().finish());
   device_.queue().submit(1, &cmdBuf.get());
+  device_.countSubmit();
   // [Vulkan filter-sync] Force each filter compute pass to fully complete
   // before the next pass samples its storage-texture output. On hardware
   // Vulkan (Intel Arc) the automatic cross-submit storage-write ->
