@@ -838,7 +838,7 @@ for (
     { id: "donner-showcase", name: "Donner Showcase", xFraction: 0.5, y: 390 },
   ] as const
 ) {
-  test(`carousel loads ${sample.name} on the first interactive frame`, async ({ page, browserName }) => {
+  test(`carousel loads ${sample.name} on the first interactive frame`, async ({ page }) => {
     const fatalMessages = await openEditor(page, { postInitializationDwellMs: 0 });
     const canvas = page.locator("canvas#canvas");
     const bounds = await canvas.boundingBox();
@@ -856,10 +856,10 @@ for (
     const beforeFrames = await page.evaluate(() => window.__donnerMainLoopRenderedFrames || 0);
     const clickStartedAt = await page.evaluate(() => performance.now());
     await page.mouse.click(bounds.x + bounds.width * sample.xFraction, bounds.y + sample.y);
-    // WebKit snapshot readback latency follows shared-runner load more closely
-    // than the other browser lanes. Keep their tighter bound while allowing
-    // WebKit enough headroom to avoid making runner speed the primary signal.
-    const carouselDeadlineMs = scaledMs(browserName === "webkit" ? 500 : 300);
+    // The overall poll bounds the interaction. This tighter gate owns only the
+    // handoff from a completed worker result to visible canvas pixels, so GPU
+    // readback speed cannot masquerade as a stalled browser presentation.
+    const presentationHandoffDeadlineMs = scaledMs(100);
     const phaseTimings: {
       activatedMs?: number;
       submittedMs?: number;
@@ -913,7 +913,12 @@ for (
         }`,
       );
     }
-    expect(phaseTimings.presentedMs).toBeLessThan(carouselDeadlineMs);
+    expect(phaseTimings.presentedMs).toBeDefined();
+    expect(phaseTimings.completedMs).toBeDefined();
+    expect(
+      phaseTimings.presentedMs! - phaseTimings.completedMs!,
+      `completed worker pixels did not reach the canvas promptly: ${JSON.stringify(phaseTimings)}`,
+    ).toBeLessThan(presentationHandoffDeadlineMs);
     if (kBackend === "geode" && (completedWorkerStats?.readbackCount || 0) > 0) {
       expect(completedWorkerStats?.readbackWaitStrategy).toBe("timed-wait-any");
     }

@@ -5,9 +5,9 @@
 /// Contract under test:
 ///  1. Overlay OFF is the default and is byte-identical to a renderer
 ///     that never touched the flag (zero behavior change when off).
-///  2. Overlay ON draws the actual post-vertex Slug triangle edges
-///     (`quadVertices` plus dynamic pixel dilation) without tinting normal
-///     document pixels between those edges.
+///  2. Overlay ON draws the actual post-vertex Slug convex-fan edges
+///     (`boundingVertices` plus dynamic pixel dilation and transform fallbacks)
+///     without tinting normal document pixels between those edges.
 ///  3. Overlay ON emits one frame-final wireframe draw; turning it back off
 ///     restores byte-identical output (no sticky state).
 
@@ -269,14 +269,14 @@ TEST_F(GeodeDebugOverlayTest, OnDrawsActualTriangleEdgesWithoutTintingInterior) 
   EXPECT_EQ(countMagentaFamilyPixels(off), 0);
   EXPECT_GT(countMagentaFamilyPixels(on), 50);
 
-  // The six quadVertices encode two triangles over the source bounds
+  // The rectangle's four bounding vertices encode a two-triangle fan over
   // (20,20)-(90,90). The overlay applies the vertex shader's dynamic dilation,
   // so the submitted outer edges move just beyond those bounds while the
   // shared diagonal still crosses (55,55). Point (40,70) remains strictly
-  // inside the quad and away from every submitted triangle edge.
-  // A real wireframe changes the diagonal and outer edge only. Regressing to
-  // a filled bounding quad turns the entire rectangle magenta and fails the
-  // interior assertion.
+  // inside the fan and away from every submitted triangle edge. A real
+  // wireframe changes the diagonal and outer edge only. Regressing to a filled
+  // bounding polygon turns the entire rectangle magenta and fails the interior
+  // assertion.
   EXPECT_NE(pixelAt(off, 55, 55), pixelAt(on, 55, 55))
       << "The shared edge between the two emitted Slug triangles must be visible.";
   EXPECT_TRUE(hasPixelDifference(off, on, 90, 52, 92, 58))

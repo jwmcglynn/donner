@@ -278,6 +278,281 @@ std::vector<CurveWithRange> omitRayParallelCurves(std::vector<CurveWithRange> cu
   return curves;
 }
 
+double polygonArea(const std::vector<Vector2d>& polygon) {
+  double twiceArea = 0.0;
+  for (size_t i = 0; i < polygon.size(); ++i) {
+    const Vector2d& a = polygon[i];
+    const Vector2d& b = polygon[(i + 1u) % polygon.size()];
+    twiceArea += a.x * b.y - a.y * b.x;
+  }
+  return std::abs(twiceArea) * 0.5;
+}
+
+/// Clip a counter-clockwise convex polygon against `normal dot point <= limit`.
+/// `limit` already includes the conservative float-rounding pad used for curve supports.
+std::vector<Vector2d> clipPolygon(std::vector<Vector2d> polygon, const Vector2d& normal,
+                                  double limit) {
+  if (polygon.empty()) {
+    return polygon;
+  }
+
+  std::vector<Vector2d> clipped;
+  clipped.reserve(polygon.size() + 1u);
+  Vector2d previous = polygon.back();
+  double previousDistance = previous.dot(normal) - limit;
+  bool previousInside = previousDistance <= 0.0;
+  for (const Vector2d& current : polygon) {
+    const double currentDistance = current.dot(normal) - limit;
+    const bool currentInside = currentDistance <= 0.0;
+    if (currentInside != previousInside) {
+      const double denominator = previousDistance - currentDistance;
+      if (denominator != 0.0) {
+        const double t = previousDistance / denominator;
+        clipped.push_back(previous + (current - previous) * t);
+      }
+    }
+    if (currentInside) {
+      clipped.push_back(current);
+    }
+    previous = current;
+    previousDistance = currentDistance;
+    previousInside = currentInside;
+  }
+  return clipped;
+}
+
+std::vector<Vector2d> aabbPolygon(const Box2d& bounds) {
+  return {{bounds.topLeft.x, bounds.topLeft.y},
+          {bounds.bottomRight.x, bounds.topLeft.y},
+          {bounds.bottomRight.x, bounds.bottomRight.y},
+          {bounds.topLeft.x, bounds.bottomRight.y}};
+}
+
+std::vector<Vector2d> smallControlHull(const std::vector<CurveWithRange>& curves) {
+  std::vector<Vector2d> points;
+  points.reserve(curves.size() * 3u);
+  for (const CurveWithRange& curve : curves) {
+    points.emplace_back(curve.curve.p0x, curve.curve.p0y);
+    points.emplace_back(curve.curve.p1x, curve.curve.p1y);
+    points.emplace_back(curve.curve.p2x, curve.curve.p2y);
+  }
+  std::sort(points.begin(), points.end(), [](const Vector2d& lhs, const Vector2d& rhs) {
+    return std::tie(lhs.x, lhs.y) < std::tie(rhs.x, rhs.y);
+  });
+  points.erase(std::unique(points.begin(), points.end(),
+                           [](const Vector2d& lhs, const Vector2d& rhs) {
+                             return lhs.x == rhs.x && lhs.y == rhs.y;
+                           }),
+               points.end());
+  if (points.size() < 3u) {
+    return {};
+  }
+
+  const auto cross = [](const Vector2d& origin, const Vector2d& a, const Vector2d& b) {
+    return (a.x - origin.x) * (b.y - origin.y) - (a.y - origin.y) * (b.x - origin.x);
+  };
+  std::vector<Vector2d> hull;
+  hull.reserve(points.size() + 1u);
+  for (const Vector2d& point : points) {
+    while (hull.size() >= 2u &&
+           cross(hull[hull.size() - 2u], hull[hull.size() - 1u], point) <= 0.0) {
+      hull.pop_back();
+    }
+    hull.push_back(point);
+  }
+  const size_t lowerSize = hull.size();
+  for (auto it = points.rbegin() + 1; it != points.rend(); ++it) {
+    while (hull.size() > lowerSize &&
+           cross(hull[hull.size() - 2u], hull[hull.size() - 1u], *it) <= 0.0) {
+      hull.pop_back();
+    }
+    hull.push_back(*it);
+  }
+  hull.pop_back();
+  return hull;
+}
+
+/// Intersect the exact AABB with diagonal control-point support bounds. Quadratic Béziers stay
+/// inside the convex hull of their control points, so the resulting polygon conservatively
+/// encloses every segment while using at most eight vertices.
+std::vector<Vector2d> buildSupportPolygon(const std::vector<CurveWithRange>& curves,
+                                          const Box2d& bounds) {
+  // Exact small hulls recover triangles and similarly simple geometry without paying an
+  // O(N log N) hull sort on complex paths. Larger paths go directly to the fixed-size support
+  // intersection below.
+  if (curves.size() <= 16u) {
+    std::vector<Vector2d> controlHull = smallControlHull(curves);
+    if (controlHull.size() >= 3u && controlHull.size() <= EncodedPath::kMaxBoundingVertices) {
+      return controlHull;
+    }
+  }
+
+  double sumMin = std::numeric_limits<double>::infinity();
+  double sumMax = -std::numeric_limits<double>::infinity();
+  double differenceMin = std::numeric_limits<double>::infinity();
+  double differenceMax = -std::numeric_limits<double>::infinity();
+  auto include = [&](double x, double y) {
+    sumMin = std::min(sumMin, x + y);
+    sumMax = std::max(sumMax, x + y);
+    differenceMin = std::min(differenceMin, x - y);
+    differenceMax = std::max(differenceMax, x - y);
+  };
+  for (const CurveWithRange& curve : curves) {
+    include(curve.curve.p0x, curve.curve.p0y);
+    include(curve.curve.p1x, curve.curve.p1y);
+    include(curve.curve.p2x, curve.curve.p2y);
+  }
+  if (!std::isfinite(sumMin) || !std::isfinite(sumMax) || !std::isfinite(differenceMin) ||
+      !std::isfinite(differenceMax)) {
+    return aabbPolygon(bounds);
+  }
+
+  const double supportScale = std::max({std::abs(sumMin), std::abs(sumMax), std::abs(differenceMin),
+                                        std::abs(differenceMax), bounds.width(), bounds.height(),
+                                        static_cast<double>(std::numeric_limits<float>::min())});
+  const double pad = supportScale * std::numeric_limits<float>::epsilon() * 8.0;
+
+  std::vector<Vector2d> polygon = aabbPolygon(bounds);
+  polygon = clipPolygon(std::move(polygon), Vector2d(1.0, 1.0), sumMax + pad);
+  polygon = clipPolygon(std::move(polygon), Vector2d(-1.0, -1.0), -sumMin + pad);
+  polygon = clipPolygon(std::move(polygon), Vector2d(1.0, -1.0), differenceMax + pad);
+  polygon = clipPolygon(std::move(polygon), Vector2d(-1.0, 1.0), -differenceMin + pad);
+  return polygon;
+}
+
+bool hasBoundedIdentityMiters(const std::vector<Vector2d>& polygon) {
+  constexpr double kMaxMiterPixels = 2.0;
+  for (size_t i = 0; i < polygon.size(); ++i) {
+    const Vector2d previous = polygon[(i + polygon.size() - 1u) % polygon.size()];
+    const Vector2d position = polygon[i];
+    const Vector2d next = polygon[(i + 1u) % polygon.size()];
+    const Vector2d incoming = position - previous;
+    const Vector2d outgoing = next - position;
+    const double incomingLength = incoming.length();
+    const double outgoingLength = outgoing.length();
+    if (!(incomingLength > 0.0) || !(outgoingLength > 0.0) || !std::isfinite(incomingLength) ||
+        !std::isfinite(outgoingLength)) {
+      return false;
+    }
+
+    const Vector2d incomingNormal(incoming.y / incomingLength, -incoming.x / incomingLength);
+    const Vector2d outgoingNormal(outgoing.y / outgoingLength, -outgoing.x / outgoingLength);
+    const double denominator = 1.0 + incomingNormal.dot(outgoingNormal);
+    if (!(denominator > 0.0) || !std::isfinite(denominator)) {
+      return false;
+    }
+    const Vector2d pixelDelta = 0.5 * (incomingNormal + outgoingNormal) / denominator;
+    if (!std::isfinite(pixelDelta.x) || !std::isfinite(pixelDelta.y) ||
+        pixelDelta.length() > kMaxMiterPixels) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool isValidFloatBoundingPolygon(
+    const std::array<Vector2f, EncodedPath::kMaxBoundingVertices>& vertices, size_t count) {
+  if (count < 3u || count > vertices.size()) {
+    return false;
+  }
+  const Vector2f origin = vertices[0];
+  double twiceArea = 0.0;
+  for (size_t i = 0; i < count; ++i) {
+    const Vector2f& previous = vertices[(i + count - 1u) % count];
+    const Vector2f& position = vertices[i];
+    const Vector2f& next = vertices[(i + 1u) % count];
+    if (!std::isfinite(position.x) || !std::isfinite(position.y) ||
+        (position.x == next.x && position.y == next.y)) {
+      return false;
+    }
+    const double incomingX = static_cast<double>(position.x) - previous.x;
+    const double incomingY = static_cast<double>(position.y) - previous.y;
+    const double outgoingX = static_cast<double>(next.x) - position.x;
+    const double outgoingY = static_cast<double>(next.y) - position.y;
+    if (!(incomingX * outgoingY - incomingY * outgoingX > 0.0)) {
+      return false;
+    }
+    twiceArea +=
+        (static_cast<double>(position.x) - origin.x) * (static_cast<double>(next.y) - origin.y) -
+        (static_cast<double>(position.y) - origin.y) * (static_cast<double>(next.x) - origin.x);
+  }
+  return twiceArea > 0.0 && std::isfinite(twiceArea);
+}
+
+void storeBoundingPolygon(EncodedPath& result, const std::vector<CurveWithRange>& curves,
+                          const Box2d& bounds) {
+  const double aabbArea = bounds.width() * bounds.height();
+  std::vector<Vector2d> polygon = buildSupportPolygon(curves, bounds);
+  double area = polygon.size() >= 3u ? polygonArea(polygon) : aabbArea;
+
+  // Extra support edges are worthwhile only when their fragment-area saving grows with the
+  // extra triangle count. Triangles always beat their AABB when valid; larger polygons must
+  // save 20%, plus 5% for every triangle beyond the AABB's two.
+  const size_t triangleCount = polygon.size() >= 3u ? polygon.size() - 2u : 0u;
+  const size_t extraTriangles = triangleCount > 2u ? triangleCount - 2u : 0u;
+  const double requiredSavingFraction = 0.20 + 0.05 * static_cast<double>(extraTriangles);
+  const bool validPolygon = polygon.size() >= 3u &&
+                            polygon.size() <= EncodedPath::kMaxBoundingVertices &&
+                            std::isfinite(area) && area > 0.0 && hasBoundedIdentityMiters(polygon);
+  bool useSupportPolygon = validPolygon && (aabbArea - area) >= aabbArea * requiredSavingFraction;
+  if (!useSupportPolygon) {
+    polygon = aabbPolygon(bounds);
+    area = aabbArea;
+  }
+
+  auto convertPolygon = [&](bool supportPolygon) {
+    std::array<Vector2f, EncodedPath::kMaxBoundingVertices> converted = {};
+    Vector2d center(0.0, 0.0);
+    for (const Vector2d& point : polygon) {
+      center += point;
+    }
+    center /= static_cast<double>(polygon.size());
+    const double conservativeScale =
+        supportPolygon ? 1.0 + 16.0 * std::numeric_limits<float>::epsilon() : 1.0;
+    for (size_t i = 0; i < polygon.size(); ++i) {
+      const Vector2d expanded = center + (polygon[i] - center) * conservativeScale;
+      float x = static_cast<float>(expanded.x);
+      float y = static_cast<float>(expanded.y);
+      if (supportPolygon) {
+        x = std::nextafter(x, x >= center.x ? std::numeric_limits<float>::infinity()
+                                            : -std::numeric_limits<float>::infinity());
+        y = std::nextafter(y, y >= center.y ? std::numeric_limits<float>::infinity()
+                                            : -std::numeric_limits<float>::infinity());
+      } else {
+        const bool left = i == 0u || i == 3u;
+        const bool top = i < 2u;
+        x = std::nextafter(x, left ? -std::numeric_limits<float>::infinity()
+                                   : std::numeric_limits<float>::infinity());
+        y = std::nextafter(y, top ? -std::numeric_limits<float>::infinity()
+                                  : std::numeric_limits<float>::infinity());
+      }
+      converted[i] = {x, y};
+    }
+    return converted;
+  };
+
+  auto converted = convertPolygon(useSupportPolygon);
+  if (useSupportPolygon && !isValidFloatBoundingPolygon(converted, polygon.size())) {
+    polygon = aabbPolygon(bounds);
+    area = aabbArea;
+    useSupportPolygon = false;
+    converted = convertPolygon(false);
+  }
+  if (!isValidFloatBoundingPolygon(converted, polygon.size())) {
+    result.boundingVertexCount = 0u;
+    result.stats.boundingGeometryArea = 0.0;
+    result.stats.boundingGeometryVertexCount = 0u;
+    return;
+  }
+
+  result.boundingVertexCount = static_cast<uint32_t>(polygon.size());
+  for (size_t i = 0; i < polygon.size(); ++i) {
+    result.boundingVertices[i] = {converted[i].x, converted[i].y};
+  }
+  result.stats.boundingGeometryArea = area;
+  result.stats.boundingGeometryVertexCount = result.boundingVertexCount;
+}
+
 /// Bin curves into bands along `axis` and flatten into the band/curve output vectors.
 /// For `BandAxis::Y` (horizontal bands, horizontal ray) the band's `yMin`/`yMax` are
 /// its strip boundaries and `xMin`/`xMax` are the curves' X-extent. For `BandAxis::X`
@@ -295,8 +570,11 @@ void bandCurves(const std::vector<CurveWithRange>& allCurves, const Box2d& bound
     return;
   }
 
-  UTILS_RELEASE_ASSERT_MSG(allCurves.size() <= std::numeric_limits<uint32_t>::max(),
-                           "Geode path has too many canonical curves for 32-bit references");
+  UTILS_RELEASE_ASSERT_MSG(
+      outCurves.size() <= std::numeric_limits<uint32_t>::max() &&
+          allCurves.size() <= std::numeric_limits<uint32_t>::max() - outCurves.size(),
+      "Geode path has too many canonical curves for 32-bit references");
+  const uint32_t canonicalBase = static_cast<uint32_t>(outCurves.size());
   outCurves.reserve(outCurves.size() + allCurves.size());
   for (const CurveWithRange& curve : allCurves) {
     outCurves.push_back(curve.curve);
@@ -309,17 +587,61 @@ void bandCurves(const std::vector<CurveWithRange>& allCurves, const Box2d& bound
   // family of per-band sorts.
   std::vector<size_t> sortedCurveIndices(allCurves.size());
   std::iota(sortedCurveIndices.begin(), sortedCurveIndices.end(), 0u);
-  std::stable_sort(sortedCurveIndices.begin(), sortedCurveIndices.end(),
-                   [&](size_t lhs, size_t rhs) {
-                     const CurveRange& lhsRange = allCurves[lhs].range;
-                     const CurveRange& rhsRange = allCurves[rhs].range;
-                     const float lhsMax = byY ? lhsRange.xMax : lhsRange.yMax;
-                     const float rhsMax = byY ? rhsRange.xMax : rhsRange.yMax;
-                     return lhsMax > rhsMax;
-                   });
+  std::sort(sortedCurveIndices.begin(), sortedCurveIndices.end(), [&](size_t lhs, size_t rhs) {
+    const CurveRange& lhsRange = allCurves[lhs].range;
+    const CurveRange& rhsRange = allCurves[rhs].range;
+    const float lhsMax = byY ? lhsRange.xMax : lhsRange.yMax;
+    const float rhsMax = byY ? rhsRange.xMax : rhsRange.yMax;
+    return lhsMax != rhsMax ? lhsMax > rhsMax : lhs < rhs;
+  });
 
-  // Per-band curve index lists.
-  std::vector<std::vector<size_t>> bandCurveIndices(bandCount);
+  // Build the compact row offsets directly. This avoids one heap allocation per band while
+  // preserving the globally sorted reference order inside every row.
+  std::vector<uint32_t> bandCounts(bandCount, 0u);
+  for (const CurveWithRange& curve : allCurves) {
+    const std::optional<BandSpan> curveSpan = curveBandSpan(curve.range, bounds, axis, bandCount);
+    if (!curveSpan) {
+      continue;
+    }
+    for (uint16_t band = curveSpan->first; band <= curveSpan->last; ++band) {
+      ++bandCounts[band];
+    }
+  }
+
+  outBands.reserve(outBands.size() + bandCount);
+  const size_t referenceBase = outCurveIndices.size();
+  uint64_t totalReferences = 0u;
+  std::vector<uint32_t> nonemptyCounts;
+  nonemptyCounts.reserve(bandCount);
+
+  for (uint16_t b = 0; b < bandCount; ++b) {
+    const uint32_t count = bandCounts[b];
+    if (count == 0u) {
+      continue;  // Skip empty bands entirely.
+    }
+
+    // Record the dense-grid cell → packed-band-slot mapping for O(1) shader lookup.
+    outGrid[b] = static_cast<uint32_t>(outBands.size());
+    UTILS_RELEASE_ASSERT_MSG(
+        referenceBase + totalReferences <= std::numeric_limits<uint32_t>::max() &&
+            count <= std::numeric_limits<uint32_t>::max() - referenceBase - totalReferences,
+        "Geode path band references overflow 32-bit storage");
+    outBands.push_back(
+        {static_cast<uint32_t>(referenceBase + totalReferences), static_cast<uint32_t>(count)});
+    totalReferences += count;
+    nonemptyCounts.push_back(count);
+  }
+
+  UTILS_RELEASE_ASSERT_MSG(totalReferences <= std::numeric_limits<size_t>::max() - referenceBase,
+                           "Geode path band references overflow addressable storage");
+  outCurveIndices.resize(referenceBase + static_cast<size_t>(totalReferences));
+  std::vector<uint32_t> writeOffsets(bandCount, 0u);
+  for (uint16_t b = 0; b < bandCount; ++b) {
+    const uint32_t slot = outGrid[b];
+    if (slot != EncodedPath::kNoBand) {
+      writeOffsets[b] = outBands[slot].curveStart;
+    }
+  }
   for (size_t ci : sortedCurveIndices) {
     const std::optional<BandSpan> curveSpan =
         curveBandSpan(allCurves[ci].range, bounds, axis, bandCount);
@@ -327,46 +649,21 @@ void bandCurves(const std::vector<CurveWithRange>& allCurves, const Box2d& bound
       continue;
     }
     for (uint16_t band = curveSpan->first; band <= curveSpan->last; ++band) {
-      bandCurveIndices[band].push_back(ci);
+      outCurveIndices[writeOffsets[band]++] = canonicalBase + static_cast<uint32_t>(ci);
     }
   }
 
-  outBands.reserve(outBands.size() + bandCount);
-  outCurveIndices.reserve(outCurveIndices.size() + allCurves.size() * 2u);
-
-  for (uint16_t b = 0; b < bandCount; ++b) {
-    const auto& indices = bandCurveIndices[b];
-    if (indices.empty()) {
-      continue;  // Skip empty bands entirely.
-    }
-
-    // Record the dense-grid cell → packed-band-slot mapping for O(1) shader lookup.
-    outGrid[b] = static_cast<uint32_t>(outBands.size());
-
-    EncodedPath::Band band = {};
-    UTILS_RELEASE_ASSERT_MSG(outCurveIndices.size() <= std::numeric_limits<uint32_t>::max(),
-                             "Geode path has too many band references for 32-bit offsets");
-    UTILS_RELEASE_ASSERT_MSG(
-        indices.size() <= std::numeric_limits<uint32_t>::max() - outCurveIndices.size(),
-        "Geode path band references overflow 32-bit storage");
-    band.curveStart = static_cast<uint32_t>(outCurveIndices.size());
-    band.curveCount = static_cast<uint32_t>(indices.size());
-    for (size_t ci : indices) {
-      outCurveIndices.push_back(static_cast<uint32_t>(ci));
-    }
-    outBands.push_back(band);
-  }
-
-  const BandMetrics metrics = evaluateBandCount(allCurves, bounds, axis, bandCount);
+  std::sort(nonemptyCounts.begin(), nonemptyCounts.end());
   outStats.canonicalCurveCount = static_cast<uint32_t>(allCurves.size());
-  outStats.curveReferenceCount = static_cast<uint32_t>(outCurveIndices.size());
+  outStats.curveReferenceCount = static_cast<uint32_t>(totalReferences);
   outStats.gridBandCount = bandCount;
   outStats.nonemptyBandCount = static_cast<uint32_t>(outBands.size());
-  outStats.maxCurvesPerBand = metrics.maxCurves;
-  outStats.p95CurvesPerBand = metrics.p95Curves;
-  if (!outBands.empty()) {
+  if (!nonemptyCounts.empty()) {
+    outStats.maxCurvesPerBand = nonemptyCounts.back();
+    const size_t p95Index = (nonemptyCounts.size() * 95u + 99u) / 100u - 1u;
+    outStats.p95CurvesPerBand = nonemptyCounts[p95Index];
     outStats.meanCurvesPerBand =
-        static_cast<double>(outCurveIndices.size()) / static_cast<double>(outBands.size());
+        static_cast<double>(totalReferences) / static_cast<double>(nonemptyCounts.size());
   }
 }
 
@@ -396,8 +693,6 @@ EncodedPath GeodePathEncoder::encode(const Path& path, FillRule /*fillRule*/, do
   }
   result.pathBounds = bounds;
   result.stats.aabbArea = bounds.width() * bounds.height();
-  result.stats.boundingGeometryArea = result.stats.aabbArea;
-  result.stats.boundingGeometryVertexCount = 4u;
 
   const float pathHeight = static_cast<float>(bounds.height());
   const float pathWidth = static_cast<float>(bounds.width());
@@ -407,6 +702,10 @@ EncodedPath GeodePathEncoder::encode(const Path& path, FillRule /*fillRule*/, do
 
   // Horizontal bands (Y-monotonic curves) for the horizontal ray.
   const std::vector<CurveWithRange> hAll = extractCurves(monoPathY);
+  storeBoundingPolygon(result, hAll, bounds);
+  if (result.boundingVertexCount < 3u) {
+    return result;
+  }
   const std::vector<CurveWithRange> hCurves = omitRayParallelCurves(hAll, BandAxis::Y);
   result.stats.horizontal.omittedParallelCurves =
       static_cast<uint32_t>(hAll.size() - hCurves.size());
@@ -440,22 +739,6 @@ EncodedPath GeodePathEncoder::encode(const Path& path, FillRule /*fillRule*/, do
       result.vStride = pathWidth / static_cast<float>(vBandCount);
       result.vBandCount = vBandCount;
     }
-  }
-
-  // Single bounding quad over the whole path for the analytic dual-ray fill shader.
-  // One quad → each pixel shaded once → folded coverage composes (no seam double-count).
-  {
-    const auto qxMin = static_cast<float>(bounds.topLeft.x);
-    const auto qyMin = static_cast<float>(bounds.topLeft.y);
-    const auto qxMax = static_cast<float>(bounds.bottomRight.x);
-    const auto qyMax = static_cast<float>(bounds.bottomRight.y);
-    result.quadVertices.reserve(6);
-    result.quadVertices.push_back({qxMin, qyMin, -1.0f, -1.0f, 0u});
-    result.quadVertices.push_back({qxMax, qyMin, 1.0f, -1.0f, 0u});
-    result.quadVertices.push_back({qxMax, qyMax, 1.0f, 1.0f, 0u});
-    result.quadVertices.push_back({qxMin, qyMin, -1.0f, -1.0f, 0u});
-    result.quadVertices.push_back({qxMax, qyMax, 1.0f, 1.0f, 0u});
-    result.quadVertices.push_back({qxMin, qyMax, -1.0f, 1.0f, 0u});
   }
 
   return result;

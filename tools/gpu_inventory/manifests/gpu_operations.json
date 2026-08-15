@@ -426,7 +426,6 @@
         "setBindGroup",
         "setPipeline",
         "setScissorRect",
-        "setVertexBuffer",
         "submit",
         "writeBuffer"
       ],
@@ -827,11 +826,7 @@
         "ShaderStage",
         "TextureFormat",
         "TextureSampleType",
-        "TextureViewDimension",
-        "VertexAttribute",
-        "VertexBufferLayout",
-        "VertexFormat",
-        "VertexStepMode"
+        "TextureViewDimension"
       ]
     },
     "donner/svg/renderer/geode/GeodePipeline.h": {

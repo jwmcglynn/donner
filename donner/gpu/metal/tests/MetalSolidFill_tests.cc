@@ -8,7 +8,8 @@
 /// GeodePathEncoder banding, the same clip-space MVP construction (pixel -> clip with the Y flip
 /// for a top-left origin), premultiplied colors, an identity per-instance transform at binding 7,
 /// and 1x1 dummy pattern/clip textures at bindings 3..6. The compact canonical curve references
-/// are expanded for the shader IR's current contiguous-curve input layout.
+/// are expanded for the shader IR's current contiguous-curve input layout, and the conservative
+/// path bounds are expressed through its current vertex-buffer quad contract.
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
@@ -116,6 +117,30 @@ struct LegacyAxis {
   std::vector<EncodedPath::Curve> curves;
 };
 
+/// Vertex layout consumed by BuildSolidFillModule's current vertex-buffer interface.
+struct LegacyVertex {
+  float posX;
+  float posY;
+  float normalX;
+  float normalY;
+  uint32_t bandIndex = 0;
+};
+static_assert(sizeof(LegacyVertex) == 20, "LegacyVertex must match the shader IR layout");
+
+/// Expresses the encoded path's conservative AABB through the generic shader IR's legacy quad.
+std::array<LegacyVertex, 6> BuildLegacyQuad(const Box2d& bounds) {
+  const auto xMin = static_cast<float>(bounds.topLeft.x);
+  const auto yMin = static_cast<float>(bounds.topLeft.y);
+  const auto xMax = static_cast<float>(bounds.bottomRight.x);
+  const auto yMax = static_cast<float>(bounds.bottomRight.y);
+  return {{{xMin, yMin, -1.0f, -1.0f},
+           {xMax, yMin, 1.0f, -1.0f},
+           {xMax, yMax, 1.0f, 1.0f},
+           {xMin, yMin, -1.0f, -1.0f},
+           {xMax, yMax, 1.0f, 1.0f},
+           {xMin, yMax, -1.0f, 1.0f}}};
+}
+
 /// Expands compact per-band curve references into the contiguous layout consumed by the current
 /// generic solid-fill shader IR. Returns false for a malformed reference range or index.
 bool ExpandLegacyAxis(std::span<const EncodedPath::Band> bands,
@@ -147,7 +172,7 @@ struct SizedBuffer {
 
 /// One path's GPU resources.
 struct PathDraw {
-  Buffer vertexBuffer;       //!< Quad vertices (6 x 20 bytes).
+  Buffer vertexBuffer;       //!< Legacy conservative quad vertices (6 x 20 bytes).
   Buffer uniformBuffer;      //!< 288-byte Uniforms.
   SizedBuffer bands;         //!< Horizontal bands (or one zero band).
   SizedBuffer curves;        //!< Horizontal curves (or 4-byte dummy).
@@ -318,7 +343,8 @@ TEST_F(MetalSolidFillTest, MatchesFrozenBaseline) {
   std::vector<PathDraw> draws;
   for (const BaselinePathSpec& spec : BaselineScenePaths()) {
     const EncodedPath encoded = geode::GeodePathEncoder::encode(spec.path, spec.rule);
-    ASSERT_FALSE(encoded.quadVertices.empty());
+    ASSERT_GE(encoded.boundingVertexCount, 3u);
+    const std::array<LegacyVertex, 6> legacyQuad = BuildLegacyQuad(encoded.pathBounds);
 
     LegacyAxis horizontal;
     LegacyAxis vertical;
@@ -326,16 +352,15 @@ TEST_F(MetalSolidFillTest, MatchesFrozenBaseline) {
     ASSERT_TRUE(ExpandLegacyAxis(encoded.vBands, encoded.vCurveIndices, encoded.vCurves, vertical));
 
     PathDraw draw;
-    draw.vertexCount = static_cast<uint32_t>(encoded.quadVertices.size());
-    draw.vertexBuffer =
-        unwrap(device_->createBuffer(BufferDescriptor{
-                   "vertices", encoded.quadVertices.size() * sizeof(EncodedPath::Vertex),
-                   BufferUsage::Vertex | BufferUsage::CopyDst}),
-               "createBuffer vertices");
+    draw.vertexCount = static_cast<uint32_t>(legacyQuad.size());
+    draw.vertexBuffer = unwrap(
+        device_->createBuffer(BufferDescriptor{"vertices", legacyQuad.size() * sizeof(LegacyVertex),
+                                               BufferUsage::Vertex | BufferUsage::CopyDst}),
+        "createBuffer vertices");
     const Status vertexWrite = device_->writeBuffer(
         draw.vertexBuffer, 0,
-        std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(encoded.quadVertices.data()),
-                                 encoded.quadVertices.size() * sizeof(EncodedPath::Vertex)));
+        std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(legacyQuad.data()),
+                                 legacyQuad.size() * sizeof(LegacyVertex)));
     ASSERT_FALSE(vertexWrite.hasError()) << vertexWrite.error();
 
     draw.bands = storageBuffer("bands", horizontal.bands.data(),
