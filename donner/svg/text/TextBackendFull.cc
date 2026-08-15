@@ -464,12 +464,19 @@ Path TextBackendFull::glyphOutline(FontHandle font, int glyphIndex, float scale)
 // ---------------------------------------------------------------------------
 
 bool TextBackendFull::isBitmapOnly(FontHandle font) const {
-  return fontManager_.isValidatedFont(font) && !HasCachedOutlineTables(fontManager_, font);
+  // FreeType may decompress embedded PNG bitmap strikes while loading a glyph, before Donner can
+  // inspect the decoded dimensions. Only application-controlled fonts may enter that decoder path.
+  return fontManager_.isTrustedFont(font) && fontManager_.isValidatedFont(font) &&
+         !HasCachedOutlineTables(fontManager_, font);
 }
 
 std::optional<TextBackend::BitmapGlyph> TextBackendFull::bitmapGlyph(FontHandle font,
                                                                      int glyphIndex,
                                                                      float requestedScale) const {
+  if (!fontManager_.isTrustedFont(font) || glyphIndex < 0) {
+    return std::nullopt;
+  }
+
   hb_font_t* hbFont = getOrCreateHbFont(font);
   if (!hbFont) {
     return std::nullopt;
@@ -509,14 +516,34 @@ std::optional<TextBackend::BitmapGlyph> TextBackendFull::bitmapGlyph(FontHandle 
     return std::nullopt;
   }
 
+  constexpr size_t kMaximumBitmapGlyphRgbaBytes = 16 * 1024 * 1024;
+  if (bitmap.width > static_cast<unsigned long>(std::numeric_limits<int>::max()) ||
+      bitmap.rows > static_cast<unsigned long>(std::numeric_limits<int>::max()) ||
+      bitmap.pitch <= 0) {
+    return std::nullopt;
+  }
+
+  const size_t width = bitmap.width;
+  const size_t height = bitmap.rows;
+  if (width > kMaximumBitmapGlyphRgbaBytes / 4 ||
+      height > kMaximumBitmapGlyphRgbaBytes / (width * 4)) {
+    return std::nullopt;
+  }
+
+  const size_t rowBytes = width * 4;
+  const size_t rgbaBytes = rowBytes * height;
+  if (static_cast<size_t>(bitmap.pitch) < rowBytes || bitmap.buffer == nullptr) {
+    return std::nullopt;
+  }
+
   // Convert BGRA to RGBA.
-  const int w = static_cast<int>(bitmap.width);
-  const int h = static_cast<int>(bitmap.rows);
-  std::vector<uint8_t> rgba(static_cast<size_t>(w) * h * 4);
+  const int w = static_cast<int>(width);
+  const int h = static_cast<int>(height);
+  std::vector<uint8_t> rgba(rgbaBytes);
 
   for (int row = 0; row < h; ++row) {
-    const uint8_t* src = bitmap.buffer + row * bitmap.pitch;
-    uint8_t* dst = rgba.data() + row * w * 4;
+    const uint8_t* src = bitmap.buffer + static_cast<size_t>(row) * bitmap.pitch;
+    uint8_t* dst = rgba.data() + static_cast<size_t>(row) * rowBytes;
     for (int col = 0; col < w; ++col) {
       dst[col * 4 + 0] = src[col * 4 + 2];  // R <- B
       dst[col * 4 + 1] = src[col * 4 + 1];  // G <- G
