@@ -41,6 +41,13 @@ py_test(
     ],
 )
 
+py_test(
+    name = "sanitizer_runtime_provenance_tests",
+    size = "small",
+    srcs = ["sanitizer_runtime_provenance_tests.py"],
+    data = [":rules.bzl"],
+)
+
 string_flag(
     name = "llvm_latest",
     build_setting_default = "0",

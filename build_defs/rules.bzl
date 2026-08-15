@@ -37,28 +37,6 @@ def _banned_patterns_lint_test(name, srcs, hdrs, tags = [], **_kwargs):
     """
     _ = (name, srcs, hdrs, tags)  # @unused
 
-def llvm21_macos_runtime_rpath_linkopts():
-    """
-    Returns rpaths needed by LLVM 21 sanitizer runtime dylibs on macOS.
-    """
-    runtime_dir = "toolchains_llvm++llvm+llvm_toolchain_llvm/lib/clang/21/lib/darwin"
-    return select({
-        "//build_defs:llvm_latest_macos": [
-            # Add rpaths for execroot (from bazel-bin/<package> to external/).
-            # The needed depth varies with package path depth.
-            "-Wl,-rpath,@loader_path/../../../../../../external/" + runtime_dir,
-            "-Wl,-rpath,@loader_path/../../../../../../../external/" + runtime_dir,
-            "-Wl,-rpath,@loader_path/../../../../../../../../external/" + runtime_dir,
-            "-Wl,-rpath,@loader_path/../../../../../../../../../external/" + runtime_dir,
-            # Add rpaths for runfiles directory (without the external/ prefix).
-            "-Wl,-rpath,@loader_path/../../../../" + runtime_dir,
-            "-Wl,-rpath,@loader_path/../../../../../" + runtime_dir,
-            "-Wl,-rpath,@loader_path/../../../../../../" + runtime_dir,
-            "-Wl,-rpath,@loader_path/../../../../../../../" + runtime_dir,
-        ],
-        "//conditions:default": [],
-    })
-
 def libc_compat_deps():
     """
     Returns extra deps needed when linking against the hermetic LLVM toolchain
@@ -516,14 +494,10 @@ def donner_cc_binary(name, srcs = [], linkopts = [], deps = [], tags = [], **kwa
       tags: Tags.
       **kwargs: Additional arguments, matching the implementation of cc_binary.
     """
-    donner_linkopts = (
-        linkopts +
-        llvm21_macos_runtime_rpath_linkopts()
-    )
     cc_binary(
         name = name,
         srcs = srcs,
-        linkopts = donner_linkopts,
+        linkopts = linkopts,
         deps = deps + libc_compat_deps(),
         tags = tags,
         **kwargs
@@ -584,7 +558,6 @@ def donner_cc_test(
         tags = [],
         variants = None,
         opens_gpu_device = False,
-        add_llvm_macos_runtime_rpaths = True,
         **kwargs):
     """
     Create a cc_test with donner-specific defaults.
@@ -605,20 +578,15 @@ def donner_cc_test(
         device/adapter, so its geode-backed variants must be drained serially.
         Forwarded to donner_multi_transitioned_test; see there for why it is
         opt-in rather than implied by the geode backend.
-      add_llvm_macos_runtime_rpaths: Add LLVM 21 sanitizer runtime rpaths on macOS.
       **kwargs: Additional arguments, matching the implementation of cc_test.
     """
-    donner_linkopts = linkopts
-    if add_llvm_macos_runtime_rpaths:
-        donner_linkopts = donner_linkopts + llvm21_macos_runtime_rpath_linkopts()
-
     if "size" not in kwargs and "timeout" not in kwargs:
         kwargs["size"] = "small"
 
     cc_test(
         name = name,
         srcs = srcs,
-        linkopts = donner_linkopts,
+        linkopts = linkopts,
         deps = deps + libc_compat_deps() + test_crash_handler_deps(),
         tags = tags,
         **kwargs
@@ -814,7 +782,6 @@ def donner_cc_fuzzer(name, corpus, deps = [], per_input_timeout_seconds = 2, tag
 
     donner_cc_test(
         name = name + "_soak",
-        add_llvm_macos_runtime_rpaths = False,
         additional_linker_inputs = fuzzer_additional_linker_inputs,
         linkopts = fuzzer_runtime_linkopts,
         args = fuzz_time_args + [
@@ -834,7 +801,6 @@ def donner_cc_fuzzer(name, corpus, deps = [], per_input_timeout_seconds = 2, tag
 
     donner_cc_test(
         name = name,
-        add_llvm_macos_runtime_rpaths = False,
         additional_linker_inputs = fuzzer_additional_linker_inputs,
         linkopts = fuzzer_runtime_linkopts,
         args = ["$(locations %s)" % corpus_name],
