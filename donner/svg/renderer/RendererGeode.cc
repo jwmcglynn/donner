@@ -2042,6 +2042,24 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
     return &slot;
   }
 
+  /// GPU-residence slot for `source`'s gradient-painted stroke.
+  /// See `residentGradientFillSlot`; the slot holds the cached
+  /// stroke-outline encode plus the resolved gradient uniform.
+  geode::GeodeResidentGradientSlot* residentGradientStrokeSlot(EntityHandle source) {
+    if (!source) {
+      return nullptr;
+    }
+    ensureCacheInvalidationWired(*source.registry());
+    geode::GeodeResidentGradientSlot& slot =
+        source.get_or_emplace<geode::GeodeResidentPathComponent>().gradientStrokeSlot;
+    std::shared_ptr<geode::GeodeResidentSlab> slab = residentSlab(*source.registry());
+    if (slot.slab.get() != slab.get()) {
+      slot.reset();
+    }
+    slot.slab = std::move(slab);
+    return &slot;
+  }
+
   /// GPU-residence slot for `source`'s gradient-painted fill.
   /// See `residentFillSlot`; the slot lives on the
   /// same `GeodeResidentPathComponent` and is invalidated by the same
@@ -2266,6 +2284,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
         // defense; this keeps the invariant obvious at the mutation site.
         if (auto* resident = source.try_get<geode::GeodeResidentPathComponent>()) {
           resident->strokeSlot.reset();
+          resident->gradientStrokeSlot.reset();
         }
       }
       result.strokedPath = &cache.strokeSlot->strokedPath;
@@ -4199,8 +4218,17 @@ void RendererGeode::drawPath(const PathShape& path, const StrokeParams& stroke) 
       (strokeDerived.encoded != nullptr && std::holds_alternative<PaintServer::Solid>(strokeServer))
           ? impl_->residentStrokeSlot(path.sourceEntity)
           : nullptr;
+  // Gradient residence for gradient-painted strokes: the cached
+  // stroke-outline encode lives in a gradient slot so an unchanged outline
+  // with an unchanged resolved gradient re-uploads zero geometry.
+  geode::GeodeResidentGradientSlot* residentGradientStroke =
+      (strokeDerived.encoded != nullptr &&
+       std::holds_alternative<components::PaintResolvedReference>(strokeServer))
+          ? impl_->residentGradientStrokeSlot(path.sourceEntity)
+          : nullptr;
   impl_->drawPaintedPathAgainst(path.path, strokedOutline, strokeServer, effectiveOpacity,
-                                strokeDerived.fillRule, strokeDerived.encoded, residentStroke);
+                                strokeDerived.fillRule, strokeDerived.encoded, residentStroke,
+                                residentGradientStroke);
 }
 
 void RendererGeode::drawRect(const Box2d& rect, const StrokeParams& stroke) {

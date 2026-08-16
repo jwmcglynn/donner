@@ -741,7 +741,7 @@ TEST_F(GeodePerfTest, GaussianBlur_NoDirtyPath_ZeroTextures) {
 }
 
 /// One rect with a linear-gradient stroke. The stroked outline is cached
-/// by the M2 stroke cache, so an unchanged frame should re-upload zero
+/// by the stroke-outline cache, so an unchanged frame should re-upload zero
 /// geometry once gradient strokes are resident.
 constexpr std::string_view kGradientStrokeSvg = R"SVG(
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
@@ -766,7 +766,7 @@ TEST_F(GeodePerfTest, GradientStroke_NoDirtyPath_ZeroWrites) {
   RecordProperty("bindgroupCreates", std::to_string(c.bindgroupCreates));
   printCounters(::testing::UnitTest::GetInstance()->current_test_info()->name(), c);
 
-  EXPECT_EQ(c.pathEncodes, 0u) << "Stroke outline must come from the M2 stroke cache.";
+  EXPECT_EQ(c.pathEncodes, 0u) << "Stroke outline must come from the stroke-outline cache.";
   EXPECT_EQ(c.bufferWriteBytes, 0u)
       << "Resident gradient strokes must re-upload zero geometry on an unchanged frame.";
 }
