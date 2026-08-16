@@ -50,6 +50,22 @@ class GeodeDevice;
 struct FilterResourceArena;
 
 /**
+ * Renderer-owned allocation boundary for filter textures.
+ *
+ * Filter work is recorded into the renderer's frame command encoder, so textures must remain
+ * unavailable for reuse until that frame submits. Implementations provide exact-descriptor
+ * pooling and defer releases to the frame boundary.
+ */
+class FilterTextureAllocator {
+public:
+  virtual ~FilterTextureAllocator() = default;
+
+  virtual wgpu::Texture acquireFilterTexture(const wgpu::TextureDescriptor& desc) = 0;
+  virtual void releaseFilterTextureAtFrameEnd(wgpu::Texture texture,
+                                              const wgpu::TextureDescriptor& desc) = 0;
+};
+
+/**
  * GPU filter-graph executor.
  *
  * Given a `FilterGraph` and a source-graphic texture (the offscreen layer
@@ -95,8 +111,9 @@ public:
    * Execute a filter graph against the source-graphic texture.
    *
    * The source texture must be RGBA8Unorm with `TextureBinding` usage.
-   * The returned texture is a freshly-allocated RGBA8Unorm texture sized
-   * to the filter region (or the source dimensions if no region is given).
+   * The returned texture is an RGBA8Unorm texture sized to the filter region
+   * (or the source dimensions if no region is given). Its lifetime is retained
+   * by @p textureAllocator until the frame command buffer has submitted.
    *
    * @param graph The filter graph to execute.
    * @param sourceGraphic The input texture (layer snapshot).
@@ -105,13 +122,16 @@ public:
    *   device-pixel coordinates, captured at `pushFilterLayer` time. Used to
    *   derive per-axis scale factors and to project directional parameters
    *   (e.g. feOffset dx/dy) through rotation/skew.
+   * @param textureAllocator Renderer-owned filter texture pool boundary.
    * @param commandEncoder The frame command encoder. Filter compute passes are recorded after the
    *   source render pass and before the filtered result is composited.
    * @return The filtered output texture (RGBA8Unorm, TextureBinding | CopySrc).
    */
   wgpu::Texture execute(const svg::components::FilterGraph& graph,
                         const wgpu::Texture& sourceGraphic, const Box2d& filterRegion,
-                        const Transform2d& deviceFromFilter, wgpu::CommandEncoder& commandEncoder);
+                        const Transform2d& deviceFromFilter,
+                        FilterTextureAllocator& textureAllocator,
+                        wgpu::CommandEncoder& commandEncoder);
 
 private:
   /// Two-pass separable Gaussian blur via compute shader.

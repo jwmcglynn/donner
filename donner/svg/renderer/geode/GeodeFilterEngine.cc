@@ -17,29 +17,29 @@
 namespace donner::geode {
 
 struct FilterResourceArena {
-  FilterResourceArena(GeodeDevice& device, wgpu::CommandEncoder& commandEncoder)
-      : device_(device), commandEncoder_(commandEncoder) {}
+  FilterResourceArena(GeodeDevice& device, FilterTextureAllocator& textureAllocator,
+                      wgpu::CommandEncoder& commandEncoder)
+      : device_(device), textureAllocator_(textureAllocator), commandEncoder_(commandEncoder) {}
   ~FilterResourceArena() {
     for (ScopedWgpuHandle<wgpu::Buffer>& buffer : buffers_) {
       device_.deferDestroy(buffer.take());
     }
-    for (ScopedWgpuHandle<wgpu::Texture>& texture : textures_) {
-      device_.deferDestroy(texture.take());
+    for (auto& owned : textures_) {
+      textureAllocator_.releaseFilterTextureAtFrameEnd(owned.texture.take(), owned.desc);
     }
   }
 
   FilterResourceArena(const FilterResourceArena&) = delete;
   FilterResourceArena& operator=(const FilterResourceArena&) = delete;
 
-  wgpu::Texture createTexture(const wgpu::Device& device, const wgpu::TextureDescriptor& desc) {
-    ScopedWgpuHandle<wgpu::Texture> texture(device.createTexture(desc));
+  wgpu::Texture createTexture(const wgpu::TextureDescriptor& desc) {
+    ScopedWgpuHandle<wgpu::Texture> texture(textureAllocator_.acquireFilterTexture(desc));
     if (!texture) {
       return {};
     }
 
-    device_.countTexture();
     wgpu::Texture result = texture.get();
-    textures_.push_back(std::move(texture));
+    textures_.push_back({std::move(texture), desc});
     return result;
   }
 
@@ -55,22 +55,18 @@ struct FilterResourceArena {
     return result;
   }
 
-  wgpu::Texture takeTexture(wgpu::Texture texture) {
-    for (ScopedWgpuHandle<wgpu::Texture>& owned : textures_) {
-      if (owned.get() == texture) {
-        return owned.take();
-      }
-    }
-
-    return texture;
-  }
-
   wgpu::CommandEncoder& commandEncoder() { return commandEncoder_; }
 
 private:
+  struct OwnedTexture {
+    ScopedWgpuHandle<wgpu::Texture> texture;
+    wgpu::TextureDescriptor desc;
+  };
+
   GeodeDevice& device_;
+  FilterTextureAllocator& textureAllocator_;
   wgpu::CommandEncoder& commandEncoder_;
-  std::vector<ScopedWgpuHandle<wgpu::Texture>> textures_;
+  std::vector<OwnedTexture> textures_;
   std::vector<ScopedWgpuHandle<wgpu::Buffer>> buffers_;
 };
 
@@ -442,7 +438,7 @@ uint32_t toShaderEdgeMode(svg::components::filter_primitive::GaussianBlur::EdgeM
 
 /// Create a texture usable as both a compute output (storage) and a
 /// subsequent compute / render input (texture binding).
-wgpu::Texture createIntermediateTexture(FilterResourceArena& arena, const wgpu::Device& device,
+wgpu::Texture createIntermediateTexture(FilterResourceArena& arena, const wgpu::Device&,
                                         uint32_t width, uint32_t height, const char* label) {
   wgpu::TextureDescriptor td{};
   td.label = wgpuLabel(label);
@@ -453,7 +449,7 @@ wgpu::Texture createIntermediateTexture(FilterResourceArena& arena, const wgpu::
   td.mipLevelCount = 1;
   td.sampleCount = 1;
   td.dimension = wgpu::TextureDimension::_2D;
-  return arena.createTexture(device, td);
+  return arena.createTexture(td);
 }
 
 /// Helper to create a pipeline with a standard (input, output, uniform) bind group layout.
@@ -1291,10 +1287,11 @@ wgpu::Texture GeodeFilterEngine::execute(const svg::components::FilterGraph& gra
                                          const wgpu::Texture& sourceGraphic,
                                          const Box2d& filterRegion,
                                          const Transform2d& deviceFromFilter,
+                                         FilterTextureAllocator& textureAllocator,
                                          wgpu::CommandEncoder& commandEncoder) {
   using namespace svg::components;
 
-  FilterResourceArena arena(device_, commandEncoder);
+  FilterResourceArena arena(device_, textureAllocator, commandEncoder);
   std::unordered_map<std::string, wgpu::Texture> namedBuffers;
   wgpu::Texture currentBuffer = sourceGraphic;
   std::optional<wgpu::Texture> sourceAlpha;
@@ -1864,7 +1861,7 @@ wgpu::Texture GeodeFilterEngine::execute(const svg::components::FilterGraph& gra
     }
   }
 
-  return arena.takeTexture(currentBuffer);
+  return currentBuffer;
 }
 
 namespace {
@@ -3081,7 +3078,7 @@ wgpu::Texture GeodeFilterEngine::applyImage(
     imgDesc.mipLevelCount = 1;
     imgDesc.sampleCount = 1;
     imgDesc.dimension = wgpu::TextureDimension::_2D;
-    wgpu::Texture emptyTex = arena.createTexture(dev, imgDesc);
+    wgpu::Texture emptyTex = arena.createTexture(imgDesc);
     const uint8_t zero[4] = {0, 0, 0, 0};
     wgpu::TexelCopyTextureInfo dstInfo{};
     dstInfo.texture = emptyTex;
@@ -3127,7 +3124,7 @@ wgpu::Texture GeodeFilterEngine::applyImage(
   imgDesc.mipLevelCount = 1;
   imgDesc.sampleCount = 1;
   imgDesc.dimension = wgpu::TextureDimension::_2D;
-  wgpu::Texture imgTex = arena.createTexture(dev, imgDesc);
+  wgpu::Texture imgTex = arena.createTexture(imgDesc);
 
   wgpu::TexelCopyTextureInfo dstInfo{};
   dstInfo.texture = imgTex;

@@ -339,8 +339,11 @@ algorithm.
     `RcString`-keyed hash map or a small fixed-size array indexed by the
     stable filter-node-index assigned at `FilterGraph` build. Current
     `.str()` copies per result lookup.
-  - [ ] Route `createIntermediateTexture` (`GeodeFilterEngine.cc:192-204`)
-    through the pool from Milestone 4.
+  - [x] Route `createIntermediateTexture` (`GeodeFilterEngine.cc:192-204`)
+    through the pool from Milestone 4. Filter arena textures now return to
+    the device-shared pool after frame submission, so an unchanged repeat
+    blur drops from eight texture creations to zero without permitting
+    unsafe same-frame reuse.
   - [x] Merge the per-primitive `CommandEncoder` + `queue().submit()` pairs
     into the outer frame encoder. A Gaussian-blur counter regression records
     the filter source render, compute passes, and composite in one frame
