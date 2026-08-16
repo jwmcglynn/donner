@@ -14,6 +14,7 @@
 /// through (the input texture is forwarded unchanged) with a one-shot
 /// warning.
 
+#include <memory>
 #include <webgpu/webgpu.hpp>
 
 #include "donner/base/Box.h"
@@ -48,6 +49,9 @@ namespace donner::geode {
 
 class GeodeDevice;
 struct FilterResourceArena;
+/// Per-frame uniform scratch and pass bind-group cache state. Defined in
+/// GeodeFilterEngine.cc; the engine owns one instance across frames.
+struct FilterResourceCache;
 
 /**
  * Renderer-owned allocation boundary for filter textures.
@@ -139,13 +143,19 @@ public:
 
   /**
    * Begin a new frame for this engine: reset the frame-scoped chunk pass
-   * counter, so the 64-pass command-buffer bound covers every filter graph
-   * recorded into the frame's shared encoder, not just one execute() call.
-   * The renderer calls this once per frame from its own beginFrame; the
-   * device-shared engine relies on the existing one-frame-per-device
-   * serialization contract.
+   * counter (so the 64-pass command-buffer bound covers every filter graph
+   * recorded into the frame's shared encoder, not just one execute() call)
+   * and reset the per-frame uniform scratch cursor.
+   *
+   * The renderer calls this once per frame from its own beginFrame, BEFORE
+   * the filter texture pool runs its stale-bucket eviction. Uniform slots
+   * written after this call reuse stable (buffer, offset) pairs across
+   * frames. The device-shared engine relies on the documented
+   * one-frame-per-device serialization contract: a sibling renderer that
+   * begins a frame mid-way through another renderer's unsubmitted frame
+   * would rewind the cursor under the recorded passes.
    */
-  void beginFrame() { framePassesInCommandBuffer_ = 0; }
+  void beginFrame();
 
 private:
   /// Two-pass separable Gaussian blur via compute shader.
@@ -474,6 +484,12 @@ private:
   /// beginFrame(); read and advanced by each execute() call's arena to
   /// bound command-buffer size (see FilterResourceArena).
   size_t framePassesInCommandBuffer_ = 0;
+
+  /// Per-frame uniform scratch buffer and bump-allocated slot cursor (see
+  /// FilterResourceCache). Pass bind groups are still created per pass:
+  /// the pooled textures a pass binds rotate across frames, so their
+  /// identities are not stable cache keys.
+  std::unique_ptr<FilterResourceCache> resourceCache_;
 };
 
 }  // namespace donner::geode

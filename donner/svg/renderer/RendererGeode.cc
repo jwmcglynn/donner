@@ -918,7 +918,15 @@ public:
   }
 
 private:
-  static constexpr std::size_t kMaxPoolEntriesPerKey = 8;
+  // Filter-heavy documents (Splash: three Gaussian blur groups) hold more
+  // than 8 live intermediates of one size at once, so the original cap of 8
+  // forced ~22 texture re-creations per frame. The cap still keeps one
+  // bucket's retained bytes comfortably inside the 64 MiB budget (16 x
+  // 1.8 MiB for the 892x512 intermediates), so raising it trades entry
+  // churn without inviting budget-eviction churn. Reducing the number of
+  // concurrent intermediates (blur ping-pong reuse) is the follow-up that
+  // would let the cap come back down.
+  static constexpr std::size_t kMaxPoolEntriesPerKey = 16;
   static constexpr uint64_t kTexturePoolBudgetBytes = 64u * 1024u * 1024u;
   static constexpr uint64_t kBucketEvictAfterFrames = 120;
 
@@ -2705,6 +2713,14 @@ void RendererGeode::beginFrame(const RenderViewport& viewport) {
   impl_->encoder.reset();
   impl_->frameFinishedEncoders.clear();
   impl_->geometryDebugEdges.clear();
+
+  // Reset the filter engine's per-frame uniform scratch cursor. The
+  // engine's pass bind groups stay cached across frames (their keys are
+  // stable resource identities), which is what keeps steady-state filter
+  // passes from recreating bind groups every frame.
+  if (impl_->device) {
+    impl_->device->filterEngine().beginFrame();
+  }
 
   if (impl_->texturePool) {
     impl_->texturePool->beginFrame();

@@ -14,6 +14,8 @@
 #include "donner/svg/renderer/geode/GeodeShaders.h"
 #include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
 
+#include <mutex>
+
 namespace donner::geode {
 
 struct FilterResourceArena {
@@ -131,6 +133,69 @@ private:
   size_t& passesInCommandBuffer_;
   std::vector<OwnedTexture> textures_;
   std::vector<ScopedWgpuHandle<wgpu::Buffer>> buffers_;
+};
+
+/// Persistent per-frame uniform scratch and pass bind-group cache.
+///
+/// Every filter primitive pass used to allocate its own uniform buffer and
+/// bind group each frame. The scratch buffer gives each pass a stable
+/// 256-aligned (buffer, offset) uniform slot, so a pass that binds the same
+/// pooled input/output textures and the same slot each frame can reuse one
+/// cached bind group. The cursor resets and the cache clears at
+/// `GeodeFilterEngine::beginFrame()`, before the renderer's texture pool
+/// evicts stale buckets, so no cached bind group can outlive a texture it
+/// references. If the scratch must grow mid-frame, its old buffer is deferred
+/// for destruction and the cache is cleared, since every cached group
+/// references the old buffer.
+struct FilterResourceCache {
+  std::mutex mutex;
+
+  /// Growable uniform scratch buffer.
+  ScopedWgpuHandle<wgpu::Buffer> uniformScratch;
+  uint64_t uniformScratchSize = 0;
+  /// Bump cursor inside the scratch; reset each frame.
+  uint64_t uniformCursor = 0;
+
+  /// One 256-aligned uniform slot inside the scratch.
+  struct UniformSlot {
+    wgpu::Buffer buffer;
+    uint64_t offset;
+  };
+
+  UniformSlot acquireUniformSlot(GeodeDevice& device, size_t size) {
+    std::lock_guard<std::mutex> lock(mutex);
+    constexpr uint64_t kAlignment = 256;
+    const uint64_t aligned = (static_cast<uint64_t>(size) + kAlignment - 1u) & ~(kAlignment - 1u);
+    if (!uniformScratch || uniformCursor + aligned > uniformScratchSize) {
+      uint64_t newSize = std::max<uint64_t>(uniformScratchSize * 2u, 64u * 1024u);
+      while (newSize < aligned) {
+        newSize *= 2u;
+      }
+      wgpu::BufferDescriptor desc = {};
+      desc.label = wgpuLabel("FilterUniformScratch");
+      desc.size = newSize;
+      desc.usage = wgpu::BufferUsage::Uniform | wgpu::BufferUsage::CopyDst;
+      if (uniformScratch) {
+        // The old buffer may still be referenced by this frame's command
+        // encoder, and every cached bind group references it. Defer its
+        // destruction (drained at the next beginFrame, after submission)
+        // and drop the cache.
+        device.deferDestroy(uniformScratch.take());
+      }
+      uniformScratch.reset(device.device().createBuffer(desc));
+      device.countBuffer();
+      uniformScratchSize = newSize;
+      uniformCursor = 0;
+    }
+    UniformSlot slot{uniformScratch.get(), uniformCursor};
+    uniformCursor += aligned;
+    return slot;
+  }
+
+  void beginFrame() {
+    std::lock_guard<std::mutex> lock(mutex);
+    uniformCursor = 0;
+  }
 };
 
 namespace {
@@ -682,8 +747,8 @@ void dispatchTwoInputUniform(FilterResourceArena& arena, GeodeDevice& device,
                              const wgpu::BindGroupLayout& bgl,
                              const wgpu::ComputePipeline& pipeline, const wgpu::Texture& in1,
                              const wgpu::Texture& in2, const wgpu::Texture& output,
-                             const wgpu::Buffer& uniformBuffer, size_t uniformSize,
-                             const char* label) {
+                             const wgpu::Buffer& uniformBuffer, uint64_t uniformOffset,
+                             size_t uniformSize, const char* label) {
   const wgpu::Device& dev = device.device();
   const uint32_t width = output.getWidth();
   const uint32_t height = output.getHeight();
@@ -701,7 +766,7 @@ void dispatchTwoInputUniform(FilterResourceArena& arena, GeodeDevice& device,
   bgEntries[2].textureView = outputView.get();
   bgEntries[3].binding = 3;
   bgEntries[3].buffer = uniformBuffer;
-  bgEntries[3].offset = 0;
+  bgEntries[3].offset = uniformOffset;
   bgEntries[3].size = uniformSize;
 
   wgpu::BindGroupDescriptor bgDesc{};
@@ -709,7 +774,7 @@ void dispatchTwoInputUniform(FilterResourceArena& arena, GeodeDevice& device,
   bgDesc.layout = bgl;
   bgDesc.entryCount = 4;
   bgDesc.entries = bgEntries;
-  ScopedWgpuHandle<wgpu::BindGroup> bindGroup(dev.createBindGroup(bgDesc));
+  ScopedWgpuHandle<wgpu::BindGroup> bindGroup(device.device().createBindGroup(bgDesc));
   device.countBindGroup();
 
   wgpu::ComputePassDescriptor passDesc{};
@@ -730,9 +795,7 @@ void dispatchTwoInputUniform(FilterResourceArena& arena, GeodeDevice& device,
 void dispatchInputOutputUniform(FilterResourceArena& arena, GeodeDevice& device,
                                 const wgpu::BindGroupLayout& bgl,
                                 const wgpu::ComputePipeline& pipeline, const wgpu::Texture& input,
-                                const wgpu::Texture& output, const wgpu::Buffer& uniformBuffer,
-                                size_t uniformSize, const char* label) {
-  const wgpu::Device& dev = device.device();
+                                const wgpu::Texture& output, const wgpu::Buffer& uniformBuffer, uint64_t uniformOffset, size_t uniformSize, const char* label) {
   const uint32_t width = output.getWidth();
   const uint32_t height = output.getHeight();
 
@@ -746,7 +809,7 @@ void dispatchInputOutputUniform(FilterResourceArena& arena, GeodeDevice& device,
   bgEntries[1].textureView = outputView.get();
   bgEntries[2].binding = 2;
   bgEntries[2].buffer = uniformBuffer;
-  bgEntries[2].offset = 0;
+  bgEntries[2].offset = uniformOffset;
   bgEntries[2].size = uniformSize;
 
   wgpu::BindGroupDescriptor bgDesc{};
@@ -754,7 +817,7 @@ void dispatchInputOutputUniform(FilterResourceArena& arena, GeodeDevice& device,
   bgDesc.layout = bgl;
   bgDesc.entryCount = 3;
   bgDesc.entries = bgEntries;
-  ScopedWgpuHandle<wgpu::BindGroup> bindGroup(dev.createBindGroup(bgDesc));
+  ScopedWgpuHandle<wgpu::BindGroup> bindGroup(device.device().createBindGroup(bgDesc));
   device.countBindGroup();
 
   wgpu::ComputePassDescriptor passDesc{};
@@ -771,19 +834,16 @@ void dispatchInputOutputUniform(FilterResourceArena& arena, GeodeDevice& device,
   pass.reset();
 }
 
-/// Create a uniform buffer and upload data to it.
-wgpu::Buffer createUniformBuffer(FilterResourceArena& arena, GeodeDevice& device, const void* data,
-                                 size_t size, const char* label) {
-  const wgpu::Device& dev = device.device();
-  wgpu::BufferDescriptor bufDesc{};
-  bufDesc.label = wgpuLabel(label);
-  bufDesc.size = size;
-  bufDesc.usage = wgpu::BufferUsage::Uniform | wgpu::BufferUsage::CopyDst;
-  bufDesc.mappedAtCreation = false;
-  wgpu::Buffer buffer = arena.createBuffer(dev, bufDesc);
-  device.queue().writeBuffer(buffer, 0, data, size);
+/// Bump-allocate a uniform slot from the engine's persistent per-frame
+/// scratch buffer and upload the params into it. The returned (buffer,
+/// offset) pair is stable across frames, which is what lets pass bind
+/// groups be cached by the engine's per-frame bind-group cache.
+FilterResourceCache::UniformSlot writeUniformSlot(FilterResourceCache& cache, GeodeDevice& device,
+                                                  const void* data, size_t size) {
+  FilterResourceCache::UniformSlot slot = cache.acquireUniformSlot(device, size);
+  device.queue().writeBuffer(slot.buffer, slot.offset, data, size);
   device.countBufferWrite(size);
-  return buffer;
+  return slot;
 }
 
 /// Resolve an input reference to a texture.
@@ -985,7 +1045,7 @@ void buildChannelLut(const svg::components::filter_primitive::ComponentTransfer:
 }  // namespace
 
 GeodeFilterEngine::GeodeFilterEngine(GeodeDevice& device, bool verbose)
-    : device_(device), verbose_(verbose) {
+    : device_(device), verbose_(verbose), resourceCache_(std::make_unique<FilterResourceCache>()) {
   const wgpu::Device& dev = device_.device();
 
   // --- Gaussian blur pipeline (existing) ---
@@ -1384,6 +1444,13 @@ GeodeFilterEngine::GeodeFilterEngine(GeodeDevice& device, bool verbose)
 }
 
 GeodeFilterEngine::~GeodeFilterEngine() = default;
+
+void GeodeFilterEngine::beginFrame() {
+  framePassesInCommandBuffer_ = 0;
+  if (resourceCache_) {
+    resourceCache_->beginFrame();
+  }
+}
 
 wgpu::Texture GeodeFilterEngine::execute(const svg::components::FilterGraph& graph,
                                          const wgpu::Texture& sourceGraphic,
@@ -2079,11 +2146,10 @@ wgpu::Texture GeodeFilterEngine::runBlurPass(FilterResourceArena& arena, const w
   params.pad0 = 0;
   params.pad1 = 0;
 
-  wgpu::Buffer uniformBuffer =
-      createUniformBuffer(arena, device_, &params, sizeof(params), "BlurParamsUniform");
+  auto uniformBuffer = writeUniformSlot(*resourceCache_, device_, &params, sizeof(params));
 
   dispatchInputOutputUniform(arena, device_, blurBindGroupLayout_.get(),
-                             gaussianBlurPipeline_.get(), input, output, uniformBuffer,
+                             gaussianBlurPipeline_.get(), input, output, uniformBuffer.buffer, uniformBuffer.offset,
                              sizeof(BlurParams), "GaussianBlurPass");
   return output;
 }
@@ -2106,11 +2172,10 @@ wgpu::Texture GeodeFilterEngine::runBoxBlurPass(FilterResourceArena& arena,
   params.pad0 = 0;
   params.pad1 = 0;
 
-  wgpu::Buffer uniformBuffer =
-      createUniformBuffer(arena, device_, &params, sizeof(params), "BlurParamsUniform");
+  auto uniformBuffer = writeUniformSlot(*resourceCache_, device_, &params, sizeof(params));
 
   dispatchInputOutputUniform(arena, device_, blurBindGroupLayout_.get(),
-                             gaussianBlurPipeline_.get(), input, output, uniformBuffer,
+                             gaussianBlurPipeline_.get(), input, output, uniformBuffer.buffer, uniformBuffer.offset,
                              sizeof(BlurParams), "BoxBlurPass");
   return output;
 }
@@ -2135,11 +2200,10 @@ wgpu::Texture GeodeFilterEngine::applyOffset(
   params.edgeMode = 0;  // None (transparent OOB).
   params.pad = 0;
 
-  wgpu::Buffer uniformBuffer =
-      createUniformBuffer(arena, device_, &params, sizeof(params), "OffsetParamsUniform");
+  auto uniformBuffer = writeUniformSlot(*resourceCache_, device_, &params, sizeof(params));
 
   dispatchInputOutputUniform(arena, device_, offsetBindGroupLayout_.get(), offsetPipeline_.get(),
-                             input, output, uniformBuffer, sizeof(OffsetParams),
+                             input, output, uniformBuffer.buffer, uniformBuffer.offset, sizeof(OffsetParams),
                              "FilterOffsetPass");
   return output;
 }
@@ -2163,11 +2227,10 @@ wgpu::Texture GeodeFilterEngine::applyColorMatrix(
   wgpu::Texture output =
       createIntermediateTexture(arena, dev, width, height, "FilterColorMatrixOutput");
 
-  wgpu::Buffer uniformBuffer =
-      createUniformBuffer(arena, device_, &params, sizeof(params), "ColorMatrixParamsUniform");
+  auto uniformBuffer = writeUniformSlot(*resourceCache_, device_, &params, sizeof(params));
 
   dispatchInputOutputUniform(arena, device_, colorMatrixBindGroupLayout_.get(),
-                             colorMatrixPipeline_.get(), input, output, uniformBuffer,
+                             colorMatrixPipeline_.get(), input, output, uniformBuffer.buffer, uniformBuffer.offset,
                              sizeof(ColorMatrixParams), "FilterColorMatrixPass");
   return output;
 }
@@ -2184,11 +2247,10 @@ wgpu::Texture GeodeFilterEngine::applySourceAlpha(FilterResourceArena& arena,
   ColorMatrixParams params{};
   params.col3[3] = 1.0f;
 
-  wgpu::Buffer uniformBuffer =
-      createUniformBuffer(arena, device_, &params, sizeof(params), "SourceAlphaParamsUniform");
+  auto uniformBuffer = writeUniformSlot(*resourceCache_, device_, &params, sizeof(params));
 
   dispatchInputOutputUniform(arena, device_, colorMatrixBindGroupLayout_.get(),
-                             colorMatrixPipeline_.get(), input, output, uniformBuffer,
+                             colorMatrixPipeline_.get(), input, output, uniformBuffer.buffer, uniformBuffer.offset,
                              sizeof(ColorMatrixParams), "FilterSourceAlphaPass");
   return output;
 }
@@ -2213,8 +2275,7 @@ wgpu::Texture GeodeFilterEngine::applyFlood(
   params.color[2] = (static_cast<float>(rgba.b) / 255.0f) * alpha;
   params.color[3] = alpha;
 
-  wgpu::Buffer uniformBuffer =
-      createUniformBuffer(arena, device_, &params, sizeof(params), "FloodParamsUniform");
+  auto uniformBuffer = writeUniformSlot(*resourceCache_, device_, &params, sizeof(params));
 
   // Flood has no input texture - only output + uniform.
   ScopedWgpuHandle<wgpu::TextureView> outputView(output.createView());
@@ -2223,8 +2284,8 @@ wgpu::Texture GeodeFilterEngine::applyFlood(
   bgEntries[0].binding = 0;
   bgEntries[0].textureView = outputView.get();
   bgEntries[1].binding = 1;
-  bgEntries[1].buffer = uniformBuffer;
-  bgEntries[1].offset = 0;
+  bgEntries[1].buffer = uniformBuffer.buffer;
+  bgEntries[1].offset = uniformBuffer.offset;
   bgEntries[1].size = sizeof(FloodParams);
 
   wgpu::BindGroupDescriptor bgDesc{};
@@ -2371,11 +2432,10 @@ wgpu::Texture GeodeFilterEngine::applyComposite(
   params.k3 = static_cast<float>(primitive.k3);
   params.k4 = static_cast<float>(primitive.k4);
 
-  wgpu::Buffer uniformBuffer =
-      createUniformBuffer(arena, device_, &params, sizeof(params), "CompositeParamsUniform");
+  auto uniformBuffer = writeUniformSlot(*resourceCache_, device_, &params, sizeof(params));
 
   dispatchTwoInputUniform(arena, device_, compositeBindGroupLayout_.get(), compositePipeline_.get(),
-                          in1, in2, output, uniformBuffer, sizeof(CompositeParams),
+                          in1, in2, output, uniformBuffer.buffer, uniformBuffer.offset, sizeof(CompositeParams),
                           "FilterCompositePass");
   return output;
 }
@@ -2395,11 +2455,10 @@ wgpu::Texture GeodeFilterEngine::applyBlend(
   params.pad1 = 0;
   params.pad2 = 0;
 
-  wgpu::Buffer uniformBuffer =
-      createUniformBuffer(arena, device_, &params, sizeof(params), "BlendParamsUniform");
+  auto uniformBuffer = writeUniformSlot(*resourceCache_, device_, &params, sizeof(params));
 
   dispatchTwoInputUniform(arena, device_, blendBindGroupLayout_.get(), blendPipeline_.get(), in1,
-                          in2, output, uniformBuffer, sizeof(BlendParams), "FilterBlendPass");
+                          in2, output, uniformBuffer.buffer, uniformBuffer.offset, sizeof(BlendParams), "FilterBlendPass");
   return output;
 }
 
@@ -2438,11 +2497,10 @@ wgpu::Texture GeodeFilterEngine::applyMorphology(
     params.op = primitive.op == Op::Dilate ? 1u : 0u;
     params.pad = 0;
 
-    wgpu::Buffer uniformBuffer =
-        createUniformBuffer(arena, device_, &params, sizeof(params), "MorphologyParamsUniform");
+    auto uniformBuffer = writeUniformSlot(*resourceCache_, device_, &params, sizeof(params));
 
     dispatchInputOutputUniform(arena, device_, morphologyBindGroupLayout_.get(),
-                               morphologyPipeline_.get(), current, output, uniformBuffer,
+                               morphologyPipeline_.get(), current, output, uniformBuffer.buffer, uniformBuffer.offset,
                                sizeof(MorphologyParams), "FilterMorphologyPassX");
     current = output;
     remainX -= passX;
@@ -2463,11 +2521,10 @@ wgpu::Texture GeodeFilterEngine::applyMorphology(
     params.op = primitive.op == Op::Dilate ? 1u : 0u;
     params.pad = 0;
 
-    wgpu::Buffer uniformBuffer =
-        createUniformBuffer(arena, device_, &params, sizeof(params), "MorphologyParamsUniform");
+    auto uniformBuffer = writeUniformSlot(*resourceCache_, device_, &params, sizeof(params));
 
     dispatchInputOutputUniform(arena, device_, morphologyBindGroupLayout_.get(),
-                               morphologyPipeline_.get(), current, output, uniformBuffer,
+                               morphologyPipeline_.get(), current, output, uniformBuffer.buffer, uniformBuffer.offset,
                                sizeof(MorphologyParams), "FilterMorphologyPassY");
     current = output;
     remainY -= passY;
@@ -2787,11 +2844,10 @@ wgpu::Texture GeodeFilterEngine::applyDisplacementMap(
   params.yChannel = toIndex(primitive.yChannelSelector);
   params.pad = 0;
 
-  wgpu::Buffer uniformBuffer =
-      createUniformBuffer(arena, device_, &params, sizeof(params), "DisplacementMapParamsUniform");
+  auto uniformBuffer = writeUniformSlot(*resourceCache_, device_, &params, sizeof(params));
 
   dispatchTwoInputUniform(arena, device_, displacementMapBindGroupLayout_.get(),
-                          displacementMapPipeline_.get(), in1, in2, output, uniformBuffer,
+                          displacementMapPipeline_.get(), in1, in2, output, uniformBuffer.buffer, uniformBuffer.offset,
                           sizeof(DisplacementParams), "FilterDisplacementMapPass");
   return output;
 }
@@ -3150,11 +3206,10 @@ wgpu::Texture GeodeFilterEngine::applyDropShadow(
   params.pad0 = 0;
   params.pad1 = 0;
 
-  wgpu::Buffer uniformBuffer =
-      createUniformBuffer(arena, device_, &params, sizeof(params), "DropShadowParamsUniform");
+  auto uniformBuffer = writeUniformSlot(*resourceCache_, device_, &params, sizeof(params));
 
   dispatchTwoInputUniform(arena, device_, dropShadowBindGroupLayout_.get(),
-                          dropShadowPipeline_.get(), input, blurred, output, uniformBuffer,
+                          dropShadowPipeline_.get(), input, blurred, output, uniformBuffer.buffer, uniformBuffer.offset,
                           sizeof(DropShadowParams), "FilterDropShadowPass");
   return output;
 }
@@ -3195,10 +3250,9 @@ wgpu::Texture GeodeFilterEngine::applyImage(
     ImageParams params{};
     params.m02 = -1000.0f;
     params.m12 = -1000.0f;
-    wgpu::Buffer ub =
-        createUniformBuffer(arena, device_, &params, sizeof(params), "ImageParamsEmpty");
+    auto ub = writeUniformSlot(*resourceCache_, device_, &params, sizeof(params));
     dispatchInputOutputUniform(arena, device_, imageBindGroupLayout_.get(), imagePipeline_.get(),
-                               emptyTex, output, ub, sizeof(ImageParams), "FilterImageEmptyPass");
+                               emptyTex, output, ub.buffer, ub.offset, sizeof(ImageParams), "FilterImageEmptyPass");
     return output;
   }
 
@@ -3269,10 +3323,9 @@ wgpu::Texture GeodeFilterEngine::applyImage(
     params.pixelated = primitive.imageRenderingPixelated ? 1u : 0u;
     params.pad1 = 0;
 
-    wgpu::Buffer uniformBuffer =
-        createUniformBuffer(arena, device_, &params, sizeof(params), "ImageParamsFragRef");
+    auto uniformBuffer = writeUniformSlot(*resourceCache_, device_, &params, sizeof(params));
     dispatchInputOutputUniform(arena, device_, imageBindGroupLayout_.get(), imagePipeline_.get(),
-                               imgTex, output, uniformBuffer, sizeof(ImageParams),
+                               imgTex, output, uniformBuffer.buffer, uniformBuffer.offset, sizeof(ImageParams),
                                "FilterImageFragRefPass");
     return output;
   }
@@ -3295,10 +3348,9 @@ wgpu::Texture GeodeFilterEngine::applyImage(
     params.pixelated = primitive.imageRenderingPixelated ? 1u : 0u;
     params.pad1 = 0;
 
-    wgpu::Buffer uniformBuffer =
-        createUniformBuffer(arena, device_, &params, sizeof(params), "ImageParamsFragRef");
+    auto uniformBuffer = writeUniformSlot(*resourceCache_, device_, &params, sizeof(params));
     dispatchInputOutputUniform(arena, device_, imageBindGroupLayout_.get(), imagePipeline_.get(),
-                               imgTex, output, uniformBuffer, sizeof(ImageParams),
+                               imgTex, output, uniformBuffer.buffer, uniformBuffer.offset, sizeof(ImageParams),
                                "FilterImageFragRefPass");
     return output;
   }
@@ -3418,11 +3470,10 @@ wgpu::Texture GeodeFilterEngine::applyImage(
   params.pixelated = primitive.imageRenderingPixelated ? 1u : 0u;
   params.pad1 = 0;
 
-  wgpu::Buffer uniformBuffer =
-      createUniformBuffer(arena, device_, &params, sizeof(params), "ImageParamsUniform");
+  auto uniformBuffer = writeUniformSlot(*resourceCache_, device_, &params, sizeof(params));
 
   dispatchInputOutputUniform(arena, device_, imageBindGroupLayout_.get(), imagePipeline_.get(),
-                             imgTex, output, uniformBuffer, sizeof(ImageParams), "FilterImagePass");
+                             imgTex, output, uniformBuffer.buffer, uniformBuffer.offset, sizeof(ImageParams), "FilterImagePass");
   return output;
 }
 
@@ -3440,11 +3491,10 @@ wgpu::Texture GeodeFilterEngine::applyTile(FilterResourceArena& arena, const wgp
   params.srcW = srcW;
   params.srcH = srcH;
 
-  wgpu::Buffer uniformBuffer =
-      createUniformBuffer(arena, device_, &params, sizeof(params), "TileParamsUniform");
+  auto uniformBuffer = writeUniformSlot(*resourceCache_, device_, &params, sizeof(params));
 
   dispatchInputOutputUniform(arena, device_, tileBindGroupLayout_.get(), tilePipeline_.get(), input,
-                             output, uniformBuffer, sizeof(TileParams), "FilterTilePass");
+                             output, uniformBuffer.buffer, uniformBuffer.offset, sizeof(TileParams), "FilterTilePass");
   return output;
 }
 
@@ -3474,11 +3524,10 @@ wgpu::Texture GeodeFilterEngine::applySubregionClip(FilterResourceArena& arena,
   params.pad0 = 0;
   params.pad1 = 0;
 
-  wgpu::Buffer uniformBuffer =
-      createUniformBuffer(arena, device_, &params, sizeof(params), "SubregionClipParamsUniform");
+  auto uniformBuffer = writeUniformSlot(*resourceCache_, device_, &params, sizeof(params));
 
   dispatchInputOutputUniform(arena, device_, subregionClipBindGroupLayout_.get(),
-                             subregionClipPipeline_.get(), input, output, uniformBuffer,
+                             subregionClipPipeline_.get(), input, output, uniformBuffer.buffer, uniformBuffer.offset,
                              sizeof(SubregionClipParams), "FilterSubregionClipPass");
   return output;
 }
@@ -3496,11 +3545,10 @@ wgpu::Texture GeodeFilterEngine::applyColorSpaceConversion(FilterResourceArena& 
   ColorSpaceConvertParams params{};
   params.direction = srgbToLinear ? 0u : 1u;
 
-  wgpu::Buffer uniformBuffer = createUniformBuffer(arena, device_, &params, sizeof(params),
-                                                   "ColorSpaceConvertParamsUniform");
+  auto uniformBuffer = writeUniformSlot(*resourceCache_, device_, &params, sizeof(params));
 
   dispatchInputOutputUniform(arena, device_, colorSpaceConvertBindGroupLayout_.get(),
-                             colorSpaceConvertPipeline_.get(), input, output, uniformBuffer,
+                             colorSpaceConvertPipeline_.get(), input, output, uniformBuffer.buffer, uniformBuffer.offset,
                              sizeof(ColorSpaceConvertParams), "FilterColorSpaceConvertPass");
   return output;
 }

@@ -380,6 +380,21 @@ int main(int argc, char* argv[]) {
     const donner::svg::RendererReadbackStats readbackStats = renderer.consumeReadbackStats();
     std::printf("  %-10s count=%d polls=%d timedWaitAny=%s\n", "Readback:", readbackStats.count,
                 readbackStats.pollIterations, readbackStats.usedTimedWaitAny ? "yes" : "no");
+    const donner::geode::GeodeCounters& counters = renderer.lastFrameTimings().counters;
+    std::printf(
+        "  %-10s drawCalls=%llu pipelineSwitches=%llu pathEncodes=%llu bufferCreates=%llu "
+        "bindgroupCreates=%llu textureCreates=%llu submits=%llu bufferWrites=%llu "
+        "bufferWriteBytes=%llu textureWriteBytes=%llu\n",
+        "Counters:", static_cast<unsigned long long>(counters.drawCalls),
+        static_cast<unsigned long long>(counters.pipelineSwitches),
+        static_cast<unsigned long long>(counters.pathEncodes),
+        static_cast<unsigned long long>(counters.bufferCreates),
+        static_cast<unsigned long long>(counters.bindgroupCreates),
+        static_cast<unsigned long long>(counters.textureCreates),
+        static_cast<unsigned long long>(counters.submits),
+        static_cast<unsigned long long>(counters.bufferWrites),
+        static_cast<unsigned long long>(counters.bufferWriteBytes),
+        static_cast<unsigned long long>(counters.textureWriteBytes));
     std::printf("\n");
 
     if (ps.draw.median > 0.0) {
