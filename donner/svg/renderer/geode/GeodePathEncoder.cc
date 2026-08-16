@@ -1,6 +1,7 @@
 #include "donner/svg/renderer/geode/GeodePathEncoder.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <limits>
 #include <numeric>
@@ -170,18 +171,19 @@ std::optional<BandSpan> curveBandSpan(const CurveRange& range, const Box2d& boun
   const float bandStride = span / static_cast<float>(bandCount);
   const float lo = byY ? range.yMin : range.xMin;
   const float hi = byY ? range.yMax : range.xMax;
-  const float hiExclusive = std::nextafter(hi, -std::numeric_limits<float>::infinity());
 
   const int first = std::clamp(static_cast<int>(std::floor((lo - spanBase) / bandStride)), 0,
                                static_cast<int>(bandCount) - 1);
-  const int last = std::clamp(static_cast<int>(std::floor((hiExclusive - spanBase) / bandStride)),
-                              first, static_cast<int>(bandCount) - 1);
+  const int last = std::clamp(static_cast<int>(std::floor((hi - spanBase) / bandStride)), first,
+                              static_cast<int>(bandCount) - 1);
   return BandSpan{static_cast<uint16_t>(first), static_cast<uint16_t>(last)};
 }
 
 BandMetrics evaluateBandCount(const std::vector<CurveWithRange>& curves, const Box2d& bounds,
                               BandAxis axis, uint16_t bandCount) {
-  std::vector<int32_t> countDeltas(static_cast<size_t>(bandCount) + 1u, 0);
+  UTILS_RELEASE_ASSERT(bandCount <= kMaxBands);
+  std::array<int32_t, static_cast<size_t>(kMaxBands) + 1u> countDeltas;
+  std::fill_n(countDeltas.begin(), static_cast<size_t>(bandCount) + 1u, 0);
   for (const CurveWithRange& curve : curves) {
     const std::optional<BandSpan> span = curveBandSpan(curve.range, bounds, axis, bandCount);
     if (!span) {
@@ -194,8 +196,8 @@ BandMetrics evaluateBandCount(const std::vector<CurveWithRange>& curves, const B
   }
 
   BandMetrics metrics;
-  std::vector<uint32_t> nonemptyCounts;
-  nonemptyCounts.reserve(bandCount);
+  std::array<uint32_t, kMaxBands> nonemptyCounts;
+  size_t nonemptyCount = 0u;
   int32_t runningCount = 0;
   for (uint16_t band = 0; band < bandCount; ++band) {
     runningCount += countDeltas[band];
@@ -203,12 +205,12 @@ BandMetrics evaluateBandCount(const std::vector<CurveWithRange>& curves, const B
     metrics.totalReferences += count;
     metrics.maxCurves = std::max(metrics.maxCurves, count);
     if (count != 0u) {
-      nonemptyCounts.push_back(count);
+      nonemptyCounts[nonemptyCount++] = count;
     }
   }
-  if (!nonemptyCounts.empty()) {
-    std::sort(nonemptyCounts.begin(), nonemptyCounts.end());
-    const size_t p95Index = (nonemptyCounts.size() * 95u + 99u) / 100u - 1u;
+  if (nonemptyCount != 0u) {
+    std::sort(nonemptyCounts.begin(), nonemptyCounts.begin() + nonemptyCount);
+    const size_t p95Index = (nonemptyCount * 95u + 99u) / 100u - 1u;
     metrics.p95Curves = nonemptyCounts[p95Index];
   }
   return metrics;
@@ -597,7 +599,8 @@ void bandCurves(const std::vector<CurveWithRange>& allCurves, const Box2d& bound
 
   // Build the compact row offsets directly. This avoids one heap allocation per band while
   // preserving the globally sorted reference order inside every row.
-  std::vector<uint32_t> bandCounts(bandCount, 0u);
+  std::array<uint32_t, kMaxBands> bandCounts;
+  std::fill_n(bandCounts.begin(), bandCount, 0u);
   for (const CurveWithRange& curve : allCurves) {
     const std::optional<BandSpan> curveSpan = curveBandSpan(curve.range, bounds, axis, bandCount);
     if (!curveSpan) {
@@ -608,11 +611,12 @@ void bandCurves(const std::vector<CurveWithRange>& allCurves, const Box2d& bound
     }
   }
 
+  const size_t bandBase = outBands.size();
   outBands.reserve(outBands.size() + bandCount);
   const size_t referenceBase = outCurveIndices.size();
   uint64_t totalReferences = 0u;
-  std::vector<uint32_t> nonemptyCounts;
-  nonemptyCounts.reserve(bandCount);
+  std::array<uint32_t, kMaxBands> nonemptyCounts;
+  size_t nonemptyCount = 0u;
 
   for (uint16_t b = 0; b < bandCount; ++b) {
     const uint32_t count = bandCounts[b];
@@ -629,17 +633,16 @@ void bandCurves(const std::vector<CurveWithRange>& allCurves, const Box2d& bound
     outBands.push_back(
         {static_cast<uint32_t>(referenceBase + totalReferences), static_cast<uint32_t>(count)});
     totalReferences += count;
-    nonemptyCounts.push_back(count);
+    nonemptyCounts[nonemptyCount++] = count;
   }
 
   UTILS_RELEASE_ASSERT_MSG(totalReferences <= std::numeric_limits<size_t>::max() - referenceBase,
                            "Geode path band references overflow addressable storage");
   outCurveIndices.resize(referenceBase + static_cast<size_t>(totalReferences));
-  std::vector<uint32_t> writeOffsets(bandCount, 0u);
   for (uint16_t b = 0; b < bandCount; ++b) {
     const uint32_t slot = outGrid[b];
     if (slot != EncodedPath::kNoBand) {
-      writeOffsets[b] = outBands[slot].curveStart;
+      bandCounts[b] = outBands[slot].curveStart;
     }
   }
   for (size_t ci : sortedCurveIndices) {
@@ -649,21 +652,21 @@ void bandCurves(const std::vector<CurveWithRange>& allCurves, const Box2d& bound
       continue;
     }
     for (uint16_t band = curveSpan->first; band <= curveSpan->last; ++band) {
-      outCurveIndices[writeOffsets[band]++] = canonicalBase + static_cast<uint32_t>(ci);
+      outCurveIndices[bandCounts[band]++] = canonicalBase + static_cast<uint32_t>(ci);
     }
   }
 
-  std::sort(nonemptyCounts.begin(), nonemptyCounts.end());
+  std::sort(nonemptyCounts.begin(), nonemptyCounts.begin() + nonemptyCount);
   outStats.canonicalCurveCount = static_cast<uint32_t>(allCurves.size());
   outStats.curveReferenceCount = static_cast<uint32_t>(totalReferences);
   outStats.gridBandCount = bandCount;
-  outStats.nonemptyBandCount = static_cast<uint32_t>(outBands.size());
-  if (!nonemptyCounts.empty()) {
-    outStats.maxCurvesPerBand = nonemptyCounts.back();
-    const size_t p95Index = (nonemptyCounts.size() * 95u + 99u) / 100u - 1u;
+  outStats.nonemptyBandCount = static_cast<uint32_t>(outBands.size() - bandBase);
+  if (nonemptyCount != 0u) {
+    outStats.maxCurvesPerBand = nonemptyCounts[nonemptyCount - 1u];
+    const size_t p95Index = (nonemptyCount * 95u + 99u) / 100u - 1u;
     outStats.p95CurvesPerBand = nonemptyCounts[p95Index];
     outStats.meanCurvesPerBand =
-        static_cast<double>(totalReferences) / static_cast<double>(nonemptyCounts.size());
+        static_cast<double>(totalReferences) / static_cast<double>(nonemptyCount);
   }
 }
 

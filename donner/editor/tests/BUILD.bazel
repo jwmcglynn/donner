@@ -1083,7 +1083,7 @@ donner_cc_test(
         "//donner/editor/tools:showcase_asset_generator",
         "//donner/svg",
         "//donner/svg/parser",
-        "//donner/svg/renderer",
+        "//donner/svg/renderer:renderer_tiny_skia",
         "@com_google_gtest//:gtest_main",
     ],
 )
