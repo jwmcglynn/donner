@@ -18,8 +18,8 @@ namespace donner::geode {
 
 struct FilterResourceArena {
   FilterResourceArena(GeodeDevice& device, FilterTextureAllocator& textureAllocator,
-                      wgpu::CommandEncoder& commandEncoder)
-      : device_(device), textureAllocator_(textureAllocator), commandEncoder_(commandEncoder) {}
+                      ScopedWgpuHandle<wgpu::CommandEncoder>& commandEncoder)
+      : device_(device), textureAllocator_(textureAllocator), encoderSlot_(&commandEncoder) {}
   ~FilterResourceArena() {
     for (ScopedWgpuHandle<wgpu::Buffer>& buffer : buffers_) {
       device_.deferDestroy(buffer.take());
@@ -55,7 +55,44 @@ struct FilterResourceArena {
     return result;
   }
 
-  wgpu::CommandEncoder& commandEncoder() { return commandEncoder_; }
+  /// Maximum compute/render passes recorded into one shared command buffer
+  /// before the arena finishes + submits it and starts a fresh encoder on the
+  /// same slot. The shared-encoder design keeps small filters at two queue
+  /// submissions per frame; pathological filter graphs must not grow a single
+  /// command buffer without bound. For example, an feMorphology with a
+  /// 24,998-device-pixel radius decomposes into 1,614 passes, and wgpu-native
+  /// v24's Metal completion path has been observed to stall on a single
+  /// command buffer of that size. Chunked submits preserve program order, so
+  /// passes recorded after the chunk still execute after the earlier chunk.
+  static constexpr size_t kMaxPassesPerCommandBuffer = 64;
+
+  wgpu::CommandEncoder& commandEncoder() {
+    if (passesInCommandBuffer_ >= kMaxPassesPerCommandBuffer) {
+      chunkCommandBuffer();
+    }
+    ++passesInCommandBuffer_;
+    return encoderSlot_->get();
+  }
+
+  /// Finish the current chunk, submit it to the queue, and replace the
+  /// encoder slot with a fresh command encoder. Callers holding their own
+  /// handle copies of the old encoder (for example a finished GeoEncoder)
+  /// keep it alive through reference counting, but it must not be used to
+  /// record again: it has already been submitted.
+  void chunkCommandBuffer() {
+    if (!*encoderSlot_) {
+      return;
+    }
+    {
+      ScopedWgpuHandle<wgpu::CommandBuffer> cmd(encoderSlot_->get().finish());
+      device_.queue().submit(1, &cmd.get());
+      device_.countSubmit();
+    }
+    wgpu::CommandEncoderDescriptor desc = {};
+    desc.label = wgpuLabel("GeodeFilterChunkCE");
+    encoderSlot_->reset(device_.device().createCommandEncoder(desc));
+    passesInCommandBuffer_ = 0;
+  }
 
 private:
   struct OwnedTexture {
@@ -65,7 +102,8 @@ private:
 
   GeodeDevice& device_;
   FilterTextureAllocator& textureAllocator_;
-  wgpu::CommandEncoder& commandEncoder_;
+  ScopedWgpuHandle<wgpu::CommandEncoder>* encoderSlot_;
+  size_t passesInCommandBuffer_ = 0;
   std::vector<OwnedTexture> textures_;
   std::vector<ScopedWgpuHandle<wgpu::Buffer>> buffers_;
 };
@@ -1327,7 +1365,7 @@ wgpu::Texture GeodeFilterEngine::execute(const svg::components::FilterGraph& gra
                                          const Box2d& filterRegion,
                                          const Transform2d& deviceFromFilter,
                                          FilterTextureAllocator& textureAllocator,
-                                         wgpu::CommandEncoder& commandEncoder) {
+                                         ScopedWgpuHandle<wgpu::CommandEncoder>& commandEncoder) {
   using namespace svg::components;
 
   FilterResourceArena arena(device_, textureAllocator, commandEncoder);

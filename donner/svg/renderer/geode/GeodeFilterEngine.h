@@ -123,15 +123,19 @@ public:
    *   derive per-axis scale factors and to project directional parameters
    *   (e.g. feOffset dx/dy) through rotation/skew.
    * @param textureAllocator Renderer-owned filter texture pool boundary.
-   * @param commandEncoder The frame command encoder. Filter compute passes are recorded after the
-   *   source render pass and before the filtered result is composited.
+   * @param commandEncoder The frame command encoder slot. Filter compute passes are recorded after
+   *   the source render pass and before the filtered result is composited. Pathological filter
+   *   graphs (for example a huge-radius feMorphology decomposing into thousands of passes) chunk
+   *   this slot: the current command buffer is submitted and a fresh encoder is installed in the
+   *   slot every 64 passes, so no single command buffer grows without bound while small filters
+   *   keep the two-submissions-per-frame shape.
    * @return The filtered output texture (RGBA8Unorm, TextureBinding | CopySrc).
    */
   wgpu::Texture execute(const svg::components::FilterGraph& graph,
                         const wgpu::Texture& sourceGraphic, const Box2d& filterRegion,
                         const Transform2d& deviceFromFilter,
                         FilterTextureAllocator& textureAllocator,
-                        wgpu::CommandEncoder& commandEncoder);
+                        ScopedWgpuHandle<wgpu::CommandEncoder>& commandEncoder);
 
 private:
   /// Two-pass separable Gaussian blur via compute shader.

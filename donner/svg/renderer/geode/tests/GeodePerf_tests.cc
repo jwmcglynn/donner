@@ -260,6 +260,44 @@ TEST_F(GeodePerfTest, Moderate_BaselineCeilings) {
   EXPECT_LE(c.pipelineSwitches, 6u);  // Solid / gradient / image pipelines + mask if any.
 }
 
+/// One rect with a huge-radius feMorphology (erode). The morphology filter
+/// decomposes the radius into per-axis passes capped at 31 device pixels, so
+/// a 9,999-user-pixel radius produces hundreds of compute passes on a
+/// viewBox-sized canvas. The shared filter encoder must chunk those passes
+/// into bounded command buffers instead of recording one unbounded buffer.
+constexpr std::string_view kHugeRadiusMorphologySvg = R"SVG(
+<svg viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg">
+  <filter id="filter1">
+    <feMorphology radius="9999"/>
+  </filter>
+  <rect x="20" y="20" width="160" height="160" fill="red" filter="url(#filter1)"/>
+</svg>
+)SVG";
+
+TEST_F(GeodePerfTest, MorphologyHugeRadius_ChunksFilterCommandBuffers) {
+  auto device = sharedDevice();
+  ASSERT_TRUE(device) << "GeodeDevice::CreateHeadless failed";
+
+  geode::GeodeCounters c = renderAndGetCounters(kHugeRadiusMorphologySvg, device);
+
+  RecordProperty("submits", std::to_string(c.submits));
+  printCounters(::testing::UnitTest::GetInstance()->current_test_info()->name(), c);
+
+  // The shared-encoder packet reduced a small blur to two submissions (frame
+  // + readback). A pathological morphology (323 X + 323 Y passes here) must
+  // not regress that design into one unbounded command buffer: every 64
+  // passes the filter arena submits its chunk and starts a fresh encoder.
+  // 646 passes therefore need 10 chunk submits plus the final frame submit
+  // and the readback submit, about 12-13 in total. Assert the bounded range
+  // so the ceiling stays honest on any canvas scaling of this fixture.
+  EXPECT_GE(c.submits, 6u)
+      << "Huge-radius morphology should force chunked filter submissions beyond the shared "
+         "frame + readback pair.";
+  EXPECT_LE(c.submits, 20u)
+      << "Chunked filter submissions should bound the command buffer to 64 passes each: "
+         "646 passes fit in 11 chunks plus frame and readback submits.";
+}
+
 TEST_F(GeodePerfTest, GaussianBlur_UsesSingleFrameSubmission) {
   auto device = sharedDevice();
   ASSERT_TRUE(device) << "GeodeDevice::CreateHeadless failed";

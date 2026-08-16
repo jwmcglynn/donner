@@ -1061,11 +1061,14 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
   std::optional<RendererGeodeTextureSnapshot> borrowedTargetSnapshot;
 
   // Single CommandEncoder owned by RendererGeode for the whole frame
-  // (design doc 0030 Milestone 3). All `GeoEncoder` instances created
+  // (design doc 0030 Milestone 3). All GeoEncoder instances created
   // during the frame (base + push/pop layer / filter / mask) share
   // this CommandEncoder, so push/pop boundaries no longer force a
-  // `queue().submit()`. Finalised + submitted exactly once in
-  // `endFrame`.
+  // queue().submit(). Finalised + submitted once in endFrame. The
+  // filter engine may chunk this slot mid-frame (finish + submit +
+  // replace every 64 filter passes) to bound command-buffer size for
+  // pathological filter graphs; the final encoder in the slot is the
+  // one endFrame submits.
   geode::ScopedWgpuHandle<wgpu::CommandEncoder> frameCommandEncoder;
 
   std::unique_ptr<geode::GeoEncoder> encoder;
@@ -3481,7 +3484,7 @@ void RendererGeode::popFilterLayer() {
             Vector2d(blurPadding + filterRegion.width(), blurPadding + filterRegion.height()));
         wgpu::Texture localFiltered = impl_->filterEngine->execute(
             frame.filterGraph, localTexture, localFilterRegion, localDeviceFromFilter, *impl_,
-            impl_->frameCommandEncoder.get());
+            impl_->frameCommandEncoder);
 
         // Restore the outer target + encoder, then composite the local result back
         // through the CTM. Transform chain (left factor first): local raster pixels
@@ -3525,7 +3528,7 @@ void RendererGeode::popFilterLayer() {
   if (impl_->filterEngine && !frame.filterGraph.empty()) {
     filteredTexture = impl_->filterEngine->execute(frame.filterGraph, frame.layerTexture,
                                                    frame.filterRegion, bufferDeviceFromFilter,
-                                                   *impl_, impl_->frameCommandEncoder.get());
+                                                   *impl_, impl_->frameCommandEncoder);
   }
 
   // Restore outer target and create a fresh encoder that preserves its
