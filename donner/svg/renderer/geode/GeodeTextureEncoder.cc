@@ -117,7 +117,8 @@ void GeodeTextureEncoder::drawTexturedQuad(GeodeDevice& device, const GeodeImage
                                            const wgpu::Texture& texture, const float mvp[16],
                                            uint32_t targetWidth, uint32_t targetHeight,
                                            const QuadParams& params,
-                                           ScopedWgpuResourceArena& resourceArena) {
+                                           ScopedWgpuResourceArena& resourceArena,
+                                           UniformScratch* scratch) {
   if (!texture) {
     return;
   }
@@ -149,14 +150,28 @@ void GeodeTextureEncoder::drawTexturedQuad(GeodeDevice& device, const GeodeImage
   u.blendMode = params.blendMode;
   u.hasClipMask = params.clipMaskView ? 1u : 0u;
 
-  wgpu::BufferDescriptor uniDesc = {};
-  uniDesc.label = wgpuLabel("GeodeImageBlitUniforms");
-  uniDesc.size = sizeof(Uniforms);
-  uniDesc.usage = wgpu::BufferUsage::Uniform | wgpu::BufferUsage::CopyDst;
-  wgpu::Buffer uniBuf = resourceArena.retain(dev.createBuffer(uniDesc));
-  device.countBuffer();
-  queue.writeBuffer(uniBuf, 0, &u, sizeof(Uniforms));
-  device.countBufferWrite(sizeof(Uniforms));
+  // Pooled callers bump-allocate from their per-frame scratch arena;
+  // standalone callers keep the legacy one-buffer-per-blit path.
+  wgpu::Buffer uniBuf;
+  uint64_t uniOffset = 0;
+  uint64_t uniSize = sizeof(Uniforms);
+  if (scratch != nullptr) {
+    constexpr uint64_t kUniformOffsetAlignment = 256u;
+    const UniformAllocation alloc =
+        scratch->allocate(&u, sizeof(Uniforms), kUniformOffsetAlignment);
+    uniBuf = alloc.buffer;
+    uniOffset = alloc.offset;
+    uniSize = alloc.size;
+  } else {
+    wgpu::BufferDescriptor uniDesc = {};
+    uniDesc.label = wgpuLabel("GeodeImageBlitUniforms");
+    uniDesc.size = sizeof(Uniforms);
+    uniDesc.usage = wgpu::BufferUsage::Uniform | wgpu::BufferUsage::CopyDst;
+    uniBuf = resourceArena.retain(dev.createBuffer(uniDesc));
+    device.countBuffer();
+    queue.writeBuffer(uniBuf, 0, &u, sizeof(Uniforms));
+    device.countBufferWrite(sizeof(Uniforms));
+  }
 
   // Pick sampler based on requested filter mode.
   const wgpu::Sampler& sampler =
@@ -176,7 +191,8 @@ void GeodeTextureEncoder::drawTexturedQuad(GeodeDevice& device, const GeodeImage
   wgpu::BindGroupEntry entries[7] = {};
   entries[0].binding = 0;
   entries[0].buffer = uniBuf;
-  entries[0].size = sizeof(Uniforms);
+  entries[0].offset = uniOffset;
+  entries[0].size = uniSize;
   entries[1].binding = 1;
   entries[1].sampler = sampler;
   entries[2].binding = 2;

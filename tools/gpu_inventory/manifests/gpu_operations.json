@@ -939,6 +939,7 @@
     },
     "donner/svg/renderer/geode/GeodeTextureEncoder.h": {
       "wgpuCppTokens": [
+        "Buffer",
         "Device",
         "Queue",
         "RenderPassEncoder",
