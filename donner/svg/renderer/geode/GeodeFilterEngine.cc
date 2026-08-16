@@ -135,18 +135,16 @@ private:
   std::vector<ScopedWgpuHandle<wgpu::Buffer>> buffers_;
 };
 
-/// Persistent per-frame uniform scratch and pass bind-group cache.
+/// Persistent per-frame uniform scratch.
 ///
-/// Every filter primitive pass used to allocate its own uniform buffer and
-/// bind group each frame. The scratch buffer gives each pass a stable
-/// 256-aligned (buffer, offset) uniform slot, so a pass that binds the same
-/// pooled input/output textures and the same slot each frame can reuse one
-/// cached bind group. The cursor resets and the cache clears at
-/// `GeodeFilterEngine::beginFrame()`, before the renderer's texture pool
-/// evicts stale buckets, so no cached bind group can outlive a texture it
-/// references. If the scratch must grow mid-frame, its old buffer is deferred
-/// for destruction and the cache is cleared, since every cached group
-/// references the old buffer.
+/// Every filter primitive pass used to allocate its own uniform buffer each
+/// frame. The scratch buffer gives each pass a stable 256-aligned (buffer,
+/// offset) uniform slot, and the cursor resets at
+/// `GeodeFilterEngine::beginFrame()`. If the scratch must grow mid-frame,
+/// the old buffer is deferred for destruction (drained at the next frame
+/// boundary, after submission). Pass bind groups are still created per
+/// pass: the pooled textures that a pass binds rotate across frames, so
+/// texture-identity keys are not stable enough to cache.
 struct FilterResourceCache {
   std::mutex mutex;
 
@@ -1697,10 +1695,12 @@ wgpu::Texture GeodeFilterEngine::execute(const svg::components::FilterGraph& gra
       // Axis-aligned CTM: fold the per-primitive subregion clip into the
       // blur's final pass (same floor/ceil round-out as the identity
       // clip path), eliminating one full-canvas dispatch and intermediate
-      // per blur node.
+      // per blur node. A zero-deviation blur dispatches no pass at all
+      // (applyGaussianBlur returns the input unchanged), so the clip
+      // cannot be folded; the dedicated clip pass handles that case.
       const Box2d* blurClip = nullptr;
       Box2d blurClipRect;
-      if (ctmAxisAligned) {
+      if (ctmAxisAligned && (sx > 0.0 || sy > 0.0)) {
         const Box2d pixelAABB = deviceFromFilter.transformBox(nodeSubregion);
         blurClipRect = Box2d(
             Vector2d(std::floor(pixelAABB.topLeft.x), std::floor(pixelAABB.topLeft.y)),

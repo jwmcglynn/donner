@@ -1783,6 +1783,51 @@ TEST_F(RendererGeodeTest, GaussianBlurZeroStdDevPassthrough) {
   EXPECT_THAT(outside, IsTransparent()) << "Outside the rect should be transparent with zero blur";
 }
 
+/// Zero-deviation blur with an explicit reduced subregion must still clip
+/// the primitive output to that subregion. The clip fold skips zero-pass
+/// blurs (no dispatch would carry the folded clip), so the dedicated
+/// subregion clip pass must run; this pins that fallback.
+TEST_F(RendererGeodeTest, GaussianBlurZeroStdDevClipsToExplicitSubregion) {
+  RendererGeode renderer = createRenderer();
+  beginFrame(renderer);
+
+  components::FilterGraph graph;
+  components::FilterNode blurNode;
+  components::filter_primitive::GaussianBlur blur;
+  blur.stdDeviationX = 0.0;
+  blur.stdDeviationY = 0.0;
+  blurNode.primitive = blur;
+  blurNode.inputs.push_back(components::FilterStandardInput::SourceGraphic);
+  // Explicit subregion: only the left half of the filter region survives.
+  blurNode.x = Lengthd(0.0, Lengthd::Unit::Percent);
+  blurNode.y = Lengthd(0.0, Lengthd::Unit::Percent);
+  blurNode.width = Lengthd(50.0, Lengthd::Unit::Percent);
+  blurNode.height = Lengthd(100.0, Lengthd::Unit::Percent);
+  graph.nodes.push_back(blurNode);
+
+  renderer.pushFilterLayer(graph, Box2d({0, 0}, {kViewportSize, kViewportSize}));
+
+  renderer.setPaint(solidFill(css::RGBA(255, 0, 0, 255)));
+  renderer.setTransform(Transform2d());
+  renderer.drawRect(Box2d({0, 0}, {kViewportSize, kViewportSize}), StrokeParams{});
+
+  renderer.popFilterLayer();
+  renderer.endFrame();
+
+  RendererBitmap snap = renderer.takeSnapshot();
+  ASSERT_FALSE(snap.empty());
+
+  // Inside the subregion: red (zero blur passes through).
+  auto inside = pixelAt(snap, 16, 32);
+  EXPECT_THAT(inside, RgbaEq(255, 0, 0, 255))
+      << "Zero-deviation blur inside the subregion should pass through";
+
+  // Outside the subregion: transparent (the clip must still apply).
+  auto outside = pixelAt(snap, 48, 32);
+  EXPECT_THAT(outside, IsTransparent())
+      << "Zero-deviation blur must still clip to the explicit subregion";
+}
+
 /// feOffset: shift a red rect by (4, 4) and verify pixels moved.
 TEST_F(RendererGeodeTest, FilterOffsetShiftsPixels) {
   RendererGeode renderer = createRenderer();
