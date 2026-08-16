@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cinttypes>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -90,8 +91,8 @@ std::uint64_t readProcStatusKb(std::string_view field) {
   std::string line;
   while (std::getline(status, line)) {
     if (line.starts_with(field)) {
-      unsigned long long value = 0;
-      if (std::sscanf(line.c_str() + field.size(), "%llu", &value) == 1) {
+      std::uint64_t value = 0;
+      if (std::sscanf(line.c_str() + field.size(), "%" PRIu64, &value) == 1) {
         return static_cast<std::uint64_t>(value);
       }
       return 0;
@@ -184,11 +185,12 @@ bool runAllocationPass(const std::string& source, MakeRenderer makeRenderer,
 
 void printAllocation(std::string_view engine, std::string_view phase,
                      const AllocationSnapshot& snapshot) {
-  std::printf("ALLOC engine=%.*s phase=%.*s calls=%llu bytes=%llu frees=%llu\n",
+  std::printf("ALLOC engine=%.*s phase=%.*s calls=%" PRIu64 " bytes=%" PRIu64
+              " frees=%" PRIu64 "\n",
               static_cast<int>(engine.size()), engine.data(), static_cast<int>(phase.size()),
-              phase.data(), static_cast<unsigned long long>(snapshot.allocationCalls),
-              static_cast<unsigned long long>(snapshot.allocationBytes),
-              static_cast<unsigned long long>(snapshot.freeCalls));
+              phase.data(), static_cast<std::uint64_t>(snapshot.allocationCalls),
+              static_cast<std::uint64_t>(snapshot.allocationBytes),
+              static_cast<std::uint64_t>(snapshot.freeCalls));
 }
 
 }  // namespace
@@ -285,11 +287,12 @@ int main(int argc, char* argv[]) {
   const std::uint64_t peakRssKb = readProcStatusKb("VmHWM:");
   std::printf(
       "RESULT engine=%.*s setup_ms=%.3f parse_ms=%.3f first_ms=%.3f second_ms=%.3f "
-      "width=%d height=%d rss_before_kb=%llu rss_setup_kb=%llu peak_rss_kb=%llu\n",
+      "width=%d height=%d rss_before_kb=%" PRIu64 " rss_setup_kb=%" PRIu64
+      " peak_rss_kb=%" PRIu64 "\n",
       static_cast<int>(engineName.size()), engineName.data(), setupMs, median(parseTimes),
       median(firstFrameTimes), median(secondFrameTimes), finalBitmap.dimensions.x,
-      finalBitmap.dimensions.y, static_cast<unsigned long long>(rssBeforeKb),
-      static_cast<unsigned long long>(rssAfterSetupKb), static_cast<unsigned long long>(peakRssKb));
+      finalBitmap.dimensions.y, static_cast<std::uint64_t>(rssBeforeKb),
+      static_cast<std::uint64_t>(rssAfterSetupKb), static_cast<std::uint64_t>(peakRssKb));
   printAllocation(engineName, "setup", setupAllocations);
   printAllocation(engineName, "parse", parseAllocations);
   printAllocation(engineName, "first", firstAllocations);
