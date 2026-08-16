@@ -79,7 +79,7 @@ GeodePipeline::GeodePipeline(const wgpu::Device& device, wgpu::TextureFormat col
   entries[9].buffer.type = wgpu::BufferBindingType::ReadOnlyStorage;
   entries[9].buffer.minBindingSize = 0;
 
-  // Analytic dual-ray fill (0041 §8): the four dense grid arrays
+  // Analytic dual-ray fill: the four dense grid arrays
   // (hBandGrid, vBandGrid, hCurveIndices, vCurveIndices) share ONE
   // combined u32 storage binding; instance records carry the element
   // bases. This keeps the fragment stage at six storage bindings, under

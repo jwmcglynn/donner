@@ -1030,6 +1030,12 @@ std::shared_ptr<RendererGeodeTexturePool> TexturePoolForDevice(geode::GeodeDevic
 
 }  // namespace
 
+/// Gate for ordered cross-entity batching. Disabled while the
+/// marker / scissor-clip deferred-flush interaction is unresolved; the
+/// SameEntity M6-B instanced path and the solo residence flows remain
+/// active and fully verified.
+constexpr bool kEnableSceneBatching = false;
+
 struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::FilterTextureAllocator {
   bool verbose = false;
   bool antialias = true;
@@ -1895,6 +1901,20 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
   /// single-draw path so we don't pay the per-instance-buffer cost for
   /// unbatched draws.
   struct PendingBatch {
+    enum class Mode : uint8_t {
+      None,
+      /// M6-B: consecutive draws of the SAME entity with the same solid
+      /// paint, collapsed into one instanced draw via the arena path
+      /// (per-instance transforms, one record per instance).
+      SameEntity,
+      /// Ordered batching: consecutive DISTINCT entities with
+      /// solid paints and resident slots, collapsed into one draw over
+      /// their record-slab records (one record per entity).
+      Scene,
+    };
+    Mode mode = Mode::None;
+
+    /// --- SameEntity mode fields ---
     /// Registry the batch's source entity belongs to. Entity ids are only
     /// unique within one registry, so a frame that draws more than one
     /// document (the icon-atlas pass) has to compare this too - otherwise a
@@ -1915,6 +1935,33 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
     /// uploaded as per-instance transforms (see
     /// `flushPendingBatch` for the math).
     std::vector<Transform2d> deviceFromLocalTransforms;
+    /// Encoder clip-state version when the SameEntity batch started. The
+    /// scene conversion only converts a pending singleton when the current
+    /// clip state matches, so a scene batch never spans a clip change.
+    uint64_t sameEntityClipVersion = 0;
+
+    /// --- Scene mode fields ---
+    struct SceneInstance {
+      geode::GeodeResidentSlot* slot = nullptr;
+      const geode::EncodedPath* encoded = nullptr;
+      const Path* path = nullptr;
+      css::RGBA color;
+      FillRule rule = FillRule::NonZero;
+      Transform2d deviceFromLocal;
+      uint32_t vertexCount = 0;
+    };
+    /// Consecutive instances. Each instance's record-slab slot index must
+    /// be `firstInstanceIndex + i`, its geometry must live in the same
+    /// slab chunk, and its record must live in the same record-slab
+    /// buffer as the batch.
+    std::vector<SceneInstance> sceneInstances;
+    wgpu::Buffer sceneChunkBuffer;
+    wgpu::Buffer sceneRecordBuffer;
+    uint32_t sceneFirstInstance = 0;
+    uint32_t sceneVertexCount = 0;
+    /// Encoder clip-state version at the batch's first append. A batch
+    /// never spans a clip change (one draw carries one clip state).
+    uint64_t sceneClipVersion = 0;
     /// GPU-residence slot for this source entity's fill (captured
     /// when the batch starts). Used only by the size-1 flush path - a
     /// size >= 2 flush routes through the instanced arena path, which has
@@ -1922,6 +1969,41 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
     geode::GeodeResidentSlot* residentFillSlot = nullptr;
   };
   std::optional<PendingBatch> pendingBatch;
+
+  /// Record-slab slots allocated this frame for same-entity repeat draws
+  /// (markers, repeated `<use>`): one record per draw, so earlier recorded
+  /// batches keep their own content at submit time. Freed (deferred) at
+  /// the next frame's draw(); the slab merges the frees at beginFrame.
+  std::vector<geode::GeodeRecordSlab::Slot> sceneTempRecordSlots;
+
+  /// Resolve the record slot for a scene-batch instance of `slot`: the
+  /// entity's primary slot on its first scene use this frame, otherwise a
+  /// fresh temporary slot (the primary slot's record is already referenced
+  /// by an earlier recorded batch). Returns false when no slot is
+  /// available.
+  /// Choose the record slot for a scene-batch instance of `slot` WITHOUT
+  /// marking it used: the primary slot on the entity's first scene use
+  /// this frame (nullptr: the ensure uses the cached write path), or a
+  /// fresh temporary slot for same-frame repeats (the primary slot's
+  /// record is already referenced by an earlier recorded batch). Callers
+  /// mark `slot.lastSceneFrame = currentFrameIndex` only after a
+  /// successful ensure.
+  bool resolveSceneRecordSlot(geode::GeodeResidentSlot& slot,
+                              const geode::GeodeRecordSlab::Slot*& outSlot) {
+    outSlot = nullptr;
+    if (slot.lastSceneFrame == currentFrameIndex) {
+      if (!slot.recordSlab) {
+        return false;
+      }
+      geode::GeodeRecordSlab::Slot tempSlot;
+      if (!slot.recordSlab->allocateSlot(*device, tempSlot)) {
+        return false;
+      }
+      sceneTempRecordSlots.push_back(tempSlot);
+      outSlot = &sceneTempRecordSlots.back();
+    }
+    return true;
+  }
 
   /// Connect (or rewire) our `on_update<ComputedPathComponent>` /
   /// `on_destroy<ComputedPathComponent>` listener onto `registry`.
@@ -1987,6 +2069,37 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
   /// rendered by a different device, and freed with the registry.
   /// Returns the registry's resident slab, shared so slots can keep the
   /// old slab alive across a device change.
+  /// Document-scoped painter-ordered record slab (ordered
+  /// batching). Mirrors `residentSlab`'s registry-context wiring: one slab
+  /// per document, swapped when a different device renders the document.
+  std::shared_ptr<geode::GeodeRecordSlab> recordSlab(Registry& registry) {
+    auto* slabPtr = registry.ctx().find<std::shared_ptr<geode::GeodeRecordSlab>>();
+    if (slabPtr == nullptr) {
+      registry.ctx().emplace<std::shared_ptr<geode::GeodeRecordSlab>>(nullptr);
+      slabPtr = registry.ctx().find<std::shared_ptr<geode::GeodeRecordSlab>>();
+    }
+    std::shared_ptr<geode::GeodeRecordSlab>& slab = *slabPtr;
+    if (!slab || slab->owningDeviceId() != device->deviceId()) {
+      slab = std::make_shared<geode::GeodeRecordSlab>(device->deviceId());
+    }
+    return slab;
+  }
+
+  /// Ensure `slot` has a record-slab slot on the current device's slab.
+  void ensureRecordSlot(geode::GeodeResidentSlot& slot, Registry& registry) {
+    std::shared_ptr<geode::GeodeRecordSlab> slab = recordSlab(registry);
+    if (slot.recordSlab.get() != slab.get()) {
+      // Device change: the old slab is retired with the registry-context
+      // swap; drop the stale slot handle and allocate fresh on the new
+      // slab.
+      slot.recordSlab = std::move(slab);
+      slot.recordSlot = geode::GeodeRecordSlab::Slot{};
+    }
+    if (!slot.recordSlot.buffer) {
+      (void)slot.recordSlab->allocateSlot(*device, slot.recordSlot);
+    }
+  }
+
   std::shared_ptr<geode::GeodeResidentSlab> residentSlab(Registry& registry) {
     auto* slabPtr = registry.ctx().find<std::shared_ptr<geode::GeodeResidentSlab>>();
     if (slabPtr == nullptr) {
@@ -2023,6 +2136,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
       slot.reset();
     }
     slot.slab = std::move(slab);
+    ensureRecordSlot(slot, *source.registry());
     return &slot;
   }
 
@@ -2039,6 +2153,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
       slot.reset();
     }
     slot.slab = std::move(slab);
+    ensureRecordSlot(slot, *source.registry());
     return &slot;
   }
 
@@ -2123,7 +2238,13 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
   /// for the subsequent stroke emit - breaks any fixture that
   /// mixes batchable fills with stroked siblings.
   void flushPendingBatch() {
-    if (!pendingBatch.has_value() || pendingBatch->deviceFromLocalTransforms.empty()) {
+    const bool empty = !pendingBatch.has_value() ||
+                       (pendingBatch->mode == PendingBatch::Mode::None) ||
+                       (pendingBatch->mode == PendingBatch::Mode::SameEntity &&
+                        pendingBatch->deviceFromLocalTransforms.empty()) ||
+                       (pendingBatch->mode == PendingBatch::Mode::Scene &&
+                        pendingBatch->sceneInstances.empty());
+    if (empty) {
       pendingBatch.reset();
       return;
     }
@@ -2134,6 +2255,46 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
     const Transform2d savedDeviceFromLocalTransform = deviceFromLocalTransform;
     PendingBatch batch = std::move(*pendingBatch);
     pendingBatch.reset();
+
+    if (batch.mode == PendingBatch::Mode::Scene) {
+      // Ordered batch: one draw over the consecutive record-slab
+      // records. Every instance's geometry and record were ensured via
+      // `ensureResidentSceneRecord`; the encoder transform is identity so
+      // the batch uniform is orthographic-only and each record carries its
+      // own full transform.
+      deviceFromLocalTransform = Transform2d();
+      syncTransform();
+
+      geode::GeoEncoder::SceneBatchBinding binding = {};
+      binding.chunkBuffer = batch.sceneChunkBuffer;
+      binding.recordBuffer = batch.sceneRecordBuffer;
+      binding.firstInstance = batch.sceneFirstInstance;
+      binding.instanceCount = static_cast<uint32_t>(batch.sceneInstances.size());
+      binding.vertexCount = batch.sceneVertexCount;
+
+      const css::RGBA batchColor = batch.sceneInstances.front().color;
+      const FillRule batchRule = batch.sceneInstances.front().rule;
+      // Ensure each instance's geometry + batch-form record immediately
+      // before the draw that consumes them, so solo flushes never observe
+      // the batch form's bytes.
+      for (const PendingBatch::SceneInstance& inst : batch.sceneInstances) {
+        if (inst.slot != nullptr && inst.encoded != nullptr) {
+          (void)encoder->ensureResidentSceneRecord(*inst.slot, *inst.encoded, inst.color,
+                                                   inst.rule, inst.deviceFromLocal, nullptr);
+        }
+      }
+      encoder->fillPathSceneBatch(batchColor, batchRule, binding);
+      // The batch now references each instance's record: mark them so a
+      // same-frame repeat of any of them gets a fresh temporary record
+      // instead of overwriting this batch's content.
+      for (const PendingBatch::SceneInstance& inst : batch.sceneInstances) {
+        if (inst.slot != nullptr) {
+          inst.slot->lastSceneFrame = currentFrameIndex;
+        }
+      }
+      deviceFromLocalTransform = savedDeviceFromLocalTransform;
+      return;
+    }
 
     if (batch.deviceFromLocalTransforms.size() == 1) {
       // Single draw - restore the captured transform + use the
@@ -2182,17 +2343,183 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
                              const css::RGBA& color, FillRule rule,
                              const geode::EncodedPath* encoded,
                              geode::GeodeResidentSlot* residentFillSlot) {
-    const bool matches = pendingBatch.has_value() &&
-                         pendingBatch->sourceRegistry == sourceRegistry &&
-                         pendingBatch->sourceEntity == sourceEntity &&
-                         pendingBatch->color == color && pendingBatch->rule == rule;
-    if (matches) {
+    // Same-entity mode: consecutive draws of the SAME entity with the
+    // same paint extend the M6-B instanced batch.
+    if (pendingBatch.has_value() && pendingBatch->mode == PendingBatch::Mode::SameEntity &&
+        pendingBatch->sourceRegistry == sourceRegistry &&
+        pendingBatch->sourceEntity == sourceEntity && pendingBatch->color == color &&
+        pendingBatch->rule == rule) {
       pendingBatch->deviceFromLocalTransforms.push_back(deviceFromLocalTransform);
       return true;
     }
-    // Key doesn't match - flush whatever's pending, then start fresh.
+
+    // Scene mode: distinct entities whose records are painter-ordered
+    // and whose geometry shares a slab chunk. Scene batches always form
+    // by converting a pending size-1 same-entity entry (the first entity
+    // starts as SameEntity(1); the second, different entity converts it),
+    // so a same-entity `<use>` repeat still prefers the instanced path.
+    // Scene batches cover entities drawn ONCE per frame. A same-frame
+    // repeat (markers, repeated <use>) belongs to the M6-B same-entity
+    // path and the solo flush's arena fallback, whose semantics predate
+    // ordered batching and are already exact for repeated draws.
+    const geode::GeodeRecordSlab::Slot* recordSlotPtr = nullptr;
+    const uint64_t clipVersion = encoder->clipStateVersion();
+    // Ordered cross-entity batching is gated off while the marker /
+    // scissor-clip edge cases are resolved (see the design checkpoint):
+    // the machinery below stays in place for the follow-up.
+    const bool sceneEligible = kEnableSceneBatching && residentFillSlot != nullptr &&
+                               encoded != nullptr &&
+                               residentFillSlot->recordSlot.buffer &&
+                               !encoder->hasActiveClipState() &&
+                               !encoder->hasActiveScissor() &&
+                               residentFillSlot->lastSceneFrame != currentFrameIndex &&
+                               resolveSceneRecordSlot(*residentFillSlot, recordSlotPtr);
+    if (sceneEligible &&
+        encoder->ensureResidentSceneRecord(*residentFillSlot, *encoded, color, rule,
+                                           deviceFromLocalTransform, recordSlotPtr)) {
+      const geode::GeodeRecordSlab::Slot& effectiveRecordSlot =
+          recordSlotPtr != nullptr ? *recordSlotPtr : residentFillSlot->recordSlot;
+      const wgpu::Buffer chunk = residentFillSlot->buffer;
+      const wgpu::Buffer recordBuf = effectiveRecordSlot.buffer;
+      const uint32_t recordIndex = effectiveRecordSlot.index;
+      const uint32_t vertexCount = encoded->boundingDrawVertexCount();
+
+      auto appendSceneInstance = [&](PendingBatch& b, const PendingBatch::SceneInstance& inst) {
+        b.sceneInstances.push_back(inst);
+        b.sceneVertexCount = std::max(b.sceneVertexCount, inst.vertexCount);
+        // The record is now claimed by a pending batch: a same-frame
+        // repeat must not overwrite it.
+        if (inst.slot != nullptr) {
+          inst.slot->lastSceneFrame = currentFrameIndex;
+        }
+      };
+
+      if (pendingBatch.has_value() && pendingBatch->mode == PendingBatch::Mode::Scene) {
+        if (pendingBatch->sceneChunkBuffer == chunk &&
+            pendingBatch->sceneRecordBuffer == recordBuf &&
+            pendingBatch->sceneClipVersion == clipVersion &&
+            pendingBatch->sceneFirstInstance + pendingBatch->sceneInstances.size() ==
+                recordIndex) {
+          appendSceneInstance(*pendingBatch,
+                              PendingBatch::SceneInstance{residentFillSlot, encoded, &path, color,
+                                                          rule, deviceFromLocalTransform,
+                                                          vertexCount});
+        } else {
+          flushPendingBatch();
+          pendingBatch = PendingBatch{};
+          pendingBatch->mode = PendingBatch::Mode::Scene;
+          pendingBatch->sceneChunkBuffer = chunk;
+          pendingBatch->sceneRecordBuffer = recordBuf;
+          pendingBatch->sceneFirstInstance = recordIndex;
+          pendingBatch->sceneClipVersion = clipVersion;
+          appendSceneInstance(*pendingBatch,
+                              PendingBatch::SceneInstance{residentFillSlot, encoded, &path, color,
+                                                          rule, deviceFromLocalTransform,
+                                                          vertexCount});
+        }
+        return true;
+      }
+
+      if (pendingBatch.has_value() && pendingBatch->mode == PendingBatch::Mode::SameEntity &&
+          pendingBatch->deviceFromLocalTransforms.size() == 1 &&
+          pendingBatch->sameEntityClipVersion == clipVersion) {
+        // Convert the pending size-1 same-entity entry into the scene
+        // batch's first instance.
+        PendingBatch::SceneInstance first{pendingBatch->residentFillSlot,
+                                          pendingBatch->encoded, pendingBatch->path,
+                                          pendingBatch->color, pendingBatch->rule,
+                                          pendingBatch->deviceFromLocalTransforms.front(),
+                                          pendingBatch->encoded->boundingDrawVertexCount()};
+        // Resolve the first entity's record slot: its primary slot on its
+        // first scene use this frame, or a fresh temporary slot when it
+        // was already batched earlier this frame (its primary record is
+        // referenced by that earlier batch and must not be overwritten).
+        const geode::GeodeRecordSlab::Slot* firstRecordSlotPtr = nullptr;
+        if (first.slot != nullptr && first.encoded != nullptr && first.slot->recordSlot.buffer &&
+            resolveSceneRecordSlot(*first.slot, firstRecordSlotPtr) &&
+            encoder->ensureResidentSceneRecord(*first.slot, *first.encoded, first.color,
+                                               first.rule, first.deviceFromLocal,
+                                               firstRecordSlotPtr)) {
+          first.slot->lastSceneFrame = currentFrameIndex;
+          const geode::GeodeRecordSlab::Slot& effectiveFirstRecordSlot =
+              firstRecordSlotPtr != nullptr ? *firstRecordSlotPtr : first.slot->recordSlot;
+          const wgpu::Buffer firstChunk = first.slot->buffer;
+          const wgpu::Buffer firstRecordBuf = effectiveFirstRecordSlot.buffer;
+          const uint32_t firstIndex = effectiveFirstRecordSlot.index;
+          pendingBatch = PendingBatch{};
+          pendingBatch->mode = PendingBatch::Mode::Scene;
+          pendingBatch->sceneChunkBuffer = firstChunk;
+          pendingBatch->sceneRecordBuffer = firstRecordBuf;
+          pendingBatch->sceneFirstInstance = firstIndex;
+          pendingBatch->sceneClipVersion = clipVersion;
+          pendingBatch->sceneVertexCount = first.vertexCount;
+          pendingBatch->sceneInstances.push_back(first);
+          if (firstChunk == chunk && firstRecordBuf == recordBuf && firstIndex + 1 == recordIndex) {
+            appendSceneInstance(*pendingBatch,
+                                PendingBatch::SceneInstance{residentFillSlot, encoded, &path,
+                                                            color, rule,
+                                                            deviceFromLocalTransform,
+                                                            vertexCount});
+          } else {
+            flushPendingBatch();
+            pendingBatch = PendingBatch{};
+            pendingBatch->mode = PendingBatch::Mode::Scene;
+            pendingBatch->sceneChunkBuffer = chunk;
+            pendingBatch->sceneRecordBuffer = recordBuf;
+            pendingBatch->sceneFirstInstance = recordIndex;
+            appendSceneInstance(*pendingBatch,
+                                PendingBatch::SceneInstance{residentFillSlot, encoded, &path,
+                                                            color, rule,
+                                                            deviceFromLocalTransform,
+                                                            vertexCount});
+          }
+        } else {
+          flushPendingBatch();
+        }
+        return true;
+      }
+
+      if (!pendingBatch.has_value() || pendingBatch->mode != PendingBatch::Mode::Scene) {
+        // First draw of an entity (or after a flushed pair): start a
+        // same-entity batch of size 1; a different entity converts it
+        // into a scene batch, a repeat extends it as instanced.
+        if (pendingBatch.has_value()) {
+          flushPendingBatch();
+        }
+        pendingBatch = PendingBatch{};
+        pendingBatch->mode = PendingBatch::Mode::SameEntity;
+        pendingBatch->sameEntityClipVersion = clipVersion;
+        pendingBatch->sourceRegistry = sourceRegistry;
+        pendingBatch->sourceEntity = sourceEntity;
+        pendingBatch->color = color;
+        pendingBatch->rule = rule;
+        pendingBatch->encoded = encoded;
+        pendingBatch->path = &path;
+        pendingBatch->residentFillSlot = residentFillSlot;
+        pendingBatch->deviceFromLocalTransforms.push_back(deviceFromLocalTransform);
+        return true;
+      }
+
+      flushPendingBatch();
+      pendingBatch = PendingBatch{};
+      pendingBatch->mode = PendingBatch::Mode::Scene;
+      pendingBatch->sceneChunkBuffer = chunk;
+      pendingBatch->sceneRecordBuffer = recordBuf;
+      pendingBatch->sceneFirstInstance = recordIndex;
+      pendingBatch->sceneClipVersion = clipVersion;
+      appendSceneInstance(*pendingBatch,
+                          PendingBatch::SceneInstance{residentFillSlot, encoded, &path, color,
+                                                      rule, deviceFromLocalTransform,
+                                                      vertexCount});
+      return true;
+    }
+
+    // Not scene-eligible: flush whatever's pending, then start a fresh
+    // same-entity batch.
     flushPendingBatch();
     pendingBatch = PendingBatch{};
+    pendingBatch->mode = PendingBatch::Mode::SameEntity;
+    pendingBatch->sameEntityClipVersion = encoder->clipStateVersion();
     pendingBatch->sourceRegistry = sourceRegistry;
     pendingBatch->sourceEntity = sourceEntity;
     pendingBatch->color = color;
@@ -2778,9 +3105,20 @@ void RendererGeode::draw(SVGDocument& document) {
   // `GeodePathCacheComponent`.
   impl_->ensureCacheInvalidationWired(document.registry());
 
-  // Freed slab ranges merge lazily inside residentSlab(), gated to once
-  // per frame, so every resident-slot access (this draw, tile frames,
-  // repeated draws) shares one merge point; see GeodeResidentSlab::beginFrame.
+  // Merge the previous frame's freed slab ranges before any draw records
+  // against this frame's command buffer (a range freed this frame is never
+  // reused this frame; see GeodeResidentSlab::beginFrame).
+  impl_->residentSlab(document.registry())->beginFrame(impl_->currentFrameIndex);
+  impl_->recordSlab(document.registry())->beginFrame(impl_->currentFrameIndex);
+
+  // Release the previous frame's temporary record slots (same-frame
+  // repeat draws). freeSlot defers to the NEXT beginFrame, so freeing
+  // here makes them reusable starting the frame after this one - the
+  // batches recorded against them last frame have long submitted.
+  for (const geode::GeodeRecordSlab::Slot& tempSlot : impl_->sceneTempRecordSlots) {
+    impl_->recordSlab(document.registry())->freeSlot(tempSlot);
+  }
+  impl_->sceneTempRecordSlots.clear();
 
   RendererDriver driver(*this, impl_->verbose);
   driver.draw(document);

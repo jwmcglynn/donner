@@ -476,6 +476,7 @@
         "submit"
       ],
       "wgpuCppTokens": [
+        "Buffer",
         "CommandEncoder",
         "Device",
         "Texture",
