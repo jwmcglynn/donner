@@ -1232,6 +1232,7 @@
         "for",
         "if",
         "let",
+        "max",
         "min",
         "return",
         "select",

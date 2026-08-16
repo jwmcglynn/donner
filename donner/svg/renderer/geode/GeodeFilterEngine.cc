@@ -210,7 +210,16 @@ struct BlurParams {
   uint32_t kernelType;  // 0 = Gaussian, 1 = Box.
   int32_t boxLeft;      // Box mode: samples on the negative side.
   int32_t boxRight;     // Box mode: samples on the positive side.
-  uint32_t pad0;
+  // Optional output-space clip rectangle, applied on the final blur pass
+  // so the per-primitive subregion clip pass can be folded into the blur.
+  // `clipActive == 0` disables the check. Semantics match the identity
+  // subregion-clip shader: pixels with coord < clipMin or coord >= clipMax
+  // are zeroed.
+  int32_t clipMinX;
+  int32_t clipMinY;
+  int32_t clipMaxX;
+  int32_t clipMaxY;
+  uint32_t clipActive;
   uint32_t pad1;
 };
 
@@ -2097,16 +2106,37 @@ wgpu::Texture GeodeFilterEngine::applyGaussianBlur(FilterResourceArena& arena,
   // kernel that the software backend never produces.
   constexpr double kBoxBlurThreshold = 2.0;
 
+  // Ping-pong pair of intermediates: every pass of one blur alternates
+  // between the two textures instead of allocating a fresh intermediate
+  // per pass (a 3-pass box blur on both axes used to hold six live
+  // textures at once). Each texture is created lazily on first use, so a
+  // single-pass blur only allocates one.
+  const wgpu::Device& dev = device_.device();
+  wgpu::Texture scratch[2] = {};
+  int scratchCursor = 0;
+  auto nextOutput = [&]() -> wgpu::Texture {
+    wgpu::Texture& out = scratch[scratchCursor];
+    if (!out) {
+      out = createIntermediateTexture(arena, dev, width, height, "GaussianBlurScratch");
+    }
+    scratchCursor = 1 - scratchCursor;
+    return out;
+  };
+
   wgpu::Texture afterHorizontal = input;
   if (stdDeviationX > 0.0) {
     if (stdDeviationX >= kBoxBlurThreshold) {
       const BoxBlurPlan plan = computeBoxPasses(stdDeviationX);
       for (int i = 0; i < plan.numPasses; ++i) {
-        afterHorizontal = runBoxBlurPass(arena, afterHorizontal, width, height, plan.passes[i].left,
-                                         plan.passes[i].right, /*axis=*/0, edgeMode);
+        const wgpu::Texture output = nextOutput();
+        afterHorizontal = runBoxBlurPass(arena, afterHorizontal, output, width, height,
+                                         plan.passes[i].left, plan.passes[i].right, /*axis=*/0,
+                                         edgeMode);
       }
     } else {
-      afterHorizontal = runBlurPass(arena, input, width, height, static_cast<float>(stdDeviationX),
+      const wgpu::Texture output = nextOutput();
+      afterHorizontal = runBlurPass(arena, input, output, width, height,
+                                    static_cast<float>(stdDeviationX),
                                     /*axis=*/0, edgeMode);
     }
   }
@@ -2116,13 +2146,16 @@ wgpu::Texture GeodeFilterEngine::applyGaussianBlur(FilterResourceArena& arena,
     if (stdDeviationY >= kBoxBlurThreshold) {
       const BoxBlurPlan plan = computeBoxPasses(stdDeviationY);
       for (int i = 0; i < plan.numPasses; ++i) {
-        afterVertical = runBoxBlurPass(arena, afterVertical, width, height, plan.passes[i].left,
-                                       plan.passes[i].right, /*axis=*/1, edgeMode);
+        const wgpu::Texture output = nextOutput();
+        afterVertical = runBoxBlurPass(arena, afterVertical, output, width, height,
+                                       plan.passes[i].left, plan.passes[i].right, /*axis=*/1,
+                                       edgeMode);
       }
     } else {
-      afterVertical =
-          runBlurPass(arena, afterHorizontal, width, height, static_cast<float>(stdDeviationY),
-                      /*axis=*/1, edgeMode);
+      const wgpu::Texture output = nextOutput();
+      afterVertical = runBlurPass(arena, afterHorizontal, output, width, height,
+                                  static_cast<float>(stdDeviationY),
+                                  /*axis=*/1, edgeMode);
     }
   }
 
@@ -2130,11 +2163,10 @@ wgpu::Texture GeodeFilterEngine::applyGaussianBlur(FilterResourceArena& arena,
 }
 
 wgpu::Texture GeodeFilterEngine::runBlurPass(FilterResourceArena& arena, const wgpu::Texture& input,
-                                             uint32_t width, uint32_t height, float stdDeviation,
-                                             uint32_t axis, uint32_t edgeMode) {
+                                             const wgpu::Texture& output, uint32_t width,
+                                             uint32_t height, float stdDeviation, uint32_t axis,
+                                             uint32_t edgeMode) {
   const wgpu::Device& dev = device_.device();
-
-  wgpu::Texture output = createIntermediateTexture(arena, dev, width, height, "GaussianBlurPass");
 
   BlurParams params{};
   params.stdDeviation = stdDeviation;
@@ -2143,7 +2175,11 @@ wgpu::Texture GeodeFilterEngine::runBlurPass(FilterResourceArena& arena, const w
   params.kernelType = 0;
   params.boxLeft = 0;
   params.boxRight = 0;
-  params.pad0 = 0;
+  params.clipMinX = 0;
+  params.clipMinY = 0;
+  params.clipMaxX = 0;
+  params.clipMaxY = 0;
+  params.clipActive = 0;
   params.pad1 = 0;
 
   auto uniformBuffer = writeUniformSlot(*resourceCache_, device_, &params, sizeof(params));
@@ -2155,12 +2191,11 @@ wgpu::Texture GeodeFilterEngine::runBlurPass(FilterResourceArena& arena, const w
 }
 
 wgpu::Texture GeodeFilterEngine::runBoxBlurPass(FilterResourceArena& arena,
-                                                const wgpu::Texture& input, uint32_t width,
+                                                const wgpu::Texture& input,
+                                                const wgpu::Texture& output, uint32_t width,
                                                 uint32_t height, int32_t boxLeft, int32_t boxRight,
                                                 uint32_t axis, uint32_t edgeMode) {
   const wgpu::Device& dev = device_.device();
-
-  wgpu::Texture output = createIntermediateTexture(arena, dev, width, height, "BoxBlurPass");
 
   BlurParams params{};
   params.stdDeviation = 0.0f;
@@ -2169,7 +2204,11 @@ wgpu::Texture GeodeFilterEngine::runBoxBlurPass(FilterResourceArena& arena,
   params.kernelType = 1;
   params.boxLeft = boxLeft;
   params.boxRight = boxRight;
-  params.pad0 = 0;
+  params.clipMinX = 0;
+  params.clipMinY = 0;
+  params.clipMaxX = 0;
+  params.clipMaxY = 0;
+  params.clipActive = 0;
   params.pad1 = 0;
 
   auto uniformBuffer = writeUniformSlot(*resourceCache_, device_, &params, sizeof(params));

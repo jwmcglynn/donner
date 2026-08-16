@@ -19,8 +19,21 @@ struct BlurParams {
   kernel_type: u32,// 0 = Gaussian, 1 = Box
   box_left: i32,   // box mode: number of samples to the negative side
   box_right: i32,  // box mode: number of samples to the positive side
-  _pad0: u32,
+  clip_min: vec2i, // optional output clip (see clip_active)
+  clip_max: vec2i, // optional output clip: zero pixels with coord < min or >= max
+  clip_active: u32,
   _pad1: u32,
+}
+
+// Zero the result for pixels outside the optional clip rectangle, matching
+// the identity subregion-clip pass so the two are interchangeable.
+fn apply_clip(coord: vec2i, value: vec4f) -> vec4f {
+  if (params.clip_active == 1u) {
+    if (any(coord < params.clip_min) || any(coord >= params.clip_max)) {
+      return vec4f(0.0);
+    }
+  }
+  return value;
 }
 
 @group(0) @binding(0) var input_tex: texture_2d<f32>;
@@ -67,13 +80,13 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
       bsum = bsum + sampleEdge(coord + off, size);
     }
     let count = f32(bl + br + 1);
-    textureStore(output_tex, coord, bsum / count);
+    textureStore(output_tex, coord, apply_clip(coord, bsum / count));
     return;
   }
 
   // stdDeviation == 0 → passthrough (no blur).
   if (sigma <= 0.0) {
-    textureStore(output_tex, coord, textureLoad(input_tex, coord, 0));
+    textureStore(output_tex, coord, apply_clip(coord, textureLoad(input_tex, coord, 0)));
     return;
   }
 
@@ -102,5 +115,5 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
     acc = acc / weight_sum;
   }
 
-  textureStore(output_tex, coord, acc);
+  textureStore(output_tex, coord, apply_clip(coord, acc));
 }

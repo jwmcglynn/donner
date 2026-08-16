@@ -175,8 +175,9 @@ private:
   /// @param axis 0 = horizontal, 1 = vertical.
   /// @param edgeMode Edge handling mode.
   /// @return Output texture for this pass.
-  wgpu::Texture runBlurPass(FilterResourceArena& arena, const wgpu::Texture& input, uint32_t width,
-                            uint32_t height, float stdDeviation, uint32_t axis, uint32_t edgeMode);
+  wgpu::Texture runBlurPass(FilterResourceArena& arena, const wgpu::Texture& input,
+                            const wgpu::Texture& output, uint32_t width, uint32_t height,
+                            float stdDeviation, uint32_t axis, uint32_t edgeMode);
 
   /// One pass of a 3-pass box blur (used to approximate a Gaussian for sigma
   /// >= 2.0, matching tiny-skia's behaviour).
@@ -189,8 +190,9 @@ private:
   /// @param edgeMode Edge handling mode.
   /// @return Output texture for this pass.
   wgpu::Texture runBoxBlurPass(FilterResourceArena& arena, const wgpu::Texture& input,
-                               uint32_t width, uint32_t height, int32_t boxLeft, int32_t boxRight,
-                               uint32_t axis, uint32_t edgeMode);
+                               const wgpu::Texture& output, uint32_t width, uint32_t height,
+                               int32_t boxLeft, int32_t boxRight, uint32_t axis,
+                               uint32_t edgeMode);
 
   /// Shift pixels by (dx, dy) via compute shader.
   /// @param input The input texture.
