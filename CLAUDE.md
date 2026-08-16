@@ -22,7 +22,7 @@
 
 ## No Design-Doc or Milestone References in Code Comments
 
-- **Code comments must never cite design documents or planning labels — including Donner's own `docs/design_docs/` pages.** Banned in any comment (C++, headers, WGSL, BUILD files, scripts, tests): design-doc numbers ("design doc 0030", "design 0053"), milestone labels ("Milestone 3", "M2", "M4.2", "M6-B"), and roadmap shorthand ("wave 2", "Tier 4", "Phase 5", "packet 8a", "Bullet 2").
+- **Code comments must never cite design documents or planning labels — including Donner's own `docs/design_docs/` pages.** Banned in any comment (C++, headers, WGSL, BUILD files, scripts, tests): design-doc numbers ("design doc 0030", "design 0053"), milestone labels ("Milestone 3", "M2", "M4.2", "M6-B"), and roadmap shorthand ("wave 2", "Tier 4", "Phase 5", "packet 8a", "Bullet 2", "Slice 1").
 - **Write the reasoning into the comment itself.** A comment must stand alone for a reader who has never seen the planning docs: state the invariant, constraint, or measured fact directly ("all GeoEncoder instances share one frame CommandEncoder, so push/pop boundaries do not force a queue submit"), not where it was decided. If the only content of a comment is a doc pointer, delete the comment.
 - Design docs may reference code; code never references design docs. This extends the "No Private-Infra References" rule (which bans private design-doc numbers everywhere) to in-repo planning references in code comments (operator review, 2026-08-16). Commit messages and PR bodies were already required to be self-contained.
 - **When you touch a line whose existing comment violates this, remove the reference in the same change**, even when it is preexisting.

@@ -361,7 +361,7 @@ public:
    * Enter isolated editing for a group in the current document.
    *
    * Selection and hit testing are constrained to strict descendants until
-   * ef exitGroupEdit is called. Nested groups may become the new scope.
+   * \ref exitGroupEdit is called. Nested groups may become the new scope.
    */
   bool enterGroupEdit(const svg::SVGElement& group);
 
