@@ -311,6 +311,12 @@ py_test(
         # glue grows with it. Measured at this layer: js 170,862 raw /
         # 48,316 gzip (main measured 48,284 gzip, 16 bytes under the old
         # budget, so the gate could no longer absorb intended growth).
+        # Review-hardening retune: the cross-submit guard, bounded readback
+        # pool, and clip-fold range checks add deliberate renderer code.
+        # Measured at this layer: package 11,451,583 raw, 1,583 bytes over
+        # the previous total budget; the total keeps about 1 percent
+        # headroom over that measurement.
+        #
         # Budgets keep about 1 percent headroom over the measured values
         # for BOTH the gzip and raw js gates: retuning only the gzip gate
         # would leave the raw gate at 138 bytes of headroom over the
@@ -329,7 +335,7 @@ py_test(
         "--max-js-gzip-bytes",
         "48800",
         "--max-total-raw-bytes",
-        "11450000",
+        "11565000",
         "--expected-js-property",
         "__donnerLastScrollEvent",
         # SHIP BLOCKER, tracked with the deferred WebKit decision: the WebGPU diagnostic
