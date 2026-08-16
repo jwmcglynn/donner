@@ -1586,7 +1586,98 @@ wgpu::Texture GeodeFilterEngine::execute(const svg::components::FilterGraph& gra
     return filterRegionSubregion;
   };
 
+  // Intersect two user-space boxes.
+  auto boxIntersect = [](const Box2d& a, const Box2d& b) -> Box2d {
+    return Box2d(
+        Vector2d(std::max(a.topLeft.x, b.topLeft.x), std::max(a.topLeft.y, b.topLeft.y)),
+        Vector2d(std::min(a.bottomRight.x, b.bottomRight.x),
+                 std::min(a.bottomRight.y, b.bottomRight.y)));
+  };
+
+  // User-space subregion for a node, mirroring tiny-skia's
+  // defaultNodeSubregion: source generators and nodes with no inputs
+  // default to the filter region; other nodes inherit the union of their
+  // input subregions with primitive-specific expansion (blur, drop-shadow,
+  // dilate). Explicit x/y/width/height attributes override and are
+  // intersected with the filter region. Computed once per node up front so
+  // the blur path can fold the per-primitive clip into its final pass.
+  auto computeNodeSubregion = [&](const FilterNode& node) -> Box2d {
+    const bool isSourceGenerator =
+        std::holds_alternative<filter_primitive::Flood>(node.primitive) ||
+        std::holds_alternative<filter_primitive::Turbulence>(node.primitive) ||
+        std::holds_alternative<filter_primitive::Image>(node.primitive) ||
+        std::holds_alternative<filter_primitive::Tile>(node.primitive);
+
+    const bool hasExplicitSubregion = node.x.has_value() || node.y.has_value() ||
+                                      node.width.has_value() || node.height.has_value();
+
+    Box2d nodeSubregion = filterRegionSubregion;
+    if (hasExplicitSubregion) {
+      const double ux =
+          node.x.has_value() ? resolvePrimitivePosition(*node.x, Lengthd::Extent::X,
+                                                        isOBB ? bboxX : 0.0, bboxW)
+                             : filterRegion.topLeft.x;
+      const double uy =
+          node.y.has_value() ? resolvePrimitivePosition(*node.y, Lengthd::Extent::Y,
+                                                        isOBB ? bboxY : 0.0, bboxH)
+                             : filterRegion.topLeft.y;
+      const double uw =
+          node.width.has_value() ? resolvePrimitiveSize(*node.width, Lengthd::Extent::X, bboxW)
+                                 : filterRegion.width();
+      const double uh =
+          node.height.has_value() ? resolvePrimitiveSize(*node.height, Lengthd::Extent::Y, bboxH)
+                                  : filterRegion.height();
+      nodeSubregion = boxIntersect(Box2d(Vector2d(ux, uy), Vector2d(ux + uw, uy + uh)),
+                                   filterRegionSubregion);
+    } else if (!isSourceGenerator && !node.inputs.empty()) {
+      Box2d inputBounds = resolveInputSubregion(node.inputs[0]);
+      for (size_t i = 1; i < node.inputs.size(); ++i) {
+        inputBounds = Box2d::Union(inputBounds, resolveInputSubregion(node.inputs[i]));
+      }
+      if (const auto* blur = std::get_if<filter_primitive::GaussianBlur>(&node.primitive)) {
+        const double expandX =
+            std::ceil((blur->stdDeviationX >= 0 ? toPixelX(blur->stdDeviationX) : 0.0) * 3.0);
+        const double expandY =
+            std::ceil((blur->stdDeviationY >= 0 ? toPixelY(blur->stdDeviationY) : 0.0) * 3.0);
+        inputBounds = Box2d(
+            Vector2d(inputBounds.topLeft.x - expandX, inputBounds.topLeft.y - expandY),
+            Vector2d(inputBounds.bottomRight.x + expandX, inputBounds.bottomRight.y + expandY));
+      } else if (const auto* drop = std::get_if<filter_primitive::DropShadow>(&node.primitive)) {
+        const double expandX =
+            std::ceil((drop->stdDeviationX >= 0 ? toPixelX(drop->stdDeviationX) : 0.0) * 3.0);
+        const double expandY =
+            std::ceil((drop->stdDeviationY >= 0 ? toPixelY(drop->stdDeviationY) : 0.0) * 3.0);
+        const Vector2d pixOff = toPixelOffset(drop->dx, drop->dy);
+        Box2d shadowBounds = Box2d(
+            Vector2d(inputBounds.topLeft.x + pixOff.x - expandX,
+                     inputBounds.topLeft.y + pixOff.y - expandY),
+            Vector2d(inputBounds.bottomRight.x + pixOff.x + expandX,
+                     inputBounds.bottomRight.y + pixOff.y + expandY));
+        inputBounds = Box2d::Union(inputBounds, shadowBounds);
+      } else if (const auto* morph = std::get_if<filter_primitive::Morphology>(&node.primitive)) {
+        if (morph->op == filter_primitive::Morphology::Operator::Dilate) {
+          const double rx = toPixelX(morph->radiusX);
+          const double ry = toPixelY(morph->radiusY);
+          inputBounds =
+              Box2d(Vector2d(inputBounds.topLeft.x - rx, inputBounds.topLeft.y - ry),
+                    Vector2d(inputBounds.bottomRight.x + rx, inputBounds.bottomRight.y + ry));
+        }
+      }
+      nodeSubregion = boxIntersect(inputBounds, filterRegionSubregion);
+    }
+    return nodeSubregion;
+  };
+
   for (const FilterNode& node : graph.nodes) {
+    // Per-node clip bookkeeping: the subregion is computed up front so the
+    // blur path can fold the per-primitive clip into its final pass.
+    const bool hasExplicitSubregion = node.x.has_value() || node.y.has_value() ||
+                                      node.width.has_value() || node.height.has_value();
+    const Box2d nodeSubregion = computeNodeSubregion(node);
+    const bool ctmAxisAligned =
+        NearZero(deviceFromFilter.data[1], 1e-6) && NearZero(deviceFromFilter.data[2], 1e-6);
+    bool clipMergedIntoBlur = false;
+
     // Resolve the primary input texture for this node.
     wgpu::Texture inputTex = currentBuffer;
     if (!node.inputs.empty()) {
@@ -1603,13 +1694,27 @@ wgpu::Texture GeodeFilterEngine::execute(const svg::components::FilterGraph& gra
       const bool nodeLinearRGB =
           node.colorInterpolationFilters.value_or(graph.colorInterpolationFilters) !=
           svg::ColorInterpolationFilters::SRGB;
+      // Axis-aligned CTM: fold the per-primitive subregion clip into the
+      // blur's final pass (same floor/ceil round-out as the identity
+      // clip path), eliminating one full-canvas dispatch and intermediate
+      // per blur node.
+      const Box2d* blurClip = nullptr;
+      Box2d blurClipRect;
+      if (ctmAxisAligned) {
+        const Box2d pixelAABB = deviceFromFilter.transformBox(nodeSubregion);
+        blurClipRect = Box2d(
+            Vector2d(std::floor(pixelAABB.topLeft.x), std::floor(pixelAABB.topLeft.y)),
+            Vector2d(std::ceil(pixelAABB.bottomRight.x), std::ceil(pixelAABB.bottomRight.y)));
+        blurClip = &blurClipRect;
+        clipMergedIntoBlur = true;
+      }
       if (nodeLinearRGB) {
         wgpu::Texture linearInput =
             applyColorSpaceConversion(arena, inputTex, /*srgbToLinear=*/true);
-        wgpu::Texture linearOutput = applyGaussianBlur(arena, linearInput, sx, sy, em);
+        wgpu::Texture linearOutput = applyGaussianBlur(arena, linearInput, sx, sy, em, blurClip);
         outputTex = applyColorSpaceConversion(arena, linearOutput, /*srgbToLinear=*/false);
       } else {
-        outputTex = applyGaussianBlur(arena, inputTex, sx, sy, em);
+        outputTex = applyGaussianBlur(arena, inputTex, sx, sy, em, blurClip);
       }
     } else if (const auto* offset = std::get_if<filter_primitive::Offset>(&node.primitive)) {
       // Project the offset vector through the full CTM so rotation/skew
@@ -1882,106 +1987,14 @@ wgpu::Texture GeodeFilterEngine::execute(const svg::components::FilterGraph& gra
       outputTex = inputTex;
     }
 
-    // Per-primitive subregion clipping: compute the user-space subregion
-    // using input-bounds-based logic matching tiny-skia's defaultNodeSubregion.
-    // Source generators (Flood, Turbulence, Image, Tile) and nodes with no
-    // inputs default to the filter region.  Other nodes inherit the union of
-    // their input subregions, with primitive-specific expansion (e.g. blur).
-    // Explicit x/y/width/height attributes override the default and are
-    // intersected with the filter region.
-    {
-      const bool isSourceGenerator =
-          std::holds_alternative<filter_primitive::Flood>(node.primitive) ||
-          std::holds_alternative<filter_primitive::Turbulence>(node.primitive) ||
-          std::holds_alternative<filter_primitive::Image>(node.primitive) ||
-          std::holds_alternative<filter_primitive::Tile>(node.primitive);
-
-      const bool hasExplicitSubregion = node.x.has_value() || node.y.has_value() ||
-                                        node.width.has_value() || node.height.has_value();
-
-      Box2d nodeSubregion = filterRegionSubregion;
-
-      // Helper: intersect two user-space boxes.
-      auto boxIntersect = [](const Box2d& a, const Box2d& b) -> Box2d {
-        return Box2d(
-            Vector2d(std::max(a.topLeft.x, b.topLeft.x), std::max(a.topLeft.y, b.topLeft.y)),
-            Vector2d(std::min(a.bottomRight.x, b.bottomRight.x),
-                     std::min(a.bottomRight.y, b.bottomRight.y)));
-      };
-
-      if (hasExplicitSubregion) {
-        // Explicit subregion attributes - resolve and intersect with filter region.
-        const double ux = node.x.has_value() ? resolvePrimitivePosition(*node.x, Lengthd::Extent::X,
-                                                                        isOBB ? bboxX : 0.0, bboxW)
-                                             : filterRegion.topLeft.x;
-        const double uy = node.y.has_value() ? resolvePrimitivePosition(*node.y, Lengthd::Extent::Y,
-                                                                        isOBB ? bboxY : 0.0, bboxH)
-                                             : filterRegion.topLeft.y;
-        const double uw = node.width.has_value()
-                              ? resolvePrimitiveSize(*node.width, Lengthd::Extent::X, bboxW)
-                              : filterRegion.width();
-        const double uh = node.height.has_value()
-                              ? resolvePrimitiveSize(*node.height, Lengthd::Extent::Y, bboxH)
-                              : filterRegion.height();
-        nodeSubregion = boxIntersect(Box2d(Vector2d(ux, uy), Vector2d(ux + uw, uy + uh)),
-                                     filterRegionSubregion);
-      } else if (!isSourceGenerator && !node.inputs.empty()) {
-        // Non-source node without explicit subregion: use union of input bounds.
-        Box2d inputBounds = resolveInputSubregion(node.inputs[0]);
-        for (size_t i = 1; i < node.inputs.size(); ++i) {
-          inputBounds = Box2d::Union(inputBounds, resolveInputSubregion(node.inputs[i]));
-        }
-
-        // Apply primitive-specific subregion expansion.
-        if (const auto* blur = std::get_if<filter_primitive::GaussianBlur>(&node.primitive)) {
-          const double expandX =
-              std::ceil((blur->stdDeviationX >= 0 ? toPixelX(blur->stdDeviationX) : 0.0) * 3.0);
-          const double expandY =
-              std::ceil((blur->stdDeviationY >= 0 ? toPixelY(blur->stdDeviationY) : 0.0) * 3.0);
-          inputBounds = Box2d(
-              Vector2d(inputBounds.topLeft.x - expandX, inputBounds.topLeft.y - expandY),
-              Vector2d(inputBounds.bottomRight.x + expandX, inputBounds.bottomRight.y + expandY));
-        } else if (const auto* drop = std::get_if<filter_primitive::DropShadow>(&node.primitive)) {
-          const double expandX =
-              std::ceil((drop->stdDeviationX >= 0 ? toPixelX(drop->stdDeviationX) : 0.0) * 3.0);
-          const double expandY =
-              std::ceil((drop->stdDeviationY >= 0 ? toPixelY(drop->stdDeviationY) : 0.0) * 3.0);
-          const Vector2d pixOff = toPixelOffset(drop->dx, drop->dy);
-          Box2d shadowBounds = Box2d(Vector2d(inputBounds.topLeft.x + pixOff.x - expandX,
-                                              inputBounds.topLeft.y + pixOff.y - expandY),
-                                     Vector2d(inputBounds.bottomRight.x + pixOff.x + expandX,
-                                              inputBounds.bottomRight.y + pixOff.y + expandY));
-          inputBounds = Box2d::Union(inputBounds, shadowBounds);
-        } else if (const auto* morph = std::get_if<filter_primitive::Morphology>(&node.primitive)) {
-          if (morph->op == filter_primitive::Morphology::Operator::Dilate) {
-            const double rx = toPixelX(morph->radiusX);
-            const double ry = toPixelY(morph->radiusY);
-            inputBounds =
-                Box2d(Vector2d(inputBounds.topLeft.x - rx, inputBounds.topLeft.y - ry),
-                      Vector2d(inputBounds.bottomRight.x + rx, inputBounds.bottomRight.y + ry));
-          }
-        }
-
-        nodeSubregion = boxIntersect(inputBounds, filterRegionSubregion);
-      }
-      // else: source generator or no inputs → nodeSubregion stays as filterRegionSubregion.
-
-      // Detect whether the CTM is axis-aligned.  When it is, the CPU
-      // path crops the primitive output with floor/ceil-rounded pixel
-      // bounds (tiny-skia's `applySubregionClipping` per-primitive crop).
-      // We mirror that behaviour by passing pixel-space bounds through
-      // the identity-transform shader path with the same round-out
-      // rounding.  When the CTM has rotation/skew we keep the existing
-      // per-pixel point-in-rect test against the user-space rect (the
-      // tightest representation that survives rotation).
-      const bool ctmAxisAligned =
-          NearZero(deviceFromFilter.data[1], 1e-6) && NearZero(deviceFromFilter.data[2], 1e-6);
-
+    // Per-primitive subregion clipping: the user-space subregion was
+    // computed up front (computeNodeSubregion). Blur nodes with an
+    // axis-aligned CTM already folded the clip into their final pass;
+    // everything else runs the dedicated clip pass. The rotation case
+    // keeps the per-pixel point-in-rect test, which is the tightest
+    // representation that survives rotation.
+    if (!clipMergedIntoBlur) {
       if (hasExplicitSubregion && !ctmAxisAligned) {
-        // Rotation-aware clip using inverse CTM and user-space bounds.
-        // Only needed when the node has explicit subregion attributes
-        // and the CTM has rotation/skew, matching the CPU path's
-        // per-pixel point-in-rect test.
         outputTex = applySubregionClip(arena, outputTex, filterFromDevice, nodeSubregion.topLeft.x,
                                        nodeSubregion.topLeft.y, nodeSubregion.bottomRight.x,
                                        nodeSubregion.bottomRight.y);
@@ -1989,9 +2002,7 @@ wgpu::Texture GeodeFilterEngine::execute(const svg::components::FilterGraph& gra
         // AABB clip in pixel space - project the user-space subregion
         // through the full CTM and clip to the axis-aligned bounding box.
         // Round-out to integer pixel bounds to match the CPU path's
-        // floor/ceil cropping in tiny-skia's per-primitive clip; without
-        // this, half-pixel-aligned subregion edges drop a row/column of
-        // pixels relative to the CPU reference.
+        // floor/ceil cropping in tiny-skia's per-primitive clip.
         const Box2d pixelAABB = deviceFromFilter.transformBox(nodeSubregion);
         static const Transform2d kIdentity;
         outputTex =
@@ -1999,13 +2010,13 @@ wgpu::Texture GeodeFilterEngine::execute(const svg::components::FilterGraph& gra
                                std::floor(pixelAABB.topLeft.y), std::ceil(pixelAABB.bottomRight.x),
                                std::ceil(pixelAABB.bottomRight.y));
       }
-
-      // Record the subregion for downstream nodes.
-      if (node.result.has_value()) {
-        namedSubregions[node.result->str()] = nodeSubregion;
-      }
-      previousOutputSubregion = nodeSubregion;
     }
+
+    // Record the subregion for downstream nodes.
+    if (node.result.has_value()) {
+      namedSubregions[node.result->str()] = nodeSubregion;
+    }
+    previousOutputSubregion = nodeSubregion;
 
     if (node.result.has_value()) {
       namedBuffers[node.result->str()] = outputTex;
@@ -2092,7 +2103,8 @@ BoxBlurPlan computeBoxPasses(double sigma) {
 
 wgpu::Texture GeodeFilterEngine::applyGaussianBlur(FilterResourceArena& arena,
                                                    const wgpu::Texture& input, double stdDeviationX,
-                                                   double stdDeviationY, uint32_t edgeMode) {
+                                                   double stdDeviationY, uint32_t edgeMode,
+                                                   const Box2d* outputClip) {
   const uint32_t width = input.getWidth();
   const uint32_t height = input.getHeight();
 
@@ -2105,6 +2117,25 @@ wgpu::Texture GeodeFilterEngine::applyGaussianBlur(FilterResourceArena& arena,
   // This eliminates faint coloured fringes at the extreme tails of the
   // kernel that the software backend never produces.
   constexpr double kBoxBlurThreshold = 2.0;
+
+  // Precompute the pass plans so the optional clip can be applied to the
+  // very last pass only.
+  BoxBlurPlan hPlan{};
+  BoxBlurPlan vPlan{};
+  if (stdDeviationX > 0.0 && stdDeviationX >= kBoxBlurThreshold) {
+    hPlan = computeBoxPasses(stdDeviationX);
+  }
+  if (stdDeviationY > 0.0 && stdDeviationY >= kBoxBlurThreshold) {
+    vPlan = computeBoxPasses(stdDeviationY);
+  }
+  const int hPasses = stdDeviationX > 0.0 ? (hPlan.numPasses > 0 ? hPlan.numPasses : 1) : 0;
+  const int vPasses = stdDeviationY > 0.0 ? (vPlan.numPasses > 0 ? vPlan.numPasses : 1) : 0;
+  const int totalPasses = hPasses + vPasses;
+  int passIndex = 0;
+  auto clipForPass = [&]() -> const Box2d* {
+    const bool isLast = (++passIndex == totalPasses);
+    return (outputClip != nullptr && isLast) ? outputClip : nullptr;
+  };
 
   // Ping-pong pair of intermediates: every pass of one blur alternates
   // between the two textures instead of allocating a fresh intermediate
@@ -2125,37 +2156,35 @@ wgpu::Texture GeodeFilterEngine::applyGaussianBlur(FilterResourceArena& arena,
 
   wgpu::Texture afterHorizontal = input;
   if (stdDeviationX > 0.0) {
-    if (stdDeviationX >= kBoxBlurThreshold) {
-      const BoxBlurPlan plan = computeBoxPasses(stdDeviationX);
-      for (int i = 0; i < plan.numPasses; ++i) {
+    if (hPlan.numPasses > 0) {
+      for (int i = 0; i < hPlan.numPasses; ++i) {
         const wgpu::Texture output = nextOutput();
         afterHorizontal = runBoxBlurPass(arena, afterHorizontal, output, width, height,
-                                         plan.passes[i].left, plan.passes[i].right, /*axis=*/0,
-                                         edgeMode);
+                                         hPlan.passes[i].left, hPlan.passes[i].right, /*axis=*/0,
+                                         edgeMode, clipForPass());
       }
     } else {
       const wgpu::Texture output = nextOutput();
       afterHorizontal = runBlurPass(arena, input, output, width, height,
-                                    static_cast<float>(stdDeviationX),
-                                    /*axis=*/0, edgeMode);
+                                    static_cast<float>(stdDeviationX), /*axis=*/0, edgeMode,
+                                    clipForPass());
     }
   }
 
   wgpu::Texture afterVertical = afterHorizontal;
   if (stdDeviationY > 0.0) {
-    if (stdDeviationY >= kBoxBlurThreshold) {
-      const BoxBlurPlan plan = computeBoxPasses(stdDeviationY);
-      for (int i = 0; i < plan.numPasses; ++i) {
+    if (vPlan.numPasses > 0) {
+      for (int i = 0; i < vPlan.numPasses; ++i) {
         const wgpu::Texture output = nextOutput();
         afterVertical = runBoxBlurPass(arena, afterVertical, output, width, height,
-                                       plan.passes[i].left, plan.passes[i].right, /*axis=*/1,
-                                       edgeMode);
+                                       vPlan.passes[i].left, vPlan.passes[i].right, /*axis=*/1,
+                                       edgeMode, clipForPass());
       }
     } else {
       const wgpu::Texture output = nextOutput();
       afterVertical = runBlurPass(arena, afterHorizontal, output, width, height,
-                                  static_cast<float>(stdDeviationY),
-                                  /*axis=*/1, edgeMode);
+                                  static_cast<float>(stdDeviationY), /*axis=*/1, edgeMode,
+                                  clipForPass());
     }
   }
 
@@ -2165,7 +2194,7 @@ wgpu::Texture GeodeFilterEngine::applyGaussianBlur(FilterResourceArena& arena,
 wgpu::Texture GeodeFilterEngine::runBlurPass(FilterResourceArena& arena, const wgpu::Texture& input,
                                              const wgpu::Texture& output, uint32_t width,
                                              uint32_t height, float stdDeviation, uint32_t axis,
-                                             uint32_t edgeMode) {
+                                             uint32_t edgeMode, const Box2d* clip) {
   const wgpu::Device& dev = device_.device();
 
   BlurParams params{};
@@ -2175,11 +2204,14 @@ wgpu::Texture GeodeFilterEngine::runBlurPass(FilterResourceArena& arena, const w
   params.kernelType = 0;
   params.boxLeft = 0;
   params.boxRight = 0;
-  params.clipMinX = 0;
-  params.clipMinY = 0;
-  params.clipMaxX = 0;
-  params.clipMaxY = 0;
-  params.clipActive = 0;
+  if (clip != nullptr) {
+    // Corners arrive pre-rounded (floor/ceil), so the integer casts are exact.
+    params.clipMinX = static_cast<int32_t>(clip->topLeft.x);
+    params.clipMinY = static_cast<int32_t>(clip->topLeft.y);
+    params.clipMaxX = static_cast<int32_t>(clip->bottomRight.x);
+    params.clipMaxY = static_cast<int32_t>(clip->bottomRight.y);
+    params.clipActive = 1;
+  }
   params.pad1 = 0;
 
   auto uniformBuffer = writeUniformSlot(*resourceCache_, device_, &params, sizeof(params));
@@ -2194,7 +2226,8 @@ wgpu::Texture GeodeFilterEngine::runBoxBlurPass(FilterResourceArena& arena,
                                                 const wgpu::Texture& input,
                                                 const wgpu::Texture& output, uint32_t width,
                                                 uint32_t height, int32_t boxLeft, int32_t boxRight,
-                                                uint32_t axis, uint32_t edgeMode) {
+                                                uint32_t axis, uint32_t edgeMode,
+                                                const Box2d* clip) {
   const wgpu::Device& dev = device_.device();
 
   BlurParams params{};
@@ -2204,11 +2237,13 @@ wgpu::Texture GeodeFilterEngine::runBoxBlurPass(FilterResourceArena& arena,
   params.kernelType = 1;
   params.boxLeft = boxLeft;
   params.boxRight = boxRight;
-  params.clipMinX = 0;
-  params.clipMinY = 0;
-  params.clipMaxX = 0;
-  params.clipMaxY = 0;
-  params.clipActive = 0;
+  if (clip != nullptr) {
+    params.clipMinX = static_cast<int32_t>(clip->topLeft.x);
+    params.clipMinY = static_cast<int32_t>(clip->topLeft.y);
+    params.clipMaxX = static_cast<int32_t>(clip->bottomRight.x);
+    params.clipMaxY = static_cast<int32_t>(clip->bottomRight.y);
+    params.clipActive = 1;
+  }
   params.pad1 = 0;
 
   auto uniformBuffer = writeUniformSlot(*resourceCache_, device_, &params, sizeof(params));
