@@ -28,6 +28,8 @@
 
 struct Uniforms {
   // Model-view-projection matrix (2D content uses an orthographic affine).
+  // For instanced / batched draws this is the orthographic screen-pixel
+  // mapping; each instance composes its own transform on top.
   mvp: mat4x4f,
   // Pattern sampling transform (paintMode == 1 only).
   patternFromPath: mat4x4f,
@@ -35,43 +37,17 @@ struct Uniforms {
   viewport: vec2f,
   // Pattern tile size in pattern-tile space.
   tileSize: vec2f,
-  // Fill color (premultiplied alpha). Only used when paintMode == 0.
-  color: vec4f,
-  // Fill rule: 0 = non-zero, 1 = even-odd.
-  fillRule: u32,
-  // Paint mode: 0 = solid color, 1 = pattern texture (repeat-tiled).
-  paintMode: u32,
-  // Pattern alpha multiplier (e.g., fill-opacity). 1.0 for solid paint.
-  patternOpacity: f32,
-  // Nonzero when a convex 4-vertex clip polygon is active.
+  // Nonzero when a convex 4-vertex clip polygon is active. Clip state is a
+  // batch boundary, so it stays batch-uniform rather than per-instance.
   hasClipPolygon: u32,
   // Nonzero when a path-clip mask texture is bound at binding 5.
   hasClipMask: u32,
   // Nonzero to preserve analytic edge coverage; zero emits binary coverage.
   antialias: u32,
   _pad1: u32,
-  _pad2: u32,
-  // Band-grid parameters (0041 §8.1). The horizontal grid bins the path's
-  // Y-range into `hBandCount` strips of `hStride` starting at `yBase`; the
-  // vertical grid bins the X-range into `vBandCount` strips of `vStride`
-  // starting at `xBase`. Padded to 16 bytes (two vec4-aligned rows).
-  yBase: f32,
-  hStride: f32,
-  hBandCount: u32,
-  xBase: f32,
-  vStride: f32,
-  vBandCount: u32,
-  _gridPad0: u32,
-  _gridPad1: u32,
   // Four inward-facing half-planes in viewport-pixel space, one per polygon
   // edge. `plane.xyz = (nx, ny, c)` with `nx*x + ny*y + c >= 0` inside.
   clipPolygonPlanes: array<vec4f, 4>,
-  boundingVertexCount: u32,
-  _boundingPad0: u32,
-  _boundingPad1: u32,
-  _boundingPad2: u32,
-  // Two path-space vec2 vertices per vec4, up to eight vertices.
-  boundingVertices: array<vec4f, 4>,
 };
 
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
@@ -98,22 +74,75 @@ struct Band {
 @group(0) @binding(5) var clipMaskTexture: texture_2d<f32>;
 @group(0) @binding(6) var clipMaskSampler: sampler;
 
-// Per-instance affine transform (vertex stage only).
+// Per-instance record (vertex + fragment stages). One record per draw or
+// batched instance; the fragment stage reads its instance's record through
+// a flat instance-id varying so overlapping batched instances still blend
+// in painter (instance) order.
 struct InstanceTransform {
   row0: vec4f,
   row1: vec4f,
 };
-@group(0) @binding(7) var<storage, read> instanceTransforms: array<InstanceTransform>;
+struct InstanceRecord {
+  // Full worldFromEntity * surfaceFromCanvas composition. The vertex stage
+  // composes `uniforms.mvp * transform` exactly like the non-instanced path
+  // composed its per-draw mvp.
+  transform: InstanceTransform,
+  // Fill color (premultiplied alpha). Only used when paintMode == 0.
+  color: vec4f,
+  // Fill rule: 0 = non-zero, 1 = even-odd.
+  fillRule: u32,
+  // Paint mode: 0 = solid color, 1 = pattern texture (repeat-tiled).
+  paintMode: u32,
+  // Pattern alpha multiplier (e.g., fill-opacity). 1.0 for solid paint.
+  patternOpacity: f32,
+  _pad0: u32,
+  // Band-grid parameters (0041 §8.1): the horizontal grid bins the path's
+  // Y-range into `hBandCount` strips of `hStride` starting at `yBase`; the
+  // vertical grid bins the X-range into `vBandCount` strips of `vStride`
+  // starting at `xBase`. Two vec4-aligned rows.
+  yBase: f32,
+  hStride: f32,
+  hBandCount: u32,
+  xBase: f32,
+  vStride: f32,
+  vBandCount: u32,
+  _gridPad0: u32,
+  _gridPad1: u32,
+  boundingVertexCount: u32,
+  _boundingPad0: u32,
+  _boundingPad1: u32,
+  _boundingPad2: u32,
+  // Two path-space vec2 vertices per vec4, up to eight vertices.
+  boundingVertices: array<vec4f, 4>,
+  // Element offsets into the bound arrays. When a batch binds a whole
+  // scene-class region (or the single-draw path binds its own range), these
+  // are relative to the binding's start; all geometry reads add them.
+  bandBase: u32,
+  curveBase: u32,
+  vBandBase: u32,
+  vCurveBase: u32,
+  hGridBase: u32,
+  vGridBase: u32,
+  hRefsBase: u32,
+  vRefsBase: u32,
+};
+@group(0) @binding(7) var<storage, read> instances: array<InstanceRecord>;
 
-// Vertical bands + curves (for the vertical ray) and the dense band grids
-// (0041 §8.1). `hBandGrid[i]` maps grid cell i to a slot in `bands` (or the
-// kNoBand sentinel); `vBandGrid[j]` maps cell j to a slot in `vBands`.
+// Vertical bands + curves (for the vertical ray).
 @group(0) @binding(8) var<storage, read> vBands: array<Band>;
 @group(0) @binding(9) var<storage, read> vCurveData: array<f32>;
-@group(0) @binding(10) var<storage, read> hBandGrid: array<u32>;
-@group(0) @binding(11) var<storage, read> vBandGrid: array<u32>;
-@group(0) @binding(12) var<storage, read> hCurveIndices: array<u32>;
-@group(0) @binding(13) var<storage, read> vCurveIndices: array<u32>;
+
+// Combined dense band-grid storage (0041 §8.1): hBandGrid, vBandGrid,
+// hCurveIndices, and vCurveIndices all live in ONE u32 array. Each
+// instance record carries the four element bases into this array, so a
+// batch (or a resident slot) binds one contiguous range instead of four
+// separate storage bindings - the fragment stage's storage-buffer count
+// stays under the baseline WebGPU limit of 8 per stage.
+// `gridData[hGridBase + i]` maps grid cell i to a slot in `bands` (or the
+// kNoBand sentinel); `gridData[vGridBase + j]` maps cell j to a slot in
+// `vBands`; `gridData[hRefsBase + ...]` / `gridData[vRefsBase + ...]`
+// index curves within a band.
+@group(0) @binding(10) var<storage, read> gridData: array<u32>;
 
 // Sentinel for an empty grid cell (must match EncodedPath::kNoBand).
 const kNoBand: u32 = 0xFFFFFFFFu;
@@ -133,10 +162,13 @@ struct VertexOutput {
   @builtin(position) clip_pos: vec4f,
   // Path-space sample position. Fragment shader casts both rays from here.
   @location(0) sample_pos: vec2f,
+  // Flat instance index - the fragment stage reads its InstanceRecord
+  // through this so overlapping batched instances blend in instance order.
+  @location(1) @interpolate(flat) instance_id: u32,
 };
 
-fn load_bounding_vertex(index: u32) -> vec2f {
-  let pair = uniforms.boundingVertices[index / 2u];
+fn load_bounding_vertex(rec: InstanceRecord, index: u32) -> vec2f {
+  let pair = rec.boundingVertices[index / 2u];
   return select(pair.xy, pair.zw, (index & 1u) != 0u);
 }
 
@@ -197,16 +229,16 @@ fn conservative_path_aabb_expansion(axes: mat2x2f) -> f32 {
   return select(0.0, expansion, expansion > 0.0 && expansion < 1e30);
 }
 
-fn needs_device_aabb_fallback(axes: mat2x2f) -> bool {
+fn needs_device_aabb_fallback(rec: InstanceRecord, axes: mat2x2f) -> bool {
   if (!axes_are_well_conditioned(axes)) {
     return false;
   }
   let orientation = select(-1.0, 1.0, axes_determinant(axes) > 0.0);
-  for (var i = 0u; i < uniforms.boundingVertexCount; i = i + 1u) {
+  for (var i = 0u; i < rec.boundingVertexCount; i = i + 1u) {
     let previous = load_bounding_vertex(
-      (i + uniforms.boundingVertexCount - 1u) % uniforms.boundingVertexCount);
-    let position = load_bounding_vertex(i);
-    let next = load_bounding_vertex((i + 1u) % uniforms.boundingVertexCount);
+      rec, (i + rec.boundingVertexCount - 1u) % rec.boundingVertexCount);
+    let position = load_bounding_vertex(rec, i);
+    let next = load_bounding_vertex(rec, (i + 1u) % rec.boundingVertexCount);
     let incoming = axes * (position - previous);
     let outgoing = axes * (next - position);
     let incoming_length = length(incoming);
@@ -231,14 +263,14 @@ fn needs_device_aabb_fallback(axes: mat2x2f) -> bool {
   return false;
 }
 
-fn load_device_aabb_vertex(effective_mvp: mat4x4f, axes: mat2x2f,
+fn load_device_aabb_vertex(rec: InstanceRecord, effective_mvp: mat4x4f, axes: mat2x2f,
                            polygon_index: u32) -> vec2f {
   let pixel_scale = vec2f(uniforms.viewport.x * 0.5, -uniforms.viewport.y * 0.5);
   let origin_pixel = (effective_mvp * vec4f(0.0, 0.0, 0.0, 1.0)).xy * pixel_scale;
   var pixel_min = vec2f(1e30, 1e30);
   var pixel_max = vec2f(-1e30, -1e30);
-  for (var i = 0u; i < uniforms.boundingVertexCount; i = i + 1u) {
-    let pixel = origin_pixel + axes * load_bounding_vertex(i);
+  for (var i = 0u; i < rec.boundingVertexCount; i = i + 1u) {
+    let pixel = origin_pixel + axes * load_bounding_vertex(rec, i);
     pixel_min = min(pixel_min, pixel);
     pixel_max = max(pixel_max, pixel);
   }
@@ -249,11 +281,11 @@ fn load_device_aabb_vertex(effective_mvp: mat4x4f, axes: mat2x2f,
   return path_from_pixel_delta(axes, pixel_corner - origin_pixel);
 }
 
-fn load_path_aabb_vertex(expansion: f32, polygon_index: u32) -> vec2f {
+fn load_path_aabb_vertex(rec: InstanceRecord, expansion: f32, polygon_index: u32) -> vec2f {
   var path_min = vec2f(1e30, 1e30);
   var path_max = vec2f(-1e30, -1e30);
-  for (var i = 0u; i < uniforms.boundingVertexCount; i = i + 1u) {
-    let position = load_bounding_vertex(i);
+  for (var i = 0u; i < rec.boundingVertexCount; i = i + 1u) {
+    let position = load_bounding_vertex(rec, i);
     path_min = min(path_min, position);
     path_max = max(path_max, position);
   }
@@ -263,13 +295,13 @@ fn load_path_aabb_vertex(expansion: f32, polygon_index: u32) -> vec2f {
                select(path_max.y + expansion, path_min.y - expansion, lower));
 }
 
-fn dilated_bounding_vertex(axes: mat2x2f, polygon_index: u32) -> vec2f {
-  let count = uniforms.boundingVertexCount;
+fn dilated_bounding_vertex(rec: InstanceRecord, axes: mat2x2f, polygon_index: u32) -> vec2f {
+  let count = rec.boundingVertexCount;
   let previous_index = (polygon_index + count - 1u) % count;
   let next_index = (polygon_index + 1u) % count;
-  let previous = load_bounding_vertex(previous_index);
-  let position = load_bounding_vertex(polygon_index);
-  let next = load_bounding_vertex(next_index);
+  let previous = load_bounding_vertex(rec, previous_index);
+  let position = load_bounding_vertex(rec, polygon_index);
+  let next = load_bounding_vertex(rec, next_index);
 
   // Work in viewport pixels, including WebGPU's Y flip. Intersect the two adjacent edge
   // half-planes after moving each outward by half a pixel, then map that miter back to path
@@ -288,31 +320,33 @@ fn dilated_bounding_vertex(axes: mat2x2f, polygon_index: u32) -> vec2f {
   return position + path_from_pixel_delta(axes, pixel_delta);
 }
 
-fn effective_bounding_vertex(effective_mvp: mat4x4f, vertex_index: u32) -> vec2f {
+fn effective_bounding_vertex(rec: InstanceRecord, effective_mvp: mat4x4f,
+                             vertex_index: u32) -> vec2f {
   let axes = pixel_axes(effective_mvp);
   let path_aabb_expansion = conservative_path_aabb_expansion(axes);
   let use_path_aabb = !axes_are_well_conditioned(axes) && path_aabb_expansion > 0.0;
-  let use_device_aabb = needs_device_aabb_fallback(axes);
+  let use_device_aabb = needs_device_aabb_fallback(rec, axes);
   let use_aabb = use_path_aabb || use_device_aabb;
-  let effective_count = select(uniforms.boundingVertexCount, 4u, use_aabb);
+  let effective_count = select(rec.boundingVertexCount, 4u, use_aabb);
   let triangle = vertex_index / 3u;
   var polygon_index = 0u;
   if (triangle < effective_count - 2u) {
     polygon_index = fan_polygon_index(vertex_index);
   }
   if (use_path_aabb) {
-    return load_path_aabb_vertex(path_aabb_expansion, polygon_index);
+    return load_path_aabb_vertex(rec, path_aabb_expansion, polygon_index);
   }
   if (use_device_aabb) {
-    return load_device_aabb_vertex(effective_mvp, axes, polygon_index);
+    return load_device_aabb_vertex(rec, effective_mvp, axes, polygon_index);
   }
-  return dilated_bounding_vertex(axes, polygon_index);
+  return dilated_bounding_vertex(rec, axes, polygon_index);
 }
 
 @vertex
 fn vs_main(@builtin(vertex_index) vertex_index: u32,
            @builtin(instance_index) instance_index: u32) -> VertexOutput {
-  let xf = instanceTransforms[instance_index];
+  let rec = instances[instance_index];
+  let xf = rec.transform;
   let instance_mat = mat4x4f(
     vec4f(xf.row0.x, xf.row1.x, 0.0, 0.0),
     vec4f(xf.row0.y, xf.row1.y, 0.0, 0.0),
@@ -321,11 +355,12 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32,
   );
   let effective_mvp = uniforms.mvp * instance_mat;
 
-  let dilated = effective_bounding_vertex(effective_mvp, vertex_index);
+  let dilated = effective_bounding_vertex(rec, effective_mvp, vertex_index);
 
   var out: VertexOutput;
   out.clip_pos = effective_mvp * vec4f(dilated, 0.0, 1.0);
   out.sample_pos = dilated;
+  out.instance_id = instance_index;
   return out;
 }
 
@@ -339,8 +374,8 @@ struct Quadratic {
   p2: vec2f,
 };
 
-fn load_h_curve(index: u32) -> Quadratic {
-  let base = index * 6u;
+fn load_h_curve(rec: InstanceRecord, index: u32) -> Quadratic {
+  let base = rec.curveBase + index * 6u;
   var q: Quadratic;
   q.p0 = vec2f(curveData[base + 0u], curveData[base + 1u]);
   q.p1 = vec2f(curveData[base + 2u], curveData[base + 3u]);
@@ -348,8 +383,8 @@ fn load_h_curve(index: u32) -> Quadratic {
   return q;
 }
 
-fn load_v_curve(index: u32) -> Quadratic {
-  let base = index * 6u;
+fn load_v_curve(rec: InstanceRecord, index: u32) -> Quadratic {
+  let base = rec.vCurveBase + index * 6u;
   var q: Quadratic;
   q.p0 = vec2f(vCurveData[base + 0u], vCurveData[base + 1u]);
   q.p1 = vec2f(vCurveData[base + 2u], vCurveData[base + 3u]);
@@ -429,7 +464,7 @@ fn owns_axis_sample(start: f32, end: f32, sample: f32) -> bool {
   return sample >= lo && sample < hi;
 }
 
-fn accumulateHoriz(slot: u32, sample: vec2f, ppemX: f32) -> RayCoverage {
+fn accumulateHoriz(rec: InstanceRecord, slot: u32, sample: vec2f, ppemX: f32) -> RayCoverage {
   var result: RayCoverage;
   result.cov = 0.0;
   result.wgt = 0.0;
@@ -437,9 +472,9 @@ fn accumulateHoriz(slot: u32, sample: vec2f, ppemX: f32) -> RayCoverage {
   if (slot == kNoBand) {
     return result;
   }
-  let band = bands[slot];
+  let band = bands[rec.bandBase + slot];
   for (var i = 0u; i < band.curveCount; i = i + 1u) {
-    let curve = load_h_curve(hCurveIndices[band.curveStart + i]);
+    let curve = load_h_curve(rec, gridData[rec.hRefsBase + band.curveStart + i]);
     let curve_max_x = max(curve.p0.x, max(curve.p1.x, curve.p2.x));
     if ((curve_max_x - sample.x) * ppemX <= -0.5) {
       break;
@@ -471,7 +506,7 @@ fn accumulateHoriz(slot: u32, sample: vec2f, ppemX: f32) -> RayCoverage {
   return result;
 }
 
-fn accumulateVert(slot: u32, sample: vec2f, ppemY: f32) -> RayCoverage {
+fn accumulateVert(rec: InstanceRecord, slot: u32, sample: vec2f, ppemY: f32) -> RayCoverage {
   var result: RayCoverage;
   result.cov = 0.0;
   result.wgt = 0.0;
@@ -479,9 +514,9 @@ fn accumulateVert(slot: u32, sample: vec2f, ppemY: f32) -> RayCoverage {
   if (slot == kNoBand) {
     return result;
   }
-  let band = vBands[slot];
+  let band = vBands[rec.vBandBase + slot];
   for (var i = 0u; i < band.curveCount; i = i + 1u) {
-    let curve = load_v_curve(vCurveIndices[band.curveStart + i]);
+    let curve = load_v_curve(rec, gridData[rec.vRefsBase + band.curveStart + i]);
     let curve_max_y = max(curve.p0.y, max(curve.p1.y, curve.p2.y));
     if ((curve_max_y - sample.y) * ppemY <= -0.5) {
       break;
@@ -551,6 +586,7 @@ struct FragOutput {
 
 @fragment
 fn fs_main(in: VertexOutput) -> FragOutput {
+  let rec = instances[in.instance_id];
   let pixel_center = in.clip_pos.xy;
 
   // Path-units per pixel, per axis. `sample_pos` is a linear function of the
@@ -562,22 +598,22 @@ fn fs_main(in: VertexOutput) -> FragOutput {
   hCov.cov = 0.0;
   hCov.wgt = 0.0;
   hCov.winding = 0.0;
-  if (uniforms.hBandCount > 0u) {
-    let hi = clamp(i32((in.sample_pos.y - uniforms.yBase) / uniforms.hStride),
-                   0, i32(uniforms.hBandCount) - 1);
-    let slot = hBandGrid[hi];
-    hCov = accumulateHoriz(slot, in.sample_pos, ppem.x);
+  if (rec.hBandCount > 0u) {
+    let hi = clamp(i32((in.sample_pos.y - rec.yBase) / rec.hStride),
+                   0, i32(rec.hBandCount) - 1);
+    let slot = gridData[rec.hGridBase + u32(hi)];
+    hCov = accumulateHoriz(rec, slot, in.sample_pos, ppem.x);
   }
 
   var vCov: RayCoverage;
   vCov.cov = 0.0;
   vCov.wgt = 0.0;
   vCov.winding = 0.0;
-  if (uniforms.vBandCount > 0u) {
-    let vj = clamp(i32((in.sample_pos.x - uniforms.xBase) / uniforms.vStride),
-                   0, i32(uniforms.vBandCount) - 1);
-    let slot = vBandGrid[vj];
-    vCov = accumulateVert(slot, in.sample_pos, ppem.y);
+  if (rec.vBandCount > 0u) {
+    let vj = clamp(i32((in.sample_pos.x - rec.xBase) / rec.vStride),
+                   0, i32(rec.vBandCount) - 1);
+    let slot = gridData[rec.vGridBase + u32(vj)];
+    vCov = accumulateVert(rec, slot, in.sample_pos, ppem.y);
   }
 
   var coverage = calc_coverage(hCov, vCov);
@@ -587,12 +623,12 @@ fn fs_main(in: VertexOutput) -> FragOutput {
   // value - a hole has combined coverage ≈ 2, which the wave maps to 0).
   if (uniforms.antialias == 0u) {
     let winding = u32(abs(hCov.winding));
-    if (uniforms.fillRule == 0u) {
+    if (rec.fillRule == 0u) {
       coverage = select(0.0, 1.0, winding != 0u);
     } else {
       coverage = f32(winding & 1u);
     }
-  } else if (uniforms.fillRule == 0u) {
+  } else if (rec.fillRule == 0u) {
     coverage = saturate(coverage);
   } else {
     coverage = 1.0 - abs(1.0 - fract(coverage * 0.5) * 2.0);
@@ -616,9 +652,9 @@ fn fs_main(in: VertexOutput) -> FragOutput {
 
   var out: FragOutput;
 
-  if (uniforms.paintMode == 0u) {
-    // `uniforms.color` is premultiplied; scale all channels by coverage.
-    out.color = uniforms.color * coverage;
+  if (rec.paintMode == 0u) {
+    // `rec.color` is premultiplied; scale all channels by coverage.
+    out.color = rec.color * coverage;
     return out;
   }
 
@@ -630,7 +666,7 @@ fn fs_main(in: VertexOutput) -> FragOutput {
   );
   let uv = wrapped / uniforms.tileSize;
   var sampled = textureSample(patternTexture, patternSampler, uv);
-  sampled = sampled * uniforms.patternOpacity * coverage;
+  sampled = sampled * rec.patternOpacity * coverage;
   out.color = sampled;
   return out;
 }
