@@ -137,6 +137,16 @@ public:
                         FilterTextureAllocator& textureAllocator,
                         ScopedWgpuHandle<wgpu::CommandEncoder>& commandEncoder);
 
+  /**
+   * Begin a new frame for this engine: reset the frame-scoped chunk pass
+   * counter, so the 64-pass command-buffer bound covers every filter graph
+   * recorded into the frame's shared encoder, not just one execute() call.
+   * The renderer calls this once per frame from its own beginFrame; the
+   * device-shared engine relies on the existing one-frame-per-device
+   * serialization contract.
+   */
+  void beginFrame() { framePassesInCommandBuffer_ = 0; }
+
 private:
   /// Two-pass separable Gaussian blur via compute shader.
   /// @param input The input texture.
@@ -458,6 +468,12 @@ private:
 
   bool verbose_ = false;
   bool warnedUnsupported_ = false;
+
+  /// Frame-scoped count of filter passes recorded into the shared frame
+  /// command encoder, across every execute() call in the frame. Reset by
+  /// beginFrame(); read and advanced by each execute() call's arena to
+  /// bound command-buffer size (see FilterResourceArena).
+  size_t framePassesInCommandBuffer_ = 0;
 };
 
 }  // namespace donner::geode

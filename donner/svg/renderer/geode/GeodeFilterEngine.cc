@@ -18,8 +18,12 @@ namespace donner::geode {
 
 struct FilterResourceArena {
   FilterResourceArena(GeodeDevice& device, FilterTextureAllocator& textureAllocator,
-                      ScopedWgpuHandle<wgpu::CommandEncoder>& commandEncoder)
-      : device_(device), textureAllocator_(textureAllocator), encoderSlot_(&commandEncoder) {}
+                      ScopedWgpuHandle<wgpu::CommandEncoder>& commandEncoder,
+                      size_t& passesInCommandBuffer)
+      : device_(device),
+        textureAllocator_(textureAllocator),
+        encoderSlot_(&commandEncoder),
+        passesInCommandBuffer_(passesInCommandBuffer) {}
   ~FilterResourceArena() {
     for (ScopedWgpuHandle<wgpu::Buffer>& buffer : buffers_) {
       device_.deferDestroy(buffer.take());
@@ -64,8 +68,15 @@ struct FilterResourceArena {
   /// v24's Metal completion path has been observed to stall on a single
   /// command buffer of that size. Chunked submits preserve program order, so
   /// passes recorded after the chunk still execute after the earlier chunk.
+  /// The pass count lives on the engine and is reset once per frame, so the
+  /// bound covers the whole frame's command buffer even when a document runs
+  /// many filter graphs (one arena per execute call).
   static constexpr size_t kMaxPassesPerCommandBuffer = 64;
 
+  /// Returns the encoder to record the NEXT pass into, counting one pass per
+  /// call. Call it immediately before beginning each pass, and never cache
+  /// the returned reference across another commandEncoder() call: a later
+  /// call may chunk (submit + replace) the encoder in the slot.
   wgpu::CommandEncoder& commandEncoder() {
     if (passesInCommandBuffer_ >= kMaxPassesPerCommandBuffer) {
       chunkCommandBuffer();
@@ -80,18 +91,31 @@ struct FilterResourceArena {
   /// keep it alive through reference counting, but it must not be used to
   /// record again: it has already been submitted.
   void chunkCommandBuffer() {
+    passesInCommandBuffer_ = 0;
     if (!*encoderSlot_) {
       return;
     }
     {
       ScopedWgpuHandle<wgpu::CommandBuffer> cmd(encoderSlot_->get().finish());
-      device_.queue().submit(1, &cmd.get());
-      device_.countSubmit();
+      if (cmd) {
+        device_.queue().submit(1, &cmd.get());
+        device_.countSubmit();
+      }
+    }
+    // A chunk boundary is a cross-submit edge inside one filter graph: pass
+    // N writes a storage texture in the submitted buffer while pass N+1
+    // samples it from the next buffer. On hardware Vulkan the automatic
+    // cross-submit storage-write to sampled-read barrier races the async
+    // queue and produces nondeterministic large-area filter corruption, so
+    // force the submitted work to complete before recording continues. The
+    // in-buffer path (no chunking) relies on WebGPU's implicit inter-pass
+    // barriers and needs no wait.
+    if (device_.isVulkan()) {
+      device_.pollSuspending(true);
     }
     wgpu::CommandEncoderDescriptor desc = {};
     desc.label = wgpuLabel("GeodeFilterChunkCE");
     encoderSlot_->reset(device_.device().createCommandEncoder(desc));
-    passesInCommandBuffer_ = 0;
   }
 
 private:
@@ -103,7 +127,8 @@ private:
   GeodeDevice& device_;
   FilterTextureAllocator& textureAllocator_;
   ScopedWgpuHandle<wgpu::CommandEncoder>* encoderSlot_;
-  size_t passesInCommandBuffer_ = 0;
+  /// Engine-owned frame-scoped pass count (see kMaxPassesPerCommandBuffer).
+  size_t& passesInCommandBuffer_;
   std::vector<OwnedTexture> textures_;
   std::vector<ScopedWgpuHandle<wgpu::Buffer>> buffers_;
 };
@@ -1368,7 +1393,7 @@ wgpu::Texture GeodeFilterEngine::execute(const svg::components::FilterGraph& gra
                                          ScopedWgpuHandle<wgpu::CommandEncoder>& commandEncoder) {
   using namespace svg::components;
 
-  FilterResourceArena arena(device_, textureAllocator, commandEncoder);
+  FilterResourceArena arena(device_, textureAllocator, commandEncoder, framePassesInCommandBuffer_);
   std::unordered_map<std::string, wgpu::Texture> namedBuffers;
   wgpu::Texture currentBuffer = sourceGraphic;
   std::optional<wgpu::Texture> sourceAlpha;

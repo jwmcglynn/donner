@@ -804,11 +804,19 @@ struct RendererGeodeTextureKey {
   uint32_t height = 0;
   wgpu::TextureFormat format = wgpu::TextureFormat::Undefined;
   wgpu::TextureUsage usage = wgpu::TextureUsage::None;
+  // Every current caller uses 1 mip / 1 sample / 2D, but key them anyway:
+  // a pooled single-sample texture handed to a future multisample or
+  // mipmapped request would validate and silently render wrong.
+  uint32_t mipLevelCount = 1;
+  uint32_t sampleCount = 1;
+  wgpu::TextureDimension dimension = wgpu::TextureDimension::_2D;
 
   auto operator<=>(const RendererGeodeTextureKey& other) const = default;
 
   static RendererGeodeTextureKey From(const wgpu::TextureDescriptor& desc) {
-    return RendererGeodeTextureKey{desc.size.width, desc.size.height, desc.format, desc.usage};
+    return RendererGeodeTextureKey{desc.size.width, desc.size.height, desc.format,
+                                   desc.usage,      desc.mipLevelCount, desc.sampleCount,
+                                   desc.dimension};
   }
 };
 
@@ -1052,23 +1060,21 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
   int pixelHeight = 0;
   // Dimensions of `target` as it was created. When the next `beginFrame`
   // comes in at the same size,
-  // the textures are reused (design doc 0030 Milestone 4.1); otherwise
-  // they're reallocated.
+  // the textures are reused; otherwise they're reallocated.
   int targetWidth = 0;
   int targetHeight = 0;
   wgpu::Texture target;  // Borrowed active render target.
   geode::ScopedWgpuHandle<wgpu::Texture> ownedTarget;
   std::optional<RendererGeodeTextureSnapshot> borrowedTargetSnapshot;
 
-  // Single CommandEncoder owned by RendererGeode for the whole frame
-  // (design doc 0030 Milestone 3). All GeoEncoder instances created
-  // during the frame (base + push/pop layer / filter / mask) share
-  // this CommandEncoder, so push/pop boundaries no longer force a
-  // queue().submit(). Finalised + submitted once in endFrame. The
-  // filter engine may chunk this slot mid-frame (finish + submit +
-  // replace every 64 filter passes) to bound command-buffer size for
-  // pathological filter graphs; the final encoder in the slot is the
-  // one endFrame submits.
+  // Single CommandEncoder owned by RendererGeode for the whole frame.
+  // All GeoEncoder instances created during the frame (base + push/pop
+  // layer / filter / mask) share this CommandEncoder, so push/pop
+  // boundaries no longer force a queue().submit(). Finalised + submitted
+  // once in endFrame. The filter engine may chunk this slot mid-frame
+  // (finish + submit + replace every 64 filter passes) to bound
+  // command-buffer size for pathological filter graphs; the final
+  // encoder in the slot is the one endFrame submits.
   geode::ScopedWgpuHandle<wgpu::CommandEncoder> frameCommandEncoder;
 
   std::unique_ptr<geode::GeoEncoder> encoder;
@@ -2699,6 +2705,11 @@ void RendererGeode::beginFrame(const RenderViewport& viewport) {
 
   if (impl_->texturePool) {
     impl_->texturePool->beginFrame();
+  }
+  if (impl_->filterEngine) {
+    // Reset the engine's frame-scoped chunk pass counter so the 64-pass
+    // command-buffer bound spans every filter graph in this frame.
+    impl_->filterEngine->beginFrame();
   }
   ++impl_->currentFrameIndex;
 

@@ -283,19 +283,23 @@ TEST_F(GeodePerfTest, MorphologyHugeRadius_ChunksFilterCommandBuffers) {
   RecordProperty("submits", std::to_string(c.submits));
   printCounters(::testing::UnitTest::GetInstance()->current_test_info()->name(), c);
 
-  // The shared-encoder packet reduced a small blur to two submissions (frame
+  // The shared-encoder design keeps a small blur at two submissions (frame
   // + readback). A pathological morphology (323 X + 323 Y passes here) must
   // not regress that design into one unbounded command buffer: every 64
-  // passes the filter arena submits its chunk and starts a fresh encoder.
-  // 646 passes therefore need 10 chunk submits plus the final frame submit
-  // and the readback submit, about 12-13 in total. Assert the bounded range
-  // so the ceiling stays honest on any canvas scaling of this fixture.
+  // passes the filter arena submits its chunk and starts a fresh encoder,
+  // so 646 passes produce 10 chunk submits plus the final frame submit and
+  // the readback submit, 12 in total. Assert a bounded range rather than
+  // the exact count so incidental extra submits (device warm-up, snapshot
+  // plumbing) don't turn this into a change-detector. The pass count
+  // scales with the DEVICE-pixel radius, so this ceiling is only valid at
+  // this fixture's fixed 200x200 canvas at devicePixelRatio 1; rescaling
+  // the fixture requires retuning both bounds.
   EXPECT_GE(c.submits, 6u)
       << "Huge-radius morphology should force chunked filter submissions beyond the shared "
          "frame + readback pair.";
   EXPECT_LE(c.submits, 20u)
       << "Chunked filter submissions should bound the command buffer to 64 passes each: "
-         "646 passes fit in 11 chunks plus frame and readback submits.";
+         "646 passes chunk into 10 mid-frame submits plus frame and readback submits.";
 }
 
 TEST_F(GeodePerfTest, GaussianBlur_UsesSingleFrameSubmission) {
