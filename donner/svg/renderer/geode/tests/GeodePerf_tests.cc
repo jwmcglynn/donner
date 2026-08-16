@@ -324,6 +324,45 @@ TEST_F(GeodePerfTest, GaussianBlur_UsesSingleFrameSubmission) {
 // testdata deps).
 // ---------------------------------------------------------------------------
 
+TEST_F(GeodePerfTest, MultiImageBlit_PoolsCompositeUniforms) {
+  auto device = sharedDevice();
+  ASSERT_TRUE(device) << "GeodeDevice::CreateHeadless failed";
+
+  // Three `drawImage` blits in one frame. Each blit previously created its
+  // own 160-byte uniform buffer; pooled blits should bump-allocate from the
+  // encoder's per-frame uniform scratch instead, so the only buffer create
+  // left is the scratch arena's first growth.
+  RendererGeode renderer(device);
+  RenderViewport viewport;
+  viewport.size = Vector2d(80.0, 32.0);
+  viewport.devicePixelRatio = 1.0;
+  renderer.beginFrame(viewport);
+
+  ImageResource image;
+  image.width = 2;
+  image.height = 2;
+  image.data = {255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 0, 255};
+
+  ImageParams params;
+  params.targetRect = Box2d({8.0, 8.0}, {24.0, 24.0});
+  params.opacity = 1.0;
+
+  renderer.drawImage(image, params);
+  params.targetRect = Box2d({32.0, 8.0}, {48.0, 24.0});
+  renderer.drawImage(image, params);
+  params.targetRect = Box2d({56.0, 8.0}, {72.0, 24.0});
+  renderer.drawImage(image, params);
+  renderer.endFrame();
+
+  const geode::GeodeCounters c = renderer.lastFrameTimings().counters;
+  RecordProperty("bufferCreates", std::to_string(c.bufferCreates));
+  printCounters(::testing::UnitTest::GetInstance()->current_test_info()->name(), c);
+
+  EXPECT_LE(c.bufferCreates, 2u)
+      << "Three image blits should pool their uniform uploads into the encoder scratch arena "
+         "instead of creating one uniform buffer per blit.";
+}
+
 TEST_F(GeodePerfTest, Lion_BaselineCeilings) {
   auto device = sharedDevice();
   ASSERT_TRUE(device) << "GeodeDevice::CreateHeadless failed";
