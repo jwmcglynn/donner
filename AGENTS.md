@@ -117,6 +117,7 @@ See `docs/design_docs/0016-ci_escape_prevention.md` for the full rationale behin
 
 - Prefer existing Donner utilities (`Transform2d`, `RcString`, `StringUtils`) before adding dependencies.
 - **No private-infra references.** Donner is public: never cite the operator's private repos, their design-doc numbers, or personal notes in code, comments, commits, or PRs. State the motivation in self-contained terms instead. See `CLAUDE.md` §"No Private-Infra References".
+- **No design-doc or planning references in code comments, including Donner's own.** Never cite `docs/design_docs/` numbers, milestones ("Milestone 3", "M2", "M4.2"), waves, tiers, phases, packets, or bullets in a comment; write the invariant, constraint, or measured fact inline so the comment stands alone. Design docs may reference code; code never references design docs. Remove violations you touch, even preexisting ones. See `CLAUDE.md` §"No Design-Doc or Milestone References in Code Comments".
 - Docs: follow `docs/AGENTS.md`, use templates under `docs/design_docs/`. Run `tools/doxygen.sh` to regenerate.
 - **All code changes should include tests.** Use gMock/gTest. Add fuzzers for parser paths when practical.
 - Fix root causes, not symptoms; include necessary error handling without asking. Mainline must stay green — investigate failures rather than dismissing them as pre-existing.
