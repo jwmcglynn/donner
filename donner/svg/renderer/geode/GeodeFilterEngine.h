@@ -148,12 +148,14 @@ public:
    * and reset the per-frame uniform scratch cursor.
    *
    * The renderer calls this once per frame from its own beginFrame, BEFORE
-   * the filter texture pool runs its stale-bucket eviction. Uniform slots
-   * written after this call reuse stable (buffer, offset) pairs across
-   * frames. The device-shared engine relies on the documented
-   * one-frame-per-device serialization contract: a sibling renderer that
-   * begins a frame mid-way through another renderer's unsubmitted frame
-   * would rewind the cursor under the recorded passes.
+   * the filter texture pool runs its stale-bucket eviction, and before any
+   * filter pass of the frame records. Uniform slots written after this call
+   * reuse stable (buffer, offset) pairs across frames. The cursor itself is
+   * mutex-guarded, but callers must still serialize one frame per device at
+   * a time: two sibling renderers drawing concurrently on the same device
+   * would alias uniform slots and rewind the cursor under recorded passes
+   * (the renderer's architecture already serializes the render worker per
+   * device).
    */
   void beginFrame();
 
