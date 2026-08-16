@@ -1921,6 +1921,52 @@ TEST_F(RendererGeodeTest, FilterSpecularLightingExponentBelowOneIsTransparent) {
       << "specularExponent<1 must produce transparent output everywhere";
 }
 
+TEST_F(RendererGeodeTest, FilterInvalidConvolveMatrixClearsReusedTexture) {
+  auto renderGraph = [&](RendererGeode& renderer, const components::FilterGraph& filterGraph) {
+    beginFrame(renderer);
+    renderer.pushFilterLayer(filterGraph, Box2d({0, 0}, {kViewportSize, kViewportSize}));
+    renderer.setPaint(solidFill(css::RGBA(255, 255, 255, 255)));
+    renderer.setTransform(Transform2d());
+    renderer.drawRect(Box2d({-4, -4}, {kViewportSize + 4, kViewportSize + 4}), StrokeParams{});
+    renderer.popFilterLayer();
+    renderer.endFrame();
+    return renderer.takeSnapshot();
+  };
+
+  // Fill the entire filter-intermediate pool bucket with opaque red textures. Reacquiring one of
+  // these textures must not leak its previous contents through a transparent short-circuit path.
+  components::FilterGraph warmGraph;
+  components::FilterNode floodNode;
+  components::filter_primitive::Flood flood;
+  flood.floodColor = css::Color(css::RGBA(255, 0, 0, 255));
+  flood.floodOpacity = 1.0;
+  floodNode.primitive = flood;
+  for (int i = 0; i < 8; ++i) {
+    warmGraph.nodes.push_back(floodNode);
+  }
+
+  RendererGeode warmRenderer = createRenderer();
+  const RendererBitmap warm = renderGraph(warmRenderer, warmGraph);
+  ASSERT_FALSE(warm.empty());
+  EXPECT_THAT(pixelAt(warm, 32, 32), RgbaEq(255, 0, 0, 255));
+
+  components::FilterGraph graph;
+  components::FilterNode convolveNode;
+  components::filter_primitive::ConvolveMatrix convolve;
+  convolve.orderX = 3;
+  convolve.orderY = 3;
+  convolve.kernelMatrix = {1.0};  // Invalid: a 3x3 kernel requires nine values.
+  convolveNode.primitive = convolve;
+  convolveNode.inputs.push_back(components::FilterStandardInput::SourceGraphic);
+  graph.nodes.push_back(convolveNode);
+
+  RendererGeode invalidRenderer = createRenderer();
+  const RendererBitmap actual = renderGraph(invalidRenderer, graph);
+  ASSERT_FALSE(actual.empty());
+  EXPECT_THAT(pixelAt(actual, 32, 32), IsTransparent());
+  EXPECT_THAT(pixelAt(actual, 18, 18), IsTransparent());
+}
+
 TEST_F(RendererGeodeTest, FilterDiffuseLightingSpotLightConeMatchesCpuReference) {
   components::FilterGraph graph;
   // The CPU reference runs the raw lighting kernel in sRGB; pin the graph to sRGB
