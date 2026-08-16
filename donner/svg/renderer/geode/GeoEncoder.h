@@ -12,6 +12,7 @@
 #include "donner/base/Transform.h"
 #include "donner/base/Vector2.h"
 #include "donner/css/Color.h"
+#include "donner/svg/renderer/geode/GeodeResidentPathComponent.h"
 
 namespace donner {
 class Path;
@@ -25,6 +26,7 @@ namespace donner::geode {
 
 struct EncodedPath;
 struct GeodeResidentSlot;
+class GeodeRecordSlab;
 struct GeodeResidentGradientSlot;
 
 /**
@@ -231,6 +233,23 @@ public:
   /// Disabled mode emits binary coverage at the pixel center.
   /// @param antialias True to retain analytic edge coverage.
   void setAntialias(bool antialias);
+
+  /// True when a clip polygon or a clip mask is active. Batchable
+  /// residence and cross-entity batching are only taken with no active
+  /// clip state (the cached bind groups and shared batch uniform carry
+  /// zero clip flags).
+  bool hasActiveClipState() const;
+
+  /// Monotonic clip-state version: every clip-polygon / clip-mask
+  /// mutation bumps it. The ordered batch machinery snapshots it per
+  /// batch so a batch never spans a clip change.
+  uint64_t clipStateVersion() const;
+
+  /// True when a rectangular scissor rect is active. The ordered batch
+  /// gate excludes scissor-clipped draws (the scissor is raster-stage
+  /// state applied per draw; a deferred batch draw would observe the
+  /// scissor at flush time instead of at draw time).
+  bool hasActiveScissor() const;
 
   /// Set the model-view transform for subsequent draw calls.
   void setTransform(const Transform2d& transform);
@@ -519,6 +538,60 @@ public:
    */
   void fillPathInstanced(const EncodedPath& encoded, const css::RGBA& color, FillRule rule,
                          std::span<const float> instanceTransforms);
+
+  /**
+   * Ensure a resident slot's geometry is uploaded and its instance record
+   * (record-slab slot, chunk-relative bases, transform-bearing) is current
+   * WITHOUT drawing. Used by the cross-entity ordered-batch path, which
+   * draws many slots in one GPU call; solo draws call `fillPathResident`
+   * instead, which performs the same work and then records the draw.
+   *
+   * @param slot Resident slot (geometry + record slab wiring installed by
+   *   the renderer).
+   * @param encoded Precomputed `EncodedPath` shared with the cache.
+   * @param color Solid fill color (NOT premultiplied).
+   * @param rule Fill rule.
+   * @param recordTransform The full deviceFromLocal transform to bake
+   *   into the record (the batch uniform is orthographic-only).
+   * @param recordSlotOverride When non-null, write the record into this
+   *   slot instead of the entity's primary slot (same-frame repeat draws
+   *   need one record per draw). Always written.
+   * @return True when the slot is resident and current.
+   */
+  bool ensureResidentSceneRecord(GeodeResidentSlot& slot, const EncodedPath& encoded,
+                                 const css::RGBA& color, FillRule rule,
+                                 const Transform2d& recordTransform,
+                                 const GeodeRecordSlab::Slot* recordSlotOverride = nullptr);
+
+  /// One cross-entity ordered batch: consecutive resident slots of one
+  /// slab chunk plus a run of consecutive record-slab slots.
+  struct SceneBatchBinding {
+    wgpu::Buffer chunkBuffer;   ///< Slab chunk holding every instance's geometry.
+    wgpu::Buffer recordBuffer;  ///< Record-slab buffer holding the records.
+    uint32_t firstInstance = 0; ///< Record-slot index of the first instance.
+    uint32_t instanceCount = 1;
+    uint32_t vertexCount = 0;   ///< Max fan vertex count over the instances.
+  };
+
+  /**
+   * Record ONE GPU draw covering a cross-entity batch of resident solid
+   * fills (ordered batching). The caller has already ensured each
+   * instance's record via `ensureResidentSceneRecord`. The bind group
+   * binds the whole slab chunk for every geometry class (the records carry
+   * chunk-relative element bases) and the record span for binding 7. The
+   * draw issues `firstInstance = binding.firstInstance` and the maximum
+   * fan vertex count; the vertex shader folds extra triangles of smaller
+   * instances into a degenerate position.
+   *
+   * The encoder transform must be identity when this is called (the batch
+   * uniform carries the orthographic mapping only).
+   *
+   * @param color Solid fill color shared by every instance.
+   * @param rule Fill rule shared by every instance.
+   * @param binding Batch binding (chunk + record span + counts).
+   */
+  void fillPathSceneBatch(const css::RGBA& color, FillRule rule,
+                          const SceneBatchBinding& binding);
 
   /**
    * Fill a path with a linear gradient.

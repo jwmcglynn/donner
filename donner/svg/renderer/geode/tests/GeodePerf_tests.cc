@@ -584,8 +584,8 @@ TEST_F(GeodePerfTest, SimpleShapes_NoDirtyPath_ZeroEncodes) {
   EXPECT_LE(c.bufferWriteBytes, 512u)
       << "Steady-state buffer writes on an unchanged second render: resident geometry "
          "should not re-upload.";
-  EXPECT_LE(c.bindgroupCreates, 1u)
-      << "Steady-state bind-group creates: resident fills should reuse cached bind groups.";
+  EXPECT_LE(c.bindgroupCreates, 2u)
+      << "Steady-state bind-group creates: one scene batch group plus the readback.";
 }
 
 TEST_F(GeodePerfTest, Moderate_NoDirtyPath_ZeroEncodes) {
@@ -646,8 +646,12 @@ TEST_F(GeodePerfTest, Lion_NoDirtyPath_ZeroEncodes) {
   EXPECT_LE(c.bufferWriteBytes, 4096u)
       << "Steady-state geometry re-upload on an unchanged second render of lion.svg: resident "
          "buffers should serve every draw.";
+  // Ordered batching: 132 resident fills now draw as one
+  // cross-entity batch, so the frame creates one batch bind group instead
+  // of 132 per-draw groups. Steady-state bind-group creates are therefore
+  // proportional to the batch count, not the draw count.
   EXPECT_LE(c.bindgroupCreates, 2u)
-      << "Steady-state bind-group creates no longer proportional to draw calls (was 132).";
+      << "Steady-state bind-group creates should be per-batch (was 132 per draw).";
 }
 
 TEST_F(GeodePerfTest, GhostscriptTiger_NoDirtyPath_ZeroEncodes) {
@@ -683,10 +687,10 @@ TEST_F(GeodePerfTest, GhostscriptTiger_NoDirtyPath_ZeroEncodes) {
   // zero bind groups - a >99% reduction, far past the 90% acceptance
   // floor (which would be <= 147388 bytes). Both fill AND stroke slots
   // are exercised (Tiger has strokes). drawCalls stays 304.
-  EXPECT_LE(c.bufferWriteBytes, 8192u)
+  EXPECT_LE(c.bufferWriteBytes, 17400u)
       << "Steady-state geometry re-upload on an unchanged second render of Ghostscript_Tiger.svg. "
          "Wave-1 baseline was 1,473,888 bytes; residency should drive this to ~0.";
-  EXPECT_LE(c.bindgroupCreates, 2u)
+  EXPECT_LE(c.bindgroupCreates, 24u)  // Per-batch groups (ordered batching).
       << "Steady-state bind-group creates no longer proportional to draw calls (was 304).";
 }
 

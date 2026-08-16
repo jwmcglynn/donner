@@ -84,43 +84,45 @@ struct alignas(16) Uniforms {
 };
 static_assert(sizeof(Uniforms) == 224, "Uniforms struct layout mismatch");
 
-/// Layout of the per-instance record at binding 7. Must match
-/// `InstanceRecord` in `shaders/slug_fill.wgsl`. The vertex stage composes
-/// `uniforms.mvp * transform`; the fragment stage reads the remaining
-/// fields through a flat instance-id varying, so overlapping batched
-/// instances still blend in painter (instance) order. All geometry bases
-/// are element offsets relative to the bound buffer range's start.
-struct alignas(16) InstanceRecord {
-  float transformRow0[4];     //   0 ..  16 - (a, c, e, 0)
-  float transformRow1[4];     //  16 ..  32 - (b, d, f, 0)
-  float color[4];             //  32 ..  48 - premultiplied
-  uint32_t fillRule;          //  48 ..  52
-  uint32_t paintMode;         //  52 ..  56
-  float patternOpacity;       //  56 ..  60
-  uint32_t _pad0;             //  60 ..  64
-  float gridYBase;            //  64 ..  68
-  float gridHStride;          //  68 ..  72
-  uint32_t gridHBandCount;    //  72 ..  76
-  float gridXBase;            //  76 ..  80
-  float gridVStride;          //  80 ..  84
-  uint32_t gridVBandCount;    //  84 ..  88
-  uint32_t _gridPad0;         //  88 ..  92
-  uint32_t _gridPad1;         //  92 ..  96
-  uint32_t boundingVertexCount;  //  96 .. 100
-  uint32_t _boundingPad0;        // 100 .. 104
-  uint32_t _boundingPad1;        // 104 .. 108
-  uint32_t _boundingPad2;        // 108 .. 112
-  float boundingVertices[4 * 4];  // 112 .. 176
-  uint32_t bandBase;           // 176 .. 180
-  uint32_t curveBase;          // 180 .. 184
-  uint32_t vBandBase;          // 184 .. 188
-  uint32_t vCurveBase;         // 188 .. 192
-  uint32_t hGridBase;          // 192 .. 196
-  uint32_t vGridBase;          // 196 .. 200
-  uint32_t hRefsBase;          // 200 .. 204
-  uint32_t vRefsBase;          // 204 .. 208
-};
-static_assert(sizeof(InstanceRecord) == 208, "InstanceRecord struct layout mismatch");
+/// Write the 4x4 identity matrix in column-major order.
+void writeIdentityMvp(float* out16) {
+  out16[0] = 1.0f;
+  out16[1] = 0.0f;
+  out16[2] = 0.0f;
+  out16[3] = 0.0f;
+  out16[4] = 0.0f;
+  out16[5] = 1.0f;
+  out16[6] = 0.0f;
+  out16[7] = 0.0f;
+  out16[8] = 0.0f;
+  out16[9] = 0.0f;
+  out16[10] = 1.0f;
+  out16[11] = 0.0f;
+  out16[12] = 0.0f;
+  out16[13] = 0.0f;
+  out16[14] = 0.0f;
+  out16[15] = 1.0f;
+}
+
+/// Compose the orthographic target-pixel -> clip-space mapping with an
+/// affine transform IN DOUBLE precision, returning the composed affine.
+/// The record's two-row transform format carries the result; the vertex
+/// stage then multiplies it by an identity uniform, so no float32
+/// rounding enters the composition.
+Transform2d composeOrthographicMvp(uint32_t targetWidth, uint32_t targetHeight,
+                                   const Transform2d& t) {
+  const double sx = 2.0 / static_cast<double>(targetWidth);
+  const double sy = -2.0 / static_cast<double>(targetHeight);
+  // clip = scale(sx, sy) * translate(-1, +1) * t  (row-major convention)
+  Transform2d result;
+  result.data[0] = sx * t.data[0];
+  result.data[1] = sy * t.data[1];
+  result.data[2] = sx * t.data[2];
+  result.data[3] = sy * t.data[3];
+  result.data[4] = sx * t.data[4] - 1.0;
+  result.data[5] = sy * t.data[5] + 1.0;
+  return result;
+}
 
 /// Build a column-major 4x4 matrix from an affine `Transform2d` and write it
 /// into the first 16 floats of the output array. Used for the `mvp` and
@@ -409,7 +411,8 @@ struct GeoEncoder::Impl : public GeodeTextureEncoder::UniformScratch {
   /// source of truth shared by the arena submitFillDraw and the resident
   /// submitResidentFillDraw, so a path that flips between the two paths
   /// (clip toggling) produces byte-identical uniforms.
-  void populateBatchUniform(Uniforms& u, const FillDrawArgs& args);
+  void populateBatchUniform(Uniforms& u, const FillDrawArgs& args,
+                            const Transform2d& mvpTransform, bool identityMvp);
 
   /// Populate the per-instance InstanceRecord from args + encoded +
   /// transform. Same sharing contract as populateBatchUniform.
@@ -432,7 +435,16 @@ struct GeoEncoder::Impl : public GeodeTextureEncoder::UniformScratch {
   bool submitResidentFillDraw(GeodeResidentSlot& slot, const EncodedPath& encoded,
                               const FillDrawArgs& args);
 
-  /// Gradient-paint extension: (re)upload `encoded` into the
+  /// Shared ensure path: upload geometry if stale, then write the batch
+  /// uniform and the instance record if changed. Used by the solo
+  /// resident draw and the cross-entity batch path.
+  bool ensureResidentSceneRecordImpl(GeodeResidentSlot& slot, const EncodedPath& encoded,
+                                     const FillDrawArgs& args,
+                                     const Transform2d& recordTransform,
+                                     const GeodeRecordSlab::Slot* recordSlotOverride,
+                                     bool bakeTransform);
+
+  /// Wave-2 extension for gradient paints: (re)upload `encoded` into the
   /// gradient slot's persistent combined buffer (same eight SSBO regions,
   /// uniform region sized for `GradientUniforms`) and reset its cached
   /// bind group.
@@ -688,6 +700,11 @@ struct GeoEncoder::Impl : public GeodeTextureEncoder::UniformScratch {
   /// Cleared via `clearClipPolygon` when popClip restores a clip with
   /// no active polygon.
   bool clipPolygonActive = false;
+
+  /// Monotonic version bumped by every clip-polygon / clip-mask mutation.
+  /// The ordered batch machinery snapshots this per batch so a batch never
+  /// spans a clip change (one draw can only carry one clip state).
+  uint64_t clipStateVersion = 0;
   float clipPolygonPlanes[16] = {0};  // 4 edges × vec4 (xyz + pad)
 
   /// Populate the `hasClipPolygon` + `clipPolygonPlanes` fields on an
@@ -803,9 +820,10 @@ struct GeoEncoder::Impl : public GeodeTextureEncoder::UniformScratch {
     }
   }
 
-  /// Build the MVP matrix from the current transform.
-  /// Maps target-pixel coordinates to clip space (-1..+1 with Y down).
-  void buildMvp(float* out16) const {
+  /// Build the MVP matrix for an explicit transform (identity = the
+  /// orthographic target-pixel -> clip-space mapping only). Maps
+  /// target-pixel coordinates to clip space (-1..+1 with Y down).
+  void buildMvp(float* out16, const Transform2d& transform) const {
     // First: convert path-space → pixel space via the transform.
     // Then: pixel space → clip space.
     //   x_clip =  2 * x_pixel / width  - 1
@@ -853,6 +871,9 @@ struct GeoEncoder::Impl : public GeodeTextureEncoder::UniformScratch {
     out16[14] = 0.0f;
     out16[15] = 1.0f;
   }
+
+  /// Build the MVP matrix from the encoder's current transform.
+  void buildMvp(float* out16) const { buildMvp(out16, transform); }
 };
 
 // Shared initialisation used by both constructors of GeoEncoder. Fills
@@ -968,6 +989,7 @@ void GeoEncoder::setScissorRect(int32_t x, int32_t y, int32_t w, int32_t h) {
   const int32_t clampedW = std::max(0, w - (clampedX - x));
   const int32_t clampedH = std::max(0, h - (clampedY - y));
   impl_->scissorActive = true;
+  ++impl_->clipStateVersion;
   impl_->scissorX = static_cast<uint32_t>(clampedX);
   impl_->scissorY = static_cast<uint32_t>(clampedY);
   impl_->scissorW = static_cast<uint32_t>(clampedW);
@@ -977,6 +999,7 @@ void GeoEncoder::setScissorRect(int32_t x, int32_t y, int32_t w, int32_t h) {
 
 void GeoEncoder::clearScissorRect() {
   impl_->scissorActive = false;
+  ++impl_->clipStateVersion;
   impl_->applyScissorIfPassOpen();
 }
 
@@ -1027,10 +1050,12 @@ void GeoEncoder::setClipPolygon(const Vector2d corners[4]) {
     impl_->clipPolygonPlanes[i * 4 + 3] = 0.0f;
   }
   impl_->clipPolygonActive = true;
+  ++impl_->clipStateVersion;
 }
 
 void GeoEncoder::clearClipPolygon() {
   impl_->clipPolygonActive = false;
+  ++impl_->clipStateVersion;
   for (size_t i = 0; i < 16; ++i) {
     impl_->clipPolygonPlanes[i] = 0.0f;
   }
@@ -1250,6 +1275,8 @@ void GeoEncoder::endMaskPass() {
 
 void GeoEncoder::setClipMask(const wgpu::TextureView& maskView) {
   impl_->activeClipMaskView = maskView;
+  ++impl_->clipStateVersion;
+  ++impl_->clipStateVersion;
   // activeClipMaskTexture keepalive is left empty by this overload; the
   // caller must guarantee the parent stays alive. The 2-arg overload
   // is preferred for any path that doesn't own the texture's lifetime
@@ -1266,6 +1293,7 @@ void GeoEncoder::setClipMask(const wgpu::Texture& maskTexture, const wgpu::Textu
 
 void GeoEncoder::clearClipMask() {
   impl_->activeClipMaskView = wgpu::TextureView{};
+  ++impl_->clipStateVersion;
   impl_->activeClipMaskTexture = wgpu::Texture{};
 }
 
@@ -1280,6 +1308,18 @@ void GeoEncoder::setGeometryDebugSink(GeometryDebugSink* sink, const Transform2d
 
 void GeoEncoder::setAntialias(bool antialias) {
   impl_->antialias = antialias;
+}
+
+bool GeoEncoder::hasActiveClipState() const {
+  return impl_->clipPolygonActive || impl_->activeClipMaskView != nullptr;
+}
+
+uint64_t GeoEncoder::clipStateVersion() const {
+  return impl_->clipStateVersion;
+}
+
+bool GeoEncoder::hasActiveScissor() const {
+  return impl_->scissorActive;
 }
 
 void GeoEncoder::setLoadPreserve() {
@@ -1356,8 +1396,18 @@ void GeoEncoder::fillPath(const Path& path, const css::RGBA& color, FillRule rul
 // GPU residence
 // ============================================================================
 
-void GeoEncoder::Impl::populateBatchUniform(Uniforms& u, const FillDrawArgs& args) {
-  buildMvp(u.mvp);
+void GeoEncoder::Impl::populateBatchUniform(Uniforms& u, const FillDrawArgs& args,
+                                           const Transform2d& mvpTransform,
+                                           bool identityMvp = false) {
+  if (identityMvp) {
+    // Scene-batch form: the vertex stage composes an IDENTITY uniform mvp
+    // with each record's host-composed transform, so the float32 matrix
+    // multiply is exact and the batch reproduces the double-precision
+    // host composition of the solo path.
+    writeIdentityMvp(u.mvp);
+  } else {
+    buildMvp(u.mvp, mvpTransform);
+  }
   affineToMat4(args.patternFromPath, u.patternFromPath);
   u.viewport[0] = static_cast<float>(targetWidth);
   u.viewport[1] = static_cast<float>(targetHeight);
@@ -1465,8 +1515,6 @@ void GeoEncoder::Impl::uploadResidentGeometry(GeodeResidentSlot& slot, const Enc
   place(slot.hRefs, hRefsBytes, kStorageOffsetAlignment, /*storageDummy=*/true);
   place(slot.vRefs, vRefsBytes, kStorageOffsetAlignment, /*storageDummy=*/true);
   place(slot.uniform, sizeof(Uniforms), kUniformOffsetAlignment, /*storageDummy=*/false);
-  place(slot.instanceRecord, sizeof(InstanceRecord), kStorageOffsetAlignment,
-        /*storageDummy=*/false);
 
   const uint64_t totalSize = cursor;
   const uint64_t geometrySize = slot.uniform.offset;  // everything before the uniform.
@@ -1523,7 +1571,6 @@ void GeoEncoder::Impl::uploadResidentGeometry(GeodeResidentSlot& slot, const Enc
   shift(slot.hGrid);
   shift(slot.vGrid);
   shift(slot.uniform);
-  shift(slot.instanceRecord);
 
   slot.vertexCount = encoded.boundingDrawVertexCount();
   slot.resident = true;
@@ -1548,8 +1595,19 @@ void GeoEncoder::Impl::buildResidentBindGroup(GeodeResidentSlot& slot) {
     entries[i].size = r.size;
   };
   bufEntry(0, 0, slot.uniform);
-  bufEntry(1, 1, slot.bands);
-  bufEntry(2, 2, slot.curves);
+  // Geometry classes bind the WHOLE slab chunk (offset 0, chunk size).
+  // The record carries chunk-relative element bases, so the same cached
+  // bind group shape and record content serve both solo resident draws
+  // and cross-entity batches.
+  const uint64_t chunkBytes = buf.getSize();
+  auto chunkEntry = [&](int i, uint32_t binding) {
+    entries[i].binding = binding;
+    entries[i].buffer = buf;
+    entries[i].offset = 0;
+    entries[i].size = chunkBytes;
+  };
+  chunkEntry(1, 1);
+  chunkEntry(2, 2);
   entries[3].binding = 3;
   entries[3].textureView = device->dummyPatternTextureView();
   entries[4].binding = 4;
@@ -1562,20 +1620,12 @@ void GeoEncoder::Impl::buildResidentBindGroup(GeodeResidentSlot& slot) {
   entries[6].binding = 6;
   entries[6].sampler = device->dummyClipMaskSampler();
   entries[7].binding = 7;
-  entries[7].buffer = buf;
-  entries[7].offset = slot.instanceRecord.offset;
-  entries[7].size = slot.instanceRecord.size;
-  bufEntry(8, 8, slot.vBands);
-  bufEntry(9, 9, slot.vCurves);
-  // Combined grid binding spanning hGrid | vGrid | hRefs | vRefs (the
-  // layout keeps them contiguous). The record's grid bases are relative
-  // to this range's start.
-  const uint64_t gridStart = slot.hGrid.offset;
-  const uint64_t gridEnd = slot.vRefs.offset + slot.vRefs.size;
-  entries[10].binding = 10;
-  entries[10].buffer = buf;
-  entries[10].offset = gridStart;
-  entries[10].size = gridEnd - gridStart;
+  entries[7].buffer = slot.recordSlot.buffer;
+  entries[7].offset = slot.recordSlot.offset;
+  entries[7].size = sizeof(InstanceRecord);
+  chunkEntry(8, 8);
+  chunkEntry(9, 9);
+  chunkEntry(10, 10);
 
   wgpu::BindGroupDescriptor bgDesc = {};
   bgDesc.label = wgpuLabel("GeodeResidentBindGroup");
@@ -1591,6 +1641,30 @@ bool GeoEncoder::Impl::submitResidentFillDraw(GeodeResidentSlot& slot, const Enc
   ensurePassOpen();
   bindSolidPipeline();
 
+  if (!ensureResidentSceneRecordImpl(slot, encoded, args, transform, nullptr,
+                                     /*bakeTransform=*/true)) {
+    return false;
+  }
+
+  // ensureResidentSceneRecordImpl already wrote the uniform + record.
+
+  if (!slot.bindGroup) {
+    buildResidentBindGroup(slot);
+  }
+
+  recordGeometryDebugDraw(encoded);
+  pass.get().setBindGroup(0, slot.bindGroup.get(), 0, nullptr);
+  pass.get().draw(slot.vertexCount, 1, 0, 0);
+  device->countDraw();
+  return true;
+}
+
+bool GeoEncoder::Impl::ensureResidentSceneRecordImpl(GeodeResidentSlot& slot,
+                                                     const EncodedPath& encoded,
+                                                     const FillDrawArgs& args,
+                                                     const Transform2d& recordTransform,
+                                                     const GeodeRecordSlab::Slot* recordSlotOverride,
+                                                     bool bakeTransform) {
   // Ensure the geometry is resident and current AND owned by THIS device.
   // Component removal is the primary invalidation; the pointer + fingerprint
   // guard catches the in-place stroke-slot rebuild (which replaces the encode
@@ -1608,9 +1682,7 @@ bool GeoEncoder::Impl::submitResidentFillDraw(GeodeResidentSlot& slot, const Enc
   }
 
   // The upload can fail (no slab, a device mismatch that the caller has
-  // not re-wired yet, or a chunk allocation failure). Route the draw
-  // through the per-frame arena path so it stays bit-exact and never touches
-  // an empty buffer.
+  // not re-wired yet, or a chunk allocation failure).
   if (!slot.resident || !slot.buffer) {
     return false;
   }
@@ -1618,11 +1690,17 @@ bool GeoEncoder::Impl::submitResidentFillDraw(GeodeResidentSlot& slot, const Enc
   // Rewrite the batch uniform and the instance record only when they
   // actually changed. A static re-render (same viewport, same paint)
   // produces byte-identical bytes, so both writes are skipped entirely
-  // and the frame emits zero buffer writes. The record's transform stays
-  // identity: the resident path bakes deviceFromLocal into uniforms.mvp,
-  // exactly like the arena single-draw path.
+  // and the frame emits zero buffer writes. The uniform carries the
+  // Two forms exist:
+  //   - Solo (bakeTransform): uniforms.mvp carries the full
+  //     deviceFromLocal transform (double precision on the host, exactly
+  //     like the wave-1 arena path) and the record's transform stays
+  //     identity.
+  //   - Scene batch (orthographic uniform): uniforms.mvp is the
+  //     orthographic mapping and the record carries the caller's
+  //     per-instance transform, so one uniform serves every instance.
   Uniforms u = {};
-  populateBatchUniform(u, args);
+  populateBatchUniform(u, args, transform, /*identityMvp=*/!bakeTransform);
   const auto* uBytes = reinterpret_cast<const uint8_t*>(&u);
   if (slot.lastUniform.size() != sizeof(Uniforms) ||
       std::memcmp(slot.lastUniform.data(), uBytes, sizeof(Uniforms)) != 0) {
@@ -1632,30 +1710,40 @@ bool GeoEncoder::Impl::submitResidentFillDraw(GeodeResidentSlot& slot, const Enc
   }
 
   InstanceRecord record = {};
-  populateInstanceRecord(record, encoded, args, Transform2d());
-  // Grid bases are element offsets relative to the combined grid
-  // binding's start (hGrid). The regions are contiguous by layout.
-  record.hGridBase = 0u;
-  record.vGridBase = static_cast<uint32_t>((slot.vGrid.offset - slot.hGrid.offset) / sizeof(uint32_t));
-  record.hRefsBase = static_cast<uint32_t>((slot.hRefs.offset - slot.hGrid.offset) / sizeof(uint32_t));
-  record.vRefsBase = static_cast<uint32_t>((slot.vRefs.offset - slot.hGrid.offset) / sizeof(uint32_t));
+  populateInstanceRecord(
+      record, encoded, args,
+      bakeTransform ? Transform2d()
+                    : composeOrthographicMvp(targetWidth, targetHeight, recordTransform));
+  // Chunk-relative element offsets: solo and batch draws both bind whole
+  // slab chunks for the geometry classes, so these bases are valid in
+  // both modes.
+  record.bandBase = static_cast<uint32_t>(slot.bands.offset / sizeof(EncodedPath::Band));
+  record.curveBase = static_cast<uint32_t>(slot.curves.offset / sizeof(float));
+  record.vBandBase = static_cast<uint32_t>(slot.vBands.offset / sizeof(EncodedPath::Band));
+  record.vCurveBase = static_cast<uint32_t>(slot.vCurves.offset / sizeof(float));
+  record.hGridBase = static_cast<uint32_t>(slot.hGrid.offset / sizeof(uint32_t));
+  record.vGridBase = static_cast<uint32_t>(slot.vGrid.offset / sizeof(uint32_t));
+  record.hRefsBase = static_cast<uint32_t>(slot.hRefs.offset / sizeof(uint32_t));
+  record.vRefsBase = static_cast<uint32_t>(slot.vRefs.offset / sizeof(uint32_t));
   const auto* rBytes = reinterpret_cast<const uint8_t*>(&record);
-  if (slot.lastRecord.size() != sizeof(InstanceRecord) ||
-      std::memcmp(slot.lastRecord.data(), rBytes, sizeof(InstanceRecord)) != 0) {
-    device->queue().writeBuffer(slot.buffer, slot.instanceRecord.offset, &record,
+  const GeodeRecordSlab::Slot& recordSlot =
+      recordSlotOverride != nullptr ? *recordSlotOverride : slot.recordSlot;
+  if (!recordSlot.buffer) {
+    return false;
+  }
+  if (recordSlotOverride != nullptr) {
+    // Per-frame temporary record slot (same-frame repeat draws): always
+    // fresh, so always written.
+    device->queue().writeBuffer(recordSlot.buffer, recordSlot.offset, &record,
+                                sizeof(InstanceRecord));
+    device->countBufferWrite(sizeof(InstanceRecord));
+  } else if (slot.lastRecord.size() != sizeof(InstanceRecord) ||
+             std::memcmp(slot.lastRecord.data(), rBytes, sizeof(InstanceRecord)) != 0) {
+    device->queue().writeBuffer(recordSlot.buffer, recordSlot.offset, &record,
                                 sizeof(InstanceRecord));
     device->countBufferWrite(sizeof(InstanceRecord));
     slot.lastRecord.assign(rBytes, rBytes + sizeof(InstanceRecord));
   }
-
-  if (!slot.bindGroup) {
-    buildResidentBindGroup(slot);
-  }
-
-  recordGeometryDebugDraw(encoded);
-  pass.get().setBindGroup(0, slot.bindGroup.get(), 0, nullptr);
-  pass.get().draw(slot.vertexCount, 1, 0, 0);
-  device->countDraw();
   return true;
 }
 
@@ -1701,7 +1789,8 @@ void GeoEncoder::fillPathResident(GeodeResidentSlot& slot, const EncodedPath& en
   // from a DIFFERENT device that previously rendered this document is not a
   // same-frame repeat and must re-upload (submitResidentFillDraw re-uploads
   // on the device-id mismatch) rather than fall back.
-  if (slot.owningDeviceId == impl_->device->deviceId() && slot.lastResidentFrame == frameId) {
+  if (slot.owningDeviceId == impl_->device->deviceId() &&
+      (slot.lastResidentFrame == frameId || slot.lastSceneFrame == frameId)) {
     submitFillDraw(args);
     return;
   }
@@ -1750,6 +1839,118 @@ void GeoEncoder::fillPathInstanced(const EncodedPath& encoded, const css::RGBA& 
   args.instanceCount = instanceCount;
 
   submitFillDraw(args, instanceTransforms);
+}
+
+bool GeoEncoder::ensureResidentSceneRecord(GeodeResidentSlot& slot, const EncodedPath& encoded,
+                                           const css::RGBA& color, FillRule rule,
+                                           const Transform2d& recordTransform,
+                                           const GeodeRecordSlab::Slot* recordSlotOverride) {
+  if (encoded.empty()) {
+    return false;
+  }
+  // Build the same solid-fill args fillPath would, so the shared ensure
+  // path produces byte-identical uniforms and records.
+  FillDrawArgs args = {};
+  args.path = nullptr;
+  args.rule = rule;
+  args.precomputedEncoded = &encoded;
+  args.paintMode = 0u;
+  const float alpha = color.a / 255.0f;
+  args.solidColor[0] = (color.r / 255.0f) * alpha;
+  args.solidColor[1] = (color.g / 255.0f) * alpha;
+  args.solidColor[2] = (color.b / 255.0f) * alpha;
+  args.solidColor[3] = alpha;
+  args.patternOpacity = 1.0f;
+  args.patternView = impl_->device->dummyPatternTextureView();
+  args.patternSampler = impl_->device->dummyPatternSampler();
+  args.tileSize = Vector2d(1.0, 1.0);
+  args.patternFromPath = Transform2d();
+  return impl_->ensureResidentSceneRecordImpl(slot, encoded, args, recordTransform,
+                                              recordSlotOverride, /*bakeTransform=*/false);
+}
+
+void GeoEncoder::fillPathSceneBatch(const css::RGBA& color, FillRule rule,
+                                    const SceneBatchBinding& binding) {
+  if (!binding.chunkBuffer || !binding.recordBuffer || binding.instanceCount == 0u ||
+      binding.vertexCount == 0u) {
+    return;
+  }
+  impl_->ensurePassOpen();
+  impl_->bindSolidPipeline();
+
+  // Batch-level uniform: orthographic mapping only (the caller set the
+  // encoder transform to identity). Pattern/clip fields use the device
+  // dummies / zero flags - batchable draws never carry patterns or clips.
+  FillDrawArgs args = {};
+  args.rule = rule;
+  args.paintMode = 0u;
+  const float alpha = color.a / 255.0f;
+  args.solidColor[0] = (color.r / 255.0f) * alpha;
+  args.solidColor[1] = (color.g / 255.0f) * alpha;
+  args.solidColor[2] = (color.b / 255.0f) * alpha;
+  args.solidColor[3] = alpha;
+  args.patternOpacity = 1.0f;
+  args.patternView = impl_->device->dummyPatternTextureView();
+  args.patternSampler = impl_->device->dummyPatternSampler();
+  args.tileSize = Vector2d(1.0, 1.0);
+  args.patternFromPath = Transform2d();
+  args.instanceCount = binding.instanceCount;
+
+  Uniforms u = {};
+  impl_->populateBatchUniform(u, args, Transform2d(), /*identityMvp=*/true);
+  const auto uniAlloc =
+      impl_->allocInArena(impl_->uniformArena, &u, sizeof(Uniforms), kUniformOffsetAlignment);
+
+  const uint64_t chunkBytes = binding.chunkBuffer.getSize();
+  const uint64_t recordSpanStart =
+      static_cast<uint64_t>(binding.firstInstance) * sizeof(InstanceRecord);
+  const uint64_t recordSpanBytes =
+      static_cast<uint64_t>(binding.instanceCount) * sizeof(InstanceRecord);
+
+  wgpu::BindGroupEntry entries[11] = {};
+  entries[0].binding = 0;
+  entries[0].buffer = uniAlloc.buffer;
+  entries[0].offset = uniAlloc.offset;
+  entries[0].size = uniAlloc.size;
+  auto chunkEntry = [&](int i, uint32_t bindingIndex) {
+    entries[i].binding = bindingIndex;
+    entries[i].buffer = binding.chunkBuffer;
+    entries[i].offset = 0;
+    entries[i].size = chunkBytes;
+  };
+  chunkEntry(1, 1);
+  chunkEntry(2, 2);
+  entries[3].binding = 3;
+  entries[3].textureView = impl_->device->dummyPatternTextureView();
+  entries[4].binding = 4;
+  entries[4].sampler = impl_->device->dummyPatternSampler();
+  entries[5].binding = 5;
+  entries[5].textureView = impl_->device->dummyClipMaskTextureView();
+  entries[6].binding = 6;
+  entries[6].sampler = impl_->device->dummyClipMaskSampler();
+  entries[7].binding = 7;
+  entries[7].buffer = binding.recordBuffer;
+  entries[7].offset = recordSpanStart;
+  entries[7].size = recordSpanBytes;
+  chunkEntry(8, 8);
+  chunkEntry(9, 9);
+  chunkEntry(10, 10);
+
+  wgpu::BindGroupDescriptor bgDesc = {};
+  bgDesc.label = wgpuLabel("GeodeSceneBatchBindGroup");
+  bgDesc.layout = impl_->pipeline->bindGroupLayout();
+  bgDesc.entryCount = 11;
+  bgDesc.entries = entries;
+  wgpu::BindGroup bindGroup =
+      impl_->transientResources.retain(impl_->device->device().createBindGroup(bgDesc));
+  impl_->device->countBindGroup();
+
+  // The binding covers the span of consecutive record slots starting at
+  // `firstInstance`; the shader's instance_index therefore runs 0..N-1
+  // (the draw's firstInstance must NOT add the slot offset again).
+  impl_->pass.get().setBindGroup(0, bindGroup, 0, nullptr);
+  impl_->pass.get().draw(binding.vertexCount, binding.instanceCount, 0, 0);
+  impl_->device->countDraw();
 }
 
 void GeoEncoder::fillPathPattern(const Path& path, FillRule rule, const PatternPaint& paint,
@@ -1843,8 +2044,11 @@ void GeoEncoder::submitFillDraw(const FillDrawArgs& args,
   // the resident fill path so both produce byte-identical bytes; the record
   // holds everything that varies per instance (transform, color, rule,
   // grid parameters, bounding polygon, geometry bases).
+  const uint32_t instanceCount = args.instanceCount;
+  const bool instanced = instanceCount > 1 && !instanceTransforms.empty() &&
+                         instanceTransforms.size() == static_cast<size_t>(instanceCount) * 8u;
   Uniforms u = {};
-  impl_->populateBatchUniform(u, args);
+  impl_->populateBatchUniform(u, args, impl_->transform, /*identityMvp=*/instanced);
   InstanceRecord record = {};
   impl_->populateInstanceRecord(record, encoded, args, Transform2d());
 
@@ -1862,24 +2066,37 @@ void GeoEncoder::submitFillDraw(const FillDrawArgs& args,
 
   // One record for single draws; the instanced path copies the base record
   // and overwrites each copy's transform so every instance still shares the
-  // same geometry bases computed above.
-  const uint32_t instanceCount = args.instanceCount;
+  // same geometry bases computed above. Instanced records carry the
+  // HOST-COMPOSED orthographic transform (double precision), and the
+  // uniform mvp becomes the identity matrix, so the vertex stage's
+  // float32 multiply is exact and rotated instances (markers) match the
+  // solo path's host-composed bake.
   wgpu::Buffer recordBuf;
   uint64_t recordOffset = 0;
   uint64_t recordSize = 0;
-  if (instanceCount > 1 && !instanceTransforms.empty()) {
+  if (instanced) {
     const size_t packedCount = static_cast<size_t>(instanceCount) * 8u;
     if (instanceTransforms.size() == packedCount) {
       std::vector<InstanceRecord> records(instanceCount, record);
       for (uint32_t i = 0; i < instanceCount; ++i) {
-        records[i].transformRow0[0] = instanceTransforms[i * 8u + 0u];
-        records[i].transformRow0[1] = instanceTransforms[i * 8u + 1u];
-        records[i].transformRow0[2] = instanceTransforms[i * 8u + 2u];
-        records[i].transformRow0[3] = instanceTransforms[i * 8u + 3u];
-        records[i].transformRow1[0] = instanceTransforms[i * 8u + 4u];
-        records[i].transformRow1[1] = instanceTransforms[i * 8u + 5u];
-        records[i].transformRow1[2] = instanceTransforms[i * 8u + 6u];
-        records[i].transformRow1[3] = instanceTransforms[i * 8u + 7u];
+        Transform2d t;
+        t.data[0] = instanceTransforms[i * 8u + 0u];
+        t.data[1] = instanceTransforms[i * 8u + 4u];
+        t.data[2] = instanceTransforms[i * 8u + 1u];
+        t.data[3] = instanceTransforms[i * 8u + 5u];
+        t.data[4] = instanceTransforms[i * 8u + 2u];
+        t.data[5] = instanceTransforms[i * 8u + 6u];
+        const Transform2d composed =
+            composeOrthographicMvp(impl_->targetWidth, impl_->targetHeight, t);
+        InstanceRecord& rec = records[i];
+        rec.transformRow0[0] = static_cast<float>(composed.data[0]);
+        rec.transformRow0[1] = static_cast<float>(composed.data[2]);
+        rec.transformRow0[2] = static_cast<float>(composed.data[4]);
+        rec.transformRow0[3] = 0.0f;
+        rec.transformRow1[0] = static_cast<float>(composed.data[1]);
+        rec.transformRow1[1] = static_cast<float>(composed.data[3]);
+        rec.transformRow1[2] = static_cast<float>(composed.data[5]);
+        rec.transformRow1[3] = 0.0f;
       }
       const uint64_t recordBytes = static_cast<size_t>(instanceCount) * sizeof(InstanceRecord);
       const auto recordAlloc = impl_->allocInArena(impl_->instanceRecordArena, records.data(),

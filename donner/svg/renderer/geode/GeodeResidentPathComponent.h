@@ -28,8 +28,188 @@
 #include <vector>
 
 #include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
+#include "donner/svg/renderer/geode/GeodeDevice.h"
 
 namespace donner::geode {
+
+/// Layout of the per-instance record at binding 7 of the Slug fill
+/// pipeline. Must match `InstanceRecord` in `shaders/slug_fill.wgsl`.
+/// The vertex stage composes `uniforms.mvp * transform`; the fragment
+/// stage reads the remaining fields through a flat instance-id varying,
+/// so overlapping batched instances still blend in painter (instance)
+/// order. All geometry bases are element offsets relative to the bound
+/// buffer range's start (chunk-relative for resident geometry).
+struct alignas(16) InstanceRecord {
+  float transformRow0[4];     //   0 ..  16 - (a, c, e, 0)
+  float transformRow1[4];     //  16 ..  32 - (b, d, f, 0)
+  float color[4];             //  32 ..  48 - premultiplied
+  uint32_t fillRule;          //  48 ..  52
+  uint32_t paintMode;         //  52 ..  56
+  float patternOpacity;       //  56 ..  60
+  uint32_t _pad0;             //  60 ..  64
+  float gridYBase;            //  64 ..  68
+  float gridHStride;          //  68 ..  72
+  uint32_t gridHBandCount;    //  72 ..  76
+  float gridXBase;            //  76 ..  80
+  float gridVStride;          //  80 ..  84
+  uint32_t gridVBandCount;    //  84 ..  88
+  uint32_t _gridPad0;         //  88 ..  92
+  uint32_t _gridPad1;         //  92 ..  96
+  uint32_t boundingVertexCount;  //  96 .. 100
+  uint32_t _boundingPad0;        // 100 .. 104
+  uint32_t _boundingPad1;        // 104 .. 108
+  uint32_t _boundingPad2;        // 108 .. 112
+  float boundingVertices[4 * 4];  // 112 .. 176
+  uint32_t bandBase;           // 176 .. 180
+  uint32_t curveBase;          // 180 .. 184
+  uint32_t vBandBase;          // 184 .. 188
+  uint32_t vCurveBase;         // 188 .. 192
+  uint32_t hGridBase;          // 192 .. 196
+  uint32_t vGridBase;          // 196 .. 200
+  uint32_t hRefsBase;          // 200 .. 204
+  uint32_t vRefsBase;          // 204 .. 208
+  // Tail padding to 256 bytes so record-slab slot offsets satisfy the
+  // baseline min_storage_buffer_offset_alignment (256) while the WGSL
+  // array stride stays a multiple of it. Zero-initialized by the
+  // `= {}` population.
+  float _padTail[12];  // 208 .. 256
+};
+static_assert(sizeof(InstanceRecord) == 256, "InstanceRecord struct layout mismatch");
+
+/**
+ * Document-scoped, painter-ordered record slab for ordered draw batching
+ * (ordered batching).
+ *
+ * Cross-entity batches issue ONE draw whose instances read
+ * `instances[firstInstance + i]` from a contiguous record array. Records
+ * therefore live in a document-scoped slab instead of inside each entity's
+ * geometry chunk: slot indices are allocated in draw order, freed ranges
+ * defer to the next frame (the same discipline as
+ * `GeodeResidentSlab::beginFrame`), and a batch covers only consecutive
+ * slots of one buffer, splitting at free-list reuse or buffer-growth
+ * boundaries.
+ *
+ * Buffer growth keeps old slots in place: a grown slab allocates a bigger
+ * buffer and future slots land there, so no record ever moves. Batches
+ * that would straddle the buffer boundary split instead.
+ *
+ * Bound to one device like `GeodeResidentSlab`; not thread-safe.
+ */
+class GeodeRecordSlab {
+public:
+  /// One record slot: its index in the contiguous array and its absolute
+  /// byte offset in the owning buffer.
+  struct Slot {
+    wgpu::Buffer buffer;
+    uint64_t offset = 0;
+    uint32_t index = 0;
+  };
+
+  explicit GeodeRecordSlab(uint64_t deviceId) : owningDeviceId_(deviceId) {}
+
+  GeodeRecordSlab(const GeodeRecordSlab&) = delete;
+  GeodeRecordSlab& operator=(const GeodeRecordSlab&) = delete;
+
+  uint64_t owningDeviceId() const { return owningDeviceId_; }
+
+  /// Merge the previous frame's freed slots into the reusable free list.
+  /// The frame-index guard makes the merge idempotent per frame (mirrors
+  /// the geometry slab's contract: a second renderer on the same device
+  /// has its own frame counter, and a stale-index skip only defers the
+  /// merge in the safe direction).
+  void beginFrame(uint64_t frameIndex) {
+    if (frameIndex == lastMergedFrame_) {
+      return;
+    }
+    lastMergedFrame_ = frameIndex;
+    for (uint32_t index : pendingFrees_) {
+      freeIndices_.insert(std::upper_bound(freeIndices_.begin(), freeIndices_.end(), index),
+                          index);
+    }
+    pendingFrees_.clear();
+  }
+
+  /// Allocate the next record slot (free-list first, then bump in the
+  /// newest buffer). Returns false when the device cannot create a buffer.
+  bool allocateSlot(GeodeDevice& device, Slot& out) {
+    if (!freeIndices_.empty()) {
+      const uint32_t index = freeIndices_.front();
+      freeIndices_.erase(freeIndices_.begin());
+      out = slotAt(index);
+      return static_cast<bool>(out.buffer);
+    }
+    if (chunks_.empty() || usedBytes_ + sizeof(InstanceRecord) > chunks_.back().size) {
+      uint64_t newSize = chunks_.empty() ? kInitialRecordSlabBytes : chunks_.back().size * 2u;
+      while (newSize < sizeof(InstanceRecord)) {
+        newSize *= 2u;
+      }
+      wgpu::BufferDescriptor desc = {};
+      desc.label = wgpuLabel("GeodeRecordSlab");
+      desc.size = newSize;
+      desc.usage = wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopyDst;
+      ScopedWgpuHandle<wgpu::Buffer> buffer(device.device().createBuffer(desc));
+      if (!buffer) {
+        return false;
+      }
+      device.countBuffer();
+      chunks_.push_back(Chunk{std::move(buffer), newSize});
+      usedBytes_ = 0;
+    }
+    out.buffer = chunks_.back().buffer.get();
+    out.offset = usedBytes_;
+    out.index = static_cast<uint32_t>(usedBytes_ / sizeof(InstanceRecord));
+    usedBytes_ += sizeof(InstanceRecord);
+    return true;
+  }
+
+  /// Defer freeing a slot until the next frame: a slot reused within the
+  /// frame that freed it would overwrite a record the frame's already
+  /// recorded batch draws still read.
+  void freeSlot(const Slot& slot) { pendingFrees_.push_back(slot.index); }
+
+  /// Borrowed handle of the newest buffer (batches bind sub-ranges of it).
+  wgpu::Buffer newestBuffer() const {
+    return chunks_.empty() ? wgpu::Buffer() : chunks_.back().buffer.get();
+  }
+
+  /// Bytes currently in use in the newest buffer.
+  uint64_t newestBufferUsedBytes() const { return usedBytes_; }
+
+  /// Total live bytes across all buffers (resident-bytes accounting).
+  uint64_t liveBytes() const {
+    uint64_t total = 0;
+    for (const Chunk& chunk : chunks_) {
+      total += chunk.size;
+    }
+    return total;
+  }
+
+private:
+  struct Chunk {
+    ScopedWgpuHandle<wgpu::Buffer> buffer;
+    uint64_t size = 0;
+  };
+
+  static constexpr uint64_t kInitialRecordSlabBytes = 262144u;
+
+  Slot slotAt(uint32_t index) const {
+    // Slots are never moved; walk the chunk sizes to find the owner.
+    uint64_t offset = static_cast<uint64_t>(index) * sizeof(InstanceRecord);
+    for (const Chunk& chunk : chunks_) {
+      if (offset < chunk.size) {
+        return Slot{chunk.buffer.get(), offset, index};
+      }
+    }
+    return Slot{wgpu::Buffer(), 0, index};
+  }
+
+  uint64_t owningDeviceId_;
+  uint64_t lastMergedFrame_ = ~uint64_t{0};
+  uint64_t usedBytes_ = 0;
+  std::vector<Chunk> chunks_;
+  std::vector<uint32_t> freeIndices_;
+  std::vector<uint32_t> pendingFrees_;
+};
 
 class GeodeDevice;
 
@@ -308,7 +488,14 @@ struct GeodeResidentSlot {
   Region hGrid;    ///< Horizontal band grid (binding 10).
   Region vGrid;    ///< Vertical band grid (binding 11).
   Region uniform;  ///< Batch-level uniform block (binding 0, 256-aligned).
-  Region instanceRecord;  ///< Per-instance record (binding 7).
+
+  /// Document-scoped record slab slot for this entity's instance record
+  /// (binding 7). Solo draws bind the slot's own range; cross-entity
+  /// batches bind a span of consecutive slots and index by slot index.
+  GeodeRecordSlab::Slot recordSlot;
+  /// Record slab that owns `recordSlot`; mirrors the geometry slab's
+  /// device-change lifetime handling.
+  std::shared_ptr<GeodeRecordSlab> recordSlab;
 
   uint32_t vertexCount = 0;  ///< Triangle-fan draw count generated from vertex_index.
 
@@ -334,6 +521,14 @@ struct GeodeResidentSlot {
   /// owns this slot yet".
   uint64_t owningDeviceId = 0;
 
+  /// Frame index in which this slot's record was last referenced by a
+  /// recorded scene-batch draw. A record slot holds ONE record; an entity
+  /// drawn again in the same frame (markers, repeated `<use>`) needs a
+  /// fresh record slot so earlier recorded batches keep reading their own
+  /// content at submit time. The scene batcher consults this to decide
+  /// between the slot's primary record and a per-frame temporary one.
+  uint64_t lastSceneFrame = ~uint64_t{0};
+
   /// True once `buffer` + `bindGroup` hold the current encode. Cleared
   /// when the slot is reset or when a re-upload is required.
   bool resident = false;
@@ -358,7 +553,12 @@ struct GeodeResidentSlot {
   std::vector<uint8_t> lastUniform;
 
   GeodeResidentSlot() = default;
-  ~GeodeResidentSlot() { reset(); }
+  ~GeodeResidentSlot() {
+    if (recordSlab && recordSlot.buffer) {
+      recordSlab->freeSlot(recordSlot);
+    }
+    reset();
+  }
 
   GeodeResidentSlot(const GeodeResidentSlot&) = delete;
   GeodeResidentSlot& operator=(const GeodeResidentSlot&) = delete;
@@ -410,10 +610,15 @@ struct GeodeResidentSlot {
       GeodeResidentSlab::Allocation alloc{buffer, allocationOffset, allocationSize};
       slab->free(alloc);
     }
-    // The slab pointer itself is intentionally kept: it outlives any one
-    // residence (it is owned by the registry context), and the re-upload
-    // path needs it right after reset(). `residentFillSlot` refreshes it
-    // when the document crosses devices.
+    // The record slot survives geometry re-uploads: its painter-ordered
+    // index is allocation-order data, not geometry data, and keeping it
+    // preserves cross-entity batch contiguity across unchanged frames.
+    // It is only freed by the destructor (component removal) or replaced
+    // by the renderer's record-slab wiring on a device change.
+    // The slab pointers themselves are intentionally kept: they outlive
+    // any one residence (they are owned by the registry context), and the
+    // re-upload path needs them right after reset(). The slot getters
+    // refresh them when the document crosses devices.
     allocationOffset = 0;
     allocationSize = 0;
     buffer = wgpu::Buffer();
@@ -423,6 +628,7 @@ struct GeodeResidentSlot {
     encodedFingerprint = 0;
     owningDeviceId = 0;
     lastUniform.clear();
+    lastRecord.clear();
   }
 };
 
@@ -540,10 +746,10 @@ struct GeodeResidentGradientSlot {
       GeodeResidentSlab::Allocation alloc{buffer, allocationOffset, allocationSize};
       slab->free(alloc);
     }
-    // The slab pointer itself is intentionally kept: it outlives any one
-    // residence (it is owned by the registry context), and the re-upload
-    // path needs it right after reset(). `residentFillSlot` refreshes it
-    // when the document crosses devices.
+    // The slab pointers themselves are intentionally kept: they outlive
+    // any one residence (they are owned by the registry context), and the
+    // re-upload path needs them right after reset(). The slot getters
+    // refresh them when the document crosses devices.
     allocationOffset = 0;
     allocationSize = 0;
     buffer = wgpu::Buffer();
