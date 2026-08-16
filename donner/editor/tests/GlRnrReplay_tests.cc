@@ -283,6 +283,22 @@ std::optional<std::filesystem::path> WriteStaticContentReplay(
   file.metadata.windowHeight = 480;
   file.metadata.displayScale = 1.0;
 
+  repro::ReproViewport viewport;
+  viewport.paneOriginX = 220.0;
+  viewport.paneOriginY = 180.0;
+  viewport.paneSizeW = 200.0;
+  viewport.paneSizeH = 120.0;
+  viewport.devicePixelRatio = 1.0;
+  viewport.zoom = 1.0;
+  viewport.panDocX = 100.0;
+  viewport.panDocY = 60.0;
+  viewport.panScreenX = 320.0;
+  viewport.panScreenY = 240.0;
+  viewport.viewBoxX = 0.0;
+  viewport.viewBoxY = 0.0;
+  viewport.viewBoxW = 200.0;
+  viewport.viewBoxH = 120.0;
+
   for (std::uint64_t frameIndex = 0; frameIndex <= lastFrame; ++frameIndex) {
     repro::ReproFrame frame;
     frame.index = frameIndex;
@@ -290,6 +306,7 @@ std::optional<std::filesystem::path> WriteStaticContentReplay(
     frame.deltaMs = 1000.0 / 60.0;
     frame.mouseX = 320.0;
     frame.mouseY = 240.0;
+    frame.viewport = viewport;
     file.frames.push_back(frame);
   }
 
@@ -2156,6 +2173,7 @@ TEST(GlRnrReplayTest, ContentOnlyDocumentCanvasCaptureMatchesRendererGroundTruth
   repro::GlRnrReplayResult result;
   std::string error;
   ASSERT_GL_REPLAY_OR_SKIP(options, result, error);
+  SCOPED_TRACE(CanonicalReplayDiagnostics(result));
 
   std::optional<svg::RendererBitmap> actual = LoadCaptureBitmap(result, kFirstPresentedReplayFrame);
   ASSERT_TRUE(actual.has_value());
@@ -2190,6 +2208,7 @@ TEST(GlRnrReplayTest, DirectDocumentCanvasCaptureIsNotDimmedByRenderPaneBackgrou
   repro::GlRnrReplayResult result;
   std::string error;
   ASSERT_GL_REPLAY_OR_SKIP(options, result, error);
+  SCOPED_TRACE(CanonicalReplayDiagnostics(result));
 
   std::optional<svg::RendererBitmap> actual = LoadCaptureBitmap(result, kFirstPresentedReplayFrame);
   ASSERT_TRUE(actual.has_value());
