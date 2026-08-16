@@ -275,9 +275,10 @@ struct RenderResult {
   };
 
   /// One composite tile from the worker's `CompositorController::
-  /// snapshotCompositorTiles()` snapshot. The editor uploads one GL texture
-  /// per tile (keyed on `id`) and
-  /// blits each tile at its canvas offset. Immediate tiles intentionally use
+  /// snapshotCompositorTiles()` snapshot. The editor uploads one GL texture per tile (keyed on
+  /// `id`). The GL presenter composes those cached textures into one pane-sized presentation
+  /// texture; the WebGPU presenter composites them directly into the framebuffer. Immediate tiles
+  /// intentionally use
   /// transient ids and always carry a fresh payload. Geometry fields are
   /// doc-unit quantities so the editor can scale them by the current
   /// `pixelsPerDocUnit` during canvas-resize debouncing.
@@ -332,10 +333,9 @@ struct RenderResult {
   };
 
   struct CompositedPreview {
-    /// Paint-order tile list. Blit in `tiles` order: each tile gets
-    /// one `AddImage` call at `(canvasOffsetDoc + dragTranslationDoc)
-    /// * pixelsPerDocUnit` with size `bitmapDimsDoc *
-    /// pixelsPerDocUnit`.
+    /// Paint-order tile list. Presentation samples the tiles in this order at
+    /// `(canvasOffsetDoc + dragTranslationDoc) * pixelsPerDocUnit`, with size
+    /// `bitmapDimsDoc * pixelsPerDocUnit`.
     std::vector<CompositedTile> tiles;
     /// Active drag-target entity (for selection chrome routing). May
     /// be `entt::null` if no entity is currently being dragged.
@@ -687,8 +687,8 @@ public:
     return lastSegmentInspectorRows_;
   }
 
-  /// Unified in-paint-order snapshot of every tile the compositor
-  /// blits to produce the final composite.
+  /// Unified in-paint-order snapshot of every tile the compositor samples to produce the final
+  /// composite.
   /// The editor's layer-inspector panel renders this list with
   /// thumbnails for every tile so the operator can see the
   /// comprehensive composite at a glance.

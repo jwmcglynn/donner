@@ -250,7 +250,7 @@ TEST(OverlayRendererTest, EditingChromeOnlySkipsSelectionGeometry) {
   EXPECT_TRUE(snapshot.handleAnchorsDoc.empty());
 }
 
-TEST(OverlayRendererTest, ActiveCombinedBoundsPreviewKeepsTextBaseline) {
+TEST(OverlayRendererTest, ActiveCombinedBoundsPreviewSkipsTextBaselineTraversal) {
   constexpr std::string_view kTextSvg =
       R"(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200">
            <text id="t" x="50" y="80" font-size="20" font-family="sans-serif">Hello</text>
@@ -273,11 +273,10 @@ TEST(OverlayRendererTest, ActiveCombinedBoundsPreviewKeepsTextBaseline) {
       boundsPreview, std::span<const svg::SVGElement>(), std::nullopt,
       SelectionChromeDetail::CombinedBoundsOnly);
 
-  ASSERT_EQ(snapshot.textBaselinesDoc.size(), 1u);
-  EXPECT_NEAR(snapshot.textBaselinesDoc.front().startDoc.y, 96.0, 1.0);
+  EXPECT_TRUE(snapshot.textBaselinesDoc.empty());
 }
 
-TEST(OverlayRendererTest, ActiveCombinedBoundsPreviewKeepsScaledSelectionPath) {
+TEST(OverlayRendererTest, ActiveCombinedBoundsPreviewAvoidsSelectionPathCapture) {
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(kTrivialSvg));
   auto rect = app.document().document().querySelector("#r1");
@@ -296,9 +295,7 @@ TEST(OverlayRendererTest, ActiveCombinedBoundsPreviewKeepsScaledSelectionPath) {
       boundsPreview, std::span<const svg::SVGElement>(), std::nullopt,
       SelectionChromeDetail::CombinedBoundsOnly);
 
-  ASSERT_EQ(snapshot.paths.size(), 1u);
-  EXPECT_EQ(snapshot.paths.front().pathDoc.bounds(),
-            scale.transformBox(boundsPreview.startBoundsDoc));
+  EXPECT_TRUE(snapshot.paths.empty());
   EXPECT_TRUE(snapshot.aabbsDoc.empty());
   ASSERT_TRUE(snapshot.orientedBoundsDoc.has_value());
   EXPECT_EQ(snapshot.orientedBoundsDoc->cornersDoc[0], Vector2d(30.0, 36.0));

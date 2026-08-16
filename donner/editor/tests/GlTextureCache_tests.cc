@@ -260,6 +260,16 @@ TEST(GlTextureCacheTest, ResetCompositedClearsMetadataBookkeepingAndCost) {
   EXPECT_EQ(coverage.overviewOutputSizePx, Vector2i::Zero());
 }
 
+TEST(GlTextureCacheTest, DocumentCompositeBytesParticipateInTrackedResourceTotal) {
+  GlTextureCache cache;
+  cache.setDocumentCompositeBytes(8192u);
+
+  const PresentationResourceStats stats = cache.presentationResourceStats();
+  EXPECT_EQ(stats.documentCompositeBytes, 8192u);
+  EXPECT_EQ(stats.totalTrackedBytes, 8192u);
+  EXPECT_EQ(stats.peakTrackedBytes, 8192u);
+}
+
 TEST(GlTextureCacheTest, EmptyThumbnailAndRetainOnEmptyDoNotAllocate) {
   GlTextureCache cache;
   svg::RendererBitmap bitmap;

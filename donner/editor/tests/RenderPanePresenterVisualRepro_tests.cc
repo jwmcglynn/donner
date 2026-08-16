@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -13,6 +14,7 @@
 
 #include "donner/base/MathUtils.h"
 #include "donner/base/tests/TestTempDir.h"
+#include "donner/editor/DocumentPresentationCompositor.h"
 #include "donner/editor/ImGuiIncludes.h"
 #include "donner/editor/MenuBarPresenter.h"
 #include "donner/editor/RenderPanePresenter.h"
@@ -159,6 +161,24 @@ svg::RendererBitmap CapturePresenterFrame(
   // the presenter; the presenter no longer consumes a chrome snapshot.
   const std::optional<SelectionChromeSnapshot> noOverlaySnapshot;
   RenderPanePresenter presenter;
+  DocumentCompositeTextureView documentComposite;
+#ifndef DONNER_EDITOR_WGPU
+  std::unique_ptr<DocumentPresentationCompositor> compositor;
+#endif
+
+#ifndef DONNER_EDITOR_WGPU
+  if (!documentPresentedDirectly) {
+    compositor = std::make_unique<DocumentPresentationCompositor>();
+    const bool drawOverviewTiles = ShouldPresentOverviewTiles(
+        textures->activeTilesViewportBounded(), textures->overviewTiles());
+    const std::vector<GlTextureCache::TileView> noOverviewTiles;
+    documentComposite = compositor->compose(
+        viewport, viewport.imageScreenRect(),
+        drawOverviewTiles ? textures->overviewTiles() : noOverviewTiles, textures->tiles(),
+        activePreview, displayedPreview, suppressedLayerEntity,
+        /*suppressDragTargetTiles=*/false);
+  }
+#endif
 
   window->beginFrame();
   ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
@@ -191,6 +211,7 @@ svg::RendererBitmap CapturePresenterFrame(
       .contentRegion = Vector2d(kLogicalWidth, kLogicalHeight),
       .suppressedLayerEntity = suppressedLayerEntity,
       .documentPresentedDirectly = documentPresentedDirectly,
+      .documentComposite = documentComposite,
       .compositorTileOverlay = compositorTileOverlay,
   });
   ImGui::End();
@@ -282,6 +303,53 @@ TEST(RenderPanePresenterVisualReproTest, WritesDisplayNoneSuppressionScreenshots
   EXPECT_GT(expectedVisiblePixels, 2500)
       << "The expected screenshot should keep the selected drag target visible while the "
          "display:none layer is suppressed.";
+}
+
+TEST(RenderPanePresenterVisualReproTest, IntermediateCompositeReusesUnchangedPresentation) {
+  gui::EditorWindow window(gui::EditorWindowOptions{
+      .title = "Document Composite Cache Repro",
+      .initialWidth = kLogicalWidth,
+      .initialHeight = kLogicalHeight,
+      .visible = false,
+      .offscreen = true,
+      .offscreenContentScale = 1.0,
+      .enableFramebufferReadback = true,
+  });
+  if (!window.valid()) {
+    GTEST_SKIP() << "Hidden editor window is unavailable on this host";
+  }
+
+  GlTextureCache textures(window.geodeDevice());
+  textures.initialize();
+  textures.uploadComposited(MakePreview(/*includeHiddenLayer=*/true));
+
+  ViewportState viewport;
+  viewport.paneSize = Vector2d(kLogicalWidth, kLogicalHeight);
+  viewport.documentViewBox = Box2d::FromXYWH(0.0, 0.0, static_cast<double>(kLogicalWidth),
+                                             static_cast<double>(kLogicalHeight));
+  viewport.panScreenPoint = Vector2d::Zero();
+  viewport.panDocPoint = Vector2d::Zero();
+
+  DocumentPresentationCompositor compositor;
+  const DocumentCompositeTextureView first =
+      compositor.compose(viewport, viewport.imageScreenRect(), {}, textures.tiles(), std::nullopt,
+                         std::nullopt, entt::null, /*suppressDragTargetTiles=*/false);
+  const DocumentCompositeTextureView second =
+      compositor.compose(viewport, viewport.imageScreenRect(), {}, textures.tiles(), std::nullopt,
+                         std::nullopt, entt::null, /*suppressDragTargetTiles=*/false);
+
+  ASSERT_NE(first.texture, 0u);
+  EXPECT_EQ(second.texture, first.texture);
+  EXPECT_EQ(compositor.compositionCountForTesting(), 1u)
+      << "An unchanged UI frame must reuse the explicit document composite.";
+  EXPECT_EQ(compositor.retainedBytes(),
+            static_cast<std::uint64_t>(kLogicalWidth) * kLogicalHeight * 4u * 2u);
+
+  viewport.panScreenPoint.x = 1.0;
+  (void)compositor.compose(viewport, viewport.imageScreenRect(), {}, textures.tiles(), std::nullopt,
+                           std::nullopt, entt::null, /*suppressDragTargetTiles=*/false);
+  EXPECT_EQ(compositor.compositionCountForTesting(), 2u)
+      << "A viewport change must invalidate the document composite.";
 }
 
 TEST(RenderPanePresenterVisualReproTest,

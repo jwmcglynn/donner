@@ -801,23 +801,11 @@ SelectionChromeSnapshot OverlayRenderer::captureChromeSnapshot(
   const bool includePathPointChrome = pathOutlinesOnly;
 
   // A live select gesture carries immutable start bounds and the exact current
-  // document transform. Keep its path outline sampled from the live DOM so it
-  // scales and rotates with the presented object, while retaining the
-  // lightweight oriented-bounds path for handles and omitting per-element
-  // AABBs and path-point chrome.
+  // document transform. Build its lightweight bounds chrome directly from
+  // that state instead of traversing selected geometry while the async
+  // renderer may hold the document. Detailed path and text-baseline chrome
+  // refine after the interaction settles.
   if (combinedBoundsOnly && activeBoundsPreview.has_value()) {
-    AppendChromeItems(
-        selection, cullRectDoc, &snapshot.paths, &snapshot.aabbsDoc,
-        /*outPathAnchorPoints=*/nullptr, /*outPathControlLines=*/nullptr,
-        /*outPathControlPoints=*/nullptr, &snapshot.textBaselinesDoc,
-        AppendChromeItemsOptions{
-            .includePaths = true,
-            .includePerElementAabbs = false,
-            .includePathPointChrome = false,
-            .canvasScale = scale,
-            .devicePixelRatio = devicePixelRatio,
-            .representedDocumentFromLiveDocument = representedDocumentFromLiveDocument,
-        });
     const auto corners = TransformedBoxCorners(activeBoundsPreview->startBoundsDoc,
                                                activeBoundsPreview->documentFromStartDocument);
     std::array<Vector2d, 4> representedCorners;

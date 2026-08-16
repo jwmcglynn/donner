@@ -428,7 +428,8 @@ void PrintFrameCost(const FrameCostBreakdown& cost) {
 }
 
 void PrintPresentationResources(const PresentationResourceStats& resources) {
-  std::cout << "{\"active_tile_bytes\":" << resources.activeTileBytes
+  std::cout << "{\"document_composite_bytes\":" << resources.documentCompositeBytes
+            << ",\"active_tile_bytes\":" << resources.activeTileBytes
             << ",\"overview_tile_bytes\":" << resources.overviewTileBytes
             << ",\"pending_retired_bytes\":" << resources.pendingRetiredBytes
             << ",\"aged_retired_bytes\":" << resources.agedRetiredBytes
