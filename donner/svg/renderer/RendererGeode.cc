@@ -2000,6 +2000,18 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
     return &source.get_or_emplace<geode::GeodeResidentPathComponent>().strokeSlot;
   }
 
+  /// GPU-residence slot for `source`'s gradient-painted fill (design doc
+  /// 0030 wave 2 extension). See `residentFillSlot`; the slot lives on the
+  /// same `GeodeResidentPathComponent` and is invalidated by the same
+  /// listener.
+  geode::GeodeResidentGradientSlot* residentGradientFillSlot(EntityHandle source) {
+    if (!source) {
+      return nullptr;
+    }
+    ensureCacheInvalidationWired(*source.registry());
+    return &source.get_or_emplace<geode::GeodeResidentPathComponent>().gradientFillSlot;
+  }
+
   /// Emit a solid fill, preferring the persistent-residence path when a
   /// resident slot and a cached encode are both available. Falls back to
   /// the wave-1 arena `fillPath` otherwise (null source, no cached encode,
@@ -2235,7 +2247,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
   /// `GeoEncoder` runs the inline encode path.
   void fillResolved(const Path& path, FillRule rule,
                     const geode::EncodedPath* precomputedEncoded = nullptr,
-                    geode::GeodeResidentSlot* residentSlot = nullptr) {
+                    geode::GeodeResidentSlot* residentSlot = nullptr,
+                    geode::GeodeResidentGradientSlot* gradientResidentSlot = nullptr) {
     if (!encoder) {
       return;
     }
@@ -2254,7 +2267,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
       return;
     }
     const double effectiveOpacity = paint.fillOpacity;
-    drawPaintedPath(path, paint.fill, effectiveOpacity, rule, precomputedEncoded, residentSlot);
+    drawPaintedPath(path, paint.fill, effectiveOpacity, rule, precomputedEncoded, residentSlot,
+                    gradientResidentSlot);
   }
 
   /// Core dispatch: given a path and a resolved paint server, emit the
@@ -2262,9 +2276,10 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
   void drawPaintedPath(const Path& path, const components::ResolvedPaintServer& server,
                        double effectiveOpacity, FillRule rule,
                        const geode::EncodedPath* precomputedEncoded = nullptr,
-                       geode::GeodeResidentSlot* residentSlot = nullptr) {
+                       geode::GeodeResidentSlot* residentSlot = nullptr,
+                       geode::GeodeResidentGradientSlot* gradientResidentSlot = nullptr) {
     drawPaintedPathAgainst(path, path, server, effectiveOpacity, rule, precomputedEncoded,
-                           residentSlot);
+                           residentSlot, gradientResidentSlot);
   }
 
   /// Same as `drawPaintedPath`, but the gradient's objectBoundingBox is
@@ -2277,7 +2292,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
                               const components::ResolvedPaintServer& server,
                               double effectiveOpacity, FillRule rule,
                               const geode::EncodedPath* precomputedEncoded = nullptr,
-                              geode::GeodeResidentSlot* residentSlot = nullptr) {
+                              geode::GeodeResidentSlot* residentSlot = nullptr,
+                              geode::GeodeResidentGradientSlot* gradientResidentSlot = nullptr) {
     if (!encoder || drawPath.empty()) {
       return;
     }
@@ -2311,7 +2327,12 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
           warnedGradient = true;
         }
         syncTransform();
-        encoder->fillPathLinearGradient(drawPath, *linear, rule, precomputedEncoded);
+        if (gradientResidentSlot != nullptr && precomputedEncoded != nullptr) {
+          encoder->fillPathLinearGradientResident(*gradientResidentSlot, *precomputedEncoded,
+                                                  *linear, rule, currentFrameIndex);
+        } else {
+          encoder->fillPathLinearGradient(drawPath, *linear, rule, precomputedEncoded);
+        }
         return;
       }
 
@@ -2325,7 +2346,12 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
         }
         if (radial->gradient.has_value()) {
           syncTransform();
-          encoder->fillPathRadialGradient(drawPath, *radial->gradient, rule, precomputedEncoded);
+          if (gradientResidentSlot != nullptr && precomputedEncoded != nullptr) {
+            encoder->fillPathRadialGradientResident(*gradientResidentSlot, *precomputedEncoded,
+                                                    *radial->gradient, rule, currentFrameIndex);
+          } else {
+            encoder->fillPathRadialGradient(drawPath, *radial->gradient, rule, precomputedEncoded);
+          }
           return;
         }
         if (radial->solidFallback.has_value()) {
@@ -4018,6 +4044,16 @@ void RendererGeode::drawPath(const PathShape& path, const StrokeParams& stroke) 
           ? impl_->residentFillSlot(path.sourceEntity)
           : nullptr;
 
+  // Wave 2 gradient residence: a persistent per-entity gradient slot for
+  // gradient-painted fills with a cached encode. Pattern references also
+  // pass through here and simply never use the slot (the resident
+  // gradient methods only run for resolved gradients).
+  geode::GeodeResidentGradientSlot* residentGradientFill =
+      (fillEncoded != nullptr &&
+       std::holds_alternative<components::PaintResolvedReference>(impl_->paint.fill))
+          ? impl_->residentGradientFillSlot(path.sourceEntity)
+          : nullptr;
+
   if (batchable) {
     const auto& solid = std::get<PaintServer::Solid>(impl_->paint.fill);
     const css::RGBA color = solid.color.resolve(impl_->paint.currentColor.rgba(),
@@ -4034,7 +4070,8 @@ void RendererGeode::drawPath(const PathShape& path, const StrokeParams& stroke) 
   // the fill on stroke-only passes so Geode reorders rather than double-paints.
   // Both default to true, so this is a no-op for ordinary fill-then-stroke draws.
   if (impl_->paint.drawFillComponent) {
-    impl_->fillResolved(path.path, path.fillRule, fillEncoded, residentFill);
+    impl_->fillResolved(path.path, path.fillRule, fillEncoded, residentFill,
+                        residentGradientFill);
   }
 
   // Mirror fillResolved's no-op safety: if there's no encoder (headless

@@ -25,6 +25,7 @@ namespace donner::geode {
 
 struct EncodedPath;
 struct GeodeResidentSlot;
+struct GeodeResidentGradientSlot;
 
 /**
  * Optional debug observer for Slug draws that actually reach a GPU draw call.
@@ -560,6 +561,35 @@ public:
    */
   void fillPathRadialGradient(const Path& path, const RadialGradientParams& params, FillRule rule,
                               const EncodedPath* precomputedEncoded = nullptr);
+
+  /**
+   * Fill a path with a linear gradient through a persistent GPU residence
+   * slot (design doc 0030 wave 2 extension for gradient paints).
+   *
+   * The slot's combined buffer holds the encoded band/curve/grid data and
+   * the 672-byte gradient uniform block; on an unchanged frame the draw
+   * rewrites nothing and reuses the cached 11-binding bind group. Falls
+   * back to the wave-1 arena path internally when a clip mask, clip
+   * polygon, or mask pass is active (the cached bind group binds dummy
+   * clip-mask resources, which is only stable when no clip is active).
+   *
+   * @param slot Resident gradient slot for this entity's fill.
+   * @param encoded Precomputed encode (from the M2 cache).
+   * @param params Resolved linear gradient parameters.
+   * @param rule Fill rule (NonZero or EvenOdd).
+   * @param frameId Current frame index (drives the once-per-frame gate).
+   */
+  void fillPathLinearGradientResident(GeodeResidentGradientSlot& slot, const EncodedPath& encoded,
+                                      const LinearGradientParams& params, FillRule rule,
+                                      uint64_t frameId);
+
+  /**
+   * Radial variant of @ref fillPathLinearGradientResident. Same residence
+   * contract and arena fallback.
+   */
+  void fillPathRadialGradientResident(GeodeResidentGradientSlot& slot, const EncodedPath& encoded,
+                                      const RadialGradientParams& params, FillRule rule,
+                                      uint64_t frameId);
 
   /**
    * Describes a pattern tile used as a paint source for `fillPathPattern`.

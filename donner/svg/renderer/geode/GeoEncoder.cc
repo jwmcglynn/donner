@@ -400,6 +400,39 @@ struct GeoEncoder::Impl {
   void submitResidentFillDraw(GeodeResidentSlot& slot, const EncodedPath& encoded,
                               const FillDrawArgs& args);
 
+  /// Wave-2 extension for gradient paints: (re)upload `encoded` into the
+  /// gradient slot's persistent combined buffer (same eight SSBO regions,
+  /// uniform region sized for `GradientUniforms`) and reset its cached
+  /// bind group.
+  void uploadResidentGradientGeometry(GeodeResidentGradientSlot& slot, const EncodedPath& encoded);
+
+  /// Build + cache the eleven-entry gradient bind group for `slot` (all
+  /// bindings reference `slot.buffer` sub-ranges + the device-owned dummy
+  /// clip-mask texture/sampler).
+  void buildResidentGradientBindGroup(GeodeResidentGradientSlot& slot);
+
+  /// Resident gradient draw: ensure geometry residence, rewrite only the
+  /// gradient uniform when it changed, reuse the cached bind group, and
+  /// record the draw. Steady-state (unchanged) frame: zero writes, zero
+  /// bind group creates.
+  void submitResidentGradientDraw(GeodeResidentGradientSlot& slot, const EncodedPath& encoded,
+                                  GradientUniforms& u);
+
+  /// Fill the common prefix of a gradient uniform (mvp, viewport, stops,
+  /// spread, kind, clip flags, AA) for the linear variant, plus the
+  /// linear-specific endpoints. Shared by the arena and resident paths so
+  /// a draw that flips between them stays byte-identical.
+  void buildLinearGradientUniforms(GradientUniforms& u, const LinearGradientParams& params,
+                                   FillRule rule);
+
+  /// Radial variant of @ref buildLinearGradientUniforms.
+  void buildRadialGradientUniforms(GradientUniforms& u, const RadialGradientParams& params,
+                                   FillRule rule);
+
+  /// Arena-path gradient submit (used as the fallback when a resident slot
+  /// is gated off by a clip or a same-frame repeat).
+  void submitGradientArenaFallback(GradientUniforms& u, const EncodedPath& encoded);
+
   /// Cheap size fingerprint of an encode, used alongside the
   /// `EncodedPath*` address to defend a resident slot against a missed
   /// invalidation (e.g. the in-place stroke-slot rebuild).
@@ -1821,17 +1854,214 @@ void populateSharedGradientUniforms(GradientUniforms& u, const Transform2d& grad
 
 }  // namespace
 
+void GeoEncoder::Impl::buildLinearGradientUniforms(GradientUniforms& u,
+                                                   const LinearGradientParams& params,
+                                                   FillRule rule) {
+  buildMvp(u.mvp);
+  u.viewport[0] = static_cast<float>(targetWidth);
+  u.viewport[1] = static_cast<float>(targetHeight);
+  populateSharedGradientUniforms<LinearGradientParams::Stop>(u, params.gradientFromPath,
+                                                             params.spreadMode, params.stops, rule);
+  u.gradientKind = kGradientKindLinear;
+  writeClipPolygonUniforms(u.hasClipPolygon, u.clipPolygonPlanes);
+  u.hasClipMask = activeClipMaskView ? 1u : 0u;
+  u.antialias = antialias ? 1u : 0u;
+  u.startGrad[0] = static_cast<float>(params.startGrad.x);
+  u.startGrad[1] = static_cast<float>(params.startGrad.y);
+  u.endGrad[0] = static_cast<float>(params.endGrad.x);
+  u.endGrad[1] = static_cast<float>(params.endGrad.y);
+}
+
+void GeoEncoder::Impl::buildRadialGradientUniforms(GradientUniforms& u,
+                                                   const RadialGradientParams& params,
+                                                   FillRule rule) {
+  buildMvp(u.mvp);
+  u.viewport[0] = static_cast<float>(targetWidth);
+  u.viewport[1] = static_cast<float>(targetHeight);
+  populateSharedGradientUniforms<RadialGradientParams::Stop>(u, params.gradientFromPath,
+                                                             params.spreadMode, params.stops, rule);
+  u.gradientKind = kGradientKindRadial;
+  writeClipPolygonUniforms(u.hasClipPolygon, u.clipPolygonPlanes);
+  u.hasClipMask = activeClipMaskView ? 1u : 0u;
+  u.antialias = antialias ? 1u : 0u;
+  u.radialCenter[0] = static_cast<float>(params.center.x);
+  u.radialCenter[1] = static_cast<float>(params.center.y);
+  u.radialFocal[0] = static_cast<float>(params.focalCenter.x);
+  u.radialFocal[1] = static_cast<float>(params.focalCenter.y);
+  u.radialRadius = static_cast<float>(params.radius);
+  u.radialFocalRadius = static_cast<float>(params.focalRadius);
+}
+
+void GeoEncoder::Impl::submitGradientArenaFallback(GradientUniforms& u,
+                                                   const EncodedPath& encoded) {
+  ensurePassOpen();
+  bindGradientPipeline();
+  submitGradientDraw(u, encoded);
+}
+
+void GeoEncoder::Impl::uploadResidentGradientGeometry(GeodeResidentGradientSlot& slot,
+                                                      const EncodedPath& encoded) {
+  // Same lifetime discipline as `uploadResidentGeometry`: release old
+  // handles (never `destroy()`) so any earlier draw in the open encoder
+  // keeps its resources alive through submission.
+  slot.reset();
+
+  const uint64_t bandsBytes = encoded.bands.size() * sizeof(EncodedPath::Band);
+  const uint64_t curvesBytes = encoded.curves.size() * 6u * sizeof(float);
+  const uint64_t hRefsBytes = encoded.curveIndices.size() * sizeof(uint32_t);
+  const uint64_t vBandsBytes = encoded.vBands.size() * sizeof(EncodedPath::Band);
+  const uint64_t vCurvesBytes = encoded.vCurves.size() * 6u * sizeof(float);
+  const uint64_t vRefsBytes = encoded.vCurveIndices.size() * sizeof(uint32_t);
+  const uint64_t hGridBytes = encoded.hBandGrid.size() * sizeof(uint32_t);
+  const uint64_t vGridBytes = encoded.vBandGrid.size() * sizeof(uint32_t);
+
+  uint64_t cursor = 0;
+  auto place = [&](GeodeResidentGradientSlot::Region& r, uint64_t bytes, uint64_t alignment,
+                   bool storageDummy) {
+    cursor = alignUp(cursor, alignment);
+    r.offset = cursor;
+    r.size = (storageDummy && bytes == 0) ? uint64_t{4} : roundUp4(bytes);
+    cursor += r.size;
+  };
+  place(slot.bands, bandsBytes, kStorageOffsetAlignment, /*storageDummy=*/true);
+  place(slot.curves, curvesBytes, kStorageOffsetAlignment, /*storageDummy=*/true);
+  place(slot.hRefs, hRefsBytes, kStorageOffsetAlignment, /*storageDummy=*/true);
+  place(slot.vBands, vBandsBytes, kStorageOffsetAlignment, /*storageDummy=*/true);
+  place(slot.vCurves, vCurvesBytes, kStorageOffsetAlignment, /*storageDummy=*/true);
+  place(slot.vRefs, vRefsBytes, kStorageOffsetAlignment, /*storageDummy=*/true);
+  place(slot.hGrid, hGridBytes, kStorageOffsetAlignment, /*storageDummy=*/true);
+  place(slot.vGrid, vGridBytes, kStorageOffsetAlignment, /*storageDummy=*/true);
+  place(slot.uniform, sizeof(GradientUniforms), kUniformOffsetAlignment, /*storageDummy=*/false);
+
+  const uint64_t totalSize = cursor;
+  const uint64_t geometrySize = slot.uniform.offset;
+
+  wgpu::BufferDescriptor desc = {};
+  desc.label = wgpuLabel("GeodeResidentGradientPath");
+  desc.size = totalSize;
+  desc.usage = wgpu::BufferUsage::Storage | wgpu::BufferUsage::Uniform | wgpu::BufferUsage::CopyDst;
+  slot.buffer.reset(device->device().createBuffer(desc));
+  device->countBuffer();
+
+  std::vector<uint8_t> staging(geometrySize, 0u);
+  auto blit = [&](const GeodeResidentGradientSlot::Region& r, const void* data, uint64_t bytes) {
+    if (bytes > 0) {
+      std::memcpy(staging.data() + r.offset, data, bytes);
+    }
+  };
+  blit(slot.bands, encoded.bands.data(), bandsBytes);
+  blit(slot.curves, encoded.curves.data(), curvesBytes);
+  blit(slot.hRefs, encoded.curveIndices.data(), hRefsBytes);
+  blit(slot.vBands, encoded.vBands.data(), vBandsBytes);
+  blit(slot.vCurves, encoded.vCurves.data(), vCurvesBytes);
+  blit(slot.vRefs, encoded.vCurveIndices.data(), vRefsBytes);
+  blit(slot.hGrid, encoded.hBandGrid.data(), hGridBytes);
+  blit(slot.vGrid, encoded.vBandGrid.data(), vGridBytes);
+
+  device->queue().writeBuffer(slot.buffer.get(), 0, staging.data(), geometrySize);
+  device->countBufferWrite(geometrySize);
+
+  slot.vertexCount = encoded.boundingDrawVertexCount();
+  slot.resident = true;
+  slot.lastUniform.clear();  // Force the first uniform write below.
+
+  slot.liveBytesGauge = device->residentBytesGauge();
+  slot.accountedBytes = static_cast<int64_t>(totalSize);
+  slot.liveBytesGauge->fetch_add(slot.accountedBytes, std::memory_order_relaxed);
+  slot.owningDeviceId = device->deviceId();
+}
+
+void GeoEncoder::Impl::buildResidentGradientBindGroup(GeodeResidentGradientSlot& slot) {
+  const wgpu::Device& dev = device->device();
+  const wgpu::Buffer& buf = slot.buffer.get();
+
+  // Eleven bindings mirroring `submitGradientDraw`, with the clip-mask
+  // texture/sampler slots bound to the device-owned dummies. Residence is
+  // gated on "no clip active", so the dummy bindings are the only state
+  // these slots ever see and the cached group stays valid across frames.
+  wgpu::BindGroupEntry entries[11] = {};
+  auto bufEntry = [&](int i, uint32_t binding, const GeodeResidentGradientSlot::Region& r) {
+    entries[i].binding = binding;
+    entries[i].buffer = buf;
+    entries[i].offset = r.offset;
+    entries[i].size = r.size;
+  };
+  bufEntry(0, 0, slot.uniform);
+  bufEntry(1, 1, slot.bands);
+  bufEntry(2, 2, slot.curves);
+  bufEntry(5, 5, slot.vBands);
+  bufEntry(6, 6, slot.vCurves);
+  bufEntry(7, 7, slot.hGrid);
+  bufEntry(8, 8, slot.vGrid);
+  bufEntry(9, 9, slot.hRefs);
+  bufEntry(10, 10, slot.vRefs);
+  entries[3].binding = 3;
+  entries[3].textureView = device->dummyClipMaskTextureView();
+  entries[4].binding = 4;
+  entries[4].sampler = device->dummyClipMaskSampler();
+
+  wgpu::BindGroupDescriptor bgDesc = {};
+  bgDesc.label = wgpuLabel("GeodeResidentGradientBindGroup");
+  bgDesc.layout = gradientPipeline->bindGroupLayout();
+  bgDesc.entryCount = 11;
+  bgDesc.entries = entries;
+  slot.bindGroup.reset(dev.createBindGroup(bgDesc));
+  device->countBindGroup();
+}
+
+void GeoEncoder::Impl::submitResidentGradientDraw(GeodeResidentGradientSlot& slot,
+                                                  const EncodedPath& encoded, GradientUniforms& u) {
+  // The grid parameters and the bounding polygon are derived from the
+  // encode, not the paint; fill them exactly like the arena path so a
+  // draw that flips between the two stays byte-identical.
+  u.gridYBase = encoded.yBase;
+  u.gridHStride = encoded.hStride;
+  u.gridHBandCount = encoded.hBandCount;
+  u.gridXBase = encoded.xBase;
+  u.gridVStride = encoded.vStride;
+  u.gridVBandCount = encoded.vBandCount;
+  writeBoundingPolygonUniforms(u, encoded);
+
+  ensurePassOpen();
+  bindGradientPipeline();
+
+  // Same residence / invalidation guards as `submitResidentFillDraw`.
+  const uint64_t fingerprint = residentFingerprint(encoded);
+  const bool needUpload = !slot.resident || !slot.buffer || slot.encodedKey != &encoded ||
+                          slot.encodedFingerprint != fingerprint ||
+                          slot.owningDeviceId != device->deviceId();
+  if (needUpload) {
+    uploadResidentGradientGeometry(slot, encoded);
+    slot.encodedKey = &encoded;
+    slot.encodedFingerprint = fingerprint;
+  }
+
+  // Rewrite the gradient uniform only when it actually changed, mirroring
+  // the fill path. A static re-render produces byte-identical uniforms.
+  const auto* uBytes = reinterpret_cast<const uint8_t*>(&u);
+  if (slot.lastUniform.size() != sizeof(GradientUniforms) ||
+      std::memcmp(slot.lastUniform.data(), uBytes, sizeof(GradientUniforms)) != 0) {
+    device->queue().writeBuffer(slot.buffer.get(), slot.uniform.offset, &u,
+                                sizeof(GradientUniforms));
+    device->countBufferWrite(sizeof(GradientUniforms));
+    slot.lastUniform.assign(uBytes, uBytes + sizeof(GradientUniforms));
+  }
+
+  if (!slot.bindGroup) {
+    buildResidentGradientBindGroup(slot);
+  }
+
+  recordGeometryDebugDraw(encoded);
+  pass.get().setBindGroup(0, slot.bindGroup.get(), 0, nullptr);
+  pass.get().draw(slot.vertexCount, 1, 0, 0);
+  device->countDraw();
+}
+
 void GeoEncoder::fillPathLinearGradient(const Path& path, const LinearGradientParams& params,
                                         FillRule rule, const EncodedPath* precomputedEncoded) {
   if (params.stops.empty()) {
     return;
   }
-
-  // Gradient bind group includes a clip-mask binding (Phase 3b); the
-  // dummy that stands in when no clip is active is pre-created in the
-  // encoder constructor.
-  impl_->ensurePassOpen();
-  impl_->bindGradientPipeline();
 
   // 1. CPU encode the path into Slug band data (same as fillPath) -
   // unless the M2 cache already has a precomputed encode.
@@ -1847,24 +2077,9 @@ void GeoEncoder::fillPathLinearGradient(const Path& path, const LinearGradientPa
     return;
   }
 
-  // 3. Build gradient uniforms.
   GradientUniforms u = {};
-  impl_->buildMvp(u.mvp);
-  u.viewport[0] = static_cast<float>(impl_->targetWidth);
-  u.viewport[1] = static_cast<float>(impl_->targetHeight);
-  populateSharedGradientUniforms<LinearGradientParams::Stop>(u, params.gradientFromPath,
-                                                             params.spreadMode, params.stops, rule);
-  u.gradientKind = kGradientKindLinear;
-  impl_->writeClipPolygonUniforms(u.hasClipPolygon, u.clipPolygonPlanes);
-  u.hasClipMask = impl_->activeClipMaskView ? 1u : 0u;
-  u.antialias = impl_->antialias ? 1u : 0u;
-
-  u.startGrad[0] = static_cast<float>(params.startGrad.x);
-  u.startGrad[1] = static_cast<float>(params.startGrad.y);
-  u.endGrad[0] = static_cast<float>(params.endGrad.x);
-  u.endGrad[1] = static_cast<float>(params.endGrad.y);
-
-  impl_->submitGradientDraw(u, encoded);
+  impl_->buildLinearGradientUniforms(u, params, rule);
+  impl_->submitGradientArenaFallback(u, encoded);
 }
 
 void GeoEncoder::fillPathRadialGradient(const Path& path, const RadialGradientParams& params,
@@ -1879,11 +2094,6 @@ void GeoEncoder::fillPathRadialGradient(const Path& path, const RadialGradientPa
     return;
   }
 
-  // Dummy texture for the clip-mask slot is pre-created in the encoder
-  // constructor (see fillPathLinearGradient note).
-  impl_->ensurePassOpen();
-  impl_->bindGradientPipeline();
-
   EncodedPath ownedEncoded;
   const EncodedPath* encodedPtr = precomputedEncoded;
   if (!encodedPtr) {
@@ -1897,24 +2107,57 @@ void GeoEncoder::fillPathRadialGradient(const Path& path, const RadialGradientPa
   }
 
   GradientUniforms u = {};
-  impl_->buildMvp(u.mvp);
-  u.viewport[0] = static_cast<float>(impl_->targetWidth);
-  u.viewport[1] = static_cast<float>(impl_->targetHeight);
-  populateSharedGradientUniforms<RadialGradientParams::Stop>(u, params.gradientFromPath,
-                                                             params.spreadMode, params.stops, rule);
-  u.gradientKind = kGradientKindRadial;
-  impl_->writeClipPolygonUniforms(u.hasClipPolygon, u.clipPolygonPlanes);
-  u.hasClipMask = impl_->activeClipMaskView ? 1u : 0u;
-  u.antialias = impl_->antialias ? 1u : 0u;
+  impl_->buildRadialGradientUniforms(u, params, rule);
+  impl_->submitGradientArenaFallback(u, encoded);
+}
 
-  u.radialCenter[0] = static_cast<float>(params.center.x);
-  u.radialCenter[1] = static_cast<float>(params.center.y);
-  u.radialFocal[0] = static_cast<float>(params.focalCenter.x);
-  u.radialFocal[1] = static_cast<float>(params.focalCenter.y);
-  u.radialRadius = static_cast<float>(params.radius);
-  u.radialFocalRadius = static_cast<float>(params.focalRadius);
+void GeoEncoder::fillPathLinearGradientResident(GeodeResidentGradientSlot& slot,
+                                                const EncodedPath& encoded,
+                                                const LinearGradientParams& params, FillRule rule,
+                                                uint64_t frameId) {
+  if (encoded.empty() || params.stops.empty()) {
+    return;
+  }
 
-  impl_->submitGradientDraw(u, encoded);
+  GradientUniforms u = {};
+  impl_->buildLinearGradientUniforms(u, params, rule);
+
+  // Residence is only safe (bind group stable, uniform clip flags zero)
+  // when no clip mask / clip polygon / mask pass is active, and a slot's
+  // single uniform can only carry one draw per frame. Fall back to the
+  // wave-1 arena path in both cases, mirroring `fillPathResident`.
+  if (impl_->activeClipMaskView || impl_->clipPolygonActive || impl_->maskPassOpen ||
+      (slot.owningDeviceId == impl_->device->deviceId() && slot.lastResidentFrame == frameId)) {
+    impl_->submitGradientArenaFallback(u, encoded);
+    return;
+  }
+  slot.lastResidentFrame = frameId;
+  impl_->submitResidentGradientDraw(slot, encoded, u);
+}
+
+void GeoEncoder::fillPathRadialGradientResident(GeodeResidentGradientSlot& slot,
+                                                const EncodedPath& encoded,
+                                                const RadialGradientParams& params, FillRule rule,
+                                                uint64_t frameId) {
+  if (encoded.empty() || params.stops.empty()) {
+    return;
+  }
+  // Degenerate radius: nothing to draw meaningfully - match tiny-skia's
+  // early return.
+  if (params.radius <= 0.0) {
+    return;
+  }
+
+  GradientUniforms u = {};
+  impl_->buildRadialGradientUniforms(u, params, rule);
+
+  if (impl_->activeClipMaskView || impl_->clipPolygonActive || impl_->maskPassOpen ||
+      (slot.owningDeviceId == impl_->device->deviceId() && slot.lastResidentFrame == frameId)) {
+    impl_->submitGradientArenaFallback(u, encoded);
+    return;
+  }
+  slot.lastResidentFrame = frameId;
+  impl_->submitResidentGradientDraw(slot, encoded, u);
 }
 
 void GeoEncoder::blitFullTarget(const wgpu::Texture& src, double opacity) {

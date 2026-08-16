@@ -181,6 +181,123 @@ struct GeodeResidentSlot {
   }
 };
 
+/// GPU-resident geometry for one gradient-painted fill (design doc 0030
+/// wave 2 extension). Mirrors \ref GeodeResidentSlot: a combined-usage
+/// buffer holds the same eight analytic dual-ray SSBO regions, but the
+/// uniform region holds the 672-byte gradient uniform block (stops inline,
+/// `shaders/slug_gradient.wgsl`) and the cached bind group uses the
+/// 11-binding gradient pipeline layout with the device-owned dummy
+/// clip-mask texture/sampler in bindings 3 and 4. Residence is only taken
+/// when no clip mask, clip polygon, or mask pass is active (the gradient
+/// shader's clip flags must stay zero for the cached bind group to remain
+/// stable), exactly like the solid-fill residence gate.
+struct GeodeResidentGradientSlot {
+  /// Combined Storage|Uniform|CopyDst buffer. Region layout matches
+  /// \ref GeodeResidentSlot: [ bands | curves | hRefs | vBands | vCurves |
+  /// vRefs | hGrid | vGrid | uniform ], with the uniform region sized for
+  /// `GradientUniforms` (672 bytes).
+  ScopedWgpuHandle<wgpu::Buffer> buffer;
+
+  /// Cached 11-binding gradient bind group. All bindings reference stable
+  /// objects (this slot's buffer sub-ranges + device-owned dummy
+  /// clip-mask texture/sampler), so it survives frames and encoders.
+  ScopedWgpuHandle<wgpu::BindGroup> bindGroup;
+
+  /// A byte sub-range of `buffer` (same semantics as GeodeResidentSlot::Region).
+  struct Region {
+    uint64_t offset = 0;
+    uint64_t size = 0;
+  };
+
+  Region bands;    ///< Horizontal band SSBO (binding 1).
+  Region curves;   ///< Horizontal curve SSBO (binding 2).
+  Region hRefs;    ///< Horizontal curve-reference SSBO (binding 9).
+  Region vBands;   ///< Vertical band SSBO (binding 5).
+  Region vCurves;  ///< Vertical curve SSBO (binding 6).
+  Region vRefs;    ///< Vertical curve-reference SSBO (binding 10).
+  Region hGrid;    ///< Horizontal band grid (binding 7).
+  Region vGrid;    ///< Vertical band grid (binding 8).
+  Region uniform;  ///< Per-draw gradient uniform block (binding 0, 256-aligned).
+
+  uint32_t vertexCount = 0;  ///< Triangle-fan draw count generated from vertex_index.
+
+  /// Frame index in which this slot was last drawn via the resident path.
+  /// A slot's single uniform buffer + cached bind group can only serve ONE
+  /// draw per frame; see GeodeResidentSlot::lastResidentFrame.
+  uint64_t lastResidentFrame = ~uint64_t{0};
+
+  /// Process-unique device id of the device that created the resources;
+  /// see GeodeResidentSlot::owningDeviceId.
+  uint64_t owningDeviceId = 0;
+
+  /// True once `buffer` + `bindGroup` hold the current encode.
+  bool resident = false;
+
+  /// Identity guard: address + cheap fingerprint of the uploaded encode.
+  const void* encodedKey = nullptr;
+  uint64_t encodedFingerprint = 0;
+
+  /// Bytes last written to the uniform region; unchanged draws skip the write.
+  std::vector<uint8_t> lastUniform;
+
+  /// Live-resident-bytes gauge, co-owned with `GeodeDevice`.
+  std::shared_ptr<std::atomic<int64_t>> liveBytesGauge;
+  int64_t accountedBytes = 0;
+
+  GeodeResidentGradientSlot() = default;
+  ~GeodeResidentGradientSlot() { reset(); }
+
+  GeodeResidentGradientSlot(const GeodeResidentGradientSlot&) = delete;
+  GeodeResidentGradientSlot& operator=(const GeodeResidentGradientSlot&) = delete;
+  GeodeResidentGradientSlot(GeodeResidentGradientSlot&&) noexcept = default;
+  GeodeResidentGradientSlot& operator=(GeodeResidentGradientSlot&& other) noexcept {
+    if (this != &other) {
+      reset();
+      buffer = std::move(other.buffer);
+      bindGroup = std::move(other.bindGroup);
+      bands = other.bands;
+      curves = other.curves;
+      hRefs = other.hRefs;
+      vBands = other.vBands;
+      vCurves = other.vCurves;
+      vRefs = other.vRefs;
+      hGrid = other.hGrid;
+      vGrid = other.vGrid;
+      uniform = other.uniform;
+      vertexCount = other.vertexCount;
+      lastResidentFrame = other.lastResidentFrame;
+      resident = other.resident;
+      encodedKey = other.encodedKey;
+      encodedFingerprint = other.encodedFingerprint;
+      owningDeviceId = other.owningDeviceId;
+      lastUniform = std::move(other.lastUniform);
+      liveBytesGauge = std::move(other.liveBytesGauge);
+      accountedBytes = other.accountedBytes;
+      other.accountedBytes = 0;
+      other.resident = false;
+      other.encodedKey = nullptr;
+      other.owningDeviceId = 0;
+    }
+    return *this;
+  }
+
+  /// Release the GPU handles and settle the live-bytes gauge. Never calls
+  /// `Buffer::destroy()`; see GeodeResidentSlot::reset.
+  void reset() {
+    if (accountedBytes != 0 && liveBytesGauge) {
+      liveBytesGauge->fetch_sub(accountedBytes, std::memory_order_relaxed);
+    }
+    accountedBytes = 0;
+    bindGroup.reset();
+    buffer.reset();
+    resident = false;
+    encodedKey = nullptr;
+    encodedFingerprint = 0;
+    owningDeviceId = 0;
+    lastUniform.clear();
+  }
+};
+
 /// Sibling of `GeodePathCacheComponent`: holds the GPU residence for an
 /// entity's fill and stroke encodes. Installed lazily by `RendererGeode`
 /// at the solid-fill draw sites; removed by the same entt listener that
@@ -188,6 +305,8 @@ struct GeodeResidentSlot {
 struct GeodeResidentPathComponent {
   GeodeResidentSlot fillSlot;
   GeodeResidentSlot strokeSlot;
+  /// Gradient-painted fill residence (design doc 0030 wave 2 extension).
+  GeodeResidentGradientSlot gradientFillSlot;
 };
 
 }  // namespace donner::geode
