@@ -57,59 +57,70 @@ static_assert(kStorageOffsetAlignment % kUniformOffsetAlignment == 0,
 /// compilers / WGSL backends.
 ///
 /// Field order must stay in lock-step with the WGSL `Uniforms` struct.
+/// Layout of the batch-level per-draw uniform buffer. Must match
+/// `Uniforms` in `shaders/slug_fill.wgsl`. Per-instance fields (transform,
+/// color, fill rule, paint mode, grid parameters, bounding polygon, and
+/// geometry bases) live in `InstanceRecord` at binding 7.
 struct alignas(16) Uniforms {
   float mvp[16];              //   0 ..  64
   float patternFromPath[16];  //  64 .. 128
   float viewport[2];          // 128 .. 136
   float tileSize[2];          // 136 .. 144
-  float color[4];             // 144 .. 160
-  uint32_t fillRule;          // 160 .. 164
-  uint32_t paintMode;         // 164 .. 168
-  float patternOpacity;       // 168 .. 172
-  uint32_t hasClipPolygon;    // 172 .. 176 - 0 = no clip, 1 = clipPolygon active
+  uint32_t hasClipPolygon;    // 144 .. 148 - 0 = no clip, 1 = clipPolygon active
   // Path-clip mask flag. When nonzero, the shader samples the
   // clip mask texture at binding 5 (linear-filtered RGBA8Unorm) and folds
   // its averaged coverage into the fragment colour. A 1x1 dummy
   // texture is always bound so the `textureSample` is always legal.
-  uint32_t hasClipMask;  // 176 .. 180
-  uint32_t antialias;    // 180 .. 184 - 0 = binary coverage, 1 = analytic AA
-  uint32_t _clipPad1;    // 184 .. 188
-  uint32_t _clipPad2;    // 188 .. 192
-  // Band-grid parameters (0041 §8.1). Two vec4-aligned rows: the fragment
-  // shader maps a path-space sample to its horizontal band via
-  // floor((y - yBase)/hStride) and its vertical band via
-  // floor((x - xBase)/vStride). Field order must match the WGSL `Uniforms`
-  // grid block in slug_fill.wgsl.
-  float gridYBase;          // 192 .. 196
-  float gridHStride;        // 196 .. 200
-  uint32_t gridHBandCount;  // 200 .. 204
-  float gridXBase;          // 204 .. 208
-  float gridVStride;        // 208 .. 212
-  uint32_t gridVBandCount;  // 212 .. 216
-  uint32_t _gridPad0;       // 216 .. 220
-  uint32_t _gridPad1;       // 220 .. 224
+  uint32_t hasClipMask;  // 148 .. 152
+  uint32_t antialias;    // 152 .. 156 - 0 = binary coverage, 1 = analytic AA
+  uint32_t _pad1;        // 156 .. 160
   // Polygon clipping: a 4-vertex convex clip polygon expressed
   // as 4 edge half-planes, one per side, in VIEWPORT-PIXEL space. Each
   // edge is `(a, b, c)` such that `a*x + b*y + c >= 0` marks the inside
-  // half-plane (the normal `(a, b)` points into the clipped region).
-  // The fragment shader discards fragments outside these half-planes.
-  // Used by `RendererGeode::pushClip` for
-  // transformed rectangular viewports (`<symbol>` / `<use>` /
-  // `<svg>` viewports with a non-axis-aligned transform) where the
-  // true clip shape is a parallelogram that WebGPU's rectangular
-  // scissor rect cannot express. Stored as `vec4f[4]` (vec4 = xyz + pad)
-  // so the struct stays mat4x4-aligned and the WGSL side reads
-  // `array<vec4f, 4>` directly.
-  float clipPolygonPlanes[16];  // 224 .. 288 (4 edges × vec4)
-  // Up to eight path-space vertices, packed two vec2 values per vec4. The vertex shader
-  // triangulates this convex fan from vertex_index and applies its device-space AA halo.
-  uint32_t boundingVertexCount;   // 288 .. 292
-  uint32_t _boundingPad0;         // 292 .. 296
-  uint32_t _boundingPad1;         // 296 .. 300
-  uint32_t _boundingPad2;         // 300 .. 304
-  float boundingVertices[4 * 4];  // 304 .. 368
+  // half-plane. Clip state is a batch boundary, so these stay
+  // batch-uniform rather than per-instance. Stored as `vec4f[4]`
+  // (vec4 = xyz + pad) so the WGSL side reads `array<vec4f, 4>` directly.
+  float clipPolygonPlanes[16];  // 160 .. 224 (4 edges × vec4)
 };
-static_assert(sizeof(Uniforms) == 368, "Uniforms struct layout mismatch");
+static_assert(sizeof(Uniforms) == 224, "Uniforms struct layout mismatch");
+
+/// Layout of the per-instance record at binding 7. Must match
+/// `InstanceRecord` in `shaders/slug_fill.wgsl`. The vertex stage composes
+/// `uniforms.mvp * transform`; the fragment stage reads the remaining
+/// fields through a flat instance-id varying, so overlapping batched
+/// instances still blend in painter (instance) order. All geometry bases
+/// are element offsets relative to the bound buffer range's start.
+struct alignas(16) InstanceRecord {
+  float transformRow0[4];     //   0 ..  16 - (a, c, e, 0)
+  float transformRow1[4];     //  16 ..  32 - (b, d, f, 0)
+  float color[4];             //  32 ..  48 - premultiplied
+  uint32_t fillRule;          //  48 ..  52
+  uint32_t paintMode;         //  52 ..  56
+  float patternOpacity;       //  56 ..  60
+  uint32_t _pad0;             //  60 ..  64
+  float gridYBase;            //  64 ..  68
+  float gridHStride;          //  68 ..  72
+  uint32_t gridHBandCount;    //  72 ..  76
+  float gridXBase;            //  76 ..  80
+  float gridVStride;          //  80 ..  84
+  uint32_t gridVBandCount;    //  84 ..  88
+  uint32_t _gridPad0;         //  88 ..  92
+  uint32_t _gridPad1;         //  92 ..  96
+  uint32_t boundingVertexCount;  //  96 .. 100
+  uint32_t _boundingPad0;        // 100 .. 104
+  uint32_t _boundingPad1;        // 104 .. 108
+  uint32_t _boundingPad2;        // 108 .. 112
+  float boundingVertices[4 * 4];  // 112 .. 176
+  uint32_t bandBase;           // 176 .. 180
+  uint32_t curveBase;          // 180 .. 184
+  uint32_t vBandBase;          // 184 .. 188
+  uint32_t vCurveBase;         // 188 .. 192
+  uint32_t hGridBase;          // 192 .. 196
+  uint32_t vGridBase;          // 196 .. 200
+  uint32_t hRefsBase;          // 200 .. 204
+  uint32_t vRefsBase;          // 204 .. 208
+};
+static_assert(sizeof(InstanceRecord) == 208, "InstanceRecord struct layout mismatch");
 
 /// Build a column-major 4x4 matrix from an affine `Transform2d` and write it
 /// into the first 16 floats of the output array. Used for the `mvp` and
@@ -274,13 +285,13 @@ struct GeoEncoder::Impl : public GeodeTextureEncoder::UniformScratch {
   /// tables, and compact curve references. Bound at bindings 8-13 of the fill pipeline.
   Arena vBandArena;
   Arena vCurveArena;
-  Arena hGridArena;
-  Arena vGridArena;
-  /// Per-instance affine transforms for `fillPathInstanced`.
+  Arena gridArena;
+  
+  /// M6-B step 3: per-instance affine transforms for `fillPathInstanced`.
   /// Packed as two vec4f rows per instance (32 bytes), matching the WGSL
   /// `InstanceTransform` struct. Alignment uses `kStorageOffsetAlignment`
   /// since the binding is storage read-only.
-  Arena instanceTransformArena;
+  Arena instanceRecordArena;
 
   /// Optional cross-frame buffer pool (owned by `RendererGeode::Impl`).
   /// When set, arena growth prefers recycled buffers and arena teardown
@@ -311,9 +322,9 @@ struct GeoEncoder::Impl : public GeodeTextureEncoder::UniformScratch {
     releaseArenaResources(uniformArena);
     releaseArenaResources(vBandArena);
     releaseArenaResources(vCurveArena);
-    releaseArenaResources(hGridArena);
-    releaseArenaResources(vGridArena);
-    releaseArenaResources(instanceTransformArena);
+    releaseArenaResources(gridArena);
+    
+    releaseArenaResources(instanceRecordArena);
     transientResources.releaseAll();
   }
 
@@ -394,11 +405,16 @@ struct GeoEncoder::Impl : public GeodeTextureEncoder::UniformScratch {
   // Defined out-of-line below `FillDrawArgs` (they reference it). See the
   // `GeodeResidentSlot` header and `submitResidentFillDraw` for the flow.
 
-  /// Populate a solid-fill `Uniforms` block from `args` + `encoded`. The
-  /// single source of truth shared by the arena `submitFillDraw` and the
-  /// resident `submitResidentFillDraw`, so a path that flips between the
-  /// two paths (clip toggling) produces byte-identical uniforms.
-  void populateFillUniform(Uniforms& u, const EncodedPath& encoded, const FillDrawArgs& args);
+  /// Populate the batch-level Uniforms block from args. The single
+  /// source of truth shared by the arena submitFillDraw and the resident
+  /// submitResidentFillDraw, so a path that flips between the two paths
+  /// (clip toggling) produces byte-identical uniforms.
+  void populateBatchUniform(Uniforms& u, const FillDrawArgs& args);
+
+  /// Populate the per-instance InstanceRecord from args + encoded +
+  /// transform. Same sharing contract as populateBatchUniform.
+  void populateInstanceRecord(InstanceRecord& r, const EncodedPath& encoded,
+                              const FillDrawArgs& args, const Transform2d& transform);
 
   /// (Re)upload `encoded` into `slot`'s persistent combined buffer and
   /// reset its cached bind group. Bumps `bufferCreates` + one
@@ -488,13 +504,13 @@ struct GeoEncoder::Impl : public GeodeTextureEncoder::UniformScratch {
                                                  encoded.vBands.size() * sizeof(EncodedPath::Band));
     const auto vCurvesAlloc = allocStorageOrDummy(vCurveArena, encoded.vCurves.data(),
                                                   encoded.vCurves.size() * 6u * sizeof(float));
-    const auto hGridAlloc = allocStorageOrDummy(hGridArena, encoded.hBandGrid.data(),
+    const auto hGridAlloc = allocStorageOrDummy(gridArena, encoded.hBandGrid.data(),
                                                 encoded.hBandGrid.size() * sizeof(uint32_t));
-    const auto vGridAlloc = allocStorageOrDummy(vGridArena, encoded.vBandGrid.data(),
+    const auto vGridAlloc = allocStorageOrDummy(gridArena, encoded.vBandGrid.data(),
                                                 encoded.vBandGrid.size() * sizeof(uint32_t));
-    const auto hRefsAlloc = allocStorageOrDummy(hGridArena, encoded.curveIndices.data(),
+    const auto hRefsAlloc = allocStorageOrDummy(gridArena, encoded.curveIndices.data(),
                                                 encoded.curveIndices.size() * sizeof(uint32_t));
-    const auto vRefsAlloc = allocStorageOrDummy(vGridArena, encoded.vCurveIndices.data(),
+    const auto vRefsAlloc = allocStorageOrDummy(gridArena, encoded.vCurveIndices.data(),
                                                 encoded.vCurveIndices.size() * sizeof(uint32_t));
 
     const auto uniAlloc =
@@ -872,16 +888,16 @@ void GeoEncoder::finalizeImpl(GeoEncoder::Impl& impl) {
   impl.curveArena.label = "GeodeCurveArena";
   impl.uniformArena.usage = wgpu::BufferUsage::Uniform | wgpu::BufferUsage::CopyDst;
   impl.uniformArena.label = "GeodeUniformArena";
-  impl.instanceTransformArena.usage = wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopyDst;
-  impl.instanceTransformArena.label = "GeodeInstanceTransformArena";
+  impl.instanceRecordArena.usage = wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopyDst;
+  impl.instanceRecordArena.label = "GeodeInstanceRecordArena";
   impl.vBandArena.usage = wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopyDst;
   impl.vBandArena.label = "GeodeVBandArena";
   impl.vCurveArena.usage = wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopyDst;
   impl.vCurveArena.label = "GeodeVCurveArena";
-  impl.hGridArena.usage = wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopyDst;
-  impl.hGridArena.label = "GeodeHGridArena";
-  impl.vGridArena.usage = wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopyDst;
-  impl.vGridArena.label = "GeodeVGridArena";
+  impl.gridArena.usage = wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopyDst;
+  impl.gridArena.label = "GeodeGridArena";
+  
+  
 }
 
 GeoEncoder::GeoEncoder(GeodeDevice& device, const GeodePipeline& fillPipeline,
@@ -1107,15 +1123,15 @@ void GeoEncoder::fillPathIntoMask(const Path& path, FillRule rule,
       impl_->vBandArena, encoded.vBands.data(), encoded.vBands.size() * sizeof(EncodedPath::Band));
   const auto vCurvesAlloc = impl_->allocStorageOrDummy(impl_->vCurveArena, encoded.vCurves.data(),
                                                        encoded.vCurves.size() * 6u * sizeof(float));
-  const auto hGridAlloc = impl_->allocStorageOrDummy(impl_->hGridArena, encoded.hBandGrid.data(),
+  const auto hGridAlloc = impl_->allocStorageOrDummy(impl_->gridArena, encoded.hBandGrid.data(),
                                                      encoded.hBandGrid.size() * sizeof(uint32_t));
-  const auto vGridAlloc = impl_->allocStorageOrDummy(impl_->vGridArena, encoded.vBandGrid.data(),
+  const auto vGridAlloc = impl_->allocStorageOrDummy(impl_->gridArena, encoded.vBandGrid.data(),
                                                      encoded.vBandGrid.size() * sizeof(uint32_t));
   const auto hRefsAlloc =
-      impl_->allocStorageOrDummy(impl_->hGridArena, encoded.curveIndices.data(),
+      impl_->allocStorageOrDummy(impl_->gridArena, encoded.curveIndices.data(),
                                  encoded.curveIndices.size() * sizeof(uint32_t));
   const auto vRefsAlloc =
-      impl_->allocStorageOrDummy(impl_->vGridArena, encoded.vCurveIndices.data(),
+      impl_->allocStorageOrDummy(impl_->gridArena, encoded.vCurveIndices.data(),
                                  encoded.vCurveIndices.size() * sizeof(uint32_t));
 
   // Mask uniforms - mvp, viewport, fillRule, hasClipMask, grid params. The
@@ -1303,15 +1319,11 @@ struct GeoEncoder::FillDrawArgs {
   Vector2d tileSize;
   float patternOpacity;
 
-  /// Optional per-instance transform buffer. When null,
-  /// `submitFillDraw` binds `GeodeDevice::identityInstanceTransformBuffer`
-  /// (single-instance draws). When set, the caller has uploaded N
-  /// copies of the 2-vec4f `InstanceTransform` struct at
-  /// `instanceTransformsOffset`, and `submitFillDraw` issues a draw
-  /// with `instanceCount == N`.
-  const wgpu::Buffer* instanceTransformsBuffer = nullptr;
-  uint64_t instanceTransformsOffset = 0;
-  uint64_t instanceTransformsSize = 0;
+  /// M6 Bullet 2: instance count for this draw. The caller passes packed
+  /// per-instance transforms (8 floats each) alongside `submitFillDraw`;
+  /// the encoder copies its base record per instance and overwrites each
+  /// transform, so one GPU draw covers all instances with shared geometry
+  /// bases.
   uint32_t instanceCount = 1;
 };
 
@@ -1344,31 +1356,69 @@ void GeoEncoder::fillPath(const Path& path, const css::RGBA& color, FillRule rul
 // GPU residence
 // ============================================================================
 
-void GeoEncoder::Impl::populateFillUniform(Uniforms& u, const EncodedPath& encoded,
-                                           const FillDrawArgs& args) {
+void GeoEncoder::Impl::populateBatchUniform(Uniforms& u, const FillDrawArgs& args) {
   buildMvp(u.mvp);
   affineToMat4(args.patternFromPath, u.patternFromPath);
   u.viewport[0] = static_cast<float>(targetWidth);
   u.viewport[1] = static_cast<float>(targetHeight);
   u.tileSize[0] = static_cast<float>(args.tileSize.x);
   u.tileSize[1] = static_cast<float>(args.tileSize.y);
-  u.color[0] = args.solidColor[0];
-  u.color[1] = args.solidColor[1];
-  u.color[2] = args.solidColor[2];
-  u.color[3] = args.solidColor[3];
-  u.fillRule = (args.rule == FillRule::EvenOdd) ? 1u : 0u;
-  u.paintMode = args.paintMode;
-  u.patternOpacity = args.patternOpacity;
   writeClipPolygonUniforms(u.hasClipPolygon, u.clipPolygonPlanes);
   u.hasClipMask = activeClipMaskView ? 1u : 0u;
   u.antialias = antialias ? 1u : 0u;
-  u.gridYBase = encoded.yBase;
-  u.gridHStride = encoded.hStride;
-  u.gridHBandCount = encoded.hBandCount;
-  u.gridXBase = encoded.xBase;
-  u.gridVStride = encoded.vStride;
-  u.gridVBandCount = encoded.vBandCount;
-  writeBoundingPolygonUniforms(u, encoded);
+}
+
+/// Pack an affine into the record's two vec4 transform rows (the same
+/// wire format `RendererGeode::Impl::packTransform` uses and the WGSL
+/// `InstanceTransform` struct expects: row0 = (a, c, e, 0),
+/// row1 = (b, d, f, 0)).
+void packRecordTransform(InstanceRecord& r, const Transform2d& xf) {
+  r.transformRow0[0] = static_cast<float>(xf.data[0]);
+  r.transformRow0[1] = static_cast<float>(xf.data[2]);
+  r.transformRow0[2] = static_cast<float>(xf.data[4]);
+  r.transformRow0[3] = 0.0f;
+  r.transformRow1[0] = static_cast<float>(xf.data[1]);
+  r.transformRow1[1] = static_cast<float>(xf.data[3]);
+  r.transformRow1[2] = static_cast<float>(xf.data[5]);
+  r.transformRow1[3] = 0.0f;
+}
+
+/// Populate the per-instance record. For single-draw (non-instanced)
+/// calls, `transform` is identity: the full deviceFromLocal transform is
+/// baked into `uniforms.mvp` by `buildMvp`, exactly like the pre-record
+/// uniform. Instanced callers set the encoder transform to identity and
+/// pass each instance's full transform here, so `uniforms.mvp * transform`
+/// reproduces the per-draw composition.
+void GeoEncoder::Impl::populateInstanceRecord(InstanceRecord& r, const EncodedPath& encoded,
+                                              const FillDrawArgs& args,
+                                              const Transform2d& transform) {
+  packRecordTransform(r, transform);
+  r.color[0] = args.solidColor[0];
+  r.color[1] = args.solidColor[1];
+  r.color[2] = args.solidColor[2];
+  r.color[3] = args.solidColor[3];
+  r.fillRule = (args.rule == FillRule::EvenOdd) ? 1u : 0u;
+  r.paintMode = args.paintMode;
+  r.patternOpacity = args.patternOpacity;
+  r.gridYBase = encoded.yBase;
+  r.gridHStride = encoded.hStride;
+  r.gridHBandCount = encoded.hBandCount;
+  r.gridXBase = encoded.xBase;
+  r.gridVStride = encoded.vStride;
+  r.gridVBandCount = encoded.vBandCount;
+  writeBoundingPolygonUniforms(r, encoded);
+  // Geometry bases are element offsets relative to the bound buffer
+  // range's start. Single-draw bind groups bind each arena allocation at
+  // its own offset, so every base is zero; batched draws bind whole
+  // scene-class regions and fill the bases in per instance.
+  r.bandBase = 0u;
+  r.curveBase = 0u;
+  r.vBandBase = 0u;
+  r.vCurveBase = 0u;
+  r.hGridBase = 0u;
+  r.vGridBase = 0u;
+  r.hRefsBase = 0u;
+  r.vRefsBase = 0u;
 }
 
 void GeoEncoder::Impl::uploadResidentGeometry(GeodeResidentSlot& slot, const EncodedPath& encoded) {
@@ -1403,15 +1453,20 @@ void GeoEncoder::Impl::uploadResidentGeometry(GeodeResidentSlot& slot, const Enc
     r.size = (storageDummy && bytes == 0) ? uint64_t{4} : roundUp4(bytes);
     cursor += r.size;
   };
+  // The four grid regions are contiguous so ONE combined storage binding
+  // (binding 10) covers them; the instance record carries element bases
+  // relative to the combined region's start.
   place(slot.bands, bandsBytes, kStorageOffsetAlignment, /*storageDummy=*/true);
   place(slot.curves, curvesBytes, kStorageOffsetAlignment, /*storageDummy=*/true);
-  place(slot.hRefs, hRefsBytes, kStorageOffsetAlignment, /*storageDummy=*/true);
   place(slot.vBands, vBandsBytes, kStorageOffsetAlignment, /*storageDummy=*/true);
   place(slot.vCurves, vCurvesBytes, kStorageOffsetAlignment, /*storageDummy=*/true);
-  place(slot.vRefs, vRefsBytes, kStorageOffsetAlignment, /*storageDummy=*/true);
   place(slot.hGrid, hGridBytes, kStorageOffsetAlignment, /*storageDummy=*/true);
   place(slot.vGrid, vGridBytes, kStorageOffsetAlignment, /*storageDummy=*/true);
+  place(slot.hRefs, hRefsBytes, kStorageOffsetAlignment, /*storageDummy=*/true);
+  place(slot.vRefs, vRefsBytes, kStorageOffsetAlignment, /*storageDummy=*/true);
   place(slot.uniform, sizeof(Uniforms), kUniformOffsetAlignment, /*storageDummy=*/false);
+  place(slot.instanceRecord, sizeof(InstanceRecord), kStorageOffsetAlignment,
+        /*storageDummy=*/false);
 
   const uint64_t totalSize = cursor;
   const uint64_t geometrySize = slot.uniform.offset;  // everything before the uniform.
@@ -1468,10 +1523,12 @@ void GeoEncoder::Impl::uploadResidentGeometry(GeodeResidentSlot& slot, const Enc
   shift(slot.hGrid);
   shift(slot.vGrid);
   shift(slot.uniform);
+  shift(slot.instanceRecord);
 
   slot.vertexCount = encoded.boundingDrawVertexCount();
   slot.resident = true;
   slot.lastUniform.clear();  // Force the first uniform write below.
+  slot.lastRecord.clear();   // Force the first record write below.
 
   // Stamp the current device's identity so a later render by a different
   // device re-uploads instead of binding this device's buffer / bind group
@@ -1505,20 +1562,25 @@ void GeoEncoder::Impl::buildResidentBindGroup(GeodeResidentSlot& slot) {
   entries[6].binding = 6;
   entries[6].sampler = device->dummyClipMaskSampler();
   entries[7].binding = 7;
-  entries[7].buffer = device->identityInstanceTransformBuffer();
-  entries[7].offset = 0;
-  entries[7].size = 32u;
+  entries[7].buffer = buf;
+  entries[7].offset = slot.instanceRecord.offset;
+  entries[7].size = slot.instanceRecord.size;
   bufEntry(8, 8, slot.vBands);
   bufEntry(9, 9, slot.vCurves);
-  bufEntry(10, 10, slot.hGrid);
-  bufEntry(11, 11, slot.vGrid);
-  bufEntry(12, 12, slot.hRefs);
-  bufEntry(13, 13, slot.vRefs);
+  // Combined grid binding spanning hGrid | vGrid | hRefs | vRefs (the
+  // layout keeps them contiguous). The record's grid bases are relative
+  // to this range's start.
+  const uint64_t gridStart = slot.hGrid.offset;
+  const uint64_t gridEnd = slot.vRefs.offset + slot.vRefs.size;
+  entries[10].binding = 10;
+  entries[10].buffer = buf;
+  entries[10].offset = gridStart;
+  entries[10].size = gridEnd - gridStart;
 
   wgpu::BindGroupDescriptor bgDesc = {};
   bgDesc.label = wgpuLabel("GeodeResidentBindGroup");
   bgDesc.layout = pipeline->bindGroupLayout();
-  bgDesc.entryCount = 14;
+  bgDesc.entryCount = 11;
   bgDesc.entries = entries;
   slot.bindGroup.reset(dev.createBindGroup(bgDesc));
   device->countBindGroup();
@@ -1553,18 +1615,37 @@ bool GeoEncoder::Impl::submitResidentFillDraw(GeodeResidentSlot& slot, const Enc
     return false;
   }
 
-  // Rewrite the uniform only when it actually changed. A static
-  // re-render (same viewport, same paint) produces byte-identical
-  // uniforms, so this write is skipped entirely and the frame emits zero
-  // buffer writes.
+  // Rewrite the batch uniform and the instance record only when they
+  // actually changed. A static re-render (same viewport, same paint)
+  // produces byte-identical bytes, so both writes are skipped entirely
+  // and the frame emits zero buffer writes. The record's transform stays
+  // identity: the resident path bakes deviceFromLocal into uniforms.mvp,
+  // exactly like the arena single-draw path.
   Uniforms u = {};
-  populateFillUniform(u, encoded, args);
+  populateBatchUniform(u, args);
   const auto* uBytes = reinterpret_cast<const uint8_t*>(&u);
   if (slot.lastUniform.size() != sizeof(Uniforms) ||
       std::memcmp(slot.lastUniform.data(), uBytes, sizeof(Uniforms)) != 0) {
     device->queue().writeBuffer(slot.buffer, slot.uniform.offset, &u, sizeof(Uniforms));
     device->countBufferWrite(sizeof(Uniforms));
     slot.lastUniform.assign(uBytes, uBytes + sizeof(Uniforms));
+  }
+
+  InstanceRecord record = {};
+  populateInstanceRecord(record, encoded, args, Transform2d());
+  // Grid bases are element offsets relative to the combined grid
+  // binding's start (hGrid). The regions are contiguous by layout.
+  record.hGridBase = 0u;
+  record.vGridBase = static_cast<uint32_t>((slot.vGrid.offset - slot.hGrid.offset) / sizeof(uint32_t));
+  record.hRefsBase = static_cast<uint32_t>((slot.hRefs.offset - slot.hGrid.offset) / sizeof(uint32_t));
+  record.vRefsBase = static_cast<uint32_t>((slot.vRefs.offset - slot.hGrid.offset) / sizeof(uint32_t));
+  const auto* rBytes = reinterpret_cast<const uint8_t*>(&record);
+  if (slot.lastRecord.size() != sizeof(InstanceRecord) ||
+      std::memcmp(slot.lastRecord.data(), rBytes, sizeof(InstanceRecord)) != 0) {
+    device->queue().writeBuffer(slot.buffer, slot.instanceRecord.offset, &record,
+                                sizeof(InstanceRecord));
+    device->countBufferWrite(sizeof(InstanceRecord));
+    slot.lastRecord.assign(rBytes, rBytes + sizeof(InstanceRecord));
   }
 
   if (!slot.bindGroup) {
@@ -1584,8 +1665,9 @@ void GeoEncoder::fillPathResident(GeodeResidentSlot& slot, const EncodedPath& en
     return;
   }
 
-  // Build the same solid-fill args `fillPath` would, so both paths share
-  // `populateFillUniform` and the fallback stays bit-exact.
+  // Build the same solid-fill args fillPath would, so both paths share
+  // populateBatchUniform / populateInstanceRecord and the fallback stays
+  // bit-exact.
   FillDrawArgs args = {};
   args.path = nullptr;
   args.rule = rule;
@@ -1643,11 +1725,6 @@ void GeoEncoder::fillPathInstanced(const EncodedPath& encoded, const css::RGBA& 
     return;
   }
 
-  // Upload packed transforms into the dedicated instance arena.
-  const uint64_t itSize = roundUp4(totalFloats * sizeof(float));
-  const auto itAlloc = impl_->allocInArena(impl_->instanceTransformArena, instanceTransforms.data(),
-                                           itSize, kStorageOffsetAlignment);
-
   FillDrawArgs args = {};
   // `args.path` stays null - with a precomputed encode the submit path
   // never re-encodes, so the raw Path isn't needed. Gradient/pattern
@@ -1667,9 +1744,9 @@ void GeoEncoder::fillPathInstanced(const EncodedPath& encoded, const css::RGBA& 
   args.tileSize = Vector2d(1.0, 1.0);
   args.patternFromPath = Transform2d();
 
-  args.instanceTransformsBuffer = &itAlloc.buffer;
-  args.instanceTransformsOffset = itAlloc.offset;
-  args.instanceTransformsSize = itAlloc.size;
+  // submitFillDraw builds the per-instance records itself: it copies the
+  // base record (shared color / rule / grid / bounding polygon / geometry
+  // bases) per instance and overwrites each copy's transform.
   args.instanceCount = instanceCount;
 
   submitFillDraw(args, instanceTransforms);
@@ -1751,31 +1828,81 @@ void GeoEncoder::submitFillDraw(const FillDrawArgs& args,
       impl_->vBandArena, encoded.vBands.data(), encoded.vBands.size() * sizeof(EncodedPath::Band));
   const auto vCurvesAlloc = impl_->allocStorageOrDummy(impl_->vCurveArena, encoded.vCurves.data(),
                                                        encoded.vCurves.size() * 6u * sizeof(float));
-  const auto hGridAlloc = impl_->allocStorageOrDummy(impl_->hGridArena, encoded.hBandGrid.data(),
+  const auto hGridAlloc = impl_->allocStorageOrDummy(impl_->gridArena, encoded.hBandGrid.data(),
                                                      encoded.hBandGrid.size() * sizeof(uint32_t));
-  const auto vGridAlloc = impl_->allocStorageOrDummy(impl_->vGridArena, encoded.vBandGrid.data(),
+  const auto vGridAlloc = impl_->allocStorageOrDummy(impl_->gridArena, encoded.vBandGrid.data(),
                                                      encoded.vBandGrid.size() * sizeof(uint32_t));
   const auto hRefsAlloc =
-      impl_->allocStorageOrDummy(impl_->hGridArena, encoded.curveIndices.data(),
+      impl_->allocStorageOrDummy(impl_->gridArena, encoded.curveIndices.data(),
                                  encoded.curveIndices.size() * sizeof(uint32_t));
   const auto vRefsAlloc =
-      impl_->allocStorageOrDummy(impl_->vGridArena, encoded.vCurveIndices.data(),
+      impl_->allocStorageOrDummy(impl_->gridArena, encoded.vCurveIndices.data(),
                                  encoded.vCurveIndices.size() * sizeof(uint32_t));
 
-  // Uniform buffer - still per-draw today; a ring buffer with dynamic
-  // offsets would lift it out of the per-draw path. `populateFillUniform` is shared
-  // with the resident fill path so both produce byte-identical uniforms.
+  // Batch-level uniform + per-instance record. The uniform is shared with
+  // the resident fill path so both produce byte-identical bytes; the record
+  // holds everything that varies per instance (transform, color, rule,
+  // grid parameters, bounding polygon, geometry bases).
   Uniforms u = {};
-  impl_->populateFillUniform(u, encoded, args);
+  impl_->populateBatchUniform(u, args);
+  InstanceRecord record = {};
+  impl_->populateInstanceRecord(record, encoded, args, Transform2d());
+
+  // The combined grid binding spans the four grid allocations; the record
+  // carries element bases relative to that span's start.
+  const uint64_t gridSpanStart =
+      std::min({hGridAlloc.offset, vGridAlloc.offset, hRefsAlloc.offset, vRefsAlloc.offset});
+  record.hGridBase = static_cast<uint32_t>((hGridAlloc.offset - gridSpanStart) / sizeof(uint32_t));
+  record.vGridBase = static_cast<uint32_t>((vGridAlloc.offset - gridSpanStart) / sizeof(uint32_t));
+  record.hRefsBase = static_cast<uint32_t>((hRefsAlloc.offset - gridSpanStart) / sizeof(uint32_t));
+  record.vRefsBase = static_cast<uint32_t>((vRefsAlloc.offset - gridSpanStart) / sizeof(uint32_t));
 
   const auto uniAlloc =
       impl_->allocInArena(impl_->uniformArena, &u, sizeof(Uniforms), kUniformOffsetAlignment);
 
-  // 3. Bind group - fourteen entries: uniforms, H bands SSBO, H curves SSBO,
+  // One record for single draws; the instanced path copies the base record
+  // and overwrites each copy's transform so every instance still shares the
+  // same geometry bases computed above.
+  const uint32_t instanceCount = args.instanceCount;
+  wgpu::Buffer recordBuf;
+  uint64_t recordOffset = 0;
+  uint64_t recordSize = 0;
+  if (instanceCount > 1 && !instanceTransforms.empty()) {
+    const size_t packedCount = static_cast<size_t>(instanceCount) * 8u;
+    if (instanceTransforms.size() == packedCount) {
+      std::vector<InstanceRecord> records(instanceCount, record);
+      for (uint32_t i = 0; i < instanceCount; ++i) {
+        records[i].transformRow0[0] = instanceTransforms[i * 8u + 0u];
+        records[i].transformRow0[1] = instanceTransforms[i * 8u + 1u];
+        records[i].transformRow0[2] = instanceTransforms[i * 8u + 2u];
+        records[i].transformRow0[3] = instanceTransforms[i * 8u + 3u];
+        records[i].transformRow1[0] = instanceTransforms[i * 8u + 4u];
+        records[i].transformRow1[1] = instanceTransforms[i * 8u + 5u];
+        records[i].transformRow1[2] = instanceTransforms[i * 8u + 6u];
+        records[i].transformRow1[3] = instanceTransforms[i * 8u + 7u];
+      }
+      const uint64_t recordBytes = static_cast<size_t>(instanceCount) * sizeof(InstanceRecord);
+      const auto recordAlloc = impl_->allocInArena(impl_->instanceRecordArena, records.data(),
+                                                   recordBytes, kStorageOffsetAlignment);
+      recordBuf = recordAlloc.buffer;
+      recordOffset = recordAlloc.offset;
+      recordSize = recordAlloc.size;
+    }
+  }
+  if (!recordBuf) {
+    const auto recordAlloc =
+        impl_->allocInArena(impl_->instanceRecordArena, &record, sizeof(InstanceRecord),
+                            kStorageOffsetAlignment);
+    recordBuf = recordAlloc.buffer;
+    recordOffset = recordAlloc.offset;
+    recordSize = recordAlloc.size;
+  }
+
+  // 3. Bind group - eleven entries: uniforms, H bands SSBO, H curves SSBO,
   // pattern texture, pattern sampler, clip-mask texture, clip-mask sampler,
-  // per-instance transforms SSBO, V bands SSBO, V curves SSBO, H band grid,
-  // V band grid, H curve references, V curve references.
-  wgpu::BindGroupEntry entries[14] = {};
+  // per-instance records SSBO, V bands SSBO, V curves SSBO, and the combined
+  // dense grid storage.
+  wgpu::BindGroupEntry entries[11] = {};
   entries[0].binding = 0;
   entries[0].buffer = uniAlloc.buffer;
   entries[0].offset = uniAlloc.offset;
@@ -1797,18 +1924,9 @@ void GeoEncoder::submitFillDraw(const FillDrawArgs& args,
   entries[6].binding = 6;
   entries[6].sampler = impl_->device->dummyClipMaskSampler();
   entries[7].binding = 7;
-  if (args.instanceTransformsBuffer != nullptr) {
-    entries[7].buffer = *args.instanceTransformsBuffer;
-    entries[7].offset = args.instanceTransformsOffset;
-    entries[7].size = args.instanceTransformsSize;
-  } else {
-    // One-element identity buffer owned by GeodeDevice. Layout is two
-    // vec4f rows = 32 bytes; kept in sync with the WGSL
-    // `InstanceTransform` struct in `shaders/slug_fill.wgsl`.
-    entries[7].buffer = impl_->device->identityInstanceTransformBuffer();
-    entries[7].offset = 0;
-    entries[7].size = 32u;
-  }
+  entries[7].buffer = recordBuf;
+  entries[7].offset = recordOffset;
+  entries[7].size = recordSize;
   entries[8].binding = 8;
   entries[8].buffer = vBandsAlloc.buffer;
   entries[8].offset = vBandsAlloc.offset;
@@ -1817,27 +1935,21 @@ void GeoEncoder::submitFillDraw(const FillDrawArgs& args,
   entries[9].buffer = vCurvesAlloc.buffer;
   entries[9].offset = vCurvesAlloc.offset;
   entries[9].size = vCurvesAlloc.size;
+  // One combined binding for all four grid arrays; the record's bases
+  // index into it.
+  const uint64_t gridSpanEnd = std::max({hGridAlloc.offset + hGridAlloc.size,
+                                         vGridAlloc.offset + vGridAlloc.size,
+                                         hRefsAlloc.offset + hRefsAlloc.size,
+                                         vRefsAlloc.offset + vRefsAlloc.size});
   entries[10].binding = 10;
   entries[10].buffer = hGridAlloc.buffer;
-  entries[10].offset = hGridAlloc.offset;
-  entries[10].size = hGridAlloc.size;
-  entries[11].binding = 11;
-  entries[11].buffer = vGridAlloc.buffer;
-  entries[11].offset = vGridAlloc.offset;
-  entries[11].size = vGridAlloc.size;
-  entries[12].binding = 12;
-  entries[12].buffer = hRefsAlloc.buffer;
-  entries[12].offset = hRefsAlloc.offset;
-  entries[12].size = hRefsAlloc.size;
-  entries[13].binding = 13;
-  entries[13].buffer = vRefsAlloc.buffer;
-  entries[13].offset = vRefsAlloc.offset;
-  entries[13].size = vRefsAlloc.size;
+  entries[10].offset = gridSpanStart;
+  entries[10].size = gridSpanEnd - gridSpanStart;
 
   wgpu::BindGroupDescriptor bgDesc = {};
   bgDesc.label = wgpuLabel("GeodeBindGroup");
   bgDesc.layout = impl_->pipeline->bindGroupLayout();
-  bgDesc.entryCount = 14;
+  bgDesc.entryCount = 11;
   bgDesc.entries = entries;
   wgpu::BindGroup bindGroup = impl_->transientResources.retain(dev.createBindGroup(bgDesc));
   impl_->device->countBindGroup();
@@ -1845,7 +1957,7 @@ void GeoEncoder::submitFillDraw(const FillDrawArgs& args,
   // 4. Record the draw call - one convex fan per path.
   impl_->recordGeometryDebugDraw(encoded, instanceTransforms);
   impl_->pass.get().setBindGroup(0, bindGroup, 0, nullptr);
-  impl_->pass.get().draw(encoded.boundingDrawVertexCount(), args.instanceCount, 0, 0);
+  impl_->pass.get().draw(encoded.boundingDrawVertexCount(), instanceCount, 0, 0);
   impl_->device->countDraw();
 }
 
@@ -1969,14 +2081,17 @@ void GeoEncoder::Impl::uploadResidentGradientGeometry(GeodeResidentGradientSlot&
     r.size = (storageDummy && bytes == 0) ? uint64_t{4} : roundUp4(bytes);
     cursor += r.size;
   };
+  // The four grid regions are contiguous so ONE combined storage binding
+  // (binding 10) covers them; the instance record carries element bases
+  // relative to the combined region's start.
   place(slot.bands, bandsBytes, kStorageOffsetAlignment, /*storageDummy=*/true);
   place(slot.curves, curvesBytes, kStorageOffsetAlignment, /*storageDummy=*/true);
-  place(slot.hRefs, hRefsBytes, kStorageOffsetAlignment, /*storageDummy=*/true);
   place(slot.vBands, vBandsBytes, kStorageOffsetAlignment, /*storageDummy=*/true);
   place(slot.vCurves, vCurvesBytes, kStorageOffsetAlignment, /*storageDummy=*/true);
-  place(slot.vRefs, vRefsBytes, kStorageOffsetAlignment, /*storageDummy=*/true);
   place(slot.hGrid, hGridBytes, kStorageOffsetAlignment, /*storageDummy=*/true);
   place(slot.vGrid, vGridBytes, kStorageOffsetAlignment, /*storageDummy=*/true);
+  place(slot.hRefs, hRefsBytes, kStorageOffsetAlignment, /*storageDummy=*/true);
+  place(slot.vRefs, vRefsBytes, kStorageOffsetAlignment, /*storageDummy=*/true);
   place(slot.uniform, sizeof(GradientUniforms), kUniformOffsetAlignment, /*storageDummy=*/false);
 
   const uint64_t totalSize = cursor;
