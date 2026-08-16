@@ -118,6 +118,9 @@ struct Sample {
   double drawMs = 0.0;
   double snapshotMs = 0.0;
   double settledMs = 0.0;
+  double retainedDrawMs = 0.0;
+  double retainedSnapshotMs = 0.0;
+  double retainedSettledMs = 0.0;
   double gpuRenderPassMs = 0.0;
   double gpuTotalMs = 0.0;
 };
@@ -189,6 +192,9 @@ struct PhaseStats {
   Stats draw;
   Stats snapshot;
   Stats settled;
+  Stats retainedDraw;
+  Stats retainedSnapshot;
+  Stats retainedSettled;
   Stats gpuRenderPass;
   Stats gpuTotal;
 };
@@ -236,16 +242,33 @@ PhaseStats benchmarkWorkload(const Workload& workload, donner::svg::RendererGeod
     s.settledMs = toMs(t1 - settledStart);
     (void)bitmap;  // Discard - we only care about timing.
 
+    // -- Retained second draw on the same document (unchanged eligible scene) --
+    const auto retainedStart = Clock::now();
+    t0 = retainedStart;
+    renderer.draw(doc);
+    t1 = Clock::now();
+    s.retainedDrawMs = toMs(t1 - t0);
+    t0 = Clock::now();
+    bitmap = renderer.takeSnapshot();
+    t1 = Clock::now();
+    s.retainedSnapshotMs = toMs(t1 - t0);
+    s.retainedSettledMs = toMs(t1 - retainedStart);
+    (void)bitmap;
+
     samples.push_back(s);
   }
 
   // Discard warmup samples.
-  std::vector<double> parseVals, drawVals, snapVals, settledVals, gpuRpVals, gpuTotVals;
+  std::vector<double> parseVals, drawVals, snapVals, settledVals, retainedDrawVals,
+      retainedSnapVals, retainedSettledVals, gpuRpVals, gpuTotVals;
   const auto reserve = static_cast<size_t>(cfg.iterations);
   parseVals.reserve(reserve);
   drawVals.reserve(reserve);
   snapVals.reserve(reserve);
   settledVals.reserve(reserve);
+  retainedDrawVals.reserve(reserve);
+  retainedSnapVals.reserve(reserve);
+  retainedSettledVals.reserve(reserve);
   gpuRpVals.reserve(reserve);
   gpuTotVals.reserve(reserve);
 
@@ -255,12 +278,22 @@ PhaseStats benchmarkWorkload(const Workload& workload, donner::svg::RendererGeod
     drawVals.push_back(s.drawMs);
     snapVals.push_back(s.snapshotMs);
     settledVals.push_back(s.settledMs);
+    retainedDrawVals.push_back(s.retainedDrawMs);
+    retainedSnapVals.push_back(s.retainedSnapshotMs);
+    retainedSettledVals.push_back(s.retainedSettledMs);
     gpuRpVals.push_back(s.gpuRenderPassMs);
     gpuTotVals.push_back(s.gpuTotalMs);
   }
 
-  return {computeStats(parseVals),   computeStats(drawVals),  computeStats(snapVals),
-          computeStats(settledVals), computeStats(gpuRpVals), computeStats(gpuTotVals)};
+  return {computeStats(parseVals),
+          computeStats(drawVals),
+          computeStats(snapVals),
+          computeStats(settledVals),
+          computeStats(retainedDrawVals),
+          computeStats(retainedSnapVals),
+          computeStats(retainedSettledVals),
+          computeStats(gpuRpVals),
+          computeStats(gpuTotVals)};
 }
 
 void printPhase(const char* label, const Stats& stats) {
@@ -329,15 +362,24 @@ int main(int argc, char* argv[]) {
   for (const auto& workload : workloads) {
     std::printf("SVG: %s (%zu bytes)\n", workload.name.c_str(), workload.source.size());
 
+    // Reset readback stats so each workload reports its own snapshot wait.
+    (void)renderer.consumeReadbackStats();
+
     PhaseStats ps = benchmarkWorkload(workload, renderer, cfg);
     printPhase("Parse:", ps.parse);
     printPhase("Draw:", ps.draw);
     printPhase("Snapshot:", ps.snapshot);
     printPhase("Settled:", ps.settled);
+    printPhase("Ret-Draw:", ps.retainedDraw);
+    printPhase("Ret-Snap:", ps.retainedSnapshot);
+    printPhase("Ret-Settled:", ps.retainedSettled);
     if (sharedDevice->supportsTimestamps()) {
       printPhase("GPU-RP:", ps.gpuRenderPass);
       printPhase("GPU-Tot:", ps.gpuTotal);
     }
+    const donner::svg::RendererReadbackStats readbackStats = renderer.consumeReadbackStats();
+    std::printf("  %-10s count=%d polls=%d timedWaitAny=%s\n", "Readback:", readbackStats.count,
+                readbackStats.pollIterations, readbackStats.usedTimedWaitAny ? "yes" : "no");
     std::printf("\n");
 
     if (ps.draw.median > 0.0) {
