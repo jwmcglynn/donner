@@ -860,7 +860,7 @@ constexpr bool kAsyncRendererWallclockTestsEnabled =
     false;
 #endif
 
-// Design doc 0033 §M5 - preemptive swap-in. When the worker finishes a
+// Preemptive swap-in. When the worker finishes a
 // render, the editor's main loop must learn about the result on the
 // NEXT ImGui frame, not on the next mouse event. The mechanism is the
 // `setWakeCallback` hook, which the worker invokes after every
@@ -1099,7 +1099,7 @@ TEST(AsyncRendererTest, PollResultStillWorksWithoutWakeCallback) {
   ASSERT_TRUE(result.has_value());
 }
 
-// Design doc 0033 §M9 + §M2C - pending-demote layers must carry their
+// Pending-demote layers must carry their
 // `canvasFromBitmap` translation through to the editor blit. The
 // worker's tile-build code previously populated `dragTranslationDoc`
 // only when `isDragTarget == true`, so a pending-demote layer (whose
@@ -1165,7 +1165,7 @@ TEST(AsyncRendererTest, PendingDemotePreviousDragTargetKeepsDragTranslationInTil
   auto resultA = waitForResult();
   ASSERT_TRUE(resultA.has_value());
 
-  // 3. Now drag B - A is demoted (queued by M9) and B is promoted.
+  // 3. Now drag B - A is demoted (queued by the hysteresis window) and B is promoted.
   //    A's bitmap is still cached with its post-drag canvasFromBitmap.
   svg::SVGGraphicsElement graphicsB = elemB->withReadAccess(
       [&elemB](svg::DocumentReadAccess&, EntityHandle) { return AsGraphicsElement(*elemB); });
@@ -1424,7 +1424,7 @@ TEST(AsyncRendererTest, DisplayNoneSelectionDoesNotLeaveStaleBackgroundPixelsWhe
   EXPECT_TRUE(sawNextLayer) << "The repro must isolate #next as the active drag layer.";
 }
 
-// Design doc 0033 §M4 - async re-rasterization with cancellation. A
+// Async re-rasterization with cancellation. A
 // second `requestRender` posted while the worker is busy must:
 //   * signal cancellation to the in-flight `CompositorController::
 //     renderFrame` (the compositor polls between rasterize loops);
@@ -1492,10 +1492,10 @@ TEST(AsyncRendererTest, RequestRenderDuringBusySignalsCancellationAndPicksUpNewR
   EXPECT_GE(asyncRenderer.cancelledRenderCount(), 0u);
 }
 
-// Design doc 0033 - `cancelInFlight()` bails a long render that's no
+// `cancelInFlight()` bails a long render that's no
 // longer wanted (a stale selection prewarm at high zoom, etc.) WITHOUT
 // queueing a new one. The worker either:
-//   - bails at the next §M4 safe point and parks (mid-render cancel),
+//   - bails at the next cancellation safe point and parks (mid-render cancel),
 //     or
 //   - completes the render but discovers state has been flipped to
 //     Idle and drops the result on the floor instead of queueing it
@@ -1526,7 +1526,7 @@ TEST(AsyncRendererTest, CancelInFlightDropsResultAndReturnsWorkerToIdle) {
 
   asyncRenderer.cancelInFlight();
 
-  // Spin-wait for the worker to settle. Whether the M4 cancel poll
+  // Spin-wait for the worker to settle. Whether the cancel poll
   // fired mid-render or the render completed and `result_` got
   // dropped via the state-flip, the worker must end up parked.
   const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
@@ -4624,8 +4624,7 @@ TEST(AsyncRendererE2ETest, StructuralWritebackDoesNotResizeCanvasAndRerasterFilt
 // Completes the Option B coverage matrix: a user-typed source-pane
 // edit that produces a `ReplaceDocumentCommand` whose new tree is
 // structurally equivalent to the old one (same tags, same ids) should
-// ALSO take the structural-remap path, not `resetAllLayers`. Design
-// doc 0026 Milestone B3 Step 3 called this out explicitly; without
+// ALSO take the structural-remap path, not `resetAllLayers`. Without
 // it, a user tweaking a transform value by typing would pay the same
 // multi-second reset cost the drag-end path used to pay.
 //

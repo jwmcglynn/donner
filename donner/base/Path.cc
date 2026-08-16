@@ -1461,7 +1461,7 @@ struct MiterResult {
 /// formula). Importantly, this is NOT `halfWidth / sinHalfAngle`: that earlier
 /// formulation happened to be correct for 90° corners (where sin=cos at 45°)
 /// but drifts for any other turn - undershooting sharp inside corners of open
-/// paths (the Phase 2C inverted-V symptom) and overshooting gentle outside
+/// paths (the inverted-V symptom) and overshooting gentle outside
 /// corners.
 MiterResult computeMiterPoint(const Vector2d& vertex, const Vector2d& prevNormal,
                               const Vector2d& curNormal, double halfWidth) {

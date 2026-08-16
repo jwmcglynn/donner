@@ -20,8 +20,7 @@
 #include "donner/svg/parser/PathParser.h"
 
 // Slice 1 SMIL animation system. Deferred features (paced/spline calcMode, syncbase timing,
-// additive/accumulate, <animateMotion>/<mpath>) are intentionally absent; see
-// docs/design_docs/animation.md.
+// additive/accumulate, <animateMotion>/<mpath>) are intentionally absent.
 
 namespace donner::svg::components {
 

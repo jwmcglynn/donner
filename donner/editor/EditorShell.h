@@ -728,7 +728,7 @@ private:
   /// Suppress source-pane reselection/scrolling when a source edit remaps the same selection while
   /// the cursor remains inside the active focus partition.
   bool preserveSourceEditFocusCursor_ = false;
-  /// Design doc 0033 §M8: set when an M8 fast-path click consumed the
+  /// Set when a fast-path click consumed the
   /// pending click without going through the `!isBusy()`-gated post-
   /// onMouseDown cache refresh. The follow-up fires on the next idle
   /// frame so re-drag hit testing catches up without posting a

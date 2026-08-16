@@ -275,8 +275,8 @@ struct RenderResult {
   };
 
   /// One composite tile from the worker's `CompositorController::
-  /// snapshotCompositorTiles()` snapshot (design doc 0033 §M2C). The
-  /// editor uploads one GL texture per tile (keyed on `id`) and
+  /// snapshotCompositorTiles()` snapshot. The editor uploads one GL texture
+  /// per tile (keyed on `id`) and
   /// blits each tile at its canvas offset. Immediate tiles intentionally use
   /// transient ids and always carry a fresh payload. Geometry fields are
   /// doc-unit quantities so the editor can scale them by the current
@@ -536,8 +536,8 @@ public:
   /// Safe to call from any thread.
   void cancelInFlight();
 
-  /// Design doc 0033 §M4 - count of renders that were cancelled
-  /// mid-flight by a subsequent `requestRender`. Exposed for tests
+  /// Count of renders that were cancelled mid-flight by a subsequent
+  /// `requestRender`. Exposed for tests
   /// to assert preemption is engaging (vs. the worker silently
   /// queueing requests). Incremented under the internal mutex; safe
   /// to read from any thread.
@@ -586,7 +586,7 @@ public:
   void setWakeCallback(std::function<void()> callback);
 
   /// Toggle whether the compositor uses tight-bounded segment
-  /// rasterization (design doc 0027). The change applies at the start
+  /// rasterization. The change applies at the start
   /// of the next worker iteration - `renderFrame` calls
   /// `CompositorController::setTightBoundedSegmentsEnabled` before
   /// compositing, which marks all cached segments dirty so the flip
@@ -668,8 +668,8 @@ public:
     return lastCompositorRenderFrameStats_;
   }
 
-  /// Snapshot of the compositor's per-layer diagnostic rows (design doc
-  /// 0033 M1). Captured under the worker mutex at every Done transition;
+  /// Snapshot of the compositor's per-layer diagnostic rows. Captured under
+  /// the worker mutex at every Done transition;
   /// the UI thread copies the cached vector out under the lock. Empty
   /// before the first render lands or when the compositor isn't
   /// instantiated.
@@ -688,7 +688,7 @@ public:
   }
 
   /// Unified in-paint-order snapshot of every tile the compositor
-  /// blits to produce the final composite (design doc 0033 §M1++).
+  /// blits to produce the final composite.
   /// The editor's layer-inspector panel renders this list with
   /// thumbnails for every tile so the operator can see the
   /// comprehensive composite at a glance.
@@ -858,7 +858,7 @@ private:
   /// keep it there across drag-release-and-reparse cycles.
   std::atomic<std::uint64_t> compositorReconstructCount_{0};
 
-  /// Design doc 0033 §M4 - cancellation token threaded into
+  /// Cancellation token threaded into
   /// `CompositorController::renderFrame(viewport, token)`. The UI
   /// thread sets `cancelRender_` via `requestRender` when posting a
   /// new request while the worker is busy; the worker polls the

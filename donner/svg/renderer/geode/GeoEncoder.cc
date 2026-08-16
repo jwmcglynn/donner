@@ -29,8 +29,7 @@ constexpr uint64_t alignUp(uint64_t value, uint64_t alignment) {
   return (value + alignment - 1u) & ~(alignment - 1u);
 }
 
-// WebGPU binding offset alignment requirements for the per-draw arenas
-// (design doc 0030 Milestone 1).
+// WebGPU binding offset alignment requirements for the per-draw arenas.
 //
 // Storage buffer bind-group offset: defaults to 256 across wgpu-native
 // backends (the spec-mandated floor for portability). Querying the
@@ -68,7 +67,7 @@ struct alignas(16) Uniforms {
   uint32_t paintMode;         // 164 .. 168
   float patternOpacity;       // 168 .. 172
   uint32_t hasClipPolygon;    // 172 .. 176 - 0 = no clip, 1 = clipPolygon active
-  // Phase 3b path-clip mask flag. When nonzero, the shader samples the
+  // Path-clip mask flag. When nonzero, the shader samples the
   // clip mask texture at binding 5 (linear-filtered RGBA8Unorm) and folds
   // its averaged coverage into the fragment colour. A 1x1 dummy
   // texture is always bound so the `textureSample` is always legal.
@@ -89,7 +88,7 @@ struct alignas(16) Uniforms {
   uint32_t gridVBandCount;  // 212 .. 216
   uint32_t _gridPad0;       // 216 .. 220
   uint32_t _gridPad1;       // 220 .. 224
-  // Phase 3a polygon clipping: a 4-vertex convex clip polygon expressed
+  // Polygon clipping: a 4-vertex convex clip polygon expressed
   // as 4 edge half-planes, one per side, in VIEWPORT-PIXEL space. Each
   // edge is `(a, b, c)` such that `a*x + b*y + c >= 0` marks the inside
   // half-plane (the normal `(a, b)` points into the clipped region).
@@ -187,7 +186,7 @@ struct alignas(16) GradientUniforms {
   uint32_t stopCount;        // 156 .. 160
   float stopColors[16 * 4];  // 160 .. 416
   float stopOffsets[4 * 4];  // 416 .. 480
-  // Phase 3a convex clip polygon + Phase 3b path-clip mask flag.
+  // Convex clip polygon + path-clip mask flag.
   // Layout mirrors `slug_gradient.wgsl` - `hasClipPolygon` +
   // `hasClipMask` + 2 pad u32 to reach vec4 alignment, then the 4
   // half-plane rows.
@@ -235,10 +234,9 @@ struct GeoEncoder::Impl {
   const GeodeImagePipeline* imagePipeline;
 
   /// Per-encoder growable GPU buffer used as a bump-allocation arena
-  /// for per-draw data (vertex / band / curve). Design doc 0030
-  /// Milestone 1 - replaces the per-fill `dev.createBuffer` pattern
-  /// with a single long-lived buffer that each draw writes into at the
-  /// current `offset`, then advances.
+  /// for per-draw data (vertex / band / curve). Replaces the per-fill
+  /// `dev.createBuffer` pattern with a single long-lived buffer that each
+  /// draw writes into at the current `offset`, then advances.
   ///
   /// Alignment: callers pass the required alignment for the binding.
   /// Vertex buffers need 4-byte offset alignment (WebGPU spec §23.8);
@@ -262,13 +260,13 @@ struct GeoEncoder::Impl {
   Arena bandArena;
   Arena curveArena;
   Arena uniformArena;
-  /// Analytic dual-ray fill (0041 §8): vertical band/curve SSBOs, dense H/V band-grid lookup
+  /// Analytic dual-ray fill: vertical band/curve SSBOs, dense H/V band-grid lookup
   /// tables, and compact curve references. Bound at bindings 8-13 of the fill pipeline.
   Arena vBandArena;
   Arena vCurveArena;
   Arena hGridArena;
   Arena vGridArena;
-  /// M6-B step 3: per-instance affine transforms for `fillPathInstanced`.
+  /// Per-instance affine transforms for `fillPathInstanced`.
   /// Packed as two vec4f rows per instance (32 bytes), matching the WGSL
   /// `InstanceTransform` struct. Alignment uses `kStorageOffsetAlignment`
   /// since the binding is storage read-only.
@@ -277,7 +275,7 @@ struct GeoEncoder::Impl {
   /// Optional cross-frame buffer pool (owned by `RendererGeode::Impl`).
   /// When set, arena growth prefers recycled buffers and arena teardown
   /// returns the fully-grown buffers instead of destroying them. See
-  /// `GeodeBufferPool` and design doc 0030 M1.
+  /// `GeodeBufferPool`.
   GeodeBufferPool* bufferPool = nullptr;
   bool antialias = true;
 
@@ -311,7 +309,7 @@ struct GeoEncoder::Impl {
 
   // When true, this encoder owns its `commandEncoder` and `finish()`
   // calls `commandEncoder.finish()` + `queue().submit()`. When false
-  // (design doc 0030 Milestone 3), the encoder is borrowed from the
+  // (shared-CommandEncoder mode), the encoder is borrowed from the
   // caller (`RendererGeode`) and `finish()` only ends any open pass.
   bool ownsCommandEncoder = true;
 
@@ -339,7 +337,7 @@ struct GeoEncoder::Impl {
       uint64_t newCap = std::max(arena.capacity * 2u, kMinGrow);
       while (newCap < size) newCap *= 2;
       // Prefer a pooled buffer recycled from a previous frame's encoder
-      // (design doc 0030 M1: steady-state bufferCreates -> 0). Falls
+      // (steady-state bufferCreates -> 0). Falls
       // back to a fresh allocation when the pool has no fit.
       if (bufferPool != nullptr) {
         uint64_t pooledCapacity = 0;
@@ -382,7 +380,7 @@ struct GeoEncoder::Impl {
     return allocInArena(arena, data, roundUp4(byteCount), kStorageOffsetAlignment);
   }
 
-  // ---- GPU residence (design doc 0030 wave 2) ------------------------
+  // ---- GPU residence -------------------------------------------------
   // Defined out-of-line below `FillDrawArgs` (they reference it). See the
   // `GeodeResidentSlot` header and `submitResidentFillDraw` for the flow.
 
@@ -408,7 +406,7 @@ struct GeoEncoder::Impl {
   bool submitResidentFillDraw(GeodeResidentSlot& slot, const EncodedPath& encoded,
                               const FillDrawArgs& args);
 
-  /// Wave-2 extension for gradient paints: (re)upload `encoded` into the
+  /// Gradient-paint extension: (re)upload `encoded` into the
   /// gradient slot's persistent combined buffer (same eight SSBO regions,
   /// uniform region sized for `GradientUniforms`) and reset its cached
   /// bind group.
@@ -555,14 +553,14 @@ struct GeoEncoder::Impl {
   uint32_t targetWidth;
   uint32_t targetHeight;
   // Dummy texture / sampler resources are now owned by `GeodeDevice`
-  // and shared across every GeoEncoder - see `GeodeDevice::dummyPatternTexture()`
-  // and the M4.2 notes in design doc 0030. Access them via
+  // and shared across every GeoEncoder - see
+  // `GeodeDevice::dummyPatternTexture()`. Access them via
   // `device->dummyPatternTextureView()`, etc. The bind-group layout
   // always includes the pattern + clip-mask slots so the pipeline can
   // be shared between solid/pattern/gradient/masked draws; the device
   // dummies fill the unused slots.
 
-  // Currently-bound clip mask state (Phase 3b). When
+  // Currently-bound clip mask state. When
   // `activeClipMaskView` is non-null, `hasClipMask == 1` in the
   // uniforms and draws sample `activeClipMaskView` through the
   // clip-mask binding. When null, the device's shared dummy is bound.
@@ -650,7 +648,7 @@ struct GeoEncoder::Impl {
   uint32_t scissorW = 0;
   uint32_t scissorH = 0;
 
-  /// Phase 3a polygon clipping state. When `clipPolygonActive` is true,
+  /// Convex polygon clipping state. When `clipPolygonActive` is true,
   /// the 4 planes in `clipPolygonPlanes` describe the inside half-plane
   /// of each edge of a convex 4-vertex clip polygon in VIEWPORT-PIXEL
   /// space. Each plane is `(a, b, c)` such that a fragment at
@@ -852,11 +850,11 @@ void GeoEncoder::initImpl(GeoEncoder::Impl& impl, GeodeDevice& device,
 // has been installed. Called by both constructors.
 void GeoEncoder::finalizeImpl(GeoEncoder::Impl& impl) {
   // Dummy pattern / clip-mask textures + samplers are now owned by
-  // `GeodeDevice` (see design doc 0030 §M4.2) and shared across
-  // encoders - no per-encoder create needed.
+  // `GeodeDevice` and shared across encoders - no per-encoder create
+  // needed.
 
-  // Configure per-draw arenas (bump-allocated GPU buffers, design
-  // doc 0030 Milestone 1). They stay empty here; the first draw
+  // Configure per-draw arenas (bump-allocated GPU buffers). They stay
+  // empty here; the first draw
   // triggers lazy growth to 64 KiB and doubles from there.
   impl.bandArena.usage = wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopyDst;
   impl.bandArena.label = "GeodeBandArena";
@@ -1013,7 +1011,7 @@ void GeoEncoder::clearClipPolygon() {
 }
 
 // ============================================================================
-// Phase 3b: clip mask pass
+// Clip mask pass
 // ============================================================================
 
 void GeoEncoder::beginMaskPass(const wgpu::Texture& mask) {
@@ -1278,9 +1276,8 @@ struct GeoEncoder::FillDrawArgs {
 
   /// Optional precomputed encode. When non-null, `submitFillDraw`
   /// uses this directly and skips `GeodePathEncoder::encode` +
-  /// `countPathEncode`. Used by the M2 `GeodePathCacheComponent`
-  /// cache-hit path (design doc 0030). When null, the encode runs
-  /// inline (legacy behavior).
+  /// `countPathEncode`. Used by the `GeodePathCacheComponent` cache-hit
+  /// path. When null, the encode runs inline (legacy behavior).
   const EncodedPath* precomputedEncoded = nullptr;
 
   // Paint mode selector. 0 = solid, 1 = pattern.
@@ -1296,7 +1293,7 @@ struct GeoEncoder::FillDrawArgs {
   Vector2d tileSize;
   float patternOpacity;
 
-  /// M6 Bullet 2: optional per-instance transform buffer. When null,
+  /// Optional per-instance transform buffer. When null,
   /// `submitFillDraw` binds `GeodeDevice::identityInstanceTransformBuffer`
   /// (single-instance draws). When set, the caller has uploaded N
   /// copies of the 2-vec4f `InstanceTransform` struct at
@@ -1334,7 +1331,7 @@ void GeoEncoder::fillPath(const Path& path, const css::RGBA& color, FillRule rul
 }
 
 // ============================================================================
-// GPU residence (design doc 0030 wave 2)
+// GPU residence
 // ============================================================================
 
 void GeoEncoder::Impl::populateFillUniform(Uniforms& u, const EncodedPath& encoded,
@@ -1540,7 +1537,7 @@ bool GeoEncoder::Impl::submitResidentFillDraw(GeodeResidentSlot& slot, const Enc
 
   // The upload can fail (no slab, a device mismatch that the caller has
   // not re-wired yet, or a chunk allocation failure). Route the draw
-  // through the wave-1 arena path so it stays bit-exact and never touches
+  // through the per-frame arena path so it stays bit-exact and never touches
   // an empty buffer.
   if (!slot.resident || !slot.buffer) {
     return false;
@@ -1597,7 +1594,7 @@ void GeoEncoder::fillPathResident(GeodeResidentSlot& slot, const EncodedPath& en
 
   // Residence is only safe (bind group stable, uniform clip flags zero)
   // when no clip mask / clip polygon / mask pass is active. Otherwise fall
-  // back to the wave-1 arena path so clipped / masked draws stay exact.
+  // back to the per-frame arena path so clipped / masked draws stay exact.
   if (impl_->activeClipMaskView || impl_->clipPolygonActive || impl_->maskPassOpen) {
     submitFillDraw(args);
     return;
@@ -1712,11 +1709,11 @@ void GeoEncoder::submitFillDraw(const FillDrawArgs& args,
   // pipeline - it issues `setPipeline` only when the tracker reports a
   // change (from image / gradient / None). Calling `setPipeline`
   // unconditionally here used to defeat the tracker on every solid
-  // draw; see design doc 0030, Tier 4.
+  // draw.
   impl_->bindSolidPipeline();
 
   // 1. CPU encode the path into Slug band data - unless the caller
-  // already supplied a precomputed encode via the M2 cache
+  // already supplied a precomputed encode via the path-encode cache
   // (`GeodePathCacheComponent`). Cache hits skip both the encode
   // work and the `pathEncodes` counter bump.
   EncodedPath ownedEncoded;
@@ -1755,8 +1752,8 @@ void GeoEncoder::submitFillDraw(const FillDrawArgs& args,
       impl_->allocStorageOrDummy(impl_->vGridArena, encoded.vCurveIndices.data(),
                                  encoded.vCurveIndices.size() * sizeof(uint32_t));
 
-  // Uniform buffer - still per-draw today; Milestone 1.f lifts it into
-  // a ring buffer with dynamic offsets. `populateFillUniform` is shared
+  // Uniform buffer - still per-draw today; a ring buffer with dynamic
+  // offsets would lift it out of the per-draw path. `populateFillUniform` is shared
   // with the resident fill path so both produce byte-identical uniforms.
   Uniforms u = {};
   impl_->populateFillUniform(u, encoded, args);
@@ -2093,7 +2090,7 @@ bool GeoEncoder::Impl::submitResidentGradientDraw(GeodeResidentGradientSlot& slo
   }
 
   // Upload failure: report it so the caller routes the draw through the
-  // wave-1 arena path.
+  // per-frame arena path.
   if (!slot.resident || !slot.buffer) {
     return false;
   }
@@ -2126,7 +2123,7 @@ void GeoEncoder::fillPathLinearGradient(const Path& path, const LinearGradientPa
   }
 
   // 1. CPU encode the path into Slug band data (same as fillPath) -
-  // unless the M2 cache already has a precomputed encode.
+  // unless the path-encode cache already has a precomputed encode.
   EncodedPath ownedEncoded;
   const EncodedPath* encodedPtr = precomputedEncoded;
   if (!encodedPtr) {
@@ -2187,7 +2184,7 @@ void GeoEncoder::fillPathLinearGradientResident(GeodeResidentGradientSlot& slot,
   // Residence is only safe (bind group stable, uniform clip flags zero)
   // when no clip mask / clip polygon / mask pass is active, and a slot's
   // single uniform can only carry one draw per frame. Fall back to the
-  // wave-1 arena path in both cases, mirroring `fillPathResident`.
+  // per-frame arena path in both cases, mirroring `fillPathResident`.
   if (impl_->activeClipMaskView || impl_->clipPolygonActive || impl_->maskPassOpen ||
       (slot.owningDeviceId == impl_->device->deviceId() && slot.lastResidentFrame == frameId)) {
     impl_->submitGradientArenaFallback(u, encoded);
@@ -2449,7 +2446,7 @@ void GeoEncoder::finish() {
     impl_->passOpen = false;
   }
 
-  // In shared-CommandEncoder mode (design doc 0030 Milestone 3), the
+  // In shared-CommandEncoder mode, the
   // caller owns the CommandEncoder and is responsible for finishing +
   // submitting it. We only ended the open pass above.
   if (!impl_->ownsCommandEncoder) {

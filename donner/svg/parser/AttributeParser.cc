@@ -1781,7 +1781,7 @@ std::vector<double> parseDoubleList(std::string_view str) {
 ///
 /// Slice 1: `begin`/`end` support offset (clock) values only. A semicolon-separated list picks the
 /// earliest valid offset. Syncbase references (`id.begin`/`id.end`) and event triggers are
-/// deferred; see docs/design_docs/animation.md.
+/// deferred.
 void parseAnimationTimingAttribute(components::AnimationTimingComponent& timing,
                                    const XMLQualifiedNameRef& name, std::string_view value) {
   auto parseEarliestOffset =

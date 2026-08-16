@@ -76,7 +76,7 @@ TEST(ViewportGeometryTest, RejectsDocumentToScreenForDegenerateViewBox) {
   EXPECT_FALSE(zeroHeight.documentToScreen(Vector2d(10.0, 20.0)).has_value());
 }
 
-// Regression for the M4 click-offset bug. The scenario the editor hits:
+// Regression for the click-offset bug. The scenario the editor hits:
 // the render pane sits inside a larger window at pane-origin (560, 0),
 // with a 720x800 content region. The rendered SVG is 720x800 (canvas
 // matches pane), zoom is 1.0, pan is (0, 0). A click at screen position

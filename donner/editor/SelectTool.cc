@@ -213,7 +213,7 @@ bool SelectTool::tryStartRedragOnSelected(EditorApp& editor, const Vector2d& doc
   if (currentSelection.size() != 1) {
     return false;
   }
-  // M8: bounds are caller-supplied so this path is race-safe during a
+  // Bounds are caller-supplied so this path is race-safe during a
   // busy render. EditorShell passes the pre-snapshotted bounds from
   // `SelectionBoundsCache::displayedBoundsDoc` (no live registry read);
   // `onMouseDown` passes a freshly-computed live snapshot (its caller has

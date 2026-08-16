@@ -220,7 +220,7 @@ ShaderResult<IrModule> BuildSolidFillModule() {
   const IrType vec2f = IrType::Vec2f();
   const IrType vec4f = IrType::Vec4f();
 
-  // ----- Struct types (byte layouts anchored by the packet 4 layout tests) -----
+  // ----- Struct types (byte layouts anchored by the layout tests) -----
   const IrType planesArray = e(IrType::SizedArray(vec4f, 4));
   const IrType uniformsType =
       e(IrType::Struct("Uniforms", {

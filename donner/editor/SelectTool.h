@@ -1,7 +1,7 @@
 #pragma once
 /// @file
 ///
-/// `SelectTool` is the editor's first and (in this milestone) only tool.
+/// `SelectTool` is the editor's primary selection tool.
 /// It dispatches three different gestures off `onMouseDown`:
 ///
 ///   - **Click on an element** → replace the selection with that
@@ -108,7 +108,7 @@ public:
                    MouseModifiers modifiers);
   void onMouseUp(EditorApp& editor, const Vector2d& documentPoint) override;
 
-  /// Snapshot-safe re-drag start (design doc 0033 §M8). When the user
+  /// Snapshot-safe re-drag start. When the user
   /// clicks inside the bounds of the single currently-selected element,
   /// start a drag of that element WITHOUT calling `EditorApp::hitTest`
   /// - so the call is safe to run even while the async-renderer worker

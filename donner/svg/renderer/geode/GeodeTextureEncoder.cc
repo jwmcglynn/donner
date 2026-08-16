@@ -36,13 +36,13 @@ struct alignas(16) Uniforms {
   float targetSize[2];             //  96 .. 104 - target size for clip-mask UVs
   float opacity;                   // 104 .. 108
   uint32_t sourceIsPremult;        // 108 .. 112
-  uint32_t maskMode;               // 112 .. 116 - Phase 3c <mask> luminance blit
+  uint32_t maskMode;               // 112 .. 116 - <mask> luminance blit
   uint32_t applyMaskBounds;        // 116 .. 120 - clip output to `maskBounds`
   uint32_t _padBeforeMaskBounds0;  // 120 .. 124 - align maskBounds to vec4f (16B) boundary
   uint32_t _padBeforeMaskBounds1;  // 124 .. 128
   float maskBounds[4];             // 128 .. 144 - (x0, y0, x1, y1) in target-pixel space
-  uint32_t blendMode;              // 144 .. 148 - Phase 3d mix-blend-mode selector
-  uint32_t hasClipMask;            // 148 .. 152 - Phase 3b path-clip mask blit
+  uint32_t blendMode;              // 144 .. 148 - mix-blend-mode selector
+  uint32_t hasClipMask;            // 148 .. 152 - path-clip mask blit
   uint32_t _pad0;                  // 152 .. 156
   uint32_t _pad1;                  // 156 .. 160
 };

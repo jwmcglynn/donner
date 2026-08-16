@@ -181,13 +181,13 @@ LayerRasterGeometry ComputeLayerRasterGeometry(RendererInterface& renderer, Regi
   result.viewport = viewport;
   result.surfaceFromCanvas = surfaceFromCanvas;
 
-  // Intrinsic-size rasterization (design doc 0033 §M2): size the
+  // Intrinsic-size rasterization: size the
   // offscreen to the layer's tight canvas bounds instead of the full
   // viewport. Editor-promoted layers go through this path too;
   // `CompositedPreview` carries the layer's `canvasOffset()` so the
   // editor blits the texture at its intrinsic dimensions + position
-  // (see RenderPanePresenter). M2A scoped this to mandatory-detected
-  // layers; M2B drops the gate.
+  // (see RenderPanePresenter). This is no longer gated to
+  // mandatory-detected layers.
   //
   // `computeEntityRangeBounds` already accounts for filter expansion,
   // stroke widths, isolated-layer accumulation, and clip rects - see

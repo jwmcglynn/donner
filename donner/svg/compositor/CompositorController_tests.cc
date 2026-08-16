@@ -269,7 +269,7 @@ TEST_F(CompositorControllerTest, DemoteRemovesLayer) {
   EXPECT_EQ(compositor.layerCount(), 1u);
 
   compositor.demoteEntity(entity);
-  // §M9: demote is queued; layer + hint linger until the hysteresis
+  // Demote is queued; layer + hint linger until the hysteresis
   // window expires. Flush immediately so we can assert the
   // committed-demote state here.
   compositor.flushPendingDemotionsForTesting();
@@ -277,7 +277,7 @@ TEST_F(CompositorControllerTest, DemoteRemovesLayer) {
   EXPECT_EQ(compositor.layerCount(), 0u);
 }
 
-// Design doc 0033 §M9 - layer-set hysteresis. `demoteEntity` queues the
+// Layer-set hysteresis. `demoteEntity` queues the
 // demotion for `kDemotionHysteresisFrames` and only fires after the
 // counter expires. A `promoteEntity` for the same entity inside the
 // window cancels the queued demotion and reuses the cached layer
@@ -320,7 +320,7 @@ TEST_F(CompositorControllerTest, M9RepromoteSameEntityCancelsPendingDemote) {
       compositor.snapshotLayerInspectorRows().front().generation;
 
   // Demote → re-promote with a different kind, mirroring the editor's
-  // selection → drag transition. With the M9 fast path the layer is
+  // selection → drag transition. With the hysteresis fast path the layer is
   // preserved and its cached bitmap reused (generation does NOT
   // bump).
   compositor.demoteEntity(entity);
@@ -363,7 +363,7 @@ TEST_F(CompositorControllerTest, M9DemoteFiresAfterHysteresisExpires) {
   EXPECT_EQ(compositor.layerCount(), 0u);
 }
 
-// Design doc 0033 §M9 + §M2C - pending-demote entries must NOT make
+// Pending-demote entries must NOT make
 // `hasSplitStaticLayers()` return false during the hysteresis window.
 // `skipMainCompose` gates on `hasSplitStaticLayers()`; if it returns
 // false, `composeLayers` runs every fast-path drag frame, doing 2N+1
@@ -438,7 +438,7 @@ TEST_F(CompositorControllerTest,
   compositor.renderFrame(viewport);
 }
 
-// Design doc 0033 §M9 + §M2C - pending-demote entries must NOT keep
+// Pending-demote entries must NOT keep
 // the live drag-target tile from being flagged `isDragTarget`. Before
 // this fix, the `activeHints_.size() == 1` check in `renderFrame`'s
 // `splitStaticLayersEntity_` setter saw `{old-pending-demote, new-
@@ -466,7 +466,7 @@ TEST_F(CompositorControllerTest, M9PendingDemoteDoesNotMaskLiveDragTarget) {
   ASSERT_TRUE(compositor.promoteEntity(entityA));
   compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
 
-  // Editor switches drag-target: demote A (queued by M9), promote B.
+  // Editor switches drag-target: demote A (queued by hysteresis), promote B.
   // activeHints_ now contains both A (pending) and B (live).
   compositor.demoteEntity(entityA);
   ASSERT_TRUE(compositor.promoteEntity(entityB));
@@ -475,7 +475,7 @@ TEST_F(CompositorControllerTest, M9PendingDemoteDoesNotMaskLiveDragTarget) {
   // The live drag-target tile (B) must be flagged `isDragTarget` so
   // the worker's `dragTranslationDoc` extraction propagates B's
   // `canvasFromBitmap` translation into the editor blit. Without
-  // this guard the post-M9 `activeHints_.size() == 1` check would
+  // this guard the `activeHints_.size() == 1` check would
   // count 2 hints and fall back to `entt::null` for the duration of
   // the hysteresis window.
   const auto tiles = compositor.snapshotTilesForUpload();
@@ -564,7 +564,7 @@ TEST_F(CompositorControllerTest, ComputedLayerAssignmentAttachedOnPromote) {
   EXPECT_NE(registry.get<ComputedLayerAssignmentComponent>(entity).layerId, 0u);
 
   compositor.demoteEntity(entity);
-  // §M9: flush the hysteresis queue so the assignment teardown
+  // Flush the hysteresis queue so the assignment teardown
   // happens before we check.
   compositor.flushPendingDemotionsForTesting();
   EXPECT_FALSE(registry.all_of<ComputedLayerAssignmentComponent>(entity));
@@ -699,7 +699,7 @@ TEST_F(CompositorControllerTest, SinglePromotedLayerBuildsSplitStaticLayers) {
   viewport.devicePixelRatio = 1.0;
   compositor.renderFrame(viewport);
 
-  // Post design-doc 0033 §M2C: `hasSplitStaticLayers` reports the
+  // `hasSplitStaticLayers` reports the
   // editor-promoted single-drag-target state, no bg/fg flatten step
   // exists. Assert the layer's bitmap is non-empty (the editor reads
   // it directly via `snapshotTilesForUpload`).
@@ -1866,7 +1866,7 @@ TEST_F(CompositorControllerTest, CancelledRenderLeavesDirtyLayerForNextFrame) {
 }
 
 TEST_F(CompositorControllerTest, IntrinsicSizeMandatoryFilterLayerHasNonZeroCanvasOffset) {
-  // Design doc 0033 §M2A: mandatory-detected filter layers rasterize
+  // Mandatory-detected filter layers rasterize
   // into an offscreen sized to their tight canvas bounds (with 1px AA
   // padding), not the full viewport. The MockRenderer's takeSnapshot
   // returns a stub 1x1 bitmap regardless of viewport, so we can't
@@ -1905,7 +1905,7 @@ TEST_F(CompositorControllerTest, IntrinsicSizeMandatoryFilterLayerHasNonZeroCanv
 }
 
 TEST_F(CompositorControllerTest, EditorPromotedLayerAlsoUsesIntrinsicSize) {
-  // Design doc 0033 §M2B: editor-promoted layers (drag target /
+  // Editor-promoted layers (drag target /
   // selection prewarm) go through the same tight-bound rasterize as
   // mandatory-detected layers. The editor reads the layer's
   // `canvasOffset` via `CompositedPreview` and blits the texture at
@@ -1983,8 +1983,8 @@ TEST_F(CompositorControllerTest, IntrinsicSizeLayerFastPathTranslationStillWorks
 }
 
 TEST_F(CompositorControllerTest, MandatoryFilterLayerSurvivesCanvasResize) {
-  // Regression for the detector-ordering bug surfaced by design doc 0033
-  // M1's layer inspector: `RenderingContext::invalidateRenderTree()`
+  // Regression for the detector-ordering bug surfaced by the layer
+  // inspector: `RenderingContext::invalidateRenderTree()`
   // (called by `SVGDocument::setCanvasSize`) clears every
   // `RenderingInstanceComponent`. If `mandatoryDetector_.reconcile`
   // runs against that empty RIC view BEFORE

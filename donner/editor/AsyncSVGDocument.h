@@ -4,8 +4,7 @@
 /// `AsyncSVGDocument` is the editor-owned wrapper around `svg::SVGDocument`.
 /// It gates canvas, tool, and application mutations through the `CommandQueue`,
 /// applies incremental source-pane edits through a separate guarded seam, and
-/// provides the snapshot hand-off to the render thread described in the M1.5
-/// design note in `docs/design_docs/0020-editor.md`.
+/// provides the snapshot hand-off to the render thread.
 ///
 /// The editor now renders on a dedicated `AsyncRenderer` worker. The worker
 /// shares the live document registry under ConcurrentDom access guards, while

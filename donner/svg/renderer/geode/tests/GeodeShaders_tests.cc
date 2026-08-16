@@ -31,7 +31,7 @@ TEST(GeodeShaders, SlugGradientCompiles) {
   ASSERT_TRUE(static_cast<bool>(module)) << "Slug gradient shader failed to compile";
 }
 
-/// Smoke test for the Phase 3b path-clip mask shader.
+/// Smoke test for the path-clip mask shader.
 TEST(GeodeShaders, SlugMaskCompiles) {
   auto geodeDevice = GeodeDevice::CreateHeadless();
   ASSERT_NE(geodeDevice, nullptr);

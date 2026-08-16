@@ -2,8 +2,7 @@
 /// @file
 /// @brief Pull-based cursor over a sequence of \ref donner::css::ComponentValue.
 ///
-/// See `docs/design_docs/0019-css_token_stream.md` for the design rationale. The
-/// short version: CSS subparsers (currently \ref donner::css::parser::SelectorParser,
+/// Rationale: CSS subparsers (currently \ref donner::css::parser::SelectorParser,
 /// planned for others) walk a pre-materialized list of ComponentValues with a
 /// one-way cursor, peeking ahead by small constant offsets and never rewinding.
 /// `ComponentValueStream` lifts that cursor into a named, testable abstraction

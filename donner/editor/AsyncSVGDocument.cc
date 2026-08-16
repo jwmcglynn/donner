@@ -265,9 +265,9 @@ void AsyncSVGDocument::applyOne(const EditorCommand& command) {
       // Apply the attribute change via the public SVGElement::setAttribute
       // API - the same path the parser uses. This triggers presentation-
       // attribute parsing, style cascade, and dirty-flag marking through
-      // the same code path as initial parse. The structured-editing M5
-      // fast path will eventually replace this with a targeted
-      // AttributeParser::ParseAndSetAttribute call, but for M3 the
+      // the same code path as initial parse. A structured-editing
+      // fast path could eventually replace this with a targeted
+      // AttributeParser::ParseAndSetAttribute call, but today the
       // public setAttribute is correct and sufficient.
       svg::SVGElement element = *command.element;
       xml::ApplySourceEditResult result = document_->setElementAttribute(

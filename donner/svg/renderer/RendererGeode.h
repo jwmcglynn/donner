@@ -6,8 +6,6 @@
 /// algorithm for resolution-independent vector rasterization. It can run
 /// **headless** (creating its own device) or **embedded** inside a host
 /// application that provides an existing WebGPU device and render target.
-///
-/// See `docs/design_docs/0017-geode_renderer.md` for the full design.
 
 #include <cstddef>
 #include <cstdint>
@@ -127,8 +125,7 @@ private:
  * durable CI signal; the GPU-timestamp fields are advisory and require
  * `enableTimestamps(true)` + driver support (see `GeodeDevice`).
  *
- * See `docs/design_docs/0030-geode_performance.md` for the target ceilings
- * each optimization milestone drives these toward.
+ * `GeodePerf_tests.cc` pins the steady-state ceilings these drive toward.
  */
 struct FrameTimings {
   /// Counters for resource creation and command submission in the last
@@ -330,7 +327,7 @@ public:
 
   /**
    * Enable or disable GPU timestamp capture. No-op today; reserved for
-   * future work (design doc 0030, "Future Work"). When wired up, this
+   * future work. When wired up, this
    * will drive the `renderPassNs` / `totalGpuNs` fields of
    * `lastFrameTimings()`. Counters (the primary regression signal) are
    * always on regardless of this flag.

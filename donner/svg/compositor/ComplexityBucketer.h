@@ -12,10 +12,9 @@ namespace donner::svg::compositor {
 /**
  * Runtime configuration for `ComplexityBucketer`.
  *
- * Defaults match the design doc's illustrative constants (see
- * § Complexity Bucketing in 0025-composited_rendering.md). They are hand-tuned
- * per Non-Goal 2 ("no ML or user-history heuristics") - adjust values based
- * on benchmark results as the system matures.
+ * Defaults are hand-tuned illustrative constants; deliberately no ML or
+ * user-history heuristics. Adjust values based on benchmark results as the
+ * system matures.
  */
 struct ComplexityBucketerConfig {
   /// Total number of layer slots the bucketer is allowed to produce, including
@@ -65,12 +64,12 @@ struct ComplexityBucketerStats {
 };
 
 /**
- * Phase 2.5 producer that pre-chunks a document into a small number of layers
+ * Producer that pre-chunks a document into a small number of layers
  * based on per-subtree rasterization cost. Runs at document load and on
  * structural rebuild (both callers control when; this class is stateless
  * between calls other than its held hints).
  *
- * Algorithm (see 0025-composited_rendering.md § Complexity Bucketing):
+ * Algorithm:
  *
  * 1. Walk `RenderingInstanceView` in draw order. The first entity is the
  *    document root; skip it as a candidate (we never bucket the whole
@@ -90,7 +89,7 @@ struct ComplexityBucketerStats {
  * / clip / filter / mask ancestor (other than the root itself), so bucketing
  * them cannot split a group that must stay atomic.
  *
- * **v1 simplifications (tracked for Phase 2.5 followups):**
+ * **v1 simplifications (tracked as followups):**
  *
  * - Cost walk does NOT perform bbox overlap rejection. Two candidates with
  *   visually overlapping subtrees may both be bucketed. Correctness is

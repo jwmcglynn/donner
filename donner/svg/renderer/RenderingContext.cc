@@ -86,8 +86,7 @@ bool isGeometryLengthAttribute(std::string_view attrName) {
  * Backs up base component values that the animation override applier mutates in place, so the
  * mutation can be reverted on a later frame when the animation is no longer active (or targets a
  * different value). Without this, base-component mutations would "stick" across time samples of the
- * same live document. Captured lazily the first time an entity is animated; see
- * docs/design_docs/animation.md ("Resolved question").
+ * same live document. Captured lazily the first time an entity is animated.
  */
 struct AnimationBaseBackup {
   std::optional<CircleComponent> circle;
@@ -154,8 +153,7 @@ void restoreAnimationBaseBackup(Registry& registry, Entity entity, AnimationBase
  *
  * This runs immediately after StyleSystem::computeAllStyles() and before layout/shape computation,
  * so that animated transforms participate in the transform hierarchy and animated geometry feeds
- * the shape pass. Overrides are applied post-style (the tiny-skia model); see
- * docs/design_docs/animation.md.
+ * the shape pass. Overrides are applied post-style (the tiny-skia model).
  */
 void applyAnimationOverrides(Registry& registry) {
   const double documentTime = registry.ctx().get<SVGDocumentContext>().documentTime;
@@ -1575,7 +1573,7 @@ void RenderingContext::createComputedComponents(ParseWarningSink& warningSink) {
   StyleSystem().computeAllStyles(registry_, warningSink);
 
   // Advance SMIL animations and apply their value overrides on top of the computed styles/geometry,
-  // before layout and shape computation. See docs/design_docs/animation.md.
+  // before layout and shape computation.
   applyAnimationOverrides(registry_);
 
   // After styles are computed, we can load fonts and other embedded resources.

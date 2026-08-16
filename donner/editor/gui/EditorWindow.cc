@@ -1280,7 +1280,7 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
                                       static_cast<float>(uiScaleConfig_.displayScale));
   io.FontGlobalScale = uiScaleConfig_.fontGlobalScale();
 
-  // Donner editor design language (design doc 0054): apply the Dark Slate token
+  // Donner editor design language: apply the Dark Slate token
   // theme with the operator-approved Signal Teal accent (variant B) in place of
   // ImGui's stock dark ramp. This also publishes the active theme so raw
   // ImDrawList widgets (overlay, chips, toolbar selection) read the same tokens.

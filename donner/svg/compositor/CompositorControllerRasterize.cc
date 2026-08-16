@@ -281,7 +281,7 @@ void CompositorController::rasterizeDirtyStaticSegments(const RenderViewport& vi
     if (!staticSegmentDirty_[i]) {
       continue;
     }
-    // §M4: bail between segment rasterizes. Leaves `staticSegmentDirty_`
+    // Bail between segment rasterizes. Leaves `staticSegmentDirty_`
     // intact for the slots we haven't reached yet so the next
     // `renderFrame` resumes the work.
     if (isCancelled()) {
@@ -353,9 +353,7 @@ void CompositorController::rasterizeDirtyStaticSegments(const RenderViewport& vi
       // ranges it can't precisely bound (text, markers, masks,
       // patterns, sub-documents - see its own contract in
       // `RendererDriver.h`). Callers treat `nullopt` as "fall back
-      // to full-canvas"; never as "empty segment". See design doc
-      // 0027-tight_bounded_segments.md for which cases are pending
-      // precise handling.
+      // to full-canvas"; never as "empty segment".
       std::optional<Box2d> tightBoundsCanvas;
       if (config_.tightBoundedSegments) {
         ZoneScopedN("Compositor::segment::computeBounds");
@@ -1001,7 +999,7 @@ void CompositorController::composeLayers(const RenderViewport& viewport,
                 Transform2d::Translate(segmentOffset));
   };
 
-  // Design doc 0033 §M2C: compose static segments and promoted layers in
+  // Compose static segments and promoted layers in
   // interleaved paint order. Active drag frames may skip this main-renderer
   // compose via the `skipMainCompose` gate above.
   if (!staticSegments_.empty()) {

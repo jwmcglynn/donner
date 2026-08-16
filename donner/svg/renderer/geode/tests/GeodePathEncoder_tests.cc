@@ -491,7 +491,7 @@ int VerticalWinding(const std::vector<EncodedPath::Curve>& curves, double px, do
 
 }  // namespace
 
-// M3: the vertical (X-monotonic) band set must be populated and produce winding
+// The vertical (X-monotonic) band set must be populated and produce winding
 // numbers consistent with the horizontal set - winding is ray-direction-independent,
 // so a point is inside per the horizontal ray iff it is inside per the vertical ray.
 TEST(GeodePathEncoder, VerticalBandsConsistentWinding) {

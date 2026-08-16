@@ -706,13 +706,13 @@ void LayersPanel::render(EditorApp* liveApp, const ThumbnailTextureProvider& tex
     const bool selected = row.isSelected;
     // Subtle hover/active tint for the row: the stock ImGui header-hover fill is
     // too bright for a dense layer list, so scale its alpha well down. These
-    // derive from the EditorTheme surface ramp (design doc 0054) via the active
+    // derive from the EditorTheme surface ramp via the active
     // ImGui style, preserving the W10 subtle-hover subtlety.
     ImGui::PushStyleColor(ImGuiCol_HeaderHovered,
                           ImGui::GetColorU32(ImGuiCol_HeaderHovered, 0.28f));
     ImGui::PushStyleColor(ImGuiCol_HeaderActive, ImGui::GetColorU32(ImGuiCol_HeaderActive, 0.45f));
     // A truly selected row reads as accent-at-22%-fill rather than the neutral
-    // surface (design doc 0054 decision 6: selection is a tinted fill, never a
+    // surface (selection is a tinted fill, never a
     // solid accent). Only the selected fill is re-tinted; unselected rows keep
     // the neutral ramp, so the accent stays reserved for real selection.
     int pushedRowColors = 2;
@@ -796,7 +796,7 @@ void LayersPanel::render(EditorApp* liveApp, const ThumbnailTextureProvider& tex
     // Subtle partial-selection affordance: a thin accent bar at the row's left
     // edge marks a group that contains the selection, without the loud
     // full-row highlight a real selection gets. The bar uses the real accent
-    // (design doc 0054 selection token), not the neutral header surface.
+    // (the EditorTheme selection token), not the neutral header surface.
     if (partialOnly) {
       const ImU32 accent = WithAlpha(EditorTheme::Active().accentDefault, 230);
       const ImVec2 barMin(ImGui::GetWindowPos().x + ImGui::GetWindowContentRegionMin().x,

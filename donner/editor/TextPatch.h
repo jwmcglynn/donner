@@ -7,9 +7,6 @@
 /// describes the corresponding byte-level splice in the source text.
 /// The main loop drains pending patches after `flushFrame()` and before
 /// rendering the source pane.
-///
-/// See `docs/design_docs/0049-structured_text_editing.md` M3 for the full
-/// design.
 
 #include <cstddef>
 #include <cstdint>

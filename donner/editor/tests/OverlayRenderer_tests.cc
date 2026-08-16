@@ -117,15 +117,14 @@ MATCHER(DimmedGrayBlueStrokePixel,
 
 // OverlayRenderer is hard to unit-test in isolation because the canvas
 // primitives end up in a renderer-owned frame buffer that we don't read
-// back at the unit-test layer. The test plan in `editor.md` calls these
-// out as belonging to the framebuffer-golden tier (M4).
+// back at the unit-test layer; that coverage belongs to the
+// framebuffer-golden tier.
 //
 // What we *can* unit-test cheaply: that calling `drawChrome` does not
 // crash on any combination of (no document / document but no selection /
 // document with valid selection / document with stale selection
 // referencing a since-deleted entity). The full visual verification
-// happens in the example viewer and in the future M4 framebuffer
-// golden tests.
+// happens in the example viewer and in the framebuffer golden tests.
 
 TEST(OverlayRendererTest, NoOpWithoutDocument) {
   EditorApp app;
@@ -1514,7 +1513,7 @@ TEST(OverlayRendererTest, ToleratesStaleSelectionAfterReload) {
   SUCCEED();
 }
 
-// Design doc 0033 §M7: `captureChromeSnapshot` + `drawChromeFromSnapshot`
+// `captureChromeSnapshot` + `drawChromeFromSnapshot`
 // must produce byte-identical pixels to the live `drawChromeWithTransform`
 // path. Pins the invariant - any future divergence (e.g. a missed paint
 // or a stroke-width regression) trips this test before it ships.

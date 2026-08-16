@@ -78,7 +78,7 @@ TEST(ViewportStateTest, ResetTo100PercentMakesOneDocUnitOneScreenPixel) {
 }
 
 // ---------------------------------------------------------------------------
-// Round-trip invariants - the core property the design doc commits to.
+// Round-trip invariants - the core property `ViewportState` commits to.
 // ---------------------------------------------------------------------------
 
 TEST(ViewportStateTest, ScreenToDocumentRoundTripsAt100Percent) {

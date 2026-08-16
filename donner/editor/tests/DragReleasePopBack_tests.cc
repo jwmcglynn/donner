@@ -107,7 +107,7 @@ TEST(DragReleasePopBackTest, CompositorProducesCorrectOutputAtEveryPhase) {
   viewport.devicePixelRatio = 1.0;
 
   // Translate canvas coords into the promoted bitmap's local pixel
-  // space. Under M2B (design doc 0033) the promoted bitmap is
+  // space. The promoted bitmap is
   // intrinsic-sized - its pixel (0,0) corresponds to canvas
   // `canvasOffset`, not canvas origin. For canvas-sized bitmaps the
   // offset is Zero and the conversion is a no-op.
@@ -489,7 +489,7 @@ TEST(DragReleasePopBackTest, EndToEndFrameSequence) {
   CompositedPresentation state;
 
   // Track bitmaps that would be "uploaded to GL" in the real main loop.
-  // Post-§M2C the editor uploads N tile textures (segments + layers) rather
+  // The editor uploads N tile textures (segments + layers) rather
   // than a bg/promoted/fg trio; for this test we still capture the live
   // promoted-layer bitmap directly off the compositor since that's what
   // `snapshotTilesForUpload` would copy into the corresponding tile.

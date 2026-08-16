@@ -62,7 +62,7 @@ const std::map<std::string_view, ImageComparisonParams>& geodeOverrides() {
   // Every entry is a Geode-only divergence we should eventually root-cause
   // and fix, at which point the entry should shrink or disappear.
   static const std::map<std::string_view, ImageComparisonParams> overrides = {
-      // feImage pulls the external SVG through the Phase 7 filter engine,
+      // feImage pulls the external SVG through the filter engine,
       // which rasterizes the nested document into an intermediate texture
       // before compositing. The embedded SVG differs along its edges, so
       // the per-pixel threshold alone isn't enough. Keep the measured

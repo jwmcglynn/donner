@@ -5,7 +5,7 @@
 /// that tools and the main loop interact with. Owns the `AsyncSVGDocument`,
 /// the active selection, and (eventually) the active tool dispatcher.
 ///
-/// Per `docs/design_docs/0020-editor.md`, canvas, tool, and application writes
+/// Canvas, tool, and application writes
 /// flow through `EditorApp::applyMutation()`. Tools never call mutation methods
 /// such as `SVGElement::setTransform()` on attached live elements directly -
 /// they build `EditorCommand`s and hand them to the editor. Incremental
@@ -108,7 +108,7 @@ public:
   [[nodiscard]] const AsyncSVGDocument& document() const { return document_; }
 
   // ---------------------------------------------------------------------------
-  // File I/O (M7: Save)
+  // File I/O (Save)
   // ---------------------------------------------------------------------------
 
   /// The file path this document was loaded from, or `std::nullopt` if it
@@ -326,8 +326,7 @@ public:
 
   /// All currently-selected elements, in selection order. Empty when
   /// nothing is selected. Multi-element selections come from
-  /// shift+click and marquee-drag (Milestone 4 of the editor UX
-  /// design doc).
+  /// shift+click and marquee-drag.
   [[nodiscard]] const std::vector<svg::SVGElement>& selectedElements() const { return selection_; }
 
   /// Single-element accessor for back-compat with single-select call
@@ -549,10 +548,10 @@ public:
   void redo();
 
   // ---------------------------------------------------------------------------
-  // Structured editing (M5)
+  // Structured editing
   // ---------------------------------------------------------------------------
 
-  /// Enable or disable the structured-editing incremental path (M5).
+  /// Enable or disable the structured-editing incremental path.
   /// When enabled, text edits that land inside a known attribute value
   /// dispatch to `SetAttributeCommand` instead of `ReplaceDocumentCommand`,
   /// preserving tree identity. Defaults to `true`; the flag remains as a

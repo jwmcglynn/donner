@@ -202,7 +202,7 @@ struct GeodeDevice::Impl {
   ScopedWgpuHandle<wgpu::TextureView> dummyClipMaskTextureView;
   ScopedWgpuHandle<wgpu::Sampler> dummyClipMaskSampler;
 
-  // M6 Bullet 2: 1-element instance-transform buffer bound by every
+  // 1-element instance-transform buffer bound by every
   // non-instanced solid fill. Uploaded once at CreateHeadless time,
   // never modified. Layout matches the WGSL `InstanceTransform`
   // struct: two vec4f rows carrying the identity affine

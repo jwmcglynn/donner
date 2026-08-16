@@ -115,7 +115,7 @@ struct ArrayStrideInfo {
 
 /**
  * Like \ref ComputeArrayStride, additionally reporting whether the uniform 16-byte rule raised
- * the natural stride - the flag packet 5's emitters consult to decide whether a padded element
+ * the natural stride - the flag backend emitters consult to decide whether a padded element
  * wrapper is required.
  *
  * @param arrayType Sized or runtime array type.

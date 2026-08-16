@@ -3,8 +3,7 @@
 ///
 /// Headless editing substrate for the ImGui TextEditor widget.
 ///
-/// Commit 1 of the three-commit TextEditor refactor
-/// (docs/design_docs/0051-text_editor_refactor.md). `TextEditorCore` owns the
+/// Part of the TextEditor refactor. `TextEditorCore` owns the
 /// editable buffer, cursor/selection state, undo history, and syntax
 /// colorizer. It exposes every editing operation as a plain C++ method and
 /// has zero dependency on `imgui.h`, fonts, or any rendering layer.

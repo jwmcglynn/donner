@@ -1,5 +1,5 @@
 /// @file
-/// The Metal solid-fill vertical slice (design 0053 phase 3): renders the shared baseline scene
+/// The Metal solid-fill vertical slice: renders the shared baseline scene
 /// through donner::gpu::metal::MetalDevice with the MSL emitted from the solid-fill IR program,
 /// and compares pixels against the frozen baseline captured from the current production
 /// renderer.

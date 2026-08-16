@@ -9,9 +9,9 @@ GeodeImagePipeline::GeodeImagePipeline(const wgpu::Device& device, wgpu::Texture
     : colorFormat_(colorFormat) {
   // ----- Bind group layout -----
   // Seven bindings: uniform buffer, sampler, sampled content texture,
-  // sampled luminance-mask texture (Phase 3c), sampled parent-
-  // snapshot texture (Phase 3d blend modes), sampled Phase 3b
-  // clip-mask texture, clip-mask sampler. Optional textures always
+  // sampled luminance-mask texture (`<mask>`), sampled parent-snapshot
+  // texture (blend modes), sampled path-clip mask texture, clip-mask
+  // sampler. Optional textures always
   // bind some valid view so the layout stays stable across every draw.
   wgpu::BindGroupLayoutEntry entries[7] = {};
 

@@ -37,7 +37,7 @@ struct MandatoryHintDetectorStats {
  * features that force isolated compositing.
  *
  * A `RenderingInstanceComponent` qualifies for a mandatory hint when any of the
- * following is true (per the design doc § Mandatory hints):
+ * following is true:
  *   - `isolatedLayer == true` (covers `opacity < 1`, `mix-blend-mode`,
  *     `isolation: isolate`).
  *   - `resolvedFilter.has_value()` (SVG `filter`).

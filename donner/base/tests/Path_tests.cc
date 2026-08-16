@@ -1460,8 +1460,8 @@ TEST(Path, StrokeToFillSquareCapDiagonal) {
   EXPECT_EQ(rayCastWinding(filled, {13.0, 13.0}), 0);
 }
 
-// (Duplicate `rayCastWinding` removed during the Phase 2C merge - the canonical
-// definition lives at line ~860 and is shared by all tests below.)
+// (Duplicate `rayCastWinding` removed - the canonical definition lives at
+// line ~860 and is shared by all tests below.)
 
 TEST(Path, StrokeToFillRoundJoin) {
   // L-shape: (0,0) -> (10,0) -> (10,10), stroked with width 2 and a round
@@ -1559,7 +1559,7 @@ TEST(Path, StrokeToFillMiterLimitFallbackMatchesBevelJoin) {
 }
 
 TEST(Path, StrokeToFillSharpOpenCornerMiterJoin) {
-  // Phase 2C: inverted V (M 0 100 L 50 0 L 100 100) with a SHARP inside
+  // Inverted V (M 0 100 L 50 0 L 100 100) with a SHARP inside
   // corner at the apex. Before the fix, `emitJoin`'s inside-turn branch
   // emitted a single line across the overlap, creating a self-intersecting
   // polygon that neither NonZero nor EvenOdd could render cleanly - visible

@@ -28,7 +28,7 @@
  *
  * A handful of tests still carry **per-backend goldens** under
  * `testdata/golden/geode/`:
- *   - Gradient coverage: the Phase 2E/F gradient pipeline landed before
+ *   - Gradient coverage: the gradient pipeline landed before
  *     the shared test fixtures did, so the `linear_gradient_*` and
  *     `radial_gradient_*` goldens have no tiny-skia counterparts yet.
  *   - Patterns: `geode_pattern_*` test the tile-capture path, which
@@ -284,7 +284,7 @@ TEST_F(RendererGeodeGoldenTests, StrokingStrokewidth) {
 }
 
 // ----------------------------------------------------------------------------
-// Linear gradient coverage (Phase 2E). These exercise the gradient-fill
+// Linear gradient coverage. These exercise the gradient-fill
 // pipeline end-to-end: `GradientSystem` resolution in the driver →
 // `RendererGeode::drawPaintedPath` → `GeoEncoder::fillPathLinearGradient` →
 // `shaders/slug_gradient.wgsl`.
@@ -325,7 +325,7 @@ TEST_F(RendererGeodeGoldenTests, LinearGradientStroke) {
 }
 
 // ----------------------------------------------------------------------------
-// Radial gradient coverage (Phase 2F). Same end-to-end pipeline as the linear
+// Radial gradient coverage. Same end-to-end pipeline as the linear
 // tests above but exercising the radial branch of `slug_gradient.wgsl` and
 // `RendererGeode::resolveRadialGradientParams`. Sweep / conic gradients are
 // not yet supported because the donner SVG parser does not yet expose them.
@@ -396,7 +396,7 @@ TEST_F(RendererGeodeGoldenTests, RadialGradientStroke) {
 }
 
 // ----------------------------------------------------------------------------
-// `<image>` element round-trips through Phase 2G's textured-quad path.
+// `<image>` element round-trips through the textured-quad path.
 // Both SVGs embed a 2x2 RGBA PNG via a data: URL so external image loading
 // doesn't factor into the test, only the CPU→GPU upload and the blit
 // pipeline.
@@ -430,7 +430,7 @@ TEST_F(RendererGeodeGoldenTests, ImageDataUrlOpacity) {
 }
 
 // ----------------------------------------------------------------------------
-// Pattern fill tests (Phase 2H). Exercise the offscreen tile rendering path
+// Pattern fill tests. Exercise the offscreen tile rendering path
 // and the Slug fill shader's pattern-sampling mode. Tile content is
 // rendered into an intermediate `wgpu::Texture` via a nested `GeoEncoder`,
 // then sampled as the fill paint when the outer path is rasterised.
@@ -471,7 +471,7 @@ TEST_F(RendererGeodeGoldenTests, PatternNonRect) {
 }
 
 // ----------------------------------------------------------------------------
-// Dashed strokes (Phase 2A: stroke-dasharray, stroke-dashoffset, pathLength).
+// Dashed strokes (stroke-dasharray, stroke-dashoffset, pathLength).
 //
 // These exercise `Path::strokeToFill`'s dash splitter, which extracts each
 // on-dash sub-polyline along the source subpath and offsets it independently

@@ -98,7 +98,7 @@ public:
   /// The most recent successful bitmap, regardless of the current status.
   /// Allows UIs to keep showing the last good render while an error chip
   /// covers the new failure - matches the address bar's "keep previous
-  /// document on screen" behavior from the design doc.
+  /// document on screen" behavior.
   [[nodiscard]] const svg::RendererBitmap& lastGoodBitmap() const { return lastGoodBitmap_; }
 
   /// Enable or disable filesystem watch mode. When enabled,

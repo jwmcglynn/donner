@@ -103,7 +103,7 @@ TEST_F(RenderSessionTest, FetchErrorKeepsPreviousBitmap) {
   EXPECT_THAT(bad.message, Not(IsEmpty()));
 
   // But lastGoodBitmap still holds the previous successful frame - this
-  // is the "keep previous document on screen" contract from the design doc.
+  // is the "keep previous document on screen" contract.
   EXPECT_EQ(app.lastGoodBitmap().pixels, goodBytes);
 }
 

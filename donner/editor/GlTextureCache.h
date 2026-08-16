@@ -155,7 +155,7 @@ struct PresentationCoverageDiagnostics {
  * The cache is intentionally dumb: callers decide *when* textures should update; this class only
  * owns the texture names, uploads pixel buffers, and tracks the currently-valid dimensions.
  *
- * Composited preview rendering follows design doc 0033 §M2C: instead of three named bg/promoted/fg
+ * Composited preview rendering is per-tile: instead of three named bg/promoted/fg
  * textures, the cache owns one GL texture per `CompositedTile` (keyed on the tile id), allocated
  * lazily on first upload and freed when the tile leaves the snapshot. The editor's
  * `RenderPanePresenter` iterates `tiles()` in paint order and blits each tile at its

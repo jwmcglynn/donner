@@ -175,7 +175,7 @@ tiny_skia::Path toTinyPath(
 }
 
 // `transformPath` now lives in the shared (text-gated) PlacedTextGeometry header
-// so both backends share one definition; see docs/design_docs/0038.
+// so both backends share one definition.
 
 inline Lengthd toPercent(Lengthd value, bool numbersArePercent) {
   if (!numbersArePercent) {
@@ -1490,7 +1490,7 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
 
   // Text bounding box for objectBoundingBox gradient/pattern mapping - the same
   // shared computation RendererGeode::drawText uses, so the two backends can't
-  // drift on the bbox (see docs/design_docs/0038). Per the SVG spec it uses
+  // drift on the bbox. Per the SVG spec it uses
   // em-box cells from font v-metrics (ascent above baseline, |descent| below),
   // not the raw font size.
   const Box2d textBounds = ComputeTextBounds(textEngine, runs, text.spans, params.viewBox,

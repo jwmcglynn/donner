@@ -1245,7 +1245,7 @@ void OverlayRenderer::drawChromeWithTransform(
     std::span<const svg::SVGElement> sourceHover, const std::optional<Box2d>& cullRectDoc,
     SelectionChromeDetail selectionDetail, const Transform2d& representedDocumentFromLiveDocument) {
   ZoneScopedN("OverlayRenderer::drawChrome");
-  // Route the live path through capture + draw so M7's snapshot
+  // Route the live path through capture + draw so the snapshot
   // implementation is the single source of truth. Same output, same
   // performance characteristics (the capture is straight-line registry
   // reads + a small allocation).

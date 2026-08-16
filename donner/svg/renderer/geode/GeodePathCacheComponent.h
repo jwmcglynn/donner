@@ -2,10 +2,8 @@
 /// @file
 /// Per-entity cache of Geode's CPU encode pipeline output.
 ///
-/// Design doc: docs/design_docs/0030-geode_performance.md §Milestone 2.
-///
 /// `GeodePathEncoder::encode` (cubicToQuadratic → toMonotonic → band
-/// decomposition) is the Tier-3 hot path identified in 0030. Without a
+/// decomposition) is a measured per-frame hot path. Without a
 /// cache it runs every frame for every draw - 132 times per frame for
 /// `lion.svg`. This component holds the encode result across frames so
 /// re-rendering an unchanged document skips the CPU work entirely.

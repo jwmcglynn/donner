@@ -49,7 +49,7 @@ wgpu::ShaderModule createSlugGradientShader(const wgpu::Device& device);
  * stage writes clip coverage into an RGBA8Unorm target.
  * The uniform layout is reduced to just the mvp matrix, viewport size,
  * and fill rule - no paint mode, no pattern, no clip polygon. Used by
- * the Phase 3b path-clipping pipeline to materialise a per-pixel clip
+ * the path-clipping pipeline to materialise a per-pixel clip
  * mask texture that subsequent fill / gradient draws sample as a
  * coverage multiplier.
  */

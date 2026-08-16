@@ -39,12 +39,12 @@ struct LayerResolverStats {
  * Stateless resolver that collapses `CompositorHintComponent` entries into
  * `ComputedLayerAssignmentComponent` assignments, subject to a layer budget.
  *
- * Algorithm (see design doc § Layer Promotion Cascade):
+ * Algorithm:
  *   1. Collect candidates - entities with at least one hint.
  *   2. Mandatory hints are non-contestable; they always take a layer.
  *   3. Rank remaining candidates by total weight descending, ties broken by
  *      numeric entity id ascending (deterministic; draw-order tie-breaking
- *      is a Phase 2 follow-up).
+ *      is a follow-up).
  *   4. Assign consecutive `layerId`s starting at 1, up to `maxLayers`.
  *      Losers have their `ComputedLayerAssignmentComponent` removed (or
  *      never attached).

@@ -643,7 +643,7 @@ FrameDriver InstallFrameDriver(void (*frameFn)(void*), void* userData) {
   // No worker rAF on this engine: Emscripten would fall back to a setTimeout
   // emulation that is not vsync-aligned and is subject to the nested-timer
   // clamp. Drive from the browser main thread's rAF instead and pay one
-  // postMessage per frame (measured at ~40 microseconds in phase 1).
+  // postMessage per frame (measured at ~40 microseconds).
   state.proxyQueue = em_proxying_queue_create();
   if (state.proxyQueue == nullptr) {
     state.driver = FrameDriver::SetTimeoutFallback;

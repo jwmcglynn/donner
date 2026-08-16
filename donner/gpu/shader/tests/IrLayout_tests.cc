@@ -98,7 +98,7 @@ TEST(IrLayoutTests, ArrayStrideInfoReportsUniformPadding) {
       GetShaderResultOrFail(IrType::SizedArray(IrType::Vec4f(), 4), IrType::F32());
 
   // array<f32, 4> in uniform is padded (natural stride 4 -> 16); the emitter obligation flag is
-  // set so packet 5 wraps the element type.
+  // set so the emitter wraps the element type.
   EXPECT_THAT(GetShaderResultOrFail(ComputeArrayStrideInfo(arrayF32, AddressSpace::Uniform)),
               Eq(ArrayStrideInfo{16, true}));
   EXPECT_THAT(GetShaderResultOrFail(ComputeArrayStrideInfo(arrayF32, AddressSpace::Storage)),
