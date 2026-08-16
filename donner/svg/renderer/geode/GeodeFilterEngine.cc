@@ -452,6 +452,45 @@ wgpu::Texture createIntermediateTexture(FilterResourceArena& arena, const wgpu::
   return arena.createTexture(td);
 }
 
+/// Create and explicitly clear an intermediate texture to transparent black.
+///
+/// Newly-created WebGPU textures read as zero, but a pooled texture retains its previous contents.
+/// Filter primitives that short-circuit to transparent output must therefore record a clear before
+/// returning the texture.
+wgpu::Texture createTransparentIntermediateTexture(FilterResourceArena& arena, uint32_t width,
+                                                   uint32_t height, const char* label) {
+  wgpu::TextureDescriptor td{};
+  td.label = wgpuLabel(label);
+  td.size = {width, height, 1};
+  td.format = wgpu::TextureFormat::RGBA8Unorm;
+  td.usage = wgpu::TextureUsage::TextureBinding | wgpu::TextureUsage::StorageBinding |
+             wgpu::TextureUsage::CopySrc | wgpu::TextureUsage::RenderAttachment;
+  td.mipLevelCount = 1;
+  td.sampleCount = 1;
+  td.dimension = wgpu::TextureDimension::_2D;
+  wgpu::Texture texture = arena.createTexture(td);
+  if (!texture) {
+    return {};
+  }
+
+  ScopedWgpuHandle<wgpu::TextureView> view(texture.createView());
+  wgpu::RenderPassColorAttachment color{};
+  color.view = view.get();
+  color.loadOp = wgpu::LoadOp::Clear;
+  color.storeOp = wgpu::StoreOp::Store;
+  color.clearValue = {0.0, 0.0, 0.0, 0.0};
+  color.depthSlice = WGPU_DEPTH_SLICE_UNDEFINED;
+
+  wgpu::RenderPassDescriptor passDesc{};
+  passDesc.label = wgpuLabel("FilterTransparentClearPass");
+  passDesc.colorAttachmentCount = 1;
+  passDesc.colorAttachments = &color;
+  ScopedWgpuHandle<wgpu::RenderPassEncoder> pass(arena.commandEncoder().beginRenderPass(passDesc));
+  pass.get().end();
+
+  return texture;
+}
+
 /// Helper to create a pipeline with a standard (input, output, uniform) bind group layout.
 /// Used by blur, offset, and color-matrix pipelines.
 struct InputOutputUniformPipeline {
@@ -2479,7 +2518,8 @@ wgpu::Texture GeodeFilterEngine::applyConvolveMatrix(
                 << ", divisor=" << divisor << "); outputting transparent black\n";
     }
     // Return a transparent texture (matches CPU reference behavior).
-    return createIntermediateTexture(arena, dev, width, height, "FilterConvolveMatrixTransparent");
+    return createTransparentIntermediateTexture(arena, width, height,
+                                                "FilterConvolveMatrixTransparent");
   }
 
   wgpu::Texture output =
@@ -2558,14 +2598,15 @@ wgpu::Texture GeodeFilterEngine::applyTurbulence(
     const Transform2d& deviceFromFilter) {
   const wgpu::Device& dev = device_.device();
 
-  wgpu::Texture output =
-      createIntermediateTexture(arena, dev, width, height, "FilterTurbulenceOutput");
-
   // Negative baseFrequency is invalid per SVG Filter Effects §15.20.3; produce transparent black
   // (matching resvg/tiny-skia behavior).
   if (primitive.baseFrequencyX < 0.0 || primitive.baseFrequencyY < 0.0) {
-    return output;
+    return createTransparentIntermediateTexture(arena, width, height,
+                                                "FilterTurbulenceTransparent");
   }
+
+  wgpu::Texture output =
+      createIntermediateTexture(arena, dev, width, height, "FilterTurbulenceOutput");
 
   TurbulenceParams params{};
   params.baseFreqX = static_cast<float>(primitive.baseFrequencyX);
@@ -2796,18 +2837,18 @@ wgpu::Texture GeodeFilterEngine::applyDiffuseLighting(
   const uint32_t width = input.getWidth();
   const uint32_t height = input.getHeight();
 
-  wgpu::Texture output =
-      createIntermediateTexture(arena, dev, width, height, "FilterDiffuseLightingOutput");
-
   // Per Filter Effects §15.9, a lighting primitive with no child light source has
   // no defined light and produces transparent-black output. The CPU path matches
   // this (FilterGraphExecutor substitutes a default-constructed graph Image, which
-  // tiny-skia renders as transparent). The fresh intermediate texture is already
-  // transparent, so skip the lighting dispatch entirely rather than fabricating a
-  // head-on distant light (which would render a lit surface).
+  // tiny-skia renders as transparent). Skip the lighting dispatch entirely rather
+  // than fabricating a head-on distant light (which would render a lit surface).
   if (!primitive.light.has_value()) {
-    return output;
+    return createTransparentIntermediateTexture(arena, width, height,
+                                                "FilterDiffuseLightingTransparent");
   }
+
+  wgpu::Texture output =
+      createIntermediateTexture(arena, dev, width, height, "FilterDiffuseLightingOutput");
 
   DiffuseLightingParams params{};
   params.surfaceScale = static_cast<float>(primitive.surfaceScale);
@@ -2908,16 +2949,15 @@ wgpu::Texture GeodeFilterEngine::applySpecularLighting(
   const uint32_t width = input.getWidth();
   const uint32_t height = input.getHeight();
 
+  // Per SVG spec, specularExponent must be in [1, 128]: values < 1 produce
+  // transparent output, values > 128 clamp to 128 (matches tiny-skia).
+  if (primitive.specularExponent < 1.0) {
+    return createTransparentIntermediateTexture(arena, width, height,
+                                                "FilterSpecularLightingTransparent");
+  }
+
   wgpu::Texture output =
       createIntermediateTexture(arena, dev, width, height, "FilterSpecularLightingOutput");
-
-  // Per SVG spec, specularExponent must be in [1, 128]: values < 1 produce
-  // transparent output, values > 128 clamp to 128 (matches tiny-skia). The fresh
-  // intermediate texture is already transparent, so for exponent < 1 we skip the
-  // lighting dispatch entirely.
-  if (primitive.specularExponent < 1.0) {
-    return output;
-  }
 
   SpecularLightingParams params{};
   params.surfaceScale = static_cast<float>(primitive.surfaceScale);

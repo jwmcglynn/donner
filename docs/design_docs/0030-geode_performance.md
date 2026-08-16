@@ -343,7 +343,8 @@ algorithm.
     through the pool from Milestone 4. Filter arena textures now return to
     the device-shared pool after frame submission, so an unchanged repeat
     blur drops from eight texture creations to zero without permitting
-    unsafe same-frame reuse.
+    unsafe same-frame reuse. Transparent short-circuit results use an explicit
+    render-pass clear because reacquired WebGPU textures retain prior contents.
   - [x] Merge the per-primitive `CommandEncoder` + `queue().submit()` pairs
     into the outer frame encoder. A Gaussian-blur counter regression records
     the filter source render, compute passes, and composite in one frame
