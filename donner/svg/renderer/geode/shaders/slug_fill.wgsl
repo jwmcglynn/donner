@@ -96,7 +96,7 @@ struct InstanceRecord {
   // Pattern alpha multiplier (e.g., fill-opacity). 1.0 for solid paint.
   patternOpacity: f32,
   _pad0: u32,
-  // Band-grid parameters (0041 §8.1): the horizontal grid bins the path's
+  // Band-grid parameters: the horizontal grid bins the path's
   // Y-range into `hBandCount` strips of `hStride` starting at `yBase`; the
   // vertical grid bins the X-range into `vBandCount` strips of `vStride`
   // starting at `xBase`. Two vec4-aligned rows.
@@ -125,6 +125,9 @@ struct InstanceRecord {
   vGridBase: u32,
   hRefsBase: u32,
   vRefsBase: u32,
+  // Tail padding to 256 bytes so record-slab slot offsets satisfy the
+  // baseline min_storage_buffer_offset_alignment (256).
+  _padTail: array<vec4f, 3>,
 };
 @group(0) @binding(7) var<storage, read> instances: array<InstanceRecord>;
 
@@ -132,7 +135,7 @@ struct InstanceRecord {
 @group(0) @binding(8) var<storage, read> vBands: array<Band>;
 @group(0) @binding(9) var<storage, read> vCurveData: array<f32>;
 
-// Combined dense band-grid storage (0041 §8.1): hBandGrid, vBandGrid,
+// Combined dense band-grid storage: hBandGrid, vBandGrid,
 // hCurveIndices, and vCurveIndices all live in ONE u32 array. Each
 // instance record carries the four element bases into this array, so a
 // batch (or a resident slot) binds one contiguous range instead of four
