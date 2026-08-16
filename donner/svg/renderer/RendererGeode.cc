@@ -1983,12 +1983,41 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
   /// 2). Returns null for a null source (editor/overlay draws stay on the
   /// arena path). The slot lives on a `GeodeResidentPathComponent` beside
   /// the M2 encode cache and is invalidated by the same listener.
+  /// Document-scoped resident slab: one growable chunk-set per registry,
+  /// bound to the current device. The slab is swapped when the document is
+  /// rendered by a different device, and freed with the registry.
+  /// Returns the registry's resident slab, shared so slots can keep the
+  /// old slab alive across a device change.
+  std::shared_ptr<geode::GeodeResidentSlab> residentSlab(Registry& registry) {
+    auto* slabPtr = registry.ctx().find<std::shared_ptr<geode::GeodeResidentSlab>>();
+    if (slabPtr == nullptr) {
+      registry.ctx().emplace<std::shared_ptr<geode::GeodeResidentSlab>>(nullptr);
+      slabPtr = registry.ctx().find<std::shared_ptr<geode::GeodeResidentSlab>>();
+    }
+    std::shared_ptr<geode::GeodeResidentSlab>& slab = *slabPtr;
+    if (!slab || slab->owningDeviceId() != device->deviceId()) {
+      slab = std::make_shared<geode::GeodeResidentSlab>(device->deviceId());
+    }
+    return slab;
+  }
+
   geode::GeodeResidentSlot* residentFillSlot(EntityHandle source) {
     if (!source) {
       return nullptr;
     }
     ensureCacheInvalidationWired(*source.registry());
-    return &source.get_or_emplace<geode::GeodeResidentPathComponent>().fillSlot;
+    geode::GeodeResidentSlot& slot =
+        source.get_or_emplace<geode::GeodeResidentPathComponent>().fillSlot;
+    std::shared_ptr<geode::GeodeResidentSlab> slab = residentSlab(*source.registry());
+    if (slot.slab.get() != slab.get()) {
+      // The registry's slab changed (device change): the slot's borrowed
+      // buffer may reference a released chunk, so its residence is stale
+      // and must re-upload from the new slab. reset() keeps the old slab
+      // reference alive via this slot until the swap below.
+      slot.reset();
+    }
+    slot.slab = std::move(slab);
+    return &slot;
   }
 
   /// GPU-residence slot for `source`'s stroke encode. See `residentFillSlot`.
@@ -1997,7 +2026,14 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
       return nullptr;
     }
     ensureCacheInvalidationWired(*source.registry());
-    return &source.get_or_emplace<geode::GeodeResidentPathComponent>().strokeSlot;
+    geode::GeodeResidentSlot& slot =
+        source.get_or_emplace<geode::GeodeResidentPathComponent>().strokeSlot;
+    std::shared_ptr<geode::GeodeResidentSlab> slab = residentSlab(*source.registry());
+    if (slot.slab.get() != slab.get()) {
+      slot.reset();
+    }
+    slot.slab = std::move(slab);
+    return &slot;
   }
 
   /// GPU-residence slot for `source`'s gradient-painted fill (design doc
@@ -2009,7 +2045,14 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
       return nullptr;
     }
     ensureCacheInvalidationWired(*source.registry());
-    return &source.get_or_emplace<geode::GeodeResidentPathComponent>().gradientFillSlot;
+    geode::GeodeResidentGradientSlot& slot =
+        source.get_or_emplace<geode::GeodeResidentPathComponent>().gradientFillSlot;
+    std::shared_ptr<geode::GeodeResidentSlab> slab = residentSlab(*source.registry());
+    if (slot.slab.get() != slab.get()) {
+      slot.reset();
+    }
+    slot.slab = std::move(slab);
+    return &slot;
   }
 
   /// Emit a solid fill, preferring the persistent-residence path when a
@@ -2707,6 +2750,11 @@ void RendererGeode::draw(SVGDocument& document) {
   // change between draws would silently leave a stale encode in
   // `GeodePathCacheComponent`.
   impl_->ensureCacheInvalidationWired(document.registry());
+
+  // Merge the previous frame's freed slab ranges before any draw records
+  // against this frame's command buffer (a range freed this frame is never
+  // reused this frame; see GeodeResidentSlab::beginFrame).
+  impl_->residentSlab(document.registry())->beginFrame();
 
   RendererDriver driver(*this, impl_->verbose);
   driver.draw(document);
