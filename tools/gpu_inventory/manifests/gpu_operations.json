@@ -736,7 +736,8 @@
         "CommandEncoder",
         "ComputePipeline",
         "Device",
-        "Texture"
+        "Texture",
+        "TextureDescriptor"
       ]
     },
     "donner/svg/renderer/geode/GeodeImagePipeline.cc": {
