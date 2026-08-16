@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <iostream>
 #include <numbers>
 #include <unordered_map>
@@ -1702,11 +1703,27 @@ wgpu::Texture GeodeFilterEngine::execute(const svg::components::FilterGraph& gra
       Box2d blurClipRect;
       if (ctmAxisAligned && (sx > 0.0 || sy > 0.0)) {
         const Box2d pixelAABB = deviceFromFilter.transformBox(nodeSubregion);
-        blurClipRect = Box2d(
+        const Box2d rounded(
             Vector2d(std::floor(pixelAABB.topLeft.x), std::floor(pixelAABB.topLeft.y)),
             Vector2d(std::ceil(pixelAABB.bottomRight.x), std::ceil(pixelAABB.bottomRight.y)));
-        blurClip = &blurClipRect;
-        clipMergedIntoBlur = true;
+        // The folded clip rides i32 uniform fields. A pathological CTM (a
+        // huge scale, or a near-singular transform producing inf/NaN
+        // corners) would make the double to int32 conversion undefined
+        // behavior; on x86 it collapses to INT32_MIN, which turns the clip
+        // into "reject every pixel" and blanks the whole blur output. Fold
+        // only when every corner fits; otherwise keep the dedicated clip
+        // pass, whose f32 uniforms degrade gracefully at extreme
+        // magnitudes. NaN corners fail fitsInt32 and take the same path.
+        const auto fitsInt32 = [](double v) {
+          return v >= static_cast<double>(std::numeric_limits<int32_t>::min()) &&
+                 v <= static_cast<double>(std::numeric_limits<int32_t>::max());
+        };
+        if (fitsInt32(rounded.topLeft.x) && fitsInt32(rounded.topLeft.y) &&
+            fitsInt32(rounded.bottomRight.x) && fitsInt32(rounded.bottomRight.y)) {
+          blurClipRect = rounded;
+          blurClip = &blurClipRect;
+          clipMergedIntoBlur = true;
+        }
       }
       if (nodeLinearRGB) {
         wgpu::Texture linearInput =

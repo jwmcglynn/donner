@@ -2740,21 +2740,19 @@ void RendererGeode::beginFrame(const RenderViewport& viewport) {
   impl_->frameFinishedEncoders.clear();
   impl_->geometryDebugEdges.clear();
 
-  // Reset the filter engine's per-frame uniform scratch cursor. The
-  // engine's pass bind groups stay cached across frames (their keys are
-  // stable resource identities), which is what keeps steady-state filter
-  // passes from recreating bind groups every frame.
+  // Reset the filter engine's per-frame state: the uniform scratch cursor
+  // (slots reuse stable buffer+offset pairs across frames) and the
+  // frame-scoped chunk pass counter (so the 64-pass command-buffer bound
+  // spans every filter graph in this frame). Pass bind groups are created
+  // per pass; the pooled textures they bind rotate across frames, so their
+  // identities are not stable cache keys. Runs BEFORE the texture pool's
+  // stale-bucket eviction below.
   if (impl_->device) {
     impl_->device->filterEngine().beginFrame();
   }
 
   if (impl_->texturePool) {
     impl_->texturePool->beginFrame();
-  }
-  if (impl_->filterEngine) {
-    // Reset the engine's frame-scoped chunk pass counter so the 64-pass
-    // command-buffer bound spans every filter graph in this frame.
-    impl_->filterEngine->beginFrame();
   }
   ++impl_->currentFrameIndex;
 

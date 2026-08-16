@@ -19,9 +19,18 @@ struct BlurParams {
   kernel_type: u32,// 0 = Gaussian, 1 = Box
   box_left: i32,   // box mode: number of samples to the negative side
   box_right: i32,  // box mode: number of samples to the positive side
-  clip_min: vec2i, // optional output clip (see clip_active)
-  clip_max: vec2i, // optional output clip: zero pixels with coord < min or >= max
+  // Optional output clip rectangle in output-texture pixel coordinates,
+  // folded into the final blur pass so a dedicated subregion-clip pass is
+  // unnecessary: pixels with coord < clip_min or coord >= clip_max write
+  // transparent black instead of the blurred value (see apply_clip).
+  clip_min: vec2i,
+  clip_max: vec2i,
+  // 1 = apply the clip rectangle above; 0 = clip disabled (whole-texture
+  // blur, the fields above are ignored). A u32 rather than a bool per WGSL
+  // uniform layout rules.
   clip_active: u32,
+  // Explicit tail padding so the struct size matches the C++ BlurParams
+  // (uniform buffers round the struct to 16-byte alignment).
   _pad1: u32,
 }
 

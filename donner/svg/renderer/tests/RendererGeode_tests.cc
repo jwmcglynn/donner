@@ -871,6 +871,56 @@ TEST_F(RendererGeodeTest, DrawEntityRangeInvalidatesCachedFillEncodeAfterPathMut
          "attribute changed.";
 }
 
+/// The resident gradient draw skips its uniform rewrite when the
+/// GradientUniforms block is byte-identical to the previous frame, so every
+/// gradient property the shader consumes must flow through that block for
+/// the skip to be sound. Pin the end-to-end behavior with pixels: an
+/// unchanged document renders identically through the steady-state resident
+/// path, and a stop-color edit (no geometry change, so only the
+/// uniform-comparison path can carry it) must change the next frame.
+TEST_F(RendererGeodeTest, GradientStopEditInvalidatesResidentGradientDraw) {
+  ParseWarningSink warningSink;
+  auto maybeDocument = parser::SVGParser::ParseSVG(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64">
+             <defs>
+               <linearGradient id="g">
+                 <stop id="s0" offset="0" stop-color="#ff0000"/>
+                 <stop id="s1" offset="1" stop-color="#ff0000"/>
+               </linearGradient>
+             </defs>
+             <rect width="64" height="64" fill="url(#g)"/>
+           </svg>)svg",
+      warningSink);
+  ASSERT_FALSE(maybeDocument.hasError()) << maybeDocument.error();
+  SVGDocument document = std::move(maybeDocument).result();
+
+  RendererGeode renderer = createRenderer();
+  renderer.draw(document);
+  const RendererBitmap first = renderer.takeSnapshot();
+  ASSERT_FALSE(first.empty());
+  EXPECT_THAT(pixelAt(first, 32, 32), RgbaEq(255, 0, 0, 255));
+
+  // Unchanged second frame: the resident path skips the uniform write and
+  // must render identically.
+  renderer.draw(document);
+  const RendererBitmap second = renderer.takeSnapshot();
+  ASSERT_FALSE(second.empty());
+  EXPECT_THAT(pixelAt(second, 32, 32), RgbaEq(255, 0, 0, 255));
+
+  auto stop0 = document.querySelector("#s0");
+  auto stop1 = document.querySelector("#s1");
+  ASSERT_TRUE(stop0.has_value());
+  ASSERT_TRUE(stop1.has_value());
+  stop0->setAttribute("stop-color", "#00ff00");
+  stop1->setAttribute("stop-color", "#00ff00");
+
+  renderer.draw(document);
+  const RendererBitmap third = renderer.takeSnapshot();
+  ASSERT_FALSE(third.empty());
+  EXPECT_THAT(pixelAt(third, 32, 32), RgbaEq(0, 255, 0, 255))
+      << "A gradient stop edit must invalidate the resident gradient draw's cached uniforms";
+}
+
 TEST_F(RendererGeodeTest, EmbeddedDeviceDrawPathExportsTextureSnapshot) {
   std::shared_ptr<geode::GeodeDevice> host = sharedDevice();
   ASSERT_TRUE(host != nullptr);
