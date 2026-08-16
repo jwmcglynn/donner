@@ -1368,8 +1368,8 @@
           "addressSpace": "storage, read",
           "binding": 7,
           "group": 0,
-          "name": "instanceTransforms",
-          "type": "array<InstanceTransform>"
+          "name": "instances",
+          "type": "array<InstanceRecord>"
         },
         {
           "addressSpace": "storage, read",
@@ -1389,28 +1389,7 @@
           "addressSpace": "storage, read",
           "binding": 10,
           "group": 0,
-          "name": "hBandGrid",
-          "type": "array<u32>"
-        },
-        {
-          "addressSpace": "storage, read",
-          "binding": 11,
-          "group": 0,
-          "name": "vBandGrid",
-          "type": "array<u32>"
-        },
-        {
-          "addressSpace": "storage, read",
-          "binding": 12,
-          "group": 0,
-          "name": "hCurveIndices",
-          "type": "array<u32>"
-        },
-        {
-          "addressSpace": "storage, read",
-          "binding": 13,
-          "group": 0,
-          "name": "vCurveIndices",
+          "name": "gridData",
           "type": "array<u32>"
         }
       ],
@@ -1462,6 +1441,7 @@
       "structs": [
         "Band",
         "FragOutput",
+        "InstanceRecord",
         "InstanceTransform",
         "Quadratic",
         "RayCoverage",

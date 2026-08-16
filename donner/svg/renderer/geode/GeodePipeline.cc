@@ -57,9 +57,12 @@ GeodePipeline::GeodePipeline(const wgpu::Device& device, wgpu::TextureFormat col
   entries[6].visibility = wgpu::ShaderStage::Fragment;
   entries[6].sampler.type = wgpu::SamplerBindingType::Filtering;
 
-  // Per-instance affine transforms (vertex-visible only).
+  // Per-instance records: the vertex stage reads the transform + bounding
+  // polygon, and the fragment stage reads color / rule / grid / geometry
+  // bases through a flat instance-id varying, so overlapping batched
+  // instances still blend in painter order.
   entries[7].binding = 7;
-  entries[7].visibility = wgpu::ShaderStage::Vertex;
+  entries[7].visibility = wgpu::ShaderStage::Vertex | wgpu::ShaderStage::Fragment;
   entries[7].buffer.type = wgpu::BufferBindingType::ReadOnlyStorage;
   entries[7].buffer.minBindingSize = 0;
 
@@ -76,26 +79,19 @@ GeodePipeline::GeodePipeline(const wgpu::Device& device, wgpu::TextureFormat col
   entries[9].buffer.type = wgpu::BufferBindingType::ReadOnlyStorage;
   entries[9].buffer.minBindingSize = 0;
 
+  // Analytic dual-ray fill (0041 §8): the four dense grid arrays
+  // (hBandGrid, vBandGrid, hCurveIndices, vCurveIndices) share ONE
+  // combined u32 storage binding; instance records carry the element
+  // bases. This keeps the fragment stage at six storage bindings, under
+  // the baseline WebGPU limit of eight per stage.
   entries[10].binding = 10;
   entries[10].visibility = wgpu::ShaderStage::Fragment;
   entries[10].buffer.type = wgpu::BufferBindingType::ReadOnlyStorage;
   entries[10].buffer.minBindingSize = 0;
 
-  entries[11].binding = 11;
-  entries[11].visibility = wgpu::ShaderStage::Fragment;
-  entries[11].buffer.type = wgpu::BufferBindingType::ReadOnlyStorage;
-  entries[11].buffer.minBindingSize = 0;
-
-  for (int i = 12; i <= 13; ++i) {
-    entries[i].binding = static_cast<uint32_t>(i);
-    entries[i].visibility = wgpu::ShaderStage::Fragment;
-    entries[i].buffer.type = wgpu::BufferBindingType::ReadOnlyStorage;
-    entries[i].buffer.minBindingSize = 0;
-  }
-
   wgpu::BindGroupLayoutDescriptor bglDesc = {};
   bglDesc.label = wgpuLabel("GeodeSlugFillBGL");
-  bglDesc.entryCount = 14;
+  bglDesc.entryCount = 11;
   bglDesc.entries = entries;
   bindGroupLayout_.reset(device.createBindGroupLayout(bglDesc));
 

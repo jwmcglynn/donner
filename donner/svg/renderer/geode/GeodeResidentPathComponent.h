@@ -272,7 +272,7 @@ struct GeodeResidentSlot {
   /// `GeodeResidentSlab` chunk. Region offsets are ABSOLUTE buffer
   /// offsets. Layout (each region offset satisfies the binding's
   /// alignment requirement):
-  ///   [ bands | curves | hRefs | vBands | vCurves | vRefs | hGrid | vGrid | uniform ]
+  ///   [ bands | curves | hRefs | vBands | vCurves | vRefs | hGrid | vGrid | uniform | instanceRecord ]
   wgpu::Buffer buffer;
   /// Slab that owns `buffer`; null until residence is established. Held
   /// by shared_ptr so a device change (which swaps the registry's slab)
@@ -307,7 +307,8 @@ struct GeodeResidentSlot {
   Region vRefs;    ///< Vertical curve-reference SSBO (binding 13).
   Region hGrid;    ///< Horizontal band grid (binding 10).
   Region vGrid;    ///< Vertical band grid (binding 11).
-  Region uniform;  ///< Per-draw uniform block (binding 0, 256-aligned).
+  Region uniform;  ///< Batch-level uniform block (binding 0, 256-aligned).
+  Region instanceRecord;  ///< Per-instance record (binding 7).
 
   uint32_t vertexCount = 0;  ///< Triangle-fan draw count generated from vertex_index.
 
@@ -344,6 +345,11 @@ struct GeodeResidentSlot {
   /// belt-and-suspenders for the in-place stroke-slot rebuild path.
   const void* encodedKey = nullptr;
   uint64_t encodedFingerprint = 0;
+
+  /// Bytes last written to the instance-record region. A draw whose
+  /// recomputed record matches this skips the `writeBuffer` entirely
+  /// (steady-state frames write zero record bytes).
+  std::vector<uint8_t> lastRecord;
 
   /// Bytes last written to the uniform region. A draw whose recomputed
   /// uniform matches this skips the `writeBuffer` entirely (steady-state
