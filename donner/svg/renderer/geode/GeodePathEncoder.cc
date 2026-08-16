@@ -172,9 +172,20 @@ std::optional<BandSpan> curveBandSpan(const CurveRange& range, const Box2d& boun
   const float lo = byY ? range.yMin : range.xMin;
   const float hi = byY ? range.yMax : range.xMax;
 
-  const int first = std::clamp(static_cast<int>(std::floor((lo - spanBase) / bandStride)), 0,
+  // The fragment shader recomputes this same quotient in f32, where WGSL
+  // division may err by ~2.5 ULP, so a sample within a few ULP of a band
+  // boundary can index the adjacent cell relative to this exact CPU
+  // binning. Pad the span by a boundary-proximity epsilon in quotient
+  // space, in both directions. Over-inclusion is cost-only: the shader
+  // re-filters every referenced curve by exact axis ownership, so an extra
+  // band reference can never change pixels, while a missing one leaves a
+  // coverage hole.
+  constexpr float kBandQuotientPad = 1e-3f;
+  const float qLo = (lo - spanBase) / bandStride;
+  const float qHi = (hi - spanBase) / bandStride;
+  const int first = std::clamp(static_cast<int>(std::floor(qLo - kBandQuotientPad)), 0,
                                static_cast<int>(bandCount) - 1);
-  const int last = std::clamp(static_cast<int>(std::floor((hi - spanBase) / bandStride)), first,
+  const int last = std::clamp(static_cast<int>(std::floor(qHi + kBandQuotientPad)), first,
                               static_cast<int>(bandCount) - 1);
   return BandSpan{static_cast<uint16_t>(first), static_cast<uint16_t>(last)};
 }
@@ -565,6 +576,8 @@ void bandCurves(const std::vector<CurveWithRange>& allCurves, const Box2d& bound
                 std::vector<EncodedPath::Curve>& outCurves, std::vector<uint32_t>& outCurveIndices,
                 uint16_t bandCount, std::vector<uint32_t>& outGrid,
                 EncodedPath::AxisStats& outStats) {
+  // The fixed-size count/scratch arrays below index up to bandCount.
+  UTILS_RELEASE_ASSERT(bandCount <= kMaxBands);
   // Dense cell → band-slot map (kNoBand for empty cells). Sized to the full grid even when
   // some cells are empty, so the fragment shader can index it directly by position.
   outGrid.assign(bandCount, EncodedPath::kNoBand);

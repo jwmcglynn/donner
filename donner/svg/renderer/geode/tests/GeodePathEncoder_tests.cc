@@ -216,7 +216,13 @@ TEST(GeodePathEncoder, CurveEndingOnBandBoundaryIsReferencedByFollowingBand) {
     const float curveMax = std::max({curve.p0y, curve.p1y, curve.p2y});
     const float gridPosition = (curveMax - encoded.yBase) / encoded.hStride;
     const float roundedPosition = std::round(gridPosition);
-    if (std::abs(gridPosition - roundedPosition) > 1e-6f || roundedPosition <= 0.0f ||
+    // Select curves ending ON or NEAR a boundary. The 1e-4 tolerance is
+    // deliberately inside the encoder's quotient-space pad (kBandQuotientPad,
+    // 1e-3, in GeodePathEncoder.cc), which guarantees any such curve is
+    // referenced from BOTH adjacent cells; a wider tolerance than the pad
+    // would assert more than the encoder provides and fail on a
+    // legitimately-binned curve.
+    if (std::abs(gridPosition - roundedPosition) > 1e-4f || roundedPosition <= 0.0f ||
         roundedPosition >= static_cast<float>(encoded.hBandCount)) {
       continue;
     }
