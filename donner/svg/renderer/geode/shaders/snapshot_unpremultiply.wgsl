@@ -24,7 +24,11 @@
 
 @compute @workgroup_size(8, 8)
 fn main(@builtin(global_invocation_id) gid: vec3u) {
-  let size = textureDimensions(input_tex);
+  // Clamp to BOTH textures: the staging output is pooled, so if a caller ever
+  // dispatched with mismatched sizes, writing only the input-covered region
+  // would silently leave stale pixels from a previous snapshot in the rest of
+  // the pooled texture instead of raising a validation error.
+  let size = min(textureDimensions(input_tex), textureDimensions(output_tex));
   if (any(gid.xy >= size)) {
     return;
   }
