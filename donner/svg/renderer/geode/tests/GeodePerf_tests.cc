@@ -638,6 +638,18 @@ TEST_F(GeodePerfTest, Moderate_NoDirtyPath_ZeroTextures) {
                                      "Layer push/pop should draw from the M4.2 texture pool.";
 }
 
+TEST_F(GeodePerfTest, GaussianBlur_NoDirtyPath_ZeroTextures) {
+  auto device = sharedDevice();
+  ASSERT_TRUE(device) << "GeodeDevice::CreateHeadless failed";
+
+  const geode::GeodeCounters c = countersForSecondRender(kFilteredBlurSvg, device);
+  printCounters("GaussianBlur_NoDirtyPath_ZeroTextures (frame2)", c);
+
+  EXPECT_EQ(c.textureCreates, 0u)
+      << "Filter intermediate textures should return to the device-shared texture pool after the "
+         "frame submits.";
+}
+
 TEST_F(GeodePerfTest, Lion_NoDirtyPath_ZeroTextures) {
   auto device = sharedDevice();
   ASSERT_TRUE(device) << "GeodeDevice::CreateHeadless failed";
