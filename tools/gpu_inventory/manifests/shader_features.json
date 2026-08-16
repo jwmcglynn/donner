@@ -1751,6 +1751,49 @@
         "Uniforms",
         "VertexOutput"
       ]
+    },
+    "donner/svg/renderer/geode/shaders/snapshot_unpremultiply.wgsl": {
+      "bindings": [
+        {
+          "binding": 0,
+          "group": 0,
+          "name": "input_tex",
+          "type": "texture_2d<f32>"
+        },
+        {
+          "binding": 1,
+          "group": 0,
+          "name": "output_tex",
+          "type": "texture_storage_2d<rgba8unorm, write>"
+        }
+      ],
+      "builtins": [
+        "global_invocation_id"
+      ],
+      "entryPoints": [
+        {
+          "name": "main",
+          "stage": "compute",
+          "workgroupSize": [
+            "8",
+            "8"
+          ]
+        }
+      ],
+      "features": [
+        "for",
+        "if",
+        "let",
+        "loop",
+        "min",
+        "return",
+        "round",
+        "textureDimensions",
+        "textureLoad",
+        "textureStore",
+        "var"
+      ],
+      "structs": []
     }
   }
 }

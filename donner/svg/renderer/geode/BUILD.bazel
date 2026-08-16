@@ -474,6 +474,17 @@ embed_resources(
     visibility = ["//donner/svg/renderer:__subpackages__"],
 )
 
+# Snapshot readback: GPU-side unpremultiply of a render target into a
+# straight-alpha RGBA8 staging texture, then copied into the readback buffer.
+embed_resources(
+    name = "snapshot_unpremultiply_wgsl",
+    header_output = "embed_resources/SnapshotUnpremultiplyWgsl.h",
+    resources = {
+        "kSnapshotUnpremultiplyWgsl": "shaders/snapshot_unpremultiply.wgsl",
+    },
+    visibility = ["//donner/svg/renderer:__subpackages__"],
+)
+
 donner_cc_library(
     name = "geode_shaders",
     srcs = ["GeodeShaders.cc"],
@@ -505,6 +516,7 @@ donner_cc_library(
         ":slug_fill_wgsl",
         ":slug_gradient_wgsl",
         ":slug_mask_wgsl",
+        ":snapshot_unpremultiply_wgsl",
         "//third_party/webgpu-cpp:webgpu_cpp",
     ],
 )
@@ -649,6 +661,31 @@ donner_multi_transitioned_test(
     size = "small",
     testonly = 1,
     dep = ":geode_embed_tests_impl",
+    opens_gpu_device = True,
+    renderer_backend = "geode",
+)
+
+# GPU-side snapshot unpremultiplication: byte parity between the compute
+# readback path and the CPU copy reference path.
+donner_cc_test(
+    name = "geode_snapshot_readback_tests_impl",
+    srcs = ["tests/GeodeSnapshotReadback_tests.cc"],
+    target_compatible_with = _GEODE_ONLY,
+    deps = [
+        ":geode_device",
+        ":geode_wgpu_util",
+        "//donner/base",
+        "//donner/base:gtest_timeout_main",
+        "//donner/svg/renderer:renderer_geode",
+        "//donner/svg/renderer:renderer_interface",
+    ],
+)
+
+donner_multi_transitioned_test(
+    name = "geode_snapshot_readback_tests",
+    size = "small",
+    testonly = 1,
+    dep = ":geode_snapshot_readback_tests_impl",
     opens_gpu_device = True,
     renderer_backend = "geode",
 )

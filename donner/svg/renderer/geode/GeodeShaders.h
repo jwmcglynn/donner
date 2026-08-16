@@ -424,4 +424,23 @@ wgpu::ShaderModule createFilterSubregionClipShader(const wgpu::Device& device);
  */
 wgpu::ShaderModule createFilterColorSpaceConvertShader(const wgpu::Device& device);
 
+/**
+ * Compile the snapshot-unpremultiply compute shader for the given device.
+ *
+ * The WGSL source is embedded at build time from
+ * `shaders/snapshot_unpremultiply.wgsl` via the `embed_resources()` Bazel
+ * rule. The shader reads a premultiplied-alpha render target and writes
+ * straight-alpha RGBA8 into a storage texture, replacing the CPU per-pixel
+ * unpremultiply loop in `RendererGeode` snapshot readback. The stored bytes
+ * replicate the CPU round-half-up formula exactly.
+ *
+ * Bind group layout:
+ * - `@group(0) @binding(0) var input_tex: texture_2d<f32>;`
+ * - `@group(0) @binding(1) var output_tex: texture_storage_2d<rgba8unorm, write>;`
+ *
+ * @return A valid shader module on success, or an empty module if compilation
+ *   failed (errors go to the device's uncaptured error callback).
+ */
+wgpu::ShaderModule createSnapshotUnpremultiplyShader(const wgpu::Device& device);
+
 }  // namespace donner::geode

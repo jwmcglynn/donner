@@ -64,4 +64,12 @@ TEST(GeodeShaders, FilterTileCompiles) {
   ASSERT_TRUE(static_cast<bool>(module)) << "feTile shader failed to compile";
 }
 
+TEST(GeodeShaders, SnapshotUnpremultiplyCompiles) {
+  auto geodeDevice = GeodeDevice::CreateHeadless();
+  ASSERT_NE(geodeDevice, nullptr);
+
+  wgpu::ShaderModule module = createSnapshotUnpremultiplyShader(geodeDevice->device());
+  ASSERT_TRUE(static_cast<bool>(module)) << "snapshot unpremultiply shader failed to compile";
+}
+
 }  // namespace donner::geode

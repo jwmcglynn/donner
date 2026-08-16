@@ -12,6 +12,8 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <map>
+#include <mutex>
 #include <string_view>
 #include <thread>
 
@@ -217,6 +219,14 @@ struct GeodeDevice::Impl {
   /// Built lazily on first `maskPipeline()` access - see the header.
   std::unique_ptr<GeodeMaskPipeline> maskPipeline;
   std::unique_ptr<GeodeFilterEngine> filterEngine;
+  /// Built lazily on first `snapshotReadbackPipeline()` access - see the header.
+  std::unique_ptr<GeodeSnapshotReadbackPipeline> snapshotReadbackPipeline;
+
+  /// Size-keyed free pool of GPU snapshot readback resources (staging texture,
+  /// view, and map-readable buffer). One entry per (width, height) so repeat
+  /// snapshots at the same dimensions allocate nothing (design doc 0030 M4.2).
+  std::mutex snapshotReadbackPoolMutex;
+  std::map<std::pair<uint32_t, uint32_t>, SnapshotReadbackResources> snapshotReadbackPool;
 };
 
 namespace {
@@ -570,6 +580,74 @@ GeodeMaskPipeline& GeodeDevice::maskPipeline() const {
 }
 GeodeFilterEngine& GeodeDevice::filterEngine() const {
   return *impl_->filterEngine;
+}
+GeodeSnapshotReadbackPipeline& GeodeDevice::snapshotReadbackPipeline() const {
+  if (!impl_->snapshotReadbackPipeline) {
+    // Lazy: only snapshot readback consumes this pipeline, so renderers that
+    // never call takeSnapshot() avoid the compile cost.
+    impl_->snapshotReadbackPipeline = std::make_unique<GeodeSnapshotReadbackPipeline>(device_);
+  }
+  return *impl_->snapshotReadbackPipeline;
+}
+
+SnapshotReadbackResources GeodeDevice::acquireSnapshotReadbackResources(uint32_t width,
+                                                                        uint32_t height) {
+  const std::pair<uint32_t, uint32_t> key(width, height);
+  {
+    std::lock_guard<std::mutex> lock(impl_->snapshotReadbackPoolMutex);
+    auto it = impl_->snapshotReadbackPool.find(key);
+    if (it != impl_->snapshotReadbackPool.end()) {
+      SnapshotReadbackResources result = std::move(it->second);
+      impl_->snapshotReadbackPool.erase(it);
+      return result;
+    }
+  }
+
+  // First use at this size: allocate the staging texture, its view, and the
+  // map-readable readback buffer. Bytes-per-row must be 256-aligned per the
+  // WebGPU texture-to-buffer copy rules.
+  SnapshotReadbackResources resources;
+  resources.width = width;
+  resources.height = height;
+
+  wgpu::TextureDescriptor td = {};
+  td.label = wgpuLabel("RendererGeodeReadbackStaging");
+  td.size = {width, height, 1};
+  td.format = wgpu::TextureFormat::RGBA8Unorm;
+  td.usage = wgpu::TextureUsage::StorageBinding | wgpu::TextureUsage::CopySrc;
+  td.mipLevelCount = 1;
+  td.sampleCount = 1;
+  td.dimension = wgpu::TextureDimension::_2D;
+  resources.staging.reset(device_.createTexture(td));
+  if (resources.staging) {
+    resources.stagingView.reset(resources.staging.get().createView());
+    countTexture();
+  }
+
+  const uint32_t bytesPerRow = (width * 4u + 255u) & ~255u;
+  wgpu::BufferDescriptor bd = {};
+  bd.label = wgpuLabel("RendererGeodeReadback");
+  bd.size = static_cast<uint64_t>(bytesPerRow) * static_cast<uint64_t>(height);
+  bd.usage = wgpu::BufferUsage::CopyDst | wgpu::BufferUsage::MapRead;
+  resources.readback.reset(device_.createBuffer(bd));
+  if (resources.readback) {
+    countBuffer();
+  }
+
+  if (resources.empty()) {
+    // Partial allocation failure: release what was created without pooling it.
+    resources = SnapshotReadbackResources{};
+  }
+  return resources;
+}
+
+void GeodeDevice::releaseSnapshotReadbackResources(SnapshotReadbackResources resources) {
+  if (resources.empty()) {
+    return;
+  }
+  const std::pair<uint32_t, uint32_t> key(resources.width, resources.height);
+  std::lock_guard<std::mutex> lock(impl_->snapshotReadbackPoolMutex);
+  impl_->snapshotReadbackPool.insert_or_assign(key, std::move(resources));
 }
 const wgpu::Instance& GeodeDevice::instance() const {
   return impl_->instance;

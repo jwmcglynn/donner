@@ -24,6 +24,30 @@ class GeodeGradientPipeline;
 class GeodeImagePipeline;
 class GeodeMaskPipeline;
 class GeodeFilterEngine;
+class GeodeSnapshotReadbackPipeline;
+
+/**
+ * Move-only resource set for one GPU snapshot unpremultiply readback: a
+ * straight-alpha staging texture, its view, and a map-readable readback
+ * buffer. Acquired from and returned to the per-device pool keyed by size,
+ * so repeat snapshots at the same dimensions allocate nothing (design doc
+ * 0030 Milestone 4.2 pooling).
+ */
+struct SnapshotReadbackResources {
+  /// Staging texture the compute pass writes the unpremultiplied result into.
+  ScopedWgpuHandle<wgpu::Texture> staging;
+  /// View of `staging`, kept with the pooled entry so it is created once.
+  ScopedWgpuHandle<wgpu::TextureView> stagingView;
+  /// Map-readable buffer the staging texture is copied into.
+  ScopedWgpuHandle<wgpu::Buffer> readback;
+  /// Pool key: staging texture width in pixels.
+  uint32_t width = 0;
+  /// Pool key: staging texture height in pixels.
+  uint32_t height = 0;
+
+  /// True when any required handle is missing; an empty set cannot be used.
+  [[nodiscard]] bool empty() const { return !staging || !stagingView || !readback; }
+};
 
 /**
  * Configuration for embedding Geode into a host application that already owns a
@@ -400,6 +424,29 @@ public:
   /// GPU filter-graph executor. Owns ~15 compute pipelines for SVG
   /// filter primitives.
   GeodeFilterEngine& filterEngine() const;
+  /// Snapshot-unpremultiply compute pipeline. Built lazily on first access so
+  /// consumers that never read back a snapshot avoid the compile cost.
+  GeodeSnapshotReadbackPipeline& snapshotReadbackPipeline() const;
+
+  /**
+   * Acquire the pooled readback resource set for a GPU snapshot readback at
+   * the given size, allocating it on first use. Repeated snapshots at the
+   * same dimensions reuse the pooled entry, so steady-state snapshot readback
+   * allocates nothing (design doc 0030 Milestone 4.2 pooling).
+   *
+   * The caller owns the returned set until `releaseSnapshotReadbackResources`
+   * returns it to the pool, or until the set is destroyed unpooled. An empty
+   * set means allocation failed.
+   */
+  SnapshotReadbackResources acquireSnapshotReadbackResources(uint32_t width, uint32_t height);
+
+  /**
+   * Return a readback resource set acquired from
+   * `acquireSnapshotReadbackResources` to the device pool for reuse. The
+   * returned set must be unmapped. Do not call this after the readback map
+   * was cancelled and the buffer destroyed; drop the set instead.
+   */
+  void releaseSnapshotReadbackResources(SnapshotReadbackResources resources);
   /// Framebuffer checkerboard underlay pipeline used by the editor's direct
   /// presentation path. Built lazily on first access - only the editor draws
   /// it, so headless/WASM consumers never pay the compile cost.
