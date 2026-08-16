@@ -54,6 +54,10 @@ class GeodeDevice;
  * rendered by a second device gets a fresh slab, and the old chunks are
  * released without touching the old device's objects (WebGPU retains any
  * still-referenced buffers through submitted command buffers).
+ *
+ * Not thread-safe: allocate/free/beginFrame mutate the free list and bump
+ * cursors without locking. The renderer serializes one frame per device at
+ * a time, so a document's slab is only touched from one thread.
  */
 class GeodeResidentSlab {
 public:
