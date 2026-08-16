@@ -305,6 +305,14 @@ py_test(
         # whole-app worker the default: wasm 11,124,823 raw / 4,443,900 gzip,
         # js 168,939 raw / 47,708 gzip, package 11,335,146 raw. A gate with
         # megabytes of slack does not catch the regression it exists for.
+        #
+        # Geode perf stack retune: the GPU-side snapshot readback adds
+        # deliberate renderer code to the editor package, and the emscripten
+        # glue grows with it. Measured at this layer: js 170,862 raw /
+        # 48,316 gzip (main measured 48,284 gzip, 16 bytes under the old
+        # budget, so the gate could no longer absorb intended growth).
+        # Budget keeps about 1 percent headroom over the final stack
+        # measurement of 48,319 gzip.
         "--max-wasm-raw-bytes",
         "11240000",
         "--max-wasm-gzip-bytes",
@@ -316,7 +324,7 @@ py_test(
         "--max-js-raw-bytes",
         "171000",
         "--max-js-gzip-bytes",
-        "48300",
+        "48800",
         "--max-total-raw-bytes",
         "11450000",
         "--expected-js-property",
