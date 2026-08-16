@@ -1998,6 +1998,13 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
     if (!slab || slab->owningDeviceId() != device->deviceId()) {
       slab = std::make_shared<geode::GeodeResidentSlab>(device->deviceId());
     }
+    // Merge the previous frame's freed ranges, at most once per frame (the
+    // slab gates on the index). Gating here rather than at one draw entry
+    // point covers every path that can record resident draws, including
+    // multi-document tile frames that bypass draw(), and keeps a repeated
+    // draw() of the same document within one frame from prematurely
+    // recycling ranges its own recorded draws still reference.
+    slab->beginFrame(currentFrameIndex);
     return slab;
   }
 
@@ -2751,10 +2758,9 @@ void RendererGeode::draw(SVGDocument& document) {
   // `GeodePathCacheComponent`.
   impl_->ensureCacheInvalidationWired(document.registry());
 
-  // Merge the previous frame's freed slab ranges before any draw records
-  // against this frame's command buffer (a range freed this frame is never
-  // reused this frame; see GeodeResidentSlab::beginFrame).
-  impl_->residentSlab(document.registry())->beginFrame();
+  // Freed slab ranges merge lazily inside residentSlab(), gated to once
+  // per frame, so every resident-slot access (this draw, tile frames,
+  // repeated draws) shares one merge point; see GeodeResidentSlab::beginFrame.
 
   RendererDriver driver(*this, impl_->verbose);
   driver.draw(document);

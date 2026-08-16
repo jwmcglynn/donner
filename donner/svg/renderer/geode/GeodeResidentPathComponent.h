@@ -35,20 +35,23 @@ namespace donner::geode {
 class GeodeDevice;
 
 /**
- * Document-scoped suballocation slab for GPU residence (design doc 0030
- * wave 2 follow-up, Phase 2 scene data).
+ * Document-scoped suballocation slab for GPU residence.
  *
- * Wave 2 gave every cached path its own combined GPU buffer, so a
- * first frame allocated one buffer per resident slot (Lion: 133). The slab
- * replaces those with sub-ranges of a small number of growable chunk
- * buffers owned by the document's registry context, cutting first-frame
- * `bufferCreates` to one chunk per growth step (1 to 2 for typical
- * documents).
+ * Per-slot residence previously gave every cached path its own combined GPU
+ * buffer, so a first frame allocated one buffer per resident slot (Lion:
+ * 133). The slab replaces those with sub-ranges of a small number of
+ * growable chunk buffers owned by the document's registry context, cutting
+ * first-frame `bufferCreates` to one chunk per growth step (1 to 2 for
+ * typical documents).
  *
  * Allocations are bump-placed and returned through a first-fit free list,
  * so a geometry edit that re-uploads a slot reuses the freed range. Each
  * chunk's bytes are accounted in the device's live-resident-bytes gauge on
- * creation and released when the slab is destroyed with its registry.
+ * creation and released when the slab is destroyed with its registry. Note
+ * the gauge therefore reports slab CAPACITY, not live payload bytes: it
+ * grows when a chunk is created and never shrinks on slot reset, which is
+ * the right shape for leak detection but over-reads against the previous
+ * per-slot accounting.
  *
  * The slab is bound to one device (`GeodeDevice::deviceId()`): a document
  * rendered by a second device gets a fresh slab, and the old chunks are
@@ -85,13 +88,28 @@ public:
   uint64_t owningDeviceId() const { return owningDeviceId_; }
 
   /// Merge the previous frame's freed ranges into the reusable free list.
-  /// The renderer calls this once per frame (from `RendererGeode::draw`)
-  /// BEFORE any draws are recorded. Freed ranges must NOT be reused within
-  /// the frame that freed them: a re-upload that reuses its own just-freed
-  /// range would overwrite the geometry before the already-recorded draws
-  /// of the same frame read it (the resident slots hold one buffer range
-  /// per slot, not one buffer per draw).
-  void beginFrame() {
+  /// Gated on `frameIndex` (the renderer's frame counter) so the merge runs
+  /// at most once per frame no matter how many times the renderer touches
+  /// the slab: the accessor calls this on every slot lookup, which covers
+  /// every draw entry point (full-document draws and multi-document
+  /// tile/thumbnail frames alike) without trusting any single call site.
+  ///
+  /// Freed ranges must NOT be reused within the frame that freed them: a
+  /// re-upload that reuses its own just-freed range would overwrite the
+  /// geometry before the already-recorded draws of the same frame read it
+  /// (the resident slots hold one buffer range per slot, not one buffer per
+  /// draw). Merging at the first touch of frame N is safe because ranges
+  /// pending at that point were freed no later than frame N-1, whose
+  /// command buffer was submitted at its endFrame; a second renderer on the
+  /// same device has its own frame counter, and a stale-index skip only
+  /// defers the merge (the safe direction). Frames on one device are
+  /// serialized by contract, so no merge can run under another renderer's
+  /// unsubmitted frame.
+  void beginFrame(uint64_t frameIndex) {
+    if (frameIndex == lastMergedFrame_) {
+      return;
+    }
+    lastMergedFrame_ = frameIndex;
     for (const FreeRange& range : pendingFrees_) {
       auto it = freeRanges_.begin();
       while (it != freeRanges_.end() &&
@@ -230,6 +248,9 @@ private:
   };
 
   uint64_t owningDeviceId_ = 0;
+  /// Frame index of the last pending-free merge; ~0 = never merged. See
+  /// beginFrame().
+  uint64_t lastMergedFrame_ = ~uint64_t{0};
   std::vector<Chunk> chunks_;
   std::vector<FreeRange> freeRanges_;
   std::vector<FreeRange> pendingFrees_;

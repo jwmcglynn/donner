@@ -41,6 +41,14 @@ constexpr uint64_t kStorageOffsetAlignment = 256u;
 // Uniform buffer bind-group offset: same 256-byte default across
 // wgpu-native backends (`minUniformBufferOffsetAlignment`).
 constexpr uint64_t kUniformOffsetAlignment = 256u;
+// The resident slab allocates slot ranges aligned only to
+// kStorageOffsetAlignment, while the region layout inside a slot uses the
+// per-region constant; absolute offsets stay valid for uniform bindings
+// only while the slab's allocation alignment also satisfies the uniform
+// alignment. Pin the coupling so a future divergence fails at compile time
+// instead of as a device-dependent binding validation error.
+static_assert(kStorageOffsetAlignment % kUniformOffsetAlignment == 0,
+              "resident slab allocation alignment must satisfy uniform binding alignment");
 
 /// Layout of the per-draw uniform buffer (must match shaders/slug_fill.wgsl).
 ///
