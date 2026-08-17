@@ -169,6 +169,61 @@ TEST(RendererPublicApiTest, DrawProducesSnapshotAndPng) {
   EXPECT_GT(std::filesystem::file_size(outputPath), 0u);
 }
 
+TEST(RendererPublicApiTest, SnapshotReportsAndReturnsStraightAlpha) {
+  // Backends composite in premultiplied space but publish straight alpha, so a
+  // half-covered pixel has to come back carrying its full-strength color. A
+  // 50%-opaque `#ff8000` fill pins all three channels to distinct values, which
+  // makes both ways of getting the conversion wrong land somewhere different:
+  //
+  //   correct (straight)          (255, 128, 0, 128)
+  //   conversion dropped (premul) (128,  64, 0, 128)
+  //   conversion applied twice    (255, 255, 0, 128)
+  //
+  // Green is the channel that separates all three, so a failure message quoting
+  // it says which mistake happened. Alpha is identical under every convention
+  // and only proves the fill landed at all.
+  SVGDocument document = ParseDocument(R"svg(
+      <svg xmlns="http://www.w3.org/2000/svg" width="4" height="4" viewBox="0 0 4 4">
+        <rect width="4" height="4" fill="#ff8000" fill-opacity="0.5" />
+      </svg>
+    )svg");
+
+  Renderer renderer;
+  renderer.draw(document);
+
+  const RendererBitmap snapshot = NormalizeSnapshot(renderer.takeSnapshot());
+  ASSERT_FALSE(snapshot.empty());
+  EXPECT_EQ(snapshot.alphaType, AlphaType::Unpremultiplied)
+      << "snapshots publish straight alpha; consumers branch on this field";
+
+  // Center of the fill, away from any edge coverage.
+  const std::array<uint8_t, 4> pixel = PixelAt(snapshot, 2, 2);
+  const int red = pixel[0];
+  const int green = pixel[1];
+  const int blue = pixel[2];
+  const int alpha = pixel[3];
+
+  EXPECT_GE(alpha, 120) << "fill did not land; RGBA=" << red << "," << green << "," << blue << ","
+                        << alpha;
+  EXPECT_LE(alpha, 136) << "fill did not land; RGBA=" << red << "," << green << "," << blue << ","
+                        << alpha;
+
+  // Bands are wide enough to absorb backend rounding and still miss both
+  // failure modes by more than 50 units.
+  EXPECT_GE(green, 112) << "green below the straight-alpha value: the premultiplied-to-straight "
+                           "conversion looks skipped. RGBA="
+                        << red << "," << green << "," << blue << "," << alpha;
+  EXPECT_LE(green, 144) << "green above the straight-alpha value: the premultiplied-to-straight "
+                           "conversion looks applied twice. RGBA="
+                        << red << "," << green << "," << blue << "," << alpha;
+  EXPECT_GE(red, 240)
+      << "red lost its full-strength value, so the snapshot is still premultiplied. "
+         "RGBA="
+      << red << "," << green << "," << blue << "," << alpha;
+  EXPECT_LE(blue, 8) << "blue should stay at the fill's zero. RGBA=" << red << "," << green << ","
+                     << blue << "," << alpha;
+}
+
 TEST(RendererPublicApiTest, ContextOwnedFontManagerSurvivesRendererLifecycle) {
   SVGDocument document = ParseDocument(R"svg(
       <svg xmlns="http://www.w3.org/2000/svg" width="16" height="8">
