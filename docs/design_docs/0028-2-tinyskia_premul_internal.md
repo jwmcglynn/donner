@@ -67,10 +67,19 @@ their per-case pixel budget after the change, in both the `max` and
 | painting/marker/target-with-subpaths-1 | 100 | 0 | 25453 |
 
 Three renderer goldens with a zero-tolerance budget also fail, the same three
-the 2026-04 run named: `MinimalClosedCubic2x2` (4 pixels),
-`MinimalClosedCubic5x3` (9 pixels), `BigLightningGlowNoFilterCrop` (446
-pixels). The claim that those failures no longer reproduce is wrong; they
-reproduce exactly.
+the 2026-04 run named. The claim that those failures no longer reproduce is
+wrong; they reproduce exactly. All three are alpha-preserving RGB shifts at
+antialiased edges:
+
+| Golden | Pixels over budget | Pixels changed | Max alpha delta | Max visible error over white |
+| --- | --- | --- | --- | --- |
+| MinimalClosedCubic2x2 | 4 of 0 allowed | 10 | 0 | 0.85 / 255 |
+| MinimalClosedCubic5x3 | 9 of 0 allowed | 16 | 0 | 0.79 / 255 |
+| BigLightningGlowNoFilterCrop | 446 of 0 allowed | 496 | 0 | 1.91 / 255 |
+
+The canonical case is `MinimalClosedCubic2x2` pixel (4,3): golden
+(17,17,17,6), now (0,0,0,6). That is mechanism 1 in its purest form, and it
+moves the composited-over-white result by 0.40/255.
 
 No other target regresses. Compositor goldens, the dual-path verifier, and
 every GPU-backend variant are unaffected.
@@ -141,6 +150,9 @@ The three marker cases are not marginal in the same sense. Each moves tens of
 thousands of pixels by up to 7-11/255 and moves measurably away from the
 reference. They are, however, entirely attributable to mechanism 2.
 
+Mechanism 1 on its own never exceeded 2/255 of visible error on any case
+measured here, across the reference suite and the renderer goldens.
+
 ## Options
 
 1. **Take the change as implemented.** Accept four suite cases and three
@@ -158,8 +170,9 @@ reference. They are, however, entirely attributable to mechanism 2.
    correct on its own terms. Costs 1.9x on the CPU backend.
 
 Option 2 is the recommendation: it is the only one that buys the speedup
-without paying for mechanism 2, and the residual mechanism 1 cost is four
-pixels on a 2x2 test image plus one suite case at 112/100.
+without paying for mechanism 2, and the residual mechanism 1 cost is bounded
+at 2/255 of visible error: one suite case at 112 against a 100 budget, plus
+three zero-tolerance goldens whose largest visible change is 1.91/255.
 
 ## Notes carried forward from the 2026-04 pass
 
