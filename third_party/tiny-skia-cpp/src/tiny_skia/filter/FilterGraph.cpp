@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstdint>
 #include <map>
+#include <memory>
 
 #include "tiny_skia/filter/Blend.h"
 #include "tiny_skia/filter/ColorMatrix.h"
@@ -220,6 +221,14 @@ struct NodeOutput {
 /// an in-place conversion would either corrupt a later consumer that wants the original space or
 /// force a lossy round trip back to it. The other space is materialized alongside instead, and
 /// only once per buffer.
+///
+/// Residency: a buffer read in both spaces holds a twin, so it costs twice the float pixels of
+/// the equivalent single-space buffer. The bound is one twin per live buffer, and only for the
+/// buffers a graph actually consumes in both spaces, which needs a graph that alternates
+/// interpolation spaces across an edge that is read twice. `FloatPixmap::fromSize` caps a single
+/// buffer at 1 GiB, and that cap applies to the twin independently. In exchange the ordinary
+/// graph, where no buffer is read in two spaces, holds no twin at all and drops the per-node
+/// conversion copies the previous scheme allocated and discarded around every primitive.
 class SpacedPixmap {
  public:
   SpacedPixmap() = default;
@@ -339,8 +348,12 @@ bool executeFilterGraph(Pixmap& sourceGraphic, const FilterGraph& graph) {
   SpacedPixmap* strokePaint = strokePaintStorage.has_value() ? &*strokePaintStorage : nullptr;
   std::optional<SpacedPixmap> transparentPaintInput;
   std::optional<SpacedPixmap> sourceAlpha;
-  std::optional<SpacedPixmap> previousOutput;
-  std::map<std::string, SpacedPixmap> namedBuffers;
+  // A node's result is one buffer even when it is reachable under two names, as `result="x"` is
+  // also the implicit input of the next primitive. Sharing the object rather than copying it
+  // keeps a converted twin shared too, so a result consumed in both spaces converts once no
+  // matter which reference asks first.
+  std::shared_ptr<SpacedPixmap> previousOutput;
+  std::map<std::string, std::shared_ptr<SpacedPixmap>> namedBuffers;
 
   // Subregion tracking.
   const Box fullRegion = Box::fromWH(w, h);
@@ -384,7 +397,7 @@ bool executeFilterGraph(Pixmap& sourceGraphic, const FilterGraph& graph) {
         [&](const auto& v) -> SpacedPixmap* {
           using V = std::decay_t<decltype(v)>;
           if constexpr (std::is_same_v<V, NodeInput::Previous>) {
-            return previousOutput.has_value() ? &previousOutput.value() : source;
+            return previousOutput ? previousOutput.get() : source;
           } else if constexpr (std::is_same_v<V, StandardInput>) {
             if (v == StandardInput::SourceGraphic) {
               return source;
@@ -402,9 +415,9 @@ bool executeFilterGraph(Pixmap& sourceGraphic, const FilterGraph& graph) {
           } else if constexpr (std::is_same_v<V, NodeInput::Named>) {
             auto it = namedBuffers.find(v.name);
             if (it != namedBuffers.end()) {
-              return &it->second;
+              return it->second.get();
             }
-            return previousOutput.has_value() ? &previousOutput.value() : source;
+            return previousOutput ? previousOutput.get() : source;
           } else {
             return source;
           }
@@ -578,12 +591,13 @@ bool executeFilterGraph(Pixmap& sourceGraphic, const FilterGraph& graph) {
 
           } else if constexpr (std::is_same_v<T, graph_primitive::ConvolveMatrix>) {
             auto fpOut = createTransparentFloat(w, h);
-            const int requiredSize = primitive.orderX * primitive.orderY;
-            if (primitive.orderX > 0 && primitive.orderY > 0 &&
-                static_cast<int>(primitive.kernel.size()) == requiredSize &&
+            const bool usable =
+                primitive.orderX > 0 && primitive.orderY > 0 &&
+                static_cast<int>(primitive.kernel.size()) == primitive.orderX * primitive.orderY &&
                 primitive.targetX >= 0 && primitive.targetX < primitive.orderX &&
                 primitive.targetY >= 0 && primitive.targetY < primitive.orderY &&
-                primitive.divisor != 0.0) {
+                primitive.divisor != 0.0;
+            if (usable) {
               ConvolveParams params;
               params.orderX = primitive.orderX;
               params.orderY = primitive.orderY;
@@ -596,7 +610,9 @@ bool executeFilterGraph(Pixmap& sourceGraphic, const FilterGraph& graph) {
               params.preserveAlpha = primitive.preserveAlpha;
               convolveMatrix(input->in(nodeLinearRGB), fpOut, params);
             }
-            output = NodeOutput{std::move(fpOut), nodeLinearRGB};
+            // An unusable kernel leaves transparent black, which carries no color and so needs no
+            // conversion whichever space consumes it.
+            output = NodeOutput{std::move(fpOut), nodeLinearRGB, /*spaceInvariant=*/!usable};
 
           } else if constexpr (std::is_same_v<T, graph_primitive::Morphology>) {
             // SVG Filter Effects §15.4: a negative radius, or a zero radius on both axes
@@ -663,7 +679,8 @@ bool executeFilterGraph(Pixmap& sourceGraphic, const FilterGraph& graph) {
             // Per SVG spec, specularExponent must be in [1, 128].
             // Values < 1: produce transparent output. Values > 128: clamp to 128.
             auto fpOut = createTransparentFloat(w, h);
-            if (primitive.params.specularExponent >= 1.0) {
+            const bool lit = primitive.params.specularExponent >= 1.0;
+            if (lit) {
               auto params = primitive.params;
               params.specularExponent = std::min(params.specularExponent, 128.0);
               if (nodeLinearRGB) {
@@ -673,7 +690,9 @@ bool executeFilterGraph(Pixmap& sourceGraphic, const FilterGraph& graph) {
               }
               specularLighting(input->in(nodeLinearRGB), fpOut, params);
             }
-            output = NodeOutput{std::move(fpOut), nodeLinearRGB};
+            // An out-of-range exponent leaves transparent black, which carries no color and so
+            // needs no conversion whichever space consumes it.
+            output = NodeOutput{std::move(fpOut), nodeLinearRGB, /*spaceInvariant=*/!lit};
 
           } else if constexpr (std::is_same_v<T, graph_primitive::DropShadow>) {
             // Decomposed into flood + composite-in + offset + blur + merge, all run in the
@@ -842,7 +861,7 @@ bool executeFilterGraph(Pixmap& sourceGraphic, const FilterGraph& graph) {
       // published and no conversion is involved.
       applySubregionClipping(output->pixmap, clipRect, w, h, xform, usrSub);
 
-      SpacedPixmap produced(std::move(*output));
+      auto produced = std::make_shared<SpacedPixmap>(std::move(*output));
       if (node.result.has_value()) {
         namedBuffers[*node.result] = produced;
         namedSubregions[*node.result] = nodeSubregion;
@@ -854,7 +873,9 @@ bool executeFilterGraph(Pixmap& sourceGraphic, const FilterGraph& graph) {
 
   // The graph's result leaves in sRGB: this is the single exit conversion, and it is skipped
   // entirely when the last node already worked in sRGB.
-  if (previousOutput.has_value()) {
+  if (previousOutput) {
+    // Nothing reads the graph's buffers after this point, so the last result can be converted in
+    // place and handed over even though other names may still refer to it.
     Pixmap result = previousOutput->release(/*linear=*/false).toPixmap();
     auto srcData = result.data();
     auto dstData = sourceGraphic.data();
