@@ -272,17 +272,17 @@ void expectCaptureReplayIdentity(DirectFn&& direct, CaptureFn&& capture) {
   auto capturePixmap = makePixmap();
   fillBackground(capturePixmap);
   auto captureView = capturePixmap.mutableView();
-  auto result = capture(captureView);
+  SpanCapture recorded;
+  ASSERT_TRUE(capture(recorded, captureView));
 
-  ASSERT_TRUE(result.has_value());
-  EXPECT_TRUE(result->spans.valid());
-  EXPECT_FALSE(result->spans.empty()) << "capture recorded nothing, so identity is vacuous";
+  EXPECT_TRUE(recorded.spans().valid());
+  EXPECT_FALSE(recorded.spans().empty()) << "capture recorded nothing, so identity is vacuous";
   EXPECT_TRUE(pixmapsEqual(directPixmap, capturePixmap)) << "capture altered the cold frame";
 
   auto replayPixmap = makePixmap();
   fillBackground(replayPixmap);
   auto replayView = replayPixmap.mutableView();
-  EXPECT_TRUE(SpanCapture::replay(replayView, result->spans, result->paint));
+  EXPECT_TRUE(SpanCapture::replay(replayView, recorded.spans(), recorded.paint()));
   EXPECT_TRUE(pixmapsEqual(directPixmap, replayPixmap)) << "replay did not reproduce the frame";
 
   auto blank = makePixmap();
@@ -415,9 +415,8 @@ TEST(SpanCaptureTest, FillPathAntiAliased) {
       [&](MutablePixmapView& view) {
         Painter::fillPath(view, path, paint, FillRule::Winding, Transform::identity());
       },
-      [&](MutablePixmapView& view) {
-        return SpanCapture::fillPath(view, path, paint, FillRule::Winding,
-                                     Transform::identity());
+      [&](SpanCapture& recorded, MutablePixmapView& view) {
+        return recorded.fillPath(view, path, paint, FillRule::Winding, Transform::identity());
       });
 }
 
@@ -438,14 +437,14 @@ TEST(SpanCaptureTest, FillPathAntiAliasedKeepsLowAlphaEdgePixels) {
   auto capturePixmap = makePixmap();
   fillBackground(capturePixmap);
   auto captureView = capturePixmap.mutableView();
-  auto result = SpanCapture::fillPath(captureView, path, paint, FillRule::Winding,
-                                      Transform::identity());
-  ASSERT_TRUE(result.has_value());
+  SpanCapture recorded;
+  ASSERT_TRUE(
+      recorded.fillPath(captureView, path, paint, FillRule::Winding, Transform::identity()));
 
   auto replayPixmap = makePixmap();
   fillBackground(replayPixmap);
   auto replayView = replayPixmap.mutableView();
-  ASSERT_TRUE(SpanCapture::replay(replayView, result->spans, result->paint));
+  ASSERT_TRUE(SpanCapture::replay(replayView, recorded.spans(), recorded.paint()));
 
   EXPECT_TRUE(pixmapsEqual(directPixmap, replayPixmap));
 }
@@ -458,9 +457,8 @@ TEST(SpanCaptureTest, FillPathTranslucent) {
       [&](MutablePixmapView& view) {
         Painter::fillPath(view, path, paint, FillRule::Winding, Transform::identity());
       },
-      [&](MutablePixmapView& view) {
-        return SpanCapture::fillPath(view, path, paint, FillRule::Winding,
-                                     Transform::identity());
+      [&](SpanCapture& recorded, MutablePixmapView& view) {
+        return recorded.fillPath(view, path, paint, FillRule::Winding, Transform::identity());
       });
 }
 
@@ -473,9 +471,8 @@ TEST(SpanCaptureTest, FillPathAliased) {
       [&](MutablePixmapView& view) {
         Painter::fillPath(view, path, paint, FillRule::Winding, Transform::identity());
       },
-      [&](MutablePixmapView& view) {
-        return SpanCapture::fillPath(view, path, paint, FillRule::Winding,
-                                     Transform::identity());
+      [&](SpanCapture& recorded, MutablePixmapView& view) {
+        return recorded.fillPath(view, path, paint, FillRule::Winding, Transform::identity());
       });
 }
 
@@ -487,9 +484,8 @@ TEST(SpanCaptureTest, FillPathEvenOdd) {
       [&](MutablePixmapView& view) {
         Painter::fillPath(view, path, paint, FillRule::EvenOdd, Transform::identity());
       },
-      [&](MutablePixmapView& view) {
-        return SpanCapture::fillPath(view, path, paint, FillRule::EvenOdd,
-                                     Transform::identity());
+      [&](SpanCapture& recorded, MutablePixmapView& view) {
+        return recorded.fillPath(view, path, paint, FillRule::EvenOdd, Transform::identity());
       });
 }
 
@@ -501,9 +497,8 @@ TEST(SpanCaptureTest, FillPathWithGradient) {
       [&](MutablePixmapView& view) {
         Painter::fillPath(view, path, paint, FillRule::Winding, Transform::identity());
       },
-      [&](MutablePixmapView& view) {
-        return SpanCapture::fillPath(view, path, paint, FillRule::Winding,
-                                     Transform::identity());
+      [&](SpanCapture& recorded, MutablePixmapView& view) {
+        return recorded.fillPath(view, path, paint, FillRule::Winding, Transform::identity());
       });
 }
 
@@ -516,8 +511,8 @@ TEST(SpanCaptureTest, FillPathTransformedTransformsTheShaderToo) {
       [&](MutablePixmapView& view) {
         Painter::fillPath(view, path, paint, FillRule::Winding, transform);
       },
-      [&](MutablePixmapView& view) {
-        return SpanCapture::fillPath(view, path, paint, FillRule::Winding, transform);
+      [&](SpanCapture& recorded, MutablePixmapView& view) {
+        return recorded.fillPath(view, path, paint, FillRule::Winding, transform);
       });
 }
 
@@ -540,15 +535,15 @@ TEST(SpanCaptureTest, FillPathWithMask) {
   auto capturePixmap = makePixmap();
   fillBackground(capturePixmap);
   auto captureView = capturePixmap.mutableView();
-  auto result = SpanCapture::fillPath(captureView, path, paint, FillRule::Winding,
-                                      Transform::identity(), &(*mask));
-  ASSERT_TRUE(result.has_value());
+  SpanCapture recorded;
+  ASSERT_TRUE(recorded.fillPath(captureView, path, paint, FillRule::Winding, Transform::identity(),
+                                &(*mask)));
   EXPECT_TRUE(pixmapsEqual(directPixmap, capturePixmap));
 
   auto replayPixmap = makePixmap();
   fillBackground(replayPixmap);
   auto replayView = replayPixmap.mutableView();
-  ASSERT_TRUE(SpanCapture::replay(replayView, result->spans, result->paint, &(*mask)));
+  ASSERT_TRUE(SpanCapture::replay(replayView, recorded.spans(), recorded.paint(), &(*mask)));
   EXPECT_TRUE(pixmapsEqual(directPixmap, replayPixmap));
 }
 
@@ -563,8 +558,8 @@ TEST(SpanCaptureTest, FillRectAntiAliasedFractionalEdges) {
       [&](MutablePixmapView& view) {
         Painter::fillRect(view, *rect, paint, Transform::identity());
       },
-      [&](MutablePixmapView& view) {
-        return SpanCapture::fillRect(view, *rect, paint, Transform::identity());
+      [&](SpanCapture& recorded, MutablePixmapView& view) {
+        return recorded.fillRect(view, *rect, paint, Transform::identity());
       });
 }
 
@@ -578,8 +573,8 @@ TEST(SpanCaptureTest, FillRectAliased) {
       [&](MutablePixmapView& view) {
         Painter::fillRect(view, *rect, paint, Transform::identity());
       },
-      [&](MutablePixmapView& view) {
-        return SpanCapture::fillRect(view, *rect, paint, Transform::identity());
+      [&](SpanCapture& recorded, MutablePixmapView& view) {
+        return recorded.fillRect(view, *rect, paint, Transform::identity());
       });
 }
 
@@ -592,11 +587,11 @@ TEST(SpanCaptureTest, FillRectAliasedRecordsASingleRect) {
   auto pixmap = makePixmap();
   fillBackground(pixmap);
   auto view = pixmap.mutableView();
-  auto result = SpanCapture::fillRect(view, *rect, paint, Transform::identity());
+  SpanCapture recorded;
+  ASSERT_TRUE(recorded.fillRect(view, *rect, paint, Transform::identity()));
 
-  ASSERT_TRUE(result.has_value());
-  EXPECT_THAT(opsIn(result->spans), ::testing::ElementsAre(SpanOp::BlitRect));
-  EXPECT_EQ(result->spans.size(), 1u);
+  EXPECT_THAT(opsIn(recorded.spans()), ::testing::ElementsAre(SpanOp::BlitRect));
+  EXPECT_EQ(recorded.spans().size(), 1u);
 }
 
 // ---- Byte identity for strokes and dashes ----
@@ -613,8 +608,8 @@ TEST(SpanCaptureTest, StrokePathThick) {
       [&](MutablePixmapView& view) {
         Painter::strokePath(view, path, paint, stroke, Transform::identity());
       },
-      [&](MutablePixmapView& view) {
-        return SpanCapture::strokePath(view, path, paint, stroke, Transform::identity());
+      [&](SpanCapture& recorded, MutablePixmapView& view) {
+        return recorded.strokePath(view, path, paint, stroke, Transform::identity());
       });
 }
 
@@ -628,8 +623,8 @@ TEST(SpanCaptureTest, StrokePathHairline) {
       [&](MutablePixmapView& view) {
         Painter::strokePath(view, path, paint, stroke, Transform::identity());
       },
-      [&](MutablePixmapView& view) {
-        return SpanCapture::strokePath(view, path, paint, stroke, Transform::identity());
+      [&](SpanCapture& recorded, MutablePixmapView& view) {
+        return recorded.strokePath(view, path, paint, stroke, Transform::identity());
       });
 }
 
@@ -645,8 +640,8 @@ TEST(SpanCaptureTest, StrokePathSubPixelHairlineAdjustsThePaint) {
       [&](MutablePixmapView& view) {
         Painter::strokePath(view, path, paint, stroke, Transform::identity());
       },
-      [&](MutablePixmapView& view) {
-        return SpanCapture::strokePath(view, path, paint, stroke, Transform::identity());
+      [&](SpanCapture& recorded, MutablePixmapView& view) {
+        return recorded.strokePath(view, path, paint, stroke, Transform::identity());
       });
 }
 
@@ -662,8 +657,8 @@ TEST(SpanCaptureTest, StrokePathDashedThick) {
       [&](MutablePixmapView& view) {
         Painter::strokePath(view, path, paint, stroke, Transform::identity());
       },
-      [&](MutablePixmapView& view) {
-        return SpanCapture::strokePath(view, path, paint, stroke, Transform::identity());
+      [&](SpanCapture& recorded, MutablePixmapView& view) {
+        return recorded.strokePath(view, path, paint, stroke, Transform::identity());
       });
 }
 
@@ -679,8 +674,8 @@ TEST(SpanCaptureTest, StrokePathDashedHairline) {
       [&](MutablePixmapView& view) {
         Painter::strokePath(view, path, paint, stroke, Transform::identity());
       },
-      [&](MutablePixmapView& view) {
-        return SpanCapture::strokePath(view, path, paint, stroke, Transform::identity());
+      [&](SpanCapture& recorded, MutablePixmapView& view) {
+        return recorded.strokePath(view, path, paint, stroke, Transform::identity());
       });
 }
 
@@ -694,9 +689,9 @@ TEST(SpanCaptureTest, ReplayWithANewColorMatchesADirectDrawInThatColor) {
   auto capturePixmap = makePixmap();
   fillBackground(capturePixmap);
   auto captureView = capturePixmap.mutableView();
-  auto result = SpanCapture::fillPath(captureView, path, capturePaint, FillRule::Winding,
-                                      Transform::identity());
-  ASSERT_TRUE(result.has_value());
+  SpanCapture recorded;
+  ASSERT_TRUE(
+      recorded.fillPath(captureView, path, capturePaint, FillRule::Winding, Transform::identity()));
 
   auto directPixmap = makePixmap();
   fillBackground(directPixmap);
@@ -706,7 +701,7 @@ TEST(SpanCaptureTest, ReplayWithANewColorMatchesADirectDrawInThatColor) {
   auto replayPixmap = makePixmap();
   fillBackground(replayPixmap);
   auto replayView = replayPixmap.mutableView();
-  ASSERT_TRUE(SpanCapture::replay(replayView, result->spans, replayPaint));
+  ASSERT_TRUE(SpanCapture::replay(replayView, recorded.spans(), replayPaint));
 
   EXPECT_TRUE(pixmapsEqual(directPixmap, replayPixmap));
 }
@@ -716,9 +711,10 @@ TEST(SpanCaptureTest, ReplayWithANewColorMatchesADirectDrawInThatColor) {
 TEST(SpanCaptureTest, CapturesEveryBlitterMethodTheScanConvertersUse) {
   std::set<SpanOp> seen;
 
-  const auto collect = [&seen](std::optional<SpanCapture::Result> result) {
-    ASSERT_TRUE(result.has_value());
-    const auto ops = opsIn(result->spans);
+  SpanCapture recorded;
+  const auto collect = [&seen, &recorded](bool captured) {
+    ASSERT_TRUE(captured);
+    const auto ops = opsIn(recorded.spans());
     seen.insert(ops.begin(), ops.end());
   };
 
@@ -732,27 +728,27 @@ TEST(SpanCaptureTest, CapturesEveryBlitterMethodTheScanConvertersUse) {
   // optimization that emits blitAntiRect and blitV.
   const auto axisRect = Rect::fromXYWH(4.5f, 4.5f, 40.0f, 40.0f);
   ASSERT_TRUE(axisRect.has_value());
-  collect(SpanCapture::fillPath(view, Path::fromRect(*axisRect), paint, FillRule::Winding,
-                                Transform::identity()));
-  collect(SpanCapture::fillPath(view, curved, paint, FillRule::Winding, Transform::identity()));
+  collect(recorded.fillPath(view, Path::fromRect(*axisRect), paint, FillRule::Winding,
+                            Transform::identity()));
+  collect(recorded.fillPath(view, curved, paint, FillRule::Winding, Transform::identity()));
 
   // Aliased rect fill: a single blitRect.
   auto aliasedPaint = paint;
   aliasedPaint.antiAlias = false;
   const auto rect = Rect::fromXYWH(6.0f, 9.0f, 41.0f, 33.0f);
   ASSERT_TRUE(rect.has_value());
-  collect(SpanCapture::fillRect(view, *rect, aliasedPaint, Transform::identity()));
+  collect(recorded.fillRect(view, *rect, aliasedPaint, Transform::identity()));
 
   // Antialiased rect fill with fractional edges: the partial top and bottom rows go through
   // the coverage-run form of the interface.
   const auto fractionalRect = Rect::fromXYWH(6.25f, 9.75f, 41.5f, 33.125f);
   ASSERT_TRUE(fractionalRect.has_value());
-  collect(SpanCapture::fillRect(view, *fractionalRect, paint, Transform::identity()));
+  collect(recorded.fillRect(view, *fractionalRect, paint, Transform::identity()));
 
   // Antialiased hairline stroke: horizontal and vertical coverage pairs.
   Stroke hairline;
   hairline.width = 0.0f;
-  collect(SpanCapture::strokePath(view, curved, paint, hairline, Transform::identity()));
+  collect(recorded.strokePath(view, curved, paint, hairline, Transform::identity()));
 
   EXPECT_THAT(seen, ::testing::IsSupersetOf({SpanOp::BlitH, SpanOp::BlitAntiHFirst,
                                              SpanOp::BlitV, SpanOp::BlitAntiH2,
@@ -770,9 +766,10 @@ TEST(SpanCaptureTest, RejectsTiledDraws) {
   const auto rect = Rect::fromXYWH(1.0f, 1.0f, 100.0f, 2.0f);
   ASSERT_TRUE(rect.has_value());
 
-  EXPECT_FALSE(SpanCapture::fillRect(view, *rect, makeSolidPaint(255, 0, 0, 255),
-                                     Transform::identity())
-                   .has_value());
+  SpanCapture recorded;
+  EXPECT_FALSE(
+      recorded.fillRect(view, *rect, makeSolidPaint(255, 0, 0, 255), Transform::identity()));
+  EXPECT_TRUE(recorded.spans().empty());
 }
 
 TEST(SpanCaptureTest, FullyTransparentPaintPaintsNothing) {
@@ -785,15 +782,15 @@ TEST(SpanCaptureTest, FullyTransparentPaintPaintsNothing) {
   fillBackground(before);
   auto view = pixmap.mutableView();
 
-  auto result = SpanCapture::fillPath(view, path, makeSolidPaint(220, 30, 90, 0),
-                                      FillRule::Winding, Transform::identity());
-  ASSERT_TRUE(result.has_value());
+  SpanCapture recorded;
+  ASSERT_TRUE(recorded.fillPath(view, path, makeSolidPaint(220, 30, 90, 0), FillRule::Winding,
+                                Transform::identity()));
   EXPECT_TRUE(pixmapsEqual(before, pixmap));
 
   auto replayPixmap = makePixmap();
   fillBackground(replayPixmap);
   auto replayView = replayPixmap.mutableView();
-  EXPECT_TRUE(SpanCapture::replay(replayView, result->spans, result->paint));
+  EXPECT_TRUE(SpanCapture::replay(replayView, recorded.spans(), recorded.paint()));
   EXPECT_TRUE(pixmapsEqual(before, replayPixmap));
 }
 

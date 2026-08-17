@@ -149,41 +149,39 @@ void replaySpans(const CapturedSpans& spans, Blitter& blitter);
 /// Draws that record their coverage while painting, and the matching replay.
 ///
 /// Each capture entry point performs the same draw `Painter` would and additionally records
-/// its blit sequence, so the captured frame is a real frame rather than a dry run.
+/// its blit sequence, so the captured frame is a real frame rather than a dry run. One
+/// instance holds the runs of one draw; capturing again into the same instance reuses the
+/// allocation, so a shape that is invalidated and re-captured settles into allocation-free
+/// rebuilds.
 class SpanCapture {
  public:
-  SpanCapture() = delete;
-
-  /// A completed capture pass.
-  struct Result {
-    /// The recorded blit sequence, in device space.
-    CapturedSpans spans;
-
-    /// The paint the draw built its blitter from. A draw may adjust the caller's paint
-    /// (hairline strokes fold their coverage into the shader opacity, and a transformed draw
-    /// transforms the shader), so replaying with this paint is what reproduces the draw.
-    /// Replaying with a different paint of the same kind re-colors the same coverage.
-    Paint paint;
-  };
-
   /// Fills a rectangle, recording its coverage. See Painter::fillRect.
-  static std::optional<Result> fillRect(MutablePixmapView& pixmap, const Rect& rect,
-                                        const Paint& paint,
-                                        Transform transform = Transform::identity(),
-                                        const Mask* mask = nullptr);
+  ///
+  /// @return false if the draw could not be recorded, in which case the pixels are still
+  ///   painted and the recorded runs are discarded.
+  bool fillRect(MutablePixmapView& pixmap, const Rect& rect, const Paint& paint,
+                Transform transform = Transform::identity(), const Mask* mask = nullptr);
 
-  /// Fills a path, recording its coverage. See Painter::fillPath.
-  static std::optional<Result> fillPath(MutablePixmapView& pixmap, const Path& path,
-                                        const Paint& paint, FillRule fillRule,
-                                        Transform transform = Transform::identity(),
-                                        const Mask* mask = nullptr);
+  /// Fills a path, recording its coverage. See Painter::fillPath and fillRect's return value.
+  bool fillPath(MutablePixmapView& pixmap, const Path& path, const Paint& paint, FillRule fillRule,
+                Transform transform = Transform::identity(), const Mask* mask = nullptr);
 
   /// Strokes a path, recording the stroked outline's coverage. Dashing, caps, and joins are
-  /// baked into the recorded runs. See Painter::strokePath.
-  static std::optional<Result> strokePath(MutablePixmapView& pixmap, const Path& path,
-                                          const Paint& paint, const Stroke& stroke,
-                                          Transform transform = Transform::identity(),
-                                          const Mask* mask = nullptr);
+  /// baked into the recorded runs. See Painter::strokePath and fillRect's return value.
+  bool strokePath(MutablePixmapView& pixmap, const Path& path, const Paint& paint,
+                  const Stroke& stroke, Transform transform = Transform::identity(),
+                  const Mask* mask = nullptr);
+
+  /// The runs the last successful capture recorded, in device space.
+  [[nodiscard]] const CapturedSpans& spans() const { return spans_; }
+
+  /// The paint the last successful capture's draw built its blitter from.
+  ///
+  /// A draw may adjust the caller's paint (hairline strokes fold their coverage into the
+  /// shader opacity, and a transformed draw transforms the shader), so replaying with this
+  /// paint is what reproduces the draw. Replaying with a different paint of the same kind
+  /// re-colors the same coverage.
+  [[nodiscard]] const Paint& paint() const { return paint_; }
 
   /// Replays recorded runs onto `pixmap` with `paint`, through the blitter configuration a
   /// direct draw with that paint would build.
@@ -199,6 +197,14 @@ class SpanCapture {
   /// @return false if `spans` is invalid, in which case nothing is drawn.
   static bool replay(MutablePixmapView& pixmap, const CapturedSpans& spans, const Paint& paint,
                      const Mask* mask = nullptr);
+
+ private:
+  /// Runs one capture pass over `draw` and keeps the result if it is replayable.
+  template <typename DrawFn>
+  bool capture(const MutablePixmapView& pixmap, const Paint& paint, DrawFn&& draw);
+
+  CapturedSpans spans_;
+  Paint paint_;
 };
 
 }  // namespace tiny_skia

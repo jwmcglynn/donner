@@ -55,27 +55,6 @@ class SpanCaptureWrapper final : public BlitterWrapper {
   int passes_ = 0;
 };
 
-/// Runs a capture pass over `draw` and packages the result.
-template <typename DrawFn>
-std::optional<SpanCapture::Result> capture(const MutablePixmapView& pixmap, const Paint& paint,
-                                           DrawFn&& draw) {
-  // A tiled draw would record runs from several tile-local origins into one sequence.
-  if (detail::DrawTiler::required(pixmap.width(), pixmap.height())) {
-    return std::nullopt;
-  }
-
-  SpanCapture::Result result;
-  SpanCaptureWrapper wrapper(result.spans, paint);
-  draw(&wrapper);
-
-  if (!result.spans.valid() || !wrapper.singlePass()) {
-    return std::nullopt;
-  }
-
-  result.paint = wrapper.paint();
-  return result;
-}
-
 }  // namespace
 
 void SpanCaptureBlitter::record(const CapturedSpan& span) { out_.spans_.push_back(span); }
@@ -265,29 +244,45 @@ void replaySpans(const CapturedSpans& spans, Blitter& blitter) {
   }
 }
 
-std::optional<SpanCapture::Result> SpanCapture::fillRect(MutablePixmapView& pixmap,
-                                                         const Rect& rect, const Paint& paint,
-                                                         Transform transform,
-                                                         const Mask* mask) {
+template <typename DrawFn>
+bool SpanCapture::capture(const MutablePixmapView& pixmap, const Paint& paint, DrawFn&& draw) {
+  spans_.clear();
+  paint_ = paint;
+
+  // A tiled draw would record runs from several tile-local origins into one sequence.
+  if (detail::DrawTiler::required(pixmap.width(), pixmap.height())) {
+    draw(nullptr);
+    return false;
+  }
+
+  SpanCaptureWrapper wrapper(spans_, paint);
+  draw(&wrapper);
+
+  if (!spans_.valid() || !wrapper.singlePass()) {
+    spans_.clear();
+    return false;
+  }
+
+  paint_ = wrapper.paint();
+  return true;
+}
+
+bool SpanCapture::fillRect(MutablePixmapView& pixmap, const Rect& rect, const Paint& paint,
+                           Transform transform, const Mask* mask) {
   return capture(pixmap, paint, [&](BlitterWrapper* wrapper) {
     Painter::fillRect(pixmap, rect, paint, transform, mask, wrapper);
   });
 }
 
-std::optional<SpanCapture::Result> SpanCapture::fillPath(MutablePixmapView& pixmap,
-                                                         const Path& path, const Paint& paint,
-                                                         FillRule fillRule, Transform transform,
-                                                         const Mask* mask) {
+bool SpanCapture::fillPath(MutablePixmapView& pixmap, const Path& path, const Paint& paint,
+                           FillRule fillRule, Transform transform, const Mask* mask) {
   return capture(pixmap, paint, [&](BlitterWrapper* wrapper) {
     Painter::fillPath(pixmap, path, paint, fillRule, transform, mask, wrapper);
   });
 }
 
-std::optional<SpanCapture::Result> SpanCapture::strokePath(MutablePixmapView& pixmap,
-                                                           const Path& path, const Paint& paint,
-                                                           const Stroke& stroke,
-                                                           Transform transform,
-                                                           const Mask* mask) {
+bool SpanCapture::strokePath(MutablePixmapView& pixmap, const Path& path, const Paint& paint,
+                             const Stroke& stroke, Transform transform, const Mask* mask) {
   return capture(pixmap, paint, [&](BlitterWrapper* wrapper) {
     Painter::strokePath(pixmap, path, paint, stroke, transform, mask, wrapper);
   });
