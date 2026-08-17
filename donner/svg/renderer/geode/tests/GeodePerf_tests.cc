@@ -274,6 +274,50 @@ constexpr std::string_view kHugeRadiusMorphologySvg = R"SVG(
 </svg>
 )SVG";
 
+// ---------------------------------------------------------------------------
+// Fixture: image blits - drawImage uniform pooling.
+// ---------------------------------------------------------------------------
+
+TEST_F(GeodePerfTest, MultiImageBlit_PoolsCompositeUniforms) {
+  auto device = sharedDevice();
+  ASSERT_TRUE(device) << "GeodeDevice::CreateHeadless failed";
+
+  // Three `drawImage` blits in one frame. Each blit previously created its
+  // own 160-byte uniform buffer; pooled blits should bump-allocate from the
+  // encoder's per-frame uniform scratch instead, so the only buffer create
+  // left is the scratch arena's first growth.
+  RendererGeode renderer(device);
+  RenderViewport viewport;
+  viewport.size = Vector2d(80.0, 32.0);
+  viewport.devicePixelRatio = 1.0;
+  renderer.beginFrame(viewport);
+
+  ImageResource image;
+  image.width = 2;
+  image.height = 2;
+  image.data = {255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 0, 255};
+
+  ImageParams params;
+  params.targetRect = Box2d({8.0, 8.0}, {24.0, 24.0});
+  params.opacity = 1.0;
+
+  renderer.drawImage(image, params);
+  params.targetRect = Box2d({32.0, 8.0}, {48.0, 24.0});
+  renderer.drawImage(image, params);
+  params.targetRect = Box2d({56.0, 8.0}, {72.0, 24.0});
+  renderer.drawImage(image, params);
+  renderer.endFrame();
+
+  const geode::GeodeCounters c = renderer.lastFrameTimings().counters;
+  RecordProperty("bufferCreates", std::to_string(c.bufferCreates));
+  printCounters(::testing::UnitTest::GetInstance()->current_test_info()->name(), c);
+
+  EXPECT_LE(c.bufferCreates, 1u)
+      << "Three image blits should pool their uniform uploads into the encoder scratch arena "
+         "(one create for the arena's first growth) instead of creating one uniform buffer per "
+         "blit.";
+}
+
 TEST_F(GeodePerfTest, MorphologyHugeRadius_ChunksFilterCommandBuffers) {
   auto device = sharedDevice();
   ASSERT_TRUE(device) << "GeodeDevice::CreateHeadless failed";
@@ -318,50 +362,12 @@ TEST_F(GeodePerfTest, GaussianBlur_UsesSingleFrameSubmission) {
          "shared frame submission plus the snapshot submission.";
 }
 
+
 // ---------------------------------------------------------------------------
-// Fixture: lion.svg - the workhorse SVG used across Donner's test suites.
-// Skipped gracefully if the file isn't bundled (e.g. unit test run without
+// Fixture: lion.svg - the workhorse SVG used across Donner test suites.
+// Skipped gracefully if the file is not bundled (e.g. unit test run without
 // testdata deps).
 // ---------------------------------------------------------------------------
-
-TEST_F(GeodePerfTest, MultiImageBlit_PoolsCompositeUniforms) {
-  auto device = sharedDevice();
-  ASSERT_TRUE(device) << "GeodeDevice::CreateHeadless failed";
-
-  // Three `drawImage` blits in one frame. Each blit previously created its
-  // own 160-byte uniform buffer; pooled blits should bump-allocate from the
-  // encoder's per-frame uniform scratch instead, so the only buffer create
-  // left is the scratch arena's first growth.
-  RendererGeode renderer(device);
-  RenderViewport viewport;
-  viewport.size = Vector2d(80.0, 32.0);
-  viewport.devicePixelRatio = 1.0;
-  renderer.beginFrame(viewport);
-
-  ImageResource image;
-  image.width = 2;
-  image.height = 2;
-  image.data = {255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 0, 255};
-
-  ImageParams params;
-  params.targetRect = Box2d({8.0, 8.0}, {24.0, 24.0});
-  params.opacity = 1.0;
-
-  renderer.drawImage(image, params);
-  params.targetRect = Box2d({32.0, 8.0}, {48.0, 24.0});
-  renderer.drawImage(image, params);
-  params.targetRect = Box2d({56.0, 8.0}, {72.0, 24.0});
-  renderer.drawImage(image, params);
-  renderer.endFrame();
-
-  const geode::GeodeCounters c = renderer.lastFrameTimings().counters;
-  RecordProperty("bufferCreates", std::to_string(c.bufferCreates));
-  printCounters(::testing::UnitTest::GetInstance()->current_test_info()->name(), c);
-
-  EXPECT_LE(c.bufferCreates, 2u)
-      << "Three image blits should pool their uniform uploads into the encoder scratch arena "
-         "instead of creating one uniform buffer per blit.";
-}
 
 TEST_F(GeodePerfTest, Lion_BaselineCeilings) {
   auto device = sharedDevice();

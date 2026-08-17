@@ -156,7 +156,7 @@ void GeodeTextureEncoder::drawTexturedQuad(GeodeDevice& device, const GeodeImage
   uint64_t uniOffset = 0;
   uint64_t uniSize = sizeof(Uniforms);
   if (scratch != nullptr) {
-    constexpr uint64_t kUniformOffsetAlignment = 256u;
+    constexpr uint64_t kUniformOffsetAlignment = GeodeTextureEncoder::kUniformOffsetAlignment;
     const UniformAllocation alloc =
         scratch->allocate(&u, sizeof(Uniforms), kUniformOffsetAlignment);
     uniBuf = alloc.buffer;

@@ -57,7 +57,17 @@ public:
   static wgpu::Texture uploadRgba8Texture(GeodeDevice& device, const uint8_t* rgbaPixels,
                                           uint32_t width, uint32_t height);
 
-  /// Borrowed uniform-buffer range for one blit uniform upload.
+  /// Uniform-buffer binding offset alignment shared by the blit path and
+  /// any UniformScratch implementation. 256 is the WebGPU default
+  /// minUniformBufferOffsetAlignment; implementations that ever query a
+  /// device limit instead must keep this constant in sync or blits fail
+  /// binding validation on devices with a larger limit.
+  static constexpr uint64_t kUniformOffsetAlignment = 256u;
+
+  /// Borrowed uniform-buffer range for one blit uniform upload. The
+  /// `buffer` field is a raw non-owning handle: the provider keeps it
+  /// alive (see UniformScratch's contract below); holders must not retain
+  /// the allocation beyond the current frame.
   struct UniformAllocation {
     wgpu::Buffer buffer;
     uint64_t offset = 0;
@@ -70,6 +80,15 @@ public:
    * `GeoEncoder` implements this over its per-encoder uniform arena, so
    * consecutive image blits and layer composites share one growing buffer
    * (the buffer itself is only created when the arena grows).
+   *
+   * Implementation contract (GeoEncoder's arena satisfies all four):
+   * - The returned buffer carries the Uniform buffer-usage flag.
+   * - The buffer outlives every command buffer recorded against it in the
+   *   current frame (retire-then-release, never destroy mid-frame).
+   * - The range `[offset, offset + size)` is never rewritten for the rest
+   *   of the frame once returned.
+   * - `offset` honors the requested alignment (at least
+   *   kUniformOffsetAlignment for blit uniforms).
    */
   class UniformScratch {
   public:
