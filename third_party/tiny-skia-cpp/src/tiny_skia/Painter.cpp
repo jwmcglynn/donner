@@ -19,6 +19,13 @@ namespace {
 /// Maximum float scalar value.
 constexpr float kScalarMax = std::numeric_limits<float>::max();
 
+/// Returns the blitter the scan converter should be driven with: the wrapper's substitute when
+/// one was supplied, otherwise the pipeline blitter itself.
+Blitter& selectBlitter(BlitterWrapper* wrapper, pipeline::RasterPipelineBlitter& blitter,
+                       const Paint& paint) {
+  return wrapper != nullptr ? wrapper->wrap(blitter, paint) : static_cast<Blitter&>(blitter);
+}
+
 }  // namespace
 
 bool detail::isTooBigForMath(const Path& path) {
@@ -69,7 +76,7 @@ std::optional<float> detail::treatAsHairline(const Paint& paint, float strokeWid
 }
 
 void Painter::fillRect(MutablePixmapView& pixmap, const Rect& rect, const Paint& paint,
-                       Transform transform, const Mask* mask) {
+                       Transform transform, const Mask* mask, BlitterWrapper* wrapper) {
   if (transform.isIdentity() && !detail::DrawTiler::required(pixmap.width(), pixmap.height())) {
     const auto clip = pixmap.size().toScreenIntRect(0, 0);
 
@@ -80,19 +87,21 @@ void Painter::fillRect(MutablePixmapView& pixmap, const Rect& rect, const Paint&
       return;
     }
 
+    Blitter& target = selectBlitter(wrapper, *blitter, paint);
     if (paint.antiAlias) {
-      scan::fillRectAa(rect, clip, *blitter);
+      scan::fillRectAa(rect, clip, target);
     } else {
-      scan::fillRect(rect, clip, *blitter);
+      scan::fillRect(rect, clip, target);
     }
   } else {
     const auto path = Path::fromRect(rect);
-    Painter::fillPath(pixmap, path, paint, FillRule::Winding, transform, mask);
+    Painter::fillPath(pixmap, path, paint, FillRule::Winding, transform, mask, wrapper);
   }
 }
 
 void Painter::fillPath(MutablePixmapView& pixmap, const Path& path, const Paint& paint,
-                       FillRule fillRule, Transform transform, const Mask* mask) {
+                       FillRule fillRule, Transform transform, const Mask* mask,
+                       BlitterWrapper* wrapper) {
   if (transform.isIdentity()) {
     // Skip empty paths and horizontal/vertical lines.
     const auto pathBounds = path.bounds();
@@ -130,10 +139,11 @@ void Painter::fillPath(MutablePixmapView& pixmap, const Path& path, const Paint&
           continue;
         }
 
+        Blitter& target = selectBlitter(wrapper, *blitter, paintCopy);
         if (paintCopy.antiAlias) {
-          scan::path_aa::fillPath(pathCopy, fillRule, clipRect, *blitter);
+          scan::path_aa::fillPath(pathCopy, fillRule, clipRect, target);
         } else {
-          scan::fillPath(pathCopy, fillRule, clipRect, *blitter);
+          scan::fillPath(pathCopy, fillRule, clipRect, target);
         }
 
         const auto tsBack =
@@ -154,10 +164,11 @@ void Painter::fillPath(MutablePixmapView& pixmap, const Path& path, const Paint&
         return;
       }
 
+      Blitter& target = selectBlitter(wrapper, *blitter, paint);
       if (paint.antiAlias) {
-        scan::path_aa::fillPath(path, fillRule, clipRect, *blitter);
+        scan::path_aa::fillPath(path, fillRule, clipRect, target);
       } else {
-        scan::fillPath(path, fillRule, clipRect, *blitter);
+        scan::fillPath(path, fillRule, clipRect, target);
       }
     }
   } else {
@@ -169,7 +180,8 @@ void Painter::fillPath(MutablePixmapView& pixmap, const Path& path, const Paint&
     auto paintCopy = paint;
     transformShader(paintCopy.shader, transform);
 
-    Painter::fillPath(pixmap, *transformed, paintCopy, fillRule, Transform::identity(), mask);
+    Painter::fillPath(pixmap, *transformed, paintCopy, fillRule, Transform::identity(), mask,
+                      wrapper);
   }
 }
 
@@ -224,7 +236,8 @@ void Painter::applyMask(MutablePixmapView& pixmap, const Mask& mask) {
 }
 
 void Painter::strokePath(MutablePixmapView& pixmap, const Path& path, const Paint& paint,
-                         const Stroke& stroke, Transform transform, const Mask* mask) {
+                         const Stroke& stroke, Transform transform, const Mask* mask,
+                         BlitterWrapper* wrapper) {
   if (stroke.width < 0.0f) {
     return;
   }
@@ -282,7 +295,7 @@ void Painter::strokePath(MutablePixmapView& pixmap, const Path& path, const Pain
         }
         auto submaskOpt = mask ? mask->submask(tile->toIntRect()) : std::nullopt;
 
-        strokeHairline(pathCopy, paintCopy, stroke.lineCap, submaskOpt, *subpix);
+        strokeHairline(pathCopy, paintCopy, stroke.lineCap, submaskOpt, *subpix, wrapper);
 
         const auto tsBack =
             Transform::fromTranslate(static_cast<float>(tile->x()), static_cast<float>(tile->y()));
@@ -302,9 +315,9 @@ void Painter::strokePath(MutablePixmapView& pixmap, const Path& path, const Pain
         if (!transformed.has_value()) {
           return;
         }
-        strokeHairline(*transformed, paintCopy, stroke.lineCap, submaskOpt, subpix);
+        strokeHairline(*transformed, paintCopy, stroke.lineCap, submaskOpt, subpix, wrapper);
       } else {
-        strokeHairline(*pathPtr, paintCopy, stroke.lineCap, submaskOpt, subpix);
+        strokeHairline(*pathPtr, paintCopy, stroke.lineCap, submaskOpt, subpix, wrapper);
       }
     }
   } else {
@@ -313,22 +326,24 @@ void Painter::strokePath(MutablePixmapView& pixmap, const Path& path, const Pain
     if (!strokedPath.has_value()) {
       return;
     }
-    Painter::fillPath(pixmap, *strokedPath, paint, FillRule::Winding, transform, mask);
+    Painter::fillPath(pixmap, *strokedPath, paint, FillRule::Winding, transform, mask, wrapper);
   }
 }
 
 void Painter::strokeHairline(const Path& path, const Paint& paint, LineCap lineCap,
-                             std::optional<SubMaskView> mask, MutableSubPixmapView& subpix) {
+                             std::optional<SubMaskView> mask, MutableSubPixmapView& subpix,
+                             BlitterWrapper* wrapper) {
   const auto clip = subpix.size.toScreenIntRect(0, 0);
   auto blitter = pipeline::RasterPipelineBlitter::create(paint, mask, &subpix);
   if (!blitter.has_value()) {
     return;
   }
 
+  Blitter& target = selectBlitter(wrapper, *blitter, paint);
   if (paint.antiAlias) {
-    scan::hairline_aa::strokePath(path, lineCap, clip, *blitter);
+    scan::hairline_aa::strokePath(path, lineCap, clip, target);
   } else {
-    scan::strokePath(path, lineCap, clip, *blitter);
+    scan::strokePath(path, lineCap, clip, target);
   }
 }
 

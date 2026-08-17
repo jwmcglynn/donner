@@ -28,6 +28,7 @@ tiny_skia_dual_mode_cc_test(
         "PathVecTest.cpp",
         "PipelineStagesTest.cpp",
         "PixmapTest.cpp",
+        "SpanCaptureTest.cpp",
     ],
     copts = ["-std=c++20"],
     deps = [

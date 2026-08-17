@@ -7,6 +7,7 @@
 #include <optional>
 #include <vector>
 
+#include "tiny_skia/Blitter.h"
 #include "tiny_skia/Geom.h"
 #include "tiny_skia/Mask.h"
 #include "tiny_skia/Paint.h"
@@ -95,13 +96,19 @@ class Painter {
   Painter() = delete;
 
   /// Fills an axis-aligned rectangle.
+  ///
+  /// @param wrapper Optional interception point for the blitter the scan converter is driven
+  ///   with. Passing nullptr draws exactly as if the parameter did not exist.
   static void fillRect(MutablePixmapView& pixmap, const Rect& rect, const Paint& paint,
-                       Transform transform = Transform::identity(), const Mask* mask = nullptr);
+                       Transform transform = Transform::identity(), const Mask* mask = nullptr,
+                       BlitterWrapper* wrapper = nullptr);
 
   /// Fills a path using the given fill rule.
+  ///
+  /// @param wrapper See fillRect.
   static void fillPath(MutablePixmapView& pixmap, const Path& path, const Paint& paint,
                        FillRule fillRule, Transform transform = Transform::identity(),
-                       const Mask* mask = nullptr);
+                       const Mask* mask = nullptr, BlitterWrapper* wrapper = nullptr);
 
   /// Composites a source pixmap onto a destination at offset (x, y).
   static void drawPixmap(MutablePixmapView& pixmap, std::int32_t x, std::int32_t y, PixmapView src,
@@ -112,14 +119,17 @@ class Painter {
   static void applyMask(MutablePixmapView& pixmap, const Mask& mask);
 
   /// Strokes a path with the given stroke settings.
+  ///
+  /// @param wrapper See fillRect.
   static void strokePath(MutablePixmapView& pixmap, const Path& path, const Paint& paint,
                          const Stroke& stroke, Transform transform = Transform::identity(),
-                         const Mask* mask = nullptr);
+                         const Mask* mask = nullptr, BlitterWrapper* wrapper = nullptr);
 
  private:
   /// @internal
   static void strokeHairline(const Path& path, const Paint& paint, LineCap lineCap,
-                             std::optional<SubMaskView> mask, MutableSubPixmapView& subpix);
+                             std::optional<SubMaskView> mask, MutableSubPixmapView& subpix,
+                             BlitterWrapper* wrapper);
 };
 
 }  // namespace tiny_skia
