@@ -154,4 +154,43 @@ private:
   ScopedWgpuHandle<wgpu::RenderPipeline> pipeline_;
 };
 
+/**
+ * Compute pipeline for GPU-side snapshot unpremultiplication.
+ *
+ * Reads a premultiplied-alpha render target (binding 0, `texture_2d<f32>`)
+ * and writes straight-alpha RGBA8 into the storage texture at binding 1
+ * (`rgba8unorm`, write-only). Owned lazily by `GeodeDevice` so every
+ * snapshot sharing the device reuses one compiled pipeline (issue #575:
+ * wgpu-native retains compiled pipelines).
+ *
+ * The stored bytes replicate the CPU round-half-up reference formula in
+ * `RendererGeode::ReadGeodeTextureSnapshot` exactly, so snapshots produced
+ * through this pipeline are byte-identical to the CPU readback path.
+ */
+class GeodeSnapshotReadbackPipeline {
+public:
+  /**
+   * Create the snapshot-unpremultiply compute pipeline for the given device.
+   */
+  explicit GeodeSnapshotReadbackPipeline(const wgpu::Device& device);
+
+  ~GeodeSnapshotReadbackPipeline() = default;
+  GeodeSnapshotReadbackPipeline(const GeodeSnapshotReadbackPipeline&) = delete;
+  GeodeSnapshotReadbackPipeline& operator=(const GeodeSnapshotReadbackPipeline&) = delete;
+  GeodeSnapshotReadbackPipeline(GeodeSnapshotReadbackPipeline&&) noexcept = default;
+  GeodeSnapshotReadbackPipeline& operator=(GeodeSnapshotReadbackPipeline&&) noexcept = default;
+
+  /// True when the bind group layout and compute pipeline compiled.
+  bool valid() const { return static_cast<bool>(pipeline_) && static_cast<bool>(bindGroupLayout_); }
+
+  /// The compiled compute pipeline.
+  const wgpu::ComputePipeline& pipeline() const { return pipeline_.get(); }
+  /// The bind group layout used by the pipeline.
+  const wgpu::BindGroupLayout& bindGroupLayout() const { return bindGroupLayout_.get(); }
+
+private:
+  ScopedWgpuHandle<wgpu::BindGroupLayout> bindGroupLayout_;
+  ScopedWgpuHandle<wgpu::ComputePipeline> pipeline_;
+};
+
 }  // namespace donner::geode

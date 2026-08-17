@@ -24,6 +24,7 @@
 #include "embed_resources/SlugFillWgsl.h"
 #include "embed_resources/SlugGradientWgsl.h"
 #include "embed_resources/SlugMaskWgsl.h"
+#include "embed_resources/SnapshotUnpremultiplyWgsl.h"
 
 namespace donner::geode {
 
@@ -180,6 +181,12 @@ wgpu::ShaderModule createFilterColorSpaceConvertShader(const wgpu::Device& devic
   return createShaderFromWgsl(device, "FilterColorSpaceConvert",
                               donner::embedded::kFilterColorSpaceConvertWgsl.data(),
                               donner::embedded::kFilterColorSpaceConvertWgsl.size());
+}
+
+wgpu::ShaderModule createSnapshotUnpremultiplyShader(const wgpu::Device& device) {
+  return createShaderFromWgsl(device, "SnapshotUnpremultiply",
+                              donner::embedded::kSnapshotUnpremultiplyWgsl.data(),
+                              donner::embedded::kSnapshotUnpremultiplyWgsl.size());
 }
 
 }  // namespace donner::geode

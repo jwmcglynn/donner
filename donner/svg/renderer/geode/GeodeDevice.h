@@ -13,6 +13,15 @@
 
 namespace donner::geode {
 
+/// 256-align a tightly packed row-byte count per the WebGPU
+/// texture-to-buffer copy rules. Shared by the device's readback-buffer
+/// sizing and the renderer's map-range math; the two MUST agree, because a
+/// mapped-range request larger than the buffer returns null rather than
+/// raising an error.
+constexpr uint32_t AlignReadbackBytesPerRow(uint32_t rowBytes) {
+  return (rowBytes + 255u) & ~255u;
+}
+
 // Forward declarations - GeodeDevice exposes accessors for the pipeline
 // objects it owns (see "Shared render / compute pipelines" section below).
 // The full class definitions live in their own headers; including them
@@ -24,6 +33,32 @@ class GeodeGradientPipeline;
 class GeodeImagePipeline;
 class GeodeMaskPipeline;
 class GeodeFilterEngine;
+class GeodeSnapshotReadbackPipeline;
+
+/**
+ * Move-only resource set for one GPU snapshot unpremultiply readback: a
+ * straight-alpha staging texture, its view, and a map-readable readback
+ * buffer. Acquired from and returned to the per-device pool keyed by size,
+ * so repeat snapshots at the same dimensions allocate nothing. The pool is
+ * bounded with least-recently-used eviction, so a caller walking many
+ * distinct sizes (for example a window resize) cannot pin unbounded staging
+ * memory for the device's lifetime.
+ */
+struct SnapshotReadbackResources {
+  /// Staging texture the compute pass writes the unpremultiplied result into.
+  ScopedWgpuHandle<wgpu::Texture> staging;
+  /// View of `staging`, kept with the pooled entry so it is created once.
+  ScopedWgpuHandle<wgpu::TextureView> stagingView;
+  /// Map-readable buffer the staging texture is copied into.
+  ScopedWgpuHandle<wgpu::Buffer> readback;
+  /// Pool key: staging texture width in pixels.
+  uint32_t width = 0;
+  /// Pool key: staging texture height in pixels.
+  uint32_t height = 0;
+
+  /// True when any required handle is missing; an empty set cannot be used.
+  [[nodiscard]] bool empty() const { return !staging || !stagingView || !readback; }
+};
 
 /**
  * Configuration for embedding Geode into a host application that already owns a
@@ -400,6 +435,35 @@ public:
   /// GPU filter-graph executor. Owns ~15 compute pipelines for SVG
   /// filter primitives.
   GeodeFilterEngine& filterEngine() const;
+  /// Snapshot-unpremultiply compute pipeline. Built lazily (thread-safe,
+  /// once-only) on first access so consumers that never read back a snapshot
+  /// avoid the compile cost.
+  GeodeSnapshotReadbackPipeline& snapshotReadbackPipeline() const;
+
+  /**
+   * Acquire the pooled readback resource set for a GPU snapshot readback at
+   * the given size, allocating it on first use. Repeated snapshots at the
+   * same dimensions reuse the pooled entry, so steady-state snapshot readback
+   * allocates nothing.
+   *
+   * The caller owns the returned set until `releaseSnapshotReadbackResources`
+   * returns it to the pool, or until the set is destroyed unpooled. An empty
+   * set means allocation failed.
+   */
+  SnapshotReadbackResources acquireSnapshotReadbackResources(uint32_t width, uint32_t height);
+
+  /**
+   * Return a readback resource set acquired from
+   * `acquireSnapshotReadbackResources` to the device pool for reuse. The
+   * returned set must be unmapped. Do not call this after the readback map
+   * was cancelled and the buffer destroyed; drop the set instead.
+   *
+   * The pool holds at most a small fixed number of size buckets; when a
+   * release would exceed that, the least-recently-used entry's backing
+   * resources are destroyed (pooled entries are idle, so eager destroy is
+   * safe).
+   */
+  void releaseSnapshotReadbackResources(SnapshotReadbackResources resources);
   /// Framebuffer checkerboard underlay pipeline used by the editor's direct
   /// presentation path. Built lazily on first access - only the editor draws
   /// it, so headless/WASM consumers never pay the compile cost.

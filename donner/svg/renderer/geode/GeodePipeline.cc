@@ -350,4 +350,48 @@ GeodeMaskPipeline::GeodeMaskPipeline(const wgpu::Device& device) {
   pipeline_.reset(device.createRenderPipeline(rpDesc));
 }
 
+// ============================================================================
+// GeodeSnapshotReadbackPipeline
+// ============================================================================
+
+GeodeSnapshotReadbackPipeline::GeodeSnapshotReadbackPipeline(const wgpu::Device& device) {
+  // Two bindings: the premultiplied render target (sampled via textureLoad)
+  // and the straight-alpha RGBA8 staging storage texture.
+  wgpu::BindGroupLayoutEntry entries[2] = {};
+
+  entries[0].binding = 0;
+  entries[0].visibility = wgpu::ShaderStage::Compute;
+  entries[0].texture.sampleType = wgpu::TextureSampleType::Float;
+  entries[0].texture.viewDimension = wgpu::TextureViewDimension::_2D;
+  entries[0].texture.multisampled = false;
+
+  entries[1].binding = 1;
+  entries[1].visibility = wgpu::ShaderStage::Compute;
+  entries[1].storageTexture.access = wgpu::StorageTextureAccess::WriteOnly;
+  entries[1].storageTexture.format = wgpu::TextureFormat::RGBA8Unorm;
+  entries[1].storageTexture.viewDimension = wgpu::TextureViewDimension::_2D;
+
+  wgpu::BindGroupLayoutDescriptor bglDesc = {};
+  bglDesc.label = wgpuLabel("GeodeSnapshotReadbackBGL");
+  bglDesc.entryCount = 2;
+  bglDesc.entries = entries;
+  bindGroupLayout_.reset(device.createBindGroupLayout(bglDesc));
+
+  wgpu::PipelineLayoutDescriptor plDesc = {};
+  plDesc.label = wgpuLabel("GeodeSnapshotReadbackPL");
+  plDesc.bindGroupLayoutCount = 1;
+  WGPUBindGroupLayout layouts[1] = {bindGroupLayout_.get()};
+  plDesc.bindGroupLayouts = layouts;
+  ScopedWgpuHandle<wgpu::PipelineLayout> pipelineLayout(device.createPipelineLayout(plDesc));
+
+  ScopedWgpuHandle<wgpu::ShaderModule> shader(createSnapshotUnpremultiplyShader(device));
+
+  wgpu::ComputePipelineDescriptor cpDesc = {};
+  cpDesc.label = wgpuLabel("GeodeSnapshotReadback");
+  cpDesc.layout = pipelineLayout.get();
+  cpDesc.compute.module = shader.get();
+  cpDesc.compute.entryPoint = wgpuLabel("main");
+  pipeline_.reset(device.createComputePipeline(cpDesc));
+}
+
 }  // namespace donner::geode

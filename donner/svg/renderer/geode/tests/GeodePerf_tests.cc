@@ -416,8 +416,11 @@ TEST_F(GeodePerfTest, UseHeavy_BaselineCeilings) {
   EXPECT_EQ(c.drawCalls, 1u);
   // And a single bind group covers all eight - per-instance
   // transforms ride in a storage-buffer binding (binding 7), while
-  // the other seven entries are stable across the batch.
-  EXPECT_EQ(c.bindgroupCreates, 1u);
+  // the other seven entries are stable across the batch. The second
+  // bind group is the GPU-side snapshot readback (one per snapshot;
+  // the input texture view changes per render target, so it cannot
+  // be pooled like the staging texture and readback buffer).
+  EXPECT_EQ(c.bindgroupCreates, 2u);
   // Seven adjacent-same-source pairs detected at `drawPath` entry
   // (BEFORE batching collapses them). This is the "opportunity"
   // counter - kept as a separate signal from `drawCalls` (the

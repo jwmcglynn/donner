@@ -5,6 +5,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <iostream>
 #include <map>
 #include <mutex>
@@ -293,10 +294,12 @@ double computeBlurPadding(const components::FilterGraph& filterGraph) {
 }
 
 /// WebGPU requires bytesPerRow alignment to 256 when copying textures to
-/// buffers. This rounds the unpadded row width up to the next 256 boundary.
+/// buffers. Delegates to the shared helper so the renderer's map-range math
+/// can never diverge from the readback-buffer sizing in GeodeDevice: a
+/// mapped-range request larger than the buffer returns null rather than
+/// raising a validation error.
 constexpr uint32_t alignBytesPerRow(uint32_t unpadded) {
-  constexpr uint32_t kAlign = 256u;
-  return (unpadded + kAlign - 1u) & ~(kAlign - 1u);
+  return geode::AlignReadbackBytesPerRow(unpadded);
 }
 
 /// Convert an SVG stroke-linecap enum to the donner::LineCap used by
@@ -4760,51 +4763,38 @@ RendererBitmap RendererGeode::takeSnapshot() const {
 // bitmap. Shared by the live renderer target and detached texture snapshots.
 // `sourceAlphaType` describes the texels: render targets store premultiplied alpha and are
 // divided back out, while a snapshot wrapping a straight-alpha host upload is copied as-is.
-static RendererBitmap ReadGeodeTextureSnapshot(const std::shared_ptr<geode::GeodeDevice>& device,
-                                               const wgpu::Texture& texture, Vector2i dimensions,
-                                               wgpu::TextureFormat format,
-                                               AlphaType sourceAlphaType,
-                                               const std::function<bool()>& shouldCancel) {
-  RendererBitmap bitmap;
-  // Close the traversal-to-snapshot race before allocating a readback buffer or submitting any GPU
-  // work. A main-document request may arrive immediately after the thumbnail finishes drawing.
-  if (shouldCancel && shouldCancel()) {
-    return bitmap;
-  }
-  if (!device || !texture || dimensions.x <= 0 || dimensions.y <= 0) {
-    return bitmap;
-  }
+//
+// Premultiplied RGBA8Unorm targets take the GPU path: a compute pass
+// unpremultiplies the target into a straight-alpha RGBA8 staging texture,
+// which is then copied into a map-readable buffer and packed out. The GPU
+// path output is byte-identical to the CPU reference loop below. Everything
+// else (BGRA targets, straight-alpha host uploads, unbindable textures) uses
+// the CPU copy path.
+namespace {
 
-  const uint32_t width = static_cast<uint32_t>(dimensions.x);
-  const uint32_t height = static_cast<uint32_t>(dimensions.y);
-  const uint32_t bytesPerRow = alignBytesPerRow(width * 4u);
+/// Outcome of a completed readback map wait.
+enum class ReadbackMapStatus {
+  /// The map completed successfully; the buffer is mapped and owned by the caller until unmap().
+  Success,
+  /// A cancellation request fired; the buffer was unmapped and destroyed.
+  Cancelled,
+  /// The 10-second deadline expired with no map completion; the buffer was
+  /// unmapped and destroyed. Distinct from Cancelled so a caller can avoid
+  /// starting a second full-deadline wait against a device that just proved
+  /// unresponsive.
+  TimedOut,
+  /// The map completed with a non-success status.
+  Failed,
+};
 
-  // Allocate readback buffer.
-  wgpu::BufferDescriptor bd = {};
-  bd.label = wgpuLabel("RendererGeodeReadback");
-  bd.size = static_cast<uint64_t>(bytesPerRow) * static_cast<uint64_t>(height);
-  bd.usage = wgpu::BufferUsage::CopyDst | wgpu::BufferUsage::MapRead;
-  geode::ScopedWgpuHandle<wgpu::Buffer> readback(device->device().createBuffer(bd));
-  device->countBuffer();
-
-  // Copy texture → readback buffer.
-  geode::ScopedWgpuHandle<wgpu::CommandEncoder> enc(device->device().createCommandEncoder());
-  wgpu::TexelCopyTextureInfo src = {};
-  src.texture = texture;
-  src.mipLevel = 0;
-  src.origin = {0, 0, 0};
-  wgpu::TexelCopyBufferInfo dst = {};
-  dst.buffer = readback.get();
-  dst.layout.bytesPerRow = bytesPerRow;
-  dst.layout.rowsPerImage = height;
-  wgpu::Extent3D copySize = {width, height, 1};
-  enc.get().copyTextureToBuffer(src, dst, copySize);
-
-  geode::ScopedWgpuHandle<wgpu::CommandBuffer> cmd(enc.get().finish());
-  device->queue().submit(1, &cmd.get());
-  device->countSubmit();
-
-  // Map for read. `BufferMapCallbackInfo` takes raw userdata rather than a std::function, and a
+/// Map `buffer` for read and wait for the GPU to deliver it. On cancellation,
+/// timeout, or map failure the buffer is unmapped and destroyed and a
+/// non-success status is returned. Readback poll statistics are recorded on
+/// the device regardless of the outcome.
+ReadbackMapStatus MapAndWaitReadback(const std::shared_ptr<geode::GeodeDevice>& device,
+                                     const wgpu::Buffer& buffer, uint64_t mapSize,
+                                     const std::function<bool()>& shouldCancel) {
+  // `BufferMapCallbackInfo` takes raw userdata rather than a std::function, and a
   // cancellation may return before WebGPU delivers that callback. Keep its payload alive
   // independently of this stack frame: one reference belongs to this caller, the other to the
   // callback. The state intentionally owns no WebGPU handles, so its final release is safe even
@@ -4832,14 +4822,22 @@ static RendererBitmap ReadGeodeTextureSnapshot(const std::shared_ptr<geode::Geod
   mapCb.userdata1 = mapState;
   mapCb.userdata2 = nullptr;
   mapCb.mode = wgpu::CallbackMode::AllowSpontaneous;
-  const wgpu::Future mapFuture = readback.get().mapAsync(wgpu::MapMode::Read, 0, bd.size, mapCb);
+  // Emscripten-only: the browser timed-wait path below consumes `mapFuture`;
+  // native builds finish without touching it.
+  [[maybe_unused]] const wgpu::Future mapFuture =
+      buffer.mapAsync(wgpu::MapMode::Read, 0, mapSize, mapCb);
   int pollIter = 0;
   bool cancelled = false;
+  bool timedOut = false;
   bool usedTimedWaitAny = false;
   const auto readbackDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
   while (!mapState->done.load(std::memory_order_acquire)) {
-    if ((shouldCancel && shouldCancel()) || std::chrono::steady_clock::now() >= readbackDeadline) {
+    if (shouldCancel && shouldCancel()) {
       cancelled = true;
+      break;
+    }
+    if (std::chrono::steady_clock::now() >= readbackDeadline) {
+      timedOut = true;
       break;
     }
     ++pollIter;
@@ -4873,30 +4871,236 @@ static RendererBitmap ReadGeodeTextureSnapshot(const std::shared_ptr<geode::Geod
 #endif
     // Never ask wgpu-native to block until the GPU map completes: a low-priority thumbnail must
     // observe a superseding main-document request promptly. Native polling is
-    // non-blocking and gets a short sleep to avoid spinning.
+    // non-blocking and gets a short sleep to avoid spinning. The 100 us sleep
+    // bounds the snapshot latency floor without the 1 ms quanta that used to
+    // dominate small-fixture readbacks; the poll itself processes the map
+    // completion callback as soon as the GPU delivers it.
     device->pollSuspending(false);
 #ifndef __EMSCRIPTEN__
-    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    std::this_thread::sleep_for(std::chrono::microseconds(100));
 #endif
   }
   device->recordReadback(usedTimedWaitAny, pollIter);
-  if (cancelled) {
+  if (cancelled || timedOut) {
     // Cancelling a pending map schedules its callback with an aborted status. The callback's
     // reference keeps `mapState` valid even when delivery happens after this method returns.
-    readback.get().unmap();
-    readback.get().destroy();
+    buffer.unmap();
+    buffer.destroy();
     mapState->release();
-    return bitmap;
+    return cancelled ? ReadbackMapStatus::Cancelled : ReadbackMapStatus::TimedOut;
   }
 
   const bool mapOk = mapState->ok.load(std::memory_order_acquire);
   mapState->release();
-  if (!mapOk) {
+  return mapOk ? ReadbackMapStatus::Success : ReadbackMapStatus::Failed;
+}
+
+/// GPU-side snapshot readback for premultiplied RGBA8Unorm render targets: a
+/// compute pass unpremultiplies the target into a straight-alpha RGBA8
+/// staging texture, which is then copied into a map-readable buffer. The
+/// output bytes are identical to the CPU reference loop in
+/// ReadGeodeTextureSnapshot. Returns an empty bitmap on any failure so the
+/// caller can fall back to the CPU copy path.
+///
+/// wgpu-native forbids combining MAP_READ with STORAGE on a single buffer, so
+/// the compute output cannot be mapped directly; the staging-texture copy is
+/// the standard readback shape.
+RendererBitmap ReadGeodeTextureSnapshotGpu(const std::shared_ptr<geode::GeodeDevice>& device,
+                                           const wgpu::Texture& texture, uint32_t width,
+                                           uint32_t height,
+                                           const std::function<bool()>& shouldCancel,
+                                           bool& outTimedOut) {
+  RendererBitmap bitmap;
+  outTimedOut = false;
+  const geode::GeodeSnapshotReadbackPipeline& readbackPipeline =
+      device->snapshotReadbackPipeline();
+  if (!readbackPipeline.valid()) {
+    return bitmap;
+  }
+
+  // Pooled staging texture + readback buffer, keyed by size. Repeat snapshots
+  // at the same dimensions reuse the entry, so steady-state readback
+  // allocates nothing.
+  geode::SnapshotReadbackResources resources =
+      device->acquireSnapshotReadbackResources(width, height);
+  if (resources.empty()) {
+    return bitmap;
+  }
+  const uint32_t bytesPerRow = alignBytesPerRow(width * 4u);
+  const uint64_t mapSize = static_cast<uint64_t>(bytesPerRow) * static_cast<uint64_t>(height);
+
+  geode::ScopedWgpuHandle<wgpu::TextureView> inputView(texture.createView());
+  wgpu::BindGroupEntry bgEntries[2] = {};
+  bgEntries[0].binding = 0;
+  bgEntries[0].textureView = inputView.get();
+  bgEntries[1].binding = 1;
+  bgEntries[1].textureView = resources.stagingView.get();
+  wgpu::BindGroupDescriptor bgDesc = {};
+  bgDesc.label = wgpuLabel("RendererGeodeReadbackBG");
+  bgDesc.layout = readbackPipeline.bindGroupLayout();
+  bgDesc.entryCount = 2;
+  bgDesc.entries = bgEntries;
+  geode::ScopedWgpuHandle<wgpu::BindGroup> bindGroup(device->device().createBindGroup(bgDesc));
+  device->countBindGroup();
+
+  // Record the unpremultiply compute pass and the staging-texture copy into
+  // one command buffer, then submit it on the device queue.
+  geode::ScopedWgpuHandle<wgpu::CommandEncoder> enc(device->device().createCommandEncoder());
+  wgpu::ComputePassDescriptor passDesc = {};
+  passDesc.label = wgpuLabel("RendererGeodeReadbackPass");
+  geode::ScopedWgpuHandle<wgpu::ComputePassEncoder> pass(enc.get().beginComputePass(passDesc));
+  pass.get().setPipeline(readbackPipeline.pipeline());
+  pass.get().setBindGroup(0, bindGroup.get(), 0, nullptr);
+  pass.get().dispatchWorkgroups((width + 7) / 8, (height + 7) / 8, 1);
+  pass.get().end();
+  pass.reset();
+
+  wgpu::TexelCopyTextureInfo src = {};
+  src.texture = resources.staging.get();
+  src.mipLevel = 0;
+  src.origin = {0, 0, 0};
+  wgpu::TexelCopyBufferInfo dst = {};
+  dst.buffer = resources.readback.get();
+  dst.layout.bytesPerRow = bytesPerRow;
+  dst.layout.rowsPerImage = height;
+  wgpu::Extent3D copySize = {width, height, 1};
+  enc.get().copyTextureToBuffer(src, dst, copySize);
+
+  geode::ScopedWgpuHandle<wgpu::CommandBuffer> cmd(enc.get().finish());
+  enc.reset();
+  device->queue().submit(1, &cmd.get());
+  device->countSubmit();
+
+  const ReadbackMapStatus mapStatus =
+      MapAndWaitReadback(device, resources.readback.get(), mapSize, shouldCancel);
+  if (mapStatus != ReadbackMapStatus::Success) {
+    // Cancelled, timed out, or failed: the helper already unmapped and
+    // destroyed the readback buffer, so the entry cannot be pooled. The
+    // caller uses outTimedOut to avoid a second full-deadline wait against
+    // an unresponsive device.
+    outTimedOut = mapStatus == ReadbackMapStatus::TimedOut;
+    return bitmap;
+  }
+
+  const uint8_t* mapped = static_cast<const uint8_t*>(
+      resources.readback.get().getConstMappedRange(0, mapSize));
+  if (mapped == nullptr) {
+    // A mapped-range/buffer-size mismatch returns null instead of raising a
+    // validation error. Unmap and drop the entry (do not pool a buffer whose
+    // sizing math disagreed with ours) and let the CPU path take over.
+    resources.readback.get().unmap();
+    return bitmap;
+  }
+
+  // The staging texture already holds straight-alpha RGBA, so the CPU only
+  // strips row padding.
+  bitmap.dimensions = Vector2i(static_cast<int>(width), static_cast<int>(height));
+  bitmap.rowBytes = static_cast<size_t>(width) * 4u;
+  bitmap.alphaType = AlphaType::Unpremultiplied;
+  bitmap.pixels.resize(bitmap.rowBytes * height);
+  for (uint32_t y = 0; y < height; ++y) {
+    if (shouldCancel && shouldCancel()) {
+      resources.readback.get().unmap();
+      return {};
+    }
+    std::memcpy(bitmap.pixels.data() + static_cast<size_t>(y) * bitmap.rowBytes,
+                mapped + static_cast<size_t>(y) * bytesPerRow, bitmap.rowBytes);
+  }
+  resources.readback.get().unmap();
+  device->releaseSnapshotReadbackResources(std::move(resources));
+  return bitmap;
+}
+
+}  // namespace
+
+static RendererBitmap ReadGeodeTextureSnapshot(const std::shared_ptr<geode::GeodeDevice>& device,
+                                               const wgpu::Texture& texture, Vector2i dimensions,
+                                               wgpu::TextureFormat format,
+                                               AlphaType sourceAlphaType,
+                                               const std::function<bool()>& shouldCancel) {
+  RendererBitmap bitmap;
+  // Close the traversal-to-snapshot race before allocating a readback buffer or submitting any GPU
+  // work. A main-document request may arrive immediately after the thumbnail finishes drawing.
+  if (shouldCancel && shouldCancel()) {
+    return bitmap;
+  }
+  if (!device || !texture || dimensions.x <= 0 || dimensions.y <= 0) {
+    return bitmap;
+  }
+
+  const uint32_t width = static_cast<uint32_t>(dimensions.x);
+  const uint32_t height = static_cast<uint32_t>(dimensions.y);
+
+  // GPU unpremultiply path: premultiplied RGBA8Unorm render targets only. The
+  // compute shader produces straight RGBA regardless of the texture's memory
+  // layout, but BGRA targets keep the proven CPU path for now.
+  // Gate on the texture's REAL format as well as the caller-declared one:
+  // the compute pass binds a view that inherits the texture's actual format,
+  // so an sRGB surface declared as RGBA8Unorm would be silently linearized
+  // by textureLoad and re-quantized into wrong bytes with no validation
+  // error, where the CPU copy path degrades only to a channel-order bug.
+  if (sourceAlphaType == AlphaType::Premultiplied &&
+      format == wgpu::TextureFormat::RGBA8Unorm && texture.getFormat() == format &&
+      (static_cast<WGPUTextureUsage>(texture.getUsage()) &
+       static_cast<WGPUTextureUsage>(wgpu::TextureUsage::TextureBinding)) != 0u) {
+    bool gpuTimedOut = false;
+    RendererBitmap gpuBitmap =
+        ReadGeodeTextureSnapshotGpu(device, texture, width, height, shouldCancel, gpuTimedOut);
+    if (!gpuBitmap.empty()) {
+      return gpuBitmap;
+    }
+    // The GPU path returned empty: cancelled, timed out, or failed. A
+    // cancellation must return here so a superseding request is not delayed
+    // by a second GPU round-trip. A timeout must also return: the device
+    // just spent the full deadline not delivering a map, and the CPU copy
+    // path would begin another full-deadline wait against the same
+    // unresponsive device, turning a 10 s stall into 20 s. Only a genuine
+    // map failure falls back to the CPU copy path below.
+    if ((shouldCancel && shouldCancel()) || gpuTimedOut) {
+      return bitmap;
+    }
+  }
+
+  const uint32_t bytesPerRow = alignBytesPerRow(width * 4u);
+
+  // Allocate readback buffer.
+  wgpu::BufferDescriptor bd = {};
+  bd.label = wgpuLabel("RendererGeodeReadback");
+  bd.size = static_cast<uint64_t>(bytesPerRow) * static_cast<uint64_t>(height);
+  bd.usage = wgpu::BufferUsage::CopyDst | wgpu::BufferUsage::MapRead;
+  geode::ScopedWgpuHandle<wgpu::Buffer> readback(device->device().createBuffer(bd));
+  device->countBuffer();
+
+  // Copy texture → readback buffer.
+  geode::ScopedWgpuHandle<wgpu::CommandEncoder> enc(device->device().createCommandEncoder());
+  wgpu::TexelCopyTextureInfo src = {};
+  src.texture = texture;
+  src.mipLevel = 0;
+  src.origin = {0, 0, 0};
+  wgpu::TexelCopyBufferInfo dst = {};
+  dst.buffer = readback.get();
+  dst.layout.bytesPerRow = bytesPerRow;
+  dst.layout.rowsPerImage = height;
+  wgpu::Extent3D copySize = {width, height, 1};
+  enc.get().copyTextureToBuffer(src, dst, copySize);
+
+  geode::ScopedWgpuHandle<wgpu::CommandBuffer> cmd(enc.get().finish());
+  device->queue().submit(1, &cmd.get());
+  device->countSubmit();
+
+  if (MapAndWaitReadback(device, readback.get(), bd.size, shouldCancel) !=
+      ReadbackMapStatus::Success) {
     return bitmap;
   }
 
   const uint8_t* mapped =
       static_cast<const uint8_t*>(readback.get().getConstMappedRange(0, bd.size));
+  if (mapped == nullptr) {
+    // Size mismatch between the map request and the buffer returns null
+    // rather than raising a validation error; never memcpy from it.
+    readback.get().unmap();
+    return bitmap;
+  }
 
   // Strip row padding and unpremultiply alpha so the consumer gets a tightly
   // packed *straight-alpha* RGBA buffer. `GeoEncoder::fillPath` premultiplies

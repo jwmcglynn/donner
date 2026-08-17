@@ -12,6 +12,8 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <map>
+#include <mutex>
 #include <string_view>
 #include <thread>
 
@@ -180,6 +182,11 @@ struct GeodeDevice::Impl {
     DestroyResourceBacking(dummyPatternTexture);
     DestroyResourceBacking(dummyClipMaskTexture);
     DestroyResourceBacking(identityInstanceTransformBuffer);
+    for (auto& [unusedKey, entry] : snapshotReadbackPool) {
+      (void)unusedKey;
+      DestroyResourceBacking(entry.resources.staging);
+      DestroyResourceBacking(entry.resources.readback);
+    }
   }
 
   wgpu::Instance instance;
@@ -217,7 +224,36 @@ struct GeodeDevice::Impl {
   /// Built lazily on first `maskPipeline()` access - see the header.
   std::unique_ptr<GeodeMaskPipeline> maskPipeline;
   std::unique_ptr<GeodeFilterEngine> filterEngine;
+  /// Built lazily on first `snapshotReadbackPipeline()` access - see the header.
+  std::unique_ptr<GeodeSnapshotReadbackPipeline> snapshotReadbackPipeline;
+
+  /// Size-keyed free pool of GPU snapshot readback resources (staging texture,
+  /// view, and map-readable buffer). One entry per (width, height) so repeat
+  /// snapshots at the same dimensions allocate nothing. Bounded: entries
+  /// carry a last-use tick, and the least-recently-used entry is destroyed
+  /// when a release would exceed kMaxSnapshotReadbackPoolEntries, so a
+  /// size-churning caller (a window resize walks hundreds of canvas sizes)
+  /// cannot accumulate retained staging memory for the device's lifetime.
+  struct SnapshotReadbackPoolEntry {
+    SnapshotReadbackResources resources;
+    uint64_t lastUsedTick = 0;
+  };
+  std::mutex snapshotReadbackPoolMutex;
+  std::map<std::pair<uint32_t, uint32_t>, SnapshotReadbackPoolEntry> snapshotReadbackPool;
+  uint64_t snapshotReadbackPoolTick = 0;
+
+  /// Guards the lazy snapshotReadbackPipeline construction: the device is
+  /// documented as shareable between the main thread and the async-render
+  /// worker, and both can take a first snapshot concurrently. A plain
+  /// null-check would let both construct, and the second assignment would
+  /// destroy the pipeline the first thread already holds a reference to.
+  std::once_flag snapshotReadbackPipelineOnce;
 };
+
+/// Distinct snapshot sizes retained by the readback pool: covers the main
+/// canvas, the async-render worker, and thumbnail/icon sizes without letting
+/// a resize sweep pin one entry per intermediate size.
+constexpr size_t kMaxSnapshotReadbackPoolEntries = 4;
 
 namespace {
 /// Monotonic source for `GeodeDevice::deviceId()`. Never reused, starts at 1
@@ -570,6 +606,94 @@ GeodeMaskPipeline& GeodeDevice::maskPipeline() const {
 }
 GeodeFilterEngine& GeodeDevice::filterEngine() const {
   return *impl_->filterEngine;
+}
+GeodeSnapshotReadbackPipeline& GeodeDevice::snapshotReadbackPipeline() const {
+  // Lazy: only snapshot readback consumes this pipeline, so renderers that
+  // never call takeSnapshot() avoid the compile cost. call_once, not a plain
+  // null-check: see Impl::snapshotReadbackPipelineOnce.
+  std::call_once(impl_->snapshotReadbackPipelineOnce, [this] {
+    impl_->snapshotReadbackPipeline = std::make_unique<GeodeSnapshotReadbackPipeline>(device_);
+  });
+  return *impl_->snapshotReadbackPipeline;
+}
+
+SnapshotReadbackResources GeodeDevice::acquireSnapshotReadbackResources(uint32_t width,
+                                                                        uint32_t height) {
+  const std::pair<uint32_t, uint32_t> key(width, height);
+  {
+    std::lock_guard<std::mutex> lock(impl_->snapshotReadbackPoolMutex);
+    auto it = impl_->snapshotReadbackPool.find(key);
+    if (it != impl_->snapshotReadbackPool.end()) {
+      SnapshotReadbackResources result = std::move(it->second.resources);
+      impl_->snapshotReadbackPool.erase(it);
+      return result;
+    }
+  }
+
+  // First use at this size: allocate the staging texture, its view, and the
+  // map-readable readback buffer. Bytes-per-row must be 256-aligned per the
+  // WebGPU texture-to-buffer copy rules.
+  SnapshotReadbackResources resources;
+  resources.width = width;
+  resources.height = height;
+
+  wgpu::TextureDescriptor td = {};
+  td.label = wgpuLabel("RendererGeodeReadbackStaging");
+  td.size = {width, height, 1};
+  td.format = wgpu::TextureFormat::RGBA8Unorm;
+  td.usage = wgpu::TextureUsage::StorageBinding | wgpu::TextureUsage::CopySrc;
+  td.mipLevelCount = 1;
+  td.sampleCount = 1;
+  td.dimension = wgpu::TextureDimension::_2D;
+  resources.staging.reset(device_.createTexture(td));
+  if (resources.staging) {
+    resources.stagingView.reset(resources.staging.get().createView());
+    countTexture();
+  }
+
+  const uint32_t bytesPerRow = AlignReadbackBytesPerRow(width * 4u);
+  wgpu::BufferDescriptor bd = {};
+  bd.label = wgpuLabel("RendererGeodeReadback");
+  bd.size = static_cast<uint64_t>(bytesPerRow) * static_cast<uint64_t>(height);
+  bd.usage = wgpu::BufferUsage::CopyDst | wgpu::BufferUsage::MapRead;
+  resources.readback.reset(device_.createBuffer(bd));
+  if (resources.readback) {
+    countBuffer();
+  }
+
+  if (resources.empty()) {
+    // Partial allocation failure: release what was created without pooling it.
+    resources = SnapshotReadbackResources{};
+  }
+  return resources;
+}
+
+void GeodeDevice::releaseSnapshotReadbackResources(SnapshotReadbackResources resources) {
+  if (resources.empty()) {
+    return;
+  }
+  const std::pair<uint32_t, uint32_t> key(resources.width, resources.height);
+  std::lock_guard<std::mutex> lock(impl_->snapshotReadbackPoolMutex);
+  Impl::SnapshotReadbackPoolEntry entry;
+  entry.resources = std::move(resources);
+  entry.lastUsedTick = ++impl_->snapshotReadbackPoolTick;
+  impl_->snapshotReadbackPool.insert_or_assign(key, std::move(entry));
+
+  while (impl_->snapshotReadbackPool.size() > kMaxSnapshotReadbackPoolEntries) {
+    auto lruIt = impl_->snapshotReadbackPool.begin();
+    for (auto it = std::next(impl_->snapshotReadbackPool.begin());
+         it != impl_->snapshotReadbackPool.end(); ++it) {
+      if (it->second.lastUsedTick < lruIt->second.lastUsedTick) {
+        lruIt = it;
+      }
+    }
+    // Pooled entries are idle by construction (release happens only after
+    // the readback unmaps), so their backings can be destroyed eagerly
+    // instead of deferred to a frame boundary.
+    DestroyResourceBacking(lruIt->second.resources.staging);
+    DestroyResourceBacking(lruIt->second.resources.readback);
+    impl_->snapshotReadbackPool.erase(lruIt);
+  }
 }
 const wgpu::Instance& GeodeDevice::instance() const {
   return impl_->instance;
