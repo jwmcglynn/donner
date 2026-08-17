@@ -1999,11 +1999,6 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
   };
   std::deque<SceneTempRecordSlot> sceneTempRecordSlots;
 
-  /// Resolve the record slot for a scene-batch instance of `slot`: the
-  /// entity's primary slot on its first scene use this frame, otherwise a
-  /// fresh temporary slot (the primary slot's record is already referenced
-  /// by an earlier recorded batch). Returns false when no slot is
-  /// available.
   /// Choose the record slot for a scene-batch instance of `slot` WITHOUT
   /// marking it used: the primary slot when nothing this frame references
   /// it yet (nullptr: the ensure uses the cached write path), or a fresh
@@ -2382,14 +2377,6 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
     deviceFromLocalTransform = savedDeviceFromLocalTransform;
   }
 
-  /// Predicate: would a batchable draw with this key extend the
-  /// currently pending batch, or does it start a new one? Returns
-  /// true when the current `drawPath` call should NOT emit (because
-  /// it's been absorbed into a batch). Always returns true on a
-  /// non-empty batch state - either appends or flushes + starts new.
-  /// The caller is expected to have already verified the draw is
-  /// "batch-compatible" (solid paint, no stroke, has source entity,
-  /// has cached fill encode, no in-flight pattern).
   /// Start a fresh size-1 same-entity batch holding the current draw.
   /// The caller has already flushed any previous pending batch.
   void startSameEntitySingleton(const Registry* sourceRegistry, Entity sourceEntity,
@@ -2409,6 +2396,14 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
     pendingBatch->deviceFromLocalTransforms.push_back(deviceFromLocalTransform);
   }
 
+  /// Predicate: would a batchable draw with this key extend the
+  /// currently pending batch, or does it start a new one? Returns
+  /// true when the current `drawPath` call should NOT emit (because
+  /// it's been absorbed into a batch). Always returns true on a
+  /// non-empty batch state - either appends or flushes + starts new.
+  /// The caller is expected to have already verified the draw is
+  /// "batch-compatible" (solid paint, no stroke, has source entity,
+  /// has cached fill encode, no in-flight pattern).
   bool tryAppendOrStartBatch(const Registry* sourceRegistry, Entity sourceEntity, const Path& path,
                              const css::RGBA& color, FillRule rule,
                              const geode::EncodedPath* encoded,
@@ -2582,7 +2577,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
       pendingBatch->sceneChunkBuffer = chunk;
       pendingBatch->sceneRecordBuffer = recordBuf;
       pendingBatch->sceneFirstInstance = recordIndex;
-          pendingBatch->sceneFirstRecordOffset = effectiveRecordSlot.offset;
+      pendingBatch->sceneFirstRecordOffset = effectiveRecordSlot.offset;
       pendingBatch->sceneClipVersion = clipVersion;
       appendSceneInstance(*pendingBatch,
                           PendingBatch::SceneInstance{residentFillSlot, encoded, &path, color,
