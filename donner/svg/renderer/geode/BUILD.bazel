@@ -641,6 +641,66 @@ donner_multi_transitioned_test(
     renderer_backend = "geode",
 )
 
+# Corpus-wide steady-state counter gate: renders every SVG in the render
+# corpus twice through one shared headless device and asserts the second-frame
+# `GeodeCounters` invariants, with an explicit ratcheting list of the scenes
+# that do not hold them yet.
+donner_cc_test(
+    name = "geode_counter_corpus_tests_impl",
+    # Sized on the impl as well as on the wrapper: under `--config=geode` this
+    # target is what runs, and it does the same full serial sweep over the
+    # corpus. A few seconds on hardware, minutes on a software adapter, so
+    # `long` (900 s) leaves headroom while still killing a driver hang.
+    size = "medium",
+    timeout = "long",
+    srcs = ["tests/GeodeCounterCorpus_tests.cc"],
+    data = [
+        "//donner/svg/renderer/benchmarks:testdata/simple_setup.svg",
+        "//donner/svg/renderer/testdata",
+        "//third_party/resvg-test-suite:fonts",
+    ],
+    # The first scene pays a one-time WebGPU device init plus WGSL pipeline
+    # compile, which on a software adapter alone approaches the 60 s default
+    # per-case watchdog in `gtest_timeout_main`. Raise it, but keep it well
+    # under the target timeout so a stuck case is reported as a per-case
+    # timeout with the scene name instead of bazel killing the whole process.
+    env = {"DONNER_TEST_TIMEOUT_SECONDS": "90"},
+    # Matches the tag `donner_multi_transitioned_test` adds for GPU-opening
+    # tests, so running the impl directly cannot land alongside another test
+    # that is driving the GPU.
+    tags = ["exclusive-if-local"],
+    target_compatible_with = _GEODE_ONLY,
+    deps = [
+        ":geode_counters",
+        ":geode_device",
+        "//donner/base",
+        "//donner/base:base_test_utils",
+        "//donner/base:gtest_timeout_main",
+        "//donner/svg",
+        "//donner/svg/parser",
+        "//donner/svg/renderer:renderer_geode",
+        "//donner/svg/renderer:renderer_interface",
+        "//donner/svg/renderer/tests:image_comparison_test_fixture",
+        "//donner/svg/resources:sandboxed_file_resource_loader",
+    ],
+)
+
+donner_multi_transitioned_test(
+    name = "geode_counter_corpus_tests",
+    # Same budget as the impl. Deliberately unsharded: every scene shares one
+    # device, so extra shards would each repay the device-init cost for no
+    # parallelism, since GPU-opening targets are serialized anyway.
+    size = "medium",
+    timeout = "long",
+    testonly = 1,
+    dep = ":geode_counter_corpus_tests_impl",
+    opens_gpu_device = True,
+    renderer_backend = "geode",
+    # The corpus includes text scenes; without the text backend they would
+    # render as no-ops and the gate would not see their counters at all.
+    text = "true",
+)
+
 donner_cc_test(
     name = "geode_embed_tests_impl",
     srcs = ["tests/GeodeEmbed_tests.cc"],

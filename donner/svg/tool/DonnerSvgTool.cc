@@ -31,8 +31,8 @@
 #include "donner/svg/SVGGeometryElement.h"
 #include "donner/svg/SVGPathElement.h"
 #include "donner/svg/SVGTextElement.h"
-#include "donner/svg/renderer/Renderer.h"
 #include "donner/svg/renderer/RendererInterface.h"
+#include "donner/svg/renderer/RendererTinySkia.h"
 #include "donner/svg/renderer/TerminalImageViewer.h"
 #include "donner/svg/resources/SandboxedFileResourceLoader.h"
 #include "donner/svg/tool/DonnerSvgToolUtils.h"
@@ -371,7 +371,7 @@ std::optional<Box2d> GraphicsWorldBounds(const SVGGraphicsElement& element) {
   return std::nullopt;
 }
 
-RendererBitmap CreateHighlightBitmap(SVGDocument& document, Renderer& renderer,
+RendererBitmap CreateHighlightBitmap(SVGDocument& document, RendererTinySkia& renderer,
                                      const SVGGraphicsElement& element,
                                      const SampledImageInfo& imageInfo) {
   const auto maybeSpline = element.isa<SVGGeometryElement>()
@@ -471,8 +471,8 @@ void RedrawImage(const TerminalImageView& view, int imageRows, std::ostream& out
 }
 
 /** Run mouse-driven terminal selection UI. */
-void RunInteractiveSelection(SVGDocument document, Renderer& renderer, const RendererBitmap& bitmap,
-                             std::ostream& out, std::ostream& err) {
+void RunInteractiveSelection(SVGDocument document, RendererTinySkia& renderer,
+                             const RendererBitmap& bitmap, std::ostream& out, std::ostream& err) {
   const SampledImageInfo imageInfo = RenderPreview(bitmap, /*interactive=*/true, out, err);
 
   // The status line sits directly after the image. renderSampled's last row ends with \n,
@@ -606,7 +606,12 @@ int RunDonnerSvgTool(int argc, char* argv[], std::ostream& out, std::ostream& er
   SVGDocument document = std::move(*maybeDocument);
   ApplyCanvasSize(options, &document);
 
-  Renderer renderer(options.verbose);
+  // donner-svg always renders on the CPU (tiny-skia) backend. A one-shot
+  // command-line render cannot amortize the GPU backend's fixed device and
+  // shader setup cost, so the CPU raster path is strictly faster for
+  // single-frame output. The GPU backend serves interactive, multi-frame
+  // rendering such as the editor.
+  RendererTinySkia renderer(options.verbose);
   renderer.draw(document);
 
   const bool shouldSavePng = options.outputFileSet || !options.preview;

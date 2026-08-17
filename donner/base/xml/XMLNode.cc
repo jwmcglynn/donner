@@ -170,6 +170,18 @@ void UpdateSourceAnchorSpan(EntityHandle handle, SourceOffsetComponent& offset) 
   }
 }
 
+/// Attach line and column numbers to a node offset recorded by the parser. The parser stores
+/// plain byte offsets because resolving line numbers for every node costs more than the rest of
+/// the parse; node offsets are the ones surfaced in diagnostics, so they are resolved on read.
+std::optional<FileOffset> AddLineInfo(std::optional<FileOffset> offset,
+                                      XMLSourceStore* sourceStore) {
+  if (sourceStore == nullptr || !offset.has_value()) {
+    return offset;
+  }
+
+  return sourceStore->resolveLineInfo(*offset);
+}
+
 std::optional<FileOffset> ResolveStartOffset(const SourceOffsetComponent& offset,
                                              XMLSourceStore* sourceStore) {
   if (sourceStore != nullptr && offset.anchorSpan.has_value() &&
@@ -182,7 +194,7 @@ std::optional<FileOffset> ResolveStartOffset(const SourceOffsetComponent& offset
     return FileOffset::Offset(*resolved);
   }
 
-  return offset.startOffset;
+  return AddLineInfo(offset.startOffset, sourceStore);
 }
 
 std::optional<FileOffset> ResolveEndOffset(const SourceOffsetComponent& offset,
@@ -197,7 +209,7 @@ std::optional<FileOffset> ResolveEndOffset(const SourceOffsetComponent& offset,
     return FileOffset::Offset(*resolved);
   }
 
-  return offset.endOffset;
+  return AddLineInfo(offset.endOffset, sourceStore);
 }
 
 }  // namespace

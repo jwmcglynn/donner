@@ -211,6 +211,19 @@ std::optional<XMLSourceDelta> XMLSourceStore::replace(std::size_t offset, std::s
   };
 }
 
+FileOffset XMLSourceStore::resolveLineInfo(FileOffset offset) const {
+  if (!offset.offset.has_value()) {
+    return offset;
+  }
+
+  if (!lineOffsets_.has_value() || lineOffsetsVersion_ != sourceVersion_) {
+    lineOffsets_.emplace(std::string_view(source_));
+    lineOffsetsVersion_ = sourceVersion_;
+  }
+
+  return lineOffsets_->fileOffset(offset.offset.value());
+}
+
 bool XMLSourceStore::isBoundary(std::size_t offset) const {
   if (offset > source_.size()) {
     return false;

@@ -1,4 +1,5 @@
 load("//build_defs:package.bzl", "donner_package")
+load("//build_defs:dep_audit.bzl", "forbidden_transitive_dep_test")
 load("//build_defs:rules.bzl", "donner_cc_binary", "donner_cc_library", "donner_cc_test")
 
 alias(
@@ -40,7 +41,14 @@ donner_cc_library(
         ":donner_svg_tool_utils",
         "//donner/base:diagnostic_renderer",
         "//donner/svg",
-        "//donner/svg/renderer",
+        # The CLI renders exactly one frame per invocation, so the GPU
+        # backend's fixed device and shader setup cost can never amortize;
+        # the CPU (tiny-skia) backend is strictly faster for one-shot
+        # rendering. Depend on the CPU backend directly instead of the
+        # config-selected //donner/svg/renderer dispatcher so the CLI never
+        # links the GPU stack, under any build config. Enforced by
+        # :donner_svg_excludes_geode_audit below.
+        "//donner/svg/renderer:renderer_tiny_skia",
         "//donner/svg/renderer:terminal_image_viewer",
     ],
 )
@@ -63,6 +71,23 @@ donner_cc_test(
         ":donner_svg_tool_lib",
         "@com_google_gtest//:gtest_main",
     ],
+)
+
+# The one-shot CLI must never link the GPU (Geode) backend: a single
+# rendered frame cannot amortize GPU device and shader setup, so the CPU
+# backend is the CLI renderer under every build config, including
+# --config=geode. somepath() over the unconfigured graph is meaningful
+# here because nothing in the CLI's dep list reaches the config-selected
+# //donner/svg/renderer dispatcher (see build_defs/dep_audit.bzl).
+forbidden_transitive_dep_test(
+    name = "donner_svg_excludes_geode_audit",
+    size = "small",
+    forbidden = "//donner/svg/renderer:renderer_geode",
+    tags = [
+        "audit",
+        "deps",
+    ],
+    target = "//donner/svg/tool:donner-svg",
 )
 
 donner_package()

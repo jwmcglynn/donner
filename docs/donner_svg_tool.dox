@@ -13,6 +13,15 @@
  * tools/donner-svg input.svg
  * ```
  *
+ * @section DonnerSvgToolBackend Rendering backend
+ *
+ * `donner-svg` always renders with Donner's CPU (tiny-skia) backend, under
+ * every build configuration. A one-shot command-line render cannot amortize
+ * the GPU backend's fixed device and shader setup cost, so the CPU backend
+ * is strictly better for single-frame output. The GPU (Geode) backend is
+ * Donner's interactive renderer, used by long-lived surfaces such as the
+ * editor where that setup cost is paid once across many frames.
+ *
  * @section DonnerSvgToolFlags Common flags
  *
  * - `--output <png>`: Output filename (default `output.png`).
