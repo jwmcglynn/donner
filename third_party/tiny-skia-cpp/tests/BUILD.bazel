@@ -5,6 +5,7 @@ package(default_visibility = ["//visibility:public"])
 test_suite(
     name = "tiny_skia_dual_mode_suite",
     tests = [
+        "//src/tiny_skia/filter/tests:tiny_skia_filter_tests",
         "//src/tiny_skia/path64/tests:tiny_skia_path64_tests",
         "//src/tiny_skia/pipeline/tests:tiny_skia_pipeline_tests",
         "//src/tiny_skia/scan/tests:tiny_skia_scan_tests",

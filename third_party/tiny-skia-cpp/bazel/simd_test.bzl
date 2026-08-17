@@ -1,6 +1,7 @@
 """Helpers for generating paired native/scalar cc_test targets."""
 
 load("@rules_cc//cc:defs.bzl", "cc_test")
+load("//:bazel/defs.bzl", "SIMD_NATIVE_WASM_COPTS")
 load("//:bazel/simd_transition.bzl", "simd_mode_dep")
 
 def _transition_deps(name, deps, mode):
@@ -30,7 +31,7 @@ def tiny_skia_dual_mode_cc_test(
         name = native_name,
         srcs = srcs,
         deps = _transition_deps(name, deps, "native"),
-        copts = copts,
+        copts = copts + SIMD_NATIVE_WASM_COPTS,
         data = data,
         tags = tags + ["simd_mode=native"],
         **kwargs
@@ -40,7 +41,9 @@ def tiny_skia_dual_mode_cc_test(
         name = scalar_name,
         srcs = srcs,
         deps = _transition_deps(name, deps, "scalar"),
-        copts = copts,
+        # The scalar variant keeps the flag too: the mode define comes from the
+        # transitioned deps, and it gates the ISA branches off regardless.
+        copts = copts + SIMD_NATIVE_WASM_COPTS,
         data = data,
         tags = tags + ["simd_mode=scalar"],
         **kwargs
