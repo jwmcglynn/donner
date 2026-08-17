@@ -118,12 +118,13 @@ donner_cc_test(
         "tests/PointsListParser_tests.cc",
         "tests/PreserveAspectRatioParser_tests.cc",
         "tests/SVGParser_tests.cc",
+        "tests/SVGParserContext_tests.cc",
         "tests/SetElement_tests.cc",
         "tests/TransformParser_tests.cc",
         "tests/ViewBoxParser_tests.cc",
     ],
-    # Variant lanes (doc 0031 M2.3): tiny / text_full / geode
-    # wrappers run automatically under `bazel test //...`.
+    # Variant lanes: the tiny / text_full / geode wrappers run automatically under
+    # `bazel test //...`.
     variants = [
         "tiny",
         "text_full",
@@ -132,6 +133,7 @@ donner_cc_test(
     deps = [
         ":parser",
         ":parser_core",
+        ":parser_details",
         "//donner/base:base_test_utils",
         "//donner/css/parser",
         "//donner/svg/components/animation:animation_system",
