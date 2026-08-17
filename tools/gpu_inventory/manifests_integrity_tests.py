@@ -60,11 +60,16 @@ class ShaderFeaturesManifestTest(unittest.TestCase):
         shader = self.manifest["shaders"]["donner/svg/renderer/geode/shaders/slug_fill.wgsl"]
         stages = sorted(e["stage"] for e in shader["entryPoints"])
         self.assertEqual(stages, ["fragment", "vertex"])
-        self.assertEqual(len(shader["bindings"]), 14)
+        # The instance-record consolidation folded the per-draw uniform
+        # bindings into the record SSBO plus a combined grid binding, so the
+        # solid-fill shader declares 11 bindings.
+        self.assertEqual(len(shader["bindings"]), 11)
         bindings = {entry["binding"]: entry["name"] for entry in shader["bindings"]}
+        # Curve references and both band grids live in the combined grid
+        # storage at binding 10; the per-instance records ride binding 7.
         self.assertEqual(
-            {binding: bindings[binding] for binding in (12, 13)},
-            {12: "hCurveIndices", 13: "vCurveIndices"},
+            {binding: bindings[binding] for binding in (7, 10)},
+            {7: "instances", 10: "gridData"},
         )
 
     def test_every_shader_has_an_entry_point(self):
