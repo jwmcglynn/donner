@@ -268,6 +268,39 @@ TEST(AttributesComponent, NamespaceAfterReparenting) {
               testing::Eq(std::nullopt));
 }
 
+TEST(AttributesComponent, NamespaceOverrideCountedPerDeclarationNotPerWrite) {
+  Registry registry;
+  auto& namespaceContext = registry.ctx().emplace<XMLNamespaceContext>(registry);
+
+  Entity parent = registry.create();
+  AttributesComponent& parentAttributes = registry.emplace<AttributesComponent>(parent);
+
+  Entity child = registry.create();
+  AttributesComponent& childAttributes = registry.emplace<AttributesComponent>(child);
+
+  {
+    auto& parentTree = registry.emplace<TreeComponent>(parent, "parent");
+    registry.emplace<TreeComponent>(child, "child");
+    parentTree.appendChild(registry, child);
+  }
+
+  parentAttributes.setAttribute(registry, XMLQualifiedNameRef("", "xmlns"),
+                                "https://example.com/parent");
+
+  // Writing the same declaration twice is still one declaration.
+  childAttributes.setAttribute(registry, XMLQualifiedNameRef("", "xmlns"),
+                               "https://example.com/child");
+  childAttributes.setAttribute(registry, XMLQualifiedNameRef("", "xmlns"),
+                               "https://example.com/child2");
+  EXPECT_TRUE(childAttributes.hasNamespaceOverrides());
+  EXPECT_EQ(namespaceContext.getNamespaceUri(registry, child, ""), "https://example.com/child2");
+
+  // Removing it leaves the element with no declarations, so the parent's applies again.
+  childAttributes.removeAttribute(registry, XMLQualifiedNameRef("", "xmlns"));
+  EXPECT_FALSE(childAttributes.hasNamespaceOverrides());
+  EXPECT_EQ(namespaceContext.getNamespaceUri(registry, child, ""), "https://example.com/parent");
+}
+
 TEST(AttributesComponent, NamespaceAfterInsertBefore) {
   Registry registry;
   auto& namespaceContext = registry.ctx().emplace<XMLNamespaceContext>(registry);
