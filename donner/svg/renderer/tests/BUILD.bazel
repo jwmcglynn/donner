@@ -204,6 +204,7 @@ donner_cc_test(
         ":image_comparison_test_fixture",
         "//donner/base:base_test_utils",
         "//donner/base:gtest_timeout_main",
+        "//donner/svg/tests:parser_test_utils",
     ],
 )
 
