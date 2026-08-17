@@ -760,7 +760,7 @@ TEST_F(GeodePerfTest, GradientStroke_NoDirtyPath_ZeroWrites) {
   auto device = sharedDevice();
   ASSERT_TRUE(device) << "GeodeDevice::CreateHeadless failed";
 
-  geode::GeodeCounters c = countersForSecondRender(kGradientStrokeSvg, device);
+  const geode::GeodeCounters c = countersForSecondRender(kGradientStrokeSvg, device);
   RecordProperty("bufferWrites", std::to_string(c.bufferWrites));
   RecordProperty("bufferWriteBytes", std::to_string(c.bufferWriteBytes));
   RecordProperty("bindgroupCreates", std::to_string(c.bindgroupCreates));
@@ -769,6 +769,8 @@ TEST_F(GeodePerfTest, GradientStroke_NoDirtyPath_ZeroWrites) {
   EXPECT_EQ(c.pathEncodes, 0u) << "Stroke outline must come from the stroke-outline cache.";
   EXPECT_EQ(c.bufferWriteBytes, 0u)
       << "Resident gradient strokes must re-upload zero geometry on an unchanged frame.";
+  EXPECT_LE(c.bindgroupCreates, 1u)
+      << "The cached gradient-stroke bind group must be reused on an unchanged frame.";
 }
 
 TEST_F(GeodePerfTest, Lion_NoDirtyPath_ZeroTextures) {

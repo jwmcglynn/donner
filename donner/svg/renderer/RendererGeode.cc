@@ -2256,6 +2256,18 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
         // zero-area closed subpaths first (see `deCloseZeroAreaSubpaths`) so a
         // degenerate `M L Z` line strokes into a clean rectangle the analytic
         // shader covers correctly, instead of overlapping triangles.
+        // Drop the stale GPU residence FIRST, unconditionally for every
+        // exit of this miss branch: the encode is about to be replaced in
+        // place (or destroyed, in the empty-outline case below) without
+        // removing the entity's components, so the entt listener does not
+        // fire, and a resident slot keyed on the old encode storage would
+        // keep a dangling encodedKey plus a retained slab range. The
+        // GeoEncoder fingerprint guard is a second line of defense; this
+        // keeps the invariant obvious at the single mutation site.
+        if (auto* resident = source.try_get<geode::GeodeResidentPathComponent>()) {
+          resident->strokeSlot.reset();
+          resident->gradientStrokeSlot.reset();
+        }
         Path stroked =
             deCloseZeroAreaSubpaths(geometry).strokeToFill(strokeStyle, flattenTolerance);
         if (stroked.empty()) {
@@ -2276,16 +2288,6 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
             .strokedEncode = std::move(encoded),
             .strokeFillRule = fillRule,
         };
-        // The stroke encode was rebuilt in place (stroke-param change)
-        // without removing the entity's components, so the entt listener
-        // does not fire. Drop the stale GPU residence explicitly so the
-        // next draw re-uploads the new stroked geometry. The `GeoEncoder`
-        // fingerprint guard is a second line of
-        // defense; this keeps the invariant obvious at the mutation site.
-        if (auto* resident = source.try_get<geode::GeodeResidentPathComponent>()) {
-          resident->strokeSlot.reset();
-          resident->gradientStrokeSlot.reset();
-        }
       }
       result.strokedPath = &cache.strokeSlot->strokedPath;
       result.encoded = &cache.strokeSlot->strokedEncode;

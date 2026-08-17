@@ -921,6 +921,55 @@ TEST_F(RendererGeodeTest, GradientStopEditInvalidatesResidentGradientDraw) {
       << "A gradient stop edit must invalidate the resident gradient draw's cached uniforms";
 }
 
+/// The stroke encode is rebuilt IN PLACE on a stroke-param change (same
+/// storage address, no component removal), so gradient-stroke residence
+/// invalidation rests on the explicit reset at the rebuild site. Pin it
+/// with pixels: a stroke-width edit with no geometry change must change
+/// the next frame, and an unchanged document must render identically
+/// through the steady-state resident path.
+TEST_F(RendererGeodeTest, StrokeWidthEditInvalidatesResidentGradientStroke) {
+  ParseWarningSink warningSink;
+  auto maybeDocument = parser::SVGParser::ParseSVG(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64">
+             <defs>
+               <linearGradient id="g" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="64"
+                                y2="0">
+                 <stop offset="0" stop-color="#00ff00"/>
+                 <stop offset="1" stop-color="#00ff00"/>
+               </linearGradient>
+             </defs>
+             <path id="p" d="M 8 32 L 56 32" fill="none" stroke="url(#g)" stroke-width="4"/>
+           </svg>)svg",
+      warningSink);
+  ASSERT_FALSE(maybeDocument.hasError()) << maybeDocument.error();
+  SVGDocument document = std::move(maybeDocument).result();
+
+  RendererGeode renderer = createRenderer();
+  renderer.draw(document);
+  const RendererBitmap first = renderer.takeSnapshot();
+  ASSERT_FALSE(first.empty());
+  // 12px above the line center: outside a 4px-wide stroke, inside a 28px one.
+  EXPECT_THAT(pixelAt(first, 32, 20), IsTransparent());
+  EXPECT_THAT(pixelAt(first, 32, 32), RgbaEq(0, 255, 0, 255));
+
+  // Unchanged second frame rides the resident path and must be identical.
+  renderer.draw(document);
+  const RendererBitmap second = renderer.takeSnapshot();
+  ASSERT_FALSE(second.empty());
+  EXPECT_THAT(pixelAt(second, 32, 20), IsTransparent());
+  EXPECT_THAT(pixelAt(second, 32, 32), RgbaEq(0, 255, 0, 255));
+
+  auto path = document.querySelector("#p");
+  ASSERT_TRUE(path.has_value());
+  path->setAttribute("stroke-width", "28");
+
+  renderer.draw(document);
+  const RendererBitmap third = renderer.takeSnapshot();
+  ASSERT_FALSE(third.empty());
+  EXPECT_THAT(pixelAt(third, 32, 20), RgbaEq(0, 255, 0, 255))
+      << "A stroke-width edit must invalidate the resident gradient-stroke draw";
+}
+
 TEST_F(RendererGeodeTest, EmbeddedDeviceDrawPathExportsTextureSnapshot) {
   std::shared_ptr<geode::GeodeDevice> host = sharedDevice();
   ASSERT_TRUE(host != nullptr);
