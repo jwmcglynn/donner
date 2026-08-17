@@ -43,6 +43,10 @@ _PR_SKIP_REASONS = frozenset(
         # A genuine subset containing nothing instrumentable. There is no
         # coverage to measure, and running anyway trips the empty-report guard.
         "no_instrumentable_targets",
+        # A genuine subset with instrumentable code but no test target to
+        # produce profile data from. `bazel coverage` treats an empty test set
+        # as an error, so running anyway is a guaranteed red with no report.
+        "no_test_targets",
     }
 )
 

@@ -37,6 +37,14 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         end = re.search(r"^  [A-Za-z0-9_-]+:\s*$", rest, re.MULTILINE)
         return rest[: end.start()] if end else rest
 
+    def _step_body(self, job, step_name):
+        """Return one step's body from a job, stopping at the next step."""
+        marker = "      - name: %s\n" % step_name
+        self.assertIn(marker, job, "step %s not found" % step_name)
+        rest = job.split(marker, 1)[1]
+        end = re.search(r"^      - name: ", rest, re.MULTILINE)
+        return rest[: end.start()] if end else rest
+
     def _heartbeat_script(self):
         match = re.search(
             r"cat > \"\$DIAG_DIR/run_bazel_with_heartbeat\.sh\" <<'EOF'\n"
@@ -91,6 +99,35 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
             with self.subTest(job=job_name):
                 job = self._job_body(job_name)
                 self.assertEqual(1, job.count("--test_tag_filters=-manual,-perf"))
+
+    def test_selected_target_lanes_tolerate_an_empty_test_selection(self):
+        """A selection with no test targets must not fail the change-based lanes.
+
+        `bazel test` exits 4 ("No test targets were found, yet testing was
+        requested") when the target patterns it is given contain no tests. A
+        change-based lane can hand it exactly that -- a docs filegroup, a
+        tool-only change, a diff confined to a vendored subtree tested from its
+        own workspace -- and the resulting red is unfixable by rerunning or by
+        editing the change. The wrapper turns only that one status into success.
+        """
+        for job_name in ("linux", "linux-self-hosted", "macos", "macos-self-hosted"):
+            with self.subTest(job=job_name):
+                step = self._step_body(self._job_body(job_name), "Test")
+                self.assertIn("tools/ci_bazel_test.sh", step)
+
+    def test_fixed_target_lanes_do_not_tolerate_an_empty_test_selection(self):
+        """A hardcoded target list that yields no tests is a real defect.
+
+        The Geode editor lanes name their tests literally, so an empty test set
+        there means a target was renamed or deleted out from under the lane.
+        That must stay red rather than inherit the change-based lanes' notice.
+        """
+        for job_name in ("macos", "macos-self-hosted"):
+            with self.subTest(job=job_name):
+                step = self._step_body(
+                    self._job_body(job_name), "Test (Geode editor lane)"
+                )
+                self.assertNotIn("tools/ci_bazel_test.sh", step)
 
     def test_linker_canary_uses_bounded_native_apt_retries(self):
         """The hosted canary must not ask an unprivileged action to kill apt."""

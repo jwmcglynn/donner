@@ -113,6 +113,14 @@ py_test(
 )
 
 py_test(
+    name = "ci_bazel_test_tests",
+    size = "small",
+    srcs = ["ci_bazel_test_tests.py"],
+    data = ["ci_bazel_test.sh"],
+    deps = ["@rules_python//python/runfiles"],
+)
+
+py_test(
     name = "ci_runtime_workflow_tests",
     size = "small",
     srcs = ["ci_runtime_workflow_tests.py"],
