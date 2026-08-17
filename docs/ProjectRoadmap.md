@@ -169,6 +169,10 @@ Focus: interactive editing, conformance, parser hardening, and ecosystem integra
 
 - Phases 1–9: timing model, interpolation engine, sandwich composition, attribute targeting,
   `<animate>`, `<animateTransform>`, `<animateMotion>`, `<set>`, event-based timing.
+- [ ] **Lottie playback (probable)** -- Play back Lottie animations (the JSON-based After
+      Effects export format, `.json`/`.lottie`) on top of the same animation timeline
+      machinery. Lottie is the dominant interchange format for production vector animation,
+      and runtimes such as ThorVG and dotLottie demonstrate the demand.
 
 ### Composited Rendering
 
