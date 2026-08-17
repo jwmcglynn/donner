@@ -5,11 +5,13 @@
 
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <memory>
 #include <string_view>
 
 #include "donner/svg/renderer/geode/GeodeCallbackState.h"
+#include "donner/svg/renderer/geode/GeodeGpuWait.h"
 #include "donner/svg/renderer/geode/GeodeFilterEngine.h"
 #include "donner/svg/renderer/geode/GeodeImagePipeline.h"
 #include "donner/svg/renderer/geode/GeodePipeline.h"
@@ -169,9 +171,13 @@ TEST(GeodeDevice, CanExecuteClearAndReadback) {
   mapCb.userdata2 = nullptr;
   readback.mapAsync(wgpu::MapMode::Read, 0, kBufferSize, mapCb);
 
-  while (!mapState->done.load(std::memory_order_acquire)) {
-    device.poll(true, nullptr);
-  }
+  const GpuWaitResult waitResult = BoundedGpuWait(
+      [&] {
+        device.poll(false, nullptr);
+        return mapState->done.load(std::memory_order_acquire);
+      },
+      kDefaultGpuWaitTimeout);
+  ASSERT_EQ(waitResult, GpuWaitResult::Complete) << "buffer map wait timed out";
   EXPECT_TRUE(mapState->ok.load(std::memory_order_relaxed)) << "buffer map failed";
 
   const uint8_t* pixels = static_cast<const uint8_t*>(readback.getConstMappedRange(0, kBufferSize));
@@ -315,6 +321,99 @@ TEST(GeodeDevice, LifetimeCountersReflectCountHelpers) {
   }
   EXPECT_EQ(device->lifetimeTextureCreates(), beforeTex + 10);
   EXPECT_EQ(device->lifetimeBufferCreates(), beforeBuf + 10);
+}
+
+/// The device-lost flag is observable, sticky, and logged once.
+TEST(GeodeDeviceLost, MarkDeviceLostIsSticky) {
+  auto device = GeodeDevice::CreateHeadless();
+  ASSERT_NE(device, nullptr);
+
+  EXPECT_FALSE(device->isDeviceLost());
+  device->markDeviceLost("test-injected loss");
+  EXPECT_TRUE(device->isDeviceLost());
+  device->markDeviceLost("second call must be a no-op");
+  EXPECT_TRUE(device->isDeviceLost());
+}
+
+/// A wait against a lost device must fail fast without polling the device:
+/// the generous default timeout is seconds, so a fast return proves the
+/// short-circuit rather than a lucky quick drain.
+TEST(GeodeDeviceLost, WaitForQueueIdleFastFailsOnLostDevice) {
+  auto device = GeodeDevice::CreateHeadless();
+  ASSERT_NE(device, nullptr);
+
+  device->markDeviceLost("test-injected loss");
+  const auto start = std::chrono::steady_clock::now();
+  const GpuWaitResult result = device->waitForQueueIdle();
+  const auto elapsed = std::chrono::steady_clock::now() - start;
+
+  EXPECT_EQ(result, GpuWaitResult::DeviceLost);
+  EXPECT_LT(elapsed, std::chrono::seconds(1))
+      << "lost-device wait must return immediately, not spend the timeout";
+}
+
+/// On a healthy device the bounded drain completes.
+TEST(GeodeDeviceLost, WaitForQueueIdleCompletesOnHealthyDevice) {
+  auto device = GeodeDevice::CreateHeadless();
+  ASSERT_NE(device, nullptr);
+
+  // Submit a trivial command buffer so the wait has real work to drain.
+  wgpu::CommandEncoder encoder = device->device().createCommandEncoder();
+  wgpu::CommandBuffer cmd = encoder.finish();
+  device->queue().submit(1, &cmd);
+
+  EXPECT_EQ(device->waitForQueueIdle(), GpuWaitResult::Complete);
+}
+
+/// Teardown after a declared loss must complete without blocking on the GPU.
+/// With submitted work still notionally in flight and the loss flag set, the
+/// destructor must skip its queue drains; finishing well under the default
+/// wait bound proves no bounded wait ran, and finishing at all proves no
+/// unbounded wait ran.
+TEST(GeodeDeviceLost, TeardownAfterLossSkipsGpuWaits) {
+  auto device = GeodeDevice::CreateHeadless();
+  ASSERT_NE(device, nullptr);
+
+  wgpu::CommandEncoder encoder = device->device().createCommandEncoder();
+  wgpu::CommandBuffer cmd = encoder.finish();
+  device->queue().submit(1, &cmd);
+  device->markDeviceLost("test-injected loss before teardown");
+
+  const auto start = std::chrono::steady_clock::now();
+  device.reset();
+  const auto elapsed = std::chrono::steady_clock::now() - start;
+  EXPECT_LT(elapsed, std::chrono::seconds(1))
+      << "post-loss teardown must not run bounded GPU waits";
+}
+
+/// An embedder-shared lost flag (GeodeEmbedConfig::lostState) is observed by
+/// the wrapper, and a loss marked through the wrapper is visible to the
+/// embedder: the flag converges both directions.
+TEST(GeodeDeviceLost, ExternalConfigSharesLostState) {
+  auto headless = GeodeDevice::CreateHeadless();
+  ASSERT_NE(headless, nullptr);
+
+  auto lostState = std::make_shared<GeodeDeviceLostState>();
+  GeodeEmbedConfig config;
+  config.device = headless->device();
+  config.queue = headless->queue();
+  config.lostState = lostState;
+  auto external = GeodeDevice::CreateFromExternal(config);
+  ASSERT_NE(external, nullptr);
+
+  EXPECT_FALSE(external->isDeviceLost());
+  lostState->lost.store(true, std::memory_order_release);
+  EXPECT_TRUE(external->isDeviceLost());
+
+  // Reset the shared flag and mark through the wrapper instead.
+  lostState->lost.store(false, std::memory_order_release);
+  external->markDeviceLost("wrapper-marked loss");
+  EXPECT_TRUE(lostState->lost.load(std::memory_order_acquire));
+
+  // The external wrapper's destructor must skip GPU waits (the flag is
+  // set); destroy it before the headless owner so the underlying device
+  // outlives the wrapper.
+  external.reset();
 }
 
 }  // namespace donner::geode

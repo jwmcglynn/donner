@@ -15,6 +15,7 @@
 #include "donner/css/Color.h"
 #include "donner/svg/renderer/geode/GeodeCallbackState.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
+#include "donner/svg/renderer/geode/GeodeGpuWait.h"
 #include "donner/svg/renderer/geode/GeodeImagePipeline.h"
 #include "donner/svg/renderer/geode/GeodePipeline.h"
 #include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
@@ -100,8 +101,9 @@ protected:
     device_->queue().submit(1, &cmd);
 
     // Map readback buffer. wgpu-native's `mapAsync` only exposes the
-    // callback-info form; plumb the done flag through `userdata1` and spin
-    // on `device.poll(true, nullptr)` which drains pending callbacks.
+    // callback-info form; plumb the done flag through `userdata1` and poll
+    // non-blocking under a bounded wait, which drains pending callbacks
+    // without risking an unbounded block inside a hung driver.
     struct MapState {
       std::atomic<bool> done = false;
       std::atomic<bool> ok = false;
@@ -117,9 +119,13 @@ protected:
     mapCb.userdata1 = retainWgpuCallbackState(mapState);
     mapCb.userdata2 = nullptr;
     readback_.mapAsync(wgpu::MapMode::Read, 0, kBytesPerRow * kSize, mapCb);
-    while (!mapState->done.load(std::memory_order_acquire)) {
-      device_->device().poll(true, nullptr);
-    }
+    const GpuWaitResult waitResult = BoundedGpuWait(
+        [&] {
+          device_->device().poll(false, nullptr);
+          return mapState->done.load(std::memory_order_acquire);
+        },
+        kDefaultGpuWaitTimeout);
+    EXPECT_EQ(waitResult, GpuWaitResult::Complete) << "buffer map wait timed out";
     EXPECT_TRUE(mapState->ok.load(std::memory_order_relaxed)) << "buffer map failed";
 
     const uint8_t* mapped =

@@ -17,6 +17,7 @@
 #include "donner/svg/renderer/geode/GeoEncoder.h"
 #include "donner/svg/renderer/geode/GeodeCallbackState.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
+#include "donner/svg/renderer/geode/GeodeGpuWait.h"
 #include "donner/svg/renderer/geode/GeodeImagePipeline.h"
 #include "donner/svg/renderer/geode/GeodePipeline.h"
 #include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
@@ -96,8 +97,15 @@ int CaptureBaseline(const char* outputPath) {
   mapCb.userdata1 = geode::retainWgpuCallbackState(mapState);
   mapCb.userdata2 = nullptr;
   readback.mapAsync(wgpu::MapMode::Read, 0, kBytesPerRow * kBaselineSize, mapCb);
-  while (!mapState->done.load(std::memory_order_acquire)) {
-    device->device().poll(true, nullptr);
+  const geode::GpuWaitResult waitResult = geode::BoundedGpuWait(
+      [&] {
+        device->device().poll(false, nullptr);
+        return mapState->done.load(std::memory_order_acquire);
+      },
+      geode::kDefaultGpuWaitTimeout);
+  if (waitResult != geode::GpuWaitResult::Complete) {
+    std::fprintf(stderr, "Readback buffer map wait timed out\n");
+    return 1;
   }
   if (!mapState->ok.load(std::memory_order_relaxed)) {
     std::fprintf(stderr, "Readback buffer map failed\n");

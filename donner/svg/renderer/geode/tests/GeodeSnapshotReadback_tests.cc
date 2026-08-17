@@ -9,6 +9,7 @@
 #include <gtest/gtest.h>
 
 #include <array>
+#include <chrono>
 #include <cstdint>
 #include <memory>
 #include <utility>
@@ -121,6 +122,45 @@ TEST_F(GeodeSnapshotReadbackTest, GpuAndCpuPathsAreByteIdentical) {
   EXPECT_EQ(gpuBitmap.alphaType, AlphaType::Unpremultiplied);
   EXPECT_EQ(gpuBitmap.pixels, cpuBitmap.pixels)
       << "GPU unpremultiply output differs from the CPU reference path";
+}
+
+/// A snapshot against a lost device must return an empty bitmap promptly
+/// instead of spending the full readback deadline waiting for a map that a
+/// hung driver will never deliver. A fresh (non-shared) device is used so the
+/// injected loss cannot poison the suite's shared device.
+TEST_F(GeodeSnapshotReadbackTest, SnapshotOnLostDeviceFailsFast) {
+  std::shared_ptr<geode::GeodeDevice> device(geode::GeodeDevice::CreateHeadless());
+  ASSERT_NE(device, nullptr);
+
+  wgpu::Texture texture = createTestTexture(
+      device->device(), wgpu::TextureUsage::TextureBinding | wgpu::TextureUsage::CopySrc);
+  const Vector2i dimensions(static_cast<int>(kWidth), static_cast<int>(kHeight));
+  RendererGeodeTextureSnapshot snapshot(device, std::move(texture), dimensions,
+                                        wgpu::TextureFormat::RGBA8Unorm);
+
+  device->markDeviceLost("test-injected loss");
+
+  const auto start = std::chrono::steady_clock::now();
+  const RendererBitmap bitmap = snapshot.takeSnapshot();
+  const auto elapsed = std::chrono::steady_clock::now() - start;
+
+  EXPECT_TRUE(bitmap.empty());
+  // Well under the 10 second readback deadline: the map wait must fail fast
+  // on the lost flag rather than waiting it out.
+  EXPECT_LT(elapsed, std::chrono::seconds(2));
+}
+
+/// RendererGeode surfaces the device-lost condition of its backing device.
+TEST_F(GeodeSnapshotReadbackTest, RendererGeodeReportsDeviceLost) {
+  std::shared_ptr<geode::GeodeDevice> device(geode::GeodeDevice::CreateHeadless());
+  ASSERT_NE(device, nullptr);
+
+  RendererGeode renderer(device);
+  EXPECT_FALSE(renderer.deviceLost());
+  device->markDeviceLost("test-injected loss");
+  EXPECT_TRUE(renderer.deviceLost());
+  // Renderer teardown after the declared loss must not block; the test
+  // completing at all (under the suite timeout) pins that.
 }
 
 }  // namespace
