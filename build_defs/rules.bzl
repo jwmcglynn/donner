@@ -272,6 +272,30 @@ exec "$impl" "$@"
 
     return providers
 
+# Implicit attributes Bazel's test machinery requires before it will
+# post-process coverage for a Starlark test rule. Forwarding
+# InstrumentedFilesInfo (above) only marks the wrapper as instrumented; the
+# test runner separately reads these rule attributes to set LCOV_MERGER and
+# CC_CODE_COVERAGE_SCRIPT in the collection environment. Without them,
+# collect_coverage.sh sees LCOV_MERGER unset, touches an EMPTY coverage.dat,
+# and exits 0, so an executed, instrumented test silently contributes no line
+# data: the .profraw files its binary wrote are never merged. A coverage run
+# whose test selection consists only of transitioned tests then yields an LCOV
+# report with per-file records but zero DA/LF lines, which
+# tools/check_lcov_report.py rejects as "no executable line data".
+_TRANSITIONED_TEST_COVERAGE_ATTRS = {
+    "_collect_cc_coverage": attr.label(
+        default = "@bazel_tools//tools/test:collect_cc_coverage",
+        cfg = "exec",
+        executable = True,
+    ),
+    "_lcov_merger": attr.label(
+        default = configuration_field(fragment = "coverage", name = "output_generator"),
+        cfg = "exec",
+        executable = True,
+    ),
+}
+
 donner_transitioned_cc_test = rule(
     implementation = _donner_transitioned_executable_impl,
     test = True,
@@ -285,7 +309,7 @@ donner_transitioned_cc_test = rule(
             mandatory = True,
             values = ["tiny_skia", "geode"],
         ),
-    },
+    } | _TRANSITIONED_TEST_COVERAGE_ATTRS,
 )
 
 def _multi_transition_impl(settings, attr):
@@ -347,7 +371,7 @@ _donner_multi_transitioned_test = rule(
             default = "false",
             values = ["true", "false"],
         ),
-    },
+    } | _TRANSITIONED_TEST_COVERAGE_ATTRS,
 )
 
 def donner_multi_transitioned_test(name, dep, renderer_backend, opens_gpu_device = False, **kwargs):
