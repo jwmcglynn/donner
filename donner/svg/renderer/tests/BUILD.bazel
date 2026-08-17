@@ -133,6 +133,10 @@ donner_cc_library(
     hdrs = [
         "ImageComparisonTestFixture.h",
     ],
+    visibility = [
+        "//donner/editor/tests:__pkg__",
+        "//donner/svg:__subpackages__",
+    ],
     deps = [
         ":renderer_image_test_utils",
         ":renderer_test_backend",
