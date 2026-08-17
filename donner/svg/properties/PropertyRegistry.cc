@@ -2245,10 +2245,11 @@ bool PropertyRegistry::isPresentationAttributeInherited(std::string_view name) {
     return false;
   }
 
-  // Each property's name and cascade mode are fixed for the life of the process, so the answer is
-  // read from a table built once rather than by constructing (and destroying) a whole registry per
-  // call just to inspect that metadata. This runs once per presentation attribute that a document
-  // sets, so the per-call registry was charged to every parse.
+  // Each property's name and cascade mode are fixed for the life of the process - every property
+  // is declared with a literal name - so the answer is read from a table built once rather than by
+  // constructing (and destroying) a whole registry per call just to inspect that metadata. This
+  // runs once per presentation attribute that a document sets, so the per-call registry was
+  // charged to every parse.
   static const std::array<std::pair<std::string_view, bool>, numProperties()> kInheritedByName =
       [] {
         std::array<std::pair<std::string_view, bool>, numProperties()> table = {};
