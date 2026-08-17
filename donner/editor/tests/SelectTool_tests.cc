@@ -531,7 +531,7 @@ TEST_F(SelectToolTest, TwoDifferentDragsBothUndoableInOrder) {
 }
 
 // ---------------------------------------------------------------------------
-// Multi-select (shift+click) and marquee selection - Milestone 4.
+// Multi-select (shift+click) and marquee selection.
 // ---------------------------------------------------------------------------
 
 TEST_F(SelectToolTest, ShiftClickAddsElementsToSelection) {
@@ -1152,7 +1152,7 @@ TEST_F(SelectToolTest, CanvasResizeMidDragDoesNotDisturbFinalTransform) {
   EXPECT_NEAR(translation.y, 40.0, 0.01) << "drag delta corrupted by mid-drag canvas resize";
 }
 
-// Design doc 0033 §M8 - re-drag-of-selected fast path. `tryStartRedragOn
+// Re-drag-of-selected fast path. `tryStartRedragOn
 // Selected` doesn't call `EditorApp::hitTest`; it works off
 // `SnapshotSelectionWorldBounds` of the currently-selected element.
 // EditorShell drops the `!isBusy()` gate for this path so the user
@@ -1243,7 +1243,7 @@ TEST_F(SelectToolTest, TryRedragOnSelectedReturnsFalseWhenClickIsOutsideSelected
   EXPECT_FALSE(tool.isDragging());
 }
 
-// Design doc 0033 §M8: the cache-based fast path must work with
+// The cache-based fast path must work with
 // pre-snapshotted bounds - the EditorShell drops the `!isBusy()`
 // gate for it, so a live `SnapshotSelectionWorldBounds` call would
 // race the worker. Passing an empty bounds span (e.g. when the
@@ -1277,7 +1277,7 @@ TEST_F(SelectToolTest, TryRedragOnSelectedHitsTransparentInteriorOfFiltergroup) 
 
   // Click inside #anchor's snapshotted world bounds. The fast path
   // re-drags #anchor without consulting `editor.hitTest`. Without it,
-  // the M8 caller-side `!isBusy()` drop wouldn't have a safe re-drag
+  // the caller-side `!isBusy()` drop wouldn't have a safe re-drag
   // path during busy renders.
   const auto anchorBounds =
       SnapshotSelectionWorldBounds(std::span<const svg::SVGElement>(app.selectedElements()));

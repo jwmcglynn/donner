@@ -696,8 +696,8 @@ INSTANTIATE_TEST_SUITE_P(
                 // seam-only residual: at the non-integer upscale here, resvg's nearest block grid
                 // lands on a slightly different device-pixel boundary than Donner's, so a handful
                 // of one-pixel-wide seams disagree. This is the same "golden kernel mismatch" class
-                // as the rest of the <image> category (0021 B3) - a vendored-golden refresh, not a
-                // Donner code change. See design 0058 Milestone 5.
+                // as the rest of the <image> category - a vendored-golden refresh, not a
+                // Donner code change.
                 {"on-feImage.svg",
                  Params::Skip("Golden kernel mismatch: image-rendering nearest implemented on both "
                               "backends; residual is the resvg nearest-grid seam convention at "

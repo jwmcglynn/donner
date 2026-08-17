@@ -11,11 +11,10 @@
 /// an async render request, and waits for the bitmap to land - exactly
 /// the flow `main.cc` runs per-frame.
 ///
-/// Design-doc context: this is the first vertical slice of Stage 2 of
-/// `docs/design_docs/0029-ui_input_repro.md` (headless replay) -
-/// scoped tightly to the repro we have in hand rather than a general
-/// replay player. When Stage 2 lands in full this harness collapses
-/// into `donner::editor::repro::ReplayPlayer`.
+/// This is a first vertical slice of headless replay, scoped tightly to the
+/// repro we have in hand rather than a general replay player. When full
+/// headless replay lands this harness collapses into
+/// `donner::editor::repro::ReplayPlayer`.
 
 #include "donner/editor/tests/FilterDragReproTestUtils.h"
 

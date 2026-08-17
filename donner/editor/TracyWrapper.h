@@ -6,8 +6,7 @@
 /// expand to no-ops so editor code can be instrumented unconditionally.
 ///
 /// Native editor builds enable Tracy by default; RE and WASM builds compile
-/// this wrapper as no-ops. See the Security section of
-/// `docs/design_docs/0020-editor.md` for the trade-off.
+/// this wrapper as no-ops.
 
 #ifdef ENABLE_TRACY
 #include "tracy/Tracy.hpp"

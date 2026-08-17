@@ -77,9 +77,8 @@ struct StrokeStyle {
   double pathLength = 0.0;
 
   /// Defaulted memberwise equality. Used as a cache key by the Geode
-  /// stroke-encode cache (design doc 0030 Milestone 2): a cached
-  /// `Path::strokeToFill` result is reused only when the source
-  /// `StrokeStyle` still compares equal.
+  /// stroke-encode cache: a cached `Path::strokeToFill` result is reused only
+  /// when the source `StrokeStyle` still compares equal.
   bool operator==(const StrokeStyle& other) const = default;
 };
 
@@ -429,7 +428,7 @@ public:
   /// point-index sequences and point arrays are bitwise-equal. Used as an
   /// invalidation edge by `ShapeSystem` to suppress redundant
   /// `ComputedPathComponent` rewrites when shape attributes recompute to
-  /// the same geometry (design doc 0030 Milestone 2).
+  /// the same geometry.
   bool operator==(const Path& other) const {
     return commands_ == other.commands_ && points_ == other.points_;
   }

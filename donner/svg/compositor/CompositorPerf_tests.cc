@@ -215,8 +215,8 @@ TEST_F(CompositorPerfTest, DragFrameOverhead_10kNodes) {
 
 // Measure click-to-first-drag-update latency - the cold path from "user selects
 // an entity" through "pre-warm the layer" to "first composited frame with the
-// drag delta applied." This is the user-visible latency the design doc calls
-// out in Goal 6 (p50 < 16 ms, p99 < 33 ms on 10k-node scene).
+// drag delta applied." The target for this user-visible latency is
+// p50 < 16 ms, p99 < 33 ms on a 10k-node scene.
 //
 // Reports three numbers:
 //   1. Prewarm cost - time to rasterize the selected entity's layer for the
@@ -330,7 +330,7 @@ TEST_F(CompositorPerfTest, ClickToFirstDragUpdate_1kNodes) {
   EXPECT_LT(combinedMs, 650.0) << "Click-to-first-drag-update absurdly slow (1k nodes)";
 }
 
-// Goal 8 baseline: bucketer reconcile on a 10k-node scene should run in under
+// Baseline: bucketer reconcile on a 10k-node scene should run in under
 // 5% of the parse + ECS-build wall clock. We approximate: parse/prep takes
 // ~tens-of-ms on 10k nodes; the bucketer should be well under that.
 //

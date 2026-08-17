@@ -60,7 +60,7 @@ struct ViewportExportOptions {
   /// When true, a group with the preferred id `donner-editor-overlay` is emitted. If the source
   /// already declares that id, the exporter appends a numeric suffix. If a \ref
   /// SelectionChromeSnapshot is supplied to \ref ExportViewportAsSvg the group is populated with
-  /// serialized overlay primitives; otherwise it is emitted empty (M6 back-compat).
+  /// serialized overlay primitives; otherwise it is emitted empty (back-compat).
   bool includeSelectionOverlay = false;
 };
 
@@ -104,7 +104,7 @@ std::string SerializeOverlaySnapshotToSvg(const SelectionChromeSnapshot& snapsho
  * When \p options.includeSelectionOverlay is true and \p overlaySnapshot is
  * non-null, the overlay group is populated with the serialized snapshot (see
  * \ref SerializeOverlaySnapshotToSvg). When the flag is true but the pointer is
- * null, an empty overlay group is emitted (M6 back-compat). The overlay group
+ * null, an empty overlay group is emitted (back-compat). The overlay group
  * is clipped to the same `donner-viewport-clip` clipPath as the content.
  *
  * @param doc Source SVG document. Must have an owned XML source store.

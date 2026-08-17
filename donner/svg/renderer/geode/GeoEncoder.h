@@ -158,7 +158,7 @@ public:
              const wgpu::Texture& target);
 
   /**
-   * Shared-CommandEncoder constructor (design doc 0030 Milestone 3).
+   * Shared-CommandEncoder constructor.
    * Uses the provided `sharedCommandEncoder` instead of creating its own.
    * When this overload is used, `finish()` only ends any open render
    * pass - it does NOT finish the CommandEncoder or submit to the
@@ -178,7 +178,7 @@ public:
   ~GeoEncoder();
 
   /**
-   * Install a cross-frame buffer pool (design doc 0030 M1). When set,
+   * Install a cross-frame buffer pool. When set,
    * arena buffer growth prefers recycled buffers from the pool and the
    * destructor returns the fully-grown arena buffers to it instead of
    * destroying them, driving steady-state per-frame `bufferCreates`
@@ -254,7 +254,7 @@ public:
   void clearScissorRect();
 
   /**
-   * Activate a convex 4-vertex clip polygon (Phase 3a).
+   * Activate a convex 4-vertex clip polygon.
    *
    * Unlike `setScissorRect`, this clips to the exact parallelogram
    * described by the 4 corners - used for `<symbol>` / `<svg>` /
@@ -276,7 +276,7 @@ public:
   void clearClipPolygon();
 
   /**
-   * Phase 3b: open a new render pass that writes into the given mask
+   * Open a new render pass that writes into the given mask
    * texture. Used by `RendererGeode::pushClip` to materialise a
    * path-based clip into an RGBA8Unorm coverage texture that subsequent
    * fill/gradient draws can sample.
@@ -297,7 +297,7 @@ public:
    * The current encoder transform applies (so clip paths use the same
    * device-pixel mapping as the content being clipped).
    */
-  /// @param precomputedEncoded Optional M2 cache-hit payload. When
+  /// @param precomputedEncoded Optional cache-hit payload. When
   ///   non-null, the encoder skips `GeodePathEncoder::encode` and the
   ///   `pathEncodes` counter bump. Used by `RendererGeode` to plumb a
   ///   cached `GeodePathCacheComponent::strokeSlot` result.
@@ -350,7 +350,7 @@ public:
   void blitFullTarget(const wgpu::Texture& src, double opacity);
 
   /**
-   * Phase 3c `<mask>` compositing. Same as @ref blitFullTarget but
+   * `<mask>` compositing. Same as @ref blitFullTarget but
    * additionally samples a luminance mask texture and multiplies the
    * content by the mask's BT.709 luminance (× alpha, matching
    * tiny-skia's `Mask::fromPixmap(Luminance)`). When `maskBounds` is
@@ -368,7 +368,7 @@ public:
                             const std::optional<Box2d>& maskBounds);
 
   /**
-   * Phase 3d `mix-blend-mode` compositing. Blits `layer` across the
+   * `mix-blend-mode` compositing. Blits `layer` across the
    * entire target using one of the 16 W3C Compositing Level 1 blend
    * formulas, reading the backdrop from `dstSnapshot` (which the
    * caller has already copied from the parent target because the
@@ -445,19 +445,18 @@ public:
    *   premultiplication for the blend pipeline).
    * @param rule Fill rule (NonZero or EvenOdd).
    */
-  /// @param precomputedEncoded Optional M2 cache-hit payload - see
+  /// @param precomputedEncoded Optional cache-hit payload - see
   ///   `GeodePathCacheComponent`. When non-null, skips encode +
   ///   counter bump.
   void fillPath(const Path& path, const css::RGBA& color, FillRule rule,
                 const EncodedPath* precomputedEncoded = nullptr);
 
   /**
-   * Solid fill of a cached path with persistent GPU residence (design doc
-   * 0030 wave 2: GPU residence).
+   * Solid fill of a cached path with persistent GPU residence.
    *
    * `slot` is a per-entity `GeodeResidentSlot` (owned by
    * `GeodeResidentPathComponent`, invalidated by the same
-   * `ComputedPathComponent` listener that clears the M2 encode cache). On
+   * `ComputedPathComponent` listener that clears the CPU encode cache). On
    * first use the encoder uploads `encoded` into a persistent combined
    * Vertex|Storage|Uniform buffer and builds a cached bind group; on every
    * subsequent unchanged frame it re-uses both and writes zero geometry
@@ -467,7 +466,7 @@ public:
    *
    * Residency is taken ONLY for the fast, cacheable case: no active clip
    * mask, no clip polygon, no open mask pass. When any of those hold the
-   * call transparently falls back to the wave-1 arena path (a fresh
+   * call transparently falls back to the per-frame arena path (a fresh
    * per-draw bind group) so clipped / masked draws stay bit-exact.
    *
    * @param slot Persistent residence for this entity's fill or stroke
@@ -488,7 +487,7 @@ public:
 
   /**
    * Fill N copies of the same encoded path at N different affine
-   * transforms, in one GPU draw call (Milestone 6 Bullet 2).
+   * transforms, in one GPU draw call.
    *
    * The caller has already packed each transform into the wire format
    * the shader expects: two `vec4f` rows per instance (row-major affine,

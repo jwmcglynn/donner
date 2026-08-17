@@ -183,8 +183,6 @@ public:
   /// sized layers, where the rasterize covers only the entity's
   /// world-bounds + filter padding and the bitmap is placed back into
   /// the canvas at `canvasOffset`.
-  ///
-  /// See design doc 0033 §M2 "Intrinsic-size layer rasterization".
   [[nodiscard]] const Vector2d& canvasOffset() const { return canvasOffset_; }
 
   /// Set the canvas-space top-left where this layer's bitmap blits back.

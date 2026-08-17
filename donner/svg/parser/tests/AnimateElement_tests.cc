@@ -432,7 +432,7 @@ TEST(SVGAnimateElement, FrozenAnimationInSandwich) {
   EXPECT_NEAR(std::stod(val3.value()), 100.0, 0.01);
 }
 
-// --- Edge case tests (Phase 8) ---
+// --- Edge case tests ---
 
 TEST(SVGAnimateElement, NegativeBeginOffset) {
   // Animation already started before document time 0.

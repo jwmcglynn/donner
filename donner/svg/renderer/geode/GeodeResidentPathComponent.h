@@ -1,10 +1,9 @@
 #pragma once
 /// @file
-/// Per-entity GPU residence for Geode's cached encoded-path geometry
-/// (design doc 0030 wave 2: "GPU residence").
+/// Per-entity GPU residence for Geode's cached encoded-path geometry.
 ///
-/// The M2 `GeodePathCacheComponent` keeps the CPU-side `EncodedPath`
-/// across frames, but wave 1 still re-uploaded that geometry to a fresh
+/// `GeodePathCacheComponent` keeps the CPU-side `EncodedPath` across
+/// frames, but the renderer still re-uploaded that geometry to a fresh
 /// per-frame bump arena on every draw - the measured headline cost was a
 /// static Ghostscript Tiger writing ~1.44 MB per frame across 2,432
 /// `writeBuffer` calls even though the CPU encode cache hit, plus one
@@ -293,7 +292,7 @@ struct GeodeResidentSlot {
 
   /// A byte sub-range of `buffer`. `size == 0` is never bound directly -
   /// empty SSBO regions reserve a 4-byte zero-filled slot so the shader's
-  /// band-count gate keeps them un-dereferenced (matching the wave-1
+  /// band-count gate keeps them un-dereferenced (matching the per-frame
   /// arena `allocStorageOrDummy` dummy).
   struct Region {
     uint64_t offset = 0;
@@ -318,7 +317,7 @@ struct GeodeResidentSlot {
   /// read the buffer's final contents at submit time). When the same slot
   /// is drawn again in the same frame at a different transform/color
   /// (markers, non-adjacent repeated `<use>`), the second and later draws
-  /// fall back to the wave-1 arena path so each gets its own uniform. The
+  /// fall back to the per-frame arena path so each gets its own uniform. The
   /// steady-state win is unaffected for the common case of a path drawn
   /// once per frame (Tiger / Lion). Sentinel `~0` means "never drawn".
   uint64_t lastResidentFrame = ~uint64_t{0};
@@ -421,8 +420,8 @@ struct GeodeResidentSlot {
   }
 };
 
-/// GPU-resident geometry for one gradient-painted fill (design doc 0030
-/// wave 2 extension). Mirrors \ref GeodeResidentSlot: a combined-usage
+/// GPU-resident geometry for one gradient-painted fill. Mirrors
+/// \ref GeodeResidentSlot: a combined-usage
 /// buffer holds the same eight analytic dual-ray SSBO regions, but the
 /// uniform region holds the 672-byte gradient uniform block (stops inline,
 /// `shaders/slug_gradient.wgsl`) and the cached bind group uses the
@@ -558,7 +557,7 @@ struct GeodeResidentGradientSlot {
 struct GeodeResidentPathComponent {
   GeodeResidentSlot fillSlot;
   GeodeResidentSlot strokeSlot;
-  /// Gradient-painted fill residence (design doc 0030 wave 2 extension).
+  /// Gradient-painted fill residence.
   GeodeResidentGradientSlot gradientFillSlot;
 };
 

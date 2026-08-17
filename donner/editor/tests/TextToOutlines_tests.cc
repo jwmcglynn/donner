@@ -328,8 +328,8 @@ TEST(TextToOutlines, NonTextElementRejected) {
 }
 
 // Performance: converting a three-glyph "SVG" string completes well within
-// budget. Design doc §"Performance" targets <=100 ms for three glyphs on an
-// M-series Mac; the assertion uses a generous 500 ms ceiling for CI variance.
+// budget. The performance target is <=100 ms for three glyphs on an M-series
+// Mac; the assertion uses a generous 500 ms ceiling for CI variance.
 TEST(TextToOutlines, ThreeGlyphConversionWithinBudget) {
   svg::SVGDocument document = Parse(kTextSvg);
   svg::SVGElement text = TextElement(document);

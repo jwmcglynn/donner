@@ -4,7 +4,7 @@
 ///
 /// `RendererTinySkia::drawText` and `RendererGeode::drawText` historically each
 /// re-derived per-glyph placement (outline → stretch → translate → rotate),
-/// which let the two copies drift (see docs/design_docs/0038). This header is
+/// which let the two copies drift. This header is
 /// the shared placement layer both backends consume so the geometry is computed
 /// once. It encodes tiny-skia's behavior verbatim (tiny-skia is the parity
 /// reference); geode converges to it.

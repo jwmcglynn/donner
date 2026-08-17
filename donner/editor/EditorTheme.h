@@ -1,6 +1,6 @@
 #pragma once
 /// @file
-/// Donner editor design language (design doc 0054): a single source of truth
+/// Donner editor design language: a single source of truth
 /// for the editor chrome's palette, spacing grid, rounding, and control
 /// metrics. Replaces the scattered color literals and ad-hoc `PushStyleVar`
 /// values that previously lived per-widget across the editor tree.
@@ -15,7 +15,7 @@
 
 namespace donner::editor {
 
-/// Accent hue variants from design doc 0054. The editor ships SignalTeal
+/// Accent hue variants. The editor ships SignalTeal
 /// (operator-approved variant B); the others are retained so the token table
 /// and its tests cover every accent and a future re-tint is a one-line change.
 enum class Accent {
@@ -27,7 +27,7 @@ enum class Accent {
 /// Number of `Accent` values, for token-completeness tests and iteration.
 inline constexpr int kAccentCount = 3;
 
-/// Named design tokens for the editor chrome (design doc 0054, Graphite).
+/// Named design tokens for the editor chrome (Graphite ramp).
 struct EditorTheme {
   // --- Surfaces: neutral graphite ramp, deepest to lightest ---
   ImU32 surfaceCanvas;   ///< #111215 artboard letterbox / deepest backdrop.
@@ -85,7 +85,7 @@ struct EditorTheme {
   /// unpacking `selectionStroke`.
   css::RGBA accentColor;
 
-  /// Build the dark theme for the given accent (design doc 0054 palette).
+  /// Build the dark theme for the given accent.
   /// Defaults to the shipped SignalTeal (variant B).
   static EditorTheme Dark(Accent accent = Accent::SignalTeal);
 

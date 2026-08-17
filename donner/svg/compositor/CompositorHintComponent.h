@@ -17,19 +17,19 @@ namespace donner::svg::compositor {
  * also has `opacity < 1` receives both a `Mandatory` and an `Interaction`
  * or `Explicit` hint).
  *
- * All five values are defined; Phase 1 produces only `Mandatory` and
- * `Explicit`. `Animation`, `Interaction`, and `ComplexityBucket` are
- * reserved for Phase 2+ and must compile/resolve cleanly even though no
- * source publishes them yet.
+ * All five values are defined; today only `Mandatory` and `Explicit` are
+ * produced. `Animation`, `Interaction`, and `ComplexityBucket` are reserved
+ * for future sources and must compile/resolve cleanly even though no source
+ * publishes them yet.
  */
 enum class HintSource : uint8_t {
   /// SVG semantics force isolation (opacity < 1, filter, mask, etc.). Infinite weight.
   Mandatory,
-  /// Published by the animation system on animated subtrees. Reserved for Phase 2.
+  /// Published by the animation system on animated subtrees. Reserved.
   Animation,
-  /// Published by the editor selection/drag subsystem. Reserved for Phase 2.
+  /// Published by the editor selection/drag subsystem. Reserved.
   Interaction,
-  /// Published by the complexity bucketer at load / structural rebuild. Reserved for Phase 2.5.
+  /// Published by the complexity bucketer at load / structural rebuild. Reserved.
   ComplexityBucket,
   /// Escape hatch for explicit callers (tests, `CompositorController::promoteEntity`).
   Explicit,
@@ -53,8 +53,8 @@ struct HintEntry {
  * `Mandatory` hint short-circuits the calculation to infinite weight
  * (`UINT32_MAX`) - mandatory hints are non-contestable.
  *
- * Storage is a plain `std::vector<HintEntry>` - see Non-Goal 3 (sequential,
- * single-threaded) in the design doc. Hints are typically 1-3 per entity.
+ * Storage is a plain `std::vector<HintEntry>`: resolution is sequential and
+ * single-threaded. Hints are typically 1-3 per entity.
  *
  * This component mirrors `StyleComponent` in the CSS engine: it is the
  * author-layer input to a resolver that produces a `ComputedLayerAssignmentComponent`.

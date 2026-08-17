@@ -1,5 +1,5 @@
 /// @file
-/// Tests for the Geode embedded-device code path (Phase 6).
+/// Tests for the Geode embedded-device code path.
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>

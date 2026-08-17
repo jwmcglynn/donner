@@ -25,7 +25,7 @@ protected:
 
 // Proves that a future animation system can publish `Animation` hints through
 // `ScopedCompositorHint::Animation` and the resolver will promote the
-// animated entity to its own layer - the Phase 2 "animation unblocked" gate.
+// animated entity to its own layer - the "animation unblocked" gate.
 // The animation system itself doesn't exist yet; this exercises the seam.
 TEST_F(AnimationIsolationTest, AnimationHintPromotesEntityToLayer) {
   const Entity animated = registry_.create();
@@ -56,9 +56,8 @@ TEST_F(AnimationIsolationTest, AnimationOutweighsInteractionUnderBudget) {
 }
 
 // When the `autoPromoteAnimations` gate is off in `ResolveOptions`, Animation
-// hints produce no layer. This is the runtime kill-switch the design doc calls
-// out in Goal 7 / § Reversibility - animations fall back to whole-document
-// re-rendering without ABI fragmentation.
+// hints produce no layer. This is the runtime kill-switch: animations fall
+// back to whole-document re-rendering without ABI fragmentation.
 TEST_F(AnimationIsolationTest, AnimationGateDisablesPromotion) {
   const Entity animated = registry_.create();
 

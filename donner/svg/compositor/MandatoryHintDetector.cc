@@ -9,7 +9,7 @@
 namespace donner::svg::compositor {
 
 bool MandatoryHintDetector::qualifies(const components::RenderingInstanceComponent& instance) {
-  // Three signals per the design doc's "Mandatory hints" table:
+  // Three signals force isolated compositing:
   //   - isolatedLayer: subsumes opacity < 1, mix-blend-mode != normal, isolation: isolate
   //   - resolvedFilter.has_value(): `filter` applied
   //   - mask.has_value(): `mask` applied

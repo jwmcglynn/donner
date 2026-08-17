@@ -18,13 +18,13 @@ class ScopedWgpuResourceArena;
  * Reusable helpers for uploading pixel data to a `wgpu::Texture` and drawing
  * it as a textured quad through `GeodeImagePipeline`.
  *
- * This is the piece `drawImage` and (Phase 2H) pattern tile rendering share.
+ * This is the piece `drawImage` and pattern tile rendering share.
  * Both paths need:
  *   1. Get an RGBA8 pixel buffer to the GPU as a sampled texture.
  *   2. Draw it into an open render pass at a specific destination rectangle,
  *      honoring the current transform and an opacity factor.
  *
- * Phase 2H specifically will call `uploadRgba8Texture` to move a rendered
+ * Pattern rendering calls `uploadRgba8Texture` to move a rendered
  * pattern tile into a sampled texture and then `drawTexturedQuad` to stamp
  * that tile across the target region (with `srcRect` chosen to implement
  * the `patternContentUnits` / `patternUnits` mapping).
@@ -62,8 +62,7 @@ public:
     /// Bilinear filtering. Default for SVG `image-rendering: auto`.
     Linear,
     /// Nearest-neighbor filtering. Used for `image-rendering: pixelated`
-    /// (and, when Phase 2H lands, for pattern tile sampling where the
-    /// host explicitly opts in).
+    /// (and for pattern tile sampling where the host explicitly opts in).
     Nearest,
   };
 
@@ -93,7 +92,7 @@ public:
     /// are premultiplied and must set this flag to avoid a double
     /// premultiplication that darkens the RGB channel.
     bool sourceIsPremultiplied = false;
-    /// Phase 3c `<mask>` luminance compositing. When non-null, this
+    /// `<mask>` luminance compositing. When non-null, this
     /// texture is sampled alongside the source and its BT.709
     /// luminance (multiplied by alpha, to match tiny-skia's
     /// `Mask::fromPixmap(Luminance)`) is used as a coverage
@@ -106,7 +105,7 @@ public:
     /// Mask bounds in target-pixel space. Ignored unless
     /// `applyMaskBounds` is true.
     Box2d maskBounds;
-    /// Phase 3d SVG `mix-blend-mode` selector. `0` = plain
+    /// SVG `mix-blend-mode` selector. `0` = plain
     /// source-over; `1..=16` map to the enumeration in
     /// `donner::svg::MixBlendMode` (Normal..Luminosity). When
     /// non-zero, `dstSnapshotTexture` must hold the parent render
@@ -118,7 +117,7 @@ public:
     /// parent content into a separate texture before opening the
     /// blend blit pass. Ignored unless `blendMode != 0`.
     wgpu::Texture dstSnapshotTexture;
-    /// Phase 3b path-clip mask view. When set, the image shader samples
+    /// Path-clip mask view. When set, the image shader samples
     /// it in target-pixel space and gates the source content before any
     /// blend/mask compositing.
     wgpu::TextureView clipMaskView;

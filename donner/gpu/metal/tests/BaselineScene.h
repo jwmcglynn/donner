@@ -1,7 +1,7 @@
 #pragma once
 /// @file
 /// The frozen-baseline scene shared by the baseline capture tool and the Metal vertical slice
-/// test (design 0053 phase 3).
+/// test.
 ///
 /// Both sides must consume IDENTICAL inputs: the capture tool renders this scene through the
 /// current production renderer as a black box and commits the PNG; the Metal slice renders the

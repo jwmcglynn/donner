@@ -95,13 +95,13 @@ CompositorController::PromoteResult CompositorController::promoteEntity(
     return PromoteResult{PromoteResult::FullCanvasPreviewRequired};
   }
 
-  // Design doc 0033 §M9 - layer-set hysteresis. If `entity` is in the
+  // Layer-set hysteresis. If `entity` is in the
   // pending-demotion queue, lift the demotion. The layer + hint
   // survived the `demoteEntity` call, so we can fall through to the
   // kind-refresh path below and reuse the cached bitmap / segment
   // split without any `resyncSegmentsToLayerSet` work. This is the
   // "click-deselect-click" / "drag-release-redrag-same-element" fast
-  // path the milestone targets.
+  // path this optimizes.
   pendingDemotions_.erase(entity);
 
   // Already promoted via the controller's `promoteEntity` path. Refresh the
@@ -170,7 +170,7 @@ CompositorController::PromoteResult CompositorController::promoteEntity(
     }
   }
 
-  // Phase 2: under `autoPromoteInteractions`, the editor-driven
+  // Under `autoPromoteInteractions`, the editor-driven
   // `promoteEntity` call publishes an `Interaction` hint tagged with the
   // caller-supplied kind (`Selection` for pre-warm on selection,
   // `ActiveDrag` for an in-flight drag). When the gate is off, we fall back
@@ -210,7 +210,7 @@ CompositorController::PromoteResult CompositorController::promoteEntity(
 }
 
 void CompositorController::demoteEntity(Entity entity) {
-  // Design doc 0033 §M9 - layer-set hysteresis. Don't run the
+  // Layer-set hysteresis. Don't run the
   // resolver / reconcileLayers immediately; queue the demotion
   // against a frame counter and let the layer + hint linger.
   // `promoteEntity` for the same entity within the window cancels
@@ -222,7 +222,7 @@ void CompositorController::demoteEntity(Entity entity) {
   // detector hints / complexity-bucket hints live in separate maps
   // and aren't part of the explicit promote/demote API, so calling
   // `demoteEntity` for those is a silent no-op (matching the
-  // pre-§M9 behaviour, where the `activeHints_.find` miss was also
+  // pre-hysteresis behaviour, where the `activeHints_.find` miss was also
   // a no-op).
   if (!activeHints_.contains(entity)) {
     return;
@@ -533,7 +533,7 @@ CompositorController::snapshotCompositeTiles(SnapshotThumbnails thumbnails) cons
     }
   }
 
-  // Post-§M2C: bg/fg tiles no longer exist (the compositor doesn't
+  // Bg/fg tiles no longer exist (the compositor doesn't
   // pre-flatten - the editor blits segments and layers directly).
   // The Kind::Background / Kind::Foreground enum values are retained
   // for source compatibility but `snapshotCompositeTiles` no longer
@@ -619,7 +619,7 @@ CompositorController::snapshotLayerInspectorRows(SnapshotThumbnails thumbnails) 
 }
 
 bool CompositorController::hasSplitStaticLayers() const {
-  // Post-design-doc 0033 §M2C: the editor blits segments + layers
+  // The editor blits segments + layers
   // directly, no bg/fg flatten step exists anymore. "Split static
   // layers active" now means "there is at least one editor-promoted
   // drag target with a rasterized layer the editor can upload". Bucket
@@ -627,7 +627,7 @@ bool CompositorController::hasSplitStaticLayers() const {
   // we check `activeHints_` (explicit promotions) rather than
   // `layers_.size()`.
   //
-  // §M9 wrinkle: pending-demote entries linger in `activeHints_` for
+  // Hysteresis wrinkle: pending-demote entries linger in `activeHints_` for
   // the hysteresis window. Counting them would mean a selection-
   // change drag (demote old → promote new) can otherwise disable the
   // `skipMainCompose` optimization for ~30 renderFrames and force
@@ -760,7 +760,7 @@ bool CompositorController::remapAfterStructuralReplace(
   }
   activeHints_ = std::move(newActiveHints);
 
-  // §M9: remap the hysteresis queue alongside `activeHints_`. Entries
+  // Remap the hysteresis queue alongside `activeHints_`. Entries
   // whose entity id doesn't survive the remap are dropped - the layer
   // they were guarding is already gone from the new entity space, so
   // there's nothing left to demote later.
@@ -913,7 +913,7 @@ void CompositorController::resetAllLayers(bool documentReplaced) {
     complexityBucketer_.clear();
   }
   activeHints_.clear();
-  // §M9 hysteresis queue is tied to the old entity space; both
+  // The hysteresis queue is tied to the old entity space; both
   // document-replaced and live-registry resets must drop it.
   pendingDemotions_.clear();
   resolver_.resolve(registry, kMaxCompositorLayers);
@@ -1068,7 +1068,7 @@ bool CompositorController::renderFrame(const RenderViewport& viewport, Cancellat
 
 bool CompositorController::renderFrame(const RenderViewport& viewport, CancellationToken& token,
                                        const Transform2d& surfaceFromCanvas) {
-  // §M4: stash the token where the rasterize loops can poll it via
+  // Stash the token where the rasterize loops can poll it via
   // `isCancelled()`. The reference is active only for this render attempt.
   cancelToken_.emplace(token);
   renderFrameImpl(viewport, surfaceFromCanvas);
@@ -1154,7 +1154,7 @@ void CompositorController::renderFrameImpl(const RenderViewport& viewport,
   hasLastSurfaceFromCanvas_ = true;
   Registry& registry = document().registry();
 
-  // Design doc 0033 §M9 - age the hysteresis queue and flush
+  // Age the hysteresis queue and flush
   // expirations before the dirty-flag snapshot. An entity that
   // expires this frame becomes a real demote whose
   // `resyncSegmentsToLayerSet` runs as part of the normal render
@@ -1773,7 +1773,7 @@ void CompositorController::renderFrameImpl(const RenderViewport& viewport,
       // Reuse the cached bitmap and keep the compose offset whenever the layer
       // is clean and still has a valid rasterize-time stamp - regardless of
       // whether `canvasFromBitmap` is identity (settled / re-promote within the
-      // M9 hysteresis window), a pure translation (the bitmap slides,
+      // hysteresis window), a pure translation (the bitmap slides,
       // pixel-exact), or a single-entity affine (rotate/scale - the bitmap is
       // transformed as a live quad, a soft preview that re-rasterizes crisp once
       // the drag settles). `isDirty()` (consumed above) is the genuine
@@ -1792,7 +1792,7 @@ void CompositorController::renderFrameImpl(const RenderViewport& viewport,
           (layer.isDirty() || layer.isImmediate() || !layer.hasRenderablePayload() || rootDirty_) &&
           !immediateDragReuse;
       if (needsRaster) {
-        // §M4: bail between layer rasterizes. The remaining dirty
+        // Bail between layer rasterizes. The remaining dirty
         // layers keep their `isDirty()` flag set, so the next
         // `renderFrame` finishes them. Returns directly out of
         // `renderFrame` rather than `break`-ing because subsequent
@@ -1873,7 +1873,7 @@ void CompositorController::renderFrameImpl(const RenderViewport& viewport,
   // bg/fg bitmaps. For `N=1` (just the drag layer promoted) they're
   // exactly the two cached segments - no composite needed. For `N>1`
   // (mandatory filter / bucket layers live alongside the drag target)
-  // Design doc 0033 §M2C: the compositor no longer pre-flattens
+  // The compositor no longer pre-flattens
   // segments + non-drag layers into bg/fg bitmaps. The editor reads
   // segments and layers directly via `snapshotTilesForUpload`, so the
   // only state we maintain here is *which* entity is the active drag
@@ -1882,7 +1882,7 @@ void CompositorController::renderFrameImpl(const RenderViewport& viewport,
   // `dragTranslationDoc` extraction (`canvasFromBitmap` translation in
   // doc units).
   //
-  // §M9 wrinkle: pending-demotion entries stay in `activeHints_` for
+  // Hysteresis wrinkle: pending-demotion entries stay in `activeHints_` for
   // the hysteresis window, so a naive `activeHints_.size() == 1`
   // check would fall to `entt::null` whenever the user is mid-switch
   // between drag targets - dragTranslationDoc on the live tile would

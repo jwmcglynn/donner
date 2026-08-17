@@ -74,7 +74,7 @@ void applyTextAnchor(std::vector<TextRun>& runs, std::vector<ChunkBoundary>& chu
 /// glyph positions in place. Called after the flat single-line layout and before text-anchor
 /// adjustment; when it wraps it applies text-anchor per line itself.
 ///
-/// Wrap rules (slice 1, horizontal writing modes only):
+/// Wrap rules (horizontal writing modes only):
 ///  - Soft-wrap opportunities are whitespace (U+0020/tab/newline) between words; there is no
 ///    mid-word breaking, hyphenation, or CJK per-character breaking.
 ///  - Greedy line filling: a word is placed on the current line when it fits within \p measurePx,

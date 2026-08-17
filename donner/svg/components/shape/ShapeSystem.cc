@@ -115,9 +115,8 @@ std::optional<ParseDiagnostic> ParseDFromAttributes(PathComponent& properties,
 /// path differs from any existing one. Suppressing the write when the
 /// geometry is unchanged keeps entt's on_update<ComputedPathComponent>
 /// signal a precise "geometry actually changed" edge - downstream
-/// caches (e.g. the Geode encode cache from design doc 0030
-/// Milestone 2) listen on that signal and rely on it not firing for
-/// no-op regenerations.
+/// caches (e.g. the Geode path-encode cache) listen on that signal and rely
+/// on it not firing for no-op regenerations.
 ComputedPathComponent& emplaceComputedPathIfChanged(EntityHandle handle, Path newPath) {
   if (auto* existing = handle.try_get<ComputedPathComponent>()) {
     if (existing->spline == newPath) {

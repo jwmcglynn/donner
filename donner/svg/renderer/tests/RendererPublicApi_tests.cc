@@ -268,7 +268,7 @@ TEST(RendererPublicApiTest, IncrementalStyleInvalidationMatchesFullRender) {
 }
 
 TEST(RendererPublicApiTest, TextUsesDocumentTransformForGlyphPlacement) {
-  // Variant guard (doc 0031 M2.3 + issue #566): this test asserts that
+  // Variant guard (issue #566): this test asserts that
   // text glyphs land at the viewBox-scaled coordinates. Without text
   // support compiled in (e.g. the `tiny` variant lane), no glyphs render
   // and the assertion is meaningless. Skip rather than fail so the same

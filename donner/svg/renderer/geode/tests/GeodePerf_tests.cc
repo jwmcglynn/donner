@@ -1,18 +1,18 @@
 /// @file
-/// Geode perf-counter assertions (design doc 0030 Milestone 0).
+/// Geode perf-counter assertions.
 ///
-/// These tests are the durable regression signal for every optimization
-/// milestone in `docs/design_docs/0030-geode_performance.md`. They assert
-/// `GeodeCounters` ceilings - steady-state buffer / bindgroup / texture /
-/// submit / path-encode counts - on representative SVG fixtures.
+/// These tests are the durable regression signal for the renderer's
+/// performance work. They assert `GeodeCounters` ceilings - steady-state
+/// buffer / bindgroup / texture / submit / path-encode counts - on
+/// representative SVG fixtures.
 ///
 /// Counter ceilings are deterministic; wall-clock budgets are not. That's
 /// why these tests (not the benchmark harness) are the CI gate.
 ///
-/// Milestone 0 (this file, initial): ceilings match CURRENT observed
-/// behaviour - the tests pass today. Each later milestone tightens the
-/// ceiling(s) it targets; the `// M{N}:` comment beside each assertion
-/// names the milestone that will change it.
+/// Ceilings track CURRENT observed behaviour with a little slack, so the
+/// tests pass today. Each optimization that lands tightens the ceiling(s)
+/// it targets; the trailing comment beside each assertion records the
+/// steady-state target it drives toward.
 
 #include <gtest/gtest.h>
 
@@ -51,7 +51,7 @@ constexpr std::string_view kSimpleShapesSvg = R"SVG(
 /// Inline fixture: a single defined shape referenced by eight `<use>`
 /// instances at distinct positions. The whole document resolves to
 /// eight draws of the same source entity - exactly the shape
-/// Milestone 6 Bullet 2 targets for instancing. Today these draw as
+/// `<use>` instancing targets. Today these draw as
 /// eight separate GPU calls; `sameSourceDrawPairs` should report
 /// seven (= 8 − 1) adjacent-same-source pairs, which is the draw-call
 /// savings an instancing pass would unlock.
@@ -104,7 +104,7 @@ constexpr std::string_view kFilteredBlurSvg = R"SVG(
 
 /// Dump counters to stderr so the observed values are visible in normal
 /// test output (RecordProperty only surfaces in XML). Format keeps each
-/// counter on its own column for easy diffing across milestones.
+/// counter on its own column for easy diffing across runs.
 void printCounters(const char* label, const geode::GeodeCounters& c) {
   std::fprintf(stderr,
                "[GeodePerf] %-40s  pathEncodes=%4" PRIu64 "  bufferCreates=%5" PRIu64
@@ -195,23 +195,23 @@ TEST_F(GeodePerfTest, SimpleShapes_BaselineCeilings) {
   printCounters(::testing::UnitTest::GetInstance()->current_test_info()->name(), c);
 
   // Observed 2026-04-19 on macOS/Metal, M4 Pro:
-  //   M0 baseline:        bufferCreates=13
-  //   M1.d+e (ssbo+vb):   bufferCreates=7
-  //   M1.f.1 (uniforms):  bufferCreates=5 (4 arenas + 1 readback,
+  //   baseline:           bufferCreates=13
+  //   ssbo+vb arenas:     bufferCreates=7
+  //   pooled uniforms:    bufferCreates=5 (4 arenas + 1 readback,
   //                       arenas lazily grown - some frames only
   //                       touch 3 arenas)
-  //   M4.2 (device dummies + pool): target fresh on first frame; repeat-render
-  //                       is 0, see `*_ZeroTextures` tests below).
-  //   M6 instrumentation: drawCalls=3 (one per solid fill),
+  //   device dummies + texture pool: target fresh on first frame;
+  //                       repeat-render is 0, see `*_ZeroTextures` below).
+  //   draw instrumentation: drawCalls=3 (one per solid fill),
   //                       pipelineSwitches=1 (solid pipeline only).
-  EXPECT_LE(c.pathEncodes, 5u);  // M2: target = 0 on unchanged-geometry frames.
-  // 0041 analytic dual-ray fill: each draw now binds 4 extra read-only SSBO
+  EXPECT_LE(c.pathEncodes, 5u);  // Target = 0 on unchanged-geometry frames.
+  // Analytic dual-ray fill: each draw now binds 4 extra read-only SSBO
   // arenas (vBands/vCurves/hBandGrid/vBandGrid) on top of bands/curves/vertex/
   // uniform, so first-frame arena growth costs a few more buffer creates.
   EXPECT_LE(c.bufferCreates, 12u);
-  EXPECT_LE(c.bindgroupCreates, 6u);  // M1.f.2: target <= #pipelines (3 today).
+  EXPECT_LE(c.bindgroupCreates, 6u);  // Target <= #pipelines (3 today).
   EXPECT_LE(c.textureCreates, 3u);    // Target on frame 1; 0 on repeat.
-  EXPECT_LE(c.submits, 3u);           // M3: target = 1.
+  EXPECT_LE(c.submits, 3u);           // Target = 1.
   EXPECT_LE(c.drawCalls, 4u);         // 3 shapes, one draw each.
   EXPECT_LE(c.pipelineSwitches, 2u);  // Solid pipeline bound once.
 }
@@ -239,23 +239,23 @@ TEST_F(GeodePerfTest, Moderate_BaselineCeilings) {
   printCounters(::testing::UnitTest::GetInstance()->current_test_info()->name(), c);
 
   // Observed 2026-04-19:
-  //   M0 baseline:    bufferCreates=10 submits=4 textureCreates=10
-  //   M1.d+e:         bufferCreates=10 submits=4 textureCreates=10
+  //   baseline:       bufferCreates=10 submits=4 textureCreates=10
+  //   ssbo+vb arenas: bufferCreates=10 submits=4 textureCreates=10
   //                   (three encoders from push/pop each allocate
   //                   their own arenas - 3×3 + 1 readback.)
-  //   M3 (shared CE): bufferCreates=10 submits=2 textureCreates=10
+  //   shared encoder: bufferCreates=10 submits=2 textureCreates=10
   //                   (push/pop no longer forces a queue submit)
-  //   M4.2 (device dummies + pool): target + layer on frame 1, 0 on repeat.
-  //   M6 instrumentation: drawCalls=2 (solid fill + gradient fill),
+  //   device dummies + texture pool: target + layer on frame 1, 0 on repeat.
+  //   draw instrumentation: drawCalls=2 (solid fill + gradient fill),
   //                   pipelineSwitches=~3 (solid for layer, image
   //                   blit on layer composite, gradient for rect).
-  EXPECT_LE(c.pathEncodes, 4u);  // M2: target = 0.
-  // 0041 analytic dual-ray: fill + gradient each grow 4 extra SSBO arenas
+  EXPECT_LE(c.pathEncodes, 4u);  // Target = 0.
+  // Analytic dual-ray: fill + gradient each grow 4 extra SSBO arenas
   // (vBands/vCurves/hBandGrid/vBandGrid) on first use.
   EXPECT_LE(c.bufferCreates, 20u);
-  EXPECT_LE(c.bindgroupCreates, 6u);  // M1.f.2: target <= #pipelines.
+  EXPECT_LE(c.bindgroupCreates, 6u);  // Target <= #pipelines.
   EXPECT_LE(c.textureCreates, 6u);    // Target + layer on first render; 0 on repeat.
-  EXPECT_LE(c.submits, 3u);           // M3: target = 2 steady-state (frame + readback).
+  EXPECT_LE(c.submits, 3u);           // Target = 2 steady-state (frame + readback).
   EXPECT_LE(c.drawCalls, 6u);         // 2 fills + blit composites.
   EXPECT_LE(c.pipelineSwitches, 6u);  // Solid / gradient / image pipelines + mask if any.
 }
@@ -350,30 +350,31 @@ TEST_F(GeodePerfTest, Lion_BaselineCeilings) {
   printCounters(::testing::UnitTest::GetInstance()->current_test_info()->name(), c);
 
   // Observed 2026-04-19:
-  //   M0 baseline:        bufferCreates=529 (132 paths × 4 + 1 readback)
-  //   M1.d+e:             bufferCreates=137 (3 arenas + 132 uniforms
+  //   baseline:           bufferCreates=529 (132 paths × 4 + 1 readback)
+  //   ssbo+vb arenas:     bufferCreates=137 (3 arenas + 132 uniforms
   //                       + dummies + readback; 74% drop)
-  //   M1.f.1 (uniforms):  bufferCreates=6 (4 arenas + 2 dummies +
-  //                       readback; 98.9% total drop from M0)
-  //   bindgroupCreates=132 (one per draw; M1.f.2 collapses to ~1).
-  //   M4.2 (device dummies + pool): target on frame 1; 0 on repeat.
-  //   M6 instrumentation: drawCalls=132 (one per path),
+  //   pooled uniforms:    bufferCreates=6 (4 arenas + 2 dummies +
+  //                       readback; 98.9% total drop from baseline)
+  //   bindgroupCreates=132 (one per draw; a shared bind group
+  //                       collapses this to ~1).
+  //   device dummies + texture pool: target on frame 1; 0 on repeat.
+  //   draw instrumentation: drawCalls=132 (one per path),
   //                       pipelineSwitches=1 (solid pipeline only -
-  //                       all of Lion is solid-fill). M6 Bullet 2
-  //                       (`<use>` instancing) is the knob that moves
-  //                       drawCalls for `<use>`-heavy fixtures; Lion
-  //                       has no `<use>` so this ceiling stays at 132.
-  EXPECT_LE(c.pathEncodes, 200u);  // M2: target = 0.
-  // Wave 2 (GPU residence): frame 1 now front-loads ONE persistent
+  //                       all of Lion is solid-fill). `<use>` instancing
+  //                       is the knob that moves drawCalls for
+  //                       `<use>`-heavy fixtures; Lion has no `<use>`
+  //                       so this ceiling stays at 132.
+  EXPECT_LE(c.pathEncodes, 200u);  // Target = 0.
+  // GPU residence: frame 1 now front-loads ONE persistent
   // combined buffer per cached solid-fill path (132 for Lion) so that
   // steady-state frames re-upload zero geometry. This trades a one-time
   // frame-1 buffer-create spike for the steady-state win asserted in
   // `Lion_NoDirtyPath_ZeroEncodes` (frame-2 bufferCreates == 1, the
   // readback). Ceiling = 132 resident + readback + arena slack.
   EXPECT_LE(c.bufferCreates, 150u);
-  EXPECT_LE(c.bindgroupCreates, 200u);   // M1.f.2: target <= #pipelines.
+  EXPECT_LE(c.bindgroupCreates, 200u);   // Target <= #pipelines.
   EXPECT_LE(c.textureCreates, 3u);       // Target on first render; 0 on repeat.
-  EXPECT_LE(c.submits, 3u);              // M3: target = 1.
+  EXPECT_LE(c.submits, 3u);              // Target = 1.
   EXPECT_LE(c.drawCalls, 200u);          // 132 paths, one draw each (no <use>).
   EXPECT_LE(c.pipelineSwitches, 2u);     // All-solid fixture: tracker binds solid once.
   EXPECT_EQ(c.sameSourceDrawPairs, 0u);  // No `<use>` in Lion - every draw has a unique source.
@@ -381,7 +382,7 @@ TEST_F(GeodePerfTest, Lion_BaselineCeilings) {
 
 // ---------------------------------------------------------------------------
 // Fixture: eight `<use>` instances of one source `<rect>`. Motivates
-// M6 Bullet 2 (`<use>` instancing): today these render as eight
+// `<use>` instancing: today these render as eight
 // separate GPU draws; the future batcher collapses them into one
 // instanced draw. The detection counter `sameSourceDrawPairs` reports
 // seven adjacent-same-source pairs = the draw-call savings an
@@ -407,11 +408,11 @@ TEST_F(GeodePerfTest, UseHeavy_BaselineCeilings) {
   RecordProperty("sameSourceDrawPairs", std::to_string(c.sameSourceDrawPairs));
   printCounters(::testing::UnitTest::GetInstance()->current_test_info()->name(), c);
 
-  // M2: the `<use>` instances share one source `<rect>` entity, so
+  // The `<use>` instances share one source `<rect>` entity, so
   // its encoded path is cached once and reused for all eight draws
   // on frame 1 (first draw encodes, next seven hit the cache).
   EXPECT_LE(c.pathEncodes, 2u);
-  // M6-B step 3: the batcher collapses all eight consecutive
+  // The batcher collapses all eight consecutive
   // same-source `<use>` draws into a single instanced GPU call.
   EXPECT_EQ(c.drawCalls, 1u);
   // And a single bind group covers all eight - per-instance
@@ -458,7 +459,7 @@ TEST_F(GeodePerfTest, CountersResetBetweenFrames) {
 
   // Second frame: same document, same size. Counters reset in beginFrame
   // and should accumulate only this frame's work. Render targets are
-  // reused across same-size frames (Milestone 4.1), so the second
+  // reused across same-size frames, so the second
   // frame's textureCreates should be strictly smaller.
   renderer.draw(document);
   (void)renderer.takeSnapshot();
@@ -466,11 +467,11 @@ TEST_F(GeodePerfTest, CountersResetBetweenFrames) {
   const auto secondCounters = renderer.lastFrameTimings().counters;
 
   // Second-frame counters are strictly this-frame only (beginFrame
-  // resets). Since M2 (`GeodePathCacheComponent`) landed, an unchanged
+  // resets). With `GeodePathCacheComponent` in place, an unchanged
   // second render does zero path encodes - the explicit assertion on
   // that invariant lives in `SimpleShapes_NoDirtyPath_ZeroEncodes`;
   // here we just confirm the reset path preserves the invariant across
-  // counters and that render targets get reused (Milestone 4.1).
+  // counters and that render targets get reused.
   EXPECT_EQ(secondCounters.pathEncodes, 0u);
   EXPECT_LE(secondCounters.pathEncodes, firstCounters.pathEncodes);
   EXPECT_LT(secondCounters.textureCreates, firstCounters.textureCreates)
@@ -479,7 +480,7 @@ TEST_F(GeodePerfTest, CountersResetBetweenFrames) {
 }
 
 // ---------------------------------------------------------------------------
-// Milestone 2: GeodePathCacheComponent - no-geometry-change ⇒ zero encodes.
+// GeodePathCacheComponent: no-geometry-change ⇒ zero encodes.
 //
 // The promise: once a document has been rendered once, rendering it again
 // with no geometry or style mutation must perform zero CPU-side path
@@ -493,7 +494,7 @@ TEST_F(GeodePerfTest, CountersResetBetweenFrames) {
 // ---------------------------------------------------------------------------
 
 /// Helper: two consecutive renders of the same document, returning only
-/// the SECOND frame's counters. Used by the M2 zero-encode assertions.
+/// the SECOND frame's counters. Used by the zero-encode assertions.
 geode::GeodeCounters countersForSecondRender(std::string_view svgSource,
                                              const std::shared_ptr<geode::GeodeDevice>& device) {
   ParseWarningSink sink = ParseWarningSink::Disabled();
@@ -522,18 +523,18 @@ TEST_F(GeodePerfTest, SimpleShapes_NoDirtyPath_ZeroEncodes) {
   const geode::GeodeCounters c = countersForSecondRender(kSimpleShapesSvg, device);
   printCounters("SimpleShapes_NoDirtyPath_ZeroEncodes (frame2)", c);
 
-  // M2 target: second frame does zero path encodes - three shapes hit the
+  // Target: second frame does zero path encodes - three shapes hit the
   // cache. countPathEncode() is only called on cache miss.
   EXPECT_EQ(c.pathEncodes, 0u) << "Cache miss on an unchanged second render: one or more paths "
                                   "re-encoded despite zero geometry changes.";
-  // M1 (GeodeBufferPool): steady-state arena buffers are recycled across
+  // `GeodeBufferPool`: steady-state arena buffers are recycled across
   // frames. The remaining create is the takeSnapshot readback buffer.
   EXPECT_LE(c.bufferCreates, 2u) << "Arena buffer churn on an unchanged second render: the "
                                     "cross-frame GeodeBufferPool should serve all arena growth.";
-  // Wave 2 (GPU residence) steady-state: the three solid fills are
+  // GPU residence steady-state: the three solid fills are
   // GPU-resident from frame 1, so frame 2 writes zero geometry AND zero
   // uniform bytes (same viewport => byte-identical uniforms) and reuses
-  // its cached bind groups. Wave-1 baseline was bufferWriteBytes=4128,
+  // its cached bind groups. The pre-residence baseline was bufferWriteBytes=4128,
   // bindgroupCreates=3.
   EXPECT_LE(c.bufferWriteBytes, 512u)
       << "Steady-state buffer writes on an unchanged second render: resident geometry "
@@ -549,18 +550,18 @@ TEST_F(GeodePerfTest, Moderate_NoDirtyPath_ZeroEncodes) {
   const geode::GeodeCounters c = countersForSecondRender(kModerateSvg, device);
   printCounters("Moderate_NoDirtyPath_ZeroEncodes (frame2)", c);
 
-  // M2 target: zero encodes across both fill paths - confirms the cache
+  // Target: zero encodes across both fill paths - confirms the cache
   // covers both `submitFillDraw` (opacity-layer path) and
   // `fillPathLinearGradient` (rounded-rect path).
   EXPECT_EQ(c.pathEncodes, 0u) << "Cache miss on unchanged second render: fill or gradient path "
                                   "re-encoded despite zero geometry changes.";
-  // M1 (GeodeBufferPool): readback + one per-blit uniform buffer remain
+  // `GeodeBufferPool`: readback + one per-blit uniform buffer remain
   // (layer composite blits create a fresh uniform buffer per call).
   EXPECT_LE(c.bufferCreates, 4u) << "Arena buffer churn on an unchanged second render.";
-  // Wave 2 (GPU residence): the opacity-layer solid path is resident, so
+  // GPU residence: the opacity-layer solid path is resident, so
   // the steady-state residual is only the gradient rect (arena path) plus
-  // the isolated-layer composite blit's per-frame uniform. Wave-1 baseline
-  // was bufferWriteBytes=5372, bindgroupCreates=3.
+  // the isolated-layer composite blit's per-frame uniform. The pre-residence
+  // baseline was bufferWriteBytes=5372, bindgroupCreates=3.
   EXPECT_LE(c.bufferWriteBytes, 3200u)
       << "Steady-state buffer writes: only the gradient + layer-blit uniforms should remain.";
   EXPECT_LE(c.bindgroupCreates, 3u) << "Steady-state bind-group creates: the resident solid fill "
@@ -581,20 +582,20 @@ TEST_F(GeodePerfTest, Lion_NoDirtyPath_ZeroEncodes) {
   const geode::GeodeCounters c = countersForSecondRender(svg, device);
   printCounters("Lion_NoDirtyPath_ZeroEncodes (frame2)", c);
 
-  // M2 target: 132 cached paths → zero re-encodes. This is the headline
+  // Target: 132 cached paths → zero re-encodes. This is the headline
   // assertion: the lion is our standard "many paths" stress fixture and
-  // the M0 baseline showed 132 pathEncodes per frame. Driving that to 0
+  // the pre-cache baseline showed 132 pathEncodes per frame. Driving that to 0
   // is the whole point of the cache.
   EXPECT_EQ(c.pathEncodes, 0u) << "Cache miss on unchanged second render of lion.svg: "
                                   "re-encoded paths despite zero geometry changes.";
-  // M1 (GeodeBufferPool): pre-pool this was 12 creates/frame (arena
+  // `GeodeBufferPool`: pre-pool this was 12 creates/frame (arena
   // re-growth in the per-frame encoder); pooled steady state is the
   // readback buffer only.
   EXPECT_LE(c.bufferCreates, 3u) << "Arena buffer churn on an unchanged second render of lion.svg.";
-  // Wave 2 (GPU residence) - the headline steady-state win. All 132 solid
+  // GPU residence - the headline steady-state win. All 132 solid
   // fills are GPU-resident from frame 1, so an unchanged second render
-  // re-uploads zero geometry bytes and creates zero bind groups. Wave-1
-  // baseline was bufferWriteBytes=172776 across 1056 writes, and
+  // re-uploads zero geometry bytes and creates zero bind groups. The
+  // pre-residence baseline was bufferWriteBytes=172776 across 1056 writes, and
   // bindgroupCreates=132 (one per draw). drawCalls stays 132 - the draws
   // still happen, they just bind cached resident buffers.
   EXPECT_LE(c.bufferWriteBytes, 4096u)
@@ -618,19 +619,19 @@ TEST_F(GeodePerfTest, GhostscriptTiger_NoDirtyPath_ZeroEncodes) {
   const geode::GeodeCounters c = countersForSecondRender(svg, device);
   printCounters("GhostscriptTiger_NoDirtyPath_ZeroEncodes (frame2)", c);
 
-  // M2 target: Tiger has strokes too, so this test also exercises the
+  // Target: Tiger has strokes too, so this test also exercises the
   // stroke slot of `GeodePathCacheComponent` - a second render must not
   // re-run `Path::strokeToFill` nor re-encode the stroked outline.
   EXPECT_EQ(c.pathEncodes, 0u)
       << "Cache miss on unchanged second render of Ghostscript_Tiger.svg: "
          "fill- or stroke-slot cache missed despite zero geometry changes.";
-  // M1 (GeodeBufferPool): pre-pool this was 20 creates/frame. Observed
+  // `GeodeBufferPool`: pre-pool this was 20 creates/frame. Observed
   // pooled steady state is 4 (readback + residual arena churn); assert
   // with a little margin.
   EXPECT_LE(c.bufferCreates, 8u)
       << "Arena buffer churn on an unchanged second render of Ghostscript_Tiger.svg.";
-  // Wave 2 (GPU residence) - THE headline acceptance target. The wave-1
-  // measured profile (design doc 0030 appendix) was ~1.44 MB re-uploaded
+  // GPU residence - THE headline acceptance target. The pre-residence
+  // measured profile was ~1.44 MB re-uploaded
   // per steady-state frame across 2,432 writeBuffer calls, plus 304 bind
   // group creates (one per draw). With persistent per-entity residence an
   // unchanged second render re-uploads zero geometry bytes and creates
@@ -645,13 +646,12 @@ TEST_F(GeodePerfTest, GhostscriptTiger_NoDirtyPath_ZeroEncodes) {
 }
 
 // ---------------------------------------------------------------------------
-// Milestone 4.2: Transient render-target pool - zero-alloc repeat render.
+// Transient render-target pool - zero-alloc repeat render.
 //
-// Per design doc 0030 §M4.2: a size-keyed free list for layer / filter /
-// mask / clip-mask scratch textures. Combined with M4.1 target reuse and
-// the per-encoder persistent dummy texture (M1), a repeat
-// render of the same document at the same size should allocate zero
-// textures on frame 2.
+// A size-keyed free list for layer / filter / mask / clip-mask scratch
+// textures. Combined with same-size render-target reuse and the
+// device-shared persistent dummy texture, a repeat render of the same
+// document at the same size should allocate zero textures on frame 2.
 // ---------------------------------------------------------------------------
 
 TEST_F(GeodePerfTest, SimpleShapes_NoDirtyPath_ZeroTextures) {
@@ -662,7 +662,7 @@ TEST_F(GeodePerfTest, SimpleShapes_NoDirtyPath_ZeroTextures) {
   printCounters("SimpleShapes_NoDirtyPath_ZeroTextures (frame2)", c);
 
   // Exercises only the main target; no isolated layers.
-  // Any texture allocation here means M4.1 regressed or a dummy is
+  // Any texture allocation here means render-target reuse regressed or a dummy is
   // leaking per-frame.
   EXPECT_EQ(c.textureCreates, 0u)
       << "Texture allocation on unchanged second render: main target or "
@@ -678,7 +678,7 @@ TEST_F(GeodePerfTest, Moderate_NoDirtyPath_ZeroTextures) {
 
   // Moderate fixture has `<path opacity="0.8">` which triggers a
   // `pushIsolatedLayer` / `popIsolatedLayer` round-trip per frame. The
-  // layer allocates an RGBA8 target that M4.2 must pool and reuse.
+  // layer allocates an RGBA8 target that the texture pool must reuse.
   EXPECT_EQ(c.textureCreates, 0u) << "Isolated-layer texture leak on unchanged second render. "
                                      "Layer push/pop should draw from the M4.2 texture pool.";
 }
@@ -814,7 +814,7 @@ TEST_F(GeodePerfTest, TextureSnapshotStressReleasesTargets) {
 }
 
 // ---------------------------------------------------------------------------
-// Wave 2 (GPU residence): eviction / no-unbounded-growth.
+// GPU residence: eviction / no-unbounded-growth.
 //
 // Persistent per-entity GPU buffers must not accumulate across distinct
 // documents. Each document owns its own ECS registry; when the document is
@@ -871,7 +871,7 @@ TEST_F(GeodePerfTest, GpuResidence_FreesResidentBuffersOnDocumentTeardown) {
 }
 
 // ---------------------------------------------------------------------------
-// Wave 2 (GPU residence): repeated same-document renders hold residence
+// GPU residence: repeated same-document renders hold residence
 // steady - they must not grow the live resident-bytes gauge frame over
 // frame (the buffers are reused, not reallocated).
 // ---------------------------------------------------------------------------
@@ -902,7 +902,7 @@ TEST_F(GeodePerfTest, GpuResidence_SteadyAcrossRepeatedRenders) {
 }
 
 // ---------------------------------------------------------------------------
-// Wave 2 (GPU residence): cross-device safety.
+// GPU residence: cross-device safety.
 //
 // A `GeodeResidentPathComponent` lives on the SVGDocument's ECS registry, so
 // it survives the `RendererGeode` that filled it. If the SAME document is

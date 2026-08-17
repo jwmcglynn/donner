@@ -9,8 +9,8 @@ GeodePipeline::GeodePipeline(const wgpu::Device& device, wgpu::TextureFormat col
     : colorFormat_(colorFormat) {
   // ----- Bind group layout -----
   // Fourteen bindings: uniforms, bands SSBO, curves SSBO, pattern texture,
-  // pattern sampler, clip-mask texture, clip-mask sampler, and
-  // (Milestone 6 Bullet 2) per-instance transforms SSBO. The pattern
+  // pattern sampler, clip-mask texture, clip-mask sampler, and the
+  // per-instance transforms SSBO. The pattern
   // texture/sampler are only sampled when paintMode == "pattern" and
   // the clip-mask texture/sampler only when `hasClipMask != 0`. A 1x1
   // dummy texture is bound for both when the feature is inactive so
@@ -46,7 +46,7 @@ GeodePipeline::GeodePipeline(const wgpu::Device& device, wgpu::TextureFormat col
   entries[4].visibility = wgpu::ShaderStage::Fragment;
   entries[4].sampler.type = wgpu::SamplerBindingType::Filtering;
 
-  // Phase 3b clip mask texture + sampler.
+  // Clip mask texture + sampler.
   entries[5].binding = 5;
   entries[5].visibility = wgpu::ShaderStage::Fragment;
   entries[5].texture.sampleType = wgpu::TextureSampleType::Float;
@@ -57,7 +57,7 @@ GeodePipeline::GeodePipeline(const wgpu::Device& device, wgpu::TextureFormat col
   entries[6].visibility = wgpu::ShaderStage::Fragment;
   entries[6].sampler.type = wgpu::SamplerBindingType::Filtering;
 
-  // M6 Bullet 2: per-instance affine transforms (vertex-visible only).
+  // Per-instance affine transforms (vertex-visible only).
   entries[7].binding = 7;
   entries[7].visibility = wgpu::ShaderStage::Vertex;
   entries[7].buffer.type = wgpu::BufferBindingType::ReadOnlyStorage;
@@ -180,7 +180,7 @@ GeodeGradientPipeline::GeodeGradientPipeline(const wgpu::Device& device,
   entries[2].buffer.type = wgpu::BufferBindingType::ReadOnlyStorage;
   entries[2].buffer.minBindingSize = 0;
 
-  // Phase 3b clip mask texture + sampler.
+  // Clip mask texture + sampler.
   entries[3].binding = 3;
   entries[3].visibility = wgpu::ShaderStage::Fragment;
   entries[3].texture.sampleType = wgpu::TextureSampleType::Float;

@@ -1779,9 +1779,9 @@ std::vector<double> parseDoubleList(std::string_view str) {
 
 /// Common animation timing attribute parsing shared by <animate>, <animateTransform>, and <set>.
 ///
-/// Slice 1: `begin`/`end` support offset (clock) values only. A semicolon-separated list picks the
+/// `begin`/`end` support offset (clock) values only. A semicolon-separated list picks the
 /// earliest valid offset. Syncbase references (`id.begin`/`id.end`) and event triggers are
-/// deferred; see docs/design_docs/animation.md.
+/// deferred.
 void parseAnimationTimingAttribute(components::AnimationTimingComponent& timing,
                                    const XMLQualifiedNameRef& name, std::string_view value) {
   auto parseEarliestOffset =
@@ -1885,7 +1885,7 @@ std::optional<ParseDiagnostic> ParseAttribute<SVGAnimateElement>(SVGParserContex
   } else if (name == XMLQualifiedNameRef("values")) {
     valueComp.values = parseSemicolonList(value);
   } else if (name == XMLQualifiedNameRef("calcMode")) {
-    // Slice 1: discrete | linear. paced/spline are deferred and map to linear.
+    // Supported calcMode values: discrete | linear. paced/spline are deferred and map to linear.
     if (value == "discrete") {
       valueComp.calcMode = components::CalcMode::Discrete;
     } else {

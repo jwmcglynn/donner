@@ -2,9 +2,8 @@
 /// @file
 ///
 /// `EditorCommand` is the discriminated union of every UI-thread→DOM mutation
-/// in the M2 scope of the editor. New tools (path, node-edit, etc.) extend
-/// this variant in their own follow-up milestones - one new case per logical
-/// operation, NOT one per ECS write.
+/// in the editor. New tools (path, node-edit, etc.) extend this variant as
+/// they land - one new case per logical operation, NOT one per ECS write.
 ///
 /// Canvas, tool, and application writes flow through
 /// `EditorApp::applyMutation()`, which pushes an `EditorCommand` onto the
@@ -45,7 +44,7 @@ struct EditorCommand {
     ReplaceDocument,
 
     /// Set a single attribute on the element. Used by the structured-
-    /// editing writeback path (M3) when a tool modifies an attribute
+    /// editing writeback path when a tool modifies an attribute
     /// value. Coalesces by `(element, attributeName)` - successive
     /// SetAttribute commands for the same element and attribute collapse
     /// to the most-recently-queued value.

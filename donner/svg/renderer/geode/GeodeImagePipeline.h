@@ -13,8 +13,8 @@ namespace donner::geode {
  * bind group layout and two reusable samplers (linear and nearest).
  *
  * One `GeodeImagePipeline` is sufficient per `(device, render-target-format)`
- * pair. It is used both by `drawImage` (SVG `<image>` elements) and, in
- * Phase 2H, by the pattern renderer: the pattern tile is rendered to an
+ * pair. It is used both by `drawImage` (SVG `<image>` elements) and by the
+ * pattern renderer: the pattern tile is rendered to an
  * offscreen texture and then sampled with this same pipeline as a
  * repeating fill.
  *
@@ -24,7 +24,7 @@ namespace donner::geode {
  * - binding 2: sampled texture 2D (float)
  * - binding 3: sampled mask texture for `<mask>` luminance mode
  * - binding 4: sampled destination snapshot for `mix-blend-mode`
- * - binding 5: sampled Phase 3b clip-mask texture
+ * - binding 5: sampled path-clip mask texture
  * - binding 6: clip-mask sampler (always linear clamp-to-edge)
  *
  * The pipeline takes no vertex buffer - the shader generates quad corners
@@ -64,7 +64,7 @@ public:
   /// `ImageParams::imageRenderingPixelated` is true.
   const wgpu::Sampler& nearestSampler() const { return nearestSampler_.get(); }
 
-  /// Linear clamp-to-edge sampler used for Phase 3b clip-mask textures.
+  /// Linear clamp-to-edge sampler used for path-clip mask textures.
   const wgpu::Sampler& clipMaskSampler() const { return clipMaskSampler_.get(); }
 
   /// Color format the pipeline was built for.

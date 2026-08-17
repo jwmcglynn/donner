@@ -9,8 +9,7 @@ namespace donner::gpu::shader::programs {
 
 /**
  * Builds the complete solid-fill IR module: a faithful semantic re-expression of the Donner-owned
- * `donner/svg/renderer/geode/shaders/slug_fill.wgsl` (the analytic dual-ray coverage algorithm of
- * design docs 0041/0042).
+ * `donner/svg/renderer/geode/shaders/slug_fill.wgsl` (the analytic dual-ray coverage algorithm).
  *
  * Contents mirror the WGSL shader function by function: the 288-byte `Uniforms` struct, `Band`
  * (32 bytes) and `InstanceTransform` (32 bytes) storage layouts, all 12 bindings at group 0 with
@@ -23,7 +22,7 @@ namespace donner::gpu::shader::programs {
  *
  * Entry points are named `vs_main` / `fs_main`; struct-typed WGSL stage IO is flattened to
  * annotated parameters/outputs with identical locations and builtins, and `.rgba` swizzles are
- * transliterated to `.xyzw`. The packet 6 Metal vertical slice compares pixels against a frozen
+ * transliterated to `.xyzw`. The Metal vertical slice compares pixels against a frozen
  * baseline rendered by the original WGSL shader, so behavior-affecting constructs must remain
  * semantically identical.
  */

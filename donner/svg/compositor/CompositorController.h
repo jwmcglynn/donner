@@ -94,11 +94,10 @@ struct CompositorTile {
   Entity layerEntity = entt::null;
 
   /// Canvas-space top-left where the tile's bitmap blits back, in
-  /// canvas pixels at rasterize time (design doc 0033 §M2C). For
-  /// segments this is `staticSegmentOffsets_[i]` (non-zero on the
-  /// tight-bounded path, design doc 0027); for layers this is
-  /// `CompositorLayer::canvasOffset()` (non-zero for intrinsic-sized
-  /// rasters, design doc 0033 §M2A). The editor's blit math is
+  /// canvas pixels at rasterize time. For segments this is
+  /// `staticSegmentOffsets_[i]` (non-zero on the tight-bounded path);
+  /// for layers this is `CompositorLayer::canvasOffset()` (non-zero for
+  /// intrinsic-sized rasters). The editor's blit math is
   /// `Translate(canvasOffsetPx) * canvasFromBitmap`.
   Vector2d canvasOffsetPx = Vector2d::Zero();
 
@@ -119,12 +118,11 @@ struct CompositorTile {
   bool immediate = false;
 };
 
-/// Design doc 0033 §M4 - cancellation handle for `CompositorController::
-/// renderFrame`. The token wraps a single `std::atomic<bool>`; the
-/// compositor's per-layer / per-segment rasterize loops poll
-/// `isCancelled()` at coarse safe points (between `rasterizeLayer` /
-/// `rasterizeStaticSegment` calls, not mid-rasterize, per design doc
-/// 0033 §R3 / §D4) and bail early when set.
+/// Cancellation handle for `CompositorController::renderFrame`. The token
+/// wraps a single `std::atomic<bool>`; the compositor's per-layer /
+/// per-segment rasterize loops poll `isCancelled()` at coarse safe points
+/// (between `rasterizeLayer` / `rasterizeStaticSegment` calls, never
+/// mid-rasterize) and bail early when set.
 ///
 /// Cancellation is best-effort: a partially-rasterized frame leaves
 /// the compositor's segment / layer dirty flags in their pre-rasterize
@@ -203,8 +201,6 @@ inline constexpr size_t kMaxCompositorMemoryBytes = 1024ull * 1024ull * 1024ull;
  * (opacity < 1, filter, mask, blend-mode, isolation) are always active - they
  * implement SVG semantics, not an optional optimization, and cannot be
  * disabled through config.
- *
- * See 0025-composited_rendering.md § Reversibility.
  */
 struct CompositorConfig {
   /// Editor-published `InteractionHint` hints promote the selected / dragged
@@ -237,14 +233,14 @@ struct CompositorConfig {
   /// offscreen bitmap to the tight canvas-space rectangle its contents
   /// paint into (with a 1-px AA padding + 75% coverage cutoff). When
   /// false, every segment rasterizes full-canvas - slower and more
-  /// memory, but bypasses every code path added in design doc 0027,
+  /// memory, but bypasses every code path added for tight bounds,
   /// which is the bisection fast-path for any visual regression
   /// suspected to originate in tight-bounded rasterization.
   ///
   /// Flipping the field at runtime (via
   /// `CompositorController::setTightBoundedSegmentsEnabled`) marks all
   /// cached segments dirty so the next frame re-rasterizes under the
-  /// new policy. See 0027-tight_bounded_segments.md § Reversibility.
+  /// new policy.
   bool tightBoundedSegments = true;
 
   /// Allow cheap static spans to be presented as immediate geometry and re-rasterized on every
@@ -456,7 +452,7 @@ public:
    */
   void renderFrame(const RenderViewport& viewport, const Transform2d& surfaceFromCanvas);
 
-  /// Design doc 0033 §M4 - cancellable variant. The @p token is polled
+  /// Cancellable variant. The @p token is polled
   /// at coarse safe points (between `rasterizeLayer` / segment
   /// rasterize calls) and `renderFrame` returns early when set. The
   /// compositor's internal dirty flags are left intact for the work
@@ -534,8 +530,8 @@ public:
 
   /// Canvas-space top-left of the entity's cached layer bitmap. `Zero()`
   /// when the entity is not promoted, when its layer hasn't rasterized
-  /// yet, or when the layer fell back to canvas-size rasterization
-  /// (design doc 0033 §M2). The editor's `CompositedPreview` consumer
+  /// yet, or when the layer fell back to canvas-size rasterization.
+  /// The editor's `CompositedPreview` consumer
   /// blits the promoted texture at this offset (converted to doc
   /// units) plus the per-frame DOM drag delta.
   [[nodiscard]] Vector2d layerCanvasOffsetOf(Entity entity) const;
@@ -580,8 +576,8 @@ public:
   };
 
   /// One row of diagnostic state per active compositor layer, intended
-  /// for the editor's read-only layer-inspector panel (design doc 0033
-  /// M1). Cheap to build, cheap to copy: a few ints and one short
+  /// for the editor's read-only layer-inspector panel. Cheap to build,
+  /// cheap to copy: a few ints and one short
   /// string per layer.
   struct LayerInspectorRow {
     /// Layer's stable numeric id (`CompositorLayer::id`).
@@ -609,7 +605,7 @@ public:
     std::string fallbackReasonsText;
     /// Canvas-space top-left position where this layer's bitmap blits
     /// back. `Vector2d::Zero()` for canvas-sized layers; non-zero for
-    /// intrinsic-sized layers (design doc 0033 §M2).
+    /// intrinsic-sized layers.
     Vector2d canvasOffset = Vector2d::Zero();
     /// Pixel dimensions of the downsampled thumbnail. `Vector2i::Zero()`
     /// when the layer has no valid bitmap. Otherwise the longer side is
@@ -641,7 +637,7 @@ public:
     /// when the slot has no bitmap yet.
     Vector2i bitmapSize = Vector2i::Zero();
     /// Canvas-space top-left offset where this segment's bitmap blits
-    /// back (non-zero only on the tight-bounded path, design doc 0027).
+    /// back (non-zero only on the tight-bounded path).
     Vector2d canvasOffset = Vector2d::Zero();
     /// Monotonic per-slot generation counter.
     uint64_t generation = 0;
@@ -726,8 +722,8 @@ public:
   }
 
   /// One row of the unified "everything composited together" view that
-  /// the layer-inspector panel renders in paint order - design doc 0033
-  /// §M1++. Mirrors what `composeLayers` actually draws so the operator
+  /// the layer-inspector panel renders in paint order. Mirrors what
+  /// `composeLayers` actually draws so the operator
   /// sees the same sequence of blits the renderer performs.
   ///
   /// Carries either a downsampled CPU thumbnail or a backend texture snapshot for every tile
@@ -1146,7 +1142,7 @@ private:
   /// all defer to it after running the resolver.
   void reconcileLayers(Registry& registry);
 
-  /// Design doc 0033 §M9 - age `pendingDemotions_` by one frame and
+  /// Age `pendingDemotions_` by one frame and
   /// flush any entries that hit zero. Called once per `renderFrame`
   /// before the dirty-flag snapshot so an expired demotion's
   /// `resyncSegmentsToLayerSet` runs inside the normal render's
@@ -1208,7 +1204,7 @@ private:
   std::unordered_map<Entity, ScopedCompositorHint> activeHints_;
   std::vector<CompositorLayer> layers_;
 
-  /// Design doc 0033 §M9 - layer-set hysteresis. Entity → frames
+  /// Layer-set hysteresis. Entity → frames
   /// remaining before the demote actually fires. `demoteEntity` adds
   /// an entry here instead of running the resolver / reconcileLayers
   /// immediately; the layer + hint stay in `layers_` /
@@ -1229,7 +1225,7 @@ public:
   /// times to observe the expiry transition.
   static constexpr uint32_t kDemotionHysteresisFrames = 30;
 
-  /// Test-only: bypass the §M9 hysteresis window and process every
+  /// Test-only: bypass the hysteresis window and process every
   /// pending demotion immediately. Provided so unit tests can keep
   /// using the "promote → demote → assert layer gone" pattern
   /// without having to render `kDemotionHysteresisFrames` frames in
@@ -1261,8 +1257,8 @@ private:
   std::vector<uint64_t> staticSegmentGeneration_;
   /// Per-segment wall-clock duration (ms) of the most recent rasterize,
   /// parallel to `staticSegments_`. Diagnostic-only - surfaced via
-  /// `snapshotSegmentInspectorRows` to the layer-inspector panel (design
-  /// doc 0033 M1+). Zero for slots that have never rasterized in the
+  /// `snapshotSegmentInspectorRows` to the layer-inspector panel. Zero for
+  /// slots that have never rasterized in the
   /// current session.
   std::vector<double> staticSegmentLastRasterizeMs_;
   /// Test-only static-span rasterize duration override. Production uses the
@@ -1308,7 +1304,7 @@ private:
   /// `Vector2d::Zero()` means the segment was rasterized full-canvas
   /// (bounds-compute returned `nullopt`, the segment is empty, or the
   /// bounds covered too much of the canvas to be worth the tight
-  /// path). See design doc 0027 for the fallback criteria.
+  /// path).
   std::vector<Vector2d> staticSegmentOffsets_;
   /// Canvas size the cached segments were rasterized at. Invalidates on
   /// zoom / window resize so stale bitmaps at the old resolution don't
@@ -1322,7 +1318,7 @@ private:
   /// `snapshotTilesForUpload` to mark the corresponding `CompositorTile`
   /// with `isDragTarget = true`. `entt::null` when no editor-promoted
   /// drag target is active (selection-only state, no editor selection,
-  /// or multiple active hints). Post-§M2C there are no pre-flattened
+  /// or multiple active hints). There are no pre-flattened
   /// bg/fg bitmaps gated on this - the field only drives the tile-list
   /// drag-target flag.
   Entity splitStaticLayersEntity_ = entt::null;
@@ -1351,7 +1347,7 @@ private:
   /// See `setSkipMainComposeDuringSplit`.
   bool skipMainComposeDuringSplit_ = false;
 
-  /// Design doc 0033 §M4 - active cancellation token for the current
+  /// Active cancellation token for the current
   /// cancellable `renderFrame` call. Empty outside the cancellable
   /// render window; `isCancelled()` returns false in that state.
   std::optional<std::reference_wrapper<const CancellationToken>> cancelToken_;

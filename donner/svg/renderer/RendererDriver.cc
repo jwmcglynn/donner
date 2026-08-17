@@ -1517,8 +1517,7 @@ std::optional<Box2d> RendererDriver::computeEntityRangeBounds(
     // Non-geometry bound-expanders we don't yet model: mask, marker-
     // shape extents, pattern tiles with subtrees. Bail here so the
     // compositor falls back to full-canvas rather than risking a
-    // visibly wrong crop. `docs/design_docs/0027-tight_bounded_
-    // segments.md` tracks which cases are pending precise handling.
+    // visibly wrong crop.
     if (instance.mask.has_value() && instance.mask->valid()) {
       return std::nullopt;
     }

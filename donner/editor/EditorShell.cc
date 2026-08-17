@@ -3386,14 +3386,14 @@ SelectionTransformHandleIntent EditorShell::updateRenderPaneToolCursor(
 void EditorShell::dispatchBufferedRenderPaneClick(bool selectToolActive, bool penToolActive,
                                                   bool textToolActive,
                                                   double pointerHitTestPixelsPerDocUnit) {
-  // Design doc 0033 §M8 - click→drag handoff doesn't wait for raster.
+  // Click→drag handoff doesn't wait for raster.
   //
   // Fast path: if the user clicks inside the bounds of the currently-
   // selected element and outside cached later-painted bounds, we can
   // start the re-drag IMMEDIATELY without gating on `!isBusy()`. The
   // check uses `SelectionBoundsCache` - populated on idle frames - so
   // the call doesn't touch the registry the worker is mid-mutating. The
-  // previous M8 attempt failed because it called the live
+  // previous attempt failed because it called the live
   // `SnapshotSelectionWorldBounds` during the busy window; the
   // cache-based check fixes the race.
   //
@@ -3932,7 +3932,7 @@ void EditorShell::renderRenderPane(ImGuiWindowFlags paneFlags) {
   dispatchBufferedRenderPaneClick(selectToolActive, penToolActive, textToolActive,
                                   pointerHitTestPixelsPerDocUnit);
 
-  // After-idle follow-up for the M8 fast-path click. This reads the
+  // After-idle follow-up for the fast-path click. This reads the
   // live registry, so it must wait for the worker to land. Keep the
   // follow-up to cache refresh only: posting a render here would run
   // before this same frame's drag move is applied, leaving the overlay

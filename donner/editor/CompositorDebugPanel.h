@@ -6,8 +6,8 @@
 /// layers) the renderer blits to produce the final frame, displayed
 /// in paint order with a thumbnail per tile.
 ///
-/// Design doc 0033 §M1++. The "comprehensive composite" view replaces
-/// the earlier separate per-layer / per-segment / split-bitmap tables.
+/// The "comprehensive composite" view replaces the earlier separate
+/// per-layer / per-segment / split-bitmap tables.
 
 #include <array>
 #include <cstdint>

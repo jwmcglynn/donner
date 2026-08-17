@@ -325,8 +325,7 @@ TEST(EditorAppTest, SelectionSetAndClear) {
   EXPECT_TRUE(app.selectedElements().empty());
 }
 
-// Multi-select API (Milestone 4 of the editor UX design doc): a
-// vector-shaped backing store for shift+click and marquee
+// Multi-select API: a vector-shaped backing store for shift+click and marquee
 // selections, with a single-element compatibility shim for back-compat
 // callers like the source-pane highlight and the inspector readout.
 TEST(EditorAppTest, MultiSelectionStoresEveryElement) {

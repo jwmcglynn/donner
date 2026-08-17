@@ -28,13 +28,13 @@ namespace {
 // below is compiled anywhere. It is the complete C++ dependency list of the
 // WebKit bitmap bridge - the two alternating document-canvas selectors, the
 // worker-canvas selector, the mode probe, and the three ImageBitmap handoff
-// entry points - held out of the the single-canvas architecture deletion series so the phase 4
-// retire-or-rebuild decision for WebKit is made against the real code rather
-// than a changelog.
+// entry points - held out of the single-canvas architecture deletion series so
+// the retire-or-rebuild decision for WebKit is made against the real code
+// rather than a changelog.
 //
 // This block is NOT a supported configuration and must not be revived as-is:
 // it presents into a second DOM canvas, which the "no CSS in presentation"
-// invariant forbids. Phase 4 either deletes it (see the series' optional
+// invariant forbids. That decision either deletes it (see the series' optional
 // bridge-deletion patch, which does exactly that and nothing else) or rebuilds
 // an ImageBitmap handoff against the single canvas. Retained-but-unused code is
 // not an outcome.
@@ -446,7 +446,7 @@ void AsyncRenderer::requestRender(const RenderRequest& request) {
       workerState_ = std::move(nextRendering);
     }
     if (signalCancel) {
-      // §M4: tell the in-flight render to bail. Set this while the mutex still
+      // Tell the in-flight render to bail. Set this while the mutex still
       // exposes the superseding state so the worker cannot start the
       // replacement request and then receive a stale cancel.
       cancelRender_.cancel();
@@ -796,7 +796,7 @@ void AsyncRenderer::workerLoop() {
     (void)requestRenderer.consumeReadbackStats();
     svg::SVGDocument& requestDocument = request.lease.document();
 
-    // §M4: every iteration starts with a fresh (non-cancelled) token.
+    // Every iteration starts with a fresh (non-cancelled) token.
     // The UI thread sets cancel via `requestRender` ONLY when posting
     // while busy, and we're idle here right before the render runs -
     // so any cancel signal from a previous iteration is stale.
@@ -1288,7 +1288,7 @@ void AsyncRenderer::workerLoop() {
       releaseDocumentAccess();
     }
 
-    // §M4: a cancelled render leaves compositor dirty flags ready for the next
+    // A cancelled render leaves compositor dirty flags ready for the next
     // pass. Do not publish a partial result; either loop into the superseding
     // request or park after a cancel-without-replacement.
     if (!renderCompleted) {

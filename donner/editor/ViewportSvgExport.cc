@@ -595,7 +595,7 @@ Result<std::string, std::string> ExportViewportAsSvg(
   output += "</g>\n";
 
   // Optional editor overlay group. Populated from the captured selection-chrome
-  // snapshot when one is supplied; otherwise emitted empty (M6 back-compat).
+  // snapshot when one is supplied; otherwise emitted empty (back-compat).
   // Clipped to the same document-space viewport rect as the content so overlay
   // chrome never spills outside the exported crop.
   if (options.includeSelectionOverlay) {

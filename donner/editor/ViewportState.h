@@ -2,9 +2,7 @@
 /// @file
 ///
 /// `ViewportState` is the single source of truth for the editor render
-/// pane's screen↔document coordinate mapping. See
-/// `docs/design_docs/0025-2-editor_ux.md` for the full design rationale;
-/// this header is the public API.
+/// pane's screen↔document coordinate mapping. This header is the public API.
 ///
 /// Conceptually a `ViewportState` is a value the main loop snapshots
 /// once at the top of each frame and then hands to every reader (async

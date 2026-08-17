@@ -1,6 +1,6 @@
 #pragma once
 /// @file
-/// Main-thread bridges for the the single-canvas architecture phase 1 whole-app-worker build.
+/// Main-thread bridges for the single-canvas architecture whole-app-worker build.
 ///
 /// In that build `main()` runs on a pthread (Emscripten `PROXY_TO_PTHREAD`) and
 /// the single `#canvas` is transferred to it as an `OffscreenCanvas`. `EM_JS`
@@ -36,7 +36,7 @@ namespace donner::editor::whole_app_worker {
  * Give the app pthread's JS context the `window` and `document` globals the
  * editor's `EM_JS` probe bodies assume.
  *
- * PHASE 1 STUB, and the largest known gap in this build. About thirty `EM_JS`
+ * STUB, and the largest known gap in this build. About thirty `EM_JS`
  * bodies across the editor publish diagnostics onto `window.__donner*` or poke
  * DOM elements; on the app thread those globals do not exist and the first such
  * call throws `ReferenceError: window is not defined`, killing the thread.
@@ -44,7 +44,7 @@ namespace donner::editor::whole_app_worker {
  * this installs a worker-local stand-in so they run harmlessly.
  *
  * Consequence: those probes land on the worker's own global and are NOT
- * readable from the page. The probes the phase 1 exit criteria depend on are
+ * readable from the page. The probes this build's exit criteria depend on are
  * explicitly bridged instead (see the rest of this header) and DO reach the
  * page. Probes known to be worker-local in this build: `__donnerWorkerStats`,
  * `__donnerSampleThumbnailStats`, `__donnerInteractionStats`,
@@ -132,7 +132,7 @@ enum class FrameDriver : int {
 ///
 /// Emscripten's `EM_TIMING_RAF` scheduler calls `globalThis.requestAnimationFrame`
 /// when it exists and silently degrades to a `setTimeout` emulation when it does
-/// not, which is what a dedicated worker got on the engines measured in phase 1.
+/// not, which is what a dedicated worker got on the engines we measured.
 /// The answer is per-engine, so it is probed at runtime rather than assumed.
 [[nodiscard]] bool WorkerRequestAnimationFrameAvailable();
 

@@ -69,7 +69,7 @@ TEST(EditorTheme, AccentEnumCoverage) {
   EXPECT_EQ(blue.destructive, violet.destructive);
 }
 
-// The named palette values match design doc 0054 exactly.
+// Pins the named palette values so a re-tint is a deliberate, reviewed change.
 TEST(EditorTheme, PaletteMatchesDoc) {
   const EditorTheme t = EditorTheme::Dark(Accent::SignalTeal);
   EXPECT_EQ(t.surfaceCanvas, IM_COL32(0x11, 0x12, 0x15, 0xFF));

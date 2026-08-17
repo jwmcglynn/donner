@@ -1219,7 +1219,7 @@ TEST_F(RendererGeodeTest, StrokeFlatteningTracksDeviceScaleWithoutASourceEntity)
          "transform, which is what renders zoomed-in curves as visible polygons.";
 }
 
-/// Same invariant through the M2 per-entity stroke cache. That cache is keyed by
+/// Same invariant through the per-entity stroke cache. That cache is keyed by
 /// `StrokeStyle`, which does not change with zoom, so the derived flattening
 /// tolerance has to be part of the key: otherwise a zoomed-in frame serves the
 /// coarse outline that was tessellated for the previous scale.
@@ -1551,7 +1551,7 @@ TEST_F(RendererGeodeTest, DrawImageEmptyIsNoOp) {
 
 /// Popping an isolated layer with a non-Normal blend mode while an outer
 /// clip is active must NOT clobber backdrop pixels outside the clip rect.
-/// This is the Phase 3d regression guarded by loading (not clearing) the
+/// This is the blend-mode regression guarded by loading (not clearing) the
 /// parent attachment on the blend-pop pass - a clear would wipe
 /// out-of-scissor pixels to transparent since the blend blit runs only
 /// inside the scissor.
@@ -1587,7 +1587,7 @@ TEST_F(RendererGeodeTest, BlendedLayerPopPreservesBackdropOutsideClip) {
   EXPECT_THAT(inside, RgbaEq(0, 0, 0, 255)) << "Inside clip should multiply to black";
 }
 
-/// Phase 3b repro: an arbitrary path clip should gate color draws to the mask.
+/// Repro: an arbitrary path clip should gate color draws to the mask.
 /// A full-viewport blue rect clipped by a left-half rect encoded as a PATH
 /// must render blue only on the left half.
 TEST_F(RendererGeodeTest, PathClipMaskClipsSolidFillToLeftHalf) {
@@ -1753,7 +1753,7 @@ TEST_F(RendererGeodeTest, StubbedMethodsAreNoOps) {
   EXPECT_THAT(center, RgbaEq(255, 255, 0, 255));
 }
 
-/// Smoke test for Phase 7 feGaussianBlur filter layer. Draws a crisp red
+/// Smoke test for the feGaussianBlur filter layer. Draws a crisp red
 /// rect, wraps it in a Gaussian blur filter, and verifies that edge pixels
 /// are blurred (reduced alpha compared to center).
 TEST_F(RendererGeodeTest, GaussianBlurSmokes) {

@@ -970,8 +970,8 @@ TEST_F(CompositorGoldenTest, FilterGroupAutoPromotesOnFirstRender) {
   // e.g. a viewport change stays cheap.
   compositor.renderFrame(viewport_);
   EXPECT_GT(compositor.layerCount(), 0u) << "filter layer persists across frames";
-  // Mandatory-detected filter layer is rasterized at intrinsic size
-  // (design doc 0033 §M2A): its bitmap covers only the filter region,
+  // Mandatory-detected filter layer is rasterized at intrinsic size:
+  // its bitmap covers only the filter region,
   // not the full canvas. Just check it's populated and ≤ canvas; the
   // exact dims depend on the gaussian blur expansion math.
   const auto& glowBitmap = compositor.layerBitmapOf(glowEntity);
@@ -1480,10 +1480,10 @@ TEST_F(CompositorGoldenTest, SplashDragWithBucketingAndMultipleFilterGroups) {
 }
 
 // Translation-only drag must not re-rasterize the static segment / non-
-// drag-layer tiles between frames. Post §M2C the editor blits segments
+// drag-layer tiles between frames. The editor blits segments
 // and non-drag layers directly - if their generations bumped per frame,
 // the editor would re-upload N textures every pointer move (the
-// equivalent of the pre-M2C "bg/fg flatten on every frame" regression).
+// equivalent of the old "bg/fg flatten on every frame" regression).
 // We probe `snapshotTilesForUpload` and assert generations are stable
 // for non-drag tiles across translation-only drag frames.
 TEST_F(CompositorGoldenTest, SplitBitmapsStableAcrossTranslationOnlyDragFrames) {
@@ -2486,7 +2486,7 @@ TEST_F(CompositorGoldenTest, DragGroupWithRadialGradientChild_NoArtifact) {
   compositor.promoteEntity(group->unsafeEntityHandle().entity(), InteractionHint::Selection);
   compositor.renderFrame(viewport);
   compositor.demoteEntity(group->unsafeEntityHandle().entity());
-  // §M9: flush so the demote-then-promote-different-kind sequence
+  // Flush so the demote-then-promote-different-kind sequence
   // rebuilds the layer (the path under test) rather than reusing
   // the hysteresis-preserved one.
   compositor.flushPendingDemotionsForTesting();
@@ -3025,7 +3025,7 @@ TEST_F(CompositorGoldenTest, SplashCloudsDragMatchesReference) {
     compositor.promoteEntity(target->unsafeEntityHandle().entity(), InteractionHint::Selection);
     compositor.renderFrame(vp);
     compositor.demoteEntity(target->unsafeEntityHandle().entity());
-    // §M9: flush the hysteresis window so the demote actually fires
+    // Flush the hysteresis window so the demote actually fires
     // before the kind-change re-promote - this test specifically
     // probes the demote+promote layer-rebuild path (vs. the
     // hysteresis-preserved layer reuse), so the hysteresis would
@@ -3154,9 +3154,9 @@ TEST_F(CompositorGoldenTest, DragGroupWithClipPathSiblingAndGradient) {
   compositor.promoteEntity(group->unsafeEntityHandle().entity(), InteractionHint::Selection);
   compositor.renderFrame(viewport);
   compositor.demoteEntity(group->unsafeEntityHandle().entity());
-  // §M9: flush the hysteresis window so the demote actually fires
+  // Flush the hysteresis window so the demote actually fires
   // before the kind-change re-promote - this test probes the
-  // demote+promote layer-rebuild path, which the M9 hysteresis would
+  // demote+promote layer-rebuild path, which the hysteresis would
   // otherwise short-circuit.
   compositor.flushPendingDemotionsForTesting();
   compositor.promoteEntity(group->unsafeEntityHandle().entity(), InteractionHint::ActiveDrag);
@@ -3263,7 +3263,7 @@ TEST_F(CompositorGoldenTest, TwoPhaseDragOfPlainGroupMovesChildren) {
       compositor.promoteEntity(group->unsafeEntityHandle().entity(), InteractionHint::Selection));
   compositor.renderFrame(viewport);
   compositor.demoteEntity(group->unsafeEntityHandle().entity());
-  // §M9: flush the hysteresis so the demote+re-promote cycle this
+  // Flush the hysteresis so the demote+re-promote cycle this
   // test specifically probes still rebuilds the layer rather than
   // taking the hysteresis fast path.
   compositor.flushPendingDemotionsForTesting();
@@ -4065,7 +4065,7 @@ TEST_F(CompositorGoldenTest, RealSplashDragLatencyOnTinySkia) {
   // First-drag and post-reset are known-expensive on the splash. Budget
   // at 2× the observed TinySkia numbers so an unrelated regression is
   // loud, but small fluctuations in path tessellation don't flake the
-  // test. Design doc 0026 tracks the reductions in Options A/B.
+  // test.
   EXPECT_LT(firstDragFrameMs, 8000.0)
       << "first drag frame on real splash regressed beyond 8s - something broke beyond the "
          "known pre-existing 4s prewarm cost";

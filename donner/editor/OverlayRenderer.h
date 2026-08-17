@@ -8,10 +8,6 @@
 /// chrome and document share one render target so there is no subpixel
 /// drift between them.
 ///
-/// See `docs/design_docs/0020-editor.md` "OverlayRenderer uses direct canvas-
-/// style Renderer calls" for the architectural rationale and the primitive
-/// policy.
-///
 /// Usage:
 ///
 /// ```cpp
@@ -89,7 +85,7 @@ enum class SelectionChromeDetail {
 /// `OverlayRenderer::drawChromeFromSnapshot` which is race-free -
 /// it touches only the snapshot, never the registry.
 ///
-/// Design doc 0033 §M7. Lets the chrome rasterize run while the worker
+/// Lets the chrome rasterize run while the worker
 /// is mid-render, so the editor can paint selection chrome in a frame
 /// that the worker hasn't returned a result for yet.
 ///
@@ -367,7 +363,7 @@ public:
   /// @param devicePixelRatio Viewport framebuffer scale used to convert
   ///   logical UI stroke widths into device pixels.
   ///
-  /// Design doc 0033 §M7. Returned snapshot is movable and self-
+  /// The returned snapshot is movable and self-
   /// contained: it holds no registry pointers and survives any
   /// subsequent registry mutation.
   /// @param livePathPreviewElement When set, the element the Pen tool is

@@ -228,7 +228,7 @@ TEST(ViewportSvgExportTest, OverlayGroupPlaceholderEmittedWhenRequested) {
       ExportViewportAsSvg(doc, viewport, renderPaneRect, options);
   ASSERT_TRUE(result.ok()) << result.error;
 
-  // The overlay group exists with the documented id but is EMPTY in M6.
+  // The overlay group exists with the documented id but is EMPTY without a snapshot.
   EXPECT_THAT(result.value, HasSubstr("<g id=\"donner-editor-overlay\""));
   EXPECT_THAT(result.value, HasSubstr("data-donner-export-role=\"editor-overlay\""));
   // No overlay primitives yet; the group must close immediately.
@@ -786,7 +786,7 @@ TEST(ViewportSvgExportTest, ExternalReferenceScannerHandlesWhitespaceAndUppercas
   EXPECT_THAT(result.error, HasSubstr("HTTPS://example.com/image.png"));
 }
 
-// --- Milestone 7: overlay serialization ---------------------------------
+// --- Overlay serialization -----------------------------------------------
 
 /// Return the substring of @p haystack spanning the `<g id="donner-editor-
 /// overlay" ...>` open tag through its matching `</g>`. Empty if not found.
@@ -953,7 +953,7 @@ TEST(ViewportSvgExportTest, OverlayGroupCarriesClipPath) {
       ExportViewportAsSvg(doc, viewport, renderPaneRect, options, &snapshot);
   ASSERT_TRUE(result.ok()) << result.error;
 
-  // The overlay group reuses the M6 content clipPath; it is not a new one.
+  // The overlay group reuses the content clipPath; it is not a new one.
   const std::size_t open = result.value.find("<g id=\"donner-editor-overlay\"");
   ASSERT_NE(open, std::string::npos) << result.value;
   const std::size_t openTagEnd = result.value.find('>', open);

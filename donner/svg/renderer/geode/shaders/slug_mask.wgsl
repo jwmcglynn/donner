@@ -1,8 +1,8 @@
 // Slug mask pipeline: analytic dual-ray coverage at 1 sample/pixel, written
 // into an RGBA8Unorm mask texture for use as a clip source by the main fill /
-// gradient pipelines (Phase 3b path clipping).
+// gradient pipelines (path clipping).
 //
-// Analytic version of the mask (0041 §8). Single convex bounding fan + dense H/V band
+// Analytic version of the mask. Single convex bounding fan + dense H/V band
 // grids → no band-seam double-count. Each fragment writes its scalar coverage
 // into ALL FOUR channels; the pipeline blends with BlendOperation::Max, so
 // overlapping clip-path draws union as max(c1, c2) per channel (correct union,

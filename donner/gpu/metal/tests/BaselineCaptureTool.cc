@@ -1,5 +1,5 @@
 /// @file
-/// Frozen-baseline capture tool (design 0053 phase 3): renders the shared baseline scene
+/// Frozen-baseline capture tool: renders the shared baseline scene
 /// through the CURRENT production renderer as a black box (GeodeDevice + GeoEncoder) and writes
 /// the PNG the Metal vertical slice compares against.
 ///

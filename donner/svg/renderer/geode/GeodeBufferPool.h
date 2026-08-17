@@ -1,6 +1,6 @@
 #pragma once
 /// @file
-/// Frame-transient wgpu buffer pool for GeoEncoder arenas (design doc 0030).
+/// Frame-transient wgpu buffer pool for GeoEncoder arenas.
 ///
 /// `GeoEncoder` instances are recreated every frame (and per layer /
 /// filter / mask push), so without pooling every frame re-creates its
@@ -28,7 +28,7 @@ namespace donner::geode {
 /**
  * Size-and-usage-keyed free list of wgpu buffers.
  *
- * Owned by `RendererGeode::Impl` (mirrors the M4.2 transient
+ * Owned by `RendererGeode::Impl` (mirrors the transient
  * render-target texture pool) and handed to every `GeoEncoder` the
  * renderer constructs. Not thread-safe; all use is on the renderer's
  * thread.

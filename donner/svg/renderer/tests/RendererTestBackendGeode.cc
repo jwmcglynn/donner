@@ -48,7 +48,7 @@ bool GeodeSupportsFeature(RendererBackendFeature feature) {
     // tuning that needs its own PR. Once that lands, flip this to
     // `true` and the category gate will let the tests run.
     //
-    // Text is implemented in `RendererGeode::drawText` as of Phase 4
+    // Text is implemented in `RendererGeode::drawText`
     // -- the renderer walks `TextEngine` runs, pulls each glyph
     // outline via `glyphOutline`, transforms it into place, and
     // fills via the Slug fill pipeline. End users calling

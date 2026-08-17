@@ -246,7 +246,7 @@ public:
    * Process-unique identity for this device instance, assigned at
    * construction from a monotonic counter (never reused, starts at 1).
    *
-   * Used by GPU-residence slots (design doc 0030 wave 2) to detect when a
+   * Used by GPU-residence slots to detect when a
    * cached buffer / bind group belongs to a DIFFERENT device than the one
    * now rendering: a document (and its ECS `GeodeResidentPathComponent`s)
    * can outlive the device that filled them and later be rendered by a
@@ -263,9 +263,8 @@ public:
    * caller must keep the struct alive for as long as the device might
    * increment it. Pass `nullptr` to disable instrumentation.
    *
-   * See design doc 0030 (geode_performance). All Geode components that
-   * hold a `GeodeDevice&` route their per-frame hot-path allocation and
-   * submission sites through this hook.
+   * All Geode components that hold a `GeodeDevice&` route their per-frame
+   * hot-path allocation and submission sites through this hook.
    */
   void setCounters(GeodeCounters* counters) { counters_ = counters; }
 
@@ -322,8 +321,8 @@ public:
     if (counters_) counters_->textureWriteBytes += bytes;
   }
 
-  /// Shared live-resident-bytes gauge (design doc 0030 wave 2: GPU
-  /// residence). Co-owned with each `GeodeResidentSlot`'s buffer so
+  /// Shared live-resident-bytes gauge for GPU residence. Co-owned with
+  /// each `GeodeResidentSlot`'s buffer so
   /// resident-memory accounting stays lifetime-safe even if a document
   /// (and its ECS registry) outlives this device. Lazily created on first
   /// access. `GeoEncoder` bumps it when a slot gains residence; the slot
@@ -346,7 +345,7 @@ public:
 
   /**
    * Whether the driver supports GPU timestamp queries. Always false
-   * today - reserved for future work (design doc 0030, "Future Work").
+   * today - reserved for future work.
    */
   bool supportsTimestamps() const { return false; }
 
@@ -357,13 +356,13 @@ public:
   /// Metal returns false and keeps the fast multi-submit path.
   bool isVulkan() const { return isVulkan_; }
 
-  /// @name Shared dummy resources (design doc 0030 Milestone 4.2)
+  /// @name Shared dummy resources
   /// @{
   ///
   /// GeoEncoder's bind groups always include pattern + clip-mask
   /// texture/sampler slots, even when the current draw doesn't
   /// actually use them. Each slot is filled with a 1×1 "identity"
-  /// texture when the feature is inactive. Prior to M4.2 every
+  /// texture when the feature is inactive. Previously every
   /// GeoEncoder instance created its own dummies (two textures per
   /// encoder), which showed up as 2+ `textureCreates` per frame per
   /// push/pop. Caching the dummies on the device - one instance per
@@ -392,7 +391,7 @@ public:
   /// affine. Bound at binding 7 of the Slug fill bind-group layout by
   /// every non-instanced solid fill so the bind-group layout stays
   /// stable across draw calls regardless of whether `fillPathInstanced`
-  /// is in play. See design doc 0030 §M6 Bullet 2.
+  /// is in play.
   ///
   /// Layout mirrors the WGSL `InstanceTransform` struct in
   /// `shaders/slug_fill.wgsl`: two `vec4f` per entry, row-major affine,
@@ -520,7 +519,7 @@ private:
   std::atomic<int> readbackPollIterations_{0};
   std::atomic<bool> readbackUsedTimedWaitAny_{false};
 
-  // Shared live-resident-bytes gauge (design doc 0030 wave 2). Mutable +
+  // Shared live-resident-bytes gauge. Mutable +
   // lazily created so `residentBytesGauge()` stays const like the other
   // reporting accessors.
   mutable std::shared_ptr<std::atomic<int64_t>> residentBytesGauge_;

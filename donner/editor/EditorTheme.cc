@@ -4,7 +4,7 @@ namespace donner::editor {
 
 namespace {
 
-/// One accent's three tints (design doc 0054, deepest to lightest).
+/// One accent's three tints (deepest to lightest).
 struct AccentTints {
   ImU32 active;
   ImU32 defaultTint;

@@ -103,7 +103,7 @@ void LayerResolver::resolve(Registry& registry, uint32_t maxLayers, const Resolv
             });
 
   // Sort contested candidates by weight descending, ties broken by entity id ascending.
-  // TODO(phase 2): break ties by draw order once RenderingInstanceComponent participates.
+  // TODO: break ties by draw order once RenderingInstanceComponent participates.
   std::sort(contestedCandidates.begin(), contestedCandidates.end(),
             [](const Candidate& a, const Candidate& b) {
               if (a.totalWeight != b.totalWeight) {
@@ -138,7 +138,7 @@ void LayerResolver::resolve(Registry& registry, uint32_t maxLayers, const Resolv
 
   for (const Candidate& candidate : mandatoryCandidates) {
     if (budgetRemaining == 0) {
-      // Over-budget mandatory candidate. Design doc: "log/TODO for budget exhaustion".
+      // Over-budget mandatory candidate: log it, there is no slot left to honour it.
       std::fprintf(stderr,
                    "LayerResolver: mandatory candidate %u exceeds maxLayers=%u; "
                    "evicting from layer assignment.\n",

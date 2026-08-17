@@ -12,7 +12,7 @@
 namespace donner::gpu::metal {
 
 /**
- * Metal backend of the Donner GPU runtime (design 0053 packet 6, the vertical-slice backend).
+ * Metal backend of the Donner GPU runtime (the vertical-slice backend).
  *
  * Inherits every fail-closed validation check from \ref donner::gpu::Device; the `on*` hooks
  * receive only validated input and translate it to Metal objects. Any Metal-side failure (nil

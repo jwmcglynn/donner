@@ -406,7 +406,7 @@ private:
 
   GeodeDevice& device_;
 
-  // Gaussian blur pipeline (reused from Phase 7 initial scope).
+  // Gaussian blur pipeline.
   ScopedWgpuHandle<wgpu::ComputePipeline> gaussianBlurPipeline_;
   ScopedWgpuHandle<wgpu::BindGroupLayout> blurBindGroupLayout_;
 

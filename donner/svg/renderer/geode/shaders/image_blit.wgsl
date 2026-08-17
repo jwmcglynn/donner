@@ -2,7 +2,7 @@
 //
 // Shared by:
 //   - `drawImage`: SVG <image> elements (via GeoEncoder::drawImage).
-//   - Phase 2H patterns: pattern tile sampled as repeating fill.
+//   - patterns: pattern tile sampled as repeating fill.
 //
 // Unlike the Slug fill pipeline, this shader does *no* coverage computation -
 // it's a straightforward 2-triangle textured quad. The vertex shader maps
@@ -24,10 +24,10 @@ struct Uniforms {
   destRect: vec4f,
   // Source UV rectangle (u0, v0, u1, v1), in normalized [0,1] texture space.
   // For a full-image blit this is (0,0,1,1). For pattern tile sampling
-  // (Phase 2H) the caller may pass a sub-rect.
+  // the caller may pass a sub-rect.
   srcRect: vec4f,
   // Target dimensions in pixels. Used to map fragment positions to the
-  // Phase 3b clip-mask texture's normalized UVs.
+  // path-clip mask texture's normalized UVs.
   targetSize: vec2f,
   // Overall multiplier applied to the sampled texel. Used for
   // `ImageParams::opacity * paint.opacity` on the draw path.
@@ -57,7 +57,7 @@ struct Uniforms {
   // only read when `applyMaskBounds != 0`. Sits at offset 112 so it
   // remains 16-byte (`vec4f`) aligned without explicit padding.
   maskBounds: vec4f,
-  // Phase 3d: SVG `mix-blend-mode` selector. `0` = plain source-over
+  // SVG `mix-blend-mode` selector. `0` = plain source-over
   // (or `maskMode` when set). `1..=16` map to the enumeration in
   // `donner::svg::MixBlendMode` in the same order. When non-zero, the
   // fragment shader samples the `dstSnapshotTexture` at binding 4 and
@@ -65,7 +65,7 @@ struct Uniforms {
   // formula before writing. `maskMode` and `blendMode` are mutually
   // exclusive; the host sets at most one per draw.
   blendMode: u32,
-  // Nonzero when a Phase 3b path-clip mask is bound at binding 5/6 and
+  // Nonzero when a path-clip mask is bound at binding 5/6 and
   // should gate the SOURCE content before mask/blend compositing.
   hasClipMask: u32,
   _blendPad0: u32,
@@ -75,17 +75,17 @@ struct Uniforms {
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
 @group(0) @binding(1) var imageSampler: sampler;
 @group(0) @binding(2) var imageTexture: texture_2d<f32>;
-// Phase 3c luminance mask input - bound to a 1x1 dummy when
+// Luminance mask input - bound to a 1x1 dummy when
 // `maskMode == 0`. Sampled with the same `imageSampler` so texels are
 // interpolated between source pixels consistently with the content.
 @group(0) @binding(3) var maskTexture: texture_2d<f32>;
-// Phase 3d destination snapshot for `mix-blend-mode`. Bound to a
+// Destination snapshot for `mix-blend-mode`. Bound to a
 // 1x1 dummy when `blendMode == 0`. When non-zero, this is a copy of
 // the parent render target captured before the blend blit pass, so
 // the blend formula can read the backdrop without the feedback loop
 // of sampling the pass's own color attachment.
 @group(0) @binding(4) var dstSnapshotTexture: texture_2d<f32>;
-// Phase 3b path-clip mask input. Bound to a 1x1 dummy when
+// Path-clip mask input. Bound to a 1x1 dummy when
 // `hasClipMask == 0`. Sampled in target-pixel space rather than source
 // UV space so it applies equally to whole-target blits and partial image draws.
 @group(0) @binding(5) var clipMaskTexture: texture_2d<f32>;
@@ -424,7 +424,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4f {
   }
 
   if (uniforms.blendMode != 0u) {
-    // Phase 3d `mix-blend-mode`. `color` is the layer being composited
+    // `mix-blend-mode`. `color` is the layer being composited
     // (premultiplied), `dstSnapshotTexture` is the frozen parent
     // target captured before the blend blit pass. The fragment
     // output REPLACES the parent pixel - the pipeline is configured

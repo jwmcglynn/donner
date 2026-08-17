@@ -174,8 +174,7 @@ public:
    *   - Any entity uses a bound-expander the visitor doesn't yet model
    *     precisely (text, markers, masks, patterns). Callers must treat
    *     `nullopt` as "fall back to full-canvas render", NOT as "empty
-   *     segment". The design doc at `docs/design_docs/0027-tight_bounded_
-   *     segments.md` tracks which cases are pending.
+   *     segment".
    *
    * Safe to call on a `RendererDriver` whose renderer holds persistent
    * state - the traversal never invokes renderer methods.

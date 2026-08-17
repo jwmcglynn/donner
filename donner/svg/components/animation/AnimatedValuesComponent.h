@@ -12,11 +12,11 @@ namespace donner::svg::components {
  * When an animation is active, its computed value is stored here. The style system checks this
  * map before falling back to base attribute values.
  *
- * For Phase 1 (`<set>` only), values are stored as raw strings that get re-parsed by the
+ * Today (`<set>` only), values are stored as raw strings that get re-parsed by the
  * style system as if they were attribute values.
  */
 struct AnimatedValuesComponent {
-  /// Map from attribute name to its animated value (as a raw string for Phase 1).
+  /// Map from attribute name to its animated value (as a raw string).
   std::unordered_map<std::string, std::string> overrides;
 };
 
