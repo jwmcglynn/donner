@@ -640,11 +640,11 @@ jobs:
   # Replaces `linux` for trusted operator PRs and main pushes (extra arch
   # coverage + homelab cache). Renovate and non-operator runs stay hosted.
   # The NixOS host pre-provisions the toolchain (fontconfig, freetype, mesa,
-  # vulkan, X11, clang-tidy) and writes bazel-cache1 over LAN gRPC, so there
-  # is no apt/setup-bazel step. The runner intentionally has no host GPU
-  # device passthrough; Mesa llvmpipe/lavapipe provide the same software
-  # rendering path used by GitHub-hosted Linux so this lane runs the same test
-  # surface instead of excluding graphics targets.
+  # vulkan, X11, clang-tidy) and writes to a shared LAN Bazel cache over
+  # gRPC, so there is no apt/setup-bazel step. The runner intentionally has
+  # no host GPU device passthrough; Mesa llvmpipe/lavapipe provide the same
+  # software rendering path used by GitHub-hosted Linux so this lane runs the
+  # same test surface instead of excluding graphics targets.
   linux-self-hosted:
     runs-on: [self-hosted, linux, arm64]
     needs: [gatekeeper, determine-targets, linux-self-hosted-turnstile]
