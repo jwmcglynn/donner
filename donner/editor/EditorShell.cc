@@ -179,16 +179,30 @@ void PublishInteractionStats(int selectedCount, int pendingClick, int workerBusy
  * rows silently does nothing. Publishing the authoritative state lets a test
  * verify the toggle took effect and retry the click instead of proceeding
  * against a menu item it missed.
+ *
+ * Also carries selection-chrome observability: whether an overlay chrome
+ * snapshot is currently installed for immediate presentation, the live and
+ * displayed document versions, and how many overlay refreshes the version gate
+ * has suppressed. A pixel probe that finds no selection outline uses these to
+ * distinguish "chrome intentionally hidden while the presentation catches up"
+ * from "chrome lost".
  */
-void PublishOverlayStats(int compositorTileOverlay, int geometryDebugOverlay) {
+void PublishOverlayStats(int compositorTileOverlay, int geometryDebugOverlay,
+                         int selectionChromeSnapshotPresent, double currentDocVersion,
+                         double displayedDocVersion, double overlayVersionGateSuppressions) {
   MAIN_THREAD_ASYNC_EM_ASM(
       {
         window['__donnerOverlayStats'] = ({
           'compositorTileOverlay' : !!$0,
           'geometryDebugOverlay' : !!$1,
+          'selectionChromeSnapshotPresent' : !!$2,
+          'currentDocVersion' : $3,
+          'displayedDocVersion' : $4,
+          'overlayVersionGateSuppressions' : $5,
         });
       },
-      compositorTileOverlay, geometryDebugOverlay);
+      compositorTileOverlay, geometryDebugOverlay, selectionChromeSnapshotPresent,
+      currentDocVersion, displayedDocVersion, overlayVersionGateSuppressions);
 }
 
 void PublishViewportStats(double paneX, double paneY, double paneWidth, double paneHeight,
@@ -6615,7 +6629,12 @@ void EditorShell::recordFrameTelemetry(
         viewport.zoom,
         static_cast<double>(renderCoordinator_.documentCanvasCommitTotal()),
         static_cast<double>(renderCoordinator_.overviewInfillRenderTotal()));
-    PublishOverlayStats(compositorTileOverlay_ ? 1 : 0, geometryDebugOverlay_ ? 1 : 0);
+    PublishOverlayStats(
+        compositorTileOverlay_ ? 1 : 0, geometryDebugOverlay_ ? 1 : 0,
+        renderCoordinator_.immediateOverlaySnapshot().has_value() ? 1 : 0,
+        app_.hasDocument() ? static_cast<double>(app_.document().currentFrameVersion()) : -1.0,
+        static_cast<double>(renderCoordinator_.displayedDocVersionForDiagnostics()),
+        static_cast<double>(renderCoordinator_.overlayVersionGateSuppressionTotalForDiagnostics()));
   }
   AccumulateFrameLoopPhaseCost(
       mainFrameCost.layoutMs, mainFrameCost.menusDialogsMs, mainFrameCost.sourcePaneMs,

@@ -341,6 +341,13 @@ public:
   [[nodiscard]] std::uint64_t displayedDocVersionForDiagnostics() const {
     return displayedDocVersion_;
   }
+  /// Cumulative count of overlay refreshes suppressed because the live document
+  /// version ran ahead of the displayed presentation. Diagnostics only: lets a
+  /// browser probe distinguish "selection chrome intentionally hidden" from
+  /// "selection chrome lost".
+  [[nodiscard]] std::uint64_t overlayVersionGateSuppressionTotalForDiagnostics() const {
+    return overlayVersionGateSuppressionTotal_;
+  }
   /// Selected entity eligible for composited presentation for replay diagnostics.
   [[nodiscard]] Entity selectedCompositedEntityForDiagnostics(EditorApp& app) const;
 
@@ -365,6 +372,7 @@ private:
   std::optional<SelectionChromeSnapshot> immediateOverlaySnapshot_;
 
   std::uint64_t displayedDocVersion_ = 0;
+  std::uint64_t overlayVersionGateSuppressionTotal_ = 0;
 
   std::vector<svg::SVGElement> lastOverlaySelectionVec_;
   std::vector<svg::SVGElement> sourceHoverElements_;
