@@ -144,6 +144,48 @@ TEST(ColorSpaceTest, FloatLinearToSrgbWithinBoundOfExact) {
       << "worst input " << result.argmax << ", delta in 8-bit units " << result.maxDelta * 255.0;
 }
 
+TEST(ColorSpaceTest, DenormalAlphaWithZeroChannelsStaysFiniteAndInRange) {
+  // A denormal alpha passes the alpha <= 0 guard while its reciprocal
+  // overflows to inf; a zero channel then unpremultiplies to 0 * inf == NaN
+  // and a nonzero channel to inf. The table lookup must map those to in-range
+  // indices instead of casting NaN to int (undefined behavior; an
+  // out-of-bounds table read on x86). Regression coverage for both
+  // conversions through the non-opaque branch.
+  for (const bool toLinear : {true, false}) {
+    auto pixmap = FloatPixmap::fromSize(2, 1).value();
+    auto data = pixmap.data();
+    constexpr float kDenormal = 1e-45f;  // Smallest positive denormal float.
+    // Pixel 0: zero channels, denormal alpha -> 0 * inf == NaN per channel.
+    data[0] = 0.0f;
+    data[1] = 0.0f;
+    data[2] = 0.0f;
+    data[3] = kDenormal;
+    // Pixel 1: nonzero channels, denormal alpha -> channel * inf == inf.
+    data[4] = kDenormal;
+    data[5] = 0.5f;
+    data[6] = 1.0f;
+    data[7] = kDenormal;
+
+    if (toLinear) {
+      srgbToLinear(pixmap);
+    } else {
+      linearToSrgb(pixmap);
+    }
+
+    auto converted = pixmap.data();
+    for (int pixel = 0; pixel < 2; ++pixel) {
+      for (int channel = 0; channel < 3; ++channel) {
+        const float value = converted[pixel * 4 + channel];
+        EXPECT_TRUE(std::isfinite(value))
+            << "pixel " << pixel << " channel " << channel << " toLinear " << toLinear;
+        EXPECT_GE(value, 0.0f) << "pixel " << pixel << " channel " << channel;
+        EXPECT_LE(value, 1.0f) << "pixel " << pixel << " channel " << channel;
+      }
+      EXPECT_EQ(converted[pixel * 4 + 3], kDenormal) << "alpha must be unchanged";
+    }
+  }
+}
+
 TEST(ColorSpaceTest, FloatConversionPreservesPremultipliedAlpha) {
   auto pixmap = FloatPixmap::fromSize(2, 1).value();
   auto data = pixmap.data();

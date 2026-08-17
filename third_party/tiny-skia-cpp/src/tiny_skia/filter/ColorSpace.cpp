@@ -106,8 +106,15 @@ const std::array<float, kFloatLutSize>& linearToSrgbFloatLut() {
 }
 
 /// Looks up a unit-range value in a float LUT, clamping the input to [0,1].
+///
+/// The comparison-based clamp maps NaN to 0 as well. NaN can reach here even
+/// though callers guard alpha <= 0: a denormal alpha passes that guard while
+/// its reciprocal overflows to inf, and a zero channel then unpremultiplies
+/// to 0 * inf == NaN. Casting a NaN index to int is undefined behavior (x86
+/// produces INT_MIN, turning the table lookup into a wild read), so the
+/// clamp must reject NaN rather than propagate it the way std::clamp does.
 inline float lookupUnit(const std::array<float, kFloatLutSize>& lut, float x) {
-  const float clamped = std::clamp(x, 0.0f, 1.0f);
+  const float clamped = (x > 0.0f) ? std::min(x, 1.0f) : 0.0f;
   return lut[static_cast<int>(clamped * (kFloatLutSize - 1) + 0.5f)];
 }
 
