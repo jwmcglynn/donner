@@ -192,7 +192,7 @@ void Painter::drawPixmap(MutablePixmapView& pixmap, std::int32_t x, std::int32_t
   paint.shader = Pattern(src, SpreadMode::Pad, ppaint.quality, ppaint.opacity, pattTransform);
   paint.blendMode = ppaint.blendMode;
   paint.antiAlias = false;
-  paint.forceHqPipeline = false;
+  paint.forceHqPipeline = ppaint.forceHqPipeline;
   paint.colorspace = ColorSpace::Linear;
   paint.unpremulStore = ppaint.unpremulStore;
 

@@ -903,10 +903,10 @@ void RendererTinySkia::popFilterLayer() {
           Transform2d::Scale(1.0 / scaleX, 1.0 / scaleY) *
           Transform2d::Translate(paddedRegion.topLeft.x, paddedRegion.topLeft.y) * deviceFromFilter;
 
-      tiny_skia::PixmapPaint compositePaint;
+      tiny_skia::PixmapPaint compositePaint =
+          makePixmapPaint(currentPixmap(), tiny_skia::FilterQuality::Bilinear);
       compositePaint.opacity = 1.0f;
       compositePaint.blendMode = tiny_skia::BlendMode::SourceOver;
-      compositePaint.quality = tiny_skia::FilterQuality::Bilinear;
 
       const tiny_skia::Mask* mask = currentClipMask_.has_value() ? &*currentClipMask_ : nullptr;
       auto pixmapView = currentPixmapView();
@@ -932,10 +932,10 @@ void RendererTinySkia::popFilterLayer() {
     {
       // Composite the filter result with the restored clip mask applied, so the clip-path
       // clips the filter output rather than the input.
-      tiny_skia::PixmapPaint paint;
+      tiny_skia::PixmapPaint paint =
+          makePixmapPaint(currentPixmap(), tiny_skia::FilterQuality::Nearest);
       paint.opacity = 1.0f;
       paint.blendMode = tiny_skia::BlendMode::SourceOver;
-      paint.quality = tiny_skia::FilterQuality::Nearest;
 
       const tiny_skia::Mask* mask = currentClipMask_.has_value() ? &*currentClipMask_ : nullptr;
       auto pixmapView = currentPixmapView();
@@ -1378,11 +1378,11 @@ void RendererTinySkia::drawImage(const ImageResource& image, const ImageParams& 
                                      Transform2d::Translate(params.targetRect.topLeft) *
                                      deviceFromLocalTransform_;
 
-  tiny_skia::PixmapPaint paint;
+  tiny_skia::PixmapPaint paint = makePixmapPaint(
+      currentPixmap(), params.imageRenderingPixelated ? tiny_skia::FilterQuality::Nearest
+                                                      : tiny_skia::FilterQuality::Bilinear);
   paint.opacity = NarrowToFloat(params.opacity * paintOpacity_);
   paint.blendMode = tiny_skia::BlendMode::SourceOver;
-  paint.quality = params.imageRenderingPixelated ? tiny_skia::FilterQuality::Nearest
-                                                 : tiny_skia::FilterQuality::Bilinear;
 
   const tiny_skia::Mask* mask = currentClipMask_.has_value() ? &*currentClipMask_ : nullptr;
   auto pixmapView = currentPixmapView();
@@ -1440,11 +1440,11 @@ void RendererTinySkia::drawBitmap(const RendererBitmap& bitmap, const ImageParam
                                      Transform2d::Translate(params.targetRect.topLeft) *
                                      deviceFromLocalTransform_;
 
-  tiny_skia::PixmapPaint paint;
+  tiny_skia::PixmapPaint paint = makePixmapPaint(
+      currentPixmap(), params.imageRenderingPixelated ? tiny_skia::FilterQuality::Nearest
+                                                      : tiny_skia::FilterQuality::Bilinear);
   paint.opacity = NarrowToFloat(params.opacity * paintOpacity_);
   paint.blendMode = tiny_skia::BlendMode::SourceOver;
-  paint.quality = params.imageRenderingPixelated ? tiny_skia::FilterQuality::Nearest
-                                                 : tiny_skia::FilterQuality::Bilinear;
 
   const tiny_skia::Mask* mask = currentClipMask_.has_value() ? &*currentClipMask_ : nullptr;
   auto pixmapView = currentPixmapView();
@@ -1670,10 +1670,10 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
                                              Transform2d::Translate(Vector2d(targetX, targetY)) *
                                              deviceFromLocalTransform_;
 
-          tiny_skia::PixmapPaint paint;
+          tiny_skia::PixmapPaint paint =
+              makePixmapPaint(currentPixmap(), tiny_skia::FilterQuality::Bilinear);
           paint.opacity = NarrowToFloat(paintOpacity_);
           paint.blendMode = tiny_skia::BlendMode::SourceOver;
-          paint.quality = tiny_skia::FilterQuality::Bilinear;
 
           const tiny_skia::Mask* mask = currentClipMask_.has_value() ? &*currentClipMask_ : nullptr;
           auto pixmapView = currentPixmapView();
@@ -2297,6 +2297,19 @@ static tiny_skia::BlendMode toTinyBlendMode(MixBlendMode mode) {
   return tiny_skia::BlendMode::SourceOver;
 }
 
+tiny_skia::PixmapPaint RendererTinySkia::makePixmapPaint(const tiny_skia::Pixmap& destination,
+                                                         tiny_skia::FilterQuality quality) const {
+  tiny_skia::PixmapPaint paint;
+  paint.quality = quality;
+  // Composites landing on `frame_` stay on the float raster pipeline. The
+  // 8-bit compose path drifts a fully opaque source pixel to alpha 250 instead
+  // of 255, which an intermediate surface absorbs at its next composite but
+  // `frame_` cannot: it is what `takeSnapshot` hands to callers, so the drift
+  // would surface as a nominally opaque region reporting partial coverage.
+  paint.forceHqPipeline = &destination == &frame_;
+  return paint;
+}
+
 void RendererTinySkia::compositePixmapInto(tiny_skia::Pixmap& destination,
                                            const tiny_skia::Pixmap& pixmap, double opacity,
                                            MixBlendMode blendMode) {
@@ -2304,10 +2317,9 @@ void RendererTinySkia::compositePixmapInto(tiny_skia::Pixmap& destination,
     return;
   }
 
-  tiny_skia::PixmapPaint paint;
+  tiny_skia::PixmapPaint paint = makePixmapPaint(destination, tiny_skia::FilterQuality::Nearest);
   paint.opacity = NarrowToFloat(opacity);
   paint.blendMode = toTinyBlendMode(blendMode);
-  paint.quality = tiny_skia::FilterQuality::Nearest;
 
   auto destinationView = destination.mutableView();
   tiny_skia::Painter::drawPixmap(destinationView, 0, 0, pixmap.view(), paint);
