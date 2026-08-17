@@ -42,6 +42,31 @@ jobs:
           external-cache: true
           cache-save: ${{ github.event_name != 'pull_request' }}
 
+      # Repository downloads are the only retried part of this lane. Keeping
+      # them separate prevents a compile or test failure from passing on retry.
+      - id: editor-wasm-prefetch
+        name: Prefetch Editor WASM dependencies
+        continue-on-error: true
+        run: |
+          bazelisk fetch \
+            //donner/editor/wasm:editor_wasm_transition_tests \
+            //donner/svg/renderer:geode_excludes_tiny_skia_audit
+          bazelisk fetch --config=wasm-size \
+            //donner/svg/renderer/wasm:render_test
+          bazelisk fetch --config=editor-wasm \
+            //donner/editor/wasm:wasm_geode_package_size_tests
+
+      - name: Retry Editor WASM dependency prefetch
+        if: steps.editor-wasm-prefetch.outcome == 'failure'
+        run: |
+          bazelisk fetch \
+            //donner/editor/wasm:editor_wasm_transition_tests \
+            //donner/svg/renderer:geode_excludes_tiny_skia_audit
+          bazelisk fetch --config=wasm-size \
+            //donner/svg/renderer/wasm:render_test
+          bazelisk fetch --config=editor-wasm \
+            //donner/editor/wasm:wasm_geode_package_size_tests
+
       - name: Build and size-check Geode editor Wasm package
         run: |
           bazelisk test --test_output=errors \
@@ -179,7 +204,8 @@ jobs:
 
       - name: Record deployment candidate digest
         run: |
-          echo "### Geode deployment candidate" >> "${GITHUB_STEP_SUMMARY}"
-          echo "- Source revision: \`${GITHUB_SHA}\`" >> "${GITHUB_STEP_SUMMARY}"
-          echo "- Artifact digest: \`${{ steps.upload-candidate.outputs.artifact-digest }}\`" \
-            >> "${GITHUB_STEP_SUMMARY}"
+          {
+            echo "### Geode deployment candidate"
+            echo "- Source revision: \`${GITHUB_SHA}\`"
+            echo "- Artifact digest: \`${{ steps.upload-candidate.outputs.artifact-digest }}\`"
+          } >> "${GITHUB_STEP_SUMMARY}"
