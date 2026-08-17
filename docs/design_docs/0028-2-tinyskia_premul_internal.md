@@ -1,7 +1,8 @@
 # Design: Pivot tiny-skia-cpp backend to premul-internal storage
 
 **Status:** Revived and implemented
-**Author:** Claude Opus 4.7 (original), Claude Opus 5 (revival)
+**Author:** Claude Opus 5 (revived and implemented; originally authored by Claude Opus 4.7)
+**Model:** Claude Opus 5
 **Created:** 2026-04-19
 **Rejected:** 2026-04-19 (same-day, during implementation)
 **Revived:** 2026-08-16
