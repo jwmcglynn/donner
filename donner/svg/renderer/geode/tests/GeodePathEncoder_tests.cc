@@ -199,6 +199,48 @@ TEST(GeodePathEncoder, ChoosesBandCountFromCurveDistribution) {
       << "A compact path with many separated curve clusters needs more than one band";
 }
 
+TEST(GeodePathEncoder, CurveEndingOnBandBoundaryIsReferencedByFollowingBand) {
+  PathBuilder builder;
+  for (int i = 0; i < 16; ++i) {
+    const double y = static_cast<double>(i);
+    builder.addRect(Box2d({0, y}, {10, y + 1.0}));
+  }
+
+  const EncodedPath encoded = GeodePathEncoder::encode(builder.build(), FillRule::NonZero);
+  ASSERT_FALSE(encoded.empty());
+  ASSERT_GT(encoded.hBandCount, 1u);
+
+  bool foundBoundaryEndingCurve = false;
+  for (uint32_t curveIndex = 0; curveIndex < encoded.curves.size(); ++curveIndex) {
+    const EncodedPath::Curve& curve = encoded.curves[curveIndex];
+    const float curveMax = std::max({curve.p0y, curve.p1y, curve.p2y});
+    const float gridPosition = (curveMax - encoded.yBase) / encoded.hStride;
+    const float roundedPosition = std::round(gridPosition);
+    // Select curves ending ON or NEAR a boundary. The 1e-4 tolerance is
+    // deliberately inside the encoder's quotient-space pad (kBandQuotientPad,
+    // 1e-3, in GeodePathEncoder.cc), which guarantees any such curve is
+    // referenced from BOTH adjacent cells; a wider tolerance than the pad
+    // would assert more than the encoder provides and fail on a
+    // legitimately-binned curve.
+    if (std::abs(gridPosition - roundedPosition) > 1e-4f || roundedPosition <= 0.0f ||
+        roundedPosition >= static_cast<float>(encoded.hBandCount)) {
+      continue;
+    }
+
+    foundBoundaryEndingCurve = true;
+    const uint32_t cell = static_cast<uint32_t>(roundedPosition);
+    const uint32_t slot = encoded.hBandGrid[cell];
+    ASSERT_NE(slot, EncodedPath::kNoBand);
+    ASSERT_LT(slot, encoded.bands.size());
+    const EncodedPath::Band& band = encoded.bands[slot];
+    const auto first = encoded.curveIndices.begin() + band.curveStart;
+    const auto last = first + band.curveCount;
+    EXPECT_NE(std::find(first, last, curveIndex), last)
+        << "A curve touching a band boundary must be visible from both adjacent cells";
+  }
+  EXPECT_TRUE(foundBoundaryEndingCurve) << "Fixture must exercise an internal band boundary";
+}
+
 TEST(GeodePathEncoder, StoresEachCurveOnceInsteadOfDuplicatingItAcrossBands) {
   const Path path = PathBuilder()
                         .moveTo(Vector2d(0, 0))

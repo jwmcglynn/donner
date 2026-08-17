@@ -20,7 +20,7 @@
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/SVGSVGElement.h"
 #include "donner/svg/parser/SVGParser.h"
-#include "donner/svg/renderer/Renderer.h"
+#include "donner/svg/renderer/RendererTinySkia.h"
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
 
@@ -107,7 +107,7 @@ TEST(ShowcaseAssetFixture, GeneratesOutlinedOverlayShowcaseOnDemand) {
   // Render through the deterministic CPU facade as the final end-to-end gate.
   constexpr Vector2i kRenderSize(223, 128);
   document.setCanvasSize(kRenderSize.x, kRenderSize.y);
-  Renderer renderer;
+  RendererTinySkia renderer;
   renderer.draw(document);
   const RendererBitmap bitmap = renderer.takeSnapshot();
   ASSERT_FALSE(bitmap.empty()) << "generated showcase produced no renderer snapshot";
@@ -137,7 +137,7 @@ TEST(ShowcaseAssetFixture, GeneratedBadgeAndOverlayMatchGolden) {
   SVGDocument document = std::move(result).result();
   constexpr Vector2i kRenderSize(223, 128);
   document.setCanvasSize(kRenderSize.x, kRenderSize.y);
-  Renderer renderer;
+  RendererTinySkia renderer;
   renderer.draw(document);
   const RendererBitmap bitmap = renderer.takeSnapshot();
   editor::tests::CompareBitmapToGolden(bitmap, kShowcaseGoldenPath, "generated_showcase_tiny_skia",

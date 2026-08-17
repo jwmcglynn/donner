@@ -429,6 +429,23 @@ algorithm.
         `drawCalls` so regressions in detection vs. batching can
         be triaged independently.
 - [ ] Milestone 7: Opportunistic cleanups.
+  - [x] Keep band-selection and band-fill scratch storage on the stack.
+    `kMaxBands` already bounds these arrays at 256 entries, so the
+    encoder now initializes only the active prefix and reuses the
+    count array as its write cursor. On allocation-instrumented first
+    frames this removes 6,010 allocation calls for Ghostscript Tiger
+    (55,914 -> 49,904, -10.8%) and 2,194 for Lion
+    (14,885 -> 12,691, -14.7%) without a measurable encode-time
+    regression.
+  - [x] Keep curve maxima inclusive when assigning band references. An
+    exclusive maximum dropped a curve from the following cell when its
+    endpoint landed exactly on an internal band boundary, producing a
+    deterministic two-pixel hole in the Donner Splash Sunburst thumbnail.
+    The focused encoder test now requires boundary-ending curves in both
+    adjacent cells.
+  - [x] Pin TinySkia-only golden tests to `RendererTinySkia`. The showcase
+    golden previously used the build-selected `Renderer` facade, so a Geode
+    test configuration compared GPU output to a TinySkia image.
   - [ ] GPU-side `takeSnapshot` unpremultiply (`RendererGeode.cc:2322-2353`)
     via a one-dispatch compute kernel writing into a CopySrc buffer;
     drops the CPU divide-per-pixel loop.

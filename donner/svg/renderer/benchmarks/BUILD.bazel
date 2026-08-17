@@ -1,7 +1,7 @@
 """Geode renderer benchmarks — per-phase timing for the WebGPU/Slug backend."""
 
-load("//build_defs:rules.bzl", "donner_cc_binary")
 load("//build_defs:package.bzl", "donner_package")
+load("//build_defs:rules.bzl", "donner_cc_binary")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -20,6 +20,32 @@ donner_cc_binary(
         "//donner/svg",
         "//donner/svg/parser",
         "//donner/svg/renderer:renderer_geode",
+        "//donner/svg/renderer/geode:geode_device",
+    ],
+)
+
+donner_cc_binary(
+    name = "engine_compare_bench",
+    srcs = [
+        "AllocationTracker.h",
+        "EngineCompareBench.cc",
+    ],
+    data = ["testdata/simple_setup.svg"],
+    target_compatible_with = select({
+        "//donner/svg/renderer/geode:geode_enabled": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    deps = [
+        "//donner/base",
+        "//donner/svg",
+        "//donner/svg/parser",
+        "//donner/svg/renderer:renderer_geode",
+        "//donner/svg/renderer:renderer_image_io",
+        # In-tree TinySkia CPU backend for the --backend=tiny-skia comparison
+        # mode. The benchmark links both backends directly (like the parity
+        # test binary), which the geode_excludes_tiny_skia_audit permits:
+        # it only forbids a path from :renderer_geode to :renderer_tiny_skia.
+        "//donner/svg/renderer:renderer_tiny_skia",
         "//donner/svg/renderer/geode:geode_device",
     ],
 )
