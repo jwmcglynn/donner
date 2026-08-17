@@ -108,7 +108,7 @@ the `tiny`, `text-full`, and `geode` variant lanes now run as
   - [ ] M4.2: ReadabilityBot / GeodeBot review rule — raw pointers into objects owned by a different `shared_ptr` chain flag for review. Narrow but prevents #552 twin.
 
 - [ ] **Milestone 5 — Stretch (L effort)**
-  - [ ] M5.1: Internal remote cache (`bazel-re1`) for authenticated runs. Fork PRs keep GHA disk cache. `--remote_local_fallback=true` so outage degrades gracefully. (From 0029 M6.)
+  - [ ] M5.1: Internal remote cache on the self-hosted remote-execution host for authenticated runs. Fork PRs keep GHA disk cache. `--remote_local_fallback=true` so outage degrades gracefully. (From 0029 M6.)
   - [ ] M5.2: Matrix-parallelize heavy variants (`linux-default`, `linux-text-full`, `linux-geode`). Only if M1+M2+M3 don't hit target. (From 0029 M7.)
 
 ## Background

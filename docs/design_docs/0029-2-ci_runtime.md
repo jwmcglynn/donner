@@ -121,14 +121,14 @@ These are hard constraints that bound the solution space:
         (`-${{ github.run_id }}` is too aggressive; per-PR + per-week
         rotation is better)
 - [ ] Milestone 6: Internal remote cache for authenticated runs
-  - [ ] Wire `--config=ci-remote-cache` to the existing `bazel-re1` worker
-        (the sysroots from PR #545 already make the toolchain hermetic
-        enough for this)
+  - [ ] Wire `--config=ci-remote-cache` to the existing self-hosted
+        remote-execution worker (the sysroots from PR #545 already make
+        the toolchain hermetic enough for this)
   - [ ] Available only to runs with repo secrets — i.e. our own branches
         and main pushes; fork PRs continue using GHA disk cache only
   - [ ] Most Donner PRs come from the `jwmcglynn` account on branches in
         the same repo, so this still benefits the majority of merge cycles
-  - [ ] Risk: bazel-re1 outage tanks our own CI. Use
+  - [ ] Risk: a remote-cache outage tanks our own CI. Use
         `--remote_local_fallback=true` so Bazel falls back to local on
         cache miss/timeout
 - [ ] Milestone 7 (stretch): Matrix-parallelize the heavy variants
@@ -218,7 +218,7 @@ flowchart TD
     MacOS -.GHA disk cache, per-config slot.-> CacheMacos[(GHA cache: CI-macOS-default)]
     Fuzz -.dedicated cache slot.-> FuzzCache[(GHA cache: CI-macOS-asan-fuzzer)]
 
-    LinuxFull -.our PRs only.-> RemoteCache[(internal bazel-re1 remote cache)]
+    LinuxFull -.our PRs only.-> RemoteCache[(internal self-hosted remote cache)]
     MacOS -.our PRs only.-> RemoteCache
     LinuxFull2 -.write-through.-> RemoteCache
     MacOS2 -.write-through.-> RemoteCache
@@ -237,7 +237,7 @@ that isn't evicted by the fuzzer step (M1).
 - **macos-15-large cost overrun** (M4): macos-15-large is ~5x the per-minute
   rate of macos-15. If wall-clock improvement is < 5x, we're paying more
   for the same throughput. Validate before rolling forward.
-- **bazel-re1 outage tanks our own CI** (M6): `--remote_local_fallback=true`
+- **Remote-cache outage tanks our own CI** (M6): `--remote_local_fallback=true`
   means a cache miss falls back to local execution; outage degrades to
   current behavior.
 - **Per-PR cache write doubles every PR** (M5): same active PRs that today
