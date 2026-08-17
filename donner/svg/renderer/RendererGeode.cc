@@ -1926,10 +1926,12 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
     css::RGBA color;
     FillRule rule = FillRule::NonZero;
     const geode::EncodedPath* encoded = nullptr;
-    /// Reference to the source Path. Caller guarantees lifetime -
-    /// the Path is stored on `ComputedPathComponent` (pinned by
-    /// `GeodePathCacheComponent`'s cache invariant for the frame's
-    /// lifetime).
+    /// Borrowed source geometry, read only by the size-1 flush when it falls back to the
+    /// arena `fillPath`. A batch is only started for a draw with a non-null `sourceEntity`,
+    /// and for those the driver points `PathShape::path` at the entity's
+    /// `ComputedPathComponent::spline` - registry-owned storage that outlives the flush.
+    /// Draws whose geometry lives on the caller's stack (`drawRect`, `drawEllipse`, overlay
+    /// chrome) have no source entity and never reach here.
     const Path* path = nullptr;
     /// `deviceFromLocalTransform` captured at each `drawPath`. On flush, the
     /// outer encoder transform is set to identity and these are
@@ -2404,6 +2406,9 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
   /// The caller is expected to have already verified the draw is
   /// "batch-compatible" (solid paint, no stroke, has source entity,
   /// has cached fill encode, no in-flight pattern).
+  ///
+  /// \p path is retained until the batch flushes, so it must be storage that outlives this
+  /// call - see `PendingBatch::path`.
   bool tryAppendOrStartBatch(const Registry* sourceRegistry, Entity sourceEntity, const Path& path,
                              const css::RGBA& color, FillRule rule,
                              const geode::EncodedPath* encoded,
@@ -3566,7 +3571,7 @@ void RendererGeode::pushClip(const ResolvedClip& clip) {
 
       impl_->encoder->beginMaskPass(maskTexture);
       for (size_t s = it->begin; s < it->end; ++s) {
-        const PathShape& shape = clip.clipPaths[s];
+        const ClipPathShape& shape = clip.clipPaths[s];
         const Transform2d composed =
             clip.clipPathUnitsTransform * shape.parentFromEntity * savedDeviceFromLocalTransform;
         impl_->encoder->setTransform(composed);
@@ -4485,11 +4490,17 @@ void RendererGeode::drawPath(const PathShape& path, const StrokeParams& stroke) 
   }
   impl_->lastDrawSourceEntity = path.sourceEntity.entity();
 
+  // `PathShape` borrows its geometry; resolve it once here. `pathOrEmpty` substitutes a
+  // shared empty path for a null pointer, and that substitute has static storage, so the
+  // reference stays valid for as long as a driver-supplied path would (this matters for the
+  // pending batch, which retains the address past the end of this call).
+  const Path& drawPathGeometry = path.pathOrEmpty();
+
   // Path-encode cache lookup for the fill. Null `sourceEntity` (editor
   // overlay, test-harness direct draws) returns nullptr and `GeoEncoder`
   // falls back to the inline encode path.
   const geode::EncodedPath* fillEncoded =
-      impl_->getFillEncode(path.sourceEntity, path.path, path.fillRule);
+      impl_->getFillEncode(path.sourceEntity, drawPathGeometry, path.fillRule);
 
   // Try to append to a pending `<use>`-batch. Preconditions:
   //  - Source entity valid (non-null handle).
@@ -4536,7 +4547,7 @@ void RendererGeode::drawPath(const PathShape& path, const StrokeParams& stroke) 
     const css::RGBA color = solid.color.resolve(impl_->paint.currentColor.rgba(),
                                                 static_cast<float>(impl_->paint.fillOpacity));
     impl_->tryAppendOrStartBatch(path.sourceEntity.registry(), path.sourceEntity.entity(),
-                                 path.path, color, path.fillRule, fillEncoded, residentFill);
+                                 drawPathGeometry, color, path.fillRule, fillEncoded, residentFill);
     return;
   }
 
@@ -4547,7 +4558,7 @@ void RendererGeode::drawPath(const PathShape& path, const StrokeParams& stroke) 
   // the fill on stroke-only passes so Geode reorders rather than double-paints.
   // Both default to true, so this is a no-op for ordinary fill-then-stroke draws.
   if (impl_->paint.drawFillComponent) {
-    impl_->fillResolved(path.path, path.fillRule, fillEncoded, residentFill,
+    impl_->fillResolved(drawPathGeometry, path.fillRule, fillEncoded, residentFill,
                         residentGradientFill);
   }
 
@@ -4591,7 +4602,7 @@ void RendererGeode::drawPath(const PathShape& path, const StrokeParams& stroke) 
   // by `StrokeStyle` equality. A cache hit skips all three computations.
   const StrokeStyle strokeStyle = toStrokeStyle(stroke);
   const Impl::StrokeDerived strokeDerived =
-      impl_->getStrokeDerived(path.sourceEntity, path.path, strokeStyle);
+      impl_->getStrokeDerived(path.sourceEntity, drawPathGeometry, strokeStyle);
   if (!strokeDerived.strokedPath) {
     return;
   }
@@ -4633,21 +4644,19 @@ void RendererGeode::drawPath(const PathShape& path, const StrokeParams& stroke) 
        std::holds_alternative<components::PaintResolvedReference>(strokeServer))
           ? impl_->residentGradientStrokeSlot(path.sourceEntity)
           : nullptr;
-  impl_->drawPaintedPathAgainst(path.path, strokedOutline, strokeServer, effectiveOpacity,
+  impl_->drawPaintedPathAgainst(drawPathGeometry, strokedOutline, strokeServer, effectiveOpacity,
                                 strokeDerived.fillRule, strokeDerived.encoded, residentStroke,
                                 residentGradientStroke);
 }
 
 void RendererGeode::drawRect(const Box2d& rect, const StrokeParams& stroke) {
-  Path path = PathBuilder().addRect(rect).build();
-  PathShape shape{std::move(path), FillRule::NonZero, Transform2d(), 0};
-  drawPath(shape, stroke);
+  const Path path = PathBuilder().addRect(rect).build();
+  drawPath(PathShape{&path, FillRule::NonZero}, stroke);
 }
 
 void RendererGeode::drawEllipse(const Box2d& bounds, const StrokeParams& stroke) {
-  Path path = PathBuilder().addEllipse(bounds).build();
-  PathShape shape{std::move(path), FillRule::NonZero, Transform2d(), 0};
-  drawPath(shape, stroke);
+  const Path path = PathBuilder().addEllipse(bounds).build();
+  drawPath(PathShape{&path, FillRule::NonZero}, stroke);
 }
 
 void RendererGeode::drawImage(const ImageResource& image, const ImageParams& params) {

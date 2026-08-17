@@ -198,9 +198,45 @@ private:
 };
 
 /**
- * Represents a resolved path along with its fill rule, transform, and layer index for boolean ops.
+ * A path to draw, along with its fill rule and the entity it came from.
+ *
+ * This is a borrowed view, not an owner: `path` points at geometry the caller keeps alive.
+ * Draw calls take it by const reference and must not retain it past the call unless the
+ * backend has separately established that the pointee outlives the retention (see
+ * `RendererGeode`'s deferred fill batch, which only retains geometry owned by a
+ * `ComputedPathComponent`).
+ *
+ * Passing a borrowed path instead of a copy is what keeps a steady-state frame free of
+ * per-drawable path allocations: the driver hands every backend a pointer straight at the
+ * entity's resolved geometry.
  */
 struct PathShape {
+  /// Geometry to draw. Non-owning: the pointee must outlive the draw call. Null is treated
+  /// as an empty path so a default-constructed `PathShape` draws nothing.
+  const Path* path = nullptr;
+  FillRule fillRule = FillRule::NonZero;
+  /// Source entity this path was derived from. Set by the driver at the `drawPath` call
+  /// site (`RendererDriver::traverseRange`). Backends that cache per-entity state key
+  /// off this (see `GeodePathCacheComponent`). A null `EntityHandle` (the default) means
+  /// "no associated entity" - non-driver callers (overlay drawing, test harnesses) leave
+  /// it null and backends fall back to the un-cached path.
+  EntityHandle sourceEntity;
+
+  /// Geometry to draw, with a null `path` reading as the empty path.
+  [[nodiscard]] const Path& pathOrEmpty() const UTILS_LIFETIME_BOUND {
+    static const Path kEmpty;
+    return path != nullptr ? *path : kEmpty;
+  }
+};
+
+/**
+ * One resolved clip-path shape, owned by the \ref ResolvedClip that holds it.
+ *
+ * Unlike \ref PathShape this owns its geometry: a `ResolvedClip` is copied into render
+ * snapshots that outlive the document registry, so it cannot borrow from the source
+ * `ComputedClipPathsComponent`.
+ */
+struct ClipPathShape {
   Path path;
   FillRule fillRule = FillRule::NonZero;
   /// Transform from clip path child to the clip path's coordinate system.
@@ -208,12 +244,6 @@ struct PathShape {
   /// Layer index for boolean combination: paths on the same layer are unioned, layers are
   /// intersected.
   int layer = 0;
-  /// Source entity this path was derived from. Set by the driver at the `drawPath` call
-  /// site (`RendererDriver::traverseRange`). Backends that cache per-entity state key
-  /// off this (see `GeodePathCacheComponent`). A null `EntityHandle` (the default) means
-  /// "no associated entity" - non-driver callers (overlay drawing, test harnesses) leave
-  /// it null and backends fall back to the un-cached path.
-  EntityHandle sourceEntity;
 };
 
 /**
@@ -244,8 +274,8 @@ struct PaintParams {
  * Clip stack entry combining rectangles, paths, and optional masks.
  */
 struct ResolvedClip {
-  std::optional<Box2d> clipRect;     ///< Optional axis-aligned clip rectangle.
-  std::vector<PathShape> clipPaths;  ///< Ordered list of clip path shapes to intersect.
+  std::optional<Box2d> clipRect;         ///< Optional axis-aligned clip rectangle.
+  std::vector<ClipPathShape> clipPaths;  ///< Ordered list of clip path shapes to intersect.
   /// Transform applied to all clip paths (e.g., objectBoundingBox unit mapping).
   Transform2d clipPathUnitsTransform;  ///< Transform applied to the clip path coordinate system.
   std::optional<components::ResolvedMask> mask;  ///< Optional resolved mask reference.

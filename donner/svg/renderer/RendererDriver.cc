@@ -366,10 +366,17 @@ void resolvePerSpanStyles(Registry& registry, components::ComputedTextComponent&
   }
 }
 
-PathShape toPathShape(EntityHandle sourceEntity, const components::ComputedPathComponent& path,
+/// Build the borrowed path view handed to `RendererInterface::drawPath`.
+///
+/// `shape.path` points straight at `path.spline`, so this costs no allocation no matter how
+/// large the geometry is. The returned view is only valid while \p path is: every caller
+/// uses it within the draw call that produced it, and the component lives on the registry
+/// for the whole frame.
+PathShape toPathShape(EntityHandle sourceEntity,
+                      const components::ComputedPathComponent& path UTILS_LIFETIME_BOUND,
                       const components::ComputedStyleComponent& style) {
   PathShape shape;
-  shape.path = path.spline;
+  shape.path = &path.spline;
   shape.fillRule = style.properties->fillRule.get().value();
   shape.sourceEntity = sourceEntity;
   return shape;
@@ -473,7 +480,7 @@ ResolvedClip toResolvedClip(const components::RenderingInstanceComponent& instan
 
     clip.clipPaths.reserve(clipPaths->clipPaths.size());
     for (const auto& path : clipPaths->clipPaths) {
-      PathShape shape;
+      ClipPathShape shape;
       shape.path = path.path;
       shape.fillRule = path.clipRule == ClipRule::NonZero ? FillRule::NonZero : FillRule::EvenOdd;
       shape.parentFromEntity = path.parentFromEntity;
@@ -489,7 +496,7 @@ ResolvedClip toResolvedClip(const components::RenderingInstanceComponent& instan
   }
 
   // The computed clip rule is inherited if undefined on the clip path itself.
-  for (PathShape& path : clip.clipPaths) {
+  for (ClipPathShape& path : clip.clipPaths) {
     if (path.fillRule == FillRule::NonZero &&
         style.properties->clipRule.get().value() == ClipRule::EvenOdd) {
       path.fillRule = FillRule::EvenOdd;

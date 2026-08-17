@@ -1102,8 +1102,9 @@ TEST_F(RendererGeodeTest, DrawPathWithSolidFill) {
   renderer.setPaint(solidFill(css::RGBA(255, 0, 0, 255)));
   renderer.setTransform(Transform2d());
 
+  const Path path = PathBuilder().addRect(Box2d({16, 16}, {48, 48})).build();
   PathShape shape;
-  shape.path = PathBuilder().addRect(Box2d({16, 16}, {48, 48})).build();
+  shape.path = &path;
   shape.fillRule = FillRule::NonZero;
   renderer.drawPath(shape, StrokeParams{});
 
@@ -1167,8 +1168,9 @@ TEST_F(RendererGeodeTest, PushPopTransform) {
   // Draw a small rect at (8,8)-(16,16) in path space, but with a translate
   // pushed so it lands at (24,24)-(32,32) in pixel space.
   renderer.pushTransform(Transform2d::Translate(Vector2d(16, 16)));
+  const Path path = PathBuilder().addRect(Box2d({8, 8}, {16, 16})).build();
   PathShape shape;
-  shape.path = PathBuilder().addRect(Box2d({8, 8}, {16, 16})).build();
+  shape.path = &path;
   shape.fillRule = FillRule::NonZero;
   renderer.drawPath(shape, StrokeParams{});
   renderer.popTransform();
@@ -1196,8 +1198,9 @@ TEST_F(RendererGeodeTest, StrokeRectOutline) {
   stroke.lineCap = StrokeLinecap::Butt;
   stroke.lineJoin = StrokeLinejoin::Miter;
 
+  const Path path = PathBuilder().addRect(Box2d({16, 16}, {48, 48})).build();
   PathShape shape;
-  shape.path = PathBuilder().addRect(Box2d({16, 16}, {48, 48})).build();
+  shape.path = &path;
   shape.fillRule = FillRule::NonZero;
   renderer.drawPath(shape, stroke);
 
@@ -1232,15 +1235,16 @@ TEST_F(RendererGeodeTest, StrokeSharedVertexDoesNotExtendVertically) {
   stroke.strokeWidth = 1.0;
   stroke.lineJoin = StrokeLinejoin::Miter;
 
+  const Path path = PathBuilder()
+                        .moveTo({50, 85})
+                        .lineTo({65, 135})
+                        .lineTo({150, 135})
+                        .lineTo({150, 85})
+                        .quadTo({100, 45}, {50, 85})
+                        .closePath()
+                        .build();
   PathShape shape;
-  shape.path = PathBuilder()
-                   .moveTo({50, 85})
-                   .lineTo({65, 135})
-                   .lineTo({150, 135})
-                   .lineTo({150, 85})
-                   .quadTo({100, 45}, {50, 85})
-                   .closePath()
-                   .build();
+  shape.path = &path;
   shape.fillRule = FillRule::NonZero;
   renderer.drawPath(shape, stroke);
   renderer.endFrame();
@@ -1263,8 +1267,9 @@ TEST_F(RendererGeodeTest, OversizedDashArrayPreservesSolidStrokeFallback) {
   stroke.strokeWidth = 4.0;
   stroke.dashArray.assign(257, 1.0);
 
+  const Path path = PathBuilder().addRect(Box2d({16, 16}, {48, 48})).build();
   PathShape shape;
-  shape.path = PathBuilder().addRect(Box2d({16, 16}, {48, 48})).build();
+  shape.path = &path;
   shape.fillRule = FillRule::NonZero;
   renderer.drawPath(shape, stroke);
 
@@ -1303,8 +1308,9 @@ TEST_F(RendererGeodeTest, OversizedDashArrayPreservesSolidStrokeFallback) {
 TEST_F(RendererGeodeTest, StrokeFlatteningTracksDeviceScaleWithoutASourceEntity) {
   RendererGeode renderer = createRenderer();
 
+  const Path path = PathBuilder().addCircle(Vector2d(32.0, 32.0), 12.0).build();
   PathShape shape;
-  shape.path = PathBuilder().addCircle(Vector2d(32.0, 32.0), 12.0).build();
+  shape.path = &path;
   shape.fillRule = FillRule::NonZero;
 
   StrokeParams stroke;
@@ -1419,8 +1425,9 @@ TEST_F(RendererGeodeTest, FillAndStrokeRect) {
   StrokeParams stroke;
   stroke.strokeWidth = 4.0;
 
+  const Path path = PathBuilder().addRect(Box2d({16, 16}, {48, 48})).build();
   PathShape shape;
-  shape.path = PathBuilder().addRect(Box2d({16, 16}, {48, 48})).build();
+  shape.path = &path;
   shape.fillRule = FillRule::NonZero;
   renderer.drawPath(shape, stroke);
 
@@ -1480,8 +1487,9 @@ TEST_F(RendererGeodeTest, StrokeBeforeBeginFrameIsNoOp) {
   StrokeParams stroke;
   stroke.strokeWidth = 4.0;
 
+  const Path path = PathBuilder().addRect(Box2d({16, 16}, {48, 48})).build();
   PathShape shape;
-  shape.path = PathBuilder().addRect(Box2d({16, 16}, {48, 48})).build();
+  shape.path = &path;
   shape.fillRule = FillRule::NonZero;
   // Before the fix, this call crashes with a null pointer dereference.
   renderer.drawPath(shape, stroke);
@@ -1497,8 +1505,9 @@ TEST_F(RendererGeodeTest, ZeroWidthStrokeIsNoOp) {
   StrokeParams stroke;
   stroke.strokeWidth = 0.0;  // Must skip stroke path entirely.
 
+  const Path path = PathBuilder().addRect(Box2d({16, 16}, {48, 48})).build();
   PathShape shape;
-  shape.path = PathBuilder().addRect(Box2d({16, 16}, {48, 48})).build();
+  shape.path = &path;
   shape.fillRule = FillRule::NonZero;
   renderer.drawPath(shape, stroke);
 
@@ -1707,7 +1716,7 @@ TEST_F(RendererGeodeTest, PathClipMaskClipsSolidFillToLeftHalf) {
   beginFrame(renderer);
 
   ResolvedClip clip;
-  PathShape clipShape;
+  ClipPathShape clipShape;
   clipShape.fillRule = FillRule::NonZero;
   clipShape.path = PathBuilder()
                        .moveTo(Vector2d(0.0, 0.0))
@@ -1740,7 +1749,7 @@ TEST_F(RendererGeodeTest, PathClipMaskClipsIsolatedLayerComposite) {
   beginFrame(renderer);
 
   ResolvedClip clip;
-  PathShape clipShape;
+  ClipPathShape clipShape;
   clipShape.fillRule = FillRule::NonZero;
   clipShape.path = PathBuilder()
                        .moveTo(Vector2d(0.0, 0.0))
@@ -1775,7 +1784,7 @@ TEST_F(RendererGeodeTest, PathClipMaskClipsIsolatedLayerCompositeForTriangle) {
   beginFrame(renderer);
 
   ResolvedClip clip;
-  PathShape clipShape;
+  ClipPathShape clipShape;
   clipShape.fillRule = FillRule::NonZero;
   clipShape.path = PathBuilder()
                        .moveTo(Vector2d(32.0, 0.0))
@@ -1809,7 +1818,7 @@ TEST_F(RendererGeodeTest, PathClipMaskClipsFilterLayerCompositeForTriangle) {
   beginFrame(renderer);
 
   ResolvedClip clip;
-  PathShape clipShape;
+  ClipPathShape clipShape;
   clipShape.fillRule = FillRule::NonZero;
   clipShape.path = PathBuilder()
                        .moveTo(Vector2d(32.0, 0.0))
@@ -2893,7 +2902,7 @@ TEST_F(RendererGeodeTest, FilterAppliedBeforeClipPathSvgRenderingOrder) {
   // through the path-clip-mask code path (the same one resvg with-clip-path
   // exercises).
   ResolvedClip clip;
-  PathShape clipShape;
+  ClipPathShape clipShape;
   clipShape.fillRule = FillRule::NonZero;
   clipShape.path = PathBuilder()
                        .moveTo(Vector2d(0.0, 0.0))

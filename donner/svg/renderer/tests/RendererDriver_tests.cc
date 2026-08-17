@@ -19,6 +19,7 @@
 #include "donner/svg/components/layout/SizedElementComponent.h"
 #include "donner/svg/components/layout/ViewBoxComponent.h"
 #include "donner/svg/components/resources/ImageComponent.h"
+#include "donner/svg/components/shape/ComputedPathComponent.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
 #include "donner/svg/components/text/TextComponent.h"
 #include "donner/svg/core/PreserveAspectRatio.h"
@@ -52,7 +53,7 @@ MATCHER(IsIdentityTransform, "identity transform") {
 }
 
 MATCHER_P(PathCommandsAre, expected, "path commands match") {
-  const auto& commands = arg.path.commands();
+  const auto commands = arg.pathOrEmpty().commands();
   if (commands.size() != expected.size()) {
     return false;
   }
@@ -129,6 +130,39 @@ TEST_F(RendererDriverTest, BeginsAndEndsFrameAroundTraversal) {
   const RendererBitmap bitmap = driver.takeSnapshot();
   EXPECT_FALSE(bitmap.empty());
   EXPECT_THAT(bitmap.dimensions, Eq(Vector2i(16, 16)));
+}
+
+/// `PathShape` borrows the geometry it draws. Copying it instead would allocate twice per
+/// drawable per frame, which is pure waste on a steady frame where nothing changed, so pin
+/// the pointer identity: every path handed to the backend must be the entity's own resolved
+/// spline, not a copy of it.
+TEST_F(RendererDriverTest, DrawPathBorrowsTheEntitySplineInsteadOfCopyingIt) {
+  SVGDocument document = makeDocument(R"svg(
+    <rect width="8" height="6" fill="red" />
+    <circle cx="4" cy="4" r="2" fill="blue" />
+  )svg");
+
+  std::vector<const Path*> drawnPaths;
+  EXPECT_CALL(renderer, drawPath(_, _))
+      .WillRepeatedly([&drawnPaths](const PathShape& path, const StrokeParams&) {
+        drawnPaths.push_back(path.path);
+      });
+
+  driver.draw(document);
+
+  ASSERT_FALSE(drawnPaths.empty());
+
+  Registry& registry = document.registry();
+  std::vector<const Path*> resolvedSplines;
+  for (const Entity entity : registry.view<components::ComputedPathComponent>()) {
+    resolvedSplines.push_back(&registry.get<components::ComputedPathComponent>(entity).spline);
+  }
+
+  for (const Path* drawn : drawnPaths) {
+    EXPECT_THAT(resolvedSplines, testing::Contains(drawn))
+        << "drawPath received a path that is not an entity's ComputedPathComponent::spline, "
+           "which means the driver copied the geometry";
+  }
 }
 
 TEST_F(RendererDriverTest, ConcurrentDomDrawReplaysBackendCallbacksOutsideWriteAccess) {
