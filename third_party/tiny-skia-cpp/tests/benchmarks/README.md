@@ -40,6 +40,11 @@ architecture-specific low/high watermarks for the same derived ratios that
 - `simd_over_scalar` (`scalar_cpp_ns / native_cpp_ns`)
 - `simd_over_rust` (`rust_avg_ns / native_cpp_ns`)
 
-The guard validates both metrics for `FillPath(512x512)` and `FillRect(512x512)`,
-with architecture-specific watermarks (`arm64`, `x86`) set to a tight ±25% band
-around calibrated baselines.
+The guard validates these ratios for `FillPath(512x512)`, `FillRect(512x512)`,
+`StrokePath`, `FillPathGradient`, and `FillPathOpaque` against
+architecture-specific (`arm64`, `x86`) floor watermarks. Floors only: the
+ratios vary widely across CPU implementations of the same architecture, so an
+upper bound fails on SIMD-friendly hosts without indicating a defect. The
+floor proves the SIMD path is engaged (a disengaged native build collapses
+the ratio to about 1.0); see `run_render_perf_regression_test.sh` for the
+derivation.
