@@ -5,6 +5,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "donner/base/CompileTimeMap.h"
@@ -2244,17 +2245,31 @@ bool PropertyRegistry::isPresentationAttributeInherited(std::string_view name) {
     return false;
   }
 
-  PropertyRegistry registry;
-  const auto properties = registry.allProperties();
-  bool inherited = false;
+  // Each property's name and cascade mode are fixed for the life of the process, so the answer is
+  // read from a table built once rather than by constructing (and destroying) a whole registry per
+  // call just to inspect that metadata. This runs once per presentation attribute that a document
+  // sets, so the per-call registry was charged to every parse.
+  static const std::array<std::pair<std::string_view, bool>, numProperties()> kInheritedByName =
+      [] {
+        std::array<std::pair<std::string_view, bool>, numProperties()> table = {};
+        PropertyRegistry registry;
+        const auto properties = registry.allProperties();
+        forEachProperty<0, numProperties()>([&properties, &table](auto i) {
+          const auto& property = std::get<i.value>(properties);
+          using PropertyType = std::decay_t<decltype(property)>;
+          table[i.value] = {property.name, PropertyType::kCascadeMode != PropertyCascade::None};
+        });
+        return table;
+      }();
 
-  forEachProperty<0, numProperties()>([&properties, name, &inherited](auto i) {
-    const auto& property = std::get<i.value>(properties);
-    using PropertyType = std::decay_t<decltype(property)>;
-    if (property.name == name) {
-      inherited = PropertyType::kCascadeMode != PropertyCascade::None;
+  // Later entries win, matching the previous scan, which kept assigning as it walked the whole
+  // property list rather than stopping at the first name match.
+  bool inherited = false;
+  for (const auto& [propertyName, propertyInherits] : kInheritedByName) {
+    if (propertyName == name) {
+      inherited = propertyInherits;
     }
-  });
+  }
 
   return inherited;
 }
