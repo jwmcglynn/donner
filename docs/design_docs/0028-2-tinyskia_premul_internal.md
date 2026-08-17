@@ -223,13 +223,15 @@ accepted and absorbed as follows.
   the existing per-case override map, with the reason recorded inline. The
   pilot corpus profile carries the same budget so its parity assertion holds.
   No other case and no global threshold moved.
-
-Three editor bitmap-golden targets still compare with a zero-pixel budget and
-still differ: `layer_thumbnail_golden_tests`, `layers_panel_tests`, and
-`showcase_asset_tests`. They are the same mechanism 1 class as the re-blessed
-renderer goldens (38 to 215 pixels per thumbnail, max alpha delta 0 to 2, max
-2.56/255 composited over white, except the root-group thumbnail at 4.00/255),
-and they need the same re-bless decision applied to editor testdata.
+- Ten editor bitmap goldens re-blessed through the same flow: nine
+  `donner_splash` layer thumbnails and `showcase_asset_tiny_skia`. Identical
+  mechanism to the renderer goldens above, so the same decision applies: the
+  deltas are alpha-preserving RGB rounding changes, 38 to 215 pixels per
+  golden, alpha delta at most 2, and at most 4.00/255 composited over white
+  (the root-group thumbnail; every other golden is under 2.56/255). The
+  `donner_splash_background` thumbnail regenerates byte-identically and did not
+  change. `layer_thumbnail_golden_tests`, `layers_panel_tests`, and
+  `showcase_asset_tests` all compare against these goldens and are green.
 
 The alternative that was rejected: shipping the storage change without the pin.
 That leaves an opaque splash corner reading back at alpha 250, a full-canvas
