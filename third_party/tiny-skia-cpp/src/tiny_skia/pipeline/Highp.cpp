@@ -117,30 +117,27 @@ void premultiply(Pipeline& pipeline) {
 
 void unpremultiply(Pipeline& pipeline) {
   // Branchless form so the compiler can vectorize the per-lane divide.
-  // The original `if (a > 0.0f) { r *= 1/a; ... }` per-lane branch blocked
-  // auto-vectorization on AVX2/NEON; we compute `invA = a > 0 ? 1/a : 0`
-  // as a mask+select and multiply unconditionally. Correct because
-  // well-formed premul input guarantees r,g,b == 0 whenever a == 0, so
-  // multiplying the zero lanes by zero leaves them at zero (same as the
-  // original "leave unchanged" branch). Ill-formed input (r > a, a == 0)
-  // is already out of spec for unpremul — either result is a policy
-  // choice; we pick the branchless one for ~3-4x speedup on every blit
-  // into `frame_` that runs with `Paint::unpremulStore = true`.
+  // The obvious `if (a > 0.0f) { r *= 1/a; ... }` per-lane branch blocks
+  // auto-vectorization on AVX2/NEON; computing `invA = a > 0 ? 1/a : 0`
+  // as a mask+select and multiplying unconditionally is about 3-4x faster.
+  // It is equivalent for well-formed premultiplied input, which guarantees
+  // r,g,b == 0 whenever a == 0: multiplying those zero lanes by zero leaves
+  // them at zero, matching the branch that would have left them unchanged.
+  // Ill-formed input (r > a, or nonzero color at a == 0) is out of spec for
+  // unpremultiply and either result is a policy choice.
   //
-  // Bit-exact parity with Rust's `f32x8::recip()` is preserved: both
-  // end up in an IEEE-754-compliant `div_ps` / `vdivq_f32`. The
-  // `#pragma clang fp contract(off)` at the top of this file keeps
-  // the compiler from fusing multiplies into FMAs that would diverge
-  // from scalar Rust.
+  // Bit-exact parity with Rust's `f32x8::recip()` is preserved: both end up
+  // in an IEEE-754-compliant `div_ps` / `vdivq_f32`. The
+  // `#pragma clang fp contract(off)` at the top of this file keeps the
+  // compiler from fusing multiplies into FMAs that would diverge from
+  // scalar Rust.
   //
-  // DO NOT replace the IEEE divide with `_mm256_rcp_ps` / `vrecpe_f32`
-  // plus Newton-Raphson. Those approximate reciprocal intrinsics give
-  // another ~2-3× speedup but drift from scalar by up to 2 ULP, which
-  // silently breaks the compositor dual-path-gate goldens
-  // (`CompositorGolden_tests::DualPathGate_*`) — those require strict
-  // `isExact()` pixel identity between the composited and full-render
-  // paths, and any per-pixel drift accumulates to visible mismatches.
-  // See design doc 0028's rejection section for the precision analysis.
+  // DO NOT replace the IEEE divide with `_mm256_rcp_ps` / `vrecpe_f32` plus
+  // Newton-Raphson. Those approximate reciprocal intrinsics are another
+  // 2-3x faster but drift from scalar by up to 2 ULP. Exact IEEE semantics
+  // are part of this stage's contract: callers compare pixels rendered
+  // through different pipeline compositions for bit identity, and per-pixel
+  // drift accumulates into visible mismatches there.
   for (std::size_t i = 0; i < kStageWidth; ++i) {
     const float a = pipeline.a[i];
     const float invA = (a > 0.0f) ? 1.0f / a : 0.0f;
