@@ -245,6 +245,95 @@ TEST_F(GeoEncoderTest, IllConditionedShearStillRasterizesHalfPixelHalo) {
   EXPECT_THAT(pixelAt(pixels, 32, 35), RgbaEq(0, 0, 0, 0));
 }
 
+/// Record-slab slots use GLOBAL indices across chunks while byte offsets are
+/// per-buffer. After the slab grows, a freed slot from a later chunk must
+/// resolve back to its exact original buffer and buffer-relative offset;
+/// resolving the global index as a raw byte offset would alias another live
+/// slot's storage and two entities would share one record.
+/// entt removes a component mid-pool by move-assigning the LAST component
+/// over the removed slot (swap-and-pop). The move must transfer the record
+/// slot and its owning slab: if the moved-from component kept them, its
+/// destructor would free the SURVIVOR's record slot back to the slab, and a
+/// later allocation would hand the same storage to another entity while the
+/// survivor's cached bind group still binds it.
+TEST_F(GeoEncoderTest, ResidentSlotMoveTransfersRecordSlot) {
+  auto slab = std::make_shared<geode::GeodeRecordSlab>(device_->deviceId());
+
+  geode::GeodeResidentSlot survivor;
+  survivor.recordSlab = slab;
+  ASSERT_TRUE(slab->allocateSlot(*device_, survivor.recordSlot));
+  const geode::GeodeRecordSlab::Slot survivorSlot = survivor.recordSlot;
+
+  {
+    // Swap-and-pop shape: the survivor is move-assigned into the removed
+    // component's storage; the moved-from shell is then destroyed.
+    geode::GeodeResidentSlot removedStorage;
+    removedStorage = std::move(survivor);
+    ASSERT_TRUE(removedStorage.recordSlot.buffer);
+    EXPECT_EQ(removedStorage.recordSlot.index, survivorSlot.index);
+    // survivor (the moved-from shell) is destroyed at scope exit of the
+    // ORIGINAL object in real usage; simulate by letting it destruct via a
+    // fresh scope below. Here, verify the shell no longer owns the slot.
+    EXPECT_FALSE(survivor.recordSlot.buffer)
+        << "The moved-from slot must not retain the record slot";
+    // Destroy the shell explicitly (what entt's pop does to the tail).
+    { geode::GeodeResidentSlot shell = std::move(survivor); }
+
+    // If the shell's destructor freed the survivor's slot, the next
+    // allocation after a frame boundary would return it. It must not.
+    slab->beginFrame(1);
+    geode::GeodeRecordSlab::Slot next;
+    ASSERT_TRUE(slab->allocateSlot(*device_, next));
+    EXPECT_FALSE(next.buffer == survivorSlot.buffer && next.offset == survivorSlot.offset)
+        << "The survivor's record slot leaked back to the slab through the moved-from shell";
+  }
+}
+
+TEST_F(GeoEncoderTest, RecordSlabFreeListSurvivesChunkGrowth) {
+  geode::GeodeRecordSlab slab(device_->deviceId());
+
+  // Fill past the first chunk so a second chunk exists.
+  std::vector<geode::GeodeRecordSlab::Slot> slots;
+  const size_t kCount = 1100;  // First chunk holds 1024 records.
+  slots.reserve(kCount);
+  for (size_t i = 0; i < kCount; ++i) {
+    geode::GeodeRecordSlab::Slot slot;
+    ASSERT_TRUE(slab.allocateSlot(*device_, slot)) << "allocation " << i;
+    ASSERT_TRUE(slot.buffer);
+    slots.push_back(slot);
+  }
+  ASSERT_NE(slots[0].buffer, slots.back().buffer) << "Fixture must span two chunks";
+
+  // Free one slot in each chunk; frees merge at the next frame boundary.
+  const geode::GeodeRecordSlab::Slot freedEarly = slots[10];
+  const geode::GeodeRecordSlab::Slot freedLate = slots[1090];
+  slab.freeSlot(freedEarly);
+  slab.freeSlot(freedLate);
+  slab.beginFrame(1);
+
+  // Reuse resolves each index to its ORIGINAL buffer and offset.
+  geode::GeodeRecordSlab::Slot reusedA;
+  geode::GeodeRecordSlab::Slot reusedB;
+  ASSERT_TRUE(slab.allocateSlot(*device_, reusedA));
+  ASSERT_TRUE(slab.allocateSlot(*device_, reusedB));
+  const auto matches = [](const geode::GeodeRecordSlab::Slot& a,
+                          const geode::GeodeRecordSlab::Slot& b) {
+    return a.buffer == b.buffer && a.offset == b.offset && a.index == b.index;
+  };
+  EXPECT_TRUE(matches(reusedA, freedEarly) || matches(reusedA, freedLate));
+  EXPECT_TRUE(matches(reusedB, freedEarly) || matches(reusedB, freedLate));
+  EXPECT_FALSE(matches(reusedA, reusedB));
+
+  // No reused slot may alias a still-live slot's storage.
+  for (const auto& live : slots) {
+    if (matches(live, freedEarly) || matches(live, freedLate)) {
+      continue;
+    }
+    EXPECT_FALSE(live.buffer == reusedA.buffer && live.offset == reusedA.offset);
+    EXPECT_FALSE(live.buffer == reusedB.buffer && live.offset == reusedB.offset);
+  }
+}
+
 TEST_F(GeoEncoderTest, ArenaGrowthKeepsEarlierGridBinding) {
   PathBuilder builder;
   for (int i = 0; i < 8500; ++i) {

@@ -207,7 +207,7 @@ struct alignas(16) GradientUniforms {
   uint32_t hasClipMask;     // 484 .. 488
   uint32_t antialias;       // 488 .. 492 - 0 = binary coverage, 1 = analytic AA
   uint32_t _clipPad2;       // 492 .. 496
-  // Band-grid parameters (0041 §8.1), matching the WGSL `GradientUniforms`.
+  // Band-grid parameters, matching the WGSL `GradientUniforms`.
   float gridYBase;                // 496 .. 500
   float gridHStride;              // 500 .. 504
   uint32_t gridHBandCount;        // 504 .. 508
@@ -288,8 +288,8 @@ struct GeoEncoder::Impl : public GeodeTextureEncoder::UniformScratch {
   Arena vBandArena;
   Arena vCurveArena;
   Arena gridArena;
-  
-  /// M6-B step 3: per-instance affine transforms for `fillPathInstanced`.
+
+  /// Per-instance affine transforms for `fillPathInstanced`.
   /// Packed as two vec4f rows per instance (32 bytes), matching the WGSL
   /// `InstanceTransform` struct. Alignment uses `kStorageOffsetAlignment`
   /// since the binding is storage read-only.
@@ -325,7 +325,7 @@ struct GeoEncoder::Impl : public GeodeTextureEncoder::UniformScratch {
     releaseArenaResources(vBandArena);
     releaseArenaResources(vCurveArena);
     releaseArenaResources(gridArena);
-    
+
     releaseArenaResources(instanceRecordArena);
     transientResources.releaseAll();
   }
@@ -486,7 +486,7 @@ struct GeoEncoder::Impl : public GeodeTextureEncoder::UniformScratch {
                                      const GeodeRecordSlab::Slot* recordSlotOverride,
                                      bool bakeTransform);
 
-  /// Wave-2 extension for gradient paints: (re)upload `encoded` into the
+  /// Gradient-paint extension: (re)upload `encoded` into the
   /// gradient slot's persistent combined buffer (same eight SSBO regions,
   /// uniform region sized for `GradientUniforms`) and reset its cached
   /// bind group.
@@ -537,7 +537,7 @@ struct GeoEncoder::Impl : public GeodeTextureEncoder::UniformScratch {
 
   /// Upload the analytic dual-ray buffers + grid params for a gradient draw,
   /// build the 11-binding bind group, and record the single-quad draw. Shared
-  /// by the linear and radial gradient paths (0041 §8). `u` is filled in by the
+  /// by the linear and radial gradient paths. `u` is filled in by the
   /// caller except for the grid params, which this writes from `encoded`.
   void submitGradientDraw(GradientUniforms& u, const EncodedPath& encoded) {
     u.gridYBase = encoded.yBase;
@@ -960,8 +960,8 @@ void GeoEncoder::finalizeImpl(GeoEncoder::Impl& impl) {
   impl.vCurveArena.label = "GeodeVCurveArena";
   impl.gridArena.usage = wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopyDst;
   impl.gridArena.label = "GeodeGridArena";
-  
-  
+
+
 }
 
 GeoEncoder::GeoEncoder(GeodeDevice& device, const GeodePipeline& fillPipeline,
@@ -1181,7 +1181,7 @@ void GeoEncoder::fillPathIntoMask(const Path& path, FillRule rule,
 
   const wgpu::Device& dev = impl_->device->device();
 
-  // Analytic dual-ray buffers (0041 §8): H/V bands, curves, references, and grids. The
+  // Analytic dual-ray buffers: H/V bands, curves, references, and grids. The
   // bounding fan is generated from vertex_index and uniform data.
   const auto bandsAlloc = impl_->allocStorageOrDummy(
       impl_->bandArena, encoded.bands.data(), encoded.bands.size() * sizeof(EncodedPath::Band));
@@ -1320,7 +1320,6 @@ void GeoEncoder::endMaskPass() {
 void GeoEncoder::setClipMask(const wgpu::TextureView& maskView) {
   impl_->activeClipMaskView = maskView;
   ++impl_->clipStateVersion;
-  ++impl_->clipStateVersion;
   // activeClipMaskTexture keepalive is left empty by this overload; the
   // caller must guarantee the parent stays alive. The 2-arg overload
   // is preferred for any path that doesn't own the texture's lifetime
@@ -1333,6 +1332,7 @@ void GeoEncoder::setClipMask(const wgpu::TextureView& maskView) {
 void GeoEncoder::setClipMask(const wgpu::Texture& maskTexture, const wgpu::TextureView& maskView) {
   impl_->activeClipMaskTexture = maskTexture;
   impl_->activeClipMaskView = maskView;
+  ++impl_->clipStateVersion;
 }
 
 void GeoEncoder::clearClipMask() {
@@ -1403,7 +1403,7 @@ struct GeoEncoder::FillDrawArgs {
   Vector2d tileSize;
   float patternOpacity;
 
-  /// M6 Bullet 2: instance count for this draw. The caller passes packed
+  /// Instance count for this draw. The caller passes packed
   /// per-instance transforms (8 floats each) alongside `submitFillDraw`;
   /// the encoder copies its base record per instance and overwrites each
   /// transform, so one GPU draw covers all instances with shared geometry
@@ -1442,7 +1442,7 @@ void GeoEncoder::fillPath(const Path& path, const css::RGBA& color, FillRule rul
 
 void GeoEncoder::Impl::populateBatchUniform(Uniforms& u, const FillDrawArgs& args,
                                            const Transform2d& mvpTransform,
-                                           bool identityMvp = false) {
+                                           bool identityMvp) {
   if (identityMvp) {
     // Scene-batch form: the vertex stage composes an IDENTITY uniform mvp
     // with each record's host-composed transform, so the float32 matrix
@@ -1734,11 +1734,10 @@ bool GeoEncoder::Impl::ensureResidentSceneRecordImpl(GeodeResidentSlot& slot,
   // Rewrite the batch uniform and the instance record only when they
   // actually changed. A static re-render (same viewport, same paint)
   // produces byte-identical bytes, so both writes are skipped entirely
-  // and the frame emits zero buffer writes. The uniform carries the
-  // Two forms exist:
+  // and the frame emits zero buffer writes. Two forms exist:
   //   - Solo (bakeTransform): uniforms.mvp carries the full
   //     deviceFromLocal transform (double precision on the host, exactly
-  //     like the wave-1 arena path) and the record's transform stays
+  //     like the per-frame arena path) and the record's transform stays
   //     identity.
   //   - Scene batch (orthographic uniform): uniforms.mvp is the
   //     orthographic mapping and the record carries the caller's
@@ -1953,9 +1952,12 @@ void GeoEncoder::fillPathSceneBatch(const css::RGBA& color, FillRule rule,
   const auto uniAlloc =
       impl_->allocInArena(impl_->uniformArena, &u, sizeof(Uniforms), kUniformOffsetAlignment);
 
+  // Whole-chunk views: valid while a chunk stays under the device's
+  // maxStorageBufferBindingSize (default 128 MiB); kInitialChunkBytes
+  // doubling reaches that only for documents far beyond the current
+  // corpus, and the failure is a loud bind-group validation error.
   const uint64_t chunkBytes = binding.chunkBuffer.getSize();
-  const uint64_t recordSpanStart =
-      static_cast<uint64_t>(binding.firstInstance) * sizeof(InstanceRecord);
+  const uint64_t recordSpanStart = binding.firstRecordOffset;
   const uint64_t recordSpanBytes =
       static_cast<uint64_t>(binding.instanceCount) * sizeof(InstanceRecord);
 
@@ -2098,7 +2100,7 @@ void GeoEncoder::submitFillDraw(const FillDrawArgs& args,
   // holds everything that varies per instance (transform, color, rule,
   // grid parameters, bounding polygon, geometry bases).
   const uint32_t instanceCount = args.instanceCount;
-  const bool instanced = instanceCount > 1 && !instanceTransforms.empty() &&
+  const bool instanced = instanceCount >= 1 && !instanceTransforms.empty() &&
                          instanceTransforms.size() == static_cast<size_t>(instanceCount) * 8u;
   Uniforms u = {};
   impl_->populateBatchUniform(u, args, impl_->transform, /*identityMvp=*/instanced);

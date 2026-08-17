@@ -432,7 +432,7 @@ fn solve_quadratic(a: f32, b: f32, c: f32) -> vec2f {
 }
 
 // ----------------------------------------------------------------------------
-// Per-ray analytic coverage (0041 §1).
+// Per-ray analytic coverage.
 //
 // The horizontal ray travels along +X at y = sample.y. For each Y-monotonic
 // curve in the band we solve for the t where the curve's Y equals sample.y,
@@ -556,7 +556,7 @@ fn accumulateVert(rec: InstanceRecord, slot: u32, sample: vec2f, ppemY: f32) -> 
   return result;
 }
 
-// Combine the two rays' coverage (0041 §1, reference `CalcCoverage`). The
+// Combine the two rays' coverage (reference `CalcCoverage`). The
 // weighted blend handles the general case; the `min(|xcov|,|ycov|)` floor
 // resolves near-axis-aligned / thin-feature / crosshair cases that a single
 // ray conflates.
