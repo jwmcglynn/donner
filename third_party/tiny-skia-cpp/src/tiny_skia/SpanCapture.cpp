@@ -1,6 +1,7 @@
 #include "tiny_skia/SpanCapture.h"
 
 #include <limits>
+#include <optional>
 
 #include "tiny_skia/Painter.h"
 #include "tiny_skia/pipeline/Blitter.h"
