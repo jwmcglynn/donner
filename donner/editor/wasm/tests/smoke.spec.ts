@@ -885,13 +885,17 @@ for (
     // failing path. Three different faults share this wait's failure message -
     // the sample never activated, the worker never returned a result, or a
     // result landed that no app frame carried - and only the raw observation
-    // separates them. `workerBusy` is the one that says whether a render is
-    // still in flight (a stalled renderer) or was never started.
+    // separates them.
+    //
+    // `workerBusy` answers the remaining question - whether a render is still
+    // in flight or was never started - but it is read ONCE after the wait
+    // ends, never inside the poll. A diagnostic that adds a round trip to
+    // every iteration changes the timing of the wait it is measuring, which
+    // is exactly the way an instrument stops observing its own subject.
     let lastPresentationState: {
       activeSample: Window["__donnerActiveSampleStats"];
       frames: number;
       worker: Window["__donnerWorkerStats"];
-      workerBusy: boolean | undefined;
     } | undefined;
     // Presentation is now one canvas frame: the sample is on screen once the
     // document render lands AND the app thread has drawn a frame carrying it.
@@ -901,7 +905,6 @@ for (
         activeSample: window.__donnerActiveSampleStats,
         frames: window.__donnerMainLoopRenderedFrames || 0,
         worker: window.__donnerWorkerStats,
-        workerBusy: window.__donnerInteractionStats?.workerBusy,
       }));
       lastPresentationState = state;
       if (state.activeSample?.sampleId === sample.id) {
@@ -940,10 +943,15 @@ for (
         intervals: [8, 16, 25, 50],
       }).toBe(true);
     } finally {
+      // Best-effort: a whole-test timeout tears the page down, and a rejection
+      // here must not replace the real failure.
+      const workerBusy = await page
+        .evaluate(() => window.__donnerInteractionStats?.workerBusy)
+        .catch(() => undefined);
       console.log(
         `carousel-presentation sample=${sample.id} timings=${JSON.stringify(phaseTimings)} worker=${
           JSON.stringify(completedWorkerStats)
-        } last=${JSON.stringify(lastPresentationState)}`,
+        } last=${JSON.stringify(lastPresentationState)} workerBusy=${JSON.stringify(workerBusy)}`,
       );
     }
     expect(phaseTimings.presentedMs).toBeDefined();
