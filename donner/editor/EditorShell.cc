@@ -142,7 +142,13 @@ void PublishSampleThumbnailStats(int requested, int started, int completed, int 
 }
 
 void PublishInteractionStats(int selectedCount, int pendingClick, int workerBusy, int dragging,
-                             int dragHasVisualChange) {
+                             int dragHasVisualChange, double pointerX, double pointerY) {
+  // `pointerX`/`pointerY` is the pointer position this frame's input processing
+  // actually used, in page CSS pixels. A DOM mouse move reaches the app thread
+  // through the proxying queue, so under load a press can be dispatched before
+  // its aiming move has been applied and is then hit-tested at the previous
+  // pointer position. Publishing the applied position lets a browser probe
+  // hold its press until the editor has the pointer where the press will land.
   MAIN_THREAD_ASYNC_EM_ASM(
       {
         window['__donnerInteractionStats'] = ({
@@ -151,9 +157,11 @@ void PublishInteractionStats(int selectedCount, int pendingClick, int workerBusy
           'workerBusy' : !!$2,
           'dragging' : !!$3,
           moved : !!$4,
+          'pointerX' : $5,
+          'pointerY' : $6,
         });
       },
-      selectedCount, pendingClick, workerBusy, dragging, dragHasVisualChange);
+      selectedCount, pendingClick, workerBusy, dragging, dragHasVisualChange, pointerX, pointerY);
 }
 
 /**
@@ -179,16 +187,30 @@ void PublishInteractionStats(int selectedCount, int pendingClick, int workerBusy
  * rows silently does nothing. Publishing the authoritative state lets a test
  * verify the toggle took effect and retry the click instead of proceeding
  * against a menu item it missed.
+ *
+ * Also carries selection-chrome observability: whether an overlay chrome
+ * snapshot is currently installed for immediate presentation, the live and
+ * displayed document versions, and how many overlay refreshes the version gate
+ * has suppressed. A pixel probe that finds no selection outline uses these to
+ * distinguish "chrome intentionally hidden while the presentation catches up"
+ * from "chrome lost".
  */
-void PublishOverlayStats(int compositorTileOverlay, int geometryDebugOverlay) {
+void PublishOverlayStats(int compositorTileOverlay, int geometryDebugOverlay,
+                         int selectionChromeSnapshotPresent, double currentDocVersion,
+                         double displayedDocVersion, double overlayVersionGateSuppressions) {
   MAIN_THREAD_ASYNC_EM_ASM(
       {
         window['__donnerOverlayStats'] = ({
           'compositorTileOverlay' : !!$0,
           'geometryDebugOverlay' : !!$1,
+          'selectionChromeSnapshotPresent' : !!$2,
+          'currentDocVersion' : $3,
+          'displayedDocVersion' : $4,
+          'overlayVersionGateSuppressions' : $5,
         });
       },
-      compositorTileOverlay, geometryDebugOverlay);
+      compositorTileOverlay, geometryDebugOverlay, selectionChromeSnapshotPresent,
+      currentDocVersion, displayedDocVersion, overlayVersionGateSuppressions);
 }
 
 void PublishViewportStats(double paneX, double paneY, double paneWidth, double paneHeight,
@@ -6600,11 +6622,17 @@ void EditorShell::recordFrameTelemetry(
       static_cast<double>(presentationResources.retiredFrameCount),
       static_cast<double>(presentationResources.wgpuLifetimeTextureCreates),
       static_cast<double>(presentationResources.wgpuLifetimeBufferCreates));
-  PublishInteractionStats(static_cast<int>(app_.selectedElements().size()),
-                          interactionController_.pendingClick().has_value() ? 1 : 0,
-                          renderCoordinator_.asyncRenderer().isBusy() ? 1 : 0,
-                          selectTool_.isDragging() ? 1 : 0,
-                          selectTool_.dragHasVisualChange() ? 1 : 0);
+  {
+    const ImVec2 imguiMousePos = ImGui::GetIO().MousePos;
+    const bool pointerValid = ImGui::IsMousePosValid(&imguiMousePos);
+    PublishInteractionStats(static_cast<int>(app_.selectedElements().size()),
+                            interactionController_.pendingClick().has_value() ? 1 : 0,
+                            renderCoordinator_.asyncRenderer().isBusy() ? 1 : 0,
+                            selectTool_.isDragging() ? 1 : 0,
+                            selectTool_.dragHasVisualChange() ? 1 : 0,
+                            pointerValid ? static_cast<double>(imguiMousePos.x) : -1.0,
+                            pointerValid ? static_cast<double>(imguiMousePos.y) : -1.0);
+  }
   {
     const ViewportState& viewport = interactionController_.viewport();
     const Box2d documentRect = viewport.imageScreenRect();
@@ -6615,7 +6643,12 @@ void EditorShell::recordFrameTelemetry(
         viewport.zoom,
         static_cast<double>(renderCoordinator_.documentCanvasCommitTotal()),
         static_cast<double>(renderCoordinator_.overviewInfillRenderTotal()));
-    PublishOverlayStats(compositorTileOverlay_ ? 1 : 0, geometryDebugOverlay_ ? 1 : 0);
+    PublishOverlayStats(
+        compositorTileOverlay_ ? 1 : 0, geometryDebugOverlay_ ? 1 : 0,
+        renderCoordinator_.immediateOverlaySnapshot().has_value() ? 1 : 0,
+        app_.hasDocument() ? static_cast<double>(app_.document().currentFrameVersion()) : -1.0,
+        static_cast<double>(renderCoordinator_.displayedDocVersionForDiagnostics()),
+        static_cast<double>(renderCoordinator_.overlayVersionGateSuppressionTotalForDiagnostics()));
   }
   AccumulateFrameLoopPhaseCost(
       mainFrameCost.layoutMs, mainFrameCost.menusDialogsMs, mainFrameCost.sourcePaneMs,

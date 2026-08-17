@@ -771,6 +771,7 @@ bool RenderCoordinator::rasterizeOverlayForPresentation(
   // blink the caret/selection chrome off for the whole typing or drafting burst.
   if (displayedDocVersion_ != 0u && currentVersion > displayedDocVersion_ &&
       !hasPresentationProjection && !allowLiveGeometryOverlay) {
+    ++overlayVersionGateSuppressionTotal_;
     if (immediateOverlaySnapshot_.has_value() && lastOverlayVersion_ > displayedDocVersion_) {
       immediateOverlaySnapshot_.reset();
     }

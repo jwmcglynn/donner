@@ -15,6 +15,7 @@ import {
   type SplashPresentationFrame,
   type SplashToneCensus,
 } from "./canvas-color-stats";
+import { waitForAppliedPointer } from "./gesture-streams";
 
 declare global {
   interface Window {
@@ -40,11 +41,17 @@ declare global {
       pendingClick: boolean;
       selectedCount: number;
       workerBusy: boolean;
+      pointerX: number;
+      pointerY: number;
     };
     __donnerFrameLoopStats?: FrameLoopStats;
     __donnerOverlayStats?: {
       compositorTileOverlay: boolean;
       geometryDebugOverlay: boolean;
+      selectionChromeSnapshotPresent: boolean;
+      currentDocVersion: number;
+      displayedDocVersion: number;
+      overlayVersionGateSuppressions: number;
     };
     __donnerViewportStats?: ViewportStats;
   }
@@ -82,6 +89,8 @@ interface FrameLoopStats {
   timerTriggeredFrames: number;
   workerOnlyFrames: number;
   uiFrameMsSamples: number[];
+  /** Page-clock arrival time of the latest frame's sample. */
+  lastFrameAtMs?: number;
 }
 
 // Shared CI runners execute this suite 2-4x slower than local development
@@ -447,15 +456,41 @@ async function openBasicShapes(page: Page): Promise<{
     .toBeGreaterThan(beforeSampleResults);
   await waitForBrowserComposite(page);
 
-  return {
-    canvasBounds,
-    documentClip: {
-      x: canvasBounds.x + 280,
-      y: canvasBounds.y + 250,
-      width: 660,
-      height: 430,
-    },
+  const documentClip = {
+    x: canvasBounds.x + 280,
+    y: canvasBounds.y + 250,
+    width: 660,
+    height: 430,
   };
+  // A completed worker result is not yet a presented document. The counter
+  // above advances when the app thread polls the raster off the worker, at
+  // least one UI frame before that frame reaches the browser composite - and
+  // a result the presenter drops (its raster viewport was superseded while it
+  // was in flight) advances the counter without presenting anything, leaving
+  // the sample picker on screen. On a loaded runner that gap spans several
+  // captures. Wait for the pixels every caller is about to measure: the Basic
+  // Shapes blue rounded rectangle inside the render pane.
+  await expect
+    .poll(
+      async () => {
+        const shot = await page.screenshot({ clip: documentClip });
+        const bounds = readEditorPixelBoundsFromPng(shot, "basic-blue", documentClip, {
+          minX: 0,
+          minY: 0,
+          maxX: documentClip.width,
+          maxY: documentClip.height,
+        });
+        return bounds === null ? 0 : bounds.pixels;
+      },
+      {
+        message: "expected the presented render pane to show the Basic Shapes blue rectangle",
+        timeout: scaledMs(5_000),
+        intervals: [16, 25, 50, 100],
+      },
+    )
+    .toBeGreaterThan(0);
+
+  return { canvasBounds, documentClip };
 }
 
 async function toggleViewMenuItem(page: Page, canvasX: number, itemY: number): Promise<void> {
@@ -786,6 +821,10 @@ test("Firefox keeps the dragged shape and its selection outline in every drag fr
   // readiness explicitly rather than sleeping for it.
   await waitForBrowserComposite(page);
   await page.mouse.move(dragStart.x, dragStart.y);
+  await waitForAppliedPointer(page, dragStart, {
+    message: "drag press",
+    timeoutMs: scaledMs(4_000),
+  });
   await waitForPressReadiness(page, "drag press");
   const resultsBeforePress = await page.evaluate(
     () => window.__donnerWorkerStats?.completedResults || 0,
@@ -978,6 +1017,10 @@ test("Firefox never exposes the checkerboard while dragging a Splash letter", as
   // below then confirmed against byte-identical bounds.
   const dragStart = splashDocumentToPage(viewport, kSplashLetterD.stemPress);
   await page.mouse.move(dragStart.x, dragStart.y);
+  await waitForAppliedPointer(page, dragStart, {
+    message: "Splash drag press",
+    timeoutMs: scaledMs(4_000),
+  });
   await waitForPressReadiness(page, "Splash drag press");
   const resultsBeforePress = await page.evaluate(
     () => window.__donnerWorkerStats?.completedResults || 0,
@@ -1002,7 +1045,22 @@ test("Firefox never exposes the checkerboard while dragging a Splash letter", as
   // after that worker result. Wait on the actual visible outline, bounded. A
   // genuinely wrong selection still never puts an outline in the letter
   // corridor and fails below with the final full-document capture attached.
+  // Each retake logs the editor's published frame-loop and overlay state so a
+  // missing outline is attributable: a parked frame counter with the chrome
+  // snapshot present means the outline was drawn but never presented; a
+  // growing suppression counter means the version gate hid it; an advancing
+  // frame counter with the snapshot absent means the chrome was genuinely
+  // lost.
+  const readOutlineWaitProbe = () =>
+    page.evaluate(() => ({
+      atMs: Math.round(performance.now()),
+      completedResults: window.__donnerWorkerStats?.completedResults || 0,
+      overlay: window.__donnerOverlayStats,
+      renderedFrames: window.__donnerMainLoopRenderedFrames || 0,
+    }));
+  const outlineWaitTimeline: Array<Awaited<ReturnType<typeof readOutlineWaitProbe>>> = [];
   let pressFrame = await captureSplashDragFrame(page, documentRegion, letterWindow, "press");
+  outlineWaitTimeline.push(await readOutlineWaitProbe());
   const pressOutlineDeadline = Date.now() + scaledMs(750);
   while (pressFrame.outline === null && Date.now() < pressOutlineDeadline) {
     await waitForBrowserComposite(page);
@@ -1012,6 +1070,7 @@ test("Firefox never exposes the checkerboard while dragging a Splash letter", as
       letterWindow,
       "press outline",
     );
+    outlineWaitTimeline.push(await readOutlineWaitProbe());
   }
   expect(pressFrame.letter, "the press lost the Splash letter").not.toBeNull();
   if (pressFrame.outline === null) {
@@ -1038,7 +1097,7 @@ test("Firefox never exposes the checkerboard while dragging a Splash letter", as
             worker: window.__donnerWorkerStats,
           })),
         )
-      }`,
+      } outlineWaitTimeline=${JSON.stringify(outlineWaitTimeline)}`,
   ).not.toBeNull();
   const letterAtRest = pressFrame.letter!;
   const outlineAtRest = pressFrame.outline!;

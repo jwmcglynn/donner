@@ -750,3 +750,57 @@ export async function burstZoomStorm(
   totals.meanIntervalMs = dispatched === 0 ? 0 : totals.elapsedMs / dispatched;
   return totals;
 }
+
+/**
+ * Wait until the editor's input processing has the pointer at `target`, in
+ * page CSS pixels.
+ *
+ * A DOM mouse move reaches the editor's app thread through the proxying
+ * queue, so a press dispatched right behind it can be processed before the
+ * move has been applied. The press is then hit-tested at the PREVIOUS pointer
+ * position and silently selects or grabs whatever sits there - on a loaded
+ * runner this turned "press the Splash letter stem" into "select the sunburst
+ * ellipse under the pointer's old position". The editor publishes the pointer
+ * position each frame's input processing actually used
+ * (`__donnerInteractionStats.pointerX/pointerY`), so a press can wait for its
+ * own aiming move to land instead of trusting event-dispatch order across
+ * threads. The tolerance absorbs whole-pixel rounding of synthetic event
+ * coordinates.
+ */
+export async function waitForAppliedPointer(
+  page: Page,
+  target: { x: number; y: number },
+  options: { timeoutMs: number; message: string },
+): Promise<void> {
+  const deadline = Date.now() + options.timeoutMs;
+  let applied = { x: -1, y: -1 };
+  let lastDispatchAt = Date.now();
+  for (;;) {
+    applied = await page.evaluate(() => {
+      const stats = (window as unknown as {
+        __donnerInteractionStats?: { pointerX?: number; pointerY?: number };
+      }).__donnerInteractionStats;
+      return { x: stats?.pointerX ?? -1, y: stats?.pointerY ?? -1 };
+    });
+    if (Math.hypot(applied.x - target.x, applied.y - target.y) <= 1.5) {
+      return;
+    }
+    if (Date.now() >= deadline) {
+      break;
+    }
+    // A real pointer emits a stream of moves, so no single event is
+    // load-bearing; only a synthetic pointer jumps somewhere in exactly one
+    // event. Re-dispatch the move while waiting so one event lost in a
+    // congested pipeline cannot leave the pointer parked at its previous
+    // position forever.
+    if (Date.now() - lastDispatchAt >= 250) {
+      await page.mouse.move(target.x, target.y);
+      lastDispatchAt = Date.now();
+    }
+    await page.waitForTimeout(16);
+  }
+  throw new Error(
+    `${options.message}: the editor never applied the pointer move to `
+      + `(${target.x}, ${target.y}); last applied pointer (${applied.x}, ${applied.y})`,
+  );
+}

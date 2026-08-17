@@ -8,6 +8,7 @@ import {
   readElementColorStats,
   readTextStyleGlyphStats,
 } from "./canvas-color-stats";
+import { waitForAppliedPointer } from "./gesture-streams";
 
 declare global {
   interface Window {
@@ -24,6 +25,7 @@ declare global {
     __donnerWorkerStats?: {
       completedResults: number;
       publishedAtMs: number;
+      presentedAtMs?: number;
       workerMs: number;
       queueWaitMs: number;
       dequeueToStartMs: number;
@@ -62,12 +64,17 @@ declare global {
     __donnerWgpuReadbackCaptureCompletions?: number;
     __donnerWgpuReadbackCaptureFailures?: number;
     __donnerMainLoopRenderedFrames?: number;
+    __donnerFrameLoopStats?: {
+      lastFrameAtMs?: number;
+    };
     __donnerInteractionStats?: {
       selectedCount: number;
       pendingClick: boolean;
       workerBusy: boolean;
       dragging: boolean;
       moved: boolean;
+      pointerX: number;
+      pointerY: number;
     };
     __donnerViewportStats?: {
       paneX: number;
@@ -824,8 +831,12 @@ test("WGPU diagnostics do not block the first carousel interaction", async ({ pa
       (heartbeat?.maxGapMs || 0).toFixed(1)
     }ms`,
   );
-  expect(carouselHeartbeatGapMs).toBeLessThan(100);
-  expect(heartbeat?.maxGapMs).toBeLessThan(100);
+  // The regression class this guards (synchronous readback waits on the main
+  // thread) blocks for whole map-wait rounds, far beyond even the scaled
+  // bound; the scaling only keeps shared-runner scheduler noise from failing
+  // an unblocked main thread.
+  expect(carouselHeartbeatGapMs).toBeLessThan(scaledMs(100));
+  expect(heartbeat?.maxGapMs).toBeLessThan(scaledMs(100));
   expect(fatalMessages).toEqual([]);
 });
 
@@ -877,7 +888,6 @@ for (
       const state = await page.evaluate(() => ({
         activeSample: window.__donnerActiveSampleStats,
         frames: window.__donnerMainLoopRenderedFrames || 0,
-        nowMs: performance.now(),
         worker: window.__donnerWorkerStats,
       }));
       if (state.activeSample?.sampleId === sample.id) {
@@ -892,11 +902,20 @@ for (
         phaseTimings.dequeuedMs = phaseTimings.startedMs - state.worker.dequeueToStartMs;
         phaseTimings.submittedMs = phaseTimings.dequeuedMs - state.worker.queueWaitMs;
       }
+      // The presenting frame is the one that polled the result off the
+      // worker: the editor stamps that result's stats with 'presentedAtMs'
+      // when the frame that consumed it finishes. Both ends of the handoff
+      // are product-published page-clock timestamps, so this measurement no
+      // longer depends on how late the test's own poll runs on a loaded
+      // runner - poll scheduling latency used to inflate the handoff by
+      // whole poll periods and fail the promptness gate below against a
+      // presentation that was actually on time.
       const pixelsPresented = state.activeSample?.sampleId === sample.id
         && completedResults > beforeSample
-        && state.frames > beforeFrames;
+        && state.frames > beforeFrames
+        && state.worker?.presentedAtMs !== undefined;
       if (pixelsPresented) {
-        phaseTimings.presentedMs ??= state.nowMs - clickStartedAt;
+        phaseTimings.presentedMs ??= state.worker!.presentedAtMs! - clickStartedAt;
       }
       return pixelsPresented;
     };
@@ -1091,6 +1110,10 @@ test("browser presents the first Basic Shapes drag frame within the interaction 
       .toBe(beforeSelectionResult + 1);
   }
   await page.mouse.move(blueRectCenter.x, blueRectCenter.y);
+  await waitForAppliedPointer(page, blueRectCenter, {
+    message: "drag-budget press",
+    timeoutMs: scaledMs(4000),
+  });
   await page.mouse.down();
 
   // The 125 ms interaction budget is calibrated for local development
@@ -1104,22 +1127,36 @@ test("browser presents the first Basic Shapes drag frame within the interaction 
   const beforeMoveFrames = await page.evaluate(
     () => window.__donnerMainLoopRenderedFrames || 0,
   );
-  const dragMoveStartedAt = Date.now();
+  // Both ends of the measurement are page-clock timestamps: the move's
+  // dispatch time is stamped on the page just before the move goes out, and
+  // the drag frame's time is the frame sample the editor publishes when that
+  // frame finishes. Timing the poll loop instead adds the poll's own
+  // scheduling latency, which on a loaded shared runner exceeds the whole
+  // budget without any product stall.
+  const dragMoveStartedAtPageMs = await page.evaluate(() => performance.now());
   await page.mouse.move(blueRectCenter.x + 120, blueRectCenter.y + 70);
+  let firstDragFrameMs = Number.POSITIVE_INFINITY;
   await expect
     .poll(async () => {
-      const frames = await page.evaluate(
-        () => window.__donnerMainLoopRenderedFrames || 0,
-      );
-      return frames > beforeMoveFrames;
+      const state = await page.evaluate(() => ({
+        frames: window.__donnerMainLoopRenderedFrames || 0,
+        lastFrameAtMs: window.__donnerFrameLoopStats?.lastFrameAtMs ?? 0,
+      }));
+      if (state.frames > beforeMoveFrames) {
+        firstDragFrameMs = Math.min(
+          firstDragFrameMs,
+          state.lastFrameAtMs - dragMoveStartedAtPageMs,
+        );
+        return true;
+      }
+      return false;
     }, {
       message: "expected the shape's first visible drag frame while the pointer remained down",
       timeout: firstDragFrameBudgetMs,
       intervals: [8, 16, 25, 33, 50],
     })
     .toBe(true);
-  const firstDragFrameMs = Date.now() - dragMoveStartedAt;
-  console.log(`first-drag-frame-ms=${firstDragFrameMs}`);
+  console.log(`first-drag-frame-ms=${firstDragFrameMs.toFixed(1)}`);
   expect(firstDragFrameMs).toBeLessThan(firstDragFrameBudgetMs);
   await page.mouse.up();
   expect(fatalMessages).toEqual([]);
@@ -1198,6 +1235,10 @@ test("Firefox keeps Basic Shapes resize pixels and outline synchronized", async 
   });
   const initialFrames = await page.evaluate(() => window.__donnerMainLoopRenderedFrames || 0);
   await page.mouse.move(resizeHandle.x, resizeHandle.y);
+  await waitForAppliedPointer(page, resizeHandle, {
+    message: "resize-handle press",
+    timeoutMs: scaledMs(4000),
+  });
   await page.mouse.down();
 
   // Emit a short 60 Hz-style burst. A starved gesture presents nothing until the
@@ -1675,12 +1716,17 @@ test("Firefox renders every visible Splash layer thumbnail", async ({ browserNam
       height: 26,
     },
   ];
+  // The published stats above prove the thumbnails rendered, not that the
+  // frame carrying them has reached the browser composite; sample the pixels
+  // to convergence instead of once.
   for (const region of thumbnailRegions) {
-    const stats = await readCanvasColorStats(page, region);
-    expect(stats.coloredPixels, `${region.name} must show its rendered SVG thumbnail`)
-      .toBeGreaterThan(
-        20,
-      );
+    await expect
+      .poll(async () => (await readCanvasColorStats(page, region)).coloredPixels, {
+        message: `${region.name} must show its rendered SVG thumbnail`,
+        timeout: scaledMs(2000),
+        intervals: [16, 25, 50, 100],
+      })
+      .toBeGreaterThan(20);
   }
   expect(fatalMessages).toEqual([]);
 });

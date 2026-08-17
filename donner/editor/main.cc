@@ -132,6 +132,18 @@ EM_JS(void, RecordWasmFrameLoopSample, (int triggerBits, double frameMs), {
   if (stats['uiFrameMsSamples'].length < kMaxSamples) {
     stats['uiFrameMsSamples'].push(frameMs);
   }
+  // Page-clock time of the latest frame's sample, so probes can measure
+  // result-to-frame handoffs from product timestamps rather than from their
+  // own poll scheduling.
+  stats['lastFrameAtMs'] = performance.now();
+  // Each worker result publishes a fresh stats object with no 'presentedAtMs';
+  // the first frame sample after it is the end of the frame that consumed the
+  // result. Stamp it exactly once so probes can pair the two product
+  // timestamps.
+  const workerStats = window['__donnerWorkerStats'];
+  if (workerStats && workerStats['presentedAtMs'] === undefined) {
+    workerStats['presentedAtMs'] = performance.now();
+  }
 });
 
 // Publish the C++-owned pinch policy so the page's WebKit gesture bridge

@@ -1085,6 +1085,21 @@ void RecordFrameSample(int triggerBits, double frameMs, int callbacks) {
         if (stats['uiFrameMsSamples'].length < kMaxSamples) {
           stats['uiFrameMsSamples'].push($1);
         }
+        // Page-clock arrival time of the latest frame's sample. The presenting
+        // frame publishes its worker stats and this sample through the same
+        // in-order proxy queue, so a probe can measure the result-to-frame
+        // handoff from product timestamps instead of from when its own poll
+        // happened to run.
+        stats['lastFrameAtMs'] = performance.now();
+        // Each worker result publishes a fresh stats object with no
+        // 'presentedAtMs'; the first frame sample to arrive after it is the
+        // end of the frame that consumed that result, so stamp it exactly
+        // once. Probes read the pair to measure how promptly a completed
+        // result reached the canvas without racing their own poll cadence.
+        const workerStats = window['__donnerWorkerStats'];
+        if (workerStats && workerStats['presentedAtMs'] === undefined) {
+          workerStats['presentedAtMs'] = performance.now();
+        }
         window['__donnerMainLoopRenderedFrames'] =
             Number(window['__donnerMainLoopRenderedFrames'] || 0) + 1;
         window['__donnerHeapBytes'] = $3;
