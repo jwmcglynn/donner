@@ -11,6 +11,9 @@
 #if defined(TINYSKIA_CFG_IF_SIMD_NATIVE) && (defined(__ARM_NEON) || defined(__ARM_NEON__))
 #include <arm_neon.h>
 #define TINY_SKIA_SIMD_NEON 1
+#elif defined(TINYSKIA_CFG_IF_SIMD_NATIVE) && defined(__wasm_simd128__)
+#include <wasm_simd128.h>
+#define TINY_SKIA_SIMD_WASM_SIMD128 1
 #elif defined(TINYSKIA_CFG_IF_SIMD_NATIVE) && defined(__SSE2__)
 #include <emmintrin.h>
 #define TINY_SKIA_SIMD_SSE2 1
@@ -30,6 +33,9 @@ struct ScaledDivider {
   std::uint32_t factor;
   std::uint32_t half;  // divisor/2 for rounding
 
+  /// Build a divider for `divisor`, which must be at least 2: the reciprocal
+  /// of 1 is 2^32, which does not fit in the 32-bit factor. Callers with a
+  /// possible divisor of 1 have nothing to divide and should skip the pass.
   explicit ScaledDivider(std::uint32_t divisor)
       : factor(static_cast<std::uint32_t>(
             (static_cast<std::uint64_t>(1) << 32) / divisor +
@@ -97,6 +103,48 @@ struct Vec4u32 {
     uint32x2_t lo_hi = vshrn_n_u64(lo, 32);
     uint32x2_t hi_hi = vshrn_n_u64(hi, 32);
     return Vec4u32(vcombine_u32(lo_hi, hi_hi));
+  }
+
+#elif defined(TINY_SKIA_SIMD_WASM_SIMD128)
+  v128_t v;
+
+  Vec4u32() : v(wasm_u32x4_splat(0)) {}
+  explicit Vec4u32(v128_t val) : v(val) {}
+  static Vec4u32 splat(std::uint32_t x) { return Vec4u32(wasm_u32x4_splat(x)); }
+
+  /// Load 4 bytes from ptr, zero-extend each to uint32.
+  static Vec4u32 loadFromU8(const std::uint8_t* ptr) {
+    // Load 4 bytes into the low lane with the rest zeroed (an unaligned load
+    // is well defined here), then widen u8 -> u16 -> u32.
+    v128_t b8 = wasm_v128_load32_zero(ptr);
+    v128_t b16 = wasm_u16x8_extend_low_u8x16(b8);
+    return Vec4u32(wasm_u32x4_extend_low_u16x8(b16));
+  }
+
+  /// Narrow uint32 lanes to uint8 and store 4 bytes.
+  void storeToU8(std::uint8_t* ptr) const {
+    // wasm128 only offers saturating narrows, so gather the low byte of every
+    // 32-bit lane with a byte shuffle instead. That keeps the scalar
+    // static_cast<uint8_t> truncation semantics exactly.
+    v128_t packed = wasm_i8x16_shuffle(v, v, 0, 4, 8, 12, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+    wasm_v128_store32_lane(ptr, packed, 0);
+  }
+
+  Vec4u32 operator+(Vec4u32 o) const { return Vec4u32(wasm_i32x4_add(v, o.v)); }
+  Vec4u32 operator-(Vec4u32 o) const { return Vec4u32(wasm_i32x4_sub(v, o.v)); }
+  Vec4u32& operator+=(Vec4u32 o) { v = wasm_i32x4_add(v, o.v); return *this; }
+  Vec4u32& operator-=(Vec4u32 o) { v = wasm_i32x4_sub(v, o.v); return *this; }
+
+  /// ScaledDivider: (v + half) * factor >> 32 for each lane.
+  [[nodiscard]] Vec4u32 scaledDivide(const ScaledDivider& d) const {
+    v128_t rounded = wasm_i32x4_add(v, wasm_u32x4_splat(d.half));
+    v128_t factor = wasm_u32x4_splat(d.factor);
+    // Widening 32x32 -> 64 unsigned multiplies, then keep the high half of
+    // each 64-bit product. Lanes are little-endian, so the high half of
+    // 64-bit lane n is 32-bit lane 2n+1 and one shuffle collects all four.
+    v128_t lo = wasm_u64x2_extmul_low_u32x4(rounded, factor);
+    v128_t hi = wasm_u64x2_extmul_high_u32x4(rounded, factor);
+    return Vec4u32(wasm_i32x4_shuffle(lo, hi, 1, 3, 5, 7));
   }
 
 #elif defined(TINY_SKIA_SIMD_SSE2)
@@ -229,6 +277,55 @@ struct Vec4f32 {
     return Vec4f32(vminq_f32(vmaxq_f32(v, vdupq_n_f32(0.0f)), maxVal.v));
   }
 
+#elif defined(TINY_SKIA_SIMD_WASM_SIMD128)
+  v128_t v;
+
+  Vec4f32() : v(wasm_f32x4_splat(0.0f)) {}
+  explicit Vec4f32(v128_t val) : v(val) {}
+  static Vec4f32 splat(float x) { return Vec4f32(wasm_f32x4_splat(x)); }
+
+  static Vec4f32 load(const float* ptr) { return Vec4f32(wasm_v128_load(ptr)); }
+  void store(float* ptr) const { wasm_v128_store(ptr, v); }
+
+  Vec4f32 operator+(Vec4f32 o) const { return Vec4f32(wasm_f32x4_add(v, o.v)); }
+  Vec4f32 operator-(Vec4f32 o) const { return Vec4f32(wasm_f32x4_sub(v, o.v)); }
+  Vec4f32 operator*(Vec4f32 o) const { return Vec4f32(wasm_f32x4_mul(v, o.v)); }
+  Vec4f32& operator+=(Vec4f32 o) { v = wasm_f32x4_add(v, o.v); return *this; }
+  Vec4f32& operator-=(Vec4f32 o) { v = wasm_f32x4_sub(v, o.v); return *this; }
+
+  // wasm128's f32x4.min/max are IEEE minimum/maximum: they canonicalize NaN
+  // and order signed zeros. f32x4.pmin/pmax are plain lane selects defined as
+  // pmin(x, y) = y < x ? y : x and pmax(x, y) = x < y ? y : x, so passing the
+  // operands as (b, a) reproduces the scalar `a < b ? a : b` and
+  // `a > b ? a : b` selections bit for bit, including NaN and signed zeros.
+  static Vec4f32 min(Vec4f32 a, Vec4f32 b) { return Vec4f32(wasm_f32x4_pmin(b.v, a.v)); }
+  static Vec4f32 max(Vec4f32 a, Vec4f32 b) { return Vec4f32(wasm_f32x4_pmax(b.v, a.v)); }
+
+  // The scalar clamps are a nested `v < lo ? lo : (v > hi ? hi : v)`, not a
+  // min/max composition, and the two differ on NaN and on a negative zero
+  // input. pmax(v, lo) is `v < lo ? lo : v` and pmin(t, hi) is
+  // `hi < t ? hi : t`, so this operand order reproduces the scalar result bit
+  // for bit. The NEON and SSE2 branches compose min/max here instead and
+  // diverge from scalar for those inputs; that behaviour predates this branch
+  // and is left alone.
+  Vec4f32 clamp01() const {
+    return Vec4f32(
+        wasm_f32x4_pmin(wasm_f32x4_pmax(v, wasm_f32x4_splat(0.0f)), wasm_f32x4_splat(1.0f)));
+  }
+
+  /// Multiply-add: a * b + c.
+  static Vec4f32 fmadd(Vec4f32 a, Vec4f32 b, Vec4f32 c) {
+    // wasm128 has no fused multiply-add (that is a relaxed-SIMD instruction),
+    // so this is a separate multiply and add. Each lane therefore rounds
+    // twice, exactly like the scalar fallback.
+    return Vec4f32(wasm_f32x4_add(wasm_f32x4_mul(a.v, b.v), c.v));
+  }
+
+  /// Clamp each lane to [0, maxVal].
+  Vec4f32 clampMax(Vec4f32 maxVal) const {
+    return Vec4f32(wasm_f32x4_pmin(wasm_f32x4_pmax(v, wasm_f32x4_splat(0.0f)), maxVal.v));
+  }
+
 #elif defined(TINY_SKIA_SIMD_SSE2)
   __m128 v;
 
@@ -335,6 +432,20 @@ struct Vec4u8 {
 
   static Vec4u8 min(Vec4u8 a, Vec4u8 b) { return Vec4u8(vmin_u8(a.v, b.v)); }
   static Vec4u8 max(Vec4u8 a, Vec4u8 b) { return Vec4u8(vmax_u8(a.v, b.v)); }
+
+#elif defined(TINY_SKIA_SIMD_WASM_SIMD128)
+  // Pack 4 bytes in the low 32 bits of a v128; the upper 12 bytes stay zero.
+  v128_t v;
+
+  Vec4u8() : v(wasm_u8x16_splat(0)) {}
+  explicit Vec4u8(v128_t val) : v(val) {}
+
+  static Vec4u8 load(const std::uint8_t* ptr) { return Vec4u8(wasm_v128_load32_zero(ptr)); }
+
+  void store(std::uint8_t* ptr) const { wasm_v128_store32_lane(ptr, v, 0); }
+
+  static Vec4u8 min(Vec4u8 a, Vec4u8 b) { return Vec4u8(wasm_u8x16_min(a.v, b.v)); }
+  static Vec4u8 max(Vec4u8 a, Vec4u8 b) { return Vec4u8(wasm_u8x16_max(a.v, b.v)); }
 
 #elif defined(TINY_SKIA_SIMD_SSE2)
   // Pack 4 bytes in the low 32 bits of an __m128i.

@@ -9,7 +9,11 @@ _SIMD_NATIVE_X86_COPTS = select({
     "//conditions:default": [],
 })
 
-_SIMD_NATIVE_WASM_COPTS = select({
+# Exported so the paired native/scalar test rule can compile test translation
+# units with the same wasm SIMD feature as the library. Without it a test TU
+# built for wasm32 has no __wasm_simd128__ and silently exercises the scalar
+# fallback instead of the branch under test.
+SIMD_NATIVE_WASM_COPTS = select({
     "//bazel/config:simd_native_wasm32": ["-msimd128"],
     "//conditions:default": [],
 })
@@ -39,7 +43,7 @@ def tiny_skia_cc_library(
             ["-std=c++20", "-ffp-contract=off", "-Wall"] +
             _FORCED_PERF_COPTS +
             _SIMD_NATIVE_X86_COPTS +
-            _SIMD_NATIVE_WASM_COPTS +
+            SIMD_NATIVE_WASM_COPTS +
             copts
         ),
         defines = defines,
@@ -52,6 +56,6 @@ def tiny_skia_cc_binary(name, srcs, deps = [], copts = [], **kwargs):
         name = name,
         srcs = srcs,
         deps = deps,
-        copts = ["-std=c++20"] + _SIMD_NATIVE_X86_COPTS + _SIMD_NATIVE_WASM_COPTS + copts,
+        copts = ["-std=c++20"] + _SIMD_NATIVE_X86_COPTS + SIMD_NATIVE_WASM_COPTS + copts,
         **kwargs
     )
