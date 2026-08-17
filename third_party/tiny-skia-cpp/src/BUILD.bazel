@@ -27,3 +27,24 @@ simd_mode_dep(
     simd_mode = "scalar",
     visibility = ["//visibility:public"],
 )
+
+# The filter library is layered on top of tiny_skia_core, and every tiny-skia
+# library is alwayslink. A binary that links a simd_mode-transitioned core
+# (tiny_skia_lib_native / tiny_skia_lib_scalar) together with an
+# untransitioned //src/tiny_skia/filter therefore links two configurations of
+# tiny_skia_core and fails with duplicate symbols. These wrappers pin the
+# filter library to the same simd_mode as the core aggregate so mixed-mode
+# links cannot happen.
+simd_mode_dep(
+    name = "tiny_skia_filter_native",
+    dep = "//src/tiny_skia/filter",
+    simd_mode = "native",
+    visibility = ["//visibility:public"],
+)
+
+simd_mode_dep(
+    name = "tiny_skia_filter_scalar",
+    dep = "//src/tiny_skia/filter",
+    simd_mode = "scalar",
+    visibility = ["//visibility:public"],
+)

@@ -7,10 +7,13 @@ exports_files([
     "LICENSE",
 ])
 
-# Convenience alias: native SIMD on the current platform (AVX2+FMA on x86,
-# NEON on ARM64, scalar on everything else). Library users can depend on
-# //:tiny_skia without caring about the native/scalar distinction.
+# Convenience alias: follows the //bazel/config:simd_mode flag (default
+# native, so AVX2+FMA on x86, NEON on ARM64, wasm SIMD128 on wasm32, scalar
+# elsewhere). Deliberately not the pinned //src:tiny_skia_lib_native target:
+# pinning one dep while another tiny-skia dep follows the flag links two
+# configurations of the same alwayslink archives into one binary and fails
+# with duplicate symbols when simd_mode=scalar is selected.
 alias(
     name = "tiny_skia",
-    actual = "//src:tiny_skia_lib_native",
+    actual = "//src:tiny_skia_lib",
 )

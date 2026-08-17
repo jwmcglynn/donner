@@ -2,6 +2,8 @@
 
 load("//:bazel/defs.bzl", "tiny_skia_cc_library")
 
+# Unreachable default kept empty to fail loudly; see the matching select in
+# //src/tiny_skia:BUILD.bazel.
 _SIMD_MODE_DEFINES = select({
     "//bazel/config:simd_native": ["TINYSKIA_CFG_IF_SIMD_NATIVE=1"],
     "//bazel/config:simd_scalar": ["TINYSKIA_CFG_IF_SIMD_SCALAR=1"],

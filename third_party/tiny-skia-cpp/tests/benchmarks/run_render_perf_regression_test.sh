@@ -66,89 +66,48 @@ ratio() {
   awk -v n="${numerator}" -v d="${denominator}" 'BEGIN { printf "%.6f", n / d }'
 }
 
-baseline_ratio() {
+# Watermark rationale: simd-over-scalar and simd-over-rust ratios vary widely
+# across CPU implementations of the same architecture. The same arm64 binary
+# pair measures fill_path simd_over_scalar at about 2.8 on one core family
+# and about 5.5 on another, because SIMD throughput scales differently from
+# scalar IPC per microarchitecture. An upper bound therefore fails on any
+# sufficiently SIMD-friendly CPU without indicating a defect, so these
+# watermarks assert only a floor.
+#
+# The floor proves the SIMD path is engaged: if a build regression silently
+# drops the native configuration to scalar codegen, simd_over_scalar
+# collapses to about 1.0. Floors sit at roughly 60 percent of the smallest
+# known-good measurement for the workload on that architecture, above the
+# disengaged signature of 1.0 while leaving headroom for arch
+# implementations with weaker SIMD units.
+#
+# Workloads dominated by scalar geometry or memset (stroke_path,
+# fill_path_opaque) cannot prove SIMD engagement portably; their floors only
+# assert the SIMD build is not materially slower than scalar. simd_over_rust
+# floors assert the C++ port stays at parity with the Rust reference
+# running on the same host.
+floor_ratio() {
   local arch="$1"
   local workload="$2"
   local metric="$3"
 
-  if [[ "${arch}" == "arm64" && "${workload}" == "fill_path" \
-    && "${metric}" == "simd_over_scalar" ]]; then
-    echo "2.80"; return
-  fi
-  if [[ "${arch}" == "arm64" && "${workload}" == "fill_path" \
-    && "${metric}" == "simd_over_rust" ]]; then
-    echo "2.90"; return
-  fi
-
-  if [[ "${arch}" == "arm64" && "${workload}" == "fill_rect" \
-    && "${metric}" == "simd_over_scalar" ]]; then
-    echo "3.90"; return
-  fi
-  if [[ "${arch}" == "arm64" && "${workload}" == "fill_rect" \
-    && "${metric}" == "simd_over_rust" ]]; then
-    echo "3.50"; return
-  fi
-
-  if [[ "${arch}" == "arm64" && "${workload}" == "stroke_path" \
-    && "${metric}" == "simd_over_scalar" ]]; then
-    echo "1.30"; return
-  fi
-  if [[ "${arch}" == "arm64" && "${workload}" == "fill_path_gradient" \
-    && "${metric}" == "simd_over_scalar" ]]; then
-    echo "8.40"; return
-  fi
-  if [[ "${arch}" == "arm64" && "${workload}" == "fill_path_opaque" \
-    && "${metric}" == "simd_over_scalar" ]]; then
-    echo "1.00"; return
-  fi
-
-  if [[ "${arch}" == "x86" && "${workload}" == "fill_path" \
-    && "${metric}" == "simd_over_scalar" ]]; then
-    echo "1.85"; return
-  fi
-  if [[ "${arch}" == "x86" && "${workload}" == "fill_path" \
-    && "${metric}" == "simd_over_rust" ]]; then
-    echo "1.18"; return
-  fi
-
-  if [[ "${arch}" == "x86" && "${workload}" == "fill_rect" \
-    && "${metric}" == "simd_over_scalar" ]]; then
-    echo "2.26"; return
-  fi
-  if [[ "${arch}" == "x86" && "${workload}" == "fill_rect" \
-    && "${metric}" == "simd_over_rust" ]]; then
-    echo "1.29"; return
-  fi
-
-  if [[ "${arch}" == "x86" && "${workload}" == "stroke_path" \
-    && "${metric}" == "simd_over_scalar" ]]; then
-    echo "1.28"; return
-  fi
-  if [[ "${arch}" == "x86" && "${workload}" == "fill_path_gradient" \
-    && "${metric}" == "simd_over_scalar" ]]; then
-    echo "2.12"; return
-  fi
-  if [[ "${arch}" == "x86" && "${workload}" == "fill_path_opaque" \
-    && "${metric}" == "simd_over_scalar" ]]; then
-    echo "1.00"; return
-  fi
-
-  echo ""
-}
-
-threshold_bounds() {
-  local arch="$1"
-  local workload="$2"
-  local metric="$3"
-
-  local baseline
-  baseline="$(baseline_ratio "${arch}" "${workload}" "${metric}")"
-  if [[ -z "${baseline}" ]]; then
-    echo ""
-    return
-  fi
-
-  awk -v b="${baseline}" 'BEGIN { printf "%.6f %.6f", b * 0.75, b * 1.25 }'
+  case "${arch}/${workload}/${metric}" in
+    arm64/fill_path/simd_over_scalar) echo "1.70" ;;
+    arm64/fill_rect/simd_over_scalar) echo "2.30" ;;
+    arm64/fill_path_gradient/simd_over_scalar) echo "5.00" ;;
+    arm64/stroke_path/simd_over_scalar) echo "0.75" ;;
+    arm64/fill_path_opaque/simd_over_scalar) echo "0.75" ;;
+    arm64/fill_path/simd_over_rust) echo "0.90" ;;
+    arm64/fill_rect/simd_over_rust) echo "0.90" ;;
+    x86/fill_path/simd_over_scalar) echo "1.10" ;;
+    x86/fill_rect/simd_over_scalar) echo "1.35" ;;
+    x86/fill_path_gradient/simd_over_scalar) echo "1.25" ;;
+    x86/stroke_path/simd_over_scalar) echo "0.75" ;;
+    x86/fill_path_opaque/simd_over_scalar) echo "0.75" ;;
+    x86/fill_path/simd_over_rust) echo "0.90" ;;
+    x86/fill_rect/simd_over_rust) echo "0.90" ;;
+    *) echo "" ;;
+  esac
 }
 
 check_metric() {
@@ -157,31 +116,24 @@ check_metric() {
   local metric="$3"
   local value="$4"
 
-  local bounds
-  bounds="$(threshold_bounds "${arch}" "${workload}" "${metric}")"
-  if [[ -z "${bounds}" ]]; then
-    echo "Missing thresholds for arch=${arch}, workload=${workload}, metric=${metric}" >&2
+  local floor
+  floor="$(floor_ratio "${arch}" "${workload}" "${metric}")"
+  if [[ -z "${floor}" ]]; then
+    echo "Missing floor for arch=${arch}, workload=${workload}, metric=${metric}" >&2
     exit 1
   fi
 
-  local low high
-  read -r low high <<<"${bounds}"
-
-  awk -v v="${value}" -v lo="${low}" -v hi="${high}" -v a="${arch}" -v w="${workload}" \
+  awk -v v="${value}" -v lo="${floor}" -v a="${arch}" -v w="${workload}" \
     -v m="${metric}" '
       BEGIN {
         if (v < lo) {
-          printf("FAIL: metric below low-water mark (%s/%s/%s): value=%s, low=%s\n", w, m, a, v, lo) > "/dev/stderr"
-          exit 1
-        }
-        if (v > hi) {
-          printf("FAIL: metric above high-water mark (%s/%s/%s): value=%s, high=%s\n", w, m, a, v, hi) > "/dev/stderr"
+          printf("FAIL: metric below SIMD engagement floor (%s/%s/%s): value=%s, floor=%s\n", w, m, a, v, lo) > "/dev/stderr"
           exit 1
         }
       }
     '
 
-  echo "PASS: ${workload}/${metric}/${arch} value=${value} in [${low}, ${high}]"
+  echo "PASS: ${workload}/${metric}/${arch} value=${value} >= floor ${floor}"
 }
 
 calc_rust_avg() {

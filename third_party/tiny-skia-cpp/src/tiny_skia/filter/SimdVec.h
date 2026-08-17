@@ -11,7 +11,7 @@
 #if defined(TINYSKIA_CFG_IF_SIMD_NATIVE) && (defined(__ARM_NEON) || defined(__ARM_NEON__))
 #include <arm_neon.h>
 #define TINY_SKIA_SIMD_NEON 1
-#elif defined(__SSE2__)
+#elif defined(TINYSKIA_CFG_IF_SIMD_NATIVE) && defined(__SSE2__)
 #include <emmintrin.h>
 #define TINY_SKIA_SIMD_SSE2 1
 #endif
@@ -58,11 +58,13 @@ struct Vec4u32 {
 
   /// Load 4 bytes from ptr, zero-extend each to uint32.
   static Vec4u32 loadFromU8(const std::uint8_t* ptr) {
-    // Load 4 bytes into a uint8x8 (only low 4 used), widen to u16, then u32.
-    uint8x8_t b8 = vld1_lane_u32(reinterpret_cast<const std::uint32_t*>(ptr),
-                                  vdup_n_u32(0), 0);
-    // Reinterpret as u8x8, widen
-    uint16x8_t b16 = vmovl_u8(vreinterpret_u8_u32(b8));
+    // Load 4 bytes into the low lane of a uint32x2, then reinterpret as
+    // uint8x8 (only low 4 bytes used) and widen to u16, then u32.
+    // vld1_lane_u32 returns uint32x2_t; keep that type until the explicit
+    // vreinterpret so the code is valid under GCC strict NEON typing rules.
+    uint32x2_t b32x2 = vld1_lane_u32(reinterpret_cast<const std::uint32_t*>(ptr),
+                                     vdup_n_u32(0), 0);
+    uint16x8_t b16 = vmovl_u8(vreinterpret_u8_u32(b32x2));
     uint32x4_t b32 = vmovl_u16(vget_low_u16(b16));
     return Vec4u32(b32);
   }
@@ -319,10 +321,11 @@ struct Vec4u8 {
   explicit Vec4u8(uint8x8_t val) : v(val) {}
 
   static Vec4u8 load(const std::uint8_t* ptr) {
-    uint8x8_t r = vdup_n_u8(0);
-    r = vld1_lane_u32(reinterpret_cast<const std::uint32_t*>(ptr),
-                      vreinterpret_u32_u8(r), 0);
-    return Vec4u8(vreinterpret_u8_u32(r));
+    // vld1_lane_u32 returns uint32x2_t; keep that type until the explicit
+    // vreinterpret so the code is valid under GCC strict NEON typing rules.
+    uint32x2_t r32 = vld1_lane_u32(reinterpret_cast<const std::uint32_t*>(ptr),
+                                   vdup_n_u32(0), 0);
+    return Vec4u8(vreinterpret_u8_u32(r32));
   }
 
   void store(std::uint8_t* ptr) const {
