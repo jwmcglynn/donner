@@ -52,6 +52,7 @@ extern "C" {
 #endif
 #include "donner/svg/renderer/geode/GeodeCallbackState.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
+#include "donner/svg/renderer/geode/GeodeGpuWait.h"
 #include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
 #endif
 
@@ -117,6 +118,29 @@ void OnEditorWgpuUncapturedError(WGPUDevice const* /*device*/, WGPUErrorType typ
   std::fprintf(stderr, "[Editor/WGPU] Uncaptured error (type=%d): %.*s\n", static_cast<int>(type),
                static_cast<int>(message.length), message.data ? message.data : "");
 }
+
+#ifndef __EMSCRIPTEN__
+/// Device-lost callback for the editor's WebGPU device. `userdata1` carries a
+/// retained shared reference to the lost-state flag that both Geode device
+/// wrappers built on this device observe, so a driver-reported loss and a
+/// bounded GPU wait timing out inside Geode converge on the same detectable
+/// condition. Fires at most once per device; a spontaneous delivery can
+/// outlive the EditorWindow, hence the retained shared state.
+void OnEditorWgpuDeviceLost(WGPUDevice const* /*device*/, WGPUDeviceLostReason reason,
+                            WGPUStringView message, void* userdata1, void* /*userdata2*/) {
+  const std::shared_ptr<donner::geode::GeodeDeviceLostState> state =
+      donner::geode::takeWgpuCallbackState<donner::geode::GeodeDeviceLostState>(userdata1);
+  if (reason == WGPUDeviceLostReason_Destroyed || reason == WGPUDeviceLostReason_InstanceDropped) {
+    // Expected teardown paths, not a driver failure.
+    return;
+  }
+  std::fprintf(stderr, "[Editor/WGPU] Device lost (reason=%d): %.*s\n", static_cast<int>(reason),
+               static_cast<int>(message.length), message.data ? message.data : "");
+  if (state) {
+    state->lost.store(true, std::memory_order_release);
+  }
+}
+#endif
 
 wgpu::Instance CreateEditorWgpuInstance() {
 #ifdef __EMSCRIPTEN__
@@ -275,11 +299,17 @@ void CopySurfaceTextureToReadbackBuffer(const wgpu::Texture& texture, const wgpu
   encoder.copyTextureToBuffer(src, dst, copySize);
 }
 
-bool MapReadbackBuffer(const wgpu::Device& device, const wgpu::Buffer& buffer, uint64_t size) {
-  // AllowSpontaneous + a bounded poll-yield loop: a timed waitAny cannot
-  // complete on the browser main thread, and the poll bailout means the
-  // callback can fire after this frame returns, so the state must be
-  // heap-retained until the callback consumes it.
+bool MapReadbackBuffer(const wgpu::Device& device, const wgpu::Buffer& buffer, uint64_t size,
+                       const std::shared_ptr<donner::geode::GeodeDevice>& geodeDevice) {
+  if (geodeDevice && geodeDevice->isDeviceLost()) {
+    // A lost device will never deliver the map; fail fast instead of
+    // spending another full wait bound on the editor thread.
+    return false;
+  }
+  // AllowSpontaneous + a bounded poll loop: a timed waitAny cannot complete
+  // on the browser main thread, and the wait bailing out means the callback
+  // can fire after this frame returns, so the state must be heap-retained
+  // until the callback consumes it.
   struct MapState {
     std::atomic<bool> done = false;
     std::atomic<bool> ok = false;
@@ -299,6 +329,9 @@ bool MapReadbackBuffer(const wgpu::Device& device, const wgpu::Buffer& buffer, u
   mapCb.mode = wgpu::CallbackMode::AllowSpontaneous;
   buffer.mapAsync(wgpu::MapMode::Read, 0, size, mapCb);
 
+#ifdef __EMSCRIPTEN__
+  // Browser: `poll` yields the thread for one browser task, so the loop is
+  // already bounded in time by the iteration cap.
   int pollCount = 0;
   while (!mapState->done.load(std::memory_order_acquire)) {
     device.poll(true, nullptr);
@@ -307,7 +340,23 @@ bool MapReadbackBuffer(const wgpu::Device& device, const wgpu::Buffer& buffer, u
       break;
     }
   }
-  return mapState->ok.load(std::memory_order_relaxed);
+#else
+  // Native: never ask the driver to block until the map completes; a hung
+  // driver would wedge the editor thread forever (worst case in
+  // uninterruptible kernel sleep). Poll non-blocking with a deadline and
+  // declare the device lost when the deadline expires.
+  const donner::geode::GpuWaitResult waitResult = donner::geode::BoundedGpuWait(
+      [&] {
+        device.poll(false, nullptr);
+        return mapState->done.load(std::memory_order_acquire);
+      },
+      donner::geode::kDefaultGpuWaitTimeout);
+  if (waitResult != donner::geode::GpuWaitResult::Complete && geodeDevice) {
+    geodeDevice->markDeviceLost("editor surface readback map did not complete within the bound");
+  }
+#endif
+  return mapState->done.load(std::memory_order_acquire) &&
+         mapState->ok.load(std::memory_order_relaxed);
 }
 #endif
 
@@ -894,6 +943,13 @@ struct EditorWindow::WgpuState {
   wgpu::CompositeAlphaMode alphaMode = wgpu::CompositeAlphaMode::Auto;
   std::shared_ptr<geode::GeodeDevice> geodeDevice;
   std::shared_ptr<geode::GeodeDevice> framebufferGeodeDevice;
+  /// Shared device-lost flag observed by both Geode wrappers above. On
+  /// native builds the WebGPU device-lost callback sets it, and bounded GPU
+  /// waits inside Geode set it on timeout, so both loss paths surface as one
+  /// condition. Created before the device so the callback can be registered
+  /// on the device descriptor.
+  std::shared_ptr<geode::GeodeDeviceLostState> deviceLostState =
+      std::make_shared<geode::GeodeDeviceLostState>();
 #ifdef __EMSCRIPTEN__
   std::shared_ptr<std::atomic_bool> smokeReadbackInFlight =
       std::make_shared<std::atomic_bool>(false);
@@ -1069,6 +1125,16 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
   deviceDesc.uncapturedErrorCallbackInfo.callback = OnEditorWgpuUncapturedError;
   deviceDesc.uncapturedErrorCallbackInfo.userdata1 = nullptr;
   deviceDesc.uncapturedErrorCallbackInfo.userdata2 = nullptr;
+#ifndef __EMSCRIPTEN__
+  // Route driver-reported device loss into the shared lost flag that the
+  // Geode wrappers below observe, so a real loss and a bounded-wait timeout
+  // converge on the same detectable condition.
+  deviceDesc.deviceLostCallbackInfo.mode = wgpu::CallbackMode::AllowSpontaneous;
+  deviceDesc.deviceLostCallbackInfo.callback = OnEditorWgpuDeviceLost;
+  deviceDesc.deviceLostCallbackInfo.userdata1 =
+      geode::retainWgpuCallbackState(wgpuState_->deviceLostState);
+  deviceDesc.deviceLostCallbackInfo.userdata2 = nullptr;
+#endif
   wgpuState_->device = wgpuState_->adapter.requestDevice(deviceDesc);
   if (!wgpuState_->device) {
     std::fprintf(stderr, "EditorWindow: failed to create WebGPU device\n");
@@ -1163,6 +1229,10 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
   embedConfig.adapter = wgpuState_->adapter;
 #endif
   embedConfig.textureFormat = wgpuState_->surfaceFormat;
+  // Both Geode wrappers share the editor's lost flag (the framebuffer config
+  // below is copied from this one), so a loss observed by either wrapper or
+  // by the device-lost callback is visible everywhere.
+  embedConfig.lostState = wgpuState_->deviceLostState;
   wgpuState_->geodeDevice = geode::GeodeDevice::CreateFromExternal(embedConfig);
   if (wgpuState_->geodeDevice == nullptr) {
     std::fprintf(stderr, "EditorWindow: GeodeDevice::CreateFromExternal failed\n");
@@ -1878,7 +1948,8 @@ void EditorWindow::endFrameImpl(svg::RendererBitmap* readback) {
     timing.readbackMs += ElapsedMs(readbackStart);
   }
   if (targetReadback != nullptr && readbackBuffer &&
-      MapReadbackBuffer(wgpuState_->device, readbackBuffer.get(), readbackBufferSize)) {
+      MapReadbackBuffer(wgpuState_->device, readbackBuffer.get(), readbackBufferSize,
+                        wgpuState_->framebufferGeodeDevice)) {
     const auto readbackStart = std::chrono::steady_clock::now();
     const uint8_t* mapped = static_cast<const uint8_t*>(
         readbackBuffer.get().getConstMappedRange(0, readbackBufferSize));

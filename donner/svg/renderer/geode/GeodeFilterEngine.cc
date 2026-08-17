@@ -113,8 +113,14 @@ struct FilterResourceArena {
     // force the submitted work to complete before recording continues. The
     // in-buffer path (no chunking) relies on WebGPU's implicit inter-pass
     // barriers and needs no wait.
+    //
+    // The wait is bounded: a driver hang here would otherwise block the
+    // rendering thread forever mid-frame. On timeout the device is declared
+    // lost and recording continues without the barrier; output for the
+    // frame is undefined, but the caller can observe the loss and tear the
+    // renderer down without further blocking.
     if (device_.isVulkan()) {
-      device_.pollSuspending(true);
+      device_.waitForQueueIdle();
     }
     wgpu::CommandEncoderDescriptor desc = {};
     desc.label = wgpuLabel("GeodeFilterChunkCE");

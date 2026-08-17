@@ -9,6 +9,7 @@
 #include <webgpu/webgpu.hpp>
 
 #include "donner/svg/renderer/geode/GeodeCounters.h"
+#include "donner/svg/renderer/geode/GeodeGpuWait.h"
 #include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
 
 namespace donner::geode {
@@ -99,6 +100,14 @@ struct GeodeEmbedConfig {
   /// Optional adapter handle. Preserved for hosts that need to query the
   /// adapter associated with the external device.
   wgpu::Adapter adapter;
+
+  /// Optional shared device-lost flag. Hosts that install their own WebGPU
+  /// device-lost callback should have that callback set this flag and pass
+  /// the same state here, so a driver-reported loss on the host device and a
+  /// bounded-wait timeout inside Geode converge on the same
+  /// `GeodeDevice::isDeviceLost()` condition. When null, the GeodeDevice
+  /// creates a private flag that only bounded-wait timeouts can set.
+  std::shared_ptr<GeodeDeviceLostState> lostState;
 };
 
 /**
@@ -156,7 +165,13 @@ public:
   /// sharing by asserting this count stays flat across repeated operations.
   static int headlessCreationCountForTesting();
 
-  /// Destructor releases the device and all GPU resources.
+  /// Destructor releases the device and all GPU resources. All teardown
+  /// waits are bounded; if the device has been declared lost (see
+  /// \ref isDeviceLost) the destructor performs no GPU waits at all and
+  /// deliberately leaks the root WebGPU handles (queue, device, adapter,
+  /// instance) rather than risking a blocking call into a hung driver. The
+  /// leak is bounded to one device's worth of driver objects per loss, and a
+  /// lost device is a process-fatal condition for GPU rendering anyway.
   ~GeodeDevice();
 
   // Non-copyable, non-movable. The device owns pipelines and a filter
@@ -183,7 +198,64 @@ public:
   /// frame time, so it has to be attributable. Route every poll through here rather than calling
   /// `device().poll` directly; the probe is a pair of clock reads on native builds, where `poll`
   /// does not suspend at all.
-  void pollSuspending(bool wait) const;
+  ///
+  /// Prefer @p wait = false: a waiting poll can block inside a hung driver
+  /// with no bound. Callers that need to wait for the queue to drain should
+  /// use \ref waitForQueueIdle, which is bounded and reports a hang as a
+  /// device-lost condition.
+  ///
+  /// @return True when the device reports its queue empty (wgpu-native's
+  ///   `wgpuDevicePoll` return value; unspecified under Emscripten, where the
+  ///   poll is a browser-task yield).
+  bool pollSuspending(bool wait) const;
+
+  /**
+   * Wait, bounded, for all submitted GPU work to complete.
+   *
+   * Replaces unbounded `poll(wait=true)` loops: the wait is a non-blocking
+   * poll at \ref kGpuWaitPollInterval cadence with a deadline, so a hung
+   * driver costs at most @p timeout instead of blocking the calling thread
+   * forever (in the worst case in uninterruptible kernel sleep). On timeout
+   * the device is marked lost (see \ref markDeviceLost) and later waits on
+   * this device return immediately.
+   *
+   * Completion condition: the wait observes "queue empty", not "the work
+   * submitted before this call completed". With a concurrent submitter on
+   * the same underlying queue (on native, the async-render thread and the
+   * editor framebuffer wrapper share one WebGPU queue), a healthy but
+   * continuously saturated queue could in principle be non-empty at every
+   * poll sample for the whole timeout and be falsely declared lost. This is
+   * accepted: real submit cadences leave idle gaps many orders of magnitude
+   * wider than the 100 us sampling interval, the exposure is bounded by the
+   * generous timeout, and a false positive degrades to the detection path
+   * (renderer reports device loss and tears down wait-free) rather than a
+   * hang or crash.
+   *
+   * Under Emscripten this performs the pre-existing single poll-yield
+   * instead of a bounded drain loop: emdawnwebgpu's poll return value does
+   * not report queue-idle, and browser device hangs surface through the
+   * readback map deadline and the browser's own device-loss reporting.
+   *
+   * @param timeout Wait budget; defaults to the shared generous bound.
+   * @return `Complete` when the queue drained, `TimedOut` when the deadline
+   *   expired (the device is now marked lost), `DeviceLost` when the device
+   *   was already lost and no wait was performed.
+   */
+  GpuWaitResult waitForQueueIdle(std::chrono::milliseconds timeout = kDefaultGpuWaitTimeout) const;
+
+  /// True once this device has been declared lost, either by the WebGPU
+  /// device-lost callback (driver-reported) or by a bounded GPU wait
+  /// exceeding its deadline. Sticky: never resets. Once lost, rendering
+  /// output is undefined, snapshots return empty bitmaps promptly, and
+  /// teardown skips all GPU waits.
+  bool isDeviceLost() const { return lostState_->lost.load(std::memory_order_acquire); }
+
+  /// Declare this device lost. Idempotent; the first call logs @p reason.
+  /// Called from bounded waits on timeout, and available to embedders whose
+  /// own device-lost signal is not shared via `GeodeEmbedConfig::lostState`.
+  /// Const because observers treat the flag as shared diagnostic state and
+  /// waits that discover a hang run through const accessors.
+  void markDeviceLost(const char* reason) const;
 
   /// Instance that created the headless device. Null for externally-owned devices.
   const wgpu::Instance& instance() const;
@@ -505,6 +577,13 @@ private:
 
   /// Process-unique identity assigned at construction. See `deviceId()`.
   const uint64_t deviceId_ = 0;
+
+  /// Shared device-lost flag; never null. Created at construction, replaced
+  /// by the host's shared state in `CreateFromExternal` when
+  /// `GeodeEmbedConfig::lostState` is provided, and retained by the WebGPU
+  /// device-lost callback in headless mode (callbacks can outlive this
+  /// object, hence shared ownership).
+  std::shared_ptr<GeodeDeviceLostState> lostState_;
 
   GeodeCounters* counters_ = nullptr;
 

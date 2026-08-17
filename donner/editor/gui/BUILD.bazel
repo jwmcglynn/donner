@@ -84,6 +84,7 @@ donner_cc_library(
     ] + select({
         "//donner/editor:wasm_geode_enabled": [
             "//donner/svg/renderer/geode:geode_device",
+            "//donner/svg/renderer/geode:geode_gpu_wait",
             "//donner/svg/renderer/geode:geode_wgpu_util",
             "//third_party/emscripten-glfw",
             "//third_party/webgpu-cpp:webgpu_cpp",
@@ -92,6 +93,7 @@ donner_cc_library(
         "//donner/svg/renderer:renderer_backend_geode": [
             ":editor_wgpu_surface",
             "//donner/svg/renderer/geode:geode_device",
+            "//donner/svg/renderer/geode:geode_gpu_wait",
             "//donner/svg/renderer/geode:geode_wgpu_util",
             "//third_party/webgpu-cpp:webgpu_cpp",
             "@glfw",

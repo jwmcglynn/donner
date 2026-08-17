@@ -2494,7 +2494,10 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
     frameFinishedEncoders.clear();
 
     if (device && device->device()) {
-      device->pollSuspending(true);
+      // Bounded drain before releasing frame resources; skips (and stays
+      // skipped) once the device is lost so renderer teardown never blocks
+      // on a hung driver.
+      device->waitForQueueIdle();
     }
 
     framePendingTextureViewReleases.clear();
@@ -2541,7 +2544,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
     if (device) {
       device->drainDeferredDestroys();
       if (device->device()) {
-        device->pollSuspending(true);
+        // Bounded; a no-op when the device is already lost.
+        device->waitForQueueIdle();
       }
     }
   }
@@ -4912,11 +4916,14 @@ enum class ReadbackMapStatus {
   Success,
   /// A cancellation request fired; the buffer was unmapped and destroyed.
   Cancelled,
-  /// The 10-second deadline expired with no map completion; the buffer was
-  /// unmapped and destroyed. Distinct from Cancelled so a caller can avoid
-  /// starting a second full-deadline wait against a device that just proved
-  /// unresponsive.
+  /// The readback deadline expired with no map completion; the buffer was
+  /// unmapped and destroyed and the device was declared lost. Distinct from
+  /// Cancelled so a caller can avoid starting a second full-deadline wait
+  /// against a device that just proved unresponsive.
   TimedOut,
+  /// The device was already declared lost before the map was requested; no
+  /// GPU wait was performed.
+  DeviceLost,
   /// The map completed with a non-success status.
   Failed,
 };
@@ -4928,6 +4935,12 @@ enum class ReadbackMapStatus {
 ReadbackMapStatus MapAndWaitReadback(const std::shared_ptr<geode::GeodeDevice>& device,
                                      const wgpu::Buffer& buffer, uint64_t mapSize,
                                      const std::function<bool()>& shouldCancel) {
+  if (device->isDeviceLost()) {
+    // A lost device will never deliver the map. Fail fast so a caller does
+    // not spend another full readback deadline against a hung driver; the
+    // caller drops the buffer without pooling it.
+    return ReadbackMapStatus::DeviceLost;
+  }
   // `BufferMapCallbackInfo` takes raw userdata rather than a std::function, and a
   // cancellation may return before WebGPU delivers that callback. Keep its payload alive
   // independently of this stack frame: one reference belongs to this caller, the other to the
@@ -4964,7 +4977,7 @@ ReadbackMapStatus MapAndWaitReadback(const std::shared_ptr<geode::GeodeDevice>& 
   bool cancelled = false;
   bool timedOut = false;
   bool usedTimedWaitAny = false;
-  const auto readbackDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+  const auto readbackDeadline = std::chrono::steady_clock::now() + geode::kReadbackMapTimeout;
   while (!mapState->done.load(std::memory_order_acquire)) {
     if (shouldCancel && shouldCancel()) {
       cancelled = true;
@@ -5005,17 +5018,24 @@ ReadbackMapStatus MapAndWaitReadback(const std::shared_ptr<geode::GeodeDevice>& 
 #endif
     // Never ask wgpu-native to block until the GPU map completes: a low-priority thumbnail must
     // observe a superseding main-document request promptly. Native polling is
-    // non-blocking and gets a short sleep to avoid spinning. The 100 us sleep
-    // bounds the snapshot latency floor without the 1 ms quanta that used to
-    // dominate small-fixture readbacks; the poll itself processes the map
-    // completion callback as soon as the GPU delivers it.
+    // non-blocking and gets a short sleep to avoid spinning. The
+    // kGpuWaitPollInterval (100 us) sleep bounds the snapshot latency floor
+    // without the 1 ms quanta that used to dominate small-fixture readbacks;
+    // the poll itself processes the map completion callback as soon as the
+    // GPU delivers it.
     device->pollSuspending(false);
 #ifndef __EMSCRIPTEN__
-    std::this_thread::sleep_for(std::chrono::microseconds(100));
+    std::this_thread::sleep_for(geode::kGpuWaitPollInterval);
 #endif
   }
   device->recordReadback(usedTimedWaitAny, pollIter);
   if (cancelled || timedOut) {
+    if (timedOut) {
+      // A full readback deadline with no map delivery is the observable
+      // signature of a hung device. Declare the loss so later waits on this
+      // device fail fast and teardown skips GPU waits entirely.
+      device->markDeviceLost("snapshot readback map did not complete within the readback deadline");
+    }
     // Cancelling a pending map schedules its callback with an aborted status. The callback's
     // reference keeps `mapState` valid even when delivery happens after this method returns.
     buffer.unmap();
@@ -5108,11 +5128,13 @@ RendererBitmap ReadGeodeTextureSnapshotGpu(const std::shared_ptr<geode::GeodeDev
   const ReadbackMapStatus mapStatus =
       MapAndWaitReadback(device, resources.readback.get(), mapSize, shouldCancel);
   if (mapStatus != ReadbackMapStatus::Success) {
-    // Cancelled, timed out, or failed: the helper already unmapped and
-    // destroyed the readback buffer, so the entry cannot be pooled. The
-    // caller uses outTimedOut to avoid a second full-deadline wait against
-    // an unresponsive device.
-    outTimedOut = mapStatus == ReadbackMapStatus::TimedOut;
+    // Cancelled, timed out, lost, or failed: on cancellation and timeout the
+    // helper already unmapped and destroyed the readback buffer, and on a
+    // lost device the map was never requested; either way the entry cannot
+    // be pooled. The caller uses outTimedOut to avoid a second full-deadline
+    // wait against an unresponsive device.
+    outTimedOut =
+        mapStatus == ReadbackMapStatus::TimedOut || mapStatus == ReadbackMapStatus::DeviceLost;
     return bitmap;
   }
 
@@ -5307,6 +5329,10 @@ RendererBitmap RendererGeode::takeSnapshotInterruptibly(
   return ReadGeodeTextureSnapshot(impl_->device, impl_->target,
                                   Vector2i(impl_->pixelWidth, impl_->pixelHeight),
                                   impl_->textureFormat, AlphaType::Premultiplied, shouldCancel);
+}
+
+bool RendererGeode::deviceLost() const {
+  return impl_->device && impl_->device->isDeviceLost();
 }
 
 RendererReadbackStats RendererGeode::consumeReadbackStats() {

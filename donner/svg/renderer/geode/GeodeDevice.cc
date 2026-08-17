@@ -25,6 +25,7 @@
 #include "donner/svg/renderer/geode/GeodeCallbackState.h"
 #include "donner/svg/renderer/geode/GeodeCheckerboardPipeline.h"
 #include "donner/svg/renderer/geode/GeodeFilterEngine.h"
+#include "donner/svg/renderer/geode/GeodeGpuWait.h"
 #include "donner/svg/renderer/geode/GeodeImagePipeline.h"
 #include "donner/svg/renderer/geode/GeodePipeline.h"
 
@@ -61,14 +62,26 @@ void OnUncapturedError(WGPUDevice const* /*device*/, WGPUErrorType type, WGPUStr
                message.data ? message.data : "");
 }
 
+/// Device-lost callback wired onto headless devices. Fires at most once per
+/// device; `userdata1` carries a retained shared reference to the device's
+/// `GeodeDeviceLostState` so a spontaneous callback can outlive the
+/// `GeodeDevice` that registered it. A driver-reported loss sets the same
+/// flag that bounded-wait timeouts set, so both failure modes surface as one
+/// detectable device-lost condition.
 void OnDeviceLost(WGPUDevice const* /*device*/, WGPUDeviceLostReason reason, WGPUStringView message,
-                  void* /*userdata1*/, void* /*userdata2*/) {
+                  void* userdata1, void* /*userdata2*/) {
+  const std::shared_ptr<GeodeDeviceLostState> state =
+      takeWgpuCallbackState<GeodeDeviceLostState>(userdata1);
   if (reason == WGPUDeviceLostReason_Destroyed || reason == WGPUDeviceLostReason_InstanceDropped) {
+    // Expected teardown paths, not a driver failure.
     return;
   }
   std::fprintf(stderr, "[Geode/wgpu-native] Device lost (reason=%d): %.*s\n",
                static_cast<int>(reason), static_cast<int>(message.length),
                message.data ? message.data : "");
+  if (state) {
+    state->lost.store(true, std::memory_order_release);
+  }
 }
 
 wgpu::BackendType RequestedHeadlessBackend() {
@@ -129,38 +142,6 @@ wgpu::Instance CreateHeadlessInstance(wgpu::BackendType backendType) {
     return wgpu::createInstance(instanceDesc);
   }
   return wgpu::createInstance();
-}
-#endif
-
-#ifndef __EMSCRIPTEN__
-void WaitForSubmittedWork(const wgpu::Device& device, const wgpu::Queue& queue) {
-  if (!device || !queue) {
-    return;
-  }
-
-  struct WorkDoneState {
-    std::atomic<bool> done = false;
-  };
-  auto state = std::make_shared<WorkDoneState>();
-
-  wgpu::QueueWorkDoneCallbackInfo callbackInfo{wgpu::Default};
-  callbackInfo.mode = wgpu::CallbackMode::AllowSpontaneous;
-  callbackInfo.callback = [](WGPUQueueWorkDoneStatus /*status*/, void* userdata1,
-                             void* /*userdata2*/) {
-    const std::shared_ptr<WorkDoneState> state = takeWgpuCallbackState<WorkDoneState>(userdata1);
-    state->done.store(true, std::memory_order_release);
-  };
-  callbackInfo.userdata1 = retainWgpuCallbackState(state);
-  callbackInfo.userdata2 = nullptr;
-
-  queue.onSubmittedWorkDone(callbackInfo);
-  // Teardown drain, not a frame-path wait, but it can still unwind the wasm
-  // stack; attribute it so an unexpectedly long shutdown is visible.
-  const ScopedSuspendPoint suspend(SuspendKind::Startup);
-  for (int pollIter = 0; !state->done.load(std::memory_order_acquire) && pollIter < 2000;
-       ++pollIter) {
-    device.poll(true, nullptr);
-  }
 }
 #endif
 
@@ -263,14 +244,22 @@ std::atomic<uint64_t> g_nextDeviceId{0};
 
 GeodeDevice::GeodeDevice()
     : impl_(std::make_unique<Impl>()),
-      deviceId_(g_nextDeviceId.fetch_add(1, std::memory_order_relaxed) + 1) {}
+      deviceId_(g_nextDeviceId.fetch_add(1, std::memory_order_relaxed) + 1),
+      lostState_(std::make_shared<GeodeDeviceLostState>()) {}
 
 GeodeDevice::~GeodeDevice() {
   // Release all resources that were created from the device before releasing the
   // root queue/device/adapter/instance handles. `webgpu.hpp` handles are raw
   // wrappers: their destructors do not release native references.
+  //
+  // Every teardown wait is bounded. Once the device is lost (driver-reported
+  // or a wait deadline expired), all further GPU waits are skipped: waiting
+  // on a hung driver can block forever, in the worst case in uninterruptible
+  // kernel sleep, and a leak is strictly better than a hung thread.
 #ifndef __EMSCRIPTEN__
-  WaitForSubmittedWork(device_, queue_);
+  if (device_ && queue_) {
+    waitForQueueIdle();
+  }
 #endif
   wgpu::Instance instance;
   if (!external_ && impl_) {
@@ -281,8 +270,9 @@ GeodeDevice::~GeodeDevice() {
   impl_.reset();
   if (device_) {
 #ifndef __EMSCRIPTEN__
-    device_.poll(true, nullptr);
-    WaitForSubmittedWork(device_, queue_);
+    // Second drain after the pipelines and pooled resources released above;
+    // returns immediately if the first wait already declared the device lost.
+    waitForQueueIdle();
 #endif
   }
 
@@ -290,6 +280,20 @@ GeodeDevice::~GeodeDevice() {
     queue_ = wgpu::Queue();
     device_ = wgpu::Device();
     adapter_ = wgpu::Adapter();
+    return;
+  }
+
+  if (isDeviceLost()) {
+    // Deliberate leak: destroying or releasing the root handles of a hung
+    // device can block inside the driver with no bound. Abandon them; the
+    // process has already lost GPU rendering on this device.
+    //
+    // Post-loss teardown is wait-free, not driver-free: drainDeferredDestroys
+    // and the Impl reset above still issued release/destroy calls into the
+    // client library for pooled textures, buffers, and pipelines. Those are
+    // refcount drops and deferred-destroy marks that do not wait on GPU
+    // completion; only the root-handle destroy/release below, which can
+    // trigger a blocking device drain, is skipped.
     return;
   }
 
@@ -302,9 +306,40 @@ GeodeDevice::~GeodeDevice() {
   ReleaseWgpuHandle(instance);
 }
 
-void GeodeDevice::pollSuspending(bool wait) const {
+bool GeodeDevice::pollSuspending(bool wait) const {
   const ScopedSuspendPoint suspend(SuspendKind::DeviceWait);
-  device_.poll(wait, nullptr);
+  return device_.poll(wait, nullptr);
+}
+
+void GeodeDevice::markDeviceLost(const char* reason) const {
+  if (!lostState_->lost.exchange(true, std::memory_order_acq_rel)) {
+    std::fprintf(stderr, "[Geode] Device declared lost: %s\n", reason ? reason : "(no reason)");
+  }
+}
+
+GpuWaitResult GeodeDevice::waitForQueueIdle(std::chrono::milliseconds timeout) const {
+  if (isDeviceLost()) {
+    return GpuWaitResult::DeviceLost;
+  }
+  if (!device_) {
+    return GpuWaitResult::Complete;
+  }
+#ifdef __EMSCRIPTEN__
+  // emdawnwebgpu's poll yields the Asyncify thread for one browser task and
+  // its return value does not report queue-idle, so a drain loop keyed on it
+  // could spin for the full timeout every call. Keep the single poll-yield
+  // this path always performed; browser device hangs surface through the
+  // readback map deadline instead.
+  (void)timeout;
+  pollSuspending(true);
+  return GpuWaitResult::Complete;
+#else
+  const GpuWaitResult result = BoundedGpuWait([this] { return pollSuspending(false); }, timeout);
+  if (result == GpuWaitResult::TimedOut) {
+    markDeviceLost("GPU queue did not go idle within the bounded wait deadline");
+  }
+  return result;
+#endif
 }
 
 void GeodeDevice::recordReadback(bool usedTimedWaitAny, int pollIterations) {
@@ -506,7 +541,6 @@ std::unique_ptr<GeodeDevice> GeodeDevice::CreateHeadless(wgpu::TextureFormat tex
   deviceDesc.label = wgpu::StringView{std::string_view{"GeodeDevice"}};
   deviceDesc.deviceLostCallbackInfo.mode = wgpu::CallbackMode::AllowSpontaneous;
   deviceDesc.deviceLostCallbackInfo.callback = OnDeviceLost;
-  deviceDesc.deviceLostCallbackInfo.userdata1 = nullptr;
   deviceDesc.deviceLostCallbackInfo.userdata2 = nullptr;
   deviceDesc.uncapturedErrorCallbackInfo.callback = OnUncapturedError;
   deviceDesc.uncapturedErrorCallbackInfo.userdata1 = nullptr;
@@ -531,6 +565,12 @@ std::unique_ptr<GeodeDevice> GeodeDevice::CreateHeadless(wgpu::TextureFormat tex
   constexpr int kMaxDeviceInitRetries = 3;
   constexpr int kDeviceInitBackoffMs[kMaxDeviceInitRetries] = {50, 200, 800};
   for (int attempt = 0;; ++attempt) {
+    // A fresh retained lost-state reference per attempt: each successfully
+    // created device eventually consumes its userdata exactly once via
+    // OnDeviceLost (including the Destroyed-at-teardown delivery). An attempt
+    // that returns a null device strands at most one small retained block,
+    // bounded by the retry count.
+    deviceDesc.deviceLostCallbackInfo.userdata1 = retainWgpuCallbackState(result->lostState_);
     result->device_ = result->adapter_.requestDevice(deviceDesc);
     if (result->device_) {
       break;  // Device created successfully.
@@ -727,6 +767,12 @@ std::unique_ptr<GeodeDevice> GeodeDevice::CreateFromExternal(const GeodeEmbedCon
 
   auto result = std::unique_ptr<GeodeDevice>(new GeodeDevice());
   result->external_ = true;
+  if (config.lostState) {
+    // Share the host's device-lost flag so a loss reported through the
+    // host's device-lost callback and a bounded-wait timeout inside Geode
+    // surface as the same isDeviceLost() condition.
+    result->lostState_ = config.lostState;
+  }
   result->device_ = config.device;
   result->queue_ = config.queue;
   result->textureFormat_ = config.textureFormat;

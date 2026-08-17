@@ -326,6 +326,22 @@ public:
   [[nodiscard]] RendererReadbackStats consumeReadbackStats() override;
 
   /**
+   * True once the GPU device backing this renderer has been declared lost,
+   * either by a driver-reported WebGPU device-lost callback or by a bounded
+   * GPU wait exceeding its deadline (for example a snapshot readback map that
+   * never completed). The condition is sticky.
+   *
+   * Once lost: draw calls may produce no usable output, snapshots return
+   * empty bitmaps promptly instead of waiting out the readback deadline, and
+   * destroying this renderer and its `GeodeDevice` performs no further GPU
+   * waits (GPU resources are deliberately leaked rather than risking a
+   * blocking call into a hung driver). Callers should treat a lost device as
+   * fatal for this renderer instance: destroy it and recreate the renderer,
+   * or fall back to a CPU backend.
+   */
+  [[nodiscard]] bool deviceLost() const;
+
+  /**
    * Enable or disable GPU timestamp capture. No-op today; reserved for
    * future work. When wired up, this
    * will drive the `renderPassNs` / `totalGpuNs` fields of
