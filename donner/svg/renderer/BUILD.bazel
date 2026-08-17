@@ -343,7 +343,14 @@ donner_perf_sensitive_cc_library(
     # tiny-skia backend) for parity; never reached by production geode —
     # enforced by //donner/svg/renderer:geode_excludes_tiny_skia_audit.
     deps = [
-        "@tiny-skia-cpp//src:tiny_skia_lib_native",
+        # Follow the workspace-level @tiny-skia-cpp//bazel/config:simd_mode
+        # flag (default native) instead of pinning the native transition.
+        # Pinning one tiny-skia dep while others (tiny_skia_filter_deps)
+        # follow the flag puts two configurations of the same alwayslink
+        # archives into one binary and fails the link with duplicate symbols
+        # whenever the flag is set to scalar, the byte-exactness reference
+        # configuration.
+        "@tiny-skia-cpp//src:tiny_skia_lib",
     ],
 )
 

@@ -181,7 +181,7 @@ donner_cc_binary(
     tags = ["manual"],
     deps = [
         "//donner/svg/renderer",
-        "@tiny-skia-cpp//src:tiny_skia_lib_native",
+        "@tiny-skia-cpp//src:tiny_skia_lib",
     ],
 )
 

@@ -11,7 +11,7 @@ donner_cc_binary(
     srcs = ["TinySkiaRenderPerfBench.cpp"],
     deps = [
         "@google_benchmark//:benchmark_main",
-        "@tiny-skia-cpp//src:tiny_skia_lib_native",
+        "@tiny-skia-cpp//src:tiny_skia_lib",
     ],
 )
 
