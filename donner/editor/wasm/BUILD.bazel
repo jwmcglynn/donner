@@ -311,6 +311,11 @@ py_test(
         # glue grows with it. Measured at this layer: js 170,862 raw /
         # 48,316 gzip (main measured 48,284 gzip, 16 bytes under the old
         # budget, so the gate could no longer absorb intended growth).
+        # Instance-record retune: the record slab and batch machinery add
+        # deliberate renderer code; measured wasm gzip at this layer is
+        # 4,490,183 (183 bytes over the previous budget), and the budget
+        # keeps about 1 percent headroom over that measurement.
+        #
         # Review-hardening retune: the cross-submit guard, bounded readback
         # pool, and clip-fold range checks add deliberate renderer code.
         # Measured at this layer: package 11,451,583 raw, 1,583 bytes over
@@ -330,7 +335,7 @@ py_test(
         "--max-wasm-raw-bytes",
         "11360000",
         "--max-wasm-gzip-bytes",
-        "4490000",
+        "4535000",
         "--max-wasm-function-body-bytes",
         "46000",
         "--max-wasm-data-segments",
