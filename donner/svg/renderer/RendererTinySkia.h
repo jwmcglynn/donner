@@ -297,14 +297,25 @@ private:
   /// `tiny_skia::Paint::unpremulStore`, so no draw pays for a per-pixel
   /// unpremultiply on store and no composite into `frame_` pays for a
   /// premultiply-blend-unpremultiply round trip. \ref takeSnapshot converts
-  /// once, on the way out, and is the only place the conversion happens.
+  /// once, on the way out, and is the only place the conversion happens. That
+  /// is worth roughly a 1.9x median settled-frame speedup across the CPU
+  /// benchmark scenes.
   ///
-  /// The tradeoff is precision: premultiplying before the float-to-u8 store
-  /// quantizes RGB at low alpha (for example straight (17,17,17,6) stores as
-  /// premultiplied (0,0,0,6), and unpremultiplying cannot recover the 17s), so
-  /// heavily antialiased edges can differ by a few units from a straight-alpha
-  /// store. Measured against the full reference SVG suite this stays inside the
-  /// per-test pixel thresholds except for a handful of thin-marker cases.
+  /// Two costs come with that, both measured:
+  ///
+  /// 1. Premultiplying before the float-to-u8 store quantizes RGB at low alpha.
+  ///    Straight (17,17,17,6) stores as premultiplied (0,0,0,6), and
+  ///    unpremultiplying cannot recover the 17s, so heavily antialiased edges of
+  ///    dark shapes can shift by a few units. A straight-alpha store cannot lose
+  ///    that because it never multiplies before rounding.
+  /// 2. The unpremultiply-on-store stage exists only in the float raster
+  ///    pipeline, so setting the flag also pinned every root draw to that
+  ///    pipeline. Without it the blitter may pick the 8-bit fixed-point
+  ///    pipeline, whose compose arithmetic drifts by a few units (an opaque
+  ///    layer pixel can land at alpha 250 instead of 255). That drift is
+  ///    accuracy-only: forcing the float pipeline back on measured within 1% of
+  ///    this configuration, so the speedup comes from dropping the conversion
+  ///    stages, not from the 8-bit pipeline.
   tiny_skia::Pixmap frame_;
   Transform2d deviceFromLocalTransform_;
   std::vector<Transform2d> deviceFromLocalTransformStack_;
