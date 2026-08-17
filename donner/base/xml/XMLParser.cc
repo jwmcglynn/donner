@@ -298,7 +298,17 @@ public:
     return ch == '\t' || ch == ' ' || ch == '\n' || ch == '\r';
   }
 
-  FileOffset currentOffset(ChunkedString& sourceString, int index) const {
+  /**
+   * Return the byte offset of \p sourceString within the original source text.
+   *
+   * This is deliberately cheap: it resolves a pointer difference and never computes line or
+   * column numbers. Line information is only needed when a diagnostic is emitted, see \ref
+   * resolveLineInfo.
+   *
+   * @param sourceString Cursor into the source text.
+   * @param index Character index relative to the cursor.
+   */
+  FileOffset currentOffset(ChunkedString& sourceString, int index = 0) const {
     if (sourceString.empty()) {
       return FileOffset::Offset(str_.size());
     }
@@ -340,7 +350,7 @@ public:
         break;
       }
 
-      const FileOffset startOffset = currentOffsetWithLineNumber(remaining_);
+      const FileOffset startOffset = currentOffset(remaining_);
 
       if (tryConsume(remaining_, "<")) {
         auto maybeNode = parseNode(startOffset);
@@ -411,7 +421,11 @@ public:
 
       const ParsedAttribute& attribute = maybeAttribute.result().value();
       if (attribute.name == name) {
-        return attribute.fullRange;
+        // This range is relative to the element text this instance was constructed with, and the
+        // caller shifts it back into the full document with FileOffset::addParentOffset, which
+        // needs both sides to carry line information to combine them correctly.
+        return SourceRange{resolveLineInfo(attribute.fullRange.start),
+                           resolveLineInfo(attribute.fullRange.end)};
       }
     }
 
@@ -419,7 +433,9 @@ public:
   }
 
 private:
-  parser::LineOffsets lineOffsets() {
+  /// Line table for the source text, scanned on first use. A document that parses without
+  /// emitting any diagnostic never pays for it.
+  const parser::LineOffsets& lineOffsets() {
     if (!lineOffsets_) {
       lineOffsets_.emplace(str_);
     }
@@ -427,20 +443,27 @@ private:
     return lineOffsets_.value();
   }
 
-  FileOffset currentOffsetWithLineNumber(ChunkedString& sourceString, int relativeOffset = 0) {
-    FileOffset current = currentOffset(sourceString, relativeOffset);
-    if (!current.offset) {
-      return current;
+  /**
+   * Attach line and column information to a byte offset.
+   *
+   * Offsets recorded on the parsed tree stay as plain byte offsets, since resolving line and
+   * column numbers for every node and attribute costs more than the whole rest of the parse for
+   * documents that never emit a diagnostic. Call this at the point a diagnostic is created.
+   *
+   * @param offset Byte offset to resolve, or an unresolved offset which is returned unchanged.
+   */
+  FileOffset resolveLineInfo(FileOffset offset) {
+    if (!offset.offset) {
+      return offset;
     }
 
-    const size_t offset = current.offset.value();
-    return lineOffsets().fileOffset(offset);
+    return lineOffsets().fileOffset(offset.offset.value());
   }
 
   ParseDiagnostic createParseError(std::string_view reason,
                                    std::optional<FileOffset> location = std::nullopt) {
     return ParseDiagnostic::Error(RcString(reason),
-                                  location.value_or(currentOffsetWithLineNumber(remaining_)));
+                                  resolveLineInfo(location.value_or(currentOffset(remaining_))));
   }
 
   [[nodiscard]] std::optional<ParseDiagnostic> recordEntitySubstitution(
@@ -717,21 +740,22 @@ private:
     // Then numeric entities: '&#' prefix
     else if (tryConsume(sourceString, "&#")) {
       const bool hex = tryConsume(sourceString, "x");
-      const FileOffset digitsOffset = currentOffsetWithLineNumber(sourceString);
+      const FileOffset digitsOffset = currentOffset(sourceString);
 
       // Grab all digits
       const RcString digits = consumeMatching<DigitsPredicate>(sourceString).toSingleRcString();
       if (digits.empty()) {
         return ParseDiagnostic::Error("Invalid numeric entity syntax (missing digits)",
-                                      entityOffset);
+                                      resolveLineInfo(entityOffset));
       }
 
       auto parseRes = hex ? IntegerParser::ParseHex(digits) : IntegerParser::Parse(digits);
       if (parseRes.hasError()) {
         ParseDiagnostic err = parseRes.error();
         if (digitsOffset.offset) {
-          err.range.start = err.range.start.addParentOffset(digitsOffset);
-          err.range.end = err.range.end.addParentOffset(digitsOffset);
+          const FileOffset parentOffset = resolveLineInfo(digitsOffset);
+          err.range.start = err.range.start.addParentOffset(parentOffset);
+          err.range.end = err.range.end.addParentOffset(parentOffset);
         } else {
           // For recursive entity expansions, source information is lost.
           // TODO: Find a way to retain this information.
@@ -746,7 +770,7 @@ private:
       // We must see a trailing ';'
       if (!tryConsume(sourceString, ";")) {
         return ParseDiagnostic::Error("Numeric character entity missing closing ';'",
-                                      currentOffsetWithLineNumber(sourceString));
+                                      resolveLineInfo(currentOffset(sourceString)));
       }
 
       // Validate and append
@@ -799,7 +823,7 @@ private:
       // Otherwise, next char must be the expected entity prefix, '&' or '%'.
       assert(nextChar == kEntityPrefix[0]);
 
-      const FileOffset entityOffset = currentOffsetWithLineNumber(sourceString);
+      const FileOffset entityOffset = currentOffset(sourceString);
 
       // 2. Try built-in or numeric
       auto parseResult = tryParseBuiltInOrNumericEntity(entityOffset, sourceString, decodedText);
@@ -1002,7 +1026,7 @@ private:
       return createParseError("XML declaration missing closing '?>'");
     }
 
-    const FileOffset endOffset = currentOffsetWithLineNumber(remaining_);
+    const FileOffset endOffset = currentOffset(remaining_);
     declaration.setSourceEndOffset(endOffset);
     declaration.setOpeningTagLocation(SourceRange{startOffset, endOffset});
     return declaration;
@@ -1010,7 +1034,7 @@ private:
 
   // Parse XML comment (<!--...)
   ParseResult<std::optional<XMLNode>> parseComment(FileOffset startOffset) {
-    const FileOffset valueStartOffset = currentOffsetWithLineNumber(remaining_);
+    const FileOffset valueStartOffset = currentOffset(remaining_);
     const auto maybeComment = consumeContentsUntilEndString("-->");
     if (!maybeComment) {
       return createParseError("Comment node does not end with '-->'");
@@ -1025,7 +1049,7 @@ private:
       }
       XMLNode commentNode = XMLNode::CreateCommentNode(document_, commentStr.toSingleRcString());
       commentNode.setSourceStartOffset(startOffset);
-      const FileOffset endOffset = currentOffsetWithLineNumber(remaining_);
+      const FileOffset endOffset = currentOffset(remaining_);
       commentNode.setSourceEndOffset(endOffset);
       if (std::optional<SourceRange> openingRange = MakeTrimmedRange(startOffset, endOffset, 0, 3);
           openingRange.has_value() && openingRange->start.offset.has_value() &&
@@ -1061,7 +1085,7 @@ private:
    * detect `<!ENTITY>` declarations in the internal subset and record them.
    */
   ParseResult<std::optional<XMLNode>> parseDoctype(FileOffset startOffset) {
-    const FileOffset valueStartOffset = currentOffsetWithLineNumber(remaining_);
+    const FileOffset valueStartOffset = currentOffset(remaining_);
 
     // We read until the first '>' at nesting level 0, while also handling the internal subset
     // `[...]`
@@ -1130,7 +1154,7 @@ private:
       }
       XMLNode docNode = XMLNode::CreateDocTypeNode(document_, doctypeStr.toSingleRcString());
       docNode.setSourceStartOffset(startOffset);
-      const FileOffset endOffset = currentOffsetWithLineNumber(remaining_);
+      const FileOffset endOffset = currentOffset(remaining_);
       docNode.setSourceEndOffset(endOffset);
       docNode.setOpeningTagLocation(SourceRange{startOffset, endOffset});
       if (std::optional<SourceRange> valueRange =
@@ -1153,7 +1177,7 @@ private:
 
     // Skip whitespace after the PI name.
     skipWhitespace(remaining_);
-    const FileOffset valueStartOffset = currentOffsetWithLineNumber(remaining_);
+    const FileOffset valueStartOffset = currentOffset(remaining_);
 
     // Consume contents until finding a '?>'
     const auto maybePiValue = consumeContentsUntilEndString("?>");
@@ -1170,7 +1194,7 @@ private:
       XMLNode pi = XMLNode::CreateProcessingInstructionNode(document_, piName.toSingleRcString(),
                                                             piValue.toSingleRcString());
       pi.setSourceStartOffset(startOffset);
-      const FileOffset endOffset = currentOffsetWithLineNumber(remaining_);
+      const FileOffset endOffset = currentOffset(remaining_);
       pi.setSourceEndOffset(endOffset);
       pi.setOpeningTagLocation(SourceRange{startOffset, endOffset});
       if (std::optional<SourceRange> valueRange =
@@ -1187,7 +1211,7 @@ private:
    * Read raw text (PCDATA) until `<` or `\0`
    */
   std::optional<ParseDiagnostic> parseAndAppendData(XMLNode& node) {
-    const FileOffset startOffset = currentOffsetWithLineNumber(remaining_);
+    const FileOffset startOffset = currentOffset(remaining_);
 
     // Expand all entities in the current text chunk
     auto maybeData = consumePCDataOnce();
@@ -1203,7 +1227,7 @@ private:
       // Create new data node
       XMLNode data = XMLNode::CreateDataNode(document_, dataStrAllocated);
       data.setSourceStartOffset(startOffset);
-      const FileOffset endOffset = currentOffsetWithLineNumber(remaining_);
+      const FileOffset endOffset = currentOffset(remaining_);
       data.setSourceEndOffset(endOffset);
       data.setValueLocation(SourceRange{startOffset, endOffset});
       node.appendChild(data);
@@ -1234,7 +1258,7 @@ private:
 
     XMLNode cdata = XMLNode::CreateCDataNode(document_, cdataStr.toSingleRcString());
     cdata.setSourceStartOffset(startOffset);
-    const FileOffset endOffset = currentOffsetWithLineNumber(remaining_);
+    const FileOffset endOffset = currentOffset(remaining_);
     cdata.setSourceEndOffset(endOffset);
     if (std::optional<SourceRange> openingRange = MakeTrimmedRange(startOffset, endOffset, 0, 3);
         openingRange.has_value() && openingRange->start.offset.has_value() &&
@@ -1388,7 +1412,7 @@ private:
     // Determine ending type
     if (tryConsume(remaining_, ">")) {
       element.setOpeningTagLocation(
-          SourceRange{startOffset, currentOffsetWithLineNumber(remaining_)});
+          SourceRange{startOffset, currentOffset(remaining_)});
       // Enter the element - bump nesting depth before recursing, restore on exit.
       if (nestingDepth_ >= maxNestingDepth_) {
         return createParseError("Maximum element nesting depth exceeded", startOffset);
@@ -1403,12 +1427,12 @@ private:
     } else if (tryConsume(remaining_, "/>")) {
       // Self-closing tag
       element.setOpeningTagLocation(
-          SourceRange{startOffset, currentOffsetWithLineNumber(remaining_)});
+          SourceRange{startOffset, currentOffset(remaining_)});
     } else {
       return createParseError("Node not closed with '>' or '/>'");
     }
 
-    element.setSourceEndOffset(currentOffsetWithLineNumber(remaining_));
+    element.setSourceEndOffset(currentOffset(remaining_));
     return element;
   }
 
@@ -1525,8 +1549,8 @@ private:
         }
 
         if (tryConsume(remaining_, "</")) {  // Node closing
-          const FileOffset closingTagOpenStart = currentOffsetWithLineNumber(contentsStart);
-          const FileOffset closingTagStart = currentOffsetWithLineNumber(remaining_);
+          const FileOffset closingTagOpenStart = currentOffset(contentsStart);
+          const FileOffset closingTagStart = currentOffset(remaining_);
 
           auto maybeClosingName = consumeQualifiedName();
           if (maybeClosingName.hasError()) {
@@ -1546,10 +1570,10 @@ private:
           }
 
           node.setClosingTagLocation(
-              SourceRange{closingTagOpenStart, currentOffsetWithLineNumber(remaining_)});
+              SourceRange{closingTagOpenStart, currentOffset(remaining_)});
           return std::nullopt;  // Node closed, finished parsing contents
         } else {
-          FileOffset startOffset = currentOffsetWithLineNumber(remaining_);
+          FileOffset startOffset = currentOffset(remaining_);
 
           // Child node
           remaining_.remove_prefix(1);  // Skip '<'
@@ -1581,7 +1605,7 @@ private:
    * @returns nullopt if none found.
    */
   ParseResult<std::optional<ParsedAttribute>> parseNextAttribute() {
-    const FileOffset attributeStartOffset = currentOffsetWithLineNumber(remaining_);
+    const FileOffset attributeStartOffset = currentOffset(remaining_);
     {
       const char nextCh = peek(remaining_).value_or('\0');
       const uint8_t ub = static_cast<uint8_t>(nextCh);
@@ -1622,7 +1646,7 @@ private:
 
     const char quote = maybeQuote.value();
     remaining_.remove_prefix(1);
-    const FileOffset valueStartOffset = currentOffsetWithLineNumber(remaining_);
+    const FileOffset valueStartOffset = currentOffset(remaining_);
 
     // Extract attribute value and expand char refs in it
     auto maybeValue = quote == '\'' ? consumeAttributeExpandEntities<'\''>()
@@ -1630,7 +1654,7 @@ private:
     if (maybeValue.hasError()) {
       return std::move(maybeValue.error());
     }
-    const FileOffset valueEndOffset = currentOffsetWithLineNumber(remaining_);
+    const FileOffset valueEndOffset = currentOffset(remaining_);
 
     // Make sure that end quote is present
     if (!tryConsume(remaining_, std::string_view(&quote, 1))) {
@@ -1640,7 +1664,7 @@ private:
         return createParseError("Attribute value not closed with '\"'");
       }
     }
-    const FileOffset attributeEndOffset = currentOffsetWithLineNumber(remaining_);
+    const FileOffset attributeEndOffset = currentOffset(remaining_);
 
     ParsedAttribute result{
         .name = name,
@@ -1659,7 +1683,7 @@ private:
     uint64_t attributeCount = 0;
     // For all attributes
     while (true) {
-      const FileOffset beforeAttribute = currentOffsetWithLineNumber(remaining_);
+      const FileOffset beforeAttribute = currentOffset(remaining_);
       ParseResult<std::optional<ParsedAttribute>> maybeAttribute = parseNextAttribute();
       if (maybeAttribute.hasError()) {
         return std::move(maybeAttribute.error());

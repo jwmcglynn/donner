@@ -9,7 +9,9 @@
 #include <string_view>
 #include <vector>
 
+#include "donner/base/FileOffset.h"
 #include "donner/base/Utils.h"
+#include "donner/base/parser/LineOffsets.h"
 
 namespace donner::xml {
 
@@ -150,6 +152,19 @@ public:
   [[nodiscard]] std::optional<XMLSourceDelta> replace(std::size_t offset, std::size_t length,
                                                       std::string_view replacement);
 
+  /**
+   * Attach line and column information to a byte offset into the current source.
+   *
+   * The line table is scanned on first use and reused until the source changes, so parsing a
+   * document that never needs a line number never pays for it. Building it mutates state behind
+   * a const method, so this must not run concurrently with another access to the same store:
+   * the document access lock admits any number of simultaneous readers, and nothing today
+   * resolves line numbers from more than one of them at a time.
+   *
+   * @param offset Byte offset, or an unresolved offset which is returned unchanged.
+   */
+  [[nodiscard]] FileOffset resolveLineInfo(FileOffset offset) const;
+
 private:
   struct Anchor {
     std::size_t offset = 0;
@@ -165,6 +180,11 @@ private:
   std::string source_;
   std::uint64_t sourceVersion_ = 0;
   std::vector<Anchor> anchors_;
+
+  /// Line table for \ref source_, built on demand by \ref resolveLineInfo.
+  mutable std::optional<donner::parser::LineOffsets> lineOffsets_;
+  /// Value of \ref sourceVersion_ that \ref lineOffsets_ was built from.
+  mutable std::uint64_t lineOffsetsVersion_ = 0;
 };
 
 }  // namespace donner::xml
