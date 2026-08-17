@@ -2480,16 +2480,27 @@ std::optional<ParseDiagnostic> ParseAttributeGeneric(SVGParserContext& context, 
   return ParseAttribute(context, element, name, value);
 }
 
-/// Number of distinct \ref ElementType values; \c Use is the last enumerator.
-inline constexpr size_t kElementTypeCount = static_cast<size_t>(ElementType::Use) + 1;
+/// Returns true when every element type in \p Types indexes inside a \ref kElementTypeCount-sized
+/// table. Guards the assumption \ref kElementTypeCount encodes, that \ref ElementType::Use is the
+/// last enumerator: an enumerator added after it that a real element type uses would otherwise
+/// index past the end of the dispatch table.
+template <typename... Types>
+constexpr bool AllElementTypesIndexInsideTable(entt::type_list<Types...>) {
+  return ((static_cast<size_t>(Types::Type) < kElementTypeCount) && ...);
+}
+
+static_assert(AllElementTypesIndexInsideTable(AllSVGElements()),
+              "An SVG element type's ElementType is outside the range kElementTypeCount covers. "
+              "Update kElementTypeCount in ElementType.h to match the last enumerator.");
 
 /**
  * Build the \ref ElementType-indexed table of attribute handlers.
  *
  * Entries are filled in type-list order and an already-occupied slot is left alone, so a type
  * appearing earlier in \ref AllSVGElements wins - the same element a linear "first type whose
- * `Type` matches" scan would have selected. Types are left null when nothing claims them, and the
- * caller falls back to the shared handler for those.
+ * `Type` matches" scan would have selected. Types are left null when nothing claims them (\ref
+ * ElementType::Unknown, and any enumerator no element type in the list uses), and the caller falls
+ * back to the shared handler for those.
  */
 template <typename... Types>
 constexpr std::array<ParseAttributeFn, kElementTypeCount> BuildParseAttributeTable(

@@ -367,8 +367,13 @@ private:
    *
    * Replaces a linear scan that compared the tag against every element type's tag in turn. Lookup
    * is exact and case-sensitive, matching the `tagName.name == ElementT::Tag` comparison it
-   * replaces. The lookup table's constructor rejects duplicate keys at compile time, so two
-   * element types can never silently claim the same tag.
+   * replaces.
+   *
+   * Two element types claiming the same tag is a build error wherever the lookup table is built as
+   * a constant expression, which is every configuration except the one that degrades the table to
+   * runtime initialization to stay inside a lower constexpr step budget. There the duplicate
+   * instead makes the map fall back to a linear scan that returns the first matching key, which is
+   * the entry the replaced scan would also have chosen.
    *
    * @param tagName Tag name to look up.
    * @return Factory for the matching element type, or nullptr when no element type claims the tag.

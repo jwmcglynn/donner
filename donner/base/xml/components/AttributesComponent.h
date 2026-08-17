@@ -100,20 +100,6 @@ struct AttributesComponent {
   }
 
   /**
-   * Store source-anchor metadata for an existing attribute.
-   *
-   * @param name Name of the attribute to update.
-   * @param anchors Source anchors for the attribute.
-   */
-  void setAttributeSourceAnchors(const xml::XMLQualifiedNameRef& name,
-                                 AttributeSourceAnchors anchors) {
-    const auto it = attributes_.find(name);
-    if (it != attributes_.end()) {
-      it->second.sourceAnchors = anchors;
-    }
-  }
-
-  /**
    * Remove source-anchor metadata for an attribute.
    *
    * @param name Name of the attribute to clear.

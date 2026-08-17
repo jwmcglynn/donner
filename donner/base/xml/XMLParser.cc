@@ -536,10 +536,12 @@ private:
   void skipWhitespace(ChunkedString& sourceString) {
     size_t skipCount = 0;
     const size_t len = sourceString.size();
-    const CharScanner chars(sourceString);
 
-    while (skipCount < len && isWhitespace(chars[skipCount])) {
-      ++skipCount;
+    {
+      const CharScanner chars(sourceString);
+      while (skipCount < len && isWhitespace(chars[skipCount])) {
+        ++skipCount;
+      }
     }
 
     sourceString.remove_prefix(skipCount);
@@ -550,10 +552,12 @@ private:
   static ChunkedString consumeMatching(ChunkedString& sourceString) {
     size_t i = 0;
     const size_t len = sourceString.size();
-    const CharScanner chars(sourceString);
 
-    while (i < len && MatchPredicate::test(chars[i])) {
-      ++i;
+    {
+      const CharScanner chars(sourceString);
+      while (i < len && MatchPredicate::test(chars[i])) {
+        ++i;
+      }
     }
 
     const ChunkedString result = sourceString.substr(0, i);
@@ -642,48 +646,53 @@ private:
       return sourceString.substr(0, 0);
     }
 
-    const CharScanner chars(sourceString);
     size_t i = 0;
 
-    // Check NameStartChar (first character)
+    // Scoped so the reader is gone before sourceString is modified below.
     {
-      const char firstByte = chars[0];
-      const uint8_t ub = static_cast<uint8_t>(firstByte);
-      if (ub < 0x80) {
-        // ASCII fast path
-        if (!IsAsciiNameStartCharNoColon(firstByte)) {
-          return sourceString.substr(0, 0);
-        }
-        i = 1;
-      } else {
-        // Multi-byte UTF-8
-        auto [codepoint, seqLen] = decodeCodepointAt(sourceString, 0);
-        // ':' is handled by the caller, so use IsNameStartChar but skip the ':' case
-        // (IsNameStartChar includes ':', but we exclude it here since it's ASCII and handled above)
-        if (!IsNameStartChar(codepoint)) {
-          return sourceString.substr(0, 0);
-        }
-        i = seqLen;
-      }
-    }
+      const CharScanner chars(sourceString);
 
-    // Consume NameChar* (subsequent characters)
-    while (i < len) {
-      const char byte = chars[i];
-      const uint8_t ub = static_cast<uint8_t>(byte);
-      if (ub < 0x80) {
-        // ASCII fast path
-        if (!IsAsciiNameCharNoColon(byte)) {
-          break;
+      // Check NameStartChar (first character)
+      {
+        const char firstByte = chars[0];
+        const uint8_t ub = static_cast<uint8_t>(firstByte);
+        if (ub < 0x80) {
+          // ASCII fast path
+          if (!IsAsciiNameStartCharNoColon(firstByte)) {
+            return sourceString.substr(0, 0);
+          }
+          i = 1;
+        } else {
+          // Multi-byte UTF-8
+          auto [codepoint, seqLen] = decodeCodepointAt(sourceString, 0);
+          // ':' is handled by the caller, so use IsNameStartChar but skip the ':' case
+          // (IsNameStartChar includes ':', but we exclude it here since it's ASCII and handled
+          // above)
+          if (!IsNameStartChar(codepoint)) {
+            return sourceString.substr(0, 0);
+          }
+          i = seqLen;
         }
-        ++i;
-      } else {
-        // Multi-byte UTF-8
-        auto [codepoint, seqLen] = decodeCodepointAt(sourceString, i);
-        if (!IsNameChar(codepoint)) {
-          break;
+      }
+
+      // Consume NameChar* (subsequent characters)
+      while (i < len) {
+        const char byte = chars[i];
+        const uint8_t ub = static_cast<uint8_t>(byte);
+        if (ub < 0x80) {
+          // ASCII fast path
+          if (!IsAsciiNameCharNoColon(byte)) {
+            break;
+          }
+          ++i;
+        } else {
+          // Multi-byte UTF-8
+          auto [codepoint, seqLen] = decodeCodepointAt(sourceString, i);
+          if (!IsNameChar(codepoint)) {
+            break;
+          }
+          i += seqLen;
         }
-        i += seqLen;
       }
     }
 
@@ -702,42 +711,46 @@ private:
       return sourceString.substr(0, 0);
     }
 
-    const CharScanner chars(sourceString);
     size_t i = 0;
 
-    // Check NameStartChar (first character), including ':'
+    // Scoped so the reader is gone before sourceString is modified below.
     {
-      const char firstByte = chars[0];
-      const uint8_t ub = static_cast<uint8_t>(firstByte);
-      if (ub < 0x80) {
-        if (!IsAsciiNameStartCharNoColon(firstByte) && firstByte != ':') {
-          return sourceString.substr(0, 0);
-        }
-        i = 1;
-      } else {
-        auto [codepoint, seqLen] = decodeCodepointAt(sourceString, 0);
-        if (!IsNameStartChar(codepoint)) {
-          return sourceString.substr(0, 0);
-        }
-        i = seqLen;
-      }
-    }
+      const CharScanner chars(sourceString);
 
-    // Consume NameChar* (subsequent characters), including ':'
-    while (i < len) {
-      const char byte = chars[i];
-      const uint8_t ub = static_cast<uint8_t>(byte);
-      if (ub < 0x80) {
-        if (!IsAsciiNameCharNoColon(byte) && byte != ':') {
-          break;
+      // Check NameStartChar (first character), including ':'
+      {
+        const char firstByte = chars[0];
+        const uint8_t ub = static_cast<uint8_t>(firstByte);
+        if (ub < 0x80) {
+          if (!IsAsciiNameStartCharNoColon(firstByte) && firstByte != ':') {
+            return sourceString.substr(0, 0);
+          }
+          i = 1;
+        } else {
+          auto [codepoint, seqLen] = decodeCodepointAt(sourceString, 0);
+          if (!IsNameStartChar(codepoint)) {
+            return sourceString.substr(0, 0);
+          }
+          i = seqLen;
         }
-        ++i;
-      } else {
-        auto [codepoint, seqLen] = decodeCodepointAt(sourceString, i);
-        if (!IsNameChar(codepoint)) {
-          break;
+      }
+
+      // Consume NameChar* (subsequent characters), including ':'
+      while (i < len) {
+        const char byte = chars[i];
+        const uint8_t ub = static_cast<uint8_t>(byte);
+        if (ub < 0x80) {
+          if (!IsAsciiNameCharNoColon(byte) && byte != ':') {
+            break;
+          }
+          ++i;
+        } else {
+          auto [codepoint, seqLen] = decodeCodepointAt(sourceString, i);
+          if (!IsNameChar(codepoint)) {
+            break;
+          }
+          i += seqLen;
         }
-        i += seqLen;
       }
     }
 
@@ -1134,7 +1147,7 @@ private:
     bool inInternalSubset = false;
 
     size_t i = 0;
-    const CharScanner chars(remaining_);
+    const CharScanner chars(remaining_);  // remaining_ is only read, never modified, in this loop.
     while (i < remaining_.size()) {
       char c = chars[i];
       if (c == '\0') {

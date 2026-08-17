@@ -16,8 +16,13 @@
 ///   svg_parse_perf_bench [--iterations=N] [--warmup=N] [--repeat=N] FILE...
 ///
 /// Each input file produces one `RESULT scene=<name> parse_ms=<median>` line
-/// per repeat, and repeats are interleaved across files so that machine drift
-/// affects every scene equally.
+/// per repeat. Repeats interleave at file granularity, not at iteration
+/// granularity: one repeat runs every iteration of the first file, then every
+/// iteration of the second, and so on, before the next repeat starts again from
+/// the first file. That spreads slow machine intervals across the repeats of
+/// every scene rather than concentrating them in whichever scene happened to be
+/// running, so comparing the median across repeats is meaningful. It does not
+/// make a single repeat's samples immune to a burst of machine load.
 
 #include <algorithm>
 #include <chrono>
@@ -26,6 +31,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -54,10 +60,12 @@ double median(std::vector<double> values) {
   return values[middle];
 }
 
-std::string readFile(const std::filesystem::path& path) {
+/// Reads a whole file. Returns an empty optional when the file cannot be opened, which the caller
+/// distinguishes from a file that opened but holds nothing.
+std::optional<std::string> readFile(const std::filesystem::path& path) {
   std::ifstream file(path, std::ios::binary);
   if (!file) {
-    return {};
+    return std::nullopt;
   }
   return std::string(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>());
 }
@@ -117,12 +125,16 @@ int main(int argc, char* argv[]) {
   scenes.reserve(inputs.size());
   for (const std::string& input : inputs) {
     const std::filesystem::path path(input);
-    std::string source = readFile(path);
-    if (source.empty()) {
-      std::fprintf(stderr, "unable to read SVG: %s\n", input.c_str());
+    std::optional<std::string> source = readFile(path);
+    if (!source.has_value()) {
+      std::fprintf(stderr, "unable to open SVG: %s\n", input.c_str());
       return 2;
     }
-    scenes.push_back(Scene{path.filename().string(), std::move(source)});
+    if (source->empty()) {
+      std::fprintf(stderr, "SVG is empty: %s\n", input.c_str());
+      return 2;
+    }
+    scenes.push_back(Scene{path.filename().string(), std::move(source.value())});
   }
 
   for (int run = 0; run < repeat; ++run) {
