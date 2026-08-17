@@ -134,9 +134,15 @@ public:
   bool allocateSlot(GeodeDevice& device, Slot& out) {
     if (!freeIndices_.empty()) {
       const uint32_t index = freeIndices_.front();
-      freeIndices_.erase(freeIndices_.begin());
       out = slotAt(index);
-      return static_cast<bool>(out.buffer);
+      if (!out.buffer) {
+        // A stale index that no longer resolves stays out of the free list,
+        // but never silently consumes the allocation attempt.
+        freeIndices_.erase(freeIndices_.begin());
+        return false;
+      }
+      freeIndices_.erase(freeIndices_.begin());
+      return true;
     }
     if (chunks_.empty() || usedBytes_ + sizeof(InstanceRecord) > chunks_.back().size) {
       uint64_t newSize = chunks_.empty() ? kInitialRecordSlabBytes : chunks_.back().size * 2u;
@@ -207,6 +213,7 @@ private:
       if (offset < chunk.size) {
         return Slot{chunk.buffer.get(), offset, index};
       }
+      offset -= chunk.size;
     }
     return Slot{wgpu::Buffer(), 0, index};
   }
@@ -581,6 +588,16 @@ struct GeodeResidentSlot {
       allocationSize = other.allocationSize;
       other.allocationOffset = 0;
       other.allocationSize = 0;
+      // The record slot and its owning slab move too: entt's swap-and-pop
+      // removal move-assigns the surviving component over the removed one,
+      // and a move that left the source's recordSlab set would let the
+      // source's destructor free the SURVIVOR's record slot while its
+      // cached bind group still binds it (rendering another entity's paint
+      // once the slot is reused).
+      recordSlot = other.recordSlot;
+      recordSlab = std::move(other.recordSlab);
+      other.recordSlot = GeodeRecordSlab::Slot{};
+      lastSceneFrame = other.lastSceneFrame;
       bindGroup = std::move(other.bindGroup);
       bands = other.bands;
       curves = other.curves;

@@ -4,6 +4,7 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <deque>
 #include <cstdio>
 #include <cstring>
 #include <iostream>
@@ -1032,7 +1033,7 @@ std::shared_ptr<RendererGeodeTexturePool> TexturePoolForDevice(geode::GeodeDevic
 
 /// Gate for ordered cross-entity batching. Disabled while the
 /// marker / scissor-clip deferred-flush interaction is unresolved; the
-/// SameEntity M6-B instanced path and the solo residence flows remain
+/// same-entity instanced path and the solo residence flows remain
 /// active and fully verified.
 constexpr bool kEnableSceneBatching = false;
 
@@ -1903,7 +1904,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
   struct PendingBatch {
     enum class Mode : uint8_t {
       None,
-      /// M6-B: consecutive draws of the SAME entity with the same solid
+      /// Consecutive draws of the SAME entity with the same solid
       /// paint, collapsed into one instanced draw via the arena path
       /// (per-instance transforms, one record per instance).
       SameEntity,
@@ -1958,6 +1959,9 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
     wgpu::Buffer sceneChunkBuffer;
     wgpu::Buffer sceneRecordBuffer;
     uint32_t sceneFirstInstance = 0;
+    /// Byte offset of the first instance's record inside sceneRecordBuffer
+    /// (indices are global across slab chunks; offsets are per-buffer).
+    uint64_t sceneFirstRecordOffset = 0;
     uint32_t sceneVertexCount = 0;
     /// Encoder clip-state version at the batch's first append. A batch
     /// never spans a clip change (one draw carries one clip state).
@@ -1974,7 +1978,16 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
   /// (markers, repeated `<use>`): one record per draw, so earlier recorded
   /// batches keep their own content at submit time. Freed (deferred) at
   /// the next frame's draw(); the slab merges the frees at beginFrame.
-  std::vector<geode::GeodeRecordSlab::Slot> sceneTempRecordSlots;
+  /// Temporary per-frame record slots for same-frame repeat draws. A deque
+  /// keeps element addresses stable (callers hold a pointer to the newest
+  /// entry while later draws append), and each entry carries the slab it
+  /// was allocated from so a multi-document frame frees every slot into
+  /// its own slab rather than whichever document draw() saw last.
+  struct SceneTempRecordSlot {
+    geode::GeodeRecordSlab::Slot slot;
+    std::shared_ptr<geode::GeodeRecordSlab> slab;
+  };
+  std::deque<SceneTempRecordSlot> sceneTempRecordSlots;
 
   /// Resolve the record slot for a scene-batch instance of `slot`: the
   /// entity's primary slot on its first scene use this frame, otherwise a
@@ -1999,8 +2012,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
       if (!slot.recordSlab->allocateSlot(*device, tempSlot)) {
         return false;
       }
-      sceneTempRecordSlots.push_back(tempSlot);
-      outSlot = &sceneTempRecordSlots.back();
+      sceneTempRecordSlots.push_back(SceneTempRecordSlot{tempSlot, slot.recordSlab});
+      outSlot = &sceneTempRecordSlots.back().slot;
     }
     return true;
   }
@@ -2268,7 +2281,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
       geode::GeoEncoder::SceneBatchBinding binding = {};
       binding.chunkBuffer = batch.sceneChunkBuffer;
       binding.recordBuffer = batch.sceneRecordBuffer;
-      binding.firstInstance = batch.sceneFirstInstance;
+      binding.firstRecordOffset = batch.sceneFirstRecordOffset;
       binding.instanceCount = static_cast<uint32_t>(batch.sceneInstances.size());
       binding.vertexCount = batch.sceneVertexCount;
 
@@ -2344,7 +2357,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
                              const geode::EncodedPath* encoded,
                              geode::GeodeResidentSlot* residentFillSlot) {
     // Same-entity mode: consecutive draws of the SAME entity with the
-    // same paint extend the M6-B instanced batch.
+    // same paint extend the same-entity instanced batch.
     if (pendingBatch.has_value() && pendingBatch->mode == PendingBatch::Mode::SameEntity &&
         pendingBatch->sourceRegistry == sourceRegistry &&
         pendingBatch->sourceEntity == sourceEntity && pendingBatch->color == color &&
@@ -2359,13 +2372,14 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
     // starts as SameEntity(1); the second, different entity converts it),
     // so a same-entity `<use>` repeat still prefers the instanced path.
     // Scene batches cover entities drawn ONCE per frame. A same-frame
-    // repeat (markers, repeated <use>) belongs to the M6-B same-entity
+    // repeat (markers, repeated <use>) belongs to the same-entity
     // path and the solo flush's arena fallback, whose semantics predate
     // ordered batching and are already exact for repeated draws.
     const geode::GeodeRecordSlab::Slot* recordSlotPtr = nullptr;
     const uint64_t clipVersion = encoder->clipStateVersion();
     // Ordered cross-entity batching is gated off while the marker /
-    // scissor-clip edge cases are resolved (see the design checkpoint):
+    // scissor-clip edge cases are resolved (markers show one-pixel AA-tip
+    // diffs when batched draws defer past a scissor change):
     // the machinery below stays in place for the follow-up.
     const bool sceneEligible = kEnableSceneBatching && residentFillSlot != nullptr &&
                                encoded != nullptr &&
@@ -2411,6 +2425,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
           pendingBatch->sceneChunkBuffer = chunk;
           pendingBatch->sceneRecordBuffer = recordBuf;
           pendingBatch->sceneFirstInstance = recordIndex;
+          pendingBatch->sceneFirstRecordOffset = effectiveRecordSlot.offset;
           pendingBatch->sceneClipVersion = clipVersion;
           appendSceneInstance(*pendingBatch,
                               PendingBatch::SceneInstance{residentFillSlot, encoded, &path, color,
@@ -2451,6 +2466,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
           pendingBatch->sceneChunkBuffer = firstChunk;
           pendingBatch->sceneRecordBuffer = firstRecordBuf;
           pendingBatch->sceneFirstInstance = firstIndex;
+          pendingBatch->sceneFirstRecordOffset = effectiveFirstRecordSlot.offset;
           pendingBatch->sceneClipVersion = clipVersion;
           pendingBatch->sceneVertexCount = first.vertexCount;
           pendingBatch->sceneInstances.push_back(first);
@@ -2467,6 +2483,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
             pendingBatch->sceneChunkBuffer = chunk;
             pendingBatch->sceneRecordBuffer = recordBuf;
             pendingBatch->sceneFirstInstance = recordIndex;
+          pendingBatch->sceneFirstRecordOffset = effectiveRecordSlot.offset;
             appendSceneInstance(*pendingBatch,
                                 PendingBatch::SceneInstance{residentFillSlot, encoded, &path,
                                                             color, rule,
@@ -2506,6 +2523,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
       pendingBatch->sceneChunkBuffer = chunk;
       pendingBatch->sceneRecordBuffer = recordBuf;
       pendingBatch->sceneFirstInstance = recordIndex;
+          pendingBatch->sceneFirstRecordOffset = effectiveRecordSlot.offset;
       pendingBatch->sceneClipVersion = clipVersion;
       appendSceneInstance(*pendingBatch,
                           PendingBatch::SceneInstance{residentFillSlot, encoded, &path, color,
@@ -3115,8 +3133,8 @@ void RendererGeode::draw(SVGDocument& document) {
   // repeat draws). freeSlot defers to the NEXT beginFrame, so freeing
   // here makes them reusable starting the frame after this one - the
   // batches recorded against them last frame have long submitted.
-  for (const geode::GeodeRecordSlab::Slot& tempSlot : impl_->sceneTempRecordSlots) {
-    impl_->recordSlab(document.registry())->freeSlot(tempSlot);
+  for (const auto& tempSlot : impl_->sceneTempRecordSlots) {
+    tempSlot.slab->freeSlot(tempSlot.slot);
   }
   impl_->sceneTempRecordSlots.clear();
 

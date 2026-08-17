@@ -568,7 +568,11 @@ public:
   struct SceneBatchBinding {
     wgpu::Buffer chunkBuffer;   ///< Slab chunk holding every instance's geometry.
     wgpu::Buffer recordBuffer;  ///< Record-slab buffer holding the records.
-    uint32_t firstInstance = 0; ///< Record-slot index of the first instance.
+    /// BYTE offset of the first instance's record inside recordBuffer.
+    /// Record-slot indices are global across slab chunks, so an index is
+    /// not a byte offset once the slab has grown; the caller passes the
+    /// first slot's own buffer-relative offset instead.
+    uint64_t firstRecordOffset = 0;
     uint32_t instanceCount = 1;
     uint32_t vertexCount = 0;   ///< Max fan vertex count over the instances.
   };
