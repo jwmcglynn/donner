@@ -154,6 +154,12 @@ Full doc comment: `donner/svg/renderer/RendererInterface.h` (~line 235). Verifie
 - `PathShape.sourceEntity` is the per-entity path-cache key (set by the driver in
   `RendererDriver::traverseRange`; Geode keys `GeodePathCacheComponent` off it). Leaving it null
   is legal but disables caching.
+- `PathShape.path` is a BORROWED `const Path*`, never an owner. It must point at storage that
+  outlives the `drawPath` call; the driver points it straight at `ComputedPathComponent::spline`
+  so a steady frame allocates nothing per drawable. Copying it back into a `Path` member is a
+  regression, not a simplification. Anything that keeps geometry past the call owns its own copy
+  instead: `RenderSnapshot`'s `DrawPathCommand`, and `ResolvedClip::clipPaths`, which use the
+  separate owning `ClipPathShape`.
 - `RenderingInstanceComponent::worldFromEntityTransform` maps entity-local to canvas coordinates;
   the driver composes it with its surface transform. Every `Transform2d` you add must be named
   `destFromSource` (project-wide hard rule — direction encoded in the name, not a comment).
