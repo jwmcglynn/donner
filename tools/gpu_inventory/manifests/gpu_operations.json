@@ -676,6 +676,7 @@
     "donner/svg/renderer/geode/GeodeFilterEngine.cc": {
       "operations": [
         "beginComputePass",
+        "beginRenderPass",
         "createBindGroup",
         "createBindGroupLayout",
         "createBuffer",
@@ -718,11 +719,16 @@
         "ComputePipelineDescriptor",
         "Device",
         "Extent3D",
+        "LoadOp",
         "PipelineLayout",
         "PipelineLayoutDescriptor",
+        "RenderPassColorAttachment",
+        "RenderPassDescriptor",
+        "RenderPassEncoder",
         "ShaderModule",
         "ShaderStage",
         "StorageTextureAccess",
+        "StoreOp",
         "TexelCopyBufferLayout",
         "TexelCopyTextureInfo",
         "Texture",
@@ -738,9 +744,11 @@
     "donner/svg/renderer/geode/GeodeFilterEngine.h": {
       "wgpuCppTokens": [
         "BindGroupLayout",
+        "CommandEncoder",
         "ComputePipeline",
         "Device",
-        "Texture"
+        "Texture",
+        "TextureDescriptor"
       ]
     },
     "donner/svg/renderer/geode/GeodeImagePipeline.cc": {
