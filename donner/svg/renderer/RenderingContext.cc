@@ -1356,10 +1356,16 @@ void RenderingContext::ensureComputedComponents(ParseWarningSink& warningSink) {
   registry_.clear<RenderingInstanceComponent>();
   registry_.clear<ComputedClipPathsComponent>();
 
-  // Shadow-tree teardown recreates tree entities with fresh ComputedStyleComponent placeholders.
-  // Force StyleSystem down the full recompute path so those placeholders are populated before the
-  // later paint/mask/marker passes walk all styled entities.
-  renderState.needsFullStyleRecompute = true;
+  // Animated presentation attributes are written straight into the cached computed styles (see
+  // applyAnimationOverrides above), which is only sound while every pass rebuilds those styles
+  // from their unanimated base. Keep documents carrying animation overrides on the whole-tree
+  // restyle; every other document may use the dirty-entity style pass.
+  //
+  // Entities that the shadow-tree instantiation below creates are handled there: it flags the
+  // fresh clones dirty so the dirty-entity pass populates their placeholder styles.
+  if (!registry_.view<AnimatedValuesComponent>().empty()) {
+    renderState.needsFullStyleRecompute = true;
+  }
 
   createComputedComponents(warningSink);
 
@@ -1549,6 +1555,15 @@ void RenderingContext::createComputedComponents(ParseWarningSink& warningSink) {
           EntityHandle(registry_, entity), shadow, ShadowBranchType::Main, targetEntity.value(),
           shadowTreeComponent.mainHref().value(), warningSink);
 
+      // populateInstance() just created these entities, each carrying an empty computed-style
+      // placeholder that the passes below dereference unconditionally. No mutation hook can have
+      // flagged them, so flag them here: the style pass is allowed to visit only dirty entities.
+      if (shadow.mainBranch) {
+        for (const Entity shadowEntity : shadow.mainBranch->shadowEntities) {
+          registry_.get_or_emplace<DirtyFlagsComponent>(shadowEntity)
+              .mark(DirtyFlagsComponent::Style);
+        }
+      }
     } else if (shadowTreeComponent.mainHref()) {
       // Same-document resolution failed. Check if this is an external reference.
       const Reference ref(shadowTreeComponent.mainHref().value());

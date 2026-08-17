@@ -316,6 +316,10 @@ void MarkSubtreeReplaced(EntityHandle handle) {
 void MarkChildRemoved(EntityHandle parentHandle) {
   components::RenderTreeState& renderState = GetRenderTreeState(parentHandle);
   renderState.needsFullRebuild = true;
+  // Removing a child changes structural selector matches (:nth-child, :empty, :first-child and
+  // the sibling combinators) for the elements that remain. Per-entity dirty flags do not track
+  // those non-local dependencies, so the whole tree has to be restyled.
+  renderState.needsFullStyleRecompute = true;
 
   parentHandle.get_or_emplace<components::DirtyFlagsComponent>().mark(
       components::DirtyFlagsComponent::All);
