@@ -1,6 +1,7 @@
 #pragma once
 /// @file
 
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <span>
@@ -330,6 +331,11 @@ private:
   std::vector<SurfaceFrame> surfaceStack_;
   std::optional<PatternPaintState> patternFillPaint_;
   std::optional<PatternPaintState> patternStrokePaint_;
+
+  /// Staging buffer for image and bitmap payloads that have to be row-packed or premultiplied
+  /// before tiny-skia can view them. Held across draws so a repeated compose reuses one
+  /// allocation; only live for the duration of a single draw call, which never nests.
+  std::vector<uint8_t> pixelScratch_;
 };
 
 }  // namespace donner::svg

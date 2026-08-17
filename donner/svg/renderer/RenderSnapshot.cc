@@ -304,6 +304,9 @@ std::size_t CountReferenceToRegistry(const RenderCommand& command, const Registr
                         [&](const DrawPathCommand& value) {
                           return CountReferenceToRegistry(value.path.sourceEntity, registry);
                         },
+                        [&](const DrawImageCommand& value) {
+                          return CountReferenceToRegistry(value.params.sourceEntity, registry);
+                        },
                         [&](const DrawTextCommand& value) {
                           return CountReferenceToRegistry(value.text, registry);
                         },
@@ -539,7 +542,12 @@ void RenderSnapshotRecorder::drawEllipse(const Box2d& bounds, const StrokeParams
 }
 
 void RenderSnapshotRecorder::drawImage(const ImageResource& image, const ImageParams& params) {
-  snapshot_.impl_->commands.push_back(DrawImageCommand{image, params});
+  ImageParams snapshotParams = params;
+  // Same rule as `drawPath`: a replayed command must not carry a handle into the live document
+  // registry, so backends replaying a snapshot convert the image per draw instead of caching it
+  // on its source entity.
+  snapshotParams.sourceEntity = EntityHandle();
+  snapshot_.impl_->commands.push_back(DrawImageCommand{image, std::move(snapshotParams)});
 }
 
 void RenderSnapshotRecorder::drawText(Registry&, const components::ComputedTextComponent& text,

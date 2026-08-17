@@ -53,38 +53,55 @@ void PremultiplyRgbaInPlace(std::vector<std::uint8_t>& rgba) {
 
 }  // namespace
 
+void PremultiplyRgbaInto(std::span<const std::uint8_t> rgbaPixels, std::vector<std::uint8_t>& out) {
+  out.assign(rgbaPixels.begin(), rgbaPixels.end());
+  PremultiplyRgbaInPlace(out);
+}
+
 std::vector<std::uint8_t> PremultiplyRgba(std::span<const std::uint8_t> rgbaPixels) {
-  std::vector<std::uint8_t> result(rgbaPixels.begin(), rgbaPixels.end());
-  PremultiplyRgbaInPlace(result);
+  std::vector<std::uint8_t> result;
+  PremultiplyRgbaInto(rgbaPixels, result);
   return result;
 }
 
-std::vector<std::uint8_t> CopyTightRgbaRows(std::span<const std::uint8_t> rgbaPixels, int width,
-                                            int height, std::size_t rowBytes) {
+void CopyTightRgbaRowsInto(std::span<const std::uint8_t> rgbaPixels, int width, int height,
+                           std::size_t rowBytes, std::vector<std::uint8_t>& out) {
   if (!HasRgbaRows(rgbaPixels, width, height, rowBytes)) {
-    return {};
+    out.clear();
+    return;
   }
 
   const std::size_t tightRowBytes = *TightRowBytesForWidth(width);
   const std::size_t sizeHeight = static_cast<std::size_t>(height);
-  std::vector<std::uint8_t> result(tightRowBytes * sizeHeight);
+  out.resize(tightRowBytes * sizeHeight);
   if (rowBytes == tightRowBytes) {
-    std::copy_n(rgbaPixels.begin(), result.size(), result.begin());
-    return result;
+    std::copy_n(rgbaPixels.begin(), out.size(), out.begin());
+    return;
   }
 
   for (std::size_t y = 0; y < sizeHeight; ++y) {
     std::copy_n(rgbaPixels.begin() + static_cast<std::ptrdiff_t>(y * rowBytes), tightRowBytes,
-                result.begin() + static_cast<std::ptrdiff_t>(y * tightRowBytes));
+                out.begin() + static_cast<std::ptrdiff_t>(y * tightRowBytes));
   }
+}
 
+std::vector<std::uint8_t> CopyTightRgbaRows(std::span<const std::uint8_t> rgbaPixels, int width,
+                                            int height, std::size_t rowBytes) {
+  std::vector<std::uint8_t> result;
+  CopyTightRgbaRowsInto(rgbaPixels, width, height, rowBytes, result);
   return result;
+}
+
+void PremultiplyRgbaRowsInto(std::span<const std::uint8_t> rgbaPixels, int width, int height,
+                             std::size_t rowBytes, std::vector<std::uint8_t>& out) {
+  CopyTightRgbaRowsInto(rgbaPixels, width, height, rowBytes, out);
+  PremultiplyRgbaInPlace(out);
 }
 
 std::vector<std::uint8_t> PremultiplyRgbaRows(std::span<const std::uint8_t> rgbaPixels, int width,
                                               int height, std::size_t rowBytes) {
-  std::vector<std::uint8_t> result = CopyTightRgbaRows(rgbaPixels, width, height, rowBytes);
-  PremultiplyRgbaInPlace(result);
+  std::vector<std::uint8_t> result;
+  PremultiplyRgbaRowsInto(rgbaPixels, width, height, rowBytes, result);
   return result;
 }
 

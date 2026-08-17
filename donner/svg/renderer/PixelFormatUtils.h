@@ -32,6 +32,17 @@ namespace donner::svg {
 /// @return Newly-allocated premul RGBA buffer of the same size.
 [[nodiscard]] std::vector<std::uint8_t> PremultiplyRgba(std::span<const std::uint8_t> rgbaPixels);
 
+/// Convert tightly-packed straight-alpha RGBA8 to premultiplied RGBA8, writing into a
+/// caller-owned buffer.
+///
+/// Same conversion as \ref PremultiplyRgba, but \p out's existing storage is reused when it is
+/// large enough, so a caller that converts once per frame keeps one buffer instead of allocating
+/// and freeing a new one every time.
+///
+/// @param rgbaPixels Straight-alpha RGBA bytes (size must be a multiple of 4).
+/// @param out Destination buffer, resized to match \p rgbaPixels.
+void PremultiplyRgbaInto(std::span<const std::uint8_t> rgbaPixels, std::vector<std::uint8_t>& out);
+
 /// Copy row-strided RGBA8 bytes into a tightly-packed RGBA8 buffer.
 ///
 /// @param rgbaPixels Source RGBA bytes.
@@ -44,6 +55,19 @@ namespace donner::svg {
                                                           int width, int height,
                                                           std::size_t rowBytes);
 
+/// Copy row-strided RGBA8 bytes into a caller-owned tightly-packed buffer.
+///
+/// Buffer-reusing form of \ref CopyTightRgbaRows. @see PremultiplyRgbaInto
+///
+/// @param rgbaPixels Source RGBA bytes.
+/// @param width Pixel width.
+/// @param height Pixel height.
+/// @param rowBytes Bytes between source rows.
+/// @param out Destination buffer, resized to the tightly-packed size, or emptied when dimensions
+///   or row storage are invalid.
+void CopyTightRgbaRowsInto(std::span<const std::uint8_t> rgbaPixels, int width, int height,
+                           std::size_t rowBytes, std::vector<std::uint8_t>& out);
+
 /// Convert row-strided straight-alpha RGBA8 to tightly-packed premultiplied RGBA8.
 ///
 /// @param rgbaPixels Straight-alpha source RGBA bytes.
@@ -54,6 +78,20 @@ namespace donner::svg {
 /// dimensions or row storage are invalid.
 [[nodiscard]] std::vector<std::uint8_t> PremultiplyRgbaRows(
     std::span<const std::uint8_t> rgbaPixels, int width, int height, std::size_t rowBytes);
+
+/// Convert row-strided straight-alpha RGBA8 to tightly-packed premultiplied RGBA8, writing into
+/// a caller-owned buffer.
+///
+/// Buffer-reusing form of \ref PremultiplyRgbaRows. @see PremultiplyRgbaInto
+///
+/// @param rgbaPixels Straight-alpha source RGBA bytes.
+/// @param width Pixel width.
+/// @param height Pixel height.
+/// @param rowBytes Bytes between source rows.
+/// @param out Destination buffer, resized to the tightly-packed size, or emptied when dimensions
+///   or row storage are invalid.
+void PremultiplyRgbaRowsInto(std::span<const std::uint8_t> rgbaPixels, int width, int height,
+                             std::size_t rowBytes, std::vector<std::uint8_t>& out);
 
 /// Convert tightly-packed premultiplied RGBA8 to straight-alpha RGBA8,
 /// in place. Fully-opaque pixels (alpha == 255) are unchanged;

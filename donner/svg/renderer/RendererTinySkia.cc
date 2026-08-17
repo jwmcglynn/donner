@@ -7,16 +7,20 @@
 #include <functional>
 #include <iostream>
 #include <optional>
+#include <span>
 #include <utility>
 #include <variant>
 #include <vector>
 
+#include "donner/base/EcsRegistry.h"
 #include "donner/base/Length.h"
 #include "donner/base/MathUtils.h"
 #include "donner/svg/components/layout/TransformComponent.h"
 #include "donner/svg/components/paint/GradientComponent.h"
 #include "donner/svg/components/paint/LinearGradientComponent.h"
 #include "donner/svg/components/paint/RadialGradientComponent.h"
+#include "donner/svg/components/resources/ImageComponent.h"
+#include "donner/svg/components/shape/ComputedPathComponent.h"
 #ifdef DONNER_FILTERS_ENABLED
 #include "donner/svg/renderer/FilterGraphExecutor.h"
 #endif
@@ -24,6 +28,7 @@
 #include "donner/svg/renderer/PixelFormatUtils.h"
 #include "donner/svg/renderer/RendererDriver.h"
 #include "donner/svg/renderer/RendererImageIO.h"
+#include "donner/svg/renderer/RendererTinySkiaCache.h"
 #ifdef DONNER_TEXT_ENABLED
 #include "donner/svg/components/text/ComputedTextGeometryComponent.h"
 #include "donner/svg/renderer/PlacedTextGeometry.h"
@@ -126,9 +131,8 @@ enum class TinyPathCloseBehavior : uint8_t {
   EndWithLine,
 };
 
-tiny_skia::Path toTinyPath(
-    const Path& spline,
-    TinyPathCloseBehavior closeBehavior = TinyPathCloseBehavior::Preserve) {
+tiny_skia::Path toTinyPath(const Path& spline,
+                           TinyPathCloseBehavior closeBehavior = TinyPathCloseBehavior::Preserve) {
   tiny_skia::PathBuilder builder(spline.commands().size(), spline.points().size());
   const auto points = spline.points();
 
@@ -173,6 +177,88 @@ tiny_skia::Path toTinyPath(
   }
 
   return builder.finish().value_or(tiny_skia::Path());
+}
+
+/// Marks a registry whose conversion-cache invalidation listeners are already connected.
+///
+/// The sentinel lives in the registry's context store, so it dies with the registry: a later
+/// registry allocated at the same address correctly misses it and gets its own listeners.
+/// Pointer identity on the registry alone could not tell those two cases apart.
+struct CacheListenersInstalled {};
+
+void OnComputedPathChanged(Registry& registry, Entity entity) {
+  // entt allows `remove` on a component the entity does not hold; it is a cheap no-op there.
+  registry.remove<TinySkiaPathCacheComponent>(entity);
+}
+
+void OnLoadedImageChanged(Registry& registry, Entity entity) {
+  registry.remove<TinySkiaImageCacheComponent>(entity);
+}
+
+/// Connects the listeners that drop a cached conversion when its source changes or goes away.
+/// Idempotent, and called before any cache entry is installed on \p registry.
+void EnsureCacheInvalidationWired(Registry& registry) {
+  if (registry.ctx().contains<CacheListenersInstalled>()) {
+    return;
+  }
+
+  registry.ctx().emplace<CacheListenersInstalled>();
+  registry.on_update<components::ComputedPathComponent>().connect<&OnComputedPathChanged>();
+  registry.on_destroy<components::ComputedPathComponent>().connect<&OnComputedPathChanged>();
+  registry.on_update<components::LoadedImageComponent>().connect<&OnLoadedImageChanged>();
+  registry.on_destroy<components::LoadedImageComponent>().connect<&OnLoadedImageChanged>();
+  // Leaving the connections attached across renderer destruction is intentional: these are
+  // free functions with no captured state, so they are safe to outlive any renderer, and the
+  // connections die with the registry.
+}
+
+/// Returns `shape.path` in tiny-skia form, converting it on a cache miss.
+///
+/// When the shape carries a source entity the conversion is memoized on that entity and the
+/// returned reference points into the cache component, which stays valid until the entity's
+/// geometry changes. Without a source entity (overlay drawing, test harnesses) the conversion
+/// lands in \p scratch, which the caller must keep alive for as long as it uses the result.
+const tiny_skia::Path& ResolveTinyPath(const PathShape& shape, TinyPathCloseBehavior closeBehavior,
+                                       tiny_skia::Path& scratch) {
+  EntityHandle source = shape.sourceEntity;
+  if (!source) {
+    scratch = toTinyPath(shape.path, closeBehavior);
+    return scratch;
+  }
+
+  EnsureCacheInvalidationWired(*source.registry());
+  auto& cache = source.get_or_emplace<TinySkiaPathCacheComponent>();
+  std::optional<tiny_skia::Path>& slot =
+      closeBehavior == TinyPathCloseBehavior::Preserve ? cache.closedPath : cache.openedPath;
+  if (!slot.has_value()) {
+    slot = toTinyPath(shape.path, closeBehavior);
+  }
+  return *slot;
+}
+
+/// Returns \p image's pixels premultiplied, converting them on a cache miss.
+///
+/// Mirrors \ref ResolveTinyPath: the payload is memoized on \p source when there is one, and
+/// otherwise converted into \p scratch, which the caller must keep alive for as long as it uses
+/// the result. A cached payload whose dimensions no longer match \p image is reconverted rather
+/// than sampled at the wrong extent.
+std::span<const std::uint8_t> ResolvePremultipliedImage(const ImageResource& image,
+                                                        EntityHandle source,
+                                                        std::vector<std::uint8_t>& scratch) {
+  if (!source) {
+    PremultiplyRgbaInto(image.data, scratch);
+    return scratch;
+  }
+
+  EnsureCacheInvalidationWired(*source.registry());
+  auto& cache = source.get_or_emplace<TinySkiaImageCacheComponent>();
+  if (cache.premultiplied.size() != image.data.size() || cache.width != image.width ||
+      cache.height != image.height) {
+    PremultiplyRgbaInto(image.data, cache.premultiplied);
+    cache.width = image.width;
+    cache.height = image.height;
+  }
+  return cache.premultiplied;
 }
 
 // `transformPath` now lives in the shared (text-gated) PlacedTextGeometry header
@@ -595,7 +681,20 @@ void RendererTinySkia::beginFrame(const RenderViewport& viewport) {
   const int pixelWidth = static_cast<int>(viewport.size.x * viewport.devicePixelRatio);
   const int pixelHeight = static_cast<int>(viewport.size.y * viewport.devicePixelRatio);
 
-  frame_ = createTransparentPixmap(pixelWidth, pixelHeight);
+  // Keep the frame buffer's allocation across frames. A renderer that draws the
+  // same viewport repeatedly (editor, compositor, animation loop) otherwise
+  // releases and re-acquires the whole buffer every frame, which costs a
+  // malloc/free pair plus a first-touch page fault for every page of a
+  // multi-megabyte buffer. The clear is not an optimization target: the buffer
+  // must start transparent, so a retained buffer is explicitly zeroed and the
+  // output is identical either way.
+  if (frame_.width() == static_cast<std::uint32_t>(std::max(pixelWidth, 0)) &&
+      frame_.height() == static_cast<std::uint32_t>(std::max(pixelHeight, 0)) &&
+      frame_.width() != 0 && frame_.height() != 0) {
+    frame_.fill(tiny_skia::Color::transparent);
+  } else {
+    frame_ = createTransparentPixmap(pixelWidth, pixelHeight);
+  }
   deviceFromLocalTransform_ = Transform2d();
   deviceFromLocalTransformStack_.clear();
   currentClipMask_.reset();
@@ -1063,9 +1162,6 @@ bool RendererTinySkia::beginPatternTile(const Box2d& tileRect,
   SurfaceFrame frame;
   frame.kind = SurfaceKind::PatternTile;
   frame.savedTransform = deviceFromLocalTransform_;
-  frame.savedTransformStack = deviceFromLocalTransformStack_;
-  frame.savedClipMask = currentClipMask_;
-  frame.savedClipStack = clipStack_;
   const Transform2d deviceFromPattern = targetFromPattern * frame.savedTransform;
   const std::optional<PatternTileRasterMetrics> rasterMetrics =
       ComputePatternTileRasterMetrics(tileRect, deviceFromPattern);
@@ -1080,6 +1176,16 @@ bool RendererTinySkia::beginPatternTile(const Box2d& tileRect,
   if (frame.pixmap.width() == 0 || frame.pixmap.height() == 0) {
     return false;
   }
+
+  // Hand the live clip and transform state to the frame by move. Every entry of
+  // `clipStack_` owns a surface-sized alpha mask, so copying the stack here
+  // duplicated one buffer per nesting level for every pattern tile the document
+  // draws, only to clear the originals three lines later. The moves are placed
+  // after the last early return, so a rejected tile still leaves the renderer's
+  // state exactly as it found it.
+  frame.savedTransformStack = std::move(deviceFromLocalTransformStack_);
+  frame.savedClipMask = std::move(currentClipMask_);
+  frame.savedClipStack = std::move(clipStack_);
 
   // Tile-content draws must not consume the outer element's pending pattern shaders (a shape
   // inside the tile would otherwise pick them up as its own fill/stroke and reset them).
@@ -1129,7 +1235,9 @@ void RendererTinySkia::drawPath(const PathShape& path, const StrokeParams& strok
     return;
   }
 
-  const tiny_skia::Path tinyPath = toTinyPath(path.path);
+  tiny_skia::Path uncachedPath;
+  const tiny_skia::Path& tinyPath =
+      ResolveTinyPath(path, TinyPathCloseBehavior::Preserve, uncachedPath);
   const tiny_skia::Mask* mask = currentClipMask_.has_value() ? &*currentClipMask_ : nullptr;
   tiny_skia::Pixmap* fillPaintPixmap =
       !surfaceStack_.empty() && surfaceStack_.back().fillPaintPixmap.has_value()
@@ -1207,11 +1315,10 @@ void RendererTinySkia::drawPath(const PathShape& path, const StrokeParams& strok
     // those ranges across ClosePath, filling the seam as if the stroke were solid. Replace only
     // the stroke's ClosePath commands with explicit closing lines so the dash stroker emits caps
     // at that boundary; fills and ordinary dashed/solid strokes keep their closed contours.
-    std::optional<tiny_skia::Path> openDashSeamPath;
+    tiny_skia::Path uncachedDashSeamPath;
     const tiny_skia::Path* strokePath = &tinyPath;
     if (tinyStroke.dash.has_value() && dashHasOnlyZeroLengthGaps) {
-      openDashSeamPath = toTinyPath(path.path, TinyPathCloseBehavior::EndWithLine);
-      strokePath = &*openDashSeamPath;
+      strokePath = &ResolveTinyPath(path, TinyPathCloseBehavior::EndWithLine, uncachedDashSeamPath);
     }
 
     auto pixmapView = currentPixmapView();
@@ -1364,11 +1471,17 @@ void RendererTinySkia::drawImage(const ImageResource& image, const ImageParams& 
     return;
   }
 
-  std::vector<std::uint8_t> premultiplied = PremultiplyRgba(image.data);
-  auto maybePixmap = tiny_skia::Pixmap::fromVec(
-      std::move(premultiplied), tiny_skia::IntSize(static_cast<std::uint32_t>(image.width),
-                                                   static_cast<std::uint32_t>(image.height)));
-  if (!maybePixmap.has_value()) {
+  // `ImageResource` publishes straight alpha and tiny-skia samples premultiplied, so the
+  // conversion is unavoidable, but it does not have to recur. The pixels belong to the element's
+  // loaded image and change only when that does, so the premultiplied form is cached on the
+  // source entity and borrowed through a view; the previous code premultiplied into a fresh
+  // buffer and wrapped it in a throwaway `Pixmap` on every draw of every frame.
+  const std::span<const std::uint8_t> premultiplied =
+      ResolvePremultipliedImage(image, params.sourceEntity, pixelScratch_);
+  const std::optional<tiny_skia::PixmapView> sourceView =
+      tiny_skia::PixmapView::fromBytes(premultiplied, static_cast<std::uint32_t>(image.width),
+                                       static_cast<std::uint32_t>(image.height));
+  if (!sourceView.has_value()) {
     return;
   }
 
@@ -1386,7 +1499,7 @@ void RendererTinySkia::drawImage(const ImageResource& image, const ImageParams& 
 
   const tiny_skia::Mask* mask = currentClipMask_.has_value() ? &*currentClipMask_ : nullptr;
   auto pixmapView = currentPixmapView();
-  tiny_skia::Painter::drawPixmap(pixmapView, 0, 0, maybePixmap->view(), paint,
+  tiny_skia::Painter::drawPixmap(pixmapView, 0, 0, *sourceView, paint,
                                  toTinyTransform(imageFromLocal), mask);
 }
 
@@ -1408,8 +1521,13 @@ void RendererTinySkia::drawBitmap(const RendererBitmap& bitmap, const ImageParam
   // payloads premultiply directly into the draw scratch while packing rows.
   // All cases beat the ImageResource contract, which costs an extra
   // full-buffer copy and, for premultiplied payloads, an extra unpremultiply.
+  //
+  // The two converting cases stage through `pixelScratch_` rather than a local
+  // buffer, so a caller that composes the same layer every frame reuses one
+  // allocation instead of acquiring and releasing a payload-sized buffer per
+  // draw. The scratch is only ever read back through the view built from it
+  // below, and no draw nests inside another, so one buffer serves all of them.
   std::optional<tiny_skia::PixmapView> sourceView;
-  std::vector<std::uint8_t> scratch;
   if (bitmap.alphaType == AlphaType::Premultiplied) {
     if (bitmap.rowBytes == tightRowBytes) {
       sourceView =
@@ -1417,16 +1535,17 @@ void RendererTinySkia::drawBitmap(const RendererBitmap& bitmap, const ImageParam
                                            static_cast<std::uint32_t>(bitmap.dimensions.x),
                                            static_cast<std::uint32_t>(bitmap.dimensions.y));
     } else {
-      scratch = CopyTightRgbaRows(bitmap.pixels, bitmap.dimensions.x, bitmap.dimensions.y,
-                                  bitmap.rowBytes);
-      sourceView = tiny_skia::PixmapView::fromBytes(
-          std::span<const std::uint8_t>(scratch), static_cast<std::uint32_t>(bitmap.dimensions.x),
-          static_cast<std::uint32_t>(bitmap.dimensions.y));
+      CopyTightRgbaRowsInto(bitmap.pixels, bitmap.dimensions.x, bitmap.dimensions.y,
+                            bitmap.rowBytes, pixelScratch_);
+      sourceView =
+          tiny_skia::PixmapView::fromBytes(std::span<const std::uint8_t>(pixelScratch_),
+                                           static_cast<std::uint32_t>(bitmap.dimensions.x),
+                                           static_cast<std::uint32_t>(bitmap.dimensions.y));
     }
   } else {
-    scratch = PremultiplyRgbaRows(bitmap.pixels, bitmap.dimensions.x, bitmap.dimensions.y,
-                                  bitmap.rowBytes);
-    sourceView = tiny_skia::PixmapView::fromBytes(std::span<const std::uint8_t>(scratch),
+    PremultiplyRgbaRowsInto(bitmap.pixels, bitmap.dimensions.x, bitmap.dimensions.y,
+                            bitmap.rowBytes, pixelScratch_);
+    sourceView = tiny_skia::PixmapView::fromBytes(std::span<const std::uint8_t>(pixelScratch_),
                                                   static_cast<std::uint32_t>(bitmap.dimensions.x),
                                                   static_cast<std::uint32_t>(bitmap.dimensions.y));
   }
@@ -2005,15 +2124,13 @@ RendererBitmap RendererTinySkia::takeSnapshot() const {
     return snapshot;
   }
 
-  auto maybeCopy = tiny_skia::Pixmap::fromVec(
-      std::vector<std::uint8_t>(frame_.data().begin(), frame_.data().end()), frame_.size());
-  if (!maybeCopy.has_value()) {
-    snapshot.dimensions = Vector2i::Zero();
-    snapshot.rowBytes = 0;
-    return snapshot;
-  }
-
-  snapshot.pixels = maybeCopy->release();
+  // Copy straight into the snapshot's buffer. The caller owns the returned
+  // pixels and `frame_` has to survive for the next frame, so one copy is
+  // unavoidable; staging it through a temporary `Pixmap` (build a vector,
+  // re-validate its length against a size we already own, then move the vector
+  // back out) only adds moves and a redundant check around that same copy.
+  const std::span<const std::uint8_t> framePixels = frame_.data();
+  snapshot.pixels.assign(framePixels.begin(), framePixels.end());
   // Scalar pass, measured at roughly 2 ms for a 900x900 frame. It already
   // short-circuits alpha==255 and alpha==0 pixels, so a separate "is the frame
   // opaque?" pre-scan would only add a second full read without removing work;
@@ -2259,13 +2376,20 @@ tiny_skia::Pixmap RendererTinySkia::createTransparentPixmap(int width, int heigh
     return tiny_skia::Pixmap();
   }
 
+  // `Pixmap::fromSize` hands back a zero-filled buffer, which is already the
+  // transparent-black bit pattern this function promises. An explicit
+  // `fill(transparent)` on top of that memsets every byte a second time, so it
+  // is dropped: the result is byte-identical and each surface (frame buffer,
+  // isolated layer, filter buffer plus its fill/stroke paint buffers, mask
+  // capture and content, pattern tile) pays one full-buffer write instead of
+  // two. Reusing a surface across frames is the one case that still needs an
+  // explicit clear; see `beginFrame`.
   auto maybePixmap = tiny_skia::Pixmap::fromSize(static_cast<std::uint32_t>(width),
                                                  static_cast<std::uint32_t>(height));
   if (!maybePixmap.has_value()) {
     return tiny_skia::Pixmap();
   }
 
-  maybePixmap->fill(tiny_skia::Color::transparent);
   return std::move(*maybePixmap);
 }
 

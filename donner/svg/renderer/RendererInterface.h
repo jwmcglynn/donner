@@ -290,6 +290,12 @@ struct ImageParams {
   double opacity = 1.0;
   /// Whether to favor nearest-neighbor sampling for pixelated rendering.
   bool imageRenderingPixelated = false;
+  /// Source entity the drawn image was loaded onto. Set by the driver at the `drawImage`
+  /// call site. Backends that cache a converted form of the pixels key off this, the same
+  /// way \ref PathShape::sourceEntity keys converted geometry. A null `EntityHandle` (the
+  /// default) means "no associated entity" - non-driver callers leave it null and backends
+  /// fall back to converting per draw.
+  EntityHandle sourceEntity;
 };
 
 /**

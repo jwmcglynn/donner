@@ -907,6 +907,7 @@ std::optional<ImageParams> toImageParams(const components::RenderingInstanceComp
   ImageParams params;
   params.opacity = style.properties->opacity.get().value();
   params.targetRect = Box2d::WithSize(Vector2d(image.image->width, image.image->height));
+  params.sourceEntity = instance.dataHandle(registry);
 
   // `image-rendering: pixelated` and `crisp-edges` (plus the legacy
   // SVG 1.1 `optimizeSpeed` alias) disable bilinear filtering and use
