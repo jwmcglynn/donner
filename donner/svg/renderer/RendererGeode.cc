@@ -5018,13 +5018,14 @@ ReadbackMapStatus MapAndWaitReadback(const std::shared_ptr<geode::GeodeDevice>& 
 #endif
     // Never ask wgpu-native to block until the GPU map completes: a low-priority thumbnail must
     // observe a superseding main-document request promptly. Native polling is
-    // non-blocking and gets a short sleep to avoid spinning. The 100 us sleep
-    // bounds the snapshot latency floor without the 1 ms quanta that used to
-    // dominate small-fixture readbacks; the poll itself processes the map
-    // completion callback as soon as the GPU delivers it.
+    // non-blocking and gets a short sleep to avoid spinning. The
+    // kGpuWaitPollInterval (100 us) sleep bounds the snapshot latency floor
+    // without the 1 ms quanta that used to dominate small-fixture readbacks;
+    // the poll itself processes the map completion callback as soon as the
+    // GPU delivers it.
     device->pollSuspending(false);
 #ifndef __EMSCRIPTEN__
-    std::this_thread::sleep_for(std::chrono::microseconds(100));
+    std::this_thread::sleep_for(geode::kGpuWaitPollInterval);
 #endif
   }
   device->recordReadback(usedTimedWaitAny, pollIter);

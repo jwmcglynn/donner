@@ -287,6 +287,13 @@ GeodeDevice::~GeodeDevice() {
     // Deliberate leak: destroying or releasing the root handles of a hung
     // device can block inside the driver with no bound. Abandon them; the
     // process has already lost GPU rendering on this device.
+    //
+    // Post-loss teardown is wait-free, not driver-free: drainDeferredDestroys
+    // and the Impl reset above still issued release/destroy calls into the
+    // client library for pooled textures, buffers, and pipelines. Those are
+    // refcount drops and deferred-destroy marks that do not wait on GPU
+    // completion; only the root-handle destroy/release below, which can
+    // trigger a blocking device drain, is skipped.
     return;
   }
 

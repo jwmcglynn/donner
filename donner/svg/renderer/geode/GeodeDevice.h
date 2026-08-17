@@ -219,6 +219,18 @@ public:
    * the device is marked lost (see \ref markDeviceLost) and later waits on
    * this device return immediately.
    *
+   * Completion condition: the wait observes "queue empty", not "the work
+   * submitted before this call completed". With a concurrent submitter on
+   * the same underlying queue (on native, the async-render thread and the
+   * editor framebuffer wrapper share one WebGPU queue), a healthy but
+   * continuously saturated queue could in principle be non-empty at every
+   * poll sample for the whole timeout and be falsely declared lost. This is
+   * accepted: real submit cadences leave idle gaps many orders of magnitude
+   * wider than the 100 us sampling interval, the exposure is bounded by the
+   * generous timeout, and a false positive degrades to the detection path
+   * (renderer reports device loss and tears down wait-free) rather than a
+   * hang or crash.
+   *
    * Under Emscripten this performs the pre-existing single poll-yield
    * instead of a bounded drain loop: emdawnwebgpu's poll return value does
    * not report queue-idle, and browser device hangs surface through the
