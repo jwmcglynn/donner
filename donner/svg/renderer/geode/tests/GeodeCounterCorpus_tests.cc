@@ -827,22 +827,21 @@ void printMeasurement(const std::string& name, const SceneMeasurement& measureme
                measurement.first.drawCalls, measurement.visiblePixels);
 }
 
-class GeodeCounterCorpusTest : public ::testing::TestWithParam<std::string> {
-protected:
-  /// One process-wide device shared by every scene. Creating a WebGPU device
-  /// and compiling the pipelines costs tens of seconds on a software adapter,
-  /// so the corpus would be unaffordable with a device per scene. It also
-  /// matches how embedders wire things up: the host owns the GPU context and
-  /// renderers come and go. `SceneCountersAreOrderIndependent` is the check
-  /// that sharing the device does not make a scene's counters depend on which
-  /// scenes ran before it.
-  static std::shared_ptr<geode::GeodeDevice> sharedDevice() {
-    static auto device = [] {
-      return std::shared_ptr<geode::GeodeDevice>(geode::GeodeDevice::CreateHeadless());
-    }();
-    return device;
-  }
-};
+/// One process-wide device shared by every scene. Creating a WebGPU device and
+/// compiling the pipelines costs tens of seconds on a software adapter, so the
+/// corpus would be unaffordable with a device per scene. It also matches how
+/// embedders wire things up: the host owns the GPU context and renderers come
+/// and go. `SceneCountersAreOrderIndependent` is the check that sharing the
+/// device does not make a scene's counters depend on which scenes ran before
+/// it.
+std::shared_ptr<geode::GeodeDevice> sharedDevice() {
+  static auto device = [] {
+    return std::shared_ptr<geode::GeodeDevice>(geode::GeodeDevice::CreateHeadless());
+  }();
+  return device;
+}
+
+using GeodeCounterCorpusTest = ::testing::TestWithParam<std::string>;
 
 TEST_P(GeodeCounterCorpusTest, SecondFrameIsSteadyState) {
   const std::shared_ptr<geode::GeodeDevice> device = sharedDevice();
@@ -1010,7 +1009,9 @@ TEST(GeodeCounterCorpusGate, DeliberatelyInertScenesAreWellFormed) {
 /// through the same device, then render it again and require identical
 /// counters.
 TEST(GeodeCounterCorpusGate, SceneCountersAreOrderIndependent) {
-  auto device = std::shared_ptr<geode::GeodeDevice>(geode::GeodeDevice::CreateHeadless());
+  // The same device every scene uses, so this measures the real configuration
+  // rather than a pristine one.
+  const std::shared_ptr<geode::GeodeDevice> device = sharedDevice();
   ASSERT_TRUE(device) << "GeodeDevice::CreateHeadless failed";
 
   // A pattern scene is the sentinel because it allocates a tile texture every
