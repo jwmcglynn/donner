@@ -227,11 +227,21 @@ constexpr uint32_t kGradientKindRadial = 1u;
 
 }  // namespace
 
-struct GeoEncoder::Impl {
+struct GeoEncoder::Impl : public GeodeTextureEncoder::UniformScratch {
   GeodeDevice* device;
   const GeodePipeline* pipeline;
   const GeodeGradientPipeline* gradientPipeline;
   const GeodeImagePipeline* imagePipeline;
+
+  /// Pooled blit-uniform scratch: bump-allocate image-blit uniforms from
+  /// the encoder's uniform arena instead of creating one buffer per blit.
+  /// Consecutive image draws and layer composites share one growing
+  /// buffer; a buffer is only created when the arena grows.
+  GeodeTextureEncoder::UniformAllocation allocate(const void* data, uint64_t size,
+                                                  uint64_t alignment) override {
+    const Allocation alloc = allocInArena(uniformArena, data, size, alignment);
+    return {alloc.buffer, alloc.offset, alloc.size};
+  }
 
   /// Per-encoder growable GPU buffer used as a bump-allocation arena
   /// for per-draw data (vertex / band / curve). Replaces the per-fill
@@ -2261,7 +2271,7 @@ void GeoEncoder::blitFullTarget(const wgpu::Texture& src, double opacity) {
 
   GeodeTextureEncoder::drawTexturedQuad(*impl_->device, *impl_->imagePipeline, impl_->pass.get(),
                                         src, mvp, impl_->targetWidth, impl_->targetHeight, qp,
-                                        impl_->transientResources);
+                                        impl_->transientResources, impl_.get());
 }
 
 void GeoEncoder::blitFullTargetMasked(const wgpu::Texture& content, const wgpu::Texture& mask,
@@ -2302,7 +2312,7 @@ void GeoEncoder::blitFullTargetMasked(const wgpu::Texture& content, const wgpu::
 
   GeodeTextureEncoder::drawTexturedQuad(*impl_->device, *impl_->imagePipeline, impl_->pass.get(),
                                         content, mvp, impl_->targetWidth, impl_->targetHeight, qp,
-                                        impl_->transientResources);
+                                        impl_->transientResources, impl_.get());
 }
 
 void GeoEncoder::blitFullTargetBlended(const wgpu::Texture& layer, const wgpu::Texture& dstSnapshot,
@@ -2345,7 +2355,7 @@ void GeoEncoder::blitFullTargetBlended(const wgpu::Texture& layer, const wgpu::T
 
   GeodeTextureEncoder::drawTexturedQuad(*impl_->device, *impl_->imagePipeline, impl_->pass.get(),
                                         layer, mvp, impl_->targetWidth, impl_->targetHeight, qp,
-                                        impl_->transientResources);
+                                        impl_->transientResources, impl_.get());
 }
 
 void GeoEncoder::drawImage(const svg::ImageResource& image, const Box2d& destRect, double opacity,
@@ -2398,7 +2408,7 @@ void GeoEncoder::drawImage(const svg::ImageResource& image, const Box2d& destRec
 
   GeodeTextureEncoder::drawTexturedQuad(*impl_->device, *impl_->imagePipeline, impl_->pass.get(),
                                         texture, mvp, impl_->targetWidth, impl_->targetHeight, qp,
-                                        impl_->transientResources);
+                                        impl_->transientResources, impl_.get());
 }
 
 void GeoEncoder::drawTexture(const wgpu::Texture& texture, const Box2d& destRect,
@@ -2429,7 +2439,7 @@ void GeoEncoder::drawTexture(const wgpu::Texture& texture, const Box2d& destRect
 
   GeodeTextureEncoder::drawTexturedQuad(*impl_->device, *impl_->imagePipeline, impl_->pass.get(),
                                         texture, mvp, impl_->targetWidth, impl_->targetHeight, qp,
-                                        impl_->transientResources);
+                                        impl_->transientResources, impl_.get());
 }
 
 void GeoEncoder::finish() {

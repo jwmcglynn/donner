@@ -57,6 +57,48 @@ public:
   static wgpu::Texture uploadRgba8Texture(GeodeDevice& device, const uint8_t* rgbaPixels,
                                           uint32_t width, uint32_t height);
 
+  /// Uniform-buffer binding offset alignment shared by the blit path and
+  /// any UniformScratch implementation. 256 is the WebGPU default
+  /// minUniformBufferOffsetAlignment; implementations that ever query a
+  /// device limit instead must keep this constant in sync or blits fail
+  /// binding validation on devices with a larger limit.
+  static constexpr uint64_t kUniformOffsetAlignment = 256u;
+
+  /// Borrowed uniform-buffer range for one blit uniform upload. The
+  /// `buffer` field is a raw non-owning handle: the provider keeps it
+  /// alive (see UniformScratch's contract below); holders must not retain
+  /// the allocation beyond the current frame.
+  struct UniformAllocation {
+    wgpu::Buffer buffer;
+    uint64_t offset = 0;
+    uint64_t size = 0;
+  };
+
+  /**
+   * Interface for callers that pool blit uniform uploads into a per-frame
+   * scratch arena instead of creating one uniform buffer per blit.
+   * `GeoEncoder` implements this over its per-encoder uniform arena, so
+   * consecutive image blits and layer composites share one growing buffer
+   * (the buffer itself is only created when the arena grows).
+   *
+   * Implementation contract (GeoEncoder's arena satisfies all four):
+   * - The returned buffer carries the Uniform buffer-usage flag.
+   * - The buffer outlives every command buffer recorded against it in the
+   *   current frame (retire-then-release, never destroy mid-frame).
+   * - The range `[offset, offset + size)` is never rewritten for the rest
+   *   of the frame once returned.
+   * - `offset` honors the requested alignment (at least
+   *   kUniformOffsetAlignment for blit uniforms).
+   */
+  class UniformScratch {
+  public:
+    virtual ~UniformScratch() = default;
+
+    /// Copy `size` bytes of uniform data into the scratch arena and return
+    /// the borrowed (buffer, offset, size) range for the bind group.
+    virtual UniformAllocation allocate(const void* data, uint64_t size, uint64_t alignment) = 0;
+  };
+
   /// Filtering mode for `drawTexturedQuad`.
   enum class Filter : uint8_t {
     /// Bilinear filtering. Default for SVG `image-rendering: auto`.
@@ -133,16 +175,20 @@ public:
    *   - Provide an MVP matrix built the same way as `GeoEncoder::Impl::buildMvp`
    *     (target-pixel → clip space, composed with the model-view transform).
    *
-   * Allocates fresh GPU resources (uniform buffer + bind group) per call and
-   * retains them in `resourceArena` until the caller finishes the enclosing
-   * command encoder.
+   * Allocates a bind group per call (retained in `resourceArena` until the
+   * caller finishes the enclosing command encoder). The uniform upload
+   * either goes into `scratch` when provided (one buffer create on arena
+   * growth instead of one per blit) or into a fresh per-blit buffer on the
+   * legacy path.
    *
    * @param resourceArena Scoped owner for WebGPU handles created by the draw.
+   * @param scratch Optional pooled uniform scratch (see `UniformScratch`).
    */
   static void drawTexturedQuad(GeodeDevice& device, const GeodeImagePipeline& pipeline,
                                const wgpu::RenderPassEncoder& pass, const wgpu::Texture& texture,
                                const float mvp[16], uint32_t targetWidth, uint32_t targetHeight,
-                               const QuadParams& params, ScopedWgpuResourceArena& resourceArena);
+                               const QuadParams& params, ScopedWgpuResourceArena& resourceArena,
+                               UniformScratch* scratch = nullptr);
 };
 
 }  // namespace donner::geode

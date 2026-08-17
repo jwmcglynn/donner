@@ -559,6 +559,10 @@ struct GeodeResidentPathComponent {
   GeodeResidentSlot strokeSlot;
   /// Gradient-painted fill residence.
   GeodeResidentGradientSlot gradientFillSlot;
+  /// Gradient-painted stroke residence. Holds the
+  /// cached stroke-outline encode plus the resolved gradient uniform, so
+  /// an unchanged gradient-stroked outline re-uploads zero geometry.
+  GeodeResidentGradientSlot gradientStrokeSlot;
 };
 
 }  // namespace donner::geode
