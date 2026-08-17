@@ -1,189 +1,273 @@
 # Design: Pivot tiny-skia-cpp backend to premul-internal storage
 
-**Status:** Rejected — precision-loss at u8 premul storage
-**Author:** Claude Opus 4.7
+**Status:** Revived and implemented
+**Author:** Claude Opus 5 (revived and implemented; originally authored by Claude Opus 4.7)
+**Model:** Claude Opus 5
 **Created:** 2026-04-19
 **Rejected:** 2026-04-19 (same-day, during implementation)
+**Revived:** 2026-08-16
 
 ## Verdict
 
-**Abandoned.** Storing `RendererTinySkia::frame_` as u8 premultiplied RGBA
-loses irrecoverable precision at low alpha values. A pixel with
-(rgb=17, a=6) — `#111111` at 6/255 coverage, a routine antialiased edge
-— premultiplies to `17 × 6 / 255 = 0.4` in float space, which stores to
-u8 as **0**. After the u8 roundtrip, no unpremultiply math can recover
-the original rgb=17; the information is gone.
+The 2026-04 rejection stands on its facts but drew the wrong conclusion from
+them. Storing `RendererTinySkia::frame_` as premultiplied RGBA8 does lose
+precision at low alpha, exactly as recorded below, and the three renderer
+goldens it named still fail today for exactly that reason. What the original
+verdict did not have was the size of the prize on the other side of the
+tradeoff: a measured 1.9x median settled-frame speedup on the CPU backend. That
+number changes the question from "is this lossy?" (yes, provably) to "is the
+loss worth 1.9x?", which is a product call, not a correctness call.
 
-Tiny-skia's `Paint::unpremulStore = true` flag exists specifically to
-dodge this: the pipeline blends in premultiplied float space and only
-unpremultiplies on final u8 store, preserving per-channel precision at
-low alpha. Donner has relied on that guarantee (sometimes unknowingly)
-across its entire golden corpus. Flipping `frame_` to premul fails at
-least three existing renderer goldens (2×2 cubic paths) on antialiased
-edge pixels — and those are the *simple* scenes. More complex
-goldens with semi-transparent edges would fail more broadly.
+The measuring turned up a second mechanism the 2026-04 pass did not separate
+out: the flag was also selecting the raster pipeline, and most of the accuracy
+loss came from that half. Keeping the root-surface pin costs nothing
+measurable, so the shipped change takes it. What remains is storage
+quantization alone, bounded at 4/255 of visible error, which was accepted:
+three renderer goldens re-blessed and one reference case moved from a 100 to a
+120 pixel budget.
 
-Skia sidesteps the same problem by doing blends in `kRGBA_F16_SkColorType`
-intermediate buffers when precision matters and only converting to u8
-at final present. Tiny-skia-cpp has no f16 pixmap support — its
-pipeline is float in registers, u8 in storage, and every store/load
-across surface boundaries quantizes. That's the structural difference
-that makes Skia's "premul internal + unpremul at snapshot" safe and
-tiny-skia's same-pivot unsafe.
+## The change, concretely
 
-## What was validated, and then kept vs reverted
+1. Delete all 15 `paint.unpremulStore = ...` assignments in
+   `RendererTinySkia.cc`. `tiny_skia::Paint::unpremulStore` defaults to false,
+   so the root frame buffer joins every other surface the backend owns in
+   holding premultiplied RGBA8, matching upstream tiny-skia.
+2. `takeSnapshot()` runs `UnpremultiplyRgbaInPlace` once over the frame. The
+   published `RendererBitmap` contract stays `AlphaType::Unpremultiplied`, so no
+   consumer changes.
+3. Add a `forceHqPipeline` passthrough to `PixmapPaint`, which
+   `Painter::drawPixmap` previously hardcoded off, and set it from
+   `RendererTinySkia::makePixmapPaint` when the composite destination is the
+   root frame. This restores the raster-pipeline selection those six composite
+   sites had before, which the deleted flag was performing as a side effect.
 
-**Kept:**
-- `donner/svg/renderer/PixelFormatUtils.{h,cc}` — shared
-  `PremultiplyRgba` / `UnpremultiplyRgba{,InPlace}` extracted from
-  `FilterGraphExecutor.cc` and `CompositorController.cc`. Pure
-  consolidation; byte-identical math to the originals. Both renderer
-  + compositor golden suites pass unchanged.
-- `FilterGraphExecutor.h` now re-exports `PremultiplyRgba` from the
-  shared header.
-- `CompositorController`'s `UnpremultiplyPixels` private copy deleted;
-  `BuildImageResource` calls `UnpremultiplyRgba` from the new header.
+The storage decision now lives in one place (a note on the `frame_` member
+declaration) instead of being re-derived at 15 call sites, and the pipeline
+decision lives in one helper instead of riding along with it.
 
-**Reverted:**
-- All `unpremulStore = ...` deletions in `RendererTinySkia.cc` — the
-  flag is load-bearing and stays.
-- `takeSnapshot()` stays a memcpy of `frame_.data()` (no unpremul pass
-  needed because `frame_` is already unpremul by construction).
+`unpremulStore` is entirely unused from Donner after this change. It is a
+tiny-skia-cpp extension, not upstream tiny-skia API; the vendored copy keeps it
+so the flag can be removed on its own schedule.
 
-## What the experiment measured
+## What the experiment measured (2026-08 rerun)
 
-Procedure (before revert):
-1. Deleted every `paint.unpremulStore = surfaceStack_.empty() / &destination == &frame_`
-   site in `RendererTinySkia.cc` — 14 call sites; default-false
-   (`unpremulStore=false`) means premul storage.
-2. Added `UnpremultiplyRgbaInPlace(snapshot.pixels)` in `takeSnapshot()`.
-3. Ran golden suites.
+Setup: `-c opt`. Benchmark is
+`engine_compare_bench --backend=tiny-skia --iterations=15 --warmup=3`; the
+reported figure is the median settled-frame time (`second_ms`), which excludes
+parse and first-frame warmup. Before and after were measured back to back in
+the same pass, twice, on an otherwise quiet machine; the two passes agreed to
+within 1% and the effect is an order of magnitude larger than that spread. The
+"after" column is the final configuration, storage change plus root-surface
+pipeline pin.
 
-Failure surface:
-- **`//donner/svg/renderer/tests:renderer_tests`**: 3 failures —
-  `MinimalClosedCubic2x2`, `MinimalClosedCubic5x3`,
-  `BigLightningGlowNoFilterCrop`. Byte-level diff of the 2×2 case
-  showed 10 pixels out of 100 mis-rendered at the antialiased path
-  edge. Pixel (4,3) expected (17,17,17,6), actual (0,0,0,6) — rgb
-  zeroed. Other affected pixels drifted by 1-3 units of rgb at
-  alphas in the range 6-72.
-- **`//donner/svg/compositor:compositor_golden_tests`**: 1 dual-path
-  failure — `DualPathGate_ExplicitPromoteAtIdentity` — with 19,200
-  pixels drifting by max 2 channels. This was the Stage-2 symptom
-  the design doc anticipated (compositor round-trip through
-  `Unpremul → BuildImageResource → drawImage → PremultiplyRgba`),
-  bounded to ≤2 channels so plausibly a Stage-2 followup could
-  address it. But the renderer-level failure is the fundamental
-  blocker, not this.
+| Scene | Size | Before (ms) | After (ms) | Speedup |
+| --- | --- | --- | --- | --- |
+| Ghostscript_Tiger | 900x900 | 41.00 | 21.94 | 1.87x |
+| lion | 567x567 | 4.589 | 2.690 | 1.71x |
+| z0rly_test6 | 500x300 | 1.548 | 0.489 | 3.17x |
+| big_lightning_glow_no_filter_crop | 95x177 | 0.360 | 0.185 | 1.95x |
 
-## Why the design's precision analysis was wrong
+Median speedup 1.91x. The snapshot-side unpremultiply pass costs about 2 ms at
+900x900 and is charged against the "after" column above.
 
-The design claimed:
+Conformance: the reference SVG suite runs 1512 cases in the `max` variant and
+1498 in `default_text`. The same four exceed their per-case pixel budget after
+the change, in both variants:
 
-> `frame_` becomes premul; a single unpremul pass runs inside
-> `takeSnapshot()`. Every existing PNG golden must byte-match before and
-> after — pure performance refactor with zero observable output change.
+| Case | Budget | Before | After |
+| --- | --- | --- | --- |
+| shapes/circle/simple-case | 100 | 14 | 112 |
+| painting/marker/marker-on-rounded-rect | 100 | 24 | 4395 |
+| painting/marker/nested | 100 | 0 | 909 |
+| painting/marker/target-with-subpaths-1 | 100 | 0 | 25453 |
 
-The flawed step: "every existing PNG golden must byte-match." That
-holds only if the pre-pivot and post-pivot u8 representations of the
-same pipeline-float state produce the same snapshot bytes. They don't.
+Three renderer goldens with a zero-tolerance budget also fail, the same three
+the 2026-04 run named. The claim that those failures no longer reproduce is
+wrong; they reproduce exactly. All three are alpha-preserving RGB shifts at
+antialiased edges:
 
-Concretely: pipeline-float state (r=0.0666, a=0.0235) after unpremultiply
-stage (pre-pivot path) stores as `(unnorm(0.0666)=17, unnorm(0.0235)=6)`.
-The same float state without the unpremultiply stage (post-pivot path)
-stores as `(unnorm(0.0666*0.0235)=0, unnorm(0.0235)=6)` — the premul
-multiplication happens *before* the unnorm round-to-u8, so the tiny
-value rounds to 0.
+| Golden | Pixels over budget | Pixels changed | Max alpha delta | Max visible error over white |
+| --- | --- | --- | --- | --- |
+| MinimalClosedCubic2x2 | 4 of 0 allowed | 10 | 0 | 0.85 / 255 |
+| MinimalClosedCubic5x3 | 9 of 0 allowed | 16 | 0 | 0.79 / 255 |
+| BigLightningGlowNoFilterCrop | 446 of 0 allowed | 496 | 0 | 1.91 / 255 |
 
-The float→u8 rounding is lossy and asymmetric. Doing it pre-unpremul
-loses precision on RGB at low alpha. Doing it post-unpremul (the
-`unpremulStore=true` path) preserves it. Both produce a valid
-premultiplied-or-unpremultiplied pixel, but the former has already
-thrown away the information needed to recover the straight-alpha rgb.
+The canonical case is `MinimalClosedCubic2x2` pixel (4,3): golden
+(17,17,17,6), now (0,0,0,6). That is mechanism 1 in its purest form, and it
+moves the composited-over-white result by 0.40/255.
 
-My audit (informed by TinySkiaBot's thorough investigation) missed
-this because I focused on *which surfaces are already premul* (all
-non-root surfaces — true) and *whether filter primitives expect premul
-input* (yes — true). Both correct. Neither implied that `frame_`
-could safely make the same switch, because none of those non-root
-surfaces exit the pipeline via a u8 unpremul snapshot to the
-outside world. They're intermediate; they compose onto `frame_` (or a
-wider parent) and the blend math on that parent still goes through
-tiny-skia's precision-preserving float pipeline.
+Five editor targets also regress, all against zero-tolerance bitmap goldens
+rendered through this backend: `layer_thumbnail_golden_tests`,
+`layers_panel_tests`, `showcase_asset_tests` (32 to 753 pixels per thumbnail),
+`rnr_replay_tests` (528,492 pixels on one full-canvas replay golden), and
+`editor_control_session_tests`, whose
+`HidingSplashBackgroundDropsGhostPixelsFromSettledFrame` case reads an opaque
+splash corner back at alpha 250 instead of 255.
 
-## What this means for the 1-2 ms/frame premul round-trip
+Whole-repository totals with the change applied: 445 tests, 418 pass, 9 fail,
+18 skipped. Every one of the 9 passes on the parent revision. Compositor
+goldens, the dual-path verifier, and every GPU-backend variant are unaffected;
+the entire regression surface is CPU-backend pixel output.
 
-The cost remains real. `compositePixmapInto` on the segment →
-`frame_` blit path still runs `unpremul=true` and pays the premul →
-blend → unpremul round-trip. On splash drag frames, that's still
-~1-2 ms across 6-8 segments. Lost ground.
+## Two independent mechanisms, separated by experiment
 
-Alternative paths forward, ordered by expected ROI:
+The failures above have two different causes, and separating them is the most
+useful thing this rerun produced.
 
-1. **Design 0027 Milestone 5 (Premul-Skip for Simple Segments).**
-   Bypass `compositePixmapInto` entirely when the segment composes as
-   opacity=1 / blendMode=SourceOver / no mask / integer translation.
-   Direct unpremul → unpremul memcpy (with SIMD alpha-test). Works
-   because segments are *already* stored unpremul on both ends, so a
-   straight memcpy of the overlapping pixels is bit-identical to what
-   the current round-trip produces for the simple case. Pure CPU win,
-   no precision change. Previously scoped at ~1-2 ms/frame on splash.
-   **Recommended next step.**
+**Mechanism 1: u8 premultiplied storage quantizes RGB at low alpha.** This is
+the original 2026-04 finding and it is correct. Pipeline-float state
+(r=0.0666, a=0.0235) stores as `(unnorm(0.0666), unnorm(0.0235))` = (17, 6)
+under straight-alpha storage, and as `(unnorm(0.0666 * 0.0235), 6)` = (0, 6)
+under premultiplied storage. The multiply happens before the round-to-u8, so
+the RGB information is gone and no later unpremultiply recovers it. At alpha 6
+a premultiplied u8 pixel can only represent 7 distinct RGB levels.
 
-2. **Tiny-skia-cpp upstream: add an f16 Pixmap type.** Would
-   structurally match Skia's design and let `frame_` be premul-f16
-   with unpremul-u8 snapshot. Large cross-library change; tiny-skia
-   upstream is written in a particular style and adding a second
-   pixel-format family touches the entire pipeline stage table. Not
-   worth it for the 1-2 ms/frame budget alone; revisit if the f16
-   case appears elsewhere (e.g., wide-gamut color support).
+**Mechanism 2: the flag was also pinning the raster pipeline to float.**
+`Stage::Unpremultiply` and `Stage::PremultiplyDestination` are implemented only
+in the float (high-precision) pipeline, so any paint with `unpremulStore` set
+forced every draw touching the root surface onto that pipeline. Without the
+flag, the blitter is free to select the 8-bit fixed-point pipeline, whose
+compose arithmetic drifts: an opaque layer pixel composited through
+`Painter::drawPixmap` can land at alpha 250 instead of 255, with the
+premultiplied RGB preserved. That is what the marker cases are seeing.
 
-3. **SIMD the `compositePixmapInto` unpremul pipeline.** Attack the
-   cost in-place inside tiny-skia's blitter. Would benefit every
-   composite, not just simple segments. Requires changes to
-   `PipelineBlitter.cpp`'s lowp / highp stage selection when
-   `unpremulStore=true`. Technically feasible; schedule risk is high
-   because it's library-internal correctness-sensitive code. Defer
-   unless (1) underdelivers.
+Attribution experiment: rebuild the branch with the pipeline selector pinned to
+float and rerun the four cases.
 
-4. **Don't optimize.** Accept the 1-2 ms. Tight-bounds already
-   landed; Geode will have entirely different perf characteristics;
-   the editor steady state is GL-texture-cached. The cost shows up
-   only on drag-frame invalidations. Plausible pragmatic choice if
-   higher-leverage work dominates the roadmap.
+| Case | Before | After | After, pipeline pinned to float |
+| --- | --- | --- | --- |
+| shapes/circle/simple-case | 14 | 112 | 112 |
+| painting/marker/marker-on-rounded-rect | 24 | 4395 | 24 |
+| painting/marker/nested | 0 | 909 | 0 |
+| painting/marker/target-with-subpaths-1 | 0 | 25453 | 0 |
+
+So the three marker regressions are entirely mechanism 2, and
+`shapes/circle/simple-case` is entirely mechanism 1. The three zero-tolerance
+renderer goldens are also entirely mechanism 1 (they fail identically with the
+pipeline pinned).
+
+Pinning the pipeline globally is only an attribution tool, not a shippable
+configuration: it also moves non-root surfaces off the 8-bit pipeline, which
+they used before this change, and that regresses the reference suite further
+(8 of 8 shards instead of 4 of 8). The shippable form of the same idea is to
+pin only the draws that target the root surface, which is exactly where the
+old flag was pinning them.
+
+Scoped attribution experiment: add a `forceHqPipeline` passthrough to
+`PixmapPaint` (today `Painter::drawPixmap` hardcodes it off) and set it at the
+six root-targeting pixmap-composite sites, using the same
+"is the destination the root surface?" predicate the deleted flag used.
+Failure surface with that in place:
+
+| Target | Parent | This change | Scoped pin |
+| --- | --- | --- | --- |
+| resvg_test_suite_max | pass | 4 cases | 1 case |
+| resvg_test_suite_default_text | pass | 4 cases | 1 case |
+| renderer_tests | pass | 3 goldens | 3 goldens |
+| donner_svg2_pilot | pass | fail | fail |
+| layer_thumbnail_golden_tests | pass | fail | fail (smaller) |
+| layers_panel_tests | pass | fail | fail (smaller) |
+| showcase_asset_tests | pass | fail | fail (smaller) |
+| rnr_replay_tests | pass | fail | pass |
+| editor_control_session_tests | pass | fail | pass |
+
+The scoped pin removes every semantic and large-magnitude defect: the opaque
+splash corner reads 255 again, and the 528,492-pixel replay golden is exact.
+What remains is mechanism 1 only, at 32 to 142 pixels per editor thumbnail and
+112 against a 100 budget on one reference case.
+
+The scoped pin costs nothing measurable. An early comparison on a loaded
+machine put it at about 3%; repeated on a quiet one, the pinned configuration
+matches the unpinned one inside run-to-run spread (Tiger 21.94 vs 21.92 ms).
+**The whole speedup comes from dropping the two conversion stages, not from the
+8-bit pipeline**, so mechanism 2 was accuracy loss bought for nothing. The
+shipped change takes the pin.
+
+## How large is the visible error?
+
+Raw RGBA deltas overstate the difference because fully transparent pixels carry
+arbitrary RGB. Composited over white, against the reference PNGs:
+
+| Case | Before, mean abs error | After, mean abs error | After, max channel error |
+| --- | --- | --- | --- |
+| shapes/circle/simple-case | 0.268 | 0.268 | 1 |
+| painting/marker/marker-on-rounded-rect | 0.036 | 0.207 | 10 |
+| painting/marker/nested | 0.040 | 1.149 | 7 |
+| painting/marker/target-with-subpaths-1 | 0.027 | 1.088 | 11 |
+
+`shapes/circle/simple-case` is genuinely marginal: no pixel moves by more than
+1/255 against the previous rendering, and the mean error against the reference
+is unchanged to three decimals. It crosses the budget only because the budget
+counts pixels over a 1% threshold, and a large number of edge pixels sit right
+at that boundary.
+
+The three marker cases are not marginal in the same sense. Each moves tens of
+thousands of pixels by up to 7-11/255 and moves measurably away from the
+reference. The same drift is what turns an opaque editor background corner
+into alpha 250. They are, however, entirely attributable to mechanism 2.
+
+Mechanism 1 on its own never exceeded 4/255 of visible error on any case
+measured here, across the reference suite, the renderer goldens, and the
+editor bitmap goldens, and it never changed alpha by more than 2.
+
+## What shipped
+
+The storage change plus the root-surface pipeline pin, which buys the full
+speedup without paying for mechanism 2. The residual mechanism 1 cost was
+accepted and absorbed as follows.
+
+- Three renderer goldens re-blessed through the `UPDATE_GOLDEN_IMAGES_DIR`
+  flow: `MinimalClosedCubic2x2`, `MinimalClosedCubic5x3`,
+  `BigLightningGlowNoFilterCrop`. Alpha is bit-identical in every changed
+  pixel; the largest change composited over white is 1.91/255.
+- `shapes/circle/simple-case` moved from a 100 to a 120 pixel budget through
+  the existing per-case override map, with the reason recorded inline. The
+  pilot corpus profile carries the same budget so its parity assertion holds.
+  No other case and no global threshold moved.
+- Ten editor bitmap goldens re-blessed through the same flow: nine
+  `donner_splash` layer thumbnails and `showcase_asset_tiny_skia`. Identical
+  mechanism to the renderer goldens above, so the same decision applies: the
+  deltas are alpha-preserving RGB rounding changes, 38 to 215 pixels per
+  golden, alpha delta at most 2, and at most 4.00/255 composited over white
+  (the root-group thumbnail; every other golden is under 2.56/255). The
+  `donner_splash_background` thumbnail regenerates byte-identically and did not
+  change. `layer_thumbnail_golden_tests`, `layers_panel_tests`, and
+  `showcase_asset_tests` all compare against these goldens and are green.
+
+The alternative that was rejected: shipping the storage change without the pin.
+That leaves an opaque splash corner reading back at alpha 250, a full-canvas
+replay golden differing on 528,492 pixels, and three reference marker cases
+drifting up to 11/255 - a correctness defect, not a tolerance question, and one
+that costs nothing to avoid.
+
+## Notes carried forward from the 2026-04 pass
+
+The shared `PixelFormatUtils.{h,cc}` extraction (`PremultiplyRgba` /
+`UnpremultiplyRgba{,InPlace}` and their row-strided variants) landed on its own
+and remains a net win independent of this decision. `takeSnapshot()` reuses
+`UnpremultiplyRgbaInPlace` rather than growing a private copy.
+
+The 2026-04 pass also cited a compositor round-trip precision concern
+(`DualPathGate_ExplicitPromoteAtIdentity`, 19,200 pixels drifting by up to 2
+channels). It does not reproduce on the current tree; the compositor suites are
+green with the change applied.
+
+The snapshot-side unpremultiply is a scalar loop that already short-circuits
+alpha 255 and alpha 0, so an "is the frame opaque?" pre-scan would add a full
+read without removing work. Vectorizing `UnpremultiplyRgbaInPlace` would help
+every caller and is the useful follow-up.
 
 ## Lessons
 
-- **Perf-refactor designs need a "reproduce byte-identical output on a
-  representative test input" gate before any code lands.** The design
-  claimed this as a property of the pivot, but the analysis for *why*
-  it should hold was absent. Pushing the precision question earlier
-  in the design phase — "what does tiny-skia's `unpremulStore=true`
-  actually protect?" — would have caught this without writing code.
-- **Storage-format decisions in low-precision pipelines are
-  non-obvious.** "Skia does X so we can do X" ignored the
-  intermediate-f16 architectural difference. For tiny-skia's u8-only
-  pipeline, every surface boundary is a quantization point; reducing
-  the number of boundaries (fewer unpremul passes) only helps if you
-  don't introduce new lossy boundaries (premul stores at low alpha).
-- **The extracted `PixelFormatUtils` helper is a net win regardless.**
-  Three copies of `PremultiplyRgba` collapsed to one, and
-  `CompositorController`'s private `UnpremultiplyPixels` is now a
-  peer. Worth keeping as a separate, trivially-reviewable commit.
-
-## What the design doc should have said up front
-
-The doc's "Premultiplied RGBA8 loses precision at low alpha values."
-line item was buried under "Non-Goals — precision loss: premul storage
-(uint8) clips low-alpha channels to discrete steps." That's not a
-non-goal, it's a *reason not to do the change*. Moving it to the
-front — before "the change, concretely" — and verifying it against a
-concrete low-alpha example would have ended the design at that step.
-
-Future perf-refactor designs touching pixel format should lead with:
-
-> "On our representative low-alpha test pixel, what bytes does the
-> current code store? What bytes will the proposed code store?
-> Demonstrate they are bit-identical, or describe the drift bound."
-
-If that can't be answered at design time, the design is not ready.
+- A perf-refactor design that changes pixel format needs both halves of the
+  tradeoff before it can be judged: the exact bytes before and after on a
+  representative low-alpha pixel, and the measured speedup. The 2026-04 pass
+  had the first and not the second, so it could only conclude "lossy", never
+  "lossy and worth it" or "lossy and not worth it".
+- A storage-format flag can be load-bearing for something other than storage
+  format. `unpremulStore` was documented as a precision guarantee; it was also,
+  silently, a pipeline selector. Most of the accuracy regression came from the
+  undocumented half, and that half costs about 3% of the speedup to give back.
+- Separate mechanisms before adjudicating. "Nine targets regressed" and "seven
+  of the nine regressed for a reason that costs 3% of the win to fix" lead to
+  different decisions.

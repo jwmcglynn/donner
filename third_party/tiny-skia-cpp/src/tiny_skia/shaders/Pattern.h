@@ -21,8 +21,21 @@ enum class FilterQuality {
 struct PixmapPaint {
   float opacity = 1.0f;                          ///< Opacity [0,1].
   BlendMode blendMode = BlendMode::SourceOver;    ///< Blend mode.
-  FilterQuality quality = FilterQuality::Nearest; ///< Sampling filter.
-  bool unpremulStore = false;                     ///< Store as straight alpha.
+  FilterQuality quality = FilterQuality::Nearest;  ///< Sampling filter.
+
+  /// Pin this blit to the float raster pipeline instead of letting the blitter
+  /// choose the 8-bit fixed-point one.
+  ///
+  /// The 8-bit compose path drifts through Painter::drawPixmap: a fully opaque
+  /// source pixel can land in the destination at alpha 250 instead of 255,
+  /// with the premultiplied RGB preserved. On an intermediate surface that
+  /// drift is absorbed by the next composite, but on a surface that is read
+  /// back or presented it is visible as a nominally opaque region reporting
+  /// partial coverage. Callers compositing into such a surface set this so the
+  /// drift cannot reach output. It is a workaround for that arithmetic, not a
+  /// quality preference, and should be dropped once the 8-bit compose path
+  /// stops losing alpha.
+  bool forceHqPipeline = false;
 };
 
 /// Pixmap-based pattern shader.

@@ -196,10 +196,8 @@ std::optional<RasterPipelineBlitter> RasterPipelineBlitter::create(const tiny_sk
   }
 
   // When drawing a constant color in Source mode with no mask, use memset.
-  // Disable memset when unpremulStore: the stored format is straight alpha, not premultiplied.
   std::optional<PremultipliedColorU8> memsetColor;
-  if (!paint.unpremulStore && paint.isSolidColor() && blendMode == BlendMode::Source &&
-      !mask.has_value()) {
+  if (paint.isSolidColor() && blendMode == BlendMode::Source && !mask.has_value()) {
     const auto& color = std::get<Color>(paint.shader);
     memsetColor = color.premultiply().toColorU8();
   }
@@ -207,12 +205,8 @@ std::optional<RasterPipelineBlitter> RasterPipelineBlitter::create(const tiny_sk
   // Clear is just a transparent color memset (when not anti-aliased and no mask).
   if (blendMode == BlendMode::Clear && !paint.antiAlias && !mask.has_value()) {
     blendMode = BlendMode::Source;
-    if (!paint.unpremulStore) {
-      memsetColor = PremultipliedColorU8::fromRgbaUnchecked(0, 0, 0, 0);
-    }
+    memsetColor = PremultipliedColorU8::fromRgbaUnchecked(0, 0, 0, 0);
   }
-
-  const bool unpremul = paint.unpremulStore;
 
   // Build blit_anti_h pipeline.
   auto blitAntiHRp = [&]() -> std::optional<RasterPipeline> {
@@ -227,9 +221,6 @@ std::optional<RasterPipelineBlitter> RasterPipelineBlitter::create(const tiny_sk
     if (shouldPreScaleCoverage(blendMode)) {
       p.push(Stage::Scale1Float);
       p.push(Stage::LoadDestination);
-      if (unpremul) {
-        p.push(Stage::PremultiplyDestination);
-      }
       if (const auto stage = expandDestStage(paint.colorspace)) {
         p.push(*stage);
       }
@@ -238,9 +229,6 @@ std::optional<RasterPipelineBlitter> RasterPipelineBlitter::create(const tiny_sk
       }
     } else {
       p.push(Stage::LoadDestination);
-      if (unpremul) {
-        p.push(Stage::PremultiplyDestination);
-      }
       if (const auto stage = expandDestStage(paint.colorspace)) {
         p.push(*stage);
       }
@@ -251,9 +239,6 @@ std::optional<RasterPipelineBlitter> RasterPipelineBlitter::create(const tiny_sk
     }
     if (const auto stage = compressStage(paint.colorspace)) {
       p.push(*stage);
-    }
-    if (unpremul) {
-      p.push(Stage::Unpremultiply);
     }
     p.push(Stage::Store);
     return p.compile();
@@ -272,8 +257,8 @@ std::optional<RasterPipelineBlitter> RasterPipelineBlitter::create(const tiny_sk
     if (mask.has_value()) {
       p.push(Stage::MaskU8);
     }
-    // SourceOverRgba is a combined lowp fast path; skip it when unpremulStore is set.
-    if (blendMode == BlendMode::SourceOver && !mask.has_value() && !unpremul) {
+    // SourceOverRgba is a combined lowp fast path.
+    if (blendMode == BlendMode::SourceOver && !mask.has_value()) {
       if (const auto stage = compressStage(paint.colorspace)) {
         p.push(*stage);
       }
@@ -281,9 +266,6 @@ std::optional<RasterPipelineBlitter> RasterPipelineBlitter::create(const tiny_sk
     } else {
       if (blendMode != BlendMode::Source) {
         p.push(Stage::LoadDestination);
-        if (unpremul) {
-          p.push(Stage::PremultiplyDestination);
-        }
         if (const auto blendStage = toStage(blendMode)) {
           if (const auto stage = expandDestStage(paint.colorspace)) {
             p.push(*stage);
@@ -293,9 +275,6 @@ std::optional<RasterPipelineBlitter> RasterPipelineBlitter::create(const tiny_sk
       }
       if (const auto stage = compressStage(paint.colorspace)) {
         p.push(*stage);
-      }
-      if (unpremul) {
-        p.push(Stage::Unpremultiply);
       }
       p.push(Stage::Store);
     }
@@ -318,9 +297,6 @@ std::optional<RasterPipelineBlitter> RasterPipelineBlitter::create(const tiny_sk
     if (shouldPreScaleCoverage(blendMode)) {
       p.push(Stage::ScaleU8);
       p.push(Stage::LoadDestination);
-      if (unpremul) {
-        p.push(Stage::PremultiplyDestination);
-      }
       if (const auto stage = expandDestStage(paint.colorspace)) {
         p.push(*stage);
       }
@@ -329,9 +305,6 @@ std::optional<RasterPipelineBlitter> RasterPipelineBlitter::create(const tiny_sk
       }
     } else {
       p.push(Stage::LoadDestination);
-      if (unpremul) {
-        p.push(Stage::PremultiplyDestination);
-      }
       if (const auto stage = expandDestStage(paint.colorspace)) {
         p.push(*stage);
       }
@@ -342,9 +315,6 @@ std::optional<RasterPipelineBlitter> RasterPipelineBlitter::create(const tiny_sk
     }
     if (const auto stage = compressStage(paint.colorspace)) {
       p.push(*stage);
-    }
-    if (unpremul) {
-      p.push(Stage::Unpremultiply);
     }
     p.push(Stage::Store);
     return p.compile();
@@ -371,7 +341,7 @@ std::optional<RasterPipelineBlitter> RasterPipelineBlitter::create(const tiny_sk
 
   // For solid color SourceOver (or strength-reduced to Source), enable inline blend fast path.
   std::optional<PremultipliedColorU8> solidSrcOverColor;
-  if (paint.isSolidColor() && !mask.has_value() && !unpremul &&
+  if (paint.isSolidColor() && !mask.has_value() &&
       (blendMode == BlendMode::Source || blendMode == BlendMode::SourceOver)) {
     const auto& color = std::get<Color>(paint.shader);
     solidSrcOverColor = color.premultiply().toColorU8();

@@ -277,6 +277,14 @@ private:
   [[nodiscard]] std::optional<tiny_skia::Paint> makeStrokePaint(const Box2d& bounds,
                                                                 const StrokeParams& stroke);
   [[nodiscard]] tiny_skia::Pixmap createTransparentPixmap(int width, int height) const;
+  /**
+   * Builds the base paint for a pixmap composite into \p destination.
+   *
+   * @param destination Surface the composite writes to.
+   * @param quality Sampling filter for the source pixmap.
+   */
+  [[nodiscard]] tiny_skia::PixmapPaint makePixmapPaint(const tiny_skia::Pixmap& destination,
+                                                       tiny_skia::FilterQuality quality) const;
   void compositePixmapInto(tiny_skia::Pixmap& destination, const tiny_skia::Pixmap& pixmap,
                            double opacity, MixBlendMode blendMode = MixBlendMode::Normal);
   void compositePixmap(const tiny_skia::Pixmap& pixmap, double opacity,
@@ -290,6 +298,30 @@ private:
   PaintParams paint_;
   double paintOpacity_ = 1.0;
 
+  /// Top-level frame buffer.
+  ///
+  /// Storage model: every pixmap this backend owns, `frame_` included, holds
+  /// premultiplied RGBA8, matching tiny-skia's native format. No draw pays for
+  /// a per-pixel unpremultiply on store, and no composite into `frame_` pays
+  /// for a premultiply-blend-unpremultiply round trip. \ref takeSnapshot
+  /// converts once, on the way out, and is the only place it happens. That
+  /// is worth roughly a 1.9x median settled-frame speedup across the CPU
+  /// benchmark scenes.
+  ///
+  /// The cost is precision at low alpha: premultiplying before the float-to-u8
+  /// store quantizes RGB, so straight (17,17,17,6) stores as premultiplied
+  /// (0,0,0,6) and unpremultiplying cannot recover the 17s. Heavily antialiased
+  /// edges of dark shapes shift by a few units as a result, measured at no more
+  /// than 4/255 once composited over an opaque background. A straight-alpha
+  /// store cannot lose that, because it never multiplies before rounding.
+  ///
+  /// This backend used to ask tiny-skia to unpremultiply on store instead, and
+  /// that stage lived only in the float raster pipeline, so it was quietly
+  /// pinning root draws to that pipeline too. \ref makePixmapPaint keeps that
+  /// pin for composites into this buffer, deliberately: dropping it as well let
+  /// the 8-bit compose path land opaque pixels at alpha 250. Keeping it costs
+  /// nothing measurable, so the speedup above comes from removing the
+  /// conversion stages, not from the 8-bit pipeline.
   tiny_skia::Pixmap frame_;
   Transform2d deviceFromLocalTransform_;
   std::vector<Transform2d> deviceFromLocalTransformStack_;

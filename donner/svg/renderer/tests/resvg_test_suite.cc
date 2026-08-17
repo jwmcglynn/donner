@@ -887,10 +887,19 @@ INSTANTIATE_TEST_SUITE_P(
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
 
-INSTANTIATE_TEST_SUITE_P(ShapesCircle, ImageComparisonTestFixture,
-                         Combine(ValuesIn(getTestsInCategory("shapes/circle")),
-                                 ValuesIn(ActiveComparisonModes())),
-                         TestNameFromFilename);
+INSTANTIATE_TEST_SUITE_P(
+    ShapesCircle, ImageComparisonTestFixture,
+    Combine(ValuesIn(getTestsInCategory(
+                "shapes/circle",
+                {
+                    {"simple-case.svg",
+                     WithMaxPixels(120,
+                                   "u8 premultiplied storage quantization moves a cluster of "
+                                   "boundary edge pixels at most 1/255 on white; mean error vs "
+                                   "the resvg reference is unchanged to three decimals")},
+                })),
+            ValuesIn(ActiveComparisonModes())),
+    TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(ShapesEllipse, ImageComparisonTestFixture,
                          Combine(ValuesIn(getTestsInCategory("shapes/ellipse")),
