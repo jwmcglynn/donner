@@ -1,7 +1,9 @@
 #include "FilterGraph.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <cstdint>
 #include <map>
 
 #include "tiny_skia/filter/Blend.h"
@@ -176,6 +178,22 @@ double srgbToLinearChannel(double s) {
     return s / 12.92;
   }
   return std::pow((s + 0.055) / 1.055, 2.4);
+}
+
+/// Fills `pixmap` with a primitive's flood color, which is authored as premultiplied sRGB, in the
+/// space the primitive interpolates in.
+///
+/// A linearRGB primitive converts the color and then fills, rather than filling and then
+/// converting the buffer: the conversion is per-pixel and every pixel here holds the same value,
+/// so the two produce identical pixels, but converting the color is constant time instead of one
+/// pass over the whole buffer.
+void floodInSpace(FloatPixmap& pixmap, std::uint8_t r, std::uint8_t g, std::uint8_t b,
+                  std::uint8_t a, bool linearRGB) {
+  std::array<float, 4> color = {r / 255.0f, g / 255.0f, b / 255.0f, a / 255.0f};
+  if (linearRGB) {
+    color = srgbToLinearPixel(color);
+  }
+  flood(pixmap, color[0], color[1], color[2], color[3]);
 }
 
 /// Pixels a node just produced, tagged with the color space they are expressed in.
@@ -493,14 +511,8 @@ bool executeFilterGraph(Pixmap& sourceGraphic, const FilterGraph& graph) {
             output = NodeOutput{std::move(fp), nodeLinearRGB};
 
           } else if constexpr (std::is_same_v<T, Flood>) {
-            // Flood color is premultiplied sRGB uint8, so a linearRGB node has to convert it into
-            // its own space.
             auto fp = createTransparentFloat(w, h);
-            flood(fp, primitive.r / 255.0f, primitive.g / 255.0f, primitive.b / 255.0f,
-                  primitive.a / 255.0f);
-            if (nodeLinearRGB) {
-              srgbToLinear(fp);
-            }
+            floodInSpace(fp, primitive.r, primitive.g, primitive.b, primitive.a, nodeLinearRGB);
             output = NodeOutput{std::move(fp), nodeLinearRGB};
 
           } else if constexpr (std::is_same_v<T, graph_primitive::Offset>) {
@@ -668,11 +680,8 @@ bool executeFilterGraph(Pixmap& sourceGraphic, const FilterGraph& graph) {
             // node's own interpolation space. Only the flood color needs converting, because it
             // is authored as premultiplied sRGB; the source alpha carries no color.
             auto floodBuf = createTransparentFloat(w, h);
-            flood(floodBuf, primitive.r / 255.0f, primitive.g / 255.0f, primitive.b / 255.0f,
-                  primitive.a / 255.0f);
-            if (nodeLinearRGB) {
-              srgbToLinear(floodBuf);
-            }
+            floodInSpace(floodBuf, primitive.r, primitive.g, primitive.b, primitive.a,
+                         nodeLinearRGB);
 
             auto compositeBuf = createTransparentFloat(w, h);
             composite(floodBuf, getSourceAlpha()->spaceAgnostic(), compositeBuf, CompositeOp::In);

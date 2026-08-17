@@ -237,9 +237,10 @@ TEST(FilterGraphColorSpace, SrgbGraphNeverConverts) {
   EXPECT_TRUE(PixmapsEqual(actual, expected));
 }
 
-// feFlood authors its color in sRGB, so a linearRGB consumer has to see the converted color. The
-// flood result is produced and consumed once, so the schedule matches the per-primitive one
-// exactly.
+// feFlood authors its color in sRGB, so a linearRGB primitive has to produce the converted color.
+// The executor converts the color and then fills; the reference below fills and then converts the
+// whole buffer, which is the conversion the per-primitive code ran. Every pixel of a flood holds
+// the same value, so the two must agree exactly.
 TEST(FilterGraphColorSpace, FloodColorReachesALinearConsumerConverted) {
   const Pixmap source = makeSourceGraphic();
 
@@ -278,6 +279,37 @@ TEST(FilterGraphColorSpace, FloodColorReachesALinearConsumerConverted) {
   linearToSrgb(merged);
 
   EXPECT_TRUE(PixmapsEqual(actual, merged.toPixmap()));
+}
+
+// The per-pixel conversion the flood path relies on has to be the same computation the buffer
+// conversion applies, for colors at both ends of the transfer function and at partial alpha.
+TEST(FilterGraphColorSpace, PerPixelConversionMatchesBufferConversion) {
+  const std::array<std::array<std::uint8_t, 4>, 6> colors = {{{0, 0, 0, 0},
+                                                              {255, 255, 255, 255},
+                                                              {kFloodR, kFloodG, kFloodB, kFloodA},
+                                                              {1, 2, 3, 255},
+                                                              {10, 10, 10, 12},
+                                                              {90, 200, 40, 128}}};
+
+  for (const auto& color : colors) {
+    const std::array<float, 4> premultiplied = {color[0] / 255.0f, color[1] / 255.0f,
+                                                color[2] / 255.0f, color[3] / 255.0f};
+
+    auto maybeFilled = FloatPixmap::fromSize(4, 4);
+    ASSERT_TRUE(maybeFilled.has_value());
+    FloatPixmap filled = std::move(*maybeFilled);
+    flood(filled, premultiplied[0], premultiplied[1], premultiplied[2], premultiplied[3]);
+    srgbToLinear(filled);
+
+    const std::array<float, 4> converted = srgbToLinearPixel(premultiplied);
+    const auto filledData = filled.data();
+    for (int channel = 0; channel < 4; ++channel) {
+      EXPECT_EQ(converted[channel], filledData[channel])
+          << "channel " << channel << " of color " << static_cast<int>(color[0]) << ","
+          << static_cast<int>(color[1]) << "," << static_cast<int>(color[2]) << ","
+          << static_cast<int>(color[3]);
+    }
+  }
 }
 
 }  // namespace
