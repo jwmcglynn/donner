@@ -290,6 +290,21 @@ private:
   PaintParams paint_;
   double paintOpacity_ = 1.0;
 
+  /// Top-level frame buffer.
+  ///
+  /// Storage model: every pixmap this backend owns, `frame_` included, holds
+  /// premultiplied RGBA8, matching tiny-skia's native format. Nothing sets
+  /// `tiny_skia::Paint::unpremulStore`, so no draw pays for a per-pixel
+  /// unpremultiply on store and no composite into `frame_` pays for a
+  /// premultiply-blend-unpremultiply round trip. \ref takeSnapshot converts
+  /// once, on the way out, and is the only place the conversion happens.
+  ///
+  /// The tradeoff is precision: premultiplying before the float-to-u8 store
+  /// quantizes RGB at low alpha (for example straight (17,17,17,6) stores as
+  /// premultiplied (0,0,0,6), and unpremultiplying cannot recover the 17s), so
+  /// heavily antialiased edges can differ by a few units from a straight-alpha
+  /// store. Measured against the full reference SVG suite this stays inside the
+  /// per-test pixel thresholds except for a handful of thin-marker cases.
   tiny_skia::Pixmap frame_;
   Transform2d deviceFromLocalTransform_;
   std::vector<Transform2d> deviceFromLocalTransformStack_;
