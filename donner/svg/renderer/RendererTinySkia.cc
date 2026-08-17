@@ -688,9 +688,10 @@ void RendererTinySkia::beginFrame(const RenderViewport& viewport) {
   // multi-megabyte buffer. The clear is not an optimization target: the buffer
   // must start transparent, so a retained buffer is explicitly zeroed and the
   // output is identical either way.
-  if (frame_.width() == static_cast<std::uint32_t>(std::max(pixelWidth, 0)) &&
-      frame_.height() == static_cast<std::uint32_t>(std::max(pixelHeight, 0)) &&
-      frame_.width() != 0 && frame_.height() != 0) {
+  const bool frameSizeUnchanged = pixelWidth > 0 && pixelHeight > 0 &&
+                                  frame_.width() == static_cast<std::uint32_t>(pixelWidth) &&
+                                  frame_.height() == static_cast<std::uint32_t>(pixelHeight);
+  if (frameSizeUnchanged) {
     frame_.fill(tiny_skia::Color::transparent);
   } else {
     frame_ = createTransparentPixmap(pixelWidth, pixelHeight);
