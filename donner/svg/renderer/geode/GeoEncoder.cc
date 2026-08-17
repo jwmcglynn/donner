@@ -41,6 +41,14 @@ constexpr uint64_t kStorageOffsetAlignment = 256u;
 // Uniform buffer bind-group offset: same 256-byte default across
 // wgpu-native backends (`minUniformBufferOffsetAlignment`).
 constexpr uint64_t kUniformOffsetAlignment = 256u;
+// The resident slab allocates slot ranges aligned only to
+// kStorageOffsetAlignment, while the region layout inside a slot uses the
+// per-region constant; absolute offsets stay valid for uniform bindings
+// only while the slab's allocation alignment also satisfies the uniform
+// alignment. Pin the coupling so a future divergence fails at compile time
+// instead of as a device-dependent binding validation error.
+static_assert(kStorageOffsetAlignment % kUniformOffsetAlignment == 0,
+              "resident slab allocation alignment must satisfy uniform binding alignment");
 
 /// Layout of the per-draw uniform buffer (must match shaders/slug_fill.wgsl).
 ///
@@ -397,7 +405,7 @@ struct GeoEncoder::Impl {
   /// uniform only if it changed, reuse the cached bind group, and record
   /// the draw. Steady-state (unchanged) frame: zero writes, zero bind
   /// group creates.
-  void submitResidentFillDraw(GeodeResidentSlot& slot, const EncodedPath& encoded,
+  bool submitResidentFillDraw(GeodeResidentSlot& slot, const EncodedPath& encoded,
                               const FillDrawArgs& args);
 
   /// Wave-2 extension for gradient paints: (re)upload `encoded` into the
@@ -415,7 +423,7 @@ struct GeoEncoder::Impl {
   /// gradient uniform when it changed, reuse the cached bind group, and
   /// record the draw. Steady-state (unchanged) frame: zero writes, zero
   /// bind group creates.
-  void submitResidentGradientDraw(GeodeResidentGradientSlot& slot, const EncodedPath& encoded,
+  bool submitResidentGradientDraw(GeodeResidentGradientSlot& slot, const EncodedPath& encoded,
                                   GradientUniforms& u);
 
   /// Fill the common prefix of a gradient uniform (mvp, viewport, stops,
@@ -1401,17 +1409,25 @@ void GeoEncoder::Impl::uploadResidentGeometry(GeodeResidentSlot& slot, const Enc
   const uint64_t totalSize = cursor;
   const uint64_t geometrySize = slot.uniform.offset;  // everything before the uniform.
 
-  wgpu::BufferDescriptor desc = {};
-  desc.label = wgpuLabel("GeodeResidentPath");
-  desc.size = totalSize;
-  desc.usage = wgpu::BufferUsage::Storage | wgpu::BufferUsage::Uniform | wgpu::BufferUsage::CopyDst;
-  slot.buffer.reset(device->device().createBuffer(desc));
-  device->countBuffer();
+  // Suballocate from the document's resident slab (one growable buffer
+  // chunk set instead of a buffer per slot). The slab is installed by the
+  // renderer at slot creation and belongs to this device.
+  GeodeResidentSlab::Allocation alloc;
+  if (slot.slab == nullptr || slot.slab->owningDeviceId() != device->deviceId() ||
+      !slot.slab->allocate(*device, totalSize, kStorageOffsetAlignment, alloc)) {
+    return;
+  }
+  slot.buffer = alloc.buffer;
+  slot.allocationOffset = alloc.offset;
+  slot.allocationSize = alloc.size;
 
   // Assemble the geometry portion in one zero-filled staging blob so
   // padding + dummy regions read as zero, then upload it in a single
-  // `writeBuffer`. The uniform region is written separately by the draw
-  // path (so a camera/color-only change rewrites just the uniform region).
+  // `writeBuffer` at the allocation's absolute offset. Region offsets are
+  // relative to the allocation start here and are shifted to absolute
+  // buffer offsets below. The uniform region is written separately by the
+  // draw path (so a camera/color-only change rewrites just the uniform
+  // region).
   std::vector<uint8_t> staging(geometrySize, 0u);
   auto blit = [&](const GeodeResidentSlot::Region& r, const void* data, uint64_t bytes) {
     if (bytes > 0) {
@@ -1427,16 +1443,28 @@ void GeoEncoder::Impl::uploadResidentGeometry(GeodeResidentSlot& slot, const Enc
   blit(slot.hGrid, encoded.hBandGrid.data(), hGridBytes);
   blit(slot.vGrid, encoded.vBandGrid.data(), vGridBytes);
 
-  device->queue().writeBuffer(slot.buffer.get(), 0, staging.data(), geometrySize);
+  device->queue().writeBuffer(slot.buffer, alloc.offset, staging.data(), geometrySize);
   device->countBufferWrite(geometrySize);
+
+  // Regions become absolute buffer offsets for the bind groups.
+  auto shift = [&](GeodeResidentSlot::Region& r) {
+    if (r.size != 0) {
+      r.offset += alloc.offset;
+    }
+  };
+  shift(slot.bands);
+  shift(slot.curves);
+  shift(slot.hRefs);
+  shift(slot.vBands);
+  shift(slot.vCurves);
+  shift(slot.vRefs);
+  shift(slot.hGrid);
+  shift(slot.vGrid);
+  shift(slot.uniform);
 
   slot.vertexCount = encoded.boundingDrawVertexCount();
   slot.resident = true;
   slot.lastUniform.clear();  // Force the first uniform write below.
-
-  slot.liveBytesGauge = device->residentBytesGauge();
-  slot.accountedBytes = static_cast<int64_t>(totalSize);
-  slot.liveBytesGauge->fetch_add(slot.accountedBytes, std::memory_order_relaxed);
 
   // Stamp the current device's identity so a later render by a different
   // device re-uploads instead of binding this device's buffer / bind group
@@ -1446,7 +1474,7 @@ void GeoEncoder::Impl::uploadResidentGeometry(GeodeResidentSlot& slot, const Enc
 
 void GeoEncoder::Impl::buildResidentBindGroup(GeodeResidentSlot& slot) {
   const wgpu::Device& dev = device->device();
-  const wgpu::Buffer& buf = slot.buffer.get();
+  const wgpu::Buffer& buf = slot.buffer;
 
   wgpu::BindGroupEntry entries[14] = {};
   auto bufEntry = [&](int i, uint32_t binding, const GeodeResidentSlot::Region& r) {
@@ -1489,8 +1517,8 @@ void GeoEncoder::Impl::buildResidentBindGroup(GeodeResidentSlot& slot) {
   device->countBindGroup();
 }
 
-void GeoEncoder::Impl::submitResidentFillDraw(GeodeResidentSlot& slot, const EncodedPath& encoded,
-                                              const FillDrawArgs& args) {
+bool GeoEncoder::Impl::submitResidentFillDraw(GeodeResidentSlot& slot, const EncodedPath& encoded,
+                                               const FillDrawArgs& args) {
   ensurePassOpen();
   bindSolidPipeline();
 
@@ -1510,6 +1538,14 @@ void GeoEncoder::Impl::submitResidentFillDraw(GeodeResidentSlot& slot, const Enc
     slot.encodedFingerprint = fingerprint;
   }
 
+  // The upload can fail (no slab, a device mismatch that the caller has
+  // not re-wired yet, or a chunk allocation failure). Route the draw
+  // through the wave-1 arena path so it stays bit-exact and never touches
+  // an empty buffer.
+  if (!slot.resident || !slot.buffer) {
+    return false;
+  }
+
   // Rewrite the uniform only when it actually changed. A static
   // re-render (same viewport, same paint) produces byte-identical
   // uniforms, so this write is skipped entirely and the frame emits zero
@@ -1519,7 +1555,7 @@ void GeoEncoder::Impl::submitResidentFillDraw(GeodeResidentSlot& slot, const Enc
   const auto* uBytes = reinterpret_cast<const uint8_t*>(&u);
   if (slot.lastUniform.size() != sizeof(Uniforms) ||
       std::memcmp(slot.lastUniform.data(), uBytes, sizeof(Uniforms)) != 0) {
-    device->queue().writeBuffer(slot.buffer.get(), slot.uniform.offset, &u, sizeof(Uniforms));
+    device->queue().writeBuffer(slot.buffer, slot.uniform.offset, &u, sizeof(Uniforms));
     device->countBufferWrite(sizeof(Uniforms));
     slot.lastUniform.assign(uBytes, uBytes + sizeof(Uniforms));
   }
@@ -1532,6 +1568,7 @@ void GeoEncoder::Impl::submitResidentFillDraw(GeodeResidentSlot& slot, const Enc
   pass.get().setBindGroup(0, slot.bindGroup.get(), 0, nullptr);
   pass.get().draw(slot.vertexCount, 1, 0, 0);
   device->countDraw();
+  return true;
 }
 
 void GeoEncoder::fillPathResident(GeodeResidentSlot& slot, const EncodedPath& encoded,
@@ -1580,7 +1617,9 @@ void GeoEncoder::fillPathResident(GeodeResidentSlot& slot, const EncodedPath& en
     return;
   }
   slot.lastResidentFrame = frameId;
-  impl_->submitResidentFillDraw(slot, encoded, args);
+  if (!impl_->submitResidentFillDraw(slot, encoded, args)) {
+    submitFillDraw(args);
+  }
 }
 
 void GeoEncoder::fillPathInstanced(const EncodedPath& encoded, const css::RGBA& color,
@@ -1936,12 +1975,16 @@ void GeoEncoder::Impl::uploadResidentGradientGeometry(GeodeResidentGradientSlot&
   const uint64_t totalSize = cursor;
   const uint64_t geometrySize = slot.uniform.offset;
 
-  wgpu::BufferDescriptor desc = {};
-  desc.label = wgpuLabel("GeodeResidentGradientPath");
-  desc.size = totalSize;
-  desc.usage = wgpu::BufferUsage::Storage | wgpu::BufferUsage::Uniform | wgpu::BufferUsage::CopyDst;
-  slot.buffer.reset(device->device().createBuffer(desc));
-  device->countBuffer();
+  // Suballocate from the document's resident slab (same contract as
+  // `uploadResidentGeometry`).
+  GeodeResidentSlab::Allocation alloc;
+  if (slot.slab == nullptr || slot.slab->owningDeviceId() != device->deviceId() ||
+      !slot.slab->allocate(*device, totalSize, kStorageOffsetAlignment, alloc)) {
+    return;
+  }
+  slot.buffer = alloc.buffer;
+  slot.allocationOffset = alloc.offset;
+  slot.allocationSize = alloc.size;
 
   std::vector<uint8_t> staging(geometrySize, 0u);
   auto blit = [&](const GeodeResidentGradientSlot::Region& r, const void* data, uint64_t bytes) {
@@ -1958,22 +2001,34 @@ void GeoEncoder::Impl::uploadResidentGradientGeometry(GeodeResidentGradientSlot&
   blit(slot.hGrid, encoded.hBandGrid.data(), hGridBytes);
   blit(slot.vGrid, encoded.vBandGrid.data(), vGridBytes);
 
-  device->queue().writeBuffer(slot.buffer.get(), 0, staging.data(), geometrySize);
+  device->queue().writeBuffer(slot.buffer, alloc.offset, staging.data(), geometrySize);
   device->countBufferWrite(geometrySize);
+
+  // Regions become absolute buffer offsets for the bind groups.
+  auto shift = [&](GeodeResidentGradientSlot::Region& r) {
+    if (r.size != 0) {
+      r.offset += alloc.offset;
+    }
+  };
+  shift(slot.bands);
+  shift(slot.curves);
+  shift(slot.hRefs);
+  shift(slot.vBands);
+  shift(slot.vCurves);
+  shift(slot.vRefs);
+  shift(slot.hGrid);
+  shift(slot.vGrid);
+  shift(slot.uniform);
 
   slot.vertexCount = encoded.boundingDrawVertexCount();
   slot.resident = true;
   slot.lastUniform.clear();  // Force the first uniform write below.
-
-  slot.liveBytesGauge = device->residentBytesGauge();
-  slot.accountedBytes = static_cast<int64_t>(totalSize);
-  slot.liveBytesGauge->fetch_add(slot.accountedBytes, std::memory_order_relaxed);
   slot.owningDeviceId = device->deviceId();
 }
 
 void GeoEncoder::Impl::buildResidentGradientBindGroup(GeodeResidentGradientSlot& slot) {
   const wgpu::Device& dev = device->device();
-  const wgpu::Buffer& buf = slot.buffer.get();
+  const wgpu::Buffer& buf = slot.buffer;
 
   // Eleven bindings mirroring `submitGradientDraw`, with the clip-mask
   // texture/sampler slots bound to the device-owned dummies. Residence is
@@ -2009,8 +2064,9 @@ void GeoEncoder::Impl::buildResidentGradientBindGroup(GeodeResidentGradientSlot&
   device->countBindGroup();
 }
 
-void GeoEncoder::Impl::submitResidentGradientDraw(GeodeResidentGradientSlot& slot,
-                                                  const EncodedPath& encoded, GradientUniforms& u) {
+bool GeoEncoder::Impl::submitResidentGradientDraw(GeodeResidentGradientSlot& slot,
+                                                   const EncodedPath& encoded,
+                                                   GradientUniforms& u) {
   // The grid parameters and the bounding polygon are derived from the
   // encode, not the paint; fill them exactly like the arena path so a
   // draw that flips between the two stays byte-identical.
@@ -2036,13 +2092,18 @@ void GeoEncoder::Impl::submitResidentGradientDraw(GeodeResidentGradientSlot& slo
     slot.encodedFingerprint = fingerprint;
   }
 
+  // Upload failure: report it so the caller routes the draw through the
+  // wave-1 arena path.
+  if (!slot.resident || !slot.buffer) {
+    return false;
+  }
+
   // Rewrite the gradient uniform only when it actually changed, mirroring
   // the fill path. A static re-render produces byte-identical uniforms.
   const auto* uBytes = reinterpret_cast<const uint8_t*>(&u);
   if (slot.lastUniform.size() != sizeof(GradientUniforms) ||
       std::memcmp(slot.lastUniform.data(), uBytes, sizeof(GradientUniforms)) != 0) {
-    device->queue().writeBuffer(slot.buffer.get(), slot.uniform.offset, &u,
-                                sizeof(GradientUniforms));
+    device->queue().writeBuffer(slot.buffer, slot.uniform.offset, &u, sizeof(GradientUniforms));
     device->countBufferWrite(sizeof(GradientUniforms));
     slot.lastUniform.assign(uBytes, uBytes + sizeof(GradientUniforms));
   }
@@ -2055,6 +2116,7 @@ void GeoEncoder::Impl::submitResidentGradientDraw(GeodeResidentGradientSlot& slo
   pass.get().setBindGroup(0, slot.bindGroup.get(), 0, nullptr);
   pass.get().draw(slot.vertexCount, 1, 0, 0);
   device->countDraw();
+  return true;
 }
 
 void GeoEncoder::fillPathLinearGradient(const Path& path, const LinearGradientParams& params,
@@ -2132,7 +2194,9 @@ void GeoEncoder::fillPathLinearGradientResident(GeodeResidentGradientSlot& slot,
     return;
   }
   slot.lastResidentFrame = frameId;
-  impl_->submitResidentGradientDraw(slot, encoded, u);
+  if (!impl_->submitResidentGradientDraw(slot, encoded, u)) {
+    impl_->submitGradientArenaFallback(u, encoded);
+  }
 }
 
 void GeoEncoder::fillPathRadialGradientResident(GeodeResidentGradientSlot& slot,
@@ -2157,7 +2221,9 @@ void GeoEncoder::fillPathRadialGradientResident(GeodeResidentGradientSlot& slot,
     return;
   }
   slot.lastResidentFrame = frameId;
-  impl_->submitResidentGradientDraw(slot, encoded, u);
+  if (!impl_->submitResidentGradientDraw(slot, encoded, u)) {
+    impl_->submitGradientArenaFallback(u, encoded);
+  }
 }
 
 void GeoEncoder::blitFullTarget(const wgpu::Texture& src, double opacity) {

@@ -322,8 +322,13 @@ py_test(
         # would leave the raw gate at 138 bytes of headroom over the
         # measured 170,862 raw, making it the one that flips red on the
         # next incidental change.
+        #
+        # Geode perf stack retune: the resident-slab packet adds deliberate
+        # renderer code to the editor package. Measured at this layer:
+        # wasm 11,243,015 raw and package 11,455,433 raw. Budgets keep about
+        # 1 percent headroom over the measured values.
         "--max-wasm-raw-bytes",
-        "11240000",
+        "11360000",
         "--max-wasm-gzip-bytes",
         "4490000",
         "--max-wasm-function-body-bytes",
@@ -335,7 +340,7 @@ py_test(
         "--max-js-gzip-bytes",
         "48800",
         "--max-total-raw-bytes",
-        "11565000",
+        "11570000",
         "--expected-js-property",
         "__donnerLastScrollEvent",
         # SHIP BLOCKER, tracked with the deferred WebKit decision: the WebGPU diagnostic

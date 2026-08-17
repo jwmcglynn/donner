@@ -862,9 +862,17 @@
       ]
     },
     "donner/svg/renderer/geode/GeodeResidentPathComponent.h": {
+      "operations": [
+        "createBuffer"
+      ],
+      "wgpuCFunctions": [
+        "wgpuLabel"
+      ],
       "wgpuCppTokens": [
         "BindGroup",
-        "Buffer"
+        "Buffer",
+        "BufferDescriptor",
+        "BufferUsage"
       ]
     },
     "donner/svg/renderer/geode/GeodeShaders.cc": {
