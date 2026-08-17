@@ -874,10 +874,10 @@ void RendererTinySkia::popFilterLayer() {
           Transform2d::Scale(scaleX, scaleY);
 
       {
-        tiny_skia::PixmapPaint resamplePaint;
+        tiny_skia::PixmapPaint resamplePaint =
+            makePixmapPaint(localPixmap, tiny_skia::FilterQuality::Bilinear);
         resamplePaint.opacity = 1.0f;
         resamplePaint.blendMode = tiny_skia::BlendMode::Source;
-        resamplePaint.quality = tiny_skia::FilterQuality::Bilinear;
 
         auto localView = localPixmap.mutableView();
         tiny_skia::Painter::drawPixmap(localView, 0, 0, frame.pixmap.view(), resamplePaint,
