@@ -3,10 +3,14 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
+#include <optional>
 #include <utility>
+#include <vector>
 
 namespace donner::svg {
 namespace {
@@ -958,6 +962,194 @@ TEST(FilterGraphExecutorTest, FeImageDefaultKernelBlendsAcrossEdge) {
   // behavior nearest-neighbor replaces, proving the `image-rendering` flag selects the kernel.
   EXPECT_THAT(GetPixel(pixmap, 3, 1), Rgba(Gt(0), _, Gt(0), _));
   EXPECT_THAT(GetPixel(pixmap, 4, 1), Rgba(Gt(0), _, Gt(0), _));
+}
+
+// ---------------------------------------------------------------------------
+// Per-primitive color-interpolation-filters
+// ---------------------------------------------------------------------------
+
+/// Builds a source graphic with saturated colors, mid-tones, and partial alpha, so the results
+/// below depend on both segments of the sRGB transfer function.
+tiny_skia::Pixmap MakeColorSourceGraphic() {
+  auto maybePixmap = tiny_skia::Pixmap::fromSize(24, 24);
+  EXPECT_TRUE(maybePixmap.has_value());
+  tiny_skia::Pixmap pixmap = std::move(*maybePixmap);
+
+  for (int y = 0; y < 24; ++y) {
+    for (int x = 0; x < 24; ++x) {
+      const int alpha = 40 + (x * 9 + y * 3) % 216;
+      const auto scale = [&](int value) { return static_cast<std::uint8_t>(value * alpha / 255); };
+      SetPixel(pixmap, x, y,
+               Pixel{scale((x * 11) % 256), scale((y * 7 + 3) % 256), scale((x * 5 + y * 13) % 256),
+                     static_cast<std::uint8_t>(alpha)});
+    }
+  }
+
+  return pixmap;
+}
+
+components::FilterNode BlurNodeWithSpace(std::optional<ColorInterpolationFilters> space) {
+  components::FilterNode node;
+  node.inputs.push_back(components::FilterInput{});  // previous
+  node.primitive = components::filter_primitive::GaussianBlur{
+      .stdDeviationX = 1.5,
+      .stdDeviationY = 1.5,
+  };
+  node.colorInterpolationFilters = space;
+  return node;
+}
+
+components::FilterNode SaturateNodeWithSpace(std::optional<ColorInterpolationFilters> space) {
+  components::FilterNode node;
+  node.inputs.push_back(components::FilterInput{});  // previous
+  node.primitive = components::filter_primitive::ColorMatrix{
+      .type = components::filter_primitive::ColorMatrix::Type::Saturate,
+      .values = {0.4},
+  };
+  node.colorInterpolationFilters = space;
+  return node;
+}
+
+/// Runs each node as its own single-primitive graph, feeding one result into the next. Because a
+/// graph converts into its interpolation space on entry and back out on exit, this reproduces the
+/// per-primitive conversion schedule exactly, whatever the executor does inside a longer graph.
+tiny_skia::Pixmap RunNodesOneGraphAtATime(const tiny_skia::Pixmap& source,
+                                          std::vector<components::FilterNode> nodes) {
+  tiny_skia::Pixmap pixmap = source;
+  for (components::FilterNode& node : nodes) {
+    components::FilterGraph graph;
+    graph.nodes.push_back(std::move(node));
+    ApplyFilterGraphToPixmap(pixmap, graph, Transform2d(), std::nullopt);
+  }
+  return pixmap;
+}
+
+tiny_skia::Pixmap RunNodesAsOneGraph(const tiny_skia::Pixmap& source,
+                                     std::vector<components::FilterNode> nodes) {
+  tiny_skia::Pixmap pixmap = source;
+  components::FilterGraph graph;
+  graph.nodes = std::move(nodes);
+  ApplyFilterGraphToPixmap(pixmap, graph, Transform2d(), std::nullopt);
+  return pixmap;
+}
+
+/// Largest absolute per-channel difference between two same-sized pixmaps.
+int MaxChannelDelta(const tiny_skia::Pixmap& lhs, const tiny_skia::Pixmap& rhs) {
+  const auto a = lhs.data();
+  const auto b = rhs.data();
+  EXPECT_EQ(a.size(), b.size());
+
+  int worst = 0;
+  for (std::size_t i = 0; i < a.size(); ++i) {
+    worst = std::max(worst, std::abs(static_cast<int>(a[i]) - static_cast<int>(b[i])));
+  }
+  return worst;
+}
+
+/// Asserts that a graph agrees with the same primitives run one filter at a time.
+///
+/// The two are the same computation up to one source of difference: the per-primitive reference
+/// hands each result back as an 8-bit pixmap, so it quantizes between primitives where a single
+/// graph keeps float intermediates. That is worth one unit per channel. A larger difference means
+/// the graph converted color spaces somewhere the per-primitive schedule did not, which is the
+/// property these tests are protecting.
+void ExpectMatchesPerPrimitiveRun(const tiny_skia::Pixmap& combined,
+                                  const tiny_skia::Pixmap& perPrimitive) {
+  EXPECT_LE(MaxChannelDelta(combined, perPrimitive), 1);
+}
+
+// A primitive that interpolates in sRGB between two that interpolate in linearRGB has to convert
+// on both crossings, which is the schedule running each primitive as its own filter produces.
+TEST(FilterGraphExecutorTest, SrgbPrimitiveBetweenLinearPrimitivesMatchesOneGraphPerPrimitive) {
+  const tiny_skia::Pixmap source = MakeColorSourceGraphic();
+
+  const auto nodes = [] {
+    std::vector<components::FilterNode> nodes;
+    nodes.push_back(BlurNodeWithSpace(ColorInterpolationFilters::LinearRGB));
+    nodes.push_back(SaturateNodeWithSpace(ColorInterpolationFilters::SRGB));
+    nodes.push_back(BlurNodeWithSpace(ColorInterpolationFilters::LinearRGB));
+    return nodes;
+  };
+
+  const tiny_skia::Pixmap combined = RunNodesAsOneGraph(source, nodes());
+  const tiny_skia::Pixmap perPrimitive = RunNodesOneGraphAtATime(source, nodes());
+
+  ExpectMatchesPerPrimitiveRun(combined, perPrimitive);
+}
+
+// The mirror image: a linearRGB primitive between two sRGB ones.
+TEST(FilterGraphExecutorTest, LinearPrimitiveBetweenSrgbPrimitivesMatchesOneGraphPerPrimitive) {
+  const tiny_skia::Pixmap source = MakeColorSourceGraphic();
+
+  const auto nodes = [] {
+    std::vector<components::FilterNode> nodes;
+    nodes.push_back(BlurNodeWithSpace(ColorInterpolationFilters::SRGB));
+    nodes.push_back(SaturateNodeWithSpace(ColorInterpolationFilters::LinearRGB));
+    nodes.push_back(BlurNodeWithSpace(ColorInterpolationFilters::SRGB));
+    return nodes;
+  };
+
+  const tiny_skia::Pixmap combined = RunNodesAsOneGraph(source, nodes());
+  const tiny_skia::Pixmap perPrimitive = RunNodesOneGraphAtATime(source, nodes());
+
+  ExpectMatchesPerPrimitiveRun(combined, perPrimitive);
+}
+
+// When every primitive agrees on the interpolation space, the intermediate results stay in that
+// space instead of being converted back out and in around every primitive. That removes rounding
+// rather than adding it, so the result still tracks the per-primitive schedule.
+TEST(FilterGraphExecutorTest, UniformLinearGraphStaysWithinRoundingOfOneGraphPerPrimitive) {
+  const tiny_skia::Pixmap source = MakeColorSourceGraphic();
+
+  const auto nodes = [] {
+    std::vector<components::FilterNode> nodes;
+    nodes.push_back(BlurNodeWithSpace(ColorInterpolationFilters::LinearRGB));
+    nodes.push_back(SaturateNodeWithSpace(ColorInterpolationFilters::LinearRGB));
+    nodes.push_back(BlurNodeWithSpace(ColorInterpolationFilters::LinearRGB));
+    return nodes;
+  };
+
+  const tiny_skia::Pixmap combined = RunNodesAsOneGraph(source, nodes());
+  const tiny_skia::Pixmap perPrimitive = RunNodesOneGraphAtATime(source, nodes());
+
+  ExpectMatchesPerPrimitiveRun(combined, perPrimitive);
+}
+
+// Interpolating in sRGB throughout converts nowhere at all, in either arrangement.
+TEST(FilterGraphExecutorTest, UniformSrgbGraphMatchesOneGraphPerPrimitive) {
+  const tiny_skia::Pixmap source = MakeColorSourceGraphic();
+
+  const auto nodes = [] {
+    std::vector<components::FilterNode> nodes;
+    nodes.push_back(BlurNodeWithSpace(ColorInterpolationFilters::SRGB));
+    nodes.push_back(SaturateNodeWithSpace(ColorInterpolationFilters::SRGB));
+    nodes.push_back(BlurNodeWithSpace(ColorInterpolationFilters::SRGB));
+    return nodes;
+  };
+
+  const tiny_skia::Pixmap combined = RunNodesAsOneGraph(source, nodes());
+  const tiny_skia::Pixmap perPrimitive = RunNodesOneGraphAtATime(source, nodes());
+
+  ExpectMatchesPerPrimitiveRun(combined, perPrimitive);
+}
+
+// The per-primitive space has to actually take effect: saturating in sRGB and saturating in
+// linearRGB are different computations, so the two graphs must not agree.
+TEST(FilterGraphExecutorTest, PerPrimitiveColorSpaceChangesTheResult) {
+  const tiny_skia::Pixmap source = MakeColorSourceGraphic();
+
+  std::vector<components::FilterNode> srgbNodes;
+  srgbNodes.push_back(BlurNodeWithSpace(ColorInterpolationFilters::LinearRGB));
+  srgbNodes.push_back(SaturateNodeWithSpace(ColorInterpolationFilters::SRGB));
+
+  std::vector<components::FilterNode> linearNodes;
+  linearNodes.push_back(BlurNodeWithSpace(ColorInterpolationFilters::LinearRGB));
+  linearNodes.push_back(SaturateNodeWithSpace(ColorInterpolationFilters::LinearRGB));
+
+  const tiny_skia::Pixmap srgbInterior = RunNodesAsOneGraph(source, std::move(srgbNodes));
+  const tiny_skia::Pixmap linearInterior = RunNodesAsOneGraph(source, std::move(linearNodes));
+
+  EXPECT_GT(MaxChannelDelta(srgbInterior, linearInterior), 2);
 }
 
 }  // namespace
