@@ -319,9 +319,9 @@ private:
   /// The unpremultiply-on-store stage lived only in the float raster pipeline,
   /// so the old flag was also pinning root draws to it. \ref makePixmapPaint
   /// keeps that pin for composites into this buffer, deliberately: dropping it
-  /// too let the 8-bit compose path land opaque pixels at alpha 250, and the
-  /// speedup comes from removing the conversion stages rather than from the
-  /// 8-bit pipeline (measured at about 3% of the win).
+  /// too let the 8-bit compose path land opaque pixels at alpha 250. Keeping it
+  /// costs nothing measurable, so the speedup above comes from removing the
+  /// conversion stages, not from the 8-bit pipeline.
   tiny_skia::Pixmap frame_;
   Transform2d deviceFromLocalTransform_;
   std::vector<Transform2d> deviceFromLocalTransformStack_;

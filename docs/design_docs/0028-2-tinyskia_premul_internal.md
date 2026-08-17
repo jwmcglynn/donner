@@ -1,6 +1,6 @@
 # Design: Pivot tiny-skia-cpp backend to premul-internal storage
 
-**Status:** Revived, implemented on a branch, pending accuracy adjudication
+**Status:** Revived and implemented
 **Author:** Claude Opus 4.7 (original), Claude Opus 5 (revival)
 **Created:** 2026-04-19
 **Rejected:** 2026-04-19 (same-day, during implementation)
@@ -17,12 +17,13 @@ tradeoff: a measured 1.9x median settled-frame speedup on the CPU backend. That
 number changes the question from "is this lossy?" (yes, provably) to "is the
 loss worth 1.9x?", which is a product call, not a correctness call.
 
-The change is implemented and measured, and the measuring turned up a second
-mechanism the 2026-04 pass did not separate out: the flag was also selecting
-the raster pipeline. Most of the accuracy loss comes from that half, and that
-half costs about 3% of the speedup to give back. The remaining decision is
-which of the three options below to take. This document records the
-measurements so that decision can be made from evidence.
+The measuring turned up a second mechanism the 2026-04 pass did not separate
+out: the flag was also selecting the raster pipeline, and most of the accuracy
+loss came from that half. Keeping the root-surface pin costs nothing
+measurable, so the shipped change takes it. What remains is storage
+quantization alone, bounded at 4/255 of visible error, which was accepted:
+three renderer goldens re-blessed and one reference case moved from a 100 to a
+120 pixel budget.
 
 ## The change, concretely
 
@@ -33,13 +34,19 @@ measurements so that decision can be made from evidence.
 2. `takeSnapshot()` runs `UnpremultiplyRgbaInPlace` once over the frame. The
    published `RendererBitmap` contract stays `AlphaType::Unpremultiplied`, so no
    consumer changes.
+3. Add a `forceHqPipeline` passthrough to `PixmapPaint`, which
+   `Painter::drawPixmap` previously hardcoded off, and set it from
+   `RendererTinySkia::makePixmapPaint` when the composite destination is the
+   root frame. This restores the raster-pipeline selection those six composite
+   sites had before, which the deleted flag was performing as a side effect.
 
 The storage decision now lives in one place (a note on the `frame_` member
-declaration) instead of being re-derived at 15 call sites.
+declaration) instead of being re-derived at 15 call sites, and the pipeline
+decision lives in one helper instead of riding along with it.
 
-`unpremulStore` becomes entirely unused from Donner after this change. It is a
-tiny-skia-cpp extension, not upstream tiny-skia API; the vendored copy is left
-untouched so the flag can be removed on its own schedule.
+`unpremulStore` is entirely unused from Donner after this change. It is a
+tiny-skia-cpp extension, not upstream tiny-skia API; the vendored copy keeps it
+so the flag can be removed on its own schedule.
 
 ## What the experiment measured (2026-08 rerun)
 
@@ -47,18 +54,19 @@ Setup: `-c opt`. Benchmark is
 `engine_compare_bench --backend=tiny-skia --iterations=15 --warmup=3`; the
 reported figure is the median settled-frame time (`second_ms`), which excludes
 parse and first-frame warmup. Before and after were measured back to back in
-the same pass, twice, on a machine that had other work running; the two passes
-agreed to within 2% and the effect is an order of magnitude larger than that
-spread.
+the same pass, twice, on an otherwise quiet machine; the two passes agreed to
+within 1% and the effect is an order of magnitude larger than that spread. The
+"after" column is the final configuration, storage change plus root-surface
+pipeline pin.
 
 | Scene | Size | Before (ms) | After (ms) | Speedup |
 | --- | --- | --- | --- | --- |
-| Ghostscript_Tiger | 900x900 | 40.75 | 21.92 | 1.86x |
-| lion | 567x567 | 4.586 | 2.712 | 1.69x |
-| z0rly_test6 | 500x300 | 1.546 | 0.492 | 3.14x |
-| big_lightning_glow_no_filter_crop | 95x177 | 0.360 | 0.183 | 1.97x |
+| Ghostscript_Tiger | 900x900 | 41.00 | 21.94 | 1.87x |
+| lion | 567x567 | 4.589 | 2.690 | 1.71x |
+| z0rly_test6 | 500x300 | 1.548 | 0.489 | 3.17x |
+| big_lightning_glow_no_filter_crop | 95x177 | 0.360 | 0.185 | 1.95x |
 
-Median speedup 1.92x. The snapshot-side unpremultiply pass costs about 2 ms at
+Median speedup 1.91x. The snapshot-side unpremultiply pass costs about 2 ms at
 900x900 and is charged against the "after" column above.
 
 Conformance: the reference SVG suite runs 1512 cases in the `max` variant and
@@ -167,12 +175,12 @@ splash corner reads 255 again, and the 528,492-pixel replay golden is exact.
 What remains is mechanism 1 only, at 32 to 142 pixels per editor thumbnail and
 112 against a 100 budget on one reference case.
 
-The scoped pin costs almost nothing: Tiger 23.03 vs 21.92 ms, lion 2.743 vs
-2.712 ms, z0rly_test6 0.555 vs 0.492 ms, big_lightning 0.184 vs 0.183 ms. That
-is 1.77x to 2.79x over the parent instead of 1.86x to 3.14x, a median of 1.87x
-instead of 1.92x. **Essentially the whole speedup comes from dropping the two
-conversion stages, not from the 8-bit pipeline.** Mechanism 2 is accuracy loss
-bought for about 3% of the win.
+The scoped pin costs nothing measurable. An early comparison on a loaded
+machine put it at about 3%; repeated on a quiet one, the pinned configuration
+matches the unpinned one inside run-to-run spread (Tiger 21.94 vs 21.92 ms).
+**The whole speedup comes from dropping the two conversion stages, not from the
+8-bit pipeline**, so mechanism 2 was accuracy loss bought for nothing. The
+shipped change takes the pin.
 
 ## How large is the visible error?
 
@@ -197,30 +205,37 @@ thousands of pixels by up to 7-11/255 and moves measurably away from the
 reference. The same drift is what turns an opaque editor background corner
 into alpha 250. They are, however, entirely attributable to mechanism 2.
 
-Mechanism 1 on its own never exceeded 2/255 of visible error on any case
-measured here, across the reference suite and the renderer goldens.
+Mechanism 1 on its own never exceeded 4/255 of visible error on any case
+measured here, across the reference suite, the renderer goldens, and the
+editor bitmap goldens, and it never changed alpha by more than 2.
 
-## Options
+## What shipped
 
-1. **Take the change as implemented.** Accept nine failing targets, including
-   an opaque splash corner that reads back at alpha 250 and a full-canvas
-   replay golden that changes on every pixel. Not recommended: the
-   opaque-corner behavior is a correctness defect, not a tolerance question.
-2. **Take the change and pin the root pipeline to float.** Keeps 1.87x of the
-   1.92x, keeps the three marker cases green, restores the
-   opaque-corner and replay goldens, and reduces the accuracy cost to mechanism
-   1 alone. This needs a way to request the float pipeline for pixmap
-   composites, which today hardcode it off inside `Painter::drawPixmap`; that
-   is a small passthrough in the vendored tiny-skia-cpp plus the same
-   six-site predicate the deleted flag used. Still leaves five zero-tolerance
-   golden targets to re-bless and one reference case at 112 against 100.
-3. **Reject again.** The accuracy argument from 2026-04 is unchanged and
-   correct on its own terms. Costs 1.9x on the CPU backend.
+The storage change plus the root-surface pipeline pin, which buys the full
+speedup without paying for mechanism 2. The residual mechanism 1 cost was
+accepted and absorbed as follows.
 
-Option 2 is the recommendation: it is the only one that buys the speedup
-without paying for mechanism 2, and the residual mechanism 1 cost is bounded
-at 2/255 of visible error: one suite case at 112 against a 100 budget, plus
-three zero-tolerance goldens whose largest visible change is 1.91/255.
+- Three renderer goldens re-blessed through the `UPDATE_GOLDEN_IMAGES_DIR`
+  flow: `MinimalClosedCubic2x2`, `MinimalClosedCubic5x3`,
+  `BigLightningGlowNoFilterCrop`. Alpha is bit-identical in every changed
+  pixel; the largest change composited over white is 1.91/255.
+- `shapes/circle/simple-case` moved from a 100 to a 120 pixel budget through
+  the existing per-case override map, with the reason recorded inline. The
+  pilot corpus profile carries the same budget so its parity assertion holds.
+  No other case and no global threshold moved.
+
+Three editor bitmap-golden targets still compare with a zero-pixel budget and
+still differ: `layer_thumbnail_golden_tests`, `layers_panel_tests`, and
+`showcase_asset_tests`. They are the same mechanism 1 class as the re-blessed
+renderer goldens (38 to 215 pixels per thumbnail, max alpha delta 0 to 2, max
+2.56/255 composited over white, except the root-group thumbnail at 4.00/255),
+and they need the same re-bless decision applied to editor testdata.
+
+The alternative that was rejected: shipping the storage change without the pin.
+That leaves an opaque splash corner reading back at alpha 250, a full-canvas
+replay golden differing on 528,492 pixels, and three reference marker cases
+drifting up to 11/255 - a correctness defect, not a tolerance question, and one
+that costs nothing to avoid.
 
 ## Notes carried forward from the 2026-04 pass
 
