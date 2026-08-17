@@ -118,6 +118,28 @@ inline float lookupUnit(const std::array<float, kFloatLutSize>& lut, float x) {
   return lut[static_cast<int>(clamped * (kFloatLutSize - 1) + 0.5f)];
 }
 
+/// Converts one premultiplied RGBA pixel through `lut`: unpremultiply, look up,
+/// re-premultiply. Alpha is not gamma-encoded and passes through untouched, and
+/// a transparent pixel is already correct in both spaces.
+inline void convertPixel(const std::array<float, kFloatLutSize>& lut, float& r, float& g, float& b,
+                         float a) {
+  if (a <= 0.0f) {
+    return;
+  }
+
+  if (a >= 1.0f) {
+    r = lookupUnit(lut, r);
+    g = lookupUnit(lut, g);
+    b = lookupUnit(lut, b);
+    return;
+  }
+
+  const float invAlpha = 1.0f / a;
+  r = lookupUnit(lut, r * invAlpha) * a;
+  g = lookupUnit(lut, g * invAlpha) * a;
+  b = lookupUnit(lut, b * invAlpha) * a;
+}
+
 }  // namespace
 
 void srgbToLinear(Pixmap& pixmap) {
@@ -229,26 +251,14 @@ void srgbToLinear(FloatPixmap& pixmap) {
 
   for (std::size_t i = 0; i < pixelCount; ++i) {
     const std::size_t off = i * 4;
-    const float a = data[off + 3];
-
-    if (a <= 0.0f) {
-      continue;
-    }
-
-    if (a >= 1.0f) {
-      // Fully opaque: direct conversion.
-      data[off + 0] = lookupUnit(lut, data[off + 0]);
-      data[off + 1] = lookupUnit(lut, data[off + 1]);
-      data[off + 2] = lookupUnit(lut, data[off + 2]);
-    } else {
-      // Unpremultiply, convert, re-premultiply.
-      const float invAlpha = 1.0f / a;
-
-      data[off + 0] = lookupUnit(lut, data[off + 0] * invAlpha) * a;
-      data[off + 1] = lookupUnit(lut, data[off + 1] * invAlpha) * a;
-      data[off + 2] = lookupUnit(lut, data[off + 2] * invAlpha) * a;
-    }
+    convertPixel(lut, data[off + 0], data[off + 1], data[off + 2], data[off + 3]);
   }
+}
+
+std::array<float, 4> srgbToLinearPixel(std::array<float, 4> premultiplied) {
+  convertPixel(srgbToLinearFloatLut(), premultiplied[0], premultiplied[1], premultiplied[2],
+               premultiplied[3]);
+  return premultiplied;
 }
 
 void linearToSrgb(FloatPixmap& pixmap) {
@@ -260,23 +270,7 @@ void linearToSrgb(FloatPixmap& pixmap) {
 
   for (std::size_t i = 0; i < pixelCount; ++i) {
     const std::size_t off = i * 4;
-    const float a = data[off + 3];
-
-    if (a <= 0.0f) {
-      continue;
-    }
-
-    if (a >= 1.0f) {
-      data[off + 0] = lookupUnit(lut, data[off + 0]);
-      data[off + 1] = lookupUnit(lut, data[off + 1]);
-      data[off + 2] = lookupUnit(lut, data[off + 2]);
-    } else {
-      const float invAlpha = 1.0f / a;
-
-      data[off + 0] = lookupUnit(lut, data[off + 0] * invAlpha) * a;
-      data[off + 1] = lookupUnit(lut, data[off + 1] * invAlpha) * a;
-      data[off + 2] = lookupUnit(lut, data[off + 2] * invAlpha) * a;
-    }
+    convertPixel(lut, data[off + 0], data[off + 1], data[off + 2], data[off + 3]);
   }
 }
 

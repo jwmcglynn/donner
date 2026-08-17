@@ -8,6 +8,7 @@ tiny_skia_dual_mode_cc_test(
     name = "tiny_skia_filter_tests",
     srcs = [
         "ColorSpaceTest.cpp",
+        "FilterGraphColorSpaceTest.cpp",
     ],
     copts = ["-std=c++20"],
     deps = [
