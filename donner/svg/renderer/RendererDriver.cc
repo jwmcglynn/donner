@@ -15,6 +15,7 @@
 #include "donner/base/ParseDiagnostic.h"
 #include "donner/base/ParseWarningSink.h"
 #include "donner/base/RelativeLengthMetrics.h"
+#include "donner/base/Utils.h"
 #include "donner/base/xml/components/TreeComponent.h"
 #include "donner/svg/components/AttachedIdLookup.h"
 #include "donner/svg/components/ComputedClipPathsComponent.h"
@@ -366,10 +367,29 @@ void resolvePerSpanStyles(Registry& registry, components::ComputedTextComponent&
   }
 }
 
-PathShape toPathShape(EntityHandle sourceEntity, const components::ComputedPathComponent& path,
+/// Build the borrowed path view handed to `RendererInterface::drawPath`.
+///
+/// `shape.path` points straight at `path.spline`, so this costs no allocation no matter how
+/// large the geometry is.
+///
+/// The borrow is valid only while \p path keeps its current address AND keeps naming this
+/// entity's geometry. Both hold during traversal, but for different reasons, and the second
+/// is the subtle one. Component storage is paged, so emplacing more `ComputedPathComponent`s
+/// never relocates the existing ones. ERASING one is swap-and-pop: the storage moves its last
+/// element into the freed slot. So an erase during traversal would leave every outstanding
+/// borrow pointing at valid memory that now holds a DIFFERENT entity's spline. The frame
+/// would render the wrong shape, with no crash and nothing for ASAN to catch. The invariant
+/// we rely on is therefore "no `ComputedPathComponent` is erased between the borrow and its
+/// last use", and it holds because every site that removes one runs outside draw traversal:
+/// DOM attribute mutation on the shape elements, shape recomputation in `ShapeSystem`, and
+/// animation-override application in `RenderingContext`. Note that `emplace_or_replace`
+/// during recomputation is fine on its own - it rewrites the component in place - so the
+/// hazard is specifically erasure, not update.
+PathShape toPathShape(EntityHandle sourceEntity,
+                      const components::ComputedPathComponent& path UTILS_LIFETIME_BOUND,
                       const components::ComputedStyleComponent& style) {
   PathShape shape;
-  shape.path = path.spline;
+  shape.path = &path.spline;
   shape.fillRule = style.properties->fillRule.get().value();
   shape.sourceEntity = sourceEntity;
   return shape;
@@ -473,7 +493,7 @@ ResolvedClip toResolvedClip(const components::RenderingInstanceComponent& instan
 
     clip.clipPaths.reserve(clipPaths->clipPaths.size());
     for (const auto& path : clipPaths->clipPaths) {
-      PathShape shape;
+      ClipPathShape shape;
       shape.path = path.path;
       shape.fillRule = path.clipRule == ClipRule::NonZero ? FillRule::NonZero : FillRule::EvenOdd;
       shape.parentFromEntity = path.parentFromEntity;
@@ -489,7 +509,7 @@ ResolvedClip toResolvedClip(const components::RenderingInstanceComponent& instan
   }
 
   // The computed clip rule is inherited if undefined on the clip path itself.
-  for (PathShape& path : clip.clipPaths) {
+  for (ClipPathShape& path : clip.clipPaths) {
     if (path.fillRule == FillRule::NonZero &&
         style.properties->clipRule.get().value() == ClipRule::EvenOdd) {
       path.fillRule = FillRule::EvenOdd;

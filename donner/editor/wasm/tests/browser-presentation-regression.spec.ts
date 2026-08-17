@@ -470,25 +470,49 @@ async function openBasicShapes(page: Page): Promise<{
   // the sample picker on screen. On a loaded runner that gap spans several
   // captures. Wait for the pixels every caller is about to measure: the Basic
   // Shapes blue rounded rectangle inside the render pane.
-  await expect
-    .poll(
-      async () => {
-        const shot = await page.screenshot({ clip: documentClip });
-        const bounds = readEditorPixelBoundsFromPng(shot, "basic-blue", documentClip, {
-          minX: 0,
-          minY: 0,
-          maxX: documentClip.width,
-          maxY: documentClip.height,
-        });
-        return bounds === null ? 0 : bounds.pixels;
-      },
-      {
-        message: "expected the presented render pane to show the Basic Shapes blue rectangle",
-        timeout: scaledMs(5_000),
-        intervals: [16, 25, 50, 100],
-      },
-    )
-    .toBeGreaterThan(0);
+  // Last pixel count the probe measured, reported below on both paths.
+  let lastBluePixels = -1;
+  try {
+    await expect
+      .poll(
+        async () => {
+          const shot = await page.screenshot({ clip: documentClip });
+          const bounds = readEditorPixelBoundsFromPng(shot, "basic-blue", documentClip, {
+            minX: 0,
+            minY: 0,
+            maxX: documentClip.width,
+            maxY: documentClip.height,
+          });
+          lastBluePixels = bounds === null ? 0 : bounds.pixels;
+          return lastBluePixels;
+        },
+        {
+          message: "expected the presented render pane to show the Basic Shapes blue rectangle",
+          timeout: scaledMs(5_000),
+          intervals: [16, 25, 50, 100],
+        },
+      )
+      .toBeGreaterThan(0);
+  } finally {
+    // "No blue" covers three unrelated faults: the worker never produced a
+    // result, a result arrived that no app frame carried, or a frame was
+    // presented whose pixels this probe window missed. Publish the app's own
+    // counters so the next failure names which one happened instead of only
+    // reporting that blue was absent. The read is best-effort: when the whole
+    // test times out the page is already being torn down, and a rejection
+    // here must not replace the real failure.
+    const presentationState = await page
+      .evaluate(() => ({
+        worker: window.__donnerWorkerStats,
+        frames: window.__donnerMainLoopRenderedFrames || 0,
+        workerBusy: window.__donnerInteractionStats?.workerBusy,
+        activeSample: window.__donnerActiveSampleStats,
+      }))
+      .catch((error: unknown) => ({ unavailable: String(error) }));
+    console.log(
+      `open-basic-shapes bluePixels=${lastBluePixels} state=${JSON.stringify(presentationState)}`,
+    );
+  }
 
   return { canvasBounds, documentClip };
 }

@@ -80,8 +80,12 @@ struct SetPaintCommand {
   PaintParams paint;
 };
 
+/// Recorded `drawPath`. A snapshot outlives the document it was captured from, so unlike the
+/// borrowed `PathShape` handed to the renderer this owns its geometry; replay hands a
+/// `PathShape` pointing back at that owned copy.
 struct DrawPathCommand {
-  PathShape path;
+  Path path;
+  FillRule fillRule = FillRule::NonZero;
   StrokeParams stroke;
 };
 
@@ -168,9 +172,6 @@ public:
   }
 
   ResolvedClip mapClip(ResolvedClip clip) {
-    for (PathShape& path : clip.clipPaths) {
-      path.sourceEntity = EntityHandle();
-    }
     if (clip.mask.has_value()) {
       clip.mask = mapMask(*clip.mask);
     }
@@ -272,9 +273,8 @@ std::size_t CountReferenceToRegistry(const components::ResolvedMask& mask,
 
 std::size_t CountReferenceToRegistry(const ResolvedClip& clip, const Registry& registry) {
   std::size_t count = 0;
-  for (const PathShape& path : clip.clipPaths) {
-    count += CountReferenceToRegistry(path.sourceEntity, registry);
-  }
+  // Clip paths hold no entity handle at all (see `ClipPathShape`), so only the mask chain
+  // can reference the registry.
   if (clip.mask.has_value()) {
     count += CountReferenceToRegistry(*clip.mask, registry);
   }
@@ -300,9 +300,6 @@ std::size_t CountReferenceToRegistry(const RenderCommand& command, const Registr
                         },
                         [&](const SetPaintCommand& value) {
                           return CountReferenceToRegistry(value.paint, registry);
-                        },
-                        [&](const DrawPathCommand& value) {
-                          return CountReferenceToRegistry(value.path.sourceEntity, registry);
                         },
                         [&](const DrawTextCommand& value) {
                           return CountReferenceToRegistry(value.text, registry);
@@ -339,7 +336,9 @@ void ReplayCommand(const RenderCommand& command, RendererInterface& renderer,
           },
           [&](const EndPatternTileCommand& value) { renderer.endPatternTile(value.forStroke); },
           [&](const SetPaintCommand& value) { renderer.setPaint(value.paint); },
-          [&](const DrawPathCommand& value) { renderer.drawPath(value.path, value.stroke); },
+          [&](const DrawPathCommand& value) {
+            renderer.drawPath(PathShape{&value.path, value.fillRule}, value.stroke);
+          },
           [&](const DrawRectCommand& value) { renderer.drawRect(value.rect, value.stroke); },
           [&](const DrawEllipseCommand& value) {
             renderer.drawEllipse(value.bounds, value.stroke);
@@ -525,9 +524,9 @@ void RenderSnapshotRecorder::setPaint(const PaintParams& paint) {
 }
 
 void RenderSnapshotRecorder::drawPath(const PathShape& path, const StrokeParams& stroke) {
-  PathShape snapshotPath = path;
-  snapshotPath.sourceEntity = EntityHandle();
-  snapshot_.impl_->commands.push_back(DrawPathCommand{std::move(snapshotPath), stroke});
+  // Deliberate copy: the recorded command has to own geometry that stays valid after the
+  // source registry is gone. The source entity is dropped for the same reason.
+  snapshot_.impl_->commands.push_back(DrawPathCommand{path.pathOrEmpty(), path.fillRule, stroke});
 }
 
 void RenderSnapshotRecorder::drawRect(const Box2d& rect, const StrokeParams& stroke) {

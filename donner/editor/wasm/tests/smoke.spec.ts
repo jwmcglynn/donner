@@ -881,6 +881,18 @@ for (
       presentedMs?: number;
     } = {};
     let completedWorkerStats: Window["__donnerWorkerStats"] | undefined;
+    // Last observation the poll made, reported on both the passing and the
+    // failing path. Three different faults share this wait's failure message -
+    // the sample never activated, the worker never returned a result, or a
+    // result landed that no app frame carried - and only the raw observation
+    // separates them. `workerBusy` is the one that says whether a render is
+    // still in flight (a stalled renderer) or was never started.
+    let lastPresentationState: {
+      activeSample: Window["__donnerActiveSampleStats"];
+      frames: number;
+      worker: Window["__donnerWorkerStats"];
+      workerBusy: boolean | undefined;
+    } | undefined;
     // Presentation is now one canvas frame: the sample is on screen once the
     // document render lands AND the app thread has drawn a frame carrying it.
     // `presentedMs` is read on the page clock at that observation.
@@ -889,7 +901,9 @@ for (
         activeSample: window.__donnerActiveSampleStats,
         frames: window.__donnerMainLoopRenderedFrames || 0,
         worker: window.__donnerWorkerStats,
+        workerBusy: window.__donnerInteractionStats?.workerBusy,
       }));
+      lastPresentationState = state;
       if (state.activeSample?.sampleId === sample.id) {
         phaseTimings.activatedMs = state.activeSample.activatedAtMs - clickStartedAt;
       }
@@ -929,7 +943,7 @@ for (
       console.log(
         `carousel-presentation sample=${sample.id} timings=${JSON.stringify(phaseTimings)} worker=${
           JSON.stringify(completedWorkerStats)
-        }`,
+        } last=${JSON.stringify(lastPresentationState)}`,
       );
     }
     expect(phaseTimings.presentedMs).toBeDefined();

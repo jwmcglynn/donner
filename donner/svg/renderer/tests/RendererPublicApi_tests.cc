@@ -467,7 +467,8 @@ TEST(RendererPublicApiTest, FacadeForwardsFrameStateAndPrimitiveCalls) {
   builder.lineTo(Vector2d(8.0, 1.0));
   builder.lineTo(Vector2d(8.0, 8.0));
   builder.closePath();
-  renderer.drawPath(PathShape{.path = builder.build()}, StrokeParams{});
+  const Path path = builder.build();
+  renderer.drawPath(PathShape{.path = &path}, StrokeParams{});
   renderer.drawRect(Box2d::FromXYWH(2.0, 2.0, 4.0, 5.0), StrokeParams{});
   renderer.drawEllipse(Box2d::FromXYWH(6.0, 2.0, 5.0, 4.0), StrokeParams{});
 
