@@ -117,7 +117,16 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Validate generated CMakeLists.txt
+      # This check queries the Bazel graph, so retry it once when the first
+      # attempt fails. Deterministic generator failures fail again on retry;
+      # compile and test steps remain single-attempt.
+      - id: cmake-generator-check
+        name: Validate generated CMakeLists.txt
+        continue-on-error: true
+        run: python3 tools/cmake/gen_cmakelists.py --check
+
+      - name: Retry generated CMakeLists.txt validation
+        if: steps.cmake-generator-check.outcome == 'failure'
         run: python3 tools/cmake/gen_cmakelists.py --check
 
   linux:

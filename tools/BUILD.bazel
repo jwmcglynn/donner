@@ -118,7 +118,10 @@ py_test(
     srcs = ["ci_runtime_workflow_tests.py"],
     data = [
         "//:.bazelrc",
+        "//:.github/workflows/cmake.yml",
         "//:.github/workflows/coverage.yml",
+        "//:.github/workflows/editor_wasm.yml",
+        "//:.github/workflows/lint.yml",
         "//:.github/workflows/main.yml",
         "//tools:coverage.sh",
     ],

@@ -96,5 +96,14 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: gen_cmakelists.py --check
+      # This check queries the Bazel graph, so retry it once when the first
+      # attempt fails. Deterministic generator failures fail again on retry;
+      # source lint checks remain single-attempt.
+      - id: cmake-generator-check
+        name: gen_cmakelists.py --check
+        continue-on-error: true
+        run: python3 tools/cmake/gen_cmakelists.py --check
+
+      - name: Retry gen_cmakelists.py --check
+        if: steps.cmake-generator-check.outcome == 'failure'
         run: python3 tools/cmake/gen_cmakelists.py --check
