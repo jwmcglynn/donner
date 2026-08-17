@@ -771,6 +771,11 @@ std::string RenderTerminalComparisonGridForTesting(const TerminalImageView& actu
   return output;
 }
 
+void RegisterFontsFromDirectoryForTesting(SVGDocument& document,
+                                          const std::filesystem::path& fontsDir) {
+  registerFontsFromDirectory(document, fontsDir);
+}
+
 SVGDocument ImageComparisonTestFixture::loadSVG(
     const char* filename, const std::optional<std::filesystem::path>& resourceDir) {
   std::ifstream file(filename);

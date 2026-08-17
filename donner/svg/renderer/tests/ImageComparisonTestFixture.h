@@ -494,6 +494,21 @@ std::filesystem::path ResolveRunfilesResourceRootForTesting(
 void TrustDocumentFontFacesForTesting(SVGDocument& document);
 
 /**
+ * @brief Register the hermetic test font set on @p document.
+ *
+ * Loads every regular/bold TTF/OTF under @p fontsDir as trusted `@font-face` rules and points the
+ * CSS generic families (serif, sans-serif, monospace, cursive, fantasy) at them, so text tests
+ * resolve glyphs from checked-in font data instead of whatever the host machine happens to have
+ * installed. Exposed for suites that need the same hermetic fonts without the golden-image
+ * comparison machinery.
+ *
+ * @param document Document to register the fonts on.
+ * @param fontsDir Directory of font files, e.g. the vendored resvg-test-suite `fonts` directory.
+ */
+void RegisterFontsFromDirectoryForTesting(SVGDocument& document,
+                                          const std::filesystem::path& fontsDir);
+
+/**
  * @brief A Google Test fixture for tests that compare rendered SVG output against golden images.
  *
  * This fixture is parameterized with \ref ImageComparisonTestcase, allowing multiple SVG files
