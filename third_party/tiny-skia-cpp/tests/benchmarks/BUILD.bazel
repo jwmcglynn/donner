@@ -23,20 +23,28 @@ tiny_skia_cc_binary(
 )
 
 _FILTER_DEPS = [
-    "//src/tiny_skia/filter:filter",
     "@google_benchmark//:benchmark_main",
 ]
 
+# The filter dep must carry the same simd_mode transition as the core
+# aggregate; a mixed-mode link duplicates every alwayslink tiny_skia_core
+# symbol. See the tiny_skia_filter_* wrappers in //src:BUILD.bazel.
 tiny_skia_cc_binary(
     name = "filter_perf_bench_native",
     srcs = ["FilterPerfBench.cpp"],
-    deps = _FILTER_DEPS + ["//src:tiny_skia_lib_native"],
+    deps = _FILTER_DEPS + [
+        "//src:tiny_skia_filter_native",
+        "//src:tiny_skia_lib_native",
+    ],
 )
 
 tiny_skia_cc_binary(
     name = "filter_perf_bench_scalar",
     srcs = ["FilterPerfBench.cpp"],
-    deps = _FILTER_DEPS + ["//src:tiny_skia_lib_scalar"],
+    deps = _FILTER_DEPS + [
+        "//src:tiny_skia_filter_scalar",
+        "//src:tiny_skia_lib_scalar",
+    ],
 )
 
 sh_test(
