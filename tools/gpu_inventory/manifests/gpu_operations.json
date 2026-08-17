@@ -638,6 +638,7 @@
         "Adapter",
         "AddressMode",
         "BackendType",
+        "BindGroup",
         "Buffer",
         "BufferDescriptor",
         "BufferUsage",
@@ -674,8 +675,12 @@
       "wgpuCFunctions": [
         "wgpuDevicePoll"
       ],
+      "wgpuCTypes": [
+        "WGPUBuffer"
+      ],
       "wgpuCppTokens": [
         "Adapter",
+        "BindGroup",
         "Buffer",
         "Device",
         "Instance",
