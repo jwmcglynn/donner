@@ -11,7 +11,7 @@
 #if defined(TINYSKIA_CFG_IF_SIMD_NATIVE) && (defined(__ARM_NEON) || defined(__ARM_NEON__))
 #include <arm_neon.h>
 #define TINY_SKIA_SIMD_NEON 1
-#elif defined(__SSE2__)
+#elif defined(TINYSKIA_CFG_IF_SIMD_NATIVE) && defined(__SSE2__)
 #include <emmintrin.h>
 #define TINY_SKIA_SIMD_SSE2 1
 #endif
