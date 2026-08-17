@@ -117,13 +117,28 @@ std::optional<ParseDiagnostic> ParseDFromAttributes(PathComponent& properties,
 /// signal a precise "geometry actually changed" edge - downstream
 /// caches (e.g. the Geode path-encode cache) listen on that signal and rely
 /// on it not firing for no-op regenerations.
-ComputedPathComponent& emplaceComputedPathIfChanged(EntityHandle handle, Path newPath) {
+///
+/// \p sourcePathData records the path-data string the spline was parsed from, so a later pass
+/// can recognize the spline as still current and skip the parse. Callers that did not produce
+/// the spline by parsing path data leave it unset, which clears any key a previous producer
+/// left behind - only a parse of path data may leave a key that matches a path-data string.
+ComputedPathComponent& emplaceComputedPathIfChanged(
+    EntityHandle handle, Path newPath, std::optional<RcString> sourcePathData = std::nullopt) {
   if (auto* existing = handle.try_get<ComputedPathComponent>()) {
     if (existing->spline == newPath) {
+      // Assign through the reference rather than re-emplacing, so the unchanged-geometry case
+      // still does not fire on_update<ComputedPathComponent>.
+      existing->sourcePathData = std::move(sourcePathData);
       return *existing;
     }
   }
-  return handle.emplace_or_replace<ComputedPathComponent>(std::move(newPath));
+
+  // Aggregate-initialize the component complete with its key, rather than filling the key in
+  // afterwards: `on_construct` and `on_update` listeners run inside `emplace_or_replace`, and a
+  // two-step write would let them observe a keyless component. The arguments are positional, so
+  // they track ComputedPathComponent's member order.
+  return handle.emplace_or_replace<ComputedPathComponent>(
+      std::move(newPath), /*cachedLocalBounds=*/std::nullopt, std::move(sourcePathData));
 }
 
 /**
@@ -375,15 +390,38 @@ ComputedPathComponent* ShapeSystem::createComputedShapeWithStyle(
   if (path.splineOverride) {
     return &emplaceComputedPathIfChanged(handle, path.splineOverride.value());
   } else if (actualD.isSpecified()) {
-    auto maybePath = parser::PathParser::Parse(actualD.get().value());
-    if (maybePath.hasError()) {
+    // `Property::get()` hands back a fresh optional, so this has to be a value rather than a
+    // reference into a temporary. Copying an RcString shares its buffer.
+    const RcString pathData = actualD.get().value();
+
+    // Reuse the retained spline when it was parsed from this exact string. The shape pass runs
+    // over every shape on every prepare, and re-parsing path data that has not changed is the
+    // single most expensive thing it does. `pathData` is resolved fresh here from the current
+    // presentation attribute and the current computed style, so any change to either - however
+    // it was made - produces a different string and falls through to the parse below.
+    if (ComputedPathComponent* existing = handle.try_get<ComputedPathComponent>();
+        existing && existing->sourcePathData && existing->sourcePathData.value() == pathData) {
+      return existing;
+    }
+
+    auto maybePath = parser::PathParser::Parse(pathData);
+    const bool hadDiagnostic = maybePath.hasError();
+    if (hadDiagnostic) {
       // Propagate warnings, which may be set on success too.
       warningSink.add(std::move(maybePath.error()));
     }
 
     if (maybePath.hasResult() && !maybePath.result().empty()) {
-      // Success: Return path
-      return &emplaceComputedPathIfChanged(handle, std::move(maybePath.result()));
+      // Success: Return path. Only remember the source string when the parse was clean; path
+      // data that produces a diagnostic must be re-parsed by every pass so the diagnostic keeps
+      // reaching the sink for as long as the malformed data is present.
+      std::optional<RcString> cacheKey;
+      if (!hadDiagnostic) {
+        cacheKey = pathData;
+      }
+
+      return &emplaceComputedPathIfChanged(handle, std::move(maybePath.result()),
+                                           std::move(cacheKey));
     }
   }
 
