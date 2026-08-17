@@ -668,7 +668,13 @@ fn fs_main(in: VertexOutput) -> FragOutput {
     fract(patternPos.y / uniforms.tileSize.y) * uniforms.tileSize.y,
   );
   let uv = wrapped / uniforms.tileSize;
-  var sampled = textureSample(patternTexture, patternSampler, uv);
+  // textureSampleLevel, not textureSample: paintMode now lives in the
+  // per-instance record, so the solid-color early return above is
+  // non-uniform control flow and WGSL forbids implicit-derivative sampling
+  // past it (browser compilers reject the module; native validation does
+  // not). Pattern textures are created with a single mip level, so sampling
+  // level 0 explicitly is an exact behavioral match.
+  var sampled = textureSampleLevel(patternTexture, patternSampler, uv, 0.0);
   sampled = sampled * rec.patternOpacity * coverage;
   out.color = sampled;
   return out;
