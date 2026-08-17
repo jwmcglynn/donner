@@ -157,7 +157,15 @@ public:
     }
     out.buffer = chunks_.back().buffer.get();
     out.offset = usedBytes_;
-    out.index = static_cast<uint32_t>(usedBytes_ / sizeof(InstanceRecord));
+    // Indices are GLOBAL across chunks (slotAt walks cumulative chunk
+    // capacities): a per-chunk index would collide with the previous
+    // chunk after growth, and a free of the collided index would hand
+    // the same storage to two live slots.
+    uint32_t baseIndex = 0;
+    for (size_t i = 0; i + 1 < chunks_.size(); ++i) {
+      baseIndex += static_cast<uint32_t>(chunks_[i].size / sizeof(InstanceRecord));
+    }
+    out.index = baseIndex + static_cast<uint32_t>(usedBytes_ / sizeof(InstanceRecord));
     usedBytes_ += sizeof(InstanceRecord);
     return true;
   }

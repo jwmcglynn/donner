@@ -1789,7 +1789,15 @@ void GeoEncoder::fillPathResident(GeodeResidentSlot& slot, const EncodedPath& en
   // from a DIFFERENT device that previously rendered this document is not a
   // same-frame repeat and must re-upload (submitResidentFillDraw re-uploads
   // on the device-id mismatch) rather than fall back.
-  if (slot.owningDeviceId == impl_->device->deviceId() &&
+  // owningDeviceId == 0 also gates: an in-place stroke rebuild resets the
+  // slot mid-frame (clearing the device id) while lastResidentFrame
+  // survives, and the slot keeps its persistent record slot across
+  // re-uploads. Without this, every rebuilt repeat re-enters the resident
+  // path and rewrites the ONE record that all previously recorded draws of
+  // this slot read at submit time (last write wins: repeated styled <use>
+  // strokes all rendered the final style). A never-drawn slot also has id
+  // 0 but its lastResidentFrame sentinel can never equal a real frameId.
+  if ((slot.owningDeviceId == impl_->device->deviceId() || slot.owningDeviceId == 0) &&
       (slot.lastResidentFrame == frameId || slot.lastSceneFrame == frameId)) {
     submitFillDraw(args);
     return;
@@ -2528,7 +2536,8 @@ void GeoEncoder::fillPathLinearGradientResident(GeodeResidentGradientSlot& slot,
   // single uniform can only carry one draw per frame. Fall back to the
   // per-frame arena path in both cases, mirroring `fillPathResident`.
   if (impl_->activeClipMaskView || impl_->clipPolygonActive || impl_->maskPassOpen ||
-      (slot.owningDeviceId == impl_->device->deviceId() && slot.lastResidentFrame == frameId)) {
+      ((slot.owningDeviceId == impl_->device->deviceId() || slot.owningDeviceId == 0) &&
+       slot.lastResidentFrame == frameId)) {
     impl_->submitGradientArenaFallback(u, encoded);
     return;
   }
@@ -2555,7 +2564,8 @@ void GeoEncoder::fillPathRadialGradientResident(GeodeResidentGradientSlot& slot,
   impl_->buildRadialGradientUniforms(u, params, rule);
 
   if (impl_->activeClipMaskView || impl_->clipPolygonActive || impl_->maskPassOpen ||
-      (slot.owningDeviceId == impl_->device->deviceId() && slot.lastResidentFrame == frameId)) {
+      ((slot.owningDeviceId == impl_->device->deviceId() || slot.owningDeviceId == 0) &&
+       slot.lastResidentFrame == frameId)) {
     impl_->submitGradientArenaFallback(u, encoded);
     return;
   }
