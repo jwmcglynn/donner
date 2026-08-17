@@ -1,0 +1,7 @@
+"""Aliases for external dependencies used by examples and tests."""
+
+alias(
+    name = "zlib",
+    actual = "@zlib//:zlib",
+    visibility = ["//visibility:public"],
+)
