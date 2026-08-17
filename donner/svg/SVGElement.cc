@@ -556,9 +556,13 @@ void SVGElement::setAttribute(const xml::XMLQualifiedNameRef& name, std::string_
 }
 
 std::optional<ParseDiagnostic> SVGElement::setAttributeFromXMLMutation(
-    const xml::XMLQualifiedNameRef& name, std::string_view value) {
+    const xml::XMLQualifiedNameRef& name, std::string_view value,
+    bool* consumedAsPresentationAttribute) {
   DocumentMutationBatch mutation = handle_.mutationBatch();
   DocumentWriteAccess& access = mutation.access();
+  if (consumedAsPresentationAttribute != nullptr) {
+    *consumedAsPresentationAttribute = false;
+  }
   // TODO: Namespace support for these attributes
   // First check some special cases which will never be presentation attributes.
   if (name == xml::XMLQualifiedNameRef("id")) {
@@ -587,6 +591,9 @@ std::optional<ParseDiagnostic> SVGElement::setAttributeFromXMLMutation(
   if (name.namespacePrefix.empty()) {
     auto trySetResult = trySetPresentationAttribute(name.name, value);
     const bool attributeWasSet = trySetResult.hasResult() && trySetResult.result();
+    if (consumedAsPresentationAttribute != nullptr) {
+      *consumedAsPresentationAttribute = attributeWasSet;
+    }
     if (attributeWasSet) {
       if (name.name == "transform") {
         // Source/XML transform edits are settled document changes, not active drag frames.

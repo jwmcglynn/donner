@@ -262,6 +262,27 @@ TEST(SVGParser, Warning) {
               ElementsAre(ParseWarningIs(0, 13, "Failed to parse number: Unexpected character")));
 }
 
+TEST(SVGParser, InvalidPresentationAttributeWarnsOnceAndKeepsRawAttribute) {
+  const std::string_view invalidXml(
+      R"(<svg xmlns="http://www.w3.org/2000/svg">
+           <rect stroke-width="notanumber" />
+         </svg>)");
+
+  ParseWarningSink warnings;
+  auto documentResult = SVGParser::ParseSVG(invalidXml, warnings);
+  ASSERT_THAT(documentResult, NoParseError());
+
+  // Exactly one diagnostic: the presentation-attribute value is parsed once, so a failure is
+  // reported once. The position is the subparser's own, since an attribute value is not a view
+  // into the document text and cannot be mapped back to it.
+  EXPECT_THAT(warnings.warnings(),
+              ElementsAre(ParseWarningIs(1, 0, "Invalid length or percentage")));
+
+  // A value that fails to parse is still round-tripped as a raw XML attribute.
+  const SVGElement rect = documentResult.result().querySelector("rect").value();
+  EXPECT_THAT(rect.getAttribute("stroke-width"), testing::Optional(RcString("notanumber")));
+}
+
 TEST(SVGParser, InvalidXmlns) {
   const std::string_view invalidXml(R"(<svg id="svg1" viewBox="0 0 200 200" xmlns="invalid">
          </svg>)");

@@ -779,9 +779,14 @@ protected:
    *
    * @param name Name of the attribute to set.
    * @param value New value to set.
+   * @param[out] consumedAsPresentationAttribute When non-null, set to true if the value was
+   *   recognized and applied as a presentation attribute, and false if it was stored only as a
+   *   generic XML attribute. Lets a caller that needs to know the outcome avoid repeating the
+   *   presentation-attribute parse to find out.
    */
-  std::optional<ParseDiagnostic> setAttributeFromXMLMutation(const xml::XMLQualifiedNameRef& name,
-                                                             std::string_view value);
+  std::optional<ParseDiagnostic> setAttributeFromXMLMutation(
+      const xml::XMLQualifiedNameRef& name, std::string_view value,
+      bool* consumedAsPresentationAttribute = nullptr);
 
   /**
    * Remove an attribute from an XML mutation without writing back to XML source.

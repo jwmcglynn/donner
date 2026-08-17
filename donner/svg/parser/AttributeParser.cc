@@ -407,27 +407,28 @@ void ParsePresentationAttribute(SVGParserContext& context, SVGElement& element,
                                 const XMLQualifiedNameRef& name, std::string_view value) {
   // TODO: Move this logic into SVGElement::setAttribute.
 
+  // Storing the attribute already performs the presentation-attribute parse and reports both its
+  // diagnostic and whether the value was recognized, so this asks for the outcome instead of
+  // parsing the value once here and a second time inside the store.
+  bool consumedAsPresentationAttribute = false;
+  std::optional<ParseDiagnostic> error =
+      AttributeParser::ApplyParsedAttribute(element, name, value, &consumedAsPresentationAttribute);
+
   // TODO: Detect the SVG namespace here and only parse elements in that namespace.
+  // For now, we only parse attributes that are not in a namespace.
   if (name.namespacePrefix.empty()) {
-    // For now, we only parse attributes that are not in a namespace.
-    auto result = element.trySetPresentationAttribute(name.name, value);
-    if (result.hasError()) {
-      context.addSubparserWarning(std::move(result.error()), context.parserOriginFrom(value));
-    } else if (!result.result()) {
-      if (context.options().disableUserAttributes) {
-        ParseDiagnostic err;
-        err.reason = "Unknown attribute '" + name.toString() + "' (disableUserAttributes: true)";
-        if (auto maybeLocation = context.getAttributeLocation(element, name)) {
-          err.range.start = maybeLocation->start;
-        }
-        context.addWarning(std::move(err));
-        AttributeParser::RemoveParsedAttribute(element, name);
-        return;
+    if (error.has_value()) {
+      context.addSubparserWarning(std::move(error.value()), context.parserOriginFrom(value));
+    } else if (!consumedAsPresentationAttribute && context.options().disableUserAttributes) {
+      ParseDiagnostic err;
+      err.reason = "Unknown attribute '" + name.toString() + "' (disableUserAttributes: true)";
+      if (auto maybeLocation = context.getAttributeLocation(element, name)) {
+        err.range.start = maybeLocation->start;
       }
+      context.addWarning(std::move(err));
+      AttributeParser::RemoveParsedAttribute(element, name);
     }
   }
-
-  (void)AttributeParser::ApplyParsedAttribute(element, name, value);
 }
 
 /**
@@ -2523,8 +2524,9 @@ std::optional<ParseDiagnostic> AttributeParser::ParseAndSetAttribute(
 }
 
 std::optional<ParseDiagnostic> AttributeParser::ApplyParsedAttribute(
-    SVGElement& element, const XMLQualifiedNameRef& name, std::string_view value) {
-  return element.setAttributeFromXMLMutation(name, value);
+    SVGElement& element, const XMLQualifiedNameRef& name, std::string_view value,
+    bool* consumedAsPresentationAttribute) {
+  return element.setAttributeFromXMLMutation(name, value, consumedAsPresentationAttribute);
 }
 
 void AttributeParser::RemoveParsedAttribute(SVGElement& element, const XMLQualifiedNameRef& name) {
