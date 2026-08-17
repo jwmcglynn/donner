@@ -9,7 +9,10 @@ namespace tiny_skia {
 
 namespace {
 
-constexpr std::uint32_t kMaxPackedLength = std::numeric_limits<std::uint16_t>::max();
+/// Returns true when a blit's length or height fits the packed record's 16-bit fields.
+constexpr bool fitsPackedLength(std::uint32_t value) {
+  return value <= std::numeric_limits<std::uint16_t>::max();
+}
 
 /// Reinterprets an unsigned device coordinate as the signed field of a packed record. The
 /// blitter methods disagree on signedness (`blitAntiRect` takes signed coordinates, the rest
@@ -60,11 +63,13 @@ class SpanCaptureWrapper final : public BlitterWrapper {
 void SpanCaptureBlitter::record(const CapturedSpan& span) { out_.spans_.push_back(span); }
 
 void SpanCaptureBlitter::blitH(std::uint32_t x, std::uint32_t y, LengthU32 width) {
-  if (width > kMaxPackedLength) {
+  if (!fitsPackedLength(width)) {
     out_.overflowed_ = true;
   } else {
-    record(CapturedSpan{toPackedCoord(x), toPackedCoord(y), static_cast<std::uint16_t>(width), 0,
-                        0, 0, SpanOp::BlitH, 0});
+    record(CapturedSpan{.x = toPackedCoord(x),
+                        .y = toPackedCoord(y),
+                        .length = static_cast<std::uint16_t>(width),
+                        .op = SpanOp::BlitH});
   }
   wrapped_.blitH(x, y, width);
 }
@@ -85,14 +90,16 @@ void SpanCaptureBlitter::blitAntiH(std::uint32_t x, std::uint32_t y,
       break;
     }
 
-    if (run > kMaxPackedLength) {
+    if (!fitsPackedLength(run)) {
       out_.overflowed_ = true;
       break;
     }
 
-    record(CapturedSpan{toPackedCoord(runX), toPackedCoord(y), static_cast<std::uint16_t>(run), 0,
-                        alpha[alphaOffset], 0,
-                        first ? SpanOp::BlitAntiHFirst : SpanOp::BlitAntiHNext, 0});
+    record(CapturedSpan{.x = toPackedCoord(runX),
+                        .y = toPackedCoord(y),
+                        .length = static_cast<std::uint16_t>(run),
+                        .alpha0 = alpha[alphaOffset],
+                        .op = first ? SpanOp::BlitAntiHFirst : SpanOp::BlitAntiHNext});
     first = false;
 
     runX += run;
@@ -105,50 +112,65 @@ void SpanCaptureBlitter::blitAntiH(std::uint32_t x, std::uint32_t y,
 
 void SpanCaptureBlitter::blitV(std::uint32_t x, std::uint32_t y, LengthU32 height,
                                AlphaU8 alpha) {
-  if (height > kMaxPackedLength) {
+  if (!fitsPackedLength(height)) {
     out_.overflowed_ = true;
   } else {
-    record(CapturedSpan{toPackedCoord(x), toPackedCoord(y), static_cast<std::uint16_t>(height), 0,
-                        alpha, 0, SpanOp::BlitV, 0});
+    record(CapturedSpan{.x = toPackedCoord(x),
+                        .y = toPackedCoord(y),
+                        .length = static_cast<std::uint16_t>(height),
+                        .alpha0 = alpha,
+                        .op = SpanOp::BlitV});
   }
   wrapped_.blitV(x, y, height, alpha);
 }
 
 void SpanCaptureBlitter::blitAntiH2(std::uint32_t x, std::uint32_t y, AlphaU8 alpha0,
                                     AlphaU8 alpha1) {
-  record(CapturedSpan{toPackedCoord(x), toPackedCoord(y), 0, 0, alpha0, alpha1,
-                      SpanOp::BlitAntiH2, 0});
+  record(CapturedSpan{.x = toPackedCoord(x),
+                      .y = toPackedCoord(y),
+                      .alpha0 = alpha0,
+                      .alpha1 = alpha1,
+                      .op = SpanOp::BlitAntiH2});
   wrapped_.blitAntiH2(x, y, alpha0, alpha1);
 }
 
 void SpanCaptureBlitter::blitAntiV2(std::uint32_t x, std::uint32_t y, AlphaU8 alpha0,
                                     AlphaU8 alpha1) {
-  record(CapturedSpan{toPackedCoord(x), toPackedCoord(y), 0, 0, alpha0, alpha1,
-                      SpanOp::BlitAntiV2, 0});
+  record(CapturedSpan{.x = toPackedCoord(x),
+                      .y = toPackedCoord(y),
+                      .alpha0 = alpha0,
+                      .alpha1 = alpha1,
+                      .op = SpanOp::BlitAntiV2});
   wrapped_.blitAntiV2(x, y, alpha0, alpha1);
 }
 
 void SpanCaptureBlitter::blitAntiRect(std::int32_t x, std::int32_t y, std::int32_t width,
                                       std::int32_t height, AlphaU8 leftAlpha,
                                       AlphaU8 rightAlpha) {
-  if (width < 0 || height < 0 || static_cast<std::uint32_t>(width) > kMaxPackedLength ||
-      static_cast<std::uint32_t>(height) > kMaxPackedLength) {
+  if (width < 0 || height < 0 || !fitsPackedLength(static_cast<std::uint32_t>(width)) ||
+      !fitsPackedLength(static_cast<std::uint32_t>(height))) {
     out_.overflowed_ = true;
   } else {
-    record(CapturedSpan{x, y, static_cast<std::uint16_t>(width),
-                        static_cast<std::uint16_t>(height), leftAlpha, rightAlpha,
-                        SpanOp::BlitAntiRect, 0});
+    record(CapturedSpan{.x = x,
+                        .y = y,
+                        .length = static_cast<std::uint16_t>(width),
+                        .height = static_cast<std::uint16_t>(height),
+                        .alpha0 = leftAlpha,
+                        .alpha1 = rightAlpha,
+                        .op = SpanOp::BlitAntiRect});
   }
   wrapped_.blitAntiRect(x, y, width, height, leftAlpha, rightAlpha);
 }
 
 void SpanCaptureBlitter::blitRect(const ScreenIntRect& rect) {
-  if (rect.width() > kMaxPackedLength || rect.height() > kMaxPackedLength) {
+  if (!fitsPackedLength(rect.width()) || !fitsPackedLength(rect.height())) {
     out_.overflowed_ = true;
   } else {
-    record(CapturedSpan{toPackedCoord(rect.x()), toPackedCoord(rect.y()),
-                        static_cast<std::uint16_t>(rect.width()),
-                        static_cast<std::uint16_t>(rect.height()), 0, 0, SpanOp::BlitRect, 0});
+    record(CapturedSpan{.x = toPackedCoord(rect.x()),
+                        .y = toPackedCoord(rect.y()),
+                        .length = static_cast<std::uint16_t>(rect.width()),
+                        .height = static_cast<std::uint16_t>(rect.height()),
+                        .op = SpanOp::BlitRect});
   }
   wrapped_.blitRect(rect);
 }

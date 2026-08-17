@@ -64,21 +64,77 @@ additions to `third_party/tiny-skia-cpp`). The Geode GPU backend is untouched.
 
 ## Next Steps
 
-- Land the span-capture seam in tiny-skia-cpp (a capturing `Blitter` plus a replay entry point)
-  with byte-identity tests at the tiny-skia level.
 - Build the retained-node cache and validation keys in `RendererTinySkia` behind a runtime mode
   flag, with the mode-comparison identity test running both modes over the golden corpus.
 
 ## Implementation Plan
 
-- [ ] Milestone 1: Span capture and replay inside tiny-skia-cpp
-  - [ ] `SpanCaptureBlitter` implementing `tiny_skia::Blitter`, recording packed coverage runs.
-  - [ ] Replay path that feeds captured runs back through the pipeline blitter
-        (`blitH` / `blitAntiH` / `blitAntiRect`) with a caller-supplied `Paint`.
-  - [ ] Byte-identity unit tests: capture+replay equals direct `Painter::fillPath` /
+- [x] Milestone 1: Span capture and replay inside tiny-skia-cpp
+  - [x] `SpanCaptureBlitter` implementing `tiny_skia::Blitter`, recording packed coverage runs.
+  - [x] Replay path that feeds captured runs back through the pipeline blitter with a
+        caller-supplied `Paint`. The blit surface is wider than this plan first listed; see
+        "Milestone 1 decisions" below.
+  - [x] Byte-identity unit tests: capture+replay equals direct `Painter::fillPath` /
         `Painter::strokePath` / `Painter::fillRect` for fills, strokes, dashes, and rect
         fast paths, including low-alpha antialiased edge pixels under the pipeline's
         root-surface store rounding.
+### Milestone 1 decisions
+
+Milestone 1 landed as `third_party/tiny-skia-cpp/src/tiny_skia/SpanCapture.{h,cpp}` with
+`src/tiny_skia/tests/SpanCaptureTest.cpp`, plus an optional `BlitterWrapper` hook on `Painter`
+so a capture is the same draw observed rather than a second implementation of it. Three
+decisions this document left open are now settled by that code.
+
+**The blit surface is wider than this document first enumerated.** The plan above named
+`blitH` / `blitAntiH` / `blitAntiRect`. Reading the scan converters shows the caller-supplied
+blitter also receives `blitV`, `blitAntiH2`, `blitAntiV2`, and `blitRect`:
+
+| Blitter method | Emitted by                                                             |
+| -------------- | ---------------------------------------------------------------------- |
+| `blitH`        | aliased path fill, aliased hairline, antialiased fill's full-coverage runs |
+| `blitAntiH`    | antialiased hairline scanlines and antialiased rect partial rows        |
+| `blitV`        | antialiased fill's single-column spans, antialiased rect vertical edges |
+| `blitAntiH2`   | antialiased fill's edge coverage pairs, antialiased hairline caps       |
+| `blitAntiV2`   | antialiased hairline vertical and near-vertical segments                |
+| `blitAntiRect` | antialiased fill's axis-aligned span optimization                       |
+| `blitRect`     | aliased rect fill, antialiased rect interior                            |
+| `blitMask`     | no scan converter emits it (see below)                                  |
+
+`blitMask` is the one method no scan converter calls: a clip mask reaches the blitter as
+pipeline state applied per blit, not as a separate blit, and the only callers are direct ones
+such as `MaskOps`. The capture blitter therefore marks the capture invalid if it ever receives
+a `blitMask`, so the case fails closed instead of silently losing pixels, and a unit test pins
+that. The document's underlying claim, that the `Blitter` interface is the complete pixel
+effect of scan conversion, holds: capture covers every method the conversion paths reach.
+
+**Packing.** A run is a fixed 16-byte record (`CapturedSpan`), not the 8-byte
+`{x, y, len, coverage}` this document estimated, and the recorded unit is the blit call rather
+than a flattened span. The wider interface is why: `blitAntiH2` and `blitAntiV2` carry two
+coverages one call must apply together, `blitAntiRect` carries a signed origin plus two edge
+coverages, and `blitRect` and `blitV` span a height. Flattening those into single-coverage
+spans would enter the blitter a different number of times with different arguments, and the
+pipeline blitter's per-call fast paths (row fills, two-pixel coverage runs, whole-column
+writes) do not decompose to the same bytes. Recording calls keeps identity true by
+construction. The record is `{int32 x, int32 y, uint16 length, uint16 height, uint8 alpha0,
+uint8 alpha1, uint8 op, uint8 padding}`; coordinates are signed because the scan converter
+calls `blitAntiRect` with a left edge that can be -1, and a value that does not fit marks the
+capture invalid rather than truncating.
+
+**Gradient ramp.** Milestone 1 keeps the instantiated shader in the retained `Paint` and adds
+no ramp lookup table. Both a cold draw and a replay hand that shader to the same blitter
+constructor, so the stops are resolved by one shared step rather than two that would have to be
+proven equal. If a quantized ramp is ever introduced it must live inside that shared
+construction for the same reason.
+
+**Measured on a 512x512 antialiased path fill** (`render_perf_bench_native`, `-c opt`,
+aarch64, 15 repetitions, median): capture costs 5.1 percent on top of the cold fill (377.8 us
+to 397.0 us), and the recorded coverage occupies 26.4 KB (1650 runs). Replaying that coverage
+takes 297.0 us, 0.79x the cold fill. That last number is the honest early signal: a single
+large path spends most of its time blending covered area rather than scan converting, so the
+steady-state win this design targets has to come from scenes with many small and medium paths,
+where coverage generation dominates and covered area does not. Milestone 5 measures that on
+Tiger.
+
 - [ ] Milestone 2: Retained node cache in `RendererTinySkia`
   - [ ] `RetainedShapeNode` storage keyed by render-tree entity; validation keys per
         property class.
@@ -173,10 +229,11 @@ transiently (`AlphaRuns`); this design makes the representation durable per shap
 Each retained shape node (`RetainedShapeNode`, keyed by the render-tree entity of the
 `RenderingInstanceComponent`) stores:
 
-- **Fill coverage spans**: packed `{x, y, len, coverage}` runs in device space, exactly the runs
-  the scan converter emitted. Interior rows compress to a few long runs at full coverage;
-  antialiased edges become short runs (the same shape `AlphaRuns` produces today). Runs are
-  stored sorted by `y` then `x`.
+- **Fill coverage spans**: packed runs in device space, exactly the blits the scan converter
+  emitted (`CapturedSpans`; see "Milestone 1 decisions" for the record layout). Interior rows
+  compress to a few long runs at full coverage; antialiased edges become short runs (the same
+  shape `AlphaRuns` produces today). Runs are stored in emission order, which is what replay
+  depends on; the scan converter already emits them in increasing `y`.
 - **Stroke coverage spans**: the same representation for the stroked outline, with dashing,
   caps, and joins already baked in by the stroker/dasher at capture time.
 - **Gradient color ramp**: for gradient paints, the instantiated `tiny_skia::Shader` (the
@@ -200,10 +257,16 @@ Capture runs inside the existing draw calls. When retention is active and the cu
 retainable (see "Retention scope"), `drawPath` routes scan conversion through a
 `SpanCaptureBlitter` (a `tiny_skia::Blitter` subclass added to tiny-skia-cpp) instead of
 letting `Painter::fillPath` construct only its internal pipeline blitter.
-`scan::PathAa::fillPath(path, fillRule, clip, blitter)` already accepts a caller-provided
-blitter, so capture requires no changes to the scan converter itself. The capture blitter
-records runs and forwards to the pipeline blitter in the same call, so the cold frame renders
-and captures in one pass; capture overhead is the run stores only.
+Every scan entry point already accepts a caller-provided blitter, so capture requires no
+changes to the scan converters themselves. What Milestone 1 did add is an optional
+`BlitterWrapper` hook on `Painter`: each draw builds its pipeline blitter, offers it to the
+wrapper, and drives scan conversion with whatever the wrapper returns. That keeps a capture the
+same draw observed, rather than a second copy of `Painter`'s transform, tiling, and
+blitter-construction logic that could drift out of identity. The hook also reports the paint
+the draw actually built its blitter from, which is not always the caller's paint: hairline
+strokes fold their coverage into the shader opacity and a transformed draw transforms the
+shader. The capture blitter records runs and forwards to the pipeline blitter in the same call,
+so the cold frame renders and captures in one pass.
 
 ### Steady-frame replay
 
@@ -281,12 +344,12 @@ that motivate the design. Tiger is entirely within the retained set. Widening th
   buffers, edge lists, stroke/dash output, scanline cells), sized high-water per worker slot,
   so steady-state prepare performs zero heap allocations once pools are warm. Slot zero belongs
   to the caller thread and is the only slot used in single-threaded mode.
-- **Cost model**: a run is 8 bytes packed (`x:u16, y:u16` row-relative, `len:u16, coverage:u8`
-  plus padding/format tag; exact packing decided in Milestone 1). A shape's run count is
-  approximately (rows x interior runs per row) + (antialiased edge pixels). For Tiger at
-  900x900 this is on the order of a few hundred thousand runs total, in the low single-digit
-  MiB. A pathological document (many thousands of small shapes) is bounded by the budget below,
-  not by hope.
+- **Cost model**: a run is 16 bytes packed (decided in Milestone 1; see the record layout
+  there). A shape's run count is approximately (rows x interior runs per row) + (antialiased
+  edge pixels), and the analytic scan converter emits long interior runs, so the count runs
+  well below one per covered pixel: a 512x512 antialiased path measured 1650 runs, 26.4 KB.
+  Extrapolating that density, Tiger at 900x900 is on the order of a few MiB. A pathological
+  document (many thousands of small shapes) is bounded by the budget below, not by hope.
 - **Budget and eviction**: a per-document retained-memory budget (default on the order of
   32 MiB, configurable). When exceeded, nodes are evicted coldest-first (least-recently-blitted)
   until under budget; an evicted shape simply renders immediate-mode and may re-enter the cache
@@ -397,10 +460,16 @@ claimed invariants trace to CI.
   runs on a CI lane that builds with `--//donner/svg/renderer:tiny_skia_prepare_threads=true`
   so the threaded configuration is compiled and exercised, per the rule that a green default
   build does not verify flag-gated code.
-- **tiny-skia-level capture/replay identity**: unit tests in
-  `third_party/tiny-skia-cpp` assert capture+replay equals direct painting for fills, strokes,
-  dashes, rect fast paths, masks, and specifically low-alpha antialiased edges under the
-  pipeline's root-surface store rounding (the failure class 0028-2 documents).
+- **tiny-skia-level capture/replay identity**: `SpanCaptureTest.cpp`, in the port's
+  `//src/tiny_skia/tests:tiny_skia_core_tests` dual native/scalar targets, asserts
+  capture+replay equals direct painting for antialiased and aliased fills, both fill rules,
+  gradients, transforms, masks, rect fast paths, thick and hairline strokes, and dashes, and
+  specifically for low-alpha antialiased edges under the pipeline's root-surface store rounding
+  (the failure class 0028-2 documents). It also asserts that the capture pass leaves the cold
+  frame byte-identical, that a replay with a different paint matches a direct draw in that
+  paint, and that the recorded ops cover every blit method the scan converters emit. Injecting
+  a one-unit coverage error into replay fails 14 of those cases and a one-pixel rect width
+  error fails 3, with the diagnostic naming the first differing pixel.
 - **Performance**: before/after `engine_compare_bench --backend=tiny-skia` runs at `-c opt` on
   Tiger and raster-heavy resvg-derived scenes, recording `second_ms`, `first_ms`, ALLOC
   `phase=second`, and RSS fields. Numbers land in this doc's status updates only as measured
@@ -411,10 +480,13 @@ claimed invariants trace to CI.
 - **Steady-frame target**: 10-20x on raster-bound scenes; Tiger from about 41 ms to 2-4 ms
   `second_ms` at 900x900, `-c opt`, reference aarch64 host. The floor is the surface clear plus
   covered-area blend cost, which is why opaque-interior straight stores matter.
-- **Cold-frame target**: parity or better. Capture adds run stores to the cold path (a strict
-  subset of the work the pipeline blitter already does per pixel); the concurrency stage, where
-  enabled, can make cold frames faster than today. Regression bar: cold `first_ms` within noise
-  of the pre-change baseline on the benchmark corpus.
+- **Cold-frame target**: parity or better. Capture adds run stores to the cold path; the
+  concurrency stage, where enabled, can make cold frames faster than today. Regression bar:
+  cold `first_ms` within noise of the pre-change baseline on the benchmark corpus. Measured at
+  the tiny-skia level, capture costs 5.1 percent on a 512x512 antialiased path fill (see
+  "Milestone 1 decisions"), which is above noise, so the cold-frame budget is a real constraint
+  rather than a free assumption. Whether that survives at the renderer level depends on how
+  much of a frame is scan conversion versus blending; Milestone 5 measures it.
 - **Measurement discipline**: all claims go through `engine_compare_bench`'s existing phases
   (`first_ms`, `second_ms`, ALLOC per phase, RSS) so numbers are comparable across the design's
   lifetime; within-engine before/after deltas only, per the benchmark's own caveats.
@@ -440,9 +512,10 @@ claimed invariants trace to CI.
 - **Eviction heuristics.** Least-recently-blitted is simple but a zooming viewport can cycle
   the working set. Open: protect shapes by blit frequency, or by rebuild cost, and what the
   thrash-detection window should be.
-- **Gradient ramp representation.** Whether to keep retaining the instantiated shader object or
-  introduce an explicit quantized ramp LUT stage in tiny-skia-cpp (shared by both paths) is a
-  Milestone 1 decision; the LUT is only worth it if the shared-stage identity constraint holds.
+- **Gradient ramp representation.** Settled for now in Milestone 1: the instantiated shader is
+  retained and no quantized ramp LUT is introduced, because both paths already share one
+  resolution step. Revisit only if ramp resolution shows up in a profile, and only as a stage
+  inside that shared step.
 - **Revision-counter plumbing.** The `RenderRevisionsComponent` extension must be marked by the
   same mutation hooks that mark `DirtyFlagsComponent`; a missed hook is an under-invalidation
   bug. The per-dirty-class tests are the net, but the hook audit is real work.
