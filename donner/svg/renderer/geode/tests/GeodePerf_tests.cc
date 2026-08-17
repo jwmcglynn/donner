@@ -16,6 +16,7 @@
 
 #include <gtest/gtest.h>
 
+#include <array>
 #include <cinttypes>
 #include <cstdint>
 #include <cstdio>
@@ -1088,6 +1089,108 @@ TEST_F(GeodePerfTest, GpuResidence_ReUploadsWhenDeviceChanges) {
   const RendererBitmap reReferenceA = rendererA2.takeSnapshot();
   EXPECT_TRUE(bitmapsEqual(referenceA, reReferenceA))
       << "device A output changed after a device-B render round-trip";
+}
+
+// ---------------------------------------------------------------------------
+// Regression: a non-adjacent same-frame reuse of an entity must not
+// retransform the entity's EARLIER draw.
+//
+// Scenario (reachable when cross-entity record-slab batching is enabled):
+// entity A is drawn early at transform T1 and that draw's record targets
+// A's PRIMARY record slot. A is reused later in the same frame at
+// transform T2, separated from its first draw by other content, so the
+// reuse lands in a size-1 same-entity batch instead of extending an
+// instanced run. The next draw is a different batch-compatible entity,
+// which converts that singleton into a cross-entity batch; the
+// conversion diverts A to a fresh TEMPORARY record slot because A's
+// primary record is already referenced this frame.
+//
+// The bug: the batch's flush-time re-ensure ignored the diverted slot
+// and recomputed the record against A's PRIMARY slot. The recomputed
+// (T2) record differs from the primary's cached (T1) bytes, so a buffer
+// write was queued into the primary record. All buffer writes execute
+// before all draws in the frame's submit, so A's EARLIER draw rendered
+// at T2: the first instance vanished from its correct position while
+// the converting batch itself (reading the temp slot) looked fine.
+//
+// The assertions are absolute pixel checks at rect centers, so the test
+// is meaningful in both batching configurations: with cross-entity
+// batching compiled out it documents the correct output; with it
+// enabled it fails on the pre-fix code (first `<use>` instance missing
+// at (30, 30)) and passes once each instance's flush-time re-ensure
+// targets the exact record slot its batch draws from.
+// ---------------------------------------------------------------------------
+
+// Draw order (document order): A@T1, B1, A@T2, B2. All solid fills,
+// disjoint rects, no clip / stroke / gradient, so every draw is
+// batch-compatible and the two `<use>` draws are non-adjacent.
+constexpr std::string_view kNonAdjacentReuseSvg = R"SVG(
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"
+     viewBox="0 0 300 100">
+  <defs>
+    <rect id="a" width="40" height="40" fill="#ff0000"/>
+  </defs>
+  <use xlink:href="#a" x="10" y="10"/>
+  <rect x="60" y="10" width="40" height="40" fill="#0000ff"/>
+  <use xlink:href="#a" x="110" y="10"/>
+  <rect x="160" y="10" width="40" height="40" fill="#00cc00"/>
+</svg>
+)SVG";
+
+// Assert the RGBA bytes at (x, y). Sample points sit at rect centers,
+// 20px from every edge, so antialiasing cannot reach them and exact
+// byte equality is safe (solid fills, alpha 255).
+void expectPixel(const RendererBitmap& bmp, int x, int y, const std::array<uint8_t, 4>& expected,
+                 const char* what) {
+  ASSERT_LT(x, bmp.dimensions.x);
+  ASSERT_LT(y, bmp.dimensions.y);
+  const uint8_t* p =
+      bmp.pixels.data() + static_cast<size_t>(y) * bmp.rowBytes + static_cast<size_t>(x) * 4u;
+  EXPECT_TRUE(p[0] == expected[0] && p[1] == expected[1] && p[2] == expected[2] &&
+              p[3] == expected[3])
+      << what << " at (" << x << ", " << y << "): expected rgba(" << int(expected[0]) << ", "
+      << int(expected[1]) << ", " << int(expected[2]) << ", " << int(expected[3]) << "), got rgba("
+      << int(p[0]) << ", " << int(p[1]) << ", " << int(p[2]) << ", " << int(p[3]) << ")";
+}
+
+TEST_F(GeodePerfTest, NonAdjacentReuse_EarlierDrawKeepsItsTransform) {
+  auto device = sharedDevice();
+  ASSERT_TRUE(device) << "GeodeDevice::CreateHeadless failed";
+
+  ParseWarningSink sink = ParseWarningSink::Disabled();
+  auto parsed = parser::SVGParser::ParseSVG(kNonAdjacentReuseSvg, sink);
+  ASSERT_FALSE(parsed.hasError()) << parsed.error().reason;
+  SVGDocument document = std::move(parsed.result());
+
+  RendererGeode renderer(device);
+  // Two frames: frame 1 establishes GPU residence and record slots;
+  // frame 2 is the steady state where every draw is record-slot
+  // eligible. The hazard reproduces on both; the snapshot reads the
+  // second frame (the general case).
+  renderer.draw(document);
+  renderer.draw(document);
+  const RendererBitmap bmp = renderer.takeSnapshot();
+  ASSERT_FALSE(bmp.empty()) << "renderer produced no snapshot";
+  ASSERT_EQ(bmp.dimensions.x, 300);
+  ASSERT_EQ(bmp.dimensions.y, 100);
+
+  const std::array<uint8_t, 4> red = {255, 0, 0, 255};
+  const std::array<uint8_t, 4> blue = {0, 0, 255, 255};
+  const std::array<uint8_t, 4> green = {0, 204, 0, 255};
+  const std::array<uint8_t, 4> clear = {0, 0, 0, 0};
+
+  // The first `<use>` of #a must still render at its own position.
+  // Pre-fix, the flush-time primary-record rewrite retransformed this
+  // draw to the second `<use>`'s position and this pixel went empty.
+  expectPixel(bmp, 30, 30, red, "first <use> instance");
+  // Separating content between the two `<use>` draws.
+  expectPixel(bmp, 80, 30, blue, "separating rect");
+  // The second `<use>` of #a at its own position.
+  expectPixel(bmp, 130, 30, red, "second <use> instance");
+  // The batch-compatible entity that triggers the singleton conversion.
+  expectPixel(bmp, 180, 30, green, "converting rect");
+  // Background stays empty - nothing rendered where nothing was drawn.
+  expectPixel(bmp, 260, 80, clear, "background");
 }
 
 }  // namespace
