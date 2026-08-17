@@ -753,6 +753,13 @@ void RasterPipelineBlitter::blitRect(const ScreenIntRect& rect) {
     return;
   }
 
+  // A rect that starts past the surface covers no pixels. The other methods already check
+  // this; blitRect used to rely on every caller being a scan converter that had clipped to the
+  // surface first, and the row-width arithmetic below underflows without that guarantee.
+  if (rect.x() >= pixmap_->width() || rect.y() >= pixmap_->height()) {
+    return;
+  }
+
   if (memsetColor_.has_value()) {
     const auto c = *memsetColor_;
     const auto maxX = std::min<std::size_t>(pixmap_->width(), rect.x() + rect.width());

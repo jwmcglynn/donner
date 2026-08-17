@@ -296,6 +296,48 @@ TEST(CapturedSpanTest, DefaultRecordsCompareEqual) {
   EXPECT_EQ(CapturedSpan{}, CapturedSpan{});
 }
 
+TEST(CapturedSpansTest, RecordsTheCaptureSurface) {
+  const auto rect = Rect::fromXYWH(6.0f, 9.0f, 41.0f, 33.0f);
+  ASSERT_TRUE(rect.has_value());
+  auto paint = makeSolidPaint(250, 210, 20, 255);
+  paint.antiAlias = false;
+
+  auto pixmap = makePixmap();
+  auto view = pixmap.mutableView();
+  SpanCapture recorded;
+  ASSERT_TRUE(recorded.fillRect(view, *rect, paint, Transform::identity()));
+
+  EXPECT_EQ(recorded.spans().surfaceSize(), pixmap.size());
+}
+
+TEST(CapturedSpansTest, ClearDropsTheCaptureSurface) {
+  CapturedSpans spans;
+  spans.reset(tiny_skia::IntSize(16, 8));
+  EXPECT_EQ(spans.surfaceSize(), tiny_skia::IntSize(16, 8));
+
+  spans.clear();
+  EXPECT_EQ(spans.surfaceSize(), tiny_skia::IntSize());
+}
+
+TEST(SpanCaptureTest, ReplayOntoAnUnrecordedSurfaceIsRefused) {
+  // Runs assembled by hand carry no surface, so the checked replay entry point refuses them
+  // rather than trusting that they fit.
+  CallLogBlitter sink;
+  CapturedSpans spans;
+  SpanCaptureBlitter capture(sink, spans);
+  capture.blitH(0, 0, 4);
+  ASSERT_TRUE(spans.valid());
+
+  auto pixmap = makePixmap();
+  fillBackground(pixmap);
+  auto untouched = makePixmap();
+  fillBackground(untouched);
+  auto view = pixmap.mutableView();
+
+  EXPECT_FALSE(SpanCapture::replay(view, spans, makeSolidPaint(255, 0, 0, 255)));
+  EXPECT_TRUE(pixmapsEqual(untouched, pixmap));
+}
+
 TEST(CapturedSpansTest, ClearKeepsCapacity) {
   CapturedSpans spans;
   CallLogBlitter sink;
@@ -322,7 +364,9 @@ TEST(SpanCaptureBlitterTest, ReplayReproducesTheCapturedCallSequence) {
   CapturedSpans spans;
   SpanCaptureBlitter capture(forwarded, spans);
 
-  // One call of every method a scan converter can make, including a multi-run blitAntiH.
+  // One call of every method a scan converter can make, including a multi-run blitAntiH. The
+  // multi-run form is driven by hand because the scan converters here only ever emit
+  // single-run coverage arrays, while the Blitter contract and AlphaRuns both allow several.
   capture.blitH(3, 4, 7);
   std::vector<std::uint8_t> alpha = {200, 0, 0, 90, 0, 255, 0, 0, 0};
   const auto run = [](std::uint16_t length) { return AlphaRun{length}; };
@@ -756,6 +800,34 @@ TEST(SpanCaptureTest, CapturesEveryBlitterMethodTheScanConvertersUse) {
                                              SpanOp::BlitAntiRect}));
 }
 
+TEST(SpanCaptureTest, ReplayOntoASmallerSurfaceIsRefused) {
+  // A recorded run is a device-space rectangle that the scan converter had already clipped to
+  // the capture surface. Replaying it onto a smaller surface would address pixels that do not
+  // exist, and nothing downstream re-clips it, so the capture carries the surface it was
+  // recorded against and a mismatched replay is refused.
+  auto capturePixmap = makePixmap(64);
+  fillBackground(capturePixmap);
+  auto captureView = capturePixmap.mutableView();
+
+  // An opaque aliased rect is one blitRect, which is the widest single write a replay makes.
+  auto paint = makeSolidPaint(250, 210, 20, 255);
+  paint.antiAlias = false;
+  const auto rect = Rect::fromXYWH(40.0f, 4.0f, 20.0f, 20.0f);
+  ASSERT_TRUE(rect.has_value());
+
+  SpanCapture recorded;
+  ASSERT_TRUE(recorded.fillRect(captureView, *rect, paint, Transform::identity()));
+
+  auto smaller = makePixmap(32);
+  fillBackground(smaller);
+  auto untouched = makePixmap(32);
+  fillBackground(untouched);
+  auto smallerView = smaller.mutableView();
+
+  EXPECT_FALSE(SpanCapture::replay(smallerView, recorded.spans(), recorded.paint()));
+  EXPECT_TRUE(pixmapsEqual(untouched, smaller));
+}
+
 TEST(SpanCaptureTest, RejectsTiledDraws) {
   // Above the tiling threshold a draw splits into tiles that each address pixels relative to
   // their own origin, which one device-space run list cannot describe.
@@ -772,26 +844,34 @@ TEST(SpanCaptureTest, RejectsTiledDraws) {
   EXPECT_TRUE(recorded.spans().empty());
 }
 
-TEST(SpanCaptureTest, FullyTransparentPaintPaintsNothing) {
+TEST(SpanCaptureTest, FullyTransparentPaintStillRecordsCoverage) {
   // Coverage is recorded even when the paint contributes no color, because coverage and color
-  // are independent: the same runs replayed with an opaque paint must paint the shape.
+  // are independent: the same runs replayed with an opaque paint paint the shape.
   const auto path = makeCurvedPath(static_cast<float>(kDim));
   auto pixmap = makePixmap();
   fillBackground(pixmap);
-  auto before = makePixmap();
-  fillBackground(before);
+  auto untouched = makePixmap();
+  fillBackground(untouched);
   auto view = pixmap.mutableView();
 
   SpanCapture recorded;
   ASSERT_TRUE(recorded.fillPath(view, path, makeSolidPaint(220, 30, 90, 0), FillRule::Winding,
                                 Transform::identity()));
-  EXPECT_TRUE(pixmapsEqual(before, pixmap));
+  EXPECT_FALSE(recorded.spans().empty());
+  EXPECT_TRUE(pixmapsEqual(untouched, pixmap)) << "a fully transparent paint painted something";
+
+  const auto opaque = makeSolidPaint(15, 190, 240, 255);
+
+  auto directPixmap = makePixmap();
+  fillBackground(directPixmap);
+  auto directView = directPixmap.mutableView();
+  Painter::fillPath(directView, path, opaque, FillRule::Winding, Transform::identity());
 
   auto replayPixmap = makePixmap();
   fillBackground(replayPixmap);
   auto replayView = replayPixmap.mutableView();
-  EXPECT_TRUE(SpanCapture::replay(replayView, recorded.spans(), recorded.paint()));
-  EXPECT_TRUE(pixmapsEqual(before, replayPixmap));
+  ASSERT_TRUE(SpanCapture::replay(replayView, recorded.spans(), opaque));
+  EXPECT_TRUE(pixmapsEqual(directPixmap, replayPixmap));
 }
 
 }  // namespace

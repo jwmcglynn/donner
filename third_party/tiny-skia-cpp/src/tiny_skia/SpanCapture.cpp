@@ -50,6 +50,10 @@ class SpanCaptureWrapper final : public BlitterWrapper {
   [[nodiscard]] const Paint& paint() const { return paint_; }
 
   /// Returns true when at most one scan pass ran, so the recorded runs share one origin.
+  ///
+  /// Defensive: rejecting tiled draws up front already means a draw builds one blitter, so
+  /// this cannot currently be false. It is the assertion that the rejection stays sufficient
+  /// if a draw ever grows a second scan pass.
   [[nodiscard]] bool singlePass() const { return passes_ <= 1; }
 
  private:
@@ -79,7 +83,8 @@ void SpanCaptureBlitter::blitAntiH(std::uint32_t x, std::uint32_t y,
                                    std::span<std::uint8_t> alpha, std::span<AlphaRun> runs) {
   // Walk the coverage runs the same way a consuming blitter does: the run length lives at the
   // start index of each run and a missing entry ends the row. Only the start indices carry
-  // meaning, so recording one entry per run is lossless.
+  // meaning, so recording one entry per run is lossless. A run length needs no range check:
+  // AlphaRun is already a 16-bit value, so it always fits the packed record.
   std::size_t runOffset = 0;
   std::size_t alphaOffset = 0;
   std::uint32_t runX = x;
@@ -88,11 +93,6 @@ void SpanCaptureBlitter::blitAntiH(std::uint32_t x, std::uint32_t y,
   while (runOffset < runs.size() && runs[runOffset].has_value()) {
     const auto run = static_cast<std::uint32_t>(runs[runOffset].value());
     if (run == 0u || alphaOffset >= alpha.size()) {
-      break;
-    }
-
-    if (!fitsPackedLength(run)) {
-      out_.overflowed_ = true;
       break;
     }
 
@@ -278,6 +278,7 @@ bool SpanCapture::capture(const MutablePixmapView& pixmap, const Paint& paint, D
     return false;
   }
 
+  spans_.reset(pixmap.size());
   SpanCaptureWrapper wrapper(spans_, paint);
   draw(&wrapper);
 
@@ -314,6 +315,14 @@ bool SpanCapture::strokePath(MutablePixmapView& pixmap, const Path& path, const 
 bool SpanCapture::replay(MutablePixmapView& pixmap, const CapturedSpans& spans,
                          const Paint& paint, const Mask* mask) {
   if (!spans.valid()) {
+    return false;
+  }
+
+  // The runs are device-space rectangles that the scan converter clipped to the capture
+  // surface, and replay does not re-clip them. A target of a different size would let a run
+  // address pixels outside the buffer, so a mismatch fails closed alongside the other
+  // unreplayable captures.
+  if (spans.surfaceSize() != pixmap.size()) {
     return false;
   }
 

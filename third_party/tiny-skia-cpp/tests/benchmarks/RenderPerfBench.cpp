@@ -465,6 +465,16 @@ void BM_FillPath_Opaque_Cpp(benchmark::State& state) {
 
 /// The same fill as BM_FillPath_Cpp, with span capture active. The delta against
 /// BM_FillPath_Cpp is the cost of recording coverage while painting it.
+///
+/// The delta is a few percent, so a single unrepeated run cannot resolve it. Compare medians
+/// from a repeated, interleaved run:
+///
+///   render_perf_bench_native --benchmark_filter='BM_FillPath_(Cpp|Capture_Cpp|Replay_Cpp)/512'
+///       --benchmark_repetitions=15 --benchmark_enable_random_interleaving=true
+///       --benchmark_report_aggregates_only=true --benchmark_min_time=0.3s
+///
+/// At -c opt on an aarch64 reference host that reports a coefficient of variation near
+/// 0.2 percent per benchmark, which is well inside the delta being measured.
 void BM_FillPath_Capture_Cpp(benchmark::State& state) {
   const auto dim = static_cast<std::uint32_t>(state.range(0));
   auto pixmap = Pixmap::fromSize(dim, dim);

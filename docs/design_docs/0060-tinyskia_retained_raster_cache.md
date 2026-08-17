@@ -93,7 +93,7 @@ blitter also receives `blitV`, `blitAntiH2`, `blitAntiV2`, and `blitRect`:
 | -------------- | ---------------------------------------------------------------------- |
 | `blitH`        | aliased path fill, aliased hairline, antialiased fill's full-coverage runs |
 | `blitAntiH`    | antialiased hairline scanlines and antialiased rect partial rows        |
-| `blitV`        | antialiased fill's single-column spans, antialiased rect vertical edges |
+| `blitV`        | antialiased fill's single-column spans, antialiased rect vertical edges, antialiased hairline vertical and near-vertical segments |
 | `blitAntiH2`   | antialiased fill's edge coverage pairs, antialiased hairline caps       |
 | `blitAntiV2`   | antialiased hairline vertical and near-vertical segments                |
 | `blitAntiRect` | antialiased fill's axis-aligned span optimization                       |
@@ -119,6 +119,18 @@ construction. The record is `{int32 x, int32 y, uint16 length, uint16 height, ui
 uint8 alpha1, uint8 op, uint8 padding}`; coordinates are signed because the scan converter
 calls `blitAntiRect` with a left edge that can be -1, and a value that does not fit marks the
 capture invalid rather than truncating.
+
+**Surface binding.** A recorded run is a device-space rectangle that the scan converter had
+already clipped to the capture surface, and replay does not re-clip it, so a capture carries
+the surface size it was recorded against and a replay onto a different size is refused. That
+joins the same fail-closed family as tiled draws and field overflow. It is a memory-safety
+boundary, not just bookkeeping: without it a replay onto a smaller surface reaches the pipeline
+blitter's rect fast path with an origin past the buffer, where the row-width arithmetic
+underflows into an out-of-bounds write (found by review, reproduced under AddressSanitizer, and
+now covered by a regression test). The pipeline blitter's `blitRect` also early-outs on an
+origin past the surface, so the invariant is enforced at both ends rather than resting on a
+silent contract. This matters directly for Milestone 2: a retained node outlives viewport
+resizes, and its stale runs must be refused rather than replayed against the new surface.
 
 **Gradient ramp.** Milestone 1 keeps the instantiated shader in the retained `Paint` and adds
 no ramp lookup table. Both a cold draw and a replay hand that shader to the same blitter
@@ -427,6 +439,9 @@ a performance knob:
   negative tests with adversarial documents (many shapes, giant device boxes, degenerate spans).
 - Span capture stores only what the scan converter emitted for the clipped device area, so
   coordinates outside the surface cannot inflate storage beyond the surface-bounded run count.
+  A capture is bound to the surface size it was recorded against and a replay onto a different
+  size is refused, so a retained capture that outlives a viewport resize cannot write outside
+  the new surface (see "Milestone 1 decisions").
 - The threaded mode is compiled out by default and, when enabled, workers only run prepare on
   data owned by the node being prepared; there is no cross-document or cross-renderer sharing.
 - Fuzzing: the existing SVG parser/render fuzzers run with retention enabled so the

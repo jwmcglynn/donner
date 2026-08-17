@@ -13,6 +13,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <span>
+#include <type_traits>
 #include <vector>
 
 #include "tiny_skia/Blitter.h"
@@ -70,19 +71,41 @@ struct CapturedSpan {
 };
 
 static_assert(sizeof(CapturedSpan) == 16, "CapturedSpan is a packed 16-byte record");
+static_assert(std::has_unique_object_representations_v<CapturedSpan>,
+              "CapturedSpan must have no padding bits, so two records that compare equal also "
+              "compare equal byte for byte");
 
 /// The recorded blit sequence of one draw, in emission order.
 ///
 /// Replay depends on order, so the runs are stored exactly as they were emitted rather than
 /// sorted. Clearing keeps the allocation, so a shape that is invalidated and rebuilt settles
-/// into allocation-free captures.
+/// into allocation-free captures. This type does not bound its own growth; capping how much
+/// coverage a document keeps retained is the owning cache's policy, not this layer's.
 class CapturedSpans {
  public:
-  /// Drops the recorded runs but keeps the allocation and clears the invalid flag.
+  /// Drops the recorded runs and the surface they were recorded against, keeping the
+  /// allocation and clearing the invalid flag.
   void clear() {
     spans_.clear();
+    surfaceSize_ = IntSize();
     overflowed_ = false;
   }
+
+  /// Drops the recorded runs and records the surface the next capture targets.
+  void reset(IntSize surfaceSize) {
+    clear();
+    surfaceSize_ = surfaceSize;
+  }
+
+  /// The surface the runs were recorded against, or a zero size when they were not recorded
+  /// from a draw.
+  ///
+  /// A run is a device-space rectangle that the scan converter had already clipped to this
+  /// surface, and nothing downstream re-clips it. Replaying onto a differently sized surface
+  /// would therefore address pixels that may not exist, which is why SpanCapture::replay
+  /// refuses a size mismatch. This also matters for a cache that outlives a viewport resize:
+  /// the stale runs are refused rather than replayed against the new surface.
+  [[nodiscard]] IntSize surfaceSize() const { return surfaceSize_; }
 
   /// Returns true when nothing was recorded, which is what an empty draw produces.
   [[nodiscard]] bool empty() const { return spans_.empty(); }
@@ -104,6 +127,7 @@ class CapturedSpans {
   friend class SpanCaptureBlitter;
 
   std::vector<CapturedSpan> spans_;
+  IntSize surfaceSize_;
   bool overflowed_ = false;
 };
 
@@ -143,6 +167,11 @@ class SpanCaptureBlitter final : public Blitter {
 ///
 /// The runs carry coverage only, so `blitter` supplies the color. Replaying through a blitter
 /// built from the paint the capture used reproduces the captured draw byte for byte.
+///
+/// The runs are device-space rectangles that were clipped to the capture surface and are not
+/// re-clipped here, so `blitter` must target a surface at least as large as
+/// `spans.surfaceSize()`. SpanCapture::replay is the checked entry point; this one leaves that
+/// obligation with the caller so a blitter that is not backed by a pixmap can be driven too.
 void replaySpans(const CapturedSpans& spans, Blitter& blitter);
 
 /// Draws that record their coverage while painting, and the matching replay.
@@ -193,7 +222,13 @@ class SpanCapture {
   /// introduced, it has to live inside that shared blitter construction for the same reason:
   /// a ramp built only on one of the two paths would diverge silently.
   ///
-  /// @return false if `spans` is invalid, in which case nothing is drawn.
+  /// A mask is not part of a capture. The recorded runs are the coverage the scan converter
+  /// produced, and the pipeline applies the mask per blit on top of that, so replaying a
+  /// capture that was taken under a mask without passing the same mask here paints the shape
+  /// unmasked. The caller owns keeping the mask alongside the runs.
+  ///
+  /// @return false if `spans` is invalid or was recorded against a different surface size, in
+  ///   which case nothing is drawn.
   static bool replay(MutablePixmapView& pixmap, const CapturedSpans& spans, const Paint& paint,
                      const Mask* mask = nullptr);
 
