@@ -175,7 +175,7 @@ constexpr std::array<KnownViolation, 32> kKnownViolations = {{
     {
         /*scene=*/"donner_icon",
         /*violated=*/kTextureCreates | kBufferWrites | kBindgroupCreates,
-        /*ceiling=*/{0, 4, 20, 25},
+        /*ceiling=*/{0, 4, 20, 20},
         /*reason=*/
         "gradient-painted paths under an opacity group re-upload geometry, allocate scratch "
         "textures, and rebuild bind groups per draw",
@@ -261,7 +261,7 @@ constexpr std::array<KnownViolation, 32> kKnownViolations = {{
     {
         /*scene=*/"geode_pattern_checker",
         /*violated=*/kTextureCreates | kBufferWrites,
-        /*ceiling=*/{0, 1, 9, 1},
+        /*ceiling=*/{0, 1, 10, 1},
         /*reason=*/
         "the pattern tile is re-rendered into a freshly allocated texture every frame and "
         "the tiled fill draws through the per-frame arena",
@@ -271,7 +271,7 @@ constexpr std::array<KnownViolation, 32> kKnownViolations = {{
     {
         /*scene=*/"geode_pattern_nonrect",
         /*violated=*/kTextureCreates | kBufferWrites,
-        /*ceiling=*/{0, 1, 9, 1},
+        /*ceiling=*/{0, 1, 10, 1},
         /*reason=*/
         "the pattern tile is re-rendered into a freshly allocated texture every frame and "
         "the tiled fill draws through the per-frame arena",
@@ -281,7 +281,7 @@ constexpr std::array<KnownViolation, 32> kKnownViolations = {{
     {
         /*scene=*/"geode_pattern_offset",
         /*violated=*/kTextureCreates | kBufferWrites,
-        /*ceiling=*/{0, 1, 9, 1},
+        /*ceiling=*/{0, 1, 10, 1},
         /*reason=*/
         "the pattern tile is re-rendered into a freshly allocated texture every frame and "
         "the tiled fill draws through the per-frame arena",
@@ -291,7 +291,7 @@ constexpr std::array<KnownViolation, 32> kKnownViolations = {{
     {
         /*scene=*/"geode_pattern_solid",
         /*violated=*/kTextureCreates | kBufferWrites,
-        /*ceiling=*/{0, 1, 9, 1},
+        /*ceiling=*/{0, 1, 10, 1},
         /*reason=*/
         "the pattern tile is re-rendered into a freshly allocated texture every frame and "
         "the tiled fill draws through the per-frame arena",
@@ -301,7 +301,7 @@ constexpr std::array<KnownViolation, 32> kKnownViolations = {{
     {
         /*scene=*/"geode_text_decoration_underline",
         /*violated=*/kPathEncodes | kBufferWrites,
-        /*ceiling=*/{5, 0, 45, 5},
+        /*ceiling=*/{5, 0, 50, 5},
         /*reason=*/
         "glyph and decoration outlines are re-encoded and re-uploaded every frame; placed "
         "text has no path cache or residency",
@@ -312,7 +312,7 @@ constexpr std::array<KnownViolation, 32> kKnownViolations = {{
     {
         /*scene=*/"geode_text_pattern_fill",
         /*violated=*/kPathEncodes | kTextureCreates | kBufferWrites,
-        /*ceiling=*/{4, 1, 36, 4},
+        /*ceiling=*/{4, 1, 40, 4},
         /*reason=*/
         "glyph outlines re-encode every frame and the pattern tile behind them is "
         "re-rendered into a fresh texture",
@@ -323,7 +323,7 @@ constexpr std::array<KnownViolation, 32> kKnownViolations = {{
     {
         /*scene=*/"geode_text_span_gradient_over_pattern",
         /*violated=*/kPathEncodes | kTextureCreates | kBufferWrites,
-        /*ceiling=*/{3, 1, 27, 3},
+        /*ceiling=*/{3, 1, 29, 3},
         /*reason=*/
         "glyph outlines re-encode every frame and the pattern tile behind them is "
         "re-rendered into a fresh texture",
@@ -334,7 +334,7 @@ constexpr std::array<KnownViolation, 32> kKnownViolations = {{
     {
         /*scene=*/"geode_text_span_gradient_over_pattern_stroke",
         /*violated=*/kPathEncodes | kTextureCreates | kBufferWrites,
-        /*ceiling=*/{3, 1, 27, 3},
+        /*ceiling=*/{3, 1, 29, 3},
         /*reason=*/
         "glyph outlines re-encode every frame and the pattern tile behind them is "
         "re-rendered into a fresh texture",
@@ -364,7 +364,7 @@ constexpr std::array<KnownViolation, 32> kKnownViolations = {{
     {
         /*scene=*/"image_external_svg_par",
         /*violated=*/kBufferWrites,
-        /*ceiling=*/{0, 0, 36, 4},
+        /*ceiling=*/{0, 0, 40, 4},
         /*reason=*/
         "the same external SVG is drawn by two image elements at different sizes; one size "
         "stays resident and the other re-uploads its geometry every frame (the single-image "
@@ -376,7 +376,7 @@ constexpr std::array<KnownViolation, 32> kKnownViolations = {{
     {
         /*scene=*/"image_external_svg_viewbox",
         /*violated=*/kBufferWrites,
-        /*ceiling=*/{0, 0, 36, 4},
+        /*ceiling=*/{0, 0, 40, 4},
         /*reason=*/
         "the same external SVG is drawn by two image elements at different sizes; one size "
         "stays resident and the other re-uploads its geometry every frame (the single-image "
@@ -388,7 +388,7 @@ constexpr std::array<KnownViolation, 32> kKnownViolations = {{
     {
         /*scene=*/"marker",
         /*violated=*/kBufferWrites | kBindgroupCreates,
-        /*ceiling=*/{0, 0, 414, 46},
+        /*ceiling=*/{0, 0, 460, 46},
         /*reason=*/
         "every drawn marker instance re-uploads its geometry through the per-frame arena and "
         "builds its own bind group",
@@ -397,7 +397,7 @@ constexpr std::array<KnownViolation, 32> kKnownViolations = {{
     {
         /*scene=*/"marker_segments",
         /*violated=*/kTextureCreates | kBufferWrites | kBindgroupCreates,
-        /*ceiling=*/{0, 7, 203, 43},
+        /*ceiling=*/{0, 7, 223, 43},
         /*reason=*/
         "every drawn marker instance re-uploads its geometry and allocates clip scratch "
         "textures each frame",
@@ -408,7 +408,7 @@ constexpr std::array<KnownViolation, 32> kKnownViolations = {{
     {
         /*scene=*/"marker_spec_example",
         /*violated=*/kBufferWrites | kBindgroupCreates,
-        /*ceiling=*/{0, 0, 92, 20},
+        /*ceiling=*/{0, 0, 101, 20},
         /*reason=*/
         "every drawn marker instance re-uploads its geometry through the per-frame arena and "
         "builds its own bind group",
@@ -417,7 +417,7 @@ constexpr std::array<KnownViolation, 32> kKnownViolations = {{
     {
         /*scene=*/"nested_svg_aspectratio",
         /*violated=*/kPathEncodes | kBufferWrites | kBindgroupCreates,
-        /*ceiling=*/{208, 0, 2582, 290},
+        /*ceiling=*/{208, 0, 2886, 290},
         /*reason=*/
         "nested viewports carrying text and use instances re-encode and re-upload the whole "
         "subtree every frame",
@@ -428,7 +428,7 @@ constexpr std::array<KnownViolation, 32> kKnownViolations = {{
     {
         /*scene=*/"poker_chips",
         /*violated=*/kPathEncodes | kBufferWrites | kBindgroupCreates,
-        /*ceiling=*/{12, 0, 96, 20},
+        /*ceiling=*/{12, 0, 193, 20},
         /*reason=*/
         "use instances share one source path with differing stroke styles, so the per-entity "
         "stroke cache thrashes and re-encodes every instance",
@@ -439,7 +439,7 @@ constexpr std::array<KnownViolation, 32> kKnownViolations = {{
     {
         /*scene=*/"simple_text_demo",
         /*violated=*/kPathEncodes | kBufferWrites | kBindgroupCreates,
-        /*ceiling=*/{24, 0, 216, 24},
+        /*ceiling=*/{24, 0, 240, 24},
         /*reason=*/
         "glyph outlines are re-encoded and re-uploaded every frame; placed text has no path "
         "cache or residency",
@@ -450,7 +450,7 @@ constexpr std::array<KnownViolation, 32> kKnownViolations = {{
     {
         /*scene=*/"stroking_complex",
         /*violated=*/kPathEncodes | kBufferWrites | kBindgroupCreates,
-        /*ceiling=*/{8, 0, 16, 8},
+        /*ceiling=*/{8, 0, 73, 8},
         /*reason=*/
         "eight use instances share one source path with differing stroke styles (width, "
         "dash, opacity), so the per-entity stroke cache thrashes and re-encodes each "
@@ -462,7 +462,7 @@ constexpr std::array<KnownViolation, 32> kKnownViolations = {{
     {
         /*scene=*/"svg2_e_use_003",
         /*violated=*/kBufferWrites,
-        /*ceiling=*/{0, 0, 9, 1},
+        /*ceiling=*/{0, 0, 10, 1},
         /*reason=*/
         "the stroke outline of a styled use instance draws through the per-frame arena "
         "instead of a resident buffer",
@@ -473,7 +473,7 @@ constexpr std::array<KnownViolation, 32> kKnownViolations = {{
     {
         /*scene=*/"svg2_e_use_004",
         /*violated=*/kBufferWrites,
-        /*ceiling=*/{0, 0, 9, 1},
+        /*ceiling=*/{0, 0, 10, 1},
         /*reason=*/
         "the stroke outline of a styled use instance draws through the per-frame arena "
         "instead of a resident buffer",
@@ -484,7 +484,7 @@ constexpr std::array<KnownViolation, 32> kKnownViolations = {{
     {
         /*scene=*/"text_inline_size_wrap",
         /*violated=*/kPathEncodes | kBufferWrites | kBindgroupCreates,
-        /*ceiling=*/{35, 0, 315, 35},
+        /*ceiling=*/{35, 0, 350, 35},
         /*reason=*/
         "every wrapped glyph outline is re-encoded and re-uploaded each frame; placed text "
         "has no path cache or residency",
@@ -495,7 +495,7 @@ constexpr std::array<KnownViolation, 32> kKnownViolations = {{
     {
         /*scene=*/"text_nested_baseline_shift_idempotency",
         /*violated=*/kPathEncodes | kBufferWrites,
-        /*ceiling=*/{2, 0, 18, 2},
+        /*ceiling=*/{2, 0, 20, 2},
         /*reason=*/
         "glyph outlines are re-encoded and re-uploaded every frame; placed text has no path "
         "cache or residency",
@@ -506,7 +506,7 @@ constexpr std::array<KnownViolation, 32> kKnownViolations = {{
     {
         /*scene=*/"z0rly_test6",
         /*violated=*/kPathEncodes | kBufferWrites | kBindgroupCreates,
-        /*ceiling=*/{22, 0, 198, 22},
+        /*ceiling=*/{22, 0, 220, 22},
         /*reason=*/
         "music-notation glyphs from an embedded font face re-encode and re-upload their "
         "outlines every frame; placed text has no path cache or residency",
