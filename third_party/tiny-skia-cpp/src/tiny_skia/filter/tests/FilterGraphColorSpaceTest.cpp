@@ -22,11 +22,16 @@
 #include "tiny_skia/Pixmap.h"
 #include "tiny_skia/filter/ColorMatrix.h"
 #include "tiny_skia/filter/ColorSpace.h"
+#include "tiny_skia/filter/Composite.h"
 #include "tiny_skia/filter/FilterGraph.h"
 #include "tiny_skia/filter/FloatPixmap.h"
 #include "tiny_skia/filter/Flood.h"
 #include "tiny_skia/filter/GaussianBlur.h"
 #include "tiny_skia/filter/Merge.h"
+#include "tiny_skia/filter/Morphology.h"
+#include "tiny_skia/filter/Offset.h"
+#include "tiny_skia/filter/Tile.h"
+#include "tiny_skia/filter/Turbulence.h"
 
 namespace tiny_skia::filter {
 namespace {
@@ -116,6 +121,13 @@ Pixmap runChainWithPerStepConversions(const Pixmap& source, std::array<bool, 3> 
   runStep(2, [&] { gaussianBlur(fp, kSigma, kSigma, BlurEdgeMode::None); });
 
   return fp.toPixmap();
+}
+
+/// A transparent working buffer at the test size.
+FloatPixmap blankFloat() {
+  auto maybeBlank = FloatPixmap::fromSize(kWidth, kHeight);
+  EXPECT_TRUE(maybeBlank.has_value());
+  return std::move(*maybeBlank);
 }
 
 /// Largest absolute per-channel difference between two same-sized pixmaps.
@@ -262,18 +274,14 @@ TEST(FilterGraphColorSpace, FloodColorReachesALinearConsumerConverted) {
   Pixmap actual = source;
   ASSERT_TRUE(executeFilterGraph(actual, graph));
 
-  auto maybeFlood = FloatPixmap::fromSize(kWidth, kHeight);
-  ASSERT_TRUE(maybeFlood.has_value());
-  FloatPixmap floodLayer = std::move(*maybeFlood);
+  FloatPixmap floodLayer = blankFloat();
   flood(floodLayer, kFloodR / 255.0f, kFloodG / 255.0f, kFloodB / 255.0f, kFloodA / 255.0f);
   srgbToLinear(floodLayer);
 
   FloatPixmap sourceLayer = FloatPixmap::fromPixmap(source);
   srgbToLinear(sourceLayer);
 
-  auto maybeMerged = FloatPixmap::fromSize(kWidth, kHeight);
-  ASSERT_TRUE(maybeMerged.has_value());
-  FloatPixmap merged = std::move(*maybeMerged);
+  FloatPixmap merged = blankFloat();
   const std::vector<const FloatPixmap*> layers = {&floodLayer, &sourceLayer};
   merge(std::span<const FloatPixmap* const>(layers), merged);
   linearToSrgb(merged);
@@ -310,6 +318,302 @@ TEST(FilterGraphColorSpace, PerPixelConversionMatchesBufferConversion) {
           << static_cast<int>(color[3]);
     }
   }
+}
+
+// ---------------------------------------------------------------------------
+// Buffers consumed in both spaces, and primitives that carry their input's space
+// ---------------------------------------------------------------------------
+//
+// The cases above pin where conversions land along a chain. These pin the two claims a chain
+// cannot reach: that a buffer read in both spaces stays correct in each, and that a primitive
+// which only moves or copies pixels carries its producer's space instead of converting to its
+// own. A mis-tagged pass-through reinterprets one space's values as the other, which is a tens-
+// of-units error rather than a rounding one, and no chained test notices because every stage
+// still runs.
+
+// A result consumed in one space by one primitive and the other space by another must be correct
+// in both. Converting the stored pixels in place, or caching the conversion under the wrong tag,
+// would feed the second consumer values from the wrong space.
+TEST(FilterGraphColorSpace, BufferConsumedInBothSpacesStaysCorrectInEach) {
+  const Pixmap source = makeSourceGraphic();
+
+  GraphNode blurLinear = blurNode(true);
+  blurLinear.inputs = {NodeInput(StandardInput::SourceGraphic)};
+  blurLinear.result = "blurred";
+
+  GraphNode matrixSrgb = colorMatrixNode(false);
+  matrixSrgb.inputs = {NodeInput(NodeInput::Named{"blurred"})};
+  matrixSrgb.result = "saturated";
+
+  GraphNode mergeLinear;
+  mergeLinear.primitive = graph_primitive::Merge{};
+  mergeLinear.inputs = {NodeInput(NodeInput::Named{"blurred"}),
+                        NodeInput(NodeInput::Named{"saturated"})};
+  mergeLinear.useLinearRGB = true;
+
+  FilterGraph graph;
+  graph.useLinearRGB = true;
+  graph.nodes = {std::move(blurLinear), std::move(matrixSrgb), std::move(mergeLinear)};
+
+  Pixmap actual = source;
+  ASSERT_TRUE(executeFilterGraph(actual, graph));
+
+  // Reference: the per-primitive schedule, every result normalized back to sRGB after its node.
+  FloatPixmap blurred = FloatPixmap::fromPixmap(source);
+  srgbToLinear(blurred);
+  gaussianBlur(blurred, kSigma, kSigma, BlurEdgeMode::None);
+  linearToSrgb(blurred);
+
+  FloatPixmap saturated(blurred);
+  colorMatrix(saturated, saturateMatrix());  // sRGB primitive, no conversion.
+
+  FloatPixmap blurredLinear(blurred);
+  srgbToLinear(blurredLinear);
+  FloatPixmap saturatedLinear(saturated);
+  srgbToLinear(saturatedLinear);
+
+  FloatPixmap merged = blankFloat();
+  const std::vector<const FloatPixmap*> layers = {&blurredLinear, &saturatedLinear};
+  merge(std::span<const FloatPixmap* const>(layers), merged);
+  linearToSrgb(merged);
+
+  EXPECT_LE(maxChannelDelta(actual, merged.toPixmap()), 2);
+}
+
+/// Runs `blurred = linearRGB blur of the source`, then `trailing`, and compares against the same
+/// blur with no further conversion: a primitive that only moves or copies pixels must leave its
+/// producer's space alone, even when the primitive itself is tagged with the other space.
+void ExpectCarriesProducerSpace(GraphNode trailing, const FloatPixmap& expected) {
+  const Pixmap source = makeSourceGraphic();
+
+  GraphNode blurLinear = blurNode(true);
+  blurLinear.inputs = {NodeInput(StandardInput::SourceGraphic)};
+
+  FilterGraph graph;
+  graph.useLinearRGB = true;
+  graph.nodes = {std::move(blurLinear), std::move(trailing)};
+
+  Pixmap actual = source;
+  ASSERT_TRUE(executeFilterGraph(actual, graph));
+
+  EXPECT_TRUE(PixmapsEqual(actual, expected.toPixmap()));
+}
+
+/// The linearRGB blur every pass-through case below feeds from, expressed in sRGB the way the
+/// graph's exit conversion delivers it.
+FloatPixmap blurredSourceAsSrgb() {
+  FloatPixmap fp = FloatPixmap::fromPixmap(makeSourceGraphic());
+  srgbToLinear(fp);
+  gaussianBlur(fp, kSigma, kSigma, BlurEdgeMode::None);
+  linearToSrgb(fp);
+  return fp;
+}
+
+// feOffset moves pixels and nothing else, so it carries its producer's space even when its own
+// color-interpolation-filters says otherwise. Tagging the moved pixels with the primitive's space
+// instead would reinterpret linearRGB values as sRGB.
+TEST(FilterGraphColorSpace, OffsetCarriesProducerSpaceThrough) {
+  GraphNode offsetSrgb;
+  offsetSrgb.primitive = graph_primitive::Offset{3, -2};
+  offsetSrgb.inputs = {NodeInput()};
+  offsetSrgb.useLinearRGB = false;
+
+  FloatPixmap expected = blankFloat();
+  filter::offset(blurredSourceAsSrgb(), expected, 3, -2);
+
+  ExpectCarriesProducerSpace(std::move(offsetSrgb), expected);
+}
+
+// A zero radius disables feMorphology, and the disabled result is the input unchanged, so it too
+// carries the producer's space.
+TEST(FilterGraphColorSpace, DisabledMorphologyCarriesProducerSpaceThrough) {
+  GraphNode morphDisabled;
+  morphDisabled.primitive = graph_primitive::Morphology{MorphologyOp::Erode, 0, 0};
+  morphDisabled.inputs = {NodeInput()};
+  morphDisabled.useLinearRGB = false;
+
+  ExpectCarriesProducerSpace(std::move(morphDisabled), blurredSourceAsSrgb());
+}
+
+// The identity matrix short-circuits feColorMatrix into a pass-through, with the same obligation.
+TEST(FilterGraphColorSpace, IdentityColorMatrixCarriesProducerSpaceThrough) {
+  GraphNode identitySrgb;
+  identitySrgb.primitive = graph_primitive::ColorMatrix{identityMatrix()};
+  identitySrgb.inputs = {NodeInput()};
+  identitySrgb.useLinearRGB = false;
+
+  ExpectCarriesProducerSpace(std::move(identitySrgb), blurredSourceAsSrgb());
+}
+
+// feTile replicates a subregion, which is also a pure pixel move.
+TEST(FilterGraphColorSpace, TileCarriesProducerSpaceThrough) {
+  const Pixmap source = makeSourceGraphic();
+
+  GraphNode blurLinear = blurNode(true);
+  blurLinear.inputs = {NodeInput(StandardInput::SourceGraphic)};
+  blurLinear.subregion = PixelRect{0, 0, 8, 8};
+  blurLinear.result = "patch";
+
+  GraphNode tileSrgb;
+  tileSrgb.primitive = graph_primitive::Tile{};
+  tileSrgb.inputs = {NodeInput(NodeInput::Named{"patch"})};
+  tileSrgb.useLinearRGB = false;
+
+  FilterGraph graph;
+  graph.useLinearRGB = true;
+  graph.nodes = {std::move(blurLinear), std::move(tileSrgb)};
+
+  Pixmap actual = source;
+  ASSERT_TRUE(executeFilterGraph(actual, graph));
+
+  FloatPixmap patch = blurredSourceAsSrgb();
+  // The executor clips a result to its subregion before publishing it.
+  auto patchData = patch.data();
+  for (int y = 0; y < kHeight; ++y) {
+    for (int x = 0; x < kWidth; ++x) {
+      if (x < 8 && y < 8) {
+        continue;
+      }
+      const std::size_t offset = static_cast<std::size_t>((y * kWidth + x) * 4);
+      patchData[offset + 0] = 0.0f;
+      patchData[offset + 1] = 0.0f;
+      patchData[offset + 2] = 0.0f;
+      patchData[offset + 3] = 0.0f;
+    }
+  }
+
+  FloatPixmap tiled = blankFloat();
+  tile(patch, tiled, 0, 0, 8, 8);
+
+  EXPECT_TRUE(PixmapsEqual(actual, tiled.toPixmap()));
+}
+
+// The control for the pass-through cases: an enabled feMorphology is not a pure pixel move, since
+// a channel minimum depends on the space the channels are in, so a disagreeing primitive must
+// convert. If pass-through carrying were applied here the result would keep the producer's space
+// and this would not match.
+TEST(FilterGraphColorSpace, EnabledMorphologyConvertsWhenSpacesDisagree) {
+  GraphNode erodeSrgb;
+  erodeSrgb.primitive = graph_primitive::Morphology{MorphologyOp::Erode, 2, 2};
+  erodeSrgb.inputs = {NodeInput()};
+  erodeSrgb.useLinearRGB = false;
+
+  FloatPixmap expected = blankFloat();
+  morphology(blurredSourceAsSrgb(), expected, MorphologyOp::Erode, 2, 2);
+
+  ExpectCarriesProducerSpace(std::move(erodeSrgb), expected);
+}
+
+// SourceAlpha has zero RGB, so both transfer functions are the identity on it and it must reach a
+// linearRGB primitive without a conversion pass. The reference applies the conversion the
+// per-primitive code ran, which has to be an exact no-op here.
+TEST(FilterGraphColorSpace, SourceAlphaIsSpaceInvariant) {
+  const Pixmap source = makeSourceGraphic();
+
+  GraphNode blurLinear = blurNode(true);
+  blurLinear.inputs = {NodeInput(StandardInput::SourceAlpha)};
+
+  FilterGraph graph;
+  graph.useLinearRGB = true;
+  graph.nodes = {std::move(blurLinear)};
+
+  Pixmap actual = source;
+  ASSERT_TRUE(executeFilterGraph(actual, graph));
+
+  FloatPixmap fp = FloatPixmap::fromPixmap(source);
+  auto data = fp.data();
+  for (int i = 0; i < kWidth * kHeight; ++i) {
+    data[i * 4 + 0] = 0.0f;
+    data[i * 4 + 1] = 0.0f;
+    data[i * 4 + 2] = 0.0f;
+  }
+  srgbToLinear(fp);
+  gaussianBlur(fp, kSigma, kSigma, BlurEdgeMode::None);
+  linearToSrgb(fp);
+
+  EXPECT_TRUE(PixmapsEqual(actual, fp.toPixmap()));
+}
+
+// feTurbulence generates noise directly in the primitive's space. The per-primitive code generated
+// the same values and immediately encoded them as sRGB for storage, so as the last primitive the
+// two arrangements have to agree exactly.
+TEST(FilterGraphColorSpace, TurbulenceGeneratesDirectlyInTheNodeSpace) {
+  const Pixmap source = makeSourceGraphic();
+
+  TurbulenceParams params;
+  params.type = TurbulenceType::Turbulence;
+  params.baseFrequencyX = 0.05;
+  params.baseFrequencyY = 0.05;
+  params.numOctaves = 3;
+  params.seed = 7.0;
+
+  GraphNode turbulenceLinear;
+  turbulenceLinear.primitive = graph_primitive::Turbulence{params};
+  turbulenceLinear.useLinearRGB = true;
+
+  FilterGraph graph;
+  graph.useLinearRGB = true;
+  graph.nodes = {std::move(turbulenceLinear)};
+
+  Pixmap actual = source;
+  ASSERT_TRUE(executeFilterGraph(actual, graph));
+
+  FloatPixmap fp = blankFloat();
+  turbulence(fp, params);
+  linearToSrgb(fp);
+
+  EXPECT_TRUE(PixmapsEqual(actual, fp.toPixmap()));
+}
+
+// feDropShadow decomposes into flood, composite-in, offset, blur, and merge. Running all of them
+// in the primitive's space, and converting the flood color rather than the flood buffer, has to
+// reproduce the old decomposition byte for byte.
+TEST(FilterGraphColorSpace, DropShadowInLinearMatchesTheDecomposedSchedule) {
+  const Pixmap source = makeSourceGraphic();
+  constexpr int kDx = 4;
+  constexpr int kDy = 4;
+
+  GraphNode shadow;
+  shadow.primitive =
+      graph_primitive::DropShadow{kFloodR, kFloodG, kFloodB, kFloodA, kDx, kDy, kSigma, kSigma};
+  shadow.inputs = {NodeInput(StandardInput::SourceGraphic)};
+  shadow.useLinearRGB = true;
+
+  FilterGraph graph;
+  graph.useLinearRGB = true;
+  graph.nodes = {std::move(shadow)};
+
+  Pixmap actual = source;
+  ASSERT_TRUE(executeFilterGraph(actual, graph));
+
+  FloatPixmap floodLayer = blankFloat();
+  flood(floodLayer, kFloodR / 255.0f, kFloodG / 255.0f, kFloodB / 255.0f, kFloodA / 255.0f);
+  srgbToLinear(floodLayer);
+
+  FloatPixmap sourceAlpha = FloatPixmap::fromPixmap(source);
+  auto sourceAlphaData = sourceAlpha.data();
+  for (int i = 0; i < kWidth * kHeight; ++i) {
+    sourceAlphaData[i * 4 + 0] = 0.0f;
+    sourceAlphaData[i * 4 + 1] = 0.0f;
+    sourceAlphaData[i * 4 + 2] = 0.0f;
+  }
+
+  FloatPixmap shadowLayer = blankFloat();
+  composite(floodLayer, sourceAlpha, shadowLayer, CompositeOp::In);
+
+  FloatPixmap offsetShadow = blankFloat();
+  filter::offset(shadowLayer, offsetShadow, kDx, kDy);
+  gaussianBlur(offsetShadow, kSigma, kSigma);
+
+  FloatPixmap sourceLinear = FloatPixmap::fromPixmap(source);
+  srgbToLinear(sourceLinear);
+
+  FloatPixmap merged = blankFloat();
+  const std::vector<const FloatPixmap*> layers = {&offsetShadow, &sourceLinear};
+  merge(std::span<const FloatPixmap* const>(layers), merged);
+  linearToSrgb(merged);
+
+  EXPECT_TRUE(PixmapsEqual(actual, merged.toPixmap()));
 }
 
 }  // namespace
