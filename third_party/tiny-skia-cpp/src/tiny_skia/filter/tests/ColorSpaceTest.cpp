@@ -128,24 +128,20 @@ TEST(ColorSpaceTest, ByteSrgbToLinearLutIsExactForEveryByte) {
 TEST(ColorSpaceTest, FloatSrgbToLinearWithinBoundOfExact) {
   const std::vector<float> sweep = buildDenseSweep();
   const SweepResult result = maxDeltaOverSweep(
-      sweep, [](FloatPixmap& p) { srgbToLinear(p); },
-      [](float s) { return srgbToLinearExact(s); });
+      sweep, [](FloatPixmap& p) { srgbToLinear(p); }, [](float s) { return srgbToLinearExact(s); });
   // Measured maximum on a 2^24-point sweep: 0.0708/255.
   EXPECT_LE(result.maxDelta, 0.2 / 255.0)
-      << "worst input " << result.argmax << ", delta in 8-bit units "
-      << result.maxDelta * 255.0;
+      << "worst input " << result.argmax << ", delta in 8-bit units " << result.maxDelta * 255.0;
 }
 
 TEST(ColorSpaceTest, FloatLinearToSrgbWithinBoundOfExact) {
   const std::vector<float> sweep = buildDenseSweep();
   const SweepResult result = maxDeltaOverSweep(
-      sweep, [](FloatPixmap& p) { linearToSrgb(p); },
-      [](float l) { return linearToSrgbExact(l); });
+      sweep, [](FloatPixmap& p) { linearToSrgb(p); }, [](float l) { return linearToSrgbExact(l); });
   // Measured maximum on a 2^24-point sweep: 0.4022/255, set by table
   // quantization at the dark end where the transfer slope approaches 12.92.
   EXPECT_LE(result.maxDelta, 0.45 / 255.0)
-      << "worst input " << result.argmax << ", delta in 8-bit units "
-      << result.maxDelta * 255.0;
+      << "worst input " << result.argmax << ", delta in 8-bit units " << result.maxDelta * 255.0;
 }
 
 TEST(ColorSpaceTest, FloatConversionPreservesPremultipliedAlpha) {
