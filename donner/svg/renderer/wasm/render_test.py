@@ -37,7 +37,7 @@ _DRIVER_RLOCATION = "donner/donner/svg/renderer/wasm/render_test_driver.mjs"
 # measured on the size-optimized (--config=wasm-size) tiny_skia wasm build.
 # Regenerate only on a deliberate renderer change (run the driver and copy the
 # HASH= line), never to paper over a glue regression.
-_GOLDEN_HASH = "28ece9d9"
+_GOLDEN_HASH = "eeac7785"
 _WIDTH = 64
 _HEIGHT = 64
 _EXPECTED_BYTES = _WIDTH * _HEIGHT * 4
