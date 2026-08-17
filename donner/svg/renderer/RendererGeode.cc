@@ -1995,16 +1995,21 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
   /// by an earlier recorded batch). Returns false when no slot is
   /// available.
   /// Choose the record slot for a scene-batch instance of `slot` WITHOUT
-  /// marking it used: the primary slot on the entity's first scene use
-  /// this frame (nullptr: the ensure uses the cached write path), or a
-  /// fresh temporary slot for same-frame repeats (the primary slot's
-  /// record is already referenced by an earlier recorded batch). Callers
-  /// mark `slot.lastSceneFrame = currentFrameIndex` only after a
-  /// successful ensure.
+  /// marking it used: the primary slot when nothing this frame references
+  /// it yet (nullptr: the ensure uses the cached write path), or a fresh
+  /// temporary slot for same-frame repeats. The primary slot is off-limits
+  /// when an earlier recorded batch references it (`lastSceneFrame`) AND
+  /// when a solo resident draw was recorded against it (`lastResidentFrame`):
+  /// buffer writes are queue-ordered ahead of every draw in the frame's
+  /// submit, so rewriting the record in scene form would retroactively
+  /// retransform the already-recorded solo draw. Callers mark
+  /// `slot.lastSceneFrame = currentFrameIndex` only after a successful
+  /// ensure.
   bool resolveSceneRecordSlot(geode::GeodeResidentSlot& slot,
                               const geode::GeodeRecordSlab::Slot*& outSlot) {
     outSlot = nullptr;
-    if (slot.lastSceneFrame == currentFrameIndex) {
+    if (slot.lastSceneFrame == currentFrameIndex ||
+        slot.lastResidentFrame == currentFrameIndex) {
       if (!slot.recordSlab) {
         return false;
       }
@@ -2278,6 +2283,22 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
       deviceFromLocalTransform = Transform2d();
       syncTransform();
 
+      if (debugGeometryOverlay) {
+        // Ordered batches issue one GPU draw, so the overlay sink never
+        // sees the per-instance geometry through the draw itself. Report
+        // each instance in paint order with the packed-transform wire
+        // format the instanced path uses (encoder transform is identity
+        // here, matching the batch draw's uniform).
+        for (const PendingBatch::SceneInstance& inst : batch.sceneInstances) {
+          if (inst.encoded != nullptr) {
+            float packed[8];
+            packTransform(inst.deviceFromLocal, packed);
+            encoder->recordGeometryDebugInstance(*inst.encoded,
+                                                 std::span<const float>(packed, 8u));
+          }
+        }
+      }
+
       geode::GeoEncoder::SceneBatchBinding binding = {};
       binding.chunkBuffer = batch.sceneChunkBuffer;
       binding.recordBuffer = batch.sceneRecordBuffer;
@@ -2352,6 +2373,25 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
   /// The caller is expected to have already verified the draw is
   /// "batch-compatible" (solid paint, no stroke, has source entity,
   /// has cached fill encode, no in-flight pattern).
+  /// Start a fresh size-1 same-entity batch holding the current draw.
+  /// The caller has already flushed any previous pending batch.
+  void startSameEntitySingleton(const Registry* sourceRegistry, Entity sourceEntity,
+                                const Path& path, const css::RGBA& color, FillRule rule,
+                                const geode::EncodedPath* encoded,
+                                geode::GeodeResidentSlot* residentFillSlot) {
+    pendingBatch = PendingBatch{};
+    pendingBatch->mode = PendingBatch::Mode::SameEntity;
+    pendingBatch->sameEntityClipVersion = encoder->clipStateVersion();
+    pendingBatch->sourceRegistry = sourceRegistry;
+    pendingBatch->sourceEntity = sourceEntity;
+    pendingBatch->color = color;
+    pendingBatch->rule = rule;
+    pendingBatch->encoded = encoded;
+    pendingBatch->path = &path;
+    pendingBatch->residentFillSlot = residentFillSlot;
+    pendingBatch->deviceFromLocalTransforms.push_back(deviceFromLocalTransform);
+  }
+
   bool tryAppendOrStartBatch(const Registry* sourceRegistry, Entity sourceEntity, const Path& path,
                              const css::RGBA& color, FillRule rule,
                              const geode::EncodedPath* encoded,
@@ -2387,6 +2427,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
                                !encoder->hasActiveClipState() &&
                                !encoder->hasActiveScissor() &&
                                residentFillSlot->lastSceneFrame != currentFrameIndex &&
+                               residentFillSlot->lastResidentFrame != currentFrameIndex &&
                                resolveSceneRecordSlot(*residentFillSlot, recordSlotPtr);
     if (sceneEligible &&
         encoder->ensureResidentSceneRecord(*residentFillSlot, *encoded, color, rule,
@@ -2483,7 +2524,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
             pendingBatch->sceneChunkBuffer = chunk;
             pendingBatch->sceneRecordBuffer = recordBuf;
             pendingBatch->sceneFirstInstance = recordIndex;
-          pendingBatch->sceneFirstRecordOffset = effectiveRecordSlot.offset;
+            pendingBatch->sceneFirstRecordOffset = effectiveRecordSlot.offset;
+            pendingBatch->sceneClipVersion = clipVersion;
             appendSceneInstance(*pendingBatch,
                                 PendingBatch::SceneInstance{residentFillSlot, encoded, &path,
                                                             color, rule,
@@ -2491,7 +2533,13 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
                                                             vertexCount});
           }
         } else {
+          // The pending singleton could not take scene form: emit it solo
+          // and keep the CURRENT draw as a fresh singleton. Returning
+          // without recording the current draw would silently drop it
+          // (its ensured record is not referenced by any batch).
           flushPendingBatch();
+          startSameEntitySingleton(sourceRegistry, sourceEntity, path, color, rule, encoded,
+                                   residentFillSlot);
         }
         return true;
       }
@@ -2503,17 +2551,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
         if (pendingBatch.has_value()) {
           flushPendingBatch();
         }
-        pendingBatch = PendingBatch{};
-        pendingBatch->mode = PendingBatch::Mode::SameEntity;
-        pendingBatch->sameEntityClipVersion = clipVersion;
-        pendingBatch->sourceRegistry = sourceRegistry;
-        pendingBatch->sourceEntity = sourceEntity;
-        pendingBatch->color = color;
-        pendingBatch->rule = rule;
-        pendingBatch->encoded = encoded;
-        pendingBatch->path = &path;
-        pendingBatch->residentFillSlot = residentFillSlot;
-        pendingBatch->deviceFromLocalTransforms.push_back(deviceFromLocalTransform);
+        startSameEntitySingleton(sourceRegistry, sourceEntity, path, color, rule, encoded,
+                                 residentFillSlot);
         return true;
       }
 
@@ -2535,17 +2574,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
     // Not scene-eligible: flush whatever's pending, then start a fresh
     // same-entity batch.
     flushPendingBatch();
-    pendingBatch = PendingBatch{};
-    pendingBatch->mode = PendingBatch::Mode::SameEntity;
-    pendingBatch->sameEntityClipVersion = encoder->clipStateVersion();
-    pendingBatch->sourceRegistry = sourceRegistry;
-    pendingBatch->sourceEntity = sourceEntity;
-    pendingBatch->color = color;
-    pendingBatch->rule = rule;
-    pendingBatch->encoded = encoded;
-    pendingBatch->path = &path;
-    pendingBatch->residentFillSlot = residentFillSlot;
-    pendingBatch->deviceFromLocalTransforms.push_back(deviceFromLocalTransform);
+    startSameEntitySingleton(sourceRegistry, sourceEntity, path, color, rule, encoded,
+                             residentFillSlot);
     return true;
   }
 

@@ -1345,6 +1345,11 @@ void GeoEncoder::setBufferPool(GeodeBufferPool* pool) {
   impl_->bufferPool = pool;
 }
 
+void GeoEncoder::recordGeometryDebugInstance(const EncodedPath& encoded,
+                                             std::span<const float> instanceTransforms) {
+  impl_->recordGeometryDebugDraw(encoded, instanceTransforms);
+}
+
 void GeoEncoder::setGeometryDebugSink(GeometryDebugSink* sink, const Transform2d& rootFromTarget) {
   impl_->geometryDebugSink = sink;
   impl_->geometryDebugRootFromTarget = rootFromTarget;
@@ -1742,14 +1747,22 @@ bool GeoEncoder::Impl::ensureResidentSceneRecordImpl(GeodeResidentSlot& slot,
   //   - Scene batch (orthographic uniform): uniforms.mvp is the
   //     orthographic mapping and the record carries the caller's
   //     per-instance transform, so one uniform serves every instance.
-  Uniforms u = {};
-  populateBatchUniform(u, args, transform, /*identityMvp=*/!bakeTransform);
-  const auto* uBytes = reinterpret_cast<const uint8_t*>(&u);
-  if (slot.lastUniform.size() != sizeof(Uniforms) ||
-      std::memcmp(slot.lastUniform.data(), uBytes, sizeof(Uniforms)) != 0) {
-    device->queue().writeBuffer(slot.buffer, slot.uniform.offset, &u, sizeof(Uniforms));
-    device->countBufferWrite(sizeof(Uniforms));
-    slot.lastUniform.assign(uBytes, uBytes + sizeof(Uniforms));
+  // The slot's uniform region belongs exclusively to the solo resident
+  // draw: scene batches bind a per-batch arena uniform instead, so the
+  // scene form must not write it. Buffer writes are queue-ordered ahead
+  // of every draw in the frame's single submit, so a scene-form write
+  // after a recorded solo draw would retroactively change that draw's
+  // uniform (last write wins at submit time).
+  if (bakeTransform) {
+    Uniforms u = {};
+    populateBatchUniform(u, args, transform, /*identityMvp=*/false);
+    const auto* uBytes = reinterpret_cast<const uint8_t*>(&u);
+    if (slot.lastUniform.size() != sizeof(Uniforms) ||
+        std::memcmp(slot.lastUniform.data(), uBytes, sizeof(Uniforms)) != 0) {
+      device->queue().writeBuffer(slot.buffer, slot.uniform.offset, &u, sizeof(Uniforms));
+      device->countBufferWrite(sizeof(Uniforms));
+      slot.lastUniform.assign(uBytes, uBytes + sizeof(Uniforms));
+    }
   }
 
   InstanceRecord record = {};

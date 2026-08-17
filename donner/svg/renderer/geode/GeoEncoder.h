@@ -199,6 +199,17 @@ public:
    * renderer's final target. Pass null to disable observation. The default
    * path stores one pointer and one branch per actual Slug submission.
    */
+  /**
+   * Record one scene-batch instance's geometry into the debug-overlay sink
+   * (no-op without a sink). Ordered batches issue a single GPU draw, so the
+   * caller reports each batched instance here in paint order, passing the
+   * instance's transform in the same packed 8-float wire format instanced
+   * draws use. The encoder transform must already be identity, matching the
+   * batch draw's uniform.
+   */
+  void recordGeometryDebugInstance(const EncodedPath& encoded,
+                                   std::span<const float> instanceTransforms);
+
   void setGeometryDebugSink(GeometryDebugSink* sink,
                             const Transform2d& rootFromTarget = Transform2d());
 
