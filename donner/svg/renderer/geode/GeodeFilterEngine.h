@@ -14,6 +14,7 @@
 /// through (the input texture is forwarded unchanged) with a one-shot
 /// warning.
 
+#include <memory>
 #include <webgpu/webgpu.hpp>
 
 #include "donner/base/Box.h"
@@ -48,6 +49,9 @@ namespace donner::geode {
 
 class GeodeDevice;
 struct FilterResourceArena;
+/// Per-frame uniform scratch and pass bind-group cache state. Defined in
+/// GeodeFilterEngine.cc; the engine owns one instance across frames.
+struct FilterResourceCache;
 
 /**
  * Renderer-owned allocation boundary for filter textures.
@@ -139,13 +143,21 @@ public:
 
   /**
    * Begin a new frame for this engine: reset the frame-scoped chunk pass
-   * counter, so the 64-pass command-buffer bound covers every filter graph
-   * recorded into the frame's shared encoder, not just one execute() call.
-   * The renderer calls this once per frame from its own beginFrame; the
-   * device-shared engine relies on the existing one-frame-per-device
-   * serialization contract.
+   * counter (so the 64-pass command-buffer bound covers every filter graph
+   * recorded into the frame's shared encoder, not just one execute() call)
+   * and reset the per-frame uniform scratch cursor.
+   *
+   * The renderer calls this once per frame from its own beginFrame, BEFORE
+   * the filter texture pool runs its stale-bucket eviction, and before any
+   * filter pass of the frame records. Uniform slots written after this call
+   * reuse stable (buffer, offset) pairs across frames. The cursor itself is
+   * mutex-guarded, but callers must still serialize one frame per device at
+   * a time: two sibling renderers drawing concurrently on the same device
+   * would alias uniform slots and rewind the cursor under recorded passes
+   * (the renderer's architecture already serializes the render worker per
+   * device).
    */
-  void beginFrame() { framePassesInCommandBuffer_ = 0; }
+  void beginFrame();
 
 private:
   /// Two-pass separable Gaussian blur via compute shader.
@@ -155,7 +167,8 @@ private:
   /// @param edgeMode Edge handling mode (0=None, 1=Duplicate, 2=Wrap).
   /// @return The blurred texture.
   wgpu::Texture applyGaussianBlur(FilterResourceArena& arena, const wgpu::Texture& input,
-                                  double stdDeviationX, double stdDeviationY, uint32_t edgeMode);
+                                  double stdDeviationX, double stdDeviationY, uint32_t edgeMode,
+                                  const Box2d* outputClip = nullptr);
 
   /// Run a single blur pass (horizontal or vertical).
   /// @param input Source texture for this pass.
@@ -165,8 +178,10 @@ private:
   /// @param axis 0 = horizontal, 1 = vertical.
   /// @param edgeMode Edge handling mode.
   /// @return Output texture for this pass.
-  wgpu::Texture runBlurPass(FilterResourceArena& arena, const wgpu::Texture& input, uint32_t width,
-                            uint32_t height, float stdDeviation, uint32_t axis, uint32_t edgeMode);
+  wgpu::Texture runBlurPass(FilterResourceArena& arena, const wgpu::Texture& input,
+                            const wgpu::Texture& output, uint32_t width, uint32_t height,
+                            float stdDeviation, uint32_t axis, uint32_t edgeMode,
+                            const Box2d* clip = nullptr);
 
   /// One pass of a 3-pass box blur (used to approximate a Gaussian for sigma
   /// >= 2.0, matching tiny-skia's behaviour).
@@ -179,8 +194,9 @@ private:
   /// @param edgeMode Edge handling mode.
   /// @return Output texture for this pass.
   wgpu::Texture runBoxBlurPass(FilterResourceArena& arena, const wgpu::Texture& input,
-                               uint32_t width, uint32_t height, int32_t boxLeft, int32_t boxRight,
-                               uint32_t axis, uint32_t edgeMode);
+                               const wgpu::Texture& output, uint32_t width, uint32_t height,
+                               int32_t boxLeft, int32_t boxRight, uint32_t axis,
+                               uint32_t edgeMode, const Box2d* clip = nullptr);
 
   /// Shift pixels by (dx, dy) via compute shader.
   /// @param input The input texture.
@@ -474,6 +490,12 @@ private:
   /// beginFrame(); read and advanced by each execute() call's arena to
   /// bound command-buffer size (see FilterResourceArena).
   size_t framePassesInCommandBuffer_ = 0;
+
+  /// Per-frame uniform scratch buffer and bump-allocated slot cursor (see
+  /// FilterResourceCache). Pass bind groups are still created per pass:
+  /// the pooled textures a pass binds rotate across frames, so their
+  /// identities are not stable cache keys.
+  std::unique_ptr<FilterResourceCache> resourceCache_;
 };
 
 }  // namespace donner::geode

@@ -147,6 +147,11 @@ WGSL_GROUP_RE = re.compile(r"@group\((\d+)\)")
 WGSL_BINDING_INDEX_RE = re.compile(r"@binding\((\d+)\)")
 WGSL_BUILTIN_RE = re.compile(r"@builtin\(([A-Za-z_][A-Za-z0-9_]*)\)")
 WGSL_STRUCT_RE = re.compile(r"\bstruct\s+([A-Za-z_][A-Za-z0-9_]*)")
+# WGSL has no string literals, so comments can be stripped with a plain regex.
+# Stripping keeps the inventory semantic: without it, prose in a comment (for
+# example "the struct size matches" or a bare "round") registers as structs
+# and function usage, and editing a comment dirties the manifest.
+WGSL_COMMENT_RE = re.compile(r"//[^\n]*|/\*.*?\*/", re.DOTALL)
 # Inline WGSL raw strings, with or without an `identifier =` assignment prefix;
 # unassigned literals (e.g. passed directly as an argument) get an index-based
 # manifest key.
@@ -270,6 +275,7 @@ def scan_wgpu_tokens(text: str) -> dict[str, object]:
 
 def scan_wgsl(text: str) -> dict[str, object]:
     """Extracts entry points, bindings, and language features from WGSL source."""
+    text = WGSL_COMMENT_RE.sub(" ", text)
     entry_points = []
     for attributes, name in WGSL_ENTRY_RE.findall(text):
         stage_match = WGSL_ENTRY_STAGE_RE.search(attributes)
