@@ -201,18 +201,27 @@ private:
  * A path to draw, along with its fill rule and the entity it came from.
  *
  * This is a borrowed view, not an owner: `path` points at geometry the caller keeps alive.
- * Draw calls take it by const reference and must not retain it past the call unless the
- * backend has separately established that the pointee outlives the retention (see
- * `RendererGeode`'s deferred fill batch, which only retains geometry owned by a
- * `ComputedPathComponent`).
+ * Draw calls take it by const reference and must not retain it past the call, unless the
+ * backend has separately established that the pointee stays valid and stays the same
+ * geometry for as long as it is retained.
+ *
+ * When the geometry lives on a component, "stays valid" is stricter than it looks. Component
+ * storage is paged, so inserting other components never moves an existing one, but ERASING
+ * one is swap-and-pop: the last element is moved into the erased slot. A pointer into a
+ * component that is erased while borrowed therefore does not dangle into freed memory, it
+ * silently starts naming a different entity's geometry. That renders the wrong shape with no
+ * crash, and neither ASAN nor a sanitizer build will flag it. The precondition for any borrow
+ * held across statements is therefore: no component of that type is erased between the borrow
+ * and its last use. Draw traversal satisfies this because every removal site runs outside it.
  *
  * Passing a borrowed path instead of a copy is what keeps a steady-state frame free of
  * per-drawable path allocations: the driver hands every backend a pointer straight at the
  * entity's resolved geometry.
  */
 struct PathShape {
-  /// Geometry to draw. Non-owning: the pointee must outlive the draw call. Null is treated
-  /// as an empty path so a default-constructed `PathShape` draws nothing.
+  /// Geometry to draw. Non-owning: the pointee must outlive the draw call, and must not be
+  /// erased from its storage while borrowed (see the note above this struct). Null is
+  /// treated as an empty path so a default-constructed `PathShape` draws nothing.
   const Path* path = nullptr;
   FillRule fillRule = FillRule::NonZero;
   /// Source entity this path was derived from. Set by the driver at the `drawPath` call
@@ -222,8 +231,10 @@ struct PathShape {
   /// it null and backends fall back to the un-cached path.
   EntityHandle sourceEntity;
 
-  /// Geometry to draw, with a null `path` reading as the empty path.
-  [[nodiscard]] const Path& pathOrEmpty() const UTILS_LIFETIME_BOUND {
+  /// Geometry to draw, with a null `path` reading as the empty path. The returned reference
+  /// is not bound to this `PathShape`: it names either the pointee or a shared empty path
+  /// with static storage, so it stays valid after the view itself goes away.
+  [[nodiscard]] const Path& pathOrEmpty() const {
     static const Path kEmpty;
     return path != nullptr ? *path : kEmpty;
   }

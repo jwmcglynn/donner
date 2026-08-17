@@ -15,6 +15,7 @@
 #include "donner/base/ParseDiagnostic.h"
 #include "donner/base/ParseWarningSink.h"
 #include "donner/base/RelativeLengthMetrics.h"
+#include "donner/base/Utils.h"
 #include "donner/base/xml/components/TreeComponent.h"
 #include "donner/svg/components/AttachedIdLookup.h"
 #include "donner/svg/components/ComputedClipPathsComponent.h"
@@ -369,9 +370,21 @@ void resolvePerSpanStyles(Registry& registry, components::ComputedTextComponent&
 /// Build the borrowed path view handed to `RendererInterface::drawPath`.
 ///
 /// `shape.path` points straight at `path.spline`, so this costs no allocation no matter how
-/// large the geometry is. The returned view is only valid while \p path is: every caller
-/// uses it within the draw call that produced it, and the component lives on the registry
-/// for the whole frame.
+/// large the geometry is.
+///
+/// The borrow is valid only while \p path keeps its current address AND keeps naming this
+/// entity's geometry. Both hold during traversal, but for different reasons, and the second
+/// is the subtle one. Component storage is paged, so emplacing more `ComputedPathComponent`s
+/// never relocates the existing ones. ERASING one is swap-and-pop: the storage moves its last
+/// element into the freed slot. So an erase during traversal would leave every outstanding
+/// borrow pointing at valid memory that now holds a DIFFERENT entity's spline. The frame
+/// would render the wrong shape, with no crash and nothing for ASAN to catch. The invariant
+/// we rely on is therefore "no `ComputedPathComponent` is erased between the borrow and its
+/// last use", and it holds because every site that removes one runs outside draw traversal:
+/// DOM attribute mutation on the shape elements, shape recomputation in `ShapeSystem`, and
+/// animation-override application in `RenderingContext`. Note that `emplace_or_replace`
+/// during recomputation is fine on its own - it rewrites the component in place - so the
+/// hazard is specifically erasure, not update.
 PathShape toPathShape(EntityHandle sourceEntity,
                       const components::ComputedPathComponent& path UTILS_LIFETIME_BOUND,
                       const components::ComputedStyleComponent& style) {

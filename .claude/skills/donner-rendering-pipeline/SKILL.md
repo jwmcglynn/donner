@@ -137,7 +137,9 @@ apply as-is.
 
 ## 4. RendererInterface contract cheat sheet
 
-Full doc comment: `donner/svg/renderer/RendererInterface.h` (~line 235). Verified rules:
+Full doc comment: the `class RendererInterface` declaration in
+`donner/svg/renderer/RendererInterface.h` (~line 384; grep the class name rather than trusting
+the number). Verified rules:
 
 - Frame lifecycle: `draw()` → `beginFrame(viewport)` → drawing calls → `endFrame()`.
 - `pushTransform`/`popTransform`, `pushClip`/`popClip`, `pushIsolatedLayer`/`popIsolatedLayer`
@@ -160,6 +162,16 @@ Full doc comment: `donner/svg/renderer/RendererInterface.h` (~line 235). Verifie
   regression, not a simplification. Anything that keeps geometry past the call owns its own copy
   instead: `RenderSnapshot`'s `DrawPathCommand`, and `ResolvedClip::clipPaths`, which use the
   separate owning `ClipPathShape`.
+- The real precondition on that borrow is **no `ComputedPathComponent` is ERASED between the
+  borrow and its last use**, which is stronger than "the pointer is not dangling". Component
+  storage is paged, so emplacing components never relocates existing ones, but erase is
+  swap-and-pop: the storage's last element moves into the freed slot, and every outstanding
+  pointer into that slot silently starts naming a DIFFERENT entity's geometry. The frame then
+  renders the wrong shape with no crash, and neither ASAN nor a sanitizer lane will catch it.
+  Today every removal site (DOM attribute mutation on shape elements, `ShapeSystem`
+  recomputation, `RenderingContext` animation-override application) runs outside draw
+  traversal. If you ever add an erase inside traversal, or retain a borrow across a phase
+  boundary, that invariant is what you broke.
 - `RenderingInstanceComponent::worldFromEntityTransform` maps entity-local to canvas coordinates;
   the driver composes it with its surface transform. Every `Transform2d` you add must be named
   `destFromSource` (project-wide hard rule — direction encoded in the name, not a comment).

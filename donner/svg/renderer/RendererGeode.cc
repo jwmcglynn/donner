@@ -1927,11 +1927,20 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
     FillRule rule = FillRule::NonZero;
     const geode::EncodedPath* encoded = nullptr;
     /// Borrowed source geometry, read only by the size-1 flush when it falls back to the
-    /// arena `fillPath`. A batch is only started for a draw with a non-null `sourceEntity`,
-    /// and for those the driver points `PathShape::path` at the entity's
-    /// `ComputedPathComponent::spline` - registry-owned storage that outlives the flush.
-    /// Draws whose geometry lives on the caller's stack (`drawRect`, `drawEllipse`, overlay
-    /// chrome) have no source entity and never reach here.
+    /// arena `fillPath`. This is the one place a `PathShape`'s pointer outlives the
+    /// `drawPath` call that delivered it, so it carries the strictest precondition in this
+    /// file.
+    ///
+    /// A batch is only started for a draw with a non-null `sourceEntity`, and for those the
+    /// driver points `PathShape::path` at the entity's `ComputedPathComponent::spline`. That
+    /// address is stable while the component exists (component storage is paged, so emplacing
+    /// other components never relocates it), but erasing that component would swap the
+    /// storage's last element into the slot and silently repoint us at another entity's
+    /// geometry - wrong pixels, no crash, invisible to ASAN. What makes the retention safe is
+    /// that nothing erases a `ComputedPathComponent` between the borrow and the flush: every
+    /// removal site runs outside draw traversal, and a flush always happens within the frame
+    /// that started the batch. Draws whose geometry lives on the caller's stack (`drawRect`,
+    /// `drawEllipse`, overlay chrome) have no source entity and never reach here.
     const Path* path = nullptr;
     /// `deviceFromLocalTransform` captured at each `drawPath`. On flush, the
     /// outer encoder transform is set to identity and these are
@@ -3243,6 +3252,11 @@ void RendererGeode::beginFrame(const RenderViewport& viewport) {
   // `<use>`-batch detection: drop the previous-draw source-entity memo so
   // cross-frame draws don't show up as "same-source runs".
   impl_->lastDrawSourceEntity = entt::null;
+
+  // Drop any batch the previous frame left pending. `endFrame` normally flushes it, but an
+  // early-out that skips the flush must not carry a borrowed `ComputedPathComponent` pointer
+  // into a frame that may no longer have that component.
+  impl_->pendingBatch.reset();
 
   // Reset counters regardless of device state.
   impl_->counters.reset();

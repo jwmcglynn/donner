@@ -7,6 +7,7 @@
 #include <array>
 #include <cmath>
 #include <memory>
+#include <utility>
 #include <vector>
 
 #include "donner/base/xml/components/TreeComponent.h"
@@ -134,18 +135,22 @@ TEST_F(RendererDriverTest, BeginsAndEndsFrameAroundTraversal) {
 
 /// `PathShape` borrows the geometry it draws. Copying it instead would allocate twice per
 /// drawable per frame, which is pure waste on a steady frame where nothing changed, so pin
-/// the pointer identity: every path handed to the backend must be the entity's own resolved
-/// spline, not a copy of it.
+/// the pointer identity: each drawn path must be the spline of the entity that same
+/// `PathShape` names in `sourceEntity`.
+///
+/// Checking correspondence rather than "is one of the live splines" matters, because the
+/// weaker check would still pass if the driver handed every draw the same wrong (but live)
+/// component. That is exactly the failure mode an erase-during-traversal would produce.
 TEST_F(RendererDriverTest, DrawPathBorrowsTheEntitySplineInsteadOfCopyingIt) {
   SVGDocument document = makeDocument(R"svg(
     <rect width="8" height="6" fill="red" />
     <circle cx="4" cy="4" r="2" fill="blue" />
   )svg");
 
-  std::vector<const Path*> drawnPaths;
+  std::vector<std::pair<Entity, const Path*>> drawnPaths;
   EXPECT_CALL(renderer, drawPath(_, _))
       .WillRepeatedly([&drawnPaths](const PathShape& path, const StrokeParams&) {
-        drawnPaths.push_back(path.path);
+        drawnPaths.emplace_back(path.sourceEntity.entity(), path.path);
       });
 
   driver.draw(document);
@@ -153,15 +158,18 @@ TEST_F(RendererDriverTest, DrawPathBorrowsTheEntitySplineInsteadOfCopyingIt) {
   ASSERT_FALSE(drawnPaths.empty());
 
   Registry& registry = document.registry();
-  std::vector<const Path*> resolvedSplines;
-  for (const Entity entity : registry.view<components::ComputedPathComponent>()) {
-    resolvedSplines.push_back(&registry.get<components::ComputedPathComponent>(entity).spline);
-  }
-
-  for (const Path* drawn : drawnPaths) {
-    EXPECT_THAT(resolvedSplines, testing::Contains(drawn))
-        << "drawPath received a path that is not an entity's ComputedPathComponent::spline, "
-           "which means the driver copied the geometry";
+  for (const auto& [sourceEntity, drawn] : drawnPaths) {
+    // Compared with `!=` rather than ASSERT_NE: gtest's comparison helper would instantiate
+    // its printer over `entt::null_t`, which does not survive template instantiation here.
+    ASSERT_TRUE(sourceEntity != entt::null)
+        << "the driver should always name the entity a shape draw came from";
+    const auto* computedPath = registry.try_get<components::ComputedPathComponent>(sourceEntity);
+    ASSERT_NE(computedPath, nullptr)
+        << "sourceEntity should still own the ComputedPathComponent the draw was built from";
+    EXPECT_EQ(drawn, &computedPath->spline)
+        << "drawPath must borrow the source entity's own spline; a different address means "
+           "the driver copied the geometry, and a different entity's address means the "
+           "borrow was repointed";
   }
 }
 
