@@ -1,5 +1,6 @@
 #include "donner/svg/parser/AttributeParser.h"
 
+#include <array>
 #include <cctype>
 #include <entt/entity/fwd.hpp>  // entt::type_list, entt::type_list_element
 #include <limits>
@@ -2456,33 +2457,69 @@ std::optional<ParseDiagnostic> ParseAttribute<SVGTextPathElement>(SVGParserConte
   return std::nullopt;
 }
 
-template <size_t I = 0, typename... Types>
-std::optional<ParseDiagnostic> ParseAttributesForElement(SVGParserContext& context,
-                                                         SVGElement& element,
-                                                         const XMLQualifiedNameRef& name,
-                                                         std::string_view value,
-                                                         entt::type_list<Types...>) {
-  if constexpr (I != sizeof...(Types)) {
-    using ElementType = typename std::tuple_element<I, std::tuple<Types...>>::type;
+/// Signature of the per-element-type attribute handler stored in \ref kParseAttributeTable.
+using ParseAttributeFn = std::optional<ParseDiagnostic> (*)(SVGParserContext&, SVGElement&,
+                                                            const XMLQualifiedNameRef&,
+                                                            std::string_view);
 
-    if (element.type() == ElementType::Type) {
-      ElementType elementDerived = element.cast<ElementType>();
-      return ParseAttribute(context, elementDerived, name, value);
-    }
-
-    return ParseAttributesForElement<I + 1>(context, element, name, value,
-                                            entt::type_list<Types...>());
-  } else {
-    return ParseAttribute(context, element, name, value);
-  }
+/// Downcasts to \p ElementT and runs that type's attribute handler.
+template <typename ElementT>
+std::optional<ParseDiagnostic> ParseAttributeAs(SVGParserContext& context, SVGElement& element,
+                                                const XMLQualifiedNameRef& name,
+                                                std::string_view value) {
+  ElementT elementDerived = element.cast<ElementT>();
+  return ParseAttribute(context, elementDerived, name, value);
 }
+
+/// Runs the handler shared by every element type, used when no element type claims the runtime
+/// type (for example \ref ElementType::Unknown).
+std::optional<ParseDiagnostic> ParseAttributeGeneric(SVGParserContext& context, SVGElement& element,
+                                                     const XMLQualifiedNameRef& name,
+                                                     std::string_view value) {
+  return ParseAttribute(context, element, name, value);
+}
+
+/// Number of distinct \ref ElementType values; \c Use is the last enumerator.
+inline constexpr size_t kElementTypeCount = static_cast<size_t>(ElementType::Use) + 1;
+
+/**
+ * Build the \ref ElementType-indexed table of attribute handlers.
+ *
+ * Entries are filled in type-list order and an already-occupied slot is left alone, so a type
+ * appearing earlier in \ref AllSVGElements wins - the same element a linear "first type whose
+ * `Type` matches" scan would have selected. Types are left null when nothing claims them, and the
+ * caller falls back to the shared handler for those.
+ */
+template <typename... Types>
+constexpr std::array<ParseAttributeFn, kElementTypeCount> BuildParseAttributeTable(
+    entt::type_list<Types...>) {
+  std::array<ParseAttributeFn, kElementTypeCount> table = {};
+  (
+      [&table]<typename ElementT>() {
+        ParseAttributeFn& slot = table[static_cast<size_t>(ElementT::Type)];
+        if (slot == nullptr) {
+          slot = &ParseAttributeAs<ElementT>;
+        }
+      }.template operator()<Types>(),
+      ...);
+  return table;
+}
+
+/// Attribute handler for each element type, replacing a linear walk of the element type list that
+/// re-read the element's runtime type at every step.
+constexpr std::array<ParseAttributeFn, kElementTypeCount> kParseAttributeTable =
+    BuildParseAttributeTable(AllSVGElements());
 
 }  // namespace
 
 std::optional<ParseDiagnostic> AttributeParser::ParseAndSetAttribute(
     SVGParserContext& context, SVGElement& element, const XMLQualifiedNameRef& name,
     std::string_view value) noexcept {
-  return ParseAttributesForElement(context, element, name, value, AllSVGElements());
+  const size_t typeIndex = static_cast<size_t>(element.type());
+  const ParseAttributeFn parseFn =
+      typeIndex < kParseAttributeTable.size() ? kParseAttributeTable[typeIndex] : nullptr;
+  return parseFn != nullptr ? parseFn(context, element, name, value)
+                            : ParseAttributeGeneric(context, element, name, value);
 }
 
 std::optional<ParseDiagnostic> AttributeParser::ApplyParsedAttribute(

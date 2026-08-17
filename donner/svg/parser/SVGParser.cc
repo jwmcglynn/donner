@@ -1,10 +1,13 @@
 #include "donner/svg/parser/SVGParser.h"
 
+#include <array>
 #include <ostream>
 #include <sstream>
 #include <string_view>
 #include <tuple>
+#include <utility>
 
+#include "donner/base/CompileTimeMap.h"
 #include "donner/base/ParseWarningSink.h"
 #include "donner/base/RcString.h"
 #include "donner/base/encoding/Decompress.h"
@@ -321,6 +324,10 @@ constexpr bool IsExperimental() {
   }
 }
 
+/// Signature of the per-tag element factory used to create and populate an element.
+using CreateElementFn = ParseResult<SVGElement> (*)(SVGParserContext&, const XMLNode&,
+                                                    const XMLQualifiedNameRef&);
+
 }  // namespace
 
 class SVGParserImpl {
@@ -329,6 +336,44 @@ private:
   std::optional<SVGDocument> document_;
   SVGDocumentHandle documentState_;
   SVGDocument::Settings settings_;
+
+  /// Creates an element of type \p ElementT on \p node and parses its attributes. Experimental
+  /// types fall back to an unknown element unless experimental support is enabled, matching the
+  /// behavior of the tag scan the factory table replaces. Element constructors are only reachable
+  /// from this class, which is why the factories live here.
+  template <typename ElementT>
+  static ParseResult<SVGElement> createElementAndParseAttributes(
+      SVGParserContext& context, const XMLNode& node, const XMLQualifiedNameRef& tagName) {
+    if constexpr (IsExperimental<ElementT>()) {
+      if (!context.options().enableExperimental) {
+        auto element = SVGUnknownElement::CreateOn(node.entityHandle(), tagName);
+        return ParseAttributes(context, element, node);
+      }
+    }
+
+    auto element = ElementT::CreateOn(node.entityHandle());
+    return ParseAttributes(context, element, node);
+  }
+
+  /// Builds the tag-name to factory entries for a perfect-hash lookup over the known element types.
+  template <typename... Types>
+  static constexpr auto makeElementFactoryEntries(entt::type_list<Types...>) {
+    return std::to_array<std::pair<std::string_view, CreateElementFn>>(
+        {{Types::Tag, &createElementAndParseAttributes<Types>}...});
+  }
+
+  /**
+   * Look up the element factory for an SVG tag name.
+   *
+   * Replaces a linear scan that compared the tag against every element type's tag in turn. Lookup
+   * is exact and case-sensitive, matching the `tagName.name == ElementT::Tag` comparison it
+   * replaces. The lookup table's constructor rejects duplicate keys at compile time, so two
+   * element types can never silently claim the same tag.
+   *
+   * @param tagName Tag name to look up.
+   * @return Factory for the matching element type, or nullptr when no element type claims the tag.
+   */
+  static const CreateElementFn* lookupElementFactory(std::string_view tagName);
 
 public:
   explicit SVGParserImpl(SVGParserContext& context, std::shared_ptr<Registry> registry,
@@ -351,35 +396,14 @@ public:
    */
   ParseResult<SVGElement> createElement(const XMLQualifiedNameRef& tagName, const XMLNode& node,
                                         bool isSvgNamespace) {
-    return createElement(tagName, node, isSvgNamespace, AllSVGElements());
-  }
-
-  template <size_t I = 0, typename... Types>
-  ParseResult<SVGElement> createElement(const XMLQualifiedNameRef& tagName, const XMLNode& node,
-                                        bool isSvgNamespace, entt::type_list<Types...>) {
-    if constexpr (I != sizeof...(Types)) {
-      using ElementT = std::tuple_element<I, std::tuple<Types...>>::type;
-
-      if (isSvgNamespace && tagName.name == ElementT::Tag) {
-        if constexpr (IsExperimental<ElementT>()) {
-          if (context_.options().enableExperimental) {
-            auto element = ElementT::CreateOn(node.entityHandle());
-            return ParseAttributes(context_, element, node);
-          } else {
-            auto element = SVGUnknownElement::CreateOn(node.entityHandle(), tagName);
-            return ParseAttributes(context_, element, node);
-          }
-        } else {
-          auto element = ElementT::CreateOn(node.entityHandle());
-          return ParseAttributes(context_, element, node);
-        }
+    if (isSvgNamespace) {
+      if (const CreateElementFn* createFn = lookupElementFactory(std::string_view(tagName.name))) {
+        return (*createFn)(context_, node, tagName);
       }
-
-      return createElement<I + 1>(tagName, node, isSvgNamespace, entt::type_list<Types...>());
-    } else {
-      auto element = SVGUnknownElement::CreateOn(node.entityHandle(), tagName);
-      return ParseAttributes(context_, element, node);
     }
+
+    auto element = SVGUnknownElement::CreateOn(node.entityHandle(), tagName);
+    return ParseAttributes(context_, element, node);
   }
 
   std::optional<ParseDiagnostic> walkChildren(std::optional<SVGElement> element,
@@ -489,6 +513,14 @@ public:
     return std::nullopt;
   }
 };
+
+const CreateElementFn* SVGParserImpl::lookupElementFactory(std::string_view tagName) {
+  // Defined out of line so the table is built where SVGParserImpl is a complete type; the factories
+  // it stores are private members of the class.
+  static DONNER_CONSTEXPR_MAP auto kElementFactories =
+      makeCompileTimeMap(makeElementFactoryEntries(AllSVGElements()));
+  return kElementFactories.find(tagName);
+}
 
 ParseResult<SVGDocument> SVGParser::ParseSVG(std::string_view source, ParseWarningSink& warningSink,
                                              SVGParser::Options options,
