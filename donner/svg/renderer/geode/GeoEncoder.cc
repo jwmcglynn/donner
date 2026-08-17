@@ -347,12 +347,12 @@ struct GeoEncoder::Impl : public GeodeTextureEncoder::UniformScratch {
     uint64_t offset;
     uint64_t size;
   };
-  Allocation allocInArena(Arena& arena, const void* data, uint64_t size, uint64_t alignment) {
-    uint64_t alignedOffset = (arena.offset + alignment - 1) & ~(alignment - 1);
-    if (alignedOffset + size > arena.capacity) {
-      // Retire the current buffer (if any) so already-recorded commands
-      // can still reference it through encoder submission time, then
-      // allocate a new, larger buffer.
+  /// Grow `arena` so at least `size` bytes fit from offset 0: retire the
+  /// current buffer (already-recorded commands keep referencing it through
+  /// encoder submission) and install a pooled or fresh larger one. Returns
+  /// with `arena.offset == 0`.
+  void growArena(Arena& arena, uint64_t size) {
+    {
       if (arena.buffer) {
         arena.retired.push_back(std::move(arena.buffer));
       }
@@ -381,6 +381,48 @@ struct GeoEncoder::Impl : public GeodeTextureEncoder::UniformScratch {
         arena.capacity = newCap;
       }
       arena.offset = 0;
+    }
+  }
+
+  /// Ensure the arena can serve `totalBytes` of upcoming allocations from
+  /// its CURRENT buffer without growing in between. Callers that bind one
+  /// combined range across several consecutive allocations (the grid-class
+  /// span) use this so the range can never straddle two buffers: a growth
+  /// between the allocations would leave earlier ones in the retired
+  /// buffer and the combined offsets meaningless.
+  void reserveInArena(Arena& arena, uint64_t totalBytes, uint64_t alignment) {
+    const uint64_t alignedOffset = (arena.offset + alignment - 1) & ~(alignment - 1);
+    if (alignedOffset + totalBytes > arena.capacity) {
+      growArena(arena, totalBytes);
+    }
+  }
+
+  /// Reserve the combined footprint of the four grid-class allocations
+  /// (hGrid, vGrid, hRefs, vRefs) so they land in ONE arena buffer: they
+  /// are bound as one combined range, and an arena growth between them
+  /// would strand the earlier allocations in the retired buffer and make
+  /// the combined offsets meaningless (observed as a bind-group range
+  /// overflow on encodes large enough to grow the grid arena
+  /// mid-sequence). Mirrors allocStorageOrDummy's sizing: empty classes
+  /// bind a 4-byte dummy, sizes round up to 4, each allocation starts
+  /// storage-aligned.
+  void reserveGridClassSpan(const EncodedPath& encoded) {
+    const uint64_t gridClassSizes[4] = {
+        encoded.hBandGrid.size() * sizeof(uint32_t), encoded.vBandGrid.size() * sizeof(uint32_t),
+        encoded.curveIndices.size() * sizeof(uint32_t),
+        encoded.vCurveIndices.size() * sizeof(uint32_t)};
+    uint64_t combined = 0;
+    for (uint64_t bytes : gridClassSizes) {
+      const uint64_t slot = bytes == 0 ? uint64_t{4} : roundUp4(bytes);
+      combined = ((combined + kStorageOffsetAlignment - 1) & ~(kStorageOffsetAlignment - 1)) + slot;
+    }
+    reserveInArena(gridArena, combined, kStorageOffsetAlignment);
+  }
+
+  Allocation allocInArena(Arena& arena, const void* data, uint64_t size, uint64_t alignment) {
+    uint64_t alignedOffset = (arena.offset + alignment - 1) & ~(alignment - 1);
+    if (alignedOffset + size > arena.capacity) {
+      growArena(arena, size);
       alignedOffset = 0;
     }
     device->queue().writeBuffer(arena.buffer.get(), alignedOffset, data, size);
@@ -516,6 +558,7 @@ struct GeoEncoder::Impl : public GeodeTextureEncoder::UniformScratch {
                                                  encoded.vBands.size() * sizeof(EncodedPath::Band));
     const auto vCurvesAlloc = allocStorageOrDummy(vCurveArena, encoded.vCurves.data(),
                                                   encoded.vCurves.size() * 6u * sizeof(float));
+    reserveGridClassSpan(encoded);
     const auto hGridAlloc = allocStorageOrDummy(gridArena, encoded.hBandGrid.data(),
                                                 encoded.hBandGrid.size() * sizeof(uint32_t));
     const auto vGridAlloc = allocStorageOrDummy(gridArena, encoded.vBandGrid.data(),
@@ -1148,6 +1191,7 @@ void GeoEncoder::fillPathIntoMask(const Path& path, FillRule rule,
       impl_->vBandArena, encoded.vBands.data(), encoded.vBands.size() * sizeof(EncodedPath::Band));
   const auto vCurvesAlloc = impl_->allocStorageOrDummy(impl_->vCurveArena, encoded.vCurves.data(),
                                                        encoded.vCurves.size() * 6u * sizeof(float));
+  impl_->reserveGridClassSpan(encoded);
   const auto hGridAlloc = impl_->allocStorageOrDummy(impl_->gridArena, encoded.hBandGrid.data(),
                                                      encoded.hBandGrid.size() * sizeof(uint32_t));
   const auto vGridAlloc = impl_->allocStorageOrDummy(impl_->gridArena, encoded.vBandGrid.data(),
@@ -2027,7 +2071,7 @@ void GeoEncoder::submitFillDraw(const FillDrawArgs& args,
   const wgpu::Device& dev = impl_->device->device();
 
   // 2. Allocate and upload GPU buffers via the per-encoder arenas. The analytic dual-ray fill
-  // (0041 §8) generates one convex bounding fan from vertex_index and binds two band/curve
+  // generates one convex bounding fan from vertex_index and binds two band/curve
   // SSBO sets (horizontal + vertical) plus the dense H/V band grids.
   const auto bandsAlloc = impl_->allocStorageOrDummy(
       impl_->bandArena, encoded.bands.data(), encoded.bands.size() * sizeof(EncodedPath::Band));
@@ -2037,6 +2081,7 @@ void GeoEncoder::submitFillDraw(const FillDrawArgs& args,
       impl_->vBandArena, encoded.vBands.data(), encoded.vBands.size() * sizeof(EncodedPath::Band));
   const auto vCurvesAlloc = impl_->allocStorageOrDummy(impl_->vCurveArena, encoded.vCurves.data(),
                                                        encoded.vCurves.size() * 6u * sizeof(float));
+  impl_->reserveGridClassSpan(encoded);
   const auto hGridAlloc = impl_->allocStorageOrDummy(impl_->gridArena, encoded.hBandGrid.data(),
                                                      encoded.hBandGrid.size() * sizeof(uint32_t));
   const auto vGridAlloc = impl_->allocStorageOrDummy(impl_->gridArena, encoded.vBandGrid.data(),
