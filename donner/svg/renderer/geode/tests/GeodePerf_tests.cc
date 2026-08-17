@@ -740,6 +740,39 @@ TEST_F(GeodePerfTest, GaussianBlur_NoDirtyPath_ZeroTextures) {
          "frame submits.";
 }
 
+/// One rect with a linear-gradient stroke. The stroked outline is cached
+/// by the stroke-outline cache, so an unchanged frame should re-upload zero
+/// geometry once gradient strokes are resident.
+constexpr std::string_view kGradientStrokeSvg = R"SVG(
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="red"/>
+      <stop offset="1" stop-color="blue"/>
+    </linearGradient>
+  </defs>
+  <rect x="20" y="20" width="60" height="60" fill="none"
+        stroke="url(#g)" stroke-width="6"/>
+</svg>
+)SVG";
+
+TEST_F(GeodePerfTest, GradientStroke_NoDirtyPath_ZeroWrites) {
+  auto device = sharedDevice();
+  ASSERT_TRUE(device) << "GeodeDevice::CreateHeadless failed";
+
+  const geode::GeodeCounters c = countersForSecondRender(kGradientStrokeSvg, device);
+  RecordProperty("bufferWrites", std::to_string(c.bufferWrites));
+  RecordProperty("bufferWriteBytes", std::to_string(c.bufferWriteBytes));
+  RecordProperty("bindgroupCreates", std::to_string(c.bindgroupCreates));
+  printCounters(::testing::UnitTest::GetInstance()->current_test_info()->name(), c);
+
+  EXPECT_EQ(c.pathEncodes, 0u) << "Stroke outline must come from the stroke-outline cache.";
+  EXPECT_EQ(c.bufferWriteBytes, 0u)
+      << "Resident gradient strokes must re-upload zero geometry on an unchanged frame.";
+  EXPECT_LE(c.bindgroupCreates, 1u)
+      << "The cached gradient-stroke bind group must be reused on an unchanged frame.";
+}
+
 TEST_F(GeodePerfTest, Lion_NoDirtyPath_ZeroTextures) {
   auto device = sharedDevice();
   ASSERT_TRUE(device) << "GeodeDevice::CreateHeadless failed";

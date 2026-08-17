@@ -2042,6 +2042,24 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
     return &slot;
   }
 
+  /// GPU-residence slot for `source`'s gradient-painted stroke.
+  /// See `residentGradientFillSlot`; the slot holds the cached
+  /// stroke-outline encode plus the resolved gradient uniform.
+  geode::GeodeResidentGradientSlot* residentGradientStrokeSlot(EntityHandle source) {
+    if (!source) {
+      return nullptr;
+    }
+    ensureCacheInvalidationWired(*source.registry());
+    geode::GeodeResidentGradientSlot& slot =
+        source.get_or_emplace<geode::GeodeResidentPathComponent>().gradientStrokeSlot;
+    std::shared_ptr<geode::GeodeResidentSlab> slab = residentSlab(*source.registry());
+    if (slot.slab.get() != slab.get()) {
+      slot.reset();
+    }
+    slot.slab = std::move(slab);
+    return &slot;
+  }
+
   /// GPU-residence slot for `source`'s gradient-painted fill.
   /// See `residentFillSlot`; the slot lives on the
   /// same `GeodeResidentPathComponent` and is invalidated by the same
@@ -2238,6 +2256,18 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
         // zero-area closed subpaths first (see `deCloseZeroAreaSubpaths`) so a
         // degenerate `M L Z` line strokes into a clean rectangle the analytic
         // shader covers correctly, instead of overlapping triangles.
+        // Drop the stale GPU residence FIRST, unconditionally for every
+        // exit of this miss branch: the encode is about to be replaced in
+        // place (or destroyed, in the empty-outline case below) without
+        // removing the entity's components, so the entt listener does not
+        // fire, and a resident slot keyed on the old encode storage would
+        // keep a dangling encodedKey plus a retained slab range. The
+        // GeoEncoder fingerprint guard is a second line of defense; this
+        // keeps the invariant obvious at the single mutation site.
+        if (auto* resident = source.try_get<geode::GeodeResidentPathComponent>()) {
+          resident->strokeSlot.reset();
+          resident->gradientStrokeSlot.reset();
+        }
         Path stroked =
             deCloseZeroAreaSubpaths(geometry).strokeToFill(strokeStyle, flattenTolerance);
         if (stroked.empty()) {
@@ -2258,15 +2288,6 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
             .strokedEncode = std::move(encoded),
             .strokeFillRule = fillRule,
         };
-        // The stroke encode was rebuilt in place (stroke-param change)
-        // without removing the entity's components, so the entt listener
-        // does not fire. Drop the stale GPU residence explicitly so the
-        // next draw re-uploads the new stroked geometry. The `GeoEncoder`
-        // fingerprint guard is a second line of
-        // defense; this keeps the invariant obvious at the mutation site.
-        if (auto* resident = source.try_get<geode::GeodeResidentPathComponent>()) {
-          resident->strokeSlot.reset();
-        }
       }
       result.strokedPath = &cache.strokeSlot->strokedPath;
       result.encoded = &cache.strokeSlot->strokedEncode;
@@ -4199,8 +4220,17 @@ void RendererGeode::drawPath(const PathShape& path, const StrokeParams& stroke) 
       (strokeDerived.encoded != nullptr && std::holds_alternative<PaintServer::Solid>(strokeServer))
           ? impl_->residentStrokeSlot(path.sourceEntity)
           : nullptr;
+  // Gradient residence for gradient-painted strokes: the cached
+  // stroke-outline encode lives in a gradient slot so an unchanged outline
+  // with an unchanged resolved gradient re-uploads zero geometry.
+  geode::GeodeResidentGradientSlot* residentGradientStroke =
+      (strokeDerived.encoded != nullptr &&
+       std::holds_alternative<components::PaintResolvedReference>(strokeServer))
+          ? impl_->residentGradientStrokeSlot(path.sourceEntity)
+          : nullptr;
   impl_->drawPaintedPathAgainst(path.path, strokedOutline, strokeServer, effectiveOpacity,
-                                strokeDerived.fillRule, strokeDerived.encoded, residentStroke);
+                                strokeDerived.fillRule, strokeDerived.encoded, residentStroke,
+                                residentGradientStroke);
 }
 
 void RendererGeode::drawRect(const Box2d& rect, const StrokeParams& stroke) {
