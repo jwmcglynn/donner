@@ -581,9 +581,18 @@ jobs:
               # happened. Ask bazel which affected targets are tests, so
               # test_suite expansion and rule kinds this workflow does not
               # enumerate are handled by definition rather than by a name
-              # heuristic. Fail closed: a query failure keeps the coverage run.
+              # heuristic, and subtract the tags the coverage command itself
+              # filters out (--test_tag_filters=-fuzz_target,-lint in .bazelrc),
+              # because a subset whose only tests carry those tags leaves the
+              # coverage run with the very empty test set this gate exists to
+              # keep it out of. `attr` matches its pattern against the string
+              # form of the tag LIST ("[fuzz_target, manual]"), not against
+              # each element, so the tag names are bracketed by the list
+              # punctuation rather than anchored with ^$. Fail closed: a query
+              # failure keeps the coverage run.
               test_query_file="$work_dir/affected-tests-query.txt"
-              printf 'tests(%s)\n' "$resolved_expr" > "$test_query_file"
+              printf 'tests(%s) except attr("tags", "[\[ ](fuzz_target|lint)[,\]]", tests(%s))\n' \
+                "$resolved_expr" "$resolved_expr" > "$test_query_file"
               affected_tests_file="$work_dir/affected-tests.txt"
               if ( cd "$head_dir" && bazelisk query --query_file="$test_query_file" \
                   --keep_going ) > "$affected_tests_file" 2> "$diagnostics_dir/test-query.log"; then

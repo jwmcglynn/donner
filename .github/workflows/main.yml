@@ -544,6 +544,17 @@ jobs:
           else
             echo "${{ needs.determine-targets.outputs.affected }}"
           fi)
+          # An empty selection is a defect in the target derivation, not a
+          # change with nothing to test. With no patterns, bazel falls back to
+          # its default target pattern (the working directory's package, which
+          # holds no tests here), so the step would build something nobody
+          # selected and then report that empty test set as success.
+          # Unreachable today because the deriving job widens an empty result
+          # to //..., and cheap to keep unreachable.
+          if [[ -z "${TARGETS// /}" ]]; then
+            echo "::error::Empty target selection reached the test step."
+            exit 1
+          fi
           # A change-based selection can legitimately contain zero test
           # targets (docs, tooling, a vendored subtree tested from its own
           # workspace), which `bazel test` reports as exit 4. The wrapper
@@ -951,6 +962,10 @@ jobs:
           else
             echo "${{ needs.determine-targets.outputs.affected }}"
           fi)
+          if [[ -z "${TARGETS// /}" ]]; then
+            echo "::error::Empty target selection reached the test step."
+            exit 1
+          fi
           tools/ci_bazel_test.sh "$DIAG_DIR/run_bazel_with_heartbeat.sh" "$DIAG_DIR/test/console.log" \
             bazelisk test --config=ci --config=latest_llvm --test_output=errors \
             $BAZEL_SELF_HOSTED_REMOTE_FALLBACK_FLAGS \
@@ -1065,6 +1080,10 @@ jobs:
           else
             echo "${{ needs.determine-targets.outputs.affected }}"
           fi)
+          if [[ -z "${TARGETS// /}" ]]; then
+            echo "::error::Empty target selection reached the test step."
+            exit 1
+          fi
           tools/ci_bazel_test.sh bazelisk test --config=ci --test_output=errors \
             --test_tag_filters=-manual,-perf \
             $BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS $TARGETS
@@ -1156,6 +1175,10 @@ jobs:
           else
             echo "${{ needs.determine-targets.outputs.affected }}"
           fi)
+          if [[ -z "${TARGETS// /}" ]]; then
+            echo "::error::Empty target selection reached the test step."
+            exit 1
+          fi
           tools/ci_bazel_test.sh bazelisk --nohome_rc test --config=ci --test_output=errors \
             --test_tag_filters=-manual,-perf \
             $BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS $TARGETS

@@ -17,11 +17,16 @@
 # 3x codes): every other status is passed through unchanged, so the step still
 # fails on all of them.
 #
-# An empty selection produced by BROKEN selection tooling never reaches this
-# wrapper. The job that derives the target set aborts on any tooling error, and
-# a selection that legitimately comes back empty is widened to the full target
-# set before the lanes run, so the only thing this wrapper can observe is a
-# non-empty, deliberately produced selection that happens to contain no tests.
+# An empty selection produced by FAILING selection tooling cannot reach this
+# wrapper: the job that derives the target set aborts on any tooling error, so
+# its lanes never run at all, and a selection that legitimately comes back
+# empty is widened to the full target set first. Callers reject an empty
+# pattern list themselves before invoking this script.
+#
+# What this wrapper cannot see is selection tooling that SUCCEEDS while being
+# wrong: an under-inclusive set that omits tests the change should have run
+# looks exactly like a set that genuinely has none. That residual belongs to
+# the derivation step and its own tests, not here.
 #
 # Usage:
 #   tools/ci_bazel_test.sh bazel test --config=ci //pkg:target ...
