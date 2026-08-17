@@ -1435,7 +1435,7 @@
         "sqrt",
         "textureDimensions",
         "textureLoad",
-        "textureSample",
+        "textureSampleLevel",
         "var"
       ],
       "structs": [
