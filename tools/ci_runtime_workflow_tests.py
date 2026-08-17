@@ -24,7 +24,9 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
     def setUpClass(cls):
         cls.bazelrc = _workflow_text(".bazelrc")
         cls.main = _workflow_text(".github/workflows/main.yml")
+        cls.cmake = _workflow_text(".github/workflows/cmake.yml")
         cls.coverage = _workflow_text(".github/workflows/coverage.yml")
+        cls.lint = _workflow_text(".github/workflows/lint.yml")
         cls.coverage_script = _workflow_text("tools/coverage.sh")
 
     def _job_body(self, job):
@@ -100,6 +102,23 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         self.assertIn("timeout-minutes: 15", install)
         self.assertEqual(2, install.count("Acquire::Retries=3"))
         self.assertNotIn("clang-tidy", install)
+
+    def test_cmake_generator_validation_retries_only_after_failure(self):
+        """Transient Bazel query failures get one retry without masking a persistent failure."""
+        for workflow_name, workflow in (("CMake", self.cmake), ("Lint", self.lint)):
+            with self.subTest(workflow=workflow_name):
+                self.assertEqual(
+                    2,
+                    workflow.count("run: python3 tools/cmake/gen_cmakelists.py --check"),
+                )
+                self.assertIn("- id: cmake-generator-check", workflow)
+                self.assertIn("continue-on-error: true", workflow)
+                self.assertEqual(
+                    1,
+                    workflow.count(
+                        "if: steps.cmake-generator-check.outcome == 'failure'"
+                    ),
+                )
 
     def test_heartbeat_cleanup_is_prompt_without_ps(self):
         """A finished command cannot leave the heartbeat sleeper holding the pipe."""
