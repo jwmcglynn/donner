@@ -152,6 +152,9 @@
       ],
       "wgpuCTypes": [
         "WGPUDevice",
+        "WGPUDeviceLostReason",
+        "WGPUDeviceLostReason_Destroyed",
+        "WGPUDeviceLostReason_InstanceDropped",
         "WGPUEmscriptenSurfaceSourceCanvasHTMLSelector",
         "WGPUErrorType",
         "WGPUInstanceFeatureName",
@@ -581,7 +584,6 @@
         "destroy",
         "getQueue",
         "hasFeature",
-        "onSubmittedWorkDone",
         "poll",
         "requestAdapter",
         "requestDevice",
@@ -628,7 +630,6 @@
         "WGPUInstanceDescriptor",
         "WGPUInstanceFeatureName",
         "WGPUInstanceFeatureName_TimedWaitAny",
-        "WGPUQueueWorkDoneStatus",
         "WGPUStatus_Success",
         "WGPUStringView"
       ],
@@ -650,7 +651,6 @@
         "InstanceDescriptor",
         "InstanceExtras",
         "Queue",
-        "QueueWorkDoneCallbackInfo",
         "RequestAdapterOptions",
         "Sampler",
         "SamplerDescriptor",

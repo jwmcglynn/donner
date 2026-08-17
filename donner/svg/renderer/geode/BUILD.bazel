@@ -76,6 +76,31 @@ donner_cc_library(
     visibility = ["//donner/svg/renderer:__subpackages__"],
 )
 
+# Bounded CPU-side waits on GPU progress plus the shared device-lost flag.
+# Pure chrono/functional code with no WebGPU dependency, so the timeout
+# policy is unit-testable without a GPU and builds regardless of the
+# enable_geode flag. Every native CPU-blocks-on-GPU wait in the Geode stack
+# routes through this library so the policy lives in one place.
+donner_cc_library(
+    name = "geode_gpu_wait",
+    srcs = ["GeodeGpuWait.cc"],
+    hdrs = ["GeodeGpuWait.h"],
+    visibility = [
+        "//donner/editor/gui:__pkg__",
+        "//donner/gpu:__subpackages__",
+        "//donner/svg/renderer:__subpackages__",
+    ],
+)
+
+donner_cc_test(
+    name = "geode_gpu_wait_tests",
+    srcs = ["tests/GeodeGpuWait_tests.cc"],
+    deps = [
+        ":geode_gpu_wait",
+        "//donner/base:gtest_timeout_main",
+    ],
+)
+
 # Header-only device-aware curve-flattening tolerance for stroke outlines.
 # Pure transform math with no WebGPU dependency, so it builds (and is tested)
 # regardless of the enable_geode flag.
@@ -204,6 +229,7 @@ donner_cc_library(
     ],
     deps = [
         ":geode_counters",
+        ":geode_gpu_wait",
         ":geode_shaders",
         ":geode_wgpu_util",
         "//donner/base",
@@ -219,6 +245,7 @@ donner_cc_test(
     target_compatible_with = _GEODE_ONLY,
     deps = [
         ":geode_device",
+        ":geode_gpu_wait",
         ":geode_wgpu_util",
         "//donner/base",
         "//donner/base:gtest_timeout_main",
@@ -594,6 +621,7 @@ donner_cc_test(
     deps = [
         ":geo_encoder",
         ":geode_device",
+        ":geode_gpu_wait",
         ":geode_wgpu_util",
         "//donner/base",
         "//donner/base:gtest_timeout_main",

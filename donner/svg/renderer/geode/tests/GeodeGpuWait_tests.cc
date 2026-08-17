@@ -8,12 +8,12 @@
 /// poll never returns, so the test process would hang forever instead of
 /// failing); the bounded contract is pinned here instead.
 
+#include "donner/svg/renderer/geode/GeodeGpuWait.h"
+
 #include <gtest/gtest.h>
 
 #include <chrono>
 #include <vector>
-
-#include "donner/svg/renderer/geode/GeodeGpuWait.h"
 
 namespace donner::geode {
 namespace {

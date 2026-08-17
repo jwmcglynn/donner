@@ -189,6 +189,9 @@
       ],
       "wgpuCTypes": [
         "WGPUDevice",
+        "WGPUDeviceLostReason",
+        "WGPUDeviceLostReason_Destroyed",
+        "WGPUDeviceLostReason_InstanceDropped",
         "WGPUEmscriptenSurfaceSourceCanvasHTMLSelector",
         "WGPUErrorType",
         "WGPUInstanceFeatureName",

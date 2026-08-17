@@ -31,6 +31,7 @@ donner_cc_binary(
         "//donner/svg/renderer:renderer_image_io",
         "//donner/svg/renderer/geode:geo_encoder",
         "//donner/svg/renderer/geode:geode_device",
+        "//donner/svg/renderer/geode:geode_gpu_wait",
         "//donner/svg/renderer/geode:geode_wgpu_util",
         "//third_party/webgpu-cpp:webgpu_cpp",
     ],
