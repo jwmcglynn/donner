@@ -188,16 +188,28 @@ struct CacheListenersInstalled {};
 
 void OnComputedPathChanged(Registry& registry, Entity entity) {
   // entt allows `remove` on a component the entity does not hold; it is a cheap no-op there.
-  registry.remove<TinySkiaPathCacheComponent>(entity);
+  registry.remove<components::TinySkiaPathCacheComponent>(entity);
 }
 
 void OnLoadedImageChanged(Registry& registry, Entity entity) {
-  registry.remove<TinySkiaImageCacheComponent>(entity);
+  registry.remove<components::TinySkiaImageCacheComponent>(entity);
 }
 
 /// Connects the listeners that drop a cached conversion when its source changes or goes away.
 /// Idempotent, and called before any cache entry is installed on \p registry.
-void EnsureCacheInvalidationWired(Registry& registry) {
+///
+/// \p checkedThisFrame memoizes the last registry the caller verified, so the context-store
+/// lookup runs once per frame per document instead of once per draw. The memo is reset at every
+/// frame boundary, which is what makes it safe: a registry cannot be destroyed and a new one
+/// allocated at the same address in the middle of a frame while the caller holds entity handles
+/// into it, so unlike a persistent pointer cache the memo cannot confuse two registries. The
+/// context-store sentinel remains the authority across frames.
+void EnsureCacheInvalidationWired(Registry& registry, const Registry*& checkedThisFrame) {
+  if (checkedThisFrame == &registry) {
+    return;
+  }
+
+  checkedThisFrame = &registry;
   if (registry.ctx().contains<CacheListenersInstalled>()) {
     return;
   }
@@ -212,6 +224,22 @@ void EnsureCacheInvalidationWired(Registry& registry) {
   // connections die with the registry.
 }
 
+/// Selects the cache slot that holds \p closeBehavior's conversion.
+///
+/// Written as an exhaustive switch, like the other `toTiny*` mappings in this file, rather than
+/// as a two-way ternary. A ternary silently folds any future close behavior into the `openedPath`
+/// slot, which would serve one behavior's outline for another - a wrong-pixels bug that no test
+/// of the existing two behaviors can see. Here `-Wswitch` names the missing case instead.
+std::optional<tiny_skia::Path>& cacheSlotFor(components::TinySkiaPathCacheComponent& cache,
+                                             TinyPathCloseBehavior closeBehavior) {
+  switch (closeBehavior) {
+    case TinyPathCloseBehavior::Preserve: return cache.closedPath;
+    case TinyPathCloseBehavior::EndWithLine: return cache.openedPath;
+  }
+
+  UTILS_UNREACHABLE();
+}
+
 /// Returns `shape.path` in tiny-skia form, converting it on a cache miss.
 ///
 /// When the shape carries a source entity the conversion is memoized on that entity and the
@@ -219,18 +247,20 @@ void EnsureCacheInvalidationWired(Registry& registry) {
 /// geometry changes. Without a source entity (overlay drawing, test harnesses) the conversion
 /// lands in \p scratch, which the caller must keep alive for as long as it uses the result.
 const tiny_skia::Path& ResolveTinyPath(const PathShape& shape, TinyPathCloseBehavior closeBehavior,
-                                       tiny_skia::Path& scratch) {
+                                       tiny_skia::Path& scratch, const Registry*& checkedThisFrame,
+                                       RendererTinySkiaFrameCounters& counters) {
   EntityHandle source = shape.sourceEntity;
   if (!source) {
+    ++counters.pathConversions;
     scratch = toTinyPath(shape.path, closeBehavior);
     return scratch;
   }
 
-  EnsureCacheInvalidationWired(*source.registry());
-  auto& cache = source.get_or_emplace<TinySkiaPathCacheComponent>();
-  std::optional<tiny_skia::Path>& slot =
-      closeBehavior == TinyPathCloseBehavior::Preserve ? cache.closedPath : cache.openedPath;
+  EnsureCacheInvalidationWired(*source.registry(), checkedThisFrame);
+  auto& cache = source.get_or_emplace<components::TinySkiaPathCacheComponent>();
+  std::optional<tiny_skia::Path>& slot = cacheSlotFor(cache, closeBehavior);
   if (!slot.has_value()) {
+    ++counters.pathConversions;
     slot = toTinyPath(shape.path, closeBehavior);
   }
   return *slot;
@@ -244,16 +274,20 @@ const tiny_skia::Path& ResolveTinyPath(const PathShape& shape, TinyPathCloseBeha
 /// than sampled at the wrong extent.
 std::span<const std::uint8_t> ResolvePremultipliedImage(const ImageResource& image,
                                                         EntityHandle source,
-                                                        std::vector<std::uint8_t>& scratch) {
+                                                        std::vector<std::uint8_t>& scratch,
+                                                        const Registry*& checkedThisFrame,
+                                                        RendererTinySkiaFrameCounters& counters) {
   if (!source) {
+    ++counters.imagePremultiplies;
     PremultiplyRgbaInto(image.data, scratch);
     return scratch;
   }
 
-  EnsureCacheInvalidationWired(*source.registry());
-  auto& cache = source.get_or_emplace<TinySkiaImageCacheComponent>();
+  EnsureCacheInvalidationWired(*source.registry(), checkedThisFrame);
+  auto& cache = source.get_or_emplace<components::TinySkiaImageCacheComponent>();
   if (cache.premultiplied.size() != image.data.size() || cache.width != image.width ||
       cache.height != image.height) {
+    ++counters.imagePremultiplies;
     PremultiplyRgbaInto(image.data, cache.premultiplied);
     cache.width = image.width;
     cache.height = image.height;
@@ -703,6 +737,11 @@ void RendererTinySkia::beginFrame(const RenderViewport& viewport) {
   surfaceStack_.clear();
   patternFillPaint_.reset();
   patternStrokePaint_.reset();
+  frameCounters_ = RendererTinySkiaFrameCounters();
+  // Both the counters and the listener-wiring memo describe one frame only. Dropping the memo
+  // here is what bounds its lifetime to a frame, which is the property that makes comparing
+  // registry addresses safe; see `EnsureCacheInvalidationWired`.
+  cacheWiringCheckedRegistry_ = nullptr;
 }
 
 void RendererTinySkia::endFrame() {
@@ -715,6 +754,7 @@ void RendererTinySkia::endFrame() {
   deviceFromLocalTransformStack_.clear();
   currentClipMask_.reset();
   clipStack_.clear();
+  cacheWiringCheckedRegistry_ = nullptr;
 }
 
 void RendererTinySkia::setTransform(const Transform2d& transform) {
@@ -1238,7 +1278,8 @@ void RendererTinySkia::drawPath(const PathShape& path, const StrokeParams& strok
 
   tiny_skia::Path uncachedPath;
   const tiny_skia::Path& tinyPath =
-      ResolveTinyPath(path, TinyPathCloseBehavior::Preserve, uncachedPath);
+      ResolveTinyPath(path, TinyPathCloseBehavior::Preserve, uncachedPath,
+                      cacheWiringCheckedRegistry_, frameCounters_);
   const tiny_skia::Mask* mask = currentClipMask_.has_value() ? &*currentClipMask_ : nullptr;
   tiny_skia::Pixmap* fillPaintPixmap =
       !surfaceStack_.empty() && surfaceStack_.back().fillPaintPixmap.has_value()
@@ -1319,7 +1360,8 @@ void RendererTinySkia::drawPath(const PathShape& path, const StrokeParams& strok
     tiny_skia::Path uncachedDashSeamPath;
     const tiny_skia::Path* strokePath = &tinyPath;
     if (tinyStroke.dash.has_value() && dashHasOnlyZeroLengthGaps) {
-      strokePath = &ResolveTinyPath(path, TinyPathCloseBehavior::EndWithLine, uncachedDashSeamPath);
+      strokePath = &ResolveTinyPath(path, TinyPathCloseBehavior::EndWithLine, uncachedDashSeamPath,
+                                    cacheWiringCheckedRegistry_, frameCounters_);
     }
 
     auto pixmapView = currentPixmapView();
@@ -1477,8 +1519,8 @@ void RendererTinySkia::drawImage(const ImageResource& image, const ImageParams& 
   // loaded image and change only when that does, so the premultiplied form is cached on the
   // source entity and borrowed through a view; the previous code premultiplied into a fresh
   // buffer and wrapped it in a throwaway `Pixmap` on every draw of every frame.
-  const std::span<const std::uint8_t> premultiplied =
-      ResolvePremultipliedImage(image, params.sourceEntity, pixelScratch_);
+  const std::span<const std::uint8_t> premultiplied = ResolvePremultipliedImage(
+      image, params.sourceEntity, pixelScratch_, cacheWiringCheckedRegistry_, frameCounters_);
   const std::optional<tiny_skia::PixmapView> sourceView =
       tiny_skia::PixmapView::fromBytes(premultiplied, static_cast<std::uint32_t>(image.width),
                                        static_cast<std::uint32_t>(image.height));

@@ -13,6 +13,12 @@
 /// Unaligned tails are ignored (matches the pre-split behavior of every
 /// caller that had its own local copy).
 ///
+/// Aliasing: the `*Into` helpers write through their `out` buffer while
+/// reading `rgbaPixels`, so the two must not overlap. Passing a span into
+/// `out`'s own storage (including `out` itself) is undefined behavior - the
+/// write can reallocate `out` and dangle the input span. Every other helper
+/// returns a fresh buffer and has no such constraint.
+///
 /// Rounding convention: integer `round-half-up` in both directions, so
 /// a round-trip premul → unpremul is bit-identical for every
 /// well-formed premul input (i.e., `r ≤ a, g ≤ a, b ≤ a`). If a caller
@@ -39,6 +45,8 @@ namespace donner::svg {
 /// large enough, so a caller that converts once per frame keeps one buffer instead of allocating
 /// and freeing a new one every time.
 ///
+/// \p rgbaPixels must not alias \p out; see the aliasing note at the top of this file.
+///
 /// @param rgbaPixels Straight-alpha RGBA bytes (size must be a multiple of 4).
 /// @param out Destination buffer, resized to match \p rgbaPixels.
 void PremultiplyRgbaInto(std::span<const std::uint8_t> rgbaPixels, std::vector<std::uint8_t>& out);
@@ -57,7 +65,8 @@ void PremultiplyRgbaInto(std::span<const std::uint8_t> rgbaPixels, std::vector<s
 
 /// Copy row-strided RGBA8 bytes into a caller-owned tightly-packed buffer.
 ///
-/// Buffer-reusing form of \ref CopyTightRgbaRows. @see PremultiplyRgbaInto
+/// Buffer-reusing form of \ref CopyTightRgbaRows. \p rgbaPixels must not alias \p out.
+/// @see PremultiplyRgbaInto
 ///
 /// @param rgbaPixels Source RGBA bytes.
 /// @param width Pixel width.
@@ -82,7 +91,8 @@ void CopyTightRgbaRowsInto(std::span<const std::uint8_t> rgbaPixels, int width, 
 /// Convert row-strided straight-alpha RGBA8 to tightly-packed premultiplied RGBA8, writing into
 /// a caller-owned buffer.
 ///
-/// Buffer-reusing form of \ref PremultiplyRgbaRows. @see PremultiplyRgbaInto
+/// Buffer-reusing form of \ref PremultiplyRgbaRows. \p rgbaPixels must not alias \p out.
+/// @see PremultiplyRgbaInto
 ///
 /// @param rgbaPixels Straight-alpha source RGBA bytes.
 /// @param width Pixel width.

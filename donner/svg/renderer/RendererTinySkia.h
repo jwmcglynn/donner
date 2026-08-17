@@ -8,6 +8,7 @@
 #include <string>
 #include <vector>
 
+#include "donner/base/EcsRegistry_fwd.h"
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/renderer/RendererInterface.h"
 #include "tiny_skia/Mask.h"
@@ -15,6 +16,25 @@
 #include "tiny_skia/Pixmap.h"
 
 namespace donner::svg {
+
+/**
+ * Per-frame counts of the conversions \ref RendererTinySkia caches.
+ *
+ * Reset at every \ref RendererTinySkia::beginFrame, so a read after a frame
+ * reports that frame's work alone. Both are zero on a settled frame of an
+ * unchanged document, because every shape and image is served from its
+ * per-entity cache; that invariant is what keeps the caches from silently
+ * regressing into per-draw conversions, so it is pinned by a test.
+ */
+struct RendererTinySkiaFrameCounters {
+  /// `donner::Path` -> `tiny_skia::Path` conversions performed. Counts cache misses plus draws
+  /// that carry no source entity to cache on.
+  uint64_t pathConversions = 0;
+
+  /// Straight-alpha -> premultiplied image conversions performed.
+  /// @see pathConversions
+  uint64_t imagePremultiplies = 0;
+};
 
 /**
  * Rendering backend using tiny-skia-cpp.
@@ -227,6 +247,12 @@ public:
   /// Returns the rendered height in pixels.
   int height() const override;
 
+  /// Conversions performed during the most recent frame.
+  /// @see RendererTinySkiaFrameCounters
+  [[nodiscard]] const RendererTinySkiaFrameCounters& frameCounters() const {
+    return frameCounters_;
+  }
+
 private:
   struct PatternPaintState {
     tiny_skia::Pixmap pixmap;
@@ -335,7 +361,17 @@ private:
   /// Staging buffer for image and bitmap payloads that have to be row-packed or premultiplied
   /// before tiny-skia can view them. Held across draws so a repeated compose reuses one
   /// allocation; only live for the duration of a single draw call, which never nests.
-  std::vector<uint8_t> pixelScratch_;
+  std::vector<std::uint8_t> pixelScratch_;
+
+  /// @see frameCounters()
+  RendererTinySkiaFrameCounters frameCounters_;
+
+  /// Registry whose conversion-cache invalidation listeners this renderer has already verified
+  /// during the current frame, so the check costs one context-store lookup per frame per
+  /// document rather than one per draw. Cleared at each frame boundary, which bounds the
+  /// comparison to a window in which no registry can be freed and reallocated at the same
+  /// address. Never dereferenced.
+  const Registry* cacheWiringCheckedRegistry_ = nullptr;
 };
 
 }  // namespace donner::svg

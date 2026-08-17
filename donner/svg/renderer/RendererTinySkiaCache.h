@@ -26,7 +26,7 @@
 
 #include "tiny_skia/Path.h"
 
-namespace donner::svg {
+namespace donner::svg::components {
 
 /// Per-entity cache of a shape's `donner::Path` converted to `tiny_skia::Path`.
 ///
@@ -34,6 +34,12 @@ namespace donner::svg {
 /// `PathShape::sourceEntity`; removed by the `ComputedPathComponent` listener when the geometry
 /// changes or the entity goes away. A null source entity (overlay drawing, test harnesses) is
 /// not cached and converts inline, exactly as before the cache existed.
+///
+/// Lives in `donner::svg::components`, alongside `ComputedPathComponent` and every other
+/// component it derives from, rather than in a backend-private namespace. (Geode's equivalent
+/// sits in `donner::geode` instead, to match the other Geode types its renderer references
+/// unqualified; the tiny-skia backend has no such namespace and already spells its component
+/// dependencies `components::`.)
 struct TinySkiaPathCacheComponent {
   /// Conversion that preserves `ClosePath` verbs. Used by fills and by every ordinary stroke.
   std::optional<tiny_skia::Path> closedPath;
@@ -52,6 +58,14 @@ struct TinySkiaPathCacheComponent {
 /// goes away. The dimensions are stored alongside the payload and rechecked on every hit, so a
 /// draw whose source no longer matches the cached buffer reconverts instead of sampling the
 /// wrong extent.
+///
+/// Residency tradeoff: the cached payload is a second full copy of the element's decoded pixels
+/// and there is no eviction, so a drawn image stays doubled in resident bytes for as long as the
+/// document holds it. That is bounded by the images the document actually draws (an undrawn or
+/// removed image holds nothing), and it buys a full-buffer conversion pass and allocation per
+/// image per frame; a document with a large enough image working set to care would need an
+/// eviction policy this cache deliberately does not have.
+/// @see TinySkiaPathCacheComponent for the namespace-placement rationale.
 struct TinySkiaImageCacheComponent {
   /// Premultiplied RGBA8, tightly packed.
   std::vector<std::uint8_t> premultiplied;
@@ -61,4 +75,4 @@ struct TinySkiaImageCacheComponent {
   int height = 0;
 };
 
-}  // namespace donner::svg
+}  // namespace donner::svg::components
