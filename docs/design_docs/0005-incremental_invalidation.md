@@ -556,12 +556,18 @@ prepare that follows a single transform edit on a group; medians of five interle
 
 | Document | Before | After | Delta |
 |----------|--------|-------|-------|
-| Ghostscript_Tiger (240 paths) | 3.55 ms | 1.62 ms | -54% |
-| Synthetic, 10,003 elements with a class-selector stylesheet | 84.8 ms | 28.4 ms | -67% |
+| Ghostscript_Tiger (240 paths) | 3.44 ms | 1.62 ms | -53% |
+| Synthetic, 10,003 elements with a class-selector stylesheet | 84.2 ms | 29.0 ms | -66% |
+| The same synthetic document, plus a `g[transform] rect` rule | 88.4 ms | 91.5 ms | parity |
+
+The third row is the fallback: once a stylesheet selects on the attribute being written, the edit
+takes the whole-tree restyle and the document performs as it did before. Interleaved in the order
+above it measured 6% slower, but re-running that document with the order reversed put the two at
+91.5 ms and 91.5 ms, so the gap is measurement drift rather than a cost of the check.
 
 The first prepare of a document is unchanged, as expected: it has never been able to use the
-selective branch, because no computed styles exist yet. Measured over the same rounds, 5.11 ms
-before and 5.07 ms after for Ghostscript_Tiger, 103.8 ms before and 101.9 ms after for the
+selective branch, because no computed styles exist yet. Measured over the same rounds, 4.90 ms
+before and 4.89 ms after for Ghostscript_Tiger, 103.5 ms before and 104.0 ms after for the
 synthetic document, both within run-to-run noise.
 
 Correctness is pinned by per-mutation-class equivalence tests in
@@ -572,12 +578,27 @@ byte-identical to a freshly parsed document in the same final state, with varian
 shadow trees (`<use>`), offscreen shadow trees (clipPath, mask, pattern, marker) and an animated
 document.
 
+The transform branch of `trySetPresentationAttribute()` is the one attribute write that stays on
+the selective pass, and it needs care: the value is stored in `AttributesComponent`, which is a
+live selector input, so `[transform]`, `[transform="..."]` and combinators keyed on them can start
+or stop matching, on other elements as well as the written one. It therefore requests the
+whole-tree restyle when, and only when, a loaded stylesheet actually selects on that attribute.
+That question is answered from a per-stylesheet cache of the attribute names its selectors
+reference, computed in `StylesheetComponent::parseStylesheet()`, which every stylesheet load and
+mutation path funnels through. The cache is keyed by attribute name rather than being a single
+"uses any attribute selector" flag because the user agent stylesheet always contains one
+(`*[xml|space=preserve]`), which would set a single flag for every document and give back the
+whole win. `SVGGraphicsElement::setTransform()` writes no attribute, so the compositor's drag path
+never reaches this check at all.
+
 Remaining over-approximation, deliberately left for a follow-up: `SVGElement::setStyle()`,
-`updateStyle()`, `setClassName()`, `setId()`, `setAttribute()` and the non-transform branch of
-`trySetPresentationAttribute()` all request a whole-tree restyle. That is correct but broader than
-necessary. Attribute, class and id edits can change selector matches on unrelated elements, so
-narrowing them needs the selector dependency index listed under Non-Goals; inline `style` edits
-only feed `[style]` attribute selectors and could be narrowed sooner.
+`updateStyle()`, `setClassName()`, `setId()`, the generic-attribute path of `setAttribute()` and
+the non-transform branch of `trySetPresentationAttribute()` all request a whole-tree restyle
+unconditionally. That is correct but broader than necessary. Class, id and attribute edits can
+change selector matches on unrelated elements, so narrowing them in general needs the selector
+dependency index listed under Non-Goals; the cheaper move is to extend the per-attribute check
+above to the other presentation attributes, which would leave only genuinely selector-relevant
+writes on the whole-tree path.
 
 ### Phase 4: Selective Layout and Transform Recomputation
 

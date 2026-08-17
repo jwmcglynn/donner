@@ -63,6 +63,14 @@ void ShadowTreeSystem::teardown(Registry& registry, ComputedShadowTreeComponent&
 }
 
 void ShadowTreeSystem::teardownInstances(EntityHandle handle) {
+  // TODO(jwmcglynn): This only tears down instances recorded on `handle` itself. A shadow tree
+  // whose clones are themselves shadow hosts records those nested instances on the clone
+  // entities, and destroying the clones here drops those records without destroying what they
+  // point at. The leak is bounded and unreachable in practice today because the render path
+  // clears every ComputedShadowTreeComponent through the teardown loop in
+  // `RenderingContext::ensureComputedComponents()` before rebuilding, but a caller that relies on
+  // this function alone would leak. Recursing here needs the nested entities to be reachable
+  // without a full registry scan.
   if (auto* shadow = handle.try_get<ComputedShadowTreeComponent>()) {
     teardown(*handle.registry(), *shadow);
   }

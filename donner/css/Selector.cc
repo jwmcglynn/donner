@@ -1,6 +1,47 @@
 #include "donner/css/Selector.h"
 
+#include <algorithm>
+
 namespace donner::css {
+
+namespace {
+
+void CollectAttributeNames(const Selector& selector, std::vector<RcString>& outNames,
+                           bool& outMatchesAnyName);
+
+void CollectAttributeNames(const CompoundSelector& compound, std::vector<RcString>& outNames,
+                           bool& outMatchesAnyName) {
+  for (const CompoundSelector::Entry& entry : compound.entries) {
+    if (const auto* attributeSelector = std::get_if<AttributeSelector>(&entry)) {
+      const RcString& localName = attributeSelector->name.name.name;
+      if (localName == "*") {
+        outMatchesAnyName = true;
+      } else if (std::find(outNames.begin(), outNames.end(), localName) == outNames.end()) {
+        outNames.push_back(localName);
+      }
+    } else if (const auto* pseudoClassSelector = std::get_if<PseudoClassSelector>(&entry)) {
+      if (pseudoClassSelector->selector) {
+        CollectAttributeNames(*pseudoClassSelector->selector, outNames, outMatchesAnyName);
+      }
+    }
+  }
+}
+
+void CollectAttributeNames(const Selector& selector, std::vector<RcString>& outNames,
+                           bool& outMatchesAnyName) {
+  for (const ComplexSelector& complexSelector : selector.entries) {
+    for (const ComplexSelector::Entry& entry : complexSelector.entries) {
+      CollectAttributeNames(entry.compoundSelector, outNames, outMatchesAnyName);
+    }
+  }
+}
+
+}  // namespace
+
+void Selector::collectAttributeSelectorNames(std::vector<RcString>& outNames,
+                                             bool& outMatchesAnyName) const {
+  CollectAttributeNames(*this, outNames, outMatchesAnyName);
+}
 
 Selector::Selector() = default;
 

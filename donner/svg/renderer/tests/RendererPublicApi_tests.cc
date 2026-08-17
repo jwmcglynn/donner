@@ -835,6 +835,10 @@ TEST(RendererPublicApiTest, AppendChildMatchesFullRender) {
 
 /// Render `initialSource`, apply `mutate`, render again, and require the pixels to match a fresh
 /// render of `finalSource` exactly.
+///
+/// Includes an anti-vacuity control: if the mutation does not change the rendered output, the
+/// equivalence assertion would hold no matter what the incremental path did, so the caller would
+/// be testing nothing. Every case here is expected to be visible.
 void ExpectIncrementalMatchesFullRender(std::string_view initialSource,
                                         const std::function<void(SVGDocument&)>& mutate,
                                         std::string_view finalSource) {
@@ -851,6 +855,14 @@ void ExpectIncrementalMatchesFullRender(std::string_view initialSource,
   fullRenderer.draw(fullDocument);
   const RendererBitmap full = NormalizeSnapshot(fullRenderer.takeSnapshot());
   ASSERT_FALSE(full.empty());
+
+  SVGDocument initialDocument = ParseDocument(initialSource);
+  Renderer initialRenderer;
+  initialRenderer.draw(initialDocument);
+  const RendererBitmap initial = NormalizeSnapshot(initialRenderer.takeSnapshot());
+  ASSERT_FALSE(initial.empty());
+  EXPECT_NE(initial.pixels, full.pixels)
+      << "the mutation produced no visible change, so the equivalence assertion is vacuous";
 
   EXPECT_EQ(incremental.dimensions, full.dimensions);
   EXPECT_EQ(incremental.rowBytes, full.rowBytes);
@@ -898,6 +910,56 @@ TEST(RendererPublicApiTest, TransformAttributeChangeMatchesFullRender) {
         <g fill="#ff0000">
           <rect width="5" height="5" transform="translate(9, 8)" />
         </g>
+      </svg>
+    )svg");
+}
+
+TEST(RendererPublicApiTest, TransformValueChangeUpdatesAttributeSelectorMatchesFullRender) {
+  // The transform attribute is a selector input, not just layout state: changing its value
+  // changes which `[transform="..."]` rules match.
+  ExpectIncrementalMatchesFullRender(
+      R"svg(
+      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
+        <style>rect { fill: #ff0000 } rect[transform="translate(9, 8)"] { fill: #0000ff }</style>
+        <rect id="r" width="5" height="5" transform="translate(1, 1)" />
+      </svg>
+    )svg",
+      [](SVGDocument& document) {
+        auto target = document.querySelector("#r");
+        ASSERT_TRUE(target.has_value());
+        target->setAttribute("transform", "translate(9, 8)");
+      },
+      R"svg(
+      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
+        <style>rect { fill: #ff0000 } rect[transform="translate(9, 8)"] { fill: #0000ff }</style>
+        <rect width="5" height="5" transform="translate(9, 8)" />
+      </svg>
+    )svg");
+}
+
+TEST(RendererPublicApiTest, TransformPresenceChangeUpdatesSiblingSelectorMatchesFullRender) {
+  // The match this changes is on a *different* element than the one written: adding the attribute
+  // makes `rect[transform] + rect` start matching the sibling. The transform itself is an
+  // identity translation, so the sibling's fill is the only visible difference, which keeps the
+  // anti-vacuity control pinned on exactly the non-local effect.
+  ExpectIncrementalMatchesFullRender(
+      R"svg(
+      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
+        <style>rect { fill: #ff0000 } rect[transform] + rect { fill: #0000ff }</style>
+        <rect id="r" width="5" height="5" />
+        <rect x="8" width="5" height="5" />
+      </svg>
+    )svg",
+      [](SVGDocument& document) {
+        auto target = document.querySelector("#r");
+        ASSERT_TRUE(target.has_value());
+        target->setAttribute("transform", "translate(0, 0)");
+      },
+      R"svg(
+      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
+        <style>rect { fill: #ff0000 } rect[transform] + rect { fill: #0000ff }</style>
+        <rect width="5" height="5" transform="translate(0, 0)" />
+        <rect x="8" width="5" height="5" />
       </svg>
     )svg");
 }
@@ -1183,6 +1245,18 @@ TEST(RendererPublicApiTest, TransformChangeOnAnimatedDocumentMatchesFullRender) 
   fullRenderer.draw(fullDocument);
   const RendererBitmap full = NormalizeSnapshot(fullRenderer.takeSnapshot());
   ASSERT_FALSE(full.empty());
+
+  // Anti-vacuity: prove the animation override is actually applied at t=1.5. Without this the
+  // comparison would pass trivially if `<set>` never took effect, which is the whole behavior
+  // this test exists to protect.
+  SVGDocument beforeAnimationDocument = ParseDocumentWithExperimental(kFinalSource);
+  beforeAnimationDocument.setTime(0.0);
+  Renderer beforeAnimationRenderer;
+  beforeAnimationRenderer.draw(beforeAnimationDocument);
+  const RendererBitmap beforeAnimation = NormalizeSnapshot(beforeAnimationRenderer.takeSnapshot());
+  ASSERT_FALSE(beforeAnimation.empty());
+  EXPECT_NE(beforeAnimation.pixels, full.pixels)
+      << "the <set> override never applied, so the equivalence assertion is vacuous";
 
   EXPECT_EQ(incremental.dimensions, full.dimensions);
   EXPECT_EQ(incremental.pixels, full.pixels);
