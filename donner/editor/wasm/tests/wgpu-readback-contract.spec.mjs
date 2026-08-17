@@ -169,7 +169,21 @@ test("worker WebGPU startup keeps its browser Promise bridge private and single-
     /#ifndef __EMSCRIPTEN__([\s\S]*?)#endif/,
   );
   assert.ok(emscriptenBranch, "expected native-only submitted-work wait");
-  assert.match(emscriptenBranch[1], /WaitForSubmittedWork/);
+  assert.match(
+    emscriptenBranch[1],
+    /waitForQueueIdle/,
+    "native teardown must drain through the bounded queue-idle wait",
+  );
+  assert.doesNotMatch(
+    geodeDeviceSource,
+    /WaitForSubmittedWork/,
+    "the unbounded submitted-work wait stays deleted; teardown drains are bounded",
+  );
+  assert.doesNotMatch(
+    deviceDestructor[1],
+    /poll\(true/,
+    "teardown must never block inside the driver without a deadline",
+  );
 });
 
 test("worker WebGPU startup enables event-driven timed readback waits", () => {
