@@ -15,6 +15,7 @@ import {
   type SplashPresentationFrame,
   type SplashToneCensus,
 } from "./canvas-color-stats";
+import { waitForAppliedPointer } from "./gesture-streams";
 
 declare global {
   interface Window {
@@ -40,6 +41,8 @@ declare global {
       pendingClick: boolean;
       selectedCount: number;
       workerBusy: boolean;
+      pointerX: number;
+      pointerY: number;
     };
     __donnerFrameLoopStats?: FrameLoopStats;
     __donnerOverlayStats?: {
@@ -86,6 +89,8 @@ interface FrameLoopStats {
   timerTriggeredFrames: number;
   workerOnlyFrames: number;
   uiFrameMsSamples: number[];
+  /** Page-clock arrival time of the latest frame's sample. */
+  lastFrameAtMs?: number;
 }
 
 // Shared CI runners execute this suite 2-4x slower than local development
@@ -816,6 +821,10 @@ test("Firefox keeps the dragged shape and its selection outline in every drag fr
   // readiness explicitly rather than sleeping for it.
   await waitForBrowserComposite(page);
   await page.mouse.move(dragStart.x, dragStart.y);
+  await waitForAppliedPointer(page, dragStart, {
+    message: "drag press",
+    timeoutMs: scaledMs(4_000),
+  });
   await waitForPressReadiness(page, "drag press");
   const resultsBeforePress = await page.evaluate(
     () => window.__donnerWorkerStats?.completedResults || 0,
@@ -1008,6 +1017,10 @@ test("Firefox never exposes the checkerboard while dragging a Splash letter", as
   // below then confirmed against byte-identical bounds.
   const dragStart = splashDocumentToPage(viewport, kSplashLetterD.stemPress);
   await page.mouse.move(dragStart.x, dragStart.y);
+  await waitForAppliedPointer(page, dragStart, {
+    message: "Splash drag press",
+    timeoutMs: scaledMs(4_000),
+  });
   await waitForPressReadiness(page, "Splash drag press");
   const resultsBeforePress = await page.evaluate(
     () => window.__donnerWorkerStats?.completedResults || 0,

@@ -70,6 +70,11 @@ When debugging bugs — **especially performance or UI bugs** — write an autom
 - **Editor path overlays must stay lockstep with presented document pixels.** A drag/zoom frame is
   wrong if the overlay uses a transform different from the shape pixels underneath it; preserve the
   same presented transform for both, or move both together.
+- **Flaky tests are root-caused, never rerun into submission.** A test that fails twice on
+  unrelated changes gets a root-cause investigation as a high priority, not a third rerun.
+  Reproduce with repetition and CPU contention, instrument to find which observable raced, and fix
+  the wait condition or the product race. Longer timeouts, retries, and weakened assertions mask
+  the defect and are unacceptable as fixes.
 - **Iterating without a repro** wastes everyone's time. A bug you can't reproduce automatically is a bug you can't fix; a fix you can't verify automatically is a fix you can't ship. Manual "please run it and tell me what you see" cycles are a last resort, not a primary workflow.
 - Reference tests:
   - `donner/editor/tests/RnrReplay_tests.cc`'s `FilterDisappearRepro3*` test — full editor replay flow (`.rnr` → `EditorApp` + `AsyncRenderer` → pixelmatch diff vs committed golden PNG) with inspectable diff PNGs.

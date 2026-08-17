@@ -142,7 +142,13 @@ void PublishSampleThumbnailStats(int requested, int started, int completed, int 
 }
 
 void PublishInteractionStats(int selectedCount, int pendingClick, int workerBusy, int dragging,
-                             int dragHasVisualChange) {
+                             int dragHasVisualChange, double pointerX, double pointerY) {
+  // `pointerX`/`pointerY` is the pointer position this frame's input processing
+  // actually used, in page CSS pixels. A DOM mouse move reaches the app thread
+  // through the proxying queue, so under load a press can be dispatched before
+  // its aiming move has been applied and is then hit-tested at the previous
+  // pointer position. Publishing the applied position lets a browser probe
+  // hold its press until the editor has the pointer where the press will land.
   MAIN_THREAD_ASYNC_EM_ASM(
       {
         window['__donnerInteractionStats'] = ({
@@ -151,9 +157,11 @@ void PublishInteractionStats(int selectedCount, int pendingClick, int workerBusy
           'workerBusy' : !!$2,
           'dragging' : !!$3,
           moved : !!$4,
+          'pointerX' : $5,
+          'pointerY' : $6,
         });
       },
-      selectedCount, pendingClick, workerBusy, dragging, dragHasVisualChange);
+      selectedCount, pendingClick, workerBusy, dragging, dragHasVisualChange, pointerX, pointerY);
 }
 
 /**
@@ -6614,11 +6622,17 @@ void EditorShell::recordFrameTelemetry(
       static_cast<double>(presentationResources.retiredFrameCount),
       static_cast<double>(presentationResources.wgpuLifetimeTextureCreates),
       static_cast<double>(presentationResources.wgpuLifetimeBufferCreates));
-  PublishInteractionStats(static_cast<int>(app_.selectedElements().size()),
-                          interactionController_.pendingClick().has_value() ? 1 : 0,
-                          renderCoordinator_.asyncRenderer().isBusy() ? 1 : 0,
-                          selectTool_.isDragging() ? 1 : 0,
-                          selectTool_.dragHasVisualChange() ? 1 : 0);
+  {
+    const ImVec2 imguiMousePos = ImGui::GetIO().MousePos;
+    const bool pointerValid = ImGui::IsMousePosValid(&imguiMousePos);
+    PublishInteractionStats(static_cast<int>(app_.selectedElements().size()),
+                            interactionController_.pendingClick().has_value() ? 1 : 0,
+                            renderCoordinator_.asyncRenderer().isBusy() ? 1 : 0,
+                            selectTool_.isDragging() ? 1 : 0,
+                            selectTool_.dragHasVisualChange() ? 1 : 0,
+                            pointerValid ? static_cast<double>(imguiMousePos.x) : -1.0,
+                            pointerValid ? static_cast<double>(imguiMousePos.y) : -1.0);
+  }
   {
     const ViewportState& viewport = interactionController_.viewport();
     const Box2d documentRect = viewport.imageScreenRect();
