@@ -496,12 +496,49 @@ private:
     return std::nullopt;
   }
 
+  /**
+   * Character reader for a scanning loop over a ChunkedString.
+   *
+   * ChunkedString::operator[] has to find the chunk holding the requested position and unwrap a
+   * variant to reach its bytes, which a loop pays for on every character. A string that is still
+   * one chunk - the usual case, since extra chunks only appear once entity expansion has spliced
+   * content together - is read straight out of a view hoisted at construction.
+   *
+   * The reader must not outlive the string it was built from, and the string must not be modified
+   * while the reader is in use.
+   */
+  class CharScanner {
+  public:
+    /**
+     * Construct a reader over \p source.
+     *
+     * @param source String to read from; must outlive this reader and must not be modified while
+     *   the reader is in use.
+     */
+    explicit CharScanner(const ChunkedString& source UTILS_LIFETIME_BOUND)
+        : contiguous_(source.singleChunkView()), source_(source) {}
+
+    /**
+     * Return the character at \p pos.
+     *
+     * @param pos Position of the character to read; behavior is undefined if out of range.
+     */
+    char operator[](size_t pos) const {
+      return contiguous_.has_value() ? (*contiguous_)[pos] : source_[pos];
+    }
+
+  private:
+    std::optional<std::string_view> contiguous_;
+    const ChunkedString& source_;
+  };
+
   /// Skip whitespace characters
   void skipWhitespace(ChunkedString& sourceString) {
     size_t skipCount = 0;
     const size_t len = sourceString.size();
+    const CharScanner chars(sourceString);
 
-    while (skipCount < len && isWhitespace(sourceString[skipCount])) {
+    while (skipCount < len && isWhitespace(chars[skipCount])) {
       ++skipCount;
     }
 
@@ -513,8 +550,9 @@ private:
   static ChunkedString consumeMatching(ChunkedString& sourceString) {
     size_t i = 0;
     const size_t len = sourceString.size();
+    const CharScanner chars(sourceString);
 
-    while (i < len && MatchPredicate::test(sourceString[i])) {
+    while (i < len && MatchPredicate::test(chars[i])) {
       ++i;
     }
 
@@ -604,11 +642,12 @@ private:
       return sourceString.substr(0, 0);
     }
 
+    const CharScanner chars(sourceString);
     size_t i = 0;
 
     // Check NameStartChar (first character)
     {
-      const char firstByte = sourceString[0];
+      const char firstByte = chars[0];
       const uint8_t ub = static_cast<uint8_t>(firstByte);
       if (ub < 0x80) {
         // ASCII fast path
@@ -630,7 +669,7 @@ private:
 
     // Consume NameChar* (subsequent characters)
     while (i < len) {
-      const char byte = sourceString[i];
+      const char byte = chars[i];
       const uint8_t ub = static_cast<uint8_t>(byte);
       if (ub < 0x80) {
         // ASCII fast path
@@ -663,11 +702,12 @@ private:
       return sourceString.substr(0, 0);
     }
 
+    const CharScanner chars(sourceString);
     size_t i = 0;
 
     // Check NameStartChar (first character), including ':'
     {
-      const char firstByte = sourceString[0];
+      const char firstByte = chars[0];
       const uint8_t ub = static_cast<uint8_t>(firstByte);
       if (ub < 0x80) {
         if (!IsAsciiNameStartCharNoColon(firstByte) && firstByte != ':') {
@@ -685,7 +725,7 @@ private:
 
     // Consume NameChar* (subsequent characters), including ':'
     while (i < len) {
-      const char byte = sourceString[i];
+      const char byte = chars[i];
       const uint8_t ub = static_cast<uint8_t>(byte);
       if (ub < 0x80) {
         if (!IsAsciiNameCharNoColon(byte) && byte != ':') {
@@ -1094,8 +1134,9 @@ private:
     bool inInternalSubset = false;
 
     size_t i = 0;
+    const CharScanner chars(remaining_);
     while (i < remaining_.size()) {
-      char c = remaining_[i];
+      char c = chars[i];
       if (c == '\0') {
         return createParseError("Unexpected end of data, found embedded null character");
       }

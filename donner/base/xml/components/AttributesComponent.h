@@ -84,6 +84,22 @@ struct AttributesComponent {
   }
 
   /**
+   * Return a pointer to an attribute's source-anchor slot.
+   *
+   * For callers that check, read, and then write the anchors of one attribute, which would
+   * otherwise look the same attribute up once per step. The returned pointer is invalidated by
+   * anything that adds or removes an attribute on this component.
+   *
+   * @param name Name of the attribute to query.
+   * @return Pointer to the attribute's anchor slot, or nullptr when the attribute is not set.
+   */
+  std::optional<AttributeSourceAnchors>* attributeSourceAnchorsSlot(
+      const xml::XMLQualifiedNameRef& name) {
+    const auto it = attributes_.find(name);
+    return it != attributes_.end() ? &it->second.sourceAnchors : nullptr;
+  }
+
+  /**
    * Store source-anchor metadata for an existing attribute.
    *
    * @param name Name of the attribute to update.

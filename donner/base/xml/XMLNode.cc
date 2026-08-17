@@ -419,15 +419,30 @@ std::optional<XMLAttributeSourceLocation> XMLNode::getAttributeSourceLocation(
 void XMLNode::setAttributeSourceLocation(const XMLQualifiedNameRef& name, SourceRange fullRange,
                                          SourceRange valueRange, char quote) {
   auto& attributes = handle_.get_or_emplace<AttributesComponent>();
-  if (!attributes.hasAttribute(name)) {
+
+  // Every step below - the existence check, the read of the previous anchors, the write of the new
+  // ones, and the clear on each failure path - concerns the same attribute. Resolve it once; the
+  // attribute set is not modified in between, so the slot stays valid for the whole function.
+  std::optional<AttributesComponent::AttributeSourceAnchors>* anchorSlot =
+      attributes.attributeSourceAnchorsSlot(name);
+  if (anchorSlot == nullptr) {
     return;
   }
 
   XMLSourceStore* sourceStore = GetSourceStore(handle_);
+
+  // Drop whatever anchors the attribute currently has, releasing them from the source store.
+  const auto clearAnchors = [sourceStore, anchorSlot]() {
+    if (sourceStore != nullptr && anchorSlot->has_value()) {
+      InvalidateAttributeAnchors(*sourceStore, **anchorSlot);
+    }
+    anchorSlot->reset();
+  };
+
   if (sourceStore == nullptr || !fullRange.start.offset.has_value() ||
       !fullRange.end.offset.has_value() || !valueRange.start.offset.has_value() ||
       !valueRange.end.offset.has_value()) {
-    clearAttributeSourceLocation(name);
+    clearAnchors();
     return;
   }
 
@@ -437,14 +452,14 @@ void XMLNode::setAttributeSourceLocation(const XMLQualifiedNameRef& name, Source
   const std::size_t valueEnd = *valueRange.end.offset;
   if (fullEnd < fullStart || valueEnd < valueStart || valueStart < fullStart ||
       valueEnd > fullEnd) {
-    clearAttributeSourceLocation(name);
+    clearAnchors();
     return;
   }
 
   std::optional<SourceAnchorSpan> fullSpan = sourceStore->createSpan(
       fullStart, fullEnd, SourceAnchorBias::After, SourceAnchorBias::Before);
   if (!fullSpan.has_value()) {
-    clearAttributeSourceLocation(name);
+    clearAnchors();
     return;
   }
 
@@ -452,23 +467,21 @@ void XMLNode::setAttributeSourceLocation(const XMLQualifiedNameRef& name, Source
       valueStart, valueEnd, SourceAnchorBias::Before, SourceAnchorBias::After);
   if (!valueSpan.has_value()) {
     InvalidateAnchors(*sourceStore, *fullSpan);
-    clearAttributeSourceLocation(name);
+    clearAnchors();
     return;
   }
 
-  if (std::optional<AttributesComponent::AttributeSourceAnchors> previous =
-          attributes.getAttributeSourceAnchors(name)) {
-    InvalidateAttributeAnchors(*sourceStore, *previous);
+  if (anchorSlot->has_value()) {
+    InvalidateAttributeAnchors(*sourceStore, **anchorSlot);
   }
 
-  attributes.setAttributeSourceAnchors(name,
-                                       AttributesComponent::AttributeSourceAnchors{
-                                           .fullStartAnchorId = fullSpan->start.value,
-                                           .fullEndAnchorId = fullSpan->end.value,
-                                           .valueStartAnchorId = valueSpan->start.value,
-                                           .valueEndAnchorId = valueSpan->end.value,
-                                           .quote = (quote == '\'' || quote == '"') ? quote : '"',
-                                       });
+  *anchorSlot = AttributesComponent::AttributeSourceAnchors{
+      .fullStartAnchorId = fullSpan->start.value,
+      .fullEndAnchorId = fullSpan->end.value,
+      .valueStartAnchorId = valueSpan->start.value,
+      .valueEndAnchorId = valueSpan->end.value,
+      .quote = (quote == '\'' || quote == '"') ? quote : '"',
+  };
 }
 
 void XMLNode::clearAttributeSourceLocation(const XMLQualifiedNameRef& name) {
