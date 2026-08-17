@@ -1134,7 +1134,10 @@ TEST(FilterGraphExecutorTest, UniformSrgbGraphMatchesOneGraphPerPrimitive) {
 }
 
 // The per-primitive space has to actually take effect: saturating in sRGB and saturating in
-// linearRGB are different computations, so the two graphs must not agree.
+// linearRGB are different computations, so the two graphs must disagree, and by much more than
+// the rounding the tests above tolerate. The measured separation is 36/255; the bound sits well
+// clear of both that and the single unit that a same-schedule comparison produces, so this fails
+// loudly if the per-primitive space is ever ignored.
 TEST(FilterGraphExecutorTest, PerPrimitiveColorSpaceChangesTheResult) {
   const tiny_skia::Pixmap source = MakeColorSourceGraphic();
 
@@ -1149,7 +1152,7 @@ TEST(FilterGraphExecutorTest, PerPrimitiveColorSpaceChangesTheResult) {
   const tiny_skia::Pixmap srgbInterior = RunNodesAsOneGraph(source, std::move(srgbNodes));
   const tiny_skia::Pixmap linearInterior = RunNodesAsOneGraph(source, std::move(linearNodes));
 
-  EXPECT_GT(MaxChannelDelta(srgbInterior, linearInterior), 2);
+  EXPECT_GT(MaxChannelDelta(srgbInterior, linearInterior), 16);
 }
 
 }  // namespace
