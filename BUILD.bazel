@@ -64,6 +64,7 @@ exports_files(
         ".github/workflows/cmake.yml",
         ".github/workflows/codeql.yml",
         ".github/workflows/coverage.yml",
+        ".github/workflows/editor_wasm.yml",
         ".github/workflows/fuzz.yml",
         ".github/workflows/lint.yml",
         ".github/workflows/main.yml",

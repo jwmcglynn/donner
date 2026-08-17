@@ -26,6 +26,7 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         cls.main = _workflow_text(".github/workflows/main.yml")
         cls.cmake = _workflow_text(".github/workflows/cmake.yml")
         cls.coverage = _workflow_text(".github/workflows/coverage.yml")
+        cls.editor_wasm = _workflow_text(".github/workflows/editor_wasm.yml")
         cls.lint = _workflow_text(".github/workflows/lint.yml")
         cls.coverage_script = _workflow_text("tools/coverage.sh")
 
@@ -119,6 +120,28 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
                         "if: steps.cmake-generator-check.outcome == 'failure'"
                     ),
                 )
+
+    def test_editor_wasm_prefetch_retries_before_single_attempt_tests(self):
+        """Wasm dependency fetches retry without retrying build or test failures."""
+        workflow = self.editor_wasm
+        self.assertIn("- id: editor-wasm-prefetch", workflow)
+        self.assertIn("- name: Build and size-check Geode editor Wasm package", workflow)
+        self.assertIn("- name: Stage package for handoff", workflow)
+        prefetch = workflow.split("- id: editor-wasm-prefetch", 1)[1].split(
+            "- name: Build and size-check Geode editor Wasm package", 1
+        )[0]
+        build = workflow.split(
+            "- name: Build and size-check Geode editor Wasm package", 1
+        )[1].split("- name: Stage package for handoff", 1)[0]
+
+        self.assertEqual(6, prefetch.count("bazelisk fetch"))
+        self.assertEqual(1, prefetch.count("continue-on-error: true"))
+        self.assertEqual(
+            1,
+            prefetch.count("if: steps.editor-wasm-prefetch.outcome == 'failure'"),
+        )
+        self.assertEqual(3, build.count("bazelisk test"))
+        self.assertNotIn("continue-on-error", build)
 
     def test_heartbeat_cleanup_is_prompt_without_ps(self):
         """A finished command cannot leave the heartbeat sleeper holding the pipe."""
