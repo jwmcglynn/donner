@@ -1950,6 +1950,16 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
       FillRule rule = FillRule::NonZero;
       Transform2d deviceFromLocal;
       uint32_t vertexCount = 0;
+      /// Record slot resolved by `resolveSceneRecordSlot` for THIS
+      /// instance: null means the slot's primary record; non-null points
+      /// into `sceneTempRecordSlots` (a deque, so the address is stable
+      /// for the rest of the frame) when the primary record was already
+      /// referenced this frame. The flush-time re-ensure MUST pass this
+      /// same slot - re-ensuring a temp-diverted instance against the
+      /// primary record would queue a buffer write that retroactively
+      /// retransforms the earlier draw that references the primary
+      /// (buffer writes execute before every draw at submit).
+      const geode::GeodeRecordSlab::Slot* recordSlotOverride = nullptr;
     };
     /// Consecutive instances. Each instance's record-slab slot index must
     /// be `firstInstanceIndex + i`, its geometry must live in the same
@@ -2310,11 +2320,18 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
       const FillRule batchRule = batch.sceneInstances.front().rule;
       // Ensure each instance's geometry + batch-form record immediately
       // before the draw that consumes them, so solo flushes never observe
-      // the batch form's bytes.
+      // the batch form's bytes. Pass each instance's resolved record slot:
+      // a temp-diverted instance must re-ensure its TEMP record, never the
+      // primary (a primary write here would retroactively retransform the
+      // earlier draw that references the primary record, because all
+      // buffer writes execute before all draws at submit). For
+      // primary-slot instances the cached-record compare makes this a
+      // no-op when the record is unchanged.
       for (const PendingBatch::SceneInstance& inst : batch.sceneInstances) {
         if (inst.slot != nullptr && inst.encoded != nullptr) {
           (void)encoder->ensureResidentSceneRecord(*inst.slot, *inst.encoded, inst.color,
-                                                   inst.rule, inst.deviceFromLocal, nullptr);
+                                                   inst.rule, inst.deviceFromLocal,
+                                                   inst.recordSlotOverride);
         }
       }
       encoder->fillPathSceneBatch(batchColor, batchRule, binding);
@@ -2458,7 +2475,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
           appendSceneInstance(*pendingBatch,
                               PendingBatch::SceneInstance{residentFillSlot, encoded, &path, color,
                                                           rule, deviceFromLocalTransform,
-                                                          vertexCount});
+                                                          vertexCount, recordSlotPtr});
         } else {
           flushPendingBatch();
           pendingBatch = PendingBatch{};
@@ -2471,7 +2488,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
           appendSceneInstance(*pendingBatch,
                               PendingBatch::SceneInstance{residentFillSlot, encoded, &path, color,
                                                           rule, deviceFromLocalTransform,
-                                                          vertexCount});
+                                                          vertexCount, recordSlotPtr});
         }
         return true;
       }
@@ -2497,6 +2514,9 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
                                                first.rule, first.deviceFromLocal,
                                                firstRecordSlotPtr)) {
           first.slot->lastSceneFrame = currentFrameIndex;
+          // Carry the resolved slot on the instance so the flush-time
+          // re-ensure targets the same record this batch draws from.
+          first.recordSlotOverride = firstRecordSlotPtr;
           const geode::GeodeRecordSlab::Slot& effectiveFirstRecordSlot =
               firstRecordSlotPtr != nullptr ? *firstRecordSlotPtr : first.slot->recordSlot;
           const wgpu::Buffer firstChunk = first.slot->buffer;
@@ -2516,7 +2536,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
                                 PendingBatch::SceneInstance{residentFillSlot, encoded, &path,
                                                             color, rule,
                                                             deviceFromLocalTransform,
-                                                            vertexCount});
+                                                            vertexCount, recordSlotPtr});
           } else {
             flushPendingBatch();
             pendingBatch = PendingBatch{};
@@ -2530,7 +2550,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
                                 PendingBatch::SceneInstance{residentFillSlot, encoded, &path,
                                                             color, rule,
                                                             deviceFromLocalTransform,
-                                                            vertexCount});
+                                                            vertexCount, recordSlotPtr});
           }
         } else {
           // The pending singleton could not take scene form: emit it solo
@@ -2567,7 +2587,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
       appendSceneInstance(*pendingBatch,
                           PendingBatch::SceneInstance{residentFillSlot, encoded, &path, color,
                                                       rule, deviceFromLocalTransform,
-                                                      vertexCount});
+                                                      vertexCount, recordSlotPtr});
       return true;
     }
 
