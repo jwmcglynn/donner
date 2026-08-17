@@ -914,6 +914,32 @@ test("Firefox keeps the dragged shape and its selection outline in every drag fr
     }
     expect(geometry?.blue, `drag frame ${state.renderedFrames} had no blue document pixels`).not
       .toBeNull();
+    // "No teal" has two very different causes and the pixels cannot tell them
+    // apart: the chrome draw ran and its pixels missed this probe window, or no
+    // chrome was drawn at all. The second is reachable without any rendering
+    // fault - the immediate-chrome plan is only installed for frames where the
+    // render coordinator is holding a selection-chrome snapshot, so a frame that
+    // lands between overlay rebuilds presents the document underlay with no
+    // chrome pass over it. The app already publishes which case it was in
+    // `selectionChromeSnapshotPresent`, so read it here rather than leaving the
+    // next failure to guess. Read only on the failing path: this test asserts on
+    // per-frame drag timing, and a probe that costs a round trip per frame
+    // changes the thing it is measuring.
+    if (geometry?.teal === null || geometry?.teal === undefined) {
+      const chromeState = await page
+        .evaluate(() => ({
+          overlay: window.__donnerOverlayStats,
+          frames: window.__donnerMainLoopRenderedFrames || 0,
+          worker: window.__donnerWorkerStats,
+          workerBusy: window.__donnerInteractionStats?.workerBusy,
+        }))
+        .catch((error: unknown) => ({ unavailable: String(error) }));
+      console.log(
+        `drag-teal-missing step=${step} frame=${state.renderedFrames} state=${
+          JSON.stringify(chromeState)
+        }`,
+      );
+    }
     expect(geometry?.teal, `drag frame ${state.renderedFrames} had no teal overlay pixels`).not
       .toBeNull();
     if (
