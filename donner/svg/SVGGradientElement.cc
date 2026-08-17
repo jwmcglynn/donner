@@ -3,6 +3,7 @@
 #include "donner/svg/components/layout/LayoutSystem.h"
 #include "donner/svg/components/paint/GradientComponent.h"
 #include "donner/svg/components/shadow/ComputedShadowTreeComponent.h"
+#include "donner/svg/components/shadow/ShadowTreeSystem.h"
 #include "donner/svg/renderer/RenderingContext.h"
 
 namespace donner::svg {
@@ -43,6 +44,7 @@ void SVGGradientElement::setHref(const std::optional<RcString>& value) {
   DocumentWriteAccess& access = mutation.access();
   handle_.get_or_emplace<components::GradientComponent>(access).href = value;
   // Force the shadow tree to be regenerated.
+  components::ShadowTreeSystem().teardownInstances(handle_);
   handle_.remove<components::ComputedShadowTreeComponent>(access);
 }
 

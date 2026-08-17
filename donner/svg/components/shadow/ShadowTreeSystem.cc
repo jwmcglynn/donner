@@ -62,6 +62,12 @@ void ShadowTreeSystem::teardown(Registry& registry, ComputedShadowTreeComponent&
   shadow.branches.clear();
 }
 
+void ShadowTreeSystem::teardownInstances(EntityHandle handle) {
+  if (auto* shadow = handle.try_get<ComputedShadowTreeComponent>()) {
+    teardown(*handle.registry(), *shadow);
+  }
+}
+
 std::optional<size_t> ShadowTreeSystem::populateInstance(EntityHandle entity,
                                                          ComputedShadowTreeComponent& shadow,
                                                          ShadowBranchType branchType,

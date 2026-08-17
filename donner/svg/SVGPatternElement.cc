@@ -7,6 +7,7 @@
 #include "donner/svg/components/layout/ViewBoxComponent.h"
 #include "donner/svg/components/paint/PatternComponent.h"
 #include "donner/svg/components/shadow/ComputedShadowTreeComponent.h"
+#include "donner/svg/components/shadow/ShadowTreeSystem.h"
 #include "donner/svg/components/style/DoNotInheritFillOrStrokeTag.h"
 #include "donner/svg/core/PreserveAspectRatio.h"
 #include "donner/svg/renderer/RenderingContext.h"
@@ -17,6 +18,7 @@ namespace {
 void InvalidatePattern(EntityHandle handle) {
   components::LayoutSystem().invalidate(handle);
   handle.remove<components::ComputedPatternComponent>();
+  components::ShadowTreeSystem().teardownInstances(handle);
   handle.remove<components::ComputedShadowTreeComponent>();
   components::RenderingContext(*handle.registry()).invalidateRenderTree();
 }
