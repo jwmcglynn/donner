@@ -178,6 +178,105 @@ double srgbToLinearChannel(double s) {
   return std::pow((s + 0.055) / 1.055, 2.4);
 }
 
+/// Pixels a node just produced, tagged with the color space they are expressed in.
+struct NodeOutput {
+  FloatPixmap pixmap;
+  /// true when the channel values are linearRGB, false when they are sRGB.
+  bool linear = false;
+  /// true when the two spaces hold bit-identical values for this buffer, which is the case
+  /// exactly when every RGB channel is zero: unpremultiplying zero yields zero, both transfer
+  /// functions map zero to zero, and neither touches alpha. Alpha-only buffers therefore never
+  /// need a conversion pass, no matter which space consumes them.
+  bool spaceInvariant = false;
+};
+
+/// A filter buffer that remembers which color space its pixels are in.
+///
+/// Primitives are defined to operate in an interpolation space, and SVG picks that space per
+/// primitive rather than per graph (`color-interpolation-filters`). Tagging each buffer instead
+/// of normalizing every node's result back to one storage space means a graph whose primitives
+/// agree on a space converts once on the way in and once on the way out, while a mixed graph pays
+/// a conversion only on the edges that actually cross between spaces.
+///
+/// The stored pixels are never converted in place, because one buffer can feed several nodes:
+/// an in-place conversion would either corrupt a later consumer that wants the original space or
+/// force a lossy round trip back to it. The other space is materialized alongside instead, and
+/// only once per buffer.
+class SpacedPixmap {
+ public:
+  SpacedPixmap() = default;
+
+  SpacedPixmap(FloatPixmap pixmap, bool linear) : pixmap_(std::move(pixmap)), linear_(linear) {}
+
+  explicit SpacedPixmap(NodeOutput output)
+      : pixmap_(std::move(output.pixmap)),
+        linear_(output.linear),
+        spaceInvariant_(output.spaceInvariant) {}
+
+  /// Wraps a buffer whose RGB channels are all zero, which reads identically in both spaces.
+  static SpacedPixmap alphaOnly(FloatPixmap pixmap) {
+    SpacedPixmap result(std::move(pixmap), /*linear=*/false);
+    result.spaceInvariant_ = true;
+    return result;
+  }
+
+  /// Returns the pixels in the requested space, materializing and caching the conversion the
+  /// first time a consumer asks for a space the stored pixels are not already in.
+  const FloatPixmap& in(bool linear) {
+    if (spaceInvariant_ || linear == linear_) {
+      return pixmap_;
+    }
+
+    if (!converted_.has_value()) {
+      FloatPixmap fp(pixmap_);
+      if (linear) {
+        srgbToLinear(fp);
+      } else {
+        linearToSrgb(fp);
+      }
+      converted_ = std::move(fp);
+    }
+
+    return *converted_;
+  }
+
+  /// Returns the stored pixels without converting. Only valid for operations that are
+  /// independent of the color space, such as moving or clearing pixels.
+  [[nodiscard]] const FloatPixmap& spaceAgnostic() const { return pixmap_; }
+
+  /// Takes ownership of the pixels in the requested space, converting in place when no cached
+  /// conversion exists. The buffer must not be read afterwards.
+  FloatPixmap release(bool linear) {
+    if (spaceInvariant_ || linear == linear_) {
+      return std::move(pixmap_);
+    }
+
+    if (converted_.has_value()) {
+      return std::move(*converted_);
+    }
+
+    FloatPixmap fp = std::move(pixmap_);
+    if (linear) {
+      srgbToLinear(fp);
+    } else {
+      linearToSrgb(fp);
+    }
+    return fp;
+  }
+
+  /// Describes the stored pixels so a space-independent operation can tag its own result the
+  /// same way.
+  [[nodiscard]] NodeOutput describe(FloatPixmap pixmap) const {
+    return NodeOutput{std::move(pixmap), linear_, spaceInvariant_};
+  }
+
+ private:
+  FloatPixmap pixmap_;
+  bool linear_ = false;
+  bool spaceInvariant_ = false;
+  std::optional<FloatPixmap> converted_;
+};
+
 }  // namespace
 
 bool executeFilterGraph(Pixmap& sourceGraphic, const FilterGraph& graph) {
@@ -187,73 +286,84 @@ bool executeFilterGraph(Pixmap& sourceGraphic, const FilterGraph& graph) {
     return false;
   }
 
-  // Float sRGB intermediate storage — eliminates uint8 quantization between nodes.
-  // All buffers are stored as float [0,1] in sRGB gamma. Per-node linearRGB conversion
-  // uses float↔float srgbToLinear/linearToSrgb (no lossy uint8 round-trip).
-  FloatPixmap sourceFloat = FloatPixmap::fromPixmap(sourceGraphic);
+  // Float intermediate storage avoids uint8 quantization between nodes. Every buffer is
+  // float [0,1] premultiplied, tagged with the color space it holds (see SpacedPixmap). The
+  // graph's pixel data therefore crosses between sRGB and linearRGB only where two adjacent
+  // primitives disagree about the interpolation space, instead of on every primitive: the usual
+  // graph, where all primitives share one space, converts once on entry and once on exit.
+  FloatPixmap sourceFloatPixels = FloatPixmap::fromPixmap(sourceGraphic);
 
   if (graph.clipSourceToFilterRegion && graph.filterRegion.has_value()) {
     if (graph.filterFromDevice.has_value() && graph.userSpaceFilterRegion.has_value()) {
-      applySubregionClipping(sourceFloat, *graph.filterRegion, w, h, &*graph.filterFromDevice,
+      applySubregionClipping(sourceFloatPixels, *graph.filterRegion, w, h, &*graph.filterFromDevice,
                              &*graph.userSpaceFilterRegion);
     } else {
-      applySubregionClipping(sourceFloat, *graph.filterRegion, w, h);
+      applySubregionClipping(sourceFloatPixels, *graph.filterRegion, w, h);
     }
   }
 
-  // Convert paint inputs to float sRGB.
-  std::optional<FloatPixmap> fillPaintStorage =
+  // The source graphic and the paint inputs arrive as uint8 sRGB.
+  SpacedPixmap sourceFloat(std::move(sourceFloatPixels), /*linear=*/false);
+  std::optional<SpacedPixmap> fillPaintStorage =
       graph.fillPaintInput.has_value()
-          ? std::make_optional(FloatPixmap::fromPixmap(*graph.fillPaintInput))
+          ? std::make_optional(SpacedPixmap(FloatPixmap::fromPixmap(*graph.fillPaintInput),
+                                            /*linear=*/false))
           : std::nullopt;
-  std::optional<FloatPixmap> strokePaintStorage =
+  std::optional<SpacedPixmap> strokePaintStorage =
       graph.strokePaintInput.has_value()
-          ? std::make_optional(FloatPixmap::fromPixmap(*graph.strokePaintInput))
+          ? std::make_optional(SpacedPixmap(FloatPixmap::fromPixmap(*graph.strokePaintInput),
+                                            /*linear=*/false))
           : std::nullopt;
 
-  // Buffer management — all intermediate storage in float sRGB.
-  FloatPixmap* source = &sourceFloat;
-  FloatPixmap* fillPaint = fillPaintStorage.has_value() ? &*fillPaintStorage : nullptr;
-  FloatPixmap* strokePaint = strokePaintStorage.has_value() ? &*strokePaintStorage : nullptr;
-  std::optional<FloatPixmap> transparentPaintInput;
-  std::optional<FloatPixmap> sourceAlpha;
-  std::optional<FloatPixmap> previousOutput;
-  std::map<std::string, FloatPixmap> namedBuffers;
+  // Buffer management.
+  SpacedPixmap* source = &sourceFloat;
+  SpacedPixmap* fillPaint = fillPaintStorage.has_value() ? &*fillPaintStorage : nullptr;
+  SpacedPixmap* strokePaint = strokePaintStorage.has_value() ? &*strokePaintStorage : nullptr;
+  std::optional<SpacedPixmap> transparentPaintInput;
+  std::optional<SpacedPixmap> sourceAlpha;
+  std::optional<SpacedPixmap> previousOutput;
+  std::map<std::string, SpacedPixmap> namedBuffers;
 
   // Subregion tracking.
   const Box fullRegion = Box::fromWH(w, h);
   const Box filterRegionBox =
       graph.filterRegion.has_value() ? Box::fromPixelRect(*graph.filterRegion) : fullRegion;
   Box previousOutputSubregion = fullRegion;
+  // Alpha coverage does not depend on the color space, so the paint bounds can read the stored
+  // pixels directly.
   const std::optional<Box> fillPaintSubregion =
-      fillPaint != nullptr ? computeNonTransparentBounds(*fillPaint) : std::nullopt;
+      fillPaint != nullptr ? computeNonTransparentBounds(fillPaint->spaceAgnostic()) : std::nullopt;
   const std::optional<Box> strokePaintSubregion =
-      strokePaint != nullptr ? computeNonTransparentBounds(*strokePaint) : std::nullopt;
+      strokePaint != nullptr ? computeNonTransparentBounds(strokePaint->spaceAgnostic())
+                             : std::nullopt;
   std::map<std::string, Box> namedSubregions;
 
-  auto getTransparentPaintInput = [&]() -> FloatPixmap* {
+  auto getTransparentPaintInput = [&]() -> SpacedPixmap* {
     if (!transparentPaintInput.has_value()) {
-      transparentPaintInput = createTransparentFloat(w, h);
+      transparentPaintInput = SpacedPixmap::alphaOnly(createTransparentFloat(w, h));
     }
     return &*transparentPaintInput;
   };
 
-  auto getSourceAlpha = [&]() -> FloatPixmap* {
+  auto getSourceAlpha = [&]() -> SpacedPixmap* {
     if (!sourceAlpha.has_value()) {
-      sourceAlpha = FloatPixmap(*source);
-      auto data = sourceAlpha->data();
+      // Zeroing RGB makes the buffer read the same in either space, so SourceAlpha never needs a
+      // conversion pass regardless of which space the consuming primitive works in.
+      FloatPixmap alphaOnly(source->spaceAgnostic());
+      auto data = alphaOnly.data();
       for (int i = 0; i < w * h; ++i) {
         data[i * 4 + 0] = 0.0f;
         data[i * 4 + 1] = 0.0f;
         data[i * 4 + 2] = 0.0f;
       }
+      sourceAlpha = SpacedPixmap::alphaOnly(std::move(alphaOnly));
     }
     return &sourceAlpha.value();
   };
 
-  auto resolveInput = [&](const NodeInput& input) -> FloatPixmap* {
+  auto resolveInput = [&](const NodeInput& input) -> SpacedPixmap* {
     return std::visit(
-        [&](const auto& v) -> FloatPixmap* {
+        [&](const auto& v) -> SpacedPixmap* {
           using V = std::decay_t<decltype(v)>;
           if constexpr (std::is_same_v<V, NodeInput::Previous>) {
             return previousOutput.has_value() ? &previousOutput.value() : source;
@@ -365,10 +475,12 @@ bool executeFilterGraph(Pixmap& sourceGraphic, const FilterGraph& graph) {
   for (const GraphNode& node : graph.nodes) {
     const bool nodeLinearRGB = node.useLinearRGB.value_or(graph.useLinearRGB);
 
-    // All stored buffers are float sRGB. Color space conversion happens per-node.
-    FloatPixmap* input = node.inputs.empty() ? source : resolveInput(node.inputs[0]);
+    // Each buffer knows its own color space, so a node asks its inputs for the space it works in
+    // and tags its result with that same space. `in()` is a no-op whenever the producer already
+    // agreed with this node, which is the common case.
+    SpacedPixmap* input = node.inputs.empty() ? source : resolveInput(node.inputs[0]);
 
-    std::optional<FloatPixmap> output;
+    std::optional<NodeOutput> output;
 
     std::visit(
         [&](const auto& primitive) {
@@ -376,107 +488,63 @@ bool executeFilterGraph(Pixmap& sourceGraphic, const FilterGraph& graph) {
           using namespace graph_primitive;
 
           if constexpr (std::is_same_v<T, GaussianBlur>) {
-            auto fp = FloatPixmap(*input);
-            if (nodeLinearRGB) {
-              srgbToLinear(fp);
-            }
+            auto fp = FloatPixmap(input->in(nodeLinearRGB));
             gaussianBlur(fp, primitive.sigmaX, primitive.sigmaY, primitive.edgeMode);
-            if (nodeLinearRGB) {
-              linearToSrgb(fp);
-            }
-            output = std::move(fp);
+            output = NodeOutput{std::move(fp), nodeLinearRGB};
 
           } else if constexpr (std::is_same_v<T, Flood>) {
-            // Flood color is sRGB uint8. Convert to float and store as sRGB float.
+            // Flood color is premultiplied sRGB uint8, so a linearRGB node has to convert it into
+            // its own space.
             auto fp = createTransparentFloat(w, h);
             flood(fp, primitive.r / 255.0f, primitive.g / 255.0f, primitive.b / 255.0f,
                   primitive.a / 255.0f);
-            output = std::move(fp);
+            if (nodeLinearRGB) {
+              srgbToLinear(fp);
+            }
+            output = NodeOutput{std::move(fp), nodeLinearRGB};
 
           } else if constexpr (std::is_same_v<T, graph_primitive::Offset>) {
-            // Pure pixel mover — color space doesn't affect the operation.
+            // Pure pixel mover: the result is the input's pixels in the input's space, so it
+            // needs no conversion in either direction.
             auto fpOut = createTransparentFloat(w, h);
-            filter::offset(*input, fpOut, primitive.dx, primitive.dy);
-            output = std::move(fpOut);
+            filter::offset(input->spaceAgnostic(), fpOut, primitive.dx, primitive.dy);
+            output = input->describe(std::move(fpOut));
 
           } else if constexpr (std::is_same_v<T, graph_primitive::Composite>) {
-            FloatPixmap* input2 = node.inputs.size() > 1 ? resolveInput(node.inputs[1]) : source;
-            if (nodeLinearRGB) {
-              auto fpIn1 = FloatPixmap(*input);
-              auto fpIn2 = FloatPixmap(*input2);
-              srgbToLinear(fpIn1);
-              srgbToLinear(fpIn2);
-              auto fpOut = createTransparentFloat(w, h);
-              composite(fpIn1, fpIn2, fpOut, primitive.op, primitive.k1, primitive.k2, primitive.k3,
-                        primitive.k4);
-              linearToSrgb(fpOut);
-              output = std::move(fpOut);
-            } else {
-              auto fpOut = createTransparentFloat(w, h);
-              composite(*input, *input2, fpOut, primitive.op, primitive.k1, primitive.k2,
-                        primitive.k3, primitive.k4);
-              output = std::move(fpOut);
-            }
+            SpacedPixmap* input2 = node.inputs.size() > 1 ? resolveInput(node.inputs[1]) : source;
+            const FloatPixmap& in1 = input->in(nodeLinearRGB);
+            const FloatPixmap& in2 = input2->in(nodeLinearRGB);
+            auto fpOut = createTransparentFloat(w, h);
+            composite(in1, in2, fpOut, primitive.op, primitive.k1, primitive.k2, primitive.k3,
+                      primitive.k4);
+            output = NodeOutput{std::move(fpOut), nodeLinearRGB};
 
           } else if constexpr (std::is_same_v<T, graph_primitive::Blend>) {
-            FloatPixmap* input2 = node.inputs.size() > 1 ? resolveInput(node.inputs[1]) : source;
-            if (nodeLinearRGB) {
-              auto fpIn1 = FloatPixmap(*input);
-              auto fpIn2 = FloatPixmap(*input2);
-              srgbToLinear(fpIn1);
-              srgbToLinear(fpIn2);
-              auto fpOut = createTransparentFloat(w, h);
-              blend(fpIn2, fpIn1, fpOut, primitive.mode);
-              linearToSrgb(fpOut);
-              output = std::move(fpOut);
-            } else {
-              auto fpOut = createTransparentFloat(w, h);
-              blend(*input2, *input, fpOut, primitive.mode);
-              output = std::move(fpOut);
-            }
+            SpacedPixmap* input2 = node.inputs.size() > 1 ? resolveInput(node.inputs[1]) : source;
+            const FloatPixmap& in1 = input->in(nodeLinearRGB);
+            const FloatPixmap& in2 = input2->in(nodeLinearRGB);
+            auto fpOut = createTransparentFloat(w, h);
+            blend(in2, in1, fpOut, primitive.mode);
+            output = NodeOutput{std::move(fpOut), nodeLinearRGB};
 
           } else if constexpr (std::is_same_v<T, graph_primitive::Merge>) {
-            if (nodeLinearRGB) {
-              std::vector<FloatPixmap> mergeFloats;
-              mergeFloats.reserve(node.inputs.size());
-              for (const auto& mergeInput : node.inputs) {
-                FloatPixmap* mergeRaw = resolveInput(mergeInput);
-                mergeFloats.push_back(FloatPixmap(*mergeRaw));
-                srgbToLinear(mergeFloats.back());
-              }
-              std::vector<const FloatPixmap*> floatLayers;
-              floatLayers.reserve(mergeFloats.size());
-              for (auto& fp : mergeFloats) {
-                floatLayers.push_back(&fp);
-              }
-              auto fpOut = createTransparentFloat(w, h);
-              merge(std::span<const FloatPixmap* const>(floatLayers), fpOut);
-              linearToSrgb(fpOut);
-              output = std::move(fpOut);
-            } else {
-              std::vector<const FloatPixmap*> layers;
-              for (const auto& mergeInput : node.inputs) {
-                layers.push_back(resolveInput(mergeInput));
-              }
-              auto fpOut = createTransparentFloat(w, h);
-              merge(std::span<const FloatPixmap* const>(layers), fpOut);
-              output = std::move(fpOut);
+            std::vector<const FloatPixmap*> layers;
+            layers.reserve(node.inputs.size());
+            for (const auto& mergeInput : node.inputs) {
+              layers.push_back(&resolveInput(mergeInput)->in(nodeLinearRGB));
             }
+            auto fpOut = createTransparentFloat(w, h);
+            merge(std::span<const FloatPixmap* const>(layers), fpOut);
+            output = NodeOutput{std::move(fpOut), nodeLinearRGB};
 
           } else if constexpr (std::is_same_v<T, graph_primitive::ColorMatrix>) {
             if (primitive.matrix == identityMatrix()) {
-              // Identity matrix: pass through without color space conversion.
-              output = FloatPixmap(*input);
-            } else if (nodeLinearRGB) {
-              auto fp = FloatPixmap(*input);
-              srgbToLinear(fp);
-              colorMatrix(fp, primitive.matrix);
-              linearToSrgb(fp);
-              output = std::move(fp);
+              // Identity matrix: pass through, which is independent of the color space.
+              output = input->describe(FloatPixmap(input->spaceAgnostic()));
             } else {
-              auto fp = FloatPixmap(*input);
+              auto fp = FloatPixmap(input->in(nodeLinearRGB));
               colorMatrix(fp, primitive.matrix);
-              output = std::move(fp);
+              output = NodeOutput{std::move(fp), nodeLinearRGB};
             }
 
           } else if constexpr (std::is_same_v<T, graph_primitive::ComponentTransfer>) {
@@ -491,16 +559,10 @@ bool executeFilterGraph(Pixmap& sourceGraphic, const FilterGraph& graph) {
               tf.offset = f.offset;
               return tf;
             };
-            auto fp = FloatPixmap(*input);
-            if (nodeLinearRGB) {
-              srgbToLinear(fp);
-            }
+            auto fp = FloatPixmap(input->in(nodeLinearRGB));
             componentTransfer(fp, toFunc(primitive.funcR), toFunc(primitive.funcG),
                               toFunc(primitive.funcB), toFunc(primitive.funcA));
-            if (nodeLinearRGB) {
-              linearToSrgb(fp);
-            }
-            output = std::move(fp);
+            output = NodeOutput{std::move(fp), nodeLinearRGB};
 
           } else if constexpr (std::is_same_v<T, graph_primitive::ConvolveMatrix>) {
             auto fpOut = createTransparentFloat(w, h);
@@ -520,16 +582,9 @@ bool executeFilterGraph(Pixmap& sourceGraphic, const FilterGraph& graph) {
               params.targetY = primitive.targetY;
               params.edgeMode = primitive.edgeMode;
               params.preserveAlpha = primitive.preserveAlpha;
-              if (nodeLinearRGB) {
-                auto fpIn = FloatPixmap(*input);
-                srgbToLinear(fpIn);
-                convolveMatrix(fpIn, fpOut, params);
-                linearToSrgb(fpOut);
-              } else {
-                convolveMatrix(*input, fpOut, params);
-              }
+              convolveMatrix(input->in(nodeLinearRGB), fpOut, params);
             }
-            output = std::move(fpOut);
+            output = NodeOutput{std::move(fpOut), nodeLinearRGB};
 
           } else if constexpr (std::is_same_v<T, graph_primitive::Morphology>) {
             // SVG Filter Effects §15.4: a negative radius, or a zero radius on both axes
@@ -540,22 +595,17 @@ bool executeFilterGraph(Pixmap& sourceGraphic, const FilterGraph& graph) {
             const bool disabled = primitive.radiusX < 0 || primitive.radiusY < 0 ||
                                   (primitive.radiusX == 0 && primitive.radiusY == 0);
             if (disabled) {
-              output = FloatPixmap(*input);
+              // Pass-through, which is independent of the color space.
+              output = input->describe(FloatPixmap(input->spaceAgnostic()));
             } else {
               auto fpOut = createTransparentFloat(w, h);
-              if (nodeLinearRGB) {
-                auto fpIn = FloatPixmap(*input);
-                srgbToLinear(fpIn);
-                morphology(fpIn, fpOut, primitive.op, primitive.radiusX, primitive.radiusY);
-                linearToSrgb(fpOut);
-              } else {
-                morphology(*input, fpOut, primitive.op, primitive.radiusX, primitive.radiusY);
-              }
-              output = std::move(fpOut);
+              morphology(input->in(nodeLinearRGB), fpOut, primitive.op, primitive.radiusX,
+                         primitive.radiusY);
+              output = NodeOutput{std::move(fpOut), nodeLinearRGB};
             }
 
           } else if constexpr (std::is_same_v<T, graph_primitive::Tile>) {
-            // Pure pixel mover — color space doesn't affect the operation.
+            // Pure pixel mover, so the result stays in the input's space with no conversion.
             auto fpOut = createTransparentFloat(w, h);
             const Box inputSubregion = node.inputs.empty() ? previousOutputSubregion
                                                            : resolveInputSubregion(node.inputs[0]);
@@ -566,56 +616,36 @@ bool executeFilterGraph(Pixmap& sourceGraphic, const FilterGraph& graph) {
             const int tileW = tileR - tileX;
             const int tileH = tileB - tileY;
             if (tileW > 0 && tileH > 0) {
-              tile(*input, fpOut, tileX, tileY, tileW, tileH);
+              tile(input->spaceAgnostic(), fpOut, tileX, tileY, tileW, tileH);
             }
-            output = std::move(fpOut);
+            output = input->describe(std::move(fpOut));
 
           } else if constexpr (std::is_same_v<T, graph_primitive::Turbulence>) {
+            // Turbulence generates noise directly in the node's interpolation space.
             auto fp = createTransparentFloat(w, h);
             turbulence(fp, primitive.params);
-            if (nodeLinearRGB) {
-              // Turbulence generates noise in the processing color space (linear).
-              // Convert to sRGB for storage.
-              linearToSrgb(fp);
-            }
-            output = std::move(fp);
+            output = NodeOutput{std::move(fp), nodeLinearRGB};
 
           } else if constexpr (std::is_same_v<T, graph_primitive::DisplacementMap>) {
-            FloatPixmap* input2 = node.inputs.size() > 1 ? resolveInput(node.inputs[1]) : source;
-            if (nodeLinearRGB) {
-              auto fpIn1 = FloatPixmap(*input);
-              auto fpIn2 = FloatPixmap(*input2);
-              srgbToLinear(fpIn1);
-              srgbToLinear(fpIn2);
-              auto fpOut = createTransparentFloat(w, h);
-              displacementMap(fpIn1, fpIn2, fpOut, primitive.scale, primitive.xChannel,
-                              primitive.yChannel);
-              linearToSrgb(fpOut);
-              output = std::move(fpOut);
-            } else {
-              auto fpOut = createTransparentFloat(w, h);
-              displacementMap(*input, *input2, fpOut, primitive.scale, primitive.xChannel,
-                              primitive.yChannel);
-              output = std::move(fpOut);
-            }
+            SpacedPixmap* input2 = node.inputs.size() > 1 ? resolveInput(node.inputs[1]) : source;
+            const FloatPixmap& in1 = input->in(nodeLinearRGB);
+            const FloatPixmap& in2 = input2->in(nodeLinearRGB);
+            auto fpOut = createTransparentFloat(w, h);
+            displacementMap(in1, in2, fpOut, primitive.scale, primitive.xChannel,
+                            primitive.yChannel);
+            output = NodeOutput{std::move(fpOut), nodeLinearRGB};
 
           } else if constexpr (std::is_same_v<T, graph_primitive::DiffuseLighting>) {
+            auto fpOut = createTransparentFloat(w, h);
+            auto params = primitive.params;
             if (nodeLinearRGB) {
-              auto fpIn = FloatPixmap(*input);
-              srgbToLinear(fpIn);
-              auto fpOut = createTransparentFloat(w, h);
-              auto params = primitive.params;
+              // The light color is authored in sRGB, so it follows the pixels into linearRGB.
               params.lightR = srgbToLinearChannel(params.lightR);
               params.lightG = srgbToLinearChannel(params.lightG);
               params.lightB = srgbToLinearChannel(params.lightB);
-              diffuseLighting(fpIn, fpOut, params);
-              linearToSrgb(fpOut);
-              output = std::move(fpOut);
-            } else {
-              auto fpOut = createTransparentFloat(w, h);
-              diffuseLighting(*input, fpOut, primitive.params);
-              output = std::move(fpOut);
             }
+            diffuseLighting(input->in(nodeLinearRGB), fpOut, params);
+            output = NodeOutput{std::move(fpOut), nodeLinearRGB};
 
           } else if constexpr (std::is_same_v<T, graph_primitive::SpecularLighting>) {
             // Per SVG spec, specularExponent must be in [1, 128].
@@ -625,75 +655,44 @@ bool executeFilterGraph(Pixmap& sourceGraphic, const FilterGraph& graph) {
               auto params = primitive.params;
               params.specularExponent = std::min(params.specularExponent, 128.0);
               if (nodeLinearRGB) {
-                auto fpIn = FloatPixmap(*input);
-                srgbToLinear(fpIn);
                 params.lightR = srgbToLinearChannel(params.lightR);
                 params.lightG = srgbToLinearChannel(params.lightG);
                 params.lightB = srgbToLinearChannel(params.lightB);
-                specularLighting(fpIn, fpOut, params);
-                linearToSrgb(fpOut);
-              } else {
-                specularLighting(*input, fpOut, params);
               }
+              specularLighting(input->in(nodeLinearRGB), fpOut, params);
             }
-            output = std::move(fpOut);
+            output = NodeOutput{std::move(fpOut), nodeLinearRGB};
 
           } else if constexpr (std::is_same_v<T, graph_primitive::DropShadow>) {
+            // Decomposed into flood + composite-in + offset + blur + merge, all run in the
+            // node's own interpolation space. Only the flood color needs converting, because it
+            // is authored as premultiplied sRGB; the source alpha carries no color.
+            auto floodBuf = createTransparentFloat(w, h);
+            flood(floodBuf, primitive.r / 255.0f, primitive.g / 255.0f, primitive.b / 255.0f,
+                  primitive.a / 255.0f);
             if (nodeLinearRGB) {
-              // All sub-operations in float linear.
-              auto fpFlood = createTransparentFloat(w, h);
-              flood(fpFlood, primitive.r / 255.0f, primitive.g / 255.0f, primitive.b / 255.0f,
-                    primitive.a / 255.0f);
-              srgbToLinear(fpFlood);
-
-              // Source alpha as float (RGB zeroed, alpha preserved).
-              // Alpha is not gamma-encoded, so no color space conversion needed.
-              auto fpSrcAlpha = FloatPixmap(*source);
-              auto srcAlphaData = fpSrcAlpha.data();
-              for (int i = 0; i < w * h; ++i) {
-                srcAlphaData[i * 4 + 0] = 0.0f;
-                srcAlphaData[i * 4 + 1] = 0.0f;
-                srcAlphaData[i * 4 + 2] = 0.0f;
-              }
-
-              auto fpComposite = createTransparentFloat(w, h);
-              composite(fpFlood, fpSrcAlpha, fpComposite, CompositeOp::In);
-
-              auto fpOffset = createTransparentFloat(w, h);
-              filter::offset(fpComposite, fpOffset, primitive.dx, primitive.dy);
-
-              gaussianBlur(fpOffset, primitive.sigmaX, primitive.sigmaY);
-
-              auto fpInput = FloatPixmap(*input);
-              srgbToLinear(fpInput);
-
-              auto fpOut = createTransparentFloat(w, h);
-              std::vector<const FloatPixmap*> layers = {&fpOffset, &fpInput};
-              merge(std::span<const FloatPixmap* const>(layers), fpOut);
-              linearToSrgb(fpOut);
-              output = std::move(fpOut);
-            } else {
-              auto floodBuf = createTransparentFloat(w, h);
-              flood(floodBuf, primitive.r / 255.0f, primitive.g / 255.0f, primitive.b / 255.0f,
-                    primitive.a / 255.0f);
-
-              auto compositeBuf = createTransparentFloat(w, h);
-              FloatPixmap* srcAlpha = getSourceAlpha();
-              composite(floodBuf, *srcAlpha, compositeBuf, CompositeOp::In);
-
-              auto offsetBuf = createTransparentFloat(w, h);
-              filter::offset(compositeBuf, offsetBuf, primitive.dx, primitive.dy);
-
-              gaussianBlur(offsetBuf, primitive.sigmaX, primitive.sigmaY);
-
-              auto fpOut = createTransparentFloat(w, h);
-              std::vector<const FloatPixmap*> layers = {&offsetBuf, input};
-              merge(std::span<const FloatPixmap* const>(layers), fpOut);
-              output = std::move(fpOut);
+              srgbToLinear(floodBuf);
             }
 
+            auto compositeBuf = createTransparentFloat(w, h);
+            composite(floodBuf, getSourceAlpha()->spaceAgnostic(), compositeBuf, CompositeOp::In);
+
+            auto offsetBuf = createTransparentFloat(w, h);
+            filter::offset(compositeBuf, offsetBuf, primitive.dx, primitive.dy);
+
+            gaussianBlur(offsetBuf, primitive.sigmaX, primitive.sigmaY);
+
+            auto fpOut = createTransparentFloat(w, h);
+            const std::vector<const FloatPixmap*> layers = {&offsetBuf, &input->in(nodeLinearRGB)};
+            merge(std::span<const FloatPixmap* const>(layers), fpOut);
+            output = NodeOutput{std::move(fpOut), nodeLinearRGB};
+
           } else if constexpr (std::is_same_v<T, graph_primitive::Image>) {
-            // Image data is sRGB uint8. Mitchell-Netravali bicubic resampling in float.
+            // Image data is sRGB uint8, and the resampling below runs on those sRGB values, so
+            // the result is tagged sRGB no matter which space this node interpolates in. A
+            // linearRGB consumer converts it, exactly as it would convert any other sRGB buffer.
+            //
+            // Mitchell-Netravali bicubic resampling in float.
             //
             // resvg (the reference renderer) resamples feImage content with the
             // Mitchell-Netravali cubic kernel (B = C = 1/3), the standard "high quality"
@@ -762,8 +761,10 @@ bool executeFilterGraph(Pixmap& sourceGraphic, const FilterGraph& graph) {
                   // position `srcXf + 0.5`) instead of the bicubic footprint. Exact per-texel, so
                   // there is no interpolation ramp; block edges stay hard.
                   if (primitive.pixelated) {
-                    const int nsx = std::clamp(static_cast<int>(std::floor(srcXf + 0.5)), 0, srcW - 1);
-                    const int nsy = std::clamp(static_cast<int>(std::floor(srcYf + 0.5)), 0, srcH - 1);
+                    const int nsx =
+                        std::clamp(static_cast<int>(std::floor(srcXf + 0.5)), 0, srcW - 1);
+                    const int nsy =
+                        std::clamp(static_cast<int>(std::floor(srcYf + 0.5)), 0, srcH - 1);
                     const std::size_t dstIdxN = static_cast<std::size_t>((dy * w + dx) * 4);
                     const float aN = static_cast<float>(sampleSrc(nsx, nsy, 3));
                     dstData[dstIdxN + 0] = std::min(static_cast<float>(sampleSrc(nsx, nsy, 0)), aN);
@@ -811,7 +812,7 @@ bool executeFilterGraph(Pixmap& sourceGraphic, const FilterGraph& graph) {
                 }
               }
             }
-            output = std::move(fpOut);
+            output = NodeOutput{std::move(fpOut), /*linear=*/false};
           }
         },
         node.primitive);
@@ -828,20 +829,24 @@ bool executeFilterGraph(Pixmap& sourceGraphic, const FilterGraph& graph) {
               ? &*graph.filterFromDevice
               : nullptr;
       const PixelRect* usrSub = xform ? &*node.userSpaceSubregion : nullptr;
-      applySubregionClipping(*output, clipRect, w, h, xform, usrSub);
+      // Clearing pixels is the same operation in either space, so it runs before the result is
+      // published and no conversion is involved.
+      applySubregionClipping(output->pixmap, clipRect, w, h, xform, usrSub);
 
+      SpacedPixmap produced(std::move(*output));
       if (node.result.has_value()) {
-        namedBuffers[*node.result] = FloatPixmap(*output);
+        namedBuffers[*node.result] = produced;
         namedSubregions[*node.result] = nodeSubregion;
       }
-      previousOutput = std::move(output);
+      previousOutput = std::move(produced);
       previousOutputSubregion = nodeSubregion;
     }
   }
 
-  // Convert final float sRGB result to uint8 sRGB.
+  // The graph's result leaves in sRGB: this is the single exit conversion, and it is skipped
+  // entirely when the last node already worked in sRGB.
   if (previousOutput.has_value()) {
-    Pixmap result = previousOutput->toPixmap();
+    Pixmap result = previousOutput->release(/*linear=*/false).toPixmap();
     auto srcData = result.data();
     auto dstData = sourceGraphic.data();
     std::copy(srcData.begin(), srcData.end(), dstData.begin());
