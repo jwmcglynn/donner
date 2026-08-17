@@ -970,6 +970,69 @@ TEST_F(RendererGeodeTest, StrokeWidthEditInvalidatesResidentGradientStroke) {
       << "A stroke-width edit must invalidate the resident gradient-stroke draw";
 }
 
+/// Removing one entity's residence component makes entt swap-and-pop the
+/// component pool: the LAST entity's component is move-assigned over the
+/// removed slot. The move must carry the record slot and its slab, or the
+/// removed component's destructor frees the survivor's record while the
+/// survivor's cached bind group still binds it; once that record storage is
+/// reused by another entity, the survivor renders with that entity's paint.
+/// Pin it with pixels across the frames where the freed slot gets reused.
+TEST_F(RendererGeodeTest, GeometryEditKeepsSiblingResidentPaintsIntact) {
+  ParseWarningSink warningSink;
+  auto maybeDocument = parser::SVGParser::ParseSVG(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="96" height="32">
+             <path id="a" d="M 2 2 L 30 2 L 30 30 L 2 30 Z" fill="#ff0000"/>
+             <path id="b" d="M 34 2 L 62 2 L 62 30 L 34 30 Z" fill="#00ff00"/>
+             <path id="c" d="M 66 2 L 94 2 L 94 30 L 66 30 Z" fill="#0000ff"/>
+           </svg>)svg",
+      warningSink);
+  ASSERT_FALSE(maybeDocument.hasError()) << maybeDocument.error();
+  SVGDocument document = std::move(maybeDocument).result();
+
+  RendererGeode renderer = createRenderer();
+  renderer.draw(document);
+  const RendererBitmap first = renderer.takeSnapshot();
+  ASSERT_FALSE(first.empty());
+  EXPECT_THAT(pixelAt(first, 16, 16), RgbaEq(255, 0, 0, 255));
+  EXPECT_THAT(pixelAt(first, 48, 16), RgbaEq(0, 255, 0, 255));
+  EXPECT_THAT(pixelAt(first, 80, 16), RgbaEq(0, 0, 255, 255));
+
+  // Edit the FIRST entity's geometry: the residence listener removes its
+  // component mid-pool, which swap-and-pops the last entity's component
+  // over it.
+  auto pathA = document.querySelector("#a");
+  ASSERT_TRUE(pathA.has_value());
+  pathA->setAttribute("d", "M 2 6 L 30 6 L 30 26 L 2 26 Z");
+
+  // Frame 2 performs the swap-and-pop (the listener fires inside the
+  // draw) and frees the removed component's record slot; frame 3 merges
+  // that slot into the free list. A second edit then forces a fresh
+  // record allocation at frame 4, which reuses the freed slot: if the
+  // survivor's bind group still points there, the survivor renders the
+  // edited entity's paint.
+  renderer.draw(document);
+  renderer.draw(document);
+  // Edit BOTH untouched-geometry siblings' shared shape class: two fresh
+  // record allocations pop the free list past the edited entity's own
+  // returned index and onto the slot the swap-and-pop shell freed, which
+  // is where a survivor with a stale bind group would pick up another
+  // entity's record.
+  pathA->setAttribute("d", "M 2 4 L 30 4 L 30 28 L 2 28 Z");
+  auto pathB = document.querySelector("#b");
+  ASSERT_TRUE(pathB.has_value());
+  pathB->setAttribute("d", "M 34 4 L 62 4 L 62 28 L 34 28 Z");
+  renderer.draw(document);
+  renderer.draw(document);
+  const RendererBitmap after = renderer.takeSnapshot();
+  ASSERT_FALSE(after.empty());
+  EXPECT_THAT(pixelAt(after, 16, 16), RgbaEq(255, 0, 0, 255))
+      << "The edited entity must render its own paint at the new geometry";
+  EXPECT_THAT(pixelAt(after, 48, 16), RgbaEq(0, 255, 0, 255))
+      << "An untouched sibling must keep its own paint after the pool swap";
+  EXPECT_THAT(pixelAt(after, 80, 16), RgbaEq(0, 0, 255, 255))
+      << "The swap-and-pop survivor must keep its own record and paint";
+}
+
 TEST_F(RendererGeodeTest, EmbeddedDeviceDrawPathExportsTextureSnapshot) {
   std::shared_ptr<geode::GeodeDevice> host = sharedDevice();
   ASSERT_TRUE(host != nullptr);
