@@ -3,8 +3,19 @@
 #include <entt/entity/helper.hpp>  // entt::to_entity (2-arg overload)
 
 #include "donner/base/Utils.h"
+#include "donner/base/xml/components/XMLNamespaceContext.h"
 
 namespace donner::components {
+
+namespace {
+
+/// Notify the document's namespace state that \p entity moved, since which namespace
+/// declarations apply to a node depends on its ancestors.
+void NotifyTreeChanged(Registry& registry, Entity entity) {
+  xml::components::XMLNamespaceContext::InvalidateScopesForTreeChange(registry, entity);
+}
+
+}  // namespace
 
 void TreeComponent::insertBefore(Registry& registry, Entity newNode, Entity referenceNode) {
   UTILS_RELEASE_ASSERT_MSG(newNode != entt::null, "newNode is null");
@@ -52,6 +63,7 @@ void TreeComponent::insertBefore(Registry& registry, Entity newNode, Entity refe
   }
 
   newTree.parent_ = self;
+  NotifyTreeChanged(registry, newNode);
 }
 
 void TreeComponent::appendChild(Registry& registry, Entity child) {
@@ -78,6 +90,7 @@ void TreeComponent::appendChild(Registry& registry, Entity child) {
   }
 
   lastChild_ = child;
+  NotifyTreeChanged(registry, child);
 }
 
 void TreeComponent::replaceChild(Registry& registry, Entity newChild, Entity oldChild) {
@@ -133,6 +146,8 @@ void TreeComponent::remove(Registry& registry) {
     parent_ = entt::null;
     previousSibling_ = entt::null;
     nextSibling_ = entt::null;
+
+    NotifyTreeChanged(registry, self);
   }
 }
 

@@ -66,9 +66,11 @@ public:
    * @return ParseDiagnostic Remapped error.
    */
   ParseDiagnostic fromSubparser(ParseDiagnostic&& error, ParserOrigin origin) {
-    const size_t line = lineOffsets_.offsetToLine(origin.startOffset);
-    const FileOffset parentOffset = FileOffset::OffsetWithLineInfo(
-        origin.startOffset, FileOffset::LineInfo{line, lineOffsets_.lineOffset(line)});
+    // LineInfo::offsetOnLine is a column within its line, not a byte offset into the file.
+    // fileOffset() computes both halves consistently; passing the line's own start offset as the
+    // column instead shifts every diagnostic on line 2 or later by the length of all preceding
+    // lines.
+    const FileOffset parentOffset = lineOffsets_.fileOffset(origin.startOffset);
 
     ParseDiagnostic newError = std::move(error);
     newError.range.start = newError.range.start.addParentOffset(parentOffset);

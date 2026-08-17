@@ -339,15 +339,28 @@ public:
 
   std::optional<SVGDocument> document() const { return document_; }
 
+  /**
+   * Create the SVG element matching \p tagName on \p node, or an unknown element if no type
+   * matches.
+   *
+   * @param tagName Qualified tag name to match against the known element types.
+   * @param node XML node to create the element on.
+   * @param isSvgNamespace Whether the tag name's prefix resolves to the SVG namespace. Resolved
+   *   once by the caller rather than once per candidate type, since it is the same answer for
+   *   every candidate.
+   */
+  ParseResult<SVGElement> createElement(const XMLQualifiedNameRef& tagName, const XMLNode& node,
+                                        bool isSvgNamespace) {
+    return createElement(tagName, node, isSvgNamespace, AllSVGElements());
+  }
+
   template <size_t I = 0, typename... Types>
   ParseResult<SVGElement> createElement(const XMLQualifiedNameRef& tagName, const XMLNode& node,
-                                        entt::type_list<Types...>) {
+                                        bool isSvgNamespace, entt::type_list<Types...>) {
     if constexpr (I != sizeof...(Types)) {
       using ElementT = std::tuple_element<I, std::tuple<Types...>>::type;
 
-      // TODO: A faster way to lookup Uris
-      if (node.getNamespaceUri(tagName.namespacePrefix) == "http://www.w3.org/2000/svg" &&
-          tagName.name == ElementT::Tag) {
+      if (isSvgNamespace && tagName.name == ElementT::Tag) {
         if constexpr (IsExperimental<ElementT>()) {
           if (context_.options().enableExperimental) {
             auto element = ElementT::CreateOn(node.entityHandle());
@@ -362,7 +375,7 @@ public:
         }
       }
 
-      return createElement<I + 1>(tagName, node, entt::type_list<Types...>());
+      return createElement<I + 1>(tagName, node, isSvgNamespace, entt::type_list<Types...>());
     } else {
       auto element = SVGUnknownElement::CreateOn(node.entityHandle(), tagName);
       return ParseAttributes(context_, element, node);
@@ -408,7 +421,9 @@ public:
           continue;
         }
 
-        auto maybeNewElement = createElement(child->tagName(), child.value(), AllSVGElements());
+        // The namespace check above already resolved this tag name's prefix.
+        auto maybeNewElement =
+            createElement(child->tagName(), child.value(), /*isSvgNamespace=*/true);
         if (maybeNewElement.hasError()) {
           return std::move(maybeNewElement.error());
         }

@@ -41,7 +41,12 @@ void AttributesComponent::setAttribute(Registry& registry, const xml::XMLQualifi
   }
 
   if (isNamespaceOverride(nameAllocated)) {
-    ++numNamespaceOverrides_;
+    // Count declarations present, not writes: overwriting an existing xmlns attribute replaces
+    // the declaration rather than adding one, while removeAttribute only ever decrements once.
+    // Counting writes leaves hasNamespaceOverrides() true after the last declaration is removed.
+    if (newAttrInserted) {
+      ++numNamespaceOverrides_;
+    }
 
     const Entity self = entt::to_entity(registry.storage<AttributesComponent>(), *this);
     registry.ctx().get<xml::components::XMLNamespaceContext>().addNamespaceOverride(
