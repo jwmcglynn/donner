@@ -10,6 +10,7 @@
 #include "donner/base/ParseWarningSink.h"
 #include "donner/base/tests/BaseTestUtils.h"
 #include "donner/base/tests/ParseResultTestUtils.h"
+#include "donner/svg/SVGPathElement.h"
 #include "donner/svg/components/shape/ComputedPathComponent.h"
 #include "donner/svg/components/style/StyleSystem.h"
 #include "donner/svg/parser/SVGParser.h"
@@ -634,6 +635,252 @@ TEST_F(ShapeSystemTest, PathMultipleMoveTo) {
   if (path) {
     EXPECT_FALSE(path->spline.empty());
   }
+}
+
+// --- Path data parse caching ---
+
+namespace {
+
+/// A spline that no shape in these tests produces. Writing it over a retained
+/// `ComputedPathComponent` makes it observable whether the next shape pass rewrote the component
+/// (marker gone, so the path data was parsed again) or reused it as-is (marker still present).
+Path MarkerSpline() {
+  return PathBuilder()
+      .moveTo(Vector2d(-1234.0, -5678.0))
+      .lineTo(Vector2d(-8765.0, -4321.0))
+      .build();
+}
+
+}  // namespace
+
+/**
+ * Path data is parsed once and the parse is skipped while the resolved path-data string is
+ * unchanged, so every way that string can change has to be shown to reach the parser again.
+ */
+class ShapeSystemPathCacheTest : public ShapeSystemTest {
+protected:
+  /// Run the style and shape passes again, the way a repeated render does.
+  void recomputeShapes(SVGDocument& document) {
+    StyleSystem().computeAllStyles(document.registry(), warningSink_);
+    shapeSystem.instantiateAllComputedPaths(document.registry(), warningSink_);
+  }
+
+  static ComputedPathComponent* computedPath(SVGElement element) {
+    return element.entityHandle().try_get<ComputedPathComponent>();
+  }
+
+  /// Overwrite the retained spline with \ref MarkerSpline.
+  void markComputedPath(SVGElement element) {
+    ComputedPathComponent* computed = computedPath(element);
+    ASSERT_THAT(computed, NotNull());
+    computed->spline = MarkerSpline();
+    computed->cachedLocalBounds.reset();
+  }
+
+  static bool isMarked(SVGElement element) {
+    const ComputedPathComponent* computed = computedPath(element);
+    return computed != nullptr && computed->spline == MarkerSpline();
+  }
+
+  /// The spline that `#p` gets in a document parsed from scratch, which is what a mutated
+  /// document has to converge on. Comparing against a separately parsed document is what makes
+  /// the check meaningful: the retained parse lives on the mutated document, so only a document
+  /// that never saw the mutation can show what the new value is supposed to produce.
+  Path freshSpline(std::string_view svg) {
+    SVGDocument fresh = ParseAndComputeShapes(svg);
+    std::optional<SVGElement> element = fresh.querySelector("#p");
+    EXPECT_TRUE(element.has_value());
+    if (!element) {
+      return Path();
+    }
+
+    const ComputedPathComponent* computed = computedPath(element.value());
+    EXPECT_THAT(computed, NotNull());
+    return computed ? computed->spline : Path();
+  }
+
+  ParseWarningSink warningSink_;
+};
+
+TEST_F(ShapeSystemPathCacheTest, UnchangedPathDataIsNotReparsed) {
+  auto document = ParseAndComputeShapes(R"(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+      <path id="p" d="M10 10 L90 90 L90 10 Z"/>
+    </svg>
+  )");
+
+  auto element = document.querySelector("#p");
+  ASSERT_TRUE(element.has_value());
+  ASSERT_NO_FATAL_FAILURE(markComputedPath(element.value()));
+
+  recomputeShapes(document);
+
+  // Nothing changed, so the retained component has to be returned untouched instead of being
+  // rebuilt from a fresh parse of the same string.
+  EXPECT_TRUE(isMarked(element.value()));
+}
+
+TEST_F(ShapeSystemPathCacheTest, SetDReparses) {
+  constexpr std::string_view kBefore = R"(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+      <path id="p" d="M10 10 L90 90"/>
+    </svg>
+  )";
+  constexpr std::string_view kAfter = R"(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+      <path id="p" d="M20 20 L80 40 L60 80 Z"/>
+    </svg>
+  )";
+
+  const Path expected = freshSpline(kAfter);
+  ASSERT_FALSE(expected == freshSpline(kBefore));
+
+  auto document = ParseAndComputeShapes(kBefore);
+  auto element = document.querySelector("#p");
+  ASSERT_TRUE(element.has_value());
+  ASSERT_NO_FATAL_FAILURE(markComputedPath(element.value()));
+
+  element->cast<SVGPathElement>().setD(RcString("M20 20 L80 40 L60 80 Z"));
+  recomputeShapes(document);
+
+  EXPECT_FALSE(isMarked(element.value()));
+  ASSERT_THAT(computedPath(element.value()), NotNull());
+  EXPECT_TRUE(computedPath(element.value())->spline == expected);
+}
+
+TEST_F(ShapeSystemPathCacheTest, SetAttributeDReparses) {
+  constexpr std::string_view kBefore = R"(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+      <path id="p" d="M10 10 L90 90"/>
+    </svg>
+  )";
+  constexpr std::string_view kAfter = R"(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+      <path id="p" d="M30 30 L70 30 L70 70 Z"/>
+    </svg>
+  )";
+
+  const Path expected = freshSpline(kAfter);
+  ASSERT_FALSE(expected == freshSpline(kBefore));
+
+  auto document = ParseAndComputeShapes(kBefore);
+  auto element = document.querySelector("#p");
+  ASSERT_TRUE(element.has_value());
+  ASSERT_NO_FATAL_FAILURE(markComputedPath(element.value()));
+
+  element->setAttribute("d", "M30 30 L70 30 L70 70 Z");
+  recomputeShapes(document);
+
+  EXPECT_FALSE(isMarked(element.value()));
+  ASSERT_THAT(computedPath(element.value()), NotNull());
+  EXPECT_TRUE(computedPath(element.value())->spline == expected);
+}
+
+TEST_F(ShapeSystemPathCacheTest, RemoveAttributeDDropsGeometry) {
+  auto document = ParseAndComputeShapes(R"(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+      <path id="p" d="M10 10 L90 90"/>
+    </svg>
+  )");
+
+  auto element = document.querySelector("#p");
+  ASSERT_TRUE(element.has_value());
+  ASSERT_NO_FATAL_FAILURE(markComputedPath(element.value()));
+
+  element->removeAttribute("d");
+  recomputeShapes(document);
+
+  // A path with no path data has no geometry at all, matching a document parsed without a `d`
+  // attribute.
+  EXPECT_THAT(computedPath(element.value()), testing::IsNull());
+}
+
+TEST_F(ShapeSystemPathCacheTest, StyleAttributeDReparses) {
+  constexpr std::string_view kBefore = R"(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+      <path id="p" d="M10 10 L90 90"/>
+    </svg>
+  )";
+  constexpr std::string_view kAfter = R"(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+      <path id="p" d="M10 10 L90 90" style="d: 'M40 40 L60 40 L60 60 Z'"/>
+    </svg>
+  )";
+
+  const Path expected = freshSpline(kAfter);
+  ASSERT_FALSE(expected == freshSpline(kBefore));
+
+  auto document = ParseAndComputeShapes(kBefore);
+  auto element = document.querySelector("#p");
+  ASSERT_TRUE(element.has_value());
+  ASSERT_NO_FATAL_FAILURE(markComputedPath(element.value()));
+
+  // A CSS `d` declaration is resolved by the shape pass itself and does not drop the computed
+  // path, so this is the mutation class the retained parse has to notice on its own rather than
+  // through an invalidation.
+  element->setStyle("d: 'M40 40 L60 40 L60 60 Z'");
+  recomputeShapes(document);
+
+  EXPECT_FALSE(isMarked(element.value()));
+  ASSERT_THAT(computedPath(element.value()), NotNull());
+  EXPECT_TRUE(computedPath(element.value())->spline == expected);
+}
+
+TEST_F(ShapeSystemPathCacheTest, SplineOverrideAndBackReparses) {
+  constexpr std::string_view kSvg = R"(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+      <path id="p" d="M10 10 L90 90"/>
+    </svg>
+  )";
+
+  const Path expected = freshSpline(kSvg);
+  const Path overrideSpline =
+      PathBuilder().moveTo(Vector2d(5.0, 5.0)).lineTo(Vector2d(25.0, 45.0)).build();
+  ASSERT_FALSE(expected == overrideSpline);
+
+  auto document = ParseAndComputeShapes(kSvg);
+  auto element = document.querySelector("#p");
+  ASSERT_TRUE(element.has_value());
+
+  element->cast<SVGPathElement>().setSpline(overrideSpline);
+  recomputeShapes(document);
+
+  ASSERT_THAT(computedPath(element.value()), NotNull());
+  EXPECT_TRUE(computedPath(element.value())->spline == overrideSpline);
+
+  // Going back to path data has to parse again: the spline that is currently retained was never
+  // produced by parsing a string, so it cannot be mistaken for a cached parse of one.
+  element->cast<SVGPathElement>().setD(RcString("M10 10 L90 90"));
+  recomputeShapes(document);
+
+  ASSERT_THAT(computedPath(element.value()), NotNull());
+  EXPECT_TRUE(computedPath(element.value())->spline == expected);
+}
+
+TEST_F(ShapeSystemPathCacheTest, MalformedPathDataReportsDiagnosticOnEveryPass) {
+  // Trailing `Q` with no coordinates: the parser returns the commands it did read plus a
+  // diagnostic, so there is a usable spline and a warning at the same time.
+  auto document = ParseSVG(R"(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+      <path id="p" d="M10 10 L90 90 Q"/>
+    </svg>
+  )");
+
+  ParseWarningSink firstSink;
+  StyleSystem().computeAllStyles(document.registry(), firstSink);
+  shapeSystem.instantiateAllComputedPaths(document.registry(), firstSink);
+  EXPECT_TRUE(firstSink.hasWarnings());
+
+  auto element = document.querySelector("#p");
+  ASSERT_TRUE(element.has_value());
+  ASSERT_THAT(computedPath(element.value()), NotNull());
+
+  // The diagnostic has to keep reaching the sink for as long as the malformed data is present,
+  // so path data that did not parse cleanly is never treated as a settled parse.
+  ParseWarningSink secondSink;
+  StyleSystem().computeAllStyles(document.registry(), secondSink);
+  shapeSystem.instantiateAllComputedPaths(document.registry(), secondSink);
+  EXPECT_TRUE(secondSink.hasWarnings());
 }
 
 }  // namespace donner::svg::components
