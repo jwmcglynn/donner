@@ -347,6 +347,27 @@ struct GeoEncoder::Impl : public GeodeTextureEncoder::UniformScratch {
     uint64_t offset;
     uint64_t size;
   };
+  /// One shared uniform allocation for every scene-batch draw this encoder
+  /// records while the uniform bytes stay unchanged (identity mvp plus
+  /// frame-constant viewport / clip / antialias state, so in practice all
+  /// batches of a frame). Sharing keeps the batch bind-group cache key
+  /// stable across batches and frames and drops the per-batch uniform
+  /// write.
+  std::vector<uint8_t> sceneBatchUniformBytes;
+  Allocation sceneBatchUniformAlloc = {};
+
+  Allocation allocSceneBatchUniform(const Uniforms& u) {
+    const auto* bytes = reinterpret_cast<const uint8_t*>(&u);
+    if (sceneBatchUniformAlloc.buffer && sceneBatchUniformBytes.size() == sizeof(Uniforms) &&
+        std::memcmp(sceneBatchUniformBytes.data(), bytes, sizeof(Uniforms)) == 0) {
+      return sceneBatchUniformAlloc;
+    }
+    sceneBatchUniformAlloc = allocInArena(uniformArena, &u, sizeof(Uniforms),
+                                          kUniformOffsetAlignment);
+    sceneBatchUniformBytes.assign(bytes, bytes + sizeof(Uniforms));
+    return sceneBatchUniformAlloc;
+  }
+
   /// Grow `arena` so at least `size` bytes fit from offset 0: retire the
   /// current buffer (already-recorded commands keep referencing it through
   /// encoder submission) and install a pooled or fresh larger one. Returns
@@ -1962,8 +1983,7 @@ void GeoEncoder::fillPathSceneBatch(const css::RGBA& color, FillRule rule,
 
   Uniforms u = {};
   impl_->populateBatchUniform(u, args, Transform2d(), /*identityMvp=*/true);
-  const auto uniAlloc =
-      impl_->allocInArena(impl_->uniformArena, &u, sizeof(Uniforms), kUniformOffsetAlignment);
+  const auto uniAlloc = impl_->allocSceneBatchUniform(u);
 
   // Whole-chunk views: valid while a chunk stays under the device's
   // maxStorageBufferBindingSize (default 128 MiB); kInitialChunkBytes
@@ -2003,14 +2023,30 @@ void GeoEncoder::fillPathSceneBatch(const css::RGBA& color, FillRule rule,
   chunkEntry(9, 9);
   chunkEntry(10, 10);
 
-  wgpu::BindGroupDescriptor bgDesc = {};
-  bgDesc.label = wgpuLabel("GeodeSceneBatchBindGroup");
-  bgDesc.layout = impl_->pipeline->bindGroupLayout();
-  bgDesc.entryCount = 11;
-  bgDesc.entries = entries;
-  wgpu::BindGroup bindGroup =
-      impl_->transientResources.retain(impl_->device->device().createBindGroup(bgDesc));
-  impl_->device->countBindGroup();
+  GeodeDevice::SceneBatchBindGroupKey cacheKey = {};
+  cacheKey.uniformBuffer = uniAlloc.buffer;
+  cacheKey.uniformOffset = uniAlloc.offset;
+  cacheKey.uniformSize = uniAlloc.size;
+  cacheKey.chunkBuffer = binding.chunkBuffer;
+  cacheKey.chunkBytes = chunkBytes;
+  cacheKey.recordBuffer = binding.recordBuffer;
+  cacheKey.recordOffset = recordSpanStart;
+  cacheKey.recordBytes = recordSpanBytes;
+
+  wgpu::BindGroup bindGroup = impl_->device->findSceneBatchBindGroup(cacheKey);
+  if (!bindGroup) {
+    wgpu::BindGroupDescriptor bgDesc = {};
+    bgDesc.label = wgpuLabel("GeodeSceneBatchBindGroup");
+    bgDesc.layout = impl_->pipeline->bindGroupLayout();
+    bgDesc.entryCount = 11;
+    bgDesc.entries = entries;
+    wgpu::BindGroup created = impl_->device->device().createBindGroup(bgDesc);
+    impl_->device->countBindGroup();
+    bindGroup = created;
+    // The cache takes ownership of the +1 handle and keeps the bound
+    // buffers alive for the entry's lifetime.
+    impl_->device->storeSceneBatchBindGroup(cacheKey, std::move(created));
+  }
 
   // The binding covers the span of consecutive record slots starting at
   // `firstInstance`; the shader's instance_index therefore runs 0..N-1

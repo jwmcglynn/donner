@@ -854,6 +854,20 @@ void GeodeDevice::initSharedPipelines() {
   impl_->filterEngine = std::make_unique<GeodeFilterEngine>(*this, /*verbose=*/false);
 }
 
+wgpu::BindGroup GeodeDevice::findSceneBatchBindGroup(
+    const SceneBatchBindGroupKey& key) const {
+  const auto it = sceneBatchBindGroups_.find(key);
+  return it != sceneBatchBindGroups_.end() ? it->second.get() : wgpu::BindGroup{};
+}
+
+void GeodeDevice::storeSceneBatchBindGroup(const SceneBatchBindGroupKey& key,
+                                           wgpu::BindGroup group) {
+  if (sceneBatchBindGroups_.size() >= kSceneBatchBindGroupCacheCap) {
+    sceneBatchBindGroups_.clear();
+  }
+  sceneBatchBindGroups_[key] = ScopedWgpuHandle<wgpu::BindGroup>(std::move(group));
+}
+
 void GeodeDevice::deferDestroy(wgpu::Buffer buffer) {
   if (buffer) {
     pendingBuffers_.push_back(ScopedWgpuHandle<wgpu::Buffer>(std::move(buffer)));
