@@ -27,10 +27,18 @@ void linearToSrgb(Pixmap& pixmap);
 
 /// Float-precision sRGB to linear RGB conversion.
 /// Operates on premultiplied float data in [0,1] range.
+///
+/// Implemented with a 4096-entry lookup table over the exact transfer
+/// function; the result is within 0.13/255 of evaluating the transfer
+/// function per pixel (see ColorSpace.cpp for the measured bounds).
 void srgbToLinear(FloatPixmap& pixmap);
 
 /// Float-precision linear RGB to sRGB conversion.
 /// Operates on premultiplied float data in [0,1] range.
+///
+/// Implemented with a 4096-entry lookup table over the exact transfer
+/// function; the result is within 0.41/255 of evaluating the transfer
+/// function per pixel (see ColorSpace.cpp for the measured bounds).
 void linearToSrgb(FloatPixmap& pixmap);
 
 }  // namespace tiny_skia::filter
