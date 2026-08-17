@@ -171,11 +171,11 @@ struct KnownViolation {
   std::string_view tracking;
 };
 
-constexpr std::array<KnownViolation, 34> kKnownViolations = {{
+constexpr std::array<KnownViolation, 32> kKnownViolations = {{
     {
         /*scene=*/"donner_icon",
         /*violated=*/kTextureCreates | kBufferWrites | kBindgroupCreates,
-        /*ceiling=*/{0, 4, 65, 25},
+        /*ceiling=*/{0, 4, 20, 25},
         /*reason=*/
         "gradient-painted paths under an opacity group re-upload geometry, allocate scratch "
         "textures, and rebuild bind groups per draw",
@@ -386,17 +386,6 @@ constexpr std::array<KnownViolation, 34> kKnownViolations = {{
         "than holding one entry per source",
     },
     {
-        /*scene=*/"linear_gradient_stroke",
-        /*violated=*/kBufferWrites,
-        /*ceiling=*/{0, 0, 9, 1},
-        /*reason=*/
-        "a gradient-painted stroke outline draws through the per-frame arena; only "
-        "solid-painted geometry is resident",
-        /*tracking=*/
-        "clears when gradient-painted stroke outlines gain residency alongside gradient "
-        "fills",
-    },
-    {
         /*scene=*/"marker",
         /*violated=*/kBufferWrites | kBindgroupCreates,
         /*ceiling=*/{0, 0, 414, 46},
@@ -446,17 +435,6 @@ constexpr std::array<KnownViolation, 34> kKnownViolations = {{
         /*tracking=*/
         "clears when the stroke cache keys on the resolved stroke style rather than one slot "
         "per source entity",
-    },
-    {
-        /*scene=*/"radial_gradient_stroke",
-        /*violated=*/kBufferWrites,
-        /*ceiling=*/{0, 0, 9, 1},
-        /*reason=*/
-        "a gradient-painted stroke outline draws through the per-frame arena; only "
-        "solid-painted geometry is resident",
-        /*tracking=*/
-        "clears when gradient-painted stroke outlines gain residency alongside gradient "
-        "fills",
     },
     {
         /*scene=*/"simple_text_demo",
