@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <memory>
 #include <span>
+#include <vector>
 #include <webgpu/webgpu.hpp>
 
 #include "donner/base/Box.h"
@@ -571,13 +572,21 @@ public:
    *   into the record (the batch uniform is orthographic-only).
    * @param recordSlotOverride When non-null, write the record into this
    *   slot instead of the entity's primary slot (same-frame repeat draws
-   *   need one record per draw). Always written.
+   *   need one record per draw, and per-occurrence text records live outside
+   *   the shared glyph slot entirely).
+   * @param overrideRecordCache Optional caller-owned copy of the override
+   *   slot's last contents. Supplying it turns the override write into the
+   *   same skip-when-unchanged write the primary record gets, which is what
+   *   lets a persistent per-occurrence record reach a zero-write steady
+   *   state. Null means the override slot is per-frame scratch and is always
+   *   written. Ignored when `recordSlotOverride` is null.
    * @return True when the slot is resident and current.
    */
   bool ensureResidentSceneRecord(GeodeResidentSlot& slot, const EncodedPath& encoded,
                                  const css::RGBA& color, FillRule rule,
                                  const Transform2d& recordTransform,
-                                 const GeodeRecordSlab::Slot* recordSlotOverride = nullptr);
+                                 const GeodeRecordSlab::Slot* recordSlotOverride = nullptr,
+                                 std::vector<uint8_t>* overrideRecordCache = nullptr);
 
   /// One cross-entity ordered batch: consecutive resident slots of one
   /// slab chunk plus a run of consecutive record-slab slots.

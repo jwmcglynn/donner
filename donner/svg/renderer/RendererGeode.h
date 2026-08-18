@@ -394,6 +394,18 @@ public:
   [[nodiscard]] RendererGeodeTexturePoolStats texturePoolStats() const;
 
   /**
+   * Shrink the glyph-residency budget so eviction can be exercised without
+   * building a font-sized working set.
+   *
+   * @param maxEntries Distinct cached glyph outlines to keep.
+   * @param maxEncodedBytes Summed encode bytes to keep.
+   */
+  void setGlyphResidencyBudgetForTesting(size_t maxEntries, uint64_t maxEncodedBytes);
+
+  /// Number of glyph outlines currently resident for `document`.
+  [[nodiscard]] size_t residentGlyphCountForTesting(SVGDocument& document);
+
+  /**
    * Captures the current resolved render target as a directly sampleable
    * WebGPU texture.
    *

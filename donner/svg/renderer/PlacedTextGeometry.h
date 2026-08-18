@@ -39,13 +39,70 @@ namespace donner::svg {
 Path TransformPath(const Path& path, const Transform2d& transform);
 
 /**
- * @brief Build the placed outline for a single glyph in document space.
+ * @brief A glyph's outline split into the part that depends only on the glyph
+ *   and the part that depends only on where the glyph sits in the run.
  *
- * Encodes tiny-skia's exact placement sequence:
+ * The two compose back into the placed outline exactly:
+ * `PlacedGlyphOutline(...) == TransformPath(outline, glyphFromLocal)`.
+ *
+ * Splitting them lets a renderer key a cache on glyph identity (font, glyph
+ * index, effective scale, stretch) and reuse one outline for every occurrence,
+ * carrying the per-occurrence placement as a transform instead of re-deriving
+ * and re-transforming the outline for each one.
+ */
+struct GlyphOutlineAndPlacement {
+  /// Raw glyph outline at the glyph's effective scale, with the lengthAdjust
+  /// stretch already baked in. Empty for `.notdef` and for glyphs with no
+  /// vector outline.
+  Path outline;
+  /// Affine placing `outline` into the text element's local space.
+  Transform2d glyphFromLocal;
+};
+
+/**
+ * @brief The affine that places a glyph's unplaced outline into the text
+ *   element's local space.
+ *
+ * Translate to the baseline origin, then rotate about it: as a composed
+ * transform `Rotate(rotateDegrees) * Translate(xPosition, yPosition)`, matching
+ * `RendererTinySkia::drawText`. Depends only on the glyph's position and
+ * rotation, so a renderer that caches outlines by glyph identity can compute
+ * this per occurrence without touching the font backend.
+ *
+ * @param glyph The positioned glyph.
+ * @return The placement transform.
+ */
+Transform2d GlyphPlacementTransform(const TextGlyph& glyph);
+
+/**
+ * @brief Build a glyph's unplaced outline and its placement transform.
+ *
+ * Encodes tiny-skia's exact placement sequence, split at the point where the
+ * glyph-identity-dependent work ends:
  *   1. `glyphOutline(font, glyph.glyphIndex, scale * glyph.fontSizeScale)`,
  *   2. stretch the **raw outline** by `Scale(stretchScaleX, stretchScaleY)`
- *      (only when either differs from 1),
- *   3. position via `Rotate(rotateDegrees) * Translate(xPosition, yPosition)`.
+ *      (only when either differs from 1)  -- these two produce `outline`,
+ *   3. `Rotate(rotateDegrees) * Translate(xPosition, yPosition)` -- this is
+ *      `glyphFromLocal`.
+ *
+ * Steps 1 and 2 depend only on (font, glyph index, `scale * fontSizeScale`,
+ * stretch); step 3 depends only on the glyph's position and rotation.
+ *
+ * @param textEngine Engine providing glyph outlines.
+ * @param font Font handle for the run.
+ * @param glyph The positioned glyph (carries position, rotation, stretch).
+ * @param scale Per-run pixel-height scale (`scaleForPixelHeight(font, sizePx)`).
+ * @return The unplaced outline plus its placement transform.
+ */
+GlyphOutlineAndPlacement UnplacedGlyphOutline(const TextEngine& textEngine, FontHandle font,
+                                              const TextGlyph& glyph, float scale);
+
+/**
+ * @brief Build the placed outline for a single glyph in document space.
+ *
+ * Equivalent to `TransformPath(o.outline, o.glyphFromLocal)` for the
+ * \ref UnplacedGlyphOutline result `o`; see that function for the exact
+ * placement sequence.
  *
  * Returns an empty path for `.notdef` (glyphIndex 0) or when the font has no
  * vector outline for the glyph (e.g. bitmap-only fonts) - callers handle those
