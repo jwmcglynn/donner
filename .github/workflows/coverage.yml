@@ -37,8 +37,8 @@ name: Coverage
 # genuine subset (infra/toolchain changes, bazel-diff failure, missing/empty diff),
 # the reason resolves to a FULL //... target set: running that on a PR is exactly
 # the 21-min re-run we are eliminating, so the PR coverage jobs SKIP instead --
-# the main-push baseline already covers those lines. Only the affected subset
-# (fallback_reason == bazel_diff), the cheap smoke subset (coverage_smoke), and
+# the main line's own baseline already covers those lines. Only the affected
+# subset (fallback_reason == bazel_diff), the cheap smoke subset (coverage_smoke), and
 # the explicit ci:full-test opt-in still produce PR coverage.
 #
 # One more skip: a genuine incremental subset whose affected targets contain
@@ -361,7 +361,7 @@ jobs:
             # shape of the bug this routing replaced. Say so in the log rather
             # than leaving a run that looks green because it did nothing.
             if [[ "$runs" == "false" && "$count" != "0" ]]; then
-              echo "::notice::Coverage skipped on this PR (reason=$reason); the main-push baseline covers these $count target(s)."
+              echo "::notice::Coverage skipped on this PR (reason=$reason); the main-line baseline covers these $count target(s)."
             fi
 
             {
@@ -472,7 +472,7 @@ jobs:
               # for every target, and bazel-diff cannot model that: it hashes
               # the graph these files DEFINE, so a version pin moving under it
               # is exactly the case its impact analysis cannot see. Let the
-              # main-push package-pattern baseline validate those.
+              # main-line package-pattern baseline validate those.
               #
               # `build_defs/*` and `.bazelrc` are deliberately NOT in this list.
               # bazel-diff hashes .bzl files transitively (that is what
@@ -790,7 +790,7 @@ jobs:
     # set is a genuine incremental subset (fallback == false => bazel_diff), the
     # cheap smoke subset, or an explicit ci:full-test opt-in. A full //... fallback
     # on a PR (infra change, bazel-diff failure, empty diff) is SKIPPED here -- the
-    # main-push baseline covers those lines under the 15-minute PR budget.
+    # main-line baseline covers those lines under the 15-minute PR budget.
     if: ${{ needs.determine-targets.outputs.use_self_hosted_linux != 'true' && needs.determine-targets.outputs.runs_coverage == 'true' }}
 
     steps:
@@ -927,8 +927,8 @@ jobs:
     runs-on: [self-hosted, linux, arm64]
     needs: [determine-targets, coverage-self-hosted-turnstile]
     # here on PRs, plus explicit ci:full-test opt-ins. A full //... fallback is
-    # skipped on PRs (main-push baseline covers it). Trusted main pushes run
-    # here instead of hosted Ubuntu.
+    # skipped on PRs (the main-line baseline covers it). Trusted main pushes
+    # run here instead of hosted Ubuntu.
     if: ${{ needs.determine-targets.outputs.use_self_hosted_linux == 'true' && needs.determine-targets.outputs.runs_coverage == 'true' }}
     # Coverage healthy median is ~21 min. This budget starts only after the
     # hosted turnstile admits this job, so queued work does not consume it or
