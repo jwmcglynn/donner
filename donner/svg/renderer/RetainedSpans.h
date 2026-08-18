@@ -157,11 +157,15 @@ struct RetainedSpanDocumentState {
 };
 
 /// Counters describing what a renderer's retained coverage did, for tests and benchmarks.
+///
+/// Counts are per fill or stroke pass of a shape draw, and cover the frame most recently drawn.
+/// Draw kinds retention does not reach at all (text, images, layer composites) are not counted
+/// here at all, not even as bypassed.
 struct RetainedSpanStats {
-  std::uint64_t replayedDraws = 0;   ///< Draws served from retained coverage.
-  std::uint64_t capturedDraws = 0;   ///< Draws that rasterized and recorded their coverage.
+  std::uint64_t replayedDraws = 0;   ///< Passes served from retained coverage.
+  std::uint64_t capturedDraws = 0;   ///< Passes that rasterized and recorded their coverage.
   std::uint64_t invalidatedDraws = 0;  ///< Captures that replaced a recording whose key changed.
-  std::uint64_t bypassedDraws = 0;   ///< Draws retention did not apply to.
+  std::uint64_t bypassedDraws = 0;   ///< Passes retention did not apply to.
   /// Draws whose recording was refused at replay, which then rasterized instead. A refusal is
   /// the surface-size guard doing its job, never a dropped shape.
   std::uint64_t refusedReplays = 0;

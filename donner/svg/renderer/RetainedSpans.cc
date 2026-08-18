@@ -115,12 +115,22 @@ void EvictRetainedSpansToBudget(Registry& registry, std::uint64_t currentFrame) 
   std::vector<Candidate> candidates;
   const auto view = registry.view<const RetainedSpansComponent>();
   candidates.reserve(view.size());
+  std::size_t held = 0;
   for (const Entity entity : view) {
     const RetainedSpansComponent& entry = view.get<const RetainedSpansComponent>(entity);
+    held += entry.chargedBytes();
     if (entry.lastUsedFrame >= currentFrame) {
       continue;
     }
     candidates.push_back(Candidate{entity, entry.lastUsedFrame, entry.chargedBytes()});
+  }
+
+  // An entity can be destroyed without this cache hearing about it, which leaves the running
+  // total above what is actually held. Recount before acting, so a document is never evicted
+  // from or disabled over memory it already gave back.
+  state->liveBytes = held;
+  if (state->liveBytes <= state->budgetBytes) {
+    return;
   }
 
   std::sort(candidates.begin(), candidates.end(),

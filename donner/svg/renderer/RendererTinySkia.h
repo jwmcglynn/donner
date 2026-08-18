@@ -248,6 +248,9 @@ public:
   /// Enables or disables anti-aliasing.
   void setAntialias(bool antialias) { antialias_ = antialias; }
 
+  /// Returns whether anti-aliasing is enabled.
+  [[nodiscard]] bool antialias() const { return antialias_; }
+
   /**
    * Enables or disables retained rasterization.
    *
