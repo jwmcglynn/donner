@@ -8,11 +8,17 @@
 
 namespace donner::svg::compositor {
 
-bool MandatoryHintDetector::qualifies(const components::RenderingInstanceComponent& instance) {
+bool MandatoryHintDetector::qualifies(const components::RenderingInstanceComponent& instance,
+                                      MandatoryHintScope scope) {
   // Three signals force isolated compositing:
   //   - isolatedLayer: subsumes opacity < 1, mix-blend-mode != normal, isolation: isolate
   //   - resolvedFilter.has_value(): `filter` applied
   //   - mask.has_value(): `mask` applied
+  // FilterOnly narrows to the filter signal; the others render through the
+  // driver's inline isolation path instead of a retained layer.
+  if (scope == MandatoryHintScope::FilterOnly) {
+    return instance.resolvedFilter.has_value();
+  }
   return instance.isolatedLayer || instance.resolvedFilter.has_value() || instance.mask.has_value();
 }
 
@@ -58,7 +64,7 @@ void MandatoryHintDetector::reconcile(Registry& registry) {
   for (auto entity : view) {
     ++stats_.candidatesEvaluated;
     const auto& instance = view.get<components::RenderingInstanceComponent>(entity);
-    if (!qualifies(instance)) {
+    if (!qualifies(instance, scope_)) {
       continue;
     }
     // Don't auto-promote if an ancestor's clip-path / mask / filter would be

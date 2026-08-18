@@ -198,9 +198,12 @@ inline constexpr size_t kMaxCompositorMemoryBytes = 1024ull * 1024ull * 1024ull;
  * inside a live compositor.
  *
  * Default-constructed config has all features enabled. Mandatory hints
- * (opacity < 1, filter, mask, blend-mode, isolation) are always active - they
- * implement SVG semantics, not an optional optimization, and cannot be
- * disabled through config.
+ * (opacity < 1, filter, mask, blend-mode, isolation) are always detected and
+ * cannot be turned off entirely - but `mandatoryHintScope` can narrow which
+ * signals publish hints. Narrowing never changes pixels: an unhinted signal
+ * renders through the driver's inline isolation path (the same path entities
+ * under compositing-breaking ancestors already take); it only trades retained
+ * layer caching for per-frame re-render cost.
  */
 struct CompositorConfig {
   /// Editor-published `InteractionHint` hints promote the selected / dragged
@@ -212,6 +215,14 @@ struct CompositorConfig {
   /// cost stays O(animated subtree). When false, animations re-render the
   /// whole document per tick; selection / drag compositing is unaffected.
   bool autoPromoteAnimations = true;
+
+  /// Which mandatory-compositing signals `MandatoryHintDetector` publishes
+  /// hints for. `FilterOnly` is the editor's "filter-only" composited
+  /// rendering mode: filters (the expensive re-render case) keep their cached
+  /// isolated layers while opacity groups, blend modes, and masks render
+  /// inline every frame. Fixed at construction - changing it means
+  /// reconstructing the controller.
+  MandatoryHintScope mandatoryHintScope = MandatoryHintScope::All;
 
   /// `ComplexityBucketer` pre-splits the document into a small number of
   /// layers at load / structural rebuild to reduce click-to-first-drag-update

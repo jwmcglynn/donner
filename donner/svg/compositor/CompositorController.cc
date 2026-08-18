@@ -48,6 +48,7 @@ CompositorController::CompositorController(SVGDocument& document, RendererInterf
     : document_(document),
       renderer_(renderer),
       config_(config),
+      mandatoryDetector_(config.mandatoryHintScope),
       // Only carve subtrees into bucket layers when they're actually
       // expensive to re-rasterize. `filterPenalty = 16` (default) plus the
       // subtree's own entity cost puts any filter group well above this

@@ -783,6 +783,11 @@ private:
   /// Render-pane frame-timing/perf overlay mode. Off by default; set via the
   /// View menu's Performance Overlay submenu.
   PerfOverlayMode perfOverlayMode_ = PerfOverlayMode::Off;
+  /// How the render worker uses the compositor (full / filters only / not at
+  /// all). Full compositing by default; set via the View menu's Composited
+  /// Rendering submenu and applied to the render worker through
+  /// `AsyncRenderer::setCompositedRenderingMode`.
+  CompositedRenderingMode compositedRenderingMode_ = CompositedRenderingMode::On;
   /// Whether the Geode geometry debug overlay is enabled on the document
   /// renderer. It shows the dynamically-dilated post-vertex Slug quad
   /// triangles in one frame-final root-target pass. While enabled, the editor

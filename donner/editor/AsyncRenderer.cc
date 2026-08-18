@@ -889,9 +889,42 @@ void AsyncRenderer::workerLoop() {
     // GL textures still showed the dragged element at its rasterize-
     // time position. Pinned by
     // `RnrReplayTest::FilterSnapbackReproPreservesCompositorAcrossWriteback`.
-    const bool needsFreshCompositor = !compositor_ || compositorRenderer_ != &requestRenderer;
+    // A third lifecycle input joins the two above: the UI-selected composited
+    // rendering mode. `Off` runs with no controller at all (every
+    // `compositor_` consumer below is null-guarded); the other modes bake
+    // their policy into `CompositorConfig` at construction, so any mode
+    // change reconstructs.
+    const CompositedRenderingMode renderMode =
+        compositedRenderingMode_.load(std::memory_order_acquire);
+    const bool renderModeChanged = renderMode != appliedCompositedRenderingMode_;
+    appliedCompositedRenderingMode_ = renderMode;
+    if (renderMode == CompositedRenderingMode::Off && compositor_ != nullptr) {
+      // Entering Off: destroy the controller and every retained cache with it.
+      // `compositorDocument_` exists only to give the controller a stable
+      // SVGDocument reference, so it is released too.
+      compositor_.reset();
+      compositorDocument_.reset();
+      compositorRenderer_ = nullptr;
+      compositorEntity_ = entt::null;
+      compositorEntities_.clear();
+      compositorInteractionKind_ = svg::compositor::InteractionHint::Selection;
+      publishedCompositedTiles_.clear();
+    }
+    const bool needsFreshCompositor =
+        renderMode != CompositedRenderingMode::Off &&
+        (!compositor_ || compositorRenderer_ != &requestRenderer || renderModeChanged);
     if (needsFreshCompositor) {
       svg::compositor::CompositorConfig compositorConfig;
+      if (renderMode == CompositedRenderingMode::FilterOnly) {
+        // Filter-only: cached isolated layers for SVG filters (the expensive
+        // re-render case) and nothing else. Opacity groups, blend modes, and
+        // masks render inline; selection/drag and animation subtrees are not
+        // promoted; the document is not pre-split into bucket layers.
+        compositorConfig.mandatoryHintScope = svg::compositor::MandatoryHintScope::FilterOnly;
+        compositorConfig.autoPromoteInteractions = false;
+        compositorConfig.autoPromoteAnimations = false;
+        compositorConfig.complexityBucketing = false;
+      }
       // The editor retains compositor textures across frames, so even a geometrically cheap span
       // is less expensive to upload once than to rerasterize during every pointer update. Browser
       // WebGPU makes the difference especially pronounced, but the same policy removes the native
@@ -922,7 +955,7 @@ void AsyncRenderer::workerLoop() {
     }
 
     const bool documentSwapDetected =
-        !needsFreshCompositor &&
+        compositor_ != nullptr && !needsFreshCompositor &&
         (request.documentGeneration != compositorDocumentGeneration_ ||
          (compositorDocument_.has_value() &&
           compositorDocument_->handle().get() != requestDocument.handle().get()));
@@ -986,8 +1019,10 @@ void AsyncRenderer::workerLoop() {
     const bool geometryDebugOverlayChanged = geometryDebugOverlay != appliedGeometryDebugOverlay_;
     if (geometryDebugOverlayChanged) {
       appliedGeometryDebugOverlay_ = geometryDebugOverlay;
-      compositor_->resetAllLayers();
-      compositorResetCount_.fetch_add(1, std::memory_order_release);
+      if (compositor_ != nullptr) {
+        compositor_->resetAllLayers();
+        compositorResetCount_.fetch_add(1, std::memory_order_release);
+      }
       compositorEntity_ = entt::null;
       compositorEntities_.clear();
       compositorInteractionKind_ = svg::compositor::InteractionHint::Selection;
@@ -1002,8 +1037,14 @@ void AsyncRenderer::workerLoop() {
     // document-space transform to every drag-target tile, keeping the path
     // overlay and cached content in lockstep while avoiding a full DOM render
     // on each pointer frame.
-    const std::vector<Entity> desiredEntities =
-        geometryDebugOverlay ? std::vector<Entity>() : DesiredCompositorEntities(request);
+    // Selection/drag promotion is a full-compositing feature: Off has no
+    // controller to promote into, and FilterOnly composits filters only, so
+    // both present drags through full-document renders.
+    const bool editorPromotionEnabled =
+        compositor_ != nullptr && renderMode == CompositedRenderingMode::On;
+    const std::vector<Entity> desiredEntities = (geometryDebugOverlay || !editorPromotionEnabled)
+                                                    ? std::vector<Entity>()
+                                                    : DesiredCompositorEntities(request);
     const Entity desiredEntity = desiredEntities.empty() ? entt::null : desiredEntities.front();
     const svg::compositor::InteractionHint desiredKind =
         request.dragPreview.has_value() ? request.dragPreview->interactionKind
@@ -1057,7 +1098,8 @@ void AsyncRenderer::workerLoop() {
         compositorEntity_ = entt::null;
       }
     }
-    if (request.dragPreview.has_value() && request.dragPreview->forceLayerRasterization) {
+    if (editorPromotionEnabled && request.dragPreview.has_value() &&
+        request.dragPreview->forceLayerRasterization) {
       for (Entity entity : DragPreviewEntities(*request.dragPreview)) {
         compositor_->markPromotedLayerDirty(entity);
       }
@@ -1086,8 +1128,10 @@ void AsyncRenderer::workerLoop() {
     // Push the current UI-thread setting for tight-bounded segments
     // into the compositor. Setter is a no-op when unchanged; otherwise
     // it marks all segments dirty so the flip takes effect this frame.
-    compositor_->setTightBoundedSegmentsEnabled(
-        tightBoundedSegments_.load(std::memory_order_acquire));
+    if (compositor_ != nullptr) {
+      compositor_->setTightBoundedSegmentsEnabled(
+          tightBoundedSegments_.load(std::memory_order_acquire));
+    }
 
     // Keep the compositor hint in ActiveDrag across mouse-up so the
     // layer/segment caches survive quick release->drag-again cycles, but
@@ -1099,8 +1143,15 @@ void AsyncRenderer::workerLoop() {
         request.dragPreview.has_value() &&
         request.dragPreview->interactionKind == svg::compositor::InteractionHint::ActiveDrag;
     const bool splitPreviewSafe = !desiredPromotionIncomplete;
-    compositor_->setSkipMainComposeDuringSplit(activeDragRequest && splitPreviewSafe &&
-                                               !request.captureCpuSnapshot);
+    if (compositor_ != nullptr) {
+      // `!desiredEntities.empty()` matters when editor promotion is disabled
+      // (FilterOnly): with nothing promoted, `desiredPromotionIncomplete` is
+      // vacuously false during a drag, and skipping the main compose would
+      // present a full-canvas snapshot of a frame that was never composed.
+      compositor_->setSkipMainComposeDuringSplit(activeDragRequest && splitPreviewSafe &&
+                                                 !desiredEntities.empty() &&
+                                                 !request.captureCpuSnapshot);
+    }
     workerTiming.setupMs = elapsedSince(workerStart);
 
     // Build a CompositedPreview from the compositor's current tile state.
@@ -1111,7 +1162,7 @@ void AsyncRenderer::workerLoop() {
       if (request.overviewInfillOnly) {
         return std::nullopt;
       }
-      if (!splitPreviewSafe || !request.dragPreview.has_value() ||
+      if (compositor_ == nullptr || !splitPreviewSafe || !request.dragPreview.has_value() ||
           compositorEntity_ == entt::null || compositor_->layerCount() == 0u) {
         return std::nullopt;
       }
@@ -1289,7 +1340,19 @@ void AsyncRenderer::workerLoop() {
       const auto renderFrameStart = std::chrono::steady_clock::now();
       {
         const ScopedHeapDelta renderFrameHeapDelta(MemoryStage::WorkerRenderFrame);
-        renderCompleted = compositor_->renderFrame(viewport, cancelRender_, surfaceFromCanvas);
+        if (compositor_ != nullptr) {
+          renderCompleted = compositor_->renderFrame(viewport, cancelRender_, surfaceFromCanvas);
+        } else {
+          // Composited rendering Off: flat full-document render with no
+          // retained state, presented through the full-canvas snapshot path
+          // below. This is the same direct path the compositor's
+          // `verifyPixelIdentity` reference render uses, so pixels match the
+          // composited modes by construction.
+          svg::RendererDriver directDriver(requestRenderer);
+          renderCompleted = directDriver.drawInterruptibly(
+              requestDocument, viewport, surfaceFromCanvas,
+              [this]() { return cancelRender_.isCancelled(); });
+        }
       }
       workerTiming.renderFrameMs = elapsedSince(renderFrameStart);
     }
@@ -1413,7 +1476,11 @@ void AsyncRenderer::workerLoop() {
     // memory in different ways, so they are published as different counter
     // kinds. See `donner/base/MemoryAttribution.h`.
     {
-      const auto breakdown = compositor_->bitmapMemoryBreakdown();
+      // With composited rendering Off there is no controller; publish zeroed
+      // compositor categories so the memory panel reflects the freed caches.
+      const auto breakdown = compositor_ != nullptr
+                                 ? compositor_->bitmapMemoryBreakdown()
+                                 : svg::compositor::CompositorController::BitmapMemoryBreakdown{};
       SetRetainedBytes(MemoryCategory::CompositorSegmentBitmaps, breakdown.segmentBitmapBytes);
       SetRetainedBytes(MemoryCategory::CompositorSegmentTextures, breakdown.segmentTextureBytes);
       SetRetainedBytes(MemoryCategory::CompositorLayerBitmaps, breakdown.layerBitmapBytes);
@@ -1470,18 +1537,31 @@ void AsyncRenderer::workerLoop() {
           done.result.version = request.version;
           done.result.documentGeneration = request.documentGeneration;
           done.presentationHoldPollsRemaining = replayResultHoldFramesForTesting_;
-          lastFastPathCounters_ = compositor_->fastPathCountersForTesting();
-          lastCompositorRenderFrameStats_ = compositor_->lastRenderFrameStats();
+          lastFastPathCounters_ =
+              compositor_ != nullptr ? compositor_->fastPathCountersForTesting()
+                                     : svg::compositor::CompositorController::FastPathCounters{};
+          lastCompositorRenderFrameStats_ =
+              compositor_ != nullptr ? compositor_->lastRenderFrameStats()
+                                     : svg::compositor::CompositorController::RenderFrameStats{};
           if (compositorDiagnosticsEnabled_.load(std::memory_order_acquire)) {
             const auto diagnosticsStart = std::chrono::steady_clock::now();
-            const auto thumbnailMode =
-                activeDragRequest
-                    ? svg::compositor::CompositorController::SnapshotThumbnails::Omit
-                    : svg::compositor::CompositorController::SnapshotThumbnails::Include;
-            lastLayerInspectorRows_ = compositor_->snapshotLayerInspectorRows(thumbnailMode);
-            lastSegmentInspectorRows_ = compositor_->snapshotSegmentInspectorRows();
-            lastCompositeTiles_ = compositor_->snapshotCompositeTiles(thumbnailMode);
-            lastStateSnapshot_ = compositor_->snapshotState();
+            if (compositor_ != nullptr) {
+              const auto thumbnailMode =
+                  activeDragRequest
+                      ? svg::compositor::CompositorController::SnapshotThumbnails::Omit
+                      : svg::compositor::CompositorController::SnapshotThumbnails::Include;
+              lastLayerInspectorRows_ = compositor_->snapshotLayerInspectorRows(thumbnailMode);
+              lastSegmentInspectorRows_ = compositor_->snapshotSegmentInspectorRows();
+              lastCompositeTiles_ = compositor_->snapshotCompositeTiles(thumbnailMode);
+              lastStateSnapshot_ = compositor_->snapshotState();
+            } else {
+              // Composited rendering Off: clear the inspector surfaces so the
+              // debug panel shows the compositor as absent, not stale.
+              lastLayerInspectorRows_.clear();
+              lastSegmentInspectorRows_.clear();
+              lastCompositeTiles_.clear();
+              lastStateSnapshot_ = {};
+            }
             workerTiming.diagnosticsMs = elapsedSince(diagnosticsStart);
           }
           lastWorkerCompositorEntity_ = compositorEntity_;

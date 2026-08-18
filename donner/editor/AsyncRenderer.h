@@ -51,6 +51,7 @@
 #include "donner/base/EcsRegistry.h"
 #include "donner/base/Transform.h"
 #include "donner/base/Vector2.h"
+#include "donner/editor/CompositedRenderingMode.h"
 #include "donner/editor/OverlayRenderer.h"
 #include "donner/editor/ViewportState.h"
 #include "donner/svg/SVGDocument.h"
@@ -620,6 +621,26 @@ public:
     return tightBoundedSegments_.load(std::memory_order_acquire);
   }
 
+  /// Select how the worker uses the compositor: full compositing, cached
+  /// layers for filters only, or no compositor at all (direct full-document
+  /// renders). See \ref CompositedRenderingMode. The change applies at the
+  /// start of the next worker iteration: entering `Off` destroys the live
+  /// `CompositorController`; leaving `Off` or changing between the other
+  /// modes reconstructs it with the matching `CompositorConfig`. Every mode
+  /// produces identical pixels.
+  ///
+  /// Same threading contract as \ref setTightBoundedSegmentsEnabled:
+  /// safe to call from the UI thread while a render is in flight.
+  void setCompositedRenderingMode(CompositedRenderingMode mode) {
+    compositedRenderingMode_.store(mode, std::memory_order_release);
+  }
+
+  /// Mirror of the current mode. UI reads this to render the correct radio
+  /// state in the View menu without racing the worker.
+  [[nodiscard]] CompositedRenderingMode compositedRenderingMode() const {
+    return compositedRenderingMode_.load(std::memory_order_acquire);
+  }
+
   /// Toggle the Geode geometry debug overlay
   /// (`RendererInterface::setDebugGeometryOverlay`) on the root document
   /// renderer. The change applies at the start of the next worker iteration.
@@ -974,6 +995,16 @@ private:
   /// Default-true matches `CompositorConfig::tightBoundedSegments`. See
   /// `setTightBoundedSegmentsEnabled`.
   std::atomic<bool> tightBoundedSegments_{true};
+
+  /// Composited rendering mode requested by the UI thread. See
+  /// `setCompositedRenderingMode`. Default `On` preserves the pre-setting
+  /// behavior: full compositing.
+  std::atomic<CompositedRenderingMode> compositedRenderingMode_{CompositedRenderingMode::On};
+
+  /// Worker-thread-only: the mode the live compositor (or its absence) was
+  /// built for. A mismatch against `compositedRenderingMode_` tears down or
+  /// reconstructs the compositor at the start of the iteration.
+  CompositedRenderingMode appliedCompositedRenderingMode_ = CompositedRenderingMode::On;
 
   /// Geode geometry debug overlay request from the UI thread. See
   /// `setGeometryDebugOverlayEnabled`. Default-off matches the
