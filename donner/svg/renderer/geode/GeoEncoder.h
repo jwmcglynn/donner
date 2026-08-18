@@ -561,8 +561,29 @@ public:
     const LinearGradientParams* linearGradient = nullptr;
     const RadialGradientParams* radialGradient = nullptr;
 
-    /// True when this instance paints with a gradient rather than a colour.
+      /// True when this instance paints with a gradient rather than a colour.
     bool isGradient() const { return linearGradient != nullptr || radialGradient != nullptr; }
+  };
+
+  /**
+   * The record fields a batched instance takes from encoder-side state rather
+   * than from its own arguments: the paint scalars published into its slot and
+   * the clip rectangle live at the time it was appended.
+   *
+   * A batch re-derives every instance's record when it flushes, which can be
+   * arbitrarily far from the append: other draws of the same entity, and other
+   * clip changes, can happen in between. Reading these back off the slot or off
+   * the encoder at that point reads the LATEST state, not the appended one. The
+   * caller therefore captures them at append and hands the same values back at
+   * flush, which is what makes the re-derivation reproduce byte-identical
+   * bytes.
+   */
+  struct SceneRecordState {
+    uint32_t paintMode = 0;
+    uint32_t gradientSpread = 0;
+    uint32_t gradientStopCount = 0;
+    uint32_t clipRectActive = 0;
+    float clipRect[4] = {0.0f, 0.0f, 0.0f, 0.0f};
   };
 
   /**
@@ -589,11 +610,17 @@ public:
    *   lets a persistent per-occurrence record reach a zero-write steady
    *   state. Null means the override slot is per-frame scratch and is always
    *   written. Ignored when `recordSlotOverride` is null.
+   * @param recordState Carries the record fields that come from encoder-side
+   *   state. When `publishPaint` is true this is an OUT parameter: `paint` is
+   *   published into the slot and the resulting scalars, plus the live clip
+   *   rectangle, are written here. When it is false this is an IN parameter:
+   *   the record takes these exact values and neither the slot's paint nor the
+   *   encoder's current clip is consulted. Null on either side falls back to
+   *   the slot's and the encoder's current state.
    * @param publishPaint True to publish `paint` into the slot's paint block
-   *   and paint scalars; false to keep whatever the slot already holds. A
-   *   batch's flush-time re-ensure passes false: it runs after the caller's
-   *   resolved gradient is gone and has to reproduce the record the append
-   *   wrote, which reading the paint back off the slot does exactly.
+   *   and paint scalars; false to replay `recordState` instead. A batch's
+   *   flush-time re-ensure passes false, because by then the slot's paint may
+   *   belong to a later draw and the encoder's clip may have moved on.
    * @return True when the slot is resident and current.
    */
   bool ensureResidentSceneRecord(GeodeResidentSlot& slot, const EncodedPath& encoded,
@@ -601,6 +628,7 @@ public:
                                  const Transform2d& recordTransform,
                                  const GeodeRecordSlab::Slot* recordSlotOverride = nullptr,
                                  std::vector<uint8_t>* overrideRecordCache = nullptr,
+                                 SceneRecordState* recordState = nullptr,
                                  bool publishPaint = true);
 
   /// One cross-entity ordered batch: consecutive resident slots of one

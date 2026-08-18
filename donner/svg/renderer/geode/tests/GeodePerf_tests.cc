@@ -1298,6 +1298,154 @@ TEST_F(GeodePerfTest, EntityRepaintedWithDifferentPaint_KeepsBothDraws) {
 }
 
 // ---------------------------------------------------------------------------
+// One entity painted solid once and by a gradient once.
+//
+// Both draws come from the same entity, so they share a residence slot, and the
+// gradient's parameters are published onto that slot. The gradient draw cannot
+// convert the pending singleton (same slot), so it drains the batch and opens
+// its own - and that drain emits the solid draw, which republishes the slot's
+// paint as solid on its way out.
+//
+// The hazard: the batch re-derives its instance's record when it flushes. If
+// that re-derivation re-read the slot, it would read the paint the solid draw
+// left behind, rewrite the record as a solid fill, and paint it in the colour
+// the gradient instance never set - opaque black. Carrying the paint scalars on
+// the instance, and claiming the slot before the drain so the solid draw takes
+// the arena fallback, both keep the gradient a gradient.
+// ---------------------------------------------------------------------------
+constexpr std::string_view kSolidThenGradientSvg = R"SVG(
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"
+     viewBox="0 0 200 100">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#ff0000"/>
+      <stop offset="1" stop-color="#ff0000"/>
+    </linearGradient>
+    <rect id="r" x="10" y="10" width="60" height="60"/>
+  </defs>
+  <g fill="#00cc00"><use xlink:href="#r"/></g>
+  <g fill="url(#g)"><use xlink:href="#r" x="100" y="0"/></g>
+</svg>
+)SVG";
+
+TEST_F(GeodePerfTest, SolidThenGradientOfOneEntity_KeepsBothPaints) {
+  auto device = sharedDevice();
+  ASSERT_TRUE(device) << "GeodeDevice::CreateHeadless failed";
+
+  const RendererBitmap bmp = renderSteadyState(kSolidThenGradientSvg, device).bitmap;
+  ASSERT_FALSE(bmp.empty()) << "renderer produced no snapshot";
+
+  const std::array<uint8_t, 4> green = {0, 204, 0, 255};
+  const std::array<uint8_t, 4> red = {255, 0, 0, 255};
+
+  expectPixel(bmp, 40, 40, green, "solid draw of #r");
+  // The gradient's stops are both pure red, so every pixel inside it is red
+  // whatever the ramp does. Before the fix this read opaque black: the record
+  // had been rewritten as a solid fill in a colour nothing ever set.
+  expectPixel(bmp, 140, 40, red, "gradient <use> of #r");
+}
+
+// The reverse order, and the same-paint-twice orderings, guard the same
+// machinery from the other side: whichever draw publishes last, each instance
+// must still render the paint it was appended with.
+constexpr std::string_view kGradientThenSolidSvg = R"SVG(
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"
+     viewBox="0 0 200 100">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#ff0000"/>
+      <stop offset="1" stop-color="#ff0000"/>
+    </linearGradient>
+    <rect id="r" x="10" y="10" width="60" height="60"/>
+  </defs>
+  <g fill="url(#g)"><use xlink:href="#r"/></g>
+  <g fill="#00cc00"><use xlink:href="#r" x="100" y="0"/></g>
+</svg>
+)SVG";
+
+TEST_F(GeodePerfTest, GradientThenSolidOfOneEntity_KeepsBothPaints) {
+  auto device = sharedDevice();
+  ASSERT_TRUE(device) << "GeodeDevice::CreateHeadless failed";
+
+  const RendererBitmap bmp = renderSteadyState(kGradientThenSolidSvg, device).bitmap;
+  ASSERT_FALSE(bmp.empty()) << "renderer produced no snapshot";
+
+  expectPixel(bmp, 40, 40, {255, 0, 0, 255}, "gradient draw of #r");
+  expectPixel(bmp, 140, 40, {0, 204, 0, 255}, "solid <use> of #r");
+}
+
+constexpr std::string_view kGradientTwiceSvg = R"SVG(
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"
+     viewBox="0 0 200 100">
+  <defs>
+    <linearGradient id="a" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#ff0000"/>
+      <stop offset="1" stop-color="#ff0000"/>
+    </linearGradient>
+    <linearGradient id="b" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#0000ff"/>
+      <stop offset="1" stop-color="#0000ff"/>
+    </linearGradient>
+    <rect id="r" x="10" y="10" width="60" height="60"/>
+  </defs>
+  <g fill="url(#a)"><use xlink:href="#r"/></g>
+  <g fill="url(#b)"><use xlink:href="#r" x="100" y="0"/></g>
+</svg>
+)SVG";
+
+TEST_F(GeodePerfTest, GradientTwiceOfOneEntity_KeepsBothRamps) {
+  auto device = sharedDevice();
+  ASSERT_TRUE(device) << "GeodeDevice::CreateHeadless failed";
+
+  const RendererBitmap bmp = renderSteadyState(kGradientTwiceSvg, device).bitmap;
+  ASSERT_FALSE(bmp.empty()) << "renderer produced no snapshot";
+
+  // One slot holds one paint block, so the second ramp overwrites the first
+  // unless the two draws are kept apart. Each must still show its own colour.
+  expectPixel(bmp, 40, 40, {255, 0, 0, 255}, "first gradient draw of #r");
+  expectPixel(bmp, 140, 40, {0, 0, 255, 255}, "second gradient draw of #r");
+}
+
+constexpr std::string_view kCrossEntityGradientRunSvg = R"SVG(
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 100">
+  <defs>
+    <linearGradient id="a" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#ff0000"/>
+      <stop offset="1" stop-color="#ff0000"/>
+    </linearGradient>
+    <linearGradient id="b" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#0000ff"/>
+      <stop offset="1" stop-color="#0000ff"/>
+    </linearGradient>
+  </defs>
+  <rect x="10" y="20" width="60" height="60" fill="url(#a)"/>
+  <rect x="110" y="20" width="60" height="60" fill="#00cc00"/>
+  <rect x="210" y="20" width="60" height="60" fill="url(#b)"/>
+</svg>
+)SVG";
+
+TEST_F(GeodePerfTest, GradientAndSolidRunOfDistinctEntities_KeepsPainterOrder) {
+  auto device = sharedDevice();
+  ASSERT_TRUE(device) << "GeodeDevice::CreateHeadless failed";
+
+  const SteadyStateFrame frame = renderSteadyState(kCrossEntityGradientRunSvg, device);
+  const RendererBitmap& bmp = frame.bitmap;
+  ASSERT_FALSE(bmp.empty()) << "renderer produced no snapshot";
+
+  expectPixel(bmp, 40, 50, {255, 0, 0, 255}, "first gradient fill");
+  expectPixel(bmp, 140, 50, {0, 204, 0, 255}, "solid fill between the gradients");
+  expectPixel(bmp, 240, 50, {0, 0, 255, 255}, "second gradient fill");
+
+  if (RendererGeode::sceneBatchingEnabledForTesting()) {
+    // Distinct entities, so each carries its own record: the interleaved
+    // gradient and solid paints collapse into one draw instead of three plus
+    // the pipeline switches between them.
+    EXPECT_EQ(frame.counters.drawCalls, 1u)
+        << "a gradient/solid/gradient run of distinct entities should form one ordered batch";
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Rect clips carried per instance.
 //
 // Two nested viewports clip their contents to different rectangles, and each

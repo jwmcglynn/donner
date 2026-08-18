@@ -721,6 +721,7 @@ struct GeoEncoder::Impl : public GeodeTextureEncoder::UniformScratch {
                                      const FillDrawArgs& args, const Transform2d& recordTransform,
                                      const GeodeRecordSlab::Slot* recordSlotOverride,
                                      std::vector<uint8_t>* overrideRecordCache, bool bakeTransform,
+                                     SceneRecordState* recordState = nullptr,
                                      bool publishPaint = true);
 
   /// Publish `args`' paint into `slot`: write the gradient paint block when
@@ -2102,7 +2103,8 @@ void GeoEncoder::Impl::publishSlotPaint(GeodeResidentSlot& slot, const FillDrawA
 bool GeoEncoder::Impl::ensureResidentSceneRecordImpl(
     GeodeResidentSlot& slot, const EncodedPath& encoded, const FillDrawArgs& args,
     const Transform2d& recordTransform, const GeodeRecordSlab::Slot* recordSlotOverride,
-    std::vector<uint8_t>* overrideRecordCache, bool bakeTransform, bool publishPaint) {
+    std::vector<uint8_t>* overrideRecordCache, bool bakeTransform, SceneRecordState* recordState,
+    bool publishPaint) {
   // Ensure the geometry is resident and current AND owned by THIS device.
   // Component removal is the primary invalidation; the pointer + fingerprint
   // guard catches the in-place stroke-slot rebuild (which replaces the encode
@@ -2159,20 +2161,50 @@ bool GeoEncoder::Impl::ensureResidentSceneRecordImpl(
   record.hRefsBase = static_cast<uint32_t>(slot.hRefs.offset / sizeof(uint32_t));
   record.vRefsBase = static_cast<uint32_t>(slot.vRefs.offset / sizeof(uint32_t));
 
-  // Paint. A gradient's parameters and stop ramp go into the slot's own paint
-  // block, and the record only carries the index of that block plus the two
-  // scalars the shader needs before it reads it. The published paint lives on
-  // the SLOT, not in this call's arguments, because a batch re-derives an
-  // instance's record when it flushes, long after the caller's resolved
-  // gradient is gone: reading it back from the slot is what makes the flush
-  // reproduce byte-identical bytes.
+  // Paint and clip. A gradient's parameters and stop ramp go into the slot's
+  // own paint block, and the record only carries the index of that block plus
+  // the two scalars the shader needs before it reads it.
+  //
+  // Both the paint scalars and the clip rectangle come from state OUTSIDE this
+  // call's arguments - the slot and the encoder - and a batch re-derives an
+  // instance's record when it flushes, arbitrarily far from its append. By then
+  // the slot's paint can belong to a later draw of the same entity and the
+  // encoder's clip can have moved on, so the flush replays exactly what the
+  // append captured instead of re-reading either.
+  SceneRecordState state;
   if (publishPaint) {
     publishSlotPaint(slot, args);
+    state.paintMode = slot.paintMode;
+    state.gradientSpread = slot.gradientSpread;
+    state.gradientStopCount = slot.gradientStopCount;
+    state.clipRectActive = record.clipRectActive;
+    for (size_t i = 0; i < std::size(state.clipRect); ++i) {
+      state.clipRect[i] = record.clipRect[i];
+    }
+    if (recordState != nullptr) {
+      *recordState = state;
+    }
+  } else if (recordState != nullptr) {
+    state = *recordState;
+  } else {
+    state.paintMode = slot.paintMode;
+    state.gradientSpread = slot.gradientSpread;
+    state.gradientStopCount = slot.gradientStopCount;
+    state.clipRectActive = record.clipRectActive;
+    for (size_t i = 0; i < std::size(state.clipRect); ++i) {
+      state.clipRect[i] = record.clipRect[i];
+    }
   }
-  record.paintMode = slot.paintMode;
+  record.paintMode = state.paintMode;
+  // The block's own address is slot state, not append-time state: a re-upload
+  // moves it and the batch's flush-time re-ensure has to bind where it is now.
   record.paintBase = static_cast<uint32_t>(slot.paint.offset / 16u);
-  record.gradientSpread = slot.gradientSpread;
-  record.gradientStopCount = slot.gradientStopCount;
+  record.gradientSpread = state.gradientSpread;
+  record.gradientStopCount = state.gradientStopCount;
+  record.clipRectActive = state.clipRectActive;
+  for (size_t i = 0; i < std::size(record.clipRect); ++i) {
+    record.clipRect[i] = state.clipRect[i];
+  }
 
   if (bakeTransform) {
     // The slot's uniform region belongs exclusively to the solo resident
@@ -2340,7 +2372,7 @@ bool GeoEncoder::ensureResidentSceneRecord(GeodeResidentSlot& slot, const Encode
                                            const Transform2d& recordTransform,
                                            const GeodeRecordSlab::Slot* recordSlotOverride,
                                            std::vector<uint8_t>* overrideRecordCache,
-                                           bool publishPaint) {
+                                           SceneRecordState* recordState, bool publishPaint) {
   if (encoded.empty()) {
     return false;
   }
@@ -2366,7 +2398,8 @@ bool GeoEncoder::ensureResidentSceneRecord(GeodeResidentSlot& slot, const Encode
   args.radialGradient = paint.radialGradient;
   return impl_->ensureResidentSceneRecordImpl(slot, encoded, args, recordTransform,
                                               recordSlotOverride, overrideRecordCache,
-                                              /*bakeTransform=*/false, publishPaint);
+                                              /*bakeTransform=*/false, recordState,
+                                              publishPaint);
 }
 
 void GeoEncoder::fillPathSceneBatch(const css::RGBA& color, FillRule rule,
