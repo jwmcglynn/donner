@@ -1,0 +1,420 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 480" width="720" height="480">
+  <defs>
+    <linearGradient id="g0" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="hsl(0, 70%, 55%)"/>
+      <stop offset="0.5" stop-color="hsl(90, 70%, 35%)" stop-opacity="0.8"/>
+      <stop offset="1" stop-color="hsl(0, 70%, 55%)"/>
+    </linearGradient>
+    <radialGradient id="g1" cx="0.4" cy="0.4" r="0.7" fx="0.3" fy="0.35">
+      <stop offset="0" stop-color="hsl(37, 70%, 55%)"/>
+      <stop offset="0.6" stop-color="hsl(127, 70%, 35%)"/>
+      <stop offset="1" stop-color="hsl(37, 70%, 55%)" stop-opacity="0.6"/>
+    </radialGradient>
+    <radialGradient id="g3" cx="0.4" cy="0.4" r="0.7" fx="0.3" fy="0.35">
+      <stop offset="0" stop-color="hsl(111, 70%, 55%)"/>
+      <stop offset="0.6" stop-color="hsl(201, 70%, 35%)"/>
+      <stop offset="1" stop-color="hsl(111, 70%, 55%)" stop-opacity="0.6"/>
+    </radialGradient>
+    <linearGradient id="g4" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="hsl(148, 70%, 55%)"/>
+      <stop offset="0.5" stop-color="hsl(238, 70%, 35%)" stop-opacity="0.8"/>
+      <stop offset="1" stop-color="hsl(148, 70%, 55%)"/>
+    </linearGradient>
+    <linearGradient id="g6" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="hsl(222, 70%, 55%)"/>
+      <stop offset="0.5" stop-color="hsl(312, 70%, 35%)" stop-opacity="0.8"/>
+      <stop offset="1" stop-color="hsl(222, 70%, 55%)"/>
+    </linearGradient>
+    <radialGradient id="g7" cx="0.4" cy="0.4" r="0.7" fx="0.3" fy="0.35">
+      <stop offset="0" stop-color="hsl(259, 70%, 55%)"/>
+      <stop offset="0.6" stop-color="hsl(349, 70%, 35%)"/>
+      <stop offset="1" stop-color="hsl(259, 70%, 55%)" stop-opacity="0.6"/>
+    </radialGradient>
+    <radialGradient id="g9" cx="0.4" cy="0.4" r="0.7" fx="0.3" fy="0.35">
+      <stop offset="0" stop-color="hsl(333, 70%, 55%)"/>
+      <stop offset="0.6" stop-color="hsl(63, 70%, 35%)"/>
+      <stop offset="1" stop-color="hsl(333, 70%, 55%)" stop-opacity="0.6"/>
+    </radialGradient>
+    <linearGradient id="g10" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="hsl(10, 70%, 55%)"/>
+      <stop offset="0.5" stop-color="hsl(100, 70%, 35%)" stop-opacity="0.8"/>
+      <stop offset="1" stop-color="hsl(10, 70%, 55%)"/>
+    </linearGradient>
+    <linearGradient id="g12" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="hsl(84, 70%, 55%)"/>
+      <stop offset="0.5" stop-color="hsl(174, 70%, 35%)" stop-opacity="0.8"/>
+      <stop offset="1" stop-color="hsl(84, 70%, 55%)"/>
+    </linearGradient>
+    <radialGradient id="g13" cx="0.4" cy="0.4" r="0.7" fx="0.3" fy="0.35">
+      <stop offset="0" stop-color="hsl(121, 70%, 55%)"/>
+      <stop offset="0.6" stop-color="hsl(211, 70%, 35%)"/>
+      <stop offset="1" stop-color="hsl(121, 70%, 55%)" stop-opacity="0.6"/>
+    </radialGradient>
+    <radialGradient id="g15" cx="0.4" cy="0.4" r="0.7" fx="0.3" fy="0.35">
+      <stop offset="0" stop-color="hsl(195, 70%, 55%)"/>
+      <stop offset="0.6" stop-color="hsl(285, 70%, 35%)"/>
+      <stop offset="1" stop-color="hsl(195, 70%, 55%)" stop-opacity="0.6"/>
+    </radialGradient>
+    <linearGradient id="g16" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="hsl(232, 70%, 55%)"/>
+      <stop offset="0.5" stop-color="hsl(322, 70%, 35%)" stop-opacity="0.8"/>
+      <stop offset="1" stop-color="hsl(232, 70%, 55%)"/>
+    </linearGradient>
+    <linearGradient id="g18" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="hsl(306, 70%, 55%)"/>
+      <stop offset="0.5" stop-color="hsl(36, 70%, 35%)" stop-opacity="0.8"/>
+      <stop offset="1" stop-color="hsl(306, 70%, 55%)"/>
+    </linearGradient>
+    <radialGradient id="g19" cx="0.4" cy="0.4" r="0.7" fx="0.3" fy="0.35">
+      <stop offset="0" stop-color="hsl(343, 70%, 55%)"/>
+      <stop offset="0.6" stop-color="hsl(73, 70%, 35%)"/>
+      <stop offset="1" stop-color="hsl(343, 70%, 55%)" stop-opacity="0.6"/>
+    </radialGradient>
+    <radialGradient id="g21" cx="0.4" cy="0.4" r="0.7" fx="0.3" fy="0.35">
+      <stop offset="0" stop-color="hsl(57, 70%, 55%)"/>
+      <stop offset="0.6" stop-color="hsl(147, 70%, 35%)"/>
+      <stop offset="1" stop-color="hsl(57, 70%, 55%)" stop-opacity="0.6"/>
+    </radialGradient>
+    <linearGradient id="g22" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="hsl(94, 70%, 55%)"/>
+      <stop offset="0.5" stop-color="hsl(184, 70%, 35%)" stop-opacity="0.8"/>
+      <stop offset="1" stop-color="hsl(94, 70%, 55%)"/>
+    </linearGradient>
+    <linearGradient id="g24" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="hsl(168, 70%, 55%)"/>
+      <stop offset="0.5" stop-color="hsl(258, 70%, 35%)" stop-opacity="0.8"/>
+      <stop offset="1" stop-color="hsl(168, 70%, 55%)"/>
+    </linearGradient>
+    <radialGradient id="g25" cx="0.4" cy="0.4" r="0.7" fx="0.3" fy="0.35">
+      <stop offset="0" stop-color="hsl(205, 70%, 55%)"/>
+      <stop offset="0.6" stop-color="hsl(295, 70%, 35%)"/>
+      <stop offset="1" stop-color="hsl(205, 70%, 55%)" stop-opacity="0.6"/>
+    </radialGradient>
+    <radialGradient id="g27" cx="0.4" cy="0.4" r="0.7" fx="0.3" fy="0.35">
+      <stop offset="0" stop-color="hsl(279, 70%, 55%)"/>
+      <stop offset="0.6" stop-color="hsl(9, 70%, 35%)"/>
+      <stop offset="1" stop-color="hsl(279, 70%, 55%)" stop-opacity="0.6"/>
+    </radialGradient>
+    <linearGradient id="g28" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="hsl(316, 70%, 55%)"/>
+      <stop offset="0.5" stop-color="hsl(46, 70%, 35%)" stop-opacity="0.8"/>
+      <stop offset="1" stop-color="hsl(316, 70%, 55%)"/>
+    </linearGradient>
+    <linearGradient id="g30" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="hsl(30, 70%, 55%)"/>
+      <stop offset="0.5" stop-color="hsl(120, 70%, 35%)" stop-opacity="0.8"/>
+      <stop offset="1" stop-color="hsl(30, 70%, 55%)"/>
+    </linearGradient>
+    <radialGradient id="g31" cx="0.4" cy="0.4" r="0.7" fx="0.3" fy="0.35">
+      <stop offset="0" stop-color="hsl(67, 70%, 55%)"/>
+      <stop offset="0.6" stop-color="hsl(157, 70%, 35%)"/>
+      <stop offset="1" stop-color="hsl(67, 70%, 55%)" stop-opacity="0.6"/>
+    </radialGradient>
+    <radialGradient id="g33" cx="0.4" cy="0.4" r="0.7" fx="0.3" fy="0.35">
+      <stop offset="0" stop-color="hsl(141, 70%, 55%)"/>
+      <stop offset="0.6" stop-color="hsl(231, 70%, 35%)"/>
+      <stop offset="1" stop-color="hsl(141, 70%, 55%)" stop-opacity="0.6"/>
+    </radialGradient>
+    <linearGradient id="g34" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="hsl(178, 70%, 55%)"/>
+      <stop offset="0.5" stop-color="hsl(268, 70%, 35%)" stop-opacity="0.8"/>
+      <stop offset="1" stop-color="hsl(178, 70%, 55%)"/>
+    </linearGradient>
+    <linearGradient id="g36" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="hsl(252, 70%, 55%)"/>
+      <stop offset="0.5" stop-color="hsl(342, 70%, 35%)" stop-opacity="0.8"/>
+      <stop offset="1" stop-color="hsl(252, 70%, 55%)"/>
+    </linearGradient>
+    <radialGradient id="g37" cx="0.4" cy="0.4" r="0.7" fx="0.3" fy="0.35">
+      <stop offset="0" stop-color="hsl(289, 70%, 55%)"/>
+      <stop offset="0.6" stop-color="hsl(19, 70%, 35%)"/>
+      <stop offset="1" stop-color="hsl(289, 70%, 55%)" stop-opacity="0.6"/>
+    </radialGradient>
+    <radialGradient id="g39" cx="0.4" cy="0.4" r="0.7" fx="0.3" fy="0.35">
+      <stop offset="0" stop-color="hsl(3, 70%, 55%)"/>
+      <stop offset="0.6" stop-color="hsl(93, 70%, 35%)"/>
+      <stop offset="1" stop-color="hsl(3, 70%, 55%)" stop-opacity="0.6"/>
+    </radialGradient>
+    <linearGradient id="g40" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="hsl(40, 70%, 55%)"/>
+      <stop offset="0.5" stop-color="hsl(130, 70%, 35%)" stop-opacity="0.8"/>
+      <stop offset="1" stop-color="hsl(40, 70%, 55%)"/>
+    </linearGradient>
+    <linearGradient id="g42" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="hsl(114, 70%, 55%)"/>
+      <stop offset="0.5" stop-color="hsl(204, 70%, 35%)" stop-opacity="0.8"/>
+      <stop offset="1" stop-color="hsl(114, 70%, 55%)"/>
+    </linearGradient>
+    <radialGradient id="g43" cx="0.4" cy="0.4" r="0.7" fx="0.3" fy="0.35">
+      <stop offset="0" stop-color="hsl(151, 70%, 55%)"/>
+      <stop offset="0.6" stop-color="hsl(241, 70%, 35%)"/>
+      <stop offset="1" stop-color="hsl(151, 70%, 55%)" stop-opacity="0.6"/>
+    </radialGradient>
+    <radialGradient id="g45" cx="0.4" cy="0.4" r="0.7" fx="0.3" fy="0.35">
+      <stop offset="0" stop-color="hsl(225, 70%, 55%)"/>
+      <stop offset="0.6" stop-color="hsl(315, 70%, 35%)"/>
+      <stop offset="1" stop-color="hsl(225, 70%, 55%)" stop-opacity="0.6"/>
+    </radialGradient>
+    <linearGradient id="g46" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="hsl(262, 70%, 55%)"/>
+      <stop offset="0.5" stop-color="hsl(352, 70%, 35%)" stop-opacity="0.8"/>
+      <stop offset="1" stop-color="hsl(262, 70%, 55%)"/>
+    </linearGradient>
+    <linearGradient id="g48" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="hsl(336, 70%, 55%)"/>
+      <stop offset="0.5" stop-color="hsl(66, 70%, 35%)" stop-opacity="0.8"/>
+      <stop offset="1" stop-color="hsl(336, 70%, 55%)"/>
+    </linearGradient>
+    <radialGradient id="g49" cx="0.4" cy="0.4" r="0.7" fx="0.3" fy="0.35">
+      <stop offset="0" stop-color="hsl(13, 70%, 55%)"/>
+      <stop offset="0.6" stop-color="hsl(103, 70%, 35%)"/>
+      <stop offset="1" stop-color="hsl(13, 70%, 55%)" stop-opacity="0.6"/>
+    </radialGradient>
+    <radialGradient id="g51" cx="0.4" cy="0.4" r="0.7" fx="0.3" fy="0.35">
+      <stop offset="0" stop-color="hsl(87, 70%, 55%)"/>
+      <stop offset="0.6" stop-color="hsl(177, 70%, 35%)"/>
+      <stop offset="1" stop-color="hsl(87, 70%, 55%)" stop-opacity="0.6"/>
+    </radialGradient>
+    <linearGradient id="g52" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="hsl(124, 70%, 55%)"/>
+      <stop offset="0.5" stop-color="hsl(214, 70%, 35%)" stop-opacity="0.8"/>
+      <stop offset="1" stop-color="hsl(124, 70%, 55%)"/>
+    </linearGradient>
+    <linearGradient id="g54" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="hsl(198, 70%, 55%)"/>
+      <stop offset="0.5" stop-color="hsl(288, 70%, 35%)" stop-opacity="0.8"/>
+      <stop offset="1" stop-color="hsl(198, 70%, 55%)"/>
+    </linearGradient>
+    <radialGradient id="g55" cx="0.4" cy="0.4" r="0.7" fx="0.3" fy="0.35">
+      <stop offset="0" stop-color="hsl(235, 70%, 55%)"/>
+      <stop offset="0.6" stop-color="hsl(325, 70%, 35%)"/>
+      <stop offset="1" stop-color="hsl(235, 70%, 55%)" stop-opacity="0.6"/>
+    </radialGradient>
+    <radialGradient id="g57" cx="0.4" cy="0.4" r="0.7" fx="0.3" fy="0.35">
+      <stop offset="0" stop-color="hsl(309, 70%, 55%)"/>
+      <stop offset="0.6" stop-color="hsl(39, 70%, 35%)"/>
+      <stop offset="1" stop-color="hsl(309, 70%, 55%)" stop-opacity="0.6"/>
+    </radialGradient>
+    <linearGradient id="g58" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="hsl(346, 70%, 55%)"/>
+      <stop offset="0.5" stop-color="hsl(76, 70%, 35%)" stop-opacity="0.8"/>
+      <stop offset="1" stop-color="hsl(346, 70%, 55%)"/>
+    </linearGradient>
+    <linearGradient id="g60" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="hsl(60, 70%, 55%)"/>
+      <stop offset="0.5" stop-color="hsl(150, 70%, 35%)" stop-opacity="0.8"/>
+      <stop offset="1" stop-color="hsl(60, 70%, 55%)"/>
+    </linearGradient>
+    <radialGradient id="g61" cx="0.4" cy="0.4" r="0.7" fx="0.3" fy="0.35">
+      <stop offset="0" stop-color="hsl(97, 70%, 55%)"/>
+      <stop offset="0.6" stop-color="hsl(187, 70%, 35%)"/>
+      <stop offset="1" stop-color="hsl(97, 70%, 55%)" stop-opacity="0.6"/>
+    </radialGradient>
+    <radialGradient id="g63" cx="0.4" cy="0.4" r="0.7" fx="0.3" fy="0.35">
+      <stop offset="0" stop-color="hsl(171, 70%, 55%)"/>
+      <stop offset="0.6" stop-color="hsl(261, 70%, 35%)"/>
+      <stop offset="1" stop-color="hsl(171, 70%, 55%)" stop-opacity="0.6"/>
+    </radialGradient>
+    <linearGradient id="g64" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="hsl(208, 70%, 55%)"/>
+      <stop offset="0.5" stop-color="hsl(298, 70%, 35%)" stop-opacity="0.8"/>
+      <stop offset="1" stop-color="hsl(208, 70%, 55%)"/>
+    </linearGradient>
+    <linearGradient id="g66" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="hsl(282, 70%, 55%)"/>
+      <stop offset="0.5" stop-color="hsl(12, 70%, 35%)" stop-opacity="0.8"/>
+      <stop offset="1" stop-color="hsl(282, 70%, 55%)"/>
+    </linearGradient>
+    <radialGradient id="g67" cx="0.4" cy="0.4" r="0.7" fx="0.3" fy="0.35">
+      <stop offset="0" stop-color="hsl(319, 70%, 55%)"/>
+      <stop offset="0.6" stop-color="hsl(49, 70%, 35%)"/>
+      <stop offset="1" stop-color="hsl(319, 70%, 55%)" stop-opacity="0.6"/>
+    </radialGradient>
+    <radialGradient id="g69" cx="0.4" cy="0.4" r="0.7" fx="0.3" fy="0.35">
+      <stop offset="0" stop-color="hsl(33, 70%, 55%)"/>
+      <stop offset="0.6" stop-color="hsl(123, 70%, 35%)"/>
+      <stop offset="1" stop-color="hsl(33, 70%, 55%)" stop-opacity="0.6"/>
+    </radialGradient>
+    <linearGradient id="g70" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="hsl(70, 70%, 55%)"/>
+      <stop offset="0.5" stop-color="hsl(160, 70%, 35%)" stop-opacity="0.8"/>
+      <stop offset="1" stop-color="hsl(70, 70%, 55%)"/>
+    </linearGradient>
+    <linearGradient id="g72" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="hsl(144, 70%, 55%)"/>
+      <stop offset="0.5" stop-color="hsl(234, 70%, 35%)" stop-opacity="0.8"/>
+      <stop offset="1" stop-color="hsl(144, 70%, 55%)"/>
+    </linearGradient>
+    <radialGradient id="g73" cx="0.4" cy="0.4" r="0.7" fx="0.3" fy="0.35">
+      <stop offset="0" stop-color="hsl(181, 70%, 55%)"/>
+      <stop offset="0.6" stop-color="hsl(271, 70%, 35%)"/>
+      <stop offset="1" stop-color="hsl(181, 70%, 55%)" stop-opacity="0.6"/>
+    </radialGradient>
+    <radialGradient id="g75" cx="0.4" cy="0.4" r="0.7" fx="0.3" fy="0.35">
+      <stop offset="0" stop-color="hsl(255, 70%, 55%)"/>
+      <stop offset="0.6" stop-color="hsl(345, 70%, 35%)"/>
+      <stop offset="1" stop-color="hsl(255, 70%, 55%)" stop-opacity="0.6"/>
+    </radialGradient>
+    <linearGradient id="g76" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="hsl(292, 70%, 55%)"/>
+      <stop offset="0.5" stop-color="hsl(22, 70%, 35%)" stop-opacity="0.8"/>
+      <stop offset="1" stop-color="hsl(292, 70%, 55%)"/>
+    </linearGradient>
+    <linearGradient id="g78" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="hsl(6, 70%, 55%)"/>
+      <stop offset="0.5" stop-color="hsl(96, 70%, 35%)" stop-opacity="0.8"/>
+      <stop offset="1" stop-color="hsl(6, 70%, 55%)"/>
+    </linearGradient>
+    <radialGradient id="g79" cx="0.4" cy="0.4" r="0.7" fx="0.3" fy="0.35">
+      <stop offset="0" stop-color="hsl(43, 70%, 55%)"/>
+      <stop offset="0.6" stop-color="hsl(133, 70%, 35%)"/>
+      <stop offset="1" stop-color="hsl(43, 70%, 55%)" stop-opacity="0.6"/>
+    </radialGradient>
+    <radialGradient id="g81" cx="0.4" cy="0.4" r="0.7" fx="0.3" fy="0.35">
+      <stop offset="0" stop-color="hsl(117, 70%, 55%)"/>
+      <stop offset="0.6" stop-color="hsl(207, 70%, 35%)"/>
+      <stop offset="1" stop-color="hsl(117, 70%, 55%)" stop-opacity="0.6"/>
+    </radialGradient>
+    <linearGradient id="g82" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="hsl(154, 70%, 55%)"/>
+      <stop offset="0.5" stop-color="hsl(244, 70%, 35%)" stop-opacity="0.8"/>
+      <stop offset="1" stop-color="hsl(154, 70%, 55%)"/>
+    </linearGradient>
+    <linearGradient id="g84" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="hsl(228, 70%, 55%)"/>
+      <stop offset="0.5" stop-color="hsl(318, 70%, 35%)" stop-opacity="0.8"/>
+      <stop offset="1" stop-color="hsl(228, 70%, 55%)"/>
+    </linearGradient>
+    <radialGradient id="g85" cx="0.4" cy="0.4" r="0.7" fx="0.3" fy="0.35">
+      <stop offset="0" stop-color="hsl(265, 70%, 55%)"/>
+      <stop offset="0.6" stop-color="hsl(355, 70%, 35%)"/>
+      <stop offset="1" stop-color="hsl(265, 70%, 55%)" stop-opacity="0.6"/>
+    </radialGradient>
+    <radialGradient id="g87" cx="0.4" cy="0.4" r="0.7" fx="0.3" fy="0.35">
+      <stop offset="0" stop-color="hsl(339, 70%, 55%)"/>
+      <stop offset="0.6" stop-color="hsl(69, 70%, 35%)"/>
+      <stop offset="1" stop-color="hsl(339, 70%, 55%)" stop-opacity="0.6"/>
+    </radialGradient>
+    <linearGradient id="g88" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="hsl(16, 70%, 55%)"/>
+      <stop offset="0.5" stop-color="hsl(106, 70%, 35%)" stop-opacity="0.8"/>
+      <stop offset="1" stop-color="hsl(16, 70%, 55%)"/>
+    </linearGradient>
+    <linearGradient id="g90" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="hsl(90, 70%, 55%)"/>
+      <stop offset="0.5" stop-color="hsl(180, 70%, 35%)" stop-opacity="0.8"/>
+      <stop offset="1" stop-color="hsl(90, 70%, 55%)"/>
+    </linearGradient>
+    <radialGradient id="g91" cx="0.4" cy="0.4" r="0.7" fx="0.3" fy="0.35">
+      <stop offset="0" stop-color="hsl(127, 70%, 55%)"/>
+      <stop offset="0.6" stop-color="hsl(217, 70%, 35%)"/>
+      <stop offset="1" stop-color="hsl(127, 70%, 55%)" stop-opacity="0.6"/>
+    </radialGradient>
+    <radialGradient id="g93" cx="0.4" cy="0.4" r="0.7" fx="0.3" fy="0.35">
+      <stop offset="0" stop-color="hsl(201, 70%, 55%)"/>
+      <stop offset="0.6" stop-color="hsl(291, 70%, 35%)"/>
+      <stop offset="1" stop-color="hsl(201, 70%, 55%)" stop-opacity="0.6"/>
+    </radialGradient>
+    <linearGradient id="g94" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="hsl(238, 70%, 55%)"/>
+      <stop offset="0.5" stop-color="hsl(328, 70%, 35%)" stop-opacity="0.8"/>
+      <stop offset="1" stop-color="hsl(238, 70%, 55%)"/>
+    </linearGradient>
+  </defs>
+  <rect x="6" y="6" width="48" height="48" rx="6" fill="url(#g0)"/>
+  <circle cx="90" cy="30" r="24" fill="url(#g1)"/>
+  <rect x="126" y="6" width="48" height="48" rx="6" fill="hsl(74, 60%, 45%)"/>
+  <path d="M 186 54 L 210 6 L 234 54 Z" fill="url(#g3)"/>
+  <rect x="246" y="6" width="48" height="48" rx="6" fill="url(#g4)"/>
+  <circle cx="330" cy="30" r="24" fill="hsl(185, 60%, 45%)"/>
+  <rect x="366" y="6" width="48" height="48" rx="6" fill="url(#g6)"/>
+  <path d="M 426 54 L 450 6 L 474 54 Z" fill="url(#g7)"/>
+  <rect x="486" y="6" width="48" height="48" rx="6" fill="hsl(296, 60%, 45%)"/>
+  <circle cx="570" cy="30" r="24" fill="url(#g9)"/>
+  <rect x="606" y="6" width="48" height="48" rx="6" fill="url(#g10)"/>
+  <path d="M 666 54 L 690 6 L 714 54 Z" fill="hsl(47, 60%, 45%)"/>
+  <rect x="6" y="66" width="48" height="48" rx="6" fill="url(#g12)"/>
+  <circle cx="90" cy="90" r="24" fill="url(#g13)"/>
+  <rect x="126" y="66" width="48" height="48" rx="6" fill="hsl(158, 60%, 45%)"/>
+  <path d="M 186 114 L 210 66 L 234 114 Z" fill="url(#g15)"/>
+  <rect x="246" y="66" width="48" height="48" rx="6" fill="url(#g16)"/>
+  <circle cx="330" cy="90" r="24" fill="hsl(269, 60%, 45%)"/>
+  <rect x="366" y="66" width="48" height="48" rx="6" fill="url(#g18)"/>
+  <path d="M 426 114 L 450 66 L 474 114 Z" fill="url(#g19)"/>
+  <rect x="486" y="66" width="48" height="48" rx="6" fill="hsl(20, 60%, 45%)"/>
+  <circle cx="570" cy="90" r="24" fill="url(#g21)"/>
+  <rect x="606" y="66" width="48" height="48" rx="6" fill="url(#g22)"/>
+  <path d="M 666 114 L 690 66 L 714 114 Z" fill="hsl(131, 60%, 45%)"/>
+  <rect x="6" y="126" width="48" height="48" rx="6" fill="url(#g24)"/>
+  <circle cx="90" cy="150" r="24" fill="url(#g25)"/>
+  <rect x="126" y="126" width="48" height="48" rx="6" fill="hsl(242, 60%, 45%)"/>
+  <path d="M 186 174 L 210 126 L 234 174 Z" fill="url(#g27)"/>
+  <rect x="246" y="126" width="48" height="48" rx="6" fill="url(#g28)"/>
+  <circle cx="330" cy="150" r="24" fill="hsl(353, 60%, 45%)"/>
+  <rect x="366" y="126" width="48" height="48" rx="6" fill="url(#g30)"/>
+  <path d="M 426 174 L 450 126 L 474 174 Z" fill="url(#g31)"/>
+  <rect x="486" y="126" width="48" height="48" rx="6" fill="hsl(104, 60%, 45%)"/>
+  <circle cx="570" cy="150" r="24" fill="url(#g33)"/>
+  <rect x="606" y="126" width="48" height="48" rx="6" fill="url(#g34)"/>
+  <path d="M 666 174 L 690 126 L 714 174 Z" fill="hsl(215, 60%, 45%)"/>
+  <rect x="6" y="186" width="48" height="48" rx="6" fill="url(#g36)"/>
+  <circle cx="90" cy="210" r="24" fill="url(#g37)"/>
+  <rect x="126" y="186" width="48" height="48" rx="6" fill="hsl(326, 60%, 45%)"/>
+  <path d="M 186 234 L 210 186 L 234 234 Z" fill="url(#g39)"/>
+  <rect x="246" y="186" width="48" height="48" rx="6" fill="url(#g40)"/>
+  <circle cx="330" cy="210" r="24" fill="hsl(77, 60%, 45%)"/>
+  <rect x="366" y="186" width="48" height="48" rx="6" fill="url(#g42)"/>
+  <path d="M 426 234 L 450 186 L 474 234 Z" fill="url(#g43)"/>
+  <rect x="486" y="186" width="48" height="48" rx="6" fill="hsl(188, 60%, 45%)"/>
+  <circle cx="570" cy="210" r="24" fill="url(#g45)"/>
+  <rect x="606" y="186" width="48" height="48" rx="6" fill="url(#g46)"/>
+  <path d="M 666 234 L 690 186 L 714 234 Z" fill="hsl(299, 60%, 45%)"/>
+  <rect x="6" y="246" width="48" height="48" rx="6" fill="url(#g48)"/>
+  <circle cx="90" cy="270" r="24" fill="url(#g49)"/>
+  <rect x="126" y="246" width="48" height="48" rx="6" fill="hsl(50, 60%, 45%)"/>
+  <path d="M 186 294 L 210 246 L 234 294 Z" fill="url(#g51)"/>
+  <rect x="246" y="246" width="48" height="48" rx="6" fill="url(#g52)"/>
+  <circle cx="330" cy="270" r="24" fill="hsl(161, 60%, 45%)"/>
+  <rect x="366" y="246" width="48" height="48" rx="6" fill="url(#g54)"/>
+  <path d="M 426 294 L 450 246 L 474 294 Z" fill="url(#g55)"/>
+  <rect x="486" y="246" width="48" height="48" rx="6" fill="hsl(272, 60%, 45%)"/>
+  <circle cx="570" cy="270" r="24" fill="url(#g57)"/>
+  <rect x="606" y="246" width="48" height="48" rx="6" fill="url(#g58)"/>
+  <path d="M 666 294 L 690 246 L 714 294 Z" fill="hsl(23, 60%, 45%)"/>
+  <rect x="6" y="306" width="48" height="48" rx="6" fill="url(#g60)"/>
+  <circle cx="90" cy="330" r="24" fill="url(#g61)"/>
+  <rect x="126" y="306" width="48" height="48" rx="6" fill="hsl(134, 60%, 45%)"/>
+  <path d="M 186 354 L 210 306 L 234 354 Z" fill="url(#g63)"/>
+  <rect x="246" y="306" width="48" height="48" rx="6" fill="url(#g64)"/>
+  <circle cx="330" cy="330" r="24" fill="hsl(245, 60%, 45%)"/>
+  <rect x="366" y="306" width="48" height="48" rx="6" fill="url(#g66)"/>
+  <path d="M 426 354 L 450 306 L 474 354 Z" fill="url(#g67)"/>
+  <rect x="486" y="306" width="48" height="48" rx="6" fill="hsl(356, 60%, 45%)"/>
+  <circle cx="570" cy="330" r="24" fill="url(#g69)"/>
+  <rect x="606" y="306" width="48" height="48" rx="6" fill="url(#g70)"/>
+  <path d="M 666 354 L 690 306 L 714 354 Z" fill="hsl(107, 60%, 45%)"/>
+  <rect x="6" y="366" width="48" height="48" rx="6" fill="url(#g72)"/>
+  <circle cx="90" cy="390" r="24" fill="url(#g73)"/>
+  <rect x="126" y="366" width="48" height="48" rx="6" fill="hsl(218, 60%, 45%)"/>
+  <path d="M 186 414 L 210 366 L 234 414 Z" fill="url(#g75)"/>
+  <rect x="246" y="366" width="48" height="48" rx="6" fill="url(#g76)"/>
+  <circle cx="330" cy="390" r="24" fill="hsl(329, 60%, 45%)"/>
+  <rect x="366" y="366" width="48" height="48" rx="6" fill="url(#g78)"/>
+  <path d="M 426 414 L 450 366 L 474 414 Z" fill="url(#g79)"/>
+  <rect x="486" y="366" width="48" height="48" rx="6" fill="hsl(80, 60%, 45%)"/>
+  <circle cx="570" cy="390" r="24" fill="url(#g81)"/>
+  <rect x="606" y="366" width="48" height="48" rx="6" fill="url(#g82)"/>
+  <path d="M 666 414 L 690 366 L 714 414 Z" fill="hsl(191, 60%, 45%)"/>
+  <rect x="6" y="426" width="48" height="48" rx="6" fill="url(#g84)"/>
+  <circle cx="90" cy="450" r="24" fill="url(#g85)"/>
+  <rect x="126" y="426" width="48" height="48" rx="6" fill="hsl(302, 60%, 45%)"/>
+  <path d="M 186 474 L 210 426 L 234 474 Z" fill="url(#g87)"/>
+  <rect x="246" y="426" width="48" height="48" rx="6" fill="url(#g88)"/>
+  <circle cx="330" cy="450" r="24" fill="hsl(53, 60%, 45%)"/>
+  <rect x="366" y="426" width="48" height="48" rx="6" fill="url(#g90)"/>
+  <path d="M 426 474 L 450 426 L 474 474 Z" fill="url(#g91)"/>
+  <rect x="486" y="426" width="48" height="48" rx="6" fill="hsl(164, 60%, 45%)"/>
+  <circle cx="570" cy="450" r="24" fill="url(#g93)"/>
+  <rect x="606" y="426" width="48" height="48" rx="6" fill="url(#g94)"/>
+  <path d="M 666 474 L 690 426 L 714 474 Z" fill="hsl(275, 60%, 45%)"/>
+</svg>

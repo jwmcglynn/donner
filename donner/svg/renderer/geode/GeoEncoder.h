@@ -253,16 +253,10 @@ public:
   /// zero clip flags).
   bool hasActiveClipState() const;
 
-  /// Monotonic clip-state version: every clip-polygon / clip-mask
-  /// mutation bumps it. The ordered batch machinery snapshots it per
-  /// batch so a batch never spans a clip change.
+  /// Monotonic clip-state version: every scissor, clip-polygon, and
+  /// clip-mask mutation bumps it. The ordered batch machinery snapshots it
+  /// per batch so a batch never spans a clip change.
   uint64_t clipStateVersion() const;
-
-  /// True when a rectangular scissor rect is active. The ordered batch
-  /// gate excludes scissor-clipped draws (the scissor is raster-stage
-  /// state applied per draw; a deferred batch draw would observe the
-  /// scissor at flush time instead of at draw time).
-  bool hasActiveScissor() const;
 
   /// True while a mask pass is open, i.e. draws are being recorded into a
   /// mask texture through the mask pipeline rather than into the main pass.
@@ -557,6 +551,21 @@ public:
                          std::span<const float> instanceTransforms);
 
   /**
+   * Paint carried by one cross-entity batch instance: a solid colour, or a
+   * resolved gradient whose parameters and stop ramp the encoder copies into
+   * the slot's persistent paint block. The gradient pointers are borrowed for
+   * the duration of the call only.
+   */
+  struct ScenePaint {
+    css::RGBA color = css::RGBA(0, 0, 0, 255);
+    const LinearGradientParams* linearGradient = nullptr;
+    const RadialGradientParams* radialGradient = nullptr;
+
+    /// True when this instance paints with a gradient rather than a colour.
+    bool isGradient() const { return linearGradient != nullptr || radialGradient != nullptr; }
+  };
+
+  /**
    * Ensure a resident slot's geometry is uploaded and its instance record
    * (record-slab slot, chunk-relative bases, transform-bearing) is current
    * WITHOUT drawing. Used by the cross-entity ordered-batch path, which
@@ -580,13 +589,19 @@ public:
    *   lets a persistent per-occurrence record reach a zero-write steady
    *   state. Null means the override slot is per-frame scratch and is always
    *   written. Ignored when `recordSlotOverride` is null.
+   * @param publishPaint True to publish `paint` into the slot's paint block
+   *   and paint scalars; false to keep whatever the slot already holds. A
+   *   batch's flush-time re-ensure passes false: it runs after the caller's
+   *   resolved gradient is gone and has to reproduce the record the append
+   *   wrote, which reading the paint back off the slot does exactly.
    * @return True when the slot is resident and current.
    */
   bool ensureResidentSceneRecord(GeodeResidentSlot& slot, const EncodedPath& encoded,
-                                 const css::RGBA& color, FillRule rule,
+                                 const ScenePaint& paint, FillRule rule,
                                  const Transform2d& recordTransform,
                                  const GeodeRecordSlab::Slot* recordSlotOverride = nullptr,
-                                 std::vector<uint8_t>* overrideRecordCache = nullptr);
+                                 std::vector<uint8_t>* overrideRecordCache = nullptr,
+                                 bool publishPaint = true);
 
   /// One cross-entity ordered batch: consecutive resident slots of one
   /// slab chunk plus a run of consecutive record-slab slots.

@@ -72,15 +72,17 @@ class ShaderFeaturesManifestTest(unittest.TestCase):
             ],
         )
         # The instance-record consolidation folded the per-draw uniform
-        # bindings into the record SSBO plus a combined grid binding, so the
-        # solid-fill shader declares 11 bindings.
-        self.assertEqual(len(shader["bindings"]), 11)
+        # bindings into the record SSBO plus a combined grid binding, and
+        # gradient paint blocks add one more storage binding, so the
+        # solid-fill shader declares 12 bindings.
+        self.assertEqual(len(shader["bindings"]), 12)
         bindings = {entry["binding"]: entry["name"] for entry in shader["bindings"]}
         # Curve references and both band grids live in the combined grid
-        # storage at binding 10; the per-instance records ride binding 7.
+        # storage at binding 10, the per-instance records ride binding 7, and
+        # the gradient paint blocks ride binding 11.
         self.assertEqual(
-            {binding: bindings[binding] for binding in (7, 10)},
-            {7: "instances", 10: "gridData"},
+            {binding: bindings[binding] for binding in (7, 10, 11)},
+            {7: "instances", 10: "gridData", 11: "paintData"},
         )
 
     def test_every_shader_has_an_entry_point(self):

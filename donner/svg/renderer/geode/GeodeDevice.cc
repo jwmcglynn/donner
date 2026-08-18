@@ -183,6 +183,10 @@ struct GeodeDevice::Impl {
   ScopedWgpuHandle<wgpu::TextureView> dummyClipMaskTextureView;
   ScopedWgpuHandle<wgpu::Sampler> dummyClipMaskSampler;
 
+  // Zero-filled gradient paint block bound by draws with no residence slot.
+  // See `GeodeDevice::dummyPaintDataBuffer()`.
+  ScopedWgpuHandle<wgpu::Buffer> dummyPaintDataBuffer;
+
   // 1-element instance-transform buffer bound by every
   // non-instanced solid fill. Uploaded once at CreateHeadless time,
   // never modified. Layout matches the WGSL `InstanceRecord` struct, whose
@@ -633,6 +637,9 @@ const wgpu::Sampler& GeodeDevice::dummyClipMaskSampler() const {
 const wgpu::Buffer& GeodeDevice::identityInstanceRecordBuffer() const {
   return impl_->identityInstanceRecordBuffer.get();
 }
+const wgpu::Buffer& GeodeDevice::dummyPaintDataBuffer() const {
+  return impl_->dummyPaintDataBuffer.get();
+}
 
 GeodePipeline& GeodeDevice::pipeline() const {
   return *impl_->pipeline;
@@ -903,6 +910,21 @@ void GeodeDevice::initSharedResources() {
     queue_.writeBuffer(impl_->identityInstanceRecordBuffer.get(), 0, identityRecord,
                        sizeof(identityRecord));
   }
+
+  {
+    // One zero-filled gradient paint block, sized from the shared row count so
+    // it cannot drift from the layout the encoder writes and the fill shader
+    // reads. A whole block, rather than a single element, keeps any accidental
+    // read inside the binding.
+    constexpr size_t kPaintBlockFloats = kGradientPaintBlockRows * 4;
+    const float zeroPaint[kPaintBlockFloats] = {};
+    wgpu::BufferDescriptor bd = {};
+    bd.label = wgpu::StringView{std::string_view{"GeodeDeviceDummyPaintData"}};
+    bd.size = sizeof(zeroPaint);
+    bd.usage = wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopyDst;
+    impl_->dummyPaintDataBuffer.reset(device_.createBuffer(bd));
+    queue_.writeBuffer(impl_->dummyPaintDataBuffer.get(), 0, zeroPaint, sizeof(zeroPaint));
+  }
 }
 
 void GeodeDevice::initSharedPipelines() {
@@ -925,10 +947,16 @@ wgpu::BindGroup GeodeDevice::findSceneBatchBindGroup(
 
 void GeodeDevice::storeSceneBatchBindGroup(const SceneBatchBindGroupKey& key,
                                            wgpu::BindGroup group) {
-  if (sceneBatchBindGroups_.size() >= kSceneBatchBindGroupCacheCap) {
-    sceneBatchBindGroups_.clear();
+  while (sceneBatchBindGroups_.size() >= kSceneBatchBindGroupCacheCap &&
+         !sceneBatchBindGroupOrder_.empty()) {
+    sceneBatchBindGroups_.erase(sceneBatchBindGroupOrder_.front());
+    sceneBatchBindGroupOrder_.pop_front();
   }
-  sceneBatchBindGroups_[key] = ScopedWgpuHandle<wgpu::BindGroup>(std::move(group));
+  if (sceneBatchBindGroups_
+          .insert_or_assign(key, ScopedWgpuHandle<wgpu::BindGroup>(std::move(group)))
+          .second) {
+    sceneBatchBindGroupOrder_.push_back(key);
+  }
 }
 
 void GeodeDevice::deferDestroy(wgpu::Buffer buffer) {

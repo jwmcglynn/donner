@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cstddef>
+#include <deque>
 #include <map>
 #include <memory>
 #include <tuple>
@@ -383,9 +384,14 @@ public:
   [[nodiscard]] wgpu::BindGroup findSceneBatchBindGroup(const SceneBatchBindGroupKey& key) const;
 
   /// Store a scene-batch bind group under `key`, taking ownership of the
-  /// +1 handle. Clears the whole cache first when it reaches the cap
-  /// (recorded command buffers keep their own references, so dropping the
-  /// cache's handles mid-frame is safe).
+  /// +1 handle. At the cap, the OLDEST entries are evicted one at a time
+  /// rather than the whole cache being dropped: the cache is device-wide and
+  /// a key belongs to one document's buffers, so wholesale clearing punished
+  /// the live document for documents that had already been torn down, and a
+  /// steady frame then rebuilt every batch group it had just been using.
+  /// Insertion order puts those dead entries first. Recorded command buffers
+  /// keep their own references, so dropping the cache's handle mid-frame is
+  /// safe either way.
   void storeSceneBatchBindGroup(const SceneBatchBindGroupKey& key, wgpu::BindGroup group);
 
   /**
@@ -602,6 +608,13 @@ public:
   /// followed by zeroes. The `.z` components carry the translation (0 for
   /// identity).
   const wgpu::Buffer& identityInstanceRecordBuffer() const;
+
+  /// Zero-filled gradient paint block, one full block long. Bound at binding
+  /// 11 of the Slug fill bind-group layout by draws that have no residence
+  /// slot to bind: those draws are solid or pattern painted and never read
+  /// the array, but the binding must still resolve to a range holding at
+  /// least one whole element of the shader's array stride.
+  const wgpu::Buffer& dummyPaintDataBuffer() const;
   /// @}
 
   /// @name Shared render / compute pipelines (issue #575 fix)
@@ -748,9 +761,12 @@ private:
   std::vector<ScopedWgpuHandle<wgpu::Texture>> pendingTextures_;
 
   // Scene-batch bind groups cached across frames (see
-  // SceneBatchBindGroupKey). Bounded by kSceneBatchBindGroupCacheCap.
+  // SceneBatchBindGroupKey). Bounded by kSceneBatchBindGroupCacheCap, with
+  // `sceneBatchBindGroupOrder_` recording insertion order so the eviction at
+  // the cap drops the oldest entries instead of everything.
   static constexpr std::size_t kSceneBatchBindGroupCacheCap = 256;
   std::map<SceneBatchBindGroupKey, ScopedWgpuHandle<wgpu::BindGroup>> sceneBatchBindGroups_;
+  std::deque<SceneBatchBindGroupKey> sceneBatchBindGroupOrder_;
 };
 
 }  // namespace donner::geode

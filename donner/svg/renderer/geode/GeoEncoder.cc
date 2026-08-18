@@ -126,8 +126,29 @@ struct alignas(16) Uniforms {
   uint32_t vRefsBase;            // 316 .. 320
   // Two path-space vec2 vertices per vec4, up to eight vertices.
   float boundingVertices[16];  // 320 .. 384
+  // Draw-level copy of the record's clip rectangle, same mirroring contract
+  // as the paint / geometry parameters above.
+  float clipRect[4];           // 384 .. 400
+  uint32_t clipRectActive;     // 400 .. 404
+  uint32_t paintBase;          // 404 .. 408
+  uint32_t gradientSpread;     // 408 .. 412
+  uint32_t gradientStopCount;  // 412 .. 416
 };
-static_assert(sizeof(Uniforms) == 384, "Uniforms struct layout mismatch");
+static_assert(sizeof(Uniforms) == 416, "Uniforms struct layout mismatch");
+
+/// Rows the stop ramp starts at inside a gradient paint block. Must match the
+/// layout documented beside `paintData` in `shaders/slug_fill.wgsl`;
+/// `kGradientPaintBlockRows` is the block's total row count.
+constexpr uint32_t kPaintStopColorRow = 5u;
+constexpr uint32_t kPaintStopOffsetRow = 21u;
+constexpr uint32_t kPaintBlockRows = kGradientPaintBlockRows;
+constexpr uint64_t kPaintBlockBytes = kPaintBlockRows * 16u;
+
+/// Paint modes shared with `shaders/slug_fill.wgsl`.
+constexpr uint32_t kPaintModeSolid = 0u;
+constexpr uint32_t kPaintModePattern = 1u;
+constexpr uint32_t kPaintModeLinearGradient = 2u;
+constexpr uint32_t kPaintModeRadialGradient = 3u;
 
 /// Write the 4x4 identity matrix in column-major order.
 void writeIdentityMvp(float* out16) {
@@ -202,8 +223,12 @@ void affineToMat4(const Transform2d& t, float* out16) {
   out16[15] = 1.0f;
 }
 
-/// Must match `kMaxStops` in `shaders/slug_gradient.wgsl`.
+/// Must match `kMaxStops` in `shaders/slug_gradient.wgsl` and in
+/// `shaders/slug_fill.wgsl`.
 constexpr uint32_t kMaxGradientStops = 16u;
+static_assert(kPaintStopColorRow + kMaxGradientStops <= kPaintStopOffsetRow &&
+                  kPaintStopOffsetRow + kMaxGradientStops / 4u <= kPaintBlockRows,
+              "gradient paint block is too small for its stop ramp");
 
 /// Layout of the gradient per-draw uniform buffer. Must match
 /// `GradientUniforms` in `shaders/slug_gradient.wgsl`.
@@ -310,6 +335,44 @@ void copyRecordParamsToUniform(Uniforms& u, const InstanceRecord& r) {
   u.vGridBase = r.vGridBase;
   u.hRefsBase = r.hRefsBase;
   u.vRefsBase = r.vRefsBase;
+  u.clipRect[0] = r.clipRect[0];
+  u.clipRect[1] = r.clipRect[1];
+  u.clipRect[2] = r.clipRect[2];
+  u.clipRect[3] = r.clipRect[3];
+  u.clipRectActive = r.clipRectActive;
+  u.paintBase = r.paintBase;
+  u.gradientSpread = r.gradientSpread;
+  u.gradientStopCount = r.gradientStopCount;
+}
+
+/// Fill one gradient paint block from resolved gradient parameters. The two
+/// gradient kinds share the block, each leaving the other's geometry rows
+/// zeroed, so a change of kind rewrites the same region.
+template <typename ParamsT>
+void writeGradientPaintBlock(float (&rows)[kPaintBlockRows * 4], const ParamsT& params,
+                             std::span<const typename ParamsT::Stop> stops) {
+  const Transform2d& t = params.gradientFromPath;
+  // Row-vector packing: gx = a*px + c*py + e, gy = b*px + d*py + f.
+  rows[0] = static_cast<float>(t.data[0]);
+  rows[1] = static_cast<float>(t.data[2]);
+  rows[2] = static_cast<float>(t.data[4]);
+  rows[3] = 0.0f;
+  rows[4] = static_cast<float>(t.data[1]);
+  rows[5] = static_cast<float>(t.data[3]);
+  rows[6] = static_cast<float>(t.data[5]);
+  rows[7] = 0.0f;
+
+  const uint32_t stopCount = std::min<uint32_t>(kMaxGradientStops,
+                                                static_cast<uint32_t>(stops.size()));
+  for (uint32_t i = 0; i < stopCount; ++i) {
+    const auto& s = stops[i];
+    float* color = rows + (kPaintStopColorRow + i) * 4u;
+    color[0] = s.rgba[0];
+    color[1] = s.rgba[1];
+    color[2] = s.rgba[2];
+    color[3] = s.rgba[3];
+    rows[kPaintStopOffsetRow * 4u + i] = s.offset;
+  }
 }
 
 /// Byte range covering a resident slot's four grid classes, which share one
@@ -330,11 +393,11 @@ GridRegionSpan gridRegionSpan(const GeodeResidentSlot& slot) {
   return {start, end - start};
 }
 
-/// Rewrite the geometry bases of a solo resident draw's uniform so they are
-/// relative to the sub-ranges its bind group actually binds, rather than to
-/// the slab chunk. Each single-class binding starts at its own region, so
-/// its base is zero; the four grid classes share one binding covering all of
-/// them, so their bases are offsets within that span.
+/// Rewrite the geometry and paint bases of a solo resident draw's uniform so
+/// they are relative to the sub-ranges its bind group actually binds, rather
+/// than to the slab chunk. Each single-class binding starts at its own region,
+/// so its base is zero; the four grid classes share one binding covering all
+/// of them, so their bases are offsets within that span.
 void writeSoloGeometryBases(Uniforms& u, const GeodeResidentSlot& slot) {
   const GridRegionSpan grid = gridRegionSpan(slot);
   u.bandBase = 0u;
@@ -345,6 +408,10 @@ void writeSoloGeometryBases(Uniforms& u, const GeodeResidentSlot& slot) {
   u.vGridBase = static_cast<uint32_t>((slot.vGrid.offset - grid.offset) / sizeof(uint32_t));
   u.hRefsBase = static_cast<uint32_t>((slot.hRefs.offset - grid.offset) / sizeof(uint32_t));
   u.vRefsBase = static_cast<uint32_t>((slot.vRefs.offset - grid.offset) / sizeof(uint32_t));
+  // The paint block is bound as its own tight range too. A solo draw never
+  // reads it - its entry point compiles in no gradient shading at all - but a
+  // base that still pointed into the chunk would be a live lie in the uniform.
+  u.paintBase = 0u;
 }
 
 /// Gradient kind values shared with `shaders/slug_gradient.wgsl`.
@@ -653,7 +720,14 @@ struct GeoEncoder::Impl : public GeodeTextureEncoder::UniformScratch {
   bool ensureResidentSceneRecordImpl(GeodeResidentSlot& slot, const EncodedPath& encoded,
                                      const FillDrawArgs& args, const Transform2d& recordTransform,
                                      const GeodeRecordSlab::Slot* recordSlotOverride,
-                                     std::vector<uint8_t>* overrideRecordCache, bool bakeTransform);
+                                     std::vector<uint8_t>* overrideRecordCache, bool bakeTransform,
+                                     bool publishPaint = true);
+
+  /// Publish `args`' paint into `slot`: write the gradient paint block when
+  /// the paint is a gradient, and record the paint mode and gradient scalars
+  /// the instance record reads back. Skipped when the bytes are unchanged, so
+  /// a steady frame writes no paint at all.
+  void publishSlotPaint(GeodeResidentSlot& slot, const FillDrawArgs& args);
 
   /// Publish the solo resident draw's uniform for `slot`, skipping the write
   /// when the bytes are unchanged. Only the solo path calls this: a scene
@@ -932,9 +1006,11 @@ struct GeoEncoder::Impl : public GeodeTextureEncoder::UniformScratch {
   /// no active polygon.
   bool clipPolygonActive = false;
 
-  /// Monotonic version bumped by every clip-polygon / clip-mask mutation.
-  /// The ordered batch machinery snapshots this per batch so a batch never
-  /// spans a clip change (one draw can only carry one clip state).
+  /// Monotonic version bumped by every scissor / clip-polygon / clip-mask
+  /// mutation. The ordered batch machinery snapshots this per batch so a
+  /// batch never spans a clip change: a batch's instances all share the
+  /// polygon and mask state its single draw carries, and all share the one
+  /// clip rectangle their records were written with.
   uint64_t clipStateVersion = 0;
   float clipPolygonPlanes[16] = {0};  // 4 edges × vec4 (xyz + pad)
 
@@ -949,6 +1025,43 @@ struct GeoEncoder::Impl : public GeodeTextureEncoder::UniformScratch {
     }
   }
 
+  /// Clamp the requested scissor to the target. Out-of-bounds scissor rects
+  /// would trip WebGPU validation, and a clip rect can legitimately fall
+  /// outside the current viewport (a nested SVG positioned at the edge).
+  void clampedScissor(uint32_t& x, uint32_t& y, uint32_t& w, uint32_t& h) const {
+    x = std::min(scissorX, targetWidth);
+    y = std::min(scissorY, targetHeight);
+    w = std::min(scissorW, targetWidth - x);
+    h = std::min(scissorH, targetHeight - y);
+  }
+
+  /// Publish the current scissor as the record/uniform clip rectangle: the
+  /// half-open integer-pixel range `[x, x+w) x [y, y+h)` the shader tests.
+  /// It is derived from the SAME clamped values `applyScissorIfPassOpen`
+  /// hands the rasterizer, so the data-carried test and the raster test keep
+  /// exactly the same pixels and a draw that uses one, the other, or both is
+  /// pixel-identical.
+  void writeClipRect(float (&outRect)[4], uint32_t& outActive) const {
+    if (!scissorActive) {
+      outRect[0] = 0.0f;
+      outRect[1] = 0.0f;
+      outRect[2] = 0.0f;
+      outRect[3] = 0.0f;
+      outActive = 0u;
+      return;
+    }
+    uint32_t x = 0;
+    uint32_t y = 0;
+    uint32_t w = 0;
+    uint32_t h = 0;
+    clampedScissor(x, y, w, h);
+    outRect[0] = static_cast<float>(x);
+    outRect[1] = static_cast<float>(y);
+    outRect[2] = static_cast<float>(x + w);
+    outRect[3] = static_cast<float>(y + h);
+    outActive = 1u;
+  }
+
   /// Apply the current scissor to the open render pass. No-op if the
   /// pass isn't open yet - `ensurePassOpen` will call this on first
   /// open. Safe to call whenever `scissorActive` / `scissor*` changes.
@@ -957,15 +1070,11 @@ struct GeoEncoder::Impl : public GeodeTextureEncoder::UniformScratch {
       return;
     }
     if (scissorActive) {
-      // Clamp to the target so out-of-bounds scissor rects don't trigger
-      // WebGPU validation errors. Required when the clip rect is outside
-      // the current viewport (e.g., a nested SVG positioned at the edge).
-      uint32_t x = std::min(scissorX, targetWidth);
-      uint32_t y = std::min(scissorY, targetHeight);
-      uint32_t maxW = targetWidth - x;
-      uint32_t maxH = targetHeight - y;
-      uint32_t w = std::min(scissorW, maxW);
-      uint32_t h = std::min(scissorH, maxH);
+      uint32_t x = 0;
+      uint32_t y = 0;
+      uint32_t w = 0;
+      uint32_t h = 0;
+      clampedScissor(x, y, w, h);
       pass.get().setScissorRect(x, y, w, h);
     } else {
       pass.get().setScissorRect(0, 0, targetWidth, targetHeight);
@@ -1565,10 +1674,6 @@ uint64_t GeoEncoder::clipStateVersion() const {
   return impl_->clipStateVersion;
 }
 
-bool GeoEncoder::hasActiveScissor() const {
-  return impl_->scissorActive;
-}
-
 bool GeoEncoder::hasOpenMaskPass() const {
   return impl_->maskPassOpen;
 }
@@ -1616,6 +1721,14 @@ struct GeoEncoder::FillDrawArgs {
   /// transform, so one GPU draw covers all instances with shared geometry
   /// bases.
   uint32_t instanceCount = 1;
+
+  /// Resolved gradient paint, for the record-sourced gradient path only
+  /// (`paintMode` 2 or 3). At most one is set; both null means the paint
+  /// rides in `solidColor` or in the pattern fields. Borrowed for the
+  /// duration of the call - the encoder copies the parameters it needs into
+  /// the residence slot's persistent paint block.
+  const LinearGradientParams* linearGradient = nullptr;
+  const RadialGradientParams* radialGradient = nullptr;
 };
 
 void GeoEncoder::fillPath(const Path& path, const css::RGBA& color, FillRule rule,
@@ -1719,6 +1832,11 @@ void GeoEncoder::Impl::populateInstanceRecord(InstanceRecord& r, const EncodedPa
   r.vGridBase = 0u;
   r.hRefsBase = 0u;
   r.vRefsBase = 0u;
+  // The clip rectangle is draw state, not geometry, so it is snapshotted
+  // here for every draw form. A solo draw is additionally scissored by the
+  // rasterizer and the two tests agree exactly; a batched draw runs with the
+  // scissor opened to the full target and relies on this value alone.
+  writeClipRect(r.clipRect, r.clipRectActive);
 }
 
 void GeoEncoder::Impl::uploadResidentGeometry(GeodeResidentSlot& slot, const EncodedPath& encoded) {
@@ -1765,6 +1883,11 @@ void GeoEncoder::Impl::uploadResidentGeometry(GeodeResidentSlot& slot, const Enc
   place(slot.vGrid, vGridBytes, kStorageOffsetAlignment, /*storageDummy=*/true);
   place(slot.hRefs, hRefsBytes, kStorageOffsetAlignment, /*storageDummy=*/true);
   place(slot.vRefs, vRefsBytes, kStorageOffsetAlignment, /*storageDummy=*/true);
+  // The gradient paint block is reserved unconditionally: paint can change
+  // from solid to gradient without the geometry changing, and re-laying-out
+  // the slot for that would move every region and invalidate the cached bind
+  // group. It stays zero-filled for a solid fill, whose record never reads it.
+  place(slot.paint, kPaintBlockBytes, kStorageOffsetAlignment, /*storageDummy=*/false);
   place(slot.uniform, sizeof(Uniforms), kUniformOffsetAlignment, /*storageDummy=*/false);
 
   // Round the slot up to the slab's allocation alignment so consecutive
@@ -1826,12 +1949,14 @@ void GeoEncoder::Impl::uploadResidentGeometry(GeodeResidentSlot& slot, const Enc
   shift(slot.vRefs);
   shift(slot.hGrid);
   shift(slot.vGrid);
+  shift(slot.paint);
   shift(slot.uniform);
 
   slot.vertexCount = encoded.boundingDrawVertexCount();
   slot.resident = true;
   slot.lastUniform.clear();  // Force the first uniform write below.
   slot.lastRecord.clear();   // Force the first record write below.
+  slot.lastPaint.clear();    // The staging blob left the paint block zeroed.
 
   // Stamp the current device's identity so a later render by a different
   // device re-uploads instead of binding this device's buffer / bind group
@@ -1843,7 +1968,7 @@ void GeoEncoder::Impl::buildResidentBindGroup(GeodeResidentSlot& slot) {
   const wgpu::Device& dev = device->device();
   const wgpu::Buffer& buf = slot.buffer;
 
-  wgpu::BindGroupEntry entries[14] = {};
+  wgpu::BindGroupEntry entries[12] = {};
   auto bufEntry = [&](int i, uint32_t binding, const GeodeResidentSlot::Region& r) {
     entries[i].binding = binding;
     entries[i].buffer = buf;
@@ -1893,11 +2018,15 @@ void GeoEncoder::Impl::buildResidentBindGroup(GeodeResidentSlot& slot) {
   entries[10].buffer = buf;
   entries[10].offset = grid.offset;
   entries[10].size = grid.size;
+  // This slot's own gradient paint block, on the same tight-range terms, so
+  // the uniform's `paintBase` is zero. A cross-entity batch instead binds the
+  // whole chunk and each record carries a chunk-relative base.
+  bufEntry(11, 11, slot.paint);
 
   wgpu::BindGroupDescriptor bgDesc = {};
   bgDesc.label = wgpuLabel("GeodeResidentBindGroup");
   bgDesc.layout = pipeline->bindGroupLayout();
-  bgDesc.entryCount = 11;
+  bgDesc.entryCount = 12;
   bgDesc.entries = entries;
   slot.bindGroup.reset(dev.createBindGroup(bgDesc));
   device->countBindGroup();
@@ -1926,10 +2055,54 @@ bool GeoEncoder::Impl::submitResidentFillDraw(GeodeResidentSlot& slot, const Enc
   return true;
 }
 
+void GeoEncoder::Impl::publishSlotPaint(GeodeResidentSlot& slot, const FillDrawArgs& args) {
+  if (args.linearGradient == nullptr && args.radialGradient == nullptr) {
+    slot.paintMode = args.paintMode;
+    slot.gradientSpread = 0u;
+    slot.gradientStopCount = 0u;
+    return;
+  }
+
+  float rows[kPaintBlockRows * 4] = {};
+  uint32_t stopCount = 0;
+  if (args.linearGradient != nullptr) {
+    const LinearGradientParams& params = *args.linearGradient;
+    writeGradientPaintBlock(rows, params, params.stops);
+    rows[2 * 4 + 0] = static_cast<float>(params.startGrad.x);
+    rows[2 * 4 + 1] = static_cast<float>(params.startGrad.y);
+    rows[2 * 4 + 2] = static_cast<float>(params.endGrad.x);
+    rows[2 * 4 + 3] = static_cast<float>(params.endGrad.y);
+    slot.paintMode = kPaintModeLinearGradient;
+    slot.gradientSpread = params.spreadMode;
+    stopCount = static_cast<uint32_t>(params.stops.size());
+  } else {
+    const RadialGradientParams& params = *args.radialGradient;
+    writeGradientPaintBlock(rows, params, params.stops);
+    rows[3 * 4 + 0] = static_cast<float>(params.center.x);
+    rows[3 * 4 + 1] = static_cast<float>(params.center.y);
+    rows[3 * 4 + 2] = static_cast<float>(params.focalCenter.x);
+    rows[3 * 4 + 3] = static_cast<float>(params.focalCenter.y);
+    rows[4 * 4 + 0] = static_cast<float>(params.radius);
+    rows[4 * 4 + 1] = static_cast<float>(params.focalRadius);
+    slot.paintMode = kPaintModeRadialGradient;
+    slot.gradientSpread = params.spreadMode;
+    stopCount = static_cast<uint32_t>(params.stops.size());
+  }
+  slot.gradientStopCount = std::min<uint32_t>(kMaxGradientStops, stopCount);
+
+  const auto* bytes = reinterpret_cast<const uint8_t*>(rows);
+  if (slot.lastPaint.size() != sizeof(rows) ||
+      std::memcmp(slot.lastPaint.data(), bytes, sizeof(rows)) != 0) {
+    device->queue().writeBuffer(slot.buffer, slot.paint.offset, rows, sizeof(rows));
+    device->countBufferWrite(sizeof(rows));
+    slot.lastPaint.assign(bytes, bytes + sizeof(rows));
+  }
+}
+
 bool GeoEncoder::Impl::ensureResidentSceneRecordImpl(
     GeodeResidentSlot& slot, const EncodedPath& encoded, const FillDrawArgs& args,
     const Transform2d& recordTransform, const GeodeRecordSlab::Slot* recordSlotOverride,
-    std::vector<uint8_t>* overrideRecordCache, bool bakeTransform) {
+    std::vector<uint8_t>* overrideRecordCache, bool bakeTransform, bool publishPaint) {
   // Ensure the geometry is resident and current AND owned by THIS device.
   // Component removal is the primary invalidation; the pointer + fingerprint
   // guard catches the in-place stroke-slot rebuild (which replaces the encode
@@ -1985,6 +2158,21 @@ bool GeoEncoder::Impl::ensureResidentSceneRecordImpl(
   record.vGridBase = static_cast<uint32_t>(slot.vGrid.offset / sizeof(uint32_t));
   record.hRefsBase = static_cast<uint32_t>(slot.hRefs.offset / sizeof(uint32_t));
   record.vRefsBase = static_cast<uint32_t>(slot.vRefs.offset / sizeof(uint32_t));
+
+  // Paint. A gradient's parameters and stop ramp go into the slot's own paint
+  // block, and the record only carries the index of that block plus the two
+  // scalars the shader needs before it reads it. The published paint lives on
+  // the SLOT, not in this call's arguments, because a batch re-derives an
+  // instance's record when it flushes, long after the caller's resolved
+  // gradient is gone: reading it back from the slot is what makes the flush
+  // reproduce byte-identical bytes.
+  if (publishPaint) {
+    publishSlotPaint(slot, args);
+  }
+  record.paintMode = slot.paintMode;
+  record.paintBase = static_cast<uint32_t>(slot.paint.offset / 16u);
+  record.gradientSpread = slot.gradientSpread;
+  record.gradientStopCount = slot.gradientStopCount;
 
   if (bakeTransform) {
     // The slot's uniform region belongs exclusively to the solo resident
@@ -2148,13 +2336,15 @@ void GeoEncoder::fillPathInstanced(const EncodedPath& encoded, const css::RGBA& 
 }
 
 bool GeoEncoder::ensureResidentSceneRecord(GeodeResidentSlot& slot, const EncodedPath& encoded,
-                                           const css::RGBA& color, FillRule rule,
+                                           const ScenePaint& paint, FillRule rule,
                                            const Transform2d& recordTransform,
                                            const GeodeRecordSlab::Slot* recordSlotOverride,
-                                           std::vector<uint8_t>* overrideRecordCache) {
+                                           std::vector<uint8_t>* overrideRecordCache,
+                                           bool publishPaint) {
   if (encoded.empty()) {
     return false;
   }
+  const css::RGBA& color = paint.color;
   // Build the same solid-fill args fillPath would, so the shared ensure
   // path produces byte-identical uniforms and records.
   FillDrawArgs args = {};
@@ -2172,9 +2362,11 @@ bool GeoEncoder::ensureResidentSceneRecord(GeodeResidentSlot& slot, const Encode
   args.patternSampler = impl_->device->dummyPatternSampler();
   args.tileSize = Vector2d(1.0, 1.0);
   args.patternFromPath = Transform2d();
+  args.linearGradient = paint.linearGradient;
+  args.radialGradient = paint.radialGradient;
   return impl_->ensureResidentSceneRecordImpl(slot, encoded, args, recordTransform,
                                               recordSlotOverride, overrideRecordCache,
-                                              /*bakeTransform=*/false);
+                                              /*bakeTransform=*/false, publishPaint);
 }
 
 void GeoEncoder::fillPathSceneBatch(const css::RGBA& color, FillRule rule,
@@ -2231,7 +2423,7 @@ void GeoEncoder::fillPathSceneBatch(const css::RGBA& color, FillRule rule,
   const uint64_t recordSpanBytes =
       static_cast<uint64_t>(binding.instanceCount) * sizeof(InstanceRecord);
 
-  wgpu::BindGroupEntry entries[11] = {};
+  wgpu::BindGroupEntry entries[12] = {};
   entries[0].binding = 0;
   entries[0].buffer = uniAlloc.buffer;
   entries[0].offset = uniAlloc.offset;
@@ -2259,6 +2451,7 @@ void GeoEncoder::fillPathSceneBatch(const css::RGBA& color, FillRule rule,
   chunkEntry(8, 8);
   chunkEntry(9, 9);
   chunkEntry(10, 10);
+  chunkEntry(11, 11);
 
   // Buffer IDENTITIES, never handle addresses: the cache lives on the
   // device, which outlives the documents drawn on it, and a destroyed
@@ -2286,7 +2479,7 @@ void GeoEncoder::fillPathSceneBatch(const css::RGBA& color, FillRule rule,
     wgpu::BindGroupDescriptor bgDesc = {};
     bgDesc.label = wgpuLabel("GeodeSceneBatchBindGroup");
     bgDesc.layout = impl_->pipeline->bindGroupLayout();
-    bgDesc.entryCount = 11;
+    bgDesc.entryCount = 12;
     bgDesc.entries = entries;
     wgpu::BindGroup created = impl_->device->device().createBindGroup(bgDesc);
     impl_->device->countBindGroup();
@@ -2303,12 +2496,28 @@ void GeoEncoder::fillPathSceneBatch(const css::RGBA& color, FillRule rule,
     }
   }
 
+  // Open the rasterizer scissor to the whole target for the duration of this
+  // draw. The batch is recorded when it flushes, which can be after the
+  // encoder's scissor has already moved to the next clip, so pass state is
+  // not a sound source for this draw's clipping. Each instance's record
+  // instead carries the rectangle that was live when the instance was
+  // appended, and the fragment stage applies it. Restoring afterwards leaves
+  // the pass exactly as the surrounding solo draws expect to find it.
+  const bool neutralizeScissor = impl_->scissorActive;
+  if (neutralizeScissor) {
+    impl_->pass.get().setScissorRect(0, 0, impl_->targetWidth, impl_->targetHeight);
+  }
+
   // The binding covers the span of consecutive record slots starting at
   // `firstInstance`; the shader's instance_index therefore runs 0..N-1
   // (the draw's firstInstance must NOT add the slot offset again).
   impl_->pass.get().setBindGroup(0, bindGroup, 0, nullptr);
   impl_->pass.get().draw(binding.vertexCount, binding.instanceCount, 0, 0);
   impl_->device->countDraw();
+
+  if (neutralizeScissor) {
+    impl_->applyScissorIfPassOpen();
+  }
 }
 
 void GeoEncoder::fillPathPattern(const Path& path, FillRule rule, const PatternPaint& paint,
@@ -2465,11 +2674,11 @@ void GeoEncoder::submitFillDraw(const FillDrawArgs& args,
     recordSize = sizeof(InstanceRecord);
   }
 
-  // 3. Bind group - eleven entries: uniforms, H bands SSBO, H curves SSBO,
+  // 3. Bind group - twelve entries: uniforms, H bands SSBO, H curves SSBO,
   // pattern texture, pattern sampler, clip-mask texture, clip-mask sampler,
-  // per-instance records SSBO, V bands SSBO, V curves SSBO, and the combined
-  // dense grid storage.
-  wgpu::BindGroupEntry entries[11] = {};
+  // per-instance records SSBO, V bands SSBO, V curves SSBO, the combined
+  // dense grid storage, and the gradient paint blocks.
+  wgpu::BindGroupEntry entries[12] = {};
   entries[0].binding = 0;
   entries[0].buffer = uniAlloc.buffer;
   entries[0].offset = uniAlloc.offset;
@@ -2507,11 +2716,18 @@ void GeoEncoder::submitFillDraw(const FillDrawArgs& args,
   entries[10].buffer = gridSpan.alloc.buffer;
   entries[10].offset = gridSpan.alloc.offset;
   entries[10].size = gridSpan.alloc.size;
+  // The per-frame arena path never carries a record-sourced gradient - a
+  // gradient without residence goes to the dedicated gradient pipeline - so it
+  // binds the device's zero-filled block and the shader never reads it.
+  entries[11].binding = 11;
+  entries[11].buffer = impl_->device->dummyPaintDataBuffer();
+  entries[11].offset = 0;
+  entries[11].size = impl_->device->dummyPaintDataBuffer().getSize();
 
   wgpu::BindGroupDescriptor bgDesc = {};
   bgDesc.label = wgpuLabel("GeodeBindGroup");
   bgDesc.layout = impl_->pipeline->bindGroupLayout();
-  bgDesc.entryCount = 11;
+  bgDesc.entryCount = 12;
   bgDesc.entries = entries;
   wgpu::BindGroup bindGroup = impl_->transientResources.retain(dev.createBindGroup(bgDesc));
   impl_->device->countBindGroup();
