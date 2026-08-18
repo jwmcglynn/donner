@@ -3297,7 +3297,7 @@ TEST_F(TextEditorTests, FocusReferenceSourceUnderlineHandlesReferenceCharactersA
   EXPECT_LT(bangUnderline->start.x, bangUnderline->end.x);
 }
 
-TEST_F(TextEditorTests, FocusReferenceRopesCullOffscreenLinksBeforeSimulation) {
+TEST_F(TextEditorTests, FocusReferenceRopesRenderAcrossViewportWithBothEndpointsOffscreen) {
   std::ostringstream source;
   source << "  <defs>\n"
          << "    <linearGradient id=\"grad\"/>\n"
@@ -3310,29 +3310,29 @@ TEST_F(TextEditorTests, FocusReferenceRopesCullOffscreenLinksBeforeSimulation) {
   editor.setText(source.str());
   editor.resetTextChanged();
 
-  const FocusReferenceLink visibleLink{
-      .from = SourcePoint{.line = 3, .column = 19},
-      .to = SourcePoint{.line = 1, .column = 6},
-  };
-  const FocusReferenceLink offscreenLink{
+  const FocusReferenceLink crossingLink{
       .from = SourcePoint{.line = 84, .column = 23},
       .to = SourcePoint{.line = 1, .column = 6},
   };
   editor.setFocusPartition(FocusPartition{
       .fullColor = {LineRange{.startLine = 1, .endLine = 85}},
-      .referenceLinks = {visibleLink, offscreenLink},
+      .referenceLinks = {crossingLink},
   });
 
-  RenderEditorFrame(ImVec2(520.0f, 120.0f));
+  constexpr ImVec2 kEditorSize(520.0f, 120.0f);
+  RenderEditorFrame(kEditorSize);
+  editor.selectAndFocus(Coordinates(42, 2), Coordinates(42, 10));
+  RenderEditorFrame(kEditorSize);
+  RenderEditorFrame(kEditorSize);
 
+  EXPECT_GT(LastScrollY(), 0.0f);
   const FrameCostBreakdown::SourceRopes& ropeCost = editor.lastSourceRopeCost();
-  EXPECT_EQ(ropeCost.candidateCount, 2);
+  EXPECT_EQ(ropeCost.candidateCount, 1);
   EXPECT_EQ(ropeCost.laidOutCount, 1);
-  EXPECT_EQ(ropeCost.culledCount, 1);
+  EXPECT_EQ(ropeCost.culledCount, 0);
   EXPECT_EQ(ropeCost.drawnCount, 1);
   EXPECT_EQ(ropeCost.activeStateCount, 1);
-  EXPECT_NE(FocusReferenceRope(visibleLink), nullptr);
-  EXPECT_EQ(FocusReferenceRope(offscreenLink), nullptr);
+  EXPECT_NE(FocusReferenceRope(crossingLink), nullptr);
 }
 
 TEST_F(TextEditorTests, FocusReferenceRopesClipToScrolledSourceViewport) {

@@ -134,6 +134,43 @@ TEST(EditorShellLayoutTest, MainLayoutGivesSourceWidthBackToRenderPaneWhenHidden
   EXPECT_FLOAT_EQ(layout.rightPaneWidth, 420.0f);
 }
 
+TEST(EditorShellLayoutTest, SourcePaneRevealAdvancesOverMultipleFrames) {
+  EXPECT_FLOAT_EQ(AdvanceSourcePaneRevealProgress(0.0f, false, 0.05f), 0.0f);
+
+  const float opening = AdvanceSourcePaneRevealProgress(0.0f, true, 0.05f);
+  EXPECT_GT(opening, 0.0f);
+  EXPECT_LT(opening, 1.0f);
+  EXPECT_FLOAT_EQ(AdvanceSourcePaneRevealProgress(opening, true, 1.0f), 1.0f);
+
+  const float closing = AdvanceSourcePaneRevealProgress(1.0f, false, 0.05f);
+  EXPECT_GT(closing, 0.0f);
+  EXPECT_LT(closing, 1.0f);
+  EXPECT_FLOAT_EQ(AdvanceSourcePaneRevealProgress(closing, false, 1.0f), 0.0f);
+}
+
+TEST(EditorShellLayoutTest, MainLayoutSlidesSourceContentAtIntermediateReveal) {
+  const EditorMainPaneLayout layout = ComputeEditorMainPaneLayout({
+      .windowWidth = 1600.0f,
+      .sourcePaneVisible = true,
+      .sourcePaneWidth = 560.0f,
+      .sourcePaneRevealProgress = 0.5f,
+      .minSourcePaneWidth = 240.0f,
+      .maxSourcePaneWidth = 900.0f,
+      .sourcePaneRailWidth = 32.0f,
+      .rightPaneWidth = 420.0f,
+      .minRightPaneWidth = 220.0f,
+      .maxRightPaneWidth = 900.0f,
+      .minRenderPaneWidth = 220.0f,
+  });
+
+  EXPECT_FLOAT_EQ(layout.sourcePaneWidth, 560.0f);
+  EXPECT_LT(layout.sourcePaneX, 0.0f);
+  EXPECT_GT(layout.renderPaneX, 32.0f);
+  EXPECT_LT(layout.renderPaneX, 560.0f);
+  EXPECT_FLOAT_EQ(layout.sourcePaneX + layout.sourcePaneWidth, layout.renderPaneX);
+  EXPECT_FLOAT_EQ(layout.sourcePaneRailWidth, 0.0f);
+}
+
 TEST(EditorShellLayoutTest, MainLayoutGivesFullWidthToCompactCanvas) {
   const EditorMainPaneLayout layout = ComputeEditorMainPaneLayout({
       .windowWidth = 390.0f,
@@ -209,7 +246,6 @@ TEST(EditorShellLayoutTest, DraggingSplitterDownPreservesLayerMinimum) {
 
   EXPECT_FLOAT_EQ(nextFraction, 0.2f);
 }
-
 
 // The render pane geometry of a settled desktop frame: a 1280x699 dock host below the menu bar,
 // split into a 947-wide canvas column and a right sidebar column, with the docked pane window
