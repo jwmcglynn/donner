@@ -271,7 +271,7 @@ public:
    * Sets the per-document ceiling on retained coverage.
    *
    * Exceeding it evicts the coldest shapes; a working set that does not fit at all turns
-   * retention off for that document. @see RetainedSpanBudget.
+   * retention off for that document. @see RetainedSpanDocumentState.
    *
    * @param bytes Ceiling in bytes.
    */
@@ -356,7 +356,7 @@ private:
   /// retainable.
   struct RetainedTarget {
     RetainedSpansComponent* entry = nullptr;
-    RetainedSpanBudget* budget = nullptr;
+    RetainedSpanDocumentState* state = nullptr;
 
     explicit operator bool() const { return entry != nullptr; }
   };
@@ -451,11 +451,15 @@ private:
   const Registry* cacheWiringCheckedRegistry_ = nullptr;
 
   bool retainedSpansEnabled_ = false;
-  std::size_t retainedSpanBudgetBytes_ = RetainedSpanBudget::kDefaultBudgetBytes;
+  std::size_t retainedSpanBudgetBytes_ = RetainedSpanDocumentState::kDefaultBudgetBytes;
   RetainedSpanStats retainedSpanStats_;
-  /// Counts frames so retained entries can record when they were last drawn. Starts at one so
-  /// a default-constructed entry's zero never reads as "used this frame".
+  /// Counts this renderer's frames, which is only used to notice that a new frame started.
   std::uint64_t frameIndex_ = 0;
+  /// Identity of the current frame within the document being drawn, taken from the document on
+  /// the frame's first retainable draw. Zero until then, which no entry can match.
+  std::uint64_t frameToken_ = 0;
+  /// The value of `frameIndex_` `frameToken_` was taken for.
+  std::uint64_t frameTokenIndex_ = 0;
   /// Identity of the clip mask now in effect, zero when there is none.
   std::uint64_t clipEpoch_ = 0;
   /// Next identity to issue. Starts at one so zero stays reserved for "no clip".

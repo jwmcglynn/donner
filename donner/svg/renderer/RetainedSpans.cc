@@ -31,8 +31,8 @@ std::size_t DropRetainedEntry(Registry& registry, Entity entity) {
   return bytes;
 }
 
-void ReleaseBytes(RetainedSpanBudget& budget, std::size_t bytes) {
-  budget.liveBytes -= std::min(budget.liveBytes, bytes);
+void ReleaseBytes(RetainedSpanDocumentState& state, std::size_t bytes) {
+  state.liveBytes -= std::min(state.liveBytes, bytes);
 }
 
 /// Drops an entity's retained coverage when its resolved path changes or goes away.
@@ -46,8 +46,8 @@ void OnComputedPathChanged(Registry& registry, Entity entity) {
     return;
   }
 
-  if (auto* budget = registry.ctx().find<RetainedSpanBudget>()) {
-    ReleaseBytes(*budget, bytes);
+  if (auto* state = registry.ctx().find<RetainedSpanDocumentState>()) {
+    ReleaseBytes(*state, bytes);
   }
 }
 
@@ -79,27 +79,28 @@ void EnsureRetainedSpanInvalidationWired(Registry& registry) {
   // component.
 }
 
-RetainedSpanBudget& RetainedSpanBudgetFor(Registry& registry, std::size_t budgetBytes) {
-  RetainedSpanBudget& budget = registry.ctx().get_or_emplace<RetainedSpanBudget>();
-  if (budget.budgetBytes != budgetBytes) {
+RetainedSpanDocumentState& RetainedSpanStateFor(Registry& registry, std::size_t budgetBytes) {
+  // `emplace` on the context returns the existing value when there is one.
+  RetainedSpanDocumentState& state = registry.ctx().emplace<RetainedSpanDocumentState>();
+  if (state.budgetBytes != budgetBytes) {
     // A new budget is a new answer to "does the working set fit", so a document that gave up
     // under the old one gets to try again.
-    budget.budgetBytes = budgetBytes;
-    budget.disabled = false;
+    state.budgetBytes = budgetBytes;
+    state.disabled = false;
   }
-  return budget;
+  return state;
 }
 
 void ClearRetainedSpans(Registry& registry) {
   registry.clear<RetainedSpansComponent>();
-  if (auto* budget = registry.ctx().find<RetainedSpanBudget>()) {
-    budget->liveBytes = 0;
+  if (auto* state = registry.ctx().find<RetainedSpanDocumentState>()) {
+    state->liveBytes = 0;
   }
 }
 
 void EvictRetainedSpansToBudget(Registry& registry, std::uint64_t currentFrame) {
-  auto* budget = registry.ctx().find<RetainedSpanBudget>();
-  if (budget == nullptr || budget->liveBytes <= budget->budgetBytes) {
+  auto* state = registry.ctx().find<RetainedSpanDocumentState>();
+  if (state == nullptr || state->liveBytes <= state->budgetBytes) {
     return;
   }
 
@@ -128,16 +129,16 @@ void EvictRetainedSpansToBudget(Registry& registry, std::uint64_t currentFrame) 
             });
 
   for (const Candidate& candidate : candidates) {
-    if (budget->liveBytes <= budget->budgetBytes) {
+    if (state->liveBytes <= state->budgetBytes) {
       return;
     }
 
     DropRetainedEntry(registry, candidate.entity);
-    ReleaseBytes(*budget, candidate.bytes);
-    ++budget->evictions;
+    ReleaseBytes(*state, candidate.bytes);
+    ++state->evictions;
   }
 
-  if (budget->liveBytes <= budget->budgetBytes) {
+  if (state->liveBytes <= state->budgetBytes) {
     return;
   }
 
@@ -145,7 +146,7 @@ void EvictRetainedSpansToBudget(Registry& registry, std::uint64_t currentFrame) 
   // any of it would evict and re-capture the same shapes every frame, which costs more than not
   // retaining at all.
   ClearRetainedSpans(registry);
-  budget->disabled = true;
+  state->disabled = true;
 }
 
 }  // namespace donner::svg

@@ -120,14 +120,18 @@ struct RetainedSpansComponent {
 };
 
 /**
- * Document-wide accounting for retained coverage, stored in the registry context.
+ * Document-wide state for retained coverage, stored in the registry context.
  *
  * Retained coverage is attacker-influenced: a document chooses how many shapes exist and how
  * much coverage each produces. The budget here is what keeps that bounded. Exceeding it evicts
  * the coldest entries, and a working set that does not fit at all turns retention off for the
  * document rather than growing without limit.
+ *
+ * It also issues frame identities, because retained entries belong to the document rather than
+ * to any one renderer: several renderers can draw one document, and each of their frames needs
+ * an identity the others cannot collide with.
  */
-struct RetainedSpanBudget {
+struct RetainedSpanDocumentState {
   /// Default budget. Sized so a full-viewport document of a few hundred shapes fits while a
   /// pathological one cannot grow unbounded.
   static constexpr std::size_t kDefaultBudgetBytes = 32u * 1024u * 1024u;
@@ -145,6 +149,11 @@ struct RetainedSpanBudget {
 
   /// Entries evicted to stay under budget, across the document's lifetime.
   std::uint64_t evictions = 0;
+
+  /// Issues frame identities. Every frame of every renderer drawing this document takes the
+  /// next value, so "already drawn in this frame" cannot be confused with "drawn by another
+  /// renderer".
+  std::uint64_t frameCounter = 0;
 };
 
 /// Counters describing what a renderer's retained coverage did, for tests and benchmarks.
@@ -167,8 +176,8 @@ struct RetainedSpanStats {
 /// Connects the resolved-path invalidation listener to `registry`, once per registry.
 void EnsureRetainedSpanInvalidationWired(Registry& registry);
 
-/// Returns the document's retained-coverage accounting, creating it if needed.
-RetainedSpanBudget& RetainedSpanBudgetFor(Registry& registry, std::size_t budgetBytes);
+/// Returns the document's retained-coverage state, creating it if needed.
+RetainedSpanDocumentState& RetainedSpanStateFor(Registry& registry, std::size_t budgetBytes);
 
 /// Drops every retained entry in `registry` and resets its accounting.
 void ClearRetainedSpans(Registry& registry);

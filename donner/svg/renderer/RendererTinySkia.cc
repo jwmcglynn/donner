@@ -496,7 +496,7 @@ bool paintBorrowsPattern(const tiny_skia::Paint& paint) {
 /// Draws one fill or stroke pass, replaying retained coverage when it still applies.
 ///
 /// @param slot Retained storage for this pass, or null to rasterize unconditionally.
-/// @param budget Document accounting to charge a new recording against. Non-null with `slot`.
+/// @param state Document state to charge a new recording against. Non-null with `slot`.
 /// @param key Inputs the recorded coverage depends on.
 /// @param pixmap Surface the pass draws onto.
 /// @param mask Clip mask in effect, applied per blit by the pipeline rather than baked into
@@ -506,7 +506,7 @@ bool paintBorrowsPattern(const tiny_skia::Paint& paint) {
 /// @param drawCapturing Performs the same draw through a capture, returning false when the
 ///   draw could not be recorded. The pixels are painted either way.
 template <typename DrawFresh, typename DrawCapturing>
-void drawRetainablePass(RetainedSpanSlot* slot, RetainedSpanBudget* budget,
+void drawRetainablePass(RetainedSpanSlot* slot, RetainedSpanDocumentState* state,
                         const RetainedSpanKey& key, tiny_skia::MutablePixmapView& pixmap,
                         const tiny_skia::Mask* mask, RetainedSpanStats& stats,
                         DrawFresh&& drawFresh, DrawCapturing&& drawCapturing) {
@@ -548,9 +548,9 @@ void drawRetainablePass(RetainedSpanSlot* slot, RetainedSpanBudget* budget,
   }
 
   const std::size_t charged = slot->capture.spans().capacityBytes();
-  budget->liveBytes = budget->liveBytes - slot->chargedBytes + charged;
+  state->liveBytes = state->liveBytes - slot->chargedBytes + charged;
   slot->chargedBytes = charged;
-  stats.liveBytes = budget->liveBytes;
+  stats.liveBytes = state->liveBytes;
 }
 
 std::optional<tiny_skia::Mask> createMaskForSize(std::uint32_t width, std::uint32_t height) {
@@ -959,16 +959,24 @@ RendererTinySkia::RetainedTarget RendererTinySkia::retainedTargetFor(
   Registry& registry = *sourceEntity.registry();
   EnsureRetainedSpanInvalidationWired(registry);
 
-  RetainedSpanBudget& budget = RetainedSpanBudgetFor(registry, retainedSpanBudgetBytes_);
-  retainedSpanStats_.documentDisabled = budget.disabled;
-  retainedSpanStats_.evictions = budget.evictions;
-  if (budget.disabled) {
+  RetainedSpanDocumentState& state = RetainedSpanStateFor(registry, retainedSpanBudgetBytes_);
+  retainedSpanStats_.documentDisabled = state.disabled;
+  retainedSpanStats_.evictions = state.evictions;
+  if (state.disabled) {
     return RetainedTarget();
   }
 
+  if (frameToken_ == 0 || frameTokenIndex_ != frameIndex_) {
+    // Take this frame's identity from the document rather than from a renderer-local counter:
+    // entries live on the document, so two renderers drawing it would otherwise agree on frame
+    // numbers and each would look to the other like a second draw of the same shape.
+    frameToken_ = ++state.frameCounter;
+    frameTokenIndex_ = frameIndex_;
+  }
+
   RetainedSpansComponent& entry = sourceEntity.get_or_emplace<RetainedSpansComponent>();
-  if (entry.drawFrame != frameIndex_) {
-    entry.drawFrame = frameIndex_;
+  if (entry.drawFrame != frameToken_) {
+    entry.drawFrame = frameToken_;
     entry.drawsThisFrame = 0;
   }
 
@@ -979,7 +987,7 @@ RendererTinySkia::RetainedTarget RendererTinySkia::retainedTargetFor(
     // can only describe one of them, and alternating between them would re-capture on every
     // draw, so this entity stops retaining.
     entry.ambiguous = true;
-    budget.liveBytes -= std::min(budget.liveBytes, entry.chargedBytes());
+    state.liveBytes -= std::min(state.liveBytes, entry.chargedBytes());
     entry.fill = RetainedSpanSlot();
     entry.stroke = RetainedSpanSlot();
   }
@@ -988,8 +996,8 @@ RendererTinySkia::RetainedTarget RendererTinySkia::retainedTargetFor(
     return RetainedTarget();
   }
 
-  entry.lastUsedFrame = frameIndex_;
-  return RetainedTarget{&entry, &budget};
+  entry.lastUsedFrame = frameToken_;
+  return RetainedTarget{&entry, &state};
 }
 
 void RendererTinySkia::pushIsolatedLayer(double opacity, MixBlendMode blendMode) {
@@ -1514,7 +1522,7 @@ void RendererTinySkia::drawPath(const PathShape& path, const StrokeParams& strok
     RetainedSpanSlot* slot =
         (retained && !paintBorrowsPattern(*fillPaint)) ? &retained.entry->fill : nullptr;
     drawRetainablePass(
-        slot, retained.budget, key, pixmapView, mask, retainedSpanStats_,
+        slot, retained.state, key, pixmapView, mask, retainedSpanStats_,
         [&] {
           tiny_skia::Painter::fillPath(pixmapView, tinyPath(), *fillPaint,
                                        toTinyFillRule(path.fillRule),
@@ -1614,7 +1622,7 @@ void RendererTinySkia::drawPath(const PathShape& path, const StrokeParams& strok
     RetainedSpanSlot* slot =
         (retained && !paintBorrowsPattern(*strokePaint)) ? &retained.entry->stroke : nullptr;
     drawRetainablePass(
-        slot, retained.budget, key, pixmapView, mask, retainedSpanStats_,
+        slot, retained.state, key, pixmapView, mask, retainedSpanStats_,
         [&] {
           tiny_skia::Painter::strokePath(pixmapView, strokePath(), *strokePaint, tinyStroke,
                                          toTinyTransform(deviceFromLocalTransform_), mask);
@@ -1637,10 +1645,10 @@ void RendererTinySkia::drawPath(const PathShape& path, const StrokeParams& strok
   if (retained) {
     // Runs after both passes so the entry this draw just wrote is complete, and after the
     // pointer into it is no longer used, since evicting removes entries.
-    EvictRetainedSpansToBudget(*path.sourceEntity.registry(), frameIndex_);
-    retainedSpanStats_.liveBytes = retained.budget->liveBytes;
-    retainedSpanStats_.evictions = retained.budget->evictions;
-    retainedSpanStats_.documentDisabled = retained.budget->disabled;
+    EvictRetainedSpansToBudget(*path.sourceEntity.registry(), frameToken_);
+    retainedSpanStats_.liveBytes = retained.state->liveBytes;
+    retainedSpanStats_.evictions = retained.state->evictions;
+    retainedSpanStats_.documentDisabled = retained.state->disabled;
   }
 }
 
