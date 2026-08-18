@@ -90,7 +90,11 @@ private:
   ScopedWgpuHandle<wgpu::PipelineLayout> pipelineLayout_;
   ScopedWgpuHandle<wgpu::ShaderModule> shader_;
   ScopedWgpuHandle<wgpu::RenderPipeline> pipeline_;
-  /// Lazily compiled by @ref batchedPipeline.
+  /// Lazily compiled by @ref batchedPipeline. The `mutable` build is
+  /// deliberately unsynchronized: a device's pipelines are only ever used
+  /// from the single thread that owns rendering for that device, so two
+  /// callers cannot reach the null check at once and the lazy build cannot
+  /// race.
   mutable ScopedWgpuHandle<wgpu::RenderPipeline> batchedPipeline_;
 };
 
