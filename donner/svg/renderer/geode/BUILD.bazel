@@ -770,6 +770,38 @@ donner_multi_transitioned_test(
 )
 
 donner_cc_test(
+    name = "geode_glyph_instancing_tests_impl",
+    srcs = ["tests/GeodeGlyphInstancing_tests.cc"],
+    data = ["//third_party/resvg-test-suite:fonts"],
+    tags = ["exclusive-if-local"],
+    target_compatible_with = _GEODE_ONLY,
+    deps = [
+        ":geode_counters",
+        ":geode_device",
+        "//donner/base",
+        "//donner/base:base_test_utils",
+        "//donner/base:gtest_timeout_main",
+        "//donner/svg",
+        "//donner/svg/parser",
+        "//donner/svg/renderer:renderer_geode",
+        "//donner/svg/renderer:renderer_interface",
+        "//donner/svg/renderer/tests:image_comparison_test_fixture",
+    ],
+)
+
+donner_multi_transitioned_test(
+    name = "geode_glyph_instancing_tests",
+    timeout = "moderate",
+    testonly = 1,
+    dep = ":geode_glyph_instancing_tests_impl",
+    opens_gpu_device = True,
+    renderer_backend = "geode",
+    # Every assertion here is about glyph geometry; without the text backend
+    # the documents render as no-ops and the gate would see nothing.
+    text = "true",
+)
+
+donner_cc_test(
     name = "geode_embed_tests_impl",
     srcs = ["tests/GeodeEmbed_tests.cc"],
     target_compatible_with = _GEODE_ONLY,
