@@ -871,12 +871,11 @@ void RenderCoordinator::pollRenderResult(EditorApp& app, const ViewportState& vi
   }
 
   const auto& result = *resultOpt;
+  const auto compositorStats = renderWorker_.asyncRenderer.compositorRenderFrameStats();
 #ifdef __EMSCRIPTEN__
-  PublishWorkerTimingStats(result.workerMs, result.workerTiming,
-                           renderWorker_.asyncRenderer.compositorRenderFrameStats());
+  PublishWorkerTimingStats(result.workerMs, result.workerTiming, compositorStats);
 #endif
-  lastFrameCostBreakdown_.compositedRender =
-      CompositedRenderCostFromStats(renderWorker_.asyncRenderer.compositorRenderFrameStats());
+  lastFrameCostBreakdown_.compositedRender = CompositedRenderCostFromStats(compositorStats);
   // Forward the worker-measured presentation latency to the frame history so
   // `RenderFrameGraph` can overlay async worker time on the UI frame graph.
   // The frame history's latest slot corresponds to the current UI frame
