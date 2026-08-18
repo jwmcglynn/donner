@@ -18,7 +18,8 @@ from typing import Iterable, Sequence, TextIO
 SCHEMA_VERSION = 1
 REGISTRATION_SOURCE = Path("donner/svg/renderer/tests/resvg_test_suite.cc")
 TESTS_ROOT = Path("third_party/resvg-test-suite/tests")
-ACTIVE_MODE_UNION = ("tiny-golden", "geode-golden")
+ACTIVE_COMPARISON_MODES = (("tiny-golden", "tiny-skia"), ("geode-golden", "geode"))
+ACTIVE_MODE_UNION = tuple(mode for mode, _ in ACTIVE_COMPARISON_MODES)
 
 
 class ParityReportError(ValueError):
@@ -394,27 +395,16 @@ def _contains_call(expression: str, names: set[str]) -> bool:
     return bool(_iter_named_calls(expression, names))
 
 
-def _params_facts(expression: str, category: str) -> dict[str, object]:
+def _primary_state_from_params(expression: str) -> str:
     skip = _contains_call(expression, {"Skip"})
     render_only = _contains_call(expression, {"RenderOnly"})
     if skip and render_only:
         raise ParityReportError("params expression cannot be both skip and render-only")
-    primary_state = "skip" if skip else "render-only" if render_only else "compare"
+    return "skip" if skip else "render-only" if render_only else "compare"
 
-    pixel_budget = _contains_call(
-        expression,
-        {
-            "WithThreshold",
-            "WithMaxPixels",
-            "withMaxPixelsDifferent",
-        },
-    )
-    simple_text_pixel_budget = _contains_call(expression, {"withSimpleTextMaxPixels"})
-    geode_pixel_budget = _contains_call(expression, {"withGeodeMaxPixelsDifferent"})
-    shared_golden = _contains_call(expression, {"WithGoldenOverride"})
-    geode_golden = _contains_call(expression, {"withGeodeGoldenOverride"})
+
+def _required_features_from_params(expression: str, category: str) -> tuple[set[str], bool, bool]:
     only_text_full = _contains_call(expression, {"onlyTextFull"})
-
     required_features: set[str] = set()
     if category.startswith("filters/"):
         required_features.add("filter-effects")
@@ -438,6 +428,10 @@ def _params_facts(expression: str, category: str) -> dict[str, object]:
         else:
             required_features.add(_normalize_cpp_expression(feature))
 
+    return required_features, only_text_full, bool(require_calls)
+
+
+def _disabled_backends_from_params(expression: str) -> set[str]:
     disabled_backends: set[str] = set()
     for _, _, arguments in _iter_named_calls(expression, {"disableBackend"}):
         if not arguments:
@@ -449,33 +443,50 @@ def _params_facts(expression: str, category: str) -> dict[str, object]:
             disabled_backends.add("geode")
         else:
             raise ParityReportError(f"unknown disabled backend {backend!r}")
+    return disabled_backends
 
-    exception_types: list[str] = []
-    if pixel_budget:
-        exception_types.append("threshold")
-    if simple_text_pixel_budget:
-        exception_types.append("simple_text_threshold")
-    if geode_pixel_budget:
-        exception_types.append("geode_threshold")
-    if shared_golden:
-        exception_types.append("shared_golden")
-    if geode_golden:
-        exception_types.append("geode_golden")
-    if only_text_full:
-        exception_types.append("text_full_gate")
-    if require_calls or disabled_backends:
-        exception_types.append("backend_gate")
 
-    comparison_modes = list(ACTIVE_MODE_UNION)
-    if "tiny-skia" in disabled_backends:
-        comparison_modes.remove("tiny-golden")
-    if "geode" in disabled_backends:
-        comparison_modes.remove("geode-golden")
+def _exception_types_from_params(
+    expression: str, only_text_full: bool, has_backend_gate: bool
+) -> list[str]:
+    exception_flags = (
+        (_contains_call(expression, {"WithThreshold", "WithMaxPixels", "withMaxPixelsDifferent"}),
+         "threshold"),
+        (_contains_call(expression, {"withSimpleTextMaxPixels"}), "simple_text_threshold"),
+        (_contains_call(expression, {"withGeodeMaxPixelsDifferent"}), "geode_threshold"),
+        (_contains_call(expression, {"WithGoldenOverride"}), "shared_golden"),
+        (_contains_call(expression, {"withGeodeGoldenOverride"}), "geode_golden"),
+        (only_text_full, "text_full_gate"),
+        (has_backend_gate, "backend_gate"),
+    )
+    return [name for enabled, name in exception_flags if enabled]
+
+
+def _comparison_modes(disabled_backends: set[str]) -> list[str]:
+    return [
+        mode
+        for mode, backend in ACTIVE_COMPARISON_MODES
+        if backend not in disabled_backends
+    ]
+
+
+def _params_facts(expression: str, category: str) -> dict[str, object]:
+    primary_state = _primary_state_from_params(expression)
+    required_features, only_text_full, has_required_feature = _required_features_from_params(
+        expression, category
+    )
+    disabled_backends = _disabled_backends_from_params(expression)
+
+    exception_types = _exception_types_from_params(
+        expression,
+        only_text_full,
+        has_required_feature or bool(disabled_backends),
+    )
 
     return {
         "backend_requirement_reason": _backend_requirement_reason_from_params(expression),
         "backend_requirements": sorted(required_features),
-        "comparison_modes": comparison_modes,
+        "comparison_modes": _comparison_modes(disabled_backends),
         "disabled_backends": sorted(disabled_backends),
         "exception_types": exception_types,
         "primary_state": primary_state,
