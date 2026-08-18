@@ -13,6 +13,7 @@
 namespace tiny_skia {
 
 class Blitter;
+struct Paint;
 
 class Blitter {
  public:
@@ -32,6 +33,31 @@ class Blitter {
 
  private:
   void unreachable() const;
+};
+
+/// Interception point for the blitter a draw hands to its scan converter.
+///
+/// A draw builds one pipeline blitter per scan pass and drives the scan converter with it.
+/// Passing a wrapper to that draw lets a caller substitute a blitter that forwards to the
+/// pipeline blitter, which is how the blit sequence can be observed without changing what the
+/// draw paints. Returning `pipelineBlitter` unchanged is always valid.
+class BlitterWrapper {
+ public:
+  BlitterWrapper() = default;
+  virtual ~BlitterWrapper() = default;
+
+  BlitterWrapper(const BlitterWrapper&) = delete;
+  BlitterWrapper& operator=(const BlitterWrapper&) = delete;
+
+  /// Returns the blitter the scan converter should drive.
+  ///
+  /// @param pipelineBlitter Blitter the draw built. It outlives the scan pass, so the
+  ///   returned blitter may hold a reference to it.
+  /// @param paint Paint `pipelineBlitter` was built from. A draw may adjust the caller's
+  ///   paint before building the blitter (hairline strokes fold their coverage into the
+  ///   shader opacity, and a transformed draw transforms the shader), so this is the paint a
+  ///   replay must reuse to reproduce the draw exactly.
+  virtual Blitter& wrap(Blitter& pipelineBlitter, const Paint& paint) = 0;
 };
 
 }  // namespace tiny_skia

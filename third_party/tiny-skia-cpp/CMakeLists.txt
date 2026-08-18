@@ -89,6 +89,7 @@ set(TINY_SKIA_SOURCES
   src/tiny_skia/Canvas.cpp
   src/tiny_skia/MaskOps.cpp
   src/tiny_skia/Painter.cpp
+  src/tiny_skia/SpanCapture.cpp
 )
 
 # Helper: create a tiny-skia library target with the given SIMD mode.

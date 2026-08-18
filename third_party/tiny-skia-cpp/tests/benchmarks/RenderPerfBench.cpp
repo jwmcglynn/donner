@@ -11,6 +11,7 @@
 #include "tiny_skia/PathBuilder.h"
 #include "tiny_skia/Pixmap.h"
 #include "tiny_skia/Point.h"
+#include "tiny_skia/SpanCapture.h"
 #include "tiny_skia/Stroke.h"
 #include "tiny_skia/shaders/Gradient.h"
 #include "tiny_skia/shaders/LinearGradient.h"
@@ -462,6 +463,92 @@ void BM_FillPath_Opaque_Cpp(benchmark::State& state) {
   recordThroughput(state, state.range(0));
 }
 
+/// The same fill as BM_FillPath_Cpp, with span capture active. The delta against
+/// BM_FillPath_Cpp is the cost of recording coverage while painting it.
+///
+/// The delta is a few percent, so a single unrepeated run cannot resolve it. Compare medians
+/// from a repeated, interleaved run:
+///
+///   render_perf_bench_native --benchmark_filter='BM_FillPath_(Cpp|Capture_Cpp|Replay_Cpp)/512'
+///       --benchmark_repetitions=15 --benchmark_enable_random_interleaving=true
+///       --benchmark_report_aggregates_only=true --benchmark_min_time=0.3s
+///
+/// At -c opt on an aarch64 reference host that reports a coefficient of variation near
+/// 0.2 percent per benchmark, which is well inside the delta being measured.
+void BM_FillPath_Capture_Cpp(benchmark::State& state) {
+  const auto dim = static_cast<std::uint32_t>(state.range(0));
+  auto pixmap = Pixmap::fromSize(dim, dim);
+  if (!pixmap.has_value()) {
+    state.SkipWithError("Failed to allocate C++ pixmap");
+    return;
+  }
+
+  auto path = createCppPath(static_cast<float>(dim));
+  if (!path.has_value()) {
+    state.SkipWithError("Failed to create C++ path");
+    return;
+  }
+
+  const Paint paint = createPaint();
+  const Color clearColor = Color::fromRgba8(0, 0, 0, 0);
+
+  // Reused across iterations, so this measures steady-state capture rather than the first
+  // capture's buffer growth.
+  tiny_skia::SpanCapture capture;
+
+  for (auto _ : state) {
+    pixmap->fill(clearColor);
+    auto mut = pixmap->mutableView();
+    if (!capture.fillPath(mut, *path, paint, FillRule::Winding, Transform::identity())) {
+      state.SkipWithError("Capture failed");
+      return;
+    }
+    benchmark::DoNotOptimize(pixmap->data().data());
+    benchmark::ClobberMemory();
+  }
+
+  recordThroughput(state, state.range(0));
+}
+
+/// Replaying the coverage BM_FillPath_Capture_Cpp recorded, with no scan conversion.
+void BM_FillPath_Replay_Cpp(benchmark::State& state) {
+  const auto dim = static_cast<std::uint32_t>(state.range(0));
+  auto pixmap = Pixmap::fromSize(dim, dim);
+  if (!pixmap.has_value()) {
+    state.SkipWithError("Failed to allocate C++ pixmap");
+    return;
+  }
+
+  auto path = createCppPath(static_cast<float>(dim));
+  if (!path.has_value()) {
+    state.SkipWithError("Failed to create C++ path");
+    return;
+  }
+
+  const Paint paint = createPaint();
+  const Color clearColor = Color::fromRgba8(0, 0, 0, 0);
+
+  tiny_skia::SpanCapture capture;
+  {
+    auto mut = pixmap->mutableView();
+    if (!capture.fillPath(mut, *path, paint, FillRule::Winding, Transform::identity())) {
+      state.SkipWithError("Capture failed");
+      return;
+    }
+  }
+  state.counters["capturedRunBytes"] = static_cast<double>(capture.spans().byteSize());
+
+  for (auto _ : state) {
+    pixmap->fill(clearColor);
+    auto mut = pixmap->mutableView();
+    tiny_skia::SpanCapture::replay(mut, capture.spans(), capture.paint());
+    benchmark::DoNotOptimize(pixmap->data().data());
+    benchmark::ClobberMemory();
+  }
+
+  recordThroughput(state, state.range(0));
+}
+
 [[maybe_unused]] const bool kBenchmarkContextInitialized = []() {
 #if defined(TINYSKIA_CFG_IF_SIMD_NATIVE)
   benchmark::AddCustomContext("simdMode", "native");
@@ -481,5 +568,7 @@ BENCHMARK(BM_FillRect_Rust)->Arg(kSceneSize);
 BENCHMARK(BM_StrokePath_Cpp)->Arg(kSceneSize);
 BENCHMARK(BM_FillPath_LinearGradient_Cpp)->Arg(kSceneSize);
 BENCHMARK(BM_FillPath_Opaque_Cpp)->Arg(kSceneSize);
+BENCHMARK(BM_FillPath_Capture_Cpp)->Arg(kSceneSize);
+BENCHMARK(BM_FillPath_Replay_Cpp)->Arg(kSceneSize);
 
 }  // namespace
