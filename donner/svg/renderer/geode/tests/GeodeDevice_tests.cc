@@ -8,6 +8,7 @@
 #include <chrono>
 #include <cstdint>
 #include <memory>
+#include <string>
 #include <string_view>
 
 #include "donner/svg/renderer/geode/GeodeCallbackState.h"
@@ -21,6 +22,13 @@
 namespace donner::geode {
 
 using svg::test::RgbaEq;
+using testing::HasSubstr;
+using testing::Not;
+
+/// Marker that `GeodeDevice`'s uncaptured-error callback prints when wgpu
+/// rejects a descriptor. wgpu still returns a non-null handle in that case, so
+/// tests that need to know a resource was actually accepted watch for this.
+constexpr const char* kWgpuUncapturedErrorMarker = "Uncaptured error";
 
 TEST(GeodeCallbackState, CallbackOwnsStateAfterCallerReturns) {
   struct State {};
@@ -300,6 +308,37 @@ TEST(GeodeDevice, SharedPipelinesReturnSameInstance) {
   // `maskPipeline()` is lazy - two calls must still return the same
   // instance (first call constructs, second call returns cached).
   EXPECT_EQ(&device->maskPipeline(), &device->maskPipeline());
+}
+
+/// The record-reading variant of the fill pipeline is compiled lazily, and
+/// only a cross-entity batch ever asks for it. A build that leaves scene
+/// batching switched off therefore never constructs it, so a renamed shader
+/// entry point, or a bind group layout the batched entry points no longer
+/// match, would pass every test and only fail once batching is enabled.
+/// Compile it here on the real device, unconditionally and independent of the
+/// batching switch, so both variants stay covered.
+///
+/// The returned handle alone proves nothing: wgpu hands back a non-null error
+/// pipeline for a rejected descriptor and reports the reason through the
+/// device's uncaptured-error callback, so the real assertion is that the
+/// callback printed nothing. The shader-emitter validation tests keep a
+/// negative control proving this marker does fire on a bad descriptor.
+TEST(GeodeDevice, BatchedFillPipelineCompilesWithoutValidationErrors) {
+  auto device = GeodeDevice::CreateHeadless();
+  ASSERT_NE(device, nullptr);
+
+  testing::internal::CaptureStderr();
+  const wgpu::RenderPipeline& batched = device->pipeline().batchedPipeline(device->device());
+  const std::string errors = testing::internal::GetCapturedStderr();
+
+  EXPECT_TRUE(static_cast<bool>(batched)) << "Batched fill pipeline creation returned null.";
+  EXPECT_THAT(errors, Not(HasSubstr(kWgpuUncapturedErrorMarker)))
+      << "wgpu rejected the record-reading fill pipeline:\n"
+      << errors;
+
+  // Built on first use, then cached: a second call must hand back the same
+  // pipeline rather than recompiling it.
+  EXPECT_EQ(&device->pipeline().batchedPipeline(device->device()), &batched);
 }
 
 /// Regression test for issue #575: texture / buffer allocation

@@ -1404,7 +1404,15 @@
           "stage": "fragment"
         },
         {
+          "name": "fs_main_batched",
+          "stage": "fragment"
+        },
+        {
           "name": "vs_main",
+          "stage": "vertex"
+        },
+        {
+          "name": "vs_main_batched",
           "stage": "vertex"
         }
       ],
@@ -1443,8 +1451,10 @@
         "FragOutput",
         "InstanceRecord",
         "InstanceTransform",
+        "PaintParams",
         "Quadratic",
         "RayCoverage",
+        "ShapeParams",
         "Uniforms",
         "VertexOutput"
       ]

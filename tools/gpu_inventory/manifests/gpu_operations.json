@@ -848,6 +848,7 @@
         "PipelineLayout",
         "PipelineLayoutDescriptor",
         "PrimitiveTopology",
+        "RenderPipeline",
         "RenderPipelineDescriptor",
         "SamplerBindingType",
         "ShaderModule",
@@ -863,13 +864,16 @@
         "BindGroupLayout",
         "ComputePipeline",
         "Device",
+        "PipelineLayout",
         "RenderPipeline",
+        "ShaderModule",
         "TextureFormat"
       ]
     },
     "donner/svg/renderer/geode/GeodeResidentPathComponent.h": {
       "operations": [
-        "createBuffer"
+        "createBuffer",
+        "writeBuffer"
       ],
       "wgpuCFunctions": [
         "wgpuLabel"
@@ -1053,6 +1057,7 @@
         "RenderPassColorAttachment",
         "RenderPassDescriptor",
         "RenderPassEncoder",
+        "RenderPipeline",
         "StoreOp",
         "TexelCopyBufferInfo",
         "TexelCopyTextureInfo",

@@ -162,7 +162,7 @@ struct GeodeDevice::Impl {
   ~Impl() {
     DestroyResourceBacking(dummyPatternTexture);
     DestroyResourceBacking(dummyClipMaskTexture);
-    DestroyResourceBacking(identityInstanceTransformBuffer);
+    DestroyResourceBacking(identityInstanceRecordBuffer);
     for (auto& [unusedKey, entry] : snapshotReadbackPool) {
       (void)unusedKey;
       DestroyResourceBacking(entry.resources.staging);
@@ -185,10 +185,10 @@ struct GeodeDevice::Impl {
 
   // 1-element instance-transform buffer bound by every
   // non-instanced solid fill. Uploaded once at CreateHeadless time,
-  // never modified. Layout matches the WGSL `InstanceTransform`
-  // struct: two vec4f rows carrying the identity affine
-  // `{(1,0,0,0), (0,1,0,0)}`.
-  ScopedWgpuHandle<wgpu::Buffer> identityInstanceTransformBuffer;
+  // never modified. Layout matches the WGSL `InstanceRecord` struct, whose
+  // leading member is a row-major affine as two vec4f rows carrying the
+  // identity `{(1,0,0,0), (0,1,0,0)}` followed by zeroes.
+  ScopedWgpuHandle<wgpu::Buffer> identityInstanceRecordBuffer;
 
   // Shared render / compute pipelines. Constructed once per GeodeDevice
   // in `initSharedPipelines` - see the public `pipeline()` / ... / `filterEngine()`
@@ -622,8 +622,8 @@ const wgpu::TextureView& GeodeDevice::dummyClipMaskTextureView() const {
 const wgpu::Sampler& GeodeDevice::dummyClipMaskSampler() const {
   return impl_->dummyClipMaskSampler.get();
 }
-const wgpu::Buffer& GeodeDevice::identityInstanceTransformBuffer() const {
-  return impl_->identityInstanceTransformBuffer.get();
+const wgpu::Buffer& GeodeDevice::identityInstanceRecordBuffer() const {
+  return impl_->identityInstanceRecordBuffer.get();
 }
 
 GeodePipeline& GeodeDevice::pipeline() const {
@@ -876,15 +876,24 @@ void GeodeDevice::initSharedResources() {
   }
 
   {
-    const float identity[8] = {
-        1.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f,
-    };
+    // One full-size record: the identity affine in the leading two rows and
+    // zeroes everywhere else, so a draw that binds it reads an identity
+    // transform for instance 0. 256 bytes is the WGSL `InstanceRecord`
+    // stride and the baseline `minStorageBufferOffsetAlignment`;
+    // `GeodeResidentPathComponent.h` owns the struct and static_asserts the
+    // same size, but it includes this header, so the constant is spelled out
+    // here rather than included back.
+    constexpr size_t kInstanceRecordFloats = 256 / sizeof(float);
+    float identityRecord[kInstanceRecordFloats] = {};
+    identityRecord[0] = 1.0f;
+    identityRecord[5] = 1.0f;
     wgpu::BufferDescriptor bd = {};
-    bd.label = wgpu::StringView{std::string_view{"GeodeDeviceIdentityInstanceTransform"}};
-    bd.size = sizeof(identity);
+    bd.label = wgpu::StringView{std::string_view{"GeodeDeviceIdentityInstanceRecord"}};
+    bd.size = sizeof(identityRecord);
     bd.usage = wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopyDst;
-    impl_->identityInstanceTransformBuffer.reset(device_.createBuffer(bd));
-    queue_.writeBuffer(impl_->identityInstanceTransformBuffer.get(), 0, identity, sizeof(identity));
+    impl_->identityInstanceRecordBuffer.reset(device_.createBuffer(bd));
+    queue_.writeBuffer(impl_->identityInstanceRecordBuffer.get(), 0, identityRecord,
+                       sizeof(identityRecord));
   }
 }
 

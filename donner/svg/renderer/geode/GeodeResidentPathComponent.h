@@ -24,6 +24,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <cstring>
 #include <memory>
 #include <vector>
 
@@ -181,6 +182,47 @@ public:
   /// recorded batch draws still read.
   void freeSlot(const Slot& slot) { pendingFrees_.push_back(slot.index); }
 
+  /**
+   * Persistent buffer holding one distinct scene-batch uniform value.
+   *
+   * A batch uniform is frame-constant (identity mvp plus the frame's
+   * viewport / clip / antialias state), so a steady frame finds its entry
+   * and writes nothing at all - the per-frame arena would rewrite it every
+   * frame because the arena's bytes do not survive.
+   *
+   * Entries are keyed by their exact bytes and are never rewritten, so a
+   * differing value (a second render-target size within one frame) takes a
+   * new entry and a batch already recorded this frame keeps reading its own
+   * bytes at submit time. Returns a null handle once `kMaxBatchUniforms`
+   * distinct values are live, and the caller falls back to its per-frame
+   * arena.
+   */
+  wgpu::Buffer acquireBatchUniform(GeodeDevice& device, const void* bytes, uint64_t size) {
+    const auto* first = static_cast<const uint8_t*>(bytes);
+    for (const BatchUniform& entry : batchUniforms_) {
+      if (entry.bytes.size() == size && std::memcmp(entry.bytes.data(), first, size) == 0) {
+        return entry.buffer.get();
+      }
+    }
+    if (batchUniforms_.size() >= kMaxBatchUniforms) {
+      return wgpu::Buffer();
+    }
+    wgpu::BufferDescriptor desc = {};
+    desc.label = wgpuLabel("GeodeSceneBatchUniform");
+    desc.size = size;
+    desc.usage = wgpu::BufferUsage::Uniform | wgpu::BufferUsage::CopyDst;
+    ScopedWgpuHandle<wgpu::Buffer> buffer(device.device().createBuffer(desc));
+    if (!buffer) {
+      return wgpu::Buffer();
+    }
+    device.countBuffer();
+    device.queue().writeBuffer(buffer.get(), 0, first, size);
+    device.countBufferWrite(size);
+    batchUniforms_.push_back(
+        BatchUniform{std::move(buffer), std::vector<uint8_t>(first, first + size)});
+    return batchUniforms_.back().buffer.get();
+  }
+
   /// Borrowed handle of the newest buffer (batches bind sub-ranges of it).
   wgpu::Buffer newestBuffer() const {
     return chunks_.empty() ? wgpu::Buffer() : chunks_.back().buffer.get();
@@ -204,7 +246,17 @@ private:
     uint64_t size = 0;
   };
 
+  struct BatchUniform {
+    ScopedWgpuHandle<wgpu::Buffer> buffer;
+    std::vector<uint8_t> bytes;
+  };
+
   static constexpr uint64_t kInitialRecordSlabBytes = 262144u;
+  /// Distinct live scene-batch uniform values before the caller falls back
+  /// to its per-frame arena. One value covers a document rendered at one
+  /// size; the cap bounds a pathological caller that varies the uniform per
+  /// batch.
+  static constexpr size_t kMaxBatchUniforms = 8u;
 
   Slot slotAt(uint32_t index) const {
     // Slots are never moved; walk the chunk sizes to find the owner.
@@ -224,6 +276,7 @@ private:
   std::vector<Chunk> chunks_;
   std::vector<uint32_t> freeIndices_;
   std::vector<uint32_t> pendingFrees_;
+  std::vector<BatchUniform> batchUniforms_;
 };
 
 class GeodeDevice;
