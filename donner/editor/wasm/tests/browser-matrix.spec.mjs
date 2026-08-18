@@ -84,6 +84,16 @@ test("Bazel owns a hermetic no-window Chromium browser lane", () => {
   const buildFile = readFileSync(buildFilePath, "utf8");
   assert.match(buildFile, /playwright_bin\.playwright_test\(/);
   assert.match(buildFile, /name = "chromium_remote_smoke"/);
+  const smokeTest = readFileSync(path.join(testDirectory, "smoke.spec.ts"), "utf8");
+  const localSmokeImports = [...smokeTest.matchAll(/from "\.\/([^"]+)"/g)].map(
+    ([, importedModule]) => `${importedModule}.ts`,
+  );
+  for (const importedFile of localSmokeImports) {
+    assert.ok(
+      buildFile.includes(`"${importedFile}"`),
+      `the Bazel browser lane is missing smoke.spec.ts dependency ${importedFile}`,
+    );
+  }
   assert.match(buildFile, /"@playwright\/\/:chromium"/);
   assert.match(
     buildFile,
