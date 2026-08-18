@@ -916,15 +916,16 @@ test("Firefox keeps the dragged shape and its selection outline in every drag fr
       .toBeNull();
     // "No teal" has two very different causes and the pixels cannot tell them
     // apart: the chrome draw ran and its pixels missed this probe window, or no
-    // chrome was drawn at all. The second is reachable without any rendering
-    // fault - the immediate-chrome plan is only installed for frames where the
-    // render coordinator is holding a selection-chrome snapshot, so a frame that
-    // lands between overlay rebuilds presents the document underlay with no
-    // chrome pass over it. The app already publishes which case it was in
-    // `selectionChromeSnapshotPresent`, so read it here rather than leaving the
-    // next failure to guess. Read only on the failing path: this test asserts on
-    // per-frame drag timing, and a probe that costs a round trip per frame
-    // changes the thing it is measuring.
+    // chrome was drawn at all. The second means the render coordinator was not
+    // holding a selection-chrome snapshot for that frame, which is what the
+    // immediate-chrome plan - and with it the whole chrome pass - is installed
+    // from. The coordinator holds that snapshot for as long as there is chrome
+    // to draw and holds back only the recapture, so a frame without one is a
+    // defect rather than ordinary timing between overlay rebuilds. The app
+    // publishes which case it was in `selectionChromeSnapshotPresent`, so read
+    // it here rather than leaving the next failure to guess. Read only on the
+    // failing path: this test asserts on per-frame drag timing, and a probe that
+    // costs a round trip per frame changes the thing it is measuring.
     if (geometry?.teal === null || geometry?.teal === undefined) {
       const chromeState = await page
         .evaluate(() => ({

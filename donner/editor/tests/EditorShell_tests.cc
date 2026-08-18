@@ -986,6 +986,32 @@ public:
     return shell.renderCoordinator_.selectionBoundsCache().displayedBoundsDoc.size();
   }
 
+  static bool ImmediateChromePlanProduced(const EditorShell& shell) {
+    return shell.immediateChromePlanProduced_;
+  }
+
+  static std::size_t SelectionChromePathCount(const EditorShell& shell) {
+    const std::optional<SelectionChromeSnapshot>& snapshot =
+        shell.renderCoordinator_.immediateOverlaySnapshot();
+    return snapshot.has_value() ? snapshot->paths.size() : 0u;
+  }
+
+  static std::uint64_t DisplayedDocVersion(const EditorShell& shell) {
+    return shell.renderCoordinator_.displayedDocVersion();
+  }
+
+  static std::optional<std::uint64_t> ImmediateOverlayDocumentVersion(const EditorShell& shell) {
+    return shell.renderCoordinator_.immediateOverlayDocumentVersionForDiagnostics();
+  }
+
+  static std::uint64_t OverlayVersionGateSuppressions(const EditorShell& shell) {
+    return shell.renderCoordinator_.overlayVersionGateSuppressionTotalForDiagnostics();
+  }
+
+  static void HoldRenderResultsForPolls(EditorShell& shell, int polls) {
+    shell.renderCoordinator_.asyncRenderer().setReplayResultHoldFramesForTesting(polls);
+  }
+
   static std::vector<svg::SVGElement> ReferenceHighlightElements(const EditorShell& shell) {
     return shell.referenceHighlightElements();
   }
@@ -1355,17 +1381,56 @@ public:
   }
 };
 
+void RunShellFrame(gui::EditorWindow& window, EditorShell& shell) {
+  window.beginFrame();
+  shell.runFrame();
+  window.endFrame();
+}
+
 void RunFramesUntilDisplayedSelectionBounds(gui::EditorWindow& window, EditorShell& shell) {
   for (int attempt = 0; attempt < 40; ++attempt) {
-    window.beginFrame();
-    shell.runFrame();
-    window.endFrame();
+    RunShellFrame(window, shell);
     if (EditorShellTestAccess::DisplayedSelectionBoundsCount(shell) > 0u) {
       return;
     }
 
     std::this_thread::sleep_for(std::chrono::milliseconds(5));
   }
+}
+
+/// Drive the frames that leave the editor holding selection chrome captured against a document
+/// version the presented pixels have not caught up to.
+///
+/// That state is what the overlay version gate is written for, and reaching it takes two things
+/// the editor only does together: a live-geometry tool (the Pen tool here) captures chrome from
+/// the post-flush DOM instead of waiting for the raster, and the worker has not published that
+/// version yet. Results are withheld from every later poll so the presented version stays pinned
+/// where the initial settle left it, making the gate's engagement a property of the sequence
+/// rather than of how fast the worker happens to be.
+///
+/// @param window Hidden window driving the frames.
+/// @param shell Editor shell under test, with its target already selected.
+/// @return Document version the presented pixels are pinned at.
+std::uint64_t RunFramesUntilChromeLeadsPresentedDocument(gui::EditorWindow& window,
+                                                         EditorShell& shell) {
+  RunFramesUntilDisplayedSelectionBounds(window, shell);
+  EditorShellTestAccess::HoldRenderResultsForPolls(shell, 64);
+
+  const std::uint64_t presentedVersion = EditorShellTestAccess::DisplayedDocVersion(shell);
+  EditorShellTestAccess::ApplyReplayAction(shell,
+                                           repro::ReproAction{
+                                               .kind = repro::ReproAction::Kind::SetActiveTool,
+                                               .tool = "pen",
+                                           });
+  EditorShellTestAccess::ApplyReplayAction(shell,
+                                           repro::ReproAction{
+                                               .kind = repro::ReproAction::Kind::SetStyleProperty,
+                                               .propertyName = "fill",
+                                               .propertyValue = "#010203",
+                                           });
+  (void)EditorShellTestAccess::App(shell).flushFrame();
+  RunShellFrame(window, shell);
+  return presentedVersion;
 }
 
 bool WaitForStyleSourceDecorations(EditorShell& shell) {
@@ -1826,6 +1891,90 @@ TEST(EditorShellTest, ReplayActionsSwitchToolsAndIgnoreUnknownToolNames) {
                                                .kind = repro::ReproAction::Kind::CommitPenPath,
                                            });
   EXPECT_TRUE(EditorShellTestAccess::ActiveToolIsSelect(shell));
+}
+
+TEST(EditorShellTest, SelectionChromePresentsOnFramesTheOverlayVersionGateSuppresses) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
+
+  EditorShell shell(window, OptionsWithSource(kInitialSvg));
+  ASSERT_TRUE(shell.valid());
+  EditorApp& app = EditorShellTestAccess::App(shell);
+  auto target = app.document().document().querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  app.setSelection(*target);
+
+  const std::uint64_t presentedVersion = RunFramesUntilChromeLeadsPresentedDocument(window, shell);
+  ASSERT_GT(presentedVersion, 0u) << "The gate only engages once a render has been presented.";
+  ASSERT_TRUE(EditorShellTestAccess::ImmediateChromePlanProduced(shell));
+  ASSERT_EQ(EditorShellTestAccess::ImmediateOverlayDocumentVersion(shell),
+            std::optional<std::uint64_t>(app.document().currentFrameVersion()));
+  ASSERT_GT(app.document().currentFrameVersion(), presentedVersion)
+      << "The Pen frame must leave the chrome captured ahead of the presented pixels.";
+
+  // Leaving the Pen tool takes away the live-geometry allowance, and there is no drag projection
+  // to reconcile chrome with older pixels, so the next frame is one the gate suppresses.
+  EditorShellTestAccess::ApplyReplayAction(shell,
+                                           repro::ReproAction{
+                                               .kind = repro::ReproAction::Kind::SetActiveTool,
+                                               .tool = "select",
+                                           });
+  const std::uint64_t suppressionsBeforeFrame =
+      EditorShellTestAccess::OverlayVersionGateSuppressions(shell);
+  RunShellFrame(window, shell);
+
+  ASSERT_EQ(EditorShellTestAccess::DisplayedDocVersion(shell), presentedVersion)
+      << "Withheld results should have kept the presented version pinned across the frame.";
+  ASSERT_GT(EditorShellTestAccess::OverlayVersionGateSuppressions(shell), suppressionsBeforeFrame)
+      << "This frame must actually be one the version gate suppressed, or it proves nothing.";
+  EXPECT_TRUE(EditorShellTestAccess::ImmediateChromePlanProduced(shell))
+      << "A suppressed overlay refresh must not take the chrome pass with it: without a plan the "
+         "frame presents document pixels with no chrome drawn over them, and the selection "
+         "outline, bounds and handles blink out until the worker catches up.";
+  EXPECT_EQ(EditorShellTestAccess::SelectionChromePathCount(shell), 1u)
+      << "The retained chrome should still outline the selected element.";
+}
+
+TEST(EditorShellTest, DeselectingDropsChromeOnFramesTheOverlayVersionGateSuppresses) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
+
+  EditorShell shell(window, OptionsWithSource(kInitialSvg));
+  ASSERT_TRUE(shell.valid());
+  EditorApp& app = EditorShellTestAccess::App(shell);
+  auto target = app.document().document().querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  app.setSelection(*target);
+
+  const std::uint64_t presentedVersion = RunFramesUntilChromeLeadsPresentedDocument(window, shell);
+  ASSERT_GT(presentedVersion, 0u);
+  ASSERT_EQ(EditorShellTestAccess::SelectionChromePathCount(shell), 1u);
+
+  // Deselecting under the same suppressed-refresh conditions. Retained chrome may trail the live
+  // geometry, but it may never outline an element that is no longer selected.
+  EditorShellTestAccess::ApplyReplayAction(shell,
+                                           repro::ReproAction{
+                                               .kind = repro::ReproAction::Kind::SetActiveTool,
+                                               .tool = "select",
+                                           });
+  app.clearSelection();
+  ASSERT_GT(app.document().currentFrameVersion(), presentedVersion)
+      << "The Pen frame must leave the chrome captured ahead of the presented pixels.";
+  const std::uint64_t suppressionsBeforeFrame =
+      EditorShellTestAccess::OverlayVersionGateSuppressions(shell);
+  RunShellFrame(window, shell);
+
+  ASSERT_EQ(EditorShellTestAccess::DisplayedDocVersion(shell), presentedVersion);
+  EXPECT_EQ(EditorShellTestAccess::OverlayVersionGateSuppressions(shell), suppressionsBeforeFrame)
+      << "A changed chrome subject must recapture instead of suppressing, because no later frame "
+         "will recapture for it while the presented document stays behind.";
+  EXPECT_EQ(EditorShellTestAccess::SelectionChromePathCount(shell), 0u)
+      << "Chrome captured for the old selection must not survive the deselect just because the "
+         "overlay refresh is otherwise suppressed.";
 }
 
 TEST(EditorShellTest, ReplayActionSelectCommitsDraftPenPath) {

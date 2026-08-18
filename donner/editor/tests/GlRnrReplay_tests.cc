@@ -2787,11 +2787,13 @@ TEST(GlRnrReplayTest, TextToolLivePointerClickOpensSessionAndTypes) {
 // collapses and later recovers is the per-keystroke flicker this reproduces.
 //
 // Observed failure mode (2026-07-06, Geode presentation): the text pixels
-// hold steady, but the cyan chrome collapses to zero for the entire typing
-// burst because `RenderCoordinator::rasterizeOverlayForPresentation` resets
-// the immediate overlay snapshot whenever the flushed document version is
-// ahead of the displayed version with no drag projection - and fast typing
-// keeps the document perpetually ahead of the async renderer.
+// held steady, but the cyan chrome collapsed to zero for the entire typing
+// burst, because at that time
+// `RenderCoordinator::rasterizeOverlayForPresentation` reset the immediate
+// overlay snapshot whenever the flushed document version was ahead of the
+// displayed version with no drag projection - and fast typing keeps the
+// document perpetually ahead of the async renderer. That reset is gone: the
+// coordinator holds the snapshot and defers only the recapture.
 TEST(GlRnrReplayTest, TypingIntoTextKeepsTextPixelsPresentEveryFrame) {
   if (!UsesGeodePresentation()) {
     GTEST_SKIP() << "Chrome pixels require the Geode direct presentation path.";

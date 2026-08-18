@@ -708,6 +708,17 @@ private:
   FrameCostBreakdown::DirectPresentation lastDirectPresentationCost_;
   /// Wall time the last immediate chrome pass spent drawing, in milliseconds.
   double lastImmediateChromeDrawMs_ = 0.0;
+  /// Whether a chrome plan was produced for the most recent frame.
+  ///
+  /// This records the coordinator-side half of the chrome pass: the shell had a selection chrome
+  /// snapshot to draw and handed a plan down for it. It is not a claim that a pass was installed or
+  /// that anything was drawn, because whether the plan reaches a draw also depends on the build
+  /// configuration and on a direct overlay renderer existing.
+  ///
+  /// False means the frame had no chrome to draw at all, which is correct only for the content-only
+  /// capture and the sample picker. Any other false is the selection outline dropping out for a
+  /// frame, so this is the invariant the presentation tests assert on.
+  bool immediateChromePlanProduced_ = false;
   bool treeSelectionOriginatedInTree_ = false;
   bool sourceSelectionOriginatedInText_ = false;
   bool sourceFocusOriginatedInStyle_ = false;
