@@ -1,6 +1,7 @@
 #pragma once
 /// @file
 
+#include <cstddef>
 #include <cstdint>
 #include <ostream>
 
@@ -71,6 +72,16 @@ enum class ElementType : uint8_t {
   Unknown,              //!< For unknown elements.
   Use,                  //!< \ref xml_use
 };
+
+/**
+ * Number of distinct \ref ElementType values, for sizing arrays indexed by element type.
+ *
+ * Derived from \ref ElementType::Use being the last enumerator. Adding an enumerator after it
+ * requires updating this expression; callers that size a table with it should static_assert that
+ * the element types they index with fit, so the mismatch is caught at compile time rather than
+ * silently truncating the table.
+ */
+inline constexpr size_t kElementTypeCount = static_cast<size_t>(ElementType::Use) + 1;
 
 /// Ostream output operator for \ref ElementType, outputs the element name.
 std::ostream& operator<<(std::ostream& os, ElementType type);

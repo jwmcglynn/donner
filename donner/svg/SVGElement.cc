@@ -444,13 +444,17 @@ ParseResult<bool> SVGElement::trySetPresentationAttribute(std::string_view name,
   DocumentWriteAccess& access = mutation.access();
   std::string_view actualName = name;
 
+  // The element's type is read several times below, and each read is an ECS component lookup.
+  // Resolve it once; the type cannot change while this call runs.
+  const ElementType elementType = type();
+
   // gradientTransform and patternTransform are special, since they map to the
   // "transform" presentation attribute. When doing this mapping, store the XML
   // attribute with the user-visible attribute name and internally map it to
   // "transform".
-  if (((type() == ElementType::LinearGradient || type() == ElementType::RadialGradient) &&
+  if (((elementType == ElementType::LinearGradient || elementType == ElementType::RadialGradient) &&
        name == "gradientTransform") ||
-      (type() == ElementType::Pattern && name == "patternTransform")) {
+      (elementType == ElementType::Pattern && name == "patternTransform")) {
     actualName = "transform";
   }
 
@@ -467,7 +471,7 @@ ParseResult<bool> SVGElement::trySetPresentationAttribute(std::string_view name,
   if (!trySetResult.result()) {
     // Try element-specific presentation attributes (cx, cy, r, rx, ry, d, etc.).
     parser::PropertyParseFnParams params = parser::PropertyParseFnParams::CreateForAttribute(value);
-    trySetResult = parser::ParsePresentationAttribute(type(), handle_, actualName, params);
+    trySetResult = parser::ParsePresentationAttribute(elementType, handle_, actualName, params);
   }
 
   if (trySetResult.hasResult() && trySetResult.result()) {
@@ -552,9 +556,13 @@ void SVGElement::setAttribute(const xml::XMLQualifiedNameRef& name, std::string_
 }
 
 std::optional<ParseDiagnostic> SVGElement::setAttributeFromXMLMutation(
-    const xml::XMLQualifiedNameRef& name, std::string_view value) {
+    const xml::XMLQualifiedNameRef& name, std::string_view value,
+    bool* consumedAsPresentationAttribute) {
   DocumentMutationBatch mutation = handle_.mutationBatch();
   DocumentWriteAccess& access = mutation.access();
+  if (consumedAsPresentationAttribute != nullptr) {
+    *consumedAsPresentationAttribute = false;
+  }
   // TODO: Namespace support for these attributes
   // First check some special cases which will never be presentation attributes.
   if (name == xml::XMLQualifiedNameRef("id")) {
@@ -583,6 +591,9 @@ std::optional<ParseDiagnostic> SVGElement::setAttributeFromXMLMutation(
   if (name.namespacePrefix.empty()) {
     auto trySetResult = trySetPresentationAttribute(name.name, value);
     const bool attributeWasSet = trySetResult.hasResult() && trySetResult.result();
+    if (consumedAsPresentationAttribute != nullptr) {
+      *consumedAsPresentationAttribute = attributeWasSet;
+    }
     if (attributeWasSet) {
       if (name.name == "transform") {
         // Source/XML transform edits are settled document changes, not active drag frames.

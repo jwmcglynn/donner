@@ -26,6 +26,16 @@ donner_cc_binary(
 )
 
 donner_cc_binary(
+    name = "svg_parse_perf_bench",
+    srcs = ["SvgParsePerfBench.cpp"],
+    deps = [
+        "//donner/base",
+        "//donner/svg",
+        "//donner/svg/parser",
+    ],
+)
+
+donner_cc_binary(
     name = "structured_editing_perf_bench",
     srcs = ["StructuredEditingPerfBench.cpp"],
     deps = [

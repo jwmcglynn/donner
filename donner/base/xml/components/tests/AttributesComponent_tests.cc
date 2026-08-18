@@ -109,6 +109,43 @@ TEST(AttributesComponent, SetAttribute) {
   EXPECT_EQ(component.getAttribute("test"), "value3");
 }
 
+TEST(AttributesComponent, OverwriteKeepsNameIdentityAndOrder) {
+  Registry registry;
+  registry.ctx().emplace<XMLNamespaceContext>(registry);
+
+  Entity entity = registry.create();
+  AttributesComponent& component = registry.emplace<AttributesComponent>(entity);
+
+  // Insert out of sorted order, so an overwrite that re-keyed the entry would be visible in the
+  // reported order as well as in the values.
+  component.setAttribute(registry, "width", "1");
+  component.setAttribute(registry, XMLQualifiedNameRef("ns", "width"), "2");
+  component.setAttribute(registry, "height", "3");
+
+  const auto namesBefore = component.attributes();
+
+  // Overwriting takes a separate path from first insertion; it must leave the stored name, the
+  // reported order, and every other attribute untouched.
+  component.setAttribute(registry, "width", "4");
+  component.setAttribute(registry, XMLQualifiedNameRef("ns", "width"), "5");
+
+  const auto namesAfter = component.attributes();
+  ASSERT_EQ(namesBefore.size(), namesAfter.size());
+  for (size_t i = 0; i < namesBefore.size(); ++i) {
+    EXPECT_EQ(namesBefore[i], namesAfter[i]) << "at index " << i;
+  }
+
+  EXPECT_EQ(component.getAttribute("width"), "4");
+  EXPECT_EQ(component.getAttribute(XMLQualifiedNameRef("ns", "width")), "5");
+  EXPECT_EQ(component.getAttribute("height"), "3");
+
+  // The overwritten attribute is still removable, which requires the name storage to still hold
+  // the key the map entry points at.
+  component.removeAttribute(registry, "width");
+  EXPECT_FALSE(component.hasAttribute("width"));
+  EXPECT_EQ(component.getAttribute(XMLQualifiedNameRef("ns", "width")), "5");
+}
+
 TEST(AttributesComponent, RemoveAttribute) {
   Registry registry;
   registry.ctx().emplace<XMLNamespaceContext>(registry);
@@ -352,8 +389,8 @@ TEST(AttributesComponent, NamespaceCacheSurvivesUnrelatedTreeChange) {
   registry.get<TreeComponent>(keptBranch).appendChild(registry, keptLeaf);
   registry.get<TreeComponent>(root).appendChild(registry, movedBranch);
 
-  registry.get<AttributesComponent>(root).setAttribute(
-      registry, XMLQualifiedNameRef("", "xmlns"), "https://example.com/root");
+  registry.get<AttributesComponent>(root).setAttribute(registry, XMLQualifiedNameRef("", "xmlns"),
+                                                       "https://example.com/root");
 
   // Warm the cache for the branch that is about to be left alone.
   EXPECT_EQ(namespaceContext.getNamespaceUri(registry, keptLeaf, ""), "https://example.com/root");

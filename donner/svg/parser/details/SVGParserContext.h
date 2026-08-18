@@ -1,5 +1,7 @@
 #pragma once
 
+#include <optional>
+
 #include "donner/base/FileOffset.h"
 #include "donner/base/ParseDiagnostic.h"
 #include "donner/base/ParseWarningSink.h"
@@ -42,7 +44,7 @@ public:
    */
   SVGParserContext(std::string_view input UTILS_LIFETIME_BOUND, ParseWarningSink& warningSink,
                    const SVGParser::Options& options)
-      : input_(input), lineOffsets_(input), warningSink_(warningSink), options_(options) {}
+      : input_(input), warningSink_(warningSink), options_(options) {}
 
   /// Get the parser options.
   const SVGParser::Options& options() const { return options_; }
@@ -70,7 +72,7 @@ public:
     // fileOffset() computes both halves consistently; passing the line's own start offset as the
     // column instead shifts every diagnostic on line 2 or later by the length of all preceding
     // lines.
-    const FileOffset parentOffset = lineOffsets_.fileOffset(origin.startOffset);
+    const FileOffset parentOffset = lineOffsets().fileOffset(origin.startOffset);
 
     ParseDiagnostic newError = std::move(error);
     newError.range.start = newError.range.start.addParentOffset(parentOffset);
@@ -149,16 +151,32 @@ public:
    * @param offset Character index.
    * @return size_t Line number, 1-indexed.
    */
-  size_t offsetToLine(size_t offset) const { return lineOffsets_.offsetToLine(offset); }
+  size_t offsetToLine(size_t offset) const { return lineOffsets().offsetToLine(offset); }
 
   /**
    * Returns the offset of a given 1-indexed line number.
    *
    * @param line Line number, 1-indexed.
    */
-  size_t lineOffset(size_t line) const { return lineOffsets_.lineOffset(line); }
+  size_t lineOffset(size_t line) const { return lineOffsets().lineOffset(line); }
 
 private:
+  /**
+   * Return the newline table for the input string, scanning the input on first use.
+   *
+   * Scanning is deferred because a successful parse never needs line or column numbers: they are
+   * only used to place diagnostics. Building the table in the constructor charged every parse for
+   * a full pass over the source plus the vector it fills, whether or not a single warning was
+   * emitted. The table is a pure function of the (immutable) input string, so the deferred result
+   * is identical to the eager one.
+   */
+  const donner::parser::LineOffsets& lineOffsets() const {
+    if (!lineOffsets_.has_value()) {
+      lineOffsets_.emplace(input_);
+    }
+    return *lineOffsets_;
+  }
+
   SourceRange addLineInfo(SourceRange range) const {
     return SourceRange{
         addLineInfo(range.start),
@@ -179,14 +197,14 @@ private:
       return offset;
     }
 
-    return lineOffsets_.fileOffset(*offset.offset);
+    return lineOffsets().fileOffset(*offset.offset);
   }
 
   /// Original string containing the XML text, used for remapping errors.
   std::string_view input_;
 
-  /// Offsets of the start of each line in the input string.
-  donner::parser::LineOffsets lineOffsets_;
+  /// Offsets of the start of each line in the input string, computed on first use.
+  mutable std::optional<donner::parser::LineOffsets> lineOffsets_;
 
   /// Sink to collect warnings encountered during parsing.
   ParseWarningSink& warningSink_;

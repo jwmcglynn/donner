@@ -30,10 +30,13 @@ public:
    * @param element The element to set the attribute on.
    * @param name The name of the attribute, as specified in the document's XML.
    * @param value The value of the attribute.
+   * @param[out] consumedAsPresentationAttribute When non-null, set to true if the value was
+   *   recognized and applied as a presentation attribute, and false if it was stored only as a
+   *   generic XML attribute.
    */
-  static std::optional<ParseDiagnostic> ApplyParsedAttribute(SVGElement& element,
-                                                             const xml::XMLQualifiedNameRef& name,
-                                                             std::string_view value);
+  static std::optional<ParseDiagnostic> ApplyParsedAttribute(
+      SVGElement& element, const xml::XMLQualifiedNameRef& name, std::string_view value,
+      bool* consumedAsPresentationAttribute = nullptr);
 
   /**
    * Remove an XML attribute from the SVG projection without writing back to source.

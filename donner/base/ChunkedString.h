@@ -2,7 +2,9 @@
 
 #include <cassert>
 #include <cstddef>
+#include <optional>
 #include <ostream>
+#include <string_view>
 #include <vector>
 
 #include "donner/base/RcString.h"
@@ -204,6 +206,24 @@ public:
   }
 
   /**
+   * Return the whole string as one contiguous view, when it is stored as a single chunk.
+   *
+   * Reading characters through \ref operator[] has to locate the chunk holding each position and
+   * unwrap a variant to reach its bytes. A string usually holds exactly one chunk - extra chunks
+   * only appear once entity expansion or concatenation has spliced content together - so a loop
+   * that scans character by character can hoist this view once and index it directly instead.
+   *
+   * @return A view of the entire string, or \c std::nullopt when it spans zero or several chunks.
+   */
+  std::optional<std::string_view> singleChunkView() const UTILS_LIFETIME_BOUND {
+    if (pieces_.size() == 1) {
+      return std::string_view(pieces_[0]);
+    }
+
+    return std::nullopt;
+  }
+
+  /**
    * Return the total length of the string.
    */
   size_t size() const { return totalLength_; }
@@ -231,6 +251,11 @@ public:
    */
   char operator[](size_t pos) const {
     assert(pos < totalLength_ && "Index out of bounds");
+
+    // A single chunk covers the whole string, so the position needs no chunk search.
+    if (pieces_.size() == 1) {
+      return std::string_view(pieces_[0])[pos];
+    }
 
     size_t currentPos = 0;
     for (const auto& piece : pieces_) {

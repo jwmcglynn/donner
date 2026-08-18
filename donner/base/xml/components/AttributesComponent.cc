@@ -30,23 +30,35 @@ SmallVector<xml::XMLQualifiedNameRef, 1> AttributesComponent::findMatchingAttrib
 
 void AttributesComponent::setAttribute(Registry& registry, const xml::XMLQualifiedNameRef& name,
                                        const RcString& value) {
+  // Overwriting an existing attribute is the common case during parsing, because the XML parser
+  // stores every attribute and the SVG layer then stores the ones it recognizes a second time.
+  // That path needs none of the allocation below: the name is already owned by attrNameStorage_
+  // and already keys the attributes_ entry, so only the value changes.
+  if (const auto existingIt = attributes_.find(name); existingIt != attributes_.end()) {
+    existingIt->second.value = value;
+
+    if (isNamespaceOverride(existingIt->second.name)) {
+      // The declaration count is unchanged - this replaces a declaration rather than adding one -
+      // but the resolved value must still be republished in case it changed.
+      const Entity self = entt::to_entity(registry.storage<AttributesComponent>(), *this);
+      registry.ctx().get<xml::components::XMLNamespaceContext>().addNamespaceOverride(
+          self, existingIt->second.name, value);
+    }
+    return;
+  }
+
   xml::XMLQualifiedName nameAllocated(RcString(name.namespacePrefix), RcString(name.name));
 
   auto [xmlAttrStorageIt, _inserted] = attrNameStorage_.insert(nameAllocated);
   const xml::XMLQualifiedNameRef attrRef = *xmlAttrStorageIt;
 
-  auto [attrIt, newAttrInserted] = attributes_.emplace(attrRef, Storage(nameAllocated, value));
-  if (!newAttrInserted) {
-    attrIt->second.value = value;
-  }
+  attributes_.emplace(attrRef, Storage(nameAllocated, value));
 
   if (isNamespaceOverride(nameAllocated)) {
     // Count declarations present, not writes: overwriting an existing xmlns attribute replaces
     // the declaration rather than adding one, while removeAttribute only ever decrements once.
     // Counting writes leaves hasNamespaceOverrides() true after the last declaration is removed.
-    if (newAttrInserted) {
-      ++numNamespaceOverrides_;
-    }
+    ++numNamespaceOverrides_;
 
     const Entity self = entt::to_entity(registry.storage<AttributesComponent>(), *this);
     registry.ctx().get<xml::components::XMLNamespaceContext>().addNamespaceOverride(
