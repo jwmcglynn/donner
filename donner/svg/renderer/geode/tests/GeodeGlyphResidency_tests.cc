@@ -160,16 +160,13 @@ TEST(GeodeGlyphCacheTest, BeginFrameTrimsAtMostOncePerFrame) {
   InsertUsed(cache, MakeKey(/*glyphIndex=*/2), /*curveCount=*/1, /*frame=*/1);
   InsertUsed(cache, MakeKey(/*glyphIndex=*/3), /*curveCount=*/1, /*frame=*/1);
 
-  EXPECT_EQ(cache.beginFrame(/*frameIndex=*/2, /*maxEntries=*/2, /*maxEncodedBytes=*/1u << 20),
-            1u);
+  EXPECT_EQ(cache.beginFrame(/*frameIndex=*/2, /*maxEntries=*/2, /*maxEncodedBytes=*/1u << 20), 1u);
   // A second touch of the same frame must not trim again, even though the
   // renderer calls the accessor once per glyph occurrence.
-  EXPECT_EQ(cache.beginFrame(/*frameIndex=*/2, /*maxEntries=*/1, /*maxEncodedBytes=*/1u << 20),
-            0u);
+  EXPECT_EQ(cache.beginFrame(/*frameIndex=*/2, /*maxEntries=*/1, /*maxEncodedBytes=*/1u << 20), 0u);
   EXPECT_EQ(cache.size(), 2u);
 
-  EXPECT_EQ(cache.beginFrame(/*frameIndex=*/3, /*maxEntries=*/1, /*maxEncodedBytes=*/1u << 20),
-            1u);
+  EXPECT_EQ(cache.beginFrame(/*frameIndex=*/3, /*maxEntries=*/1, /*maxEncodedBytes=*/1u << 20), 1u);
   EXPECT_EQ(cache.size(), 1u);
 }
 

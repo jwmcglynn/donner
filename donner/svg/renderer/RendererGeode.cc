@@ -2196,8 +2196,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
     // becomes reusable at the NEXT merge, never inside a frame whose recorded
     // draws still read it. Gating here rather than at one draw entry point
     // covers the multi-document tile paths that never reach `draw()`.
-    device->countGlyphResidencyEvictions(cache->beginFrame(
-        currentFrameIndex, glyphCacheMaxEntries, glyphCacheMaxEncodedBytes));
+    device->countGlyphResidencyEvictions(
+        cache->beginFrame(currentFrameIndex, glyphCacheMaxEntries, glyphCacheMaxEncodedBytes));
     return cache;
   }
 
@@ -2370,9 +2370,9 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
     const wgpu::Buffer chunk = entry.slot.buffer;
     const uint32_t vertexCount = entry.encoded.boundingDrawVertexCount();
     const uint64_t clipVersion = encoder->clipStateVersion();
-    const PendingBatch::SceneInstance instance{
-        &entry.slot, &entry.encoded, &entry.outline, color,      FillRule::NonZero,
-        deviceFromGlyph, vertexCount, recordSlot,    recordCache};
+    const PendingBatch::SceneInstance instance{&entry.slot, &entry.encoded,    &entry.outline,
+                                               color,       FillRule::NonZero, deviceFromGlyph,
+                                               vertexCount, recordSlot,        recordCache};
 
     if (pendingBatch.has_value() && pendingBatch->mode == PendingBatch::Mode::Scene &&
         pendingBatch->sceneChunkBuffer == chunk &&
@@ -2602,9 +2602,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
       // no-op when the record is unchanged.
       for (const PendingBatch::SceneInstance& inst : batch.sceneInstances) {
         if (inst.slot != nullptr && inst.encoded != nullptr) {
-          (void)encoder->ensureResidentSceneRecord(*inst.slot, *inst.encoded, inst.color,
-                                                   inst.rule, inst.deviceFromLocal,
-                                                   inst.recordSlotOverride,
+          (void)encoder->ensureResidentSceneRecord(*inst.slot, *inst.encoded, inst.color, inst.rule,
+                                                   inst.deviceFromLocal, inst.recordSlotOverride,
                                                    inst.recordCacheOverride);
         }
       }
@@ -3513,8 +3512,7 @@ bool RendererGeode::sceneBatchingEnabledForTesting() {
   return kEnableSceneBatching;
 }
 
-void RendererGeode::setGlyphResidencyBudgetForTesting(size_t maxEntries,
-                                                      uint64_t maxEncodedBytes) {
+void RendererGeode::setGlyphResidencyBudgetForTesting(size_t maxEntries, uint64_t maxEncodedBytes) {
   impl_->glyphCacheMaxEntries = maxEntries;
   impl_->glyphCacheMaxEncodedBytes = maxEncodedBytes;
 }
@@ -3523,8 +3521,7 @@ size_t RendererGeode::residentGlyphCountForTesting(SVGDocument& document) {
   if (!impl_->device) {
     return 0;
   }
-  auto* cachePtr =
-      document.registry().ctx().find<std::shared_ptr<geode::GeodeGlyphCache>>();
+  auto* cachePtr = document.registry().ctx().find<std::shared_ptr<geode::GeodeGlyphCache>>();
   if (cachePtr == nullptr || !*cachePtr) {
     return 0;
   }
@@ -5156,8 +5153,7 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
   // Per-occurrence record storage for this element's solid-fill glyphs. The
   // ordinal advances across runs, so the element's persistent slots stay in
   // one consecutive range and a batch can cover the whole element.
-  Impl::TextRecordCursor textRecords =
-      impl_->beginTextRecords(registry, params.textRootEntity);
+  Impl::TextRecordCursor textRecords = impl_->beginTextRecords(registry, params.textRootEntity);
 
   for (size_t runIndex = 0; runIndex < runs.size(); ++runIndex) {
     const auto& run = runs[runIndex];

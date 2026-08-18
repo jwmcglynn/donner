@@ -653,8 +653,7 @@ struct GeoEncoder::Impl : public GeodeTextureEncoder::UniformScratch {
   bool ensureResidentSceneRecordImpl(GeodeResidentSlot& slot, const EncodedPath& encoded,
                                      const FillDrawArgs& args, const Transform2d& recordTransform,
                                      const GeodeRecordSlab::Slot* recordSlotOverride,
-                                     std::vector<uint8_t>* overrideRecordCache,
-                                     bool bakeTransform);
+                                     std::vector<uint8_t>* overrideRecordCache, bool bakeTransform);
 
   /// Gradient-paint extension: (re)upload `encoded` into the
   /// gradient slot's persistent combined buffer (same eight SSBO regions,
@@ -1907,13 +1906,10 @@ bool GeoEncoder::Impl::submitResidentFillDraw(GeodeResidentSlot& slot, const Enc
   return true;
 }
 
-bool GeoEncoder::Impl::ensureResidentSceneRecordImpl(GeodeResidentSlot& slot,
-                                                     const EncodedPath& encoded,
-                                                     const FillDrawArgs& args,
-                                                     const Transform2d& recordTransform,
-                                                     const GeodeRecordSlab::Slot* recordSlotOverride,
-                                                     std::vector<uint8_t>* overrideRecordCache,
-                                                     bool bakeTransform) {
+bool GeoEncoder::Impl::ensureResidentSceneRecordImpl(
+    GeodeResidentSlot& slot, const EncodedPath& encoded, const FillDrawArgs& args,
+    const Transform2d& recordTransform, const GeodeRecordSlab::Slot* recordSlotOverride,
+    std::vector<uint8_t>* overrideRecordCache, bool bakeTransform) {
   // Ensure the geometry is resident and current AND owned by THIS device.
   // Component removal is the primary invalidation; the pointer + fingerprint
   // guard catches the in-place stroke-slot rebuild (which replaces the encode
