@@ -9,6 +9,48 @@ const require = createRequire(import.meta.url);
 const testDirectory = path.dirname(fileURLToPath(import.meta.url));
 const repositoryRoot = path.resolve(testDirectory, "../../../..");
 
+test("Playwright version stays synchronized across package locks and browser metadata", () => {
+  const packageJson = JSON.parse(readFileSync(path.join(testDirectory, "package.json"), "utf8"));
+  const packageLock = JSON.parse(
+    readFileSync(path.join(testDirectory, "package-lock.json"), "utf8"),
+  );
+  const playwrightVersion = packageJson.devDependencies["@playwright/test"];
+  assert.match(playwrightVersion, /^\d+\.\d+\.\d+$/);
+  assert.equal(packageLock.packages[""].devDependencies["@playwright/test"], playwrightVersion);
+  for (const packageName of ["@playwright/test", "playwright", "playwright-core"]) {
+    assert.equal(
+      packageLock.packages[`node_modules/${packageName}`].version,
+      playwrightVersion,
+      `${packageName} in package-lock.json must match package.json`,
+    );
+  }
+
+  const pnpmLock = readFileSync(path.join(testDirectory, "pnpm-lock.yaml"), "utf8");
+  for (
+    const lockEntry of [
+      `specifier: ${playwrightVersion}`,
+      `version: ${playwrightVersion}`,
+      `'@playwright/test@${playwrightVersion}':`,
+      `playwright@${playwrightVersion}:`,
+      `playwright-core@${playwrightVersion}:`,
+    ]
+  ) {
+    assert.ok(pnpmLock.includes(lockEntry), `pnpm-lock.yaml is missing ${lockEntry}`);
+  }
+
+  const browserMetadataPath = path.join(
+    testDirectory,
+    `browsers.${playwrightVersion}.json`,
+  );
+  assert.ok(existsSync(browserMetadataPath), "browser metadata filename must match Playwright");
+  const browserMetadata = JSON.parse(readFileSync(browserMetadataPath, "utf8"));
+  assert.equal(browserMetadata.playwrightVersion, playwrightVersion);
+  assert.equal(
+    browserMetadata.comment,
+    `Pinned from playwright-core ${playwrightVersion}; update with the npm lock.`,
+  );
+});
+
 test("Bazel owns a hermetic no-window Chromium browser lane", () => {
   const moduleFile = readFileSync(path.join(repositoryRoot, "MODULE.bazel"), "utf8");
   assert.match(
@@ -188,17 +230,17 @@ test("CI discovers Firefox, WebKit, and real Safari compatibility regressions", 
     .replace(/\\\s*\n\s*/g, " ")
     .replace(/\s+/g, " ");
   const laneCommands = [
-    'run_lane "chromium-default" bash donner/editor/wasm/tests/run_tests.sh --headed',
-    'run_lane "firefox-geode-resize" npm --prefix donner/editor/wasm/tests' +
-      " run test:compatibility -- --project=firefox-geode-resize --headed",
-    'run_lane "webkit-geode-carousel" npm --prefix donner/editor/wasm/tests' +
-      " run test:compatibility -- --project=webkit-geode-carousel --headed",
-    'run_lane "firefox-composited-invariants" bash' +
-      " donner/editor/wasm/tests/run_tests.sh --headed" +
-      " --config=playwright.composited-firefox.config.js",
-    'run_lane "composited-chromium" bash' +
-      " donner/editor/wasm/tests/run_tests.sh --headed" +
-      " --config=playwright.composited-chromium.config.js",
+    "run_lane \"chromium-default\" bash donner/editor/wasm/tests/run_tests.sh --headed",
+    "run_lane \"firefox-geode-resize\" npm --prefix donner/editor/wasm/tests"
+    + " run test:compatibility -- --project=firefox-geode-resize --headed",
+    "run_lane \"webkit-geode-carousel\" npm --prefix donner/editor/wasm/tests"
+    + " run test:compatibility -- --project=webkit-geode-carousel --headed",
+    "run_lane \"firefox-composited-invariants\" bash"
+    + " donner/editor/wasm/tests/run_tests.sh --headed"
+    + " --config=playwright.composited-firefox.config.js",
+    "run_lane \"composited-chromium\" bash"
+    + " donner/editor/wasm/tests/run_tests.sh --headed"
+    + " --config=playwright.composited-chromium.config.js",
   ];
   let searchFrom = 0;
   for (const laneCommand of laneCommands) {
