@@ -1,9 +1,12 @@
 #include "tools/mcp-servers/editor-control/EditorControlSession.h"
 
+#include <algorithm>
+#include <array>
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <initializer_list>
 #include <optional>
 #include <sstream>
 #include <string>
@@ -12,6 +15,8 @@
 
 #include "donner/base/tests/TestTempDir.h"
 #include "donner/editor/repro/ReproFile.h"
+#include "donner/editor/tests/BitmapGoldenCompare.h"
+#include "donner/svg/renderer/Renderer.h"
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
 #include "nlohmann/json.hpp"
@@ -850,7 +855,7 @@ TEST(EditorControlSessionTest, TransformSelectorRotatesThroughHandleAndExposesAf
                                                         {"delta_y", 48.0},
                                                         {"frames", 2},
                                                         {"release", false},
-                                                        {"include_final_frame", false}});
+                                                        {"include_final_frame", true}});
   ASSERT_TRUE(rotate.body.value("ok", false)) << rotate.body.dump(2);
   EXPECT_EQ(rotate.body.value("gesture_kind", ""), "rotate");
   EXPECT_EQ(rotate.body.value("corner", ""), "top_right");
@@ -871,6 +876,117 @@ TEST(EditorControlSessionTest, TransformSelectorRotatesThroughHandleAndExposesAf
   EXPECT_NEAR(center.y, 30.0, 1e-6);
   EXPECT_NEAR(topRight.x, 40.0, 1e-6);
   EXPECT_NEAR(topRight.y, 40.0, 1e-6);
+
+  ASSERT_TRUE(lastFrame["stages"].is_array()) << lastFrame.dump(2);
+  ASSERT_FALSE(lastFrame["stages"].empty()) << lastFrame.dump(2);
+  const json& finalBitmap = lastFrame["stages"].back()["bitmap"];
+  ASSERT_TRUE(finalBitmap["dimensions"].is_object()) << finalBitmap.dump(2);
+  EXPECT_GT(finalBitmap["dimensions"].value("x", 0), 0) << finalBitmap.dump(2);
+  EXPECT_GT(finalBitmap["dimensions"].value("y", 0), 0) << finalBitmap.dump(2);
+  EXPECT_TRUE(finalBitmap.value("png_attached", false)) << finalBitmap.dump(2);
+}
+
+TEST(EditorControlSessionTest, HeadlessTileCompositionPreservesAffinePlacementAndAlpha) {
+  const auto makeBitmap = [](Vector2i dimensions, std::size_t rowBytes,
+                             std::initializer_list<std::array<std::uint8_t, 4>> pixels) {
+    svg::RendererBitmap bitmap;
+    bitmap.dimensions = dimensions;
+    bitmap.rowBytes = rowBytes;
+    bitmap.alphaType = svg::AlphaType::Unpremultiplied;
+    bitmap.pixels.resize(static_cast<std::size_t>(dimensions.y) * rowBytes, 0xa5u);
+    auto pixel = pixels.begin();
+    for (int y = 0; y < dimensions.y; ++y) {
+      for (int x = 0; x < dimensions.x; ++x, ++pixel) {
+        const std::size_t offset =
+            static_cast<std::size_t>(y) * rowBytes + static_cast<std::size_t>(x) * 4u;
+        std::copy(pixel->begin(), pixel->end(), bitmap.pixels.begin() + offset);
+      }
+    }
+    return bitmap;
+  };
+
+  const svg::RendererBitmap rotatedBitmap =
+      makeBitmap(Vector2i(2, 3), 12u,
+                 {std::array<std::uint8_t, 4>{255u, 0u, 0u, 255u},
+                  std::array<std::uint8_t, 4>{0u, 0u, 255u, 128u},
+                  std::array<std::uint8_t, 4>{255u, 255u, 0u, 255u},
+                  std::array<std::uint8_t, 4>{0u, 255u, 255u, 192u},
+                  std::array<std::uint8_t, 4>{255u, 0u, 255u, 64u},
+                  std::array<std::uint8_t, 4>{0u, 0u, 0u, 255u}});
+  const svg::RendererBitmap overlappingBitmap =
+      makeBitmap(Vector2i(2, 2), 8u,
+                 {std::array<std::uint8_t, 4>{255u, 128u, 0u, 128u},
+                  std::array<std::uint8_t, 4>{64u, 0u, 128u, 255u},
+                  std::array<std::uint8_t, 4>{0u, 255u, 0u, 96u},
+                  std::array<std::uint8_t, 4>{255u, 255u, 255u, 192u}});
+
+  Transform2d documentFromRotatedTexture(Transform2d::uninitialized);
+  documentFromRotatedTexture.data[0] = 0.0;
+  documentFromRotatedTexture.data[1] = 1.0;
+  documentFromRotatedTexture.data[2] = -1.0;
+  documentFromRotatedTexture.data[3] = 0.0;
+  documentFromRotatedTexture.data[4] = 3.0;
+  documentFromRotatedTexture.data[5] = 0.0;
+
+  RenderResult::CompositedPreview preview;
+  preview.tiles = {
+      RenderResult::CompositedTile{
+          .id = "rotated",
+          .generation = 1u,
+          .bitmap = rotatedBitmap,
+          .bitmapDimsPx = rotatedBitmap.dimensions,
+          .rasterCanvasSize = Vector2i(8, 8),
+          .canvasOffsetDoc = Vector2d(1.0, 1.0),
+          .bitmapDimsDoc = Vector2d(2.0, 3.0),
+          .documentFromCachedDocument = documentFromRotatedTexture,
+      },
+      RenderResult::CompositedTile{
+          .id = "overlap",
+          .generation = 1u,
+          .bitmap = overlappingBitmap,
+          .bitmapDimsPx = overlappingBitmap.dimensions,
+          .rasterCanvasSize = Vector2i(8, 8),
+          .canvasOffsetDoc = Vector2d(0.0, 2.0),
+          .bitmapDimsDoc = Vector2d(2.0, 2.0),
+      },
+  };
+
+  EditorControlSession::HeadlessTextureCache cache;
+  cache.uploadComposited(preview);
+  EditorControlSession::DisplayFrameSnapshot display{
+      .path = "tiles",
+      .hasCachedTiles = true,
+      .tiles = cache.tiles(),
+  };
+  const std::optional<svg::RendererBitmap> actual =
+      cache.composeDisplayFrame(display, Box2d::FromXYWH(0.0, 0.0, 8.0, 8.0), Vector2i(8, 8));
+  ASSERT_TRUE(actual.has_value());
+
+  svg::Renderer reference;
+  reference.beginFrame(svg::RenderViewport{
+      .size = Vector2d(8.0, 8.0),
+      .devicePixelRatio = 1.0,
+  });
+  Transform2d outputFromRotatedTexture(Transform2d::uninitialized);
+  outputFromRotatedTexture.data[0] = 0.0;
+  outputFromRotatedTexture.data[1] = 1.0;
+  outputFromRotatedTexture.data[2] = -1.0;
+  outputFromRotatedTexture.data[3] = 0.0;
+  outputFromRotatedTexture.data[4] = 2.0;
+  outputFromRotatedTexture.data[5] = 1.0;
+  reference.setTransform(outputFromRotatedTexture);
+  reference.drawBitmap(rotatedBitmap, svg::ImageParams{
+                                          .targetRect = Box2d::FromXYWH(0.0, 0.0, 2.0, 3.0),
+                                      });
+  reference.setTransform(Transform2d::Translate(0.0, 2.0));
+  reference.drawBitmap(overlappingBitmap, svg::ImageParams{
+                                              .targetRect = Box2d::FromXYWH(0.0, 0.0, 2.0, 2.0),
+                                          });
+  reference.endFrame();
+  const svg::RendererBitmap expected = reference.takeSnapshot();
+
+  tests::CompareBitmapToBitmap(*actual, expected, "headless_affine_tile_composition",
+                               tests::PixelmatchIdentityParams());
 }
 
 TEST(EditorControlSessionTest, SplashOThenRDragKeepsStableSplitLayerPaintOrder) {

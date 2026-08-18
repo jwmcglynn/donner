@@ -118,6 +118,17 @@ struct PresentedPixelRect {
     const std::optional<PresentedDragBaseline>& dragBaseline);
 
 /**
+ * Recover the affine transform that maps source texture pixels onto a presented tile quad.
+ *
+ * @param tileQuad Presented output-space tile corners.
+ * @param textureSizePx Source texture dimensions in pixels.
+ * @return Transform from texture pixels to output coordinates, or `std::nullopt` for invalid
+ *   inputs.
+ */
+[[nodiscard]] std::optional<Transform2d> ComputePresentedOutputFromTextureTransform(
+    const PresentedTileQuad& tileQuad, const Vector2i& textureSizePx);
+
+/**
  * Compute the output-space rectangle for a presented tile.
  *
  * @param tile Geometry for the tile being presented.

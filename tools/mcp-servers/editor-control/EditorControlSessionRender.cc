@@ -6,7 +6,6 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
-#include <limits>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -99,75 +98,6 @@ json DirtyFlagsToJson(std::uint16_t flags) {
     }
   }
   return out;
-}
-
-std::uint8_t PremultiplyChannel(std::uint8_t channel, std::uint8_t alpha,
-                                svg::AlphaType alphaType) {
-  if (alphaType == svg::AlphaType::Premultiplied) {
-    return channel;
-  }
-  return static_cast<std::uint8_t>((static_cast<int>(channel) * static_cast<int>(alpha) + 127) /
-                                   255);
-}
-
-std::uint8_t BlendChannel(std::uint8_t src, std::uint8_t dst, std::uint8_t srcAlpha) {
-  const int invAlpha = 255 - static_cast<int>(srcAlpha);
-  return static_cast<std::uint8_t>(
-      std::min(255, static_cast<int>(src) + (static_cast<int>(dst) * invAlpha + 127) / 255));
-}
-
-void BlendBitmapOver(svg::RendererBitmap* destination, const svg::RendererBitmap& source,
-                     int targetX, int targetY, int targetWidth, int targetHeight) {
-  if (destination == nullptr || destination->empty() || source.empty() || targetWidth <= 0 ||
-      targetHeight <= 0) {
-    return;
-  }
-
-  const std::size_t sourceRowBytes =
-      source.rowBytes > 0 ? source.rowBytes : static_cast<std::size_t>(source.dimensions.x) * 4;
-  const std::size_t destinationRowBytes = destination->rowBytes;
-  for (int y = 0; y < targetHeight; ++y) {
-    const int dy = targetY + y;
-    if (dy < 0 || dy >= destination->dimensions.y) {
-      continue;
-    }
-    const int sy =
-        std::clamp(static_cast<int>((static_cast<int64_t>(y) * source.dimensions.y) / targetHeight),
-                   0, source.dimensions.y - 1);
-    for (int x = 0; x < targetWidth; ++x) {
-      const int dx = targetX + x;
-      if (dx < 0 || dx >= destination->dimensions.x) {
-        continue;
-      }
-      const int sx = std::clamp(
-          static_cast<int>((static_cast<int64_t>(x) * source.dimensions.x) / targetWidth), 0,
-          source.dimensions.x - 1);
-      const std::size_t sourceIndex =
-          static_cast<std::size_t>(sy) * sourceRowBytes + static_cast<std::size_t>(sx) * 4;
-      const std::size_t destinationIndex =
-          static_cast<std::size_t>(dy) * destinationRowBytes + static_cast<std::size_t>(dx) * 4;
-      if (sourceIndex + 3 >= source.pixels.size() ||
-          destinationIndex + 3 >= destination->pixels.size()) {
-        continue;
-      }
-
-      const std::uint8_t srcAlpha = source.pixels[sourceIndex + 3];
-      const std::uint8_t srcRed =
-          PremultiplyChannel(source.pixels[sourceIndex], srcAlpha, source.alphaType);
-      const std::uint8_t srcGreen =
-          PremultiplyChannel(source.pixels[sourceIndex + 1], srcAlpha, source.alphaType);
-      const std::uint8_t srcBlue =
-          PremultiplyChannel(source.pixels[sourceIndex + 2], srcAlpha, source.alphaType);
-      destination->pixels[destinationIndex] =
-          BlendChannel(srcRed, destination->pixels[destinationIndex], srcAlpha);
-      destination->pixels[destinationIndex + 1] =
-          BlendChannel(srcGreen, destination->pixels[destinationIndex + 1], srcAlpha);
-      destination->pixels[destinationIndex + 2] =
-          BlendChannel(srcBlue, destination->pixels[destinationIndex + 2], srcAlpha);
-      destination->pixels[destinationIndex + 3] =
-          BlendChannel(srcAlpha, destination->pixels[destinationIndex + 3], srcAlpha);
-    }
-  }
 }
 
 std::string CompositeTileKindName(
@@ -306,11 +236,11 @@ std::optional<svg::RendererBitmap> EditorControlSession::HeadlessTextureCache::c
     return std::nullopt;
   }
 
-  svg::RendererBitmap composed;
-  composed.dimensions = canvasSize;
-  composed.rowBytes = static_cast<std::size_t>(canvasSize.x) * 4;
-  composed.alphaType = svg::AlphaType::Premultiplied;
-  composed.pixels.resize(static_cast<std::size_t>(canvasSize.y) * composed.rowBytes, 0);
+  svg::Renderer renderer;
+  renderer.beginFrame(svg::RenderViewport{
+      .size = Vector2d(static_cast<double>(canvasSize.x), static_cast<double>(canvasSize.y)),
+      .devicePixelRatio = 1.0,
+  });
 
   const double pixelsPerDocX = static_cast<double>(canvasSize.x) / viewBox.size().x;
   const double pixelsPerDocY = static_cast<double>(canvasSize.y) / viewBox.size().y;
@@ -325,22 +255,29 @@ std::optional<svg::RendererBitmap> EditorControlSession::HeadlessTextureCache::c
       continue;
     }
 
-    const std::optional<PresentedTileRect> tileRect = ComputePresentedTileRect(
+    const std::optional<PresentedTileQuad> tileQuad = ComputePresentedTileQuad(
         PresentedGeometryFromDisplayTile(tile), canvasPixelsFromCanvasTransform, dragBaseline);
-    if (!tileRect.has_value()) {
+    if (!tileQuad.has_value()) {
       continue;
     }
-    const std::optional<PresentedPixelRect> pixelRect =
-        RoundPresentedTileRectToPixelRect(*tileRect);
-    if (!pixelRect.has_value()) {
+    const svg::RendererBitmap& bitmap = tileIt->second.bitmap;
+    const std::optional<Transform2d> canvasPixelsFromTexture =
+        ComputePresentedOutputFromTextureTransform(*tileQuad, bitmap.dimensions);
+    if (!canvasPixelsFromTexture.has_value()) {
       continue;
     }
 
-    BlendBitmapOver(&composed, tileIt->second.bitmap, pixelRect->x, pixelRect->y, pixelRect->width,
-                    pixelRect->height);
+    renderer.setTransform(*canvasPixelsFromTexture);
+    renderer.drawBitmap(
+        bitmap, svg::ImageParams{
+                    .targetRect =
+                        Box2d(Vector2d::Zero(), Vector2d(static_cast<double>(bitmap.dimensions.x),
+                                                         static_cast<double>(bitmap.dimensions.y))),
+                });
   }
 
-  return composed;
+  renderer.endFrame();
+  return renderer.takeSnapshot();
 }
 
 ToolCallResult EditorControlSession::renderFrameTool(const json& arguments) {
@@ -559,9 +496,11 @@ bool EditorControlSession::renderCurrentFrame(std::vector<CapturedRenderResult>*
   while (std::chrono::steady_clock::now() < deadline) {
     if (auto result = asyncRenderer_.pollResult(); result.has_value()) {
       DisplayFrameSnapshot displayFrame = recordDisplayFrame(*result);
+      std::optional<svg::RendererBitmap> presentedBitmap = composeDisplayFrameBitmap(displayFrame);
       results->push_back(CapturedRenderResult{
           .renderResult = std::move(*result),
           .displayFrame = std::move(displayFrame),
+          .presentedBitmap = std::move(presentedBitmap),
       });
       // A completed render can leave a deferred first-frame cache warmup queued on the
       // worker. That warmup traverses the document from the worker thread, while the next
