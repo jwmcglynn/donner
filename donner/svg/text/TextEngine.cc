@@ -452,7 +452,8 @@ ByteIndexMappings buildByteIndexMappings(std::string_view spanText) {
 
 void applyTextLength(std::vector<TextRun>& runs, const components::ComputedTextComponent& text,
                      const std::vector<RunPenExtent>& runExtents, const TextLayoutParams& params,
-                     bool vertical, double currentPenX, double currentPenY) {
+                     bool vertical, double currentPenX, double currentPenY,
+                     TextLengthTraversalStats* traversalStats) {
   // Check if any span has per-span textLength.
   bool anySpanHasTextLength = false;
   for (const auto& span : text.spans) {
@@ -465,6 +466,9 @@ void applyTextLength(std::vector<TextRun>& runs, const components::ComputedTextC
   // ── Per-span textLength ───────────────────────────────────────────────
   if (anySpanHasTextLength) {
     for (size_t i = 0; i < runs.size() && i < text.spans.size(); ++i) {
+      if (traversalStats) {
+        ++traversalStats->runVisits;
+      }
       auto& run = runs[i];
       const auto& span = text.spans[i];
       if (!span.textLength.has_value() || run.glyphs.empty()) {
@@ -491,6 +495,9 @@ void applyTextLength(std::vector<TextRun>& runs, const components::ComputedTextC
         const size_t numGaps = run.glyphs.size() > 1 ? run.glyphs.size() - 1 : 1;
         const double extraPerGap = (targetLength - naturalLength) / static_cast<double>(numGaps);
         for (size_t gi = 0; gi < run.glyphs.size(); ++gi) {
+          if (traversalStats) {
+            ++traversalStats->glyphVisits;
+          }
           if (vertical) {
             run.glyphs[gi].yPosition += extraPerGap * static_cast<double>(gi);
           } else {
@@ -500,6 +507,9 @@ void applyTextLength(std::vector<TextRun>& runs, const components::ComputedTextC
       } else {
         const double scaleFactor = targetLength / naturalLength;
         for (auto& g : run.glyphs) {
+          if (traversalStats) {
+            ++traversalStats->glyphVisits;
+          }
           if (vertical) {
             g.yPosition = runStartPos + (g.yPosition - runStartPos) * scaleFactor;
             g.yAdvance *= scaleFactor;
@@ -517,6 +527,9 @@ void applyTextLength(std::vector<TextRun>& runs, const components::ComputedTextC
         // The adjusted current position carries forward until an absolute inline reset.
         for (size_t following = i + 1; following < runs.size() && following < text.spans.size();
              ++following) {
+          if (traversalStats) {
+            ++traversalStats->runVisits;
+          }
           const auto& followingSpan = text.spans[following];
           if (runs[following].onPath) {
             break;
@@ -525,6 +538,9 @@ void applyTextLength(std::vector<TextRun>& runs, const components::ComputedTextC
           const auto& inlinePositions = vertical ? followingSpan.yList : followingSpan.xList;
           std::optional<size_t> resetCharIndex;
           for (size_t charIndex = 0; charIndex < inlinePositions.size(); ++charIndex) {
+            if (traversalStats) {
+              ++traversalStats->inlinePositionVisits;
+            }
             if (inlinePositions[charIndex].has_value()) {
               resetCharIndex = charIndex;
               break;
@@ -538,9 +554,15 @@ void applyTextLength(std::vector<TextRun>& runs, const components::ComputedTextC
             }
             const std::string_view followingText(followingSpan.text.data() + followingSpan.start,
                                                  followingSpan.end - followingSpan.start);
+            if (traversalStats) {
+              traversalStats->mappedTextBytes += followingText.size();
+            }
             mappings = buildByteIndexMappings(followingText);
           }
           for (auto& glyph : runs[following].glyphs) {
+            if (traversalStats) {
+              ++traversalStats->glyphVisits;
+            }
             if (resetCharIndex.has_value()) {
               const size_t charIndex = glyph.cluster < mappings->byteToCharIdx.size()
                                            ? mappings->byteToCharIdx[glyph.cluster]

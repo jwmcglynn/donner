@@ -2,6 +2,7 @@
 /// @file
 /// Internal helpers for TextEngine layout. Exposed in a header for unit testing.
 
+#include <cstddef>
 #include <optional>
 #include <string_view>
 #include <vector>
@@ -61,10 +62,19 @@ struct RunPenExtent {
   double endY = 0.0;    ///< Pen Y position at the end of the run.
 };
 
+/// Optional operation counts for deterministic textLength traversal complexity tests.
+struct TextLengthTraversalStats {
+  size_t runVisits = 0;             ///< Run visits in the per-span adjustment phase.
+  size_t glyphVisits = 0;           ///< Glyph visits in the per-span adjustment phase.
+  size_t inlinePositionVisits = 0;  ///< Inline-position entries inspected for resets.
+  size_t mappedTextBytes = 0;       ///< Span text bytes mapped to SVG character indices.
+};
+
 /// Apply per-span and global textLength adjustments to positioned runs.
 void applyTextLength(std::vector<TextRun>& runs, const components::ComputedTextComponent& text,
                      const std::vector<RunPenExtent>& runExtents, const TextLayoutParams& params,
-                     bool vertical, double currentPenX, double currentPenY);
+                     bool vertical, double currentPenX, double currentPenY,
+                     TextLengthTraversalStats* traversalStats = nullptr);
 
 /// Fix up chunk text-anchors and apply per-chunk text-anchor adjustment.
 void applyTextAnchor(std::vector<TextRun>& runs, std::vector<ChunkBoundary>& chunkBoundaries,
@@ -91,8 +101,7 @@ void applyTextAnchor(std::vector<TextRun>& runs, std::vector<ChunkBoundary>& chu
 /// @param measurePx The inline-size measure in pixels (must be > 0).
 /// @param lineHeightPx Vertical advance between line baselines in pixels.
 /// @return true if wrapping was applied.
-bool applyInlineSizeWrap(std::vector<TextRun>& runs,
-                         const components::ComputedTextComponent& text,
+bool applyInlineSizeWrap(std::vector<TextRun>& runs, const components::ComputedTextComponent& text,
                          const TextLayoutParams& params, double measurePx, double lineHeightPx);
 
 /// Compute per-span baseline-shift in pixels, including OS/2 sub/super metrics
