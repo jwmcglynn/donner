@@ -6,6 +6,7 @@
 #include <array>
 #include <atomic>
 #include <cstdint>
+#include <cstring>
 #include <memory>
 #include <vector>
 
@@ -13,6 +14,7 @@
 #include "donner/base/Path.h"
 #include "donner/base/Transform.h"
 #include "donner/css/Color.h"
+#include "donner/svg/renderer/geode/GeodeBufferPool.h"
 #include "donner/svg/renderer/geode/GeodeCallbackState.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
 #include "donner/svg/renderer/geode/GeodeGpuWait.h"
@@ -332,6 +334,308 @@ TEST_F(GeoEncoderTest, RecordSlabFreeListSurvivesChunkGrowth) {
     EXPECT_FALSE(live.buffer == reusedA.buffer && live.offset == reusedA.offset);
     EXPECT_FALSE(live.buffer == reusedB.buffer && live.offset == reusedB.offset);
   }
+}
+
+/// The scene-batch bind-group cache lives on the device, which outlives the
+/// documents drawn through it (renderers lease devices from an idle pool).
+/// A destroyed document's slabs release their buffer handles, and those
+/// addresses go straight back to the allocator, so a later document's
+/// buffers can land on them. Small documents make that collision easy -
+/// same chunk size, record offset 0, same record-span byte count - so a key
+/// built from handle addresses could compare EQUAL across two unrelated
+/// documents and the lookup would return the dead document's bind group,
+/// drawing its records and geometry instead. Buffer ids must therefore never
+/// repeat, no matter what the allocator does with the handles.
+TEST_F(GeoEncoderTest, BufferIdsAreNeverReusedAcrossSlabGenerations) {
+  struct SlabGeneration {
+    WGPUBuffer chunkHandle = nullptr;
+    WGPUBuffer recordHandle = nullptr;
+    WGPUBuffer uniformHandle = nullptr;
+    uint64_t chunkId = 0;
+    uint64_t recordId = 0;
+    uint64_t uniformId = 0;
+  };
+
+  // One document's worth of slabs, destroyed before returning: exactly the
+  // lifetime a rendered-and-closed document has.
+  const auto renderOneDocument = [this]() {
+    geode::GeodeResidentSlab geometry(device_->deviceId());
+    geode::GeodeRecordSlab records(device_->deviceId());
+
+    geode::GeodeResidentSlab::Allocation geometryAlloc;
+    EXPECT_TRUE(geometry.allocate(*device_, 4096, 256, geometryAlloc));
+    geode::GeodeRecordSlab::Slot recordSlot;
+    EXPECT_TRUE(records.allocateSlot(*device_, recordSlot));
+    const uint32_t uniformBytes[4] = {1u, 2u, 3u, 4u};
+    const geode::GeodeRecordSlab::BatchUniformHandle uniform =
+        records.acquireBatchUniform(*device_, uniformBytes, sizeof(uniformBytes));
+
+    SlabGeneration out;
+    out.chunkHandle = geometryAlloc.buffer;
+    out.recordHandle = recordSlot.buffer;
+    out.uniformHandle = uniform.buffer;
+    out.chunkId = geometryAlloc.bufferId;
+    out.recordId = recordSlot.bufferId;
+    out.uniformId = uniform.bufferId;
+    return out;
+  };
+
+  const SlabGeneration first = renderOneDocument();
+  const SlabGeneration second = renderOneDocument();
+
+  // 0 is the "no buffer" sentinel and must never be handed out.
+  EXPECT_NE(first.chunkId, 0u);
+  EXPECT_NE(first.recordId, 0u);
+  EXPECT_NE(first.uniformId, 0u);
+
+  EXPECT_NE(first.chunkId, second.chunkId);
+  EXPECT_NE(first.recordId, second.recordId);
+  EXPECT_NE(first.uniformId, second.uniformId);
+
+  // Two keys that agree on every size and offset - the shape two small
+  // documents rendered back to back produce - must stay distinct. Under the
+  // map's ordering, "distinct" means one sorts before the other.
+  const auto makeKey = [](const SlabGeneration& generation) {
+    geode::GeodeDevice::SceneBatchBindGroupKey key;
+    key.uniformBufferId = generation.uniformId;
+    key.uniformOffset = 0;
+    key.uniformSize = sizeof(geode::InstanceRecord);
+    key.chunkBufferId = generation.chunkId;
+    key.chunkBytes = 1u << 20;
+    key.recordBufferId = generation.recordId;
+    key.recordOffset = 0;
+    key.recordBytes = 2 * sizeof(geode::InstanceRecord);
+    return key;
+  };
+  const geode::GeodeDevice::SceneBatchBindGroupKey firstKey = makeKey(first);
+  const geode::GeodeDevice::SceneBatchBindGroupKey secondKey = makeKey(second);
+  EXPECT_TRUE(firstKey < secondKey || secondKey < firstKey)
+      << "Two documents' scene-batch keys collided; the second document would "
+         "draw the first's records and geometry";
+
+  // Within one slab generation the ids DO have to be stable, or the cache
+  // would miss every frame and the batched draw would rebuild its bind group
+  // each time.
+  geode::GeodeRecordSlab records(device_->deviceId());
+  geode::GeodeRecordSlab::Slot slotA;
+  geode::GeodeRecordSlab::Slot slotB;
+  ASSERT_TRUE(records.allocateSlot(*device_, slotA));
+  ASSERT_TRUE(records.allocateSlot(*device_, slotB));
+  ASSERT_EQ(slotA.buffer, slotB.buffer) << "Fixture must keep both slots in one chunk";
+  EXPECT_EQ(slotA.bufferId, slotB.bufferId);
+}
+
+/// End-to-end guard on the scene-batch bind-group cache lookup itself.
+///
+/// `BufferIdsAreNeverReusedAcrossSlabGenerations` pins the ids, but nothing
+/// forces `fillPathSceneBatch` to actually build its key out of them: keying
+/// on the `WGPUBuffer` handle addresses instead still passes every other test
+/// in this suite, every golden, and the whole resvg suite on any machine
+/// whose allocator happens not to recycle the handles. That is precisely the
+/// hole the original defect lived in, so the cache lookup gets its own
+/// assertion.
+///
+/// Two slab generations model two documents rendered through one pooled
+/// device, shaped so their bindings agree on everything the key can see -
+/// same chunk size, record offset 0, same record-span byte count, same
+/// uniform bytes. The first generation is fully destroyed before the second
+/// allocates, which is what frees the handle addresses for reuse. Every
+/// generation's first batch must MISS (one `createBindGroup`), because it
+/// binds different buffers; an immediate repeat within a generation must HIT
+/// (zero), because it binds the same ones.
+TEST_F(GeoEncoderTest, SceneBatchBindGroupCacheDistinguishesSlabGenerations) {
+  // One document's slabs, plus the two record slots its batch draws.
+  struct Generation {
+    std::shared_ptr<geode::GeodeResidentSlab> geometry;
+    std::shared_ptr<geode::GeodeRecordSlab> records;
+    geode::GeodeResidentSlab::Allocation chunk;
+    geode::GeodeRecordSlab::Slot recordSlots[2];
+  };
+
+  constexpr uint32_t kInstanceCount = 2;
+
+  const auto makeGeneration = [this]() {
+    Generation generation;
+    generation.geometry = std::make_shared<geode::GeodeResidentSlab>(device_->deviceId());
+    generation.records = std::make_shared<geode::GeodeRecordSlab>(device_->deviceId());
+    // 4 KiB of geometry is enough to own a chunk; the chunk's SIZE is what
+    // the key sees, and the slab's initial chunk is the same for every
+    // generation.
+    EXPECT_TRUE(generation.geometry->allocate(*device_, 4096, 256, generation.chunk));
+    for (uint32_t i = 0; i < kInstanceCount; ++i) {
+      EXPECT_TRUE(generation.records->allocateSlot(*device_, generation.recordSlots[i]));
+    }
+
+    // Populate the records so the batch is a real draw rather than a draw
+    // over uninitialized storage. Identity transform, a small quad bounding
+    // polygon, and zero band counts, so the shader's band-count gates stop
+    // before dereferencing the (empty) geometry chunk.
+    for (uint32_t i = 0; i < kInstanceCount; ++i) {
+      geode::InstanceRecord record = {};
+      record.transformRow0[0] = 1.0f;
+      record.transformRow1[1] = 1.0f;
+      record.color[1] = 0.5f;
+      record.color[3] = 1.0f;
+      record.boundingVertexCount = 4;
+      const float quad[8] = {8.0f, 8.0f, 24.0f, 8.0f, 24.0f, 24.0f, 8.0f, 24.0f};
+      std::memcpy(record.boundingVertices, quad, sizeof(quad));
+      device_->queue().writeBuffer(generation.recordSlots[i].buffer,
+                                   generation.recordSlots[i].offset, &record,
+                                   sizeof(record));
+    }
+    return generation;
+  };
+
+  const auto bindingFor = [](const Generation& generation) {
+    GeoEncoder::SceneBatchBinding binding = {};
+    binding.chunkBuffer = generation.chunk.buffer;
+    binding.recordBuffer = generation.recordSlots[0].buffer;
+    binding.chunkBufferId = generation.chunk.bufferId;
+    binding.recordBufferId = generation.recordSlots[0].bufferId;
+    binding.firstRecordOffset = generation.recordSlots[0].offset;
+    binding.instanceCount = kInstanceCount;
+    binding.vertexCount = 6;
+    binding.recordSlab = generation.records.get();
+    return binding;
+  };
+
+  geode::GeodeCounters counters;
+  device_->setCounters(&counters);
+  // The device is shared process-wide by this fixture, so the counters must
+  // come back off however this test exits.
+  struct CounterScope {
+    geode::GeodeDevice* device;
+    ~CounterScope() { device->setCounters(nullptr); }
+  } counterScope{device_.get()};
+
+  // Draw one generation's batch twice through a fresh encoder, and report the
+  // `createBindGroup` calls each of the two batches caused.
+  const auto drawGeneration = [&](const Generation& generation, uint64_t& firstBatchCreates,
+                                  uint64_t& repeatBatchCreates) {
+    GeoEncoder encoder(*device_, *pipeline_, *gradientPipeline_, *imagePipeline_, target_);
+    encoder.clear(css::RGBA(0, 0, 0, 0));
+
+    const GeoEncoder::SceneBatchBinding binding = bindingFor(generation);
+    const uint64_t beforeFirst = counters.bindgroupCreates;
+    encoder.fillPathSceneBatch(css::RGBA(0, 128, 0, 255), FillRule::NonZero, binding);
+    firstBatchCreates = counters.bindgroupCreates - beforeFirst;
+
+    const uint64_t beforeRepeat = counters.bindgroupCreates;
+    encoder.fillPathSceneBatch(css::RGBA(0, 128, 0, 255), FillRule::NonZero, binding);
+    repeatBatchCreates = counters.bindgroupCreates - beforeRepeat;
+
+    encoder.finish();
+  };
+
+  // Several generations, because a handle address only becomes reusable once
+  // its owner is gone: one round is a single roll of the allocator's dice,
+  // and a key built from addresses has to survive every one of them.
+  constexpr int kGenerations = 8;
+  for (int round = 0; round < kGenerations; ++round) {
+    uint64_t firstBatchCreates = 0;
+    uint64_t repeatBatchCreates = 0;
+    {
+      const Generation generation = makeGeneration();
+      drawGeneration(generation, firstBatchCreates, repeatBatchCreates);
+    }
+    // The generation (and its buffers) are released here, before the next
+    // round allocates.
+
+    EXPECT_EQ(firstBatchCreates, 1u)
+        << "Round " << round
+        << ": this generation's batch binds buffers no earlier generation owned, so its "
+           "bind-group lookup must miss. A hit means the cache matched a dead generation's "
+           "entry and this batch drew the previous generation's records and geometry.";
+    EXPECT_EQ(repeatBatchCreates, 0u)
+        << "Round " << round
+        << ": repeating the identical batch must reuse the cached bind group.";
+  }
+}
+
+/// Companion to the slab-generation test above, and the half of the guard
+/// that does not depend on the allocator at all.
+///
+/// The encoder's bump arenas hand their buffers back to a `GeodeBufferPool`
+/// when they are destroyed, and the next encoder reacquires the very same
+/// buffer. So two batches drawn through two encoders over ONE generation of
+/// slabs agree on every byte a bind-group key can see - same chunk, same
+/// record span, same arena buffer at the same offset and size - and differ
+/// only in the arena's identity, which is re-stamped on every growth because
+/// the recycled buffer's contents start over. The second batch must still
+/// miss. `bufferCreates == 0` on the second batch is what proves the pool
+/// really did hand back the same buffer, so this test cannot quietly stop
+/// testing anything.
+TEST_F(GeoEncoderTest, SceneBatchBindGroupCacheDistinguishesRecycledArenaUniforms) {
+  auto geometry = std::make_shared<geode::GeodeResidentSlab>(device_->deviceId());
+  auto records = std::make_shared<geode::GeodeRecordSlab>(device_->deviceId());
+
+  geode::GeodeResidentSlab::Allocation chunk;
+  ASSERT_TRUE(geometry->allocate(*device_, 4096, 256, chunk));
+  geode::GeodeRecordSlab::Slot recordSlot;
+  ASSERT_TRUE(records->allocateSlot(*device_, recordSlot));
+
+  geode::InstanceRecord record = {};
+  record.transformRow0[0] = 1.0f;
+  record.transformRow1[1] = 1.0f;
+  record.color[1] = 0.5f;
+  record.color[3] = 1.0f;
+  record.boundingVertexCount = 4;
+  const float quad[8] = {8.0f, 8.0f, 24.0f, 8.0f, 24.0f, 24.0f, 8.0f, 24.0f};
+  std::memcpy(record.boundingVertices, quad, sizeof(quad));
+  device_->queue().writeBuffer(recordSlot.buffer, recordSlot.offset, &record, sizeof(record));
+
+  // A null `recordSlab` routes the batch uniform through the encoder's
+  // per-frame arena instead of the slab's persistent table, which is the
+  // allocation the buffer pool recycles.
+  GeoEncoder::SceneBatchBinding binding = {};
+  binding.chunkBuffer = chunk.buffer;
+  binding.recordBuffer = recordSlot.buffer;
+  binding.chunkBufferId = chunk.bufferId;
+  binding.recordBufferId = recordSlot.bufferId;
+  binding.firstRecordOffset = recordSlot.offset;
+  binding.instanceCount = 1;
+  binding.vertexCount = 6;
+  binding.recordSlab = nullptr;
+
+  geode::GeodeCounters counters;
+  device_->setCounters(&counters);
+  struct CounterScope {
+    geode::GeodeDevice* device;
+    ~CounterScope() { device->setCounters(nullptr); }
+  } counterScope{device_.get()};
+
+  GeodeBufferPool pool;
+  const auto drawOneEncoder = [&](uint64_t& bindGroupCreates, uint64_t& bufferCreates) {
+    GeoEncoder encoder(*device_, *pipeline_, *gradientPipeline_, *imagePipeline_, target_);
+    encoder.setBufferPool(&pool);
+    encoder.clear(css::RGBA(0, 0, 0, 0));
+
+    const uint64_t bindGroupsBefore = counters.bindgroupCreates;
+    const uint64_t buffersBefore = counters.bufferCreates;
+    encoder.fillPathSceneBatch(css::RGBA(0, 128, 0, 255), FillRule::NonZero, binding);
+    bindGroupCreates = counters.bindgroupCreates - bindGroupsBefore;
+    bufferCreates = counters.bufferCreates - buffersBefore;
+
+    encoder.finish();
+    // The encoder is destroyed here, releasing its arena buffer into `pool`.
+  };
+
+  uint64_t firstBindGroups = 0;
+  uint64_t firstBuffers = 0;
+  drawOneEncoder(firstBindGroups, firstBuffers);
+  EXPECT_EQ(firstBindGroups, 1u);
+  ASSERT_GE(firstBuffers, 1u) << "The first batch must grow the uniform arena";
+
+  uint64_t secondBindGroups = 0;
+  uint64_t secondBuffers = 0;
+  drawOneEncoder(secondBindGroups, secondBuffers);
+  ASSERT_EQ(secondBuffers, 0u)
+      << "Fixture precondition: the second encoder must reacquire the first encoder's arena "
+         "buffer from the pool, otherwise this test is not exercising a recycled buffer";
+  EXPECT_EQ(secondBindGroups, 1u)
+      << "The recycled arena buffer holds a different uniform allocation than the one the "
+         "cached bind group was built over, so the lookup must miss. A hit means the key is "
+         "built from the buffer's handle rather than its identity.";
 }
 
 TEST_F(GeoEncoderTest, ArenaGrowthKeepsEarlierGridBinding) {
