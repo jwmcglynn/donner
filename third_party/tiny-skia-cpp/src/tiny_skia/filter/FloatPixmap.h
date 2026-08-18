@@ -186,7 +186,8 @@ class FloatPixmap {
 
       // Truncation toward zero is what the scalar cast to uint8 does. The
       // conversion's saturation only applies to inputs the clamp already
-      // removed.
+      // removed, and its one remaining special case is NaN, which the clamp
+      // passes through and this conversion maps to zero.
       const v128_t u0 = wasm_u32x4_trunc_sat_f32x4(c0);
       const v128_t u1 = wasm_u32x4_trunc_sat_f32x4(c1);
       const v128_t u2 = wasm_u32x4_trunc_sat_f32x4(c2);
@@ -223,8 +224,12 @@ class FloatPixmap {
       const __m128i u2 = _mm_cvttps_epi32(c2);
       const __m128i u3 = _mm_cvttps_epi32(c3);
 
-      // Narrow 32->16->8. Every lane is already in [0, 255], so the saturating
-      // packs never actually saturate.
+      // Narrow 32->16->8. A lane that came from a finite value is already in
+      // [0, 255] and both packs leave it alone. A NaN lane is the one case that
+      // does saturate, and it has to: the clamp passes NaN through, the
+      // conversion turns it into INT_MIN, the signed pack clamps that to
+      // -32768, and the unsigned pack clamps that to 0. That is the same byte
+      // the wasm128 branch's saturating conversion produces for NaN.
       const __m128i lo = _mm_packs_epi32(u0, u1);
       const __m128i hi = _mm_packs_epi32(u2, u3);
       _mm_storeu_si128(reinterpret_cast<__m128i*>(&bytes[i]), _mm_packus_epi16(lo, hi));

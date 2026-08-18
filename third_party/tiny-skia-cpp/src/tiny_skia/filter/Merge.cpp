@@ -213,3 +213,5 @@ void merge(std::span<const FloatPixmap* const> layers, FloatPixmap& dst) {
 }
 
 }  // namespace tiny_skia::filter
+
+#undef TINY_SKIA_FILTER_MERGE_VECTOR

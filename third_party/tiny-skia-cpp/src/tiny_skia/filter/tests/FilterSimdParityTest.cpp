@@ -10,6 +10,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <span>
 #include <vector>
 
@@ -45,6 +46,22 @@ constexpr bool kExactScalarParity = false;
 #else
 constexpr bool kExactScalarParity = true;
 #endif
+
+// Whether `FloatPixmap::toPixmap` runs its vector conversion. The scalar
+// fallback casts the clamped float straight to uint8, and that cast is
+// undefined behaviour for the NaN input the clamp passes through, so the
+// expectations that feed a NaN through the conversion are scoped to the
+// branches that define an answer for it.
+#if defined(TINY_SKIA_SIMD_NEON) || defined(TINY_SKIA_SIMD_WASM_SIMD128) || \
+    defined(TINY_SKIA_SIMD_SSE2)
+constexpr bool kVectorToPixmap = true;
+#else
+constexpr bool kVectorToPixmap = false;
+#endif
+
+/// A quiet NaN, built from its bit pattern so no expression in the test has to
+/// produce one.
+float quietNan() { return std::bit_cast<float>(std::uint32_t{0x7fc00000}); }
 
 /// Compares one float against its scalar reference.
 ///
@@ -150,6 +167,52 @@ TEST(FloatPixmapConversionTest, ToPixmapMatchesScalarClampAndTruncate) {
   for (std::size_t i = 0; i < data.size(); ++i) {
     SCOPED_TRACE(testing::Message() << "i=" << i << " value=" << data[i]);
     const float scaled = data[i] * 255.0f + 0.5f;
+    const float clamped = scaled < 0.0f ? 0.0f : (255.0f < scaled ? 255.0f : scaled);
+    EXPECT_EQ(int{out[i]}, int{static_cast<std::uint8_t>(clamped)});
+  }
+}
+
+TEST(FloatPixmapConversionTest, ToPixmapMapsNanLanesToZeroBytes) {
+  if (!kVectorToPixmap) {
+    GTEST_SKIP() << "the scalar fallback's cast of a NaN float to uint8 is undefined behaviour";
+  }
+
+  // The clamp in the vector conversion is a nested selection, so a NaN lane
+  // falls through both comparisons unchanged, exactly as `std::clamp` does.
+  // Each conversion then turns that NaN into a zero byte: the wasm128
+  // saturating conversion defines NaN as zero, and the x86 conversion produces
+  // INT_MIN, which the signed pack clamps to -32768 and the unsigned pack
+  // clamps to 0. A clamp whose operands were the other way round would select
+  // the bound the scalar formula rejects and store 255 instead, so this is the
+  // expectation that holds that operand order in place.
+  const float nan = quietNan();
+
+  // Four pixels is exactly one 16-float vector step, so no lane reaches the
+  // scalar tail. A NaN sits in a different position in each group of four so a
+  // lane mix-up cannot hide one.
+  static const std::array<float, 16> kValues = {nan,   0.0f,  1.0f,  0.5f,    //
+                                                0.25f, nan,   0.75f, 1.0f,    //
+                                                2.0f,  -1.0f, nan,   0.125f,  //
+                                                1.0f,  0.5f,  0.0f,  nan};
+
+  FloatPixmap pixmap = *FloatPixmap::fromSize(4, 1);
+  auto data = pixmap.data();
+  ASSERT_EQ(data.size(), kValues.size());
+  for (std::size_t i = 0; i < data.size(); ++i) {
+    data[i] = kValues[i];
+  }
+
+  const Pixmap converted = pixmap.toPixmap();
+  const auto out = converted.data();
+  ASSERT_EQ(out.size(), kValues.size());
+  for (std::size_t i = 0; i < kValues.size(); ++i) {
+    SCOPED_TRACE(testing::Message() << "i=" << i << " value=" << kValues[i]);
+    if (std::isnan(kValues[i])) {
+      EXPECT_EQ(int{out[i]}, 0);
+      continue;
+    }
+
+    const float scaled = kValues[i] * 255.0f + 0.5f;
     const float clamped = scaled < 0.0f ? 0.0f : (255.0f < scaled ? 255.0f : scaled);
     EXPECT_EQ(int{out[i]}, int{static_cast<std::uint8_t>(clamped)});
   }
@@ -281,6 +344,37 @@ TEST(ColorMatrixFloatTest, TranslationOnlyMatrixReachesTransparentPixels) {
   for (std::size_t channel = 0; channel < 4; ++channel) {
     SCOPED_TRACE(testing::Message() << "channel=" << channel);
     expectFloatMatches(pixmap.data()[channel], expected[channel], kUnitRangeTolerance);
+  }
+}
+
+TEST(ColorMatrixFloatTest, DenormalAlphaProducesNanThatTheClampPassesThrough) {
+  // This is how NaN reaches the clamp in ordinary use. A premultiplied pixel
+  // whose alpha is denormal makes the unpremultiply's reciprocal overflow to
+  // infinity, and a zero color channel times that infinity is NaN, which then
+  // spreads across every product and sum in the matrix.
+  //
+  // Every branch's clamp is a nested selection, so the NaN falls through both
+  // comparisons and survives, exactly as `std::clamp` leaves it. A clamp whose
+  // operands were the other way round would select a bound instead and store 0
+  // or 1, so this is the expectation that holds that operand order in place.
+  FloatPixmap pixmap = *FloatPixmap::fromSize(1, 1);
+  auto data = pixmap.data();
+  data[0] = 0.0f;
+  data[1] = 0.0f;
+  data[2] = 0.0f;
+  data[3] = std::numeric_limits<float>::denorm_min();
+
+  // Guards the premise: a platform that computed a finite reciprocal here would
+  // never reach the clamp with a NaN and would make the expectations below
+  // vacuous.
+  ASSERT_TRUE(std::isinf(1.0f / data[3]));
+
+  colorMatrix(pixmap, identityMatrix());
+
+  const auto out = pixmap.data();
+  for (std::size_t channel = 0; channel < 4; ++channel) {
+    SCOPED_TRACE(testing::Message() << "channel=" << channel);
+    EXPECT_TRUE(std::isnan(out[channel])) << "value=" << out[channel];
   }
 }
 
