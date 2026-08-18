@@ -131,6 +131,10 @@ donner_cc_library(
     target_compatible_with = _GEODE_ONLY,
     visibility = ["//donner/svg/renderer:__subpackages__"],
     deps = [
+        # The slabs stamp every buffer they create with
+        # `GeodeDevice::AllocateBufferId`, which is defined out of line, so
+        # this is a link dependency and not just an include.
+        ":geode_device",
         ":geode_wgpu_util",
         "//third_party/webgpu-cpp:webgpu_cpp",
     ],

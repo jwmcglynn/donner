@@ -104,6 +104,10 @@ public:
     wgpu::Buffer buffer;
     uint64_t offset = 0;
     uint32_t index = 0;
+    /// Stable identity of `buffer` (see `GeodeDevice::AllocateBufferId`).
+    /// Anything that caches keyed on this slot must compare the id: the
+    /// handle address is recycled once the owning slab is destroyed.
+    uint64_t bufferId = 0;
   };
 
   explicit GeodeRecordSlab(uint64_t deviceId) : owningDeviceId_(deviceId) {}
@@ -159,10 +163,11 @@ public:
         return false;
       }
       device.countBuffer();
-      chunks_.push_back(Chunk{std::move(buffer), newSize});
+      chunks_.push_back(Chunk{std::move(buffer), newSize, GeodeDevice::AllocateBufferId()});
       usedBytes_ = 0;
     }
     out.buffer = chunks_.back().buffer.get();
+    out.bufferId = chunks_.back().bufferId;
     out.offset = usedBytes_;
     // Indices are GLOBAL across chunks (slotAt walks cumulative chunk
     // capacities): a per-chunk index would collide with the previous
@@ -182,6 +187,13 @@ public:
   /// recorded batch draws still read.
   void freeSlot(const Slot& slot) { pendingFrees_.push_back(slot.index); }
 
+  /// A batch-uniform buffer plus its stable identity; `buffer` is null when
+  /// the slab declined (uniform cache full, or buffer creation failed).
+  struct BatchUniformHandle {
+    wgpu::Buffer buffer;
+    uint64_t bufferId = 0;
+  };
+
   /**
    * Persistent buffer holding one distinct scene-batch uniform value.
    *
@@ -197,15 +209,15 @@ public:
    * distinct values are live, and the caller falls back to its per-frame
    * arena.
    */
-  wgpu::Buffer acquireBatchUniform(GeodeDevice& device, const void* bytes, uint64_t size) {
+  BatchUniformHandle acquireBatchUniform(GeodeDevice& device, const void* bytes, uint64_t size) {
     const auto* first = static_cast<const uint8_t*>(bytes);
     for (const BatchUniform& entry : batchUniforms_) {
       if (entry.bytes.size() == size && std::memcmp(entry.bytes.data(), first, size) == 0) {
-        return entry.buffer.get();
+        return BatchUniformHandle{entry.buffer.get(), entry.bufferId};
       }
     }
     if (batchUniforms_.size() >= kMaxBatchUniforms) {
-      return wgpu::Buffer();
+      return BatchUniformHandle{};
     }
     wgpu::BufferDescriptor desc = {};
     desc.label = wgpuLabel("GeodeSceneBatchUniform");
@@ -213,14 +225,15 @@ public:
     desc.usage = wgpu::BufferUsage::Uniform | wgpu::BufferUsage::CopyDst;
     ScopedWgpuHandle<wgpu::Buffer> buffer(device.device().createBuffer(desc));
     if (!buffer) {
-      return wgpu::Buffer();
+      return BatchUniformHandle{};
     }
     device.countBuffer();
     device.queue().writeBuffer(buffer.get(), 0, first, size);
     device.countBufferWrite(size);
-    batchUniforms_.push_back(
-        BatchUniform{std::move(buffer), std::vector<uint8_t>(first, first + size)});
-    return batchUniforms_.back().buffer.get();
+    batchUniforms_.push_back(BatchUniform{std::move(buffer),
+                                          std::vector<uint8_t>(first, first + size),
+                                          GeodeDevice::AllocateBufferId()});
+    return BatchUniformHandle{batchUniforms_.back().buffer.get(), batchUniforms_.back().bufferId};
   }
 
   /// Borrowed handle of the newest buffer (batches bind sub-ranges of it).
@@ -244,11 +257,13 @@ private:
   struct Chunk {
     ScopedWgpuHandle<wgpu::Buffer> buffer;
     uint64_t size = 0;
+    uint64_t bufferId = 0;
   };
 
   struct BatchUniform {
     ScopedWgpuHandle<wgpu::Buffer> buffer;
     std::vector<uint8_t> bytes;
+    uint64_t bufferId = 0;
   };
 
   static constexpr uint64_t kInitialRecordSlabBytes = 262144u;
@@ -263,11 +278,11 @@ private:
     uint64_t offset = static_cast<uint64_t>(index) * sizeof(InstanceRecord);
     for (const Chunk& chunk : chunks_) {
       if (offset < chunk.size) {
-        return Slot{chunk.buffer.get(), offset, index};
+        return Slot{chunk.buffer.get(), offset, index, chunk.bufferId};
       }
       offset -= chunk.size;
     }
-    return Slot{wgpu::Buffer(), 0, index};
+    return Slot{wgpu::Buffer(), 0, index, 0};
   }
 
   uint64_t owningDeviceId_;
@@ -316,6 +331,10 @@ public:
     wgpu::Buffer buffer;  // Borrowed handle; owned by the slab chunk.
     uint64_t offset = 0;
     uint64_t size = 0;
+    /// Stable identity of `buffer` (see `GeodeDevice::AllocateBufferId`).
+    /// Only allocation results carry it; `free` matches on the handle,
+    /// which is unambiguous while the slab that owns the chunk is alive.
+    uint64_t bufferId = 0;
   };
 
   /// Create an empty slab bound to `deviceId` (usually the current
@@ -403,6 +422,7 @@ public:
       const uint64_t start = alignUp(it->offset, alignment);
       if (start + size <= it->offset + it->size) {
         out.buffer = chunks_[it->chunk].buffer.get();
+        out.bufferId = chunks_[it->chunk].bufferId;
         out.offset = start;
         out.size = size;
         if (start == it->offset) {
@@ -440,6 +460,7 @@ public:
       }
       device.countBuffer();
       chunk.size = newSize;
+      chunk.bufferId = GeodeDevice::AllocateBufferId();
       chunks_.push_back(std::move(chunk));
       if (!gauge_) {
         gauge_ = device.residentBytesGauge();
@@ -450,6 +471,7 @@ public:
 
     Chunk& chunk = chunks_.back();
     out.buffer = chunk.buffer.get();
+    out.bufferId = chunk.bufferId;
     out.offset = alignUp(chunk.cursor, alignment);
     out.size = size;
     chunk.cursor = out.offset + size;
@@ -462,10 +484,13 @@ public:
     if (alloc.size == 0) {
       return;
     }
-    // Locate the owning chunk.
+    // Locate the owning chunk by identity rather than by handle address, so
+    // the match means "the chunk this range was carved out of" and cannot be
+    // confused by a recycled handle. A default-constructed allocation carries
+    // id 0 and matches nothing, since ids start at 1.
     size_t chunkIndex = 0;
     for (; chunkIndex < chunks_.size(); ++chunkIndex) {
-      if (chunks_[chunkIndex].buffer.get() == alloc.buffer) {
+      if (chunks_[chunkIndex].bufferId == alloc.bufferId) {
         break;
       }
     }
@@ -486,6 +511,7 @@ private:
     ScopedWgpuHandle<wgpu::Buffer> buffer;
     uint64_t size = 0;
     uint64_t cursor = 0;
+    uint64_t bufferId = 0;
   };
 
   struct FreeRange {
@@ -526,6 +552,12 @@ struct GeodeResidentSlot {
   /// slab's allocation alignment so consecutive slots leave no unwritten
   /// bytes between them.
   wgpu::Buffer buffer;
+  /// Stable identity of `buffer` (see `GeodeDevice::AllocateBufferId`).
+  /// A cross-entity batch binds the whole chunk and caches the resulting
+  /// bind group past the lifetime of the document that owns it, so the
+  /// cache key has to name the chunk by this id rather than by the handle
+  /// address, which the allocator recycles once the slab is destroyed.
+  uint64_t bufferId = 0;
   /// Slab that owns `buffer`; null until residence is established. Held
   /// by shared_ptr so a device change (which swaps the registry's slab)
   /// cannot leave a slot referencing a destroyed slab: old slots keep the
@@ -643,7 +675,9 @@ struct GeodeResidentSlot {
     if (this != &other) {
       reset();
       buffer = other.buffer;
+      bufferId = other.bufferId;
       other.buffer = wgpu::Buffer();
+      other.bufferId = 0;
       slab = std::move(other.slab);
       allocationOffset = other.allocationOffset;
       allocationSize = other.allocationSize;
@@ -693,7 +727,7 @@ struct GeodeResidentSlot {
   /// done.
   void reset() {
     if (slab && allocationSize != 0) {
-      GeodeResidentSlab::Allocation alloc{buffer, allocationOffset, allocationSize};
+      GeodeResidentSlab::Allocation alloc{buffer, allocationOffset, allocationSize, bufferId};
       slab->free(alloc);
     }
     // The record slot survives geometry re-uploads: its painter-ordered
@@ -708,6 +742,7 @@ struct GeodeResidentSlot {
     allocationOffset = 0;
     allocationSize = 0;
     buffer = wgpu::Buffer();
+    bufferId = 0;
     bindGroup.reset();
     resident = false;
     encodedKey = nullptr;
@@ -734,6 +769,10 @@ struct GeodeResidentGradientSlot {
   /// offsets. Region layout matches \ref GeodeResidentSlot, with the
   /// uniform region sized for `GradientUniforms` (672 bytes).
   wgpu::Buffer buffer;
+  /// Stable identity of `buffer` (see `GeodeDevice::AllocateBufferId`), so
+  /// returning the allocation matches the owning chunk by identity rather
+  /// than by a handle address the allocator can recycle.
+  uint64_t bufferId = 0;
   /// Slab that owns `buffer`; null until residence is established. Held
   /// by shared_ptr so a device change (which swaps the registry's slab)
   /// cannot leave a slot referencing a destroyed slab: old slots keep the
@@ -795,7 +834,9 @@ struct GeodeResidentGradientSlot {
     if (this != &other) {
       reset();
       buffer = other.buffer;
+      bufferId = other.bufferId;
       other.buffer = wgpu::Buffer();
+      other.bufferId = 0;
       slab = std::move(other.slab);
       allocationOffset = other.allocationOffset;
       allocationSize = other.allocationSize;
@@ -829,7 +870,7 @@ struct GeodeResidentGradientSlot {
   /// Never calls `Buffer::destroy()`; see GeodeResidentSlot::reset.
   void reset() {
     if (slab && allocationSize != 0) {
-      GeodeResidentSlab::Allocation alloc{buffer, allocationOffset, allocationSize};
+      GeodeResidentSlab::Allocation alloc{buffer, allocationOffset, allocationSize, bufferId};
       slab->free(alloc);
     }
     // The slab pointers themselves are intentionally kept: they outlive
@@ -839,6 +880,7 @@ struct GeodeResidentGradientSlot {
     allocationOffset = 0;
     allocationSize = 0;
     buffer = wgpu::Buffer();
+    bufferId = 0;
     bindGroup.reset();
     resident = false;
     encodedKey = nullptr;

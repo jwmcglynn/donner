@@ -240,7 +240,15 @@ namespace {
 /// Monotonic source for `GeodeDevice::deviceId()`. Never reused, starts at 1
 /// (0 is the "no device" sentinel on a `GeodeResidentSlot`).
 std::atomic<uint64_t> g_nextDeviceId{0};
+
+/// Monotonic source for `GeodeDevice::AllocateBufferId()`. Never reused,
+/// starts at 1 (0 is the "no buffer" sentinel).
+std::atomic<uint64_t> g_nextBufferId{0};
 }  // namespace
+
+uint64_t GeodeDevice::AllocateBufferId() {
+  return g_nextBufferId.fetch_add(1, std::memory_order_relaxed) + 1;
+}
 
 GeodeDevice::GeodeDevice()
     : impl_(std::make_unique<Impl>()),

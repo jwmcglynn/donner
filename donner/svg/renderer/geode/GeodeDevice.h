@@ -325,28 +325,57 @@ public:
    * Scene batches bind pooled arena and slab buffers whose identities and
    * offsets are stable across steady-state frames, so a cached bind group
    * keyed this way is reusable frame over frame (keeping the per-frame
-   * bind-group create count flat; the GeodePerf ceilings pin this). A
-   * cached entry holds a reference to its bind group, which in turn keeps
-   * every bound buffer alive, so a raw handle in a live key can never be
-   * recycled for a different buffer.
+   * bind-group create count flat; the GeodePerf ceilings pin this).
+   *
+   * Buffers are identified by the process-unique ids handed out by
+   * `AllocateBufferId()`, NOT by their `WGPUBuffer` handle addresses. A
+   * cached bind group keeps the buffer's GPU-side resource alive inside
+   * WebGPU, but it does NOT keep the caller's handle object alive: when the
+   * document that owned a slab chunk is destroyed, its handles are released
+   * and their addresses become available to the allocator again. A device
+   * outlives the documents drawn on it (renderers lease devices from a
+   * small idle pool), so a later document's freshly created buffer can land
+   * on a recycled address and - with identical chunk sizes and record
+   * offsets, the norm for small documents - compare EQUAL to an entry left
+   * behind by the dead one. The lookup would then hand back the previous
+   * document's bind group and the batch would draw that document's records
+   * and geometry, which shows up as whole shapes rendered at another
+   * document's transform.
    */
   struct SceneBatchBindGroupKey {
-    WGPUBuffer uniformBuffer = nullptr;
+    uint64_t uniformBufferId = 0;
     uint64_t uniformOffset = 0;
     uint64_t uniformSize = 0;
-    WGPUBuffer chunkBuffer = nullptr;
+    uint64_t chunkBufferId = 0;
     uint64_t chunkBytes = 0;
-    WGPUBuffer recordBuffer = nullptr;
+    uint64_t recordBufferId = 0;
     uint64_t recordOffset = 0;
     uint64_t recordBytes = 0;
 
     friend bool operator<(const SceneBatchBindGroupKey& a, const SceneBatchBindGroupKey& b) {
-      return std::tie(a.uniformBuffer, a.uniformOffset, a.uniformSize, a.chunkBuffer, a.chunkBytes,
-                      a.recordBuffer, a.recordOffset, a.recordBytes) <
-             std::tie(b.uniformBuffer, b.uniformOffset, b.uniformSize, b.chunkBuffer, b.chunkBytes,
-                      b.recordBuffer, b.recordOffset, b.recordBytes);
+      return std::tie(a.uniformBufferId, a.uniformOffset, a.uniformSize, a.chunkBufferId,
+                      a.chunkBytes, a.recordBufferId, a.recordOffset, a.recordBytes) <
+             std::tie(b.uniformBufferId, b.uniformOffset, b.uniformSize, b.chunkBufferId,
+                      b.chunkBytes, b.recordBufferId, b.recordOffset, b.recordBytes);
     }
   };
+
+  /**
+   * Allocate a process-unique identity for a GPU buffer handle, from a
+   * monotonic counter that starts at 1 and is never reused.
+   *
+   * Anything that outlives a buffer and still has to answer "is this the
+   * same buffer I saw before?" must compare these ids rather than
+   * `WGPUBuffer` handle addresses. Releasing the last handle reference frees
+   * the handle object even while WebGPU keeps the underlying resource alive
+   * for bind groups and recorded commands that already reference it, so a
+   * later allocation can reuse the address and make two unrelated buffers
+   * indistinguishable. `deviceId()` exists for the same reason one level up.
+   *
+   * `0` is reserved for "no buffer", so a default-constructed id never
+   * matches a real one.
+   */
+  [[nodiscard]] static uint64_t AllocateBufferId();
 
   /// Look up a cached scene-batch bind group. Returns a borrowed handle
   /// (valid while the cache entry lives), or an empty handle on miss.
