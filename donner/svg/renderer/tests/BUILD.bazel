@@ -617,6 +617,7 @@ donner_cc_test(
     deps = [
         ":mock_renderer_interface",
         "//donner/base:base_test_utils",
+        "//donner/base/encoding:base64",
         "//donner/svg/components/layout:layout_system",
         "//donner/svg/components/resources:resource_manager_context",
         "//donner/svg/renderer:renderer_driver",

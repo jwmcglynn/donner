@@ -126,6 +126,10 @@ public:
    * differs in any of those fields is a different declaration and mints a new entity, so newly
    * loaded font data is never served from a stale entity.
    *
+   * Family names are compared case-insensitively, matching how `findFont()` selects a face, so two
+   * declarations differing only in the casing of their family name are one declaration here and
+   * `numFaces()` counts them once.
+   *
    * @param face The parsed `@font-face` rule.
    */
   void addFontFace(const css::FontFace& face);
@@ -254,7 +258,15 @@ public:
    *   2. The attached provider (a `FontCatalog` tries Embedded families, then System families).
    *   3. Embedded Public Sans fallback.
    */
-  void setFontProvider(const FontFamilyProvider* provider) { provider_ = provider; }
+  void setFontProvider(const FontFamilyProvider* provider) {
+    if (provider != provider_) {
+      // Another provider may answer the same request with different bytes, so nothing resolved
+      // through the previous one carries over.
+      provider_ = provider;
+      providerFonts_.clear();
+      cache_.clear();
+    }
+  }
 
   /**
    * Set the process-wide default font provider. Every FontManager constructed afterwards adopts it
@@ -366,18 +378,6 @@ private:
     size_t operator()(const ProviderFontKey& key) const noexcept;
   };
 
-  /**
-   * Build the identity key for an `@font-face` declaration.
-   *
-   * Two declarations share a key exactly when they would resolve to the same face and load the
-   * same bytes: the matching descriptors (family, weight, style, stretch) plus the ordered source
-   * list, including each source's kind, trust, format and technology hints, and payload identity.
-   * Inline data payloads are immutable and shared by pointer, and the registered face entity keeps
-   * its own copy of that shared pointer alive, so the pointer value is a stable identity for the
-   * bytes and cannot be recycled by another buffer while the key is registered.
-   */
-  static std::string faceIdentityKey(const css::FontFace& face);
-
   /// Internal EnTT storage for font faces, loaded font bytes, and backend caches.
   Registry& registry_;  // NOLINT(cppcoreguidelines-avoid-const-or-ref-data-members)
 
@@ -388,6 +388,10 @@ private:
   /// re-registration of an unchanged rule from minting a second entity for the same declaration.
   std::unordered_map<std::string, Entity> faceEntities_;
 
+  /// Registration counter handed to each new face so ties between equally good faces can resolve
+  /// to the one declared last without depending on ECS storage order.
+  uint64_t nextFaceSequence_ = 0;
+
   /**
    * Resolved provider lookup to the entity holding the bytes it returned.
    *
@@ -396,13 +400,10 @@ private:
    * whole request. Memoizing on that keeps a repeated request, including one repeated after the
    * resolution cache is dropped, on one identity instead of loading a duplicate copy of the same
    * bytes onto a fresh entity each time. Entries are only ever read back, never reloaded, so bytes
-   * are never swapped underneath a handle already in use.
+   * are never swapped underneath a handle already in use. Attaching a different provider drops the
+   * whole map, because another provider may answer the same request with different bytes.
    */
   std::unordered_map<ProviderFontKey, FontHandle, ProviderFontKeyHash> providerFonts_;
-
-  /// Provider that populated \ref providerFonts_. A different provider may answer the same family
-  /// with different bytes, so swapping providers abandons the memo rather than serving stale data.
-  const FontFamilyProvider* providerFontsSource_ = nullptr;
 
   /// Mapping from CSS generic family names to real family names.
   std::unordered_map<std::string, std::string> genericFamilyMap_;

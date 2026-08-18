@@ -6,6 +6,7 @@
 #include <atomic>
 #include <fstream>
 #include <memory>
+#include <string>
 #include <thread>
 #include <vector>
 
@@ -674,7 +675,9 @@ TEST(FontManagerTest, ProviderRequestKeepsOneIdentityAcrossStylesAndCacheDrops) 
       << "A dropped resolution cache re-loaded fonts the provider memo already held.";
 }
 
-TEST(FontManagerTest, SwappingProviderAbandonsTheMemoizedFamilyIdentity) {
+/// Two providers may answer the same request with different bytes, so attaching a different one
+/// abandons everything resolved through the old one, including the repeat of an identical query.
+TEST(FontManagerTest, SwappingProviderAbandonsWhatThePreviousOneResolved) {
   Registry registry;
   FontManager mgr(registry);
 
@@ -682,15 +685,94 @@ TEST(FontManagerTest, SwappingProviderAbandonsTheMemoizedFamilyIdentity) {
   mgr.setFontProvider(&first);
   const FontHandle fromFirst = mgr.findFont("ProviderFamily");
   ASSERT_TRUE(static_cast<bool>(fromFirst));
+  EXPECT_EQ(first.loadCalls, 1);
 
   FakeFontProvider second({"ProviderFamily"});
   mgr.setFontProvider(&second);
-  // The resolution cache still holds the previous answer for this exact query, so ask with a
-  // different weight to reach the provider path.
-  const FontHandle fromSecond = mgr.findFont("ProviderFamily", 700);
+
+  const FontHandle fromSecond = mgr.findFont("ProviderFamily");
   ASSERT_TRUE(static_cast<bool>(fromSecond));
-  EXPECT_NE(fromSecond, fromFirst);
+  EXPECT_NE(fromSecond, fromFirst) << "The new provider's family kept the old provider's font.";
   EXPECT_EQ(second.loadCalls, 1);
+
+  // Re-attaching the same provider is not a change and must not throw away its resolutions.
+  mgr.setFontProvider(&second);
+  EXPECT_EQ(mgr.findFont("ProviderFamily"), fromSecond);
+  EXPECT_EQ(second.loadCalls, 1);
+}
+
+/// A face that matches the family but cannot be loaded resolves to the fallback for now. That
+/// answer must not stick: the failure can be a full font budget, which a later release undoes, and
+/// a stuck answer would leave the document rendering in the wrong font forever.
+TEST(FontManagerTest, FallbackForAnUnloadableFaceIsRetriedRatherThanCached) {
+  Registry registry;
+  const std::vector<uint8_t> data(embedded::kPublicSansMediumOtf.begin(),
+                                  embedded::kPublicSansMediumOtf.end());
+  const size_t charge = RetainedCharge(data);
+  // Room for exactly one font, which the fallback claims first.
+  FontManager mgr(registry, charge);
+
+  css::FontFace face;
+  face.familyName = RcString("TestFont");
+  css::FontFaceSource source;
+  source.kind = css::FontFaceSource::Kind::Data;
+  source.payload = std::make_shared<const std::vector<uint8_t>>(data.begin(), data.end());
+  face.sources.push_back(std::move(source));
+  mgr.addFontFace(face);
+
+  const FontHandle fallback = mgr.fallbackFont();
+  ASSERT_TRUE(static_cast<bool>(fallback));
+  EXPECT_EQ(mgr.findFont("TestFont"), fallback) << "The budget was full, so the face cannot load.";
+
+  // Free the budget and ask again. The face must now load rather than replay the cached fallback.
+  registry.destroy(fallback.entity());
+  const FontHandle loaded = mgr.findFont("TestFont");
+  ASSERT_TRUE(static_cast<bool>(loaded));
+  EXPECT_NE(loaded, fallback);
+  EXPECT_EQ(mgr.numLoadedFonts(), 1u);
+}
+
+/// Equally good faces resolve to the one declared last. Deduplication must not disturb that, so a
+/// re-announced early declaration stays early rather than jumping ahead of later ones.
+TEST(FontManagerTest, TiedFacesResolveToTheLastDeclaredEvenAfterReAnnouncement) {
+  Registry registry;
+  FontManager mgr(registry);
+
+  auto payload = std::make_shared<const std::vector<uint8_t>>(
+      embedded::kPublicSansMediumOtf.begin(), embedded::kPublicSansMediumOtf.end());
+
+  // Two declarations for one family that score identically for a plain lookup, distinguishable
+  // only by which entity resolves.
+  css::FontFace early;
+  early.familyName = RcString("TestFont");
+  css::FontFaceSource earlySource;
+  earlySource.kind = css::FontFaceSource::Kind::Data;
+  earlySource.payload = payload;
+  earlySource.formatHint = RcString("opentype");
+  early.sources.push_back(earlySource);
+
+  css::FontFace late = early;
+  late.sources[0].formatHint = RcString("truetype");
+
+  mgr.addFontFace(early);
+  mgr.addFontFace(late);
+  const FontHandle winner = mgr.findFont("TestFont");
+  ASSERT_TRUE(static_cast<bool>(winner));
+
+  // Re-announce the whole set the way a style recompute does, repeatedly. Each round also brings
+  // one genuinely new declaration, which drops the resolution cache and forces the tie to be
+  // decided again rather than replayed.
+  for (int recompute = 0; recompute < 5; ++recompute) {
+    mgr.addFontFace(early);
+    mgr.addFontFace(late);
+
+    css::FontFace unrelated;
+    unrelated.familyName = RcString("Unrelated" + std::to_string(recompute));
+    mgr.addFontFace(unrelated);
+
+    EXPECT_EQ(mgr.findFont("TestFont"), winner)
+        << "The tie between two equally good faces moved at recompute " << recompute;
+  }
 }
 
 TEST(FontManagerTest, AllowsAttachingAndRemovingCustomCacheComponents) {

@@ -263,8 +263,10 @@ constexpr int kMutationRounds = 8;
 /// The mutation an editor's drag or typing loop performs: one attribute on one element changes and
 /// the whole document is drawn again. Text is moved by its `x`, which changes where the glyphs land
 /// but not which outlines they are, so a well-behaved renderer should approach its unchanged-frame
-/// cost. Documents with no text toggle a presentation attribute on the root instead, so the frame
-/// still cannot take the nothing-is-dirty fast path.
+/// cost. Documents with no text nudge the root's opacity instead, so the frame still cannot take
+/// the nothing-is-dirty fast path. Both opacity values are below 1 on purpose: crossing 1 would
+/// switch the whole document between the direct and the offscreen-layer path, and the phase would
+/// then report the median of two different pipelines.
 class DocumentMutator {
 public:
   explicit DocumentMutator(donner::svg::SVGDocument& document)
@@ -279,12 +281,12 @@ public:
     if (movesText_) {
       target_->setAttribute("x", std::to_string(10 + (round % kMutationRounds)));
     } else {
-      target_->setAttribute("opacity", (round % 2) == 0 ? "1" : "0.999");
+      target_->setAttribute("opacity", (round % 2) == 0 ? "0.999" : "0.998");
     }
   }
 
-  /// True when the mutation moves real text, which is the case the phase is about.
-  bool movesText() const { return movesText_; }
+  /// What the phase actually mutated, for the report: a `Mut-` number means nothing without it.
+  const char* description() const { return movesText_ ? "text x" : "root opacity"; }
 
 private:
   std::optional<donner::svg::SVGElement> target_;
@@ -307,6 +309,8 @@ struct PhaseStats {
   Stats mutatedSettled;
   Stats gpuRenderPass;
   Stats gpuTotal;
+  /// What the mutate-every-frame phase changed, for labelling its rows.
+  const char* mutation = "";
 };
 
 PhaseStats benchmarkWorkload(const Workload& workload, donner::svg::RendererGeode& renderer,
@@ -314,6 +318,7 @@ PhaseStats benchmarkWorkload(const Workload& workload, donner::svg::RendererGeod
   const int total = cfg.warmup + cfg.iterations;
   std::vector<Sample> samples;
   samples.reserve(static_cast<size_t>(total));
+  const char* mutationDescription = "";
 
   for (int i = 0; i < total; ++i) {
     Sample s;
@@ -368,6 +373,7 @@ PhaseStats benchmarkWorkload(const Workload& workload, donner::svg::RendererGeod
 
     // -- Mutate every frame (the editor's drag/typing loop) --
     DocumentMutator mutator(doc);
+    mutationDescription = mutator.description();
     std::vector<double> mutatedDraws;
     std::vector<double> mutatedSettleds;
     mutatedDraws.reserve(kMutationRounds);
@@ -431,7 +437,8 @@ PhaseStats benchmarkWorkload(const Workload& workload, donner::svg::RendererGeod
           computeStats(mutatedDrawVals),
           computeStats(mutatedSettledVals),
           computeStats(gpuRpVals),
-          computeStats(gpuTotVals)};
+          computeStats(gpuTotVals),
+          mutationDescription};
 }
 
 void printPhase(const char* label, const Stats& stats) {
@@ -511,6 +518,7 @@ int main(int argc, char* argv[]) {
     printPhase("Ret-Draw:", ps.retainedDraw);
     printPhase("Ret-Snap:", ps.retainedSnapshot);
     printPhase("Ret-Settled:", ps.retainedSettled);
+    std::printf("  Mutating:  %s\n", ps.mutation);
     printPhase("Mut-Draw:", ps.mutatedDraw);
     printPhase("Mut-Settled:", ps.mutatedSettled);
     if (sharedDevice->supportsTimestamps()) {
