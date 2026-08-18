@@ -17,8 +17,8 @@ namespace donner::editor::internal {
 
 /// Interactive regions of the Fill/Stroke widget, in hit-test priority order.
 enum class FillStrokeWidgetRegion {
-  None,         ///< No interactive region under the point.
-  FillSwatch,   ///< Front (fill) swatch: opens the fill color picker.
+  None,          ///< No interactive region under the point.
+  FillSwatch,    ///< Front (fill) swatch: opens the fill color picker.
   StrokeSwatch,  ///< Back (stroke) swatch: opens the stroke color picker.
   Swap,          ///< Double-arrow affordance: swaps fill and stroke paints.
   FillNone,      ///< Fill "set none" affordance.
@@ -30,24 +30,34 @@ enum class FillStrokeWidgetRegion {
 /// Screen-space rectangles for every drawable/interactive part of the widget.
 struct FillStrokeWidgetLayout {
   ImVec2 fillMin, fillMax;              ///< Front (fill) swatch.
-  ImVec2 strokeMin, strokeMax;         ///< Back (stroke) swatch.
-  ImVec2 swapMin, swapMax;             ///< Swap double-arrow affordance.
-  ImVec2 fillNoneMin, fillNoneMax;     ///< Fill "set none" affordance.
+  ImVec2 strokeMin, strokeMax;          ///< Back (stroke) swatch.
+  ImVec2 swapMin, swapMax;              ///< Swap double-arrow affordance.
+  ImVec2 fillNoneMin, fillNoneMax;      ///< Fill "set none" affordance.
   ImVec2 strokeNoneMin, strokeNoneMax;  ///< Stroke "set none" affordance.
-  ImVec2 fillChipMin, fillChipMax;     ///< Fill custom-paint label chip.
+  ImVec2 fillChipMin, fillChipMax;      ///< Fill custom-paint label chip.
   ImVec2 strokeChipMin, strokeChipMax;  ///< Stroke custom-paint label chip.
 };
 
 /// Stable interaction policy for one fill/stroke toolbar frame.
 struct FillStrokeWidgetInteractionState {
+  /// Whether widget actions may mutate the active paint.
   bool canEdit = false;
+  /// Whether the shell should replace its cached paint snapshot this frame.
   bool refreshPaintSnapshot = false;
 };
 
-/// Resolve editability and snapshot refresh without keying drag chrome to a
-/// renderer busy bit that can alternate between adjacent preview frames. The
-/// caller must report whether its snapshot belongs to the current document
-/// and first selected element, not merely whether any snapshot exists.
+/**
+ * Resolve editability and snapshot refresh without keying drag chrome to a renderer busy bit.
+ *
+ * The caller reports whether its snapshot belongs to the current document and first selected
+ * element, not merely whether any snapshot exists.
+ *
+ * @param hasDocument Whether the editor currently owns a document.
+ * @param rendererBusy Whether the async renderer currently owns document access.
+ * @param canvasInteractionActive Whether a canvas gesture is in progress.
+ * @param paintSnapshotMatchesSelection Whether the cached paint belongs to the current selection.
+ * @return Editability and snapshot-refresh policy for the current toolbar frame.
+ */
 [[nodiscard]] FillStrokeWidgetInteractionState ResolveFillStrokeWidgetInteractionState(
     bool hasDocument, bool rendererBusy, bool canvasInteractionActive,
     bool paintSnapshotMatchesSelection);
@@ -81,7 +91,7 @@ void DrawSwapAffordance(ImDrawList* drawList, const ImVec2& min, const ImVec2& m
 /// Draw a "set none" affordance. @p fillVariant selects the solid (fill) motif
 /// versus the hollow (stroke) motif; @p active brightens it when the slot is
 /// already none.
-void DrawNoneAffordance(ImDrawList* drawList, const ImVec2& min, const ImVec2& max, bool fillVariant,
-                        bool active);
+void DrawNoneAffordance(ImDrawList* drawList, const ImVec2& min, const ImVec2& max,
+                        bool fillVariant, bool active);
 
 }  // namespace donner::editor::internal
