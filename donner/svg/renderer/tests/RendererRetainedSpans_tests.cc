@@ -586,6 +586,53 @@ TEST(RendererRetainedSpans, EvictedShapeRendersFromRasterization) {
   EXPECT_TRUE(BitmapsEqual(renderFresh(document), renderer.takeSnapshot()));
 }
 
+TEST(RendererRetainedSpans, TurningRetentionOffHandsBackWhatTheDocumentHeld) {
+  SVGDocument document = parseFragment(kShapes);
+
+  RendererTinySkia renderer;
+  renderer.setRetainedSpansEnabled(true);
+  renderer.draw(document);
+  ASSERT_GT(renderer.retainedSpanStats().liveBytes, 0u);
+  ASSERT_FALSE(document.registry().view<RetainedSpansComponent>().empty());
+
+  renderer.setRetainedSpansEnabled(false);
+  renderer.draw(document);
+
+  EXPECT_TRUE(document.registry().view<RetainedSpansComponent>().empty())
+      << "entries live on the document, so a renderer that stops retaining has to hand them "
+         "back rather than leave them for nothing to replay";
+  const auto* state = document.registry().ctx().find<RetainedSpanDocumentState>();
+  ASSERT_NE(state, nullptr);
+  EXPECT_EQ(state->liveBytes, 0u);
+  EXPECT_TRUE(BitmapsEqual(renderFresh(document), renderer.takeSnapshot()));
+}
+
+TEST(RendererRetainedSpans, RetainedBytesCountThePaintsKeptBesideTheCoverage) {
+  SVGDocument document = parseFragment(
+      R"svg(<defs><linearGradient id="g">
+             <stop offset="0" stop-color="#ff0000"/>
+             <stop offset="0.5" stop-color="#00ff00"/>
+             <stop offset="1" stop-color="#0000ff"/>
+           </linearGradient></defs>
+          <rect id="r" x="5" y="5" width="86" height="86" fill="url(#g)"/>)svg");
+  auto rect = document.querySelector("#r");
+  ASSERT_TRUE(rect.has_value());
+
+  RendererTinySkia renderer;
+  renderer.setRetainedSpansEnabled(true);
+  renderer.draw(document);
+
+  const RetainedSpansComponent& entry =
+      document.registry().get<RetainedSpansComponent>(rect->unsafeEntityHandle().entity());
+  ASSERT_TRUE(entry.fill.valid);
+
+  const std::size_t coverageBytes = entry.fill.capture.spans().capacityBytes();
+  EXPECT_GT(RetainedEntryBytes(entry), coverageBytes + sizeof(RetainedSpansComponent))
+      << "a gradient paint owns its stop list, and the entry keeps two paints, so the budget "
+         "has to see more than the recorded coverage";
+  EXPECT_EQ(entry.chargedBytes, RetainedEntryBytes(entry));
+}
+
 TEST(RendererRetainedSpans, AnimatedDocumentStaysCorrectAcrossTimeSamples) {
   parser::SVGParser::Options options;
   options.enableExperimental = true;

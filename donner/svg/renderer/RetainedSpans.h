@@ -76,9 +76,6 @@ struct RetainedSpanSlot {
   /// Whether `capture` holds a replayable recording.
   bool valid = false;
 
-  /// Bytes this slot is currently charged against the document budget.
-  std::size_t chargedBytes = 0;
-
   /// Drops the recording, keeping the allocation for the next capture.
   void invalidate() { valid = false; }
 };
@@ -113,9 +110,18 @@ struct RetainedSpansComponent {
   /// them would re-capture on every draw, so the entry stops retaining instead.
   bool ambiguous = false;
 
-  /// Bytes both slots are charged against the document budget.
-  [[nodiscard]] std::size_t chargedBytes() const { return fill.chargedBytes + stroke.chargedBytes; }
+  /// Bytes this entry is currently charged against the document budget, refreshed after every
+  /// draw that writes it. @see RetainedEntryBytes.
+  std::size_t chargedBytes = 0;
 };
+
+/// Returns everything an entry holds: recorded coverage, the paints kept beside it, and the
+/// entry itself.
+///
+/// The paints are counted because a gradient paint owns its stop list and an entry keeps two of
+/// them, so a document of many small gradient-painted shapes would otherwise grow the cache in
+/// a way the budget could not see. Recorded coverage still dominates in practice.
+[[nodiscard]] std::size_t RetainedEntryBytes(const RetainedSpansComponent& entry);
 
 /**
  * Document-wide state for retained coverage, stored in the registry context.

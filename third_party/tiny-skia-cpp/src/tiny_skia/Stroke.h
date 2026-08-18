@@ -44,7 +44,9 @@ struct Stroke {
 
   /// Two strokes compare equal when they expand an outline the same way, which is what lets a
   /// caller keep work derived from a stroke and decide later whether it still applies. Floats
-  /// compare bitwise, so the answer is never "equal" for inputs that merely look alike.
+  /// compare with IEEE semantics: a NaN width is never equal even to itself, so such a stroke
+  /// is never reused, and positive and negative zero compare equal, which the stroker cannot
+  /// distinguish either.
   friend bool operator==(const Stroke&, const Stroke&) = default;
 };
 

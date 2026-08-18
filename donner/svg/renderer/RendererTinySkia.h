@@ -347,13 +347,25 @@ private:
   ///
   /// A clip mask is rebuilt every frame, so object identity says nothing about whether the clip
   /// changed. Comparing the rebuilt mask against the one this depth held last time turns that
-  /// into an integer a shape can carry in its retained key: equal identities mean the two masks
-  /// compared byte-equal, because an identity is only ever issued for one comparison chain, and
-  /// no two depths share one.
+  /// into an integer a shape can carry in its retained key, and within one renderer equal
+  /// identities do mean the masks compared byte-equal, because an identity is only ever issued
+  /// for one comparison chain and no two depths share one.
+  ///
+  /// Identities are renderer-local, so two renderers drawing one document number their clips
+  /// independently and a shape retained by one can meet the other's numbering. Nothing rests on
+  /// that: a replay is handed the clip mask in effect at replay time, exactly as a fresh draw
+  /// would be, and the recorded coverage does not depend on the mask at all, because scan
+  /// conversion clips to the surface and the mask reaches the blitter as per-blit pipeline
+  /// state. The key is there to keep clip changes conservative, not to make them correct.
   struct ClipEpochSlot {
     std::optional<tiny_skia::Mask> mask;
     std::uint64_t epoch = 0;
   };
+
+  /// Clip depths past this one take a fresh identity per draw instead of a remembered mask, so
+  /// a document cannot decide how many full-surface masks a renderer holds. Deeper clips are
+  /// rare, and a shape under one rasterizes rather than replaying.
+  static constexpr std::size_t kMaxRetainedClipDepth = 8;
 
   /// Retained storage and accounting for the shape being drawn, or empty when the draw is not
   /// retainable.
@@ -389,7 +401,9 @@ private:
   /// rasterize.
   [[nodiscard]] RetainedTarget retainedTargetFor(const EntityHandle& sourceEntity);
   /// Returns the identity of the clip mask now in effect, assigning a new one if it changed.
-  [[nodiscard]] std::uint64_t assignClipEpoch();
+  ///
+  /// @param depth Position of this clip in the clip stack, outermost being zero.
+  [[nodiscard]] std::uint64_t assignClipEpoch(std::size_t depth);
 
   bool verbose_ = false;
   bool antialias_ = true;
@@ -469,6 +483,8 @@ private:
   std::uint64_t nextClipEpoch_ = 1;
   std::vector<std::uint64_t> clipEpochStack_;
   std::vector<ClipEpochSlot> clipEpochSlots_;
+  /// Surface size the remembered clip masks were built against.
+  tiny_skia::IntSize previousFrameSize_;
 };
 
 }  // namespace donner::svg

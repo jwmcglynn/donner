@@ -1,6 +1,8 @@
 #include "donner/svg/renderer/RetainedSpans.h"
 
 #include <algorithm>
+#include <type_traits>
+#include <variant>
 #include <vector>
 
 #include "donner/svg/components/shape/ComputedPathComponent.h"
@@ -26,9 +28,30 @@ std::size_t DropRetainedEntry(Registry& registry, Entity entity) {
     return 0;
   }
 
-  const std::size_t bytes = entry->chargedBytes();
+  const std::size_t bytes = entry->chargedBytes;
   registry.remove<RetainedSpansComponent>(entity);
   return bytes;
+}
+
+/// Returns the heap a paint owns beyond the object itself, which for a gradient is its stops.
+std::size_t PaintHeapBytes(const tiny_skia::Paint& paint) {
+  return std::visit(
+      [](const auto& shader) -> std::size_t {
+        using ShaderType = std::decay_t<decltype(shader)>;
+        if constexpr (std::is_same_v<ShaderType, tiny_skia::LinearGradient> ||
+                      std::is_same_v<ShaderType, tiny_skia::RadialGradient> ||
+                      std::is_same_v<ShaderType, tiny_skia::SweepGradient>) {
+          return shader.base_.stopsByteSize();
+        } else {
+          return 0;
+        }
+      },
+      paint.shader);
+}
+
+std::size_t SlotBytes(const RetainedSpanSlot& slot) {
+  return slot.capture.spans().capacityBytes() + PaintHeapBytes(slot.key.paint) +
+         PaintHeapBytes(slot.capture.paint());
 }
 
 void ReleaseBytes(RetainedSpanDocumentState& state, std::size_t bytes) {
@@ -52,6 +75,10 @@ void OnComputedPathChanged(Registry& registry, Entity entity) {
 }
 
 }  // namespace
+
+std::size_t RetainedEntryBytes(const RetainedSpansComponent& entry) {
+  return sizeof(RetainedSpansComponent) + SlotBytes(entry.fill) + SlotBytes(entry.stroke);
+}
 
 bool operator==(const RetainedSpanKey& lhs, const RetainedSpanKey& rhs) {
   return TransformsEqual(lhs.deviceFromLocal, rhs.deviceFromLocal) && lhs.paint == rhs.paint &&
@@ -92,10 +119,15 @@ RetainedSpanDocumentState& RetainedSpanStateFor(Registry& registry, std::size_t 
 }
 
 void ClearRetainedSpans(Registry& registry) {
-  registry.clear<RetainedSpansComponent>();
-  if (auto* state = registry.ctx().find<RetainedSpanDocumentState>()) {
-    state->liveBytes = 0;
+  // The document state is created by the first retainable draw, so its absence means this
+  // document never retained anything and there is nothing to walk.
+  auto* state = registry.ctx().find<RetainedSpanDocumentState>();
+  if (state == nullptr) {
+    return;
   }
+
+  registry.clear<RetainedSpansComponent>();
+  state->liveBytes = 0;
 }
 
 void EvictRetainedSpansToBudget(Registry& registry, std::uint64_t currentFrame) {
@@ -118,11 +150,11 @@ void EvictRetainedSpansToBudget(Registry& registry, std::uint64_t currentFrame) 
   std::size_t held = 0;
   for (const Entity entity : view) {
     const RetainedSpansComponent& entry = view.get<const RetainedSpansComponent>(entity);
-    held += entry.chargedBytes();
+    held += entry.chargedBytes;
     if (entry.lastUsedFrame >= currentFrame) {
       continue;
     }
-    candidates.push_back(Candidate{entity, entry.lastUsedFrame, entry.chargedBytes()});
+    candidates.push_back(Candidate{entity, entry.lastUsedFrame, entry.chargedBytes});
   }
 
   // An entity can be destroyed without this cache hearing about it, which leaves the running

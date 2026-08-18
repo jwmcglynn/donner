@@ -51,15 +51,14 @@ class Pattern {
   /// @internal
   [[nodiscard]] bool pushStages(ColorSpace cs, pipeline::RasterPipelineBuilder& p) const;
 
-  /// Never equal, deliberately.
+  /// Equal when every field describing the tiling is equal, including the view, which
+  /// compares by address rather than by content.
   ///
-  /// A pattern borrows its pixels through a view, so two patterns that describe the same
-  /// tile today can describe different pixels a moment later without either object changing.
-  /// Equality exists so a caller can ask "is this the same paint I saw before, such that work
-  /// derived from it is still valid", and for a borrowed-pixel shader the honest answer is
-  /// always no. Reporting equal would let a caller reuse output built from pixels that have
-  /// since been overwritten.
-  friend bool operator==(const Pattern&, const Pattern&) { return false; }
+  /// A pattern does not own its pixels, so equality says the two patterns read the same
+  /// buffer, not that the buffer still holds the same image. A caller that keeps work derived
+  /// from a pattern has to know whether anything can have overwritten those pixels since; this
+  /// comparison cannot tell it that.
+  friend bool operator==(const Pattern&, const Pattern&) = default;
 
   /// @internal
   PixmapView pixmap_;

@@ -221,9 +221,14 @@ donner::svg::RendererBitmap renderSettled(Renderer& renderer, donner::svg::SVGDo
 /// transform of everything under it, so nothing about the previous frame's rasterization still
 /// applies. Between them they bracket what an edit can cost.
 ///
+/// Every iteration parses the document again, so the edit is applied once to a document that
+/// has never seen it. Alternating between an edit and an edit-back would leave half the timed
+/// frames identical to the settled frame that precedes them, and the median would report a
+/// blend of the two rather than the cost of a change.
+///
 /// @return false when the document has no element the mode applies to, in which case no
 ///   mutated frame is timed.
-bool applyMutation(donner::svg::SVGDocument& document, const std::string& mode, bool toggled) {
+bool applyMutation(donner::svg::SVGDocument& document, const std::string& mode) {
   if (mode.empty()) {
     return false;
   }
@@ -249,7 +254,7 @@ bool applyMutation(donner::svg::SVGDocument& document, const std::string& mode, 
   // whole drawing, and overwriting it would change how much of the surface the frame covers,
   // which is the very thing being timed.
   const std::optional<donner::RcString> original = target->getAttribute("transform");
-  std::string value = toggled ? "translate(1, 0)" : "translate(0, 0)";
+  std::string value = "translate(1, 0)";
   if (original.has_value()) {
     value += " ";
     value += std::string_view(*original);
@@ -289,7 +294,7 @@ bool runTimedLoop(const Config& config, const std::string& source, MakeRenderer 
 
     double mutatedFrameMs = 0.0;
     bool mutated = false;
-    if (applyMutation(document, config.mutate, (i % 2) == 0)) {
+    if (applyMutation(document, config.mutate)) {
       start = Clock::now();
       const donner::svg::RendererBitmap mutatedBitmap = renderSettled(renderer, document);
       mutatedFrameMs = toMs(Clock::now() - start);
