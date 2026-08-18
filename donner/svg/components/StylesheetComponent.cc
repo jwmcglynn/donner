@@ -71,10 +71,7 @@ std::optional<std::size_t> StylesheetSourceMap::mapToLocalCssOffset(
 }
 
 void StylesheetComponent::parseStylesheet(const RcStringOrRef& str) {
-  text = RcString(str);
-  sourceMap = StylesheetSourceMap();
-  ParseWarningSink disabled = ParseWarningSink::Disabled();
-  stylesheet = donner::css::parser::StylesheetParser::Parse(str, disabled);
+  parseStylesheet(str, StylesheetSourceMap());
 }
 
 void StylesheetComponent::parseStylesheet(const RcStringOrRef& str,
@@ -83,6 +80,15 @@ void StylesheetComponent::parseStylesheet(const RcStringOrRef& str,
   sourceMap = std::move(newSourceMap);
   ParseWarningSink disabled = ParseWarningSink::Disabled();
   stylesheet = donner::css::parser::StylesheetParser::Parse(str, disabled);
+
+  // Every path that loads or mutates a stylesheet ends here, so recomputing the cache alongside
+  // the parse keeps it from going stale.
+  attributeSelectorNames.clear();
+  attributeSelectorMatchesAnyName = false;
+  for (const css::SelectorRule& rule : stylesheet.rules()) {
+    rule.selector.collectAttributeSelectorNames(attributeSelectorNames,
+                                                attributeSelectorMatchesAnyName);
+  }
 }
 
 }  // namespace donner::svg::components

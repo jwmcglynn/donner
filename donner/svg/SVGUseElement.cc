@@ -6,6 +6,7 @@
 #include "donner/svg/components/resources/ImageComponent.h"
 #include "donner/svg/components/shadow/ComputedShadowTreeComponent.h"
 #include "donner/svg/components/shadow/ShadowTreeComponent.h"
+#include "donner/svg/components/shadow/ShadowTreeSystem.h"
 #include "donner/svg/renderer/RenderingContext.h"
 
 namespace donner::svg {
@@ -13,6 +14,7 @@ namespace {
 
 void InvalidateUse(EntityHandle handle) {
   components::LayoutSystem().invalidate(handle);
+  components::ShadowTreeSystem().teardownInstances(handle);
   handle.remove<components::ComputedShadowTreeComponent, components::ExternalUseComponent>();
   components::RenderingContext(*handle.registry()).invalidateRenderTree();
 }

@@ -1,8 +1,10 @@
 #pragma once
 /// @file
 
+#include <algorithm>
 #include <optional>
 #include <span>
+#include <string_view>
 #include <vector>
 
 #include "donner/base/FileOffset.h"
@@ -88,10 +90,43 @@ struct StylesheetComponent {
   bool isUserAgentStylesheet = false;
 
   /**
+   * Local names of the attributes referenced by attribute selectors in \ref stylesheet, cached
+   * when the stylesheet is parsed. Used by \ref usesAttributeInSelector.
+   */
+  std::vector<RcString> attributeSelectorNames;
+
+  /**
+   * True when an attribute selector in \ref stylesheet uses a wildcard local name, so any
+   * attribute write can change selector matching. No CSS syntax produces this today.
+   */
+  bool attributeSelectorMatchesAnyName = false;
+
+  /**
    * Returns true if the \ref xml_style element has either no `type` attribute, or if it has been
    * manually set to "text/css".
    */
   bool isCssType() const { return type.empty() || type.equalsIgnoreCase("text/css"); }
+
+  /**
+   * Returns true if this stylesheet contains an attribute selector that could match an attribute
+   * with the given local name, meaning writing that attribute can change which elements the
+   * stylesheet matches.
+   *
+   * Deliberately per-name rather than a single "uses any attribute selector" flag: the user agent
+   * stylesheet always contains one (`*[xml|space=preserve]`), so a single flag would be set for
+   * every document.
+   *
+   * @param localName Attribute local name, compared case-insensitively to over-approximate.
+   */
+  bool usesAttributeInSelector(std::string_view localName) const {
+    if (attributeSelectorMatchesAnyName) {
+      return true;
+    }
+
+    return std::any_of(
+        attributeSelectorNames.begin(), attributeSelectorNames.end(),
+        [localName](const RcString& name) { return name.equalsIgnoreCase(localName); });
+  }
 
   /**
    * Parse the contents of the \ref xml_style element.

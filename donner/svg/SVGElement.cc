@@ -481,6 +481,16 @@ ParseResult<bool> SVGElement::trySetPresentationAttribute(std::string_view name,
 
     // Mark dirty flags based on the attribute type.
     if (actualName == "transform") {
+      // The value was just stored as an attribute above, and attributes are a live selector
+      // input: `[transform]`, `[transform="..."]` and combinators keyed on them can start or stop
+      // matching, including on elements other than this one. Per-entity dirty flags cannot
+      // express that, so it needs the whole-tree restyle - but only when a stylesheet actually
+      // selects on this attribute, which keeps the common case on the selective style pass.
+      if (components::StyleSystem().anyStylesheetUsesAttributeInSelector(*handle_.registry(),
+                                                                         name)) {
+        markNeedsFullStyleRecompute(handle_);
+      }
+
       components::LayoutSystem().invalidate(handle_);
       markDirty(handle_, components::DirtyFlagsComponent::RenderInstance);
       propagateWorldTransformDirtyToDescendants(handle_);

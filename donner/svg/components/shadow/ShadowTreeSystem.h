@@ -60,6 +60,18 @@ public:
   void teardown(Registry& registry, ComputedShadowTreeComponent& shadow);
 
   /**
+   * Destroy every shadow tree instantiated on \p handle, if any.
+   *
+   * Call this before removing an entity's \ref ComputedShadowTreeComponent to force its shadow
+   * trees to be regenerated. Removing the component on its own orphans the cloned entities: they
+   * stay parented into the tree with nothing left recording them, so the next render instantiates
+   * a second copy that draws on top of the first.
+   *
+   * @param handle The shadow host whose instances should be destroyed.
+   */
+  void teardownInstances(EntityHandle handle);
+
+  /**
    * Create a new computed shadow tree instance, such as the shadow tree for a \ref xml_use element
    * or a \ref xml_pattern element.
    *

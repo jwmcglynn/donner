@@ -119,6 +119,19 @@ public:
   void invalidateComputed(EntityHandle handle);
 
   /**
+   * Returns true if any stylesheet loaded into \p registry contains an attribute selector that
+   * could match an attribute with the given local name.
+   *
+   * Writing such an attribute changes selector matching, and can do so for elements other than
+   * the one written (sibling combinators, descendant selectors), which per-entity dirty flags do
+   * not track. Callers use this to decide whether an attribute write needs a whole-tree restyle.
+   *
+   * @param registry Document registry.
+   * @param localName Attribute local name that is about to be written.
+   */
+  bool anyStylesheetUsesAttributeInSelector(Registry& registry, std::string_view localName) const;
+
+  /**
    * Invalidate the full style and reparse attributes.
    *
    * @param handle Entity handle to invalidate

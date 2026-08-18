@@ -519,9 +519,86 @@ Modify `StyleSystem` to skip clean entities.
   inheriting descendants) are recomputed in the style pass
 - [x] Correctness test: incremental style invalidation output matches a fresh full render for the
   same final DOM state
+- [x] Make the selective branch reachable from the render path (see below)
 
 At this point the style stage has a selective path, but the rest of `createComputedComponents()`
 still falls back to whole-tree recomputation once anything is dirty.
+
+#### Phase 3 was shipped switched off, and is now live
+
+The selective branch landed unreachable. `RenderingContext::ensureComputedComponents()` set
+`RenderTreeState::needsFullStyleRecompute` unconditionally immediately before calling
+`createComputedComponents()`, so `StyleSystem::computeAllStyles()` always took the whole-tree
+branch, discarded every `ComputedStyleComponent`, and recomputed the cascade for the entire
+document on any dirty entity. Only the unit tests that call `computeAllStyles()` directly ever
+exercised the selective branch.
+
+The flag was guarding a real hazard rather than being redundant. Tearing down shadow trees
+destroys the cloned entities, and repopulating a main shadow-tree instance creates fresh clones
+that each carry an empty `ComputedStyleComponent` placeholder. Nothing marks those clones dirty,
+so the selective branch would skip them, and the paint/mask/marker pass that follows dereferences
+`ComputedStyleComponent::properties` on every entity it sees.
+
+The fix marks the clones dirty where they are created, which is where the knowledge that they are
+new lives, and narrows the forced whole-tree restyle to the one case that still needs it:
+documents with active animation overrides. `applyAnimationOverrides()` writes animated
+presentation attributes directly into the cached computed styles, which is only sound while those
+styles are rebuilt from their unanimated base on every pass.
+
+Closing the selective path also exposed a gap in the invalidation hooks: removing an element
+through the document mutation API requested a full rebuild but not a full restyle, which left the
+remaining siblings' structural selector matches (`:nth-child`, `:empty`, `:first-child`, sibling
+combinators) stale. Element removal now requests the whole-tree restyle.
+
+Measured effect on the prepare phase for an incremental frame (parse, prepare once, then time the
+prepare that follows a single transform edit on a group; medians of five interleaved A/B rounds,
+`-c opt`, Linux aarch64):
+
+| Document | Before | After | Delta |
+|----------|--------|-------|-------|
+| Ghostscript_Tiger (240 paths) | 3.44 ms | 1.62 ms | -53% |
+| Synthetic, 10,003 elements with a class-selector stylesheet | 84.2 ms | 29.0 ms | -66% |
+| The same synthetic document, plus a `g[transform] rect` rule | 88.4 ms | 91.5 ms | parity |
+
+The third row is the fallback: once a stylesheet selects on the attribute being written, the edit
+takes the whole-tree restyle and the document performs as it did before. Interleaved in the order
+above it measured 6% slower, but re-running that document with the order reversed put the two at
+91.5 ms and 91.5 ms, so the gap is measurement drift rather than a cost of the check.
+
+The first prepare of a document is unchanged, as expected: it has never been able to use the
+selective branch, because no computed styles exist yet. Measured over the same rounds, 4.90 ms
+before and 4.89 ms after for Ghostscript_Tiger, 103.5 ms before and 104.0 ms after for the
+synthetic document, both within run-to-run noise.
+
+Correctness is pinned by per-mutation-class equivalence tests in
+`donner/svg/renderer/tests/RendererPublicApi_tests.cc`: presentation attribute, transform,
+class, inline style, text content, structural insert, structural remove (including a structural
+selector case), and `<use>` retarget edits each require the incrementally rendered document to be
+byte-identical to a freshly parsed document in the same final state, with variants covering main
+shadow trees (`<use>`), offscreen shadow trees (clipPath, mask, pattern, marker) and an animated
+document.
+
+The transform branch of `trySetPresentationAttribute()` is the one attribute write that stays on
+the selective pass, and it needs care: the value is stored in `AttributesComponent`, which is a
+live selector input, so `[transform]`, `[transform="..."]` and combinators keyed on them can start
+or stop matching, on other elements as well as the written one. It therefore requests the
+whole-tree restyle when, and only when, a loaded stylesheet actually selects on that attribute.
+That question is answered from a per-stylesheet cache of the attribute names its selectors
+reference, computed in `StylesheetComponent::parseStylesheet()`, which every stylesheet load and
+mutation path funnels through. The cache is keyed by attribute name rather than being a single
+"uses any attribute selector" flag because the user agent stylesheet always contains one
+(`*[xml|space=preserve]`), which would set a single flag for every document and give back the
+whole win. `SVGGraphicsElement::setTransform()` writes no attribute, so the compositor's drag path
+never reaches this check at all.
+
+Remaining over-approximation, deliberately left for a follow-up: `SVGElement::setStyle()`,
+`updateStyle()`, `setClassName()`, `setId()`, the generic-attribute path of `setAttribute()` and
+the non-transform branch of `trySetPresentationAttribute()` all request a whole-tree restyle
+unconditionally. That is correct but broader than necessary. Class, id and attribute edits can
+change selector matches on unrelated elements, so narrowing them in general needs the selector
+dependency index listed under Non-Goals; the cheaper move is to extend the per-attribute check
+above to the other presentation attributes, which would leave only genuinely selector-relevant
+writes on the whole-tree path.
 
 ### Phase 4: Selective Layout and Transform Recomputation
 

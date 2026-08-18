@@ -3,12 +3,16 @@
 
 #include <array>
 #include <filesystem>
+#include <functional>
 #include <limits>
+#include <tuple>
 #include <vector>
 
 #include "donner/base/ParseWarningSink.h"
 #include "donner/svg/SVG.h"
 #include "donner/svg/SVGRectElement.h"
+#include "donner/svg/SVGTextElement.h"
+#include "donner/svg/SVGUseElement.h"
 #include "donner/svg/renderer/Renderer.h"
 #include "donner/svg/renderer/tests/MockRendererInterface.h"
 #include "donner/svg/renderer/tests/RendererTestBackend.h"
@@ -26,6 +30,16 @@ using ::testing::Lt;
 SVGDocument ParseDocument(std::string_view svgSource) {
   ParseWarningSink warningSink;
   ParseResult<SVGDocument> maybeDocument = parser::SVGParser::ParseSVG(svgSource, warningSink);
+  EXPECT_FALSE(maybeDocument.hasError());
+  return std::move(maybeDocument.result());
+}
+
+SVGDocument ParseDocumentWithExperimental(std::string_view svgSource) {
+  ParseWarningSink warningSink;
+  parser::SVGParser::Options options;
+  options.enableExperimental = true;
+  ParseResult<SVGDocument> maybeDocument =
+      parser::SVGParser::ParseSVG(svgSource, warningSink, options);
   EXPECT_FALSE(maybeDocument.hasError());
   return std::move(maybeDocument.result());
 }
@@ -807,6 +821,442 @@ TEST(RendererPublicApiTest, AppendChildMatchesFullRender) {
   Renderer r2;
   r2.draw(doc2);
   const RendererBitmap full = NormalizeSnapshot(r2.takeSnapshot());
+
+  EXPECT_EQ(incremental.dimensions, full.dimensions);
+  EXPECT_EQ(incremental.pixels, full.pixels);
+}
+
+// --- Mutation-class equivalence: incremental render vs. a fresh parse ---
+//
+// One test per class of DOM mutation. Each renders a document, mutates it, renders again, and
+// requires the result to be byte-identical to rendering a freshly parsed document that already
+// has the mutated state. These pin the invariant that reusing cached computed state can never
+// produce different pixels than computing everything from scratch.
+
+/// Render `initialSource`, apply `mutate`, render again, and require the pixels to match a fresh
+/// render of `finalSource` exactly.
+///
+/// Includes an anti-vacuity control: if the mutation does not change the rendered output, the
+/// equivalence assertion would hold no matter what the incremental path did, so the caller would
+/// be testing nothing. Every case here is expected to be visible.
+void ExpectIncrementalMatchesFullRender(std::string_view initialSource,
+                                        const std::function<void(SVGDocument&)>& mutate,
+                                        std::string_view finalSource) {
+  SVGDocument incrementalDocument = ParseDocument(initialSource);
+  Renderer incrementalRenderer;
+  incrementalRenderer.draw(incrementalDocument);
+  mutate(incrementalDocument);
+  incrementalRenderer.draw(incrementalDocument);
+  const RendererBitmap incremental = NormalizeSnapshot(incrementalRenderer.takeSnapshot());
+  ASSERT_FALSE(incremental.empty());
+
+  SVGDocument fullDocument = ParseDocument(finalSource);
+  Renderer fullRenderer;
+  fullRenderer.draw(fullDocument);
+  const RendererBitmap full = NormalizeSnapshot(fullRenderer.takeSnapshot());
+  ASSERT_FALSE(full.empty());
+
+  SVGDocument initialDocument = ParseDocument(initialSource);
+  Renderer initialRenderer;
+  initialRenderer.draw(initialDocument);
+  const RendererBitmap initial = NormalizeSnapshot(initialRenderer.takeSnapshot());
+  ASSERT_FALSE(initial.empty());
+  EXPECT_NE(initial.pixels, full.pixels)
+      << "the mutation produced no visible change, so the equivalence assertion is vacuous";
+
+  EXPECT_EQ(incremental.dimensions, full.dimensions);
+  EXPECT_EQ(incremental.rowBytes, full.rowBytes);
+  EXPECT_EQ(incremental.pixels, full.pixels);
+}
+
+TEST(RendererPublicApiTest, PresentationAttributeChangeMatchesFullRender) {
+  ExpectIncrementalMatchesFullRender(
+      R"svg(
+      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
+        <rect id="r" x="1" y="1" width="6" height="6" fill="#ff0000" stroke="#000000" />
+      </svg>
+    )svg",
+      [](SVGDocument& document) {
+        auto target = document.querySelector("#r");
+        ASSERT_TRUE(target.has_value());
+        target->setAttribute("width", "11");
+        target->setAttribute("fill", "#00ff00");
+      },
+      R"svg(
+      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
+        <rect x="1" y="1" width="11" height="6" fill="#00ff00" stroke="#000000" />
+      </svg>
+    )svg");
+}
+
+TEST(RendererPublicApiTest, TransformAttributeChangeMatchesFullRender) {
+  // A transform edit marks only layout/transform dirty, so this is the mutation class that
+  // reaches the dirty-entity style pass.
+  ExpectIncrementalMatchesFullRender(
+      R"svg(
+      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
+        <g fill="#ff0000">
+          <rect id="r" width="5" height="5" transform="translate(1, 1)" />
+        </g>
+      </svg>
+    )svg",
+      [](SVGDocument& document) {
+        auto target = document.querySelector("#r");
+        ASSERT_TRUE(target.has_value());
+        target->setAttribute("transform", "translate(9, 8)");
+      },
+      R"svg(
+      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
+        <g fill="#ff0000">
+          <rect width="5" height="5" transform="translate(9, 8)" />
+        </g>
+      </svg>
+    )svg");
+}
+
+TEST(RendererPublicApiTest, TransformValueChangeUpdatesAttributeSelectorMatchesFullRender) {
+  // The transform attribute is a selector input, not just layout state: changing its value
+  // changes which `[transform="..."]` rules match.
+  ExpectIncrementalMatchesFullRender(
+      R"svg(
+      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
+        <style>rect { fill: #ff0000 } rect[transform="translate(9, 8)"] { fill: #0000ff }</style>
+        <rect id="r" width="5" height="5" transform="translate(1, 1)" />
+      </svg>
+    )svg",
+      [](SVGDocument& document) {
+        auto target = document.querySelector("#r");
+        ASSERT_TRUE(target.has_value());
+        target->setAttribute("transform", "translate(9, 8)");
+      },
+      R"svg(
+      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
+        <style>rect { fill: #ff0000 } rect[transform="translate(9, 8)"] { fill: #0000ff }</style>
+        <rect width="5" height="5" transform="translate(9, 8)" />
+      </svg>
+    )svg");
+}
+
+TEST(RendererPublicApiTest, TransformPresenceChangeUpdatesSiblingSelectorMatchesFullRender) {
+  // The match this changes is on a *different* element than the one written: adding the attribute
+  // makes `rect[transform] + rect` start matching the sibling. The transform itself is an
+  // identity translation, so the sibling's fill is the only visible difference, which keeps the
+  // anti-vacuity control pinned on exactly the non-local effect.
+  ExpectIncrementalMatchesFullRender(
+      R"svg(
+      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
+        <style>rect { fill: #ff0000 } rect[transform] + rect { fill: #0000ff }</style>
+        <rect id="r" width="5" height="5" />
+        <rect x="8" width="5" height="5" />
+      </svg>
+    )svg",
+      [](SVGDocument& document) {
+        auto target = document.querySelector("#r");
+        ASSERT_TRUE(target.has_value());
+        target->setAttribute("transform", "translate(0, 0)");
+      },
+      R"svg(
+      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
+        <style>rect { fill: #ff0000 } rect[transform] + rect { fill: #0000ff }</style>
+        <rect width="5" height="5" transform="translate(0, 0)" />
+        <rect x="8" width="5" height="5" />
+      </svg>
+    )svg");
+}
+
+TEST(RendererPublicApiTest, TransformChangeWithUseShadowTreeMatchesFullRender) {
+  // Shadow-tree instances are torn down and recreated on every pass, so their entities are new
+  // (and unstyled) each time even though nothing about them changed.
+  ExpectIncrementalMatchesFullRender(
+      R"svg(
+      <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">
+        <defs>
+          <g id="src" fill="#ff0000" stroke="#0000ff" stroke-width="1">
+            <rect width="6" height="6" />
+            <circle cx="9" cy="3" r="3" />
+          </g>
+        </defs>
+        <use id="u" href="#src" transform="translate(1, 1)" />
+        <use href="#src" transform="translate(1, 12)" />
+      </svg>
+    )svg",
+      [](SVGDocument& document) {
+        auto target = document.querySelector("#u");
+        ASSERT_TRUE(target.has_value());
+        target->setAttribute("transform", "translate(10, 1)");
+      },
+      R"svg(
+      <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">
+        <defs>
+          <g id="src" fill="#ff0000" stroke="#0000ff" stroke-width="1">
+            <rect width="6" height="6" />
+            <circle cx="9" cy="3" r="3" />
+          </g>
+        </defs>
+        <use href="#src" transform="translate(10, 1)" />
+        <use href="#src" transform="translate(1, 12)" />
+      </svg>
+    )svg");
+}
+
+TEST(RendererPublicApiTest, TransformChangeWithOffscreenShadowTreesMatchesFullRender) {
+  // clipPath, mask, pattern and marker references all instantiate offscreen shadow trees, which
+  // are likewise recreated on every pass.
+  ExpectIncrementalMatchesFullRender(
+      R"svg(
+      <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">
+        <defs>
+          <clipPath id="clip"><rect width="10" height="10" /></clipPath>
+          <mask id="m"><rect width="24" height="24" fill="#ffffff" /></mask>
+          <pattern id="p" width="4" height="4" patternUnits="userSpaceOnUse">
+            <rect width="2" height="2" fill="#00ff00" />
+          </pattern>
+          <marker id="mk" markerWidth="3" markerHeight="3" refX="1" refY="1">
+            <circle cx="1" cy="1" r="1" fill="#0000ff" />
+          </marker>
+        </defs>
+        <rect id="r" width="12" height="12" fill="url(#p)" clip-path="url(#clip)" mask="url(#m)"
+              transform="translate(1, 1)" />
+        <path d="M 2 20 L 10 20 L 18 20" stroke="#000000" fill="none" marker-start="url(#mk)"
+              marker-mid="url(#mk)" marker-end="url(#mk)" />
+      </svg>
+    )svg",
+      [](SVGDocument& document) {
+        auto target = document.querySelector("#r");
+        ASSERT_TRUE(target.has_value());
+        target->setAttribute("transform", "translate(8, 6)");
+      },
+      R"svg(
+      <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">
+        <defs>
+          <clipPath id="clip"><rect width="10" height="10" /></clipPath>
+          <mask id="m"><rect width="24" height="24" fill="#ffffff" /></mask>
+          <pattern id="p" width="4" height="4" patternUnits="userSpaceOnUse">
+            <rect width="2" height="2" fill="#00ff00" />
+          </pattern>
+          <marker id="mk" markerWidth="3" markerHeight="3" refX="1" refY="1">
+            <circle cx="1" cy="1" r="1" fill="#0000ff" />
+          </marker>
+        </defs>
+        <rect width="12" height="12" fill="url(#p)" clip-path="url(#clip)" mask="url(#m)"
+              transform="translate(8, 6)" />
+        <path d="M 2 20 L 10 20 L 18 20" stroke="#000000" fill="none" marker-start="url(#mk)"
+              marker-mid="url(#mk)" marker-end="url(#mk)" />
+      </svg>
+    )svg");
+}
+
+TEST(RendererPublicApiTest, ClassNameChangeMatchesFullRender) {
+  ExpectIncrementalMatchesFullRender(
+      R"svg(
+      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
+        <style>.a { fill: #ff0000 } .b { fill: #0000ff } .b rect { stroke: #00ff00 }</style>
+        <g id="g" class="a"><rect width="10" height="10" /></g>
+      </svg>
+    )svg",
+      [](SVGDocument& document) {
+        auto target = document.querySelector("#g");
+        ASSERT_TRUE(target.has_value());
+        target->setClassName("b");
+      },
+      R"svg(
+      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
+        <style>.a { fill: #ff0000 } .b { fill: #0000ff } .b rect { stroke: #00ff00 }</style>
+        <g class="b"><rect width="10" height="10" /></g>
+      </svg>
+    )svg");
+}
+
+TEST(RendererPublicApiTest, StyleAttributeChangeWithInheritanceMatchesFullRender) {
+  ExpectIncrementalMatchesFullRender(
+      R"svg(
+      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
+        <g id="g" style="fill: #ff0000"><rect width="10" height="10" /></g>
+      </svg>
+    )svg",
+      [](SVGDocument& document) {
+        auto target = document.querySelector("#g");
+        ASSERT_TRUE(target.has_value());
+        target->setStyle("fill: #0000ff; opacity: 0.5");
+      },
+      R"svg(
+      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
+        <g style="fill: #0000ff; opacity: 0.5"><rect width="10" height="10" /></g>
+      </svg>
+    )svg");
+}
+
+TEST(RendererPublicApiTest, RemoveChildMatchesFullRender) {
+  ExpectIncrementalMatchesFullRender(
+      R"svg(
+      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
+        <rect width="6" height="6" fill="#ff0000" />
+        <rect id="r" x="8" width="6" height="6" fill="#0000ff" />
+      </svg>
+    )svg",
+      [](SVGDocument& document) {
+        auto target = document.querySelector("#r");
+        ASSERT_TRUE(target.has_value());
+        document.svgElement().removeChild(*target);
+      },
+      R"svg(
+      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
+        <rect width="6" height="6" fill="#ff0000" />
+      </svg>
+    )svg");
+}
+
+TEST(RendererPublicApiTest, RemoveElementUpdatesStructuralSelectorsMatchesFullRender) {
+  // Removing an element changes which of its remaining siblings match structural selectors, a
+  // dependency that no per-entity dirty flag tracks.
+  ExpectIncrementalMatchesFullRender(
+      R"svg(
+      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
+        <style>rect { fill: #ff0000 } rect:last-child { fill: #0000ff }</style>
+        <rect width="6" height="6" />
+        <rect id="r" x="8" width="6" height="6" />
+      </svg>
+    )svg",
+      [](SVGDocument& document) {
+        auto target = document.querySelector("#r");
+        ASSERT_TRUE(target.has_value());
+        std::ignore = document.removeElement(*target);
+      },
+      R"svg(
+      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
+        <style>rect { fill: #ff0000 } rect:last-child { fill: #0000ff }</style>
+        <rect width="6" height="6" />
+      </svg>
+    )svg");
+}
+
+TEST(RendererPublicApiTest, InsertChildUpdatesStructuralSelectorsMatchesFullRender) {
+  ExpectIncrementalMatchesFullRender(
+      R"svg(
+      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
+        <style>rect { fill: #ff0000 } rect:last-child { fill: #0000ff }</style>
+        <rect width="6" height="6" />
+      </svg>
+    )svg",
+      [](SVGDocument& document) {
+        SVGRectElement rect = SVGRectElement::Create(document);
+        rect.setAttribute("x", "8");
+        rect.setAttribute("width", "6");
+        rect.setAttribute("height", "6");
+        document.svgElement().appendChild(rect);
+      },
+      R"svg(
+      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
+        <style>rect { fill: #ff0000 } rect:last-child { fill: #0000ff }</style>
+        <rect width="6" height="6" />
+        <rect x="8" width="6" height="6" />
+      </svg>
+    )svg");
+}
+
+TEST(RendererPublicApiTest, UseHrefRetargetMatchesFullRender) {
+  ExpectIncrementalMatchesFullRender(
+      R"svg(
+      <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">
+        <defs>
+          <rect id="a" width="8" height="8" fill="#ff0000" />
+          <circle id="b" cx="4" cy="4" r="4" fill="#0000ff" />
+        </defs>
+        <use id="u" href="#a" transform="translate(2, 2)" />
+      </svg>
+    )svg",
+      [](SVGDocument& document) {
+        auto target = document.querySelector("#u");
+        ASSERT_TRUE(target.has_value());
+        target->cast<SVGUseElement>().setHref("#b");
+      },
+      R"svg(
+      <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">
+        <defs>
+          <rect id="a" width="8" height="8" fill="#ff0000" />
+          <circle id="b" cx="4" cy="4" r="4" fill="#0000ff" />
+        </defs>
+        <use href="#b" transform="translate(2, 2)" />
+      </svg>
+    )svg");
+}
+
+TEST(RendererPublicApiTest, TextContentEditMatchesFullRender) {
+  if (!ActiveRendererSupportsFeature(RendererBackendFeature::Text)) {
+    GTEST_SKIP() << "Text rendering disabled in this variant (" << ActiveRendererBackendName()
+                 << "); skipping text-edit equivalence assertion.";
+  }
+
+  ExpectIncrementalMatchesFullRender(
+      R"svg(
+      <svg xmlns="http://www.w3.org/2000/svg" width="64" height="32" viewBox="0 0 64 32"
+           font-size="16">
+        <text id="t" x="4" y="20">AAA</text>
+      </svg>
+    )svg",
+      [](SVGDocument& document) {
+        auto target = document.querySelector("#t");
+        ASSERT_TRUE(target.has_value());
+        target->cast<SVGTextElement>().setTextContent("BB");
+      },
+      R"svg(
+      <svg xmlns="http://www.w3.org/2000/svg" width="64" height="32" viewBox="0 0 64 32"
+           font-size="16">
+        <text x="4" y="20">BB</text>
+      </svg>
+    )svg");
+}
+
+TEST(RendererPublicApiTest, TransformChangeOnAnimatedDocumentMatchesFullRender) {
+  // Animation overrides are written into the cached computed styles in place, so a document with
+  // active overrides must keep producing the same pixels as a freshly parsed equivalent even when
+  // a later mutation only touches the transform.
+  constexpr std::string_view kInitialSource = R"svg(
+      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
+        <rect id="r" width="6" height="6" fill="#ff0000" transform="translate(1, 1)">
+          <set attributeName="fill" to="#0000ff" begin="1s" dur="2s" />
+        </rect>
+      </svg>
+    )svg";
+  constexpr std::string_view kFinalSource = R"svg(
+      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
+        <rect width="6" height="6" fill="#ff0000" transform="translate(8, 7)">
+          <set attributeName="fill" to="#0000ff" begin="1s" dur="2s" />
+        </rect>
+      </svg>
+    )svg";
+
+  SVGDocument incrementalDocument = ParseDocumentWithExperimental(kInitialSource);
+  incrementalDocument.setTime(1.5);
+  Renderer incrementalRenderer;
+  incrementalRenderer.draw(incrementalDocument);
+
+  auto target = incrementalDocument.querySelector("#r");
+  ASSERT_TRUE(target.has_value());
+  target->setAttribute("transform", "translate(8, 7)");
+
+  incrementalRenderer.draw(incrementalDocument);
+  const RendererBitmap incremental = NormalizeSnapshot(incrementalRenderer.takeSnapshot());
+  ASSERT_FALSE(incremental.empty());
+
+  SVGDocument fullDocument = ParseDocumentWithExperimental(kFinalSource);
+  fullDocument.setTime(1.5);
+  Renderer fullRenderer;
+  fullRenderer.draw(fullDocument);
+  const RendererBitmap full = NormalizeSnapshot(fullRenderer.takeSnapshot());
+  ASSERT_FALSE(full.empty());
+
+  // Anti-vacuity: prove the animation override is actually applied at t=1.5. Without this the
+  // comparison would pass trivially if `<set>` never took effect, which is the whole behavior
+  // this test exists to protect.
+  SVGDocument beforeAnimationDocument = ParseDocumentWithExperimental(kFinalSource);
+  beforeAnimationDocument.setTime(0.0);
+  Renderer beforeAnimationRenderer;
+  beforeAnimationRenderer.draw(beforeAnimationDocument);
+  const RendererBitmap beforeAnimation = NormalizeSnapshot(beforeAnimationRenderer.takeSnapshot());
+  ASSERT_FALSE(beforeAnimation.empty());
+  EXPECT_NE(beforeAnimation.pixels, full.pixels)
+      << "the <set> override never applied, so the equivalence assertion is vacuous";
 
   EXPECT_EQ(incremental.dimensions, full.dimensions);
   EXPECT_EQ(incremental.pixels, full.pixels);

@@ -417,6 +417,19 @@ void StyleSystem::computeAllStyles(Registry& registry, ParseWarningSink& warning
       renderState != nullptr && renderState->needsFullStyleRecompute;
   const bool hasDirtyEntities = !registry.view<DirtyFlagsComponent>().empty();
 
+  // Selective pass: recompute only the entities flagged dirty. This depends on a two-part
+  // invariant that mutation hooks must uphold together, because either half alone is inert:
+  //
+  //   1. The entity's cached ComputedStyleComponent must have been removed. computeStyle() is
+  //      memoized (see computePropertiesInto, which returns early once `properties` is set), so
+  //      a Style dirty flag on an entity whose cached style is still populated does nothing.
+  //   2. The entity must be flagged DirtyFlagsComponent::Style. Removing the cached style without
+  //      flagging it leaves the entity with no computed style at all, which later passes that
+  //      walk ComputedStyleComponent would then skip or dereference.
+  //
+  // Mutations whose effect is not local to specific entities (stylesheet edits, class/id/attribute
+  // writes that feed selectors, structural changes) cannot express themselves through per-entity
+  // flags at all, and must instead request RenderTreeState::needsFullStyleRecompute.
   if (hasBeenBuilt && hasDirtyEntities && !needsFullStyleRecompute) {
     for (auto entity : registry.view<DirtyFlagsComponent>()) {
       const auto& dirty = registry.get<DirtyFlagsComponent>(entity);
@@ -467,6 +480,17 @@ void StyleSystem::computeStylesFor(Registry& registry, std::span<const Entity> e
   for (Entity entity : entities) {
     computeStyle(EntityHandle(registry, entity), warningSink);
   }
+}
+
+bool StyleSystem::anyStylesheetUsesAttributeInSelector(Registry& registry,
+                                                       std::string_view localName) const {
+  for (auto view = registry.view<StylesheetComponent>(); auto stylesheetEntity : view) {
+    if (view.get<StylesheetComponent>(stylesheetEntity).usesAttributeInSelector(localName)) {
+      return true;
+    }
+  }
+
+  return false;
 }
 
 void StyleSystem::invalidateComputed(EntityHandle handle) {

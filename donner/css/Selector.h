@@ -37,6 +37,23 @@ struct Selector {
   std::vector<ComplexSelector> entries;
 
   /**
+   * Collect the attribute names referenced by every attribute selector in this selector.
+   *
+   * Recurses into functional pseudo-classes that carry their own selector list, such as `:is()`,
+   * `:not()`, `:has()` and `:nth-child(An+B of S)`, so a nested `[attr]` is not missed.
+   *
+   * Namespaces are ignored: only the local name is collected, which over-approximates
+   * `[ns|attr]` to `[attr]`. Callers use this to decide whether writing an attribute can change
+   * selector matching, where over-approximating is the safe direction.
+   *
+   * @param outNames Receives each distinct local name found, appended to any existing contents.
+   * @param outMatchesAnyName Set to true if a selector uses a wildcard local name, meaning any
+   *   attribute write can change matching. No CSS syntax produces this today; it is a fail-safe.
+   */
+  void collectAttributeSelectorNames(std::vector<RcString>& outNames,
+                                     bool& outMatchesAnyName) const;
+
+  /**
    * Get the max specificity of all ComplexSelectors in the Selector.
    */
   Specificity::ABC maxSpecificity() const {
