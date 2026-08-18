@@ -438,15 +438,35 @@ That callback points `RendererGeode` at the current swapchain texture, preserves
 framebuffer contents, pushes a framebuffer-space clip rect for the artboard, and calls
 `OverlayRenderer::drawChromeFromSnapshot`.
 
-The overlay is rebuilt every frame from the current viewport and current interaction state. It is
-not retained behind the async document-content version gate and it is not reprojected from a cached
-overlay texture during pan, zoom, drag, or transform handles. This keeps the chrome aligned with the
-content even when the document tiles are still refining.
+The overlay is rebuilt every frame from the current viewport and current interaction state, and it
+is never reprojected from a cached overlay texture during pan, zoom, drag, or transform handles.
+This keeps the chrome aligned with the content even when the document tiles are still refining.
+
+The async document-content version gate holds back the recapture, not the snapshot. A
+non-transforming edit that puts the live document ahead of the presented pixels has no
+presenter-side projection that could make chrome captured from the new DOM line up with the older
+pixels, so the capture waits for the worker to catch up. But the chrome pass itself exists only for
+frames a snapshot is held for, so releasing the snapshot across that window would present document
+pixels with no chrome over them at all: the selection outline, bounds, and handles would blink out
+until the worker caught up, which is a dropout rather than a stale frame. The snapshot is therefore
+retained across the catch-up window and only the recapture is deferred. The cost is a geometry lead
+of at most one render, the same bargain the pen live preview already makes deliberately in the
+other direction.
+
+A changed chrome subject is the one difference the gate may not hold. Chrome that outlines elements
+which are no longer selected or hovered is wrong rather than early, and no later frame will
+recapture for it while the gate holds, so those frames recapture immediately: deselecting captures
+empty chrome instead of leaving a stale outline behind.
 
 The path overlay has an iron lockstep rule: it must represent the same transform as the document
 tiles actually presented underneath it in that frame. If a high-zoom or worker-busy frame cannot
 present a fresh drag-target tile yet, the overlay must be projected back to the presented content
 transform instead of displaying a newer transform over stale pixels.
+
+The retained snapshot above does not weaken that rule, because the rule is about transform. Held
+chrome is re-pointed at the presented transform at draw time, so it never puts a newer transform
+over older pixels. Only geometry, which no reprojection can reconcile, is allowed to lead, and only
+by the single render it takes the gate to release.
 
 Large selections use LOD:
 
@@ -457,9 +477,12 @@ Large selections use LOD:
 | >32 elements or "select all" | combined bounds + handles + count                           | visible outlines after interaction settles          |
 | Group with many descendants  | group bounds first                                          | descendant outlines only when zoomed in and visible |
 
-`SelectionChromeSnapshot` is a per-frame transfer object, not a retained cache. It should keep
-capture and draw separate so we can count work, cull before draw, and choose large-selection LOD,
-but it should be discarded after the current overlay has been drawn or uploaded.
+`SelectionChromeSnapshot` keeps capture and draw separate so we can count work, cull before draw,
+and choose large-selection LOD. It is held for as long as there is chrome to draw rather than
+discarded after each draw, because the chrome pass is installed only for frames a snapshot is held
+for. It is still not a cache that outlives its subject: a capture is redone whenever the viewport,
+the interaction state, or the chrome subject changes, and the held geometry is re-pointed at the
+presented transform every time it is drawn.
 
 ### Source-Pane Ropes
 
