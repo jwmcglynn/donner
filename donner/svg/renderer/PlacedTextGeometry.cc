@@ -36,8 +36,9 @@ Path TransformPath(const Path& path, const Transform2d& transform) {
 }
 
 Transform2d GlyphPlacementTransform(const TextGlyph& glyph) {
-  // Translate to the baseline origin, then rotate about it. As a composed
-  // transform this is `Rotate * Translate` (translate applied first), matching
+  // Rotate the outline about its own origin, then move it to the baseline
+  // position: `Rotate * Translate`, which applies the rotation first because a
+  // `Transform2d` product applies its LEFT operand first. Matching
   // `RendererTinySkia::drawText`.
   Transform2d glyphFromLocal = Transform2d::Translate(glyph.xPosition, glyph.yPosition);
   if (glyph.rotateDegrees != 0.0) {

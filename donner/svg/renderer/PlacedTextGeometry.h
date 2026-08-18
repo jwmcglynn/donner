@@ -63,11 +63,12 @@ struct GlyphOutlineAndPlacement {
  * @brief The affine that places a glyph's unplaced outline into the text
  *   element's local space.
  *
- * Translate to the baseline origin, then rotate about it: as a composed
- * transform `Rotate(rotateDegrees) * Translate(xPosition, yPosition)`, matching
- * `RendererTinySkia::drawText`. Depends only on the glyph's position and
- * rotation, so a renderer that caches outlines by glyph identity can compute
- * this per occurrence without touching the font backend.
+ * Rotate the outline about its own origin, then move it to the baseline
+ * position: `Rotate(rotateDegrees) * Translate(xPosition, yPosition)`, which
+ * applies the rotation first because a `Transform2d` product applies its LEFT
+ * operand first. Matches `RendererTinySkia::drawText`. Depends only on the
+ * glyph's position and rotation, so a renderer that caches outlines by glyph
+ * identity can compute this per occurrence without touching the font backend.
  *
  * @param glyph The positioned glyph.
  * @return The placement transform.

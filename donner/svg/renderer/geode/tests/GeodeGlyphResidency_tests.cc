@@ -104,7 +104,7 @@ TEST(GeodeGlyphCacheTest, EntryCountBudgetDropsTheLeastRecentlyUsedFirst) {
   InsertUsed(cache, middle, /*curveCount=*/1, /*frame=*/2);
   InsertUsed(cache, newest, /*curveCount=*/1, /*frame=*/3);
 
-  EXPECT_EQ(cache.evictToBudget(/*currentFrame=*/4, /*maxEntries=*/2,
+  EXPECT_EQ(cache.evictToBudget(/*oldestOpenFrame=*/4, /*maxEntries=*/2,
                                 /*maxEncodedBytes=*/1u << 20),
             1u);
   EXPECT_EQ(cache.size(), 2u);
@@ -121,7 +121,7 @@ TEST(GeodeGlyphCacheTest, ByteBudgetDropsEntriesUntilItFits) {
   InsertUsed(cache, MakeKey(/*glyphIndex=*/3), /*curveCount=*/4, /*frame=*/3);
   ASSERT_EQ(cache.encodedBytes(), 12u * curveBytes);
 
-  EXPECT_EQ(cache.evictToBudget(/*currentFrame=*/4, /*maxEntries=*/100,
+  EXPECT_EQ(cache.evictToBudget(/*oldestOpenFrame=*/4, /*maxEntries=*/100,
                                 /*maxEncodedBytes=*/5u * curveBytes),
             2u);
   EXPECT_EQ(cache.size(), 1u);
@@ -129,16 +129,16 @@ TEST(GeodeGlyphCacheTest, ByteBudgetDropsEntriesUntilItFits) {
   EXPECT_NE(cache.find(MakeKey(/*glyphIndex=*/3)), nullptr);
 }
 
-TEST(GeodeGlyphCacheTest, EntriesUsedThisFrameSurviveAnOverBudgetTrim) {
-  // The frame that is drawing right now has recorded draws reading these
-  // entries' geometry, and freeing a slab range mid-frame would hand it to a
-  // later allocation in the same frame.
+TEST(GeodeGlyphCacheTest, EntriesAnUnsubmittedFrameTouchedSurviveAnOverBudgetTrim) {
+  // A frame that touched these entries has not submitted; its recorded draws
+  // still read their geometry, so freeing the slab range would hand it to a
+  // later allocation to overwrite.
   GeodeGlyphCache cache(/*deviceId=*/1u);
   InsertUsed(cache, MakeKey(/*glyphIndex=*/1), /*curveCount=*/1, /*frame=*/9);
   InsertUsed(cache, MakeKey(/*glyphIndex=*/2), /*curveCount=*/1, /*frame=*/9);
   InsertUsed(cache, MakeKey(/*glyphIndex=*/3), /*curveCount=*/1, /*frame=*/9);
 
-  EXPECT_EQ(cache.evictToBudget(/*currentFrame=*/9, /*maxEntries=*/1,
+  EXPECT_EQ(cache.evictToBudget(/*oldestOpenFrame=*/9, /*maxEntries=*/1,
                                 /*maxEncodedBytes=*/1u << 20),
             0u);
   EXPECT_EQ(cache.size(), 3u);
@@ -148,7 +148,7 @@ TEST(GeodeGlyphCacheTest, TrimIsSkippedWhenTheCacheAlreadyFits) {
   GeodeGlyphCache cache(/*deviceId=*/1u);
   InsertUsed(cache, MakeKey(/*glyphIndex=*/1), /*curveCount=*/1, /*frame=*/1);
 
-  EXPECT_EQ(cache.evictToBudget(/*currentFrame=*/2, /*maxEntries=*/4,
+  EXPECT_EQ(cache.evictToBudget(/*oldestOpenFrame=*/2, /*maxEntries=*/4,
                                 /*maxEncodedBytes=*/1u << 20),
             0u);
   EXPECT_EQ(cache.size(), 1u);
@@ -160,13 +160,19 @@ TEST(GeodeGlyphCacheTest, BeginFrameTrimsAtMostOncePerFrame) {
   InsertUsed(cache, MakeKey(/*glyphIndex=*/2), /*curveCount=*/1, /*frame=*/1);
   InsertUsed(cache, MakeKey(/*glyphIndex=*/3), /*curveCount=*/1, /*frame=*/1);
 
-  EXPECT_EQ(cache.beginFrame(/*frameIndex=*/2, /*maxEntries=*/2, /*maxEncodedBytes=*/1u << 20), 1u);
+  EXPECT_EQ(cache.beginFrame(/*frameIndex=*/2, /*oldestOpenFrame=*/2, /*maxEntries=*/2,
+                             /*maxEncodedBytes=*/1u << 20),
+            1u);
   // A second touch of the same frame must not trim again, even though the
   // renderer calls the accessor once per glyph occurrence.
-  EXPECT_EQ(cache.beginFrame(/*frameIndex=*/2, /*maxEntries=*/1, /*maxEncodedBytes=*/1u << 20), 0u);
+  EXPECT_EQ(cache.beginFrame(/*frameIndex=*/2, /*oldestOpenFrame=*/2, /*maxEntries=*/1,
+                             /*maxEncodedBytes=*/1u << 20),
+            0u);
   EXPECT_EQ(cache.size(), 2u);
 
-  EXPECT_EQ(cache.beginFrame(/*frameIndex=*/3, /*maxEntries=*/1, /*maxEncodedBytes=*/1u << 20), 1u);
+  EXPECT_EQ(cache.beginFrame(/*frameIndex=*/3, /*oldestOpenFrame=*/3, /*maxEntries=*/1,
+                             /*maxEncodedBytes=*/1u << 20),
+            1u);
   EXPECT_EQ(cache.size(), 1u);
 }
 
