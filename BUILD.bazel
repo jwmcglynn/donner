@@ -61,6 +61,8 @@ exports_files(
         "donner_splash.svg",
         "BUILD.bazel",
         "MODULE.bazel",
+        ".github/actions/re-turnstile/action.yml",
+        ".github/actions/re-turnstile/admission.py",
         ".github/workflows/cmake.yml",
         ".github/workflows/codeql.yml",
         ".github/workflows/coverage.yml",

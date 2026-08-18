@@ -763,10 +763,15 @@ jobs:
           fail_ci_if_error: true
           verbose: false
 
-  # Wait for the coverage lane on a hosted runner so queued older work can
+  # Wait for a self-hosted pool slot on a hosted runner so queued older work can
   # still acquire the constrained self-hosted runner pool. Waiting inside the
   # heavy job can deadlock when newer runs occupy every runner while the oldest
   # lane remains queued.
+  #
+  # Coverage shares one pool with CI's Linux lane, sized to the runner fleet,
+  # instead of holding a private slot. A per-lane slot made coverage a 1-wide
+  # FIFO: a burst of coverage runs serialized into a multi-hour backlog while
+  # the rest of the fleet sat idle because no Linux work was queued.
   coverage-self-hosted-turnstile:
     runs-on: ubuntu-24.04
     needs: determine-targets
@@ -782,6 +787,9 @@ jobs:
         uses: ./.github/actions/re-turnstile
         with:
           lane: coverage-self-hosted
+          pool: linux-self-hosted coverage-self-hosted
+          pool-workflows: main.yml coverage.yml
+          capacity: "4"
           token: ${{ github.token }}
           timeout-minutes: "150"
 
@@ -800,22 +808,24 @@ jobs:
     # still fails in about a minute regardless of this backstop; the CPU-capped
     # 2-3 h local re-run cannot recur because local fallback is disabled.
     timeout-minutes: 210
-    # Admission control on the shared remote-execution backend. Two concurrent
-    # instrumented coverage builds were the measured failure that hit the
-    # timeout: both self-hosted lanes execute on a shared remote-execution
-    # backend that an interactive development host also uses with priority, so
-    # two-plus concurrent instrumented builds oversubscribe it and crawl into
-    # the timeout (measured). Serialization is enforced by the hosted
-    # re-turnstile prerequisite above, NOT by a GitHub concurrency group.
-    # A concurrency group caps the queue at one pending run and cancels any
-    # older pending run when a third concurrent run arrives, so a parallel-PR
-    # burst (and every post-merge main coverage run competing for the same
-    # group) drops pending runs and self-clogs. The turnstile instead holds
-    # each run until its turn, FIFO, so N concurrent runs all execute in
-    # submission order and none are cancelled, while still keeping at most one
-    # instrumented coverage build on the backend at a time. The sibling CI
-    # linux-self-hosted lane serializes on its own turnstile lane, so a Linux
-    # build and a coverage build may overlap but two coverage builds never do.
+    # Admission control on the shared remote-execution backend. Both
+    # self-hosted lanes execute on a backend that an interactive development
+    # host also uses with priority, so unbounded concurrent instrumented builds
+    # oversubscribe it and crawl into the timeout (measured). Admission is
+    # enforced by the hosted re-turnstile prerequisite above, NOT by a GitHub
+    # concurrency group. A concurrency group caps the queue at one pending run
+    # and cancels any older pending run when a third concurrent run arrives, so
+    # a parallel-PR burst (and every post-merge main coverage run competing for
+    # the same group) drops pending runs and self-clogs. The turnstile instead
+    # holds each run until its turn, FIFO, so N concurrent runs all execute in
+    # submission order and none are cancelled.
+    #
+    # The bound is a POOL shared with CI's linux-self-hosted lane, sized to the
+    # runner fleet, not one slot per lane. Per-lane slots capped the fleet at
+    # two jobs and made a coverage burst serialize behind itself while Linux
+    # capacity sat idle. Any mix of Linux and coverage jobs may hold the pool's
+    # slots; the ceiling on backend demand is the pool size, which is what the
+    # oversubscription measurement actually constrains.
     env:
       # RE-availability SLA: do NOT fall back to local execution when remote
       # execution is unavailable or degraded. A CPU-capped self-hosted runner
