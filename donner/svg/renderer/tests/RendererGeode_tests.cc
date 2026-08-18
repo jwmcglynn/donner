@@ -2391,6 +2391,32 @@ TEST_F(RendererGeodeTest, FilterImageWithTrailingPayloadIsTransparent) {
   EXPECT_THAT(pixelAt(renderer.takeSnapshot(), 2, 2), IsTransparent());
 }
 
+TEST_F(RendererGeodeTest, FilterImageOverTextureAxisLimitIsTransparent) {
+  RendererGeode renderer = createRenderer();
+  beginFrame(renderer);
+
+  constexpr int kOverLimitWidth = 16385;
+  components::filter_primitive::Image image;
+  image.imageData.resize(static_cast<std::size_t>(kOverLimitWidth) * 4u, 255);
+  image.imageWidth = kOverLimitWidth;
+  image.imageHeight = 1;
+
+  components::FilterGraph graph;
+  components::FilterNode imageNode;
+  imageNode.primitive = std::move(image);
+  graph.nodes.push_back(std::move(imageNode));
+
+  renderer.pushFilterLayer(graph, Box2d::FromXYWH(0.0, 0.0, 5.0, 5.0));
+  renderer.setPaint(solidFill(css::RGBA(0, 0, 0, 0)));
+  renderer.drawRect(Box2d::FromXYWH(0.0, 0.0, 5.0, 5.0), StrokeParams{});
+  renderer.popFilterLayer();
+  renderer.endFrame();
+
+  const RendererBitmap snapshot = renderer.takeSnapshot();
+  ASSERT_FALSE(snapshot.empty());
+  EXPECT_THAT(pixelAt(snapshot, 2, 2), IsTransparent());
+}
+
 /// feMerge: composite two feFlood layers via alpha-over.
 TEST_F(RendererGeodeTest, FilterMergeCompositesInputs) {
   RendererGeode renderer = createRenderer();
