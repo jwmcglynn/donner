@@ -132,12 +132,12 @@ public:
     double pixelatedScaleX = 1.0;
     /// @see pixelatedScaleX
     double pixelatedScaleY = 1.0;
-    /// Set when the source texture already stores premultiplied-alpha
-    /// pixels. `drawImage` uses straight-alpha textures uploaded from
-    /// `ImageResource` (default = false). Offscreen render targets that
-    /// Geode blits back during `popIsolatedLayer` / pattern compositing
-    /// are premultiplied and must set this flag to avoid a double
-    /// premultiplication that darkens the RGB channel.
+    /// Set when the source texture already stores premultiplied-alpha pixels.
+    /// `drawImage` premultiplies `ImageResource` pixels before upload, and
+    /// offscreen render targets blitted during `popIsolatedLayer` / pattern
+    /// compositing are already premultiplied. Both paths set this flag to avoid
+    /// a second premultiplication that darkens the RGB channel. Straight-alpha
+    /// callers leave the default false so the shader premultiplies on output.
     bool sourceIsPremultiplied = false;
     /// `<mask>` compositing input. Ignored unless `maskMode` is nonzero.
     wgpu::Texture maskTexture;

@@ -32,15 +32,13 @@ struct Uniforms {
   // Overall multiplier applied to the sampled texel. Used for
   // `ImageParams::opacity * paint.opacity` on the draw path.
   opacity: f32,
-  // 0 = texture stores STRAIGHT alpha (default; `drawImage` for SVG
-  // `<image>` elements sourced from `ImageResource`). The fragment
-  // shader will premultiply by `alpha * opacity` before writing.
-  // 1 = texture already stores PREMULTIPLIED alpha (used by
-  // `blitFullTarget` for layer/pattern compositing - offscreen render
-  // targets always end up premultiplied because the Geode render
-  // pipeline's blend state is premultiplied source-over). The shader
-  // will multiply the entire texel by `opacity` and write the result
-  // as-is.
+  // 0 = texture stores STRAIGHT alpha. The fragment shader will premultiply
+  // by `alpha * opacity` before writing.
+  // 1 = texture already stores PREMULTIPLIED alpha. This includes
+  // `drawImage` uploads, whose `ImageResource` pixels are premultiplied before
+  // upload, and `blitFullTarget` layer/pattern compositing from premultiplied
+  // offscreen targets. The shader multiplies the entire texel by `opacity` and
+  // writes the result as-is.
   sourceIsPremult: u32,
   // Mask coverage selector for the texture bound at binding 3:
   // 0 disables masking, 1 uses luminance, and 2 uses alpha.
