@@ -259,6 +259,23 @@ public:
   /// waits that discover a hang run through const accessors.
   void markDeviceLost(const char* reason) const;
 
+  /**
+   * Declare this device lost because a bounded wait exceeded its deadline,
+   * recording which wait it was and how long it actually ran.
+   *
+   * Prefer this over \ref markDeviceLost at every deadline: the attribution is
+   * what turns "rendering stopped" into a diagnosable report, and it is only
+   * available at the wait site. Loss stays sticky, and the FIRST attribution
+   * wins: once a device hangs, every later bounded wait against it also times
+   * out, and those are consequences rather than the cause.
+   *
+   * @param site Which bounded wait expired.
+   * @param elapsed Wall time that wait spent before giving up.
+   * @param reason Human-readable cause, logged once like \ref markDeviceLost.
+   */
+  void markDeviceLostAfterWaitTimeout(GpuWaitSite site, std::chrono::milliseconds elapsed,
+                                      const char* reason) const;
+
   /// Instance that created the headless device. Null for externally-owned devices.
   const wgpu::Instance& instance() const;
 
@@ -269,6 +286,14 @@ public:
     int count = 0;
     int pollIterations = 0;
     bool usedTimedWaitAny = false;
+    /// True once this device has been declared lost. Sticky, so every later
+    /// consume keeps reporting it: a frame that never rendered has no other
+    /// evidence to carry.
+    bool deviceLost = false;
+    /// Bounded wait that declared that loss, or `None`.
+    GpuWaitSite timedOutWaitSite = GpuWaitSite::None;
+    /// Wall time that wait spent before giving up, in milliseconds.
+    int timedOutWaitMs = 0;
   };
 
   /// Record one completed CPU readback from a renderer sharing this device.

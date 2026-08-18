@@ -325,6 +325,25 @@ void GeodeDevice::markDeviceLost(const char* reason) const {
   }
 }
 
+void GeodeDevice::markDeviceLostAfterWaitTimeout(GpuWaitSite site,
+                                                 std::chrono::milliseconds elapsed,
+                                                 const char* reason) const {
+  if (lostState_->lost.load(std::memory_order_acquire)) {
+    // Keep the first attribution. Once the device is hung, every later
+    // bounded wait against it expires too, and overwriting would replace the
+    // wait that found the hang with one that merely inherited it.
+    return;
+  }
+  // Publish the attribution before the flag so an observer that sees `lost`
+  // also sees a populated site. Two waits expiring at once can both pass the
+  // check above and race here; either store is a real timeout attribution, so
+  // the race is benign and `markDeviceLost` still logs exactly once.
+  lostState_->timedOutSite.store(site, std::memory_order_relaxed);
+  lostState_->timedOutElapsedMs.store(static_cast<int>(elapsed.count()),
+                                      std::memory_order_relaxed);
+  markDeviceLost(reason);
+}
+
 GpuWaitResult GeodeDevice::waitForQueueIdle(std::chrono::milliseconds timeout) const {
   if (isDeviceLost()) {
     return GpuWaitResult::DeviceLost;
@@ -344,7 +363,9 @@ GpuWaitResult GeodeDevice::waitForQueueIdle(std::chrono::milliseconds timeout) c
 #else
   const GpuWaitResult result = BoundedGpuWait([this] { return pollSuspending(false); }, timeout);
   if (result == GpuWaitResult::TimedOut) {
-    markDeviceLost("GPU queue did not go idle within the bounded wait deadline");
+    markDeviceLostAfterWaitTimeout(
+        GpuWaitSite::QueueIdle, timeout,
+        "GPU queue did not go idle within the bounded wait deadline");
   }
   return result;
 #endif
@@ -363,6 +384,12 @@ GeodeDevice::ReadbackStats GeodeDevice::consumeReadbackStats() {
       .count = readbackCount_.exchange(0, std::memory_order_relaxed),
       .pollIterations = readbackPollIterations_.exchange(0, std::memory_order_relaxed),
       .usedTimedWaitAny = readbackUsedTimedWaitAny_.exchange(false, std::memory_order_relaxed),
+      // Device loss is reported, not consumed: it is sticky on the device, so
+      // clearing it here would let the very next stats read claim the device
+      // is healthy while rendering stays dead.
+      .deviceLost = isDeviceLost(),
+      .timedOutWaitSite = lostState_->timedOutSite.load(std::memory_order_relaxed),
+      .timedOutWaitMs = lostState_->timedOutElapsedMs.load(std::memory_order_relaxed),
   };
 }
 

@@ -5461,7 +5461,8 @@ ReadbackMapStatus MapAndWaitReadback(const std::shared_ptr<geode::GeodeDevice>& 
   bool cancelled = false;
   bool timedOut = false;
   bool usedTimedWaitAny = false;
-  const auto readbackDeadline = std::chrono::steady_clock::now() + geode::kReadbackMapTimeout;
+  const auto readbackWaitStart = std::chrono::steady_clock::now();
+  const auto readbackDeadline = readbackWaitStart + geode::kReadbackMapTimeout;
   while (!mapState->done.load(std::memory_order_acquire)) {
     if (shouldCancel && shouldCancel()) {
       cancelled = true;
@@ -5517,8 +5518,14 @@ ReadbackMapStatus MapAndWaitReadback(const std::shared_ptr<geode::GeodeDevice>& 
     if (timedOut) {
       // A full readback deadline with no map delivery is the observable
       // signature of a hung device. Declare the loss so later waits on this
-      // device fail fast and teardown skips GPU waits entirely.
-      device->markDeviceLost("snapshot readback map did not complete within the readback deadline");
+      // device fail fast and teardown skips GPU waits entirely, and record the
+      // site and the measured wait so a consumer reading only the stats can
+      // tell this hang from a queue-drain hang.
+      device->markDeviceLostAfterWaitTimeout(
+          geode::GpuWaitSite::ReadbackMap,
+          std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() -
+                                                                readbackWaitStart),
+          "snapshot readback map did not complete within the readback deadline");
     }
     // Cancelling a pending map schedules its callback with an aborted status. The callback's
     // reference keeps `mapState` valid even when delivery happens after this method returns.
@@ -5818,6 +5825,23 @@ bool RendererGeode::deviceLost() const {
   return impl_->device && impl_->device->isDeviceLost();
 }
 
+namespace {
+
+/// Translate the Geode wait vocabulary into the backend-neutral one the
+/// renderer interface publishes. Kept as an explicit switch so adding a wait
+/// site to either enum fails the build here rather than silently reporting
+/// the wrong hang.
+GpuWaitTimeoutSite NeutralWaitSite(geode::GpuWaitSite site) {
+  switch (site) {
+    case geode::GpuWaitSite::None: return GpuWaitTimeoutSite::None;
+    case geode::GpuWaitSite::ReadbackMap: return GpuWaitTimeoutSite::ReadbackMap;
+    case geode::GpuWaitSite::QueueIdle: return GpuWaitTimeoutSite::QueueIdle;
+  }
+  return GpuWaitTimeoutSite::None;
+}
+
+}  // namespace
+
 RendererReadbackStats RendererGeode::consumeReadbackStats() {
   if (!impl_->device) {
     return {};
@@ -5827,6 +5851,9 @@ RendererReadbackStats RendererGeode::consumeReadbackStats() {
       .count = stats.count,
       .pollIterations = stats.pollIterations,
       .usedTimedWaitAny = stats.usedTimedWaitAny,
+      .deviceLost = stats.deviceLost,
+      .timedOutWaitSite = NeutralWaitSite(stats.timedOutWaitSite),
+      .timedOutWaitMs = stats.timedOutWaitMs,
   };
 }
 

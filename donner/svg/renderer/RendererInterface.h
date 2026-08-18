@@ -77,13 +77,42 @@ struct RendererBitmap {
 };
 
 /**
+ * Bounded CPU-blocks-on-GPU wait that exceeded its deadline and caused a
+ * renderer backend to declare its device lost.
+ *
+ * Backend-neutral mirror of the GPU backend's own wait vocabulary, so a
+ * consumer of \ref RendererReadbackStats can distinguish the two very
+ * different hangs without depending on a graphics API. Backends that never
+ * block on the GPU always report \ref None.
+ */
+enum class GpuWaitTimeoutSite : uint8_t {
+  /// No bounded wait has timed out. A device reported lost with this site was
+  /// reported by the driver, not by a deadline.
+  None,
+  /// A buffer-map wait for GPU-to-CPU readback.
+  ReadbackMap,
+  /// A wait for the GPU queue to drain.
+  QueueIdle,
+};
+
+/**
  * Aggregate diagnostics for CPU readbacks completed by a renderer and any
- * offscreen instances that share its backend device.
+ * offscreen instances that share its backend device, plus the device-health
+ * outcome those readbacks observed.
  */
 struct RendererReadbackStats {
   int count = 0;
   int pollIterations = 0;
   bool usedTimedWaitAny = false;
+  /// True once the backend device has been declared lost. Sticky: a device
+  /// that hangs never recovers, and a caller whose frame produced nothing has
+  /// no other evidence to report.
+  bool deviceLost = false;
+  /// Which bounded wait declared that loss, when a deadline did.
+  GpuWaitTimeoutSite timedOutWaitSite = GpuWaitTimeoutSite::None;
+  /// Wall time that wait spent before giving up, in milliseconds. Zero while
+  /// \ref timedOutWaitSite is \ref GpuWaitTimeoutSite::None.
+  int timedOutWaitMs = 0;
 };
 
 /// Backend type for \ref RendererTextureSnapshot payloads.

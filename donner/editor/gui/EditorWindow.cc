@@ -345,6 +345,7 @@ bool MapReadbackBuffer(const wgpu::Device& device, const wgpu::Buffer& buffer, u
   // driver would wedge the editor thread forever (worst case in
   // uninterruptible kernel sleep). Poll non-blocking with a deadline and
   // declare the device lost when the deadline expires.
+  const auto surfaceWaitStart = std::chrono::steady_clock::now();
   const donner::geode::GpuWaitResult waitResult = donner::geode::BoundedGpuWait(
       [&] {
         device.poll(false, nullptr);
@@ -352,7 +353,11 @@ bool MapReadbackBuffer(const wgpu::Device& device, const wgpu::Buffer& buffer, u
       },
       donner::geode::kDefaultGpuWaitTimeout);
   if (waitResult != donner::geode::GpuWaitResult::Complete && geodeDevice) {
-    geodeDevice->markDeviceLost("editor surface readback map did not complete within the bound");
+    geodeDevice->markDeviceLostAfterWaitTimeout(
+        donner::geode::GpuWaitSite::ReadbackMap,
+        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() -
+                                                              surfaceWaitStart),
+        "editor surface readback map did not complete within the bound");
   }
 #endif
   return mapState->done.load(std::memory_order_acquire) &&

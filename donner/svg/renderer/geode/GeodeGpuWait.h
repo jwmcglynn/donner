@@ -16,6 +16,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstdint>
 #include <functional>
 
 namespace donner::geode {
@@ -57,6 +58,24 @@ struct GpuWaitTestHooks {
   std::function<void(std::chrono::microseconds)> sleep;
 };
 
+/// Which bounded wait exceeded its deadline and declared the device lost.
+///
+/// A hung device costs the full timeout wherever it is first waited on, and
+/// the two waits have very different budgets and callers, so "the device was
+/// declared lost" is not actionable on its own: a readback-map timeout points
+/// at buffer-map delivery, a queue-drain timeout points at submitted work
+/// never retiring. Recording which one tripped keeps that distinction in the
+/// diagnostics a failure report is assembled from.
+enum class GpuWaitSite : std::uint8_t {
+  /// No bounded wait has timed out. A device lost with this site was reported
+  /// by the driver's device-lost callback, not by a deadline.
+  None,
+  /// A buffer-map wait for GPU-to-CPU readback (snapshot or surface capture).
+  ReadbackMap,
+  /// A wait for the GPU queue to drain (teardown, inter-submit serialization).
+  QueueIdle,
+};
+
 /// Shared device-lost flag.
 ///
 /// Set exactly once, from either direction, so a driver-reported device-loss
@@ -73,6 +92,13 @@ struct GpuWaitTestHooks {
 struct GeodeDeviceLostState {
   /// True once the device has been declared lost. Never reset.
   std::atomic<bool> lost{false};
+  /// Bounded wait that declared the loss, or `None` when the driver reported
+  /// it. Written just before the first `lost` store, so an observer that sees
+  /// the flag also sees the attribution that explains it.
+  std::atomic<GpuWaitSite> timedOutSite{GpuWaitSite::None};
+  /// Wall time the timed-out wait spent before giving up, in milliseconds.
+  /// Zero while `timedOutSite` is `None`.
+  std::atomic<int> timedOutElapsedMs{0};
 };
 
 /**
