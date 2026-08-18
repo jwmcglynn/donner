@@ -99,6 +99,11 @@ struct FrameSample {
   }
 };
 
+/// Sentinel for `KnownViolation::sceneBatchingViolated`: no override, the
+/// batching build breaks exactly what `violated` names. A plain `0` cannot
+/// serve, because "breaks nothing" is a meaningful value here.
+constexpr uint32_t kViolatedSameAsBase = ~uint32_t{0};
+
 /// Bit per gated counter, used by `KnownViolation::violated` to say which
 /// invariants a scene is currently allowed (and required) to break.
 enum CounterBit : uint32_t {
@@ -169,6 +174,14 @@ struct KnownViolation {
   std::string_view reason;
   /// What has to change for this entry to be deleted.
   std::string_view tracking;
+  /// Counters this scene still breaks in a build with cross-entity ordered
+  /// batching compiled in. Batching can fix a violation OUTRIGHT rather than
+  /// only moving its number, and an entry that went on listing a counter the
+  /// shipped build already holds would hide the next regression behind a
+  /// stale ceiling - the still-violating assertion is what catches that.
+  /// `kViolatedSameAsBase` keeps `violated`; `0` means the batching build
+  /// breaks nothing here and the scene is held to the shared target.
+  uint32_t sceneBatchingViolated = kViolatedSameAsBase;
   /// Counters whose measured value differs with cross-entity ordered batching
   /// compiled in, and the value they take there. A ceiling is the EXACT
   /// measurement of one build, so a scene that measures differently in the two
@@ -179,6 +192,14 @@ struct KnownViolation {
   uint32_t sceneBatchingDiffers = 0;
   Observed sceneBatchingCeiling = {};
 };
+
+/// Resolve `entry`'s violated mask for the build under test.
+constexpr uint32_t effectiveViolated(const KnownViolation& entry, bool sceneBatching) {
+  if (!sceneBatching || entry.sceneBatchingViolated == kViolatedSameAsBase) {
+    return entry.violated;
+  }
+  return entry.sceneBatchingViolated;
+}
 
 /// Resolve `entry`'s ceiling for the build under test, taking each counter
 /// from whichever measurement applies.
@@ -202,7 +223,7 @@ constexpr Observed effectiveCeiling(const KnownViolation& entry, bool sceneBatch
   return out;
 }
 
-constexpr std::array<KnownViolation, 29> kKnownViolations = {{
+constexpr std::array<KnownViolation, 28> kKnownViolations = {{
     {
         /*scene=*/"donner_icon",
         /*violated=*/kTextureCreates | kBufferWrites | kBindgroupCreates,
@@ -455,6 +476,7 @@ constexpr std::array<KnownViolation, 29> kKnownViolations = {{
         /*tracking=*/
         "clears when nested-viewport subtrees, placed text, and use instances all keep their "
         "cached geometry",
+        /*sceneBatchingViolated=*/kViolatedSameAsBase,
         /*sceneBatchingDiffers=*/kBufferWrites | kBindgroupCreates,
         /*sceneBatchingCeiling=*/{4, 0, 746, 84},
     },
@@ -469,6 +491,7 @@ constexpr std::array<KnownViolation, 29> kKnownViolations = {{
         /*tracking=*/
         "clears when the stroke cache keys on the resolved stroke style rather than one slot "
         "per source entity",
+        /*sceneBatchingViolated=*/kViolatedSameAsBase,
         /*sceneBatchingDiffers=*/kBufferWrites | kBindgroupCreates,
         /*sceneBatchingCeiling=*/{12, 0, 97, 19},
     },
@@ -490,10 +513,14 @@ constexpr std::array<KnownViolation, 29> kKnownViolations = {{
         /*ceiling=*/{0, 0, 9, 1},
         /*reason=*/
         "the stroke outline of a styled use instance draws through the per-frame arena "
-        "instead of a resident buffer",
+        "instead of a resident buffer; ordered batching draws it from the instance record "
+        "instead, which is why the batching build breaks nothing here",
         /*tracking=*/
         "clears when use-instance stroke outlines gain the residency their fills already "
         "have",
+        /*sceneBatchingViolated=*/0,
+        /*sceneBatchingDiffers=*/kBufferWrites,
+        /*sceneBatchingCeiling=*/{0, 0, 0, 1},
     },
     {
         /*scene=*/"svg2_e_use_004",
@@ -501,22 +528,14 @@ constexpr std::array<KnownViolation, 29> kKnownViolations = {{
         /*ceiling=*/{0, 0, 9, 1},
         /*reason=*/
         "the stroke outline of a styled use instance draws through the per-frame arena "
-        "instead of a resident buffer",
+        "instead of a resident buffer; ordered batching draws it from the instance record "
+        "instead, which is why the batching build breaks nothing here",
         /*tracking=*/
         "clears when use-instance stroke outlines gain the residency their fills already "
         "have",
-    },
-    {
-        /*scene=*/"z0rly_test6",
-        /*violated=*/kBindgroupCreates,
-        /*ceiling=*/{0, 0, 0, 22},
-        /*reason=*/
-        "residency removed this scene's outline re-encodes and uniform re-uploads, but its "
-        "music-notation glyphs are drawn from many separate text elements that ordered batching "
-        "does not merge, so each draw still builds its own bind group",
-        /*tracking=*/
-        "clears when bind groups are cached across draws that share a pipeline, or when batching "
-        "merges runs from separate text elements",
+        /*sceneBatchingViolated=*/0,
+        /*sceneBatchingDiffers=*/kBufferWrites,
+        /*sceneBatchingCeiling=*/{0, 0, 0, 1},
     },
 }};
 
@@ -860,7 +879,10 @@ TEST_P(GeodeCounterCorpusTest, SecondFrameIsSteadyState) {
   for (const CounterField& field : kCounterFields) {
     const uint64_t value = sample.gated.*field.member;
     const uint64_t target = kSteadyState.*field.member;
-    const bool expectedToViolate = known != nullptr && (known->violated & field.bit) != 0;
+    const bool expectedToViolate =
+        known != nullptr &&
+        (effectiveViolated(*known, RendererGeode::sceneBatchingEnabledForTesting()) & field.bit) !=
+            0;
 
     if (!expectedToViolate) {
       EXPECT_LE(value, target)
@@ -954,6 +976,14 @@ TEST(GeodeCounterCorpusGate, KnownViolationsAreWellFormed) {
     EXPECT_FALSE(entry.tracking.empty())
         << "kKnownViolations entry '" << entry.scene << "' needs a tracking note.";
 
+    EXPECT_EQ(entry.sceneBatchingViolated == kViolatedSameAsBase
+                  ? 0u
+                  : (entry.sceneBatchingViolated & ~entry.violated),
+              0u)
+        << "kKnownViolations entry '" << entry.scene
+        << "' marks a counter violated in the batching build that the base build does not "
+        << "list, so the base build would fail the shared assertion on it. Widen `violated`.";
+
     EXPECT_EQ(entry.sceneBatchingDiffers & ~entry.violated, 0u)
         << "kKnownViolations entry '" << entry.scene
         << "' records a scene-batching ceiling for a counter it does not mark violated, so that "
@@ -961,10 +991,12 @@ TEST(GeodeCounterCorpusGate, KnownViolationsAreWellFormed) {
 
     const Observed entryCeilings =
         effectiveCeiling(entry, RendererGeode::sceneBatchingEnabledForTesting());
+    const uint32_t entryViolated =
+        effectiveViolated(entry, RendererGeode::sceneBatchingEnabledForTesting());
     for (const CounterField& field : kCounterFields) {
       const uint64_t ceiling = entryCeilings.*field.member;
       const uint64_t target = kSteadyState.*field.member;
-      if ((entry.violated & field.bit) != 0) {
+      if ((entryViolated & field.bit) != 0) {
         EXPECT_GT(ceiling, target)
             << "kKnownViolations entry '" << entry.scene << "' marks " << field.name
             << " as violated but records a ceiling at or below the shared target, so the "
