@@ -162,6 +162,82 @@ test("pre-map diagnostic setup failures use the same bounded completion policy",
   assert.doesNotMatch(source, /struct AsyncSmokeReadbackRetry/);
 });
 
+test("worker stats carry the GPU wait outcome that ended the frame", () => {
+  const publisher = renderCoordinatorSource.match(
+    /void PublishWorkerTimingStats\([\s\S]*?\n\}/,
+  );
+  assert.ok(publisher, "expected the completed-frame worker stats publisher");
+  assert.match(publisher[0], /stats\['deviceLost'\]/);
+  assert.match(publisher[0], /stats\['gpuWaitTimeoutSite'\] = UTF8ToString/);
+  assert.match(publisher[0], /stats\['gpuWaitTimeoutMs'\]/);
+  assert.match(publisher[0], /stats\['publishReason'\] = 'render-result'/);
+
+  // The site names are what a failing run prints, so they are part of the
+  // contract rather than an implementation detail.
+  assert.match(renderCoordinatorSource, /GpuWaitTimeoutSite::None: return "none"/);
+  assert.match(renderCoordinatorSource, /GpuWaitTimeoutSite::ReadbackMap: return "readback-map"/);
+  assert.match(renderCoordinatorSource, /GpuWaitTimeoutSite::QueueIdle: return "queue-idle"/);
+
+  // clang-format splits a bare `!==` into `!= =`; the publishers must not
+  // depend on an operator that a formatting pass can silently corrupt.
+  assert.doesNotMatch(renderCoordinatorSource, /!\s*=\s+=/);
+});
+
+test("a GPU wait failure publishes worker stats even though no frame completed", () => {
+  const failurePublisher = renderCoordinatorSource.match(
+    /void PublishWorkerGpuWaitFailure\([\s\S]*?\n\}/,
+  );
+  assert.ok(failurePublisher, "expected a publisher for frames that never completed");
+  assert.match(
+    failurePublisher[0],
+    /window\['__donnerWorkerStats'\] = stats/,
+    "the failure path must write the same stats object the harness reads",
+  );
+  assert.match(failurePublisher[0], /stats\['publishReason'\] = 'gpu-wait-failure'/);
+  assert.match(
+    failurePublisher[0],
+    /previous \? Object\.assign\(\{\}, previous\) : \(\{'completedResults' : 0\}\)/,
+    "a failure before any frame landed must still create the stats object",
+  );
+  assert.doesNotMatch(
+    failurePublisher[0],
+    /'completedResults' : previous/,
+    "the completed-frame counter orders presentation samples and must count frames only",
+  );
+
+  const poll = renderCoordinatorSource.match(
+    /void RenderCoordinator::pollRenderResult\([\s\S]*?\n  const auto& result = \*resultOpt;/,
+  );
+  assert.ok(poll, "expected the UI-thread result poll");
+  const failureCall = poll[0].indexOf("PublishWorkerGpuWaitFailure(");
+  const earlyReturn = poll[0].indexOf("if (!resultOpt.has_value()) {");
+  assert.ok(failureCall >= 0, "the poll must report a GPU wait failure");
+  assert.ok(
+    failureCall < earlyReturn,
+    "the failure report must happen before the no-result early return",
+  );
+  assert.match(poll[0], /gpuWaitFailure\.generation != publishedGpuWaitGeneration_/);
+});
+
+test("the render worker records a GPU wait failure on the abandoned-frame path", () => {
+  const abandoned = workerRendererSource.match(
+    /if \(!renderCompleted\) \{[\s\S]*?cancelledRenderCount_\.fetch_add/,
+  );
+  assert.ok(abandoned, "expected the worker's abandoned-iteration path");
+  assert.match(abandoned[0], /noteGpuWaitOutcome\(requestRenderer\.consumeReadbackStats\(\)\)/);
+
+  assert.match(
+    workerRendererHeader,
+    /struct GpuWaitFailure \{[\s\S]*?bool deviceLost[\s\S]*?timedOutWaitSite[\s\S]*?timedOutWaitMs[\s\S]*?generation/,
+    "the worker's failure record must carry the flag, the wait site, and the elapsed wait",
+  );
+  assert.match(
+    workerRendererHeader,
+    /bool deviceLost = false;[\s\S]*?svg::GpuWaitTimeoutSite timedOutWaitSite[\s\S]*?int timedOutWaitMs/,
+    "the per-frame timing breakdown must carry the same three fields",
+  );
+});
+
 test("worker WebGPU startup keeps its browser Promise bridge private and single-purpose", () => {
   assert.doesNotMatch(geodeDeviceHeader, /CreateHeadlessAsync/);
   assert.doesNotMatch(geodeDeviceHeader, /donnerGeodeCompleteHeadlessImport/);

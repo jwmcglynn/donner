@@ -110,6 +110,40 @@ TEST(BoundedGpuWait, ZeroTimeoutPollsOnceThenTimesOut) {
   EXPECT_TRUE(clock.sleeps.empty());
 }
 
+/// A device-lost record starts with no timeout attribution, so "lost with no
+/// site" is a meaningful state: it says the driver reported the loss rather
+/// than a deadline discovering it.
+TEST(GeodeDeviceLostState, StartsWithNoTimeoutAttribution) {
+  const GeodeDeviceLostState state;
+
+  EXPECT_FALSE(state.lost.load());
+  EXPECT_EQ(state.timedOutSite.load(), GpuWaitSite::None);
+  EXPECT_EQ(state.timedOutElapsedMs.load(), 0);
+}
+
+/// A stalled wait must hand its caller both a `TimedOut` result and an elapsed
+/// time worth reporting. Without the elapsed measurement a diagnostic consumer
+/// could only echo the configured budget back, which would be indistinguishable
+/// from a wait that never ran.
+TEST(BoundedGpuWait, StalledWaitYieldsAnElapsedTimeWorthRecording) {
+  FakeClock clock;
+  const auto waitStart = clock.current;
+  const GpuWaitResult result = BoundedGpuWait([] { return false; }, 10ms, 100us, clock.hooks());
+  const auto elapsed =
+      std::chrono::duration_cast<std::chrono::milliseconds>(clock.current - waitStart);
+
+  ASSERT_EQ(result, GpuWaitResult::TimedOut);
+
+  // Record it the way a device does when a bounded wait expires.
+  GeodeDeviceLostState state;
+  state.timedOutSite.store(GpuWaitSite::ReadbackMap);
+  state.timedOutElapsedMs.store(static_cast<int>(elapsed.count()));
+  state.lost.store(true);
+
+  EXPECT_EQ(state.timedOutSite.load(), GpuWaitSite::ReadbackMap);
+  EXPECT_EQ(state.timedOutElapsedMs.load(), 10);
+}
+
 TEST(BoundedGpuWait, ZeroPollIntervalDoesNotSleep) {
   FakeClock clock;
   int pollCount = 0;

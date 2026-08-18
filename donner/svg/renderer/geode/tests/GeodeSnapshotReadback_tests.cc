@@ -163,5 +163,52 @@ TEST_F(GeodeSnapshotReadbackTest, RendererGeodeReportsDeviceLost) {
   // completing at all (under the suite timeout) pins that.
 }
 
+/// The renderer's readback stats are the only channel a frame that produced
+/// nothing has left, so they must carry the device-lost outcome and the
+/// attribution of the bounded wait that declared it, translated into the
+/// backend-neutral vocabulary.
+TEST_F(GeodeSnapshotReadbackTest, ReadbackStatsCarryWaitTimeoutAttribution) {
+  std::shared_ptr<geode::GeodeDevice> device(geode::GeodeDevice::CreateHeadless());
+  ASSERT_NE(device, nullptr);
+
+  RendererGeode renderer(device);
+  const RendererReadbackStats healthy = renderer.consumeReadbackStats();
+  EXPECT_FALSE(healthy.deviceLost);
+  EXPECT_EQ(healthy.timedOutWaitSite, GpuWaitTimeoutSite::None);
+  EXPECT_EQ(healthy.timedOutWaitMs, 0);
+
+  device->markDeviceLostAfterWaitTimeout(geode::GpuWaitSite::ReadbackMap,
+                                         geode::kReadbackMapTimeout,
+                                         "test-injected readback map stall");
+
+  const RendererReadbackStats afterTimeout = renderer.consumeReadbackStats();
+  EXPECT_TRUE(afterTimeout.deviceLost);
+  EXPECT_EQ(afterTimeout.timedOutWaitSite, GpuWaitTimeoutSite::ReadbackMap);
+  EXPECT_EQ(afterTimeout.timedOutWaitMs,
+            static_cast<int>(geode::kReadbackMapTimeout.count()));
+
+  const RendererReadbackStats laterFrame = renderer.consumeReadbackStats();
+  EXPECT_TRUE(laterFrame.deviceLost);
+  EXPECT_EQ(laterFrame.timedOutWaitSite, GpuWaitTimeoutSite::ReadbackMap);
+}
+
+/// A queue-drain stall must be reported as a different wait than a readback
+/// map stall. The two have different budgets and different callers, so a
+/// report that collapsed them would point at the wrong subsystem.
+TEST_F(GeodeSnapshotReadbackTest, QueueIdleTimeoutIsReportedAsItsOwnWaitSite) {
+  std::shared_ptr<geode::GeodeDevice> device(geode::GeodeDevice::CreateHeadless());
+  ASSERT_NE(device, nullptr);
+
+  RendererGeode renderer(device);
+  device->markDeviceLostAfterWaitTimeout(geode::GpuWaitSite::QueueIdle,
+                                         geode::kDefaultGpuWaitTimeout,
+                                         "test-injected queue drain stall");
+
+  const RendererReadbackStats stats = renderer.consumeReadbackStats();
+  EXPECT_TRUE(stats.deviceLost);
+  EXPECT_EQ(stats.timedOutWaitSite, GpuWaitTimeoutSite::QueueIdle);
+  EXPECT_EQ(stats.timedOutWaitMs, static_cast<int>(geode::kDefaultGpuWaitTimeout.count()));
+}
+
 }  // namespace
 }  // namespace donner::svg
