@@ -151,8 +151,7 @@ TEST_F(GeodeGlyphInstancingTest, RepeatedGlyphsShareOneResidentOutline) {
       << "An unchanged frame must not re-derive any glyph outline.";
   EXPECT_EQ(second.counters.glyphResidencyHits, 4u)
       << "Every occurrence of an unchanged frame comes from residency.";
-  EXPECT_EQ(second.counters.pathEncodes, 0u)
-      << "An unchanged text frame must re-encode nothing.";
+  EXPECT_EQ(second.counters.pathEncodes, 0u) << "An unchanged text frame must re-encode nothing.";
   EXPECT_EQ(nonTransparentPixels(second.bitmap), nonTransparentPixels(first.bitmap))
       << "The resident second frame must draw the same coverage as the first.";
 }

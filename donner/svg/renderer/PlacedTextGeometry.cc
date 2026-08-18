@@ -70,8 +70,8 @@ GlyphOutlineAndPlacement UnplacedGlyphOutline(const TextEngine& textEngine, Font
   //    when a per-glyph rotation is present the stretch axes follow the glyph,
   //    not the post-rotation frame.
   if (glyph.stretchScaleX != 1.0f || glyph.stretchScaleY != 1.0f) {
-    result.outline = TransformPath(result.outline,
-                                   Transform2d::Scale(glyph.stretchScaleX, glyph.stretchScaleY));
+    result.outline =
+        TransformPath(result.outline, Transform2d::Scale(glyph.stretchScaleX, glyph.stretchScaleY));
   }
 
   return result;
