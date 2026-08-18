@@ -55,6 +55,13 @@ constexpr std::string_view kStyledSvg = R"svg(
 </svg>
 )svg";
 
+constexpr std::string_view kPaintSnapshotSelectionChangeSvg = R"svg(
+<svg xmlns="http://www.w3.org/2000/svg" width="120" height="80" viewBox="0 0 120 80">
+  <rect id="first" x="10" y="12" width="40" height="24" fill="#ff0000"/>
+  <rect id="second" x="65" y="12" width="40" height="24" fill="#0000ff"/>
+</svg>
+)svg";
+
 constexpr std::string_view kReferencedSvg = R"svg(
 <svg xmlns="http://www.w3.org/2000/svg" width="120" height="80" viewBox="0 0 120 80">
   <defs>
@@ -640,6 +647,35 @@ TEST(EditorShellInternalTest, FillStrokeWidgetLayoutAndHitTestClassifyRegions) {
   EXPECT_EQ(hit(fillChip, true, false), internal::FillStrokeWidgetRegion::FillChip);
   const ImVec2 strokeChip = center(layout.strokeChipMin, layout.strokeChipMax);
   EXPECT_EQ(hit(strokeChip, false, true), internal::FillStrokeWidgetRegion::StrokeChip);
+}
+
+TEST(EditorShellInternalTest, FillStrokeWidgetInteractionStateIgnoresBusyHandoffsDuringDrag) {
+  const internal::FillStrokeWidgetInteractionState idleDrag =
+      internal::ResolveFillStrokeWidgetInteractionState(
+          /*hasDocument=*/true, /*rendererBusy=*/false, /*canvasInteractionActive=*/true,
+          /*paintSnapshotMatchesSelection=*/true);
+  const internal::FillStrokeWidgetInteractionState busyDrag =
+      internal::ResolveFillStrokeWidgetInteractionState(
+          /*hasDocument=*/true, /*rendererBusy=*/true, /*canvasInteractionActive=*/true,
+          /*paintSnapshotMatchesSelection=*/true);
+  EXPECT_EQ(idleDrag.canEdit, busyDrag.canEdit);
+  EXPECT_EQ(idleDrag.refreshPaintSnapshot, busyDrag.refreshPaintSnapshot);
+  EXPECT_FALSE(idleDrag.canEdit);
+  EXPECT_FALSE(idleDrag.refreshPaintSnapshot);
+
+  const internal::FillStrokeWidgetInteractionState firstDragFrame =
+      internal::ResolveFillStrokeWidgetInteractionState(
+          /*hasDocument=*/true, /*rendererBusy=*/false, /*canvasInteractionActive=*/true,
+          /*paintSnapshotMatchesSelection=*/false);
+  EXPECT_FALSE(firstDragFrame.canEdit);
+  EXPECT_TRUE(firstDragFrame.refreshPaintSnapshot);
+
+  const internal::FillStrokeWidgetInteractionState settled =
+      internal::ResolveFillStrokeWidgetInteractionState(
+          /*hasDocument=*/true, /*rendererBusy=*/false, /*canvasInteractionActive=*/false,
+          /*paintSnapshotMatchesSelection=*/true);
+  EXPECT_TRUE(settled.canEdit);
+  EXPECT_TRUE(settled.refreshPaintSnapshot);
 }
 
 TEST(EditorShellInternalTest, SourceHelpersPreferInitialSourceAndCanonicalizeTrailingNewline) {
@@ -1262,6 +1298,13 @@ public:
 
   static bool SelectToolIsMarqueeing(const EditorShell& shell) {
     return shell.selectTool_.isMarqueeing();
+  }
+
+  static bool BeginSelectedShapeDrag(EditorShell& shell, const Vector2d& documentPoint,
+                                     const Box2d& selectionBounds) {
+    const std::array<Box2d, 1> bounds = {selectionBounds};
+    return shell.selectTool_.tryStartRedragOnSelected(shell.app_, documentPoint, MouseModifiers{},
+                                                      bounds);
   }
 
   static void BufferPendingClick(EditorShell& shell, const Vector2d& documentPoint,
@@ -3446,6 +3489,68 @@ TEST(EditorShellTest, FillStrokeToolbarKeepsChosenPaintVisibleWhileRendererIsBus
                                                            std::chrono::seconds(2)));
   std::ignore = renderer.pollResult();
   renderer.setReplayRenderDelayForTesting(std::chrono::milliseconds(0));
+}
+
+TEST(EditorShellTest, FillStrokeToolbarStaysVisuallyStableDuringShapeDrag) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
+
+  EditorShell shell(window, OptionsWithSource(kStyledSvg, "styled.svg"));
+  ASSERT_TRUE(shell.valid());
+  EditorShellTestAccess::ConfigureViewport(shell, Box2d::FromXYWH(0.0, 0.0, 120.0, 80.0));
+  std::optional<svg::SVGElement> target =
+      EditorShellTestAccess::App(shell).document().document().querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  EditorShellTestAccess::App(shell).setSelection(*target);
+  ASSERT_TRUE(EditorShellTestAccess::BeginSelectedShapeDrag(
+      shell, Vector2d(20.0, 20.0), Box2d::FromXYWH(10.0, 12.0, 40.0, 24.0)));
+
+  constexpr ImVec2 kCursor(20.0f, 40.0f);
+  constexpr ImU32 kEnabledSwap = IM_COL32(215, 222, 232, 255);
+  constexpr ImU32 kDisabledSwap = IM_COL32(120, 126, 134, 255);
+  const auto expectStableDragChrome = [&]() {
+    EXPECT_TRUE(DrawDataContainsColor(kDisabledSwap));
+    EXPECT_FALSE(DrawDataContainsColor(kEnabledSwap));
+    EXPECT_TRUE(DrawDataContainsColor(IM_COL32(255, 0, 0, 255))) << "Fill swatch changed";
+    EXPECT_TRUE(DrawDataContainsColor(IM_COL32(0, 0, 255, 255))) << "Stroke swatch changed";
+  };
+
+  RenderToolbarFrame(window, shell, kCursor, ImVec2(-100.0f, -100.0f), /*mouseDown=*/false);
+  expectStableDragChrome();
+}
+
+TEST(EditorShellTest, FillStrokeToolbarCapturesNewSelectionBeforeFreezingShapeDrag) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
+
+  EditorShell shell(window,
+                    OptionsWithSource(kPaintSnapshotSelectionChangeSvg, "paint_selection.svg"));
+  ASSERT_TRUE(shell.valid());
+  EditorShellTestAccess::ConfigureViewport(shell, Box2d::FromXYWH(0.0, 0.0, 120.0, 80.0));
+  svg::SVGDocument& document = EditorShellTestAccess::App(shell).document().document();
+  std::optional<svg::SVGElement> first = document.querySelector("#first");
+  std::optional<svg::SVGElement> second = document.querySelector("#second");
+  ASSERT_TRUE(first.has_value());
+  ASSERT_TRUE(second.has_value());
+
+  constexpr ImVec2 kCursor(20.0f, 40.0f);
+  EditorShellTestAccess::App(shell).setSelection(*first);
+  RenderToolbarFrame(window, shell, kCursor, ImVec2(-100.0f, -100.0f), /*mouseDown=*/false);
+  ASSERT_TRUE(DrawDataContainsColor(IM_COL32(255, 0, 0, 255)));
+
+  EditorShellTestAccess::App(shell).setSelection(*second);
+  ASSERT_TRUE(EditorShellTestAccess::BeginSelectedShapeDrag(
+      shell, Vector2d(75.0, 20.0), Box2d::FromXYWH(65.0, 12.0, 40.0, 24.0)));
+  RenderToolbarFrame(window, shell, kCursor, ImVec2(-100.0f, -100.0f), /*mouseDown=*/false);
+
+  EXPECT_TRUE(DrawDataContainsColor(IM_COL32(0, 0, 255, 255)))
+      << "The drag must freeze the newly selected element's fill";
+  EXPECT_FALSE(DrawDataContainsColor(IM_COL32(255, 0, 0, 255)))
+      << "The drag must not replay the previous selection's fill";
 }
 
 TEST(EditorShellTest, ToolPaletteSelectCommitsOpenPenPath) {
