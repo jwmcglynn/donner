@@ -986,8 +986,8 @@ public:
     return shell.renderCoordinator_.selectionBoundsCache().displayedBoundsDoc.size();
   }
 
-  static bool ImmediateChromePlanInstalled(const EditorShell& shell) {
-    return shell.immediateChromePlanInstalled_;
+  static bool ImmediateChromePlanProduced(const EditorShell& shell) {
+    return shell.immediateChromePlanProduced_;
   }
 
   static std::size_t SelectionChromePathCount(const EditorShell& shell) {
@@ -1908,7 +1908,7 @@ TEST(EditorShellTest, SelectionChromePresentsOnFramesTheOverlayVersionGateSuppre
 
   const std::uint64_t presentedVersion = RunFramesUntilChromeLeadsPresentedDocument(window, shell);
   ASSERT_GT(presentedVersion, 0u) << "The gate only engages once a render has been presented.";
-  ASSERT_TRUE(EditorShellTestAccess::ImmediateChromePlanInstalled(shell));
+  ASSERT_TRUE(EditorShellTestAccess::ImmediateChromePlanProduced(shell));
   ASSERT_EQ(EditorShellTestAccess::ImmediateOverlayDocumentVersion(shell),
             std::optional<std::uint64_t>(app.document().currentFrameVersion()));
   ASSERT_GT(app.document().currentFrameVersion(), presentedVersion)
@@ -1929,7 +1929,7 @@ TEST(EditorShellTest, SelectionChromePresentsOnFramesTheOverlayVersionGateSuppre
       << "Withheld results should have kept the presented version pinned across the frame.";
   ASSERT_GT(EditorShellTestAccess::OverlayVersionGateSuppressions(shell), suppressionsBeforeFrame)
       << "This frame must actually be one the version gate suppressed, or it proves nothing.";
-  EXPECT_TRUE(EditorShellTestAccess::ImmediateChromePlanInstalled(shell))
+  EXPECT_TRUE(EditorShellTestAccess::ImmediateChromePlanProduced(shell))
       << "A suppressed overlay refresh must not take the chrome pass with it: without a plan the "
          "frame presents document pixels with no chrome drawn over them, and the selection "
          "outline, bounds and handles blink out until the worker catches up.";
@@ -1962,6 +1962,8 @@ TEST(EditorShellTest, DeselectingDropsChromeOnFramesTheOverlayVersionGateSuppres
                                                .tool = "select",
                                            });
   app.clearSelection();
+  ASSERT_GT(app.document().currentFrameVersion(), presentedVersion)
+      << "The Pen frame must leave the chrome captured ahead of the presented pixels.";
   const std::uint64_t suppressionsBeforeFrame =
       EditorShellTestAccess::OverlayVersionGateSuppressions(shell);
   RunShellFrame(window, shell);

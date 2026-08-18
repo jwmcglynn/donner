@@ -4007,9 +4007,8 @@ void EditorShell::installFramebufferUnderlayPlan(
 #endif
 }
 
-void EditorShell::installImmediateChromePlan(
-    [[maybe_unused]] std::optional<ImmediateChromePlan> plan) {
-  immediateChromePlanInstalled_ = plan.has_value();
+void EditorShell::installImmediateChromePlan(std::optional<ImmediateChromePlan> plan) {
+  immediateChromePlanProduced_ = plan.has_value();
 #ifdef DONNER_EDITOR_WGPU
   if (!plan.has_value() || directOverlayRenderer_ == nullptr) {
     window_.setWgpuDirectRenderCallback({});

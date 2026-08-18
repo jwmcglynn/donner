@@ -359,11 +359,15 @@ private:
    * True when the elements \ref immediateOverlaySnapshot draws chrome for are no longer the
    * elements the editor would draw chrome for now.
    *
-   * This is about *what* the chrome annotates, not where it sits: the selection and the transient
-   * source-hover set are the only inputs that decide which elements get an outline, so a snapshot
-   * captured for a different set annotates elements that are no longer selected or hovered. That
-   * is the one difference the overlay refresh may never skip, because a snapshot describing the
-   * wrong elements is worse than one that trails the live geometry by a frame.
+   * This is about *what* the chrome annotates, not where it sits: a snapshot captured for a
+   * different selection or source-hover set annotates elements that are no longer selected or
+   * hovered. That is the one difference the overlay refresh may never skip, because a snapshot
+   * describing the wrong elements is worse than one that trails the live geometry by a frame.
+   *
+   * Selection and source hover are not the whole chrome subject. A locked-rejection flash outlines
+   * an element that is not selected, and a marquee rect is chrome that annotates no element at all.
+   * Both are short-lived interaction state that already keeps the overlay refreshing every frame on
+   * its own, so they are compared with the rest of the per-frame geometry instead of here.
    *
    * @param app Editor application state holding the live selection.
    */
