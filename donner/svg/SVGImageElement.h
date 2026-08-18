@@ -46,9 +46,10 @@ namespace donner::svg {
  * </svg>
  * \endhtmlonly
  *
- * @note The `image-rendering: pixelated` style selects nearest-neighbor sampling in this example.
- * Donner also accepts `auto`, `smooth`, `crisp-edges`, and the legacy SVG aliases
- * `optimizeSpeed` and `optimizeQuality`.
+ * @note The `image-rendering: pixelated` style first scales to the closest positive integer
+ * multiple with nearest-neighbor sampling, then smooths to the final size. Donner also accepts
+ * `auto`, `smooth`, `high-quality`, `crisp-edges`, and the legacy SVG aliases `optimizeSpeed` and
+ * `optimizeQuality`.
  *
  * | Attribute | Default | Description  |
  * | --------: | :-----: | :----------- |

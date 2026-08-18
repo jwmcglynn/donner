@@ -1544,7 +1544,7 @@ TEST_F(RendererGeodeTest, DrawImageFourColorQuadrants) {
   ImageParams params;
   params.targetRect = Box2d({16.0, 16.0}, {48.0, 48.0});
   params.opacity = 1.0;
-  params.imageRenderingPixelated = true;
+  params.imageRendering = ImageRendering::Pixelated;
 
   renderer.drawImage(image, params);
   renderer.endFrame();
@@ -1571,6 +1571,47 @@ TEST_F(RendererGeodeTest, DrawImageFourColorQuadrants) {
   // Outside the target rect: transparent.
   auto outside = pixelAt(snap, 4, 4);
   EXPECT_THAT(outside, IsTransparent()) << "Outside alpha";
+}
+
+TEST_F(RendererGeodeTest, DrawImagePixelatedSmoothsFromNearestIntegerScale) {
+  RendererGeode renderer = createRenderer();
+  beginFrame(renderer);
+
+  ImageResource image;
+  image.width = 2;
+  image.height = 2;
+  image.data = {
+      255, 0, 0, 255, 0, 0, 255, 255, 255, 0, 0, 255, 0, 0, 255, 255,
+  };
+
+  ImageParams params;
+  params.targetRect = Box2d({16.0, 16.0}, {21.0, 21.0});
+  params.imageRendering = ImageRendering::Pixelated;
+
+  renderer.drawImage(image, params);
+  renderer.endFrame();
+
+  const std::array<uint8_t, 4> center = pixelAt(renderer.takeSnapshot(), 18, 18);
+  EXPECT_THAT(center, Rgba(::testing::Gt(0), 0, ::testing::Gt(0), 255));
+}
+
+TEST_F(RendererGeodeTest, DrawImagePixelatedInterpolatesPremultipliedColors) {
+  RendererGeode renderer = createRenderer();
+  beginFrame(renderer);
+
+  ImageResource image;
+  image.width = 2;
+  image.height = 1;
+  image.data = {255, 0, 0, 255, 0, 0, 255, 0};
+
+  ImageParams params;
+  params.targetRect = Box2d({16.0, 16.0}, {21.0, 17.0});
+  params.imageRendering = ImageRendering::Pixelated;
+  renderer.drawImage(image, params);
+  renderer.endFrame();
+
+  const std::array<uint8_t, 4> center = pixelAt(renderer.takeSnapshot(), 18, 16);
+  EXPECT_THAT(center, Rgba(Near(255, 2), 0, 0, Near(128, 8)));
 }
 
 /// Transform stack must compose with drawImage. Push a translate, draw
@@ -2282,6 +2323,33 @@ TEST_F(RendererGeodeTest, FilterFloodFillsSubregion) {
   auto center = pixelAt(snap, 32, 32);
   EXPECT_THAT(center, Rgba(Near(255, 2), testing::Eq(0), testing::Eq(0), Near(128, 2)))
       << "feFlood should preserve straight-alpha red at 50% opacity";
+}
+
+TEST_F(RendererGeodeTest, FilterImagePixelatedSmoothsFromNearestIntegerScale) {
+  RendererGeode renderer = createRenderer();
+  beginFrame(renderer);
+
+  components::filter_primitive::Image image;
+  image.imageData = {
+      255, 0, 0, 255, 0, 0, 255, 255, 255, 0, 0, 255, 0, 0, 255, 255,
+  };
+  image.imageWidth = 2;
+  image.imageHeight = 2;
+  image.imageRendering = ImageRendering::Pixelated;
+
+  components::FilterGraph graph;
+  components::FilterNode imageNode;
+  imageNode.primitive = std::move(image);
+  graph.nodes.push_back(std::move(imageNode));
+
+  renderer.pushFilterLayer(graph, Box2d::FromXYWH(0.0, 0.0, 5.0, 5.0));
+  renderer.setPaint(solidFill(css::RGBA(0, 0, 0, 0)));
+  renderer.drawRect(Box2d::FromXYWH(0.0, 0.0, 5.0, 5.0), StrokeParams{});
+  renderer.popFilterLayer();
+  renderer.endFrame();
+
+  const std::array<uint8_t, 4> center = pixelAt(renderer.takeSnapshot(), 2, 2);
+  EXPECT_THAT(center, Rgba(::testing::Gt(0), 0, ::testing::Gt(0), 255));
 }
 
 /// feMerge: composite two feFlood layers via alpha-over.

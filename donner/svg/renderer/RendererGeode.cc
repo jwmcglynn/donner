@@ -5362,8 +5362,11 @@ void RendererGeode::drawImage(const ImageResource& image, const ImageParams& par
     return;
   }
   impl_->syncTransform();
-  impl_->encoder->drawImage(image, params.targetRect, combinedOpacity,
-                            params.imageRenderingPixelated);
+  ImageRendering imageRendering = params.imageRendering;
+  if (imageRendering == ImageRendering::Auto && params.imageRenderingPixelated) {
+    imageRendering = ImageRendering::Pixelated;
+  }
+  impl_->encoder->drawImage(image, params.targetRect, combinedOpacity, imageRendering);
 }
 
 bool RendererGeode::drawTextureSnapshot(const RendererTextureSnapshot& texture,

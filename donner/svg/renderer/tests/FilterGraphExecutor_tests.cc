@@ -1453,8 +1453,9 @@ TEST(FilterGraphExecutorTest, BlendMultiplyDarkensColors) {
 // meet` (scale 2, centered), placing it at device x in [2, 6), so device columns 2-3 map to the
 // red source column and columns 4-5 map to the blue source column. `pixelated` selects the
 // `image-rendering` sampling kernel.
-tiny_skia::Pixmap RenderTwoColumnFeImage(bool pixelated) {
-  auto maybePixmap = tiny_skia::Pixmap::fromSize(8, 4);
+tiny_skia::Pixmap RenderTwoColumnFeImage(bool pixelated, int width = 8, int height = 4) {
+  auto maybePixmap = tiny_skia::Pixmap::fromSize(static_cast<std::uint32_t>(width),
+                                                 static_cast<std::uint32_t>(height));
   EXPECT_TRUE(maybePixmap.has_value());
   tiny_skia::Pixmap pixmap = std::move(*maybePixmap);
 
@@ -1463,7 +1464,7 @@ tiny_skia::Pixmap RenderTwoColumnFeImage(bool pixelated) {
   image.imageData = {255, 0, 0, 255, 0, 0, 255, 255, 255, 0, 0, 255, 0, 0, 255, 255};
   image.imageWidth = 2;
   image.imageHeight = 2;
-  image.imageRenderingPixelated = pixelated;
+  image.imageRendering = pixelated ? ImageRendering::Pixelated : ImageRendering::Auto;
 
   components::FilterGraph graph;
   components::FilterNode node;
@@ -1493,6 +1494,13 @@ TEST(FilterGraphExecutorTest, FeImageDefaultKernelBlendsAcrossEdge) {
   // behavior nearest-neighbor replaces, proving the `image-rendering` flag selects the kernel.
   EXPECT_THAT(GetPixel(pixmap, 3, 1), Rgba(Gt(0), _, Gt(0), _));
   EXPECT_THAT(GetPixel(pixmap, 4, 1), Rgba(Gt(0), _, Gt(0), _));
+}
+
+TEST(FilterGraphExecutorTest, FeImagePixelatedSmoothsFromNearestIntegerScale) {
+  const tiny_skia::Pixmap pixmap =
+      RenderTwoColumnFeImage(/*pixelated=*/true, /*width=*/5, /*height=*/5);
+
+  EXPECT_THAT(GetPixel(pixmap, 2, 2), Rgba(Gt(0), 0, Gt(0), 255));
 }
 
 // ---------------------------------------------------------------------------

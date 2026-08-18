@@ -13,6 +13,7 @@
 #include "donner/base/Transform.h"
 #include "donner/base/Vector2.h"
 #include "donner/css/Color.h"
+#include "donner/svg/core/ImageRendering.h"
 #include "donner/svg/core/MaskType.h"
 #include "donner/svg/renderer/geode/GeodeResidentPathComponent.h"
 
@@ -441,11 +442,17 @@ public:
    * @param destRect Destination rectangle in local (pre-transform) space.
    * @param opacity Overall opacity in [0, 1], combined with the sampled
    *   texel's alpha in the fragment shader.
-   * @param pixelated If true, use nearest-neighbor filtering (for
-   *   `image-rendering: pixelated`). Otherwise, bilinear.
+   * @param imageRendering Resolved smooth, crisp, or two-stage pixelated sampling policy.
    */
   void drawImage(const svg::ImageResource& image, const Box2d& destRect, double opacity,
-                 bool pixelated);
+                 svg::ImageRendering imageRendering);
+
+  /// Source-compatible legacy overload. New callers pass the resolved image-rendering enum.
+  void drawImage(const svg::ImageResource& image, const Box2d& destRect, double opacity,
+                 bool pixelated) {
+    drawImage(image, destRect, opacity,
+              pixelated ? svg::ImageRendering::Pixelated : svg::ImageRendering::Auto);
+  }
 
   /**
    * Draw an already-GPU-resident RGBA texture into the destination rectangle.

@@ -24,6 +24,7 @@
 #ifdef DONNER_FILTERS_ENABLED
 #include "donner/svg/renderer/FilterGraphExecutor.h"
 #endif
+#include "donner/svg/renderer/ImageSampling.h"
 #include "donner/svg/renderer/PatternTile.h"
 #include "donner/svg/renderer/PixelFormatUtils.h"
 #include "donner/svg/renderer/RendererDriver.h"
@@ -1801,13 +1802,116 @@ void RendererTinySkia::drawEllipse(const Box2d& bounds, const StrokeParams& stro
   }
 }
 
-void RendererTinySkia::drawImage(const ImageResource& image, const ImageParams& params) {
-  if (image.data.empty() || image.width <= 0 || image.height <= 0) {
+void RendererTinySkia::drawImagePixmap(const tiny_skia::PixmapView& source, int sourceWidth,
+                                       int sourceHeight, const ImageParams& params) {
+  const std::optional<tiny_skia::Rect> targetRect = toTinyRect(params.targetRect);
+  if (!targetRect.has_value() || sourceWidth <= 0 || sourceHeight <= 0) {
     return;
   }
 
-  const std::optional<tiny_skia::Rect> targetRect = toTinyRect(params.targetRect);
-  if (!targetRect.has_value()) {
+  ImageRendering imageRendering = params.imageRendering;
+  if (imageRendering == ImageRendering::Auto && params.imageRenderingPixelated) {
+    imageRendering = ImageRendering::Pixelated;
+  }
+
+  tiny_skia::PixmapView sampledSource = source;
+  int sampledWidth = sourceWidth;
+  int sampledHeight = sourceHeight;
+  std::optional<tiny_skia::Pixmap> pixelatedIntermediate;
+  tiny_skia::FilterQuality quality = tiny_skia::FilterQuality::Bilinear;
+
+  if (imageRendering == ImageRendering::CrispEdges ||
+      imageRendering == ImageRendering::OptimizeSpeed) {
+    quality = tiny_skia::FilterQuality::Nearest;
+  } else if (imageRendering == ImageRendering::Pixelated) {
+    const Transform2d deviceFromImage =
+        Transform2d::Scale(params.targetRect.width() / static_cast<double>(sourceWidth),
+                           params.targetRect.height() / static_cast<double>(sourceHeight)) *
+        Transform2d::Translate(params.targetRect.topLeft) * deviceFromLocalTransform_;
+    const double roundedScaleX =
+        std::floor(deviceFromImage.transformVector(Vector2d(1.0, 0.0)).length() + 0.5);
+    const double roundedScaleY =
+        std::floor(deviceFromImage.transformVector(Vector2d(0.0, 1.0)).length() + 0.5);
+    const bool finiteScale = std::isfinite(roundedScaleX) && std::isfinite(roundedScaleY);
+    const std::int64_t multipleX =
+        finiteScale ? std::max<std::int64_t>(1, static_cast<std::int64_t>(std::min<double>(
+                                                    roundedScaleX, kMaxImageSamplingDimension)))
+                    : 1;
+    const std::int64_t multipleY =
+        finiteScale ? std::max<std::int64_t>(1, static_cast<std::int64_t>(std::min<double>(
+                                                    roundedScaleY, kMaxImageSamplingDimension)))
+                    : 1;
+    const std::int64_t intermediateWidth = static_cast<std::int64_t>(sourceWidth) * multipleX;
+    const std::int64_t intermediateHeight = static_cast<std::int64_t>(sourceHeight) * multipleY;
+    const bool bounded = finiteScale && roundedScaleX <= kMaxImageSamplingDimension &&
+                         roundedScaleY <= kMaxImageSamplingDimension &&
+                         intermediateWidth <= kMaxImageSamplingDimension &&
+                         intermediateHeight <= kMaxImageSamplingDimension &&
+                         intermediateWidth * intermediateHeight <= kMaxImageSamplingSurfacePixels;
+    const bool needsIntermediate = multipleX > 1 || multipleY > 1;
+    if (bounded && needsIntermediate) {
+      tiny_skia::Pixmap intermediate = createTransparentPixmap(
+          static_cast<int>(intermediateWidth), static_cast<int>(intermediateHeight));
+      if (intermediate.width() > 0 && intermediate.height() > 0) {
+        tiny_skia::PixmapPaint nearest =
+            makePixmapPaint(intermediate, tiny_skia::FilterQuality::Nearest);
+        nearest.blendMode = tiny_skia::BlendMode::Source;
+        tiny_skia::MutablePixmapView intermediateView = intermediate.mutableView();
+        tiny_skia::Painter::drawPixmap(
+            intermediateView, 0, 0, source, nearest,
+            toTinyTransform(Transform2d::Scale(static_cast<double>(multipleX),
+                                               static_cast<double>(multipleY))));
+        pixelatedIntermediate = std::move(intermediate);
+        sampledSource = pixelatedIntermediate->view();
+        sampledWidth = static_cast<int>(intermediateWidth);
+        sampledHeight = static_cast<int>(intermediateHeight);
+      }
+    }
+
+    if (needsIntermediate && !pixelatedIntermediate.has_value()) {
+      std::vector<std::uint8_t> proceduralPixels = RasterizeImagePremultiplied(
+          source.data(), sourceWidth, sourceHeight, deviceFromImage,
+          static_cast<int>(currentPixmap().width()), static_cast<int>(currentPixmap().height()),
+          ImageRendering::Pixelated);
+      auto procedural = tiny_skia::Pixmap::fromVec(
+          std::move(proceduralPixels),
+          tiny_skia::IntSize(currentPixmap().width(), currentPixmap().height()));
+      if (!procedural.has_value()) {
+        if (verbose_) {
+          std::cerr << "RendererTinySkia: pixelated image exceeds the raster surface budget\n";
+        }
+        return;
+      }
+
+      tiny_skia::PixmapPaint paint =
+          makePixmapPaint(currentPixmap(), tiny_skia::FilterQuality::Nearest);
+      paint.opacity = NarrowToFloat(params.opacity * paintOpacity_);
+      paint.blendMode = tiny_skia::BlendMode::SourceOver;
+      const tiny_skia::Mask* mask = currentClipMask_.has_value() ? &*currentClipMask_ : nullptr;
+      auto pixmapView = currentPixmapView();
+      tiny_skia::Painter::drawPixmap(pixmapView, 0, 0, procedural->view(), paint,
+                                     toTinyTransform(Transform2d()), mask);
+      return;
+    }
+  }
+
+  const Transform2d deviceFromSampled =
+      Transform2d::Scale(params.targetRect.width() / static_cast<double>(sampledWidth),
+                         params.targetRect.height() / static_cast<double>(sampledHeight)) *
+      Transform2d::Translate(params.targetRect.topLeft) * deviceFromLocalTransform_;
+
+  tiny_skia::PixmapPaint paint = makePixmapPaint(currentPixmap(), quality);
+  paint.opacity = NarrowToFloat(params.opacity * paintOpacity_);
+  paint.blendMode = tiny_skia::BlendMode::SourceOver;
+
+  const tiny_skia::Mask* mask = currentClipMask_.has_value() ? &*currentClipMask_ : nullptr;
+  auto pixmapView = currentPixmapView();
+  tiny_skia::Painter::drawPixmap(pixmapView, 0, 0, sampledSource, paint,
+                                 toTinyTransform(deviceFromSampled), mask);
+}
+
+void RendererTinySkia::drawImage(const ImageResource& image, const ImageParams& params) {
+  if (image.data.empty() || image.width <= 0 || image.height <= 0) {
     return;
   }
 
@@ -1836,22 +1940,7 @@ void RendererTinySkia::drawImage(const ImageResource& image, const ImageParams& 
     return;
   }
 
-  const double scaleX = params.targetRect.width() / static_cast<double>(image.width);
-  const double scaleY = params.targetRect.height() / static_cast<double>(image.height);
-  const Transform2d imageFromLocal = Transform2d::Scale(scaleX, scaleY) *
-                                     Transform2d::Translate(params.targetRect.topLeft) *
-                                     deviceFromLocalTransform_;
-
-  tiny_skia::PixmapPaint paint = makePixmapPaint(
-      currentPixmap(), params.imageRenderingPixelated ? tiny_skia::FilterQuality::Nearest
-                                                      : tiny_skia::FilterQuality::Bilinear);
-  paint.opacity = NarrowToFloat(params.opacity * paintOpacity_);
-  paint.blendMode = tiny_skia::BlendMode::SourceOver;
-
-  const tiny_skia::Mask* mask = currentClipMask_.has_value() ? &*currentClipMask_ : nullptr;
-  auto pixmapView = currentPixmapView();
-  tiny_skia::Painter::drawPixmap(pixmapView, 0, 0, *sourceView, paint,
-                                 toTinyTransform(imageFromLocal), mask);
+  drawImagePixmap(*sourceView, image.width, image.height, params);
 }
 
 void RendererTinySkia::drawBitmap(const RendererBitmap& bitmap, const ImageParams& params) {
@@ -1904,22 +1993,7 @@ void RendererTinySkia::drawBitmap(const RendererBitmap& bitmap, const ImageParam
     return;
   }
 
-  const double scaleX = params.targetRect.width() / static_cast<double>(bitmap.dimensions.x);
-  const double scaleY = params.targetRect.height() / static_cast<double>(bitmap.dimensions.y);
-  const Transform2d imageFromLocal = Transform2d::Scale(scaleX, scaleY) *
-                                     Transform2d::Translate(params.targetRect.topLeft) *
-                                     deviceFromLocalTransform_;
-
-  tiny_skia::PixmapPaint paint = makePixmapPaint(
-      currentPixmap(), params.imageRenderingPixelated ? tiny_skia::FilterQuality::Nearest
-                                                      : tiny_skia::FilterQuality::Bilinear);
-  paint.opacity = NarrowToFloat(params.opacity * paintOpacity_);
-  paint.blendMode = tiny_skia::BlendMode::SourceOver;
-
-  const tiny_skia::Mask* mask = currentClipMask_.has_value() ? &*currentClipMask_ : nullptr;
-  auto pixmapView = currentPixmapView();
-  tiny_skia::Painter::drawPixmap(pixmapView, 0, 0, *sourceView, paint,
-                                 toTinyTransform(imageFromLocal), mask);
+  drawImagePixmap(*sourceView, bitmap.dimensions.x, bitmap.dimensions.y, params);
 }
 
 void RendererTinySkia::drawText(Registry& registry, const components::ComputedTextComponent& text,

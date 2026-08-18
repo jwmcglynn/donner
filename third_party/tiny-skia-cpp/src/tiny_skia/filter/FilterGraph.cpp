@@ -778,6 +778,17 @@ bool executeFilterGraph(Pixmap& sourceGraphic, const FilterGraph& graph) {
 
               const double invScaleX = static_cast<double>(primitive.width) / tw;
               const double invScaleY = static_cast<double>(primitive.height) / th;
+              constexpr double kMaxPixelatedScale = 65536.0;
+              const double pixelatedScaleX = std::floor(tw / primitive.width + 0.5);
+              const double pixelatedScaleY = std::floor(th / primitive.height + 0.5);
+              const std::int64_t pixelatedMultipleX =
+                  std::isfinite(pixelatedScaleX) ? static_cast<std::int64_t>(std::clamp(
+                                                       pixelatedScaleX, 1.0, kMaxPixelatedScale))
+                                                 : 1;
+              const std::int64_t pixelatedMultipleY =
+                  std::isfinite(pixelatedScaleY) ? static_cast<std::int64_t>(std::clamp(
+                                                       pixelatedScaleY, 1.0, kMaxPixelatedScale))
+                                                 : 1;
 
               auto dstData = fpOut.data();
               const auto& srcData = primitive.pixels;
@@ -821,11 +832,7 @@ bool executeFilterGraph(Pixmap& sourceGraphic, const FilterGraph& graph) {
                   const double srcXf = (static_cast<double>(dx) + 0.5 - tx) * invScaleX - 0.5;
                   const double srcYf = (static_cast<double>(dy) + 0.5 - ty) * invScaleY - 0.5;
 
-                  // `image-rendering: pixelated`/`crisp-edges` on the source feImage: sample the
-                  // single nearest texel (the texel whose [i, i+1) span contains the source
-                  // position `srcXf + 0.5`) instead of the bicubic footprint. Exact per-texel, so
-                  // there is no interpolation ramp; block edges stay hard.
-                  if (primitive.pixelated) {
+                  if (primitive.sampling == Image::Sampling::CrispEdges) {
                     const int nsx =
                         std::clamp(static_cast<int>(std::floor(srcXf + 0.5)), 0, srcW - 1);
                     const int nsy =
@@ -836,6 +843,48 @@ bool executeFilterGraph(Pixmap& sourceGraphic, const FilterGraph& graph) {
                     dstData[dstIdxN + 1] = std::min(static_cast<float>(sampleSrc(nsx, nsy, 1)), aN);
                     dstData[dstIdxN + 2] = std::min(static_cast<float>(sampleSrc(nsx, nsy, 2)), aN);
                     dstData[dstIdxN + 3] = aN;
+                    continue;
+                  }
+
+                  if (primitive.sampling == Image::Sampling::Pixelated) {
+                    const double intermediateX =
+                        (srcXf + 0.5) * static_cast<double>(pixelatedMultipleX) - 0.5;
+                    const double intermediateY =
+                        (srcYf + 0.5) * static_cast<double>(pixelatedMultipleY) - 0.5;
+                    const std::int64_t ix0 = static_cast<std::int64_t>(std::floor(intermediateX));
+                    const std::int64_t iy0 = static_cast<std::int64_t>(std::floor(intermediateY));
+                    const double fx = intermediateX - static_cast<double>(ix0);
+                    const double fy = intermediateY - static_cast<double>(iy0);
+                    const std::int64_t intermediateWidth =
+                        static_cast<std::int64_t>(srcW) * pixelatedMultipleX;
+                    const std::int64_t intermediateHeight =
+                        static_cast<std::int64_t>(srcH) * pixelatedMultipleY;
+                    const auto sampleIntermediate = [&](std::int64_t ix, std::int64_t iy,
+                                                        int channel) {
+                      ix = std::clamp<std::int64_t>(ix, 0, intermediateWidth - 1);
+                      iy = std::clamp<std::int64_t>(iy, 0, intermediateHeight - 1);
+                      return sampleSrc(static_cast<int>(ix / pixelatedMultipleX),
+                                       static_cast<int>(iy / pixelatedMultipleY), channel);
+                    };
+
+                    const std::size_t dstIdx = static_cast<std::size_t>((dy * w + dx) * 4);
+                    float out[4];
+                    for (int channel = 0; channel < 4; ++channel) {
+                      const double top = std::lerp(sampleIntermediate(ix0, iy0, channel),
+                                                   sampleIntermediate(ix0 + 1, iy0, channel), fx);
+                      const double bottom =
+                          std::lerp(sampleIntermediate(ix0, iy0 + 1, channel),
+                                    sampleIntermediate(ix0 + 1, iy0 + 1, channel), fx);
+                      out[channel] =
+                          static_cast<float>(std::clamp(std::lerp(top, bottom, fy), 0.0, 1.0));
+                    }
+                    out[0] = std::min(out[0], out[3]);
+                    out[1] = std::min(out[1], out[3]);
+                    out[2] = std::min(out[2], out[3]);
+                    dstData[dstIdx + 0] = out[0];
+                    dstData[dstIdx + 1] = out[1];
+                    dstData[dstIdx + 2] = out[2];
+                    dstData[dstIdx + 3] = out[3];
                     continue;
                   }
 

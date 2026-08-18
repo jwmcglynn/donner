@@ -30,9 +30,10 @@ struct ImageParams {
   m10: f32,
   m11: f32,
   m12: f32,
-  // 1 = nearest-neighbor sampling (`image-rendering: pixelated`/`crisp-edges` on the source
-  // feImage); 0 = Mitchell-Netravali bicubic (the default high-quality kernel).
-  pixelated: u32,
+  // 0 = smooth bicubic, 1 = crisp nearest-neighbor, 2 = CSS pixelated two-stage sampling.
+  samplingMode: u32,
+  pixelatedScaleX: f32,
+  pixelatedScaleY: f32,
   _pad1: u32,
 }
 
@@ -48,6 +49,13 @@ fn sampleImage(x: i32, y: i32, iw: i32, ih: i32) -> vec4f {
   let cx = clamp(x, 0, iw - 1);
   let cy = clamp(y, 0, ih - 1);
   return textureLoad(image_tex, vec2i(cx, cy), 0);
+}
+
+fn samplePixelated(ix: i32, iy: i32, iw: i32, ih: i32, multipleX: i32,
+                   multipleY: i32) -> vec4f {
+  let boundedX = clamp(ix, 0, iw * multipleX - 1);
+  let boundedY = clamp(iy, 0, ih * multipleY - 1);
+  return textureLoad(image_tex, vec2i(boundedX / multipleX, boundedY / multipleY), 0);
 }
 
 // Mitchell-Netravali cubic weight (B = C = 1/3), identical to the CPU
@@ -97,14 +105,32 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
     return;
   }
 
-  // `image-rendering: pixelated`/`crisp-edges`: sample the single nearest texel (the one whose
-  // [i, i+1) span contains the source position `sx + 0.5`) instead of the bicubic footprint.
-  if (params.pixelated != 0u) {
+  if (params.samplingMode == 1u) {
     let nsx = clamp(i32(floor(sx + 0.5)), 0, img_size.x - 1);
     let nsy = clamp(i32(floor(sy + 0.5)), 0, img_size.y - 1);
     let texel = textureLoad(image_tex, vec2i(nsx, nsy), 0);
     let an = texel.a;
     textureStore(output_tex, coord, vec4f(min(texel.rgb, vec3f(an)), an));
+    return;
+  }
+
+  if (params.samplingMode == 2u) {
+    let multipleX = i32(clamp(floor(params.pixelatedScaleX + 0.5), 1.0, 65536.0));
+    let multipleY = i32(clamp(floor(params.pixelatedScaleY + 0.5), 1.0, 65536.0));
+    let intermediateX = (sx + 0.5) * f32(multipleX) - 0.5;
+    let intermediateY = (sy + 0.5) * f32(multipleY) - 0.5;
+    let ix0 = i32(floor(intermediateX));
+    let iy0 = i32(floor(intermediateY));
+    let fraction = vec2f(intermediateX - f32(ix0), intermediateY - f32(iy0));
+    let top = mix(samplePixelated(ix0, iy0, img_size.x, img_size.y, multipleX, multipleY),
+                  samplePixelated(ix0 + 1, iy0, img_size.x, img_size.y, multipleX, multipleY),
+                  fraction.x);
+    let bottom = mix(samplePixelated(ix0, iy0 + 1, img_size.x, img_size.y, multipleX, multipleY),
+                     samplePixelated(ix0 + 1, iy0 + 1, img_size.x, img_size.y, multipleX,
+                                     multipleY),
+                     fraction.x);
+    let texel = clamp(mix(top, bottom, fraction.y), vec4f(0.0), vec4f(1.0));
+    textureStore(output_tex, coord, vec4f(min(texel.rgb, vec3f(texel.a)), texel.a));
     return;
   }
 

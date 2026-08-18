@@ -23,7 +23,7 @@ constexpr uint32_t alignUp(uint32_t value, uint32_t alignment) {
 
 /// Layout of the per-draw uniform buffer (must match shaders/image_blit.wgsl).
 ///
-/// 160 bytes total. `vec4f` members in WGSL require 16-byte alignment, so
+/// 176 bytes total. `vec4f` members in WGSL require 16-byte alignment, so
 /// `maskBounds` lands at offset 128 (not 120). The explicit 8-byte pad
 /// before `maskBounds` mirrors that alignment so `blendMode` /
 /// `hasClipMask` end up at the offsets the fragment shader reads from
@@ -43,10 +43,13 @@ struct alignas(16) Uniforms {
   float maskBounds[4];             // 128 .. 144 - (x0, y0, x1, y1) in target-pixel space
   uint32_t blendMode;              // 144 .. 148 - mix-blend-mode selector
   uint32_t hasClipMask;            // 148 .. 152 - path-clip mask blit
-  uint32_t _pad0;                  // 152 .. 156
+  uint32_t samplingMode;           // 152 .. 156 - GeodeTextureEncoder::Filter
   uint32_t _pad1;                  // 156 .. 160
+  float pixelatedScale[2];         // 160 .. 168 - device pixels per source texel
+  uint32_t _pad2;                  // 168 .. 172
+  uint32_t _pad3;                  // 172 .. 176
 };
-static_assert(sizeof(Uniforms) == 160, "Image-blit Uniforms layout mismatch");
+static_assert(sizeof(Uniforms) == 176, "Image-blit Uniforms layout mismatch");
 
 }  // namespace
 
@@ -146,6 +149,9 @@ void GeodeTextureEncoder::drawTexturedQuad(
   u.maskBounds[3] = static_cast<float>(params.maskBounds.bottomRight.y);
   u.blendMode = params.blendMode;
   u.hasClipMask = params.clipMaskView ? 1u : 0u;
+  u.samplingMode = static_cast<uint32_t>(params.filter);
+  u.pixelatedScale[0] = static_cast<float>(params.pixelatedScaleX);
+  u.pixelatedScale[1] = static_cast<float>(params.pixelatedScaleY);
 
   // Pooled callers bump-allocate from their per-frame scratch arena;
   // standalone callers keep the legacy one-buffer-per-blit path.
@@ -172,7 +178,7 @@ void GeodeTextureEncoder::drawTexturedQuad(
 
   // Pick sampler based on requested filter mode.
   const wgpu::Sampler& sampler =
-      (params.filter == Filter::Nearest) ? pipeline.nearestSampler() : pipeline.linearSampler();
+      params.filter == Filter::Nearest ? pipeline.nearestSampler() : pipeline.linearSampler();
 
   // Bind group - optional texture bindings must always carry a valid
   // view. When their owning feature flags are off, we bind the source

@@ -5,6 +5,7 @@
 #include <iterator>
 #include <vector>
 
+#include "donner/svg/renderer/PixelFormatUtils.h"
 #include "donner/svg/renderer/geode/GeodeBufferPool.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
 #include "donner/svg/renderer/geode/GeodeImagePipeline.h"
@@ -3296,7 +3297,7 @@ void GeoEncoder::blitFullTargetBlended(const wgpu::Texture& layer, const wgpu::T
 }
 
 void GeoEncoder::drawImage(const svg::ImageResource& image, const Box2d& destRect, double opacity,
-                           bool pixelated) {
+                           svg::ImageRendering imageRendering) {
   if (image.data.empty() || image.width <= 0 || image.height <= 0) {
     return;
   }
@@ -3321,9 +3322,10 @@ void GeoEncoder::drawImage(const svg::ImageResource& image, const Box2d& destRec
   impl_->ensurePassOpen();
   impl_->bindImagePipeline(impl_->imagePipeline->pipeline());
 
-  // Upload the image to a sampled texture.
+  // Interpolation happens in premultiplied space so transparent colored texels cannot fringe.
+  const std::vector<std::uint8_t> premultiplied = svg::PremultiplyRgba(image.data);
   wgpu::Texture texture = impl_->transientResources.retain(GeodeTextureEncoder::uploadRgba8Texture(
-      *impl_->device, image.data.data(), static_cast<uint32_t>(image.width),
+      *impl_->device, premultiplied.data(), static_cast<uint32_t>(image.width),
       static_cast<uint32_t>(image.height)));
   if (!texture) {
     return;
@@ -3339,8 +3341,26 @@ void GeoEncoder::drawImage(const svg::ImageResource& image, const Box2d& destRec
   qp.destRect = destRect;
   qp.srcRect = Box2d({0.0, 0.0}, {1.0, 1.0});
   qp.opacity = opacity;
-  qp.filter =
-      pixelated ? GeodeTextureEncoder::Filter::Nearest : GeodeTextureEncoder::Filter::Linear;
+  qp.sourceIsPremultiplied = true;
+  switch (imageRendering) {
+    case svg::ImageRendering::CrispEdges:
+    case svg::ImageRendering::OptimizeSpeed:
+      qp.filter = GeodeTextureEncoder::Filter::Nearest;
+      break;
+    case svg::ImageRendering::Pixelated: qp.filter = GeodeTextureEncoder::Filter::Pixelated; break;
+    case svg::ImageRendering::Auto:
+    case svg::ImageRendering::Smooth:
+    case svg::ImageRendering::HighQuality:
+    case svg::ImageRendering::OptimizeQuality:
+      qp.filter = GeodeTextureEncoder::Filter::Linear;
+      break;
+  }
+  const Transform2d deviceFromImage =
+      Transform2d::Scale(destRect.width() / static_cast<double>(image.width),
+                         destRect.height() / static_cast<double>(image.height)) *
+      Transform2d::Translate(destRect.topLeft) * impl_->transform;
+  qp.pixelatedScaleX = deviceFromImage.transformVector(Vector2d(1.0, 0.0)).length();
+  qp.pixelatedScaleY = deviceFromImage.transformVector(Vector2d(0.0, 1.0)).length();
   qp.clipMaskView = impl_->activeClipMaskView;
 
   GeodeTextureEncoder::drawTexturedQuad(*impl_->device, *impl_->imagePipeline, impl_->pass.get(),

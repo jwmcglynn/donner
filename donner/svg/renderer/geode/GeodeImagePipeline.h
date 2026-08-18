@@ -61,7 +61,7 @@ public:
   const wgpu::Sampler& linearSampler() const { return linearSampler_.get(); }
 
   /// Nearest-neighbor sampler, clamped to edge. Used when
-  /// `ImageParams::imageRenderingPixelated` is true.
+  /// `ImageRendering::CrispEdges` or its legacy alias is selected.
   const wgpu::Sampler& nearestSampler() const { return nearestSampler_.get(); }
 
   /// Linear clamp-to-edge sampler used for path-clip mask textures.

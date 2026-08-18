@@ -25,6 +25,7 @@
 #include "donner/svg/components/filter/FilterEffect.h"
 #include "donner/svg/components/filter/FilterGraph.h"
 #include "donner/svg/components/text/ComputedTextComponent.h"
+#include "donner/svg/core/ImageRendering.h"
 #include "donner/svg/core/LengthAdjust.h"
 #include "donner/svg/core/MaskType.h"
 #include "donner/svg/core/MixBlendMode.h"
@@ -365,7 +366,7 @@ struct ImageParams {
   /// Destination rectangle in device-independent units.
   Box2d targetRect;
   double opacity = 1.0;
-  /// Whether to favor nearest-neighbor sampling for pixelated rendering.
+  /// Legacy source-compatibility switch. New callers set `imageRendering`.
   bool imageRenderingPixelated = false;
   /// Source entity the drawn image was loaded onto. Set by the driver at the `drawImage`
   /// call site. Backends that cache a converted form of the pixels key off this, the same
@@ -373,6 +374,8 @@ struct ImageParams {
   /// default) means "no associated entity" - non-driver callers leave it null and backends
   /// fall back to converting per draw.
   EntityHandle sourceEntity;
+  /// Resolved CSS image sampling policy.
+  ImageRendering imageRendering = ImageRendering::Auto;
 };
 
 /**

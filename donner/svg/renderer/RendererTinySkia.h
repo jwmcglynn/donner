@@ -388,6 +388,8 @@ private:
   [[nodiscard]] std::optional<tiny_skia::Paint> makeFillPaint(const Box2d& bounds);
   [[nodiscard]] std::optional<tiny_skia::Paint> makeStrokePaint(const Box2d& bounds,
                                                                 const StrokeParams& stroke);
+  void drawImagePixmap(const tiny_skia::PixmapView& source, int sourceWidth, int sourceHeight,
+                       const ImageParams& params);
   [[nodiscard]] tiny_skia::Pixmap createTransparentPixmap(int width, int height) const;
   /**
    * Builds the base paint for a pixmap composite into \p destination.

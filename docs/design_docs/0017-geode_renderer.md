@@ -555,7 +555,7 @@ class GeoImage {
 struct GeoImageParams {
   double opacity = 1.0;
   MixBlendMode blendMode = MixBlendMode::Normal;
-  bool pixelated = false;  // nearest-neighbor filtering
+  ImageRendering imageRendering = ImageRendering::Auto;
 };
 
 }  // namespace donner::geode

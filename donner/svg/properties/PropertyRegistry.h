@@ -408,8 +408,7 @@ public:
   Property<Isolation> isolation{"isolation",
                                 []() -> std::optional<Isolation> { return Isolation::Auto; }};
 
-  /// `image-rendering` property. Controls the sampling filter for raster image
-  /// upscaling (`auto` = bilinear, `pixelated` = nearest-neighbor). Inherited.
+  /// `image-rendering` property. Selects smooth, crisp, or two-stage pixelated sampling. Inherited.
   Property<ImageRendering, PropertyCascade::Inherit> imageRendering{
       "image-rendering", []() -> std::optional<ImageRendering> { return ImageRendering::Auto; }};
 

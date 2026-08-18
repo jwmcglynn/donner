@@ -663,30 +663,20 @@ INSTANTIATE_TEST_SUITE_P(PaintingFillRule, ImageComparisonTestFixture,
 
 INSTANTIATE_TEST_SUITE_P(
     PaintingImageRendering, ImageComparisonTestFixture,
-    Combine(
-        ValuesIn(getTestsInCategory(
-            "painting/image-rendering",
-            {
-                // `image-rendering: pixelated`/`crisp-edges` (+ the legacy `optimizeSpeed` alias)
-                // is now honored: `<image>` via tiny-skia nearest sampling (RendererTinySkia /
-                // GeodeImagePipeline) and `<feImage>` via a nearest branch in the CPU and Geode
-                // feImage resamplers (both backends render bit-identical nearest output; proven by
-                // FilterGraphExecutorTest.FeImage* unit tests). These two goldens still diff by a
-                // seam-only residual: at the non-integer upscale here, resvg's nearest block grid
-                // lands on a slightly different device-pixel boundary than Donner's, so a handful
-                // of one-pixel-wide seams disagree. This is the same "golden kernel mismatch" class
-                // as the rest of the <image> category - a vendored-golden refresh, not a
-                // Donner code change.
-                {"on-feImage.svg",
-                 Params::Skip("Golden kernel mismatch: image-rendering nearest implemented on both "
-                              "backends; residual is the resvg nearest-grid seam convention at "
-                              "non-integer scale (0021 B3)")},
-                {"optimizeSpeed.svg",
-                 Params::Skip("Golden kernel mismatch: image-rendering nearest implemented on both "
-                              "backends; residual is the resvg nearest-grid seam convention at "
-                              "non-integer scale (0021 B3)")},
-            })),
-        ValuesIn(ActiveComparisonModes())),
+    Combine(ValuesIn(getTestsInCategory(
+                "painting/image-rendering",
+                {
+                    // Both files use the deprecated `optimizeSpeed` alias, which CSS Images maps to
+                    // `crisp-edges`. Donner uses an allowed nearest-neighbor policy, but the resvg
+                    // golden chooses a different pixel-center grid under the root viewport scale.
+                    {"on-feImage.svg",
+                     Params::Skip("Reference oracle: allowed crisp-edges nearest grid differs from "
+                                  "the resvg pixel-center convention under viewport scaling")},
+                    {"optimizeSpeed.svg",
+                     Params::Skip("Reference oracle: allowed crisp-edges nearest grid differs from "
+                                  "the resvg pixel-center convention under viewport scaling")},
+                })),
+            ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(PaintingIsolation, ImageComparisonTestFixture,

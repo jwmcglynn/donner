@@ -6,86 +6,10 @@
 #include <cstdint>
 #include <utility>
 
+#include "donner/svg/renderer/ImageSampling.h"
 #include "tiny_skia/filter/FilterGraph.h"
 
 namespace donner::svg {
-
-// PremultiplyRgba: now shared across backends in PixelFormatUtils.{h,cc}.
-
-std::vector<std::uint8_t> RasterizeTransformedImagePremultiplied(
-    std::span<const std::uint8_t> premultipliedPixels, int sourceWidth, int sourceHeight,
-    const Transform2d& deviceFromImage, std::optional<Box2d> userSubregion,
-    std::optional<Transform2d> filterFromDevice, int outputWidth, int outputHeight,
-    bool pixelated) {
-  std::vector<std::uint8_t> output(static_cast<std::size_t>(outputWidth * outputHeight * 4), 0);
-  if (sourceWidth <= 0 || sourceHeight <= 0 || outputWidth <= 0 || outputHeight <= 0) {
-    return output;
-  }
-
-  if (NearZero(deviceFromImage.determinant(), 1e-12)) {
-    return output;
-  }
-
-  const Transform2d imageFromDevice = deviceFromImage.inverse();
-
-  (void)userSubregion;
-  (void)filterFromDevice;
-
-  auto sampleSource = [&](int x, int y, int channel) -> float {
-    x = std::clamp(x, 0, sourceWidth - 1);
-    y = std::clamp(y, 0, sourceHeight - 1);
-    return premultipliedPixels[static_cast<std::size_t>((y * sourceWidth + x) * 4 + channel)] /
-           255.0f;
-  };
-
-  for (int y = 0; y < outputHeight; ++y) {
-    for (int x = 0; x < outputWidth; ++x) {
-      const Vector2d devicePoint(static_cast<double>(x) + 0.5, static_cast<double>(y) + 0.5);
-      const Vector2d imagePoint = imageFromDevice.transformPosition(devicePoint);
-      const double sourceX = imagePoint.x - 0.5;
-      const double sourceY = imagePoint.y - 0.5;
-      // Skip pixels whose sample center falls outside the source image. This prevents
-      // edge-clamped bilinear sampling from extending the image beyond its placement
-      // rectangle (important for feImage with preserveAspectRatio where the image doesn't
-      // fill the full subregion).
-      if (sourceX < -0.5 || sourceX >= sourceWidth - 0.5 || sourceY < -0.5 ||
-          sourceY >= sourceHeight - 0.5) {
-        continue;
-      }
-      const std::size_t outIndex = static_cast<std::size_t>((y * outputWidth + x) * 4);
-
-      // `image-rendering: pixelated`/`crisp-edges`: sample the single nearest texel (the one whose
-      // [i, i+1) span contains the source position `sourceX + 0.5`) rather than the bilinear 2x2.
-      if (pixelated) {
-        const int nx = std::clamp(static_cast<int>(std::floor(sourceX + 0.5)), 0, sourceWidth - 1);
-        const int ny = std::clamp(static_cast<int>(std::floor(sourceY + 0.5)), 0, sourceHeight - 1);
-        for (int channel = 0; channel < 4; ++channel) {
-          output[outIndex + channel] =
-              premultipliedPixels[static_cast<std::size_t>((ny * sourceWidth + nx) * 4 + channel)];
-        }
-        continue;
-      }
-
-      const int x0 = static_cast<int>(std::floor(sourceX));
-      const int y0 = static_cast<int>(std::floor(sourceY));
-
-      const float fx = static_cast<float>(sourceX - x0);
-      const float fy = static_cast<float>(sourceY - y0);
-      for (int channel = 0; channel < 4; ++channel) {
-        const float s00 = sampleSource(x0, y0, channel);
-        const float s10 = sampleSource(x0 + 1, y0, channel);
-        const float s01 = sampleSource(x0, y0 + 1, channel);
-        const float s11 = sampleSource(x0 + 1, y0 + 1, channel);
-        const float top = s00 + (s10 - s00) * fx;
-        const float bottom = s01 + (s11 - s01) * fx;
-        const float value = std::clamp(top + (bottom - top) * fy, 0.0f, 1.0f);
-        output[outIndex + channel] = static_cast<std::uint8_t>(std::round(value * 255.0f));
-      }
-    }
-  }
-
-  return output;
-}
 
 void ApplyFilterGraphToPixmap(tiny_skia::Pixmap& pixmap, const components::FilterGraph& filterGraph,
                               const Transform2d& deviceFromFilter,
@@ -571,7 +495,21 @@ void ApplyFilterGraphToPixmap(tiny_skia::Pixmap& pixmap, const components::Filte
 
           } else if constexpr (std::is_same_v<T, Image>) {
             gp::Image image;
-            image.pixelated = primitive.imageRenderingPixelated;
+            switch (primitive.imageRendering) {
+              case ImageRendering::CrispEdges:
+              case ImageRendering::OptimizeSpeed:
+                image.sampling = gp::Image::Sampling::CrispEdges;
+                break;
+              case ImageRendering::Pixelated:
+                image.sampling = gp::Image::Sampling::Pixelated;
+                break;
+              case ImageRendering::Auto:
+              case ImageRendering::Smooth:
+              case ImageRendering::HighQuality:
+              case ImageRendering::OptimizeQuality:
+                image.sampling = gp::Image::Sampling::Smooth;
+                break;
+            }
             if (!primitive.imageData.empty() && primitive.imageWidth > 0 &&
                 primitive.imageHeight > 0) {
               const std::vector<std::uint8_t> premultiplied = PremultiplyRgba(primitive.imageData);
@@ -598,9 +536,9 @@ void ApplyFilterGraphToPixmap(tiny_skia::Pixmap& pixmap, const components::Filte
                 const Transform2d deviceFromFragment =
                     viewBoxScaleInv * regionOffset * deviceFromFilter;
 
-                image.pixels = RasterizeTransformedImagePremultiplied(
+                image.pixels = RasterizeImagePremultiplied(
                     premultiplied, primitive.imageWidth, primitive.imageHeight, deviceFromFragment,
-                    std::nullopt, std::nullopt, w, h, primitive.imageRenderingPixelated);
+                    w, h, primitive.imageRendering);
                 image.width = w;
                 image.height = h;
                 image.targetRect = tiny_skia::filter::PixelRect{0.0, 0.0, static_cast<double>(w),
@@ -632,10 +570,9 @@ void ApplyFilterGraphToPixmap(tiny_skia::Pixmap& pixmap, const components::Filte
                                                                                      imageBox);
                 const Transform2d deviceFromImage = filterFromImage * deviceFromFilter;
 
-                image.pixels = RasterizeTransformedImagePremultiplied(
-                    premultiplied, primitive.imageWidth, primitive.imageHeight, deviceFromImage,
-                    userSubregion, deviceFromFilter.inverse(), w, h,
-                    primitive.imageRenderingPixelated);
+                image.pixels = RasterizeImagePremultiplied(premultiplied, primitive.imageWidth,
+                                                           primitive.imageHeight, deviceFromImage,
+                                                           w, h, primitive.imageRendering);
                 image.width = w;
                 image.height = h;
                 image.targetRect = tiny_skia::filter::PixelRect{0.0, 0.0, static_cast<double>(w),
