@@ -84,6 +84,51 @@ private:
   std::vector<std::string> families_;
 };
 
+/// A provider that genuinely serves different bytes per requested face, which is what the
+/// interface allows: a family is a set of faces, and asking for bold is a different question from
+/// asking for regular. Every answer is Public Sans with a distinct amount of trailing padding, so
+/// the loaded byte count says which face was served.
+class VariantFontProvider : public FontFamilyProvider {
+public:
+  explicit VariantFontProvider(std::string family) : family_(std::move(family)) {}
+
+  /// Trailing padding, and so the loaded size, that @p request is answered with.
+  static size_t PaddingFor(const FontFaceRequest& request) {
+    return 1u + static_cast<size_t>(request.weight) +
+           1000u * static_cast<size_t>(static_cast<int>(request.style)) +
+           100000u * static_cast<size_t>(static_cast<int>(request.stretch));
+  }
+
+  /// The exact loaded byte count this provider answers @p request with.
+  static size_t SizeFor(const FontFaceRequest& request) {
+    return embedded::kPublicSansMediumOtf.size() + PaddingFor(request);
+  }
+
+  std::vector<FontFamilyInfo> families() const override {
+    return {FontFamilyInfo{family_, FontSource::Embedded, FontCategory::SansSerif}};
+  }
+
+  bool hasFamily(std::string_view family) const override { return family == family_; }
+
+  std::vector<uint8_t> loadFamilyData(std::string_view family,
+                                      const FontFaceRequest& request) const override {
+    ++loadCalls;
+    if (!hasFamily(family)) {
+      return {};
+    }
+    // Padding after the last table leaves a valid sfnt whose size identifies the face.
+    std::vector<uint8_t> data(embedded::kPublicSansMediumOtf.begin(),
+                              embedded::kPublicSansMediumOtf.end());
+    data.resize(SizeFor(request), 0);
+    return data;
+  }
+
+  mutable int loadCalls = 0;
+
+private:
+  std::string family_;
+};
+
 size_t RetainedCharge(std::span<const uint8_t> data) {
   auto sfnt = fonts::SfntFont::Validate(data);
   EXPECT_TRUE(sfnt.has_value());
@@ -468,6 +513,184 @@ TEST(FontManagerTest, AddFontFaceWithDataSource) {
   EXPECT_NE(handle, fallback);
 
   EXPECT_FALSE(mgr.fontData(handle).empty());
+}
+
+/// A style recompute re-announces the document's whole `@font-face` set. Minting a fresh entity
+/// for each unchanged declaration would give every text run a new font identity on every unrelated
+/// document mutation, invalidating every cache keyed on the font (glyph outlines, backend faces)
+/// and stranding a second copy of the bytes on the abandoned entity.
+TEST(FontManagerTest, ReAnnouncingUnchangedFontFacesKeepsOneFontIdentity) {
+  Registry registry;
+  FontManager mgr(registry);
+
+  css::FontFace face;
+  face.familyName = RcString("TestFont");
+  css::FontFaceSource source;
+  source.kind = css::FontFaceSource::Kind::Data;
+  source.payload = std::make_shared<const std::vector<uint8_t>>(
+      embedded::kPublicSansMediumOtf.begin(), embedded::kPublicSansMediumOtf.end());
+  face.sources.push_back(std::move(source));
+
+  mgr.addFontFace(face);
+  const FontHandle first = mgr.findFont("TestFont");
+  ASSERT_TRUE(static_cast<bool>(first));
+  const size_t bytesAfterFirstLoad = mgr.loadedFontBytes();
+  EXPECT_EQ(mgr.numLoadedFonts(), 1u);
+
+  for (int recompute = 0; recompute < 20; ++recompute) {
+    mgr.addFontFace(face);
+    EXPECT_EQ(mgr.findFont("TestFont"), first)
+        << "Font identity changed at recompute " << recompute;
+    EXPECT_EQ(mgr.numLoadedFonts(), 1u) << "Duplicate font load at recompute " << recompute;
+    EXPECT_EQ(mgr.loadedFontBytes(), bytesAfterFirstLoad)
+        << "Duplicate font bytes charged at recompute " << recompute;
+  }
+}
+
+/// Identity reuse is keyed on the declaration, so a rule that names the same family but points at
+/// different bytes is a different declaration: it takes a new entity, and the bytes behind the
+/// original handle are left exactly as they were. Callers cache parsed faces and rendered outlines
+/// against a handle, so swapping bytes underneath a live handle would serve one font's cached
+/// geometry for another's.
+TEST(FontManagerTest, ReplacingFontFaceDataTakesANewIdentityAndLeavesTheOldBytesIntact) {
+  Registry registry;
+  FontManager mgr(registry);
+
+  css::FontFace face;
+  face.familyName = RcString("TestFont");
+  css::FontFaceSource source;
+  source.kind = css::FontFaceSource::Kind::Data;
+  source.payload = std::make_shared<const std::vector<uint8_t>>(
+      embedded::kPublicSansMediumOtf.begin(), embedded::kPublicSansMediumOtf.end());
+  face.sources.push_back(std::move(source));
+  mgr.addFontFace(face);
+
+  const FontHandle original = mgr.findFont("TestFont");
+  ASSERT_TRUE(static_cast<bool>(original));
+  const size_t originalSize = mgr.fontData(original).size();
+  ASSERT_GT(originalSize, 0u);
+
+  // Same descriptors, different payload: the WOFF form of the same font decompresses to different
+  // sfnt bytes than the OTF, so a stale reuse would be visible as an unchanged byte count.
+  const std::vector<uint8_t> woff = readFile("donner/base/fonts/testdata/valid-001.woff");
+  ASSERT_FALSE(woff.empty()) << "Could not read WOFF test file";
+  css::FontFace replacement;
+  replacement.familyName = RcString("TestFont");
+  css::FontFaceSource replacementSource;
+  replacementSource.kind = css::FontFaceSource::Kind::Data;
+  replacementSource.payload =
+      std::make_shared<const std::vector<uint8_t>>(woff.begin(), woff.end());
+  replacement.sources.push_back(std::move(replacementSource));
+  mgr.addFontFace(replacement);
+
+  const FontHandle updated = mgr.findFont("TestFont");
+  ASSERT_TRUE(static_cast<bool>(updated));
+  EXPECT_NE(updated, original) << "New font data must resolve to a new identity.";
+  EXPECT_EQ(mgr.fontData(original).size(), originalSize)
+      << "The original handle's bytes were swapped underneath it.";
+  EXPECT_NE(mgr.fontData(updated).size(), originalSize);
+}
+
+/// A declaration that differs only in a matching descriptor selects a different face, so it must
+/// take its own entity rather than colliding with the family's existing one.
+TEST(FontManagerTest, FontFacesDifferingOnlyByWeightTakeSeparateIdentities) {
+  Registry registry;
+  FontManager mgr(registry);
+
+  auto sharedPayload = std::make_shared<const std::vector<uint8_t>>(
+      embedded::kPublicSansMediumOtf.begin(), embedded::kPublicSansMediumOtf.end());
+
+  css::FontFace regular;
+  regular.familyName = RcString("TestFont");
+  css::FontFaceSource regularSource;
+  regularSource.kind = css::FontFaceSource::Kind::Data;
+  regularSource.payload = sharedPayload;
+  regular.sources.push_back(regularSource);
+  mgr.addFontFace(regular);
+
+  css::FontFace bold = regular;
+  bold.fontWeight = 700;
+  mgr.addFontFace(bold);
+
+  const FontHandle regularHandle = mgr.findFont("TestFont", 400);
+  const FontHandle boldHandle = mgr.findFont("TestFont", 700);
+  ASSERT_TRUE(static_cast<bool>(regularHandle));
+  ASSERT_TRUE(static_cast<bool>(boldHandle));
+  EXPECT_NE(regularHandle, boldHandle);
+}
+
+/// A provider answers per requested face, so the memo that keeps provider fonts on one identity is
+/// keyed on the whole request. The same request has to keep resolving to the same entity across
+/// recomputes and across a dropped resolution cache, or every downstream cache keyed on the font
+/// handle is thrown away on an unrelated document change. A DIFFERENT request is a different
+/// question and may resolve elsewhere; what it must never do is receive another face's bytes.
+TEST(FontManagerTest, ProviderRequestKeepsOneIdentityAcrossStylesAndCacheDrops) {
+  Registry registry;
+  FontManager mgr(registry);
+
+  VariantFontProvider provider("ProviderFamily");
+  mgr.setFontProvider(&provider);
+
+  const FontHandle regular = mgr.findFont("ProviderFamily");
+  ASSERT_TRUE(static_cast<bool>(regular));
+  EXPECT_EQ(provider.loadCalls, 1);
+  EXPECT_EQ(mgr.fontData(regular).size(), VariantFontProvider::SizeFor(FontFaceRequest{}));
+
+  // The same request, repeated: one identity, no second load.
+  EXPECT_EQ(mgr.findFont("ProviderFamily"), regular);
+  EXPECT_EQ(provider.loadCalls, 1);
+
+  // Different faces of the same family are different questions. They may take their own entities,
+  // and each must carry the bytes the provider returned for that face rather than the first
+  // face's, which is what a family-keyed memo would hand back.
+  const FontFaceRequest boldRequest{.weight = 700};
+  const FontHandle bold = mgr.findFont("ProviderFamily", boldRequest.weight);
+  ASSERT_TRUE(static_cast<bool>(bold));
+  EXPECT_EQ(mgr.fontData(bold).size(), VariantFontProvider::SizeFor(boldRequest))
+      << "The bold request was served another face's bytes.";
+
+  const FontFaceRequest italicRequest{.weight = 400, .style = FontStyle::Italic};
+  const FontHandle italic =
+      mgr.findFont("ProviderFamily", italicRequest.weight, static_cast<int>(italicRequest.style),
+                   static_cast<int>(italicRequest.stretch));
+  ASSERT_TRUE(static_cast<bool>(italic));
+  EXPECT_EQ(mgr.fontData(italic).size(), VariantFontProvider::SizeFor(italicRequest))
+      << "The italic request was served another face's bytes.";
+
+  // Registering an unrelated declaration drops the resolution cache, because a new rule can
+  // outrank an earlier answer. Every request's identity must survive that unchanged.
+  css::FontFace unrelated;
+  unrelated.familyName = RcString("SomeOtherFamily");
+  mgr.addFontFace(unrelated);
+
+  const int loadsBeforeCacheDrop = provider.loadCalls;
+  EXPECT_EQ(mgr.findFont("ProviderFamily"), regular);
+  EXPECT_EQ(mgr.findFont("ProviderFamily", boldRequest.weight), bold);
+  EXPECT_EQ(
+      mgr.findFont("ProviderFamily", italicRequest.weight, static_cast<int>(italicRequest.style),
+                   static_cast<int>(italicRequest.stretch)),
+      italic);
+  EXPECT_EQ(provider.loadCalls, loadsBeforeCacheDrop)
+      << "A dropped resolution cache re-loaded fonts the provider memo already held.";
+}
+
+TEST(FontManagerTest, SwappingProviderAbandonsTheMemoizedFamilyIdentity) {
+  Registry registry;
+  FontManager mgr(registry);
+
+  FakeFontProvider first({"ProviderFamily"});
+  mgr.setFontProvider(&first);
+  const FontHandle fromFirst = mgr.findFont("ProviderFamily");
+  ASSERT_TRUE(static_cast<bool>(fromFirst));
+
+  FakeFontProvider second({"ProviderFamily"});
+  mgr.setFontProvider(&second);
+  // The resolution cache still holds the previous answer for this exact query, so ask with a
+  // different weight to reach the provider path.
+  const FontHandle fromSecond = mgr.findFont("ProviderFamily", 700);
+  ASSERT_TRUE(static_cast<bool>(fromSecond));
+  EXPECT_NE(fromSecond, fromFirst);
+  EXPECT_EQ(second.loadCalls, 1);
 }
 
 TEST(FontManagerTest, AllowsAttachingAndRemovingCustomCacheComponents) {

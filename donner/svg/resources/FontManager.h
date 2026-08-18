@@ -117,6 +117,15 @@ public:
    * Register a `@font-face` declaration. Sources are resolved lazily on first `findFont()` call
    * for the corresponding family name.
    *
+   * Registration is idempotent: re-registering a declaration that is byte-for-byte the same rule
+   * (same family, weight, style, stretch, and the same ordered source list pointing at the same
+   * payloads) reuses the entity minted the first time and leaves the resolution cache intact.
+   * Callers that re-announce a document's whole `@font-face` set on every style recompute
+   * therefore keep stable font entities, which keeps every downstream per-font cache (rendered
+   * glyph outlines, backend face objects) valid across unrelated document mutations. A rule that
+   * differs in any of those fields is a different declaration and mints a new entity, so newly
+   * loaded font data is never served from a stale entity.
+   *
    * @param face The parsed `@font-face` rule.
    */
   void addFontFace(const css::FontFace& face);
@@ -331,11 +340,69 @@ private:
   /// Returns true if \p handle refers to a live font entity in the registry.
   bool isValidHandle(FontHandle handle) const;
 
+  /**
+   * Identity of one provider lookup: the family the provider was asked for, folded the way family
+   * matching compares it, plus the exact face within that family.
+   *
+   * The face is part of the identity because a provider resolves a family to one of its faces:
+   * asking for bold and asking for regular are two different questions with two different answers.
+   * Keying only on the family would hand every weight and style whichever variant happened to be
+   * loaded first.
+   */
+  struct ProviderFontKey {
+    std::string family;  ///< Family name, ASCII-lowercased.
+    int weight = 400;    ///< CSS font-weight, 100-900.
+    int style = 0;       ///< CSS font-style, matching \ref FontStyle.
+    int stretch = 5;     ///< CSS font-stretch, matching \ref FontStretch.
+
+    /// Equality comparison; the fields are the identity, so this is total over them.
+    bool operator==(const ProviderFontKey& other) const = default;
+  };
+
+  /// Hash for \ref ProviderFontKey. Combines the fields rather than concatenating them into a
+  /// string, so no field value can be mistaken for part of another.
+  struct ProviderFontKeyHash {
+    /// Returns a hash value combining every field of \p key.
+    size_t operator()(const ProviderFontKey& key) const noexcept;
+  };
+
+  /**
+   * Build the identity key for an `@font-face` declaration.
+   *
+   * Two declarations share a key exactly when they would resolve to the same face and load the
+   * same bytes: the matching descriptors (family, weight, style, stretch) plus the ordered source
+   * list, including each source's kind, trust, format and technology hints, and payload identity.
+   * Inline data payloads are immutable and shared by pointer, and the registered face entity keeps
+   * its own copy of that shared pointer alive, so the pointer value is a stable identity for the
+   * bytes and cannot be recycled by another buffer while the key is registered.
+   */
+  static std::string faceIdentityKey(const css::FontFace& face);
+
   /// Internal EnTT storage for font faces, loaded font bytes, and backend caches.
   Registry& registry_;  // NOLINT(cppcoreguidelines-avoid-const-or-ref-data-members)
 
   /// Cache: family/style query key → resolved font handle.
   std::unordered_map<std::string, FontHandle> cache_;
+
+  /// Identity key of every registered `@font-face` rule → the entity holding it. Keeps
+  /// re-registration of an unchanged rule from minting a second entity for the same declaration.
+  std::unordered_map<std::string, Entity> faceEntities_;
+
+  /**
+   * Resolved provider lookup to the entity holding the bytes it returned.
+   *
+   * A provider answers per requested face, not per family: the same family with a different weight
+   * or style is a different face and legitimately different bytes, so the key has to carry the
+   * whole request. Memoizing on that keeps a repeated request, including one repeated after the
+   * resolution cache is dropped, on one identity instead of loading a duplicate copy of the same
+   * bytes onto a fresh entity each time. Entries are only ever read back, never reloaded, so bytes
+   * are never swapped underneath a handle already in use.
+   */
+  std::unordered_map<ProviderFontKey, FontHandle, ProviderFontKeyHash> providerFonts_;
+
+  /// Provider that populated \ref providerFonts_. A different provider may answer the same family
+  /// with different bytes, so swapping providers abandons the memo rather than serving stale data.
+  const FontFamilyProvider* providerFontsSource_ = nullptr;
 
   /// Mapping from CSS generic family names to real family names.
   std::unordered_map<std::string, std::string> genericFamilyMap_;
