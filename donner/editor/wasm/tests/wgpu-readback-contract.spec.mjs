@@ -216,7 +216,7 @@ test("a GPU wait failure publishes worker stats even though no frame completed",
   );
 
   const poll = renderCoordinatorSource.match(
-    /void RenderCoordinator::pollRenderResult\([\s\S]*?\n  const auto& result = \*resultOpt;/,
+    /void RenderCoordinator::pollRenderResult\([\s\S]*?\n {2}const auto& result = \*resultOpt;/,
   );
   assert.ok(poll, "expected the UI-thread result poll");
   const failureCall = poll[0].indexOf("PublishWorkerGpuWaitFailure(");
