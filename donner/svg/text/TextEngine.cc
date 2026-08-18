@@ -452,7 +452,8 @@ ByteIndexMappings buildByteIndexMappings(std::string_view spanText) {
 
 void applyTextLength(std::vector<TextRun>& runs, const components::ComputedTextComponent& text,
                      const std::vector<RunPenExtent>& runExtents, const TextLayoutParams& params,
-                     bool vertical, double currentPenX, double currentPenY) {
+                     bool vertical, double currentPenX, double currentPenY,
+                     TextLengthTraversalStats* traversalStats) {
   // Check if any span has per-span textLength.
   bool anySpanHasTextLength = false;
   for (const auto& span : text.spans) {
@@ -464,9 +465,67 @@ void applyTextLength(std::vector<TextRun>& runs, const components::ComputedTextC
 
   // ── Per-span textLength ───────────────────────────────────────────────
   if (anySpanHasTextLength) {
+    double carriedAdvanceDelta = 0.0;
+    bool carryActive = false;
+
     for (size_t i = 0; i < runs.size() && i < text.spans.size(); ++i) {
+      if (traversalStats) {
+        ++traversalStats->runVisits;
+      }
       auto& run = runs[i];
       const auto& span = text.spans[i];
+
+      if (run.onPath) {
+        carryActive = false;
+        carriedAdvanceDelta = 0.0;
+      } else if (carryActive) {
+        const auto& inlinePositions = vertical ? span.yList : span.xList;
+        std::optional<size_t> resetCharIndex;
+        for (size_t charIndex = 0; charIndex < inlinePositions.size(); ++charIndex) {
+          if (traversalStats) {
+            ++traversalStats->inlinePositionVisits;
+          }
+          if (inlinePositions[charIndex].has_value()) {
+            resetCharIndex = charIndex;
+            break;
+          }
+        }
+
+        std::optional<ByteIndexMappings> mappings;
+        if (resetCharIndex.has_value() && !run.glyphs.empty()) {
+          const std::string_view spanText(span.text.data() + span.start, span.end - span.start);
+          if (traversalStats) {
+            traversalStats->mappedTextBytes += spanText.size();
+          }
+          mappings = buildByteIndexMappings(spanText);
+        }
+
+        for (auto& glyph : run.glyphs) {
+          if (traversalStats) {
+            ++traversalStats->glyphVisits;
+          }
+          if (resetCharIndex.has_value()) {
+            const size_t charIndex = glyph.cluster < mappings->byteToCharIdx.size()
+                                         ? mappings->byteToCharIdx[glyph.cluster]
+                                         : 0;
+            if (charIndex >= *resetCharIndex) {
+              continue;
+            }
+          }
+
+          if (vertical) {
+            glyph.yPosition += carriedAdvanceDelta;
+          } else {
+            glyph.xPosition += carriedAdvanceDelta;
+          }
+        }
+
+        if (resetCharIndex.has_value()) {
+          carryActive = false;
+          carriedAdvanceDelta = 0.0;
+        }
+      }
+
       if (!span.textLength.has_value() || run.glyphs.empty()) {
         continue;
       }
@@ -483,7 +542,7 @@ void applyTextLength(std::vector<TextRun>& runs, const components::ComputedTextC
       const double targetLength = span.textLength->toPixels(
           params.viewBox, params.fontMetrics, vertical ? Lengthd::Extent::Y : Lengthd::Extent::X);
 
-      if (targetLength <= 0.0) {
+      if (targetLength < 0.0) {
         continue;
       }
 
@@ -491,6 +550,9 @@ void applyTextLength(std::vector<TextRun>& runs, const components::ComputedTextC
         const size_t numGaps = run.glyphs.size() > 1 ? run.glyphs.size() - 1 : 1;
         const double extraPerGap = (targetLength - naturalLength) / static_cast<double>(numGaps);
         for (size_t gi = 0; gi < run.glyphs.size(); ++gi) {
+          if (traversalStats) {
+            ++traversalStats->glyphVisits;
+          }
           if (vertical) {
             run.glyphs[gi].yPosition += extraPerGap * static_cast<double>(gi);
           } else {
@@ -500,6 +562,9 @@ void applyTextLength(std::vector<TextRun>& runs, const components::ComputedTextC
       } else {
         const double scaleFactor = targetLength / naturalLength;
         for (auto& g : run.glyphs) {
+          if (traversalStats) {
+            ++traversalStats->glyphVisits;
+          }
           if (vertical) {
             g.yPosition = runStartPos + (g.yPosition - runStartPos) * scaleFactor;
             g.yAdvance *= scaleFactor;
@@ -510,6 +575,16 @@ void applyTextLength(std::vector<TextRun>& runs, const components::ComputedTextC
             g.stretchScaleX *= NarrowToFloat(scaleFactor);
           }
         }
+      }
+
+      if (!run.onPath) {
+        const double advanceDelta = targetLength - naturalLength;
+        if (carryActive) {
+          carriedAdvanceDelta += advanceDelta;
+        } else {
+          carriedAdvanceDelta = advanceDelta;
+        }
+        carryActive = true;
       }
     }
   }
@@ -532,7 +607,7 @@ void applyTextLength(std::vector<TextRun>& runs, const components::ComputedTextC
     const double targetLength = params.textLength->toPixels(
         params.viewBox, params.fontMetrics, vertical ? Lengthd::Extent::Y : Lengthd::Extent::X);
 
-    if (targetLength > 0.0) {
+    if (targetLength >= 0.0) {
       size_t totalGlyphs = 0;
       for (const auto& r : runs) {
         totalGlyphs += r.glyphs.size();

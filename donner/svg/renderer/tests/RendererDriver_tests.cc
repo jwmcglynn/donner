@@ -35,6 +35,7 @@ using ::testing::_;
 using ::testing::AtLeast;
 using ::testing::Eq;
 using ::testing::Field;
+using ::testing::SizeIs;
 
 namespace donner::svg {
 namespace {
@@ -428,9 +429,8 @@ TEST_F(RendererDriverTest, EmitsMaskSequenceForMaskedElement) {
   EXPECT_CALL(renderer, setTransform(_)).Times(AtLeast(1));
   EXPECT_CALL(renderer, setPaint(_)).Times(AtLeast(1));
 
-  EXPECT_CALL(renderer, pushMask(_)).WillRepeatedly([&](const std::optional<Box2d>&) {
-    ++pushMaskCount;
-  });
+  EXPECT_CALL(renderer, pushMask(_, MaskType::Luminance))
+      .WillRepeatedly([&](const std::optional<Box2d>&, MaskType) { ++pushMaskCount; });
   EXPECT_CALL(renderer, transitionMaskToContent()).WillRepeatedly([&]() {
     EXPECT_GE(pushMaskCount, 1) << "transitionMaskToContent called before pushMask";
     ++transitionCount;
@@ -457,6 +457,22 @@ TEST_F(RendererDriverTest, EmitsMaskSequenceForMaskedElement) {
   EXPECT_EQ(pushMaskCount, popMaskCount) << "pushMask and popMask should be paired";
   EXPECT_GE(drawPathAfterTransition, 1)
       << "The masked element should be drawn after transitionMaskToContent";
+}
+
+TEST_F(RendererDriverTest, EmitsMaskTypeFromReferencedMaskStyle) {
+  SVGDocument document = makeDocument(R"svg(
+    <defs>
+      <mask id="m" style="mask-type: alpha">
+        <rect x="0" y="0" width="8" height="8" fill="black" />
+      </mask>
+    </defs>
+    <rect x="0" y="0" width="8" height="8" fill="blue" mask="url(#m)" />
+  )svg",
+                                      Vector2i(8, 8));
+
+  EXPECT_CALL(renderer, pushMask(_, MaskType::Alpha)).Times(1);
+
+  driver.draw(document);
 }
 
 TEST_F(RendererDriverTest, EmitsIsolatedLayerForOpacity) {
@@ -1172,6 +1188,84 @@ TEST_F(RendererDriverTest, DrawPreservesDegenerateShapeObjectBoundingBoxForFilte
 }
 
 #ifdef DONNER_TEXT_ENABLED
+TEST_F(RendererDriverTest, DrawConvertsTextClipChildrenToPlacedGlyphOutlines) {
+  SVGDocument document = makeDocument(R"svg(
+    <defs>
+      <clipPath id="clip" clip-rule="evenodd">
+        <text x="20" y="80" font-family="Noto Sans" font-size="48">AB</text>
+      </clipPath>
+    </defs>
+    <rect width="100" height="100" fill="green" clip-path="url(#clip)" />
+  )svg",
+                                      Vector2i(100, 100));
+
+  EXPECT_CALL(renderer, beginFrame(_)).Times(1);
+  EXPECT_CALL(renderer, endFrame()).Times(1);
+  EXPECT_CALL(renderer, setTransform(_)).Times(AtLeast(1));
+  EXPECT_CALL(renderer, setPaint(_)).Times(AtLeast(1));
+  EXPECT_CALL(renderer, drawPath(_, _)).Times(1);
+  EXPECT_CALL(renderer, pushClip(_)).WillOnce([](const ResolvedClip& clip) {
+    ASSERT_THAT(clip.clipPaths, SizeIs(2));
+    for (const ClipPathShape& glyph : clip.clipPaths) {
+      EXPECT_FALSE(glyph.path.empty());
+      EXPECT_EQ(glyph.fillRule, FillRule::EvenOdd);
+    }
+  });
+  EXPECT_CALL(renderer, popClip()).Times(1);
+
+  driver.draw(document);
+}
+
+TEST_F(RendererDriverTest, DrawRejectsNestedClipOnTextChildWithoutLeakingLayerRecords) {
+  SVGDocument document = makeDocument(R"svg(
+    <defs>
+      <clipPath id="inner">
+        <rect x="20" y="20" width="60" height="60" />
+      </clipPath>
+      <clipPath id="outer">
+        <text x="20" y="80" font-family="Noto Sans" font-size="48"
+              clip-path="url(#inner)">AB</text>
+      </clipPath>
+    </defs>
+    <rect width="100" height="100" fill="green" clip-path="url(#outer)" />
+  )svg",
+                                      Vector2i(100, 100));
+
+  EXPECT_CALL(renderer, pushClip(_)).WillOnce([](const ResolvedClip& clip) {
+    ASSERT_THAT(clip.clipPaths, SizeIs(1));
+    EXPECT_TRUE(clip.clipPaths.front().path.empty());
+  });
+
+  driver.draw(document);
+}
+
+TEST_F(RendererDriverTest, DrawUsesTextObjectBoundingBoxForClipPathUnits) {
+  SVGDocument document = makeDocument(R"svg(
+    <defs>
+      <clipPath id="clip" clipPathUnits="objectBoundingBox">
+        <rect x="0.2" y="0.2" width="0.6" height="0.6" />
+      </clipPath>
+    </defs>
+    <text x="100" y="100" text-anchor="middle" font-family="Noto Sans" font-size="64"
+          clip-path="url(#clip)">Text</text>
+  )svg",
+                                      Vector2i(200, 200));
+
+  EXPECT_CALL(renderer, beginFrame(_)).Times(1);
+  EXPECT_CALL(renderer, endFrame()).Times(1);
+  EXPECT_CALL(renderer, setTransform(_)).Times(AtLeast(1));
+  EXPECT_CALL(renderer, setPaint(_)).Times(AtLeast(1));
+  EXPECT_CALL(renderer, drawText(_, _, _)).Times(1);
+  EXPECT_CALL(renderer, pushClip(_)).WillOnce([](const ResolvedClip& clip) {
+    EXPECT_FALSE(clip.clipPaths.empty());
+    EXPECT_GT(std::abs(clip.clipPathUnitsTransform.data[0]), 1.0);
+    EXPECT_GT(std::abs(clip.clipPathUnitsTransform.data[3]), 1.0);
+  });
+  EXPECT_CALL(renderer, popClip()).Times(1);
+
+  driver.draw(document);
+}
+
 TEST_F(RendererDriverTest, DrawUsesTextObjectBoundingBoxForFilterRegion) {
   SVGDocument document = makeDocument(R"svg(
     <defs>

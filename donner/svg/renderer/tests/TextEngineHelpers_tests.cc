@@ -23,6 +23,7 @@ using text_engine_detail::computeBaselineShift;
 using text_engine_detail::computeSpanBaselineShiftPx;
 using text_engine_detail::findChunkRanges;
 using text_engine_detail::RunPenExtent;
+using text_engine_detail::TextLengthTraversalStats;
 
 namespace {
 
@@ -491,6 +492,214 @@ TEST(ApplyTextLengthTest, IgnoresNonPositiveSpanLengths) {
 
   EXPECT_THAT(runs, ElementsAre(RunGlyphsAre(ElementsAre(GlyphXPositionIs(DoubleEq(10.0)))),
                                 RunGlyphsAre(ElementsAre(GlyphXPositionIs(DoubleEq(50.0))))));
+}
+
+TEST(ApplyTextLengthTest, AccumulatesMultiplePerSpanAdvanceDeltas) {
+  std::vector<TextRun> runs(4);
+  runs[0].glyphs = {{.xPosition = 0.0, .xAdvance = 10.0}};
+  runs[1].glyphs = {{.xPosition = 10.0, .xAdvance = 10.0}};
+  runs[2].glyphs = {{.xPosition = 20.0, .xAdvance = 10.0}};
+  runs[3].glyphs = {{.xPosition = 30.0, .xAdvance = 10.0}};
+
+  components::ComputedTextComponent text;
+  text.spans.resize(4);
+  text.spans[0].textLength = Lengthd(20.0, Lengthd::Unit::None);
+  text.spans[1].textLength = Lengthd(30.0, Lengthd::Unit::None);
+  text.spans[2].textLength = Lengthd(5.0, Lengthd::Unit::None);
+
+  const std::vector<RunPenExtent> extents = {
+      {.startX = 0.0, .endX = 10.0},
+      {.startX = 10.0, .endX = 20.0},
+      {.startX = 20.0, .endX = 30.0},
+      {.startX = 30.0, .endX = 40.0},
+  };
+  TextLayoutParams params;
+  params.viewBox = Box2d(Vector2d::Zero(), Vector2d(200, 200));
+  params.fontMetrics = FontMetrics();
+
+  applyTextLength(runs, text, extents, params, false, 40.0, 0.0);
+
+  EXPECT_THAT(runs, ElementsAre(RunGlyphsAre(ElementsAre(GlyphXPositionIs(DoubleEq(0.0)))),
+                                RunGlyphsAre(ElementsAre(GlyphXPositionIs(DoubleEq(20.0)))),
+                                RunGlyphsAre(ElementsAre(GlyphXPositionIs(DoubleEq(50.0)))),
+                                RunGlyphsAre(ElementsAre(GlyphXPositionIs(DoubleEq(55.0))))));
+}
+
+TEST(ApplyTextLengthTest, InternalResetAppliesIncomingCarryBeforeCurrentTextLength) {
+  std::vector<TextRun> runs(3);
+  runs[0].glyphs = {{.xPosition = 0.0, .xAdvance = 10.0}};
+  runs[1].glyphs = {{.xPosition = 10.0, .xAdvance = 10.0, .cluster = 0},
+                    {.xPosition = 100.0, .xAdvance = 10.0, .cluster = 1}};
+  runs[2].glyphs = {{.xPosition = 30.0, .xAdvance = 10.0}};
+
+  components::ComputedTextComponent text;
+  text.spans.resize(3);
+  text.spans[0].textLength = Lengthd(20.0, Lengthd::Unit::None);
+  text.spans[1].text = RcString("AB");
+  text.spans[1].start = 0;
+  text.spans[1].end = 2;
+  text.spans[1].xList = {std::nullopt, Lengthd(100.0, Lengthd::Unit::None)};
+  text.spans[1].textLength = Lengthd(40.0, Lengthd::Unit::None);
+
+  const std::vector<RunPenExtent> extents = {
+      {.startX = 0.0, .endX = 10.0},
+      {.startX = 10.0, .endX = 30.0},
+      {.startX = 30.0, .endX = 40.0},
+  };
+  TextLayoutParams params;
+  params.viewBox = Box2d(Vector2d::Zero(), Vector2d(200, 200));
+  params.fontMetrics = FontMetrics();
+
+  applyTextLength(runs, text, extents, params, false, 40.0, 0.0);
+
+  EXPECT_THAT(runs, ElementsAre(RunGlyphsAre(ElementsAre(GlyphXPositionIs(DoubleEq(0.0)))),
+                                RunGlyphsAre(ElementsAre(GlyphXPositionIs(DoubleEq(20.0)),
+                                                         GlyphXPositionIs(DoubleEq(120.0)))),
+                                RunGlyphsAre(ElementsAre(GlyphXPositionIs(DoubleEq(50.0))))));
+}
+
+TEST(ApplyTextLengthTest, EmptyRunsPassOrStopCarryAccordingToInlineReset) {
+  std::vector<TextRun> runs(5);
+  runs[0].glyphs = {{.xPosition = 0.0, .xAdvance = 10.0}};
+  runs[2].glyphs = {{.xPosition = 20.0, .xAdvance = 10.0}};
+  runs[4].glyphs = {{.xPosition = 40.0, .xAdvance = 10.0}};
+
+  components::ComputedTextComponent text;
+  text.spans.resize(5);
+  text.spans[0].textLength = Lengthd(20.0, Lengthd::Unit::None);
+  text.spans[1].textLength = Lengthd(100.0, Lengthd::Unit::None);
+  text.spans[3].xList = {Lengthd(80.0, Lengthd::Unit::None)};
+
+  const std::vector<RunPenExtent> extents = {
+      {.startX = 0.0, .endX = 10.0},  {.startX = 10.0, .endX = 10.0},
+      {.startX = 20.0, .endX = 30.0}, {.startX = 30.0, .endX = 30.0},
+      {.startX = 40.0, .endX = 50.0},
+  };
+  TextLayoutParams params;
+  params.viewBox = Box2d(Vector2d::Zero(), Vector2d(200, 200));
+  params.fontMetrics = FontMetrics();
+
+  applyTextLength(runs, text, extents, params, false, 50.0, 0.0);
+
+  EXPECT_THAT(runs, ElementsAre(RunGlyphsAre(ElementsAre(GlyphXPositionIs(DoubleEq(0.0)))),
+                                RunGlyphsAre(IsEmpty()),
+                                RunGlyphsAre(ElementsAre(GlyphXPositionIs(DoubleEq(30.0)))),
+                                RunGlyphsAre(IsEmpty()),
+                                RunGlyphsAre(ElementsAre(GlyphXPositionIs(DoubleEq(40.0))))));
+}
+
+TEST(ApplyTextLengthTest, TextPathStopsIncomingAndOutgoingCarry) {
+  std::vector<TextRun> runs(3);
+  runs[0].glyphs = {{.xPosition = 0.0, .xAdvance = 10.0}};
+  runs[1].glyphs = {{.xPosition = 100.0, .xAdvance = 10.0}, {.xPosition = 110.0, .xAdvance = 10.0}};
+  runs[1].onPath = true;
+  runs[2].glyphs = {{.xPosition = 20.0, .xAdvance = 10.0}};
+
+  components::ComputedTextComponent text;
+  text.spans.resize(3);
+  text.spans[0].textLength = Lengthd(20.0, Lengthd::Unit::None);
+  text.spans[1].textLength = Lengthd(40.0, Lengthd::Unit::None);
+
+  const std::vector<RunPenExtent> extents = {
+      {.startX = 0.0, .endX = 10.0},
+      {.startX = 100.0, .endX = 120.0},
+      {.startX = 20.0, .endX = 30.0},
+  };
+  TextLayoutParams params;
+  params.viewBox = Box2d(Vector2d::Zero(), Vector2d(200, 200));
+  params.fontMetrics = FontMetrics();
+
+  applyTextLength(runs, text, extents, params, false, 30.0, 0.0);
+
+  EXPECT_THAT(runs, ElementsAre(RunGlyphsAre(ElementsAre(GlyphXPositionIs(DoubleEq(0.0)))),
+                                RunGlyphsAre(ElementsAre(GlyphXPositionIs(DoubleEq(100.0)),
+                                                         GlyphXPositionIs(DoubleEq(130.0)))),
+                                RunGlyphsAre(ElementsAre(GlyphXPositionIs(DoubleEq(20.0))))));
+}
+
+TEST(ApplyTextLengthTest, Utf8AndUtf16ResetMapsOutOfOrderGlyphClusters) {
+  std::vector<TextRun> runs(2);
+  runs[0].glyphs = {{.xPosition = 0.0, .xAdvance = 10.0}};
+  runs[1].glyphs = {{.xPosition = 30.0, .cluster = 3},
+                    {.xPosition = 0.0, .cluster = 0},
+                    {.xPosition = 70.0, .cluster = 7},
+                    {.xPosition = 10.0, .cluster = 1}};
+
+  components::ComputedTextComponent text;
+  text.spans.resize(2);
+  text.spans[0].textLength = Lengthd(20.0, Lengthd::Unit::None);
+  text.spans[1].text = RcString(
+      "A\xC3\xA9\xF0\x9F\x98\x80"
+      "B");
+  text.spans[1].start = 0;
+  text.spans[1].end = 8;
+  text.spans[1].xList = {std::nullopt, std::nullopt, std::nullopt,
+                         Lengthd(100.0, Lengthd::Unit::None)};
+
+  const std::vector<RunPenExtent> extents = {
+      {.startX = 0.0, .endX = 10.0},
+      {.startX = 10.0, .endX = 80.0},
+  };
+  TextLayoutParams params;
+  params.viewBox = Box2d(Vector2d::Zero(), Vector2d(200, 200));
+  params.fontMetrics = FontMetrics();
+
+  applyTextLength(runs, text, extents, params, false, 80.0, 0.0);
+
+  EXPECT_THAT(runs[1].glyphs,
+              ElementsAre(GlyphXPositionIs(DoubleEq(30.0)), GlyphXPositionIs(DoubleEq(10.0)),
+                          GlyphXPositionIs(DoubleEq(70.0)), GlyphXPositionIs(DoubleEq(20.0))));
+}
+
+TEST(ApplyTextLengthTest, AnyPerSpanTextLengthSuppressesGlobalAdjustment) {
+  std::vector<TextRun> runs(2);
+  runs[0].glyphs = {{.xPosition = 0.0, .xAdvance = 10.0}, {.xPosition = 10.0, .xAdvance = 10.0}};
+
+  components::ComputedTextComponent text;
+  text.spans.resize(2);
+  text.spans[1].textLength = Lengthd(100.0, Lengthd::Unit::None);
+
+  const std::vector<RunPenExtent> extents = {
+      {.startX = 0.0, .endX = 20.0},
+      {.startX = 20.0, .endX = 20.0},
+  };
+  TextLayoutParams params;
+  params.viewBox = Box2d(Vector2d::Zero(), Vector2d(200, 200));
+  params.fontMetrics = FontMetrics();
+  params.textLength = Lengthd(100.0, Lengthd::Unit::None);
+
+  applyTextLength(runs, text, extents, params, false, 20.0, 0.0);
+
+  EXPECT_THAT(runs, ElementsAre(RunGlyphsAre(ElementsAre(GlyphXPositionIs(DoubleEq(0.0)),
+                                                         GlyphXPositionIs(DoubleEq(10.0)))),
+                                RunGlyphsAre(IsEmpty())));
+}
+
+TEST(ApplyTextLengthTest, CumulativeCarryHasLinearTraversal) {
+  constexpr size_t kRunCount = 64;
+  std::vector<TextRun> runs(kRunCount);
+  components::ComputedTextComponent text;
+  text.spans.resize(kRunCount);
+  std::vector<RunPenExtent> extents(kRunCount);
+
+  for (size_t i = 0; i < kRunCount; ++i) {
+    const double start = static_cast<double>(i) * 10.0;
+    runs[i].glyphs = {{.xPosition = start, .xAdvance = 10.0}};
+    text.spans[i].textLength = Lengthd(20.0, Lengthd::Unit::None);
+    extents[i] = {.startX = start, .endX = start + 10.0};
+  }
+
+  TextLayoutParams params;
+  params.viewBox = Box2d(Vector2d::Zero(), Vector2d(200, 200));
+  params.fontMetrics = FontMetrics();
+  TextLengthTraversalStats traversalStats;
+
+  applyTextLength(runs, text, extents, params, false, 640.0, 0.0, &traversalStats);
+
+  EXPECT_LE(traversalStats.runVisits, kRunCount);
+  EXPECT_LE(traversalStats.glyphVisits, kRunCount * 2);
+  EXPECT_EQ(traversalStats.inlinePositionVisits, 0u);
+  EXPECT_EQ(traversalStats.mappedTextBytes, 0u);
 }
 
 // ── computeSpanBaselineShiftPx ──────────────────────────────────────────────

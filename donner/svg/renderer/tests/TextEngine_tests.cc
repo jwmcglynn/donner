@@ -508,6 +508,93 @@ TEST(TextEngineHelperTest, ApplyTextLengthAdjustsGlobalSpacing) {
                                 RunGlyphsAre(ElementsAre(GlyphXPositionIs(DoubleEq(50.0))))));
 }
 
+TEST(TextEngineHelperTest, ApplyTextLengthAcceptsZeroGlobalSpacing) {
+  std::vector<TextRun> runs = {
+      {.glyphs = {{.xPosition = 10.0, .xAdvance = 10.0}, {.xPosition = 20.0, .xAdvance = 10.0}}},
+  };
+  components::ComputedTextComponent text;
+  text.spans.resize(1);
+  TextLayoutParams params = MakeTextParams(10.0);
+  params.textLength = Lengthd(0.0, Lengthd::Unit::None);
+  params.lengthAdjust = LengthAdjust::Spacing;
+
+  text_engine_detail::applyTextLength(runs, text, {}, params, /*vertical=*/false,
+                                      /*currentPenX=*/30.0, /*currentPenY=*/0.0);
+
+  EXPECT_THAT(runs, ElementsAre(RunGlyphsAre(ElementsAre(GlyphXPositionIs(DoubleEq(10.0)),
+                                                         GlyphXPositionIs(DoubleEq(0.0))))));
+}
+
+TEST(TextEngineHelperTest, ApplyPerSpanTextLengthAdvancesFollowingRunsUntilAbsoluteReset) {
+  std::vector<TextRun> runs = {
+      {.glyphs = {{.xPosition = 10.0, .xAdvance = 10.0}, {.xPosition = 20.0, .xAdvance = 10.0}}},
+      {.glyphs = {{.xPosition = 30.0, .xAdvance = 10.0}}},
+      {.glyphs = {{.xPosition = 40.0, .xAdvance = 10.0, .cluster = 0},
+                  {.xPosition = 100.0, .xAdvance = 10.0, .cluster = 1}}},
+      {.glyphs = {{.xPosition = 110.0, .xAdvance = 10.0}}},
+  };
+  components::ComputedTextComponent text;
+  text.spans.resize(4);
+  text.spans[0].textLength = Lengthd(40.0, Lengthd::Unit::None);
+  text.spans[0].lengthAdjust = LengthAdjust::Spacing;
+  text.spans[2].text = RcString("AB");
+  text.spans[2].start = 0;
+  text.spans[2].end = 2;
+  text.spans[2].xList = {std::nullopt, Lengthd(100.0, Lengthd::Unit::None)};
+  const std::vector<text_engine_detail::RunPenExtent> extents = {
+      {.startX = 10.0, .endX = 30.0},
+      {.startX = 30.0, .endX = 40.0},
+      {.startX = 40.0, .endX = 110.0},
+      {.startX = 110.0, .endX = 120.0},
+  };
+
+  text_engine_detail::applyTextLength(runs, text, extents, MakeTextParams(10.0),
+                                      /*vertical=*/false, /*currentPenX=*/120.0,
+                                      /*currentPenY=*/0.0);
+
+  EXPECT_THAT(runs, ElementsAre(RunGlyphsAre(ElementsAre(GlyphXPositionIs(DoubleEq(10.0)),
+                                                         GlyphXPositionIs(DoubleEq(40.0)))),
+                                RunGlyphsAre(ElementsAre(GlyphXPositionIs(DoubleEq(50.0)))),
+                                RunGlyphsAre(ElementsAre(GlyphXPositionIs(DoubleEq(60.0)),
+                                                         GlyphXPositionIs(DoubleEq(100.0)))),
+                                RunGlyphsAre(ElementsAre(GlyphXPositionIs(DoubleEq(110.0))))));
+}
+
+TEST(TextEngineHelperTest, ApplyPerSpanTextLengthAdvancesVerticallyUntilAbsoluteReset) {
+  std::vector<TextRun> runs = {
+      {.glyphs = {{.yPosition = 10.0, .yAdvance = 10.0}, {.yPosition = 20.0, .yAdvance = 10.0}}},
+      {.glyphs = {{.yPosition = 30.0, .yAdvance = 10.0}}},
+      {.glyphs = {{.yPosition = 40.0, .yAdvance = 10.0, .cluster = 0},
+                  {.yPosition = 100.0, .yAdvance = 10.0, .cluster = 1}}},
+      {.glyphs = {{.yPosition = 110.0, .yAdvance = 10.0}}},
+  };
+  components::ComputedTextComponent text;
+  text.spans.resize(4);
+  text.spans[0].textLength = Lengthd(40.0, Lengthd::Unit::None);
+  text.spans[0].lengthAdjust = LengthAdjust::Spacing;
+  text.spans[2].text = RcString("AB");
+  text.spans[2].start = 0;
+  text.spans[2].end = 2;
+  text.spans[2].yList = {std::nullopt, Lengthd(100.0, Lengthd::Unit::None)};
+  const std::vector<text_engine_detail::RunPenExtent> extents = {
+      {.startY = 10.0, .endY = 30.0},
+      {.startY = 30.0, .endY = 40.0},
+      {.startY = 40.0, .endY = 110.0},
+      {.startY = 110.0, .endY = 120.0},
+  };
+
+  text_engine_detail::applyTextLength(runs, text, extents, MakeTextParams(10.0),
+                                      /*vertical=*/true, /*currentPenX=*/0.0,
+                                      /*currentPenY=*/120.0);
+
+  EXPECT_THAT(runs, ElementsAre(RunGlyphsAre(ElementsAre(GlyphYPositionIs(DoubleEq(10.0)),
+                                                         GlyphYPositionIs(DoubleEq(40.0)))),
+                                RunGlyphsAre(ElementsAre(GlyphYPositionIs(DoubleEq(50.0)))),
+                                RunGlyphsAre(ElementsAre(GlyphYPositionIs(DoubleEq(60.0)),
+                                                         GlyphYPositionIs(DoubleEq(100.0)))),
+                                RunGlyphsAre(ElementsAre(GlyphYPositionIs(DoubleEq(110.0))))));
+}
+
 TEST(TextEngineHelperTest, ApplyTextLengthAdjustsGlobalSpacingAndGlyphsHorizontally) {
   std::vector<TextRun> runs = {
       {.glyphs = {{.xPosition = 10.0, .xAdvance = 10.0}, {.xPosition = 20.0, .xAdvance = 10.0}}},

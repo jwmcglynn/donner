@@ -42,9 +42,8 @@ struct Uniforms {
   // will multiply the entire texel by `opacity` and write the result
   // as-is.
   sourceIsPremult: u32,
-  // Nonzero when this blit should apply a luminance mask from the
-  // texture bound at binding 3. Used by `RendererGeode::popMask` to
-  // composite mask content through a `<mask>` element's luminance.
+  // Mask coverage selector for the texture bound at binding 3:
+  // 0 disables masking, 1 uses luminance, and 2 uses alpha.
   // When 0, the mask texture binding carries the 1x1 dummy and the
   // shader skips the sampling entirely.
   maskMode: u32,
@@ -75,7 +74,7 @@ struct Uniforms {
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
 @group(0) @binding(1) var imageSampler: sampler;
 @group(0) @binding(2) var imageTexture: texture_2d<f32>;
-// Luminance mask input - bound to a 1x1 dummy when
+// Mask input - bound to a 1x1 dummy when
 // `maskMode == 0`. Sampled with the same `imageSampler` so texels are
 // interpolated between source pixels consistently with the content.
 @group(0) @binding(3) var maskTexture: texture_2d<f32>;
@@ -435,6 +434,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4f {
   }
 
   if (uniforms.maskMode != 0u) {
+    let maskSample = textureSample(maskTexture, imageSampler, in.uv);
+    var maskValue = maskSample.a;
+
     // SVG `<mask>` luminance. tiny-skia's mask.rs computes
     //   luma = 0.2126*R + 0.7152*G + 0.0722*B   (BT.709, on STRAIGHT RGB)
     //   mask_value = luma * alpha
@@ -443,10 +445,11 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4f {
     //     = a * (0.2126*R + 0.7152*G + 0.0722*B)
     //     = luma * a = mask_value
     // exactly the tiny-skia formula - no division, no branching.
-    let maskSample = textureSample(maskTexture, imageSampler, in.uv);
-    let maskValue = maskSample.r * 0.2126
-                  + maskSample.g * 0.7152
-                  + maskSample.b * 0.0722;
+    if (uniforms.maskMode == 1u) {
+      maskValue = maskSample.r * 0.2126
+                + maskSample.g * 0.7152
+                + maskSample.b * 0.0722;
+    }
 
     // Honour the `<mask>` element's x/y/width/height attributes by
     // discarding anything outside the bounds rectangle in target-

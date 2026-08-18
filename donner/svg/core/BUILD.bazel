@@ -25,6 +25,7 @@ cc_library(
         "LengthAdjust.h",
         "MarkerOrient.h",
         "MarkerUnits.h",
+        "MaskType.h",
         "MaskUnits.h",
         "MixBlendMode.h",
         "Overflow.h",

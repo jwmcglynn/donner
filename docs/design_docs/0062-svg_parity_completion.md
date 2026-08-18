@@ -20,7 +20,7 @@ honors `paint-order` on both renderers. It also has partial support for `image-r
 the existing focused tests, then fixes the causal gap instead of adding a second implementation.
 
 The current source-declared resvg baseline has 1,679 vendored cases, 43 cases in one disabled
-category, 124 skip expressions, 78 effective render-only cases, 103 explicit pixel-budget call
+category, 116 skip expressions, 78 effective render-only cases, 103 explicit pixel-budget call
 sites, 36 shared golden overrides, and 6 Geode-specific golden overrides. Those numbers mix real
 product gaps, deprecated features, undefined behavior, and independent reference-oracle choices.
 Reducing the raw totals is useful, but correctness and classification are the actual goals.
@@ -101,8 +101,17 @@ Reducing the raw totals is useful, but correctness and classification are the ac
         `//donner/svg/renderer/tests:filter_graph_executor_tests`,
         `:renderer_geode_golden_tests`, and `:resvg_test_suite`.
 - [ ] Milestone 3: Finish existing text-length machinery
-  - [ ] Fix `textLength=0`, single-cluster spacing, per-chunk adjustment, decoration extents, and
-        the ordering between length adjustment and textPath placement.
+  - [x] Apply `textLength=0` spacing semantics and cover them with a focused unit test. Keep the
+        resvg case disabled until its 397-pixel overlapping-glyph raster residual is independently
+        classified.
+  - [x] Propagate a per-span `textLength` advance through following text until the first explicit
+        inline-axis position or textPath reset. A single forward carry pass bounds this work by
+        runs, glyphs, inline-position entries, and mapped text bytes. Horizontal, vertical,
+        mid-run reset, DOM geometry, and deterministic traversal-count tests cover the
+        current-position contract. The single-tspan resvg case remains classified for a 499-pixel
+        small-text raster residual.
+  - [ ] Fix single-cluster spacing, per-chunk adjustment, decoration extents, and the ordering
+        between length adjustment and textPath placement.
   - [ ] Parse and apply `textLength` and `lengthAdjust` on `<textPath>`.
   - [ ] Verify both length-adjust modes, single-cluster and zero targets, decoration extents, and
         path ordering with `//donner/svg/renderer/tests:text_engine_tests`,
@@ -139,16 +148,24 @@ Reducing the raw totals is useful, but correctness and classification are the ac
         `//donner/svg/renderer/tests:renderer_driver_tests`, `:renderer_tests`,
         `:renderer_geode_golden_tests`, and `:donner_svg2_suite`.
 - [ ] Milestone 7: Complete clip semantics
-  - [ ] Use the unified rendering object bounding box for text, images, groups, clip paths, and
-        masks instead of path-only shape bounds.
-  - [ ] Add text glyph outlines to clip geometry and define behavior for bitmap-only glyphs.
+  - [x] Use the unified rendering object bounding box for text clip units instead of path-only shape
+        bounds. The transformed-text resvg case remains disabled because its vendored golden uses
+        ink bounds while SVG 2 and Firefox use full glyph cells; cross-browser classification is
+        still required before changing comparison policy.
+  - [ ] Extend the unified rendering object bounding box through image, group, and mask unit paths.
+  - [x] Add placed vector glyph outlines to clip geometry and activate the four directly targeted
+        resvg text-child cases in both TinyGolden and GeodeGolden modes. Keep a text child with its
+        own nested clip fail-closed until the explicit clip-expression work below can preserve that
+        child's grouping.
+  - [ ] Define and implement shared clip silhouettes for bitmap-only glyphs.
   - [ ] Replace the integer nested-clip layer convention with an explicit union and intersection
         expression consumed identically by TinySkia and Geode.
   - [ ] Verify text clips, objectBoundingBox transforms, sibling unions, nested intersections, and
         bitmap-glyph policy with `//donner/svg/renderer/tests:renderer_driver_tests`,
         `:renderer_tests`, `:renderer_geode_golden_tests`, and `:resvg_test_suite`.
 - [ ] Milestone 8: Complete mask semantics
-  - [ ] Add typed `mask-type` and carry alpha versus luminance mode through the renderer interface.
+  - [x] Add typed `mask-type` and carry alpha versus luminance mode through the renderer interface,
+        snapshots, TinySkia, and Geode. All directly targeted resvg comparisons are active.
   - [ ] Preserve transformed mask region geometry instead of reducing rotated regions to one
         axis-aligned box.
   - [ ] Resolve `maskUnits`, `maskContentUnits`, default regions, non-positive dimensions,
@@ -513,8 +530,8 @@ change this coordinate space without re-running those oracles.
 
 - Cache bidi paragraph analysis and shaping by text content, computed text properties, font
   selection, and relevant geometry generation.
-- Keep logical-to-visual maps linear in source clusters and cap reference, clip-expression, mask,
-  and placed-glyph growth.
+- Keep textLength carry and logical-to-visual maps linear in source clusters, runs, and glyphs, and
+  cap reference, clip-expression, mask, and placed-glyph growth.
 - Avoid per-frame reparsing of property strings or rebuilding unchanged glyph outlines.
 - Benchmark mixed bidi paragraphs, long textPath content, deep clip expressions, large masks, and
   non-scaling dashed paths before and after each owning slice.
@@ -542,6 +559,9 @@ must preserve the existing no-exception error model and resource budgets.
   Non-finite transforms and expansion overflow run through `//donner/base:path_fuzzer`,
   `:path_ops_fuzzer`, `//donner/svg/parser:path_parser_fuzzer`, and
   `//donner/svg/renderer/tests:svg_document_render_fuzzer`.
+- Per-span `textLength` current-position carry visits each run once and maps reset text only when an
+  active carry reaches that run. `ApplyTextLengthTest.CumulativeCarryHasLinearTraversal` in
+  `//donner/svg/renderer/tests:text_engine_helpers_tests` enforces the operation-count bound.
 - Parser and document-render fuzz targets cover every new grammar and structured interaction.
 
 The following CI targets enforce the relevant boundaries:

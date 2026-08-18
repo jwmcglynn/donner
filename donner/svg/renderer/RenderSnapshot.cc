@@ -61,6 +61,7 @@ struct PopFilterLayerCommand {};
 
 struct PushMaskCommand {
   std::optional<Box2d> maskBounds;
+  MaskType maskType = MaskType::Luminance;
 };
 
 struct TransitionMaskToContentCommand {};
@@ -331,7 +332,9 @@ void ReplayCommand(const RenderCommand& command, RendererInterface& renderer,
             renderer.pushFilterLayer(value.filterGraph, value.filterRegion);
           },
           [&](const PopFilterLayerCommand&) { renderer.popFilterLayer(); },
-          [&](const PushMaskCommand& value) { renderer.pushMask(value.maskBounds); },
+          [&](const PushMaskCommand& value) {
+            renderer.pushMask(value.maskBounds, value.maskType);
+          },
           [&](const TransitionMaskToContentCommand&) { renderer.transitionMaskToContent(); },
           [&](const PopMaskCommand&) { renderer.popMask(); },
           [&](const BeginPatternTileCommand& value) {
@@ -500,7 +503,11 @@ void RenderSnapshotRecorder::popFilterLayer() {
 }
 
 void RenderSnapshotRecorder::pushMask(const std::optional<Box2d>& maskBounds) {
-  snapshot_.impl_->commands.push_back(PushMaskCommand{maskBounds});
+  pushMask(maskBounds, MaskType::Luminance);
+}
+
+void RenderSnapshotRecorder::pushMask(const std::optional<Box2d>& maskBounds, MaskType maskType) {
+  snapshot_.impl_->commands.push_back(PushMaskCommand{maskBounds, maskType});
 }
 
 void RenderSnapshotRecorder::transitionMaskToContent() {

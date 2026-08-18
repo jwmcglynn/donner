@@ -36,7 +36,7 @@ struct alignas(16) Uniforms {
   float targetSize[2];             //  96 .. 104 - target size for clip-mask UVs
   float opacity;                   // 104 .. 108
   uint32_t sourceIsPremult;        // 108 .. 112
-  uint32_t maskMode;               // 112 .. 116 - <mask> luminance blit
+  uint32_t maskMode;               // 112 .. 116 - <mask> coverage selector
   uint32_t applyMaskBounds;        // 116 .. 120 - clip output to `maskBounds`
   uint32_t _padBeforeMaskBounds0;  // 120 .. 124 - align maskBounds to vec4f (16B) boundary
   uint32_t _padBeforeMaskBounds1;  // 124 .. 128
@@ -112,13 +112,10 @@ wgpu::Texture GeodeTextureEncoder::uploadRgba8Texture(GeodeDevice& device,
   return texture;
 }
 
-void GeodeTextureEncoder::drawTexturedQuad(GeodeDevice& device, const GeodeImagePipeline& pipeline,
-                                           const wgpu::RenderPassEncoder& pass,
-                                           const wgpu::Texture& texture, const float mvp[16],
-                                           uint32_t targetWidth, uint32_t targetHeight,
-                                           const QuadParams& params,
-                                           ScopedWgpuResourceArena& resourceArena,
-                                           UniformScratch* scratch) {
+void GeodeTextureEncoder::drawTexturedQuad(
+    GeodeDevice& device, const GeodeImagePipeline& pipeline, const wgpu::RenderPassEncoder& pass,
+    const wgpu::Texture& texture, const float mvp[16], uint32_t targetWidth, uint32_t targetHeight,
+    const QuadParams& params, ScopedWgpuResourceArena& resourceArena, UniformScratch* scratch) {
   if (!texture) {
     return;
   }
@@ -141,7 +138,7 @@ void GeodeTextureEncoder::drawTexturedQuad(GeodeDevice& device, const GeodeImage
   u.targetSize[1] = static_cast<float>(targetHeight);
   u.opacity = static_cast<float>(params.opacity);
   u.sourceIsPremult = params.sourceIsPremultiplied ? 1u : 0u;
-  u.maskMode = params.maskTexture ? 1u : 0u;
+  u.maskMode = params.maskTexture ? params.maskMode : 0u;
   u.applyMaskBounds = params.applyMaskBounds ? 1u : 0u;
   u.maskBounds[0] = static_cast<float>(params.maskBounds.topLeft.x);
   u.maskBounds[1] = static_cast<float>(params.maskBounds.topLeft.y);

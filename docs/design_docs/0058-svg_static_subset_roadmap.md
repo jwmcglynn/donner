@@ -54,7 +54,8 @@ loading, a set of masking/clipping and filter edge cases, and CPU/GPU renderer p
 
 - [ ] Milestone 1: Text static-subset completion (largest gap cluster)
   - [ ] Bidirectional text: `direction`, `unicode-bidi`, and bidi reordering.
-  - [ ] `textLength` and `lengthAdjust` (`spacing` and `spacingAndGlyphs`).
+  - [~] `textLength` and `lengthAdjust`: zero length and per-span current-position propagation are
+    implemented; nested aggregation, decoration, vertical, and textPath interactions remain.
   - [ ] SVG 2 `<textPath>` features: `side`, `method=stretch`, `spacing=auto`, the `path` attribute,
         and reference-to-shape targets.
   - [ ] Full SVG 2 `text-decoration` (independent line, style, and color).
@@ -69,9 +70,12 @@ loading, a set of masking/clipping and filter edge cases, and CPU/GPU renderer p
   - [ ] External CSS `@import`.
   - [ ] `<svg>` with no explicit size: compute bounds from content.
 - [ ] Milestone 3: Masking and clipping edge cases
-  - [ ] `clip-path` on and with `<text>`.
+  - [x] Vector text children inside `clipPath` and text objectBoundingBox clip-unit plumbing.
+  - [ ] Bitmap-only glyph clip silhouettes; keep the transformed-text oracle difference classified
+        until broader browser review is complete.
   - [ ] Nested clip-path intersection (currently a GPU-backend TODO; align both backends).
-  - [ ] Remaining `mask-type` / `maskUnits` / `maskContentUnits` edge cases and
+  - [x] `mask-type: luminance` and `mask-type: alpha` on both renderers.
+  - [ ] Remaining `maskUnits` / `maskContentUnits` edge cases, transformed regions, and
         `color-interpolation=linearRGB` on masks.
 - [ ] Milestone 4: Filter completion
   - [ ] CSS `filter:` function-list support (the currently disabled `filter-functions` category).

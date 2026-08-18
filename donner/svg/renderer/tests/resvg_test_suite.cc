@@ -310,11 +310,10 @@ INSTANTIATE_TEST_SUITE_P(FiltersFeMerge, ImageComparisonTestFixture,
                                  ValuesIn(ActiveComparisonModes())),
                          TestNameFromFilename);
 
-INSTANTIATE_TEST_SUITE_P(
-    FiltersFeMorphology, ImageComparisonTestFixture,
-    Combine(ValuesIn(getTestsInCategory("filters/feMorphology")),
-            ValuesIn(ActiveComparisonModes())),
-    TestNameFromFilename);
+INSTANTIATE_TEST_SUITE_P(FiltersFeMorphology, ImageComparisonTestFixture,
+                         Combine(ValuesIn(getTestsInCategory("filters/feMorphology")),
+                                 ValuesIn(ActiveComparisonModes())),
+                         TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(FiltersFeOffset, ImageComparisonTestFixture,
                          Combine(ValuesIn(getTestsInCategory("filters/feOffset")),
@@ -472,31 +471,25 @@ INSTANTIATE_TEST_SUITE_P(MaskingClipRule, ImageComparisonTestFixture,
 
 INSTANTIATE_TEST_SUITE_P(
     MaskingClipPath, ImageComparisonTestFixture,
-    Combine(
-        ValuesIn(getTestsInCategory(
-            "masking/clipPath",
-            {
-                {"clip-path-on-children.svg", Params::Skip("Bug: Nested clip-path not working")},
-                {"clip-path-with-transform-on-text.svg",
-                 Params::Skip("Not impl: clipPath on <text>")},
-                {"clipping-with-complex-text-1.svg",
-                 Params::Skip("Not impl: clipPath with <text> children")},
-                {"clipping-with-complex-text-2.svg",
-                 Params::Skip("Not impl: clipPath with <text> children")},
-                {"clipping-with-complex-text-and-clip-rule.svg",
-                 Params::Skip("Not impl: clipPath with <text> children")},
-                {"clipping-with-text.svg", Params::Skip("Not impl: clipPath with <text> children")},
-                {"on-the-root-svg-without-size.svg",
-                 Params::RenderOnly("UB: on root `<svg>` without size")},
+    Combine(ValuesIn(getTestsInCategory(
+                "masking/clipPath",
+                {
+                    {"clip-path-on-children.svg",
+                     Params::Skip("Bug: Nested clip-path not working")},
+                    {"clip-path-with-transform-on-text.svg",
+                     Params::Skip("Triage: text objectBoundingBox units resolve; 2526px transform "
+                                  "alignment residual remains")},
+                    {"on-the-root-svg-without-size.svg",
+                     Params::RenderOnly("UB: on root `<svg>` without size")},
 
-                {"circle-shorthand-with-stroke-box.svg",
-                 Params::Skip("Bug: clipPath edge cases beyond core support")},
-                {"circle-shorthand-with-view-box.svg",
-                 Params::Skip("Bug: clipPath edge cases beyond core support")},
-                {"circle-shorthand.svg",
-                 Params::Skip("Bug: clipPath edge cases beyond core support")},
-            })),
-        ValuesIn(ActiveComparisonModes())),
+                    {"circle-shorthand-with-stroke-box.svg",
+                     Params::Skip("Bug: clipPath edge cases beyond core support")},
+                    {"circle-shorthand-with-view-box.svg",
+                     Params::Skip("Bug: clipPath edge cases beyond core support")},
+                    {"circle-shorthand.svg",
+                     Params::Skip("Bug: clipPath edge cases beyond core support")},
+                })),
+            ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(
@@ -516,20 +509,6 @@ INSTANTIATE_TEST_SUITE_P(
                      Params::Skip(
                          "Bug: mask edge cases (color-interpolation, mask-units, mask-type) need "
                          "investigation")},
-                    {"mask-on-self-with-mask-type=alpha.svg",
-                     Params::Skip(
-                         "Bug: mask edge cases (color-interpolation, mask-units, mask-type) need "
-                         "investigation")},
-                    {"mask-on-self-with-mixed-mask-type.svg",
-                     Params::Skip(
-                         "Bug: mask edge cases (color-interpolation, mask-units, mask-type) need "
-                         "investigation")},
-                    {"mask-type-in-style.svg",
-                     Params::Skip("Bug: mask edge cases (color-interpolation, "
-                                  "mask-units, mask-type) need investigation")},
-                    {"mask-type=alpha.svg",
-                     Params::Skip("Bug: mask edge cases (color-interpolation, "
-                                  "mask-units, mask-type) need investigation")},
                     {"on-group-with-transform.svg",
                      Params::Skip(
                          "Bug: mask edge cases (color-interpolation, mask-units, mask-type) need "
@@ -1513,10 +1492,11 @@ INSTANTIATE_TEST_SUITE_P(
                     {"arabic.svg",
                      Params().onlyTextFull().withReason("Arabic shaping needs HarfBuzz")},
                     {"on-a-single-tspan.svg",
-                     Params::Skip("Not impl: textLength + lengthAdjust attribute (text "
-                                  "stretching/compressing)")},
-                    {"zero.svg", Params::Skip("Not impl: textLength + lengthAdjust attribute (text "
-                                              "stretching/compressing)")},
+                     Params::Skip("Triage: per-span textLength and following current-position "
+                                  "advance apply; 499px small-text raster residual remains")},
+                    {"zero.svg",
+                     Params::Skip("Triage: zero-length spacing is applied; 397px overlapping-glyph "
+                                  "raster residual remains against the resvg golden")},
                 })),
             ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);

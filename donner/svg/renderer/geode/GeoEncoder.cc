@@ -483,8 +483,8 @@ struct GeoEncoder::Impl : public GeodeTextureEncoder::UniformScratch {
         std::memcmp(sceneBatchUniformBytes.data(), bytes, sizeof(Uniforms)) == 0) {
       return sceneBatchUniformAlloc;
     }
-    sceneBatchUniformAlloc = allocInArena(uniformArena, &u, sizeof(Uniforms),
-                                          kUniformOffsetAlignment);
+    sceneBatchUniformAlloc =
+        allocInArena(uniformArena, &u, sizeof(Uniforms), kUniformOffsetAlignment);
     sceneBatchUniformBytes.assign(bytes, bytes + sizeof(Uniforms));
     return sceneBatchUniformAlloc;
   }
@@ -621,8 +621,8 @@ struct GeoEncoder::Impl : public GeodeTextureEncoder::UniformScratch {
   /// source of truth shared by the arena submitFillDraw and the resident
   /// submitResidentFillDraw, so a path that flips between the two paths
   /// (clip toggling) produces byte-identical uniforms.
-  void populateBatchUniform(Uniforms& u, const FillDrawArgs& args,
-                            const Transform2d& mvpTransform, bool identityMvp);
+  void populateBatchUniform(Uniforms& u, const FillDrawArgs& args, const Transform2d& mvpTransform,
+                            bool identityMvp);
 
   /// Populate the per-instance InstanceRecord from args + encoded +
   /// transform. Same sharing contract as populateBatchUniform.
@@ -651,8 +651,7 @@ struct GeoEncoder::Impl : public GeodeTextureEncoder::UniformScratch {
   /// uniform and the instance record if changed. Used by the solo
   /// resident draw and the cross-entity batch path.
   bool ensureResidentSceneRecordImpl(GeodeResidentSlot& slot, const EncodedPath& encoded,
-                                     const FillDrawArgs& args,
-                                     const Transform2d& recordTransform,
+                                     const FillDrawArgs& args, const Transform2d& recordTransform,
                                      const GeodeRecordSlab::Slot* recordSlotOverride,
                                      bool bakeTransform);
 
@@ -1142,8 +1141,6 @@ void GeoEncoder::finalizeImpl(GeoEncoder::Impl& impl) {
   impl.vCurveArena.label = "GeodeVCurveArena";
   impl.gridArena.usage = wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopyDst;
   impl.gridArena.label = "GeodeGridArena";
-
-
 }
 
 GeoEncoder::GeoEncoder(GeodeDevice& device, const GeodePipeline& fillPipeline,
@@ -1631,8 +1628,7 @@ void GeoEncoder::fillPath(const Path& path, const css::RGBA& color, FillRule rul
 // ============================================================================
 
 void GeoEncoder::Impl::populateBatchUniform(Uniforms& u, const FillDrawArgs& args,
-                                           const Transform2d& mvpTransform,
-                                           bool identityMvp) {
+                                            const Transform2d& mvpTransform, bool identityMvp) {
   if (identityMvp) {
     // Scene-batch form: the vertex stage composes an IDENTITY uniform mvp
     // with each record's host-composed transform, so the float32 matrix
@@ -1888,7 +1884,7 @@ void GeoEncoder::Impl::buildResidentBindGroup(GeodeResidentSlot& slot) {
 }
 
 bool GeoEncoder::Impl::submitResidentFillDraw(GeodeResidentSlot& slot, const EncodedPath& encoded,
-                                               const FillDrawArgs& args) {
+                                              const FillDrawArgs& args) {
   ensurePassOpen();
   bindSolidPipeline();
 
@@ -1910,12 +1906,10 @@ bool GeoEncoder::Impl::submitResidentFillDraw(GeodeResidentSlot& slot, const Enc
   return true;
 }
 
-bool GeoEncoder::Impl::ensureResidentSceneRecordImpl(GeodeResidentSlot& slot,
-                                                     const EncodedPath& encoded,
-                                                     const FillDrawArgs& args,
-                                                     const Transform2d& recordTransform,
-                                                     const GeodeRecordSlab::Slot* recordSlotOverride,
-                                                     bool bakeTransform) {
+bool GeoEncoder::Impl::ensureResidentSceneRecordImpl(
+    GeodeResidentSlot& slot, const EncodedPath& encoded, const FillDrawArgs& args,
+    const Transform2d& recordTransform, const GeodeRecordSlab::Slot* recordSlotOverride,
+    bool bakeTransform) {
   // Ensure the geometry is resident and current AND owned by THIS device.
   // Component removal is the primary invalidation; the pointer + fingerprint
   // guard catches the in-place stroke-slot rebuild (which replaces the encode
@@ -1955,10 +1949,10 @@ bool GeoEncoder::Impl::ensureResidentSceneRecordImpl(GeodeResidentSlot& slot,
   // Either way the write is skipped when the bytes are unchanged, so a
   // static re-render emits zero buffer writes.
   InstanceRecord record = {};
-  populateInstanceRecord(
-      record, encoded, args,
-      bakeTransform ? Transform2d()
-                    : composeOrthographicMvp(targetWidth, targetHeight, recordTransform));
+  populateInstanceRecord(record, encoded, args,
+                         bakeTransform
+                             ? Transform2d()
+                             : composeOrthographicMvp(targetWidth, targetHeight, recordTransform));
   // Chunk-relative element offsets, which is what a cross-entity batch
   // needs: its one bind group spans the whole chunk so every instance can
   // reach its own slot. A solo draw binds its own sub-ranges instead and
@@ -2717,8 +2711,7 @@ void GeoEncoder::Impl::buildResidentGradientBindGroup(GeodeResidentGradientSlot&
 }
 
 bool GeoEncoder::Impl::submitResidentGradientDraw(GeodeResidentGradientSlot& slot,
-                                                   const EncodedPath& encoded,
-                                                   GradientUniforms& u) {
+                                                  const EncodedPath& encoded, GradientUniforms& u) {
   // The grid parameters and the bounding polygon are derived from the
   // encode, not the paint; fill them exactly like the arena path so a
   // draw that flips between the two stays byte-identical.
@@ -2922,6 +2915,7 @@ void GeoEncoder::blitFullTarget(const wgpu::Texture& src, double opacity) {
 }
 
 void GeoEncoder::blitFullTargetMasked(const wgpu::Texture& content, const wgpu::Texture& mask,
+                                      svg::MaskType maskType,
                                       const std::optional<Box2d>& maskBounds) {
   if (!content || !mask) {
     return;
@@ -2951,6 +2945,7 @@ void GeoEncoder::blitFullTargetMasked(const wgpu::Texture& content, const wgpu::
   // in premultiplied alpha.
   qp.sourceIsPremultiplied = true;
   qp.maskTexture = mask;
+  qp.maskMode = maskType == svg::MaskType::Alpha ? 2u : 1u;
   qp.clipMaskView = impl_->activeClipMaskView;
   if (maskBounds.has_value()) {
     qp.applyMaskBounds = true;

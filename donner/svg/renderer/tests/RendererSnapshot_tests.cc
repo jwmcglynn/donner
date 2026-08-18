@@ -108,6 +108,25 @@ TEST(RendererSnapshotTests, LaterSnapshotObservesLaterDomRevision) {
   EXPECT_EQ(replayedFills.back(), css::RGBA(0, 0, 255, 255));
 }
 
+TEST(RendererSnapshotTests, ReplayingSnapshotPreservesMaskType) {
+  SVGDocument document = MakeDocument(R"svg(
+    <defs>
+      <mask id="alpha" style="mask-type: alpha">
+        <rect width="8" height="8" fill="black" />
+      </mask>
+    </defs>
+    <rect width="8" height="8" fill="green" mask="url(#alpha)" />
+  )svg");
+
+  ::testing::NiceMock<MockRendererInterface> renderer;
+  RendererDriver driver(renderer);
+  RenderSnapshot snapshot = driver.captureRenderSnapshot(document);
+
+  EXPECT_CALL(renderer, pushMask(_, MaskType::Alpha)).Times(1);
+
+  driver.draw(snapshot);
+}
+
 TEST(RendererSnapshotTests, ConcurrentDomMutationsCanCompleteWhileSnapshotReplays) {
   SVGDocument document = MakeDocument(R"svg(
     <rect x="1" y="2" width="8" height="6" fill="red" />

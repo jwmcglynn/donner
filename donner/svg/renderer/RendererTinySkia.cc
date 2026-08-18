@@ -1325,11 +1325,12 @@ void RendererTinySkia::popFilterLayer() {
 #endif  // DONNER_FILTERS_ENABLED
 }
 
-void RendererTinySkia::pushMask(const std::optional<Box2d>& maskBounds) {
+void RendererTinySkia::pushMask(const std::optional<Box2d>& maskBounds, MaskType maskType) {
   SurfaceFrame frame;
   frame.kind = SurfaceKind::MaskCapture;
   frame.maskBounds = maskBounds;
   frame.maskBoundsTransform = deviceFromLocalTransform_;
+  frame.maskType = maskType;
   frame.pixmap = createTransparentPixmap(static_cast<int>(currentPixmap().width()),
                                          static_cast<int>(currentPixmap().height()));
   surfaceStack_.push_back(std::move(frame));
@@ -1341,8 +1342,10 @@ void RendererTinySkia::transitionMaskToContent() {
   }
 
   SurfaceFrame& frame = surfaceStack_.back();
-  frame.maskAlpha =
-      tiny_skia::Mask::fromPixmap(frame.pixmap.view(), tiny_skia::MaskType::Luminance);
+  const tiny_skia::MaskType tinyMaskType = frame.maskType == MaskType::Alpha
+                                               ? tiny_skia::MaskType::Alpha
+                                               : tiny_skia::MaskType::Luminance;
+  frame.maskAlpha = tiny_skia::Mask::fromPixmap(frame.pixmap.view(), tinyMaskType);
 
   if (frame.maskAlpha.has_value() && frame.maskBounds.has_value()) {
     std::optional<tiny_skia::Mask> boundsMask =

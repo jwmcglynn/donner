@@ -403,6 +403,30 @@ TEST(PropertyRegistry, ParsePresentationAttribute) {
   }
 }
 
+TEST(PropertyRegistry, MaskTypeGrammarAndCascade) {
+  PropertyRegistry registry;
+  EXPECT_THAT(registry.maskType.get(), Optional(MaskType::Luminance));
+
+  registry.parseStyle("mask-type: alpha");
+  EXPECT_THAT(registry.maskType.get(), Optional(MaskType::Alpha));
+
+  PropertyRegistry attributeRegistry;
+  EXPECT_THAT(attributeRegistry.parsePresentationAttribute("mask-type", "alpha"),
+              ParseResultIs(true));
+  EXPECT_THAT(attributeRegistry.maskType.get(), Optional(MaskType::Alpha));
+
+  PropertyRegistry invalidRegistry;
+  css::Declaration invalid = css::CSS::ParseStyleAttribute("mask-type: invalid").at(0);
+  EXPECT_THAT(invalidRegistry.parseProperty(invalid, Specificity()),
+              ParseErrorIs("Invalid mask-type value"));
+  EXPECT_THAT(invalidRegistry.maskType.get(), Optional(MaskType::Luminance));
+
+  PropertyRegistry parent;
+  parent.parseStyle("mask-type: alpha");
+  const PropertyRegistry child = PropertyRegistry().inheritFrom(parent);
+  EXPECT_THAT(child.maskType.get(), Optional(MaskType::Luminance));
+}
+
 TEST(PropertyRegistry, Fill) {
   // Initial value of fill is black.
   const PaintServer kInitialFill(PaintServer::Solid(Color(RGBA(0, 0, 0, 0xFF))));

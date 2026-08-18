@@ -691,6 +691,23 @@ ParseResult<ClipRule> ParseClipRule(std::span<const css::ComponentValue> compone
   return err;
 }
 
+ParseResult<MaskType> ParseMaskType(std::span<const css::ComponentValue> components) {
+  if (components.size() == 1) {
+    if (const auto* ident = components.front().tryGetToken<css::Token::Ident>()) {
+      if (ident->value.equalsLowercase("luminance")) {
+        return MaskType::Luminance;
+      } else if (ident->value.equalsLowercase("alpha")) {
+        return MaskType::Alpha;
+      }
+    }
+  }
+
+  ParseDiagnostic err;
+  err.reason = "Invalid mask-type value";
+  err.range.start = !components.empty() ? components.front().sourceOffset() : FileOffset::Offset(0);
+  return err;
+}
+
 ParseResult<StrokeLinecap> ParseStrokeLinecap(std::span<const css::ComponentValue> components) {
   if (components.size() == 1) {
     const css::ComponentValue& component = components.front();
@@ -1346,7 +1363,7 @@ ParseResult<VectorEffect> ParseVectorEffect(std::span<const css::ComponentValue>
 
 // List of valid presentation attributes from
 // https://www.w3.org/TR/SVG2/styling.html#PresentationAttributes
-constexpr std::array<std::pair<std::string_view, bool>, 72> kValidPresentationAttributeEntries{{
+constexpr std::array<std::pair<std::string_view, bool>, 73> kValidPresentationAttributeEntries{{
     {"cx", true},
     {"cy", true},
     {"height", true},
@@ -1394,6 +1411,7 @@ constexpr std::array<std::pair<std::string_view, bool>, 72> kValidPresentationAt
     {"marker-mid", true},
     {"marker-start", true},
     {"mask", true},
+    {"mask-type", true},
     {"opacity", true},
     {"overflow", true},
     {"paint-order", true},
@@ -1987,6 +2005,15 @@ DONNER_CONSTEXPR_MAP auto kProperties =
                          return ParseReference("mask", params.components());
                        },
                        &registry.mask);
+                 }},  //
+                {"mask-type",
+                 [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
+                   return Parse(
+                       params,
+                       [](const parser::PropertyParseFnParams& params) {
+                         return ParseMaskType(params.components());
+                       },
+                       &registry.maskType);
                  }},  //
                 {"color-interpolation-filters",
                  [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {

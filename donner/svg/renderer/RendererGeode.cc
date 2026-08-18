@@ -4,9 +4,9 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
-#include <deque>
 #include <cstdio>
 #include <cstring>
+#include <deque>
 #include <iostream>
 #include <map>
 #include <mutex>
@@ -818,9 +818,8 @@ struct RendererGeodeTextureKey {
   auto operator<=>(const RendererGeodeTextureKey& other) const = default;
 
   static RendererGeodeTextureKey From(const wgpu::TextureDescriptor& desc) {
-    return RendererGeodeTextureKey{desc.size.width, desc.size.height, desc.format,
-                                   desc.usage,      desc.mipLevelCount, desc.sampleCount,
-                                   desc.dimension};
+    return RendererGeodeTextureKey{desc.size.width,    desc.size.height, desc.format,   desc.usage,
+                                   desc.mipLevelCount, desc.sampleCount, desc.dimension};
   }
 };
 
@@ -1378,6 +1377,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
     /// `popMask` can lift `maskBounds` into device-pixel space. This
     /// mirrors `RendererTinySkia::SurfaceFrame::maskBoundsTransform`.
     Transform2d maskBoundsTransform;
+    MaskType maskType = MaskType::Luminance;
   };
   std::vector<MaskStackFrame> maskStack;
 
@@ -2036,8 +2036,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
   bool resolveSceneRecordSlot(geode::GeodeResidentSlot& slot,
                               const geode::GeodeRecordSlab::Slot*& outSlot) {
     outSlot = nullptr;
-    if (slot.lastSceneFrame == currentFrameIndex ||
-        slot.lastResidentFrame == currentFrameIndex) {
+    if (slot.lastSceneFrame == currentFrameIndex || slot.lastResidentFrame == currentFrameIndex) {
       if (!slot.recordSlab) {
         return false;
       }
@@ -2291,12 +2290,11 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
   /// for the subsequent stroke emit - breaks any fixture that
   /// mixes batchable fills with stroked siblings.
   void flushPendingBatch() {
-    const bool empty = !pendingBatch.has_value() ||
-                       (pendingBatch->mode == PendingBatch::Mode::None) ||
-                       (pendingBatch->mode == PendingBatch::Mode::SameEntity &&
-                        pendingBatch->deviceFromLocalTransforms.empty()) ||
-                       (pendingBatch->mode == PendingBatch::Mode::Scene &&
-                        pendingBatch->sceneInstances.empty());
+    const bool empty =
+        !pendingBatch.has_value() || (pendingBatch->mode == PendingBatch::Mode::None) ||
+        (pendingBatch->mode == PendingBatch::Mode::SameEntity &&
+         pendingBatch->deviceFromLocalTransforms.empty()) ||
+        (pendingBatch->mode == PendingBatch::Mode::Scene && pendingBatch->sceneInstances.empty());
     if (empty) {
       pendingBatch.reset();
       return;
@@ -2328,8 +2326,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
           if (inst.encoded != nullptr) {
             float packed[8];
             packTransform(inst.deviceFromLocal, packed);
-            encoder->recordGeometryDebugInstance(*inst.encoded,
-                                                 std::span<const float>(packed, 8u));
+            encoder->recordGeometryDebugInstance(*inst.encoded, std::span<const float>(packed, 8u));
           }
         }
       }
@@ -2361,9 +2358,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
       // no-op when the record is unchanged.
       for (const PendingBatch::SceneInstance& inst : batch.sceneInstances) {
         if (inst.slot != nullptr && inst.encoded != nullptr) {
-          (void)encoder->ensureResidentSceneRecord(*inst.slot, *inst.encoded, inst.color,
-                                                   inst.rule, inst.deviceFromLocal,
-                                                   inst.recordSlotOverride);
+          (void)encoder->ensureResidentSceneRecord(*inst.slot, *inst.encoded, inst.color, inst.rule,
+                                                   inst.deviceFromLocal, inst.recordSlotOverride);
         }
       }
       encoder->fillPathSceneBatch(batchColor, batchRule, binding);
@@ -2421,8 +2417,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
 
   /// Start a fresh size-1 same-entity batch holding the current draw.
   /// The caller has already flushed any previous pending batch.
-  void startSameEntitySingleton(Registry* sourceRegistry, Entity sourceEntity,
-                                const Path& path, const css::RGBA& color, FillRule rule,
+  void startSameEntitySingleton(Registry* sourceRegistry, Entity sourceEntity, const Path& path,
+                                const css::RGBA& color, FillRule rule,
                                 const geode::EncodedPath* encoded,
                                 geode::GeodeResidentSlot* residentFillSlot) {
     pendingBatch = PendingBatch{};
@@ -2527,12 +2523,11 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
         if (pendingBatch->sceneChunkBufferId == chunkId &&
             pendingBatch->sceneRecordBufferId == recordBufId &&
             pendingBatch->sceneClipVersion == clipVersion &&
-            pendingBatch->sceneFirstInstance + pendingBatch->sceneInstances.size() ==
-                recordIndex) {
-          appendSceneInstance(*pendingBatch,
-                              PendingBatch::SceneInstance{residentFillSlot, encoded, &path, color,
-                                                          rule, deviceFromLocalTransform,
-                                                          vertexCount, recordSlotPtr});
+            pendingBatch->sceneFirstInstance + pendingBatch->sceneInstances.size() == recordIndex) {
+          appendSceneInstance(
+              *pendingBatch,
+              PendingBatch::SceneInstance{residentFillSlot, encoded, &path, color, rule,
+                                          deviceFromLocalTransform, vertexCount, recordSlotPtr});
         } else {
           flushPendingBatch();
           pendingBatch = PendingBatch{};
@@ -2544,10 +2539,10 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
           pendingBatch->sceneFirstInstance = recordIndex;
           pendingBatch->sceneFirstRecordOffset = effectiveRecordSlot.offset;
           pendingBatch->sceneClipVersion = clipVersion;
-          appendSceneInstance(*pendingBatch,
-                              PendingBatch::SceneInstance{residentFillSlot, encoded, &path, color,
-                                                          rule, deviceFromLocalTransform,
-                                                          vertexCount, recordSlotPtr});
+          appendSceneInstance(
+              *pendingBatch,
+              PendingBatch::SceneInstance{residentFillSlot, encoded, &path, color, rule,
+                                          deviceFromLocalTransform, vertexCount, recordSlotPtr});
         }
         return true;
       }
@@ -2558,8 +2553,10 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
         // Convert the pending size-1 same-entity entry into the scene
         // batch's first instance.
         PendingBatch::SceneInstance first{pendingBatch->residentFillSlot,
-                                          pendingBatch->encoded, pendingBatch->path,
-                                          pendingBatch->color, pendingBatch->rule,
+                                          pendingBatch->encoded,
+                                          pendingBatch->path,
+                                          pendingBatch->color,
+                                          pendingBatch->rule,
                                           pendingBatch->deviceFromLocalTransforms.front(),
                                           pendingBatch->encoded->boundingDrawVertexCount()};
         // Resolve the first entity's record slot: its primary slot on its
@@ -2575,9 +2572,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
             pendingBatch->sourceRegistry != nullptr &&
             ensureRecordSlot(*first.slot, *pendingBatch->sourceRegistry) &&
             resolveSceneRecordSlot(*first.slot, firstRecordSlotPtr) &&
-            encoder->ensureResidentSceneRecord(*first.slot, *first.encoded, first.color,
-                                               first.rule, first.deviceFromLocal,
-                                               firstRecordSlotPtr)) {
+            encoder->ensureResidentSceneRecord(*first.slot, *first.encoded, first.color, first.rule,
+                                               first.deviceFromLocal, firstRecordSlotPtr)) {
           first.slot->lastSceneFrame = currentFrameIndex;
           // Carry the resolved slot on the instance so the flush-time
           // re-ensure targets the same record this batch draws from.
@@ -2602,11 +2598,10 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
           pendingBatch->sceneInstances.push_back(first);
           if (firstChunkId == chunkId && firstRecordBufId == recordBufId &&
               firstIndex + 1 == recordIndex) {
-            appendSceneInstance(*pendingBatch,
-                                PendingBatch::SceneInstance{residentFillSlot, encoded, &path,
-                                                            color, rule,
-                                                            deviceFromLocalTransform,
-                                                            vertexCount, recordSlotPtr});
+            appendSceneInstance(
+                *pendingBatch,
+                PendingBatch::SceneInstance{residentFillSlot, encoded, &path, color, rule,
+                                            deviceFromLocalTransform, vertexCount, recordSlotPtr});
           } else {
             flushPendingBatch();
             pendingBatch = PendingBatch{};
@@ -2618,11 +2613,10 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
             pendingBatch->sceneFirstInstance = recordIndex;
             pendingBatch->sceneFirstRecordOffset = effectiveRecordSlot.offset;
             pendingBatch->sceneClipVersion = clipVersion;
-            appendSceneInstance(*pendingBatch,
-                                PendingBatch::SceneInstance{residentFillSlot, encoded, &path,
-                                                            color, rule,
-                                                            deviceFromLocalTransform,
-                                                            vertexCount, recordSlotPtr});
+            appendSceneInstance(
+                *pendingBatch,
+                PendingBatch::SceneInstance{residentFillSlot, encoded, &path, color, rule,
+                                            deviceFromLocalTransform, vertexCount, recordSlotPtr});
           }
         } else {
           // The pending singleton could not take scene form: emit it solo
@@ -2658,10 +2652,9 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
       pendingBatch->sceneFirstInstance = recordIndex;
       pendingBatch->sceneFirstRecordOffset = effectiveRecordSlot.offset;
       pendingBatch->sceneClipVersion = clipVersion;
-      appendSceneInstance(*pendingBatch,
-                          PendingBatch::SceneInstance{residentFillSlot, encoded, &path, color,
-                                                      rule, deviceFromLocalTransform,
-                                                      vertexCount, recordSlotPtr});
+      appendSceneInstance(*pendingBatch, PendingBatch::SceneInstance{
+                                             residentFillSlot, encoded, &path, color, rule,
+                                             deviceFromLocalTransform, vertexCount, recordSlotPtr});
       return true;
     }
 
@@ -4099,9 +4092,9 @@ void RendererGeode::popFilterLayer() {
         const Box2d localFilterRegion(
             Vector2d(blurPadding, blurPadding),
             Vector2d(blurPadding + filterRegion.width(), blurPadding + filterRegion.height()));
-        wgpu::Texture localFiltered = impl_->filterEngine->execute(
-            frame.filterGraph, localTexture, localFilterRegion, localDeviceFromFilter, *impl_,
-            impl_->frameCommandEncoder);
+        wgpu::Texture localFiltered =
+            impl_->filterEngine->execute(frame.filterGraph, localTexture, localFilterRegion,
+                                         localDeviceFromFilter, *impl_, impl_->frameCommandEncoder);
 
         // Restore the outer target + encoder, then composite the local result back
         // through the CTM. Transform chain (left factor first): local raster pixels
@@ -4143,9 +4136,9 @@ void RendererGeode::popFilterLayer() {
   // Run the filter graph on the captured layer texture.
   wgpu::Texture filteredTexture = frame.layerTexture;
   if (impl_->filterEngine && !frame.filterGraph.empty()) {
-    filteredTexture = impl_->filterEngine->execute(frame.filterGraph, frame.layerTexture,
-                                                   frame.filterRegion, bufferDeviceFromFilter,
-                                                   *impl_, impl_->frameCommandEncoder);
+    filteredTexture =
+        impl_->filterEngine->execute(frame.filterGraph, frame.layerTexture, frame.filterRegion,
+                                     bufferDeviceFromFilter, *impl_, impl_->frameCommandEncoder);
   }
 
   // Restore outer target and create a fresh encoder that preserves its
@@ -4204,7 +4197,7 @@ void RendererGeode::popFilterLayer() {
   impl_->releaseTextureAtFrameEnd(std::move(frame.layerTexture), frame.layerDesc);
 }
 
-void RendererGeode::pushMask(const std::optional<Box2d>& maskBounds) {
+void RendererGeode::pushMask(const std::optional<Box2d>& maskBounds, MaskType maskType) {
   impl_->flushPendingBatch();  // Flush any pending `<use>` batch.
   if (!impl_->device || !impl_->pipeline || !impl_->gradientPipeline || !impl_->imagePipeline ||
       !impl_->encoder || impl_->pixelWidth <= 0 || impl_->pixelHeight <= 0) {
@@ -4237,6 +4230,7 @@ void RendererGeode::pushMask(const std::optional<Box2d>& maskBounds) {
   }
   frame.maskBounds = maskBounds;
   frame.maskBoundsTransform = impl_->deviceFromLocalTransform;
+  frame.maskType = maskType;
 
   // Flush the outer encoder's pending draws so they land before we
   // redirect subsequent commands into the mask capture.
@@ -4326,8 +4320,9 @@ void RendererGeode::popMask() {
     pixelMaskBounds = frame.maskBoundsTransform.transformBox(*frame.maskBounds);
   }
 
-  // Composite `content * luminance(mask)` onto the outer target.
-  impl_->encoder->blitFullTargetMasked(frame.contentTexture, frame.maskTexture, pixelMaskBounds);
+  // Composite content through the selected luminance or alpha mask onto the outer target.
+  impl_->encoder->blitFullTargetMasked(frame.contentTexture, frame.maskTexture, frame.maskType,
+                                       pixelMaskBounds);
 
   // Defer release to endFrame - `blitFullTargetMasked` recorded
   // samples from both `contentTexture` and `maskTexture` into the
@@ -5555,8 +5550,7 @@ RendererBitmap ReadGeodeTextureSnapshotGpu(const std::shared_ptr<geode::GeodeDev
                                            bool& outTimedOut) {
   RendererBitmap bitmap;
   outTimedOut = false;
-  const geode::GeodeSnapshotReadbackPipeline& readbackPipeline =
-      device->snapshotReadbackPipeline();
+  const geode::GeodeSnapshotReadbackPipeline& readbackPipeline = device->snapshotReadbackPipeline();
   if (!readbackPipeline.valid()) {
     return bitmap;
   }
@@ -5627,8 +5621,8 @@ RendererBitmap ReadGeodeTextureSnapshotGpu(const std::shared_ptr<geode::GeodeDev
     return bitmap;
   }
 
-  const uint8_t* mapped = static_cast<const uint8_t*>(
-      resources.readback.get().getConstMappedRange(0, mapSize));
+  const uint8_t* mapped =
+      static_cast<const uint8_t*>(resources.readback.get().getConstMappedRange(0, mapSize));
   if (mapped == nullptr) {
     // A mapped-range/buffer-size mismatch returns null instead of raising a
     // validation error. Unmap and drop the entry (do not pool a buffer whose
@@ -5684,8 +5678,8 @@ static RendererBitmap ReadGeodeTextureSnapshot(const std::shared_ptr<geode::Geod
   // so an sRGB surface declared as RGBA8Unorm would be silently linearized
   // by textureLoad and re-quantized into wrong bytes with no validation
   // error, where the CPU copy path degrades only to a channel-order bug.
-  if (sourceAlphaType == AlphaType::Premultiplied &&
-      format == wgpu::TextureFormat::RGBA8Unorm && texture.getFormat() == format &&
+  if (sourceAlphaType == AlphaType::Premultiplied && format == wgpu::TextureFormat::RGBA8Unorm &&
+      texture.getFormat() == format &&
       (static_cast<WGPUTextureUsage>(texture.getUsage()) &
        static_cast<WGPUTextureUsage>(wgpu::TextureUsage::TextureBinding)) != 0u) {
     bool gpuTimedOut = false;

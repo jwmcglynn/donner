@@ -22,6 +22,7 @@
 #include "donner/svg/core/FontVariant.h"
 #include "donner/svg/core/ImageRendering.h"
 #include "donner/svg/core/Isolation.h"
+#include "donner/svg/core/MaskType.h"
 #include "donner/svg/core/MixBlendMode.h"
 #include "donner/svg/core/Overflow.h"
 #include "donner/svg/core/PaintOrder.h"
@@ -109,6 +110,7 @@ auto as_mutable(const std::tuple<Args...>& tuple) {
  * | `clip-path` | \ref clipPath | `none` |
  * | `clip-rule` | \ref clipRule | `nonzero` |
  * | `mask` | \ref mask | `none` |
+ * | `mask-type` | \ref maskType | `luminance` |
  * | `pointer-events` | \ref pointerEvents | `auto` |
  * | `cursor` | \ref cursor | `auto` |
  * | `marker-start` | \ref markerStart | `none` |
@@ -244,6 +246,11 @@ public:
   /// none.
   Property<Reference, PropertyCascade::None> mask{
       "mask", []() -> std::optional<Reference> { return std::nullopt; }};
+
+  /// `mask-type` property, which selects how rendered `<mask>` content becomes coverage.
+  /// Defaults to luminance and is not inherited.
+  Property<MaskType> maskType{"mask-type",
+                              []() -> std::optional<MaskType> { return MaskType::Luminance; }};
 
   //
   // Filter
@@ -440,7 +447,7 @@ public:
     return std::forward_as_tuple(
         color, display, opacity, visibility, overflow, transformOrigin, fill, fillRule, fillOpacity,
         stroke, strokeOpacity, strokeWidth, strokeLinecap, strokeLinejoin, strokeMiterlimit,
-        strokeDasharray, strokeDashoffset, vectorEffect, clipPath, clipRule, mask, filter,
+        strokeDasharray, strokeDashoffset, vectorEffect, clipPath, clipRule, mask, maskType, filter,
         colorInterpolationFilters, pointerEvents, cursor, markerStart, markerMid, markerEnd,
         fontFamily, fontSize, fontWeight, fontStyle, fontStretch, fontVariant, textAnchor,
         textDecoration, dominantBaseline, writingMode, inlineSize, letterSpacing, wordSpacing,
