@@ -80,7 +80,10 @@ void OnDeviceLost(WGPUDevice const* /*device*/, WGPUDeviceLostReason reason, WGP
                static_cast<int>(reason), static_cast<int>(message.length),
                message.data ? message.data : "");
   if (state) {
-    state->lost.store(true, std::memory_order_release);
+    // Route through the shared declarer rather than storing the flag: it is
+    // what leaves `timedOutSite` empty, which is how a report tells a
+    // driver-reported loss from one a bounded wait's deadline discovered.
+    DeclareDeviceLost(*state);
   }
 }
 
@@ -319,28 +322,28 @@ bool GeodeDevice::pollSuspending(bool wait) const {
   return device_.poll(wait, nullptr);
 }
 
+namespace {
+
+/// Log the cause of a device loss. Called only by the declaring caller, so the
+/// line appears exactly once per device.
+void LogDeclaredDeviceLoss(const char* reason) {
+  std::fprintf(stderr, "[Geode] Device declared lost: %s\n", reason ? reason : "(no reason)");
+}
+
+}  // namespace
+
 void GeodeDevice::markDeviceLost(const char* reason) const {
-  if (!lostState_->lost.exchange(true, std::memory_order_acq_rel)) {
-    std::fprintf(stderr, "[Geode] Device declared lost: %s\n", reason ? reason : "(no reason)");
+  if (DeclareDeviceLost(*lostState_)) {
+    LogDeclaredDeviceLoss(reason);
   }
 }
 
 void GeodeDevice::markDeviceLostAfterWaitTimeout(GpuWaitSite site,
                                                  std::chrono::milliseconds elapsed,
                                                  const char* reason) const {
-  if (lostState_->lost.load(std::memory_order_acquire)) {
-    // Keep the first attribution. Once the device is hung, every later
-    // bounded wait against it expires too, and overwriting would replace the
-    // wait that found the hang with one that merely inherited it.
-    return;
+  if (DeclareDeviceLostAfterWaitTimeout(*lostState_, site, elapsed)) {
+    LogDeclaredDeviceLoss(reason);
   }
-  // Publish the attribution before the flag so an observer that sees `lost`
-  // also sees a populated site. Two waits expiring at once can both pass the
-  // check above and race here; either store is a real timeout attribution, so
-  // the race is benign and `markDeviceLost` still logs exactly once.
-  lostState_->timedOutSite.store(site, std::memory_order_relaxed);
-  lostState_->timedOutElapsedMs.store(static_cast<int>(elapsed.count()), std::memory_order_relaxed);
-  markDeviceLost(reason);
 }
 
 GpuWaitResult GeodeDevice::waitForQueueIdle(std::chrono::milliseconds timeout) const {
@@ -360,9 +363,16 @@ GpuWaitResult GeodeDevice::waitForQueueIdle(std::chrono::milliseconds timeout) c
   pollSuspending(true);
   return GpuWaitResult::Complete;
 #else
+  const auto queueWaitStart = std::chrono::steady_clock::now();
   const GpuWaitResult result = BoundedGpuWait([this] { return pollSuspending(false); }, timeout);
   if (result == GpuWaitResult::TimedOut) {
-    markDeviceLostAfterWaitTimeout(GpuWaitSite::QueueIdle, timeout,
+    // Report the wait that actually ran, not the budget it was given: the
+    // budget is a constant the reader already knows, while the measurement
+    // says whether the deadline was reached on schedule or the loop itself
+    // overran under load.
+    markDeviceLostAfterWaitTimeout(GpuWaitSite::QueueIdle,
+                                   std::chrono::duration_cast<std::chrono::milliseconds>(
+                                       std::chrono::steady_clock::now() - queueWaitStart),
                                    "GPU queue did not go idle within the bounded wait deadline");
   }
   return result;
@@ -386,7 +396,9 @@ GeodeDevice::ReadbackStats GeodeDevice::consumeReadbackStats() {
       // clearing it here would let the very next stats read claim the device
       // is healthy while rendering stays dead.
       .deviceLost = isDeviceLost(),
-      .timedOutWaitSite = lostState_->timedOutSite.load(std::memory_order_relaxed),
+      // Acquire on the site pairs with its release store, so a non-empty site
+      // guarantees the elapsed time written before it is visible too.
+      .timedOutWaitSite = lostState_->timedOutSite.load(std::memory_order_acquire),
       .timedOutWaitMs = lostState_->timedOutElapsedMs.load(std::memory_order_relaxed),
   };
 }

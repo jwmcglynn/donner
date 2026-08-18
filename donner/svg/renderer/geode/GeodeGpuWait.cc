@@ -4,6 +4,26 @@
 
 namespace donner::geode {
 
+bool DeclareDeviceLost(GeodeDeviceLostState& state) {
+  return !state.lost.exchange(true, std::memory_order_acq_rel);
+}
+
+bool DeclareDeviceLostAfterWaitTimeout(GeodeDeviceLostState& state, GpuWaitSite site,
+                                       std::chrono::milliseconds elapsed) {
+  if (!DeclareDeviceLost(state)) {
+    return false;
+  }
+  // Winning the transition makes this call the only writer of the
+  // attribution, so the stores below race with nothing. Publish the elapsed
+  // time first and the site last: `timedOutSite` is what a reader tests, so
+  // releasing it last is what makes the pair observable together.
+  state.timedOutElapsedMs.store(static_cast<int>(elapsed.count()), std::memory_order_relaxed);
+  GpuWaitSite unattributed = GpuWaitSite::None;
+  state.timedOutSite.compare_exchange_strong(unattributed, site, std::memory_order_release,
+                                             std::memory_order_relaxed);
+  return true;
+}
+
 GpuWaitResult BoundedGpuWait(const std::function<bool()>& pollOnce,
                              std::chrono::milliseconds timeout,
                              std::chrono::microseconds pollInterval,

@@ -34,6 +34,7 @@ const char* GpuWaitTimeoutSiteName(svg::GpuWaitTimeoutSite site) {
     case svg::GpuWaitTimeoutSite::None: return "none";
     case svg::GpuWaitTimeoutSite::ReadbackMap: return "readback-map";
     case svg::GpuWaitTimeoutSite::QueueIdle: return "queue-idle";
+    case svg::GpuWaitTimeoutSite::Unknown: return "unknown";
   }
   return "unknown";
 }
@@ -120,6 +121,13 @@ void PublishWorkerGpuWaitFailure(bool deviceLost, const char* timedOutWaitSiteNa
       {
         const previous = window['__donnerWorkerStats'];
         const stats = previous ? Object.assign({}, previous) : ({'completedResults' : 0});
+        // Every published stats object starts without 'presentedAtMs'; the
+        // frame that consumes a result stamps it exactly once, and probes pair
+        // the two timestamps to measure the handoff. Carrying the previous
+        // object's stamp forward would date this publish to a frame that
+        // presented something else. Absent is also the more useful answer
+        // here: this publish is the one that never presented.
+        delete stats['presentedAtMs'];
         stats['deviceLost'] = $0 > 0;
         stats['gpuWaitTimeoutSite'] = UTF8ToString($1);
         stats['gpuWaitTimeoutMs'] = $2;

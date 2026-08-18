@@ -87,12 +87,18 @@ struct RendererBitmap {
  */
 enum class GpuWaitTimeoutSite : uint8_t {
   /// No bounded wait has timed out. A device reported lost with this site was
-  /// reported by the driver, not by a deadline.
+  /// reported by the driver, not by a deadline. This is a positive claim, so
+  /// never use it as a fallback for a site that could not be translated - see
+  /// \ref Unknown.
   None,
   /// A buffer-map wait for GPU-to-CPU readback.
   ReadbackMap,
   /// A wait for the GPU queue to drain.
   QueueIdle,
+  /// A backend wait this build cannot name. Reported rather than folded into
+  /// \ref None so a report never claims the driver declared a loss that one of
+  /// the backend's own deadlines actually did.
+  Unknown,
 };
 
 /**

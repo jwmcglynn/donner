@@ -711,6 +711,13 @@ public:
     return gpuWaitFailure_;
   }
 
+  /// Fold one render attempt's device-health stats into the failure record, as
+  /// the worker does at the end of every iteration. Tests use this to pin the
+  /// record's deduplication without hanging a real GPU.
+  void noteGpuWaitOutcomeForTesting(const svg::RendererReadbackStats& readbackStats) {
+    noteGpuWaitOutcome(readbackStats);
+  }
+
   /// Snapshot of the compositor's per-layer diagnostic rows. Captured under
   /// the worker mutex at every Done transition;
   /// the UI thread copies the cached vector out under the lock. Empty

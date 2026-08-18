@@ -265,9 +265,10 @@ public:
    *
    * Prefer this over \ref markDeviceLost at every deadline: the attribution is
    * what turns "rendering stopped" into a diagnosable report, and it is only
-   * available at the wait site. Loss stays sticky, and the FIRST attribution
-   * wins: once a device hangs, every later bounded wait against it also times
-   * out, and those are consequences rather than the cause.
+   * available at the wait site. Loss stays sticky, and only the call that
+   * declares it records an attribution; see
+   * \ref DeclareDeviceLostAfterWaitTimeout for why that rule is what keeps a
+   * driver-reported loss from being relabelled as a wait timeout.
    *
    * @param site Which bounded wait expired.
    * @param elapsed Wall time that wait spent before giving up.

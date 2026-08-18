@@ -90,16 +90,63 @@ enum class GpuWaitSite : std::uint8_t {
 /// flag (the `GeodeDevice`, a host embedder's device-lost callback), because
 /// WebGPU callbacks can outlive the object that registered them.
 struct GeodeDeviceLostState {
-  /// True once the device has been declared lost. Never reset.
+  /// True once the device has been declared lost. Never reset. Publish it
+  /// only through \ref DeclareDeviceLost or
+  /// \ref DeclareDeviceLostAfterWaitTimeout, never by storing directly: the
+  /// declaring call is what decides the attribution below, and a direct store
+  /// silently opts out of that decision.
   std::atomic<bool> lost{false};
   /// Bounded wait that declared the loss, or `None` when the driver reported
-  /// it. Written just before the first `lost` store, so an observer that sees
-  /// the flag also sees the attribution that explains it.
+  /// it. Only the call that wins the `lost` transition writes this, so an
+  /// empty site is a positive statement ("no deadline expired first"), not an
+  /// unwritten field.
+  ///
+  /// Written just after `lost`, so a reader sampling between the two sees a
+  /// lost device with an empty site for the width of two stores. That reads
+  /// as a driver-reported loss, which is wrong but self-correcting: the site
+  /// settles immediately and the next sample carries it. Consumers that
+  /// publish this pair should therefore key on its value changing rather than
+  /// latching the first sample they see.
   std::atomic<GpuWaitSite> timedOutSite{GpuWaitSite::None};
   /// Wall time the timed-out wait spent before giving up, in milliseconds.
-  /// Zero while `timedOutSite` is `None`.
+  /// Written before `timedOutSite`, which publishes it, so a reader that sees
+  /// a site also sees that site's elapsed time. Zero while `timedOutSite` is
+  /// `None`.
   std::atomic<int> timedOutElapsedMs{0};
 };
+
+/**
+ * Declare @p state lost with no wait to attribute it to.
+ *
+ * For losses the driver reports: there is no deadline behind them, so
+ * `timedOutSite` stays `None` and says exactly that.
+ *
+ * @return True when this call performed the false-to-true transition, so a
+ *   caller can log the cause exactly once.
+ */
+bool DeclareDeviceLost(GeodeDeviceLostState& state);
+
+/**
+ * Declare @p state lost because a bounded wait at @p site exceeded its
+ * deadline after @p elapsed.
+ *
+ * The attribution is written only when this call is the one that declares the
+ * loss. Two other writers reach the same flag and neither may claim the site:
+ * a later bounded wait, which expires because the device is ALREADY hung (a
+ * consequence of the loss, never its cause), and the driver's device-lost
+ * callback, which has no wait to name. Deriving the claim from the flag's own
+ * transition covers both without a check-then-set window - reading the flag
+ * and then storing the site would let a driver-reported loss landing in
+ * between be relabelled as a wait timeout, which is the one misattribution an
+ * empty site exists to rule out.
+ *
+ * @param state Shared device-lost record.
+ * @param site Which bounded wait expired.
+ * @param elapsed Wall time that wait spent before giving up.
+ * @return True when this call performed the false-to-true transition.
+ */
+bool DeclareDeviceLostAfterWaitTimeout(GeodeDeviceLostState& state, GpuWaitSite site,
+                                       std::chrono::milliseconds elapsed);
 
 /**
  * Repeatedly invoke @p pollOnce until it returns true or @p timeout expires.

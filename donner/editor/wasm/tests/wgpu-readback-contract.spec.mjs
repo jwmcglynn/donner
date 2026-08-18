@@ -23,6 +23,10 @@ const rotateCursorSource = await readFile(
   new URL("../../RotateCursorSet.cc", import.meta.url),
   "utf8",
 );
+const presentationRegressionSource = await readFile(
+  new URL("./browser-presentation-regression.spec.ts", import.meta.url),
+  "utf8",
+);
 const geodeDeviceSource = await readFile(
   new URL("../../../svg/renderer/geode/GeodeDevice.cc", import.meta.url),
   "utf8",
@@ -204,6 +208,12 @@ test("a GPU wait failure publishes worker stats even though no frame completed",
     /'completedResults' : previous/,
     "the completed-frame counter orders presentation samples and must count frames only",
   );
+  assert.match(
+    failurePublisher[0],
+    /delete stats\['presentedAtMs'\]/,
+    "a merged publish must not inherit the previous object's presentation stamp; "
+      + "the editor stamps it once per fresh stats object and probes pair the two timestamps",
+  );
 
   const poll = renderCoordinatorSource.match(
     /void RenderCoordinator::pollRenderResult\([\s\S]*?\n  const auto& result = \*resultOpt;/,
@@ -235,6 +245,36 @@ test("the render worker records a GPU wait failure on the abandoned-frame path",
     workerRendererHeader,
     /bool deviceLost = false;[\s\S]*?svg::GpuWaitTimeoutSite timedOutWaitSite[\s\S]*?int timedOutWaitMs/,
     "the per-frame timing breakdown must carry the same three fields",
+  );
+});
+
+test("the presentation regression gates print the worker health they wait on", () => {
+  const helper = presentationRegressionSource.match(
+    /async function expectWorkerResultsToReach\([\s\S]*?\n\}/,
+  );
+  assert.ok(helper, "expected one shared render gate for the presentation suite");
+  assert.match(helper[0], /readWorkerHealth\(page\)/);
+  // Playwright prints the whole received value for `toEqual`, but only the
+  // keys it was asked to match for `toMatchObject`. With the latter the health
+  // fields never reach the log and the helper is pure overhead, so the matcher
+  // is part of the contract rather than a style choice.
+  assert.match(helper[0], /\.toEqual\(expect\.objectContaining\(\{ reached: true \}\)\)/);
+  assert.doesNotMatch(helper[0], /toMatchObject/);
+
+  const health = presentationRegressionSource.match(
+    /async function readWorkerHealth\([\s\S]*?\n\}/,
+  );
+  assert.ok(health, "expected a worker health snapshot helper");
+  for (const field of ["deviceLost", "gpuWaitTimeoutSite", "gpuWaitTimeoutMs", "publishReason"]) {
+    assert.match(health[0], new RegExp(`${field}:`), `health snapshot must carry ${field}`);
+  }
+
+  // Every render gate in the suite has to go through the helper: one that
+  // still polls the bare counter is exactly the gate that reports nothing when
+  // the worker stops publishing.
+  assert.doesNotMatch(
+    presentationRegressionSource,
+    /\.poll\((?:async )?\(\) => page\.evaluate\(\(\) => window\.__donnerWorkerStats\?\.completedResults/,
   );
 });
 

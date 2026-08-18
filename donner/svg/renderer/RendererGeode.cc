@@ -5828,16 +5828,21 @@ bool RendererGeode::deviceLost() const {
 namespace {
 
 /// Translate the Geode wait vocabulary into the backend-neutral one the
-/// renderer interface publishes. Kept as an explicit switch so adding a wait
-/// site to either enum fails the build here rather than silently reporting
-/// the wrong hang.
+/// renderer interface publishes.
+///
+/// A new enumerator on either side is only a -Wswitch warning here, not a
+/// build error, so the fallthrough must not resolve to `None`: `None` is
+/// published as "the driver declared this loss, no deadline expired", and a
+/// wait site quietly wearing that label points a report at the wrong
+/// subsystem. Report it as `Unknown` instead, which reads as itself in the
+/// published diagnostics.
 GpuWaitTimeoutSite NeutralWaitSite(geode::GpuWaitSite site) {
   switch (site) {
     case geode::GpuWaitSite::None: return GpuWaitTimeoutSite::None;
     case geode::GpuWaitSite::ReadbackMap: return GpuWaitTimeoutSite::ReadbackMap;
     case geode::GpuWaitSite::QueueIdle: return GpuWaitTimeoutSite::QueueIdle;
   }
-  return GpuWaitTimeoutSite::None;
+  return GpuWaitTimeoutSite::Unknown;
 }
 
 }  // namespace

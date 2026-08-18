@@ -359,6 +359,46 @@ TEST(AsyncRendererTest, GeometryOverlayForcesFlatFrameThenRepromotesSelectionWhe
   EXPECT_EQ(asyncRenderer.compositorResetCountForTesting(), resetCountAfterEnable + 1u);
 }
 
+/// The worker's GPU-wait failure record is read by an edge-triggered
+/// publisher, so its generation is the whole contract: device loss is sticky
+/// and every later frame re-reports it, and a generation that moved each time
+/// would republish the same failure for the rest of the session.
+TEST(AsyncRendererGpuWaitFailureTest, RepeatedIdenticalLossBumpsTheGenerationOnce) {
+  AsyncRenderer asyncRenderer(AsyncRendererStartMode::Deferred);
+
+  EXPECT_FALSE(asyncRenderer.gpuWaitFailure().deviceLost);
+  EXPECT_EQ(asyncRenderer.gpuWaitFailure().generation, 0u);
+
+  asyncRenderer.noteGpuWaitOutcomeForTesting(svg::RendererReadbackStats{});
+  EXPECT_EQ(asyncRenderer.gpuWaitFailure().generation, 0u)
+      << "a healthy frame must not manufacture a failure to publish";
+
+  svg::RendererReadbackStats lost;
+  lost.deviceLost = true;
+  lost.timedOutWaitSite = svg::GpuWaitTimeoutSite::ReadbackMap;
+  lost.timedOutWaitMs = 10000;
+  asyncRenderer.noteGpuWaitOutcomeForTesting(lost);
+
+  const AsyncRenderer::GpuWaitFailure declared = asyncRenderer.gpuWaitFailure();
+  EXPECT_TRUE(declared.deviceLost);
+  EXPECT_EQ(declared.timedOutWaitSite, svg::GpuWaitTimeoutSite::ReadbackMap);
+  EXPECT_EQ(declared.timedOutWaitMs, 10000);
+  EXPECT_EQ(declared.generation, 1u);
+
+  for (int frame = 0; frame < 5; ++frame) {
+    asyncRenderer.noteGpuWaitOutcomeForTesting(lost);
+  }
+  EXPECT_EQ(asyncRenderer.gpuWaitFailure().generation, 1u)
+      << "the same sticky loss must be reported once, not once per frame";
+
+  // A different outcome is a different failure and has to reach the page.
+  svg::RendererReadbackStats escalated = lost;
+  escalated.timedOutWaitSite = svg::GpuWaitTimeoutSite::QueueIdle;
+  asyncRenderer.noteGpuWaitOutcomeForTesting(escalated);
+  EXPECT_EQ(asyncRenderer.gpuWaitFailure().generation, 2u);
+  EXPECT_EQ(asyncRenderer.gpuWaitFailure().timedOutWaitSite, svg::GpuWaitTimeoutSite::QueueIdle);
+}
+
 TEST(AsyncRendererTest, DeferredStartQueuesWorkAndStartsExactlyOnce) {
   svg::SVGDocument document = svg::instantiateSubtree(
       R"svg(<rect id="rect" x="1" y="1" width="8" height="8" fill="blue" />)svg");
