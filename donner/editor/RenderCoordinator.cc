@@ -531,6 +531,11 @@ void RenderCoordinator::setLockedRejectionFlash(
   lockedRejectionFlash_ = std::move(flash);
 }
 
+bool RenderCoordinator::chromeSubjectDiffersFromSnapshot(const EditorApp& app) const {
+  return app.selectedElements() != lastOverlaySelectionVec_ ||
+         sourceHoverElements_ != lastOverlaySourceHoverVec_;
+}
+
 void RenderCoordinator::refreshSelectionBoundsCache(EditorApp& app) {
   if (!app.hasDocument()) {
     selectionBoundsCache_ = SelectionBoundsCache{};
@@ -590,9 +595,7 @@ bool RenderCoordinator::rasterizeOverlayForCurrentSelection(
         });
   }
   const bool overlayGeometryDiffers =
-      overlaySelection != lastOverlaySelectionVec_ ||
-      sourceHoverElements_ != lastOverlaySourceHoverVec_ ||
-      currentPenLiveSpline != lastOverlayPenLiveSpline_ ||
+      chromeSubjectDiffersFromSnapshot(app) || currentPenLiveSpline != lastOverlayPenLiveSpline_ ||
       marqueeRectDoc != lastOverlayMarqueeRectDoc_ ||
       currentOverlayRasterSize != lastOverlayRasterSize_ || !lastOverlayScreenRect_.has_value() ||
       currentOverlayScreenRect != *lastOverlayScreenRect_ ||
@@ -762,19 +765,31 @@ bool RenderCoordinator::rasterizeOverlayForPresentation(
                                          representedDragPreview.has_value() ||
                                          activeBoundsPreview.has_value();
   const std::uint64_t currentVersion = app.document().currentFrameVersion();
-  // Non-transforming geometry edits usually have no presenter-side projection that can make live
-  // chrome line up with older document pixels. Live-geometry tools are the exception (the caller
-  // passes `allowLiveGeometryOverlay`): active PenTool editing, where the selected path is itself
-  // the live interaction surface, and active TextTool sessions, where every keystroke flushes the
-  // DOM ahead of the async renderer and the caret/frame chrome comes from the live post-flush DOM.
-  // For those the chrome must keep tracking the live document; resetting the snapshot here would
-  // blink the caret/selection chrome off for the whole typing or drafting burst.
+  // Hold the overlay RECAPTURE back while the live document runs ahead of the presented pixels: a
+  // non-transforming geometry edit has no presenter-side projection that could make chrome captured
+  // from the new DOM line up with the older pixels on screen. Live-geometry tools are the exception
+  // the caller names with `allowLiveGeometryOverlay` - active PenTool editing, where the selected
+  // path is itself the live interaction surface, and active TextTool sessions, where every
+  // keystroke flushes the DOM ahead of the async renderer and the caret/frame chrome comes from the
+  // live post-flush DOM. For those the chrome must keep tracking the live document, or it blinks
+  // off for the whole typing or drafting burst.
+  //
+  // Only the recapture is held back, never the snapshot itself. The presenter installs its chrome
+  // pass only for frames this coordinator is holding a snapshot for, so releasing the snapshot here
+  // would present document pixels with no chrome pass over them at all: the selection outline,
+  // bounds and handles blink out until the worker catches up. Retaining it costs at most a
+  // one-render lead over the presented pixels - the conservative half of the choice the
+  // live-geometry tools above already make deliberately - and the retained geometry is re-pointed
+  // at the transform those pixels landed in before it is drawn.
+  //
+  // The chrome subject is the one difference no lead can excuse: an outline around elements that
+  // are no longer selected or hovered is wrong rather than early, and no recapture is coming while
+  // this gate holds. Recapture for those frames instead, so the chrome names the right elements -
+  // deselecting captures empty chrome, which is what draws nothing.
   if (displayedDocVersion_ != 0u && currentVersion > displayedDocVersion_ &&
-      !hasPresentationProjection && !allowLiveGeometryOverlay) {
+      !hasPresentationProjection && !allowLiveGeometryOverlay &&
+      !chromeSubjectDiffersFromSnapshot(app)) {
     ++overlayVersionGateSuppressionTotal_;
-    if (immediateOverlaySnapshot_.has_value() && lastOverlayVersion_ > displayedDocVersion_) {
-      immediateOverlaySnapshot_.reset();
-    }
 
     FrameCostBreakdown::Overlay overlayCost;
     overlayCost.canvasSize = OverlayRasterSizeForViewport(viewport);

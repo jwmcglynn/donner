@@ -355,6 +355,19 @@ private:
   [[nodiscard]] Entity selectedCompositedEntity(EditorApp& app) const;
   [[nodiscard]] std::vector<Entity> selectedCompositedExtraEntities(EditorApp& app,
                                                                     Entity primaryEntity) const;
+  /**
+   * True when the elements \ref immediateOverlaySnapshot draws chrome for are no longer the
+   * elements the editor would draw chrome for now.
+   *
+   * This is about *what* the chrome annotates, not where it sits: the selection and the transient
+   * source-hover set are the only inputs that decide which elements get an outline, so a snapshot
+   * captured for a different set annotates elements that are no longer selected or hovered. That
+   * is the one difference the overlay refresh may never skip, because a snapshot describing the
+   * wrong elements is worse than one that trails the live geometry by a frame.
+   *
+   * @param app Editor application state holding the live selection.
+   */
+  [[nodiscard]] bool chromeSubjectDiffersFromSnapshot(const EditorApp& app) const;
 
   struct RenderWorkerBundle {
     explicit RenderWorkerBundle(

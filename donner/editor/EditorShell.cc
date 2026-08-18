@@ -4009,6 +4009,7 @@ void EditorShell::installFramebufferUnderlayPlan(
 
 void EditorShell::installImmediateChromePlan(
     [[maybe_unused]] std::optional<ImmediateChromePlan> plan) {
+  immediateChromePlanInstalled_ = plan.has_value();
 #ifdef DONNER_EDITOR_WGPU
   if (!plan.has_value() || directOverlayRenderer_ == nullptr) {
     window_.setWgpuDirectRenderCallback({});
@@ -4171,10 +4172,19 @@ void EditorShell::renderRenderPanePresentation(
   if (documentPresenter_->presentUnderlay(std::move(underlayPlan)) && underlayPresentsTiles) {
     documentPresentedDirectly = true;
   }
-  // Chrome is drawn immediately, every frame, into the same framebuffer the
-  // tiles just landed in, with the transform those tiles were placed with.
-  // Nothing caches it, so it cannot lag the document, and nothing re-scales
-  // it, so handles cannot grow with zoom.
+  // Chrome is drawn immediately, into the same framebuffer the tiles just
+  // landed in, with the transform those tiles were placed with. Nothing caches
+  // it, so it cannot lag the document, and nothing re-scales it, so handles
+  // cannot grow with zoom.
+  //
+  // Every frame that draws chrome at all has to build a plan for it. Installing
+  // no plan detaches the direct-render callback, so a frame that skipped one
+  // presents the document underlay with no chrome pass over it - a dropout, not
+  // a stale frame. That is why the coordinator holds its chrome snapshot for as
+  // long as there is chrome to draw and holds back only the recapture; the two
+  // frames below that legitimately carry no chrome are the content-only capture
+  // (which is defined as document pixels without editor chrome) and the sample
+  // picker (which covers the canvas).
   std::optional<ImmediateChromePlan> chromePlan;
   if (!contentOnlyCaptureThisFrame_ && !showSamplePicker_ &&
       renderCoordinator_.immediateOverlaySnapshot().has_value()) {

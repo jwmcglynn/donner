@@ -708,6 +708,12 @@ private:
   FrameCostBreakdown::DirectPresentation lastDirectPresentationCost_;
   /// Wall time the last immediate chrome pass spent drawing, in milliseconds.
   double lastImmediateChromeDrawMs_ = 0.0;
+  /// Whether the most recently installed plan carries a chrome pass.
+  ///
+  /// False means the presented frame is document pixels with no chrome drawn over them, which is
+  /// correct only for a frame that has no chrome to draw. Any other false is the selection outline
+  /// dropping out for a frame, so this is the invariant the presentation tests assert on.
+  bool immediateChromePlanInstalled_ = false;
   bool treeSelectionOriginatedInTree_ = false;
   bool sourceSelectionOriginatedInText_ = false;
   bool sourceFocusOriginatedInStyle_ = false;
