@@ -10,9 +10,7 @@
 #include <cstring>
 #include <utility>
 
-#if defined(TINYSKIA_CFG_IF_SIMD_NATIVE) && (defined(__ARM_NEON) || defined(__ARM_NEON__))
-#include <arm_neon.h>
-#endif
+#include "tiny_skia/filter/TurbulenceKernel.h"
 
 namespace tiny_skia::filter {
 
@@ -153,7 +151,7 @@ public:
     }
   }
 
-  // Float-precision 4-channel noise with NEON vectorization.
+  // Float-precision 4-channel noise, vectorized by `turbulenceBlend4`.
   // Uses SOA gradient tables for cache-friendly 4-channel SIMD loads.
   void noise2_4ch_f(float x, float y, const StitchInfo* stitch, float out[4]) const {
     float t = x + static_cast<float>(kPerlinN);
@@ -190,46 +188,11 @@ public:
     const float sx = sCurveF(rx0);
     const float sy = sCurveF(ry0);
 
-#if defined(TINYSKIA_CFG_IF_SIMD_NATIVE) && (defined(__ARM_NEON) || defined(__ARM_NEON__))
     // Load 4-channel gradient vectors from SOA tables (contiguous float[4]).
-    const float32x4_t gx00 = vld1q_f32(gradX4_[b00]);
-    const float32x4_t gy00 = vld1q_f32(gradY4_[b00]);
-    const float32x4_t gx10 = vld1q_f32(gradX4_[b10]);
-    const float32x4_t gy10 = vld1q_f32(gradY4_[b10]);
-    const float32x4_t gx01 = vld1q_f32(gradX4_[b01]);
-    const float32x4_t gy01 = vld1q_f32(gradY4_[b01]);
-    const float32x4_t gx11 = vld1q_f32(gradX4_[b11]);
-    const float32x4_t gy11 = vld1q_f32(gradY4_[b11]);
-
-    // 4 dot products: dot = gx * rx + gy * ry
-    const float32x4_t d00 = vfmaq_n_f32(vmulq_n_f32(gx00, rx0), gy00, ry0);
-    const float32x4_t d10 = vfmaq_n_f32(vmulq_n_f32(gx10, rx1), gy10, ry0);
-    const float32x4_t d01 = vfmaq_n_f32(vmulq_n_f32(gx01, rx0), gy01, ry1);
-    const float32x4_t d11 = vfmaq_n_f32(vmulq_n_f32(gx11, rx1), gy11, ry1);
-
-    // Bilinear interpolation: lerp(sx, d00, d10) then lerp(sy, a, b)
-    const float32x4_t sx_v = vdupq_n_f32(sx);
-    const float32x4_t a = vfmaq_f32(d00, sx_v, vsubq_f32(d10, d00));
-    const float32x4_t b = vfmaq_f32(d01, sx_v, vsubq_f32(d11, d01));
-
-    const float32x4_t sy_v = vdupq_n_f32(sy);
-    const float32x4_t result = vfmaq_f32(a, sy_v, vsubq_f32(b, a));
-
-    vst1q_f32(out, result);
-#else
-    // Scalar float fallback.
-    for (int ch = 0; ch < 4; ++ch) {
-      float u = gradX4_[b00][ch] * rx0 + gradY4_[b00][ch] * ry0;
-      float v = gradX4_[b10][ch] * rx1 + gradY4_[b10][ch] * ry0;
-      const float af = u + sx * (v - u);
-
-      u = gradX4_[b01][ch] * rx0 + gradY4_[b01][ch] * ry1;
-      v = gradX4_[b11][ch] * rx1 + gradY4_[b11][ch] * ry1;
-      const float bf = u + sx * (v - u);
-
-      out[ch] = af + sy * (bf - af);
-    }
-#endif
+    const TurbulenceCorners corners{gradX4_[b00], gradY4_[b00], gradX4_[b10], gradY4_[b10],
+                                    gradX4_[b01], gradY4_[b01], gradX4_[b11], gradY4_[b11]};
+    const TurbulenceWeights weights{rx0, rx1, ry0, ry1, sx, sy};
+    turbulenceBlend4(corners, weights, out);
   }
 
 private:
@@ -287,7 +250,7 @@ private:
       }
     }
 
-    // Build SOA float gradient tables for NEON-vectorized 4-channel access.
+    // Build SOA float gradient tables for vectorized 4-channel access.
     // gradX4_[idx] = {ch0_x, ch1_x, ch2_x, ch3_x} as float.
     constexpr int kTableSize = kBLen + kBLenPlus2;
     for (int idx = 0; idx < kTableSize; ++idx) {
@@ -316,7 +279,7 @@ private:
 
   int latticeSelector_[kBLen + kBLenPlus2] = {};
   double gradient_[4][kBLen + kBLenPlus2][2] = {};
-  // SOA float gradient tables: gradX4_[idx][ch], gradY4_[idx][ch] for NEON 4-channel loads.
+  // SOA float gradient tables: gradX4_[idx][ch], gradY4_[idx][ch] for 4-channel loads.
   alignas(16) float gradX4_[kBLen + kBLenPlus2][4] = {};
   alignas(16) float gradY4_[kBLen + kBLenPlus2][4] = {};
 };

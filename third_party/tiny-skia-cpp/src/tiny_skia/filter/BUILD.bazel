@@ -41,6 +41,7 @@ tiny_skia_cc_library(
         "SimdVec.h",
         "Tile.h",
         "Turbulence.h",
+        "TurbulenceKernel.h",
     ],
     include_prefix = "tiny_skia/filter",
     strip_include_prefix = ".",
