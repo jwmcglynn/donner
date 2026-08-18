@@ -709,8 +709,10 @@ TEST(FontManagerTest, FallbackForAnUnloadableFaceIsRetriedRatherThanCached) {
   const std::vector<uint8_t> data(embedded::kPublicSansMediumOtf.begin(),
                                   embedded::kPublicSansMediumOtf.end());
   const size_t charge = RetainedCharge(data);
-  // Room for exactly one font, which the fallback claims first.
-  FontManager mgr(registry, charge);
+  // Room for two fonts: the fallback, and one filler that is released later to make room. The
+  // fallback has to survive that release, or the cached answer would be dropped for being stale
+  // rather than for being provisional, and this would not be testing the retry at all.
+  FontManager mgr(registry, charge * 2);
 
   css::FontFace face;
   face.familyName = RcString("TestFont");
@@ -722,42 +724,63 @@ TEST(FontManagerTest, FallbackForAnUnloadableFaceIsRetriedRatherThanCached) {
 
   const FontHandle fallback = mgr.fallbackFont();
   ASSERT_TRUE(static_cast<bool>(fallback));
+  const FontHandle filler = mgr.loadFontData(data);
+  ASSERT_TRUE(static_cast<bool>(filler));
+  ASSERT_EQ(mgr.numLoadedFonts(), 2u) << "The budget is not full, so the load below would succeed.";
+
   EXPECT_EQ(mgr.findFont("TestFont"), fallback) << "The budget was full, so the face cannot load.";
 
-  // Free the budget and ask again. The face must now load rather than replay the cached fallback.
-  registry.destroy(fallback.entity());
+  // Free the budget, leaving the fallback entity alive, and ask again. The face must now load
+  // rather than replay the answer that stood in for it.
+  registry.destroy(filler.entity());
+  ASSERT_TRUE(registry.valid(fallback.entity()));
   const FontHandle loaded = mgr.findFont("TestFont");
   ASSERT_TRUE(static_cast<bool>(loaded));
   EXPECT_NE(loaded, fallback);
-  EXPECT_EQ(mgr.numLoadedFonts(), 1u);
+  EXPECT_EQ(mgr.numLoadedFonts(), 2u);
 }
 
-/// Equally good faces resolve to the one declared last. Deduplication must not disturb that, so a
+/// Equally good faces resolve to the one declared last (CSS Fonts: a later `@font-face` wins).
+/// The two declarations here carry different bytes, so the assertion names which one won rather
+/// than only that the answer held still. Deduplication must not disturb the order either, so a
 /// re-announced early declaration stays early rather than jumping ahead of later ones.
-TEST(FontManagerTest, TiedFacesResolveToTheLastDeclaredEvenAfterReAnnouncement) {
+TEST(FontManagerTest, TiedFacesResolveToTheLastDeclared) {
   Registry registry;
   FontManager mgr(registry);
 
-  auto payload = std::make_shared<const std::vector<uint8_t>>(
-      embedded::kPublicSansMediumOtf.begin(), embedded::kPublicSansMediumOtf.end());
+  const std::vector<uint8_t> earlyBytes(embedded::kPublicSansMediumOtf.begin(),
+                                        embedded::kPublicSansMediumOtf.end());
+  // Trailing padding after the last table leaves a valid sfnt with a distinguishable byte count,
+  // so the loaded font says which declaration produced it.
+  std::vector<uint8_t> lateBytes = earlyBytes;
+  lateBytes.resize(lateBytes.size() + 17, 0);
+  ASSERT_NE(earlyBytes.size(), lateBytes.size());
 
-  // Two declarations for one family that score identically for a plain lookup, distinguishable
-  // only by which entity resolves.
+  // Two declarations for one family that score identically for a plain lookup: same family,
+  // weight, style, and stretch, differing only in the bytes they carry.
   css::FontFace early;
   early.familyName = RcString("TestFont");
   css::FontFaceSource earlySource;
   earlySource.kind = css::FontFaceSource::Kind::Data;
-  earlySource.payload = payload;
-  earlySource.formatHint = RcString("opentype");
-  early.sources.push_back(earlySource);
+  earlySource.payload =
+      std::make_shared<const std::vector<uint8_t>>(earlyBytes.begin(), earlyBytes.end());
+  early.sources.push_back(std::move(earlySource));
 
-  css::FontFace late = early;
-  late.sources[0].formatHint = RcString("truetype");
+  css::FontFace late;
+  late.familyName = RcString("TestFont");
+  css::FontFaceSource lateSource;
+  lateSource.kind = css::FontFaceSource::Kind::Data;
+  lateSource.payload =
+      std::make_shared<const std::vector<uint8_t>>(lateBytes.begin(), lateBytes.end());
+  late.sources.push_back(std::move(lateSource));
 
   mgr.addFontFace(early);
   mgr.addFontFace(late);
+
   const FontHandle winner = mgr.findFont("TestFont");
   ASSERT_TRUE(static_cast<bool>(winner));
+  EXPECT_EQ(mgr.fontData(winner).size(), lateBytes.size())
+      << "The earlier declaration won the tie; CSS resolves a tie to the last one declared.";
 
   // Re-announce the whole set the way a style recompute does, repeatedly. Each round also brings
   // one genuinely new declaration, which drops the resolution cache and forces the tie to be
@@ -772,7 +795,46 @@ TEST(FontManagerTest, TiedFacesResolveToTheLastDeclaredEvenAfterReAnnouncement) 
 
     EXPECT_EQ(mgr.findFont("TestFont"), winner)
         << "The tie between two equally good faces moved at recompute " << recompute;
+    EXPECT_EQ(mgr.fontData(mgr.findFont("TestFont")).size(), lateBytes.size())
+        << "The tie stopped resolving to the last declaration at recompute " << recompute;
   }
+}
+
+/// The provider path needs the same retry the document-face path gets. A provider face whose bytes
+/// cannot be stored right now (a full aggregate budget is enough on its own) resolves to the
+/// fallback for the moment, and caching that would leave that request on the wrong font for the
+/// rest of the manager's life even after the budget frees up.
+TEST(FontManagerTest, FallbackForAnUnstorableProviderFaceIsRetriedRatherThanCached) {
+  Registry registry;
+  const std::vector<uint8_t> data(embedded::kPublicSansMediumOtf.begin(),
+                                  embedded::kPublicSansMediumOtf.end());
+  const size_t charge = RetainedCharge(data);
+  // Room for two fonts, as above: the fallback must outlive the release that makes room, or the
+  // second lookup would miss the cache because its entry went stale rather than because the answer
+  // was provisional.
+  FontManager mgr(registry, charge * 2);
+
+  FakeFontProvider provider({"ProviderFamily"});
+  mgr.setFontProvider(&provider);
+
+  const FontHandle fallback = mgr.fallbackFont();
+  ASSERT_TRUE(static_cast<bool>(fallback));
+  const FontHandle filler = mgr.loadFontData(data);
+  ASSERT_TRUE(static_cast<bool>(filler));
+  ASSERT_EQ(mgr.numLoadedFonts(), 2u);
+
+  EXPECT_EQ(mgr.findFont("ProviderFamily"), fallback)
+      << "The budget was full, so the provider's bytes cannot be stored.";
+
+  // Free the budget, leaving the fallback entity alive, and ask again. The provider's font must
+  // now load rather than replay the answer that stood in for it.
+  registry.destroy(filler.entity());
+  ASSERT_TRUE(registry.valid(fallback.entity()));
+  const FontHandle loaded = mgr.findFont("ProviderFamily");
+  ASSERT_TRUE(static_cast<bool>(loaded));
+  EXPECT_NE(loaded, fallback);
+  EXPECT_EQ(mgr.numLoadedFonts(), 2u);
+  EXPECT_FALSE(mgr.fontData(loaded).empty());
 }
 
 TEST(FontManagerTest, AllowsAttachingAndRemovingCustomCacheComponents) {

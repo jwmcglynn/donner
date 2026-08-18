@@ -11,7 +11,15 @@
 
 namespace donner::css {
 
-/// A single entry listed in `src:`-either a local face, a URL, or inline data.
+/**
+ * A single entry listed in `src:`-either a local face, a URL, or inline data.
+ *
+ * \ref FontFaceIdentityKey is total over every field below: it is what decides whether two
+ * declarations are the same declaration, and callers deduplicate on it, dropping the later of two
+ * that match. A field added here without being added there makes two sources that differ only in
+ * that field indistinguishable, and the second one is then silently discarded in favour of the
+ * first. Extend the key with any field added here.
+ */
 struct FontFaceSource {
   /**
    * Specifies the source type for a font face declaration.
@@ -42,6 +50,10 @@ struct FontFaceSource {
 
 /**
  * In-memory representation of a single `@font-face` rule.
+ *
+ * \ref FontFaceIdentityKey is total over every field below, for the reason spelled out on \ref
+ * FontFaceSource: extend the key with any field added here, or two rules differing only in the new
+ * field become one and the second is dropped.
  */
 struct FontFace {
   RcString familyName;                  ///< font-family descriptor

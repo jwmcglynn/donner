@@ -58,21 +58,23 @@ std::string FontFaceIdentityKey(const FontFace& face) {
       appendField(key, std::string_view(tech));
     }
 
-    // The payload's alternative is tagged separately from its value, so a URL string can never
-    // read as a payload of another kind.
-    if (const auto* url = std::get_if<RcString>(&source.payload)) {
-      appendField(key, "url");
-      appendField(key, std::string_view(*url));
+    // Which alternative of the payload variant is held, tagged separately from its value so a
+    // string payload can never read as a payload of another shape. These name the variant
+    // alternative, not `FontFaceSource::Kind`; the kind is a separate field above, and a malformed
+    // source can pair any kind with either alternative.
+    if (const auto* text = std::get_if<RcString>(&source.payload)) {
+      appendField(key, "payload-string");
+      appendField(key, std::string_view(*text));
     } else if (const auto* data =
                    std::get_if<std::shared_ptr<const std::vector<uint8_t>>>(&source.payload)) {
       // Payload identity, not payload contents: hashing every byte would cost more than the load
       // this key exists to avoid, and the buffers are immutable and shared.
-      appendField(key, "bytes");
+      appendField(key, "payload-bytes");
       appendPointerField(key, data->get());
     } else {
       // No alternative matched, which means the payload variant gained a case this key does not
       // know how to distinguish. Tag it so it cannot collapse onto one that is known.
-      appendField(key, "unknown");
+      appendField(key, "payload-unknown");
     }
   }
 

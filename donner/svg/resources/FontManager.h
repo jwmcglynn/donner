@@ -253,6 +253,12 @@ public:
    *
    * The provider is borrowed, not owned, and must outlive this FontManager. Pass nullptr to detach.
    *
+   * Attaching a different provider abandons every font resolved through the previous one, since
+   * another provider may answer the same family with different bytes. Those fonts keep their
+   * entities and their share of the aggregate budget: handles to them may still be held by text
+   * runs and by backend caches keyed on the handle, so their bytes have to stay valid. The budget
+   * is released when the entities are destroyed, normally with the registry.
+   *
    * Resolution order for `findFont(family)`:
    *   1. Matching `@font-face` rule registered via `addFontFace()` (document-provided fonts win).
    *   2. The attached provider (a `FontCatalog` tries Embedded families, then System families).
@@ -402,6 +408,11 @@ private:
    * bytes onto a fresh entity each time. Entries are only ever read back, never reloaded, so bytes
    * are never swapped underneath a handle already in use. Attaching a different provider drops the
    * whole map, because another provider may answer the same request with different bytes.
+   *
+   * The map holds one entry per distinct request the document actually made, not one per family,
+   * so a document using several weights of one family keeps several entries. That is the same set
+   * of loads the provider would be asked for without this memo; what the memo removes is repeating
+   * them.
    */
   std::unordered_map<ProviderFontKey, FontHandle, ProviderFontKeyHash> providerFonts_;
 

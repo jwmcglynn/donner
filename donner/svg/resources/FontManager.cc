@@ -328,9 +328,11 @@ FontHandle FontManager::findFont(std::string_view family, int weight, int style,
   const std::string cacheKey = std::string(family) + ":" + std::to_string(weight) + ":" +
                                std::to_string(style) + ":" + std::to_string(stretch);
   if (auto it = cache_.find(cacheKey); it != cache_.end()) {
-    // A cached answer outlives many lookups, so confirm the entity behind it is still alive rather
-    // than handing back a handle to a destroyed font.
-    if (isValidHandle(it->second)) {
+    // A cached answer outlives many lookups, so confirm the entity behind it is still a live,
+    // loaded font rather than handing back a handle to a destroyed or emptied one. Every answer
+    // this function caches has loaded bytes, so anything else means the entity changed underneath
+    // the cache and the query has to be resolved again.
+    if (isValidHandle(it->second) && registry_.all_of<LoadedFontComponent>(it->second.entity())) {
       return it->second;
     }
     cache_.erase(it);
@@ -390,10 +392,11 @@ FontHandle FontManager::findFont(std::string_view family, int weight, int style,
     }
   }
 
-  // Set when a matching face exists but could not be turned into loaded bytes this time. The
-  // failure can be transient (the aggregate budget was full), and the answer below is only a
-  // stand-in for it, so that answer must not be cached or the family would never recover.
-  bool matchedFaceFailedToLoad = false;
+  // Set when something claimed this family but could not be turned into loaded bytes this time,
+  // whether that was an `@font-face` rule or the external provider. The failure can be transient
+  // (the aggregate budget was full), and the answer returned below is only a stand-in for it, so
+  // that answer must not be cached or the family would never recover.
+  bool matchedSourceFailedToLoad = false;
 
   if (bestEntity != entt::null) {
     if (registry_.all_of<LoadedFontComponent>(bestEntity)) {
@@ -415,11 +418,11 @@ FontHandle FontManager::findFont(std::string_view family, int weight, int style,
         }
       }
     }
-    matchedFaceFailedToLoad = true;
+    matchedSourceFailedToLoad = true;
   }
 
   const auto cacheUnlessRetryable = [&](FontHandle handle) {
-    if (!matchedFaceFailedToLoad) {
+    if (!matchedSourceFailedToLoad) {
       cache_[cacheKey] = handle;
     }
     return handle;
@@ -453,6 +456,13 @@ FontHandle FontManager::findFont(std::string_view family, int weight, int style,
       }
       registry_.destroy(entity);
     }
+
+    // The provider claims this family but nothing loadable came back for the requested face, which
+    // a full aggregate budget alone is enough to cause. Same reasoning as a document face that
+    // failed to load: the answer below stands in for this request until the load can succeed, so
+    // it must not stick. Only this request is affected; the family's other faces resolve on their
+    // own and are not held back by it.
+    matchedSourceFailedToLoad = true;
   }
 
   // Fall back to the embedded Public Sans font.

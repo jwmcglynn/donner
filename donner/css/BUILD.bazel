@@ -81,6 +81,15 @@ donner_cc_library(
 )
 
 donner_cc_test(
+    name = "font_face_tests",
+    srcs = ["tests/FontFace_tests.cc"],
+    deps = [
+        ":core",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
     name = "css_tests",
     srcs = [
         "tests/Color_tests.cc",
