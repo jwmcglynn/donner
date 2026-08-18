@@ -3022,5 +3022,59 @@ TEST_F(RendererGeodeTest, NullDeviceEntersNoOpModeWithoutCrashing) {
   EXPECT_TRUE(renderer.takeSnapshot().empty());
 }
 
+/// A fill whose subpaths are all vertical segments produces horizontal band
+/// data but an EMPTY vertical band array, so the vertical band binding falls
+/// back to the zero-filled slot every empty storage class reserves. WebGPU
+/// requires a storage binding to expose at least one element of the WGSL
+/// array it feeds, and `array<Band>` has an 8-byte stride, so a narrower
+/// dummy fails bind-group validation at submit, invalidates the whole
+/// command buffer of that frame, and takes the process down with it. The
+/// rectangle drawn alongside the degenerate path is the liveness signal: its
+/// pixels only survive if the frame actually submitted.
+///
+/// Unclipped, which takes the resident per-slot bindings.
+TEST_F(RendererGeodeTest, VerticalOnlyFillWithEmptyVerticalBandsRenders) {
+  ParseWarningSink warningSink;
+  auto maybeDocument = parser::SVGParser::ParseSVG(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64">
+             <rect x="0" y="0" width="64" height="64" fill="#00ff00"/>
+             <path d="M 16 8 L 16 56 M 48 8 L 48 56" fill="#0000ff"/>
+           </svg>)svg",
+      warningSink);
+  ASSERT_FALSE(maybeDocument.hasError()) << maybeDocument.error();
+  SVGDocument document = std::move(maybeDocument).result();
+
+  RendererGeode renderer = createRenderer();
+  renderer.draw(document);
+  const RendererBitmap snapshot = renderer.takeSnapshot();
+  ASSERT_FALSE(snapshot.empty());
+  EXPECT_THAT(pixelAt(snapshot, 32, 32), RgbaEq(0, 255, 0, 255))
+      << "A fill with no vertical bands must not invalidate the frame it is drawn in.";
+}
+
+/// Clipped, which takes the per-frame arena bindings instead of the resident
+/// ones. Same defect, different allocation path.
+TEST_F(RendererGeodeTest, ClippedVerticalOnlyFillWithEmptyVerticalBandsRenders) {
+  ParseWarningSink warningSink;
+  auto maybeDocument = parser::SVGParser::ParseSVG(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64">
+             <clipPath id="c"><rect x="0" y="0" width="64" height="64"/></clipPath>
+             <g clip-path="url(#c)">
+               <rect x="0" y="0" width="64" height="64" fill="#00ff00"/>
+               <path d="M 16 8 L 16 56 M 48 8 L 48 56" fill="#0000ff"/>
+             </g>
+           </svg>)svg",
+      warningSink);
+  ASSERT_FALSE(maybeDocument.hasError()) << maybeDocument.error();
+  SVGDocument document = std::move(maybeDocument).result();
+
+  RendererGeode renderer = createRenderer();
+  renderer.draw(document);
+  const RendererBitmap snapshot = renderer.takeSnapshot();
+  ASSERT_FALSE(snapshot.empty());
+  EXPECT_THAT(pixelAt(snapshot, 32, 32), RgbaEq(0, 255, 0, 255))
+      << "A clipped fill with no vertical bands must not invalidate the frame it is drawn in.";
+}
+
 }  // namespace
 }  // namespace donner::svg

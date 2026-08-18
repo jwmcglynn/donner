@@ -539,9 +539,11 @@ struct GeodeResidentSlot {
   ScopedWgpuHandle<wgpu::BindGroup> bindGroup;
 
   /// A byte sub-range of `buffer`. `size == 0` is never bound directly -
-  /// empty SSBO regions reserve a 4-byte zero-filled slot so the shader's
-  /// band-count gate keeps them un-dereferenced (matching the per-frame
-  /// arena `allocStorageOrDummy` dummy).
+  /// empty SSBO regions reserve a zero-filled dummy slot wide enough for one
+  /// element of the WGSL array they feed, so the shader's band-count gate
+  /// keeps them un-dereferenced and the binding still passes WebGPU's
+  /// minimum-size validation (matching the per-frame arena
+  /// `allocStorageOrDummy` dummy).
   struct Region {
     uint64_t offset = 0;
     uint64_t size = 0;

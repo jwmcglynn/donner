@@ -50,6 +50,20 @@ constexpr uint64_t kUniformOffsetAlignment = 256u;
 static_assert(kStorageOffsetAlignment % kUniformOffsetAlignment == 0,
               "resident slab allocation alignment must satisfy uniform binding alignment");
 
+// Size of the zero-filled slot bound in place of an empty storage class.
+// WebGPU rejects a zero-sized storage binding, and it also rejects a binding
+// smaller than ONE element of the WGSL array it feeds: a binding declared
+// `array<T>` must expose at least `sizeof(T)` bytes even when the shader
+// never indexes it. The widest element any of these bindings carries is the
+// 8-byte `Band` struct, so anything below 8 fails bind-group validation at
+// submit time and invalidates the whole command buffer. 16 keeps a margin
+// for a future vec4-shaped element and still fits inside the 256-byte
+// alignment padding every one of these allocations already reserves, so it
+// costs no additional bytes anywhere.
+constexpr uint64_t kStorageDummyBytes = 16u;
+static_assert(kStorageDummyBytes % sizeof(uint32_t) == 0,
+              "storage dummy must be a whole number of u32 elements");
+
 /// Layout of the per-draw uniform buffer (must match shaders/slug_fill.wgsl).
 ///
 /// WGSL struct layout requires the total size to be a multiple of the largest
@@ -498,7 +512,7 @@ struct GeoEncoder::Impl : public GeodeTextureEncoder::UniformScratch {
         encoded.vCurveIndices.size() * sizeof(uint32_t)};
     uint64_t combined = 0;
     for (uint64_t bytes : gridClassSizes) {
-      const uint64_t slot = bytes == 0 ? uint64_t{4} : roundUp4(bytes);
+      const uint64_t slot = bytes == 0 ? kStorageDummyBytes : roundUp4(bytes);
       combined = ((combined + kStorageOffsetAlignment - 1) & ~(kStorageOffsetAlignment - 1)) + slot;
     }
     reserveInArena(gridArena, combined, kStorageOffsetAlignment);
@@ -518,14 +532,14 @@ struct GeoEncoder::Impl : public GeodeTextureEncoder::UniformScratch {
 
   /// Allocate a read-only storage binding for `byteCount` bytes of `data`,
   /// rounding the size up to a multiple of 4. When `byteCount == 0` (a
-  /// degenerate axis with no vertical band data, or an empty grid) a single
-  /// zeroed 4-byte slot is bound instead, since WebGPU rejects zero-sized
-  /// storage bindings. The shader gates on the band-count uniform so it never
-  /// dereferences the dummy slot.
+  /// degenerate axis with no vertical band data, or an empty grid) a zeroed
+  /// dummy slot of `kStorageDummyBytes` is bound instead, since WebGPU
+  /// rejects zero-sized storage bindings. The shader gates on the band-count
+  /// uniform so it never dereferences the dummy slot.
   Allocation allocStorageOrDummy(Arena& arena, const void* data, uint64_t byteCount) {
     if (byteCount == 0) {
-      static const uint32_t kZero = 0u;
-      return allocInArena(arena, &kZero, sizeof(kZero), kStorageOffsetAlignment);
+      static const uint32_t kZero[kStorageDummyBytes / sizeof(uint32_t)] = {};
+      return allocInArena(arena, kZero, sizeof(kZero), kStorageOffsetAlignment);
     }
     return allocInArena(arena, data, roundUp4(byteCount), kStorageOffsetAlignment);
   }
@@ -1643,15 +1657,15 @@ void GeoEncoder::Impl::uploadResidentGeometry(GeodeResidentSlot& slot, const Enc
 
   // Lay out the combined buffer. Each storage region's offset satisfies
   // `kStorageOffsetAlignment`; the uniform region needs `kUniformOffsetAlignment`. Empty storage
-  // regions reserve a 4-byte zero-filled dummy slot (the shader's
-  // band-count gate never dereferences them), mirroring the arena
+  // regions reserve a `kStorageDummyBytes` zero-filled dummy slot (the
+  // shader's band-count gate never dereferences them), mirroring the arena
   // `allocStorageOrDummy` dummy.
   uint64_t cursor = 0;
   auto place = [&](GeodeResidentSlot::Region& r, uint64_t bytes, uint64_t alignment,
                    bool storageDummy) {
     cursor = alignUp(cursor, alignment);
     r.offset = cursor;
-    r.size = (storageDummy && bytes == 0) ? uint64_t{4} : roundUp4(bytes);
+    r.size = (storageDummy && bytes == 0) ? kStorageDummyBytes : roundUp4(bytes);
     cursor += r.size;
   };
   // The four grid regions are contiguous so ONE combined storage binding
@@ -2505,7 +2519,7 @@ void GeoEncoder::Impl::uploadResidentGradientGeometry(GeodeResidentGradientSlot&
                    bool storageDummy) {
     cursor = alignUp(cursor, alignment);
     r.offset = cursor;
-    r.size = (storageDummy && bytes == 0) ? uint64_t{4} : roundUp4(bytes);
+    r.size = (storageDummy && bytes == 0) ? kStorageDummyBytes : roundUp4(bytes);
     cursor += r.size;
   };
   // The four grid regions are contiguous so ONE combined storage binding
