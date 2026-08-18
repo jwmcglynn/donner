@@ -184,8 +184,7 @@ TEST_F(GeodeSnapshotReadbackTest, ReadbackStatsCarryWaitTimeoutAttribution) {
   const RendererReadbackStats afterTimeout = renderer.consumeReadbackStats();
   EXPECT_TRUE(afterTimeout.deviceLost);
   EXPECT_EQ(afterTimeout.timedOutWaitSite, GpuWaitTimeoutSite::ReadbackMap);
-  EXPECT_EQ(afterTimeout.timedOutWaitMs,
-            static_cast<int>(geode::kReadbackMapTimeout.count()));
+  EXPECT_EQ(afterTimeout.timedOutWaitMs, static_cast<int>(geode::kReadbackMapTimeout.count()));
 
   const RendererReadbackStats laterFrame = renderer.consumeReadbackStats();
   EXPECT_TRUE(laterFrame.deviceLost);

@@ -334,7 +334,6 @@ void AsyncRenderer::shutdown() {
   }
 }
 
-
 void AsyncRenderer::noteGpuWaitOutcome(const svg::RendererReadbackStats& readbackStats) {
   if (!readbackStats.deviceLost) {
     return;

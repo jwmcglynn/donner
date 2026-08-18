@@ -339,8 +339,7 @@ void GeodeDevice::markDeviceLostAfterWaitTimeout(GpuWaitSite site,
   // check above and race here; either store is a real timeout attribution, so
   // the race is benign and `markDeviceLost` still logs exactly once.
   lostState_->timedOutSite.store(site, std::memory_order_relaxed);
-  lostState_->timedOutElapsedMs.store(static_cast<int>(elapsed.count()),
-                                      std::memory_order_relaxed);
+  lostState_->timedOutElapsedMs.store(static_cast<int>(elapsed.count()), std::memory_order_relaxed);
   markDeviceLost(reason);
 }
 
@@ -363,9 +362,8 @@ GpuWaitResult GeodeDevice::waitForQueueIdle(std::chrono::milliseconds timeout) c
 #else
   const GpuWaitResult result = BoundedGpuWait([this] { return pollSuspending(false); }, timeout);
   if (result == GpuWaitResult::TimedOut) {
-    markDeviceLostAfterWaitTimeout(
-        GpuWaitSite::QueueIdle, timeout,
-        "GPU queue did not go idle within the bounded wait deadline");
+    markDeviceLostAfterWaitTimeout(GpuWaitSite::QueueIdle, timeout,
+                                   "GPU queue did not go idle within the bounded wait deadline");
   }
   return result;
 #endif

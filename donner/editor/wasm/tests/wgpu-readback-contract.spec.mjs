@@ -210,7 +210,7 @@ test("a GPU wait failure publishes worker stats even though no frame completed",
   );
   assert.ok(poll, "expected the UI-thread result poll");
   const failureCall = poll[0].indexOf("PublishWorkerGpuWaitFailure(");
-  const earlyReturn = poll[0].indexOf("if (!resultOpt.has_value()) {");
+  const earlyReturn = poll[0].indexOf("if (!resultOpt.has_value()) {\n    return;");
   assert.ok(failureCall >= 0, "the poll must report a GPU wait failure");
   assert.ok(
     failureCall < earlyReturn,
