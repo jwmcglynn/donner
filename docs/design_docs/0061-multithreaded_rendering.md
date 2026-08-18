@@ -1,7 +1,7 @@
 # Design: Optional Multithreaded Rendering
 
 **Status:** Draft
-**Author:** Claude Opus 5
+**Author:** Claude Fable 5
 **Drafted by:** Claude Opus 5
 **Created:** 2026-08-18
 
@@ -41,7 +41,7 @@ re-litigated: Geode command-encoding parallelism, and render-tree branch paralle
 ## Goals
 
 - A large CPU filter node's raster scales with worker count: at least 4x on eight workers for the
-  gather-shaped primitives (convolve, lighting, morphology, component transfer, composite), measured
+  compute-heavy primitives (convolve, lighting, morphology, component transfer, composite), measured
   by a filter scaling benchmark at `-c opt`.
 - **Byte-identical output at every worker count**, including the zero-worker inline mode, over the
   renderer golden corpus and the resvg suite. This is the primary correctness property and it is a
@@ -228,7 +228,7 @@ judgement the design requires.
 | ----- | ---------- | ---------- | ------------------------ | ------------- |
 | Per-pixel pure | `flood`, `colorMatrix`, `componentTransfer`, `composite`, `blend`, `merge`, `offset`, `tile`, `turbulence`, subregion clipping, `srgbToLinear` / `linearToSrgb` on `FloatPixmap` | output rows | the same rows (`offset` and `tile` read a fixed translation of them) | none |
 | Bounded gather | `convolveMatrix`, `diffuseLighting`, `specularLighting` | output rows | `[yBegin - up, yEnd + down)`; convolve uses `up = targetY`, `down = orderY - 1 - targetY`; lighting uses 1 and 1 for its 3x3 normal | none |
-| Unbounded gather | `displacementMap` | output rows | up to the whole source, bounded by `scale` | none |
+| Displacement-bounded gather | `displacementMap` | output rows | the band's rows extended by half the displacement scale on each side, clamped to the buffer | none |
 | Separable multi-pass | `gaussianBlur`, `morphology` | rows of the pass currently executing | the same rows; every pass reads and writes one row at a time | a running sum or a van Herk block accumulator **along x**, within one row |
 | Reduction | `computeNonTransparentBounds` | output rows | the same rows | a per-band min/max, combined in fixed band order |
 
@@ -466,9 +466,10 @@ but it does add a thread pool, so the boundaries are:
 - **Fail-safe, not fail-open.** A pool that cannot start degrades to inline execution. There is no
   path where a threading failure produces partial or uninitialized pixels, because a band that was
   never submitted was never joined and the frame does not proceed past the join.
-- **Fuzzing.** The existing SVG render fuzzer runs with the pool enabled at a small non-zero worker
-  count on the sanitizer lanes, so hostile filter graphs exercise the band decomposition and the
-  reduction combine.
+- **Fuzzing.** Milestone 3 adds a sanitizer-lane configuration of the existing SVG render fuzzer
+  with the pool enabled at a small non-zero worker count, so hostile filter graphs exercise the band
+  decomposition and the reduction combine. Until that lands, this bullet is a plan, not a running
+  gate.
 
 ## Testing and Validation
 
