@@ -481,7 +481,8 @@ TEST_F(GeoEncoderTest, SceneBatchBindGroupCacheDistinguishesSlabGenerations) {
       const float quad[8] = {8.0f, 8.0f, 24.0f, 8.0f, 24.0f, 24.0f, 8.0f, 24.0f};
       std::memcpy(record.boundingVertices, quad, sizeof(quad));
       device_->queue().writeBuffer(generation.recordSlots[i].buffer,
-                                   generation.recordSlots[i].offset, &record, sizeof(record));
+                                   generation.recordSlots[i].offset, &record,
+                                   sizeof(record));
     }
     return generation;
   };
@@ -547,7 +548,8 @@ TEST_F(GeoEncoderTest, SceneBatchBindGroupCacheDistinguishesSlabGenerations) {
            "bind-group lookup must miss. A hit means the cache matched a dead generation's "
            "entry and this batch drew the previous generation's records and geometry.";
     EXPECT_EQ(repeatBatchCreates, 0u)
-        << "Round " << round << ": repeating the identical batch must reuse the cached bind group.";
+        << "Round " << round
+        << ": repeating the identical batch must reuse the cached bind group.";
   }
 }
 

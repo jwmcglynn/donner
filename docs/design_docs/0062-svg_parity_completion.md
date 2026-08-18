@@ -568,9 +568,10 @@ must preserve the existing no-exception error model and resource budgets.
   fallback invariant.
 - Programmatic raster images and `<feImage>` primitives reach premultiplication, CPU sampling, or
   GPU upload only when their payload is exactly the overflow-safe tightly packed RGBA8 size for
-  the declared dimensions. The procedural sampler rejects oversized axes before allocation and
-  leaves its bounded output transparent when source, inverse, scale, or mapped coordinates are
-  non-finite. `//donner/svg/renderer/tests:image_sampling_tests`,
+  the declared dimensions. GPU paths also reject source axes beyond the active device's reported
+  texture limit. The procedural sampler rejects oversized output axes before allocation and leaves
+  its bounded output transparent when source, inverse, scale, or mapped coordinates are non-finite.
+  `//donner/svg/renderer/tests:image_sampling_tests`,
   `:filter_graph_executor_tests`, `:renderer_public_api_tests`, and `:renderer_geode_tests` own
   these failure contracts.
 - General-affine stroking retains the existing path command, subdivision, and dash-work limits.

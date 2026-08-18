@@ -3304,13 +3304,9 @@ void GeoEncoder::drawImage(const svg::ImageResource& image, const Box2d& destRec
   if (destRect.isEmpty()) {
     return;
   }
-  // Size cap: refuse pathological images. 16384 × 16384 × 4 bytes = 1 GiB,
-  // which is already past any sensible WebGPU device limit. The texture
-  // creation itself enforces tighter limits on the device side, but a sanity
-  // check here turns "invalid texture descriptor → uncaptured device error"
-  // into a clean no-op for the renderer.
-  constexpr int kMaxImageDim = 16384;
-  if (image.width > kMaxImageDim || image.height > kMaxImageDim) {
+  const uint32_t maxTextureDimension = impl_->device->maxTextureDimension2D();
+  if (static_cast<uint32_t>(image.width) > maxTextureDimension ||
+      static_cast<uint32_t>(image.height) > maxTextureDimension) {
     return;
   }
   if (!svg::HasExactRgbaPayload(image.data, image.width, image.height)) {

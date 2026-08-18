@@ -11,7 +11,7 @@
 
 namespace donner::svg {
 
-/// Maximum source or output axis accepted by the procedural image sampler.
+/// Maximum output axis of a materialized procedural image-sampling surface.
 inline constexpr std::int64_t kMaxImageSamplingDimension = 16384;
 /// Maximum pixels in one materialized image-sampling surface.
 inline constexpr std::size_t kMaxImageSamplingSurfacePixels = 16 * 1024 * 1024;

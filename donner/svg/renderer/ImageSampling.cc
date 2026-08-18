@@ -33,7 +33,6 @@ std::vector<std::uint8_t> RasterizeImagePremultiplied(
     const Transform2d& deviceFromImage, int outputWidth, int outputHeight,
     ImageRendering imageRendering) {
   if (sourceWidth <= 0 || sourceHeight <= 0 || outputWidth <= 0 || outputHeight <= 0 ||
-      sourceWidth > kMaxImageSamplingDimension || sourceHeight > kMaxImageSamplingDimension ||
       outputWidth > kMaxImageSamplingDimension || outputHeight > kMaxImageSamplingDimension) {
     return {};
   }

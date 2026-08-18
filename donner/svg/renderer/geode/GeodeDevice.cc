@@ -864,6 +864,13 @@ std::unique_ptr<GeodeDevice> GeodeDevice::CreateFromExternal(const GeodeEmbedCon
 }
 
 void GeodeDevice::initSharedResources() {
+  wgpu::Limits limits;
+  if (device_.getLimits(&limits) == wgpu::Status::Success &&
+      limits.maxTextureDimension2D != WGPU_LIMIT_U32_UNDEFINED &&
+      limits.maxTextureDimension2D > 0) {
+    maxTextureDimension2D_ = limits.maxTextureDimension2D;
+  }
+
   // Shared dummy textures / samplers used by every GeoEncoder. These are 1x1
   // identity fills for the pattern and clip-mask bind slots when the current
   // draw doesn't actually use them. Created before any setCounters() call so

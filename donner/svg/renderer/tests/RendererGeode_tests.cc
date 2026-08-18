@@ -10,6 +10,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <optional>
 #include <utility>
 
@@ -2395,10 +2396,12 @@ TEST_F(RendererGeodeTest, FilterImageOverTextureAxisLimitIsTransparent) {
   RendererGeode renderer = createRenderer();
   beginFrame(renderer);
 
-  constexpr int kOverLimitWidth = 16385;
+  ASSERT_LT(sharedDevice()->maxTextureDimension2D(),
+            static_cast<uint32_t>(std::numeric_limits<int>::max()));
+  const int overLimitWidth = static_cast<int>(sharedDevice()->maxTextureDimension2D()) + 1;
   components::filter_primitive::Image image;
-  image.imageData.resize(static_cast<std::size_t>(kOverLimitWidth) * 4u, 255);
-  image.imageWidth = kOverLimitWidth;
+  image.imageData.resize(static_cast<std::size_t>(overLimitWidth) * 4u, 255);
+  image.imageWidth = overLimitWidth;
   image.imageHeight = 1;
 
   components::FilterGraph graph;

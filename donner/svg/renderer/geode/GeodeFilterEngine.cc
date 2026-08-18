@@ -3370,13 +3370,14 @@ wgpu::Texture GeodeFilterEngine::applyImage(
 
   const bool hasExactPayload =
       svg::HasExactRgbaPayload(primitive.imageData, primitive.imageWidth, primitive.imageHeight);
+  const bool hasSafeTextureExtent =
+      hasExactPayload &&
+      static_cast<uint32_t>(primitive.imageWidth) <= device_.maxTextureDimension2D() &&
+      static_cast<uint32_t>(primitive.imageHeight) <= device_.maxTextureDimension2D() &&
+      static_cast<uint32_t>(primitive.imageWidth) <= std::numeric_limits<uint32_t>::max() / 4u;
   wgpu::Texture output = createIntermediateTexture(arena, dev, width, height, "FilterImageOutput");
 
-  // Empty, malformed, or degenerate source: feed the shader a 1×1 transparent texture
-  // with an out-of-bounds transform. The resulting output is transparent
-  // everywhere - which is also what the shader would emit for any real
-  // image whose sample coordinates fall outside the source bounds.
-  if (!hasExactPayload) {
+  const auto renderTransparentOutput = [&]() {
     wgpu::TextureDescriptor imgDesc{};
     imgDesc.label = wgpuLabel("FilterImageEmptySource");
     imgDesc.size = {1, 1, 1};
@@ -3404,31 +3405,39 @@ wgpu::Texture GeodeFilterEngine::applyImage(
                                emptyTex, output, ub.buffer, ub.offset, sizeof(ImageParams),
                                "FilterImageEmptyPass");
     return output;
+  };
+
+  // Empty, malformed, degenerate, or device-oversized sources remain transparent.
+  if (!hasSafeTextureExtent) {
+    return renderTransparentOutput();
   }
 
   // Upload the image's straight-alpha RGBA pixels as a premultiplied
   // texture - Geode operates in premultiplied throughout the filter graph
   // (consistent with feFlood / feMerge).
-  const int imgW = primitive.imageWidth;
-  const int imgH = primitive.imageHeight;
+  const uint32_t imgW = static_cast<uint32_t>(primitive.imageWidth);
+  const uint32_t imgH = static_cast<uint32_t>(primitive.imageHeight);
   const std::vector<uint8_t> premul = svg::PremultiplyRgba(primitive.imageData);
 
   wgpu::TextureDescriptor imgDesc{};
   imgDesc.label = wgpuLabel("FilterImageSource");
-  imgDesc.size = {static_cast<uint32_t>(imgW), static_cast<uint32_t>(imgH), 1};
+  imgDesc.size = {imgW, imgH, 1};
   imgDesc.format = kFormat;
   imgDesc.usage = wgpu::TextureUsage::TextureBinding | wgpu::TextureUsage::CopyDst;
   imgDesc.mipLevelCount = 1;
   imgDesc.sampleCount = 1;
   imgDesc.dimension = wgpu::TextureDimension::_2D;
   wgpu::Texture imgTex = arena.createTexture(imgDesc);
+  if (!imgTex) {
+    return renderTransparentOutput();
+  }
 
   wgpu::TexelCopyTextureInfo dstInfo{};
   dstInfo.texture = imgTex;
   wgpu::TexelCopyBufferLayout layout{};
-  layout.bytesPerRow = static_cast<uint32_t>(imgW * 4);
-  layout.rowsPerImage = static_cast<uint32_t>(imgH);
-  wgpu::Extent3D extent = {static_cast<uint32_t>(imgW), static_cast<uint32_t>(imgH), 1};
+  layout.bytesPerRow = imgW * 4u;
+  layout.rowsPerImage = imgH;
+  wgpu::Extent3D extent = {imgW, imgH, 1};
   device_.queue().writeTexture(dstInfo, premul.data(), premul.size(), layout, extent);
   device_.countTextureWrite(premul.size());
 
