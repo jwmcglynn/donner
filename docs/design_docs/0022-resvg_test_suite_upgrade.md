@@ -32,14 +32,15 @@ tooling were migrated to match.
   Renovate-driven re-run is reproducible. The scratch `resvg_test_suite.cc.draft`
   was deleted 2026-05-15 as a leftover.
 
-### Known residue (handed to 0021)
+### Current follow-up (owned by 0021)
 
-- The entire **`filters/filter-functions`** `INSTANTIATE` block is commented out:
-  it throws `"Data corrupted"` parse errors on CI x86_64 but passes locally on
-  aarch64. Root cause unknown. Its two custom goldens are parked (see
-  [0009](0009-resvg_test_suite_bugs.md)).
-- M2 per-category enablement (the point of the upgrade) is the backlog in
-  [0021](0021-resvg_feature_gaps.md).
+- The **`filters/filter-functions`** category is active. Twenty-six of 43 files compare on both
+  backends; 17 use explicit `Triage:` skips while their input validity and output oracles are
+  checked against the specification and independent browsers. There is no current x86_64
+  startup-corruption exception.
+- Two migrated drop-shadow goldens remain parked and unreferenced pending that normative triage;
+  see [0009](0009-resvg_test_suite_bugs.md).
+- Remaining per-case parity work is tracked in [0021](0021-resvg_feature_gaps.md).
 
 ---
 

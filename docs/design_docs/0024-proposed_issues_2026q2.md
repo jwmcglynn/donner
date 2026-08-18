@@ -75,22 +75,24 @@ These are deprecated SVG 1.1 features. They should remain `Params::Skip()` perma
 
 These features are **already parsed** — the rendering path just needs to be connected.
 
-### Issue S1: Apply CSS filter function shorthands at render time
+### Issue S1: Triage remaining CSS filter-function mismatches
 
 | Field | Value |
 |-------|-------|
-| **Tests unblocked** | 30 (`filters/filter-functions/*`) |
-| **Complexity** | Small — this is a **bug**, not a new feature |
+| **Tests affected** | 17 explicit skips (`filters/filter-functions/*`) |
+| **Complexity** | Medium - input grammar and rendering oracles vary by case |
 | **Spec** | [Filter Effects §8 — Filter Functions](https://www.w3.org/TR/filter-effects-1/#FilterFunction) |
 | **Already tracked** | B2 in `docs/design_docs/0021-resvg_feature_gaps.md` |
 
-**Current state:** `PropertyRegistry::ParseFilterFunction()` correctly parses all 10 CSS filter
-functions (`blur()`, `brightness()`, `contrast()`, `drop-shadow()`, `grayscale()`, `hue-rotate()`,
-`invert()`, `opacity()`, `saturate()`, `sepia()`). The rendering path only recognizes
-`ElementReference` variants (SVG `url(#id)` form) and ignores the CSS function vector.
+**Current state:** CSS filter-function lists are parsed and rendered. All 43 vendored cases are
+active; 26 compare on both backends and 17 carry neutral `Triage:` skips. Before changing parser
+grammar or pixels, classify each remaining case against Filter Effects and an independent browser
+oracle. In particular, unitless nonzero `blur()` and negative color-adjust inputs may be invalid
+rather than Donner rendering defects.
 
-**Key files:** `RenderingContext.cc:244`, `RendererDriver.cc`
-**Dependencies:** None
+**Key files:** `PropertyRegistry.cc`, `FilterSystem.cc`, `FilterGraphExecutor.cc`,
+`GeodeFilterEngine.cc`, `resvg_test_suite.cc`
+**Dependencies:** Normative input/output classification per case
 
 ### Issue S2: Support `transform-origin` as a presentation attribute
 

@@ -91,7 +91,7 @@ bottom for completeness.
 
 | ID  | Gap                                                                     |                         Impact | Kind                                                                                                                                                                                                |
 | --- | ----------------------------------------------------------------------- | -----------------------------: | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| B2  | `filters/filter-functions` coverage                                     | **DONE** (26/43 files compare) | Category active; 17 failures are explicit skips.                                                                                                                                                    |
+| B2  | `filters/filter-functions` coverage                                     | **DONE** (26/43 files compare) | Category active; 17 mismatches are explicit triage skips.                                                                                                                                           |
 | B3  | `structure/image` golden kernel-era mismatch                            |                             13 | Golden refresh + `<image>` upscale-kernel decision (see [B3](#b3-structureimage-golden-kernel-era-mismatch))                                                                                        |
 | F12 | `transform-origin` on `<textPath>` baseline                             |                       **DONE** | Resolved by #868; all category cases are active.                                                                                                                                                    |
 | F7  | `paint-order` rendering                                                 |               **DONE** (14/14) | Shapes and text run on both backends; `on-tspan` uses a project-owned oracle because the vendored PNG breaks cross-span kerning.                                                                    |
@@ -110,14 +110,16 @@ bottom for completeness.
 
 ### B2: `filters/filter-functions` category coverage
 
-**Resolved.** All 43 files are instantiated. A combined TinySkia and Geode triage runs 86
-comparisons: 53 passed before classification, representing 26 files on both backends plus one
-TinySkia-only pass. Seventeen unique failing files now carry explicit normal-path skips for blur,
-color-adjust, drop-shadow, or URL-chain defects. No category remains dark.
+**Resolved as a coverage gap.** All 43 files are instantiated. A combined TinySkia and Geode run
+executes 86 comparisons: 53 passed before exception classification, representing 26 files on both
+backends plus one TinySkia-only pass. Seventeen unique mismatching files now carry explicit
+normal-path `Triage:` skips for blur, color-adjust, drop-shadow, or URL-chain cases. No category
+remains dark, but these skips are not yet classified as Donner defects.
 
-**Next step:** fix the 17 classified rendering defects through their owning blur, color-adjust,
-drop-shadow, and URL-chain paths. Remove each local skip only after its focused regression and both
-comparison modes pass; do not restore the category-level disable or the parked custom goldens.
+**Next step:** classify the 17 mismatches against the normative grammar and independent browser
+pixels, then fix only confirmed Donner defects through their owning blur, color-adjust,
+drop-shadow, and URL-chain paths. Remove each local skip only after that classification, a focused
+regression, and both comparison modes pass; do not restore the category-level disable.
 
 ---
 

@@ -84,8 +84,9 @@ Reducing the raw totals is useful, but correctness and classification are the ac
   - [ ] Run each requested disabled case in its applicable TinySkia, text-full, and Geode modes and
         preserve the actual, expected, and diff images.
   - [ ] Enable any case that already passes without changing a threshold or golden.
-  - [x] Activate and triage all 43 `filters/filter-functions` files. Twenty-six compare on both
-        backends; 17 unique failures now use explicit normal-path skips instead of a dark category.
+  - [x] Activate all 43 `filters/filter-functions` files. Twenty-six compare on both backends; 17
+        unique mismatches use explicit neutral triage skips instead of a dark category. Normative
+        defect classification remains part of the filter-completion phase.
   - [x] Verify the generated counts with `//tools/resvg_parity:parity_report_tests`.
   - [ ] Run `//donner/svg/renderer/tests:resvg_test_suite` without changing comparison policy.
 - [ ] Milestone 2: Complete image-sampling semantics

@@ -115,7 +115,7 @@ noted.
 > "Minor char" cluster is the precedent. Tracked in
 > [0021](0021-resvg_feature_gaps.md).
 
-## Parked goldens (2) — filters/filter-functions disabled
+## Parked goldens (2) - filters/filter-functions triage
 
 `resvg-drop-shadow-function-mm-values.png` and
 `resvg-drop-shadow-function-em-values.png` are the migrated successors of the old
@@ -123,11 +123,11 @@ noted.
 box-blur approximation (correct per CSS Filter Effects L1 §8 / SVG §15.9) produces
 a different halo shape than resvg's blur, so a Donner golden is required.
 
-They are currently **unreferenced** because the entire `filters/filter-functions`
-`INSTANTIATE_TEST_SUITE_P` block is commented out — that category throws
-`"Data corrupted"` parse errors on CI x86_64 but passes locally on aarch64 (root
-cause unknown). **Keep both files**: re-enabling the block (tracked in
-[0021](0021-resvg_feature_gaps.md)) will need them. Do not delete as "orphans".
+They are currently **unreferenced**. The `filters/filter-functions` category is active, with 26 of
+43 files comparing on both backends and 17 explicit `Triage:` skips. No project-owned oracle has
+been accepted for the two unit-based drop-shadow cases yet. **Keep both files** until normative
+specification/browser triage decides whether each mismatch is a Donner defect, a vendored-oracle
+difference, or a justified project golden. Do not delete them as "orphans".
 
 ## Removed goldens (cleanup, 2026-05-15)
 
