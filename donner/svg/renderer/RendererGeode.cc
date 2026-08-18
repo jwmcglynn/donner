@@ -2057,12 +2057,17 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
   std::deque<SceneTempRecordSlot> sceneTempRecordSlots;
 
   /// Choose the record slot for a scene-batch instance of `slot` WITHOUT
-  /// marking it used: the primary slot when nothing this frame reads it yet
+  /// marking it used: the primary slot when no unsubmitted frame reads it yet
   /// (nullptr: the ensure uses the cached write path), or a fresh temporary
-  /// slot for a same-frame repeat. The primary is off-limits exactly when an
-  /// earlier recorded BATCH draw references it, because buffer writes are
-  /// queue-ordered ahead of every draw in the frame's submit and rewriting the
-  /// record would retroactively retransform that draw.
+  /// slot otherwise. The primary is off-limits exactly when a recorded BATCH
+  /// draw of a still-open frame references it - a repeat earlier in THIS
+  /// frame, or an outer renderer whose frame is still open while an offscreen
+  /// pass renders the same document - because buffer writes are queue-ordered
+  /// ahead of every draw in a frame's submit and rewriting the record (or the
+  /// paint block the ensure republishes with it) would retroactively repaint
+  /// that draw. Generations are device-scoped, so the claim test compares
+  /// against `GeodeDevice::oldestOpenFrameGeneration` rather than our own
+  /// frame index.
   ///
   /// A solo resident draw of the same slot is NOT such a reference: it binds
   /// the device's shared identity record and takes every parameter from the
@@ -2074,7 +2079,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
   bool resolveSceneRecordSlot(geode::GeodeResidentSlot& slot,
                               const geode::GeodeRecordSlab::Slot*& outSlot) {
     outSlot = nullptr;
-    if (slot.lastSceneFrame == currentFrameIndex) {
+    if (device->frameStampClaimed(slot.lastSceneFrame)) {
       outSlot = allocateTempRecordSlot(slot.recordSlab);
       return outSlot != nullptr;
     }
@@ -2858,8 +2863,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
     const bool sceneEligible =
         kEnableSceneBatching && residentSlot != nullptr && encoded != nullptr &&
         !encoder->hasActiveClipState() && !encoder->hasOpenMaskPass() &&
-        residentSlot->lastSceneFrame != currentFrameIndex &&
-        residentSlot->lastResidentFrame != currentFrameIndex && sourceRegistry != nullptr &&
+        !device->frameStampClaimed(residentSlot->lastSceneFrame) &&
+        !device->frameStampClaimed(residentSlot->lastResidentFrame) && sourceRegistry != nullptr &&
         ensureRecordSlot(*residentSlot, *sourceRegistry) &&
         resolveSceneRecordSlot(*residentSlot, recordSlotPtr);
     geode::GeoEncoder::SceneRecordState recordState;

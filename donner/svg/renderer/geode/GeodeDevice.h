@@ -516,6 +516,22 @@ public:
     return oldest;
   }
 
+  /**
+   * True when a resource stamped with `stamp` (a generation minted by
+   * `beginFrameGeneration`) may still be read by a frame that has not
+   * submitted: some open frame is at or before the stamp, so a recorded draw
+   * in that frame can reference the stamped bytes, and every queue write in a
+   * frame lands before every draw in its submit.
+   *
+   * The never-drawn sentinel `~0` used by the resident-slot stamps is
+   * explicitly NOT claimed - a naive `>=` would read a never-drawn slot as
+   * claimed forever, since `oldestOpenFrameGeneration()` is also `~0` when no
+   * frame is open.
+   */
+  [[nodiscard]] bool frameStampClaimed(uint64_t stamp) const {
+    return stamp != ~uint64_t{0} && stamp >= oldestOpenFrameGeneration();
+  }
+
   /// Record one glyph occurrence served from an already-resident outline.
   void countGlyphResidencyHit() const {
     if (counters_) ++counters_->glyphResidencyHits;

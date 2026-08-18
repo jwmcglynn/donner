@@ -2300,15 +2300,19 @@ void GeoEncoder::fillPathResident(GeodeResidentSlot& slot, const EncodedPath& en
     return;
   }
   // A slot's single uniform buffer can only carry one draw's uniform per
-  // frame. If this slot was already drawn resident this frame (markers,
-  // non-adjacent repeated `<use>` at distinct transforms), route the
-  // repeat through the arena path so it gets its own uniform + bind group
-  // instead of clobbering the first draw's transform. The frame counter is
-  // per-renderer, so this same-frame gate only applies when the slot is
-  // already resident ON THIS device; a matching frame index carried over
-  // from a DIFFERENT device that previously rendered this document is not a
-  // same-frame repeat and must re-upload (submitResidentFillDraw re-uploads
-  // on the device-id mismatch) rather than fall back.
+  // frame. If a frame that drew this slot resident is still open - a repeat
+  // earlier in THIS frame (markers, non-adjacent repeated `<use>` at
+  // distinct transforms), or an outer renderer's frame on this device that
+  // recorded a draw against the slot while an offscreen pass renders the
+  // same document - route this draw through the arena path so it gets its
+  // own uniform + bind group instead of clobbering the parameters that
+  // recorded draw reads at submit. Frame stamps are device-scoped
+  // generations, so the claim compares against the device's oldest open
+  // generation; the gate still applies only when the slot is resident ON
+  // THIS device, because a stamp carried over from a DIFFERENT device that
+  // previously rendered this document is not a live claim and must
+  // re-upload (submitResidentFillDraw re-uploads on the device-id
+  // mismatch) rather than fall back.
   // A repeat whose slot was re-uploaded mid-frame (an in-place stroke
   // rebuild clears the device id) is NOT gated here: the re-upload took a
   // fresh slab range with its own uniform region, and a solo resident draw
@@ -2316,7 +2320,8 @@ void GeoEncoder::fillPathResident(GeodeResidentSlot& slot, const EncodedPath& en
   // per-entity record, so the earlier recorded draw of this slot keeps its
   // own parameters at submit time.
   if (slot.owningDeviceId == impl_->device->deviceId() &&
-      (slot.lastResidentFrame == frameId || slot.lastSceneFrame == frameId)) {
+      (impl_->device->frameStampClaimed(slot.lastResidentFrame) ||
+       impl_->device->frameStampClaimed(slot.lastSceneFrame))) {
     submitFillDraw(args);
     return;
   }
@@ -3119,11 +3124,13 @@ void GeoEncoder::fillPathLinearGradientResident(GeodeResidentGradientSlot& slot,
 
   // Residence is only safe (bind group stable, uniform clip flags zero)
   // when no clip mask / clip polygon / mask pass is active, and a slot's
-  // single uniform can only carry one draw per frame. Fall back to the
-  // per-frame arena path in both cases, mirroring `fillPathResident`.
+  // single uniform can only carry one draw per still-open frame (the stamp
+  // claim covers a same-frame repeat and an offscreen pass drawing while an
+  // outer frame on this device has recorded against the slot). Fall back to
+  // the per-frame arena path in both cases, mirroring `fillPathResident`.
   if (impl_->activeClipMaskView || impl_->clipPolygonActive || impl_->maskPassOpen ||
       ((slot.owningDeviceId == impl_->device->deviceId() || slot.owningDeviceId == 0) &&
-       slot.lastResidentFrame == frameId)) {
+       impl_->device->frameStampClaimed(slot.lastResidentFrame))) {
     impl_->submitGradientArenaFallback(u, encoded);
     return;
   }
@@ -3151,7 +3158,7 @@ void GeoEncoder::fillPathRadialGradientResident(GeodeResidentGradientSlot& slot,
 
   if (impl_->activeClipMaskView || impl_->clipPolygonActive || impl_->maskPassOpen ||
       ((slot.owningDeviceId == impl_->device->deviceId() || slot.owningDeviceId == 0) &&
-       slot.lastResidentFrame == frameId)) {
+       impl_->device->frameStampClaimed(slot.lastResidentFrame))) {
     impl_->submitGradientArenaFallback(u, encoded);
     return;
   }
