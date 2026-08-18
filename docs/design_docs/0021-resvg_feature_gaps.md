@@ -30,19 +30,19 @@ be expressed through the normal `Params` path close to the affected tests:
 
 | State | Count | Meaning |
 |---|---:|---|
-| `Params::Skip("reason")` | 126 | Not run. Feature gap or known bug. The bulk of this doc. |
+| `Params::Skip("reason")` | 124 | Not run. Feature gap or known bug. The bulk of this doc. |
 | `Params::RenderOnly("reason")` | 58 | Rendered, **not** compared. Used for UB/deprecated cases where no-crash coverage is still useful. |
 | Commented-out `INSTANTIATE_TEST_SUITE_P` | 1 block | `filters/filter-functions` — whole category dark on CI. See [B2](#b2-filtersfilter-functions-category-disabled-on-ci). |
-| `Params::WithThreshold(…, maxPx)` / local max-pixel budget | 90 | Passes with an explicit threshold or pixel budget. Large non-text budgets remain suspect; see [Masked bugs behind inflated CPU thresholds](#masked-bugs-behind-inflated-cpu-thresholds). |
+| `Params::WithThreshold(…, maxPx)` / local max-pixel budget | 103 | Passes with an explicit threshold or pixel budget. Large non-text budgets remain suspect; see [Masked bugs behind inflated CPU thresholds](#masked-bugs-behind-inflated-cpu-thresholds). |
 | Geode-disabled local `Params` entries | 0 | Geode now runs every active resvg case. Verified analytic edge residuals use exact per-backend goldens instead of disabling the backend or inflating thresholds. |
 
 ## Current totals
 
 | | Count |
 |---|---:|
-| `Params::Skip(...)` | 126 (`grep -o 'Params::Skip('`, 2026-07-12) |
+| `Params::Skip(...)` | 124 (`grep -o 'Params::Skip('`) |
 | `Params::RenderOnly(...)` | 58 (render-must-not-crash, no pixel compare) |
-| `WithThreshold` / max-pixel overrides | 90 (`grep -oE 'WithThreshold\(|WithMaxPixels\('`, 2026-07-12; large non-text budgets remain masked-bug candidates) |
+| `WithThreshold` / max-pixel overrides | 103 call sites: 79 `WithThreshold`, 11 `WithMaxPixels`, and 13 direct `withMaxPixelsDifferent` calls. Large non-text budgets remain masked-bug candidates. |
 | Geode-disabled local `Params` entries | 0 (all active cases now run on Geode) |
 | Commented-out category blocks | 1 (`filters/filter-functions`) |
 
@@ -93,7 +93,7 @@ bottom for completeness.
 | B2 | `filters/filter-functions` disabled (CI "Data corrupted") | ~30 | CI gap — whole category dark |
 | B3 | `structure/image` golden kernel-era mismatch | 13 | Golden refresh + `<image>` upscale-kernel decision (see [B3](#b3-structureimage-golden-kernel-era-mismatch)) |
 | F12 | `transform-origin` on `<textPath>` baseline | **DONE** | Resolved by #868; all category cases are active. |
-| F7 | `paint-order` rendering | **DONE** (8/8) | Shapes and text run on both backends; `on-tspan` uses a project-owned oracle because the vendored PNG breaks cross-span kerning. |
+| F7 | `paint-order` rendering | **DONE** (14/14) | Shapes and text run on both backends; `on-tspan` uses a project-owned oracle because the vendored PNG breaks cross-span kerning. |
 | F9 | `textLength` + `lengthAdjust` stretch/compress | 8 | Feature |
 | F10 | `textPath` SVG2 attributes (`path`/`side`/`method`/`spacing`) | 8 | Feature |
 | F11 | BiDi / RTL text shaping | ~8 | Feature (needs `text-full`) |
@@ -236,7 +236,7 @@ Per-test threshold inflation is not an option.
 
 ### F7: `paint-order` rendering
 
-**Resolved.** All 8 tests in `painting/paint-order/` are active. Shape marker/fill/stroke
+**Resolved.** All 14 tests in `painting/paint-order/` are active. Shape marker/fill/stroke
 ordering and text whole-run fill/stroke ordering run on both backends. The vendored
 `on-tspan` PNG loses kerning across a paint-only span boundary, so Donner uses explicit
 CPU and Geode goldens that preserve continuous shaping while still gating paint order.
@@ -251,8 +251,9 @@ text-full builds and are enabled with `.onlyTextFull()`.
 ### F10: `textPath` SVG2 attributes
 
 **Impact:** 8 in `text/textPath/`: `path` attribute, `side=right`, `method=stretch`,
-`spacing=auto`, `path`+`xlink:href` combinations, `filter` on textPath, plus the
-deferred vertical/`writing-mode=tb` cases.
+`spacing=auto`, `path`+`xlink:href` combinations, `filter` on textPath, plus modern vertical
+writing-mode cases. Obsolete SVG 1.1 writing-mode aliases are classification work, not new feature
+work.
 
 ### F11: BiDi / RTL text shaping
 
@@ -286,7 +287,7 @@ content-placement transform.
 | structure/svg | 2 | nested-svg `overflow` |
 | structure/style | 1 | CSS `@import` / external CSS |
 | structure/symbol | 1 | `transform` on `<symbol>` (SVG2) |
-| painting/image-rendering | 2 | `image-rendering` (pixelated/crisp-edges) |
+| painting/image-rendering | 2 | Both backends select smooth versus nearest sampling, but the CSS value distinctions and the non-integer nearest-grid disagreement still need conformance triage. |
 | masking/clipPath | 6 | clipPath with `<text>` children, `<use>` child, shorthand edge cases |
 | masking/mask | 8 | `mask-type`, `mask-units`, `color-interpolation`, mask-on-self |
 | text/font | 2 | `font` shorthand; canvas-size mismatch (test harness) |
@@ -307,7 +308,7 @@ Donner/tiny-skia bug. Pinned by `RendererTests.DashSeamClosedContourMitersStartC
 `Path::vertices()` now emits the arrival marker-mid at a rounded rect's zero-length-close
 start corner (stacking start + mid + end, matching resvg), while still excluding smooth
 all-curve loops (circle/ellipse).
-| text/writing-mode | ~7 | `writing-mode=tb` with `dx`/`dy`, vertical-lr/rl edge cases, mixed-script (upright CJK + rotated Latin) column geometry (also skips `text/alignment-baseline/hanging-on-vertical`) |
+| text/writing-mode | ~7 | `vertical-lr` / `vertical-rl` edge cases and mixed-script (upright CJK plus rotated Latin) column geometry. Obsolete `tb*` SVG 1.1 values should be classified or mapped to their required compatibility aliases, not implemented as distinct modes. |
 
 ---
 
@@ -352,18 +353,17 @@ bug vs. out-of-scope:
 
 Geode is part of the same resvg test matrix as the CPU variants. It should use the
 same `ImageComparisonParams` thresholds, render-only state, skips, and golden
-overrides as the other renderers. Backend support is recorded through normal
-`Params` feature requirements or local backend disables, never through side-table
-gates.
+overrides as the other renderers. Build capability is recorded through normal
+`Params` feature requirements, never through parity-only backend disables or side-table gates.
 
 Policy:
 
 - Do not add `geodeCategoryGate`, `geodeFilenameGate`, or backend-specific threshold
   side tables.
 - Do not maintain symptom-ledger sets such as `kEdgeFloor` or `kGenuineG2` in the
-  resvg file. If a parity-only exception is truly needed, express it through the
-  local `Params` override for that test, using `disableGeodeParity(...)` with a
-  short reason.
+  resvg file. If an independently verified analytic Geode result differs from the shared reference,
+  attach an exact local `withGeodeGoldenOverride(...)` and current reason to that case. Never disable
+  the backend or widen a Geode-only threshold to absorb the difference.
 - Category-wide defaults are acceptable only when every file in the category has
   the same reason. `filters/enable-background` is the model: one category default
   `Params::RenderOnly(...)`, not a per-file list. Category feature requirements

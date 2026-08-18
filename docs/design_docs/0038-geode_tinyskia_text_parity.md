@@ -1,15 +1,10 @@
 # 0038 — Geode ↔ tiny-skia text parity: developer reference
 
-**Status:** Developer reference. Text parity between the Geode and tiny-skia
-backends is **complete** — 0 structural divergences remain (§4 catalog, resolved). Since
-this doc was written, [0041](0041-geode_analytical_aa.md)'s analytic dual-ray coverage
-rewrite landed and retired the `GeodeTinyParity` (geode-vs-tiny) comparison mode for the
-resvg corpus entirely — each backend now gates against the shared reference image
-directly (`GeodeGolden`/`TinyGolden`), not against each other. §3 below still describes
-the now-retired `GeodeTinyParity` mode and `disableGeodeParity(reason)` mechanism as
-live; treat that section as historical context for how text parity was originally
-verified, not the current gating mechanism. This doc describes the shared text layer
-both backends consume, which is unaffected and still current.
+**Status:** Developer reference. Text structure is shared by Geode and tiny-skia, with no known
+backend-specific layout divergence. The resvg matrix runs two active modes in Geode builds:
+`TinyGolden` and `GeodeGolden`. Each backend gates independently against its reference golden;
+direct Geode-to-tiny pixel comparison is not an active mode because their analytic and
+finite-sample coverage can legitimately differ.
 
 **Related:** [0017 §Phase 4b](0017-geode_renderer.md#phase-4b-in-process-backend-matrix--geode-vs-tiny-skia-parity-comparison),
 [0041 anti-aliasing](0041-geode_analytical_aa.md),
@@ -69,47 +64,36 @@ Each backend's `drawText` loops the shared placement/bounds output and rasterize
 - **tiny-skia** (`RendererTinySkia::drawText`): the same logical steps on the
   tiny-skia rasterizer.
 
-**Invariant:** tiny-skia text output is the parity reference. Any change to the
-shared layer must keep tiny-skia byte-identical (verified against
-`:resvg_test_suite` text tests + `:renderer_tests`); Geode converges to it.
+**Invariant:** both backends consume the same placed glyph and decoration geometry. Changes to the
+shared layer are verified by `:text_engine_tests` and `:text_span_positioning_tests`; rendered
+output is independently gated by the `TinyGolden` and `GeodeGolden` modes of
+`:resvg_test_suite` plus the focused renderer golden targets.
 
 ---
 
 ## 2. Parity status
 
-**0 structural text divergences** (catalog in §4). The remaining geode↔tiny text diff is
-the accepted-by-design sub-pixel coverage floor — geode renders the correct
-glyphs/positions/colors; the residual is the thin edge band + the resvg harness 0.5px
-crosshair overlay (see [0041 §2](0041-geode_analytical_aa.md), proven sample-independent).
-No text test needs a parity exception: the residual stays within each test's normal
-`ImageComparisonParams` budget.
+**0 known structural text divergences** (catalog in section 4). Geode analytic coverage and
+tiny-skia finite-sample coverage can differ at glyph edges, so pixel identity between the backends
+is not a correctness requirement. Each backend instead has an exact or thresholded reference
+oracle close to the affected resvg case.
 
 ---
 
 ## 3. How parity is expressed (for text)
 
-Parity runs in the **geode-enabled build** of `//donner/svg/renderer/tests:resvg_test_suite`
-(it rides the `*_geode` wrapper under `bazel test //...`). Each test runs up to three
-comparison modes; text is validated on the `GeodeTinyParity` mode. See
-[0017 §Phase 4b](0017-geode_renderer.md#phase-4b-in-process-backend-matrix--geode-vs-tiny-skia-parity-comparison)
-for the full mode matrix.
+The Geode-enabled build of `//donner/svg/renderer/tests:resvg_test_suite` runs each active case in
+two modes:
 
-**Policy (text and non-text alike):** `GeodeTinyParity` compares geode↔tiny-skia at
-each test's **own** `ImageComparisonParams` threshold and max-pixel budget — the same
-budget its golden comparison uses — with pixelmatch `includeAA=false`. There is no
-separate geode threshold table; a parity diff over the test's budget fails, never
-absorbed by a larger budget (that would be masking). See
-[0021 §Geode / Resvg Override Policy](0021-resvg_feature_gaps.md#geode--resvg-override-policy).
+- `TinyGolden`: tiny-skia output against the shared or project-owned TinySkia golden.
+- `GeodeGolden`: Geode output against the shared golden or an exact Geode golden when independently
+  verified analytic coverage differs.
 
-**To add a text test:** add it to the suite as usual. If it renders correctly but its
-geode↔tiny diff exceeds the test's budget (the accepted edge floor), attach a
-`disableGeodeParity("<reason, e.g. 0039 edge floor>")` to that test's `Params`. If it
-renders *wrong*, that's a real bug — fix the shared layer or the backend consumer,
-don't add an exception. The standing goal (per 0021) is *fewer* exceptions over time.
-
-> The parity oracle is tiny-skia, so a tiny-skia text regression could mask a geode
-> one. This is mitigated because the `TinyGolden` mode gates tiny-skia against the
-> resvg ground truth in the same run.
+Both modes use the case's local `ImageComparisonParams`. There is no category side table, backend
+disable list, or direct Geode-to-tiny comparison mode. A legitimate backend-specific reference is
+attached to that case with `withGeodeGoldenOverride` and a current reason. A structural or semantic
+error is fixed in the shared layer or backend consumer; it is not absorbed by a wider threshold.
+See [0021](0021-resvg_feature_gaps.md#geode--resvg-override-policy) for the active policy.
 
 ---
 

@@ -237,10 +237,13 @@ which is a convenience wrapper around it. If more than one thread touches the do
 \ref faq-threads first. See also \ref DonnerAPI for the DOM manipulation surface.
 
 ## What SVG features does Donner not support, and what happens if I use them? {#faq-unsupported}
-Donner implements SVG 2, so the features it omits are mostly things SVG 2 itself removed or
-deprecated, plus a handful of not-yet-implemented corners. The general rule for an unsupported
+Donner implements a broad SVG 2 static subset with documented gaps in advanced text, interaction
+properties, rendering hints, clipping, masking, image sampling, and affine non-scaling strokes. It
+also intentionally omits features SVG 2 removed or deprecated. The general rule for an unsupported
 feature is that it is ignored quietly: the document still parses, and the affected element either
-renders without that feature or does not render at all. You rarely get a hard error.
+renders without that feature or does not render at all. You rarely get a hard error. See the
+[README feature matrix](../README.md#presentation-attributes-and-css-properties) for the current
+support summary.
 
 Removed or deprecated in SVG 2, and intentionally not implemented:
 
@@ -252,13 +255,21 @@ Removed or deprecated in SVG 2, and intentionally not implemented:
   shape.
 - **`enable-background`, `BackgroundImage`, `BackgroundAlpha`:** removed filter inputs; they resolve
   to transparent black. See \ref faq-filter-chrome.
-- **`xml:base`, `xml:lang`:** not implemented (`xml:space` is honored for `<text>` whitespace).
+- **`xml:base`:** removed and not implemented (`xml:space` is honored for `<text>` whitespace).
+
+Other current-feature gap:
+
+- **`xml:lang`:** retained by SVG 2 but not interpreted by Donner for text language or font
+  selection. This is separate from the implemented `systemLanguage` conditional-processing
+  attribute.
 
 Two behaviors worth singling out because they look like bugs:
 
-- **`vector-effect="non-scaling-stroke"` is accepted but does nothing.** The attribute name is
-  recognized so it does not raise a parse error, but no code consumes it, so it is a silent no-op.
-  See \ref faq-stroke-scale.
+- **`vector-effect="non-scaling-stroke"` is supported, with a non-uniform-scale limitation.** It
+  keeps stroke width and dash lengths constant under uniform scaling and rotation. A non-uniform
+  transform such as `scale(2, 1)` currently uses the transform's scalar geometric-mean scale, so
+  it cannot keep the stroke at one constant device width in every direction. See
+  \ref faq-stroke-scale.
 - **An unknown element becomes an `SVGUnknownElement`.** It parses fine and lives in the DOM, but it
   has no geometry and renders nothing. See \ref faq-not-rendered.
 
@@ -374,16 +385,17 @@ scale the coordinate system (a large `viewBox` mapped into a small viewport, or 
 stroke scales right along with the geometry. A shape scaled 2x gets a stroke twice as thick. This is
 correct, not a Donner quirk.
 
-The wrinkle is that the usual escape hatch does not work here.
-`vector-effect="non-scaling-stroke"`, which browsers use to hold a stroke at constant device width
-under scaling, is accepted by Donner's parser but not implemented: it is a silent no-op (see
-\ref faq-unsupported). So there is currently no attribute you can set to opt a stroke out of scaling.
+Use `vector-effect="non-scaling-stroke"` to hold the stroke width and dash pattern constant under
+uniform scaling and rotation. Donner applies the property in both renderer backends and includes
+the adjusted stroke width in viewport culling, so a downscaled non-scaling stroke is not clipped
+merely because its authored path bounds are small.
 
-If you need a stroke that stays visually constant, you have to compensate yourself: either
-pre-divide the `stroke-width` by the scale factor you are applying, or apply the scale to the
-geometry's coordinates rather than through a `transform` on a stroked ancestor, so the stroke lives
-in an unscaled coordinate space. It is less convenient than `non-scaling-stroke`, but it is
-predictable. See \ref xml_path and \ref faq-path-api for setting geometry.
+The current implementation compensates before stroking with the scalar geometric-mean scale of the
+element's transform. That is exact for uniform scale and rotation, but a non-uniform transform such
+as `scale(2, 1)` cannot be represented by one scalar stroke width. Under such transforms the stroke
+is only an approximation of a constant device-space width. If that distinction matters, apply the
+non-uniform scale to the geometry's coordinates and leave the stroked coordinate space unscaled.
+See \ref xml_path and \ref faq-path-api for setting geometry.
 
 <div class="section_buttons">
 

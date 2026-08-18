@@ -55,6 +55,31 @@ this functionality.
 
 **Donner behavior:** Not implemented.
 
+## Legacy Glyph Orientation Properties
+
+**SVG 1.1 behavior:** `glyph-orientation-horizontal` and `glyph-orientation-vertical` selected
+per-glyph rotation in horizontal and vertical text.
+
+**SVG 2 status:** `glyph-orientation-horizontal` was removed. `glyph-orientation-vertical` was
+obsoleted and replaced by `text-orientation`; SVG 2 retains only a narrow compatibility alias for
+`auto`, `0`, and `90` values.
+
+**Donner behavior:** The legacy property names are recognized but do not have independent layout
+behavior. The narrow `glyph-orientation-vertical` compatibility alias is not yet applied. Modern
+vertical text should use `writing-mode: vertical-rl` or `vertical-lr` together with
+`text-orientation`.
+
+## Obsolete SVG 1.1 Writing-Mode Values
+
+**SVG 1.1 behavior:** Values such as `lr`, `lr-tb`, `rl`, `rl-tb`, `tb`, `tb-rl`, and `tb-lr`
+selected horizontal or vertical text flow.
+
+**SVG 2 status:** The distinct values are obsolete. CSS Writing Modes maps them to
+`horizontal-tb`, `vertical-rl`, or `vertical-lr` for compatibility.
+
+**Donner behavior:** The parser immediately maps the obsolete spellings to their modern computed
+values. There is no separate legacy layout path.
+
 ## The Clip Property (CSS 2 Clip Rect)
 
 **SVG 1.1 behavior:** `clip: rect(top, right, bottom, left)` on `<svg>`, `<symbol>`, `<image>`,
@@ -65,10 +90,11 @@ this functionality.
 **Donner behavior:** Not implemented. Use `clip-path` with `clipPathUnits="userSpaceOnUse"` and
 an `inset()` shape instead.
 
-## xml:base, xml:lang, xml:space
+## XML Language and Whitespace Attributes
 
-**SVG 2 status:** `xml:base` removed. `xml:lang` replaced by `lang`. `xml:space` replaced by
-CSS `white-space`.
+**SVG 2 status:** `xml:base` was removed. `xml:lang` remains a current XML language attribute, and
+SVG 2 also defines `lang`. `xml:space` was replaced by CSS `white-space`.
 
 **Donner behavior:** `xml:space` is parsed for `<text>` whitespace handling. `xml:base` and
-`xml:lang` are not implemented.
+`xml:lang` are not implemented. The implemented `systemLanguage` conditional-processing attribute
+is a separate feature and does not supply text language or font selection.

@@ -1470,45 +1470,30 @@ cleanup.
 
 ### Phase 4b: In-process backend matrix + geode-vs-tiny-skia parity comparison
 
-**Status: ✅ complete.** Text + filter parity between Geode and tiny-skia is reached; the
-only remaining geode↔tiny diff is the accepted-by-design sub-pixel coverage floor. For
-detail, see the three developer references:
+**Status: complete.** Text and filter structure is shared across Geode and tiny-skia. For detail,
+see the three developer references:
 [0038 text parity](0038-geode_tinyskia_text_parity.md),
 [0041 anti-aliasing & coverage](0041-geode_analytical_aa.md),
 [0042 Slug implementation](0042-geode_slug_conformance.md).
 
-**What it is.** Both backends link into one binary (the geode-enabled build); each resvg
-test runs up to three comparison modes via a `ComparisonMode` parameter dimension:
+**Current matrix.** Both backends link into one Geode-enabled test binary. Each active resvg case
+runs in two comparison modes:
 
 | Mode | Compares | Notes |
 |---|---|---|
 | `TinyGolden` | tiny-skia → resvg golden | ground-truth oracle |
 | `GeodeGolden` | geode → resvg golden | geode against the shared golden |
-| `GeodeTinyParity` | geode → tiny-skia, golden ignored | the geode↔tiny metric for text/filters |
 
-tiny-skia is the validated oracle (passes all text tests vs golden at strict budgets), so
-geode↔tiny-skia + tiny-skia↔golden transitively validates Geode without the golden's
-~1313 px baseline offset. `GeodeTinyParity` compares with pixelmatch `includeAA=false` at
-**each test's own `ImageComparisonParams` threshold and max-pixel budget** — the same
-budget its golden comparison uses. Geode runs the same params as the CPU variants; a
-parity-only exception is a per-test `disableGeodeParity(reason)`, and `Skip()` /
-`disableBackend(Geode)` are honored. The combined matrix lives only in the geode build
-(rides the `*_geode` wrapper under `bazel test //...`); the pure-CPU `resvg_test_suite`
-runs the same params without the parity mode. See
-[0021 §Geode / Resvg Override Policy](0021-resvg_feature_gaps.md#geode--resvg-override-policy)
-for the override policy.
+Both modes use the case-local `ImageComparisonParams`. Geode's analytic coverage can legitimately
+differ from tiny-skia's finite-sample coverage, so direct backend pixel identity is not an active
+mode. Independently verified differences use a local exact Geode golden and reason. Structural or
+semantic differences remain bugs in the shared layer or backend consumer and are never handled by
+category gates or widened backend-only thresholds. See
+[0021](0021-resvg_feature_gaps.md#geode--resvg-override-policy) for the override policy.
 
-**Coverage.** All structural text divergences and all 37 filter divergences are resolved.
-The residual geode↔tiny diff is the accepted edge floor: geode renders correctly, and the
-diff is the sub-pixel coverage delta vs tiny-skia's scan-converter + the resvg crosshair —
-proven sample-independent (see [0041 §2](0041-geode_analytical_aa.md)). A separate set of
-~137 non-text tests shows a uniform sub-perceptual premultiply/color-space offset that
-stays within their `0.02` budget; tracked in
-[0021 §Geode / Resvg Override Policy](0021-resvg_feature_gaps.md#geode--resvg-override-policy).
-
-**Risk:** parity uses tiny-skia as the geode oracle, so a tiny-skia regression could mask
-a geode one — mitigated because `TinyGolden` checks tiny-skia against ground truth in the
-same run.
+**Coverage.** All known structural text and filter divergences are resolved. Shared geometry and
+filter graph tests enforce semantic parity, while each renderer's reference comparison enforces its
+raster output.
 
 **Out of scope (separate items):** color-emoji / bitmap glyphs ([0021 §Geode / Resvg Override Policy](0021-resvg_feature_gaps.md#geode--resvg-override-policy),
 `drawText` skips CBDT bitmap glyphs); the CJK `xml:lang` font-fallback gap
@@ -1527,10 +1512,10 @@ transform-order divergence (no current test triggers it).
 
 ### Phase 5b: Full Test-Suite Parity with tiny-skia
 
-✅ Complete. The renderer golden suites and the resvg suite run under the `*_geode`
-variant against the shared tiny-skia-authored goldens, plus the `GeodeTinyParity`
-geode↔tiny check. Per-test exceptions live in the normal `ImageComparisonParams` — no
-per-backend golden files, no backend-specific threshold tables — see
+Complete. The renderer golden suites and the resvg suite run under the `*_geode` variant in
+`TinyGolden` and `GeodeGolden` modes. Per-test exceptions live in the normal
+`ImageComparisonParams`; independently verified analytic differences may use an exact local Geode
+golden, but there are no backend category gates or backend-specific threshold tables. See
 [§Phase 4b](#phase-4b-in-process-backend-matrix--geode-vs-tiny-skia-parity-comparison)
 and [0021 §Geode / Resvg Override Policy](0021-resvg_feature_gaps.md#geode--resvg-override-policy).
 A 30-second per-test SIGALRM watchdog (`//donner/base:gtest_timeout_main`) keeps a

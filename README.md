@@ -78,10 +78,11 @@ Elements outside this list (for example `<foreignObject>`, `<tref>`, SVG 1.1 `<f
 
 | Support | Properties |
 | :------ | :--------- |
-| Honored | `fill` / `fill-rule` / `fill-opacity`, `stroke` and all `stroke-*`, `opacity`, `color`, `display`, `visibility`, `overflow`, `transform` / `transform-origin`, `clip-path` / `clip-rule`, `mask`, `filter`, `color-interpolation-filters`, `marker-start` / `-mid` / `-end`, `mix-blend-mode` (all 16 modes), `isolation`, `image-rendering` (sampling), `vector-effect` (only `non-scaling-stroke`), and the text properties (`font-*`, `text-anchor`, `text-decoration`, baseline family, `letter-spacing`, `word-spacing`, `writing-mode`). |
-| Partial | `paint-order` (honored by the CPU backend; not yet by the GPU backend). |
-| Parsed but not painted | `pointer-events` and `cursor` (used for hit-testing / interaction, not drawing); the rendering hints `color-rendering`, `shape-rendering`, `text-rendering`, `color-interpolation`. |
-| Not implemented | `direction` / `unicode-bidi` (bidirectional text), `image-rendering: pixelated` / `crisp-edges`, `glyph-orientation-*`, `font-size-adjust`, CSS2 `clip: rect(...)`. |
+| Honored | `fill` / `fill-rule` / `fill-opacity`, `stroke` and all `stroke-*`, `opacity`, `color`, `display`, `visibility`, `overflow`, `transform` / `transform-origin`, `clip-path` / `clip-rule`, `mask`, `filter`, `color-interpolation-filters`, `marker-start` / `-mid` / `-end`, `mix-blend-mode` (all 16 modes), `isolation`, `paint-order`, and the text properties (`font-*`, `text-anchor`, `text-decoration`, baseline family, `letter-spacing`, `word-spacing`, `writing-mode`). |
+| Partial | `image-rendering` (smooth versus nearest sampling is honored for `<image>` and `<feImage>`, but `pixelated`, `crisp-edges`, and `optimizeSpeed` currently share one nearest-neighbor policy and two non-integer-scale conformance cases remain unresolved); `vector-effect` (`non-scaling-stroke` is exact for uniform scale and rotation, while non-uniform transforms use a scalar approximation and the other at-risk SVG 2 values parse as typed values but render with `none` behavior); `pointer-events` (used by hit-testing, with text, image, clip-path, and `auto` edge cases still incomplete). |
+| Typed but not operational | `cursor` has inherited typed storage, but declaration parsing, complete CSS UI grammar, resolved hit-result consumption, and host integration are not implemented. |
+| Recognized but not implemented | The rendering hints `color-rendering`, `shape-rendering`, `text-rendering`, and `color-interpolation` are retained as raw properties but do not yet have typed cascade or runtime behavior. |
+| Not implemented | `direction` / `unicode-bidi` (bidirectional text), `text-orientation`, and `font-size-adjust`. SVG 1.1-only features such as `<tref>`, `glyph-orientation-horizontal`, and CSS2 `clip: rect(...)` are intentionally unsupported; see [unsupported SVG 1.x features](docs/unsupported_svg1_features.md). |
 
 ### Text features
 
@@ -90,16 +91,17 @@ positioning, `text-anchor`, `textPath` along a path, and a full font stack (Free
 WOFF2) or a compact built-in stack. Known gaps, tracked against the resvg suite: bidirectional
 text and `direction` / `unicode-bidi`, `textLength` / `lengthAdjust`, several SVG 2 `<textPath>`
 features (`side`, `method=stretch`, `spacing=auto`, the `path` attribute), full SVG 2
-`text-decoration` (independent line, style, and color), `<tref>`, and some vertical
-`writing-mode: tb` cases.
+`text-decoration` (independent line, style, and color), and some `vertical-rl` / `vertical-lr`
+and `text-orientation` cases. `<tref>` is intentionally unsupported because SVG 2 removed it.
 
 ### Renderers
 
 Donner ships two backends behind one renderer interface. The tiny_skia CPU backend is the default
 and the most complete; the Geode WebGPU backend drives the editor canvas and is at broad parity,
-with a few narrower gaps (`paint-order`, some `0 N` dash caps, nested path-clip intersection) where
-the CPU backend currently passes conformance cases the GPU backend does not. Both share the same
-DOM, layout, paint resolution, markers, and filter graph.
+with a few narrower gaps (some `0 N` dash caps and nested path-clip intersection) where the CPU
+backend currently passes conformance cases the GPU backend does not. Both backends honor
+`paint-order` for shapes, markers, text, and tspans, and share the same DOM, layout, paint
+resolution, markers, and filter graph.
 
 ## CLI Tool: donner-svg
 

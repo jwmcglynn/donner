@@ -430,58 +430,6 @@ std::string escapeFilename(std::string filename) {
   return filename;
 }
 
-/// Runs the GeodeTinyParity comparison using the same threshold budget as the
-/// test's normal golden comparison.
-void runGeodeTinyParityComparison(const RendererBitmap& actual, const RendererBitmap& reference,
-                                  const std::filesystem::path& svgFilename,
-                                  const ImageComparisonParams& params) {
-  // Both backends rendered the same document at the same canvas size, so the
-  // dimensions/stride should match. If they don't, that's itself a divergence.
-  if (actual.dimensions != reference.dimensions || actual.rowBytes != reference.rowBytes ||
-      actual.pixels.size() != reference.pixels.size()) {
-    std::cout << "PARITY|" << svgFilename.string() << "|SIZEMISMATCH geode=" << actual.dimensions.x
-              << "x" << actual.dimensions.y << " tiny=" << reference.dimensions.x << "x"
-              << reference.dimensions.y << "\n";
-    ADD_FAILURE() << "GeodeTinyParity size mismatch for " << svgFilename.string();
-    return;
-  }
-
-  const int width = actual.dimensions.x;
-  const int height = actual.dimensions.y;
-  const size_t strideInPixels = actual.rowBytes / 4u;
-
-  std::vector<uint8_t> diffImage(strideInPixels * static_cast<size_t>(height) * 4u);
-  pixelmatch::Options options;
-  options.threshold = params.threshold;
-  options.includeAA = params.includeAntiAliasing;
-  const int mismatchedPixels = pixelmatch::pixelmatch(reference.pixels, actual.pixels, diffImage,
-                                                      width, height, strideInPixels, options);
-
-  std::cout << "PARITY|" << svgFilename.string() << "|" << mismatchedPixels << "\n";
-
-  const int budget = params.effectiveMaxMismatchedPixels(ComparisonMode::GeodeTinyParity);
-
-  if (mismatchedPixels > budget) {
-    std::cout << "FAIL (" << mismatchedPixels << " geode-vs-tiny pixels differ, with " << budget
-              << " max)\n";
-    const std::filesystem::path outDir = parityOutputDir();
-    const std::string flat = escapeFilename(svgFilename.string());
-    RendererImageIO::writeRgbaPixelsToPngFile(
-        (outDir / ("parity_geode_" + flat + ".png")).string().c_str(), actual.pixels, width, height,
-        strideInPixels);
-    RendererImageIO::writeRgbaPixelsToPngFile(
-        (outDir / ("parity_tiny_" + flat + ".png")).string().c_str(), reference.pixels, width,
-        height, strideInPixels);
-    RendererImageIO::writeRgbaPixelsToPngFile(
-        (outDir / ("parity_diff_" + flat + ".png")).string().c_str(), diffImage, width, height,
-        strideInPixels);
-    ADD_FAILURE() << mismatchedPixels << " geode-vs-tiny-skia pixels differ (budget " << budget
-                  << ") for " << svgFilename.string();
-  } else {
-    std::cout << "PARITY-PASS (" << mismatchedPixels << " / " << budget << ")\n";
-  }
-}
-
 bool isBackendAllowed(RendererBackend backend, const ImageComparisonParams& params) {
   switch (backend) {
     case RendererBackend::TinySkia: return params.allowTinySkia;
@@ -606,7 +554,6 @@ std::string_view ComparisonModeName(ComparisonMode mode) {
   switch (mode) {
     case ComparisonMode::TinyGolden: return "TinyGolden";
     case ComparisonMode::GeodeGolden: return "GeodeGolden";
-    case ComparisonMode::GeodeTinyParity: return "GeodeTinyParity";
   }
   return "Unknown";
 }
@@ -843,13 +790,6 @@ void ImageComparisonTestFixture::renderAndCompare(SVGDocument& document,
     GTEST_SKIP() << *skipReason;
   }
 
-  if (mode == ComparisonMode::GeodeTinyParity) {
-    if (params.disableGeodeTinyParity) {
-      GTEST_SKIP() << "GeodeTinyParity disabled"
-                   << (params.reason.empty() ? "" : (": " + std::string(params.reason)));
-    }
-  }
-
   // Goldens are shared across backends. Per-test exceptions belong in
   // ImageComparisonParams so every comparison mode sees the same policy.
   // Exception: a verified-correct Geode output that differs from the shared
@@ -914,15 +854,6 @@ void ImageComparisonTestFixture::renderAndCompare(SVGDocument& document,
       std::cout << ": " << params.reason;
     }
     std::cout << "\n";
-    return;
-  }
-
-  // GeodeTinyParity compares the geode render against an in-process tiny-skia
-  // render and uses the same Params threshold/max-pixel budget as golden tests.
-  if (mode == ComparisonMode::GeodeTinyParity) {
-    const RendererBitmap reference =
-        NormalizeSnapshot(RenderDocumentWithBackend(document, RendererBackend::TinySkia));
-    runGeodeTinyParityComparison(snapshot, reference, svgFilename, params);
     return;
   }
 

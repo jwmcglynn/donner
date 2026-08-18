@@ -1,0 +1,28 @@
+load("@rules_python//python:defs.bzl", "py_binary", "py_test")
+
+py_binary(
+    name = "parity_report",
+    srcs = ["parity_report.py"],
+    data = [
+        "//donner/svg/renderer/tests:resvg_test_registration_source",
+        "//third_party/resvg-test-suite:tests",
+    ],
+    imports = ["."],
+    main = "parity_report.py",
+    visibility = ["//visibility:public"],
+)
+
+py_test(
+    name = "parity_report_tests",
+    size = "small",
+    srcs = [
+        "parity_report.py",
+        "parity_report_tests.py",
+    ],
+    data = [
+        "//donner/svg/renderer/tests:resvg_test_registration_source",
+        "//third_party/resvg-test-suite:tests",
+    ],
+    imports = ["."],
+    main = "parity_report_tests.py",
+)

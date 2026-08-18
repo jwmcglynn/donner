@@ -29,8 +29,6 @@ enum class ComparisonMode : uint8_t {
   TinyGolden,
   /// geode render vs the committed golden (today's geode behavior; geode build).
   GeodeGolden,
-  /// geode render vs an in-process tiny-skia render, golden ignored.
-  GeodeTinyParity,
 };
 
 /**
@@ -55,7 +53,7 @@ std::string_view ComparisonModeName(ComparisonMode mode);
  * @brief The comparison modes active for the current build.
  *
  * Pure-CPU build: `{ TinyGolden }`. Geode-enabled build:
- * `{ TinyGolden, GeodeGolden, GeodeTinyParity }`.
+ * `{ TinyGolden, GeodeGolden }`. The former `GeodeTinyParity` mode is retired.
  *
  * @return The active modes, in run order.
  */
@@ -132,9 +130,6 @@ struct ImageComparisonParams {
   /// Surfaced in test skip messages and failure output - prefer this over trailing
   /// `// comments` so the reason is discoverable from test logs.
   std::string_view reason;
-
-  /// If true, skip only the `GeodeTinyParity` instance for this test.
-  bool disableGeodeTinyParity = false;
 
   /**
    * @brief Creates parameters to skip a test.
@@ -328,30 +323,13 @@ struct ImageComparisonParams {
   }
 
   /**
-   * @brief Sets the max mismatched pixels for Geode comparison modes.
+   * @brief Sets the max mismatched pixels for the Geode comparison mode.
    *
    * @param pixels The max mismatched pixels when rendering with Geode.
    * @return Reference to this ImageComparisonParams object.
    */
   ImageComparisonParams& withGeodeMaxPixelsDifferent(int pixels) {
     geodeMaxMismatchedPixels = pixels;
-    return *this;
-  }
-
-  /**
-   * @brief Skips only the `GeodeTinyParity` instance for this test.
-   *
-   * Use sparingly for a known geode-vs-tiny divergence that should not disable
-   * the normal golden comparisons.
-   *
-   * @param reason Short tracking reason.
-   * @return Reference to this ImageComparisonParams object.
-   */
-  ImageComparisonParams& disableGeodeParity(std::string_view reason = std::string_view()) {
-    disableGeodeTinyParity = true;
-    if (!reason.empty()) {
-      this->reason = reason;
-    }
     return *this;
   }
 
