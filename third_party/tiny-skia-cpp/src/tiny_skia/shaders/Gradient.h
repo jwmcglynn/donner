@@ -61,9 +61,7 @@ class Gradient {
 
   /// Returns the bytes the stop list occupies, for a caller that bounds how much gradient
   /// state it keeps.
-  [[nodiscard]] std::size_t stopsByteSize() const {
-    return stops_.size() * sizeof(GradientStop);
-  }
+  [[nodiscard]] std::size_t stopsByteSize() const { return stops_.size() * sizeof(GradientStop); }
 
   /// Two gradients compare equal when every value the pipeline stages read from them is equal,
   /// which is what lets a caller decide that a shader it built earlier still describes the

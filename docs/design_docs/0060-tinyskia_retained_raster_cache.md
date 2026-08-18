@@ -409,8 +409,8 @@ the retained set (for example, retaining an isolated layer's composed pixmap) is
 - **Cost model**: a run is 16 bytes packed. A shape's run count is approximately (rows x
   interior runs per row) + (antialiased edge pixels), and the analytic scan converter emits long
   interior runs, so the count runs well below one per covered pixel: a 512x512 antialiased path
-  measures 1650 runs, 26.4 KB. Measured on real documents, the tiger holds 3.21 MiB across 305
-  retained passes at 900x900 and the lion 501 KiB across 132.
+  measures 1650 runs, 26.4 KB. Measured on real documents, the tiger holds 3.41 MiB across 305
+  retained passes at 900x900 and the lion 612 KiB across 132.
 - **Budget and eviction**: a per-document retained-memory budget, 32 MiB by default and settable
   on the renderer. It charges the whole of an entry, not only its coverage: the runs plus their
   kept capacity, the two paints beside them, and the entry itself. When the budget is exceeded,
@@ -571,56 +571,59 @@ claimed invariants trace to CI.
 
 ## Performance
 
-### Measured, Milestone 2 and 3
+### Measured
 
 `engine_compare_bench --backend=tiny-skia`, `-c opt`, aarch64, one core, medians of three
 interleaved passes of five timed iterations each, retention off versus on in the same binary.
 `pixels_hash` was identical between the two modes in every run.
 
-| Scene (size)               | cold base | cold retained | steady base | steady retained | steady speedup |
-| -------------------------- | --------: | ------------: | ----------: | --------------: | -------------: |
-| Ghostscript_Tiger (900x900)|  27.47 ms |      28.19 ms |    22.03 ms |         9.27 ms |          2.38x |
-| lion (400x400)             |   3.64 ms |       4.11 ms |     3.00 ms |         1.65 ms |          1.82x |
-| Edzample_Anim3             |   6.86 ms |       7.07 ms |     5.61 ms |         5.22 ms |          1.07x |
-| z0rly_test6                |   5.11 ms |       5.19 ms |     0.56 ms |         0.53 ms |          1.07x |
+| Scene (size)                | cold base | cold retained | steady base | steady retained | steady speedup |
+| --------------------------- | --------: | ------------: | ----------: | --------------: | -------------: |
+| Ghostscript_Tiger (900x900) |  27.09 ms |      27.83 ms |    22.10 ms |         8.85 ms |          2.50x |
+| lion (400x400)              |   3.55 ms |       3.91 ms |     2.81 ms |         1.57 ms |          1.79x |
+| Edzample_Anim3              |   6.76 ms |       6.91 ms |     5.54 ms |         5.16 ms |          1.07x |
+| z0rly_test6                 |   4.98 ms |       5.02 ms |     0.54 ms |         0.52 ms |          1.04x |
 
-Capture costs 2.6 percent of the cold frame on Tiger and 12.9 percent on lion, which is the
-cold-frame budget this document set and, on lion, is at the edge of it.
+Capture costs 2.7 percent of the cold frame on the tiger and 10.2 percent on the lion, which is
+the cold-frame budget this document set and, on the lion, is at the edge of it.
 
 A frame that follows an edit, timed as a third phase (`--mutate`):
 
 | Scene             | drag base | drag retained | pan base | pan retained |
 | ----------------- | --------: | ------------: | -------: | -----------: |
-| Ghostscript_Tiger |  22.57 ms |      10.20 ms | 23.51 ms |     23.23 ms |
-| lion              |   3.40 ms |       2.02 ms |  3.13 ms |      3.29 ms |
-| Edzample_Anim3    |   6.01 ms |       5.44 ms |  5.99 ms |      5.45 ms |
-| z0rly_test6       |   4.56 ms |       4.45 ms |  4.59 ms |      4.47 ms |
+| Ghostscript_Tiger |  22.34 ms |       9.45 ms | 22.37 ms |     24.16 ms |
+| lion              |   3.29 ms |       1.91 ms |  2.96 ms |      3.17 ms |
+| Edzample_Anim3    |   5.90 ms |       5.38 ms |  5.91 ms |      5.37 ms |
+| z0rly_test6       |   4.51 ms |       4.37 ms |  4.46 ms |      4.43 ms |
 
-`drag` moves one shape, so everything else still replays; `pan` moves the outermost group, so
-every device transform changes and nothing replays. `pan` is the worst case retention can be
-put in, and it costs at most 5 percent (lion) against not retaining at all.
+`drag` moves one shape, so everything else still replays and the frame is close to a steady one.
+`pan` moves the outermost group, so every device transform changes, every key misses, and every
+shape is captured again: that is the worst case retention can be put in, and it costs 8 percent
+on the tiger and 7 percent on the lion against not retaining at all. The cost is capture on top
+of a full rasterization, plus the comparison that decided nothing could be reused.
 
-Retained memory on a settled frame, from the benchmark's `RETAINED` line:
+Retained memory on a settled frame, from the benchmark's `RETAINED` line, which reports what the
+budget charges (coverage, the paints beside it, and the entries themselves):
 
 | Scene             | retained passes | retained bytes |
 | ----------------- | --------------: | -------------: |
-| Ghostscript_Tiger |             305 |        3.21 MiB |
-| lion              |             132 |         501 KiB |
-| Edzample_Anim3    |              49 |         124 KiB |
-| z0rly_test6       |              58 |         7.2 KiB |
+| Ghostscript_Tiger |             305 |        3.41 MiB |
+| lion              |             132 |         612 KiB |
+| Edzample_Anim3    |              49 |         166 KiB |
+| z0rly_test6       |              58 |          46 KiB |
 
-The tiger's 3.21 MiB at 900x900 matches this document's "order of a few MiB" estimate, and
-every scene sits far under the 32 MiB default budget.
+The tiger's 3.41 MiB at 900x900 matches this document's "order of a few MiB" estimate, and every
+scene sits far under the 32 MiB default budget.
 
-**The 10-20x target was not met, and the reason is structural rather than incidental.** Tiger's
-steady frame went from 22.0 ms to 9.3 ms. What retention removes is coverage generation; what
-remains is blending that coverage into the surface, which the design's own Milestone 1
-measurement predicted (replaying a 512x512 antialiased fill cost 0.79x the cold fill, because a
-single large path spends most of its time blending). The projection of 2-4 ms assumed the
-opaque-interior straight stores that Milestone 2 deliberately did not build, because a separate
-store path for the common case is a second implementation of the blitter's arithmetic and the
-byte-identity argument would stop holding by construction. Closing that gap means putting the
-fast path inside the shared blitter construction, where both a cold draw and a replay get it.
+**The 10-20x target was not met, and the reason is structural rather than incidental.** The
+tiger's steady frame went from 22.1 ms to 8.9 ms. What retention removes is coverage generation;
+what remains is blending that coverage into the surface, which Milestone 1's own measurement
+predicted (replaying a 512x512 antialiased fill cost 0.79x the cold fill, because a single large
+path spends most of its time blending). The projection of 2-4 ms assumed opaque-interior stores,
+which were deliberately not built: a separate store path for the common case is a second
+implementation of the blitter's arithmetic, and the byte-identity argument would stop holding by
+construction. Closing that gap means putting the fast path inside the shared blitter
+construction, where both a cold draw and a replay get it.
 
 ### Targets
 
@@ -630,7 +633,7 @@ fast path inside the shared blitter construction, where both a cold draw and a r
   has to come with the fast path that makes it reachable; see Next Steps.
 - **Cold-frame target**: parity or better. Capture adds run stores to the cold path. Measured at
   the tiny-skia level it costs 5.1 percent on a 512x512 antialiased path fill, and at the
-  renderer level 2.6 percent on the tiger and 12.9 percent on the lion, so the cold-frame budget
+  renderer level 2.7 percent on the tiger and 10.2 percent on the lion, so the cold-frame budget
   is a real constraint rather than a free assumption.
 - **Measurement discipline**: all claims go through `engine_compare_bench`'s phases (`first_ms`,
   `second_ms`, `mutated_ms`, ALLOC per phase, RSS) so numbers are comparable across the design's
@@ -639,7 +642,7 @@ fast path inside the shared blitter construction, where both a cold draw and a r
 ## Risks and Open Questions
 
 - **Memory growth bounds.** The 32 MiB default is a guess: measured documents sit far under it
-  (3.21 MiB for the tiger), so nothing has pushed on eviction outside its tests. Open: should
+  (3.41 MiB for the tiger), so nothing has pushed on eviction outside its tests. Open: should
   the budget scale with surface area? Is whole-entry eviction granular enough, or is dropping a
   stroke pass alone worth the complexity?
 - **Interaction with the frame storage convention.** Replay must reproduce the exact
