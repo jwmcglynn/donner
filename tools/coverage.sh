@@ -124,16 +124,24 @@ function run_quiet_with_progress() {
 
       local current
       current="$(tail -n 1 "$log_file" 2> /dev/null || true)"
+      # Surface bazel's own latest progress counter ("[8,521 / 8,522] 66 / 116
+      # tests; Testing //...") so the workflow log shows how far along the run
+      # is, not just that it is alive. Bounded read: progress lines live at the
+      # end of the log, and curses output separates updates with carriage
+      # returns, so normalize those to newlines before matching.
+      local snapshot
+      snapshot="$(tail -c 65536 "$log_file" 2> /dev/null | tr "\r" "\n" \
+        | grep -E "^\[[0-9,]+ */ *[0-9,]+\]" | tail -n 1 || true)"
       if [[ "$current" != "$last_line" ]]; then
         last_line="$current"
         last_change=$now
-        echo "$description still running after ${elapsed}s; detailed log: $log_file"
+        echo "$description still running after ${elapsed}s${snapshot:+ - ${snapshot}}; detailed log: $log_file"
         continue
       fi
 
       local stalled=$((now - last_change))
       if ((stalled < stall_limit)); then
-        echo "$description still running after ${elapsed}s (no new output for ${stalled}s); detailed log: $log_file"
+        echo "$description still running after ${elapsed}s (no new output for ${stalled}s)${snapshot:+ - last progress: ${snapshot}}; detailed log: $log_file"
         continue
       fi
 
