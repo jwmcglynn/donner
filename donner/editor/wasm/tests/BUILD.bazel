@@ -17,6 +17,7 @@ playwright_bin.playwright_test(
     copy_data_to_bin = False,
     data = [
         "canvas-color-stats.ts",
+        "gesture-streams.ts",
         "package.json",
         "playwright.bazel.config.js",
         "playwright.config.js",
