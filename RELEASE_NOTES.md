@@ -50,6 +50,12 @@ See the [Project Roadmap](docs/ProjectRoadmap.md) and
 
 ### Fixes and Internals
 
+- **Filter graph `in2` default.** A filter-graph node that leaves a two-input primitive's second
+  input unpopulated (`feComposite`, `feBlend`, `feDisplacementMap`) now resolves it to the previous
+  primitive's result on both the tiny-skia and Geode backends, per the Filter Effects defaulting
+  rule, instead of the source graphic or the node's own first input. Parsed SVG documents are
+  unaffected because the attribute layer always populates both inputs; this is a behavior change
+  for embedders that build a `FilterGraph` directly.
 - **Filter subregion clipping hardening (security)** — fixed two heap-buffer-overflows in the
   tiny-skia filter pipeline (`applySubregionClipping` and `ClipFilterOutputToRegion`) where the
   kept-rect origin was clamped only at the low end; both axes are now clamped to the output bounds.

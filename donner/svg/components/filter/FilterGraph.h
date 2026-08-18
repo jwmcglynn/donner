@@ -356,8 +356,15 @@ using FilterPrimitive =
  * operation, and writes to an output buffer.
  */
 struct FilterNode {
-  FilterPrimitive primitive;        ///< The filter primitive operation.
-  std::vector<FilterInput> inputs;  ///< Input(s) to this primitive.
+  FilterPrimitive primitive;  ///< The filter primitive operation.
+
+  /// Input(s) to this primitive. A slot this list leaves unpopulated resolves exactly like an
+  /// unspecified `in`/`in2` attribute: to the previous primitive's result, and to SourceGraphic
+  /// only when the node is the first primitive in the graph. A Composite, Blend, or
+  /// DisplacementMap node built with a single input therefore reads the previous result as its
+  /// second input, never the source graphic.
+  std::vector<FilterInput> inputs;
+
   std::optional<RcString> result;   ///< Named output (for `result` attribute).
   std::optional<Lengthd> x;         ///< Primitive subregion X.
   std::optional<Lengthd> y;         ///< Primitive subregion Y.

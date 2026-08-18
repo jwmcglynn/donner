@@ -2411,6 +2411,65 @@ TEST_F(RendererGeodeTest, FilterCompositeInOperator) {
       << "feComposite operator=in should mask red by green alpha";
 }
 
+/// feComposite with no `in2`: an unspecified `in2` resolves the same way an unspecified `in`
+/// does, to the preceding primitive's result. Falling back to the node's own first input would
+/// mask red by its own opaque alpha and leave the result fully opaque instead.
+TEST_F(RendererGeodeTest, FilterCompositeImplicitIn2UsesPrecedingResult) {
+  RendererGeode renderer = createRenderer();
+  beginFrame(renderer);
+
+  components::FilterGraph graph;
+
+  // Node 0: opaque red flood -> result="red".
+  {
+    components::FilterNode node;
+    components::filter_primitive::Flood f;
+    f.floodColor = css::Color(css::RGBA(255, 0, 0, 255));
+    f.floodOpacity = 1.0;
+    node.primitive = f;
+    node.result = RcString("red");
+    graph.nodes.push_back(node);
+  }
+
+  // Node 1: 50% alpha green flood, deliberately unnamed so it is reachable only as the previous
+  // result.
+  {
+    components::FilterNode node;
+    components::filter_primitive::Flood f;
+    f.floodColor = css::Color(css::RGBA(0, 255, 0, 255));
+    f.floodOpacity = 0.5;
+    node.primitive = f;
+    graph.nodes.push_back(node);
+  }
+
+  // Node 2: feComposite in="red" operator=in, with no in2 at all.
+  {
+    components::FilterNode node;
+    components::filter_primitive::Composite comp;
+    comp.op = components::filter_primitive::Composite::Operator::In;
+    node.primitive = comp;
+    node.inputs.push_back(components::FilterInput::Named{RcString("red")});
+    graph.nodes.push_back(node);
+  }
+
+  renderer.pushFilterLayer(graph, Box2d({0, 0}, {kViewportSize, kViewportSize}));
+  renderer.setPaint(solidFill(css::RGBA(0, 0, 255, 255)));
+  renderer.setTransform(Transform2d());
+  renderer.drawRect(Box2d({0, 0}, {kViewportSize, kViewportSize}), StrokeParams{});
+  renderer.popFilterLayer();
+  renderer.endFrame();
+
+  RendererBitmap snap = renderer.takeSnapshot();
+  ASSERT_FALSE(snap.empty());
+
+  // in1 premul = (255,0,0,255); the defaulted in2 is the green flood, premul alpha 128.
+  // operator=in: result = in1 * in2.a ~= (128,0,0,128), which takeSnapshot unpremultiplies to
+  // (255,0,0,128). Reading the first input as in2 would have left alpha at 255.
+  auto center = pixelAt(snap, 32, 32);
+  EXPECT_THAT(center, Rgba(Near(255, 3), testing::Eq(0), testing::Eq(0), Near(128, 3)))
+      << "an unspecified in2 should mask red by the preceding flood's alpha";
+}
+
 /// feComposite defaults to operator=over.
 TEST_F(RendererGeodeTest, FilterCompositeOverDefault) {
   RendererGeode renderer = createRenderer();

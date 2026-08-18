@@ -231,8 +231,15 @@ struct AffineTransform {
 
 /// A single node in the filter graph.
 struct GraphNode {
-  GraphPrimitive primitive;            ///< The filter operation.
-  std::vector<NodeInput> inputs;       ///< Input reference(s).
+  GraphPrimitive primitive;  ///< The filter operation.
+
+  /// Input reference(s). A slot this list leaves unpopulated resolves exactly like an unspecified
+  /// `in`/`in2` attribute: to the previous primitive's result, and to SourceGraphic only when the
+  /// node is the first primitive in the graph. A Composite, Blend, or DisplacementMap node built
+  /// with a single input therefore reads the previous result as its second input, never the
+  /// source graphic.
+  std::vector<NodeInput> inputs;
+
   std::optional<std::string> result;   ///< Named output (for `result` attribute).
   std::optional<PixelRect> subregion;  ///< Pixel-space primitive subregion (AABB, for clipping).
 

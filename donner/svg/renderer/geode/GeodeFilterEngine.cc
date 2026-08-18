@@ -860,6 +860,31 @@ FilterResourceCache::UniformSlot writeUniformSlot(FilterResourceCache& cache, Ge
   return slot;
 }
 
+/// The number of inputs a primitive reads through the filter attribute surface. feComposite,
+/// feBlend and feDisplacementMap each take a second input (`in2`); feMerge is variadic and reads
+/// exactly the list it was built with, and every other primitive reads at most one input. The cap
+/// of two is deliberate rather than a lower bound: those primitives never sample a third input, so
+/// an extra entry a caller appends must not widen the node's subregion either.
+size_t filterInputSlotCount(const svg::components::FilterNode& node) {
+  using namespace svg::components;
+  if (std::holds_alternative<filter_primitive::Composite>(node.primitive) ||
+      std::holds_alternative<filter_primitive::Blend>(node.primitive) ||
+      std::holds_alternative<filter_primitive::DisplacementMap>(node.primitive)) {
+    return 2;
+  }
+  return node.inputs.size();
+}
+
+/// The input in slot @p index, or the default for a slot the graph left empty. A slot the graph
+/// never populated is an unspecified `in`/`in2` attribute, and both resolve the same way: to the
+/// preceding primitive's result, which is SourceGraphic only when this node is the first
+/// primitive in the filter. Falling back to the node's own first input instead would silently
+/// composite, blend, or displace a buffer against itself.
+svg::components::FilterInput filterInputOrDefault(const svg::components::FilterNode& node,
+                                                  size_t index) {
+  return index < node.inputs.size() ? node.inputs[index] : svg::components::FilterInput{};
+}
+
 /// Resolve an input reference to a texture.
 wgpu::Texture resolveInput(const svg::components::FilterInput& input,
                            const std::unordered_map<std::string, wgpu::Texture>& namedBuffers,
@@ -1616,6 +1641,11 @@ wgpu::Texture GeodeFilterEngine::execute(const svg::components::FilterGraph& gra
     const bool hasExplicitSubregion = node.x.has_value() || node.y.has_value() ||
                                       node.width.has_value() || node.height.has_value();
 
+    // The slot count and not the populated list: a two-input primitive with nothing filled in
+    // still reads two defaulted inputs, so its bounds come from those defaults rather than from
+    // the whole filter region.
+    const size_t slots = filterInputSlotCount(node);
+
     Box2d nodeSubregion = filterRegionSubregion;
     if (hasExplicitSubregion) {
       const double ux =
@@ -1634,10 +1664,13 @@ wgpu::Texture GeodeFilterEngine::execute(const svg::components::FilterGraph& gra
                                   : filterRegion.height();
       nodeSubregion = boxIntersect(Box2d(Vector2d(ux, uy), Vector2d(ux + uw, uy + uh)),
                                    filterRegionSubregion);
-    } else if (!isSourceGenerator && !node.inputs.empty()) {
-      Box2d inputBounds = resolveInputSubregion(node.inputs[0]);
-      for (size_t i = 1; i < node.inputs.size(); ++i) {
-        inputBounds = Box2d::Union(inputBounds, resolveInputSubregion(node.inputs[i]));
+    } else if (!isSourceGenerator && slots > 0) {
+      // Walk every slot the primitive reads, so a defaulted `in2` contributes its subregion
+      // the same way an explicit one would.
+      Box2d inputBounds = resolveInputSubregion(filterInputOrDefault(node, 0));
+      for (size_t i = 1; i < slots; ++i) {
+        inputBounds =
+            Box2d::Union(inputBounds, resolveInputSubregion(filterInputOrDefault(node, i)));
       }
       if (const auto* blur = std::get_if<filter_primitive::GaussianBlur>(&node.primitive)) {
         const double expandX =
@@ -1684,11 +1717,9 @@ wgpu::Texture GeodeFilterEngine::execute(const svg::components::FilterGraph& gra
     bool clipMergedIntoBlur = false;
 
     // Resolve the primary input texture for this node.
-    wgpu::Texture inputTex = currentBuffer;
-    if (!node.inputs.empty()) {
-      inputTex = resolveInput(node.inputs[0], namedBuffers, currentBuffer, sourceGraphic,
-                              sourceAlpha ? &*sourceAlpha : nullptr);
-    }
+    wgpu::Texture inputTex =
+        resolveInput(filterInputOrDefault(node, 0), namedBuffers, currentBuffer, sourceGraphic,
+                     sourceAlpha ? &*sourceAlpha : nullptr);
 
     // Dispatch based on primitive type.
     wgpu::Texture outputTex;
@@ -1778,11 +1809,9 @@ wgpu::Texture GeodeFilterEngine::execute(const svg::components::FilterGraph& gra
                              sourceAlpha ? &*sourceAlpha : nullptr, nodeLinearRGB);
     } else if (const auto* composite = std::get_if<filter_primitive::Composite>(&node.primitive)) {
       // Resolve second input (in2/backdrop).
-      wgpu::Texture in2Tex = inputTex;
-      if (node.inputs.size() >= 2) {
-        in2Tex = resolveInput(node.inputs[1], namedBuffers, currentBuffer, sourceGraphic,
-                              sourceAlpha ? &*sourceAlpha : nullptr);
-      }
+      wgpu::Texture in2Tex =
+          resolveInput(filterInputOrDefault(node, 1), namedBuffers, currentBuffer, sourceGraphic,
+                       sourceAlpha ? &*sourceAlpha : nullptr);
       // Per SVG spec, feComposite operates in the filter's color-interpolation-
       // filters space (linearRGB by default). The arithmetic operator in
       // particular evaluates k1..k4 against the channel values, so the result
@@ -1802,11 +1831,9 @@ wgpu::Texture GeodeFilterEngine::execute(const svg::components::FilterGraph& gra
       }
     } else if (const auto* blend = std::get_if<filter_primitive::Blend>(&node.primitive)) {
       // Resolve second input (in2/backdrop).
-      wgpu::Texture in2Tex = inputTex;
-      if (node.inputs.size() >= 2) {
-        in2Tex = resolveInput(node.inputs[1], namedBuffers, currentBuffer, sourceGraphic,
-                              sourceAlpha ? &*sourceAlpha : nullptr);
-      }
+      wgpu::Texture in2Tex =
+          resolveInput(filterInputOrDefault(node, 1), namedBuffers, currentBuffer, sourceGraphic,
+                       sourceAlpha ? &*sourceAlpha : nullptr);
       // Per SVG spec, feBlend operates in the filter's color-interpolation-filters
       // space (linearRGB by default). Match tiny-skia by wrapping the blend with
       // sRGB↔linear conversion when the node resolves to linearRGB.
@@ -1902,11 +1929,10 @@ wgpu::Texture GeodeFilterEngine::execute(const svg::components::FilterGraph& gra
         outputTex = applyColorSpaceConversion(arena, outputTex, /*srgbToLinear=*/false);
       }
     } else if (const auto* disp = std::get_if<filter_primitive::DisplacementMap>(&node.primitive)) {
-      wgpu::Texture in2Tex = inputTex;
-      if (node.inputs.size() >= 2) {
-        in2Tex = resolveInput(node.inputs[1], namedBuffers, currentBuffer, sourceGraphic,
-                              sourceAlpha ? &*sourceAlpha : nullptr);
-      }
+      // Resolve second input (in2), the displacement map.
+      wgpu::Texture in2Tex =
+          resolveInput(filterInputOrDefault(node, 1), namedBuffers, currentBuffer, sourceGraphic,
+                       sourceAlpha ? &*sourceAlpha : nullptr);
       // For objectBoundingBox, scale through sqrt(bboxW * bboxH) per the spec.
       double pixelScale = std::abs(disp->scale);
       if (isOBB) {
@@ -1931,8 +1957,10 @@ wgpu::Texture GeodeFilterEngine::execute(const svg::components::FilterGraph& gra
       }
     } else if (const auto* diffuse =
                    std::get_if<filter_primitive::DiffuseLighting>(&node.primitive)) {
-      const Box2d lightingInputSubregion =
-          node.inputs.empty() ? filterRegionSubregion : resolveInputSubregion(node.inputs[0]);
+      // Bounds for the buffer this pass actually reads: an unpopulated input slot resolves to
+      // the previous primitive's result, so its subregion has to follow that buffer rather than
+      // widening to the whole filter region.
+      const Box2d lightingInputSubregion = resolveInputSubregion(filterInputOrDefault(node, 0));
       const bool nodeLinearRGB =
           node.colorInterpolationFilters.value_or(graph.colorInterpolationFilters) !=
           svg::ColorInterpolationFilters::SRGB;
@@ -1940,8 +1968,10 @@ wgpu::Texture GeodeFilterEngine::execute(const svg::components::FilterGraph& gra
                                        lightingInputSubregion, nodeLinearRGB);
     } else if (const auto* specular =
                    std::get_if<filter_primitive::SpecularLighting>(&node.primitive)) {
-      const Box2d lightingInputSubregion =
-          node.inputs.empty() ? filterRegionSubregion : resolveInputSubregion(node.inputs[0]);
+      // Bounds for the buffer this pass actually reads: an unpopulated input slot resolves to
+      // the previous primitive's result, so its subregion has to follow that buffer rather than
+      // widening to the whole filter region.
+      const Box2d lightingInputSubregion = resolveInputSubregion(filterInputOrDefault(node, 0));
       const bool nodeLinearRGB =
           node.colorInterpolationFilters.value_or(graph.colorInterpolationFilters) !=
           svg::ColorInterpolationFilters::SRGB;
@@ -1977,10 +2007,10 @@ wgpu::Texture GeodeFilterEngine::execute(const svg::components::FilterGraph& gra
                              deviceFromFilter, imagePlacementRegion);
     } else if (std::holds_alternative<filter_primitive::Tile>(node.primitive)) {
       // FE1 §9.20: feTile repeats the INPUT primitive's subregion to fill
-      // feTile's own subregion. Default to the filter region only when there
-      // is no explicit input.
-      const Box2d tileSourceSubregion =
-          node.inputs.empty() ? filterRegionSubregion : resolveInputSubregion(node.inputs[0]);
+      // feTile's own subregion. An unpopulated input slot resolves to the
+      // previous primitive's result, the same buffer the tile is read from, so
+      // the source bounds follow it instead of widening to the filter region.
+      const Box2d tileSourceSubregion = resolveInputSubregion(filterInputOrDefault(node, 0));
       // An empty/inverted input subregion (topLeft > bottomRight, e.g. a flood
       // whose explicit x/y/w/h lies entirely outside the filter region) must
       // produce transparent output. transformBox() normalizes (min/max) the
