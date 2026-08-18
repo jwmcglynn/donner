@@ -492,6 +492,7 @@ TEST(AsyncRendererTest, FilterOnlyModeRestrictsHintsAndDisablesSelectionPromotio
       <rect x="4" y="4" width="20" height="20" fill="red" filter="url(#blur)"/>
       <g opacity="0.5">
         <rect x="30" y="8" width="16" height="16" fill="green"/>
+        <rect x="38" y="16" width="16" height="16" fill="blue"/>
       </g>
       <rect id="target" x="10" y="44" width="12" height="12" fill="black"/>
     </svg>
@@ -513,25 +514,32 @@ TEST(AsyncRendererTest, FilterOnlyModeRestrictsHintsAndDisablesSelectionPromotio
     return WaitForRenderResult(asyncRenderer);
   };
 
+  // `activeHintsCount` counts editor-explicit `promoteEntity` hints only;
+  // mandatory (detector) promotions are observed through `layerCount`.
   ASSERT_TRUE(renderSelected().has_value());
   EXPECT_EQ(asyncRenderer.workerCompositorEntity(), entity);
   const auto onState = asyncRenderer.compositorState();
-  EXPECT_GE(onState.activeHintsCount, 2u)
-      << "Full compositing publishes mandatory hints for the filter AND the opacity group, plus "
-         "the selection hint";
+  EXPECT_EQ(onState.activeHintsCount, 1u) << "The selection promotion must take";
+  EXPECT_GE(onState.layerCount, 2u)
+      << "Full compositing promotes at least the filter subtree and the selection";
 
   asyncRenderer.setCompositedRenderingMode(CompositedRenderingMode::FilterOnly);
   ASSERT_TRUE(renderSelected().has_value());
   EXPECT_TRUE(asyncRenderer.workerCompositorEntity() == entt::null)
       << "FilterOnly must not promote the selection";
   const auto filterOnlyState = asyncRenderer.compositorState();
-  EXPECT_EQ(filterOnlyState.activeHintsCount, 1u)
-      << "FilterOnly publishes a mandatory hint for the filter only";
+  EXPECT_EQ(filterOnlyState.activeHintsCount, 0u)
+      << "FilterOnly publishes no editor promotion hints";
+  EXPECT_EQ(filterOnlyState.layerCount, 1u)
+      << "FilterOnly keeps exactly the filter subtree composited (no opacity layer, no selection "
+         "layer, no complexity buckets)";
 
   asyncRenderer.setCompositedRenderingMode(CompositedRenderingMode::Off);
   ASSERT_TRUE(renderSelected().has_value());
   EXPECT_TRUE(asyncRenderer.workerCompositorEntity() == entt::null);
-  EXPECT_EQ(asyncRenderer.compositorState().activeHintsCount, 0u);
+  const auto offState = asyncRenderer.compositorState();
+  EXPECT_EQ(offState.activeHintsCount, 0u);
+  EXPECT_EQ(offState.layerCount, 0u);
 }
 
 TEST(AsyncRendererTest, DeferredStartQueuesWorkAndStartsExactlyOnce) {
