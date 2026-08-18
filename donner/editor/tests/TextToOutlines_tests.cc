@@ -90,12 +90,30 @@ std::string ApplyConversion(svg::SVGDocument& document, svg::SVGElement text,
   return std::string(document.source());
 }
 
+/// Comparison parameters for "the same content, before and after conversion to
+/// outlines".
+///
+/// Conversion must not move, restyle, or drop anything, and a real defect there
+/// shows up as hundreds or thousands of divergent pixels. It is not, however, a
+/// bit-exact identity: the GPU backend keeps a glyph's outline resident in the
+/// glyph's own coordinate space and carries the placement in the draw
+/// transform, while a converted `<path>` is encoded at its placed coordinates.
+/// Analytic coverage evaluated from those two (equally valid) spaces lands a
+/// handful of glyph-edge pixels a couple of levels apart. The per-pixel
+/// threshold is the renderer suite's standard 0.02, and NO pixel is allowed to
+/// exceed it, so the allowance covers last-bits shading and nothing else.
+tests::BitmapGoldenCompareParams OutlineConversionParams() {
+  return tests::ApprovedPixelToleranceParams(/*threshold=*/0.02f, /*maxMismatchedPixels=*/0,
+                                             /*includeAntiAliasing=*/true);
+}
+
 /// Paint-retention matrix helper. Parses \p svg, converts its first `<text>` to
 /// outlines, applies the structural edit, and asserts the converted document
-/// renders pixel-identical to the original text. This is the load-bearing
-/// assertion for W4: whatever styling form painted the source text (presentation
-/// attribute, CSS rule, inline style, inheritance, per-tspan override, paint
-/// server, currentColor, or an opacity interaction) must survive the conversion.
+/// renders the same as the original text. This is the load-bearing assertion
+/// for paint retention: whatever styling form painted the source text
+/// (presentation attribute, CSS rule, inline style, inheritance, per-tspan
+/// override, paint server, currentColor, or an opacity interaction) must
+/// survive the conversion.
 void ExpectPaintRetained(std::string_view svg, std::string_view label) {
   svg::SVGDocument converted = Parse(svg);
   svg::SVGElement text = TextElement(converted);
@@ -110,7 +128,7 @@ void ExpectPaintRetained(std::string_view svg, std::string_view label) {
   const svg::RendererBitmap afterBitmap = RenderToBitmap(after);
 
   tests::CompareBitmapToBitmap(afterBitmap, beforeBitmap, std::string(label),
-                               tests::PixelmatchIdentityParams());
+                               OutlineConversionParams());
 }
 
 }  // namespace
@@ -179,7 +197,7 @@ TEST(TextToOutlines, PixelCompareBeforeAndAfterMatches) {
   // `CompareBitmapToBitmap` adds gtest failures and writes
   // actual_/expected_/diff_ PNGs to $TEST_UNDECLARED_OUTPUTS_DIR on mismatch.
   tests::CompareBitmapToBitmap(afterBitmap, beforeBitmap, "text_to_outlines_before_after",
-                               tests::PixelmatchIdentityParams());
+                               OutlineConversionParams());
 }
 
 // Text authored by the editor's text tool: box text with per-line <tspan>
@@ -208,7 +226,7 @@ TEST(TextToOutlines, ConvertsTextToolBoxTextPixelIdentical) {
   const svg::RendererBitmap beforeBitmap = RenderToBitmap(beforeFresh);
   const svg::RendererBitmap afterBitmap = RenderToBitmap(after);
   tests::CompareBitmapToBitmap(afterBitmap, beforeBitmap, "text_to_outlines_tool_box_text",
-                               tests::PixelmatchIdentityParams());
+                               OutlineConversionParams());
 }
 
 // Preserves fill, opacity, transform, fill-rule, stroke, and paint order: the

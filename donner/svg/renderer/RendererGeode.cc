@@ -1246,8 +1246,27 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
     encoderToConfigure.setAntialias(antialias);
   }
 
-  /// Per-renderer frame index used to age resident path-cache entries.
+  /// Frame index used to age resident cache entries and to tell "this frame
+  /// already claimed that buffer" from "an earlier, submitted frame did".
+  ///
+  /// DEVICE-scoped, not per-renderer: an offscreen renderer built from this
+  /// device renders `feImage` fragments and layer thumbnails out of the same
+  /// document while this renderer's frame is still open, and a per-renderer
+  /// counter would let those two frames alias. See
+  /// `GeodeDevice::beginFrameGeneration`.
   uint64_t currentFrameIndex = 0;
+  /// True while `currentFrameIndex` names a generation this renderer opened and
+  /// has not closed. Frames are closed at `endFrame`, at the next `beginFrame`
+  /// (a caller that abandons a frame), and at teardown.
+  bool frameGenerationOpen = false;
+
+  /// Close this renderer's open frame generation, if any.
+  void closeFrameGeneration() {
+    if (frameGenerationOpen && device) {
+      device->endFrameGeneration(currentFrameIndex);
+    }
+    frameGenerationOpen = false;
+  }
 
   /// Acquire a pooled texture matching `desc`, or create a fresh one
   /// on miss. Always increments the `textureCreates` counter on miss;
@@ -2197,7 +2216,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
     // draws still read it. Gating here rather than at one draw entry point
     // covers the multi-document tile paths that never reach `draw()`.
     device->countGlyphResidencyEvictions(
-        cache->beginFrame(currentFrameIndex, glyphCacheMaxEntries, glyphCacheMaxEncodedBytes));
+        cache->beginFrame(currentFrameIndex, device->oldestOpenFrameGeneration(),
+                          glyphCacheMaxEntries, glyphCacheMaxEncodedBytes));
     return cache;
   }
 
@@ -2234,12 +2254,13 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
       component.freeRecordSlots();
       component.recordSlab = std::move(slab);
     }
-    if (component.lastFrame == currentFrameIndex) {
-      // The element already drew this frame (a `<use>` of the text, a
-      // multi-document tile pass). Its slots are referenced by that draw's
-      // recorded batch, and every buffer write in a frame lands before every
-      // draw in the same submit, so rewriting them would retroactively
-      // retransform the earlier draw.
+    if (component.lastFrame >= device->oldestOpenFrameGeneration()) {
+      // Some frame that wrote these slots has not submitted: this element drew
+      // earlier in this frame (a `<use>` of the text), or an outer frame
+      // recorded its glyph batch and an offscreen pass is now rendering the
+      // same document. Every buffer write in a frame lands before every draw in
+      // the same submit, so rewriting the slots would retroactively retransform
+      // that recorded draw. Take per-frame temporaries instead.
       return cursor;
     }
     component.lastFrame = currentFrameIndex;
@@ -2382,6 +2403,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
             recordSlot->index) {
       pendingBatch->sceneInstances.push_back(instance);
       pendingBatch->sceneVertexCount = std::max(pendingBatch->sceneVertexCount, vertexCount);
+      entry.slot.lastSceneFrame = currentFrameIndex;
       return true;
     }
 
@@ -2395,6 +2417,11 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
     pendingBatch->sceneClipVersion = clipVersion;
     pendingBatch->sceneVertexCount = vertexCount;
     pendingBatch->sceneInstances.push_back(instance);
+    // Claim the shared glyph slot now rather than at flush: while this batch is
+    // pending, a solo resident draw of the same glyph must already see the slot
+    // as taken, or it would publish its paint through the slot's uniform and
+    // through `lastResidentFrame` while the batch still depends on it.
+    entry.slot.lastSceneFrame = currentFrameIndex;
     return true;
   }
 
@@ -3452,6 +3479,9 @@ RendererGeode::~RendererGeode() {
   if (impl_ && impl_->device && impl_->device->counters() == &impl_->counters) {
     impl_->device->setCounters(nullptr);
   }
+  if (impl_) {
+    impl_->closeFrameGeneration();
+  }
 }
 RendererGeode::RendererGeode(RendererGeode&&) noexcept = default;
 RendererGeode& RendererGeode::operator=(RendererGeode&& other) noexcept {
@@ -3522,7 +3552,8 @@ size_t RendererGeode::residentGlyphCountForTesting(SVGDocument& document) {
     return 0;
   }
   auto* cachePtr = document.registry().ctx().find<std::shared_ptr<geode::GeodeGlyphCache>>();
-  if (cachePtr == nullptr || !*cachePtr) {
+  if (cachePtr == nullptr || !*cachePtr ||
+      (*cachePtr)->owningDeviceId() != impl_->device->deviceId()) {
     return 0;
   }
   return (*cachePtr)->size();
@@ -3570,7 +3601,16 @@ void RendererGeode::beginFrame(const RenderViewport& viewport) {
   if (impl_->texturePool) {
     impl_->texturePool->beginFrame();
   }
-  ++impl_->currentFrameIndex;
+  // A caller that abandons a frame (beginFrame without endFrame) must not leave
+  // its generation open forever, or every later eviction would be held back by
+  // it.
+  impl_->closeFrameGeneration();
+  if (impl_->device) {
+    impl_->currentFrameIndex = impl_->device->beginFrameGeneration();
+    impl_->frameGenerationOpen = true;
+  } else {
+    ++impl_->currentFrameIndex;
+  }
 
   // `<use>`-batch detection: drop the previous-draw source-entity memo so
   // cross-frame draws don't show up as "same-source runs".
@@ -3690,6 +3730,11 @@ void RendererGeode::endFrame() {
     impl_->frameCommandEncoder.reset();
     impl_->frameFinishedEncoders.clear();
   }
+
+  // The frame's work is submitted, so nothing it recorded can still be waiting
+  // to read a buffer: its generation stops holding back the caches that defer
+  // recycling until every frame that touched them has submitted.
+  impl_->closeFrameGeneration();
 
   // Now that the command buffer is submitted, it's safe to return the
   // frame's transient layer / filter / mask / snapshot textures to
@@ -5296,11 +5341,20 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
     };
     std::vector<RunGlyphOccurrence> runGlyphOccurrences;
     std::vector<Path> runGlyphPaths;
-    runGlyphOccurrences.reserve(run.glyphs.size());
+    if (residentGlyphFill || needPlacedGlyphPaths) {
+      runGlyphOccurrences.reserve(run.glyphs.size());
+    }
     if (needPlacedGlyphPaths) {
       runGlyphPaths.reserve(run.glyphs.size());
     }
+    // A run can reach here with no glyph paint at all - decoration lines only -
+    // and must not then fetch, encode, and permanently cache an outline per
+    // glyph for geometry nothing draws.
+    const bool runNeedsGlyphGeometry = residentGlyphFill || needPlacedGlyphPaths;
     for (const auto& glyph : run.glyphs) {
+      if (!runNeedsGlyphGeometry) {
+        break;
+      }
       if (glyph.glyphIndex == 0) {
         continue;  // `.notdef` -- skip to match tiny-skia.
       }
@@ -5757,7 +5811,7 @@ ReadbackMapStatus MapAndWaitReadback(const std::shared_ptr<geode::GeodeDevice>& 
     std::atomic<bool> done{false};
     std::atomic<bool> ok{false};
 
-    void freeRecordSlots() {
+    void release() {
       if (references.fetch_sub(1, std::memory_order_acq_rel) == 1) {
         delete this;
       }
@@ -5770,7 +5824,7 @@ ReadbackMapStatus MapAndWaitReadback(const std::shared_ptr<geode::GeodeDevice>& 
     auto* s = static_cast<MapState*>(userdata1);
     s->ok.store(status == WGPUMapAsyncStatus_Success, std::memory_order_relaxed);
     s->done.store(true, std::memory_order_release);
-    s->freeRecordSlots();
+    s->release();
   };
   mapCb.userdata1 = mapState;
   mapCb.userdata2 = nullptr;
@@ -5846,12 +5900,12 @@ ReadbackMapStatus MapAndWaitReadback(const std::shared_ptr<geode::GeodeDevice>& 
     // reference keeps `mapState` valid even when delivery happens after this method returns.
     buffer.unmap();
     buffer.destroy();
-    mapState->freeRecordSlots();
+    mapState->release();
     return cancelled ? ReadbackMapStatus::Cancelled : ReadbackMapStatus::TimedOut;
   }
 
   const bool mapOk = mapState->ok.load(std::memory_order_acquire);
-  mapState->freeRecordSlots();
+  mapState->release();
   return mapOk ? ReadbackMapStatus::Success : ReadbackMapStatus::Failed;
 }
 

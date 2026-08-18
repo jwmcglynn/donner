@@ -118,10 +118,12 @@ struct GeodeGlyphResidentEntry {
   EncodedPath encoded;
   /// Persistent GPU residence for `encoded`.
   GeodeResidentSlot slot;
-  /// Renderer frame index of the last occurrence that used this entry. The
-  /// eviction pass never touches an entry used in the current frame, because
-  /// this frame's recorded draws still read its geometry.
-  uint64_t lastUsedFrame = ~uint64_t{0};
+  /// Device-scoped frame generation of the last occurrence that used this
+  /// entry. The eviction pass never drops an entry a frame that has not
+  /// submitted touched, because that frame's recorded draws still read its
+  /// geometry. Zero means "never used"; generations start at 1, so an entry
+  /// that somehow never reached a draw is evictable immediately.
+  uint64_t lastUsedFrame = 0;
   /// Approximate CPU footprint of the encode, used as the residence budget's
   /// unit. Slab capacity is not usable here: the slab reports whole chunks.
   uint64_t encodedBytes = 0;
@@ -166,14 +168,21 @@ public:
   /// The returned address is stable for the entry's lifetime.
   GeodeGlyphResidentEntry* insert(const GlyphGeometryKey& key, Path&& outline,
                                   EncodedPath&& encoded) {
-    auto entry = std::make_unique<GeodeGlyphResidentEntry>();
+    // try_emplace, not emplace: emplace constructs the node before it checks
+    // for a duplicate key and destroys it on collision, which would hand the
+    // caller a pointer into freed storage and leave the byte total crediting an
+    // entry that is not in the map.
+    auto [it, inserted] = entries_.try_emplace(key);
+    if (!inserted) {
+      return it->second.get();
+    }
+    it->second = std::make_unique<GeodeGlyphResidentEntry>();
+    GeodeGlyphResidentEntry* entry = it->second.get();
     entry->outline = std::move(outline);
     entry->encoded = std::move(encoded);
     entry->encodedBytes = EncodedBytes(entry->encoded);
     encodedBytes_ += entry->encodedBytes;
-    GeodeGlyphResidentEntry* raw = entry.get();
-    entries_.emplace(key, std::move(entry));
-    return raw;
+    return entry;
   }
 
   /// Number of live entries.
@@ -186,20 +195,24 @@ public:
   /// call idempotent no matter how many times a frame touches the cache, so
   /// the caller can put it on the accessor and cover every draw entry point.
   /// Returns the number of entries dropped.
-  size_t beginFrame(uint64_t frameIndex, size_t maxEntries, uint64_t maxEncodedBytes) {
+  size_t beginFrame(uint64_t frameIndex, uint64_t oldestOpenFrame, size_t maxEntries,
+                    uint64_t maxEncodedBytes) {
     if (frameIndex == lastEvictedFrame_) {
       return 0;
     }
     lastEvictedFrame_ = frameIndex;
-    return evictToBudget(frameIndex, maxEntries, maxEncodedBytes);
+    return evictToBudget(oldestOpenFrame, maxEntries, maxEncodedBytes);
   }
 
   /// Drop entries until the cache fits the budget, oldest-unused first.
-  /// Entries whose `lastUsedFrame` equals `currentFrame` are never dropped:
-  /// this frame's already-recorded draws still read their geometry, and the
-  /// slab would hand the range to a later allocation in the same frame.
-  /// Returns the number of entries dropped.
-  size_t evictToBudget(uint64_t currentFrame, size_t maxEntries, uint64_t maxEncodedBytes) {
+  ///
+  /// An entry last used at or after `oldestOpenFrame` is never dropped: some
+  /// frame that touched it has not submitted, its recorded draws still read
+  /// that geometry, and dropping the entry would return the slab range for a
+  /// later allocation to overwrite. `oldestOpenFrame` is device-scoped, so an
+  /// offscreen pass nested inside an outer frame cannot free the outer frame's
+  /// geometry out from under it. Returns the number of entries dropped.
+  size_t evictToBudget(uint64_t oldestOpenFrame, size_t maxEntries, uint64_t maxEncodedBytes) {
     if (entries_.size() <= maxEntries && encodedBytes_ <= maxEncodedBytes) {
       return 0;
     }
@@ -211,7 +224,7 @@ public:
     std::vector<std::pair<uint64_t, const GlyphGeometryKey*>> candidates;
     candidates.reserve(entries_.size());
     for (const auto& [key, entry] : entries_) {
-      if (entry->lastUsedFrame != currentFrame) {
+      if (entry->lastUsedFrame < oldestOpenFrame) {
         candidates.emplace_back(entry->lastUsedFrame, &key);
       }
     }
@@ -286,12 +299,16 @@ private:
  * slots unused (and free for the element to grow back into); a longer one
  * appends.
  *
- * `lastFrame` guards the one case the compare cannot: the SAME element drawn
- * twice in one frame (a `<use>` of the text, a multi-document tile pass). The
- * second pass must not rewrite records the first pass's already-recorded draw
- * reads, because every buffer write in a frame executes before every draw in
- * that frame's submit. The renderer diverts the repeat to per-frame temporary
- * slots instead.
+ * `lastFrame` guards the one case the compare cannot: the same element written
+ * twice while an earlier writer's draws are still unsubmitted - the same
+ * element drawn twice in one frame (a `<use>` of the text), or an offscreen
+ * pass rendering the same document inside an outer frame that has already
+ * recorded its glyph batch. The second writer must not rewrite those records,
+ * because every buffer write in a frame executes before every draw in that
+ * frame's submit. `lastFrame` holds a DEVICE-scoped generation
+ * (`GeodeDevice::beginFrameGeneration`) so the comparison covers renderers
+ * sharing a device, and the renderer diverts the second writer to per-frame
+ * temporary slots instead.
  */
 struct GeodeTextInstanceRecordComponent {
   /// One occurrence's record slot plus the bytes last written to it.
@@ -309,9 +326,11 @@ struct GeodeTextInstanceRecordComponent {
   /// Slab the slots were allocated from; also keeps that slab alive so a
   /// device change cannot leave the slots pointing at a destroyed slab.
   std::shared_ptr<GeodeRecordSlab> recordSlab;
-  /// Renderer frame index of the last draw that wrote these slots. Sentinel
-  /// `~0` means "never drawn".
-  uint64_t lastFrame = ~uint64_t{0};
+  /// Device-scoped frame generation of the last draw that wrote these slots.
+  /// Zero means "never written": generations start at 1, and the guard reads
+  /// this as "older than every open frame", which is what an untouched
+  /// component is.
+  uint64_t lastFrame = 0;
 
   GeodeTextInstanceRecordComponent() = default;
   ~GeodeTextInstanceRecordComponent() { freeRecordSlots(); }
