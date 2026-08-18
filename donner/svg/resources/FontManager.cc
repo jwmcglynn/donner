@@ -50,6 +50,19 @@ void writeBE16(uint8_t* p, uint16_t v) {
   p[1] = static_cast<uint8_t>(v & 0xFF);
 }
 
+/// ASCII-only lowercase, used for the map keys that stand in for the case-insensitive family
+/// comparison. Locale-sensitive lowercasing would make those keys depend on the process locale
+/// while the comparison they mirror would not.
+std::string ToLowerAscii(std::string_view value) {
+  std::string lowered(value);
+  for (char& c : lowered) {
+    if (c >= 'A' && c <= 'Z') {
+      c = static_cast<char>(c - 'A' + 'a');
+    }
+  }
+  return lowered;
+}
+
 /// Read a uint32_t in big-endian from a byte pointer.
 uint32_t readBE32(const uint8_t* p) {
   return (static_cast<uint32_t>(p[0]) << 24) | (static_cast<uint32_t>(p[1]) << 16) |
@@ -133,9 +146,14 @@ std::vector<uint8_t> reconstructSfnt(const fonts::WoffFont& woff) {
 }  // namespace
 
 struct FontManager::FontFaceComponent {
-  explicit FontFaceComponent(css::FontFace fontFace) : face(std::move(fontFace)) {}
+  FontFaceComponent(css::FontFace fontFace, uint64_t declarationSequence)
+      : face(std::move(fontFace)), sequence(declarationSequence) {}
 
   css::FontFace face;
+
+  /// Registration order. CSS resolves a tie between equally good faces in favour of the one
+  /// declared last, and storage order is not a contract, so the winner is chosen on this instead.
+  uint64_t sequence = 0;
 };
 
 struct FontManager::FontBudgetState {
@@ -233,41 +251,6 @@ FontManager::FontManager(Registry& registry, size_t maximumLoadedFontBytes,
           FontBudgetState{maximumLoadedFontBytes, maximumLoadedFonts, 0, 0})) {}
 FontManager::~FontManager() = default;
 
-std::string FontManager::faceIdentityKey(const css::FontFace& face) {
-  std::string key(face.familyName);
-  std::transform(key.begin(), key.end(), key.begin(),
-                 [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-  key += '\x1f';
-  key += std::to_string(face.fontWeight);
-  key += '\x1f';
-  key += std::to_string(face.fontStyle);
-  key += '\x1f';
-  key += std::to_string(face.fontStretch);
-
-  for (const css::FontFaceSource& source : face.sources) {
-    key += '\x1e';
-    key += std::to_string(static_cast<int>(source.kind));
-    key += source.trusted ? "T" : "U";
-    key += '\x1f';
-    key += std::string_view(source.formatHint);
-    for (const RcString& tech : source.techHints) {
-      key += '\x1f';
-      key += std::string_view(tech);
-    }
-    key += '\x1f';
-    if (const auto* url = std::get_if<RcString>(&source.payload)) {
-      key += std::string_view(*url);
-    } else if (const auto* data =
-                   std::get_if<std::shared_ptr<const std::vector<uint8_t>>>(&source.payload)) {
-      // Payload identity, not payload contents: hashing every byte would cost more than the load
-      // this dedupe exists to avoid, and the buffers are immutable and shared.
-      key += std::to_string(reinterpret_cast<uintptr_t>(data->get()));
-    }
-  }
-
-  return key;
-}
-
 size_t FontManager::ProviderFontKeyHash::operator()(const ProviderFontKey& key) const noexcept {
   // Mixed field by field rather than through a concatenated string, so no field's value can run
   // into the next one's and make two different requests hash and compare as one.
@@ -279,7 +262,7 @@ size_t FontManager::ProviderFontKeyHash::operator()(const ProviderFontKey& key) 
 }
 
 void FontManager::addFontFace(const css::FontFace& face) {
-  std::string key = faceIdentityKey(face);
+  std::string key = css::FontFaceIdentityKey(face);
   if (auto it = faceEntities_.find(key); it != faceEntities_.end()) {
     // The registered entity is also what keeps the declaration's payload pointers alive, so the
     // key stays meaningful exactly as long as that entity still carries the rule.
@@ -293,7 +276,7 @@ void FontManager::addFontFace(const css::FontFace& face) {
   }
 
   const Entity entity = registry_.create();
-  registry_.emplace<FontFaceComponent>(entity, face);
+  registry_.emplace<FontFaceComponent>(entity, face, nextFaceSequence_++);
   faceEntities_.emplace(std::move(key), entity);
   // A genuinely new declaration can outrank an earlier resolution, so previously resolved queries
   // have to be recomputed.
@@ -324,10 +307,7 @@ std::string_view FontManager::faceFamilyName(size_t index) const {
 
 void FontManager::setGenericFamilyMapping(std::string_view genericName,
                                           std::string_view realFamily) {
-  std::string key(genericName);
-  std::transform(key.begin(), key.end(), key.begin(),
-                 [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-  genericFamilyMap_[std::move(key)] = std::string(realFamily);
+  genericFamilyMap_[ToLowerAscii(genericName)] = std::string(realFamily);
 }
 
 FontHandle FontManager::findFont(std::string_view family) {
@@ -340,9 +320,7 @@ FontHandle FontManager::findFont(std::string_view family, int weight) {
 
 FontHandle FontManager::findFont(std::string_view family, int weight, int style, int stretch) {
   // Resolve CSS generic family names to real family names.
-  std::string familyLower(family);
-  std::transform(familyLower.begin(), familyLower.end(), familyLower.begin(),
-                 [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+  const std::string familyLower = ToLowerAscii(family);
   if (auto it = genericFamilyMap_.find(familyLower); it != genericFamilyMap_.end()) {
     family = it->second;
   }
@@ -350,17 +328,24 @@ FontHandle FontManager::findFont(std::string_view family, int weight, int style,
   const std::string cacheKey = std::string(family) + ":" + std::to_string(weight) + ":" +
                                std::to_string(style) + ":" + std::to_string(stretch);
   if (auto it = cache_.find(cacheKey); it != cache_.end()) {
-    return it->second;
+    // A cached answer outlives many lookups, so confirm the entity behind it is still alive rather
+    // than handing back a handle to a destroyed font.
+    if (isValidHandle(it->second)) {
+      return it->second;
+    }
+    cache_.erase(it);
   }
 
   // Walk @font-face rules looking for the best match.
   // CSS font matching: style first, then stretch, then weight.
   Entity bestEntity = entt::null;
   int bestScore = std::numeric_limits<int>::max();
+  uint64_t bestSequence = 0;
 
   auto view = registry_.view<FontFaceComponent>();
   for (const Entity entity : view) {
-    const css::FontFace& face = view.get<FontFaceComponent>(entity).face;
+    const FontFaceComponent& component = view.get<FontFaceComponent>(entity);
+    const css::FontFace& face = component.face;
     if (!StringUtils::Equals<StringComparison::IgnoreCase>(face.familyName, family)) {
       continue;
     }
@@ -395,14 +380,20 @@ FontHandle FontManager::findFont(std::string_view family, int weight, int style,
 
     score += std::abs(face.fontWeight - weight);
 
-    if (score < bestScore) {
+    // Equally good faces resolve to the one declared last, per CSS. The scan runs to completion
+    // rather than stopping at the first exact match, because a later declaration can tie it and
+    // then has to win.
+    if (score < bestScore || (score == bestScore && component.sequence > bestSequence)) {
       bestScore = score;
+      bestSequence = component.sequence;
       bestEntity = entity;
-      if (score == 0) {
-        break;  // Exact match.
-      }
     }
   }
+
+  // Set when a matching face exists but could not be turned into loaded bytes this time. The
+  // failure can be transient (the aggregate budget was full), and the answer below is only a
+  // stand-in for it, so that answer must not be cached or the family would never recover.
+  bool matchedFaceFailedToLoad = false;
 
   if (bestEntity != entt::null) {
     if (registry_.all_of<LoadedFontComponent>(bestEntity)) {
@@ -424,34 +415,30 @@ FontHandle FontManager::findFont(std::string_view family, int weight, int style,
         }
       }
     }
+    matchedFaceFailedToLoad = true;
   }
+
+  const auto cacheUnlessRetryable = [&](FontHandle handle) {
+    if (!matchedFaceFailedToLoad) {
+      cache_[cacheKey] = handle;
+    }
+    return handle;
+  };
 
   // No document @font-face matched. Consult the external provider (embedded/system catalog) before
   // falling back to Public Sans. The provider itself orders Embedded before System.
   if (provider_ != nullptr && provider_->hasFamily(family)) {
-    if (providerFontsSource_ != provider_) {
-      // A different provider can answer the same request with different bytes, so its entities are
-      // not interchangeable with the ones memoized here.
-      providerFonts_.clear();
-      providerFontsSource_ = provider_;
-    }
-
     const FontFaceRequest request{.weight = weight,
                                   .style = static_cast<FontStyle>(style),
                                   .stretch = static_cast<FontStretch>(stretch)};
-
-    std::string providerFamily(family);
-    std::transform(providerFamily.begin(), providerFamily.end(), providerFamily.begin(),
-                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-    const ProviderFontKey providerKey{std::move(providerFamily), weight, style, stretch};
+    const ProviderFontKey providerKey{ToLowerAscii(family), weight, style, stretch};
 
     if (auto it = providerFonts_.find(providerKey); it != providerFonts_.end()) {
       if (isValidHandle(it->second) && registry_.all_of<LoadedFontComponent>(it->second.entity())) {
         // A provider answers per requested face, so this memo is keyed on the whole request. The
         // same request resolving again reuses the entity already holding those bytes instead of
         // loading a duplicate copy onto a new identity.
-        cache_[cacheKey] = it->second;
-        return it->second;
+        return cacheUnlessRetryable(it->second);
       }
       providerFonts_.erase(it);
     }
@@ -461,18 +448,15 @@ FontHandle FontManager::findFont(std::string_view family, int weight, int style,
       const Entity entity = registry_.create();
       if (loadFontDataIntoEntity(entity, data, FontDataTrust::Trusted)) {
         FontHandle handle(entity);
-        cache_[cacheKey] = handle;
         providerFonts_[providerKey] = handle;
-        return handle;
+        return cacheUnlessRetryable(handle);
       }
       registry_.destroy(entity);
     }
   }
 
   // Fall back to the embedded Public Sans font.
-  FontHandle fallback = fallbackFont();
-  cache_[cacheKey] = fallback;
-  return fallback;
+  return cacheUnlessRetryable(fallbackFont());
 }
 
 FontHandle FontManager::loadFontData(std::span<const uint8_t> data, FontDataTrust trust) {

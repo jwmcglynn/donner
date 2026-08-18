@@ -3,6 +3,8 @@
 
 #include <memory>
 #include <span>
+#include <string>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -90,6 +92,13 @@ public:
   /**
    * Add a list of \ref css::FontFace objects to be loaded.
    *
+   * Registration is idempotent. The style pass re-announces every stylesheet's `@font-face` rules
+   * on each recompute, so a declaration already registered is not stored a second time; it is only
+   * re-queued for loading, which retries a source that has not resolved yet and does nothing for
+   * one that has. Storing duplicates instead would re-fetch each URL and re-wrap its bytes in a
+   * fresh buffer every recompute, which in turn gives the font layer a new identity for a font
+   * that never changed.
+   *
    * @param fontFaces Font faces to load.
    */
   void addFontFaces(std::span<const css::FontFace> fontFaces);
@@ -118,6 +127,11 @@ private:
 
   /// All registered `@font-face` declarations (persistent, for FontRegistry resolution).
   std::vector<css::FontFace> fontFaces_;
+
+  /// Identity of each registered declaration, as it was when first registered, to its index in
+  /// \ref fontFaces_. Keyed on the declaration as announced rather than as stored, because URL
+  /// sources are rewritten in place once their bytes resolve.
+  std::unordered_map<std::string, size_t> fontFaceIndexByIdentity_;
 
   /// Indexes into \ref fontFaces_ for font faces with URL sources that need hydration.
   std::vector<size_t> fontFaceIndexesToLoad_;

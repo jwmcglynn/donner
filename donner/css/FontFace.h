@@ -3,6 +3,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <string>
 #include <variant>
 #include <vector>
 
@@ -49,5 +50,26 @@ struct FontFace {
   int fontStyle = 0;                    ///< font-style descriptor (0=normal, 1=italic, 2=oblique)
   int fontStretch = 5;  ///< font-stretch descriptor (1-9, 5=normal, matching FontStretch enum)
 };
+
+/**
+ * Build a string that identifies an `@font-face` declaration.
+ *
+ * Two declarations produce the same key exactly when they would select the same face and resolve
+ * to the same bytes: the matching descriptors (family, compared case-insensitively, plus weight,
+ * style, and stretch) together with the ordered source list, including each source's kind, trust,
+ * format and technology hints, and payload identity. Inline data payloads are immutable and shared
+ * by pointer, so the pointer value identifies the bytes as long as something holds a reference to
+ * them; the key is only meaningful while its holder keeps that reference alive.
+ *
+ * Every variable-length field is length-prefixed, so a separator character appearing inside a
+ * family name, hint, or URL cannot make two different declarations produce one key.
+ *
+ * The intended use is deduplication: callers that re-announce a document's `@font-face` set (a
+ * style recompute does this on every pass) key on this so an unchanged declaration keeps whatever
+ * identity and cached state it already had.
+ *
+ * @param face The declaration to identify.
+ */
+std::string FontFaceIdentityKey(const FontFace& face);
 
 }  // namespace donner::css

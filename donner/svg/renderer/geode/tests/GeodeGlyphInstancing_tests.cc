@@ -355,16 +355,10 @@ TEST_F(GeodeGlyphInstancingTest, RepeatedMutationKeepsResidencyBounded) {
   ASSERT_TRUE(text.has_value());
 
   RendererGeode renderer(sharedDevice());
-  // A budget far below what 20 rounds of unreclaimed churn would reach, so the
-  // ceiling assertion below still catches a regression that starts stranding
-  // superseded entries instead of reusing them.
-  constexpr size_t kMaxEntries = 16u;
-  // "Hello" resolves to four distinct glyph outlines, and a frame's own new
-  // entries land AFTER that frame's trim, so the count legitimately sits above
-  // the cap until the next frame trims it. Give that one frame of headroom.
-  constexpr size_t kDistinctGlyphsPerFrame = 4u;
-  constexpr size_t kCeiling = kMaxEntries + kDistinctGlyphsPerFrame;
-  renderer.setGlyphResidencyBudgetForTesting(kMaxEntries, /*maxEncodedBytes=*/1u << 30);
+  // "Hello" resolves to four distinct glyph outlines, and a recolor changes
+  // none of them, so this is the exact count for every round rather than a
+  // ceiling: any other number means identities are being churned.
+  constexpr size_t kDistinctGlyphs = 4u;
 
   uint64_t totalEvictions = 0;
   uint64_t uploadsAfterFirstFrame = 0;
@@ -380,10 +374,8 @@ TEST_F(GeodeGlyphInstancingTest, RepeatedMutationKeepsResidencyBounded) {
       uploadsAfterFirstFrame += frame.counters.glyphResidencyUploads;
     }
 
-    const size_t resident = renderer.residentGlyphCountForTesting(document);
-    EXPECT_LE(resident, kCeiling) << "Residency exceeded its budget at mutation round " << round;
-    EXPECT_EQ(resident, kDistinctGlyphsPerFrame)
-        << "A recolor added glyph identities at mutation round " << round;
+    EXPECT_EQ(renderer.residentGlyphCountForTesting(document), kDistinctGlyphs)
+        << "A recolor changed the resident glyph set at mutation round " << round;
   }
 
   EXPECT_EQ(uploadsAfterFirstFrame, 0u)

@@ -521,6 +521,46 @@ TEST_F(StyleSystemTest, ComputeAllStylesRegistersFontFacesDuringIncrementalPass)
   EXPECT_EQ(document.registry().ctx().get<ResourceManagerContext>().fontFaces().size(), 1u);
 }
 
+/// Every style pass re-announces each stylesheet's `@font-face` rules, because the pass has no way
+/// to know whether a stylesheet changed. Storing a second copy of an unchanged rule would make the
+/// resource manager grow without bound, re-fetch the rule's URL on every pass, and hand the font
+/// layer a fresh copy of bytes that never changed, which invalidates everything cached against the
+/// font that rule resolves to.
+TEST_F(StyleSystemTest, RepeatedStylePassesRegisterEachFontFaceOnce) {
+  auto document = ParseSVG(R"(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+      <style>
+        @font-face {
+          font-family: TestFont;
+          src: local(TestFont);
+        }
+        @font-face {
+          font-family: OtherFont;
+          src: local(OtherFont);
+        }
+      </style>
+      <rect id="r" width="50" height="50"/>
+    </svg>
+  )");
+
+  auto element = document.querySelector("#r")->entityHandle();
+  ParseWarningSink warningSink;
+  const auto& resourceManager = document.registry().ctx().get<ResourceManagerContext>();
+
+  for (int pass = 0; pass < 5; ++pass) {
+    SetRenderTreeState(document.registry(), RenderTreeState{.needsFullRebuild = false,
+                                                            .needsFullStyleRecompute = false,
+                                                            .hasBeenBuilt = true});
+    document.registry()
+        .emplace_or_replace<DirtyFlagsComponent>(element.entity())
+        .mark(DirtyFlagsComponent::Style);
+    styleSystem.computeAllStyles(document.registry(), warningSink);
+
+    EXPECT_EQ(resourceManager.fontFaces().size(), 2u)
+        << "Font faces were re-registered on style pass " << pass;
+  }
+}
+
 TEST_F(StyleSystemTest, ComputeStylesForSubsetOnlyComputesRequestedEntities) {
   auto document = ParseSVG(R"(
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
