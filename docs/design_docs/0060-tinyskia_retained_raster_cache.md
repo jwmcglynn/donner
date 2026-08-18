@@ -32,16 +32,16 @@ additions to `third_party/tiny-skia-cpp`). The Geode GPU backend is untouched.
 
 ## Goals
 
-- Steady-state frames of an unchanged document render 10-20x faster on raster-bound scenes
-  (Tiger: from about 41 ms to 2-4 ms), measured by `engine_compare_bench`'s `second_ms` phase at
-  `-c opt`.
+- Steady-state frames of an unchanged document render substantially faster on raster-bound
+  scenes, measured by `engine_compare_bench`'s `second_ms` phase at `-c opt`. The target was
+  10-20x; the measured result is 2.4x on the tiger, and Performance says why the rest is not
+  reachable without giving up the identity argument.
 - Cold (first) frames stay at parity or better.
-- The retained path produces bit-identical output to a fresh render, asserted by a
-  mode-comparison test over the golden and resvg corpora, for every supported scene.
-- Property changes invalidate only the retained state they affect: a fill color change rebuilds
-  nothing; a gradient stop change rebuilds only the color ramp; a stroke property change rebuilds
-  only stroke spans; geometry, transform, or clip changes rebuild outline and spans.
-- Steady-state prepare performs zero heap allocations, asserted by an allocation-count test.
+- The retained path produces bit-identical output to a fresh render, for every supported scene.
+- A change invalidates at least the retained state it affects, and never less. Fine-grained
+  classification is a goal only where it can be had without an invalidation rule that has to be
+  kept in sync with the property system by hand; today a stroke change rebuilds only stroke
+  coverage, and every other change rebuilds the shape.
 - With the concurrency feature enabled, output is identical for every thread count, including the
   zero-thread inline mode.
 
@@ -64,11 +64,18 @@ additions to `third_party/tiny-skia-cpp`). The Geode GPU backend is untouched.
 
 ## Next Steps
 
-- Decide whether the steady frame's remaining cost (blending covered area, not generating it)
-  is worth attacking with opaque-interior straight stores, and whether that can be done inside
-  the shared blitter construction so identity still holds by construction.
-- Revisit the colour-only fast path: a solid paint change currently re-rasterizes, which the
-  goals below said it should not.
+- Decide whether the steady frame's remaining cost (blending covered area, not generating it) is
+  worth attacking with opaque-interior stores, and whether that can live inside the shared
+  blitter construction so identity still holds by construction rather than by proof.
+- Add a colour-only fast path: when a draw does not derive its blitter's paint from the caller's
+  (which a hairline stroke and a transformed gradient both do), coverage is independent of the
+  paint and a replay could take the fresh paint instead of rebuilding.
+- Give corpus-wide retained-versus-fresh identity a CI lane, instead of leaving
+  `DONNER_TINYSKIA_RETAINED=compare` as a diagnostic someone has to remember to run.
+- Run the SVG parser and render fuzzers with retention enabled, so the invalidation and eviction
+  state machines see hostile mutation sequences.
+- Make a steady frame allocation-free, which needs paint comparison that does not rebuild a
+  gradient's stop list every frame, and then assert it.
 
 ## Implementation Plan
 
@@ -158,7 +165,9 @@ Tiger.
         straight stores; they go through the same blitter a cold draw builds, which is what
         keeps identity true by construction. That decision is why the measured win is smaller
         than this document projected; see Performance.
-  - [x] Mode-comparison identity test over the renderer golden corpus and the resvg suite.
+  - [x] Retained-versus-fresh identity test, plus a run mode that turns the golden and resvg
+        suites into corpus-wide identity runs. The run mode is a diagnostic with no CI lane
+        setting it; see Testing and Validation.
   - [x] Per-dirty-class invalidation tests (mutate one property class, assert identity with a
         fresh render).
 - [x] Milestone 3: Memory policy
@@ -178,50 +187,28 @@ Tiger.
 
 ### Milestone 2 decisions
 
-**Validation compares the draw's inputs, not per-property revision counters.** This document
-proposed a `RenderRevisionsComponent` extension of the 0005 dirty-flag machinery, and flagged
-the hook audit it needs as real work, with a missed hook being an under-invalidation bug. What
-landed instead needs no audit: a retained entry records the exact inputs its coverage was
-produced from (device transform, the `tiny_skia::Paint` the draw was handed, the stroke, the
-clip identity, the surface size, the fill rule, and whether the stroke opened its dash seams)
-and replays only while all of them compare equal. Paint equality is real deep equality, added
-to the tiny-skia paint and shader types for this purpose, so a gradient stop edit is caught by
-the same comparison as a colour edit with nothing to remember to mark. Geometry is the one
-input too large to compare per frame, and it is handled by dropping the whole entry from the
-resolved-path update and destroy signals, the same mechanism the Geode encode cache already
-relies on.
-
-The cost of that choice is granularity. This document's goals said a fill colour change should
-rebuild nothing and a gradient stop change should rebuild only the ramp; both now rebuild the
-shape's coverage. The conservative direction is the safe one (a rebuild is always correct,
-a missed rebuild never is), and the case the design exists for, a frame where nothing changed,
-is unaffected. A colour-only fast path is possible on top of this: when the draw does not
-derive its blitter's paint from the caller's (which a hairline stroke and a transformed
-gradient both do), the coverage is independent of the paint and a replay could take the fresh
-paint. It is listed under Next Steps rather than assumed.
-
-**Clip is a validation key, decided by mask content.** The mask reaches the blitter as pipeline
-state applied per blit, so recorded coverage does not depend on it, but this iteration keeps
-clip conservative as planned. Each clip-stack depth remembers the mask it last held; a rebuilt
-mask that compares byte-equal keeps that depth's identity, and any change issues a new one.
-Equal identities therefore mean byte-equal masks, and a shape carries only the integer. The
-comparison costs one pass over a mask per clip push, against the mask build that already costs
-the same order.
-
-**Retention covers `drawPath` only.** `drawRect` and `drawEllipse` carry no source entity, and
-the driver never emits them: they exist for replaying a recorded snapshot, which has no stable
-identity to key on. Their coverage is recorded by the same packed records anyway when a rect
-draw reaches the capture blitter through `drawPath`.
-
-**An entity drawn more than once in a frame stops retaining.** One entry cannot describe two
-draws, and shadow-tree instancing (`use`), markers, and a `paint-order` that splits fill from
-stroke all draw one data entity several times. Those entities fall back to rasterizing rather
-than re-capturing on every draw.
+**Why validation compares inputs instead of counting revisions.** The alternative is a
+per-entity revision counter bumped wherever `DirtyFlagsComponent` is marked, which needs every
+mutation site to remember to bump it and turns a missed site into an under-invalidation bug,
+where a shape keeps painting its old pixels. Comparing the draw's own inputs has no such site
+list: whatever a mutation does to the document, the next frame either builds the same transform,
+paint, stroke, clip and surface it built before, or it does not. The one input too large to
+compare, the outline, is handled by dropping the entry from a signal that already exists and is
+already load-bearing for the Geode encode cache. The cost is granularity, and Invalidation and
+validation keys states exactly how coarse.
 
 **Frame identity belongs to the document.** Entries live on the document's registry, so several
-renderers can meet the same entry. Each frame takes its identity from a counter on the
-document, which is what keeps one renderer's frame from reading as a second draw inside
-another's.
+renderers can meet the same entry, and each frame takes its identity from a counter on the
+document rather than from a renderer-local one. Otherwise two renderers would agree on frame
+numbers and each would read the other's draw as a second draw of the same shape, which is the
+signal that makes an entity stop retaining.
+
+**Known limitation: several renderers retaining one document thrash.** One entry describes one
+draw, so two renderers with different surfaces or transforms drawing the same document take
+turns re-capturing it. Output stays correct, because a key that does not match is never
+replayed; only the work is wasted. The case that matters in practice, one renderer per document,
+is unaffected, and the corpus harness deliberately keeps its reference renderer out of retention
+so it cannot perturb the retained one.
 
 ## Background
 
@@ -294,30 +281,25 @@ transiently (`AlphaRuns`); this design makes the representation durable per shap
 
 ### Retained state per shape
 
-Each retained shape node (`RetainedShapeNode`, keyed by the render-tree entity of the
-`RenderingInstanceComponent`) stores:
+Retained state lives on the entity a shape's geometry came from, as a `RetainedSpansComponent`
+holding two slots, one for the fill pass and one for the stroke pass. Each slot holds:
 
-- **Fill coverage spans**: packed runs in device space, exactly the blits the scan converter
-  emitted (`CapturedSpans`; see "Milestone 1 decisions" for the record layout). Interior rows
-  compress to a few long runs at full coverage; antialiased edges become short runs (the same
-  shape `AlphaRuns` produces today). Runs are stored in emission order, which is what replay
-  depends on; the scan converter already emits them in increasing `y`.
-- **Stroke coverage spans**: the same representation for the stroked outline, with dashing,
-  caps, and joins already baked in by the stroker/dasher at capture time.
-- **Gradient color ramp**: for gradient paints, the instantiated `tiny_skia::Shader` (the
-  product of `instantiateGradientShader`), including any stop-ramp lookup table the gradient
-  pipeline stage precomputes. If an explicit ramp LUT stage is introduced, the cold path must
-  use the identical LUT so identity holds; this is called out under Open Questions.
-- **Device-space bounding box** of the union of fill and stroke spans, used for clipped blits
-  and for bounds queries without touching span data.
-- **Fast-path flag** for axis-aligned rectangles: `drawRect` fills that go through
-  `Scan::fillRect` / `fillRectAa` retain the rect plus its edge alphas instead of spans and
-  replay via `blitRect` / `blitAntiRect`.
-- **Validation keys** described below.
+- **Coverage runs** in device space, exactly the blits the scan converter emitted
+  (`CapturedSpans`; see "Milestone 1 decisions" for the record layout). Interior rows compress
+  to a few long runs at full coverage; antialiased edges become short runs. Runs are stored in
+  emission order, which is what replay depends on.
+- **The paint the recorded draw built its blitter from**, which is not always the paint the
+  caller passed: a hairline stroke folds its coverage into the shader opacity, and a transformed
+  draw transforms the shader. Replaying with this paint is what reproduces the draw. A gradient
+  lives inside it as an instantiated shader, so no separate ramp is kept.
+- **The validation key**, described below.
 
-Span storage is per-shape `std::vector`-backed with capacity retention: invalidation resets the
-count but keeps the allocation, so a shape that oscillates between two geometries settles into
-zero-allocation rebuilds.
+Storage keeps its capacity across invalidations, so a shape that is rebuilt repeatedly settles
+into allocation-free captures.
+
+Nothing else is retained. There is no cached bounding box (nothing reads one), and axis-aligned
+rectangles need no special case: a rect draw's `blitRect` and `blitAntiRect` calls are recorded
+by the same packed records as everything else.
 
 ### Capture
 
@@ -341,90 +323,109 @@ so the cold frame renders and captures in one pass.
 A steady frame is:
 
 1. Surface clear (as `beginFrame` does today).
-2. For each visible shape in paint order: validate the node (cheap key compare), then blit its
-   fill spans and stroke spans in the shape's fill/stroke/paint-order sequence.
+2. For each visible shape in paint order: compare the validation key, then replay the fill and
+   stroke runs in the shape's fill/stroke/paint-order sequence.
 
-Replay feeds the recorded runs to the same pipeline blitter configuration the cold path uses,
-constructed from the shape's current `Paint`:
+Replay builds the blitter exactly as a direct draw with the retained paint would, and feeds the
+recorded runs to it. That is the whole of the identity argument: the same blitter receives the
+same calls in the same order, so it performs the same stores.
 
-- **Opaque interior spans** (coverage 255, opaque solid paint, source-over) are straight stores:
-  a `memset`-style row fill of the paint color. This is the dominant case on raster-bound
-  scenes.
-- **Edge spans and translucent paints** blend through the normal pipeline stages, reproducing
-  the exact root-surface store rounding of the active pipeline configuration so low-alpha edge
-  pixels keep the bytes the golden corpus depends on (0028-2 documents how observable this
-  rounding class is).
-- **Color at blit**: because spans are pure coverage, the paint color is an input to replay, not
-  to capture. A solid paint color change therefore rebuilds nothing.
-- **Clipped blits**: spans are sorted by `y`, so a clip band or tight viewport selects its span
-  sub-range by binary search on `y` rather than walking the whole array.
+- **Clip masks** are supplied at replay, not baked into coverage. Scan conversion clips to the
+  surface and the mask reaches the blitter as per-blit pipeline state, so recorded coverage is
+  mask-independent and a replay is handed whatever mask a fresh draw would get.
+- **Edge runs and translucent paints** blend through the normal pipeline stages, reproducing the
+  root-surface store rounding of the active pipeline configuration, so low-alpha edge pixels
+  keep the bytes the golden corpus depends on (0028-2 documents how observable this rounding
+  class is).
+- **No separate fast path for opaque interiors.** A `memset`-style store for full-coverage runs
+  under an opaque solid paint would be a second implementation of the blitter's arithmetic, and
+  identity would stop holding by construction and start needing to be proven. That is the main
+  reason the steady frame is faster but not as fast as this document first projected; see
+  Performance.
 
 ### Invalidation and validation keys
 
-Retained state is invalidated by property class, mirroring `DirtyFlagsComponent` categories.
-Because the compute systems clear the dirty flags before the renderer runs, each category
-increments a small per-entity revision counter when marked (a `RenderRevisionsComponent`
-extension of the 0005 machinery); retained nodes record the revisions they were built from and
-compare on validation.
+A recording is replayed only while every input the recorded coverage depended on is unchanged.
+Rather than tracking which properties were marked dirty, the renderer compares those inputs
+directly, so no mutation hook has to be audited for the result to be sound.
 
-| Change class                                  | Rebuilds                                     |
-| --------------------------------------------- | -------------------------------------------- |
-| Geometry (`Shape`), transform (`Transform` /  | Outline conversion, fill spans, stroke spans |
-| `WorldTransform`), clip chain                 |                                              |
-| Solid paint color, `fill-opacity`,            | Nothing (applied at blit)                    |
-| `stroke-opacity`, `currentColor`              |                                              |
-| Gradient stop list or stop colors             | Gradient ramp only (spans untouched)         |
-| Stroke properties (width, caps, joins, dash   | Stroke spans only (fill spans untouched)     |
-| array/offset, miter limit)                    |                                              |
-| Paint server kind change (solid to gradient,  | Paint object only; spans untouched           |
-| gradient to solid)                            |                                              |
-| Paint becomes a pattern, or shape enters a    | Node leaves retention; immediate mode        |
-| non-retained context                          |                                              |
+The key is the device transform, the `tiny_skia::Paint` the draw was handed, the stroke, the
+identity of the clip mask, the surface size, the fill rule, and whether the stroke opened its
+dash seams. Paint comparison is real deep equality over the shader, which is why a gradient
+stop edit is caught by the same comparison as a colour edit, with nothing to remember to mark.
 
-Clip participates conservatively in the first iteration: the node key includes the identity of
-the clip chain affecting the shape, and any clip change rebuilds the node's spans. Because the
-clip mask is actually applied at blit time (the pipeline blitter takes the mask), a later
-refinement can drop clip from the rebuild set; that is listed under Open Questions rather than
-assumed.
+Geometry is the one input too large to compare per frame. It is handled by dropping the entry
+entirely from the resolved-path update and destroy signals, the mechanism the Geode encode
+cache already relies on: `ShapeSystem`'s content-equality gate means those signals fire when the
+outline actually changed and stay quiet on an idle re-render.
+
+| Change class                                             | Effect on the next frame            |
+| -------------------------------------------------------- | ----------------------------------- |
+| Geometry                                                  | Entry dropped; shape re-rasterizes  |
+| Transform, clip, surface size, fill rule, dash seam       | Key mismatch; shape re-rasterizes   |
+| Any paint change, including a solid colour or a gradient stop | Key mismatch; shape re-rasterizes |
+| Stroke width, caps, joins, dash array or offset, miter    | Stroke pass re-rasterizes; fill pass replays |
+| Paint becomes a pattern, or the shape enters a non-retained context | Entry unused; immediate mode |
+
+This is coarser than the per-property table this design first proposed: a colour change
+rebuilds coverage that a colour change cannot affect. The conservative direction is the safe
+one, and the case the design exists for, a frame where nothing changed, is unaffected. A
+colour-only fast path is possible on top of this and is under Next Steps.
+
+The clip identity is conservatism, not a correctness dependency. Each clip-stack depth remembers
+the mask it last held, and a rebuilt mask that compares byte-equal keeps that depth's identity;
+any change takes a new one. Identities are renderer-local, so two renderers drawing one document
+number their clips independently, and nothing rests on that, because coverage does not depend on
+the mask and a replay is handed the mask in effect at replay time.
 
 ### Retention scope
 
-Retention initially covers shape draws (`drawPath`, `drawRect`, `drawEllipse`) with solid or
-gradient paint, emitted directly to the root surface (`surfaceStack_.empty()`). Everything else
-bypasses retention and renders through the unchanged immediate-mode code:
+Retention covers `drawPath` with solid or gradient paint, emitted directly to the root surface
+(`surfaceStack_.empty()`) for a shape that carries a source entity. `drawRect` and `drawEllipse`
+are not retained and do not need to be: the driver never emits them, they exist for replaying a
+recorded snapshot, and a snapshot has no stable identity to key on. Everything below bypasses
+retention and renders through the unchanged immediate-mode code:
 
 - Filter layers (`pushFilterLayer` content and composition).
 - Masks (`pushMask` capture and content).
 - Pattern tiles (`beginPatternTile` recording and pattern-painted shapes).
 - Isolated layers (`pushIsolatedLayer` for group opacity, mix-blend-mode, isolation).
 - Text (`drawText`) and images (`drawImage` / `drawBitmap`).
+- Draws that also paint a context-paint capture surface, which are two draws sharing one
+  outline and cannot be described by one entry.
+- Entities drawn more than once in a frame. Shadow-tree instancing (`use`), markers, and a
+  `paint-order` that splits fill from stroke all draw one data entity several times, and one
+  entry cannot describe several draws. Such an entity stops retaining rather than re-capturing
+  on every draw.
 
-Bypassed content is drawn between retained blits in paint order, so ordering semantics are
-unchanged. This split keeps the identity argument simple (retained draws replay the exact blit
-sequence; bypassed draws run the exact existing code) while covering the raster-bound scenes
-that motivate the design. Tiger is entirely within the retained set. Widening the retained set
-(for example, retaining an isolated layer's composed pixmap) is future work.
+Bypassed content is drawn between replays in paint order, so ordering semantics are unchanged.
+This split keeps the identity argument simple: retained draws replay the exact blit sequence,
+bypassed draws run the exact existing code. Tiger is entirely within the retained set. Widening
+the retained set (for example, retaining an isolated layer's composed pixmap) is future work.
 
 ### Memory policy
 
 - **Per-shape storage** keeps capacity across invalidations, as above.
-- **Per-worker scratch pools** hold the transient prepare intermediates (path conversion
-  buffers, edge lists, stroke/dash output, scanline cells), sized high-water per worker slot,
-  so steady-state prepare performs zero heap allocations once pools are warm. Slot zero belongs
-  to the caller thread and is the only slot used in single-threaded mode.
-- **Cost model**: a run is 16 bytes packed (decided in Milestone 1; see the record layout
-  there). A shape's run count is approximately (rows x interior runs per row) + (antialiased
-  edge pixels), and the analytic scan converter emits long interior runs, so the count runs
-  well below one per covered pixel: a 512x512 antialiased path measured 1650 runs, 26.4 KB.
-  Extrapolating that density, Tiger at 900x900 is on the order of a few MiB. A pathological
-  document (many thousands of small shapes) is bounded by the budget below, not by hope.
-- **Budget and eviction**: a per-document retained-memory budget (default on the order of
-  32 MiB, configurable). When exceeded, nodes are evicted coldest-first (least-recently-blitted)
-  until under budget; an evicted shape simply renders immediate-mode and may re-enter the cache
-  later. If eviction thrashes (a tracked counter crosses a threshold within a frame window),
-  retention disables for the document and the renderer reverts to today's behavior wholesale.
-- **Opt-out**: a document-level API disables retention explicitly for embedders that prefer the
-  immediate-mode memory profile.
+- **Cost model**: a run is 16 bytes packed. A shape's run count is approximately (rows x
+  interior runs per row) + (antialiased edge pixels), and the analytic scan converter emits long
+  interior runs, so the count runs well below one per covered pixel: a 512x512 antialiased path
+  measures 1650 runs, 26.4 KB. Measured on real documents, the tiger holds 3.21 MiB across 305
+  retained passes at 900x900 and the lion 501 KiB across 132.
+- **Budget and eviction**: a per-document retained-memory budget, 32 MiB by default and settable
+  on the renderer. It charges the whole of an entry, not only its coverage: the runs plus their
+  kept capacity, the two paints beside them, and the entry itself. When the budget is exceeded,
+  entries not drawn in the current frame are evicted coldest-first until the document is back
+  under it; an evicted shape rasterizes and may re-enter later. If evicting every entry from an
+  earlier frame still leaves the document over budget, its working set does not fit at all, so
+  retention turns off for the document rather than evicting and re-capturing the same shapes
+  every frame. Raising the budget lets it try again.
+- **Clip masks a renderer remembers** are not part of that budget. They are bounded instead:
+  eight depths at most, one mask per depth, dropped whenever the surface changes size. Past that
+  depth a clip takes a fresh identity per draw, so shapes under it rasterize.
+- **Opt-out**: retention is off by default and enabled per renderer. Turning it off hands back
+  everything the document was holding, since entries outlive the renderer that made them.
+- **Per-worker scratch pools** for transient prepare intermediates belong to the concurrency
+  stage and do not exist yet.
 
 ## Structured-Concurrency Prepare Stage
 
@@ -448,7 +449,7 @@ Consumers join before reading:
 
 - The blit pass joins each node immediately before blitting it (in paint order, so the caller
   naturally overlaps blitting early shapes with preparing later ones).
-- Bounds queries join the node before reading its device-space bounding box.
+- Any consumer that reads a node's prepared state joins it first.
 - Clip dependencies do not schedule concurrently: a prepare that depends on another node's clip
   output joins that dependency at submission time, on the submitting thread, rather than
   deferring the join into the worker. This keeps the dependency graph trivially acyclic at the
@@ -488,63 +489,85 @@ unchanged, and does, because the zero-thread mode is the same code path.
 
 SVG input is untrusted. This design adds no new parsing surfaces, but it adds retained state
 whose size is attacker-influenced, so the memory policy above is a security boundary, not just
-a performance knob:
+a performance knob. What the budget caps, precisely:
 
-- The per-document budget caps retained memory regardless of shape count or coordinates;
-  overflow degrades to immediate mode, never to unbounded growth. The budget/eviction paths get
-  negative tests with adversarial documents (many shapes, giant device boxes, degenerate spans).
+- Every byte a retained entry holds is charged: the recorded coverage including the capacity it
+  keeps across a rebuild, the two paints kept beside it (a gradient paint owns its stop list),
+  and the entry itself. Exceeding the budget evicts coldest-first; a working set that does not
+  fit at all disables retention for the document. Growth is bounded either way.
+- Not charged, and bounded by other means: the per-depth clip masks a renderer remembers, which
+  are capped at eight depths and dropped when the surface changes size, so a document chooses
+  neither how many it holds nor how large they are; and the entry shell of an entity that has
+  stopped retaining, which is one small component per entity, bounded like any per-entity
+  component by the document's own size.
 - Span capture stores only what the scan converter emitted for the clipped device area, so
   coordinates outside the surface cannot inflate storage beyond the surface-bounded run count.
   A capture is bound to the surface size it was recorded against and a replay onto a different
   size is refused, so a retained capture that outlives a viewport resize cannot write outside
-  the new surface (see "Milestone 1 decisions").
-- The threaded mode is compiled out by default and, when enabled, workers only run prepare on
-  data owned by the node being prepared; there is no cross-document or cross-renderer sharing.
-- Fuzzing: the existing SVG parser/render fuzzers run with retention enabled so the
-  invalidation and eviction state machines see hostile mutation sequences; a mode-flip fuzz
-  cycle (render, mutate, render, compare against fresh) doubles as a correctness oracle.
+  the new surface.
+- Retention holds no pixel data of its own: coverage carries alpha, and the paint that colors it
+  is supplied at replay, so an evicted or disabled document leaks nothing about what it drew.
+- The threaded mode does not exist yet; when it does, workers must only run prepare on data
+  owned by the node being prepared, with no cross-document or cross-renderer sharing.
 
 ## Testing and Validation
 
 Every invariant below names the CI target that enforces it, per this directory's rule that
 claimed invariants trace to CI.
 
-- **Byte identity, retained vs fresh** (the core invariant): a new
-  `//donner/svg/renderer/tests:renderer_retained_identity_tests` renders every case twice with
-  a shared corpus driver: once with a fresh renderer, once through a warmed retained cache
-  (render, then render again), and asserts byte-equal snapshots. It runs over the renderer
-  golden corpus and, on lanes where `--//donner/svg/renderer:resvg_test_suite_available=True`,
-  over the resvg suite corpus. A retained-mode configuration of the existing golden suites
-  (`renderer_tests`, `resvg_test_suite`) additionally pins retained output to the checked-in
-  goldens.
-- **Per-dirty-class invalidation**: in the same target, each property class from the
-  invalidation table is mutated in isolation (color, gradient stops, stroke width, dash array,
-  transform, geometry, clip), then the steady frame is compared byte-equal against a fresh
-  render of the mutated document. This catches both under-invalidation (stale pixels) and
-  mis-classified rebuilds.
-- **Steady-state allocations**: `renderer_retained_identity_tests` includes cases wrapping the
-  steady frame in the allocation-counting scope from
-  `donner/svg/renderer/benchmarks/AllocationTracker.h` and asserting zero prepare-path
-  allocations after warmup (the frame clear and snapshot are excluded and measured separately).
-- **Thread-count determinism**: with the concurrency config enabled, the identity test
-  parameterizes thread counts {0, 2, 8} and asserts byte-equal output across all of them. This
-  runs on a CI lane that builds with `--//donner/svg/renderer:tiny_skia_prepare_threads=true`
-  so the threaded configuration is compiled and exercised, per the rule that a green default
-  build does not verify flag-gated code.
-- **tiny-skia-level capture/replay identity**: `SpanCaptureTest.cpp`, in the port's
-  `//src/tiny_skia/tests:tiny_skia_core_tests` dual native/scalar targets, asserts
-  capture+replay equals direct painting for antialiased and aliased fills, both fill rules,
-  gradients, transforms, masks, rect fast paths, thick and hairline strokes, and dashes, and
-  specifically for low-alpha antialiased edges under the pipeline's root-surface store rounding
-  (the failure class 0028-2 documents). It also asserts that the capture pass leaves the cold
-  frame byte-identical, that a replay with a different paint matches a direct draw in that
-  paint, and that the recorded ops cover every blit method the scan converters emit. Injecting
-  a one-unit coverage error into replay fails 14 of those cases and a one-pixel rect width
-  error fails 3, with the diagnostic naming the first differing pixel.
-- **Performance**: before/after `engine_compare_bench --backend=tiny-skia` runs at `-c opt` on
-  Tiger and raster-heavy resvg-derived scenes, recording `second_ms`, `first_ms`, ALLOC
-  `phase=second`, and RSS fields. Numbers land in this doc's status updates only as measured
-  output, never estimated.
+- **Byte identity, retained vs fresh** (the core invariant):
+  `//donner/svg/renderer/tests:renderer_retained_spans_tests` renders each of its documents
+  several times both ways, once through a renderer that retains nothing and once through a
+  warmed retained cache, and asserts byte-equal snapshots frame by frame. Its documents cover
+  the retained draw kinds (fills, both fill rules, hairline and thick and dashed strokes,
+  zero-length-gap dashes, linear and radial gradients, gradient strokes) and the bypassed ones
+  (patterns, masks, isolated layers, markers, `use` instancing, `paint-order` splits), plus
+  three real documents from `donner/svg/renderer/testdata` including the tiger.
+- **Corpus-wide identity** is a diagnostic, not a CI gate. Setting
+  `DONNER_TINYSKIA_RETAINED=compare` makes the tiny-skia test backend render every document a
+  suite touches both ways and fail on the first differing byte, so
+  `renderer_tests`, `renderer_regression_tests`, `renderer_ascii_tests` and `resvg_test_suite`
+  become retained-versus-fresh identity runs over roughly three thousand documents. No CI lane
+  sets it today; it is invoked by hand with `--test_env`. Turning it into a lane is the
+  follow-up under Next Steps.
+- **Per-change-class invalidation**: `renderer_retained_spans_tests` mutates each class in
+  isolation (geometry, transform, solid paint, gradient stop, stroke width, clip, surface
+  resize), then asserts through the renderer's counters that the next frame rasterized rather
+  than replayed, and that its bytes match a fresh render of the mutated document. This catches
+  both under-invalidation (stale pixels) and a mutation that quietly does nothing.
+- **Fail-closed surface binding**: the same target makes a retained key claim a surface its
+  recording did not come from, with every other input identical by construction, and asserts
+  the recording is refused, that the refusal falls back to rasterizing rather than dropping the
+  shape, and that the frame matches a fresh render.
+- **Memory bound**: the same target pins the eviction and whole-document-fallback paths, and
+  that turning retention off hands back what the document held.
+- **Steady-state allocations**: not implemented. A steady frame still rebuilds each shape's
+  `tiny_skia::Paint` to compare it, which allocates for gradient paints, so there is no
+  zero-allocation claim to enforce. Listed under Next Steps.
+- **Fuzzing with retention enabled**: not wired. The SVG parser and render fuzzers run without
+  retention, so the invalidation and eviction state machines do not currently see fuzzer
+  mutation sequences. Listed under Next Steps.
+- **Thread-count determinism**: not applicable until the concurrency stage exists.
+- **Paint and stroke equality**: `//src/tiny_skia/tests:tiny_skia_core_tests` (dual native and
+  scalar) covers `PaintTest.cpp`, which pins reflexivity for every shader kind, field
+  sensitivity for solid, gradient and pattern paints and for strokes and dashes, and the float
+  policy in both directions (a NaN is never equal, signed zeroes are). Equality is what decides
+  whether a recording still applies, so an equality that answered wrongly would be the shortest
+  path to a stale pixel.
+- **tiny-skia-level capture/replay identity**: `SpanCaptureTest.cpp`, in the same dual targets,
+  asserts capture+replay equals direct painting for antialiased and aliased fills, both fill
+  rules, gradients, transforms, masks, rect fast paths, thick and hairline strokes, and dashes,
+  and specifically for low-alpha antialiased edges under the pipeline's root-surface store
+  rounding (the failure class 0028-2 documents). It also asserts that the capture pass leaves
+  the cold frame byte-identical, that a replay with a different paint matches a direct draw in
+  that paint, that the recorded ops cover every blit method the scan converters emit, and that
+  the storage accessors a bounded cache depends on report and release what they claim.
+  Injecting a one-unit coverage error into replay fails 14 of those cases and a one-pixel rect
+  width error fails 3, with the diagnostic naming the first differing pixel.
+- **Performance**: `engine_compare_bench --backend=tiny-skia` at `-c opt`, run with and without
+  `--retained-spans`, recording `second_ms`, `first_ms`, `mutated_ms`, the `RETAINED` line, ALLOC
+  `phase=second`, and RSS fields. Numbers land in this doc only as measured output, never
+  estimated.
 
 ## Performance
 
@@ -601,48 +624,44 @@ fast path inside the shared blitter construction, where both a cold draw and a r
 
 ### Targets
 
-- **Steady-frame target**: 10-20x on raster-bound scenes; Tiger from about 41 ms to 2-4 ms
-  `second_ms` at 900x900, `-c opt`, reference aarch64 host. The floor is the surface clear plus
-  covered-area blend cost, which is why opaque-interior straight stores matter.
-- **Cold-frame target**: parity or better. Capture adds run stores to the cold path; the
-  concurrency stage, where enabled, can make cold frames faster than today. Regression bar:
-  cold `first_ms` within noise of the pre-change baseline on the benchmark corpus. Measured at
-  the tiny-skia level, capture costs 5.1 percent on a 512x512 antialiased path fill (see
-  "Milestone 1 decisions"), which is above noise, so the cold-frame budget is a real constraint
-  rather than a free assumption. Whether that survives at the renderer level depends on how
-  much of a frame is scan conversion versus blending; Milestone 5 measures it.
-- **Measurement discipline**: all claims go through `engine_compare_bench`'s existing phases
-  (`first_ms`, `second_ms`, ALLOC per phase, RSS) so numbers are comparable across the design's
+- **Steady-frame target**: the original 10-20x is not reachable while replay goes through the
+  same blitter a cold draw builds, because what remains after coverage generation is removed is
+  the blend of that coverage. A target that can be met without giving up the identity argument
+  has to come with the fast path that makes it reachable; see Next Steps.
+- **Cold-frame target**: parity or better. Capture adds run stores to the cold path. Measured at
+  the tiny-skia level it costs 5.1 percent on a 512x512 antialiased path fill, and at the
+  renderer level 2.6 percent on the tiger and 12.9 percent on the lion, so the cold-frame budget
+  is a real constraint rather than a free assumption.
+- **Measurement discipline**: all claims go through `engine_compare_bench`'s phases (`first_ms`,
+  `second_ms`, `mutated_ms`, ALLOC per phase, RSS) so numbers are comparable across the design's
   lifetime; within-engine before/after deltas only, per the benchmark's own caveats.
 
 ## Risks and Open Questions
 
-- **Memory growth bounds.** The budget/eviction policy is designed but its default (32 MiB
-  order) is a guess until measured across the resvg corpus and editor documents. Open: should
-  the budget scale with surface area? What eviction granularity (whole node vs stroke-only)
-  pays for its complexity?
+- **Memory growth bounds.** The 32 MiB default is a guess: measured documents sit far under it
+  (3.21 MiB for the tiger), so nothing has pushed on eviction outside its tests. Open: should
+  the budget scale with surface area? Is whole-entry eviction granular enough, or is dropping a
+  stroke pass alone worth the complexity?
 - **Interaction with the frame storage convention.** Replay must reproduce the exact
   root-surface store rounding of the active pipeline configuration; 0028-2 governs that
   convention and documents how observable the low-alpha rounding class is. The capture/replay
   identity tests target this class directly and must hold across any storage-convention change,
   and any future explicit gradient ramp LUT must be shared by cold and steady paths or identity
   breaks silently.
-- **Clip-chain invalidation fan-out.** A clip path change invalidates every shape it affects;
-  for a document-root clip that is everything. Conservative rebuild is correct but makes some
-  single-property edits cost a full re-rasterization. Open: apply clip masks purely at blit
-  time (the pipeline already takes the mask per blit) so clip changes rebuild nothing, at the
-  cost of keying blits by mask identity; decide after measuring real editor clip-edit
-  frequency.
-- **Eviction heuristics.** Least-recently-blitted is simple but a zooming viewport can cycle
-  the working set. Open: protect shapes by blit frequency, or by rebuild cost, and what the
-  thrash-detection window should be.
-- **Gradient ramp representation.** Settled for now in Milestone 1: the instantiated shader is
-  retained and no quantized ramp LUT is introduced, because both paths already share one
-  resolution step. Revisit only if ramp resolution shows up in a profile, and only as a stage
-  inside that shared step.
-- **Revision-counter plumbing.** The `RenderRevisionsComponent` extension must be marked by the
-  same mutation hooks that mark `DirtyFlagsComponent`; a missed hook is an under-invalidation
-  bug. The per-dirty-class tests are the net, but the hook audit is real work.
+- **Clip-chain invalidation fan-out.** A clip change invalidates every shape under it; for a
+  document-root clip that is everything. Conservative rebuild is correct but makes some
+  single-property edits cost a full re-rasterization. Open: drop clip from the key entirely,
+  which coverage already permits, once there is a reason to trust that no future change makes
+  scan conversion consult the mask.
+- **Eviction heuristics.** Least-recently-drawn is simple but a zooming viewport can cycle the
+  working set. Open: protect shapes by draw frequency or by rebuild cost.
+- **Gradient ramp representation.** The instantiated shader is retained and no quantized ramp
+  LUT is introduced, because both paths already share one resolution step. Revisit only if ramp
+  resolution shows up in a profile, and only as a stage inside that shared step.
+- **Paint comparison is the whole invalidation story for paint.** An equality that answered
+  wrongly, on any shader field, would be the shortest path to a stale pixel. `PaintTest.cpp`
+  covers reflexivity, field sensitivity and the float policy for that reason, and any field
+  added to a shader has to be added to its comparison in the same change.
 
 ## Alternatives Considered
 
