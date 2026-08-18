@@ -414,7 +414,10 @@ donner_cc_library(
 donner_perf_sensitive_cc_library(
     name = "renderer_tiny_skia",
     srcs = ["RendererTinySkia.cc"],
-    hdrs = ["RendererTinySkia.h"],
+    hdrs = [
+        "RendererTinySkia.h",
+        "RendererTinySkiaCache.h",
+    ],
     defines = select({
         ":text_enabled": ["DONNER_TEXT_ENABLED"],
         "//conditions:default": [],
