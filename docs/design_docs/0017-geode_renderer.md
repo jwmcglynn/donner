@@ -49,8 +49,7 @@ directly (`GeodeGolden`/`TinyGolden`); geode-vs-tiny parity comparison was retir
     `MinimalClosedCubic5x3`, `BigLightningGlowNoFilterCrop`, `Lion`,
     `Edzample`. Strict identity check (`threshold=0`, `max=0`,
     `includeAntiAliasingDifferences`) catches any Geode-side regressions.
-    Regenerate with `UPDATE_GOLDEN_IMAGES_DIR=$(bazel info workspace)
-    bazel run --config=geode //donner/svg/renderer/tests:renderer_geode_golden_tests`.
+    Regenerate with `UPDATE_GOLDEN_IMAGES_DIR=$(bazel info workspace) bazel run --config=geode //donner/svg/renderer/tests:renderer_geode_golden_tests`.
   - 🚧 Linux CI via Mesa `llvmpipe` — switched from SwiftShader plan.
     Ubuntu's `mesa-vulkan-drivers` package provides `llvmpipe`, a
     maintained software Vulkan ICD that's apt-installable (no vendoring
@@ -112,7 +111,6 @@ directly (`GeodeGolden`/`TinyGolden`); geode-vs-tiny parity comparison was retir
   Mesa ANV 25.2.8 exhibited non-deterministic hangs even for empty render
   passes, outside shader execution.
 
-
 ## Summary
 
 Geode is a new GPU-native rendering backend for Donner, built on WebGPU and the Slug algorithm
@@ -164,10 +162,10 @@ usable inside game engines, UI frameworks, and other applications that already o
 
 Donner currently ships two rendering backends behind `RendererInterface`:
 
-| Backend | Type | Binary Size | Strengths | Limitations |
-|---------|------|-------------|-----------|-------------|
-| FullSkiaRenderer | CPU/GPU (Skia) | ~50 MB | Full feature parity, reference quality | Heavy dependency, not embeddable |
-| RendererTinySkia | CPU (software) | ~2 MB | Lightweight, no dependencies | No text, limited filters, CPU-bound |
+| Backend          | Type           | Binary Size | Strengths                              | Limitations                         |
+| ---------------- | -------------- | ----------- | -------------------------------------- | ----------------------------------- |
+| FullSkiaRenderer | CPU/GPU (Skia) | ~50 MB      | Full feature parity, reference quality | Heavy dependency, not embeddable    |
+| RendererTinySkia | CPU (software) | ~2 MB       | Lightweight, no dependencies           | No text, limited filters, CPU-bound |
 
 Both backends are CPU-centric for rasterization. For applications requiring high-performance
 rendering — real-time UI, game engines, large/complex SVGs — a GPU-native backend is the natural
@@ -213,13 +211,13 @@ The ["A Decade of Slug" retrospective](https://terathon.com/blog/decade-slug.htm
 critical lessons from deploying Slug at studios including Activision, Blizzard, id Software,
 Ubisoft, Insomniac, and Adobe. Geode's design incorporates these learnings:
 
-| Lesson | What happened | How Geode applies it |
-|--------|--------------|---------------------|
-| **Band-split optimization hurts more than it helps** | Duplicate sorted curve lists for bidirectional rays improved large glyphs but introduced shader divergence that hurt small text. Removed — halved band data from 4×16-bit to 2×16-bit per band. | Geode uses the simplified single-direction band format from day one. No bidirectional rays. |
-| **Dynamic dilation obsoletes supersampling** | Adaptive supersampling was added for tiny text, then removed because dilation solved the same problem better with simpler shaders. | Geode implements dilation only; no supersampling path. Simpler fragment shader = faster compilation, less divergence. |
-| **Per-glyph bounding polygons beat per-layer loops for color emoji** | Original multi-color emoji used a loop in the fragment shader over stacked layers. Most layers covered a small fraction of the composite glyph area, wasting work. Replaced with independent glyphs rendered as separate draw calls with individual bounding polygons. | Geode renders multi-layer color glyphs as independent instanced draws, not shader loops. Slightly more vertex data, significantly less fragment waste. |
-| **Winding number core is stable** | The root eligibility and winding number calculation has been unchanged since 2017 — it was correct from the start. | Geode's clean-room implementation prioritizes matching the mathematical specification exactly. This is the one part where correctness is non-negotiable. |
-| **2×16-bit band data is sufficient** | After removing band-split, each band needs only two 16-bit components (curve range start + count, or equivalent). | Geode packs band metadata into 32 bits per band. |
+| Lesson                                                               | What happened                                                                                                                                                                                                                                                          | How Geode applies it                                                                                                                                     |
+| -------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Band-split optimization hurts more than it helps**                 | Duplicate sorted curve lists for bidirectional rays improved large glyphs but introduced shader divergence that hurt small text. Removed — halved band data from 4×16-bit to 2×16-bit per band.                                                                        | Geode uses the simplified single-direction band format from day one. No bidirectional rays.                                                              |
+| **Dynamic dilation obsoletes supersampling**                         | Adaptive supersampling was added for tiny text, then removed because dilation solved the same problem better with simpler shaders.                                                                                                                                     | Geode implements dilation only; no supersampling path. Simpler fragment shader = faster compilation, less divergence.                                    |
+| **Per-glyph bounding polygons beat per-layer loops for color emoji** | Original multi-color emoji used a loop in the fragment shader over stacked layers. Most layers covered a small fraction of the composite glyph area, wasting work. Replaced with independent glyphs rendered as separate draw calls with individual bounding polygons. | Geode renders multi-layer color glyphs as independent instanced draws, not shader loops. Slightly more vertex data, significantly less fragment waste.   |
+| **Winding number core is stable**                                    | The root eligibility and winding number calculation has been unchanged since 2017 — it was correct from the start.                                                                                                                                                     | Geode's clean-room implementation prioritizes matching the mathematical specification exactly. This is the one part where correctness is non-negotiable. |
+| **2×16-bit band data is sufficient**                                 | After removing band-split, each band needs only two 16-bit components (curve range start + count, or equivalent).                                                                                                                                                      | Geode packs band metadata into 32 bits per band.                                                                                                         |
 
 **Dynamic dilation detail:**
 
@@ -249,12 +247,12 @@ and `s` is constant, but the full perspective path is implemented from the start
 
 **Advantages over alternatives:**
 
-| Approach | Drawback Slug avoids |
-|----------|---------------------|
-| Tessellation (e.g., pathfinder, piet-gpu) | Vertex explosion on complex paths, LOD management |
-| SDF textures (e.g., msdfgen) | Limited to simple glyphs, atlas management, blurriness at extremes |
-| CPU rasterization (e.g., tiny-skia) | No GPU parallelism, memory bandwidth bound |
-| Skia Ganesh/Graphite | Massive dependency, not designed for embedding |
+| Approach                                  | Drawback Slug avoids                                               |
+| ----------------------------------------- | ------------------------------------------------------------------ |
+| Tessellation (e.g., pathfinder, piet-gpu) | Vertex explosion on complex paths, LOD management                  |
+| SDF textures (e.g., msdfgen)              | Limited to simple glyphs, atlas management, blurriness at extremes |
+| CPU rasterization (e.g., tiny-skia)       | No GPU parallelism, memory bandwidth bound                         |
+| Skia Ganesh/Graphite                      | Massive dependency, not designed for embedding                     |
 
 Slug natively supports quadratic and cubic Bézier curves, lines, and arcs — covering the full
 SVG path vocabulary. It has been proven at scale on hardware as modest as 2016-era game consoles
@@ -370,29 +368,29 @@ critical path to a ~12 MB download with no compile step.
 ### Component Overview
 
 ```
- Donner SVG pipeline                    Standalone / Game engine
- ─────────────────                      ──────────────────────────
- SVGDocument                            Application code
-     |                                       |
-     v                                       v
- RendererDriver ──> RendererInterface   GeoEncoder / GeoEncoder3D
-                          |                  |
-              +-----------+------+           |
-              |           |      |           |
-        FullSkiaRenderer  TinySkia  RendererGeode|
-                                     |       |
-                                     v       v
-                              ┌──────────────────┐
-                              │   donner::geode   │
-                              │                   │
-                              │  GeoEncoder       │  (2D drawing API)
-                              │  GeoSurface       │
-                              │  GeoPaint         │
-                              │  GeoImage         │
-                              │  GeodeDevice      │  (WebGPU lifecycle)
-                              │  GeodePipeline    │  (Slug shaders)
-                              │  GeodePathEncoder │  (band decomposition)
-                              └──────────────────┘
+Donner SVG pipeline                    Standalone / Game engine
+─────────────────                      ──────────────────────────
+SVGDocument                            Application code
+    |                                       |
+    v                                       v
+RendererDriver ──> RendererInterface   GeoEncoder / GeoEncoder3D
+                         |                  |
+             +-----------+------+           |
+             |           |      |           |
+       FullSkiaRenderer  TinySkia  RendererGeode|
+                                    |       |
+                                    v       v
+                             ┌──────────────────┐
+                             │   donner::geode   │
+                             │                   │
+                             │  GeoEncoder       │  (2D drawing API)
+                             │  GeoSurface       │
+                             │  GeoPaint         │
+                             │  GeoImage         │
+                             │  GeodeDevice      │  (WebGPU lifecycle)
+                             │  GeodePipeline    │  (Slug shaders)
+                             │  GeodePathEncoder │  (band decomposition)
+                             └──────────────────┘
 ```
 
 The `donner::geode` layer is SVG-agnostic. `RendererGeode` (in `donner::svg`) is a thin adapter
@@ -401,16 +399,16 @@ that translates `RendererInterface` calls into `GeoEncoder` calls. Applications 
 
 ### Layer Responsibilities
 
-| Layer | Location | Responsibility |
-|-------|----------|----------------|
-| `RendererGeode` | `donner/svg/renderer/RendererGeode.h` | `RendererInterface` impl, state stack management, ECS cache coordination |
-| `GeodeDevice` | `donner/svg/renderer/geode/GeodeDevice.h` | WebGPU device/queue lifecycle, surface management, buffer allocation |
-| `GeodePipeline` | `donner/svg/renderer/geode/GeodePipeline.h` | Render pipeline objects, shader modules, bind group layouts |
-| `GeodePathEncoder` | `donner/svg/renderer/geode/GeodePathEncoder.h` | Slug band decomposition: `Path` → GPU band buffers |
-| `GeodeGradientEncoder` | `donner/svg/renderer/geode/GeodeGradientEncoder.h` | Gradient stop → 1D texture or SSBO encoding |
-| `GeodeCompositor` | `donner/svg/renderer/geode/GeodeCompositor.h` | Isolated layers, blend modes, mask compositing via render targets |
-| `GeodeTextRenderer` | `donner/svg/renderer/geode/GeodeTextRenderer.h` | Text shaping → Slug glyph submission |
-| `GeodeFilterEngine` | `donner/svg/renderer/geode/GeodeFilterEngine.h` | (v2) Compute shader filter graph execution |
+| Layer                  | Location                                           | Responsibility                                                           |
+| ---------------------- | -------------------------------------------------- | ------------------------------------------------------------------------ |
+| `RendererGeode`        | `donner/svg/renderer/RendererGeode.h`              | `RendererInterface` impl, state stack management, ECS cache coordination |
+| `GeodeDevice`          | `donner/svg/renderer/geode/GeodeDevice.h`          | WebGPU device/queue lifecycle, surface management, buffer allocation     |
+| `GeodePipeline`        | `donner/svg/renderer/geode/GeodePipeline.h`        | Render pipeline objects, shader modules, bind group layouts              |
+| `GeodePathEncoder`     | `donner/svg/renderer/geode/GeodePathEncoder.h`     | Slug band decomposition: `Path` → GPU band buffers                       |
+| `GeodeGradientEncoder` | `donner/svg/renderer/geode/GeodeGradientEncoder.h` | Gradient stop → 1D texture or SSBO encoding                              |
+| `GeodeCompositor`      | `donner/svg/renderer/geode/GeodeCompositor.h`      | Isolated layers, blend modes, mask compositing via render targets        |
+| `GeodeTextRenderer`    | `donner/svg/renderer/geode/GeodeTextRenderer.h`    | Text shaping → Slug glyph submission                                     |
+| `GeodeFilterEngine`    | `donner/svg/renderer/geode/GeodeFilterEngine.h`    | (v2) Compute shader filter graph execution                               |
 
 ### General-Purpose 2D Drawing API
 
@@ -640,9 +638,11 @@ section. This is critical for `fillPath3D` (future 3D support) and for SVG conte
 under CSS perspective transforms.
 
 Each vertex also outputs em-space sampling coordinates adjusted by the inverse Jacobian:
+
 ```
 em_offset = jacobian_inv * (dilated_pos - original_pos)
 ```
+
 This ensures the fragment shader samples curve data in the correct coordinate space even after
 dilation, handling non-uniform scaling and skew correctly.
 
@@ -900,14 +900,14 @@ class RendererGeode : public RendererInterface {
 
 ## GPU Resource Budget
 
-| Resource | Typical Size | Notes |
-|----------|-------------|-------|
-| Band vertex buffer (per path) | 1–8 KB | Scales with path complexity and band count |
-| Curve data SSBO (per path) | 0.5–4 KB | Proportional to curve count |
-| Glyph cache (per unique glyph) | ~0.5 KB | Amortized across text runs |
-| Gradient stop texture | 256 B–1 KB | 1D texture, typically ≤64 stops |
-| Offscreen render target | W×H×4 B | One per isolated layer / mask / pattern in flight |
-| Stencil buffer | W×H×1 B | Shared across clip operations |
+| Resource                       | Typical Size | Notes                                             |
+| ------------------------------ | ------------ | ------------------------------------------------- |
+| Band vertex buffer (per path)  | 1–8 KB       | Scales with path complexity and band count        |
+| Curve data SSBO (per path)     | 0.5–4 KB     | Proportional to curve count                       |
+| Glyph cache (per unique glyph) | ~0.5 KB      | Amortized across text runs                        |
+| Gradient stop texture          | 256 B–1 KB   | 1D texture, typically ≤64 stops                   |
+| Offscreen render target        | W×H×4 B      | One per isolated layer / mask / pattern in flight |
+| Stencil buffer                 | W×H×1 B      | Shared across clip operations                     |
 
 For a typical SVG document with ~100 paths and a few text runs, total GPU memory is in the
 low single-digit MB range, dominated by render targets for compositing layers.
@@ -920,11 +920,11 @@ and should land as standalone PRs before Geode-specific code.
 
 ### Rename: `Transform` → `Transform2`
 
-| Current | New | References | Files |
-|---------|-----|-----------|-------|
-| `Transform2d` | `Transform2d` | ~514 | ~57 |
-| `Transformf` | `Transform2f` | ~2 | ~2 |
-| `Transform<T>` | `Transform2<T>` | (template) | 1 |
+| Current        | New             | References | Files |
+| -------------- | --------------- | ---------- | ----- |
+| `Transform2d`  | `Transform2d`   | ~514       | ~57   |
+| `Transformf`   | `Transform2f`   | ~2         | ~2    |
+| `Transform<T>` | `Transform2<T>` | (template) | 1     |
 
 **Why now:** Makes room for `Transform3<T>` / `Transform3d` (4×4 matrix) without ambiguity.
 The current name `Transform` implies generality but is inherently 2D (3×3 affine matrix, 6
@@ -935,10 +935,10 @@ compatibility aliases in `Transform.h` transitionally for downstream consumers, 
 
 ### Rename: `Box` → `Box2`
 
-| Current | New | References | Files |
-|---------|-----|-----------|-------|
-| `Box2d` | `Box2d` | ~516 | ~76 |
-| `Box<T>` | `Box2<T>` | (template) | 1 |
+| Current  | New       | References | Files |
+| -------- | --------- | ---------- | ----- |
+| `Box2d`  | `Box2d`   | ~516       | ~76   |
+| `Box<T>` | `Box2<T>` | (template) | 1     |
 
 **Why now:** Same reasoning as Transform. `Box` uses `Vector2<T>` corners internally — the 3D
 equivalent (`Box3<T>` / AABB) would use `Vector3<T>` corners and add a `depth()` method.
@@ -1047,15 +1047,15 @@ class PathBuilder {
 
 **Key changes from the old `PathSpline`:**
 
-| Change | Rationale |
-|--------|-----------|
-| **Split into `Path` (immutable) + `PathBuilder` (mutable)** | Thread safety, cacheable, clear ownership semantics. Cached `GeodePathCacheComponent` holds a `Path` that never changes underneath it. |
-| **Add `QuadTo` verb** | Slug evaluates quadratic curves more efficiently than cubics (quadratic root-finding vs. cubic). SVG `<path>` has Q/q commands. Currently these are converted to cubics unnecessarily. |
-| **`cubicToQuadratic()` conversion** | Slug's fragment shader solves for ray-curve intersections. Quadratic = one `f32` square root; cubic = Cardano's formula with potential numerical issues. Converting to quadratics where possible reduces fragment shader cost and improves numerical stability. |
-| **`toMonotonic()` splitting** | Band decomposition requires curves that are monotonic in Y (each curve crosses any horizontal line at most once). Without this, band assignment is ambiguous. |
-| **`flatten()` method** | Useful for stroke expansion fallback and hit testing. Exists internally as `SubdivideAndMeasureCubic` but not exposed. |
-| **`strokeToFill()` method** | Replaces the open question about stroke rendering strategy — CPU stroke expansion as the initial approach, GPU expansion as future optimization. |
-| **`forEach` visitor** | Clean iteration without exposing internal indices. Useful for `GeodePathEncoder`. |
+| Change                                                      | Rationale                                                                                                                                                                                                                                                       |
+| ----------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Split into `Path` (immutable) + `PathBuilder` (mutable)** | Thread safety, cacheable, clear ownership semantics. Cached `GeodePathCacheComponent` holds a `Path` that never changes underneath it.                                                                                                                          |
+| **Add `QuadTo` verb**                                       | Slug evaluates quadratic curves more efficiently than cubics (quadratic root-finding vs. cubic). SVG `<path>` has Q/q commands. Currently these are converted to cubics unnecessarily.                                                                          |
+| **`cubicToQuadratic()` conversion**                         | Slug's fragment shader solves for ray-curve intersections. Quadratic = one `f32` square root; cubic = Cardano's formula with potential numerical issues. Converting to quadratics where possible reduces fragment shader cost and improves numerical stability. |
+| **`toMonotonic()` splitting**                               | Band decomposition requires curves that are monotonic in Y (each curve crosses any horizontal line at most once). Without this, band assignment is ambiguous.                                                                                                   |
+| **`flatten()` method**                                      | Useful for stroke expansion fallback and hit testing. Exists internally as `SubdivideAndMeasureCubic` but not exposed.                                                                                                                                          |
+| **`strokeToFill()` method**                                 | Replaces the open question about stroke rendering strategy — CPU stroke expansion as the initial approach, GPU expansion as future optimization.                                                                                                                |
+| **`forEach` visitor**                                       | Clean iteration without exposing internal indices. Useful for `GeodePathEncoder`.                                                                                                                                                                               |
 
 **Cubic-to-quadratic decomposition algorithm:**
 
@@ -1167,11 +1167,11 @@ cleanup.
 ### Phase 0: Type Refactoring (pre-Geode)
 
 - [x] Rename `Transform<T>` → `Transform2<T>`, `Transform2d` → `Transform2d` with compatibility
-  aliases.
+      aliases.
 - [x] Rename `Box<T>` → `Box2<T>`, `Box2d` → `Box2d` with compatibility aliases.
 - [x] Implement Bézier utility functions: `SplitQuadratic`, `SplitCubic`,
-  `ApproximateCubicWithQuadratics`, `QuadraticYExtrema`, `CubicYExtrema`, `QuadraticBounds`,
-  `CubicBounds`, `EvalQuadratic`, `EvalCubic`.
+      `ApproximateCubicWithQuadratics`, `QuadraticYExtrema`, `CubicYExtrema`, `QuadraticBounds`,
+      `CubicBounds`, `EvalQuadratic`, `EvalCubic`.
   - [ ] Unit tests for all utilities.
   - [ ] Fuzz tests for cubic-to-quadratic approximation and monotonic splitting.
 - [x] Implement `Path` (immutable) and `PathBuilder` (mutable), replacing `PathSpline`.
@@ -1180,9 +1180,9 @@ cleanup.
   - [x] Implement `toMonotonic()`.
   - [x] Implement `flatten()`.
   - [x] Implement `strokeToFill()` — flattens curves, offsets each segment
-    by width/2, applies cap/join with miter-limit fallback to bevel.
-    Produces two same-winding closed contours per closed subpath, so
-    callers must fill with `EvenOdd` to get the expected hollow ring.
+        by width/2, applies cap/join with miter-limit fallback to bevel.
+        Produces two same-winding closed contours per closed subpath, so
+        callers must fill with `EvenOdd` to get the expected hollow ring.
 - [x] Migrate `RendererInterface` from `PathSpline` to `Path`.
 - [x] Migrate remaining callers, remove `PathSpline`.
 
@@ -1225,178 +1225,178 @@ cleanup.
   - **4 tests passing on macOS Metal**, including end-to-end clear+readback
     verifying that the first pixel of a cleared texture is `(255, 0, 0, 255)`.
 - [x] Implement Slug vertex shader: MVP transform, dynamic half-pixel
-  dilation. **(WGSL in `shaders/slug_fill.wgsl`, compiles via Tint.)**
+      dilation. **(WGSL in `shaders/slug_fill.wgsl`, compiles via Tint.)**
 - [x] Implement Slug fragment shader: ray-curve intersection, winding
-  number, coverage. **(compiles via Tint; end-to-end rendering not yet
-  wired up.)**
+      number, coverage. **(compiles via Tint; end-to-end rendering not yet
+      wired up.)**
   - [x] Non-zero fill rule.
   - [x] Even-odd fill rule.
 - [x] Implement `GeodePathEncoder`: `Path` → Slug band decomposition. **(commit `e42f3f75`)**
 - [x] Implement `GeoEncoder` core: transform stack, solid color fill, path
-  rendering. **(commit `ddbcda6b`)**
+      rendering. **(commit `ddbcda6b`)**
 - [x] Implement `RendererGeode` skeleton: `beginFrame`/`endFrame`,
-  `setTransform`, `drawPath` with solid fill.
+      `setTransform`, `drawPath` with solid fill.
 - [x] Add Bazel `--config=geode` backend selection.
 - [x] Run basic renderer tests (solid-fill SVGs) against golden images —
-  `renderer_geode_golden_tests` with per-backend goldens under
-  `testdata/golden/geode/`; 5/5 green on macOS Metal.
+      `renderer_geode_golden_tests` with per-backend goldens under
+      `testdata/golden/geode/`; 5/5 green on macOS Metal.
 - [x] Linux CI headless Vulkan via Mesa `llvmpipe`. **(Switched from
-  SwiftShader: Ubuntu's `mesa-vulkan-drivers` apt package ships llvmpipe,
-  a maintained pure-software Vulkan ICD. No vendoring/CMake work
-  required. Added as experimental `linux-geode` CI job —
-  `continue-on-error: true` until first run proves it out.)**
+      SwiftShader: Ubuntu's `mesa-vulkan-drivers` apt package ships llvmpipe,
+      a maintained pure-software Vulkan ICD. No vendoring/CMake work
+      required. Added as experimental `linux-geode` CI job —
+      `continue-on-error: true` until first run proves it out.)**
 
 ### Phase 2: Complete SVG Painting
 
 - [x] Stroke rendering via `Path::strokeToFill()` → Slug fill pipeline.
-  `RendererGeode::drawPath` expands the stroked outline on the CPU via
-  `Path::strokeToFill` and fills it through the existing Slug pipeline.
-  The fill rule is chosen **per source**: open source paths produce a
-  single-subpath result rendered with `NonZero` (overlapping start/end
-  caps + inside-miter shortcuts in `emitJoin` can self-intersect and
-  EvenOdd would drop whole segments); closed source paths produce a
-  two-subpath result (outer + inner, same winding) rendered with
-  `EvenOdd` to get the hollow ring. `drawPath` counts `MoveTo` verbs in
-  the result path to select the rule.
-    * **Dashes, dashoffset, pathLength** — plumbed through
-      `Path::strokeToFill`'s dash splitter. Each dash is stroked as its
-      own open sub-polyline with butt caps. The final dash is truncated
-      at `totalArc` for closed subpaths (the earlier wrap-around-stitch
-      path overlapped with the first iteration's dash at arc 0 and
-      EvenOdd cancellation produced a visible gap at the seam — now
-      fixed, matches tiny-skia).
-    * **Round / square / butt caps** — handled by `emitCap`. SVG 2 §11.4
-      zero-length subpath caps (square → axis-aligned square, round →
-      full circle, butt → nothing) detected up front in `strokeSubpath`
-      before the normal segment-normal loop.
-    * **Sharp concave corners on open subpaths** — `emitJoin`'s inside-
-      turn branch emits the true offset-line intersection (the miter
-      point) so the resulting polygon is geometrically clean.
-    * **Curved flattened strokes on closed subpaths** — rounded rects,
-      ellipses, and quadratic curves (`rect2`, `ellipse1`, `skew1`,
-      `quadbezier1`) all pass after the strokeToFill regressions landed
-      earlier in Phase 2.
-  Outstanding: `painting/stroke-linejoin/miter` still shows a ~2-pixel
-  offset at the bevel-fallback corner tip, marked `disableBackend(Geode)`
-  with a TODO to align `emitJoin`'s outside-turn branch with tiny-skia's
-  reference.
+      `RendererGeode::drawPath` expands the stroked outline on the CPU via
+      `Path::strokeToFill` and fills it through the existing Slug pipeline.
+      The fill rule is chosen **per source**: open source paths produce a
+      single-subpath result rendered with `NonZero` (overlapping start/end
+      caps + inside-miter shortcuts in `emitJoin` can self-intersect and
+      EvenOdd would drop whole segments); closed source paths produce a
+      two-subpath result (outer + inner, same winding) rendered with
+      `EvenOdd` to get the hollow ring. `drawPath` counts `MoveTo` verbs in
+      the result path to select the rule.
+  - **Dashes, dashoffset, pathLength** — plumbed through
+    `Path::strokeToFill`'s dash splitter. Each dash is stroked as its
+    own open sub-polyline with butt caps. The final dash is truncated
+    at `totalArc` for closed subpaths (the earlier wrap-around-stitch
+    path overlapped with the first iteration's dash at arc 0 and
+    EvenOdd cancellation produced a visible gap at the seam — now
+    fixed, matches tiny-skia).
+  - **Round / square / butt caps** — handled by `emitCap`. SVG 2 §11.4
+    zero-length subpath caps (square → axis-aligned square, round →
+    full circle, butt → nothing) detected up front in `strokeSubpath`
+    before the normal segment-normal loop.
+  - **Sharp concave corners on open subpaths** — `emitJoin`'s inside-
+    turn branch emits the true offset-line intersection (the miter
+    point) so the resulting polygon is geometrically clean.
+  - **Curved flattened strokes on closed subpaths** — rounded rects,
+    ellipses, and quadratic curves (`rect2`, `ellipse1`, `skew1`,
+    `quadbezier1`) all pass after the strokeToFill regressions landed
+    earlier in Phase 2.
+    Outstanding: `painting/stroke-linejoin/miter` still shows a ~2-pixel
+    offset at the bevel-fallback corner tip, marked `disableBackend(Geode)`
+    with a TODO to align `emitJoin`'s outside-turn branch with tiny-skia's
+    reference.
 - [🚧] Implement `GeodeGradientEncoder`: linear, radial, and sweep gradients.
   - [x] **Linear gradients (Phase 2E).** Shipped as a sibling pipeline
-    (`GeodeGradientPipeline`) + fragment shader
-    (`shaders/slug_gradient.wgsl`) + `GeoEncoder::fillPathLinearGradient`.
-    Supports both `userSpaceOnUse` and `objectBoundingBox` units, the
-    `gradientTransform` attribute, and all three spread modes. Stops are
-    baked into the per-draw uniform (cap: 16 stops — follow-up is a
-    texture-based stop lookup via `GeodeGradientCacheComponent`). The
-    `RendererGeode` fill/stroke dispatch shares a single code path
-    (`drawPaintedPathAgainst`) so gradient strokes reuse the *original*
-    path bounds for gradient coordinate resolution, matching the SVG spec
-    and the other backends. Golden coverage:
-    `linear_gradient_basic.svg` (objectBoundingBox / horizontal / pad),
-    `linear_gradient_userspace.svg` (userSpaceOnUse + rotate
-    gradientTransform + 3-stop),
-    `linear_gradient_spread.svg` (three rects exercising
-    pad / reflect / repeat side by side),
-    `linear_gradient_stroke.svg` (stroked rect outline gradient-filled).
-    Unit-test coverage in `GeoEncoder_tests.cc` exercises the pipeline
-    directly (`FillLinearGradientUserSpace`, `FillLinearGradientRepeat`).
+        (`GeodeGradientPipeline`) + fragment shader
+        (`shaders/slug_gradient.wgsl`) + `GeoEncoder::fillPathLinearGradient`.
+        Supports both `userSpaceOnUse` and `objectBoundingBox` units, the
+        `gradientTransform` attribute, and all three spread modes. Stops are
+        baked into the per-draw uniform (cap: 16 stops — follow-up is a
+        texture-based stop lookup via `GeodeGradientCacheComponent`). The
+        `RendererGeode` fill/stroke dispatch shares a single code path
+        (`drawPaintedPathAgainst`) so gradient strokes reuse the _original_
+        path bounds for gradient coordinate resolution, matching the SVG spec
+        and the other backends. Golden coverage:
+        `linear_gradient_basic.svg` (objectBoundingBox / horizontal / pad),
+        `linear_gradient_userspace.svg` (userSpaceOnUse + rotate
+        gradientTransform + 3-stop),
+        `linear_gradient_spread.svg` (three rects exercising
+        pad / reflect / repeat side by side),
+        `linear_gradient_stroke.svg` (stroked rect outline gradient-filled).
+        Unit-test coverage in `GeoEncoder_tests.cc` exercises the pipeline
+        directly (`FillLinearGradientUserSpace`, `FillLinearGradientRepeat`).
   - [x] **Radial gradients (Phase 2F).** Shipped by extending
-    `slug_gradient.wgsl` with a `gradientKind` discriminator (linear vs.
-    radial) and a small uniform-layout grow (`GradientUniforms` is now
-    480 bytes, up from 464). The fragment stage forks into one of two
-    `t` derivations before reaching the shared `apply_spread` /
-    `sample_stops` path:
-      * **linear** — projects the gradient-space sample onto the
-        `(start, end)` axis (unchanged from Phase 2E).
-      * **radial** — solves the SVG 2 / Canvas two-circle quadratic
-        `|e − t·d|² = (Fr + t·Dr)²` for `t`, taking the root whose
-        corresponding radius `Fr + t·Dr` is non-negative. Reduces to the
-        closed form `|P − C| / R` when the focal point coincides with
-        the center and `fr == 0`. See `radial_t()` in
-        `shaders/slug_gradient.wgsl` for the full derivation.
-    `RendererGeode::resolveRadialGradientParams` shares its frame /
-    transform / stop-list helpers with the linear resolver via the new
-    `resolveGradientFrame` and `buildGradientStops` factor-outs, so the
-    only branch-specific code is the geometry resolution and the new
-    `geode::RadialGradientParams` struct. Both fill and stroke routes
-    work — the existing `drawPaintedPathAgainst` dispatch tries linear
-    first, then radial, then falls back to the reference's solid
-    fallback color. Golden coverage:
-    `radial_gradient_basic.svg` (objectBoundingBox / concentric / pad),
-    `radial_gradient_userspace.svg` (userSpaceOnUse + anisotropic
-    gradientTransform + 3-stop),
-    `radial_gradient_focal.svg` (off-center focal point exercising the
-    general two-circle quadratic),
-    `radial_gradient_spread.svg` (pad / reflect / repeat side by side
-    on a 30%-radius gradient),
-    `radial_gradient_stroke.svg` (stroked rect outline radial-filled).
-    Unit-test coverage in `GeoEncoder_tests.cc` exercises the encoder
-    directly (`FillRadialGradientConcentric`, `FillRadialGradientFocal`).
+        `slug_gradient.wgsl` with a `gradientKind` discriminator (linear vs.
+        radial) and a small uniform-layout grow (`GradientUniforms` is now
+        480 bytes, up from 464). The fragment stage forks into one of two
+        `t` derivations before reaching the shared `apply_spread` /
+        `sample_stops` path:
+    - **linear** — projects the gradient-space sample onto the
+      `(start, end)` axis (unchanged from Phase 2E).
+    - **radial** — solves the SVG 2 / Canvas two-circle quadratic
+      `|e − t·d|² = (Fr + t·Dr)²` for `t`, taking the root whose
+      corresponding radius `Fr + t·Dr` is non-negative. Reduces to the
+      closed form `|P − C| / R` when the focal point coincides with
+      the center and `fr == 0`. See `radial_t()` in
+      `shaders/slug_gradient.wgsl` for the full derivation.
+      `RendererGeode::resolveRadialGradientParams` shares its frame /
+      transform / stop-list helpers with the linear resolver via the new
+      `resolveGradientFrame` and `buildGradientStops` factor-outs, so the
+      only branch-specific code is the geometry resolution and the new
+      `geode::RadialGradientParams` struct. Both fill and stroke routes
+      work — the existing `drawPaintedPathAgainst` dispatch tries linear
+      first, then radial, then falls back to the reference's solid
+      fallback color. Golden coverage:
+      `radial_gradient_basic.svg` (objectBoundingBox / concentric / pad),
+      `radial_gradient_userspace.svg` (userSpaceOnUse + anisotropic
+      gradientTransform + 3-stop),
+      `radial_gradient_focal.svg` (off-center focal point exercising the
+      general two-circle quadratic),
+      `radial_gradient_spread.svg` (pad / reflect / repeat side by side
+      on a 30%-radius gradient),
+      `radial_gradient_stroke.svg` (stroked rect outline radial-filled).
+      Unit-test coverage in `GeoEncoder_tests.cc` exercises the encoder
+      directly (`FillRadialGradientConcentric`, `FillRadialGradientFocal`).
   - [ ] Sweep / conic gradients (Phase 2F-followup). The donner SVG
-    parser does not yet expose a `<conicGradient>` element nor a
-    `ComputedSweepGradientComponent`, so there is nothing for the
-    renderer to dispatch on. The shader is structured to take a third
-    branch when the parser side lands: add a `kGradientSweep` enum
-    value, drop a `sweep_t()` function next to `radial_t()` (one
-    `atan2` over the gradient-space delta), and wire a sibling
-    resolver in `RendererGeode`. Tracking issue / parser support is
-    a prerequisite.
+        parser does not yet expose a `<conicGradient>` element nor a
+        `ComputedSweepGradientComponent`, so there is nothing for the
+        renderer to dispatch on. The shader is structured to take a third
+        branch when the parser side lands: add a `kGradientSweep` enum
+        value, drop a `sweep_t()` function next to `radial_t()` (one
+        `atan2` over the gradient-space delta), and wire a sibling
+        resolver in `RendererGeode`. Tracking issue / parser support is
+        a prerequisite.
   - [x] Spread modes: pad, reflect, repeat (covered by both linear and
-    radial paths).
+        radial paths).
 - [x] Implement pattern tile rendering: render tile to offscreen texture, sample as repeating
-  shader. The Slug fill shader gained a `paintMode` uniform (0 = solid, 1 = pattern), a
-  `patternFromPath` affine transform, and texture + sampler bindings. `beginPatternTile`
-  allocates an offscreen `wgpu::Texture`, finishes the outer `GeoEncoder`, and redirects
-  subsequent draws into a nested `GeoEncoder` on the tile. `endPatternTile` finishes the
-  tile encoder, stashes the texture as the fill or stroke paint, and creates a fresh outer
-  encoder with `setLoadPreserve()` so earlier outer content is retained. Pattern fills
-  reuse the winding-number coverage path, so non-rectangular pattern fills (e.g., pattern
-  inside a triangle) work transparently. Goldens: `geode_pattern_solid`, `_checker`,
-  `_offset`, `_nonrect`.
+      shader. The Slug fill shader gained a `paintMode` uniform (0 = solid, 1 = pattern), a
+      `patternFromPath` affine transform, and texture + sampler bindings. `beginPatternTile`
+      allocates an offscreen `wgpu::Texture`, finishes the outer `GeoEncoder`, and redirects
+      subsequent draws into a nested `GeoEncoder` on the tile. `endPatternTile` finishes the
+      tile encoder, stashes the texture as the fill or stroke paint, and creates a fresh outer
+      encoder with `setLoadPreserve()` so earlier outer content is retained. Pattern fills
+      reuse the winding-number coverage path, so non-rectangular pattern fills (e.g., pattern
+      inside a triangle) work transparently. Goldens: `geode_pattern_solid`, `_checker`,
+      `_offset`, `_nonrect`.
 - [ ] Implement `drawRect` and `drawEllipse` optimized paths (skip band decomposition for
-  axis-aligned primitives).
+      axis-aligned primitives).
 - [x] Implement `drawImage`: textured quad with opacity and filtering.
-  Shipped via `GeodeImagePipeline` + `GeodeTextureEncoder` (see
-  implementation-status note above). Unit-tested in
-  `geo_encoder_tests` and `renderer_geode_tests`; golden tests in
-  `renderer_geode_golden_tests` (`image_data_url_pixelated.svg`,
-  `image_data_url_opacity.svg`). The same `GeodeTextureEncoder`
-  helpers will be reused by Phase 2H pattern tile sampling.
+      Shipped via `GeodeImagePipeline` + `GeodeTextureEncoder` (see
+      implementation-status note above). Unit-tested in
+      `geo_encoder_tests` and `renderer_geode_tests`; golden tests in
+      `renderer_geode_golden_tests` (`image_data_url_pixelated.svg`,
+      `image_data_url_opacity.svg`). The same `GeodeTextureEncoder`
+      helpers will be reused by Phase 2H pattern tile sampling.
 - [ ] Implement `GeodeGradientCacheComponent` for ECS gradient caching.
 
 ### Phase 3: Compositing and Clipping
 
 - [x] Implement scissor-based clip rect.
 - [x] **Phase 3a: convex 4-vertex clip polygon.** For non-axis-aligned
-  ancestor transforms (e.g., a skewed or rotated `<symbol>` / `<svg>`
-  viewport), the rectangular scissor can only describe the AABB of the
-  transformed viewport, not the true parallelogram. `GeoEncoder` now
-  accepts `setClipPolygon(corners[4])` / `clearClipPolygon()`, uploads
-  4 inward half-planes through the `Uniforms` / `GradientUniforms`
-  blocks, and the fragment shader rejects positions outside any
-  half-plane. `RendererGeode::pushClip` detects non-axis-
-  aligned transforms via the 2×2 linear part and pushes the 4
-  transformed corners alongside the existing scissor AABB. Re-enables
-  `structure/symbol/with-transform-on-use{,-no-size}` on the Geode
-  resvg suite. Nested polygon clips (unusual) fall back to the
-  topmost polygon — no in-shader polygon-intersection pass yet.
+      ancestor transforms (e.g., a skewed or rotated `<symbol>` / `<svg>`
+      viewport), the rectangular scissor can only describe the AABB of the
+      transformed viewport, not the true parallelogram. `GeoEncoder` now
+      accepts `setClipPolygon(corners[4])` / `clearClipPolygon()`, uploads
+      4 inward half-planes through the `Uniforms` / `GradientUniforms`
+      blocks, and the fragment shader rejects positions outside any
+      half-plane. `RendererGeode::pushClip` detects non-axis-
+      aligned transforms via the 2×2 linear part and pushes the 4
+      transformed corners alongside the existing scissor AABB. Re-enables
+      `structure/symbol/with-transform-on-use{,-no-size}` on the Geode
+      resvg suite. Nested polygon clips (unusual) fall back to the
+      topmost polygon — no in-shader polygon-intersection pass yet.
 - [x] **Phase 3b: path clipping via R8 mask texture.** Arbitrary SVG
-  `clip-path` references are now honoured. `GeoEncoder` gains a
-  `beginMaskPass` / `fillPathIntoMask` / `endMaskPass` /
-  `setClipMask` / `clearClipMask` API. A new `GeodeMaskPipeline`
-  + `shaders/slug_mask.wgsl` renders clip paths directly into a
-  single-sample RGBA8Unorm texture; the
-  main fill + gradient pipelines gain an extra texture+sampler
-  binding and their fragment shaders sample `mask.r` at each pixel
-  center and multiply it into the output colour. A 1x1 dummy R8
-  (value 0xFF) is bound when no clip is active so the bind group
-  layout stays stable. `RendererGeode::pushClip` allocates mask
-  texture(s) per clip, walks `clip.clipPaths` applying the
-  `clipPathUnitsTransform × parentFromEntity × currentTransform`
-  chain (matches `RendererTinySkia`), and stashes the outermost
-  resolve view on the clip stack entry so `updateEncoderScissor`
-  can bind the topmost mask. Multiple clip paths within a single
-  layer union via `BlendOperation::Max` on the R channel.
+      `clip-path` references are now honoured. `GeoEncoder` gains a
+      `beginMaskPass` / `fillPathIntoMask` / `endMaskPass` /
+      `setClipMask` / `clearClipMask` API. A new `GeodeMaskPipeline`
+  - `shaders/slug_mask.wgsl` renders clip paths directly into a
+    single-sample RGBA8Unorm texture; the
+    main fill + gradient pipelines gain an extra texture+sampler
+    binding and their fragment shaders sample `mask.r` at each pixel
+    center and multiply it into the output colour. A 1x1 dummy R8
+    (value 0xFF) is bound when no clip is active so the bind group
+    layout stays stable. `RendererGeode::pushClip` allocates mask
+    texture(s) per clip, walks `clip.clipPaths` applying the
+    `clipPathUnitsTransform × parentFromEntity × currentTransform`
+    chain (matches `RendererTinySkia`), and stashes the outermost
+    resolve view on the clip stack entry so `updateEncoderScissor`
+    can bind the topmost mask. Multiple clip paths within a single
+    layer union via `BlendOperation::Max` on the R channel.
 
   **Nested clip-path support (follow-up, also done):** The mask
   pipeline itself accepts a clip mask input — `slug_mask.wgsl`
@@ -1417,56 +1417,56 @@ cleanup.
   cross-category `*-on-clipPath` tests. Session delta: 596 → 636
   passing on `resvg_test_suite_geode_text`.
 - [ ] Implement stencil-based clip path — superseded by Phase 3b
-  texture-mask clipping, which uses a resolved R8 mask sampled by the
-  main fill / gradient fragment shaders. Stencil would still be a
-  valid optimisation (skip the sample + the offscreen pass for simple
-  clip rects), but is no longer on the critical path.
+      texture-mask clipping, which uses a resolved R8 mask sampled by the
+      main fill / gradient fragment shaders. Stencil would still be a
+      valid optimisation (skip the sample + the offscreen pass for simple
+      clip rects), but is no longer on the critical path.
 - [x] Implement `pushIsolatedLayer`/`popIsolatedLayer`: offscreen
-  render target allocation + opacity compositing. (Phase 2 landing.)
+      render target allocation + opacity compositing. (Phase 2 landing.)
   - [ ] Blend mode fragment shader (all 28 SVG/CSS blend modes).
-    Still pending — `popIsolatedLayer` does a plain premultiplied
-    source-over today. `painting/mix-blend-mode` + `painting/isolation`
-    remain category-gated.
+        Still pending — `popIsolatedLayer` does a plain premultiplied
+        source-over today. `painting/mix-blend-mode` + `painting/isolation`
+        remain category-gated.
 - [x] **Phase 3c: `<mask>` compositing via luminance blit.** The
-  existing `GeodeImagePipeline` is extended with a second texture
-  binding (luminance mask) + `maskMode` / `applyMaskBounds` /
-  `maskBounds` uniforms; a 1x1 dummy mask is bound for normal
-  `drawImage` / `blitFullTarget` calls so layout stays stable. The
-  fragment shader computes `0.2126·R_pm + 0.7152·G_pm + 0.0722·B_pm`
-  (which equals `luminance(demult) · alpha` for premultiplied input)
-  and multiplies it into the output colour, matching tiny-skia's
-  `Mask::fromPixmap(Luminance)`. `RendererGeode::pushMask` allocates
-  two offscreen texture pairs (mask capture + masked content),
-  redirects the encoder into the first pair, and saves the outer
-  target + the `currentTransform` as the mask-bounds reference frame.
-  `transitionMaskToContent` swaps the encoder into the content pair.
-  `popMask` composites the pair back onto the restored parent via
-  `GeoEncoder::blitFullTargetMasked`, lifting the raw mask-bounds
-  rect into device-pixel space through the saved transform so
-  `maskUnits=userSpaceOnUse` and percent-sized bounds render
-  correctly. Unlocks the entire `masking/mask` category (31/31
-  tests passing). Session delta: 636 → 666 passing on
-  `resvg_test_suite_geode_text`.
+      existing `GeodeImagePipeline` is extended with a second texture
+      binding (luminance mask) + `maskMode` / `applyMaskBounds` /
+      `maskBounds` uniforms; a 1x1 dummy mask is bound for normal
+      `drawImage` / `blitFullTarget` calls so layout stays stable. The
+      fragment shader computes `0.2126·R_pm + 0.7152·G_pm + 0.0722·B_pm`
+      (which equals `luminance(demult) · alpha` for premultiplied input)
+      and multiplies it into the output colour, matching tiny-skia's
+      `Mask::fromPixmap(Luminance)`. `RendererGeode::pushMask` allocates
+      two offscreen texture pairs (mask capture + masked content),
+      redirects the encoder into the first pair, and saves the outer
+      target + the `currentTransform` as the mask-bounds reference frame.
+      `transitionMaskToContent` swaps the encoder into the content pair.
+      `popMask` composites the pair back onto the restored parent via
+      `GeoEncoder::blitFullTargetMasked`, lifting the raw mask-bounds
+      rect into device-pixel space through the saved transform so
+      `maskUnits=userSpaceOnUse` and percent-sized bounds render
+      correctly. Unlocks the entire `masking/mask` category (31/31
+      tests passing). Session delta: 636 → 666 passing on
+      `resvg_test_suite_geode_text`.
 - [ ] Implement `GeodePatternCacheComponent` for ECS pattern caching.
 
 ### Phase 4: Text Rendering
 
 - [x] Implement glyph outline extraction: `RendererGeode::drawText` extracts
-  per-glyph outlines via `TextEngine::glyphOutline` and routes them through
-  the existing `Path` → `GeoEncoder` pipeline (no separate `GeodeTextRenderer`
-  class — glyph outlines reuse the fill pipeline).
+      per-glyph outlines via `TextEngine::glyphOutline` and routes them through
+      the existing `Path` → `GeoEncoder` pipeline (no separate `GeodeTextRenderer`
+      class — glyph outlines reuse the fill pipeline).
 - [x] Integrate with `TextShaper` (text-full config) and `TextLayout` (base config).
 - [x] Implement `drawText` on `RendererGeode` (landed in #543).
 - [x] Run text-related renderer tests across base, text-full, and Geode configs —
-  the resvg suite's `text/*` category is gated off Geode builds without
-  `--config=text` / `--config=text-full`, and runs live on the text builds.
+      the resvg suite's `text/*` category is gated off Geode builds without
+      `--config=text` / `--config=text-full`, and runs live on the text builds.
 - [ ] Optimize: `GeodeGlyphCacheComponent` for per-glyph band data cache in ECS.
-  Today every character re-encodes from the outline every frame; caching the
-  encoded bands keyed by (font, glyph-id, pixel-height) would amortize that
-  cost. Deferred as a Phase 5-style perf optimization once the Phase 5b
-  parity push finishes.
+      Today every character re-encodes from the outline every frame; caching the
+      encoded bands keyed by (font, glyph-id, pixel-height) would amortize that
+      cost. Deferred as a Phase 5-style perf optimization once the Phase 5b
+      parity push finishes.
 - [ ] Optimize: instanced glyph rendering (per-character position/transform/color).
-  Complementary to the cache above; requires the Phase 5 batch-draw refactor.
+      Complementary to the cache above; requires the Phase 5 batch-draw refactor.
 
 ### Phase 4b: In-process backend matrix + geode-vs-tiny-skia parity comparison
 
@@ -1479,10 +1479,10 @@ see the three developer references:
 **Current matrix.** Both backends link into one Geode-enabled test binary. Each active resvg case
 runs in two comparison modes:
 
-| Mode | Compares | Notes |
-|---|---|---|
-| `TinyGolden` | tiny-skia → resvg golden | ground-truth oracle |
-| `GeodeGolden` | geode → resvg golden | geode against the shared golden |
+| Mode          | Compares                 | Notes                           |
+| ------------- | ------------------------ | ------------------------------- |
+| `TinyGolden`  | tiny-skia → resvg golden | ground-truth oracle             |
+| `GeodeGolden` | geode → resvg golden     | geode against the shared golden |
 
 Both modes use the case-local `ImageComparisonParams`. Geode's analytic coverage can legitimately
 differ from tiny-skia's finite-sample coverage, so direct backend pixel identity is not an active
@@ -1507,7 +1507,7 @@ transform-order divergence (no current test triggers it).
 - [ ] Implement deferred GPU resource destruction (frame-boundary cleanup).
 - [ ] Implement GPU timestamp profiling (behind `enableTimestamps` flag).
 - [ ] Performance benchmarking: compare against the archived full-Skia renderer and RendererTinySkia on the
-  resvg test suite and complex real-world SVGs.
+      resvg test suite and complex real-world SVGs.
 - [ ] Optimize: batch draw calls for paths sharing the same pipeline state.
 
 ### Phase 5b: Full Test-Suite Parity with tiny-skia
@@ -1553,9 +1553,9 @@ GPU-driver hang from consuming the whole Bazel timeout.
   - [x] feTile (wraparound tiling of the input subregion across the filter region).
 - [x] Implement `pushFilterLayer`/`popFilterLayer` on `RendererGeode`.
 - [x] Implement filter graph execution: route intermediate textures between compute passes
-  matching the `FilterGraph` node topology (scaffolding — unsupported primitives pass through).
+      matching the `FilterGraph` node topology (scaffolding — unsupported primitives pass through).
 - [x] Run full resvg filter test suite — all filter categories now run on Geode with the
-  `FilterEffects` feature flag enabled.
+      `FilterEffects` feature flag enabled.
 
 ## Testing and Validation
 
@@ -1567,6 +1567,7 @@ tiny-skia-cpp (per-pixel threshold first, `maxMismatchedPixels` as last resort).
 structural assertions apply identically since `RendererDriver` is backend-agnostic.
 
 **GPU-specific tests:**
+
 - Resource leak detection: track `wgpu::Buffer`/`wgpu::Texture` create/destroy counts per frame.
 - Cache hit/miss counters: verify ECS caching is effective across re-renders.
 - Timestamp profiling: regression detection for per-frame GPU time.
@@ -1579,9 +1580,9 @@ existing testing conventions.
 
 ## Dependencies
 
-| Dependency | Version | Purpose | License |
-|------------|---------|---------|---------|
-| Dawn | HEAD (pinned) | WebGPU implementation | BSD-3-Clause |
+| Dependency  | Version       | Purpose                                    | License        |
+| ----------- | ------------- | ------------------------------------------ | -------------- |
+| Dawn        | HEAD (pinned) | WebGPU implementation                      | BSD-3-Clause   |
 | wgpu-native | (alternative) | Lighter-weight WebGPU if Dawn is too heavy | Apache-2.0/MIT |
 
 Dawn is the primary choice for its maturity and Chromium backing. If binary size is a concern
@@ -1602,12 +1603,12 @@ clean-room implementation lets us:
 
 **What we use from Slug:**
 
-| Resource | How we use it | License status |
-|----------|--------------|----------------|
-| Patent US10373352B1 | Implements the patented algorithm | Public domain (dedicated 2026-03-17) |
-| JCGT 2017 paper | Mathematical reference for winding number, root eligibility | Academic publication (ideas not copyrightable) |
-| "A Decade of Slug" blog post | Design lessons (dilation > supersampling, no band-split, no emoji loops) | Ideas not copyrightable |
-| Reference shader code (GitHub) | **Not used** — clean-room WGSL implementation | MIT (we avoid to keep ISC clean) |
+| Resource                       | How we use it                                                            | License status                                 |
+| ------------------------------ | ------------------------------------------------------------------------ | ---------------------------------------------- |
+| Patent US10373352B1            | Implements the patented algorithm                                        | Public domain (dedicated 2026-03-17)           |
+| JCGT 2017 paper                | Mathematical reference for winding number, root eligibility              | Academic publication (ideas not copyrightable) |
+| "A Decade of Slug" blog post   | Design lessons (dilation > supersampling, no band-split, no emoji loops) | Ideas not copyrightable                        |
+| Reference shader code (GitHub) | **Not used** — clean-room WGSL implementation                            | MIT (we avoid to keep ISC clean)               |
 
 **Implementation approach:**
 
@@ -1699,9 +1700,9 @@ to drop to native APIs if needed.
   - Error/fallback paths in `RendererGeode::beginFrame` / `pushFilterLayer` /
     `pushClip` — several are only exercised when a `wgpu::Texture::createTexture` or
     `createCommandEncoder` returns null, which doesn't happen on healthy CI hardware.
-  Once patch coverage on subsequent Geode PRs is consistently at or above the project
-  baseline, flip `codecov/patch` back to a blocking status (drop the `informational: true`
-  line in `codecov.yml`).
+    Once patch coverage on subsequent Geode PRs is consistently at or above the project
+    baseline, flip `codecov/patch` back to a blocking status (drop the `informational: true`
+    line in `codecov.yml`).
 
 ## Long-Term Vision: Geode as a Standalone Rendering Engine
 
@@ -1862,9 +1863,9 @@ These phases follow after the core Geode v1 phases (1–7) described above.
 #### Phase 8: Standalone Library Extraction
 
 - [ ] Verify `//geode` Bazel package has no transitive dependency on `//donner/svg` — the 2D
-  API is designed standalone from the start; this phase is about validation and packaging.
+      API is designed standalone from the start; this phase is about validation and packaging.
 - [ ] Extract shared base types (`Vector2`, `Transform2`, `Box2`, `Path`, color types)
-  into `//geode/base` or `//donner/base` as a shared foundation.
+      into `//geode/base` or `//donner/base` as a shared foundation.
 - [ ] Publish standalone API documentation and usage guide.
 - [ ] Provide examples:
   - [ ] SDL/GLFW window with Geode drawing 2D vector content (paths, gradients, text).
@@ -1898,4 +1899,4 @@ These phases follow after the core Geode v1 phases (1–7) described above.
 - [ ] Implement instanced mesh rendering for repeated geometry.
 - [ ] Frustum culling using ECS bounding-box components.
 - [ ] Provide example: game-engine-style scene with 3D meshes, in-world SVG UI panels, and
-  Slug-rendered text labels.
+      Slug-rendered text labels.

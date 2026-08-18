@@ -79,15 +79,15 @@ loading, a set of masking/clipping and filter edge cases, and CPU/GPU renderer p
   - [ ] Filter-region scissor per SVG 2 section 15.5 (GPU backend TODO).
 - [ ] Milestone 5: Painting and structural edge cases
 - [~] `image-rendering: pixelated` / `crisp-edges` sampling. Nearest-neighbor is honored on
-        both the CPU (tiny_skia) and GPU (Geode) backends for both the `<image>` element and the
-        `<feImage>` filter primitive (the `feImage` resampler previously always used the
-        Mitchell-bicubic kernel and ignored `image-rendering`). Both backends render bit-identical
-        nearest output; proven by `FilterGraphExecutorTest.FeImagePixelatedUsesNearestNeighborSharpEdge`
-        and `...FeImageDefaultKernelBlendsAcrossEdge`. The implementation currently collapses
-        `pixelated`, `crisp-edges`, and `optimizeSpeed` to one nearest-neighbor policy. The
-        `painting/image-rendering` goldens (`on-feImage.svg`, `optimizeSpeed.svg`) also retain a
-        non-integer-scale nearest-grid disagreement that needs independent conformance triage before
-        the skips can be removed.
+  both the CPU (tiny_skia) and GPU (Geode) backends for both the `<image>` element and the
+  `<feImage>` filter primitive (the `feImage` resampler previously always used the
+  Mitchell-bicubic kernel and ignored `image-rendering`). Both backends render bit-identical
+  nearest output; proven by `FilterGraphExecutorTest.FeImagePixelatedUsesNearestNeighborSharpEdge`
+  and `...FeImageDefaultKernelBlendsAcrossEdge`. The implementation currently collapses
+  `pixelated`, `crisp-edges`, and `optimizeSpeed` to one nearest-neighbor policy. The
+  `painting/image-rendering` goldens (`on-feImage.svg`, `optimizeSpeed.svg`) also retain a
+  non-integer-scale nearest-grid disagreement that needs independent conformance triage before
+  the skips can be removed.
   - [ ] `<svg version="1.1">` compatibility handling.
   - [ ] Non-UTF-8 document encodings.
 - [ ] Milestone 6: CPU/GPU (Geode) render parity

@@ -141,6 +141,7 @@ Rendering Text id=text1 #5 transform=matrix(2.5 0 0 2.5 0 0)
 ```
 
 This shows:
+
 - **Canvas transform**: The scaling/transform applied to the entire SVG
 - **Instantiating**: Elements being created from the SVG DOM
 - **Rendering**: Elements being drawn to the canvas with their transforms
@@ -161,6 +162,7 @@ SVG Content for simple-case.svg:
 ```
 
 Look for:
+
 - **`<title>`**: Describes what the test validates
 - **Element attributes**: Features being tested (e.g., multiple x/y values)
 - **Complexity**: Number of elements and their properties
@@ -206,16 +208,19 @@ mark differing pixels, colored outlines mark positional differences.
 Based on the output, determine what's causing the failure:
 
 **Check the SVG source** (printed in test output):
+
 - Look at the `<title>` to understand test intent
 - Identify which SVG features are being tested
 - Note complex attributes or patterns
 
 **Compare images**:
+
 - Open the diff image to see where differences are
 - Compare actual vs expected side-by-side
 - Assess the magnitude of differences (pixel count)
 
 **Review verbose output**:
+
 - Check if elements are being instantiated
 - Verify transforms are being applied
 - Look for errors or warnings in the render log
@@ -223,6 +228,7 @@ Based on the output, determine what's causing the failure:
 ### 4. Categorize the Failure
 
 Common failure categories:
+
 - **Not implemented**: Feature doesn't exist yet (e.g., `<tspan>`, `writing-mode`)
 - **UB (Undefined Behavior)**: Edge case or non-standard behavior; render-only (no compare)
 - **Bug**: Wrong output for an implemented feature — find the root cause (wrong transform,
@@ -250,6 +256,7 @@ INSTANTIATE_TEST_SUITE_P(
 ```
 
 **Comment format**:
+
 - `Not impl: <feature>` - Feature not yet implemented
 - `UB: <reason>` - Undefined behavior or edge case (use `Params::RenderOnly`, not `Skip`)
 - `Bug: <description>` - Known bug
@@ -285,6 +292,7 @@ bazel run //donner/svg/renderer/tests:resvg_test_suite -c dbg -- '--gtest_filter
 ```
 
 You should see:
+
 - Skipped tests don't run
 - Passing tests still pass
 - Clear count of passed/skipped tests
@@ -292,9 +300,9 @@ You should see:
 ### Example Triage Workflow
 
 1. Run tests
-    ```
-    bazel run //donner/svg/renderer/tests:resvg_test_suite -c dbg -- '--gtest_filter=TextFontWeight/*'
-    ```
+   ```
+   bazel run //donner/svg/renderer/tests:resvg_test_suite -c dbg -- '--gtest_filter=TextFontWeight/*'
+   ```
 
 2. Examine the SVG of the failing test (printed as output)
 
@@ -310,12 +318,12 @@ You should see:
 - **Categorize systematically**: Group tests by missing feature for easier tracking
 - **Keep comments concise**: Use the established format from existing tests
 
-
 ## MCP Servers
 
 The `resvg-test-triage` MCP server provides automated test analysis. When available, use it to:
 
 **Batch analyze test failures:**
+
 ```python
 # After running tests, pass output to MCP server
 result = await mcp.call_tool("batch_triage_tests", {
@@ -329,6 +337,7 @@ result = await mcp.call_tool("batch_triage_tests", {
 ```
 
 **Analyze individual tests:**
+
 ```python
 result = await mcp.call_tool("analyze_test_failure", {
     "test_name": "e-text-023.svg",
@@ -340,6 +349,7 @@ result = await mcp.call_tool("analyze_test_failure", {
 ```
 
 **Get implementation guidance (NEW):**
+
 ```python
 # Find which files to modify for a missing feature
 result = await mcp.call_tool("suggest_implementation_approach", {
@@ -356,6 +366,7 @@ result = await mcp.call_tool("suggest_implementation_approach", {
 ```
 
 **Find related tests for batch implementation (NEW):**
+
 ```python
 # Discover all tests failing for the same feature
 result = await mcp.call_tool("find_related_tests", {
@@ -370,6 +381,7 @@ result = await mcp.call_tool("find_related_tests", {
 ```
 
 **Track feature progress (NEW):**
+
 ```python
 # Generate progress report for a test category
 result = await mcp.call_tool("generate_feature_report", {
@@ -386,6 +398,7 @@ result = await mcp.call_tool("generate_feature_report", {
 ```
 
 **Analyze visual differences (NEW):**
+
 ```python
 # Programmatically analyze diff images
 result = await mcp.call_tool("analyze_visual_diff", {
@@ -401,6 +414,7 @@ result = await mcp.call_tool("analyze_visual_diff", {
 ```
 
 **Setup:**
+
 1. Install: `pip install -e tools/mcp-servers/resvg-test-triage`
 2. Configure in MCP settings:
    - **Claude Code**: See `tools/mcp-servers/resvg-test-triage/mcp-config-example.json`
@@ -408,6 +422,7 @@ result = await mcp.call_tool("analyze_visual_diff", {
 3. Use tools during test triage
 
 **Benefits:**
+
 - Consistent categorization across all tests
 - Auto-detection of SVG features being tested
 - Batch processing of 50+ test failures
