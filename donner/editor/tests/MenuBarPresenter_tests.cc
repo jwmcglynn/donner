@@ -183,6 +183,17 @@ TEST(MenuBarPresenterActionsTest, ApplyViewMenuToggleActionsHandlesNullAndIndepe
   ApplyViewMenuToggleActions(actions, &showCompositorDebugPanel, &perfOverlayMode);
   EXPECT_FALSE(showCompositorDebugPanel);
   EXPECT_EQ(perfOverlayMode, PerfOverlayMode::FullGraph);
+
+  CompositedRenderingMode compositedRenderingMode = CompositedRenderingMode::On;
+  actions = MenuBarActions{};
+  actions.setCompositedRenderingMode = true;
+  actions.compositedRenderingMode = CompositedRenderingMode::FilterOnly;
+  ApplyViewMenuToggleActions(actions, nullptr, nullptr);
+  EXPECT_EQ(compositedRenderingMode, CompositedRenderingMode::On)
+      << "null out-param must leave the caller's mode untouched";
+  ApplyViewMenuToggleActions(actions, nullptr, nullptr, nullptr, nullptr,
+                             &compositedRenderingMode);
+  EXPECT_EQ(compositedRenderingMode, CompositedRenderingMode::FilterOnly);
 }
 
 TEST(MenuBarPresenterActionsTest, ApplyMenuBarCommandIgnoresInactiveAndNullActions) {
@@ -309,6 +320,21 @@ TEST(MenuBarPresenterActionsTest, ApplyMenuBarCommandMapsSimpleCommandsToActions
   ApplyMenuBarCommand(true, MenuBarCommand::SetPerfOverlayFullGraph, state, &actions);
   EXPECT_TRUE(actions.setPerfOverlayMode);
   EXPECT_EQ(actions.perfOverlayMode, PerfOverlayMode::FullGraph);
+
+  actions = MenuBarActions{};
+  ApplyMenuBarCommand(true, MenuBarCommand::SetCompositedRenderingOff, state, &actions);
+  EXPECT_TRUE(actions.setCompositedRenderingMode);
+  EXPECT_EQ(actions.compositedRenderingMode, CompositedRenderingMode::Off);
+
+  actions = MenuBarActions{};
+  ApplyMenuBarCommand(true, MenuBarCommand::SetCompositedRenderingFilterOnly, state, &actions);
+  EXPECT_TRUE(actions.setCompositedRenderingMode);
+  EXPECT_EQ(actions.compositedRenderingMode, CompositedRenderingMode::FilterOnly);
+
+  actions = MenuBarActions{};
+  ApplyMenuBarCommand(true, MenuBarCommand::SetCompositedRenderingOn, state, &actions);
+  EXPECT_TRUE(actions.setCompositedRenderingMode);
+  EXPECT_EQ(actions.compositedRenderingMode, CompositedRenderingMode::On);
 }
 
 TEST(MenuBarPresenterActionsTest, ApplyMenuBarCommandRoutesSelectCommandsBySourceFocus) {

@@ -397,6 +397,141 @@ TEST(AsyncRendererGpuWaitFailureTest, RepeatedIdenticalLossBumpsTheGenerationOnc
   asyncRenderer.noteGpuWaitOutcomeForTesting(escalated);
   EXPECT_EQ(asyncRenderer.gpuWaitFailure().generation, 2u);
   EXPECT_EQ(asyncRenderer.gpuWaitFailure().timedOutWaitSite, svg::GpuWaitTimeoutSite::QueueIdle);
+
+namespace {
+
+/// Returns the presented full-canvas pixels for a render result, whichever
+/// presentation path produced them: the CPU snapshot when the backend honors
+/// `captureCpuSnapshot`, otherwise the single full-canvas composited tile's
+/// texture snapshot (Geode presentation ignores the CPU snapshot request).
+svg::RendererBitmap FullCanvasPixels(const RenderResult& result) {
+  if (!result.bitmap.empty()) {
+    return result.bitmap;
+  }
+  if (result.compositedPreview.has_value() && result.compositedPreview->tiles.size() == 1) {
+    return MaterializeTileBitmap(result.compositedPreview->tiles.front());
+  }
+  return {};
+}
+
+}  // namespace
+
+TEST(AsyncRendererTest, CompositedRenderingModesProduceIdenticalPixels) {
+  // One entity per isolation signal class: a filter (stays composited in
+  // FilterOnly), an opacity group (inline in FilterOnly), and a plain rect.
+  svg::SVGDocument document = svg::instantiateSubtree(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+      <defs>
+        <filter id="blur"><feGaussianBlur stdDeviation="1.5"/></filter>
+      </defs>
+      <rect x="4" y="4" width="20" height="20" fill="red" filter="url(#blur)"/>
+      <g opacity="0.5">
+        <rect x="30" y="8" width="16" height="16" fill="green"/>
+        <rect x="38" y="16" width="16" height="16" fill="blue"/>
+      </g>
+      <rect x="10" y="44" width="12" height="12" fill="black"/>
+    </svg>
+  )svg");
+  document.setCanvasSize(64, 64);
+
+  svg::Renderer renderer;
+  AsyncRenderer asyncRenderer;
+  std::uint64_t version = 0;
+  const auto renderAndCapture = [&]() -> svg::RendererBitmap {
+    RenderRequest request(renderer, document);
+    request.version = ++version;
+    request.documentGeneration = 1;
+    request.captureCpuSnapshot = true;
+    asyncRenderer.requestRender(request);
+    const std::optional<RenderResult> result = WaitForRenderResult(asyncRenderer);
+    if (!result.has_value()) {
+      return {};
+    }
+    return FullCanvasPixels(*result);
+  };
+
+  const svg::RendererBitmap onPixels = renderAndCapture();
+  ASSERT_FALSE(onPixels.empty());
+  EXPECT_EQ(asyncRenderer.compositorReconstructCountForTesting(), 1u);
+
+  asyncRenderer.setCompositedRenderingMode(CompositedRenderingMode::FilterOnly);
+  const svg::RendererBitmap filterOnlyPixels = renderAndCapture();
+  ASSERT_FALSE(filterOnlyPixels.empty());
+  EXPECT_EQ(asyncRenderer.compositorReconstructCountForTesting(), 2u)
+      << "A mode change between composited modes must reconstruct the controller";
+  ASSERT_EQ(filterOnlyPixels.dimensions, onPixels.dimensions);
+  EXPECT_TRUE(filterOnlyPixels.pixels == onPixels.pixels)
+      << "FilterOnly must render pixel-identically to full compositing";
+
+  asyncRenderer.setCompositedRenderingMode(CompositedRenderingMode::Off);
+  const svg::RendererBitmap offPixels = renderAndCapture();
+  ASSERT_FALSE(offPixels.empty());
+  const auto offState = asyncRenderer.compositorState();
+  EXPECT_EQ(offState.activeHintsCount, 0u);
+  EXPECT_EQ(offState.layerCount, 0u);
+  ASSERT_EQ(offPixels.dimensions, onPixels.dimensions);
+  EXPECT_TRUE(offPixels.pixels == onPixels.pixels)
+      << "The direct (no compositor) path must render pixel-identically to full compositing";
+
+  asyncRenderer.setCompositedRenderingMode(CompositedRenderingMode::On);
+  const svg::RendererBitmap restoredPixels = renderAndCapture();
+  ASSERT_FALSE(restoredPixels.empty());
+  EXPECT_EQ(asyncRenderer.compositorReconstructCountForTesting(), 3u)
+      << "Leaving Off must reconstruct the controller";
+  ASSERT_EQ(restoredPixels.dimensions, onPixels.dimensions);
+  EXPECT_TRUE(restoredPixels.pixels == onPixels.pixels)
+      << "Returning to full compositing must restore the original output";
+}
+
+TEST(AsyncRendererTest, FilterOnlyModeRestrictsHintsAndDisablesSelectionPromotion) {
+  svg::SVGDocument document = svg::instantiateSubtree(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+      <defs>
+        <filter id="blur"><feGaussianBlur stdDeviation="1.5"/></filter>
+      </defs>
+      <rect x="4" y="4" width="20" height="20" fill="red" filter="url(#blur)"/>
+      <g opacity="0.5">
+        <rect x="30" y="8" width="16" height="16" fill="green"/>
+      </g>
+      <rect id="target" x="10" y="44" width="12" height="12" fill="black"/>
+    </svg>
+  )svg");
+  document.setCanvasSize(64, 64);
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  const Entity entity = target->unsafeEntityHandle().entity();
+
+  svg::Renderer renderer;
+  AsyncRenderer asyncRenderer;
+  std::uint64_t version = 0;
+  const auto renderSelected = [&]() {
+    RenderRequest request(renderer, document);
+    request.version = ++version;
+    request.documentGeneration = 1;
+    request.selectedEntity = entity;
+    asyncRenderer.requestRender(request);
+    return WaitForRenderResult(asyncRenderer);
+  };
+
+  ASSERT_TRUE(renderSelected().has_value());
+  EXPECT_EQ(asyncRenderer.workerCompositorEntity(), entity);
+  const auto onState = asyncRenderer.compositorState();
+  EXPECT_GE(onState.activeHintsCount, 2u)
+      << "Full compositing publishes mandatory hints for the filter AND the opacity group, plus "
+         "the selection hint";
+
+  asyncRenderer.setCompositedRenderingMode(CompositedRenderingMode::FilterOnly);
+  ASSERT_TRUE(renderSelected().has_value());
+  EXPECT_TRUE(asyncRenderer.workerCompositorEntity() == entt::null)
+      << "FilterOnly must not promote the selection";
+  const auto filterOnlyState = asyncRenderer.compositorState();
+  EXPECT_EQ(filterOnlyState.activeHintsCount, 1u)
+      << "FilterOnly publishes a mandatory hint for the filter only";
+
+  asyncRenderer.setCompositedRenderingMode(CompositedRenderingMode::Off);
+  ASSERT_TRUE(renderSelected().has_value());
+  EXPECT_TRUE(asyncRenderer.workerCompositorEntity() == entt::null);
+  EXPECT_EQ(asyncRenderer.compositorState().activeHintsCount, 0u);
 }
 
 TEST(AsyncRendererTest, DeferredStartQueuesWorkAndStartsExactlyOnce) {
