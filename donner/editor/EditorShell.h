@@ -315,12 +315,28 @@ private:
     Redo,
   };
 
+  enum class PendingDocumentReplacementKind : std::uint8_t {
+    NewDocument,
+    Sample,
+  };
+
+  struct PendingDocumentReplacement {
+    PendingDocumentReplacementKind kind = PendingDocumentReplacementKind::NewDocument;
+    std::string sampleId;
+    bool pickerWasVisible = false;
+    bool needsConfirmation = false;
+    bool discardConfirmed = false;
+  };
+
   bool tryOpenPath(std::string_view path, std::string* error);
   bool tryLoadSource(std::string_view source, std::optional<std::string> path, std::string* error);
+  void requestNewDocument();
+  void queuePendingDocumentReplacement(PendingDocumentReplacementKind kind,
+                                       std::string sampleId = {});
   void queuePendingSampleLoad(std::string sampleId);
-  void cancelPendingSampleLoad();
-  void confirmPendingSampleLoadDiscard();
-  void processPendingSampleLoad();
+  void cancelPendingDocumentReplacement();
+  void confirmPendingDocumentReplacementDiscard();
+  void processPendingDocumentReplacement();
   /// Apply Group or Ungroup only while the render worker releases DOM ownership.
   bool tryApplyGroupOperation(bool ungroup);
   bool trySavePath(std::string_view path, std::string* error);
@@ -770,9 +786,7 @@ private:
   /// presentation. This prevents the startup placeholder surface from becoming user-visible.
   bool samplePresentationPending_ = false;
   std::string activeSampleId_;
-  std::string pendingSampleLoadId_;
-  bool pendingSampleLoadNeedsConfirmation_ = false;
-  bool pendingSampleLoadDiscardConfirmed_ = false;
+  std::optional<PendingDocumentReplacement> pendingDocumentReplacement_;
   /// Current compact sheet state. Desktop keeps the source/sidebar preferences
   /// above intact so switching profiles does not rewrite user layout choices.
   bool compactPanelVisible_ = false;

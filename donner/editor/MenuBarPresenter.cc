@@ -15,6 +15,7 @@ void ApplyMenuBarCommand(bool activated, MenuBarCommand command, const MenuBarSt
 
   switch (command) {
     case MenuBarCommand::OpenAbout: actions->openAbout = true; return;
+    case MenuBarCommand::NewDocument: actions->newDocument = true; return;
     case MenuBarCommand::OpenFile: actions->openFile = true; return;
     case MenuBarCommand::OpenSamples: actions->openSamples = true; return;
     case MenuBarCommand::SaveFile: actions->saveFile = true; return;
@@ -132,6 +133,8 @@ MenuBarActions MenuBarPresenter::render(const MenuBarState& state, ImFont* boldM
   ImGui::SameLine(0.0f, theme.space4);
 
   if (ImGui::BeginMenu("File")) {
+    ApplyMenuBarCommand(ImGui::MenuItem("New", "Cmd+N"), MenuBarCommand::NewDocument, state,
+                        &actions);
     ApplyMenuBarCommand(ImGui::MenuItem("Open...", "Cmd+O"), MenuBarCommand::OpenFile, state,
                         &actions);
     ApplyMenuBarCommand(ImGui::MenuItem("Open Sample..."), MenuBarCommand::OpenSamples, state,

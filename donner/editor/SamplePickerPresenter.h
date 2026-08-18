@@ -57,6 +57,7 @@ struct SamplePickerState {
 /// Edge-triggered requests emitted by one rendered picker frame.
 struct SamplePickerActions {
   bool dismiss = false;
+  bool newDocument = false;
   bool openFile = false;
   bool loadSample = false;
   std::string sampleId;
@@ -76,6 +77,7 @@ using SamplePickerThumbnailProvider =
 
 enum class SamplePickerCommand {
   Dismiss,
+  NewDocument,
   OpenFile,
   LoadSample,
   OpenGitHub,

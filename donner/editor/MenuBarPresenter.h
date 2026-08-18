@@ -58,6 +58,7 @@ struct MenuBarState {
 
 struct MenuBarActions {
   bool openAbout = false;
+  bool newDocument = false;
   bool openFile = false;
   bool openSamples = false;
   bool saveFile = false;
@@ -110,6 +111,7 @@ struct MenuBarActions {
 /// Semantic command emitted by a top-level menu item.
 enum class MenuBarCommand {
   OpenAbout,
+  NewDocument,
   OpenFile,
   OpenSamples,
   SaveFile,

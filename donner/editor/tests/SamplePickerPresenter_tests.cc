@@ -82,6 +82,10 @@ TEST(SamplePickerPresenter, CommandsProduceSemanticActions) {
   EXPECT_TRUE(actions.dismiss);
 
   actions = SamplePickerActions{};
+  ApplySamplePickerCommand(true, SamplePickerCommand::NewDocument, {}, &actions);
+  EXPECT_TRUE(actions.newDocument);
+
+  actions = SamplePickerActions{};
   ApplySamplePickerCommand(true, SamplePickerCommand::OpenFile, {}, &actions);
   EXPECT_TRUE(actions.openFile);
 
@@ -122,13 +126,14 @@ TEST(SamplePickerPresenter, CommandsIgnoreEmptySampleAndNullAccumulator) {
 
 /// True when no action flag is set on @p actions.
 bool NoActions(const SamplePickerActions& actions) {
-  return !actions.dismiss && !actions.openFile && !actions.loadSample && !actions.openGitHub &&
-         actions.sampleId.empty();
+  return !actions.dismiss && !actions.newDocument && !actions.openFile && !actions.loadSample &&
+         !actions.openGitHub && actions.sampleId.empty();
 }
 
 /// Accumulate every edge-triggered flag from @p frame into @p merged.
 void MergeActions(SamplePickerActions& merged, const SamplePickerActions& frame) {
   merged.dismiss = merged.dismiss || frame.dismiss;
+  merged.newDocument = merged.newDocument || frame.newDocument;
   merged.openFile = merged.openFile || frame.openFile;
   merged.loadSample = merged.loadSample || frame.loadSample;
   merged.openGitHub = merged.openGitHub || frame.openGitHub;
@@ -268,31 +273,41 @@ TEST_F(SamplePickerPresenterImGuiTest, ClickingDismissButtonEmitsDismiss) {
   EXPECT_TRUE(dismissed.dismiss) << "Dismiss button not found along the top-right edge";
 }
 
-TEST_F(SamplePickerPresenterImGuiTest, ClickingActionButtonsEmitsOpenFileAndOpenGitHub) {
+TEST_F(SamplePickerPresenterImGuiTest, ClickingActionButtonsEmitsNewOpenFileAndOpenGitHub) {
   const SamplePickerState state;
   constexpr float kHostWidth = 1024.0f;
 
   Frame(state, {}, kHostWidth);
 
-  // The "Open SVG" button hugs the left content edge below the heading text;
+  // The action row hugs the left content edge below the heading text;
   // its vertical position depends on font metrics, so probe downward.
-  float openRowY = -1.0f;
+  float actionRowY = -1.0f;
   for (float y = 56.0f; y <= 400.0f; y += 6.0f) {
     const SamplePickerActions actions = Click(state, {}, kHostWidth, ImVec2(60.0f, y));
     EXPECT_FALSE(actions.dismiss);
     EXPECT_FALSE(actions.loadSample);
-    if (actions.openFile) {
-      openRowY = y;
+    if (actions.newDocument) {
+      actionRowY = y;
       break;
     }
   }
-  ASSERT_GT(openRowY, 0.0f) << "Open SVG button not found along the left edge";
+  ASSERT_GT(actionRowY, 0.0f) << "New Document button not found along the left edge";
 
-  // The GitHub action sits on the same row, right of the 112px-wide Open SVG
-  // button (8px gap).
+  bool openedFile = false;
+  for (float x = 140.0f; x <= 300.0f; x += 12.0f) {
+    const SamplePickerActions actions = Click(state, {}, kHostWidth, ImVec2(x, actionRowY));
+    EXPECT_FALSE(actions.dismiss);
+    EXPECT_FALSE(actions.loadSample);
+    if (actions.openFile) {
+      openedFile = true;
+      break;
+    }
+  }
+  EXPECT_TRUE(openedFile) << "Open SVG action not found after New Document";
+
   bool openedGitHub = false;
-  for (float x = 132.0f; x <= 300.0f; x += 12.0f) {
-    const SamplePickerActions actions = Click(state, {}, kHostWidth, ImVec2(x, openRowY));
+  for (float x = 260.0f; x <= 520.0f; x += 12.0f) {
+    const SamplePickerActions actions = Click(state, {}, kHostWidth, ImVec2(x, actionRowY));
     EXPECT_FALSE(actions.dismiss);
     EXPECT_FALSE(actions.loadSample);
     if (actions.openGitHub) {
