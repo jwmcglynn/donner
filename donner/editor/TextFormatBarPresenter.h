@@ -59,13 +59,18 @@ struct FormatBarFontFamily {
   svg::FontSource source = svg::FontSource::Embedded;
 };
 
-/// Build the picker's family list from a catalog listing (see
-/// `FontCatalog::families()`, which already orders Embedded before System and
-/// sorts within each group). Each entry keeps its CSS family name and source;
-/// `preview` is filled from @p previewForFamily for families already rendered
-/// by the bounded preview worker. Families the catalog lacks are still
-/// reachable through the bar's free-text box, so this list is additive, not a
-/// whitelist.
+/**
+ * Build the picker's family list from a catalog listing.
+ *
+ * `FontCatalog::families()` already orders Embedded before System and sorts within each group.
+ * Each entry keeps its CSS family name and source; `preview` is filled for families already
+ * rendered by the bounded preview worker. Families the catalog lacks remain reachable through the
+ * free-text box, so this list is additive rather than a whitelist.
+ *
+ * @param catalogFamilies Ordered font families available to the picker.
+ * @param previewForFamily Returns a rendered preview when one is ready for a family.
+ * @return Picker entries preserving catalog order, source, and available previews.
+ */
 [[nodiscard]] std::vector<FormatBarFontFamily> BuildFormatBarFamilies(
     const std::vector<svg::FontFamilyInfo>& catalogFamilies,
     const std::function<FormatBarFontPreview(const svg::FontFamilyInfo&)>& previewForFamily);
