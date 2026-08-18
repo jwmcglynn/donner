@@ -30,13 +30,17 @@ test("Playwright version stays synchronized across package locks and browser met
     const lockEntry of [
       `specifier: ${playwrightVersion}`,
       `version: ${playwrightVersion}`,
-      `'@playwright/test@${playwrightVersion}':`,
       `playwright@${playwrightVersion}:`,
       `playwright-core@${playwrightVersion}:`,
     ]
   ) {
     assert.ok(pnpmLock.includes(lockEntry), `pnpm-lock.yaml is missing ${lockEntry}`);
   }
+  const scopedPackageKey = `@playwright/test@${playwrightVersion}`;
+  assert.ok(
+    pnpmLock.includes(`'${scopedPackageKey}':`) || pnpmLock.includes(`"${scopedPackageKey}":`),
+    `pnpm-lock.yaml is missing the exact ${scopedPackageKey} key`,
+  );
 
   const browserMetadataPath = path.join(
     testDirectory,
