@@ -48,6 +48,34 @@ struct Uniforms {
   // Four inward-facing half-planes in viewport-pixel space, one per polygon
   // edge. `plane.xyz = (nx, ny, c)` with `nx*x + ny*y + c >= 0` inside.
   clipPolygonPlanes: array<vec4f, 4>,
+  // Draw-level copy of the paint / geometry parameters below. Every draw
+  // whose instances share ONE paint and ONE encoded path - a single fill, a
+  // repeated `<use>` of the same entity - reads these instead of a
+  // per-instance record, so it needs no record storage at all. Only a
+  // cross-entity batch, whose instances differ in paint and geometry, reads
+  // them per instance (the `_batched` entry points).
+  color: vec4f,
+  fillRule: u32,
+  paintMode: u32,
+  patternOpacity: f32,
+  _pad2: u32,
+  yBase: f32,
+  hStride: f32,
+  hBandCount: u32,
+  xBase: f32,
+  vStride: f32,
+  vBandCount: u32,
+  boundingVertexCount: u32,
+  _gridPad0: u32,
+  bandBase: u32,
+  curveBase: u32,
+  vBandBase: u32,
+  vCurveBase: u32,
+  hGridBase: u32,
+  vGridBase: u32,
+  hRefsBase: u32,
+  vRefsBase: u32,
+  boundingVertices: array<vec4f, 4>,
 };
 
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
@@ -74,10 +102,12 @@ struct Band {
 @group(0) @binding(5) var clipMaskTexture: texture_2d<f32>;
 @group(0) @binding(6) var clipMaskSampler: sampler;
 
-// Per-instance record (vertex + fragment stages). One record per draw or
-// batched instance; the fragment stage reads its instance's record through
-// a flat instance-id varying so overlapping batched instances still blend
-// in painter (instance) order.
+// Per-instance record (vertex + fragment stages). A cross-entity batch
+// binds one record per instance and reads all of it through the `_batched`
+// entry points, so overlapping instances blend in painter (instance) order.
+// Every other draw only reads `transform` here (in the vertex stage) and
+// takes the rest from the uniform, so it can bind the device's shared
+// identity record and write no record storage at all.
 struct InstanceTransform {
   row0: vec4f,
   row1: vec4f,
@@ -170,8 +200,16 @@ struct VertexOutput {
   @location(1) @interpolate(flat) instance_id: u32,
 };
 
-fn load_bounding_vertex(rec: InstanceRecord, index: u32) -> vec2f {
-  let pair = rec.boundingVertices[index / 2u];
+// Bounding polygon of the path this vertex belongs to. Built once per
+// vertex from either the uniform or the instance's record, so the dilation
+// helpers below are written once and serve both entry points.
+struct ShapeParams {
+  boundingVertexCount: u32,
+  boundingVertices: array<vec4f, 4>,
+};
+
+fn load_bounding_vertex(shape: ShapeParams, index: u32) -> vec2f {
+  let pair = shape.boundingVertices[index / 2u];
   return select(pair.xy, pair.zw, (index & 1u) != 0u);
 }
 
@@ -232,16 +270,16 @@ fn conservative_path_aabb_expansion(axes: mat2x2f) -> f32 {
   return select(0.0, expansion, expansion > 0.0 && expansion < 1e30);
 }
 
-fn needs_device_aabb_fallback(rec: InstanceRecord, axes: mat2x2f) -> bool {
+fn needs_device_aabb_fallback(shape: ShapeParams, axes: mat2x2f) -> bool {
   if (!axes_are_well_conditioned(axes)) {
     return false;
   }
   let orientation = select(-1.0, 1.0, axes_determinant(axes) > 0.0);
-  for (var i = 0u; i < rec.boundingVertexCount; i = i + 1u) {
+  for (var i = 0u; i < shape.boundingVertexCount; i = i + 1u) {
     let previous = load_bounding_vertex(
-      rec, (i + rec.boundingVertexCount - 1u) % rec.boundingVertexCount);
-    let position = load_bounding_vertex(rec, i);
-    let next = load_bounding_vertex(rec, (i + 1u) % rec.boundingVertexCount);
+      shape, (i + shape.boundingVertexCount - 1u) % shape.boundingVertexCount);
+    let position = load_bounding_vertex(shape, i);
+    let next = load_bounding_vertex(shape, (i + 1u) % shape.boundingVertexCount);
     let incoming = axes * (position - previous);
     let outgoing = axes * (next - position);
     let incoming_length = length(incoming);
@@ -266,14 +304,14 @@ fn needs_device_aabb_fallback(rec: InstanceRecord, axes: mat2x2f) -> bool {
   return false;
 }
 
-fn load_device_aabb_vertex(rec: InstanceRecord, effective_mvp: mat4x4f, axes: mat2x2f,
+fn load_device_aabb_vertex(shape: ShapeParams, effective_mvp: mat4x4f, axes: mat2x2f,
                            polygon_index: u32) -> vec2f {
   let pixel_scale = vec2f(uniforms.viewport.x * 0.5, -uniforms.viewport.y * 0.5);
   let origin_pixel = (effective_mvp * vec4f(0.0, 0.0, 0.0, 1.0)).xy * pixel_scale;
   var pixel_min = vec2f(1e30, 1e30);
   var pixel_max = vec2f(-1e30, -1e30);
-  for (var i = 0u; i < rec.boundingVertexCount; i = i + 1u) {
-    let pixel = origin_pixel + axes * load_bounding_vertex(rec, i);
+  for (var i = 0u; i < shape.boundingVertexCount; i = i + 1u) {
+    let pixel = origin_pixel + axes * load_bounding_vertex(shape, i);
     pixel_min = min(pixel_min, pixel);
     pixel_max = max(pixel_max, pixel);
   }
@@ -284,11 +322,11 @@ fn load_device_aabb_vertex(rec: InstanceRecord, effective_mvp: mat4x4f, axes: ma
   return path_from_pixel_delta(axes, pixel_corner - origin_pixel);
 }
 
-fn load_path_aabb_vertex(rec: InstanceRecord, expansion: f32, polygon_index: u32) -> vec2f {
+fn load_path_aabb_vertex(shape: ShapeParams, expansion: f32, polygon_index: u32) -> vec2f {
   var path_min = vec2f(1e30, 1e30);
   var path_max = vec2f(-1e30, -1e30);
-  for (var i = 0u; i < rec.boundingVertexCount; i = i + 1u) {
-    let position = load_bounding_vertex(rec, i);
+  for (var i = 0u; i < shape.boundingVertexCount; i = i + 1u) {
+    let position = load_bounding_vertex(shape, i);
     path_min = min(path_min, position);
     path_max = max(path_max, position);
   }
@@ -298,13 +336,13 @@ fn load_path_aabb_vertex(rec: InstanceRecord, expansion: f32, polygon_index: u32
                select(path_max.y + expansion, path_min.y - expansion, lower));
 }
 
-fn dilated_bounding_vertex(rec: InstanceRecord, axes: mat2x2f, polygon_index: u32) -> vec2f {
-  let count = rec.boundingVertexCount;
+fn dilated_bounding_vertex(shape: ShapeParams, axes: mat2x2f, polygon_index: u32) -> vec2f {
+  let count = shape.boundingVertexCount;
   let previous_index = (polygon_index + count - 1u) % count;
   let next_index = (polygon_index + 1u) % count;
-  let previous = load_bounding_vertex(rec, previous_index);
-  let position = load_bounding_vertex(rec, polygon_index);
-  let next = load_bounding_vertex(rec, next_index);
+  let previous = load_bounding_vertex(shape, previous_index);
+  let position = load_bounding_vertex(shape, polygon_index);
+  let next = load_bounding_vertex(shape, next_index);
 
   // Work in viewport pixels, including WebGPU's Y flip. Intersect the two adjacent edge
   // half-planes after moving each outward by half a pixel, then map that miter back to path
@@ -323,33 +361,30 @@ fn dilated_bounding_vertex(rec: InstanceRecord, axes: mat2x2f, polygon_index: u3
   return position + path_from_pixel_delta(axes, pixel_delta);
 }
 
-fn effective_bounding_vertex(rec: InstanceRecord, effective_mvp: mat4x4f,
+fn effective_bounding_vertex(shape: ShapeParams, effective_mvp: mat4x4f,
                              vertex_index: u32) -> vec2f {
   let axes = pixel_axes(effective_mvp);
   let path_aabb_expansion = conservative_path_aabb_expansion(axes);
   let use_path_aabb = !axes_are_well_conditioned(axes) && path_aabb_expansion > 0.0;
-  let use_device_aabb = needs_device_aabb_fallback(rec, axes);
+  let use_device_aabb = needs_device_aabb_fallback(shape, axes);
   let use_aabb = use_path_aabb || use_device_aabb;
-  let effective_count = select(rec.boundingVertexCount, 4u, use_aabb);
+  let effective_count = select(shape.boundingVertexCount, 4u, use_aabb);
   let triangle = vertex_index / 3u;
   var polygon_index = 0u;
   if (triangle < effective_count - 2u) {
     polygon_index = fan_polygon_index(vertex_index);
   }
   if (use_path_aabb) {
-    return load_path_aabb_vertex(rec, path_aabb_expansion, polygon_index);
+    return load_path_aabb_vertex(shape, path_aabb_expansion, polygon_index);
   }
   if (use_device_aabb) {
-    return load_device_aabb_vertex(rec, effective_mvp, axes, polygon_index);
+    return load_device_aabb_vertex(shape, effective_mvp, axes, polygon_index);
   }
-  return dilated_bounding_vertex(rec, axes, polygon_index);
+  return dilated_bounding_vertex(shape, axes, polygon_index);
 }
 
-@vertex
-fn vs_main(@builtin(vertex_index) vertex_index: u32,
-           @builtin(instance_index) instance_index: u32) -> VertexOutput {
-  let rec = instances[instance_index];
-  let xf = rec.transform;
+fn emit_vertex(shape: ShapeParams, xf: InstanceTransform, vertex_index: u32,
+               instance_index: u32) -> VertexOutput {
   let instance_mat = mat4x4f(
     vec4f(xf.row0.x, xf.row1.x, 0.0, 0.0),
     vec4f(xf.row0.y, xf.row1.y, 0.0, 0.0),
@@ -358,13 +393,38 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32,
   );
   let effective_mvp = uniforms.mvp * instance_mat;
 
-  let dilated = effective_bounding_vertex(rec, effective_mvp, vertex_index);
+  let dilated = effective_bounding_vertex(shape, effective_mvp, vertex_index);
 
   var out: VertexOutput;
   out.clip_pos = effective_mvp * vec4f(dilated, 0.0, 1.0);
   out.sample_pos = dilated;
   out.instance_id = instance_index;
   return out;
+}
+
+/// Shared-geometry entry point: every instance draws the same encoded path,
+/// so the bounding polygon comes from the uniform and only the per-instance
+/// transform is read from the record. A single fill binds the device's
+/// identity record here and reads nothing else from binding 7.
+@vertex
+fn vs_main(@builtin(vertex_index) vertex_index: u32,
+           @builtin(instance_index) instance_index: u32) -> VertexOutput {
+  var shape: ShapeParams;
+  shape.boundingVertexCount = uniforms.boundingVertexCount;
+  shape.boundingVertices = uniforms.boundingVertices;
+  return emit_vertex(shape, instances[instance_index].transform, vertex_index, instance_index);
+}
+
+/// Cross-entity batch entry point: each instance draws a DIFFERENT encoded
+/// path, so both the bounding polygon and the transform come from its record.
+@vertex
+fn vs_main_batched(@builtin(vertex_index) vertex_index: u32,
+                   @builtin(instance_index) instance_index: u32) -> VertexOutput {
+  let rec = instances[instance_index];
+  var shape: ShapeParams;
+  shape.boundingVertexCount = rec.boundingVertexCount;
+  shape.boundingVertices = rec.boundingVertices;
+  return emit_vertex(shape, rec.transform, vertex_index, instance_index);
 }
 
 // ============================================================================
@@ -377,8 +437,33 @@ struct Quadratic {
   p2: vec2f,
 };
 
-fn load_h_curve(rec: InstanceRecord, index: u32) -> Quadratic {
-  let base = rec.curveBase + index * 6u;
+// Paint and geometry parameters of the path this fragment belongs to. Built
+// once per fragment from either the uniform or the instance's record, so the
+// coverage and shading code below is written once and serves both entry
+// points.
+struct PaintParams {
+  color: vec4f,
+  fillRule: u32,
+  paintMode: u32,
+  patternOpacity: f32,
+  yBase: f32,
+  hStride: f32,
+  hBandCount: u32,
+  xBase: f32,
+  vStride: f32,
+  vBandCount: u32,
+  bandBase: u32,
+  curveBase: u32,
+  vBandBase: u32,
+  vCurveBase: u32,
+  hGridBase: u32,
+  vGridBase: u32,
+  hRefsBase: u32,
+  vRefsBase: u32,
+};
+
+fn load_h_curve(paint: PaintParams, index: u32) -> Quadratic {
+  let base = paint.curveBase + index * 6u;
   var q: Quadratic;
   q.p0 = vec2f(curveData[base + 0u], curveData[base + 1u]);
   q.p1 = vec2f(curveData[base + 2u], curveData[base + 3u]);
@@ -386,8 +471,8 @@ fn load_h_curve(rec: InstanceRecord, index: u32) -> Quadratic {
   return q;
 }
 
-fn load_v_curve(rec: InstanceRecord, index: u32) -> Quadratic {
-  let base = rec.vCurveBase + index * 6u;
+fn load_v_curve(paint: PaintParams, index: u32) -> Quadratic {
+  let base = paint.vCurveBase + index * 6u;
   var q: Quadratic;
   q.p0 = vec2f(vCurveData[base + 0u], vCurveData[base + 1u]);
   q.p1 = vec2f(vCurveData[base + 2u], vCurveData[base + 3u]);
@@ -467,7 +552,7 @@ fn owns_axis_sample(start: f32, end: f32, sample: f32) -> bool {
   return sample >= lo && sample < hi;
 }
 
-fn accumulateHoriz(rec: InstanceRecord, slot: u32, sample: vec2f, ppemX: f32) -> RayCoverage {
+fn accumulateHoriz(paint: PaintParams, slot: u32, sample: vec2f, ppemX: f32) -> RayCoverage {
   var result: RayCoverage;
   result.cov = 0.0;
   result.wgt = 0.0;
@@ -475,9 +560,9 @@ fn accumulateHoriz(rec: InstanceRecord, slot: u32, sample: vec2f, ppemX: f32) ->
   if (slot == kNoBand) {
     return result;
   }
-  let band = bands[rec.bandBase + slot];
+  let band = bands[paint.bandBase + slot];
   for (var i = 0u; i < band.curveCount; i = i + 1u) {
-    let curve = load_h_curve(rec, gridData[rec.hRefsBase + band.curveStart + i]);
+    let curve = load_h_curve(paint, gridData[paint.hRefsBase + band.curveStart + i]);
     let curve_max_x = max(curve.p0.x, max(curve.p1.x, curve.p2.x));
     if ((curve_max_x - sample.x) * ppemX <= -0.5) {
       break;
@@ -509,7 +594,7 @@ fn accumulateHoriz(rec: InstanceRecord, slot: u32, sample: vec2f, ppemX: f32) ->
   return result;
 }
 
-fn accumulateVert(rec: InstanceRecord, slot: u32, sample: vec2f, ppemY: f32) -> RayCoverage {
+fn accumulateVert(paint: PaintParams, slot: u32, sample: vec2f, ppemY: f32) -> RayCoverage {
   var result: RayCoverage;
   result.cov = 0.0;
   result.wgt = 0.0;
@@ -517,9 +602,9 @@ fn accumulateVert(rec: InstanceRecord, slot: u32, sample: vec2f, ppemY: f32) -> 
   if (slot == kNoBand) {
     return result;
   }
-  let band = vBands[rec.vBandBase + slot];
+  let band = vBands[paint.vBandBase + slot];
   for (var i = 0u; i < band.curveCount; i = i + 1u) {
-    let curve = load_v_curve(rec, gridData[rec.vRefsBase + band.curveStart + i]);
+    let curve = load_v_curve(paint, gridData[paint.vRefsBase + band.curveStart + i]);
     let curve_max_y = max(curve.p0.y, max(curve.p1.y, curve.p2.y));
     if ((curve_max_y - sample.y) * ppemY <= -0.5) {
       break;
@@ -587,9 +672,7 @@ struct FragOutput {
   @location(0) color: vec4f,
 };
 
-@fragment
-fn fs_main(in: VertexOutput) -> FragOutput {
-  let rec = instances[in.instance_id];
+fn shade(paint: PaintParams, in: VertexOutput) -> FragOutput {
   let pixel_center = in.clip_pos.xy;
 
   // Path-units per pixel, per axis. `sample_pos` is a linear function of the
@@ -601,22 +684,22 @@ fn fs_main(in: VertexOutput) -> FragOutput {
   hCov.cov = 0.0;
   hCov.wgt = 0.0;
   hCov.winding = 0.0;
-  if (rec.hBandCount > 0u) {
-    let hi = clamp(i32((in.sample_pos.y - rec.yBase) / rec.hStride),
-                   0, i32(rec.hBandCount) - 1);
-    let slot = gridData[rec.hGridBase + u32(hi)];
-    hCov = accumulateHoriz(rec, slot, in.sample_pos, ppem.x);
+  if (paint.hBandCount > 0u) {
+    let hi = clamp(i32((in.sample_pos.y - paint.yBase) / paint.hStride),
+                   0, i32(paint.hBandCount) - 1);
+    let slot = gridData[paint.hGridBase + u32(hi)];
+    hCov = accumulateHoriz(paint, slot, in.sample_pos, ppem.x);
   }
 
   var vCov: RayCoverage;
   vCov.cov = 0.0;
   vCov.wgt = 0.0;
   vCov.winding = 0.0;
-  if (rec.vBandCount > 0u) {
-    let vj = clamp(i32((in.sample_pos.x - rec.xBase) / rec.vStride),
-                   0, i32(rec.vBandCount) - 1);
-    let slot = gridData[rec.vGridBase + u32(vj)];
-    vCov = accumulateVert(rec, slot, in.sample_pos, ppem.y);
+  if (paint.vBandCount > 0u) {
+    let vj = clamp(i32((in.sample_pos.x - paint.xBase) / paint.vStride),
+                   0, i32(paint.vBandCount) - 1);
+    let slot = gridData[paint.vGridBase + u32(vj)];
+    vCov = accumulateVert(paint, slot, in.sample_pos, ppem.y);
   }
 
   var coverage = calc_coverage(hCov, vCov);
@@ -626,12 +709,12 @@ fn fs_main(in: VertexOutput) -> FragOutput {
   // value - a hole has combined coverage ≈ 2, which the wave maps to 0).
   if (uniforms.antialias == 0u) {
     let winding = u32(abs(hCov.winding));
-    if (rec.fillRule == 0u) {
+    if (paint.fillRule == 0u) {
       coverage = select(0.0, 1.0, winding != 0u);
     } else {
       coverage = f32(winding & 1u);
     }
-  } else if (rec.fillRule == 0u) {
+  } else if (paint.fillRule == 0u) {
     coverage = saturate(coverage);
   } else {
     coverage = 1.0 - abs(1.0 - fract(coverage * 0.5) * 2.0);
@@ -655,9 +738,9 @@ fn fs_main(in: VertexOutput) -> FragOutput {
 
   var out: FragOutput;
 
-  if (rec.paintMode == 0u) {
-    // `rec.color` is premultiplied; scale all channels by coverage.
-    out.color = rec.color * coverage;
+  if (paint.paintMode == 0u) {
+    // `paint.color` is premultiplied; scale all channels by coverage.
+    out.color = paint.color * coverage;
     return out;
   }
 
@@ -668,14 +751,69 @@ fn fs_main(in: VertexOutput) -> FragOutput {
     fract(patternPos.y / uniforms.tileSize.y) * uniforms.tileSize.y,
   );
   let uv = wrapped / uniforms.tileSize;
-  // textureSampleLevel, not textureSample: paintMode now lives in the
-  // per-instance record, so the solid-color early return above is
+  // textureSampleLevel, not textureSample: the batched entry point reads
+  // paintMode per instance, so the solid-color early return above is
   // non-uniform control flow and WGSL forbids implicit-derivative sampling
   // past it (browser compilers reject the module; native validation does
   // not). Pattern textures are created with a single mip level, so sampling
   // level 0 explicitly is an exact behavioral match.
   var sampled = textureSampleLevel(patternTexture, patternSampler, uv, 0.0);
-  sampled = sampled * rec.patternOpacity * coverage;
+  sampled = sampled * paint.patternOpacity * coverage;
   out.color = sampled;
   return out;
+}
+
+/// Shared-paint entry point: every instance of this draw carries the same
+/// paint and the same encoded path, so the parameters come from the uniform
+/// and the fragment stage never touches binding 7.
+@fragment
+fn fs_main(in: VertexOutput) -> FragOutput {
+  var paint: PaintParams;
+  paint.color = uniforms.color;
+  paint.fillRule = uniforms.fillRule;
+  paint.paintMode = uniforms.paintMode;
+  paint.patternOpacity = uniforms.patternOpacity;
+  paint.yBase = uniforms.yBase;
+  paint.hStride = uniforms.hStride;
+  paint.hBandCount = uniforms.hBandCount;
+  paint.xBase = uniforms.xBase;
+  paint.vStride = uniforms.vStride;
+  paint.vBandCount = uniforms.vBandCount;
+  paint.bandBase = uniforms.bandBase;
+  paint.curveBase = uniforms.curveBase;
+  paint.vBandBase = uniforms.vBandBase;
+  paint.vCurveBase = uniforms.vCurveBase;
+  paint.hGridBase = uniforms.hGridBase;
+  paint.vGridBase = uniforms.vGridBase;
+  paint.hRefsBase = uniforms.hRefsBase;
+  paint.vRefsBase = uniforms.vRefsBase;
+  return shade(paint, in);
+}
+
+/// Cross-entity batch entry point: each instance carries its own paint and
+/// its own geometry, read through the flat instance-id varying so
+/// overlapping instances still blend in painter (instance) order.
+@fragment
+fn fs_main_batched(in: VertexOutput) -> FragOutput {
+  let rec = instances[in.instance_id];
+  var paint: PaintParams;
+  paint.color = rec.color;
+  paint.fillRule = rec.fillRule;
+  paint.paintMode = rec.paintMode;
+  paint.patternOpacity = rec.patternOpacity;
+  paint.yBase = rec.yBase;
+  paint.hStride = rec.hStride;
+  paint.hBandCount = rec.hBandCount;
+  paint.xBase = rec.xBase;
+  paint.vStride = rec.vStride;
+  paint.vBandCount = rec.vBandCount;
+  paint.bandBase = rec.bandBase;
+  paint.curveBase = rec.curveBase;
+  paint.vBandBase = rec.vBandBase;
+  paint.vCurveBase = rec.vCurveBase;
+  paint.hGridBase = rec.hGridBase;
+  paint.vGridBase = rec.vGridBase;
+  paint.hRefsBase = rec.hRefsBase;
+  paint.vRefsBase = rec.vRefsBase;
+  return shade(paint, in);
 }

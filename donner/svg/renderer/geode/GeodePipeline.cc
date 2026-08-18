@@ -101,10 +101,12 @@ GeodePipeline::GeodePipeline(const wgpu::Device& device, wgpu::TextureFormat col
   plDesc.bindGroupLayoutCount = 1;
   WGPUBindGroupLayout layouts[1] = {bindGroupLayout_.get()};
   plDesc.bindGroupLayouts = layouts;
-  ScopedWgpuHandle<wgpu::PipelineLayout> pipelineLayout(device.createPipelineLayout(plDesc));
+  pipelineLayout_.reset(device.createPipelineLayout(plDesc));
+  ScopedWgpuHandle<wgpu::PipelineLayout>& pipelineLayout = pipelineLayout_;
 
   // ----- Shader module -----
-  ScopedWgpuHandle<wgpu::ShaderModule> shader(createSlugFillShader(device));
+  shader_.reset(createSlugFillShader(device));
+  ScopedWgpuHandle<wgpu::ShaderModule>& shader = shader_;
 
   // ----- Fragment / blending -----
   wgpu::BlendState blend = {};
@@ -145,6 +147,54 @@ GeodePipeline::GeodePipeline(const wgpu::Device& device, wgpu::TextureFormat col
   rpDesc.multisample.mask = 0xFFFFFFFF;
 
   pipeline_.reset(device.createRenderPipeline(rpDesc));
+}
+
+const wgpu::RenderPipeline& GeodePipeline::batchedPipeline(const wgpu::Device& device) const {
+  if (batchedPipeline_) {
+    return batchedPipeline_.get();
+  }
+
+  // Identical state to the default pipeline - same layout, same shader
+  // module, same blending - differing only in the entry points that read
+  // paint and geometry from each instance's record. Built on first use
+  // because only a cross-entity batch needs it.
+  wgpu::BlendState blend = {};
+  blend.color.srcFactor = wgpu::BlendFactor::One;
+  blend.color.dstFactor = wgpu::BlendFactor::OneMinusSrcAlpha;
+  blend.color.operation = wgpu::BlendOperation::Add;
+  blend.alpha.srcFactor = wgpu::BlendFactor::One;
+  blend.alpha.dstFactor = wgpu::BlendFactor::OneMinusSrcAlpha;
+  blend.alpha.operation = wgpu::BlendOperation::Add;
+
+  wgpu::ColorTargetState colorTarget = {};
+  colorTarget.format = colorFormat_;
+  colorTarget.blend = &blend;
+  colorTarget.writeMask = wgpu::ColorWriteMask::All;
+
+  wgpu::FragmentState fragmentState = {};
+  fragmentState.module = shader_.get();
+  fragmentState.entryPoint = wgpuLabel("fs_main_batched");
+  fragmentState.targetCount = 1;
+  fragmentState.targets = &colorTarget;
+
+  wgpu::RenderPipelineDescriptor rpDesc = {};
+  rpDesc.label = wgpuLabel("GeodeSlugFillBatched");
+  rpDesc.layout = pipelineLayout_.get();
+
+  rpDesc.vertex.module = shader_.get();
+  rpDesc.vertex.entryPoint = wgpuLabel("vs_main_batched");
+  rpDesc.vertex.bufferCount = 0;
+  rpDesc.vertex.buffers = nullptr;
+
+  rpDesc.primitive.topology = wgpu::PrimitiveTopology::TriangleList;
+  rpDesc.primitive.cullMode = wgpu::CullMode::None;
+
+  rpDesc.fragment = &fragmentState;
+  rpDesc.multisample.count = 1;
+  rpDesc.multisample.mask = 0xFFFFFFFF;
+
+  batchedPipeline_.reset(device.createRenderPipeline(rpDesc));
+  return batchedPipeline_.get();
 }
 
 // ============================================================================

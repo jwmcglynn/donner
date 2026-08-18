@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <iterator>
 #include <vector>
 
 #include "donner/svg/renderer/geode/GeodeBufferPool.h"
@@ -81,8 +82,38 @@ struct alignas(16) Uniforms {
   // batch-uniform rather than per-instance. Stored as `vec4f[4]`
   // (vec4 = xyz + pad) so the WGSL side reads `array<vec4f, 4>` directly.
   float clipPolygonPlanes[16];  // 160 .. 224 (4 edges × vec4)
+
+  // Draw-level copy of the per-instance paint / geometry parameters. Every
+  // draw whose instances share one paint and one encoded path reads these
+  // instead of a record, so it binds the device's shared identity record and
+  // writes no record storage at all. `copyRecordParamsToUniform` fills them
+  // from the record the same draw would have written, so the two forms stay
+  // bit-identical by construction.
+  float color[4];                // 224 .. 240 - premultiplied
+  uint32_t fillRule;             // 240 .. 244
+  uint32_t paintMode;            // 244 .. 248
+  float patternOpacity;          // 248 .. 252
+  uint32_t _pad2;                // 252 .. 256
+  float gridYBase;               // 256 .. 260
+  float gridHStride;             // 260 .. 264
+  uint32_t gridHBandCount;       // 264 .. 268
+  float gridXBase;               // 268 .. 272
+  float gridVStride;             // 272 .. 276
+  uint32_t gridVBandCount;       // 276 .. 280
+  uint32_t boundingVertexCount;  // 280 .. 284
+  uint32_t _gridPad0;            // 284 .. 288
+  uint32_t bandBase;             // 288 .. 292
+  uint32_t curveBase;            // 292 .. 296
+  uint32_t vBandBase;            // 296 .. 300
+  uint32_t vCurveBase;           // 300 .. 304
+  uint32_t hGridBase;            // 304 .. 308
+  uint32_t vGridBase;            // 308 .. 312
+  uint32_t hRefsBase;            // 312 .. 316
+  uint32_t vRefsBase;            // 316 .. 320
+  // Two path-space vec2 vertices per vec4, up to eight vertices.
+  float boundingVertices[16];  // 320 .. 384
 };
-static_assert(sizeof(Uniforms) == 224, "Uniforms struct layout mismatch");
+static_assert(sizeof(Uniforms) == 384, "Uniforms struct layout mismatch");
 
 /// Write the 4x4 identity matrix in column-major order.
 void writeIdentityMvp(float* out16) {
@@ -232,6 +263,39 @@ void writeBoundingPolygonUniforms(UniformT& uniforms, const EncodedPath& encoded
     uniforms.boundingVertices[i * 2u] = encoded.boundingVertices[i].x;
     uniforms.boundingVertices[i * 2u + 1u] = encoded.boundingVertices[i].y;
   }
+}
+
+/// Mirror a record's paint / geometry parameters into the draw-level
+/// uniform. Called for every draw whose instances share one paint and one
+/// encoded path, which is every draw except a cross-entity batch: the
+/// shader's shared-paint entry points read the uniform copy and the draw
+/// binds no record of its own.
+void copyRecordParamsToUniform(Uniforms& u, const InstanceRecord& r) {
+  u.color[0] = r.color[0];
+  u.color[1] = r.color[1];
+  u.color[2] = r.color[2];
+  u.color[3] = r.color[3];
+  u.fillRule = r.fillRule;
+  u.paintMode = r.paintMode;
+  u.patternOpacity = r.patternOpacity;
+  u.gridYBase = r.gridYBase;
+  u.gridHStride = r.gridHStride;
+  u.gridHBandCount = r.gridHBandCount;
+  u.gridXBase = r.gridXBase;
+  u.gridVStride = r.gridVStride;
+  u.gridVBandCount = r.gridVBandCount;
+  u.boundingVertexCount = r.boundingVertexCount;
+  for (size_t i = 0; i < std::size(u.boundingVertices); ++i) {
+    u.boundingVertices[i] = r.boundingVertices[i];
+  }
+  u.bandBase = r.bandBase;
+  u.curveBase = r.curveBase;
+  u.vBandBase = r.vBandBase;
+  u.vCurveBase = r.vCurveBase;
+  u.hGridBase = r.hGridBase;
+  u.vGridBase = r.vGridBase;
+  u.hRefsBase = r.hRefsBase;
+  u.vRefsBase = r.vRefsBase;
 }
 
 /// Gradient kind values shared with `shaders/slug_gradient.wgsl`.
@@ -854,7 +918,7 @@ struct GeoEncoder::Impl : public GeodeTextureEncoder::UniformScratch {
 
   /// Track which pipeline is currently bound so we can emit `SetPipeline`
   /// only when it actually changes.
-  enum class BoundPipeline { kNone, kSolid, kGradient, kImage };
+  enum class BoundPipeline { kNone, kSolid, kSolidBatched, kGradient, kImage };
   BoundPipeline currentPipeline = BoundPipeline::kNone;
   // Kept for backward compat with the gradient binding flag - see
   // bindGradientPipeline below.
@@ -864,6 +928,19 @@ struct GeoEncoder::Impl : public GeodeTextureEncoder::UniformScratch {
       pass.get().setPipeline(pipeline->pipeline());
       device->countPipelineSwitch();
       currentPipeline = BoundPipeline::kSolid;
+      currentPipelineIsGradient = false;
+    }
+  }
+  /// Bind the cross-entity batch variant of the solid-fill pipeline: same
+  /// bind-group layout and same shader module, but the entry points that
+  /// read paint and geometry from each instance's record instead of from
+  /// the draw-level uniform. Only a cross-entity batch needs it, so the
+  /// pipeline object is created on first use.
+  void bindSolidBatchedPipeline() {
+    if (currentPipeline != BoundPipeline::kSolidBatched) {
+      pass.get().setPipeline(pipeline->batchedPipeline(device->device()));
+      device->countPipelineSwitch();
+      currentPipeline = BoundPipeline::kSolidBatched;
       currentPipelineIsGradient = false;
     }
   }
@@ -1689,9 +1766,14 @@ void GeoEncoder::Impl::buildResidentBindGroup(GeodeResidentSlot& slot) {
   entries[5].textureView = device->dummyClipMaskTextureView();
   entries[6].binding = 6;
   entries[6].sampler = device->dummyClipMaskSampler();
+  // A solo resident draw reads its paint from the slot's uniform, so the
+  // record binding only has to supply the vertex stage's identity transform.
+  // Binding the device's shared identity record keeps this slot out of the
+  // record slab entirely: nothing to allocate, nothing to write, and no
+  // record a same-frame repeat could overwrite.
   entries[7].binding = 7;
-  entries[7].buffer = slot.recordSlot.buffer;
-  entries[7].offset = slot.recordSlot.offset;
+  entries[7].buffer = device->identityInstanceRecordBuffer();
+  entries[7].offset = 0;
   entries[7].size = sizeof(InstanceRecord);
   chunkEntry(8, 8);
   chunkEntry(9, 9);
@@ -1757,35 +1839,22 @@ bool GeoEncoder::Impl::ensureResidentSceneRecordImpl(GeodeResidentSlot& slot,
     return false;
   }
 
-  // Rewrite the batch uniform and the instance record only when they
-  // actually changed. A static re-render (same viewport, same paint)
-  // produces byte-identical bytes, so both writes are skipped entirely
-  // and the frame emits zero buffer writes. Two forms exist:
-  //   - Solo (bakeTransform): uniforms.mvp carries the full
-  //     deviceFromLocal transform (double precision on the host, exactly
-  //     like the per-frame arena path) and the record's transform stays
-  //     identity.
-  //   - Scene batch (orthographic uniform): uniforms.mvp is the
-  //     orthographic mapping and the record carries the caller's
-  //     per-instance transform, so one uniform serves every instance.
-  // The slot's uniform region belongs exclusively to the solo resident
-  // draw: scene batches bind a per-batch arena uniform instead, so the
-  // scene form must not write it. Buffer writes are queue-ordered ahead
-  // of every draw in the frame's single submit, so a scene-form write
-  // after a recorded solo draw would retroactively change that draw's
-  // uniform (last write wins at submit time).
-  if (bakeTransform) {
-    Uniforms u = {};
-    populateBatchUniform(u, args, transform, /*identityMvp=*/false);
-    const auto* uBytes = reinterpret_cast<const uint8_t*>(&u);
-    if (slot.lastUniform.size() != sizeof(Uniforms) ||
-        std::memcmp(slot.lastUniform.data(), uBytes, sizeof(Uniforms)) != 0) {
-      device->queue().writeBuffer(slot.buffer, slot.uniform.offset, &u, sizeof(Uniforms));
-      device->countBufferWrite(sizeof(Uniforms));
-      slot.lastUniform.assign(uBytes, uBytes + sizeof(Uniforms));
-    }
-  }
-
+  // The parameters are always computed in record form, so the solo and the
+  // batch draw stay bit-identical by construction; only where they are
+  // published differs.
+  //   - Solo (bakeTransform): uniforms.mvp carries the full deviceFromLocal
+  //     transform (double precision on the host, exactly like the per-frame
+  //     arena path) and the parameters are mirrored into the slot's uniform.
+  //     No record is written and none is allocated: the draw binds the
+  //     device's shared identity record and reads its paint from the
+  //     uniform, so a same-frame repeat of this entity can never overwrite
+  //     an already-recorded draw's parameters.
+  //   - Scene batch (orthographic uniform): uniforms.mvp is the orthographic
+  //     mapping and the record carries the caller's per-instance transform,
+  //     so one uniform serves every instance and the parameters must live
+  //     per instance.
+  // Either way the write is skipped when the bytes are unchanged, so a
+  // static re-render emits zero buffer writes.
   InstanceRecord record = {};
   populateInstanceRecord(
       record, encoded, args,
@@ -1802,6 +1871,27 @@ bool GeoEncoder::Impl::ensureResidentSceneRecordImpl(GeodeResidentSlot& slot,
   record.vGridBase = static_cast<uint32_t>(slot.vGrid.offset / sizeof(uint32_t));
   record.hRefsBase = static_cast<uint32_t>(slot.hRefs.offset / sizeof(uint32_t));
   record.vRefsBase = static_cast<uint32_t>(slot.vRefs.offset / sizeof(uint32_t));
+
+  if (bakeTransform) {
+    // The slot's uniform region belongs exclusively to the solo resident
+    // draw: scene batches bind a per-batch arena uniform instead, so the
+    // scene form must not write it. Buffer writes are queue-ordered ahead
+    // of every draw in the frame's single submit, so a scene-form write
+    // after a recorded solo draw would retroactively change that draw's
+    // uniform (last write wins at submit time).
+    Uniforms u = {};
+    populateBatchUniform(u, args, transform, /*identityMvp=*/false);
+    copyRecordParamsToUniform(u, record);
+    const auto* uBytes = reinterpret_cast<const uint8_t*>(&u);
+    if (slot.lastUniform.size() != sizeof(Uniforms) ||
+        std::memcmp(slot.lastUniform.data(), uBytes, sizeof(Uniforms)) != 0) {
+      device->queue().writeBuffer(slot.buffer, slot.uniform.offset, &u, sizeof(Uniforms));
+      device->countBufferWrite(sizeof(Uniforms));
+      slot.lastUniform.assign(uBytes, uBytes + sizeof(Uniforms));
+    }
+    return true;
+  }
+
   const auto* rBytes = reinterpret_cast<const uint8_t*>(&record);
   const GeodeRecordSlab::Slot& recordSlot =
       recordSlotOverride != nullptr ? *recordSlotOverride : slot.recordSlot;
@@ -1866,15 +1956,13 @@ void GeoEncoder::fillPathResident(GeodeResidentSlot& slot, const EncodedPath& en
   // from a DIFFERENT device that previously rendered this document is not a
   // same-frame repeat and must re-upload (submitResidentFillDraw re-uploads
   // on the device-id mismatch) rather than fall back.
-  // owningDeviceId == 0 also gates: an in-place stroke rebuild resets the
-  // slot mid-frame (clearing the device id) while lastResidentFrame
-  // survives, and the slot keeps its persistent record slot across
-  // re-uploads. Without this, every rebuilt repeat re-enters the resident
-  // path and rewrites the ONE record that all previously recorded draws of
-  // this slot read at submit time (last write wins: repeated styled <use>
-  // strokes all rendered the final style). A never-drawn slot also has id
-  // 0 but its lastResidentFrame sentinel can never equal a real frameId.
-  if ((slot.owningDeviceId == impl_->device->deviceId() || slot.owningDeviceId == 0) &&
+  // A repeat whose slot was re-uploaded mid-frame (an in-place stroke
+  // rebuild clears the device id) is NOT gated here: the re-upload took a
+  // fresh slab range with its own uniform region, and a solo resident draw
+  // publishes its paint through that uniform rather than through a shared
+  // per-entity record, so the earlier recorded draw of this slot keeps its
+  // own parameters at submit time.
+  if (slot.owningDeviceId == impl_->device->deviceId() &&
       (slot.lastResidentFrame == frameId || slot.lastSceneFrame == frameId)) {
     submitFillDraw(args);
     return;
@@ -1961,7 +2049,7 @@ void GeoEncoder::fillPathSceneBatch(const css::RGBA& color, FillRule rule,
     return;
   }
   impl_->ensurePassOpen();
-  impl_->bindSolidPipeline();
+  impl_->bindSolidBatchedPipeline();
 
   // Batch-level uniform: orthographic mapping only (the caller set the
   // encoder transform to identity). Pattern/clip fields use the device
@@ -2165,16 +2253,22 @@ void GeoEncoder::submitFillDraw(const FillDrawArgs& args,
   record.hRefsBase = static_cast<uint32_t>((hRefsAlloc.offset - gridSpanStart) / sizeof(uint32_t));
   record.vRefsBase = static_cast<uint32_t>((vRefsAlloc.offset - gridSpanStart) / sizeof(uint32_t));
 
+  // Every instance of this draw shares one paint and one encoded path, so
+  // the parameters ride in the uniform and the fragment stage reads no
+  // record at all.
+  copyRecordParamsToUniform(u, record);
+
   const auto uniAlloc =
       impl_->allocInArena(impl_->uniformArena, &u, sizeof(Uniforms), kUniformOffsetAlignment);
 
-  // One record for single draws; the instanced path copies the base record
-  // and overwrites each copy's transform so every instance still shares the
-  // same geometry bases computed above. Instanced records carry the
-  // HOST-COMPOSED orthographic transform (double precision), and the
-  // uniform mvp becomes the identity matrix, so the vertex stage's
-  // float32 multiply is exact and rotated instances (markers) match the
-  // solo path's host-composed bake.
+  // The instanced path copies the base record and overwrites each copy's
+  // transform so every instance still shares the geometry bases computed
+  // above. Instanced records carry the HOST-COMPOSED orthographic transform
+  // (double precision), and the uniform mvp becomes the identity matrix, so
+  // the vertex stage's float32 multiply is exact and rotated instances
+  // (markers) match the solo path's host-composed bake. A single draw needs
+  // no record of its own: its transform is baked into uniforms.mvp, so it
+  // binds the device's shared identity record and writes nothing.
   wgpu::Buffer recordBuf;
   uint64_t recordOffset = 0;
   uint64_t recordSize = 0;
@@ -2211,12 +2305,9 @@ void GeoEncoder::submitFillDraw(const FillDrawArgs& args,
     }
   }
   if (!recordBuf) {
-    const auto recordAlloc =
-        impl_->allocInArena(impl_->instanceRecordArena, &record, sizeof(InstanceRecord),
-                            kStorageOffsetAlignment);
-    recordBuf = recordAlloc.buffer;
-    recordOffset = recordAlloc.offset;
-    recordSize = recordAlloc.size;
+    recordBuf = impl_->device->identityInstanceRecordBuffer();
+    recordOffset = 0;
+    recordSize = sizeof(InstanceRecord);
   }
 
   // 3. Bind group - eleven entries: uniforms, H bands SSBO, H curves SSBO,

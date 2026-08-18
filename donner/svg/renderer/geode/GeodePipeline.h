@@ -53,10 +53,22 @@ public:
   /// Move assignment operator.
   GeodePipeline& operator=(GeodePipeline&&) noexcept = default;
 
-  /// The compiled render pipeline.
+  /// The compiled render pipeline. Its entry points take the draw's paint
+  /// and geometry parameters from the uniform, which serves every draw whose
+  /// instances share one paint and one encoded path.
   const wgpu::RenderPipeline& pipeline() const { return pipeline_.get(); }
 
-  /// The bind group layout used by the pipeline.
+  /**
+   * The cross-entity batch variant of @ref pipeline: same layout, same
+   * shader module and same blending, but the entry points that take paint
+   * and geometry from each instance's record. Compiled on first call,
+   * because only a cross-entity batch needs it.
+   *
+   * @param device The WebGPU device this pipeline was created for.
+   */
+  const wgpu::RenderPipeline& batchedPipeline(const wgpu::Device& device) const;
+
+  /// The bind group layout used by both pipelines.
   const wgpu::BindGroupLayout& bindGroupLayout() const { return bindGroupLayout_.get(); }
 
   /// Color format the pipeline was built for.
@@ -65,7 +77,11 @@ public:
 private:
   wgpu::TextureFormat colorFormat_;
   ScopedWgpuHandle<wgpu::BindGroupLayout> bindGroupLayout_;
+  ScopedWgpuHandle<wgpu::PipelineLayout> pipelineLayout_;
+  ScopedWgpuHandle<wgpu::ShaderModule> shader_;
   ScopedWgpuHandle<wgpu::RenderPipeline> pipeline_;
+  /// Lazily compiled by @ref batchedPipeline.
+  mutable ScopedWgpuHandle<wgpu::RenderPipeline> batchedPipeline_;
 };
 
 /**

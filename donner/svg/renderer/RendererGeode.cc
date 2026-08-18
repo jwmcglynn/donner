@@ -2119,8 +2119,16 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
     return slab;
   }
 
-  /// Ensure `slot` has a record-slab slot on the current device's slab.
-  void ensureRecordSlot(geode::GeodeResidentSlot& slot, Registry& registry) {
+  /// Ensure `slot` has a record-slab slot on the current device's slab, and
+  /// report whether it now has one.
+  ///
+  /// Only a draw that can join a cross-entity batch needs a record: every
+  /// other draw takes its paint from the uniform and binds the device's
+  /// shared identity record. Allocating from here rather than from the
+  /// residence getters keeps the slab (and its buffer creations, its
+  /// per-entity slots and its deferred frees) entirely out of a document
+  /// that never batches.
+  bool ensureRecordSlot(geode::GeodeResidentSlot& slot, Registry& registry) {
     std::shared_ptr<geode::GeodeRecordSlab> slab = recordSlab(registry);
     if (slot.recordSlab.get() != slab.get()) {
       // Device change: the old slab is retired with the registry-context
@@ -2132,6 +2140,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
     if (!slot.recordSlot.buffer) {
       (void)slot.recordSlab->allocateSlot(*device, slot.recordSlot);
     }
+    return static_cast<bool>(slot.recordSlot.buffer);
   }
 
   std::shared_ptr<geode::GeodeResidentSlab> residentSlab(Registry& registry) {
@@ -2170,7 +2179,6 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
       slot.reset();
     }
     slot.slab = std::move(slab);
-    ensureRecordSlot(slot, *source.registry());
     return &slot;
   }
 
@@ -2187,7 +2195,6 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
       slot.reset();
     }
     slot.slab = std::move(slab);
-    ensureRecordSlot(slot, *source.registry());
     return &slot;
   }
 
@@ -2418,7 +2425,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
   ///
   /// \p path is retained until the batch flushes, so it must be storage that outlives this
   /// call - see `PendingBatch::path`.
-  bool tryAppendOrStartBatch(const Registry* sourceRegistry, Entity sourceEntity, const Path& path,
+  bool tryAppendOrStartBatch(Registry* sourceRegistry, Entity sourceEntity, const Path& path,
                              const css::RGBA& color, FillRule rule,
                              const geode::EncodedPath* encoded,
                              geode::GeodeResidentSlot* residentFillSlot) {
@@ -2443,17 +2450,25 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
     // ordered batching and are already exact for repeated draws.
     const geode::GeodeRecordSlab::Slot* recordSlotPtr = nullptr;
     const uint64_t clipVersion = encoder->clipStateVersion();
-    // Ordered cross-entity batching is gated off while the marker /
-    // scissor-clip edge cases are resolved (markers show one-pixel AA-tip
-    // diffs when batched draws defer past a scissor change):
-    // the machinery below stays in place for the follow-up.
+    // `kEnableSceneBatching` keeps ordered cross-entity batching off by
+    // default: it is a behavior-visible rendering change that is being
+    // rolled out separately from the machinery, and every gate below still
+    // has to hold before a draw can join a batch. With the flag off the
+    // predicate folds away at compile time, so no draw allocates a record
+    // slot, writes a record, or touches the record slab.
+    //
+    // The record-slab slot is allocated HERE, on the eligibility path,
+    // rather than when the residence slot is created: a draw that can never
+    // batch takes its paint from the uniform and binds the device's shared
+    // identity record, so giving it a slot would be pure cost.
     const bool sceneEligible = kEnableSceneBatching && residentFillSlot != nullptr &&
                                encoded != nullptr &&
-                               residentFillSlot->recordSlot.buffer &&
                                !encoder->hasActiveClipState() &&
                                !encoder->hasActiveScissor() &&
                                residentFillSlot->lastSceneFrame != currentFrameIndex &&
                                residentFillSlot->lastResidentFrame != currentFrameIndex &&
+                               sourceRegistry != nullptr &&
+                               ensureRecordSlot(*residentFillSlot, *sourceRegistry) &&
                                resolveSceneRecordSlot(*residentFillSlot, recordSlotPtr);
     if (sceneEligible &&
         encoder->ensureResidentSceneRecord(*residentFillSlot, *encoded, color, rule,

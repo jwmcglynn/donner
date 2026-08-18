@@ -503,17 +503,19 @@ public:
   /// Linear-ClampToEdge sampler used for both the dummy and real clip masks.
   const wgpu::Sampler& dummyClipMaskSampler() const;
 
-  /// One-element instance-transform storage buffer carrying the identity
-  /// affine. Bound at binding 7 of the Slug fill bind-group layout by
-  /// every non-instanced solid fill so the bind-group layout stays
-  /// stable across draw calls regardless of whether `fillPathInstanced`
-  /// is in play.
+  /// One-element instance-record storage buffer carrying the identity
+  /// affine and zeroed parameters. Bound at binding 7 of the Slug fill
+  /// bind-group layout by every draw that is not a cross-entity batch, so
+  /// the bind-group layout stays stable across draw calls and those draws
+  /// need no record storage of their own: their transform is baked into
+  /// `uniforms.mvp` and their paint rides in the uniform.
   ///
-  /// Layout mirrors the WGSL `InstanceTransform` struct in
-  /// `shaders/slug_fill.wgsl`: two `vec4f` per entry, row-major affine,
-  /// so the identity is `{(1, 0, 0, 0), (0, 1, 0, 0)}`. The `.z`
-  /// components carry the translation (0 for identity).
-  const wgpu::Buffer& identityInstanceTransformBuffer() const;
+  /// Layout mirrors the WGSL `InstanceRecord` struct in
+  /// `shaders/slug_fill.wgsl`, whose leading member is a row-major affine
+  /// as two `vec4f`, so the identity is `{(1, 0, 0, 0), (0, 1, 0, 0)}`
+  /// followed by zeroes. The `.z` components carry the translation (0 for
+  /// identity).
+  const wgpu::Buffer& identityInstanceRecordBuffer() const;
   /// @}
 
   /// @name Shared render / compute pipelines (issue #575 fix)

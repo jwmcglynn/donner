@@ -1050,7 +1050,7 @@ TEST_F(RendererGeodeTest, EmbeddedDeviceDrawPathExportsTextureSnapshot) {
   ASSERT_TRUE(static_cast<bool>(embedded->dummyPatternSampler()));
   ASSERT_TRUE(static_cast<bool>(embedded->dummyClipMaskTextureView()));
   ASSERT_TRUE(static_cast<bool>(embedded->dummyClipMaskSampler()));
-  ASSERT_TRUE(static_cast<bool>(embedded->identityInstanceTransformBuffer()));
+  ASSERT_TRUE(static_cast<bool>(embedded->identityInstanceRecordBuffer()));
 
   RendererGeode renderer(embedded);
   beginFrame(renderer);
