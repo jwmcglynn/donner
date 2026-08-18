@@ -673,6 +673,49 @@ TEST(RendererPublicApiTest, PixelatedLargeLogicalIntermediateUsesBoundedSampler)
               Rgba(::testing::Gt(0), 0, ::testing::Gt(0), 255));
 }
 
+TEST(RendererPublicApiTest, ActiveRendererRejectsShortAndTrailingImagePayloads) {
+  std::unique_ptr<RendererInterface> renderer = CreateActiveRendererInstance();
+  renderer->beginFrame(RenderViewport{.size = Vector2d(2, 1), .devicePixelRatio = 1.0});
+
+  ImageParams shortParams{Box2d::FromXYWH(0.0, 0.0, 1.0, 1.0), 1.0, false};
+  renderer->drawImage(ImageResource{{255, 0, 0}, 1, 1}, shortParams);
+
+  ImageParams trailingParams;
+  trailingParams.targetRect = Box2d::FromXYWH(1.0, 0.0, 1.0, 1.0);
+  renderer->drawImage(ImageResource{{255, 0, 0, 255, 17}, 1, 1}, trailingParams);
+  renderer->endFrame();
+
+  const RendererBitmap snapshot = NormalizeSnapshot(renderer->takeSnapshot());
+  EXPECT_THAT(PixelAt(snapshot, 0, 0), IsTransparent());
+  EXPECT_THAT(PixelAt(snapshot, 1, 0), IsTransparent());
+}
+
+TEST(RendererPublicApiTest, PixelatedFallbackRejectsHostileTransform) {
+  std::unique_ptr<RendererInterface> renderer = CreateRendererInstance(RendererBackend::TinySkia);
+  renderer->beginFrame(RenderViewport{.size = Vector2d(2, 2), .devicePixelRatio = 1.0});
+
+  constexpr double kLargeScale = 20000.0;
+  Transform2d deviceFromImage(Transform2d::uninitialized);
+  deviceFromImage.data[0] = kLargeScale;
+  deviceFromImage.data[1] = kLargeScale;
+  deviceFromImage.data[2] = std::nextafter(kLargeScale, 0.0);
+  deviceFromImage.data[3] = kLargeScale;
+  deviceFromImage.data[4] = std::numeric_limits<double>::max();
+  deviceFromImage.data[5] = std::numeric_limits<double>::max();
+  renderer->pushTransform(deviceFromImage);
+
+  ImageParams params;
+  params.targetRect = Box2d::FromXYWH(0.0, 0.0, 1.0, 1.0);
+  params.imageRendering = ImageRendering::Pixelated;
+  renderer->drawImage(ImageResource{{255, 0, 0, 255}, 1, 1}, params);
+  renderer->popTransform();
+  renderer->endFrame();
+
+  const RendererBitmap snapshot = NormalizeSnapshot(renderer->takeSnapshot());
+  EXPECT_THAT(PixelAt(snapshot, 0, 0), IsTransparent());
+  EXPECT_THAT(PixelAt(snapshot, 1, 1), IsTransparent());
+}
+
 TEST(RendererPublicApiTest, TripleDrawWithoutMutationStaysStable) {
   SVGDocument document = ParseDocument(R"svg(
       <svg xmlns="http://www.w3.org/2000/svg" width="8" height="8" viewBox="0 0 8 8">

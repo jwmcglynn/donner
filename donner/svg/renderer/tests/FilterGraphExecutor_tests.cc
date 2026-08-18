@@ -1503,6 +1503,26 @@ TEST(FilterGraphExecutorTest, FeImagePixelatedSmoothsFromNearestIntegerScale) {
   EXPECT_THAT(GetPixel(pixmap, 2, 2), Rgba(Gt(0), 0, Gt(0), 255));
 }
 
+TEST(FilterGraphExecutorTest, FeImageRejectsTrailingPayloadBytes) {
+  auto maybePixmap = tiny_skia::Pixmap::fromSize(4, 4);
+  ASSERT_TRUE(maybePixmap.has_value());
+  tiny_skia::Pixmap pixmap = std::move(*maybePixmap);
+
+  components::filter_primitive::Image image;
+  image.imageData = {255, 0, 0, 255, 17};
+  image.imageWidth = 1;
+  image.imageHeight = 1;
+
+  components::FilterGraph graph;
+  components::FilterNode node;
+  node.primitive = std::move(image);
+  graph.nodes.push_back(std::move(node));
+
+  ApplyFilterGraphToPixmap(pixmap, graph, Transform2d(), std::nullopt);
+
+  EXPECT_THAT(GetPixel(pixmap, 2, 2), Rgba(0, 0, 0, 0));
+}
+
 // ---------------------------------------------------------------------------
 // Per-primitive color-interpolation-filters
 // ---------------------------------------------------------------------------

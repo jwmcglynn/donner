@@ -1711,6 +1711,22 @@ TEST_F(RendererGeodeTest, DrawImageEmptyIsNoOp) {
   EXPECT_THAT(center, IsTransparent()) << "Empty image should draw nothing";
 }
 
+TEST_F(RendererGeodeTest, DrawImageWithTrailingPayloadIsNoOp) {
+  RendererGeode renderer = createRenderer();
+  beginFrame(renderer);
+
+  ImageResource image;
+  image.width = 1;
+  image.height = 1;
+  image.data = {255, 0, 0, 255, 17};
+  ImageParams params;
+  params.targetRect = Box2d({16.0, 16.0}, {48.0, 48.0});
+  renderer.drawImage(image, params);
+  renderer.endFrame();
+
+  EXPECT_THAT(pixelAt(renderer.takeSnapshot(), 32, 32), IsTransparent());
+}
+
 /// Popping an isolated layer with a non-Normal blend mode while an outer
 /// clip is active must NOT clobber backdrop pixels outside the clip rect.
 /// This is the blend-mode regression guarded by loading (not clearing) the
@@ -2350,6 +2366,29 @@ TEST_F(RendererGeodeTest, FilterImagePixelatedSmoothsFromNearestIntegerScale) {
 
   const std::array<uint8_t, 4> center = pixelAt(renderer.takeSnapshot(), 2, 2);
   EXPECT_THAT(center, Rgba(::testing::Gt(0), 0, ::testing::Gt(0), 255));
+}
+
+TEST_F(RendererGeodeTest, FilterImageWithTrailingPayloadIsTransparent) {
+  RendererGeode renderer = createRenderer();
+  beginFrame(renderer);
+
+  components::filter_primitive::Image image;
+  image.imageData = {255, 0, 0, 255, 17};
+  image.imageWidth = 1;
+  image.imageHeight = 1;
+
+  components::FilterGraph graph;
+  components::FilterNode imageNode;
+  imageNode.primitive = std::move(image);
+  graph.nodes.push_back(std::move(imageNode));
+
+  renderer.pushFilterLayer(graph, Box2d::FromXYWH(0.0, 0.0, 5.0, 5.0));
+  renderer.setPaint(solidFill(css::RGBA(0, 0, 0, 0)));
+  renderer.drawRect(Box2d::FromXYWH(0.0, 0.0, 5.0, 5.0), StrokeParams{});
+  renderer.popFilterLayer();
+  renderer.endFrame();
+
+  EXPECT_THAT(pixelAt(renderer.takeSnapshot(), 2, 2), IsTransparent());
 }
 
 /// feMerge: composite two feFlood layers via alpha-over.
