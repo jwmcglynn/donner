@@ -338,6 +338,12 @@ TEST(RenderPanePresenterVisualReproTest, IntermediateCompositeReusesUnchangedPre
       compositor.compose(viewport, viewport.imageScreenRect(), {}, textures.tiles(), std::nullopt,
                          std::nullopt, entt::null, /*suppressDragTargetTiles=*/false);
 
+#ifdef DONNER_EDITOR_WGPU
+  EXPECT_EQ(first.texture, 0u);
+  EXPECT_EQ(second.texture, 0u);
+  EXPECT_EQ(compositor.compositionCountForTesting(), 0u);
+  EXPECT_EQ(compositor.retainedBytes(), 0u);
+#else
   ASSERT_NE(first.texture, 0u);
   EXPECT_EQ(second.texture, first.texture);
   EXPECT_EQ(compositor.compositionCountForTesting(), 1u)
@@ -350,6 +356,7 @@ TEST(RenderPanePresenterVisualReproTest, IntermediateCompositeReusesUnchangedPre
                            std::nullopt, entt::null, /*suppressDragTargetTiles=*/false);
   EXPECT_EQ(compositor.compositionCountForTesting(), 2u)
       << "A viewport change must invalidate the document composite.";
+#endif
 }
 
 TEST(RenderPanePresenterVisualReproTest,
@@ -442,26 +449,26 @@ TEST(RenderPanePresenterVisualReproTest,
   // 2x. Document-space chrome drawn with the live transform lands at twice the
   // offset and twice the size, floating off the pixels it is annotating.
   constexpr double kLiveZoomAheadOfPresentation = 2.0;
-  const svg::RendererBitmap withoutOverlay = CapturePresenterFrame(
-      &window, &textures, entt::null, std::nullopt, std::nullopt,
-      /*documentPresentedDirectly=*/true, /*compositorTileOverlay=*/false,
-      kLiveZoomAheadOfPresentation);
-  const svg::RendererBitmap withOverlay = CapturePresenterFrame(
-      &window, &textures, entt::null, std::nullopt, std::nullopt,
-      /*documentPresentedDirectly=*/true, /*compositorTileOverlay=*/true,
-      kLiveZoomAheadOfPresentation);
+  const svg::RendererBitmap withoutOverlay =
+      CapturePresenterFrame(&window, &textures, entt::null, std::nullopt, std::nullopt,
+                            /*documentPresentedDirectly=*/true, /*compositorTileOverlay=*/false,
+                            kLiveZoomAheadOfPresentation);
+  const svg::RendererBitmap withOverlay =
+      CapturePresenterFrame(&window, &textures, entt::null, std::nullopt, std::nullopt,
+                            /*documentPresentedDirectly=*/true, /*compositorTileOverlay=*/true,
+                            kLiveZoomAheadOfPresentation);
   // Aligned baseline: the same overlay with the live viewport matching the
   // presented one. Its extent is this host's presented-tile far corner plus
   // whatever label overhang this host's text rendering produces, which makes
   // the divergence assertion below host-independent.
-  const svg::RendererBitmap alignedWithoutOverlay = CapturePresenterFrame(
-      &window, &textures, entt::null, std::nullopt, std::nullopt,
-      /*documentPresentedDirectly=*/true, /*compositorTileOverlay=*/false,
-      /*liveZoomAheadOfPresentation=*/1.0);
-  const svg::RendererBitmap alignedWithOverlay = CapturePresenterFrame(
-      &window, &textures, entt::null, std::nullopt, std::nullopt,
-      /*documentPresentedDirectly=*/true, /*compositorTileOverlay=*/true,
-      /*liveZoomAheadOfPresentation=*/1.0);
+  const svg::RendererBitmap alignedWithoutOverlay =
+      CapturePresenterFrame(&window, &textures, entt::null, std::nullopt, std::nullopt,
+                            /*documentPresentedDirectly=*/true, /*compositorTileOverlay=*/false,
+                            /*liveZoomAheadOfPresentation=*/1.0);
+  const svg::RendererBitmap alignedWithOverlay =
+      CapturePresenterFrame(&window, &textures, entt::null, std::nullopt, std::nullopt,
+                            /*documentPresentedDirectly=*/true, /*compositorTileOverlay=*/true,
+                            /*liveZoomAheadOfPresentation=*/1.0);
   ASSERT_FALSE(alignedWithoutOverlay.empty());
   ASSERT_FALSE(alignedWithOverlay.empty());
   ASSERT_EQ(alignedWithOverlay.pixels.size(), alignedWithoutOverlay.pixels.size());
@@ -525,8 +532,7 @@ TEST(RenderPanePresenterVisualReproTest,
           std::max(alignedMaxLogicalY, static_cast<double>(y) / readbackFromLogicalY);
     }
   }
-  ASSERT_GT(alignedChangedPixels, 0)
-      << "The aligned baseline overlay must draw something at all.";
+  ASSERT_GT(alignedChangedPixels, 0) << "The aligned baseline overlay must draw something at all.";
 
   // The tile covers document (54,44)-(132,122); drawn against the 2x live
   // viewport its annotations would land at roughly twice the offset and size.
