@@ -574,7 +574,8 @@ synchronization to the exact path the residency work made cheap.
 ### Do not parallelize render-tree branches
 
 **Decision: no.** The ECS registry does not tolerate structural mutation concurrent with view
-iteration, and the measured win did not exist.
+iteration, which is a hard constraint, and the task shape did not pay for itself on the corpus,
+which is recorded below as a design assumption rather than as a re-runnable measurement.
 
 *The precise constraint.* Component storage is paged, so **inserting** a component never relocates
 existing ones. **Erasing** one is swap-and-pop: the storage moves its last element into the freed
