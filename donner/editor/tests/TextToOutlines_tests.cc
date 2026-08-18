@@ -95,13 +95,25 @@ std::string ApplyConversion(svg::SVGDocument& document, svg::SVGElement text,
 ///
 /// Conversion must not move, restyle, or drop anything, and a real defect there
 /// shows up as hundreds or thousands of divergent pixels. It is not, however, a
-/// bit-exact identity: the GPU backend keeps a glyph's outline resident in the
-/// glyph's own coordinate space and carries the placement in the draw
-/// transform, while a converted `<path>` is encoded at its placed coordinates.
-/// Analytic coverage evaluated from those two (equally valid) spaces lands a
-/// handful of glyph-edge pixels a couple of levels apart. The per-pixel
-/// threshold is the renderer suite's standard 0.02, and NO pixel is allowed to
-/// exceed it, so the allowance covers last-bits shading and nothing else.
+/// bit-exact identity on the GPU backend, for one narrow reason: a resident
+/// glyph outline is encoded in the glyph's own coordinate space and placed by
+/// the draw transform, while a converted `<path>` is encoded at its placed
+/// coordinates. Both spaces are axis-aligned with the pixel grid and the
+/// analytic coverage is the same algorithm; what differs is float32
+/// conditioning at large versus small coordinates.
+///
+/// On THESE fixtures that was measured at up to 3/255 across 6 to 12
+/// glyph-edge pixels. That figure is not a universal bound and must not be
+/// quoted as one: elsewhere in the render corpus the same mechanism puts a
+/// handful of edge pixels a few tens of levels apart, on documents this suite
+/// does not cover.
+///
+/// The allowance is the renderer suite's standard per-pixel threshold with ZERO
+/// pixels permitted to exceed it. Read honestly, that bounds how far any single
+/// pixel may drift and puts no cap on how many pixels sit under the bound - a
+/// uniform sub-threshold shift across the whole glyph would pass. What it rules
+/// out is any pixel moving far enough to be a placement, paint, or coverage
+/// error, which is the class of defect this check exists to catch.
 tests::BitmapGoldenCompareParams OutlineConversionParams() {
   return tests::ApprovedPixelToleranceParams(/*threshold=*/0.02f, /*maxMismatchedPixels=*/0,
                                              /*includeAntiAliasing=*/true);
@@ -204,6 +216,34 @@ TEST(TextToOutlines, PixelCompareBeforeAndAfterMatches) {
 // children (x + dy line advance), the box-size data attributes, and bold
 // styling. Conversion must produce path geometry that renders pixel-identical
 // to the live text.
+// Per-glyph `rotate` is the case that most stresses the comparison above: the
+// GPU backend keeps a rotated glyph's outline resident with the rotation baked
+// in, so the resident space stays aligned with the pixel grid. Leaving the
+// rotation in the draw transform instead tilts that space, the analytic
+// coverage measures the glyph through a coarser per-axis footprint, and the
+// edges soften - this fixture's own red measured 57/255 across 582 pixels, far
+// outside what the conversion check allows. Keep a rotated document in the
+// matrix so that failure mode cannot come back unnoticed.
+TEST(TextToOutlines, ConvertsRotatedGlyphsWithoutLosingEdgeFidelity) {
+  constexpr std::string_view kRotatedSvg =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+<text x="20" y="120" font-family="sans-serif" font-size="48" fill="black" rotate="30">Text</text>
+</svg>)";
+  svg::SVGDocument converted = Parse(kRotatedSvg);
+  svg::SVGElement text = TextElement(converted);
+
+  ConvertTextToOutlinesResult result = convertTextToOutlines(converted, text);
+  ASSERT_TRUE(result.ok) << result.error;
+  const std::string mergedSource = ApplyConversion(converted, text, result);
+
+  svg::SVGDocument beforeFresh = Parse(kRotatedSvg);
+  svg::SVGDocument after = Parse(mergedSource);
+  const svg::RendererBitmap beforeBitmap = RenderToBitmap(beforeFresh);
+  const svg::RendererBitmap afterBitmap = RenderToBitmap(after);
+  tests::CompareBitmapToBitmap(afterBitmap, beforeBitmap, "text_to_outlines_rotated_glyphs",
+                               OutlineConversionParams());
+}
+
 TEST(TextToOutlines, ConvertsTextToolBoxTextPixelIdentical) {
   constexpr std::string_view kToolAuthoredSvg =
       R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">

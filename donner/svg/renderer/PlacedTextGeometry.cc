@@ -36,24 +36,15 @@ Path TransformPath(const Path& path, const Transform2d& transform) {
 }
 
 Transform2d GlyphPlacementTransform(const TextGlyph& glyph) {
-  // Rotate the outline about its own origin, then move it to the baseline
-  // position: `Rotate * Translate`, which applies the rotation first because a
-  // `Transform2d` product applies its LEFT operand first. Matching
-  // `RendererTinySkia::drawText`.
-  Transform2d glyphFromLocal = Transform2d::Translate(glyph.xPosition, glyph.yPosition);
-  if (glyph.rotateDegrees != 0.0) {
-    glyphFromLocal = Transform2d::Rotate(glyph.rotateDegrees * MathConstants<double>::kPi / 180.0) *
-                     glyphFromLocal;
-  }
-  return glyphFromLocal;
+  return Transform2d::Translate(glyph.xPosition, glyph.yPosition);
 }
 
 GlyphOutlineAndPlacement UnplacedGlyphOutline(const TextEngine& textEngine, FontHandle font,
                                               const TextGlyph& glyph, float scale) {
   GlyphOutlineAndPlacement result;
 
-  // 3. Position. Computed even for an empty outline so the placement stays a
-  //    pure function of the glyph's position fields.
+  // Position. Computed even for an empty outline so the placement stays a pure
+  // function of the glyph's position fields.
   result.glyphFromLocal = GlyphPlacementTransform(glyph);
 
   if (glyph.glyphIndex == 0) {
@@ -75,16 +66,55 @@ GlyphOutlineAndPlacement UnplacedGlyphOutline(const TextEngine& textEngine, Font
         TransformPath(result.outline, Transform2d::Scale(glyph.stretchScaleX, glyph.stretchScaleY));
   }
 
+  // 3. Rotation, baked into the OUTLINE rather than left in the placement.
+  //
+  //    A renderer that keeps this outline and carries `glyphFromLocal` as a
+  //    draw transform is choosing the coordinate space its rasteriser works in.
+  //    Leaving a rotation in that transform tilts the outline's own space
+  //    against the pixel grid, and a rasteriser that evaluates coverage with
+  //    per-axis pixel footprints then measures a rotated glyph through a
+  //    coarser footprint than an upright one - visibly softer edges on
+  //    `rotate` and on `textPath`, which rotates every glyph. Baking it here
+  //    keeps that space axis-aligned, and the rotation stays part of the
+  //    glyph's identity so one angle costs one cached outline.
+  if (glyph.rotateDegrees != 0.0) {
+    result.outline = TransformPath(
+        result.outline,
+        Transform2d::Rotate(glyph.rotateDegrees * MathConstants<double>::kPi / 180.0));
+  }
+
   return result;
 }
 
 Path PlacedGlyphOutline(const TextEngine& textEngine, FontHandle font, const TextGlyph& glyph,
                         float scale) {
-  const GlyphOutlineAndPlacement unplaced = UnplacedGlyphOutline(textEngine, font, glyph, scale);
-  if (unplaced.outline.empty()) {
-    return unplaced.outline;
+  if (glyph.glyphIndex == 0) {
+    return Path();  // `.notdef` -- caller skips.
   }
-  return TransformPath(unplaced.outline, unplaced.glyphFromLocal);
+
+  // Deliberately NOT built from `UnplacedGlyphOutline`: this composes the
+  // placement into ONE affine and transforms the outline once, and the CPU
+  // backend's golden images are pinned to that exact arithmetic. Splitting it
+  // into a rotate pass and a translate pass is the same mapping but not the
+  // same rounding.
+  Path glyphPath = textEngine.glyphOutline(font, glyph.glyphIndex, scale * glyph.fontSizeScale);
+  if (glyphPath.empty()) {
+    return glyphPath;  // No vector outline (e.g. bitmap-only) -- caller handles.
+  }
+
+  if (glyph.stretchScaleX != 1.0f || glyph.stretchScaleY != 1.0f) {
+    glyphPath =
+        TransformPath(glyphPath, Transform2d::Scale(glyph.stretchScaleX, glyph.stretchScaleY));
+  }
+
+  // Translate to the baseline origin and rotate about it, as one transform.
+  Transform2d glyphFromLocal = Transform2d::Translate(glyph.xPosition, glyph.yPosition);
+  if (glyph.rotateDegrees != 0.0) {
+    glyphFromLocal = Transform2d::Rotate(glyph.rotateDegrees * MathConstants<double>::kPi / 180.0) *
+                     glyphFromLocal;
+  }
+
+  return TransformPath(glyphPath, glyphFromLocal);
 }
 
 Box2d ComputeTextBounds(const TextEngine& textEngine, const std::vector<TextRun>& runs,

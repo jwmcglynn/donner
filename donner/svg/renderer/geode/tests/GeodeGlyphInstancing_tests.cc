@@ -156,10 +156,15 @@ TEST_F(GeodeGlyphInstancingTest, RepeatedGlyphsShareOneResidentOutline) {
       << "The resident second frame must draw the same coverage as the first.";
 }
 
-/// Two separate `<text>` elements are distinct source entities that share glyph
-/// outlines. They must batch together, and - the part that batching can get
-/// wrong - overlapping instances must still composite in painter order, because
-/// the batch draws them as instances of one call.
+/// Two separate `<text>` elements are distinct source entities that share one
+/// glyph outline: residency is keyed on the glyph, not on the element, so the
+/// outline is built once for both.
+///
+/// Their DRAWS do not currently share a batch - each element's fill loop closes
+/// its batch before anything else can emit, so batching collapses occurrences
+/// within an element and cross-element batching is future work. What this pins
+/// is the property batching can get wrong wherever it does apply: instances of
+/// one draw must still composite in painter order.
 TEST_F(GeodeGlyphInstancingTest, OverlappingTextElementsCompositeInPaintOrder) {
   // Both elements draw the same glyphs at the same place: opaque blue is
   // painted last, so blue must win everywhere the two overlap.
@@ -273,8 +278,6 @@ TEST_F(GeodeGlyphInstancingTest, FontSizeChangeInvalidatesResidentGlyphGeometry)
       << "The larger font must cover substantially more of the canvas; serving the cached "
          "small outline would keep the coverage the same.";
 
-  // Back to the original size: the first entry is still resident and serves it
-  // without a rebuild.
   // Returning to the original size renders the original geometry again. This
   // deliberately does not assert a cache hit: a style mutation re-resolves the
   // document's fonts, and a re-resolved font is a new identity, so the earlier
@@ -286,6 +289,107 @@ TEST_F(GeodeGlyphInstancingTest, FontSizeChangeInvalidatesResidentGlyphGeometry)
   const Frame backToSmall = render(renderer, document);
   EXPECT_EQ(nonTransparentPixels(backToSmall.bitmap), smallCovered)
       << "Returning to the original size must render the original geometry.";
+}
+
+/// Per-glyph `rotate` is part of glyph identity, so a rotated run is cached and
+/// instanced exactly like an upright one: one angle costs one outline no matter
+/// how many occurrences carry it.
+TEST_F(GeodeGlyphInstancingTest, WholeRunRotationCostsOneResidentOutlinePerAngle) {
+  SVGDocument document = parse(R"svg(
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200"
+           font-family="Noto Sans" font-size="32">
+        <text x="20" y="120" fill="black" rotate="30">eeee</text>
+      </svg>)svg");
+
+  RendererGeode renderer(sharedDevice());
+  const Frame first = render(renderer, document);
+  ASSERT_GT(nonTransparentPixels(first.bitmap), 0u) << "Rotated text did not render at all.";
+
+  EXPECT_EQ(first.counters.glyphResidencyUploads, 1u)
+      << "Four occurrences of one glyph at one angle must build one outline.";
+  EXPECT_EQ(renderer.residentGlyphCountForTesting(document), 1u);
+
+  const Frame second = render(renderer, document);
+  EXPECT_EQ(second.counters.glyphResidencyUploads, 0u);
+  EXPECT_EQ(second.counters.pathEncodes, 0u)
+      << "An unchanged rotated text frame must re-encode nothing.";
+  EXPECT_EQ(nonTransparentPixels(second.bitmap), nonTransparentPixels(first.bitmap));
+}
+
+/// Angle is part of the key, so glyphs that differ ONLY in rotation must not
+/// share an outline - serving one angle's geometry for another would draw the
+/// glyph tilted the wrong way.
+TEST_F(GeodeGlyphInstancingTest, DistinctRotationsTakeDistinctResidentOutlines) {
+  SVGDocument document = parse(R"svg(
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200"
+           font-family="Noto Sans" font-size="32">
+        <text x="20" y="120" fill="black" rotate="0 45 90">eee</text>
+      </svg>)svg");
+
+  RendererGeode renderer(sharedDevice());
+  const Frame first = render(renderer, document);
+  ASSERT_GT(nonTransparentPixels(first.bitmap), 0u) << "Rotated text did not render at all.";
+
+  EXPECT_EQ(renderer.residentGlyphCountForTesting(document), 3u)
+      << "One glyph at three angles is three glyph identities.";
+  EXPECT_EQ(first.counters.glyphResidencyUploads, 3u);
+}
+
+/// A document that keeps mutating - the editor's typing and drag loop - churns
+/// glyph identities today, because re-resolving a text element's style hands
+/// back new font handles (a `FontManager` behaviour this change does not
+/// touch). The residency must then stay BOUNDED by its budget rather than
+/// growing without limit: superseded entries have to be evicted, not stranded.
+TEST_F(GeodeGlyphInstancingTest, RepeatedMutationKeepsResidencyBounded) {
+  SVGDocument document = parse(R"svg(
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+        <text id="t" x="10" y="120" font-family="Noto Sans" font-size="24"
+              fill="black">Hello</text>
+      </svg>)svg");
+
+  auto text = document.querySelector("#t");
+  ASSERT_TRUE(text.has_value());
+
+  RendererGeode renderer(sharedDevice());
+  // A budget far below what 20 rounds of unreclaimed churn would reach, so a
+  // pass means eviction is doing the work rather than the budget being roomy.
+  constexpr size_t kMaxEntries = 16u;
+  // "Hello" resolves to four distinct glyph outlines, and a frame's own new
+  // entries land AFTER that frame's trim, so the count legitimately sits above
+  // the cap until the next frame trims it. Give that one frame of headroom.
+  constexpr size_t kDistinctGlyphsPerFrame = 4u;
+  constexpr size_t kCeiling = kMaxEntries + kDistinctGlyphsPerFrame;
+  renderer.setGlyphResidencyBudgetForTesting(kMaxEntries, /*maxEncodedBytes=*/1u << 30);
+
+  uint64_t totalEvictions = 0;
+  size_t settledCount = 0;
+  for (int round = 0; round < 20; ++round) {
+    // Alternate the fill so every round is a real style mutation while the
+    // glyph geometry stays identical.
+    text->setAttribute("fill", (round % 2) == 0 ? "#101010" : "#202020");
+    const Frame frame = render(renderer, document);
+    ASSERT_GT(nonTransparentPixels(frame.bitmap), 0u)
+        << "Text stopped rendering at mutation round " << round;
+    totalEvictions += frame.counters.glyphResidencyEvictions;
+
+    const size_t resident = renderer.residentGlyphCountForTesting(document);
+    EXPECT_LE(resident, kCeiling) << "Residency exceeded its budget at mutation round " << round;
+
+    // Once the churn has filled the budget, the count must stop climbing:
+    // that, not the absolute number, is what says superseded identities are
+    // reclaimed rather than stranded.
+    if (round == 9) {
+      settledCount = resident;
+    } else if (round > 9) {
+      EXPECT_LE(resident, settledCount)
+          << "Residency grew after settling, at mutation round " << round;
+    }
+  }
+
+  EXPECT_GT(totalEvictions, 0u)
+      << "Mutation churn must be reclaimed by eviction, not accumulated. If this fails while "
+         "the ceiling assertion passes, the churn stopped happening and this test is now "
+         "measuring nothing.";
 }
 
 }  // namespace
