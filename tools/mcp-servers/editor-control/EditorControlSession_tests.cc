@@ -805,7 +805,7 @@ TEST(EditorControlSessionTest, TransformSelectorRotatesThroughHandleAndExposesAf
                                                         {"delta_y", 48.0},
                                                         {"frames", 2},
                                                         {"release", false},
-                                                        {"include_final_frame", false}});
+                                                        {"include_final_frame", true}});
   ASSERT_TRUE(rotate.body.value("ok", false)) << rotate.body.dump(2);
   EXPECT_EQ(rotate.body.value("gesture_kind", ""), "rotate");
   EXPECT_EQ(rotate.body.value("corner", ""), "top_right");
@@ -826,6 +826,14 @@ TEST(EditorControlSessionTest, TransformSelectorRotatesThroughHandleAndExposesAf
   EXPECT_NEAR(center.y, 30.0, 1e-6);
   EXPECT_NEAR(topRight.x, 40.0, 1e-6);
   EXPECT_NEAR(topRight.y, 40.0, 1e-6);
+
+  ASSERT_TRUE(lastFrame["stages"].is_array()) << lastFrame.dump(2);
+  ASSERT_FALSE(lastFrame["stages"].empty()) << lastFrame.dump(2);
+  const json& finalBitmap = lastFrame["stages"].back()["bitmap"];
+  ASSERT_TRUE(finalBitmap["dimensions"].is_object()) << finalBitmap.dump(2);
+  EXPECT_GT(finalBitmap["dimensions"].value("x", 0), 0) << finalBitmap.dump(2);
+  EXPECT_GT(finalBitmap["dimensions"].value("y", 0), 0) << finalBitmap.dump(2);
+  EXPECT_TRUE(finalBitmap.value("png_attached", false)) << finalBitmap.dump(2);
 }
 
 TEST(EditorControlSessionTest, HeadlessTileCompositionPreservesAffinePlacementAndAlpha) {
