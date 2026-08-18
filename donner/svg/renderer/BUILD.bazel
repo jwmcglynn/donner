@@ -394,6 +394,7 @@ donner_cc_library(
         # GeodeFilterEngine that were previously separate libraries
         # (see that target's comment).
         "//donner/svg/renderer/geode:geode_device",
+        "//donner/svg/renderer/geode:geode_glyph_residency",
         "//donner/svg/renderer/geode:geode_path_cache_component",
         "//donner/svg/renderer/geode:geode_resident_path_component",
         "//donner/svg/renderer/geode:geode_path_encoder",

@@ -140,6 +140,41 @@ donner_cc_library(
     ],
 )
 
+# Header-only glyph-identity-keyed outline cache plus the persistent
+# per-occurrence text instance records that ride on top of it.
+donner_cc_library(
+    name = "geode_glyph_residency",
+    hdrs = ["GeodeGlyphResidency.h"],
+    target_compatible_with = _GEODE_ONLY,
+    visibility = ["//donner/svg/renderer:__subpackages__"],
+    deps = [
+        ":geode_device",
+        ":geode_path_encoder",
+        ":geode_resident_path_component",
+        "//donner/base",
+        "//third_party/webgpu-cpp:webgpu_cpp",
+    ],
+)
+
+donner_cc_test(
+    name = "geode_glyph_residency_tests_impl",
+    srcs = ["tests/GeodeGlyphResidency_tests.cc"],
+    target_compatible_with = _GEODE_ONLY,
+    deps = [
+        ":geode_glyph_residency",
+        "//donner/base",
+        "//donner/base:gtest_timeout_main",
+    ],
+)
+
+donner_multi_transitioned_test(
+    name = "geode_glyph_residency_tests",
+    timeout = "short",
+    testonly = 1,
+    dep = ":geode_glyph_residency_tests_impl",
+    renderer_backend = "geode",
+)
+
 donner_cc_test(
     name = "geode_path_encoder_tests",
     srcs = ["tests/GeodePathEncoder_tests.cc"],

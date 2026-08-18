@@ -465,6 +465,18 @@ public:
   void countTextureWrite(uint64_t bytes) const {
     if (counters_) counters_->textureWriteBytes += bytes;
   }
+  /// Record one glyph occurrence served from an already-resident outline.
+  void countGlyphResidencyHit() const {
+    if (counters_) ++counters_->glyphResidencyHits;
+  }
+  /// Record one unique glyph outline encoded and made resident.
+  void countGlyphResidencyUpload() const {
+    if (counters_) ++counters_->glyphResidencyUploads;
+  }
+  /// Record `count` cached glyph outlines dropped to stay inside the budget.
+  void countGlyphResidencyEvictions(uint64_t count) const {
+    if (counters_) counters_->glyphResidencyEvictions += count;
+  }
 
   /// Shared live-resident-bytes gauge for GPU residence. Co-owned with
   /// each `GeodeResidentSlot`'s buffer so

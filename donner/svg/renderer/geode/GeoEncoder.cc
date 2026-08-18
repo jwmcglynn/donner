@@ -653,6 +653,7 @@ struct GeoEncoder::Impl : public GeodeTextureEncoder::UniformScratch {
   bool ensureResidentSceneRecordImpl(GeodeResidentSlot& slot, const EncodedPath& encoded,
                                      const FillDrawArgs& args, const Transform2d& recordTransform,
                                      const GeodeRecordSlab::Slot* recordSlotOverride,
+                                     std::vector<uint8_t>* overrideRecordCache,
                                      bool bakeTransform);
 
   /// Gradient-paint extension: (re)upload `encoded` into the
@@ -1888,7 +1889,7 @@ bool GeoEncoder::Impl::submitResidentFillDraw(GeodeResidentSlot& slot, const Enc
   ensurePassOpen();
   bindSolidPipeline();
 
-  if (!ensureResidentSceneRecordImpl(slot, encoded, args, transform, nullptr,
+  if (!ensureResidentSceneRecordImpl(slot, encoded, args, transform, nullptr, nullptr,
                                      /*bakeTransform=*/true)) {
     return false;
   }
@@ -1906,10 +1907,13 @@ bool GeoEncoder::Impl::submitResidentFillDraw(GeodeResidentSlot& slot, const Enc
   return true;
 }
 
-bool GeoEncoder::Impl::ensureResidentSceneRecordImpl(
-    GeodeResidentSlot& slot, const EncodedPath& encoded, const FillDrawArgs& args,
-    const Transform2d& recordTransform, const GeodeRecordSlab::Slot* recordSlotOverride,
-    bool bakeTransform) {
+bool GeoEncoder::Impl::ensureResidentSceneRecordImpl(GeodeResidentSlot& slot,
+                                                     const EncodedPath& encoded,
+                                                     const FillDrawArgs& args,
+                                                     const Transform2d& recordTransform,
+                                                     const GeodeRecordSlab::Slot* recordSlotOverride,
+                                                     std::vector<uint8_t>* overrideRecordCache,
+                                                     bool bakeTransform) {
   // Ensure the geometry is resident and current AND owned by THIS device.
   // Component removal is the primary invalidation; the pointer + fingerprint
   // guard catches the in-place stroke-slot rebuild (which replaces the encode
@@ -1993,7 +1997,19 @@ bool GeoEncoder::Impl::ensureResidentSceneRecordImpl(
   if (!recordSlot.buffer) {
     return false;
   }
-  if (recordSlotOverride != nullptr) {
+  if (recordSlotOverride != nullptr && overrideRecordCache != nullptr) {
+    // Caller-owned record slot with a caller-owned copy of its last contents
+    // (per-occurrence text records, which persist across frames). Same
+    // skip-when-unchanged contract as the slot's own primary record, just
+    // with the cache living where the slot does.
+    if (overrideRecordCache->size() != sizeof(InstanceRecord) ||
+        std::memcmp(overrideRecordCache->data(), rBytes, sizeof(InstanceRecord)) != 0) {
+      device->queue().writeBuffer(recordSlot.buffer, recordSlot.offset, &record,
+                                  sizeof(InstanceRecord));
+      device->countBufferWrite(sizeof(InstanceRecord));
+      overrideRecordCache->assign(rBytes, rBytes + sizeof(InstanceRecord));
+    }
+  } else if (recordSlotOverride != nullptr) {
     // Per-frame temporary record slot (same-frame repeat draws): always
     // fresh, so always written.
     device->queue().writeBuffer(recordSlot.buffer, recordSlot.offset, &record,
@@ -2112,7 +2128,8 @@ void GeoEncoder::fillPathInstanced(const EncodedPath& encoded, const css::RGBA& 
 bool GeoEncoder::ensureResidentSceneRecord(GeodeResidentSlot& slot, const EncodedPath& encoded,
                                            const css::RGBA& color, FillRule rule,
                                            const Transform2d& recordTransform,
-                                           const GeodeRecordSlab::Slot* recordSlotOverride) {
+                                           const GeodeRecordSlab::Slot* recordSlotOverride,
+                                           std::vector<uint8_t>* overrideRecordCache) {
   if (encoded.empty()) {
     return false;
   }
@@ -2134,7 +2151,8 @@ bool GeoEncoder::ensureResidentSceneRecord(GeodeResidentSlot& slot, const Encode
   args.tileSize = Vector2d(1.0, 1.0);
   args.patternFromPath = Transform2d();
   return impl_->ensureResidentSceneRecordImpl(slot, encoded, args, recordTransform,
-                                              recordSlotOverride, /*bakeTransform=*/false);
+                                              recordSlotOverride, overrideRecordCache,
+                                              /*bakeTransform=*/false);
 }
 
 void GeoEncoder::fillPathSceneBatch(const css::RGBA& color, FillRule rule,
