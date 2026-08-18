@@ -118,10 +118,10 @@ separately: `DONNER_ENABLE_TERMINAL_IMAGES=0` disables it (default on; per-test 
 source. The failure output prints a rerun hint with a literal `<target>` placeholder — substitute
 the resvg target and your `--gtest_filter` yourself.
 
-Startup noise: repeated `error at 0:0: Data corrupted` lines appear on every run — all categories
-register at binary startup regardless of `--gtest_filter`, and `filters/filter-functions` produces
-this known resource-loading noise (TODO in `resvg_test_suite.cc`). Ignore them unless your test is
-in that category.
+Active resvg categories register at binary startup regardless of `--gtest_filter`. The
+`filters/filter-functions` registration remains deliberately disabled at this layer, but there is
+no known blanket startup-corruption exception. Treat parser or resource-loading diagnostics from
+an active category as failures to investigate.
 
 ## Comparison modes (verified against ActiveComparisonModes())
 
@@ -130,9 +130,8 @@ in that category.
 - CPU builds: `{ TinyGolden }` — tiny-skia render vs the committed golden.
 - Geode builds: `{ TinyGolden, GeodeGolden }` — each backend vs the same committed golden.
 
-**`GeodeTinyParity` (geode-render-vs-tiny-render) is retired** and no longer runs; the enum member
-and `.disableGeodeParity(...)` builder still exist but are inert in this suite.
-`README_resvg_test_suite.md` still claims three modes — that is stale; the `.cc` implementation
+**`GeodeTinyParity` (geode-render-vs-tiny-render) is retired** and no longer runs. Its enum member
+and `.disableGeodeParity(...)` builder were removed. The `.cc` implementation
 (`ActiveComparisonModes()`) is authoritative.
 
 A test can pass `_TinyGolden` and fail `_GeodeGolden` (or vice versa). Handle per-backend
@@ -217,7 +216,7 @@ header when in doubt, it is the source of truth):
   budget only for Geode comparison modes), `.onlyTextFull()`, `.setCanvasSize(w, h)`,
   `.disableBackend(backend, reason)`, `.requireFeature(feature, reason)`,
   `.withGeodeGoldenOverride(filename, reason)`, `.includeAntiAliasingDifferences()`,
-  `.enableGoldenUpdateFromEnv()`, `.disableGeodeParity(reason)` (inert — parity mode retired).
+  `.enableGoldenUpdateFromEnv()`.
 
 After editing, verify: rerun with a category filter and confirm skips show as skipped, passes
 still pass, and the un-skipped test actually runs. Then run `bazel test //...` before pushing

@@ -354,7 +354,6 @@ _REASON_CALLS = {
     "WithMaxPixels",
     "withReason",
     "withGeodeGoldenOverride",
-    "disableGeodeParity",
 }
 
 
@@ -362,7 +361,7 @@ def _reason_from_params(expression: str) -> str | None:
     reason: str | None = None
     for _, name, arguments in sorted(_iter_named_calls(expression, _REASON_CALLS)):
         argument_index: int | None = None
-        if name in {"Skip", "RenderOnly", "withReason", "disableGeodeParity"} and arguments:
+        if name in {"Skip", "RenderOnly", "withReason"} and arguments:
             argument_index = 0
         elif name == "WithThreshold" and len(arguments) >= 3:
             argument_index = 2
@@ -375,6 +374,19 @@ def _reason_from_params(expression: str) -> str | None:
             candidate = _parse_cpp_string_expression(arguments[argument_index])
             if candidate:
                 reason = candidate
+    return reason
+
+
+def _backend_requirement_reason_from_params(expression: str) -> str | None:
+    reason: str | None = None
+    for _, _, arguments in sorted(
+        _iter_named_calls(expression, {"requireFeature", "disableBackend"})
+    ):
+        if len(arguments) < 2:
+            continue
+        candidate = _parse_cpp_string_expression(arguments[1])
+        if candidate:
+            reason = candidate
     return reason
 
 
@@ -461,6 +473,7 @@ def _params_facts(expression: str, category: str) -> dict[str, object]:
         comparison_modes.remove("geode-golden")
 
     return {
+        "backend_requirement_reason": _backend_requirement_reason_from_params(expression),
         "backend_requirements": sorted(required_features),
         "comparison_modes": comparison_modes,
         "disabled_backends": sorted(disabled_backends),

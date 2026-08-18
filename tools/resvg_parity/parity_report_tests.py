@@ -182,6 +182,36 @@ class ParityReportTests(unittest.TestCase):
         self.assertEqual(case["reason"], "geode reason")
         self.assertEqual(case["backend_requirements"], ["text", "text-full"])
 
+    def test_backend_gate_reasons_are_separate_from_comparison_reasons(self) -> None:
+        self.fixture.add_case("painting/fill/required.svg")
+        self.fixture.add_case("painting/fill/disabled.svg")
+        source = _registration(
+            "PaintingFill",
+            textwrap.dedent(
+                """
+                "painting/fill",
+                {
+                    {"required.svg", Params::WithThreshold(0.1f, 2, "pixel budget")
+                        .requireFeature(RendererBackendFeature::Text, "text rendering")},
+                    {"disabled.svg", Params().disableBackend(
+                        RendererBackend::Geode, "Geode path unavailable")},
+                }
+                """
+            ),
+        )
+
+        cases = {
+            case["path"]: case
+            for case in parity_report.build_report(source, self.fixture.tests_root)["cases"]
+        }
+
+        required = cases["painting/fill/required.svg"]
+        self.assertEqual(required["reason"], "pixel budget")
+        self.assertEqual(required["backend_requirement_reason"], "text rendering")
+        disabled = cases["painting/fill/disabled.svg"]
+        self.assertIsNone(disabled["reason"])
+        self.assertEqual(disabled["backend_requirement_reason"], "Geode path unavailable")
+
     def test_unregistered_category_fails_closed(self) -> None:
         self.fixture.add_case("painting/fill/a.svg")
         self.fixture.add_case("painting/stroke/b.svg")
