@@ -150,6 +150,27 @@ std::optional<PresentedTileQuad> ComputePresentedTileQuad(
   return quad;
 }
 
+std::optional<Transform2d> ComputePresentedOutputFromTextureTransform(
+    const PresentedTileQuad& tileQuad, const Vector2i& textureSizePx) {
+  if (!IsValidQuad(tileQuad) || textureSizePx.x <= 0 || textureSizePx.y <= 0) {
+    return std::nullopt;
+  }
+
+  const Vector2d sourceSize(static_cast<double>(textureSizePx.x),
+                            static_cast<double>(textureSizePx.y));
+  Transform2d outputFromTexture(Transform2d::uninitialized);
+  outputFromTexture.data[0] = (tileQuad.topRight.x - tileQuad.topLeft.x) / sourceSize.x;
+  outputFromTexture.data[1] = (tileQuad.topRight.y - tileQuad.topLeft.y) / sourceSize.x;
+  outputFromTexture.data[2] = (tileQuad.bottomLeft.x - tileQuad.topLeft.x) / sourceSize.y;
+  outputFromTexture.data[3] = (tileQuad.bottomLeft.y - tileQuad.topLeft.y) / sourceSize.y;
+  outputFromTexture.data[4] = tileQuad.topLeft.x;
+  outputFromTexture.data[5] = tileQuad.topLeft.y;
+  if (!IsFinite(outputFromTexture)) {
+    return std::nullopt;
+  }
+  return outputFromTexture;
+}
+
 std::optional<PresentedTileRect> ComputePresentedTileRect(
     const PresentedFrameTileGeometry& tile, const Transform2d& outputFromCanvasTransform,
     const std::optional<PresentedDragBaseline>& dragBaseline) {
