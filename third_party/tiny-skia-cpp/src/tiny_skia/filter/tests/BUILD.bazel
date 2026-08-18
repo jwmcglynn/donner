@@ -9,6 +9,7 @@ tiny_skia_dual_mode_cc_test(
     srcs = [
         "ColorSpaceTest.cpp",
         "FilterGraphColorSpaceTest.cpp",
+        "FilterSimdParityTest.cpp",
         "SimdVecTest.cpp",
     ],
     # -ffp-contract=off matches the library so the reference expressions in the
