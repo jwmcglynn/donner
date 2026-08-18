@@ -39,6 +39,14 @@ name: Coverage
 # strength: shared C++ sources always impact their host cc_library/cc_test
 # owners too, which classify as instrumentable. Future readers:
 # do not silently re-add a full instrumented PR coverage run.
+#
+# And the same shape one step further in: a genuine incremental subset that
+# holds instrumentable code but no TEST target at all has nothing to measure
+# either, because coverage data comes only from tests that run. `bazel coverage`
+# reports an empty test set as an error and writes no report, so the lane would
+# die on the "report was not generated" guard. Bazel itself is asked which of
+# the affected targets are tests (fallback_reason == no_test_targets), and that
+# detection fails closed too: a query failure runs coverage as before.
 on:
   push:
     branches: [main]
@@ -506,12 +514,12 @@ jobs:
           # alias in the set with its actual; an alias that cannot be resolved
           # stays an `alias` kind and the classifier treats it as instrumentable
           # (fail closed).
+          # The alias-resolved affected set, shared by the kind query below and
+          # by the test-presence query after it. Keep it single-quoted: `$a` is
+          # a bazel query variable, not a shell one.
+          resolved_expr="$(printf 'let a = set(%s) in ($a - kind("^alias rule$", $a)) + labels("actual", kind("^alias rule$", $a))' "$(tr '\n' ' ' < "$work_dir/affected.txt")")"
           kind_query_file="$work_dir/affected-query.txt"
-          {
-            printf 'let a = set('
-            tr '\n' ' ' < "$work_dir/affected.txt"
-            printf ') in ($a - kind("^alias rule$", $a)) + labels("actual", kind("^alias rule$", $a))\n'
-          } > "$kind_query_file"
+          printf '%s\n' "$resolved_expr" > "$kind_query_file"
           label_kind_file="$work_dir/affected-label-kind.txt"
           if ( cd "$head_dir" && bazelisk query --query_file="$kind_query_file" \
               --output label_kind --keep_going ) > "$label_kind_file" 2> "$diagnostics_dir/kind-query.log"; then
@@ -563,6 +571,41 @@ jobs:
                 fi
               fi
               echo "Affected subset includes instrumentable C/C++ targets; running coverage."
+
+              # Test-presence gate. Instrumentable code is not enough: coverage
+              # data comes only from tests that RUN, so a subset holding a
+              # library or tool whose test reverse dependencies are not in the
+              # set has nothing to measure. `bazel coverage` reports that empty
+              # test set as an error and writes no report, so the lane dies on
+              # the "report was not generated" guard rather than saying what
+              # happened. Ask bazel which affected targets are tests, so
+              # test_suite expansion and rule kinds this workflow does not
+              # enumerate are handled by definition rather than by a name
+              # heuristic, and subtract the tags the coverage command itself
+              # filters out (--test_tag_filters=-fuzz_target,-lint in .bazelrc),
+              # because a subset whose only tests carry those tags leaves the
+              # coverage run with the very empty test set this gate exists to
+              # keep it out of. `attr` matches its pattern against the string
+              # form of the tag LIST ("[fuzz_target, manual]"), not against
+              # each element, so the tag names are bracketed by the list
+              # punctuation rather than anchored with ^$. Fail closed: a query
+              # failure keeps the coverage run.
+              test_query_file="$work_dir/affected-tests-query.txt"
+              printf 'tests(%s) except attr("tags", "[\[ ](fuzz_target|lint)[,\]]", tests(%s))\n' \
+                "$resolved_expr" "$resolved_expr" > "$test_query_file"
+              affected_tests_file="$work_dir/affected-tests.txt"
+              if ( cd "$head_dir" && bazelisk query --query_file="$test_query_file" \
+                  --keep_going ) > "$affected_tests_file" 2> "$diagnostics_dir/test-query.log"; then
+                cp "$affected_tests_file" "$diagnostics_dir/affected-tests.txt"
+                if [[ ! -s "$affected_tests_file" ]]; then
+                  echo "Affected subset contains no test targets; skipping PR coverage."
+                  emit_targets true no_test_targets ""
+                  exit 0
+                fi
+              else
+                echo "Test-presence query failed; running coverage on affected subset (guard intact)."
+                cat "$diagnostics_dir/test-query.log" || true
+              fi
             else
               echo "Instrumentability classifier errored; running coverage on affected subset (guard intact)."
             fi
