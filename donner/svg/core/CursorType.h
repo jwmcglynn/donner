@@ -14,30 +14,42 @@ namespace donner::svg {
  * @see https://www.w3.org/TR/css-ui-4/#cursor
  */
 enum class CursorType : uint8_t {
-  Auto,        //!< The browser determines the cursor based on context.
-  Default,     //!< Platform default cursor (usually an arrow).
-  None,        //!< No cursor is rendered.
-  Pointer,     //!< Indicates a link (usually a hand).
-  Crosshair,   //!< Cross cursor, often for selection.
-  Move,        //!< Indicates something can be moved.
-  Text,        //!< Indicates text can be selected.
-  Wait,        //!< Indicates the program is busy.
-  Help,        //!< Indicates help is available.
-  NotAllowed,  //!< Indicates the action is not allowed.
-  Grab,        //!< Indicates something can be grabbed.
-  Grabbing,    //!< Indicates something is being grabbed.
-  NResize,     //!< Resize north.
-  EResize,     //!< Resize east.
-  SResize,     //!< Resize south.
-  WResize,     //!< Resize west.
-  NEResize,    //!< Resize north-east.
-  NWResize,    //!< Resize north-west.
-  SEResize,    //!< Resize south-east.
-  SWResize,    //!< Resize south-west.
-  ColResize,   //!< Resize column.
-  RowResize,   //!< Resize row.
-  ZoomIn,      //!< Zoom in.
-  ZoomOut,     //!< Zoom out.
+  Auto,          //!< The browser determines the cursor based on context.
+  Default,       //!< Platform default cursor (usually an arrow).
+  None,          //!< No cursor is rendered.
+  Pointer,       //!< Indicates a link (usually a hand).
+  Crosshair,     //!< Cross cursor, often for selection.
+  Move,          //!< Indicates something can be moved.
+  Text,          //!< Indicates text can be selected.
+  Wait,          //!< Indicates the program is busy.
+  Help,          //!< Indicates help is available.
+  NotAllowed,    //!< Indicates the action is not allowed.
+  Grab,          //!< Indicates something can be grabbed.
+  Grabbing,      //!< Indicates something is being grabbed.
+  NResize,       //!< Resize north.
+  EResize,       //!< Resize east.
+  SResize,       //!< Resize south.
+  WResize,       //!< Resize west.
+  NEResize,      //!< Resize north-east.
+  NWResize,      //!< Resize north-west.
+  SEResize,      //!< Resize south-east.
+  SWResize,      //!< Resize south-west.
+  ColResize,     //!< Resize column.
+  RowResize,     //!< Resize row.
+  ZoomIn,        //!< Zoom in.
+  ZoomOut,       //!< Zoom out.
+  ContextMenu,   //!< A context menu is available.
+  Progress,      //!< The application is busy but interaction remains possible.
+  Cell,          //!< A table cell or cell collection can be selected.
+  VerticalText,  //!< Vertical text can be selected.
+  Alias,         //!< An alias or shortcut will be created.
+  Copy,          //!< Content will be copied.
+  NoDrop,        //!< A dragged item cannot be dropped here.
+  AllScroll,     //!< Content can be scrolled in any direction.
+  EWResize,      //!< Bidirectional east-west resize.
+  NSResize,      //!< Bidirectional north-south resize.
+  NESWResize,    //!< Bidirectional north-east to south-west resize.
+  NWSEResize,    //!< Bidirectional north-west to south-east resize.
 };
 
 /// Output stream operator for \ref CursorType, outputs the CSS string representation.
@@ -67,6 +79,18 @@ inline std::ostream& operator<<(std::ostream& os, CursorType value) {
     case CursorType::RowResize: return os << "row-resize";
     case CursorType::ZoomIn: return os << "zoom-in";
     case CursorType::ZoomOut: return os << "zoom-out";
+    case CursorType::ContextMenu: return os << "context-menu";
+    case CursorType::Progress: return os << "progress";
+    case CursorType::Cell: return os << "cell";
+    case CursorType::VerticalText: return os << "vertical-text";
+    case CursorType::Alias: return os << "alias";
+    case CursorType::Copy: return os << "copy";
+    case CursorType::NoDrop: return os << "no-drop";
+    case CursorType::AllScroll: return os << "all-scroll";
+    case CursorType::EWResize: return os << "ew-resize";
+    case CursorType::NSResize: return os << "ns-resize";
+    case CursorType::NESWResize: return os << "nesw-resize";
+    case CursorType::NWSEResize: return os << "nwse-resize";
   }
 
   UTILS_UNREACHABLE();  // LCOV_EXCL_LINE

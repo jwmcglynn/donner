@@ -7,6 +7,7 @@
 #include <gtest/gtest.h>
 
 #include "donner/base/tests/BaseTestUtils.h"
+#include "donner/svg/core/Cursor.h"
 
 namespace donner::svg {
 
@@ -36,6 +37,27 @@ TEST(CursorTypeTest, OstreamOutput) {
   EXPECT_THAT(CursorType::RowResize, ToStringIs("row-resize"));
   EXPECT_THAT(CursorType::ZoomIn, ToStringIs("zoom-in"));
   EXPECT_THAT(CursorType::ZoomOut, ToStringIs("zoom-out"));
+  EXPECT_THAT(CursorType::ContextMenu, ToStringIs("context-menu"));
+  EXPECT_THAT(CursorType::Progress, ToStringIs("progress"));
+  EXPECT_THAT(CursorType::Cell, ToStringIs("cell"));
+  EXPECT_THAT(CursorType::VerticalText, ToStringIs("vertical-text"));
+  EXPECT_THAT(CursorType::Alias, ToStringIs("alias"));
+  EXPECT_THAT(CursorType::Copy, ToStringIs("copy"));
+  EXPECT_THAT(CursorType::NoDrop, ToStringIs("no-drop"));
+  EXPECT_THAT(CursorType::AllScroll, ToStringIs("all-scroll"));
+  EXPECT_THAT(CursorType::EWResize, ToStringIs("ew-resize"));
+  EXPECT_THAT(CursorType::NSResize, ToStringIs("ns-resize"));
+  EXPECT_THAT(CursorType::NESWResize, ToStringIs("nesw-resize"));
+  EXPECT_THAT(CursorType::NWSEResize, ToStringIs("nwse-resize"));
+}
+
+TEST(CursorTest, OstreamOutput) {
+  Cursor cursor;
+  cursor.images.push_back(CursorImage{RcString("first.cur"), Vector2d(3.0, 4.0)});
+  cursor.images.push_back(CursorImage{RcString("second.cur"), std::nullopt});
+  cursor.fallback = CursorType::Pointer;
+
+  EXPECT_THAT(cursor, ToStringIs("url(first.cur) 3 4, url(second.cur), pointer"));
 }
 
 }  // namespace donner::svg

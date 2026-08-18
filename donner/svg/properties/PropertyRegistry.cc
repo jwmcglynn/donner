@@ -1304,7 +1304,9 @@ ParseResult<PointerEvents> ParsePointerEvents(std::span<const css::ComponentValu
     if (const auto* ident = component.tryGetToken<css::Token::Ident>()) {
       const RcString& value = ident->value;
 
-      if (value.equalsLowercase("none")) {
+      if (value.equalsLowercase("auto")) {
+        return PointerEvents::Auto;
+      } else if (value.equalsLowercase("none")) {
         return PointerEvents::None;
       } else if (value.equalsLowercase("bounding-box")) {
         return PointerEvents::BoundingBox;
@@ -1332,6 +1334,142 @@ ParseResult<PointerEvents> ParsePointerEvents(std::span<const css::ComponentValu
   err.reason = "Invalid pointer-events";
   err.range.start = !components.empty() ? components.front().sourceOffset() : FileOffset::Offset(0);
   return err;
+}
+
+ParseResult<CursorType> ParseCursorType(std::span<const css::ComponentValue> components) {
+  if (components.size() == 1) {
+    if (const auto* ident = components.front().tryGetToken<css::Token::Ident>()) {
+      const RcString& value = ident->value;
+      if (value.equalsLowercase("auto")) return CursorType::Auto;
+      if (value.equalsLowercase("default")) return CursorType::Default;
+      if (value.equalsLowercase("none")) return CursorType::None;
+      if (value.equalsLowercase("context-menu")) return CursorType::ContextMenu;
+      if (value.equalsLowercase("help")) return CursorType::Help;
+      if (value.equalsLowercase("pointer")) return CursorType::Pointer;
+      if (value.equalsLowercase("progress")) return CursorType::Progress;
+      if (value.equalsLowercase("wait")) return CursorType::Wait;
+      if (value.equalsLowercase("cell")) return CursorType::Cell;
+      if (value.equalsLowercase("crosshair")) return CursorType::Crosshair;
+      if (value.equalsLowercase("text")) return CursorType::Text;
+      if (value.equalsLowercase("vertical-text")) return CursorType::VerticalText;
+      if (value.equalsLowercase("alias")) return CursorType::Alias;
+      if (value.equalsLowercase("copy")) return CursorType::Copy;
+      if (value.equalsLowercase("move")) return CursorType::Move;
+      if (value.equalsLowercase("no-drop")) return CursorType::NoDrop;
+      if (value.equalsLowercase("not-allowed")) return CursorType::NotAllowed;
+      if (value.equalsLowercase("grab")) return CursorType::Grab;
+      if (value.equalsLowercase("grabbing")) return CursorType::Grabbing;
+      if (value.equalsLowercase("e-resize")) return CursorType::EResize;
+      if (value.equalsLowercase("n-resize")) return CursorType::NResize;
+      if (value.equalsLowercase("ne-resize")) return CursorType::NEResize;
+      if (value.equalsLowercase("nw-resize")) return CursorType::NWResize;
+      if (value.equalsLowercase("s-resize")) return CursorType::SResize;
+      if (value.equalsLowercase("se-resize")) return CursorType::SEResize;
+      if (value.equalsLowercase("sw-resize")) return CursorType::SWResize;
+      if (value.equalsLowercase("w-resize")) return CursorType::WResize;
+      if (value.equalsLowercase("ew-resize")) return CursorType::EWResize;
+      if (value.equalsLowercase("ns-resize")) return CursorType::NSResize;
+      if (value.equalsLowercase("nesw-resize")) return CursorType::NESWResize;
+      if (value.equalsLowercase("nwse-resize")) return CursorType::NWSEResize;
+      if (value.equalsLowercase("col-resize")) return CursorType::ColResize;
+      if (value.equalsLowercase("row-resize")) return CursorType::RowResize;
+      if (value.equalsLowercase("all-scroll")) return CursorType::AllScroll;
+      if (value.equalsLowercase("zoom-in")) return CursorType::ZoomIn;
+      if (value.equalsLowercase("zoom-out")) return CursorType::ZoomOut;
+    }
+  }
+
+  ParseDiagnostic err;
+  err.reason = "Invalid cursor value";
+  err.range.start = !components.empty() ? components.front().sourceOffset() : FileOffset::Offset(0);
+  return err;
+}
+
+std::optional<RcString> CursorUrl(const css::ComponentValue& component) {
+  if (const auto* token = component.is<css::Token>() ? &component.get<css::Token>() : nullptr) {
+    if (token->is<css::Token::Url>()) {
+      return token->get<css::Token::Url>().value;
+    }
+  }
+
+  if (const auto* function =
+          component.is<css::Function>() ? &component.get<css::Function>() : nullptr;
+      function && function->name.equalsLowercase("url")) {
+    std::span<const css::ComponentValue> values = function->values;
+    SkipWhitespace(values);
+    if (values.empty()) {
+      return std::nullopt;
+    }
+    const auto* string = values.front().tryGetToken<css::Token::String>();
+    if (!string) {
+      return std::nullopt;
+    }
+    values = values.subspan(1);
+    SkipWhitespace(values);
+    if (values.empty()) {
+      return string->value;
+    }
+  }
+  return std::nullopt;
+}
+
+ParseResult<Cursor> ParseCursor(std::span<const css::ComponentValue> components) {
+  Cursor cursor;
+  std::span<const css::ComponentValue> remaining = components;
+  SkipWhitespace(remaining);
+
+  while (!remaining.empty()) {
+    const std::optional<RcString> url = CursorUrl(remaining.front());
+    if (!url) {
+      break;
+    }
+    remaining = remaining.subspan(1);
+    SkipWhitespace(remaining);
+
+    std::optional<Vector2d> hotspot;
+    if (!remaining.empty()) {
+      if (const auto* x = remaining.front().tryGetToken<css::Token::Number>()) {
+        remaining = remaining.subspan(1);
+        SkipWhitespace(remaining);
+        if (remaining.empty()) {
+          ParseDiagnostic err;
+          err.reason = "Cursor hotspot requires two numbers";
+          return err;
+        }
+        const auto* y = remaining.front().tryGetToken<css::Token::Number>();
+        if (!y) {
+          ParseDiagnostic err;
+          err.reason = "Cursor hotspot requires two numbers";
+          err.range.start = remaining.front().sourceOffset();
+          return err;
+        }
+        hotspot = Vector2d(x->value, y->value);
+        remaining = remaining.subspan(1);
+        SkipWhitespace(remaining);
+      }
+    }
+
+    if (remaining.empty() || !remaining.front().isToken<css::Token::Comma>()) {
+      ParseDiagnostic err;
+      err.reason = "Cursor image must be followed by a comma and fallback keyword";
+      err.range.start =
+          remaining.empty() ? components.back().sourceOffset() : remaining.front().sourceOffset();
+      return err;
+    }
+    remaining = remaining.subspan(1);
+    cursor.images.push_back(CursorImage{*url, hotspot});
+    SkipWhitespace(remaining);
+  }
+
+  while (!remaining.empty() && remaining.back().isToken<css::Token::Whitespace>()) {
+    remaining = remaining.first(remaining.size() - 1);
+  }
+  ParseResult<CursorType> fallback = ParseCursorType(remaining);
+  if (fallback.hasError()) {
+    return std::move(fallback.error());
+  }
+  cursor.fallback = fallback.result();
+  return cursor;
 }
 
 ParseResult<VectorEffect> ParseVectorEffect(std::span<const css::ComponentValue> components) {
@@ -2040,6 +2178,15 @@ DONNER_CONSTEXPR_MAP auto kProperties =
                          return ParsePointerEvents(params.components());
                        },
                        &registry.pointerEvents);
+                 }},  //
+                {"cursor",
+                 [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
+                   return Parse(
+                       params,
+                       [](const parser::PropertyParseFnParams& params) {
+                         return ParseCursor(params.components());
+                       },
+                       &registry.cursor);
                  }},  //
                 {"marker-start",
                  [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {

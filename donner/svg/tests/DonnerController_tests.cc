@@ -52,8 +52,8 @@ TEST_F(DonnerControllerTest, ClickInsideLinkDirectChild) {
   EXPECT_EQ(link->hitElement, *document.querySelector("#r"));
 }
 
-/// @test A click on a shape nested several levels below an `<a>` (through a `<g>`) still resolves to
-/// the enclosing link (SVG enclosing-`<a>` semantics: the whole subtree of a link is clickable).
+/// @test A click on a shape nested several levels below an `<a>` (through a `<g>`) still resolves
+/// to the enclosing link (SVG enclosing-`<a>` semantics: the whole subtree of a link is clickable).
 TEST_F(DonnerControllerTest, ClickOnNestedDescendant) {
   SVGDocument document = ParseSVG(R"(
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
@@ -287,6 +287,30 @@ TEST_F(DonnerControllerTest, PointerEventsNoneSuppressesLink) {
   )");
   DonnerController controller(document);
   EXPECT_THAT(controller.hitTestLink(Vector2d(50, 50)), Eq(std::nullopt));
+}
+
+TEST_F(DonnerControllerTest, CursorAtReturnsInheritedTypedValue) {
+  SVGDocument document = ParseSVG(R"(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+      <g style="cursor: url(primary.cur) 3 4, copy">
+        <rect x="10" y="10" width="35" height="80" fill="red"/>
+      </g>
+      <rect x="55" y="10" width="35" height="80" fill="blue"/>
+    </svg>
+  )");
+  DonnerController controller(document);
+
+  const std::optional<Cursor> inherited = controller.cursorAt(Vector2d(25, 50));
+  ASSERT_TRUE(inherited.has_value());
+  ASSERT_EQ(inherited->images.size(), 1u);
+  EXPECT_EQ(inherited->images[0], (CursorImage{RcString("primary.cur"), Vector2d(3.0, 4.0)}));
+  EXPECT_EQ(inherited->fallback, CursorType::Copy);
+
+  const std::optional<Cursor> initial = controller.cursorAt(Vector2d(75, 50));
+  ASSERT_TRUE(initial.has_value());
+  EXPECT_TRUE(initial->images.empty());
+  EXPECT_EQ(initial->fallback, CursorType::Auto);
+  EXPECT_EQ(controller.cursorAt(Vector2d(5, 5)), std::nullopt);
 }
 
 // --- Hover affordances: the app drives the same query on pointer-move ---

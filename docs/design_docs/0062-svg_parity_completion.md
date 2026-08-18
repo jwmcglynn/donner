@@ -132,12 +132,17 @@ Reducing the raw totals is useful, but correctness and classification are the ac
         `//donner/svg/renderer/tests:renderer_driver_tests`, `:renderer_regression_tests`,
         `:renderer_geode_golden_tests`, and `//donner/svg/tests:svg_tests`.
 - [ ] Milestone 5: Complete pointer and cursor interaction
-  - [ ] Add the missing `auto` and complete value behavior to typed `pointer-events` parsing.
+  - [x] Add typed `pointer-events: auto` parsing, make it the initial value, and map it to
+        `visiblePainted` hit behavior for SVG content.
   - [ ] Make pointer-event hit-testing honor visibility, paint, fill, stroke, text, images,
         clip-path, transforms, units, and non-scaling strokes.
-  - [ ] Add complete typed `cursor` grammar, including keyword and URL fallback lists, cascade, and
-        inheritance.
-  - [ ] Expose the resolved cursor through a DOM-shaped hit result and connect it to editor and host
+  - [x] Add the complete CSS Basic UI cursor keyword set, typed declaration and presentation
+        parsing, cascade, inheritance, and a DOM-shaped `DonnerController::cursorAt` query.
+  - [x] Add ordered authored `url()` cursor candidates with optional hotspots and the required
+        keyword fallback to the cascaded value returned by `cursorAt`.
+  - [ ] Add CSS `image-set()` cursor candidates and retain each declaration's base so computed
+        relative URLs become absolute as CSS Basic UI requires.
+  - [ ] Connect `cursorAt` to editor and host resource loading, failure advancement, and platform
         cursor selection without adding paint commands.
   - [ ] Verify every pointer-events value and cursor fallback path with
         `//donner/svg/properties/tests:properties_tests`,
@@ -255,8 +260,9 @@ requires a feature flag to make the next slice possible.
   range, decoration, and textPath-order fix is independently revertible with its red test.
 - Host-space stroking replaces the scalar branches in `toStrokeParams` and cull-bounds adjustment
   only after path, text, clip, hit-test, and both backend consumers use the host-space outline.
-- Pointer-events changes remain internal. The cursor public hit-result field lands only with parser,
-  cascade, controller, and host-consumer tests, so reverting it removes the complete API addition.
+- Pointer-events changes remain internal. The `cursorAt` value lands with keyword and `url()`
+  grammar, cascade, inheritance, and controller tests. `image-set()`, declaration-base resolution,
+  resource loading, and platform mapping remain.
 - Typed rendering hints remove their corresponding raw-property keys only when the live driver
   consumes the typed policy. There is no typed-but-unused intermediate state.
 - Explicit clip expressions replace `ResolvedClip::layer` only after both backends consume the
@@ -290,7 +296,9 @@ inspection changes several classifications:
   only for uniform scale and rotation. Text and hit-testing need separate coverage.
 - `pointer-events` affects path and link hit-testing, but its complete SVG value matrix is not
   applied to every drawable kind or clipping case.
-- `cursor` has an enum but no complete property parser, cascade, hit result, or host consumer.
+- `cursor` has complete typed keyword parsing plus authored `url()`/hotspot lists, cascade,
+  inheritance, and a DOM-shaped point query. CSS `image-set()`, computed absolute URL resolution,
+  resource loading, failure advancement, and platform mapping remain.
 - `textLength`, `lengthAdjust`, and textPath `method`, `side`, and `spacing` already have parser or
   layout components. Several skips therefore represent activation bugs rather than absent features.
 - Text clip children can reuse existing computed glyph paths, while nested clips need an explicit
@@ -482,8 +490,10 @@ RendererInterface commands
 ### Property and interaction model
 
 The property registry owns grammar, inheritance, and computed values. Interaction code consumes
-the same computed visibility, paint, clip, and stroke state as rendering. `cursor` is returned as
-part of a DOM-facing hit result; an editor or embedder maps it to platform cursor APIs.
+the same computed visibility, paint, clip, and stroke state as rendering. `cursorAt` currently
+returns ordered authored `url()` candidates, optional hotspots, and the final keyword for the top
+hit. Declaration-base tracking must land before calling relative URLs computed or absolute. The
+editor or embedder then tries resources in order and maps the surviving choice to platform APIs.
 
 ### Text layout result
 

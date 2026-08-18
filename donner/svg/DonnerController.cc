@@ -1,6 +1,7 @@
 #include "donner/svg/DonnerController.h"
 
 #include "donner/base/Utils.h"
+#include "donner/svg/components/style/StyleSystem.h"
 #include "donner/svg/renderer/RenderingContext.h"
 
 namespace donner::svg {
@@ -33,6 +34,20 @@ std::vector<SVGGraphicsElement> DonnerController::findAllIntersecting(const Vect
     results.push_back(element.cast<SVGGraphicsElement>());
   }
   return results;
+}
+
+std::optional<Cursor> DonnerController::cursorAt(const Vector2d& point) {
+  DocumentWriteAccess access = document_.writeAccess();
+  Registry& registry = access.registry();
+  const Entity entity = components::RenderingContext(registry).findIntersecting(point);
+  if (entity == entt::null) {
+    return std::nullopt;
+  }
+
+  ParseWarningSink disabledSink = ParseWarningSink::Disabled();
+  const components::ComputedStyleComponent& style =
+      components::StyleSystem().computeStyle(EntityHandle(registry, entity), disabledSink);
+  return style.properties->cursor.get().value();
 }
 
 std::optional<DonnerController::LinkHit> DonnerController::hitTestLink(const Vector2d& point) {

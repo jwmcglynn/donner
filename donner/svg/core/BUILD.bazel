@@ -11,6 +11,7 @@ cc_library(
         "ClipRule.h",
         "ColorInterpolationFilters.h",
         "CssTransform.h",
+        "Cursor.h",
         "CursorType.h",
         "Display.h",
         "DominantBaseline.h",
