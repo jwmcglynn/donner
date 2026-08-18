@@ -81,10 +81,13 @@ struct LinearGradientParams {
   /// fixed-size uniform buffer layout in `slug_gradient.wgsl`. Stops beyond
   /// the cap are silently truncated - a follow-up will move stop storage to
   /// a texture lookup (`GeodeGradientCacheComponent`) to lift this limit.
-  /// A single gradient stop: normalized offset and premultiplied linear RGBA.
+  /// A single gradient stop: normalized offset and STRAIGHT-alpha RGBA.
+  /// Not premultiplied: the resolver writes r/g/b/a each divided by 255, and
+  /// both gradient shaders interpolate stops in straight alpha and
+  /// premultiply only at output (stop-opacity conformance depends on it).
   struct Stop {
     float offset = 0.0f;                       ///< Stop offset in [0, 1].
-    float rgba[4] = {0.0f, 0.0f, 0.0f, 1.0f};  ///< Premultiplied linear RGBA color.
+    float rgba[4] = {0.0f, 0.0f, 0.0f, 1.0f};  ///< Straight-alpha RGBA color.
   };
   /// Gradient stops (capped at 16 entries by the underlying uniform buffer).
   std::span<const Stop> stops;

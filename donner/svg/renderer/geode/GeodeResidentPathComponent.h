@@ -695,7 +695,7 @@ struct GeodeResidentSlot {
   /// Bytes last written to the uniform region. A draw whose recomputed
   /// uniform matches this skips the `writeBuffer` entirely (steady-state
   /// static frame => zero buffer writes); a camera/color change rewrites
-  /// only this 368-byte region and keeps the cached bind group.
+  /// only this 416-byte region and keeps the cached bind group.
   std::vector<uint8_t> lastUniform;
 
   GeodeResidentSlot() = default;

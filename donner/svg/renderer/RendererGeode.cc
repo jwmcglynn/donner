@@ -2395,7 +2395,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
                            const Transform2d& deviceFromGlyph,
                            const geode::GeodeRecordSlab::Slot* recordSlot,
                            std::vector<uint8_t>* recordCache) {
-    if (!kEnableSceneBatching || recordSlot == nullptr || encoder->hasActiveClipState()) {
+    if (!kEnableSceneBatching || recordSlot == nullptr || encoder->hasActiveClipState() ||
+        encoder->hasOpenMaskPass()) {
       return false;
     }
     // The ensure both establishes residence on first sight of this glyph and
