@@ -847,6 +847,42 @@ TEST_F(CompositorControllerTest, OpacityTriggersFallback) {
             FallbackReason::None);
 }
 
+// Attribute mutation removes ComputedStyleComponent while the stale
+// RenderingInstanceComponent survives until the next prepare, and promotion
+// (plus the reconcile at the top of renderFrame) runs before that prepare.
+// Fallback detection must tolerate the absent style, and it fails closed:
+// an unknown style claims the blend bit so the layer direct-composes until
+// the post-prepare metadata refresh re-derives the truth.
+TEST_F(CompositorControllerTest, PromoteAfterAttributeMutationFailsClosedWithoutCrashing) {
+  SVGDocument document = makeDocument(R"svg(
+    <rect id="target" width="10" height="10" fill="red" opacity="0.5" />
+  )svg");
+
+  ParseWarningSink warningSink;
+  RendererUtils::prepareDocumentForRendering(document, /*verbose=*/false, warningSink);
+
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  const Entity entity = target->unsafeEntityHandle().entity();
+
+  // Removes the computed style; the rendering instance survives.
+  target->setAttribute("opacity", "0.4");
+
+  CompositorController compositor(document, renderer_);
+  ASSERT_TRUE(compositor.promoteEntity(entity));
+  EXPECT_NE(compositor.fallbackReasonsOf(entity) & FallbackReason::BlendMode, FallbackReason::None);
+
+  // A rendered frame re-prepares the document and re-derives the real
+  // reasons: plain opacity is not a blend, so the conservative bit clears.
+  RenderViewport viewport;
+  viewport.size = Vector2d(20, 20);
+  viewport.devicePixelRatio = 1.0;
+  compositor.renderFrame(viewport);
+  EXPECT_EQ(compositor.fallbackReasonsOf(entity) & FallbackReason::BlendMode, FallbackReason::None);
+  EXPECT_NE(compositor.fallbackReasonsOf(entity) & FallbackReason::IsolatedLayer,
+            FallbackReason::None);
+}
+
 TEST_F(CompositorControllerTest, GradientFillTriggersFallback) {
   SVGDocument document = makeDocument(R"svg(
     <defs>

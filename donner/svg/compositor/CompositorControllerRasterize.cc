@@ -949,8 +949,19 @@ void CompositorController::composeLayers(const RenderViewport& viewport,
     // moves `canvasFromBitmap`. Direct-drawing that layer can reproduce its old pixels in the
     // flattened frame, so translate the retained payload below. Scale and rotation keep the
     // established direct-render path, which avoids resampling differences from transforming an
-    // already-rasterized payload.
-    const bool shouldDirectComposeLayer = ShouldDirectComposeLayer(layer);
+    // already-rasterized payload. That resampling guarantee is preserved for isolated-effect
+    // layers too: they compose from their cached bitmap when the bitmap sits at its rendered
+    // transform, but a rotate or scale drag re-renders them rather than resampling the payload
+    // through a non-translation affine.
+    // isTranslation() is true for identity, so one predicate covers both
+    // at-rest cases.
+    const bool nonTranslationTransform = !layer.canvasFromBitmap().isTranslation();
+    const bool resampleSensitiveEffect =
+        (layer.fallbackReasons() & (FallbackReason::Filter | FallbackReason::ClipPath |
+                                    FallbackReason::Mask | FallbackReason::IsolatedLayer)) !=
+        FallbackReason::None;
+    const bool shouldDirectComposeLayer =
+        ShouldDirectComposeLayer(layer) || (nonTranslationTransform && resampleSensitiveEffect);
     const bool blitRetainedTranslation = shouldDirectComposeLayer &&
                                          !layer.canvasFromBitmap().isIdentity() &&
                                          layer.canvasFromBitmap().isTranslation();

@@ -480,9 +480,25 @@ double EstimateStaticSpanRasterizeMs(int estimatedDrawOps, int estimatedPathVerb
 }
 
 bool ShouldDirectComposeLayer(const CompositorLayer& layer) {
+  // Immediate layers re-render by explicit plan. External paint references
+  // may resolve against elements outside the promoted subtree, so their
+  // cached raster cannot be trusted across mutations. A non-normal
+  // mix-blend-mode must read the live backdrop at blend time, which a
+  // source-over blit cannot reproduce.
+  //
+  // Plain isolated layers (group opacity, isolation: isolate) are NOT in
+  // this list: their offscreen rasterization pushes the isolated layer
+  // itself, so the cached bitmap already holds the group composited against
+  // transparency with its opacity applied, and blitting that premultiplied
+  // raster source-over is exactly the group-opacity compositing model. They
+  // previously direct-composed here, which re-rendered the whole subtree
+  // (including any filters inside it) every composed frame. During a rotate
+  // or scale drag, composeLayers re-adds isolated-effect layers to the
+  // direct path so an already-rasterized payload is never resampled through
+  // a non-translation affine.
   return layer.isImmediate() ||
-         (layer.fallbackReasons() &
-          (FallbackReason::ExternalPaint | FallbackReason::IsolatedLayer)) != FallbackReason::None;
+         (layer.fallbackReasons() & (FallbackReason::ExternalPaint | FallbackReason::BlendMode)) !=
+             FallbackReason::None;
 }
 
 double ImmediateStaticSpanBudgetMs() {
