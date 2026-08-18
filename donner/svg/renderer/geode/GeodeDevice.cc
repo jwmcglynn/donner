@@ -7,12 +7,14 @@
 #define WEBGPU_CPP_IMPLEMENTATION
 #include "donner/svg/renderer/geode/GeodeDevice.h"
 
+#include <algorithm>
 #include <atomic>
 #include <cassert>
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <iterator>
 #include <map>
 #include <mutex>
 #include <string_view>
@@ -940,10 +942,22 @@ void GeodeDevice::initSharedPipelines() {
   impl_->filterEngine = std::make_unique<GeodeFilterEngine>(*this, /*verbose=*/false);
 }
 
-wgpu::BindGroup GeodeDevice::findSceneBatchBindGroup(
-    const SceneBatchBindGroupKey& key) const {
+wgpu::BindGroup GeodeDevice::findSceneBatchBindGroup(const SceneBatchBindGroupKey& key) {
   const auto it = sceneBatchBindGroups_.find(key);
-  return it != sceneBatchBindGroups_.end() ? it->second.get() : wgpu::BindGroup{};
+  if (it == sceneBatchBindGroups_.end()) {
+    return wgpu::BindGroup{};
+  }
+  // Refresh recency: move the key to the back of the eviction order so the
+  // cap evicts least-recently-USED. One linear scan of at most
+  // kSceneBatchBindGroupCacheCap small keys, only on a hit.
+  const auto orderIt =
+      std::find(sceneBatchBindGroupOrder_.begin(), sceneBatchBindGroupOrder_.end(), key);
+  if (orderIt != sceneBatchBindGroupOrder_.end() &&
+      std::next(orderIt) != sceneBatchBindGroupOrder_.end()) {
+    sceneBatchBindGroupOrder_.erase(orderIt);
+    sceneBatchBindGroupOrder_.push_back(key);
+  }
+  return it->second.get();
 }
 
 void GeodeDevice::storeSceneBatchBindGroup(const SceneBatchBindGroupKey& key,

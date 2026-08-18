@@ -354,6 +354,9 @@ public:
     uint64_t recordOffset = 0;
     uint64_t recordBytes = 0;
 
+    friend bool operator==(const SceneBatchBindGroupKey& a,
+                           const SceneBatchBindGroupKey& b) = default;
+
     friend bool operator<(const SceneBatchBindGroupKey& a, const SceneBatchBindGroupKey& b) {
       return std::tie(a.uniformBufferId, a.uniformOffset, a.uniformSize, a.chunkBufferId,
                       a.chunkBytes, a.recordBufferId, a.recordOffset, a.recordBytes) <
@@ -380,8 +383,12 @@ public:
   [[nodiscard]] static uint64_t AllocateBufferId();
 
   /// Look up a cached scene-batch bind group. Returns a borrowed handle
-  /// (valid while the cache entry lives), or an empty handle on miss.
-  [[nodiscard]] wgpu::BindGroup findSceneBatchBindGroup(const SceneBatchBindGroupKey& key) const;
+  /// (valid while the cache entry lives), or an empty handle on miss. A hit
+  /// refreshes the entry to most-recently-used, so eviction at the cap drops
+  /// the coldest entry rather than the oldest-inserted one - with more than
+  /// the cap of live groups, pure insertion order would evict the hottest
+  /// steady-state entry every frame.
+  [[nodiscard]] wgpu::BindGroup findSceneBatchBindGroup(const SceneBatchBindGroupKey& key);
 
   /// Store a scene-batch bind group under `key`, taking ownership of the
   /// +1 handle. At the cap, the OLDEST entries are evicted one at a time
