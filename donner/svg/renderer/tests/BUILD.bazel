@@ -187,6 +187,18 @@ donner_cc_test(
     ],
 )
 
+# Pure-CPU steady-state pins for the tiny-skia conversion caches: no GPU device, no goldens,
+# no backend dispatch (the counters are read straight off `RendererTinySkia`).
+donner_cc_test(
+    name = "renderer_tiny_skia_perf_tests",
+    srcs = ["RendererTinySkiaPerf_tests.cc"],
+    deps = [
+        "//donner/svg/renderer:renderer_tiny_skia",
+        "//donner/svg/tests:parser_test_utils",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
 donner_cc_test(
     name = "renderer_regression_tests",
     srcs = ["RendererRegression_tests.cc"],
@@ -204,6 +216,7 @@ donner_cc_test(
         ":image_comparison_test_fixture",
         "//donner/base:base_test_utils",
         "//donner/base:gtest_timeout_main",
+        "//donner/svg/tests:parser_test_utils",
     ],
 )
 

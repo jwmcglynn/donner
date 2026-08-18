@@ -268,6 +268,44 @@ TEST(RendererSnapshotTests, RejectedPatternTileSkipsRecordedContentAndEndCommand
   driver.draw(snapshot);
 }
 
+// A snapshot replays off the document thread, so no recorded command may hold a handle into the
+// live registry. `ImageParams` carries one at capture time (backends key a converted-pixel cache
+// off it), so the recorder has to clear it, and the reference audit has to look at it - an audit
+// that skipped `DrawImageCommand` would report zero for a snapshot that does hold a live handle.
+// No other case in this file draws an `<image>`, so this is the only coverage of either.
+TEST(RendererSnapshotTests, ImageSourceEntityIsClearedBeforeReplay) {
+  // A 2x2 solid red PNG as a data URI, so the image loads with no external resources.
+  SVGDocument document = MakeDocument(R"svg(
+    <image id="i" x="0" y="0" width="8" height="8"
+           href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAEElEQVR4nGP4z8AARAwQCgAf7gP9i18U1AAAAABJRU5ErkJggg==" />
+  )svg");
+
+  ::testing::NiceMock<MockRendererInterface> renderer;
+  RendererDriver driver(renderer);
+
+  RenderSnapshot snapshot = driver.captureRenderSnapshot(document);
+  EXPECT_EQ(snapshot.liveRegistryReferenceCountForTesting(document.registry()), 0u);
+
+  std::optional<SVGElement> maybeImage = document.querySelector("image");
+  ASSERT_TRUE(maybeImage.has_value());
+  maybeImage->remove();
+  EXPECT_EQ(snapshot.liveRegistryReferenceCountForTesting(document.registry()), 0u);
+
+  std::vector<ImageParams> replayedImageParams;
+  EXPECT_CALL(renderer, beginFrame(_)).Times(1);
+  EXPECT_CALL(renderer, endFrame()).Times(1);
+  EXPECT_CALL(renderer, drawImage(_, _))
+      .WillRepeatedly([&](const ImageResource&, const ImageParams& params) {
+        replayedImageParams.push_back(params);
+      });
+
+  driver.draw(snapshot);
+
+  ASSERT_FALSE(replayedImageParams.empty());
+  EXPECT_FALSE(static_cast<bool>(replayedImageParams.back().sourceEntity))
+      << "a replayed drawImage must not carry a handle into the live document registry";
+}
+
 TEST(RendererSnapshotTests, FeImageFragmentReferencesAreClearedBeforeReplay) {
   SVGDocument document = MakeDocument(R"svg(
     <defs>
