@@ -362,8 +362,8 @@ void writeGradientPaintBlock(float (&rows)[kPaintBlockRows * 4], const ParamsT& 
   rows[6] = static_cast<float>(t.data[5]);
   rows[7] = 0.0f;
 
-  const uint32_t stopCount = std::min<uint32_t>(kMaxGradientStops,
-                                                static_cast<uint32_t>(stops.size()));
+  const uint32_t stopCount =
+      std::min<uint32_t>(kMaxGradientStops, static_cast<uint32_t>(stops.size()));
   for (uint32_t i = 0; i < stopCount; ++i) {
     const auto& s = stops[i];
     float* color = rows + (kPaintStopColorRow + i) * 4u;
@@ -2398,8 +2398,7 @@ bool GeoEncoder::ensureResidentSceneRecord(GeodeResidentSlot& slot, const Encode
   args.radialGradient = paint.radialGradient;
   return impl_->ensureResidentSceneRecordImpl(slot, encoded, args, recordTransform,
                                               recordSlotOverride, overrideRecordCache,
-                                              /*bakeTransform=*/false, recordState,
-                                              publishPaint);
+                                              /*bakeTransform=*/false, recordState, publishPaint);
 }
 
 void GeoEncoder::fillPathSceneBatch(const css::RGBA& color, FillRule rule,

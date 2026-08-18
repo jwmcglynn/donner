@@ -561,7 +561,7 @@ public:
     const LinearGradientParams* linearGradient = nullptr;
     const RadialGradientParams* radialGradient = nullptr;
 
-      /// True when this instance paints with a gradient rather than a colour.
+    /// True when this instance paints with a gradient rather than a colour.
     bool isGradient() const { return linearGradient != nullptr || radialGradient != nullptr; }
   };
 
@@ -628,8 +628,7 @@ public:
                                  const Transform2d& recordTransform,
                                  const GeodeRecordSlab::Slot* recordSlotOverride = nullptr,
                                  std::vector<uint8_t>* overrideRecordCache = nullptr,
-                                 SceneRecordState* recordState = nullptr,
-                                 bool publishPaint = true);
+                                 SceneRecordState* recordState = nullptr, bool publishPaint = true);
 
   /// One cross-entity ordered batch: consecutive resident slots of one
   /// slab chunk plus a run of consecutive record-slab slots.

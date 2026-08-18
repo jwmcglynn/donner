@@ -85,9 +85,9 @@ struct alignas(16) InstanceRecord {
   // reachable by index is what lets differently painted gradient fills share
   // one draw with each other and with the solid fills between them. Only read
   // when `paintMode` selects a gradient.
-  uint32_t paintBase;           // 228 .. 232
-  uint32_t gradientSpread;      // 232 .. 236 - 0 pad, 1 reflect, 2 repeat
-  uint32_t gradientStopCount;   // 236 .. 240
+  uint32_t paintBase;          // 228 .. 232
+  uint32_t gradientSpread;     // 232 .. 236 - 0 pad, 1 reflect, 2 repeat
+  uint32_t gradientStopCount;  // 236 .. 240
   // Tail padding to 256 bytes so record-slab slot offsets satisfy the
   // baseline min_storage_buffer_offset_alignment (256) while the WGSL
   // array stride stays a multiple of it. Zero-initialized by the

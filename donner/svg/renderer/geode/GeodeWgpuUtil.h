@@ -35,7 +35,6 @@ namespace donner::geode {
 /// binding and the encoder's region reservation cannot drift apart.
 constexpr uint32_t kGradientPaintBlockRows = 25u;
 
-
 /// Wrap a NUL-terminated C string literal in a `wgpu::StringView`
 /// suitable for direct assignment to a descriptor's `label` field.
 /// `std::string_view{}` handles the `strlen()` at compile time when the

@@ -2396,20 +2396,18 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
     // The ensure both establishes residence on first sight of this glyph and
     // publishes this occurrence's record; a repeat frame writes neither.
     geode::GeoEncoder::SceneRecordState recordState;
-    if (!encoder->ensureResidentSceneRecord(entry.slot, entry.encoded,
-                                            geode::GeoEncoder::ScenePaint{color},
-                                            FillRule::NonZero, deviceFromGlyph, recordSlot,
-                                            recordCache, &recordState)) {
+    if (!encoder->ensureResidentSceneRecord(
+            entry.slot, entry.encoded, geode::GeoEncoder::ScenePaint{color}, FillRule::NonZero,
+            deviceFromGlyph, recordSlot, recordCache, &recordState)) {
       return false;
     }
 
     const wgpu::Buffer chunk = entry.slot.buffer;
     const uint32_t vertexCount = entry.encoded.boundingDrawVertexCount();
     const uint64_t clipVersion = encoder->clipStateVersion();
-    const PendingBatch::SceneInstance instance{&entry.slot, &entry.encoded,    &entry.outline,
-                                               color,       FillRule::NonZero, deviceFromGlyph,
-                                               vertexCount, recordSlot,        recordCache,
-                                               recordState};
+    const PendingBatch::SceneInstance instance{
+        &entry.slot,     &entry.encoded, &entry.outline, color,       FillRule::NonZero,
+        deviceFromGlyph, vertexCount,    recordSlot,     recordCache, recordState};
 
     if (pendingBatch.has_value() && pendingBatch->mode == PendingBatch::Mode::Scene &&
         pendingBatch->sceneChunkBuffer == chunk &&
@@ -2826,11 +2824,11 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
     // index than a draw that already has one and split the pair.
     const bool havePendingSceneBatch =
         pendingBatch.has_value() && pendingBatch->mode == PendingBatch::Mode::Scene;
-    const bool haveConvertibleSingleton =
-        pendingBatch.has_value() && pendingBatch->mode == PendingBatch::Mode::SameEntity &&
-        pendingBatch->deviceFromLocalTransforms.size() == 1 &&
-        pendingBatch->sameEntityClipVersion == clipVersion &&
-        pendingBatch->residentSlot != residentSlot;
+    const bool haveConvertibleSingleton = pendingBatch.has_value() &&
+                                          pendingBatch->mode == PendingBatch::Mode::SameEntity &&
+                                          pendingBatch->deviceFromLocalTransforms.size() == 1 &&
+                                          pendingBatch->sameEntityClipVersion == clipVersion &&
+                                          pendingBatch->residentSlot != residentSlot;
     const bool wantsRecord = gradientPaint || havePendingSceneBatch || haveConvertibleSingleton;
 
     // `kEnableSceneBatching` is the compile-time gate for ordered
@@ -2877,11 +2875,9 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
       // One description of THIS draw, used by every branch below. It carries
       // the record state the ensure just captured, so wherever the instance
       // ends up, its flush replays what was appended.
-      const PendingBatch::SceneInstance current{residentSlot, encoded,
-                                                &path,        color,
-                                                rule,         deviceFromLocalTransform,
-                                                vertexCount,  recordSlotPtr,
-                                                nullptr,      recordState};
+      const PendingBatch::SceneInstance current{
+          residentSlot, encoded,       &path,   color,      rule, deviceFromLocalTransform,
+          vertexCount,  recordSlotPtr, nullptr, recordState};
 
       auto appendSceneInstance = [&](PendingBatch& b, const PendingBatch::SceneInstance& inst) {
         b.sceneInstances.push_back(inst);
@@ -2902,8 +2898,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
             pendingBatch->sceneClipVersion == clipVersion &&
             pendingBatch->sceneFirstInstance + pendingBatch->sceneInstances.size() ==
                 recordIndex) {
-          appendSceneInstance(*pendingBatch,
-                              current);
+          appendSceneInstance(*pendingBatch, current);
         } else {
           flushPendingBatch();
           pendingBatch = PendingBatch{};
@@ -2915,8 +2910,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
           pendingBatch->sceneFirstInstance = recordIndex;
           pendingBatch->sceneFirstRecordOffset = effectiveRecordSlot.offset;
           pendingBatch->sceneClipVersion = clipVersion;
-          appendSceneInstance(*pendingBatch,
-                              current);
+          appendSceneInstance(*pendingBatch, current);
         }
         return true;
       }
@@ -2938,8 +2932,10 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
         // Convert the pending size-1 same-entity entry into the scene
         // batch's first instance.
         PendingBatch::SceneInstance first{pendingBatch->residentSlot,
-                                          pendingBatch->encoded, pendingBatch->path,
-                                          pendingBatch->color, pendingBatch->rule,
+                                          pendingBatch->encoded,
+                                          pendingBatch->path,
+                                          pendingBatch->color,
+                                          pendingBatch->rule,
                                           pendingBatch->deviceFromLocalTransforms.front(),
                                           pendingBatch->encoded->boundingDrawVertexCount()};
         // Resolve the first entity's record slot: its primary slot on its
@@ -2983,8 +2979,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
           pendingBatch->sceneInstances.push_back(first);
           if (firstChunkId == chunkId && firstRecordBufId == recordBufId &&
               firstIndex + 1 == recordIndex) {
-            appendSceneInstance(*pendingBatch,
-                                current);
+            appendSceneInstance(*pendingBatch, current);
           } else {
             flushPendingBatch();
             pendingBatch = PendingBatch{};
@@ -2996,8 +2991,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
             pendingBatch->sceneFirstInstance = recordIndex;
             pendingBatch->sceneFirstRecordOffset = effectiveRecordSlot.offset;
             pendingBatch->sceneClipVersion = clipVersion;
-            appendSceneInstance(*pendingBatch,
-                                current);
+            appendSceneInstance(*pendingBatch, current);
           }
         } else {
           // The pending singleton could not take scene form: emit it solo
@@ -3038,8 +3032,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
       pendingBatch->sceneFirstInstance = recordIndex;
       pendingBatch->sceneFirstRecordOffset = effectiveRecordSlot.offset;
       pendingBatch->sceneClipVersion = clipVersion;
-      appendSceneInstance(*pendingBatch,
-                          current);
+      appendSceneInstance(*pendingBatch, current);
       return true;
     }
 
@@ -3065,8 +3058,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
   /// Only a gradient needs it: solid paint publishes nothing a later solid
   /// draw could disturb, and a solid draw that becomes a singleton still wants
   /// its own residence, which the claim would take away.
-  void claimSceneSlot(geode::GeodeResidentSlot& slot,
-                      const geode::GeoEncoder::ScenePaint& paint) {
+  void claimSceneSlot(geode::GeodeResidentSlot& slot, const geode::GeoEncoder::ScenePaint& paint) {
     if (paint.isGradient()) {
       slot.lastSceneFrame = currentFrameIndex;
     }
@@ -3227,8 +3219,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
   /// everything it needs into the entity's persistent paint block during the
   /// append, and a batch's flush-time re-ensure reads the paint back off the
   /// residence slot rather than from the caller.
-  bool resolveBatchGradient(const Path& geometryPath,
-                            const components::ResolvedPaintServer& server, double effectiveOpacity,
+  bool resolveBatchGradient(const Path& geometryPath, const components::ResolvedPaintServer& server,
+                            double effectiveOpacity,
                             std::optional<geode::LinearGradientParams>& outLinear,
                             std::optional<geode::RadialGradientParams>& outRadial) {
     const auto* ref = std::get_if<components::PaintResolvedReference>(&server);
