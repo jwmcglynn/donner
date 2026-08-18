@@ -21,9 +21,11 @@ tooling were migrated to match.
 - **Discovery**: `resvg_test_suite.cc` uses the directory-scoped
   `getTestsInCategory("<category>", { …overrides… })` API (Option A), with one
   `INSTANTIATE_TEST_SUITE_P` block per category directory.
-- **Override inventory (current)**: ~288 `Skip`, ~51 `RenderOnly`, 34
-  `WithGoldenOverride` entries — see [0021](0021-resvg_feature_gaps.md) for the
-  skip backlog and [0009](0009-resvg_test_suite_bugs.md) for the golden overrides.
+- **Override inventory (generated)**: run
+  `bazel run //tools/resvg_parity:parity_report` for current raw sources and effective case counts.
+  The report distinguishes category-default propagation from explicit per-case expressions. See
+  [0021](0021-resvg_feature_gaps.md) for the classified backlog and
+  [0009](0009-resvg_test_suite_bugs.md) for the shared-golden catalog.
 - **Custom goldens**: re-validated and renamed to the new stems; two dead em/ex
   orphans removed (2026-05-15, see [0009](0009-resvg_test_suite_bugs.md)).
 - **Migration artifacts retained** under `tools/resvg_test_suite_upgrade/`
@@ -101,7 +103,7 @@ everything in one PR, one triage pass, one set of goldens to re-bless.
 - **Canvas size**: forced to 500×500 for all tests via
   `params.setCanvasSize(500, 500)` at `resvg_test_suite.cc:34`
 
-### Override inventory (current)
+### Override inventory at design time (historical)
 
 | Override | Count | Meaning |
 |---|---:|---|

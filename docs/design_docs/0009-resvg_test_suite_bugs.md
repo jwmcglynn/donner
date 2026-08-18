@@ -1,6 +1,6 @@
 # resvg-test-suite: Custom Golden Overrides
 
-**Status:** Reference (current as of 2026-05-15)
+**Status:** Reference (current as of 2026-08-18)
 
 When Donner's rendering of a resvg-test-suite case is correct but the upstream
 golden is *not* the right thing to compare against, the test pins
@@ -31,7 +31,7 @@ the test name there to find it inline.
 > direction) were superseded upstream and retired — the surviving marker
 > override is `orient=auto-on-M-C-C-4`.
 
-## Active overrides (35)
+## Active overrides (36)
 
 ### resvg golden is wrong per spec
 
@@ -43,6 +43,7 @@ the test name there to find it inline.
 | painting/context | with-pattern-objectBoundingBox-in-use | resvg golden bakes fractional-tile rounding |
 | painting/marker | orient=auto-on-M-C-C-4 | Pre-existing rendering diff (stroke/AA), not cusp-related |
 | painting/marker | with-an-image-child | We (correctly) render the image child |
+| painting/paint-order | on-tspan | Preserve cross-span kerning across a paint-only tspan boundary |
 | text/font-size | named-value | Donner uses CSS Fonts Level 4 |
 | text/font-size | named-value-without-a-parent | Donner uses CSS Fonts Level 4 |
 
@@ -141,7 +142,7 @@ git history if a real override need surfaces):
 
 The corresponding `text/font-size` tests pass against the upstream golden — only
 `named-value{,-without-a-parent}` need an override. After this cleanup the
-`golden/` dir holds exactly 37 `resvg-*.png`: 35 active + the 2 parked drop-shadow
+`golden/` dir holds exactly 38 `resvg-*.png`: 36 active + the 2 parked drop-shadow
 goldens above.
 
 ## Maintenance
