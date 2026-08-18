@@ -548,7 +548,10 @@ void drawRetainablePass(RetainedSpanSlot* slot, RetainedSpanDocumentState* state
   }
 
   const std::size_t charged = slot->capture.spans().capacityBytes();
-  state->liveBytes = state->liveBytes - slot->chargedBytes + charged;
+  // Subtract before adding, and never below zero: the running total is maintained across
+  // several paths and an unsigned wrap here would read as a document holding gigabytes.
+  state->liveBytes -= std::min(state->liveBytes, slot->chargedBytes);
+  state->liveBytes += charged;
   slot->chargedBytes = charged;
   stats.liveBytes = state->liveBytes;
 }

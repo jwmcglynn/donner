@@ -245,7 +245,17 @@ bool applyMutation(donner::svg::SVGDocument& document, const std::string& mode, 
     return false;
   }
 
-  target->setAttribute("transform", toggled ? "translate(1, 0)" : "translate(0, 0)");
+  // Prepend rather than replace: the element may already carry the transform that places the
+  // whole drawing, and overwriting it would change how much of the surface the frame covers,
+  // which is the very thing being timed.
+  const std::optional<donner::RcString> original = target->getAttribute("transform");
+  std::string value = toggled ? "translate(1, 0)" : "translate(0, 0)";
+  if (original.has_value()) {
+    value += " ";
+    value += std::string_view(*original);
+  }
+
+  target->setAttribute("transform", value);
   return true;
 }
 

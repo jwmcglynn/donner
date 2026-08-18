@@ -64,8 +64,11 @@ additions to `third_party/tiny-skia-cpp`). The Geode GPU backend is untouched.
 
 ## Next Steps
 
-- Build the retained-node cache and validation keys in `RendererTinySkia` behind a runtime mode
-  flag, with the mode-comparison identity test running both modes over the golden corpus.
+- Decide whether the steady frame's remaining cost (blending covered area, not generating it)
+  is worth attacking with opaque-interior straight stores, and whether that can be done inside
+  the shared blitter construction so identity still holds by construction.
+- Revisit the colour-only fast path: a solid paint change currently re-rasterizes, which the
+  goals below said it should not.
 
 ## Implementation Plan
 
@@ -147,25 +150,78 @@ steady-state win this design targets has to come from scenes with many small and
 where coverage generation dominates and covered area does not. Milestone 5 measures that on
 Tiger.
 
-- [ ] Milestone 2: Retained node cache in `RendererTinySkia`
-  - [ ] `RetainedShapeNode` storage keyed by render-tree entity; validation keys per
-        property class.
-  - [ ] Steady-frame path: surface clear plus in-order span blits; opaque interior runs as
-        straight stores.
-  - [ ] Mode-comparison identity test over the renderer golden corpus and resvg suite.
-  - [ ] Per-dirty-class invalidation tests (mutate one property class, assert identity with a
+- [x] Milestone 2: Retained node cache in `RendererTinySkia`
+  - [x] `RetainedSpansComponent` storage keyed by the render-tree entity, with a validation key
+        compared per draw. The key is the draw's own inputs rather than per-property revision
+        counters; see "Milestone 2 decisions" below.
+  - [x] Steady-frame path: surface clear plus in-order replays. Opaque interior runs are NOT
+        straight stores; they go through the same blitter a cold draw builds, which is what
+        keeps identity true by construction. That decision is why the measured win is smaller
+        than this document projected; see Performance.
+  - [x] Mode-comparison identity test over the renderer golden corpus and the resvg suite.
+  - [x] Per-dirty-class invalidation tests (mutate one property class, assert identity with a
         fresh render).
-- [ ] Milestone 3: Memory policy
-  - [ ] Per-document span budget, eviction, whole-document fallback, and opt-out API.
-  - [ ] Memory accounting counters surfaced through the benchmark output.
+- [x] Milestone 3: Memory policy
+  - [x] Per-document byte budget, coldest-first eviction, whole-document fallback, and a
+        runtime enable/disable plus budget setter on the renderer.
+  - [x] Memory accounting surfaced through the benchmark's `RETAINED` line.
 - [ ] Milestone 4: Structured-concurrency prepare (config-gated, default off)
   - [ ] Joinable retained nodes with idempotent completion wait; zero-thread inline mode.
   - [ ] Worker pool with per-slot scratch pools; slot zero reserved for the caller thread.
   - [ ] Thread-count determinism test (identity across thread counts 0, 2, 8).
 - [ ] Milestone 5: Steady-state allocation assertions and performance validation
-  - [ ] Zero-allocation steady-prepare test.
-  - [ ] Before/after `engine_compare_bench` numbers recorded for Tiger and the resvg-derived
-        raster-heavy scenes.
+  - [ ] Zero-allocation steady-prepare test. Not met and not attempted: a steady frame still
+        rebuilds each shape's `tiny_skia::Paint` in order to compare it, which allocates for
+        gradient paints.
+  - [x] Before/after `engine_compare_bench` numbers recorded for Tiger and other raster-heavy
+        scenes; see Performance.
+
+### Milestone 2 decisions
+
+**Validation compares the draw's inputs, not per-property revision counters.** This document
+proposed a `RenderRevisionsComponent` extension of the 0005 dirty-flag machinery, and flagged
+the hook audit it needs as real work, with a missed hook being an under-invalidation bug. What
+landed instead needs no audit: a retained entry records the exact inputs its coverage was
+produced from (device transform, the `tiny_skia::Paint` the draw was handed, the stroke, the
+clip identity, the surface size, the fill rule, and whether the stroke opened its dash seams)
+and replays only while all of them compare equal. Paint equality is real deep equality, added
+to the tiny-skia paint and shader types for this purpose, so a gradient stop edit is caught by
+the same comparison as a colour edit with nothing to remember to mark. Geometry is the one
+input too large to compare per frame, and it is handled by dropping the whole entry from the
+resolved-path update and destroy signals, the same mechanism the Geode encode cache already
+relies on.
+
+The cost of that choice is granularity. This document's goals said a fill colour change should
+rebuild nothing and a gradient stop change should rebuild only the ramp; both now rebuild the
+shape's coverage. The conservative direction is the safe one (a rebuild is always correct,
+a missed rebuild never is), and the case the design exists for, a frame where nothing changed,
+is unaffected. A colour-only fast path is possible on top of this: when the draw does not
+derive its blitter's paint from the caller's (which a hairline stroke and a transformed
+gradient both do), the coverage is independent of the paint and a replay could take the fresh
+paint. It is listed under Next Steps rather than assumed.
+
+**Clip is a validation key, decided by mask content.** The mask reaches the blitter as pipeline
+state applied per blit, so recorded coverage does not depend on it, but this iteration keeps
+clip conservative as planned. Each clip-stack depth remembers the mask it last held; a rebuilt
+mask that compares byte-equal keeps that depth's identity, and any change issues a new one.
+Equal identities therefore mean byte-equal masks, and a shape carries only the integer. The
+comparison costs one pass over a mask per clip push, against the mask build that already costs
+the same order.
+
+**Retention covers `drawPath` only.** `drawRect` and `drawEllipse` carry no source entity, and
+the driver never emits them: they exist for replaying a recorded snapshot, which has no stable
+identity to key on. Their coverage is recorded by the same packed records anyway when a rect
+draw reaches the capture blitter through `drawPath`.
+
+**An entity drawn more than once in a frame stops retaining.** One entry cannot describe two
+draws, and shadow-tree instancing (`use`), markers, and a `paint-order` that splits fill from
+stroke all draw one data entity several times. Those entities fall back to rasterizing rather
+than re-capturing on every draw.
+
+**Frame identity belongs to the document.** Entries live on the document's registry, so several
+renderers can meet the same entry. Each frame takes its identity from a counter on the
+document, which is what keeps one renderer's frame from reading as a second draw inside
+another's.
 
 ## Background
 
@@ -491,6 +547,59 @@ claimed invariants trace to CI.
   output, never estimated.
 
 ## Performance
+
+### Measured, Milestone 2 and 3
+
+`engine_compare_bench --backend=tiny-skia`, `-c opt`, aarch64, one core, medians of three
+interleaved passes of five timed iterations each, retention off versus on in the same binary.
+`pixels_hash` was identical between the two modes in every run.
+
+| Scene (size)               | cold base | cold retained | steady base | steady retained | steady speedup |
+| -------------------------- | --------: | ------------: | ----------: | --------------: | -------------: |
+| Ghostscript_Tiger (900x900)|  27.47 ms |      28.19 ms |    22.03 ms |         9.27 ms |          2.38x |
+| lion (400x400)             |   3.64 ms |       4.11 ms |     3.00 ms |         1.65 ms |          1.82x |
+| Edzample_Anim3             |   6.86 ms |       7.07 ms |     5.61 ms |         5.22 ms |          1.07x |
+| z0rly_test6                |   5.11 ms |       5.19 ms |     0.56 ms |         0.53 ms |          1.07x |
+
+Capture costs 2.6 percent of the cold frame on Tiger and 12.9 percent on lion, which is the
+cold-frame budget this document set and, on lion, is at the edge of it.
+
+A frame that follows an edit, timed as a third phase (`--mutate`):
+
+| Scene             | drag base | drag retained | pan base | pan retained |
+| ----------------- | --------: | ------------: | -------: | -----------: |
+| Ghostscript_Tiger |  22.57 ms |      10.20 ms | 23.51 ms |     23.23 ms |
+| lion              |   3.40 ms |       2.02 ms |  3.13 ms |      3.29 ms |
+| Edzample_Anim3    |   6.01 ms |       5.44 ms |  5.99 ms |      5.45 ms |
+| z0rly_test6       |   4.56 ms |       4.45 ms |  4.59 ms |      4.47 ms |
+
+`drag` moves one shape, so everything else still replays; `pan` moves the outermost group, so
+every device transform changes and nothing replays. `pan` is the worst case retention can be
+put in, and it costs at most 5 percent (lion) against not retaining at all.
+
+Retained memory on a settled frame, from the benchmark's `RETAINED` line:
+
+| Scene             | retained passes | retained bytes |
+| ----------------- | --------------: | -------------: |
+| Ghostscript_Tiger |             305 |        3.21 MiB |
+| lion              |             132 |         501 KiB |
+| Edzample_Anim3    |              49 |         124 KiB |
+| z0rly_test6       |              58 |         7.2 KiB |
+
+The tiger's 3.21 MiB at 900x900 matches this document's "order of a few MiB" estimate, and
+every scene sits far under the 32 MiB default budget.
+
+**The 10-20x target was not met, and the reason is structural rather than incidental.** Tiger's
+steady frame went from 22.0 ms to 9.3 ms. What retention removes is coverage generation; what
+remains is blending that coverage into the surface, which the design's own Milestone 1
+measurement predicted (replaying a 512x512 antialiased fill cost 0.79x the cold fill, because a
+single large path spends most of its time blending). The projection of 2-4 ms assumed the
+opaque-interior straight stores that Milestone 2 deliberately did not build, because a separate
+store path for the common case is a second implementation of the blitter's arithmetic and the
+byte-identity argument would stop holding by construction. Closing that gap means putting the
+fast path inside the shared blitter construction, where both a cold draw and a replay get it.
+
+### Targets
 
 - **Steady-frame target**: 10-20x on raster-bound scenes; Tiger from about 41 ms to 2-4 ms
   `second_ms` at 900x900, `-c opt`, reference aarch64 host. The floor is the surface clear plus
