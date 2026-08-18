@@ -2403,6 +2403,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
     }
 
     const wgpu::Buffer chunk = entry.slot.buffer;
+    const uint64_t chunkId = entry.slot.bufferId;
     const uint32_t vertexCount = entry.encoded.boundingDrawVertexCount();
     const uint64_t clipVersion = encoder->clipStateVersion();
     const PendingBatch::SceneInstance instance{
@@ -2410,8 +2411,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
         deviceFromGlyph, vertexCount,    recordSlot,     recordCache, recordState};
 
     if (pendingBatch.has_value() && pendingBatch->mode == PendingBatch::Mode::Scene &&
-        pendingBatch->sceneChunkBuffer == chunk &&
-        pendingBatch->sceneRecordBuffer == recordSlot->buffer &&
+        pendingBatch->sceneChunkBufferId == chunkId &&
+        pendingBatch->sceneRecordBufferId == recordSlot->bufferId &&
         pendingBatch->sceneClipVersion == clipVersion &&
         pendingBatch->sceneFirstInstance + pendingBatch->sceneInstances.size() ==
             recordSlot->index) {
@@ -2426,6 +2427,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
     pendingBatch->mode = PendingBatch::Mode::Scene;
     pendingBatch->sceneChunkBuffer = chunk;
     pendingBatch->sceneRecordBuffer = recordSlot->buffer;
+    pendingBatch->sceneChunkBufferId = chunkId;
+    pendingBatch->sceneRecordBufferId = recordSlot->bufferId;
     pendingBatch->sceneFirstInstance = recordSlot->index;
     pendingBatch->sceneFirstRecordOffset = recordSlot->offset;
     pendingBatch->sceneClipVersion = clipVersion;
@@ -2868,7 +2871,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
           recordSlotPtr != nullptr ? *recordSlotPtr : residentSlot->recordSlot;
       const wgpu::Buffer chunk = residentSlot->buffer;
       const wgpu::Buffer recordBuf = effectiveRecordSlot.buffer;
-      const uint64_t chunkId = residentFillSlot->bufferId;
+      const uint64_t chunkId = residentSlot->bufferId;
       const uint64_t recordBufId = effectiveRecordSlot.bufferId;
       const uint32_t recordIndex = effectiveRecordSlot.index;
       const uint32_t vertexCount = encoded->boundingDrawVertexCount();
@@ -3001,8 +3004,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
           claimSceneSlot(*residentSlot, paint);
           flushPendingBatch();
           startPending(sourceRegistry, sourceEntity, path, paint, rule, encoded, residentSlot,
-                       chunk, recordBuf, recordIndex, effectiveRecordSlot.offset, clipVersion,
-                       current);
+                       chunk, recordBuf, chunkId, recordBufId, recordIndex,
+                       effectiveRecordSlot.offset, clipVersion, current);
         }
         return true;
       }
@@ -3018,7 +3021,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
           flushPendingBatch();
         }
         startPending(sourceRegistry, sourceEntity, path, paint, rule, encoded, residentSlot, chunk,
-                     recordBuf, recordIndex, effectiveRecordSlot.offset, clipVersion, current);
+                     recordBuf, chunkId, recordBufId, recordIndex, effectiveRecordSlot.offset,
+                     clipVersion, current);
         return true;
       }
 
@@ -3073,7 +3077,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
                     const geode::GeoEncoder::ScenePaint& paint, FillRule rule,
                     const geode::EncodedPath* encoded, geode::GeodeResidentSlot* residentSlot,
                     const wgpu::Buffer& chunk, const wgpu::Buffer& recordBuffer,
-                    uint32_t recordIndex, uint64_t recordOffset, uint64_t clipVersion,
+                    uint64_t chunkId, uint64_t recordBufferId, uint32_t recordIndex,
+                    uint64_t recordOffset, uint64_t clipVersion,
                     const PendingBatch::SceneInstance& instance) {
     if (!paint.isGradient()) {
       startSameEntitySingleton(sourceRegistry, sourceEntity, path, paint.color, rule, encoded,
@@ -3084,6 +3089,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
     pendingBatch->mode = PendingBatch::Mode::Scene;
     pendingBatch->sceneChunkBuffer = chunk;
     pendingBatch->sceneRecordBuffer = recordBuffer;
+    pendingBatch->sceneChunkBufferId = chunkId;
+    pendingBatch->sceneRecordBufferId = recordBufferId;
     pendingBatch->sceneFirstInstance = recordIndex;
     pendingBatch->sceneFirstRecordOffset = recordOffset;
     pendingBatch->sceneClipVersion = clipVersion;

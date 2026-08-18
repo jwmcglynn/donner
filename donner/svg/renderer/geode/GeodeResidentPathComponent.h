@@ -586,7 +586,7 @@ struct GeodeResidentSlot {
   uint64_t allocationOffset = 0;
   uint64_t allocationSize = 0;
 
-  /// Cached fill bind group. All eleven bindings reference stable
+  /// Cached fill bind group. All twelve bindings reference stable
   /// objects (this slot's `buffer` sub-ranges + device-owned dummy
   /// texture/sampler/identity-instance handles), so it survives frames
   /// and encoders. Rebuilt only when the geometry buffer is
