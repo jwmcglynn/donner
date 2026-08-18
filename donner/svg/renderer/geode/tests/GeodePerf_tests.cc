@@ -210,10 +210,16 @@ TEST_F(GeodePerfTest, SimpleShapes_BaselineCeilings) {
   // arenas (vBands/vCurves/hBandGrid/vBandGrid) on top of bands/curves/vertex/
   // uniform, so first-frame arena growth costs a few more buffer creates.
   EXPECT_LE(c.bufferCreates, 12u);
-  EXPECT_LE(c.bindgroupCreates, 6u);  // Target <= #pipelines (3 today).
-  EXPECT_LE(c.textureCreates, 3u);    // Target on frame 1; 0 on repeat.
-  EXPECT_LE(c.submits, 3u);           // Target = 1.
-  EXPECT_LE(c.drawCalls, 4u);         // 3 shapes, one draw each.
+  // One group for the batch, one for the snapshot readback.
+  EXPECT_LE(c.bindgroupCreates, 2u);
+  EXPECT_LE(c.textureCreates, 3u);  // Target on frame 1; 0 on repeat.
+  EXPECT_LE(c.submits, 3u);         // Target = 1.
+  // Three unclipped solid fills of distinct entities in painter order form
+  // one ordered cross-entity batch, so the whole fixture is a single
+  // instanced draw. Each instance's record carries its own color and fill
+  // rule, so the fixture's differing paints (red / blue / green) do not
+  // split the batch.
+  EXPECT_LE(c.drawCalls, 1u);
   EXPECT_LE(c.pipelineSwitches, 2u);  // Solid pipeline bound once.
 }
 
@@ -406,22 +412,23 @@ TEST_F(GeodePerfTest, Lion_BaselineCeilings) {
   //   device dummies + texture pool: target on frame 1; 0 on repeat.
   //   draw instrumentation: drawCalls=132 (one per path),
   //                       pipelineSwitches=1 (solid pipeline only -
-  //                       all of Lion is solid-fill). `<use>` instancing
-  //                       is the knob that moves drawCalls for
-  //                       `<use>`-heavy fixtures; Lion has no `<use>`
-  //                       so this ceiling stays at 132.
+  //                       all of Lion is solid-fill).
   EXPECT_LE(c.pathEncodes, 200u);  // Target = 0.
-  // GPU residence: frame 1 now front-loads ONE persistent
-  // combined buffer per cached solid-fill path (132 for Lion) so that
-  // steady-state frames re-upload zero geometry. This trades a one-time
-  // frame-1 buffer-create spike for the steady-state win asserted in
-  // `Lion_NoDirtyPath_ZeroEncodes` (frame-2 bufferCreates == 1, the
-  // readback). Ceiling = 132 resident + readback + arena slack.
-  EXPECT_LE(c.bufferCreates, 150u);
-  EXPECT_LE(c.bindgroupCreates, 200u);   // Target <= #pipelines.
-  EXPECT_LE(c.textureCreates, 3u);       // Target on first render; 0 on repeat.
-  EXPECT_LE(c.submits, 3u);              // Target = 1.
-  EXPECT_LE(c.drawCalls, 200u);          // 132 paths, one draw each (no <use>).
+  // GPU residence packs every cached solid fill into shared slab chunks
+  // rather than a buffer per path, so frame 1 creates a handful of slab
+  // chunks, the record slab, the arenas and the readback buffer - a count
+  // set by the slab chunk size, not by the 132 paths. Steady-state frames
+  // then re-upload zero geometry (`Lion_NoDirtyPath_ZeroEncodes`).
+  EXPECT_LE(c.bufferCreates, 8u);
+  // Ordered cross-entity batching collapsed this from one bind group per
+  // draw (133) to the batch's own group plus the readback's.
+  EXPECT_LE(c.bindgroupCreates, 2u);
+  EXPECT_LE(c.textureCreates, 3u);  // Target on first render; 0 on repeat.
+  EXPECT_LE(c.submits, 3u);         // Target = 1.
+  // All 132 paths are unclipped solid fills in painter order sharing one slab
+  // chunk, so they merge into a single instanced draw. Lion has no `<use>`,
+  // so this is entirely the cross-entity path, not same-entity instancing.
+  EXPECT_LE(c.drawCalls, 1u);
   EXPECT_LE(c.pipelineSwitches, 2u);     // All-solid fixture: tracker binds solid once.
   EXPECT_EQ(c.sameSourceDrawPairs, 0u);  // No `<use>` in Lion - every draw has a unique source.
 }
@@ -642,14 +649,14 @@ TEST_F(GeodePerfTest, Lion_NoDirtyPath_ZeroEncodes) {
   // fills are GPU-resident from frame 1, so an unchanged second render
   // re-uploads zero geometry bytes and creates zero bind groups. The
   // pre-residence baseline was bufferWriteBytes=172776 across 1056 writes, and
-  // bindgroupCreates=132 (one per draw). drawCalls stays 132 - the draws
-  // still happen, they just bind cached resident buffers.
+  // bindgroupCreates=132 (one per draw). The 132 draws now merge into one
+  // ordered cross-entity batch that binds the cached resident buffers.
   EXPECT_LE(c.bufferWriteBytes, 4096u)
       << "Steady-state geometry re-upload on an unchanged second render of lion.svg: resident "
          "buffers should serve every draw.";
-  // Resident draws reuse their cached bind groups on an unchanged frame;
-  // cross-entity batching is gated off, so nothing here may create groups
-  // per draw or per batch.
+  // Resident draws reuse their cached bind groups on an unchanged frame, and
+  // a scene batch reuses the group cached under its arena / slab identities,
+  // so nothing here may create a group per draw or per batch.
   EXPECT_LE(c.bindgroupCreates, 1u)
       << "Steady-state bind-group creates: cached resident groups should serve every draw.";
 }
@@ -686,12 +693,22 @@ TEST_F(GeodePerfTest, GhostscriptTiger_NoDirtyPath_ZeroEncodes) {
   // unchanged second render re-uploads zero geometry bytes and creates
   // zero bind groups - a >99% reduction, far past the 90% acceptance
   // floor (which would be <= 147388 bytes). Both fill AND stroke slots
-  // are exercised (Tiger has strokes). drawCalls stays 304.
+  // are exercised (Tiger has strokes). The 304 draws merge down to 153:
+  // Tiger's strokes are not batch-eligible, so each one ends a run of fills.
   EXPECT_LE(c.bufferWriteBytes, 8192u)
       << "Steady-state geometry re-upload on an unchanged second render of Ghostscript_Tiger.svg. "
          "The pre-residency baseline was 1,473,888 bytes; residency should drive this to ~0.";
   EXPECT_LE(c.bindgroupCreates, 2u)
       << "Steady-state bind-group creates no longer proportional to draw calls (was 304).";
+  // Batching is not free here: the batched and solo solid fills are separate
+  // pipeline objects, so every stroke that interrupts a run of fills costs a
+  // switch back and forth. Tiger went from 1 switch (one solid pipeline for
+  // all 304 draws) to 11 as the draws collapsed to 153. That is a good trade
+  // at this ratio, but it scales with how often non-eligible draws interleave,
+  // so bound it rather than letting it track the draw count again.
+  EXPECT_LE(c.pipelineSwitches, 12u)
+      << "Pipeline alternation between the batched and solo solid fill pipelines grew: a batch "
+         "that keeps getting interrupted gives back the draw-call win.";
 }
 
 // ---------------------------------------------------------------------------

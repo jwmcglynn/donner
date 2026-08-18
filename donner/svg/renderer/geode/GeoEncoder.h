@@ -262,6 +262,13 @@ public:
   /// scissor at flush time instead of at draw time).
   bool hasActiveScissor() const;
 
+  /// True while a mask pass is open, i.e. draws are being recorded into a
+  /// mask texture through the mask pipeline rather than into the main pass.
+  /// Residency and the ordered batch gate both exclude these draws: a batch
+  /// defers to flush time, by which point the mask pass has closed and the
+  /// draw would land in the wrong target.
+  bool hasOpenMaskPass() const;
+
   /// Set the model-view transform for subsequent draw calls.
   void setTransform(const Transform2d& transform);
 

@@ -1469,6 +1469,10 @@ bool GeoEncoder::hasActiveScissor() const {
   return impl_->scissorActive;
 }
 
+bool GeoEncoder::hasOpenMaskPass() const {
+  return impl_->maskPassOpen;
+}
+
 void GeoEncoder::setLoadPreserve() {
   // No-op if a pass is already open - loadOp is a pass-construction
   // parameter and can't be changed mid-pass. The RendererGeode caller

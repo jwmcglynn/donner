@@ -1031,11 +1031,17 @@ std::shared_ptr<RendererGeodeTexturePool> TexturePoolForDevice(geode::GeodeDevic
 
 }  // namespace
 
-/// Gate for ordered cross-entity batching. Disabled while the
-/// marker / scissor-clip deferred-flush interaction is unresolved; the
-/// same-entity instanced path and the solo residence flows remain
-/// active and fully verified.
-constexpr bool kEnableSceneBatching = false;
+/// Gate for ordered cross-entity batching. Enabled: the deferred flush that
+/// used to reorder a batched draw past a scissor or clip change can no longer
+/// form one, because the eligibility predicate refuses any draw taken while a
+/// clip state, a scissor, or a mask pass is active. The same-entity instanced
+/// path and the solo residence flows are unchanged and still handle
+/// everything a scene batch declines.
+///
+/// Kept as a compile-time constant rather than a runtime option so that
+/// turning it off folds the whole eligibility predicate away, leaving the
+/// record slab, its buffers and its per-entity slots entirely uncreated.
+constexpr bool kEnableSceneBatching = true;
 
 struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::FilterTextureAllocator {
   bool verbose = false;
@@ -2367,10 +2373,15 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
 
     if (batch.deviceFromLocalTransforms.size() == 1) {
       // Single draw - restore the captured transform + use the
-      // non-instanced path. Prefer the persistent-residence path
-      // so an unbatched solid fill re-uploads zero geometry on an
-      // unchanged frame (the common Lion / Tiger case: distinct source
-      // entities never batch, so almost every solid fill flushes here).
+      // non-instanced path. Prefer the persistent-residence path so an
+      // unbatched solid fill re-uploads zero geometry on an unchanged frame.
+      // A fill lands here whenever it never gained a second batch member:
+      // it was scene-ineligible (clipped, scissored, no cached encode, no
+      // residence slot, or a same-frame repeat), or it was eligible but its
+      // record slot did not extend the pending run. Differing paint does NOT
+      // land a draw here - a scene batch carries color and fill rule per
+      // instance record; only the same-entity instanced mode ends its run on
+      // a paint or fill-rule change.
       deviceFromLocalTransform = batch.deviceFromLocalTransforms.front();
       syncTransform();
       emitSolidFill(*batch.path, batch.color, batch.rule, batch.encoded, batch.residentFillSlot);
@@ -2455,26 +2466,30 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
     // ordered batching and are already exact for repeated draws.
     const geode::GeodeRecordSlab::Slot* recordSlotPtr = nullptr;
     const uint64_t clipVersion = encoder->clipStateVersion();
-    // `kEnableSceneBatching` keeps ordered cross-entity batching off by
-    // default: it is a behavior-visible rendering change that is being
-    // rolled out separately from the machinery, and every gate below still
-    // has to hold before a draw can join a batch. With the flag off the
-    // predicate folds away at compile time, so no draw allocates a record
-    // slot, writes a record, or touches the record slab.
+    // `kEnableSceneBatching` is the compile-time gate for ordered
+    // cross-entity batching; with it off the whole predicate folds away, so
+    // no draw allocates a record slot, writes a record, or touches the record
+    // slab. Every gate below still has to hold before a draw can join a
+    // batch.
     //
     // The record-slab slot is allocated HERE, on the eligibility path,
     // rather than when the residence slot is created: a draw that can never
     // batch takes its paint from the uniform and binds the device's shared
     // identity record, so giving it a slot would be pure cost.
-    const bool sceneEligible = kEnableSceneBatching && residentFillSlot != nullptr &&
-                               encoded != nullptr &&
-                               !encoder->hasActiveClipState() &&
-                               !encoder->hasActiveScissor() &&
-                               residentFillSlot->lastSceneFrame != currentFrameIndex &&
-                               residentFillSlot->lastResidentFrame != currentFrameIndex &&
-                               sourceRegistry != nullptr &&
-                               ensureRecordSlot(*residentFillSlot, *sourceRegistry) &&
-                               resolveSceneRecordSlot(*residentFillSlot, recordSlotPtr);
+    //
+    // The three target-state guards (clip, scissor, mask pass) are what make
+    // deferring a draw to flush time safe: each is state the batch would
+    // observe at flush rather than at draw. Solid fills do not currently
+    // reach here during a mask pass, but the residency helpers all carry the
+    // same three-way guard, and an ordered batch is the one caller for which
+    // getting it wrong silently paints into the wrong target.
+    const bool sceneEligible =
+        kEnableSceneBatching && residentFillSlot != nullptr && encoded != nullptr &&
+        !encoder->hasActiveClipState() && !encoder->hasActiveScissor() &&
+        !encoder->hasOpenMaskPass() && residentFillSlot->lastSceneFrame != currentFrameIndex &&
+        residentFillSlot->lastResidentFrame != currentFrameIndex && sourceRegistry != nullptr &&
+        ensureRecordSlot(*residentFillSlot, *sourceRegistry) &&
+        resolveSceneRecordSlot(*residentFillSlot, recordSlotPtr);
     if (sceneEligible &&
         encoder->ensureResidentSceneRecord(*residentFillSlot, *encoded, color, rule,
                                            deviceFromLocalTransform, recordSlotPtr)) {
@@ -4563,10 +4578,10 @@ void RendererGeode::drawPath(const PathShape& path, const StrokeParams& stroke) 
                          impl_->paint.drawFillComponent;
 
   // GPU residence: a persistent per-entity fill slot, eligible for
-  // any solid fill with a cached encode. Shared by the batch size-1 flush
-  // and the direct `fillResolved` path so almost every solid fill (which
-  // never batches across distinct source entities) re-uploads zero
-  // geometry on an unchanged frame.
+  // any solid fill with a cached encode. Shared by the batch size-1 flush,
+  // the cross-entity scene batch and the direct `fillResolved` path, so a
+  // solid fill re-uploads zero geometry on an unchanged frame however it
+  // ends up being drawn.
   geode::GeodeResidentSlot* residentFill =
       (fillEncoded != nullptr && std::holds_alternative<PaintServer::Solid>(impl_->paint.fill))
           ? impl_->residentFillSlot(path.sourceEntity)
