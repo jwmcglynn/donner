@@ -1066,7 +1066,8 @@ var LibraryWebGPU = {
   emwgpuBufferMapAsync__sig: 'vpjjpp',
   emwgpuBufferMapAsync: (bufferPtr, futureId, mode, offset, size) => {
     var buffer = WebGPU.getJsObject(bufferPtr);
-    WebGPU.Internals.bufferOnUnmaps[bufferPtr] = [];
+    var onUnmap = [];
+    WebGPU.Internals.bufferOnUnmaps[bufferPtr] = onUnmap;
 
     {{{ gpu.convertSentinelToUndefined('size', true) }}}
 
@@ -1088,7 +1089,10 @@ var LibraryWebGPU = {
           0;
         {{{ gpu.makeCheck('status') }}}
         _emwgpuOnMapAsyncCompleted(futureId, status, {{{ gpu.passAsPointer('messagePtr') }}});
-        delete WebGPU.Internals.bufferOnUnmaps[bufferPtr];
+        // An aborted C++ map can release and reuse bufferPtr before this Promise settles.
+        if (WebGPU.Internals.bufferOnUnmaps[bufferPtr] === onUnmap) {
+          delete WebGPU.Internals.bufferOnUnmaps[bufferPtr];
+        }
       });
     }));
   },

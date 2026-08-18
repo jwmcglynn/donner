@@ -58,7 +58,10 @@ loading, a set of masking/clipping and filter edge cases, and CPU/GPU renderer p
   - [ ] SVG 2 `<textPath>` features: `side`, `method=stretch`, `spacing=auto`, the `path` attribute,
         and reference-to-shape targets.
   - [ ] Full SVG 2 `text-decoration` (independent line, style, and color).
-  - [ ] Vertical text: remaining `writing-mode: tb` cases and `glyph-orientation-*`.
+  - [ ] Vertical text: remaining `vertical-rl`, `vertical-lr`, and `text-orientation` cases. Do not
+        add separate implementations for removed SVG 1.1 glyph-orientation properties or obsolete
+        writing-mode values; retain only the compatibility aliases required by SVG 2 and CSS
+        Writing Modes.
   - [ ] `font-size-adjust`, `font-kerning`, and the `font` shorthand.
 - [ ] Milestone 2: External resource loading
   - [ ] External-URL `<image>` references (with the security limits in the Security section).
@@ -75,21 +78,21 @@ loading, a set of masking/clipping and filter edge cases, and CPU/GPU renderer p
   - [ ] feImage subregion cases and feConvolveMatrix / feDropShadow edge cases.
   - [ ] Filter-region scissor per SVG 2 section 15.5 (GPU backend TODO).
 - [ ] Milestone 5: Painting and structural edge cases
-  - [~] `image-rendering: pixelated` / `crisp-edges` sampling. Nearest-neighbor is now honored on
-        both the CPU (tiny_skia) and GPU (Geode) backends for both the `<image>` element and the
-        `<feImage>` filter primitive (the `feImage` resampler previously always used the
-        Mitchell-bicubic kernel and ignored `image-rendering`). Both backends render bit-identical
-        nearest output; proven by `FilterGraphExecutorTest.FeImagePixelatedUsesNearestNeighborSharpEdge`
-        and `...FeImageDefaultKernelBlendsAcrossEdge`. Done-signal not yet met: the
-        `painting/image-rendering` goldens (`on-feImage.svg`, `optimizeSpeed.svg`) still diff by a
-        seam-only residual because resvg's nearest block grid lands on a slightly different
-        device-pixel boundary than Donner's at the non-integer upscale in these cases. This is the
-        same "golden kernel mismatch" class (0021 B3) that already blocks most of the `<image>`
-        category, and clears with a vendored-golden refresh, not a Donner code change.
+- [~] `image-rendering: pixelated` / `crisp-edges` sampling. Nearest-neighbor is honored on
+  both the CPU (tiny_skia) and GPU (Geode) backends for both the `<image>` element and the
+  `<feImage>` filter primitive (the `feImage` resampler previously always used the
+  Mitchell-bicubic kernel and ignored `image-rendering`). Both backends render bit-identical
+  nearest output; proven by `FilterGraphExecutorTest.FeImagePixelatedUsesNearestNeighborSharpEdge`
+  and `...FeImageDefaultKernelBlendsAcrossEdge`. The implementation currently collapses
+  `pixelated`, `crisp-edges`, and `optimizeSpeed` to one nearest-neighbor policy. The
+  `painting/image-rendering` goldens (`on-feImage.svg`, `optimizeSpeed.svg`) also retain a
+  non-integer-scale nearest-grid disagreement that needs independent conformance triage before
+  the skips can be removed.
   - [ ] `<svg version="1.1">` compatibility handling.
   - [ ] Non-UTF-8 document encodings.
 - [ ] Milestone 6: CPU/GPU (Geode) render parity
-  - [ ] `paint-order` fill/stroke/marker reordering on the GPU backend.
+  - [x] `paint-order` fill/stroke/marker reordering on the GPU backend. All 14 resvg category
+        cases are active; focused renderer tests also cover paint order on text and tspans.
   - [ ] `0 N` dash round/square caps on the GPU backend.
   - [ ] Stroke-join defect (issue #663).
   - [ ] Color/bitmap-emoji glyphs in the GPU `drawText` path.

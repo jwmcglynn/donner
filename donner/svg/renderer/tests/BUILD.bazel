@@ -11,6 +11,12 @@ load(
     "renderer_backend_compatible_with",
 )
 
+filegroup(
+    name = "resvg_test_registration_source",
+    srcs = ["resvg_test_suite.cc"],
+    visibility = ["//tools/resvg_parity:__pkg__"],
+)
+
 donner_cc_library(
     name = "rgba_test_matchers",
     testonly = 1,

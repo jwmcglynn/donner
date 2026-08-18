@@ -12,7 +12,7 @@ tracing milestone in `Backlog.md`.
 ## The loop
 
 ```
-  edit SVG  ->  render (donner-svg)  ->  score  ->  inspect diff.png  ->  edit again
+edit SVG  ->  render (donner-svg)  ->  score  ->  inspect diff.png  ->  edit again
 ```
 
 Each pass is one `vectorize.py` invocation. You (the agent) own the SVG editing;
@@ -25,7 +25,7 @@ rules).
    `donner-svg` at the reference's exact pixel size and diffs the two.
 3. **Read `score.json`:** check `rmse`, `diff_pixel_percent`, and `worst_tiles`.
 4. **Open `diff.png`:** bright red = large per-pixel error, near-black = match.
-   The heatmap tells you *where* to work next; `worst_tiles` gives coordinates.
+   The heatmap tells you _where_ to work next; `worst_tiles` gives coordinates.
 5. **Repeat** until the score meets the target and the structure is clean.
 
 ## The oracles (where render + diff come from)
@@ -44,16 +44,17 @@ rules).
 
 ## Score metrics (score.json)
 
-| field | meaning | target |
-|-------|---------|--------|
-| `rmse` | root-mean-square per-channel error, 0..255 | drive toward 0 |
-| `rmse_normalized` | `rmse / 255`, 0..1 | < 0.02 is a strong match |
-| `diff_pixel_percent` | % of pixels whose max channel diff > `--threshold` | < 1% |
-| `quality_score` | `100 * (1 - rmse_normalized)`, higher is better | > 98 |
-| `worst_tiles` | worst NxN grid tiles by RMSE, with pixel x/y/w/h | use to target edits |
-| `diff_png` | red heatmap of per-pixel error | inspect every pass |
+| field                | meaning                                            | target                   |
+| -------------------- | -------------------------------------------------- | ------------------------ |
+| `rmse`               | root-mean-square per-channel error, 0..255         | drive toward 0           |
+| `rmse_normalized`    | `rmse / 255`, 0..1                                 | < 0.02 is a strong match |
+| `diff_pixel_percent` | % of pixels whose max channel diff > `--threshold` | < 1%                     |
+| `quality_score`      | `100 * (1 - rmse_normalized)`, higher is better    | > 98                     |
+| `worst_tiles`        | worst NxN grid tiles by RMSE, with pixel x/y/w/h   | use to target edits      |
+| `diff_png`           | red heatmap of per-pixel error                     | inspect every pass       |
 
 Suggested milestones for a real trace:
+
 - **Silhouette lock** (`quality` > 85): major shapes in the right place, right
   colors. The background glow and the largest masses dominate RMSE first.
 - **Structure match** (`quality` > 95): facets, rim, wordmark all present and
@@ -115,32 +116,30 @@ python3 tools/vectorize/vectorize.py \
 Outputs land in `<workdir>`: `score.json`, `rendered.png` (the donner-svg
 render), and `diff.png` (the error heatmap).
 
-Useful flags: `--background white|black|gray` (composite background; use
-`black` for the dark Geode splash), `--threshold N` (diff-pixel sensitivity),
+Useful flags: `--background white|black|gray` (composite background),
+`--threshold N` (diff-pixel sensitivity),
 `--grid N` (NxN worst-tile grid), `--worst K` (tiles reported),
 `--width/--height` (render size override; defaults to the reference size),
 `--renderer <path>` (explicit donner-svg binary).
 
-### Starting a real vectorization session (the Geode v1.0 splash)
+### Starting a real vectorization session
 
-The reference raster is the `Geode` splash (1536x1024 RGB). It lives in the
-zettelkasten, not in this repo:
-`/Users/jwm/Documents/zettelkasten/assets/images/donner/geode-splash-v2.png`
-(SHA-256 `0e536ed95bbbfc8aac1677fc425a53e5e41939b5407cd94db470ecae08a77246`).
+Supply the reference raster explicitly. Reference images may be proprietary or
+licensed separately, so keep them outside this repository unless their license
+and publication status have been reviewed.
 
 ```
 # 1. Build the render oracle once.
 bazel build //donner/svg/tool:donner-svg
 
-# 2. Start from an empty/rough candidate and iterate. Use --background black
-#    because the splash is near-black. Re-run after every SVG edit.
+# 2. Start from an empty/rough candidate and iterate. Re-run after every SVG edit.
 python3 tools/vectorize/vectorize.py \
-    --reference /Users/jwm/Documents/zettelkasten/assets/images/donner/geode-splash-v2.png \
-    --svg tools/vectorize/geode_candidate.svg \
-    --out tools/vectorize/geode_run \
-    --background black
+    --reference /absolute/path/to/reference.png \
+    --svg tools/vectorize/candidate.svg \
+    --out tools/vectorize/run \
+    --background white
 
-# 3. Read geode_run/score.json, open geode_run/diff.png, edit the SVG, repeat.
+# 3. Read run/score.json, open run/diff.png, edit the SVG, repeat.
 ```
 
 Note: the diff is computed in pure Python; a 1536x1024 pass takes on the order
@@ -153,10 +152,10 @@ See `example/`. `reference_source.svg` is rendered by donner-svg into
 `reference.png` (the pretend "raster reference": a purple circle with a dark rim
 and a "Donner" wordmark). Two candidate iterations show the score improving:
 
-| iteration | file | rmse | quality | diff pixels |
-|-----------|------|------|---------|-------------|
-| v1 (rough: wrong-blue, offset, undersized, no rim, no text) | `candidate_v1.svg` | 58.57 | 77.03 | 29.57% |
-| v2 (recentered, correct fill, rim added, wordmark added, named group) | `candidate_v2.svg` | 0.00 | 100.00 | 0.00% |
+| iteration                                                             | file               | rmse  | quality | diff pixels |
+| --------------------------------------------------------------------- | ------------------ | ----- | ------- | ----------- |
+| v1 (rough: wrong-blue, offset, undersized, no rim, no text)           | `candidate_v1.svg` | 58.57 | 77.03   | 29.57%      |
+| v2 (recentered, correct fill, rim added, wordmark added, named group) | `candidate_v2.svg` | 0.00  | 100.00  | 0.00%       |
 
 Reproduce:
 

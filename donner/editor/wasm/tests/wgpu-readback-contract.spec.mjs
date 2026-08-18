@@ -31,6 +31,52 @@ const geodeDeviceHeader = await readFile(
   new URL("../../../svg/renderer/geode/GeodeDevice.h", import.meta.url),
   "utf8",
 );
+const emdawnWebgpuSource = await readFile(
+  new URL("../../../../third_party/emdawnwebgpu/webgpu/src/library_webgpu.js", import.meta.url),
+  "utf8",
+);
+
+test("late map rejection cannot clear a reused buffer handle's cleanup state", () => {
+  const mapAsyncStart = emdawnWebgpuSource.search(/\bemwgpuBufferMapAsync\s*:/);
+  assert.ok(mapAsyncStart >= 0, "expected the asynchronous buffer-map bridge");
+  const mapAsyncEndOffset = emdawnWebgpuSource.slice(mapAsyncStart).search(
+    /\bemwgpuBufferUnmap\s*:/,
+  );
+  assert.ok(mapAsyncEndOffset > 0, "expected the buffer-unmap bridge after mapAsync");
+  const mapAsyncEnd = mapAsyncStart + mapAsyncEndOffset;
+  const mapAsync = emdawnWebgpuSource.slice(mapAsyncStart, mapAsyncEnd);
+  const cleanupListDeclaration = mapAsync.match(
+    /(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*\[\]/,
+  );
+  assert.ok(
+    cleanupListDeclaration,
+    "each map generation must own a distinct cleanup list",
+  );
+  const cleanupList = cleanupListDeclaration[1];
+  assert.match(
+    mapAsync,
+    new RegExp(`bufferOnUnmaps\\[bufferPtr\\]\\s*=\\s*${cleanupList}\\b`),
+    "the current buffer handle must publish that generation's cleanup list",
+  );
+  const cleanupDeletes = [
+    ...mapAsync.matchAll(/delete\s+WebGPU\.Internals\.bufferOnUnmaps\[bufferPtr\]/g),
+  ];
+  assert.equal(cleanupDeletes.length, 1, "the rejection path must have one cleanup deletion");
+  const guardedCleanup = mapAsync.match(
+    new RegExp(
+      `if\\s*\\(WebGPU\\.Internals\\.bufferOnUnmaps\\[bufferPtr\\]\\s*===\\s*${cleanupList}\\)\\s*\\{([\\s\\S]*?)\\}`,
+    ),
+  );
+  assert.ok(
+    guardedCleanup,
+    "a late rejection must not delete cleanup state installed by a reused handle",
+  );
+  assert.match(
+    guardedCleanup[1],
+    /delete\s+WebGPU\.Internals\.bufferOnUnmaps\[bufferPtr\]/,
+    "only the current map generation may delete its cleanup state",
+  );
+});
 
 test("diagnostic readback requests remain pending until a capture completes", () => {
   const peek = source.match(

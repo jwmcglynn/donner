@@ -16,6 +16,7 @@ PR**. Golden overrides (where Donner is right and resvg's golden is wrong) live 
 [0009](0009-resvg_test_suite_bugs.md), not here.
 
 **Conventions:**
+
 - **Impact** = number of currently-skipped (or fat-thresholded) tests the entry covers.
 - **Root cause** = best-known localized explanation, or "needs investigation".
 - **Next step** = what a fix PR touches first.
@@ -28,23 +29,23 @@ PR**. Golden overrides (where Donner is right and resvg's golden is wrong) live 
 There are **five** supported ways the suite records a known gap. All of them must
 be expressed through the normal `Params` path close to the affected tests:
 
-| State | Count | Meaning |
-|---|---:|---|
-| `Params::Skip("reason")` | 126 | Not run. Feature gap or known bug. The bulk of this doc. |
-| `Params::RenderOnly("reason")` | 58 | Rendered, **not** compared. Used for UB/deprecated cases where no-crash coverage is still useful. |
-| Commented-out `INSTANTIATE_TEST_SUITE_P` | 1 block | `filters/filter-functions` — whole category dark on CI. See [B2](#b2-filtersfilter-functions-category-disabled-on-ci). |
-| `Params::WithThreshold(…, maxPx)` / local max-pixel budget | 90 | Passes with an explicit threshold or pixel budget. Large non-text budgets remain suspect; see [Masked bugs behind inflated CPU thresholds](#masked-bugs-behind-inflated-cpu-thresholds). |
-| Geode-disabled local `Params` entries | 0 | Geode now runs every active resvg case. Verified analytic edge residuals use exact per-backend goldens instead of disabling the backend or inflating thresholds. |
+| State                                                      |   Count | Meaning                                                                                                                                                                                  |
+| ---------------------------------------------------------- | ------: | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Params::Skip("reason")`                                   |     124 | Not run. Feature gap or known bug. The bulk of this doc.                                                                                                                                 |
+| `Params::RenderOnly("reason")`                             |      58 | Rendered, **not** compared. Used for UB/deprecated cases where no-crash coverage is still useful.                                                                                        |
+| Commented-out `INSTANTIATE_TEST_SUITE_P`                   | 1 block | `filters/filter-functions` — whole category dark on CI. See [B2](#b2-filtersfilter-functions-category-disabled-on-ci).                                                                   |
+| `Params::WithThreshold(…, maxPx)` / local max-pixel budget |     103 | Passes with an explicit threshold or pixel budget. Large non-text budgets remain suspect; see [Masked bugs behind inflated CPU thresholds](#masked-bugs-behind-inflated-cpu-thresholds). |
+| Geode-disabled local `Params` entries                      |       0 | Geode now runs every active resvg case. Verified analytic edge residuals use exact per-backend goldens instead of disabling the backend or inflating thresholds.                         |
 
 ## Current totals
 
-| | Count |
-|---|---:|
-| `Params::Skip(...)` | 126 (`grep -o 'Params::Skip('`, 2026-07-12) |
-| `Params::RenderOnly(...)` | 58 (render-must-not-crash, no pixel compare) |
-| `WithThreshold` / max-pixel overrides | 90 (`grep -oE 'WithThreshold\(|WithMaxPixels\('`, 2026-07-12; large non-text budgets remain masked-bug candidates) |
-| Geode-disabled local `Params` entries | 0 (all active cases now run on Geode) |
-| Commented-out category blocks | 1 (`filters/filter-functions`) |
+|                                       |                                                                                                                                                      Count |
+| ------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------: |
+| `Params::Skip(...)`                   |                                                                                                                            124 (`grep -o 'Params::Skip('`) |
+| `Params::RenderOnly(...)`             |                                                                                                               58 (render-must-not-crash, no pixel compare) |
+| `WithThreshold` / max-pixel overrides | 103 call sites: 79 `WithThreshold`, 11 `WithMaxPixels`, and 13 direct `withMaxPixelsDifferent` calls. Large non-text budgets remain masked-bug candidates. |
+| Geode-disabled local `Params` entries |                                                                                                                      0 (all active cases now run on Geode) |
+| Commented-out category blocks         |                                                                                                                             1 (`filters/filter-functions`) |
 
 ---
 
@@ -54,14 +55,14 @@ Landed 2026-05-25 from a parallel CPU-backend debugging sweep. IDs are burned (n
 
 - **F2 — `transform-origin` regression (#514)** → [#609](https://github.com/jwmcglynn/donner/pull/609).
   The pivot sandwich was written `Translate(O) * raw * Translate(-O)`, but
-  `Transform2d::operator*` is left-first, so the pivot-out translate applied *last* —
+  `Transform2d::operator*` is left-first, so the pivot-out translate applied _last_ —
   the pivot wasn't a fixed point. Swapped to `Translate(-O) * raw * Translate(O)`.
   13 tests un-skipped (9.7k–151k px → pass). The 7 paint-server/`<image>`/text cases
-  were a *separate* never-implemented gap → re-filed as **F12** below.
+  were a _separate_ never-implemented gap → re-filed as **F12** below.
 - **B1 — intrinsic sizing + percent on non-square viewBox** → [#611](https://github.com/jwmcglynn/donner/pull/611).
   Three coupled causes: `calculateRawDocumentSize` used `transformPosition` (folded
   the letterbox translation into the size); percent resolution used the viewBox
-  *diagonal* extent instead of per-axis X/Y; `<marker>` length attrs were parsed with
+  _diagonal_ extent instead of per-axis X/Y; `<marker>` length attrs were parsed with
   a no-suffix parser that rejected `%`. 10 tests un-skipped.
 - **B5 — `feMorphology` degenerate radius** → [#608](https://github.com/jwmcglynn/donner/pull/608).
   Negative/zero/empty/absent radius blanked the shape to transparent black; per
@@ -88,20 +89,20 @@ bottom for completeness.
 > (feImage resampling) are resolved; their IDs are burned. The rows below are
 > what's left.
 
-| ID | Gap | Impact | Kind |
-|---|---|---:|---|
-| B2 | `filters/filter-functions` disabled (CI "Data corrupted") | ~30 | CI gap — whole category dark |
-| B3 | `structure/image` golden kernel-era mismatch | 13 | Golden refresh + `<image>` upscale-kernel decision (see [B3](#b3-structureimage-golden-kernel-era-mismatch)) |
-| F12 | `transform-origin` on `<textPath>` baseline | **DONE** | Resolved by #868; all category cases are active. |
-| F7 | `paint-order` rendering | **DONE** (8/8) | Shapes and text run on both backends; `on-tspan` uses a project-owned oracle because the vendored PNG breaks cross-span kerning. |
-| F9 | `textLength` + `lengthAdjust` stretch/compress | 8 | Feature |
-| F10 | `textPath` SVG2 attributes (`path`/`side`/`method`/`spacing`) | 8 | Feature |
-| F11 | BiDi / RTL text shaping | ~8 | Feature (needs `text-full`) |
-| B7 | font substitution — missing bundled families (masked by fat thresholds) | ~9 | Triage: bundle fonts vs. document as known gap |
-| — | masking edge cases (mask 8, clipPath 5) | ~13 | Mixed; `clipPath/with-use-child` is now active on both backends. |
-| — | uncertain `Bug?` entries (need triage) | ~12 | Needs investigation |
-| F1 | `enable-background` + `in=Background*` | 23 | **Out of scope** (deprecated) |
-| — | other deprecated/UB skips | ~30 | **Out of scope** |
+| ID  | Gap                                                                     |           Impact | Kind                                                                                                                             |
+| --- | ----------------------------------------------------------------------- | ---------------: | -------------------------------------------------------------------------------------------------------------------------------- |
+| B2  | `filters/filter-functions` disabled (CI "Data corrupted")               |              ~30 | CI gap — whole category dark                                                                                                     |
+| B3  | `structure/image` golden kernel-era mismatch                            |               13 | Golden refresh + `<image>` upscale-kernel decision (see [B3](#b3-structureimage-golden-kernel-era-mismatch))                     |
+| F12 | `transform-origin` on `<textPath>` baseline                             |         **DONE** | Resolved by #868; all category cases are active.                                                                                 |
+| F7  | `paint-order` rendering                                                 | **DONE** (14/14) | Shapes and text run on both backends; `on-tspan` uses a project-owned oracle because the vendored PNG breaks cross-span kerning. |
+| F9  | `textLength` + `lengthAdjust` stretch/compress                          |                8 | Feature                                                                                                                          |
+| F10 | `textPath` SVG2 attributes (`path`/`side`/`method`/`spacing`)           |                8 | Feature                                                                                                                          |
+| F11 | BiDi / RTL text shaping                                                 |               ~8 | Feature (needs `text-full`)                                                                                                      |
+| B7  | font substitution — missing bundled families (masked by fat thresholds) |               ~9 | Triage: bundle fonts vs. document as known gap                                                                                   |
+| —   | masking edge cases (mask 8, clipPath 5)                                 |              ~13 | Mixed; `clipPath/with-use-child` is now active on both backends.                                                                 |
+| —   | uncertain `Bug?` entries (need triage)                                  |              ~12 | Needs investigation                                                                                                              |
+| F1  | `enable-background` + `in=Background*`                                  |               23 | **Out of scope** (deprecated)                                                                                                    |
+| —   | other deprecated/UB skips                                               |              ~30 | **Out of scope**                                                                                                                 |
 
 ---
 
@@ -114,8 +115,7 @@ at [`resvg_test_suite.cc:1410`](../../donner/svg/renderer/tests/resvg_test_suite
 
 **Symptom:** The `INSTANTIATE_TEST_SUITE_P(FiltersFilterFunctions, …)` block is
 commented out. The category produces `"Data corrupted"` parse errors on CI x86_64
-runners but passes locally on aarch64. (Note: the harmless per-test `"Data
-corrupted"` log lines from `UrlLoader` font fallback are *unrelated* — this is a
+runners but passes locally on aarch64. (Note: the harmless per-test `"Data corrupted"` log lines from `UrlLoader` font fallback are _unrelated_ — this is a
 parse failure that fails the comparison.)
 
 **Root cause:** unknown. Candidates: a resvg-test-suite data-integrity issue on
@@ -136,7 +136,7 @@ goldens (`drop-shadow-function-{mm,em}-values`) are parked for re-enable; see
 
 These tests **pass**, but only because `maxMismatchedPixels` was raised far above
 the suite default (100). pixelmatch already excludes anti-aliased pixels, so a
-multi-thousand-px diff on the CPU backend is a *real* rendering difference. Per
+multi-thousand-px diff on the CPU backend is a _real_ rendering difference. Per
 [CLAUDE.md §"Anti-Aliasing Is Never the Root Cause"](../../CLAUDE.md), "AA drift"
 is not a valid reason for these magnitudes. The full audit list lives in the test
 file. **B6 (feImage resampling) is now fixed** — see [Recently fixed](#recently-fixed-prs-608611);
@@ -149,17 +149,15 @@ now removed). The remaining structural cluster is below.
 **Impact:** ~9 `text/font-family/` tests at `maxPx` 600–5200 (`serif` 4200,
 `sans-serif` 1900, `monospace` 600, `cursive` 5000, `fantasy` 5200,
 `bold-sans-serif` 5200, `source-sans-pro` 1300, `font-list` 1300, `fallback-2`
-1000), plus `text/text/xml-lang=ja` (19100, CJK) and `structure/defs/
-style-inheritance-on-text` (6500).
+1000), plus `text/text/xml-lang=ja` (19100, CJK) and `structure/defs/ style-inheritance-on-text` (6500).
 
-**Symptom:** the diffs are whole-glyph — Donner substitutes a *different font* than
+**Symptom:** the diffs are whole-glyph — Donner substitutes a _different font_ than
 the golden was rendered with (the suite's `cursive`/`fantasy`/CJK families aren't
 bundled), so every glyph outline differs. This is not a renderer bug; it's a
-font-availability gap currently *silently* absorbed by a fat threshold.
+font-availability gap currently _silently_ absorbed by a fat threshold.
 
 **Next step (triage decision):** either (a) bundle the missing families and tighten
-the thresholds to default, or (b) reclassify these as explicit `Skip("font not
-bundled: <family>")` so the gap is visible instead of hidden. Do **not** leave them
+the thresholds to default, or (b) reclassify these as explicit `Skip("font not bundled: <family>")` so the gap is visible instead of hidden. Do **not** leave them
 as unexplained fat thresholds. Decide per-family; `serif`/`sans-serif`/`monospace`
 likely map to already-bundled Noto faces (real diff to chase), while
 `cursive`/`fantasy` are genuinely missing.
@@ -186,7 +184,7 @@ causes: (1) the `<use>` width/height override + viewport machinery
 transform dropped the referenced svg's `x`/`y` when it had no viewBox; (2) a CSS
 shadow-tree bug — `ShadowedElementAdapter::parentElement()` looked up
 `ElementTypeComponent` on the raw tree entity, so a shadow entity whose parent
-was *also* a shadow entity appeared parentless, matched `:root`, and the UA
+was _also_ a shadow entity appeared parentless, matched `:root`, and the UA
 rule `svg:not(:root) { overflow: hidden }` never clipped nested
 `<use>` → `<use>` → `<svg>` chains (descendant combinators through shadow
 parents were broken generally). 5 tests un-skipped (70k–130k px → pass).
@@ -236,7 +234,7 @@ Per-test threshold inflation is not an option.
 
 ### F7: `paint-order` rendering
 
-**Resolved.** All 8 tests in `painting/paint-order/` are active. Shape marker/fill/stroke
+**Resolved.** All 14 tests in `painting/paint-order/` are active. Shape marker/fill/stroke
 ordering and text whole-run fill/stroke ordering run on both backends. The vendored
 `on-tspan` PNG loses kerning across a paint-only span boundary, so Donner uses explicit
 CPU and Geode goldens that preserve continuous shaping while still gating paint order.
@@ -251,8 +249,9 @@ text-full builds and are enabled with `.onlyTextFull()`.
 ### F10: `textPath` SVG2 attributes
 
 **Impact:** 8 in `text/textPath/`: `path` attribute, `side=right`, `method=stretch`,
-`spacing=auto`, `path`+`xlink:href` combinations, `filter` on textPath, plus the
-deferred vertical/`writing-mode=tb` cases.
+`spacing=auto`, `path`+`xlink:href` combinations, `filter` on textPath, plus modern vertical
+writing-mode cases. Obsolete SVG 1.1 writing-mode aliases are classification work, not new feature
+work.
 
 ### F11: BiDi / RTL text shaping
 
@@ -281,24 +280,24 @@ content-placement transform.
 
 ### Smaller feature gaps
 
-| Category | Tests | Gap |
-|---|---:|---|
-| structure/svg | 2 | nested-svg `overflow` |
-| structure/style | 1 | CSS `@import` / external CSS |
-| structure/symbol | 1 | `transform` on `<symbol>` (SVG2) |
-| painting/image-rendering | 2 | `image-rendering` (pixelated/crisp-edges) |
-| masking/clipPath | 6 | clipPath with `<text>` children, `<use>` child, shorthand edge cases |
-| masking/mask | 8 | `mask-type`, `mask-units`, `color-interpolation`, mask-on-self |
-| text/font | 2 | `font` shorthand; canvas-size mismatch (test harness) |
-| text/tspan | 3 | tspan interaction with `clip-path`/`filter`/`mask` |
-| painting/stroke-dasharray | 4 | `0 n` dash patterns with caps; `40 0` closed-rect dash-seam (see note) |
-| painting/marker | 3 | multiple closepaths, recursive-5 (rounded-rect corner fixed, [#623](https://github.com/jwmcglynn/donner/issues/623)) |
+| Category                  | Tests | Gap                                                                                                                                                              |
+| ------------------------- | ----: | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| structure/svg             |     2 | nested-svg `overflow`                                                                                                                                            |
+| structure/style           |     1 | CSS `@import` / external CSS                                                                                                                                     |
+| structure/symbol          |     1 | `transform` on `<symbol>` (SVG2)                                                                                                                                 |
+| painting/image-rendering  |     2 | Both backends select smooth versus nearest sampling, but the CSS value distinctions and the non-integer nearest-grid disagreement still need conformance triage. |
+| masking/clipPath          |     6 | clipPath with `<text>` children, `<use>` child, shorthand edge cases                                                                                             |
+| masking/mask              |     8 | `mask-type`, `mask-units`, `color-interpolation`, mask-on-self                                                                                                   |
+| text/font                 |     2 | `font` shorthand; canvas-size mismatch (test harness)                                                                                                            |
+| text/tspan                |     3 | tspan interaction with `clip-path`/`filter`/`mask`                                                                                                               |
+| painting/stroke-dasharray |     4 | `0 n` dash patterns with caps; `40 0` closed-rect dash-seam (see note)                                                                                           |
+| painting/marker           |     3 | multiple closepaths, recursive-5 (rounded-rect corner fixed, [#623](https://github.com/jwmcglynn/donner/issues/623))                                             |
 
 **`painting/stroke-dasharray/n-0` (`40 0`)** — root-caused under [#623](https://github.com/jwmcglynn/donner/issues/623)
-and intentionally left skipped: an SVG `<rect>` is a *closed* contour, so tiny-skia
+and intentionally left skipped: an SVG `<rect>` is a _closed_ contour, so tiny-skia
 (the faithful Rust-tiny-skia port) seam-joins the first and last `40`-unit dash across
 the start vertex into one continuous dash, making the start corner an interior MITER.
-resvg's golden butt-caps that corner because usvg flattens the rect to a *non-closed*
+resvg's golden butt-caps that corner because usvg flattens the rect to a _non-closed_
 path before dashing. Donner's mitered closed-contour seam is the spec-conformant
 behavior (matches Skia/Chrome/Firefox); the diff is a resvg-pipeline difference, not a
 Donner/tiny-skia bug. Pinned by `RendererTests.DashSeamClosedContourMitersStartCorner`.
@@ -307,7 +306,7 @@ Donner/tiny-skia bug. Pinned by `RendererTests.DashSeamClosedContourMitersStartC
 `Path::vertices()` now emits the arrival marker-mid at a rounded rect's zero-length-close
 start corner (stacking start + mid + end, matching resvg), while still excluding smooth
 all-curve loops (circle/ellipse).
-| text/writing-mode | ~7 | `writing-mode=tb` with `dx`/`dy`, vertical-lr/rl edge cases, mixed-script (upright CJK + rotated Latin) column geometry (also skips `text/alignment-baseline/hanging-on-vertical`) |
+| text/writing-mode | ~7 | `vertical-lr` / `vertical-rl` edge cases and mixed-script (upright CJK plus rotated Latin) column geometry. Obsolete `tb*` SVG 1.1 values should be classified or mapped to their required compatibility aliases, not implemented as distinct modes. |
 
 ---
 
@@ -335,16 +334,16 @@ bug vs. out-of-scope:
 
 ## Out of scope (correctly skipped — do not "fix")
 
-| Category | Tests | Why |
-|---|---:|---|
-| filters/enable-background | 21 | Category default `Params::RenderOnly(...)`: deprecated in SVG 2 (→ `<filter>` chains / `backdrop-filter`). See [`unsupported_svg1_features.md`](../unsupported_svg1_features.md). |
-| filters/filter `in=Background*` | 2 | Same deprecation (BackgroundImage/BackgroundAlpha inputs). |
-| text/tref | 9 (+1 display) | `<tref>` removed in SVG 2. |
-| text/kerning | 2 | `kerning` attribute deprecated SVG 1.1. |
-| text/glyph-orientation-* | 2 | deprecated SVG 1.1. |
-| paint-servers/radialGradient | 1 | test-suite bug (`fr>` default — SVG2 behavior changed). `focal-point-correction` now passes and is enabled. |
-| structure/style-attribute | 1 | `<svg version="1.1">` disables geometry-in-style (SVG 1.1 behavior). |
-| Other RenderOnly UB cases | 51 | Implementation-defined output; we verify no-crash only (per project policy, kept RenderOnly not Skip). |
+| Category                        |          Tests | Why                                                                                                                                                                               |
+| ------------------------------- | -------------: | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| filters/enable-background       |             21 | Category default `Params::RenderOnly(...)`: deprecated in SVG 2 (→ `<filter>` chains / `backdrop-filter`). See [`unsupported_svg1_features.md`](../unsupported_svg1_features.md). |
+| filters/filter `in=Background*` |              2 | Same deprecation (BackgroundImage/BackgroundAlpha inputs).                                                                                                                        |
+| text/tref                       | 9 (+1 display) | `<tref>` removed in SVG 2.                                                                                                                                                        |
+| text/kerning                    |              2 | `kerning` attribute deprecated SVG 1.1.                                                                                                                                           |
+| text/glyph-orientation-*        |              2 | deprecated SVG 1.1.                                                                                                                                                               |
+| paint-servers/radialGradient    |              1 | test-suite bug (`fr>` default — SVG2 behavior changed). `focal-point-correction` now passes and is enabled.                                                                       |
+| structure/style-attribute       |              1 | `<svg version="1.1">` disables geometry-in-style (SVG 1.1 behavior).                                                                                                              |
+| Other RenderOnly UB cases       |             51 | Implementation-defined output; we verify no-crash only (per project policy, kept RenderOnly not Skip).                                                                            |
 
 ---
 
@@ -352,18 +351,17 @@ bug vs. out-of-scope:
 
 Geode is part of the same resvg test matrix as the CPU variants. It should use the
 same `ImageComparisonParams` thresholds, render-only state, skips, and golden
-overrides as the other renderers. Backend support is recorded through normal
-`Params` feature requirements or local backend disables, never through side-table
-gates.
+overrides as the other renderers. Build capability is recorded through normal
+`Params` feature requirements, never through parity-only backend disables or side-table gates.
 
 Policy:
 
 - Do not add `geodeCategoryGate`, `geodeFilenameGate`, or backend-specific threshold
   side tables.
 - Do not maintain symptom-ledger sets such as `kEdgeFloor` or `kGenuineG2` in the
-  resvg file. If a parity-only exception is truly needed, express it through the
-  local `Params` override for that test, using `disableGeodeParity(...)` with a
-  short reason.
+  resvg file. If an independently verified analytic Geode result differs from the shared reference,
+  attach an exact local `withGeodeGoldenOverride(...)` and current reason to that case. Never disable
+  the backend or widen a Geode-only threshold to absorb the difference.
 - Category-wide defaults are acceptable only when every file in the category has
   the same reason. `filters/enable-background` is the model: one category default
   `Params::RenderOnly(...)`, not a per-file list. Category feature requirements
@@ -387,7 +385,7 @@ unified; `GeodeTinyParity` retired). See [0041](0041-geode_analytical_aa.md) (as
 
 The earlier theory in this section — that ~16 Geode gates shared one "slug_fill
 edge-coverage quantization" root cause — was **wrong**, and is preserved here only as a
-caution: the analytic rewrite left those tests **byte-identical**, *proving* coverage was
+caution: the analytic rewrite left those tests **byte-identical**, _proving_ coverage was
 never the cause. They were three real, separate bugs plus two legitimate per-backend
 goldens, all now fixed/closed:
 
@@ -426,5 +424,6 @@ rotated pattern case, use exact Geode goldens so the backend remains fully gated
 **Next step:** (Concrete action for a fix PR.)
 
 **Affected tests:**
+
 - path/to/first-test.svg
 ```
