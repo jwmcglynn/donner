@@ -38,6 +38,19 @@ struct Paint {
 
   /// Returns true if the shader is a solid color.
   [[nodiscard]] bool isSolidColor() const { return std::holds_alternative<Color>(shader); }
+
+  /// Two paints compare equal when a draw with either would build the same blitter.
+  ///
+  /// This is what lets a caller keep work derived from a paint and decide later whether it
+  /// still applies. Floats compare with IEEE semantics, which deviates from "same value" in
+  /// two ways and both fail toward reporting a difference: a paint holding a NaN is never
+  /// equal even to itself, so such a paint is simply never reused, and positive and negative
+  /// zero compare equal, which is sound because the two produce the same pixels everywhere the
+  /// pipeline consumes them.
+  ///
+  /// A pattern shader compares its pixel view by address, so equality means the two paints
+  /// read the same buffer, not that the buffer still holds the same image. @see Pattern.
+  friend bool operator==(const Paint&, const Paint&) = default;
 };
 
 }  // namespace tiny_skia

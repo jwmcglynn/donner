@@ -413,10 +413,14 @@ donner_cc_library(
 
 donner_perf_sensitive_cc_library(
     name = "renderer_tiny_skia",
-    srcs = ["RendererTinySkia.cc"],
+    srcs = [
+        "RendererTinySkia.cc",
+        "RetainedSpans.cc",
+    ],
     hdrs = [
         "RendererTinySkia.h",
         "RendererTinySkiaCache.h",
+        "RetainedSpans.h",
     ],
     defines = select({
         ":text_enabled": ["DONNER_TEXT_ENABLED"],
@@ -446,6 +450,7 @@ donner_perf_sensitive_cc_library(
         ":tiny_skia_deps",
         "//donner/base",
         "//donner/svg",
+        "//donner/svg/components",
     ] + select({
         ":text_enabled": [
             ":placed_text_geometry",

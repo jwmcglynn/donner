@@ -30,6 +30,9 @@ class LinearGradient {
   /// @internal
   [[nodiscard]] bool pushStages(ColorSpace cs, pipeline::RasterPipelineBuilder& p) const;
 
+  /// Equal when the underlying gradient data is equal. @see Gradient's operator==.
+  friend bool operator==(const LinearGradient&, const LinearGradient&) = default;
+
   /// @internal
   Gradient base_;
 };

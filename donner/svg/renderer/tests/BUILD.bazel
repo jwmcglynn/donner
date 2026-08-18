@@ -240,6 +240,21 @@ donner_cc_test(
 )
 
 donner_cc_test(
+    name = "renderer_retained_spans_tests",
+    size = "medium",
+    srcs = ["RendererRetainedSpans_tests.cc"],
+    data = [
+        "//donner/svg/renderer/testdata",
+    ],
+    deps = [
+        "//donner/svg/parser",
+        "//donner/svg/renderer:renderer_tiny_skia",
+        "//donner/svg/tests:parser_test_utils",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
     name = "renderer_tests",
     srcs = [
         "RendererAscii_tests.cc",

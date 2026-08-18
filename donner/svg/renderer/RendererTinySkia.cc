@@ -478,6 +478,75 @@ tiny_skia::Paint makeBasePaint(bool antialias) {
   return paint;
 }
 
+bool masksEqual(const tiny_skia::Mask& lhs, const tiny_skia::Mask& rhs) {
+  const std::span<const std::uint8_t> lhsData = lhs.data();
+  const std::span<const std::uint8_t> rhsData = rhs.data();
+  return lhs.size() == rhs.size() && lhsData.size() == rhsData.size() &&
+         std::equal(lhsData.begin(), lhsData.end(), rhsData.begin());
+}
+
+/// True when a paint borrows its pixels from a pattern tile.
+///
+/// Those pixels are rebuilt per use and live outside the paint, so coverage recorded under one
+/// cannot be shown to still describe the next draw. Such a draw is left to rasterize.
+bool paintBorrowsPattern(const tiny_skia::Paint& paint) {
+  return std::holds_alternative<tiny_skia::Pattern>(paint.shader);
+}
+
+/// Draws one fill or stroke pass, replaying retained coverage when it still applies.
+///
+/// @param slot Retained storage for this pass, or null to rasterize unconditionally.
+/// @param key Inputs the recorded coverage depends on.
+/// @param pixmap Surface the pass draws onto.
+/// @param mask Clip mask in effect, applied per blit by the pipeline rather than baked into
+///   coverage, so a replay must be handed the same one a fresh draw would get.
+/// @param stats Counters describing what happened.
+/// @param drawFresh Performs the ordinary draw.
+/// @param drawCapturing Performs the same draw through a capture, returning false when the
+///   draw could not be recorded. The pixels are painted either way.
+template <typename DrawFresh, typename DrawCapturing>
+void drawRetainablePass(RetainedSpanSlot* slot, const RetainedSpanKey& key,
+                        tiny_skia::MutablePixmapView& pixmap, const tiny_skia::Mask* mask,
+                        RetainedSpanStats& stats, DrawFresh&& drawFresh,
+                        DrawCapturing&& drawCapturing) {
+  if (slot == nullptr) {
+    ++stats.bypassedDraws;
+    drawFresh();
+    return;
+  }
+
+  if (slot->valid && slot->key == key) {
+    if (tiny_skia::SpanCapture::replay(pixmap, slot->capture.spans(), slot->capture.paint(),
+                                       mask)) {
+      ++stats.replayedDraws;
+      return;
+    }
+
+    // The recording was refused, which the surface-size guard does for runs that were recorded
+    // against a differently sized surface. Falling through to a real draw is what keeps a
+    // refusal from turning into a missing shape.
+    ++stats.refusedReplays;
+    slot->invalidate();
+  }
+
+  if (slot->valid) {
+    ++stats.invalidatedDraws;
+    slot->invalidate();
+  }
+
+  const bool recorded = drawCapturing(slot->capture);
+  if (recorded) {
+    slot->valid = true;
+    slot->key = key;
+    ++stats.capturedDraws;
+  } else {
+    // Nothing to replay, and the draw will be just as unrecordable next frame, so give the
+    // storage back rather than charge the document for it.
+    slot->capture.release();
+    ++stats.unrecordableDraws;
+  }
+}
+
 std::optional<tiny_skia::Mask> createMaskForSize(std::uint32_t width, std::uint32_t height) {
   return tiny_skia::Mask::fromSize(width, height);
 }
@@ -720,6 +789,18 @@ RendererTinySkia::RendererTinySkia(RendererTinySkia&&) noexcept = default;
 RendererTinySkia& RendererTinySkia::operator=(RendererTinySkia&&) noexcept = default;
 
 void RendererTinySkia::draw(SVGDocument& document) {
+  if (retainedSpansEnabled_) {
+    // Connect the geometry-invalidation listener before the driver instantiates the render
+    // tree, so a shape whose outline changed between draws drops its recording before this
+    // frame could replay it.
+    EnsureRetainedSpanInvalidationWired(document.registry());
+  } else {
+    // Retained entries live on the document, not on the renderer that made them, so a renderer
+    // that stops retaining has to hand them back. Otherwise turning retention off leaves the
+    // document holding coverage nothing will ever replay.
+    ClearRetainedSpans(document.registry());
+  }
+
   RendererDriver driver(*this, verbose_);
   driver.draw(document);
 }
@@ -756,6 +837,18 @@ void RendererTinySkia::beginFrame(const RenderViewport& viewport) {
   // here is what bounds its lifetime to a frame, which is the property that makes comparing
   // registry addresses safe; see `EnsureCacheInvalidationWired`.
   cacheWiringCheckedRegistry_ = nullptr;
+
+  ++frameIndex_;
+  retainedSpanStats_ = RetainedSpanStats();
+  clipEpoch_ = 0;
+  clipEpochStack_.clear();
+  if (frame_.size() != previousFrameSize_) {
+    // The remembered clip masks are sized for the surface they were built against, so they can
+    // never match again once it changes. Dropping them here is what keeps a resizing viewport
+    // from holding one full-surface mask per depth per size.
+    clipEpochSlots_.clear();
+    previousFrameSize_ = frame_.size();
+  }
 }
 
 void RendererTinySkia::endFrame() {
@@ -807,6 +900,7 @@ void RendererTinySkia::popTransform() {
 
 void RendererTinySkia::pushClip(const ResolvedClip& clip) {
   clipStack_.push_back(currentClipMask_);
+  clipEpochStack_.push_back(clipEpoch_);
 
   std::optional<tiny_skia::Mask> clipMask = buildClipMask(clip);
   if (!clipMask.has_value()) {
@@ -818,16 +912,105 @@ void RendererTinySkia::pushClip(const ResolvedClip& clip) {
   }
 
   currentClipMask_ = std::move(clipMask);
+  // `clipEpochStack_` already holds the epoch this clip replaced, so the clip's own depth is
+  // one below the stack's size, and the outermost clip is depth zero.
+  clipEpoch_ = assignClipEpoch(clipEpochStack_.size() - 1);
 }
 
 void RendererTinySkia::popClip() {
   if (clipStack_.empty()) {
     currentClipMask_.reset();
+    clipEpoch_ = 0;
     return;
   }
 
   currentClipMask_ = std::move(clipStack_.back());
   clipStack_.pop_back();
+  clipEpoch_ = clipEpochStack_.back();
+  clipEpochStack_.pop_back();
+}
+
+std::uint64_t RendererTinySkia::assignClipEpoch(std::size_t depth) {
+  if (!retainedSpansEnabled_ || !currentClipMask_.has_value()) {
+    return 0;
+  }
+
+  // Remembering one mask per depth is what makes the identity useful: a document's clip stack
+  // is rebuilt in the same order every frame, so an unchanged clip meets its own previous mask
+  // and keeps its identity, while any change takes a new one. Past the cap the identity is
+  // fresh every time, so deeply clipped shapes rasterize rather than letting a document choose
+  // how many full-surface masks this renderer holds.
+  if (depth >= kMaxRetainedClipDepth) {
+    return nextClipEpoch_++;
+  }
+
+  if (clipEpochSlots_.size() <= depth) {
+    clipEpochSlots_.resize(depth + 1);
+  }
+
+  ClipEpochSlot& slot = clipEpochSlots_[depth];
+  if (slot.epoch != 0 && slot.mask.has_value() && masksEqual(*slot.mask, *currentClipMask_)) {
+    return slot.epoch;
+  }
+
+  slot.mask = currentClipMask_;
+  slot.epoch = nextClipEpoch_++;
+  return slot.epoch;
+}
+
+RendererTinySkia::RetainedTarget RendererTinySkia::retainedTargetFor(
+    const EntityHandle& sourceEntity) {
+  // Coverage is retained only for a draw that goes straight to the root surface: a layer,
+  // mask, or pattern-tile surface is rebuilt with the thing that owns it, so a recording made
+  // against one describes a surface that no longer exists. A draw with no source entity (a
+  // replayed snapshot, an overlay, a test harness) has no identity to key on.
+  if (!retainedSpansEnabled_ || !surfaceStack_.empty() || !sourceEntity) {
+    return RetainedTarget();
+  }
+
+  Registry& registry = *sourceEntity.registry();
+  EnsureRetainedSpanInvalidationWired(registry);
+
+  RetainedSpanDocumentState& state = RetainedSpanStateFor(registry, retainedSpanBudgetBytes_);
+  retainedSpanStats_.documentDisabled = state.disabled;
+  retainedSpanStats_.evictions = state.evictions;
+  if (state.disabled) {
+    return RetainedTarget();
+  }
+
+  if (frameToken_ == 0 || frameTokenIndex_ != frameIndex_) {
+    // Take this frame's identity from the document rather than from a renderer-local counter:
+    // entries live on the document, so two renderers drawing it would otherwise agree on frame
+    // numbers and each would look to the other like a second draw of the same shape.
+    frameToken_ = ++state.frameCounter;
+    frameTokenIndex_ = frameIndex_;
+  }
+
+  RetainedSpansComponent& entry = sourceEntity.get_or_emplace<RetainedSpansComponent>();
+  if (entry.drawFrame != frameToken_) {
+    entry.drawFrame = frameToken_;
+    entry.drawsThisFrame = 0;
+  }
+
+  ++entry.drawsThisFrame;
+  if (entry.drawsThisFrame > 1 && !entry.ambiguous) {
+    // One entity, several draws in one frame: an instanced shape drawn through a shadow tree,
+    // or a shape whose `paint-order` splits fill and stroke into separate draws. A single entry
+    // can only describe one of them, and alternating between them would re-capture on every
+    // draw, so this entity stops retaining.
+    entry.ambiguous = true;
+    state.liveBytes -= std::min(state.liveBytes, entry.chargedBytes);
+    entry.chargedBytes = 0;
+    entry.fill = RetainedSpanSlot();
+    entry.stroke = RetainedSpanSlot();
+  }
+
+  if (entry.ambiguous) {
+    return RetainedTarget();
+  }
+
+  entry.lastUsedFrame = frameToken_;
+  return RetainedTarget{&entry, &state};
 }
 
 void RendererTinySkia::pushIsolatedLayer(double opacity, MixBlendMode blendMode) {
@@ -940,8 +1123,12 @@ void RendererTinySkia::pushFilterLayer(const components::FilterGraph& filterGrap
   // The clip mask is restored in popFilterLayer and applied when compositing the filter output.
   frame.savedClipMask = std::move(currentClipMask_);
   frame.savedClipStack = std::move(clipStack_);
+  frame.savedClipEpoch = clipEpoch_;
+  frame.savedClipEpochStack = std::move(clipEpochStack_);
   currentClipMask_.reset();
   clipStack_.clear();
+  clipEpoch_ = 0;
+  clipEpochStack_.clear();
 
   surfaceStack_.push_back(std::move(frame));
 
@@ -975,6 +1162,8 @@ void RendererTinySkia::popFilterLayer() {
   // paint → filter → clip-path → mask → opacity.
   currentClipMask_ = std::move(frame.savedClipMask);
   clipStack_ = std::move(frame.savedClipStack);
+  clipEpoch_ = frame.savedClipEpoch;
+  clipEpochStack_ = std::move(frame.savedClipEpochStack);
 
   // Transform is maintained by RendererDriver via setTransform. The filter buffer offset
   // (if any) was applied in setTransform and is automatically removed when the surface is
@@ -1241,6 +1430,8 @@ bool RendererTinySkia::beginPatternTile(const Box2d& tileRect,
   frame.savedTransformStack = std::move(deviceFromLocalTransformStack_);
   frame.savedClipMask = std::move(currentClipMask_);
   frame.savedClipStack = std::move(clipStack_);
+  frame.savedClipEpoch = clipEpoch_;
+  frame.savedClipEpochStack = std::move(clipEpochStack_);
 
   // Tile-content draws must not consume the outer element's pending pattern shaders (a shape
   // inside the tile would otherwise pick them up as its own fill/stroke and reset them).
@@ -1255,6 +1446,8 @@ bool RendererTinySkia::beginPatternTile(const Box2d& tileRect,
   deviceFromLocalTransformStack_.clear();
   currentClipMask_.reset();
   clipStack_.clear();
+  clipEpoch_ = 0;
+  clipEpochStack_.clear();
   return true;
 }
 
@@ -1270,6 +1463,8 @@ void RendererTinySkia::endPatternTile(bool forStroke) {
   deviceFromLocalTransformStack_ = std::move(frame.savedTransformStack);
   currentClipMask_ = std::move(frame.savedClipMask);
   clipStack_ = std::move(frame.savedClipStack);
+  clipEpoch_ = frame.savedClipEpoch;
+  clipEpochStack_ = std::move(frame.savedClipEpochStack);
   patternFillPaint_ = std::move(frame.savedPatternFillPaint);
   patternStrokePaint_ = std::move(frame.savedPatternStrokePaint);
   PatternPaintState state{std::move(frame.pixmap), frame.targetFromPattern};
@@ -1291,10 +1486,7 @@ void RendererTinySkia::drawPath(const PathShape& path, const StrokeParams& strok
   }
 
   const Path& pathGeometry = path.pathOrEmpty();
-  tiny_skia::Path uncachedPath;
-  const tiny_skia::Path& tinyPath =
-      ResolveTinyPath(path, TinyPathCloseBehavior::Preserve, uncachedPath,
-                      cacheWiringCheckedRegistry_, frameCounters_);
+
   const tiny_skia::Mask* mask = currentClipMask_.has_value() ? &*currentClipMask_ : nullptr;
   tiny_skia::Pixmap* fillPaintPixmap =
       !surfaceStack_.empty() && surfaceStack_.back().fillPaintPixmap.has_value()
@@ -1305,16 +1497,57 @@ void RendererTinySkia::drawPath(const PathShape& path, const StrokeParams& strok
           ? &*surfaceStack_.back().strokePaintPixmap
           : nullptr;
 
+  // The tiny-skia outline is resolved on demand, through the per-entity conversion cache: a
+  // draw served from retained coverage needs no outline at all, and one that does need it takes
+  // the cached conversion rather than converting again. Retention never converts on its own, so
+  // the cache stays the only place a conversion happens and its per-frame count keeps meaning
+  // what it says.
+  tiny_skia::Path uncachedPath;
+  const tiny_skia::Path* resolvedPath = nullptr;
+  const auto tinyPath = [&]() -> const tiny_skia::Path& {
+    if (resolvedPath == nullptr) {
+      resolvedPath = &ResolveTinyPath(path, TinyPathCloseBehavior::Preserve, uncachedPath,
+                                      cacheWiringCheckedRegistry_, frameCounters_);
+    }
+    return *resolvedPath;
+  };
+
+  // A draw that also paints a context-paint capture surface is two draws sharing one outline,
+  // which one retained entry cannot describe, so it rasterizes.
+  const RetainedTarget retained = (fillPaintPixmap == nullptr && strokePaintPixmap == nullptr)
+                                      ? retainedTargetFor(path.sourceEntity)
+                                      : RetainedTarget();
+
   const bool usedPatternFill = patternFillPaint_.has_value();
   std::optional<tiny_skia::Paint> fillPaint =
       paint_.drawFillComponent ? makeFillPaint(pathGeometry.bounds()) : std::nullopt;
   if (fillPaint) {
     auto pixmapView = currentPixmapView();
-    tiny_skia::Painter::fillPath(pixmapView, tinyPath, *fillPaint, toTinyFillRule(path.fillRule),
-                                 toTinyTransform(deviceFromLocalTransform_), mask);
+
+    RetainedSpanKey key;
+    key.deviceFromLocal = deviceFromLocalTransform_;
+    key.paint = *fillPaint;
+    key.clipEpoch = clipEpoch_;
+    key.surfaceSize = pixmapView.size();
+    key.fillRule = path.fillRule;
+
+    RetainedSpanSlot* slot =
+        (retained && !paintBorrowsPattern(*fillPaint)) ? &retained.entry->fill : nullptr;
+    drawRetainablePass(
+        slot, key, pixmapView, mask, retainedSpanStats_,
+        [&] {
+          tiny_skia::Painter::fillPath(pixmapView, tinyPath(), *fillPaint,
+                                       toTinyFillRule(path.fillRule),
+                                       toTinyTransform(deviceFromLocalTransform_), mask);
+        },
+        [&](tiny_skia::SpanCapture& capture) {
+          return capture.fillPath(pixmapView, tinyPath(), *fillPaint, toTinyFillRule(path.fillRule),
+                                  toTinyTransform(deviceFromLocalTransform_), mask);
+        });
+
     if (fillPaintPixmap != nullptr) {
       auto fillPaintView = fillPaintPixmap->mutableView();
-      tiny_skia::Painter::fillPath(fillPaintView, tinyPath, *fillPaint,
+      tiny_skia::Painter::fillPath(fillPaintView, tinyPath(), *fillPaint,
                                    toTinyFillRule(path.fillRule),
                                    toTinyTransform(deviceFromLocalTransform_), mask);
     }
@@ -1372,24 +1605,70 @@ void RendererTinySkia::drawPath(const PathShape& path, const StrokeParams& strok
     // those ranges across ClosePath, filling the seam as if the stroke were solid. Replace only
     // the stroke's ClosePath commands with explicit closing lines so the dash stroker emits caps
     // at that boundary; fills and ordinary dashed/solid strokes keep their closed contours.
+    const bool openDashSeam = tinyStroke.dash.has_value() && dashHasOnlyZeroLengthGaps;
     tiny_skia::Path uncachedDashSeamPath;
-    const tiny_skia::Path* strokePath = &tinyPath;
-    if (tinyStroke.dash.has_value() && dashHasOnlyZeroLengthGaps) {
-      strokePath = &ResolveTinyPath(path, TinyPathCloseBehavior::EndWithLine, uncachedDashSeamPath,
-                                    cacheWiringCheckedRegistry_, frameCounters_);
-    }
+    const tiny_skia::Path* resolvedDashSeamPath = nullptr;
+    const auto strokePath = [&]() -> const tiny_skia::Path& {
+      if (!openDashSeam) {
+        return tinyPath();
+      }
+      if (resolvedDashSeamPath == nullptr) {
+        resolvedDashSeamPath =
+            &ResolveTinyPath(path, TinyPathCloseBehavior::EndWithLine, uncachedDashSeamPath,
+                             cacheWiringCheckedRegistry_, frameCounters_);
+      }
+      return *resolvedDashSeamPath;
+    };
 
     auto pixmapView = currentPixmapView();
-    tiny_skia::Painter::strokePath(pixmapView, *strokePath, *strokePaint, tinyStroke,
-                                   toTinyTransform(deviceFromLocalTransform_), mask);
+
+    RetainedSpanKey key;
+    key.deviceFromLocal = deviceFromLocalTransform_;
+    key.paint = *strokePaint;
+    key.stroke = tinyStroke;
+    key.clipEpoch = clipEpoch_;
+    key.surfaceSize = pixmapView.size();
+    key.openDashSeam = openDashSeam;
+
+    RetainedSpanSlot* slot =
+        (retained && !paintBorrowsPattern(*strokePaint)) ? &retained.entry->stroke : nullptr;
+    drawRetainablePass(
+        slot, key, pixmapView, mask, retainedSpanStats_,
+        [&] {
+          tiny_skia::Painter::strokePath(pixmapView, strokePath(), *strokePaint, tinyStroke,
+                                         toTinyTransform(deviceFromLocalTransform_), mask);
+        },
+        [&](tiny_skia::SpanCapture& capture) {
+          return capture.strokePath(pixmapView, strokePath(), *strokePaint, tinyStroke,
+                                    toTinyTransform(deviceFromLocalTransform_), mask);
+        });
+
     if (strokePaintPixmap != nullptr) {
       auto strokePaintView = strokePaintPixmap->mutableView();
-      tiny_skia::Painter::strokePath(strokePaintView, *strokePath, *strokePaint, tinyStroke,
+      tiny_skia::Painter::strokePath(strokePaintView, strokePath(), *strokePaint, tinyStroke,
                                      toTinyTransform(deviceFromLocalTransform_), mask);
     }
     if (usedPatternStroke) {
       patternStrokePaint_.reset();
     }
+  }
+
+  if (retained) {
+    // Charge the whole entry once both passes have written it, rather than each pass its own
+    // slot: the two share the entry's own footprint, and the paints one pass keeps are only
+    // meaningful next to the coverage the other kept.
+    const std::size_t entryBytes = RetainedEntryBytes(*retained.entry);
+    // Subtract before adding, and never below zero: the running total is maintained across
+    // several paths and an unsigned wrap here would read as a document holding gigabytes.
+    retained.state->liveBytes -= std::min(retained.state->liveBytes, retained.entry->chargedBytes);
+    retained.state->liveBytes += entryBytes;
+    retained.entry->chargedBytes = entryBytes;
+
+    // Evicting removes entries, so nothing may touch `retained.entry` after this point.
+    EvictRetainedSpansToBudget(*path.sourceEntity.registry(), frameToken_);
+    retainedSpanStats_.liveBytes = retained.state->liveBytes;
+    retainedSpanStats_.evictions = retained.state->evictions;
+    retainedSpanStats_.documentDisabled = retained.state->disabled;
   }
 }
 

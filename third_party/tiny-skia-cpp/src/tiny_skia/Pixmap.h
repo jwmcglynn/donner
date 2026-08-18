@@ -49,6 +49,12 @@ class PixmapView {
   /// Clones a rectangular region into a new Pixmap.
   [[nodiscard]] std::optional<Pixmap> cloneRect(const IntRect& rect) const;
 
+  /// Two views compare equal when they name the same bytes: the same address, the same length,
+  /// and the same dimensions. This is view identity, not image equality. Views onto two buffers
+  /// holding identical pixels are not equal, and one view stays equal to itself after the bytes
+  /// it points at are overwritten, because a view does not own them.
+  friend bool operator==(const PixmapView&, const PixmapView&) = default;
+
  private:
   friend class Pixmap;
 

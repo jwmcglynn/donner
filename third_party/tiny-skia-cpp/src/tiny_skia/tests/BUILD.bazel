@@ -22,6 +22,7 @@ tiny_skia_dual_mode_cc_test(
         "LineClipperTest.cpp",
         "MaskTest.cpp",
         "MathTest.cpp",
+        "PaintTest.cpp",
         "PainterTest.cpp",
         "PathGeometryTest.cpp",
         "PathTest.cpp",

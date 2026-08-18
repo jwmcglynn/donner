@@ -874,4 +874,73 @@ TEST(SpanCaptureTest, FullyTransparentPaintStillRecordsCoverage) {
   EXPECT_TRUE(pixmapsEqual(directPixmap, replayPixmap));
 }
 
+// A cache that bounds how much coverage it keeps has to be able to ask what a recording costs
+// and to hand the storage back, so those three accessors are pinned directly.
+
+TEST(SpanCaptureTest, ReportsWhatItHoldsIncludingCapacityKeptAcrossAClear) {
+  const auto path = makeCurvedPath(static_cast<float>(kDim));
+  auto pixmap = makePixmap();
+  auto view = pixmap.mutableView();
+
+  SpanCapture recorded;
+  ASSERT_TRUE(recorded.fillPath(view, path, makeSolidPaint(220, 30, 90, 255), FillRule::Winding,
+                                Transform::identity()));
+
+  const CapturedSpans& spans = recorded.spans();
+  EXPECT_GT(spans.size(), 0u);
+  EXPECT_EQ(spans.byteSize(), spans.size() * sizeof(CapturedSpan));
+  EXPECT_GE(spans.capacityBytes(), spans.byteSize())
+      << "capacity is what the recording actually holds, so it can never be under what it uses";
+
+  const std::size_t heldWhileRecorded = spans.capacityBytes();
+
+  // Capturing a smaller shape reuses the allocation, which is what makes a repeatedly rebuilt
+  // shape allocation-free. The used bytes fall; the held bytes do not.
+  const auto smallPath = makeCurvedPath(static_cast<float>(kDim) / 4.0f);
+  ASSERT_TRUE(recorded.fillPath(view, smallPath, makeSolidPaint(220, 30, 90, 255),
+                                FillRule::Winding, Transform::identity()));
+  EXPECT_LT(recorded.spans().byteSize(), heldWhileRecorded);
+  EXPECT_EQ(recorded.spans().capacityBytes(), heldWhileRecorded);
+}
+
+TEST(SpanCaptureTest, ReleaseDropsTheRunsAndTheirStorage) {
+  const auto path = makeCurvedPath(static_cast<float>(kDim));
+  auto pixmap = makePixmap();
+  auto view = pixmap.mutableView();
+
+  SpanCapture recorded;
+  ASSERT_TRUE(recorded.fillPath(view, path, makeSolidPaint(220, 30, 90, 255), FillRule::Winding,
+                                Transform::identity()));
+  ASSERT_GT(recorded.spans().capacityBytes(), 0u);
+
+  recorded.release();
+  EXPECT_TRUE(recorded.spans().empty());
+  EXPECT_EQ(recorded.spans().byteSize(), 0u);
+  EXPECT_EQ(recorded.spans().capacityBytes(), 0u)
+      << "release exists so a caller that will not replay a recording stops paying for it";
+}
+
+TEST(SpanCaptureTest, ShrinkToFitReturnsUnusedCapacity) {
+  const auto path = makeCurvedPath(static_cast<float>(kDim));
+  auto pixmap = makePixmap();
+  auto view = pixmap.mutableView();
+
+  SpanCapture recorded;
+  ASSERT_TRUE(recorded.fillPath(view, path, makeSolidPaint(220, 30, 90, 255), FillRule::Winding,
+                                Transform::identity()));
+
+  // Work on a copy: clearing it keeps the allocation, which is exactly the unused capacity
+  // shrinking is meant to return.
+  CapturedSpans spans = recorded.spans();
+  const std::size_t heldWhileRecorded = spans.capacityBytes();
+  ASSERT_GT(heldWhileRecorded, 0u);
+
+  spans.clear();
+  EXPECT_TRUE(spans.empty());
+  EXPECT_EQ(spans.capacityBytes(), heldWhileRecorded) << "clearing keeps the allocation";
+
+  spans.shrinkToFit();
+  EXPECT_EQ(spans.capacityBytes(), 0u);
+}
+
 }  // namespace

@@ -119,6 +119,17 @@ class CapturedSpans {
   /// Returns the bytes the recorded runs occupy, excluding unused vector capacity.
   [[nodiscard]] std::size_t byteSize() const { return spans_.size() * sizeof(CapturedSpan); }
 
+  /// Returns the bytes actually held, including capacity kept across a clear.
+  ///
+  /// A cache that bounds how much coverage it retains has to charge itself for what it is
+  /// holding, not for what it is currently using, because clearing runs keeps the allocation.
+  [[nodiscard]] std::size_t capacityBytes() const {
+    return spans_.capacity() * sizeof(CapturedSpan);
+  }
+
+  /// Releases unused capacity, so a cache can return memory it charged itself for.
+  void shrinkToFit() { spans_.shrink_to_fit(); }
+
   /// Returns false when a blit call carried a value the packed record cannot hold. The
   /// recorded runs are then incomplete and must not be replayed.
   [[nodiscard]] bool valid() const { return !overflowed_; }
@@ -202,6 +213,16 @@ class SpanCapture {
 
   /// The runs the last successful capture recorded, in device space.
   [[nodiscard]] const CapturedSpans& spans() const { return spans_; }
+
+  /// Drops the recorded runs and gives their storage back.
+  ///
+  /// Capturing again normally keeps the allocation, which is what makes a repeatedly rebuilt
+  /// shape allocation-free. A caller that has decided not to capture this draw again wants the
+  /// opposite, so it can stop paying for storage it will not use.
+  void release() {
+    spans_.clear();
+    spans_.shrinkToFit();
+  }
 
   /// The paint the last successful capture's draw built its blitter from.
   ///

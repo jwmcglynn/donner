@@ -61,6 +61,13 @@ struct Config {
   std::string input;
   std::string outputPng;
   std::string backend = "geode";
+  /// Retain and replay per-shape coverage (tiny-skia only). Off by default so the reported
+  /// numbers keep meaning the same thing unless the run asks for the retained mode.
+  bool retainedSpans = false;
+  /// Optional third timed frame that follows a document edit, so a run can report what a frame
+  /// costs when something changed rather than only what a settled frame costs. Empty disables
+  /// it; "drag" moves one shape; "pan" moves the whole drawing.
+  std::string mutate;
 };
 
 double toMs(Clock::duration duration) {
@@ -91,6 +98,10 @@ Config parseArgs(int argc, char* argv[]) {
       config.outputPng = arg.substr(9);
     } else if (arg.starts_with("--backend=")) {
       config.backend = arg.substr(10);
+    } else if (arg == "--retained-spans") {
+      config.retainedSpans = true;
+    } else if (arg.starts_with("--mutate=")) {
+      config.mutate = arg.substr(9);
     } else if (config.input.empty()) {
       config.input = arg;
     }
@@ -203,12 +214,62 @@ donner::svg::RendererBitmap renderSettled(Renderer& renderer, donner::svg::SVGDo
   return renderer.takeSnapshot();
 }
 
+/// Edits one element's transform, so the frame after it is a frame where something moved.
+///
+/// "drag" moves a single shape, which is what an editor does while dragging one object: nearly
+/// every shape is unchanged. "pan" moves the outermost group, which changes the device
+/// transform of everything under it, so nothing about the previous frame's rasterization still
+/// applies. Between them they bracket what an edit can cost.
+///
+/// Every iteration parses the document again, so the edit is applied once to a document that
+/// has never seen it. Alternating between an edit and an edit-back would leave half the timed
+/// frames identical to the settled frame that precedes them, and the median would report a
+/// blend of the two rather than the cost of a change.
+///
+/// @return false when the document has no element the mode applies to, in which case no
+///   mutated frame is timed.
+bool applyMutation(donner::svg::SVGDocument& document, const std::string& mode) {
+  if (mode.empty()) {
+    return false;
+  }
+
+  std::optional<donner::svg::SVGElement> target;
+  if (mode == "pan") {
+    target = document.querySelector("g");
+  }
+  if (!target.has_value()) {
+    for (const char* selector : {"path", "rect", "circle", "ellipse", "polygon", "g"}) {
+      target = document.querySelector(selector);
+      if (target.has_value()) {
+        break;
+      }
+    }
+  }
+
+  if (!target.has_value()) {
+    return false;
+  }
+
+  // Prepend rather than replace: the element may already carry the transform that places the
+  // whole drawing, and overwriting it would change how much of the surface the frame covers,
+  // which is the very thing being timed.
+  const std::optional<donner::RcString> original = target->getAttribute("transform");
+  std::string value = "translate(1, 0)";
+  if (original.has_value()) {
+    value += " ";
+    value += std::string_view(*original);
+  }
+
+  target->setAttribute("transform", value);
+  return true;
+}
+
 /// Timed first/second-frame loop. `makeRenderer` constructs a fresh renderer
 /// per iteration, mirroring per-document renderer lifetime in production.
 template <typename MakeRenderer>
 bool runTimedLoop(const Config& config, const std::string& source, MakeRenderer makeRenderer,
                   std::vector<double>& parseTimes, std::vector<double>& firstFrameTimes,
-                  std::vector<double>& secondFrameTimes,
+                  std::vector<double>& secondFrameTimes, std::vector<double>& mutatedFrameTimes,
                   donner::svg::RendererBitmap& finalBitmap) {
   const int total = config.warmup + config.iterations;
   for (int i = 0; i < total; ++i) {
@@ -231,10 +292,26 @@ bool runTimedLoop(const Config& config, const std::string& source, MakeRenderer 
       return false;
     }
 
+    double mutatedFrameMs = 0.0;
+    bool mutated = false;
+    if (applyMutation(document, config.mutate)) {
+      start = Clock::now();
+      const donner::svg::RendererBitmap mutatedBitmap = renderSettled(renderer, document);
+      mutatedFrameMs = toMs(Clock::now() - start);
+      if (mutatedBitmap.empty()) {
+        std::fprintf(stderr, "renderer returned an empty bitmap\n");
+        return false;
+      }
+      mutated = true;
+    }
+
     if (i >= config.warmup) {
       parseTimes.push_back(parseMs);
       firstFrameTimes.push_back(firstFrameMs);
       secondFrameTimes.push_back(secondFrameMs);
+      if (mutated) {
+        mutatedFrameTimes.push_back(mutatedFrameMs);
+      }
       finalBitmap = std::move(secondBitmap);
     }
   }
@@ -288,7 +365,7 @@ int main(int argc, char* argv[]) {
   if (config.input.empty()) {
     std::fprintf(stderr,
                  "usage: engine_compare_bench [--backend=geode|tiny-skia] [--iterations=N] "
-                 "[--warmup=N] [--output=FILE] SVG\n");
+                 "[--warmup=N] [--output=FILE] [--retained-spans] [--mutate=drag|pan] SVG\n");
     return 2;
   }
   if (config.backend != "geode" && config.backend != "tiny-skia") {
@@ -329,19 +406,24 @@ int main(int argc, char* argv[]) {
   std::vector<double> parseTimes;
   std::vector<double> firstFrameTimes;
   std::vector<double> secondFrameTimes;
+  std::vector<double> mutatedFrameTimes;
   donner::svg::RendererBitmap finalBitmap;
   if (geodeMode) {
-    if (!runTimedLoop(config, source,
-                      [&sharedDevice] {
-                        return donner::svg::RendererGeode(sharedDevice, /*verbose=*/false);
-                      },
-                      parseTimes, firstFrameTimes, secondFrameTimes, finalBitmap)) {
+    if (!runTimedLoop(
+            config, source,
+            [&sharedDevice] { return donner::svg::RendererGeode(sharedDevice, /*verbose=*/false); },
+            parseTimes, firstFrameTimes, secondFrameTimes, mutatedFrameTimes, finalBitmap)) {
       return 1;
     }
   } else {
-    if (!runTimedLoop(config, source,
-                      [] { return donner::svg::RendererTinySkia(/*verbose=*/false); },
-                      parseTimes, firstFrameTimes, secondFrameTimes, finalBitmap)) {
+    if (!runTimedLoop(
+            config, source,
+            [&config] {
+              donner::svg::RendererTinySkia renderer(/*verbose=*/false);
+              renderer.setRetainedSpansEnabled(config.retainedSpans);
+              return renderer;
+            },
+            parseTimes, firstFrameTimes, secondFrameTimes, mutatedFrameTimes, finalBitmap)) {
       return 1;
     }
   }
@@ -358,8 +440,14 @@ int main(int argc, char* argv[]) {
       return 1;
     }
   } else {
-    if (!runAllocationPass(source, [] { return donner::svg::RendererTinySkia(/*verbose=*/false); },
-                           parseAllocations, firstAllocations, secondAllocations)) {
+    if (!runAllocationPass(
+            source,
+            [&config] {
+              donner::svg::RendererTinySkia renderer(/*verbose=*/false);
+              renderer.setRetainedSpansEnabled(config.retainedSpans);
+              return renderer;
+            },
+            parseAllocations, firstAllocations, secondAllocations)) {
       return 1;
     }
   }
@@ -376,14 +464,40 @@ int main(int argc, char* argv[]) {
   const BitmapFingerprint fingerprint = fingerprintBitmap(finalBitmap);
   std::printf(
       "RESULT engine=%.*s setup_ms=%.3f parse_ms=%.3f first_ms=%.3f second_ms=%.3f "
-      "width=%d height=%d rss_before_kb=%" PRIu64 " rss_setup_kb=%" PRIu64
-      " peak_rss_kb=%" PRIu64 " rss_supported=%d pixels_hash=%016" PRIx64
-      " nonzero_bytes=%" PRIu64 "\n",
+      "mutated_ms=%.3f "
+      "width=%d height=%d rss_before_kb=%" PRIu64 " rss_setup_kb=%" PRIu64 " peak_rss_kb=%" PRIu64
+      " rss_supported=%d pixels_hash=%016" PRIx64 " nonzero_bytes=%" PRIu64 "\n",
       static_cast<int>(engineName.size()), engineName.data(), setupMs, median(parseTimes),
-      median(firstFrameTimes), median(secondFrameTimes), finalBitmap.dimensions.x,
-      finalBitmap.dimensions.y, static_cast<std::uint64_t>(rssBeforeKb),
+      median(firstFrameTimes), median(secondFrameTimes), median(mutatedFrameTimes),
+      finalBitmap.dimensions.x, finalBitmap.dimensions.y, static_cast<std::uint64_t>(rssBeforeKb),
       static_cast<std::uint64_t>(rssAfterSetupKb), static_cast<std::uint64_t>(peakRssKb),
       kRssSupported ? 1 : 0, fingerprint.hash, fingerprint.nonzeroBytes);
+  if (!geodeMode && config.retainedSpans) {
+    // Untimed pass whose only job is to report what the retained mode held and did on a
+    // settled frame, so the memory the mode costs is measured rather than estimated.
+    donner::svg::SVGDocument retainedDocument;
+    if (parseDocument(source, retainedDocument)) {
+      donner::svg::RendererTinySkia retainedRenderer(/*verbose=*/false);
+      retainedRenderer.setRetainedSpansEnabled(true);
+      retainedRenderer.draw(retainedDocument);
+      const donner::svg::RetainedSpanStats coldStats = retainedRenderer.retainedSpanStats();
+      retainedRenderer.draw(retainedDocument);
+      const donner::svg::RetainedSpanStats steadyStats = retainedRenderer.retainedSpanStats();
+      std::printf(
+          "RETAINED engine=%.*s cold_captured=%" PRIu64 " cold_bypassed=%" PRIu64
+          " steady_replayed=%" PRIu64 " steady_captured=%" PRIu64 " steady_bypassed=%" PRIu64
+          " live_bytes=%" PRIu64 " evictions=%" PRIu64 " disabled=%d\n",
+          static_cast<int>(engineName.size()), engineName.data(),
+          static_cast<std::uint64_t>(coldStats.capturedDraws),
+          static_cast<std::uint64_t>(coldStats.bypassedDraws),
+          static_cast<std::uint64_t>(steadyStats.replayedDraws),
+          static_cast<std::uint64_t>(steadyStats.capturedDraws),
+          static_cast<std::uint64_t>(steadyStats.bypassedDraws),
+          static_cast<std::uint64_t>(steadyStats.liveBytes),
+          static_cast<std::uint64_t>(steadyStats.evictions), steadyStats.documentDisabled ? 1 : 0);
+    }
+  }
+
   printAllocation(engineName, "setup", setupAllocations);
   printAllocation(engineName, "parse", parseAllocations);
   printAllocation(engineName, "first", firstAllocations);

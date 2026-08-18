@@ -3,7 +3,9 @@
 /// @file shaders/Gradient.h
 /// @brief Base gradient data and gradient stop type.
 
+#include <cstddef>
 #include <functional>
+#include <span>
 #include <vector>
 
 #include "tiny_skia/Color.h"
@@ -24,6 +26,8 @@ struct GradientStop {
   static GradientStop create(float position, Color color) {
     return GradientStop{NormalizedF32::newClamped(position), color};
   }
+
+  friend bool operator==(const GradientStop&, const GradientStop&) = default;
 };
 
 /// @internal
@@ -51,6 +55,21 @@ class Gradient {
                                              ColorSpace cs) const;
 
   void applyOpacity(float opacity);
+
+  /// Returns the color stops, in the order the pipeline stages read them.
+  [[nodiscard]] std::span<const GradientStop> stops() const { return stops_; }
+
+  /// Returns the bytes the stop list occupies, for a caller that bounds how much gradient
+  /// state it keeps.
+  [[nodiscard]] std::size_t stopsByteSize() const { return stops_.size() * sizeof(GradientStop); }
+
+  /// Two gradients compare equal when every value the pipeline stages read from them is equal,
+  /// which is what lets a caller decide that a shader it built earlier still describes the
+  /// paint it wants now. Floats compare with IEEE semantics: a stop or transform holding a NaN
+  /// is never equal even to itself, so such a gradient is never reused, and positive and
+  /// negative zero compare equal, which the stages cannot distinguish either. An unequal
+  /// result is at worst a missed reuse.
+  friend bool operator==(const Gradient&, const Gradient&) = default;
 
   Transform transform;
 

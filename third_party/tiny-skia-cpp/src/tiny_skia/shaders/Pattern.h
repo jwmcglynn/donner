@@ -51,6 +51,15 @@ class Pattern {
   /// @internal
   [[nodiscard]] bool pushStages(ColorSpace cs, pipeline::RasterPipelineBuilder& p) const;
 
+  /// Equal when every field describing the tiling is equal, including the view, which
+  /// compares by address rather than by content.
+  ///
+  /// A pattern does not own its pixels, so equality says the two patterns read the same
+  /// buffer, not that the buffer still holds the same image. A caller that keeps work derived
+  /// from a pattern has to know whether anything can have overwritten those pixels since; this
+  /// comparison cannot tell it that.
+  friend bool operator==(const Pattern&, const Pattern&) = default;
+
   /// @internal
   PixmapView pixmap_;
   /// @internal
