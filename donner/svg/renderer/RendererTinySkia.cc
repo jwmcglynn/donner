@@ -1504,10 +1504,9 @@ void RendererTinySkia::drawPath(const PathShape& path, const StrokeParams& strok
 
   // A draw that also paints a context-paint capture surface is two draws sharing one outline,
   // which one retained entry cannot describe, so it rasterizes.
-  const RetainedTarget retained =
-      (fillPaintPixmap == nullptr && strokePaintPixmap == nullptr)
-          ? retainedTargetFor(path.sourceEntity)
-          : RetainedTarget();
+  const RetainedTarget retained = (fillPaintPixmap == nullptr && strokePaintPixmap == nullptr)
+                                      ? retainedTargetFor(path.sourceEntity)
+                                      : RetainedTarget();
 
   const bool usedPatternFill = patternFillPaint_.has_value();
   std::optional<tiny_skia::Paint> fillPaint =
@@ -1532,8 +1531,7 @@ void RendererTinySkia::drawPath(const PathShape& path, const StrokeParams& strok
                                        toTinyTransform(deviceFromLocalTransform_), mask);
         },
         [&](tiny_skia::SpanCapture& capture) {
-          return capture.fillPath(pixmapView, tinyPath(), *fillPaint,
-                                  toTinyFillRule(path.fillRule),
+          return capture.fillPath(pixmapView, tinyPath(), *fillPaint, toTinyFillRule(path.fillRule),
                                   toTinyTransform(deviceFromLocalTransform_), mask);
         });
 

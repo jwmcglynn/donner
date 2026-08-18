@@ -307,13 +307,13 @@ void ExpectRasterizedAndCorrect(const MutationResult& result) {
 }  // namespace
 
 TEST(RendererRetainedSpans, GeometryEditFallsBackToRasterizing) {
-  SVGDocument document = parseFragment(
-      R"svg(<path id="p" d="M 10 10 H 70 V 70 H 10 Z" fill="#20a020"/>)svg");
+  SVGDocument document =
+      parseFragment(R"svg(<path id="p" d="M 10 10 H 70 V 70 H 10 Z" fill="#20a020"/>)svg");
   auto path = document.querySelector("#p");
   ASSERT_TRUE(path.has_value());
 
-  const MutationResult result = renderThroughMutation(
-      document, [&] { path->setAttribute("d", "M 20 20 H 86 V 86 H 20 Z"); });
+  const MutationResult result =
+      renderThroughMutation(document, [&] { path->setAttribute("d", "M 20 20 H 86 V 86 H 20 Z"); });
   ExpectRasterizedAndCorrect(result);
   EXPECT_EQ(result.stats.invalidatedDraws, 0u)
       << "a geometry change drops the whole entry, so the redraw is a fresh capture rather "

@@ -114,9 +114,7 @@ struct RetainedSpansComponent {
   bool ambiguous = false;
 
   /// Bytes both slots are charged against the document budget.
-  [[nodiscard]] std::size_t chargedBytes() const {
-    return fill.chargedBytes + stroke.chargedBytes;
-  }
+  [[nodiscard]] std::size_t chargedBytes() const { return fill.chargedBytes + stroke.chargedBytes; }
 };
 
 /**
@@ -162,18 +160,18 @@ struct RetainedSpanDocumentState {
 /// Draw kinds retention does not reach at all (text, images, layer composites) are not counted
 /// here at all, not even as bypassed.
 struct RetainedSpanStats {
-  std::uint64_t replayedDraws = 0;   ///< Passes served from retained coverage.
-  std::uint64_t capturedDraws = 0;   ///< Passes that rasterized and recorded their coverage.
+  std::uint64_t replayedDraws = 0;     ///< Passes served from retained coverage.
+  std::uint64_t capturedDraws = 0;     ///< Passes that rasterized and recorded their coverage.
   std::uint64_t invalidatedDraws = 0;  ///< Captures that replaced a recording whose key changed.
-  std::uint64_t bypassedDraws = 0;   ///< Passes retention did not apply to.
+  std::uint64_t bypassedDraws = 0;     ///< Passes retention did not apply to.
   /// Draws whose recording was refused at replay, which then rasterized instead. A refusal is
   /// the surface-size guard doing its job, never a dropped shape.
   std::uint64_t refusedReplays = 0;
   /// Draws that could not be recorded (a tiled surface, or a blit the packed record cannot
   /// hold). The pixels are painted regardless.
   std::uint64_t unrecordableDraws = 0;
-  std::size_t liveBytes = 0;    ///< Bytes retained by the document at the end of the frame.
-  std::uint64_t evictions = 0;  ///< Entries evicted to stay under budget.
+  std::size_t liveBytes = 0;      ///< Bytes retained by the document at the end of the frame.
+  std::uint64_t evictions = 0;    ///< Entries evicted to stay under budget.
   bool documentDisabled = false;  ///< Whether the document fell back to immediate mode.
 };
 

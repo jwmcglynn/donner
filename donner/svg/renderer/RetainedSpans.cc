@@ -133,10 +133,9 @@ void EvictRetainedSpansToBudget(Registry& registry, std::uint64_t currentFrame) 
     return;
   }
 
-  std::sort(candidates.begin(), candidates.end(),
-            [](const Candidate& lhs, const Candidate& rhs) {
-              return lhs.lastUsedFrame < rhs.lastUsedFrame;
-            });
+  std::sort(candidates.begin(), candidates.end(), [](const Candidate& lhs, const Candidate& rhs) {
+    return lhs.lastUsedFrame < rhs.lastUsedFrame;
+  });
 
   for (const Candidate& candidate : candidates) {
     if (state->liveBytes <= state->budgetBytes) {

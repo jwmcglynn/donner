@@ -404,23 +404,21 @@ int main(int argc, char* argv[]) {
   std::vector<double> mutatedFrameTimes;
   donner::svg::RendererBitmap finalBitmap;
   if (geodeMode) {
-    if (!runTimedLoop(config, source,
-                      [&sharedDevice] {
-                        return donner::svg::RendererGeode(sharedDevice, /*verbose=*/false);
-                      },
-                      parseTimes, firstFrameTimes, secondFrameTimes, mutatedFrameTimes,
-                      finalBitmap)) {
+    if (!runTimedLoop(
+            config, source,
+            [&sharedDevice] { return donner::svg::RendererGeode(sharedDevice, /*verbose=*/false); },
+            parseTimes, firstFrameTimes, secondFrameTimes, mutatedFrameTimes, finalBitmap)) {
       return 1;
     }
   } else {
-    if (!runTimedLoop(config, source,
-                      [&config] {
-                        donner::svg::RendererTinySkia renderer(/*verbose=*/false);
-                        renderer.setRetainedSpansEnabled(config.retainedSpans);
-                        return renderer;
-                      },
-                      parseTimes, firstFrameTimes, secondFrameTimes, mutatedFrameTimes,
-                      finalBitmap)) {
+    if (!runTimedLoop(
+            config, source,
+            [&config] {
+              donner::svg::RendererTinySkia renderer(/*verbose=*/false);
+              renderer.setRetainedSpansEnabled(config.retainedSpans);
+              return renderer;
+            },
+            parseTimes, firstFrameTimes, secondFrameTimes, mutatedFrameTimes, finalBitmap)) {
       return 1;
     }
   }
@@ -437,13 +435,14 @@ int main(int argc, char* argv[]) {
       return 1;
     }
   } else {
-    if (!runAllocationPass(source,
-                           [&config] {
-                             donner::svg::RendererTinySkia renderer(/*verbose=*/false);
-                             renderer.setRetainedSpansEnabled(config.retainedSpans);
-                             return renderer;
-                           },
-                           parseAllocations, firstAllocations, secondAllocations)) {
+    if (!runAllocationPass(
+            source,
+            [&config] {
+              donner::svg::RendererTinySkia renderer(/*verbose=*/false);
+              renderer.setRetainedSpansEnabled(config.retainedSpans);
+              return renderer;
+            },
+            parseAllocations, firstAllocations, secondAllocations)) {
       return 1;
     }
   }
@@ -461,13 +460,11 @@ int main(int argc, char* argv[]) {
   std::printf(
       "RESULT engine=%.*s setup_ms=%.3f parse_ms=%.3f first_ms=%.3f second_ms=%.3f "
       "mutated_ms=%.3f "
-      "width=%d height=%d rss_before_kb=%" PRIu64 " rss_setup_kb=%" PRIu64
-      " peak_rss_kb=%" PRIu64 " rss_supported=%d pixels_hash=%016" PRIx64
-      " nonzero_bytes=%" PRIu64 "\n",
+      "width=%d height=%d rss_before_kb=%" PRIu64 " rss_setup_kb=%" PRIu64 " peak_rss_kb=%" PRIu64
+      " rss_supported=%d pixels_hash=%016" PRIx64 " nonzero_bytes=%" PRIu64 "\n",
       static_cast<int>(engineName.size()), engineName.data(), setupMs, median(parseTimes),
       median(firstFrameTimes), median(secondFrameTimes), median(mutatedFrameTimes),
-      finalBitmap.dimensions.x,
-      finalBitmap.dimensions.y, static_cast<std::uint64_t>(rssBeforeKb),
+      finalBitmap.dimensions.x, finalBitmap.dimensions.y, static_cast<std::uint64_t>(rssBeforeKb),
       static_cast<std::uint64_t>(rssAfterSetupKb), static_cast<std::uint64_t>(peakRssKb),
       kRssSupported ? 1 : 0, fingerprint.hash, fingerprint.nonzeroBytes);
   if (!geodeMode && config.retainedSpans) {
@@ -481,19 +478,18 @@ int main(int argc, char* argv[]) {
       const donner::svg::RetainedSpanStats coldStats = retainedRenderer.retainedSpanStats();
       retainedRenderer.draw(retainedDocument);
       const donner::svg::RetainedSpanStats steadyStats = retainedRenderer.retainedSpanStats();
-      std::printf("RETAINED engine=%.*s cold_captured=%" PRIu64 " cold_bypassed=%" PRIu64
-                  " steady_replayed=%" PRIu64 " steady_captured=%" PRIu64
-                  " steady_bypassed=%" PRIu64 " live_bytes=%" PRIu64 " evictions=%" PRIu64
-                  " disabled=%d\n",
-                  static_cast<int>(engineName.size()), engineName.data(),
-                  static_cast<std::uint64_t>(coldStats.capturedDraws),
-                  static_cast<std::uint64_t>(coldStats.bypassedDraws),
-                  static_cast<std::uint64_t>(steadyStats.replayedDraws),
-                  static_cast<std::uint64_t>(steadyStats.capturedDraws),
-                  static_cast<std::uint64_t>(steadyStats.bypassedDraws),
-                  static_cast<std::uint64_t>(steadyStats.liveBytes),
-                  static_cast<std::uint64_t>(steadyStats.evictions),
-                  steadyStats.documentDisabled ? 1 : 0);
+      std::printf(
+          "RETAINED engine=%.*s cold_captured=%" PRIu64 " cold_bypassed=%" PRIu64
+          " steady_replayed=%" PRIu64 " steady_captured=%" PRIu64 " steady_bypassed=%" PRIu64
+          " live_bytes=%" PRIu64 " evictions=%" PRIu64 " disabled=%d\n",
+          static_cast<int>(engineName.size()), engineName.data(),
+          static_cast<std::uint64_t>(coldStats.capturedDraws),
+          static_cast<std::uint64_t>(coldStats.bypassedDraws),
+          static_cast<std::uint64_t>(steadyStats.replayedDraws),
+          static_cast<std::uint64_t>(steadyStats.capturedDraws),
+          static_cast<std::uint64_t>(steadyStats.bypassedDraws),
+          static_cast<std::uint64_t>(steadyStats.liveBytes),
+          static_cast<std::uint64_t>(steadyStats.evictions), steadyStats.documentDisabled ? 1 : 0);
     }
   }
 
