@@ -17,8 +17,9 @@ namespace donner::geode {
  * draw call but the pipeline state object can be reused.
  *
  * The bind group layout matches the shader in `shaders/slug_fill.wgsl`:
- * - binding 0: uniform buffer (Uniforms struct: mvp, patternFromPath, viewport,
- *   tileSize, color, fillRule, paintMode, patternOpacity)
+ * - binding 0: uniform buffer (Uniforms struct: mvp, patternFromPath,
+ *   viewport, tileSize, clip state, and the draw-level copy of the paint /
+ *   geometry parameters)
  * - binding 1: storage buffer (read-only) - Band[]
  * - binding 2: storage buffer (read-only) - curve data (flat f32[])
  * - binding 3: pattern tile texture (2D, Float sampleType) - sampled only
@@ -26,10 +27,12 @@ namespace donner::geode {
  * - binding 4: pattern sampler (Filtering) - paired with binding 3.
  * - binding 5: nested clip-mask texture.
  * - binding 6: nested clip-mask sampler.
- * - binding 7: per-instance transforms.
+ * - binding 7: per-instance records. Only a cross-entity batch reads more
+ *   than the transform here; every other draw binds the device's shared
+ *   identity record.
  * - bindings 8 and 9: vertical Band[] and canonical curve data.
- * - bindings 10 and 11: horizontal and vertical dense band grids.
- * - bindings 12 and 13: horizontal and vertical curve-reference indexes.
+ * - binding 10: the four dense grid arrays in one combined storage range,
+ *   indexed through the per-draw or per-instance element bases.
  *
  * The pipeline has no vertex buffer. Its shader expands the uniform bounding polygon into a
  * triangle fan from `vertex_index` and applies the half-pixel AA halo in device space.
@@ -75,6 +78,13 @@ public:
   wgpu::TextureFormat colorFormat() const { return colorFormat_; }
 
 private:
+  /// Compile one variant of the Slug fill pipeline. Both variants share the
+  /// layout, the shader module and the blend state; only the entry points
+  /// differ.
+  wgpu::RenderPipeline buildPipeline(const wgpu::Device& device, const char* label,
+                                     const char* vertexEntryPoint,
+                                     const char* fragmentEntryPoint) const;
+
   wgpu::TextureFormat colorFormat_;
   ScopedWgpuHandle<wgpu::BindGroupLayout> bindGroupLayout_;
   ScopedWgpuHandle<wgpu::PipelineLayout> pipelineLayout_;

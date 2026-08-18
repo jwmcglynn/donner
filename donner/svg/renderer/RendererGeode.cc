@@ -2536,10 +2536,10 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
         // first scene use this frame, or a fresh temporary slot when it
         // was already batched earlier this frame (its primary record is
         // referenced by that earlier batch and must not be overwritten).
-        // The pending singleton reached the batcher without being scene
-        // eligible itself, so its slot may still be holding a record slot
-        // from a slab this device does not own (another device rendered the
-        // document in between). Re-ensure before resolving.
+        // The singleton reached the batcher without being scene eligible
+        // itself, so it may still hold a slot from a slab this device does
+        // not own (another device rendered the document in between): ensure
+        // it against the current slab before resolving.
         const geode::GeodeRecordSlab::Slot* firstRecordSlotPtr = nullptr;
         if (first.slot != nullptr && first.encoded != nullptr &&
             pendingBatch->sourceRegistry != nullptr &&

@@ -185,9 +185,9 @@ struct GeodeDevice::Impl {
 
   // 1-element instance-transform buffer bound by every
   // non-instanced solid fill. Uploaded once at CreateHeadless time,
-  // never modified. Layout matches the WGSL `InstanceTransform`
-  // struct: two vec4f rows carrying the identity affine
-  // `{(1,0,0,0), (0,1,0,0)}`.
+  // never modified. Layout matches the WGSL `InstanceRecord` struct, whose
+  // leading member is a row-major affine as two vec4f rows carrying the
+  // identity `{(1,0,0,0), (0,1,0,0)}` followed by zeroes.
   ScopedWgpuHandle<wgpu::Buffer> identityInstanceRecordBuffer;
 
   // Shared render / compute pipelines. Constructed once per GeodeDevice
@@ -876,14 +876,13 @@ void GeodeDevice::initSharedResources() {
   }
 
   {
-    // One full-size record: the identity affine in the leading two rows,
-    // zeroes everywhere else. Sized to the WGSL `InstanceRecord` stride so
-    // it satisfies the binding's minimum size, and so a draw that binds it
-    // reads an identity transform for instance 0.
-    // 256 bytes: the WGSL `InstanceRecord` stride, which is also the
-    // baseline `minStorageBufferOffsetAlignment`. `GeodeResidentPathComponent.h`
-    // owns the struct and static_asserts the same size, but it includes this
-    // header, so the constant is spelled out here rather than included back.
+    // One full-size record: the identity affine in the leading two rows and
+    // zeroes everywhere else, so a draw that binds it reads an identity
+    // transform for instance 0. 256 bytes is the WGSL `InstanceRecord`
+    // stride and the baseline `minStorageBufferOffsetAlignment`;
+    // `GeodeResidentPathComponent.h` owns the struct and static_asserts the
+    // same size, but it includes this header, so the constant is spelled out
+    // here rather than included back.
     constexpr size_t kInstanceRecordFloats = 256 / sizeof(float);
     float identityRecord[kInstanceRecordFloats] = {};
     identityRecord[0] = 1.0f;

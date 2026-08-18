@@ -102,62 +102,21 @@ GeodePipeline::GeodePipeline(const wgpu::Device& device, wgpu::TextureFormat col
   WGPUBindGroupLayout layouts[1] = {bindGroupLayout_.get()};
   plDesc.bindGroupLayouts = layouts;
   pipelineLayout_.reset(device.createPipelineLayout(plDesc));
-  ScopedWgpuHandle<wgpu::PipelineLayout>& pipelineLayout = pipelineLayout_;
 
   // ----- Shader module -----
   shader_.reset(createSlugFillShader(device));
-  ScopedWgpuHandle<wgpu::ShaderModule>& shader = shader_;
-
-  // ----- Fragment / blending -----
-  wgpu::BlendState blend = {};
-  // Standard premultiplied-alpha source-over blending.
-  blend.color.srcFactor = wgpu::BlendFactor::One;
-  blend.color.dstFactor = wgpu::BlendFactor::OneMinusSrcAlpha;
-  blend.color.operation = wgpu::BlendOperation::Add;
-  blend.alpha.srcFactor = wgpu::BlendFactor::One;
-  blend.alpha.dstFactor = wgpu::BlendFactor::OneMinusSrcAlpha;
-  blend.alpha.operation = wgpu::BlendOperation::Add;
-
-  wgpu::ColorTargetState colorTarget = {};
-  colorTarget.format = colorFormat_;
-  colorTarget.blend = &blend;
-  colorTarget.writeMask = wgpu::ColorWriteMask::All;
-
-  wgpu::FragmentState fragmentState = {};
-  fragmentState.module = shader.get();
-  fragmentState.entryPoint = wgpuLabel("fs_main");
-  fragmentState.targetCount = 1;
-  fragmentState.targets = &colorTarget;
 
   // ----- Render pipeline -----
-  wgpu::RenderPipelineDescriptor rpDesc = {};
-  rpDesc.label = wgpuLabel("GeodeSlugFill");
-  rpDesc.layout = pipelineLayout.get();
-
-  rpDesc.vertex.module = shader.get();
-  rpDesc.vertex.entryPoint = wgpuLabel("vs_main");
-  rpDesc.vertex.bufferCount = 0;
-  rpDesc.vertex.buffers = nullptr;
-
-  rpDesc.primitive.topology = wgpu::PrimitiveTopology::TriangleList;
-  rpDesc.primitive.cullMode = wgpu::CullMode::None;
-
-  rpDesc.fragment = &fragmentState;
-  rpDesc.multisample.count = 1;
-  rpDesc.multisample.mask = 0xFFFFFFFF;
-
-  pipeline_.reset(device.createRenderPipeline(rpDesc));
+  // The default entry points take the draw's paint and geometry from the
+  // uniform, which serves every draw whose instances share one paint and one
+  // encoded path. `batchedPipeline` builds the record-reading variant.
+  pipeline_.reset(buildPipeline(device, "GeodeSlugFill", "vs_main", "fs_main"));
 }
 
-const wgpu::RenderPipeline& GeodePipeline::batchedPipeline(const wgpu::Device& device) const {
-  if (batchedPipeline_) {
-    return batchedPipeline_.get();
-  }
-
-  // Identical state to the default pipeline - same layout, same shader
-  // module, same blending - differing only in the entry points that read
-  // paint and geometry from each instance's record. Built on first use
-  // because only a cross-entity batch needs it.
+wgpu::RenderPipeline GeodePipeline::buildPipeline(const wgpu::Device& device, const char* label,
+                                                  const char* vertexEntryPoint,
+                                                  const char* fragmentEntryPoint) const {
+  // Standard premultiplied-alpha source-over blending.
   wgpu::BlendState blend = {};
   blend.color.srcFactor = wgpu::BlendFactor::One;
   blend.color.dstFactor = wgpu::BlendFactor::OneMinusSrcAlpha;
@@ -173,16 +132,16 @@ const wgpu::RenderPipeline& GeodePipeline::batchedPipeline(const wgpu::Device& d
 
   wgpu::FragmentState fragmentState = {};
   fragmentState.module = shader_.get();
-  fragmentState.entryPoint = wgpuLabel("fs_main_batched");
+  fragmentState.entryPoint = wgpuLabel(fragmentEntryPoint);
   fragmentState.targetCount = 1;
   fragmentState.targets = &colorTarget;
 
   wgpu::RenderPipelineDescriptor rpDesc = {};
-  rpDesc.label = wgpuLabel("GeodeSlugFillBatched");
+  rpDesc.label = wgpuLabel(label);
   rpDesc.layout = pipelineLayout_.get();
 
   rpDesc.vertex.module = shader_.get();
-  rpDesc.vertex.entryPoint = wgpuLabel("vs_main_batched");
+  rpDesc.vertex.entryPoint = wgpuLabel(vertexEntryPoint);
   rpDesc.vertex.bufferCount = 0;
   rpDesc.vertex.buffers = nullptr;
 
@@ -193,7 +152,18 @@ const wgpu::RenderPipeline& GeodePipeline::batchedPipeline(const wgpu::Device& d
   rpDesc.multisample.count = 1;
   rpDesc.multisample.mask = 0xFFFFFFFF;
 
-  batchedPipeline_.reset(device.createRenderPipeline(rpDesc));
+  return device.createRenderPipeline(rpDesc);
+}
+
+const wgpu::RenderPipeline& GeodePipeline::batchedPipeline(const wgpu::Device& device) const {
+  if (!batchedPipeline_) {
+    // Identical state to the default pipeline - same layout, same shader
+    // module, same blending - differing only in the entry points that read
+    // paint and geometry from each instance's record. Built on first use
+    // because only a cross-entity batch needs it.
+    batchedPipeline_.reset(
+        buildPipeline(device, "GeodeSlugFillBatched", "vs_main_batched", "fs_main_batched"));
+  }
   return batchedPipeline_.get();
 }
 
