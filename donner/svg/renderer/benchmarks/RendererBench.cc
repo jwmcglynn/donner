@@ -17,6 +17,10 @@
 ///   //donner/svg/renderer/benchmarks:renderer_bench -- \
 ///   donner/svg/renderer/testdata/Ghostscript_Tiger.svg
 /// ```
+///
+/// Text workloads otherwise resolve every family to the built-in fallback font. To measure them
+/// against real document fonts, register one with `--font-face=Family=/path/to/font.ttf`
+/// (repeatable); each is announced to every parsed document as an `@font-face` rule.
 
 #include <algorithm>
 #include <chrono>
@@ -28,12 +32,17 @@
 #include <fstream>
 #include <memory>
 #include <numeric>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
 
 #include "donner/base/ParseWarningSink.h"
+#include "donner/base/RcString.h"
+#include "donner/css/FontFace.h"
 #include "donner/svg/SVGDocument.h"
+#include "donner/svg/SVGElement.h"
+#include "donner/svg/components/resources/ResourceManagerContext.h"
 #include "donner/svg/parser/SVGParser.h"
 #include "donner/svg/renderer/RendererGeode.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
@@ -122,6 +131,8 @@ struct Sample {
   double retainedDrawMs = 0.0;
   double retainedSnapshotMs = 0.0;
   double retainedSettledMs = 0.0;
+  double mutatedDrawMs = 0.0;
+  double mutatedSettledMs = 0.0;
   double gpuRenderPassMs = 0.0;
   double gpuTotalMs = 0.0;
 };
@@ -150,10 +161,27 @@ Stats computeStats(std::vector<double>& values) {
 // Configuration.
 // ---------------------------------------------------------------------------
 
+/// A font file to register as an `@font-face` rule on every parsed document, so text workloads can
+/// be measured against real document fonts instead of the built-in fallback.
+struct FontFaceSpec {
+  std::string family;
+  std::shared_ptr<const std::vector<uint8_t>> data;
+};
+
 struct Config {
   int iterations = 10;
   int warmup = 2;
+  std::vector<FontFaceSpec> fontFaces;
 };
+
+std::shared_ptr<const std::vector<uint8_t>> readBinaryFile(const std::filesystem::path& path) {
+  std::ifstream file(path, std::ios::binary);
+  if (!file) {
+    return nullptr;
+  }
+  return std::make_shared<const std::vector<uint8_t>>(std::istreambuf_iterator<char>(file),
+                                                      std::istreambuf_iterator<char>());
+}
 
 Config parseArgs(int argc, char* argv[], std::vector<std::string>& outFiles) {
   Config cfg;
@@ -163,11 +191,51 @@ Config parseArgs(int argc, char* argv[], std::vector<std::string>& outFiles) {
       cfg.iterations = std::max(1, std::atoi(arg.substr(13).data()));
     } else if (arg.starts_with("--warmup=")) {
       cfg.warmup = std::max(0, std::atoi(arg.substr(9).data()));
+    } else if (arg.starts_with("--font-face=")) {
+      const std::string_view value = arg.substr(12);
+      const size_t split = value.find('=');
+      if (split == std::string_view::npos) {
+        std::fprintf(stderr, "error: --font-face expects Family=/path/to/font\n");
+        continue;
+      }
+      const std::filesystem::path path(value.substr(split + 1));
+      auto data = readBinaryFile(path);
+      if (!data || data->empty()) {
+        std::fprintf(stderr, "warning: skipping unreadable font: %s\n", path.c_str());
+        continue;
+      }
+      cfg.fontFaces.push_back(FontFaceSpec{std::string(value.substr(0, split)), std::move(data)});
     } else {
       outFiles.emplace_back(arg);
     }
   }
   return cfg;
+}
+
+/// Announce the configured fonts to a freshly parsed document, the way a document's own
+/// `@font-face` rules would arrive.
+void registerFontFaces(donner::svg::SVGDocument& document,
+                       const std::vector<FontFaceSpec>& fontFaces) {
+  if (fontFaces.empty()) {
+    return;
+  }
+
+  std::vector<donner::css::FontFace> faces;
+  faces.reserve(fontFaces.size());
+  for (const FontFaceSpec& spec : fontFaces) {
+    donner::css::FontFace face;
+    face.familyName = donner::RcString(spec.family);
+    donner::css::FontFaceSource source;
+    source.kind = donner::css::FontFaceSource::Kind::Data;
+    // Application-supplied bytes named on the command line, not document-provided.
+    source.trusted = true;
+    source.payload = spec.data;
+    face.sources.push_back(std::move(source));
+    faces.push_back(std::move(face));
+  }
+
+  document.registry().ctx().get<donner::svg::components::ResourceManagerContext>().addFontFaces(
+      faces);
 }
 
 std::string readFile(const std::filesystem::path& path) {
@@ -185,6 +253,45 @@ std::string readFile(const std::filesystem::path& path) {
 }
 
 // ---------------------------------------------------------------------------
+// Mutate-every-frame workload.
+// ---------------------------------------------------------------------------
+
+/// Frames drawn per iteration in the mutate-every-frame phase. Enough that the phase reports a
+/// steady state rather than the first mutation's one-off costs.
+constexpr int kMutationRounds = 8;
+
+/// The mutation an editor's drag or typing loop performs: one attribute on one element changes and
+/// the whole document is drawn again. Text is moved by its `x`, which changes where the glyphs land
+/// but not which outlines they are, so a well-behaved renderer should approach its unchanged-frame
+/// cost. Documents with no text toggle a presentation attribute on the root instead, so the frame
+/// still cannot take the nothing-is-dirty fast path.
+class DocumentMutator {
+public:
+  explicit DocumentMutator(donner::svg::SVGDocument& document)
+      : target_(document.querySelector("text")) {
+    if (!target_) {
+      target_ = donner::svg::SVGElement(document.svgElement());
+      movesText_ = false;
+    }
+  }
+
+  void apply(int round) {
+    if (movesText_) {
+      target_->setAttribute("x", std::to_string(10 + (round % kMutationRounds)));
+    } else {
+      target_->setAttribute("opacity", (round % 2) == 0 ? "1" : "0.999");
+    }
+  }
+
+  /// True when the mutation moves real text, which is the case the phase is about.
+  bool movesText() const { return movesText_; }
+
+private:
+  std::optional<donner::svg::SVGElement> target_;
+  bool movesText_ = true;
+};
+
+// ---------------------------------------------------------------------------
 // Benchmark driver.
 // ---------------------------------------------------------------------------
 
@@ -196,6 +303,8 @@ struct PhaseStats {
   Stats retainedDraw;
   Stats retainedSnapshot;
   Stats retainedSettled;
+  Stats mutatedDraw;
+  Stats mutatedSettled;
   Stats gpuRenderPass;
   Stats gpuTotal;
 };
@@ -222,6 +331,7 @@ PhaseStats benchmarkWorkload(const Workload& workload, donner::svg::RendererGeod
       return {};
     }
     donner::svg::SVGDocument doc = std::move(result.result());
+    registerFontFaces(doc, cfg.fontFaces);
 
     // -- Draw through snapshot readback (settled wall-clock) --
     const auto settledStart = Clock::now();
@@ -256,12 +366,33 @@ PhaseStats benchmarkWorkload(const Workload& workload, donner::svg::RendererGeod
     s.retainedSettledMs = toMs(t1 - retainedStart);
     (void)bitmap;
 
+    // -- Mutate every frame (the editor's drag/typing loop) --
+    DocumentMutator mutator(doc);
+    std::vector<double> mutatedDraws;
+    std::vector<double> mutatedSettleds;
+    mutatedDraws.reserve(kMutationRounds);
+    mutatedSettleds.reserve(kMutationRounds);
+    for (int round = 0; round < kMutationRounds; ++round) {
+      mutator.apply(round);
+      const auto mutatedStart = Clock::now();
+      t0 = mutatedStart;
+      renderer.draw(doc);
+      t1 = Clock::now();
+      mutatedDraws.push_back(toMs(t1 - t0));
+      bitmap = renderer.takeSnapshot();
+      mutatedSettleds.push_back(toMs(Clock::now() - mutatedStart));
+      (void)bitmap;
+    }
+    s.mutatedDrawMs = computeStats(mutatedDraws).median;
+    s.mutatedSettledMs = computeStats(mutatedSettleds).median;
+
     samples.push_back(s);
   }
 
   // Discard warmup samples.
   std::vector<double> parseVals, drawVals, snapVals, settledVals, retainedDrawVals,
-      retainedSnapVals, retainedSettledVals, gpuRpVals, gpuTotVals;
+      retainedSnapVals, retainedSettledVals, mutatedDrawVals, mutatedSettledVals, gpuRpVals,
+      gpuTotVals;
   const auto reserve = static_cast<size_t>(cfg.iterations);
   parseVals.reserve(reserve);
   drawVals.reserve(reserve);
@@ -270,6 +401,8 @@ PhaseStats benchmarkWorkload(const Workload& workload, donner::svg::RendererGeod
   retainedDrawVals.reserve(reserve);
   retainedSnapVals.reserve(reserve);
   retainedSettledVals.reserve(reserve);
+  mutatedDrawVals.reserve(reserve);
+  mutatedSettledVals.reserve(reserve);
   gpuRpVals.reserve(reserve);
   gpuTotVals.reserve(reserve);
 
@@ -282,6 +415,8 @@ PhaseStats benchmarkWorkload(const Workload& workload, donner::svg::RendererGeod
     retainedDrawVals.push_back(s.retainedDrawMs);
     retainedSnapVals.push_back(s.retainedSnapshotMs);
     retainedSettledVals.push_back(s.retainedSettledMs);
+    mutatedDrawVals.push_back(s.mutatedDrawMs);
+    mutatedSettledVals.push_back(s.mutatedSettledMs);
     gpuRpVals.push_back(s.gpuRenderPassMs);
     gpuTotVals.push_back(s.gpuTotalMs);
   }
@@ -293,6 +428,8 @@ PhaseStats benchmarkWorkload(const Workload& workload, donner::svg::RendererGeod
           computeStats(retainedDrawVals),
           computeStats(retainedSnapVals),
           computeStats(retainedSettledVals),
+          computeStats(mutatedDrawVals),
+          computeStats(mutatedSettledVals),
           computeStats(gpuRpVals),
           computeStats(gpuTotVals)};
 }
@@ -374,6 +511,8 @@ int main(int argc, char* argv[]) {
     printPhase("Ret-Draw:", ps.retainedDraw);
     printPhase("Ret-Snap:", ps.retainedSnapshot);
     printPhase("Ret-Settled:", ps.retainedSettled);
+    printPhase("Mut-Draw:", ps.mutatedDraw);
+    printPhase("Mut-Settled:", ps.mutatedSettled);
     if (sharedDevice->supportsTimestamps()) {
       printPhase("GPU-RP:", ps.gpuRenderPass);
       printPhase("GPU-Tot:", ps.gpuTotal);
