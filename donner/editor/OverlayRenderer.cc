@@ -939,11 +939,7 @@ void OverlayRenderer::drawChromeFromSnapshot(svg::RendererInterface& renderer,
     paint.strokeParams.strokeWidth = preview.strokeWidthDoc;
     renderer.setPaint(paint);
     renderer.setTransform(snapshot.canvasFromDoc);
-    svg::PathShape shape;
-    shape.path = preview.pathDoc;
-    shape.fillRule = preview.fillRule;
-    shape.parentFromEntity = Transform2d();
-    renderer.drawPath(shape, paint.strokeParams);
+    renderer.drawPath(svg::PathShape{&preview.pathDoc, preview.fillRule}, paint.strokeParams);
   }
 
   if (!snapshot.textSelectionQuadsDoc.empty()) {
@@ -951,10 +947,8 @@ void OverlayRenderer::drawChromeFromSnapshot(svg::RendererInterface& renderer,
     renderer.setPaint(selectionFill);
     renderer.setTransform(snapshot.canvasFromDoc);
     for (const std::array<Vector2d, 4>& corners : snapshot.textSelectionQuadsDoc) {
-      svg::PathShape shape;
-      shape.path = PathForCorners(corners);
-      shape.parentFromEntity = Transform2d();
-      renderer.drawPath(shape, selectionFill.strokeParams);
+      const Path quad = PathForCorners(corners);
+      renderer.drawPath(svg::PathShape{&quad}, selectionFill.strokeParams);
     }
   }
 
@@ -971,10 +965,8 @@ void OverlayRenderer::drawChromeFromSnapshot(svg::RendererInterface& renderer,
       PathBuilder builder;
       builder.moveTo(baseline.startDoc);
       builder.lineTo(baseline.endDoc);
-      svg::PathShape shape;
-      shape.path = builder.build();
-      shape.parentFromEntity = Transform2d();
-      renderer.drawPath(shape, baselinePaint.strokeParams);
+      const Path baselinePath = builder.build();
+      renderer.drawPath(svg::PathShape{&baselinePath}, baselinePaint.strokeParams);
     }
   }
 
@@ -984,10 +976,7 @@ void OverlayRenderer::drawChromeFromSnapshot(svg::RendererInterface& renderer,
     renderer.setPaint(hoverShapePaint);
     renderer.setTransform(snapshot.canvasFromDoc);
     for (const auto& item : snapshot.hoverPaths) {
-      svg::PathShape shape;
-      shape.path = item.pathDoc;
-      shape.parentFromEntity = Transform2d();
-      renderer.drawPath(shape, hoverShapePaint.strokeParams);
+      renderer.drawPath(svg::PathShape{&item.pathDoc}, hoverShapePaint.strokeParams);
     }
   } else if (!snapshot.hoverAabbsDoc.empty()) {
     const svg::PaintParams hoverBoundsPaint =
@@ -1012,10 +1001,7 @@ void OverlayRenderer::drawChromeFromSnapshot(svg::RendererInterface& renderer,
       const svg::PaintParams& paint =
           item.displayNone ? displayNoneSelectionStrokePaint : selectionStrokePaint;
       renderer.setPaint(paint);
-      svg::PathShape shape;
-      shape.path = item.pathDoc;
-      shape.parentFromEntity = Transform2d();
-      renderer.drawPath(shape, paint.strokeParams);
+      renderer.drawPath(svg::PathShape{&item.pathDoc}, paint.strokeParams);
     }
   }
 
@@ -1027,10 +1013,7 @@ void OverlayRenderer::drawChromeFromSnapshot(svg::RendererInterface& renderer,
         MakePathControlLinePaint(drawScale.selectionStrokeWidthWorld);
     renderer.setPaint(previewPaint);
     renderer.setTransform(snapshot.canvasFromDoc);
-    svg::PathShape shape;
-    shape.path = *snapshot.penPreviewSegmentDoc;
-    shape.parentFromEntity = Transform2d();
-    renderer.drawPath(shape, previewPaint.strokeParams);
+    renderer.drawPath(svg::PathShape{&*snapshot.penPreviewSegmentDoc}, previewPaint.strokeParams);
   }
   if (snapshot.penCloseAffordanceDoc.has_value()) {
     const svg::PaintParams affordancePaint = MakeHandlePaint(drawScale.selectionStrokeWidthWorld);
@@ -1063,10 +1046,8 @@ void OverlayRenderer::drawChromeFromSnapshot(svg::RendererInterface& renderer,
       PathBuilder builder;
       builder.moveTo(preview.baselineStartDoc);
       builder.lineTo(preview.baselineEndDoc);
-      svg::PathShape shape;
-      shape.path = builder.build();
-      shape.parentFromEntity = Transform2d();
-      renderer.drawPath(shape, baselinePaint.strokeParams);
+      const Path baselinePath = builder.build();
+      renderer.drawPath(svg::PathShape{&baselinePath}, baselinePaint.strokeParams);
     }
 
     const svg::PaintParams ibeamPaint =
@@ -1083,10 +1064,8 @@ void OverlayRenderer::drawChromeFromSnapshot(svg::RendererInterface& renderer,
       builder.lineTo(preview.ibeamTopDoc + Vector2d(serifHalf, 0.0));
       builder.moveTo(preview.ibeamBottomDoc - Vector2d(serifHalf, 0.0));
       builder.lineTo(preview.ibeamBottomDoc + Vector2d(serifHalf, 0.0));
-      svg::PathShape shape;
-      shape.path = builder.build();
-      shape.parentFromEntity = Transform2d();
-      renderer.drawPath(shape, ibeamPaint.strokeParams);
+      const Path ibeamPath = builder.build();
+      renderer.drawPath(svg::PathShape{&ibeamPath}, ibeamPaint.strokeParams);
     }
   }
 
@@ -1102,10 +1081,8 @@ void OverlayRenderer::drawChromeFromSnapshot(svg::RendererInterface& renderer,
     const svg::PaintParams framePaint =
         MakeSelectionStrokePaint(drawScale.selectionStrokeWidthWorld, frameOpacity);
     renderer.setPaint(framePaint);
-    svg::PathShape frameShape;
-    frameShape.path = PathForCorners(*snapshot.textFrameCornersDoc);
-    frameShape.parentFromEntity = Transform2d();
-    renderer.drawPath(frameShape, framePaint.strokeParams);
+    const Path framePath = PathForCorners(*snapshot.textFrameCornersDoc);
+    renderer.drawPath(svg::PathShape{&framePath}, framePaint.strokeParams);
 
     // Use the select tool's handle-box helper directly. Deriving this size
     // from stroke width double-counted device scale on high-density displays.
@@ -1125,10 +1102,8 @@ void OverlayRenderer::drawChromeFromSnapshot(svg::RendererInterface& renderer,
     PathBuilder caretBuilder;
     caretBuilder.moveTo(snapshot.textCaretDoc->topDoc);
     caretBuilder.lineTo(snapshot.textCaretDoc->bottomDoc);
-    svg::PathShape caretShape;
-    caretShape.path = caretBuilder.build();
-    caretShape.parentFromEntity = Transform2d();
-    renderer.drawPath(caretShape, caretPaint.strokeParams);
+    const Path caretPath = caretBuilder.build();
+    renderer.drawPath(svg::PathShape{&caretPath}, caretPaint.strokeParams);
   }
 
   if (!snapshot.pathControlLinesDoc.empty()) {
@@ -1140,10 +1115,8 @@ void OverlayRenderer::drawChromeFromSnapshot(svg::RendererInterface& renderer,
       PathBuilder builder;
       builder.moveTo(line.anchorDoc);
       builder.lineTo(line.controlDoc);
-      svg::PathShape shape;
-      shape.path = builder.build();
-      shape.parentFromEntity = Transform2d();
-      renderer.drawPath(shape, pathControlLinePaint.strokeParams);
+      const Path controlLinePath = builder.build();
+      renderer.drawPath(svg::PathShape{&controlLinePath}, pathControlLinePaint.strokeParams);
     }
   }
 
@@ -1177,10 +1150,8 @@ void OverlayRenderer::drawChromeFromSnapshot(svg::RendererInterface& renderer,
   if (snapshot.orientedBoundsDoc.has_value()) {
     renderer.setPaint(selectionStrokePaint);
     renderer.setTransform(snapshot.canvasFromDoc);
-    svg::PathShape shape;
-    shape.path = PathForCorners(snapshot.orientedBoundsDoc->cornersDoc);
-    shape.parentFromEntity = Transform2d();
-    renderer.drawPath(shape, selectionStrokePaint.strokeParams);
+    const Path boundsPath = PathForCorners(snapshot.orientedBoundsDoc->cornersDoc);
+    renderer.drawPath(svg::PathShape{&boundsPath}, selectionStrokePaint.strokeParams);
   } else if (!snapshot.aabbsDoc.empty()) {
     renderer.setPaint(selectionStrokePaint);
     renderer.setTransform(snapshot.canvasFromDoc);
@@ -1231,10 +1202,8 @@ void OverlayRenderer::drawChromeFromSnapshot(svg::RendererInterface& renderer,
         MakeLockedFlashStrokePaint(lockedFlashStrokeWidthWorld, snapshot.lockedFlash->intensity);
     renderer.setPaint(lockedFlashPaint);
     renderer.setTransform(snapshot.canvasFromDoc);
-    svg::PathShape shape;
-    shape.path = snapshot.lockedFlash->pathDoc;
-    shape.parentFromEntity = Transform2d();
-    renderer.drawPath(shape, lockedFlashPaint.strokeParams);
+    renderer.drawPath(svg::PathShape{&snapshot.lockedFlash->pathDoc},
+                      lockedFlashPaint.strokeParams);
   }
 }
 

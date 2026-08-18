@@ -1129,7 +1129,8 @@ void RendererTinySkia::drawPath(const PathShape& path, const StrokeParams& strok
     return;
   }
 
-  const tiny_skia::Path tinyPath = toTinyPath(path.path);
+  const Path& pathGeometry = path.pathOrEmpty();
+  const tiny_skia::Path tinyPath = toTinyPath(pathGeometry);
   const tiny_skia::Mask* mask = currentClipMask_.has_value() ? &*currentClipMask_ : nullptr;
   tiny_skia::Pixmap* fillPaintPixmap =
       !surfaceStack_.empty() && surfaceStack_.back().fillPaintPixmap.has_value()
@@ -1142,7 +1143,7 @@ void RendererTinySkia::drawPath(const PathShape& path, const StrokeParams& strok
 
   const bool usedPatternFill = patternFillPaint_.has_value();
   std::optional<tiny_skia::Paint> fillPaint =
-      paint_.drawFillComponent ? makeFillPaint(path.path.bounds()) : std::nullopt;
+      paint_.drawFillComponent ? makeFillPaint(pathGeometry.bounds()) : std::nullopt;
   if (fillPaint) {
     auto pixmapView = currentPixmapView();
     tiny_skia::Painter::fillPath(pixmapView, tinyPath, *fillPaint, toTinyFillRule(path.fillRule),
@@ -1161,7 +1162,7 @@ void RendererTinySkia::drawPath(const PathShape& path, const StrokeParams& strok
   StrokeParams adjustedStroke = stroke;
   if (!adjustedStroke.dashArray.empty() && adjustedStroke.pathLength > 0.0 &&
       !NearZero(adjustedStroke.pathLength)) {
-    const double actualLength = path.path.pathLength();
+    const double actualLength = pathGeometry.pathLength();
     const double dashUnitsScale = actualLength / adjustedStroke.pathLength;
     for (double& dash : adjustedStroke.dashArray) {
       dash *= dashUnitsScale;
@@ -1171,7 +1172,7 @@ void RendererTinySkia::drawPath(const PathShape& path, const StrokeParams& strok
 
   const bool usedPatternStroke = patternStrokePaint_.has_value();
   std::optional<tiny_skia::Paint> strokePaint =
-      paint_.drawStrokeComponent ? makeStrokePaint(path.path.bounds(), adjustedStroke)
+      paint_.drawStrokeComponent ? makeStrokePaint(pathGeometry.bounds(), adjustedStroke)
                                  : std::nullopt;
   if (strokePaint) {
     tiny_skia::Stroke tinyStroke;
@@ -1210,7 +1211,7 @@ void RendererTinySkia::drawPath(const PathShape& path, const StrokeParams& strok
     std::optional<tiny_skia::Path> openDashSeamPath;
     const tiny_skia::Path* strokePath = &tinyPath;
     if (tinyStroke.dash.has_value() && dashHasOnlyZeroLengthGaps) {
-      openDashSeamPath = toTinyPath(path.path, TinyPathCloseBehavior::EndWithLine);
+      openDashSeamPath = toTinyPath(pathGeometry, TinyPathCloseBehavior::EndWithLine);
       strokePath = &*openDashSeamPath;
     }
 
@@ -2091,7 +2092,7 @@ std::optional<tiny_skia::Mask> RendererTinySkia::buildClipMask(const ResolvedCli
     }
   }
 
-  const auto renderShapeMask = [&](const PathShape& shape) -> std::optional<tiny_skia::Mask> {
+  const auto renderShapeMask = [&](const ClipPathShape& shape) -> std::optional<tiny_skia::Mask> {
     std::optional<tiny_skia::Mask> shapeMask = createMask();
     if (!shapeMask.has_value()) {
       return std::nullopt;
@@ -2127,7 +2128,7 @@ std::optional<tiny_skia::Mask> RendererTinySkia::buildClipMask(const ResolvedCli
         [&](int layer) -> std::optional<tiny_skia::Mask> {
       std::optional<tiny_skia::Mask> layerMask;
       while (index >= 0 && clip.clipPaths[static_cast<std::size_t>(index)].layer == layer) {
-        const PathShape& shape = clip.clipPaths[static_cast<std::size_t>(index)];
+        const ClipPathShape& shape = clip.clipPaths[static_cast<std::size_t>(index)];
         std::optional<tiny_skia::Mask> shapeMask = renderShapeMask(shape);
         --index;
 

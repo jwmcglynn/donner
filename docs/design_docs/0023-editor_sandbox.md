@@ -361,6 +361,12 @@ Three properties of the existing interface make this work:
    deep-copy constructor explicitly
    ([RendererInterface.h:109-127](../../donner/svg/renderer/RendererInterface.h))
    because the driver already needs it. That deep copy is the serializer.
+
+   **No longer accurate for `PathShape`.** `PathShape::path` is now a borrowed
+   `const Path*` into the source document, not an owned `Path`, so a future
+   marshaller cannot copy the struct: it must materialize an owned `Path` at
+   decode time and point the view at that storage. Clip paths kept value
+   semantics under the separate owning `ClipPathShape` type.
 3. **Driver is already separated from backend.** `RendererDriver` consumes
    an `SVGDocument` and emits calls into a `RendererInterface&`. It doesn't
    know what backend is on the other side. Swapping a real backend for a

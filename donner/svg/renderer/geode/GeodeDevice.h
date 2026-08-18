@@ -4,7 +4,9 @@
 
 #include <atomic>
 #include <cstddef>
+#include <map>
 #include <memory>
+#include <tuple>
 #include <vector>
 #include <webgpu/webgpu.hpp>
 
@@ -315,6 +317,48 @@ public:
   }
 
   /**
+   * Key identifying a scene-batch bind group by its exact buffer bindings:
+   * the shared batch uniform allocation, the geometry slab chunk, and the
+   * record span. The dummy texture/sampler bindings are device-owned
+   * singletons, so they never contribute to the key.
+   *
+   * Scene batches bind pooled arena and slab buffers whose identities and
+   * offsets are stable across steady-state frames, so a cached bind group
+   * keyed this way is reusable frame over frame (keeping the per-frame
+   * bind-group create count flat; the GeodePerf ceilings pin this). A
+   * cached entry holds a reference to its bind group, which in turn keeps
+   * every bound buffer alive, so a raw handle in a live key can never be
+   * recycled for a different buffer.
+   */
+  struct SceneBatchBindGroupKey {
+    WGPUBuffer uniformBuffer = nullptr;
+    uint64_t uniformOffset = 0;
+    uint64_t uniformSize = 0;
+    WGPUBuffer chunkBuffer = nullptr;
+    uint64_t chunkBytes = 0;
+    WGPUBuffer recordBuffer = nullptr;
+    uint64_t recordOffset = 0;
+    uint64_t recordBytes = 0;
+
+    friend bool operator<(const SceneBatchBindGroupKey& a, const SceneBatchBindGroupKey& b) {
+      return std::tie(a.uniformBuffer, a.uniformOffset, a.uniformSize, a.chunkBuffer, a.chunkBytes,
+                      a.recordBuffer, a.recordOffset, a.recordBytes) <
+             std::tie(b.uniformBuffer, b.uniformOffset, b.uniformSize, b.chunkBuffer, b.chunkBytes,
+                      b.recordBuffer, b.recordOffset, b.recordBytes);
+    }
+  };
+
+  /// Look up a cached scene-batch bind group. Returns a borrowed handle
+  /// (valid while the cache entry lives), or an empty handle on miss.
+  [[nodiscard]] wgpu::BindGroup findSceneBatchBindGroup(const SceneBatchBindGroupKey& key) const;
+
+  /// Store a scene-batch bind group under `key`, taking ownership of the
+  /// +1 handle. Clears the whole cache first when it reaches the cap
+  /// (recorded command buffers keep their own references, so dropping the
+  /// cache's handles mid-frame is safe).
+  void storeSceneBatchBindGroup(const SceneBatchBindGroupKey& key, wgpu::BindGroup group);
+
+  /**
    * Process-unique identity for this device instance, assigned at
    * construction from a monotonic counter (never reused, starts at 1).
    *
@@ -607,6 +651,11 @@ private:
   // alive until drainDeferredDestroys() drops them at the next frame boundary.
   std::vector<ScopedWgpuHandle<wgpu::Buffer>> pendingBuffers_;
   std::vector<ScopedWgpuHandle<wgpu::Texture>> pendingTextures_;
+
+  // Scene-batch bind groups cached across frames (see
+  // SceneBatchBindGroupKey). Bounded by kSceneBatchBindGroupCacheCap.
+  static constexpr std::size_t kSceneBatchBindGroupCacheCap = 256;
+  std::map<SceneBatchBindGroupKey, ScopedWgpuHandle<wgpu::BindGroup>> sceneBatchBindGroups_;
 };
 
 }  // namespace donner::geode

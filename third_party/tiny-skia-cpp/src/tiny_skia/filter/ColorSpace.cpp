@@ -5,22 +5,35 @@
 #include <cmath>
 #include <cstddef>
 
-#include "tiny_skia/Math.h"
-
 namespace tiny_skia::filter {
 
 namespace {
 
+/// Exact sRGB -> linear transfer function, computed in double precision.
+/// C_linear = C_srgb <= 0.04045 ? C_srgb/12.92 : pow((C_srgb+0.055)/1.055, 2.4)
+double srgbToLinearExact(double s) {
+  if (s <= 0.04045) {
+    return s / 12.92;
+  }
+  return std::pow((s + 0.055) / 1.055, 2.4);
+}
+
+/// Exact linear -> sRGB transfer function, computed in double precision.
+/// C_srgb = C_linear <= 0.0031308 ? 12.92*C_linear : 1.055*pow(C_linear, 1/2.4)-0.055
+double linearToSrgbExact(double l) {
+  if (l <= 0.0031308) {
+    return 12.92 * l;
+  }
+  return 1.055 * std::pow(l, 1.0 / 2.4) - 0.055;
+}
+
 // Pre-computed LUT for sRGB -> linear (256 entries, input is 8-bit sRGB value).
+// Exact for every possible input byte: each entry is the double-precision
+// transfer function evaluated at i/255.
 std::array<double, 256> buildSrgbToLinearLut() {
   std::array<double, 256> lut{};
   for (int i = 0; i < 256; ++i) {
-    const double s = i / 255.0;
-    if (s <= 0.04045) {
-      lut[i] = s / 12.92;
-    } else {
-      lut[i] = std::pow((s + 0.055) / 1.055, 2.4);
-    }
+    lut[i] = srgbToLinearExact(i / 255.0);
   }
   return lut;
 }
@@ -29,13 +42,7 @@ std::array<double, 256> buildSrgbToLinearLut() {
 std::array<std::uint8_t, 4096> buildLinearToSrgbLut() {
   std::array<std::uint8_t, 4096> lut{};
   for (int i = 0; i < 4096; ++i) {
-    const double l = i / 4095.0;
-    double s;
-    if (l <= 0.0031308) {
-      s = 12.92 * l;
-    } else {
-      s = 1.055 * std::pow(l, 1.0 / 2.4) - 0.055;
-    }
+    const double s = linearToSrgbExact(i / 4095.0);
     lut[i] = static_cast<std::uint8_t>(std::clamp(std::round(s * 255.0), 0.0, 255.0));
   }
   return lut;
@@ -49,6 +56,88 @@ const auto& srgbToLinearLut() {
 const auto& linearToSrgbLut() {
   static const auto lut = buildLinearToSrgbLut();
   return lut;
+}
+
+// Float-path LUTs for the FloatPixmap conversions: 4096 entries over [0,1],
+// direct-indexed with rounding (index = round(x * 4095), input clamped to
+// [0,1] first). Entries are the exact double-precision transfer functions
+// sampled at i/4095, so the tables cover both the linear toe segment and the
+// power segment without a per-pixel branch.
+//
+// Accuracy, measured over a 2^24-point uniform sweep of [0,1] with deltas
+// expressed in 8-bit output units (1 unit = 1/255):
+//   sRGB -> linear: max |LUT - exact| = 0.071 units;
+//                   max |LUT - previous approxPowf path| = 0.121 units.
+//   linear -> sRGB: max |LUT - exact| = 0.402 units;
+//                   max |LUT - previous approxPowf path| = 0.402 units.
+// Both directions stay well within 1 unit of the previous per-pixel
+// approxPowf() implementation, so a rounded 8-bit result differs by at most
+// 1. The linear -> sRGB bound is set by table quantization at the dark end,
+// where the transfer slope approaches 12.92; 4096 entries keep that below
+// half a unit. ColorSpaceTest.cpp locks in these bounds.
+constexpr int kFloatLutSize = 4096;
+
+std::array<float, kFloatLutSize> buildSrgbToLinearFloatLut() {
+  std::array<float, kFloatLutSize> lut{};
+  for (int i = 0; i < kFloatLutSize; ++i) {
+    lut[i] = static_cast<float>(srgbToLinearExact(static_cast<double>(i) / (kFloatLutSize - 1)));
+  }
+  return lut;
+}
+
+std::array<float, kFloatLutSize> buildLinearToSrgbFloatLut() {
+  std::array<float, kFloatLutSize> lut{};
+  for (int i = 0; i < kFloatLutSize; ++i) {
+    lut[i] = static_cast<float>(linearToSrgbExact(static_cast<double>(i) / (kFloatLutSize - 1)));
+  }
+  return lut;
+}
+
+// Lazily built on first use. C++11 function-local static initialization is
+// guaranteed thread-safe, so concurrent first callers are fine.
+const std::array<float, kFloatLutSize>& srgbToLinearFloatLut() {
+  static const auto lut = buildSrgbToLinearFloatLut();
+  return lut;
+}
+
+const std::array<float, kFloatLutSize>& linearToSrgbFloatLut() {
+  static const auto lut = buildLinearToSrgbFloatLut();
+  return lut;
+}
+
+/// Looks up a unit-range value in a float LUT, clamping the input to [0,1].
+///
+/// The comparison-based clamp maps NaN to 0 as well. NaN can reach here even
+/// though callers guard alpha <= 0: a denormal alpha passes that guard while
+/// its reciprocal overflows to inf, and a zero channel then unpremultiplies
+/// to 0 * inf == NaN. Casting a NaN index to int is undefined behavior (x86
+/// produces INT_MIN, turning the table lookup into a wild read), so the
+/// clamp must reject NaN rather than propagate it the way std::clamp does.
+inline float lookupUnit(const std::array<float, kFloatLutSize>& lut, float x) {
+  const float clamped = (x > 0.0f) ? std::min(x, 1.0f) : 0.0f;
+  return lut[static_cast<int>(clamped * (kFloatLutSize - 1) + 0.5f)];
+}
+
+/// Converts one premultiplied RGBA pixel through `lut`: unpremultiply, look up,
+/// re-premultiply. Alpha is not gamma-encoded and passes through untouched, and
+/// a transparent pixel is already correct in both spaces.
+inline void convertPixel(const std::array<float, kFloatLutSize>& lut, float& r, float& g, float& b,
+                         float a) {
+  if (a <= 0.0f) {
+    return;
+  }
+
+  if (a >= 1.0f) {
+    r = lookupUnit(lut, r);
+    g = lookupUnit(lut, g);
+    b = lookupUnit(lut, b);
+    return;
+  }
+
+  const float invAlpha = 1.0f / a;
+  r = lookupUnit(lut, r * invAlpha) * a;
+  g = lookupUnit(lut, g * invAlpha) * a;
+  b = lookupUnit(lut, b * invAlpha) * a;
 }
 
 }  // namespace
@@ -153,79 +242,35 @@ void linearToSrgb(Pixmap& pixmap) {
 }
 
 void srgbToLinear(FloatPixmap& pixmap) {
+  // sRGB transfer function (inverse gamma) via direct-indexed LUT. Replaces a
+  // per-channel approxPowf() evaluation, which profiling showed dominating
+  // filter scenes that convert to linearRGB and back around every primitive.
+  const auto& lut = srgbToLinearFloatLut();
   auto data = pixmap.data();
   const std::size_t pixelCount = data.size() / 4;
 
   for (std::size_t i = 0; i < pixelCount; ++i) {
     const std::size_t off = i * 4;
-    const float a = data[off + 3];
-
-    if (a <= 0.0f) {
-      continue;
-    }
-
-    // sRGB transfer function (inverse gamma). Uses fast bit-trick power approximation
-    // (~3-5 FLOPs) instead of std::pow() (~50+ cycles).
-    auto srgbToLinearChannel = [](float s) -> float {
-      if (s <= 0.04045f) {
-        return s / 12.92f;
-      }
-      return tiny_skia::approxPowf((s + 0.055f) / 1.055f, 2.4f);
-    };
-
-    if (a >= 1.0f) {
-      // Fully opaque: direct conversion.
-      data[off + 0] = srgbToLinearChannel(data[off + 0]);
-      data[off + 1] = srgbToLinearChannel(data[off + 1]);
-      data[off + 2] = srgbToLinearChannel(data[off + 2]);
-    } else {
-      // Unpremultiply, convert, re-premultiply.
-      const float invAlpha = 1.0f / a;
-      const float sr = std::clamp(data[off + 0] * invAlpha, 0.0f, 1.0f);
-      const float sg = std::clamp(data[off + 1] * invAlpha, 0.0f, 1.0f);
-      const float sb = std::clamp(data[off + 2] * invAlpha, 0.0f, 1.0f);
-
-      data[off + 0] = srgbToLinearChannel(sr) * a;
-      data[off + 1] = srgbToLinearChannel(sg) * a;
-      data[off + 2] = srgbToLinearChannel(sb) * a;
-    }
+    convertPixel(lut, data[off + 0], data[off + 1], data[off + 2], data[off + 3]);
   }
 }
 
+std::array<float, 4> srgbToLinearPixel(std::array<float, 4> premultiplied) {
+  convertPixel(srgbToLinearFloatLut(), premultiplied[0], premultiplied[1], premultiplied[2],
+               premultiplied[3]);
+  return premultiplied;
+}
+
 void linearToSrgb(FloatPixmap& pixmap) {
+  // sRGB transfer function (apply gamma) via direct-indexed LUT; see
+  // srgbToLinear() above for why the approxPowf() path was replaced.
+  const auto& lut = linearToSrgbFloatLut();
   auto data = pixmap.data();
   const std::size_t pixelCount = data.size() / 4;
 
   for (std::size_t i = 0; i < pixelCount; ++i) {
     const std::size_t off = i * 4;
-    const float a = data[off + 3];
-
-    if (a <= 0.0f) {
-      continue;
-    }
-
-    // sRGB transfer function (apply gamma). Uses fast bit-trick power approximation.
-    auto linearToSrgbChannel = [](float l) -> float {
-      if (l <= 0.0031308f) {
-        return 12.92f * l;
-      }
-      return 1.055f * tiny_skia::approxPowf(l, 1.0f / 2.4f) - 0.055f;
-    };
-
-    if (a >= 1.0f) {
-      data[off + 0] = linearToSrgbChannel(std::clamp(data[off + 0], 0.0f, 1.0f));
-      data[off + 1] = linearToSrgbChannel(std::clamp(data[off + 1], 0.0f, 1.0f));
-      data[off + 2] = linearToSrgbChannel(std::clamp(data[off + 2], 0.0f, 1.0f));
-    } else {
-      const float invAlpha = 1.0f / a;
-      const float lr = std::clamp(data[off + 0] * invAlpha, 0.0f, 1.0f);
-      const float lg = std::clamp(data[off + 1] * invAlpha, 0.0f, 1.0f);
-      const float lb = std::clamp(data[off + 2] * invAlpha, 0.0f, 1.0f);
-
-      data[off + 0] = linearToSrgbChannel(lr) * a;
-      data[off + 1] = linearToSrgbChannel(lg) * a;
-      data[off + 2] = linearToSrgbChannel(lb) * a;
-    }
+    convertPixel(lut, data[off + 0], data[off + 1], data[off + 2], data[off + 3]);
   }
 }
 
