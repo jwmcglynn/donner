@@ -15,7 +15,10 @@ donner_cc_library(
     hdrs = ["BitmapGoldenCompare.h"],
     # //donner/gpu: the Metal vertical slice test (design 0053) uses the one
     # blessed pixelmatch comparator for its frozen-baseline comparison.
-    visibility = ["//donner/gpu/metal/tests:__pkg__"],
+    visibility = [
+        "//donner/gpu/metal/tests:__pkg__",
+        "//tools/mcp-servers/editor-control:__pkg__",
+    ],
     deps = [
         "//donner/svg/renderer:renderer_image_io",
         "//donner/svg/renderer:renderer_interface",
