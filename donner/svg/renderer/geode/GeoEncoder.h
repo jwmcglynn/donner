@@ -586,6 +586,10 @@ public:
     uint64_t firstRecordOffset = 0;
     uint32_t instanceCount = 1;
     uint32_t vertexCount = 0;   ///< Max fan vertex count over the instances.
+    /// Record slab the instances' records live in. Supplies the persistent
+    /// batch-uniform buffer so a steady frame writes nothing; null falls
+    /// back to the encoder's per-frame uniform arena.
+    GeodeRecordSlab* recordSlab = nullptr;
   };
 
   /**

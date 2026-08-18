@@ -2069,9 +2069,20 @@ void GeoEncoder::fillPathSceneBatch(const css::RGBA& color, FillRule rule,
   args.patternFromPath = Transform2d();
   args.instanceCount = binding.instanceCount;
 
+  // Batch uniforms are frame-constant, so they live in the document's
+  // record slab and a steady frame rewrites nothing. The per-frame arena is
+  // the fallback when no slab is supplied or its cache is full.
   Uniforms u = {};
   impl_->populateBatchUniform(u, args, Transform2d(), /*identityMvp=*/true);
-  const auto uniAlloc = impl_->allocSceneBatchUniform(u);
+  Impl::Allocation uniAlloc = {};
+  if (binding.recordSlab != nullptr) {
+    uniAlloc.buffer = binding.recordSlab->acquireBatchUniform(*impl_->device, &u, sizeof(Uniforms));
+    uniAlloc.offset = 0;
+    uniAlloc.size = sizeof(Uniforms);
+  }
+  if (!uniAlloc.buffer) {
+    uniAlloc = impl_->allocSceneBatchUniform(u);
+  }
 
   // Whole-chunk views: valid while a chunk stays under the device's
   // maxStorageBufferBindingSize (default 128 MiB); kInitialChunkBytes

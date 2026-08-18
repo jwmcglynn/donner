@@ -2328,6 +2328,11 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
       binding.firstRecordOffset = batch.sceneFirstRecordOffset;
       binding.instanceCount = static_cast<uint32_t>(batch.sceneInstances.size());
       binding.vertexCount = batch.sceneVertexCount;
+      // Every instance's record lives in this batch's record buffer, so the
+      // first instance's slab owns the batch uniform too.
+      binding.recordSlab = batch.sceneInstances.front().slot != nullptr
+                               ? batch.sceneInstances.front().slot->recordSlab.get()
+                               : nullptr;
 
       const css::RGBA batchColor = batch.sceneInstances.front().color;
       const FillRule batchRule = batch.sceneInstances.front().rule;
