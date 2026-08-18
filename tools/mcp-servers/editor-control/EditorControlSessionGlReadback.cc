@@ -455,6 +455,9 @@ std::vector<std::string> BazelGlRnrReplayCommand(const repro::GlRnrReplayOptions
   if (options.driveDocumentSpaceInput) {
     args.push_back("--drive-document-input");
   }
+  if (options.sourcePaneVisible) {
+    args.push_back("--source-pane-visible");
+  }
   if (options.workerRenderDelayMsForTesting > 0) {
     args.push_back("--worker-delay-ms");
     args.push_back(std::to_string(options.workerRenderDelayMsForTesting));

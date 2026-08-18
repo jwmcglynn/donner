@@ -540,6 +540,7 @@ bool RunGlRnrReplay(const GlRnrReplayOptions& options, GlRnrReplayResult* result
   if (!shell.valid()) {
     return SetError(error, "failed to initialize editor shell");
   }
+  shell.setSourcePaneVisibleForReplay(options.sourcePaneVisible);
 
   AsyncRenderer& replayRenderer = shell.asyncRendererForReplay();
   replayRenderer.setReplayRenderDelayForTesting(

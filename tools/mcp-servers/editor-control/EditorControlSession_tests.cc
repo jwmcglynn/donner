@@ -354,6 +354,7 @@ TEST(EditorControlSessionTest, ToolListExposesSelectorDragAndRenderTools) {
   EXPECT_TRUE(hasTool("replay_rnr"));
   ASSERT_NE(replayTool, nullptr);
   EXPECT_TRUE((*replayTool)["inputSchema"]["properties"].contains("gl_drive_document_input"));
+  EXPECT_TRUE((*replayTool)["inputSchema"]["properties"].contains("gl_source_pane_visible"));
 }
 
 TEST(EditorControlSessionTest, CatalogFontFamilyMutationChangesRenderedGlyphs) {

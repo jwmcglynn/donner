@@ -470,6 +470,7 @@ json EditorControlSession::toolList() {
                     {"gl_visible", {{"type", "boolean"}, {"default", false}}},
                     {"gl_pace", {{"type", "boolean"}, {"default", true}}},
                     {"gl_drive_document_input", {{"type", "boolean"}, {"default", false}}},
+                    {"gl_source_pane_visible", {{"type", "boolean"}, {"default", false}}},
                     {"gl_timeout_ms", {{"type", "integer"}, {"minimum", 1}, {"default", 120000}}},
                     {"include_gl_images", {{"type", "boolean"}, {"default", true}}},
                     {"include_frame_results", {{"type", "boolean"}, {"default", true}}},

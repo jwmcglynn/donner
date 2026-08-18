@@ -289,6 +289,10 @@ public:
   ///
   /// @param action Tool or paint action decoded from a replay frame.
   void applyReplayActionForTesting(const repro::ReproAction& action);
+  /// Set the source-pane target visibility before deterministic replay frames.
+  ///
+  /// @param visible True to open the source pane.
+  void setSourcePaneVisibleForReplay(bool visible) { setSourcePaneVisible(visible); }
   /// Current selection label for replay/readback harnesses.
   [[nodiscard]] std::optional<std::string> selectedElementLabelForReadback() const;
 

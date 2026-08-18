@@ -58,6 +58,8 @@ struct GlRnrReplayOptions {
   int workerRenderDelayMsForTesting = 0;
   /// Drive canvas tool input from recorded document coordinates instead of GUI screen hit-testing.
   bool driveDocumentSpaceInput = false;
+  /// Open the source pane before replaying the first frame.
+  bool sourcePaneVisible = false;
   /// Suppress non-document render-pane chrome when writing captures.
   bool contentOnlyCapture = false;
   /// Read retained GPU textures back to count diagnostic pixels. Expensive and disabled unless a
