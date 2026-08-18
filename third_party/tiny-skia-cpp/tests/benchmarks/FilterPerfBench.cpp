@@ -13,8 +13,9 @@
 #include "tiny_skia/filter/Composite.h"
 #include "tiny_skia/filter/ConvolveMatrix.h"
 #include "tiny_skia/filter/DisplacementMap.h"
-#include "tiny_skia/filter/Flood.h"
+#include "tiny_skia/filter/FilterGraph.h"
 #include "tiny_skia/filter/FloatPixmap.h"
+#include "tiny_skia/filter/Flood.h"
 #include "tiny_skia/filter/GaussianBlur.h"
 #include "tiny_skia/filter/Lighting.h"
 #include "tiny_skia/filter/Merge.h"
@@ -346,8 +347,8 @@ void BM_ConvolveMatrix_5x5_Float(benchmark::State& state) {
   FloatPixmap fpSrc = FloatPixmap::fromPixmap(src);
 
   // 5x5 Gaussian-like kernel.
-  const double kernel[] = {1, 4,  7,  4,  1, 4,  16, 26, 16, 4, 7, 26, 41,
-                           26, 7, 4,  16, 26, 16, 4,  1,  4,  7, 4, 1};
+  const double kernel[] = {1,  4, 7, 4,  1,  4,  16, 26, 16, 4, 7, 26, 41,
+                           26, 7, 4, 16, 26, 16, 4,  1,  4,  7, 4, 1};
   ConvolveParams params;
   params.orderX = 5;
   params.orderY = 5;
@@ -582,6 +583,88 @@ void BM_Tile_Uint8(benchmark::State& state) {
 // ---------------------------------------------------------------------------
 
 // Gaussian blur.
+// ---------------------------------------------------------------------------
+// Whole-graph benchmarks
+// ---------------------------------------------------------------------------
+//
+// The primitive benchmarks above measure one operation at a time, which cannot see what the graph
+// executor spends on color-space conversion around those operations. These run the same seven
+// primitive stack twice, once interpolating in sRGB and once in linearRGB. The only difference
+// between the two is the conversion work, so their ratio is the conversion overhead of a whole
+// graph: converting at the graph's boundaries makes it two passes regardless of length, while
+// converting around every primitive would scale it with the primitive count.
+
+/// Builds a seven-primitive stack in one interpolation space: blur, saturate, offset, transfer,
+/// composite over the source, dilate, and merge with the source.
+tiny_skia::filter::FilterGraph makeSevenPrimitiveStack(bool linearRGB) {
+  using tiny_skia::filter::GraphNode;
+  using tiny_skia::filter::NodeInput;
+  using tiny_skia::filter::StandardInput;
+  namespace primitives = tiny_skia::filter::graph_primitive;
+
+  auto node = [&](tiny_skia::filter::GraphPrimitive primitive) {
+    GraphNode result;
+    result.primitive = std::move(primitive);
+    result.inputs = {NodeInput()};
+    result.useLinearRGB = linearRGB;
+    return result;
+  };
+
+  primitives::ComponentTransfer transfer;
+  transfer.funcR.type = tiny_skia::filter::TransferFuncType::Gamma;
+  transfer.funcR.amplitude = 1.1;
+  transfer.funcR.exponent = 0.9;
+  transfer.funcG.type = tiny_skia::filter::TransferFuncType::Linear;
+  transfer.funcG.slope = 1.05;
+  transfer.funcG.intercept = 0.01;
+  transfer.funcB.type = tiny_skia::filter::TransferFuncType::Gamma;
+  transfer.funcB.amplitude = 0.95;
+  transfer.funcB.exponent = 1.1;
+
+  GraphNode composite = node(primitives::Composite{tiny_skia::filter::CompositeOp::Over});
+  composite.inputs = {NodeInput(), NodeInput(StandardInput::SourceGraphic)};
+
+  GraphNode merge = node(primitives::Merge{});
+  merge.inputs = {NodeInput(), NodeInput(StandardInput::SourceGraphic)};
+
+  tiny_skia::filter::FilterGraph graph;
+  graph.useLinearRGB = linearRGB;
+  graph.nodes.push_back(node(primitives::GaussianBlur{4.0, 4.0, BlurEdgeMode::None}));
+  graph.nodes.push_back(node(primitives::ColorMatrix{tiny_skia::filter::saturateMatrix(1.6)}));
+  graph.nodes.push_back(node(primitives::Offset{10, 10}));
+  graph.nodes.push_back(node(std::move(transfer)));
+  graph.nodes.push_back(std::move(composite));
+  graph.nodes.push_back(node(primitives::Morphology{MorphologyOp::Dilate, 1, 1}));
+  graph.nodes.push_back(std::move(merge));
+  return graph;
+}
+
+void BM_FilterGraph_SevenPrimitives_LinearRGB(benchmark::State& state) {
+  const auto size = static_cast<std::uint32_t>(state.range(0));
+  const Pixmap src = makeRandomPixmap(size, size);
+  const tiny_skia::filter::FilterGraph graph = makeSevenPrimitiveStack(/*linearRGB=*/true);
+
+  for (auto _ : state) {
+    Pixmap copy = src;
+    benchmark::DoNotOptimize(tiny_skia::filter::executeFilterGraph(copy, graph));
+    benchmark::DoNotOptimize(copy.data().data());
+  }
+  setCounters(state, size);
+}
+
+void BM_FilterGraph_SevenPrimitives_Srgb(benchmark::State& state) {
+  const auto size = static_cast<std::uint32_t>(state.range(0));
+  const Pixmap src = makeRandomPixmap(size, size);
+  const tiny_skia::filter::FilterGraph graph = makeSevenPrimitiveStack(/*linearRGB=*/false);
+
+  for (auto _ : state) {
+    Pixmap copy = src;
+    benchmark::DoNotOptimize(tiny_skia::filter::executeFilterGraph(copy, graph));
+    benchmark::DoNotOptimize(copy.data().data());
+  }
+  setCounters(state, size);
+}
+
 BENCHMARK(BM_GaussianBlur_Float)->Args({512, 3})->Args({512, 6})->Args({512, 20})->Args({1024, 6});
 BENCHMARK(BM_GaussianBlur_Uint8)->Args({512, 3})->Args({512, 6})->Args({512, 20})->Args({1024, 6});
 
@@ -639,5 +722,9 @@ BENCHMARK(BM_ComponentTransfer_Table_Uint8)->Arg(512);
 
 // Tile.
 BENCHMARK(BM_Tile_Uint8)->Arg(512);
+
+// Whole graph, which is where the executor's color-space conversion cost shows up.
+BENCHMARK(BM_FilterGraph_SevenPrimitives_LinearRGB)->Arg(512);
+BENCHMARK(BM_FilterGraph_SevenPrimitives_Srgb)->Arg(512);
 
 }  // namespace
