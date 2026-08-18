@@ -12,7 +12,7 @@ tracing milestone in `Backlog.md`.
 ## The loop
 
 ```
-  edit SVG  ->  render (donner-svg)  ->  score  ->  inspect diff.png  ->  edit again
+edit SVG  ->  render (donner-svg)  ->  score  ->  inspect diff.png  ->  edit again
 ```
 
 Each pass is one `vectorize.py` invocation. You (the agent) own the SVG editing;
@@ -25,7 +25,7 @@ rules).
    `donner-svg` at the reference's exact pixel size and diffs the two.
 3. **Read `score.json`:** check `rmse`, `diff_pixel_percent`, and `worst_tiles`.
 4. **Open `diff.png`:** bright red = large per-pixel error, near-black = match.
-   The heatmap tells you *where* to work next; `worst_tiles` gives coordinates.
+   The heatmap tells you _where_ to work next; `worst_tiles` gives coordinates.
 5. **Repeat** until the score meets the target and the structure is clean.
 
 ## The oracles (where render + diff come from)
@@ -44,16 +44,17 @@ rules).
 
 ## Score metrics (score.json)
 
-| field | meaning | target |
-|-------|---------|--------|
-| `rmse` | root-mean-square per-channel error, 0..255 | drive toward 0 |
-| `rmse_normalized` | `rmse / 255`, 0..1 | < 0.02 is a strong match |
-| `diff_pixel_percent` | % of pixels whose max channel diff > `--threshold` | < 1% |
-| `quality_score` | `100 * (1 - rmse_normalized)`, higher is better | > 98 |
-| `worst_tiles` | worst NxN grid tiles by RMSE, with pixel x/y/w/h | use to target edits |
-| `diff_png` | red heatmap of per-pixel error | inspect every pass |
+| field                | meaning                                            | target                   |
+| -------------------- | -------------------------------------------------- | ------------------------ |
+| `rmse`               | root-mean-square per-channel error, 0..255         | drive toward 0           |
+| `rmse_normalized`    | `rmse / 255`, 0..1                                 | < 0.02 is a strong match |
+| `diff_pixel_percent` | % of pixels whose max channel diff > `--threshold` | < 1%                     |
+| `quality_score`      | `100 * (1 - rmse_normalized)`, higher is better    | > 98                     |
+| `worst_tiles`        | worst NxN grid tiles by RMSE, with pixel x/y/w/h   | use to target edits      |
+| `diff_png`           | red heatmap of per-pixel error                     | inspect every pass       |
 
 Suggested milestones for a real trace:
+
 - **Silhouette lock** (`quality` > 85): major shapes in the right place, right
   colors. The background glow and the largest masses dominate RMSE first.
 - **Structure match** (`quality` > 95): facets, rim, wordmark all present and
@@ -151,10 +152,10 @@ See `example/`. `reference_source.svg` is rendered by donner-svg into
 `reference.png` (the pretend "raster reference": a purple circle with a dark rim
 and a "Donner" wordmark). Two candidate iterations show the score improving:
 
-| iteration | file | rmse | quality | diff pixels |
-|-----------|------|------|---------|-------------|
-| v1 (rough: wrong-blue, offset, undersized, no rim, no text) | `candidate_v1.svg` | 58.57 | 77.03 | 29.57% |
-| v2 (recentered, correct fill, rim added, wordmark added, named group) | `candidate_v2.svg` | 0.00 | 100.00 | 0.00% |
+| iteration                                                             | file               | rmse  | quality | diff pixels |
+| --------------------------------------------------------------------- | ------------------ | ----- | ------- | ----------- |
+| v1 (rough: wrong-blue, offset, undersized, no rim, no text)           | `candidate_v1.svg` | 58.57 | 77.03   | 29.57%      |
+| v2 (recentered, correct fill, rim added, wordmark added, named group) | `candidate_v2.svg` | 0.00  | 100.00  | 0.00%       |
 
 Reproduce:
 

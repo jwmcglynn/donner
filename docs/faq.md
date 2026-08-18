@@ -13,13 +13,14 @@ Donner targets the [SVG 2 specification](https://www.w3.org/TR/SVG2/), so "corre
 does". Where that distinction matters, the answer calls it out.
 
 ## Why does my gradient not show up? {#faq-gradient}
+
 Almost always because the gradient has no `<stop>` children, or its `objectBoundingBox` coordinate
 space collapsed to zero. A gradient with zero stops is not an error and paints nothing; add at least
 one \ref xml_stop and it appears.
 
 Donner resolves paint in two stages, and knowing the split explains every gradient mystery. First,
 at style-resolution time, `fill="url(#g)"` is resolved to a reference: this only checks that `#g`
-exists and is a gradient or pattern, not that it is *usable*. Second, at draw time, that reference
+exists and is a gradient or pattern, not that it is _usable_. Second, at draw time, that reference
 is turned into an actual shader, and this is where stops and bounding boxes are inspected. So a
 stopless gradient sails through stage one and only produces nothing in stage two.
 
@@ -44,6 +45,7 @@ wait for a log line. Diagnose it by reasoning about stops and bounding boxes. Se
 closely related \ref faq-not-rendered.
 
 ## Why is my text invisible, or not shaping correctly? {#faq-text}
+
 Two different failures wear the same "I see no text" costume: the glyphs are painted but you cannot
 see them (a fill problem), or the glyphs were never produced (a font or shaping problem). Check the
 fill first, because it is the more common one.
@@ -56,7 +58,7 @@ default that fills your shapes.
 **The font.** Donner does not read system fonts. There is no fontconfig, CoreText, or DirectWrite
 lookup anywhere in the text path. Fonts come from `@font-face` rules or from calling
 `donner::svg::FontManager::loadFontData()` yourself, plus one embedded fallback (Public Sans). So
-text with no matching font does *not* vanish: it falls back to Public Sans and renders with Latin
+text with no matching font does _not_ vanish: it falls back to Public Sans and renders with Latin
 coverage. If your Latin text renders but your styled font does not, your `@font-face` source did not
 load (see below); if your text is CJK, Arabic, or emoji, read on.
 
@@ -77,6 +79,7 @@ text engine out entirely, so `<text>` renders nothing.
 See \ref xml_text, \ref xml_tspan, \ref xml_textPath, and \ref elements_text.
 
 ## When should I use SVGPathElement's API instead of setting the d string? {#faq-path-api}
+
 Use `setD()` and `d()` when you are round-tripping SVG source or letting the CSS cascade drive the
 geometry; use `setSpline()` when you already have geometry in hand and want to skip parsing
 entirely. They are two doors into the same \ref donner::svg::SVGPathElement, and picking the right
@@ -101,6 +104,7 @@ a slightly broken `d` gives you a truncated path, not an empty document. See \re
 \ref faq-stroke-scale for how that geometry then gets stroked.
 
 ## Why is my &lt;symbol&gt; the wrong size when I instantiate it with &lt;use&gt;? {#faq-symbol-size}
+
 Ninety percent of the time the symbol has no `viewBox`, and without a `viewBox` a symbol does not
 scale. Setting `width`/`height` on the `<symbol>` or the `<use>` without a `viewBox` only changes
 the clipping rectangle, not the content, so your artwork gets cropped instead of resized. Add a
@@ -120,13 +124,14 @@ The sizing rules that trip people up:
   override; the symbol's and the use's `x`/`y` add together.
 - `preserveAspectRatio` defaults to `xMidYMid meet`, so a symbol dropped into a box with a different
   aspect ratio is letterboxed, not stretched. Use `preserveAspectRatio="none"` to stretch.
-- `refX`/`refY` default to the top-left corner, which is *not* the same as `0`. If you expected the
+- `refX`/`refY` default to the top-left corner, which is _not_ the same as `0`. If you expected the
   symbol centered on the `<use>` point, set `refX`/`refY` explicitly.
 
 The full coordinate chain, with worked diagrams, lives in \ref SymbolElementUsage. See also
 \ref donner::svg::SVGSymbolElement and \ref donner::svg::SVGUseElement.
 
 ## Why doesn't my filter output match Chrome's exactly? {#faq-filter-chrome}
+
 Because Donner is not trying to match Chrome; it is trying to match the
 [Filter Effects](https://drafts.fxtf.org/filter-effects/) spec, and it validates that against the
 resvg test suite, not against a browser. The default backend is Donner's own CPU pixel executor
@@ -153,6 +158,7 @@ For the architecture, backend details, and `feImage` handling, see \ref FilterEf
 \ref xml_filter.
 
 ## How do I load an SVG and render it to pixels in the fewest lines? {#faq-render-pixels}
+
 Parse the source, check for an error, and hand the document to a \ref donner::svg::Renderer. That is
 five meaningful lines, and you do not need to set a canvas size if the SVG declares its own
 `width`/`height`/`viewBox`.
@@ -192,6 +198,7 @@ the formatting work entirely), but see \ref faq-not-rendered before you decide y
 complete runnable version is `examples/cmake_consumer/main.cc`.
 
 ## Do I have to keep the SVG source string alive after parsing? {#faq-lifetime}
+
 Yes. The buffer you pass to `SVGParser::ParseSVG` is referenced internally by the returned
 \ref donner::svg::SVGDocument, not copied wholesale, so it must outlive the document. Free it too
 early and you get a dangling reference, not a clean error.
@@ -208,6 +215,7 @@ that, copy the SVG text into a buffer you own and keep it. See \ref faq-render-p
 parse-to-pixels flow.
 
 ## How do I mutate the DOM and re-render efficiently? {#faq-mutate}
+
 Keep one \ref donner::svg::Renderer alive and call `draw()` again after your edits; do not reparse
 the SVG and do not construct a fresh renderer per frame. Donner's renderer is two-phase: it builds
 and caches a render tree, and DOM mutations mark only the affected elements dirty, so a redraw
@@ -237,6 +245,7 @@ which is a convenience wrapper around it. If more than one thread touches the do
 \ref faq-threads first. See also \ref DonnerAPI for the DOM manipulation surface.
 
 ## What SVG features does Donner not support, and what happens if I use them? {#faq-unsupported}
+
 Donner implements a broad SVG 2 static subset with documented gaps in advanced text, interaction
 properties, rendering hints, clipping, masking, image sampling, and affine non-scaling strokes. It
 also intentionally omits features SVG 2 removed or deprecated. The general rule for an unsupported
@@ -277,15 +286,15 @@ The authoritative list, with per-feature rationale and the modern replacement, i
 [Unsupported SVG 1.1 Features](unsupported_svg1_features.html).
 
 ## Why did parsing succeed but my element still not render? {#faq-not-rendered}
+
 A successful parse only means the XML and CSS were well-formed; it says nothing about whether an
-element is *renderable*. The usual suspects are being inside `<defs>`, having `display:none`,
+element is _renderable_. The usual suspects are being inside `<defs>`, having `display:none`,
 collapsing to zero size, or living in the wrong XML namespace. Start by dumping the parse warnings,
 because the namespace case in particular reports one.
 
 The exclusion rules Donner applies while building the render tree:
 
-- **`display: none`** removes the element and its entire subtree from rendering. (`visibility:
-  hidden` is different: the element still participates in layout but is not painted.)
+- **`display: none`** removes the element and its entire subtree from rendering. (`visibility: hidden` is different: the element still participates in layout but is not painted.)
 - **Children of `<defs>`** are non-renderable by design; they only appear when referenced, for
   example through \ref xml_use or a paint `url()`. The same is true of the contents of
   \ref xml_mask, \ref xml_pattern, and \ref xml_symbol, which render only when instantiated.
@@ -314,6 +323,7 @@ selectors like `rect[data-role="status"]` will not match. Set it to `false` if y
 the missing element is a gradient fill, see \ref faq-gradient.
 
 ## Something looks off but parsing succeeded. How do I get diagnostics? {#faq-diagnostics}
+
 Donner splits problems into two buckets and reports them through two different channels. Fatal
 problems that stop parsing come back as an error on the \ref donner::ParseResult; non-fatal problems
 that Donner recovered from (ignored attributes, unknown namespaces, malformed but partially parsed
@@ -342,6 +352,7 @@ render right", read \ref faq-not-rendered, because the namespace and ignored-att
 cause silent non-rendering surface here and nowhere else.
 
 ## How do I embed Donner without dragging in the editor? {#faq-embed}
+
 You already are: depending on `@donner` gives you the parser, DOM, and renderer, and nothing else.
 The editor is a separate Bazel target (`//donner/editor:editor`) that depends on the core libraries,
 never the other way around, so linking Donner does not pull in ImGui, GLFW, or any editor code.
@@ -359,6 +370,7 @@ renderer it uses all come from core. Your own binary that depends on `@donner` g
 build setup, see \ref GettingStarted (Bazel) and its CMake section.
 
 ## What threads can I touch the DOM from? {#faq-threads}
+
 By default, exactly one: the thread that created the document. \ref donner::svg::SVGDocument starts
 in single-threaded mode, which is the lowest-overhead path and asserts that DOM calls come from the
 owning thread. If you need worker threads to read or mutate the same document, opt in first.
@@ -380,6 +392,7 @@ The full contract, including how removed elements stay alive while you hold a ha
 \ref SvgDomThreadingAndLifetime, with the implementation-level details in \ref Multithreading.
 
 ## Why are my stroke widths wrong when I scale? {#faq-stroke-scale}
+
 Because that is what SVG says should happen: `stroke-width` is measured in user units, and when you
 scale the coordinate system (a large `viewBox` mapped into a small viewport, or a `transform`), the
 stroke scales right along with the geometry. A shape scaled 2x gets a stroke twice as thick. This is
@@ -399,8 +412,8 @@ See \ref xml_path and \ref faq-path-api for setting geometry.
 
 <div class="section_buttons">
 
-| Previous           |                                        Next |
-| :----------------- | ------------------------------------------: |
-| [Home](index.html) | [Getting started](GettingStarted.html)      |
+| Previous           |                                   Next |
+| :----------------- | -------------------------------------: |
+| [Home](index.html) | [Getting started](GettingStarted.html) |
 
 </div>

@@ -16,7 +16,7 @@ finite-sample coverage can legitimately differ.
 ## 1. How text flows through both backends
 
 `RendererGeode::drawText` and `RendererTinySkia::drawText` are two backend-specific
-consumers of one **shared text layer**. Everything that determines *what* to draw —
+consumers of one **shared text layer**. Everything that determines _what_ to draw —
 glyph placement, paint resolution, decoration geometry, font-size/scale — is computed
 once, above both backends and below `TextEngine`; each backend only rasterizes the
 result.
@@ -26,7 +26,7 @@ result.
 - **`ComputedTextGeometryComponent` (`runs` cache) + `toTextLayoutParams`** produce
   per-glyph `{xPosition, yPosition, rotateDegrees, stretchScale, fontSizeScale}`.
   These values are **identical between backends** — neither backend re-derives glyph
-  positions. A backend can only diverge in how it *consumes* these values.
+  positions. A backend can only diverge in how it _consumes_ these values.
 - **`spanFontSizePx` + `scaleForPixelHeight`** (per-element and per-span font-size
   resolution, including named keywords `xx-small`…, percent, and negative sizes) are
   computed by a byte-identical expression in both backends from the same inputs.
@@ -104,11 +104,11 @@ feature). All are resolved; they double as regression-relevant implementation no
 
 ### 4.1 Feature gaps fixed in Geode's `drawText`
 
-| # | Divergence | Root cause | Fix |
-|---|---|---|---|
-| D1 | text-decoration not drawn | geode drew no underline/overline/line-through | `d1742348c` — decoration geometry |
-| D2 | stroked-glyph ring fill rule | geode used `NonZero` (solid interior); the ring needs `EvenOdd` | `2314efb0d` — stroke→fill |
-| D3 | pattern-fill on text | geode `drawText` had no pattern path → glyphs unfilled + a staged `patternFillPaint` slot leaked to the next shape | `1e2eb2b6f` — paint resolution |
+| #  | Divergence                     | Root cause                                                                                                                                                    | Fix                                                                            |
+| -- | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| D1 | text-decoration not drawn      | geode drew no underline/overline/line-through                                                                                                                 | `d1742348c` — decoration geometry                                              |
+| D2 | stroked-glyph ring fill rule   | geode used `NonZero` (solid interior); the ring needs `EvenOdd`                                                                                               | `2314efb0d` — stroke→fill                                                      |
+| D3 | pattern-fill on text           | geode `drawText` had no pattern path → glyphs unfilled + a staged `patternFillPaint` slot leaked to the next shape                                            | `1e2eb2b6f` — paint resolution                                                 |
 | D4 | stretch+rotate transform order | tiny applied stretch on the raw outline then `Rotate*Translate`; geode used `Scale*Rotate*Translate` — diverges only when `stretchScale≠1` **and** `rotate≠0` | structurally fixed by `placedGlyphOutline` (latent: no suite test triggers it) |
 
 ### 4.2 Paint resolution against the text bbox
@@ -124,18 +124,18 @@ inline text-bbox loop and adopted the same `computeTextBounds` (proven a pixel n
 95-test before/after diff identical). **One bbox implementation now serves both
 backends.**
 
-| # | test | geode↔tiny px (before → after) | outcome |
-|---|---|---|---|
-| B15 | `painting/fill/radial-gradient-on-text` | 14562 → 3 | un-gated |
-| B16 | `painting/stroke/pattern-on-text` | 13115 → 39 | un-gated |
-| B18 | `painting/fill/linear-gradient-on-text` | 10195 → 1 | un-gated |
-| B17 | `painting/stroke/linear-gradient-on-text` | 11917 → 465 | edge-floor |
-| B11 | `text/tspan/tspan-bbox-2` | 2929 → 694 | edge-floor |
-| B12 | `text/tspan/tspan-bbox-1` | 1803 → 702 | edge-floor |
+| #   | test                                      | geode↔tiny px (before → after) | outcome    |
+| --- | ----------------------------------------- | ------------------------------ | ---------- |
+| B15 | `painting/fill/radial-gradient-on-text`   | 14562 → 3                      | un-gated   |
+| B16 | `painting/stroke/pattern-on-text`         | 13115 → 39                     | un-gated   |
+| B18 | `painting/fill/linear-gradient-on-text`   | 10195 → 1                      | un-gated   |
+| B17 | `painting/stroke/linear-gradient-on-text` | 11917 → 465                    | edge-floor |
+| B11 | `text/tspan/tspan-bbox-2`                 | 2929 → 694                     | edge-floor |
+| B12 | `text/tspan/tspan-bbox-1`                 | 1803 → 702                     | edge-floor |
 
-(B19 `paint-servers/pattern/text-child` is a `<pattern>` *containing* text — already
-rendered correctly, edge-floor — distinct from B16 which is a pattern *as the text
-fill*.)
+(B19 `paint-servers/pattern/text-child` is a `<pattern>` _containing_ text — already
+rendered correctly, edge-floor — distinct from B16 which is a pattern _as the text
+fill_.)
 
 ### 4.3 Nested baseline-shift (shared-layout idempotency)
 
@@ -149,14 +149,14 @@ Position dump: geode (1st pass) `y=74.4` (correct 2×20%), tiny (2nd pass) `y=61
 layout. tiny single-pass output unchanged (clear is a no-op on the empty default;
 verified byte-identical across 96 text tests).
 
-| # | test | geode↔tiny px (before → after) |
-|---|---|---|
-| B1 | `text/baseline-shift/nested-with-baseline-2` | 19750 → 702 |
-| B2 | `text/baseline-shift/nested-with-baseline-1` | 12886 → 702 |
-| B3 | `text/baseline-shift/mixed-nested` | 4338 → 690 |
-| B4 | `text/baseline-shift/deeply-nested-super` | 4320 → 720 |
-| B5 | `text/baseline-shift/nested-super` | 2870 → 677 |
-| B6 | `text/baseline-shift/nested-length` | 2438 → 686 |
+| #  | test                                         | geode↔tiny px (before → after) |
+| -- | -------------------------------------------- | ------------------------------ |
+| B1 | `text/baseline-shift/nested-with-baseline-2` | 19750 → 702                    |
+| B2 | `text/baseline-shift/nested-with-baseline-1` | 12886 → 702                    |
+| B3 | `text/baseline-shift/mixed-nested`           | 4338 → 690                     |
+| B4 | `text/baseline-shift/deeply-nested-super`    | 4320 → 720                     |
+| B5 | `text/baseline-shift/nested-super`           | 2870 → 677                     |
+| B6 | `text/baseline-shift/nested-length`          | 2438 → 686                     |
 
 All six now render correctly at the ~677–720 px edge floor. This same
 double-draw idempotency class also surfaced a production feImage-fragment bug
@@ -165,10 +165,10 @@ and the appendix).
 
 ### 4.4 Per-char `dy` / `rotate` lists (render-correct edge floor)
 
-| # | test | geode↔tiny px (before → after) |
-|---|---|---|
-| B7 | `text/text-decoration/underline-with-dy-list-2` | 4643 → 1177 |
-| B8 | `text/text-decoration/underline-with-rotate-list-4` | 4561 → 1145 |
+| #  | test                                                | geode↔tiny px (before → after) |
+| -- | --------------------------------------------------- | ------------------------------ |
+| B7 | `text/text-decoration/underline-with-dy-list-2`     | 4643 → 1177                    |
+| B8 | `text/text-decoration/underline-with-rotate-list-4` | 4561 → 1145                    |
 
 The baseline-shift fix cleared the structural part of B7/B8. The residual is the 4×
 fringe on the gray stroke-ring + gradient: the plain-black siblings `dy-list-1`
@@ -181,13 +181,13 @@ ruled out (tiny-twice = 0 px). Both are accepted edge-floor.
 These were never structural — they render correctly and the diff is cumulative edge
 fringe (many lines / long strings / on-path small text / tiled fields):
 
-| # | test | px |
-|---|---|---|
-| B9 | `text/text-decoration/tspan-decoration` | 1822 |
-| B10 | `text/font-size/named-value` | 3488 (named keywords are on `<rect>`s; the text is all size-12 and renders correct) |
-| B13 | `text/textPath/dy-with-tiny-coordinates` | 2219 |
-| B14 | `text/letter-spacing/on-Arabic` | 932 |
-| B19 | `paint-servers/pattern/text-child` | 1663 |
+| #   | test                                     | px                                                                                  |
+| --- | ---------------------------------------- | ----------------------------------------------------------------------------------- |
+| B9  | `text/text-decoration/tspan-decoration`  | 1822                                                                                |
+| B10 | `text/font-size/named-value`             | 3488 (named keywords are on `<rect>`s; the text is all size-12 and renders correct) |
+| B13 | `text/textPath/dy-with-tiny-coordinates` | 2219                                                                                |
+| B14 | `text/letter-spacing/on-Arabic`          | 932                                                                                 |
+| B19 | `paint-servers/pattern/text-child`       | 1663                                                                                |
 
 > Note: at strict-0 the characterization also listed `font-size/negative-size` (5588)
 > and `tspan/with-opacity` (1599) as bugs; both drop below the 100-px flat budget at
@@ -226,7 +226,7 @@ backend-agnostic op list, collapsing each `drawText` to a thin op consumer.
 What actually shipped: the **geometry** slices were hoisted (`PlacedTextGeometry`:
 `placedGlyphOutline`, `transformPath`, `computeTextBounds` — §1.2). The remaining
 divergences turned out **not** to be drift in shared logic but either (a) a feature
-*missing* from geode (gradient/stroke-pattern on text — fixed by targeted convergence
+_missing_ from geode (gradient/stroke-pattern on text — fixed by targeted convergence
 reusing geode's existing infra) or (b) a shared-layout idempotency bug
 (baseline-shift). Once those were fixed there was **no remaining drift** to justify
 the larger paint-descriptor abstraction, so the full op-list hoist was **descoped** —
@@ -235,17 +235,17 @@ drift reappears, the op-list builder remains the recorded durable fix.
 
 ### A.2 Increment-by-increment findings (why the plan changed shape)
 
-- **Per-run scale + font-size (planned increment):** *skipped — already shared.*
+- **Per-run scale + font-size (planned increment):** _skipped — already shared._
   `spanFontSizePx` and `scaleForPixelHeight` are byte-identical expressions in both
   backends; nothing to extract. B10 (`font-size/named-value`) was never a font-size
   bug — reclassified edge-floor.
 - **D4 placement order:** structurally fixed by `placedGlyphOutline` but flips **zero**
-  gates — no suite test has simultaneous `stretchScale≠1` *and* `rotateDegrees≠0`, so
+  gates — no suite test has simultaneous `stretchScale≠1` _and_ `rotateDegrees≠0`, so
   the order fix changes no pixels. Kept because it makes D4 impossible for any future
   stretch+rotate test.
 - **The "identical positions" contradiction:** early analysis found `glyph.{x,y,rotate}`
   identical between backends (shared `runs` cache), seemingly contradicting whole-glyph
-  baseline-shift offsets. Resolution: the positions *were* identical per-pass — the
+  baseline-shift offsets. Resolution: the positions _were_ identical per-pass — the
   divergence was the double-draw accumulation in shared layout (§4.3), not a geode
   consume-path bug.
 
