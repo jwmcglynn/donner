@@ -520,7 +520,11 @@ struct GeodeResidentSlot {
   /// `GeodeResidentSlab` chunk. Region offsets are ABSOLUTE buffer
   /// offsets. Layout (each region offset satisfies the binding's
   /// alignment requirement):
-  ///   [ bands | curves | hRefs | vBands | vCurves | vRefs | hGrid | vGrid | uniform | instanceRecord ]
+  ///   [ bands | curves | vBands | vCurves | hGrid | vGrid | hRefs | vRefs | uniform ]
+  /// The four grid classes are placed adjacently on purpose: they share one
+  /// storage binding, whose range spans them. The slot is padded out to the
+  /// slab's allocation alignment so consecutive slots leave no unwritten
+  /// bytes between them.
   wgpu::Buffer buffer;
   /// Slab that owns `buffer`; null until residence is established. Held
   /// by shared_ptr so a device change (which swaps the registry's slab)
@@ -531,7 +535,7 @@ struct GeodeResidentSlot {
   uint64_t allocationOffset = 0;
   uint64_t allocationSize = 0;
 
-  /// Cached fill bind group. All fourteen bindings reference stable
+  /// Cached fill bind group. All eleven bindings reference stable
   /// objects (this slot's `buffer` sub-ranges + device-owned dummy
   /// texture/sampler/identity-instance handles), so it survives frames
   /// and encoders. Rebuilt only when the geometry buffer is
@@ -551,12 +555,14 @@ struct GeodeResidentSlot {
 
   Region bands;    ///< Horizontal band SSBO (binding 1).
   Region curves;   ///< Horizontal curve SSBO (binding 2).
-  Region hRefs;    ///< Horizontal curve-reference SSBO (binding 12).
+  // The four grid classes below share binding 10, whose range covers all of
+  // them; each one is reached through an element base in the uniform.
+  Region hRefs;    ///< Horizontal curve-reference SSBO (binding 10).
   Region vBands;   ///< Vertical band SSBO (binding 8).
   Region vCurves;  ///< Vertical curve SSBO (binding 9).
-  Region vRefs;    ///< Vertical curve-reference SSBO (binding 13).
+  Region vRefs;    ///< Vertical curve-reference SSBO (binding 10).
   Region hGrid;    ///< Horizontal band grid (binding 10).
-  Region vGrid;    ///< Vertical band grid (binding 11).
+  Region vGrid;    ///< Vertical band grid (binding 10).
   Region uniform;  ///< Batch-level uniform block (binding 0, 256-aligned).
 
   /// Document-scoped record slab slot for this entity's instance record
