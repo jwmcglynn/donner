@@ -307,7 +307,7 @@ struct GeodeTextInstanceRecordComponent {
   uint64_t lastFrame = ~uint64_t{0};
 
   GeodeTextInstanceRecordComponent() = default;
-  ~GeodeTextInstanceRecordComponent() { release(); }
+  ~GeodeTextInstanceRecordComponent() { freeRecordSlots(); }
 
   GeodeTextInstanceRecordComponent(const GeodeTextInstanceRecordComponent&) = delete;
   GeodeTextInstanceRecordComponent& operator=(const GeodeTextInstanceRecordComponent&) = delete;
@@ -326,7 +326,7 @@ struct GeodeTextInstanceRecordComponent {
       // surviving component over the removed one, and a source that kept its
       // slots would free the SURVIVOR's records from its own destructor,
       // handing live batch bindings to whatever allocates next.
-      release();
+      freeRecordSlots();
       occurrences = std::move(other.occurrences);
       recordSlab = std::move(other.recordSlab);
       lastFrame = other.lastFrame;
@@ -337,7 +337,7 @@ struct GeodeTextInstanceRecordComponent {
 
   /// Return every slot to the slab (deferred to the next frame's merge, like
   /// every other record free) and drop them.
-  void release() {
+  void freeRecordSlots() {
     if (recordSlab) {
       for (const Occurrence& occurrence : occurrences) {
         if (occurrence.slot.buffer) {

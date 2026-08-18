@@ -2231,7 +2231,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
     if (component.recordSlab.get() != slab.get()) {
       // Device change retired the old slab with the registry-context swap;
       // the held slots belong to it, so drop them and start fresh.
-      component.release();
+      component.freeRecordSlots();
       component.recordSlab = std::move(slab);
     }
     if (component.lastFrame == currentFrameIndex) {
@@ -5341,8 +5341,12 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
           const geode::GeodeRecordSlab::Slot* recordSlot = nullptr;
           std::vector<uint8_t>* recordCache = nullptr;
           impl_->nextTextRecord(textRecords, registry, recordSlot, recordCache);
+          // `Transform2d`'s product applies its left operand first, so the
+          // glyph's placement into element-local space comes first and the
+          // element's device transform second. This is the same composition
+          // `pushTransform` performs for a nested element.
           impl_->emitGlyphFill(*occurrence.entry, spanFill,
-                               impl_->deviceFromLocalTransform * occurrence.glyphFromLocal,
+                               occurrence.glyphFromLocal * impl_->deviceFromLocalTransform,
                                recordSlot, recordCache);
         }
         // Stroke, decoration, and the next run all emit straight through the
@@ -5753,7 +5757,7 @@ ReadbackMapStatus MapAndWaitReadback(const std::shared_ptr<geode::GeodeDevice>& 
     std::atomic<bool> done{false};
     std::atomic<bool> ok{false};
 
-    void release() {
+    void freeRecordSlots() {
       if (references.fetch_sub(1, std::memory_order_acq_rel) == 1) {
         delete this;
       }
@@ -5766,7 +5770,7 @@ ReadbackMapStatus MapAndWaitReadback(const std::shared_ptr<geode::GeodeDevice>& 
     auto* s = static_cast<MapState*>(userdata1);
     s->ok.store(status == WGPUMapAsyncStatus_Success, std::memory_order_relaxed);
     s->done.store(true, std::memory_order_release);
-    s->release();
+    s->freeRecordSlots();
   };
   mapCb.userdata1 = mapState;
   mapCb.userdata2 = nullptr;
@@ -5842,12 +5846,12 @@ ReadbackMapStatus MapAndWaitReadback(const std::shared_ptr<geode::GeodeDevice>& 
     // reference keeps `mapState` valid even when delivery happens after this method returns.
     buffer.unmap();
     buffer.destroy();
-    mapState->release();
+    mapState->freeRecordSlots();
     return cancelled ? ReadbackMapStatus::Cancelled : ReadbackMapStatus::TimedOut;
   }
 
   const bool mapOk = mapState->ok.load(std::memory_order_acquire);
-  mapState->release();
+  mapState->freeRecordSlots();
   return mapOk ? ReadbackMapStatus::Success : ReadbackMapStatus::Failed;
 }
 
