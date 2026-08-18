@@ -85,6 +85,10 @@ donner_cc_test(
         "SVGUseElement_tests.cc",
     ],
     opens_gpu_device = True,
+    # Applies to the base target and the tiny variant. The device-opening
+    # variants are exclusive, and exclusive shards drain one at a time, so the
+    # macro drops sharding for those instead of paying an action round trip
+    # per shard for work that finishes no sooner.
     shard_count = 10,
     # Variant lanes (doc 0031 M2.3): emits `svg_tests_tiny`,
     # `svg_tests_text_full`, and `svg_tests_geode` so `bazel test //...`

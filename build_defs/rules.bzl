@@ -390,6 +390,9 @@ def donner_multi_transitioned_test(name, dep, renderer_backend, opens_gpu_device
         parsing/ECS/CSS/text-shaping), and tagging those serialized every
         geode-configured target in the repo into a single-file queue at the
         end of the test phase.
+
+        Such a variant is also never sharded, whatever `shard_count` the
+        caller set for the family; see below.
       **kwargs: Additional arguments for the underlying test rule.
     """
     if "size" not in kwargs and "timeout" not in kwargs:
@@ -398,6 +401,26 @@ def donner_multi_transitioned_test(name, dep, renderer_backend, opens_gpu_device
         tags = kwargs.get("tags", [])
         if "exclusive-if-local" not in tags:
             kwargs["tags"] = tags + ["exclusive-if-local"]
+
+        # Sharding a test that Bazel drains one at a time buys nothing and is
+        # not free. Every shard of an exclusive test runs back to back in
+        # Bazel's serial phase, so N shards finish no sooner than one
+        # unsharded run and cost N action round trips instead of one. Under
+        # coverage each of those round trips also fetches a full set of test
+        # outputs (the LCOV data, the raw profile, the XML), which is why the
+        # waste is most visible there: on one measured coverage run these
+        # variants contributed 40 of the 70 serialized test actions, and the
+        # extra 36 were pure round-trip overhead.
+        #
+        # The shard counts these families carry were tuned before the
+        # exclusive tag existed, when the geode variants really did shard into
+        # parallel actions. Adding the tag silently turned that tuning into
+        # cost, and the BUILD files had no way to see it. Drop it here, at the
+        # one place that knows a target is about to become exclusive, so the
+        # two cannot drift apart again. Non-exclusive siblings in the same
+        # family keep their sharding: this only fires for the variants that
+        # open a device.
+        kwargs.pop("shard_count", None)
 
     _donner_multi_transitioned_test(
         name = name,
@@ -599,9 +622,11 @@ def donner_cc_test(
         opt-in mechanism that lets `bazel test //...` cover variant lanes
         without per-test `--config=` flags. See doc 0031 M2.3.
       opens_gpu_device: True when this test instantiates a real GPU
-        device/adapter, so its geode-backed variants must be drained serially.
-        Forwarded to donner_multi_transitioned_test; see there for why it is
-        opt-in rather than implied by the geode backend.
+        device/adapter, so its geode-backed variants must be drained serially
+        and are therefore never sharded. Forwarded to
+        donner_multi_transitioned_test; see there for why it is opt-in rather
+        than implied by the geode backend, and why a `shard_count` here
+        reaches the other variants but not those.
       **kwargs: Additional arguments, matching the implementation of cc_test.
     """
     if "size" not in kwargs and "timeout" not in kwargs:

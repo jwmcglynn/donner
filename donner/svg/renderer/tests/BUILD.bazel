@@ -696,16 +696,18 @@ donner_variant_cc_test(
         # comparisons still run on every `bazel test //...` via
         # resvg_test_suite_default_text.
         #
-        # With the CPU half gone the shard work is pure geode
-        # render+readback+golden-compare volume; 16 shards halves the
-        # per-shard critical path relative to the CPU variants' 8.
+        # No shard_count override. This variant opens a GPU device, so it is
+        # exclusive and Bazel drains its shards one at a time; sharding it
+        # bought parallelism only before that tag existed, and since then a
+        # higher count has meant more serialized action round trips for the
+        # same total work. The macro drops sharding for exclusive variants;
+        # the CPU variants below keep the family's shard_count.
         {
             "name": "geode",
             "backend": "geode",
             "text": "true",
             "text_full": "false",
             "args": ["--gtest_filter=-*_TinyGolden"],
-            "shard_count": 16,
             # No platform pin: see the note on renderer_geode_golden_tests
             # above. This variant is explicitly designed for software Vulkan
             # (see the resvg_test_suite_impl comment on the lavapipe per-case
@@ -715,10 +717,11 @@ donner_variant_cc_test(
         },
     ],
     opens_gpu_device = True,
-    # Hundreds of independent image comparisons per variant. Unsharded, the
-    # geode variant alone ran ~267 s on the self-hosted RE lane
-    # (CI baseline, 2026-07-01) and sat on the test-step critical path. 8 shards
-    # per variant turn that into parallel ~35 s RE actions.
+    # Hundreds of independent image comparisons per variant, so the CPU
+    # variants shard into parallel RE actions. The geode variant does not: it
+    # opens a device, which makes it exclusive, and exclusive shards run one
+    # at a time. The macro drops sharding there rather than paying a round
+    # trip per shard for work that finishes no sooner.
     shard_count = 8,
 )
 

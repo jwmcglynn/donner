@@ -1188,9 +1188,11 @@ donner_cc_test(
         "//conditions:default": [],
     }),
     opens_gpu_device = True,
-    # 71 independent panel/golden cases. The geode variant runs them through
-    # software Vulkan on GPU-less CI (~23 s single-shard); shard so the render
-    # work runs as parallel RE actions.
+    # 71 independent panel/golden cases, ~23 s in one shard through software
+    # Vulkan on GPU-less CI. This applies to the base target only: the geode
+    # variant opens a device, which makes it exclusive, and exclusive shards
+    # drain one at a time, so the macro leaves that variant unsharded rather
+    # than paying an action round trip per shard.
     shard_count = 4,
     variants = ["geode"],
     deps = [
