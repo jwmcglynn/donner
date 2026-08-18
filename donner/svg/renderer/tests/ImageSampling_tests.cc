@@ -5,7 +5,10 @@
 
 #include <cstdint>
 #include <limits>
+#include <span>
 #include <vector>
+
+#include "donner/svg/renderer/PixelFormatUtils.h"
 
 namespace donner::svg {
 namespace {
@@ -14,6 +17,17 @@ using ::testing::ElementsAre;
 using ::testing::IsEmpty;
 
 constexpr std::uint8_t kOpaqueRed[] = {255, 0, 0, 255};
+
+TEST(ImageSamplingTest, ExactPayloadValidationRejectsMalformedDimensionsAndLengths) {
+  EXPECT_TRUE(HasExactRgbaPayload(kOpaqueRed, 1, 1));
+  EXPECT_FALSE(HasExactRgbaPayload(kOpaqueRed, 0, 1));
+  EXPECT_FALSE(HasExactRgbaPayload(kOpaqueRed, 1, 0));
+  EXPECT_FALSE(HasExactRgbaPayload(std::span(kOpaqueRed).first(3), 1, 1));
+  const std::vector<std::uint8_t> trailing = {255, 0, 0, 255, 17};
+  EXPECT_FALSE(HasExactRgbaPayload(trailing, 1, 1));
+  EXPECT_FALSE(HasExactRgbaPayload(std::span<const std::uint8_t>{}, std::numeric_limits<int>::max(),
+                                   std::numeric_limits<int>::max()));
+}
 
 TEST(ImageSamplingTest, RejectsTrailingSourceBytes) {
   const std::vector<std::uint8_t> pixels = {255, 0, 0, 255, 17};

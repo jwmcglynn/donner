@@ -20,6 +20,24 @@ std::optional<std::size_t> TightRowBytesForWidth(int width) {
   return sizeWidth * 4u;
 }
 
+std::optional<std::size_t> TightRgbaBytesForDimensions(int width, int height) {
+  if (height <= 0) {
+    return std::nullopt;
+  }
+
+  const std::optional<std::size_t> tightRowBytes = TightRowBytesForWidth(width);
+  if (!tightRowBytes.has_value()) {
+    return std::nullopt;
+  }
+
+  const std::size_t sizeHeight = static_cast<std::size_t>(height);
+  if (sizeHeight > std::numeric_limits<std::size_t>::max() / *tightRowBytes) {
+    return std::nullopt;
+  }
+
+  return *tightRowBytes * sizeHeight;
+}
+
 bool HasRgbaRows(std::span<const std::uint8_t> rgbaPixels, int width, int height,
                  std::size_t rowBytes) {
   if (height <= 0) {
@@ -52,6 +70,11 @@ void PremultiplyRgbaInPlace(std::vector<std::uint8_t>& rgba) {
 }
 
 }  // namespace
+
+bool HasExactRgbaPayload(std::span<const std::uint8_t> rgbaPixels, int width, int height) {
+  const std::optional<std::size_t> tightBytes = TightRgbaBytesForDimensions(width, height);
+  return tightBytes.has_value() && rgbaPixels.size() == *tightBytes;
+}
 
 void PremultiplyRgbaInto(std::span<const std::uint8_t> rgbaPixels, std::vector<std::uint8_t>& out) {
   out.assign(rgbaPixels.begin(), rgbaPixels.end());

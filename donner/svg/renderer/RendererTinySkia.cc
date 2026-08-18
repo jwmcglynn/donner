@@ -1911,18 +1911,7 @@ void RendererTinySkia::drawImagePixmap(const tiny_skia::PixmapView& source, int 
 }
 
 void RendererTinySkia::drawImage(const ImageResource& image, const ImageParams& params) {
-  if (image.data.empty() || image.width <= 0 || image.height <= 0) {
-    return;
-  }
-
-  // A payload longer than its declared dimensions is malformed, and drawing its leading
-  // `width * height` pixels would present mismatched content. The check is explicit because
-  // `PixmapView::fromBytes` below accepts any buffer at least as large as the view it returns,
-  // where wrapping the pixels in an owning `Pixmap` demanded an exact length; short payloads and
-  // dimensions too large to address are still rejected by `fromBytes` itself.
-  const std::uint64_t expectedDataBytes =
-      static_cast<std::uint64_t>(image.width) * static_cast<std::uint64_t>(image.height) * 4u;
-  if (static_cast<std::uint64_t>(image.data.size()) != expectedDataBytes) {
+  if (!HasExactRgbaPayload(image.data, image.width, image.height)) {
     return;
   }
 

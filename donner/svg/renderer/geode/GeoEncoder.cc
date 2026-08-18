@@ -3313,9 +3313,7 @@ void GeoEncoder::drawImage(const svg::ImageResource& image, const Box2d& destRec
   if (image.width > kMaxImageDim || image.height > kMaxImageDim) {
     return;
   }
-  const size_t expectedBytes =
-      static_cast<size_t>(image.width) * static_cast<size_t>(image.height) * 4u;
-  if (image.data.size() < expectedBytes) {
+  if (!svg::HasExactRgbaPayload(image.data, image.width, image.height)) {
     return;
   }
 

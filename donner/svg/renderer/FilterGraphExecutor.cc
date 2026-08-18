@@ -7,6 +7,7 @@
 #include <utility>
 
 #include "donner/svg/renderer/ImageSampling.h"
+#include "donner/svg/renderer/PixelFormatUtils.h"
 #include "tiny_skia/filter/FilterGraph.h"
 
 namespace donner::svg {
@@ -510,8 +511,8 @@ void ApplyFilterGraphToPixmap(tiny_skia::Pixmap& pixmap, const components::Filte
                 image.sampling = gp::Image::Sampling::Smooth;
                 break;
             }
-            if (!primitive.imageData.empty() && primitive.imageWidth > 0 &&
-                primitive.imageHeight > 0) {
+            if (HasExactRgbaPayload(primitive.imageData, primitive.imageWidth,
+                                    primitive.imageHeight)) {
               const std::vector<std::uint8_t> premultiplied = PremultiplyRgba(primitive.imageData);
 
               if (primitive.isFragmentReference && graph.filterFromDevice.has_value()) {

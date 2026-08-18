@@ -221,6 +221,7 @@ donner_perf_sensitive_cc_library(
     hdrs = ["ImageSampling.h"],
     visibility = ["//donner/svg/renderer:__subpackages__"],
     deps = [
+        ":pixel_format_utils",
         "//donner/base",
         "//donner/svg/core",
     ],

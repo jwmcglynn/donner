@@ -98,11 +98,12 @@ Reducing the raw totals is useful, but correctness and classification are the ac
   - [ ] Resolve pixel centers and non-integer nearest-grid behavior for `<image>` and `<feImage>` on
         both renderers, then enable `painting/image-rendering/on-feImage.svg` and
         `optimizeSpeed.svg` when the independent oracle agrees.
-  - [ ] Validate programmatic `ImageResource` payload length against `width * height * 4` before
-        premultiplication or upload. Loader-produced SVG images are already dimension and byte
-        budget constrained; this hardens direct embedder construction.
+  - [x] Validate programmatic `ImageResource` and `<feImage>` payloads against overflow-safe exact
+        `width * height * 4` byte counts before premultiplication, sampling, or upload. Reject
+        hostile image-sampling axes before allocation and keep non-finite transforms transparent.
   - [ ] Verify property mapping, CPU filter sampling, Geode sampling, and the resvg category with
         `//donner/svg/properties/tests:properties_tests`,
+        `//donner/svg/renderer/tests:image_sampling_tests`,
         `//donner/svg/renderer/tests:filter_graph_executor_tests`,
         `:renderer_geode_golden_tests`, and `:resvg_test_suite`.
 - [ ] Milestone 3: Finish existing text-length machinery
@@ -565,6 +566,13 @@ must preserve the existing no-exception error model and resource budgets.
   the already-bounded output surface; an output above the same surface budget fails closed before
   allocation. `RendererPublicApiTest.PixelatedLargeLogicalIntermediateUsesBoundedSampler` owns the
   fallback invariant.
+- Programmatic raster images and `<feImage>` primitives reach premultiplication, CPU sampling, or
+  GPU upload only when their payload is exactly the overflow-safe tightly packed RGBA8 size for
+  the declared dimensions. The procedural sampler rejects oversized axes before allocation and
+  leaves its bounded output transparent when source, inverse, scale, or mapped coordinates are
+  non-finite. `//donner/svg/renderer/tests:image_sampling_tests`,
+  `:filter_graph_executor_tests`, `:renderer_public_api_tests`, and `:renderer_geode_tests` own
+  these failure contracts.
 - General-affine stroking retains the existing path command, subdivision, and dash-work limits.
   Non-finite transforms and expansion overflow run through `//donner/base:path_fuzzer`,
   `:path_ops_fuzzer`, `//donner/svg/parser:path_parser_fuzzer`, and

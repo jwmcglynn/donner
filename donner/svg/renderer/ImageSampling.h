@@ -11,7 +11,7 @@
 
 namespace donner::svg {
 
-/// Maximum axis of a materialized image-sampling surface.
+/// Maximum source or output axis accepted by the procedural image sampler.
 inline constexpr std::int64_t kMaxImageSamplingDimension = 16384;
 /// Maximum pixels in one materialized image-sampling surface.
 inline constexpr std::size_t kMaxImageSamplingSurfacePixels = 16 * 1024 * 1024;
@@ -19,15 +19,16 @@ inline constexpr std::size_t kMaxImageSamplingSurfacePixels = 16 * 1024 * 1024;
 /**
  * Rasterizes a premultiplied image through an affine transform into a bounded device surface.
  *
- * @param premultipliedPixels Tightly packed premultiplied RGBA8 source pixels.
+ * @param premultipliedPixels Exact tightly packed premultiplied RGBA8 source payload.
  * @param sourceWidth Source width in pixels.
  * @param sourceHeight Source height in pixels.
  * @param deviceFromImage Transform from source-pixel coordinates to output pixels.
  * @param outputWidth Output width in pixels.
  * @param outputHeight Output height in pixels.
  * @param imageRendering Resolved image sampling policy.
- * @return Tightly packed premultiplied RGBA8 output, or empty when inputs exceed the surface
- * budget.
+ * @return Tightly packed premultiplied RGBA8 output. Malformed payloads, invalid dimensions, and
+ * over-budget surfaces return empty; invalid transforms return a correctly sized transparent
+ * output.
  */
 std::vector<std::uint8_t> RasterizeImagePremultiplied(
     std::span<const std::uint8_t> premultipliedPixels, int sourceWidth, int sourceHeight,

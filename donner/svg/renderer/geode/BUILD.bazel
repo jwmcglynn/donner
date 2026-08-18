@@ -274,6 +274,7 @@ donner_cc_library(
         "//donner/base",
         "//donner/base:asyncify_suspend_probe",
         "//donner/svg/components/filter:components",
+        "//donner/svg/renderer:pixel_format_utils",
         "//third_party/webgpu-cpp:webgpu_cpp",
     ],
 )

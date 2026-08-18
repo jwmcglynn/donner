@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "donner/svg/components/filter/FilterGraph.h"
+#include "donner/svg/renderer/PixelFormatUtils.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
 #include "donner/svg/renderer/geode/GeodeShaders.h"
 #include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
@@ -3367,13 +3368,15 @@ wgpu::Texture GeodeFilterEngine::applyImage(
     const Box2d& placementRegionUser) {
   const wgpu::Device& dev = device_.device();
 
+  const bool hasExactPayload =
+      svg::HasExactRgbaPayload(primitive.imageData, primitive.imageWidth, primitive.imageHeight);
   wgpu::Texture output = createIntermediateTexture(arena, dev, width, height, "FilterImageOutput");
 
-  // Empty / degenerate source: feed the shader a 1×1 transparent texture
+  // Empty, malformed, or degenerate source: feed the shader a 1×1 transparent texture
   // with an out-of-bounds transform. The resulting output is transparent
   // everywhere - which is also what the shader would emit for any real
   // image whose sample coordinates fall outside the source bounds.
-  if (primitive.imageData.empty() || primitive.imageWidth <= 0 || primitive.imageHeight <= 0) {
+  if (!hasExactPayload) {
     wgpu::TextureDescriptor imgDesc{};
     imgDesc.label = wgpuLabel("FilterImageEmptySource");
     imgDesc.size = {1, 1, 1};
@@ -3408,17 +3411,7 @@ wgpu::Texture GeodeFilterEngine::applyImage(
   // (consistent with feFlood / feMerge).
   const int imgW = primitive.imageWidth;
   const int imgH = primitive.imageHeight;
-  std::vector<uint8_t> premul(primitive.imageData.size());
-  for (size_t i = 0; i + 3 < primitive.imageData.size(); i += 4) {
-    const unsigned a = primitive.imageData[i + 3];
-    premul[i + 0] =
-        static_cast<uint8_t>((static_cast<unsigned>(primitive.imageData[i + 0]) * a + 127u) / 255u);
-    premul[i + 1] =
-        static_cast<uint8_t>((static_cast<unsigned>(primitive.imageData[i + 1]) * a + 127u) / 255u);
-    premul[i + 2] =
-        static_cast<uint8_t>((static_cast<unsigned>(primitive.imageData[i + 2]) * a + 127u) / 255u);
-    premul[i + 3] = static_cast<uint8_t>(a);
-  }
+  const std::vector<uint8_t> premul = svg::PremultiplyRgba(primitive.imageData);
 
   wgpu::TextureDescriptor imgDesc{};
   imgDesc.label = wgpuLabel("FilterImageSource");
