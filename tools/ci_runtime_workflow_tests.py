@@ -263,6 +263,24 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
                 )
                 self.assertEqual("x" * (iteration + 1), hook_count.read_text())
 
+    def test_quiet_coverage_keeps_bazels_own_build_summary(self):
+        """The archived log must still say how much of the run was cached.
+
+        Bazel's end-of-build INFO summary ("N processes: X remote cache hit,
+        Y remote") is the only line that distinguishes a coverage run that was
+        slow because it built from one that was slow while doing nothing but
+        fetching cached results. Filtering INFO events left every archived log
+        ending in a bare "INFO:" with the counts stripped, so that question had
+        to be re-derived from the profile every time. The filter costs nothing
+        to keep off: in quiet mode this output is redirected to the log file,
+        not the console.
+        """
+        quiet_invocation = self.coverage_script.split("run_quiet_with_progress", 2)[2]
+        quiet_invocation = quiet_invocation.split("\n  else", 1)[0]
+        self.assertIn("--ui_event_filters=", quiet_invocation)
+        filters = re.search(r"--ui_event_filters=(\S+)", quiet_invocation).group(1)
+        self.assertNotIn("-info", filters)
+
     def test_coverage_cleanup_is_portable_and_prompt_without_ps(self):
         """Coverage remains portable to macOS and owns its heartbeat sleeper."""
         self.assertNotIn("awk -v p=", self.coverage_script)

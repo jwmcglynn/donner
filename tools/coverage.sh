@@ -378,8 +378,17 @@ fi
     # containing a single line, so a coverage run that stalled for 200 minutes
     # produced no evidence of WHAT it stalled on. Progress lines are the only
     # record of the in-flight target when the job is killed by its timeout.
+    #
+    # `-info` is NOT filtered, for the same reason. Bazel's end-of-build INFO
+    # summary is the one line that says how many actions ran versus came from
+    # a cache ("N processes: X remote cache hit, Y remote"), which is the only
+    # direct evidence of whether a slow coverage run was slow because it built
+    # or slow because it did not. Filtering it left every archived coverage log
+    # ending in a bare "INFO:" with the counts stripped out, so the question had
+    # to be re-answered from the profile every time. Everything this restores
+    # goes to the log file, not the console, so --quiet is still quiet.
     run_quiet_with_progress "Bazel coverage" "$BAZEL_COVERAGE_LOG" \
-      "${BAZEL_CMD[@]}" coverage --config=latest_llvm --ui_event_filters=-info,-stdout,-stderr \
+      "${BAZEL_CMD[@]}" coverage --config=latest_llvm --ui_event_filters=-stdout,-stderr \
       "${DEFAULT_BAZEL_COVERAGE_FLAGS[@]}" \
       "${BAZEL_COVERAGE_FLAGS[@]}" \
       "${LLVM_COVERAGE_FLAGS[@]}" \
