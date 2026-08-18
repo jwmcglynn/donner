@@ -1,0 +1,5 @@
+# CodeFactor analysis configuration.
+# Vendored code is analyzed upstream, not held to this repository's style
+# rules; findings there are noise the maintainers cannot act on.
+exclude:
+  - "third_party/**"
