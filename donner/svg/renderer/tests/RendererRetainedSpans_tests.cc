@@ -633,6 +633,99 @@ TEST(RendererRetainedSpans, RetainedBytesCountThePaintsKeptBesideTheCoverage) {
   EXPECT_EQ(entry.chargedBytes, RetainedEntryBytes(entry));
 }
 
+// Retention and the per-entity conversion caches sit on the same draw and the same entities, so
+// what each does to the other's observable behavior is pinned here rather than assumed.
+
+namespace {
+
+/// A 2x2 solid red PNG as a data URI, so the image loads with no external resources.
+constexpr std::string_view kRedImageDataUri =
+    "data:image/png;base64,"
+    "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAEElEQVR4nGP4z8AARAwQCgAf7gP9i18U1AAAAABJRU5E"
+    "rkJggg==";
+
+SVGDocument shapesAndImageDocument() {
+  return parseFragment(std::string(R"svg(<path id="p" d="M 8 8 L 60 8 L 60 60 Z" fill="black"/>
+         <rect x="10" y="10" width="30" height="30" fill="red"/>
+         <circle cx="70" cy="70" r="16" fill="blue"/>
+         <image id="i" x="60" y="0" width="30" height="30" href=")svg") +
+                       std::string(kRedImageDataUri) + R"svg(" />)svg");
+}
+
+}  // namespace
+
+TEST(RendererRetainedSpans, SettledFrameConvertsNothingWithRetentionEnabled) {
+  SVGDocument document = shapesAndImageDocument();
+
+  RendererTinySkia renderer;
+  renderer.setRetainedSpansEnabled(true);
+  renderer.draw(document);
+
+  EXPECT_GT(renderer.frameCounters().pathConversions, 0u)
+      << "the capture frame rasterizes, so it needs the outlines and converts them once";
+  EXPECT_GT(renderer.frameCounters().imagePremultiplies, 0u);
+  EXPECT_GT(renderer.retainedSpanStats().capturedDraws, 0u);
+
+  renderer.draw(document);
+
+  EXPECT_EQ(renderer.frameCounters().pathConversions, 0u)
+      << "a replayed frame needs no outline at all, so retention must not reach the conversion "
+         "cache and must not convert on its own";
+  EXPECT_EQ(renderer.frameCounters().imagePremultiplies, 0u)
+      << "images bypass retention, so their cache has to keep serving them";
+  EXPECT_GT(renderer.retainedSpanStats().replayedDraws, 0u);
+  EXPECT_TRUE(BitmapsEqual(renderFresh(document), renderer.takeSnapshot()));
+}
+
+TEST(RendererRetainedSpans, RecaptureTakesTheCachedOutlineInsteadOfConvertingAgain) {
+  SVGDocument document =
+      parseFragment(R"svg(<rect id="r" x="10" y="10" width="40" height="40" fill="#a02020"/>)svg");
+  auto rect = document.querySelector("#r");
+  ASSERT_TRUE(rect.has_value());
+
+  RendererTinySkia renderer;
+  renderer.setRetainedSpansEnabled(true);
+  renderer.draw(document);
+  renderer.draw(document);
+  ASSERT_EQ(renderer.frameCounters().pathConversions, 0u);
+
+  // A transform change invalidates the recording but not the outline, which is the case where
+  // the two caches have to compose: the shape rasterizes again and takes its outline from the
+  // conversion cache rather than converting a second time.
+  rect->setAttribute("transform", "translate(12, 9)");
+  renderer.draw(document);
+
+  EXPECT_GT(renderer.retainedSpanStats().capturedDraws, 0u);
+  EXPECT_EQ(renderer.frameCounters().pathConversions, 0u)
+      << "re-rasterizing must not bypass the conversion cache";
+  EXPECT_TRUE(BitmapsEqual(renderFresh(document), renderer.takeSnapshot()));
+}
+
+TEST(RendererRetainedSpans, GeometryEditDropsBothCachesForTheSameEntity) {
+  SVGDocument document =
+      parseFragment(R"svg(<path id="p" d="M 10 10 H 70 V 70 H 10 Z" fill="#20a020"/>)svg");
+  auto path = document.querySelector("#p");
+  ASSERT_TRUE(path.has_value());
+
+  RendererTinySkia renderer;
+  renderer.setRetainedSpansEnabled(true);
+  renderer.draw(document);
+  renderer.draw(document);
+  ASSERT_EQ(renderer.frameCounters().pathConversions, 0u);
+  ASSERT_GT(renderer.retainedSpanStats().replayedDraws, 0u);
+
+  path->setAttribute("d", "M 20 20 H 86 V 86 H 20 Z");
+  renderer.draw(document);
+
+  // Both caches listen on the resolved-path signals. Both listeners have to run: one converting
+  // the new outline, the other refusing to replay coverage of the old one.
+  EXPECT_GT(renderer.frameCounters().pathConversions, 0u)
+      << "the conversion cache kept the pre-edit outline";
+  EXPECT_GT(renderer.retainedSpanStats().capturedDraws, 0u)
+      << "the retained cache kept the pre-edit coverage";
+  EXPECT_TRUE(BitmapsEqual(renderFresh(document), renderer.takeSnapshot()));
+}
+
 TEST(RendererRetainedSpans, AnimatedDocumentStaysCorrectAcrossTimeSamples) {
   parser::SVGParser::Options options;
   options.enableExperimental = true;
