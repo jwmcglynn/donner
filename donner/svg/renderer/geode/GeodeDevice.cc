@@ -8,6 +8,7 @@
 #include "donner/svg/renderer/geode/GeodeDevice.h"
 
 #include <atomic>
+#include <cassert>
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
@@ -947,6 +948,11 @@ wgpu::BindGroup GeodeDevice::findSceneBatchBindGroup(
 
 void GeodeDevice::storeSceneBatchBindGroup(const SceneBatchBindGroupKey& key,
                                            wgpu::BindGroup group) {
+  // The deque holds one entry per live map key, in insertion order: a key is
+  // pushed only when it was newly inserted, and popped only together with the
+  // erase of that same key. Nothing else touches either container, so the two
+  // stay the same size and eviction always finds a key that is really there.
+  assert(sceneBatchBindGroupOrder_.size() == sceneBatchBindGroups_.size());
   while (sceneBatchBindGroups_.size() >= kSceneBatchBindGroupCacheCap &&
          !sceneBatchBindGroupOrder_.empty()) {
     sceneBatchBindGroups_.erase(sceneBatchBindGroupOrder_.front());

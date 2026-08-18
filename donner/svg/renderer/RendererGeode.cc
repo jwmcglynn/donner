@@ -2694,9 +2694,11 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
       // non-instanced path. Prefer the persistent-residence path so an
       // unbatched solid fill re-uploads zero geometry on an unchanged frame.
       // A fill lands here whenever it never gained a second batch member:
-      // it was scene-ineligible (clipped, scissored, no cached encode, no
-      // residence slot, or a same-frame repeat), or it was eligible but its
-      // record slot did not extend the pending run. Differing paint does NOT
+      // it was scene-ineligible (a clip polygon or mask, an open mask pass, no
+      // cached encode, no residence slot, or a same-frame repeat), or it was
+      // eligible but its record slot did not extend the pending run. A
+      // rectangular clip is NOT among those reasons any more - it travels in
+      // the instance record. Differing paint does NOT
       // land a draw here - a scene batch carries color and fill rule per
       // instance record; only the same-entity instanced mode ends its run on
       // a paint or fill-rule change.
@@ -5140,7 +5142,14 @@ void RendererGeode::drawPath(const PathShape& path, const StrokeParams& stroke) 
   // than at emit time because the batcher needs them before it can decide.
   std::optional<geode::LinearGradientParams> batchLinear;
   std::optional<geode::RadialGradientParams> batchRadial;
-  if (kEnableSceneBatching && referenceFill && fillShapeBatchable) {
+  //
+  // The state-driven reasons a gradient would be declined are cheap to test up
+  // front, and testing them here keeps the ordinary emit path from re-resolving
+  // a gradient the batcher just discarded. The remaining decline is a
+  // same-frame repeat of one entity, which needs the residence slot to detect
+  // and is rare enough not to be worth fetching one for.
+  if (kEnableSceneBatching && referenceFill && fillShapeBatchable &&
+      !impl_->encoder->hasActiveClipState() && !impl_->encoder->hasOpenMaskPass()) {
     impl_->resolveBatchGradient(drawPathGeometry, impl_->paint.fill, impl_->paint.fillOpacity,
                                 batchLinear, batchRadial);
   }
