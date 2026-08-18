@@ -254,7 +254,7 @@ jobs:
 
             # Non-PR events (main pushes) always run: that baseline is what
             # lets PR-side fallbacks be skipped at all.
-            if [[ "${{ github.event_name }}" != "pull_request" ]]; then
+            if [[ "$EVENT_NAME" != "pull_request" ]]; then
               echo true
               return
             fi
@@ -306,7 +306,7 @@ jobs:
             } > "$diagnostics_dir/summary.txt"
           }
 
-          if [[ "${{ github.event_name }}" != "pull_request" ]]; then
+          if [[ "$EVENT_NAME" != "pull_request" ]]; then
             echo "Non-PR event; using full coverage target set."
             emit_targets true non_pr "$FULL_COVERAGE_TARGETS"
             exit 0
