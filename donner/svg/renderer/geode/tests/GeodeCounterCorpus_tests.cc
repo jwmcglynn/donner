@@ -169,15 +169,9 @@ struct KnownViolation {
   std::string_view reason;
   /// What has to change for this entry to be deleted.
   std::string_view tracking;
-  /// True when the scene only falls off the steady state in a build with
-  /// cross-entity ordered batching compiled out. Such a scene has its work
-  /// batched away entirely when batching is on, so the entry does not apply
-  /// there and the scene is held to the shared target instead. Delete the
-  /// qualifier (and the entry) once batching is unconditional.
-  bool onlyWithoutSceneBatching = false;
 };
 
-constexpr std::array<KnownViolation, 31> kKnownViolations = {{
+constexpr std::array<KnownViolation, 29> kKnownViolations = {{
     {
         /*scene=*/"donner_icon",
         /*violated=*/kTextureCreates | kBufferWrites | kBindgroupCreates,
@@ -443,17 +437,6 @@ constexpr std::array<KnownViolation, 31> kKnownViolations = {{
         "per source entity",
     },
     {
-        /*scene=*/"simple_text_demo",
-        /*violated=*/kBufferWrites | kBindgroupCreates,
-        /*ceiling=*/{0, 0, 135, 15},
-        /*reason=*/
-        "glyph outlines are resident, but without a batch to read per-occurrence records the "
-        "repeated occurrences of a glyph fall back to the per-frame arena for their uniforms",
-        /*tracking=*/
-        "clears when cross-entity ordered batching is unconditional",
-        /*onlyWithoutSceneBatching=*/true,
-    },
-    {
         /*scene=*/"stroking_complex",
         /*violated=*/kPathEncodes | kBufferWrites | kBindgroupCreates,
         /*ceiling=*/{8, 0, 16, 8},
@@ -488,27 +471,16 @@ constexpr std::array<KnownViolation, 31> kKnownViolations = {{
         "have",
     },
     {
-        /*scene=*/"text_inline_size_wrap",
-        /*violated=*/kBufferWrites | kBindgroupCreates,
-        /*ceiling=*/{0, 0, 72, 8},
-        /*reason=*/
-        "glyph outlines are resident, but without a batch to read per-occurrence records the "
-        "repeated occurrences of a glyph fall back to the per-frame arena for their uniforms",
-        /*tracking=*/
-        "clears when cross-entity ordered batching is unconditional",
-        /*onlyWithoutSceneBatching=*/true,
-    },
-    {
         /*scene=*/"z0rly_test6",
-        /*violated=*/kBufferWrites | kBindgroupCreates,
-        /*ceiling=*/{0, 0, 162, 18},
+        /*violated=*/kBindgroupCreates,
+        /*ceiling=*/{0, 0, 0, 22},
         /*reason=*/
-        "music-notation glyph outlines are resident, but without a batch to read "
-        "per-occurrence records the repeated occurrences fall back to the per-frame arena "
-        "for their uniforms",
+        "residency removed this scene's outline re-encodes and uniform re-uploads, but its "
+        "music-notation glyphs are drawn from many separate text elements that ordered batching "
+        "does not merge, so each draw still builds its own bind group",
         /*tracking=*/
-        "clears when cross-entity ordered batching is unconditional",
-        /*onlyWithoutSceneBatching=*/true,
+        "clears when bind groups are cached across draws that share a pipeline, or when batching "
+        "merges runs from separate text elements",
     },
 }};
 
@@ -516,12 +488,6 @@ const KnownViolation* findKnownViolation(std::string_view scene) {
   for (const KnownViolation& entry : kKnownViolations) {
     if (entry.scene != scene) {
       continue;
-    }
-    if (entry.onlyWithoutSceneBatching && RendererGeode::sceneBatchingEnabledForTesting()) {
-      // The entry describes a build this is not. Falling through to the shared
-      // target is the point: with batching on the scene reaches it, and the
-      // ratchet must fail if it ever stops.
-      return nullptr;
     }
     return &entry;
   }
