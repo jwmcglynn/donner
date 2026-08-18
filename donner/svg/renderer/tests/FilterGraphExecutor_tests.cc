@@ -18,6 +18,7 @@ namespace {
 using ::testing::_;
 using ::testing::AllOf;
 using ::testing::ElementsAre;
+using ::testing::ElementsAreArray;
 using ::testing::Ge;
 using ::testing::Gt;
 using ::testing::Le;
@@ -666,6 +667,177 @@ TEST(FilterGraphExecutorTest, DropShadowProducesOffsetAndBlurredCopy) {
   // The shadow center should be near (20, 20), with non-zero alpha (black shadow).
   const Pixel shadow = GetPixel(pixmap, 20, 20);
   EXPECT_THAT(shadow, Rgba(_, _, _, Gt(0)));
+}
+
+// ---------------------------------------------------------------------------
+// feDropShadow input selection
+// ---------------------------------------------------------------------------
+
+/// Fills a square of opaque white, the simplest shape whose alpha is either 255 or 0 everywhere
+/// so a shadow cast from it can be located exactly.
+void FillOpaqueSquare(tiny_skia::Pixmap& pixmap, int x, int y, int size) {
+  for (int row = y; row < y + size; ++row) {
+    for (int column = x; column < x + size; ++column) {
+      SetPixel(pixmap, column, row, Pixel{255, 255, 255, 255});
+    }
+  }
+}
+
+/// A drop shadow with no blur, so the shadow is a hard-edged copy of its input's alpha and its
+/// position can be asserted per-pixel instead of through a tolerance.
+components::filter_primitive::DropShadow SharpBlackShadow(double dx, double dy) {
+  return components::filter_primitive::DropShadow{
+      .dx = dx,
+      .dy = dy,
+      .stdDeviationX = 0.0,
+      .stdDeviationY = 0.0,
+      .floodColor = css::Color(css::RGBA(0, 0, 0, 255)),
+      .floodOpacity = 1.0,
+  };
+}
+
+// feDropShadow builds its shadow from the alpha of its own input, and an explicit `in` naming
+// an earlier result has to move the shadow with that result. A shadow cut from SourceGraphic
+// instead stays behind at the unfiltered geometry.
+TEST(FilterGraphExecutorTest, DropShadowUsesNamedInputAlphaNotSourceGraphic) {
+  auto maybePixmap = tiny_skia::Pixmap::fromSize(32, 32);
+  ASSERT_TRUE(maybePixmap.has_value());
+  tiny_skia::Pixmap pixmap = std::move(*maybePixmap);
+
+  // SourceGraphic is one opaque square covering x,y in [6, 10).
+  FillOpaqueSquare(pixmap, 6, 6, 4);
+
+  components::FilterGraph graph;
+
+  // Node 0: move the square to [18, 22) and publish it as "moved".
+  components::FilterNode offsetNode;
+  offsetNode.inputs.push_back(
+      components::FilterInput{components::FilterStandardInput::SourceGraphic});
+  offsetNode.primitive = components::filter_primitive::Offset{.dx = 12.0, .dy = 12.0};
+  offsetNode.result = RcString("moved");
+  graph.nodes.push_back(std::move(offsetNode));
+
+  // Node 1: shadow "moved", putting the shadow at [22, 26).
+  components::FilterNode shadowNode;
+  shadowNode.inputs.push_back(
+      components::FilterInput{components::FilterInput::Named{RcString("moved")}});
+  shadowNode.primitive = SharpBlackShadow(/*dx=*/4.0, /*dy=*/4.0);
+  graph.nodes.push_back(std::move(shadowNode));
+
+  ApplyFilterGraphToPixmap(pixmap, graph, Transform2d(), std::nullopt);
+
+  // The input the shadow was cut from is still merged over it.
+  EXPECT_THAT(GetPixel(pixmap, 19, 19), Rgba(255, 255, 255, 255));
+
+  // The shadow follows the named input.
+  EXPECT_THAT(GetPixel(pixmap, 23, 23), Rgba(0, 0, 0, 255));
+
+  // ... and no shadow is cast from SourceGraphic's untouched position, which is where a shadow
+  // built from SourceGraphic's alpha would have landed.
+  EXPECT_THAT(GetPixel(pixmap, 11, 11), Rgba(_, _, _, 0));
+}
+
+// The same obligation reached through the implicit input: an unspecified `in` is the preceding
+// primitive's result, so only a feDropShadow that is itself the first primitive resolves to
+// SourceGraphic.
+TEST(FilterGraphExecutorTest, DropShadowUsesPrecedingResultAlphaWhenInputIsImplicit) {
+  auto maybePixmap = tiny_skia::Pixmap::fromSize(32, 32);
+  ASSERT_TRUE(maybePixmap.has_value());
+  tiny_skia::Pixmap pixmap = std::move(*maybePixmap);
+
+  FillOpaqueSquare(pixmap, 6, 6, 4);
+
+  components::FilterGraph graph;
+
+  components::FilterNode offsetNode;
+  offsetNode.inputs.push_back(
+      components::FilterInput{components::FilterStandardInput::SourceGraphic});
+  offsetNode.primitive = components::filter_primitive::Offset{.dx = 12.0, .dy = 12.0};
+  graph.nodes.push_back(std::move(offsetNode));
+
+  components::FilterNode shadowNode;
+  shadowNode.inputs.push_back(components::FilterInput{});  // Previous.
+  shadowNode.primitive = SharpBlackShadow(/*dx=*/4.0, /*dy=*/4.0);
+  graph.nodes.push_back(std::move(shadowNode));
+
+  ApplyFilterGraphToPixmap(pixmap, graph, Transform2d(), std::nullopt);
+
+  EXPECT_THAT(GetPixel(pixmap, 19, 19), Rgba(255, 255, 255, 255));
+  EXPECT_THAT(GetPixel(pixmap, 23, 23), Rgba(0, 0, 0, 255));
+  EXPECT_THAT(GetPixel(pixmap, 11, 11), Rgba(_, _, _, 0));
+}
+
+// The default case, which the two above must not disturb: a feDropShadow with no earlier
+// primitive to chain from still cuts its shadow out of SourceGraphic.
+TEST(FilterGraphExecutorTest, DropShadowWithoutAnEarlierResultShadowsSourceGraphic) {
+  auto maybePixmap = tiny_skia::Pixmap::fromSize(32, 32);
+  ASSERT_TRUE(maybePixmap.has_value());
+  tiny_skia::Pixmap pixmap = std::move(*maybePixmap);
+
+  FillOpaqueSquare(pixmap, 6, 6, 4);
+
+  components::FilterGraph graph;
+  components::FilterNode shadowNode;
+  shadowNode.inputs.push_back(components::FilterInput{});  // Previous, which is SourceGraphic here.
+  shadowNode.primitive = SharpBlackShadow(/*dx=*/4.0, /*dy=*/4.0);
+  graph.nodes.push_back(std::move(shadowNode));
+
+  ApplyFilterGraphToPixmap(pixmap, graph, Transform2d(), std::nullopt);
+
+  EXPECT_THAT(GetPixel(pixmap, 7, 7), Rgba(255, 255, 255, 255));
+  EXPECT_THAT(GetPixel(pixmap, 11, 11), Rgba(0, 0, 0, 255));
+}
+
+// On a first primitive, an explicit `in="SourceGraphic"` and an implicit input name the same
+// buffer, so the two renders have to agree byte for byte. This is the pixel-level statement that
+// reading the node's own input left that path alone.
+TEST(FilterGraphExecutorTest, DropShadowExplicitSourceGraphicMatchesImplicitInput) {
+  const auto render = [](components::FilterInput input) {
+    auto maybePixmap = tiny_skia::Pixmap::fromSize(32, 32);
+    EXPECT_TRUE(maybePixmap.has_value());
+    tiny_skia::Pixmap pixmap = std::move(*maybePixmap);
+
+    // Partial alpha and mixed colors, so a shadow that reads the wrong channel or skips a
+    // conversion shows up rather than cancelling against a flat opaque square.
+    for (int y = 4; y < 12; ++y) {
+      for (int x = 4; x < 12; ++x) {
+        const auto alpha = static_cast<std::uint8_t>(40 + (x * 9 + y * 3) % 216);
+        const auto scale = [&](int value) {
+          return static_cast<std::uint8_t>(value * alpha / 255);
+        };
+        SetPixel(pixmap, x, y, Pixel{scale(200), scale(80), scale(30), alpha});
+      }
+    }
+
+    components::FilterGraph graph;
+    components::FilterNode shadowNode;
+    shadowNode.inputs.push_back(std::move(input));
+    shadowNode.primitive = components::filter_primitive::DropShadow{
+        .dx = 3.0,
+        .dy = 2.0,
+        .stdDeviationX = 1.5,
+        .stdDeviationY = 1.5,
+        .floodColor = css::Color(css::RGBA(20, 90, 160, 255)),
+        .floodOpacity = 0.75,
+    };
+    graph.nodes.push_back(std::move(shadowNode));
+
+    ApplyFilterGraphToPixmap(pixmap, graph, Transform2d(), std::nullopt);
+    return pixmap;
+  };
+
+  const tiny_skia::Pixmap implicitInput = render(components::FilterInput{});
+  const tiny_skia::Pixmap explicitSourceGraphic =
+      render(components::FilterInput{components::FilterStandardInput::SourceGraphic});
+
+  const auto implicitData = implicitInput.data();
+  const auto explicitData = explicitSourceGraphic.data();
+  ASSERT_EQ(implicitData.size(), explicitData.size());
+  EXPECT_THAT(std::vector<std::uint8_t>(explicitData.begin(), explicitData.end()),
+              ElementsAreArray(implicitData));
+
+  // The shadow is present, so the comparison above is not two blank pixmaps agreeing.
+  EXPECT_THAT(GetPixel(implicitInput, 13, 12), Rgba(_, _, _, Gt(0)));
 }
 
 // ---------------------------------------------------------------------------
