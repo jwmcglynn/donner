@@ -1,4 +1,5 @@
 {
+  "playwrightVersion": "1.62.1",
   "comment": "Pinned from playwright-core 1.62.1; update with the npm lock.",
   "browsers": [
     {
