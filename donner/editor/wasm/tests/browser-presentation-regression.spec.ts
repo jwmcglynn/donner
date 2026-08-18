@@ -54,6 +54,7 @@ declare global {
       overlayVersionGateSuppressions: number;
     };
     __donnerViewportStats?: ViewportStats;
+    __donnerEditorFrameRequested?: boolean;
   }
 }
 
@@ -431,6 +432,112 @@ async function openEditor(page: Page): Promise<string[]> {
   return failures;
 }
 
+// Read the editor canvas the way the page itself sees it, then again after the
+// editor has presented one more frame.
+//
+// A screenshot is two hops away from what the editor drew: the editor presents
+// into the canvas, and the browser then has to hand that presented image to
+// whoever reads the page. Gecko does not guarantee the second hop survives an
+// arbitrary gap between presents for a canvas a worker owns, and this suite
+// already carries a same-task retry for its empty first read of a
+// just-presented WebGPU canvas (see the composited probe). The editor's frame
+// loop is demand driven, so once it parks after presenting there is nothing to
+// re-arm that image, and every later read of the page answers empty.
+//
+// Distinguishing that from "the editor presented nothing" cannot be done from
+// the screenshot alone, because both answer with the page background. So sample
+// the canvas element directly, wake the editor for one more frame, and sample
+// again. `beforeWake > 0` means the canvas held content and only the screenshot
+// path missed it; `beforeWake === 0 && afterWake > 0` means the presented image
+// was lost while the loop was parked and a fresh present restores it;
+// both zero means the editor really is presenting nothing.
+//
+// This runs only after a pixel wait has already failed, so it can neither
+// rescue a failing assertion nor perturb a passing one.
+interface PresentedCanvasDiagnosis {
+  beforeWake: number;
+  afterWake: number;
+  framesBeforeWake: number;
+  framesAfterWake: number;
+  canvasWidth: number;
+  canvasHeight: number;
+}
+
+async function diagnosePresentedCanvas(
+  page: Page,
+): Promise<PresentedCanvasDiagnosis | { unavailable: string }> {
+  return page
+    .evaluate(async () => {
+      const surface = document.getElementById("canvas") as HTMLCanvasElement | null;
+      if (surface === null) {
+        throw new Error("the editor canvas is missing");
+      }
+      const scratch = document.createElement("canvas");
+      scratch.width = 240;
+      scratch.height = 150;
+      const context = scratch.getContext("2d", { willReadFrequently: true });
+      if (context === null) {
+        throw new Error("no 2d context for the canvas probe");
+      }
+      // Count pixels that carry both coverage and hue, so the editor's own
+      // chrome registers while the flat page background does not.
+      const readColoredPixels = (): number => {
+        context.clearRect(0, 0, scratch.width, scratch.height);
+        context.drawImage(
+          surface,
+          0,
+          0,
+          surface.width,
+          surface.height,
+          0,
+          0,
+          scratch.width,
+          scratch.height,
+        );
+        const pixels = context.getImageData(0, 0, scratch.width, scratch.height).data;
+        let colored = 0;
+        for (let index = 0; index < pixels.length; index += 4) {
+          const red = pixels[index];
+          const green = pixels[index + 1];
+          const blue = pixels[index + 2];
+          const alpha = pixels[index + 3];
+          const spread = Math.max(red, green, blue) - Math.min(red, green, blue);
+          if (alpha >= 40 && spread >= 12) {
+            colored += 1;
+          }
+        }
+        return colored;
+      };
+
+      const framesBeforeWake = window.__donnerMainLoopRenderedFrames || 0;
+      const beforeWake = readColoredPixels();
+
+      // Ask the editor for one frame through the same flag the page uses, then
+      // wait for the loop to report it before reading again.
+      window.__donnerEditorFrameRequested = true;
+      const deadline = performance.now() + 2000;
+      while (
+        (window.__donnerMainLoopRenderedFrames || 0) === framesBeforeWake
+        && performance.now() < deadline
+      ) {
+        await new Promise((resolve) => requestAnimationFrame(() => resolve(null)));
+      }
+      await new Promise((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve(null)))
+      );
+
+      return {
+        beforeWake,
+        afterWake: readColoredPixels(),
+        framesBeforeWake,
+        framesAfterWake: window.__donnerMainLoopRenderedFrames || 0,
+        canvasWidth: surface.width,
+        canvasHeight: surface.height,
+      };
+    })
+    .catch((error: unknown) => ({ unavailable: String(error) }));
+}
+
 async function openBasicShapes(page: Page): Promise<{
   canvasBounds: { x: number; y: number; width: number; height: number };
   documentClip: { x: number; y: number; width: number; height: number };
@@ -509,8 +616,12 @@ async function openBasicShapes(page: Page): Promise<{
         activeSample: window.__donnerActiveSampleStats,
       }))
       .catch((error: unknown) => ({ unavailable: String(error) }));
+    // Only worth the extra page work when the pixels never arrived; a passing
+    // wait already proved the whole path.
+    const canvasDiagnosis = lastBluePixels > 0 ? null : await diagnosePresentedCanvas(page);
     console.log(
-      `open-basic-shapes bluePixels=${lastBluePixels} state=${JSON.stringify(presentationState)}`,
+      `open-basic-shapes bluePixels=${lastBluePixels} state=${JSON.stringify(presentationState)}`
+        + ` canvas=${JSON.stringify(canvasDiagnosis)}`,
     );
   }
 
