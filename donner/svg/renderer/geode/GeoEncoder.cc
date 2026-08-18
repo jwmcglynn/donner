@@ -618,8 +618,10 @@ struct GeoEncoder::Impl : public GeodeTextureEncoder::UniformScratch {
                               const FillDrawArgs& args, const Transform2d& transform);
 
   /// (Re)upload `encoded` into `slot`'s persistent combined buffer and
-  /// reset its cached bind group. Bumps `bufferCreates` + one
-  /// `bufferWrite` (geometry only; the uniform is written separately).
+  /// reset its cached bind group. Bumps `bufferCreates` + one `bufferWrite`
+  /// covering the WHOLE slot, uniform region and trailing padding included,
+  /// so the slot leaves no byte of the slab chunk unwritten. The draw path
+  /// rewrites the uniform region right after.
   void uploadResidentGeometry(GeodeResidentSlot& slot, const EncodedPath& encoded);
 
   /// Build + cache the eleven-entry fill bind group for `slot` (all
@@ -1737,8 +1739,12 @@ void GeoEncoder::Impl::uploadResidentGeometry(GeodeResidentSlot& slot, const Enc
   place(slot.vRefs, vRefsBytes, kStorageOffsetAlignment, /*storageDummy=*/true);
   place(slot.uniform, sizeof(Uniforms), kUniformOffsetAlignment, /*storageDummy=*/false);
 
-  const uint64_t totalSize = cursor;
-  const uint64_t geometrySize = slot.uniform.offset;  // everything before the uniform.
+  // Round the slot up to the slab's allocation alignment so consecutive
+  // slots leave no unwritten hole between them: a hole inside a chunk is a
+  // byte the driver still owes a zero-fill to, and a cross-entity batch
+  // binds whole chunks, so a hole would become clear work on the frame that
+  // first binds past it.
+  const uint64_t totalSize = alignUp(cursor, kStorageOffsetAlignment);
 
   // Suballocate from the document's resident slab (one growable buffer
   // chunk set instead of a buffer per slot). The slab is installed by the
@@ -1752,14 +1758,14 @@ void GeoEncoder::Impl::uploadResidentGeometry(GeodeResidentSlot& slot, const Enc
   slot.allocationOffset = alloc.offset;
   slot.allocationSize = alloc.size;
 
-  // Assemble the geometry portion in one zero-filled staging blob so
-  // padding + dummy regions read as zero, then upload it in a single
-  // `writeBuffer` at the allocation's absolute offset. Region offsets are
-  // relative to the allocation start here and are shifted to absolute
-  // buffer offsets below. The uniform region is written separately by the
-  // draw path (so a camera/color-only change rewrites just the uniform
-  // region).
-  std::vector<uint8_t> staging(geometrySize, 0u);
+  // Assemble the whole slot in one zero-filled staging blob so padding,
+  // dummy regions, and the not-yet-written uniform all read as zero, then
+  // upload it in a single `writeBuffer` at the allocation's absolute
+  // offset. Region offsets are relative to the allocation start here and
+  // are shifted to absolute buffer offsets below. The draw path rewrites
+  // just the uniform region afterwards, so a camera/color-only change stays
+  // a small write.
+  std::vector<uint8_t> staging(totalSize, 0u);
   auto blit = [&](const GeodeResidentSlot::Region& r, const void* data, uint64_t bytes) {
     if (bytes > 0) {
       std::memcpy(staging.data() + r.offset, data, bytes);
@@ -1774,8 +1780,8 @@ void GeoEncoder::Impl::uploadResidentGeometry(GeodeResidentSlot& slot, const Enc
   blit(slot.hGrid, encoded.hBandGrid.data(), hGridBytes);
   blit(slot.vGrid, encoded.vBandGrid.data(), vGridBytes);
 
-  device->queue().writeBuffer(slot.buffer, alloc.offset, staging.data(), geometrySize);
-  device->countBufferWrite(geometrySize);
+  device->queue().writeBuffer(slot.buffer, alloc.offset, staging.data(), totalSize);
+  device->countBufferWrite(totalSize);
 
   // Regions become absolute buffer offsets for the bind groups.
   auto shift = [&](GeodeResidentSlot::Region& r) {
@@ -2582,8 +2588,9 @@ void GeoEncoder::Impl::uploadResidentGradientGeometry(GeodeResidentGradientSlot&
   place(slot.vRefs, vRefsBytes, kStorageOffsetAlignment, /*storageDummy=*/true);
   place(slot.uniform, sizeof(GradientUniforms), kUniformOffsetAlignment, /*storageDummy=*/false);
 
-  const uint64_t totalSize = cursor;
-  const uint64_t geometrySize = slot.uniform.offset;
+  // Same no-hole rounding as `uploadResidentGeometry`: gradient slots share
+  // the chunk with fill slots, so a gap here is a hole in the same chunk.
+  const uint64_t totalSize = alignUp(cursor, kStorageOffsetAlignment);
 
   // Suballocate from the document's resident slab (same contract as
   // `uploadResidentGeometry`).
@@ -2596,7 +2603,7 @@ void GeoEncoder::Impl::uploadResidentGradientGeometry(GeodeResidentGradientSlot&
   slot.allocationOffset = alloc.offset;
   slot.allocationSize = alloc.size;
 
-  std::vector<uint8_t> staging(geometrySize, 0u);
+  std::vector<uint8_t> staging(totalSize, 0u);
   auto blit = [&](const GeodeResidentGradientSlot::Region& r, const void* data, uint64_t bytes) {
     if (bytes > 0) {
       std::memcpy(staging.data() + r.offset, data, bytes);
@@ -2611,8 +2618,8 @@ void GeoEncoder::Impl::uploadResidentGradientGeometry(GeodeResidentGradientSlot&
   blit(slot.hGrid, encoded.hBandGrid.data(), hGridBytes);
   blit(slot.vGrid, encoded.vBandGrid.data(), vGridBytes);
 
-  device->queue().writeBuffer(slot.buffer, alloc.offset, staging.data(), geometrySize);
-  device->countBufferWrite(geometrySize);
+  device->queue().writeBuffer(slot.buffer, alloc.offset, staging.data(), totalSize);
+  device->countBufferWrite(totalSize);
 
   // Regions become absolute buffer offsets for the bind groups.
   auto shift = [&](GeodeResidentGradientSlot::Region& r) {
