@@ -3,10 +3,15 @@
 #include <algorithm>
 #include <atomic>
 #include <cassert>
+#include <cstdint>
 #include <cstring>
+#include <functional>
 #include <iostream>
 #include <limits>
+#include <string>
+#include <string_view>
 #include <utility>
+#include <variant>
 
 #include "donner/base/StringUtils.h"
 #include "donner/base/fonts/SfntUtils.h"
@@ -228,9 +233,68 @@ FontManager::FontManager(Registry& registry, size_t maximumLoadedFontBytes,
           FontBudgetState{maximumLoadedFontBytes, maximumLoadedFonts, 0, 0})) {}
 FontManager::~FontManager() = default;
 
+std::string FontManager::faceIdentityKey(const css::FontFace& face) {
+  std::string key(face.familyName);
+  std::transform(key.begin(), key.end(), key.begin(),
+                 [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+  key += '\x1f';
+  key += std::to_string(face.fontWeight);
+  key += '\x1f';
+  key += std::to_string(face.fontStyle);
+  key += '\x1f';
+  key += std::to_string(face.fontStretch);
+
+  for (const css::FontFaceSource& source : face.sources) {
+    key += '\x1e';
+    key += std::to_string(static_cast<int>(source.kind));
+    key += source.trusted ? "T" : "U";
+    key += '\x1f';
+    key += std::string_view(source.formatHint);
+    for (const RcString& tech : source.techHints) {
+      key += '\x1f';
+      key += std::string_view(tech);
+    }
+    key += '\x1f';
+    if (const auto* url = std::get_if<RcString>(&source.payload)) {
+      key += std::string_view(*url);
+    } else if (const auto* data =
+                   std::get_if<std::shared_ptr<const std::vector<uint8_t>>>(&source.payload)) {
+      // Payload identity, not payload contents: hashing every byte would cost more than the load
+      // this dedupe exists to avoid, and the buffers are immutable and shared.
+      key += std::to_string(reinterpret_cast<uintptr_t>(data->get()));
+    }
+  }
+
+  return key;
+}
+
+size_t FontManager::ProviderFontKeyHash::operator()(const ProviderFontKey& key) const noexcept {
+  // Mixed field by field rather than through a concatenated string, so no field's value can run
+  // into the next one's and make two different requests hash and compare as one.
+  size_t hash = std::hash<std::string>{}(key.family);
+  for (const int field : {key.weight, key.style, key.stretch}) {
+    hash ^= std::hash<int>{}(field) + 0x9e3779b97f4a7c15ULL + (hash << 6) + (hash >> 2);
+  }
+  return hash;
+}
+
 void FontManager::addFontFace(const css::FontFace& face) {
+  std::string key = faceIdentityKey(face);
+  if (auto it = faceEntities_.find(key); it != faceEntities_.end()) {
+    if (registry_.valid(it->second)) {
+      // The identical declaration is already registered. Minting a second entity for it would
+      // strand every cache keyed on the old one, so keep the existing identity and leave the
+      // resolution cache alone.
+      return;
+    }
+    faceEntities_.erase(it);
+  }
+
   const Entity entity = registry_.create();
   registry_.emplace<FontFaceComponent>(entity, face);
+  faceEntities_.emplace(std::move(key), entity);
+  // A genuinely new declaration can outrank an earlier resolution, so previously resolved queries
+  // have to be recomputed.
   cache_.clear();
 }
 
@@ -363,15 +427,40 @@ FontHandle FontManager::findFont(std::string_view family, int weight, int style,
   // No document @font-face matched. Consult the external provider (embedded/system catalog) before
   // falling back to Public Sans. The provider itself orders Embedded before System.
   if (provider_ != nullptr && provider_->hasFamily(family)) {
+    if (providerFontsSource_ != provider_) {
+      // A different provider can answer the same request with different bytes, so its entities are
+      // not interchangeable with the ones memoized here.
+      providerFonts_.clear();
+      providerFontsSource_ = provider_;
+    }
+
     const FontFaceRequest request{.weight = weight,
                                   .style = static_cast<FontStyle>(style),
                                   .stretch = static_cast<FontStretch>(stretch)};
+
+    std::string providerFamily(family);
+    std::transform(providerFamily.begin(), providerFamily.end(), providerFamily.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    const ProviderFontKey providerKey{std::move(providerFamily), weight, style, stretch};
+
+    if (auto it = providerFonts_.find(providerKey); it != providerFonts_.end()) {
+      if (isValidHandle(it->second) && registry_.all_of<LoadedFontComponent>(it->second.entity())) {
+        // A provider answers per requested face, so this memo is keyed on the whole request. The
+        // same request resolving again reuses the entity already holding those bytes instead of
+        // loading a duplicate copy onto a new identity.
+        cache_[cacheKey] = it->second;
+        return it->second;
+      }
+      providerFonts_.erase(it);
+    }
+
     std::vector<uint8_t> data = provider_->loadFamilyData(family, request);
     if (!data.empty()) {
       const Entity entity = registry_.create();
       if (loadFontDataIntoEntity(entity, data, FontDataTrust::Trusted)) {
         FontHandle handle(entity);
         cache_[cacheKey] = handle;
+        providerFonts_[providerKey] = handle;
         return handle;
       }
       registry_.destroy(entity);
