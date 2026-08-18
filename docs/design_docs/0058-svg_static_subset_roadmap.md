@@ -78,7 +78,8 @@ loading, a set of masking/clipping and filter edge cases, and CPU/GPU renderer p
   - [ ] Remaining `maskUnits` / `maskContentUnits` edge cases, transformed regions, and
         `color-interpolation=linearRGB` on masks.
 - [ ] Milestone 4: Filter completion
-  - [ ] CSS `filter:` function-list support (the currently disabled `filter-functions` category).
+  - [~] CSS `filter:` function-list support: all 43 files are instantiated; 26 compare on both
+        backends and 17 explicitly classified failures remain.
   - [ ] feImage subregion cases and feConvolveMatrix / feDropShadow edge cases.
   - [ ] Filter-region scissor per SVG 2 section 15.5 (GPU backend TODO).
 - [ ] Milestone 5: Painting and structural edge cases

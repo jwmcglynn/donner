@@ -427,16 +427,47 @@ INSTANTIATE_TEST_SUITE_P(
         ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
 
-// TODO: The filters/filter-functions category has CSS filter-function pixel-parity gaps when
-// enabled wholesale. Keep the category disabled until those rendering mismatches are triaged; the
-// previous resource-loading "Data corrupted" warnings are covered by ResourceManagerContext tests,
-// and filters/feImage/empty.svg now runs in the active FiltersFeImage suite.
-//
-// INSTANTIATE_TEST_SUITE_P(
-//     FiltersFilterFunctions, ImageComparisonTestFixture,
-//     Combine(ValuesIn(getTestsInCategory("filters/filter-functions")),
-//             ValuesIn(ActiveComparisonModes())),
-//     TestNameFromFilename);
+INSTANTIATE_TEST_SUITE_P(
+    FiltersFilterFunctions, ImageComparisonTestFixture,
+    Combine(
+        ValuesIn(getTestsInCategory(
+            "filters/filter-functions",
+            {
+                {"blur-function.svg",
+                 Params::Skip("Bug: unitless nonzero CSS blur function is not applied")},
+                {"color-adjust-functions-0percent.svg",
+                 Params::Skip("Bug: CSS color-adjust filter function output mismatch")},
+                {"color-adjust-functions-100percent.svg",
+                 Params::Skip("Bug: CSS color-adjust filter function output mismatch")},
+                {"color-adjust-functions-2.svg",
+                 Params::Skip("Bug: CSS color-adjust filter function output mismatch")},
+                {"color-adjust-functions-200percent.svg",
+                 Params::Skip("Bug: CSS color-adjust filter function output mismatch")},
+                {"color-adjust-functions-50percent.svg",
+                 Params::Skip("Bug: CSS color-adjust filter function output mismatch")},
+                {"color-adjust-functions-default-value.svg",
+                 Params::Skip("Bug: CSS color-adjust filter function output mismatch")},
+                {"color-adjust-functions-negative.svg",
+                 Params::Skip("Bug: CSS color-adjust filter function output mismatch")},
+                {"drop-shadow-function-color-last.svg",
+                 Params::Skip("Bug: CSS drop-shadow color and unit variants mismatch")},
+                {"drop-shadow-function-em-values.svg",
+                 Params::Skip("Bug: CSS drop-shadow color and unit variants mismatch")},
+                {"drop-shadow-function-filter-region.svg",
+                 Params::Skip("Bug: CSS drop-shadow filter region differs on Geode")},
+                {"drop-shadow-function-mm-values.svg",
+                 Params::Skip("Bug: CSS drop-shadow color and unit variants mismatch")},
+                {"drop-shadow-function-no-color.svg",
+                 Params::Skip("Bug: CSS drop-shadow color and unit variants mismatch")},
+                {"drop-shadow-function.svg", Params::Skip("Bug: CSS drop-shadow output mismatch")},
+                {"two-exact-urls.svg",
+                 Params::Skip("Bug: chained CSS filter URL references mismatch")},
+                {"two-urls.svg", Params::Skip("Bug: chained CSS filter URL references mismatch")},
+                {"url-and-grayscale.svg",
+                 Params::Skip("Bug: mixed CSS filter URL and function mismatch")},
+            })),
+        ValuesIn(ActiveComparisonModes())),
+    TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(
     FiltersFloodColor, ImageComparisonTestFixture,

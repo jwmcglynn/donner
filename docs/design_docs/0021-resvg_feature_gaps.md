@@ -29,23 +29,23 @@ PR**. Golden overrides (where Donner is right and resvg's golden is wrong) live 
 There are **five** supported ways the suite records a known gap. All of them must
 be expressed through the normal `Params` path close to the affected tests:
 
-| State                                                      |   Count | Meaning                                                                                                                                                                                  |
-| ---------------------------------------------------------- | ------: | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `Params::Skip("reason")`                                   |     116 | Not run. Feature gap or known bug. The bulk of this doc.                                                                                                                                 |
-| `Params::RenderOnly("reason")`                             |      58 | Rendered, **not** compared. Used for UB/deprecated cases where no-crash coverage is still useful.                                                                                        |
-| Commented-out `INSTANTIATE_TEST_SUITE_P`                   | 1 block | `filters/filter-functions` — whole category dark on CI. See [B2](#b2-filtersfilter-functions-category-disabled-on-ci).                                                                   |
-| `Params::WithThreshold(…, maxPx)` / local max-pixel budget |     103 | Passes with an explicit threshold or pixel budget. Large non-text budgets remain suspect; see [Masked bugs behind inflated CPU thresholds](#masked-bugs-behind-inflated-cpu-thresholds). |
-| Geode-disabled local `Params` entries                      |       0 | Geode now runs every active resvg case. Verified analytic edge residuals use exact per-backend goldens instead of disabling the backend or inflating thresholds.                         |
+| State                                                      | Count | Meaning                                                                                                                                                                                  |
+| ---------------------------------------------------------- | ----: | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Params::Skip("reason")`                                   |   133 | Not run. Feature gap or known bug. The bulk of this doc.                                                                                                                                 |
+| `Params::RenderOnly("reason")`                             |    58 | Rendered, **not** compared. Used for UB/deprecated cases where no-crash coverage is still useful.                                                                                        |
+| Commented-out `INSTANTIATE_TEST_SUITE_P`                   |     0 | Every vendored category is instantiated.                                                                                                                                                 |
+| `Params::WithThreshold(…, maxPx)` / local max-pixel budget |   103 | Passes with an explicit threshold or pixel budget. Large non-text budgets remain suspect; see [Masked bugs behind inflated CPU thresholds](#masked-bugs-behind-inflated-cpu-thresholds). |
+| Geode-disabled local `Params` entries                      |     0 | Geode now runs every active resvg case. Verified analytic edge residuals use exact per-backend goldens instead of disabling the backend or inflating thresholds.                         |
 
 ## Current totals
 
 |                                       |                                                                                                                                                      Count |
 | ------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------: |
-| `Params::Skip(...)`                   |                                                                                                                            116 (`grep -o 'Params::Skip('`) |
+| `Params::Skip(...)`                   |                                                                                                                            133 (`grep -o 'Params::Skip('`) |
 | `Params::RenderOnly(...)`             |                                                                                                               58 (render-must-not-crash, no pixel compare) |
 | `WithThreshold` / max-pixel overrides | 103 call sites: 79 `WithThreshold`, 11 `WithMaxPixels`, and 13 direct `withMaxPixelsDifferent` calls. Large non-text budgets remain masked-bug candidates. |
 | Geode-disabled local `Params` entries |                                                                                                                      0 (all active cases now run on Geode) |
-| Commented-out category blocks         |                                                                                                                             1 (`filters/filter-functions`) |
+| Commented-out category blocks         |                                                                                                                                                          0 |
 
 ---
 
@@ -89,46 +89,35 @@ bottom for completeness.
 > (feImage resampling) are resolved; their IDs are burned. The rows below are
 > what's left.
 
-| ID  | Gap                                                                     |           Impact | Kind                                                                                                                                                                                                |
-| --- | ----------------------------------------------------------------------- | ---------------: | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| B2  | `filters/filter-functions` disabled (CI "Data corrupted")               |              ~30 | CI gap — whole category dark                                                                                                                                                                        |
-| B3  | `structure/image` golden kernel-era mismatch                            |               13 | Golden refresh + `<image>` upscale-kernel decision (see [B3](#b3-structureimage-golden-kernel-era-mismatch))                                                                                        |
-| F12 | `transform-origin` on `<textPath>` baseline                             |         **DONE** | Resolved by #868; all category cases are active.                                                                                                                                                    |
-| F7  | `paint-order` rendering                                                 | **DONE** (14/14) | Shapes and text run on both backends; `on-tspan` uses a project-owned oracle because the vendored PNG breaks cross-span kerning.                                                                    |
-| F9  | `textLength` + `lengthAdjust` stretch/compress                          |                8 | Feature                                                                                                                                                                                             |
-| F10 | `textPath` SVG2 attributes (`path`/`side`/`method`/`spacing`)           |                8 | Feature                                                                                                                                                                                             |
-| F11 | BiDi / RTL text shaping                                                 |               ~8 | Feature (needs `text-full`)                                                                                                                                                                         |
-| B7  | font substitution — missing bundled families (masked by fat thresholds) |               ~9 | Triage: bundle fonts vs. document as known gap                                                                                                                                                      |
-| —   | masking edge cases (mask 3, clipPath 5)                                 |                8 | `mask-type` and vector text clip children are active on both backends; remaining cases are units, transforms, color interpolation, bitmap text clips, nested intersections, and shorthand geometry. |
-| —   | uncertain `Bug?` entries (need triage)                                  |              ~12 | Needs investigation                                                                                                                                                                                 |
-| F1  | `enable-background` + `in=Background*`                                  |               23 | **Out of scope** (deprecated)                                                                                                                                                                       |
-| —   | other deprecated/UB skips                                               |              ~30 | **Out of scope**                                                                                                                                                                                    |
+| ID  | Gap                                                                     |                         Impact | Kind                                                                                                                                                                                                |
+| --- | ----------------------------------------------------------------------- | -----------------------------: | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| B2  | `filters/filter-functions` coverage                                     | **DONE** (26/43 files compare) | Category active; 17 failures are explicit skips.                                                                                                                                                    |
+| B3  | `structure/image` golden kernel-era mismatch                            |                             13 | Golden refresh + `<image>` upscale-kernel decision (see [B3](#b3-structureimage-golden-kernel-era-mismatch))                                                                                        |
+| F12 | `transform-origin` on `<textPath>` baseline                             |                       **DONE** | Resolved by #868; all category cases are active.                                                                                                                                                    |
+| F7  | `paint-order` rendering                                                 |               **DONE** (14/14) | Shapes and text run on both backends; `on-tspan` uses a project-owned oracle because the vendored PNG breaks cross-span kerning.                                                                    |
+| F9  | `textLength` + `lengthAdjust` stretch/compress                          |                              8 | Feature                                                                                                                                                                                             |
+| F10 | `textPath` SVG2 attributes (`path`/`side`/`method`/`spacing`)           |                              8 | Feature                                                                                                                                                                                             |
+| F11 | BiDi / RTL text shaping                                                 |                             ~8 | Feature (needs `text-full`)                                                                                                                                                                         |
+| B7  | font substitution — missing bundled families (masked by fat thresholds) |                             ~9 | Triage: bundle fonts vs. document as known gap                                                                                                                                                      |
+| —   | masking edge cases (mask 3, clipPath 5)                                 |                              8 | `mask-type` and vector text clip children are active on both backends; remaining cases are units, transforms, color interpolation, bitmap text clips, nested intersections, and shorthand geometry. |
+| —   | uncertain `Bug?` entries (need triage)                                  |                            ~12 | Needs investigation                                                                                                                                                                                 |
+| F1  | `enable-background` + `in=Background*`                                  |                             23 | **Out of scope** (deprecated)                                                                                                                                                                       |
+| —   | other deprecated/UB skips                                               |                            ~30 | **Out of scope**                                                                                                                                                                                    |
 
 ---
 
 ## Tracked regressions & disabled blocks
 
-### B2: `filters/filter-functions` category disabled on CI
+### B2: `filters/filter-functions` category coverage
 
-**Impact:** ~30 tests — the entire `filters/filter-functions/` block, commented out
-at [`resvg_test_suite.cc:1410`](../../donner/svg/renderer/tests/resvg_test_suite.cc).
+**Resolved.** All 43 files are instantiated. A combined TinySkia and Geode triage runs 86
+comparisons: 53 passed before classification, representing 26 files on both backends plus one
+TinySkia-only pass. Seventeen unique failing files now carry explicit normal-path skips for blur,
+color-adjust, drop-shadow, or URL-chain defects. No category remains dark.
 
-**Symptom:** The `INSTANTIATE_TEST_SUITE_P(FiltersFilterFunctions, …)` block is
-commented out. The category produces `"Data corrupted"` parse errors on CI x86_64
-runners but passes locally on aarch64. (Note: the harmless per-test `"Data corrupted"` log lines from `UrlLoader` font fallback are _unrelated_ — this is a
-parse failure that fails the comparison.)
-
-**Root cause:** unknown. Candidates: a resvg-test-suite data-integrity issue on
-CI, an x86_64-specific parser bug, or a runfiles/encoding difference between the
-runners. This is exactly the CI-vs-local gap the project's always-green-main
-policy calls out — the fix is to close the gap, not route around it.
-
-**Next step:** reproduce on an x86_64 runner (or container). Capture the exact SVG
-that triggers `"Data corrupted"` and minimize it. These tests were enabled once in
-[#515](https://github.com/jwmcglynn/donner/pull/515) before being disabled, so the
-rendering path works — this is an input/parse problem on one arch. Two custom
-goldens (`drop-shadow-function-{mm,em}-values`) are parked for re-enable; see
-[0009](0009-resvg_test_suite_bugs.md).
+**Next step:** fix the 17 classified rendering defects through their owning blur, color-adjust,
+drop-shadow, and URL-chain paths. Remove each local skip only after its focused regression and both
+comparison modes pass; do not restore the category-level disable or the parked custom goldens.
 
 ---
 
