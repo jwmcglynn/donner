@@ -47,6 +47,13 @@ namespace donner::geode {
  * The floating-point fields are compared and hashed BITWISE, matching how they
  * reach the font backend: two scales that differ in the last bit produce
  * different outlines, so they must not share an entry.
+ *
+ * `fontId` carries the font handle's version bits, so an unloaded font whose
+ * slot is later reused cannot be mistaken for the original. It is also not
+ * stable across a style mutation that makes the document re-resolve its fonts:
+ * the re-resolved font is a new identity and its glyphs are rebuilt. That costs
+ * a rebuild on a mutating document rather than serving stale geometry, and the
+ * superseded entries age out through the residency budget.
  */
 struct GlyphGeometryKey {
   uint64_t fontId = 0;

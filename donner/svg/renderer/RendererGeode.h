@@ -394,6 +394,16 @@ public:
   [[nodiscard]] RendererGeodeTexturePoolStats texturePoolStats() const;
 
   /**
+   * Whether cross-entity ordered batching is compiled into this build.
+   *
+   * Batching collapses many draws into one, so any assertion about draw-call
+   * counts or about the buffer traffic a batch's records replace has a
+   * different right answer in each build state. Tests read this rather than
+   * hard-coding one of them.
+   */
+  [[nodiscard]] static bool sceneBatchingEnabledForTesting();
+
+  /**
    * Shrink the glyph-residency budget so eviction can be exercised without
    * building a font-sized working set.
    *

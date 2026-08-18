@@ -3509,6 +3509,10 @@ void RendererGeode::draw(SVGDocument& document) {
   driver.draw(document);
 }
 
+bool RendererGeode::sceneBatchingEnabledForTesting() {
+  return kEnableSceneBatching;
+}
+
 void RendererGeode::setGlyphResidencyBudgetForTesting(size_t maxEntries,
                                                       uint64_t maxEncodedBytes) {
   impl_->glyphCacheMaxEntries = maxEntries;
