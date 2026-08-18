@@ -35,7 +35,8 @@ std::vector<FontFamilyInfo> EmbeddedFontProvider::families() const {
   std::vector<FontFamilyInfo> result;
   result.reserve(entries().size());
   for (const EmbeddedEntry& entry : entries()) {
-    result.push_back(FontFamilyInfo{std::string(entry.family), FontSource::Embedded, entry.category});
+    result.push_back(
+        FontFamilyInfo{std::string(entry.family), FontSource::Embedded, entry.category});
   }
   std::sort(result.begin(), result.end(),
             [](const FontFamilyInfo& a, const FontFamilyInfo& b) { return a.family < b.family; });
@@ -51,7 +52,8 @@ bool EmbeddedFontProvider::hasFamily(std::string_view family) const {
   return false;
 }
 
-std::vector<uint8_t> EmbeddedFontProvider::loadFamilyData(std::string_view family) const {
+std::vector<uint8_t> EmbeddedFontProvider::loadFamilyData(
+    std::string_view family, const FontFaceRequest& /*request*/) const {
   for (const EmbeddedEntry& entry : entries()) {
     if (StringUtils::Equals<StringComparison::IgnoreCase>(entry.family, family)) {
       return std::vector<uint8_t>(entry.data.begin(), entry.data.end());

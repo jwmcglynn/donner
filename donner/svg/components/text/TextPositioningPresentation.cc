@@ -4,12 +4,9 @@
 
 #include "donner/base/parser/LengthParser.h"
 #include "donner/base/parser/NumberParser.h"
-#include "donner/base/xml/components/TreeComponent.h"
-#include "donner/svg/components/DirtyFlagsComponent.h"
 #include "donner/svg/components/text/ComputedTextComponent.h"
-#include "donner/svg/components/text/ComputedTextGeometryComponent.h"
+#include "donner/svg/components/text/TextInvalidation.h"
 #include "donner/svg/components/text/TextPositioningComponent.h"
-#include "donner/svg/components/text/TextRootComponent.h"
 #include "donner/svg/parser/ListParser.h"
 
 namespace donner::svg::components {
@@ -63,24 +60,12 @@ std::optional<SmallVector<double, 1>> ParseRotateList(std::string_view value) {
   return list;
 }
 
-/// Invalidate the enclosing text root's cached layout, mirroring
-/// `SVGTextContentElement::invalidateTextGeometry()`.
+/// Invalidate the enclosing text root's cached layout. Positioning attributes also feed
+/// \ref ComputedTextComponent (per-character x/y/dx/dy/rotate lists), so that is dropped too.
 void InvalidateTextRootLayout(EntityHandle handle) {
-  Registry& registry = *handle.registry();
-  Entity current = handle.entity();
-  while (current != entt::null) {
-    if (registry.any_of<TextRootComponent>(current)) {
-      registry.remove<ComputedTextGeometryComponent>(current);
-      registry.remove<ComputedTextComponent>(current);
-      registry.get_or_emplace<DirtyFlagsComponent>(current).mark(
-          DirtyFlagsComponent::TextGeometry | DirtyFlagsComponent::RenderInstance);
-      return;
-    }
-    const auto* tree = registry.try_get<donner::components::TreeComponent>(current);
-    if (!tree) {
-      break;
-    }
-    current = tree->parent();
+  const Entity textRoot = InvalidateTextLayout(handle);
+  if (textRoot != entt::null) {
+    handle.registry()->remove<ComputedTextComponent>(textRoot);
   }
 }
 

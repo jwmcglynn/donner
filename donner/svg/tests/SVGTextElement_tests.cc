@@ -462,6 +462,116 @@ TEST(SVGTextElementCacheTests, SetPositionInvalidatesCache) {
   EXPECT_NEAR(startAfter.x, 50.0, 0.5);
 }
 
+// Regression: the editor's font controls write presentation attributes onto the selected `<text>`
+// element (`font-size`, `font-family`, `font-weight`, ...). Those are style inputs to text layout,
+// so a write must drop the memoized `ComputedTextGeometryComponent` - both renderers draw straight
+// out of that cache, and a stale entry makes every font control look like a no-op.
+TEST(SVGTextElementCacheTests, FontSizeAttributeChangeInvalidatesCache) {
+  SVGDocument doc = instantiateSubtree(R"-(
+    <svg viewBox="0 0 200 40">
+      <text id="t" x="10" y="20" font-family="fallback-font" font-size="12px">ABCDEF</text>
+    </svg>
+  )-",
+                                       kExperimentalOptions);
+
+  auto textElement = doc.querySelector("#t")->cast<SVGTextElement>();
+
+  // Prime the cache, the way the editor does when it measures the selection bounds.
+  const double lengthBefore = textElement.getComputedTextLength();
+  ASSERT_GT(lengthBefore, 0.0);
+
+  textElement.setAttribute("font-size", "24px");
+
+  // Doubling the font size doubles the advance width.
+  EXPECT_THAT(textElement.getComputedTextLength(),
+              testing::DoubleNear(lengthBefore * 2.0, lengthBefore * 0.05));
+}
+
+TEST(SVGTextElementCacheTests, TextAnchorAttributeChangeInvalidatesCache) {
+  SVGDocument doc = instantiateSubtree(R"-(
+    <svg viewBox="0 0 200 40">
+      <text id="t" x="100" y="20" font-family="fallback-font" font-size="12px">ABCDEF</text>
+    </svg>
+  )-",
+                                       kExperimentalOptions);
+
+  auto textElement = doc.querySelector("#t")->cast<SVGTextElement>();
+
+  const double length = textElement.getComputedTextLength();
+  ASSERT_GT(length, 0.0);
+  ASSERT_THAT(textElement.getStartPositionOfChar(0).x, testing::DoubleNear(100.0, 0.5));
+
+  textElement.setAttribute("text-anchor", "end");
+
+  // `text-anchor: end` puts the *end* of the run on the anchor point.
+  EXPECT_THAT(textElement.getStartPositionOfChar(0).x, testing::DoubleNear(100.0 - length, 0.5));
+}
+
+TEST(SVGTextElementCacheTests, StyleAttributeChangeInvalidatesCache) {
+  SVGDocument doc = instantiateSubtree(R"-(
+    <svg viewBox="0 0 200 40">
+      <text id="t" x="10" y="20" font-family="fallback-font" font-size="12px">ABCDEF</text>
+    </svg>
+  )-",
+                                       kExperimentalOptions);
+
+  auto textElement = doc.querySelector("#t")->cast<SVGTextElement>();
+
+  const double lengthBefore = textElement.getComputedTextLength();
+  ASSERT_GT(lengthBefore, 0.0);
+
+  textElement.setStyle("font-size: 24px");
+
+  EXPECT_THAT(textElement.getComputedTextLength(),
+              testing::DoubleNear(lengthBefore * 2.0, lengthBefore * 0.05));
+}
+
+// `font-size` inherits, so a write on an ancestor group must invalidate the text roots beneath it.
+TEST(SVGTextElementCacheTests, InheritedFontChangeOnAncestorInvalidatesCache) {
+  SVGDocument doc = instantiateSubtree(R"-(
+    <svg viewBox="0 0 200 40">
+      <g id="g">
+        <text id="t" x="10" y="20" font-family="fallback-font">ABCDEF</text>
+      </g>
+    </svg>
+  )-",
+                                       kExperimentalOptions);
+
+  auto group = doc.querySelector("#g").value();
+  auto textElement = doc.querySelector("#t")->cast<SVGTextElement>();
+
+  group.setAttribute("font-size", "12px");
+  const double lengthBefore = textElement.getComputedTextLength();
+  ASSERT_GT(lengthBefore, 0.0);
+
+  group.setAttribute("font-size", "24px");
+
+  EXPECT_THAT(textElement.getComputedTextLength(),
+              testing::DoubleNear(lengthBefore * 2.0, lengthBefore * 0.05));
+}
+
+// A write on a `<tspan>` must invalidate the enclosing `<text>` root's layout, not just its own.
+TEST(SVGTextElementCacheTests, TSpanFontSizeAttributeChangeInvalidatesParent) {
+  SVGDocument doc = instantiateSubtree(R"-(
+    <svg viewBox="0 0 200 40">
+      <text id="root" x="10" y="20" font-family="fallback-font" font-size="12px"
+        ><tspan id="span">ABC</tspan></text>
+    </svg>
+  )-",
+                                       kExperimentalOptions);
+
+  auto root = doc.querySelector("#root")->cast<SVGTextElement>();
+  auto span = doc.querySelector("#span")->cast<SVGTSpanElement>();
+
+  const double lengthBefore = root.getComputedTextLength();
+  ASSERT_GT(lengthBefore, 0.0);
+
+  span.setAttribute("font-size", "24px");
+
+  EXPECT_THAT(root.getComputedTextLength(),
+              testing::DoubleNear(lengthBefore * 2.0, lengthBefore * 0.05));
+}
+
 TEST(SVGTextElementCacheTests, TSpanPositionChangeInvalidatesParent) {
   SVGDocument doc = instantiateSubtree(R"-(
     <svg viewBox="0 0 200 40">

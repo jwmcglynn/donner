@@ -586,6 +586,12 @@ public:
   struct SceneBatchBinding {
     wgpu::Buffer chunkBuffer;   ///< Slab chunk holding every instance's geometry.
     wgpu::Buffer recordBuffer;  ///< Record-slab buffer holding the records.
+    /// Stable identities of `chunkBuffer` / `recordBuffer` (see
+    /// `GeodeDevice::AllocateBufferId`). The bind-group cache outlives the
+    /// document that owns these buffers, so it keys on these ids; the raw
+    /// handle addresses are recycled once that document is destroyed.
+    uint64_t chunkBufferId = 0;
+    uint64_t recordBufferId = 0;
     /// BYTE offset of the first instance's record inside recordBuffer.
     /// Record-slot indices are global across slab chunks, so an index is
     /// not a byte offset once the slab has grown; the caller passes the

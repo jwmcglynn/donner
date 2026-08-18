@@ -130,7 +130,7 @@ bool ApplyFormatBarActionsToSelection(const FormatBarActions& actions, const For
 
 std::vector<FormatBarFontFamily> BuildFormatBarFamilies(
     const std::vector<svg::FontFamilyInfo>& catalogFamilies,
-    const std::function<ImFont*(const svg::FontFamilyInfo&)>& previewForFamily) {
+    const std::function<FormatBarFontPreview(const svg::FontFamilyInfo&)>& previewForFamily) {
   std::vector<FormatBarFontFamily> families;
   families.reserve(catalogFamilies.size());
   // Preserve the catalog's ordering (Embedded group first, then System, sorted
@@ -139,7 +139,7 @@ std::vector<FormatBarFontFamily> BuildFormatBarFamilies(
   for (const svg::FontFamilyInfo& info : catalogFamilies) {
     families.push_back(FormatBarFontFamily{
         .name = info.family,
-        .previewFont = previewForFamily ? previewForFamily(info) : nullptr,
+        .preview = previewForFamily ? previewForFamily(info) : FormatBarFontPreview{},
         .source = info.source,
     });
   }
@@ -222,14 +222,32 @@ FormatBarActions TextFormatBarPresenter::render(const FormatBarState& state, con
           shownGroup = family.source;
         }
         const bool selected = family.name == state.fontFamily;
-        // Preview each family in its own face where the editor has one loaded.
-        if (family.previewFont != nullptr) {
-          ImGui::PushFont(family.previewFont);
+        ImGui::PushID(family.name.c_str());
+        const float rowHeight = std::max(ImGui::GetTextLineHeight(), family.preview.height);
+        const bool chosen = ImGui::Selectable("##font_family", selected, ImGuiSelectableFlags_None,
+                                              ImVec2(0.0f, rowHeight));
+        const ImVec2 rowMin = ImGui::GetItemRectMin();
+        const ImVec2 rowMax = ImGui::GetItemRectMax();
+        if (family.preview.available()) {
+          const float renderedWidth = std::min(family.preview.width, rowMax.x - rowMin.x);
+          const float renderedHeight = std::min(family.preview.height, rowMax.y - rowMin.y);
+          const ImVec2 previewMin(rowMin.x,
+                                  rowMin.y + (rowMax.y - rowMin.y - renderedHeight) * 0.5f);
+          const ImVec2 previewMax(previewMin.x + renderedWidth, previewMin.y + renderedHeight);
+          ImGui::GetWindowDrawList()->AddImage(static_cast<ImTextureID>(family.preview.texture),
+                                               previewMin, previewMax, ImVec2(0.0f, 0.0f),
+                                               ImVec2(family.preview.uvMaxX, family.preview.uvMaxY),
+                                               ImGui::GetColorU32(ImGuiCol_Text));
+        } else {
+          ImGui::GetWindowDrawList()->AddText(
+              ImVec2(rowMin.x,
+                     rowMin.y + (rowMax.y - rowMin.y - ImGui::GetTextLineHeight()) * 0.5f),
+              ImGui::GetColorU32(ImGuiCol_Text), family.name.c_str());
+          if (ImGui::IsItemVisible()) {
+            actions.requestFontPreviews.push_back(family.name);
+          }
         }
-        const bool chosen = ImGui::Selectable(family.name.c_str(), selected);
-        if (family.previewFont != nullptr) {
-          ImGui::PopFont();
-        }
+        ImGui::PopID();
         if (chosen) {
           actions.setFontFamily = true;
           actions.fontFamily = family.name;

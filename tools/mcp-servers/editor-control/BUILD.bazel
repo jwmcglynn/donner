@@ -56,6 +56,8 @@ cc_library(
         "//donner/svg/compositor",
         "//donner/svg/renderer",
         "//donner/svg/renderer:renderer_image_io",
+        "//donner/svg/resources:font_catalog",
+        "//donner/svg/resources:font_manager",
         "@nlohmann_json//:json",
         "@pixelmatch-cpp17",
     ] + select({

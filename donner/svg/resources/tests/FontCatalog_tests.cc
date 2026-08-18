@@ -5,8 +5,11 @@
 
 #include <algorithm>
 #include <memory>
+#include <ranges>
 
+#include "donner/svg/core/FontStyle.h"
 #include "donner/svg/resources/EmbeddedFontProvider.h"
+#include "donner/svg/resources/FontManager.h"
 #include "donner/svg/resources/SystemFontProvider.h"
 
 namespace donner::svg {
@@ -15,6 +18,8 @@ namespace {
 
 using ::testing::Contains;
 using ::testing::ElementsAre;
+using ::testing::IsEmpty;
+using ::testing::Not;
 
 /// A provider that reports a fixed family list and returns a single sentinel byte per family so
 /// tests can tell which provider served a given family.
@@ -36,7 +41,8 @@ public:
                        [&](const std::string& name) { return name == family; });
   }
 
-  std::vector<uint8_t> loadFamilyData(std::string_view family) const override {
+  std::vector<uint8_t> loadFamilyData(std::string_view family,
+                                      const FontFaceRequest& /*request*/) const override {
     if (!hasFamily(family)) {
       return {};
     }
@@ -93,7 +99,7 @@ TEST(EmbeddedFontProviderTest, SetSpansMultipleCategories) {
 TEST(EmbeddedFontProviderTest, EveryAdvertisedFamilyLoadsValidSfntBytes) {
   EmbeddedFontProvider provider;
   for (const FontFamilyInfo& info : provider.families()) {
-    const std::vector<uint8_t> data = provider.loadFamilyData(info.family);
+    const std::vector<uint8_t> data = provider.loadFamilyData(info.family, FontFaceRequest{});
     ASSERT_GE(data.size(), 4u) << info.family;
     // Every curated source is a TrueType sfnt with magic 0x00010000.
     EXPECT_EQ(data[0], 0x00) << info.family;
@@ -108,16 +114,15 @@ TEST(EmbeddedFontProviderTest, LookupIsCaseInsensitive) {
   EXPECT_TRUE(provider.hasFamily("inter"));
   EXPECT_TRUE(provider.hasFamily("JETBRAINS MONO"));
   EXPECT_FALSE(provider.hasFamily("Definitely Not A Font"));
-  EXPECT_TRUE(provider.loadFamilyData("Definitely Not A Font").empty());
+  EXPECT_TRUE(provider.loadFamilyData("Definitely Not A Font", FontFaceRequest{}).empty());
 }
 
 // --- FontCatalog aggregation + precedence -----------------------------------------------------
 
 TEST(FontCatalogTest, GroupsEmbeddedBeforeSystem) {
   std::vector<std::unique_ptr<FontFamilyProvider>> providers;
-  providers.push_back(
-      std::make_unique<MarkerProvider>(std::vector<std::string>{"EmbeddedOnly"},
-                                       FontSource::Embedded, 0x11));
+  providers.push_back(std::make_unique<MarkerProvider>(std::vector<std::string>{"EmbeddedOnly"},
+                                                       FontSource::Embedded, 0x11));
   providers.push_back(std::make_unique<MarkerProvider>(std::vector<std::string>{"SystemOnly"},
                                                        FontSource::System, 0x22));
   FontCatalog catalog(std::move(providers));
@@ -152,10 +157,10 @@ TEST(FontCatalogTest, EmbeddedShadowsSystemForDuplicateFamily) {
 
 TEST(FontCatalogTest, FamiliesBySourceFilters) {
   std::vector<std::unique_ptr<FontFamilyProvider>> providers;
-  providers.push_back(std::make_unique<MarkerProvider>(
-      std::vector<std::string>{"E1", "E2"}, FontSource::Embedded, 0x01));
-  providers.push_back(std::make_unique<MarkerProvider>(std::vector<std::string>{"S1"},
-                                                       FontSource::System, 0x02));
+  providers.push_back(std::make_unique<MarkerProvider>(std::vector<std::string>{"E1", "E2"},
+                                                       FontSource::Embedded, 0x01));
+  providers.push_back(
+      std::make_unique<MarkerProvider>(std::vector<std::string>{"S1"}, FontSource::System, 0x02));
   FontCatalog catalog(std::move(providers));
 
   EXPECT_THAT(familyNames(catalog.familiesBySource(FontSource::Embedded)),
@@ -194,18 +199,64 @@ TEST(SystemFontProviderTest, LoadsSfntForKnownSystemFamily) {
   if (!provider.hasFamily("Helvetica")) {
     GTEST_SKIP() << "Helvetica not available on this host";
   }
-  const std::vector<uint8_t> data = provider.loadFamilyData("Helvetica");
+  const std::vector<uint8_t> data = provider.loadFamilyData("Helvetica", FontFaceRequest{});
   ASSERT_GE(data.size(), 4u);
   const uint32_t magic = (uint32_t(data[0]) << 24) | (uint32_t(data[1]) << 16) |
                          (uint32_t(data[2]) << 8) | uint32_t(data[3]);
-  EXPECT_TRUE(magic == 0x00010000u || magic == 0x4F54544Fu /*OTTO*/ || magic == 0x74727565u /*true*/)
+  EXPECT_TRUE(magic == 0x00010000u || magic == 0x4F54544Fu /*OTTO*/ ||
+              magic == 0x74727565u /*true*/)
       << "unexpected sfnt magic: " << std::hex << magic;
 }
 
 TEST(SystemFontProviderTest, UnknownFamilyReturnsEmpty) {
   SystemFontProvider provider;
   EXPECT_FALSE(provider.hasFamily("Definitely Not Installed Font XYZ"));
-  EXPECT_TRUE(provider.loadFamilyData("Definitely Not Installed Font XYZ").empty());
+  EXPECT_TRUE(
+      provider.loadFamilyData("Definitely Not Installed Font XYZ", FontFaceRequest{}).empty());
+}
+
+// Regression: a catalog family is a *set* of faces, and `font-weight`/`font-style` pick which one.
+// Resolving them all to the family's default face is what makes bold and italic render as regular.
+TEST(FontManagerCatalogFaceTest, BoldResolvesToADistinctFaceFromRegular) {
+  SystemFontProvider probe;
+  if (!probe.hasFamily("Helvetica")) {
+    GTEST_SKIP() << "Helvetica not available on this host";
+  }
+
+  FontCatalog catalog;
+  Registry registry;
+  FontManager manager(registry);
+  manager.setFontProvider(&catalog);
+
+  const std::span<const uint8_t> regular = manager.fontData(manager.findFont("Helvetica", 400));
+  const std::span<const uint8_t> bold = manager.fontData(manager.findFont("Helvetica", 700));
+
+  ASSERT_THAT(regular, Not(IsEmpty()));
+  ASSERT_THAT(bold, Not(IsEmpty()));
+  EXPECT_FALSE(std::ranges::equal(regular, bold))
+      << "font-weight:700 resolved to the same face bytes as font-weight:400";
+}
+
+TEST(FontManagerCatalogFaceTest, ItalicResolvesToADistinctFaceFromUpright) {
+  SystemFontProvider probe;
+  if (!probe.hasFamily("Helvetica")) {
+    GTEST_SKIP() << "Helvetica not available on this host";
+  }
+
+  FontCatalog catalog;
+  Registry registry;
+  FontManager manager(registry);
+  manager.setFontProvider(&catalog);
+
+  const std::span<const uint8_t> upright =
+      manager.fontData(manager.findFont("Helvetica", 400, static_cast<int>(FontStyle::Normal), 5));
+  const std::span<const uint8_t> italic =
+      manager.fontData(manager.findFont("Helvetica", 400, static_cast<int>(FontStyle::Italic), 5));
+
+  ASSERT_THAT(upright, Not(IsEmpty()));
+  ASSERT_THAT(italic, Not(IsEmpty()));
+  EXPECT_FALSE(std::ranges::equal(upright, italic))
+      << "font-style:italic resolved to the same face bytes as font-style:normal";
 }
 #else
 TEST(SystemFontProviderTest, StubEnumeratesNothing) {

@@ -379,8 +379,15 @@ enum class SampleThumbnailRenderOutcome : std::uint8_t {
   RendererUnavailable,
 };
 
+/// Consumer of one bounded low-priority SVG preview render.
+enum class AuxiliaryPreviewKind : std::uint8_t {
+  Sample,
+  FontFamily,
+};
+
 /// One SVG source queued for bounded, low-priority rendering on the existing render worker.
 struct SampleThumbnailRenderRequest {
+  AuxiliaryPreviewKind kind = AuxiliaryPreviewKind::Sample;
   /// Caller-defined key copied into the result (the sample-catalog index in `EditorShell`).
   std::uint64_t key = 0;
   /// Complete SVG source. The request owns its copy until the worker finishes parsing it.
@@ -396,6 +403,7 @@ struct SampleThumbnailRenderRequest {
 
 /// CPU bitmap returned by one asynchronous sample-thumbnail attempt.
 struct SampleThumbnailRenderResult {
+  AuxiliaryPreviewKind kind = AuxiliaryPreviewKind::Sample;
   std::uint64_t key = 0;
   SampleThumbnailRenderOutcome outcome = SampleThumbnailRenderOutcome::RenderError;
   svg::RendererBitmap bitmap;

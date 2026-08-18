@@ -415,6 +415,8 @@ constexpr std::string_view kEditorUiRegularFontName = "Donner UI Regular";
 constexpr std::string_view kEditorUiBoldFontName = "Donner UI Bold";
 constexpr std::string_view kEditorCodeFontName = "Donner Code";
 constexpr std::string_view kEditorCodeSymbolFontName = "Donner Code Symbols";
+constexpr int kFontPreviewWidth = 196;
+constexpr int kFontPreviewHeight = 24;
 
 void SetImGuiFontConfigName(ImFontConfig& config, std::string_view name) {
   const std::size_t size = std::min(name.size(), sizeof(config.Name) - 1u);
@@ -435,6 +437,38 @@ ImFont* FindImGuiFontByConfigName(const ImFontAtlas& atlas, std::string_view nam
     }
   }
   return nullptr;
+}
+
+std::string EscapeXmlText(std::string_view text) {
+  std::string escaped;
+  escaped.reserve(text.size());
+  for (char c : text) {
+    switch (c) {
+      case '&': escaped += "&amp;"; break;
+      case '<': escaped += "&lt;"; break;
+      case '>': escaped += "&gt;"; break;
+      case '"': escaped += "&quot;"; break;
+      case '\'': escaped += "&apos;"; break;
+      default: escaped.push_back(c); break;
+    }
+  }
+  return escaped;
+}
+
+std::string FontPreviewSvg(std::string_view family) {
+  const std::string escaped = EscapeXmlText(family);
+  return "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 196 24\">"
+         "<text x=\"1\" y=\"18\" font-family=\"" +
+         escaped + "\" font-size=\"16\" fill=\"#fff\">" + escaped + "</text></svg>";
+}
+
+std::uint64_t FontPreviewKey(std::string_view family) {
+  std::uint64_t hash = 14695981039346656037ULL;
+  for (unsigned char c : family) {
+    hash ^= static_cast<unsigned char>(std::tolower(c));
+    hash *= 1099511628211ULL;
+  }
+  return hash;
 }
 
 bool ResourceDiagnosticsEnabled() {
@@ -1093,6 +1127,7 @@ EditorShell::EditorShell(gui::EditorWindow& window, EditorShellOptions options)
       textures_(window.geodeDevice()),
       thumbnailTextures_(window.geodeDevice()),
       sampleThumbnailTextures_(window.geodeDevice()),
+      fontPreviewTextures_(window.geodeDevice()),
       toolbarIconTextures_(window.geodeDevice()),
       layerThumbnailRenderer_(window.geodeDevice()),
       fontCatalog_(),
@@ -2716,30 +2751,13 @@ FormatBarState EditorShell::computeFormatBarState() {
     ReadTextFormatState(selection.front(), &state);
   }
 
-  // The family picker lists the real font catalog (embedded curated Google
-  // Fonts, then macOS system fonts), grouped Embedded-then-System as
-  // `FontCatalog::families()` orders them. A menu entry previews in its own
-  // face only where the editor already has that face loaded as an ImGui font:
-  // the default UI face (Roboto) and the code face (Fira Code). Other families
-  // render their label in the default UI font, and the free-text box still
-  // round-trips any family the catalog lacks. Building preview faces for
-  // arbitrary catalog entries from `fontCatalog().loadFace()` bytes would need
-  // a mid-session ImGui atlas rebuild, out of scope for this bar.
-  ImFont* const regularFace =
-      ImGui::GetIO().Fonts->Fonts.empty() ? nullptr : ImGui::GetIO().Fonts->Fonts[0];
+  // Preview bitmaps are generated lazily by the existing low-priority render
+  // worker. This keeps the 180-plus desktop System group out of startup and
+  // avoids mutating ImGui's atlas after its backend texture has been uploaded.
   state.boldToggleFont = uiFontBold_;
-  state.families = BuildFormatBarFamilies(fontCatalog().families(),
-                                          [&](const svg::FontFamilyInfo& info) -> ImFont* {
-                                            if (StringUtils::Equals<StringComparison::IgnoreCase>(
-                                                    info.family, std::string_view("Roboto"))) {
-                                              return regularFace;
-                                            }
-                                            if (StringUtils::Equals<StringComparison::IgnoreCase>(
-                                                    info.family, std::string_view("Fira Code"))) {
-                                              return codeFont_;
-                                            }
-                                            return nullptr;
-                                          });
+  state.families = BuildFormatBarFamilies(
+      fontCatalog().families(),
+      [&](const svg::FontFamilyInfo& info) { return fontPreviewForFamily(info.family); });
   return state;
 }
 
@@ -4229,6 +4247,7 @@ void EditorShell::renderRenderPanePresentation(
                                                 static_cast<float>(formatBarRect->topLeft.y)),
                                          static_cast<float>(formatBarRect->width()));
       applyFormatBarActions(formatBarState, actions);
+      requestFontPreviews(actions.requestFontPreviews);
     }
     renderCanvasZoomControl();
     if (adaptiveUiLayout_.showCanvasScrollbars) {
@@ -4272,18 +4291,28 @@ void EditorShell::ensureSampleThumbnails() {
 
   if (std::optional<SampleThumbnailRenderResult> result =
           asyncRenderer.pollSampleThumbnailResult()) {
-    const std::size_t index = static_cast<std::size_t>(result->key);
-    if (index < samples.size()) {
+    if (result->kind == AuxiliaryPreviewKind::FontFamily && fontPreviewInFlight_.has_value() &&
+        result->key == FontPreviewKey(*fontPreviewInFlight_)) {
       if (result->outcome == SampleThumbnailRenderOutcome::Rendered && !result->bitmap.empty()) {
-        sampleThumbnailBitmaps_[index] = std::move(result->bitmap);
+        fontPreviewBitmaps_.insert_or_assign(*fontPreviewInFlight_, std::move(result->bitmap));
+      } else if (result->outcome != SampleThumbnailRenderOutcome::Cancelled) {
+        fontPreviewBitmaps_.insert_or_assign(*fontPreviewInFlight_, std::nullopt);
       }
-      if (result->outcome != SampleThumbnailRenderOutcome::Cancelled &&
-          index == sampleThumbnailGenerationCursor_) {
-        ++sampleThumbnailGenerationCursor_;
+      fontPreviewInFlight_.reset();
+    } else if (result->kind == AuxiliaryPreviewKind::Sample) {
+      const std::size_t index = static_cast<std::size_t>(result->key);
+      if (index < samples.size()) {
+        if (result->outcome == SampleThumbnailRenderOutcome::Rendered && !result->bitmap.empty()) {
+          sampleThumbnailBitmaps_[index] = std::move(result->bitmap);
+        }
+        if (result->outcome != SampleThumbnailRenderOutcome::Cancelled &&
+            index == sampleThumbnailGenerationCursor_) {
+          ++sampleThumbnailGenerationCursor_;
+        }
       }
-    }
-    if (sampleThumbnailInFlightIndex_ == index) {
-      sampleThumbnailInFlightIndex_.reset();
+      if (sampleThumbnailInFlightIndex_ == index) {
+        sampleThumbnailInFlightIndex_.reset();
+      }
     }
   }
 
@@ -4327,6 +4356,84 @@ void EditorShell::cancelSampleThumbnailGeneration() {
   renderCoordinator_.asyncRenderer().cancelSampleThumbnailWork();
   sampleThumbnailInFlightIndex_.reset();
   sampleThumbnailRetryPending_ = false;
+  if (fontPreviewInFlight_.has_value()) {
+    pendingFontPreviews_.push_front(std::move(*fontPreviewInFlight_));
+    fontPreviewInFlight_.reset();
+  }
+}
+
+void EditorShell::requestFontPreviews(const std::vector<std::string>& families) {
+  bool queued = false;
+  for (const std::string& family : families) {
+    if (!fontCatalog_.hasFamily(family) || fontPreviewBitmaps_.contains(family) ||
+        fontPreviewInFlight_ == family ||
+        std::ranges::find(pendingFontPreviews_, family) != pendingFontPreviews_.end()) {
+      continue;
+    }
+    pendingFontPreviews_.push_back(family);
+    queued = true;
+  }
+  if (queued) {
+    window_.wakeEventLoop();
+  }
+}
+
+void EditorShell::advanceFontPreviewGeneration() {
+  AsyncRenderer& asyncRenderer = renderCoordinator_.asyncRenderer();
+  if (std::optional<SampleThumbnailRenderResult> result =
+          asyncRenderer.pollSampleThumbnailResult()) {
+    if (result->kind == AuxiliaryPreviewKind::FontFamily && fontPreviewInFlight_.has_value() &&
+        result->key == FontPreviewKey(*fontPreviewInFlight_)) {
+      if (result->outcome == SampleThumbnailRenderOutcome::Rendered && !result->bitmap.empty()) {
+        fontPreviewBitmaps_.insert_or_assign(*fontPreviewInFlight_, std::move(result->bitmap));
+      } else if (result->outcome != SampleThumbnailRenderOutcome::Cancelled) {
+        // Remember terminal failures so an unsupported face does not spin the
+        // event loop every time its row becomes visible.
+        fontPreviewBitmaps_.insert_or_assign(*fontPreviewInFlight_, std::nullopt);
+      }
+    }
+    fontPreviewInFlight_.reset();
+  }
+
+  if (fontPreviewInFlight_.has_value() || pendingFontPreviews_.empty() || asyncRenderer.isBusy()) {
+    return;
+  }
+
+  std::string family = std::move(pendingFontPreviews_.front());
+  pendingFontPreviews_.pop_front();
+  const double displayScale = window_.displayScale();
+  SampleThumbnailRenderRequest request{
+      .kind = AuxiliaryPreviewKind::FontFamily,
+      .key = FontPreviewKey(family),
+      .source = FontPreviewSvg(family),
+      .dimensions =
+          Vector2i(std::max(1, static_cast<int>(std::ceil(kFontPreviewWidth * displayScale))),
+                   std::max(1, static_cast<int>(std::ceil(kFontPreviewHeight * displayScale)))),
+  };
+#ifndef __EMSCRIPTEN__
+  request.nativeRenderer = &renderCoordinator_.renderer();
+#endif
+  if (asyncRenderer.requestSampleThumbnail(std::move(request))) {
+    fontPreviewInFlight_ = std::move(family);
+  } else {
+    pendingFontPreviews_.push_front(std::move(family));
+  }
+}
+
+FormatBarFontPreview EditorShell::fontPreviewForFamily(std::string_view family) {
+  const auto it = fontPreviewBitmaps_.find(std::string(family));
+  if (it == fontPreviewBitmaps_.end() || !it->second.has_value()) {
+    return {};
+  }
+  const GlTextureCache::ThumbnailTextureView uploaded =
+      fontPreviewTextures_.uploadThumbnail(FontPreviewKey(family), *it->second);
+  return FormatBarFontPreview{
+      .texture = static_cast<std::uint64_t>(uploaded.texture),
+      .uvMaxX = static_cast<float>(uploaded.uvBottomRight.x),
+      .uvMaxY = static_cast<float>(uploaded.uvBottomRight.y),
+      .width = static_cast<float>(kFontPreviewWidth),
+      .height = static_cast<float>(kFontPreviewHeight),
+  };
 }
 
 void EditorShell::renderSamplePicker(const ImVec2& paneOrigin, const ImVec2& contentRegion) {
@@ -6687,6 +6794,9 @@ void EditorShell::runFrame() {
   contentOnlyCaptureForNextFrame_ = false;
   textures_.advancePresentationFrame();
   compositorDebugPanel_.advancePresentationFrame();
+  if (!showSamplePicker_) {
+    advanceFontPreviewGeneration();
+  }
   snapshotReproFrame();
   const float frameDeltaMs = ImGui::GetIO().DeltaTime * 1000.0f;
   interactionController_.noteFrameDelta(frameDeltaMs);

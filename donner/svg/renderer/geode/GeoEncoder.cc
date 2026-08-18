@@ -389,6 +389,12 @@ struct GeoEncoder::Impl : public GeodeTextureEncoder::UniformScratch {
     ScopedWgpuHandle<wgpu::Buffer> buffer;
     uint64_t capacity = 0;
     uint64_t offset = 0;  // Next unused byte within `buffer`.
+    /// Stable identity of `buffer` (see `GeodeDevice::AllocateBufferId`),
+    /// re-stamped on every growth. Arena buffers are recycled through the
+    /// device's buffer pool, so two arenas at different times can hold the
+    /// same handle address with completely different contents; anything
+    /// that caches across frames must compare this id instead.
+    uint64_t bufferId = 0;
     std::vector<ScopedWgpuHandle<wgpu::Buffer>> retired;
     wgpu::BufferUsage usage = wgpu::BufferUsage::CopyDst;
     const char* label = "GeodeArena";
@@ -459,6 +465,8 @@ struct GeoEncoder::Impl : public GeodeTextureEncoder::UniformScratch {
     wgpu::Buffer buffer;
     uint64_t offset;
     uint64_t size;
+    /// Stable identity of `buffer`; see `Arena::bufferId`.
+    uint64_t bufferId = 0;
   };
   /// One shared uniform allocation for every scene-batch draw this encoder
   /// records while the uniform bytes stay unchanged (identity mvp plus
@@ -514,6 +522,10 @@ struct GeoEncoder::Impl : public GeodeTextureEncoder::UniformScratch {
         device->countBuffer();
         arena.capacity = newCap;
       }
+      // Fresh identity for the new backing buffer, pooled or not: the
+      // contents restart at offset 0 and share nothing with the retired
+      // buffer, even when the pool hands back the same handle address.
+      arena.bufferId = GeodeDevice::AllocateBufferId();
       arena.offset = 0;
     }
   }
@@ -584,7 +596,7 @@ struct GeoEncoder::Impl : public GeodeTextureEncoder::UniformScratch {
     device->queue().writeBuffer(arena.buffer.get(), alignedOffset, data, size);
     device->countBufferWrite(size);
     arena.offset = alignedOffset + size;
-    return {arena.buffer.get(), alignedOffset, size};
+    return {arena.buffer.get(), alignedOffset, size, arena.bufferId};
   }
 
   /// Allocate a read-only storage binding for `byteCount` bytes of `data`,
@@ -1755,6 +1767,7 @@ void GeoEncoder::Impl::uploadResidentGeometry(GeodeResidentSlot& slot, const Enc
     return;
   }
   slot.buffer = alloc.buffer;
+  slot.bufferId = alloc.bufferId;
   slot.allocationOffset = alloc.offset;
   slot.allocationSize = alloc.size;
 
@@ -2164,7 +2177,10 @@ void GeoEncoder::fillPathSceneBatch(const css::RGBA& color, FillRule rule,
   impl_->populateBatchUniform(u, args, Transform2d(), /*identityMvp=*/true);
   Impl::Allocation uniAlloc = {};
   if (binding.recordSlab != nullptr) {
-    uniAlloc.buffer = binding.recordSlab->acquireBatchUniform(*impl_->device, &u, sizeof(Uniforms));
+    const GeodeRecordSlab::BatchUniformHandle uniform =
+        binding.recordSlab->acquireBatchUniform(*impl_->device, &u, sizeof(Uniforms));
+    uniAlloc.buffer = uniform.buffer;
+    uniAlloc.bufferId = uniform.bufferId;
     uniAlloc.offset = 0;
     uniAlloc.size = sizeof(Uniforms);
   }
@@ -2210,17 +2226,28 @@ void GeoEncoder::fillPathSceneBatch(const css::RGBA& color, FillRule rule,
   chunkEntry(9, 9);
   chunkEntry(10, 10);
 
+  // Buffer IDENTITIES, never handle addresses: the cache lives on the
+  // device, which outlives the documents drawn on it, and a destroyed
+  // document's handle addresses are handed straight back out to the next
+  // one. See `GeodeDevice::SceneBatchBindGroupKey`.
   GeodeDevice::SceneBatchBindGroupKey cacheKey = {};
-  cacheKey.uniformBuffer = uniAlloc.buffer;
+  cacheKey.uniformBufferId = uniAlloc.bufferId;
   cacheKey.uniformOffset = uniAlloc.offset;
   cacheKey.uniformSize = uniAlloc.size;
-  cacheKey.chunkBuffer = binding.chunkBuffer;
+  cacheKey.chunkBufferId = binding.chunkBufferId;
   cacheKey.chunkBytes = chunkBytes;
-  cacheKey.recordBuffer = binding.recordBuffer;
+  cacheKey.recordBufferId = binding.recordBufferId;
   cacheKey.recordOffset = recordSpanStart;
   cacheKey.recordBytes = recordSpanBytes;
 
-  wgpu::BindGroup bindGroup = impl_->device->findSceneBatchBindGroup(cacheKey);
+  // A zero id means some buffer in this binding has no stable identity, so
+  // no key can distinguish it from a later buffer; skip the cache entirely
+  // rather than store an entry that a future batch could match by accident.
+  const bool cacheable =
+      cacheKey.uniformBufferId != 0 && cacheKey.chunkBufferId != 0 && cacheKey.recordBufferId != 0;
+
+  wgpu::BindGroup bindGroup =
+      cacheable ? impl_->device->findSceneBatchBindGroup(cacheKey) : wgpu::BindGroup{};
   if (!bindGroup) {
     wgpu::BindGroupDescriptor bgDesc = {};
     bgDesc.label = wgpuLabel("GeodeSceneBatchBindGroup");
@@ -2230,9 +2257,16 @@ void GeoEncoder::fillPathSceneBatch(const css::RGBA& color, FillRule rule,
     wgpu::BindGroup created = impl_->device->device().createBindGroup(bgDesc);
     impl_->device->countBindGroup();
     bindGroup = created;
-    // The cache takes ownership of the +1 handle and keeps the bound
-    // buffers alive for the entry's lifetime.
-    impl_->device->storeSceneBatchBindGroup(cacheKey, std::move(created));
+    if (cacheable) {
+      // The cache takes ownership of the +1 handle.
+      impl_->device->storeSceneBatchBindGroup(cacheKey, std::move(created));
+    } else {
+      // Defensive only: every buffer that can reach this call is stamped at
+      // creation, so no live path produces a zero id today. Hand the +1 to
+      // the encoder's per-frame arena so that if one ever does, the bind
+      // group is released at the frame boundary instead of leaking.
+      bindGroup = impl_->transientResources.retain(created);
+    }
   }
 
   // The binding covers the span of consecutive record slots starting at
@@ -2600,6 +2634,7 @@ void GeoEncoder::Impl::uploadResidentGradientGeometry(GeodeResidentGradientSlot&
     return;
   }
   slot.buffer = alloc.buffer;
+  slot.bufferId = alloc.bufferId;
   slot.allocationOffset = alloc.offset;
   slot.allocationSize = alloc.size;
 

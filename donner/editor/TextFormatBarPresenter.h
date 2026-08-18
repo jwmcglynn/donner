@@ -18,6 +18,7 @@
 /// bar is a second surface over those commands, not a new styling pipeline.
 
 #include <array>
+#include <cstdint>
 #include <functional>
 #include <string>
 #include <vector>
@@ -32,29 +33,47 @@ namespace donner::editor {
 
 class EditorApp;
 
+/// Donner-rendered family-name preview uploaded for one dropdown row.
+struct FormatBarFontPreview {
+  /// Backend texture handle represented without importing ImGui into this header.
+  std::uint64_t texture = 0;
+  /// Bottom-right UV for texture allocations larger than the preview payload.
+  float uvMaxX = 1.0f;
+  float uvMaxY = 1.0f;
+  /// Logical row size used when the raster payload was produced.
+  float width = 0.0f;
+  float height = 0.0f;
+
+  [[nodiscard]] bool available() const { return texture != 0 && width > 0.0f && height > 0.0f; }
+};
+
 /// One selectable font family in the format bar's family picker.
 struct FormatBarFontFamily {
   /// CSS family name written to the document (e.g. "Roboto", "sans-serif").
   std::string name;
-  /// Face used to preview this family's menu entry, or null to fall back to the
-  /// default UI font. Lets each family render in its own face when the editor
-  /// has it loaded (the embedded Roboto and Fira Code faces today).
-  ImFont* previewFont = nullptr;
+  /// Donner-rendered label in this family's own face. An unavailable preview
+  /// falls back to UI text while the bounded worker request is in flight.
+  FormatBarFontPreview preview;
   /// Origin of this family in the catalog. The picker lists the Embedded group
   /// before the System group and shows a header at each group boundary.
   svg::FontSource source = svg::FontSource::Embedded;
 };
 
-/// Build the picker's family list from a catalog listing (see
-/// `FontCatalog::families()`, which already orders Embedded before System and
-/// sorts within each group). Each entry keeps its CSS family name and source;
-/// `previewFont` is filled from @p previewForFamily for families the editor has
-/// a loaded face for, and left null otherwise (the entry then renders in the
-/// default UI font). Families the catalog lacks are still reachable through the
-/// bar's free-text box, so this list is additive, not a whitelist.
+/**
+ * Build the picker's family list from a catalog listing.
+ *
+ * `FontCatalog::families()` already orders Embedded before System and sorts within each group.
+ * Each entry keeps its CSS family name and source; `preview` is filled for families already
+ * rendered by the bounded preview worker. Families the catalog lacks remain reachable through the
+ * free-text box, so this list is additive rather than a whitelist.
+ *
+ * @param catalogFamilies Ordered font families available to the picker.
+ * @param previewForFamily Returns a rendered preview when one is ready for a family.
+ * @return Picker entries preserving catalog order, source, and available previews.
+ */
 [[nodiscard]] std::vector<FormatBarFontFamily> BuildFormatBarFamilies(
     const std::vector<svg::FontFamilyInfo>& catalogFamilies,
-    const std::function<ImFont*(const svg::FontFamilyInfo&)>& previewForFamily);
+    const std::function<FormatBarFontPreview(const svg::FontFamilyInfo&)>& previewForFamily);
 
 /// Snapshot of the current text formatting context, driving the bar's controls.
 ///
@@ -96,6 +115,8 @@ struct FormatBarActions {
   bool toggleBold = false;
   bool toggleItalic = false;
   bool toggleUnderline = false;
+  /// Visible dropdown rows whose family-name previews are not cached yet.
+  std::vector<std::string> requestFontPreviews;
 };
 
 /// Common font-size presets offered by the size combo (document units).

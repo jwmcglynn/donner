@@ -987,12 +987,14 @@
         "poll",
         "submit",
         "unmap",
+        "writeBuffer",
         "writeTexture"
       ],
       "wgpuCFunctions": [
         "wgpuLabel"
       ],
       "wgpuCTypes": [
+        "WGPUBuffer",
         "WGPUMapAsyncStatus",
         "WGPUMapAsyncStatus_Success",
         "WGPUStringView"

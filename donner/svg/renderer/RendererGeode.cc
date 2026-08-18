@@ -1985,6 +1985,12 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
     std::vector<SceneInstance> sceneInstances;
     wgpu::Buffer sceneChunkBuffer;
     wgpu::Buffer sceneRecordBuffer;
+    /// Stable identities of the two buffers above (see
+    /// `GeodeDevice::AllocateBufferId`). The encoder's bind-group cache
+    /// outlives the document, so it keys on these rather than on the handle
+    /// addresses, which are recycled once the document is destroyed.
+    uint64_t sceneChunkBufferId = 0;
+    uint64_t sceneRecordBufferId = 0;
     uint32_t sceneFirstInstance = 0;
     /// Byte offset of the first instance's record inside sceneRecordBuffer
     /// (indices are global across slab chunks; offsets are per-buffer).
@@ -2331,6 +2337,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
       geode::GeoEncoder::SceneBatchBinding binding = {};
       binding.chunkBuffer = batch.sceneChunkBuffer;
       binding.recordBuffer = batch.sceneRecordBuffer;
+      binding.chunkBufferId = batch.sceneChunkBufferId;
+      binding.recordBufferId = batch.sceneRecordBufferId;
       binding.firstRecordOffset = batch.sceneFirstRecordOffset;
       binding.instanceCount = static_cast<uint32_t>(batch.sceneInstances.size());
       binding.vertexCount = batch.sceneVertexCount;
@@ -2497,6 +2505,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
           recordSlotPtr != nullptr ? *recordSlotPtr : residentFillSlot->recordSlot;
       const wgpu::Buffer chunk = residentFillSlot->buffer;
       const wgpu::Buffer recordBuf = effectiveRecordSlot.buffer;
+      const uint64_t chunkId = residentFillSlot->bufferId;
+      const uint64_t recordBufId = effectiveRecordSlot.bufferId;
       const uint32_t recordIndex = effectiveRecordSlot.index;
       const uint32_t vertexCount = encoded->boundingDrawVertexCount();
 
@@ -2511,8 +2521,11 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
       };
 
       if (pendingBatch.has_value() && pendingBatch->mode == PendingBatch::Mode::Scene) {
-        if (pendingBatch->sceneChunkBuffer == chunk &&
-            pendingBatch->sceneRecordBuffer == recordBuf &&
+        // Buffer identities, not handles: the two are interchangeable inside
+        // one frame, but comparing ids keeps every "is this the same buffer?"
+        // question in this file answered the same way.
+        if (pendingBatch->sceneChunkBufferId == chunkId &&
+            pendingBatch->sceneRecordBufferId == recordBufId &&
             pendingBatch->sceneClipVersion == clipVersion &&
             pendingBatch->sceneFirstInstance + pendingBatch->sceneInstances.size() ==
                 recordIndex) {
@@ -2526,6 +2539,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
           pendingBatch->mode = PendingBatch::Mode::Scene;
           pendingBatch->sceneChunkBuffer = chunk;
           pendingBatch->sceneRecordBuffer = recordBuf;
+          pendingBatch->sceneChunkBufferId = chunkId;
+          pendingBatch->sceneRecordBufferId = recordBufId;
           pendingBatch->sceneFirstInstance = recordIndex;
           pendingBatch->sceneFirstRecordOffset = effectiveRecordSlot.offset;
           pendingBatch->sceneClipVersion = clipVersion;
@@ -2571,17 +2586,22 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
               firstRecordSlotPtr != nullptr ? *firstRecordSlotPtr : first.slot->recordSlot;
           const wgpu::Buffer firstChunk = first.slot->buffer;
           const wgpu::Buffer firstRecordBuf = effectiveFirstRecordSlot.buffer;
+          const uint64_t firstChunkId = first.slot->bufferId;
+          const uint64_t firstRecordBufId = effectiveFirstRecordSlot.bufferId;
           const uint32_t firstIndex = effectiveFirstRecordSlot.index;
           pendingBatch = PendingBatch{};
           pendingBatch->mode = PendingBatch::Mode::Scene;
           pendingBatch->sceneChunkBuffer = firstChunk;
           pendingBatch->sceneRecordBuffer = firstRecordBuf;
+          pendingBatch->sceneChunkBufferId = firstChunkId;
+          pendingBatch->sceneRecordBufferId = firstRecordBufId;
           pendingBatch->sceneFirstInstance = firstIndex;
           pendingBatch->sceneFirstRecordOffset = effectiveFirstRecordSlot.offset;
           pendingBatch->sceneClipVersion = clipVersion;
           pendingBatch->sceneVertexCount = first.vertexCount;
           pendingBatch->sceneInstances.push_back(first);
-          if (firstChunk == chunk && firstRecordBuf == recordBuf && firstIndex + 1 == recordIndex) {
+          if (firstChunkId == chunkId && firstRecordBufId == recordBufId &&
+              firstIndex + 1 == recordIndex) {
             appendSceneInstance(*pendingBatch,
                                 PendingBatch::SceneInstance{residentFillSlot, encoded, &path,
                                                             color, rule,
@@ -2593,6 +2613,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
             pendingBatch->mode = PendingBatch::Mode::Scene;
             pendingBatch->sceneChunkBuffer = chunk;
             pendingBatch->sceneRecordBuffer = recordBuf;
+            pendingBatch->sceneChunkBufferId = chunkId;
+            pendingBatch->sceneRecordBufferId = recordBufId;
             pendingBatch->sceneFirstInstance = recordIndex;
             pendingBatch->sceneFirstRecordOffset = effectiveRecordSlot.offset;
             pendingBatch->sceneClipVersion = clipVersion;
@@ -2631,6 +2653,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
       pendingBatch->mode = PendingBatch::Mode::Scene;
       pendingBatch->sceneChunkBuffer = chunk;
       pendingBatch->sceneRecordBuffer = recordBuf;
+      pendingBatch->sceneChunkBufferId = chunkId;
+      pendingBatch->sceneRecordBufferId = recordBufId;
       pendingBatch->sceneFirstInstance = recordIndex;
       pendingBatch->sceneFirstRecordOffset = effectiveRecordSlot.offset;
       pendingBatch->sceneClipVersion = clipVersion;
