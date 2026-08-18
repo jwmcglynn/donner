@@ -19,6 +19,7 @@
 #include "donner/editor/ViewportState.h"
 #include "donner/editor/repro/ReproFile.h"
 #include "donner/svg/renderer/Renderer.h"
+#include "donner/svg/resources/FontCatalog.h"
 #include "nlohmann/json.hpp"
 
 namespace donner::editor::mcp {
@@ -141,6 +142,7 @@ private:
   [[nodiscard]] bool loadCurrentSourceText(const LoadOptions& options, std::string_view sourcePath,
                                            bool resetRenderVersion, nlohmann::json* loadInfo,
                                            std::string* error);
+  void installFontCatalogOnDocument();
   [[nodiscard]] nlohmann::json sourceStateJson() const;
 
   class HeadlessTextureCache {
@@ -196,6 +198,9 @@ private:
   [[nodiscard]] bool ensureDocumentLoaded(std::string* error) const;
   [[nodiscard]] bool waitUntilIdle(std::string* error);
 
+  /// Same catalog used by EditorShell, declared first so render workers cannot
+  /// outlive the provider they resolve family changes through.
+  svg::FontCatalog fontCatalog_;
   EditorApp app_;
   std::unique_ptr<SelectTool> selectTool_;
   PenTool penTool_;

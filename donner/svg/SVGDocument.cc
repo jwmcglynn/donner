@@ -26,8 +26,8 @@
 #include "donner/svg/components/paint/ClipPathComponent.h"
 #include "donner/svg/components/resources/ResourceManagerContext.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
-#include "donner/svg/components/text/ComputedTextGeometryComponent.h"
 #include "donner/svg/components/text/TextComponent.h"
+#include "donner/svg/components/text/TextInvalidation.h"
 #include "donner/svg/components/text/TextPositioningComponent.h"
 #include "donner/svg/components/text/TextRootComponent.h"
 #include "donner/svg/renderer/RenderingContext.h"
@@ -50,27 +50,6 @@ SourceRange MutationRange(std::string_view source, const xml::XMLMutation& mutat
 
   return mutation.node.getNodeLocation().value_or(
       SourceRange{FileOffset::Offset(0), FileOffset::Offset(0)});
-}
-
-void InvalidateTextGeometry(EntityHandle handle) {
-  Registry& registry = *handle.registry();
-  Entity current = handle.entity();
-  while (current != entt::null) {
-    if (registry.any_of<components::TextRootComponent>(current)) {
-      registry.remove<components::ComputedTextGeometryComponent>(current);
-      registry.get_or_emplace<components::DirtyFlagsComponent>(current).mark(
-          components::DirtyFlagsComponent::TextGeometry |
-          components::DirtyFlagsComponent::RenderInstance);
-      return;
-    }
-
-    const auto* tree = registry.try_get<donner::components::TreeComponent>(current);
-    if (tree == nullptr) {
-      return;
-    }
-
-    current = tree->parent();
-  }
 }
 
 std::optional<EntityHandle> TextElementHandleForNodeValueMutation(
@@ -116,7 +95,7 @@ std::optional<ParseDiagnostic> ApplyNodeValueChanged(std::string_view source,
     text.text = *mutation.value;
     text.textChunks.clear();
     text.textChunks.emplace_back(*mutation.value);
-    InvalidateTextGeometry(*targetHandle);
+    (void)components::InvalidateTextLayout(*targetHandle);
     return std::nullopt;
   }
 

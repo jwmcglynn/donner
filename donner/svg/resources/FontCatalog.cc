@@ -57,10 +57,11 @@ bool FontCatalog::hasFamily(std::string_view family) const {
   return false;
 }
 
-std::vector<uint8_t> FontCatalog::loadFamilyData(std::string_view family) const {
+std::vector<uint8_t> FontCatalog::loadFamilyData(std::string_view family,
+                                                 const FontFaceRequest& request) const {
   for (const auto& provider : providers_) {
     if (provider->hasFamily(family)) {
-      std::vector<uint8_t> data = provider->loadFamilyData(family);
+      std::vector<uint8_t> data = provider->loadFamilyData(family, request);
       if (!data.empty()) {
         return data;
       }

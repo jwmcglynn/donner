@@ -363,7 +363,10 @@ FontHandle FontManager::findFont(std::string_view family, int weight, int style,
   // No document @font-face matched. Consult the external provider (embedded/system catalog) before
   // falling back to Public Sans. The provider itself orders Embedded before System.
   if (provider_ != nullptr && provider_->hasFamily(family)) {
-    std::vector<uint8_t> data = provider_->loadFamilyData(family);
+    const FontFaceRequest request{.weight = weight,
+                                  .style = static_cast<FontStyle>(style),
+                                  .stretch = static_cast<FontStretch>(stretch)};
+    std::vector<uint8_t> data = provider_->loadFamilyData(family, request);
     if (!data.empty()) {
       const Entity entity = registry_.create();
       if (loadFontDataIntoEntity(entity, data, FontDataTrust::Trusted)) {

@@ -24,6 +24,8 @@
 #include "donner/svg/components/style/ComputedStyleComponent.h"
 #include "donner/svg/components/style/StyleComponent.h"
 #include "donner/svg/components/style/StyleSystem.h"
+#include "donner/svg/components/text/TextInvalidation.h"
+#include "donner/svg/components/text/TextRootComponent.h"
 #include "donner/svg/properties/PresentationAttributeParsing.h"
 
 namespace donner::svg {
@@ -33,6 +35,19 @@ namespace {
 /// Mark an entity with dirty flags for incremental invalidation.
 void markDirty(EntityHandle handle, uint16_t flags) {
   handle.get_or_emplace<components::DirtyFlagsComponent>().mark(flags);
+}
+
+/**
+ * Mark a style-cascade change on \p handle, plus any \p extraFlags.
+ *
+ * Text layout is memoized per text root in \ref components::ComputedTextGeometryComponent and both
+ * renderers draw straight out of it, so a style change inside a text subtree has to drop it. The
+ * font properties (`font-family`, `font-size`, `font-weight`, `letter-spacing`, ...) are exactly
+ * the ones an editor writes, and without this every one of them is a silent no-op.
+ */
+void markStyleCascadeDirty(EntityHandle handle, uint16_t extraFlags = 0) {
+  markDirty(handle, components::DirtyFlagsComponent::StyleCascade | extraFlags);
+  (void)components::InvalidateTextLayout(handle);
 }
 
 void invalidateComputedStyle(EntityHandle handle) {
@@ -53,7 +68,7 @@ void markNeedsFullStyleRecompute(EntityHandle handle) {
 
 void markConditionalProcessingChanged(EntityHandle handle) {
   markNeedsFullStyleRecompute(handle);
-  markDirty(handle, components::DirtyFlagsComponent::StyleCascade);
+  markStyleCascadeDirty(handle);
 }
 
 void invalidateComputedStyleForDescendants(EntityHandle handle) {
@@ -77,6 +92,11 @@ void propagateStyleDirtyToDescendants(EntityHandle handle) {
           markDirty(desc, components::DirtyFlagsComponent::Style |
                               components::DirtyFlagsComponent::Paint |
                               components::DirtyFlagsComponent::RenderInstance);
+          // The font properties inherit, so a style change on an ancestor restyles every text
+          // root beneath it. Match on the root itself to keep this O(1) per descendant.
+          if (desc.all_of<components::TextRootComponent>()) {
+            (void)components::InvalidateTextLayout(desc);
+          }
         });
   }
 }
@@ -402,7 +422,7 @@ void SVGElement::setClassName(std::string_view name) {
   markNeedsFullStyleRecompute(handle_);
   invalidateComputedStyle(handle_);
   invalidateComputedStyleForDescendants(handle_);
-  markDirty(handle_, components::DirtyFlagsComponent::StyleCascade);
+  markStyleCascadeDirty(handle_);
   propagateStyleDirtyToDescendants(handle_);
 }
 
@@ -418,7 +438,7 @@ void SVGElement::setStyle(std::string_view style) {
   markNeedsFullStyleRecompute(handle_);
   invalidateComputedStyleForDescendants(handle_);
 
-  markDirty(handle_, components::DirtyFlagsComponent::StyleCascade);
+  markStyleCascadeDirty(handle_);
   propagateStyleDirtyToDescendants(handle_);
 }
 
@@ -434,7 +454,7 @@ void SVGElement::updateStyle(std::string_view style) {
   invalidateComputedStyle(handle_);
   invalidateComputedStyleForDescendants(handle_);
 
-  markDirty(handle_, components::DirtyFlagsComponent::StyleCascade);
+  markStyleCascadeDirty(handle_);
   propagateStyleDirtyToDescendants(handle_);
 }
 
@@ -499,8 +519,7 @@ ParseResult<bool> SVGElement::trySetPresentationAttribute(std::string_view name,
       // (cx, cy, r, d, etc.), mark style cascade + shape dirty.
       markNeedsFullStyleRecompute(handle_);
       invalidateComputedStyle(handle_);
-      markDirty(handle_, components::DirtyFlagsComponent::StyleCascade |
-                             components::DirtyFlagsComponent::Shape);
+      markStyleCascadeDirty(handle_, components::DirtyFlagsComponent::Shape);
       if (PropertyRegistry::isPresentationAttributeInherited(actualName)) {
         invalidateComputedStyleForDescendants(handle_);
         propagateStyleDirtyToDescendants(handle_);

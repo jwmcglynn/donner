@@ -16,6 +16,7 @@
 #include "donner/editor/TextPatch.h"
 #include "donner/editor/ViewportState.h"
 #include "donner/svg/SVGDocument.h"
+#include "donner/svg/resources/FontManager.h"
 #include "nlohmann/json.hpp"
 #include "tools/mcp-servers/editor-control/EditorControlSessionInternal.h"
 
@@ -26,6 +27,17 @@ namespace {
 using nlohmann::json;
 
 }  // namespace
+
+void EditorControlSession::installFontCatalogOnDocument() {
+  svg::SVGDocument& document = app_.document().document();
+  document.withWriteAccess([this](svg::DocumentWriteAccess& access) {
+    Registry& registry = access.registry();
+    svg::FontManager& fontManager = registry.ctx().contains<svg::FontManager>()
+                                        ? registry.ctx().get<svg::FontManager>()
+                                        : registry.ctx().emplace<svg::FontManager>(registry);
+    fontManager.setFontProvider(&fontCatalog_);
+  });
+}
 
 ToolCallResult EditorControlSession::loadDocument(const json& arguments) {
   std::string error;
@@ -87,6 +99,7 @@ bool EditorControlSession::loadCurrentSourceText(const LoadOptions& options,
     *error = "failed to parse SVG source";
     return false;
   }
+  installFontCatalogOnDocument();
 
   currentSourcePath_ = std::string(sourcePath);
   app_.setCurrentFilePath(std::string(sourcePath));

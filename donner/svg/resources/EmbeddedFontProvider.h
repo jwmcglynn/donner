@@ -11,6 +11,11 @@ namespace donner::svg {
  * The family table is generated from `third_party/google_fonts/fonts.bzl` (see the
  * `DONNER_GF_ENTRY` x-macro include), so it always matches the fetched-and-embedded bytes. All
  * families report \ref FontSource::Embedded.
+ *
+ * Each family is a single file, so \ref loadFamilyData ignores the requested face: ten of the
+ * twelve curated families are variable fonts whose `wght` axis neither text backend instances, and
+ * the other two ship only a regular face. Bold and italic therefore render upright and regular for
+ * embedded families.
  */
 class EmbeddedFontProvider : public FontFamilyProvider {
 public:
@@ -18,7 +23,8 @@ public:
 
   std::vector<FontFamilyInfo> families() const override;
   bool hasFamily(std::string_view family) const override;
-  std::vector<uint8_t> loadFamilyData(std::string_view family) const override;
+  std::vector<uint8_t> loadFamilyData(std::string_view family,
+                                      const FontFaceRequest& request) const override;
 };
 
 }  // namespace donner::svg

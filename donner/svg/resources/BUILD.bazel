@@ -110,6 +110,7 @@ donner_cc_library(
         "//donner/editor:__subpackages__",
         "//donner/svg:__subpackages__",
     ],
+    deps = ["//donner/svg/core"],
 )
 
 donner_cc_library(
@@ -123,6 +124,7 @@ donner_cc_library(
     visibility = [
         "//donner/editor:__subpackages__",
         "//donner/svg:__subpackages__",
+        "//tools/mcp-servers/editor-control:__pkg__",
     ],
     deps = [
         ":font_catalog_types",
@@ -171,6 +173,7 @@ donner_cc_library(
     visibility = [
         "//donner/editor:__subpackages__",
         "//donner/svg:__subpackages__",
+        "//tools/mcp-servers/editor-control:__pkg__",
     ],
     deps = [
         ":font_catalog_types",
@@ -202,6 +205,7 @@ donner_cc_test(
         ":font_catalog_types",
         ":font_manager",
         "//donner/base/fonts:sfnt_utils",
+        "//donner/svg/core",
         "//third_party/public-sans",
         "@com_google_gtest//:gtest_main",
         "@stb//:truetype",
@@ -221,6 +225,8 @@ donner_cc_test(
     deps = [
         ":font_catalog",
         ":font_catalog_types",
+        ":font_manager",
+        "//donner/svg/core",
         "@com_google_gtest//:gtest_main",
     ],
 )
