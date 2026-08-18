@@ -652,8 +652,12 @@ private:
   bool sidebarSnapshotRefreshPending_ = false;
   /// Last paint presentation read while the document was idle. The renderer
   /// owns the document registry while busy, so worker frames replay this
-  /// value instead of substituting the unrelated authoring paint.
+  /// value instead of substituting the unrelated authoring paint. The owner
+  /// fields prevent a drag that changes selection from replaying the previous
+  /// element's paint.
   std::unique_ptr<internal::ToolbarPaintState> toolbarPaintSnapshot_;
+  svg::SVGDocumentHandle toolbarPaintSnapshotDocument_;
+  std::optional<Entity> toolbarPaintSnapshotSelection_;
   /// Document-derived menu/shortcut state from the last idle UI epoch. Busy frames must replay
   /// these values instead of traversing the live registry behind the worker's write guard.
   bool cachedCanvasHasSelectableElements_ = false;
