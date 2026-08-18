@@ -1921,7 +1921,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
     /// document (the icon-atlas pass) has to compare this too - otherwise a
     /// second document's identically-numbered entity extends the first
     /// document's batch and is drawn with the first document's geometry.
-    const Registry* sourceRegistry = nullptr;
+    Registry* sourceRegistry = nullptr;
     Entity sourceEntity = entt::null;
     css::RGBA color;
     FillRule rule = FillRule::NonZero;
@@ -2402,7 +2402,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
 
   /// Start a fresh size-1 same-entity batch holding the current draw.
   /// The caller has already flushed any previous pending batch.
-  void startSameEntitySingleton(const Registry* sourceRegistry, Entity sourceEntity,
+  void startSameEntitySingleton(Registry* sourceRegistry, Entity sourceEntity,
                                 const Path& path, const css::RGBA& color, FillRule rule,
                                 const geode::EncodedPath* encoded,
                                 geode::GeodeResidentSlot* residentFillSlot) {
@@ -2536,8 +2536,14 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
         // first scene use this frame, or a fresh temporary slot when it
         // was already batched earlier this frame (its primary record is
         // referenced by that earlier batch and must not be overwritten).
+        // The pending singleton reached the batcher without being scene
+        // eligible itself, so its slot may still be holding a record slot
+        // from a slab this device does not own (another device rendered the
+        // document in between). Re-ensure before resolving.
         const geode::GeodeRecordSlab::Slot* firstRecordSlotPtr = nullptr;
-        if (first.slot != nullptr && first.encoded != nullptr && first.slot->recordSlot.buffer &&
+        if (first.slot != nullptr && first.encoded != nullptr &&
+            pendingBatch->sourceRegistry != nullptr &&
+            ensureRecordSlot(*first.slot, *pendingBatch->sourceRegistry) &&
             resolveSceneRecordSlot(*first.slot, firstRecordSlotPtr) &&
             encoder->ensureResidentSceneRecord(*first.slot, *first.encoded, first.color,
                                                first.rule, first.deviceFromLocal,
