@@ -939,8 +939,8 @@ PresentationResourceStats GlTextureCache::presentationResourceStats() const {
 #endif
 
   stats.totalTrackedBytes = stats.documentCompositeBytes + stats.activeTileBytes +
-                            stats.overviewTileBytes +
-                            stats.pendingRetiredBytes + stats.agedRetiredBytes;
+                            stats.overviewTileBytes + stats.pendingRetiredBytes +
+                            stats.agedRetiredBytes;
   peakTrackedResourceBytes_ = std::max(peakTrackedResourceBytes_, stats.totalTrackedBytes);
   stats.peakTrackedBytes = peakTrackedResourceBytes_;
   return stats;

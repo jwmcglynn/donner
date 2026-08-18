@@ -35,8 +35,8 @@
 #include "donner/css/parser/ColorParser.h"
 #include "donner/editor/AttributeWriteback.h"
 #include "donner/editor/DisclosureChevron.h"
-#include "donner/editor/DocumentSave.h"
 #include "donner/editor/DocumentPresentationCompositor.h"
+#include "donner/editor/DocumentSave.h"
 #include "donner/editor/DragCoalesce.h"
 #include "donner/editor/EditorDockLayout.h"
 #include "donner/editor/EditorSampleCatalog.h"
@@ -1720,8 +1720,7 @@ void EditorShell::maybeLogResourceDiagnostics(const FrameCostBreakdown& frameCos
   std::cerr << "[DonnerResource] frame=" << resourceDiagnosticsFrame_
             << " tracked_mib=" << MegabytesRoundedUp(resources.totalTrackedBytes)
             << " peak_mib=" << MegabytesRoundedUp(resources.peakTrackedBytes)
-            << " document_composite_mib="
-            << MegabytesRoundedUp(resources.documentCompositeBytes)
+            << " document_composite_mib=" << MegabytesRoundedUp(resources.documentCompositeBytes)
             << " active_tile_mib=" << MegabytesRoundedUp(resources.activeTileBytes)
             << " overview_tile_mib=" << MegabytesRoundedUp(resources.overviewTileBytes)
             << " retired_mib="
@@ -6598,9 +6597,9 @@ void EditorShell::recordFrameTelemetry(
   // `donner/base/MemoryAttribution.h`); the render thread publishes the
   // compositor's half from `AsyncRenderer::workerLoop`. The frame publisher
   // reads both and is the only writer of the page-visible stats object.
-  SetRetainedBytes(MemoryCategory::PresentationTiles,
-                   presentationResources.activeTileBytes +
-                       presentationResources.documentCompositeBytes);
+  SetRetainedBytes(
+      MemoryCategory::PresentationTiles,
+      presentationResources.activeTileBytes + presentationResources.documentCompositeBytes);
   SetEntryCount(MemoryCategory::PresentationTiles,
                 static_cast<std::uint64_t>(presentationResources.activeTileTextures));
   SetRetainedBytes(MemoryCategory::PresentationOverviewTiles,
