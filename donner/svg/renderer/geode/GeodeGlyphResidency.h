@@ -39,13 +39,20 @@ namespace donner::geode {
  *
  * `fontId` is the font handle's opaque identifier, `outlineScale` is the
  * effective scale handed to the font backend (the run scale times the glyph's
- * own font-size multiplier), and the stretch factors are the `lengthAdjust`
- * scale baked into the outline before placement. Position and rotation are
- * deliberately absent: they are the placement transform, which rides in the
- * per-occurrence record.
+ * own font-size multiplier), the stretch factors are the `lengthAdjust` scale,
+ * and `rotateDegrees` is the per-glyph rotation - all four are baked into the
+ * outline before placement. Position is deliberately absent: it is the
+ * placement transform, which rides in the per-occurrence record.
  *
- * The floating-point fields are compared and hashed BITWISE, matching how they
- * reach the font backend: two scales that differ in the last bit produce
+ * Rotation belongs here rather than in the placement because a resident
+ * outline is also the space its rasteriser works in, and that space has to stay
+ * aligned with the pixel grid. The cost is one cached outline per distinct
+ * angle: a whole run rotated by one angle still collapses to one entry, and a
+ * `textPath`, which rotates every glyph differently, degrades to about one
+ * entry per glyph - which is what an uncached renderer pays anyway.
+ *
+ * The numeric fields are compared and hashed BITWISE, matching how they reach
+ * the font backend: two scales or angles that differ in the last bit produce
  * different outlines, so they must not share an entry.
  *
  * `fontId` carries the font handle's version bits, so an unloaded font whose
@@ -61,18 +68,27 @@ struct GlyphGeometryKey {
   float outlineScale = 0.0f;
   float stretchScaleX = 1.0f;
   float stretchScaleY = 1.0f;
+  double rotateDegrees = 0.0;
 
   bool operator==(const GlyphGeometryKey& other) const {
     return fontId == other.fontId && glyphIndex == other.glyphIndex &&
            bits(outlineScale) == bits(other.outlineScale) &&
            bits(stretchScaleX) == bits(other.stretchScaleX) &&
-           bits(stretchScaleY) == bits(other.stretchScaleY);
+           bits(stretchScaleY) == bits(other.stretchScaleY) &&
+           bits(rotateDegrees) == bits(other.rotateDegrees);
   }
 
   /// Raw bit pattern of a float, so `-0.0f` and NaN payloads compare and hash
   /// as the distinct inputs they are rather than by numeric equality.
   static uint32_t bits(float value) {
     uint32_t out = 0;
+    std::memcpy(&out, &value, sizeof(out));
+    return out;
+  }
+
+  /// Raw bit pattern of a double; same policy as the float overload.
+  static uint64_t bits(double value) {
+    uint64_t out = 0;
     std::memcpy(&out, &value, sizeof(out));
     return out;
   }
@@ -88,6 +104,7 @@ struct GlyphGeometryKeyHash {
     h = mix(h ^ GlyphGeometryKey::bits(key.outlineScale));
     h = mix(h ^ GlyphGeometryKey::bits(key.stretchScaleX));
     h = mix(h ^ GlyphGeometryKey::bits(key.stretchScaleY));
+    h = mix(h ^ GlyphGeometryKey::bits(key.rotateDegrees));
     return static_cast<size_t>(h);
   }
 
@@ -257,6 +274,11 @@ public:
 private:
   /// CPU size of an encode. Used as the budget unit because it tracks the GPU
   /// residence byte-for-byte (the resident slot uploads exactly these arrays).
+  ///
+  /// The entry's retained `Path outline` is NOT counted: it is CPU-only, it is
+  /// small next to the banded encode, and the entry-count cap already bounds
+  /// how many of them can be live. Add it here if the outline ever grows a
+  /// representation where that stops being true.
   static uint64_t EncodedBytes(const EncodedPath& encoded) {
     return encoded.bands.size() * sizeof(EncodedPath::Band) +
            encoded.curves.size() * 6u * sizeof(float) +

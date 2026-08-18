@@ -11,6 +11,7 @@
 #include <map>
 #include <mutex>
 #include <optional>
+#include <span>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -2616,6 +2617,10 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
                                ? batch.sceneInstances.front().slot->recordSlab.get()
                                : nullptr;
 
+      // The batched entry points read colour and fill rule from each instance's
+      // record, so these two only populate the draw-level uniform the batched
+      // shader does not consult. They come from the first instance because the
+      // uniform still has to hold something well-formed.
       const css::RGBA batchColor = batch.sceneInstances.front().color;
       const FillRule batchRule = batch.sceneInstances.front().rule;
       // Ensure each instance's geometry + batch-form record immediately
@@ -5351,10 +5356,8 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
     // and must not then fetch, encode, and permanently cache an outline per
     // glyph for geometry nothing draws.
     const bool runNeedsGlyphGeometry = residentGlyphFill || needPlacedGlyphPaths;
-    for (const auto& glyph : run.glyphs) {
-      if (!runNeedsGlyphGeometry) {
-        break;
-      }
+    for (const auto& glyph : runNeedsGlyphGeometry ? std::span<const TextGlyph>(run.glyphs)
+                                                   : std::span<const TextGlyph>()) {
       if (glyph.glyphIndex == 0) {
         continue;  // `.notdef` -- skip to match tiny-skia.
       }
@@ -5373,6 +5376,7 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
       key.outlineScale = scale * glyph.fontSizeScale;
       key.stretchScaleX = glyph.stretchScaleX;
       key.stretchScaleY = glyph.stretchScaleY;
+      key.rotateDegrees = glyph.rotateDegrees;
 
       geode::GeodeGlyphResidentEntry* entry =
           impl_->residentGlyphEntry(registry, key, [&]() -> Path {
@@ -5392,6 +5396,11 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
     const auto drawRunFill = [&]() {
       if (residentGlyphFill) {
         for (const RunGlyphOccurrence& occurrence : runGlyphOccurrences) {
+          // The ordinal advances even for an occurrence whose encode turns out
+          // empty (a whitespace-only outline), so an element's occurrence ->
+          // slot mapping stays stable across frames. That occurrence's slot is
+          // allocated and then left alone: the emit returns before any record
+          // is written, so the slot holds nothing and no draw reads it.
           const geode::GeodeRecordSlab::Slot* recordSlot = nullptr;
           std::vector<uint8_t>* recordCache = nullptr;
           impl_->nextTextRecord(textRecords, registry, recordSlot, recordCache);
