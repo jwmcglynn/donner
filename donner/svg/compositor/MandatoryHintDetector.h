@@ -28,6 +28,9 @@ enum class MandatoryHintScope : uint8_t {
   All,
   /// Publish hints only for `resolvedFilter.has_value()`. Filters dominate
   /// re-render cost; opacity groups, blend modes, and masks render inline.
+  /// A filter nested under an inline isolation ancestor is NOT promoted
+  /// either (extracting it would split the ancestor's isolation group); it
+  /// renders fully inline instead.
   FilterOnly,
 };
 

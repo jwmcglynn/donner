@@ -216,6 +216,35 @@ TEST(MandatoryHintDetectorTest, FilterOnlyScopeIgnoresIsolationAndMaskSignals) {
   EXPECT_FALSE(registry.all_of<CompositorHintComponent>(masked));
 }
 
+TEST(MandatoryHintDetectorTest, FilterOnlyScopeSkipsFilterUnderInlineIsolationAncestor) {
+  // `<g opacity="0.5"> <rect filter="..."/> </g>` under FilterOnly: the group
+  // stays inline (isolation is out of scope), so promoting the child filter
+  // would split the group's isolation - trailing in-group content re-enters
+  // at full alpha and the tile blit resets paint. The child must render
+  // inline instead.
+  Registry registry;
+  MandatoryHintDetector detector(MandatoryHintScope::FilterOnly);
+
+  const Entity group = makeTreeEntity(registry, entt::null);
+  registry.emplace<RenderingInstanceComponent>(group).isolatedLayer = true;
+
+  const Entity filtered = makeTreeEntity(registry, group);
+  registry.emplace<RenderingInstanceComponent>(filtered).resolvedFilter.emplace(
+      std::vector<FilterEffect>{});
+
+  detector.reconcile(registry);
+
+  EXPECT_EQ(detector.stats().hintsPublished, 0u)
+      << "A filter under an inline isolation ancestor must not be extracted in FilterOnly scope";
+  EXPECT_FALSE(registry.all_of<CompositorHintComponent>(filtered));
+
+  // The same topology under the default All scope promotes (the ancestor is
+  // itself promoted, so the group's isolation is not broken by extraction).
+  MandatoryHintDetector allScopeDetector;
+  allScopeDetector.reconcile(registry);
+  EXPECT_TRUE(registry.all_of<CompositorHintComponent>(filtered));
+}
+
 TEST(MandatoryHintDetectorTest, ReconcileIsIdempotent) {
   Registry registry;
   MandatoryHintDetector detector;

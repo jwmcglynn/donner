@@ -427,11 +427,17 @@ TEST(AsyncRendererTest, CompositedRenderingModesProduceIdenticalPixels) {
       <rect x="4" y="4" width="20" height="20" fill="red" filter="url(#blur)"/>
       <g opacity="0.5">
         <rect x="30" y="8" width="16" height="16" fill="green"/>
+        <rect x="34" y="12" width="10" height="10" fill="purple" filter="url(#blur)"/>
         <rect x="38" y="16" width="16" height="16" fill="blue"/>
       </g>
       <rect x="10" y="44" width="12" height="12" fill="black"/>
     </svg>
   )svg");
+  // The filter NESTED inside the opacity group, with in-group siblings before
+  // and after it, is the sharp case: FilterOnly must not extract it (the
+  // inline group's isolation would be split - trailing siblings re-enter at
+  // full alpha and the tile blit resets paint), so it renders inline and the
+  // pixels stay identical across all three modes.
   document.setCanvasSize(64, 64);
 
   svg::Renderer renderer;

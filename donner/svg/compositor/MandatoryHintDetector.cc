@@ -24,13 +24,21 @@ bool MandatoryHintDetector::qualifies(const components::RenderingInstanceCompone
 
 namespace {
 
-/// Returns true if any ancestor of @p entity carries a clip-path, mask, or
-/// filter on its `RenderingInstanceComponent`. Such an ancestor wraps a
-/// compositing context that would be broken if a descendant were extracted
-/// into its own cached layer - the clip/mask/filter context is applied by the
-/// main tree walk, not replayed when the extracted layer bitmap is composited
-/// back. Returning true is a signal to NOT auto-promote.
-bool HasCompositingBreakingAncestor(Registry& registry, Entity entity) {
+/// Returns true if any ancestor of @p entity carries a compositing context
+/// that would be broken if the descendant were extracted into its own cached
+/// layer - the ancestor's context is applied by the main tree walk, not
+/// replayed when the extracted layer bitmap is composited back. Returning
+/// true is a signal to NOT auto-promote.
+///
+/// Under `All`, clip-path / mask / filter ancestors qualify; an isolation
+/// ancestor (opacity < 1, blend mode) does not need to, because it is itself
+/// promoted. Under `FilterOnly`, isolation ancestors stay INLINE (their
+/// signal is out of scope), so extracting a descendant filter would split
+/// the group: trailing in-group content would land in a segment slice that
+/// re-enters the group at full alpha, and the tile blit resets paint before
+/// composing. Treat unhinted isolation ancestors as breaking too; the nested
+/// filter then renders fully inline - pixel-correct, merely uncached.
+bool HasCompositingBreakingAncestor(Registry& registry, Entity entity, MandatoryHintScope scope) {
   const auto* tree = registry.try_get<donner::components::TreeComponent>(entity);
   if (tree == nullptr) {
     return false;
@@ -41,6 +49,9 @@ bool HasCompositingBreakingAncestor(Registry& registry, Entity entity) {
             registry.try_get<components::RenderingInstanceComponent>(cursor)) {
       if (ancestorInstance->clipPath.has_value() || ancestorInstance->mask.has_value() ||
           ancestorInstance->resolvedFilter.has_value()) {
+        return true;
+      }
+      if (scope == MandatoryHintScope::FilterOnly && ancestorInstance->isolatedLayer) {
         return true;
       }
     }
@@ -71,7 +82,7 @@ void MandatoryHintDetector::reconcile(Registry& registry) {
     // lost by extracting the subtree into its own cached layer. Such entities
     // fall through to the driver's inline `pushClip` / `pushMask` /
     // `pushFilterLayer` path, which handles the context correctly.
-    if (HasCompositingBreakingAncestor(registry, entity)) {
+    if (HasCompositingBreakingAncestor(registry, entity, scope_)) {
       continue;
     }
     qualifying.insert(entity);

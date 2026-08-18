@@ -909,6 +909,15 @@ void AsyncRenderer::workerLoop() {
       compositorEntities_.clear();
       compositorInteractionKind_ = svg::compositor::InteractionHint::Selection;
       publishedCompositedTiles_.clear();
+      // The per-generation remap history exists only to preserve compositor
+      // caches across structural replaces; with no compositor the erase sites
+      // in the swap path are unreachable, so drop the history here or a long
+      // Off session accumulates one map per structural replace. Leaving Off
+      // always reconstructs and needs no remap history.
+      {
+        std::lock_guard<std::mutex> lock(mutex_);
+        retainedStructuralRemaps_.clear();
+      }
     }
     const bool needsFreshCompositor =
         renderMode != CompositedRenderingMode::Off &&

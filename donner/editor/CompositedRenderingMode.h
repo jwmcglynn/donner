@@ -11,8 +11,8 @@ namespace donner::editor {
 /// against per-frame re-render cost.
 enum class CompositedRenderingMode : std::uint8_t {
   /// No `CompositorController` is constructed. Every frame renders the full
-  /// document directly through `RendererDriver::draw`. The baseline for
-  /// measuring what compositing buys on a given document.
+  /// document directly through `RendererDriver::drawInterruptibly`. The
+  /// baseline for measuring what compositing buys on a given document.
   Off,
   /// Compositor runs, but only SVG filters (the expensive re-render case) get
   /// cached isolated layers. Opacity groups, blend modes, and masks render
