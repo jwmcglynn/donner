@@ -102,24 +102,6 @@ Box2d FramebufferBoxFromScreenBox(const Box2d& screenBox, double devicePixelRati
   return Box2d(screenBox.topLeft * devicePixelRatio, screenBox.bottomRight * devicePixelRatio);
 }
 
-std::optional<Transform2d> FramebufferFromTextureTransform(const PresentedTileQuad& tileQuad,
-                                                           const Vector2i& textureSizePx) {
-  if (textureSizePx.x <= 0 || textureSizePx.y <= 0) {
-    return std::nullopt;
-  }
-
-  const Vector2d sourceSize(static_cast<double>(textureSizePx.x),
-                            static_cast<double>(textureSizePx.y));
-  Transform2d framebufferFromTexture(Transform2d::uninitialized);
-  framebufferFromTexture.data[0] = (tileQuad.topRight.x - tileQuad.topLeft.x) / sourceSize.x;
-  framebufferFromTexture.data[1] = (tileQuad.topRight.y - tileQuad.topLeft.y) / sourceSize.x;
-  framebufferFromTexture.data[2] = (tileQuad.bottomLeft.x - tileQuad.topLeft.x) / sourceSize.y;
-  framebufferFromTexture.data[3] = (tileQuad.bottomLeft.y - tileQuad.topLeft.y) / sourceSize.y;
-  framebufferFromTexture.data[4] = tileQuad.topLeft.x;
-  framebufferFromTexture.data[5] = tileQuad.topLeft.y;
-  return framebufferFromTexture;
-}
-
 }  // namespace
 
 FrameCostBreakdown::DirectPresentation DrawDocumentPresentationToFramebuffer(
@@ -188,7 +170,7 @@ FrameCostBreakdown::DirectPresentation DrawDocumentPresentationToFramebuffer(
 
     const Vector2i textureSizePx = tile.textureSnapshot->dimensions();
     const std::optional<Transform2d> framebufferFromTexture =
-        FramebufferFromTextureTransform(*tileQuad, textureSizePx);
+        ComputePresentedOutputFromTextureTransform(*tileQuad, textureSizePx);
     if (!framebufferFromTexture.has_value()) {
       return false;
     }
