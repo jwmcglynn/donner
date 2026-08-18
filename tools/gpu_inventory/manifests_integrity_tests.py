@@ -58,8 +58,19 @@ class ShaderFeaturesManifestTest(unittest.TestCase):
 
     def test_solid_fill_shader_shape(self):
         shader = self.manifest["shaders"]["donner/svg/renderer/geode/shaders/slug_fill.wgsl"]
-        stages = sorted(e["stage"] for e in shader["entryPoints"])
-        self.assertEqual(stages, ["fragment", "vertex"])
+        # Two entry-point pairs: the default ones take the draw's paint and
+        # geometry from the uniform, the `_batched` ones take them from each
+        # instance record. Both pairs share one bind-group layout.
+        entries = sorted((e["stage"], e["name"]) for e in shader["entryPoints"])
+        self.assertEqual(
+            entries,
+            [
+                ("fragment", "fs_main"),
+                ("fragment", "fs_main_batched"),
+                ("vertex", "vs_main"),
+                ("vertex", "vs_main_batched"),
+            ],
+        )
         # The instance-record consolidation folded the per-draw uniform
         # bindings into the record SSBO plus a combined grid binding, so the
         # solid-fill shader declares 11 bindings.
