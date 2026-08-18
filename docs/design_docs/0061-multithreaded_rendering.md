@@ -206,9 +206,12 @@ what makes the apron a non-problem:
   geometry; a band handed a row range into the original buffer cannot. The same argument covers
   `tile`, whose tile origin is in buffer coordinates, and `turbulence`, whose noise is a function of
   absolute position.
-- **Edge modes keep working.** `resolveEdge` clamps or wraps against the real buffer extent. A band
-  is not an edge, so `BlurEdgeMode::Duplicate` at a band boundary does not fire, and at the real
-  image edge it fires exactly as it does today.
+- **Edge modes keep working.** Out-of-bounds sampling resolves against the real buffer extent
+  (`resolveEdge` in the blur, `fetchPixelFloat` in the convolve). A band is not an edge, so a
+  `Duplicate` clamp at a band boundary never fires, and at the real image edge it fires exactly
+  as it does today. `Wrap` makes this vivid: it is modular arithmetic over the whole buffer, so a
+  band handed only its own rows would wrap inside the band and produce different pixels, while a
+  band handed a row range into the whole buffer wraps to the same rows the serial path does.
 
 The prototype in "Measurements" deliberately used the harder variant, staging each band into its own
 buffer with an apron, precisely to prove the apron reasoning is sound; that variant still produced
@@ -226,7 +229,7 @@ judgement the design requires.
 | Per-pixel pure | `flood`, `colorMatrix`, `componentTransfer`, `composite`, `blend`, `merge`, `offset`, `tile`, `turbulence`, subregion clipping, `srgbToLinear` / `linearToSrgb` on `FloatPixmap` | output rows | the same rows (`offset` and `tile` read a fixed translation of them) | none |
 | Bounded gather | `convolveMatrix`, `diffuseLighting`, `specularLighting` | output rows | `[yBegin - up, yEnd + down)`; convolve uses `up = targetY`, `down = orderY - 1 - targetY`; lighting uses 1 and 1 for its 3x3 normal | none |
 | Unbounded gather | `displacementMap` | output rows | up to the whole source, bounded by `scale` | none |
-| Separable multi-pass | `gaussianBlur`, `morphology` | rows of the pass currently executing | the whole row (both are row-wise passes) | a running sum or a van Herk block accumulator **along x**, within one row |
+| Separable multi-pass | `gaussianBlur`, `morphology` | rows of the pass currently executing | the same rows; every pass reads and writes one row at a time | a running sum or a van Herk block accumulator **along x**, within one row |
 | Reduction | `computeNonTransparentBounds` | output rows | the same rows | a per-band min/max, combined in fixed band order |
 
 The separable multi-pass row deserves the most care, because it is the one place a naive tiling would
@@ -253,11 +256,12 @@ The determinism argument has four parts and each one is checkable in the tree:
 
 1. **Disjoint writes.** Bands partition the output rows. Two bands never write the same byte, so no
    write is ordered against another write and no atomic or lock mediates pixel stores.
-2. **Immutable reads.** Every primitive reads a source buffer it does not write. The one apparent
-   exception, the in-place `FloatPixmap` color-space conversions, reads and writes only the pixel it
-   is converting, so a band's reads and writes stay inside its own rows. `gaussianBlur` and
-   `morphology` copy their input into a private buffer before the first pass, so their passes are
-   also strictly read-one-buffer, write-another.
+2. **Immutable reads.** Every gather primitive reads a source buffer it does not write. The
+   apparent exceptions are the in-place operations (`colorMatrix`, `componentTransfer`, and the
+   `FloatPixmap` color-space conversions), and they are not exceptions in practice: each reads and
+   writes only the pixel it is transforming, so a band's reads and writes stay inside its own rows.
+   `gaussianBlur` and `morphology` copy their input into a private buffer before the first pass, so
+   their passes are also strictly read-one-buffer, write-another.
 3. **Per-pixel purity.** Each output pixel is a pure function of the source buffer and the node
    parameters. That function does not depend on which rows were computed first, or on how many
    bands there were, so the partition itself does not appear in the result. This is why identity
@@ -306,10 +310,10 @@ Two consequences are worth stating:
 - **The band height must not be so small that the per-band prologue dominates.** The default band
   height is a tuning parameter with a floor; see "Open Questions".
 
-The scalar fallback build is also the ThreadSanitizer build's likely configuration on some lanes,
-which is fine: identity is asserted within a configuration, never across ISA branches. Cross-ISA
-byte differences already exist by design (`FloatPixmap::fromPixmap` documents one such deliberate
-NEON/scalar divergence) and are outside this design's scope.
+Identity is asserted within one build configuration, never across ISA branches. Cross-ISA byte
+differences already exist by design (`FloatPixmap::fromPixmap` documents one such deliberate
+NEON/scalar divergence) and are outside this design's scope; what this design owns is that a given
+configuration produces the same bytes at every worker count.
 
 ### The shared worker pool
 
@@ -397,10 +401,10 @@ The primitives gain their `RowRange` parameter. Nothing in the public SVG API ch
 
 ### Measurements
 
-All numbers are `-c opt` on a reference multi-core x86-64 Linux host, median of nine repetitions, taken
-with a scratch harness linked against the in-tree filter library. They are reproduced in this doc as
-the motivation and the acceptance baseline; the benchmark target in Milestone 4 makes them
-re-runnable.
+All numbers are `-c opt` on a reference multi-core x86-64 Linux host, median of nine
+repetitions, taken with a scratch harness linked against the in-tree filter library. They are
+reproduced here as the motivation and the acceptance baseline; the benchmark target in Milestone 4
+makes them re-runnable.
 
 **Concurrency headroom**, running the same primitive on N disjoint 900x900 buffers from N threads.
 This bounds what banding one buffer can reach on this machine, because it is the same instruction mix
@@ -563,7 +567,8 @@ mode is not a crash or a race a sanitizer reports: it is a draw silently renderi
 draw's parameters. On top of that, the supporting structures are documented single-threaded by
 design (`GeodeBufferPool`: "Not thread-safe; all use is on the renderer's thread";
 `GeodeResidentSlab`: "Not thread-safe: allocate/free/beginFrame mutate the free list and bump
-allocator ... a document's slab is only touched from one thread"). Making them thread-safe would add
+cursors without locking. The renderer serializes one frame per device at a time, so a document's
+slab is only touched from one thread"). Making them thread-safe would add
 synchronization to the exact path the residency work made cheap.
 
 ### Do not parallelize render-tree branches
