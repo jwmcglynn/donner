@@ -4,16 +4,61 @@ description: >-
   runs. This action must run in a separate hosted prerequisite job: running the
   wait on the constrained self-hosted pool can let newer runs occupy every
   runner while the oldest lane job remains queued, deadlocking the FIFO. Waits
-  (oldest run first) until the requested lane is free, then returns so the
+  (oldest run first) until the pool has a free slot, then returns so the
   dependent self-hosted job can be scheduled. Read-only: it lists this
   repository's own workflow runs via the Actions API and mutates nothing.
+
+
+  Several lanes may share one pool. The runner fleet has four machines, so the
+  pool is sized four and the lanes mix and match: any combination of Linux CI
+  and coverage jobs may hold the four slots, instead of one slot per lane which
+  capped the whole fleet at two. The accepted tradeoff is that up to four
+  concurrent CI jobs share the remote-execution backend; interactive
+  development use of that backend still outranks CI, which is why the pool is
+  capped well below what the fleet could otherwise submit.
+
+
+  Admission counts a run as holding a slot from the moment its pool job exists,
+  not from the moment it starts executing. A run whose turnstile has passed but
+  whose self-hosted job has not been picked up yet is still committed to a
+  slot; if it were counted only once executing, a burst of runs would all
+  observe free capacity within one poll interval and over-admit. The window
+  before a freshly created run's job list materializes is covered by treating
+  an older run with no pool job yet as holding a slot.
+
+
+  The admission rules live in admission.py, which reads fabricated Actions API
+  payloads just as well as real ones and is unit-tested by
+  tools/turnstile_admission_tests.py. This file only fetches pages and applies
+  the answer.
 
 inputs:
   lane:
     description: >-
-      Job name to serialize on. All runs whose job of this name is active
-      form one FIFO queue; only the oldest proceeds at a time.
+      This run's own pool job name. Used to describe the wait, and as the
+      whole pool when `pool` is not given.
     required: true
+  pool:
+    description: >-
+      Whitespace-separated job names that share one pool. Any run holding any
+      of these jobs consumes a slot. Defaults to `lane` alone, which with the
+      default capacity of 1 reproduces the original single-lane FIFO.
+    required: false
+    default: ""
+  pool-workflows:
+    description: >-
+      Whitespace-separated workflow file names (for example "main.yml
+      coverage.yml") whose runs can hold pool slots. Only these workflows are
+      enumerated, so a run of an unrelated workflow is never mistaken for a
+      pool run that is still initializing. Defaults to this run's own workflow.
+    required: false
+    default: ""
+  capacity:
+    description: >-
+      How many pool jobs may be admitted at once. Default 1 preserves the
+      original strictly serialized behavior for any single-lane caller.
+    required: false
+    default: "1"
   token:
     description: Token with actions:read on this repository (github.token).
     required: true
@@ -37,9 +82,13 @@ runs:
       shell: bash
       env:
         TURNSTILE_LANE: ${{ inputs.lane }}
+        TURNSTILE_POOL: ${{ inputs.pool }}
+        TURNSTILE_POOL_WORKFLOWS: ${{ inputs.pool-workflows }}
+        TURNSTILE_CAPACITY: ${{ inputs.capacity }}
         TURNSTILE_TOKEN: ${{ inputs.token }}
         TURNSTILE_TIMEOUT_MINUTES: ${{ inputs.timeout-minutes }}
         TURNSTILE_POLL_SECONDS: ${{ inputs.poll-seconds }}
+        TURNSTILE_ACTION_PATH: ${{ github.action_path }}
       run: |
         set -uo pipefail
 
@@ -48,7 +97,16 @@ runs:
         run_id="${GITHUB_RUN_ID}"
         lane="${TURNSTILE_LANE}"
         poll="${TURNSTILE_POLL_SECONDS}"
+        capacity="${TURNSTILE_CAPACITY}"
+        admission="${TURNSTILE_ACTION_PATH}/admission.py"
         deadline=$(( $(date +%s) + TURNSTILE_TIMEOUT_MINUTES * 60 ))
+
+        pool_names="${TURNSTILE_POOL}"
+        if [[ -z "${pool_names// /}" ]]; then
+          pool_names="${lane}"
+        fi
+        # shellcheck disable=SC2086 # deliberate word splitting into a JSON array
+        pool_json=$(printf '%s\n' ${pool_names} | jq -Rsc 'split("\n") | map(select(length > 0))')
 
         # GET one Actions API page. Callers that enumerate collections own the
         # pagination so admission does not depend on a burst fitting one page.
@@ -61,20 +119,28 @@ runs:
             "$1" 2>/dev/null
         }
 
-        # Identify this run: its ordering key (run_number) and workflow id.
-        # API availability is part of admission correctness. Retry off-pool
-        # until the common safety deadline instead of releasing all waiters on
-        # one transient 5xx response.
-        me_json=""
-        my_number=""
-        workflow_id=""
+        # Identify this run's workflow, then resolve every workflow whose runs
+        # can hold a pool slot. API availability is part of admission
+        # correctness, so retry off-pool until the common safety deadline
+        # instead of releasing all waiters on one transient 5xx response.
+        workflow_ids=""
         while true; do
+          workflow_ids=""
           if me_json=$(gh_get "${api}/repos/${repo}/actions/runs/${run_id}"); then
-            my_number=$(printf '%s' "${me_json}" | jq -er '.run_number | numbers' 2>/dev/null) || my_number=""
-            workflow_id=$(printf '%s' "${me_json}" | jq -er '.workflow_id | numbers' 2>/dev/null) || workflow_id=""
-            if [[ "${my_number}" =~ ^[0-9]+$ && "${workflow_id}" =~ ^[0-9]+$ ]]; then
-              break
+            my_workflow=$(printf '%s' "${me_json}" | jq -er '.workflow_id | numbers' 2>/dev/null) || my_workflow=""
+            if [[ "${my_workflow}" =~ ^[0-9]+$ ]]; then
+              if [[ -z "${TURNSTILE_POOL_WORKFLOWS// /}" ]]; then
+                workflow_ids="${my_workflow}"
+              elif all_workflows=$(gh_get "${api}/repos/${repo}/actions/workflows?per_page=100"); then
+                # shellcheck disable=SC2086 # deliberate word splitting into a JSON array
+                wanted=$(printf '%s\n' ${TURNSTILE_POOL_WORKFLOWS} | jq -Rsc 'split("\n") | map(select(length > 0))')
+                workflow_ids=$(printf '%s' "${all_workflows}" | jq -r --argjson wanted "${wanted}" \
+                  '.workflows[]? | . as $w | select([$wanted[] | select($w.path | endswith("/" + .))] | length > 0) | .id' 2>/dev/null)
+              fi
             fi
+          fi
+          if [[ -n "${workflow_ids}" ]]; then
+            break
           fi
           now=$(date +%s)
           if (( now >= deadline )); then
@@ -85,108 +151,98 @@ runs:
           echo "turnstile: Actions API metadata unavailable; re-checking in $(( poll + jitter ))s"
           sleep $(( poll + jitter ))
         done
-        echo "turnstile: lane='${lane}' this run #${my_number} (workflow ${workflow_id})"
+        echo "turnstile: lane='${lane}' pool=${pool_json} capacity=${capacity} run ${run_id}"
 
-        # A run is "ahead" of us if it is older (smaller run_number) and its
-        # lane job is not yet in a terminal state. A still-initializing older
-        # run whose lane job has not appeared yet also counts as ahead so we
-        # never jump its place (strict FIFO, no two-at-once race). Because the
-        # order is a strict total order on run_number, the oldest run is never
-        # ahead of anyone: no cycles, no deadlock, no starvation.
-        last_ahead_desc=""
+        last_blockers=""
         clear_observations=0
         while true; do
-          ahead_desc=""
           list_failed=0
-          # Enumerate older, still-active runs of this workflow, oldest first,
-          # and break on the first one still holding the lane (that alone is
-          # enough to keep waiting). Filter every nonterminal status server-side
-          # so an old active run is never missed behind >100 newer runs; active
-          # runs are not hidden behind a page of newer runs.
-          older_active=$(
-            for status in queued in_progress requested waiting pending; do
-              page=1
-              while true; do
-                if ! p=$(gh_get "${api}/repos/${repo}/actions/workflows/${workflow_id}/runs?status=${status}&per_page=100&page=${page}"); then
-                  echo "LIST_FAILED"
-                  break
-                fi
-                if ! printf '%s' "${p}" | jq -e '.workflow_runs | arrays' >/dev/null 2>&1; then
-                  echo "LIST_FAILED"
-                  break
-                fi
-                printf '%s' "${p}" | jq -r --argjson mine "${my_number}" \
-                  '.workflow_runs[] | select(.run_number < $mine) | "\(.id)\t\(.run_number)"'
-                page_size=$(printf '%s' "${p}" | jq -r '.workflow_runs | length')
-                (( page_size < 100 )) && break
-                page=$(( page + 1 ))
+          # Enumerate still-active runs of every pool workflow. Filter each
+          # nonterminal status server-side so an old active run is never hidden
+          # behind a page of newer runs.
+          candidates=$(
+            for workflow_id in ${workflow_ids}; do
+              for status in queued in_progress requested waiting pending; do
+                page=1
+                while true; do
+                  if ! p=$(gh_get "${api}/repos/${repo}/actions/workflows/${workflow_id}/runs?status=${status}&per_page=100&page=${page}"); then
+                    echo "LIST_FAILED"
+                    break
+                  fi
+                  if ! printf '%s' "${p}" | jq -e '.workflow_runs | arrays' >/dev/null 2>&1; then
+                    echo "LIST_FAILED"
+                    break
+                  fi
+                  printf '%s' "${p}" | jq -r '.workflow_runs[].id'
+                  page_size=$(printf '%s' "${p}" | jq -r '.workflow_runs | length')
+                  if (( page_size < 100 )); then
+                    break
+                  fi
+                  page=$(( page + 1 ))
+                done
               done
             done
           )
-          if printf '%s\n' "${older_active}" | grep -q '^LIST_FAILED$'; then
+          if printf '%s\n' "${candidates}" | grep -q '^LIST_FAILED$'; then
             list_failed=1
           fi
-          while IFS=$'\t' read -r other_id other_number; do
-            [[ -z "${other_id}" || "${other_id}" == "LIST_FAILED" ]] && continue
-            [[ "${other_id}" == "${run_id}" ]] && continue
-            if ! jobs=$(gh_get "${api}/repos/${repo}/actions/runs/${other_id}/jobs?per_page=100"); then
-              # Cannot inspect this older active run; be conservative and treat
-              # it as ahead so we do not race past it.
-              ahead_desc="#${other_number} (jobs unavailable)"
-              break
-            fi
-            lane_state=$(printf '%s' "${jobs}" \
-              | jq -r --arg lane "${lane}" \
-                  'first(.jobs[]? | select(.name == $lane) | .status) // "absent"' \
-                  2>/dev/null) || lane_state="unavailable"
-            case "${lane_state}" in
-              queued|in_progress|requested|waiting|pending|absent)
-                # Any nonterminal state holds the lane. Absent means the older
-                # run is still initializing and has not yet created (or skipped)
-                # its lane job.
-                ahead_desc="#${other_number} (lane ${lane_state})"
-                break
-                ;;
-              unavailable)
-                ahead_desc="#${other_number} (jobs unavailable)"
-                break
-                ;;
-              *)
-                # terminal (completed/skipped/cancelled): not blocking
-                ;;
-            esac
-          done < <(printf '%s\n' "${older_active}" | grep -v '^LIST_FAILED$' | sort -t$'\t' -k2 -n)
 
-          if [[ -n "${ahead_desc}" ]]; then
-            clear_observations=0
-            last_ahead_desc="${ahead_desc}"
-          elif [[ "${list_failed}" -eq 1 ]]; then
-            clear_observations=0
-            ahead_desc="${last_ahead_desc:-Actions API unavailable}"
-          else
+          # Collect each candidate run's job list. A run whose jobs cannot be
+          # read is passed through as null, which admission.py counts as
+          # executing, so an API hiccup narrows the pool instead of opening it.
+          request=$(jq -nc --argjson capacity "${capacity}" --argjson me "${run_id}" \
+            --argjson pool "${pool_json}" \
+            '{capacity: $capacity, me: $me, pool: $pool, runs: []}')
+          while read -r other_id; do
+            if ! [[ "${other_id}" =~ ^[0-9]+$ ]] || [[ "${other_id}" == "${run_id}" ]]; then
+              continue
+            fi
+            if ! jobs=$(gh_get "${api}/repos/${repo}/actions/runs/${other_id}/jobs?per_page=100"); then
+              jobs="null"
+            fi
+            if ! printf '%s' "${jobs}" | jq -e '.' >/dev/null 2>&1; then
+              jobs="null"
+            fi
+            request=$(printf '%s' "${request}" | jq -c --argjson id "${other_id}" \
+              --argjson jobs "${jobs}" '.runs += [{id: $id, jobs: $jobs}]')
+          done < <(printf '%s\n' "${candidates}" | grep -v '^LIST_FAILED$' | sort -n -u)
+
+          decision=$(printf '%s' "${request}" | python3 "${admission}")
+          admit=$(printf '%s' "${decision}" | jq -r '.admit')
+          occupancy=$(printf '%s' "${decision}" | jq -r '.occupancy')
+          blockers=$(printf '%s' "${decision}" | jq -r '.blockers | join(", ")')
+
+          if [[ "${admit}" == "true" && "${list_failed}" -eq 0 ]]; then
             # Status-filtered run lists converge asynchronously after dispatch.
-            # Confirm a clear lane across a poll interval before releasing it.
+            # Confirm free capacity across a poll interval before taking a slot.
             clear_observations=$(( clear_observations + 1 ))
             if (( clear_observations >= 2 )); then
-              echo "turnstile: clear, proceeding"
+              echo "turnstile: ${occupancy}/${capacity} pool slots held, proceeding"
               exit 0
             fi
             jitter=$(( RANDOM % 5 ))
-            echo "turnstile: candidate clear; confirming in $(( poll + jitter ))s"
+            echo "turnstile: ${occupancy}/${capacity} pool slots held; confirming in $(( poll + jitter ))s"
             sleep $(( poll + jitter ))
             continue
           fi
 
+          clear_observations=0
+          if [[ "${list_failed}" -eq 1 ]]; then
+            blockers="${blockers:-${last_blockers:-Actions API unavailable}}"
+          else
+            last_blockers="${blockers}"
+          fi
+
           now=$(date +%s)
           if (( now >= deadline )); then
-            echo "turnstile: safety timeout reached while waiting behind ${ahead_desc}; proceeding (fail-open)"
+            echo "turnstile: safety timeout reached while waiting behind ${blockers}; proceeding (fail-open)"
             exit 0
           fi
           jitter=$(( RANDOM % 5 ))
           if [[ "${list_failed}" -eq 1 ]]; then
-            echo "turnstile: Actions API list unavailable; retaining gate behind ${ahead_desc}; re-checking in $(( poll + jitter ))s"
+            echo "turnstile: Actions API list unavailable; retaining gate behind ${blockers}; re-checking in $(( poll + jitter ))s"
           else
-            echo "turnstile: waiting behind run ${ahead_desc}; re-checking in $(( poll + jitter ))s"
+            echo "turnstile: ${occupancy}/${capacity} pool slots held by ${blockers}; re-checking in $(( poll + jitter ))s"
           fi
           sleep $(( poll + jitter ))
         done

@@ -628,7 +628,12 @@ jobs:
   # cannot run on the constrained self-hosted pool itself: newer runs could
   # occupy every runner while the oldest lane job remains queued, creating a
   # head-of-line deadlock. This lightweight prerequisite waits off-pool and
-  # releases exactly one dependent self-hosted job at a time.
+  # releases dependent self-hosted jobs in submission order.
+  #
+  # The Linux and coverage lanes share ONE pool sized to the runner fleet
+  # rather than holding one slot each. Per-lane serialization capped the whole
+  # fleet at two concurrent jobs no matter which lane the queued work was in,
+  # so a burst of coverage runs left Linux capacity idle and vice versa.
   linux-self-hosted-turnstile:
     runs-on: ubuntu-24.04
     needs: [gatekeeper, determine-targets]
@@ -644,6 +649,9 @@ jobs:
         uses: ./.github/actions/re-turnstile
         with:
           lane: linux-self-hosted
+          pool: linux-self-hosted coverage-self-hosted
+          pool-workflows: main.yml coverage.yml
+          capacity: "4"
           token: ${{ github.token }}
           timeout-minutes: "150"
 
@@ -670,20 +678,23 @@ jobs:
     # backstop.
     timeout-minutes: 210
     # Admission control on the shared remote-execution backend. Both self-hosted
-    # lanes execute on a shared remote-execution backend that an interactive
-    # development host also uses with priority; two-plus concurrent operator PRs
-    # oversubscribe it and crawl into the 60 min timeout (measured).
-    # Serialization is enforced by the hosted re-turnstile prerequisite above,
-    # NOT by a GitHub concurrency group. A concurrency group caps the queue at
-    # one pending run and cancels any older pending run when a third concurrent
-    # run arrives, so a parallel-PR burst (and every post-merge main run
-    # competing for the same group) drops pending runs. The turnstile instead
-    # holds each run until its turn, FIFO, so N concurrent runs all execute in
-    # submission order and none are cancelled, while keeping at most one Linux
-    # build on the backend at a time. Bounding CI's demand on the backend also
-    # protects the interactive host's latency. The sibling coverage-self-hosted
-    # lane serializes on its own turnstile lane, so a Linux build and a coverage
-    # build may overlap but two of the same heavy lane never do.
+    # lanes execute on a backend that an interactive development host also uses
+    # with priority; unbounded concurrent operator PRs oversubscribe it and
+    # crawl into the 60 min timeout (measured). Admission is enforced by the
+    # hosted re-turnstile prerequisite above, NOT by a GitHub concurrency group.
+    # A concurrency group caps the queue at one pending run and cancels any
+    # older pending run when a third concurrent run arrives, so a parallel-PR
+    # burst (and every post-merge main run competing for the same group) drops
+    # pending runs. The turnstile instead holds each run until its turn, FIFO,
+    # so N concurrent runs all execute in submission order and none are
+    # cancelled. Bounding CI's demand on the backend also protects the
+    # interactive host's latency.
+    #
+    # The bound is a POOL shared with the coverage lane, sized to the runner
+    # fleet, not one slot per lane. Per-lane slots capped the fleet at two jobs
+    # and let a burst in one lane serialize behind itself while the other
+    # lane's capacity sat idle. Any mix of Linux and coverage jobs may hold the
+    # pool's slots.
     env:
       # The runner host may add the LAN Bazel cache from its home rc. Use that
       # acceleration when healthy, but do NOT fall back to local execution when

@@ -168,6 +168,19 @@ py_test(
 )
 
 py_test(
+    name = "turnstile_admission_tests",
+    size = "small",
+    srcs = ["turnstile_admission_tests.py"],
+    data = [
+        "//:.github/actions/re-turnstile/action.yml",
+        "//:.github/actions/re-turnstile/admission.py",
+        "//:.github/workflows/coverage.yml",
+        "//:.github/workflows/main.yml",
+    ],
+    deps = ["@rules_python//python/runfiles"],
+)
+
+py_test(
     name = "remote_cache_config_tests",
     size = "small",
     srcs = ["remote_cache_config_tests.py"],
