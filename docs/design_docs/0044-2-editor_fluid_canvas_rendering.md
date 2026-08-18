@@ -425,11 +425,15 @@ Selection chrome is UI, not document content. It should not use a full-document 
 Cached document tiles have one backend-specific presentation boundary. Geode/WGPU builds sample
 them directly into the window framebuffer. The non-WGPU GL path samples the same tile textures,
 with their full affine placement and paint order, into one pane-sized explicit intermediate and
-presents that texture with one axis-aligned ImGui image. It must cache an unchanged composition,
-retain no CPU copy of tile pixels, and account for both intermediate RGBA8 textures in presentation
-resource diagnostics. Per-tile `AddImageQuad` commands are not a supported document-composition
-path on GL. The WGPU presenter retains a compatibility-only per-tile fallback for a frame whose
+presents that texture with one axis-aligned ImGui image. The intermediate reuses unchanged
+compositions, retains no CPU copy of tile pixels, and reports both RGBA8 textures in presentation
+resource diagnostics. `//donner/editor/tests:render_pane_presenter_visual_repro_tests` pins affine
+placement and cache reuse, while `//donner/editor/tests:gl_texture_cache_tests` pins resource
+accounting. The WGPU presenter retains a compatibility-only per-tile fallback for a frame whose
 payload cannot enter the direct Geode underlay.
+`//donner/editor/tests:render_pane_presenter_visual_repro_tests` under `--config=geode` covers that
+fallback, while `//donner/editor/tests:gl_rnr_replay_tests` covers direct Geode and native GL
+presentation.
 
 Replace the current full-canvas overlay texture with:
 

@@ -348,11 +348,7 @@ struct DocumentPresentationCompositor::Impl {
     if (tileProgram != 0 && resolveProgram != 0 && vertexArray != 0 && vertexBuffer != 0) {
       return true;
     }
-#ifdef __EMSCRIPTEN__
-    constexpr const char* kVersion = "#version 300 es\nprecision highp float;\n";
-#else
     constexpr const char* kVersion = "#version 330 core\n";
-#endif
     const std::string vertexSource = std::string(kVersion) +
                                      R"glsl(layout(location = 0) in vec2 positionPx;
 layout(location = 1) in vec2 textureUv;

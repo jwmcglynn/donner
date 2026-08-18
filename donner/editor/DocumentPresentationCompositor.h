@@ -31,6 +31,19 @@ public:
   DocumentPresentationCompositor(const DocumentPresentationCompositor&) = delete;
   DocumentPresentationCompositor& operator=(const DocumentPresentationCompositor&) = delete;
 
+  /**
+   * Compose the current document presentation into one pane-sized texture.
+   *
+   * @param viewport Presented document-to-screen mapping.
+   * @param imageClipRect Visible document region clipped to the render pane.
+   * @param overviewTiles Low-resolution infill tiles drawn below active coverage.
+   * @param tiles Active paint-order tile views.
+   * @param activeDragPreview Live drag transform to advance eligible tiles.
+   * @param displayedDragPreview Drag transform already represented by cached tiles.
+   * @param suppressedLayerEntity Layer omitted from this presentation frame.
+   * @param suppressDragTargetTiles Whether active drag-target tiles are omitted.
+   * @return Cached or newly composed texture view, or an empty view when composition is invalid.
+   */
   [[nodiscard]] DocumentCompositeTextureView compose(
       const ViewportState& viewport, const Box2d& imageClipRect,
       std::span<const GlTextureCache::TileView> overviewTiles,
@@ -39,7 +52,7 @@ public:
       const std::optional<SelectTool::ActiveDragPreview>& displayedDragPreview,
       Entity suppressedLayerEntity, bool suppressDragTargetTiles);
 
-  /// Release cached output and invalidate the request cache.
+  /// Invalidate the cached request and clear its presented view while retaining allocations.
   void reset();
 
   /// Bytes retained by the two RGBA8 intermediate textures.
