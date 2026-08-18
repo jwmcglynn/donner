@@ -18,6 +18,8 @@ struct FocalData {
   float focalX = 0.0f;
   bool isSwapped = false;
 
+  friend bool operator==(const FocalData&, const FocalData&) = default;
+
   [[nodiscard]] bool isFocalOnCircle() const;
   [[nodiscard]] bool isWellBehaved() const;
   [[nodiscard]] bool isNativelyFocal() const;
@@ -29,11 +31,15 @@ struct FocalData {
 struct RadialType {
   float radius1 = 0.0f;
   float radius2 = 0.0f;
+
+  friend bool operator==(const RadialType&, const RadialType&) = default;
 };
 
 /// @internal
 struct StripType {
   float scaledR0 = 0.0f;
+
+  friend bool operator==(const StripType&, const StripType&) = default;
 };
 
 /// @internal
@@ -58,6 +64,10 @@ class RadialGradient {
 
   /// @internal
   [[nodiscard]] bool pushStages(ColorSpace cs, pipeline::RasterPipelineBuilder& p) const;
+
+  /// Equal when the gradient data and the resolved conical configuration are equal.
+  /// @see Gradient's operator==.
+  friend bool operator==(const RadialGradient&, const RadialGradient&) = default;
 
   /// @internal
   Gradient base_;

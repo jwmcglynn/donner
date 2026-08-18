@@ -30,6 +30,8 @@ struct StrokeDash {
   /// Creates a validated dash. Returns nullopt if the array is invalid.
   [[nodiscard]] static std::optional<StrokeDash> create(std::vector<float> dashArray,
                                                         float dashOffset);
+
+  friend bool operator==(const StrokeDash&, const StrokeDash&) = default;
 };
 
 /// Stroke properties for Painter::strokePath.
@@ -39,6 +41,11 @@ struct Stroke {
   LineCap lineCap = LineCap::Butt;     ///< Endpoint cap style.
   LineJoin lineJoin = LineJoin::Miter;  ///< Corner join style.
   std::optional<StrokeDash> dash;       ///< Optional dash pattern.
+
+  /// Two strokes compare equal when they expand an outline the same way, which is what lets a
+  /// caller keep work derived from a stroke and decide later whether it still applies. Floats
+  /// compare bitwise, so the answer is never "equal" for inputs that merely look alike.
+  friend bool operator==(const Stroke&, const Stroke&) = default;
 };
 
 }  // namespace tiny_skia

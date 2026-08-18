@@ -24,6 +24,8 @@ struct GradientStop {
   static GradientStop create(float position, Color color) {
     return GradientStop{NormalizedF32::newClamped(position), color};
   }
+
+  friend bool operator==(const GradientStop&, const GradientStop&) = default;
 };
 
 /// @internal
@@ -51,6 +53,12 @@ class Gradient {
                                              ColorSpace cs) const;
 
   void applyOpacity(float opacity);
+
+  /// Two gradients compare equal when every value the pipeline stages read from them is
+  /// equal, which is what lets a caller decide that a shader it built earlier still describes
+  /// the paint it wants now. Floats compare bitwise-exactly, so an equal result means the
+  /// stages are built from identical inputs, and an unequal one is at worst a missed reuse.
+  friend bool operator==(const Gradient&, const Gradient&) = default;
 
   Transform transform;
 

@@ -32,6 +32,9 @@ class SweepGradient {
   /// @internal
   [[nodiscard]] bool pushStages(ColorSpace cs, pipeline::RasterPipelineBuilder& p) const;
 
+  /// Equal when the gradient data and the sweep angles are equal. @see Gradient's operator==.
+  friend bool operator==(const SweepGradient&, const SweepGradient&) = default;
+
   /// @internal
   Gradient base_;
 

@@ -1,6 +1,7 @@
 #pragma once
 /// @file
 
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -11,6 +12,7 @@
 #include "donner/base/EcsRegistry_fwd.h"
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/renderer/RendererInterface.h"
+#include "donner/svg/renderer/RetainedSpans.h"
 #include "tiny_skia/Mask.h"
 #include "tiny_skia/Paint.h"
 #include "tiny_skia/Pixmap.h"
@@ -246,6 +248,38 @@ public:
   /// Enables or disables anti-aliasing.
   void setAntialias(bool antialias) { antialias_ = antialias; }
 
+  /**
+   * Enables or disables retained rasterization.
+   *
+   * When enabled, each shape's coverage is recorded the first time it is rasterized and
+   * replayed on later frames for as long as every input that coverage depended on is
+   * unchanged, which turns a redraw of an unchanged document into blits. Output is
+   * byte-identical either way; the cost is the memory the recordings occupy, bounded by
+   * \ref setRetainedSpanBudgetBytes.
+   *
+   * Off by default, because a renderer that draws each document once pays the recording cost
+   * with nothing to replay it onto.
+   *
+   * @param enabled Whether to retain and replay per-shape coverage.
+   */
+  void setRetainedSpansEnabled(bool enabled) { retainedSpansEnabled_ = enabled; }
+
+  /// Returns whether retained rasterization is enabled.
+  [[nodiscard]] bool retainedSpansEnabled() const { return retainedSpansEnabled_; }
+
+  /**
+   * Sets the per-document ceiling on retained coverage.
+   *
+   * Exceeding it evicts the coldest shapes; a working set that does not fit at all turns
+   * retention off for that document. @see RetainedSpanBudget.
+   *
+   * @param bytes Ceiling in bytes.
+   */
+  void setRetainedSpanBudgetBytes(std::size_t bytes) { retainedSpanBudgetBytes_ = bytes; }
+
+  /// Returns what retained rasterization did during the most recent frame.
+  [[nodiscard]] const RetainedSpanStats& retainedSpanStats() const { return retainedSpanStats_; }
+
   /// Returns the rendered width in pixels.
   int width() const override;
 
@@ -299,6 +333,32 @@ private:
     std::optional<PatternPaintState> savedPatternFillPaint;
     /// @see savedPatternFillPaint
     std::optional<PatternPaintState> savedPatternStrokePaint;
+    /// Clip identity saved alongside `savedClipMask`, so the identity and the mask it names
+    /// are restored together.
+    std::uint64_t savedClipEpoch = 0;
+    /// @see savedClipEpoch
+    std::vector<std::uint64_t> savedClipEpochStack;
+  };
+
+  /// Last clip mask seen at one clip-stack depth, and the identity assigned to it.
+  ///
+  /// A clip mask is rebuilt every frame, so object identity says nothing about whether the clip
+  /// changed. Comparing the rebuilt mask against the one this depth held last time turns that
+  /// into an integer a shape can carry in its retained key: equal identities mean the two masks
+  /// compared byte-equal, because an identity is only ever issued for one comparison chain, and
+  /// no two depths share one.
+  struct ClipEpochSlot {
+    std::optional<tiny_skia::Mask> mask;
+    std::uint64_t epoch = 0;
+  };
+
+  /// Retained storage and accounting for the shape being drawn, or empty when the draw is not
+  /// retainable.
+  struct RetainedTarget {
+    RetainedSpansComponent* entry = nullptr;
+    RetainedSpanBudget* budget = nullptr;
+
+    explicit operator bool() const { return entry != nullptr; }
   };
 
   [[nodiscard]] tiny_skia::Pixmap& currentPixmap();
@@ -322,6 +382,11 @@ private:
   void compositePixmap(const tiny_skia::Pixmap& pixmap, double opacity,
                        MixBlendMode blendMode = MixBlendMode::Normal);
   void maybeWarnUnsupportedText();
+  /// Returns retained storage for \p sourceEntity, or an empty target when this draw must
+  /// rasterize.
+  [[nodiscard]] RetainedTarget retainedTargetFor(const EntityHandle& sourceEntity);
+  /// Returns the identity of the clip mask now in effect, assigning a new one if it changed.
+  [[nodiscard]] std::uint64_t assignClipEpoch();
 
   bool verbose_ = false;
   bool antialias_ = true;
@@ -384,6 +449,19 @@ private:
   /// comparison to a window in which no registry can be freed and reallocated at the same
   /// address. Never dereferenced.
   const Registry* cacheWiringCheckedRegistry_ = nullptr;
+
+  bool retainedSpansEnabled_ = false;
+  std::size_t retainedSpanBudgetBytes_ = RetainedSpanBudget::kDefaultBudgetBytes;
+  RetainedSpanStats retainedSpanStats_;
+  /// Counts frames so retained entries can record when they were last drawn. Starts at one so
+  /// a default-constructed entry's zero never reads as "used this frame".
+  std::uint64_t frameIndex_ = 0;
+  /// Identity of the clip mask now in effect, zero when there is none.
+  std::uint64_t clipEpoch_ = 0;
+  /// Next identity to issue. Starts at one so zero stays reserved for "no clip".
+  std::uint64_t nextClipEpoch_ = 1;
+  std::vector<std::uint64_t> clipEpochStack_;
+  std::vector<ClipEpochSlot> clipEpochSlots_;
 };
 
 }  // namespace donner::svg
