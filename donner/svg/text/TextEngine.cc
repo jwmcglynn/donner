@@ -465,12 +465,67 @@ void applyTextLength(std::vector<TextRun>& runs, const components::ComputedTextC
 
   // ── Per-span textLength ───────────────────────────────────────────────
   if (anySpanHasTextLength) {
+    double carriedAdvanceDelta = 0.0;
+    bool carryActive = false;
+
     for (size_t i = 0; i < runs.size() && i < text.spans.size(); ++i) {
       if (traversalStats) {
         ++traversalStats->runVisits;
       }
       auto& run = runs[i];
       const auto& span = text.spans[i];
+
+      if (run.onPath) {
+        carryActive = false;
+        carriedAdvanceDelta = 0.0;
+      } else if (carryActive) {
+        const auto& inlinePositions = vertical ? span.yList : span.xList;
+        std::optional<size_t> resetCharIndex;
+        for (size_t charIndex = 0; charIndex < inlinePositions.size(); ++charIndex) {
+          if (traversalStats) {
+            ++traversalStats->inlinePositionVisits;
+          }
+          if (inlinePositions[charIndex].has_value()) {
+            resetCharIndex = charIndex;
+            break;
+          }
+        }
+
+        std::optional<ByteIndexMappings> mappings;
+        if (resetCharIndex.has_value() && !run.glyphs.empty()) {
+          const std::string_view spanText(span.text.data() + span.start, span.end - span.start);
+          if (traversalStats) {
+            traversalStats->mappedTextBytes += spanText.size();
+          }
+          mappings = buildByteIndexMappings(spanText);
+        }
+
+        for (auto& glyph : run.glyphs) {
+          if (traversalStats) {
+            ++traversalStats->glyphVisits;
+          }
+          if (resetCharIndex.has_value()) {
+            const size_t charIndex = glyph.cluster < mappings->byteToCharIdx.size()
+                                         ? mappings->byteToCharIdx[glyph.cluster]
+                                         : 0;
+            if (charIndex >= *resetCharIndex) {
+              continue;
+            }
+          }
+
+          if (vertical) {
+            glyph.yPosition += carriedAdvanceDelta;
+          } else {
+            glyph.xPosition += carriedAdvanceDelta;
+          }
+        }
+
+        if (resetCharIndex.has_value()) {
+          carryActive = false;
+          carriedAdvanceDelta = 0.0;
+        }
+      }
+
       if (!span.textLength.has_value() || run.glyphs.empty()) {
         continue;
       }
@@ -524,63 +579,12 @@ void applyTextLength(std::vector<TextRun>& runs, const components::ComputedTextC
 
       if (!run.onPath) {
         const double advanceDelta = targetLength - naturalLength;
-        // The adjusted current position carries forward until an absolute inline reset.
-        for (size_t following = i + 1; following < runs.size() && following < text.spans.size();
-             ++following) {
-          if (traversalStats) {
-            ++traversalStats->runVisits;
-          }
-          const auto& followingSpan = text.spans[following];
-          if (runs[following].onPath) {
-            break;
-          }
-
-          const auto& inlinePositions = vertical ? followingSpan.yList : followingSpan.xList;
-          std::optional<size_t> resetCharIndex;
-          for (size_t charIndex = 0; charIndex < inlinePositions.size(); ++charIndex) {
-            if (traversalStats) {
-              ++traversalStats->inlinePositionVisits;
-            }
-            if (inlinePositions[charIndex].has_value()) {
-              resetCharIndex = charIndex;
-              break;
-            }
-          }
-
-          std::optional<ByteIndexMappings> mappings;
-          if (resetCharIndex.has_value()) {
-            if (runs[following].glyphs.empty()) {
-              break;
-            }
-            const std::string_view followingText(followingSpan.text.data() + followingSpan.start,
-                                                 followingSpan.end - followingSpan.start);
-            if (traversalStats) {
-              traversalStats->mappedTextBytes += followingText.size();
-            }
-            mappings = buildByteIndexMappings(followingText);
-          }
-          for (auto& glyph : runs[following].glyphs) {
-            if (traversalStats) {
-              ++traversalStats->glyphVisits;
-            }
-            if (resetCharIndex.has_value()) {
-              const size_t charIndex = glyph.cluster < mappings->byteToCharIdx.size()
-                                           ? mappings->byteToCharIdx[glyph.cluster]
-                                           : 0;
-              if (charIndex >= *resetCharIndex) {
-                continue;
-              }
-            }
-            if (vertical) {
-              glyph.yPosition += advanceDelta;
-            } else {
-              glyph.xPosition += advanceDelta;
-            }
-          }
-          if (resetCharIndex.has_value()) {
-            break;
-          }
+        if (carryActive) {
+          carriedAdvanceDelta += advanceDelta;
+        } else {
+          carriedAdvanceDelta = advanceDelta;
         }
+        carryActive = true;
       }
     }
   }

@@ -105,9 +105,11 @@ Reducing the raw totals is useful, but correctness and classification are the ac
         resvg case disabled until its 397-pixel overlapping-glyph raster residual is independently
         classified.
   - [x] Propagate a per-span `textLength` advance through following text until the first explicit
-        inline-axis position or textPath reset. Horizontal, vertical, mid-run reset, and DOM
-        geometry tests cover the current-position contract. The single-tspan resvg case remains
-        classified for a 499-pixel small-text raster residual.
+        inline-axis position or textPath reset. A single forward carry pass bounds this work by
+        runs, glyphs, inline-position entries, and mapped text bytes. Horizontal, vertical,
+        mid-run reset, DOM geometry, and deterministic traversal-count tests cover the
+        current-position contract. The single-tspan resvg case remains classified for a 499-pixel
+        small-text raster residual.
   - [ ] Fix single-cluster spacing, per-chunk adjustment, decoration extents, and the ordering
         between length adjustment and textPath placement.
   - [ ] Parse and apply `textLength` and `lengthAdjust` on `<textPath>`.
@@ -528,8 +530,8 @@ change this coordinate space without re-running those oracles.
 
 - Cache bidi paragraph analysis and shaping by text content, computed text properties, font
   selection, and relevant geometry generation.
-- Keep logical-to-visual maps linear in source clusters and cap reference, clip-expression, mask,
-  and placed-glyph growth.
+- Keep textLength carry and logical-to-visual maps linear in source clusters, runs, and glyphs, and
+  cap reference, clip-expression, mask, and placed-glyph growth.
 - Avoid per-frame reparsing of property strings or rebuilding unchanged glyph outlines.
 - Benchmark mixed bidi paragraphs, long textPath content, deep clip expressions, large masks, and
   non-scaling dashed paths before and after each owning slice.
@@ -557,6 +559,9 @@ must preserve the existing no-exception error model and resource budgets.
   Non-finite transforms and expansion overflow run through `//donner/base:path_fuzzer`,
   `:path_ops_fuzzer`, `//donner/svg/parser:path_parser_fuzzer`, and
   `//donner/svg/renderer/tests:svg_document_render_fuzzer`.
+- Per-span `textLength` current-position carry visits each run once and maps reset text only when an
+  active carry reaches that run. `ApplyTextLengthTest.CumulativeCarryHasLinearTraversal` in
+  `//donner/svg/renderer/tests:text_engine_helpers_tests` enforces the operation-count bound.
 - Parser and document-render fuzz targets cover every new grammar and structured interaction.
 
 The following CI targets enforce the relevant boundaries:
