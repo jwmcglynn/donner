@@ -35,6 +35,7 @@
 #include "donner/css/parser/ColorParser.h"
 #include "donner/editor/AttributeWriteback.h"
 #include "donner/editor/DisclosureChevron.h"
+#include "donner/editor/DocumentPresentationCompositor.h"
 #include "donner/editor/DocumentSave.h"
 #include "donner/editor/DragCoalesce.h"
 #include "donner/editor/EditorDockLayout.h"
@@ -304,30 +305,31 @@ void AccumulateFrameLoopPhaseCost(double layoutMs, double menusDialogsMs, double
 }
 
 void PublishPresentationResourceStats(double totalTrackedBytes, double peakTrackedBytes,
-                                      double pendingRetiredBytes, double agedRetiredBytes,
-                                      double activeTileTextures, double overviewTileTextures,
-                                      double pendingRetiredTextures, double agedRetiredTextures,
-                                      double retiredFrameCount, double lifetimeTextureCreates,
-                                      double lifetimeBufferCreates) {
+                                      double documentCompositeBytes, double pendingRetiredBytes,
+                                      double agedRetiredBytes, double activeTileTextures,
+                                      double overviewTileTextures, double pendingRetiredTextures,
+                                      double agedRetiredTextures, double retiredFrameCount,
+                                      double lifetimeTextureCreates, double lifetimeBufferCreates) {
   MAIN_THREAD_ASYNC_EM_ASM(
       {
         window['__donnerPresentationResourceStats'] = ({
           'totalTrackedBytes' : $0,
           'peakTrackedBytes' : $1,
-          'pendingRetiredBytes' : $2,
-          'agedRetiredBytes' : $3,
-          'activeTileTextures' : $4,
-          'overviewTileTextures' : $5,
-          'pendingRetiredTextures' : $6,
-          'agedRetiredTextures' : $7,
-          'retiredFrameCount' : $8,
-          'lifetimeTextureCreates' : $9,
-          'lifetimeBufferCreates' : $10,
+          'documentCompositeBytes' : $2,
+          'pendingRetiredBytes' : $3,
+          'agedRetiredBytes' : $4,
+          'activeTileTextures' : $5,
+          'overviewTileTextures' : $6,
+          'pendingRetiredTextures' : $7,
+          'agedRetiredTextures' : $8,
+          'retiredFrameCount' : $9,
+          'lifetimeTextureCreates' : $10,
+          'lifetimeBufferCreates' : $11,
         });
       },
-      totalTrackedBytes, peakTrackedBytes, pendingRetiredBytes, agedRetiredBytes,
-      activeTileTextures, overviewTileTextures, pendingRetiredTextures, agedRetiredTextures,
-      retiredFrameCount, lifetimeTextureCreates, lifetimeBufferCreates);
+      totalTrackedBytes, peakTrackedBytes, documentCompositeBytes, pendingRetiredBytes,
+      agedRetiredBytes, activeTileTextures, overviewTileTextures, pendingRetiredTextures,
+      agedRetiredTextures, retiredFrameCount, lifetimeTextureCreates, lifetimeBufferCreates);
 }
 
 #endif
@@ -1266,6 +1268,8 @@ EditorShell::EditorShell(gui::EditorWindow& window, EditorShellOptions options)
     // unique_ptr is released.
     ConfigureEmbeddedSvgIconRenderer(*directOverlayRenderer_);
   }
+#else
+  documentPresentationCompositor_ = std::make_unique<DocumentPresentationCompositor>();
 #endif
   PrewarmEditorIcons();
   if (!rotateCursorSet_.initialize(window_.rawHandle(), window_.geodeDevice())) {
@@ -1753,6 +1757,7 @@ void EditorShell::maybeLogResourceDiagnostics(const FrameCostBreakdown& frameCos
   std::cerr << "[DonnerResource] frame=" << resourceDiagnosticsFrame_
             << " tracked_mib=" << MegabytesRoundedUp(resources.totalTrackedBytes)
             << " peak_mib=" << MegabytesRoundedUp(resources.peakTrackedBytes)
+            << " document_composite_mib=" << MegabytesRoundedUp(resources.documentCompositeBytes)
             << " active_tile_mib=" << MegabytesRoundedUp(resources.activeTileBytes)
             << " overview_tile_mib=" << MegabytesRoundedUp(resources.overviewTileBytes)
             << " retired_mib="
@@ -4200,8 +4205,6 @@ void EditorShell::renderRenderPanePresentation(
   }
   const Entity presentSuppressedLayerEntity =
       penPreviewSuppressedEntity != entt::null ? penPreviewSuppressedEntity : suppressedLayerEntity;
-  interactionController_.frameHistory().setLatestMemorySample(
-      MemorySampleFromPresentationResources(textures_.presentationResourceStats()));
   // Document tiles use the direct framebuffer path where possible. The
   // framebuffer pass also owns the transparency checkerboard unconditionally:
   // there is no draw-list checkerboard to fall back to, because every pixel the
@@ -4235,12 +4238,9 @@ void EditorShell::renderRenderPanePresentation(
   };
   const bool drawOverviewTiles =
       ShouldPresentOverviewTiles(textures_.activeTilesViewportBounded(), textures_.overviewTiles());
-  if (!contentOnlyCaptureThisFrame_ && directDocumentRenderer_ != nullptr &&
-      directDocumentClipRect.has_value()) {
+  if (directDocumentRenderer_ != nullptr && directDocumentClipRect.has_value()) {
     // Tiles ride the framebuffer pass only when every one of them is a Geode
-    // texture. The remaining case is the browser bitmap bridge, whose CPU tiles
-    // are still blitted as images by the render pane - an image blit, never
-    // path geometry.
+    // texture. A non-Geode compatibility payload falls back through the render pane.
     underlayPresentsTiles =
         ((drawOverviewTiles && hasDirectlyPresentableTile(textures_.overviewTiles())) ||
          hasDirectlyPresentableTile(textures_.tiles())) &&
@@ -4294,6 +4294,32 @@ void EditorShell::renderRenderPanePresentation(
     };
   }
   installImmediateChromePlan(std::move(chromePlan));
+#ifndef DONNER_EDITOR_WGPU
+  const std::optional<Box2d> intermediateDocumentClipRect =
+      PresentedImageClipRect(paneRect, presentedDocumentViewport.imageScreenRect());
+  DocumentCompositeTextureView documentComposite;
+  if (documentPresentationCompositor_ != nullptr && intermediateDocumentClipRect.has_value() &&
+      (!textures_.tiles().empty() || !textures_.overviewTiles().empty())) {
+    const bool drawOverviewTiles = ShouldPresentOverviewTiles(
+        textures_.activeTilesViewportBounded(), textures_.overviewTiles());
+    const std::vector<GlTextureCache::TileView> noOverviewTiles;
+    documentComposite = documentPresentationCompositor_->compose(
+        presentedDocumentViewport, *intermediateDocumentClipRect,
+        drawOverviewTiles ? textures_.overviewTiles() : noOverviewTiles, textures_.tiles(),
+        activeDragPreview, displayedDragPreview, presentSuppressedLayerEntity,
+        suppressDragTargetTiles);
+  } else if (documentPresentationCompositor_ != nullptr) {
+    documentPresentationCompositor_->reset();
+  }
+  textures_.setDocumentCompositeBytes(documentPresentationCompositor_ != nullptr
+                                          ? documentPresentationCompositor_->retainedBytes()
+                                          : 0u);
+#else
+  const DocumentCompositeTextureView documentComposite;
+  textures_.setDocumentCompositeBytes(0u);
+#endif
+  interactionController_.frameHistory().setLatestMemorySample(
+      MemorySampleFromPresentationResources(textures_.presentationResourceStats()));
   RenderPanePresenterState paneState{
       .viewport = interactionController_.viewport(),
       .presentedDocumentViewport = &presentedDocumentViewport,
@@ -4306,6 +4332,7 @@ void EditorShell::renderRenderPanePresentation(
       .suppressedLayerEntity = presentSuppressedLayerEntity,
       .suppressDragTargetTiles = suppressDragTargetTiles,
       .documentPresentedDirectly = documentPresentedDirectly,
+      .documentComposite = documentComposite,
       .compositorTileOverlay = !contentOnlyCaptureThisFrame_ && compositorTileOverlay_,
       .perfOverlayMode = contentOnlyCaptureThisFrame_ ? PerfOverlayMode::Off : perfOverlayMode_,
   };
@@ -6772,7 +6799,9 @@ void EditorShell::recordFrameTelemetry(
   // `donner/base/MemoryAttribution.h`); the render thread publishes the
   // compositor's half from `AsyncRenderer::workerLoop`. The frame publisher
   // reads both and is the only writer of the page-visible stats object.
-  SetRetainedBytes(MemoryCategory::PresentationTiles, presentationResources.activeTileBytes);
+  SetRetainedBytes(
+      MemoryCategory::PresentationTiles,
+      presentationResources.activeTileBytes + presentationResources.documentCompositeBytes);
   SetEntryCount(MemoryCategory::PresentationTiles,
                 static_cast<std::uint64_t>(presentationResources.activeTileTextures));
   SetRetainedBytes(MemoryCategory::PresentationOverviewTiles,
@@ -6824,6 +6853,7 @@ void EditorShell::recordFrameTelemetry(
   PublishPresentationResourceStats(
       static_cast<double>(presentationResources.totalTrackedBytes),
       static_cast<double>(presentationResources.peakTrackedBytes),
+      static_cast<double>(presentationResources.documentCompositeBytes),
       static_cast<double>(presentationResources.pendingRetiredBytes),
       static_cast<double>(presentationResources.agedRetiredBytes),
       static_cast<double>(presentationResources.activeTileTextures),

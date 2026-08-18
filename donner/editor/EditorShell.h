@@ -66,6 +66,8 @@ struct ReproAction;
 
 namespace donner::editor {
 
+class DocumentPresentationCompositor;
+
 namespace internal {
 struct ToolbarPaintState;
 }
@@ -665,6 +667,8 @@ private:
   std::unique_ptr<FramebufferCheckerboardRenderer> directCheckerboardRenderer_;
   std::unique_ptr<svg::RendererGeode> directDocumentRenderer_;
   std::unique_ptr<svg::RendererGeode> directOverlayRenderer_;
+#else
+  std::unique_ptr<DocumentPresentationCompositor> documentPresentationCompositor_;
 #endif
 
   std::string lastWindowTitle_;
