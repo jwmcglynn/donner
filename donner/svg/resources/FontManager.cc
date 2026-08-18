@@ -281,7 +281,9 @@ size_t FontManager::ProviderFontKeyHash::operator()(const ProviderFontKey& key) 
 void FontManager::addFontFace(const css::FontFace& face) {
   std::string key = faceIdentityKey(face);
   if (auto it = faceEntities_.find(key); it != faceEntities_.end()) {
-    if (registry_.valid(it->second)) {
+    // The registered entity is also what keeps the declaration's payload pointers alive, so the
+    // key stays meaningful exactly as long as that entity still carries the rule.
+    if (registry_.valid(it->second) && registry_.all_of<FontFaceComponent>(it->second)) {
       // The identical declaration is already registered. Minting a second entity for it would
       // strand every cache keyed on the old one, so keep the existing identity and leave the
       // resolution cache alone.

@@ -384,7 +384,7 @@ private:
   /// Cache: family/style query key → resolved font handle.
   std::unordered_map<std::string, FontHandle> cache_;
 
-  /// Identity key of every registered `@font-face` rule → the entity holding it. Keeps
+  /// Identity key of every registered `@font-face` rule to the entity holding it. Keeps
   /// re-registration of an unchanged rule from minting a second entity for the same declaration.
   std::unordered_map<std::string, Entity> faceEntities_;
 
