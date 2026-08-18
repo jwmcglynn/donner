@@ -1859,7 +1859,7 @@ TEST_F(RendererGeodeTest, StubbedMethodsAreNoOps) {
   renderer.popClip();
   renderer.pushIsolatedLayer(0.5, MixBlendMode::Normal);
   renderer.popIsolatedLayer();
-  renderer.pushMask(std::nullopt);
+  renderer.pushMask(std::nullopt, MaskType::Luminance);
   renderer.transitionMaskToContent();
   renderer.popMask();
 

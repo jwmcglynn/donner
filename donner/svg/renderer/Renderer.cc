@@ -556,6 +556,10 @@ void Renderer::pushMask(const std::optional<Box2d>& maskBounds) {
   impl_->pushMask(maskBounds);
 }
 
+void Renderer::pushMask(const std::optional<Box2d>& maskBounds, MaskType maskType) {
+  impl_->pushMask(maskBounds, maskType);
+}
+
 void Renderer::transitionMaskToContent() {
   impl_->transitionMaskToContent();
 }

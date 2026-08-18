@@ -1146,7 +1146,7 @@ TEST(TextEngineScriptedTest, PerSpanTextLengthSpacingAdjustsVerticalGaps) {
   span.lengthAdjust = LengthAdjust::Spacing;
   text.spans.push_back(std::move(span));
 
-  // A sibling span without textLength is skipped by the per-span adjustment.
+  // A sibling span without textLength is not stretched, but inherits the adjusted current position.
   auto plainSpan = MakeSpan("C");
   plainSpan.startsNewChunk = false;
   text.spans.push_back(std::move(plainSpan));
@@ -1156,11 +1156,11 @@ TEST(TextEngineScriptedTest, PerSpanTextLengthSpacingAdjustsVerticalGaps) {
   const auto runs = engine.layout(text, params);
 
   // Natural length 22px (10px advance, 2px kern, 10px advance) stretched to 40px moves
-  // the second glyph down by the 18px gap difference. The plain span keeps its natural
-  // position after the first span's unadjusted 22px extent plus the 4px cross-span kern.
+  // the second glyph down by the 18px gap difference. The plain span starts from the adjusted
+  // 40px current position plus the 4px cross-span kern.
   EXPECT_THAT(runs, ElementsAre(RunGlyphsAre(ElementsAre(GlyphYPositionIs(DoubleEq(0.0)),
                                                          GlyphYPositionIs(DoubleEq(30.0)))),
-                                RunGlyphsAre(ElementsAre(GlyphYPositionIs(DoubleEq(26.0))))));
+                                RunGlyphsAre(ElementsAre(GlyphYPositionIs(DoubleEq(44.0))))));
 }
 
 TEST(TextEngineScriptedTest, InlineSizeDoesNotWrapTextOnPath) {

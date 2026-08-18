@@ -26,6 +26,7 @@
 #include "donner/svg/components/filter/FilterGraph.h"
 #include "donner/svg/components/text/ComputedTextComponent.h"
 #include "donner/svg/core/LengthAdjust.h"
+#include "donner/svg/core/MaskType.h"
 #include "donner/svg/core/MixBlendMode.h"
 #include "donner/svg/core/TextAnchor.h"
 #include "donner/svg/core/TextDecoration.h"
@@ -480,6 +481,9 @@ public:
    * transitionMaskToContent, then renders the actual content between transitionMaskToContent
    * and popMask.
    *
+   * This compatibility entry point begins a luminance mask. Existing embedders that implement this
+   * pure virtual remain source-compatible. Override the typed overload to support alpha masks.
+   *
    * @param maskBounds Optional clip rect for the mask region.
    */
   virtual void pushMask(const std::optional<Box2d>& maskBounds) = 0;
@@ -671,6 +675,21 @@ public:
   /// Whether the backend's geometry debug overlay is enabled. Backends
   /// without an overlay always report false.
   [[nodiscard]] virtual bool debugGeometryOverlay() const { return false; }
+
+  /**
+   * Begins mask rendering with an explicit coverage mode.
+   *
+   * Appended after the legacy virtual surface to preserve existing vtable slot order. The default
+   * compatibility implementation delegates to the one-argument luminance entry point. Backends
+   * that support `MaskType::Alpha` override this overload.
+   *
+   * @param maskBounds Optional clip rect for the mask region.
+   * @param maskType Whether mask coverage comes from luminance or alpha.
+   */
+  virtual void pushMask(const std::optional<Box2d>& maskBounds, MaskType maskType) {
+    (void)maskType;
+    pushMask(maskBounds);
+  }
 };
 
 }  // namespace donner::svg

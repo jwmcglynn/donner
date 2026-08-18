@@ -11,20 +11,16 @@ namespace donner::svg {
  *
  * Defines a mask, which is used to apply image-based visibility to graphical elements. Compared to
  * \ref xml_clipPath, which clips against geometry from paths and shapes, `<mask>` visibility is
- * computed from the luminance of rendered mask content.
+ * computed from rendered mask content using luminance or alpha coverage.
  *
  * - DOM object: SVGMaskElement
  * - SVG2 spec: https://drafts.fxtf.org/css-masking-1/#MaskElement
  *
- * A `<mask>` defines a **luminance-based soft mask**. You fill the `<mask>` with arbitrary SVG
- * graphics - shapes, gradients, even images - and at render time SVG uses the brightness
- * (luminance) of each pixel of the mask as the alpha value for the corresponding pixel of the
- * masked element. White pixels in the mask leave the target fully visible, black pixels hide
- * it completely, and gray pixels produce partial transparency, so you can author smooth fades
- * and soft edges that \ref xml_clipPath cannot express.
- *
- * @note Donner currently implements luminance masks. The CSS `mask-type: alpha` mode is not yet
- * supported.
+ * A `<mask>` defines a soft mask. By default, SVG uses each rendered pixel's luminance multiplied
+ * by its alpha as mask coverage. `mask-type: alpha` uses only the alpha channel. White pixels in a
+ * luminance mask leave the target fully visible, black pixels hide it completely, and gray pixels
+ * produce partial transparency, so you can author smooth fades and soft edges that \ref
+ * xml_clipPath cannot express.
  *
  * Declare a `<mask>` inside \ref xml_defs with an `id`, then apply it to any shape via the
  * `mask="url(#id)"` attribute or CSS property. Reach for `<mask>` when you need soft edges,
@@ -71,6 +67,7 @@ namespace donner::svg {
  * | `height`           | `120%`              | Height of the mask region. |
  * | `maskUnits`        | `objectBoundingBox` | Coordinate system for `x`, `y`, `width`, and `height`. Either `userSpaceOnUse` or `objectBoundingBox`. |
  * | `maskContentUnits` | `userSpaceOnUse`    | Coordinate system for the contents of the mask. Either `userSpaceOnUse` or `objectBoundingBox`. |
+ * | `mask-type`        | `luminance`         | Coverage source. Either `luminance` or `alpha`. |
  */
 
 /**

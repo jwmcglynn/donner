@@ -31,7 +31,7 @@ be expressed through the normal `Params` path close to the affected tests:
 
 | State                                                      |   Count | Meaning                                                                                                                                                                                  |
 | ---------------------------------------------------------- | ------: | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `Params::Skip("reason")`                                   |     124 | Not run. Feature gap or known bug. The bulk of this doc.                                                                                                                                 |
+| `Params::Skip("reason")`                                   |     116 | Not run. Feature gap or known bug. The bulk of this doc.                                                                                                                                 |
 | `Params::RenderOnly("reason")`                             |      58 | Rendered, **not** compared. Used for UB/deprecated cases where no-crash coverage is still useful.                                                                                        |
 | Commented-out `INSTANTIATE_TEST_SUITE_P`                   | 1 block | `filters/filter-functions` — whole category dark on CI. See [B2](#b2-filtersfilter-functions-category-disabled-on-ci).                                                                   |
 | `Params::WithThreshold(…, maxPx)` / local max-pixel budget |     103 | Passes with an explicit threshold or pixel budget. Large non-text budgets remain suspect; see [Masked bugs behind inflated CPU thresholds](#masked-bugs-behind-inflated-cpu-thresholds). |
@@ -41,7 +41,7 @@ be expressed through the normal `Params` path close to the affected tests:
 
 |                                       |                                                                                                                                                      Count |
 | ------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------: |
-| `Params::Skip(...)`                   |                                                                                                                            124 (`grep -o 'Params::Skip('`) |
+| `Params::Skip(...)`                   |                                                                                                                            116 (`grep -o 'Params::Skip('`) |
 | `Params::RenderOnly(...)`             |                                                                                                               58 (render-must-not-crash, no pixel compare) |
 | `WithThreshold` / max-pixel overrides | 103 call sites: 79 `WithThreshold`, 11 `WithMaxPixels`, and 13 direct `withMaxPixelsDifferent` calls. Large non-text budgets remain masked-bug candidates. |
 | Geode-disabled local `Params` entries |                                                                                                                      0 (all active cases now run on Geode) |
@@ -89,20 +89,20 @@ bottom for completeness.
 > (feImage resampling) are resolved; their IDs are burned. The rows below are
 > what's left.
 
-| ID  | Gap                                                                     |           Impact | Kind                                                                                                                             |
-| --- | ----------------------------------------------------------------------- | ---------------: | -------------------------------------------------------------------------------------------------------------------------------- |
-| B2  | `filters/filter-functions` disabled (CI "Data corrupted")               |              ~30 | CI gap — whole category dark                                                                                                     |
-| B3  | `structure/image` golden kernel-era mismatch                            |               13 | Golden refresh + `<image>` upscale-kernel decision (see [B3](#b3-structureimage-golden-kernel-era-mismatch))                     |
-| F12 | `transform-origin` on `<textPath>` baseline                             |         **DONE** | Resolved by #868; all category cases are active.                                                                                 |
-| F7  | `paint-order` rendering                                                 | **DONE** (14/14) | Shapes and text run on both backends; `on-tspan` uses a project-owned oracle because the vendored PNG breaks cross-span kerning. |
-| F9  | `textLength` + `lengthAdjust` stretch/compress                          |                8 | Feature                                                                                                                          |
-| F10 | `textPath` SVG2 attributes (`path`/`side`/`method`/`spacing`)           |                8 | Feature                                                                                                                          |
-| F11 | BiDi / RTL text shaping                                                 |               ~8 | Feature (needs `text-full`)                                                                                                      |
-| B7  | font substitution — missing bundled families (masked by fat thresholds) |               ~9 | Triage: bundle fonts vs. document as known gap                                                                                   |
-| —   | masking edge cases (mask 8, clipPath 5)                                 |              ~13 | Mixed; `clipPath/with-use-child` is now active on both backends.                                                                 |
-| —   | uncertain `Bug?` entries (need triage)                                  |              ~12 | Needs investigation                                                                                                              |
-| F1  | `enable-background` + `in=Background*`                                  |               23 | **Out of scope** (deprecated)                                                                                                    |
-| —   | other deprecated/UB skips                                               |              ~30 | **Out of scope**                                                                                                                 |
+| ID  | Gap                                                                     |           Impact | Kind                                                                                                                                                                                                |
+| --- | ----------------------------------------------------------------------- | ---------------: | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| B2  | `filters/filter-functions` disabled (CI "Data corrupted")               |              ~30 | CI gap — whole category dark                                                                                                                                                                        |
+| B3  | `structure/image` golden kernel-era mismatch                            |               13 | Golden refresh + `<image>` upscale-kernel decision (see [B3](#b3-structureimage-golden-kernel-era-mismatch))                                                                                        |
+| F12 | `transform-origin` on `<textPath>` baseline                             |         **DONE** | Resolved by #868; all category cases are active.                                                                                                                                                    |
+| F7  | `paint-order` rendering                                                 | **DONE** (14/14) | Shapes and text run on both backends; `on-tspan` uses a project-owned oracle because the vendored PNG breaks cross-span kerning.                                                                    |
+| F9  | `textLength` + `lengthAdjust` stretch/compress                          |                8 | Feature                                                                                                                                                                                             |
+| F10 | `textPath` SVG2 attributes (`path`/`side`/`method`/`spacing`)           |                8 | Feature                                                                                                                                                                                             |
+| F11 | BiDi / RTL text shaping                                                 |               ~8 | Feature (needs `text-full`)                                                                                                                                                                         |
+| B7  | font substitution — missing bundled families (masked by fat thresholds) |               ~9 | Triage: bundle fonts vs. document as known gap                                                                                                                                                      |
+| —   | masking edge cases (mask 3, clipPath 5)                                 |                8 | `mask-type` and vector text clip children are active on both backends; remaining cases are units, transforms, color interpolation, bitmap text clips, nested intersections, and shorthand geometry. |
+| —   | uncertain `Bug?` entries (need triage)                                  |              ~12 | Needs investigation                                                                                                                                                                                 |
+| F1  | `enable-background` + `in=Background*`                                  |               23 | **Out of scope** (deprecated)                                                                                                                                                                       |
+| —   | other deprecated/UB skips                                               |              ~30 | **Out of scope**                                                                                                                                                                                    |
 
 ---
 
@@ -246,6 +246,17 @@ interaction). Text stretching/compressing to a target length (`spacing` and
 `spacingAndGlyphs`). The `arabic`/`arabic-with-lengthAdjust` cases pass on
 text-full builds and are enabled with `.onlyTextFull()`.
 
+Zero target length is applied to spacing in the text engine and has focused unit coverage. The
+resvg `zero.svg` case remains disabled with a 397-pixel residual concentrated on the overlapping
+glyph raster; its layout is no longer ignored, but the remaining oracle difference still needs
+independent browser triage before the exception can be removed.
+
+Per-span adjustment now updates the current text position inherited by following runs and stops at
+the first explicit inline-axis position, including a reset later inside a span. The
+`on-a-single-tspan.svg` layout is active in focused helper and DOM geometry tests; its resvg entry
+remains classified for a 499-pixel small-text raster residual. Nested-container aggregation,
+decoration extents, vertical layout, and textPath ordering remain implementation work.
+
 ### F10: `textPath` SVG2 attributes
 
 **Impact:** 8 in `text/textPath/`: `path` attribute, `side=right`, `method=stretch`,
@@ -280,18 +291,18 @@ content-placement transform.
 
 ### Smaller feature gaps
 
-| Category                  | Tests | Gap                                                                                                                                                              |
-| ------------------------- | ----: | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| structure/svg             |     2 | nested-svg `overflow`                                                                                                                                            |
-| structure/style           |     1 | CSS `@import` / external CSS                                                                                                                                     |
-| structure/symbol          |     1 | `transform` on `<symbol>` (SVG2)                                                                                                                                 |
-| painting/image-rendering  |     2 | Both backends select smooth versus nearest sampling, but the CSS value distinctions and the non-integer nearest-grid disagreement still need conformance triage. |
-| masking/clipPath          |     6 | clipPath with `<text>` children, `<use>` child, shorthand edge cases                                                                                             |
-| masking/mask              |     8 | `mask-type`, `mask-units`, `color-interpolation`, mask-on-self                                                                                                   |
-| text/font                 |     2 | `font` shorthand; canvas-size mismatch (test harness)                                                                                                            |
-| text/tspan                |     3 | tspan interaction with `clip-path`/`filter`/`mask`                                                                                                               |
-| painting/stroke-dasharray |     4 | `0 n` dash patterns with caps; `40 0` closed-rect dash-seam (see note)                                                                                           |
-| painting/marker           |     3 | multiple closepaths, recursive-5 (rounded-rect corner fixed, [#623](https://github.com/jwmcglynn/donner/issues/623))                                             |
+| Category                  | Tests | Gap                                                                                                                                                                                                                                                                               |
+| ------------------------- | ----: | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| structure/svg             |     2 | nested-svg `overflow`                                                                                                                                                                                                                                                             |
+| structure/style           |     1 | CSS `@import` / external CSS                                                                                                                                                                                                                                                      |
+| structure/symbol          |     1 | `transform` on `<symbol>` (SVG2)                                                                                                                                                                                                                                                  |
+| painting/image-rendering  |     2 | Both backends select smooth versus nearest sampling, but the CSS value distinctions and the non-integer nearest-grid disagreement still need conformance triage.                                                                                                                  |
+| masking/clipPath          |     5 | Nested clip intersections and shorthand edge cases remain. Vector text children use shared placed glyph outlines. The transformed-text vendored golden uses ink bounds, unlike SVG 2 full-glyph-cell bounds and Firefox, so it remains classified pending broader browser review. |
+| masking/mask              |     3 | `mask-units`, transformed regions, and `color-interpolation`; `mask-type` alpha/luminance is active.                                                                                                                                                                              |
+| text/font                 |     2 | `font` shorthand; canvas-size mismatch (test harness)                                                                                                                                                                                                                             |
+| text/tspan                |     3 | tspan interaction with `clip-path`/`filter`/`mask`                                                                                                                                                                                                                                |
+| painting/stroke-dasharray |     4 | `0 n` dash patterns with caps; `40 0` closed-rect dash-seam (see note)                                                                                                                                                                                                            |
+| painting/marker           |     3 | multiple closepaths, recursive-5 (rounded-rect corner fixed, [#623](https://github.com/jwmcglynn/donner/issues/623))                                                                                                                                                              |
 
 **`painting/stroke-dasharray/n-0` (`40 0`)** — root-caused under [#623](https://github.com/jwmcglynn/donner/issues/623)
 and intentionally left skipped: an SVG `<rect>` is a _closed_ contour, so tiny-skia

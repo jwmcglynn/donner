@@ -483,7 +483,7 @@ void applyTextLength(std::vector<TextRun>& runs, const components::ComputedTextC
       const double targetLength = span.textLength->toPixels(
           params.viewBox, params.fontMetrics, vertical ? Lengthd::Extent::Y : Lengthd::Extent::X);
 
-      if (targetLength <= 0.0) {
+      if (targetLength < 0.0) {
         continue;
       }
 
@@ -511,6 +511,55 @@ void applyTextLength(std::vector<TextRun>& runs, const components::ComputedTextC
           }
         }
       }
+
+      if (!run.onPath) {
+        const double advanceDelta = targetLength - naturalLength;
+        // The adjusted current position carries forward until an absolute inline reset.
+        for (size_t following = i + 1; following < runs.size() && following < text.spans.size();
+             ++following) {
+          const auto& followingSpan = text.spans[following];
+          if (runs[following].onPath) {
+            break;
+          }
+
+          const auto& inlinePositions = vertical ? followingSpan.yList : followingSpan.xList;
+          std::optional<size_t> resetCharIndex;
+          for (size_t charIndex = 0; charIndex < inlinePositions.size(); ++charIndex) {
+            if (inlinePositions[charIndex].has_value()) {
+              resetCharIndex = charIndex;
+              break;
+            }
+          }
+
+          std::optional<ByteIndexMappings> mappings;
+          if (resetCharIndex.has_value()) {
+            if (runs[following].glyphs.empty()) {
+              break;
+            }
+            const std::string_view followingText(followingSpan.text.data() + followingSpan.start,
+                                                 followingSpan.end - followingSpan.start);
+            mappings = buildByteIndexMappings(followingText);
+          }
+          for (auto& glyph : runs[following].glyphs) {
+            if (resetCharIndex.has_value()) {
+              const size_t charIndex = glyph.cluster < mappings->byteToCharIdx.size()
+                                           ? mappings->byteToCharIdx[glyph.cluster]
+                                           : 0;
+              if (charIndex >= *resetCharIndex) {
+                continue;
+              }
+            }
+            if (vertical) {
+              glyph.yPosition += advanceDelta;
+            } else {
+              glyph.xPosition += advanceDelta;
+            }
+          }
+          if (resetCharIndex.has_value()) {
+            break;
+          }
+        }
+      }
     }
   }
 
@@ -532,7 +581,7 @@ void applyTextLength(std::vector<TextRun>& runs, const components::ComputedTextC
     const double targetLength = params.textLength->toPixels(
         params.viewBox, params.fontMetrics, vertical ? Lengthd::Extent::Y : Lengthd::Extent::X);
 
-    if (targetLength > 0.0) {
+    if (targetLength >= 0.0) {
       size_t totalGlyphs = 0;
       for (const auto& r : runs) {
         totalGlyphs += r.glyphs.size();

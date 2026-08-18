@@ -134,13 +134,10 @@ public:
     /// are premultiplied and must set this flag to avoid a double
     /// premultiplication that darkens the RGB channel.
     bool sourceIsPremultiplied = false;
-    /// `<mask>` luminance compositing. When non-null, this
-    /// texture is sampled alongside the source and its BT.709
-    /// luminance (multiplied by alpha, to match tiny-skia's
-    /// `Mask::fromPixmap(Luminance)`) is used as a coverage
-    /// multiplier on the output. Ignored unless
-    /// `RendererGeode::popMask` sets it.
+    /// `<mask>` compositing input. Ignored unless `maskMode` is nonzero.
     wgpu::Texture maskTexture;
+    /// Mask coverage selector: 0 disables masking, 1 uses luminance, and 2 uses alpha.
+    uint32_t maskMode = 0;
     /// When true, output pixels outside `maskBounds` are discarded.
     /// Used to honour the `<mask>` element's x/y/width/height.
     bool applyMaskBounds = false;

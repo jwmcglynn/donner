@@ -7,18 +7,18 @@
 #include <utility>
 #include <vector>
 
-#include "donner/base/parser/LengthParser.h"
 #include "donner/base/RcString.h"
+#include "donner/base/parser/LengthParser.h"
 #include "donner/base/xml/components/TreeComponent.h"
 #include "donner/svg/components/ComputedClipPathsComponent.h"
 #include "donner/svg/components/ConditionalProcessingComponent.h"
 #include "donner/svg/components/DirtyFlagsComponent.h"
-#include "donner/svg/components/animation/AnimatedValuesComponent.h"
-#include "donner/svg/components/animation/AnimationSystem.h"
 #include "donner/svg/components/ElementTypeComponent.h"
 #include "donner/svg/components/RenderingBehaviorComponent.h"
 #include "donner/svg/components/RenderingInstanceComponent.h"
 #include "donner/svg/components/SVGDocumentContext.h"
+#include "donner/svg/components/animation/AnimatedValuesComponent.h"
+#include "donner/svg/components/animation/AnimationSystem.h"
 #include "donner/svg/components/filter/FilterComponent.h"
 #include "donner/svg/components/filter/FilterSystem.h"
 #include "donner/svg/components/layout/LayoutSystem.h"
@@ -797,13 +797,26 @@ public:
 
       const auto* clipPathData = dataEntity.try_get<components::ComputedPathComponent>();
       const auto* computedStyle = entity.try_get<components::ComputedStyleComponent>();
-      if (!clipPathData || !computedStyle) {
+#ifdef DONNER_TEXT_ENABLED
+      const EntityHandle textEntity =
+          entity.all_of<TextRootComponent, ComputedTextComponent>() ? entity : dataEntity;
+      const bool isTextClipChild = textEntity.all_of<TextRootComponent, ComputedTextComponent>();
+#else
+      const bool isTextClipChild = false;
+#endif
+      if ((!clipPathData && !isTextClipChild) || !computedStyle) {
         return;
       }
 
       const auto& style = computedStyle->properties.value();
       if (enforceVisibility && (style.visibility.get().value() != Visibility::Visible ||
                                 style.display.get().value() == Display::None)) {
+        return;
+      }
+
+      // Keep text glyphs separate for evenodd; reject nested clips until layers preserve groups.
+      if (isTextClipChild && style.clipPath.get()) {
+        encounteredInvalidReference = true;
         return;
       }
 
@@ -825,7 +838,18 @@ public:
 
       const Transform2d parentFromEntity = LayoutSystem().getEntityFromWorldTransform(entity);
       const ClipRule clipRule = style.clipRule.get().value_or(ClipRule::NonZero);
-      clipPaths.emplace_back(clipPathData->spline, parentFromEntity, clipRule, layer);
+      if (clipPathData) {
+        clipPaths.emplace_back(clipPathData->spline, parentFromEntity, clipRule, layer);
+      }
+#ifdef DONNER_TEXT_ENABLED
+      else if (auto* textEngine = registry_.ctx().find<TextEngine>()) {
+        for (const Path& glyphPath : textEngine->computedGlyphPaths(textEntity)) {
+          if (!glyphPath.empty()) {
+            clipPaths.emplace_back(glyphPath, parentFromEntity, clipRule, layer);
+          }
+        }
+      }
+#endif
     };
 
     // Check for clip-path on the <clipPath> itself

@@ -483,8 +483,7 @@ ResolvedClip toResolvedClip(const components::RenderingInstanceComponent& instan
           instance.styleHandle(registry).try_get<components::ComputedClipPathsComponent>()) {
     // Compute objectBoundingBox transform if needed.
     if (instance.clipPath && instance.clipPath->units == ClipPathUnits::ObjectBoundingBox) {
-      if (auto maybeBounds =
-              components::ShapeSystem().getShapeBounds(instance.dataHandle(registry))) {
+      if (auto maybeBounds = RenderingObjectBoundingBox(registry, instance.dataHandle(registry))) {
         const Box2d bounds = maybeBounds.value();
         clip.clipPathUnitsTransform =
             Transform2d::Scale(bounds.size()) * Transform2d::Translate(bounds.topLeft);
@@ -2320,6 +2319,11 @@ int RendererDriver::renderMask(RenderingInstanceView& view, Registry& registry,
     const double wPx = resolveMaskLength(width, Lengthd::Extent::X, false);
     const double hPx = resolveMaskLength(height, Lengthd::Extent::Y, false);
     const std::optional<Box2d> maskBounds = Box2d::FromXYWH(xPx, yPx, wPx, hPx);
+    MaskType maskType = MaskType::Luminance;
+    if (const auto* maskStyle = m->reference.handle.try_get<components::ComputedStyleComponent>();
+        maskStyle != nullptr && maskStyle->properties.has_value()) {
+      maskType = maskStyle->properties->maskType.get().value_or(MaskType::Luminance);
+    }
 
     if (verbose_) {
       std::cout << "[renderMask] chain depth=" << chain.size()
@@ -2331,7 +2335,7 @@ int RendererDriver::renderMask(RenderingInstanceView& view, Registry& registry,
                                                                                 : "userSpace")
                 << "\n";
     }
-    renderer_.pushMask(maskBounds);
+    renderer_.pushMask(maskBounds, maskType);
 
     const Transform2d savedSurfaceFromCanvas = surfaceFromCanvasTransform_;
     surfaceFromCanvasTransform_ = instance.worldFromEntityTransform * surfaceFromCanvasTransform_;

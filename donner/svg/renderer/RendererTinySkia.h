@@ -139,8 +139,12 @@ public:
    * Begins mask rendering.
    *
    * @param maskBounds Optional mask bounds clip.
+   * @param maskType Whether mask coverage comes from luminance or alpha.
    */
-  void pushMask(const std::optional<Box2d>& maskBounds) override;
+  void pushMask(const std::optional<Box2d>& maskBounds) override {
+    pushMask(maskBounds, MaskType::Luminance);
+  }
+  void pushMask(const std::optional<Box2d>& maskBounds, MaskType maskType) override;
 
   /// Switches from mask rendering to masked content rendering.
   void transitionMaskToContent() override;
@@ -286,6 +290,7 @@ private:
     int filterBufferOffsetY = 0;
     std::optional<Box2d> maskBounds;
     Transform2d maskBoundsTransform;
+    MaskType maskType = MaskType::Luminance;
     std::optional<tiny_skia::Mask> maskAlpha;
     Transform2d targetFromPattern;
     Transform2d patternRasterFromTile;

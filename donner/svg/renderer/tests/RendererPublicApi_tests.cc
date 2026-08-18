@@ -1864,6 +1864,31 @@ TEST(RendererPublicApiTest, MaskElement) {
   EXPECT_THAT(center, Rgba(_, _, _, Lt(corner[3])));  // More transparent than the corner
 }
 
+TEST(RendererPublicApiTest, MaskTypeAlphaUsesAlphaChannel) {
+  SVGDocument document = ParseDocument(R"svg(
+      <svg xmlns="http://www.w3.org/2000/svg" width="40" height="20" viewBox="0 0 40 20">
+        <defs>
+          <mask id="alpha" style="mask-type: alpha">
+            <rect width="20" height="20" fill="black" />
+          </mask>
+          <mask id="luminance">
+            <rect width="20" height="20" fill="black" />
+          </mask>
+        </defs>
+        <rect width="20" height="20" fill="green" mask="url(#alpha)" />
+        <rect x="20" width="20" height="20" fill="green" mask="url(#luminance)" />
+      </svg>
+    )svg");
+
+  Renderer renderer;
+  renderer.draw(document);
+  const RendererBitmap snapshot = NormalizeSnapshot(renderer.takeSnapshot());
+  ASSERT_FALSE(snapshot.empty());
+
+  EXPECT_THAT(PixelAt(snapshot, 10, 10), ElementsAre(0, 128, 0, 255));
+  EXPECT_THAT(PixelAt(snapshot, 30, 10), IsTransparent());
+}
+
 // 21. Mix-blend-mode triggers isolated layer
 TEST(RendererPublicApiTest, MixBlendModeIsolatedLayer) {
   // Use cyan (#00ffff) over yellow (#ffff00) with multiply blend.

@@ -443,6 +443,23 @@ TEST(SVGTextElementCacheTests, SetTextLengthInvalidatesCache) {
   EXPECT_GT(std::abs(posAfter.x - posBefore.x), 10.0);
 }
 
+TEST(SVGTextElementPublicApiTests, TSpanTextLengthAdvancesFollowingText) {
+  SVGDocument doc = instantiateSubtree(R"(
+    <svg viewBox="0 0 200 40">
+      <text id="root" x="20" y="20" font-family="fallback-font" font-size="12px">Some<tspan
+        id="span" textLength="80">long</tspan>text</text>
+    </svg>
+  )");
+
+  auto root = doc.querySelector("#root")->cast<SVGTextElement>();
+  auto span = doc.querySelector("#span")->cast<SVGTSpanElement>();
+  const double adjustedStart = span.getStartPositionOfChar(0).x;
+  const double adjustedEnd = span.getEndPositionOfChar(3).x;
+
+  EXPECT_NEAR(adjustedEnd - adjustedStart, 80.0, 0.5);
+  EXPECT_NEAR(root.getStartPositionOfChar(8).x, adjustedEnd, 1.0);
+}
+
 TEST(SVGTextElementCacheTests, SetPositionInvalidatesCache) {
   SVGDocument doc = instantiateSubtree(R"-(
     <svg viewBox="0 0 200 40">

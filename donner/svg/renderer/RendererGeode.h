@@ -297,7 +297,10 @@ public:
                        const std::optional<Box2d>& filterRegion) override;
   void popFilterLayer() override;
 
-  void pushMask(const std::optional<Box2d>& maskBounds) override;
+  void pushMask(const std::optional<Box2d>& maskBounds) override {
+    pushMask(maskBounds, MaskType::Luminance);
+  }
+  void pushMask(const std::optional<Box2d>& maskBounds, MaskType maskType) override;
   void transitionMaskToContent() override;
   void popMask() override;
 

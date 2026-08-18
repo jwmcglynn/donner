@@ -12,6 +12,7 @@
 #include "donner/base/Transform.h"
 #include "donner/base/Vector2.h"
 #include "donner/css/Color.h"
+#include "donner/svg/core/MaskType.h"
 #include "donner/svg/renderer/geode/GeodeResidentPathComponent.h"
 
 namespace donner {
@@ -387,22 +388,19 @@ public:
   void blitFullTarget(const wgpu::Texture& src, double opacity);
 
   /**
-   * `<mask>` compositing. Same as @ref blitFullTarget but
-   * additionally samples a luminance mask texture and multiplies the
-   * content by the mask's BT.709 luminance (× alpha, matching
-   * tiny-skia's `Mask::fromPixmap(Luminance)`). When `maskBounds` is
-   * provided, pixels outside the rect are discarded so the `<mask>`
-   * element's x/y/width/height are honoured.
+   * `<mask>` compositing. Same as @ref blitFullTarget but additionally samples a mask texture and
+   * derives coverage according to `maskType`. When `maskBounds` is provided, pixels outside the
+   * rect are discarded so the `<mask>` element's x/y/width/height are honoured.
    *
    * @param content Offscreen RGBA8 content texture, premultiplied,
    *   same size as this encoder's target.
    * @param mask Offscreen RGBA8 mask texture, premultiplied, same
-   *   size as `content`. The mask's luminance × alpha becomes a
-   *   per-pixel coverage multiplier on the content.
+   *   size as `content`.
+   * @param maskType Whether mask coverage comes from luminance or alpha.
    * @param maskBounds Optional clip rect in target-pixel space.
    */
   void blitFullTargetMasked(const wgpu::Texture& content, const wgpu::Texture& mask,
-                            const std::optional<Box2d>& maskBounds);
+                            svg::MaskType maskType, const std::optional<Box2d>& maskBounds);
 
   /**
    * `mix-blend-mode` compositing. Blits `layer` across the
@@ -598,7 +596,7 @@ public:
     /// first slot's own buffer-relative offset instead.
     uint64_t firstRecordOffset = 0;
     uint32_t instanceCount = 1;
-    uint32_t vertexCount = 0;   ///< Max fan vertex count over the instances.
+    uint32_t vertexCount = 0;  ///< Max fan vertex count over the instances.
     /// Record slab the instances' records live in. Supplies the persistent
     /// batch-uniform buffer so a steady frame writes nothing; null falls
     /// back to the encoder's per-frame uniform arena.
@@ -622,8 +620,7 @@ public:
    * @param rule Fill rule shared by every instance.
    * @param binding Batch binding (chunk + record span + counts).
    */
-  void fillPathSceneBatch(const css::RGBA& color, FillRule rule,
-                          const SceneBatchBinding& binding);
+  void fillPathSceneBatch(const css::RGBA& color, FillRule rule, const SceneBatchBinding& binding);
 
   /**
    * Fill a path with a linear gradient.
