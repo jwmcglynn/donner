@@ -356,10 +356,10 @@ public:
   /// otherwise not mutating these components on the same registry.
   /// When `cullRectDoc` is present, path outlines, AABBs, and handles
   /// fully outside that document-space rect are skipped before draw.
-  /// `CombinedBoundsOnly` normally skips selected path extraction and stores
-  /// one combined bounds box for low-latency large-selection feedback. During
-  /// an active scale/rotate preview it also captures path outlines so they
-  /// remain visible and aligned with the gesture.
+  /// `CombinedBoundsOnly` skips selected path extraction and stores one
+  /// combined bounds box for low-latency interaction feedback. An active
+  /// scale/rotate preview derives oriented bounds and handles directly from
+  /// gesture-owned geometry without traversing the selection.
   /// @param devicePixelRatio Viewport framebuffer scale used to convert
   ///   logical UI stroke widths into device pixels.
   ///

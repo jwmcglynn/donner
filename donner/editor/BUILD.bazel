@@ -852,10 +852,20 @@ donner_cc_library(
 )
 
 donner_cc_library(
+    name = "document_composite_texture",
+    hdrs = ["DocumentCompositeTexture.h"],
+    deps = [
+        ":imgui_headers",
+        "//donner/base",
+    ],
+)
+
+donner_cc_library(
     name = "render_pane_presenter",
     srcs = ["RenderPanePresenter.cc"],
     hdrs = ["RenderPanePresenter.h"],
     deps = [
+        ":document_composite_texture",
         ":gl_texture_cache",
         ":imgui_headers",
         ":menu_bar_presenter",
@@ -890,6 +900,65 @@ donner_cc_library(
         ":whole_app_worker_config",
         "//donner/base",
     ],
+)
+
+donner_cc_library(
+    name = "editor_shell_presentation",
+    srcs = ["EditorShellPresentation.cc"],
+    hdrs = ["EditorShellPresentation.h"],
+    defines = select({
+        ":wasm_geode_enabled": ["DONNER_EDITOR_WGPU"],
+        "//donner/svg/renderer:renderer_backend_geode": ["DONNER_EDITOR_WGPU"],
+        "//conditions:default": [],
+    }),
+    deps = [
+        ":frame_cost_breakdown",
+        ":gl_texture_cache",
+        ":overlay_renderer",
+        ":presented_frame_composer",
+        ":render_pane_presenter",
+        ":select_tool",
+        ":tracy_wrapper",
+        ":viewport_state",
+        "//donner/base",
+        "//donner/editor/gui:editor_window",
+        "//donner/svg/renderer:renderer_interface",
+    ] + select({
+        ":wasm_geode_enabled": [
+            "//donner/svg/renderer:renderer_geode",
+        ],
+        "//donner/svg/renderer:renderer_backend_geode": [
+            "//donner/svg/renderer:renderer_geode",
+        ],
+        "//conditions:default": [],
+    }),
+)
+
+donner_cc_library(
+    name = "document_presentation_compositor",
+    srcs = ["DocumentPresentationCompositor.cc"],
+    hdrs = ["DocumentPresentationCompositor.h"],
+    defines = select({
+        ":wasm_geode_enabled": ["DONNER_EDITOR_WGPU"],
+        "//donner/svg/renderer:renderer_backend_geode": ["DONNER_EDITOR_WGPU"],
+        "//conditions:default": [],
+    }),
+    deps = [
+        ":document_composite_texture",
+        ":editor_shell_presentation",
+        ":gl_texture_cache",
+        ":presented_frame_composer",
+        ":render_pane_presenter",
+        ":select_tool",
+        ":viewport_state",
+        "//donner/base",
+    ] + select({
+        ":wasm_geode_enabled": [],
+        "//donner/svg/renderer:renderer_backend_geode": [],
+        "//conditions:default": [
+            "//third_party/glad",
+        ],
+    }),
 )
 
 donner_cc_library(
@@ -947,8 +1016,6 @@ donner_cc_library(
     name = "editor_shell",
     srcs = [
         "EditorShell.cc",
-        "EditorShellPresentation.cc",
-        "EditorShellPresentation.h",
         "FillStrokeWidget.cc",
     ],
     hdrs = [
@@ -968,6 +1035,7 @@ donner_cc_library(
         ":compositor_debug_panel",
         ":dialog_presenter",
         ":disclosure_chevron",
+        ":document_presentation_compositor",
         ":document_presenter",
         ":document_save",
         ":document_sync_controller",
@@ -977,6 +1045,7 @@ donner_cc_library(
         ":editor_input_bridge",
         ":editor_sample_catalog",
         ":editor_shell_layout",
+        ":editor_shell_presentation",
         ":editor_symbol_glyphs",
         ":editor_theme",
         ":embedded_svg_icon",

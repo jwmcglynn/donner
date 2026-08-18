@@ -48,6 +48,8 @@ struct CompositedTileTextureIdentity {
 
 /// Approximate resource footprint retained by the editor presentation texture cache.
 struct PresentationResourceStats {
+  /// Bytes retained by an external explicit document-composite target.
+  std::uint64_t documentCompositeBytes = 0;
   /// Bytes retained by active composited tile textures.
   std::uint64_t activeTileBytes = 0;
   /// Bytes retained by the zoom-out overview tile textures.
@@ -157,9 +159,9 @@ struct PresentationCoverageDiagnostics {
  *
  * Composited preview rendering is per-tile: instead of three named bg/promoted/fg
  * textures, the cache owns one GL texture per `CompositedTile` (keyed on the tile id), allocated
- * lazily on first upload and freed when the tile leaves the snapshot. The editor's
- * `RenderPanePresenter` iterates `tiles()` in paint order and blits each tile at its
- * `(canvasOffsetDoc + dragTranslationDoc) * pixelsPerDocUnit` origin.
+ * lazily on first upload and freed when the tile leaves the snapshot. The GL presentation
+ * compositor samples `tiles()` in paint order into one pane-sized texture. WebGPU builds retain
+ * the direct-framebuffer presentation path.
  */
 class GlTextureCache {
 public:
@@ -210,6 +212,8 @@ public:
   ThumbnailTextureView retainThumbnailTextureSnapshot(
       std::uint64_t key, std::shared_ptr<const svg::RendererTextureSnapshot> textureSnapshot);
 
+  /// Report bytes retained by the non-WGPU explicit document compositor.
+  void setDocumentCompositeBytes(std::uint64_t bytes) { documentCompositeBytes_ = bytes; }
   /// Evict every cached thumbnail texture whose key is not in @p liveKeys,
   /// freeing the backing GL/WGPU texture. Called after each Layers-panel render
   /// so thumbnails for removed rows do not leak across refreshes.
@@ -220,9 +224,8 @@ public:
   /// Number of thumbnail textures currently retained (testing/diagnostics).
   [[nodiscard]] std::size_t thumbnailTextureCount() const { return thumbnailTextures_.size(); }
 
-  /// One composite-tile entry as the presenter sees it: the GL
-  /// texture handle (resolved from the upload cache) plus the
-  /// geometry fields the presenter needs to blit in paint order.
+  /// One composite-tile entry as presentation sees it: the GL texture handle
+  /// (resolved from the upload cache) plus its paint-order geometry.
   struct TileView {
     ImTextureID texture = 0;
     std::string id;
@@ -353,6 +356,7 @@ private:
   int metadataOnlyMissCount_ = 0;
   int duplicateLiveTextureCount_ = 0;
   FrameCostBreakdown::CompositedUpload lastCompositedUploadCost_;
+  std::uint64_t documentCompositeBytes_ = 0;
   mutable std::uint64_t peakTrackedResourceBytes_ = 0;
 
 #ifdef DONNER_EDITOR_WGPU

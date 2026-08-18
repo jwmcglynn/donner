@@ -10,6 +10,7 @@
 #include <cstring>
 #include <filesystem>
 #include <iostream>
+#include <iterator>
 #include <optional>
 #include <sstream>
 #include <string>
@@ -283,6 +284,22 @@ std::optional<std::filesystem::path> WriteStaticContentReplay(
   file.metadata.windowHeight = 480;
   file.metadata.displayScale = 1.0;
 
+  repro::ReproViewport viewport;
+  viewport.paneOriginX = 220.0;
+  viewport.paneOriginY = 180.0;
+  viewport.paneSizeW = 200.0;
+  viewport.paneSizeH = 120.0;
+  viewport.devicePixelRatio = 1.0;
+  viewport.zoom = 1.0;
+  viewport.panDocX = 100.0;
+  viewport.panDocY = 60.0;
+  viewport.panScreenX = 320.0;
+  viewport.panScreenY = 240.0;
+  viewport.viewBoxX = 0.0;
+  viewport.viewBoxY = 0.0;
+  viewport.viewBoxW = 200.0;
+  viewport.viewBoxH = 120.0;
+
   for (std::uint64_t frameIndex = 0; frameIndex <= lastFrame; ++frameIndex) {
     repro::ReproFrame frame;
     frame.index = frameIndex;
@@ -290,6 +307,7 @@ std::optional<std::filesystem::path> WriteStaticContentReplay(
     frame.deltaMs = 1000.0 / 60.0;
     frame.mouseX = 320.0;
     frame.mouseY = 240.0;
+    frame.viewport = viewport;
     file.frames.push_back(frame);
   }
 
@@ -2156,6 +2174,7 @@ TEST(GlRnrReplayTest, ContentOnlyDocumentCanvasCaptureMatchesRendererGroundTruth
   repro::GlRnrReplayResult result;
   std::string error;
   ASSERT_GL_REPLAY_OR_SKIP(options, result, error);
+  SCOPED_TRACE(CanonicalReplayDiagnostics(result));
 
   std::optional<svg::RendererBitmap> actual = LoadCaptureBitmap(result, kFirstPresentedReplayFrame);
   ASSERT_TRUE(actual.has_value());
@@ -2190,6 +2209,7 @@ TEST(GlRnrReplayTest, DirectDocumentCanvasCaptureIsNotDimmedByRenderPaneBackgrou
   repro::GlRnrReplayResult result;
   std::string error;
   ASSERT_GL_REPLAY_OR_SKIP(options, result, error);
+  SCOPED_TRACE(CanonicalReplayDiagnostics(result));
 
   std::optional<svg::RendererBitmap> actual = LoadCaptureBitmap(result, kFirstPresentedReplayFrame);
   ASSERT_TRUE(actual.has_value());
@@ -3220,21 +3240,21 @@ TEST(GlRnrReplayTest, HoldFramesBehindRecordsWithheldReplayDiagnostics) {
   repro::GlRnrReplayResult result;
   std::string error;
   ASSERT_GL_REPLAY_OR_SKIP(options, result, error);
+  SCOPED_TRACE(CanonicalReplayDiagnostics(result));
 
-  // The first result is ready on `kFirstPresentedReplayFrame`; `holdFramesBehind = 1` withholds it
-  // for exactly that one poll and releases it on the next frame.
-  const repro::GlRnrReplayFrameDiagnostics* withheld =
-      FindFrameDiagnostics(result, kFirstPresentedReplayFrame);
-  ASSERT_NE(withheld, nullptr);
+  // Viewport initialization decides which replay frame first posts work. Assert the deterministic
+  // hold relative to the completed result instead of pinning that initialization to a frame index.
+  const auto withheld = std::find_if(
+      result.frameDiagnostics.begin(), result.frameDiagnostics.end(),
+      [](const repro::GlRnrReplayFrameDiagnostics& frame) { return frame.replayResultWithheld; });
+  ASSERT_NE(withheld, result.frameDiagnostics.end());
   EXPECT_EQ(withheld->replayWorkerScheduling, repro::GlRnrReplayWorkerScheduling::HoldFramesBehind);
   EXPECT_EQ(withheld->replayWorkerRenderDelayMsForTesting, 1);
   EXPECT_EQ(withheld->replayHoldFramesBehind, 1);
   EXPECT_EQ(withheld->replayResultHoldPollsThisFrame, 1u);
-  EXPECT_TRUE(withheld->replayResultWithheld);
 
-  const repro::GlRnrReplayFrameDiagnostics* released =
-      FindFrameDiagnostics(result, kFirstPresentedReplayFrame + 1);
-  ASSERT_NE(released, nullptr);
+  const auto released = std::next(withheld);
+  ASSERT_NE(released, result.frameDiagnostics.end());
   EXPECT_EQ(released->replayResultHoldPollsThisFrame, 0u);
   EXPECT_FALSE(released->replayResultWithheld);
   EXPECT_NE(FindCapture(result, kFirstPresentedReplayFrame + 1), nullptr);
@@ -3565,13 +3585,10 @@ TEST(GlRnrReplayTest, GeodeDragZoomRebuildsDonnerDGestureBoundsEveryPresentedFra
         << "Selection overlay was not rebuilt for presented zoom frame " << frame;
     EXPECT_TRUE(diagnostics->frameCost.overlay.selectionBoundsOnly)
         << "Active drag should use gesture-owned bounds chrome on presented zoom frame " << frame;
-    // Gesture-owned bounds chrome keeps exactly one selection outline per selected element so the
-    // outline scales and rotates with the presented object; it drops per-element AABBs and
-    // path-point chrome. Pinned by
-    // `OverlayRendererTest.ActiveCombinedBoundsPreviewKeepsScaledSelectionPath`.
-    EXPECT_EQ(diagnostics->frameCost.overlay.pathCount, 1)
-        << "Active drag lost the gesture-scaled selection outline on presented zoom frame "
-        << frame;
+    // Gesture-owned bounds chrome skips live path and text traversal while the worker may hold the
+    // document. The oriented bounds and handles still advance with the presented object.
+    EXPECT_EQ(diagnostics->frameCost.overlay.pathCount, 0)
+        << "Active drag traversed selection paths on presented zoom frame " << frame;
     EXPECT_EQ(diagnostics->frameCost.overlay.handleCount, 4)
         << "Selection transform handles were not rebuilt for presented zoom frame " << frame;
     EXPECT_GT(diagnostics->frameCost.overlay.payloadBytes, 0u)

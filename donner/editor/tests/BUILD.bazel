@@ -368,6 +368,7 @@ donner_cc_test(
     deps = [
         "//donner/base",
         "//donner/base:base_test_utils",
+        "//donner/editor:document_presentation_compositor",
         "//donner/editor:gl_texture_cache",
         "//donner/editor:imgui_headers",
         "//donner/editor:menu_bar_presenter",

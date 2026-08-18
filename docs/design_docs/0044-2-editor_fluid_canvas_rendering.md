@@ -1,7 +1,7 @@
 # Design: Editor Fluid Canvas Rendering
 
 **Status:** Implementation in progress
-**Author:** Codex
+**Author:** Unknown (model-authored; exact identifier not recorded)
 **Created:** 2026-05-27
 
 ## Summary
@@ -422,6 +422,19 @@ thing now and cull it" instead of "allocate a texture and upload it forever."
 
 Selection chrome is UI, not document content. It should not use a full-document raster target.
 
+Cached document tiles have one backend-specific presentation boundary. Geode/WGPU builds sample
+them directly into the window framebuffer. The non-WGPU GL path samples the same tile textures,
+with their full affine placement and paint order, into one pane-sized explicit intermediate and
+presents that texture with one axis-aligned ImGui image. The intermediate reuses unchanged
+compositions, retains no CPU copy of tile pixels, and reports both RGBA8 textures in presentation
+resource diagnostics. `//donner/editor/tests:render_pane_presenter_visual_repro_tests` pins affine
+placement and cache reuse, while `//donner/editor/tests:gl_texture_cache_tests` pins resource
+accounting. The WGPU presenter retains a compatibility-only per-tile fallback for a frame whose
+payload cannot enter the direct Geode underlay.
+`//donner/editor/tests:render_pane_presenter_visual_repro_tests` under `--config=geode` covers that
+fallback, while `//donner/editor/tests:gl_rnr_replay_tests` covers direct Geode and native GL
+presentation.
+
 Replace the current full-canvas overlay texture with:
 
 - immediate Geode drawing for handles, AABBs, marquee, and path outlines directly into the
@@ -432,8 +445,7 @@ Replace the current full-canvas overlay texture with:
 - culling against the visible document rect before path transformation/draw.
 
 In Geode editor builds, the immediate chrome path must use Donner renderer calls, not ImGui path
-commands. The render-pane presenter still uses ImGui to present cached canvas tiles, then
-`EditorWindow` invokes a post-ImGui direct-render callback before surface presentation/readback.
+commands. `EditorWindow` invokes a direct-render callback before surface presentation/readback.
 That callback points `RendererGeode` at the current swapchain texture, preserves existing
 framebuffer contents, pushes a framebuffer-space clip rect for the artboard, and calls
 `OverlayRenderer::drawChromeFromSnapshot`.
@@ -467,6 +479,10 @@ The retained snapshot above does not weaken that rule, because the rule is about
 chrome is re-pointed at the presented transform at draw time, so it never puts a newer transform
 over older pixels. Only geometry, which no reprojection can reconcile, is allowed to lead, and only
 by the single render it takes the gate to release.
+
+During an active move, resize, or rotate gesture, the immediate chrome uses gesture-owned oriented
+bounds and handles only. It does not traverse selected geometry or text layout on each pointer
+frame. Detailed path outlines and text baselines return after the interaction settles.
 
 Large selections use LOD:
 
