@@ -144,6 +144,8 @@ private:
                                            std::string* error);
   [[nodiscard]] nlohmann::json sourceStateJson() const;
 
+public:
+  /// CPU mirror of the editor's tile presentation cache, exposed for focused composition tests.
   class HeadlessTextureCache {
   public:
     void reset();
@@ -167,6 +169,7 @@ private:
     std::vector<DisplayTileView> tiles_;
   };
 
+private:
   [[nodiscard]] bool renderCurrentFrame(std::vector<CapturedRenderResult>* results,
                                         std::string* error);
   [[nodiscard]] std::optional<svg::RendererBitmap> composeDisplayFrameBitmap(
