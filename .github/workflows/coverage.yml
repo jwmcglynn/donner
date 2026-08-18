@@ -1,8 +1,27 @@
 name: Coverage
 
-# Runs coverage on: main merges (the Codecov baseline), PR pushes (INCREMENTAL:
-# only the changed code's affected targets, so Codecov can still patch-annotate),
-# and on-demand via workflow_dispatch.
+# Runs coverage on: a NIGHTLY schedule (the FULL Codecov baseline), main pushes
+# (INCREMENTAL, tracking the baseline between nightlies), PR pushes
+# (INCREMENTAL: only the changed code's affected targets, so Codecov can still
+# patch-annotate), and on-demand via workflow_dispatch (full).
+#
+# Cadence, and what it costs. A full instrumented run covers four package trees
+# and is the expensive thing here; running one on every main push spent that
+# cost per merge to re-measure lines no merge had touched. The baseline is now
+# cut once a night, and main pushes cover only their own affected targets. What
+# makes that coherent for Codecov is codecov.yml's `flags: unittests:
+# carryforward: true`: a partial upload does not blank the files it omits, it
+# inherits their coverage from the previous report. So main's coverage graph is
+# the last nightly plus each merge's own delta, and every upload still lands.
+#
+# The accepted tradeoff is baseline staleness of up to one day: a line that no
+# merge touched since the last nightly is reported from that nightly's
+# measurement, not from a fresh one. Coverage of such a line can only move if
+# something reached it, and anything that reaches it is in some merge's
+# affected set, so the staleness window bounds drift rather than hiding it. A
+# main push that cannot be scoped to a genuine subset still runs FULL, so an
+# infra change or a bazel-diff failure re-cuts the baseline immediately instead
+# of waiting for the night.
 #
 # Codecov's patch-coverage signal ("X% of changed lines covered") requires the
 # PR head's own coverage upload measured against the main-branch baseline, so we
@@ -52,6 +71,14 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  schedule:
+    # Nightly FULL baseline, 08:10 UTC. Off the hour so it does not collide
+    # with the other scheduled workflows, and late enough in the UTC day that
+    # it is not competing with interactive use of the shared execution
+    # backend. Main pushes diff against the newest successful run of THIS
+    # trigger, so if a nightly is missed the next main push falls back to a
+    # full run and re-cuts the baseline itself.
+    - cron: "10 8 * * *"
   workflow_dispatch: # Re-run on demand (e.g. before final merge)
 
 permissions:
@@ -114,7 +141,9 @@ jobs:
       # this job outright and cost whole CI round trips. Retry the download as
       # a whole with backoff, and let curl retry inside each attempt too.
       - name: Download bazel-diff
-        if: github.event_name == 'pull_request'
+        # Both incremental paths need it: PRs diff against their merge base,
+        # main pushes diff against the last nightly baseline.
+        if: github.event_name == 'pull_request' || github.event_name == 'push'
         shell: bash
         run: |
           set -euo pipefail
@@ -136,23 +165,60 @@ jobs:
           echo "error: bazel-diff download failed after 5 attempts." >&2
           exit 1
 
-      - id: pr-meta
-        name: Extract PR base SHA for hash caching
-        if: github.event_name == 'pull_request'
+      # Resolve what this run diffs against. A PR diffs against its base
+      # branch; a main push diffs against the commit the last nightly baseline
+      # measured. Emitting both from one step keeps the hash cache keyed the
+      # same way for both paths.
+      - id: diff-meta
+        name: Resolve diff base
+        if: github.event_name == 'pull_request' || github.event_name == 'push'
         shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
-          echo "base_sha=$(python3 -c 'import json, os; print(json.load(open(os.environ["GITHUB_EVENT_PATH"], encoding="utf-8")).get("pull_request", {}).get("base", {}).get("sha", ""))')" >> "$GITHUB_OUTPUT"
+
+          if [[ "$EVENT_NAME" == "pull_request" ]]; then
+            base_sha="$(python3 -c 'import json, os; print(json.load(open(os.environ["GITHUB_EVENT_PATH"], encoding="utf-8")).get("pull_request", {}).get("base", {}).get("sha", ""))')"
+            echo "base_sha=$base_sha" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # The newest successful scheduled run of THIS workflow is the last
+          # full baseline, and its head SHA is the commit that baseline
+          # measured. Anything merged since then is what this push must cover.
+          # Fail open to an empty base: the determine step reads that as "no
+          # baseline to diff against" and runs FULL, which re-cuts the
+          # baseline immediately instead of silently reporting a subset
+          # against a baseline that may not exist.
+          base_sha=""
+          if ! base_sha="$(gh api -H "Accept: application/vnd.github+json" \
+            "/repos/$REPOSITORY/actions/workflows/coverage.yml/runs?event=schedule&status=success&branch=main&per_page=1" \
+            --jq '.workflow_runs[0].head_sha // ""')"; then
+            echo "Could not query the last nightly baseline; coverage will run full."
+            base_sha=""
+          fi
+          if [[ -n "$base_sha" ]] && ! git cat-file -e "$base_sha^{commit}" 2>/dev/null; then
+            echo "Last nightly baseline $base_sha is not in this checkout; coverage will run full."
+            base_sha=""
+          fi
+          echo "Nightly baseline for this push: ${base_sha:-<none>}"
+          echo "base_sha=$base_sha" >> "$GITHUB_OUTPUT"
 
       # Shares the cache convention (and main-push pre-warm) with main.yml's
       # determine-targets: base hashes are keyed by (bazel-diff version,
-      # base SHA) and skip half the bazel-diff work on a hit.
+      # base SHA) and skip half the bazel-diff work on a hit. The main-push
+      # path benefits more than the PR path does: every push between two
+      # nightlies diffs against the SAME baseline commit, so the baseline
+      # hashes are computed once a night and reused all day.
       - name: Cache bazel-diff base hashes
-        if: github.event_name == 'pull_request' && steps.pr-meta.outputs.base_sha != ''
+        if: steps.diff-meta.outputs.base_sha != ''
         uses: actions/cache@v6
         with:
-          path: ~/.cache/bazel-diff-base-hashes/${{ steps.pr-meta.outputs.base_sha }}.json
-          key: bazel-diff-base-hashes-tt-${{ env.BAZEL_DIFF_TAG }}-${{ steps.pr-meta.outputs.base_sha }}
+          path: ~/.cache/bazel-diff-base-hashes/${{ steps.diff-meta.outputs.base_sha }}.json
+          key: bazel-diff-base-hashes-tt-${{ env.BAZEL_DIFF_TAG }}-${{ steps.diff-meta.outputs.base_sha }}
 
       - id: determine
         name: Determine coverage targets
@@ -166,6 +232,7 @@ jobs:
           SHA: ${{ github.sha }}
           TRIGGERING_ACTOR: ${{ github.triggering_actor }}
           SELFHOSTED_LINUX_RUNNER: ${{ vars.SELFHOSTED_LINUX_RUNNER }}
+          DIFF_BASE_SHA: ${{ steps.diff-meta.outputs.base_sha }}
         run: |
           set -euo pipefail
 
@@ -252,24 +319,33 @@ jobs:
             local fallback="$1"
             local reason="$2"
 
-            # Non-PR events (main pushes) always run: that baseline is what
-            # lets PR-side fallbacks be skipped at all.
-            if [[ "$EVENT_NAME" != "pull_request" ]]; then
-              echo true
-              return
-            fi
-            if [[ "$reason" == "no_instrumentable_targets" ]]; then
+            # Nothing measurable is nothing measurable, whatever the trigger.
+            # These two reasons emit an EMPTY target set because the affected
+            # code has no instrumentable C/C++, or no test to produce profile
+            # data from. Running anyway builds an empty LCOV report and trips
+            # the report guards: a deterministic red no rerun can clear. The
+            # main-push path reaches these through exactly the same queries as
+            # the PR path, and they fail closed the same way.
+            if [[ "$reason" == "no_instrumentable_targets" || "$reason" == "no_test_targets" ]]; then
               echo false
               return
             fi
             # A genuine incremental subset, the cheap smoke subset, and an
-            # explicit opt-in all run on a PR. Everything else is a full
-            # fallback whose baseline is the main-push run.
+            # explicit opt-in always run.
             if [[ "$fallback" == "false" || "$reason" == "coverage_smoke" || "$reason" == "full_test_label" ]]; then
               echo true
               return
             fi
-            echo false
+            # What is left is a FULL fallback. On a PR that is the ~21-minute
+            # re-run this workflow exists to avoid, and the main-line baseline
+            # already covers those lines, so skip. Off a PR it IS the baseline
+            # (the nightly, a manual dispatch, or a main push whose diff could
+            # not be scoped), so run it: that is what re-cuts the baseline.
+            if [[ "$EVENT_NAME" == "pull_request" ]]; then
+              echo false
+              return
+            fi
+            echo true
           }
 
           emit_targets() {
@@ -306,15 +382,50 @@ jobs:
             } > "$diagnostics_dir/summary.txt"
           }
 
-          if [[ "$EVENT_NAME" != "pull_request" ]]; then
-            echo "Non-PR event; using full coverage target set."
-            emit_targets true non_pr "$FULL_COVERAGE_TARGETS"
+          # Which events cut a FULL baseline, and which are incremental.
+          #
+          # The nightly schedule is the baseline: one full instrumented run a
+          # day, whose upload is what every later partial upload carries
+          # forward from. A manual dispatch is the operator asking for that
+          # same full picture now.
+          #
+          # A main push is incremental against the newest successful nightly.
+          # It uses the identical bazel-diff machinery, guards, and fail-closed
+          # behavior as the PR path; only the diff base differs. If no nightly
+          # baseline can be resolved (none has run yet, the run list is
+          # unreachable, or its commit is not in this checkout), it runs FULL,
+          # which re-cuts the baseline on the spot.
+          if [[ "$EVENT_NAME" == "schedule" ]]; then
+            echo "Nightly schedule; cutting the full coverage baseline."
+            emit_targets true nightly_baseline "$FULL_COVERAGE_TARGETS"
             exit 0
           fi
 
-          eval "$(
-            python3 -c 'import json, os, shlex; event = json.load(open(os.environ["GITHUB_EVENT_PATH"], encoding="utf-8")); pr = event.get("pull_request", {}); labels = [label.get("name", "") for label in pr.get("labels", [])]; values = {"BASE_SHA": pr.get("base", {}).get("sha", ""), "HEAD_SHA": pr.get("head", {}).get("sha", ""), "FORCE_FULL_TEST": "true" if "ci:full-test" in labels else "false"}; print("\n".join(f"{key}={shlex.quote(value)}" for key, value in values.items()))'
-          )"
+          if [[ "$EVENT_NAME" != "pull_request" && "$EVENT_NAME" != "push" ]]; then
+            echo "Manual or other non-incremental event; using full coverage target set."
+            emit_targets true manual_full "$FULL_COVERAGE_TARGETS"
+            exit 0
+          fi
+
+          if [[ "$EVENT_NAME" == "push" ]]; then
+            BASE_SHA="$DIFF_BASE_SHA"
+            HEAD_SHA="$SHA"
+            FORCE_FULL_TEST=false
+            if [[ -z "$BASE_SHA" ]]; then
+              echo "No nightly coverage baseline to diff against; using full coverage target set."
+              emit_targets true no_nightly_baseline "$FULL_COVERAGE_TARGETS"
+              exit 0
+            fi
+            if [[ "$BASE_SHA" == "$HEAD_SHA" ]]; then
+              echo "This commit is the nightly baseline itself; using full coverage target set."
+              emit_targets true no_nightly_baseline "$FULL_COVERAGE_TARGETS"
+              exit 0
+            fi
+          else
+            eval "$(
+              python3 -c 'import json, os, shlex; event = json.load(open(os.environ["GITHUB_EVENT_PATH"], encoding="utf-8")); pr = event.get("pull_request", {}); labels = [label.get("name", "") for label in pr.get("labels", [])]; values = {"BASE_SHA": pr.get("base", {}).get("sha", ""), "HEAD_SHA": pr.get("head", {}).get("sha", ""), "FORCE_FULL_TEST": "true" if "ci:full-test" in labels else "false"}; print("\n".join(f"{key}={shlex.quote(value)}" for key, value in values.items()))'
+            )"
+          fi
 
           if [[ -z "$BASE_SHA" || -z "$HEAD_SHA" ]]; then
             echo "Missing PR base/head SHA; using full coverage target set."
@@ -630,7 +741,21 @@ jobs:
           # untrimmed set / target; variant-only targets (no base sibling)
           # are never dropped. See tools/coverage_variant_trim.py and
           # docs/design_docs/0029-2.
+          #
+          # PR-only. On a main push the incremental run is the thing keeping
+          # the baseline current between nightlies, so it must measure what
+          # the nightly measured: dropping variant wrappers there would report
+          # backend-gated lines as uncovered on every merge that touches them
+          # and make main's coverage graph oscillate with the trim rather than
+          # with the code. A PR upload is compared against main and annotates a
+          # patch, so the redundant parameterizations cost time without moving
+          # that signal.
           printf '%s\n' $affected > "$work_dir/affected-pretrim.txt"
+          if [[ "$EVENT_NAME" != "pull_request" ]]; then
+            echo "Main-line incremental run; keeping all variants so the baseline stays comparable."
+            emit_targets false bazel_diff "$affected"
+            exit 0
+          fi
           if trimmed="$(python3 tools/coverage_variant_trim.py \
               --affected-file "$work_dir/affected-pretrim.txt" \
               --label-kind-file "$label_kind_file" \
@@ -730,10 +855,15 @@ jobs:
 
       - name: Generate coverage
         shell: bash
+        env:
+          COVERAGE_TARGETS: ${{ needs.determine-targets.outputs.targets }}
+          COVERAGE_FALLBACK: ${{ needs.determine-targets.outputs.fallback }}
+          COVERAGE_FALLBACK_REASON: ${{ needs.determine-targets.outputs.fallback_reason }}
+          COVERAGE_TARGET_COUNT: ${{ needs.determine-targets.outputs.target_count }}
         run: |
           set -euo pipefail
-          read -r -a TARGETS <<< "${{ needs.determine-targets.outputs.targets }}"
-          echo "Coverage target selection: fallback=${{ needs.determine-targets.outputs.fallback }} reason=${{ needs.determine-targets.outputs.fallback_reason }} count=${{ needs.determine-targets.outputs.target_count }}"
+          read -r -a TARGETS <<< "$COVERAGE_TARGETS"
+          echo "Coverage target selection: fallback=$COVERAGE_FALLBACK reason=$COVERAGE_FALLBACK_REASON count=$COVERAGE_TARGET_COUNT"
           printf "Coverage targets:\n"
           printf "  %s\n" "${TARGETS[@]}"
           echo "::group::Disk before coverage"
@@ -864,10 +994,15 @@ jobs:
 
       - name: Fetch Bazel LLVM toolchain
         shell: bash
+        env:
+          COVERAGE_TARGETS: ${{ needs.determine-targets.outputs.targets }}
+          COVERAGE_FALLBACK: ${{ needs.determine-targets.outputs.fallback }}
+          COVERAGE_FALLBACK_REASON: ${{ needs.determine-targets.outputs.fallback_reason }}
+          COVERAGE_TARGET_COUNT: ${{ needs.determine-targets.outputs.target_count }}
         run: |
           set -euo pipefail
-          read -r -a TARGETS <<< "${{ needs.determine-targets.outputs.targets }}"
-          echo "Coverage target selection: fallback=${{ needs.determine-targets.outputs.fallback }} reason=${{ needs.determine-targets.outputs.fallback_reason }} count=${{ needs.determine-targets.outputs.target_count }}"
+          read -r -a TARGETS <<< "$COVERAGE_TARGETS"
+          echo "Coverage target selection: fallback=$COVERAGE_FALLBACK reason=$COVERAGE_FALLBACK_REASON count=$COVERAGE_TARGET_COUNT"
           printf "Coverage targets:\n"
           printf "  %s\n" "${TARGETS[@]}"
 
@@ -902,12 +1037,17 @@ jobs:
 
       - name: Generate coverage
         shell: bash
+        env:
+          COVERAGE_TARGETS: ${{ needs.determine-targets.outputs.targets }}
+          COVERAGE_FALLBACK: ${{ needs.determine-targets.outputs.fallback }}
+          COVERAGE_FALLBACK_REASON: ${{ needs.determine-targets.outputs.fallback_reason }}
+          COVERAGE_TARGET_COUNT: ${{ needs.determine-targets.outputs.target_count }}
         run: |
           set -euo pipefail
           export DONNER_CI_DIAGNOSTICS_DIR="$RUNNER_TEMP/donner-ci-diagnostics"
           echo "DONNER_CI_DIAGNOSTICS_DIR=$DONNER_CI_DIAGNOSTICS_DIR" >> "$GITHUB_ENV"
-          read -r -a TARGETS <<< "${{ needs.determine-targets.outputs.targets }}"
-          echo "Coverage target selection: fallback=${{ needs.determine-targets.outputs.fallback }} reason=${{ needs.determine-targets.outputs.fallback_reason }} count=${{ needs.determine-targets.outputs.target_count }}"
+          read -r -a TARGETS <<< "$COVERAGE_TARGETS"
+          echo "Coverage target selection: fallback=$COVERAGE_FALLBACK reason=$COVERAGE_FALLBACK_REASON count=$COVERAGE_TARGET_COUNT"
           tools/coverage.sh --quiet --no-html "${TARGETS[@]}"
 
       - name: Upload coverage artifact
