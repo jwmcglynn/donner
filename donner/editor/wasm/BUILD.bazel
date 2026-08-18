@@ -246,7 +246,7 @@ editor_wasm_geode_transitioned_target(
         "manual",
         "wasm",
     ],
-    visibility = ["//visibility:private"],
+    visibility = ["//donner/editor/wasm/tests:__pkg__"],
 )
 
 serve_http(

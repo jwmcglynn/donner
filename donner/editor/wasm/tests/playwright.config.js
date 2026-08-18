@@ -27,6 +27,11 @@ module.exports = defineConfig({
   timeout: 30000,
   use: {
     ...devices["Desktop Chrome"],
+    // Playwright normally swaps in Chromium's legacy headless shell when
+    // headless. The regular Chromium channel uses the new headless path, which
+    // presents the transferred WebGPU canvas while still opening no window.
+    channel: "chromium",
+    headless: true,
     ignoreHTTPSErrors: true,
     launchOptions: {
       args: [

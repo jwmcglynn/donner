@@ -207,26 +207,14 @@ test.use({
 });
 
 async function readWebGpuDiagnostics(page: Page) {
-  const browser = await page.evaluate(async () => {
+  const browser = await page.evaluate(() => {
     const gpu = navigator.gpu;
-    let fallbackAdapterAvailable = false;
-    let adapterRequestError: string | null = null;
-    if (gpu) {
-      try {
-        fallbackAdapterAvailable =
-          (await gpu.requestAdapter({ forceFallbackAdapter: true })) !== null;
-      } catch (error) {
-        adapterRequestError = String(error);
-      }
-    }
 
     return {
       isSecureContext,
       crossOriginIsolated,
       hasSharedArrayBuffer: typeof SharedArrayBuffer !== "undefined",
       hasNavigatorGpu: Boolean(gpu),
-      fallbackAdapterAvailable,
-      adapterRequestError,
       selectedBackend: window.__donnerBackend,
       userAgent: navigator.userAgent,
     };
@@ -293,15 +281,20 @@ async function openEditor(page: Page, options: OpenEditorOptions = {}): Promise<
     url.searchParams.set("wgpuReadbackStats", "1");
   }
   const fatalMessages: string[] = [];
+  const recordFatalMessage = (message: string) => {
+    const boundedMessage = message.replace(/\s+/g, " ").slice(0, 2000);
+    fatalMessages.push(boundedMessage);
+    console.error(`browser fatal: ${boundedMessage}`);
+  };
 
   page.on("console", (message) => {
     const text = message.text();
     if (kFatalRuntimePattern.test(text)) {
-      fatalMessages.push(`[console:${message.type()}] ${text}`);
+      recordFatalMessage(`[console:${message.type()}] ${text}`);
     }
   });
   page.on("pageerror", (error) => {
-    fatalMessages.push(`[pageerror] ${error.stack || error.message}`);
+    recordFatalMessage(`[pageerror] ${error.stack || error.message}`);
   });
 
   await page.goto(url.toString(), { waitUntil: "domcontentloaded" });

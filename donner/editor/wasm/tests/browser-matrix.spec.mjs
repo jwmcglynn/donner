@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import test from "node:test";
@@ -8,6 +8,163 @@ import { fileURLToPath } from "node:url";
 const require = createRequire(import.meta.url);
 const testDirectory = path.dirname(fileURLToPath(import.meta.url));
 const repositoryRoot = path.resolve(testDirectory, "../../../..");
+
+test("Playwright version stays synchronized across package locks and browser metadata", () => {
+  const packageJson = JSON.parse(readFileSync(path.join(testDirectory, "package.json"), "utf8"));
+  const packageLock = JSON.parse(
+    readFileSync(path.join(testDirectory, "package-lock.json"), "utf8"),
+  );
+  const playwrightVersion = packageJson.devDependencies["@playwright/test"];
+  assert.match(playwrightVersion, /^\d+\.\d+\.\d+$/);
+  assert.equal(packageLock.packages[""].devDependencies["@playwright/test"], playwrightVersion);
+  for (const packageName of ["@playwright/test", "playwright", "playwright-core"]) {
+    assert.equal(
+      packageLock.packages[`node_modules/${packageName}`].version,
+      playwrightVersion,
+      `${packageName} in package-lock.json must match package.json`,
+    );
+  }
+
+  const pnpmLock = readFileSync(path.join(testDirectory, "pnpm-lock.yaml"), "utf8");
+  for (
+    const lockEntry of [
+      `specifier: ${playwrightVersion}`,
+      `version: ${playwrightVersion}`,
+      `playwright@${playwrightVersion}:`,
+      `playwright-core@${playwrightVersion}:`,
+    ]
+  ) {
+    assert.ok(pnpmLock.includes(lockEntry), `pnpm-lock.yaml is missing ${lockEntry}`);
+  }
+  const scopedPackageKey = `@playwright/test@${playwrightVersion}`;
+  assert.ok(
+    pnpmLock.includes(`'${scopedPackageKey}':`) || pnpmLock.includes(`"${scopedPackageKey}":`),
+    `pnpm-lock.yaml is missing the exact ${scopedPackageKey} key`,
+  );
+
+  const browserMetadataPath = path.join(
+    testDirectory,
+    `browsers.${playwrightVersion}.json`,
+  );
+  assert.ok(existsSync(browserMetadataPath), "browser metadata filename must match Playwright");
+  const browserMetadata = JSON.parse(readFileSync(browserMetadataPath, "utf8"));
+  assert.equal(browserMetadata.playwrightVersion, playwrightVersion);
+  assert.equal(
+    browserMetadata.comment,
+    `Pinned from playwright-core ${playwrightVersion}; update with the npm lock.`,
+  );
+});
+
+test("Bazel owns a hermetic no-window Chromium browser lane", () => {
+  const moduleFile = readFileSync(path.join(repositoryRoot, "MODULE.bazel"), "utf8");
+  assert.match(
+    moduleFile,
+    /bazel_dep\(name = "rules_playwright", version = "0\.5\.3"/,
+    "MODULE.bazel must pin the browser repository rule",
+  );
+  assert.match(
+    moduleFile,
+    /browsers_json = "\/\/donner\/editor\/wasm\/tests:browsers\.1\.62\.1\.json"/,
+    "the browser revisions must come from the Playwright version in package-lock.json",
+  );
+  assert.match(
+    moduleFile,
+    /builds\/cft\/151\.0\.7922\.34\/mac-arm64\/chrome-mac-arm64\.zip/,
+    "macOS remote tests must use Playwright's Chrome-for-Testing artifact path",
+  );
+  assert.match(
+    moduleFile,
+    /"playwright-chromium-mac14-arm64": "playwright_chromium_mac_arm64"/,
+    "the default rules_playwright macOS archive must be replaced hermetically",
+  );
+  assert.match(
+    moduleFile,
+    /"playwright-chromium-mac15-arm64": "playwright_chromium_mac_arm64"/,
+    "the latest supported rules_playwright macOS archive must be replaced hermetically",
+  );
+
+  const buildFilePath = path.join(testDirectory, "BUILD.bazel");
+  assert.ok(existsSync(buildFilePath), "Wasm browser tests need a Bazel package");
+  const buildFile = readFileSync(buildFilePath, "utf8");
+  assert.match(buildFile, /playwright_bin\.playwright_test\(/);
+  assert.match(buildFile, /name = "chromium_remote_smoke"/);
+  const smokeTest = readFileSync(path.join(testDirectory, "smoke.spec.ts"), "utf8");
+  const localSmokeImports = [...smokeTest.matchAll(/from "\.\/([^"]+)"/g)].map(
+    ([, importedModule]) => `${importedModule}.ts`,
+  );
+  for (const importedFile of localSmokeImports) {
+    assert.ok(
+      buildFile.includes(`"${importedFile}"`),
+      `the Bazel browser lane is missing smoke.spec.ts dependency ${importedFile}`,
+    );
+  }
+  assert.match(buildFile, /"@playwright\/\/:chromium"/);
+  assert.match(
+    buildFile,
+    /"\/\/donner\/editor\/wasm:_wasm_web_package_for_serve"/,
+    "the browser lane must own the editor-Wasm transition instead of requiring caller flags",
+  );
+  const editorBuildFile = readFileSync(path.join(testDirectory, "..", "BUILD.bazel"), "utf8");
+  assert.match(
+    editorBuildFile,
+    /editor_wasm_geode_transitioned_target\([\s\S]*?name = "_wasm_web_package_for_serve"[\s\S]*?visibility = \["\/\/donner\/editor\/wasm\/tests:__pkg__"\]/,
+    "only the browser-test package should be able to consume the transitioned web package",
+  );
+  assert.match(
+    buildFile,
+    /"PLAYWRIGHT_BROWSERS_PATH": "\$\(rootpath @playwright\/\/:chromium\)\/\.\.\/"/,
+  );
+  assert.match(
+    buildFile,
+    /target_compatible_with = \[[\s\S]*?"@platforms\/\/cpu:aarch64"[\s\S]*?\] \+ select\(\{[\s\S]*?"@platforms\/\/os:macos": \[\][\s\S]*?"@platforms\/\/os:linux": \[\][\s\S]*?"\/\/conditions:default": \["@platforms\/\/:incompatible"\]/,
+    "the headless browser test must allow only macOS and Linux ARM64 execution",
+  );
+
+  const chromiumConfig = readFileSync(path.join(testDirectory, "playwright.config.js"), "utf8");
+  assert.match(
+    chromiumConfig,
+    /channel:\s*"chromium"/,
+    "the regular Chromium build preserves WebGPU presentation without opening a window",
+  );
+});
+
+test("browser diagnostics do not manufacture fatal adapter failures", () => {
+  const smokeTest = readFileSync(path.join(testDirectory, "smoke.spec.ts"), "utf8");
+  assert.doesNotMatch(
+    smokeTest,
+    /requestAdapter\(\{ forceFallbackAdapter: true \}\)/,
+    "an optional fallback-adapter probe must not emit a fatal-class browser warning",
+  );
+  assert.match(
+    smokeTest,
+    /const recordFatalMessage[\s\S]*?fatalMessages\.push[\s\S]*?console\.error[\s\S]*?page\.on\("console"[\s\S]*?recordFatalMessage[\s\S]*?page\.on\("pageerror"[\s\S]*?recordFatalMessage/,
+    "startup failures must be emitted while they are captured, before openEditor can time out",
+  );
+});
+
+test("remote browser server preserves bounded request failures", () => {
+  const server = readFileSync(path.join(testDirectory, "remote-webserver.mjs"), "utf8");
+  assert.match(
+    server,
+    /function describeServerError[\s\S]*?replaceAll\(root, "<package>"\)[\s\S]*?if \(error\?\.code !== "ENOENT"\) \{[\s\S]*?console\.error/,
+    "the remote webserver must preserve bounded package and request failures in test.log",
+  );
+  assert.match(
+    server,
+    /\.replace\(\/\(\?:\\\/\[\^\\s\/:\]\+\)\{2,\}\/g, "<path>"\)/,
+    "server diagnostics must scrub absolute paths outside the package root",
+  );
+  assert.match(
+    server,
+    /\.slice\(0, 512\)/,
+    "server diagnostics must stay bounded in remote test logs",
+  );
+  assert.match(
+    server,
+    /console\.error\(`remote-webserver request failed: \$\{describeServerError\(error\)\}`\)/,
+    "non-ENOENT failures must emit the sanitized diagnostic",
+  );
+});
 
 test("CI discovers Firefox, WebKit, and real Safari compatibility regressions", () => {
   const config = require("./playwright.compatibility.config.js");
@@ -87,17 +244,17 @@ test("CI discovers Firefox, WebKit, and real Safari compatibility regressions", 
     .replace(/\\\s*\n\s*/g, " ")
     .replace(/\s+/g, " ");
   const laneCommands = [
-    'run_lane "chromium-default" bash donner/editor/wasm/tests/run_tests.sh --headed',
-    'run_lane "firefox-geode-resize" npm --prefix donner/editor/wasm/tests' +
-      " run test:compatibility -- --project=firefox-geode-resize --headed",
-    'run_lane "webkit-geode-carousel" npm --prefix donner/editor/wasm/tests' +
-      " run test:compatibility -- --project=webkit-geode-carousel --headed",
-    'run_lane "firefox-composited-invariants" bash' +
-      " donner/editor/wasm/tests/run_tests.sh --headed" +
-      " --config=playwright.composited-firefox.config.js",
-    'run_lane "composited-chromium" bash' +
-      " donner/editor/wasm/tests/run_tests.sh --headed" +
-      " --config=playwright.composited-chromium.config.js",
+    "run_lane \"chromium-default\" bash donner/editor/wasm/tests/run_tests.sh --headed",
+    "run_lane \"firefox-geode-resize\" npm --prefix donner/editor/wasm/tests"
+    + " run test:compatibility -- --project=firefox-geode-resize --headed",
+    "run_lane \"webkit-geode-carousel\" npm --prefix donner/editor/wasm/tests"
+    + " run test:compatibility -- --project=webkit-geode-carousel --headed",
+    "run_lane \"firefox-composited-invariants\" bash"
+    + " donner/editor/wasm/tests/run_tests.sh --headed"
+    + " --config=playwright.composited-firefox.config.js",
+    "run_lane \"composited-chromium\" bash"
+    + " donner/editor/wasm/tests/run_tests.sh --headed"
+    + " --config=playwright.composited-chromium.config.js",
   ];
   let searchFrom = 0;
   for (const laneCommand of laneCommands) {
