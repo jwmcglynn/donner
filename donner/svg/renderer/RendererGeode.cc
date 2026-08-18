@@ -2905,8 +2905,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
         if (pendingBatch->sceneChunkBufferId == chunkId &&
             pendingBatch->sceneRecordBufferId == recordBufId &&
             pendingBatch->sceneClipVersion == clipVersion &&
-            pendingBatch->sceneFirstInstance + pendingBatch->sceneInstances.size() ==
-                recordIndex) {
+            pendingBatch->sceneFirstInstance + pendingBatch->sceneInstances.size() == recordIndex) {
           appendSceneInstance(*pendingBatch, current);
         } else {
           flushPendingBatch();
@@ -3082,10 +3081,9 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
   void startPending(Registry* sourceRegistry, Entity sourceEntity, const Path& path,
                     const geode::GeoEncoder::ScenePaint& paint, FillRule rule,
                     const geode::EncodedPath* encoded, geode::GeodeResidentSlot* residentSlot,
-                    const wgpu::Buffer& chunk, const wgpu::Buffer& recordBuffer,
-                    uint64_t chunkId, uint64_t recordBufferId, uint32_t recordIndex,
-                    uint64_t recordOffset, uint64_t clipVersion,
-                    const PendingBatch::SceneInstance& instance) {
+                    const wgpu::Buffer& chunk, const wgpu::Buffer& recordBuffer, uint64_t chunkId,
+                    uint64_t recordBufferId, uint32_t recordIndex, uint64_t recordOffset,
+                    uint64_t clipVersion, const PendingBatch::SceneInstance& instance) {
     if (!paint.isGradient()) {
       startSameEntitySingleton(sourceRegistry, sourceEntity, path, paint.color, rule, encoded,
                                residentSlot);
