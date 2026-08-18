@@ -93,6 +93,9 @@ Reducing the raw totals is useful, but correctness and classification are the ac
   - [ ] Resolve pixel centers and non-integer nearest-grid behavior for `<image>` and `<feImage>` on
         both renderers, then enable `painting/image-rendering/on-feImage.svg` and
         `optimizeSpeed.svg` when the independent oracle agrees.
+  - [ ] Validate programmatic `ImageResource` payload length against `width * height * 4` before
+        premultiplication or upload. Loader-produced SVG images are already dimension and byte
+        budget constrained; this hardens direct embedder construction.
   - [ ] Verify property mapping, CPU filter sampling, Geode sampling, and the resvg category with
         `//donner/svg/properties/tests:properties_tests`,
         `//donner/svg/renderer/tests:filter_graph_executor_tests`,

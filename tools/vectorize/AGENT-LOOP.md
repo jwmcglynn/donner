@@ -115,32 +115,30 @@ python3 tools/vectorize/vectorize.py \
 Outputs land in `<workdir>`: `score.json`, `rendered.png` (the donner-svg
 render), and `diff.png` (the error heatmap).
 
-Useful flags: `--background white|black|gray` (composite background; use
-`black` for the dark Geode splash), `--threshold N` (diff-pixel sensitivity),
+Useful flags: `--background white|black|gray` (composite background),
+`--threshold N` (diff-pixel sensitivity),
 `--grid N` (NxN worst-tile grid), `--worst K` (tiles reported),
 `--width/--height` (render size override; defaults to the reference size),
 `--renderer <path>` (explicit donner-svg binary).
 
-### Starting a real vectorization session (the Geode v1.0 splash)
+### Starting a real vectorization session
 
-The reference raster is the `Geode` splash (1536x1024 RGB). It lives in the
-zettelkasten, not in this repo:
-`/Users/jwm/Documents/zettelkasten/assets/images/donner/geode-splash-v2.png`
-(SHA-256 `0e536ed95bbbfc8aac1677fc425a53e5e41939b5407cd94db470ecae08a77246`).
+Supply the reference raster explicitly. Reference images may be proprietary or
+licensed separately, so keep them outside this repository unless their license
+and publication status have been reviewed.
 
 ```
 # 1. Build the render oracle once.
 bazel build //donner/svg/tool:donner-svg
 
-# 2. Start from an empty/rough candidate and iterate. Use --background black
-#    because the splash is near-black. Re-run after every SVG edit.
+# 2. Start from an empty/rough candidate and iterate. Re-run after every SVG edit.
 python3 tools/vectorize/vectorize.py \
-    --reference /Users/jwm/Documents/zettelkasten/assets/images/donner/geode-splash-v2.png \
-    --svg tools/vectorize/geode_candidate.svg \
-    --out tools/vectorize/geode_run \
-    --background black
+    --reference /absolute/path/to/reference.png \
+    --svg tools/vectorize/candidate.svg \
+    --out tools/vectorize/run \
+    --background white
 
-# 3. Read geode_run/score.json, open geode_run/diff.png, edit the SVG, repeat.
+# 3. Read run/score.json, open run/diff.png, edit the SVG, repeat.
 ```
 
 Note: the diff is computed in pure Python; a 1536x1024 pass takes on the order
