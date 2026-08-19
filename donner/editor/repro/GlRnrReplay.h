@@ -263,6 +263,16 @@ struct GlRnrReplayResult {
 [[nodiscard]] std::string_view GlRnrReplayCropModeSuffix(GlRnrReplayCropMode cropMode);
 
 /**
+ * Return the pixel scale between a captured framebuffer and ImGui's logical display.
+ *
+ * @param framebufferSize Captured framebuffer dimensions in physical pixels.
+ * @param logicalDisplaySize ImGui display dimensions in logical pixels.
+ * @return Per-axis framebuffer pixels per logical pixel, or (1, 1) for invalid dimensions.
+ */
+[[nodiscard]] Vector2d GlRnrReplayFramebufferFromLogicalScale(const Vector2i& framebufferSize,
+                                                              const Vector2d& logicalDisplaySize);
+
+/**
  * Replay an `.rnr` recording through `EditorShell`, capture the OpenGL
  * framebuffer, and write requested frames as PNGs.
  *

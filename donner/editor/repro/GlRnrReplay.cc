@@ -281,11 +281,12 @@ void QueueRecordedScrollEvents(EditorShell& shell, const ReproFrame& frame) {
 
 [[nodiscard]] PixelRect LogicalRectToPixelRect(const Box2d& logicalRect,
                                                const svg::RendererBitmap& bitmap,
-                                               double devicePixelRatio, PixelSnapMode snapMode) {
-  const double left = logicalRect.topLeft.x * devicePixelRatio;
-  const double top = logicalRect.topLeft.y * devicePixelRatio;
-  const double right = logicalRect.bottomRight.x * devicePixelRatio;
-  const double bottom = logicalRect.bottomRight.y * devicePixelRatio;
+                                               const Vector2d& framebufferFromLogicalScale,
+                                               PixelSnapMode snapMode) {
+  const double left = logicalRect.topLeft.x * framebufferFromLogicalScale.x;
+  const double top = logicalRect.topLeft.y * framebufferFromLogicalScale.y;
+  const double right = logicalRect.bottomRight.x * framebufferFromLogicalScale.x;
+  const double bottom = logicalRect.bottomRight.y * framebufferFromLogicalScale.y;
 
   const int unclampedX0 = snapMode == PixelSnapMode::Contained ? static_cast<int>(std::ceil(left))
                                                                : static_cast<int>(std::floor(left));
@@ -309,9 +310,9 @@ void QueueRecordedScrollEvents(EditorShell& shell, const ReproFrame& frame) {
   };
 }
 
-[[nodiscard]] std::optional<PixelRect> CropRectForMode(GlRnrReplayCropMode cropMode,
-                                                       const ViewportState& viewport,
-                                                       const svg::RendererBitmap& bitmap) {
+[[nodiscard]] std::optional<PixelRect> CropRectForMode(
+    GlRnrReplayCropMode cropMode, const ViewportState& viewport, const svg::RendererBitmap& bitmap,
+    const Vector2d& framebufferFromLogicalScale) {
   if (cropMode == GlRnrReplayCropMode::Full) {
     return std::nullopt;
   }
@@ -331,7 +332,7 @@ void QueueRecordedScrollEvents(EditorShell& shell, const ReproFrame& frame) {
                                      ? PixelSnapMode::Contained
                                      : PixelSnapMode::Covering;
   PixelRect pixelRect =
-      LogicalRectToPixelRect(logicalRect, bitmap, viewport.devicePixelRatio, snapMode);
+      LogicalRectToPixelRect(logicalRect, bitmap, framebufferFromLogicalScale, snapMode);
   if (pixelRect.width <= 0 || pixelRect.height <= 0) {
     return std::nullopt;
   }
@@ -360,8 +361,10 @@ void QueueRecordedScrollEvents(EditorShell& shell, const ReproFrame& frame) {
 
 [[nodiscard]] svg::RendererBitmap CropForOutput(const svg::RendererBitmap& bitmap,
                                                 GlRnrReplayCropMode cropMode,
-                                                const ViewportState& viewport) {
-  const std::optional<PixelRect> cropRect = CropRectForMode(cropMode, viewport, bitmap);
+                                                const ViewportState& viewport,
+                                                const Vector2d& framebufferFromLogicalScale) {
+  const std::optional<PixelRect> cropRect =
+      CropRectForMode(cropMode, viewport, bitmap, framebufferFromLogicalScale);
   return cropRect.has_value() ? CropBitmap(bitmap, *cropRect) : bitmap;
 }
 
@@ -462,6 +465,18 @@ std::string_view GlRnrReplayCropModeSuffix(GlRnrReplayCropMode cropMode) {
   }
 
   return "";
+}
+
+Vector2d GlRnrReplayFramebufferFromLogicalScale(const Vector2i& framebufferSize,
+                                                const Vector2d& logicalDisplaySize) {
+  if (framebufferSize.x <= 0 || framebufferSize.y <= 0 || !std::isfinite(logicalDisplaySize.x) ||
+      !std::isfinite(logicalDisplaySize.y) || logicalDisplaySize.x <= 0.0 ||
+      logicalDisplaySize.y <= 0.0) {
+    return Vector2d(1.0, 1.0);
+  }
+
+  return Vector2d(static_cast<double>(framebufferSize.x) / logicalDisplaySize.x,
+                  static_cast<double>(framebufferSize.y) / logicalDisplaySize.y);
 }
 
 bool RunGlRnrReplay(const GlRnrReplayOptions& options, GlRnrReplayResult* result,
@@ -720,8 +735,12 @@ bool RunGlRnrReplay(const GlRnrReplayOptions& options, GlRnrReplayResult* result
 
     if (captureReason.has_value()) {
       const std::filesystem::path path = CapturePath(options, frame, *captureReason);
+      const ImVec2 logicalDisplaySize = ImGui::GetIO().DisplaySize;
+      const svg::RendererBitmap framebuffer = window.endFrameAndReadPixels();
+      const Vector2d framebufferFromLogicalScale = GlRnrReplayFramebufferFromLogicalScale(
+          framebuffer.dimensions, Vector2d(logicalDisplaySize.x, logicalDisplaySize.y));
       const svg::RendererBitmap bitmap = CropForOutput(
-          window.endFrameAndReadPixels(), options.cropMode, shell.viewportForReadback());
+          framebuffer, options.cropMode, shell.viewportForReadback(), framebufferFromLogicalScale);
       if (!WriteCapture(bitmap, path, error)) {
         return false;
       }
