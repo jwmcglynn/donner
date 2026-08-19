@@ -43,7 +43,12 @@ enum class FallbackReason : uint16_t {
   /// Entity has a paint server (gradient/pattern) referencing external elements.
   ExternalPaint = 1 << 5,
 
-  /// Entity establishes an isolation group (opacity < 1 composed with siblings).
+  /// Entity establishes an isolation group (opacity, filter, clip-path,
+  /// mask, blend, or isolation: isolate). Informational: the cached layer
+  /// bitmap holds the isolated result, so this bit alone does not force
+  /// direct compose (a non-normal blend mode does, via BlendMode). During a
+  /// rotate or scale drag such layers still direct-render to avoid
+  /// resampling an already-rasterized payload.
   IsolatedLayer = 1 << 6,
 };
 

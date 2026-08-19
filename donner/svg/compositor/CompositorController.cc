@@ -2218,7 +2218,7 @@ void CompositorController::refreshLayerMetadata() {
 
     if (registry.all_of<components::RenderingInstanceComponent>(layer.entity())) {
       const auto& instance = registry.get<components::RenderingInstanceComponent>(layer.entity());
-      layer.setFallbackReasons(detectFallbackReasons(instance));
+      layer.setFallbackReasons(detectFallbackReasons(registry, instance));
     } else {
       layer.setFallbackReasons(FallbackReason::None);
     }
@@ -2265,7 +2265,7 @@ void CompositorController::reconcileLayers(Registry& registry) {
 
     if (registry.all_of<components::RenderingInstanceComponent>(entity)) {
       const auto& instance = registry.get<components::RenderingInstanceComponent>(entity);
-      layers_.back().setFallbackReasons(detectFallbackReasons(instance));
+      layers_.back().setFallbackReasons(detectFallbackReasons(registry, instance));
     }
 
     // A layer-set change is handled by `resyncSegmentsToLayerSet`, which
@@ -2419,15 +2419,37 @@ void CompositorController::propagateFastPathDeltaToSubtree(
 }
 
 FallbackReason CompositorController::detectFallbackReasons(
-    const components::RenderingInstanceComponent& instance) {
+    Registry& registry, const components::RenderingInstanceComponent& instance) {
   FallbackReason reasons = FallbackReason::None;
 
-  // Isolated layers (opacity < 1, isolation groups) interact with the backdrop.
+  // Isolated layers (opacity < 1, isolation groups). The layer's offscreen
+  // rasterization pushes the isolated layer itself, so the cached bitmap
+  // already holds the group composited against transparency with its opacity
+  // applied, and constant opacity on a premultiplied raster commutes with
+  // source-over. The flag is informational for such layers; only a
+  // non-normal blend mode (below) genuinely needs the live backdrop.
   if (instance.isolatedLayer) {
     reasons |= FallbackReason::IsolatedLayer;
   }
 
-  // Filters may reference BackgroundImage or other backdrop-dependent inputs.
+  // A non-normal mix-blend-mode reads the backdrop at blend time, which a
+  // cached source-over blit cannot reproduce, so these layers must render
+  // directly into the composed frame in paint order. The computed style can
+  // be absent here: attribute mutation removes ComputedStyleComponent while
+  // the RenderingInstanceComponent survives until the next prepare, and
+  // promotion (and the reconcile inside renderFrame) runs before that
+  // prepare. Fail closed in that window - claim the blend bit so an unknown
+  // style direct-composes; refreshLayerMetadata re-derives the reasons from
+  // the fresh style immediately after the prepare in the same frame.
+  const auto* style = instance.styleHandle(registry).try_get<components::ComputedStyleComponent>();
+  if (style == nullptr || !style->properties.has_value() ||
+      style->properties->mixBlendMode.get().value() != MixBlendMode::Normal) {
+    reasons |= FallbackReason::BlendMode;
+  }
+
+  // Filter roots are tracked for promotion and diagnostics; the filter
+  // itself renders into the layer's cached bitmap, so the bit does not
+  // force direct compose.
   if (instance.resolvedFilter.has_value()) {
     reasons |= FallbackReason::Filter;
   }

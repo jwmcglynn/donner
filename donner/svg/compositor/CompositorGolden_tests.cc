@@ -1200,9 +1200,131 @@ TEST_F(CompositorGoldenTest, GaussianBlurredShapeMatchesFullRenderAfterPromotion
   // Blur produces semi-transparent edge pixels over a wide radius; the tolerance
   // here is looser than the identity-composition cases because the blur kernel
   // itself has sub-pixel variation and the unpremul round-trip may amplify it.
+  // The compose path blits the layer's cached bitmap rather than re-rendering
+  // the filter into the frame, which adds one 8-bit quantization boundary
+  // (filter output -> premultiplied bitmap -> blit), spreading off-by-one
+  // channel values across the blur skirt. Observed: about 2.8% of pixels at a
+  // channel diff of exactly 1.
   EXPECT_LE(result.maxChannelDiff, 3) << result;
-  EXPECT_LE(result.mismatchCount, result.totalPixels / 50u)  // 2%
+  EXPECT_LE(result.mismatchCount, result.totalPixels / 25u)  // 4%
       << "blurred shape should match full-render within AA tolerance: " << result;
+}
+
+// A group with opacity composes from its cached layer bitmap instead of
+// re-rendering the subtree every composed frame. The cached bitmap is correct
+// by construction: layer rasterization pushes the isolated layer itself, so
+// the bitmap holds the children composited against transparency with the
+// group opacity applied, and blitting that premultiplied raster source-over
+// is exactly the group-opacity compositing model. The overlapping children
+// make this discriminating: re-rendering them with per-child opacity instead
+// would double-darken the overlap.
+TEST_F(CompositorGoldenTest, OpacityGroupComposesFromCachedBitmapWithoutRerender) {
+  // Two dozen small overlapping rects keep the immediate-plan economics on
+  // the cached side (many draw ops, small covered area) without pulling in a
+  // filter, whose mandatory promotion hint would split the group into two
+  // layers and defeat the point of the test.
+  std::string rects;
+  for (int i = 0; i < 24; ++i) {
+    const int x = 20 + (i % 8) * 8;
+    const int y = 24 + (i / 8) * 10;
+    rects += "<rect x=\"" + std::to_string(x) + "\" y=\"" + std::to_string(y) +
+             "\" width=\"20\" height=\"16\" fill=\"" + (i % 2 == 0 ? "red" : "blue") + "\"/>";
+  }
+  // No background content: static segments stay empty, so the immediate
+  // rasterize accumulator below measures only this layer's compose behavior
+  // (cheap static spans legitimately direct-render and would otherwise
+  // contribute a few tenths of a millisecond of their own).
+  SVGDocument document = parseDocument(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">
+      <g id="target" opacity="0.6">)svg" +
+                                       rects + R"svg(</g>
+    </svg>
+  )svg");
+
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  const Entity entity = target->unsafeEntityHandle().entity();
+
+  // No explicit promotion: the opacity group auto-promotes as a mandatory
+  // layer. An explicitly promoted entity would carry an interaction hint,
+  // which legitimately opts cheap layers into direct compose for drag
+  // latency; the steady-state document case is the one this test pins.
+  CompositorController compositor(document, renderer_);
+
+  DualPathVerifier verifier(compositor, renderer_);
+  const auto result = verifier.renderAndVerify(viewport_);
+
+  EXPECT_NE(compositor.fallbackReasonsOf(entity) & FallbackReason::IsolatedLayer,
+            FallbackReason::None);
+  EXPECT_EQ(compositor.fallbackReasonsOf(entity) & FallbackReason::BlendMode, FallbackReason::None);
+  // A zero here proves the compose blitted the cached bitmap rather than
+  // direct-rendering the subtree every composed frame.
+  EXPECT_EQ(compositor.lastRenderFrameStats().immediateRasterizeMs, 0.0);
+  EXPECT_LE(result.maxChannelDiff, 1) << result;
+
+  const auto second = verifier.renderAndVerify(viewport_);
+  EXPECT_EQ(compositor.lastRenderFrameStats().immediateRasterizeMs, 0.0);
+  EXPECT_LE(second.maxChannelDiff, 1) << second;
+}
+
+// A non-normal mix-blend-mode reads the live backdrop at blend time, which a
+// cached source-over blit cannot reproduce, so such a layer must keep
+// rendering directly into the composed frame in paint order.
+TEST_F(CompositorGoldenTest, BlendModeGroupStillComposesDirectly) {
+  SVGDocument document = parseDocument(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">
+      <rect width="200" height="100" fill="white"/>
+      <rect x="10" y="10" width="120" height="60" fill="orange"/>
+      <g id="target" style="mix-blend-mode: multiply">
+        <rect x="40" y="20" width="80" height="50" fill="skyblue"/>
+      </g>
+    </svg>
+  )svg");
+
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  const Entity entity = target->unsafeEntityHandle().entity();
+
+  CompositorController compositor(document, renderer_);
+  ASSERT_TRUE(compositor.promoteEntity(entity));
+
+  DualPathVerifier verifier(compositor, renderer_);
+  const auto result = verifier.renderAndVerify(viewport_);
+
+  EXPECT_NE(compositor.fallbackReasonsOf(entity) & FallbackReason::BlendMode, FallbackReason::None);
+  // Direct compose accrues immediate-rasterize time; a zero would mean the
+  // blend group was blitted source-over, silently dropping the blend.
+  EXPECT_GT(compositor.lastRenderFrameStats().immediateRasterizeMs, 0.0);
+  EXPECT_TRUE(result.isExact()) << result;
+}
+
+// Changing the group's opacity re-rasterizes the layer: the opacity is baked
+// into the cached bitmap, so a stale bitmap would keep composing the old
+// value. The second verification against the full render catches that.
+TEST_F(CompositorGoldenTest, OpacityChangeRefreshesTheComposedResult) {
+  SVGDocument document = parseDocument(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">
+      <rect width="200" height="100" fill="white"/>
+      <g id="target" opacity="0.5">
+        <rect x="20" y="20" width="60" height="40" fill="red"/>
+        <rect x="50" y="30" width="60" height="40" fill="blue"/>
+      </g>
+    </svg>
+  )svg");
+
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+
+  CompositorController compositor(document, renderer_);
+  ASSERT_TRUE(compositor.promoteEntity(target->unsafeEntityHandle().entity()));
+
+  DualPathVerifier verifier(compositor, renderer_);
+  const auto before = verifier.renderAndVerify(viewport_);
+  EXPECT_LE(before.maxChannelDiff, 1) << before;
+
+  target->setAttribute("opacity", "0.9");
+  const auto after = verifier.renderAndVerify(viewport_);
+  EXPECT_LE(after.maxChannelDiff, 1) << after;
 }
 
 // Regression variant: the blurred shape is dragged (composition transform set

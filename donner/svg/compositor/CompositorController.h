@@ -1172,8 +1172,10 @@ private:
   static std::pair<Entity, Entity> computeEntityRange(Registry& registry, Entity entity);
 
   /// Inspect a RenderingInstanceComponent and return which fallback reasons apply.
+  /// The registry is needed to reach the instance's computed style, which is
+  /// where mix-blend-mode lives.
   static FallbackReason detectFallbackReasons(
-      const components::RenderingInstanceComponent& instance);
+      Registry& registry, const components::RenderingInstanceComponent& instance);
 
   /// Fast-path helper: a promoted subtree layer's root just moved by a
   /// world-space delta (translation, scale, or rotation). Descendants' local
