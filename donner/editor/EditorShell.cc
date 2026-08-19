@@ -1326,6 +1326,10 @@ std::optional<float> EditorShell::nextIdleWakeSeconds() const {
   includeWake(documentSyncController_.nextTextSyncWakeSeconds());
   includeWake(textEditor_.nextFlashWakeSeconds());
   includeWake(textEditor_.nextRopeAnimationWakeSeconds());
+  const bool sourcePaneTargetVisible = !adaptiveUiLayout_.compactTouch() && sourcePaneVisible_;
+  if (sourcePaneRevealProgress_ != (sourcePaneTargetVisible ? 1.0f : 0.0f)) {
+    includeWake(1.0f / 60.0f);
+  }
   // Caret blink: wake at the next visibility flip while a text session is
   // editing. The flip only re-pushes the caret chrome and recaptures the
   // overlay snapshot; it never schedules a content render.
@@ -2942,11 +2946,11 @@ void EditorShell::convertSelectedTextToOutlines() {
   app_.setSelection(std::move(newSelection));
 }
 
-void EditorShell::renderSourcePane(float paneOriginY, float paneHeight, float paneWidth,
-                                   ImFont* codeFont) {
+void EditorShell::renderSourcePane(float paneOriginX, float paneOriginY, float paneHeight,
+                                   float paneWidth, ImFont* codeFont) {
   constexpr ImGuiWindowFlags kPaneFlags = ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize |
                                           ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoTitleBar;
-  ImGui::SetNextWindowPos(ImVec2(0.0f, paneOriginY), ImGuiCond_Always);
+  ImGui::SetNextWindowPos(ImVec2(paneOriginX, paneOriginY), ImGuiCond_Always);
   ImGui::SetNextWindowSize(ImVec2(paneWidth, paneHeight), ImGuiCond_Always);
   ImGui::Begin("Source", nullptr, kPaneFlags);
   // TextEditor owns the canonical, edit-remapped diagnostic ranges used for both inline
@@ -5307,7 +5311,7 @@ void EditorShell::renderLayerPanelContents() {
 }
 
 void EditorShell::renderSourcePaneSplitter(float windowWidth, float paneOriginY, float paneHeight,
-                                           float sourcePaneWidth) {
+                                           float sourcePaneEdgeX) {
   const EditorTheme& theme = EditorTheme::Active();
   ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
   ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
@@ -5315,17 +5319,18 @@ void EditorShell::renderSourcePaneSplitter(float windowWidth, float paneOriginY,
       ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse |
       ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoScrollbar |
       ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBackground;
-  const bool renderedVisibleSplitter = sourcePaneVisible_ && sourcePaneWidth > 0.0f;
+  const bool renderedVisibleSplitter = sourcePaneRevealProgress_ > 0.0f && sourcePaneEdgeX > 0.0f;
+  const bool sourcePaneSettledOpen = sourcePaneVisible_ && sourcePaneRevealProgress_ >= 1.0f;
 
   if (renderedVisibleSplitter) {
-    const float splitterLeft = sourcePaneWidth - kSourcePaneSplitterThickness * 0.5f;
+    const float splitterLeft = sourcePaneEdgeX - kSourcePaneSplitterThickness * 0.5f;
     ImGui::SetNextWindowPos(ImVec2(splitterLeft, paneOriginY), ImGuiCond_Always);
     ImGui::SetNextWindowSize(ImVec2(kSourcePaneSplitterThickness, paneHeight), ImGuiCond_Always);
     ImGui::Begin("##source_pane_splitter", nullptr, kSplitterFlags);
     ImGui::InvisibleButton("##source_pane_splitter_handle",
                            ImVec2(kSourcePaneSplitterThickness, paneHeight));
-    if (ImGui::IsItemActive()) {
-      const float nextWidth = sourcePaneWidth + ImGui::GetIO().MouseDelta.x;
+    if (sourcePaneSettledOpen && ImGui::IsItemActive()) {
+      const float nextWidth = sourcePaneWidth_ + ImGui::GetIO().MouseDelta.x;
       if (nextWidth < kSourcePaneCollapseThreshold) {
         setSourcePaneVisible(false);
       } else {
@@ -5351,7 +5356,7 @@ void EditorShell::renderSourcePaneSplitter(float windowWidth, float paneOriginY,
     }
   }
 
-  if (renderedVisibleSplitter && (ImGui::IsItemHovered() || ImGui::IsItemActive())) {
+  if (sourcePaneSettledOpen && (ImGui::IsItemHovered() || ImGui::IsItemActive())) {
     ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
   } else if (!renderedVisibleSplitter && ImGui::IsItemHovered()) {
     ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
@@ -7068,6 +7073,8 @@ void EditorShell::runFrame() {
       .preferTouch = kPreferTouchInput,
   });
   const bool compactUi = adaptiveUiLayout_.compactTouch();
+  sourcePaneRevealProgress_ = AdvanceSourcePaneRevealProgress(
+      sourcePaneRevealProgress_, !compactUi && sourcePaneVisible_, ImGui::GetIO().DeltaTime);
   const float menuBarHeight = compactUi ? adaptiveUiLayout_.topBarHeight : ImGui::GetFrameHeight();
   const float paneOriginY = menuBarHeight;
   const float paneHeight = std::max(0.0f, static_cast<float>(windowSize.y) - paneOriginY);
@@ -7075,9 +7082,10 @@ void EditorShell::runFrame() {
       .windowWidth = static_cast<float>(windowSize.x),
       .sourcePaneVisible = !compactUi && sourcePaneVisible_,
       .sourcePaneWidth = sourcePaneWidth_,
+      .sourcePaneRevealProgress = compactUi ? 0.0f : sourcePaneRevealProgress_,
       .minSourcePaneWidth = kMinSourcePaneWidth,
       .maxSourcePaneWidth = kMaxSourcePaneWidth,
-      .sourcePaneRailWidth = kSourcePaneRevealHandleWidth,
+      .sourcePaneRailWidth = compactUi ? 0.0f : kSourcePaneRevealHandleWidth,
       .rightPaneWidth = rightPaneWidth_,
       .rightPaneVisible = !compactUi,
       .minRightPaneWidth = kMinRightPaneWidth,
@@ -7125,8 +7133,9 @@ void EditorShell::runFrame() {
   markPhase(mainFrameCost.menusDialogsMs);
 
   std::ignore = highlightSelectionSourceIfNeeded();
-  if (!compactUi && sourcePaneVisible_) {
-    renderSourcePane(paneOriginY, paneHeight, mainPaneLayout.sourcePaneWidth, codeFont_);
+  if (!compactUi && mainPaneLayout.sourcePaneWidth > 0.0f) {
+    renderSourcePane(mainPaneLayout.sourcePaneX, paneOriginY, paneHeight,
+                     mainPaneLayout.sourcePaneWidth, codeFont_);
   }
   markPhase(mainFrameCost.sourcePaneMs);
   // The canvas pane must never window-scroll: an ImGui scrollbar here would
@@ -7146,7 +7155,7 @@ void EditorShell::runFrame() {
   // Debug float are now owned by the DockSpace submitted above.
   if (!compactUi) {
     renderSourcePaneSplitter(static_cast<float>(windowSize.x), paneOriginY, paneHeight,
-                             mainPaneLayout.sourcePaneWidth);
+                             mainPaneLayout.renderPaneX);
   }
   if (!contentOnlyCaptureThisFrame_ && showSamplePicker_) {
     renderSamplePicker(ImVec2(0.0f, paneOriginY),

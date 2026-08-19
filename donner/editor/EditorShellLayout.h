@@ -1,6 +1,8 @@
 #pragma once
 /// @file
 
+#include <optional>
+
 namespace donner::editor {
 
 /// Editor chrome profile selected from viewport constraints and input type.
@@ -71,6 +73,8 @@ struct EditorMainPaneLayoutInput {
   bool sourcePaneVisible = true;
   /// Preferred source pane width when visible.
   float sourcePaneWidth = 0.0f;
+  /// Optional linear reveal progress. Absent snaps to the target visibility.
+  std::optional<float> sourcePaneRevealProgress;
   /// Minimum source pane width while visible.
   float minSourcePaneWidth = 0.0f;
   /// Maximum source pane width while visible.
@@ -91,6 +95,8 @@ struct EditorMainPaneLayoutInput {
 
 /// Computed geometry for the editor's horizontal source/render/sidebar layout.
 struct EditorMainPaneLayout {
+  /// Left edge of the full-width source pane. Negative while it slides in or out.
+  float sourcePaneX = 0.0f;
   /// Effective source pane width. Zero when the source pane is hidden.
   float sourcePaneWidth = 0.0f;
   /// Effective source reveal-rail width. Zero while the source pane is visible.
@@ -113,6 +119,17 @@ struct EditorMainPaneLayout {
  */
 [[nodiscard]] EditorMainPaneLayout ComputeEditorMainPaneLayout(
     const EditorMainPaneLayoutInput& input);
+
+/**
+ * Advance the source-pane reveal toward its target at the fixed UI animation rate.
+ *
+ * @param currentProgress Current linear progress in [0, 1].
+ * @param targetVisible True to advance toward fully visible.
+ * @param deltaSeconds Elapsed frame time in seconds.
+ * @return Updated linear progress in [0, 1].
+ */
+[[nodiscard]] float AdvanceSourcePaneRevealProgress(float currentProgress, bool targetVisible,
+                                                    float deltaSeconds);
 
 /// Inputs used to compute the editor's right sidebar pane layout.
 struct RightSidebarLayoutInput {

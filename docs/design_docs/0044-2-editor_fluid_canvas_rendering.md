@@ -90,8 +90,9 @@ This design proposes a second responsiveness pass:
   - [x] Add large-selection LOD: combined bounds first, visible path outlines during idle.
 - [x] **M3: Clip and cull source-pane ropes.**
   - [x] Push a source-pane clip rect around `renderFocusReferenceLinks`.
-  - [x] Skip rope simulation/draw for links whose source/target/route AABB is outside the visible
-        text region.
+  - [x] Skip rope simulation/draw only when the complete connector/route AABB is outside the
+        visible text region. Endpoint visibility alone cannot cull a rope whose middle crosses the
+        viewport.
   - [x] Cap animated rope count and fall back to static straight connectors for overflow.
 - [x] **M4: Immediate-mode cheap compositor spans.**
   - [x] Add a `StaticSpanPlan` for each paint-order gap: `CachedTile` or `Immediate`.
@@ -506,7 +507,8 @@ presented transform every time it is drawn.
 clip and cull:
 
 - push a clip rect for the source text content area before rope drawing;
-- compute a cheap route AABB from source endpoint, target endpoint, and slack bounds;
+- compute a cheap route AABB from source endpoint, target endpoint, and slack bounds, even when
+  both endpoints are outside opposite edges of the visible region;
 - skip simulation and draw when the route AABB is outside the visible text region;
 - cap active simulated ropes, e.g. 64 visible ropes, and draw overflow as static straight lines or a
   chip count;
@@ -629,7 +631,8 @@ Per design-doc invariant policy:
 - "Large selection first feedback is combined bounds only" must be enforced by
   `overlay_renderer_tests`.
 - "Immediate spans preserve paint order" must be enforced by compositor golden tests.
-- "Ropes cannot draw outside the source pane" must be enforced by a text-editor visual/unit test.
+- "Ropes cannot draw outside the source pane, and a crossing visible segment is not culled with its
+  endpoints" is enforced by `//donner/editor/tests:text_editor_tests`.
 
 ## Security / Privacy
 

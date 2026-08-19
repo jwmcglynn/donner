@@ -990,6 +990,7 @@ public:
 
   static void SetSourcePaneVisible(EditorShell& shell, bool visible) {
     shell.setSourcePaneVisible(visible);
+    shell.sourcePaneRevealProgress_ = visible ? 1.0f : 0.0f;
   }
 
   static void RevealSourceRange(EditorShell& shell, SourceByteRange byteRange) {
@@ -1174,7 +1175,7 @@ public:
 
   static void RenderSourcePane(EditorShell& shell, float paneOriginY, float paneHeight,
                                float paneWidth, ImFont* codeFont) {
-    shell.renderSourcePane(paneOriginY, paneHeight, paneWidth, codeFont);
+    shell.renderSourcePane(/*paneOriginX=*/0.0f, paneOriginY, paneHeight, paneWidth, codeFont);
   }
 
   static void RenderRenderPane(EditorShell& shell, const Vector2d& renderPaneOrigin,

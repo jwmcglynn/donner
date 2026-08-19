@@ -14,8 +14,9 @@ tokens and color intent.
 
 The visual MVP includes the application bar, dock tabs, source palette, canvas toolbar,
 Fill/Stroke chrome, canvas zoom control, and structured Inspector property lists for XML and
-computed CSS. The source pane starts collapsed behind a persistent reveal rail, and Transform uses
-aligned paired fields, direct click-to-type behavior, and a concurrent-DOM-safe edit lifecycle.
+computed CSS. The source pane starts collapsed behind a persistent reveal rail and slides in or out
+without resizing its contents, and Transform uses aligned paired fields, direct click-to-type
+behavior, and a concurrent-DOM-safe edit lifecycle.
 Toolbar and cursor artwork use one two-tone contrast system. It does not include workspace modes or
 runtime SVG interaction. The implemented interaction contract also keeps text entry, outlined-shape
 dragging, and source reveal within the UI frame budget by coalescing document work and validating
@@ -51,6 +52,8 @@ asynchronous source analysis by document revision.
 - Present XML and computed CSS as compact property lists with CSS-shaped values, separate cascade
   provenance, typed color swatches, and full-value hover disclosure.
 - Start with a canvas-first workspace while retaining an obvious, full-height source reveal rail.
+  Slide the fixed-width source surface behind that rail so opening and closing preserve readable
+  text geometry throughout the transition.
 - Present Position, Size, and Rotation as stable responsive rows, with the raw matrix behind a
   disclosure.
 - Give Transform axis labels dedicated fixed columns so field rectangles align independent of label
@@ -95,6 +98,7 @@ asynchronous source analysis by document revision.
 - [x] Remove viewport implementation telemetry from the Inspector.
 - [x] Polish XML attributes and computed CSS into compact, provenance-aware property lists.
 - [x] Collapse source by default behind a persistent reveal rail.
+- [x] Slide the source pane in and out without compressing its text layout.
 - [x] Rework Transform into responsive Position, Size, Rotation, and matrix rows.
 - [x] Align Transform fields on fixed axis/value columns and enable simple click-to-type input.
 - [x] Fix Transform activation's concurrent-DOM lock-upgrade deadlock.
@@ -130,6 +134,10 @@ The following targets enforce the design-language contracts:
 - `//donner/editor/tests:editor_shell_tests`
 - `//donner/editor/tests:text_editor_tests`
 - `//donner/editor/tests:inspector_ui_fuzzer`
+
+`//donner/editor/tests:editor_shell_layout_tests` pins intermediate source-pane slide geometry and
+its bounded frame-to-frame progress. `//donner/editor/tests:editor_shell_tests` owns the real ImGui
+pane and replay integration.
 
 The full editor frame is verified through
 `//donner/editor/tests:editor_rnr_gl_replay` with `zoom-out-drag-jump.rnr`, full-frame capture, and

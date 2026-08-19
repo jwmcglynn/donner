@@ -16,6 +16,12 @@ constexpr float kCompactPanelMinWidth = 280.0f;
 constexpr float kCompactPanelMaxWidth = 380.0f;
 constexpr float kCompactPanelMinHeight = 220.0f;
 constexpr float kCompactPanelMaxHeight = 360.0f;
+constexpr float kSourcePaneRevealDurationSeconds = 0.20f;
+
+float EaseSourcePaneRevealProgress(float progress) {
+  const float clamped = std::clamp(progress, 0.0f, 1.0f);
+  return clamped * clamped * (3.0f - 2.0f * clamped);
+}
 
 }  // namespace
 
@@ -69,23 +75,27 @@ EditorMainPaneLayout ComputeEditorMainPaneLayout(const EditorMainPaneLayoutInput
   const float minRenderPaneWidth = std::max(0.0f, input.minRenderPaneWidth);
   const float maxRightPaneWidth =
       input.rightPaneVisible ? std::max(minRightPaneWidth, input.maxRightPaneWidth) : 0.0f;
-  const float sourcePaneRailWidth =
-      input.sourcePaneVisible ? 0.0f : std::clamp(input.sourcePaneRailWidth, 0.0f, windowWidth);
+  const float hiddenSourcePaneRailWidth = std::clamp(input.sourcePaneRailWidth, 0.0f, windowWidth);
   const float sourcePaneUpperBound = std::max(
       0.0f, std::min(maxSourcePaneWidth, windowWidth - minRightPaneWidth - minRenderPaneWidth));
   const float sourcePaneLowerBound = std::min(minSourcePaneWidth, sourcePaneUpperBound);
-  const float sourcePaneWidth =
-      input.sourcePaneVisible
-          ? std::clamp(input.sourcePaneWidth, sourcePaneLowerBound, sourcePaneUpperBound)
-          : 0.0f;
-  const float leftChromeWidth = sourcePaneWidth + sourcePaneRailWidth;
+  const float fullSourcePaneWidth =
+      std::clamp(input.sourcePaneWidth, sourcePaneLowerBound, sourcePaneUpperBound);
+  const float linearRevealProgress = std::clamp(
+      input.sourcePaneRevealProgress.value_or(input.sourcePaneVisible ? 1.0f : 0.0f), 0.0f, 1.0f);
+  const float revealProgress = EaseSourcePaneRevealProgress(linearRevealProgress);
+  const bool sourcePaneParticipates = input.sourcePaneVisible || linearRevealProgress > 0.0f;
+  const float sourcePaneWidth = sourcePaneParticipates ? fullSourcePaneWidth : 0.0f;
+  const float leftChromeWidth =
+      std::lerp(hiddenSourcePaneRailWidth, fullSourcePaneWidth, revealProgress);
   const float rightPaneUpperBound =
       std::max(minRightPaneWidth,
                std::min(maxRightPaneWidth, windowWidth - leftChromeWidth - minRenderPaneWidth));
 
   EditorMainPaneLayout layout;
+  layout.sourcePaneX = sourcePaneParticipates ? leftChromeWidth - fullSourcePaneWidth : 0.0f;
   layout.sourcePaneWidth = sourcePaneWidth;
-  layout.sourcePaneRailWidth = sourcePaneRailWidth;
+  layout.sourcePaneRailWidth = sourcePaneParticipates ? 0.0f : hiddenSourcePaneRailWidth;
   layout.rightPaneWidth =
       input.rightPaneVisible
           ? std::clamp(input.rightPaneWidth, minRightPaneWidth, rightPaneUpperBound)
@@ -94,6 +104,22 @@ EditorMainPaneLayout ComputeEditorMainPaneLayout(const EditorMainPaneLayoutInput
   layout.renderPaneWidth = std::max(0.0f, windowWidth - leftChromeWidth - layout.rightPaneWidth);
   layout.rightPaneX = windowWidth - layout.rightPaneWidth;
   return layout;
+}
+
+float AdvanceSourcePaneRevealProgress(float currentProgress, bool targetVisible,
+                                      float deltaSeconds) {
+  const float target = targetVisible ? 1.0f : 0.0f;
+  if (!std::isfinite(currentProgress)) {
+    return target;
+  }
+
+  const float current = std::clamp(currentProgress, 0.0f, 1.0f);
+  if (!std::isfinite(deltaSeconds) || deltaSeconds <= 0.0f || current == target) {
+    return current;
+  }
+
+  const float step = deltaSeconds / kSourcePaneRevealDurationSeconds;
+  return targetVisible ? std::min(1.0f, current + step) : std::max(0.0f, current - step);
 }
 
 RightSidebarLayout ComputeRightSidebarLayout(const RightSidebarLayoutInput& input) {
@@ -202,10 +228,9 @@ bool RenderPaneViewportLatchReady(const RenderPaneLatchInput& input) {
     return false;
   }
 
-  const bool dockGeometrySettled = input.dockCentralNode.width > 0.0f &&
-                                   input.dockCentralNode.height > 0.0f &&
-                                   SameRect(input.paneWindow, input.dockCentralNode) &&
-                                   CentralNodeMatchesDockHost(input);
+  const bool dockGeometrySettled =
+      input.dockCentralNode.width > 0.0f && input.dockCentralNode.height > 0.0f &&
+      SameRect(input.paneWindow, input.dockCentralNode) && CentralNodeMatchesDockHost(input);
   if (dockGeometrySettled) {
     return true;
   }

@@ -1521,8 +1521,8 @@ void TextEditor::renderLineBackground(const VisualLine& visualLine, const ImVec2
   const float textStartX =
       lineStart.x + textStart_ + static_cast<float>(visualLine.indentColumns) * charAdvance_.x;
 
-  const auto drawSourceCoordinates = [&](const Coordinates& rangeStart,
-                                         const Coordinates& rangeEnd, ImU32 color) {
+  const auto drawSourceCoordinates = [&](const Coordinates& rangeStart, const Coordinates& rangeEnd,
+                                         ImU32 color) {
     if (rangeEnd.line < visualLine.lineNo || rangeStart.line > visualLine.lineNo) {
       return;
     }
@@ -2272,32 +2272,8 @@ void TextEditor::renderFocusReferenceLinks(ImDrawList* drawList) {
     }
     return bounds;
   };
-  const auto sourcePointIntersectsVisibleRows = [&](const SourcePoint& point) {
-    if (isLineHiddenByFocus(point.line)) {
-      return false;
-    }
-
-    int visualIndex = point.line;
-    if ((wordWrapEnabled_ || focusPartitionActive_) && !visualLines_.empty()) {
-      visualIndex = visualLineIndexForCoordinates(Coordinates(point.line, point.column));
-      if (visualIndex < 0 || visualIndex >= static_cast<int>(visualLines_.size()) ||
-          visualLines_[visualIndex].lineNo != point.line) {
-        return false;
-      }
-    }
-
-    const double rowTop = uiCursorPos_.y + static_cast<double>(visualIndex) * charAdvance_.y;
-    const double rowBottom = rowTop + charAdvance_.y;
-    return rowBottom >= visibleTextBounds.topLeft.y && rowTop <= visibleTextBounds.bottomRight.y;
-  };
-
   drawList->PushClipRect(clipMin, clipMax, true);
   for (const FocusReferenceLink& link : focusPartition_.referenceLinks) {
-    if (!sourcePointIntersectsVisibleRows(link.from)) {
-      ++ropeCost.culledCount;
-      continue;
-    }
-
     const auto layoutStart = std::chrono::steady_clock::now();
     std::optional<FocusReferenceConnectorLayout> layout =
         focusReferenceConnectorLayout(link, visibleLinkIndex);

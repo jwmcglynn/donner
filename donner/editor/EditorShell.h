@@ -396,7 +396,8 @@ private:
   /// Selects every selectable element on the canvas via the shared `setSelection()` path, so the
   /// canvas highlight, source-pane sync, and overlay all update together. No-op without a document.
   void selectAllCanvasElements();
-  void renderSourcePane(float paneOriginY, float paneHeight, float paneWidth, ImFont* codeFont);
+  void renderSourcePane(float paneOriginX, float paneOriginY, float paneHeight, float paneWidth,
+                        ImFont* codeFont);
   void renderRenderPane(ImGuiWindowFlags paneFlags);
   // Frame stages split out of `runFrame` and `renderRenderPane`, deliberately kept out of line.
   //
@@ -460,7 +461,7 @@ private:
   [[nodiscard]] FormatBarFontPreview fontPreviewForFamily(std::string_view family);
   void renderSamplePicker(const ImVec2& paneOrigin, const ImVec2& contentRegion);
   void renderSourcePaneSplitter(float windowWidth, float paneOriginY, float paneHeight,
-                                float sourcePaneWidth);
+                                float sourcePaneEdgeX);
   /// Submit the host window and DockSpace that own the canvas (central node) and
   /// the right-column dockable panels, (re)building the default locked layout on
   /// first frame, after a reset, or when the docked-panel set changes.
@@ -778,6 +779,8 @@ private:
   bool sourceFocusMode_ = true;
   /// Preferred width for the source pane when it is visible.
   float sourcePaneWidth_ = 560.0f;
+  /// Linear progress for the source-pane slide animation.
+  float sourcePaneRevealProgress_ = 0.0f;
   bool sourcePaneVisible_ = false;
   bool showSamplePicker_ = false;
   bool welcomePlaceholderActive_ = false;
