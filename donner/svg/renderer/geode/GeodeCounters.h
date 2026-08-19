@@ -116,6 +116,26 @@ struct GeodeCounters {
   /// zoomed-in curves render as visible polygons.
   uint64_t strokeOutlinePoints = 0;
 
+  /// Glyph occurrences this frame that resolved to an already-cached glyph
+  /// outline. A text run repeats a handful of outlines across many
+  /// occurrences, so this is the direct measure of the glyph cache doing its
+  /// job: on an unchanged frame it equals the run's total non-`.notdef` glyph
+  /// count. Counted at the cache lookup, so an occurrence whose font has no
+  /// vector outline for it counts too - the lookup is what the cache saved.
+  uint64_t glyphResidencyHits = 0;
+
+  /// Glyph outlines fetched from the font backend and cached this frame,
+  /// including the encode and the GPU upload for the ones that have geometry.
+  /// Steady-state target: `== 0` once a document's glyph set is cached;
+  /// nonzero only on the first frame, after an eviction, or when a font or
+  /// scale change mints new glyph identities.
+  uint64_t glyphResidencyUploads = 0;
+
+  /// Cached glyph outlines dropped this frame to stay inside the residency
+  /// budget. Steady-state target: `== 0`; sustained nonzero means the working
+  /// set does not fit and every frame repays the upload.
+  uint64_t glyphResidencyEvictions = 0;
+
   /// Reset all counters to zero. Called at `RendererGeode::beginFrame`.
   void reset() { *this = {}; }
 };

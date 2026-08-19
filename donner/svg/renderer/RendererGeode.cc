@@ -11,6 +11,7 @@
 #include <map>
 #include <mutex>
 #include <optional>
+#include <span>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -40,6 +41,7 @@
 #include "donner/svg/renderer/geode/GeodeCallbackState.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
 #include "donner/svg/renderer/geode/GeodeFilterEngine.h"
+#include "donner/svg/renderer/geode/GeodeGlyphResidency.h"
 #include "donner/svg/renderer/geode/GeodeImagePipeline.h"
 #include "donner/svg/renderer/geode/GeodePathCacheComponent.h"
 #include "donner/svg/renderer/geode/GeodePathEncoder.h"
@@ -1245,8 +1247,27 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
     encoderToConfigure.setAntialias(antialias);
   }
 
-  /// Per-renderer frame index used to age resident path-cache entries.
+  /// Frame index used to age resident cache entries and to tell "this frame
+  /// already claimed that buffer" from "an earlier, submitted frame did".
+  ///
+  /// DEVICE-scoped, not per-renderer: an offscreen renderer built from this
+  /// device renders `feImage` fragments and layer thumbnails out of the same
+  /// document while this renderer's frame is still open, and a per-renderer
+  /// counter would let those two frames alias. See
+  /// `GeodeDevice::beginFrameGeneration`.
   uint64_t currentFrameIndex = 0;
+  /// True while `currentFrameIndex` names a generation this renderer opened and
+  /// has not closed. Frames are closed at `endFrame`, at the next `beginFrame`
+  /// (a caller that abandons a frame), and at teardown.
+  bool frameGenerationOpen = false;
+
+  /// Close this renderer's open frame generation, if any.
+  void closeFrameGeneration() {
+    if (frameGenerationOpen && device) {
+      device->endFrameGeneration(currentFrameIndex);
+    }
+    frameGenerationOpen = false;
+  }
 
   /// Acquire a pooled texture matching `desc`, or create a fresh one
   /// on miss. Always increments the `textureCreates` counter on miss;
@@ -1977,6 +1998,11 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
       /// retransforms the earlier draw that references the primary
       /// (buffer writes execute before every draw at submit).
       const geode::GeodeRecordSlab::Slot* recordSlotOverride = nullptr;
+      /// Last-written bytes of `recordSlotOverride`, when that slot persists
+      /// across frames (per-occurrence text records). Non-null turns the
+      /// override write into a skip-when-unchanged write. Null for per-frame
+      /// temporary slots, which are always fresh and always written.
+      std::vector<uint8_t>* recordCacheOverride = nullptr;
     };
     /// Consecutive instances. Each instance's record-slab slot index must
     /// be `firstInstanceIndex + i`, its geometry must live in the same
@@ -2037,17 +2063,27 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
                               const geode::GeodeRecordSlab::Slot*& outSlot) {
     outSlot = nullptr;
     if (slot.lastSceneFrame == currentFrameIndex || slot.lastResidentFrame == currentFrameIndex) {
-      if (!slot.recordSlab) {
-        return false;
-      }
-      geode::GeodeRecordSlab::Slot tempSlot;
-      if (!slot.recordSlab->allocateSlot(*device, tempSlot)) {
-        return false;
-      }
-      sceneTempRecordSlots.push_back(SceneTempRecordSlot{tempSlot, slot.recordSlab});
-      outSlot = &sceneTempRecordSlots.back().slot;
+      outSlot = allocateTempRecordSlot(slot.recordSlab);
+      return outSlot != nullptr;
     }
     return true;
+  }
+
+  /// Allocate a record slot that lives only for this frame, retained in
+  /// `sceneTempRecordSlots` so its address stays valid until the next
+  /// `draw()` returns it to `slab`. Returns null when `slab` is absent or the
+  /// device cannot back the allocation.
+  const geode::GeodeRecordSlab::Slot* allocateTempRecordSlot(
+      const std::shared_ptr<geode::GeodeRecordSlab>& slab) {
+    if (!slab) {
+      return nullptr;
+    }
+    geode::GeodeRecordSlab::Slot tempSlot;
+    if (!slab->allocateSlot(*device, tempSlot)) {
+      return nullptr;
+    }
+    sceneTempRecordSlots.push_back(SceneTempRecordSlot{tempSlot, slab});
+    return &sceneTempRecordSlots.back().slot;
   }
 
   /// Connect (or rewire) our `on_update<ComputedPathComponent>` /
@@ -2152,6 +2188,242 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
       (void)slot.recordSlab->allocateSlot(*device, slot.recordSlot);
     }
     return static_cast<bool>(slot.recordSlot.buffer);
+  }
+
+  /// Glyph-residency budget, in distinct cached outlines and in summed encode
+  /// bytes. Defaults come from `GeodeGlyphCache`; a test shrinks them to reach
+  /// eviction without building a font-sized working set.
+  size_t glyphCacheMaxEntries = geode::GeodeGlyphCache::kDefaultMaxEntries;
+  uint64_t glyphCacheMaxEncodedBytes = geode::GeodeGlyphCache::kDefaultMaxEncodedBytes;
+
+  /// Document-scoped glyph-outline residency. Mirrors `residentSlab`'s
+  /// registry-context wiring: one cache per document, replaced when a
+  /// different device renders the document, because every cached entry holds
+  /// that device's buffer and bind group.
+  std::shared_ptr<geode::GeodeGlyphCache> glyphCache(Registry& registry) {
+    auto* cachePtr = registry.ctx().find<std::shared_ptr<geode::GeodeGlyphCache>>();
+    if (cachePtr == nullptr) {
+      registry.ctx().emplace<std::shared_ptr<geode::GeodeGlyphCache>>(nullptr);
+      cachePtr = registry.ctx().find<std::shared_ptr<geode::GeodeGlyphCache>>();
+    }
+    std::shared_ptr<geode::GeodeGlyphCache>& cache = *cachePtr;
+    if (!cache || cache->owningDeviceId() != device->deviceId()) {
+      cache = std::make_shared<geode::GeodeGlyphCache>(device->deviceId());
+    }
+    // Trim to budget at the first touch of each frame, the same shape (and for
+    // the same reason) as the slabs' pending-free merge: dropping an entry
+    // returns its slab range through the deferred free list, so the range only
+    // becomes reusable at the NEXT merge, never inside a frame whose recorded
+    // draws still read it. Gating here rather than at one draw entry point
+    // covers the multi-document tile paths that never reach `draw()`.
+    device->countGlyphResidencyEvictions(
+        cache->beginFrame(currentFrameIndex, device->oldestOpenFrameGeneration(),
+                          glyphCacheMaxEntries, glyphCacheMaxEncodedBytes));
+    return cache;
+  }
+
+  /// Per-occurrence record storage for one text element's glyph fills.
+  ///
+  /// `component` non-null means the element's persistent slots are in play and
+  /// `next` is the ordinal of the occurrence about to be drawn. Null means
+  /// this pass takes per-frame temporaries instead (no source entity, batching
+  /// off, or the element already drew once this frame).
+  struct TextRecordCursor {
+    geode::GeodeTextInstanceRecordComponent* component = nullptr;
+    size_t next = 0;
+  };
+
+  /// Open per-occurrence record allocation for the text element rooted at
+  /// `textRoot`.
+  TextRecordCursor beginTextRecords(Registry& registry, Entity textRoot) {
+    TextRecordCursor cursor;
+    // Records only earn their keep when a batch can read them; with ordered
+    // batching off every glyph draws solo from the uniform and a record would
+    // be pure cost.
+    if (!kEnableSceneBatching || textRoot == entt::null) {
+      return cursor;
+    }
+    EntityHandle handle(registry, textRoot);
+    if (!handle) {
+      return cursor;
+    }
+    auto& component = handle.get_or_emplace<geode::GeodeTextInstanceRecordComponent>();
+    std::shared_ptr<geode::GeodeRecordSlab> slab = recordSlab(registry);
+    if (component.recordSlab.get() != slab.get()) {
+      // Device change retired the old slab with the registry-context swap;
+      // the held slots belong to it, so drop them and start fresh.
+      component.freeRecordSlots();
+      component.recordSlab = std::move(slab);
+    }
+    if (component.lastFrame >= device->oldestOpenFrameGeneration()) {
+      // Some frame that wrote these slots has not submitted: this element drew
+      // earlier in this frame (a `<use>` of the text), or an outer frame
+      // recorded its glyph batch and an offscreen pass is now rendering the
+      // same document. Every buffer write in a frame lands before every draw in
+      // the same submit, so rewriting the slots would retroactively retransform
+      // that recorded draw. Take per-frame temporaries instead.
+      return cursor;
+    }
+    component.lastFrame = currentFrameIndex;
+    cursor.component = &component;
+    return cursor;
+  }
+
+  /// Take the next occurrence's record slot, growing the element's persistent
+  /// list on demand. Falls back to a per-frame temporary when there is no
+  /// persistent list. Leaves `outSlot` null when no record can be had at all,
+  /// which sends the occurrence down the solo resident draw path.
+  void nextTextRecord(TextRecordCursor& cursor, Registry& registry,
+                      const geode::GeodeRecordSlab::Slot*& outSlot,
+                      std::vector<uint8_t>*& outCache) {
+    outSlot = nullptr;
+    outCache = nullptr;
+    if (cursor.component != nullptr) {
+      auto& occurrences = cursor.component->occurrences;
+      if (cursor.next == occurrences.size() && cursor.component->recordSlab) {
+        geode::GeodeRecordSlab::Slot slot;
+        if (cursor.component->recordSlab->allocateSlot(*device, slot)) {
+          occurrences.push_back(geode::GeodeTextInstanceRecordComponent::Occurrence{slot, {}});
+        }
+      }
+      if (cursor.next < occurrences.size()) {
+        outSlot = &occurrences[cursor.next].slot;
+        outCache = &occurrences[cursor.next].lastRecord;
+        ++cursor.next;
+        return;
+      }
+    }
+    if (!kEnableSceneBatching) {
+      return;
+    }
+    outSlot = allocateTempRecordSlot(recordSlab(registry));
+  }
+
+  /// Resident CPU encode + GPU geometry for one glyph identity, creating it on
+  /// first use.
+  ///
+  /// `buildOutline` is a callable returning the glyph's unplaced `Path`; it
+  /// runs only on a miss, which is the whole point - fetching an outline from
+  /// the font backend is the cost this cache exists to pay once. An entry
+  /// whose outline comes back empty (a glyph the font has no vector outline
+  /// for) is still cached, so that miss also costs one backend call per
+  /// document rather than one per occurrence per frame.
+  template <typename BuildOutlineFn>
+  geode::GeodeGlyphResidentEntry* residentGlyphEntry(Registry& registry,
+                                                     const geode::GlyphGeometryKey& key,
+                                                     BuildOutlineFn&& buildOutline) {
+    std::shared_ptr<geode::GeodeGlyphCache> cache = glyphCache(registry);
+    geode::GeodeGlyphResidentEntry* entry = cache->find(key);
+    if (entry != nullptr) {
+      device->countGlyphResidencyHit();
+    } else {
+      Path outline = buildOutline();
+      geode::EncodedPath encoded;
+      if (!outline.empty()) {
+        device->countPathEncode();
+        encoded = geode::GeodePathEncoder::encode(outline, FillRule::NonZero);
+      }
+      entry = cache->insert(key, std::move(outline), std::move(encoded));
+      device->countGlyphResidencyUpload();
+    }
+    entry->lastUsedFrame = currentFrameIndex;
+
+    // Wire the slot to the document's current slabs, exactly like the
+    // per-entity residence getters do.
+    std::shared_ptr<geode::GeodeResidentSlab> slab = residentSlab(registry);
+    if (entry->slot.slab.get() != slab.get()) {
+      entry->slot.reset();
+    }
+    entry->slot.slab = std::move(slab);
+    std::shared_ptr<geode::GeodeRecordSlab> records = recordSlab(registry);
+    if (entry->slot.recordSlab.get() != records.get()) {
+      entry->slot.recordSlot = geode::GeodeRecordSlab::Slot{};
+      entry->slot.recordSlab = std::move(records);
+    }
+    return entry;
+  }
+
+  /// Draw one glyph occurrence over shared resident geometry.
+  ///
+  /// `recordSlot` / `recordCache` are this occurrence's own record storage.
+  /// When a record is available the occurrence joins (or opens) a batch of
+  /// consecutive records over the same slab chunk; otherwise it falls back to
+  /// a solo resident draw whose placement rides in the encoder transform. The
+  /// glyph's geometry is uploaded at most once either way.
+  void emitGlyphFill(geode::GeodeGlyphResidentEntry& entry, const css::RGBA& color,
+                     const Transform2d& deviceFromGlyph,
+                     const geode::GeodeRecordSlab::Slot* recordSlot,
+                     std::vector<uint8_t>* recordCache) {
+    if (entry.encoded.empty()) {
+      return;
+    }
+    if (tryAppendGlyphBatch(entry, color, deviceFromGlyph, recordSlot, recordCache)) {
+      return;
+    }
+    flushPendingBatch();
+    encoder->setTransform(deviceFromGlyph);
+    encoder->fillPathResident(entry.slot, entry.encoded, color, FillRule::NonZero,
+                              currentFrameIndex);
+  }
+
+  /// Append one glyph occurrence to the pending ordered batch, opening a new
+  /// one when the current batch cannot cover it. Returns false when the
+  /// occurrence cannot batch at all and the caller must draw it solo.
+  ///
+  /// Unlike the per-entity scene path this never needs the same-frame repeat
+  /// divert: the geometry is shared by construction and every occurrence
+  /// already owns a distinct record, so no record a recorded draw depends on
+  /// is ever rewritten.
+  bool tryAppendGlyphBatch(geode::GeodeGlyphResidentEntry& entry, const css::RGBA& color,
+                           const Transform2d& deviceFromGlyph,
+                           const geode::GeodeRecordSlab::Slot* recordSlot,
+                           std::vector<uint8_t>* recordCache) {
+    if (!kEnableSceneBatching || recordSlot == nullptr || encoder->hasActiveClipState() ||
+        encoder->hasActiveScissor()) {
+      return false;
+    }
+    // The ensure both establishes residence on first sight of this glyph and
+    // publishes this occurrence's record; a repeat frame writes neither.
+    if (!encoder->ensureResidentSceneRecord(entry.slot, entry.encoded, color, FillRule::NonZero,
+                                            deviceFromGlyph, recordSlot, recordCache)) {
+      return false;
+    }
+
+    const wgpu::Buffer chunk = entry.slot.buffer;
+    const uint32_t vertexCount = entry.encoded.boundingDrawVertexCount();
+    const uint64_t clipVersion = encoder->clipStateVersion();
+    const PendingBatch::SceneInstance instance{&entry.slot, &entry.encoded,    &entry.outline,
+                                               color,       FillRule::NonZero, deviceFromGlyph,
+                                               vertexCount, recordSlot,        recordCache};
+
+    if (pendingBatch.has_value() && pendingBatch->mode == PendingBatch::Mode::Scene &&
+        pendingBatch->sceneChunkBuffer == chunk &&
+        pendingBatch->sceneRecordBuffer == recordSlot->buffer &&
+        pendingBatch->sceneClipVersion == clipVersion &&
+        pendingBatch->sceneFirstInstance + pendingBatch->sceneInstances.size() ==
+            recordSlot->index) {
+      pendingBatch->sceneInstances.push_back(instance);
+      pendingBatch->sceneVertexCount = std::max(pendingBatch->sceneVertexCount, vertexCount);
+      entry.slot.lastSceneFrame = currentFrameIndex;
+      return true;
+    }
+
+    flushPendingBatch();
+    pendingBatch = PendingBatch{};
+    pendingBatch->mode = PendingBatch::Mode::Scene;
+    pendingBatch->sceneChunkBuffer = chunk;
+    pendingBatch->sceneRecordBuffer = recordSlot->buffer;
+    pendingBatch->sceneFirstInstance = recordSlot->index;
+    pendingBatch->sceneFirstRecordOffset = recordSlot->offset;
+    pendingBatch->sceneClipVersion = clipVersion;
+    pendingBatch->sceneVertexCount = vertexCount;
+    pendingBatch->sceneInstances.push_back(instance);
+    // Claim the shared glyph slot now rather than at flush: while this batch is
+    // pending, a solo resident draw of the same glyph must already see the slot
+    // as taken, or it would publish its paint through the slot's uniform and
+    // through `lastResidentFrame` while the batch still depends on it.
+    entry.slot.lastSceneFrame = currentFrameIndex;
+    return true;
   }
 
   std::shared_ptr<geode::GeodeResidentSlab> residentSlab(Registry& registry) {
@@ -2345,6 +2617,10 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
                                ? batch.sceneInstances.front().slot->recordSlab.get()
                                : nullptr;
 
+      // The batched entry points read colour and fill rule from each instance's
+      // record, so these two only populate the draw-level uniform the batched
+      // shader does not consult. They come from the first instance because the
+      // uniform still has to hold something well-formed.
       const css::RGBA batchColor = batch.sceneInstances.front().color;
       const FillRule batchRule = batch.sceneInstances.front().rule;
       // Ensure each instance's geometry + batch-form record immediately
@@ -2359,7 +2635,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
       for (const PendingBatch::SceneInstance& inst : batch.sceneInstances) {
         if (inst.slot != nullptr && inst.encoded != nullptr) {
           (void)encoder->ensureResidentSceneRecord(*inst.slot, *inst.encoded, inst.color, inst.rule,
-                                                   inst.deviceFromLocal, inst.recordSlotOverride);
+                                                   inst.deviceFromLocal, inst.recordSlotOverride,
+                                                   inst.recordCacheOverride);
         }
       }
       encoder->fillPathSceneBatch(batchColor, batchRule, binding);
@@ -3207,6 +3484,9 @@ RendererGeode::~RendererGeode() {
   if (impl_ && impl_->device && impl_->device->counters() == &impl_->counters) {
     impl_->device->setCounters(nullptr);
   }
+  if (impl_) {
+    impl_->closeFrameGeneration();
+  }
 }
 RendererGeode::RendererGeode(RendererGeode&&) noexcept = default;
 RendererGeode& RendererGeode::operator=(RendererGeode&& other) noexcept {
@@ -3263,6 +3543,27 @@ void RendererGeode::draw(SVGDocument& document) {
   driver.draw(document);
 }
 
+bool RendererGeode::sceneBatchingEnabledForTesting() {
+  return kEnableSceneBatching;
+}
+
+void RendererGeode::setGlyphResidencyBudgetForTesting(size_t maxEntries, uint64_t maxEncodedBytes) {
+  impl_->glyphCacheMaxEntries = maxEntries;
+  impl_->glyphCacheMaxEncodedBytes = maxEncodedBytes;
+}
+
+size_t RendererGeode::residentGlyphCountForTesting(SVGDocument& document) {
+  if (!impl_->device) {
+    return 0;
+  }
+  auto* cachePtr = document.registry().ctx().find<std::shared_ptr<geode::GeodeGlyphCache>>();
+  if (cachePtr == nullptr || !*cachePtr ||
+      (*cachePtr)->owningDeviceId() != impl_->device->deviceId()) {
+    return 0;
+  }
+  return (*cachePtr)->size();
+}
+
 int RendererGeode::width() const {
   return impl_->pixelWidth;
 }
@@ -3305,7 +3606,16 @@ void RendererGeode::beginFrame(const RenderViewport& viewport) {
   if (impl_->texturePool) {
     impl_->texturePool->beginFrame();
   }
-  ++impl_->currentFrameIndex;
+  // A caller that abandons a frame (beginFrame without endFrame) must not leave
+  // its generation open forever, or every later eviction would be held back by
+  // it.
+  impl_->closeFrameGeneration();
+  if (impl_->device) {
+    impl_->currentFrameIndex = impl_->device->beginFrameGeneration();
+    impl_->frameGenerationOpen = true;
+  } else {
+    ++impl_->currentFrameIndex;
+  }
 
   // `<use>`-batch detection: drop the previous-draw source-entity memo so
   // cross-frame draws don't show up as "same-source runs".
@@ -3425,6 +3735,11 @@ void RendererGeode::endFrame() {
     impl_->frameCommandEncoder.reset();
     impl_->frameFinishedEncoders.clear();
   }
+
+  // The frame's work is submitted, so nothing it recorded can still be waiting
+  // to read a buffer: its generation stops holding back the caches that defer
+  // recycling until every frame that touched them has submitted.
+  impl_->closeFrameGeneration();
 
   // Now that the command buffer is submitted, it's safe to return the
   // frame's transient layer / filter / mask / snapshot textures to
@@ -4885,6 +5200,11 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
   // encoder to use the element's deviceFromLocalTransform unchanged.
   impl_->encoder->setTransform(impl_->deviceFromLocalTransform);
 
+  // Per-occurrence record storage for this element's solid-fill glyphs. The
+  // ordinal advances across runs, so the element's persistent slots stay in
+  // one consecutive range and a batch can cover the whole element.
+  Impl::TextRecordCursor textRecords = impl_->beginTextRecords(registry, params.textRootEntity);
+
   for (size_t runIndex = 0; runIndex < runs.size(); ++runIndex) {
     const auto& run = runs[runIndex];
     if (run.font == FontHandle()) {
@@ -5010,29 +5330,96 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
       continue;  // Nothing to fill, stroke, or decorate.
     }
 
+    // A solid fill draws each glyph from shared resident geometry: the outline
+    // is cached once per glyph identity and the occurrence contributes only a
+    // placement transform. Gradient, pattern, and stroke paint still consume a
+    // glyph outline placed in the element's local space, so those keep
+    // building placed paths.
+    const bool residentGlyphFill = hasFill && !fillIsGradient && !usePatternFill;
+    const bool needPlacedGlyphPaths = fillIsGradient || usePatternFill || hasStrokePaint;
+
+    // Glyph occurrences of this run, in paint order. Parallel to
+    // `runGlyphPaths` when both are populated.
+    struct RunGlyphOccurrence {
+      geode::GeodeGlyphResidentEntry* entry = nullptr;
+      Transform2d glyphFromLocal;
+    };
+    std::vector<RunGlyphOccurrence> runGlyphOccurrences;
     std::vector<Path> runGlyphPaths;
-    runGlyphPaths.reserve(run.glyphs.size());
-    for (const auto& glyph : run.glyphs) {
+    if (residentGlyphFill || needPlacedGlyphPaths) {
+      runGlyphOccurrences.reserve(run.glyphs.size());
+    }
+    if (needPlacedGlyphPaths) {
+      runGlyphPaths.reserve(run.glyphs.size());
+    }
+    // A run can reach here with no glyph paint at all - decoration lines only -
+    // and must not then fetch, encode, and permanently cache an outline per
+    // glyph for geometry nothing draws.
+    const bool runNeedsGlyphGeometry = residentGlyphFill || needPlacedGlyphPaths;
+    for (const auto& glyph : runNeedsGlyphGeometry ? std::span<const TextGlyph>(run.glyphs)
+                                                   : std::span<const TextGlyph>()) {
       if (glyph.glyphIndex == 0) {
         continue;  // `.notdef` -- skip to match tiny-skia.
       }
 
-      // Placed outline in document space, shared with RendererTinySkia via
-      // PlacedTextGeometry so the two backends can't drift on placement (0038).
-      // This encodes tiny-skia's order (stretch the raw outline, then
-      // `Rotate * Translate`) - geode previously composed
-      // `Scale * Rotate * Translate`, which stretched in the post-rotation frame
-      // (the D4 divergence). Empty for outline-less glyphs; bitmap-only fonts
-      // were already skipped at the run level above.
-      const Path placed = PlacedGlyphOutline(textEngine, run.font, glyph, scale);
-      if (placed.empty()) {
-        continue;
+      // Outline + placement are split by PlacedTextGeometry, which both
+      // backends share so they cannot drift on placement. The split encodes
+      // tiny-skia's order: stretch the raw outline, then `Rotate * Translate`.
+      // Geode once composed `Scale * Rotate * Translate`, which stretched in
+      // the post-rotation frame and diverged from tiny-skia.
+      geode::GlyphGeometryKey key;
+      // The font handle's entity id, versioned by entt, so a font that is
+      // unloaded and a different one loaded into the same slot cannot be
+      // mistaken for the original.
+      key.fontId = static_cast<uint64_t>(static_cast<uint32_t>(run.font.entity()));
+      key.glyphIndex = static_cast<uint32_t>(glyph.glyphIndex);
+      key.outlineScale = scale * glyph.fontSizeScale;
+      key.stretchScaleX = glyph.stretchScaleX;
+      key.stretchScaleY = glyph.stretchScaleY;
+      key.rotateDegrees = glyph.rotateDegrees;
+
+      geode::GeodeGlyphResidentEntry* entry =
+          impl_->residentGlyphEntry(registry, key, [&]() -> Path {
+            return UnplacedGlyphOutline(textEngine, run.font, glyph, scale).outline;
+          });
+      if (entry == nullptr || entry->outline.empty()) {
+        continue;  // No vector outline; bitmap-only fonts were skipped above.
       }
 
-      runGlyphPaths.push_back(placed);
+      const Transform2d glyphFromLocal = GlyphPlacementTransform(glyph);
+      runGlyphOccurrences.push_back(RunGlyphOccurrence{entry, glyphFromLocal});
+      if (needPlacedGlyphPaths) {
+        runGlyphPaths.push_back(TransformPath(entry->outline, glyphFromLocal));
+      }
     }
 
     const auto drawRunFill = [&]() {
+      if (residentGlyphFill) {
+        for (const RunGlyphOccurrence& occurrence : runGlyphOccurrences) {
+          // The ordinal advances even for an occurrence whose encode turns out
+          // empty (a whitespace-only outline), so an element's occurrence ->
+          // slot mapping stays stable across frames. That occurrence's slot is
+          // allocated and then left alone: the emit returns before any record
+          // is written, so the slot holds nothing and no draw reads it.
+          const geode::GeodeRecordSlab::Slot* recordSlot = nullptr;
+          std::vector<uint8_t>* recordCache = nullptr;
+          impl_->nextTextRecord(textRecords, registry, recordSlot, recordCache);
+          // `Transform2d`'s product applies its left operand first, so the
+          // glyph's placement into element-local space comes first and the
+          // element's device transform second. This is the same composition
+          // `pushTransform` performs for a nested element.
+          impl_->emitGlyphFill(*occurrence.entry, spanFill,
+                               occurrence.glyphFromLocal * impl_->deviceFromLocalTransform,
+                               recordSlot, recordCache);
+        }
+        // Stroke, decoration, and the next run all emit straight through the
+        // encoder without flushing, so close the batch here or they would land
+        // ahead of these glyphs. The flush leaves the encoder transform at
+        // identity; restore the element's.
+        impl_->flushPendingBatch();
+        impl_->encoder->setTransform(impl_->deviceFromLocalTransform);
+        return;
+      }
       for (const Path& placed : runGlyphPaths) {
         if (fillIsGradient) {
           // Gradient fill on text: resolve the gradient against the text bbox
@@ -5048,8 +5435,6 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
           impl_->encoder->fillPathPattern(
               placed, FillRule::NonZero,
               impl_->buildPatternPaint(*impl_->patternFillPaint, impl_->paint.fillOpacity));
-        } else if (hasFill) {
-          impl_->encoder->fillPath(placed, spanFill, FillRule::NonZero);
         }
       }
     };

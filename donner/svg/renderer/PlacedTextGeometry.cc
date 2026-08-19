@@ -35,16 +35,26 @@ Path TransformPath(const Path& path, const Transform2d& transform) {
   return builder.build();
 }
 
-Path PlacedGlyphOutline(const TextEngine& textEngine, FontHandle font, const TextGlyph& glyph,
-                        float scale) {
+Transform2d GlyphPlacementTransform(const TextGlyph& glyph) {
+  return Transform2d::Translate(glyph.xPosition, glyph.yPosition);
+}
+
+GlyphOutlineAndPlacement UnplacedGlyphOutline(const TextEngine& textEngine, FontHandle font,
+                                              const TextGlyph& glyph, float scale) {
+  GlyphOutlineAndPlacement result;
+
+  // Position. Computed even for an empty outline so the placement stays a pure
+  // function of the glyph's position fields.
+  result.glyphFromLocal = GlyphPlacementTransform(glyph);
+
   if (glyph.glyphIndex == 0) {
-    return Path();  // `.notdef` -- caller skips.
+    return result;  // `.notdef` -- caller skips.
   }
 
   // 1. Raw outline at the glyph's effective scale.
-  Path glyphPath = textEngine.glyphOutline(font, glyph.glyphIndex, scale * glyph.fontSizeScale);
-  if (glyphPath.empty()) {
-    return glyphPath;  // No vector outline (e.g. bitmap-only) -- caller handles.
+  result.outline = textEngine.glyphOutline(font, glyph.glyphIndex, scale * glyph.fontSizeScale);
+  if (result.outline.empty()) {
+    return result;  // No vector outline (e.g. bitmap-only) -- caller handles.
   }
 
   // 2. Stretch the raw outline (lengthAdjust=spacingAndGlyphs), matching
@@ -52,13 +62,52 @@ Path PlacedGlyphOutline(const TextEngine& textEngine, FontHandle font, const Tex
   //    when a per-glyph rotation is present the stretch axes follow the glyph,
   //    not the post-rotation frame.
   if (glyph.stretchScaleX != 1.0f || glyph.stretchScaleY != 1.0f) {
+    result.outline =
+        TransformPath(result.outline, Transform2d::Scale(glyph.stretchScaleX, glyph.stretchScaleY));
+  }
+
+  // 3. Rotation, baked into the OUTLINE rather than left in the placement.
+  //
+  //    A renderer that keeps this outline and carries `glyphFromLocal` as a
+  //    draw transform is choosing the coordinate space its rasteriser works in.
+  //    Leaving a rotation in that transform tilts the outline's own space
+  //    against the pixel grid, and a rasteriser that evaluates coverage with
+  //    per-axis pixel footprints then measures a rotated glyph through a
+  //    coarser footprint than an upright one - visibly softer edges on
+  //    `rotate` and on `textPath`, which rotates every glyph. Baking it here
+  //    keeps that space axis-aligned, and the rotation stays part of the
+  //    glyph's identity so one angle costs one cached outline.
+  if (glyph.rotateDegrees != 0.0) {
+    result.outline = TransformPath(
+        result.outline,
+        Transform2d::Rotate(glyph.rotateDegrees * MathConstants<double>::kPi / 180.0));
+  }
+
+  return result;
+}
+
+Path PlacedGlyphOutline(const TextEngine& textEngine, FontHandle font, const TextGlyph& glyph,
+                        float scale) {
+  if (glyph.glyphIndex == 0) {
+    return Path();  // `.notdef` -- caller skips.
+  }
+
+  // Deliberately NOT built from `UnplacedGlyphOutline`: this composes the
+  // placement into ONE affine and transforms the outline once, and the CPU
+  // backend's golden images are pinned to that exact arithmetic. Splitting it
+  // into a rotate pass and a translate pass is the same mapping but not the
+  // same rounding.
+  Path glyphPath = textEngine.glyphOutline(font, glyph.glyphIndex, scale * glyph.fontSizeScale);
+  if (glyphPath.empty()) {
+    return glyphPath;  // No vector outline (e.g. bitmap-only) -- caller handles.
+  }
+
+  if (glyph.stretchScaleX != 1.0f || glyph.stretchScaleY != 1.0f) {
     glyphPath =
         TransformPath(glyphPath, Transform2d::Scale(glyph.stretchScaleX, glyph.stretchScaleY));
   }
 
-  // 3. Position: translate to the baseline origin, then rotate about it. As a
-  //    composed transform this is `Rotate * Translate` (translate applied
-  //    first), matching `RendererTinySkia::drawText`.
+  // Translate to the baseline origin and rotate about it, as one transform.
   Transform2d glyphFromLocal = Transform2d::Translate(glyph.xPosition, glyph.yPosition);
   if (glyph.rotateDegrees != 0.0) {
     glyphFromLocal = Transform2d::Rotate(glyph.rotateDegrees * MathConstants<double>::kPi / 180.0) *

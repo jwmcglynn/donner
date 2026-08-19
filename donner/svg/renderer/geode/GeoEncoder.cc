@@ -653,7 +653,27 @@ struct GeoEncoder::Impl : public GeodeTextureEncoder::UniformScratch {
   bool ensureResidentSceneRecordImpl(GeodeResidentSlot& slot, const EncodedPath& encoded,
                                      const FillDrawArgs& args, const Transform2d& recordTransform,
                                      const GeodeRecordSlab::Slot* recordSlotOverride,
-                                     bool bakeTransform);
+                                     std::vector<uint8_t>* overrideRecordCache, bool bakeTransform);
+
+  /// Publish the solo resident draw's uniform for `slot`, skipping the write
+  /// when the bytes are unchanged. Only the solo path calls this: a scene
+  /// batch binds a per-batch arena uniform instead.
+  void publishSoloUniform(GeodeResidentSlot& slot, const FillDrawArgs& args,
+                          const InstanceRecord& record);
+
+  /// Publish `record` into the record slot backing this draw, skipping the
+  /// write when the guarding cache already holds these bytes. Which slot and
+  /// which cache apply depends on what the caller supplied:
+  ///   - no override: the slot's own record, guarded by `slot.lastRecord`.
+  ///   - override without a cache: a per-frame temporary slot (same-frame
+  ///     repeat draws). Always fresh, so always written.
+  ///   - override with a cache: a caller-owned slot whose last contents the
+  ///     caller keeps (per-occurrence text records, which persist across
+  ///     frames), guarded by that cache.
+  /// Returns false when no record buffer backs the target slot.
+  bool publishInstanceRecord(GeodeResidentSlot& slot, const InstanceRecord& record,
+                             const GeodeRecordSlab::Slot* recordSlotOverride,
+                             std::vector<uint8_t>* overrideRecordCache);
 
   /// Gradient-paint extension: (re)upload `encoded` into the
   /// gradient slot's persistent combined buffer (same eight SSBO regions,
@@ -1888,7 +1908,7 @@ bool GeoEncoder::Impl::submitResidentFillDraw(GeodeResidentSlot& slot, const Enc
   ensurePassOpen();
   bindSolidPipeline();
 
-  if (!ensureResidentSceneRecordImpl(slot, encoded, args, transform, nullptr,
+  if (!ensureResidentSceneRecordImpl(slot, encoded, args, transform, nullptr, nullptr,
                                      /*bakeTransform=*/true)) {
     return false;
   }
@@ -1909,7 +1929,7 @@ bool GeoEncoder::Impl::submitResidentFillDraw(GeodeResidentSlot& slot, const Enc
 bool GeoEncoder::Impl::ensureResidentSceneRecordImpl(
     GeodeResidentSlot& slot, const EncodedPath& encoded, const FillDrawArgs& args,
     const Transform2d& recordTransform, const GeodeRecordSlab::Slot* recordSlotOverride,
-    bool bakeTransform) {
+    std::vector<uint8_t>* overrideRecordCache, bool bakeTransform) {
   // Ensure the geometry is resident and current AND owned by THIS device.
   // Component removal is the primary invalidation; the pointer + fingerprint
   // guard catches the in-place stroke-slot rebuild (which replaces the encode
@@ -1973,38 +1993,56 @@ bool GeoEncoder::Impl::ensureResidentSceneRecordImpl(
     // of every draw in the frame's single submit, so a scene-form write
     // after a recorded solo draw would retroactively change that draw's
     // uniform (last write wins at submit time).
-    Uniforms u = {};
-    populateBatchUniform(u, args, transform, /*identityMvp=*/false);
-    copyRecordParamsToUniform(u, record);
-    writeSoloGeometryBases(u, slot);
-    const auto* uBytes = reinterpret_cast<const uint8_t*>(&u);
-    if (slot.lastUniform.size() != sizeof(Uniforms) ||
-        std::memcmp(slot.lastUniform.data(), uBytes, sizeof(Uniforms)) != 0) {
-      device->queue().writeBuffer(slot.buffer, slot.uniform.offset, &u, sizeof(Uniforms));
-      device->countBufferWrite(sizeof(Uniforms));
-      slot.lastUniform.assign(uBytes, uBytes + sizeof(Uniforms));
-    }
+    publishSoloUniform(slot, args, record);
     return true;
   }
 
-  const auto* rBytes = reinterpret_cast<const uint8_t*>(&record);
+  return publishInstanceRecord(slot, record, recordSlotOverride, overrideRecordCache);
+}
+
+void GeoEncoder::Impl::publishSoloUniform(GeodeResidentSlot& slot, const FillDrawArgs& args,
+                                          const InstanceRecord& record) {
+  Uniforms u = {};
+  populateBatchUniform(u, args, transform, /*identityMvp=*/false);
+  copyRecordParamsToUniform(u, record);
+  writeSoloGeometryBases(u, slot);
+
+  const auto* uBytes = reinterpret_cast<const uint8_t*>(&u);
+  if (slot.lastUniform.size() == sizeof(Uniforms) &&
+      std::memcmp(slot.lastUniform.data(), uBytes, sizeof(Uniforms)) == 0) {
+    return;
+  }
+
+  device->queue().writeBuffer(slot.buffer, slot.uniform.offset, &u, sizeof(Uniforms));
+  device->countBufferWrite(sizeof(Uniforms));
+  slot.lastUniform.assign(uBytes, uBytes + sizeof(Uniforms));
+}
+
+bool GeoEncoder::Impl::publishInstanceRecord(GeodeResidentSlot& slot, const InstanceRecord& record,
+                                             const GeodeRecordSlab::Slot* recordSlotOverride,
+                                             std::vector<uint8_t>* overrideRecordCache) {
   const GeodeRecordSlab::Slot& recordSlot =
       recordSlotOverride != nullptr ? *recordSlotOverride : slot.recordSlot;
   if (!recordSlot.buffer) {
     return false;
   }
-  if (recordSlotOverride != nullptr) {
-    // Per-frame temporary record slot (same-frame repeat draws): always
-    // fresh, so always written.
-    device->queue().writeBuffer(recordSlot.buffer, recordSlot.offset, &record,
-                                sizeof(InstanceRecord));
-    device->countBufferWrite(sizeof(InstanceRecord));
-  } else if (slot.lastRecord.size() != sizeof(InstanceRecord) ||
-             std::memcmp(slot.lastRecord.data(), rBytes, sizeof(InstanceRecord)) != 0) {
-    device->queue().writeBuffer(recordSlot.buffer, recordSlot.offset, &record,
-                                sizeof(InstanceRecord));
-    device->countBufferWrite(sizeof(InstanceRecord));
-    slot.lastRecord.assign(rBytes, rBytes + sizeof(InstanceRecord));
+
+  // The cache guarding this write, or null when nothing guards it. An
+  // override slot without a caller-supplied cache is a per-frame temporary
+  // (same-frame repeat draws): always fresh, so always written.
+  std::vector<uint8_t>* cache =
+      recordSlotOverride != nullptr ? overrideRecordCache : &slot.lastRecord;
+  const auto* rBytes = reinterpret_cast<const uint8_t*>(&record);
+  if (cache != nullptr && cache->size() == sizeof(InstanceRecord) &&
+      std::memcmp(cache->data(), rBytes, sizeof(InstanceRecord)) == 0) {
+    return true;
+  }
+
+  device->queue().writeBuffer(recordSlot.buffer, recordSlot.offset, &record,
+                              sizeof(InstanceRecord));
+  device->countBufferWrite(sizeof(InstanceRecord));
+  if (cache != nullptr) {
+    cache->assign(rBytes, rBytes + sizeof(InstanceRecord));
   }
   return true;
 }
@@ -2112,7 +2150,8 @@ void GeoEncoder::fillPathInstanced(const EncodedPath& encoded, const css::RGBA& 
 bool GeoEncoder::ensureResidentSceneRecord(GeodeResidentSlot& slot, const EncodedPath& encoded,
                                            const css::RGBA& color, FillRule rule,
                                            const Transform2d& recordTransform,
-                                           const GeodeRecordSlab::Slot* recordSlotOverride) {
+                                           const GeodeRecordSlab::Slot* recordSlotOverride,
+                                           std::vector<uint8_t>* overrideRecordCache) {
   if (encoded.empty()) {
     return false;
   }
@@ -2134,7 +2173,8 @@ bool GeoEncoder::ensureResidentSceneRecord(GeodeResidentSlot& slot, const Encode
   args.tileSize = Vector2d(1.0, 1.0);
   args.patternFromPath = Transform2d();
   return impl_->ensureResidentSceneRecordImpl(slot, encoded, args, recordTransform,
-                                              recordSlotOverride, /*bakeTransform=*/false);
+                                              recordSlotOverride, overrideRecordCache,
+                                              /*bakeTransform=*/false);
 }
 
 void GeoEncoder::fillPathSceneBatch(const css::RGBA& color, FillRule rule,

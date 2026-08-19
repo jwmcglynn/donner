@@ -2,6 +2,7 @@
 /// @file
 /// RAII wrapper around a WebGPU device - headless or host-provided.
 
+#include <algorithm>
 #include <atomic>
 #include <cstddef>
 #include <map>
@@ -491,6 +492,62 @@ public:
   void countTextureWrite(uint64_t bytes) const {
     if (counters_) counters_->textureWriteBytes += bytes;
   }
+  /**
+   * Open a frame on this device and return its generation.
+   *
+   * Generations are DEVICE-scoped and monotonic, so two renderers sharing one
+   * device cannot mint the same index. That happens routinely: an offscreen
+   * renderer built from this device renders an `feImage` fragment or a layer
+   * thumbnail from the same document while the outer renderer's frame is still
+   * open and has already recorded draws. With per-renderer counters the two
+   * frames alias, and a cache keyed on "was this touched in the current frame?"
+   * cannot tell the inner pass from the outer one - it would let the inner pass
+   * rewrite buffers the outer pass's recorded draws read, and every buffer
+   * write in a frame lands before every draw in that frame's submit.
+   *
+   * Pair with `endFrameGeneration`. A cache that must not recycle memory an
+   * unsubmitted frame still reads compares against
+   * `oldestOpenFrameGeneration()` rather than against its own index.
+   */
+  uint64_t beginFrameGeneration() {
+    const uint64_t generation = ++frameGeneration_;
+    openFrameGenerations_.push_back(generation);
+    return generation;
+  }
+
+  /// Close a generation opened by `beginFrameGeneration`. Unknown values are
+  /// ignored, so a renderer that never opened one (no-op mode) is safe.
+  void endFrameGeneration(uint64_t generation) {
+    const auto it =
+        std::find(openFrameGenerations_.begin(), openFrameGenerations_.end(), generation);
+    if (it != openFrameGenerations_.end()) {
+      openFrameGenerations_.erase(it);
+    }
+  }
+
+  /// Oldest generation whose frame has not closed yet, or `~0` when no frame is
+  /// open. Anything a generation at or after this touched may still be read by
+  /// an unsubmitted draw.
+  uint64_t oldestOpenFrameGeneration() const {
+    uint64_t oldest = ~uint64_t{0};
+    for (const uint64_t generation : openFrameGenerations_) {
+      oldest = std::min(oldest, generation);
+    }
+    return oldest;
+  }
+
+  /// Record one glyph occurrence served from an already-resident outline.
+  void countGlyphResidencyHit() const {
+    if (counters_) ++counters_->glyphResidencyHits;
+  }
+  /// Record one unique glyph outline encoded and made resident.
+  void countGlyphResidencyUpload() const {
+    if (counters_) ++counters_->glyphResidencyUploads;
+  }
+  /// Record `count` cached glyph outlines dropped to stay inside the budget.
+  void countGlyphResidencyEvictions(uint64_t count) const {
+    if (counters_) counters_->glyphResidencyEvictions += count;
+  }
 
   /// Shared live-resident-bytes gauge for GPU residence. Co-owned with
   /// each `GeodeResidentSlot`'s buffer so
@@ -678,6 +735,13 @@ private:
 
   /// Process-unique identity assigned at construction. See `deviceId()`.
   const uint64_t deviceId_ = 0;
+
+  /// Monotonic device-scoped frame counter; see `beginFrameGeneration()`.
+  uint64_t frameGeneration_ = 0;
+  /// Generations opened but not yet closed. At most a handful are ever live
+  /// (an outer frame plus its nested offscreen passes), so a linear scan is
+  /// cheaper than any ordered container.
+  std::vector<uint64_t> openFrameGenerations_;
 
   /// Shared device-lost flag; never null. Created at construction, replaced
   /// by the host's shared state in `CreateFromExternal` when

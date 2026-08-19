@@ -171,7 +171,7 @@ struct KnownViolation {
   std::string_view tracking;
 };
 
-constexpr std::array<KnownViolation, 32> kKnownViolations = {{
+constexpr std::array<KnownViolation, 29> kKnownViolations = {{
     {
         /*scene=*/"donner_icon",
         /*violated=*/kTextureCreates | kBufferWrites | kBindgroupCreates,
@@ -437,17 +437,6 @@ constexpr std::array<KnownViolation, 32> kKnownViolations = {{
         "per source entity",
     },
     {
-        /*scene=*/"simple_text_demo",
-        /*violated=*/kPathEncodes | kBufferWrites | kBindgroupCreates,
-        /*ceiling=*/{24, 0, 216, 24},
-        /*reason=*/
-        "glyph outlines are re-encoded and re-uploaded every frame; placed text has no path "
-        "cache or residency",
-        /*tracking=*/
-        "clears when placed glyph geometry gets the same per-entity cache and residency "
-        "shapes have",
-    },
-    {
         /*scene=*/"stroking_complex",
         /*violated=*/kPathEncodes | kBufferWrites | kBindgroupCreates,
         /*ceiling=*/{8, 0, 16, 8},
@@ -482,45 +471,25 @@ constexpr std::array<KnownViolation, 32> kKnownViolations = {{
         "have",
     },
     {
-        /*scene=*/"text_inline_size_wrap",
-        /*violated=*/kPathEncodes | kBufferWrites | kBindgroupCreates,
-        /*ceiling=*/{35, 0, 315, 35},
-        /*reason=*/
-        "every wrapped glyph outline is re-encoded and re-uploaded each frame; placed text "
-        "has no path cache or residency",
-        /*tracking=*/
-        "clears when placed glyph geometry gets the same per-entity cache and residency "
-        "shapes have",
-    },
-    {
-        /*scene=*/"text_nested_baseline_shift_idempotency",
-        /*violated=*/kPathEncodes | kBufferWrites,
-        /*ceiling=*/{2, 0, 18, 2},
-        /*reason=*/
-        "glyph outlines are re-encoded and re-uploaded every frame; placed text has no path "
-        "cache or residency",
-        /*tracking=*/
-        "clears when placed glyph geometry gets the same per-entity cache and residency "
-        "shapes have",
-    },
-    {
         /*scene=*/"z0rly_test6",
-        /*violated=*/kPathEncodes | kBufferWrites | kBindgroupCreates,
-        /*ceiling=*/{22, 0, 198, 22},
+        /*violated=*/kBindgroupCreates,
+        /*ceiling=*/{0, 0, 0, 22},
         /*reason=*/
-        "music-notation glyphs from an embedded font face re-encode and re-upload their "
-        "outlines every frame; placed text has no path cache or residency",
+        "residency removed this scene's outline re-encodes and uniform re-uploads, but its "
+        "music-notation glyphs are drawn from many separate text elements that ordered batching "
+        "does not merge, so each draw still builds its own bind group",
         /*tracking=*/
-        "clears when placed glyph geometry gets the same per-entity cache and residency "
-        "shapes have",
+        "clears when bind groups are cached across draws that share a pipeline, or when batching "
+        "merges runs from separate text elements",
     },
 }};
 
 const KnownViolation* findKnownViolation(std::string_view scene) {
   for (const KnownViolation& entry : kKnownViolations) {
-    if (entry.scene == scene) {
-      return &entry;
+    if (entry.scene != scene) {
+      continue;
     }
+    return &entry;
   }
   return nullptr;
 }

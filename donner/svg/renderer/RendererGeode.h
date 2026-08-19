@@ -394,6 +394,28 @@ public:
   [[nodiscard]] RendererGeodeTexturePoolStats texturePoolStats() const;
 
   /**
+   * Whether cross-entity ordered batching is compiled into this build.
+   *
+   * Batching collapses many draws into one, so any assertion about draw-call
+   * counts or about the buffer traffic a batch's records replace has a
+   * different right answer in each build state. Tests read this rather than
+   * hard-coding one of them.
+   */
+  [[nodiscard]] static bool sceneBatchingEnabledForTesting();
+
+  /**
+   * Shrink the glyph-residency budget so eviction can be exercised without
+   * building a font-sized working set.
+   *
+   * @param maxEntries Distinct cached glyph outlines to keep.
+   * @param maxEncodedBytes Summed encode bytes to keep.
+   */
+  void setGlyphResidencyBudgetForTesting(size_t maxEntries, uint64_t maxEncodedBytes);
+
+  /// Number of glyph outlines currently resident for `document`.
+  [[nodiscard]] size_t residentGlyphCountForTesting(SVGDocument& document);
+
+  /**
    * Captures the current resolved render target as a directly sampleable
    * WebGPU texture.
    *

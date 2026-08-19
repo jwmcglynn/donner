@@ -39,13 +39,79 @@ namespace donner::svg {
 Path TransformPath(const Path& path, const Transform2d& transform);
 
 /**
- * @brief Build the placed outline for a single glyph in document space.
+ * @brief A glyph's outline split into the part that depends only on the glyph
+ *   and the part that depends only on where the glyph sits in the run.
  *
- * Encodes tiny-skia's exact placement sequence:
+ * The two compose back into the placed outline: `TransformPath(outline,
+ * glyphFromLocal)` maps to the same place `PlacedGlyphOutline` does. It is not
+ * the same arithmetic - that one composes the placement into a single affine -
+ * so the two agree as mappings, not bit for bit, whenever a rotation is
+ * present.
+ *
+ * Splitting them lets a renderer key a cache on glyph identity (font, glyph
+ * index, effective scale, stretch, rotation) and reuse one outline for every
+ * occurrence, carrying the per-occurrence placement as a transform instead of
+ * re-deriving and re-transforming the outline for each one.
+ */
+struct GlyphOutlineAndPlacement {
+  /// Raw glyph outline at the glyph's effective scale, with the lengthAdjust
+  /// stretch and the per-glyph rotation already baked in. Empty for `.notdef`
+  /// and for glyphs with no vector outline.
+  Path outline;
+  /// Pure translation placing `outline` at its baseline position in the text
+  /// element's local space.
+  Transform2d glyphFromLocal;
+};
+
+/**
+ * @brief The affine that places a glyph's unplaced outline at its baseline
+ *   position in the text element's local space.
+ *
+ * A pure translation to `(xPosition, yPosition)`. Per-glyph rotation is NOT
+ * here: it is baked into the outline by \ref UnplacedGlyphOutline, so a
+ * renderer that rasterises in the outline's own space keeps that space aligned
+ * with the pixel grid. Depends only on the glyph's position, so a renderer that
+ * caches outlines by glyph identity can compute this per occurrence without
+ * touching the font backend.
+ *
+ * @param glyph The positioned glyph.
+ * @return The placement transform.
+ */
+Transform2d GlyphPlacementTransform(const TextGlyph& glyph);
+
+/**
+ * @brief Build a glyph's unplaced outline and its placement transform.
+ *
+ * Encodes tiny-skia's placement inputs, split at the point where the
+ * glyph-identity-dependent work ends:
  *   1. `glyphOutline(font, glyph.glyphIndex, scale * glyph.fontSizeScale)`,
  *   2. stretch the **raw outline** by `Scale(stretchScaleX, stretchScaleY)`
  *      (only when either differs from 1),
- *   3. position via `Rotate(rotateDegrees) * Translate(xPosition, yPosition)`.
+ *   3. rotate by `rotateDegrees` about the glyph's own origin -- these three
+ *      produce `outline`,
+ *   4. `Translate(xPosition, yPosition)` -- this is `glyphFromLocal`.
+ *
+ * Steps 1 to 3 depend only on (font, glyph index, `scale * fontSizeScale`,
+ * stretch, rotation); step 4 depends only on the glyph's position.
+ *
+ * @param textEngine Engine providing glyph outlines.
+ * @param font Font handle for the run.
+ * @param glyph The positioned glyph (carries position, rotation, stretch).
+ * @param scale Per-run pixel-height scale (`scaleForPixelHeight(font, sizePx)`).
+ * @return The unplaced outline plus its placement transform.
+ */
+GlyphOutlineAndPlacement UnplacedGlyphOutline(const TextEngine& textEngine, FontHandle font,
+                                              const TextGlyph& glyph, float scale);
+
+/**
+ * @brief Build the placed outline for a single glyph in document space.
+ *
+ * Encodes tiny-skia's exact placement sequence: stretch the raw outline, then
+ * position it with `Rotate(rotateDegrees) * Translate(xPosition, yPosition)`
+ * composed into ONE affine and applied once. The single composition is
+ * load-bearing rather than incidental: the CPU backend's golden images are
+ * pinned to that arithmetic, so \ref UnplacedGlyphOutline's two-step form is
+ * not a drop-in substitute for it.
  *
  * Returns an empty path for `.notdef` (glyphIndex 0) or when the font has no
  * vector outline for the glyph (e.g. bitmap-only fonts) - callers handle those
