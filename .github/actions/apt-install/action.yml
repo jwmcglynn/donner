@@ -52,6 +52,10 @@ runs:
       run: |
         set -euo pipefail
 
+        # `Acquire::Retries` retries an individual fetch inside one apt run, which
+        # is a different layer from retrying the whole install below: it covers a
+        # single flaky mirror response without paying for a full re-run.
+
         # Collapse the input to one line so the caller can format the list
         # readably in YAML without worrying about continuations.
         read -r -a packages <<< "$(printf '%s' "$APT_PACKAGES" | tr '\n' ' ')"
@@ -69,10 +73,11 @@ runs:
           # `timeout` signals the process group it started, which this shell
           # owns, so a stuck mirror is bounded without any cross-user kill.
           timeout --signal=TERM --kill-after=30s "$APT_ATTEMPT_TIMEOUT" \
-            sudo -E apt-get update || status=$?
+            sudo -E apt-get -o Acquire::Retries=3 update || status=$?
           if [ "$status" -eq 0 ]; then
             timeout --signal=TERM --kill-after=30s "$APT_ATTEMPT_TIMEOUT" \
-              sudo -E apt-get install -y --no-install-recommends "${packages[@]}" || status=$?
+              sudo -E apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+                "${packages[@]}" || status=$?
           fi
           echo "::endgroup::"
 
