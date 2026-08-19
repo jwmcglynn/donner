@@ -3297,7 +3297,7 @@ TEST_F(TextEditorTests, FocusReferenceSourceUnderlineHandlesReferenceCharactersA
   EXPECT_LT(bangUnderline->start.x, bangUnderline->end.x);
 }
 
-TEST_F(TextEditorTests, FocusReferenceRopesRenderAcrossViewportWithBothEndpointsOffscreen) {
+std::string LongFocusReferenceSource() {
   std::ostringstream source;
   source << "  <defs>\n"
          << "    <linearGradient id=\"grad\"/>\n"
@@ -3307,7 +3307,11 @@ TEST_F(TextEditorTests, FocusReferenceRopesRenderAcrossViewportWithBothEndpoints
     source << "  <!-- filler " << i << " -->\n";
   }
   source << "  <circle stroke=\"url(#grad)\"/>\n";
-  editor.setText(source.str());
+  return source.str();
+}
+
+TEST_F(TextEditorTests, FocusReferenceRopesRenderAcrossViewportWithBothEndpointsOffscreen) {
+  editor.setText(LongFocusReferenceSource());
   editor.resetTextChanged();
 
   const FocusReferenceLink crossingLink{
@@ -3336,16 +3340,7 @@ TEST_F(TextEditorTests, FocusReferenceRopesRenderAcrossViewportWithBothEndpoints
 }
 
 TEST_F(TextEditorTests, FocusReferenceRopesClipToScrolledSourceViewport) {
-  std::ostringstream source;
-  source << "  <defs>\n"
-         << "    <linearGradient id=\"grad\"/>\n"
-         << "  </defs>\n"
-         << "  <rect fill=\"url(#grad)\"/>\n";
-  for (int i = 0; i < 80; ++i) {
-    source << "  <!-- filler " << i << " -->\n";
-  }
-  source << "  <circle stroke=\"url(#grad)\"/>\n";
-  editor.setText(source.str());
+  editor.setText(LongFocusReferenceSource());
   editor.resetTextChanged();
 
   const FocusReferenceLink scrolledLink{
@@ -3371,6 +3366,30 @@ TEST_F(TextEditorTests, FocusReferenceRopesClipToScrolledSourceViewport) {
   EXPECT_EQ(ropeCost.drawnCount, 1);
   EXPECT_EQ(ropeCost.activeStateCount, 1);
   EXPECT_NE(FocusReferenceRope(scrolledLink), nullptr);
+}
+
+TEST_F(TextEditorTests, FocusReferenceRopesCullRoutesEntirelyBelowViewport) {
+  editor.setText(LongFocusReferenceSource());
+  editor.resetTextChanged();
+
+  const FocusReferenceLink belowViewport{
+      .from = SourcePoint{.line = 84, .column = 23},
+      .to = SourcePoint{.line = 83, .column = 4},
+  };
+  editor.setFocusPartition(FocusPartition{
+      .fullColor = {LineRange{.startLine = 1, .endLine = 85}},
+      .referenceLinks = {belowViewport},
+  });
+
+  RenderEditorFrame(ImVec2(520.0f, 120.0f));
+
+  const FrameCostBreakdown::SourceRopes& ropeCost = editor.lastSourceRopeCost();
+  EXPECT_EQ(ropeCost.candidateCount, 1);
+  EXPECT_EQ(ropeCost.laidOutCount, 1);
+  EXPECT_EQ(ropeCost.culledCount, 1);
+  EXPECT_EQ(ropeCost.drawnCount, 0);
+  EXPECT_EQ(ropeCost.activeStateCount, 0);
+  EXPECT_EQ(FocusReferenceRope(belowViewport), nullptr);
 }
 
 TEST_F(TextEditorTests, FocusReferenceRopesUseStaticConnectorsAfterAnimatedCap) {
