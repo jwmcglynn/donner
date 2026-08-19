@@ -1,0 +1,97 @@
+name: Install apt packages
+description: >-
+  Install Debian packages with retries that run inside the shell, so a slow
+  mirror costs time instead of failing the job.
+
+# Why this exists rather than a retry wrapper action:
+#
+# These installs used to run under a third-party retry action with a five
+# minute per-attempt timeout. When that timeout fired, the action tried to
+# kill the running command, but the command is `sudo apt-get`, whose process
+# the runner user is not permitted to signal. The kill failed with EPERM and
+# the action reported that error as the step result, so an apt run that was
+# merely slow became a hard job failure. It hit the sanitizer, linker canary,
+# and CodeQL lanes repeatedly, each time costing a rerun on a job that had
+# nothing wrong with it.
+#
+# Retrying inside the shell removes that failure mode: nothing external needs
+# to signal the process, so there is no kill to be denied. A hung apt is still
+# bounded, but by `timeout` sending signals to a process tree the shell owns,
+# and by the job's own `timeout-minutes`.
+inputs:
+  packages:
+    description: >-
+      Packages to install. Whitespace or newline separated; a trailing
+      backslash is not needed.
+    required: true
+  attempts:
+    description: How many times to try the update/install pair.
+    required: false
+    default: "3"
+  attempt-timeout:
+    description: >-
+      Per-attempt wall clock limit, as a `timeout(1)` duration. Generous on
+      purpose: exceeding it means apt is stuck, not merely slow.
+    required: false
+    default: "15m"
+  retry-wait-seconds:
+    description: Seconds to wait between attempts.
+    required: false
+    default: "15"
+
+runs:
+  using: composite
+  steps:
+    - name: Install packages
+      shell: bash
+      env:
+        APT_PACKAGES: ${{ inputs.packages }}
+        APT_ATTEMPTS: ${{ inputs.attempts }}
+        APT_ATTEMPT_TIMEOUT: ${{ inputs.attempt-timeout }}
+        APT_RETRY_WAIT: ${{ inputs.retry-wait-seconds }}
+      run: |
+        set -euo pipefail
+
+        # `Acquire::Retries` retries an individual fetch inside one apt run, which
+        # is a different layer from retrying the whole install below: it covers a
+        # single flaky mirror response without paying for a full re-run.
+
+        # Collapse the input to one line so the caller can format the list
+        # readably in YAML without worrying about continuations.
+        read -r -a packages <<< "$(printf '%s' "$APT_PACKAGES" | tr '\n' ' ')"
+        if [ "${#packages[@]}" -eq 0 ]; then
+          echo "apt-install: no packages requested" >&2
+          exit 1
+        fi
+
+        export DEBIAN_FRONTEND=noninteractive
+
+        attempt=1
+        while true; do
+          echo "::group::apt attempt ${attempt} of ${APT_ATTEMPTS}"
+          status=0
+          # `timeout` signals the process group it started, which this shell
+          # owns, so a stuck mirror is bounded without any cross-user kill.
+          timeout --signal=TERM --kill-after=30s "$APT_ATTEMPT_TIMEOUT" \
+            sudo -E apt-get -o Acquire::Retries=3 update || status=$?
+          if [ "$status" -eq 0 ]; then
+            timeout --signal=TERM --kill-after=30s "$APT_ATTEMPT_TIMEOUT" \
+              sudo -E apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+                "${packages[@]}" || status=$?
+          fi
+          echo "::endgroup::"
+
+          if [ "$status" -eq 0 ]; then
+            sudo apt-get clean || true
+            exit 0
+          fi
+
+          if [ "$attempt" -ge "$APT_ATTEMPTS" ]; then
+            echo "apt-install: failed after ${APT_ATTEMPTS} attempts (last status ${status})" >&2
+            exit "$status"
+          fi
+
+          echo "apt-install: attempt ${attempt} failed with status ${status}; retrying in ${APT_RETRY_WAIT}s" >&2
+          sleep "$APT_RETRY_WAIT"
+          attempt=$((attempt + 1))
+        done

@@ -29,6 +29,7 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         cls.editor_wasm = _workflow_text(".github/workflows/editor_wasm.yml")
         cls.lint = _workflow_text(".github/workflows/lint.yml")
         cls.coverage_script = _workflow_text("tools/coverage.sh")
+        cls.apt_install = _workflow_text(".github/actions/apt-install/action.yml")
 
     def _job_body(self, job):
         marker = "\n  %s:\n" % job
@@ -164,16 +165,38 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
                 self.assertNotIn("tools/ci_bazel_test.sh", step)
 
     def test_linker_canary_uses_bounded_native_apt_retries(self):
-        """The hosted canary must not ask an unprivileged action to kill apt."""
+        """The hosted canary must not ask an unprivileged action to kill apt.
+
+        The bound now lives in the shared action rather than the step: retrying
+        inside the shell means nothing external has to signal a sudo-owned
+        process, which is the failure this contract exists to prevent.
+        """
         job = self._job_body("linker-canary")
         install = job.split("- name: Install system dependencies", 1)[1].split(
             "- name: Setup Bazel", 1
         )[0]
 
         self.assertNotIn("nick-fields/retry", install)
-        self.assertIn("timeout-minutes: 15", install)
-        self.assertEqual(2, install.count("Acquire::Retries=3"))
+        self.assertIn("uses: ./.github/actions/apt-install", install)
         self.assertNotIn("clang-tidy", install)
+
+    def test_shared_apt_action_bounds_and_retries_without_external_kill(self):
+        """Every apt install inherits the bound, so no lane can regress alone."""
+        # No wrapper that would have to kill a sudo-owned process.
+        self.assertNotIn("nick-fields/retry", self.apt_install)
+        # A stuck apt is bounded by a timeout the shell itself owns.
+        self.assertIn("timeout --signal=TERM", self.apt_install)
+        self.assertIn('attempt-timeout', self.apt_install)
+        # Transport-level retries cover a single flaky fetch; the surrounding
+        # loop covers apt failing or hanging outright.
+        self.assertEqual(2, self.apt_install.count("Acquire::Retries=3"))
+        self.assertIn("attempt=$((attempt + 1))", self.apt_install)
+
+        # No surviving wrapper wraps an apt install. A wrapper around brew is
+        # fine and still present: brew does not run under sudo, so the kill
+        # that fails here would succeed there.
+        for block in self.main.split("uses: nick-fields/retry")[1:]:
+            self.assertNotIn("apt-get", block.split("- name:", 1)[0])
 
     def test_cmake_generator_validation_retries_only_after_failure(self):
         """Transient Bazel query failures get one retry without masking a persistent failure."""
