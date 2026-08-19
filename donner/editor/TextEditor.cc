@@ -2282,10 +2282,7 @@ void TextEditor::renderFocusReferenceLinks(ImDrawList* drawList) {
       continue;
     }
     ++ropeCost.laidOutCount;
-    if (!BoxesIntersect(layoutBounds(*layout), visibleTextBounds)) {
-      ++ropeCost.culledCount;
-      continue;
-    }
+    const Box2d connectorLayoutBounds = layoutBounds(*layout);
 
     const auto drawStaticConnector = [&] {
       const auto drawStart = std::chrono::steady_clock::now();
@@ -2307,9 +2304,14 @@ void TextEditor::renderFocusReferenceLinks(ImDrawList* drawList) {
     };
 
     if (animatedLinkCount >= kMaxAnimatedFocusReferenceRopes) {
+      if (!BoxesIntersect(connectorLayoutBounds, visibleTextBounds)) {
+        ++ropeCost.culledCount;
+        continue;
+      }
       drawStaticConnector();
       continue;
     }
+    ++animatedLinkCount;
 
     const auto updateStart = std::chrono::steady_clock::now();
     const Vector2d start = ToVector2d(layout->start);
@@ -2337,12 +2339,16 @@ void TextEditor::renderFocusReferenceLinks(ImDrawList* drawList) {
     ropeState.chordLength = chordLength;
     ropeState.lastFrameSeen = focusReferenceRopeFrame_;
     ropeCost.updateMs += MillisecondsSince(updateStart);
-    ++animatedLinkCount;
 
     const std::optional<Box2d> routeBounds = ropeState.path.bounds();
-    if (routeBounds.has_value() && !BoxesIntersect(*routeBounds, visibleTextBounds)) {
+    Box2d completeRouteBounds = connectorLayoutBounds;
+    if (routeBounds.has_value()) {
+      AddPointToBox(&completeRouteBounds, ToImVec2(routeBounds->topLeft));
+      AddPointToBox(&completeRouteBounds, ToImVec2(routeBounds->bottomRight));
+    }
+    if (!BoxesIntersect(completeRouteBounds, visibleTextBounds)) {
       ++ropeCost.culledCount;
-      ++visibleLinkIndex;
+      focusReferenceRopes_.erase(link);
       continue;
     }
 

@@ -38,8 +38,8 @@ gesture-owned bounds instead of rewalking selected path geometry, and cached dra
 to live selections by entity identity. Source reveal preserves the canvas center and keeps the
 existing full-document raster when a pane-bounded raster would be larger. Reference ropes are
 clipped by their complete route, so the visible middle remains drawn when both endpoints are above
-and below the fold. CSS source annotations run against an isolated source snapshot and are applied
-only after revision validation.
+and below the fold, while fully offscreen routes retain no simulation state. CSS source annotations
+run against an isolated source snapshot and are applied only after revision validation.
 
 ## Building
 

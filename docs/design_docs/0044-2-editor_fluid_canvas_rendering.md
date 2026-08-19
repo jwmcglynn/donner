@@ -90,9 +90,8 @@ This design proposes a second responsiveness pass:
   - [x] Add large-selection LOD: combined bounds first, visible path outlines during idle.
 - [x] **M3: Clip and cull source-pane ropes.**
   - [x] Push a source-pane clip rect around `renderFocusReferenceLinks`.
-  - [x] Skip rope simulation/draw only when the complete connector/route AABB is outside the
-        visible text region. Endpoint visibility alone cannot cull a rope whose middle crosses the
-        viewport.
+  - [x] Accept animated-rope visibility only after computing the complete connector/route AABB.
+        Endpoint visibility alone cannot cull a rope whose middle crosses the viewport.
   - [x] Cap animated rope count and fall back to static straight connectors for overflow.
 - [x] **M4: Immediate-mode cheap compositor spans.**
   - [x] Add a `StaticSpanPlan` for each paint-order gap: `CachedTile` or `Immediate`.
@@ -507,9 +506,10 @@ presented transform every time it is drawn.
 clip and cull:
 
 - push a clip rect for the source text content area before rope drawing;
-- compute a cheap route AABB from source endpoint, target endpoint, and slack bounds, even when
-  both endpoints are outside opposite edges of the visible region;
-- skip simulation and draw when the route AABB is outside the visible text region;
+- compute the actual bounded catenary route before accepting an animated candidate as visible, even
+  when both endpoints are outside the same or opposite edges of the visible region;
+- skip drawing and discard retained simulation state when the complete route AABB is outside the
+  visible text region; overflow static connectors use their exact chord and decoration bounds;
 - cap active simulated ropes, e.g. 64 visible ropes, and draw overflow as static straight lines or a
   chip count;
 - sleep ropes immediately when the source pane is not hovered, not scrolling, and no rope is near
