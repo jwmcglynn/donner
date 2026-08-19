@@ -116,8 +116,18 @@ test("Bazel owns a hermetic no-window Chromium browser lane", () => {
   );
   assert.match(
     buildFile,
-    /target_compatible_with = \[[\s\S]*?"@platforms\/\/cpu:aarch64"[\s\S]*?\] \+ select\(\{[\s\S]*?"@platforms\/\/os:macos": \[\][\s\S]*?"@platforms\/\/os:linux": \[\][\s\S]*?"\/\/conditions:default": \["@platforms\/\/:incompatible"\]/,
-    "the headless browser test must allow only macOS and Linux ARM64 execution",
+    /target_compatible_with = \[[\s\S]*?"@platforms\/\/cpu:aarch64"[\s\S]*?"@platforms\/\/os:macos"[\s\S]*?\]/,
+    "the headless browser test must allow only macOS ARM64 execution",
+  );
+  // Linux is excluded deliberately, not by omission: headless Chromium there
+  // cannot present a WebGPU OffscreenCanvas swapchain on the SwiftShader
+  // adapter, so the presented-pixel assertions can never pass. Restoring the
+  // platform needs a GPU-backed runner or upstream swapchain support, not just
+  // a constraint edit, so re-adding it here should fail this contract first.
+  assert.doesNotMatch(
+    buildFile,
+    /"@platforms\/\/os:linux"/,
+    "the headless browser test cannot run on Linux until WebGPU swapchain presentation exists there",
   );
 
   const chromiumConfig = readFileSync(path.join(testDirectory, "playwright.config.js"), "utf8");

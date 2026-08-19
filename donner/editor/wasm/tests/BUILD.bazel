@@ -37,11 +37,20 @@ playwright_bin.playwright_test(
         "NODE_OPTIONS": "",
         "PLAYWRIGHT_BROWSERS_PATH": "$(rootpath @playwright//:chromium)/../",
     },
+    # macOS-only: the selected smoke test asserts on presented WebGPU canvas
+    # pixels, and headless Chromium on Linux cannot present a WebGPU
+    # OffscreenCanvas swapchain with the SwiftShader WebGPU adapter. The GPU
+    # service finds no SharedImageBackingFactory for the swapchain allocation
+    # (usage WebgpuSwapChainTexture|DisplayRead|...), fails the first present,
+    # and destroys the device, after which every WebGPU call rejects with "A
+    # valid external Instance reference no longer exists". A browser-only
+    # probe (worker + transferred OffscreenCanvas + clear + present) fails the
+    # same way with no Donner code involved, on both Chromium 147 and 151 and
+    # with ANGLE/SwiftShader GL, Vulkan, and Graphite flag configurations, so
+    # this is an environment capability boundary, not a flag or timing gap.
+    # macOS headless Chromium presents through the real GPU and passes.
     target_compatible_with = [
         "@platforms//cpu:aarch64",
-    ] + select({
-        "@platforms//os:macos": [],
-        "@platforms//os:linux": [],
-        "//conditions:default": ["@platforms//:incompatible"],
-    }),
+        "@platforms//os:macos",
+    ],
 )
