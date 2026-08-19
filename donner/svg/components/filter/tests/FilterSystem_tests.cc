@@ -7,6 +7,10 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <string>
+#include <string_view>
+#include <variant>
+
 #include "donner/base/ParseWarningSink.h"
 #include "donner/base/tests/BaseTestUtils.h"
 #include "donner/base/tests/ParseResultTestUtils.h"
@@ -816,6 +820,43 @@ TEST_F(FilterSystemTest, FilterCustomAttributes) {
   ASSERT_THAT(computed, NotNull());
   EXPECT_EQ(computed->filterUnits, FilterUnits::ObjectBoundingBox);
   EXPECT_EQ(computed->primitiveUnits, PrimitiveUnits::UserSpaceOnUse);
+}
+
+// --- `in2` defaulting ---
+
+// Every primitive with an `in2` attribute defaults it the same way `in` defaults: to the
+// preceding primitive's result, which is SourceGraphic only for the first primitive in the
+// filter. The graph carries that as a second input holding Previous, so an executor never has to
+// guess what an absent second input meant.
+TEST_F(FilterSystemTest, UnspecifiedIn2IsThePreviousResult) {
+  for (const std::string_view primitive :
+       {"<feComposite in=\"SourceGraphic\" operator=\"in\"/>",
+        "<feBlend in=\"SourceGraphic\" mode=\"multiply\"/>",
+        "<feDisplacementMap in=\"SourceGraphic\" scale=\"4\"/>"}) {
+    SCOPED_TRACE(primitive);
+
+    auto document = ParseAndComputeFilters(std::string(R"(
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+        <defs>
+          <filter id="f">
+            <feFlood flood-color="red"/>
+            )") + std::string(primitive) + R"(
+          </filter>
+        </defs>
+      </svg>
+    )");
+
+    auto element = document.querySelector("#f");
+    ASSERT_TRUE(element.has_value());
+    auto* computed = element->entityHandle().try_get<ComputedFilterComponent>();
+    ASSERT_THAT(computed, NotNull());
+    ASSERT_THAT(computed->filterGraph.nodes, SizeIs(2));
+
+    const FilterNode& node = computed->filterGraph.nodes[1];
+    ASSERT_THAT(node.inputs, SizeIs(2));
+    EXPECT_TRUE(std::holds_alternative<FilterStandardInput>(node.inputs[0].value));
+    EXPECT_TRUE(std::holds_alternative<FilterInput::Previous>(node.inputs[1].value));
+  }
 }
 
 }  // namespace donner::svg::components

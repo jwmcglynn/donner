@@ -202,6 +202,11 @@ auto pixmap = Pixmap::fromSize(256, 256).value();
 executeFilterGraph(pixmap, graph);  // Result written back to pixmap.
 ```
 
+Inputs default the way the SVG attributes do: a slot a node leaves unpopulated resolves to the
+previous primitive's result, and to `SourceGraphic` only for the first node. A `Composite`,
+`Blend`, or `DisplacementMap` node built with one input therefore reads the previous result as its
+second input.
+
 ### Supported primitives
 
 | Primitive | SVG element | Description |

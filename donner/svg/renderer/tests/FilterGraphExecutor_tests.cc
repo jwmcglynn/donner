@@ -841,6 +841,365 @@ TEST(FilterGraphExecutorTest, DropShadowExplicitSourceGraphicMatchesImplicitInpu
 }
 
 // ---------------------------------------------------------------------------
+// Two-input primitive `in2` resolution
+// ---------------------------------------------------------------------------
+
+/// Fills a block of mixed colors and partial alpha, so a two-input primitive that reads the wrong
+/// buffer or skips a color-space conversion shows up rather than cancelling against a flat opaque
+/// square.
+void FillMixedAlphaBlock(tiny_skia::Pixmap& pixmap) {
+  for (int y = 4; y < 12; ++y) {
+    for (int x = 4; x < 12; ++x) {
+      const auto alpha = static_cast<std::uint8_t>(40 + (x * 9 + y * 3) % 216);
+      const auto scale = [&](int value) { return static_cast<std::uint8_t>(value * alpha / 255); };
+      SetPixel(pixmap, x, y, Pixel{scale(200), scale(80), scale(30), alpha});
+    }
+  }
+}
+
+/// Asserts two renders agree byte for byte. Used by the first-primitive cases, where an
+/// unspecified `in2` and an explicit `in2="SourceGraphic"` name the same buffer.
+void ExpectPixmapsEqual(const tiny_skia::Pixmap& lhs, const tiny_skia::Pixmap& rhs) {
+  const auto lhsData = lhs.data();
+  const auto rhsData = rhs.data();
+  ASSERT_EQ(lhsData.size(), rhsData.size());
+  EXPECT_THAT(std::vector<std::uint8_t>(rhsData.begin(), rhsData.end()), ElementsAreArray(lhsData));
+}
+
+/// A 16x16 pixmap holding one opaque white square covering x,y in [2, 10).
+tiny_skia::Pixmap MakeSquarePixmap() {
+  auto maybePixmap = tiny_skia::Pixmap::fromSize(16, 16);
+  EXPECT_TRUE(maybePixmap.has_value());
+  tiny_skia::Pixmap pixmap = std::move(*maybePixmap);
+  FillOpaqueSquare(pixmap, 2, 2, 8);
+  return pixmap;
+}
+
+/// An feOffset that shifts SourceGraphic right by six pixels, so the moved copy overlaps the
+/// original only in x = [8, 10). A second input taken from the preceding result and one taken
+/// from SourceGraphic therefore mask different pixels.
+components::FilterNode MakeMovedSquareNode() {
+  components::FilterNode node;
+  node.inputs.push_back(components::FilterInput{components::FilterStandardInput::SourceGraphic});
+  node.primitive = components::filter_primitive::Offset{.dx = 6.0, .dy = 0.0};
+  return node;
+}
+
+// An unspecified `in2` resolves the same way an unspecified `in` does: to the preceding
+// primitive's result, and to SourceGraphic only when the primitive is first in the filter. The
+// mask here is therefore the moved square, not the unfiltered element the filter started from.
+TEST(FilterGraphExecutorTest, CompositeImplicitIn2UsesPrecedingResult) {
+  tiny_skia::Pixmap pixmap = MakeSquarePixmap();
+
+  components::FilterGraph graph;
+  graph.nodes.push_back(MakeMovedSquareNode());
+
+  components::FilterNode compositeNode;
+  compositeNode.inputs.push_back(
+      components::FilterInput{components::FilterStandardInput::SourceGraphic});
+  // No second input at all, which is how an unspecified `in2` reaches the executor.
+  compositeNode.primitive = components::filter_primitive::Composite{
+      .op = components::filter_primitive::Composite::Operator::In,
+  };
+  graph.nodes.push_back(std::move(compositeNode));
+
+  ApplyFilterGraphToPixmap(pixmap, graph, Transform2d(), std::nullopt);
+
+  // The overlap of the source square with the moved square survives.
+  EXPECT_THAT(GetPixel(pixmap, 9, 4), Rgba(255, 255, 255, 255));
+
+  // The rest of the source square is masked away. Masking against SourceGraphic would have kept
+  // it, because a square is fully inside itself.
+  EXPECT_THAT(GetPixel(pixmap, 3, 4), Rgba(_, _, _, 0));
+
+  // `operator="in"` keeps nothing outside the first input either way.
+  EXPECT_THAT(GetPixel(pixmap, 12, 4), Rgba(_, _, _, 0));
+}
+
+// An explicit `in2` still names its own buffer. Pointing a chained feComposite back at
+// SourceGraphic keeps the whole source square, which is exactly what the implicit case must not
+// do, so the two tests together pin the default rather than a hardcoded choice.
+TEST(FilterGraphExecutorTest, CompositeExplicitIn2NamesItsOwnInput) {
+  tiny_skia::Pixmap pixmap = MakeSquarePixmap();
+
+  components::FilterGraph graph;
+  graph.nodes.push_back(MakeMovedSquareNode());
+
+  components::FilterNode compositeNode;
+  compositeNode.inputs.push_back(
+      components::FilterInput{components::FilterStandardInput::SourceGraphic});
+  compositeNode.inputs.push_back(
+      components::FilterInput{components::FilterStandardInput::SourceGraphic});
+  compositeNode.primitive = components::filter_primitive::Composite{
+      .op = components::filter_primitive::Composite::Operator::In,
+  };
+  graph.nodes.push_back(std::move(compositeNode));
+
+  ApplyFilterGraphToPixmap(pixmap, graph, Transform2d(), std::nullopt);
+
+  EXPECT_THAT(GetPixel(pixmap, 3, 4), Rgba(255, 255, 255, 255));
+  EXPECT_THAT(GetPixel(pixmap, 9, 4), Rgba(255, 255, 255, 255));
+  EXPECT_THAT(GetPixel(pixmap, 12, 4), Rgba(_, _, _, 0));
+}
+
+// On a first primitive there is no preceding result, so an unspecified `in2` and an explicit
+// `in2="SourceGraphic"` name the same buffer and the two renders have to agree byte for byte.
+// This is the pixel-level statement that single-primitive filters are unaffected.
+TEST(FilterGraphExecutorTest, CompositeFirstPrimitiveImplicitIn2MatchesSourceGraphic) {
+  const auto render = [](bool explicitIn2) {
+    auto maybePixmap = tiny_skia::Pixmap::fromSize(16, 16);
+    EXPECT_TRUE(maybePixmap.has_value());
+    tiny_skia::Pixmap pixmap = std::move(*maybePixmap);
+    FillMixedAlphaBlock(pixmap);
+
+    components::FilterGraph graph;
+    components::FilterNode node;
+    node.inputs.push_back(components::FilterInput{components::FilterStandardInput::SourceGraphic});
+    if (explicitIn2) {
+      node.inputs.push_back(
+          components::FilterInput{components::FilterStandardInput::SourceGraphic});
+    }
+    // Arithmetic mixes both inputs channel by channel, so a wrong second buffer cannot hide
+    // behind a Porter-Duff operator that happens to ignore it.
+    node.primitive = components::filter_primitive::Composite{
+        .op = components::filter_primitive::Composite::Operator::Arithmetic,
+        .k1 = 0.5,
+        .k2 = 0.25,
+        .k3 = 0.25,
+        .k4 = 0.0,
+    };
+    graph.nodes.push_back(std::move(node));
+
+    ApplyFilterGraphToPixmap(pixmap, graph, Transform2d(), std::nullopt);
+    return pixmap;
+  };
+
+  const tiny_skia::Pixmap implicitIn2 = render(false);
+  const tiny_skia::Pixmap explicitIn2 = render(true);
+  ExpectPixmapsEqual(implicitIn2, explicitIn2);
+
+  // The composite produced something, so the comparison is not two blank pixmaps agreeing.
+  EXPECT_THAT(GetPixel(implicitIn2, 8, 8), Rgba(_, _, _, Gt(0)));
+}
+
+// feBlend's `in2` is the backdrop, and it defaults the same way: the preceding flood, not the
+// white source graphic.
+TEST(FilterGraphExecutorTest, BlendImplicitIn2UsesPrecedingResult) {
+  auto maybePixmap = tiny_skia::Pixmap::fromSize(16, 16);
+  ASSERT_TRUE(maybePixmap.has_value());
+  tiny_skia::Pixmap pixmap = std::move(*maybePixmap);
+  FillOpaqueSquare(pixmap, 0, 0, 16);
+
+  components::FilterGraph graph;
+  // sRGB keeps `multiply` a plain per-channel product of the authored values.
+  graph.colorInterpolationFilters = ColorInterpolationFilters::SRGB;
+
+  components::FilterNode floodNode;
+  floodNode.inputs.push_back(components::FilterInput{});
+  floodNode.primitive = components::filter_primitive::Flood{
+      .floodColor = css::Color(css::RGBA(128, 128, 128, 255)),
+      .floodOpacity = 1.0,
+  };
+  graph.nodes.push_back(std::move(floodNode));
+
+  components::FilterNode blendNode;
+  blendNode.inputs.push_back(
+      components::FilterInput{components::FilterStandardInput::SourceGraphic});
+  // No second input at all, which is how an unspecified `in2` reaches the executor.
+  blendNode.primitive = components::filter_primitive::Blend{
+      .mode = components::filter_primitive::Blend::Mode::Multiply,
+  };
+  graph.nodes.push_back(std::move(blendNode));
+
+  ApplyFilterGraphToPixmap(pixmap, graph, Transform2d(), std::nullopt);
+
+  // White multiplied by the 50% gray flood. Blending against SourceGraphic would have multiplied
+  // white by white and left the pixmap at 255.
+  EXPECT_THAT(GetPixel(pixmap, 8, 8),
+              Rgba(ChannelNear(128, 2), ChannelNear(128, 2), ChannelNear(128, 2), 255));
+}
+
+// The explicit counterpart: naming SourceGraphic as the backdrop multiplies white by white and
+// leaves the pixmap untouched, so the default above is a default and not a rewrite.
+TEST(FilterGraphExecutorTest, BlendExplicitIn2NamesItsOwnInput) {
+  auto maybePixmap = tiny_skia::Pixmap::fromSize(16, 16);
+  ASSERT_TRUE(maybePixmap.has_value());
+  tiny_skia::Pixmap pixmap = std::move(*maybePixmap);
+  FillOpaqueSquare(pixmap, 0, 0, 16);
+
+  components::FilterGraph graph;
+  graph.colorInterpolationFilters = ColorInterpolationFilters::SRGB;
+
+  components::FilterNode floodNode;
+  floodNode.inputs.push_back(components::FilterInput{});
+  floodNode.primitive = components::filter_primitive::Flood{
+      .floodColor = css::Color(css::RGBA(128, 128, 128, 255)),
+      .floodOpacity = 1.0,
+  };
+  graph.nodes.push_back(std::move(floodNode));
+
+  components::FilterNode blendNode;
+  blendNode.inputs.push_back(
+      components::FilterInput{components::FilterStandardInput::SourceGraphic});
+  blendNode.inputs.push_back(
+      components::FilterInput{components::FilterStandardInput::SourceGraphic});
+  blendNode.primitive = components::filter_primitive::Blend{
+      .mode = components::filter_primitive::Blend::Mode::Multiply,
+  };
+  graph.nodes.push_back(std::move(blendNode));
+
+  ApplyFilterGraphToPixmap(pixmap, graph, Transform2d(), std::nullopt);
+
+  EXPECT_THAT(GetPixel(pixmap, 8, 8), Rgba(255, 255, 255, 255));
+}
+
+// The first-primitive identity for feBlend: with nothing before it, the implicit backdrop is
+// SourceGraphic, so naming it explicitly has to render the same bytes.
+TEST(FilterGraphExecutorTest, BlendFirstPrimitiveImplicitIn2MatchesSourceGraphic) {
+  const auto render = [](bool explicitIn2) {
+    auto maybePixmap = tiny_skia::Pixmap::fromSize(16, 16);
+    EXPECT_TRUE(maybePixmap.has_value());
+    tiny_skia::Pixmap pixmap = std::move(*maybePixmap);
+    FillMixedAlphaBlock(pixmap);
+
+    components::FilterGraph graph;
+    components::FilterNode node;
+    node.inputs.push_back(components::FilterInput{components::FilterStandardInput::SourceGraphic});
+    if (explicitIn2) {
+      node.inputs.push_back(
+          components::FilterInput{components::FilterStandardInput::SourceGraphic});
+    }
+    node.primitive = components::filter_primitive::Blend{
+        .mode = components::filter_primitive::Blend::Mode::Multiply,
+    };
+    graph.nodes.push_back(std::move(node));
+
+    ApplyFilterGraphToPixmap(pixmap, graph, Transform2d(), std::nullopt);
+    return pixmap;
+  };
+
+  const tiny_skia::Pixmap implicitIn2 = render(false);
+  const tiny_skia::Pixmap explicitIn2 = render(true);
+  ExpectPixmapsEqual(implicitIn2, explicitIn2);
+
+  EXPECT_THAT(GetPixel(implicitIn2, 8, 8), Rgba(_, _, _, Gt(0)));
+}
+
+// feDisplacementMap's `in2` is the displacement map itself, so the default decides where every
+// output pixel is sampled from. An opaque flood displaces the whole image by a constant; the
+// source graphic's own alpha would displace the square and its surroundings in opposite
+// directions.
+TEST(FilterGraphExecutorTest, DisplacementMapImplicitIn2UsesPrecedingResult) {
+  auto maybePixmap = tiny_skia::Pixmap::fromSize(16, 16);
+  ASSERT_TRUE(maybePixmap.has_value());
+  tiny_skia::Pixmap pixmap = std::move(*maybePixmap);
+  FillOpaqueSquare(pixmap, 4, 4, 4);
+
+  components::FilterGraph graph;
+
+  components::FilterNode floodNode;
+  floodNode.inputs.push_back(components::FilterInput{});
+  floodNode.primitive = components::filter_primitive::Flood{
+      .floodColor = css::Color(css::RGBA(255, 255, 255, 255)),
+      .floodOpacity = 1.0,
+  };
+  graph.nodes.push_back(std::move(floodNode));
+
+  components::FilterNode displaceNode;
+  displaceNode.inputs.push_back(
+      components::FilterInput{components::FilterStandardInput::SourceGraphic});
+  // No second input at all, which is how an unspecified `in2` reaches the executor.
+  displaceNode.primitive = components::filter_primitive::DisplacementMap{
+      .scale = 8.0,
+      .xChannelSelector = components::filter_primitive::DisplacementMap::Channel::A,
+      .yChannelSelector = components::filter_primitive::DisplacementMap::Channel::A,
+  };
+  graph.nodes.push_back(std::move(displaceNode));
+
+  ApplyFilterGraphToPixmap(pixmap, graph, Transform2d(), std::nullopt);
+
+  // Alpha is 1 everywhere in the flood, so every pixel samples 8 * (1 - 0.5) = 4 pixels down and
+  // to the right: the square moves from [4, 8) to [0, 4).
+  EXPECT_THAT(GetPixel(pixmap, 2, 2), Rgba(255, 255, 255, 255));
+
+  // Displacing by SourceGraphic's own alpha instead would have sent the pixels outside the
+  // square the other way and landed a copy of the square at [8, 12).
+  EXPECT_THAT(GetPixel(pixmap, 10, 10), Rgba(_, _, _, 0));
+}
+
+// The explicit counterpart, which is also the pre-default behavior: naming SourceGraphic as the
+// displacement map splits the image, because its alpha is 1 inside the square and 0 outside.
+TEST(FilterGraphExecutorTest, DisplacementMapExplicitIn2NamesItsOwnInput) {
+  auto maybePixmap = tiny_skia::Pixmap::fromSize(16, 16);
+  ASSERT_TRUE(maybePixmap.has_value());
+  tiny_skia::Pixmap pixmap = std::move(*maybePixmap);
+  FillOpaqueSquare(pixmap, 4, 4, 4);
+
+  components::FilterGraph graph;
+
+  components::FilterNode floodNode;
+  floodNode.inputs.push_back(components::FilterInput{});
+  floodNode.primitive = components::filter_primitive::Flood{
+      .floodColor = css::Color(css::RGBA(255, 255, 255, 255)),
+      .floodOpacity = 1.0,
+  };
+  graph.nodes.push_back(std::move(floodNode));
+
+  components::FilterNode displaceNode;
+  displaceNode.inputs.push_back(
+      components::FilterInput{components::FilterStandardInput::SourceGraphic});
+  displaceNode.inputs.push_back(
+      components::FilterInput{components::FilterStandardInput::SourceGraphic});
+  displaceNode.primitive = components::filter_primitive::DisplacementMap{
+      .scale = 8.0,
+      .xChannelSelector = components::filter_primitive::DisplacementMap::Channel::A,
+      .yChannelSelector = components::filter_primitive::DisplacementMap::Channel::A,
+  };
+  graph.nodes.push_back(std::move(displaceNode));
+
+  ApplyFilterGraphToPixmap(pixmap, graph, Transform2d(), std::nullopt);
+
+  // Alpha 0 outside the square sends those pixels 4 up and to the left, so [8, 12) samples the
+  // square at [4, 8).
+  EXPECT_THAT(GetPixel(pixmap, 10, 10), Rgba(255, 255, 255, 255));
+  EXPECT_THAT(GetPixel(pixmap, 2, 2), Rgba(_, _, _, 0));
+}
+
+// The first-primitive identity for feDisplacementMap: the implicit map is SourceGraphic when
+// nothing precedes the primitive, so both spellings render the same bytes.
+TEST(FilterGraphExecutorTest, DisplacementMapFirstPrimitiveImplicitIn2MatchesSourceGraphic) {
+  const auto render = [](bool explicitIn2) {
+    auto maybePixmap = tiny_skia::Pixmap::fromSize(16, 16);
+    EXPECT_TRUE(maybePixmap.has_value());
+    tiny_skia::Pixmap pixmap = std::move(*maybePixmap);
+    FillMixedAlphaBlock(pixmap);
+
+    components::FilterGraph graph;
+    components::FilterNode node;
+    node.inputs.push_back(components::FilterInput{components::FilterStandardInput::SourceGraphic});
+    if (explicitIn2) {
+      node.inputs.push_back(
+          components::FilterInput{components::FilterStandardInput::SourceGraphic});
+    }
+    node.primitive = components::filter_primitive::DisplacementMap{
+        .scale = 6.0,
+        .xChannelSelector = components::filter_primitive::DisplacementMap::Channel::R,
+        .yChannelSelector = components::filter_primitive::DisplacementMap::Channel::A,
+    };
+    graph.nodes.push_back(std::move(node));
+
+    ApplyFilterGraphToPixmap(pixmap, graph, Transform2d(), std::nullopt);
+    return pixmap;
+  };
+
+  const tiny_skia::Pixmap implicitIn2 = render(false);
+  const tiny_skia::Pixmap explicitIn2 = render(true);
+  ExpectPixmapsEqual(implicitIn2, explicitIn2);
+
+  EXPECT_THAT(GetPixel(implicitIn2, 6, 6), Rgba(_, _, _, Gt(0)));
+}
+
+// ---------------------------------------------------------------------------
 // Error / edge cases
 // ---------------------------------------------------------------------------
 

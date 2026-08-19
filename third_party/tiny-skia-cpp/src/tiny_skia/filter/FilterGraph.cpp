@@ -304,6 +304,29 @@ class SpacedPixmap {
   std::optional<FloatPixmap> converted_;
 };
 
+/// The number of inputs a primitive reads through the filter attribute surface. feComposite,
+/// feBlend and feDisplacementMap each take a second input (`in2`); feMerge is variadic and reads
+/// exactly the list it was built with, and every other primitive reads at most one input. The cap
+/// of two is deliberate rather than a lower bound: those primitives never sample a third input, so
+/// an extra entry a caller appends must not widen the node's subregion either.
+std::size_t inputSlotCount(const GraphNode& node) {
+  if (std::holds_alternative<graph_primitive::Composite>(node.primitive) ||
+      std::holds_alternative<graph_primitive::Blend>(node.primitive) ||
+      std::holds_alternative<graph_primitive::DisplacementMap>(node.primitive)) {
+    return 2;
+  }
+  return node.inputs.size();
+}
+
+/// The input in slot @p index, or the default for a slot the graph left empty. A slot the caller
+/// never populated is an unspecified `in`/`in2` attribute, and both resolve the same way: to the
+/// preceding primitive's result, which is SourceGraphic only when this node is the first
+/// primitive in the filter. Substituting SourceGraphic directly would reach past the chain to the
+/// unfiltered element every time a two-input primitive omitted `in2`.
+NodeInput inputOrDefault(const GraphNode& node, std::size_t index) {
+  return index < node.inputs.size() ? node.inputs[index] : NodeInput();
+}
+
 }  // namespace
 
 bool executeFilterGraph(Pixmap& sourceGraphic, const FilterGraph& graph) {
@@ -463,13 +486,18 @@ bool executeFilterGraph(Pixmap& sourceGraphic, const FilterGraph& graph) {
       return Box::fromPixelRect(*node.subregion).intersect(filterRegionBox);
     }
 
-    if (node.inputs.empty() || isSourceGenerator) {
+    // Walk every slot the primitive reads, so a defaulted `in2` contributes its subregion the
+    // same way an explicit one would. The test is the slot count and not the populated list: a
+    // two-input primitive with nothing filled in still reads two defaulted inputs, so its bounds
+    // come from those defaults rather than from the whole filter region.
+    const std::size_t slots = inputSlotCount(node);
+    if (slots == 0 || isSourceGenerator) {
       return filterRegionBox;
     }
 
-    Box inputBounds = resolveInputSubregion(node.inputs[0]);
-    for (std::size_t i = 1; i < node.inputs.size(); ++i) {
-      inputBounds = inputBounds.unite(resolveInputSubregion(node.inputs[i]));
+    Box inputBounds = resolveInputSubregion(inputOrDefault(node, 0));
+    for (std::size_t i = 1; i < slots; ++i) {
+      inputBounds = inputBounds.unite(resolveInputSubregion(inputOrDefault(node, i)));
     }
 
     return std::visit(
@@ -509,7 +537,7 @@ bool executeFilterGraph(Pixmap& sourceGraphic, const FilterGraph& graph) {
     // Each buffer knows its own color space, so a node asks its inputs for the space it works in
     // and tags its result with that same space. `in()` is a no-op whenever the producer already
     // agreed with this node, which is the common case.
-    SpacedPixmap* input = node.inputs.empty() ? source : resolveInput(node.inputs[0]);
+    SpacedPixmap* input = resolveInput(inputOrDefault(node, 0));
 
     std::optional<NodeOutput> output;
 
@@ -536,7 +564,7 @@ bool executeFilterGraph(Pixmap& sourceGraphic, const FilterGraph& graph) {
             output = input->describe(std::move(fpOut));
 
           } else if constexpr (std::is_same_v<T, graph_primitive::Composite>) {
-            SpacedPixmap* input2 = node.inputs.size() > 1 ? resolveInput(node.inputs[1]) : source;
+            SpacedPixmap* input2 = resolveInput(inputOrDefault(node, 1));
             const FloatPixmap& in1 = input->in(nodeLinearRGB);
             const FloatPixmap& in2 = input2->in(nodeLinearRGB);
             auto fpOut = createTransparentFloat(w, h);
@@ -545,7 +573,7 @@ bool executeFilterGraph(Pixmap& sourceGraphic, const FilterGraph& graph) {
             output = NodeOutput{std::move(fpOut), nodeLinearRGB};
 
           } else if constexpr (std::is_same_v<T, graph_primitive::Blend>) {
-            SpacedPixmap* input2 = node.inputs.size() > 1 ? resolveInput(node.inputs[1]) : source;
+            SpacedPixmap* input2 = resolveInput(inputOrDefault(node, 1));
             const FloatPixmap& in1 = input->in(nodeLinearRGB);
             const FloatPixmap& in2 = input2->in(nodeLinearRGB);
             auto fpOut = createTransparentFloat(w, h);
@@ -635,8 +663,7 @@ bool executeFilterGraph(Pixmap& sourceGraphic, const FilterGraph& graph) {
           } else if constexpr (std::is_same_v<T, graph_primitive::Tile>) {
             // Pure pixel mover, so the result stays in the input's space with no conversion.
             auto fpOut = createTransparentFloat(w, h);
-            const Box inputSubregion = node.inputs.empty() ? previousOutputSubregion
-                                                           : resolveInputSubregion(node.inputs[0]);
+            const Box inputSubregion = resolveInputSubregion(inputOrDefault(node, 0));
             const int tileX = std::max(0, static_cast<int>(std::floor(inputSubregion.x0)));
             const int tileY = std::max(0, static_cast<int>(std::floor(inputSubregion.y0)));
             const int tileR = std::min(w, static_cast<int>(std::ceil(inputSubregion.x1)));
@@ -655,7 +682,7 @@ bool executeFilterGraph(Pixmap& sourceGraphic, const FilterGraph& graph) {
             output = NodeOutput{std::move(fp), nodeLinearRGB};
 
           } else if constexpr (std::is_same_v<T, graph_primitive::DisplacementMap>) {
-            SpacedPixmap* input2 = node.inputs.size() > 1 ? resolveInput(node.inputs[1]) : source;
+            SpacedPixmap* input2 = resolveInput(inputOrDefault(node, 1));
             const FloatPixmap& in1 = input->in(nodeLinearRGB);
             const FloatPixmap& in2 = input2->in(nodeLinearRGB);
             auto fpOut = createTransparentFloat(w, h);
