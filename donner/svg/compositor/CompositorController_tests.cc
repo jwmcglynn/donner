@@ -241,7 +241,7 @@ TEST_F(CompositorControllerTest, PromoteInvalidEntityFails) {
   const auto result = compositor.promoteEntity(entt::null);
   EXPECT_EQ(result, CompositorController::PromoteResult::InvalidEntity);
   EXPECT_FALSE(result.promotedLayer());
-  EXPECT_FALSE(result.fullCanvasPreviewRequired());
+  EXPECT_FALSE(result.owningTilesRequired());
   EXPECT_EQ(compositor.layerCount(), 0u);
   EXPECT_FALSE(compositor.isPromoted(entt::null));
   EXPECT_TRUE(compositor.layerComposeOffset(entt::null).isIdentity());
@@ -920,9 +920,8 @@ TEST_F(CompositorControllerTest, FallbackReasonsOfUnpromotedEntity) {
   EXPECT_EQ(compositor.fallbackReasonsOf(entity), FallbackReason::None);
 }
 
-TEST_F(CompositorControllerTest,
-       PromoteDescendantUnderRawCompositingAncestorUsesFullCanvasPreview) {
-  const auto expectFullCanvasPreview = [this](std::string_view svg) {
+TEST_F(CompositorControllerTest, PromoteDescendantUnderRawCompositingAncestorUsesOwningTiles) {
+  const auto expectOwningTiles = [this](std::string_view svg) {
     SVGDocument document = makeDocument(svg);
     auto target = document.querySelector("#target");
     ASSERT_TRUE(target.has_value());
@@ -931,8 +930,8 @@ TEST_F(CompositorControllerTest,
     CompositorController compositor(document, renderer_);
     const auto result = compositor.promoteEntity(entity);
 
-    EXPECT_EQ(result, CompositorController::PromoteResult::FullCanvasPreviewRequired);
-    EXPECT_TRUE(result.fullCanvasPreviewRequired());
+    EXPECT_EQ(result, CompositorController::PromoteResult::OwningTilesRequired);
+    EXPECT_TRUE(result.owningTilesRequired());
     EXPECT_FALSE(result.promotedLayer());
     EXPECT_FALSE(compositor.isPromoted(entity));
     EXPECT_EQ(compositor.layerCount(), 0u);
@@ -940,7 +939,7 @@ TEST_F(CompositorControllerTest,
               CompositorController::PromoteRefusalReason::None);
   };
 
-  expectFullCanvasPreview(R"svg(
+  expectOwningTiles(R"svg(
     <defs>
       <filter id="blur"><feGaussianBlur stdDeviation="2" /></filter>
     </defs>
@@ -948,7 +947,7 @@ TEST_F(CompositorControllerTest,
       <rect id="target" width="10" height="10" fill="red" />
     </g>
   )svg");
-  expectFullCanvasPreview(R"svg(
+  expectOwningTiles(R"svg(
     <defs>
       <clipPath id="cp"><rect width="5" height="5" /></clipPath>
     </defs>
@@ -956,7 +955,7 @@ TEST_F(CompositorControllerTest,
       <rect id="target" width="10" height="10" fill="red" />
     </g>
   )svg");
-  expectFullCanvasPreview(R"svg(
+  expectOwningTiles(R"svg(
     <defs>
       <mask id="m"><rect width="10" height="10" fill="white" /></mask>
     </defs>
@@ -966,8 +965,7 @@ TEST_F(CompositorControllerTest,
   )svg");
 }
 
-TEST_F(CompositorControllerTest,
-       PromoteDescendantUnderPreparedIsolatedAncestorUsesFullCanvasPreview) {
+TEST_F(CompositorControllerTest, PromoteDescendantUnderPreparedIsolatedAncestorUsesOwningTiles) {
   SVGDocument document = makeDocument(R"svg(
     <g id="ancestor" opacity="0.5">
       <rect id="target" width="10" height="10" fill="red" />
@@ -984,8 +982,8 @@ TEST_F(CompositorControllerTest,
   CompositorController compositor(document, renderer_);
   const auto result = compositor.promoteEntity(entity);
 
-  EXPECT_EQ(result, CompositorController::PromoteResult::FullCanvasPreviewRequired);
-  EXPECT_TRUE(result.fullCanvasPreviewRequired());
+  EXPECT_EQ(result, CompositorController::PromoteResult::OwningTilesRequired);
+  EXPECT_TRUE(result.owningTilesRequired());
   EXPECT_FALSE(compositor.isPromoted(entity));
   EXPECT_EQ(compositor.layerCount(), 0u);
 }
@@ -1253,7 +1251,7 @@ TEST_F(CompositorControllerTest, TextureBackedStaticSegmentsExposeDimensionsWith
   EXPECT_EQ(inspectorSegmentIt->bitmapDims, Vector2i(32, 32));
 }
 
-TEST_F(CompositorControllerTest, PromotedGroupWithMandatoryChildDragReusesTextureFastPath) {
+TEST_F(CompositorControllerTest, MandatoryChildDisplacesOverlappingParentInteractionLayer) {
   SVGDocument document = makeDocument(R"svg(
     <g id="Blue_center_burst">
       <ellipse id="burst_child" cx="45" cy="30" rx="18" ry="21" fill="blue" opacity="0.75" />
@@ -1273,54 +1271,34 @@ TEST_F(CompositorControllerTest, PromotedGroupWithMandatoryChildDragReusesTextur
 
   compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
   const auto rowsAfterFirst = compositor.snapshotLayerInspectorRows();
-  ASSERT_GT(rowsAfterFirst.size(), 1u)
-      << "The opacity child should remain a mandatory promoted descendant layer.";
+  ASSERT_EQ(rowsAfterFirst.size(), 1u)
+      << "The mandatory child and selected parent must not remain as overlapping layers";
   const auto rowAfterFirst =
       std::find_if(rowsAfterFirst.begin(), rowsAfterFirst.end(),
                    [entity](const auto& row) { return row.entity == entity; });
   const auto childRowAfterFirst =
       std::find_if(rowsAfterFirst.begin(), rowsAfterFirst.end(),
                    [childEntity](const auto& row) { return row.entity == childEntity; });
-  ASSERT_NE(rowAfterFirst, rowsAfterFirst.end());
+  EXPECT_EQ(rowAfterFirst, rowsAfterFirst.end());
   ASSERT_NE(childRowAfterFirst, rowsAfterFirst.end());
-  ASSERT_TRUE(rowAfterFirst->hasValidBitmap);
   ASSERT_TRUE(childRowAfterFirst->hasValidBitmap);
-  const uint64_t generationAfterFirst = rowAfterFirst->generation;
-  const uint32_t rasterizeCountAfterFirst = rowAfterFirst->rasterizeCount;
   const uint64_t childGenerationAfterFirst = childRowAfterFirst->generation;
   const uint32_t childRasterizeCountAfterFirst = childRowAfterFirst->rasterizeCount;
+  EXPECT_FALSE(compositor.isPromoted(entity));
+  EXPECT_NE(compositor.findLayerForTest(childEntity), nullptr);
 
-  const auto countersBeforeDrag = compositor.fastPathCountersForTesting();
   target->cast<SVGGraphicsElement>().setTransform(Transform2d::Translate(7.0, 11.0));
   compositor.renderFrame(RenderViewport{kTestSvgDefaultSize});
 
   const auto rowsAfterDrag = compositor.snapshotLayerInspectorRows();
-  const auto rowAfterDrag =
-      std::find_if(rowsAfterDrag.begin(), rowsAfterDrag.end(),
-                   [entity](const auto& row) { return row.entity == entity; });
   const auto childRowAfterDrag =
       std::find_if(rowsAfterDrag.begin(), rowsAfterDrag.end(),
                    [childEntity](const auto& row) { return row.entity == childEntity; });
-  ASSERT_NE(rowAfterDrag, rowsAfterDrag.end());
   ASSERT_NE(childRowAfterDrag, rowsAfterDrag.end());
-  EXPECT_EQ(rowAfterDrag->generation, generationAfterFirst)
-      << "A translation-only drag of a promoted group with a mandatory child layer must reuse the "
-         "cached texture.";
-  EXPECT_EQ(rowAfterDrag->rasterizeCount, rasterizeCountAfterFirst)
-      << "Re-rasterizing this subtree on every drag frame is the #Blue_center_burst lag.";
-  EXPECT_EQ(childRowAfterDrag->generation, childGenerationAfterFirst);
+  EXPECT_EQ(childRowAfterDrag->generation, childGenerationAfterFirst)
+      << "Dropping the overlapping parent layer must not throw away the mandatory child's cached "
+         "texture during a parent translation";
   EXPECT_EQ(childRowAfterDrag->rasterizeCount, childRasterizeCountAfterFirst);
-
-  const auto countersAfterDrag = compositor.fastPathCountersForTesting();
-  EXPECT_EQ(countersAfterDrag.fastPathFrames, countersBeforeDrag.fastPathFrames + 1u);
-  EXPECT_EQ(countersAfterDrag.slowPathFramesWithDirty, countersBeforeDrag.slowPathFramesWithDirty);
-
-  const auto* layer = compositor.findLayerForTest(entity);
-  ASSERT_NE(layer, nullptr);
-  ASSERT_TRUE(layer->canvasFromBitmap().isTranslation());
-  EXPECT_NEAR(layer->canvasFromBitmap().translation().x, 7.0, 1e-10);
-  EXPECT_NEAR(layer->canvasFromBitmap().translation().y, 11.0, 1e-10);
-
   const auto* childLayer = compositor.findLayerForTest(childEntity);
   ASSERT_NE(childLayer, nullptr);
   ASSERT_TRUE(childLayer->canvasFromBitmap().isTranslation());

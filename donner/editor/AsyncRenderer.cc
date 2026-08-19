@@ -9,6 +9,7 @@
 
 #include "donner/base/MemoryAttribution.h"
 #include "donner/base/Utils.h"
+#include "donner/base/xml/components/TreeComponent.h"
 #include "donner/editor/OverlayRenderer.h"
 #include "donner/editor/TracyWrapper.h"
 #include "donner/svg/SVGDocument.h"
@@ -186,9 +187,20 @@ bool SameEntityList(const std::vector<Entity>& lhs, const std::vector<Entity>& r
   return lhs == rhs;
 }
 
-bool ContainsAllEntities(const std::vector<Entity>& haystack, const std::vector<Entity>& needles) {
-  return std::ranges::all_of(needles,
-                             [&](Entity entity) { return ContainsEntity(haystack, entity); });
+bool ContainsAllEntitiesOrOwningAncestors(Registry& registry,
+                                          const std::vector<Entity>& promotedEntities,
+                                          const std::vector<Entity>& desiredEntities) {
+  return std::ranges::all_of(desiredEntities, [&](Entity desiredEntity) {
+    Entity cursor = desiredEntity;
+    while (cursor != entt::null && registry.valid(cursor)) {
+      if (ContainsEntity(promotedEntities, cursor)) {
+        return true;
+      }
+      const auto* tree = registry.try_get<donner::components::TreeComponent>(cursor);
+      cursor = tree != nullptr ? tree->parent() : entt::null;
+    }
+    return false;
+  });
 }
 
 bool WaitForSampleThumbnailDelay(const svg::compositor::CancellationToken& cancellation,
@@ -927,22 +939,19 @@ void AsyncRenderer::workerLoop() {
       if (renderMode == CompositedRenderingMode::FilterOnly) {
         // Filter-only: cached isolated layers for SVG filters (the expensive
         // re-render case) and nothing else. Opacity groups, blend modes, and
-        // masks render inline; selection/drag and animation subtrees are not
-        // promoted; the document is not pre-split into bucket layers.
+        // masks render inline; animation subtrees are not promoted and the
+        // document is not pre-split into bucket layers. Selection/drag layers
+        // remain active because they are structural editor presentation, not
+        // optional retained-content caching.
         compositorConfig.mandatoryHintScope = svg::compositor::MandatoryHintScope::FilterOnly;
-        compositorConfig.autoPromoteInteractions = false;
         compositorConfig.autoPromoteAnimations = false;
         compositorConfig.complexityBucketing = false;
       }
-      // The editor retains compositor textures across frames, so even a geometrically cheap span
-      // is less expensive to upload once than to rerasterize during every pointer update. Browser
-      // WebGPU makes the difference especially pronounced, but the same policy removes the native
-      // renderer's dominant steady-drag CPU cost as well.
-      compositorConfig.immediateStaticSpans = false;
-      compositorConfig.dynamicImmediateStaticSpans = false;
-      // The first full-document draw is already correct. Publish it first, then warm retained
-      // caches from the worker's independent low-priority lane after the result is accepted.
-      compositorConfig.deferFirstFrameWarmup = true;
+      // Every non-Off editor frame is presented from the compositor's paint-order tile set.
+      // Preserve the normal immediate-span policy so cheap background/selection/foreground spans
+      // remain layers without retaining needless textures, and finish the first-frame warmup before
+      // publishing so a cold frame cannot fall back to a monolithic full-canvas payload.
+      compositorConfig.deferFirstFrameWarmup = false;
       // CompositorController stores its SVGDocument by reference. Bind that reference to the
       // AsyncRenderer-owned value before constructing the controller: RenderLease is destroyed
       // after this request, while deferred warmup and later frames intentionally outlive it.
@@ -1046,11 +1055,10 @@ void AsyncRenderer::workerLoop() {
     // document-space transform to every drag-target tile, keeping the path
     // overlay and cached content in lockstep while avoiding a full DOM render
     // on each pointer frame.
-    // Selection/drag promotion is a full-compositing feature: Off has no
-    // controller to promote into, and FilterOnly composits filters only, so
-    // both present drags through full-document renders.
-    const bool editorPromotionEnabled =
-        compositor_ != nullptr && renderMode == CompositedRenderingMode::On;
+    // Selection/drag promotion is structural editor presentation in both non-Off modes. FilterOnly
+    // narrows automatic retained-content layers; it does not collapse selected content back into a
+    // root render.
+    const bool editorPromotionEnabled = compositor_ != nullptr;
     const std::vector<Entity> desiredEntities = (geometryDebugOverlay || !editorPromotionEnabled)
                                                     ? std::vector<Entity>()
                                                     : DesiredCompositorEntities(request);
@@ -1098,9 +1106,9 @@ void AsyncRenderer::workerLoop() {
             compositorEntity_ = entity;
           }
           compositorInteractionKind_ = desiredKind;
-        } else if (promoteResult.fullCanvasPreviewRequired()) {
-          // Valid renderable content under a filter, clip-path, or mask is presented through the
-          // full-canvas composited tile built from the final snapshot below.
+        } else if (promoteResult.owningTilesRequired()) {
+          // The requested entity remains inside the paint-order tiles that own its ancestor
+          // compositing context. Only the interaction split is unavailable.
         }
       }
       if (compositorEntities_.empty()) {
@@ -1114,7 +1122,9 @@ void AsyncRenderer::workerLoop() {
       }
     }
     const bool desiredPromotionIncomplete =
-        !desiredEntities.empty() && !ContainsAllEntities(compositorEntities_, desiredEntities);
+        !desiredEntities.empty() &&
+        !ContainsAllEntitiesOrOwningAncestors(requestDocument.registry(), compositorEntities_,
+                                              desiredEntities);
 
     // The DOM is the sole source of truth for the dragged entity's
     // position - `SelectTool` mutates the `transform` attribute every
@@ -1153,10 +1163,9 @@ void AsyncRenderer::workerLoop() {
         request.dragPreview->interactionKind == svg::compositor::InteractionHint::ActiveDrag;
     const bool splitPreviewSafe = !desiredPromotionIncomplete;
     if (compositor_ != nullptr) {
-      // `!desiredEntities.empty()` matters when editor promotion is disabled
-      // (FilterOnly): with nothing promoted, `desiredPromotionIncomplete` is
-      // vacuously false during a drag, and skipping the main compose would
-      // present a full-canvas snapshot of a frame that was never composed.
+      // `!desiredEntities.empty()` protects requests without editor selection/drag promotion:
+      // `desiredPromotionIncomplete` is vacuously false when nothing is requested, but skipping the
+      // main compose would leave diagnostic snapshots stale.
       compositor_->setSkipMainComposeDuringSplit(activeDragRequest && splitPreviewSafe &&
                                                  !desiredEntities.empty() &&
                                                  !request.captureCpuSnapshot);
@@ -1167,15 +1176,22 @@ void AsyncRenderer::workerLoop() {
     // Tiles whose id/generation/dimensions were already published carry
     // metadata only; the GL cache keeps the existing texture and applies
     // updated presentation geometry.
+    bool desiredPromotionCoverageCompleteAfterRender = false;
     const auto buildCompositedPreview = [&]() -> std::optional<RenderResult::CompositedPreview> {
       if (request.overviewInfillOnly) {
         return std::nullopt;
       }
-      if (compositor_ == nullptr || !splitPreviewSafe || !request.dragPreview.has_value() ||
-          compositorEntity_ == entt::null || compositor_->layerCount() == 0u) {
+      if (compositor_ == nullptr) {
         return std::nullopt;
       }
-      const std::vector<Entity> dragPreviewEntities = DragPreviewEntities(*request.dragPreview);
+      const std::vector<Entity> dragPreviewEntities =
+          request.dragPreview.has_value() ? DragPreviewEntities(*request.dragPreview)
+                                          : std::vector<Entity>();
+      const Entity previewEntity =
+          desiredPromotionCoverageCompleteAfterRender ? compositorEntity_ : entt::null;
+      const svg::compositor::InteractionHint previewInteractionKind =
+          request.dragPreview.has_value() ? request.dragPreview->interactionKind
+                                          : svg::compositor::InteractionHint::Selection;
       const Transform2d documentFromOutput = rasterViewport.outputFromDocument.inverse();
       const auto outputPointToPresentedDoc = [&](const Vector2d& outputPoint) {
         return documentFromOutput.transformPosition(outputPoint) - documentViewBox.topLeft;
@@ -1318,8 +1334,8 @@ void AsyncRenderer::workerLoop() {
       }
       return RenderResult::CompositedPreview{
           .tiles = std::move(previewTiles),
-          .entity = compositorEntity_,
-          .interactionKind = request.dragPreview->interactionKind,
+          .entity = previewEntity,
+          .interactionKind = previewInteractionKind,
           .representedDragPreview = request.dragPreview,
       };
     };
@@ -1350,7 +1366,40 @@ void AsyncRenderer::workerLoop() {
       {
         const ScopedHeapDelta renderFrameHeapDelta(MemoryStage::WorkerRenderFrame);
         if (compositor_ != nullptr) {
+          const auto syncWorkerPromotions = [&]() {
+            std::erase_if(compositorEntities_,
+                          [this](Entity entity) { return !compositor_->isPromoted(entity); });
+            compositorEntity_ =
+                compositorEntities_.empty() ? entt::null : compositorEntities_.front();
+            if (compositorEntity_ == entt::null) {
+              compositorInteractionKind_ = svg::compositor::InteractionHint::Selection;
+            }
+          };
           renderCompleted = compositor_->renderFrame(viewport, cancelRender_, surfaceFromCanvas);
+          if (renderCompleted) {
+            syncWorkerPromotions();
+            bool promotionAddedAfterPrepare = false;
+            for (Entity entity : desiredEntities) {
+              if (compositor_->isPromoted(entity)) {
+                continue;
+              }
+              const svg::compositor::CompositorController::PromoteResult promoteResult =
+                  compositor_->promoteEntity(entity, desiredKind);
+              if (promoteResult.promotedLayer()) {
+                AppendUniqueEntity(&compositorEntities_, entity);
+                promotionAddedAfterPrepare = true;
+              }
+            }
+            if (promotionAddedAfterPrepare) {
+              compositorEntity_ = compositorEntities_.front();
+              compositorInteractionKind_ = desiredKind;
+              renderCompleted =
+                  compositor_->renderFrame(viewport, cancelRender_, surfaceFromCanvas);
+              if (renderCompleted) {
+                syncWorkerPromotions();
+              }
+            }
+          }
         } else {
           // Composited rendering Off: flat full-document render with no
           // retained state, presented through the full-canvas snapshot path
@@ -1364,6 +1413,10 @@ void AsyncRenderer::workerLoop() {
         }
       }
       workerTiming.renderFrameMs = elapsedSince(renderFrameStart);
+    }
+    if (renderCompleted && compositor_ != nullptr && !desiredEntities.empty()) {
+      desiredPromotionCoverageCompleteAfterRender = ContainsAllEntitiesOrOwningAncestors(
+          requestDocument.registry(), compositorEntities_, desiredEntities);
     }
 
     // A superseding request can arrive after the compositor's final internal cancellation point.
@@ -1413,17 +1466,15 @@ void AsyncRenderer::workerLoop() {
       continue;
     }
 
-    // Build a CompositedPreview from the compositor tile set when available.
-    // If the splitter cannot provide tiles for this frame, the final snapshot
-    // below is wrapped as a single full-canvas tile so presentation still goes
-    // through the compositor path.
+    // Every non-Off editor frame publishes the compositor's paint-order tile set. Promotion
+    // refusal only disables the drag skip-compose optimization; the remaining mandatory layers
+    // and static segments are still the correct presentation topology.
     {
       const auto buildPreviewStart = std::chrono::steady_clock::now();
       const ScopedHeapDelta buildPreviewHeapDelta(MemoryStage::WorkerBuildPreview);
       compositedPreview = buildCompositedPreview();
       workerTiming.buildPreviewMs = elapsedSince(buildPreviewStart);
     }
-
     // Selection chrome is no longer baked into the bitmap - main.cc
     // draws it via the ImGui draw list every frame so clicks don't
     // pay the SVG re-rasterize cost. The `request.selection` field
@@ -1464,9 +1515,14 @@ void AsyncRenderer::workerLoop() {
     workerTiming.timedOutWaitSite = readbackStats.timedOutWaitSite;
     workerTiming.timedOutWaitMs = readbackStats.timedOutWaitMs;
     noteGpuWaitOutcome(readbackStats);
+    // Only the explicit Off mode, overview infill, and the geometry-debug diagnostic use a flat
+    // payload. Normal On and FilterOnly presentation must have produced compositor tiles above.
     if (!compositedPreview.has_value() && (!bitmap.empty() || fullCanvasTexture != nullptr)) {
-      const Entity previewEntity =
-          request.dragPreview.has_value() ? request.dragPreview->entity : request.selectedEntity;
+      UTILS_RELEASE_ASSERT_MSG(
+          compositor_ == nullptr || request.overviewInfillOnly || geometryDebugOverlay,
+          "A non-Off editor render produced no compositor tiles. Refusing monolithic full-canvas "
+          "presentation.");
+      const Entity previewEntity = compositor_ != nullptr ? compositorEntity_ : entt::null;
       const svg::compositor::InteractionHint interactionKind =
           request.dragPreview.has_value() ? request.dragPreview->interactionKind
                                           : svg::compositor::InteractionHint::Selection;
@@ -1476,7 +1532,16 @@ void AsyncRenderer::workerLoop() {
       compositedPreview = BuildFullCanvasCompositedPreview(
           documentViewBox, bitmap, std::move(fullCanvasTexture), ++fullCanvasPayloadGeneration_,
           previewEntity, interactionKind, rasterViewport, request.dragPreview);
+      if (geometryDebugOverlay) {
+        compositedPreview->tiles.front().kind = RenderResult::CompositedTile::Kind::Immediate;
+        compositedPreview->tiles.front().id = "geometry-debug-flat";
+      }
     }
+    UTILS_RELEASE_ASSERT_MSG(
+        compositor_ == nullptr || request.overviewInfillOnly || geometryDebugOverlay ||
+            compositedPreview.has_value(),
+        "A non-Off editor render produced no compositor tiles. Refusing monolithic full-canvas "
+        "presentation.");
 
     // Attribute what this render iteration is holding, before the result leaves
     // the worker. The compositor caches are a level (they persist across

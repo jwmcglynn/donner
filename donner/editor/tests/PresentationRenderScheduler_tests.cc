@@ -108,6 +108,29 @@ TEST(PresentationRenderSchedulerTest, RepeatedUpToDateSelectionDoesNotRequestRen
   EXPECT_FALSE(second.dragPreview.has_value());
 }
 
+TEST(PresentationRenderSchedulerTest, UnownedTileCacheDoesNotSuppressActiveDragRender) {
+  PresentationRenderScheduler scheduler;
+  CompositedPresentation presentation;
+  scheduler.noteRenderCompleted(/*completedVersion=*/1, kCanvasSize, RasterViewport());
+  presentation.noteCachedTextures(entt::null, /*version=*/1, kCanvasSize);
+
+  SelectTool::ActiveDragPreview activeDrag{
+      .entity = Entity(7),
+      .translation = Vector2d(4.0, 2.0),
+      .documentFromCachedDocument = Transform2d::Translate(Vector2d(4.0, 2.0)),
+      .dragGeneration = 1,
+  };
+  const PresentationRenderScheduleDecision decision =
+      scheduler.evaluate(presentation, Input(Entity(7), /*version=*/1, activeDrag));
+
+  EXPECT_TRUE(decision.shouldRequestRender());
+  EXPECT_TRUE(decision.needsCompositedLayerCapture)
+      << "Off mode and OwningTilesRequired results have no movable entity tile; every changed drag "
+         "transform must request rendered pixels";
+  ASSERT_TRUE(decision.dragPreview.has_value());
+  EXPECT_EQ(decision.dragPreview->entity, Entity(7));
+}
+
 TEST(PresentationRenderSchedulerTest, PresentationSettingChangeForcesCurrentDocumentRender) {
   PresentationRenderScheduler scheduler;
   CompositedPresentation presentation;

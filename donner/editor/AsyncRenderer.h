@@ -345,8 +345,8 @@ struct RenderResult {
     /// * pixelsPerDocUnit` with size `bitmapDimsDoc *
     /// pixelsPerDocUnit`.
     std::vector<CompositedTile> tiles;
-    /// Active drag-target entity (for selection chrome routing). May
-    /// be `entt::null` if no entity is currently being dragged.
+    /// Primary editor-promoted entity represented by a movable layer tile. Null when Off or when
+    /// the requested selection must remain inside its owning compositor tiles.
     Entity entity = entt::null;
     /// Interaction phase that produced this composited preview.
     svg::compositor::InteractionHint interactionKind = svg::compositor::InteractionHint::Selection;

@@ -16,8 +16,8 @@ enum class CompositedRenderingMode : std::uint8_t {
   Off,
   /// Compositor runs, but only SVG filters (the expensive re-render case) get
   /// cached isolated layers. Opacity groups, blend modes, and masks render
-  /// inline, and selection/drag promotion, animation promotion, and complexity
-  /// bucketing are disabled.
+  /// inline. Editor-required selection/drag layers remain active; animation
+  /// promotion and complexity bucketing are disabled.
   FilterOnly,
   /// Full compositing: mandatory hints for all isolation signals plus
   /// selection/drag promotion, animation promotion, and complexity bucketing.
