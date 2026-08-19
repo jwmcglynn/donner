@@ -365,9 +365,16 @@ fi
     mkdir -p "$DONNER_CI_DIAGNOSTICS_DIR/coverage"
     DIAG_FLAGS=(
       --profile="$DONNER_CI_DIAGNOSTICS_DIR/coverage/profile.gz"
-      --build_event_json_file="$DONNER_CI_DIAGNOSTICS_DIR/coverage/bep.json"
     )
+    COVERAGE_BEP="$DONNER_CI_DIAGNOSTICS_DIR/coverage/bep.json"
+  else
+    COVERAGE_BEP="$COVERAGE_HTML_DIR/bep.json"
   fi
+  # The build event stream is written unconditionally, not only under CI
+  # diagnostics: the missing-report guard below reads it to tell "every target
+  # was skipped as incompatible with this platform" apart from a real failure,
+  # and that distinction has to work wherever this script runs.
+  DIAG_FLAGS+=(--build_event_json_file="$COVERAGE_BEP")
   phase_mark() {
     if [ -n "${DONNER_CI_DIAGNOSTICS_DIR:-}" ]; then
       echo "$1=$(date +%s)" >> "$DONNER_CI_DIAGNOSTICS_DIR/coverage/timing.txt"
@@ -404,6 +411,25 @@ fi
   phase_mark bazel_coverage_done
 
   if [ ! -f "$COVERAGE_REPORT" ]; then
+    # Fail closed by default: an absent report must never read as success,
+    # because a silently empty report would claim full coverage of nothing.
+    #
+    # The one benign cause is that every selected target is restricted to a
+    # platform this lane does not run on, so Bazel skipped them all and there
+    # was nothing to measure. A change touching only such a target would
+    # otherwise be unable to pass this lane on any run. Consult the build event
+    # stream, which names skipped targets explicitly, and exit cleanly only
+    # when it positively shows skipping accounted for every target.
+    BEP_STATUS="unknown"
+    if [ -f "$COVERAGE_BEP" ]; then
+      BEP_STATUS="$(python3 tools/coverage_bep_status.py "$COVERAGE_BEP" |
+        python3 -c 'import json, sys; print(json.load(sys.stdin)["status"])')"
+    fi
+    if [ "$BEP_STATUS" = "all_skipped" ]; then
+      echo "No coverage report: every selected target was skipped as incompatible with this platform."
+      echo "Nothing to measure here; treating the lane as satisfied."
+      exit 0
+    fi
     echo "ERROR: Coverage report was not generated"
     exit 1
   fi

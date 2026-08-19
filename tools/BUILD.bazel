@@ -77,6 +77,15 @@ py_test(
 )
 
 py_test(
+    name = "coverage_bep_status_tests",
+    size = "small",
+    srcs = [
+        "coverage_bep_status.py",
+        "coverage_bep_status_tests.py",
+    ],
+)
+
+py_test(
     name = "coverage_instrumentable_targets_tests",
     size = "small",
     srcs = [
