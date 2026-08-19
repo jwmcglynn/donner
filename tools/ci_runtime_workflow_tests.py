@@ -192,8 +192,11 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         self.assertEqual(2, self.apt_install.count("Acquire::Retries=3"))
         self.assertIn("attempt=$((attempt + 1))", self.apt_install)
 
-        # Every apt-installing lane routes through the action.
-        self.assertNotIn("nick-fields/retry", self.main.split("brew install")[0])
+        # No surviving wrapper wraps an apt install. A wrapper around brew is
+        # fine and still present: brew does not run under sudo, so the kill
+        # that fails here would succeed there.
+        for block in self.main.split("uses: nick-fields/retry")[1:]:
+            self.assertNotIn("apt-get", block.split("- name:", 1)[0])
 
     def test_cmake_generator_validation_retries_only_after_failure(self):
         """Transient Bazel query failures get one retry without masking a persistent failure."""
