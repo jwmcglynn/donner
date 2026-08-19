@@ -1039,6 +1039,20 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
 #endif
 #endif
 
+#ifndef __EMSCRIPTEN__
+  // A hidden window never shows chrome, and dropping it is what makes the
+  // requested size reachable: AppKit constrains a *titled* window's frame to
+  // the display it lands on, so a hidden 1600x900 replay window on a small
+  // headless display (a GitHub-hosted macOS runner is 1024x768) silently
+  // becomes 1024x645. That reshapes the editor's dock layout and invalidates
+  // every device-pixel coordinate a capture test asserts on, while the replay
+  // still reports success. Borderless windows are exempt from that constraint,
+  // so hidden windows get the framebuffer they asked for on any display.
+  if (!options_.visible) {
+    glfwWindowHint(GLFW_DECORATED, GLFW_FALSE);
+  }
+#endif
+
   const int initialWidth =
 #ifdef __EMSCRIPTEN__
       CanvasPixelWidth();

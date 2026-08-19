@@ -53,6 +53,49 @@ TEST(EditorWindowOffscreenTargetTest, ForceOffscreenRenderTargetDefaultsOff) {
   EXPECT_FALSE(EditorWindowOptions{}.forceOffscreenRenderTarget);
 }
 
+// A hidden replay window must get the framebuffer it asked for, whatever the
+// host display can show. macOS constrains a titled window's frame to its
+// screen, so a 1600x900 replay on a 1024x768 headless runner quietly rendered
+// at 1024x645: the dock layout reflowed, the render pane moved, and every
+// capture test that crops device pixels or injects a canvas-relative click
+// compared the wrong region while the replay still reported success.
+//
+// A developer display is large enough that one oversized window can escape the
+// constraint, so this opens a window first and then asks for an oversized one -
+// the position AppKit picks for the second window is what makes the clamp
+// reachable here. Both windows must come back at their requested size.
+TEST(EditorWindowOffscreenTargetTest, HiddenWindowsKeepTheirRequestedSize) {
+  constexpr Vector2i kFirstRequested(1600, 900);
+  constexpr Vector2i kOversizedRequested(4000, 2400);
+
+  const auto openHidden = [](Vector2i requested) {
+    return EditorWindow(EditorWindowOptions{
+        .title = "Hidden Window Size Test",
+        .initialWidth = requested.x,
+        .initialHeight = requested.y,
+        .visible = false,
+        .offscreen = true,
+    });
+  };
+
+  {
+    EditorWindow first = openHidden(kFirstRequested);
+#if defined(__linux__)
+    ASSERT_TRUE(first.valid());
+#else
+    if (!first.valid()) {
+      GTEST_SKIP() << "editor window is unavailable on this host";
+    }
+#endif
+    EXPECT_EQ(first.framebufferSize(), kFirstRequested);
+  }
+
+  EditorWindow oversized = openHidden(kOversizedRequested);
+  ASSERT_TRUE(oversized.valid());
+  EXPECT_EQ(oversized.framebufferSize(), kOversizedRequested)
+      << "the host clamped the hidden replay window to its display";
+}
+
 #if defined(DONNER_EDITOR_WGPU)
 
 TEST(EditorWindowOffscreenTargetTest, ForcedOffscreenTargetRendersAndReadsBackOnEveryPlatform) {
