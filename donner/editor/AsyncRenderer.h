@@ -272,6 +272,13 @@ struct RenderResult {
     int readbackPollIterations = 0;
     /// True when browser readbacks used the event-driven timed WaitAny path.
     bool usedTimedWaitAny = false;
+    /// True when the worker's backend device has been declared lost, either by
+    /// the driver or by a bounded GPU wait exceeding its deadline.
+    bool deviceLost = false;
+    /// Which bounded GPU wait declared that loss, when a deadline did.
+    svg::GpuWaitTimeoutSite timedOutWaitSite = svg::GpuWaitTimeoutSite::None;
+    /// Wall time that wait spent before giving up, in milliseconds.
+    int timedOutWaitMs = 0;
   };
 
   /// One composite tile from the worker's `CompositorController::
@@ -676,6 +683,41 @@ public:
     return lastCompositorRenderFrameStats_;
   }
 
+  /// Device-health outcome the render worker observed, independent of any
+  /// frame it produced.
+  ///
+  /// A bounded GPU wait that burns its deadline declares the device lost and
+  /// ends the worker iteration with nothing to hand over, so the per-frame
+  /// diagnostics a result carries are never published. That makes the most
+  /// severe renderer failure the only one that leaves no trace in the frame
+  /// stats. The worker records the outcome here instead, so a poller can
+  /// report it without a frame ever landing.
+  struct GpuWaitFailure {
+    /// True once the worker's backend device has been declared lost. Sticky.
+    bool deviceLost = false;
+    /// Which bounded GPU wait declared that loss, when a deadline did.
+    svg::GpuWaitTimeoutSite timedOutWaitSite = svg::GpuWaitTimeoutSite::None;
+    /// Wall time that wait spent before giving up, in milliseconds.
+    int timedOutWaitMs = 0;
+    /// Bumped whenever the record above changes. A poller compares it against
+    /// what it last reported so a sticky loss is reported once rather than on
+    /// every frame.
+    std::uint64_t generation = 0;
+  };
+
+  /// Snapshot of the worker's GPU-wait failure record. UI-thread safe.
+  [[nodiscard]] GpuWaitFailure gpuWaitFailure() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return gpuWaitFailure_;
+  }
+
+  /// Fold one render attempt's device-health stats into the failure record, as
+  /// the worker does at the end of every iteration. Tests use this to pin the
+  /// record's deduplication without hanging a real GPU.
+  void noteGpuWaitOutcomeForTesting(const svg::RendererReadbackStats& readbackStats) {
+    noteGpuWaitOutcome(readbackStats);
+  }
+
   /// Snapshot of the compositor's per-layer diagnostic rows. Captured under
   /// the worker mutex at every Done transition;
   /// the UI thread copies the cached vector out under the lock. Empty
@@ -856,6 +898,12 @@ private:
   void notePublishedCompositedPreview(
       const std::optional<RenderResult::CompositedPreview>& compositedPreview);
 
+  /// Fold one render attempt's backend device-health stats into
+  /// `gpuWaitFailure_`, bumping its generation only when the outcome changes.
+  /// Called from the worker thread; takes `mutex_`, so the caller must have
+  /// released document access first.
+  void noteGpuWaitOutcome(const svg::RendererReadbackStats& readbackStats);
+
   /// Counter of worker-side `resetAllLayers()` invocations. Document-generation
   /// changes and supported geometry-overlay state transitions increment it;
   /// ordinary frame-version changes do not.
@@ -888,6 +936,10 @@ private:
 
   /// Most recent compositor render-cost split captured at the Done transition.
   svg::compositor::CompositorController::RenderFrameStats lastCompositorRenderFrameStats_;
+
+  /// Worker device-health record; see `GpuWaitFailure`. Written by the worker
+  /// and read by the UI thread, both under `mutex_`.
+  GpuWaitFailure gpuWaitFailure_;
 
   /// Most recent per-layer diagnostic snapshot, captured under `mutex_`
   /// at every Done transition. UI-thread reads this via

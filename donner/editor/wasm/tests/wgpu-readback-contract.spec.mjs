@@ -23,6 +23,10 @@ const rotateCursorSource = await readFile(
   new URL("../../RotateCursorSet.cc", import.meta.url),
   "utf8",
 );
+const presentationRegressionSource = await readFile(
+  new URL("./browser-presentation-regression.spec.ts", import.meta.url),
+  "utf8",
+);
 const geodeDeviceSource = await readFile(
   new URL("../../../svg/renderer/geode/GeodeDevice.cc", import.meta.url),
   "utf8",
@@ -160,6 +164,118 @@ test("pre-map diagnostic setup failures use the same bounded completion policy",
   );
   assert.match(setupGuard[0], /WakeWasmEditorForPendingWgpuReadback/);
   assert.doesNotMatch(source, /struct AsyncSmokeReadbackRetry/);
+});
+
+test("worker stats carry the GPU wait outcome that ended the frame", () => {
+  const publisher = renderCoordinatorSource.match(
+    /void PublishWorkerTimingStats\([\s\S]*?\n\}/,
+  );
+  assert.ok(publisher, "expected the completed-frame worker stats publisher");
+  assert.match(publisher[0], /stats\['deviceLost'\]/);
+  assert.match(publisher[0], /stats\['gpuWaitTimeoutSite'\] = UTF8ToString/);
+  assert.match(publisher[0], /stats\['gpuWaitTimeoutMs'\]/);
+  assert.match(publisher[0], /stats\['publishReason'\] = 'render-result'/);
+
+  // The site names are what a failing run prints, so they are part of the
+  // contract rather than an implementation detail.
+  assert.match(renderCoordinatorSource, /GpuWaitTimeoutSite::None: return "none"/);
+  assert.match(renderCoordinatorSource, /GpuWaitTimeoutSite::ReadbackMap: return "readback-map"/);
+  assert.match(renderCoordinatorSource, /GpuWaitTimeoutSite::QueueIdle: return "queue-idle"/);
+
+  // clang-format splits a bare `!==` into `!= =`; the publishers must not
+  // depend on an operator that a formatting pass can silently corrupt.
+  assert.doesNotMatch(renderCoordinatorSource, /!\s*=\s+=/);
+});
+
+test("a GPU wait failure publishes worker stats even though no frame completed", () => {
+  const failurePublisher = renderCoordinatorSource.match(
+    /void PublishWorkerGpuWaitFailure\([\s\S]*?\n\}/,
+  );
+  assert.ok(failurePublisher, "expected a publisher for frames that never completed");
+  assert.match(
+    failurePublisher[0],
+    /window\['__donnerWorkerStats'\] = stats/,
+    "the failure path must write the same stats object the harness reads",
+  );
+  assert.match(failurePublisher[0], /stats\['publishReason'\] = 'gpu-wait-failure'/);
+  assert.match(
+    failurePublisher[0],
+    /previous \? Object\.assign\(\{\}, previous\) : \(\{'completedResults' : 0\}\)/,
+    "a failure before any frame landed must still create the stats object",
+  );
+  assert.doesNotMatch(
+    failurePublisher[0],
+    /'completedResults' : previous/,
+    "the completed-frame counter orders presentation samples and must count frames only",
+  );
+  assert.match(
+    failurePublisher[0],
+    /delete stats\['presentedAtMs'\]/,
+    "a merged publish must not inherit the previous object's presentation stamp; "
+      + "the editor stamps it once per fresh stats object and probes pair the two timestamps",
+  );
+
+  const poll = renderCoordinatorSource.match(
+    /void RenderCoordinator::pollRenderResult\([\s\S]*?\n {2}const auto& result = \*resultOpt;/,
+  );
+  assert.ok(poll, "expected the UI-thread result poll");
+  const failureCall = poll[0].indexOf("PublishWorkerGpuWaitFailure(");
+  const earlyReturn = poll[0].indexOf("if (!resultOpt.has_value()) {\n    return;");
+  assert.ok(failureCall >= 0, "the poll must report a GPU wait failure");
+  assert.ok(
+    failureCall < earlyReturn,
+    "the failure report must happen before the no-result early return",
+  );
+  assert.match(poll[0], /gpuWaitFailure\.generation != publishedGpuWaitGeneration_/);
+});
+
+test("the render worker records a GPU wait failure on the abandoned-frame path", () => {
+  const abandoned = workerRendererSource.match(
+    /if \(!renderCompleted\) \{[\s\S]*?cancelledRenderCount_\.fetch_add/,
+  );
+  assert.ok(abandoned, "expected the worker's abandoned-iteration path");
+  assert.match(abandoned[0], /noteGpuWaitOutcome\(requestRenderer\.consumeReadbackStats\(\)\)/);
+
+  assert.match(
+    workerRendererHeader,
+    /struct GpuWaitFailure \{[\s\S]*?bool deviceLost[\s\S]*?timedOutWaitSite[\s\S]*?timedOutWaitMs[\s\S]*?generation/,
+    "the worker's failure record must carry the flag, the wait site, and the elapsed wait",
+  );
+  assert.match(
+    workerRendererHeader,
+    /bool deviceLost = false;[\s\S]*?svg::GpuWaitTimeoutSite timedOutWaitSite[\s\S]*?int timedOutWaitMs/,
+    "the per-frame timing breakdown must carry the same three fields",
+  );
+});
+
+test("the presentation regression gates print the worker health they wait on", () => {
+  const helper = presentationRegressionSource.match(
+    /async function expectWorkerResultsToReach\([\s\S]*?\n\}/,
+  );
+  assert.ok(helper, "expected one shared render gate for the presentation suite");
+  assert.match(helper[0], /readWorkerHealth\(page\)/);
+  // Playwright prints the whole received value for `toEqual`, but only the
+  // keys it was asked to match for `toMatchObject`. With the latter the health
+  // fields never reach the log and the helper is pure overhead, so the matcher
+  // is part of the contract rather than a style choice.
+  assert.match(helper[0], /\.toEqual\(expect\.objectContaining\(\{ reached: true \}\)\)/);
+  assert.doesNotMatch(helper[0], /toMatchObject/);
+
+  const health = presentationRegressionSource.match(
+    /async function readWorkerHealth\([\s\S]*?\n\}/,
+  );
+  assert.ok(health, "expected a worker health snapshot helper");
+  for (const field of ["deviceLost", "gpuWaitTimeoutSite", "gpuWaitTimeoutMs", "publishReason"]) {
+    assert.match(health[0], new RegExp(`${field}:`), `health snapshot must carry ${field}`);
+  }
+
+  // Every render gate in the suite has to go through the helper: one that
+  // still polls the bare counter is exactly the gate that reports nothing when
+  // the worker stops publishing.
+  assert.doesNotMatch(
+    presentationRegressionSource,
+    /\.poll\((?:async )?\(\) => page\.evaluate\(\(\) => window\.__donnerWorkerStats\?\.completedResults/,
+  );
 });
 
 test("worker WebGPU startup keeps its browser Promise bridge private and single-purpose", () => {

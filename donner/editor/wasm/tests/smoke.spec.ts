@@ -22,6 +22,11 @@ declare global {
       count?: number;
     };
     __donnerPinchWheelDeltaPerLnScale?: number;
+    // Shape of a completed frame's publish. A publish that reports a GPU wait
+    // failure carries only `completedResults` and the health fields below, so
+    // the timing fields are optional in principle; they are declared required
+    // because every assertion in this file reads them from a frame that
+    // landed, and loosening them would push a null check into each one.
     __donnerWorkerStats?: {
       completedResults: number;
       publishedAtMs: number;
@@ -46,6 +51,12 @@ declare global {
       readbackCount: number;
       readbackPollIterations: number;
       readbackWaitStrategy: string;
+      // Present on every publish, including one that reports a GPU wait
+      // failure with no frame behind it.
+      deviceLost: boolean;
+      gpuWaitTimeoutSite: string;
+      gpuWaitTimeoutMs: number;
+      publishReason: string;
     };
     __donnerActiveSampleStats?: {
       sampleId: string;
@@ -1487,6 +1498,17 @@ test("Geode WASM selects through the overlay with one prewarm render and no recu
   expect(workerStats?.readbackCount).toBe(0);
   expect(workerStats?.readbackPollIterations).toBe(0);
   expect(["timed-wait-any", "device-poll"]).toContain(workerStats?.readbackWaitStrategy);
+  // A run that presented frames must say so explicitly rather than by the
+  // absence of a failure field. A hung GPU wait publishes the same object with
+  // `deviceLost` set and the wait named, so a rare stall prints a line that
+  // identifies itself instead of leaving the stats undefined.
+  expect(
+    workerStats?.deviceLost,
+    `worker device was declared lost: ${JSON.stringify(workerStats)}`,
+  ).toBe(false);
+  expect(workerStats?.gpuWaitTimeoutSite).toBe("none");
+  expect(workerStats?.gpuWaitTimeoutMs).toBe(0);
+  expect(workerStats?.publishReason).toBe("render-result");
   console.log(`wasm-worker-stats=${JSON.stringify(workerStats)}`);
   expect(fatalMessages).toEqual([]);
 });

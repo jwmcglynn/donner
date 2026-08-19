@@ -26,45 +26,56 @@ namespace donner::editor {
 namespace {
 
 #ifdef __EMSCRIPTEN__
+/// Stable wire name for a published GPU wait site. These strings are what the
+/// browser test harness prints, so a failing run names the wait that hung
+/// instead of an opaque number.
+const char* GpuWaitTimeoutSiteName(svg::GpuWaitTimeoutSite site) {
+  switch (site) {
+    case svg::GpuWaitTimeoutSite::None: return "none";
+    case svg::GpuWaitTimeoutSite::ReadbackMap: return "readback-map";
+    case svg::GpuWaitTimeoutSite::QueueIdle: return "queue-idle";
+    case svg::GpuWaitTimeoutSite::Unknown: return "unknown";
+  }
+  return "unknown";
+}
+
 // Proxied to the browser main thread: the render pthread has no `window`.
-// The 24 values ride one heap buffer because EM_ASM argument substitution
-// stops at $15; the buffer is static because the async proxy reads it after
-// this function returns, and the publisher is single-threaded per process.
-void PublishWorkerTimingStats(double workerMs, double queueWaitMs, double dequeueToStartMs,
-                              double setupMs, double renderFrameMs, double buildPreviewMs,
-                              double finalSnapshotMs, double diagnosticsMs, double pollDelayMs,
-                              double wakeToPollMs, double firstFrameDrawMs,
-                              double firstFramePlanningMs, double firstFrameWarmupMs,
-                              double immediateRasterizeMs, double cachedRasterizeMs,
-                              int immediateTileCount, int cachedTileCount,
-                              int offscreenCreateCount, int offscreenRecycleCount,
-                              int offscreenCreateTotal, int offscreenRecycleTotal,
-                              int readbackCount, int readbackPollIterations, int usedTimedWaitAny) {
-  static double buffer[24];
-  const double values[24] = {workerMs,
-                             queueWaitMs,
-                             dequeueToStartMs,
-                             setupMs,
-                             renderFrameMs,
-                             buildPreviewMs,
-                             finalSnapshotMs,
-                             diagnosticsMs,
-                             pollDelayMs,
-                             wakeToPollMs,
-                             firstFrameDrawMs,
-                             firstFramePlanningMs,
-                             firstFrameWarmupMs,
-                             immediateRasterizeMs,
-                             cachedRasterizeMs,
-                             static_cast<double>(immediateTileCount),
-                             static_cast<double>(cachedTileCount),
-                             static_cast<double>(offscreenCreateCount),
-                             static_cast<double>(offscreenRecycleCount),
-                             static_cast<double>(offscreenCreateTotal),
-                             static_cast<double>(offscreenRecycleTotal),
-                             static_cast<double>(readbackCount),
-                             static_cast<double>(readbackPollIterations),
-                             usedTimedWaitAny ? 1.0 : 0.0};
+// The numeric values ride one heap buffer because EM_ASM argument
+// substitution stops at $15; the buffer is static because the async proxy
+// reads it after this function returns, and the publisher is single-threaded
+// per process. The wait-site name rides a separate argument as a pointer to a
+// string literal, which has static storage and so outlives the proxy hop too.
+void PublishWorkerTimingStats(
+    double workerMs, const RenderResult::WorkerTimingBreakdown& timing,
+    const svg::compositor::CompositorController::RenderFrameStats& compositorStats) {
+  constexpr std::size_t kValueCount = 26;
+  static double buffer[kValueCount];
+  const double values[kValueCount] = {workerMs,
+                                      timing.queueWaitMs,
+                                      timing.dequeueToStartMs,
+                                      timing.setupMs,
+                                      timing.renderFrameMs,
+                                      timing.buildPreviewMs,
+                                      timing.finalSnapshotMs,
+                                      timing.diagnosticsMs,
+                                      timing.pollDelayMs,
+                                      timing.wakeToPollMs,
+                                      compositorStats.firstFrameDrawMs,
+                                      compositorStats.firstFramePlanningMs,
+                                      compositorStats.firstFrameWarmupMs,
+                                      compositorStats.immediateRasterizeMs,
+                                      compositorStats.cachedRasterizeMs,
+                                      static_cast<double>(compositorStats.immediateTileCount),
+                                      static_cast<double>(compositorStats.cachedTileCount),
+                                      static_cast<double>(compositorStats.offscreenCreateCount),
+                                      static_cast<double>(compositorStats.offscreenRecycleCount),
+                                      static_cast<double>(compositorStats.offscreenCreateTotal),
+                                      static_cast<double>(compositorStats.offscreenRecycleTotal),
+                                      static_cast<double>(timing.readbackCount),
+                                      static_cast<double>(timing.readbackPollIterations),
+                                      timing.usedTimedWaitAny ? 1.0 : 0.0,
+                                      timing.deviceLost ? 1.0 : 0.0,
+                                      static_cast<double>(timing.timedOutWaitMs)};
   std::copy(std::begin(values), std::end(values), std::begin(buffer));
   MAIN_THREAD_ASYNC_EM_ASM(
       {
@@ -87,9 +98,44 @@ void PublishWorkerTimingStats(double workerMs, double queueWaitMs, double dequeu
           stats[names[index]] = heap[b + index];
         }
         stats['readbackWaitStrategy'] = heap[b + 23] ? 'timed-wait-any' : 'device-poll';
+        stats['deviceLost'] = heap[b + 24] > 0;
+        stats['gpuWaitTimeoutSite'] = UTF8ToString($1);
+        stats['gpuWaitTimeoutMs'] = heap[b + 25];
+        stats['publishReason'] = 'render-result';
         window['__donnerWorkerStats'] = stats;
       },
-      buffer);
+      buffer, GpuWaitTimeoutSiteName(timing.timedOutWaitSite));
+}
+
+// Publish a GPU-wait failure that produced no frame.
+//
+// A bounded GPU wait that burns its deadline declares the device lost and
+// ends the worker iteration with nothing to present, so the stats object
+// above is never written and the failure reads as silence to anything polling
+// the page. Merge the failure onto whatever was last published, creating the
+// object when nothing ever completed, and leave `completedResults` alone: that
+// counter orders presentation samples and must keep counting frames only.
+void PublishWorkerGpuWaitFailure(bool deviceLost, const char* timedOutWaitSiteName,
+                                 int timedOutWaitMs) {
+  MAIN_THREAD_ASYNC_EM_ASM(
+      {
+        const previous = window['__donnerWorkerStats'];
+        const stats = previous ? Object.assign({}, previous) : ({'completedResults' : 0});
+        // Every published stats object starts without 'presentedAtMs'; the
+        // frame that consumes a result stamps it exactly once, and probes pair
+        // the two timestamps to measure the handoff. Carrying the previous
+        // object's stamp forward would date this publish to a frame that
+        // presented something else. Absent is also the more useful answer
+        // here: this publish is the one that never presented.
+        delete stats['presentedAtMs'];
+        stats['deviceLost'] = $0 > 0;
+        stats['gpuWaitTimeoutSite'] = UTF8ToString($1);
+        stats['gpuWaitTimeoutMs'] = $2;
+        stats['publishedAtMs'] = performance.now();
+        stats['publishReason'] = 'gpu-wait-failure';
+        window['__donnerWorkerStats'] = stats;
+      },
+      deviceLost ? 1 : 0, timedOutWaitSiteName, timedOutWaitMs);
 }
 #endif
 
@@ -811,29 +857,33 @@ void RenderCoordinator::pollRenderResult(EditorApp& app, const ViewportState& vi
   ZoneScopedN("RenderCoordinator::pollRenderResult");
   const ScopedHeapDelta pollHeapDelta(MemoryStage::AppPollResult);
   auto resultOpt = renderWorker_.asyncRenderer.pollResult();
+#ifdef __EMSCRIPTEN__
+  // Report a GPU-wait failure whether or not a frame landed. The completed
+  // frame below carries the same fields, so consume the generation either way
+  // and only publish separately when there is no frame to carry them.
+  {
+    const AsyncRenderer::GpuWaitFailure gpuWaitFailure =
+        renderWorker_.asyncRenderer.gpuWaitFailure();
+    if (gpuWaitFailure.generation != publishedGpuWaitGeneration_) {
+      publishedGpuWaitGeneration_ = gpuWaitFailure.generation;
+      if (!resultOpt.has_value()) {
+        PublishWorkerGpuWaitFailure(gpuWaitFailure.deviceLost,
+                                    GpuWaitTimeoutSiteName(gpuWaitFailure.timedOutWaitSite),
+                                    gpuWaitFailure.timedOutWaitMs);
+      }
+    }
+  }
+#endif
   if (!resultOpt.has_value()) {
     return;
   }
 
   const auto& result = *resultOpt;
-#ifdef __EMSCRIPTEN__
   const auto compositorStats = renderWorker_.asyncRenderer.compositorRenderFrameStats();
-  PublishWorkerTimingStats(
-      result.workerMs, result.workerTiming.queueWaitMs, result.workerTiming.dequeueToStartMs,
-      result.workerTiming.setupMs, result.workerTiming.renderFrameMs,
-      result.workerTiming.buildPreviewMs, result.workerTiming.finalSnapshotMs,
-      result.workerTiming.diagnosticsMs, result.workerTiming.pollDelayMs,
-      result.workerTiming.wakeToPollMs, compositorStats.firstFrameDrawMs,
-      compositorStats.firstFramePlanningMs, compositorStats.firstFrameWarmupMs,
-      compositorStats.immediateRasterizeMs, compositorStats.cachedRasterizeMs,
-      compositorStats.immediateTileCount, compositorStats.cachedTileCount,
-      compositorStats.offscreenCreateCount, compositorStats.offscreenRecycleCount,
-      compositorStats.offscreenCreateTotal, compositorStats.offscreenRecycleTotal,
-      result.workerTiming.readbackCount, result.workerTiming.readbackPollIterations,
-      result.workerTiming.usedTimedWaitAny ? 1 : 0);
+#ifdef __EMSCRIPTEN__
+  PublishWorkerTimingStats(result.workerMs, result.workerTiming, compositorStats);
 #endif
-  lastFrameCostBreakdown_.compositedRender =
-      CompositedRenderCostFromStats(renderWorker_.asyncRenderer.compositorRenderFrameStats());
+  lastFrameCostBreakdown_.compositedRender = CompositedRenderCostFromStats(compositorStats);
   // Forward the worker-measured presentation latency to the frame history so
   // `RenderFrameGraph` can overlay async worker time on the UI frame graph.
   // The frame history's latest slot corresponds to the current UI frame

@@ -12,7 +12,9 @@
 
 #include <gtest/gtest.h>
 
+#include <atomic>
 #include <chrono>
+#include <thread>
 #include <vector>
 
 namespace donner::geode {
@@ -108,6 +110,86 @@ TEST(BoundedGpuWait, ZeroTimeoutPollsOnceThenTimesOut) {
   // never be reported as a timeout), but sleeps nothing.
   EXPECT_EQ(pollCount, 1);
   EXPECT_TRUE(clock.sleeps.empty());
+}
+
+/// A device-lost record starts with no timeout attribution, so "lost with no
+/// site" is a meaningful state: it says the driver reported the loss rather
+/// than a deadline discovering it.
+TEST(GeodeDeviceLostState, StartsWithNoTimeoutAttribution) {
+  const GeodeDeviceLostState state;
+
+  EXPECT_FALSE(state.lost.load());
+  EXPECT_EQ(state.timedOutSite.load(), GpuWaitSite::None);
+  EXPECT_EQ(state.timedOutElapsedMs.load(), 0);
+}
+
+/// Only the declaring call records an attribution, so a wait that expires
+/// against an already-hung device reports nothing new: it inherited the hang
+/// rather than finding it.
+TEST(GeodeDeviceLostState, OnlyTheDeclaringWaitRecordsAnAttribution) {
+  GeodeDeviceLostState state;
+
+  EXPECT_TRUE(DeclareDeviceLostAfterWaitTimeout(state, GpuWaitSite::ReadbackMap, 10000ms));
+  EXPECT_FALSE(DeclareDeviceLostAfterWaitTimeout(state, GpuWaitSite::QueueIdle, 5000ms));
+
+  EXPECT_TRUE(state.lost.load());
+  EXPECT_EQ(state.timedOutSite.load(), GpuWaitSite::ReadbackMap);
+  EXPECT_EQ(state.timedOutElapsedMs.load(), 10000);
+}
+
+/// A driver-reported loss leaves the attribution empty, and a wait that
+/// expires afterwards must not fill it in: an empty site is the only way a
+/// report can say the driver declared the loss.
+TEST(GeodeDeviceLostState, ADriverLossKeepsTheAttributionEmpty) {
+  GeodeDeviceLostState state;
+
+  EXPECT_TRUE(DeclareDeviceLost(state));
+  EXPECT_FALSE(DeclareDeviceLostAfterWaitTimeout(state, GpuWaitSite::ReadbackMap, 10000ms));
+
+  EXPECT_EQ(state.timedOutSite.load(), GpuWaitSite::None);
+  EXPECT_EQ(state.timedOutElapsedMs.load(), 0);
+}
+
+/// The two declaring paths run on different threads (the driver's device-lost
+/// callback is spontaneous; bounded waits expire on whichever thread is
+/// waiting), so they race for real. Whoever wins the flag owns the
+/// attribution, and the loser must leave it alone - a check-then-set that
+/// reads the flag and then stores the site lets a driver loss landing in the
+/// gap be relabelled as a wait timeout, which this pins against by asserting
+/// the attribution always agrees with the reported winner.
+TEST(GeodeDeviceLostState, ConcurrentDriverLossAndWaitTimeoutAgreeOnOneAttribution) {
+  constexpr int kTrials = 1000;
+  for (int trial = 0; trial < kTrials; ++trial) {
+    GeodeDeviceLostState state;
+    std::atomic<bool> go{false};
+    bool driverDeclared = false;
+    bool waitDeclared = false;
+
+    std::thread driver([&] {
+      while (!go.load(std::memory_order_acquire)) {}
+      driverDeclared = DeclareDeviceLost(state);
+    });
+    std::thread waiter([&] {
+      while (!go.load(std::memory_order_acquire)) {}
+      waitDeclared = DeclareDeviceLostAfterWaitTimeout(state, GpuWaitSite::ReadbackMap, 10000ms);
+    });
+    go.store(true, std::memory_order_release);
+    driver.join();
+    waiter.join();
+
+    ASSERT_TRUE(state.lost.load());
+    ASSERT_NE(driverDeclared, waitDeclared) << "exactly one caller may declare the loss";
+    if (driverDeclared) {
+      ASSERT_EQ(state.timedOutSite.load(), GpuWaitSite::None)
+          << "a driver-reported loss was relabelled as a wait timeout (trial " << trial << ")";
+      ASSERT_EQ(state.timedOutElapsedMs.load(), 0);
+    } else {
+      ASSERT_EQ(state.timedOutSite.load(), GpuWaitSite::ReadbackMap)
+          << "the declaring wait lost its attribution (trial " << trial << ")";
+      ASSERT_EQ(state.timedOutElapsedMs.load(), 10000)
+          << "the site was published without its elapsed time (trial " << trial << ")";
+    }
+  }
 }
 
 TEST(BoundedGpuWait, ZeroPollIntervalDoesNotSleep) {

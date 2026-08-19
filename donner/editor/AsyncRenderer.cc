@@ -334,6 +334,25 @@ void AsyncRenderer::shutdown() {
   }
 }
 
+void AsyncRenderer::noteGpuWaitOutcome(const svg::RendererReadbackStats& readbackStats) {
+  if (!readbackStats.deviceLost) {
+    return;
+  }
+
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (gpuWaitFailure_.deviceLost &&
+      gpuWaitFailure_.timedOutWaitSite == readbackStats.timedOutWaitSite &&
+      gpuWaitFailure_.timedOutWaitMs == readbackStats.timedOutWaitMs) {
+    // Device loss is sticky, so every later frame re-reports it. Leave the
+    // generation alone for a repeat so a reader publishes each distinct
+    // failure once instead of on every poll.
+    return;
+  }
+  gpuWaitFailure_.deviceLost = true;
+  gpuWaitFailure_.timedOutWaitSite = readbackStats.timedOutWaitSite;
+  gpuWaitFailure_.timedOutWaitMs = readbackStats.timedOutWaitMs;
+  ++gpuWaitFailure_.generation;
+}
 
 void AsyncRenderer::notePublishedCompositedPreview(
     const std::optional<RenderResult::CompositedPreview>& compositedPreview) {
@@ -1296,6 +1315,12 @@ void AsyncRenderer::workerLoop() {
     if (!renderCompleted) {
       // Release document access before taking `mutex_` to avoid a lock-order inversion.
       releaseDocumentAccess();
+      // An abandoned iteration still observed whatever the backend device did.
+      // A bounded GPU wait that burns its deadline declares the device lost
+      // and then ends the frame with nothing to present, so this is the only
+      // place that failure can be recorded: the completed-frame stats below
+      // are never reached.
+      noteGpuWaitOutcome(requestRenderer.consumeReadbackStats());
       cancelledRenderCount_.fetch_add(1, std::memory_order_release);
       std::function<void()> wake;
       bool notifyStateChange = false;
@@ -1363,6 +1388,10 @@ void AsyncRenderer::workerLoop() {
     workerTiming.readbackCount = readbackStats.count;
     workerTiming.readbackPollIterations = readbackStats.pollIterations;
     workerTiming.usedTimedWaitAny = readbackStats.usedTimedWaitAny;
+    workerTiming.deviceLost = readbackStats.deviceLost;
+    workerTiming.timedOutWaitSite = readbackStats.timedOutWaitSite;
+    workerTiming.timedOutWaitMs = readbackStats.timedOutWaitMs;
+    noteGpuWaitOutcome(readbackStats);
     if (!compositedPreview.has_value() && (!bitmap.empty() || fullCanvasTexture != nullptr)) {
       const Entity previewEntity =
           request.dragPreview.has_value() ? request.dragPreview->entity : request.selectedEntity;

@@ -474,6 +474,12 @@ private:
   std::uint64_t documentCanvasCommitTotal_ = 0;
   /// Cumulative overview-infill requests; see `overviewInfillRenderTotal`.
   std::uint64_t overviewInfillRenderTotal_ = 0;
+#ifdef __EMSCRIPTEN__
+  /// Generation of the last worker GPU-wait failure reported to the page.
+  /// Device loss is sticky, so publishing is edge-triggered on this rather
+  /// than repeated every frame for the rest of the session.
+  std::uint64_t publishedGpuWaitGeneration_ = 0;
+#endif
 };
 
 }  // namespace donner::editor

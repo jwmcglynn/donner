@@ -374,6 +374,81 @@ TEST(GeodeDeviceLost, MarkDeviceLostIsSticky) {
   EXPECT_TRUE(device->isDeviceLost());
 }
 
+/// A timeout-declared loss carries the attribution that makes it diagnosable:
+/// which bounded wait expired and how long it actually ran.
+TEST(GeodeDeviceLost, WaitTimeoutRecordsSiteAndElapsed) {
+  auto device = GeodeDevice::CreateHeadless();
+  ASSERT_NE(device, nullptr);
+
+  const GeodeDevice::ReadbackStats healthy = device->consumeReadbackStats();
+  EXPECT_FALSE(healthy.deviceLost);
+  EXPECT_EQ(healthy.timedOutWaitSite, GpuWaitSite::None);
+  EXPECT_EQ(healthy.timedOutWaitMs, 0);
+
+  device->markDeviceLostAfterWaitTimeout(GpuWaitSite::ReadbackMap, kReadbackMapTimeout,
+                                         "test-injected readback map stall");
+
+  EXPECT_TRUE(device->isDeviceLost());
+  const GeodeDevice::ReadbackStats afterTimeout = device->consumeReadbackStats();
+  EXPECT_TRUE(afterTimeout.deviceLost);
+  EXPECT_EQ(afterTimeout.timedOutWaitSite, GpuWaitSite::ReadbackMap);
+  EXPECT_EQ(afterTimeout.timedOutWaitMs, static_cast<int>(kReadbackMapTimeout.count()));
+}
+
+/// Once a device hangs, every later bounded wait against it expires too. Those
+/// are consequences, so the first attribution has to survive them or the
+/// report names whichever wait happened to run last.
+TEST(GeodeDeviceLost, FirstWaitTimeoutAttributionWins) {
+  auto device = GeodeDevice::CreateHeadless();
+  ASSERT_NE(device, nullptr);
+
+  device->markDeviceLostAfterWaitTimeout(GpuWaitSite::ReadbackMap, kReadbackMapTimeout,
+                                         "test-injected readback map stall");
+  device->markDeviceLostAfterWaitTimeout(GpuWaitSite::QueueIdle, kDefaultGpuWaitTimeout,
+                                         "test-injected follow-on queue drain stall");
+
+  const GeodeDevice::ReadbackStats stats = device->consumeReadbackStats();
+  EXPECT_EQ(stats.timedOutWaitSite, GpuWaitSite::ReadbackMap);
+  EXPECT_EQ(stats.timedOutWaitMs, static_cast<int>(kReadbackMapTimeout.count()));
+}
+
+/// A driver-reported loss has no wait to attribute it to, and must not borrow
+/// one: an empty site is how a report distinguishes "the driver told us" from
+/// "one of our deadlines expired".
+TEST(GeodeDeviceLost, DriverReportedLossHasNoWaitAttribution) {
+  auto device = GeodeDevice::CreateHeadless();
+  ASSERT_NE(device, nullptr);
+
+  device->markDeviceLost("test-injected driver-reported loss");
+
+  const GeodeDevice::ReadbackStats stats = device->consumeReadbackStats();
+  EXPECT_TRUE(stats.deviceLost);
+  EXPECT_EQ(stats.timedOutWaitSite, GpuWaitSite::None);
+  EXPECT_EQ(stats.timedOutWaitMs, 0);
+}
+
+/// The readback counters reset on every consume. The device-health fields must
+/// not, or the frame after the failure would report a healthy device while
+/// rendering stays dead.
+TEST(GeodeDeviceLost, ReadbackStatsReportLossWithoutConsumingIt) {
+  auto device = GeodeDevice::CreateHeadless();
+  ASSERT_NE(device, nullptr);
+
+  device->recordReadback(/*usedTimedWaitAny=*/true, /*pollIterations=*/7);
+  device->markDeviceLostAfterWaitTimeout(GpuWaitSite::QueueIdle, kDefaultGpuWaitTimeout,
+                                         "test-injected queue drain stall");
+
+  const GeodeDevice::ReadbackStats first = device->consumeReadbackStats();
+  EXPECT_EQ(first.count, 1);
+  EXPECT_EQ(first.pollIterations, 7);
+
+  const GeodeDevice::ReadbackStats second = device->consumeReadbackStats();
+  EXPECT_EQ(second.count, 0) << "readback counters must still be consumed";
+  EXPECT_TRUE(second.deviceLost);
+  EXPECT_EQ(second.timedOutWaitSite, GpuWaitSite::QueueIdle);
+  EXPECT_EQ(second.timedOutWaitMs, static_cast<int>(kDefaultGpuWaitTimeout.count()));
+}
+
 /// A wait against a lost device must fail fast without polling the device:
 /// the generous default timeout is seconds, so a fast return proves the
 /// short-circuit rather than a lucky quick drain.

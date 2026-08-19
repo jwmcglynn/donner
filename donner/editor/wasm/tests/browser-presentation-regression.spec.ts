@@ -35,6 +35,17 @@ declare global {
       offscreenCreateTotal?: number;
       offscreenRecycleCount?: number;
       offscreenRecycleTotal?: number;
+      // Device health, published onto the same object as the frame counter.
+      // A frame that never lands leaves the counter flat and says nothing
+      // else; these say whether the renderer stopped and which bounded GPU
+      // wait stopped it. Optional because a build older than the publisher,
+      // or a page where the worker never published at all, has neither.
+      deviceLost?: boolean;
+      gpuWaitTimeoutSite?: string;
+      gpuWaitTimeoutMs?: number;
+      publishReason?: string;
+      publishedAtMs?: number;
+      presentedAtMs?: number;
     };
     __donnerInteractionStats?: {
       dragging: boolean;
@@ -386,6 +397,66 @@ async function readDocumentPresentationState(page: Page): Promise<DocumentPresen
   }));
 }
 
+// The worker's device health, published alongside the frame counter every
+// gate in this file waits on.
+interface WorkerHealth {
+  completedResults: number;
+  deviceLost: boolean;
+  gpuWaitTimeoutSite: string;
+  gpuWaitTimeoutMs: number;
+  publishReason: string;
+}
+
+// `unpublished` and -1 distinguish "the worker never published stats at all"
+// from "the worker published and reports a healthy device". Those are very
+// different failures and the counter alone reports both as a flat zero.
+async function readWorkerHealth(page: Page): Promise<WorkerHealth> {
+  return page.evaluate(() => ({
+    completedResults: window.__donnerWorkerStats?.completedResults ?? 0,
+    deviceLost: window.__donnerWorkerStats?.deviceLost ?? false,
+    gpuWaitTimeoutSite: window.__donnerWorkerStats?.gpuWaitTimeoutSite ?? "unpublished",
+    gpuWaitTimeoutMs: window.__donnerWorkerStats?.gpuWaitTimeoutMs ?? -1,
+    publishReason: window.__donnerWorkerStats?.publishReason ?? "unpublished",
+  }));
+}
+
+/**
+ * Wait for the worker's completed-frame count to satisfy `reached`.
+ *
+ * Every render gate in this file waits on that counter, and a counter that
+ * never moves reports only "still <n>" - which is what the hardest failure
+ * looks like too: a bounded GPU wait burning its deadline stops the worker
+ * publishing entirely, and on a loaded runner that is indistinguishable from
+ * slow. Polling the whole health snapshot instead of the bare number puts the
+ * device-lost flag, the wait that timed out and its elapsed time into the
+ * value the assertion prints, so a failing run names the cause without a
+ * rerun. Waiting behavior is unchanged; only what the failure says changes.
+ *
+ * The matcher is deliberately `toEqual(objectContaining(...))` and not
+ * `toMatchObject`: the latter prints only the keys it was asked to match, so
+ * the health fields would never reach the log and this helper would be pure
+ * overhead. Verified by running both against a failing poll.
+ */
+async function expectWorkerResultsToReach(
+  page: Page,
+  reached: (completedResults: number) => boolean,
+  options: { message: string; timeout: number },
+): Promise<void> {
+  await expect
+    .poll(
+      async () => {
+        const health = await readWorkerHealth(page);
+        return { ...health, reached: reached(health.completedResults) };
+      },
+      {
+        message: options.message,
+        timeout: options.timeout,
+        intervals: [16, 25, 50, 100],
+      },
+    )
+    .toEqual(expect.objectContaining({ reached: true }));
+}
+
 // What a drag press is supposed to have accomplished, read as one snapshot: the
 // shape is selected and its single prewarm render has landed. Reading both
 // together is what makes the failure diagnosable - a press the busy worker
@@ -554,13 +625,11 @@ async function openBasicShapes(page: Page): Promise<{
   );
   await page.mouse.click(canvasBounds.x + canvasBounds.width * 0.5, canvasBounds.y + 282);
   await expect(editorCanvas).toHaveAttribute("data-active-sample-id", "basic-shapes");
-  await expect
-    .poll(() => page.evaluate(() => window.__donnerWorkerStats?.completedResults || 0), {
-      message: "Basic Shapes must have its own document render before capture",
-      timeout: scaledMs(5_000),
-      intervals: [16, 25, 50, 100],
-    })
-    .toBeGreaterThan(beforeSampleResults);
+  await expectWorkerResultsToReach(
+    page,
+    (completedResults) => completedResults > beforeSampleResults,
+    { message: "Basic Shapes must have its own document render before capture", timeout: scaledMs(5_000) },
+  );
   await waitForBrowserComposite(page);
 
   const documentClip = {
@@ -769,13 +838,11 @@ test("Geode Wasm View overlays render tile metadata and sparse Slug triangle edg
     () => window.__donnerWorkerStats?.completedResults || 0,
   );
   await setViewOverlayState(page, canvasBounds.x, 155, "compositorTileOverlay", true);
-  await expect
-    .poll(() => page.evaluate(() => window.__donnerWorkerStats?.completedResults || 0), {
-      message: "Compositor Tile Overlay must rasterize a fresh document render",
-      timeout: scaledMs(2_000),
-      intervals: [16, 25, 50, 100],
-    })
-    .toBeGreaterThan(beforeCompositorResults);
+  await expectWorkerResultsToReach(
+    page,
+    (completedResults) => completedResults > beforeCompositorResults,
+    { message: "Compositor Tile Overlay must rasterize a fresh document render", timeout: scaledMs(2_000) },
+  );
   await waitForBrowserComposite(page);
   const compositorOverlay = await page.screenshot({ clip: documentClip });
   await test.info().attach("compositor-tile-overlay", {
@@ -851,13 +918,11 @@ test("Geode Wasm View overlays render tile metadata and sparse Slug triangle edg
     () => window.__donnerWorkerStats?.completedResults || 0,
   );
   await setViewOverlayState(page, canvasBounds.x, 176, "geometryDebugOverlay", true);
-  await expect
-    .poll(() => page.evaluate(() => window.__donnerWorkerStats?.completedResults || 0), {
-      message: "Geometry Debug Overlay must schedule a freshly rasterized document render",
-      timeout: scaledMs(2_000),
-      intervals: [16, 25, 50, 100],
-    })
-    .toBeGreaterThan(beforeGeometryResults);
+  await expectWorkerResultsToReach(
+    page,
+    (completedResults) => completedResults > beforeGeometryResults,
+    { message: "Geometry Debug Overlay must schedule a freshly rasterized document render", timeout: scaledMs(2_000) },
+  );
   await waitForBrowserComposite(page);
   const geometryOverlay = await page.screenshot({ clip: documentClip });
   await test.info().attach("geometry-debug-overlay", {
@@ -932,9 +997,14 @@ test("Firefox keeps the dragged shape and its selection outline in every drag fr
   const beforeSample = await page.evaluate(() => window.__donnerWorkerStats?.completedResults || 0);
   await page.mouse.click(editorBounds.x + editorBounds.width * 0.5, editorBounds.y + 282);
   await expect(editorCanvas).toHaveAttribute("data-active-sample-id", "basic-shapes");
-  await expect
-    .poll(() => page.evaluate(() => window.__donnerWorkerStats?.completedResults || 0))
-    .toBeGreaterThan(beforeSample);
+  await expectWorkerResultsToReach(
+    page,
+    (completedResults) => completedResults > beforeSample,
+    {
+      message: "expected Basic Shapes to render before the drag",
+      timeout: scaledMs(5_000),
+    },
+  );
 
   await expect
     .poll(() => readElementColorStats(editorCanvas).then((stats) => stats.coloredPixels), {
@@ -1081,13 +1151,11 @@ test("Firefox keeps the dragged shape and its selection outline in every drag fr
     samples[0]?.renderedFrames || 0,
   );
   // The release commits the moved geometry with exactly one document render.
-  await expect
-    .poll(async () => page.evaluate(() => window.__donnerWorkerStats?.completedResults || 0), {
-      message: "expected the pointer release to commit exactly one document render",
-      timeout: scaledMs(2_000),
-      intervals: [16, 25, 50, 100],
-    })
-    .toBe(resultsDuringDrag + 1);
+  await expectWorkerResultsToReach(
+    page,
+    (completedResults) => completedResults === resultsDuringDrag + 1,
+    { message: "expected the pointer release to commit exactly one document render", timeout: scaledMs(2_000) },
+  );
   const centerX = (bounds: PixelBounds) => (bounds.minX + bounds.maxX) * 0.5;
   const centerY = (bounds: PixelBounds) => (bounds.minY + bounds.maxY) * 0.5;
   for (const sample of samples) {
@@ -1404,13 +1472,11 @@ test("Firefox never exposes the checkerboard while dragging a Splash letter", as
   ).toBeLessThanOrEqual(2);
 
   // The release commits the moved letter with exactly one document render.
-  await expect
-    .poll(async () => page.evaluate(() => window.__donnerWorkerStats?.completedResults || 0), {
-      message: "expected the pointer release to commit exactly one Splash document render",
-      timeout: scaledMs(2_000),
-      intervals: [16, 25, 50, 100],
-    })
-    .toBe(resultsDuringDrag + 1);
+  await expectWorkerResultsToReach(
+    page,
+    (completedResults) => completedResults === resultsDuringDrag + 1,
+    { message: "expected the pointer release to commit exactly one Splash document render", timeout: scaledMs(2_000) },
+  );
   expect(failures).toEqual([]);
 });
 
@@ -1429,13 +1495,11 @@ test("WebKit Geode survives a burst of drag wakeups without fatal errors", async
   const beforeSample = await page.evaluate(() => window.__donnerWorkerStats?.completedResults || 0);
   await page.mouse.click(editorBounds.x + editorBounds.width * 0.5, editorBounds.y + 282);
   await expect(editorCanvas).toHaveAttribute("data-active-sample-id", "basic-shapes");
-  await expect
-    .poll(() => page.evaluate(() => window.__donnerWorkerStats?.completedResults || 0), {
-      message: "expected Basic Shapes to finish presenting before the WebKit drag burst",
-      timeout: scaledMs(2_000),
-      intervals: [16, 25, 50, 100],
-    })
-    .toBeGreaterThan(beforeSample);
+  await expectWorkerResultsToReach(
+    page,
+    (completedResults) => completedResults > beforeSample,
+    { message: "expected Basic Shapes to finish presenting before the WebKit drag burst", timeout: scaledMs(2_000) },
+  );
 
   const dragStart = {
     x: editorBounds.x + kBlueRectOffset.x,
@@ -1451,13 +1515,11 @@ test("WebKit Geode survives a burst of drag wakeups without fatal errors", async
     }
   }
   await page.mouse.up();
-  await expect
-    .poll(() => page.evaluate(() => window.__donnerWorkerStats?.completedResults || 0), {
-      message: "expected WebKit to complete a render after the drag wakeup burst",
-      timeout: scaledMs(2_000),
-      intervals: [16, 25, 50, 100],
-    })
-    .toBeGreaterThan(beforeDrag);
+  await expectWorkerResultsToReach(
+    page,
+    (completedResults) => completedResults > beforeDrag,
+    { message: "expected WebKit to complete a render after the drag wakeup burst", timeout: scaledMs(2_000) },
+  );
   expect(failures).toEqual([]);
 });
 
@@ -1524,13 +1586,11 @@ async function openDonnerSplash(page: Page): Promise<{
   );
   await page.mouse.click(editorBounds.x + editorBounds.width * 0.24, editorBounds.y + 282);
   await expect(editorCanvas).toHaveAttribute("data-active-sample-id", "donner-splash");
-  await expect
-    .poll(() => page.evaluate(() => window.__donnerWorkerStats?.completedResults || 0), {
-      message: "Donner Splash must produce a document render",
-      timeout: scaledMs(5_000),
-      intervals: [16, 25, 50, 100],
-    })
-    .toBeGreaterThan(beforeSampleResults);
+  await expectWorkerResultsToReach(
+    page,
+    (completedResults) => completedResults > beforeSampleResults,
+    { message: "Donner Splash must produce a document render", timeout: scaledMs(5_000) },
+  );
   return { editorBounds };
 }
 
