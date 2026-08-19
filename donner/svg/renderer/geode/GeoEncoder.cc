@@ -3296,20 +3296,70 @@ void GeoEncoder::blitFullTargetBlended(const wgpu::Texture& layer, const wgpu::T
                                         impl_->transientResources, impl_.get());
 }
 
-void GeoEncoder::drawImage(const svg::ImageResource& image, const Box2d& destRect, double opacity,
-                           svg::ImageRendering imageRendering) {
+namespace {
+
+/// Returns whether an image draw has a valid destination and upload-safe RGBA payload.
+bool IsValidImageDraw(const svg::ImageResource& image, const Box2d& destRect,
+                      const GeodeDevice& device) {
   if (image.data.empty() || image.width <= 0 || image.height <= 0) {
-    return;
+    return false;
   }
   if (destRect.isEmpty()) {
-    return;
+    return false;
   }
-  const uint32_t maxTextureDimension = impl_->device->maxTextureDimension2D();
+
+  const uint32_t maxTextureDimension = device.maxTextureDimension2D();
   if (static_cast<uint32_t>(image.width) > maxTextureDimension ||
       static_cast<uint32_t>(image.height) > maxTextureDimension) {
-    return;
+    return false;
   }
-  if (!svg::HasExactRgbaPayload(image.data, image.width, image.height)) {
+
+  return svg::HasExactRgbaPayload(image.data, image.width, image.height);
+}
+
+/// Maps the resolved CSS image-rendering value to the Geode sampler policy.
+GeodeTextureEncoder::Filter ImageFilter(svg::ImageRendering imageRendering) {
+  switch (imageRendering) {
+    case svg::ImageRendering::CrispEdges:
+    case svg::ImageRendering::OptimizeSpeed: return GeodeTextureEncoder::Filter::Nearest;
+    case svg::ImageRendering::Pixelated: return GeodeTextureEncoder::Filter::Pixelated;
+    case svg::ImageRendering::Auto:
+    case svg::ImageRendering::Smooth:
+    case svg::ImageRendering::HighQuality:
+    case svg::ImageRendering::OptimizeQuality: return GeodeTextureEncoder::Filter::Linear;
+  }
+
+  return GeodeTextureEncoder::Filter::Linear;
+}
+
+/// Builds textured-quad parameters for an uploaded image draw.
+GeodeTextureEncoder::QuadParams MakeImageQuadParams(const svg::ImageResource& image,
+                                                    const Box2d& destRect, double opacity,
+                                                    svg::ImageRendering imageRendering,
+                                                    const Transform2d& deviceFromLocalTransform,
+                                                    const wgpu::TextureView& clipMaskView) {
+  GeodeTextureEncoder::QuadParams params;
+  params.destRect = destRect;
+  params.srcRect = Box2d({0.0, 0.0}, {1.0, 1.0});
+  params.opacity = opacity;
+  params.filter = ImageFilter(imageRendering);
+  params.sourceIsPremultiplied = true;
+
+  const Transform2d deviceFromImage =
+      Transform2d::Scale(destRect.width() / static_cast<double>(image.width),
+                         destRect.height() / static_cast<double>(image.height)) *
+      Transform2d::Translate(destRect.topLeft) * deviceFromLocalTransform;
+  params.pixelatedScaleX = deviceFromImage.transformVector(Vector2d(1.0, 0.0)).length();
+  params.pixelatedScaleY = deviceFromImage.transformVector(Vector2d(0.0, 1.0)).length();
+  params.clipMaskView = clipMaskView;
+  return params;
+}
+
+}  // namespace
+
+void GeoEncoder::drawImage(const svg::ImageResource& image, const Box2d& destRect, double opacity,
+                           svg::ImageRendering imageRendering) {
+  if (!IsValidImageDraw(image, destRect, *impl_->device)) {
     return;
   }
 
@@ -3331,31 +3381,8 @@ void GeoEncoder::drawImage(const svg::ImageResource& image, const Box2d& destRec
   float mvp[16];
   impl_->buildMvp(mvp);
 
-  GeodeTextureEncoder::QuadParams qp;
-  qp.destRect = destRect;
-  qp.srcRect = Box2d({0.0, 0.0}, {1.0, 1.0});
-  qp.opacity = opacity;
-  qp.sourceIsPremultiplied = true;
-  switch (imageRendering) {
-    case svg::ImageRendering::CrispEdges:
-    case svg::ImageRendering::OptimizeSpeed:
-      qp.filter = GeodeTextureEncoder::Filter::Nearest;
-      break;
-    case svg::ImageRendering::Pixelated: qp.filter = GeodeTextureEncoder::Filter::Pixelated; break;
-    case svg::ImageRendering::Auto:
-    case svg::ImageRendering::Smooth:
-    case svg::ImageRendering::HighQuality:
-    case svg::ImageRendering::OptimizeQuality:
-      qp.filter = GeodeTextureEncoder::Filter::Linear;
-      break;
-  }
-  const Transform2d deviceFromImage =
-      Transform2d::Scale(destRect.width() / static_cast<double>(image.width),
-                         destRect.height() / static_cast<double>(image.height)) *
-      Transform2d::Translate(destRect.topLeft) * impl_->transform;
-  qp.pixelatedScaleX = deviceFromImage.transformVector(Vector2d(1.0, 0.0)).length();
-  qp.pixelatedScaleY = deviceFromImage.transformVector(Vector2d(0.0, 1.0)).length();
-  qp.clipMaskView = impl_->activeClipMaskView;
+  const GeodeTextureEncoder::QuadParams qp = MakeImageQuadParams(
+      image, destRect, opacity, imageRendering, impl_->transform, impl_->activeClipMaskView);
 
   GeodeTextureEncoder::drawTexturedQuad(*impl_->device, *impl_->imagePipeline, impl_->pass.get(),
                                         texture, mvp, impl_->targetWidth, impl_->targetHeight, qp,

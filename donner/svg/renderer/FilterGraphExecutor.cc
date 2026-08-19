@@ -3,8 +3,11 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
-#include <utility>
+#include <string>
+#include <type_traits>
+#include <vector>
 
 #include "donner/svg/renderer/ImageSampling.h"
 #include "donner/svg/renderer/PixelFormatUtils.h"
@@ -12,225 +15,621 @@
 
 namespace donner::svg {
 
-void ApplyFilterGraphToPixmap(tiny_skia::Pixmap& pixmap, const components::FilterGraph& filterGraph,
-                              const Transform2d& deviceFromFilter,
-                              const std::optional<Box2d>& filterRegion,
-                              bool clipSourceToFilterRegion,
-                              const tiny_skia::Pixmap* fillPaintInput,
-                              const tiny_skia::Pixmap* strokePaintInput) {
-  using namespace components;
-  using namespace components::filter_primitive;
-  namespace gp = tiny_skia::filter::graph_primitive;
+namespace {
 
-  const int w = static_cast<int>(pixmap.width());
-  const int h = static_cast<int>(pixmap.height());
+namespace fp = components::filter_primitive;
+namespace gp = tiny_skia::filter::graph_primitive;
 
-  const bool isOBB = filterGraph.primitiveUnits == PrimitiveUnits::ObjectBoundingBox &&
-                     filterGraph.elementBoundingBox.has_value();
-  const double bboxW = isOBB ? filterGraph.elementBoundingBox->width() : 1.0;
-  const double bboxH = isOBB ? filterGraph.elementBoundingBox->height() : 1.0;
-  const double bboxX = isOBB ? filterGraph.elementBoundingBox->topLeft.x : 0.0;
-  const double bboxY = isOBB ? filterGraph.elementBoundingBox->topLeft.y : 0.0;
+struct PremulRGBA {
+  std::uint8_t r;
+  std::uint8_t g;
+  std::uint8_t b;
+  std::uint8_t a;
+};
 
-  const Vector2d transformedXAxis = deviceFromFilter.transformVector(Vector2d(1.0, 0.0));
-  const double scaleX = transformedXAxis.length();
-  const double determinant = deviceFromFilter.determinant();
-  const double scaleY =
-      NearZero(scaleX, 1e-12) ? std::abs(deviceFromFilter.data[3]) : std::abs(determinant) / scaleX;
+PremulRGBA FloodToPremul(const css::Color& color, double opacity) {
+  const css::RGBA rgba = color.asRGBA();
+  const double alpha = (rgba.a / 255.0) * opacity;
+  return {static_cast<std::uint8_t>(std::round(rgba.r * alpha)),
+          static_cast<std::uint8_t>(std::round(rgba.g * alpha)),
+          static_cast<std::uint8_t>(std::round(rgba.b * alpha)),
+          static_cast<std::uint8_t>(std::round(alpha * 255.0))};
+}
 
-  auto toPixelX = [&](double userX) -> double { return std::abs(userX) * scaleX; };
-  auto toPixelY = [&](double userY) -> double { return std::abs(userY) * scaleY; };
+tiny_skia::filter::NodeInput ConvertInput(const components::FilterInput& input) {
+  return std::visit(
+      [](const auto& value) -> tiny_skia::filter::NodeInput {
+        using T = std::decay_t<decltype(value)>;
+        if constexpr (std::is_same_v<T, components::FilterInput::Previous>) {
+          return tiny_skia::filter::NodeInput();
+        } else if constexpr (std::is_same_v<T, components::FilterStandardInput>) {
+          return tiny_skia::filter::NodeInput(static_cast<tiny_skia::filter::StandardInput>(value));
+        } else if constexpr (std::is_same_v<T, components::FilterInput::Named>) {
+          return tiny_skia::filter::NodeInput(
+              tiny_skia::filter::NodeInput::Named{std::string(value.name)});
+        } else {
+          return tiny_skia::filter::NodeInput();
+        }
+      },
+      input.value);
+}
 
-  auto primToPixelX = [&](double val) -> double {
-    return isOBB ? toPixelX(val * bboxW) : toPixelX(val);
-  };
-  auto primToPixelY = [&](double val) -> double {
-    return isOBB ? toPixelY(val * bboxH) : toPixelY(val);
-  };
-  auto primToPixelOffset = [&](double dx, double dy) -> Vector2d {
-    const Vector2d userOffset = isOBB ? Vector2d(dx * bboxW, dy * bboxH) : Vector2d(dx, dy);
+double ComputePixelScale(const Transform2d& deviceFromFilter) {
+  const Vector2d transformedXAxis = deviceFromFilter.transformPosition(Vector2d(1, 0)) -
+                                    deviceFromFilter.transformPosition(Vector2d(0, 0));
+  const Vector2d transformedYAxis = deviceFromFilter.transformPosition(Vector2d(0, 1)) -
+                                    deviceFromFilter.transformPosition(Vector2d(0, 0));
+  return std::sqrt(
+      (transformedXAxis.x * transformedXAxis.x + transformedXAxis.y * transformedXAxis.y +
+       transformedYAxis.x * transformedYAxis.x + transformedYAxis.y * transformedYAxis.y) /
+      2.0);
+}
+
+std::array<double, 6> ComputePixelToUser(const Transform2d& deviceFromFilter) {
+  const Transform2d filterFromDevice = deviceFromFilter.inverse();
+  return {filterFromDevice.data[0], filterFromDevice.data[2], filterFromDevice.data[4],
+          filterFromDevice.data[1], filterFromDevice.data[3], filterFromDevice.data[5]};
+}
+
+bool HasShear(const Transform2d& deviceFromFilter) {
+  const double a = deviceFromFilter.data[0];
+  const double b = deviceFromFilter.data[1];
+  const double c = deviceFromFilter.data[2];
+  const double d = deviceFromFilter.data[3];
+  const double dot = a * c + b * d;
+  const double firstAxisLengthSquared = a * a + b * b;
+  const double secondAxisLengthSquared = c * c + d * d;
+  return dot * dot > 0.0003 * firstAxisLengthSquared * secondAxisLengthSquared;
+}
+
+Box2d ComputePrimitiveUnitsBounds(const components::FilterGraph& filterGraph,
+                                  bool usesObjectBoundingBox, double scaleX, double scaleY,
+                                  int outputWidth, int outputHeight) {
+  if (usesObjectBoundingBox) {
+    return *filterGraph.elementBoundingBox;
+  }
+
+  const double userWidth =
+      NearZero(filterGraph.userToPixelScale.x, 1e-12)
+          ? (NearZero(scaleX, 1e-12) ? static_cast<double>(outputWidth)
+                                     : static_cast<double>(outputWidth) / scaleX)
+          : static_cast<double>(outputWidth) / filterGraph.userToPixelScale.x;
+  const double userHeight =
+      NearZero(filterGraph.userToPixelScale.y, 1e-12)
+          ? (NearZero(scaleY, 1e-12) ? static_cast<double>(outputHeight)
+                                     : static_cast<double>(outputHeight) / scaleY)
+          : static_cast<double>(outputHeight) / filterGraph.userToPixelScale.y;
+  return Box2d::FromXYWH(0.0, 0.0, userWidth, userHeight);
+}
+
+struct FilterConversionContext {
+  FilterConversionContext(const components::FilterGraph& filterGraph,
+                          const Transform2d& deviceFromFilter,
+                          const std::optional<Box2d>& filterRegion, int outputWidth,
+                          int outputHeight)
+      : filterGraph(filterGraph),
+        deviceFromFilter(deviceFromFilter),
+        filterRegion(filterRegion),
+        outputWidth(outputWidth),
+        outputHeight(outputHeight),
+        usesObjectBoundingBox(filterGraph.primitiveUnits == PrimitiveUnits::ObjectBoundingBox &&
+                              filterGraph.elementBoundingBox.has_value()),
+        boundingBoxWidth(usesObjectBoundingBox ? filterGraph.elementBoundingBox->width() : 1.0),
+        boundingBoxHeight(usesObjectBoundingBox ? filterGraph.elementBoundingBox->height() : 1.0),
+        boundingBoxX(usesObjectBoundingBox ? filterGraph.elementBoundingBox->topLeft.x : 0.0),
+        boundingBoxY(usesObjectBoundingBox ? filterGraph.elementBoundingBox->topLeft.y : 0.0),
+        scaleX(deviceFromFilter.transformVector(Vector2d(1.0, 0.0)).length()),
+        scaleY(NearZero(scaleX, 1e-12) ? std::abs(deviceFromFilter.data[3])
+                                       : std::abs(deviceFromFilter.determinant()) / scaleX),
+        primitiveUnitsBounds(ComputePrimitiveUnitsBounds(filterGraph, usesObjectBoundingBox, scaleX,
+                                                         scaleY, outputWidth, outputHeight)),
+        pixelScale(ComputePixelScale(deviceFromFilter)),
+        pixelToUser(ComputePixelToUser(deviceFromFilter)),
+        hasShear(HasShear(deviceFromFilter)) {}
+
+  double primitiveToPixelX(double value) const {
+    return std::abs(usesObjectBoundingBox ? value * boundingBoxWidth : value) * scaleX;
+  }
+
+  double primitiveToPixelY(double value) const {
+    return std::abs(usesObjectBoundingBox ? value * boundingBoxHeight : value) * scaleY;
+  }
+
+  Vector2d primitiveToPixelOffset(double dx, double dy) const {
+    const Vector2d userOffset = usesObjectBoundingBox
+                                    ? Vector2d(dx * boundingBoxWidth, dy * boundingBoxHeight)
+                                    : Vector2d(dx, dy);
     return deviceFromFilter.transformVector(userOffset);
-  };
+  }
 
-  const Box2d primitiveUnitsBounds = [&]() {
-    if (isOBB) {
-      return *filterGraph.elementBoundingBox;
+  double resolvePrimitivePosition(const Lengthd& length, Lengthd::Extent extent) const {
+    const double boundingBoxOrigin = extent == Lengthd::Extent::X ? boundingBoxX : boundingBoxY;
+    const double boundingBoxDimension =
+        extent == Lengthd::Extent::X ? boundingBoxWidth : boundingBoxHeight;
+    if (usesObjectBoundingBox && length.unit == Lengthd::Unit::None) {
+      return boundingBoxOrigin + length.value * boundingBoxDimension;
     }
-    const double userW =
-        NearZero(filterGraph.userToPixelScale.x, 1e-12)
-            ? (NearZero(scaleX, 1e-12) ? static_cast<double>(w) : static_cast<double>(w) / scaleX)
-            : static_cast<double>(w) / filterGraph.userToPixelScale.x;
-    const double userH =
-        NearZero(filterGraph.userToPixelScale.y, 1e-12)
-            ? (NearZero(scaleY, 1e-12) ? static_cast<double>(h) : static_cast<double>(h) / scaleY)
-            : static_cast<double>(h) / filterGraph.userToPixelScale.y;
-    return Box2d::FromXYWH(0.0, 0.0, userW, userH);
-  }();
-
-  auto percentPositionReferenceSize = [&](Lengthd::Extent extent) -> double {
-    if (isOBB) {
-      return extent == Lengthd::Extent::X ? bboxW : bboxH;
+    if (length.unit == Lengthd::Unit::Percent) {
+      const double referenceOrigin =
+          usesObjectBoundingBox ? boundingBoxOrigin
+                                : (extent == Lengthd::Extent::X ? primitiveUnitsBounds.topLeft.x
+                                                                : primitiveUnitsBounds.topLeft.y);
+      const double referenceSize =
+          usesObjectBoundingBox ? boundingBoxDimension
+                                : (extent == Lengthd::Extent::X ? primitiveUnitsBounds.width()
+                                                                : primitiveUnitsBounds.height());
+      return referenceOrigin + referenceSize * length.value / 100.0;
     }
-    return extent == Lengthd::Extent::X ? primitiveUnitsBounds.width()
-                                        : primitiveUnitsBounds.height();
-  };
+    return length.toPixels(primitiveUnitsBounds, FontMetrics(), extent);
+  }
 
-  auto percentPositionReferenceOrigin = [&](Lengthd::Extent extent) -> double {
-    if (isOBB) {
-      return extent == Lengthd::Extent::X ? bboxX : bboxY;
+  double resolvePrimitiveSize(const Lengthd& length, Lengthd::Extent extent) const {
+    const double boundingBoxDimension =
+        extent == Lengthd::Extent::X ? boundingBoxWidth : boundingBoxHeight;
+    if (usesObjectBoundingBox && length.unit == Lengthd::Unit::None) {
+      return length.value * boundingBoxDimension;
     }
-    return extent == Lengthd::Extent::X ? primitiveUnitsBounds.topLeft.x
-                                        : primitiveUnitsBounds.topLeft.y;
-  };
-
-  auto percentSizeReference = [&](Lengthd::Extent extent) -> double {
-    if (isOBB) {
-      return extent == Lengthd::Extent::X ? bboxW : bboxH;
+    if (length.unit == Lengthd::Unit::Percent) {
+      const double referenceSize =
+          usesObjectBoundingBox ? boundingBoxDimension
+                                : (extent == Lengthd::Extent::X ? primitiveUnitsBounds.width()
+                                                                : primitiveUnitsBounds.height());
+      return referenceSize * length.value / 100.0;
     }
-    return extent == Lengthd::Extent::X ? primitiveUnitsBounds.width()
-                                        : primitiveUnitsBounds.height();
-  };
+    return length.toPixels(primitiveUnitsBounds, FontMetrics(), extent);
+  }
 
-  auto resolvePrimitivePosition = [&](const Lengthd& len, Lengthd::Extent extent, double origin,
-                                      double bboxDim) -> double {
-    if (isOBB && len.unit == Lengthd::Unit::None) {
-      return origin + len.value * bboxDim;
-    }
-    if (len.unit == Lengthd::Unit::Percent) {
-      return percentPositionReferenceOrigin(extent) +
-             percentPositionReferenceSize(extent) * len.value / 100.0;
-    }
-    return len.toPixels(primitiveUnitsBounds, FontMetrics(), extent);
-  };
+  tiny_skia::filter::LightSourceParams convertLightSource(const fp::LightSource& light) const {
+    tiny_skia::filter::LightSourceParams result;
+    result.type = static_cast<tiny_skia::filter::LightType>(light.type);
+    result.azimuth = light.azimuth;
+    result.elevation = light.elevation;
 
-  auto resolvePrimitiveSize = [&](const Lengthd& len, Lengthd::Extent extent,
-                                  double bboxDim) -> double {
-    if (isOBB && len.unit == Lengthd::Unit::None) {
-      return len.value * bboxDim;
-    }
-    if (len.unit == Lengthd::Unit::Percent) {
-      return percentSizeReference(extent) * len.value / 100.0;
-    }
-    return len.toPixels(primitiveUnitsBounds, FontMetrics(), extent);
-  };
-
-  auto convertInput = [](const FilterInput& fi) -> tiny_skia::filter::NodeInput {
-    return std::visit(
-        [](const auto& v) -> tiny_skia::filter::NodeInput {
-          using V = std::decay_t<decltype(v)>;
-          if constexpr (std::is_same_v<V, FilterInput::Previous>) {
-            return tiny_skia::filter::NodeInput();
-          } else if constexpr (std::is_same_v<V, FilterStandardInput>) {
-            return tiny_skia::filter::NodeInput(static_cast<tiny_skia::filter::StandardInput>(v));
-          } else if constexpr (std::is_same_v<V, FilterInput::Named>) {
-            return tiny_skia::filter::NodeInput(
-                tiny_skia::filter::NodeInput::Named{std::string(v.name)});
-          } else {
-            return tiny_skia::filter::NodeInput();
-          }
-        },
-        fi.value);
-  };
-
-  struct PremulRGBA {
-    std::uint8_t r;
-    std::uint8_t g;
-    std::uint8_t b;
-    std::uint8_t a;
-  };
-  auto floodToPremul = [](const css::Color& color, double opacity) -> PremulRGBA {
-    const css::RGBA rgba = color.asRGBA();
-    const double alpha = (rgba.a / 255.0) * opacity;
-    return {static_cast<std::uint8_t>(std::round(rgba.r * alpha)),
-            static_cast<std::uint8_t>(std::round(rgba.g * alpha)),
-            static_cast<std::uint8_t>(std::round(rgba.b * alpha)),
-            static_cast<std::uint8_t>(std::round(alpha * 255.0))};
-  };
-
-  const double pixelScale = [&]() -> double {
-    const Vector2d sx = deviceFromFilter.transformPosition(Vector2d(1, 0)) -
-                        deviceFromFilter.transformPosition(Vector2d(0, 0));
-    const Vector2d sy = deviceFromFilter.transformPosition(Vector2d(0, 1)) -
-                        deviceFromFilter.transformPosition(Vector2d(0, 0));
-    return std::sqrt((sx.x * sx.x + sx.y * sx.y + sy.x * sy.x + sy.y * sy.y) / 2.0);
-  }();
-
-  // Inverse transform mapping pixel coordinates back to user/filter space.
-  // Used by spot light cone angle computation which must be done in user space.
-  const std::array<double, 6> pixelToUser = [&]() -> std::array<double, 6> {
-    const Transform2d inv = deviceFromFilter.inverse();
-    // Layout: ux = [0]*px + [1]*py + [2], uy = [3]*px + [4]*py + [5]
-    return {inv.data[0], inv.data[2], inv.data[4], inv.data[1], inv.data[3], inv.data[5]};
-  }();
-
-  // Detect non-conformal transforms (shear/skew) that distort angles in device space.
-  // For conformal transforms (rotation + uniform scale), device-space angles match user-space.
-  const bool hasShear = [&]() -> bool {
-    const double a = deviceFromFilter.data[0];
-    const double b = deviceFromFilter.data[1];
-    const double c = deviceFromFilter.data[2];
-    const double d = deviceFromFilter.data[3];
-    // Transform axes are orthogonal iff their dot product is zero.
-    const double dot = a * c + b * d;
-    const double lenSq1 = a * a + b * b;
-    const double lenSq2 = c * c + d * d;
-    // Check if cosine of angle between axes exceeds ~1 degree.
-    return dot * dot > 0.0003 * lenSq1 * lenSq2;  // cos²(1°) ≈ 0.0003
-  }();
-
-  auto convertLightSource =
-      [&](const filter_primitive::LightSource& ls) -> tiny_skia::filter::LightSourceParams {
-    tiny_skia::filter::LightSourceParams lp;
-    lp.type = static_cast<tiny_skia::filter::LightType>(ls.type);
-    lp.azimuth = ls.azimuth;
-    lp.elevation = ls.elevation;
-
-    double userX;
-    double userY;
-    double userZ;
-    double userPtX;
-    double userPtY;
-    double userPtZ;
-    if (isOBB) {
-      userX = ls.x * bboxW + bboxX;
-      userY = ls.y * bboxH + bboxY;
-      userZ = ls.z * bboxH;
-      userPtX = ls.pointsAtX * bboxW + bboxX;
-      userPtY = ls.pointsAtY * bboxH + bboxY;
-      userPtZ = ls.pointsAtZ * bboxH;
-    } else {
-      userX = ls.x;
-      userY = ls.y;
-      userZ = ls.z;
-      userPtX = ls.pointsAtX;
-      userPtY = ls.pointsAtY;
-      userPtZ = ls.pointsAtZ;
-    }
+    const double userX =
+        usesObjectBoundingBox ? light.x * boundingBoxWidth + boundingBoxX : light.x;
+    const double userY =
+        usesObjectBoundingBox ? light.y * boundingBoxHeight + boundingBoxY : light.y;
+    const double userZ = usesObjectBoundingBox ? light.z * boundingBoxHeight : light.z;
+    const double userPointsAtX =
+        usesObjectBoundingBox ? light.pointsAtX * boundingBoxWidth + boundingBoxX : light.pointsAtX;
+    const double userPointsAtY = usesObjectBoundingBox
+                                     ? light.pointsAtY * boundingBoxHeight + boundingBoxY
+                                     : light.pointsAtY;
+    const double userPointsAtZ =
+        usesObjectBoundingBox ? light.pointsAtZ * boundingBoxHeight : light.pointsAtZ;
 
     const Vector2d lightPixel = deviceFromFilter.transformPosition(Vector2d(userX, userY));
-    const Vector2d pointsAtPixel = deviceFromFilter.transformPosition(Vector2d(userPtX, userPtY));
-    lp.x = lightPixel.x;
-    lp.y = lightPixel.y;
-    lp.z = userZ * pixelScale;
-    lp.pointsAtX = pointsAtPixel.x;
-    lp.pointsAtY = pointsAtPixel.y;
-    lp.pointsAtZ = userPtZ * pixelScale;
-    lp.spotExponent = ls.spotExponent;
-    lp.limitingConeAngle = ls.limitingConeAngle;
+    const Vector2d pointsAtPixel =
+        deviceFromFilter.transformPosition(Vector2d(userPointsAtX, userPointsAtY));
+    result.x = lightPixel.x;
+    result.y = lightPixel.y;
+    result.z = userZ * pixelScale;
+    result.pointsAtX = pointsAtPixel.x;
+    result.pointsAtY = pointsAtPixel.y;
+    result.pointsAtZ = userPointsAtZ * pixelScale;
+    result.spotExponent = light.spotExponent;
+    result.limitingConeAngle = light.limitingConeAngle;
+    result.userX = userX;
+    result.userY = userY;
+    result.userZ = userZ;
+    result.userPointsAtX = userPointsAtX;
+    result.userPointsAtY = userPointsAtY;
+    result.userPointsAtZ = userPointsAtZ;
+    return result;
+  }
 
-    // Store user-space positions for spot light cone angle computation.
-    lp.userX = userX;
-    lp.userY = userY;
-    lp.userZ = userZ;
-    lp.userPointsAtX = userPtX;
-    lp.userPointsAtY = userPtY;
-    lp.userPointsAtZ = userPtZ;
+  const components::FilterGraph& filterGraph;
+  const Transform2d& deviceFromFilter;
+  const std::optional<Box2d>& filterRegion;
+  int outputWidth;
+  int outputHeight;
+  bool usesObjectBoundingBox;
+  double boundingBoxWidth;
+  double boundingBoxHeight;
+  double boundingBoxX;
+  double boundingBoxY;
+  double scaleX;
+  double scaleY;
+  Box2d primitiveUnitsBounds;
+  double pixelScale;
+  std::array<double, 6> pixelToUser;
+  bool hasShear;
+};
 
-    return lp;
-  };
+struct PrimitiveConversionState {
+  const FilterConversionContext& context;
+  const tiny_skia::filter::FilterGraph& graph;
+  const tiny_skia::filter::GraphNode& node;
+};
 
+tiny_skia::filter::GraphPrimitive ConvertPrimitive(const fp::GaussianBlur& primitive,
+                                                   const PrimitiveConversionState& state) {
+  gp::GaussianBlur blur;
+  blur.sigmaX =
+      primitive.stdDeviationX >= 0 ? state.context.primitiveToPixelX(primitive.stdDeviationX) : 0.0;
+  blur.sigmaY =
+      primitive.stdDeviationY >= 0 ? state.context.primitiveToPixelY(primitive.stdDeviationY) : 0.0;
+  blur.edgeMode = static_cast<tiny_skia::filter::BlurEdgeMode>(primitive.edgeMode);
+  return blur;
+}
+
+tiny_skia::filter::GraphPrimitive ConvertPrimitive(const fp::Flood& primitive,
+                                                   const PrimitiveConversionState&) {
+  const PremulRGBA color = FloodToPremul(primitive.floodColor, primitive.floodOpacity);
+  return gp::Flood{color.r, color.g, color.b, color.a};
+}
+
+tiny_skia::filter::GraphPrimitive ConvertPrimitive(const fp::Offset& primitive,
+                                                   const PrimitiveConversionState& state) {
+  const Vector2d offset = state.context.primitiveToPixelOffset(primitive.dx, primitive.dy);
+  return gp::Offset{static_cast<int>(std::lround(offset.x)),
+                    static_cast<int>(std::lround(offset.y))};
+}
+
+tiny_skia::filter::GraphPrimitive ConvertPrimitive(const fp::Composite& primitive,
+                                                   const PrimitiveConversionState&) {
+  gp::Composite composite;
+  composite.op = static_cast<tiny_skia::filter::CompositeOp>(primitive.op);
+  composite.k1 = primitive.k1;
+  composite.k2 = primitive.k2;
+  composite.k3 = primitive.k3;
+  composite.k4 = primitive.k4;
+  return composite;
+}
+
+tiny_skia::filter::GraphPrimitive ConvertPrimitive(const fp::Blend& primitive,
+                                                   const PrimitiveConversionState&) {
+  gp::Blend blend;
+  blend.mode = static_cast<tiny_skia::filter::BlendMode>(primitive.mode);
+  return blend;
+}
+
+tiny_skia::filter::GraphPrimitive ConvertPrimitive(const fp::Merge&,
+                                                   const PrimitiveConversionState&) {
+  return gp::Merge{};
+}
+
+tiny_skia::filter::GraphPrimitive ConvertPrimitive(const fp::ColorMatrix& primitive,
+                                                   const PrimitiveConversionState&) {
+  gp::ColorMatrix colorMatrix;
+  if (primitive.type == fp::ColorMatrix::Type::Matrix) {
+    if (primitive.values.size() == 20) {
+      for (std::size_t i = 0; i < 20; ++i) {
+        colorMatrix.matrix[i] = primitive.values[i];
+      }
+    } else {
+      colorMatrix.matrix = tiny_skia::filter::identityMatrix();
+    }
+  } else if (primitive.type == fp::ColorMatrix::Type::Saturate) {
+    const double saturation = primitive.values.empty() ? 1.0 : primitive.values[0];
+    colorMatrix.matrix = tiny_skia::filter::saturateMatrix(saturation);
+  } else if (primitive.type == fp::ColorMatrix::Type::HueRotate) {
+    const double angle = primitive.values.empty() ? 0.0 : primitive.values[0];
+    colorMatrix.matrix = tiny_skia::filter::hueRotateMatrix(angle);
+  } else if (primitive.type == fp::ColorMatrix::Type::LuminanceToAlpha) {
+    colorMatrix.matrix = tiny_skia::filter::luminanceToAlphaMatrix();
+  } else {
+    colorMatrix.matrix = tiny_skia::filter::identityMatrix();
+  }
+  return colorMatrix;
+}
+
+gp::ComponentTransfer::Func ConvertTransferFunction(const fp::ComponentTransfer::Func& function) {
+  gp::ComponentTransfer::Func result;
+  result.type = static_cast<tiny_skia::filter::TransferFuncType>(function.type);
+  result.tableValues = function.tableValues;
+  result.slope = function.slope;
+  result.intercept = function.intercept;
+  result.amplitude = function.amplitude;
+  result.exponent = function.exponent;
+  result.offset = function.offset;
+  return result;
+}
+
+tiny_skia::filter::GraphPrimitive ConvertPrimitive(const fp::ComponentTransfer& primitive,
+                                                   const PrimitiveConversionState&) {
+  gp::ComponentTransfer componentTransfer;
+  componentTransfer.funcR = ConvertTransferFunction(primitive.funcR);
+  componentTransfer.funcG = ConvertTransferFunction(primitive.funcG);
+  componentTransfer.funcB = ConvertTransferFunction(primitive.funcB);
+  componentTransfer.funcA = ConvertTransferFunction(primitive.funcA);
+  return componentTransfer;
+}
+
+tiny_skia::filter::GraphPrimitive ConvertPrimitive(const fp::DropShadow& primitive,
+                                                   const PrimitiveConversionState& state) {
+  const PremulRGBA color = FloodToPremul(primitive.floodColor, primitive.floodOpacity);
+  const Vector2d offset = state.context.primitiveToPixelOffset(primitive.dx, primitive.dy);
+  gp::DropShadow dropShadow;
+  dropShadow.r = color.r;
+  dropShadow.g = color.g;
+  dropShadow.b = color.b;
+  dropShadow.a = color.a;
+  dropShadow.dx = static_cast<int>(std::lround(offset.x));
+  dropShadow.dy = static_cast<int>(std::lround(offset.y));
+  dropShadow.sigmaX =
+      primitive.stdDeviationX >= 0 ? state.context.primitiveToPixelX(primitive.stdDeviationX) : 0.0;
+  dropShadow.sigmaY =
+      primitive.stdDeviationY >= 0 ? state.context.primitiveToPixelY(primitive.stdDeviationY) : 0.0;
+  return dropShadow;
+}
+
+tiny_skia::filter::GraphPrimitive ConvertPrimitive(const fp::Morphology& primitive,
+                                                   const PrimitiveConversionState& state) {
+  gp::Morphology morphology;
+  if (primitive.radiusX < 0 || primitive.radiusY < 0 ||
+      (primitive.radiusX == 0 && primitive.radiusY == 0)) {
+    morphology.radiusX = 0;
+    morphology.radiusY = 0;
+  } else {
+    morphology.op = primitive.op == fp::Morphology::Operator::Erode
+                        ? tiny_skia::filter::MorphologyOp::Erode
+                        : tiny_skia::filter::MorphologyOp::Dilate;
+    morphology.radiusX =
+        static_cast<int>(std::round(state.context.primitiveToPixelX(primitive.radiusX)));
+    morphology.radiusY =
+        static_cast<int>(std::round(state.context.primitiveToPixelY(primitive.radiusY)));
+  }
+  return morphology;
+}
+
+tiny_skia::filter::GraphPrimitive ConvertPrimitive(const fp::ConvolveMatrix& primitive,
+                                                   const PrimitiveConversionState&) {
+  gp::ConvolveMatrix convolveMatrix;
+  convolveMatrix.orderX = primitive.orderX;
+  convolveMatrix.orderY = primitive.orderY;
+  convolveMatrix.kernel = primitive.kernelMatrix;
+  convolveMatrix.bias = primitive.bias;
+  convolveMatrix.edgeMode = static_cast<tiny_skia::filter::ConvolveEdgeMode>(primitive.edgeMode);
+  convolveMatrix.preserveAlpha = primitive.preserveAlpha;
+  convolveMatrix.targetX = primitive.targetX.value_or(primitive.orderX / 2);
+  convolveMatrix.targetY = primitive.targetY.value_or(primitive.orderY / 2);
+
+  if (primitive.divisor.has_value()) {
+    convolveMatrix.divisor = *primitive.divisor;
+  } else {
+    const int requiredSize = primitive.orderX * primitive.orderY;
+    double sum = 0.0;
+    for (std::size_t i = 0;
+         i < primitive.kernelMatrix.size() && i < static_cast<std::size_t>(requiredSize); ++i) {
+      sum += primitive.kernelMatrix[i];
+    }
+    convolveMatrix.divisor = std::abs(sum) < 1e-10 ? 1.0 : sum;
+  }
+  return convolveMatrix;
+}
+
+tiny_skia::filter::GraphPrimitive ConvertPrimitive(const fp::Tile&,
+                                                   const PrimitiveConversionState&) {
+  return gp::Tile{};
+}
+
+tiny_skia::filter::GraphPrimitive ConvertPrimitive(const fp::Turbulence& primitive,
+                                                   const PrimitiveConversionState& state) {
+  gp::Turbulence turbulence;
+  turbulence.params.type = primitive.type == fp::Turbulence::Type::FractalNoise
+                               ? tiny_skia::filter::TurbulenceType::FractalNoise
+                               : tiny_skia::filter::TurbulenceType::Turbulence;
+  turbulence.params.baseFrequencyX = primitive.baseFrequencyX;
+  turbulence.params.baseFrequencyY = primitive.baseFrequencyY;
+  turbulence.params.numOctaves = primitive.numOctaves;
+  turbulence.params.seed = primitive.seed;
+  turbulence.params.stitchTiles = primitive.stitchTiles;
+  turbulence.params.tileWidth = state.context.outputWidth;
+  turbulence.params.tileHeight = state.context.outputHeight;
+
+  const double a = state.context.deviceFromFilter.data[0];
+  const double b = state.context.deviceFromFilter.data[1];
+  const double c = state.context.deviceFromFilter.data[2];
+  const double d = state.context.deviceFromFilter.data[3];
+  double determinant = a * d - b * c;
+  if (std::abs(determinant) < 1e-10) {
+    determinant = 1.0;
+  }
+  const double inverseDeterminant = 1.0 / determinant;
+  turbulence.params.filterFromDeviceA = d * inverseDeterminant;
+  turbulence.params.filterFromDeviceB = -c * inverseDeterminant;
+  turbulence.params.filterFromDeviceC = -b * inverseDeterminant;
+  turbulence.params.filterFromDeviceD = a * inverseDeterminant;
+  return turbulence;
+}
+
+tiny_skia::filter::GraphPrimitive ConvertPrimitive(const fp::DisplacementMap& primitive,
+                                                   const PrimitiveConversionState& state) {
+  gp::DisplacementMap displacementMap;
+  displacementMap.scale = state.context.usesObjectBoundingBox
+                              ? primitive.scale * std::sqrt(state.context.boundingBoxWidth *
+                                                            state.context.boundingBoxHeight)
+                              : primitive.scale;
+  displacementMap.xChannel =
+      static_cast<tiny_skia::filter::DisplacementChannel>(primitive.xChannelSelector);
+  displacementMap.yChannel =
+      static_cast<tiny_skia::filter::DisplacementChannel>(primitive.yChannelSelector);
+  return displacementMap;
+}
+
+gp::Image::Sampling ConvertImageSampling(ImageRendering imageRendering) {
+  switch (imageRendering) {
+    case ImageRendering::CrispEdges:
+    case ImageRendering::OptimizeSpeed: return gp::Image::Sampling::CrispEdges;
+    case ImageRendering::Pixelated: return gp::Image::Sampling::Pixelated;
+    case ImageRendering::Auto:
+    case ImageRendering::Smooth:
+    case ImageRendering::HighQuality:
+    case ImageRendering::OptimizeQuality: return gp::Image::Sampling::Smooth;
+  }
+  return gp::Image::Sampling::Smooth;
+}
+
+void PopulateTransformedFragmentImage(gp::Image& image, const fp::Image& primitive,
+                                      const PrimitiveConversionState& state,
+                                      std::span<const std::uint8_t> premultiplied) {
+  const Transform2d viewBoxScaleInv =
+      Transform2d::Scale(NearZero(state.context.filterGraph.userToPixelScale.x, 1e-12)
+                             ? 1.0
+                             : 1.0 / state.context.filterGraph.userToPixelScale.x,
+                         NearZero(state.context.filterGraph.userToPixelScale.y, 1e-12)
+                             ? 1.0
+                             : 1.0 / state.context.filterGraph.userToPixelScale.y);
+  const Transform2d regionOffset =
+      Transform2d::Translate(primitive.fragmentRegionTopLeft.x, primitive.fragmentRegionTopLeft.y);
+  const Transform2d deviceFromFragment =
+      viewBoxScaleInv * regionOffset * state.context.deviceFromFilter;
+
+  image.pixels = RasterizeImagePremultiplied(
+      premultiplied, primitive.imageWidth, primitive.imageHeight, deviceFromFragment,
+      state.context.outputWidth, state.context.outputHeight, primitive.imageRendering);
+  image.width = state.context.outputWidth;
+  image.height = state.context.outputHeight;
+  image.targetRect =
+      tiny_skia::filter::PixelRect{0.0, 0.0, static_cast<double>(state.context.outputWidth),
+                                   static_cast<double>(state.context.outputHeight)};
+}
+
+void PopulateUntransformedFragmentImage(gp::Image& image, const fp::Image& primitive,
+                                        const PrimitiveConversionState& state,
+                                        std::span<const std::uint8_t> premultiplied) {
+  image.pixels.assign(premultiplied.begin(), premultiplied.end());
+  image.width = primitive.imageWidth;
+  image.height = primitive.imageHeight;
+  const double deviceOffsetX =
+      primitive.fragmentRegionTopLeft.x * state.context.filterGraph.userToPixelScale.x;
+  const double deviceOffsetY =
+      primitive.fragmentRegionTopLeft.y * state.context.filterGraph.userToPixelScale.y;
+  image.targetRect = tiny_skia::filter::PixelRect{deviceOffsetX, deviceOffsetY,
+                                                  static_cast<double>(primitive.imageWidth),
+                                                  static_cast<double>(primitive.imageHeight)};
+}
+
+void PopulateTransformedImage(gp::Image& image, const fp::Image& primitive,
+                              const PrimitiveConversionState& state,
+                              std::span<const std::uint8_t> premultiplied) {
+  const Box2d imageBox = Box2d::FromXYWH(0, 0, primitive.imageWidth, primitive.imageHeight);
+  const Box2d userSubregion =
+      state.node.userSpaceSubregion.has_value()
+          ? Box2d::FromXYWH(state.node.userSpaceSubregion->x, state.node.userSpaceSubregion->y,
+                            state.node.userSpaceSubregion->w, state.node.userSpaceSubregion->h)
+          : state.context.filterRegion.value_or(state.context.primitiveUnitsBounds);
+  const Transform2d filterFromImage =
+      primitive.preserveAspectRatio.elementContentFromViewBoxTransform(userSubregion, imageBox);
+  const Transform2d deviceFromImage = filterFromImage * state.context.deviceFromFilter;
+
+  image.pixels = RasterizeImagePremultiplied(
+      premultiplied, primitive.imageWidth, primitive.imageHeight, deviceFromImage,
+      state.context.outputWidth, state.context.outputHeight, primitive.imageRendering);
+  image.width = state.context.outputWidth;
+  image.height = state.context.outputHeight;
+  image.targetRect =
+      tiny_skia::filter::PixelRect{0.0, 0.0, static_cast<double>(state.context.outputWidth),
+                                   static_cast<double>(state.context.outputHeight)};
+}
+
+tiny_skia::filter::PixelRect ResolveUntransformedImageTarget(
+    const fp::Image& primitive, const PrimitiveConversionState& state) {
+  double regionX = 0.0;
+  double regionY = 0.0;
+  double regionWidth = state.context.outputWidth;
+  double regionHeight = state.context.outputHeight;
+  if (state.node.subregion.has_value()) {
+    regionX = state.node.subregion->x;
+    regionY = state.node.subregion->y;
+    regionWidth = state.node.subregion->w;
+    regionHeight = state.node.subregion->h;
+  } else if (state.graph.filterRegion.has_value()) {
+    regionX = state.graph.filterRegion->x;
+    regionY = state.graph.filterRegion->y;
+    regionWidth = state.graph.filterRegion->w;
+    regionHeight = state.graph.filterRegion->h;
+  }
+
+  const Box2d imageBox = Box2d::FromXYWH(0, 0, primitive.imageWidth, primitive.imageHeight);
+  const Box2d regionRect = Box2d::FromXYWH(0, 0, regionWidth, regionHeight);
+  const Transform2d regionFromImage =
+      primitive.preserveAspectRatio.elementContentFromViewBoxTransform(regionRect, imageBox);
+  const Vector2d topLeft = regionFromImage.transformPosition(Vector2d(0, 0));
+  const Vector2d bottomRight =
+      regionFromImage.transformPosition(Vector2d(primitive.imageWidth, primitive.imageHeight));
+  return tiny_skia::filter::PixelRect{
+      std::min(topLeft.x, bottomRight.x) + regionX, std::min(topLeft.y, bottomRight.y) + regionY,
+      std::abs(bottomRight.x - topLeft.x), std::abs(bottomRight.y - topLeft.y)};
+}
+
+void PopulateUntransformedImage(gp::Image& image, const fp::Image& primitive,
+                                const PrimitiveConversionState& state,
+                                std::span<const std::uint8_t> premultiplied) {
+  image.pixels.assign(premultiplied.begin(), premultiplied.end());
+  image.width = primitive.imageWidth;
+  image.height = primitive.imageHeight;
+  image.targetRect = ResolveUntransformedImageTarget(primitive, state);
+}
+
+tiny_skia::filter::GraphPrimitive ConvertPrimitive(const fp::Image& primitive,
+                                                   const PrimitiveConversionState& state) {
+  gp::Image image;
+  image.sampling = ConvertImageSampling(primitive.imageRendering);
+  if (!HasExactRgbaPayload(primitive.imageData, primitive.imageWidth, primitive.imageHeight)) {
+    return image;
+  }
+
+  const std::vector<std::uint8_t> premultiplied = PremultiplyRgba(primitive.imageData);
+  if (primitive.isFragmentReference && state.graph.filterFromDevice.has_value()) {
+    PopulateTransformedFragmentImage(image, primitive, state, premultiplied);
+  } else if (primitive.isFragmentReference) {
+    PopulateUntransformedFragmentImage(image, primitive, state, premultiplied);
+  } else if (state.graph.filterFromDevice.has_value()) {
+    PopulateTransformedImage(image, primitive, state, premultiplied);
+  } else {
+    PopulateUntransformedImage(image, primitive, state, premultiplied);
+  }
+  return image;
+}
+
+template <typename LightingParams>
+void PopulateLightingParams(LightingParams& params, const css::Color& lightingColor,
+                            const fp::LightSource& light, const FilterConversionContext& context) {
+  const css::RGBA rgba = lightingColor.asRGBA();
+  params.lightR = rgba.r / 255.0;
+  params.lightG = rgba.g / 255.0;
+  params.lightB = rgba.b / 255.0;
+  params.light = context.convertLightSource(light);
+  params.pixelToUser = context.pixelToUser;
+  params.hasShear = context.hasShear;
+}
+
+tiny_skia::filter::GraphPrimitive ConvertPrimitive(const fp::DiffuseLighting& primitive,
+                                                   const PrimitiveConversionState& state) {
+  if (!primitive.light.has_value()) {
+    return gp::Image{};
+  }
+  gp::DiffuseLighting diffuseLighting;
+  diffuseLighting.params.surfaceScale = primitive.surfaceScale;
+  diffuseLighting.params.diffuseConstant = primitive.diffuseConstant;
+  PopulateLightingParams(diffuseLighting.params, primitive.lightingColor, *primitive.light,
+                         state.context);
+  return diffuseLighting;
+}
+
+tiny_skia::filter::GraphPrimitive ConvertPrimitive(const fp::SpecularLighting& primitive,
+                                                   const PrimitiveConversionState& state) {
+  if (!primitive.light.has_value()) {
+    return gp::Image{};
+  }
+  gp::SpecularLighting specularLighting;
+  specularLighting.params.surfaceScale = primitive.surfaceScale;
+  specularLighting.params.specularConstant = primitive.specularConstant;
+  specularLighting.params.specularExponent = primitive.specularExponent;
+  PopulateLightingParams(specularLighting.params, primitive.lightingColor, *primitive.light,
+                         state.context);
+  return specularLighting;
+}
+
+tiny_skia::filter::FilterGraph CreateExecutableGraph(const FilterConversionContext& context,
+                                                     bool clipSourceToFilterRegion,
+                                                     const tiny_skia::Pixmap* fillPaintInput,
+                                                     const tiny_skia::Pixmap* strokePaintInput) {
   tiny_skia::filter::FilterGraph graph;
-  graph.useLinearRGB = filterGraph.colorInterpolationFilters != ColorInterpolationFilters::SRGB;
+  graph.useLinearRGB =
+      context.filterGraph.colorInterpolationFilters != ColorInterpolationFilters::SRGB;
   graph.clipSourceToFilterRegion = clipSourceToFilterRegion;
   if (fillPaintInput != nullptr) {
     graph.fillPaintInput = *fillPaintInput;
@@ -239,426 +638,104 @@ void ApplyFilterGraphToPixmap(tiny_skia::Pixmap& pixmap, const components::Filte
     graph.strokePaintInput = *strokePaintInput;
   }
 
-  if (filterRegion.has_value()) {
-    const Box2d pixelRegion = deviceFromFilter.transformBox(*filterRegion);
+  if (context.filterRegion.has_value()) {
+    const Box2d pixelRegion = context.deviceFromFilter.transformBox(*context.filterRegion);
     graph.filterRegion =
         tiny_skia::filter::PixelRect{pixelRegion.topLeft.x, pixelRegion.topLeft.y,
                                      pixelRegion.bottomRight.x - pixelRegion.topLeft.x,
                                      pixelRegion.bottomRight.y - pixelRegion.topLeft.y};
   }
 
-  // Detect rotation/skew: if the transform has off-diagonal elements, subregion clipping inside
-  // the filter graph needs per-pixel point-in-rect testing to avoid AABB overflow.
-  const bool hasRotation =
-      !NearZero(deviceFromFilter.data[1], 1e-6) || !NearZero(deviceFromFilter.data[2], 1e-6);
-  if (hasRotation && !NearZero(deviceFromFilter.determinant(), 1e-12)) {
-    const Transform2d inv = deviceFromFilter.inverse();
+  const bool hasRotation = !NearZero(context.deviceFromFilter.data[1], 1e-6) ||
+                           !NearZero(context.deviceFromFilter.data[2], 1e-6);
+  if (hasRotation && !NearZero(context.deviceFromFilter.determinant(), 1e-12)) {
+    const Transform2d filterFromDevice = context.deviceFromFilter.inverse();
     graph.filterFromDevice = tiny_skia::filter::AffineTransform{
-        inv.data[0], inv.data[1], inv.data[2], inv.data[3], inv.data[4], inv.data[5]};
-    if (filterRegion.has_value()) {
-      graph.userSpaceFilterRegion =
-          tiny_skia::filter::PixelRect{filterRegion->topLeft.x, filterRegion->topLeft.y,
-                                       filterRegion->width(), filterRegion->height()};
+        filterFromDevice.data[0], filterFromDevice.data[1], filterFromDevice.data[2],
+        filterFromDevice.data[3], filterFromDevice.data[4], filterFromDevice.data[5]};
+    if (context.filterRegion.has_value()) {
+      graph.userSpaceFilterRegion = tiny_skia::filter::PixelRect{
+          context.filterRegion->topLeft.x, context.filterRegion->topLeft.y,
+          context.filterRegion->width(), context.filterRegion->height()};
     }
   }
+  return graph;
+}
 
-  for (const FilterNode& node : filterGraph.nodes) {
-    tiny_skia::filter::GraphNode graphNode;
+void PopulateSubregion(const components::FilterNode& node, const FilterConversionContext& context,
+                       const tiny_skia::filter::FilterGraph& graph,
+                       tiny_skia::filter::GraphNode& graphNode) {
+  if (!node.x.has_value() && !node.y.has_value() && !node.width.has_value() &&
+      !node.height.has_value()) {
+    return;
+  }
 
-    for (const auto& fi : node.inputs) {
-      graphNode.inputs.push_back(convertInput(fi));
-    }
+  const Box2d defaultSubregionUser = context.filterRegion.value_or(context.primitiveUnitsBounds);
+  const double userX = node.x.has_value()
+                           ? context.resolvePrimitivePosition(*node.x, Lengthd::Extent::X)
+                           : defaultSubregionUser.topLeft.x;
+  const double userY = node.y.has_value()
+                           ? context.resolvePrimitivePosition(*node.y, Lengthd::Extent::Y)
+                           : defaultSubregionUser.topLeft.y;
+  const double userWidth = node.width.has_value()
+                               ? context.resolvePrimitiveSize(*node.width, Lengthd::Extent::X)
+                               : defaultSubregionUser.width();
+  const double userHeight = node.height.has_value()
+                                ? context.resolvePrimitiveSize(*node.height, Lengthd::Extent::Y)
+                                : defaultSubregionUser.height();
 
-    if (node.result.has_value()) {
-      graphNode.result = std::string(*node.result);
-    }
+  const Box2d pixelRegion =
+      context.deviceFromFilter.transformBox(Box2d::FromXYWH(userX, userY, userWidth, userHeight));
+  graphNode.subregion =
+      tiny_skia::filter::PixelRect{pixelRegion.topLeft.x, pixelRegion.topLeft.y,
+                                   pixelRegion.bottomRight.x - pixelRegion.topLeft.x,
+                                   pixelRegion.bottomRight.y - pixelRegion.topLeft.y};
+  if (graph.filterFromDevice.has_value()) {
+    graphNode.userSpaceSubregion =
+        tiny_skia::filter::PixelRect{userX, userY, userWidth, userHeight};
+  }
+}
 
-    if (node.x.has_value() || node.y.has_value() || node.width.has_value() ||
-        node.height.has_value()) {
-      const Box2d defaultSubregionUser = filterRegion.value_or(primitiveUnitsBounds);
-      const double defaultUserWidth = defaultSubregionUser.width();
-      const double defaultUserHeight = defaultSubregionUser.height();
-      const double defaultOriginX = defaultSubregionUser.topLeft.x;
-      const double defaultOriginY = defaultSubregionUser.topLeft.y;
+tiny_skia::filter::GraphNode ConvertNode(const components::FilterNode& node,
+                                         const FilterConversionContext& context,
+                                         const tiny_skia::filter::FilterGraph& graph) {
+  tiny_skia::filter::GraphNode graphNode;
+  graphNode.inputs.reserve(node.inputs.size());
+  for (const components::FilterInput& input : node.inputs) {
+    graphNode.inputs.push_back(ConvertInput(input));
+  }
+  if (node.result.has_value()) {
+    graphNode.result = std::string(*node.result);
+  }
 
-      const double ux = node.x.has_value() ? resolvePrimitivePosition(*node.x, Lengthd::Extent::X,
-                                                                      isOBB ? bboxX : 0.0, bboxW)
-                                           : defaultOriginX;
-      const double uy = node.y.has_value() ? resolvePrimitivePosition(*node.y, Lengthd::Extent::Y,
-                                                                      isOBB ? bboxY : 0.0, bboxH)
-                                           : defaultOriginY;
-      const double uw = node.width.has_value()
-                            ? resolvePrimitiveSize(*node.width, Lengthd::Extent::X, bboxW)
-                            : defaultUserWidth;
-      const double uh = node.height.has_value()
-                            ? resolvePrimitiveSize(*node.height, Lengthd::Extent::Y, bboxH)
-                            : defaultUserHeight;
+  PopulateSubregion(node, context, graph, graphNode);
+  const PrimitiveConversionState state{context, graph, graphNode};
+  graphNode.primitive =
+      std::visit([&state](const auto& primitive) { return ConvertPrimitive(primitive, state); },
+                 node.primitive);
 
-      const Box2d pixelRegion = deviceFromFilter.transformBox(Box2d::FromXYWH(ux, uy, uw, uh));
-      graphNode.subregion =
-          tiny_skia::filter::PixelRect{pixelRegion.topLeft.x, pixelRegion.topLeft.y,
-                                       pixelRegion.bottomRight.x - pixelRegion.topLeft.x,
-                                       pixelRegion.bottomRight.y - pixelRegion.topLeft.y};
+  if (node.colorInterpolationFilters.has_value()) {
+    graphNode.useLinearRGB = *node.colorInterpolationFilters != ColorInterpolationFilters::SRGB;
+  }
+  return graphNode;
+}
 
-      // Store user-space subregion for rotation-aware clipping.
-      if (graph.filterFromDevice.has_value()) {
-        graphNode.userSpaceSubregion = tiny_skia::filter::PixelRect{ux, uy, uw, uh};
-      }
-    }
+}  // namespace
 
-    std::visit(
-        [&](const auto& primitive) {
-          using T = std::decay_t<decltype(primitive)>;
-
-          if constexpr (std::is_same_v<T, GaussianBlur>) {
-            gp::GaussianBlur blur;
-            blur.sigmaX =
-                primitive.stdDeviationX >= 0 ? primToPixelX(primitive.stdDeviationX) : 0.0;
-            blur.sigmaY =
-                primitive.stdDeviationY >= 0 ? primToPixelY(primitive.stdDeviationY) : 0.0;
-            blur.edgeMode = static_cast<tiny_skia::filter::BlurEdgeMode>(primitive.edgeMode);
-            graphNode.primitive = blur;
-
-          } else if constexpr (std::is_same_v<T, Flood>) {
-            const PremulRGBA pm = floodToPremul(primitive.floodColor, primitive.floodOpacity);
-            graphNode.primitive = gp::Flood{pm.r, pm.g, pm.b, pm.a};
-
-          } else if constexpr (std::is_same_v<T, Offset>) {
-            const Vector2d offset = primToPixelOffset(primitive.dx, primitive.dy);
-            graphNode.primitive = gp::Offset{
-                static_cast<int>(std::lround(offset.x)),
-                static_cast<int>(std::lround(offset.y)),
-            };
-
-          } else if constexpr (std::is_same_v<T, Composite>) {
-            gp::Composite composite;
-            composite.op = static_cast<tiny_skia::filter::CompositeOp>(primitive.op);
-            composite.k1 = primitive.k1;
-            composite.k2 = primitive.k2;
-            composite.k3 = primitive.k3;
-            composite.k4 = primitive.k4;
-            graphNode.primitive = composite;
-
-          } else if constexpr (std::is_same_v<T, Blend>) {
-            gp::Blend blend;
-            blend.mode = static_cast<tiny_skia::filter::BlendMode>(primitive.mode);
-            graphNode.primitive = blend;
-
-          } else if constexpr (std::is_same_v<T, Merge>) {
-            graphNode.primitive = gp::Merge{};
-
-          } else if constexpr (std::is_same_v<T, ColorMatrix>) {
-            gp::ColorMatrix colorMatrix;
-            if (primitive.type == ColorMatrix::Type::Matrix) {
-              if (primitive.values.size() == 20) {
-                for (size_t j = 0; j < 20; ++j) {
-                  colorMatrix.matrix[j] = primitive.values[j];
-                }
-              } else {
-                colorMatrix.matrix = tiny_skia::filter::identityMatrix();
-              }
-            } else if (primitive.type == ColorMatrix::Type::Saturate) {
-              const double s = primitive.values.empty() ? 1.0 : primitive.values[0];
-              colorMatrix.matrix = tiny_skia::filter::saturateMatrix(s);
-            } else if (primitive.type == ColorMatrix::Type::HueRotate) {
-              const double angle = primitive.values.empty() ? 0.0 : primitive.values[0];
-              colorMatrix.matrix = tiny_skia::filter::hueRotateMatrix(angle);
-            } else if (primitive.type == ColorMatrix::Type::LuminanceToAlpha) {
-              colorMatrix.matrix = tiny_skia::filter::luminanceToAlphaMatrix();
-            } else {
-              colorMatrix.matrix = tiny_skia::filter::identityMatrix();
-            }
-            graphNode.primitive = colorMatrix;
-
-          } else if constexpr (std::is_same_v<T, ComponentTransfer>) {
-            gp::ComponentTransfer componentTransfer;
-            auto convertFunc = [](const ComponentTransfer::Func& f) {
-              gp::ComponentTransfer::Func graphFunc;
-              graphFunc.type = static_cast<tiny_skia::filter::TransferFuncType>(f.type);
-              graphFunc.tableValues = f.tableValues;
-              graphFunc.slope = f.slope;
-              graphFunc.intercept = f.intercept;
-              graphFunc.amplitude = f.amplitude;
-              graphFunc.exponent = f.exponent;
-              graphFunc.offset = f.offset;
-              return graphFunc;
-            };
-            componentTransfer.funcR = convertFunc(primitive.funcR);
-            componentTransfer.funcG = convertFunc(primitive.funcG);
-            componentTransfer.funcB = convertFunc(primitive.funcB);
-            componentTransfer.funcA = convertFunc(primitive.funcA);
-            graphNode.primitive = componentTransfer;
-
-          } else if constexpr (std::is_same_v<T, DropShadow>) {
-            const PremulRGBA pm = floodToPremul(primitive.floodColor, primitive.floodOpacity);
-            gp::DropShadow dropShadow;
-            dropShadow.r = pm.r;
-            dropShadow.g = pm.g;
-            dropShadow.b = pm.b;
-            dropShadow.a = pm.a;
-            const Vector2d offset = primToPixelOffset(primitive.dx, primitive.dy);
-            dropShadow.dx = static_cast<int>(std::lround(offset.x));
-            dropShadow.dy = static_cast<int>(std::lround(offset.y));
-            dropShadow.sigmaX =
-                primitive.stdDeviationX >= 0 ? primToPixelX(primitive.stdDeviationX) : 0.0;
-            dropShadow.sigmaY =
-                primitive.stdDeviationY >= 0 ? primToPixelY(primitive.stdDeviationY) : 0.0;
-            graphNode.primitive = dropShadow;
-
-          } else if constexpr (std::is_same_v<T, Morphology>) {
-            gp::Morphology morphology;
-            if (primitive.radiusX < 0 || primitive.radiusY < 0 ||
-                (primitive.radiusX == 0 && primitive.radiusY == 0)) {
-              morphology.radiusX = 0;
-              morphology.radiusY = 0;
-            } else {
-              morphology.op = primitive.op == Morphology::Operator::Erode
-                                  ? tiny_skia::filter::MorphologyOp::Erode
-                                  : tiny_skia::filter::MorphologyOp::Dilate;
-              morphology.radiusX = static_cast<int>(std::round(primToPixelX(primitive.radiusX)));
-              morphology.radiusY = static_cast<int>(std::round(primToPixelY(primitive.radiusY)));
-            }
-            graphNode.primitive = morphology;
-
-          } else if constexpr (std::is_same_v<T, ConvolveMatrix>) {
-            gp::ConvolveMatrix convolveMatrix;
-            convolveMatrix.orderX = primitive.orderX;
-            convolveMatrix.orderY = primitive.orderY;
-            convolveMatrix.kernel = primitive.kernelMatrix;
-            convolveMatrix.bias = primitive.bias;
-            convolveMatrix.edgeMode =
-                static_cast<tiny_skia::filter::ConvolveEdgeMode>(primitive.edgeMode);
-            convolveMatrix.preserveAlpha = primitive.preserveAlpha;
-            convolveMatrix.targetX = primitive.targetX.value_or(primitive.orderX / 2);
-            convolveMatrix.targetY = primitive.targetY.value_or(primitive.orderY / 2);
-
-            if (primitive.divisor.has_value()) {
-              convolveMatrix.divisor = *primitive.divisor;
-            } else {
-              const int requiredSize = primitive.orderX * primitive.orderY;
-              double sum = 0.0;
-              for (size_t i = 0;
-                   i < primitive.kernelMatrix.size() && i < static_cast<size_t>(requiredSize);
-                   ++i) {
-                sum += primitive.kernelMatrix[i];
-              }
-              // Per SVG spec: if the sum is zero, divisor defaults to 1.
-              // Use a tolerance check because floating-point sums of values like
-              // 0.1*8 + (-0.8) may not be exactly 0.0 due to IEEE 754 representation.
-              convolveMatrix.divisor = std::abs(sum) < 1e-10 ? 1.0 : sum;
-            }
-            graphNode.primitive = convolveMatrix;
-
-          } else if constexpr (std::is_same_v<T, Tile>) {
-            graphNode.primitive = gp::Tile{};
-
-          } else if constexpr (std::is_same_v<T, Turbulence>) {
-            gp::Turbulence turbulence;
-            turbulence.params.type = primitive.type == Turbulence::Type::FractalNoise
-                                         ? tiny_skia::filter::TurbulenceType::FractalNoise
-                                         : tiny_skia::filter::TurbulenceType::Turbulence;
-            turbulence.params.baseFrequencyX = primitive.baseFrequencyX;
-            turbulence.params.baseFrequencyY = primitive.baseFrequencyY;
-            turbulence.params.numOctaves = primitive.numOctaves;
-            turbulence.params.seed = primitive.seed;
-            turbulence.params.stitchTiles = primitive.stitchTiles;
-            turbulence.params.tileWidth = w;
-            turbulence.params.tileHeight = h;
-            // Compute the 2x2 inverse of deviceFromFilter to map pixel
-            // coordinates back to user (filter) space.  This handles skew and
-            // rotation, not just axis-aligned scale.
-            {
-              const double a = deviceFromFilter.data[0];
-              const double b = deviceFromFilter.data[1];
-              const double c = deviceFromFilter.data[2];
-              const double d = deviceFromFilter.data[3];
-              double det = a * d - b * c;
-              if (std::abs(det) < 1e-10) {
-                det = 1.0;  // Degenerate transform: fall back to identity.
-              }
-              const double invDet = 1.0 / det;
-              turbulence.params.filterFromDeviceA = d * invDet;
-              turbulence.params.filterFromDeviceB = -c * invDet;
-              turbulence.params.filterFromDeviceC = -b * invDet;
-              turbulence.params.filterFromDeviceD = a * invDet;
-            }
-            graphNode.primitive = turbulence;
-
-          } else if constexpr (std::is_same_v<T, DisplacementMap>) {
-            gp::DisplacementMap displacementMap;
-            displacementMap.scale =
-                isOBB ? primitive.scale * std::sqrt(bboxW * bboxH) : primitive.scale;
-            displacementMap.xChannel =
-                static_cast<tiny_skia::filter::DisplacementChannel>(primitive.xChannelSelector);
-            displacementMap.yChannel =
-                static_cast<tiny_skia::filter::DisplacementChannel>(primitive.yChannelSelector);
-            graphNode.primitive = displacementMap;
-
-          } else if constexpr (std::is_same_v<T, Image>) {
-            gp::Image image;
-            switch (primitive.imageRendering) {
-              case ImageRendering::CrispEdges:
-              case ImageRendering::OptimizeSpeed:
-                image.sampling = gp::Image::Sampling::CrispEdges;
-                break;
-              case ImageRendering::Pixelated:
-                image.sampling = gp::Image::Sampling::Pixelated;
-                break;
-              case ImageRendering::Auto:
-              case ImageRendering::Smooth:
-              case ImageRendering::HighQuality:
-              case ImageRendering::OptimizeQuality:
-                image.sampling = gp::Image::Sampling::Smooth;
-                break;
-            }
-            if (HasExactRgbaPayload(primitive.imageData, primitive.imageWidth,
-                                    primitive.imageHeight)) {
-              const std::vector<std::uint8_t> premultiplied = PremultiplyRgba(primitive.imageData);
-
-              if (primitive.isFragmentReference && graph.filterFromDevice.has_value()) {
-                // Fragment references with host transform (skew/rotation): rasterize the fragment
-                // image through the combined transform that maps from fragment pixel coordinates
-                // to device pixel coordinates, including the host's transform and filter region
-                // offset.
-                //
-                // The transform chain is:
-                //   fragment pixel → (÷ viewBoxScale) → document user space
-                //   → (+ filterRegion.topLeft) → host user space
-                //   → (× deviceFromFilter) → device pixels
-                const Transform2d viewBoxScaleInv =
-                    Transform2d::Scale(NearZero(filterGraph.userToPixelScale.x, 1e-12)
-                                           ? 1.0
-                                           : 1.0 / filterGraph.userToPixelScale.x,
-                                       NearZero(filterGraph.userToPixelScale.y, 1e-12)
-                                           ? 1.0
-                                           : 1.0 / filterGraph.userToPixelScale.y);
-                const Transform2d regionOffset = Transform2d::Translate(
-                    primitive.fragmentRegionTopLeft.x, primitive.fragmentRegionTopLeft.y);
-                const Transform2d deviceFromFragment =
-                    viewBoxScaleInv * regionOffset * deviceFromFilter;
-
-                image.pixels = RasterizeImagePremultiplied(
-                    premultiplied, primitive.imageWidth, primitive.imageHeight, deviceFromFragment,
-                    w, h, primitive.imageRendering);
-                image.width = w;
-                image.height = h;
-                image.targetRect = tiny_skia::filter::PixelRect{0.0, 0.0, static_cast<double>(w),
-                                                                static_cast<double>(h)};
-              } else if (primitive.isFragmentReference) {
-                image.pixels = premultiplied;
-                image.width = primitive.imageWidth;
-                image.height = primitive.imageHeight;
-                // Fragment references without host transform: apply a simple device-space
-                // post-translation to position content at the filter region origin.
-                const double deviceOffsetX =
-                    primitive.fragmentRegionTopLeft.x * filterGraph.userToPixelScale.x;
-                const double deviceOffsetY =
-                    primitive.fragmentRegionTopLeft.y * filterGraph.userToPixelScale.y;
-                image.targetRect = tiny_skia::filter::PixelRect{
-                    deviceOffsetX, deviceOffsetY, static_cast<double>(primitive.imageWidth),
-                    static_cast<double>(primitive.imageHeight)};
-              } else if (graph.filterFromDevice.has_value()) {
-                const Box2d imageBox =
-                    Box2d::FromXYWH(0, 0, primitive.imageWidth, primitive.imageHeight);
-                const Box2d userSubregion = graphNode.userSpaceSubregion.has_value()
-                                                ? Box2d::FromXYWH(graphNode.userSpaceSubregion->x,
-                                                                  graphNode.userSpaceSubregion->y,
-                                                                  graphNode.userSpaceSubregion->w,
-                                                                  graphNode.userSpaceSubregion->h)
-                                                : filterRegion.value_or(primitiveUnitsBounds);
-                const Transform2d filterFromImage =
-                    primitive.preserveAspectRatio.elementContentFromViewBoxTransform(userSubregion,
-                                                                                     imageBox);
-                const Transform2d deviceFromImage = filterFromImage * deviceFromFilter;
-
-                image.pixels = RasterizeImagePremultiplied(premultiplied, primitive.imageWidth,
-                                                           primitive.imageHeight, deviceFromImage,
-                                                           w, h, primitive.imageRendering);
-                image.width = w;
-                image.height = h;
-                image.targetRect = tiny_skia::filter::PixelRect{0.0, 0.0, static_cast<double>(w),
-                                                                static_cast<double>(h)};
-              } else {
-                image.pixels = premultiplied;
-                image.width = primitive.imageWidth;
-                image.height = primitive.imageHeight;
-                double regionX = 0.0;
-                double regionY = 0.0;
-                double regionW = w;
-                double regionH = h;
-                if (graphNode.subregion.has_value()) {
-                  regionX = graphNode.subregion->x;
-                  regionY = graphNode.subregion->y;
-                  regionW = graphNode.subregion->w;
-                  regionH = graphNode.subregion->h;
-                } else if (graph.filterRegion.has_value()) {
-                  regionX = graph.filterRegion->x;
-                  regionY = graph.filterRegion->y;
-                  regionW = graph.filterRegion->w;
-                  regionH = graph.filterRegion->h;
-                }
-
-                const Box2d imageBox =
-                    Box2d::FromXYWH(0, 0, primitive.imageWidth, primitive.imageHeight);
-                const Box2d regionRect = Box2d::FromXYWH(0, 0, regionW, regionH);
-                const Transform2d regionFromImage =
-                    primitive.preserveAspectRatio.elementContentFromViewBoxTransform(regionRect,
-                                                                                     imageBox);
-
-                const Vector2d topLeft = regionFromImage.transformPosition(Vector2d(0, 0));
-                const Vector2d bottomRight = regionFromImage.transformPosition(
-                    Vector2d(primitive.imageWidth, primitive.imageHeight));
-                image.targetRect = tiny_skia::filter::PixelRect{
-                    std::min(topLeft.x, bottomRight.x) + regionX,
-                    std::min(topLeft.y, bottomRight.y) + regionY,
-                    std::abs(bottomRight.x - topLeft.x), std::abs(bottomRight.y - topLeft.y)};
-              }
-            }
-            graphNode.primitive = std::move(image);
-
-          } else if constexpr (std::is_same_v<T, DiffuseLighting>) {
-            if (primitive.light.has_value()) {
-              gp::DiffuseLighting diffuseLighting;
-              diffuseLighting.params.surfaceScale = primitive.surfaceScale;
-              diffuseLighting.params.diffuseConstant = primitive.diffuseConstant;
-              const css::RGBA rgba = primitive.lightingColor.asRGBA();
-              diffuseLighting.params.lightR = rgba.r / 255.0;
-              diffuseLighting.params.lightG = rgba.g / 255.0;
-              diffuseLighting.params.lightB = rgba.b / 255.0;
-              diffuseLighting.params.light = convertLightSource(*primitive.light);
-              diffuseLighting.params.pixelToUser = pixelToUser;
-              diffuseLighting.params.hasShear = hasShear;
-              graphNode.primitive = diffuseLighting;
-            } else {
-              graphNode.primitive = gp::Image{};
-            }
-
-          } else if constexpr (std::is_same_v<T, SpecularLighting>) {
-            if (primitive.light.has_value()) {
-              gp::SpecularLighting specularLighting;
-              specularLighting.params.surfaceScale = primitive.surfaceScale;
-              specularLighting.params.specularConstant = primitive.specularConstant;
-              specularLighting.params.specularExponent = primitive.specularExponent;
-              const css::RGBA rgba = primitive.lightingColor.asRGBA();
-              specularLighting.params.lightR = rgba.r / 255.0;
-              specularLighting.params.lightG = rgba.g / 255.0;
-              specularLighting.params.lightB = rgba.b / 255.0;
-              specularLighting.params.light = convertLightSource(*primitive.light);
-              specularLighting.params.pixelToUser = pixelToUser;
-              specularLighting.params.hasShear = hasShear;
-              graphNode.primitive = specularLighting;
-            } else {
-              graphNode.primitive = gp::Image{};
-            }
-          }
-        },
-        node.primitive);
-
-    if (node.colorInterpolationFilters.has_value()) {
-      graphNode.useLinearRGB = *node.colorInterpolationFilters != ColorInterpolationFilters::SRGB;
-    }
-
-    graph.nodes.push_back(std::move(graphNode));
+void ApplyFilterGraphToPixmap(tiny_skia::Pixmap& pixmap, const components::FilterGraph& filterGraph,
+                              const Transform2d& deviceFromFilter,
+                              const std::optional<Box2d>& filterRegion,
+                              bool clipSourceToFilterRegion,
+                              const tiny_skia::Pixmap* fillPaintInput,
+                              const tiny_skia::Pixmap* strokePaintInput) {
+  const FilterConversionContext context(filterGraph, deviceFromFilter, filterRegion,
+                                        static_cast<int>(pixmap.width()),
+                                        static_cast<int>(pixmap.height()));
+  tiny_skia::filter::FilterGraph graph =
+      CreateExecutableGraph(context, clipSourceToFilterRegion, fillPaintInput, strokePaintInput);
+  graph.nodes.reserve(filterGraph.nodes.size());
+  for (const components::FilterNode& node : filterGraph.nodes) {
+    graph.nodes.push_back(ConvertNode(node, context, graph));
   }
 
   tiny_skia::filter::executeFilterGraph(pixmap, graph);
