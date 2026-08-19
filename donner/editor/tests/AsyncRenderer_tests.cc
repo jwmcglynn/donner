@@ -408,6 +408,7 @@ TEST(AsyncRendererGpuWaitFailureTest, RepeatedIdenticalLossBumpsTheGenerationOnc
   asyncRenderer.noteGpuWaitOutcomeForTesting(escalated);
   EXPECT_EQ(asyncRenderer.gpuWaitFailure().generation, 2u);
   EXPECT_EQ(asyncRenderer.gpuWaitFailure().timedOutWaitSite, svg::GpuWaitTimeoutSite::QueueIdle);
+}
 
 namespace {
 
