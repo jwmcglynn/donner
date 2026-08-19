@@ -507,6 +507,7 @@ donner_cc_library(
     srcs = ["AsyncRenderer.cc"],
     hdrs = ["AsyncRenderer.h"],
     deps = [
+        ":composited_rendering_mode",
         ":overlay_renderer",
         ":tracy_wrapper",
         ":viewport_state",
@@ -685,10 +686,16 @@ donner_cc_library(
     srcs = ["MenuBarPresenter.cc"],
     hdrs = ["MenuBarPresenter.h"],
     deps = [
+        ":composited_rendering_mode",
         ":editor_theme",
         ":imgui_headers",
         "@imgui",
     ],
+)
+
+donner_cc_library(
+    name = "composited_rendering_mode",
+    hdrs = ["CompositedRenderingMode.h"],
 )
 
 donner_cc_library(

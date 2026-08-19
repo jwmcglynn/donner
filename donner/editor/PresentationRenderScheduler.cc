@@ -88,8 +88,8 @@ PresentationRenderScheduleDecision PresentationRenderScheduler::evaluate(
                                                      input.selectedEntity != entt::null &&
                                                      input.forceSelectedLayerRasterization;
   // A selected element needs a selection-hint render whenever the raster window changes. Otherwise
-  // a high-zoom pan/zoom regular render can publish a full-canvas fallback and evict the promoted
-  // drag-target tile just before the next drag starts.
+  // a high-zoom pan/zoom regular render can omit the promoted drag-target tile just before the next
+  // drag starts.
   const bool selectedViewportRenderNeedsPrewarm = input.selectedEntity != entt::null &&
                                                   !input.activeDragPreview.has_value() &&
                                                   (canvasSizeChanged || rasterViewportChanged);

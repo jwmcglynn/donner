@@ -14,6 +14,27 @@ struct RenderingInstanceComponent;
 namespace donner::svg::compositor {
 
 /**
+ * Which mandatory-compositing signals `MandatoryHintDetector` acts on.
+ *
+ * Every signal is handled correctly by the renderer driver's inline
+ * `pushClip` / `pushMask` / `pushFilterLayer` path when no hint is published
+ * (that inline path is what entities under compositing-breaking ancestors
+ * already use), so narrowing the scope trades retained-layer caching for
+ * per-frame re-render cost without changing pixels.
+ */
+enum class MandatoryHintScope : uint8_t {
+  /// Publish hints for every signal: `isolatedLayer` (opacity < 1,
+  /// mix-blend-mode, isolation: isolate), filter, and mask.
+  All,
+  /// Publish hints only for `resolvedFilter.has_value()`. Filters dominate
+  /// re-render cost; opacity groups, blend modes, and masks render inline.
+  /// A filter nested under an inline isolation ancestor is NOT promoted
+  /// either (extracting it would split the ancestor's isolation group); it
+  /// renders fully inline instead.
+  FilterOnly,
+};
+
+/**
  * Stats produced by `MandatoryHintDetector::reconcile()`. Tests inspect these to
  * verify that the detector published / dropped the right number of hints on a
  * given pass.
@@ -36,12 +57,15 @@ struct MandatoryHintDetectorStats {
  * Subsystem that publishes `Mandatory` `CompositorHint` entries for SVG
  * features that force isolated compositing.
  *
- * A `RenderingInstanceComponent` qualifies for a mandatory hint when any of the
- * following is true:
+ * Under `MandatoryHintScope::All` (the default), a `RenderingInstanceComponent`
+ * qualifies for a mandatory hint when any of the following is true:
  *   - `isolatedLayer == true` (covers `opacity < 1`, `mix-blend-mode`,
  *     `isolation: isolate`).
  *   - `resolvedFilter.has_value()` (SVG `filter`).
  *   - `mask.has_value()` (SVG `mask`).
+ *
+ * Under `MandatoryHintScope::FilterOnly`, only the filter signal qualifies;
+ * the other signals render through the driver's inline isolation path.
  *
  * Other fallback-inducing features (`clipPath`, markers, external paint
  * servers) intentionally do NOT force a mandatory promotion - that's the
@@ -57,8 +81,11 @@ struct MandatoryHintDetectorStats {
  */
 class MandatoryHintDetector {
 public:
-  /// Default constructor.
+  /// Default constructor. Acts on every mandatory signal (`MandatoryHintScope::All`).
   MandatoryHintDetector() = default;
+
+  /// Construct with an explicit signal scope. See `MandatoryHintScope`.
+  explicit MandatoryHintDetector(MandatoryHintScope scope) : scope_(scope) {}
 
   /// Destructor. Drops all outstanding hints via `ScopedCompositorHint` RAII.
   ~MandatoryHintDetector() = default;
@@ -122,9 +149,14 @@ public:
   [[nodiscard]] const MandatoryHintDetectorStats& stats() const { return stats_; }
 
 private:
-  /// Returns true if the given rendering instance exhibits any of the three
-  /// mandatory-compositing signals.
-  [[nodiscard]] static bool qualifies(const components::RenderingInstanceComponent& instance);
+  /// Returns true if the given rendering instance exhibits a
+  /// mandatory-compositing signal covered by @p scope.
+  [[nodiscard]] static bool qualifies(const components::RenderingInstanceComponent& instance,
+                                      MandatoryHintScope scope);
+
+  /// Which signals publish hints. Fixed at construction; a consumer that
+  /// changes scope reconstructs its compositor.
+  MandatoryHintScope scope_ = MandatoryHintScope::All;
 
   /// One scoped `Mandatory` hint per currently-qualifying entity.
   std::unordered_map<Entity, ScopedCompositorHint> hints_;

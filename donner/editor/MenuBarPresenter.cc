@@ -73,6 +73,18 @@ void ApplyMenuBarCommand(bool activated, MenuBarCommand command, const MenuBarSt
       actions->setPerfOverlayMode = true;
       actions->perfOverlayMode = PerfOverlayMode::FullGraph;
       return;
+    case MenuBarCommand::SetCompositedRenderingOff:
+      actions->setCompositedRenderingMode = true;
+      actions->compositedRenderingMode = CompositedRenderingMode::Off;
+      return;
+    case MenuBarCommand::SetCompositedRenderingFilterOnly:
+      actions->setCompositedRenderingMode = true;
+      actions->compositedRenderingMode = CompositedRenderingMode::FilterOnly;
+      return;
+    case MenuBarCommand::SetCompositedRenderingOn:
+      actions->setCompositedRenderingMode = true;
+      actions->compositedRenderingMode = CompositedRenderingMode::On;
+      return;
     case MenuBarCommand::ToggleLayoutLock: actions->toggleLayoutLock = true; return;
     case MenuBarCommand::ResetLayout: actions->resetLayout = true; return;
   }
@@ -80,7 +92,8 @@ void ApplyMenuBarCommand(bool activated, MenuBarCommand command, const MenuBarSt
 
 void ApplyViewMenuToggleActions(const MenuBarActions& actions, bool* showCompositorDebugPanel,
                                 PerfOverlayMode* perfOverlayMode, bool* geometryDebugOverlay,
-                                bool* compositorTileOverlay) {
+                                bool* compositorTileOverlay,
+                                CompositedRenderingMode* compositedRenderingMode) {
   if (actions.toggleCompositorDebugPanel && showCompositorDebugPanel != nullptr) {
     *showCompositorDebugPanel = !*showCompositorDebugPanel;
   }
@@ -92,6 +105,9 @@ void ApplyViewMenuToggleActions(const MenuBarActions& actions, bool* showComposi
   }
   if (actions.toggleCompositorTileOverlay && compositorTileOverlay != nullptr) {
     *compositorTileOverlay = !*compositorTileOverlay;
+  }
+  if (actions.setCompositedRenderingMode && compositedRenderingMode != nullptr) {
+    *compositedRenderingMode = actions.compositedRenderingMode;
   }
 }
 
@@ -221,6 +237,21 @@ MenuBarActions MenuBarPresenter::render(const MenuBarState& state, ImFont* boldM
                         MenuBarCommand::ToggleLayoutLock, state, &actions);
     ApplyMenuBarCommand(ImGui::MenuItem("Reset Layout"), MenuBarCommand::ResetLayout, state,
                         &actions);
+    if (ImGui::BeginMenu("Composited Rendering")) {
+      ApplyMenuBarCommand(ImGui::MenuItem("On", nullptr,
+                                          state.compositedRenderingMode ==
+                                              CompositedRenderingMode::On),
+                          MenuBarCommand::SetCompositedRenderingOn, state, &actions);
+      ApplyMenuBarCommand(ImGui::MenuItem("Filters Only", nullptr,
+                                          state.compositedRenderingMode ==
+                                              CompositedRenderingMode::FilterOnly),
+                          MenuBarCommand::SetCompositedRenderingFilterOnly, state, &actions);
+      ApplyMenuBarCommand(ImGui::MenuItem("Off", nullptr,
+                                          state.compositedRenderingMode ==
+                                              CompositedRenderingMode::Off),
+                          MenuBarCommand::SetCompositedRenderingOff, state, &actions);
+      ImGui::EndMenu();
+    }
     if (ImGui::BeginMenu("Performance Overlay")) {
       ApplyMenuBarCommand(
           ImGui::MenuItem("Off", nullptr, state.perfOverlayMode == PerfOverlayMode::Off),

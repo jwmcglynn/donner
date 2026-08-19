@@ -3,6 +3,8 @@
 
 #include <cstdint>
 
+#include "donner/editor/CompositedRenderingMode.h"
+
 struct ImFont;
 
 namespace donner::editor {
@@ -51,6 +53,9 @@ struct MenuBarState {
   /// Current render-pane performance overlay mode (drives the View-menu
   /// checkmarks). Off by default.
   PerfOverlayMode perfOverlayMode = PerfOverlayMode::Off;
+  /// Current composited rendering mode (drives the View-menu radio marks).
+  /// Full compositing by default.
+  CompositedRenderingMode compositedRenderingMode = CompositedRenderingMode::On;
   /// Whether the dockable panel layout is locked (drives the View-menu "Lock
   /// Panel Layout" checkmark). Locked by default.
   bool panelLayoutLocked = true;
@@ -101,6 +106,11 @@ struct MenuBarActions {
   /// Requested performance overlay mode; meaningful only while
   /// `setPerfOverlayMode` is true.
   PerfOverlayMode perfOverlayMode = PerfOverlayMode::Off;
+  /// Set when the user picks a composited rendering mode via the View menu.
+  bool setCompositedRenderingMode = false;
+  /// Requested composited rendering mode; meaningful only while
+  /// `setCompositedRenderingMode` is true.
+  CompositedRenderingMode compositedRenderingMode = CompositedRenderingMode::On;
   /// Set when the user toggles the panel-layout lock via the View menu.
   bool toggleLayoutLock = false;
   /// Set when the user picks "Reset Layout" to restore the default dock layout.
@@ -139,6 +149,9 @@ enum class MenuBarCommand {
   SetPerfOverlayOff,
   SetPerfOverlayFpsPill,
   SetPerfOverlayFullGraph,
+  SetCompositedRenderingOff,
+  SetCompositedRenderingFilterOnly,
+  SetCompositedRenderingOn,
   ToggleLayoutLock,
   ResetLayout,
 };
@@ -162,7 +175,8 @@ void ApplyMenuBarCommand(bool activated, MenuBarCommand command, const MenuBarSt
 void ApplyViewMenuToggleActions(const MenuBarActions& actions, bool* showCompositorDebugPanel,
                                 PerfOverlayMode* perfOverlayMode,
                                 bool* geometryDebugOverlay = nullptr,
-                                bool* compositorTileOverlay = nullptr);
+                                bool* compositorTileOverlay = nullptr,
+                                CompositedRenderingMode* compositedRenderingMode = nullptr);
 
 /// Renders the app's top menu bar and reports semantic actions back to the shell.
 class MenuBarPresenter {

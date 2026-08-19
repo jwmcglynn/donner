@@ -214,6 +214,19 @@ TEST_F(LayerResolverTest, ReResolveAfterHintDropClearsAssignment) {
   EXPECT_EQ(resolver_.stats().layersAssigned, 1u);
 }
 
+TEST_F(LayerResolverTest, EmptyHintComponentClearsStaleAssignment) {
+  const Entity entity = registry_.create();
+  registry_.emplace<CompositorHintComponent>(entity);
+  registry_.emplace<ComputedLayerAssignmentComponent>(entity, ComputedLayerAssignmentComponent{1u});
+
+  resolver_.resolve(registry_, kDefaultBudget);
+
+  EXPECT_FALSE(hasAssignment(entity))
+      << "An empty retained hint component must not keep a stale promoted layer alive";
+  EXPECT_EQ(resolver_.stats().candidatesEvaluated, 0u);
+  EXPECT_EQ(resolver_.stats().layersAssigned, 0u);
+}
+
 TEST_F(LayerResolverTest, WriteOnlyOnDiffAvoidsChurn) {
   const Entity e = registry_.create();
   ScopedCompositorHint hint = ScopedCompositorHint::Explicit(registry_, e, 0x4000);

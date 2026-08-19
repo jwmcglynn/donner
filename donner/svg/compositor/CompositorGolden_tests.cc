@@ -3715,7 +3715,7 @@ TEST_F(CompositorGoldenTest, FilteredGroupWithChildrenRasterizesIncludingChildre
   EXPECT_LE(result.mismatchCount, result.totalPixels / 20u) << result;  // 5% AA tolerance
 }
 
-TEST_F(CompositorGoldenTest, ChildOfFilteredGroupRequiresFullCanvasPreview) {
+TEST_F(CompositorGoldenTest, ChildOfFilteredGroupRequiresOwningTiles) {
   SVGDocument document = parseDocument(R"svg(
     <svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">
       <defs>
@@ -3735,12 +3735,12 @@ TEST_F(CompositorGoldenTest, ChildOfFilteredGroupRequiresFullCanvasPreview) {
 
   CompositorController compositor(document, renderer_);
   EXPECT_EQ(compositor.promoteEntity(target->unsafeEntityHandle().entity()),
-            CompositorController::PromoteResult::FullCanvasPreviewRequired);
+            CompositorController::PromoteResult::OwningTilesRequired);
   EXPECT_FALSE(compositor.isPromoted(target->unsafeEntityHandle().entity()));
   EXPECT_EQ(compositor.layerCount(), 0u);
 }
 
-TEST_F(CompositorGoldenTest, ChildOfClippedGroupRequiresFullCanvasPreview) {
+TEST_F(CompositorGoldenTest, ChildOfClippedGroupRequiresOwningTiles) {
   SVGDocument document = parseDocument(R"svg(
     <svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">
       <defs>
@@ -3760,10 +3760,10 @@ TEST_F(CompositorGoldenTest, ChildOfClippedGroupRequiresFullCanvasPreview) {
 
   CompositorController compositor(document, renderer_);
   EXPECT_EQ(compositor.promoteEntity(target->unsafeEntityHandle().entity()),
-            CompositorController::PromoteResult::FullCanvasPreviewRequired);
+            CompositorController::PromoteResult::OwningTilesRequired);
 }
 
-TEST_F(CompositorGoldenTest, ChildOfMaskedGroupRequiresFullCanvasPreview) {
+TEST_F(CompositorGoldenTest, ChildOfMaskedGroupRequiresOwningTiles) {
   SVGDocument document = parseDocument(R"svg(
     <svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">
       <defs>
@@ -3783,7 +3783,7 @@ TEST_F(CompositorGoldenTest, ChildOfMaskedGroupRequiresFullCanvasPreview) {
 
   CompositorController compositor(document, renderer_);
   EXPECT_EQ(compositor.promoteEntity(target->unsafeEntityHandle().entity()),
-            CompositorController::PromoteResult::FullCanvasPreviewRequired);
+            CompositorController::PromoteResult::OwningTilesRequired);
 }
 
 // Positive: a plain descendant (no compositing ancestor) still promotes.

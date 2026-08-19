@@ -1,5 +1,6 @@
 #include "tools/mcp-servers/editor-control/EditorControlSession.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
@@ -637,7 +638,7 @@ TEST(EditorControlSessionTest, InvalidSvgSourceEditKeepsDraftAndStalePreview) {
   EXPECT_FALSE(fixed.body["source"].value("preview_stale", true));
 }
 
-TEST(EditorControlSessionTest, PreDragRenderUsesFullCanvasCompositedTile) {
+TEST(EditorControlSessionTest, PreDragRenderUsesLayeredCompositedTiles) {
   EditorControlSession session;
 
   ToolCallResult load =
@@ -651,17 +652,21 @@ TEST(EditorControlSessionTest, PreDragRenderUsesFullCanvasCompositedTile) {
 
   const json& stage = load.body["render_stages"].back();
   ASSERT_FALSE(stage["composited_preview"].is_null());
-  EXPECT_EQ(stage["composited_preview"].value("tile_count", 0), 1);
-  ASSERT_EQ(stage["composited_preview"]["tiles"].size(), 1u);
-  EXPECT_EQ(stage["composited_preview"]["tiles"][0].value("kind", ""), "segment");
-  EXPECT_EQ(stage["composited_preview"]["tiles"][0].value("id", ""), "full-canvas");
+  EXPECT_EQ(stage["composited_preview"].value("tile_count", 0), 3);
+  ASSERT_EQ(stage["composited_preview"]["tiles"].size(), 3u);
+  EXPECT_TRUE(std::ranges::any_of(stage["composited_preview"]["tiles"], [](const json& tile) {
+    return tile.value("kind", "") == "layer";
+  }));
+  EXPECT_FALSE(std::ranges::any_of(stage["composited_preview"]["tiles"], [](const json& tile) {
+    return tile.value("id", "") == "full-canvas";
+  }));
 
   const json& display = stage["display_preview"];
   EXPECT_EQ(display.value("path", ""), "tiles");
-  EXPECT_EQ(display.value("tile_count", 0), 1);
-  ASSERT_EQ(display["tiles"].size(), 1u);
-  EXPECT_EQ(display["tiles"][0].value("kind", ""), "segment");
-  EXPECT_EQ(display["tiles"][0].value("id", ""), "full-canvas");
+  EXPECT_EQ(display.value("tile_count", 0), 3);
+  ASSERT_EQ(display["tiles"].size(), 3u);
+  EXPECT_FALSE(std::ranges::any_of(
+      display["tiles"], [](const json& tile) { return tile.value("id", "") == "full-canvas"; }));
 }
 
 TEST(EditorControlSessionTest, SelectsBySelectorAndDragsThroughCompositedPreview) {

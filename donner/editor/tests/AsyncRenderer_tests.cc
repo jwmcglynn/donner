@@ -321,7 +321,8 @@ TEST(AsyncRendererTest, GeometryOverlayForcesFlatFrameThenRepromotesSelectionWhe
   ASSERT_GT(asyncRenderer.compositorState().activeHintsCount, 0u);
 
   asyncRenderer.setGeometryDebugOverlayEnabled(true);
-  ASSERT_TRUE(renderSelected(2).has_value());
+  const std::optional<RenderResult> firstDebugResult = renderSelected(2);
+  ASSERT_TRUE(firstDebugResult.has_value());
 
   if (!geometryOverlaySupported) {
     EXPECT_EQ(asyncRenderer.workerCompositorEntity(), entity);
@@ -330,6 +331,11 @@ TEST(AsyncRendererTest, GeometryOverlayForcesFlatFrameThenRepromotesSelectionWhe
     EXPECT_EQ(asyncRenderer.compositorResetCountForTesting(), 0u);
     return;
   }
+
+  ASSERT_TRUE(firstDebugResult->compositedPreview.has_value());
+  ASSERT_EQ(firstDebugResult->compositedPreview->tiles.size(), 1u);
+  EXPECT_EQ(firstDebugResult->compositedPreview->tiles.front().id, "geometry-debug-flat");
+  EXPECT_NE(firstDebugResult->compositedPreview->tiles.front().id, "full-canvas");
 
   const auto state = asyncRenderer.compositorState();
   EXPECT_TRUE(asyncRenderer.workerCompositorEntity() == entt::null);
@@ -340,7 +346,12 @@ TEST(AsyncRendererTest, GeometryOverlayForcesFlatFrameThenRepromotesSelectionWhe
   const std::uint64_t resetCountAfterEnable = asyncRenderer.compositorResetCountForTesting();
   EXPECT_EQ(resetCountAfterEnable, 1u);
 
-  ASSERT_TRUE(renderSelected(3).has_value());
+  const std::optional<RenderResult> consecutiveDebugResult = renderSelected(3);
+  ASSERT_TRUE(consecutiveDebugResult.has_value());
+  ASSERT_TRUE(consecutiveDebugResult->compositedPreview.has_value());
+  ASSERT_EQ(consecutiveDebugResult->compositedPreview->tiles.size(), 1u);
+  EXPECT_EQ(consecutiveDebugResult->compositedPreview->tiles.front().id, "geometry-debug-flat");
+  EXPECT_NE(consecutiveDebugResult->compositedPreview->tiles.front().id, "full-canvas");
   const auto consecutiveDebugState = asyncRenderer.compositorState();
   EXPECT_TRUE(asyncRenderer.workerCompositorEntity() == entt::null);
   EXPECT_EQ(consecutiveDebugState.activeHintsCount, 0u);
@@ -397,6 +408,455 @@ TEST(AsyncRendererGpuWaitFailureTest, RepeatedIdenticalLossBumpsTheGenerationOnc
   asyncRenderer.noteGpuWaitOutcomeForTesting(escalated);
   EXPECT_EQ(asyncRenderer.gpuWaitFailure().generation, 2u);
   EXPECT_EQ(asyncRenderer.gpuWaitFailure().timedOutWaitSite, svg::GpuWaitTimeoutSite::QueueIdle);
+}
+
+namespace {
+
+/// Returns materialized full-frame pixels for a render result: the explicit CPU snapshot when
+/// available, otherwise the payload of a single compositor tile that covers the frame.
+svg::RendererBitmap FullCanvasPixels(const RenderResult& result) {
+  if (!result.bitmap.empty()) {
+    return result.bitmap;
+  }
+  if (result.compositedPreview.has_value() && result.compositedPreview->tiles.size() == 1) {
+    return MaterializeTileBitmap(result.compositedPreview->tiles.front());
+  }
+  return {};
+}
+
+bool ContainsFullCanvasTile(const RenderResult& result) {
+  return result.compositedPreview.has_value() &&
+         std::ranges::any_of(
+             result.compositedPreview->tiles,
+             [](const RenderResult::CompositedTile& tile) { return tile.id == "full-canvas"; });
+}
+
+const RenderResult::CompositedTile* FindLayerTile(const RenderResult& result, Entity entity) {
+  if (!result.compositedPreview.has_value()) {
+    return nullptr;
+  }
+  const auto it = std::ranges::find_if(
+      result.compositedPreview->tiles, [entity](const RenderResult::CompositedTile& tile) {
+        return tile.kind == RenderResult::CompositedTile::Kind::Layer && tile.layerEntity == entity;
+      });
+  return it == result.compositedPreview->tiles.end() ? nullptr : &*it;
+}
+
+}  // namespace
+
+TEST(AsyncRendererTest, CompositedRenderingModesProduceIdenticalPixels) {
+  // One entity per isolation signal class: a filter (stays composited in
+  // FilterOnly), an opacity group (inline in FilterOnly), and a plain rect.
+  svg::SVGDocument document = svg::instantiateSubtree(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+      <defs>
+        <filter id="blur"><feGaussianBlur stdDeviation="1.5"/></filter>
+      </defs>
+      <rect x="4" y="4" width="20" height="20" fill="red" filter="url(#blur)"/>
+      <g opacity="0.5">
+        <rect x="30" y="8" width="16" height="16" fill="green"/>
+        <rect x="34" y="12" width="10" height="10" fill="purple" filter="url(#blur)"/>
+        <rect x="38" y="16" width="16" height="16" fill="blue"/>
+      </g>
+      <rect x="10" y="44" width="12" height="12" fill="black"/>
+    </svg>
+  )svg");
+  // The filter NESTED inside the opacity group, with in-group siblings before
+  // and after it, is the sharp case: FilterOnly must not extract it (the
+  // inline group's isolation would be split - trailing siblings re-enter at
+  // full alpha and the tile blit resets paint), so it renders inline and the
+  // pixels stay identical across all three modes.
+  document.setCanvasSize(64, 64);
+
+  svg::Renderer renderer;
+  AsyncRenderer asyncRenderer;
+  std::uint64_t version = 0;
+  const auto renderAndCapture = [&]() -> std::optional<RenderResult> {
+    RenderRequest request(renderer, document);
+    request.version = ++version;
+    request.documentGeneration = 1;
+    request.captureCpuSnapshot = true;
+    asyncRenderer.requestRender(request);
+    return WaitForRenderResult(asyncRenderer);
+  };
+
+  const std::optional<RenderResult> onResult = renderAndCapture();
+  ASSERT_TRUE(onResult.has_value());
+  ASSERT_TRUE(onResult->compositedPreview.has_value());
+  EXPECT_FALSE(ContainsFullCanvasTile(*onResult));
+  const svg::RendererBitmap onPixels = FullCanvasPixels(*onResult);
+  ASSERT_FALSE(onPixels.empty());
+  EXPECT_EQ(asyncRenderer.compositorReconstructCountForTesting(), 1u);
+
+  asyncRenderer.setCompositedRenderingMode(CompositedRenderingMode::FilterOnly);
+  const std::optional<RenderResult> filterOnlyResult = renderAndCapture();
+  ASSERT_TRUE(filterOnlyResult.has_value());
+  ASSERT_TRUE(filterOnlyResult->compositedPreview.has_value());
+  EXPECT_FALSE(ContainsFullCanvasTile(*filterOnlyResult));
+  const svg::RendererBitmap filterOnlyPixels = FullCanvasPixels(*filterOnlyResult);
+  ASSERT_FALSE(filterOnlyPixels.empty());
+  EXPECT_EQ(asyncRenderer.compositorReconstructCountForTesting(), 2u)
+      << "A mode change between composited modes must reconstruct the controller";
+  ASSERT_EQ(filterOnlyPixels.dimensions, onPixels.dimensions);
+  EXPECT_TRUE(filterOnlyPixels.pixels == onPixels.pixels)
+      << "FilterOnly must render pixel-identically to full compositing";
+
+  asyncRenderer.setCompositedRenderingMode(CompositedRenderingMode::Off);
+  const std::optional<RenderResult> offResult = renderAndCapture();
+  ASSERT_TRUE(offResult.has_value());
+  EXPECT_TRUE(ContainsFullCanvasTile(*offResult));
+  const svg::RendererBitmap offPixels = FullCanvasPixels(*offResult);
+  ASSERT_FALSE(offPixels.empty());
+  const auto offState = asyncRenderer.compositorState();
+  EXPECT_EQ(offState.activeHintsCount, 0u);
+  EXPECT_EQ(offState.layerCount, 0u);
+  ASSERT_EQ(offPixels.dimensions, onPixels.dimensions);
+  EXPECT_TRUE(offPixels.pixels == onPixels.pixels)
+      << "The direct (no compositor) path must render pixel-identically to full compositing";
+
+  asyncRenderer.setCompositedRenderingMode(CompositedRenderingMode::On);
+  const std::optional<RenderResult> restoredResult = renderAndCapture();
+  ASSERT_TRUE(restoredResult.has_value());
+  ASSERT_TRUE(restoredResult->compositedPreview.has_value());
+  EXPECT_FALSE(ContainsFullCanvasTile(*restoredResult));
+  const svg::RendererBitmap restoredPixels = FullCanvasPixels(*restoredResult);
+  ASSERT_FALSE(restoredPixels.empty());
+  EXPECT_EQ(asyncRenderer.compositorReconstructCountForTesting(), 3u)
+      << "Leaving Off must reconstruct the controller";
+  ASSERT_EQ(restoredPixels.dimensions, onPixels.dimensions);
+  EXPECT_TRUE(restoredPixels.pixels == onPixels.pixels)
+      << "Returning to full compositing must restore the original output";
+}
+
+TEST(AsyncRendererTest, FilterOnlyRestrictsMandatoryHintsButKeepsSelectionLayer) {
+  svg::SVGDocument document = svg::instantiateSubtree(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+      <defs>
+        <filter id="blur"><feGaussianBlur stdDeviation="1.5"/></filter>
+      </defs>
+      <rect id="filtered" x="4" y="4" width="20" height="20" fill="red"
+            filter="url(#blur)"/>
+      <g opacity="0.5">
+        <rect x="30" y="8" width="16" height="16" fill="green"/>
+        <rect x="38" y="16" width="16" height="16" fill="blue"/>
+      </g>
+      <rect id="target" x="10" y="44" width="12" height="12" fill="black"/>
+    </svg>
+  )svg");
+  document.setCanvasSize(64, 64);
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  const Entity entity = target->unsafeEntityHandle().entity();
+  auto filtered = document.querySelector("#filtered");
+  ASSERT_TRUE(filtered.has_value());
+  const Entity filteredEntity = filtered->unsafeEntityHandle().entity();
+
+  svg::Renderer renderer;
+  AsyncRenderer asyncRenderer;
+  std::uint64_t version = 0;
+  const auto renderSelected = [&]() {
+    RenderRequest request(renderer, document);
+    request.version = ++version;
+    request.documentGeneration = 1;
+    request.selectedEntity = entity;
+    asyncRenderer.requestRender(request);
+    return WaitForRenderResult(asyncRenderer);
+  };
+
+  // `activeHintsCount` counts editor-explicit `promoteEntity` hints only;
+  // mandatory (detector) promotions are observed through `layerCount`.
+  ASSERT_TRUE(renderSelected().has_value());
+  EXPECT_EQ(asyncRenderer.workerCompositorEntity(), entity);
+  const auto onState = asyncRenderer.compositorState();
+  EXPECT_EQ(onState.activeHintsCount, 1u) << "The selection promotion must take";
+  EXPECT_GE(onState.layerCount, 2u)
+      << "Full compositing promotes at least the filter subtree and the selection";
+
+  asyncRenderer.setCompositedRenderingMode(CompositedRenderingMode::FilterOnly);
+  const std::optional<RenderResult> filterOnlyResult = renderSelected();
+  ASSERT_TRUE(filterOnlyResult.has_value());
+  EXPECT_EQ(asyncRenderer.workerCompositorEntity(), entity)
+      << "FilterOnly must preserve the editor's structural selection layer";
+  const auto filterOnlyState = asyncRenderer.compositorState();
+  EXPECT_EQ(filterOnlyState.activeHintsCount, 1u)
+      << "FilterOnly keeps the selected entity explicitly promoted";
+  EXPECT_EQ(filterOnlyState.layerCount, 2u)
+      << "FilterOnly keeps the filter subtree and selection separate, without opacity or "
+         "complexity-bucket layers";
+  ASSERT_TRUE(filterOnlyResult->compositedPreview.has_value());
+  EXPECT_FALSE(ContainsFullCanvasTile(*filterOnlyResult));
+  EXPECT_NE(FindLayerTile(*filterOnlyResult, filteredEntity), nullptr)
+      << "FilterOnly must publish the isolated filter layer, not hide it behind a full-canvas "
+         "presentation";
+  EXPECT_NE(FindLayerTile(*filterOnlyResult, entity), nullptr)
+      << "FilterOnly must publish the selected entity as its own editor layer";
+
+  asyncRenderer.setCompositedRenderingMode(CompositedRenderingMode::Off);
+  ASSERT_TRUE(renderSelected().has_value());
+  EXPECT_TRUE(asyncRenderer.workerCompositorEntity() == entt::null);
+  const auto offState = asyncRenderer.compositorState();
+  EXPECT_EQ(offState.activeHintsCount, 0u);
+  EXPECT_EQ(offState.layerCount, 0u);
+}
+
+TEST(AsyncRendererE2ETest, FilterOnlyPublishesSplashBlurGroupsAsSeparateLayers) {
+  std::ifstream splashStream("donner_splash.svg");
+  if (!splashStream.is_open()) {
+    GTEST_SKIP() << "donner_splash.svg not found in runfiles";
+  }
+  std::ostringstream splashBuffer;
+  splashBuffer << splashStream.rdbuf();
+
+  svg::SVGDocument document = svg::instantiateSubtree(splashBuffer.str());
+  document.setCanvasSize(892, 512);
+  const std::array<std::string_view, 3> filterSelectors = {
+      "#Lightning_glow_dark",
+      "#Lightning_glow_bright",
+      "#Big_lightning_glow",
+  };
+  std::array<Entity, 3> filterEntities;
+  for (std::size_t i = 0; i < filterSelectors.size(); ++i) {
+    auto element = document.querySelector(filterSelectors[i]);
+    ASSERT_TRUE(element.has_value()) << filterSelectors[i];
+    filterEntities[i] = element->unsafeEntityHandle().entity();
+  }
+
+  svg::Renderer renderer;
+  AsyncRenderer asyncRenderer;
+  asyncRenderer.setCompositedRenderingMode(CompositedRenderingMode::FilterOnly);
+
+  RenderRequest request(renderer, document);
+  request.version = 1;
+  request.documentGeneration = 1;
+  asyncRenderer.requestRender(request);
+  const std::optional<RenderResult> result = WaitForRenderResult(asyncRenderer);
+
+  ASSERT_TRUE(result.has_value());
+  ASSERT_TRUE(result->compositedPreview.has_value());
+  EXPECT_FALSE(ContainsFullCanvasTile(*result));
+  for (std::size_t i = 0; i < filterSelectors.size(); ++i) {
+    EXPECT_NE(FindLayerTile(*result, filterEntities[i]), nullptr)
+        << filterSelectors[i] << " must remain an isolated presented layer in FilterOnly mode";
+  }
+}
+
+TEST(AsyncRendererTest, FilterOnlyPublishesNewFilterLayerOnFirstFilteredFrame) {
+  svg::SVGDocument document = svg::instantiateSubtree(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+      <defs><filter id="blur"><feGaussianBlur stdDeviation="2"/></filter></defs>
+      <rect id="target" x="8" y="8" width="24" height="24" fill="red"/>
+    </svg>
+  )svg");
+  document.setCanvasSize(64, 64);
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  const Entity targetEntity = target->unsafeEntityHandle().entity();
+
+  svg::Renderer renderer;
+  AsyncRenderer asyncRenderer;
+  asyncRenderer.setCompositedRenderingMode(CompositedRenderingMode::FilterOnly);
+  const auto render = [&](std::uint64_t version) {
+    RenderRequest request(renderer, document);
+    request.version = version;
+    request.documentGeneration = 1;
+    asyncRenderer.requestRender(request);
+    return WaitForRenderResult(asyncRenderer);
+  };
+
+  const std::optional<RenderResult> before = render(1);
+  ASSERT_TRUE(before.has_value());
+  EXPECT_FALSE(ContainsFullCanvasTile(*before));
+  EXPECT_EQ(FindLayerTile(*before, targetEntity), nullptr);
+
+  AsGraphicsElement(*target).setStyle("filter:url(#blur)");
+  const std::optional<RenderResult> after = render(2);
+  ASSERT_TRUE(after.has_value());
+  EXPECT_FALSE(ContainsFullCanvasTile(*after));
+  EXPECT_NE(FindLayerTile(*after, targetEntity), nullptr)
+      << "The first frame after adding a filter must reconcile against the prepared render tree "
+         "and publish the new filter layer";
+}
+
+TEST(AsyncRendererTest, FilterOnlyColdSelectionDoesNotSplitInlineOpacityAncestor) {
+  svg::SVGDocument document = svg::instantiateSubtree(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+      <g opacity="0.5">
+        <rect x="4" y="4" width="20" height="20" fill="red"/>
+        <rect id="target" x="12" y="12" width="20" height="20" fill="green"/>
+        <rect x="20" y="20" width="20" height="20" fill="blue"/>
+      </g>
+    </svg>
+  )svg");
+  document.setCanvasSize(64, 64);
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  const Entity targetEntity = target->unsafeEntityHandle().entity();
+
+  svg::Renderer renderer;
+  AsyncRenderer asyncRenderer;
+  const auto renderAndCapture = [&](std::uint64_t version) {
+    RenderRequest request(renderer, document);
+    request.version = version;
+    request.documentGeneration = 1;
+    request.selectedEntity = targetEntity;
+    request.captureCpuSnapshot = true;
+    asyncRenderer.requestRender(request);
+    return WaitForRenderResult(asyncRenderer);
+  };
+
+  asyncRenderer.setCompositedRenderingMode(CompositedRenderingMode::FilterOnly);
+  const std::optional<RenderResult> filterOnly = renderAndCapture(1);
+  ASSERT_TRUE(filterOnly.has_value());
+  EXPECT_FALSE(ContainsFullCanvasTile(*filterOnly));
+  EXPECT_EQ(FindLayerTile(*filterOnly, targetEntity), nullptr)
+      << "A selected descendant cannot be extracted from an opacity group that FilterOnly keeps "
+         "inline";
+  const svg::RendererBitmap filterOnlyPixels = FullCanvasPixels(*filterOnly);
+  ASSERT_FALSE(filterOnlyPixels.empty());
+
+  asyncRenderer.setCompositedRenderingMode(CompositedRenderingMode::Off);
+  const std::optional<RenderResult> off = renderAndCapture(2);
+  ASSERT_TRUE(off.has_value());
+  const svg::RendererBitmap offPixels = FullCanvasPixels(*off);
+  ASSERT_EQ(filterOnlyPixels.dimensions, offPixels.dimensions);
+  EXPECT_EQ(filterOnlyPixels.pixels, offPixels.pixels)
+      << "Refusing the unsafe selection split must preserve the inline opacity group's pixels";
+}
+
+TEST(AsyncRendererTest, FilterOnlyDropsSelectionLayerWhenAncestorBecomesInlineOpacityGroup) {
+  svg::SVGDocument document = svg::instantiateSubtree(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+      <g id="group">
+        <rect x="4" y="4" width="20" height="20" fill="red"/>
+        <rect id="target" x="12" y="12" width="20" height="20" fill="green"/>
+        <rect x="20" y="20" width="20" height="20" fill="blue"/>
+      </g>
+    </svg>
+  )svg");
+  document.setCanvasSize(64, 64);
+  auto group = document.querySelector("#group");
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(group.has_value());
+  ASSERT_TRUE(target.has_value());
+  const Entity targetEntity = target->unsafeEntityHandle().entity();
+
+  svg::Renderer renderer;
+  AsyncRenderer asyncRenderer;
+  asyncRenderer.setCompositedRenderingMode(CompositedRenderingMode::FilterOnly);
+  const auto renderSelected = [&](std::uint64_t version) {
+    RenderRequest request(renderer, document);
+    request.version = version;
+    request.documentGeneration = 1;
+    request.selectedEntity = targetEntity;
+    asyncRenderer.requestRender(request);
+    return WaitForRenderResult(asyncRenderer);
+  };
+
+  const std::optional<RenderResult> before = renderSelected(1);
+  ASSERT_TRUE(before.has_value());
+  EXPECT_NE(FindLayerTile(*before, targetEntity), nullptr);
+
+  AsGraphicsElement(*group).setStyle("opacity:0.5");
+  const std::optional<RenderResult> after = renderSelected(2);
+  ASSERT_TRUE(after.has_value());
+  EXPECT_FALSE(ContainsFullCanvasTile(*after));
+  EXPECT_EQ(FindLayerTile(*after, targetEntity), nullptr)
+      << "The first prepared frame after adding ancestor opacity must fold the selection back "
+         "into that inline compositing context";
+  EXPECT_TRUE(asyncRenderer.workerCompositorEntity() == entt::null)
+      << "Worker promotion bookkeeping must follow compositor safety demotion";
+
+  AsGraphicsElement(*group).setStyle("");
+  const std::optional<RenderResult> restored = renderSelected(3);
+  ASSERT_TRUE(restored.has_value());
+  EXPECT_NE(FindLayerTile(*restored, targetEntity), nullptr)
+      << "Removing the inline ancestor context must restore the still-selected entity layer";
+  EXPECT_EQ(asyncRenderer.workerCompositorEntity(), targetEntity);
+}
+
+TEST(AsyncRendererTest, FilterOnlyDropsSelectedParentWhenChildBecomesFilterLayer) {
+  svg::SVGDocument document = svg::instantiateSubtree(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+      <defs><filter id="blur"><feGaussianBlur stdDeviation="2"/></filter></defs>
+      <g id="target">
+        <rect x="4" y="4" width="20" height="20" fill="red"/>
+        <rect id="child" x="20" y="20" width="20" height="20" fill="blue"/>
+      </g>
+    </svg>
+  )svg");
+  document.setCanvasSize(64, 64);
+  auto target = document.querySelector("#target");
+  auto child = document.querySelector("#child");
+  ASSERT_TRUE(target.has_value());
+  ASSERT_TRUE(child.has_value());
+  const Entity targetEntity = target->unsafeEntityHandle().entity();
+  const Entity childEntity = child->unsafeEntityHandle().entity();
+
+  svg::Renderer renderer;
+  AsyncRenderer asyncRenderer;
+  asyncRenderer.setCompositedRenderingMode(CompositedRenderingMode::FilterOnly);
+  const auto renderSelected = [&](std::uint64_t version) {
+    RenderRequest request(renderer, document);
+    request.version = version;
+    request.documentGeneration = 1;
+    request.selectedEntity = targetEntity;
+    asyncRenderer.requestRender(request);
+    return WaitForRenderResult(asyncRenderer);
+  };
+
+  const std::optional<RenderResult> before = renderSelected(1);
+  ASSERT_TRUE(before.has_value());
+  EXPECT_NE(FindLayerTile(*before, targetEntity), nullptr);
+
+  AsGraphicsElement(*child).setStyle("filter:url(#blur)");
+  const std::optional<RenderResult> after = renderSelected(2);
+  ASSERT_TRUE(after.has_value());
+  EXPECT_FALSE(ContainsFullCanvasTile(*after));
+  EXPECT_EQ(FindLayerTile(*after, targetEntity), nullptr)
+      << "A selected parent must not overlap a newly mandatory descendant layer";
+  EXPECT_NE(FindLayerTile(*after, childEntity), nullptr)
+      << "The new filter descendant must own its isolated layer on the first changed frame";
+  EXPECT_TRUE(asyncRenderer.workerCompositorEntity() == entt::null);
+}
+
+TEST(AsyncRendererTest, OnDropsSelectionLayerWhenAncestorBecomesCompositingGroup) {
+  svg::SVGDocument document = svg::instantiateSubtree(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+      <g id="group">
+        <rect x="4" y="4" width="20" height="20" fill="red"/>
+        <rect id="target" x="20" y="20" width="20" height="20" fill="blue"/>
+      </g>
+    </svg>
+  )svg");
+  document.setCanvasSize(64, 64);
+  auto group = document.querySelector("#group");
+  auto target = document.querySelector("#target");
+  ASSERT_TRUE(group.has_value());
+  ASSERT_TRUE(target.has_value());
+  const Entity targetEntity = target->unsafeEntityHandle().entity();
+
+  svg::Renderer renderer;
+  AsyncRenderer asyncRenderer;
+  const auto renderSelected = [&](std::uint64_t version) {
+    RenderRequest request(renderer, document);
+    request.version = version;
+    request.documentGeneration = 1;
+    request.selectedEntity = targetEntity;
+    asyncRenderer.requestRender(request);
+    return WaitForRenderResult(asyncRenderer);
+  };
+
+  const std::optional<RenderResult> before = renderSelected(1);
+  ASSERT_TRUE(before.has_value());
+  EXPECT_NE(FindLayerTile(*before, targetEntity), nullptr);
+
+  AsGraphicsElement(*group).setStyle("isolation:isolate");
+  const std::optional<RenderResult> after = renderSelected(2);
+  ASSERT_TRUE(after.has_value());
+  EXPECT_FALSE(ContainsFullCanvasTile(*after));
+  EXPECT_EQ(FindLayerTile(*after, targetEntity), nullptr)
+      << "On must not keep an interaction layer extracted from a newly isolated ancestor";
+  EXPECT_TRUE(asyncRenderer.workerCompositorEntity() == entt::null);
 }
 
 TEST(AsyncRendererTest, DeferredStartQueuesWorkAndStartsExactlyOnce) {
@@ -488,12 +948,12 @@ TEST(AsyncRendererTest, CancellingDeferredCompositorWarmupCannotLoseDocumentWait
          "busy immediately before the worker released the gate.";
 }
 
-TEST(AsyncRendererTest, FirstDocumentResultPublishesBeforeRetainedCacheWarmup) {
+TEST(AsyncRendererTest, FirstDocumentResultWarmsLayerTilesBeforePublishing) {
   svg::SVGDocument document = svg::instantiateSubtree(R"svg(
     <defs>
       <filter id="f"><feGaussianBlur stdDeviation="2"/></filter>
     </defs>
-    <g filter="url(#f)">
+    <g id="filtered" filter="url(#f)">
       <rect x="1" y="1" width="12" height="12" fill="blue" />
     </g>
   )svg");
@@ -505,13 +965,18 @@ TEST(AsyncRendererTest, FirstDocumentResultPublishesBeforeRetainedCacheWarmup) {
   request.version = 1;
   request.documentGeneration = 1;
   asyncRenderer.requestRender(request);
-  ASSERT_TRUE(WaitForRenderResult(asyncRenderer).has_value());
+  const std::optional<RenderResult> result = WaitForRenderResult(asyncRenderer);
+  ASSERT_TRUE(result.has_value());
 
   const auto stats = asyncRenderer.compositorRenderFrameStats();
   EXPECT_GT(stats.firstFrameDrawMs, 0.0);
-  EXPECT_EQ(stats.firstFrameWarmupMs, 0.0)
-      << "The accepted result must describe the already-correct main draw, not later speculative "
-         "cache preparation.";
+  EXPECT_GT(stats.firstFrameWarmupMs, 0.0)
+      << "The first accepted non-Off result must finish its compositor tile warmup";
+  EXPECT_FALSE(asyncRenderer.compositorState().firstFrameWarmupPending);
+  EXPECT_FALSE(ContainsFullCanvasTile(*result));
+  auto filtered = document.querySelector("#filtered");
+  ASSERT_TRUE(filtered.has_value());
+  EXPECT_NE(FindLayerTile(*result, filtered->unsafeEntityHandle().entity()), nullptr);
 }
 
 TEST(AsyncRendererTest, MultiSelectActiveDragMarksEverySelectedLayerAsDragTarget) {
@@ -560,6 +1025,146 @@ TEST(AsyncRendererTest, MultiSelectActiveDragMarksEverySelectedLayerAsDragTarget
   };
   EXPECT_NE(dragTileFor(r1Entity), result->compositedPreview->tiles.end());
   EXPECT_NE(dragTileFor(r2Entity), result->compositedPreview->tiles.end());
+}
+
+TEST(AsyncRendererTest, NestedMultiSelectionNeverPublishesOverlappingLayers) {
+  constexpr std::string_view kNestedSelectionSvg = R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+      <rect x="0" y="0" width="64" height="64" fill="white"/>
+      <g id="parent">
+        <rect id="child" x="12" y="12" width="24" height="24" fill="red"/>
+      </g>
+    </svg>
+  )svg";
+  svg::SVGDocument document = svg::instantiateSubtree(std::string(kNestedSelectionSvg));
+  document.setCanvasSize(64, 64);
+  auto parent = document.querySelector("#parent");
+  auto child = document.querySelector("#child");
+  ASSERT_TRUE(parent.has_value());
+  ASSERT_TRUE(child.has_value());
+  const Entity parentEntity = parent->unsafeEntityHandle().entity();
+  const Entity childEntity = child->unsafeEntityHandle().entity();
+
+  svg::Renderer renderer;
+  AsyncRenderer asyncRenderer;
+  RenderRequest request(renderer, document);
+  request.version = 1;
+  request.documentGeneration = 1;
+  request.captureCpuSnapshot = true;
+  request.selectedEntity = parentEntity;
+  request.dragPreview = RenderRequest::DragPreview{
+      .entity = parentEntity,
+      .extraEntities = {childEntity},
+      .interactionKind = svg::compositor::InteractionHint::ActiveDrag,
+  };
+  asyncRenderer.requestRender(request);
+  const std::optional<RenderResult> layered = WaitForRenderResult(asyncRenderer);
+
+  ASSERT_TRUE(layered.has_value());
+  ASSERT_TRUE(layered->compositedPreview.has_value());
+  EXPECT_FALSE(ContainsFullCanvasTile(*layered));
+  EXPECT_NE(FindLayerTile(*layered, parentEntity), nullptr);
+  EXPECT_EQ(FindLayerTile(*layered, childEntity), nullptr)
+      << "A nested child selection must stay inside its already-promoted parent tile";
+  EXPECT_EQ(layered->compositedPreview->entity, parentEntity);
+
+  svg::SVGDocument reversedDocument = svg::instantiateSubtree(std::string(kNestedSelectionSvg));
+  reversedDocument.setCanvasSize(64, 64);
+  auto reversedParent = reversedDocument.querySelector("#parent");
+  auto reversedChild = reversedDocument.querySelector("#child");
+  ASSERT_TRUE(reversedParent.has_value());
+  ASSERT_TRUE(reversedChild.has_value());
+  const Entity reversedParentEntity = reversedParent->unsafeEntityHandle().entity();
+  const Entity reversedChildEntity = reversedChild->unsafeEntityHandle().entity();
+  svg::Renderer reversedRenderer;
+  AsyncRenderer reversedAsyncRenderer;
+  RenderRequest reversedRequest(reversedRenderer, reversedDocument);
+  reversedRequest.version = 1;
+  reversedRequest.documentGeneration = 1;
+  reversedRequest.captureCpuSnapshot = true;
+  reversedRequest.selectedEntity = reversedChildEntity;
+  reversedRequest.dragPreview = RenderRequest::DragPreview{
+      .entity = reversedChildEntity,
+      .extraEntities = {reversedParentEntity},
+      .interactionKind = svg::compositor::InteractionHint::ActiveDrag,
+  };
+  reversedAsyncRenderer.requestRender(reversedRequest);
+  const std::optional<RenderResult> reversed = WaitForRenderResult(reversedAsyncRenderer);
+  ASSERT_TRUE(reversed.has_value());
+  ASSERT_TRUE(reversed->compositedPreview.has_value());
+  EXPECT_NE(FindLayerTile(*reversed, reversedChildEntity), nullptr);
+  EXPECT_EQ(FindLayerTile(*reversed, reversedParentEntity), nullptr);
+  EXPECT_TRUE(reversed->compositedPreview->entity == entt::null)
+      << "A partially promoted nested selection must require rendered drag frames";
+
+  svg::SVGDocument referenceDocument = svg::instantiateSubtree(std::string(kNestedSelectionSvg));
+  referenceDocument.setCanvasSize(64, 64);
+  svg::Renderer referenceRenderer;
+  AsyncRenderer directRenderer;
+  directRenderer.setCompositedRenderingMode(CompositedRenderingMode::Off);
+  RenderRequest referenceRequest(referenceRenderer, referenceDocument);
+  referenceRequest.version = 1;
+  referenceRequest.documentGeneration = 1;
+  referenceRequest.captureCpuSnapshot = true;
+  directRenderer.requestRender(referenceRequest);
+  const std::optional<RenderResult> reference = WaitForRenderResult(directRenderer);
+  ASSERT_TRUE(reference.has_value());
+
+  const svg::RendererBitmap layeredPixels = FullCanvasPixels(*layered);
+  const svg::RendererBitmap reversedPixels = FullCanvasPixels(*reversed);
+  const svg::RendererBitmap referencePixels = FullCanvasPixels(*reference);
+  ASSERT_EQ(layeredPixels.dimensions, referencePixels.dimensions);
+  EXPECT_EQ(layeredPixels.pixels, referencePixels.pixels)
+      << "Nested multi-selection must not double-render the child's pixels";
+  ASSERT_EQ(reversedPixels.dimensions, referencePixels.dimensions);
+  EXPECT_EQ(reversedPixels.pixels, referencePixels.pixels)
+      << "Reversing nested selection order must not change pixels";
+}
+
+TEST(AsyncRendererTest, PendingParentDemotionDoesNotClaimMovableChildCoverage) {
+  svg::SVGDocument document = svg::instantiateSubtree(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+      <g id="parent">
+        <rect id="child" x="12" y="12" width="24" height="24" fill="red"/>
+      </g>
+    </svg>
+  )svg");
+  document.setCanvasSize(64, 64);
+  auto parent = document.querySelector("#parent");
+  auto child = document.querySelector("#child");
+  ASSERT_TRUE(parent.has_value());
+  ASSERT_TRUE(child.has_value());
+  const Entity parentEntity = parent->unsafeEntityHandle().entity();
+  const Entity childEntity = child->unsafeEntityHandle().entity();
+
+  svg::Renderer renderer;
+  AsyncRenderer asyncRenderer;
+  const auto renderSelected = [&](std::uint64_t version, Entity selectedEntity) {
+    RenderRequest request(renderer, document);
+    request.version = version;
+    request.documentGeneration = 1;
+    request.selectedEntity = selectedEntity;
+    request.dragPreview = RenderRequest::DragPreview{
+        .entity = selectedEntity,
+        .interactionKind = svg::compositor::InteractionHint::ActiveDrag,
+    };
+    asyncRenderer.requestRender(request);
+    return WaitForRenderResult(asyncRenderer);
+  };
+
+  const std::optional<RenderResult> parentResult = renderSelected(1, parentEntity);
+  ASSERT_TRUE(parentResult.has_value());
+  ASSERT_TRUE(parentResult->compositedPreview.has_value());
+  EXPECT_EQ(parentResult->compositedPreview->entity, parentEntity);
+
+  const std::optional<RenderResult> childResult = renderSelected(2, childEntity);
+  ASSERT_TRUE(childResult.has_value());
+  ASSERT_TRUE(childResult->compositedPreview.has_value());
+  EXPECT_NE(FindLayerTile(*childResult, parentEntity), nullptr)
+      << "The previous parent layer may remain cached during demotion hysteresis";
+  EXPECT_EQ(FindLayerTile(*childResult, childEntity), nullptr);
+  EXPECT_TRUE(childResult->compositedPreview->entity == entt::null)
+      << "A pending previous-selection parent is not a movable layer for the child request";
 }
 
 TEST(AsyncRendererE2ETest, UnbundledDonnerDDragMarksEveryComponentAsDragTarget) {
@@ -625,7 +1230,7 @@ TEST(AsyncRendererE2ETest, UnbundledDonnerDDragMarksEveryComponentAsDragTarget) 
   EXPECT_NE(dragTileFor(secondEntity), result->compositedPreview->tiles.end());
 }
 
-TEST(AsyncRendererTest, FullCanvasFallbackCarriesBoundedRasterViewportGeometry) {
+TEST(AsyncRendererTest, OffModeFullCanvasCarriesBoundedRasterViewportGeometry) {
   svg::SVGDocument document = svg::instantiateSubtree(R"svg(
     <rect x="150" y="250" width="20" height="20" fill="red" />
   )svg");
@@ -634,6 +1239,7 @@ TEST(AsyncRendererTest, FullCanvasFallbackCarriesBoundedRasterViewportGeometry) 
 
   svg::Renderer renderer;
   AsyncRenderer asyncRenderer;
+  asyncRenderer.setCompositedRenderingMode(CompositedRenderingMode::Off);
 
   RenderRequest request(renderer, document);
   request.version = 1;
@@ -658,7 +1264,7 @@ TEST(AsyncRendererTest, FullCanvasFallbackCarriesBoundedRasterViewportGeometry) 
   EXPECT_EQ(tile.bitmapDimsDoc, Vector2d(100.0, 80.0));
 }
 
-TEST(AsyncRendererTest, FreshFullCanvasFallbacksHaveDistinctTextureIdentity) {
+TEST(AsyncRendererTest, FreshOffModeFullCanvasFramesHaveDistinctTextureIdentity) {
   svg::SVGDocument document = svg::instantiateSubtree(R"svg(
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 100">
       <rect x="0" y="0" width="100" height="100" fill="red"/>
@@ -669,6 +1275,7 @@ TEST(AsyncRendererTest, FreshFullCanvasFallbacksHaveDistinctTextureIdentity) {
 
   svg::Renderer renderer;
   AsyncRenderer asyncRenderer;
+  asyncRenderer.setCompositedRenderingMode(CompositedRenderingMode::Off);
   RenderRequest request(renderer, document);
   request.version = 7;
   request.documentGeneration = 1;
@@ -722,10 +1329,11 @@ TEST(AsyncRendererTest, FreshFullCanvasFallbacksHaveDistinctTextureIdentity) {
               Rgba(::testing::Lt(80), ::testing::Lt(80), Gt(200), Gt(200)));
 }
 
-TEST(AsyncRendererTest, ProductionRendererCachesStaticSpansAcrossPublishedFrames) {
+TEST(AsyncRendererTest, SimpleIdleSelectionPublishesThreeImmediateLayers) {
   svg::SVGDocument document = svg::instantiateSubtree(R"svg(
-    <rect id="target" x="40" y="0" width="10" height="10" fill="red" />
-    <rect id="cheap" x="2" y="2" width="8" height="8" fill="blue" />
+    <rect id="under" x="2" y="2" width="8" height="8" fill="blue" />
+    <rect id="target" x="24" y="2" width="8" height="8" fill="red" />
+    <rect id="over" x="46" y="2" width="8" height="8" fill="green" />
   )svg");
   document.setCanvasSize(64, 64);
 
@@ -746,34 +1354,34 @@ TEST(AsyncRendererTest, ProductionRendererCachesStaticSpansAcrossPublishedFrames
     request.version = version;
     request.documentGeneration = 1;
     request.selectedEntity = targetEntity;
-    request.dragPreview = RenderRequest::DragPreview{
-        .entity = targetEntity,
-        .interactionKind = svg::compositor::InteractionHint::Selection,
-    };
     asyncRenderer.requestRender(request);
     return waitForResult();
   };
-  const auto expectNoImmediateTiles = [](const RenderResult& result) {
-    ASSERT_TRUE(result.compositedPreview.has_value());
-    for (const RenderResult::CompositedTile& tile : result.compositedPreview->tiles) {
-      EXPECT_NE(tile.kind, RenderResult::CompositedTile::Kind::Immediate)
-          << "Production editor frames must cache static spans instead of rerasterizing them";
-    }
+
+  const auto expectThreeImmediateLayers = [&](const std::optional<RenderResult>& result) {
+    ASSERT_TRUE(result.has_value());
+    ASSERT_TRUE(result->compositedPreview.has_value());
+    EXPECT_FALSE(ContainsFullCanvasTile(*result));
+    ASSERT_EQ(result->compositedPreview->tiles.size(), 3u);
+    EXPECT_EQ(result->compositedPreview->tiles[0].kind,
+              RenderResult::CompositedTile::Kind::Immediate);
+    EXPECT_EQ(result->compositedPreview->tiles[1].kind, RenderResult::CompositedTile::Kind::Layer);
+    EXPECT_EQ(result->compositedPreview->tiles[1].layerEntity, targetEntity);
+    EXPECT_EQ(result->compositedPreview->tiles[2].kind,
+              RenderResult::CompositedTile::Kind::Immediate);
+
+    const auto compositeTiles = asyncRenderer.compositorCompositeTiles();
+    ASSERT_EQ(compositeTiles.size(), 3u) << DescribeCompositeSegments(compositeTiles);
+    EXPECT_TRUE(
+        std::ranges::all_of(compositeTiles, [](const auto& tile) { return tile.immediate; }))
+        << "A simple selected scene should keep bg/selection/fg as explicit paint-order layers "
+           "while rendering each one immediately.\n"
+        << DescribeCompositeSegments(compositeTiles);
   };
 
-  const std::optional<RenderResult> first = postSelection(1);
-  ASSERT_TRUE(first.has_value());
-  expectNoImmediateTiles(*first);
-  const auto firstStats = asyncRenderer.compositorRenderFrameStats();
-  EXPECT_GT(firstStats.cachedTileCount, 0);
-
-  const std::optional<RenderResult> second = postSelection(2);
-  ASSERT_TRUE(second.has_value());
-  expectNoImmediateTiles(*second);
-  const auto secondStats = asyncRenderer.compositorRenderFrameStats();
-  EXPECT_EQ(secondStats.immediateTileCount, 0);
-  EXPECT_EQ(secondStats.cachedTileCount, 0)
-      << "An unchanged follow-up frame must reuse the cached segment payloads";
+  expectThreeImmediateLayers(postSelection(1));
+  asyncRenderer.setCompositedRenderingMode(CompositedRenderingMode::FilterOnly);
+  expectThreeImmediateLayers(postSelection(2));
 }
 
 TEST(AsyncRendererE2ETest, SplashDonnerSelectionExposesEligibleStaticSpansForLayerPanel) {
@@ -1784,12 +2392,14 @@ TEST(AsyncRendererTest, CompositorResetOnDocumentVersionChange) {
   }
 }
 
-// A request with `selectedEntity` set and no `dragPreview` must still produce
-// a valid composited preview. If the compositor cannot split the selection yet,
-// the final CPU snapshot is wrapped as one full-canvas tile.
+// A request with `selectedEntity` set and no `dragPreview` must publish the same
+// paint-order layer topology used during a drag. Idle presentation must not
+// collapse back to a monolithic full-canvas render.
 TEST(AsyncRendererTest, SelectedEntityWithoutDragPreviewProducesCompositedPreview) {
   svg::SVGDocument document = svg::instantiateSubtree(R"svg(
-    <rect id="target" x="0" y="0" width="16" height="16" fill="red" />
+    <rect id="under" x="0" y="0" width="16" height="16" fill="blue" />
+    <rect id="target" x="20" y="0" width="16" height="16" fill="red" />
+    <rect id="over" x="40" y="0" width="16" height="16" fill="green" />
   )svg");
   document.setCanvasSize(64, 64);
 
@@ -1813,13 +2423,23 @@ TEST(AsyncRendererTest, SelectedEntityWithoutDragPreviewProducesCompositedPrevie
   }
 
   ASSERT_TRUE(result.has_value());
-  EXPECT_EQ(result->bitmap.empty(), renderer.requiresTextureSnapshotPresentation());
+  EXPECT_TRUE(result->bitmap.empty())
+      << "Layer tiles already carry the idle presentation; a redundant full-canvas CPU snapshot "
+         "would collapse the topology the editor must preserve";
   ASSERT_TRUE(result->compositedPreview.has_value());
   EXPECT_TRUE(result->compositedPreview->valid());
+  EXPECT_FALSE(ContainsFullCanvasTile(*result));
+  ASSERT_EQ(result->compositedPreview->tiles.size(), 3u);
+  EXPECT_EQ(result->compositedPreview->tiles[0].kind,
+            RenderResult::CompositedTile::Kind::Immediate);
+  EXPECT_EQ(result->compositedPreview->tiles[1].kind, RenderResult::CompositedTile::Kind::Layer);
+  EXPECT_EQ(result->compositedPreview->tiles[1].layerEntity, target->unsafeEntityHandle().entity());
+  EXPECT_EQ(result->compositedPreview->tiles[2].kind,
+            RenderResult::CompositedTile::Kind::Immediate);
   EXPECT_TRUE(std::ranges::any_of(result->compositedPreview->tiles, HasPresentationPayload));
 }
 
-TEST(AsyncRendererTest, ColdRenderWithoutSelectionProducesFullCanvasCompositedTile) {
+TEST(AsyncRendererTest, ColdRenderWithoutSelectionProducesCompositorSegment) {
   svg::SVGDocument document = svg::instantiateSubtree(R"svg(
     <rect x="0" y="0" width="64" height="64" fill="red" />
   )svg");
@@ -1842,8 +2462,8 @@ TEST(AsyncRendererTest, ColdRenderWithoutSelectionProducesFullCanvasCompositedTi
   ASSERT_TRUE(result->compositedPreview.has_value());
   ASSERT_EQ(result->compositedPreview->tiles.size(), 1u);
   const RenderResult::CompositedTile& tile = result->compositedPreview->tiles.front();
-  EXPECT_EQ(tile.kind, RenderResult::CompositedTile::Kind::Segment);
-  EXPECT_EQ(tile.id, "full-canvas");
+  EXPECT_EQ(tile.kind, RenderResult::CompositedTile::Kind::Immediate);
+  EXPECT_NE(tile.id, "full-canvas");
   EXPECT_TRUE(HasPresentationPayload(tile));
   if (renderer.requiresTextureSnapshotPresentation()) {
     ASSERT_NE(tile.textureSnapshot, nullptr);
@@ -1858,6 +2478,34 @@ TEST(AsyncRendererTest, ColdRenderWithoutSelectionProducesFullCanvasCompositedTi
   EXPECT_EQ(tile.canvasOffsetDoc, Vector2d::Zero());
   EXPECT_EQ(tile.bitmapDimsDoc, Vector2d(64.0, 64.0));
   EXPECT_TRUE(result->compositedPreview->entity == entt::null);
+}
+
+TEST(AsyncRendererTest, EmptyDocumentProducesTransparentCompositorSegment) {
+  svg::SVGDocument document = svg::instantiateSubtree(
+      R"svg(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" display="none"/>)svg");
+  document.setCanvasSize(64, 64);
+
+  svg::Renderer renderer;
+  AsyncRenderer asyncRenderer;
+  RenderRequest request(renderer, document);
+  request.version = 1;
+  request.documentGeneration = 1;
+  asyncRenderer.requestRender(request);
+
+  const std::optional<RenderResult> result = WaitForRenderResult(asyncRenderer);
+  ASSERT_TRUE(result.has_value());
+  ASSERT_TRUE(result->compositedPreview.has_value());
+  ASSERT_EQ(result->compositedPreview->tiles.size(), 1u);
+  const RenderResult::CompositedTile& tile = result->compositedPreview->tiles.front();
+  EXPECT_NE(tile.id, "full-canvas");
+  EXPECT_TRUE(tile.kind == RenderResult::CompositedTile::Kind::Segment ||
+              tile.kind == RenderResult::CompositedTile::Kind::Immediate);
+  EXPECT_EQ(tile.bitmapDimsDoc, Vector2d(64.0, 64.0));
+  const svg::RendererBitmap pixels = MaterializeTileBitmap(tile);
+  ASSERT_FALSE(pixels.pixels.empty());
+  EXPECT_TRUE(
+      std::ranges::all_of(pixels.pixels, [](std::uint8_t channel) { return channel == 0u; }));
+  EXPECT_FALSE(ContainsFullCanvasTile(*result));
 }
 
 TEST(AsyncRendererTest, CompositedTilesCarryRasterCanvasSizeForCacheIdentity) {
@@ -1896,7 +2544,7 @@ TEST(AsyncRendererTest, CompositedTilesCarryRasterCanvasSizeForCacheIdentity) {
   }
 }
 
-TEST(AsyncRendererTest, CompositingContextDescendantsProduceFullCanvasCompositedPreview) {
+TEST(AsyncRendererTest, CompositingContextDescendantsStillProduceLayeredPreview) {
   const std::array<std::string_view, 3> cases = {
       R"svg(
         <defs><filter id="blur"><feGaussianBlur stdDeviation="4"/></filter></defs>
@@ -1945,18 +2593,12 @@ TEST(AsyncRendererTest, CompositingContextDescendantsProduceFullCanvasComposited
 
     ASSERT_TRUE(result.has_value());
     ASSERT_TRUE(result->compositedPreview.has_value()) << svgBody;
-    ASSERT_EQ(result->compositedPreview->tiles.size(), 1u) << svgBody;
-    const RenderResult::CompositedTile& tile = result->compositedPreview->tiles.front();
-    EXPECT_EQ(tile.id, "full-canvas") << svgBody;
-    EXPECT_TRUE(HasPresentationPayload(tile)) << svgBody;
-    if (!tile.bitmap.empty()) {
-      EXPECT_EQ(tile.bitmap.dimensions, result->bitmap.dimensions) << svgBody;
-      EXPECT_EQ(tile.bitmap.pixels, result->bitmap.pixels) << svgBody;
-    }
-    if (tile.textureSnapshot != nullptr) {
-      EXPECT_EQ(tile.textureSnapshot->dimensions(), tile.bitmapDimsPx) << svgBody;
-    }
-    EXPECT_EQ(result->compositedPreview->entity, target->unsafeEntityHandle().entity()) << svgBody;
+    EXPECT_FALSE(ContainsFullCanvasTile(*result)) << svgBody;
+    EXPECT_TRUE(std::ranges::any_of(result->compositedPreview->tiles, HasPresentationPayload))
+        << svgBody;
+    EXPECT_TRUE(result->compositedPreview->entity == entt::null)
+        << "A refused interaction split must not advertise a movable cached entity\n"
+        << svgBody;
     ASSERT_TRUE(result->compositedPreview->representedDragPreview.has_value()) << svgBody;
     EXPECT_EQ(result->compositedPreview->representedDragPreview->entity,
               target->unsafeEntityHandle().entity())
@@ -2042,8 +2684,9 @@ TEST(AsyncRendererTest, CompositorStaysAliveAcrossDragRelease) {
   auto held = waitForResult();
   ASSERT_TRUE(held.has_value());
   ASSERT_TRUE(held->compositedPreview.has_value());
-  ASSERT_EQ(held->compositedPreview->tiles.size(), 1u);
-  EXPECT_EQ(held->compositedPreview->tiles.front().id, "full-canvas");
+  EXPECT_FALSE(ContainsFullCanvasTile(*held));
+  EXPECT_NE(FindLayerTile(*held, target->unsafeEntityHandle().entity()), nullptr)
+      << "Idle selection must keep its promoted layer between drag gestures";
 
   // Drag frame 2: same entity, same DOM transform (4, 0). If the compositor
   // were torn down between the release and this drag, it would re-rasterize
@@ -2061,13 +2704,11 @@ TEST(AsyncRendererTest, CompositorStaysAliveAcrossDragRelease) {
   auto drag2 = waitForResult();
   ASSERT_TRUE(drag2.has_value());
   ASSERT_TRUE(drag2->compositedPreview.has_value());
-  if (!renderer.requiresTextureSnapshotPresentation()) {
-    EXPECT_EQ(findDragTileBitmap(*drag2->compositedPreview), promotedPixelsDrag1)
-        << "drag-target tile bitmap should be identical after release -> drag-again";
-  } else {
-    EXPECT_EQ(findDragTileSignature(*drag2->compositedPreview), promotedSignatureDrag1)
-        << "drag-target tile signature should be stable after release -> drag-again";
-  }
+  const auto promotedSignatureDrag2 = findDragTileSignature(*drag2->compositedPreview);
+  EXPECT_EQ(std::get<1>(promotedSignatureDrag2), std::get<1>(promotedSignatureDrag1));
+  EXPECT_EQ(std::get<2>(promotedSignatureDrag2), std::get<2>(promotedSignatureDrag1))
+      << "drag-target tile generation and dimensions should remain stable after release -> "
+         "drag-again; a metadata-only second result reuses the payload published before release";
 }
 
 TEST(AsyncRendererTest, ActiveDragCanvasResizePublishesFreshFinalOnly) {
@@ -3197,11 +3838,9 @@ TEST(AsyncRendererTest, DragFrameVersionBumpDoesNotResetCompositor) {
 //
 //   Frame 0 (page load): RenderRequest with no selectedEntity and no
 //     dragPreview. Compositor takes the cold-render path, draws the
-//     correct full document, and publishes it before retained-cache
-//     warmup. After acceptance the worker warms mandatory filter layers
-//     and static segments on its cancellable low-priority lane. If the
-//     next gesture arrives first, it cancels that lane and the foreground
-//     render completes only the payloads still missing.
+//     correct full document, then warms mandatory filter layers and static
+//     segments before publishing the first paint-order tile set. This avoids
+//     ever presenting a monolithic full-canvas fallback in On mode.
 //
 //   Frame 1 (click-then-drag, one UI frame): user clicks a letter →
 //     SelectTool sets selection + dragState in the same event. By the

@@ -177,6 +177,74 @@ TEST(MandatoryHintDetectorTest, MaskQualifies) {
               testing::ElementsAre(HintEntryIs(HintSource::Mandatory, 0xFFFF)));
 }
 
+TEST(MandatoryHintDetectorTest, FilterOnlyScopePublishesForFilterSignal) {
+  Registry registry;
+  MandatoryHintDetector detector(MandatoryHintScope::FilterOnly);
+
+  const Entity entity = registry.create();
+  auto& instance = registry.emplace<RenderingInstanceComponent>(entity);
+  instance.resolvedFilter.emplace(std::vector<FilterEffect>{});
+
+  detector.reconcile(registry);
+
+  EXPECT_EQ(detector.stats().hintsPublished, 1u);
+  EXPECT_EQ(detector.stats().hintsActive, 1u);
+  ASSERT_TRUE(registry.all_of<CompositorHintComponent>(entity));
+  EXPECT_THAT(registry.get<CompositorHintComponent>(entity).entries,
+              testing::ElementsAre(HintEntryIs(HintSource::Mandatory, 0xFFFF)));
+}
+
+TEST(MandatoryHintDetectorTest, FilterOnlyScopeIgnoresIsolationAndMaskSignals) {
+  Registry registry;
+  MandatoryHintDetector detector(MandatoryHintScope::FilterOnly);
+
+  const Entity isolated = registry.create();
+  registry.emplace<RenderingInstanceComponent>(isolated).isolatedLayer = true;
+
+  const Entity masked = registry.create();
+  registry.emplace<RenderingInstanceComponent>(masked).mask = components::ResolvedMask{
+      ResolvedReference{EntityHandle()}, std::nullopt, MaskContentUnits::Default};
+
+  detector.reconcile(registry);
+
+  EXPECT_EQ(detector.stats().candidatesEvaluated, 2u);
+  EXPECT_EQ(detector.stats().hintsPublished, 0u)
+      << "FilterOnly scope must leave opacity/blend isolation and masks to the driver's inline "
+         "isolation path";
+  EXPECT_EQ(detector.stats().hintsActive, 0u);
+  EXPECT_FALSE(registry.all_of<CompositorHintComponent>(isolated));
+  EXPECT_FALSE(registry.all_of<CompositorHintComponent>(masked));
+}
+
+TEST(MandatoryHintDetectorTest, FilterOnlyScopeSkipsFilterUnderInlineIsolationAncestor) {
+  // `<g opacity="0.5"> <rect filter="..."/> </g>` under FilterOnly: the group
+  // stays inline (isolation is out of scope), so promoting the child filter
+  // would split the group's isolation - trailing in-group content re-enters
+  // at full alpha and the tile blit resets paint. The child must render
+  // inline instead.
+  Registry registry;
+  MandatoryHintDetector detector(MandatoryHintScope::FilterOnly);
+
+  const Entity group = makeTreeEntity(registry, entt::null);
+  registry.emplace<RenderingInstanceComponent>(group).isolatedLayer = true;
+
+  const Entity filtered = makeTreeEntity(registry, group);
+  registry.emplace<RenderingInstanceComponent>(filtered).resolvedFilter.emplace(
+      std::vector<FilterEffect>{});
+
+  detector.reconcile(registry);
+
+  EXPECT_EQ(detector.stats().hintsPublished, 0u)
+      << "A filter under an inline isolation ancestor must not be extracted in FilterOnly scope";
+  EXPECT_FALSE(registry.all_of<CompositorHintComponent>(filtered));
+
+  // The same topology under the default All scope promotes (the ancestor is
+  // itself promoted, so the group's isolation is not broken by extraction).
+  MandatoryHintDetector allScopeDetector;
+  allScopeDetector.reconcile(registry);
+  EXPECT_TRUE(registry.all_of<CompositorHintComponent>(filtered));
+}
+
 TEST(MandatoryHintDetectorTest, ReconcileIsIdempotent) {
   Registry registry;
   MandatoryHintDetector detector;

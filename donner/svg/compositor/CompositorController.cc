@@ -41,13 +41,56 @@
 
 namespace donner::svg::compositor {
 
-namespace {}  // namespace
+namespace {
+
+bool HasAssignedDescendant(Registry& registry, Entity entity) {
+  using TreeComponent = donner::components::TreeComponent;
+  std::vector<Entity> stack;
+  if (const auto* tree = registry.try_get<TreeComponent>(entity)) {
+    for (Entity child = tree->firstChild(); child != entt::null;
+         child = registry.get<TreeComponent>(child).nextSibling()) {
+      stack.push_back(child);
+    }
+  }
+  while (!stack.empty()) {
+    const Entity descendant = stack.back();
+    stack.pop_back();
+    const auto* assignment = registry.try_get<ComputedLayerAssignmentComponent>(descendant);
+    if (assignment != nullptr && assignment->layerId != 0) {
+      return true;
+    }
+    if (const auto* tree = registry.try_get<TreeComponent>(descendant)) {
+      for (Entity child = tree->firstChild(); child != entt::null;
+           child = registry.get<TreeComponent>(child).nextSibling()) {
+        stack.push_back(child);
+      }
+    }
+  }
+  return false;
+}
+
+bool HasAssignedAncestor(Registry& registry, Entity entity) {
+  const auto* tree = registry.try_get<donner::components::TreeComponent>(entity);
+  Entity cursor = tree != nullptr ? tree->parent() : entt::null;
+  while (cursor != entt::null && registry.valid(cursor)) {
+    const auto* assignment = registry.try_get<ComputedLayerAssignmentComponent>(cursor);
+    if (assignment != nullptr && assignment->layerId != 0) {
+      return true;
+    }
+    const auto* ancestorTree = registry.try_get<donner::components::TreeComponent>(cursor);
+    cursor = ancestorTree != nullptr ? ancestorTree->parent() : entt::null;
+  }
+  return false;
+}
+
+}  // namespace
 
 CompositorController::CompositorController(SVGDocument& document, RendererInterface& renderer,
                                            CompositorConfig config)
     : document_(document),
       renderer_(renderer),
       config_(config),
+      mandatoryDetector_(config.mandatoryHintScope),
       // Only carve subtrees into bucket layers when they're actually
       // expensive to re-rasterize. `filterPenalty = 16` (default) plus the
       // subtree's own entity cost puts any filter group well above this
@@ -76,23 +119,51 @@ CompositorController::PromoteResult CompositorController::promoteEntity(
       case PromoteRefusalReason::MemoryLimit: return PromoteResult{PromoteResult::MemoryLimit};
       case PromoteRefusalReason::DescendantPromoted:
         return PromoteResult{PromoteResult::DescendantPromoted};
-      case PromoteRefusalReason::None:
-        return PromoteResult{PromoteResult::FullCanvasPreviewRequired};
+      case PromoteRefusalReason::None: return PromoteResult{PromoteResult::OwningTilesRequired};
     }
-    return PromoteResult{PromoteResult::FullCanvasPreviewRequired};
+    return PromoteResult{PromoteResult::OwningTilesRequired};
   };
 
   if (!registry.valid(entity)) {
     return refuse(PromoteRefusalReason::InvalidEntity);
   }
 
-  // Descendants under an ancestor filter / mask / clip-path cannot be extracted into their own
-  // layer without losing the ancestor compositing context. They are still presentable through the
-  // compositor as a full-canvas tile.
-  if (HasCompositingBreakingAncestor(registry, entity)) {
+  // FilterOnly leaves opacity, blend-mode, and isolation ancestors inline. Promotion safety in
+  // that scope therefore depends on their resolved isolation state, including CSS-authored
+  // values. A cold editor request can promote a selection before the first renderFrame call; raw
+  // XML attributes are not enough to classify those cases. Prepare and reconcile first so the
+  // narrowed scope never extracts a selection from an inline compositing context. Full scope
+  // defers the equivalent validation to render preparation so its cold path stays unchanged.
+  if (!documentPrepared_ && config_.mandatoryHintScope == MandatoryHintScope::FilterOnly) {
+    ParseWarningSink warningSink;
+    RendererUtils::prepareDocumentForRendering(document(), /*verbose=*/false, warningSink);
+    documentPrepared_ = true;
+    if (registry.ctx().contains<components::RenderTreeState>()) {
+      registry.ctx().get<components::RenderTreeState>().needsFullRebuild = false;
+    }
+    mandatoryDetector_.reconcile(registry);
+    if (config_.complexityBucketing) {
+      complexityBucketer_.reconcile(registry);
+    }
+    hintsScanned_ = true;
+    const ResolveOptions resolveOptions{
+        .enableInteractionHints = config_.autoPromoteInteractions,
+        .enableAnimationHints = config_.autoPromoteAnimations,
+        .enableComplexityBucketHints = config_.complexityBucketing,
+    };
+    resolver_.resolve(registry, kMaxCompositorLayers, resolveOptions);
+    reconcileLayers(registry);
+    refreshLayerMetadata();
+  }
+
+  // Descendants under an ancestor filter / mask / clip-path or an already assigned layer cannot be
+  // extracted into their own layer without losing or duplicating the owning context. The editor
+  // still presents the compositor's remaining paint-order tiles; only the requested interaction
+  // split is refused.
+  if (HasCompositingBreakingAncestor(registry, entity) || HasAssignedAncestor(registry, entity)) {
     lastPromoteRefusalReason_ = PromoteRefusalReason::None;
     lastPromoteRefusalEntity_ = entt::null;
-    return PromoteResult{PromoteResult::FullCanvasPreviewRequired};
+    return PromoteResult{PromoteResult::OwningTilesRequired};
   }
 
   // Layer-set hysteresis. If `entity` is in the
@@ -141,33 +212,12 @@ CompositorController::PromoteResult CompositorController::promoteEntity(
   // edges when dragging `#Clouds_with_gradients` on the splash, which
   // contains cls-90 / cls-93 clip-path sublayers.
   //
-  // Falling back to non-composited rendering for this specific drag
-  // target costs compositor optimization but preserves correctness.
+  // Leaving this specific drag target inside its owning compositor tiles costs the interaction
+  // fast path but preserves correctness.
   // Typical interactive targets (single shapes, text letters, filter
   // groups themselves) are unaffected.
-  {
-    using TreeComponent = donner::components::TreeComponent;
-    std::vector<Entity> stack;
-    if (const auto* tree = registry.try_get<TreeComponent>(entity)) {
-      for (Entity child = tree->firstChild(); child != entt::null;
-           child = registry.get<TreeComponent>(child).nextSibling()) {
-        stack.push_back(child);
-      }
-    }
-    while (!stack.empty()) {
-      const Entity descendant = stack.back();
-      stack.pop_back();
-      const auto* assignment = registry.try_get<ComputedLayerAssignmentComponent>(descendant);
-      if (assignment != nullptr && assignment->layerId != 0) {
-        return refuse(PromoteRefusalReason::DescendantPromoted);
-      }
-      if (const auto* descTree = registry.try_get<TreeComponent>(descendant)) {
-        for (Entity grandchild = descTree->firstChild(); grandchild != entt::null;
-             grandchild = registry.get<TreeComponent>(grandchild).nextSibling()) {
-          stack.push_back(grandchild);
-        }
-      }
-    }
+  if (HasAssignedDescendant(registry, entity)) {
+    return refuse(PromoteRefusalReason::DescendantPromoted);
   }
 
   // Under `autoPromoteInteractions`, the editor-driven
@@ -307,13 +357,20 @@ void CompositorController::processPendingDemotions(Registry& registry) {
   reconcileLayers(registry);
 }
 
-bool CompositorController::dropNonRenderableInteractionHints(Registry& registry) {
+bool CompositorController::dropUnsafeInteractionHints(Registry& registry) {
   std::vector<Entity> droppedEntities;
   droppedEntities.reserve(activeHints_.size());
   for (const auto& [entity, hint] : activeHints_) {
     (void)hint;
-    if (!registry.valid(entity) ||
-        !registry.all_of<components::RenderingInstanceComponent>(entity)) {
+    const bool hasNoRenderInstance =
+        !registry.valid(entity) || !registry.all_of<components::RenderingInstanceComponent>(entity);
+    const bool hasCompositingAncestor =
+        !hasNoRenderInstance && HasCompositingBreakingAncestor(registry, entity);
+    const bool hasPromotedAncestor = !hasNoRenderInstance && HasAssignedAncestor(registry, entity);
+    const bool hasPromotedDescendant =
+        !hasNoRenderInstance && HasAssignedDescendant(registry, entity);
+    if (hasNoRenderInstance || hasCompositingAncestor || hasPromotedAncestor ||
+        hasPromotedDescendant) {
       droppedEntities.push_back(entity);
     }
   }
@@ -346,6 +403,22 @@ bool CompositorController::isActiveDragTarget(Entity entity) const {
 
 bool CompositorController::isPromoted(Entity entity) const {
   return activeHints_.contains(entity);
+}
+
+bool CompositorController::interactionLayersCover(const std::vector<Entity>& interactionLayerRoots,
+                                                  const std::vector<Entity>& entities) const {
+  Registry& registry = document().registry();
+  return std::ranges::all_of(entities, [&](Entity entity) {
+    Entity cursor = entity;
+    while (cursor != entt::null && registry.valid(cursor)) {
+      if (std::ranges::find(interactionLayerRoots, cursor) != interactionLayerRoots.end()) {
+        return true;
+      }
+      const auto* tree = registry.try_get<donner::components::TreeComponent>(cursor);
+      cursor = tree != nullptr ? tree->parent() : entt::null;
+    }
+    return false;
+  });
 }
 
 void CompositorController::markPromotedLayerDirty(Entity entity) {
@@ -783,7 +856,6 @@ bool CompositorController::remapAfterStructuralReplace(
     complexityBucketer_.rebuildForReplacedDocument(registry);
   }
   hintsScanned_ = true;
-  const bool droppedNonRenderableHints = dropNonRenderableInteractionHints(registry);
 
   // Step 3: remap layer entity ids. Cached `bitmap_`, `canvasFromBitmap_`,
   // `bitmapEntityFromWorldTransform_`, and `fallbackReasons_` survive
@@ -827,7 +899,10 @@ bool CompositorController::remapAfterStructuralReplace(
   };
   resolver_.resolve(registry, kMaxCompositorLayers, resolveOptions);
   reconcileLayers(registry);
-  if (droppedNonRenderableHints) {
+  const bool droppedUnsafeHints = dropUnsafeInteractionHints(registry);
+  if (droppedUnsafeHints) {
+    resolver_.resolve(registry, kMaxCompositorLayers, resolveOptions);
+    reconcileLayers(registry);
     markAllSegmentsDirty();
   }
 
@@ -1452,34 +1527,16 @@ void CompositorController::renderFrameImpl(const RenderViewport& viewport,
   // bucket detectors can't score anything useful. Defer them to the first
   // post-prepare frame by also rescanning whenever `hintsScanned_` is false.
   //
-  // The same condition applies when `needsFullRebuild` is true:
+  // The same condition applies whenever the document is dirty:
   // `RenderingContext::invalidateRenderTree()` (called by
   // `SVGDocument::setCanvasSize` etc.) wipes every RIC. Running the
-  // detector against the empty view here would mark every existing
-  // mandatory hint as stale (the qualifying set is empty, see
-  // `MandatoryHintDetector::reconcile`) and silently demote every
-  // filter / mask / isolated-layer subtree until the user mutates the
-  // document again. Skip the pre-prepare scan in that case and let the
-  // post-prepare branch below pick the hints back up against the
-  // freshly-rebuilt RIC view. Pinned by `MandatoryFilterLayerSurvives
-  // CanvasResize`.
-  const bool deferDetectorsToPostPrepare = needsFullRebuild;
-  const bool needsHintRescan = !hintsScanned_ || documentDirty;
-  if ((!documentPrepared_ || documentDirty) && documentPrepared_ && !deferDetectorsToPostPrepare) {
-    // Document is already prepared and became dirty - rescan now.
-    {
-      ZoneScopedN("Compositor::mandatoryDetector.reconcile");
-      mandatoryDetector_.reconcile(registry);
-    }
-    if (config_.complexityBucketing) {
-      ZoneScopedN("Compositor::complexityBucketer.reconcile");
-      complexityBucketer_.reconcile(registry);
-    }
-    hintsScanned_ = true;
-  } else if (!documentPrepared_ && needsHintRescan) {
-    // First frame, RICs don't exist yet. Skip the detectors - we'll run them
-    // immediately after the first prepare below.
-  }
+  // detector against either that empty view or the stale pre-mutation view
+  // can incorrectly drop a still-live mandatory layer or retain one whose
+  // entity just became `display:none`. Skip the pre-prepare scan in that
+  // case and let the post-prepare branch below reconcile against the freshly
+  // rebuilt RIC view. Pinned by `MandatoryFilterLayerSurvivesCanvasResize`
+  // and the editor's same-frame display:none layer suppression test.
+  const bool deferDetectorsToPostPrepare = documentDirty;
   const ResolveOptions resolveOptions{
       .enableInteractionHints = config_.autoPromoteInteractions,
       .enableAnimationHints = config_.autoPromoteAnimations,
@@ -1550,7 +1607,8 @@ void CompositorController::renderFrameImpl(const RenderViewport& viewport,
     // discovered mandatory filter/mask/isolated-layer promotes the affected
     // subtree immediately.
     const auto firstFramePlanningStart = std::chrono::steady_clock::now();
-    if (!hintsScanned_) {
+    const bool needsLayerPlanning = !hintsScanned_ || deferDetectorsToPostPrepare;
+    if (needsLayerPlanning) {
       ZoneScopedN("Compositor::firstFrameDetectorsAndWarmup");
       {
         ZoneScopedN("Compositor::mandatoryDetector.reconcile (first)");
@@ -1571,16 +1629,18 @@ void CompositorController::renderFrameImpl(const RenderViewport& viewport,
       }
       refreshLayerMetadata();
       lastRenderFrameStats_.firstFramePlanningMs = elapsedMsSince(firstFramePlanningStart);
+    }
 
-      // The flat output above is already the correct frame. Interactive owners may publish it now
-      // and perform this offscreen-only cache preparation in a later cancellable worker turn.
-      if (config_.deferFirstFrameWarmup) {
-        firstFrameWarmupPending_ = true;
-      } else {
-        const auto firstFrameWarmupStart = std::chrono::steady_clock::now();
-        warmFirstFrameCaches(viewport, surfaceFromCanvas);
-        lastRenderFrameStats_.firstFrameWarmupMs = elapsedMsSince(firstFrameWarmupStart);
-      }
+    // The flat output above is already the correct frame. Owners that allow flat first-frame
+    // presentation may defer the initial cache fill. Tile-only owners warm eagerly on every
+    // transition to an empty layer set, including a later selection demotion, so the root static
+    // segment remains publishable instead of disappearing until another promotion.
+    if (config_.deferFirstFrameWarmup && needsLayerPlanning) {
+      firstFrameWarmupPending_ = true;
+    } else if (!config_.deferFirstFrameWarmup) {
+      const auto firstFrameWarmupStart = std::chrono::steady_clock::now();
+      warmFirstFrameCaches(viewport, surfaceFromCanvas);
+      lastRenderFrameStats_.firstFrameWarmupMs = elapsedMsSince(firstFrameWarmupStart);
     }
     return;
   }
@@ -1606,12 +1666,6 @@ void CompositorController::renderFrameImpl(const RenderViewport& viewport,
     documentPrepared_ = true;
     refreshLayerMetadata();
 
-    if (dropNonRenderableInteractionHints(registry)) {
-      resolver_.resolve(registry, kMaxCompositorLayers, resolveOptions);
-      reconcileLayers(registry);
-      markAllSegmentsDirty();
-    }
-
     // After preparation, keep the global rebuild signal consumed. RenderingContext clears this
     // after a successful render-tree instantiation; this write is a defensive no-op for callers
     // that still reach this path with the flag set.
@@ -1631,6 +1685,11 @@ void CompositorController::renderFrameImpl(const RenderViewport& viewport,
       hintsScanned_ = true;
       resolver_.resolve(registry, kMaxCompositorLayers, resolveOptions);
       reconcileLayers(registry);
+    }
+    if (dropUnsafeInteractionHints(registry)) {
+      resolver_.resolve(registry, kMaxCompositorLayers, resolveOptions);
+      reconcileLayers(registry);
+      markAllSegmentsDirty();
     }
   }
 
@@ -1652,6 +1711,11 @@ void CompositorController::renderFrameImpl(const RenderViewport& viewport,
     splitStaticLayersViewport_ = Vector2i::Zero();
     rootDirty_ = false;
     mainRendererHasCachedFrame_ = true;
+    if (!config_.deferFirstFrameWarmup) {
+      const auto emptyLayerWarmupStart = std::chrono::steady_clock::now();
+      warmFirstFrameCaches(viewport, surfaceFromCanvas);
+      lastRenderFrameStats_.firstFrameWarmupMs = elapsedMsSince(emptyLayerWarmupStart);
+    }
     return;
   }
 

@@ -2331,8 +2331,22 @@ void EditorShell::applyMenuActions(const MenuBarActions& menuActions) {
   const bool compositorTileOverlayBeforeMenu = compositorTileOverlay_;
   const PerfOverlayMode perfOverlayModeBeforeMenu = perfOverlayMode_;
   const bool geometryDebugOverlayBeforeMenu = geometryDebugOverlay_;
+  const CompositedRenderingMode compositedRenderingModeBeforeMenu = compositedRenderingMode_;
   ApplyViewMenuToggleActions(menuActions, &showCompositorDebugPanel_, &perfOverlayMode_,
-                             &geometryDebugOverlay_, &compositorTileOverlay_);
+                             &geometryDebugOverlay_, &compositorTileOverlay_,
+                             &compositedRenderingMode_);
+  if (compositedRenderingMode_ != compositedRenderingModeBeforeMenu) {
+    // Push the new mode to the worker and post a render; the worker tears
+    // down or reconstructs the compositor at the start of that iteration.
+    renderCoordinator_.asyncRenderer().setCompositedRenderingMode(compositedRenderingMode_);
+    // Reconstruction restarts compositor tile generations, so a refreshed
+    // tile can arrive carrying an id+generation the texture cache has already
+    // seen with different pixels. Drop uploaded textures the same way a
+    // document load does.
+    textures_.resetComposited();
+    renderCoordinator_.requestPresentationRefresh();
+    requestRenderAtEndOfFrame_ = true;
+  }
   if (geometryDebugOverlay_ != geometryDebugOverlayBeforeMenu) {
     // Push the new overlay state to the worker and post a render. Geometry
     // debug uses a flat full-document pass while enabled; disabling it resets
@@ -6583,6 +6597,7 @@ void EditorShell::renderMenuBarAndDialogs(bool compactUi) {
       .compositorTileOverlay = compositorTileOverlay_,
       .geometryDebugOverlay = geometryDebugOverlay_,
       .perfOverlayMode = perfOverlayMode_,
+      .compositedRenderingMode = compositedRenderingMode_,
       .panelLayoutLocked = dockLayoutLocked_,
   };
   MenuBarActions menuActions;

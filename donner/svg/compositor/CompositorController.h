@@ -198,9 +198,12 @@ inline constexpr size_t kMaxCompositorMemoryBytes = 1024ull * 1024ull * 1024ull;
  * inside a live compositor.
  *
  * Default-constructed config has all features enabled. Mandatory hints
- * (opacity < 1, filter, mask, blend-mode, isolation) are always active - they
- * implement SVG semantics, not an optional optimization, and cannot be
- * disabled through config.
+ * (opacity < 1, filter, mask, blend-mode, isolation) are always detected and
+ * cannot be turned off entirely - but `mandatoryHintScope` can narrow which
+ * signals publish hints. Narrowing never changes pixels: an unhinted signal
+ * renders through the driver's inline isolation path (the same path entities
+ * under compositing-breaking ancestors already take); it only trades retained
+ * layer caching for per-frame re-render cost.
  */
 struct CompositorConfig {
   /// Editor-published `InteractionHint` hints promote the selected / dragged
@@ -212,6 +215,14 @@ struct CompositorConfig {
   /// cost stays O(animated subtree). When false, animations re-render the
   /// whole document per tick; selection / drag compositing is unaffected.
   bool autoPromoteAnimations = true;
+
+  /// Which mandatory-compositing signals `MandatoryHintDetector` publishes
+  /// hints for. `FilterOnly` is the editor's "filter-only" composited
+  /// rendering mode: filters (the expensive re-render case) keep their cached
+  /// isolated layers while opacity groups, blend modes, and masks render
+  /// inline every frame. Fixed at construction - changing it means
+  /// reconstructing the controller.
+  MandatoryHintScope mandatoryHintScope = MandatoryHintScope::All;
 
   /// `ComplexityBucketer` pre-splits the document into a small number of
   /// layers at load / structural rebuild to reduce click-to-first-drag-update
@@ -310,8 +321,8 @@ public:
     enum class Code : uint8_t {
       /// The requested entity owns a promoted compositor layer.
       PromotedLayer,
-      /// The request is valid but must be presented as a full-canvas preview.
-      FullCanvasPreviewRequired,
+      /// The request is valid but cannot be extracted from its owning compositor tiles.
+      OwningTilesRequired,
       /// The requested entity is not valid in the document registry.
       InvalidEntity,
       /// The compositor cannot add another layer without exceeding the layer limit.
@@ -323,7 +334,7 @@ public:
     };
 
     static constexpr Code PromotedLayer = Code::PromotedLayer;
-    static constexpr Code FullCanvasPreviewRequired = Code::FullCanvasPreviewRequired;
+    static constexpr Code OwningTilesRequired = Code::OwningTilesRequired;
     static constexpr Code InvalidEntity = Code::InvalidEntity;
     static constexpr Code LayerLimit = Code::LayerLimit;
     static constexpr Code MemoryLimit = Code::MemoryLimit;
@@ -333,9 +344,7 @@ public:
     Code code = Code::PromotedLayer;
 
     [[nodiscard]] bool promotedLayer() const { return code == Code::PromotedLayer; }
-    [[nodiscard]] bool fullCanvasPreviewRequired() const {
-      return code == Code::FullCanvasPreviewRequired;
-    }
+    [[nodiscard]] bool owningTilesRequired() const { return code == Code::OwningTilesRequired; }
     [[nodiscard]] operator bool() const { return promotedLayer(); }
 
     friend bool operator==(PromoteResult result, Code code) { return result.code == code; }
@@ -379,9 +388,9 @@ public:
    * @param interactionKind Semantic kind for the Interaction hint. Use `Selection` for
    *   selection-driven pre-warm (no drag in progress) and `ActiveDrag` for an active
    *   user drag. Defaults to `ActiveDrag` for callers that only use this API during drag.
-   * @return Promotion result. Valid renderable descendants under a filter, clip-path, or mask
-   *   return \ref PromoteResult::FullCanvasPreviewRequired so callers can present a full-canvas
-   *   composited tile instead of treating the request as a hard failure.
+   * @return Promotion result. Valid renderable descendants under a compositing ancestor return
+   *   \ref PromoteResult::OwningTilesRequired so callers keep them inside the compositor's
+   *   existing paint-order tiles instead of treating the request as a hard failure.
    */
   PromoteResult promoteEntity(Entity entity,
                               InteractionHint interactionKind = InteractionHint::ActiveDrag);
@@ -403,6 +412,11 @@ public:
    * @param entity The entity to check.
    */
   [[nodiscard]] bool isPromoted(Entity entity) const;
+
+  /// True when every requested entity is represented by one of the current request's interaction
+  /// layer roots, directly or through a DOM ancestor.
+  [[nodiscard]] bool interactionLayersCover(const std::vector<Entity>& interactionLayerRoots,
+                                            const std::vector<Entity>& entities) const;
 
   /**
    * Mark an already-promoted layer dirty so the next \ref renderFrame re-rasterizes it.
@@ -1153,14 +1167,15 @@ private:
   /// `pendingDemotions_` and reuses the cached bitmap.
   void processPendingDemotions(Registry& registry);
 
-  /// Drop interaction hints for entities that no longer have a render instance.
+  /// Drop interaction hints for entities that can no longer own a safe independent layer.
   ///
-  /// Demotion hysteresis deliberately keeps released drag layers alive for a short
-  /// window, but an entity that just became `display:none` has left paint order.
-  /// Keeping its interaction layer as a static-segment boundary lets preserved
-  /// segment caches describe the wrong paint range. Returns true when the layer
-  /// assignment must be re-resolved and every static segment should be rebuilt.
-  bool dropNonRenderableInteractionHints(Registry& registry);
+  /// Demotion hysteresis deliberately keeps released drag layers alive for a short window, but an
+  /// entity that just became `display:none` has left paint order. A selected entity whose ancestor
+  /// just became an opacity/blend/filter/mask/isolation context must likewise rejoin that context
+  /// instead of remaining extracted. An interaction layer also cannot overlap a newly assigned
+  /// ancestor or descendant layer. Returns true when the layer assignment must be re-resolved and
+  /// every static segment should be rebuilt.
+  bool dropUnsafeInteractionHints(Registry& registry);
 
   /// Returns true when @p entity has a non-pending ActiveDrag interaction hint.
   bool isActiveDragTarget(Entity entity) const;

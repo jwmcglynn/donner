@@ -19,6 +19,8 @@ TEST(ViewMenuVisibility, MenuBarStateDefaultsMatchVisibilityContract) {
       << "Performance overlay must default to off";
   EXPECT_FALSE(state.geometryDebugOverlay)
       << "Geode geometry debug overlay must default to off (zero impact on normal rendering)";
+  EXPECT_EQ(state.compositedRenderingMode, CompositedRenderingMode::On)
+      << "Composited rendering must default to full compositing (pre-setting behavior)";
 }
 
 // The toggle actions are edge-triggered requests, so they must default to false
@@ -28,6 +30,7 @@ TEST(ViewMenuVisibility, MenuBarActionsToggleRequestsDefaultFalse) {
   EXPECT_FALSE(actions.toggleCompositorDebugPanel);
   EXPECT_FALSE(actions.setPerfOverlayMode);
   EXPECT_FALSE(actions.toggleGeometryDebugOverlay);
+  EXPECT_FALSE(actions.setCompositedRenderingMode);
 }
 
 TEST(ViewMenuVisibility, ToggleActionsFlipCompositorDebugPanel) {

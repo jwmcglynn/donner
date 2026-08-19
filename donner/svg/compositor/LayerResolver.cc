@@ -30,7 +30,8 @@ void LayerResolver::resolve(Registry& registry, uint32_t maxLayers, const Resolv
     std::vector<Entity> stale;
     auto assignmentView = registry.view<ComputedLayerAssignmentComponent>();
     for (auto entity : assignmentView) {
-      if (!registry.all_of<CompositorHintComponent>(entity)) {
+      const auto* hints = registry.try_get<CompositorHintComponent>(entity);
+      if (hints == nullptr || hints->empty()) {
         stale.push_back(entity);
       }
     }

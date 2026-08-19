@@ -1492,11 +1492,20 @@ test("Geode WASM selects through the overlay with one prewarm render and no recu
   );
   const workerStats = await page.evaluate(() => window.__donnerWorkerStats);
   expect(workerStats).toBeDefined();
-  // Presentation costs no CPU readback: Geode draws the document straight into
-  // the canvas frame, so the readback counters stay at zero and the wait
-  // strategy is only ever one of the two GPU-fence strategies.
-  expect(workerStats?.readbackCount).toBe(0);
-  expect(workerStats?.readbackPollIterations).toBe(0);
+  console.log(`wasm-worker-stats=${JSON.stringify(workerStats)}`);
+  // Browser WebGPU textures cannot cross the worker/UI device boundary, so the
+  // two immediate owning spans around the preserved selected layer each need
+  // one CPU readback for upload. Tie that cost to the tiles rasterized in this
+  // settle frame: an extra readback would expose duplicate tile work or a
+  // forbidden flat full-canvas snapshot.
+  expect(workerStats?.immediateTileCount).toBe(2);
+  expect(workerStats?.cachedTileCount).toBe(0);
+  expect(workerStats?.readbackCount).toBe(
+    (workerStats?.immediateTileCount || 0) + (workerStats?.cachedTileCount || 0),
+  );
+  expect(workerStats?.readbackPollIterations || 0).toBeGreaterThanOrEqual(
+    workerStats?.readbackCount || 0,
+  );
   expect(["timed-wait-any", "device-poll"]).toContain(workerStats?.readbackWaitStrategy);
   // A run that presented frames must say so explicitly rather than by the
   // absence of a failure field. A hung GPU wait publishes the same object with
@@ -1509,7 +1518,6 @@ test("Geode WASM selects through the overlay with one prewarm render and no recu
   expect(workerStats?.gpuWaitTimeoutSite).toBe("none");
   expect(workerStats?.gpuWaitTimeoutMs).toBe(0);
   expect(workerStats?.publishReason).toBe("render-result");
-  console.log(`wasm-worker-stats=${JSON.stringify(workerStats)}`);
   expect(fatalMessages).toEqual([]);
 });
 
