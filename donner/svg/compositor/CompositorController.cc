@@ -405,6 +405,22 @@ bool CompositorController::isPromoted(Entity entity) const {
   return activeHints_.contains(entity);
 }
 
+bool CompositorController::interactionLayersCover(const std::vector<Entity>& interactionLayerRoots,
+                                                  const std::vector<Entity>& entities) const {
+  Registry& registry = document().registry();
+  return std::ranges::all_of(entities, [&](Entity entity) {
+    Entity cursor = entity;
+    while (cursor != entt::null && registry.valid(cursor)) {
+      if (std::ranges::find(interactionLayerRoots, cursor) != interactionLayerRoots.end()) {
+        return true;
+      }
+      const auto* tree = registry.try_get<donner::components::TreeComponent>(cursor);
+      cursor = tree != nullptr ? tree->parent() : entt::null;
+    }
+    return false;
+  });
+}
+
 void CompositorController::markPromotedLayerDirty(Entity entity) {
   CompositorLayer* layer = findLayer(entity);
   if (layer != nullptr) {

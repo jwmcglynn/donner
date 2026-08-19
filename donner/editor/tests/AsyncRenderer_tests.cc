@@ -1120,6 +1120,52 @@ TEST(AsyncRendererTest, NestedMultiSelectionNeverPublishesOverlappingLayers) {
       << "Reversing nested selection order must not change pixels";
 }
 
+TEST(AsyncRendererTest, PendingParentDemotionDoesNotClaimMovableChildCoverage) {
+  svg::SVGDocument document = svg::instantiateSubtree(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+      <g id="parent">
+        <rect id="child" x="12" y="12" width="24" height="24" fill="red"/>
+      </g>
+    </svg>
+  )svg");
+  document.setCanvasSize(64, 64);
+  auto parent = document.querySelector("#parent");
+  auto child = document.querySelector("#child");
+  ASSERT_TRUE(parent.has_value());
+  ASSERT_TRUE(child.has_value());
+  const Entity parentEntity = parent->unsafeEntityHandle().entity();
+  const Entity childEntity = child->unsafeEntityHandle().entity();
+
+  svg::Renderer renderer;
+  AsyncRenderer asyncRenderer;
+  const auto renderSelected = [&](std::uint64_t version, Entity selectedEntity) {
+    RenderRequest request(renderer, document);
+    request.version = version;
+    request.documentGeneration = 1;
+    request.selectedEntity = selectedEntity;
+    request.dragPreview = RenderRequest::DragPreview{
+        .entity = selectedEntity,
+        .interactionKind = svg::compositor::InteractionHint::ActiveDrag,
+    };
+    asyncRenderer.requestRender(request);
+    return WaitForRenderResult(asyncRenderer);
+  };
+
+  const std::optional<RenderResult> parentResult = renderSelected(1, parentEntity);
+  ASSERT_TRUE(parentResult.has_value());
+  ASSERT_TRUE(parentResult->compositedPreview.has_value());
+  EXPECT_EQ(parentResult->compositedPreview->entity, parentEntity);
+
+  const std::optional<RenderResult> childResult = renderSelected(2, childEntity);
+  ASSERT_TRUE(childResult.has_value());
+  ASSERT_TRUE(childResult->compositedPreview.has_value());
+  EXPECT_NE(FindLayerTile(*childResult, parentEntity), nullptr)
+      << "The previous parent layer may remain cached during demotion hysteresis";
+  EXPECT_EQ(FindLayerTile(*childResult, childEntity), nullptr);
+  EXPECT_TRUE(childResult->compositedPreview->entity == entt::null)
+      << "A pending previous-selection parent is not a movable layer for the child request";
+}
+
 TEST(AsyncRendererE2ETest, UnbundledDonnerDDragMarksEveryComponentAsDragTarget) {
   std::ifstream splashStream("donner_splash.svg");
   if (!splashStream.is_open()) {

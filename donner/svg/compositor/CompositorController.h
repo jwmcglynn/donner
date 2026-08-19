@@ -413,6 +413,11 @@ public:
    */
   [[nodiscard]] bool isPromoted(Entity entity) const;
 
+  /// True when every requested entity is represented by one of the current request's interaction
+  /// layer roots, directly or through a DOM ancestor.
+  [[nodiscard]] bool interactionLayersCover(const std::vector<Entity>& interactionLayerRoots,
+                                            const std::vector<Entity>& entities) const;
+
   /**
    * Mark an already-promoted layer dirty so the next \ref renderFrame re-rasterizes it.
    *

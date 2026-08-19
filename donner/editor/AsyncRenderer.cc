@@ -9,7 +9,6 @@
 
 #include "donner/base/MemoryAttribution.h"
 #include "donner/base/Utils.h"
-#include "donner/base/xml/components/TreeComponent.h"
 #include "donner/editor/OverlayRenderer.h"
 #include "donner/editor/TracyWrapper.h"
 #include "donner/svg/SVGDocument.h"
@@ -185,22 +184,6 @@ std::vector<Entity> DesiredCompositorEntities(const RenderRequest& request) {
 
 bool SameEntityList(const std::vector<Entity>& lhs, const std::vector<Entity>& rhs) {
   return lhs == rhs;
-}
-
-bool ContainsAllEntitiesOrOwningAncestors(Registry& registry,
-                                          const std::vector<Entity>& promotedEntities,
-                                          const std::vector<Entity>& desiredEntities) {
-  return std::ranges::all_of(desiredEntities, [&](Entity desiredEntity) {
-    Entity cursor = desiredEntity;
-    while (cursor != entt::null && registry.valid(cursor)) {
-      if (ContainsEntity(promotedEntities, cursor)) {
-        return true;
-      }
-      const auto* tree = registry.try_get<donner::components::TreeComponent>(cursor);
-      cursor = tree != nullptr ? tree->parent() : entt::null;
-    }
-    return false;
-  });
 }
 
 bool WaitForSampleThumbnailDelay(const svg::compositor::CancellationToken& cancellation,
@@ -1123,8 +1106,7 @@ void AsyncRenderer::workerLoop() {
     }
     const bool desiredPromotionIncomplete =
         !desiredEntities.empty() &&
-        !ContainsAllEntitiesOrOwningAncestors(requestDocument.registry(), compositorEntities_,
-                                              desiredEntities);
+        !compositor_->interactionLayersCover(compositorEntities_, desiredEntities);
 
     // The DOM is the sole source of truth for the dragged entity's
     // position - `SelectTool` mutates the `transform` attribute every
@@ -1415,8 +1397,8 @@ void AsyncRenderer::workerLoop() {
       workerTiming.renderFrameMs = elapsedSince(renderFrameStart);
     }
     if (renderCompleted && compositor_ != nullptr && !desiredEntities.empty()) {
-      desiredPromotionCoverageCompleteAfterRender = ContainsAllEntitiesOrOwningAncestors(
-          requestDocument.registry(), compositorEntities_, desiredEntities);
+      desiredPromotionCoverageCompleteAfterRender =
+          compositor_->interactionLayersCover(compositorEntities_, desiredEntities);
     }
 
     // A superseding request can arrive after the compositor's final internal cancellation point.
