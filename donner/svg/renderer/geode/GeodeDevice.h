@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cstddef>
+#include <deque>
 #include <map>
 #include <memory>
 #include <tuple>
@@ -353,6 +354,9 @@ public:
     uint64_t recordOffset = 0;
     uint64_t recordBytes = 0;
 
+    friend bool operator==(const SceneBatchBindGroupKey& a,
+                           const SceneBatchBindGroupKey& b) = default;
+
     friend bool operator<(const SceneBatchBindGroupKey& a, const SceneBatchBindGroupKey& b) {
       return std::tie(a.uniformBufferId, a.uniformOffset, a.uniformSize, a.chunkBufferId,
                       a.chunkBytes, a.recordBufferId, a.recordOffset, a.recordBytes) <
@@ -379,13 +383,22 @@ public:
   [[nodiscard]] static uint64_t AllocateBufferId();
 
   /// Look up a cached scene-batch bind group. Returns a borrowed handle
-  /// (valid while the cache entry lives), or an empty handle on miss.
-  [[nodiscard]] wgpu::BindGroup findSceneBatchBindGroup(const SceneBatchBindGroupKey& key) const;
+  /// (valid while the cache entry lives), or an empty handle on miss. A hit
+  /// refreshes the entry to most-recently-used, so eviction at the cap drops
+  /// the coldest entry rather than the oldest-inserted one - with more than
+  /// the cap of live groups, pure insertion order would evict the hottest
+  /// steady-state entry every frame.
+  [[nodiscard]] wgpu::BindGroup findSceneBatchBindGroup(const SceneBatchBindGroupKey& key);
 
   /// Store a scene-batch bind group under `key`, taking ownership of the
-  /// +1 handle. Clears the whole cache first when it reaches the cap
-  /// (recorded command buffers keep their own references, so dropping the
-  /// cache's handles mid-frame is safe).
+  /// +1 handle. At the cap, the OLDEST entries are evicted one at a time
+  /// rather than the whole cache being dropped: the cache is device-wide and
+  /// a key belongs to one document's buffers, so wholesale clearing punished
+  /// the live document for documents that had already been torn down, and a
+  /// steady frame then rebuilt every batch group it had just been using.
+  /// Insertion order puts those dead entries first. Recorded command buffers
+  /// keep their own references, so dropping the cache's handle mid-frame is
+  /// safe either way.
   void storeSceneBatchBindGroup(const SceneBatchBindGroupKey& key, wgpu::BindGroup group);
 
   /**
@@ -510,6 +523,22 @@ public:
     return oldest;
   }
 
+  /**
+   * True when a resource stamped with `stamp` (a generation minted by
+   * `beginFrameGeneration`) may still be read by a frame that has not
+   * submitted: some open frame is at or before the stamp, so a recorded draw
+   * in that frame can reference the stamped bytes, and every queue write in a
+   * frame lands before every draw in its submit.
+   *
+   * The never-drawn sentinel `~0` used by the resident-slot stamps is
+   * explicitly NOT claimed - a naive `>=` would read a never-drawn slot as
+   * claimed forever, since `oldestOpenFrameGeneration()` is also `~0` when no
+   * frame is open.
+   */
+  [[nodiscard]] bool frameStampClaimed(uint64_t stamp) const {
+    return stamp != ~uint64_t{0} && stamp >= oldestOpenFrameGeneration();
+  }
+
   /// Record one glyph occurrence served from an already-resident outline.
   void countGlyphResidencyHit() const {
     if (counters_) ++counters_->glyphResidencyHits;
@@ -602,6 +631,13 @@ public:
   /// followed by zeroes. The `.z` components carry the translation (0 for
   /// identity).
   const wgpu::Buffer& identityInstanceRecordBuffer() const;
+
+  /// Zero-filled gradient paint block, one full block long. Bound at binding
+  /// 11 of the Slug fill bind-group layout by draws that have no residence
+  /// slot to bind: those draws are solid or pattern painted and never read
+  /// the array, but the binding must still resolve to a range holding at
+  /// least one whole element of the shader's array stride.
+  const wgpu::Buffer& dummyPaintDataBuffer() const;
   /// @}
 
   /// @name Shared render / compute pipelines (issue #575 fix)
@@ -748,9 +784,12 @@ private:
   std::vector<ScopedWgpuHandle<wgpu::Texture>> pendingTextures_;
 
   // Scene-batch bind groups cached across frames (see
-  // SceneBatchBindGroupKey). Bounded by kSceneBatchBindGroupCacheCap.
+  // SceneBatchBindGroupKey). Bounded by kSceneBatchBindGroupCacheCap, with
+  // `sceneBatchBindGroupOrder_` recording insertion order so the eviction at
+  // the cap drops the oldest entries instead of everything.
   static constexpr std::size_t kSceneBatchBindGroupCacheCap = 256;
   std::map<SceneBatchBindGroupKey, ScopedWgpuHandle<wgpu::BindGroup>> sceneBatchBindGroups_;
+  std::deque<SceneBatchBindGroupKey> sceneBatchBindGroupOrder_;
 };
 
 }  // namespace donner::geode

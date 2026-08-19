@@ -462,6 +462,10 @@ int main(int argc, char* argv[]) {
   const std::vector<std::string> defaultFiles = {
       "donner/svg/renderer/testdata/Ghostscript_Tiger.svg",
       "donner/svg/renderer/testdata/lion.svg",
+      // Gradient-heavy grid: 96 shapes, two thirds painted by their own linear
+      // or radial gradient and the rest solid, interleaved. Covers the
+      // paint-heterogeneous run that the solid-and-stroke scenes above do not.
+      "donner/svg/renderer/benchmarks/testdata/gradient_grid.svg",
   };
 
   auto tryAddFile = [&workloads](const std::string& path) {

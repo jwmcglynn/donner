@@ -878,4 +878,32 @@ donner_multi_transitioned_test(
     text = "true",
 )
 
+# Cross-renderer frame-generation claims on one shared device: the
+# frameStampClaimed contract plus an end-to-end mid-frame offscreen render of
+# the same document that must not repaint an outer frame's recorded gradient.
+donner_cc_test(
+    name = "geode_shared_device_frame_tests_impl",
+    srcs = ["tests/GeodeSharedDeviceFrame_tests.cc"],
+    target_compatible_with = _GEODE_ONLY,
+    deps = [
+        ":geode_device",
+        "//donner/base",
+        "//donner/base:gtest_timeout_main",
+        "//donner/svg",
+        "//donner/svg/components",
+        "//donner/svg/parser",
+        "//donner/svg/renderer:renderer_geode",
+        "//donner/svg/renderer:renderer_interface",
+    ],
+)
+
+donner_multi_transitioned_test(
+    name = "geode_shared_device_frame_tests",
+    size = "small",
+    testonly = 1,
+    dep = ":geode_shared_device_frame_tests_impl",
+    opens_gpu_device = True,
+    renderer_backend = "geode",
+)
+
 donner_package()

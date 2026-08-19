@@ -1391,6 +1391,13 @@
           "group": 0,
           "name": "gridData",
           "type": "array<u32>"
+        },
+        {
+          "addressSpace": "storage, read",
+          "binding": 11,
+          "group": 0,
+          "name": "paintData",
+          "type": "array<vec4f>"
         }
       ],
       "builtins": [
@@ -1425,6 +1432,7 @@
         "continue",
         "discard",
         "dot",
+        "floor",
         "for",
         "fract",
         "fwidth",
@@ -1435,6 +1443,7 @@
         "mat4x4f",
         "max",
         "min",
+        "mix",
         "normalize",
         "return",
         "round",

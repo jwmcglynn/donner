@@ -19,7 +19,7 @@ GeodePipeline::GeodePipeline(const wgpu::Device& device, wgpu::TextureFormat col
   // bind group layout is stable across draw calls. Every draw binds at
   // least one record; instanced and batched draws bind a contiguous
   // record span indexed by instance_index.
-  wgpu::BindGroupLayoutEntry entries[11] = {};
+  wgpu::BindGroupLayoutEntry entries[12] = {};
 
   entries[0].binding = 0;
   entries[0].visibility = wgpu::ShaderStage::Vertex | wgpu::ShaderStage::Fragment;
@@ -82,16 +82,24 @@ GeodePipeline::GeodePipeline(const wgpu::Device& device, wgpu::TextureFormat col
   // Analytic dual-ray fill: the four dense grid arrays
   // (hBandGrid, vBandGrid, hCurveIndices, vCurveIndices) share ONE
   // combined u32 storage binding; instance records carry the element
-  // bases. This keeps the fragment stage at six storage bindings, under
+  // bases. This keeps the fragment stage at seven storage bindings, under
   // the baseline WebGPU limit of eight per stage.
   entries[10].binding = 10;
   entries[10].visibility = wgpu::ShaderStage::Fragment;
   entries[10].buffer.type = wgpu::BufferBindingType::ReadOnlyStorage;
   entries[10].buffer.minBindingSize = 0;
 
+  // Gradient paint blocks, addressed by each record's element base, so a run
+  // of differently painted gradient fills shares one draw instead of rebinding
+  // a per-draw gradient uniform.
+  entries[11].binding = 11;
+  entries[11].visibility = wgpu::ShaderStage::Fragment;
+  entries[11].buffer.type = wgpu::BufferBindingType::ReadOnlyStorage;
+  entries[11].buffer.minBindingSize = 0;
+
   wgpu::BindGroupLayoutDescriptor bglDesc = {};
   bglDesc.label = wgpuLabel("GeodeSlugFillBGL");
-  bglDesc.entryCount = 11;
+  bglDesc.entryCount = 12;
   bglDesc.entries = entries;
   bindGroupLayout_.reset(device.createBindGroupLayout(bglDesc));
 
