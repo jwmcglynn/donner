@@ -199,6 +199,19 @@ TEST(GlRnrReplayTest, CropModeParsingAcceptsAliasesAndRejectsUnknownValues) {
   EXPECT_EQ(repro::GlRnrReplayCropModeSuffix(repro::GlRnrReplayCropMode::DocumentCanvas), "canvas");
 }
 
+TEST(GlRnrReplayTest, CaptureCropScaleComesFromFramebufferAndLogicalDisplaySizes) {
+  EXPECT_EQ(
+      repro::GlRnrReplayFramebufferFromLogicalScale(Vector2i(1280, 960), Vector2d(640.0, 480.0)),
+      Vector2d(2.0, 2.0));
+  EXPECT_EQ(
+      repro::GlRnrReplayFramebufferFromLogicalScale(Vector2i(900, 800), Vector2d(600.0, 400.0)),
+      Vector2d(1.5, 2.0));
+  EXPECT_EQ(repro::GlRnrReplayFramebufferFromLogicalScale(Vector2i::Zero(), Vector2d(640.0, 480.0)),
+            Vector2d(1.0, 1.0));
+  EXPECT_EQ(repro::GlRnrReplayFramebufferFromLogicalScale(Vector2i(1280, 960), Vector2d::Zero()),
+            Vector2d(1.0, 1.0));
+}
+
 TEST(GlRnrReplayTest, RunGlRnrReplayValidatesOptionsBeforeOpeningWindow) {
   repro::GlRnrReplayOptions options;
   repro::GlRnrReplayResult result;
