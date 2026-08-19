@@ -126,6 +126,7 @@ py_test(
     srcs = ["ci_runtime_workflow_tests.py"],
     data = [
         "//:.bazelrc",
+        "//:.github/actions/apt-install/action.yml",
         "//:.github/workflows/cmake.yml",
         "//:.github/workflows/coverage.yml",
         "//:.github/workflows/editor_wasm.yml",
