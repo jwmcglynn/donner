@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <memory>
+#include <string>
+#include <utility>
 
 #include "donner/base/EcsRegistry.h"
 #include "donner/base/ParseDiagnostic.h"
@@ -358,10 +360,18 @@ std::optional<SVGDocumentHandle> ResourceManagerContext::loadExternalSVG(
 }
 
 void ResourceManagerContext::addFontFaces(std::span<const css::FontFace> fontFaces) {
-  const size_t firstInsertedIndex = fontFaces_.size();
-  fontFaces_.insert(fontFaces_.end(), fontFaces.begin(), fontFaces.end());
-  for (size_t index = 0; index < fontFaces.size(); ++index) {
-    fontFaceIndexesToLoad_.push_back(firstInsertedIndex + index);
+  for (const css::FontFace& fontFace : fontFaces) {
+    std::string identity = css::FontFaceIdentityKey(fontFace);
+    if (auto it = fontFaceIndexByIdentity_.find(identity); it != fontFaceIndexByIdentity_.end()) {
+      // Already registered. Re-queue the stored copy so a source that has not resolved yet gets
+      // another attempt; one that already resolved is skipped by the load pass.
+      fontFaceIndexesToLoad_.push_back(it->second);
+      continue;
+    }
+
+    fontFaceIndexByIdentity_.emplace(std::move(identity), fontFaces_.size());
+    fontFaceIndexesToLoad_.push_back(fontFaces_.size());
+    fontFaces_.push_back(fontFace);
   }
 }
 

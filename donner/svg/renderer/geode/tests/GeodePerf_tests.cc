@@ -210,16 +210,23 @@ TEST_F(GeodePerfTest, SimpleShapes_BaselineCeilings) {
   // arenas (vBands/vCurves/hBandGrid/vBandGrid) on top of bands/curves/vertex/
   // uniform, so first-frame arena growth costs a few more buffer creates.
   EXPECT_LE(c.bufferCreates, 12u);
-  // One group for the batch, one for the snapshot readback.
-  EXPECT_LE(c.bindgroupCreates, 2u);
   EXPECT_LE(c.textureCreates, 3u);  // Target on frame 1; 0 on repeat.
   EXPECT_LE(c.submits, 3u);         // Target = 1.
-  // Three unclipped solid fills of distinct entities in painter order form
-  // one ordered cross-entity batch, so the whole fixture is a single
-  // instanced draw. Each instance's record carries its own color and fill
-  // rule, so the fixture's differing paints (red / blue / green) do not
-  // split the batch.
-  EXPECT_LE(c.drawCalls, 1u);
+  if (RendererGeode::sceneBatchingEnabledForTesting()) {
+    // Three unclipped solid fills of distinct entities in painter order form
+    // one ordered cross-entity batch, so the whole fixture is a single
+    // instanced draw. Each instance's record carries its own color and fill
+    // rule, so the fixture's differing paints (red / blue / green) do not
+    // split the batch. One group for the batch, one for the readback.
+    EXPECT_LE(c.drawCalls, 1u);
+    EXPECT_LE(c.bindgroupCreates, 2u);
+  } else {
+    // Without ordered batching each fill is its own resident draw, reusing
+    // its slot's cached group; the creates are the three slots' groups plus
+    // the readback's.
+    EXPECT_LE(c.drawCalls, 3u);
+    EXPECT_LE(c.bindgroupCreates, 4u);
+  }
   EXPECT_LE(c.pipelineSwitches, 2u);  // Solid pipeline bound once.
 }
 
@@ -420,15 +427,22 @@ TEST_F(GeodePerfTest, Lion_BaselineCeilings) {
   // set by the slab chunk size, not by the 132 paths. Steady-state frames
   // then re-upload zero geometry (`Lion_NoDirtyPath_ZeroEncodes`).
   EXPECT_LE(c.bufferCreates, 8u);
-  // Ordered cross-entity batching collapsed this from one bind group per
-  // draw (133) to the batch's own group plus the readback's.
-  EXPECT_LE(c.bindgroupCreates, 2u);
   EXPECT_LE(c.textureCreates, 3u);  // Target on first render; 0 on repeat.
   EXPECT_LE(c.submits, 3u);         // Target = 1.
-  // All 132 paths are unclipped solid fills in painter order sharing one slab
-  // chunk, so they merge into a single instanced draw. Lion has no `<use>`,
-  // so this is entirely the cross-entity path, not same-entity instancing.
-  EXPECT_LE(c.drawCalls, 1u);
+  if (RendererGeode::sceneBatchingEnabledForTesting()) {
+    // All 132 paths are unclipped solid fills in painter order sharing one
+    // slab chunk, so they merge into a single instanced draw. Lion has no
+    // `<use>`, so this is entirely the cross-entity path, not same-entity
+    // instancing. That also collapsed the bind groups from one per draw
+    // (133) to the batch's own plus the readback's.
+    EXPECT_LE(c.drawCalls, 1u);
+    EXPECT_LE(c.bindgroupCreates, 2u);
+  } else {
+    // Without ordered batching every path draws alone from its own resident
+    // slot, each with its own cached bind group.
+    EXPECT_LE(c.drawCalls, 132u);
+    EXPECT_LE(c.bindgroupCreates, 133u);
+  }
   EXPECT_LE(c.pipelineSwitches, 2u);     // All-solid fixture: tracker binds solid once.
   EXPECT_EQ(c.sameSourceDrawPairs, 0u);  // No `<use>` in Lion - every draw has a unique source.
 }
@@ -1208,6 +1222,397 @@ TEST_F(GeodePerfTest, NonAdjacentReuse_EarlierDrawKeepsItsTransform) {
   expectPixel(bmp, 180, 30, green, "converting rect");
   // Background stays empty - nothing rendered where nothing was drawn.
   expectPixel(bmp, 260, 80, clear, "background");
+}
+
+/// Second-frame snapshot plus that frame's counters.
+struct SteadyStateFrame {
+  RendererBitmap bitmap;
+  geode::GeodeCounters counters;
+};
+
+/// Render `svgSource` twice on a fresh renderer and return the second frame's
+/// snapshot and counters. Two frames put every draw in the steady state where
+/// residence and record slots already exist, which is where the batching
+/// hazards live. The counters are sampled before the snapshot so the
+/// readback's own submit and bind group stay out of them.
+SteadyStateFrame renderSteadyState(std::string_view svgSource,
+                                   const std::shared_ptr<geode::GeodeDevice>& device) {
+  ParseWarningSink sink = ParseWarningSink::Disabled();
+  auto parsed = parser::SVGParser::ParseSVG(svgSource, sink);
+  if (parsed.hasError()) {
+    ADD_FAILURE() << "ParseSVG failed: " << parsed.error().reason;
+    return {};
+  }
+  SVGDocument document = std::move(parsed.result());
+
+  RendererGeode renderer(device);
+  renderer.draw(document);
+  renderer.draw(document);
+  SteadyStateFrame frame;
+  frame.counters = renderer.lastFrameTimings().counters;
+  frame.bitmap = renderer.takeSnapshot();
+  return frame;
+}
+
+// ---------------------------------------------------------------------------
+// One entity painted twice with different paint.
+//
+// `#r` carries no fill of its own, so the direct draw paints it black and the
+// `<use>` paints it green at a different position. Both draws come from the
+// same entity and therefore from the same residence slot, but their paint
+// differs, so the instanced same-entity path - which expresses one shape at
+// many transforms - does not absorb the second one.
+//
+// The hazard: the second draw resolves the slot's primary record and the
+// conversion of the first draw's pending singleton resolves it again, because
+// neither resolution has marked the slot yet. Both instances then read one
+// record, the later write wins (every buffer write in a submit executes ahead
+// of every draw), and the black rectangle is repainted green at the green
+// rectangle's position, disappearing entirely.
+// ---------------------------------------------------------------------------
+constexpr std::string_view kEntityRepaintedSvg = R"SVG(
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"
+     viewBox="0 0 200 100">
+  <rect id="r" x="10" y="10" width="60" height="60"/>
+  <use xlink:href="#r" x="100" y="0" fill="#00cc00"/>
+</svg>
+)SVG";
+
+TEST_F(GeodePerfTest, EntityRepaintedWithDifferentPaint_KeepsBothDraws) {
+  auto device = sharedDevice();
+  ASSERT_TRUE(device) << "GeodeDevice::CreateHeadless failed";
+
+  const RendererBitmap bmp = renderSteadyState(kEntityRepaintedSvg, device).bitmap;
+  ASSERT_FALSE(bmp.empty()) << "renderer produced no snapshot";
+
+  const std::array<uint8_t, 4> black = {0, 0, 0, 255};
+  const std::array<uint8_t, 4> green = {0, 204, 0, 255};
+  const std::array<uint8_t, 4> clear = {0, 0, 0, 0};
+
+  // The direct draw keeps its own paint and position. Before the aliasing
+  // guard this pixel was empty: the shared record had been overwritten by the
+  // `<use>`, which moved the first draw on top of the second.
+  expectPixel(bmp, 40, 40, black, "direct draw of #r");
+  expectPixel(bmp, 140, 40, green, "<use> of #r");
+  expectPixel(bmp, 90, 90, clear, "background");
+}
+
+// ---------------------------------------------------------------------------
+// One entity painted solid once and by a gradient once.
+//
+// Both draws come from the same entity, so they share a residence slot, and the
+// gradient's parameters are published onto that slot. The gradient draw cannot
+// convert the pending singleton (same slot), so it drains the batch and opens
+// its own - and that drain emits the solid draw, which republishes the slot's
+// paint as solid on its way out.
+//
+// The hazard: the batch re-derives its instance's record when it flushes. If
+// that re-derivation re-read the slot, it would read the paint the solid draw
+// left behind, rewrite the record as a solid fill, and paint it in the colour
+// the gradient instance never set - opaque black. Carrying the paint scalars on
+// the instance, and claiming the slot before the drain so the solid draw takes
+// the arena fallback, both keep the gradient a gradient.
+// ---------------------------------------------------------------------------
+constexpr std::string_view kSolidThenGradientSvg = R"SVG(
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"
+     viewBox="0 0 200 100">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#ff0000"/>
+      <stop offset="1" stop-color="#ff0000"/>
+    </linearGradient>
+    <rect id="r" x="10" y="10" width="60" height="60"/>
+  </defs>
+  <g fill="#00cc00"><use xlink:href="#r"/></g>
+  <g fill="url(#g)"><use xlink:href="#r" x="100" y="0"/></g>
+</svg>
+)SVG";
+
+TEST_F(GeodePerfTest, SolidThenGradientOfOneEntity_KeepsBothPaints) {
+  auto device = sharedDevice();
+  ASSERT_TRUE(device) << "GeodeDevice::CreateHeadless failed";
+
+  const RendererBitmap bmp = renderSteadyState(kSolidThenGradientSvg, device).bitmap;
+  ASSERT_FALSE(bmp.empty()) << "renderer produced no snapshot";
+
+  const std::array<uint8_t, 4> green = {0, 204, 0, 255};
+  const std::array<uint8_t, 4> red = {255, 0, 0, 255};
+
+  expectPixel(bmp, 40, 40, green, "solid draw of #r");
+  // The gradient's stops are both pure red, so every pixel inside it is red
+  // whatever the ramp does. Before the fix this read opaque black: the record
+  // had been rewritten as a solid fill in a colour nothing ever set.
+  expectPixel(bmp, 140, 40, red, "gradient <use> of #r");
+}
+
+// The reverse order, and the same-paint-twice orderings, guard the same
+// machinery from the other side: whichever draw publishes last, each instance
+// must still render the paint it was appended with.
+constexpr std::string_view kGradientThenSolidSvg = R"SVG(
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"
+     viewBox="0 0 200 100">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#ff0000"/>
+      <stop offset="1" stop-color="#ff0000"/>
+    </linearGradient>
+    <rect id="r" x="10" y="10" width="60" height="60"/>
+  </defs>
+  <g fill="url(#g)"><use xlink:href="#r"/></g>
+  <g fill="#00cc00"><use xlink:href="#r" x="100" y="0"/></g>
+</svg>
+)SVG";
+
+TEST_F(GeodePerfTest, GradientThenSolidOfOneEntity_KeepsBothPaints) {
+  auto device = sharedDevice();
+  ASSERT_TRUE(device) << "GeodeDevice::CreateHeadless failed";
+
+  const RendererBitmap bmp = renderSteadyState(kGradientThenSolidSvg, device).bitmap;
+  ASSERT_FALSE(bmp.empty()) << "renderer produced no snapshot";
+
+  expectPixel(bmp, 40, 40, {255, 0, 0, 255}, "gradient draw of #r");
+  expectPixel(bmp, 140, 40, {0, 204, 0, 255}, "solid <use> of #r");
+}
+
+constexpr std::string_view kGradientTwiceSvg = R"SVG(
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"
+     viewBox="0 0 200 100">
+  <defs>
+    <linearGradient id="a" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#ff0000"/>
+      <stop offset="1" stop-color="#ff0000"/>
+    </linearGradient>
+    <linearGradient id="b" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#0000ff"/>
+      <stop offset="1" stop-color="#0000ff"/>
+    </linearGradient>
+    <rect id="r" x="10" y="10" width="60" height="60"/>
+  </defs>
+  <g fill="url(#a)"><use xlink:href="#r"/></g>
+  <g fill="url(#b)"><use xlink:href="#r" x="100" y="0"/></g>
+</svg>
+)SVG";
+
+TEST_F(GeodePerfTest, GradientTwiceOfOneEntity_KeepsBothRamps) {
+  auto device = sharedDevice();
+  ASSERT_TRUE(device) << "GeodeDevice::CreateHeadless failed";
+
+  const RendererBitmap bmp = renderSteadyState(kGradientTwiceSvg, device).bitmap;
+  ASSERT_FALSE(bmp.empty()) << "renderer produced no snapshot";
+
+  // One slot holds one paint block, so the second ramp overwrites the first
+  // unless the two draws are kept apart. Each must still show its own colour.
+  expectPixel(bmp, 40, 40, {255, 0, 0, 255}, "first gradient draw of #r");
+  expectPixel(bmp, 140, 40, {0, 0, 255, 255}, "second gradient draw of #r");
+}
+
+constexpr std::string_view kCrossEntityGradientRunSvg = R"SVG(
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 100">
+  <defs>
+    <linearGradient id="a" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#ff0000"/>
+      <stop offset="1" stop-color="#ff0000"/>
+    </linearGradient>
+    <linearGradient id="b" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#0000ff"/>
+      <stop offset="1" stop-color="#0000ff"/>
+    </linearGradient>
+  </defs>
+  <rect x="10" y="20" width="60" height="60" fill="url(#a)"/>
+  <rect x="110" y="20" width="60" height="60" fill="#00cc00"/>
+  <rect x="210" y="20" width="60" height="60" fill="url(#b)"/>
+</svg>
+)SVG";
+
+TEST_F(GeodePerfTest, GradientAndSolidRunOfDistinctEntities_KeepsPainterOrder) {
+  auto device = sharedDevice();
+  ASSERT_TRUE(device) << "GeodeDevice::CreateHeadless failed";
+
+  const SteadyStateFrame frame = renderSteadyState(kCrossEntityGradientRunSvg, device);
+  const RendererBitmap& bmp = frame.bitmap;
+  ASSERT_FALSE(bmp.empty()) << "renderer produced no snapshot";
+
+  expectPixel(bmp, 40, 50, {255, 0, 0, 255}, "first gradient fill");
+  expectPixel(bmp, 140, 50, {0, 204, 0, 255}, "solid fill between the gradients");
+  expectPixel(bmp, 240, 50, {0, 0, 255, 255}, "second gradient fill");
+
+  if (RendererGeode::sceneBatchingEnabledForTesting()) {
+    // Distinct entities, so each carries its own record: the interleaved
+    // gradient and solid paints collapse into one draw instead of three plus
+    // the pipeline switches between them.
+    EXPECT_EQ(frame.counters.drawCalls, 1u)
+        << "a gradient/solid/gradient run of distinct entities should form one ordered batch";
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Rect clips carried per instance.
+//
+// Two nested viewports clip their contents to different rectangles, and each
+// holds two oversized fills so there is a run of rect-clipped draws to batch.
+// The clip changes between the viewports, which is exactly what a deferred
+// batch cannot take from raster-stage pass state: by the time the first
+// viewport's batch draw is recorded the encoder may already carry the second
+// viewport's clip.
+// ---------------------------------------------------------------------------
+constexpr std::string_view kNestedViewportClipSvg = R"SVG(
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 100" width="200" height="100">
+  <svg x="0" y="0" width="50" height="100" overflow="hidden">
+    <rect x="0" y="0" width="200" height="40" fill="#ff0000"/>
+    <rect x="0" y="60" width="200" height="40" fill="#0000ff"/>
+  </svg>
+  <svg x="120" y="0" width="50" height="100" overflow="hidden">
+    <rect x="0" y="0" width="200" height="40" fill="#00cc00"/>
+    <rect x="0" y="60" width="200" height="40" fill="#cccc00"/>
+  </svg>
+</svg>
+)SVG";
+
+TEST_F(GeodePerfTest, RectClippedFills_StayInsideTheirOwnViewport) {
+  auto device = sharedDevice();
+  ASSERT_TRUE(device) << "GeodeDevice::CreateHeadless failed";
+
+  const SteadyStateFrame frame = renderSteadyState(kNestedViewportClipSvg, device);
+  const RendererBitmap& bmp = frame.bitmap;
+  ASSERT_FALSE(bmp.empty()) << "renderer produced no snapshot";
+  ASSERT_EQ(bmp.dimensions.x, 200);
+  ASSERT_EQ(bmp.dimensions.y, 100);
+
+  const std::array<uint8_t, 4> red = {255, 0, 0, 255};
+  const std::array<uint8_t, 4> blue = {0, 0, 255, 255};
+  const std::array<uint8_t, 4> green = {0, 204, 0, 255};
+  const std::array<uint8_t, 4> yellow = {204, 204, 0, 255};
+  const std::array<uint8_t, 4> clear = {0, 0, 0, 0};
+
+  // Inside the first viewport both fills survive.
+  expectPixel(bmp, 25, 20, red, "first viewport upper fill");
+  expectPixel(bmp, 25, 80, blue, "first viewport lower fill");
+  // Past its right edge nothing from it may appear. A batch that took the
+  // wrong clip, or no clip at all, paints here.
+  expectPixel(bmp, 80, 20, clear, "right of the first viewport");
+  expectPixel(bmp, 80, 80, clear, "right of the first viewport, lower");
+  // Inside the second viewport both fills survive.
+  expectPixel(bmp, 145, 20, green, "second viewport upper fill");
+  expectPixel(bmp, 145, 80, yellow, "second viewport lower fill");
+  // Between and beyond the viewports stays empty.
+  expectPixel(bmp, 100, 20, clear, "between the viewports");
+  expectPixel(bmp, 190, 80, clear, "right of the second viewport");
+
+  if (RendererGeode::sceneBatchingEnabledForTesting()) {
+    // Each viewport's pair of fills collapses into one draw. A rect-clipped
+    // fill can only do that once the clip travels in the record instead of in
+    // raster-stage pass state; while it did not, all four fills drew alone.
+    EXPECT_EQ(frame.counters.drawCalls, 2u)
+        << "the two rect-clipped fills of each viewport should collapse into one draw each";
+  }
+}
+
+// ---------------------------------------------------------------------------
+// A stroked outline batches as the instance right after its own element fill,
+// so the two must still composite in that order.
+// ---------------------------------------------------------------------------
+constexpr std::string_view kFillAndStrokeRunSvg = R"SVG(
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 100">
+  <rect x="20" y="20" width="60" height="60" fill="#ff0000" stroke="#0000ff" stroke-width="10"/>
+  <rect x="120" y="20" width="60" height="60" fill="#00cc00" stroke="#cccc00" stroke-width="10"/>
+</svg>
+)SVG";
+
+TEST_F(GeodePerfTest, StrokeBatchedWithFill_PaintsOverIt) {
+  auto device = sharedDevice();
+  ASSERT_TRUE(device) << "GeodeDevice::CreateHeadless failed";
+
+  const SteadyStateFrame frame = renderSteadyState(kFillAndStrokeRunSvg, device);
+  const RendererBitmap& bmp = frame.bitmap;
+  ASSERT_FALSE(bmp.empty()) << "renderer produced no snapshot";
+
+  const std::array<uint8_t, 4> red = {255, 0, 0, 255};
+  const std::array<uint8_t, 4> blue = {0, 0, 255, 255};
+  const std::array<uint8_t, 4> green = {0, 204, 0, 255};
+  const std::array<uint8_t, 4> yellow = {204, 204, 0, 255};
+
+  // Rect centres keep their fill.
+  expectPixel(bmp, 50, 50, red, "first fill");
+  expectPixel(bmp, 150, 50, green, "second fill");
+  // The stroke straddles the edge - width 10 centred on x=20 covers 15..25 -
+  // so a point two pixels inside the edge is stroke, not fill. It reads as
+  // fill if the outline was dropped or ordered underneath.
+  expectPixel(bmp, 22, 50, blue, "first stroke over its fill");
+  expectPixel(bmp, 122, 50, yellow, "second stroke over its fill");
+
+  if (RendererGeode::sceneBatchingEnabledForTesting()) {
+    // Two fills and two outlines, one draw. While a stroked element ended the
+    // run, this document could not batch at all and drew four times.
+    EXPECT_EQ(frame.counters.drawCalls, 1u)
+        << "a fill/stroke/fill/stroke run should collapse into a single ordered batch";
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Solo and batched draws must produce identical pixels.
+//
+// Both documents draw the same shapes at the same positions. The second wraps
+// them in a clip path whose rectangle covers the whole viewport: that clips
+// nothing away, but an active clip mask forces every draw onto the solo path,
+// which reads its paint and geometry parameters from the draw-level uniform
+// instead of from the instance record. Any drift between the two parameter
+// sources - a field mirrored into one and not the other, or mirrored with a
+// different value - surfaces here as a pixel difference.
+// ---------------------------------------------------------------------------
+constexpr std::string_view kTwoConventionBatchedSvg = R"SVG(
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 100">
+  <rect x="10" y="10" width="70" height="55" fill="#3366cc"/>
+  <circle cx="140" cy="45" r="33" fill="#cc3366"/>
+  <path d="M 20 95 C 60 60, 120 60, 180 95 Z" fill="#66cc33" fill-rule="evenodd"/>
+</svg>
+)SVG";
+
+constexpr std::string_view kTwoConventionSoloSvg = R"SVG(
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 100">
+  <defs>
+    <clipPath id="everything" clipPathUnits="userSpaceOnUse">
+      <rect x="0" y="0" width="200" height="100"/>
+    </clipPath>
+  </defs>
+  <g clip-path="url(#everything)">
+    <rect x="10" y="10" width="70" height="55" fill="#3366cc"/>
+    <circle cx="140" cy="45" r="33" fill="#cc3366"/>
+    <path d="M 20 95 C 60 60, 120 60, 180 95 Z" fill="#66cc33" fill-rule="evenodd"/>
+  </g>
+</svg>
+)SVG";
+
+TEST_F(GeodePerfTest, RecordSourcedAndUniformSourcedDrawsAgree) {
+  auto device = sharedDevice();
+  ASSERT_TRUE(device) << "GeodeDevice::CreateHeadless failed";
+
+  const RendererBitmap batched = renderSteadyState(kTwoConventionBatchedSvg, device).bitmap;
+  const RendererBitmap solo = renderSteadyState(kTwoConventionSoloSvg, device).bitmap;
+  ASSERT_FALSE(batched.empty());
+  ASSERT_FALSE(solo.empty());
+  ASSERT_EQ(batched.dimensions.x, solo.dimensions.x);
+  ASSERT_EQ(batched.dimensions.y, solo.dimensions.y);
+
+  size_t differingPixels = 0;
+  int firstX = -1;
+  int firstY = -1;
+  for (int y = 0; y < batched.dimensions.y; ++y) {
+    const uint8_t* a = batched.pixels.data() + static_cast<size_t>(y) * batched.rowBytes;
+    const uint8_t* b = solo.pixels.data() + static_cast<size_t>(y) * solo.rowBytes;
+    const size_t rowBytes = static_cast<size_t>(batched.dimensions.x) * 4u;
+    for (size_t i = 0; i < rowBytes; i += 4u) {
+      if (std::memcmp(a + i, b + i, 4u) != 0) {
+        ++differingPixels;
+        if (firstX < 0) {
+          firstX = static_cast<int>(i / 4u);
+          firstY = y;
+        }
+      }
+    }
+  }
+  EXPECT_EQ(differingPixels, 0u)
+      << "record-sourced and uniform-sourced draws of the same content diverged; first at ("
+      << firstX << ", " << firstY << ")";
 }
 
 }  // namespace

@@ -69,11 +69,30 @@ struct alignas(16) InstanceRecord {
   uint32_t vGridBase;          // 196 .. 200
   uint32_t hRefsBase;          // 200 .. 204
   uint32_t vRefsBase;          // 204 .. 208
+  // Axis-aligned device-pixel clip rectangle as a half-open range
+  // `[minX, maxX) x [minY, maxY)` over integer pixel indices, matching what
+  // a rasterizer scissor of the same rectangle keeps. Carrying it here
+  // instead of leaving it in raster-stage pass state is what lets a
+  // rect-clipped fill stay inside a deferred batch: the batch's single draw
+  // is recorded after the clip may already have moved on, so pass state at
+  // record time is the wrong clip, while the per-instance value is the clip
+  // that was live when the instance was appended.
+  float clipRect[4];        // 208 .. 224
+  uint32_t clipRectActive;  // 224 .. 228 - 0 = unclipped, 1 = test clipRect
+  // Element index of this instance's gradient paint block inside the bound
+  // paint array. The block holds the gradient transform, the two-circle or
+  // two-point geometry, and the stop ramp; keeping it out of the record and
+  // reachable by index is what lets differently painted gradient fills share
+  // one draw with each other and with the solid fills between them. Only read
+  // when `paintMode` selects a gradient.
+  uint32_t paintBase;          // 228 .. 232
+  uint32_t gradientSpread;     // 232 .. 236 - 0 pad, 1 reflect, 2 repeat
+  uint32_t gradientStopCount;  // 236 .. 240
   // Tail padding to 256 bytes so record-slab slot offsets satisfy the
   // baseline min_storage_buffer_offset_alignment (256) while the WGSL
   // array stride stays a multiple of it. Zero-initialized by the
   // `= {}` population.
-  float _padTail[12];  // 208 .. 256
+  float _padTail[4];  // 240 .. 256
 };
 static_assert(sizeof(InstanceRecord) == 256, "InstanceRecord struct layout mismatch");
 
@@ -567,7 +586,7 @@ struct GeodeResidentSlot {
   uint64_t allocationOffset = 0;
   uint64_t allocationSize = 0;
 
-  /// Cached fill bind group. All eleven bindings reference stable
+  /// Cached fill bind group. All twelve bindings reference stable
   /// objects (this slot's `buffer` sub-ranges + device-owned dummy
   /// texture/sampler/identity-instance handles), so it survives frames
   /// and encoders. Rebuilt only when the geometry buffer is
@@ -595,6 +614,12 @@ struct GeodeResidentSlot {
   Region vRefs;    ///< Vertical curve-reference SSBO (binding 10).
   Region hGrid;    ///< Horizontal band grid (binding 10).
   Region vGrid;    ///< Vertical band grid (binding 10).
+  /// Gradient paint block: transform rows, gradient geometry, and the stop
+  /// ramp, as `vec4` rows addressed by the record's `paintBase` (binding 11).
+  /// Always reserved, so a fill that changes from solid to gradient paint
+  /// rewrites this region rather than re-laying-out the slot; a solid fill
+  /// leaves it zero-filled and its record never reads it.
+  Region paint;
   Region uniform;  ///< Batch-level uniform block (binding 0, 256-aligned).
 
   /// Document-scoped record slab slot for this entity's instance record
@@ -654,10 +679,23 @@ struct GeodeResidentSlot {
   /// (steady-state frames write zero record bytes).
   std::vector<uint8_t> lastRecord;
 
+  /// Bytes last written to the gradient paint region, with the same
+  /// skip-when-unchanged contract as the record and the uniform.
+  std::vector<uint8_t> lastPaint;
+
+  /// Paint published by the last paint write: the record's `paintMode` and
+  /// the two gradient scalars that go with it. They live on the slot rather
+  /// than travelling with each draw because a batch re-derives an instance's
+  /// record at flush time, after the caller's resolved gradient is gone, and
+  /// must reproduce byte-identical bytes.
+  uint32_t paintMode = 0;
+  uint32_t gradientSpread = 0;
+  uint32_t gradientStopCount = 0;
+
   /// Bytes last written to the uniform region. A draw whose recomputed
   /// uniform matches this skips the `writeBuffer` entirely (steady-state
   /// static frame => zero buffer writes); a camera/color change rewrites
-  /// only this 368-byte region and keeps the cached bind group.
+  /// only this 416-byte region and keeps the cached bind group.
   std::vector<uint8_t> lastUniform;
 
   GeodeResidentSlot() = default;
@@ -702,6 +740,7 @@ struct GeodeResidentSlot {
       vRefs = other.vRefs;
       hGrid = other.hGrid;
       vGrid = other.vGrid;
+      paint = other.paint;
       uniform = other.uniform;
       vertexCount = other.vertexCount;
       lastResidentFrame = other.lastResidentFrame;
@@ -710,6 +749,11 @@ struct GeodeResidentSlot {
       encodedFingerprint = other.encodedFingerprint;
       owningDeviceId = other.owningDeviceId;
       lastUniform = std::move(other.lastUniform);
+      lastRecord = std::move(other.lastRecord);
+      lastPaint = std::move(other.lastPaint);
+      paintMode = other.paintMode;
+      gradientSpread = other.gradientSpread;
+      gradientStopCount = other.gradientStopCount;
       other.resident = false;
       other.encodedKey = nullptr;
       other.owningDeviceId = 0;
@@ -750,6 +794,10 @@ struct GeodeResidentSlot {
     owningDeviceId = 0;
     lastUniform.clear();
     lastRecord.clear();
+    lastPaint.clear();
+    paintMode = 0;
+    gradientSpread = 0;
+    gradientStopCount = 0;
   }
 };
 

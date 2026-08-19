@@ -7,7 +7,13 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <memory>
+#include <span>
+#include <string>
+#include <vector>
+
 #include "donner/base/ParseWarningSink.h"
+#include "donner/base/encoding/Base64.h"
 #include "donner/base/tests/BaseTestUtils.h"
 #include "donner/base/tests/ParseResultTestUtils.h"
 #include "donner/base/xml/components/TreeComponent.h"
@@ -15,9 +21,12 @@
 #include "donner/svg/components/IdComponent.h"
 #include "donner/svg/components/RenderingInstanceComponent.h"
 #include "donner/svg/components/layout/LayoutSystem.h"
+#include "donner/svg/components/resources/ResourceManagerContext.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
 #include "donner/svg/parser/SVGParser.h"
+#include "donner/svg/resources/FontManager.h"
 #include "donner/svg/text/TextEngine.h"
+#include "embed_resources/PublicSansFont.h"
 
 using testing::ElementsAre;
 using testing::Eq;
@@ -226,6 +235,122 @@ TEST_F(RenderingContextTest, GetWorldBoundsInvalidEntity) {
 
   auto bounds = ctx.getWorldBounds(entt::null);
   EXPECT_FALSE(bounds.has_value());
+}
+
+// --- Font identity across style recomputes ---
+
+/// Every style recompute re-announces the document's `@font-face` set to the font manager. That
+/// must not change which entity a text run's font resolves to: downstream caches (rendered glyph
+/// outlines, backend face objects) are keyed on that entity, so a new identity on every unrelated
+/// mutation throws all of them away and reloads the same bytes onto a fresh entity, which also
+/// charges the aggregate font budget again.
+TEST_F(RenderingContextTest, RepeatedRecomputeKeepsResolvedFontIdentityAndBudget) {
+  auto document = ParseSVG(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+      <text id="t" x="10" y="120" font-family="TestFont" font-size="24" fill="black">Hello</text>
+    </svg>
+  )svg");
+
+  Registry& registry = document.registry();
+
+  // Supply the document font through the resource manager, already resolved to bytes. That is the
+  // shape the render pass re-announces to the font layer on every recompute; the stylesheet-driven
+  // path that produces those bytes is covered separately below.
+  css::FontFace face;
+  face.familyName = RcString("TestFont");
+  css::FontFaceSource source;
+  source.kind = css::FontFaceSource::Kind::Data;
+  source.trusted = true;
+  source.payload = std::make_shared<const std::vector<uint8_t>>(
+      embedded::kPublicSansMediumOtf.begin(), embedded::kPublicSansMediumOtf.end());
+  face.sources.push_back(std::move(source));
+  registry.ctx().get<ResourceManagerContext>().addFontFaces(
+      std::span<const css::FontFace>(&face, 1));
+
+  RenderingContext ctx(registry);
+  ctx.instantiateRenderTree(false, warningSink_);
+
+  if (!registry.ctx().contains<FontManager>()) {
+    GTEST_SKIP() << "Text is disabled in this renderer variant";
+  }
+
+  FontManager& fontManager = registry.ctx().get<FontManager>();
+  const FontHandle resolved = fontManager.findFont("TestFont");
+  ASSERT_TRUE(static_cast<bool>(resolved));
+  ASSERT_NE(resolved, fontManager.fallbackFont())
+      << "The document font never resolved, so this test would only be watching the fallback.";
+  const size_t loadedFonts = fontManager.numLoadedFonts();
+  const size_t loadedBytes = fontManager.loadedFontBytes();
+
+  auto text = document.querySelector("#t");
+  ASSERT_TRUE(text.has_value());
+
+  for (int step = 0; step < 8; ++step) {
+    text->setAttribute("x", std::to_string(10 + step));
+    ctx.instantiateRenderTree(false, warningSink_);
+
+    EXPECT_EQ(fontManager.findFont("TestFont"), resolved)
+        << "The font entity changed on an unrelated mutation, at step " << step;
+    EXPECT_EQ(fontManager.numLoadedFonts(), loadedFonts)
+        << "A recompute loaded a duplicate font, at step " << step;
+    EXPECT_EQ(fontManager.loadedFontBytes(), loadedBytes)
+        << "A recompute charged duplicate font bytes, at step " << step;
+  }
+}
+
+/// The same invariant on the path a real document takes: an `@font-face` rule in a `<style>` block
+/// whose `src` has to be fetched and turned into bytes. Every recompute re-announces that rule, so
+/// nothing along the chain may treat the re-announcement as a new declaration: re-registering it
+/// would re-fetch the source, wrap the bytes in a fresh buffer, and hand the font layer an identity
+/// it has never seen, discarding everything cached against the old one.
+TEST_F(RenderingContextTest, RepeatedRecomputeKeepsStylesheetFontIdentityAndBudget) {
+  const std::string fontUrl =
+      "data:font/otf;base64," + EncodeBase64Data(embedded::kPublicSansMediumOtf);
+  const std::string source =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+           <style>@font-face { font-family: TestFont; src: url()" +
+      fontUrl +
+      R"(); }</style>
+           <text id="t" x="10" y="120" font-family="TestFont" font-size="24">Hello</text>
+         </svg>)";
+
+  auto document = ParseSVG(source);
+  Registry& registry = document.registry();
+
+  RenderingContext ctx(registry);
+  ctx.instantiateRenderTree(false, warningSink_);
+
+  if (!registry.ctx().contains<FontManager>()) {
+    GTEST_SKIP() << "Text is disabled in this renderer variant";
+  }
+
+  const auto& resourceManager = registry.ctx().get<ResourceManagerContext>();
+  ASSERT_EQ(resourceManager.fontFaces().size(), 1u);
+
+  FontManager& fontManager = registry.ctx().get<FontManager>();
+  const FontHandle resolved = fontManager.findFont("TestFont");
+  ASSERT_TRUE(static_cast<bool>(resolved));
+  ASSERT_NE(resolved, fontManager.fallbackFont())
+      << "The stylesheet font never resolved, so this test would only be watching the fallback.";
+  const size_t loadedFonts = fontManager.numLoadedFonts();
+  const size_t loadedBytes = fontManager.loadedFontBytes();
+
+  auto text = document.querySelector("#t");
+  ASSERT_TRUE(text.has_value());
+
+  for (int step = 0; step < 8; ++step) {
+    text->setAttribute("x", std::to_string(10 + step));
+    ctx.instantiateRenderTree(false, warningSink_);
+
+    EXPECT_EQ(resourceManager.fontFaces().size(), 1u)
+        << "The stylesheet's rule was registered again, at step " << step;
+    EXPECT_EQ(fontManager.findFont("TestFont"), resolved)
+        << "The font entity changed on an unrelated mutation, at step " << step;
+    EXPECT_EQ(fontManager.numLoadedFonts(), loadedFonts)
+        << "A recompute loaded a duplicate font, at step " << step;
+    EXPECT_EQ(fontManager.loadedFontBytes(), loadedBytes)
+        << "A recompute charged duplicate font bytes, at step " << step;
+  }
 }
 
 // --- Invalidation ---

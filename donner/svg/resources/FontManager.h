@@ -117,6 +117,19 @@ public:
    * Register a `@font-face` declaration. Sources are resolved lazily on first `findFont()` call
    * for the corresponding family name.
    *
+   * Registration is idempotent: re-registering a declaration that is byte-for-byte the same rule
+   * (same family, weight, style, stretch, and the same ordered source list pointing at the same
+   * payloads) reuses the entity minted the first time and leaves the resolution cache intact.
+   * Callers that re-announce a document's whole `@font-face` set on every style recompute
+   * therefore keep stable font entities, which keeps every downstream per-font cache (rendered
+   * glyph outlines, backend face objects) valid across unrelated document mutations. A rule that
+   * differs in any of those fields is a different declaration and mints a new entity, so newly
+   * loaded font data is never served from a stale entity.
+   *
+   * Family names are compared case-insensitively, matching how `findFont()` selects a face, so two
+   * declarations differing only in the casing of their family name are one declaration here and
+   * `numFaces()` counts them once.
+   *
    * @param face The parsed `@font-face` rule.
    */
   void addFontFace(const css::FontFace& face);
@@ -240,12 +253,26 @@ public:
    *
    * The provider is borrowed, not owned, and must outlive this FontManager. Pass nullptr to detach.
    *
+   * Attaching a different provider abandons every font resolved through the previous one, since
+   * another provider may answer the same family with different bytes. Those fonts keep their
+   * entities and their share of the aggregate budget: handles to them may still be held by text
+   * runs and by backend caches keyed on the handle, so their bytes have to stay valid. The budget
+   * is released when the entities are destroyed, normally with the registry.
+   *
    * Resolution order for `findFont(family)`:
    *   1. Matching `@font-face` rule registered via `addFontFace()` (document-provided fonts win).
    *   2. The attached provider (a `FontCatalog` tries Embedded families, then System families).
    *   3. Embedded Public Sans fallback.
    */
-  void setFontProvider(const FontFamilyProvider* provider) { provider_ = provider; }
+  void setFontProvider(const FontFamilyProvider* provider) {
+    if (provider != provider_) {
+      // Another provider may answer the same request with different bytes, so nothing resolved
+      // through the previous one carries over.
+      provider_ = provider;
+      providerFonts_.clear();
+      cache_.clear();
+    }
+  }
 
   /**
    * Set the process-wide default font provider. Every FontManager constructed afterwards adopts it
@@ -331,11 +358,63 @@ private:
   /// Returns true if \p handle refers to a live font entity in the registry.
   bool isValidHandle(FontHandle handle) const;
 
+  /**
+   * Identity of one provider lookup: the family the provider was asked for, folded the way family
+   * matching compares it, plus the exact face within that family.
+   *
+   * The face is part of the identity because a provider resolves a family to one of its faces:
+   * asking for bold and asking for regular are two different questions with two different answers.
+   * Keying only on the family would hand every weight and style whichever variant happened to be
+   * loaded first.
+   */
+  struct ProviderFontKey {
+    std::string family;  ///< Family name, ASCII-lowercased.
+    int weight = 400;    ///< CSS font-weight, 100-900.
+    int style = 0;       ///< CSS font-style, matching \ref FontStyle.
+    int stretch = 5;     ///< CSS font-stretch, matching \ref FontStretch.
+
+    /// Equality comparison; the fields are the identity, so this is total over them.
+    bool operator==(const ProviderFontKey& other) const = default;
+  };
+
+  /// Hash for \ref ProviderFontKey. Combines the fields rather than concatenating them into a
+  /// string, so no field value can be mistaken for part of another.
+  struct ProviderFontKeyHash {
+    /// Returns a hash value combining every field of \p key.
+    size_t operator()(const ProviderFontKey& key) const noexcept;
+  };
+
   /// Internal EnTT storage for font faces, loaded font bytes, and backend caches.
   Registry& registry_;  // NOLINT(cppcoreguidelines-avoid-const-or-ref-data-members)
 
   /// Cache: family/style query key → resolved font handle.
   std::unordered_map<std::string, FontHandle> cache_;
+
+  /// Identity key of every registered `@font-face` rule to the entity holding it. Keeps
+  /// re-registration of an unchanged rule from minting a second entity for the same declaration.
+  std::unordered_map<std::string, Entity> faceEntities_;
+
+  /// Registration counter handed to each new face so ties between equally good faces can resolve
+  /// to the one declared last without depending on ECS storage order.
+  uint64_t nextFaceSequence_ = 0;
+
+  /**
+   * Resolved provider lookup to the entity holding the bytes it returned.
+   *
+   * A provider answers per requested face, not per family: the same family with a different weight
+   * or style is a different face and legitimately different bytes, so the key has to carry the
+   * whole request. Memoizing on that keeps a repeated request, including one repeated after the
+   * resolution cache is dropped, on one identity instead of loading a duplicate copy of the same
+   * bytes onto a fresh entity each time. Entries are only ever read back, never reloaded, so bytes
+   * are never swapped underneath a handle already in use. Attaching a different provider drops the
+   * whole map, because another provider may answer the same request with different bytes.
+   *
+   * The map holds one entry per distinct request the document actually made, not one per family,
+   * so a document using several weights of one family keeps several entries. That is the same set
+   * of loads the provider would be asked for without this memo; what the memo removes is repeating
+   * them.
+   */
+  std::unordered_map<ProviderFontKey, FontHandle, ProviderFontKeyHash> providerFonts_;
 
   /// Mapping from CSS generic family names to real family names.
   std::unordered_map<std::string, std::string> genericFamilyMap_;

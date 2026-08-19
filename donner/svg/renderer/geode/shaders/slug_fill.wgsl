@@ -76,6 +76,13 @@ struct Uniforms {
   hRefsBase: u32,
   vRefsBase: u32,
   boundingVertices: array<vec4f, 4>,
+  // Draw-level copy of the per-instance clip rectangle, mirrored from the
+  // record the same draw would have written.
+  clipRect: vec4f,
+  clipRectActive: u32,
+  paintBase: u32,
+  gradientSpread: u32,
+  gradientStopCount: u32,
 };
 
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
@@ -155,9 +162,22 @@ struct InstanceRecord {
   vGridBase: u32,
   hRefsBase: u32,
   vRefsBase: u32,
+  // Axis-aligned device-pixel clip rectangle, half-open over integer pixel
+  // indices: a fragment survives when `floor(pixel_center)` lies in
+  // `[clipRect.xy, clipRect.zw)`. That is exactly the set a rasterizer
+  // scissor of the same rectangle keeps. Carrying the rectangle per instance
+  // is what lets a rect-clipped fill stay inside a deferred batch, whose one
+  // draw is recorded after the clip may already have moved on.
+  clipRect: vec4f,
+  clipRectActive: u32,
+  // Element index of this instance's gradient paint block in `paintData`.
+  // Meaningless (and never read) unless paintMode selects a gradient.
+  paintBase: u32,
+  gradientSpread: u32,
+  gradientStopCount: u32,
   // Tail padding to 256 bytes so record-slab slot offsets satisfy the
   // baseline min_storage_buffer_offset_alignment (256).
-  _padTail: array<vec4f, 3>,
+  _padTail: vec4f,
 };
 @group(0) @binding(7) var<storage, read> instances: array<InstanceRecord>;
 
@@ -176,6 +196,33 @@ struct InstanceRecord {
 // `vBands`; `gridData[hRefsBase + ...]` / `gridData[vRefsBase + ...]`
 // index curves within a band.
 @group(0) @binding(10) var<storage, read> gridData: array<u32>;
+
+// Gradient paint parameters and stop ramp, as vec4 rows. Every instance
+// record carries the element index of its own block, so a run of differently
+// painted gradient fills needs no per-draw uniform rebinding and can share one
+// draw with the solid fills around it. Block layout, relative to `paintBase`:
+//
+//   +0  gradientFromPath row0 (a, c, e, 0)
+//   +1  gradientFromPath row1 (b, d, f, 0)
+//   +2  (startGrad.xy, endGrad.xy)                      linear
+//   +3  (center.xy, focalCenter.xy)                     radial
+//   +4  (radius, focalRadius, 0, 0)                     radial
+//   +5  .. +20  stop colours, straight alpha
+//   +21 .. +24  stop offsets, four per row
+//
+// A solid or pattern instance points at a zero-filled block and never reads
+// it, so the whole array can be one binding over the geometry chunk.
+@group(0) @binding(11) var<storage, read> paintData: array<vec4f>;
+
+const kPaintSolid: u32 = 0u;
+const kPaintPattern: u32 = 1u;
+const kPaintLinearGradient: u32 = 2u;
+const kPaintRadialGradient: u32 = 3u;
+
+const kMaxStops: u32 = 16u;
+const kPaintStopColorRow: u32 = 5u;
+const kPaintStopOffsetRow: u32 = 21u;
+const kInvalidGradientT: f32 = -1e30;
 
 // Sentinel for an empty grid cell (must match EncodedPath::kNoBand).
 const kNoBand: u32 = 0xFFFFFFFFu;
@@ -460,7 +507,145 @@ struct PaintParams {
   vGridBase: u32,
   hRefsBase: u32,
   vRefsBase: u32,
+  clipRect: vec4f,
+  clipRectActive: u32,
+  paintBase: u32,
+  gradientSpread: u32,
+  gradientStopCount: u32,
 };
+
+// ----------------------------------------------------------------------------
+// Gradient paint. The parameter math matches the dedicated gradient pipeline
+// exactly, statement for statement, so a fill that moves between the two
+// produces the same pixels; only where the parameters are read from differs.
+// ----------------------------------------------------------------------------
+
+fn gradient_space(paint: PaintParams, path_pos: vec2f) -> vec2f {
+  let row0 = paintData[paint.paintBase + 0u];
+  let row1 = paintData[paint.paintBase + 1u];
+  let gx = row0.x * path_pos.x + row0.y * path_pos.y + row0.z;
+  let gy = row1.x * path_pos.x + row1.y * path_pos.y + row1.z;
+  return vec2f(gx, gy);
+}
+
+fn linear_gradient_t(paint: PaintParams, gpos: vec2f) -> f32 {
+  let ends = paintData[paint.paintBase + 2u];
+  let start = ends.xy;
+  let axis = ends.zw - start;
+  let axisLenSq = max(dot(axis, axis), 1e-12);
+  return dot(gpos - start, axis) / axisLenSq;
+}
+
+fn radial_gradient_t(paint: PaintParams, gpos: vec2f) -> f32 {
+  let centers = paintData[paint.paintBase + 3u];
+  let radii = paintData[paint.paintBase + 4u];
+  let center = centers.xy;
+  let focal = centers.zw;
+  let outerRadius = radii.x;
+  let focalRadius = radii.y;
+
+  let e = gpos - focal;
+  let d = center - focal;
+  let dr = outerRadius - focalRadius;
+  let a = dot(d, d) - dr * dr;
+  let b = dot(e, d) + focalRadius * dr;
+  let c = dot(e, e) - focalRadius * focalRadius;
+
+  if (abs(a) < 1e-8) {
+    if (abs(b) < 1e-8) {
+      return 1.0;
+    }
+    let linear_t = c / (2.0 * b);
+    if (focalRadius + linear_t * dr < 0.0) {
+      return kInvalidGradientT;
+    }
+    return linear_t;
+  }
+
+  let disc = b * b - a * c;
+  if (disc < 0.0) {
+    return kInvalidGradientT;
+  }
+
+  let sqrtDisc = sqrt(disc);
+  let invA = 1.0 / a;
+  let t0 = (b - sqrtDisc) * invA;
+  let t1 = (b + sqrtDisc) * invA;
+
+  let r1 = focalRadius + t1 * dr;
+  if (r1 >= 0.0) {
+    return t1;
+  }
+  let r0 = focalRadius + t0 * dr;
+  if (r0 >= 0.0) {
+    return t0;
+  }
+  return kInvalidGradientT;
+}
+
+fn gradient_t(paint: PaintParams, path_pos: vec2f) -> f32 {
+  let gpos = gradient_space(paint, path_pos);
+  if (paint.paintMode == kPaintRadialGradient) {
+    return radial_gradient_t(paint, gpos);
+  }
+  return linear_gradient_t(paint, gpos);
+}
+
+fn apply_spread(t: f32, mode: u32) -> f32 {
+  if (mode == 1u) {
+    var r = t - 2.0 * floor(t * 0.5);
+    if (r > 1.0) {
+      r = 2.0 - r;
+    }
+    return r;
+  }
+  if (mode == 2u) {
+    return t - floor(t);
+  }
+  return clamp(t, 0.0, 1.0);
+}
+
+fn load_stop_offset(paint: PaintParams, index: u32) -> f32 {
+  let row = paintData[paint.paintBase + kPaintStopOffsetRow + index / 4u];
+  let lane = index % 4u;
+  if (lane == 0u) {
+    return row.x;
+  }
+  if (lane == 1u) {
+    return row.y;
+  }
+  if (lane == 2u) {
+    return row.z;
+  }
+  return row.w;
+}
+
+fn sample_stops(paint: PaintParams, t: f32) -> vec4f {
+  let count = min(paint.gradientStopCount, kMaxStops);
+  if (count == 0u) {
+    return vec4f(0.0, 0.0, 0.0, 0.0);
+  }
+  let firstOffset = load_stop_offset(paint, 0u);
+  if (t <= firstOffset) {
+    return paintData[paint.paintBase + kPaintStopColorRow];
+  }
+  let lastOffset = load_stop_offset(paint, count - 1u);
+  if (t >= lastOffset) {
+    return paintData[paint.paintBase + kPaintStopColorRow + count - 1u];
+  }
+  for (var i: u32 = 1u; i < count; i = i + 1u) {
+    let o0 = load_stop_offset(paint, i - 1u);
+    let o1 = load_stop_offset(paint, i);
+    if (t <= o1) {
+      let span = max(o1 - o0, 1e-6);
+      let f = (t - o0) / span;
+      let c0 = paintData[paint.paintBase + kPaintStopColorRow + i - 1u];
+      let c1 = paintData[paint.paintBase + kPaintStopColorRow + i];
+      return mix(c0, c1, f);
+    }
+  }
+  return paintData[paint.paintBase + kPaintStopColorRow + count - 1u];
+}
 
 fn load_h_curve(paint: PaintParams, index: u32) -> Quadratic {
   let base = paint.curveBase + index * 6u;
@@ -655,6 +840,20 @@ fn calc_coverage(h: RayCoverage, v: RayCoverage) -> f32 {
 // Fragment stage
 // ============================================================================
 
+// Half-open integer-pixel rectangle test. `pixel_pos` is
+// `@builtin(position).xy`, whose fractional part is always 0.5 at 1
+// sample/pixel, so flooring recovers the exact integer pixel index and the
+// comparison keeps precisely the pixels a rasterizer scissor of the same
+// rectangle would keep.
+fn sample_in_clip_rect(paint: PaintParams, pixel_pos: vec2f) -> bool {
+  if (paint.clipRectActive == 0u) {
+    return true;
+  }
+  let pixel = floor(pixel_pos);
+  return pixel.x >= paint.clipRect.x && pixel.x < paint.clipRect.z &&
+         pixel.y >= paint.clipRect.y && pixel.y < paint.clipRect.w;
+}
+
 fn sample_in_clip_polygon(pixel_pos: vec2f) -> bool {
   if (uniforms.hasClipPolygon == 0u) {
     return true;
@@ -672,7 +871,10 @@ struct FragOutput {
   @location(0) color: vec4f,
 };
 
-fn shade(paint: PaintParams, in: VertexOutput) -> FragOutput {
+/// Analytic coverage of this fragment, folded through the fill rule and every
+/// clip. Returns zero when nothing of this path covers the pixel; the caller
+/// discards rather than blending a fully transparent fragment.
+fn shade_coverage(paint: PaintParams, in: VertexOutput) -> f32 {
   let pixel_center = in.clip_pos.xy;
 
   // Path-units per pixel, per axis. `sample_pos` is a linear function of the
@@ -725,26 +927,20 @@ fn shade(paint: PaintParams, in: VertexOutput) -> FragOutput {
     coverage = 0.0;
   }
 
+  // Axis-aligned rect clip, in the same viewport-pixel space.
+  if (!sample_in_clip_rect(paint, pixel_center)) {
+    coverage = 0.0;
+  }
+
   // Path-clip mask coverage (multiplicative).
   var clipCoverage: f32 = 1.0;
   if (uniforms.hasClipMask != 0u) {
     clipCoverage = clip_mask_coverage(pixel_center);
   }
-  coverage = coverage * clipCoverage;
+  return coverage * clipCoverage;
+}
 
-  if (coverage <= 0.0) {
-    discard;
-  }
-
-  var out: FragOutput;
-
-  if (paint.paintMode == 0u) {
-    // `paint.color` is premultiplied; scale all channels by coverage.
-    out.color = paint.color * coverage;
-    return out;
-  }
-
-  // Pattern mode.
+fn shade_pattern(paint: PaintParams, in: VertexOutput, coverage: f32) -> vec4f {
   let patternPos = (uniforms.patternFromPath * vec4f(in.sample_pos, 0.0, 1.0)).xy;
   let wrapped = vec2f(
     fract(patternPos.x / uniforms.tileSize.x) * uniforms.tileSize.x,
@@ -752,20 +948,35 @@ fn shade(paint: PaintParams, in: VertexOutput) -> FragOutput {
   );
   let uv = wrapped / uniforms.tileSize;
   // textureSampleLevel, not textureSample: the batched entry point reads
-  // paintMode per instance, so the solid-color early return above is
+  // paintMode per instance, so the solid-color early return in its caller is
   // non-uniform control flow and WGSL forbids implicit-derivative sampling
   // past it (browser compilers reject the module; native validation does
   // not). Pattern textures are created with a single mip level, so sampling
   // level 0 explicitly is an exact behavioral match.
-  var sampled = textureSampleLevel(patternTexture, patternSampler, uv, 0.0);
-  sampled = sampled * paint.patternOpacity * coverage;
-  out.color = sampled;
-  return out;
+  return textureSampleLevel(patternTexture, patternSampler, uv, 0.0) *
+         paint.patternOpacity * coverage;
+}
+
+fn shade_gradient(paint: PaintParams, in: VertexOutput, coverage: f32) -> vec4f {
+  let raw_t = gradient_t(paint, in.sample_pos);
+  if (raw_t < -1e20) {
+    discard;
+  }
+  let t = apply_spread(raw_t, paint.gradientSpread);
+  // Stops interpolate in straight alpha and premultiply at output, which is
+  // what the CPU renderer does and what the stop-opacity conformance cases
+  // expect.
+  let straight = sample_stops(paint, t);
+  return vec4f(straight.rgb * straight.a, straight.a) * coverage;
 }
 
 /// Shared-paint entry point: every instance of this draw carries the same
 /// paint and the same encoded path, so the parameters come from the uniform
-/// and the fragment stage never touches binding 7.
+/// and the fragment stage never touches binding 7. Gradient paint never
+/// reaches here - a gradient draw either joins an ordered batch, which uses
+/// the batched entry point below, or goes to the dedicated gradient pipeline -
+/// so this entry point does not compile the gradient shading in, and the
+/// fragment cost of a plain solid fill is unchanged by its existence.
 @fragment
 fn fs_main(in: VertexOutput) -> FragOutput {
   var paint: PaintParams;
@@ -787,7 +998,24 @@ fn fs_main(in: VertexOutput) -> FragOutput {
   paint.vGridBase = uniforms.vGridBase;
   paint.hRefsBase = uniforms.hRefsBase;
   paint.vRefsBase = uniforms.vRefsBase;
-  return shade(paint, in);
+  paint.clipRect = uniforms.clipRect;
+  paint.clipRectActive = uniforms.clipRectActive;
+  paint.paintBase = uniforms.paintBase;
+  paint.gradientSpread = uniforms.gradientSpread;
+  paint.gradientStopCount = uniforms.gradientStopCount;
+
+  let coverage = shade_coverage(paint, in);
+  if (coverage <= 0.0) {
+    discard;
+  }
+  var out: FragOutput;
+  if (paint.paintMode == kPaintSolid) {
+    // `paint.color` is premultiplied; scale all channels by coverage.
+    out.color = paint.color * coverage;
+    return out;
+  }
+  out.color = shade_pattern(paint, in, coverage);
+  return out;
 }
 
 /// Cross-entity batch entry point: each instance carries its own paint and
@@ -815,5 +1043,25 @@ fn fs_main_batched(in: VertexOutput) -> FragOutput {
   paint.vGridBase = rec.vGridBase;
   paint.hRefsBase = rec.hRefsBase;
   paint.vRefsBase = rec.vRefsBase;
-  return shade(paint, in);
+  paint.clipRect = rec.clipRect;
+  paint.clipRectActive = rec.clipRectActive;
+  paint.paintBase = rec.paintBase;
+  paint.gradientSpread = rec.gradientSpread;
+  paint.gradientStopCount = rec.gradientStopCount;
+
+  let coverage = shade_coverage(paint, in);
+  if (coverage <= 0.0) {
+    discard;
+  }
+  var out: FragOutput;
+  if (paint.paintMode == kPaintSolid) {
+    out.color = paint.color * coverage;
+    return out;
+  }
+  if (paint.paintMode >= kPaintLinearGradient) {
+    out.color = shade_gradient(paint, in, coverage);
+    return out;
+  }
+  out.color = shade_pattern(paint, in, coverage);
+  return out;
 }

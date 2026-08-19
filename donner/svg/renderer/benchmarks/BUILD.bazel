@@ -25,6 +25,7 @@ donner_cc_binary(
     name = "renderer_bench",
     srcs = ["RendererBench.cc"],
     data = [
+        "testdata/gradient_grid.svg",
         "//donner/svg/renderer/testdata",
     ],
     target_compatible_with = select({
@@ -33,7 +34,9 @@ donner_cc_binary(
     }),
     deps = [
         "//donner/base",
+        "//donner/css",
         "//donner/svg",
+        "//donner/svg/components/resources:resource_manager_context",
         "//donner/svg/parser",
         "//donner/svg/renderer:renderer_geode",
         "//donner/svg/renderer/geode:geode_device",

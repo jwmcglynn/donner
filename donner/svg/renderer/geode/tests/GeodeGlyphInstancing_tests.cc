@@ -335,11 +335,15 @@ TEST_F(GeodeGlyphInstancingTest, DistinctRotationsTakeDistinctResidentOutlines) 
   EXPECT_EQ(first.counters.glyphResidencyUploads, 3u);
 }
 
-/// A document that keeps mutating - the editor's typing and drag loop - churns
-/// glyph identities today, because re-resolving a text element's style hands
-/// back new font handles (a `FontManager` behaviour this change does not
-/// touch). The residency must then stay BOUNDED by its budget rather than
-/// growing without limit: superseded entries have to be evicted, not stranded.
+/// A document that keeps mutating - the editor's typing and drag loop - must
+/// not churn glyph identities when the mutation says nothing about the glyphs.
+/// A style recompute re-resolves the text element's font, and the resolved font
+/// entity is what `GlyphGeometryKey::fontId` carries, so an unstable entity
+/// would silently give every glyph a new key on every keystroke: total misses,
+/// every outline refetched and re-uploaded, and the superseded entries left to
+/// be evicted. Recoloring changes no glyph geometry, so residency must hold at
+/// the run's distinct-outline count with nothing re-derived and nothing
+/// evicted.
 TEST_F(GeodeGlyphInstancingTest, RepeatedMutationKeepsResidencyBounded) {
   SVGDocument document = parse(R"svg(
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
@@ -351,12 +355,53 @@ TEST_F(GeodeGlyphInstancingTest, RepeatedMutationKeepsResidencyBounded) {
   ASSERT_TRUE(text.has_value());
 
   RendererGeode renderer(sharedDevice());
-  // A budget far below what 20 rounds of unreclaimed churn would reach, so a
-  // pass means eviction is doing the work rather than the budget being roomy.
+  // "Hello" resolves to four distinct glyph outlines, and a recolor changes
+  // none of them, so this is the exact count for every round rather than a
+  // ceiling: any other number means identities are being churned.
+  constexpr size_t kDistinctGlyphs = 4u;
+
+  uint64_t totalEvictions = 0;
+  uint64_t uploadsAfterFirstFrame = 0;
+  for (int round = 0; round < 20; ++round) {
+    // Alternate the fill so every round is a real style mutation while the
+    // glyph geometry stays identical.
+    text->setAttribute("fill", (round % 2) == 0 ? "#101010" : "#202020");
+    const Frame frame = render(renderer, document);
+    ASSERT_GT(nonTransparentPixels(frame.bitmap), 0u)
+        << "Text stopped rendering at mutation round " << round;
+    totalEvictions += frame.counters.glyphResidencyEvictions;
+    if (round > 0) {
+      uploadsAfterFirstFrame += frame.counters.glyphResidencyUploads;
+    }
+
+    EXPECT_EQ(renderer.residentGlyphCountForTesting(document), kDistinctGlyphs)
+        << "A recolor changed the resident glyph set at mutation round " << round;
+  }
+
+  EXPECT_EQ(uploadsAfterFirstFrame, 0u)
+      << "A mutation that changes no glyph geometry re-derived an outline; the glyph key is not "
+         "stable across style recomputes.";
+  EXPECT_EQ(totalEvictions, 0u)
+      << "Nothing was superseded, so nothing should have needed reclaiming.";
+}
+
+/// The counterpart to the recolor loop: a mutation that DOES change glyph
+/// geometry legitimately produces new identities every round, and the residency
+/// has to reclaim the superseded ones rather than growing without limit. This
+/// is what keeps the eviction path exercised now that ordinary mutation no
+/// longer churns.
+TEST_F(GeodeGlyphInstancingTest, GlyphChurnStaysBoundedByEviction) {
+  SVGDocument document = parse(R"svg(
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+        <text id="t" x="10" y="120" font-family="Noto Sans" font-size="24"
+              fill="black">Hello</text>
+      </svg>)svg");
+
+  auto text = document.querySelector("#t");
+  ASSERT_TRUE(text.has_value());
+
+  RendererGeode renderer(sharedDevice());
   constexpr size_t kMaxEntries = 16u;
-  // "Hello" resolves to four distinct glyph outlines, and a frame's own new
-  // entries land AFTER that frame's trim, so the count legitimately sits above
-  // the cap until the next frame trims it. Give that one frame of headroom.
   constexpr size_t kDistinctGlyphsPerFrame = 4u;
   constexpr size_t kCeiling = kMaxEntries + kDistinctGlyphsPerFrame;
   renderer.setGlyphResidencyBudgetForTesting(kMaxEntries, /*maxEncodedBytes=*/1u << 30);
@@ -364,9 +409,9 @@ TEST_F(GeodeGlyphInstancingTest, RepeatedMutationKeepsResidencyBounded) {
   uint64_t totalEvictions = 0;
   size_t settledCount = 0;
   for (int round = 0; round < 20; ++round) {
-    // Alternate the fill so every round is a real style mutation while the
-    // glyph geometry stays identical.
-    text->setAttribute("fill", (round % 2) == 0 ? "#101010" : "#202020");
+    // A new font size every round is a genuinely new outline scale, so each
+    // round's glyphs are new identities and the previous round's are dead.
+    text->setAttribute("font-size", std::to_string(20 + round));
     const Frame frame = render(renderer, document);
     ASSERT_GT(nonTransparentPixels(frame.bitmap), 0u)
         << "Text stopped rendering at mutation round " << round;
@@ -387,9 +432,77 @@ TEST_F(GeodeGlyphInstancingTest, RepeatedMutationKeepsResidencyBounded) {
   }
 
   EXPECT_GT(totalEvictions, 0u)
-      << "Mutation churn must be reclaimed by eviction, not accumulated. If this fails while "
+      << "Glyph churn must be reclaimed by eviction, not accumulated. If this fails while "
          "the ceiling assertion passes, the churn stopped happening and this test is now "
          "measuring nothing.";
+}
+
+/// The narrowest statement of the same invariant, on the mutation an editor
+/// drag actually performs: moving a `<text>` element changes where its glyphs
+/// land, never which outlines they are. Every frame after the first must serve
+/// all of them from residency, re-encoding and re-uploading nothing.
+TEST_F(GeodeGlyphInstancingTest, RepositioningTextReusesEveryResidentGlyph) {
+  SVGDocument document = parse(R"svg(
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+        <text id="t" x="10" y="120" font-family="Noto Sans" font-size="24"
+              fill="black">Hello</text>
+      </svg>)svg");
+
+  auto text = document.querySelector("#t");
+  ASSERT_TRUE(text.has_value());
+
+  RendererGeode renderer(sharedDevice());
+  const Frame first = render(renderer, document);
+  ASSERT_GT(nonTransparentPixels(first.bitmap), 0u) << "Text did not render at all.";
+  const size_t residentAfterFirst = renderer.residentGlyphCountForTesting(document);
+  ASSERT_GT(residentAfterFirst, 0u) << "No glyphs became resident; the loop below proves nothing.";
+
+  for (int round = 0; round < 16; ++round) {
+    text->setAttribute("x", std::to_string(10 + round));
+    const Frame frame = render(renderer, document);
+    ASSERT_GT(nonTransparentPixels(frame.bitmap), 0u)
+        << "Text stopped rendering at drag step " << round;
+
+    EXPECT_EQ(frame.counters.glyphResidencyUploads, 0u)
+        << "A move re-derived a glyph outline at drag step " << round;
+    EXPECT_EQ(frame.counters.pathEncodes, 0u)
+        << "A move re-encoded glyph geometry at drag step " << round;
+    EXPECT_EQ(frame.counters.glyphResidencyEvictions, 0u)
+        << "A move superseded a glyph identity at drag step " << round;
+    EXPECT_EQ(renderer.residentGlyphCountForTesting(document), residentAfterFirst)
+        << "Residency changed size on a move at drag step " << round;
+  }
+}
+
+/// Reuse must not go so far that a genuinely different font keeps the old
+/// glyphs. Switching `font-family` selects different outlines for the same
+/// characters, so those are new identities that have to be built and drawn.
+TEST_F(GeodeGlyphInstancingTest, FontFamilyChangeTakesNewGlyphIdentities) {
+  SVGDocument document = parse(R"svg(
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+        <text id="t" x="10" y="120" font-family="Noto Sans" font-size="48"
+              fill="black">Hello</text>
+      </svg>)svg");
+
+  auto text = document.querySelector("#t");
+  ASSERT_TRUE(text.has_value());
+
+  RendererGeode renderer(sharedDevice());
+  const Frame sans = render(renderer, document);
+  const size_t sansPixels = nonTransparentPixels(sans.bitmap);
+  ASSERT_GT(sansPixels, 0u) << "Text did not render at all.";
+  const size_t sansResident = renderer.residentGlyphCountForTesting(document);
+  ASSERT_GT(sansResident, 0u);
+
+  text->setAttribute("font-family", "Noto Serif");
+  const Frame serif = render(renderer, document);
+  EXPECT_GT(nonTransparentPixels(serif.bitmap), 0u) << "Text stopped rendering after the swap.";
+  EXPECT_GT(serif.counters.glyphResidencyUploads, 0u)
+      << "A different font must build its own outlines rather than reusing the previous font's.";
+  EXPECT_GT(renderer.residentGlyphCountForTesting(document), sansResident)
+      << "The serif glyphs are additional identities, not the sans ones renamed.";
+  EXPECT_NE(nonTransparentPixels(serif.bitmap), sansPixels)
+      << "The serif face drew exactly the sans coverage; the font swap did not reach the glyphs.";
 }
 
 }  // namespace
