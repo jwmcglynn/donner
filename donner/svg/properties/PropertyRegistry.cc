@@ -1336,46 +1336,59 @@ ParseResult<PointerEvents> ParsePointerEvents(std::span<const css::ComponentValu
   return err;
 }
 
+// Keyword table for the `cursor` property, in specification order. A table
+// plus one comparison loop stays readable as the list grows, where a chain of
+// nearly forty branches did not. CSS keywords are case-insensitive, so entries
+// are matched with `equalsLowercase` rather than looked up in a case-sensitive
+// map.
+constexpr std::array<std::pair<std::string_view, CursorType>, 36> kCursorKeywords{{
+    {"auto", CursorType::Auto},
+    {"default", CursorType::Default},
+    {"none", CursorType::None},
+    {"context-menu", CursorType::ContextMenu},
+    {"help", CursorType::Help},
+    {"pointer", CursorType::Pointer},
+    {"progress", CursorType::Progress},
+    {"wait", CursorType::Wait},
+    {"cell", CursorType::Cell},
+    {"crosshair", CursorType::Crosshair},
+    {"text", CursorType::Text},
+    {"vertical-text", CursorType::VerticalText},
+    {"alias", CursorType::Alias},
+    {"copy", CursorType::Copy},
+    {"move", CursorType::Move},
+    {"no-drop", CursorType::NoDrop},
+    {"not-allowed", CursorType::NotAllowed},
+    {"grab", CursorType::Grab},
+    {"grabbing", CursorType::Grabbing},
+    {"e-resize", CursorType::EResize},
+    {"n-resize", CursorType::NResize},
+    {"ne-resize", CursorType::NEResize},
+    {"nw-resize", CursorType::NWResize},
+    {"s-resize", CursorType::SResize},
+    {"se-resize", CursorType::SEResize},
+    {"sw-resize", CursorType::SWResize},
+    {"w-resize", CursorType::WResize},
+    {"ew-resize", CursorType::EWResize},
+    {"ns-resize", CursorType::NSResize},
+    {"nesw-resize", CursorType::NESWResize},
+    {"nwse-resize", CursorType::NWSEResize},
+    {"col-resize", CursorType::ColResize},
+    {"row-resize", CursorType::RowResize},
+    {"all-scroll", CursorType::AllScroll},
+    {"zoom-in", CursorType::ZoomIn},
+    {"zoom-out", CursorType::ZoomOut},
+}};
+
 ParseResult<CursorType> ParseCursorType(std::span<const css::ComponentValue> components) {
   if (components.size() == 1) {
     if (const auto* ident = components.front().tryGetToken<css::Token::Ident>()) {
       const RcString& value = ident->value;
-      if (value.equalsLowercase("auto")) return CursorType::Auto;
-      if (value.equalsLowercase("default")) return CursorType::Default;
-      if (value.equalsLowercase("none")) return CursorType::None;
-      if (value.equalsLowercase("context-menu")) return CursorType::ContextMenu;
-      if (value.equalsLowercase("help")) return CursorType::Help;
-      if (value.equalsLowercase("pointer")) return CursorType::Pointer;
-      if (value.equalsLowercase("progress")) return CursorType::Progress;
-      if (value.equalsLowercase("wait")) return CursorType::Wait;
-      if (value.equalsLowercase("cell")) return CursorType::Cell;
-      if (value.equalsLowercase("crosshair")) return CursorType::Crosshair;
-      if (value.equalsLowercase("text")) return CursorType::Text;
-      if (value.equalsLowercase("vertical-text")) return CursorType::VerticalText;
-      if (value.equalsLowercase("alias")) return CursorType::Alias;
-      if (value.equalsLowercase("copy")) return CursorType::Copy;
-      if (value.equalsLowercase("move")) return CursorType::Move;
-      if (value.equalsLowercase("no-drop")) return CursorType::NoDrop;
-      if (value.equalsLowercase("not-allowed")) return CursorType::NotAllowed;
-      if (value.equalsLowercase("grab")) return CursorType::Grab;
-      if (value.equalsLowercase("grabbing")) return CursorType::Grabbing;
-      if (value.equalsLowercase("e-resize")) return CursorType::EResize;
-      if (value.equalsLowercase("n-resize")) return CursorType::NResize;
-      if (value.equalsLowercase("ne-resize")) return CursorType::NEResize;
-      if (value.equalsLowercase("nw-resize")) return CursorType::NWResize;
-      if (value.equalsLowercase("s-resize")) return CursorType::SResize;
-      if (value.equalsLowercase("se-resize")) return CursorType::SEResize;
-      if (value.equalsLowercase("sw-resize")) return CursorType::SWResize;
-      if (value.equalsLowercase("w-resize")) return CursorType::WResize;
-      if (value.equalsLowercase("ew-resize")) return CursorType::EWResize;
-      if (value.equalsLowercase("ns-resize")) return CursorType::NSResize;
-      if (value.equalsLowercase("nesw-resize")) return CursorType::NESWResize;
-      if (value.equalsLowercase("nwse-resize")) return CursorType::NWSEResize;
-      if (value.equalsLowercase("col-resize")) return CursorType::ColResize;
-      if (value.equalsLowercase("row-resize")) return CursorType::RowResize;
-      if (value.equalsLowercase("all-scroll")) return CursorType::AllScroll;
-      if (value.equalsLowercase("zoom-in")) return CursorType::ZoomIn;
-      if (value.equalsLowercase("zoom-out")) return CursorType::ZoomOut;
+      for (const auto& [keyword, cursor] : kCursorKeywords) {
+        if (value.equalsLowercase(keyword)) {
+          return cursor;
+        }
+      }
     }
   }
 
