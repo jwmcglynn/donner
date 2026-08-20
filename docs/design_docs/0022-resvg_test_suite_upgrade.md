@@ -21,9 +21,11 @@ tooling were migrated to match.
 - **Discovery**: `resvg_test_suite.cc` uses the directory-scoped
   `getTestsInCategory("<category>", { …overrides… })` API (Option A), with one
   `INSTANTIATE_TEST_SUITE_P` block per category directory.
-- **Override inventory (current)**: ~288 `Skip`, ~51 `RenderOnly`, 34
-  `WithGoldenOverride` entries — see [0021](0021-resvg_feature_gaps.md) for the
-  skip backlog and [0009](0009-resvg_test_suite_bugs.md) for the golden overrides.
+- **Override inventory (generated)**: run
+  `bazel run //tools/resvg_parity:parity_report` for current raw sources and effective case counts.
+  The report distinguishes category-default propagation from explicit per-case expressions. See
+  [0021](0021-resvg_feature_gaps.md) for the classified backlog and
+  [0009](0009-resvg_test_suite_bugs.md) for the shared-golden catalog.
 - **Custom goldens**: re-validated and renamed to the new stems; two dead em/ex
   orphans removed (2026-05-15, see [0009](0009-resvg_test_suite_bugs.md)).
 - **Migration artifacts retained** under `tools/resvg_test_suite_upgrade/`
@@ -32,14 +34,15 @@ tooling were migrated to match.
   Renovate-driven re-run is reproducible. The scratch `resvg_test_suite.cc.draft`
   was deleted 2026-05-15 as a leftover.
 
-### Known residue (handed to 0021)
+### Current follow-up (owned by 0021)
 
-- The entire **`filters/filter-functions`** `INSTANTIATE` block is commented out:
-  it throws `"Data corrupted"` parse errors on CI x86_64 but passes locally on
-  aarch64. Root cause unknown. Its two custom goldens are parked (see
-  [0009](0009-resvg_test_suite_bugs.md)).
-- M2 per-category enablement (the point of the upgrade) is the backlog in
-  [0021](0021-resvg_feature_gaps.md).
+- The **`filters/filter-functions`** category is active. Twenty-six of 43 files compare on both
+  backends; 17 use explicit `Triage:` skips while their input validity and output oracles are
+  checked against the specification and independent browsers. There is no current x86_64
+  startup-corruption exception.
+- Two migrated drop-shadow goldens remain parked and unreferenced pending that normative triage;
+  see [0009](0009-resvg_test_suite_bugs.md).
+- Remaining per-case parity work is tracked in [0021](0021-resvg_feature_gaps.md).
 
 ---
 
@@ -100,15 +103,15 @@ everything in one PR, one triage pass, one set of goldens to re-bless.
 - **Canvas size**: forced to 500×500 for all tests via
   `params.setCanvasSize(500, 500)` at `resvg_test_suite.cc:34`
 
-### Override inventory (current)
+### Override inventory at design time (historical)
 
-| Override | Count | Meaning |
-|---|---:|---|
-| `Params::Skip()` | ~77 | Feature not implemented, or known bug we haven't rooted out |
-| `Params::RenderOnly()` | ~51 | Renders fine, pixel compare not meaningful (includes the 49 UB tests from jwmcglynn/donner#496) |
-| `Params::WithThreshold(...)` | ~89 | AA artifacts, minor rendering diffs |
-| `.onlyTextFull()` | ~15 | Needs HarfBuzz backend (`--config=text-full`) |
-| `Params::WithGoldenOverride(...)` | ~40 | resvg's golden is wrong per spec; stored in `donner/svg/renderer/testdata/golden/resvg-*.png` |
+| Override                          | Count | Meaning                                                                                         |
+| --------------------------------- | ----: | ----------------------------------------------------------------------------------------------- |
+| `Params::Skip()`                  |   ~77 | Feature not implemented, or known bug we haven't rooted out                                     |
+| `Params::RenderOnly()`            |   ~51 | Renders fine, pixel compare not meaningful (includes the 49 UB tests from jwmcglynn/donner#496) |
+| `Params::WithThreshold(...)`      |   ~89 | AA artifacts, minor rendering diffs                                                             |
+| `.onlyTextFull()`                 |   ~15 | Needs HarfBuzz backend (`--config=text-full`)                                                   |
+| `Params::WithGoldenOverride(...)` |   ~40 | resvg's golden is wrong per spec; stored in `donner/svg/renderer/testdata/golden/resvg-*.png`   |
 
 **Total test entries**: roughly 1087 lines in `resvg_test_suite.cc`, with ~220
 of them carrying non-default params. Each one represents a judgment call that
@@ -142,21 +145,22 @@ need to be updated in lockstep.
 
 ### Key commits to migrate across
 
-| Commit | Date | What it does |
-|---|---|---|
-| `7dea0ef591` | 2023-05-05 | **Restructure tests.** Flat `svg/` + `png/` → hierarchical `tests/<category>/<feature>/<NNN>.svg` with paired `.png` in the same leaf directory. `a-`/`e-` prefix dropped — the directory tree now encodes that distinction. `images/` → `resources/`. |
-| `dd23ec1319` | 2023-05-06 | **The great rename.** Numeric `NNN.svg` → descriptive kebab-case (e.g. `001.svg` → `accumulate-with-new.svg`). Goldens renamed alongside. No mapping document — only git's rename detection tells you old → new. |
-| `58104c8752` | 2023-05-06 | **Rename more.** Cleanup of the great rename. |
-| `9b6f7d9f39` | 2023-05-06 | **Remove dummy tests.** Some of our entries will resolve to "deleted upstream". |
-| 2023-05-15..2023-05-21 | | New filter/mask/text/clipPath/stroke-dasharray tests added |
-| 2023-10-01 | | More marker/fill/svg tests; reference image updates |
-| `d20d47b514` | 2024-08-20 | **Sync tests with resvg.** Large sync pulling in upstream changes |
-| `3c2309ffde` | 2024-10-29 | master → main rename |
-| `d8e064337f` | 2024-10-29 | **HEAD as of this design doc.** 1679 `.svg` files under `tests/`, 7 top-level categories (`filters/`, `masking/`, `paint-servers/`, `painting/`, `shapes/`, `structure/`, `text/`). |
+| Commit                 | Date       | What it does                                                                                                                                                                                                                                           |
+| ---------------------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `7dea0ef591`           | 2023-05-05 | **Restructure tests.** Flat `svg/` + `png/` → hierarchical `tests/<category>/<feature>/<NNN>.svg` with paired `.png` in the same leaf directory. `a-`/`e-` prefix dropped — the directory tree now encodes that distinction. `images/` → `resources/`. |
+| `dd23ec1319`           | 2023-05-06 | **The great rename.** Numeric `NNN.svg` → descriptive kebab-case (e.g. `001.svg` → `accumulate-with-new.svg`). Goldens renamed alongside. No mapping document — only git's rename detection tells you old → new.                                       |
+| `58104c8752`           | 2023-05-06 | **Rename more.** Cleanup of the great rename.                                                                                                                                                                                                          |
+| `9b6f7d9f39`           | 2023-05-06 | **Remove dummy tests.** Some of our entries will resolve to "deleted upstream".                                                                                                                                                                        |
+| 2023-05-15..2023-05-21 |            | New filter/mask/text/clipPath/stroke-dasharray tests added                                                                                                                                                                                             |
+| 2023-10-01             |            | More marker/fill/svg tests; reference image updates                                                                                                                                                                                                    |
+| `d20d47b514`           | 2024-08-20 | **Sync tests with resvg.** Large sync pulling in upstream changes                                                                                                                                                                                      |
+| `3c2309ffde`           | 2024-10-29 | master → main rename                                                                                                                                                                                                                                   |
+| `d8e064337f`           | 2024-10-29 | **HEAD as of this design doc.** 1679 `.svg` files under `tests/`, 7 top-level categories (`filters/`, `masking/`, `paint-servers/`, `painting/`, `shapes/`, `structure/`, `text/`).                                                                    |
 
 ### New layout sample
 
 Before (what our code assumes):
+
 ```
 svg/
   a-fill-001.svg
@@ -171,6 +175,7 @@ images/
 ```
 
 After (current upstream):
+
 ```
 tests/
   painting/
@@ -233,8 +238,7 @@ truth is git's rename detection across the two restructuring commits.
 
 1. Walks every `.svg` in the **old** pinned commit (`682a9c8`) listed in our
    `resvg_test_suite.cc` overrides
-2. For each, runs `git log --follow --name-status --diff-filter=R
-   682a9c8..d8e064337f -- <old-path>` to collect all rename events
+2. For each, runs `git log --follow --name-status --diff-filter=R 682a9c8..d8e064337f -- <old-path>` to collect all rename events
 3. Produces `tools/resvg_test_suite_upgrade/rename_map.json` mapping
    `old_filename → new_relative_path` (or `null` for deletions)
 
@@ -243,6 +247,7 @@ and great rename are two separate commits, plus `58104c8752 "Rename more."` and
 some ad-hoc moves afterwards. `--follow` chains all of them.
 
 **Caveats**:
+
 - `--follow` only tracks one path at a time — the script has to loop.
 - Git rename detection is similarity-based; files that were also edited in the
   same commit may show as delete+add instead of rename, requiring
@@ -345,6 +350,7 @@ Write `tools/resvg_test_suite_upgrade/rewrite_test_entries.py` that:
 
 **Hand review of orphaned entries**: each one used to encode a reason
 (Skip/threshold/bug comment). For each, either:
+
 - Verify the test really is gone upstream and drop the entry, OR
 - Find the new test that replaced it and re-target the override
 
@@ -395,6 +401,7 @@ need:
 ### Phase 7: Land
 
 Final PR contents:
+
 - `third_party/bazel/non_bcr_deps.bzl` — new commit + URL
 - `third_party/BUILD.resvg-test-suite` — new layout
 - `donner/svg/renderer/tests/BUILD.bazel` — updated data deps
@@ -601,7 +608,7 @@ pixel-diff equivalence check**. It's a shipping spreadsheet.
 
 The best prior art for what we'd be doing is
 [linebender/resvg-test-suite#55](https://github.com/linebender/resvg-test-suite/pull/55)
-— *"Test Ladybird"*, by shlyakpavel (not a Ladybird maintainer). It's a
+— _"Test Ladybird"_, by shlyakpavel (not a Ladybird maintainer). It's a
 draft PR against the `vdiff` tool that:
 
 - Adds a `Ladybird` entry to the `Backend` enum in `tools/vdiff/src/tests.h`
@@ -612,8 +619,8 @@ draft PR against the `vdiff` tool that:
   settings dialog `.ui` forms
 - Appends a `ladybird` column to `results.csv` and runs the triage manually
 
-Maintainer RazrFalcon responded: *"That's the easy 25%. Not worth adding to
-the main test suite yet. Let's wait for at least 50–60%."* The PR stalled
+Maintainer RazrFalcon responded: _"That's the easy 25%. Not worth adding to
+the main test suite yet. Let's wait for at least 50–60%."_ The PR stalled
 at 27.5% passing. No updates since November 2024. Lesson: **don't bother
 opening the PR until we're ≥60%**.
 
@@ -706,6 +713,7 @@ in the table is community recognition, not a one-time thing.
 ```
 
 The script that generates it must:
+
 - Include every `.svg` referenced in `resvg_test_suite.cc` overrides
 - Additionally include every `.svg` that existed in `682a9c8` (to catch tests
   that currently use default params — they might still be worth knowing

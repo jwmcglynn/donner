@@ -1,9 +1,9 @@
 # resvg-test-suite: Custom Golden Overrides
 
-**Status:** Reference (current as of 2026-05-15)
+**Status:** Reference (current as of 2026-08-18)
 
 When Donner's rendering of a resvg-test-suite case is correct but the upstream
-golden is *not* the right thing to compare against, the test pins
+golden is _not_ the right thing to compare against, the test pins
 `Params::WithGoldenOverride("donner/svg/renderer/testdata/golden/resvg-<name>.png")`
 so it compares against a Donner-blessed golden instead. This doc is the catalog
 of every such override and the reason it exists.
@@ -31,20 +31,21 @@ the test name there to find it inline.
 > direction) were superseded upstream and retired — the surviving marker
 > override is `orient=auto-on-M-C-C-4`.
 
-## Active overrides (35)
+## Active overrides (36)
 
 ### resvg golden is wrong per spec
 
-| Category | Test | Reason (`withReason`) |
-|---|---|---|
-| filters/feSpotLight | complex-transform | resvg bug: SpotLight Y |
-| filters/feImage | svg | We render higher quality |
-| filters/feSpecularLighting | with-fePointLight | resvg golden |
-| painting/context | with-pattern-objectBoundingBox-in-use | resvg golden bakes fractional-tile rounding |
-| painting/marker | orient=auto-on-M-C-C-4 | Pre-existing rendering diff (stroke/AA), not cusp-related |
-| painting/marker | with-an-image-child | We (correctly) render the image child |
-| text/font-size | named-value | Donner uses CSS Fonts Level 4 |
-| text/font-size | named-value-without-a-parent | Donner uses CSS Fonts Level 4 |
+| Category                   | Test                                  | Reason (`withReason`)                                          |
+| -------------------------- | ------------------------------------- | -------------------------------------------------------------- |
+| filters/feSpotLight        | complex-transform                     | resvg bug: SpotLight Y                                         |
+| filters/feImage            | svg                                   | We render higher quality                                       |
+| filters/feSpecularLighting | with-fePointLight                     | resvg golden                                                   |
+| painting/context           | with-pattern-objectBoundingBox-in-use | resvg golden bakes fractional-tile rounding                    |
+| painting/marker            | orient=auto-on-M-C-C-4                | Pre-existing rendering diff (stroke/AA), not cusp-related      |
+| painting/marker            | with-an-image-child                   | We (correctly) render the image child                          |
+| painting/paint-order       | on-tspan                              | Preserve cross-span kerning across a paint-only tspan boundary |
+| text/font-size             | named-value                           | Donner uses CSS Fonts Level 4                                  |
+| text/font-size             | named-value-without-a-parent          | Donner uses CSS Fonts Level 4                                  |
 
 `named-value{,-without-a-parent}` reflect CSS Fonts Level 4's revised handling of
 named font sizes (`xx-small` … `xx-large`), which differs from resvg's older table.
@@ -57,7 +58,7 @@ size, and this test's context bounding box yields a fractional 56.57px on-screen
 tile that resvg draws as 57px, stretching the tile period by ~0.8%. Donner repeats
 the tile at the exact period. A numeric grid fit confirms it: Donner's render fits
 an ideal diamond grid anchored at the computed context box
-`(31.82, -116.67), 226.27²` with score 1.0, while resvg's golden fits *no* ideal
+`(31.82, -116.67), 226.27²` with score 1.0, while resvg's golden fits _no_ ideal
 grid (best score 0.899 — its grid drifts, consistent with per-tile rounding). The
 integer-tile pattern goldens in the same category (`with-pattern-in-use`,
 `with-pattern-and-transform-in-use`, `with-pattern-on-marker`, whose tiles land on
@@ -70,11 +71,11 @@ These render correctly but differ from resvg because Donner's text stack (and th
 simple-vs-`text-full` split) shapes/composes differently. The golden is whichever
 Donner backend the test runs under.
 
-| Category | Test | Reason |
-|---|---|---|
-| text/text | complex-graphemes-and-coordinates-list | Simple text can't compose combining marks |
-| text/text | compound-emojis-and-coordinates-list | Emoji bitmap scaling differs from the golden |
-| text/text | rotate-on-Arabic | Arabic shaping requires text-full |
+| Category  | Test                                         | Reason                                              |
+| --------- | -------------------------------------------- | --------------------------------------------------- |
+| text/text | complex-graphemes-and-coordinates-list       | Simple text can't compose combining marks           |
+| text/text | compound-emojis-and-coordinates-list         | Emoji bitmap scaling differs from the golden        |
+| text/text | rotate-on-Arabic                             | Arabic shaping requires text-full                   |
 | text/text | x-and-y-with-multiple-values-and-arabic-text | Arabic shaping; vertical-axis AA diff not the focus |
 
 ### Blessed minor diffs (textPath / text-decoration)
@@ -84,38 +85,38 @@ advance and anti-aliasing differences along curved baselines, which differ betwe
 the simple and `text-full` backends. All are `.withReason("Minor char")` unless
 noted.
 
-| Category | Test | Reason |
-|---|---|---|
-| text/textPath | dy-with-tiny-coordinates | AA + minor char advance diffs (text vs text-full) |
-| text/textPath | m-L-Z-path | Minor char |
-| text/textPath | mixed-children-1 | AA diffs |
-| text/textPath | nested | Minor char |
-| text/textPath | path-with-ClosePath | Minor char |
-| text/textPath | simple-case | Minor char |
-| text/textPath | startOffset=-100 | Minor char |
-| text/textPath | startOffset=10percent | Minor char |
-| text/textPath | startOffset=30 | Minor char |
-| text/textPath | startOffset=5mm | Minor char |
-| text/textPath | tspan-with-absolute-position | Minor char |
-| text/textPath | tspan-with-relative-position | Minor char |
-| text/textPath | two-paths | Minor char |
-| text/textPath | very-long-text | AA diffs |
-| text/textPath | with-baseline-shift | Minor char |
-| text/textPath | with-coordinates-on-text | Minor char |
-| text/textPath | with-coordinates-on-textPath | Minor char |
-| text/textPath | with-rotate | Minor char |
-| text/textPath | with-text-anchor | (no reason string) |
-| text/textPath | with-transform-on-a-referenced-path | Minor char |
-| text/textPath | with-transform-outside-a-referenced-path | Minor char |
-| text/textPath | with-underline | Minor char |
-| text/text-decoration | indirect | (no reason string) |
+| Category             | Test                                     | Reason                                            |
+| -------------------- | ---------------------------------------- | ------------------------------------------------- |
+| text/textPath        | dy-with-tiny-coordinates                 | AA + minor char advance diffs (text vs text-full) |
+| text/textPath        | m-L-Z-path                               | Minor char                                        |
+| text/textPath        | mixed-children-1                         | AA diffs                                          |
+| text/textPath        | nested                                   | Minor char                                        |
+| text/textPath        | path-with-ClosePath                      | Minor char                                        |
+| text/textPath        | simple-case                              | Minor char                                        |
+| text/textPath        | startOffset=-100                         | Minor char                                        |
+| text/textPath        | startOffset=10percent                    | Minor char                                        |
+| text/textPath        | startOffset=30                           | Minor char                                        |
+| text/textPath        | startOffset=5mm                          | Minor char                                        |
+| text/textPath        | tspan-with-absolute-position             | Minor char                                        |
+| text/textPath        | tspan-with-relative-position             | Minor char                                        |
+| text/textPath        | two-paths                                | Minor char                                        |
+| text/textPath        | very-long-text                           | AA diffs                                          |
+| text/textPath        | with-baseline-shift                      | Minor char                                        |
+| text/textPath        | with-coordinates-on-text                 | Minor char                                        |
+| text/textPath        | with-coordinates-on-textPath             | Minor char                                        |
+| text/textPath        | with-rotate                              | Minor char                                        |
+| text/textPath        | with-text-anchor                         | (no reason string)                                |
+| text/textPath        | with-transform-on-a-referenced-path      | Minor char                                        |
+| text/textPath        | with-transform-outside-a-referenced-path | Minor char                                        |
+| text/textPath        | with-underline                           | Minor char                                        |
+| text/text-decoration | indirect                                 | (no reason string)                                |
 
 > Two entries (`textPath/with-text-anchor`, `text-decoration/indirect`) carry no
 > `withReason`. They should either get one or migrate to a per-test threshold; the
 > "Minor char" cluster is the precedent. Tracked in
 > [0021](0021-resvg_feature_gaps.md).
 
-## Parked goldens (2) — filters/filter-functions disabled
+## Parked goldens (2) - filters/filter-functions triage
 
 `resvg-drop-shadow-function-mm-values.png` and
 `resvg-drop-shadow-function-em-values.png` are the migrated successors of the old
@@ -123,11 +124,11 @@ noted.
 box-blur approximation (correct per CSS Filter Effects L1 §8 / SVG §15.9) produces
 a different halo shape than resvg's blur, so a Donner golden is required.
 
-They are currently **unreferenced** because the entire `filters/filter-functions`
-`INSTANTIATE_TEST_SUITE_P` block is commented out — that category throws
-`"Data corrupted"` parse errors on CI x86_64 but passes locally on aarch64 (root
-cause unknown). **Keep both files**: re-enabling the block (tracked in
-[0021](0021-resvg_feature_gaps.md)) will need them. Do not delete as "orphans".
+They are currently **unreferenced**. The `filters/filter-functions` category is active, with 26 of
+43 files comparing on both backends and 17 explicit `Triage:` skips. No project-owned oracle has
+been accepted for the two unit-based drop-shadow cases yet. **Keep both files** until normative
+specification/browser triage decides whether each mismatch is a Donner defect, a vendored-oracle
+difference, or a justified project golden. Do not delete them as "orphans".
 
 ## Removed goldens (cleanup, 2026-05-15)
 
@@ -141,14 +142,13 @@ git history if a real override need surfaces):
 
 The corresponding `text/font-size` tests pass against the upstream golden — only
 `named-value{,-without-a-parent}` need an override. After this cleanup the
-`golden/` dir holds exactly 37 `resvg-*.png`: 35 active + the 2 parked drop-shadow
+`golden/` dir holds exactly 38 `resvg-*.png`: 36 active + the 2 parked drop-shadow
 goldens above.
 
 ## Maintenance
 
 - Adding an override: place `resvg-<new-stem>.png` in
-  `donner/svg/renderer/testdata/golden/`, add `Params::WithGoldenOverride(…)
-  .withReason("…")` in `resvg_test_suite.cc`, and add a row here. The
+  `donner/svg/renderer/testdata/golden/`, add `Params::WithGoldenOverride(…) .withReason("…")` in `resvg_test_suite.cc`, and add a row here. The
   `golden/*.png` glob in
   [`testdata/BUILD.bazel`](../../donner/svg/renderer/testdata/BUILD.bazel) picks it
   up automatically.

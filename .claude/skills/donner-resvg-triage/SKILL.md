@@ -118,10 +118,11 @@ separately: `DONNER_ENABLE_TERMINAL_IMAGES=0` disables it (default on; per-test 
 source. The failure output prints a rerun hint with a literal `<target>` placeholder — substitute
 the resvg target and your `--gtest_filter` yourself.
 
-Active resvg categories register at binary startup regardless of `--gtest_filter`. The
-`filters/filter-functions` registration remains deliberately disabled at this layer, but there is
-no known blanket startup-corruption exception. Treat parser or resource-loading diagnostics from
-an active category as failures to investigate.
+All resvg categories register at binary startup regardless of `--gtest_filter`. The
+`filters/filter-functions` category is active: 26 of its 43 files compare on both backends and 17
+carry explicit `Triage:` skips pending a normative specification/browser oracle. There is no known
+blanket startup-corruption exception, so treat parser or resource-loading diagnostics as failures
+to investigate.
 
 ## Comparison modes (verified against ActiveComparisonModes())
 

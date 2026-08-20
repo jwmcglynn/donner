@@ -20,8 +20,8 @@ flow. It also has partial support for `pointer-events`, `vector-effect: non-scal
 `<textPath>` attributes. Each slice begins by running its disabled conformance cases and inspecting
 the existing focused tests, then fixes the causal gap instead of adding a second implementation.
 
-The current source-declared resvg baseline has 1,679 vendored cases, 43 cases in one disabled
-category, 116 skip expressions, 78 effective render-only cases, 103 explicit pixel-budget call
+The current source-declared resvg baseline has 1,679 active vendored cases, no disabled category,
+133 skip expressions, 78 effective render-only cases, 103 explicit pixel-budget call
 sites, 36 shared golden overrides, and 6 Geode-specific golden overrides. Those numbers mix real
 product gaps, deprecated features, undefined behavior, and independent reference-oracle choices.
 Reducing the raw totals is useful, but correctness and classification are the actual goals.
@@ -84,8 +84,9 @@ Reducing the raw totals is useful, but correctness and classification are the ac
   - [ ] Run each requested disabled case in its applicable TinySkia, text-full, and Geode modes and
         preserve the actual, expected, and diff images.
   - [ ] Enable any case that already passes without changing a threshold or golden.
-  - [ ] Triage the 43 disabled `filters/filter-functions` cases separately so the dark category does
-        not distort the parity baseline.
+  - [x] Activate all 43 `filters/filter-functions` files. Twenty-six compare on both backends; 17
+        unique mismatches use explicit neutral triage skips instead of a dark category. Normative
+        defect classification remains part of the filter-completion phase.
   - [x] Verify the generated counts with `//tools/resvg_parity:parity_report_tests`.
   - [ ] Run `//donner/svg/renderer/tests:resvg_test_suite` without changing comparison policy.
 - [ ] Milestone 2: Complete image-sampling semantics

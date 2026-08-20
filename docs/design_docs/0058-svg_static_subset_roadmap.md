@@ -78,7 +78,8 @@ loading, a set of masking/clipping and filter edge cases, and CPU/GPU renderer p
   - [ ] Remaining `maskUnits` / `maskContentUnits` edge cases, transformed regions, and
         `color-interpolation=linearRGB` on masks.
 - [ ] Milestone 4: Filter completion
-  - [ ] CSS `filter:` function-list support (the currently disabled `filter-functions` category).
+  - [~] CSS `filter:` function-list support: all 43 files are instantiated; 26 compare on both
+    backends and 17 explicitly skipped mismatches await normative classification.
   - [ ] feImage subregion cases and feConvolveMatrix / feDropShadow edge cases.
   - [ ] Filter-region scissor per SVG 2 section 15.5 (GPU backend TODO).
 - [ ] Milestone 5: Painting and structural edge cases
@@ -100,9 +101,10 @@ loading, a set of masking/clipping and filter edge cases, and CPU/GPU renderer p
 ## Background
 
 Donner tracks conformance continuously against the upstream resvg test suite with visual regression
-in CI. The resvg run is the most reliable signal of real gaps: a category renamed `DISABLED_` via
-`Params::Skip`, or a golden override with a "Not impl" comment, marks a concrete unimplemented
-feature. This roadmap reads those markers as the backlog and folds them into the broader SVG 2
+in CI. The resvg run is the most reliable signal of parity debt, but an exception is evidence to
+classify, not proof of a Donner defect. Skips and golden overrides can also represent deprecated
+behavior, invalid input, or a reference-oracle difference. This roadmap folds the classified
+backlog into the broader SVG 2
 conformance program defined in [design 0026](0026-svg_conformance_testing.md) and operationalized in
 [design 0057](0057-donner_svg2_test_suite.md).
 

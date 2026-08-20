@@ -427,16 +427,49 @@ INSTANTIATE_TEST_SUITE_P(
         ValuesIn(ActiveComparisonModes())),
     TestNameFromFilename);
 
-// TODO: The filters/filter-functions category has CSS filter-function pixel-parity gaps when
-// enabled wholesale. Keep the category disabled until those rendering mismatches are triaged; the
-// previous resource-loading "Data corrupted" warnings are covered by ResourceManagerContext tests,
-// and filters/feImage/empty.svg now runs in the active FiltersFeImage suite.
-//
-// INSTANTIATE_TEST_SUITE_P(
-//     FiltersFilterFunctions, ImageComparisonTestFixture,
-//     Combine(ValuesIn(getTestsInCategory("filters/filter-functions")),
-//             ValuesIn(ActiveComparisonModes())),
-//     TestNameFromFilename);
+INSTANTIATE_TEST_SUITE_P(
+    FiltersFilterFunctions, ImageComparisonTestFixture,
+    Combine(
+        ValuesIn(getTestsInCategory(
+            "filters/filter-functions",
+            {
+                {"blur-function.svg",
+                 Params::Skip("Triage: verify unitless nonzero blur grammar and reference oracle")},
+                {"color-adjust-functions-0percent.svg",
+                 Params::Skip("Triage: CSS color-adjust input validity or output oracle mismatch")},
+                {"color-adjust-functions-100percent.svg",
+                 Params::Skip("Triage: CSS color-adjust input validity or output oracle mismatch")},
+                {"color-adjust-functions-2.svg",
+                 Params::Skip("Triage: CSS color-adjust input validity or output oracle mismatch")},
+                {"color-adjust-functions-200percent.svg",
+                 Params::Skip("Triage: CSS color-adjust input validity or output oracle mismatch")},
+                {"color-adjust-functions-50percent.svg",
+                 Params::Skip("Triage: CSS color-adjust input validity or output oracle mismatch")},
+                {"color-adjust-functions-default-value.svg",
+                 Params::Skip("Triage: CSS color-adjust input validity or output oracle mismatch")},
+                {"color-adjust-functions-negative.svg",
+                 Params::Skip("Triage: verify negative color-adjust grammar and reference oracle")},
+                {"drop-shadow-function-color-last.svg",
+                 Params::Skip("Triage: CSS drop-shadow color or unit variant oracle mismatch")},
+                {"drop-shadow-function-em-values.svg",
+                 Params::Skip("Triage: CSS drop-shadow color or unit variant oracle mismatch")},
+                {"drop-shadow-function-filter-region.svg",
+                 Params::Skip("Triage: CSS drop-shadow filter-region oracle mismatch")},
+                {"drop-shadow-function-mm-values.svg",
+                 Params::Skip("Triage: CSS drop-shadow color or unit variant oracle mismatch")},
+                {"drop-shadow-function-no-color.svg",
+                 Params::Skip("Triage: CSS drop-shadow color or unit variant oracle mismatch")},
+                {"drop-shadow-function.svg",
+                 Params::Skip("Triage: CSS drop-shadow output oracle mismatch")},
+                {"two-exact-urls.svg",
+                 Params::Skip("Triage: chained CSS filter URL reference oracle mismatch")},
+                {"two-urls.svg",
+                 Params::Skip("Triage: chained CSS filter URL reference oracle mismatch")},
+                {"url-and-grayscale.svg",
+                 Params::Skip("Triage: mixed CSS filter URL and function oracle mismatch")},
+            })),
+        ValuesIn(ActiveComparisonModes())),
+    TestNameFromFilename);
 
 INSTANTIATE_TEST_SUITE_P(
     FiltersFloodColor, ImageComparisonTestFixture,
