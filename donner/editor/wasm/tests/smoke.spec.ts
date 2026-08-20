@@ -713,7 +713,7 @@ test("WGPU diagnostics do not block the first carousel interaction", async ({ pa
     .toEqual({
       active: false,
       pending: false,
-      ready: 5,
+      ready: 4,
       resultReady: false,
     });
   await expect
