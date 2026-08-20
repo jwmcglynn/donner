@@ -1039,6 +1039,29 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
 #endif
 #endif
 
+#ifndef __EMSCRIPTEN__
+  // Hidden windows are undecorated so the window server cannot quietly rewrite
+  // the size they asked for. AppKit constrains a *titled* window's frame to the
+  // display it lands on, and where it lands matters: the first window in a
+  // process is centered and usually escapes, while a later cascaded one is
+  // pushed toward the screen edge and shrunk to fit. A replay window that comes
+  // back smaller reshapes the editor's dock layout, which invalidates every
+  // device-pixel crop and canvas-relative pointer coordinate a capture test
+  // asserts on, while the replay still reports success. Borderless windows are
+  // exempt from that constraint, so hidden windows keep the geometry they
+  // requested on any display.
+  //
+  // Hints are sticky for the lifetime of the GLFW library, so set both arms
+  // rather than only the false one: a hidden window must not leave later
+  // windows in the same process undecorated.
+  //
+  // A visible replay (the interactive debugging path) stays decorated and so
+  // keeps the constraint. It can still reflow on a display smaller than the
+  // recording, which is worth knowing when using it to chase a hidden-replay
+  // failure.
+  glfwWindowHint(GLFW_DECORATED, options_.visible ? GLFW_TRUE : GLFW_FALSE);
+#endif
+
   const int initialWidth =
 #ifdef __EMSCRIPTEN__
       CanvasPixelWidth();
