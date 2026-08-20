@@ -1111,6 +1111,41 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
   emscripten_glfw_make_canvas_resizable(window_, "window", nullptr);
 #endif
 
+#ifndef __EMSCRIPTEN__
+  // Offscreen replay reproduces the recorded HiDPI scale by enlarging the native
+  // window, so framebuffer readback matches the pixel geometry the recording host
+  // captured. The null platform already allocated at the emulated size up front;
+  // native platforms are resized here, once their real framebuffer/logical scale
+  // is known.
+  //
+  // This must run before the WebGPU surface is configured below, which sizes
+  // itself from the framebuffer. It previously lived in the OpenGL arm alone, so
+  // the WebGPU build applied the recorded display scale to ImGui (that half is in
+  // the common path) while leaving the window unscaled: every scale-2 recording
+  // laid the editor out at half its recorded logical size.
+  if (options_.offscreen && !useNullPlatform && offscreenScale != 1.0) {
+    int nativeLogicalWidth = 0;
+    int nativeLogicalHeight = 0;
+    glfwGetWindowSize(window_, &nativeLogicalWidth, &nativeLogicalHeight);
+    int nativeFramebufferWidth = 0;
+    int nativeFramebufferHeight = 0;
+    glfwGetFramebufferSize(window_, &nativeFramebufferWidth, &nativeFramebufferHeight);
+    const double nativeScaleX =
+        nativeLogicalWidth > 0 && nativeFramebufferWidth > 0
+            ? static_cast<double>(nativeFramebufferWidth) / static_cast<double>(nativeLogicalWidth)
+            : 1.0;
+    const double nativeScaleY = nativeLogicalHeight > 0 && nativeFramebufferHeight > 0
+                                    ? static_cast<double>(nativeFramebufferHeight) /
+                                          static_cast<double>(nativeLogicalHeight)
+                                    : nativeScaleX;
+    const int emulatedLogicalWidth = static_cast<int>(std::lround(
+        static_cast<double>(initialWidth) * offscreenScale / std::max(nativeScaleX, 0.001)));
+    const int emulatedLogicalHeight = static_cast<int>(std::lround(
+        static_cast<double>(initialHeight) * offscreenScale / std::max(nativeScaleY, 0.001)));
+    glfwSetWindowSize(window_, emulatedLogicalWidth, emulatedLogicalHeight);
+  }
+#endif
+
 #ifdef DONNER_EDITOR_WGPU
   wgpuState_ = std::make_unique<WgpuState>();
   wgpuState_->instance = CreateEditorWgpuInstance();
@@ -1311,27 +1346,6 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
     return;
   }
 
-  if (options_.offscreen && !useNullPlatform && offscreenScale != 1.0) {
-    int nativeLogicalWidth = 0;
-    int nativeLogicalHeight = 0;
-    glfwGetWindowSize(window_, &nativeLogicalWidth, &nativeLogicalHeight);
-    int nativeFramebufferWidth = 0;
-    int nativeFramebufferHeight = 0;
-    glfwGetFramebufferSize(window_, &nativeFramebufferWidth, &nativeFramebufferHeight);
-    const double nativeScaleX =
-        nativeLogicalWidth > 0 && nativeFramebufferWidth > 0
-            ? static_cast<double>(nativeFramebufferWidth) / static_cast<double>(nativeLogicalWidth)
-            : 1.0;
-    const double nativeScaleY = nativeLogicalHeight > 0 && nativeFramebufferHeight > 0
-                                    ? static_cast<double>(nativeFramebufferHeight) /
-                                          static_cast<double>(nativeLogicalHeight)
-                                    : nativeScaleX;
-    const int emulatedLogicalWidth = static_cast<int>(std::lround(
-        static_cast<double>(initialWidth) * offscreenScale / std::max(nativeScaleX, 0.001)));
-    const int emulatedLogicalHeight = static_cast<int>(std::lround(
-        static_cast<double>(initialHeight) * offscreenScale / std::max(nativeScaleY, 0.001)));
-    glfwSetWindowSize(window_, emulatedLogicalWidth, emulatedLogicalHeight);
-  }
 #endif
 #endif
 
