@@ -429,18 +429,20 @@ public:
   }
 
   /// Current DOM threading policy.
-  ThreadingMode threadingMode() const { return threadingMode_; }
+  ThreadingMode threadingMode() const { return threadingMode_.load(std::memory_order_acquire); }
 
   /**
    * Set the DOM threading policy.
    *
    * @param mode New threading mode.
    */
-  void setThreadingMode(ThreadingMode mode) { threadingMode_ = mode; }
+  void setThreadingMode(ThreadingMode mode) {
+    threadingMode_.store(mode, std::memory_order_release);
+  }
 
 private:
   void assertSingleThreadedAccess() const {
-    assert(threadingMode_ != ThreadingMode::SingleThreaded ||
+    assert(threadingMode() != ThreadingMode::SingleThreaded ||
            ownerThread_ == std::this_thread::get_id());
   }
 
@@ -627,7 +629,10 @@ private:
   std::deque<DocumentMutationRecord> mutationLog_;
   std::uint64_t latestMutationSequence_ = 0;
   DetachedNodeState detachedNodeState_;
-  ThreadingMode threadingMode_ = ThreadingMode::SingleThreaded;
+  // Read by UI threads on every scoped access and by the render worker, so the
+  // mode must be readable without tearing even though it only ever transitions
+  // once (SingleThreaded -> ConcurrentDom) and never transitions back.
+  std::atomic<ThreadingMode> threadingMode_ = ThreadingMode::SingleThreaded;
   std::thread::id ownerThread_ = std::this_thread::get_id();
   mutable DocumentAccessLock accessMutex_;
 
@@ -869,7 +874,7 @@ private:
 
 inline DocumentReadAccess::DocumentReadAccess(DocumentState& documentState)
     : documentState_(&documentState) {
-  if (documentState.threadingMode_ == ThreadingMode::ConcurrentDom) {
+  if (documentState.threadingMode() == ThreadingMode::ConcurrentDom) {
     if (!documentState.currentThreadHasWriteAccess() &&
         !documentState.currentThreadHasReadAccess()) {
       documentState.accessMutex_.lockRead();
@@ -886,7 +891,7 @@ inline DocumentReadAccess::DocumentReadAccess(DocumentState& documentState)
 
 inline DocumentReadAccess::DocumentReadAccess(DocumentState& documentState, TryLockTag)
     : documentState_(&documentState) {
-  if (documentState.threadingMode_ == ThreadingMode::ConcurrentDom) {
+  if (documentState.threadingMode() == ThreadingMode::ConcurrentDom) {
     if (!documentState.currentThreadHasWriteAccess() &&
         !documentState.currentThreadHasReadAccess()) {
       if (!documentState.accessMutex_.tryLockRead()) {
@@ -950,7 +955,7 @@ inline DocumentReadAccess::~DocumentReadAccess() {
 
 inline DocumentWriteAccess::DocumentWriteAccess(DocumentState& documentState)
     : documentState_(&documentState) {
-  if (documentState.threadingMode_ == ThreadingMode::ConcurrentDom) {
+  if (documentState.threadingMode() == ThreadingMode::ConcurrentDom) {
     if (documentState.currentThreadHasWriteAccess()) {
       documentState.pushWriteAccessMarker();
       ownsWriteMarker_ = true;
@@ -1046,7 +1051,7 @@ inline auto DocumentReadAccess::tryUpgrade() -> std::optional<DocumentWriteAcces
     return std::nullopt;
   }
 
-  if (documentState_->threadingMode_ != ThreadingMode::ConcurrentDom ||
+  if (documentState_->threadingMode() != ThreadingMode::ConcurrentDom ||
       documentState_->currentThreadHasWriteAccess()) {
     DocumentWriteAccess writeAccess(*documentState_);
     return std::optional<DocumentWriteAccess>(std::move(writeAccess));
@@ -1067,7 +1072,7 @@ inline auto DocumentWriteAccess::tryDowngrade() && -> std::optional<DocumentRead
     return std::nullopt;
   }
 
-  if (documentState_->threadingMode_ != ThreadingMode::ConcurrentDom) {
+  if (documentState_->threadingMode() != ThreadingMode::ConcurrentDom) {
     DocumentState* documentState = documentState_;
     documentState_ = nullptr;
     DocumentReadAccess readAccess(*documentState);
@@ -1106,7 +1111,7 @@ inline DocumentWriteAccess DocumentState::write() {
 }
 
 inline std::optional<DocumentWriteAccess> DocumentState::tryWrite() {
-  if (threadingMode_ != ThreadingMode::ConcurrentDom || currentThreadHasWriteAccess()) {
+  if (threadingMode() != ThreadingMode::ConcurrentDom || currentThreadHasWriteAccess()) {
     DocumentWriteAccess access(*this);
     return std::optional<DocumentWriteAccess>(std::move(access));
   }

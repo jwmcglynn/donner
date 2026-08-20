@@ -434,6 +434,16 @@ void AsyncRenderer::requestRender(const RenderRequest& request) {
     }
     RenderRequest stagedRequest = request;
     stagedRequest.queuedAt = std::chrono::steady_clock::now();
+    // §concurrent-dom: put the document in ConcurrentDom here, on the UI thread,
+    // before the worker can observe this request. The worker used to flip it on
+    // its own first render, which raced every UI-thread access guard: a scoped
+    // `DocumentReadAccess` samples the mode to decide whether to push this
+    // thread's access marker, and `ElementAnchor` samples it again to decide
+    // whether to require one. A flip landing between those two samples left a
+    // correct `withReadAccess()` caller holding no marker while the guard
+    // demanded one, aborting the process. Transitioning on the thread that does
+    // the reading means no UI-thread reader can straddle the change.
+    stagedRequest.lease.document().setThreadingMode(svg::ThreadingMode::ConcurrentDom);
     if (!request.structuralRemap.empty()) {
       retainedStructuralRemaps_[request.documentGeneration] = request.structuralRemap;
     } else {
@@ -839,15 +849,13 @@ void AsyncRenderer::workerLoop() {
 
     // §concurrent-dom: serialize this worker render against UI-thread DOM reads. The lease shares
     // the live registry (it does not snapshot), and the worker cannot touch the document in
-    // SingleThreaded mode (owner-thread assert). The document is flipped to ConcurrentDom on first
-    // render and stays there for the editor's lifetime - UI-thread reads are responsible for
-    // holding their own access guard (`withReadAccess` / a scoped `DocumentReadAccess`) where they
-    // touch the live document. The worker holds a write guard across the document-reading render
-    // work and releases it via `releaseDocumentAccess()` before every `mutex_` section below to
-    // avoid a lock-order inversion against UI threads holding `mutex_` while reading the DOM.
-    if (requestDocument.threadingMode() != svg::ThreadingMode::ConcurrentDom) {
-      requestDocument.setThreadingMode(svg::ThreadingMode::ConcurrentDom);
-    }
+    // SingleThreaded mode (owner-thread assert). `requestRender` has already put the document in
+    // ConcurrentDom on the UI thread, where it stays for the editor's lifetime - UI-thread reads
+    // are responsible for holding their own access guard (`withReadAccess` / a scoped
+    // `DocumentReadAccess`) where they touch the live document. The worker holds a write guard
+    // across the document-reading render work and releases it via `releaseDocumentAccess()` before
+    // every `mutex_` section below to avoid a lock-order inversion against UI threads holding
+    // `mutex_` while reading the DOM.
     std::optional<svg::DocumentWriteAccess> documentAccess;
     documentAccess.emplace(requestDocument.writeAccess());
     const auto releaseDocumentAccess = [&]() { documentAccess.reset(); };

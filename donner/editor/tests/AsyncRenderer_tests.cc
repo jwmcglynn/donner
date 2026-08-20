@@ -599,6 +599,41 @@ TEST(AsyncRendererTest, FilterOnlyRestrictsMandatoryHintsButKeepsSelectionLayer)
   EXPECT_EQ(offState.layerCount, 0u);
 }
 
+// The document's threading mode must be established by the UI thread that
+// requests the render, not by the worker once it picks the request up.
+//
+// Both halves of the ConcurrentDom access guard sample the mode independently:
+// a scoped `DocumentReadAccess` samples it to decide whether to push this
+// thread's access marker, and `ElementAnchor` samples it again to decide
+// whether to require one. While the worker owned the transition, a flip landing
+// between those two samples left a correct `withReadAccess()` caller holding no
+// marker while the guard demanded one, aborting the process from inside
+// correctly written code. Observed once as a SIGABRT under `EditorShell::
+// layerInspectorStatusForReadback`.
+//
+// Asserting on the UI thread immediately after `requestRender`, with no wait for
+// a result, pins the transition to the requesting thread: the worker may not
+// have run at all yet.
+TEST(AsyncRendererTest, RequestRenderEstablishesConcurrentDomOnTheRequestingThread) {
+  svg::SVGDocument document = svg::instantiateSubtree(
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64"></svg>)");
+  document.setCanvasSize(64, 64);
+  ASSERT_EQ(document.threadingMode(), svg::ThreadingMode::SingleThreaded)
+      << "a fresh document starts single-threaded";
+
+  svg::Renderer renderer;
+  AsyncRenderer asyncRenderer;
+
+  RenderRequest request(renderer, document);
+  request.version = 1;
+  request.documentGeneration = 1;
+  asyncRenderer.requestRender(request);
+
+  EXPECT_EQ(document.threadingMode(), svg::ThreadingMode::ConcurrentDom)
+      << "requestRender must transition the document on the calling thread, so no UI-thread "
+         "reader can straddle the change";
+}
+
 TEST(AsyncRendererE2ETest, FilterOnlyPublishesSplashBlurGroupsAsSeparateLayers) {
   std::ifstream splashStream("donner_splash.svg");
   if (!splashStream.is_open()) {
