@@ -53,21 +53,28 @@ TEST(EditorWindowOffscreenTargetTest, ForceOffscreenRenderTargetDefaultsOff) {
   EXPECT_FALSE(EditorWindowOptions{}.forceOffscreenRenderTarget);
 }
 
-// A hidden replay window must get the framebuffer it asked for, whatever the
-// host display can show. macOS constrains a titled window's frame to its
-// screen, so a 1600x900 replay on a 1024x768 headless runner quietly rendered
-// at 1024x645: the dock layout reflowed, the render pane moved, and every
-// capture test that crops device pixels or injects a canvas-relative click
-// compared the wrong region while the replay still reported success.
+// A hidden replay window must keep the size it asked for, whatever the host
+// display can show. macOS constrains a titled window's frame to the display it
+// lands on, so a replay window recorded at 1600x900 came back at 1024x645 on a
+// runner with a small virtual display: the dock layout reflowed, the render
+// pane moved, and every capture test that crops device pixels or injects a
+// canvas-relative click compared the wrong region while the replay still
+// reported success.
 //
-// A developer display is large enough that one oversized window can escape the
-// constraint, so this opens a window first and then asks for an oversized one -
-// the position AppKit picks for the second window is what makes the clamp
-// reachable here. Both windows must come back at their requested size.
+// The constraint depends on where the window lands, not on size alone. The
+// first window in a process is centered and escapes it on a large display, so
+// reaching the clamp here takes a second, cascaded window that is larger than
+// the screen. That is also why only part of the replay suite failed in CI.
+//
+// Assert on the logical window size rather than the framebuffer: points are
+// what AppKit constrains, and the comparison then holds at any backing scale
+// instead of assuming the host is 1x.
 TEST(EditorWindowOffscreenTargetTest, HiddenWindowsKeepTheirRequestedSize) {
   constexpr Vector2i kFirstRequested(1600, 900);
   constexpr Vector2i kOversizedRequested(4000, 2400);
 
+  // Returned by value: C++17 guaranteed copy elision constructs into the
+  // caller's storage, so EditorWindow needs neither a copy nor a move ctor.
   const auto openHidden = [](Vector2i requested) {
     return EditorWindow(EditorWindowOptions{
         .title = "Hidden Window Size Test",
@@ -87,13 +94,13 @@ TEST(EditorWindowOffscreenTargetTest, HiddenWindowsKeepTheirRequestedSize) {
       GTEST_SKIP() << "editor window is unavailable on this host";
     }
 #endif
-    EXPECT_EQ(first.framebufferSize(), kFirstRequested);
+    EXPECT_EQ(first.windowSize(), kFirstRequested);
   }
 
   EditorWindow oversized = openHidden(kOversizedRequested);
   ASSERT_TRUE(oversized.valid());
-  EXPECT_EQ(oversized.framebufferSize(), kOversizedRequested)
-      << "the host clamped the hidden replay window to its display";
+  EXPECT_EQ(oversized.windowSize(), kOversizedRequested)
+      << "the host constrained the hidden replay window to its display";
 }
 
 #if defined(DONNER_EDITOR_WGPU)

@@ -164,6 +164,9 @@ struct EditorWindowOptions {
   int initialHeight = 720;
   /// Whether the native desktop window should be shown. Hidden windows still
   /// create a real OpenGL context and are useful for framebuffer replay tests.
+  /// They are additionally created undecorated: a titled window's frame is
+  /// constrained to the display it lands on, and a silently shrunk replay
+  /// window changes the editor's layout. See the constructor for details.
   bool visible = true;
   /// Request an offscreen framebuffer-readback replay surface. Linux uses GLFW's
   /// windowless "null" platform (OSMesa software GL), even when a display is
