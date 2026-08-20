@@ -12,8 +12,8 @@
 //
 // The pipeline blend state is premultiplied-source-over (same as Slug fill),
 // so the fragment shader premultiplies RGB by (alpha * opacity) before
-// writing. The input texture itself is uploaded as straight-alpha RGBA8
-// (that's what `ImageResource` stores); the premultiply happens here.
+// writing. ImageResource uploads are premultiplied before filtering; callers
+// identify any remaining straight-alpha textures through the uniform.
 
 struct Uniforms {
   // Model-view-projection matrix - maps target-pixel space to clip space.
@@ -32,15 +32,13 @@ struct Uniforms {
   // Overall multiplier applied to the sampled texel. Used for
   // `ImageParams::opacity * paint.opacity` on the draw path.
   opacity: f32,
-  // 0 = texture stores STRAIGHT alpha (default; `drawImage` for SVG
-  // `<image>` elements sourced from `ImageResource`). The fragment
-  // shader will premultiply by `alpha * opacity` before writing.
-  // 1 = texture already stores PREMULTIPLIED alpha (used by
-  // `blitFullTarget` for layer/pattern compositing - offscreen render
-  // targets always end up premultiplied because the Geode render
-  // pipeline's blend state is premultiplied source-over). The shader
-  // will multiply the entire texel by `opacity` and write the result
-  // as-is.
+  // 0 = texture stores STRAIGHT alpha. The fragment shader will premultiply
+  // by `alpha * opacity` before writing.
+  // 1 = texture already stores PREMULTIPLIED alpha. This includes
+  // `drawImage` uploads, whose `ImageResource` pixels are premultiplied before
+  // upload, and `blitFullTarget` layer/pattern compositing from premultiplied
+  // offscreen targets. The shader multiplies the entire texel by `opacity` and
+  // writes the result as-is.
   sourceIsPremult: u32,
   // Mask coverage selector for the texture bound at binding 3:
   // 0 disables masking, 1 uses luminance, and 2 uses alpha.
@@ -67,8 +65,12 @@ struct Uniforms {
   // Nonzero when a path-clip mask is bound at binding 5/6 and
   // should gate the SOURCE content before mask/blend compositing.
   hasClipMask: u32,
-  _blendPad0: u32,
+  // 0 = linear, 1 = nearest, 2 = CSS pixelated two-stage sampling.
+  samplingMode: u32,
   _blendPad1: u32,
+  // Device pixels per source texel after the complete image transform.
+  pixelatedScale: vec2f,
+  _samplingPad: vec2u,
 };
 
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
@@ -95,6 +97,38 @@ fn clip_mask_coverage(pixel_center: vec2f) -> f32 {
   let texel = clamp(vec2i(round(pixel_center - vec2f(0.5))), vec2i(0), dims - vec2i(1));
   let sample = textureLoad(clipMaskTexture, texel, 0);
   return clamp((sample.r + sample.g + sample.b + sample.a) * 0.25, 0.0, 1.0);
+}
+
+fn pixelated_texel(intermediate_coord: vec2i, source_origin: vec2i, source_size: vec2i,
+                   multiple: vec2i) -> vec4f {
+  let intermediate_size = source_size * multiple;
+  let bounded = clamp(intermediate_coord, vec2i(0), intermediate_size - vec2i(1));
+  return textureLoad(imageTexture, source_origin + bounded / multiple, 0);
+}
+
+fn sample_pixelated(uv: vec2f) -> vec4f {
+  let texture_size = vec2i(textureDimensions(imageTexture));
+  let source_min = uniforms.srcRect.xy * vec2f(texture_size);
+  let source_max = uniforms.srcRect.zw * vec2f(texture_size);
+  let source_origin = clamp(vec2i(floor(source_min + vec2f(0.5))), vec2i(0),
+                            texture_size - vec2i(1));
+  let source_size = max(vec2i(floor(source_max - source_min + vec2f(0.5))), vec2i(1));
+  let multiple = vec2i(clamp(floor(uniforms.pixelatedScale + vec2f(0.5)), vec2f(1.0),
+                             vec2f(65536.0)));
+  let source_uv_size = max(uniforms.srcRect.zw - uniforms.srcRect.xy, vec2f(1e-12));
+  let local_uv = clamp((uv - uniforms.srcRect.xy) / source_uv_size, vec2f(0.0), vec2f(1.0));
+  let intermediate_size = source_size * multiple;
+  let position = local_uv * vec2f(intermediate_size) - vec2f(0.5);
+  let base = vec2i(floor(position));
+  let fraction = fract(position);
+
+  let top = mix(pixelated_texel(base, source_origin, source_size, multiple),
+                pixelated_texel(base + vec2i(1, 0), source_origin, source_size, multiple),
+                fraction.x);
+  let bottom = mix(pixelated_texel(base + vec2i(0, 1), source_origin, source_size, multiple),
+                   pixelated_texel(base + vec2i(1, 1), source_origin, source_size, multiple),
+                   fraction.x);
+  return mix(top, bottom, fraction.y);
 }
 
 // The vertex shader uses `@builtin(vertex_index)` to pick one of the six
@@ -400,7 +434,10 @@ fn composite_with_blend(mode: u32, src_pm: vec4f, dst_pm: vec4f) -> vec4f {
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4f {
-  let sampled = textureSample(imageTexture, imageSampler, in.uv);
+  var sampled = textureSample(imageTexture, imageSampler, in.uv);
+  if (uniforms.samplingMode == 2u) {
+    sampled = sample_pixelated(in.uv);
+  }
 
   // Base colour - premultiplied by the pipeline's blend expectations.
   var color: vec4f;

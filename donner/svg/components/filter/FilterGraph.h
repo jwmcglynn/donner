@@ -15,6 +15,7 @@
 #include "donner/svg/SVGDocumentHandle.h"
 #include "donner/svg/components/filter/FilterUnits.h"
 #include "donner/svg/core/ColorInterpolationFilters.h"
+#include "donner/svg/core/ImageRendering.h"
 #include "donner/svg/core/PreserveAspectRatio.h"
 
 namespace donner::svg::components {
@@ -277,10 +278,8 @@ struct Image {
   /// subregion origin. Set by the renderer driver during pre-rendering.
   Vector2d fragmentRegionTopLeft;
 
-  /// True when the source `<feImage>` requests nearest-neighbor sampling via
-  /// `image-rendering: pixelated` / `crisp-edges` (or the legacy `optimizeSpeed` alias). When set,
-  /// both backends resample this image with nearest-neighbor instead of the default kernel.
-  bool imageRenderingPixelated = false;
+  /// Resolved sampling policy inherited by the source `<feImage>`.
+  ImageRendering imageRendering = ImageRendering::Auto;
 };
 
 /// Parameters for \c feDisplacementMap.

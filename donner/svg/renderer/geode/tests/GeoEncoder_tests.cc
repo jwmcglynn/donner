@@ -7,6 +7,7 @@
 #include <atomic>
 #include <cstdint>
 #include <cstring>
+#include <limits>
 #include <memory>
 #include <vector>
 
@@ -936,6 +937,26 @@ TEST_F(GeoEncoderTest, DrawImageHonorsOpacity) {
   // 0.5 alpha source over opaque black → R ≈ 128, A = 255.
   EXPECT_THAT(center, Rgba(Near(128, 2), testing::Eq(0), testing::Eq(0), testing::Eq(255)))
       << "Image opacity should blend red over opaque black";
+}
+
+TEST_F(GeoEncoderTest, DrawImageOverDeviceTextureLimitIsNoOp) {
+  wgpu::Limits limits;
+  ASSERT_EQ(device_->device().getLimits(&limits), wgpu::Status::Success);
+  ASSERT_LT(limits.maxTextureDimension2D, static_cast<uint32_t>(std::numeric_limits<int>::max()));
+  const int overLimitWidth = static_cast<int>(limits.maxTextureDimension2D) + 1;
+
+  svg::ImageResource image;
+  image.width = overLimitWidth;
+  image.height = 1;
+  image.data.resize(static_cast<std::size_t>(overLimitWidth) * 4u, 255);
+
+  GeoEncoder encoder(*device_, *pipeline_, *gradientPipeline_, *imagePipeline_, target_);
+  encoder.clear(css::RGBA(0, 0, 0, 255));
+  encoder.drawImage(image, Box2d({16.0, 16.0}, {48.0, 48.0}), /*opacity=*/1.0,
+                    /*pixelated=*/true);
+  encoder.finish();
+
+  EXPECT_THAT(pixelAt(readback(), 32, 32), RgbaEq(0, 0, 0, 255));
 }
 
 /// Mixing a fillPath and a drawImage in the same pass must work - after

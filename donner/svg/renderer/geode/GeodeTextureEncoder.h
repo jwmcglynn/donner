@@ -35,8 +35,8 @@ class ScopedWgpuResourceArena;
 class GeodeTextureEncoder {
 public:
   /**
-   * Upload a tightly packed straight-alpha RGBA8 pixel buffer to a freshly
-   * created `wgpu::Texture` (usage = `TextureBinding | CopyDst`).
+   * Upload a tightly packed RGBA8 pixel buffer to a freshly created `wgpu::Texture`
+   * (usage = `TextureBinding | CopyDst`). Alpha interpretation is carried by the draw parameters.
    *
    * WebGPU requires `bytesPerRow` to be 256-aligned for texture writes, but
    * the unpadded-row path is exercised by `queue.WriteTexture` on all Dawn
@@ -49,7 +49,7 @@ public:
    *
    * @param device The Geode device wrapper (provides both `wgpu::Device`
    *   and `wgpu::Queue`).
-   * @param rgbaPixels Straight-alpha RGBA8 pixels in row-major order.
+   * @param rgbaPixels RGBA8 pixels in row-major order.
    *   Must contain at least `width * height * 4` bytes.
    * @param width  Image width in pixels. Must be > 0.
    * @param height Image height in pixels. Must be > 0.
@@ -103,9 +103,10 @@ public:
   enum class Filter : uint8_t {
     /// Bilinear filtering. Default for SVG `image-rendering: auto`.
     Linear,
-    /// Nearest-neighbor filtering. Used for `image-rendering: pixelated`
-    /// (and for pattern tile sampling where the host explicitly opts in).
+    /// Nearest-neighbor filtering for `crisp-edges` and explicit pattern sampling.
     Nearest,
+    /// Integer nearest-neighbor scaling followed by smooth scaling.
+    Pixelated,
   };
 
   /**
@@ -127,12 +128,16 @@ public:
     double opacity = 1.0;
     /// Sampling filter mode.
     Filter filter = Filter::Linear;
-    /// Set when the source texture already stores premultiplied-alpha
-    /// pixels. `drawImage` uses straight-alpha textures uploaded from
-    /// `ImageResource` (default = false). Offscreen render targets that
-    /// Geode blits back during `popIsolatedLayer` / pattern compositing
-    /// are premultiplied and must set this flag to avoid a double
-    /// premultiplication that darkens the RGB channel.
+    /// Device-pixel scale per source texel for CSS `pixelated` sampling.
+    double pixelatedScaleX = 1.0;
+    /// @see pixelatedScaleX
+    double pixelatedScaleY = 1.0;
+    /// Set when the source texture already stores premultiplied-alpha pixels.
+    /// `drawImage` premultiplies `ImageResource` pixels before upload, and
+    /// offscreen render targets blitted during `popIsolatedLayer` / pattern
+    /// compositing are already premultiplied. Both paths set this flag to avoid
+    /// a second premultiplication that darkens the RGB channel. Straight-alpha
+    /// callers leave the default false so the shader premultiplies on output.
     bool sourceIsPremultiplied = false;
     /// `<mask>` compositing input. Ignored unless `maskMode` is nonzero.
     wgpu::Texture maskTexture;

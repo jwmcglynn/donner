@@ -32,6 +32,7 @@
 #include "donner/svg/tests/ParserTestUtils.h"
 
 using ::testing::_;
+using ::testing::AllOf;
 using ::testing::AtLeast;
 using ::testing::Eq;
 using ::testing::Field;
@@ -326,7 +327,8 @@ TEST_F(RendererDriverTest, ResolvesSpanStrokeAndDecorationPaintFromTextStyle) {
 
 TEST_F(RendererDriverTest, EmitsImageDrawCallsWithClipAndTransform) {
   SVGDocument document = makeDocument(R"svg(
-    <image x="1" y="1" width="4" height="2" href="dummy.png" />
+    <image x="1" y="1" width="4" height="2" href="dummy.png"
+           image-rendering="high-quality" />
   )svg",
                                       Vector2i(10, 8));
 
@@ -350,7 +352,9 @@ TEST_F(RendererDriverTest, EmitsImageDrawCallsWithClipAndTransform) {
   EXPECT_CALL(renderer, setPaint(_)).Times(AtLeast(1));
   EXPECT_CALL(renderer, pushClip(HasClipRect())).Times(AtLeast(1));
 
-  EXPECT_CALL(renderer, drawImage(_, Field(&ImageParams::targetRect, BoxSizeEq(Vector2d(2, 3)))))
+  EXPECT_CALL(renderer,
+              drawImage(_, AllOf(Field(&ImageParams::targetRect, BoxSizeEq(Vector2d(2, 3))),
+                                 Field(&ImageParams::imageRendering, ImageRendering::HighQuality))))
       .Times(AtLeast(1));
 
   driver.draw(document);

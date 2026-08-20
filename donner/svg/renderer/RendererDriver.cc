@@ -928,14 +928,7 @@ std::optional<ImageParams> toImageParams(const components::RenderingInstanceComp
   params.targetRect = Box2d::WithSize(Vector2d(image.image->width, image.image->height));
   params.sourceEntity = instance.dataHandle(registry);
 
-  // `image-rendering: pixelated` and `crisp-edges` (plus the legacy
-  // SVG 1.1 `optimizeSpeed` alias) disable bilinear filtering and use
-  // nearest-neighbor sampling instead. `auto`, `smooth`, and
-  // `optimizeQuality` all fall back to the backend default (bilinear).
-  const ImageRendering imageRendering = style.properties->imageRendering.get().value();
-  params.imageRenderingPixelated = imageRendering == ImageRendering::Pixelated ||
-                                   imageRendering == ImageRendering::CrispEdges ||
-                                   imageRendering == ImageRendering::OptimizeSpeed;
+  params.imageRendering = style.properties->imageRendering.get().value();
 
   return params;
 }

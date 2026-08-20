@@ -578,9 +578,7 @@ TEST(RendererPublicApiTest, DrawBitmapHonorsPaddedRows) {
   viewport.devicePixelRatio = 1.0;
   renderer.beginFrame(viewport);
 
-  ImageParams params;
-  params.targetRect = Box2d(Vector2d::Zero(), Vector2d(2, 2));
-  params.imageRenderingPixelated = true;
+  ImageParams params{Box2d(Vector2d::Zero(), Vector2d(2, 2)), 1.0, true};
   renderer.drawBitmap(MakePaddedTwoByTwoBitmap(), params);
   renderer.endFrame();
 
@@ -591,6 +589,131 @@ TEST(RendererPublicApiTest, DrawBitmapHonorsPaddedRows) {
   EXPECT_THAT(PixelAt(snapshot, 1, 0), Rgba(0, 255, 0, 255));
   EXPECT_THAT(PixelAt(snapshot, 0, 1), Rgba(0, 0, 255, 255));
   EXPECT_THAT(PixelAt(snapshot, 1, 1), Rgba(255, 255, 0, 255));
+}
+
+TEST(RendererPublicApiTest, PixelatedAndCrispEdgesUseDistinctNonIntegerScaling) {
+  const ImageResource image{
+      {
+          255,
+          0,
+          0,
+          255,
+          0,
+          0,
+          255,
+          255,
+          255,
+          0,
+          0,
+          255,
+          0,
+          0,
+          255,
+          255,
+      },
+      2,
+      2,
+  };
+
+  const auto render = [&](ImageRendering imageRendering) {
+    Renderer renderer;
+    renderer.beginFrame(RenderViewport{.size = Vector2d(5, 5), .devicePixelRatio = 1.0});
+    ImageParams params;
+    params.targetRect = Box2d::FromXYWH(0.0, 0.0, 5.0, 5.0);
+    params.imageRendering = imageRendering;
+    renderer.drawImage(image, params);
+    renderer.endFrame();
+    return NormalizeSnapshot(renderer.takeSnapshot());
+  };
+
+  EXPECT_THAT(PixelAt(render(ImageRendering::Pixelated), 2, 2),
+              Rgba(::testing::Gt(0), 0, ::testing::Gt(0), 255));
+  EXPECT_THAT(PixelAt(render(ImageRendering::CrispEdges), 2, 2),
+              ::testing::AnyOf(Rgba(255, 0, 0, 255), Rgba(0, 0, 255, 255)));
+}
+
+TEST(RendererPublicApiTest, PixelatedInterpolatesPremultipliedColors) {
+  const ImageResource image{{255, 0, 0, 255, 0, 0, 255, 0}, 2, 1};
+  std::unique_ptr<RendererInterface> renderer = CreateRendererInstance(RendererBackend::TinySkia);
+  renderer->beginFrame(RenderViewport{.size = Vector2d(5, 1), .devicePixelRatio = 1.0});
+
+  ImageParams params;
+  params.targetRect = Box2d::FromXYWH(0.0, 0.0, 5.0, 1.0);
+  params.imageRendering = ImageRendering::Pixelated;
+  renderer->drawImage(image, params);
+  renderer->endFrame();
+
+  EXPECT_THAT(PixelAt(NormalizeSnapshot(renderer->takeSnapshot()), 2, 0),
+              Rgba(255, 0, 0, ::testing::AllOf(::testing::Ge(120), ::testing::Le(136))));
+}
+
+TEST(RendererPublicApiTest, PixelatedLargeLogicalIntermediateUsesBoundedSampler) {
+  constexpr int kSourceWidth = 8193;
+  ImageResource image;
+  image.width = kSourceWidth;
+  image.height = 1;
+  image.data.resize(static_cast<std::size_t>(kSourceWidth) * 4u);
+  for (int x = 0; x < kSourceWidth; ++x) {
+    const std::size_t offset = static_cast<std::size_t>(x) * 4u;
+    image.data[offset + 0] = x < 4096 ? 255 : 0;
+    image.data[offset + 1] = 0;
+    image.data[offset + 2] = x < 4096 ? 0 : 255;
+    image.data[offset + 3] = 255;
+  }
+
+  std::unique_ptr<RendererInterface> renderer = CreateRendererInstance(RendererBackend::TinySkia);
+  renderer->beginFrame(RenderViewport{.size = Vector2d(5, 1), .devicePixelRatio = 1.0});
+  ImageParams params;
+  params.targetRect = Box2d::FromXYWH(-10237.5, 0.0, kSourceWidth * 2.5, 1.0);
+  params.imageRendering = ImageRendering::Pixelated;
+  renderer->drawImage(image, params);
+  renderer->endFrame();
+
+  EXPECT_THAT(PixelAt(NormalizeSnapshot(renderer->takeSnapshot()), 2, 0),
+              Rgba(::testing::Gt(0), 0, ::testing::Gt(0), 255));
+}
+
+TEST(RendererPublicApiTest, ActiveRendererRejectsShortAndTrailingImagePayloads) {
+  std::unique_ptr<RendererInterface> renderer = CreateActiveRendererInstance();
+  renderer->beginFrame(RenderViewport{.size = Vector2d(2, 1), .devicePixelRatio = 1.0});
+
+  ImageParams shortParams{Box2d::FromXYWH(0.0, 0.0, 1.0, 1.0), 1.0, false};
+  renderer->drawImage(ImageResource{{255, 0, 0}, 1, 1}, shortParams);
+
+  ImageParams trailingParams;
+  trailingParams.targetRect = Box2d::FromXYWH(1.0, 0.0, 1.0, 1.0);
+  renderer->drawImage(ImageResource{{255, 0, 0, 255, 17}, 1, 1}, trailingParams);
+  renderer->endFrame();
+
+  const RendererBitmap snapshot = NormalizeSnapshot(renderer->takeSnapshot());
+  EXPECT_THAT(PixelAt(snapshot, 0, 0), IsTransparent());
+  EXPECT_THAT(PixelAt(snapshot, 1, 0), IsTransparent());
+}
+
+TEST(RendererPublicApiTest, PixelatedFallbackRejectsHostileTransform) {
+  std::unique_ptr<RendererInterface> renderer = CreateRendererInstance(RendererBackend::TinySkia);
+  renderer->beginFrame(RenderViewport{.size = Vector2d(2, 2), .devicePixelRatio = 1.0});
+
+  constexpr double kLargeScale = 20000.0;
+  Transform2d deviceFromImage(Transform2d::uninitialized);
+  deviceFromImage.data[0] = kLargeScale;
+  deviceFromImage.data[1] = kLargeScale;
+  deviceFromImage.data[2] = std::nextafter(kLargeScale, 0.0);
+  deviceFromImage.data[3] = kLargeScale;
+  deviceFromImage.data[4] = std::numeric_limits<double>::max();
+  deviceFromImage.data[5] = std::numeric_limits<double>::max();
+  renderer->pushTransform(deviceFromImage);
+
+  ImageParams params;
+  params.targetRect = Box2d::FromXYWH(0.0, 0.0, 1.0, 1.0);
+  params.imageRendering = ImageRendering::Pixelated;
+  renderer->drawImage(ImageResource{{255, 0, 0, 255}, 1, 1}, params);
+  renderer->popTransform();
+  renderer->endFrame();
+
+  const RendererBitmap snapshot = NormalizeSnapshot(renderer->takeSnapshot());
+  EXPECT_THAT(PixelAt(snapshot, 0, 0), IsTransparent());
+  EXPECT_THAT(PixelAt(snapshot, 1, 1), IsTransparent());
 }
 
 TEST(RendererPublicApiTest, TripleDrawWithoutMutationStaysStable) {

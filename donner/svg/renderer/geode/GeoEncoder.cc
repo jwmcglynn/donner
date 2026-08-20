@@ -5,6 +5,7 @@
 #include <iterator>
 #include <vector>
 
+#include "donner/svg/renderer/PixelFormatUtils.h"
 #include "donner/svg/renderer/geode/GeodeBufferPool.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
 #include "donner/svg/renderer/geode/GeodeImagePipeline.h"
@@ -3295,35 +3296,80 @@ void GeoEncoder::blitFullTargetBlended(const wgpu::Texture& layer, const wgpu::T
                                         impl_->transientResources, impl_.get());
 }
 
-void GeoEncoder::drawImage(const svg::ImageResource& image, const Box2d& destRect, double opacity,
-                           bool pixelated) {
+namespace {
+
+/// Returns whether an image draw has a valid destination and upload-safe RGBA payload.
+bool IsValidImageDraw(const svg::ImageResource& image, const Box2d& destRect,
+                      const GeodeDevice& device) {
   if (image.data.empty() || image.width <= 0 || image.height <= 0) {
-    return;
+    return false;
   }
   if (destRect.isEmpty()) {
-    return;
+    return false;
   }
-  // Size cap: refuse pathological images. 16384 × 16384 × 4 bytes = 1 GiB,
-  // which is already past any sensible WebGPU device limit. The texture
-  // creation itself enforces tighter limits on the device side, but a sanity
-  // check here turns "invalid texture descriptor → uncaptured device error"
-  // into a clean no-op for the renderer.
-  constexpr int kMaxImageDim = 16384;
-  if (image.width > kMaxImageDim || image.height > kMaxImageDim) {
-    return;
+
+  const uint32_t maxTextureDimension = device.maxTextureDimension2D();
+  if (static_cast<uint32_t>(image.width) > maxTextureDimension ||
+      static_cast<uint32_t>(image.height) > maxTextureDimension) {
+    return false;
   }
-  const size_t expectedBytes =
-      static_cast<size_t>(image.width) * static_cast<size_t>(image.height) * 4u;
-  if (image.data.size() < expectedBytes) {
+
+  return svg::HasExactRgbaPayload(image.data, image.width, image.height);
+}
+
+/// Maps the resolved CSS image-rendering value to the Geode sampler policy.
+GeodeTextureEncoder::Filter ImageFilter(svg::ImageRendering imageRendering) {
+  switch (imageRendering) {
+    case svg::ImageRendering::CrispEdges:
+    case svg::ImageRendering::OptimizeSpeed: return GeodeTextureEncoder::Filter::Nearest;
+    case svg::ImageRendering::Pixelated: return GeodeTextureEncoder::Filter::Pixelated;
+    case svg::ImageRendering::Auto:
+    case svg::ImageRendering::Smooth:
+    case svg::ImageRendering::HighQuality:
+    case svg::ImageRendering::OptimizeQuality: return GeodeTextureEncoder::Filter::Linear;
+  }
+
+  return GeodeTextureEncoder::Filter::Linear;
+}
+
+/// Builds textured-quad parameters for an uploaded image draw.
+GeodeTextureEncoder::QuadParams MakeImageQuadParams(const svg::ImageResource& image,
+                                                    const Box2d& destRect, double opacity,
+                                                    svg::ImageRendering imageRendering,
+                                                    const Transform2d& deviceFromLocalTransform,
+                                                    const wgpu::TextureView& clipMaskView) {
+  GeodeTextureEncoder::QuadParams params;
+  params.destRect = destRect;
+  params.srcRect = Box2d({0.0, 0.0}, {1.0, 1.0});
+  params.opacity = opacity;
+  params.filter = ImageFilter(imageRendering);
+  params.sourceIsPremultiplied = true;
+
+  const Transform2d deviceFromImage =
+      Transform2d::Scale(destRect.width() / static_cast<double>(image.width),
+                         destRect.height() / static_cast<double>(image.height)) *
+      Transform2d::Translate(destRect.topLeft) * deviceFromLocalTransform;
+  params.pixelatedScaleX = deviceFromImage.transformVector(Vector2d(1.0, 0.0)).length();
+  params.pixelatedScaleY = deviceFromImage.transformVector(Vector2d(0.0, 1.0)).length();
+  params.clipMaskView = clipMaskView;
+  return params;
+}
+
+}  // namespace
+
+void GeoEncoder::drawImage(const svg::ImageResource& image, const Box2d& destRect, double opacity,
+                           svg::ImageRendering imageRendering) {
+  if (!IsValidImageDraw(image, destRect, *impl_->device)) {
     return;
   }
 
   impl_->ensurePassOpen();
   impl_->bindImagePipeline(impl_->imagePipeline->pipeline());
 
-  // Upload the image to a sampled texture.
+  // Interpolation happens in premultiplied space so transparent colored texels cannot fringe.
+  const std::vector<std::uint8_t> premultiplied = svg::PremultiplyRgba(image.data);
   wgpu::Texture texture = impl_->transientResources.retain(GeodeTextureEncoder::uploadRgba8Texture(
-      *impl_->device, image.data.data(), static_cast<uint32_t>(image.width),
+      *impl_->device, premultiplied.data(), static_cast<uint32_t>(image.width),
       static_cast<uint32_t>(image.height)));
   if (!texture) {
     return;
@@ -3335,13 +3381,8 @@ void GeoEncoder::drawImage(const svg::ImageResource& image, const Box2d& destRec
   float mvp[16];
   impl_->buildMvp(mvp);
 
-  GeodeTextureEncoder::QuadParams qp;
-  qp.destRect = destRect;
-  qp.srcRect = Box2d({0.0, 0.0}, {1.0, 1.0});
-  qp.opacity = opacity;
-  qp.filter =
-      pixelated ? GeodeTextureEncoder::Filter::Nearest : GeodeTextureEncoder::Filter::Linear;
-  qp.clipMaskView = impl_->activeClipMaskView;
+  const GeodeTextureEncoder::QuadParams qp = MakeImageQuadParams(
+      image, destRect, opacity, imageRendering, impl_->transform, impl_->activeClipMaskView);
 
   GeodeTextureEncoder::drawTexturedQuad(*impl_->device, *impl_->imagePipeline, impl_->pass.get(),
                                         texture, mvp, impl_->targetWidth, impl_->targetHeight, qp,

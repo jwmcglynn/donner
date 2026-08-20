@@ -126,7 +126,7 @@ GeodeImagePipeline::GeodeImagePipeline(const wgpu::Device& device, wgpu::Texture
   linearDesc.maxAnisotropy = 1;
   linearSampler_.reset(device.createSampler(linearDesc));
 
-  // Nearest sampler - for `image-rendering: pixelated`.
+  // Nearest sampler for crisp-edge and explicit nearest sampling.
   wgpu::SamplerDescriptor nearestDesc{wgpu::Default};
   nearestDesc.label = wgpuLabel("GeodeImageBlitNearest");
   nearestDesc.maxAnisotropy = 1;

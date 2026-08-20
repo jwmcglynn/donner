@@ -21,6 +21,7 @@ TEST(ImageRenderingTest, OstreamOutput) {
   EXPECT_THAT(ImageRendering::CrispEdges, ToStringIs("crisp-edges"));
   EXPECT_THAT(ImageRendering::Pixelated, ToStringIs("pixelated"));
   EXPECT_THAT(ImageRendering::Smooth, ToStringIs("smooth"));
+  EXPECT_THAT(ImageRendering::HighQuality, ToStringIs("high-quality"));
 }
 
 /// @test Ostream output \c operator<< for all \ref ColorInterpolationFilters values.

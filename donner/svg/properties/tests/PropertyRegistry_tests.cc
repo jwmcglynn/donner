@@ -1156,6 +1156,7 @@ TEST(PropertyRegistry, AdditionalKeywordProperties) {
         {"smooth", ImageRendering::Smooth},
         {"crisp-edges", ImageRendering::CrispEdges},
         {"pixelated", ImageRendering::Pixelated},
+        {"high-quality", ImageRendering::HighQuality},
         {"optimizeSpeed", ImageRendering::OptimizeSpeed},
         {"optimizespeed", ImageRendering::OptimizeSpeed},
         {"OPTIMIZESPEED", ImageRendering::OptimizeSpeed},

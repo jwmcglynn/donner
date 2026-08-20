@@ -14,8 +14,9 @@ interaction properties, rendering hints, non-scaling strokes, bidirectional and 
 text clipping, nested clips, and mask edge cases.
 
 This is an evidence-first completion program, not a rewrite. The current implementation already
-honors `paint-order` on both renderers. It also has partial support for `image-rendering`,
-`pointer-events`, `vector-effect: non-scaling-stroke`, `textLength`, `lengthAdjust`, and several
+honors `paint-order` on both renderers and implements the complete typed `image-rendering` value
+flow. It also has partial support for `pointer-events`, `vector-effect: non-scaling-stroke`,
+`textLength`, `lengthAdjust`, and several
 `<textPath>` attributes. Each slice begins by running its disabled conformance cases and inspecting
 the existing focused tests, then fixes the causal gap instead of adding a second implementation.
 
@@ -88,16 +89,21 @@ Reducing the raw totals is useful, but correctness and classification are the ac
   - [x] Verify the generated counts with `//tools/resvg_parity:parity_report_tests`.
   - [ ] Run `//donner/svg/renderer/tests:resvg_test_suite` without changing comparison policy.
 - [ ] Milestone 2: Complete image-sampling semantics
-  - [ ] Carry the complete `ImageRendering` value through image and filter commands instead of
-        collapsing three values to one boolean.
+  - [x] Carry the complete `ImageRendering` value through image and filter commands. Preserve the
+        former public boolean only as a source-compatibility input that maps to `pixelated` when no
+        typed value is set.
+  - [x] Implement the specified two-stage non-integer `pixelated` policy independently from
+        nearest-only `crisp-edges` and smooth or quality values in TinySkia, Geode, and both
+        `<feImage>` executors.
   - [ ] Resolve pixel centers and non-integer nearest-grid behavior for `<image>` and `<feImage>` on
         both renderers, then enable `painting/image-rendering/on-feImage.svg` and
         `optimizeSpeed.svg` when the independent oracle agrees.
-  - [ ] Validate programmatic `ImageResource` payload length against `width * height * 4` before
-        premultiplication or upload. Loader-produced SVG images are already dimension and byte
-        budget constrained; this hardens direct embedder construction.
+  - [x] Validate programmatic `ImageResource` and `<feImage>` payloads against overflow-safe exact
+        `width * height * 4` byte counts before premultiplication, sampling, or upload. Reject
+        hostile image-sampling axes before allocation and keep non-finite transforms transparent.
   - [ ] Verify property mapping, CPU filter sampling, Geode sampling, and the resvg category with
         `//donner/svg/properties/tests:properties_tests`,
+        `//donner/svg/renderer/tests:image_sampling_tests`,
         `//donner/svg/renderer/tests:filter_graph_executor_tests`,
         `:renderer_geode_golden_tests`, and `:resvg_test_suite`.
 - [ ] Milestone 3: Finish existing text-length machinery
@@ -242,9 +248,9 @@ Each numbered milestone above is an upper bound, not one pull request. The imple
 small in-place slices with one causal behavior and its tests. No slice keeps a dead parallel path or
 requires a feature flag to make the next slice possible.
 
-- Image sampling replaces `ImageParams::imageRenderingPixelated` and the filter primitive boolean
-  only after both renderers consume the typed enum in the same slice. Reverting that slice restores
-  the boolean and its callers together.
+- Image sampling uses the typed enum in both renderers and filter executors. The former public
+  `ImageParams::imageRenderingPixelated` field remains only as a source-compatible input and maps
+  to `pixelated` when the typed value is still `auto`.
 - Text-length fixes modify the live `applyTextLength` stages in place. Each zero, single-cluster,
   range, decoration, and textPath-order fix is independently revertible with its red test.
 - Host-space stroking replaces the scalar branches in `toStrokeParams` and cull-bounds adjustment
@@ -278,9 +284,8 @@ inspection changes several classifications:
 
 - `paint-order` is complete for shapes, markers, text, and tspans on both renderers. All 14 resvg
   category cases are active.
-- `image-rendering` selects smooth or nearest sampling for `<image>` and `<feImage>` on both
-  renderers, but it collapses distinct CSS values and retains two unresolved non-integer-scale
-  cases.
+- `image-rendering` carries the full CSS value set through `<image>` and `<feImage>` on both
+  renderers. Two legacy `optimizeSpeed` reference cases retain a nearest-grid oracle disagreement.
 - `non-scaling-stroke` changes output and adjusts culling, but its determinant-based scalar is exact
   only for uniform scale and rotation. Text and hit-testing need separate coverage.
 - `pointer-events` affects path and link hit-testing, but its complete SVG value matrix is not
@@ -325,8 +330,9 @@ value must still reach an explicit driver policy that a renderer mock can observ
 ### Image rendering
 
 - `auto` uses the backend's stable default smooth policy.
-- `smooth` and deprecated `optimizeQuality` prohibit nearest-only sampling. `high-quality` uses the
-  same algorithm with a higher resource-priority policy.
+- `smooth`, `high-quality`, and deprecated `optimizeQuality` prohibit nearest-only sampling.
+  Donner does not dynamically degrade image quality under load, so `high-quality` uses the same
+  stable smooth algorithm; its distinct typed value remains observable at the driver seam.
 - `crisp-edges` and deprecated `optimizeSpeed` preserve source colors without blending; nearest
   neighbor is the initial implementation.
 - `pixelated` performs nearest-neighbor scaling to the nearest positive integer multiple on each
@@ -555,6 +561,19 @@ must preserve the existing no-exception error model and resource budgets.
   non-positive, or over-budget regions fail before allocation. Negative tests live in
   `//donner/svg/renderer/tests:renderer_error_paths_tests` and
   `:filter_graph_executor_tests`.
+- Pixelated image sampling limits a materialized intermediate to 16,384 pixels per axis and
+  16,777,216 pixels total. Larger logical intermediates use the shared procedural sampler against
+  the already-bounded output surface; an output above the same surface budget fails closed before
+  allocation. `RendererPublicApiTest.PixelatedLargeLogicalIntermediateUsesBoundedSampler` owns the
+  fallback invariant.
+- Programmatic raster images and `<feImage>` primitives reach premultiplication, CPU sampling, or
+  GPU upload only when their payload is exactly the overflow-safe tightly packed RGBA8 size for
+  the declared dimensions. GPU paths also reject source axes beyond the active device's reported
+  texture limit. The procedural sampler rejects oversized output axes before allocation and leaves
+  its bounded output transparent when source, inverse, scale, or mapped coordinates are non-finite.
+  `//donner/svg/renderer/tests:image_sampling_tests`,
+  `:filter_graph_executor_tests`, `:renderer_public_api_tests`, and `:renderer_geode_tests` own
+  these failure contracts.
 - General-affine stroking retains the existing path command, subdivision, and dash-work limits.
   Non-finite transforms and expansion overflow run through `//donner/base:path_fuzzer`,
   `:path_ops_fuzzer`, `//donner/svg/parser:path_parser_fuzzer`, and

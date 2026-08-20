@@ -535,6 +535,28 @@ TEST_F(FilterSystemTest, FeImageUsesLoadedSvgSubDocument) {
   EXPECT_THAT(imageNode->imageData, IsEmpty());
 }
 
+TEST_F(FilterSystemTest, FeImageCarriesImageRendering) {
+  auto document = ParseAndComputeFilters(R"(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+      <defs>
+        <filter id="f">
+          <feImage href="#rectRef" image-rendering="pixelated"/>
+        </filter>
+        <rect id="rectRef" width="10" height="10"/>
+      </defs>
+    </svg>
+  )");
+
+  auto filterElement = document.querySelector("#f");
+  ASSERT_TRUE(filterElement.has_value());
+  const auto* computed = filterElement->entityHandle().try_get<ComputedFilterComponent>();
+  ASSERT_THAT(computed, NotNull());
+  const auto* imageNode =
+      std::get_if<filter_primitive::Image>(&computed->filterGraph.nodes[0].primitive);
+  ASSERT_THAT(imageNode, NotNull());
+  EXPECT_EQ(imageNode->imageRendering, ImageRendering::Pixelated);
+}
+
 TEST_F(FilterSystemTest, FeImageUsesLoadedRasterAndFragmentReference) {
   {
     auto document = ParseSVG(R"(

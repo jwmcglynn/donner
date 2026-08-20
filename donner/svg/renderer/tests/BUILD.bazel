@@ -184,6 +184,16 @@ donner_cc_test(
 )
 
 donner_cc_test(
+    name = "image_sampling_tests",
+    srcs = ["ImageSampling_tests.cc"],
+    deps = [
+        "//donner/svg/renderer:image_sampling",
+        "//donner/svg/renderer:pixel_format_utils",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
     name = "pattern_tile_tests",
     srcs = ["PatternTile_tests.cc"],
     deps = [

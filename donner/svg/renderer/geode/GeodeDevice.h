@@ -193,6 +193,9 @@ public:
   /// Returns the wgpu::Device. Guaranteed valid for the lifetime of this object.
   const wgpu::Device& device() const { return device_; }
 
+  /// Maximum supported width or height of a 2D texture on this device.
+  [[nodiscard]] uint32_t maxTextureDimension2D() const { return maxTextureDimension2D_; }
+
   /// Poll the device, bracketed for ASYNCIFY suspend attribution.
   ///
   /// Under Emscripten, emdawnwebgpu implements `poll` by yielding the
@@ -758,6 +761,10 @@ private:
   wgpu::Device device_;
   wgpu::Queue queue_;
   wgpu::TextureFormat textureFormat_ = wgpu::TextureFormat::RGBA8Unorm;
+
+  /// Queried once during initialization. WebGPU guarantees at least 8,192, which is the
+  /// fail-closed fallback when a device cannot report its limits.
+  uint32_t maxTextureDimension2D_ = 8192u;
 
   bool supportsTimestamps_ = false;
 

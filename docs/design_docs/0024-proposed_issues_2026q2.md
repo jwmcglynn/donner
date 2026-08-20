@@ -361,15 +361,18 @@ Basic underline/overline/line-through works. Independent color/style not support
 
 Would toggle HarfBuzz's `kern` feature.
 
-### Issue S24: Implement `image-rendering` full value set
+### Issue S24: Classify `image-rendering` reference grids
 
 | Field | Value |
 |-------|-------|
-| **Tests unblocked** | 2 (`painting/image-rendering/*`) |
+| **Tests classified** | 2 (`painting/image-rendering/*`) |
 | **Complexity** | Small |
 | **Spec** | [CSS Images 3 §5.3](https://drafts.csswg.org/css-images-3/#the-image-rendering) |
 
-Only `pixelated` → nearest-neighbor is implemented. Missing `crisp-edges`, `smooth`/`auto`.
+The complete value set reaches `<image>` and `<feImage>` on both backends. The remaining skipped
+legacy `optimizeSpeed` cases use an allowed nearest algorithm but choose different pixel-center
+grids under viewport scaling; independent browser oracles determine whether project-owned goldens
+should replace the vendored references.
 
 ---
 

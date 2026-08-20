@@ -32,6 +32,20 @@
 
 namespace donner::svg {
 
+/**
+ * Returns whether a byte span is exactly one tightly packed RGBA8 payload.
+ *
+ * This internal renderer guard performs no allocation and rejects non-positive dimensions and
+ * any byte-count multiplication that cannot be represented by `size_t`.
+ *
+ * @param rgbaPixels Candidate tightly packed RGBA8 bytes.
+ * @param width Declared pixel width.
+ * @param height Declared pixel height.
+ * @return True only when the span size is exactly `width * height * 4`.
+ */
+[[nodiscard]] bool HasExactRgbaPayload(std::span<const std::uint8_t> rgbaPixels, int width,
+                                       int height);
+
 /// Convert tightly-packed straight-alpha RGBA8 to premultiplied RGBA8.
 ///
 /// @param rgbaPixels Straight-alpha RGBA bytes (size must be a multiple of 4).

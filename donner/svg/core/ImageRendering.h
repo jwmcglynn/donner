@@ -16,11 +16,12 @@ namespace donner::svg {
  */
 enum class ImageRendering : uint8_t {
   Auto,             ///< [DEFAULT] UA picks the algorithm; typically bilinear/trilinear.
-  OptimizeSpeed,    ///< Legacy SVG 1.1 alias; treated as `pixelated` here.
-  OptimizeQuality,  ///< Legacy SVG 1.1 alias; treated as `auto`.
-  CrispEdges,       ///< Preserves sharp edges; treated as `pixelated` for nearest-neighbor.
-  Pixelated,        ///< Nearest-neighbor sampling for blocky upscaling.
+  OptimizeSpeed,    ///< Legacy alias with the same behavior as `crisp-edges`.
+  OptimizeQuality,  ///< Legacy alias with the same behavior as `smooth`.
+  CrispEdges,       ///< Preserves contrast without blending source colors.
+  Pixelated,        ///< Integer nearest-neighbor scale followed by smooth scaling.
   Smooth,           ///< Bilinear/trilinear (same as `auto`).
+  HighQuality,      ///< Smooth scaling retained as a distinct author preference.
 };
 
 /// ostream output operator for \ref ImageRendering.
@@ -32,6 +33,7 @@ inline std::ostream& operator<<(std::ostream& os, ImageRendering value) {
     case ImageRendering::CrispEdges: return os << "crisp-edges";
     case ImageRendering::Pixelated: return os << "pixelated";
     case ImageRendering::Smooth: return os << "smooth";
+    case ImageRendering::HighQuality: return os << "high-quality";
   }
 
   UTILS_UNREACHABLE();  // LCOV_EXCL_LINE
