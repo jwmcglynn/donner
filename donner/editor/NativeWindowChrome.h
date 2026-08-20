@@ -22,6 +22,9 @@ namespace donner::editor {
 struct WindowChromeState {
   /// Path of the open document, or `std::nullopt` for an untitled buffer.
   std::optional<std::string> filePath;
+  /// Display name used for the title when no file path is set (e.g. the name
+  /// of the built-in sample currently open). Ignored when \ref filePath is set.
+  std::optional<std::string> documentName;
   /// Whether the document has unsaved changes.
   bool edited = false;
 };
@@ -33,9 +36,10 @@ struct WindowChromeState {
 ///   with a bullet ("● ") in the text itself. Callers pass false on
 ///   platforms that show the edited state natively (macOS), where the dot
 ///   is rendered by the OS via `setDocumentEdited:` instead.
-/// @return Title such as "diagram.svg - Donner SVG Editor" or, for an
-///   unsaved untitled buffer with `showEditedDotInText`, "● untitled -
-///   Donner SVG Editor".
+/// @return Title such as "diagram.svg - Donner SVG Editor", "Donner Splash
+///   Sample - Donner SVG Editor" for a built-in sample without a file path, or
+///   "● untitled - Donner SVG Editor" for an unsaved untitled buffer with
+///   `showEditedDotInText`.
 [[nodiscard]] std::string ComposeWindowTitle(const WindowChromeState& state,
                                              bool showEditedDotInText);
 

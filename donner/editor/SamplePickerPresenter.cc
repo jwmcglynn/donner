@@ -16,11 +16,6 @@ constexpr float kCardHeight = 96.0f;
 constexpr float kThumbnailWidth = 104.0f;
 constexpr float kThumbnailHeight = 64.0f;
 constexpr float kHeadingSpacing = 8.0f;
-#ifdef __EMSCRIPTEN__
-constexpr std::string_view kGitHubActionLabel = "View on GitHub";
-#else
-constexpr std::string_view kGitHubActionLabel = "Copy GitHub Link";
-#endif
 
 std::size_t BoundedSampleCount(std::size_t sampleCount) noexcept {
   return std::min(sampleCount, kSamplePickerMaxVisibleSamples);
@@ -118,9 +113,6 @@ std::string_view SamplePickerDescription(std::string_view sampleId) noexcept {
   if (sampleId == "donner-splash") {
     return "A quick look at Donner";
   }
-  if (sampleId == "donner-showcase") {
-    return "Generated in Donner";
-  }
   if (sampleId == "basic-shapes") {
     return "Shapes, fills, and strokes";
   }
@@ -142,6 +134,7 @@ void ApplySamplePickerCommand(bool activated, SamplePickerCommand command,
   switch (command) {
     case SamplePickerCommand::Dismiss: actions->dismiss = true; return;
     case SamplePickerCommand::OpenFile: actions->openFile = true; return;
+    case SamplePickerCommand::NewDocument: actions->newDocument = true; return;
     case SamplePickerCommand::LoadSample:
       if (FindEditorSample(sampleId) != nullptr) {
         actions->loadSample = true;
@@ -177,15 +170,26 @@ SamplePickerActions SamplePickerPresenter::render(
   ImGui::TextWrapped("Edit SVG graphics and source together.");
   ImGui::Dummy(ImVec2(0.0f, kHeadingSpacing));
 
+  const float newWidth = std::max(96.0f, ImGui::CalcTextSize("New SVG").x + 2.0f * theme.space4);
+  if (ImGui::Button("New SVG", ImVec2(newWidth, kSamplePickerMinTouchTarget))) {
+    ApplySamplePickerCommand(true, SamplePickerCommand::NewDocument, {}, &actions);
+  }
+  ImGui::SameLine(0.0f, theme.space2);
   const float openWidth = std::max(112.0f, ImGui::CalcTextSize("Open SVG").x + 2.0f * theme.space4);
   if (ImGui::Button("Open SVG", ImVec2(openWidth, kSamplePickerMinTouchTarget))) {
     ApplySamplePickerCommand(true, SamplePickerCommand::OpenFile, {}, &actions);
   }
   ImGui::SameLine(0.0f, theme.space2);
-  const float githubWidth =
-      std::max(128.0f, ImGui::CalcTextSize(kGitHubActionLabel.data()).x + 2.0f * theme.space4);
-  if (ImGui::Button(kGitHubActionLabel.data(), ImVec2(githubWidth, kSamplePickerMinTouchTarget))) {
+  // The GitHub action reads as a hyperlink (underlined, link-colored, hand
+  // cursor) and reports the same edge-triggered action the old button did.
+  const float linkY =
+      ImGui::GetCursorPosY() + (kSamplePickerMinTouchTarget - ImGui::GetTextLineHeight()) * 0.5f;
+  ImGui::SetCursorPosY(linkY);
+  if (ImGui::TextLink(kSamplePickerGitHubUrl.data())) {
     ApplySamplePickerCommand(true, SamplePickerCommand::OpenGitHub, {}, &actions);
+  }
+  if (ImGui::IsItemHovered()) {
+    ImGui::SetTooltip("Open on GitHub");
   }
   ImGui::Dummy(ImVec2(0.0f, theme.space3));
 

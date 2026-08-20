@@ -11,7 +11,8 @@ namespace donner::editor {
 /// Owns the editor's popup/modal state and renders the corresponding ImGui dialogs.
 class DialogPresenter {
 public:
-  explicit DialogPresenter(std::string editorNoticeText);
+  explicit DialogPresenter(std::string editorNoticeText,
+                           std::string editorBuildInfo = std::string());
 
   void requestOpenFile(const std::optional<std::string>& currentFilePath);
   void requestSaveFile(const std::optional<std::string>& currentFilePath,
@@ -58,6 +59,12 @@ private:
   std::string openFileError_;
   std::string saveFileError_;
   std::string editorNoticeText_;
+  /// Embedded "<version>\n<commit>\n" build metadata, or empty when unset.
+  std::string editorBuildInfo_;
+  /// Version line parsed from \ref editorBuildInfo_, or empty when unset.
+  std::string editorVersion_;
+  /// Commit line parsed from \ref editorBuildInfo_, or empty when unset.
+  std::string editorCommit_;
 };
 
 }  // namespace donner::editor

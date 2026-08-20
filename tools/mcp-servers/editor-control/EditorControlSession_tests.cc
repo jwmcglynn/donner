@@ -507,6 +507,17 @@ TEST(EditorControlSessionTest, DraggingSplashBackgroundDropsGhostPixelsFromPrese
                                                                 {"render_after_load", true}});
   ASSERT_TRUE(load.body.value("ok", false)) << load.body.dump(2);
 
+  // The splash Background is locked by default (data-donner-locked), so unlock
+  // it through the same Layers-panel handler the UI uses before dragging it.
+  ToolCallResult unlock =
+      session.handleToolCall("click_layer_button", json{{"selector", "#Background"},
+                                                       {"button", "lock"},
+                                                       {"include_display_before_render", false},
+                                                       {"include_final_frame", false},
+                                                       {"include_display_frame", false}});
+  ASSERT_TRUE(unlock.body.value("ok", false)) << unlock.body.dump(2);
+  ASSERT_EQ(unlock.body["after"].value("locked", true), false) << unlock.body.dump(2);
+
   ToolCallResult drag =
       session.handleToolCall("drag_selector", json{{"selector", "#Background"},
                                                    {"delta_x", 96.0},

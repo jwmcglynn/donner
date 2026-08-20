@@ -199,7 +199,10 @@ cc_binary(
         ":wasm_enabled": [],
         "//conditions:default": ["@platforms//:incompatible"],
     }),
-    deps = _EDITOR_WASM_BINARY_DEPS + ["//donner/editor:notice"],
+    deps = _EDITOR_WASM_BINARY_DEPS + [
+        "//donner/editor:editor_build_info",
+        "//donner/editor:notice",
+    ],
 )
 
 wasm_cc_binary(

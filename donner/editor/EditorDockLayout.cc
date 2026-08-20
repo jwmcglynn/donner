@@ -55,6 +55,10 @@ EditorDockNodes BuildDefaultDockLayout(ImGuiID dockspaceId, const EditorDockLayo
                               &rightLowerId);
   nodes.rightTop = layersId;
 
+  // The right column below Layers hosts the Inspector, with the Compositor
+  // Debug Info panel docked at the bottom when it is enabled. Splitting the
+  // inspector area this way keeps the compositor diagnostics reachable in the
+  // side column while leaving its pane resizable via the splitter.
   if (params.includeCompositorDebug) {
     ImGuiID compositorId = 0;
     ImGuiID inspectorId = 0;
@@ -80,10 +84,11 @@ ImGuiDockNodeFlags EditorDockSpaceFlags(bool locked) {
   // The canvas central node always stays clear of docked panels.
   ImGuiDockNodeFlags flags = ImGuiDockNodeFlags_NoDockingOverCentralNode;
   if (locked) {
-    // Disable the splitter/resizer, prevent new splits, and block undocking
-    // (tear-off) so the locked layout cannot be accidentally rearranged.
-    flags |= ImGuiDockNodeFlags_NoResize | ImGuiDockNodeFlags_NoDockingSplit |
-             ImGuiDockNodeFlags_NoUndocking;
+    // Fix the layout structure: block new splits and undocking (tear-off) so
+    // panels cannot be accidentally rearranged. The existing splitters stay
+    // resizable so the right column width and panel heights (e.g. the
+    // Layers/Inspector pane) can be adjusted.
+    flags |= ImGuiDockNodeFlags_NoDockingSplit | ImGuiDockNodeFlags_NoUndocking;
   }
   return flags;
 }

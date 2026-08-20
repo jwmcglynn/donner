@@ -67,8 +67,8 @@ TEST(SamplePickerPresenter, EmptyCatalogLayoutHasNoRowsOrColumns) {
 }
 
 TEST(SamplePickerPresenter, DescriptionsCoverCatalogAndFallback) {
-  constexpr std::array<std::string_view, 5> kSampleIds = {
-      "donner-splash", "basic-shapes", "text-style", "gradients-clip", "donner-showcase"};
+  constexpr std::array<std::string_view, 4> kSampleIds = {"donner-splash", "basic-shapes",
+                                                          "text-style", "gradients-clip"};
   for (const std::string_view id : kSampleIds) {
     EXPECT_FALSE(SamplePickerDescription(id).empty());
   }
@@ -84,6 +84,11 @@ TEST(SamplePickerPresenter, CommandsProduceSemanticActions) {
   actions = SamplePickerActions{};
   ApplySamplePickerCommand(true, SamplePickerCommand::OpenFile, {}, &actions);
   EXPECT_TRUE(actions.openFile);
+
+  actions = SamplePickerActions{};
+  ApplySamplePickerCommand(true, SamplePickerCommand::NewDocument, {}, &actions);
+  EXPECT_TRUE(actions.newDocument);
+  EXPECT_FALSE(actions.openFile);
 
   actions = SamplePickerActions{};
 
@@ -122,14 +127,15 @@ TEST(SamplePickerPresenter, CommandsIgnoreEmptySampleAndNullAccumulator) {
 
 /// True when no action flag is set on @p actions.
 bool NoActions(const SamplePickerActions& actions) {
-  return !actions.dismiss && !actions.openFile && !actions.loadSample && !actions.openGitHub &&
-         actions.sampleId.empty();
+  return !actions.dismiss && !actions.openFile && !actions.newDocument && !actions.loadSample &&
+         !actions.openGitHub && actions.sampleId.empty();
 }
 
 /// Accumulate every edge-triggered flag from @p frame into @p merged.
 void MergeActions(SamplePickerActions& merged, const SamplePickerActions& frame) {
   merged.dismiss = merged.dismiss || frame.dismiss;
   merged.openFile = merged.openFile || frame.openFile;
+  merged.newDocument = merged.newDocument || frame.newDocument;
   merged.loadSample = merged.loadSample || frame.loadSample;
   merged.openGitHub = merged.openGitHub || frame.openGitHub;
   if (!frame.sampleId.empty()) {
@@ -268,39 +274,31 @@ TEST_F(SamplePickerPresenterImGuiTest, ClickingDismissButtonEmitsDismiss) {
   EXPECT_TRUE(dismissed.dismiss) << "Dismiss button not found along the top-right edge";
 }
 
-TEST_F(SamplePickerPresenterImGuiTest, ClickingActionButtonsEmitsOpenFileAndOpenGitHub) {
+TEST_F(SamplePickerPresenterImGuiTest, ClickingActionButtonsEmitsNewDocumentOpenFileAndOpenGitHub) {
   const SamplePickerState state;
   constexpr float kHostWidth = 1024.0f;
 
   Frame(state, {}, kHostWidth);
 
-  // The "Open SVG" button hugs the left content edge below the heading text;
-  // its vertical position depends on font metrics, so probe downward.
-  float openRowY = -1.0f;
-  for (float y = 56.0f; y <= 400.0f; y += 6.0f) {
-    const SamplePickerActions actions = Click(state, {}, kHostWidth, ImVec2(60.0f, y));
-    EXPECT_FALSE(actions.dismiss);
-    EXPECT_FALSE(actions.loadSample);
-    if (actions.openFile) {
-      openRowY = y;
-      break;
+  // Scan the action-button band for the three primary actions. The "New SVG"
+  // and "Open SVG" buttons are 44px touch targets while the GitHub hyperlink
+  // is a thin centered text link, so probe a grid across the whole band.
+  bool foundNew = false;
+  bool foundOpen = false;
+  bool foundGit = false;
+  for (float y = 40.0f; y <= 200.0f && !(foundNew && foundOpen && foundGit); y += 4.0f) {
+    for (float x = 0.0f; x <= 800.0f && !(foundNew && foundOpen && foundGit); x += 8.0f) {
+      const SamplePickerActions actions = Click(state, {}, kHostWidth, ImVec2(x, y));
+      EXPECT_FALSE(actions.dismiss);
+      EXPECT_FALSE(actions.loadSample);
+      foundNew = foundNew || actions.newDocument;
+      foundOpen = foundOpen || actions.openFile;
+      foundGit = foundGit || actions.openGitHub;
     }
   }
-  ASSERT_GT(openRowY, 0.0f) << "Open SVG button not found along the left edge";
-
-  // The GitHub action sits on the same row, right of the 112px-wide Open SVG
-  // button (8px gap).
-  bool openedGitHub = false;
-  for (float x = 132.0f; x <= 300.0f; x += 12.0f) {
-    const SamplePickerActions actions = Click(state, {}, kHostWidth, ImVec2(x, openRowY));
-    EXPECT_FALSE(actions.dismiss);
-    EXPECT_FALSE(actions.loadSample);
-    if (actions.openGitHub) {
-      openedGitHub = true;
-      break;
-    }
-  }
-  EXPECT_TRUE(openedGitHub) << "GitHub action button not found on the Open SVG row";
+  EXPECT_TRUE(foundNew) << "New SVG button not found";
+  EXPECT_TRUE(foundOpen) << "Open SVG button not found";
+  EXPECT_TRUE(foundGit) << "GitHub hyperlink not found on the action band";
 }
 
 TEST_F(SamplePickerPresenterImGuiTest, ClickingFirstSampleCardLoadsThatSample) {

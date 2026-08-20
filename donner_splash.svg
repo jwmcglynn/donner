@@ -784,7 +784,7 @@
       xlink:href="#radial-gradient-63" />
   </defs>
   <g class="cls-94">
-    <g id="Background">
+    <g id="Background" data-donner-locked="true">
       <rect class="cls-89" width="892" height="512" />
     </g>
     <g id="Sunburst">

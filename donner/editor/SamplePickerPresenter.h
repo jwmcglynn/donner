@@ -58,6 +58,7 @@ struct SamplePickerState {
 struct SamplePickerActions {
   bool dismiss = false;
   bool openFile = false;
+  bool newDocument = false;
   bool loadSample = false;
   std::string sampleId;
   bool openGitHub = false;
@@ -77,6 +78,7 @@ using SamplePickerThumbnailProvider =
 enum class SamplePickerCommand {
   Dismiss,
   OpenFile,
+  NewDocument,
   LoadSample,
   OpenGitHub,
 };
