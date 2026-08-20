@@ -1241,6 +1241,7 @@ TEST(PropertyRegistry, AdditionalKeywordProperties) {
 
   {
     const std::pair<const char*, PointerEvents> cases[] = {
+        {"auto", PointerEvents::Auto},
         {"none", PointerEvents::None},
         {"bounding-box", PointerEvents::BoundingBox},
         {"visiblePainted", PointerEvents::VisiblePainted},
@@ -1409,6 +1410,99 @@ TEST(PropertyRegistry, DisplayAnchorVisibilityOverflowAndPointerEventsErrors) {
     PropertyRegistry registry;
     registry.parseStyle("baseline-shift: 2px");
     EXPECT_THAT(registry.baselineShift.get(), Optional(Lengthd(2, Lengthd::Unit::Px)));
+  }
+}
+
+TEST(PropertyRegistry, PointerEventsAutoIsValid) {
+  PropertyRegistry registry;
+  const css::Declaration declaration = css::CSS::ParseStyleAttribute("pointer-events: auto").at(0);
+
+  EXPECT_EQ(registry.parseProperty(declaration, Specificity()), std::nullopt);
+}
+
+TEST(PropertyRegistry, CursorKeywordIsTyped) {
+  const std::pair<const char*, CursorType> cases[] = {
+      {"auto", CursorType::Auto},
+      {"default", CursorType::Default},
+      {"none", CursorType::None},
+      {"context-menu", CursorType::ContextMenu},
+      {"help", CursorType::Help},
+      {"pointer", CursorType::Pointer},
+      {"progress", CursorType::Progress},
+      {"wait", CursorType::Wait},
+      {"cell", CursorType::Cell},
+      {"crosshair", CursorType::Crosshair},
+      {"text", CursorType::Text},
+      {"vertical-text", CursorType::VerticalText},
+      {"alias", CursorType::Alias},
+      {"copy", CursorType::Copy},
+      {"move", CursorType::Move},
+      {"no-drop", CursorType::NoDrop},
+      {"not-allowed", CursorType::NotAllowed},
+      {"grab", CursorType::Grab},
+      {"grabbing", CursorType::Grabbing},
+      {"e-resize", CursorType::EResize},
+      {"n-resize", CursorType::NResize},
+      {"ne-resize", CursorType::NEResize},
+      {"nw-resize", CursorType::NWResize},
+      {"s-resize", CursorType::SResize},
+      {"se-resize", CursorType::SEResize},
+      {"sw-resize", CursorType::SWResize},
+      {"w-resize", CursorType::WResize},
+      {"ew-resize", CursorType::EWResize},
+      {"ns-resize", CursorType::NSResize},
+      {"nesw-resize", CursorType::NESWResize},
+      {"nwse-resize", CursorType::NWSEResize},
+      {"col-resize", CursorType::ColResize},
+      {"row-resize", CursorType::RowResize},
+      {"all-scroll", CursorType::AllScroll},
+      {"zoom-in", CursorType::ZoomIn},
+      {"zoom-out", CursorType::ZoomOut},
+      {"PoInTeR", CursorType::Pointer},
+  };
+
+  for (const auto& [value, expected] : cases) {
+    PropertyRegistry registry;
+    registry.parseStyle(std::string("cursor: ") + value);
+    EXPECT_THAT(registry.cursor.get(), Optional(testing::Field(&Cursor::fallback, expected)));
+  }
+
+  PropertyRegistry invalidRegistry;
+  const css::Declaration invalid = css::CSS::ParseStyleAttribute("cursor: bogus").at(0);
+  EXPECT_THAT(invalidRegistry.parseProperty(invalid, Specificity()),
+              ParseErrorIs("Invalid cursor value"));
+
+  PropertyRegistry attributeRegistry;
+  EXPECT_THAT(attributeRegistry.parsePresentationAttribute("cursor", "url(attr.cur) 1 2, copy"),
+              ParseResultIs(true));
+  ASSERT_TRUE(attributeRegistry.cursor.get().has_value());
+  const Cursor attributeCursor = *attributeRegistry.cursor.get();
+  EXPECT_EQ(attributeCursor.images,
+            std::vector<CursorImage>({CursorImage{RcString("attr.cur"), Vector2d(1.0, 2.0)}}));
+  EXPECT_EQ(attributeCursor.fallback, CursorType::Copy);
+}
+
+TEST(PropertyRegistry, CursorUrlFallbackListIsTyped) {
+  PropertyRegistry registry;
+  const css::Declaration declaration =
+      css::CSS::ParseStyleAttribute(R"(cursor: url(first.cur) 4 5, url("second.cur"), pointer)")
+          .at(0);
+  EXPECT_EQ(registry.parseProperty(declaration, Specificity()), std::nullopt);
+
+  ASSERT_TRUE(registry.cursor.get().has_value());
+  const Cursor cursor = *registry.cursor.get();
+  ASSERT_EQ(cursor.images.size(), 2u);
+  EXPECT_EQ(cursor.images[0].url, "first.cur");
+  EXPECT_EQ(cursor.images[0].hotspot, Vector2d(4.0, 5.0));
+  EXPECT_EQ(cursor.images[1].url, "second.cur");
+  EXPECT_EQ(cursor.images[1].hotspot, std::nullopt);
+  EXPECT_EQ(cursor.fallback, CursorType::Pointer);
+
+  for (const char* invalidValue : {"url(first.cur)", "url(first.cur) 4, pointer"}) {
+    PropertyRegistry invalidRegistry;
+    const css::Declaration invalid =
+        css::CSS::ParseStyleAttribute(std::string("cursor: ") + invalidValue).at(0);
+    EXPECT_TRUE(invalidRegistry.parseProperty(invalid, Specificity()).has_value());
   }
 }
 

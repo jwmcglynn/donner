@@ -9,6 +9,7 @@
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/SVGGeometryElement.h"
 #include "donner/svg/SVGGraphicsElement.h"
+#include "donner/svg/core/Cursor.h"
 
 namespace donner::svg {
 
@@ -74,6 +75,16 @@ public:
    * outside the active scope to occlude an eligible descendant.
    */
   std::vector<SVGGraphicsElement> findAllIntersecting(const Vector2d& point);
+
+  /**
+   * Returns the inherited CSS cursor value for the topmost interactive element at a point. URL
+   * strings remain authored until declaration-base tracking is available.
+   *
+   * @param point Position in canvas coordinates.
+   * @return Ordered image candidates and keyword fallback, or `std::nullopt` when no element is
+   * hit.
+   */
+  std::optional<Cursor> cursorAt(const Vector2d& point);
 
   /**
    * Finds the hyperlink (\ref xml_a) at the given point, if any, resolving the enclosing-`<a>`

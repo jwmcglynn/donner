@@ -14,7 +14,7 @@
 #include "donner/svg/components/filter/FilterEffect.h"
 #include "donner/svg/core/ClipRule.h"
 #include "donner/svg/core/ColorInterpolationFilters.h"
-#include "donner/svg/core/CursorType.h"
+#include "donner/svg/core/Cursor.h"
 #include "donner/svg/core/Display.h"
 #include "donner/svg/core/DominantBaseline.h"
 #include "donner/svg/core/FontStretch.h"
@@ -274,15 +274,14 @@ public:
   //
 
   /// `pointer-events` property, which determines how the element responds to pointer events (such
-  /// as clicks or hover). Defaults to \ref PointerEvents::VisiblePainted.
+  /// as clicks or hover). Defaults to \ref PointerEvents::Auto.
   Property<PointerEvents, PropertyCascade::Inherit> pointerEvents{
-      "pointer-events",
-      []() -> std::optional<PointerEvents> { return PointerEvents::VisiblePainted; }};
+      "pointer-events", []() -> std::optional<PointerEvents> { return PointerEvents::Auto; }};
 
   /// `cursor` property, which defines the mouse cursor to display when hovering over the element.
-  /// Defaults to \ref CursorType::Auto. Inherited.
-  Property<CursorType, PropertyCascade::Inherit> cursor{
-      "cursor", []() -> std::optional<CursorType> { return CursorType::Auto; }};
+  /// Defaults to an empty image list and \ref CursorType::Auto fallback. Inherited.
+  Property<Cursor, PropertyCascade::Inherit> cursor{
+      "cursor", []() -> std::optional<Cursor> { return Cursor{}; }};
 
   //
   // Markers

@@ -1304,7 +1304,9 @@ ParseResult<PointerEvents> ParsePointerEvents(std::span<const css::ComponentValu
     if (const auto* ident = component.tryGetToken<css::Token::Ident>()) {
       const RcString& value = ident->value;
 
-      if (value.equalsLowercase("none")) {
+      if (value.equalsLowercase("auto")) {
+        return PointerEvents::Auto;
+      } else if (value.equalsLowercase("none")) {
         return PointerEvents::None;
       } else if (value.equalsLowercase("bounding-box")) {
         return PointerEvents::BoundingBox;
@@ -1332,6 +1334,155 @@ ParseResult<PointerEvents> ParsePointerEvents(std::span<const css::ComponentValu
   err.reason = "Invalid pointer-events";
   err.range.start = !components.empty() ? components.front().sourceOffset() : FileOffset::Offset(0);
   return err;
+}
+
+// Keyword table for the `cursor` property, in specification order. A table
+// plus one comparison loop stays readable as the list grows, where a chain of
+// nearly forty branches did not. CSS keywords are case-insensitive, so entries
+// are matched with `equalsLowercase` rather than looked up in a case-sensitive
+// map.
+constexpr std::array<std::pair<std::string_view, CursorType>, 36> kCursorKeywords{{
+    {"auto", CursorType::Auto},
+    {"default", CursorType::Default},
+    {"none", CursorType::None},
+    {"context-menu", CursorType::ContextMenu},
+    {"help", CursorType::Help},
+    {"pointer", CursorType::Pointer},
+    {"progress", CursorType::Progress},
+    {"wait", CursorType::Wait},
+    {"cell", CursorType::Cell},
+    {"crosshair", CursorType::Crosshair},
+    {"text", CursorType::Text},
+    {"vertical-text", CursorType::VerticalText},
+    {"alias", CursorType::Alias},
+    {"copy", CursorType::Copy},
+    {"move", CursorType::Move},
+    {"no-drop", CursorType::NoDrop},
+    {"not-allowed", CursorType::NotAllowed},
+    {"grab", CursorType::Grab},
+    {"grabbing", CursorType::Grabbing},
+    {"e-resize", CursorType::EResize},
+    {"n-resize", CursorType::NResize},
+    {"ne-resize", CursorType::NEResize},
+    {"nw-resize", CursorType::NWResize},
+    {"s-resize", CursorType::SResize},
+    {"se-resize", CursorType::SEResize},
+    {"sw-resize", CursorType::SWResize},
+    {"w-resize", CursorType::WResize},
+    {"ew-resize", CursorType::EWResize},
+    {"ns-resize", CursorType::NSResize},
+    {"nesw-resize", CursorType::NESWResize},
+    {"nwse-resize", CursorType::NWSEResize},
+    {"col-resize", CursorType::ColResize},
+    {"row-resize", CursorType::RowResize},
+    {"all-scroll", CursorType::AllScroll},
+    {"zoom-in", CursorType::ZoomIn},
+    {"zoom-out", CursorType::ZoomOut},
+}};
+
+ParseResult<CursorType> ParseCursorType(std::span<const css::ComponentValue> components) {
+  if (components.size() == 1) {
+    if (const auto* ident = components.front().tryGetToken<css::Token::Ident>()) {
+      const RcString& value = ident->value;
+      for (const auto& [keyword, cursor] : kCursorKeywords) {
+        if (value.equalsLowercase(keyword)) {
+          return cursor;
+        }
+      }
+    }
+  }
+
+  ParseDiagnostic err;
+  err.reason = "Invalid cursor value";
+  err.range.start = !components.empty() ? components.front().sourceOffset() : FileOffset::Offset(0);
+  return err;
+}
+
+std::optional<RcString> CursorUrl(const css::ComponentValue& component) {
+  if (const auto* token = component.is<css::Token>() ? &component.get<css::Token>() : nullptr) {
+    if (token->is<css::Token::Url>()) {
+      return token->get<css::Token::Url>().value;
+    }
+  }
+
+  if (const auto* function =
+          component.is<css::Function>() ? &component.get<css::Function>() : nullptr;
+      function && function->name.equalsLowercase("url")) {
+    std::span<const css::ComponentValue> values = function->values;
+    SkipWhitespace(values);
+    if (values.empty()) {
+      return std::nullopt;
+    }
+    const auto* string = values.front().tryGetToken<css::Token::String>();
+    if (!string) {
+      return std::nullopt;
+    }
+    values = values.subspan(1);
+    SkipWhitespace(values);
+    if (values.empty()) {
+      return string->value;
+    }
+  }
+  return std::nullopt;
+}
+
+ParseResult<Cursor> ParseCursor(std::span<const css::ComponentValue> components) {
+  Cursor cursor;
+  std::span<const css::ComponentValue> remaining = components;
+  SkipWhitespace(remaining);
+
+  while (!remaining.empty()) {
+    const std::optional<RcString> url = CursorUrl(remaining.front());
+    if (!url) {
+      break;
+    }
+    remaining = remaining.subspan(1);
+    SkipWhitespace(remaining);
+
+    std::optional<Vector2d> hotspot;
+    if (!remaining.empty()) {
+      if (const auto* x = remaining.front().tryGetToken<css::Token::Number>()) {
+        remaining = remaining.subspan(1);
+        SkipWhitespace(remaining);
+        if (remaining.empty()) {
+          ParseDiagnostic err;
+          err.reason = "Cursor hotspot requires two numbers";
+          return err;
+        }
+        const auto* y = remaining.front().tryGetToken<css::Token::Number>();
+        if (!y) {
+          ParseDiagnostic err;
+          err.reason = "Cursor hotspot requires two numbers";
+          err.range.start = remaining.front().sourceOffset();
+          return err;
+        }
+        hotspot = Vector2d(x->value, y->value);
+        remaining = remaining.subspan(1);
+        SkipWhitespace(remaining);
+      }
+    }
+
+    if (remaining.empty() || !remaining.front().isToken<css::Token::Comma>()) {
+      ParseDiagnostic err;
+      err.reason = "Cursor image must be followed by a comma and fallback keyword";
+      err.range.start =
+          remaining.empty() ? components.back().sourceOffset() : remaining.front().sourceOffset();
+      return err;
+    }
+    remaining = remaining.subspan(1);
+    cursor.images.push_back(CursorImage{*url, hotspot});
+    SkipWhitespace(remaining);
+  }
+
+  while (!remaining.empty() && remaining.back().isToken<css::Token::Whitespace>()) {
+    remaining = remaining.first(remaining.size() - 1);
+  }
+  ParseResult<CursorType> fallback = ParseCursorType(remaining);
+  if (fallback.hasError()) {
+    return std::move(fallback.error());
+  }
+  cursor.fallback = fallback.result();
+  return cursor;
 }
 
 ParseResult<VectorEffect> ParseVectorEffect(std::span<const css::ComponentValue> components) {
@@ -2040,6 +2191,15 @@ DONNER_CONSTEXPR_MAP auto kProperties =
                          return ParsePointerEvents(params.components());
                        },
                        &registry.pointerEvents);
+                 }},  //
+                {"cursor",
+                 [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {
+                   return Parse(
+                       params,
+                       [](const parser::PropertyParseFnParams& params) {
+                         return ParseCursor(params.components());
+                       },
+                       &registry.cursor);
                  }},  //
                 {"marker-start",
                  [](PropertyRegistry& registry, const parser::PropertyParseFnParams& params) {

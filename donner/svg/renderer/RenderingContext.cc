@@ -1309,11 +1309,12 @@ struct HitTestConfig {
 /// Returns the hit-test configuration for a given PointerEvents value.
 HitTestConfig configFromPointerEvents(PointerEvents pe) {
   switch (pe) {
+    case PointerEvents::Auto:
+    case PointerEvents::VisiblePainted: return {true, true, true, true, true};
     case PointerEvents::None:
       return {false, false, false, false, false};  // Should be filtered before this call.
     case PointerEvents::BoundingBox:
       return {false, false, false, false, false};  // Handled separately.
-    case PointerEvents::VisiblePainted: return {true, true, true, true, true};
     case PointerEvents::VisibleFill: return {true, false, true, false, false};
     case PointerEvents::VisibleStroke: return {false, true, true, false, false};
     case PointerEvents::Visible: return {true, true, true, false, false};

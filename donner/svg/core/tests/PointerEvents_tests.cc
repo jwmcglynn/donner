@@ -12,6 +12,7 @@ namespace donner::svg {
 
 /// @test Ostream output \c operator<< for all \ref PointerEvents values.
 TEST(PointerEventsTest, OstreamOutput) {
+  EXPECT_THAT(PointerEvents::Auto, ToStringIs("auto"));
   EXPECT_THAT(PointerEvents::None, ToStringIs("none"));
   EXPECT_THAT(PointerEvents::BoundingBox, ToStringIs("bounding-box"));
   EXPECT_THAT(PointerEvents::VisiblePainted, ToStringIs("visiblePainted"));

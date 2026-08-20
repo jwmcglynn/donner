@@ -699,6 +699,22 @@ TEST_F(RenderingContextTest, PointerEventsBoundingBoxHitsWithoutPaint) {
   EXPECT_EQ(ctx.findIntersecting(Vector2d(50, 50)), rectEntity);
 }
 
+TEST_F(RenderingContextTest, PointerEventsAutoUsesVisiblePaintedSemantics) {
+  auto document = ParseSVG(R"(
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+      <rect id="painted" x="10" y="10" width="35" height="80" fill="red"
+            pointer-events="auto"/>
+      <rect x="55" y="10" width="35" height="80" fill="none" stroke="none"
+            pointer-events="auto"/>
+    </svg>
+  )");
+
+  RenderingContext ctx(document.registry());
+  const Entity paintedEntity = document.querySelector("#painted")->unsafeEntityHandle().entity();
+  EXPECT_EQ(ctx.findIntersecting(Vector2d(25, 50)), paintedEntity);
+  EXPECT_TRUE(ctx.findIntersecting(Vector2d(75, 50)) == entt::null);
+}
+
 TEST_F(RenderingContextTest, PointerEventsVisibleFillHitsTransparentFill) {
   auto document = ParseSVG(R"(
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">

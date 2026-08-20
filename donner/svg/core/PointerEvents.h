@@ -33,8 +33,9 @@ enum class PointerEvents : uint8_t {
          //!< fill or visibility property values.
   Stroke,  //!< Responds to pointer events only if the pointer is within the stroke area, regardless
            //!< of stroke or visibility property values.
-  All,  //!< Responds to pointer events regardless of the element's visibility or painted area, if
-        //!< the pointer is within either the fill or stroke areas.
+  All,   //!< Responds to pointer events regardless of the element's visibility or painted area, if
+         //!< the pointer is within either the fill or stroke areas.
+  Auto,  //!< [DEFAULT] Behaves as visiblePainted for SVG content.
 };
 
 /// Output stream operator for \ref PointerEvents, outputs the CSS string representation for this
@@ -51,6 +52,7 @@ inline std::ostream& operator<<(std::ostream& os, PointerEvents value) {
     case PointerEvents::Fill: return os << "fill";
     case PointerEvents::Stroke: return os << "stroke";
     case PointerEvents::All: return os << "all";
+    case PointerEvents::Auto: return os << "auto";
   }
 
   UTILS_UNREACHABLE();  // LCOV_EXCL_LINE
