@@ -21,9 +21,10 @@ automated sample.
 - [ ] Run `bazel test //donner/editor/tests:showcase_asset_tests`. The test
       generates the derived SVG in memory and verifies parsing, text-to-outline
       conversion, overlay serialization, and rendering.
-- [ ] Open the editor's sample picker and select **Donner Showcase**. Confirm it
-      contains the generated outlined `SVG` badge and selection overlay. Treat
-      this as a starting sample, not a prescribed final composition.
+- [ ] Open the editor's sample picker and select **Donner Splash**. The
+      showcase itself is no longer a picker sample: it is generated on demand
+      (see the tool step above) and verified by `showcase_asset_tests`. Treat
+      the splash as a starting sample, not a prescribed final composition.
 - [ ] Open `/tmp/donner-showcase.svg` in Donner and a browser. Confirm the
       crop, overlay, transparency, and outlined `SVG` lettering are correct.
 - [ ] Confirm the canonical input is unchanged and no generated

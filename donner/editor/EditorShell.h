@@ -81,6 +81,9 @@ struct EditorShellOptions {
   /// Show the in-workspace welcome and sample picker on the first frame.
   bool showWelcome = false;
   std::string editorNoticeText;
+  /// Embedded "<version>\n<commit>\n" build metadata displayed in the About
+  /// dialog. May be empty when the build did not embed it.
+  std::string editorBuildInfo;
   /// Optional destination path for a `.donner-repro` recording of the
   /// user's UI interactions. When set, the shell constructs a
   /// `ReproRecorder` and snapshots ImGui input state at the start of
@@ -315,6 +318,9 @@ private:
 
   bool tryOpenPath(std::string_view path, std::string* error);
   bool tryLoadSource(std::string_view source, std::optional<std::string> path, std::string* error);
+  /// Start creating a blank document, deferring the replacement to a safe
+  /// frame (mirrors \ref queuePendingSampleLoad).
+  void requestNewDocument();
   void queuePendingSampleLoad(std::string sampleId);
   void cancelPendingSampleLoad();
   void confirmPendingSampleLoadDiscard();
@@ -684,8 +690,9 @@ private:
   /// DockSpace owns panel sizing.
   float rightPaneWidth_ = 420.0f;
   /// Whether the DockSpace panel layout is locked (default). While locked the
-  /// splitters, resizing, and tear-off are all disabled; an unlock toggle lives
-  /// in the View menu.
+  /// layout structure is fixed: no new splits and no tear-off, but the existing
+  /// splitters stay resizable so the right column width and panel heights can
+  /// be adjusted; an unlock toggle lives in the View menu.
   bool dockLayoutLocked_ = true;
   /// Set for one frame by the View menu's "Reset Layout" item to rebuild the
   /// default layout, discarding any persisted/rearranged state.
@@ -698,9 +705,9 @@ private:
   /// Whether the active DockSpace includes persistent sidebars. Used to rebind
   /// the canvas between separate desktop and compact roots on profile changes.
   bool dockSidebarsIncludedInLayout_ = true;
-  /// Whether the currently built layout reserves a node for the Compositor Debug
-  /// panel. Tracks \ref showCompositorDebugPanel_ so toggling the panel rebuilds
-  /// the layout to add or reclaim its slot.
+  /// Whether the currently built layout reserves a node for the Compositor
+  /// Debug Info panel in the inspector area. Tracks \ref showCompositorDebugPanel_
+  /// so toggling the panel rebuilds the layout to add or reclaim its slot.
   bool dockCompositorIncludedInLayout_ = false;
   std::vector<svg::SVGElement> lastHighlightedSelection_;
   std::optional<svg::SVGElement> lastTreeSelection_;
@@ -767,6 +774,7 @@ private:
   bool samplePresentationPending_ = false;
   std::string activeSampleId_;
   std::string pendingSampleLoadId_;
+  bool pendingNewDocument_ = false;
   bool pendingSampleLoadNeedsConfirmation_ = false;
   bool pendingSampleLoadDiscardConfirmed_ = false;
   /// Current compact sheet state. Desktop keeps the source/sidebar preferences
@@ -774,7 +782,7 @@ private:
   bool compactPanelVisible_ = false;
   bool compactInspectorSheet_ = false;
   EditorAdaptiveUiLayout adaptiveUiLayout_;
-  /// Whether the Compositor Debug panel window renders. Off by default: it is a
+  /// Whether the Compositor Debug Info panel window renders. Off by default: it is a
   /// developer-facing composite-tile diagnostics view, toggled on via the View
   /// menu. The user-facing Layers panel is unrelated and always visible.
   bool showCompositorDebugPanel_ = false;

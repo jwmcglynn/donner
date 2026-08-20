@@ -10,8 +10,26 @@
 
 namespace donner::editor {
 
-DialogPresenter::DialogPresenter(std::string editorNoticeText)
-    : editorNoticeText_(std::move(editorNoticeText)) {}
+DialogPresenter::DialogPresenter(std::string editorNoticeText, std::string editorBuildInfo)
+    : editorNoticeText_(std::move(editorNoticeText)), editorBuildInfo_(std::move(editorBuildInfo)) {
+  // The embedded build info is "<version>\n<commit>\n". Split the first two
+  // lines so the About dialog can render them independently; anything missing
+  // or malformed is left empty rather than shown verbatim.
+  std::size_t start = 0;
+  for (std::string* out : {&editorVersion_, &editorCommit_}) {
+    const std::size_t end = editorBuildInfo_.find('\n', start);
+    *out =
+        editorBuildInfo_.substr(start, end == std::string::npos ? std::string::npos : end - start);
+    if (end == std::string::npos) {
+      break;
+    }
+    start = end + 1;
+  }
+  if (editorBuildInfo_.empty()) {
+    editorVersion_.clear();
+    editorCommit_.clear();
+  }
+}
 
 void DialogPresenter::requestOpenFile(const std::optional<std::string>& currentFilePath) {
   std::fill(openFilePathBuffer_.begin(), openFilePathBuffer_.end(), '\0');
@@ -125,6 +143,12 @@ void DialogPresenter::render(
                                ImGuiWindowFlags_AlwaysAutoResize)) {
       ImGui::TextUnformatted("About Donner SVG Editor");
       ImGui::Separator();
+      if (!editorVersion_.empty()) {
+        ImGui::Text("Version: %s", editorVersion_.c_str());
+      }
+      if (!editorCommit_.empty()) {
+        ImGui::Text("Commit: %s", editorCommit_.c_str());
+      }
       ImGui::TextUnformatted("(c) 2024-2026 Jeff McGlynn");
       ImGui::Spacing();
       ImGui::TextWrapped(

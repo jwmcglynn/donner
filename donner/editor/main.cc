@@ -158,6 +158,7 @@ EM_JS(void, PublishWasmPinchZoomPolicy, (double wheelDeltaPerLnScale),
 #include "donner/base/FailureSignalHandler.h"
 #endif
 
+#include "donner/editor/EditorBuildInfo.h"
 #include "donner/editor/EditorShell.h"
 #include "donner/editor/Notice.h"
 #include "donner/editor/PinchZoomPolicy.h"
@@ -292,8 +293,8 @@ void RunWasmEditorFrame(void* userdata) {
   // and a press taken the same way left the click buffered and the shape
   // unselected. Consuming the request first keeps the request-clearing
   // unconditional.
-  const bool browserRequested = ConsumeBrowserEditorFrameRequest()
-                                || state->window->hasQueuedInputEvents();
+  const bool browserRequested =
+      ConsumeBrowserEditorFrameRequest() || state->window->hasQueuedInputEvents();
   const bool timerDue = state->nextIdleWakeAtMs.has_value() && nowMs >= *state->nextIdleWakeAtMs;
   if (!editorRequested && !browserRequested && !timerDue) {
     // The GPU device lives on this thread, so its callbacks (the raster
@@ -303,8 +304,7 @@ void RunWasmEditorFrame(void* userdata) {
     // 1.9 second first-sample present, the idle-timer period, with the
     // raster thread burning 265 poll round trips. A non-blocking poll on
     // every skipped tick is nanoseconds when nothing is pending.
-    if (const std::shared_ptr<donner::geode::GeodeDevice> device =
-            state->window->geodeDevice()) {
+    if (const std::shared_ptr<donner::geode::GeodeDevice> device = state->window->geodeDevice()) {
       device->pollSuspending(false);
     }
     return;
@@ -417,6 +417,7 @@ int main(int argc, char** argv) {
                    .initialPath = initialPath,
                    .showWelcome = showWelcome,
                    .editorNoticeText = EmbeddedBytesToString(donner::embedded::kEditorNoticeText),
+                   .editorBuildInfo = EmbeddedBytesToString(donner::embedded::kEditorBuildInfo),
                    .reproOutputPath = reproOutputPath});
   if (!shell->valid()) {
     if (svgPath.has_value()) {

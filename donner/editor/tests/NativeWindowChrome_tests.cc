@@ -30,28 +30,60 @@ TEST(ComposeWindowTitle, UntitledEditedNativeIndicatorOmitsDot) {
 }
 
 TEST(ComposeWindowTitle, NamedFileUsesBasename) {
-  const WindowChromeState state{.filePath = std::optional<std::string>("/home/user/art/diagram.svg"),
-                                .edited = false};
+  const WindowChromeState state{
+      .filePath = std::optional<std::string>("/home/user/art/diagram.svg"), .edited = false};
   EXPECT_EQ(ComposeWindowTitle(state, /*showEditedDotInText=*/true),
             "diagram.svg - Donner SVG Editor");
 }
 
 TEST(ComposeWindowTitle, NamedFileEditedShowsDotInText) {
-  const WindowChromeState state{.filePath = std::optional<std::string>("/home/user/art/diagram.svg"),
-                                .edited = true};
+  const WindowChromeState state{
+      .filePath = std::optional<std::string>("/home/user/art/diagram.svg"), .edited = true};
   EXPECT_EQ(ComposeWindowTitle(state, /*showEditedDotInText=*/true),
             std::string(kDotPrefix) + "diagram.svg - Donner SVG Editor");
 }
 
 TEST(ComposeWindowTitle, NamedFileEditedNativeIndicatorOmitsDot) {
-  const WindowChromeState state{.filePath = std::optional<std::string>("/home/user/art/diagram.svg"),
-                                .edited = true};
+  const WindowChromeState state{
+      .filePath = std::optional<std::string>("/home/user/art/diagram.svg"), .edited = true};
   EXPECT_EQ(ComposeWindowTitle(state, /*showEditedDotInText=*/false),
             "diagram.svg - Donner SVG Editor");
 }
 
 TEST(ComposeWindowTitle, EmptyPathTreatedAsUntitled) {
   const WindowChromeState state{.filePath = std::optional<std::string>(""), .edited = false};
+  EXPECT_EQ(ComposeWindowTitle(state, /*showEditedDotInText=*/true),
+            "untitled - Donner SVG Editor");
+}
+
+TEST(ComposeWindowTitle, SampleDocumentNameUsedWithoutFilePath) {
+  const WindowChromeState state{.filePath = std::nullopt,
+                                .documentName = std::optional<std::string>("Donner Splash Sample"),
+                                .edited = false};
+  EXPECT_EQ(ComposeWindowTitle(state, /*showEditedDotInText=*/true),
+            "Donner Splash Sample - Donner SVG Editor");
+}
+
+TEST(ComposeWindowTitle, SampleDocumentNameEditedShowsDotInText) {
+  const WindowChromeState state{.filePath = std::nullopt,
+                                .documentName = std::optional<std::string>("Donner Splash Sample"),
+                                .edited = true};
+  EXPECT_EQ(ComposeWindowTitle(state, /*showEditedDotInText=*/true),
+            std::string(kDotPrefix) + "Donner Splash Sample - Donner SVG Editor");
+}
+
+TEST(ComposeWindowTitle, FilePathTakesPrecedenceOverDocumentName) {
+  const WindowChromeState state{
+      .filePath = std::optional<std::string>("/home/user/art/diagram.svg"),
+      .documentName = std::optional<std::string>("Donner Splash Sample"),
+      .edited = false};
+  EXPECT_EQ(ComposeWindowTitle(state, /*showEditedDotInText=*/true),
+            "diagram.svg - Donner SVG Editor");
+}
+
+TEST(ComposeWindowTitle, EmptyDocumentNameTreatedAsUntitled) {
+  const WindowChromeState state{
+      .filePath = std::nullopt, .documentName = std::optional<std::string>(""), .edited = false};
   EXPECT_EQ(ComposeWindowTitle(state, /*showEditedDotInText=*/true),
             "untitled - Donner SVG Editor");
 }

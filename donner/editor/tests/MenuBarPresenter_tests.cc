@@ -54,6 +54,7 @@ TEST_F(MenuBarPresenterTest, RendersDisabledMenusWithoutActions) {
   const MenuBarActions actions = RenderFrame(state);
 
   EXPECT_FALSE(actions.openAbout);
+  EXPECT_FALSE(actions.newFile);
   EXPECT_FALSE(actions.openFile);
   EXPECT_FALSE(actions.saveFile);
   EXPECT_FALSE(actions.saveFileAs);
@@ -84,6 +85,7 @@ TEST_F(MenuBarPresenterTest, RendersEnabledStateWithBoldMenuFont) {
   const MenuBarActions actions = RenderFrame(state, font);
 
   EXPECT_FALSE(actions.openAbout);
+  EXPECT_FALSE(actions.newFile);
   EXPECT_FALSE(actions.openFile);
   EXPECT_FALSE(actions.saveFile);
   EXPECT_FALSE(actions.saveFileAs);
@@ -120,6 +122,7 @@ TEST_F(MenuBarPresenterTest, RendersEachOpenMenuWithoutImplicitActions) {
     PrimeMainMenuPopup(menuLabel);
     const MenuBarActions actions = RenderFrame(state);
     EXPECT_FALSE(actions.openAbout) << menuLabel;
+    EXPECT_FALSE(actions.newFile) << menuLabel;
     EXPECT_FALSE(actions.openFile) << menuLabel;
     EXPECT_FALSE(actions.openSamples) << menuLabel;
     EXPECT_FALSE(actions.saveFile) << menuLabel;
@@ -213,6 +216,10 @@ TEST(MenuBarPresenterActionsTest, ApplyMenuBarCommandMapsSimpleCommandsToActions
   MenuBarActions actions;
   ApplyMenuBarCommand(true, MenuBarCommand::OpenAbout, state, &actions);
   EXPECT_TRUE(actions.openAbout);
+
+  actions = MenuBarActions{};
+  ApplyMenuBarCommand(true, MenuBarCommand::NewFile, state, &actions);
+  EXPECT_TRUE(actions.newFile);
 
   actions = MenuBarActions{};
   ApplyMenuBarCommand(true, MenuBarCommand::OpenFile, state, &actions);

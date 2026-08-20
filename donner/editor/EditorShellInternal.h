@@ -125,7 +125,8 @@ template <typename Resolver>
   return static_cast<bool>(std::forward<Resolver>(resolveWhenIdle)());
 }
 
-[[nodiscard]] bool SamplePickerActionsNeedFollowupFrame(bool dismiss, bool openFile) noexcept;
+[[nodiscard]] bool SamplePickerActionsNeedFollowupFrame(bool dismiss, bool openFile,
+                                                        bool newDocument) noexcept;
 [[nodiscard]] DeferredRenderAction DeferredRenderActionForState(bool hasDocument,
                                                                 bool penDragFlushed,
                                                                 bool rendererBusy) noexcept;

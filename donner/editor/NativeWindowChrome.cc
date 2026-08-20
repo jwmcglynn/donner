@@ -11,6 +11,8 @@ std::string ComposeWindowTitle(const WindowChromeState& state, bool showEditedDo
   }
   if (state.filePath.has_value() && !state.filePath->empty()) {
     title += std::filesystem::path(*state.filePath).filename().string();
+  } else if (state.documentName.has_value() && !state.documentName->empty()) {
+    title += *state.documentName;
   } else {
     title += "untitled";
   }

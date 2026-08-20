@@ -98,6 +98,7 @@ TEST_F(EditorDockLayoutTest, BuildsCanvasCentralNodeWithStackedRightColumn) {
   EXPECT_NE(nodes.central, 0u);
   EXPECT_NE(nodes.rightTop, 0u);
   EXPECT_NE(nodes.rightMid, 0u);
+  // The Compositor Debug Info panel is docked in the inspector area.
   EXPECT_NE(nodes.rightBottom, 0u);
   // Every panel lands in a distinct node.
   EXPECT_NE(nodes.central, nodes.rightTop);
@@ -157,11 +158,9 @@ TEST_F(EditorDockLayoutTest, CompactLayoutReservesEntireDockspaceForCanvas) {
   EditorDockLayoutParams params = DefaultParams(/*includeCompositorDebug=*/false);
   params.includeSidebars = false;
 
-  const EditorDockNodes nodes =
-      RenderDockFrame(dockspaceId, /*locked=*/true, /*showCompositorDebug=*/false,
-                      /*build=*/true, params);
-  RenderDockFrame(dockspaceId, /*locked=*/true, /*showCompositorDebug=*/false,
-                  /*build=*/false);
+  const EditorDockNodes nodes = RenderDockFrame(
+      dockspaceId, /*locked=*/true, /*showCompositorDebug=*/false, /*build=*/true, params);
+  RenderDockFrame(dockspaceId, /*locked=*/true, /*showCompositorDebug=*/false, /*build=*/false);
 
   EXPECT_EQ(nodes.central, dockspaceId);
   EXPECT_EQ(nodes.rightTop, 0u);
@@ -197,9 +196,12 @@ TEST_F(EditorDockLayoutTest, ResetRestoresDefaultLayoutAfterRearrange) {
   EXPECT_NE(DockNodeIdForWindow(kInspectorWindowName), original.central);
 }
 
-TEST_F(EditorDockLayoutTest, LockGatesResizeSplitAndUndock) {
+TEST_F(EditorDockLayoutTest, LockGatesSplitAndUndockButKeepsResizing) {
   const ImGuiDockNodeFlags locked = EditorDockSpaceFlags(true);
-  EXPECT_TRUE(locked & ImGuiDockNodeFlags_NoResize);
+  // Locking fixes the layout structure: no new splits and no undocking
+  // (tear-off), but the existing splitters stay resizable so the right column
+  // width and panel heights can be adjusted.
+  EXPECT_FALSE(locked & ImGuiDockNodeFlags_NoResize);
   EXPECT_TRUE(locked & ImGuiDockNodeFlags_NoDockingSplit);
   EXPECT_TRUE(locked & ImGuiDockNodeFlags_NoUndocking);
 
@@ -221,13 +223,16 @@ TEST_F(EditorDockLayoutTest, LockFlagsPropagateToLiveDockNodes) {
   RenderDockFrame(dockspaceId, /*locked=*/true, /*showCompositorDebug=*/true, /*build=*/false);
   ImGuiDockNode* rootLocked = ImGui::DockBuilderGetNode(dockspaceId);
   ASSERT_NE(rootLocked, nullptr);
-  EXPECT_TRUE(rootLocked->MergedFlags & ImGuiDockNodeFlags_NoResize);
+  // Locked nodes keep splitters resizable but block undocking.
+  EXPECT_FALSE(rootLocked->MergedFlags & ImGuiDockNodeFlags_NoResize);
+  EXPECT_TRUE(rootLocked->MergedFlags & ImGuiDockNodeFlags_NoUndocking);
 
   RenderDockFrame(dockspaceId, /*locked=*/false, /*showCompositorDebug=*/true, /*build=*/false);
   RenderDockFrame(dockspaceId, /*locked=*/false, /*showCompositorDebug=*/true, /*build=*/false);
   ImGuiDockNode* rootUnlocked = ImGui::DockBuilderGetNode(dockspaceId);
   ASSERT_NE(rootUnlocked, nullptr);
   EXPECT_FALSE(rootUnlocked->MergedFlags & ImGuiDockNodeFlags_NoResize);
+  EXPECT_FALSE(rootUnlocked->MergedFlags & ImGuiDockNodeFlags_NoUndocking);
 }
 
 }  // namespace

@@ -15,6 +15,7 @@ void ApplyMenuBarCommand(bool activated, MenuBarCommand command, const MenuBarSt
 
   switch (command) {
     case MenuBarCommand::OpenAbout: actions->openAbout = true; return;
+    case MenuBarCommand::NewFile: actions->newFile = true; return;
     case MenuBarCommand::OpenFile: actions->openFile = true; return;
     case MenuBarCommand::OpenSamples: actions->openSamples = true; return;
     case MenuBarCommand::SaveFile: actions->saveFile = true; return;
@@ -148,6 +149,7 @@ MenuBarActions MenuBarPresenter::render(const MenuBarState& state, ImFont* boldM
   ImGui::SameLine(0.0f, theme.space4);
 
   if (ImGui::BeginMenu("File")) {
+    ApplyMenuBarCommand(ImGui::MenuItem("New", "Cmd+N"), MenuBarCommand::NewFile, state, &actions);
     ApplyMenuBarCommand(ImGui::MenuItem("Open...", "Cmd+O"), MenuBarCommand::OpenFile, state,
                         &actions);
     ApplyMenuBarCommand(ImGui::MenuItem("Open Sample..."), MenuBarCommand::OpenSamples, state,
@@ -224,7 +226,7 @@ MenuBarActions MenuBarPresenter::render(const MenuBarState& state, ImFont* boldM
                         &actions);
     ImGui::Separator();
     ApplyMenuBarCommand(
-        ImGui::MenuItem("Compositor Debug", nullptr, state.showCompositorDebugPanel),
+        ImGui::MenuItem("Compositor Debug Info", nullptr, state.showCompositorDebugPanel),
         MenuBarCommand::ToggleCompositorDebugPanel, state, &actions);
     ApplyMenuBarCommand(
         ImGui::MenuItem("Compositor Tile Overlay", nullptr, state.compositorTileOverlay),

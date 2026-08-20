@@ -1288,6 +1288,29 @@ embed_resources(
     },
 )
 
+# Bakes "<version>\n<commit>\n" into the editor binary for the About dialog.
+# The version is read from MODULE.bazel (the repo's version source of truth);
+# the commit falls back to "unknown" when git is unavailable.
+genrule(
+    name = "editor_build_info_txt",
+    srcs = [
+        "//:MODULE.bazel",
+        "write_build_info.sh",
+    ],
+    outs = ["editor_build_info.txt"],
+    cmd = "bash $(location write_build_info.sh) $(execpath //:MODULE.bazel) $@",
+    # Runs on the local machine so `git` can reach the real checkout.
+    local = True,
+)
+
+embed_resources(
+    name = "editor_build_info",
+    header_output = "donner/editor/EditorBuildInfo.h",
+    resources = {
+        "kEditorBuildInfo": ":editor_build_info_txt",
+    },
+)
+
 embed_resources(
     name = "editor_splash",
     header_output = "donner/editor/EditorSplash.h",
@@ -1303,7 +1326,6 @@ donner_cc_library(
     deps = [
         ":editor_splash",
         "//donner/base",
-        "//donner/editor/tools:showcase_asset_generator",
     ],
 )
 
@@ -1345,6 +1367,7 @@ donner_cc_binary(
     }),
     visibility = ["//visibility:private"],
     deps = [
+        ":editor_build_info",
         ":editor_shell",
         ":editor_splash",
         ":notice",

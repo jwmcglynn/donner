@@ -41,7 +41,7 @@ struct MenuBarState {
   /// True when the document has at least one selectable element. Enables the canvas "Select All"
   /// when the source pane is not focused.
   bool hasSelectableElements = false;
-  /// Current visibility of the Compositor Debug panel (drives the View-menu
+  /// Current visibility of the Compositor Debug Info panel (drives the View-menu
   /// checkmark). Off by default.
   bool showCompositorDebugPanel = false;
   /// Whether compositor tile boundaries and identities are drawn directly over the canvas.
@@ -63,6 +63,7 @@ struct MenuBarState {
 
 struct MenuBarActions {
   bool openAbout = false;
+  bool newFile = false;
   bool openFile = false;
   bool openSamples = false;
   bool saveFile = false;
@@ -94,7 +95,7 @@ struct MenuBarActions {
   bool zoomOut = false;
   bool actualSize = false;
   bool toggleSourceFocusMode = false;
-  /// Set when the user toggles the Compositor Debug panel via the View menu.
+  /// Set when the user toggles the Compositor Debug Info panel via the View menu.
   bool toggleCompositorDebugPanel = false;
   /// Set when the user toggles compositor tile boundaries over the canvas.
   bool toggleCompositorTileOverlay = false;
@@ -120,6 +121,7 @@ struct MenuBarActions {
 /// Semantic command emitted by a top-level menu item.
 enum class MenuBarCommand {
   OpenAbout,
+  NewFile,
   OpenFile,
   OpenSamples,
   SaveFile,
@@ -168,7 +170,7 @@ void ApplyMenuBarCommand(bool activated, MenuBarCommand command, const MenuBarSt
 /// Apply View-menu visibility toggle actions to persistent UI state.
 ///
 /// @param actions Edge-triggered menu actions from \ref MenuBarPresenter::render.
-/// @param showCompositorDebugPanel Current Compositor Debug panel visibility.
+/// @param showCompositorDebugPanel Current Compositor Debug Info panel visibility.
 /// @param perfOverlayMode Current performance overlay mode.
 /// @param geometryDebugOverlay Current Geode geometry debug overlay state.
 ///   Optional (may be null) so callers without a document renderer skip it.

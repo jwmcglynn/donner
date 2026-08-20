@@ -23,8 +23,9 @@ the version number.
 - [ ] **Showcase demo generates and renders** — The v0.8 showcase must generate on demand from
       `donner_splash.svg`, parse, and render in Donner. This is gated by
       `//donner/editor/tests:showcase_asset_tests`, which exercises the generator and validates the
-      derived SVG, plus `//donner/editor/tests:editor_sample_catalog_tests`, which verifies that the
-      editor's built-in Donner Showcase entry uses generated output, and
+      derived SVG, plus `//donner/editor/tests:editor_sample_catalog_tests`, which verifies the
+      sample catalog (the showcase is intentionally no longer a built-in picker sample; it is
+      generated on demand via `//donner/editor/tools:generate_showcase_asset`), and
       `//donner/editor/tools:generate_showcase_asset_cli_tests`, which protects the canonical input
       against same-path, symlink, and hard-link output aliases. No checked-in variant is required.
       (Applies from the v0.8 "Donner SVG Editor & Engine" release onward.)

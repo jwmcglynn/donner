@@ -458,11 +458,17 @@ TEST(EditorShellInternalTest, BusyFrameReplaysDocumentUiBooleansWithoutEvaluatin
 
 TEST(EditorShellInternalTest, LateSamplePickerActionsRequestAHostFollowupFrame) {
   EXPECT_FALSE(internal::SamplePickerActionsNeedFollowupFrame(/*dismiss=*/false,
-                                                              /*openFile=*/false));
+                                                              /*openFile=*/false,
+                                                              /*newDocument=*/false));
   EXPECT_TRUE(internal::SamplePickerActionsNeedFollowupFrame(/*dismiss=*/true,
-                                                             /*openFile=*/false));
+                                                             /*openFile=*/false,
+                                                             /*newDocument=*/false));
   EXPECT_TRUE(internal::SamplePickerActionsNeedFollowupFrame(/*dismiss=*/false,
-                                                             /*openFile=*/true));
+                                                             /*openFile=*/true,
+                                                             /*newDocument=*/false));
+  EXPECT_TRUE(internal::SamplePickerActionsNeedFollowupFrame(/*dismiss=*/false,
+                                                             /*openFile=*/false,
+                                                             /*newDocument=*/true));
 }
 
 TEST(EditorShellInternalTest, BusyDeferredRenderWaitsForWorkerCompletionInsteadOfSpinning) {

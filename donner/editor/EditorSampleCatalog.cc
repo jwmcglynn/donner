@@ -3,11 +3,9 @@
 #include <array>
 #include <span>
 #include <string>
-#include <utility>
+#include <string_view>
 
-#include "donner/base/Utils.h"
 #include "donner/editor/EditorSplash.h"
-#include "donner/editor/tools/GenerateShowcaseAsset.h"
 
 namespace donner::editor {
 namespace {
@@ -70,25 +68,15 @@ std::string_view SourceFromEmbedded(std::span<const unsigned char> bytes) noexce
   return {reinterpret_cast<const char*>(bytes.data()), bytes.size()};
 }
 
-std::string GenerateShowcaseSource() {
-  const std::string_view canonicalSplash = SourceFromEmbedded(embedded::kEditorSplashSvg);
-  auto generated = GenerateShowcaseAsset(canonicalSplash);
-  UTILS_RELEASE_ASSERT_MSG(generated.ok(), generated.error.c_str());
-  return std::move(generated.value);
-}
-
 struct EditorSampleCatalogStorage {
   EditorSampleCatalogStorage()
-      : showcaseSource(GenerateShowcaseSource()),
-        samples(
+      : samples(
             {{{"donner-splash", "Donner Splash", SourceFromEmbedded(embedded::kEditorSplashSvg)},
               {"basic-shapes", "Basic Shapes", kBasicShapesSvg},
               {"text-style", "Text and Style", kTextStyleSvg},
-              {"gradients-clip", "Gradients and Clip", kGradientsClipSvg},
-              {"donner-showcase", "Donner Showcase", showcaseSource}}}) {}
+              {"gradients-clip", "Gradients and Clip", kGradientsClipSvg}}}) {}
 
-  std::string showcaseSource;
-  std::array<EditorSample, 5> samples;
+  std::array<EditorSample, 4> samples;
 };
 
 const EditorSampleCatalogStorage& CatalogStorage() {

@@ -113,14 +113,14 @@ void PublishSampleThumbnailStats(int requested, int started, int completed, int 
       {
         const frame = Number(window['__donnerMainLoopRenderedFrames'] || 0) + 1;
         const previous = window['__donnerSampleThumbnailStats'] || ({
-          'carouselFrame' : frame,
-          'firstRequestFrame' : 0,
-          'ready' : 0,
-          'publicationFrames' : ([]),
-        });
-        const publicationFrames =
-            Array.isArray(previous['publicationFrames']) ? previous['publicationFrames'].slice()
-                                                         : ([]);
+                           'carouselFrame' : frame,
+                           'firstRequestFrame' : 0,
+                           'ready' : 0,
+                           'publicationFrames' : ([]),
+                         });
+        const publicationFrames = Array.isArray(previous['publicationFrames'])
+                                      ? previous['publicationFrames'].slice()
+                                      : ([]);
         for (let published = Number(previous['ready'] || 0); published < $4; ++published) {
           publicationFrames.push(frame);
         }
@@ -342,6 +342,9 @@ constexpr float kSourcePaneCollapseThreshold = kMinSourcePaneWidth;
 constexpr float kKeyboardZoomStep = 1.5f;
 constexpr float kMinRightPaneWidth = 220.0f;
 constexpr float kMaxRightPaneWidth = 900.0f;
+/// Blank document created by File > New and the sample picker's "New SVG".
+constexpr std::string_view kNewDocumentSvg =
+    R"(<svg xmlns="http://www.w3.org/2000/svg" width="640" height="400" viewBox="0 0 640 400"/>)";
 #ifdef __EMSCRIPTEN__
 // emscripten-glfw normalizes every DOM_DELTA_PIXEL wheel at 100 px per scroll
 // unit, where desktop GLFW scales precise trackpad deltas at 10 px per unit.
@@ -642,8 +645,8 @@ bool SidebarSnapshotRefreshPendingAfterPass(std::size_t deferredThumbnailCount) 
   return deferredThumbnailCount > 0u;
 }
 
-bool SamplePickerActionsNeedFollowupFrame(bool dismiss, bool openFile) noexcept {
-  return dismiss || openFile;
+bool SamplePickerActionsNeedFollowupFrame(bool dismiss, bool openFile, bool newDocument) noexcept {
+  return dismiss || openFile || newDocument;
 }
 
 DeferredRenderAction DeferredRenderActionForState(bool hasDocument, bool penDragFlushed,
@@ -1147,12 +1150,11 @@ EditorShell::EditorShell(gui::EditorWindow& window, EditorShellOptions options)
       interactionController_(),
       inputBridge_(window_, kWheelZoomStep),
       compositorDebugPanel_(window.geodeDevice()),
-      dialogPresenter_(options_.editorNoticeText) {
+      dialogPresenter_(options_.editorNoticeText, options_.editorBuildInfo) {
   // One presenter owns where document pixels land for the whole session.
-  documentPresenter_ =
-      MakeDocumentPresenter([this](std::optional<FramebufferUnderlayPlan> plan) {
-        installFramebufferUnderlayPlan(std::move(plan));
-      });
+  documentPresenter_ = MakeDocumentPresenter([this](std::optional<FramebufferUnderlayPlan> plan) {
+    installFramebufferUnderlayPlan(std::move(plan));
+  });
   renderCoordinator_.asyncRenderer().setCompositorDiagnosticsEnabled(false);
   // Install the embedded + system font catalog as the process-wide default provider, so every
   // document FontManager created by the render paths resolves font-family names against embedded
@@ -1831,6 +1833,7 @@ bool EditorShell::tryLoadSource(std::string_view source, std::optional<std::stri
   const std::string canonicalSource = textEditor_.getText();
   if (path.has_value()) {
     app_.setCurrentFilePath(std::move(*path));
+    activeSampleId_.clear();
   } else {
     app_.clearCurrentFilePath();
   }
@@ -1840,8 +1843,21 @@ bool EditorShell::tryLoadSource(std::string_view source, std::optional<std::stri
   return true;
 }
 
+void EditorShell::requestNewDocument() {
+  pendingNewDocument_ = true;
+  pendingSampleLoadNeedsConfirmation_ = false;
+  pendingSampleLoadDiscardConfirmed_ = false;
+  pendingSampleLoadId_.clear();
+  // The blank document supersedes the current document frame. Start cancellation in the click
+  // frame so the next UI frame can claim the DOM as soon as SVG traversal reaches a safe point.
+  cancelSampleThumbnailGeneration();
+  renderCoordinator_.asyncRenderer().cancelInFlight();
+  window_.wakeEventLoop();
+}
+
 void EditorShell::queuePendingSampleLoad(std::string sampleId) {
   pendingSampleLoadId_ = std::move(sampleId);
+  pendingNewDocument_ = false;
   pendingSampleLoadNeedsConfirmation_ = false;
   pendingSampleLoadDiscardConfirmed_ = false;
   // The selected sample supersedes the current document frame. Start cancellation in the click
@@ -1852,12 +1868,13 @@ void EditorShell::queuePendingSampleLoad(std::string sampleId) {
 
 void EditorShell::cancelPendingSampleLoad() {
   pendingSampleLoadId_.clear();
+  pendingNewDocument_ = false;
   pendingSampleLoadNeedsConfirmation_ = false;
   pendingSampleLoadDiscardConfirmed_ = false;
 }
 
 void EditorShell::confirmPendingSampleLoadDiscard() {
-  if (pendingSampleLoadId_.empty()) {
+  if (pendingSampleLoadId_.empty() && !pendingNewDocument_) {
     return;
   }
   pendingSampleLoadNeedsConfirmation_ = false;
@@ -1866,22 +1883,50 @@ void EditorShell::confirmPendingSampleLoadDiscard() {
 }
 
 void EditorShell::processPendingSampleLoad() {
-  if (pendingSampleLoadId_.empty()) {
+  if (pendingSampleLoadId_.empty() && !pendingNewDocument_) {
     return;
   }
   const bool hasDocument = app_.hasDocument();
   std::optional<svg::DocumentWriteAccess> documentAccess =
       hasDocument ? app_.document().document().tryWriteAccess() : std::nullopt;
   const bool documentWriteAvailable = !hasDocument || documentAccess.has_value();
-  if (!internal::PendingDocumentReplacementCanProcess(!pendingSampleLoadId_.empty(),
-                                                      documentWriteAvailable,
-                                                      app_.document().hasPendingMutations())) {
+  if (!internal::PendingDocumentReplacementCanProcess(
+          !pendingSampleLoadId_.empty() || pendingNewDocument_, documentWriteAvailable,
+          app_.document().hasPendingMutations())) {
     return;
   }
 
   if (!pendingSampleLoadDiscardConfirmed_ && (app_.isDirty() || textEditor_.isTextChanged())) {
     pendingSampleLoadNeedsConfirmation_ = true;
     showSamplePicker_ = true;
+    return;
+  }
+
+  if (pendingNewDocument_) {
+    pendingNewDocument_ = false;
+    pendingSampleLoadNeedsConfirmation_ = false;
+    pendingSampleLoadDiscardConfirmed_ = false;
+#ifdef DONNER_EDITOR_WGPU
+    // The previous frame's direct callback has run, but remains installed until the next
+    // render-pane submission. Detach it before releasing presentation resources for the old
+    // document.
+    window_.setWgpuDirectRenderCallback({});
+#endif
+    // If the previous render is packaging a result after releasing the DOM, ensure that result is
+    // dropped instead of landing over the replacement document.
+    renderCoordinator_.asyncRenderer().cancelInFlight();
+    std::string error;
+    if (tryLoadSource(kNewDocumentSvg, std::nullopt, &error)) {
+      activeSampleId_.clear();
+#ifdef __EMSCRIPTEN__
+      PublishActiveSampleId("");
+#endif
+      welcomePlaceholderActive_ = false;
+      showSamplePicker_ = false;
+      requestRenderAtEndOfFrame_ = true;
+    } else {
+      std::fprintf(stderr, "[editor] failed to create new document: %s\n", error.c_str());
+    }
     return;
   }
 
@@ -2016,6 +2061,9 @@ bool EditorShell::trySavePath(std::string_view path, std::string* error) {
   }
 
   app_.setCurrentFilePath(std::string(path));
+  // The document now has a real backing path; drop any sample identity so the
+  // picker highlight and published active-sample id do not go stale.
+  activeSampleId_.clear();
   app_.setCleanSourceText(textEditor_.getText());
   documentSyncController_.resetForLoadedDocument(textEditor_.getText());
   dialogPresenter_.clearSaveFileError();
@@ -2173,7 +2221,15 @@ void EditorShell::serviceNativeDialogs() {
 }
 
 void EditorShell::updateWindowTitle() {
-  const WindowChromeState chromeState{.filePath = app_.currentFilePath(), .edited = app_.isDirty()};
+  std::optional<std::string> documentName;
+  if (!app_.currentFilePath().has_value() && !activeSampleId_.empty()) {
+    if (const EditorSample* sample = FindEditorSample(activeSampleId_)) {
+      documentName = std::string(sample->title) + " Sample";
+    }
+  }
+  const WindowChromeState chromeState{.filePath = app_.currentFilePath(),
+                                      .documentName = std::move(documentName),
+                                      .edited = app_.isDirty()};
 
   // On platforms with native title-bar chrome (macOS) the edited "dot" and
   // proxy icon are shown by the OS, so keep them out of the title text.
@@ -2222,6 +2278,11 @@ void EditorShell::applyPendingHistoryActions() {
 void EditorShell::applyMenuActions(const MenuBarActions& menuActions) {
   if (menuActions.openAbout) {
     dialogPresenter_.requestAbout();
+  }
+  if (menuActions.newFile) {
+    cancelSampleThumbnailGeneration();
+    cancelPendingSampleLoad();
+    requestNewDocument();
   }
   if (menuActions.openFile) {
     cancelSampleThumbnailGeneration();
@@ -2412,6 +2473,12 @@ void EditorShell::handleGlobalShortcuts() {
       !sourcePaneFocused && !ImGui::GetIO().WantTextInput) {
     handleTextEditingKeyboard();
     return;
+  }
+
+  if (!anyPopupOpen && cmd && !shift && ImGui::IsKeyPressed(ImGuiKey_N, /*repeat=*/false)) {
+    cancelSampleThumbnailGeneration();
+    cancelPendingSampleLoad();
+    requestNewDocument();
   }
 
   if (!anyPopupOpen && cmd && !shift && ImGui::IsKeyPressed(ImGuiKey_O, /*repeat=*/false)) {
@@ -4498,14 +4565,15 @@ void EditorShell::renderSamplePicker(const ImVec2& paneOrigin, const ImVec2& con
       ImGui::OpenPopup("Discard changes?");
     }
     if (ImGui::BeginPopupModal("Discard changes?", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-      ImGui::TextUnformatted("Loading a sample replaces the current document.");
+      ImGui::TextUnformatted("This replaces the current document.");
       ImGui::Spacing();
       if (ImGui::Button("Cancel", ImVec2(112.0f, 40.0f))) {
         cancelPendingSampleLoad();
         ImGui::CloseCurrentPopup();
       }
       ImGui::SameLine();
-      if (ImGui::Button("Discard & Load", ImVec2(148.0f, 40.0f))) {
+      const char* confirmLabel = pendingNewDocument_ ? "Discard & New" : "Discard & Load";
+      if (ImGui::Button(confirmLabel, ImVec2(148.0f, 40.0f))) {
         confirmPendingSampleLoadDiscard();
         ImGui::CloseCurrentPopup();
       }
@@ -4533,7 +4601,13 @@ void EditorShell::renderSamplePicker(const ImVec2& paneOrigin, const ImVec2& con
     }
     dialogPresenter_.requestOpenFile(app_.currentFilePath());
   }
-  if (internal::SamplePickerActionsNeedFollowupFrame(actions.dismiss, actions.openFile)) {
+  if (actions.newDocument) {
+    cancelSampleThumbnailGeneration();
+    cancelPendingSampleLoad();
+    requestNewDocument();
+  }
+  if (internal::SamplePickerActionsNeedFollowupFrame(actions.dismiss, actions.openFile,
+                                                     actions.newDocument)) {
     // These actions mutate state after the picker has already drawn this frame.
     // Explicitly present the replacement document/modal even if no further DOM
     // input arrives to wake the event-driven browser loop.
@@ -4548,8 +4622,14 @@ void EditorShell::renderSamplePicker(const ImVec2& paneOrigin, const ImVec2& con
         window.location.assign(url);
       }
     });
+#elif defined(__APPLE__)
+    const std::string openCommand =
+        std::string("open \"") + std::string(kSamplePickerGitHubUrl) + "\"";
+    std::system(openCommand.c_str());
 #else
-    ImGui::SetClipboardText(kSamplePickerGitHubUrl.data());
+    const std::string openCommand =
+        std::string("xdg-open \"") + std::string(kSamplePickerGitHubUrl) + "\"";
+    std::system(openCommand.c_str());
 #endif
   }
   if (actions.loadSample) {
@@ -5142,10 +5222,10 @@ void EditorShell::renderSidebars() {
   }
   thumbnailTextures_.retainThumbnailsOnly(liveThumbnailKeys);
 
-  // The Compositor Debug panel is a developer diagnostics view, hidden unless
-  // toggled on from the View menu. It is now an ordinary dockable window in the
-  // same DockSpace (its content is unchanged); the homegrown detach/float host
-  // is gone - unlock the layout to tear it off into a floating imgui window.
+  // The Compositor Debug Info panel is a developer diagnostics view, hidden
+  // unless toggled on from the View menu. It is docked in the inspector area
+  // (the bottom of the right column) by default; the dock splitters stay
+  // resizable so the pane can be made taller and the right column wider.
   if (!showCompositorDebugPanel_) {
     return;
   }
@@ -6768,12 +6848,11 @@ void EditorShell::recordFrameTelemetry(
     const ViewportState& viewport = interactionController_.viewport();
     const Box2d documentRect = viewport.imageScreenRect();
     const Vector2d documentSize = documentRect.size();
-    PublishViewportStats(
-        viewport.paneOrigin.x, viewport.paneOrigin.y, viewport.paneSize.x, viewport.paneSize.y,
-        documentRect.topLeft.x, documentRect.topLeft.y, documentSize.x, documentSize.y,
-        viewport.zoom,
-        static_cast<double>(renderCoordinator_.documentCanvasCommitTotal()),
-        static_cast<double>(renderCoordinator_.overviewInfillRenderTotal()));
+    PublishViewportStats(viewport.paneOrigin.x, viewport.paneOrigin.y, viewport.paneSize.x,
+                         viewport.paneSize.y, documentRect.topLeft.x, documentRect.topLeft.y,
+                         documentSize.x, documentSize.y, viewport.zoom,
+                         static_cast<double>(renderCoordinator_.documentCanvasCommitTotal()),
+                         static_cast<double>(renderCoordinator_.overviewInfillRenderTotal()));
     PublishOverlayStats(
         compositorTileOverlay_ ? 1 : 0, geometryDebugOverlay_ ? 1 : 0,
         renderCoordinator_.immediateOverlaySnapshot().has_value() ? 1 : 0,
