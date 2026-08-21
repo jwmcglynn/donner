@@ -1,6 +1,29 @@
 #include "donner/svg/components/resources/SubDocumentCache.h"
 
+#include "donner/base/EcsRegistry.h"
+#include "donner/svg/components/ParsedPayloadResourceBudget.h"
+
 namespace donner::svg::components {
+
+bool SubDocumentCache::admissionAvailable() const {
+  if (securityStats_.rejected || cache_.size() >= limits_.maximumDocuments ||
+      securityStats_.parseAttempts >= limits_.maximumParseAttempts) {
+    return false;
+  }
+  if (rootEntityCount_ > limits_.maximumAggregateEntities ||
+      securityStats_.entities > limits_.maximumAggregateEntities - rootEntityCount_) {
+    return false;
+  }
+  return rootPayloadBytes_ <= limits_.maximumAggregatePayloadBytes &&
+         securityStats_.payloadBytes <= limits_.maximumAggregatePayloadBytes - rootPayloadBytes_;
+}
+
+bool SubDocumentCache::candidateFits(size_t entityCount, size_t payloadBytes) const {
+  const size_t retainedBefore = rootEntityCount_ + securityStats_.entities;
+  const size_t payloadBefore = rootPayloadBytes_ + securityStats_.payloadBytes;
+  return entityCount <= limits_.maximumAggregateEntities - retainedBefore &&
+         payloadBytes <= limits_.maximumAggregatePayloadBytes - payloadBefore;
+}
 
 std::optional<SVGDocumentHandle> SubDocumentCache::getOrParse(
     const RcString& resolvedUrl, const std::vector<uint8_t>& svgContent,
@@ -10,6 +33,13 @@ std::optional<SVGDocumentHandle> SubDocumentCache::getOrParse(
     return it->second;
   }
   if (isRejected(resolvedUrl)) {
+    ++securityStats_.negativeCacheHits;
+    return std::nullopt;
+  }
+
+  if (!admissionAvailable()) {
+    securityStats_.rejected = true;
+    rememberFailure(resolvedUrl);
     return std::nullopt;
   }
 
@@ -24,6 +54,7 @@ std::optional<SVGDocumentHandle> SubDocumentCache::getOrParse(
   // Mark as loading to guard against recursion.
   loading_.insert(resolvedUrl);
 
+  ++securityStats_.parseAttempts;
   auto maybeDocument = parseCallback(svgContent, warningSink);
 
   loading_.erase(resolvedUrl);
@@ -33,7 +64,22 @@ std::optional<SVGDocumentHandle> SubDocumentCache::getOrParse(
     return std::nullopt;
   }
 
+  const size_t entityCount = (*maybeDocument)->registry().storage<Entity>().size();
+  const auto* payloadBudget =
+      (*maybeDocument)->registry().ctx().find<ParsedPayloadResourceBudget>();
+  const size_t payloadBytes = payloadBudget ? payloadBudget->securityStats().retainedBytes : 0;
+  if (!candidateFits(entityCount, payloadBytes)) {
+    securityStats_.rejected = true;
+    rememberFailure(resolvedUrl);
+    return std::nullopt;
+  }
+
   auto [it, inserted] = cache_.emplace(resolvedUrl, std::move(*maybeDocument));
+  if (inserted) {
+    securityStats_.documents = cache_.size();
+    securityStats_.entities += entityCount;
+    securityStats_.payloadBytes += payloadBytes;
+  }
   return it->second;
 }
 

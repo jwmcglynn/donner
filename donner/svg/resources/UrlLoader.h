@@ -96,8 +96,6 @@ public:
   std::variant<Result, UrlLoaderError> fromUri(std::string_view uri);
 
 private:
-  bool consumeResourceBytes(size_t size);
-
   /// Resource loader to use for fetching external resources.
   ResourceLoaderInterface& resourceLoader_;  // NOLINT
 
