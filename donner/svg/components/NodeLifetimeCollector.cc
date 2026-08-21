@@ -57,6 +57,15 @@ bool IsCollectibleDetachedRoot(Registry& registry, Entity root) {
          MaxPublicHandlesInSubtree(registry, root) == 0;
 }
 
+void ReleaseEntityResourceReservations(Registry& registry, Entity entity) {
+  if (auto* budget = registry.ctx().find<ParsedPayloadResourceBudget>()) {
+    budget->release(entity);
+  }
+  if (auto* budget = registry.ctx().find<GeometryPreparationResourceBudget>()) {
+    budget->release(entity);
+  }
+}
+
 }  // namespace
 
 void NodeLifetimeCollector::EnqueueDetachedRoot(Registry& registry, Entity detachedRoot) {
@@ -157,12 +166,7 @@ void NodeLifetimeCollector::Collect(Registry& registry) {
       if (auto* nodeLifetime = registry.try_get<NodeLifetimeComponent>(entity)) {
         nodeLifetime->markDestroying();
       }
-      if (auto* budget = registry.ctx().find<ParsedPayloadResourceBudget>()) {
-        budget->release(entity);
-      }
-      if (auto* budget = registry.ctx().find<GeometryPreparationResourceBudget>()) {
-        budget->release(entity);
-      }
+      ReleaseEntityResourceReservations(registry, entity);
       registry.destroy(entity);
     }
   }
