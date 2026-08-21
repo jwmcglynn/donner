@@ -3408,6 +3408,44 @@ TEST_F(TextEditorTests, FocusReferenceRopesRenderWhenSameSideCatenarySagsIntoVie
   EXPECT_NE(FocusReferenceRope(saggingLink), nullptr);
 }
 
+TEST_F(TextEditorTests, FocusReferenceRopesDoNotCountOffscreenRoutesAgainstAnimatedCap) {
+  editor.setWordWrapEnabled(false);
+  editor.setText(SaggingFocusReferenceSource());
+  editor.resetTextChanged();
+
+  std::vector<FocusReferenceLink> links;
+  links.reserve(65);
+  for (int column = 0; column < 64; ++column) {
+    links.push_back(FocusReferenceLink{
+        .from = SourcePoint{.line = 36, .column = column},
+        .to = SourcePoint{.line = 36, .column = 0},
+    });
+  }
+  const FocusReferenceLink saggingLink{
+      .from = SourcePoint{.line = 37, .column = 101},
+      .to = SourcePoint{.line = 36, .column = 0},
+  };
+  links.push_back(saggingLink);
+  editor.setFocusPartition(FocusPartition{
+      .fullColor = {LineRange{.startLine = 0, .endLine = 64}},
+      .referenceLinks = std::move(links),
+  });
+
+  constexpr ImVec2 kEditorSize(520.0f, 120.0f);
+  RenderEditorFrame(kEditorSize);
+  editor.selectAndFocus(Coordinates(55, 0), Coordinates(55, 6));
+  RenderEditorFrame(kEditorSize);
+  RenderEditorFrame(kEditorSize);
+
+  const FrameCostBreakdown::SourceRopes& ropeCost = editor.lastSourceRopeCost();
+  EXPECT_EQ(ropeCost.candidateCount, 65);
+  EXPECT_EQ(ropeCost.laidOutCount, 65);
+  EXPECT_EQ(ropeCost.culledCount, 64);
+  EXPECT_EQ(ropeCost.drawnCount, 1);
+  EXPECT_EQ(ropeCost.activeStateCount, 1);
+  EXPECT_NE(FocusReferenceRope(saggingLink), nullptr);
+}
+
 TEST_F(TextEditorTests, FocusReferenceRopesClipToScrolledSourceViewport) {
   editor.setText(LongFocusReferenceSource());
   editor.resetTextChanged();
