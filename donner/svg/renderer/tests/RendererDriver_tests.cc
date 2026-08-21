@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <limits>
 #include <memory>
 #include <utility>
 #include <vector>
@@ -193,6 +194,19 @@ TEST_F(RendererDriverTest, ConcurrentDomDrawReplaysBackendCallbacksOutsideWriteA
 
   EXPECT_FALSE(document.handle()->currentThreadHasWriteAccess());
   EXPECT_EQ(document.handle()->revision(), initialRevision);
+}
+
+TEST_F(RendererDriverTest, NonFiniteViewportDoesNotCastBeforeBackendValidation) {
+  SVGDocument document = makeDocument(R"svg(
+    <rect width="8" height="6" fill="red" />
+  )svg");
+  RenderViewport viewport;
+  viewport.size = Vector2d(std::numeric_limits<double>::infinity(), 16.0);
+  viewport.devicePixelRatio = 1.0;
+
+  EXPECT_CALL(renderer, beginFrame(_)).Times(1);
+  EXPECT_CALL(renderer, endFrame()).Times(1);
+  driver.draw(document, viewport, Transform2d());
 }
 
 TEST_F(RendererDriverTest, EmitsClipPathsWhenPresent) {
