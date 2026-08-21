@@ -56,6 +56,12 @@ void logLimitHits(const ParseResult<XMLDocument>& result) {
     if (reason.find("attributes-per-element") != std::string::npos) {
       (void)fprintf(stderr, "HIT_ATTRS_CAP\n");
     }
+    if (reason.find("total attribute") != std::string::npos) {
+      (void)fprintf(stderr, "HIT_TOTAL_ATTRS_CAP\n");
+    }
+    if (reason.find("entity declaration") != std::string::npos) {
+      (void)fprintf(stderr, "HIT_ENTITY_DECL_CAP\n");
+    }
     if (reason.find("nesting depth") != std::string::npos) {
       (void)fprintf(stderr, "HIT_NESTING_CAP\n");
     }

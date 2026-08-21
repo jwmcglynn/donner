@@ -107,6 +107,14 @@ TEST(StringUtils, EqualsIgnoreCase) {
       "test STRING that is longer than 30 characters"sv, "other string"sv));
 }
 
+TEST(StringUtils, IgnoreCaseAcceptsHighBitBytesWithoutCtypeDomainViolation) {
+  const std::string highBit(1, static_cast<char>(0xff));
+  EXPECT_TRUE(StringUtils::Equals<StringComparison::IgnoreCase>(highBit, highBit));
+  EXPECT_TRUE(CaseInsensitiveCharTraits::eq(highBit[0], highBit[0]));
+  EXPECT_EQ(CaseInsensitiveCharTraits::find(highBit.data(), highBit.size(), highBit[0]),
+            highBit.data());
+}
+
 TEST(StringUtils, MixedStringTypes) {
   EXPECT_TRUE(StringUtils::Equals("str"sv, std::string("str")));
   EXPECT_TRUE(StringUtils::Equals(RcString("str"), "str"sv));

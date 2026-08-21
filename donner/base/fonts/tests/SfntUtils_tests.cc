@@ -149,6 +149,19 @@ TEST(SfntUtils, SortsDirectoryForBoundedLookup) {
   EXPECT_EQ(font->findTable(data, "cmap"), std::nullopt);
 }
 
+TEST(SfntUtils, RetainsPerGlyphComplexityIndependentOfSourceBytes) {
+  std::vector<uint8_t> data = MakeTrueType({SimpleGlyph(3)});
+  auto font = SfntFont::Validate(data);
+  ASSERT_TRUE(font.has_value());
+  data.clear();
+
+  const auto complexity = font->glyphOutlineComplexity(0);
+  ASSERT_TRUE(complexity.has_value());
+  EXPECT_EQ(complexity->maximumVertices, 5u);
+  EXPECT_EQ(complexity->work, 17u);
+  EXPECT_FALSE(font->glyphOutlineComplexity(1).has_value());
+}
+
 TEST(SfntUtils, RejectsTableCountAboveExplicitCap) {
   std::vector<uint8_t> data(12 + (kMaximumSfntTables + 1) * 16, 0);
   WriteBe32(&data, 0, 0x00010000);
@@ -307,7 +320,8 @@ TEST(SfntUtils, ReportsExactRetainedIndexBytes) {
   const std::vector<uint8_t> data = MakeTrueType({std::vector<uint8_t>(10, 0), {}});
   auto font = SfntFont::Validate(data);
   ASSERT_TRUE(font.has_value());
-  EXPECT_EQ(font->retainedBytes(), 4 * sizeof(SfntFont::TableRecord) + 3 * sizeof(uint32_t));
+  EXPECT_EQ(font->retainedBytes(), 4 * sizeof(SfntFont::TableRecord) + 3 * sizeof(uint32_t) +
+                                       2 * sizeof(SfntFont::GlyphOutlineComplexity));
 }
 
 }  // namespace
