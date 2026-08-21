@@ -271,6 +271,8 @@ struct EditorWindowWgpuRenderTarget {
   wgpu::Texture texture;
   /// Framebuffer dimensions in physical pixels.
   Vector2i framebufferSizePx = Vector2i::Zero();
+  /// Physical framebuffer pixels per ImGui logical pixel for this frame.
+  Vector2d framebufferFromLogicalScale = Vector2d(1.0, 1.0);
 };
 
 /// Callback invoked before ImGui renders, after the surface has been cleared.

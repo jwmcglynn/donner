@@ -190,8 +190,11 @@ TEST(EditorShellPresentationTest, ChromeTransformEqualsTileTransformInTheSameFra
   SelectionChromeSnapshot snapshot;
   snapshot.canvasFromDoc = Transform2d::Scale(11.0) * Transform2d::Translate(Vector2d(3.0, 5.0));
 
-  const SelectionChromeSnapshot placed = ChromePlacedOnPresentedDocument(viewport, snapshot);
-  const Transform2d presentedFromDocument = PresentedFramebufferFromDocumentTransform(viewport);
+  const Vector2d framebufferFromLogicalScale(2.0, 2.0);
+  const SelectionChromeSnapshot placed =
+      ChromePlacedOnPresentedDocument(viewport, framebufferFromLogicalScale, snapshot);
+  const Transform2d presentedFromDocument =
+      PresentedFramebufferFromDocumentTransform(viewport, framebufferFromLogicalScale);
   EXPECT_THAT(placed.canvasFromDoc.data, ::testing::ElementsAreArray(presentedFromDocument.data));
 
   // The same transform is what the tile compose places quads with: a tile
@@ -222,9 +225,27 @@ TEST(EditorShellPresentationTest, ChromePlacementIgnoresTheCaptureTimeTransform)
   SelectionChromeSnapshot capturedAtFourX;
   capturedAtFourX.canvasFromDoc = Transform2d::Scale(4.0);
 
-  EXPECT_THAT(ChromePlacedOnPresentedDocument(viewport, capturedAtOneX).canvasFromDoc.data,
-              ::testing::ElementsAreArray(
-                  ChromePlacedOnPresentedDocument(viewport, capturedAtFourX).canvasFromDoc.data));
+  const Vector2d framebufferFromLogicalScale(1.0, 1.0);
+  EXPECT_THAT(
+      ChromePlacedOnPresentedDocument(viewport, framebufferFromLogicalScale, capturedAtOneX)
+          .canvasFromDoc.data,
+      ::testing::ElementsAreArray(
+          ChromePlacedOnPresentedDocument(viewport, framebufferFromLogicalScale, capturedAtFourX)
+              .canvasFromDoc.data));
+}
+
+TEST(EditorShellPresentationTest, PresentationUsesFramebufferScaleInsteadOfRasterDpr) {
+  ViewportState viewport;
+  viewport.devicePixelRatio = 1.0;
+  viewport.zoom = 1.0;
+  viewport.panScreenPoint = Vector2d(320.0, 240.0);
+  viewport.panDocPoint = Vector2d(100.0, 60.0);
+
+  const Transform2d framebufferFromDocument =
+      PresentedFramebufferFromDocumentTransform(viewport, Vector2d(2.0, 2.0));
+  EXPECT_EQ(framebufferFromDocument.transformPosition(Vector2d(0.0, 0.0)), Vector2d(440.0, 360.0));
+  EXPECT_EQ(framebufferFromDocument.transformPosition(Vector2d(200.0, 120.0)),
+            Vector2d(840.0, 600.0));
 }
 
 TEST(EditorShellInternalTest, CursorForTransformHandleIntentMapsResizeAndRotateHandles) {

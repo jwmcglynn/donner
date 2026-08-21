@@ -1707,6 +1707,12 @@ void EditorWindow::endFrameImpl(svg::RendererBitmap* readback) {
   glfwGetFramebufferSize(window_, &displayW, &displayH);
 #endif
 #ifdef DONNER_EDITOR_WGPU
+  Vector2d framebufferFromLogicalScale(1.0, 1.0);
+  if (const ImDrawData* drawData = ImGui::GetDrawData();
+      drawData != nullptr && drawData->DisplaySize.x > 0.0f && drawData->DisplaySize.y > 0.0f) {
+    framebufferFromLogicalScale = Vector2d(static_cast<double>(displayW) / drawData->DisplaySize.x,
+                                           static_cast<double>(displayH) / drawData->DisplaySize.y);
+  }
   svg::RendererBitmap* targetReadback = readback;
 #if defined(__EMSCRIPTEN__) && defined(DONNER_EDITOR_WGPU)
   const bool publishSmokeReadbackStats = WgpuReadbackStatsEnabled();
@@ -1899,6 +1905,7 @@ void EditorWindow::endFrameImpl(svg::RendererBitmap* readback) {
       EditorWindowWgpuRenderTarget underlayTarget{
           .texture = target,
           .framebufferSizePx = Vector2i(displayW, displayH),
+          .framebufferFromLogicalScale = framebufferFromLogicalScale,
       };
       wgpuUnderlayRenderCallback_(underlayTarget);
       timing.underlayMs = ElapsedMs(underlayStart);
@@ -1913,6 +1920,7 @@ void EditorWindow::endFrameImpl(svg::RendererBitmap* readback) {
     EditorWindowWgpuRenderTarget directTarget{
         .texture = target,
         .framebufferSizePx = Vector2i(displayW, displayH),
+        .framebufferFromLogicalScale = framebufferFromLogicalScale,
     };
     wgpuDirectRenderCallback_(directTarget);
     timing.directMs = ElapsedMs(directStart);

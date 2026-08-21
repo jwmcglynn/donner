@@ -2716,11 +2716,17 @@ TEST(GlRnrReplayTest, HighZoomRapidPanKeepsPaneCoveredByContent) {
   std::string error;
   ASSERT_GL_REPLAY_OR_SKIP(options, result, error);
 
-  // Pane rect in device pixels (logical origin 568,29 size 604x863 at DPR 1).
+  // Full captures are in the host framebuffer's physical pixels. Scale the recorded logical pane
+  // instead of assuming its DPR 1 metadata matches the host (Retina replays are 2x).
   // Inset by 8 logical px so pane-border chrome never counts.
   const auto paneCrop = [&](const svg::RendererBitmap& bitmap) {
-    return CropBitmap(*&bitmap,
-                      PixelCrop{.x = 568 + 8, .y = 29 + 8, .width = 604 - 16, .height = 863 - 16});
+    const double captureScaleX = static_cast<double>(bitmap.dimensions.x) / 1600.0;
+    const double captureScaleY = static_cast<double>(bitmap.dimensions.y) / 900.0;
+    return CropBitmap(
+        bitmap, PixelCrop{.x = static_cast<int>(std::lround((568.0 + 8.0) * captureScaleX)),
+                          .y = static_cast<int>(std::lround((29.0 + 8.0) * captureScaleY)),
+                          .width = static_cast<int>(std::lround((604.0 - 16.0) * captureScaleX)),
+                          .height = static_cast<int>(std::lround((863.0 - 16.0) * captureScaleY))});
   };
   // Ratio of pane pixels showing document content (either stripe color).
   // Non-content pixels are the checkerboard/background plus the in-pane
