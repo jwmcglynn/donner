@@ -66,7 +66,9 @@ build before the first proxied request after startup.
   `gl_capture_left_mousedown` to replay through the real OpenGL editor shell and
   return framebuffer PNGs; `gl_drive_document_input: true` uses recorded
   document-space mouse coordinates for MCP-generated replays,
-  `gl_source_pane_visible: true` opens the source pane before the first replay frame, and
+  `gl_source_pane_visible: true` sets the source pane's animation target to visible before the
+  first replay frame,
+  so frame zero captures the beginning of its slide-in transition, and
   `gl_crop: "document-canvas"` hides source and side panels in the capture. Raw
   `bazel-bin` MCP launches route GL readback through `bazel run //donner/editor/tests:editor_rnr_gl_replay` so macOS Cocoa/GL initialization
   happens in the same environment as the replay helper.

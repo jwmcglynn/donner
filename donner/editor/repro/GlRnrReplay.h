@@ -58,7 +58,9 @@ struct GlRnrReplayOptions {
   int workerRenderDelayMsForTesting = 0;
   /// Drive canvas tool input from recorded document coordinates instead of GUI screen hit-testing.
   bool driveDocumentSpaceInput = false;
-  /// Open the source pane before replaying the first frame.
+  /// Set the source pane's animation target visible before the first frame.
+  ///
+  /// Frame zero captures the beginning of the slide-in transition.
   bool sourcePaneVisible = false;
   /// Suppress non-document render-pane chrome when writing captures.
   bool contentOnlyCapture = false;

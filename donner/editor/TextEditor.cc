@@ -2311,8 +2311,6 @@ void TextEditor::renderFocusReferenceLinks(ImDrawList* drawList) {
       drawStaticConnector();
       continue;
     }
-    ++animatedLinkCount;
-
     const auto updateStart = std::chrono::steady_clock::now();
     const Vector2d start = ToVector2d(layout->start);
     const Vector2d tip = ToVector2d(layout->tip);
@@ -2351,6 +2349,7 @@ void TextEditor::renderFocusReferenceLinks(ImDrawList* drawList) {
       focusReferenceRopes_.erase(link);
       continue;
     }
+    ++animatedLinkCount;
 
     const auto drawStart = std::chrono::steady_clock::now();
     const ImU32 color = ropeState.hovered ? BrightenReferenceColor(layout->color) : layout->color;
