@@ -24,10 +24,19 @@ class CheckBannedPatternsTests(unittest.TestCase):
         source_path.write_text(source, encoding="utf-8")
         return source_path
 
-    def _descriptions_for(self, source: str, filename: str = "Example.cc") -> list[str]:
+    def _descriptions_for(
+        self,
+        source: str,
+        filename: str = "Example.cc",
+        *,
+        check_method_complexity: bool = False,
+    ) -> list[str]:
         return [
             error[1]
-            for error in check_banned_patterns.check_file(self._write_source(source, filename))
+            for error in check_banned_patterns.check_file(
+                self._write_source(source, filename),
+                check_method_complexity=check_method_complexity,
+            )
         ]
 
     def test_blocks_typographic_hyphens_and_dashes_in_comments_and_strings(self):
@@ -99,7 +108,8 @@ class CheckBannedPatternsTests(unittest.TestCase):
             f"  if (value == {index}) {{ value += {index}; }}" for index in range(11)
         )
         descriptions = self._descriptions_for(
-            "void Example::run(int value) {\n" + branches + "\n}\n"
+            "void Example::run(int value) {\n" + branches + "\n}\n",
+            check_method_complexity=True,
         )
 
         self.assertIn("complex method (11 decision points; limit 10)", descriptions)
@@ -109,10 +119,53 @@ class CheckBannedPatternsTests(unittest.TestCase):
             f"  if (value == {index}) {{ value += {index}; }}" for index in range(10)
         )
         descriptions = self._descriptions_for(
-            "void Example::run(int value) {\n" + branches + "\n}\n"
+            "void Example::run(int value) {\n" + branches + "\n}\n",
+            check_method_complexity=True,
         )
 
         self.assertNotIn("complex method", "\n".join(descriptions))
+
+    def test_allows_preexisting_complex_method_from_baseline(self):
+        branches = "\n".join(
+            f"  if (value == {index}) {{ value += {index}; }}" for index in range(11)
+        )
+        source = "void Example::run(int value) {\n" + branches + "\n}\n"
+        source_path = self._write_source(source)
+        descriptions = [
+            error[1]
+            for error in check_banned_patterns.check_file(
+                source_path,
+                check_method_complexity=True,
+                method_complexity_baseline=check_banned_patterns._strip_comments_and_strings(
+                    source
+                ),
+            )
+        ]
+
+        self.assertNotIn("complex method", "\n".join(descriptions))
+
+    def test_blocks_new_complex_method_against_simple_baseline(self):
+        current_branches = "\n".join(
+            f"  if (value == {index}) {{ value += {index}; }}" for index in range(11)
+        )
+        baseline_branches = "\n".join(
+            f"  if (value == {index}) {{ value += {index}; }}" for index in range(10)
+        )
+        source_path = self._write_source(
+            "void Example::run(int value) {\n" + current_branches + "\n}\n"
+        )
+        descriptions = [
+            error[1]
+            for error in check_banned_patterns.check_file(
+                source_path,
+                check_method_complexity=True,
+                method_complexity_baseline=check_banned_patterns._strip_comments_and_strings(
+                    "void Example::run(int value) {\n" + baseline_branches + "\n}\n"
+                ),
+            )
+        ]
+
+        self.assertIn("complex method (11 decision points; limit 10)", descriptions)
 
 
 if __name__ == "__main__":
