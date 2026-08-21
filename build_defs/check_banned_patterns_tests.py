@@ -94,6 +94,26 @@ class CheckBannedPatternsTests(unittest.TestCase):
                 check_banned_patterns._iter_source_files([source_root]),
             )
 
+    def test_blocks_methods_above_the_local_complexity_limit(self):
+        branches = "\n".join(
+            f"  if (value == {index}) {{ value += {index}; }}" for index in range(11)
+        )
+        descriptions = self._descriptions_for(
+            "void Example::run(int value) {\n" + branches + "\n}\n"
+        )
+
+        self.assertIn("complex method (11 decision points; limit 10)", descriptions)
+
+    def test_allows_methods_at_the_local_complexity_limit(self):
+        branches = "\n".join(
+            f"  if (value == {index}) {{ value += {index}; }}" for index in range(10)
+        )
+        descriptions = self._descriptions_for(
+            "void Example::run(int value) {\n" + branches + "\n}\n"
+        )
+
+        self.assertNotIn("complex method", "\n".join(descriptions))
+
 
 if __name__ == "__main__":
     unittest.main()
