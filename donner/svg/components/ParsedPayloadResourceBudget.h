@@ -180,15 +180,21 @@ public:
   /// Conservative pre-parse bound for raw CSS plus all parser-retained representations.
   static std::optional<std::size_t> estimateStylesheetPreflightBytes(
       std::size_t sourceBytes, std::size_t projectedSourceBytes) {
-    // Every retained component value, declaration, and rule needs at least one source byte; their
-    // estimates total 320 bytes. 512 also covers raw/projected copies and allocator slack.
+    // Every retained component value, declaration, and rule needs at least one source byte, but a
+    // single string token may contain most of a stylesheet (notably an embedded font data URL).
+    // The CSS parser independently caps those structural objects, so cap their conservative
+    // representation allowance rather than multiplying opaque payload bytes without bound.
     constexpr std::size_t kMaximumRepresentationBytesPerSourceByte = 512;
+    constexpr std::size_t kMaximumParsedRepresentationBytes = 8 * 1024 * 1024;
     constexpr std::size_t kMaximum = std::numeric_limits<std::size_t>::max();
-    if (sourceBytes >
-        (kMaximum - projectedSourceBytes) / kMaximumRepresentationBytesPerSourceByte) {
+    const std::size_t representationBytes =
+        sourceBytes > kMaximumParsedRepresentationBytes / kMaximumRepresentationBytesPerSourceByte
+            ? kMaximumParsedRepresentationBytes
+            : sourceBytes * kMaximumRepresentationBytesPerSourceByte;
+    if (projectedSourceBytes > kMaximum - representationBytes) {
       return std::nullopt;
     }
-    return projectedSourceBytes + sourceBytes * kMaximumRepresentationBytesPerSourceByte;
+    return projectedSourceBytes + representationBytes;
   }
 
 private:
