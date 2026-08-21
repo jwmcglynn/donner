@@ -649,7 +649,7 @@ private:
   }
 
   static unsigned int fromHex(unsigned char ch) {
-    assert(std::isxdigit(ch));
+    assert(std::isxdigit(static_cast<unsigned char>(ch)));
 
     if (ch >= 'a' && ch <= 'f') {
       return 10 + ch - 'a';

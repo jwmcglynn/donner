@@ -36,11 +36,12 @@ static bool isNameStartCodepoint(char ch) {
   // Also include \0, since this tokenizer postpones the preprocessing step at
   // https://www.w3.org/TR/css-syntax-3/#input-preprocessing which transforms \u0000 to \uFFFD,
   // which would pass this check.
-  return std::isalpha(ch) || static_cast<unsigned char>(ch) >= 0x80 || ch == '_' || ch == '\0';
+  return std::isalpha(static_cast<unsigned char>(ch)) || static_cast<unsigned char>(ch) >= 0x80 ||
+         ch == '_' || ch == '\0';
 }
 
 static bool isNameCodepoint(char ch) {
-  return isNameStartCodepoint(ch) || std::isdigit(ch) || ch == '-';
+  return isNameStartCodepoint(ch) || std::isdigit(static_cast<unsigned char>(ch)) || ch == '-';
 }
 
 /// Returns true if the codepoint is non-printable, per
@@ -128,21 +129,22 @@ static bool isNumberStart(std::string_view remaining) {
   if (remaining[0] == '+' || remaining[0] == '-') {
     // U+002B PLUS SIGN (+) or U+002D HYPHEN-MINUS (-): If the second code point is a digit,
     // return true.
-    if (remainingSize > 1 && std::isdigit(remaining[1])) {
+    if (remainingSize > 1 && std::isdigit(static_cast<unsigned char>(remaining[1]))) {
       return true;
     }
 
     // Otherwise, if the second code point is a U+002E FULL STOP (.) and the third code point is a
     // digit, return true.
-    if (remainingSize > 2 && remaining[1] == '.' && std::isdigit(remaining[2])) {
+    if (remainingSize > 2 && remaining[1] == '.' &&
+        std::isdigit(static_cast<unsigned char>(remaining[2]))) {
       return true;
     }
 
     return false;
   } else if (remaining[0] == '.') {
     // If the second code point is a digit, return true. Otherwise, return false.
-    return (remainingSize > 1 && std::isdigit(remaining[1]));
-  } else if (std::isdigit(remaining[0])) {
+    return (remainingSize > 1 && std::isdigit(static_cast<unsigned char>(remaining[1])));
+  } else if (std::isdigit(static_cast<unsigned char>(remaining[0]))) {
     return true;
   } else {
     return false;
@@ -157,13 +159,13 @@ static std::tuple<char32_t, int> consumeEscapedCodepoint(std::string_view remain
   if (remaining.empty()) {
     // EOF: This is a parse error. Return U+FFFD REPLACEMENT CHARACTER (�).
     return {Utf8::kUnicodeReplacementCharacter, 0};
-  } else if (std::isxdigit(remaining[0])) {
+  } else if (std::isxdigit(static_cast<unsigned char>(remaining[0]))) {
     char32_t number = hexDigitToDecimal(remaining[0]);
     size_t i = 1;
 
     // Consume as many hex digits as possible, but no more than 5 (more).
     const size_t maxLength = std::min(remaining.size(), size_t(6));
-    while (i < maxLength && std::isxdigit(remaining[i])) {
+    while (i < maxLength && std::isxdigit(static_cast<unsigned char>(remaining[i]))) {
       number = (number << 4) | hexDigitToDecimal(remaining[i]);
       ++i;
     }
@@ -343,7 +345,7 @@ Token Tokenizer::next() {
     case ':': return token<Token::Colon>(1);
     case ';': return token<Token::Semicolon>(1);
     default: {
-      if (std::isdigit(remaining_[0])) {
+      if (std::isdigit(static_cast<unsigned char>(remaining_[0]))) {
         return consumeNumericToken();
       } else if (isNameStartCodepoint(remaining_[0])) {
         return consumeIdentLikeToken();

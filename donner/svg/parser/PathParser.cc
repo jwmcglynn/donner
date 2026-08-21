@@ -22,7 +22,8 @@ public:
    *
    * @param d The string to parse.
    */
-  explicit PathParserImpl(std::string_view d) : d_(d), remaining_(d) {}
+  explicit PathParserImpl(std::string_view d)
+      : builder_(PathParser::kMaximumPoints), d_(d), remaining_(d) {}
 
   /**
    * Parse the path data.
@@ -154,9 +155,9 @@ private:
     // Read one-character
     char ch = remaining_[0];
     bool relative = true;
-    if (std::isupper(ch)) {
+    if (std::isupper(static_cast<unsigned char>(ch))) {
       relative = false;
-      ch = static_cast<char>(std::tolower(ch));
+      ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
     }
 
     Token token;
@@ -302,6 +303,14 @@ private:
   }
 
   std::optional<ParseDiagnostic> processCommand(TokenCommand command) {
+    if (commandCount_ >= PathParser::kMaximumCommands) {
+      ParseDiagnostic err;
+      err.reason = "Path command limit exceeded";
+      err.range = currentRange(0, 0);
+      return err;
+    }
+    ++commandCount_;
+
     if (command.token == Token::MoveTo) {
       // 9.3.3 "moveto": https://www.w3.org/TR/SVG/paths.html#PathDataMovetoCommands
       double coords[2];
@@ -460,6 +469,13 @@ private:
       return err;
     }
 
+    if (builder_.exceededMaximumPoints()) {
+      ParseDiagnostic err;
+      err.reason = "Path point limit exceeded";
+      err.range = currentRange(0, 0);
+      return err;
+    }
+
     lastToken_ = command.token;
     return std::nullopt;
   }
@@ -480,6 +496,7 @@ private:
   }
 
   PathBuilder builder_;
+  std::size_t commandCount_ = 0;
 
   std::string_view d_;
   std::string_view remaining_;

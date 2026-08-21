@@ -2,7 +2,6 @@
 /// @file
 
 #include <cstddef>
-#include <limits>
 
 #include "donner/base/element/ElementLike.h"
 
@@ -19,7 +18,11 @@ public:
 
   /// Consume one element visit, returning false once the limit is reached.
   [[nodiscard]] bool consume() {
-    if (steps_ < std::numeric_limits<std::size_t>::max()) ++steps_;
+    if (rejected_ || steps_ >= maximumSteps_) {
+      rejected_ = true;
+      return false;
+    }
+    ++steps_;
     return true;
   }
 

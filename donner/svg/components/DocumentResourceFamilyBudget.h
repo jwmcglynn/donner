@@ -3,7 +3,6 @@
 
 #include <array>
 #include <cstddef>
-#include <limits>
 #include <memory>
 
 namespace donner::svg::components {
@@ -37,9 +36,11 @@ public:
     if (stats_.rejected || index >= stats_.retainedBytes.size()) {
       return false;
     }
-    constexpr std::size_t kMaximum = std::numeric_limits<std::size_t>::max();
-    return bytes <= kMaximum - stats_.retainedBytes[index] &&
-           bytes <= kMaximum - stats_.totalRetainedBytes;
+    const std::size_t maximum = maximumFor(kind);
+    return stats_.retainedBytes[index] <= maximum &&
+           bytes <= maximum - stats_.retainedBytes[index] &&
+           stats_.totalRetainedBytes <= limits_.maximumTotalRetainedBytes &&
+           bytes <= limits_.maximumTotalRetainedBytes - stats_.totalRetainedBytes;
   }
 
   bool reserve(Kind kind, std::size_t bytes) {
@@ -75,6 +76,16 @@ public:
   const SecurityStats& securityStats() const { return stats_; }
 
 private:
+  std::size_t maximumFor(Kind kind) const {
+    switch (kind) {
+      case Kind::ParsedPayload: return limits_.parsedPayloadBytes;
+      case Kind::Geometry: return limits_.geometryBytes;
+      case Kind::ComputedStyle: return limits_.computedStyleBytes;
+      case Kind::Count: return 0;
+    }
+    return 0;
+  }
+
   Limits limits_;
   SecurityStats stats_;
 };
