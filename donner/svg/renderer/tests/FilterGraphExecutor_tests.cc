@@ -206,6 +206,34 @@ TEST(FilterGraphExecutorTest, ExtremeFilterValuesStayWithinNumericAndWorkBounds)
   EXPECT_EQ(pixmap.height(), 8u);
 }
 
+TEST(FilterGraphExecutorTest, MorphologyAdmissionChargesPassSamplesAndRetainedTextures) {
+  components::FilterGraph graph;
+  for (int index = 0; index < 4; ++index) {
+    components::FilterNode node;
+    node.primitive = components::filter_primitive::Morphology{
+        .op = components::filter_primitive::Morphology::Operator::Dilate,
+        .radiusX = components::kMaximumFilterMorphologyRadius,
+        .radiusY = components::kMaximumFilterMorphologyRadius,
+    };
+    graph.nodes.push_back(std::move(node));
+  }
+
+  constexpr std::uint64_t kExpectedWorkMultiplier = 1047;
+  const std::uint64_t boundaryPixels =
+      components::kMaximumFilterWorkUnits / (4 * kExpectedWorkMultiplier);
+  EXPECT_TRUE(components::FilterGraphFitsExecutionBudget(
+      graph, boundaryPixels, components::FilterMemoryModel::GpuAllNodes));
+  EXPECT_FALSE(components::FilterGraphFitsExecutionBudget(
+      graph, boundaryPixels + 1, components::FilterMemoryModel::GpuAllNodes));
+
+  std::uint64_t workUnits = 0;
+  std::uint64_t retainedBytes = 0;
+  ASSERT_TRUE(components::FilterGraphExecutionCost(
+      graph, 100, components::FilterMemoryModel::GpuAllNodes, workUnits, retainedBytes));
+  EXPECT_EQ(workUnits, 4u * 100u * kExpectedWorkMultiplier);
+  EXPECT_EQ(retainedBytes, 100u * 4u * (2u + 4u * 21u));
+}
+
 TEST(FilterGraphExecutorTest, RejectsAggregateConvolveWorkAndNamedBufferMemory) {
   components::FilterGraph graph;
   components::FilterNode convolve;

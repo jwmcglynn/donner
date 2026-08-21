@@ -288,6 +288,16 @@ constexpr std::string_view kHugeRadiusMorphologySvg = R"SVG(
 </svg>
 )SVG";
 
+constexpr std::string_view kChunkedMorphologySvg = R"SVG(
+<svg viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg">
+  <filter id="filter1">
+    <feMorphology radius="256"/><feMorphology radius="256"/>
+    <feMorphology radius="256"/><feMorphology radius="256"/>
+  </filter>
+  <rect x="20" y="20" width="160" height="160" fill="red" filter="url(#filter1)"/>
+</svg>
+)SVG";
+
 // ---------------------------------------------------------------------------
 // Fixture: image blits - drawImage uniform pooling.
 // ---------------------------------------------------------------------------
@@ -346,6 +356,14 @@ TEST_F(GeodePerfTest, MorphologyHugeRadiusIsBoundedBeforeEncoding) {
   // only the frame and readback submissions instead of scaling work with the raw radius.
   EXPECT_GE(c.submits, 1u);
   EXPECT_LE(c.submits, 3u);
+}
+
+TEST_F(GeodePerfTest, MultipleBoundedMorphologyNodesStillChunkCommandBuffers) {
+  auto device = sharedDevice();
+  ASSERT_TRUE(device);
+  const geode::GeodeCounters counters = renderAndGetCounters(kChunkedMorphologySvg, device);
+  EXPECT_GE(counters.submits, 3u);
+  EXPECT_LE(counters.submits, 6u);
 }
 
 TEST_F(GeodePerfTest, GaussianBlur_UsesSingleFrameSubmission) {
