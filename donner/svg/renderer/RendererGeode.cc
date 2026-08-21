@@ -3875,8 +3875,17 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
       device->drainDeferredDestroys();
     }
     viewport = nextViewport;
-    pixelWidth = static_cast<int>(nextViewport.size.x * nextViewport.devicePixelRatio);
-    pixelHeight = static_cast<int>(nextViewport.size.y * nextViewport.devicePixelRatio);
+    const double nextPixelWidth = nextViewport.size.x * nextViewport.devicePixelRatio;
+    const double nextPixelHeight = nextViewport.size.y * nextViewport.devicePixelRatio;
+    constexpr double kMaximumPixelDimension = static_cast<double>(std::numeric_limits<int>::max());
+    const bool invalidViewport =
+        !std::isfinite(nextViewport.size.x) || !std::isfinite(nextViewport.size.y) ||
+        !std::isfinite(nextViewport.devicePixelRatio) || nextViewport.size.x < 0.0 ||
+        nextViewport.size.y < 0.0 || nextViewport.devicePixelRatio <= 0.0 ||
+        !std::isfinite(nextPixelWidth) || !std::isfinite(nextPixelHeight) ||
+        nextPixelWidth > kMaximumPixelDimension || nextPixelHeight > kMaximumPixelDimension;
+    pixelWidth = invalidViewport ? 0 : static_cast<int>(nextPixelWidth);
+    pixelHeight = invalidViewport ? 0 : static_cast<int>(nextPixelHeight);
     deviceFromLocalTransform = Transform2d();
     deviceFromLocalTransformStack.clear();
     paint = PaintParams();

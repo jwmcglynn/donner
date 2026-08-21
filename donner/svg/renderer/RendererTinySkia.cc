@@ -46,6 +46,16 @@ namespace donner::svg {
 
 namespace {
 
+std::optional<int> CheckedPixelDimension(double logicalDimension, double devicePixelRatio) {
+  const double pixelDimension = logicalDimension * devicePixelRatio;
+  if (!std::isfinite(logicalDimension) || !std::isfinite(devicePixelRatio) ||
+      logicalDimension < 0.0 || devicePixelRatio <= 0.0 || !std::isfinite(pixelDimension) ||
+      pixelDimension > static_cast<double>(std::numeric_limits<int>::max())) {
+    return std::nullopt;
+  }
+  return static_cast<int>(pixelDimension);
+}
+
 #ifdef DONNER_TEXT_ENABLED
 TextLayoutParams toTextLayoutParams(const TextParams& params) {
   TextLayoutParams layoutParams;
@@ -1060,8 +1070,10 @@ void RendererTinySkia::draw(SVGDocument& document) {
 
 void RendererTinySkia::beginFrame(const RenderViewport& viewport) {
   viewport_ = viewport;
-  const int pixelWidth = static_cast<int>(viewport.size.x * viewport.devicePixelRatio);
-  const int pixelHeight = static_cast<int>(viewport.size.y * viewport.devicePixelRatio);
+  const int pixelWidth =
+      CheckedPixelDimension(viewport.size.x, viewport.devicePixelRatio).value_or(0);
+  const int pixelHeight =
+      CheckedPixelDimension(viewport.size.y, viewport.devicePixelRatio).value_or(0);
 
   // Keep the frame buffer's allocation across frames. A renderer that draws the
   // same viewport repeatedly (editor, compositor, animation loop) otherwise
