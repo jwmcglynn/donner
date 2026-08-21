@@ -111,7 +111,7 @@ TEST(TextBackendFullBitmap, RejectsInvalidDecodeRequestsBeforeLoadingGlyph) {
 
   Registry registry;
   FontManager fontManager(registry);
-  const FontHandle font = fontManager.loadFontData(fontBytes);
+  const FontHandle font = fontManager.loadFontData(fontBytes, FontDataTrust::Trusted);
   ASSERT_TRUE(static_cast<bool>(font));
 
   TextBackendFull backend(fontManager, registry);

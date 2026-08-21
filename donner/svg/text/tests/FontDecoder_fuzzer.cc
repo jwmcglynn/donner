@@ -339,6 +339,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
   const bool isZeroLengthTableSeed =
       size == kZeroLengthTableSeed.size() &&
       std::equal(kZeroLengthTableSeed.begin(), kZeroLengthTableSeed.end(), data);
+  const bool isTrustedBitmapMutationSeed = size >= 1 && data[0] == 'Y';
   if (isZeroLengthTableSeed) {
     structured.bytes =
         MakeSfnt({TableSpec{"cmap", {}}, TableSpec{"glyf", {}}, TableSpec{"head", {}},
@@ -365,6 +366,25 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
   Registry registry;
   FontManager fontManager(registry);
   const FontHandle font = fontManager.loadFontData(fontBytes, trust);
+#ifdef DONNER_TEXT_FULL
+  if (isTrustedBitmapMutationSeed) {
+    if (!font || !fontManager.isTrustedFont(font)) {
+      std::abort();
+    }
+    FuzzTextBackend backend(fontManager, registry);
+    constexpr std::string_view kEmoji = "\xF0\x9F\x98\x81";
+    const TextBackend::ShapedRun shaped =
+        backend.shapeRun(font, 32.0f, kEmoji, 0, kEmoji.size(), false, FontVariant::Normal, false);
+    if (shaped.glyphs.empty()) {
+      std::abort();
+    }
+    const float scale = backend.scaleForEmToPixels(font, 32.0f);
+    if (!backend.bitmapGlyph(font, shaped.glyphs.front().glyphIndex, scale).has_value()) {
+      std::abort();
+    }
+    return 0;
+  }
+#endif
   if (font) {
     if (isStructuredSeed && data[0] == 'B') {
       FuzzTextBackend backend(fontManager, registry);
