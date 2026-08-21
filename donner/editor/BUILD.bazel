@@ -16,6 +16,7 @@ load("@bazel_skylib//lib:selects.bzl", "selects")
 load("//build_defs:embed_resources.bzl", "embed_resources")
 load("//build_defs:package.bzl", "donner_package")
 load("//build_defs:rules.bzl", "donner_cc_binary", "donner_cc_library", "donner_multi_transitioned_binary")
+load(":editor_product_config.bzl", "EDITOR_RENDERER_BACKEND", "EDITOR_TEXT", "EDITOR_TEXT_FULL")
 
 #Editor libraries are public so the  // examples:svg_viewer target (in the
 #separate examples Bazel module) can depend on `: text_editor`.BCR
@@ -1388,15 +1389,15 @@ donner_cc_binary(
 donner_multi_transitioned_binary(
     name = "editor",
     dep = ":editor_impl",
-    renderer_backend = "geode",
+    renderer_backend = EDITOR_RENDERER_BACKEND,
     tags = ["codeql_default"],
     target_compatible_with = select({
         "@platforms//os:macos": [],
         "@platforms//os:linux": [],
         "//conditions:default": ["@platforms//:incompatible"],
     }),
-    text = "true",
-    text_full = "false",
+    text = EDITOR_TEXT,
+    text_full = EDITOR_TEXT_FULL,
 )
 
 donner_cc_library(
