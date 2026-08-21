@@ -140,6 +140,15 @@ public:
   void invalidateAll(EntityHandle handle);
 
 private:
+  void applyStylesheetRules(Registry& registry, Entity treeEntity, Entity dataEntity,
+                            PropertyRegistry& properties,
+                            css::SelectorTraversalBudget& selectorTraversalBudget,
+                            ParseWarningSink& warningSink);
+  PropertyRegistry inheritProperties(Registry& registry, Entity parent, PropertyRegistry properties,
+                                     ParseWarningSink& warningSink,
+                                     css::SelectorTraversalBudget& selectorTraversalBudget);
+  static void resolveRelativeFontProperties(Registry& registry, Entity parent,
+                                            PropertyRegistry& properties);
   const ComputedStyleComponent& computeStyleWithBudget(
       EntityHandle handle, ParseWarningSink& warningSink,
       css::SelectorTraversalBudget& selectorTraversalBudget);

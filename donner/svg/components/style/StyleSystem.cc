@@ -230,6 +230,68 @@ void StyleSystem::updateStyle(EntityHandle handle, std::string_view style) {
   invalidateComputed(handle);
 }
 
+void StyleSystem::applyStylesheetRules(Registry& registry, Entity treeEntity, Entity dataEntity,
+                                       PropertyRegistry& properties,
+                                       css::SelectorTraversalBudget& selectorTraversalBudget,
+                                       ParseWarningSink& warningSink) {
+  const ShadowedElementAdapter adapter(registry, treeEntity, dataEntity);
+  for (auto view = registry.view<StylesheetComponent>(); auto stylesheetEntity : view) {
+    const auto& stylesheet = view.get<StylesheetComponent>(stylesheetEntity);
+    for (const css::SelectorRule& rule : stylesheet.stylesheet.rules()) {
+      if (selectorTraversalBudget.rejected()) {
+        return;
+      }
+      const std::optional<MatchedSelectorEntry> match =
+          MatchSelectorRule(rule, adapter, selectorTraversalBudget);
+      if (!match.has_value()) {
+        continue;
+      }
+      css::Specificity specificity = match->specificity;
+      if (stylesheet.isUserAgentStylesheet) {
+        specificity = specificity.toUserAgentSpecificity();
+      }
+      for (const auto& declaration : rule.declarations) {
+        if (auto error = properties.parseProperty(declaration, specificity)) {
+          warningSink.add(std::move(error.value()));
+        }
+      }
+    }
+  }
+}
+
+PropertyRegistry StyleSystem::inheritProperties(
+    Registry& registry, Entity parent, PropertyRegistry properties, ParseWarningSink& warningSink,
+    css::SelectorTraversalBudget& selectorTraversalBudget) {
+  if (parent == entt::null) {
+    return properties;
+  }
+  auto& parentStyleComponent = registry.get_or_emplace<ComputedStyleComponent>(parent);
+  computePropertiesInto(EntityHandle(registry, parent), parentStyleComponent, warningSink,
+                        selectorTraversalBudget);
+  const PropertyInheritOptions inheritOptions = registry.all_of<DoNotInheritFillOrStrokeTag>(parent)
+                                                    ? PropertyInheritOptions::NoPaint
+                                                    : PropertyInheritOptions::All;
+  return properties.inheritFrom(parentStyleComponent.properties.value(), inheritOptions);
+}
+
+void StyleSystem::resolveRelativeFontProperties(Registry& registry, Entity parent,
+                                                PropertyRegistry& properties) {
+  double parentFontSizePx = 12.0;
+  int parentFontWeight = 400;
+  int parentFontStretch = static_cast<int>(FontStretch::Normal);
+  if (parent != entt::null) {
+    const auto& parentStyle = registry.get<ComputedStyleComponent>(parent);
+    if (parentStyle.properties) {
+      parentFontSizePx = parentStyle.properties->fontSize.get().value().value;
+      parentFontWeight = parentStyle.properties->fontWeight.get().value();
+      parentFontStretch = parentStyle.properties->fontStretch.get().value();
+    }
+  }
+  properties.resolveFontSize(parentFontSizePx);
+  properties.resolveFontWeight(parentFontWeight);
+  properties.resolveFontStretch(parentFontStretch);
+}
+
 void StyleSystem::computePropertiesInto(EntityHandle handle, ComputedStyleComponent& computedStyle,
                                         ParseWarningSink& warningSink,
                                         css::SelectorTraversalBudget& selectorTraversalBudget) {
@@ -250,83 +312,18 @@ void StyleSystem::computePropertiesInto(EntityHandle handle, ComputedStyleCompon
     properties = PropertyRegistry();
   }
 
-  // Apply style from stylesheets.
-  for (auto view = registry.view<StylesheetComponent>(); auto stylesheetEntity : view) {
-    auto [stylesheet] = view.get(stylesheetEntity);
+  applyStylesheetRules(registry, handle.entity(), dataEntity, properties, selectorTraversalBudget,
+                       warningSink);
 
-    for (const css::SelectorRule& rule : stylesheet.stylesheet.rules()) {
-      if (selectorTraversalBudget.rejected()) {
-        break;
-      }
-      if (std::optional<MatchedSelectorEntry> match =
-              MatchSelectorRule(rule, ShadowedElementAdapter(registry, handle.entity(), dataEntity),
-                                selectorTraversalBudget);
-          match.has_value()) {
-        css::Specificity specificity = match->specificity;
-        if (stylesheet.isUserAgentStylesheet) {
-          specificity = specificity.toUserAgentSpecificity();
-        }
-
-        for (const auto& declaration : rule.declarations) {
-          if (auto error = properties.parseProperty(declaration, specificity)) {
-            warningSink.add(std::move(error.value()));
-          }
-        }
-      }
-    }
-  }
-
-  // Inherit from parent.
   const Entity parent = handle.get<donner::components::TreeComponent>().parent();
-  if (parent != entt::null) {
-    auto& parentStyleComponent = registry.get_or_emplace<ComputedStyleComponent>(parent);
-    computePropertiesInto(EntityHandle(registry, parent), parentStyleComponent, warningSink,
-                          selectorTraversalBudget);
-
-    // <pattern> elements can't inherit 'fill' or 'stroke' or it creates recursion in the shadow
-    // tree.
-    const PropertyInheritOptions inheritOptions =
-        registry.all_of<DoNotInheritFillOrStrokeTag>(parent) ? PropertyInheritOptions::NoPaint
-                                                             : PropertyInheritOptions::All;
-
-    computedStyle.properties =
-        properties.inheritFrom(parentStyleComponent.properties.value(), inheritOptions);
-  } else {
-    computedStyle.properties = properties;
-  }
+  computedStyle.properties = inheritProperties(registry, parent, std::move(properties), warningSink,
+                                               selectorTraversalBudget);
 
   // Resolve font-size to absolute pixels. CSS spec requires the computed value of font-size to
   // always be an absolute length. Relative units (em, %, ex) resolve against the parent's computed
   // font-size, and percentages resolve against the parent font-size (not the viewBox).
   if (computedStyle.properties) {
-    double parentFontSizePx = 12.0;  // UA default font size (medium) for root elements.
-    if (parent != entt::null) {
-      const auto& parentStyle = registry.get<ComputedStyleComponent>(parent);
-      if (parentStyle.properties) {
-        parentFontSizePx = parentStyle.properties->fontSize.get().value().value;
-      }
-    }
-    computedStyle.properties->resolveFontSize(parentFontSizePx);
-
-    // Resolve relative font-weight keywords (bolder/lighter) against inherited weight.
-    int parentFontWeight = 400;  // CSS initial value.
-    if (parent != entt::null) {
-      const auto& parentStyle = registry.get<ComputedStyleComponent>(parent);
-      if (parentStyle.properties) {
-        parentFontWeight = parentStyle.properties->fontWeight.get().value();
-      }
-    }
-    computedStyle.properties->resolveFontWeight(parentFontWeight);
-
-    // Resolve relative font-stretch keywords (narrower/wider) against inherited stretch.
-    int parentFontStretch = static_cast<int>(FontStretch::Normal);
-    if (parent != entt::null) {
-      const auto& parentStyle = registry.get<ComputedStyleComponent>(parent);
-      if (parentStyle.properties) {
-        parentFontStretch = parentStyle.properties->fontStretch.get().value();
-      }
-    }
-    computedStyle.properties->resolveFontStretch(parentFontStretch);
+    resolveRelativeFontProperties(registry, parent, *computedStyle.properties);
   }
 }
 
