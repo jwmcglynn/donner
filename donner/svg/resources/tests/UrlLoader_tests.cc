@@ -161,10 +161,12 @@ TEST(UrlLoader, ExhaustedAggregateBudgetDoesNotFetchExternalResource) {
 }
 TEST(UrlLoader, RejectsOversizedOrInvalidExternalUriBeforeCallback) {
   InProcResourceLoader loader;
-  UrlLoader urlLoader(loader);
+  size_t remainingResourceBytes = 16;
+  UrlLoader urlLoader(loader, UrlLoader::kDefaultMaximumResourceSize, &remainingResourceBytes);
 
   EXPECT_THAT(urlLoader.fromUri(std::string(UrlLoader::kMaximumExternalUriSize + 1, 'a')),
               VariantWith<UrlLoaderError>(UrlLoaderError::ResourceTooLarge));
+  EXPECT_EQ(remainingResourceBytes, 0u);
   constexpr char kInvalidUtf8[] = "invalid-\xED\xA0\x80.png";
   EXPECT_THAT(urlLoader.fromUri(std::string_view(kInvalidUtf8, sizeof(kInvalidUtf8) - 1)),
               VariantWith<UrlLoaderError>(UrlLoaderError::InvalidDataUrl));

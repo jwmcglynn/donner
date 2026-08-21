@@ -131,6 +131,10 @@ public:
   const std::vector<css::FontFace>& fontFaces() const { return fontFaces_; }
   size_t pendingFontFaceCount() const { return fontFaceIndexesToLoad_.size(); }
   bool stylesheetFontFaceLimitRejected() const { return stylesheetFontFaceLimitRejected_; }
+  size_t stylesheetFontFaceCountForTesting() const { return stylesheetFontFaceCount_; }
+  size_t stylesheetFontFaceRegistrationCountForTesting() const {
+    return stylesheetFontFaceRegistrations_.size();
+  }
 
 private:
   /**
