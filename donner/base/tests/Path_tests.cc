@@ -681,7 +681,7 @@ TEST(Path, RecursiveGeometryQueriesFailClosedAtAggregateWorkLimit) {
   EXPECT_FALSE(path.isOnPath({2000.0, 2000.0}, 0.001));
 }
 
-TEST(Path, RecursiveSubdivisionDepthLimitsFailClosed) {
+TEST(Path, RecursiveSubdivisionDepthLimitsBoundWork) {
   const Path path =
       PathBuilder().moveTo({0.0, 0.0}).curveTo({1e100, 1e100}, {-1e100, 1e100}, {0.0, 0.0}).build();
 
@@ -695,8 +695,11 @@ TEST(Path, RecursiveSubdivisionDepthLimitsFailClosed) {
   const Vector2d midpoint(0.0, 7.5e99);
   EXPECT_FALSE(path.isOnPath(midpoint, 0.001));
   EXPECT_FALSE(path.isInside(midpoint));
-  EXPECT_TRUE(path.flatten(0.001).empty());
-  EXPECT_TRUE(path.strokeToFill({.width = 1.0}, 0.001).empty());
+  const Path flattened = path.flatten(0.001);
+  EXPECT_FALSE(flattened.empty());
+  EXPECT_LE(flattened.verbCount(),
+            1u + (1u << static_cast<unsigned int>(Path::kMaximumFlattenSubdivisionDepth)));
+  EXPECT_FALSE(path.strokeToFill({.width = 1.0}, 0.001).empty());
 }
 
 TEST(Path, MeasuredPathRetainedBytesUseCheckedCapacityModel) {

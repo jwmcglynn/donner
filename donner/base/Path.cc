@@ -525,8 +525,11 @@ Path::PointOnPath Path::pointAtArcLength(double distance) const {
 }
 
 Path::PointOnPath Path::MeasuredPath::pointAtArcLength(double distance) const {
-  if (!valid_ || segments_.empty() || !std::isfinite(distance) || distance < 0.0) {
+  if (!valid_ || !std::isfinite(distance) || distance < 0.0) {
     return {{}, {}, 0.0, false};
+  }
+  if (segments_.empty()) {
+    return {endpoint_, {}, 0.0, false};
   }
 
   if (distance > totalLength_) {
@@ -1606,7 +1609,8 @@ bool flattenQuadratic(PathBuilder& builder, const Vector2d& p0, const Vector2d& 
     return !builder.exceededMaximumPoints();
   }
   if (depth >= Path::kMaximumFlattenSubdivisionDepth) {
-    return false;
+    builder.lineTo(p2);
+    return !builder.exceededMaximumPoints();
   }
 
   auto [left, right] = SplitQuadratic(p0, p1, p2, 0.5);
@@ -1630,7 +1634,8 @@ bool flattenCubic(PathBuilder& builder, const Vector2d& p0, const Vector2d& p1, 
     return !builder.exceededMaximumPoints();
   }
   if (depth >= Path::kMaximumFlattenSubdivisionDepth) {
-    return false;
+    builder.lineTo(p3);
+    return !builder.exceededMaximumPoints();
   }
 
   auto [left, right] = SplitCubic(p0, p1, p2, p3, 0.5);
@@ -1643,6 +1648,9 @@ bool flattenCubic(PathBuilder& builder, const Vector2d& p0, const Vector2d& p1, 
 }  // namespace
 
 Path Path::flatten(double tolerance) const {
+  if (!std::isfinite(tolerance) || tolerance <= 0.0) {
+    return Path();
+  }
   PathBuilder builder;
 
   if (!flattenInto(builder, tolerance)) {
@@ -3115,7 +3123,8 @@ std::optional<ArcCubicSegment> ComputeArcCubicSegment(const ArcParameters& arc, 
 }  // namespace
 
 Path Path::strokeToFill(const StrokeStyle& style, double flattenTolerance) const {
-  if (commands_.empty() || style.width <= 0.0 || !std::isfinite(style.width)) {
+  if (commands_.empty() || style.width <= 0.0 || !std::isfinite(style.width) ||
+      flattenTolerance <= 0.0 || !std::isfinite(flattenTolerance)) {
     return Path();
   }
 
