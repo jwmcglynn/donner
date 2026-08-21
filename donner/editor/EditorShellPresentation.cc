@@ -19,25 +19,29 @@
 
 namespace donner::editor {
 
-Transform2d PresentedFramebufferFromDocumentTransform(const ViewportState& viewport) {
-  const double devicePixelsPerDocUnit = viewport.devicePixelsPerDocUnit();
+Transform2d PresentedFramebufferFromDocumentTransform(const ViewportState& viewport,
+                                                      const Vector2d& framebufferFromLogicalScale) {
+  const Vector2d framebufferPixelsPerDocUnit =
+      framebufferFromLogicalScale * viewport.pixelsPerDocUnit();
   const Vector2d framebufferOriginFromDocumentOrigin =
-      viewport.panScreenPoint * viewport.devicePixelRatio -
-      viewport.panDocPoint * devicePixelsPerDocUnit;
+      viewport.panScreenPoint * framebufferFromLogicalScale -
+      viewport.panDocPoint * framebufferPixelsPerDocUnit;
 
   Transform2d framebufferFromDocument(Transform2d::uninitialized);
-  framebufferFromDocument.data[0] = devicePixelsPerDocUnit;
+  framebufferFromDocument.data[0] = framebufferPixelsPerDocUnit.x;
   framebufferFromDocument.data[1] = 0.0;
   framebufferFromDocument.data[2] = 0.0;
-  framebufferFromDocument.data[3] = devicePixelsPerDocUnit;
+  framebufferFromDocument.data[3] = framebufferPixelsPerDocUnit.y;
   framebufferFromDocument.data[4] = framebufferOriginFromDocumentOrigin.x;
   framebufferFromDocument.data[5] = framebufferOriginFromDocumentOrigin.y;
   return framebufferFromDocument;
 }
 
 SelectionChromeSnapshot ChromePlacedOnPresentedDocument(const ViewportState& presentedViewport,
+                                                        const Vector2d& framebufferFromLogicalScale,
                                                         SelectionChromeSnapshot snapshot) {
-  snapshot.canvasFromDoc = PresentedFramebufferFromDocumentTransform(presentedViewport);
+  snapshot.canvasFromDoc =
+      PresentedFramebufferFromDocumentTransform(presentedViewport, framebufferFromLogicalScale);
   return snapshot;
 }
 
@@ -98,26 +102,10 @@ Box2d PresentedTileQuadBounds(const PresentedTileQuad& tileQuad) {
   return bounds;
 }
 
-Box2d FramebufferBoxFromScreenBox(const Box2d& screenBox, double devicePixelRatio) {
-  return Box2d(screenBox.topLeft * devicePixelRatio, screenBox.bottomRight * devicePixelRatio);
-}
-
-std::optional<Transform2d> FramebufferFromTextureTransform(const PresentedTileQuad& tileQuad,
-                                                           const Vector2i& textureSizePx) {
-  if (textureSizePx.x <= 0 || textureSizePx.y <= 0) {
-    return std::nullopt;
-  }
-
-  const Vector2d sourceSize(static_cast<double>(textureSizePx.x),
-                            static_cast<double>(textureSizePx.y));
-  Transform2d framebufferFromTexture(Transform2d::uninitialized);
-  framebufferFromTexture.data[0] = (tileQuad.topRight.x - tileQuad.topLeft.x) / sourceSize.x;
-  framebufferFromTexture.data[1] = (tileQuad.topRight.y - tileQuad.topLeft.y) / sourceSize.x;
-  framebufferFromTexture.data[2] = (tileQuad.bottomLeft.x - tileQuad.topLeft.x) / sourceSize.y;
-  framebufferFromTexture.data[3] = (tileQuad.bottomLeft.y - tileQuad.topLeft.y) / sourceSize.y;
-  framebufferFromTexture.data[4] = tileQuad.topLeft.x;
-  framebufferFromTexture.data[5] = tileQuad.topLeft.y;
-  return framebufferFromTexture;
+Box2d FramebufferBoxFromScreenBox(const Box2d& screenBox,
+                                  const Vector2d& framebufferFromLogicalScale) {
+  return Box2d(screenBox.topLeft * framebufferFromLogicalScale,
+               screenBox.bottomRight * framebufferFromLogicalScale);
 }
 
 }  // namespace
@@ -143,7 +131,7 @@ FrameCostBreakdown::DirectPresentation DrawDocumentPresentationToFramebuffer(
 
   const auto checkerboardStart = std::chrono::steady_clock::now();
   cost.checkerboardDrawCount =
-      checkerboardRenderer.draw(target, imageClipRect, viewport.devicePixelRatio);
+      checkerboardRenderer.draw(target, imageClipRect, target.framebufferFromLogicalScale);
   cost.checkerboardMs = ElapsedMs(checkerboardStart);
 
   renderer.setTargetTexture(target.texture);
@@ -151,16 +139,16 @@ FrameCostBreakdown::DirectPresentation DrawDocumentPresentationToFramebuffer(
   renderer.beginFrame(renderViewport);
 
   svg::ResolvedClip clip;
-  clip.clipRect = FramebufferBoxFromScreenBox(imageClipRect, viewport.devicePixelRatio);
+  clip.clipRect = FramebufferBoxFromScreenBox(imageClipRect, target.framebufferFromLogicalScale);
   renderer.pushClip(clip);
   renderer.setTransform(Transform2d());
 
   const Transform2d framebufferFromCanvasTransform =
-      PresentedFramebufferFromDocumentTransform(viewport);
+      PresentedFramebufferFromDocumentTransform(viewport, target.framebufferFromLogicalScale);
   const std::optional<PresentedDragBaseline> dragBaseline =
       PresentedBaselineFromDragPreviews(activeDragPreview, displayedDragPreview);
   const Box2d framebufferClipRect =
-      FramebufferBoxFromScreenBox(imageClipRect, viewport.devicePixelRatio);
+      FramebufferBoxFromScreenBox(imageClipRect, target.framebufferFromLogicalScale);
 
   const auto computeTileQuad = [&](const GlTextureCache::TileView& tile) {
     if (tile.textureSnapshot == nullptr ||
@@ -188,7 +176,7 @@ FrameCostBreakdown::DirectPresentation DrawDocumentPresentationToFramebuffer(
 
     const Vector2i textureSizePx = tile.textureSnapshot->dimensions();
     const std::optional<Transform2d> framebufferFromTexture =
-        FramebufferFromTextureTransform(*tileQuad, textureSizePx);
+        ComputePresentedOutputFromTextureTransform(*tileQuad, textureSizePx);
     if (!framebufferFromTexture.has_value()) {
       return false;
     }
@@ -279,15 +267,16 @@ double DrawImmediateChromeToFramebuffer(svg::RendererGeode& renderer,
   renderer.beginFrame(renderViewport);
 
   svg::ResolvedClip clip;
-  clip.clipRect = FramebufferBoxFromScreenBox(paneClipRect, viewport.devicePixelRatio);
+  clip.clipRect = FramebufferBoxFromScreenBox(paneClipRect, target.framebufferFromLogicalScale);
   renderer.setTransform(Transform2d());
   renderer.pushClip(clip);
 
   // What makes chrome/content desync impossible: chrome is placed with the
   // transform the tiles were placed with this frame, from the same viewport and
   // the same function, not the one capture happened to sample.
-  OverlayRenderer::drawChromeFromSnapshot(renderer,
-                                          ChromePlacedOnPresentedDocument(viewport, snapshot));
+  OverlayRenderer::drawChromeFromSnapshot(
+      renderer,
+      ChromePlacedOnPresentedDocument(viewport, target.framebufferFromLogicalScale, snapshot));
 
   renderer.popClip();
   renderer.endFrame();
@@ -300,20 +289,24 @@ FramebufferCheckerboardRenderer::FramebufferCheckerboardRenderer(
     : device_(std::move(device)) {}
 
 std::optional<geode::CheckerboardScissorPx>
-FramebufferCheckerboardRenderer::ScissorRectFromScreenBox(const Box2d& screenBox,
-                                                          double devicePixelRatio,
-                                                          const Vector2i& framebufferSizePx) {
-  if (devicePixelRatio <= 0.0 || framebufferSizePx.x <= 0 || framebufferSizePx.y <= 0) {
+FramebufferCheckerboardRenderer::ScissorRectFromScreenBox(
+    const Box2d& screenBox, const Vector2d& framebufferFromLogicalScale,
+    const Vector2i& framebufferSizePx) {
+  if (framebufferFromLogicalScale.x <= 0.0 || framebufferFromLogicalScale.y <= 0.0 ||
+      framebufferSizePx.x <= 0 || framebufferSizePx.y <= 0) {
     return std::nullopt;
   }
 
   const double maxX = static_cast<double>(framebufferSizePx.x);
   const double maxY = static_cast<double>(framebufferSizePx.y);
-  const double left = std::clamp(std::floor(screenBox.topLeft.x * devicePixelRatio), 0.0, maxX);
-  const double top = std::clamp(std::floor(screenBox.topLeft.y * devicePixelRatio), 0.0, maxY);
-  const double right = std::clamp(std::ceil(screenBox.bottomRight.x * devicePixelRatio), 0.0, maxX);
+  const double left =
+      std::clamp(std::floor(screenBox.topLeft.x * framebufferFromLogicalScale.x), 0.0, maxX);
+  const double top =
+      std::clamp(std::floor(screenBox.topLeft.y * framebufferFromLogicalScale.y), 0.0, maxY);
+  const double right =
+      std::clamp(std::ceil(screenBox.bottomRight.x * framebufferFromLogicalScale.x), 0.0, maxX);
   const double bottom =
-      std::clamp(std::ceil(screenBox.bottomRight.y * devicePixelRatio), 0.0, maxY);
+      std::clamp(std::ceil(screenBox.bottomRight.y * framebufferFromLogicalScale.y), 0.0, maxY);
   if (left >= right || top >= bottom) {
     return std::nullopt;
   }
@@ -327,13 +320,14 @@ FramebufferCheckerboardRenderer::ScissorRectFromScreenBox(const Box2d& screenBox
 }
 
 int FramebufferCheckerboardRenderer::draw(const gui::EditorWindowWgpuRenderTarget& target,
-                                          const Box2d& imageClipRect, double devicePixelRatio) {
+                                          const Box2d& imageClipRect,
+                                          const Vector2d& framebufferFromLogicalScale) {
   if (device_ == nullptr || !target.texture) {
     return 0;
   }
 
-  const std::optional<geode::CheckerboardScissorPx> scissor =
-      ScissorRectFromScreenBox(imageClipRect, devicePixelRatio, target.framebufferSizePx);
+  const std::optional<geode::CheckerboardScissorPx> scissor = ScissorRectFromScreenBox(
+      imageClipRect, framebufferFromLogicalScale, target.framebufferSizePx);
   if (!scissor.has_value()) {
     return 0;
   }
@@ -343,7 +337,7 @@ int FramebufferCheckerboardRenderer::draw(const gui::EditorWindowWgpuRenderTarge
   // cells for the same document.
   static_assert(kFramebufferCheckerboardSize == geode::kTransparencyCheckerboardCellLogicalPx);
   geode::CheckerboardUnderlayParams params;
-  params.devicePixelRatio = devicePixelRatio;
+  params.devicePixelRatio = framebufferFromLogicalScale.x;
   params.cellSizeLogicalPx = kFramebufferCheckerboardSize;
   // The window framebuffer *is* the anchor: the pattern is fixed to the window
   // and the document slides over it, so the target's own origin is the anchor.

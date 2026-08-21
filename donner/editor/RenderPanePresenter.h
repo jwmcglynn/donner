@@ -9,6 +9,7 @@
 #include "donner/base/Box.h"
 #include "donner/base/Path.h"
 #include "donner/base/Vector2.h"
+#include "donner/editor/DocumentCompositeTexture.h"
 #include "donner/editor/GlTextureCache.h"
 #include "donner/editor/MenuBarPresenter.h"
 #include "donner/editor/OverlayRenderer.h"
@@ -46,6 +47,7 @@ struct RenderPanePresenterState {
   Entity suppressedLayerEntity = entt::null;
   bool suppressDragTargetTiles = false;
   bool documentPresentedDirectly = false;
+  DocumentCompositeTextureView documentComposite;
   bool compositorTileOverlay = false;
   PerfOverlayMode perfOverlayMode = PerfOverlayMode::Off;
 };

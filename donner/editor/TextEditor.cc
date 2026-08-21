@@ -1521,8 +1521,8 @@ void TextEditor::renderLineBackground(const VisualLine& visualLine, const ImVec2
   const float textStartX =
       lineStart.x + textStart_ + static_cast<float>(visualLine.indentColumns) * charAdvance_.x;
 
-  const auto drawSourceCoordinates = [&](const Coordinates& rangeStart,
-                                         const Coordinates& rangeEnd, ImU32 color) {
+  const auto drawSourceCoordinates = [&](const Coordinates& rangeStart, const Coordinates& rangeEnd,
+                                         ImU32 color) {
     if (rangeEnd.line < visualLine.lineNo || rangeStart.line > visualLine.lineNo) {
       return;
     }
@@ -2272,32 +2272,8 @@ void TextEditor::renderFocusReferenceLinks(ImDrawList* drawList) {
     }
     return bounds;
   };
-  const auto sourcePointIntersectsVisibleRows = [&](const SourcePoint& point) {
-    if (isLineHiddenByFocus(point.line)) {
-      return false;
-    }
-
-    int visualIndex = point.line;
-    if ((wordWrapEnabled_ || focusPartitionActive_) && !visualLines_.empty()) {
-      visualIndex = visualLineIndexForCoordinates(Coordinates(point.line, point.column));
-      if (visualIndex < 0 || visualIndex >= static_cast<int>(visualLines_.size()) ||
-          visualLines_[visualIndex].lineNo != point.line) {
-        return false;
-      }
-    }
-
-    const double rowTop = uiCursorPos_.y + static_cast<double>(visualIndex) * charAdvance_.y;
-    const double rowBottom = rowTop + charAdvance_.y;
-    return rowBottom >= visibleTextBounds.topLeft.y && rowTop <= visibleTextBounds.bottomRight.y;
-  };
-
   drawList->PushClipRect(clipMin, clipMax, true);
   for (const FocusReferenceLink& link : focusPartition_.referenceLinks) {
-    if (!sourcePointIntersectsVisibleRows(link.from)) {
-      ++ropeCost.culledCount;
-      continue;
-    }
-
     const auto layoutStart = std::chrono::steady_clock::now();
     std::optional<FocusReferenceConnectorLayout> layout =
         focusReferenceConnectorLayout(link, visibleLinkIndex);
@@ -2306,10 +2282,7 @@ void TextEditor::renderFocusReferenceLinks(ImDrawList* drawList) {
       continue;
     }
     ++ropeCost.laidOutCount;
-    if (!BoxesIntersect(layoutBounds(*layout), visibleTextBounds)) {
-      ++ropeCost.culledCount;
-      continue;
-    }
+    const Box2d connectorLayoutBounds = layoutBounds(*layout);
 
     const auto drawStaticConnector = [&] {
       const auto drawStart = std::chrono::steady_clock::now();
@@ -2331,10 +2304,13 @@ void TextEditor::renderFocusReferenceLinks(ImDrawList* drawList) {
     };
 
     if (animatedLinkCount >= kMaxAnimatedFocusReferenceRopes) {
+      if (!BoxesIntersect(connectorLayoutBounds, visibleTextBounds)) {
+        ++ropeCost.culledCount;
+        continue;
+      }
       drawStaticConnector();
       continue;
     }
-
     const auto updateStart = std::chrono::steady_clock::now();
     const Vector2d start = ToVector2d(layout->start);
     const Vector2d tip = ToVector2d(layout->tip);
@@ -2361,14 +2337,19 @@ void TextEditor::renderFocusReferenceLinks(ImDrawList* drawList) {
     ropeState.chordLength = chordLength;
     ropeState.lastFrameSeen = focusReferenceRopeFrame_;
     ropeCost.updateMs += MillisecondsSince(updateStart);
-    ++animatedLinkCount;
 
     const std::optional<Box2d> routeBounds = ropeState.path.bounds();
-    if (routeBounds.has_value() && !BoxesIntersect(*routeBounds, visibleTextBounds)) {
+    Box2d completeRouteBounds = connectorLayoutBounds;
+    if (routeBounds.has_value()) {
+      AddPointToBox(&completeRouteBounds, ToImVec2(routeBounds->topLeft));
+      AddPointToBox(&completeRouteBounds, ToImVec2(routeBounds->bottomRight));
+    }
+    if (!BoxesIntersect(completeRouteBounds, visibleTextBounds)) {
       ++ropeCost.culledCount;
-      ++visibleLinkIndex;
+      focusReferenceRopes_.erase(link);
       continue;
     }
+    ++animatedLinkCount;
 
     const auto drawStart = std::chrono::steady_clock::now();
     const ImU32 color = ropeState.hovered ? BrightenReferenceColor(layout->color) : layout->color;

@@ -128,17 +128,18 @@ std::optional<std::string> EncodeBitmapPngBase64(const svg::RendererBitmap& bitm
   return Base64Encode(png);
 }
 
-json RenderResultJson(const RenderResult& result, ToolCallResult* out,
-                      const EditorControlSession::CaptureOptions& capture,
+json RenderResultJson(const RenderResult& result, const svg::RendererBitmap* presentedBitmap,
+                      ToolCallResult* out, const EditorControlSession::CaptureOptions& capture,
                       std::string_view imagePrefix) {
+  const svg::RendererBitmap& finalBitmap = presentedBitmap ? *presentedBitmap : result.bitmap;
   json resultJson{
       {"version", result.version},
       {"worker_ms", result.workerMs},
-      {"bitmap", BitmapSummary(result.bitmap)},
+      {"bitmap", BitmapSummary(finalBitmap)},
   };
 
   if (capture.includeFinalFrame) {
-    AttachBitmapImage(out, std::string(imagePrefix) + "/final_frame", result.bitmap,
+    AttachBitmapImage(out, std::string(imagePrefix) + "/final_frame", finalBitmap,
                       capture.embedPngBase64, &resultJson["bitmap"]);
   }
 
@@ -187,7 +188,10 @@ json CapturedRenderResultJson(const EditorControlSession::CapturedRenderResult& 
                               ToolCallResult* out,
                               const EditorControlSession::CaptureOptions& capture,
                               std::string_view imagePrefix) {
-  json resultJson = RenderResultJson(captured.renderResult, out, capture, imagePrefix);
+  const svg::RendererBitmap* presentedBitmap =
+      captured.presentedBitmap.has_value() ? &*captured.presentedBitmap : nullptr;
+  json resultJson =
+      RenderResultJson(captured.renderResult, presentedBitmap, out, capture, imagePrefix);
   resultJson["display_preview"] = DisplayFrameJson(captured.displayFrame);
   return resultJson;
 }

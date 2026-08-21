@@ -52,8 +52,10 @@ std::optional<PresentedDragBaseline> PresentedBaselineFromDragPreviews(
  * can disagree and the chrome annotates pixels that moved.
  *
  * @param viewport Viewport this frame's document pixels are placed with.
+ * @param framebufferFromLogicalScale Physical framebuffer pixels per ImGui logical pixel.
  */
-[[nodiscard]] Transform2d PresentedFramebufferFromDocumentTransform(const ViewportState& viewport);
+[[nodiscard]] Transform2d PresentedFramebufferFromDocumentTransform(
+    const ViewportState& viewport, const Vector2d& framebufferFromLogicalScale);
 
 /**
  * Return @p snapshot re-pointed at the transform @p presentedViewport places
@@ -65,10 +67,12 @@ std::optional<PresentedDragBaseline> PresentedBaselineFromDragPreviews(
  * other than the presented one.
  *
  * @param presentedViewport Viewport this frame's document pixels landed in.
+ * @param framebufferFromLogicalScale Physical framebuffer pixels per ImGui logical pixel.
  * @param snapshot Captured chrome geometry.
  */
 [[nodiscard]] SelectionChromeSnapshot ChromePlacedOnPresentedDocument(
-    const ViewportState& presentedViewport, SelectionChromeSnapshot snapshot);
+    const ViewportState& presentedViewport, const Vector2d& framebufferFromLogicalScale,
+    SelectionChromeSnapshot snapshot);
 
 /// Everything the immediate chrome pass needs to draw one frame of editor
 /// chrome. Captured by value because the direct-render callback runs later in
@@ -98,17 +102,18 @@ public:
    *
    * @param target Window framebuffer for this frame.
    * @param imageClipRect Render-pane rect in screen pixels; the checkerboard is clipped to it.
-   * @param devicePixelRatio Device pixels per logical pixel.
+   * @param framebufferFromLogicalScale Physical framebuffer pixels per ImGui logical pixel.
    * @return Number of draws submitted, for the frame cost breakdown.
    */
   [[nodiscard]] int draw(const gui::EditorWindowWgpuRenderTarget& target,
-                         const Box2d& imageClipRect, double devicePixelRatio);
+                         const Box2d& imageClipRect, const Vector2d& framebufferFromLogicalScale);
 
 private:
   /// The device-pixel scissor covering @p screenBox, or nullopt when the box is
   /// degenerate or entirely outside the framebuffer.
   [[nodiscard]] static std::optional<geode::CheckerboardScissorPx> ScissorRectFromScreenBox(
-      const Box2d& screenBox, double devicePixelRatio, const Vector2i& framebufferSizePx);
+      const Box2d& screenBox, const Vector2d& framebufferFromLogicalScale,
+      const Vector2i& framebufferSizePx);
 
   std::shared_ptr<geode::GeodeDevice> device_;
   geode::GeodeCheckerboardPass checkerboardPass_;

@@ -21,7 +21,8 @@ When extending the UI:
 - update the focused theme or visual replay coverage for changed contracts
 
 The source pane is collapsed on startup behind the left reveal rail. Source-navigation commands
-open it automatically. Transform controls use responsive Position, Size, and Rotation rows; the
+open it automatically through a fixed-width slide, so the source text does not compress during the
+transition. Transform controls use responsive Position, Size, and Rotation rows; the
 advanced matrix remains available through its disclosure. Numeric fields drag to adjust and enter
 text mode on a simple click-release. Tool and cursor SVGs use black cores with white halos so they
 remain legible over light and dark content. The toolbar exposes only ready tools; unfinished path
@@ -35,8 +36,10 @@ DOM rewrap and source writeback once on release; text and select handles share t
 Text input is coalesced into one document synchronization per UI frame. Active move chrome uses
 gesture-owned bounds instead of rewalking selected path geometry, and cached drag pixels are matched
 to live selections by entity identity. Source reveal preserves the canvas center and keeps the
-existing full-document raster when a pane-bounded raster would be larger. CSS source annotations run
-against an isolated source snapshot and are applied only after revision validation.
+existing full-document raster when a pane-bounded raster would be larger. Reference ropes are
+clipped by their complete route, so the visible middle remains drawn when both endpoints are above
+and below the fold, while fully offscreen routes retain no simulation state. CSS source annotations
+run against an isolated source snapshot and are applied only after revision validation.
 
 ## Building
 

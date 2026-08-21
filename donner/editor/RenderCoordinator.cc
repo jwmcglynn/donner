@@ -1164,8 +1164,14 @@ Entity RenderCoordinator::selectedCompositedEntityForDiagnostics(EditorApp& app)
     return entt::null;
   }
 
-  return app.document().document().withReadAccess(
-      [this, &app](svg::DocumentReadAccess&) { return selectedCompositedEntity(app); });
+  const svg::SVGElement& selected = *app.selectedElement();
+  return selected.withReadAccess(
+      [&selected](svg::DocumentReadAccess&, EntityHandle handle) -> Entity {
+        if (!selected.isa<svg::SVGGraphicsElement>() || IsDisplayNone(selected)) {
+          return entt::null;
+        }
+        return handle.entity();
+      });
 }
 
 std::vector<Entity> RenderCoordinator::selectedCompositedExtraEntities(EditorApp& app,

@@ -415,7 +415,7 @@ bool ParseBazelGlRnrReplayResult(const json& object, repro::GlRnrReplayResult* r
 
 std::vector<std::string> BazelGlRnrReplayCommand(const repro::GlRnrReplayOptions& options) {
   std::vector<std::string> args{
-      "bazel",
+      "tools/llm-bazel-wrap.sh",
       "run",
       "--noshow_progress",
       "--noshow_loading_progress",
@@ -454,6 +454,9 @@ std::vector<std::string> BazelGlRnrReplayCommand(const repro::GlRnrReplayOptions
   }
   if (options.driveDocumentSpaceInput) {
     args.push_back("--drive-document-input");
+  }
+  if (options.sourcePaneVisible) {
+    args.push_back("--source-pane-visible");
   }
   if (options.workerRenderDelayMsForTesting > 0) {
     args.push_back("--worker-delay-ms");

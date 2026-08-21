@@ -66,6 +66,8 @@ struct ReproAction;
 
 namespace donner::editor {
 
+class DocumentPresentationCompositor;
+
 namespace internal {
 struct ToolbarPaintState;
 }
@@ -287,6 +289,10 @@ public:
   ///
   /// @param action Tool or paint action decoded from a replay frame.
   void applyReplayActionForTesting(const repro::ReproAction& action);
+  /// Set the source-pane target visibility before deterministic replay frames.
+  ///
+  /// @param visible True to open the source pane.
+  void setSourcePaneVisibleForReplay(bool visible) { setSourcePaneVisible(visible); }
   /// Current selection label for replay/readback harnesses.
   [[nodiscard]] std::optional<std::string> selectedElementLabelForReadback() const;
 
@@ -390,7 +396,8 @@ private:
   /// Selects every selectable element on the canvas via the shared `setSelection()` path, so the
   /// canvas highlight, source-pane sync, and overlay all update together. No-op without a document.
   void selectAllCanvasElements();
-  void renderSourcePane(float paneOriginY, float paneHeight, float paneWidth, ImFont* codeFont);
+  void renderSourcePane(float paneOriginX, float paneOriginY, float paneHeight, float paneWidth,
+                        ImFont* codeFont);
   void renderRenderPane(ImGuiWindowFlags paneFlags);
   // Frame stages split out of `runFrame` and `renderRenderPane`, deliberately kept out of line.
   //
@@ -454,7 +461,7 @@ private:
   [[nodiscard]] FormatBarFontPreview fontPreviewForFamily(std::string_view family);
   void renderSamplePicker(const ImVec2& paneOrigin, const ImVec2& contentRegion);
   void renderSourcePaneSplitter(float windowWidth, float paneOriginY, float paneHeight,
-                                float sourcePaneWidth);
+                                float sourcePaneEdgeX);
   /// Submit the host window and DockSpace that own the canvas (central node) and
   /// the right-column dockable panels, (re)building the default locked layout on
   /// first frame, after a reset, or when the docked-panel set changes.
@@ -640,8 +647,12 @@ private:
   bool sidebarSnapshotRefreshPending_ = false;
   /// Last paint presentation read while the document was idle. The renderer
   /// owns the document registry while busy, so worker frames replay this
-  /// value instead of substituting the unrelated authoring paint.
+  /// value instead of substituting the unrelated authoring paint. The owner
+  /// fields prevent a drag that changes selection from replaying the previous
+  /// element's paint.
   std::unique_ptr<internal::ToolbarPaintState> toolbarPaintSnapshot_;
+  svg::SVGDocumentHandle toolbarPaintSnapshotDocument_;
+  std::optional<Entity> toolbarPaintSnapshotSelection_;
   /// Document-derived menu/shortcut state from the last idle UI epoch. Busy frames must replay
   /// these values instead of traversing the live registry behind the worker's write guard.
   bool cachedCanvasHasSelectableElements_ = false;
@@ -665,6 +676,8 @@ private:
   std::unique_ptr<FramebufferCheckerboardRenderer> directCheckerboardRenderer_;
   std::unique_ptr<svg::RendererGeode> directDocumentRenderer_;
   std::unique_ptr<svg::RendererGeode> directOverlayRenderer_;
+#else
+  std::unique_ptr<DocumentPresentationCompositor> documentPresentationCompositor_;
 #endif
 
   std::string lastWindowTitle_;
@@ -766,6 +779,8 @@ private:
   bool sourceFocusMode_ = true;
   /// Preferred width for the source pane when it is visible.
   float sourcePaneWidth_ = 560.0f;
+  /// Linear progress for the source-pane slide animation.
+  float sourcePaneRevealProgress_ = 0.0f;
   bool sourcePaneVisible_ = false;
   bool showSamplePicker_ = false;
   bool welcomePlaceholderActive_ = false;

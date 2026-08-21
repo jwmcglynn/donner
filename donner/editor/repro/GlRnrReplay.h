@@ -58,6 +58,10 @@ struct GlRnrReplayOptions {
   int workerRenderDelayMsForTesting = 0;
   /// Drive canvas tool input from recorded document coordinates instead of GUI screen hit-testing.
   bool driveDocumentSpaceInput = false;
+  /// Set the source pane's animation target visible before the first frame.
+  ///
+  /// Frame zero captures the beginning of the slide-in transition.
+  bool sourcePaneVisible = false;
   /// Suppress non-document render-pane chrome when writing captures.
   bool contentOnlyCapture = false;
   /// Read retained GPU textures back to count diagnostic pixels. Expensive and disabled unless a
@@ -259,6 +263,16 @@ struct GlRnrReplayResult {
  * @param cropMode Output crop mode.
  */
 [[nodiscard]] std::string_view GlRnrReplayCropModeSuffix(GlRnrReplayCropMode cropMode);
+
+/**
+ * Return the pixel scale between a captured framebuffer and ImGui's logical display.
+ *
+ * @param framebufferSize Captured framebuffer dimensions in physical pixels.
+ * @param logicalDisplaySize ImGui display dimensions in logical pixels.
+ * @return Per-axis framebuffer pixels per logical pixel, or (1, 1) for invalid dimensions.
+ */
+[[nodiscard]] Vector2d GlRnrReplayFramebufferFromLogicalScale(const Vector2i& framebufferSize,
+                                                              const Vector2d& logicalDisplaySize);
 
 /**
  * Replay an `.rnr` recording through `EditorShell`, capture the OpenGL

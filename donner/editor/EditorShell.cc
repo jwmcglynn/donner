@@ -35,6 +35,7 @@
 #include "donner/css/parser/ColorParser.h"
 #include "donner/editor/AttributeWriteback.h"
 #include "donner/editor/DisclosureChevron.h"
+#include "donner/editor/DocumentPresentationCompositor.h"
 #include "donner/editor/DocumentSave.h"
 #include "donner/editor/DragCoalesce.h"
 #include "donner/editor/EditorDockLayout.h"
@@ -304,30 +305,31 @@ void AccumulateFrameLoopPhaseCost(double layoutMs, double menusDialogsMs, double
 }
 
 void PublishPresentationResourceStats(double totalTrackedBytes, double peakTrackedBytes,
-                                      double pendingRetiredBytes, double agedRetiredBytes,
-                                      double activeTileTextures, double overviewTileTextures,
-                                      double pendingRetiredTextures, double agedRetiredTextures,
-                                      double retiredFrameCount, double lifetimeTextureCreates,
-                                      double lifetimeBufferCreates) {
+                                      double documentCompositeBytes, double pendingRetiredBytes,
+                                      double agedRetiredBytes, double activeTileTextures,
+                                      double overviewTileTextures, double pendingRetiredTextures,
+                                      double agedRetiredTextures, double retiredFrameCount,
+                                      double lifetimeTextureCreates, double lifetimeBufferCreates) {
   MAIN_THREAD_ASYNC_EM_ASM(
       {
         window['__donnerPresentationResourceStats'] = ({
           'totalTrackedBytes' : $0,
           'peakTrackedBytes' : $1,
-          'pendingRetiredBytes' : $2,
-          'agedRetiredBytes' : $3,
-          'activeTileTextures' : $4,
-          'overviewTileTextures' : $5,
-          'pendingRetiredTextures' : $6,
-          'agedRetiredTextures' : $7,
-          'retiredFrameCount' : $8,
-          'lifetimeTextureCreates' : $9,
-          'lifetimeBufferCreates' : $10,
+          'documentCompositeBytes' : $2,
+          'pendingRetiredBytes' : $3,
+          'agedRetiredBytes' : $4,
+          'activeTileTextures' : $5,
+          'overviewTileTextures' : $6,
+          'pendingRetiredTextures' : $7,
+          'agedRetiredTextures' : $8,
+          'retiredFrameCount' : $9,
+          'lifetimeTextureCreates' : $10,
+          'lifetimeBufferCreates' : $11,
         });
       },
-      totalTrackedBytes, peakTrackedBytes, pendingRetiredBytes, agedRetiredBytes,
-      activeTileTextures, overviewTileTextures, pendingRetiredTextures, agedRetiredTextures,
-      retiredFrameCount, lifetimeTextureCreates, lifetimeBufferCreates);
+      totalTrackedBytes, peakTrackedBytes, documentCompositeBytes, pendingRetiredBytes,
+      agedRetiredBytes, activeTileTextures, overviewTileTextures, pendingRetiredTextures,
+      agedRetiredTextures, retiredFrameCount, lifetimeTextureCreates, lifetimeBufferCreates);
 }
 
 #endif
@@ -1266,6 +1268,8 @@ EditorShell::EditorShell(gui::EditorWindow& window, EditorShellOptions options)
     // unique_ptr is released.
     ConfigureEmbeddedSvgIconRenderer(*directOverlayRenderer_);
   }
+#else
+  documentPresentationCompositor_ = std::make_unique<DocumentPresentationCompositor>();
 #endif
   PrewarmEditorIcons();
   if (!rotateCursorSet_.initialize(window_.rawHandle(), window_.geodeDevice())) {
@@ -1322,6 +1326,10 @@ std::optional<float> EditorShell::nextIdleWakeSeconds() const {
   includeWake(documentSyncController_.nextTextSyncWakeSeconds());
   includeWake(textEditor_.nextFlashWakeSeconds());
   includeWake(textEditor_.nextRopeAnimationWakeSeconds());
+  const bool sourcePaneTargetVisible = !adaptiveUiLayout_.compactTouch() && sourcePaneVisible_;
+  if (sourcePaneRevealProgress_ != (sourcePaneTargetVisible ? 1.0f : 0.0f)) {
+    includeWake(1.0f / 60.0f);
+  }
   // Caret blink: wake at the next visibility flip while a text session is
   // editing. The flip only re-pushes the caret chrome and recaptures the
   // overlay snapshot; it never schedules a content render.
@@ -1753,6 +1761,7 @@ void EditorShell::maybeLogResourceDiagnostics(const FrameCostBreakdown& frameCos
   std::cerr << "[DonnerResource] frame=" << resourceDiagnosticsFrame_
             << " tracked_mib=" << MegabytesRoundedUp(resources.totalTrackedBytes)
             << " peak_mib=" << MegabytesRoundedUp(resources.peakTrackedBytes)
+            << " document_composite_mib=" << MegabytesRoundedUp(resources.documentCompositeBytes)
             << " active_tile_mib=" << MegabytesRoundedUp(resources.activeTileBytes)
             << " overview_tile_mib=" << MegabytesRoundedUp(resources.overviewTileBytes)
             << " retired_mib="
@@ -2937,11 +2946,11 @@ void EditorShell::convertSelectedTextToOutlines() {
   app_.setSelection(std::move(newSelection));
 }
 
-void EditorShell::renderSourcePane(float paneOriginY, float paneHeight, float paneWidth,
-                                   ImFont* codeFont) {
+void EditorShell::renderSourcePane(float paneOriginX, float paneOriginY, float paneHeight,
+                                   float paneWidth, ImFont* codeFont) {
   constexpr ImGuiWindowFlags kPaneFlags = ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize |
                                           ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoTitleBar;
-  ImGui::SetNextWindowPos(ImVec2(0.0f, paneOriginY), ImGuiCond_Always);
+  ImGui::SetNextWindowPos(ImVec2(paneOriginX, paneOriginY), ImGuiCond_Always);
   ImGui::SetNextWindowSize(ImVec2(paneWidth, paneHeight), ImGuiCond_Always);
   ImGui::Begin("Source", nullptr, kPaneFlags);
   // TextEditor owns the canonical, edit-remapped diagnostic ranges used for both inline
@@ -3049,7 +3058,23 @@ Box2d EditorShell::canvasZoomControlScreenRect() const {
 
 void EditorShell::renderFillStrokeToolbarWidget() {
   const bool rendererBusy = renderCoordinator_.asyncRenderer().isBusy();
-  const bool canEditPaint = app_.hasDocument() && !rendererBusy;
+  const bool canvasInteractionActive = selectTool_.isDragging() || selectTool_.isMarqueeing() ||
+                                       penTool_.isDraggingAnchor() || textTool_.isDraggingBox() ||
+                                       textTool_.isAdjustingFrame();
+  svg::SVGDocumentHandle currentPaintDocument;
+  std::optional<Entity> currentPaintSelection;
+  if (app_.hasDocument()) {
+    currentPaintDocument = app_.document().document().handle();
+    if (!app_.selectedElements().empty()) {
+      currentPaintSelection = app_.selectedElements().front().unsafeEntityHandle().entity();
+    }
+  }
+  const bool paintSnapshotMatchesSelection =
+      toolbarPaintSnapshot_ != nullptr && toolbarPaintSnapshotDocument_ == currentPaintDocument &&
+      toolbarPaintSnapshotSelection_ == currentPaintSelection;
+  const FillStrokeWidgetInteractionState interactionState = ResolveFillStrokeWidgetInteractionState(
+      app_.hasDocument(), rendererBusy, canvasInteractionActive, paintSnapshotMatchesSelection);
+  const bool canEditPaint = interactionState.canEdit;
   std::string editorSource;
   std::string documentSource;
   std::optional<std::string_view> sourceForRanges;
@@ -3060,14 +3085,17 @@ void EditorShell::renderFillStrokeToolbarWidget() {
       sourceForRanges = std::string_view(editorSource);
     }
   }
-  // The worker owns the selected element while busy. Preserve the last idle
-  // presentation instead of replacing the selected paint with the unrelated
-  // authoring default for every render update.
+  // The worker owns the selected element while busy, and drag-frame handoffs
+  // alternate between busy and idle as previews land. Preserve one paint and
+  // enabled-state presentation for the entire canvas interaction instead of
+  // letting the swap arrow and selected swatches oscillate with worker state.
   ToolbarPaintState paintState;
-  if (!rendererBusy) {
+  if (interactionState.refreshPaintSnapshot) {
     paintState = ToolbarPaintStateForApp(app_, sourceForRanges);
     toolbarPaintSnapshot_ = std::make_unique<ToolbarPaintState>(paintState);
-  } else if (toolbarPaintSnapshot_ != nullptr) {
+    toolbarPaintSnapshotDocument_ = std::move(currentPaintDocument);
+    toolbarPaintSnapshotSelection_ = currentPaintSelection;
+  } else if (paintSnapshotMatchesSelection) {
     paintState = *toolbarPaintSnapshot_;
   } else {
     paintState = ToolbarPaintStateForActivePaint(app_.activePaintStyle());
@@ -4200,8 +4228,6 @@ void EditorShell::renderRenderPanePresentation(
   }
   const Entity presentSuppressedLayerEntity =
       penPreviewSuppressedEntity != entt::null ? penPreviewSuppressedEntity : suppressedLayerEntity;
-  interactionController_.frameHistory().setLatestMemorySample(
-      MemorySampleFromPresentationResources(textures_.presentationResourceStats()));
   // Document tiles use the direct framebuffer path where possible. The
   // framebuffer pass also owns the transparency checkerboard unconditionally:
   // there is no draw-list checkerboard to fall back to, because every pixel the
@@ -4235,12 +4261,9 @@ void EditorShell::renderRenderPanePresentation(
   };
   const bool drawOverviewTiles =
       ShouldPresentOverviewTiles(textures_.activeTilesViewportBounded(), textures_.overviewTiles());
-  if (!contentOnlyCaptureThisFrame_ && directDocumentRenderer_ != nullptr &&
-      directDocumentClipRect.has_value()) {
+  if (directDocumentRenderer_ != nullptr && directDocumentClipRect.has_value()) {
     // Tiles ride the framebuffer pass only when every one of them is a Geode
-    // texture. The remaining case is the browser bitmap bridge, whose CPU tiles
-    // are still blitted as images by the render pane - an image blit, never
-    // path geometry.
+    // texture. A non-Geode compatibility payload falls back through the render pane.
     underlayPresentsTiles =
         ((drawOverviewTiles && hasDirectlyPresentableTile(textures_.overviewTiles())) ||
          hasDirectlyPresentableTile(textures_.tiles())) &&
@@ -4294,6 +4317,32 @@ void EditorShell::renderRenderPanePresentation(
     };
   }
   installImmediateChromePlan(std::move(chromePlan));
+#ifndef DONNER_EDITOR_WGPU
+  const std::optional<Box2d> intermediateDocumentClipRect =
+      PresentedImageClipRect(paneRect, presentedDocumentViewport.imageScreenRect());
+  DocumentCompositeTextureView documentComposite;
+  if (documentPresentationCompositor_ != nullptr && intermediateDocumentClipRect.has_value() &&
+      (!textures_.tiles().empty() || !textures_.overviewTiles().empty())) {
+    const bool drawOverviewTiles = ShouldPresentOverviewTiles(
+        textures_.activeTilesViewportBounded(), textures_.overviewTiles());
+    const std::vector<GlTextureCache::TileView> noOverviewTiles;
+    documentComposite = documentPresentationCompositor_->compose(
+        presentedDocumentViewport, *intermediateDocumentClipRect,
+        drawOverviewTiles ? textures_.overviewTiles() : noOverviewTiles, textures_.tiles(),
+        activeDragPreview, displayedDragPreview, presentSuppressedLayerEntity,
+        suppressDragTargetTiles);
+  } else if (documentPresentationCompositor_ != nullptr) {
+    documentPresentationCompositor_->reset();
+  }
+  textures_.setDocumentCompositeBytes(documentPresentationCompositor_ != nullptr
+                                          ? documentPresentationCompositor_->retainedBytes()
+                                          : 0u);
+#else
+  const DocumentCompositeTextureView documentComposite;
+  textures_.setDocumentCompositeBytes(0u);
+#endif
+  interactionController_.frameHistory().setLatestMemorySample(
+      MemorySampleFromPresentationResources(textures_.presentationResourceStats()));
   RenderPanePresenterState paneState{
       .viewport = interactionController_.viewport(),
       .presentedDocumentViewport = &presentedDocumentViewport,
@@ -4306,6 +4355,7 @@ void EditorShell::renderRenderPanePresentation(
       .suppressedLayerEntity = presentSuppressedLayerEntity,
       .suppressDragTargetTiles = suppressDragTargetTiles,
       .documentPresentedDirectly = documentPresentedDirectly,
+      .documentComposite = documentComposite,
       .compositorTileOverlay = !contentOnlyCaptureThisFrame_ && compositorTileOverlay_,
       .perfOverlayMode = contentOnlyCaptureThisFrame_ ? PerfOverlayMode::Off : perfOverlayMode_,
   };
@@ -5261,7 +5311,7 @@ void EditorShell::renderLayerPanelContents() {
 }
 
 void EditorShell::renderSourcePaneSplitter(float windowWidth, float paneOriginY, float paneHeight,
-                                           float sourcePaneWidth) {
+                                           float sourcePaneEdgeX) {
   const EditorTheme& theme = EditorTheme::Active();
   ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
   ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
@@ -5269,17 +5319,18 @@ void EditorShell::renderSourcePaneSplitter(float windowWidth, float paneOriginY,
       ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse |
       ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoScrollbar |
       ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBackground;
-  const bool renderedVisibleSplitter = sourcePaneVisible_ && sourcePaneWidth > 0.0f;
+  const bool renderedVisibleSplitter = sourcePaneRevealProgress_ > 0.0f && sourcePaneEdgeX > 0.0f;
+  const bool sourcePaneSettledOpen = sourcePaneVisible_ && sourcePaneRevealProgress_ >= 1.0f;
 
   if (renderedVisibleSplitter) {
-    const float splitterLeft = sourcePaneWidth - kSourcePaneSplitterThickness * 0.5f;
+    const float splitterLeft = sourcePaneEdgeX - kSourcePaneSplitterThickness * 0.5f;
     ImGui::SetNextWindowPos(ImVec2(splitterLeft, paneOriginY), ImGuiCond_Always);
     ImGui::SetNextWindowSize(ImVec2(kSourcePaneSplitterThickness, paneHeight), ImGuiCond_Always);
     ImGui::Begin("##source_pane_splitter", nullptr, kSplitterFlags);
     ImGui::InvisibleButton("##source_pane_splitter_handle",
                            ImVec2(kSourcePaneSplitterThickness, paneHeight));
-    if (ImGui::IsItemActive()) {
-      const float nextWidth = sourcePaneWidth + ImGui::GetIO().MouseDelta.x;
+    if (sourcePaneSettledOpen && ImGui::IsItemActive()) {
+      const float nextWidth = sourcePaneWidth_ + ImGui::GetIO().MouseDelta.x;
       if (nextWidth < kSourcePaneCollapseThreshold) {
         setSourcePaneVisible(false);
       } else {
@@ -5305,7 +5356,7 @@ void EditorShell::renderSourcePaneSplitter(float windowWidth, float paneOriginY,
     }
   }
 
-  if (renderedVisibleSplitter && (ImGui::IsItemHovered() || ImGui::IsItemActive())) {
+  if (sourcePaneSettledOpen && (ImGui::IsItemHovered() || ImGui::IsItemActive())) {
     ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
   } else if (!renderedVisibleSplitter && ImGui::IsItemHovered()) {
     ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
@@ -6772,7 +6823,9 @@ void EditorShell::recordFrameTelemetry(
   // `donner/base/MemoryAttribution.h`); the render thread publishes the
   // compositor's half from `AsyncRenderer::workerLoop`. The frame publisher
   // reads both and is the only writer of the page-visible stats object.
-  SetRetainedBytes(MemoryCategory::PresentationTiles, presentationResources.activeTileBytes);
+  SetRetainedBytes(
+      MemoryCategory::PresentationTiles,
+      presentationResources.activeTileBytes + presentationResources.documentCompositeBytes);
   SetEntryCount(MemoryCategory::PresentationTiles,
                 static_cast<std::uint64_t>(presentationResources.activeTileTextures));
   SetRetainedBytes(MemoryCategory::PresentationOverviewTiles,
@@ -6824,6 +6877,7 @@ void EditorShell::recordFrameTelemetry(
   PublishPresentationResourceStats(
       static_cast<double>(presentationResources.totalTrackedBytes),
       static_cast<double>(presentationResources.peakTrackedBytes),
+      static_cast<double>(presentationResources.documentCompositeBytes),
       static_cast<double>(presentationResources.pendingRetiredBytes),
       static_cast<double>(presentationResources.agedRetiredBytes),
       static_cast<double>(presentationResources.activeTileTextures),
@@ -7019,6 +7073,8 @@ void EditorShell::runFrame() {
       .preferTouch = kPreferTouchInput,
   });
   const bool compactUi = adaptiveUiLayout_.compactTouch();
+  sourcePaneRevealProgress_ = AdvanceSourcePaneRevealProgress(
+      sourcePaneRevealProgress_, !compactUi && sourcePaneVisible_, ImGui::GetIO().DeltaTime);
   const float menuBarHeight = compactUi ? adaptiveUiLayout_.topBarHeight : ImGui::GetFrameHeight();
   const float paneOriginY = menuBarHeight;
   const float paneHeight = std::max(0.0f, static_cast<float>(windowSize.y) - paneOriginY);
@@ -7026,9 +7082,10 @@ void EditorShell::runFrame() {
       .windowWidth = static_cast<float>(windowSize.x),
       .sourcePaneVisible = !compactUi && sourcePaneVisible_,
       .sourcePaneWidth = sourcePaneWidth_,
+      .sourcePaneRevealProgress = compactUi ? 0.0f : sourcePaneRevealProgress_,
       .minSourcePaneWidth = kMinSourcePaneWidth,
       .maxSourcePaneWidth = kMaxSourcePaneWidth,
-      .sourcePaneRailWidth = kSourcePaneRevealHandleWidth,
+      .sourcePaneRailWidth = compactUi ? 0.0f : kSourcePaneRevealHandleWidth,
       .rightPaneWidth = rightPaneWidth_,
       .rightPaneVisible = !compactUi,
       .minRightPaneWidth = kMinRightPaneWidth,
@@ -7076,8 +7133,9 @@ void EditorShell::runFrame() {
   markPhase(mainFrameCost.menusDialogsMs);
 
   std::ignore = highlightSelectionSourceIfNeeded();
-  if (!compactUi && sourcePaneVisible_) {
-    renderSourcePane(paneOriginY, paneHeight, mainPaneLayout.sourcePaneWidth, codeFont_);
+  if (!compactUi && mainPaneLayout.sourcePaneWidth > 0.0f) {
+    renderSourcePane(mainPaneLayout.sourcePaneX, paneOriginY, paneHeight,
+                     mainPaneLayout.sourcePaneWidth, codeFont_);
   }
   markPhase(mainFrameCost.sourcePaneMs);
   // The canvas pane must never window-scroll: an ImGui scrollbar here would
@@ -7097,7 +7155,7 @@ void EditorShell::runFrame() {
   // Debug float are now owned by the DockSpace submitted above.
   if (!compactUi) {
     renderSourcePaneSplitter(static_cast<float>(windowSize.x), paneOriginY, paneHeight,
-                             mainPaneLayout.sourcePaneWidth);
+                             mainPaneLayout.renderPaneX);
   }
   if (!contentOnlyCaptureThisFrame_ && showSamplePicker_) {
     renderSamplePicker(ImVec2(0.0f, paneOriginY),

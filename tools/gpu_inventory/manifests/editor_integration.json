@@ -35,6 +35,9 @@
     "donner/editor/CompositorDebugPanel.h": {
       "usesEditorWgpuDefine": true
     },
+    "donner/editor/DocumentPresentationCompositor.cc": {
+      "usesEditorWgpuDefine": true
+    },
     "donner/editor/EditorShell.cc": {
       "usesEditorWgpuDefine": true,
       "wgpuCFunctions": [
@@ -103,6 +106,9 @@
       ]
     },
     "donner/editor/ImGuiBackendIncludes.h": {
+      "usesEditorWgpuDefine": true
+    },
+    "donner/editor/RenderPanePresenter.cc": {
       "usesEditorWgpuDefine": true
     },
     "donner/editor/ViewportInteractionController.h": {
@@ -312,6 +318,9 @@
       ]
     },
     "donner/editor/tests/LayersPanel_tests.cc": {
+      "usesEditorWgpuDefine": true
+    },
+    "donner/editor/tests/RenderPanePresenterVisualRepro_tests.cc": {
       "usesEditorWgpuDefine": true
     },
     "donner/editor/tests/ViewportInteractionController_tests.cc": {

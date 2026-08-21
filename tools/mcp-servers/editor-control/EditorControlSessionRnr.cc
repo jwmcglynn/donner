@@ -500,6 +500,7 @@ ToolCallResult EditorControlSession::replayRnr(const json& arguments) {
   bool glVisible = false;
   bool glPace = true;
   bool glDriveDocumentInput = false;
+  bool glSourcePaneVisible = false;
   int glCaptureFrame = -1;
   int glCaptureLeftMouseDown = 0;
   int glMaxFrame = -1;
@@ -524,6 +525,7 @@ ToolCallResult EditorControlSession::replayRnr(const json& arguments) {
       !ReadOptionalBool(arguments, "gl_pace", true, &glPace, &error) ||
       !ReadOptionalBool(arguments, "gl_drive_document_input", false, &glDriveDocumentInput,
                         &error) ||
+      !ReadOptionalBool(arguments, "gl_source_pane_visible", false, &glSourcePaneVisible, &error) ||
       !ReadOptionalInt(arguments, "gl_capture_frame", -1, &glCaptureFrame, &error) ||
       !ReadOptionalInt(arguments, "gl_capture_left_mousedown", 0, &glCaptureLeftMouseDown,
                        &error) ||
@@ -585,6 +587,7 @@ ToolCallResult EditorControlSession::replayRnr(const json& arguments) {
     replayOptions.pace = glPace;
     replayOptions.visible = glVisible;
     replayOptions.driveDocumentSpaceInput = glDriveDocumentInput;
+    replayOptions.sourcePaneVisible = glSourcePaneVisible;
 
     GlReadbackRunner glReadbackRunner = GlReadbackRunner::InProcess;
     if (!SelectGlReadbackRunner(&glReadbackRunner, &error)) {
@@ -616,6 +619,7 @@ ToolCallResult EditorControlSession::replayRnr(const json& arguments) {
         {"output_dir", replayOptions.outputDir.string()},
         {"crop", glCrop},
         {"gl_drive_document_input", replayOptions.driveDocumentSpaceInput},
+        {"gl_source_pane_visible", replayOptions.sourcePaneVisible},
         {"capture_count", replayResult.captures.size()},
         {"captures", json::array()},
     };

@@ -10,6 +10,7 @@
 #include <cstring>
 #include <filesystem>
 #include <iostream>
+#include <iterator>
 #include <optional>
 #include <sstream>
 #include <string>
@@ -198,6 +199,19 @@ TEST(GlRnrReplayTest, CropModeParsingAcceptsAliasesAndRejectsUnknownValues) {
   EXPECT_EQ(repro::GlRnrReplayCropModeSuffix(repro::GlRnrReplayCropMode::DocumentCanvas), "canvas");
 }
 
+TEST(GlRnrReplayTest, CaptureCropScaleComesFromFramebufferAndLogicalDisplaySizes) {
+  EXPECT_EQ(
+      repro::GlRnrReplayFramebufferFromLogicalScale(Vector2i(1280, 960), Vector2d(640.0, 480.0)),
+      Vector2d(2.0, 2.0));
+  EXPECT_EQ(
+      repro::GlRnrReplayFramebufferFromLogicalScale(Vector2i(900, 800), Vector2d(600.0, 400.0)),
+      Vector2d(1.5, 2.0));
+  EXPECT_EQ(repro::GlRnrReplayFramebufferFromLogicalScale(Vector2i::Zero(), Vector2d(640.0, 480.0)),
+            Vector2d(1.0, 1.0));
+  EXPECT_EQ(repro::GlRnrReplayFramebufferFromLogicalScale(Vector2i(1280, 960), Vector2d::Zero()),
+            Vector2d(1.0, 1.0));
+}
+
 TEST(GlRnrReplayTest, RunGlRnrReplayValidatesOptionsBeforeOpeningWindow) {
   repro::GlRnrReplayOptions options;
   repro::GlRnrReplayResult result;
@@ -283,6 +297,22 @@ std::optional<std::filesystem::path> WriteStaticContentReplay(
   file.metadata.windowHeight = 480;
   file.metadata.displayScale = 1.0;
 
+  repro::ReproViewport viewport;
+  viewport.paneOriginX = 220.0;
+  viewport.paneOriginY = 180.0;
+  viewport.paneSizeW = 200.0;
+  viewport.paneSizeH = 120.0;
+  viewport.devicePixelRatio = 1.0;
+  viewport.zoom = 1.0;
+  viewport.panDocX = 100.0;
+  viewport.panDocY = 60.0;
+  viewport.panScreenX = 320.0;
+  viewport.panScreenY = 240.0;
+  viewport.viewBoxX = 0.0;
+  viewport.viewBoxY = 0.0;
+  viewport.viewBoxW = 200.0;
+  viewport.viewBoxH = 120.0;
+
   for (std::uint64_t frameIndex = 0; frameIndex <= lastFrame; ++frameIndex) {
     repro::ReproFrame frame;
     frame.index = frameIndex;
@@ -290,6 +320,7 @@ std::optional<std::filesystem::path> WriteStaticContentReplay(
     frame.deltaMs = 1000.0 / 60.0;
     frame.mouseX = 320.0;
     frame.mouseY = 240.0;
+    frame.viewport = viewport;
     file.frames.push_back(frame);
   }
 
@@ -2156,6 +2187,7 @@ TEST(GlRnrReplayTest, ContentOnlyDocumentCanvasCaptureMatchesRendererGroundTruth
   repro::GlRnrReplayResult result;
   std::string error;
   ASSERT_GL_REPLAY_OR_SKIP(options, result, error);
+  SCOPED_TRACE(CanonicalReplayDiagnostics(result));
 
   std::optional<svg::RendererBitmap> actual = LoadCaptureBitmap(result, kFirstPresentedReplayFrame);
   ASSERT_TRUE(actual.has_value());
@@ -2190,6 +2222,7 @@ TEST(GlRnrReplayTest, DirectDocumentCanvasCaptureIsNotDimmedByRenderPaneBackgrou
   repro::GlRnrReplayResult result;
   std::string error;
   ASSERT_GL_REPLAY_OR_SKIP(options, result, error);
+  SCOPED_TRACE(CanonicalReplayDiagnostics(result));
 
   std::optional<svg::RendererBitmap> actual = LoadCaptureBitmap(result, kFirstPresentedReplayFrame);
   ASSERT_TRUE(actual.has_value());
@@ -2683,11 +2716,17 @@ TEST(GlRnrReplayTest, HighZoomRapidPanKeepsPaneCoveredByContent) {
   std::string error;
   ASSERT_GL_REPLAY_OR_SKIP(options, result, error);
 
-  // Pane rect in device pixels (logical origin 568,29 size 604x863 at DPR 1).
+  // Full captures are in the host framebuffer's physical pixels. Scale the recorded logical pane
+  // instead of assuming its DPR 1 metadata matches the host (Retina replays are 2x).
   // Inset by 8 logical px so pane-border chrome never counts.
   const auto paneCrop = [&](const svg::RendererBitmap& bitmap) {
-    return CropBitmap(*&bitmap,
-                      PixelCrop{.x = 568 + 8, .y = 29 + 8, .width = 604 - 16, .height = 863 - 16});
+    const double captureScaleX = static_cast<double>(bitmap.dimensions.x) / 1600.0;
+    const double captureScaleY = static_cast<double>(bitmap.dimensions.y) / 900.0;
+    return CropBitmap(
+        bitmap, PixelCrop{.x = static_cast<int>(std::lround((568.0 + 8.0) * captureScaleX)),
+                          .y = static_cast<int>(std::lround((29.0 + 8.0) * captureScaleY)),
+                          .width = static_cast<int>(std::lround((604.0 - 16.0) * captureScaleX)),
+                          .height = static_cast<int>(std::lround((863.0 - 16.0) * captureScaleY))});
   };
   // Ratio of pane pixels showing document content (either stripe color).
   // Non-content pixels are the checkerboard/background plus the in-pane
@@ -3220,21 +3259,21 @@ TEST(GlRnrReplayTest, HoldFramesBehindRecordsWithheldReplayDiagnostics) {
   repro::GlRnrReplayResult result;
   std::string error;
   ASSERT_GL_REPLAY_OR_SKIP(options, result, error);
+  SCOPED_TRACE(CanonicalReplayDiagnostics(result));
 
-  // The first result is ready on `kFirstPresentedReplayFrame`; `holdFramesBehind = 1` withholds it
-  // for exactly that one poll and releases it on the next frame.
-  const repro::GlRnrReplayFrameDiagnostics* withheld =
-      FindFrameDiagnostics(result, kFirstPresentedReplayFrame);
-  ASSERT_NE(withheld, nullptr);
+  // Viewport initialization decides which replay frame first posts work. Assert the deterministic
+  // hold relative to the completed result instead of pinning that initialization to a frame index.
+  const auto withheld = std::find_if(
+      result.frameDiagnostics.begin(), result.frameDiagnostics.end(),
+      [](const repro::GlRnrReplayFrameDiagnostics& frame) { return frame.replayResultWithheld; });
+  ASSERT_NE(withheld, result.frameDiagnostics.end());
   EXPECT_EQ(withheld->replayWorkerScheduling, repro::GlRnrReplayWorkerScheduling::HoldFramesBehind);
   EXPECT_EQ(withheld->replayWorkerRenderDelayMsForTesting, 1);
   EXPECT_EQ(withheld->replayHoldFramesBehind, 1);
   EXPECT_EQ(withheld->replayResultHoldPollsThisFrame, 1u);
-  EXPECT_TRUE(withheld->replayResultWithheld);
 
-  const repro::GlRnrReplayFrameDiagnostics* released =
-      FindFrameDiagnostics(result, kFirstPresentedReplayFrame + 1);
-  ASSERT_NE(released, nullptr);
+  const auto released = std::next(withheld);
+  ASSERT_NE(released, result.frameDiagnostics.end());
   EXPECT_EQ(released->replayResultHoldPollsThisFrame, 0u);
   EXPECT_FALSE(released->replayResultWithheld);
   EXPECT_NE(FindCapture(result, kFirstPresentedReplayFrame + 1), nullptr);
@@ -3565,13 +3604,10 @@ TEST(GlRnrReplayTest, GeodeDragZoomRebuildsDonnerDGestureBoundsEveryPresentedFra
         << "Selection overlay was not rebuilt for presented zoom frame " << frame;
     EXPECT_TRUE(diagnostics->frameCost.overlay.selectionBoundsOnly)
         << "Active drag should use gesture-owned bounds chrome on presented zoom frame " << frame;
-    // Gesture-owned bounds chrome keeps exactly one selection outline per selected element so the
-    // outline scales and rotates with the presented object; it drops per-element AABBs and
-    // path-point chrome. Pinned by
-    // `OverlayRendererTest.ActiveCombinedBoundsPreviewKeepsScaledSelectionPath`.
-    EXPECT_EQ(diagnostics->frameCost.overlay.pathCount, 1)
-        << "Active drag lost the gesture-scaled selection outline on presented zoom frame "
-        << frame;
+    // Gesture-owned bounds chrome skips live path and text traversal while the worker may hold the
+    // document. The oriented bounds and handles still advance with the presented object.
+    EXPECT_EQ(diagnostics->frameCost.overlay.pathCount, 0)
+        << "Active drag traversed selection paths on presented zoom frame " << frame;
     EXPECT_EQ(diagnostics->frameCost.overlay.handleCount, 4)
         << "Selection transform handles were not rebuilt for presented zoom frame " << frame;
     EXPECT_GT(diagnostics->frameCost.overlay.payloadBytes, 0u)

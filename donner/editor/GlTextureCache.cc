@@ -889,6 +889,7 @@ PresentationResourceStats GlTextureCache::presentationResourceStats() const {
     return allocationBytes(Vector2i(entry.width, entry.height));
   };
 
+  stats.documentCompositeBytes = documentCompositeBytes_;
   stats.activeTileTextures = static_cast<int>(tileTextures_.size());
   for (const auto& [_, entry] : tileTextures_) {
     if (entry.texture != 0) {
@@ -937,8 +938,9 @@ PresentationResourceStats GlTextureCache::presentationResourceStats() const {
   }
 #endif
 
-  stats.totalTrackedBytes = stats.activeTileBytes + stats.overviewTileBytes +
-                            stats.pendingRetiredBytes + stats.agedRetiredBytes;
+  stats.totalTrackedBytes = stats.documentCompositeBytes + stats.activeTileBytes +
+                            stats.overviewTileBytes + stats.pendingRetiredBytes +
+                            stats.agedRetiredBytes;
   peakTrackedResourceBytes_ = std::max(peakTrackedResourceBytes_, stats.totalTrackedBytes);
   stats.peakTrackedBytes = peakTrackedResourceBytes_;
   return stats;

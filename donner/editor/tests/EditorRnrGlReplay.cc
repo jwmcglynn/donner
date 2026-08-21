@@ -66,7 +66,8 @@ void PrintUsage(std::string_view argv0) {
                "       [--worker-delay-ms <n>]\n"
                "       [--worker-scheduling realtime|drain-each-frame|hold-frames-behind]\n"
                "       [--hold-frames-behind <n>]\n"
-               "       [--drive-document-input] [--content-only-capture]\n"
+               "       [--drive-document-input] [--source-pane-visible]\n"
+               "       [--content-only-capture]\n"
                "       [--visible] [--no-pace] [--print-diagnostics]\n"
                "       [--diagnostics-frame <n>]...\n";
 }
@@ -181,6 +182,11 @@ void PrintUsage(std::string_view argv0) {
 
     if (arg == "--drive-document-input") {
       options->driveDocumentSpaceInput = true;
+      continue;
+    }
+
+    if (arg == "--source-pane-visible") {
+      options->sourcePaneVisible = true;
       continue;
     }
 
@@ -428,7 +434,8 @@ void PrintFrameCost(const FrameCostBreakdown& cost) {
 }
 
 void PrintPresentationResources(const PresentationResourceStats& resources) {
-  std::cout << "{\"active_tile_bytes\":" << resources.activeTileBytes
+  std::cout << "{\"document_composite_bytes\":" << resources.documentCompositeBytes
+            << ",\"active_tile_bytes\":" << resources.activeTileBytes
             << ",\"overview_tile_bytes\":" << resources.overviewTileBytes
             << ",\"pending_retired_bytes\":" << resources.pendingRetiredBytes
             << ",\"aged_retired_bytes\":" << resources.agedRetiredBytes
