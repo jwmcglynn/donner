@@ -257,10 +257,17 @@ class CheckBannedPatternsTests(unittest.TestCase):
                     cwd=repo,
                     check=True,
                 )
+            write_source(current_decision_points)
+            subprocess.run(["git", "add", "."], cwd=repo, check=True)
+            subprocess.run(
+                ["git", "commit", "--allow-empty", "-m", "candidate"],
+                cwd=repo,
+                check=True,
+                capture_output=True,
+            )
             subprocess.run(
                 ["git", "checkout", "--detach"], cwd=repo, check=True, capture_output=True
             )
-            write_source(current_decision_points)
 
             return subprocess.run(
                 [str(repo / "tools" / "lint.sh")],
