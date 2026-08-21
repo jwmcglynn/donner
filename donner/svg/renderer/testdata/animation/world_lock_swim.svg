@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="480" height="566" viewBox="0 0 480 566">
+  <title>World-lock swim artifact</title>
+  <desc>A virtual blue box sways from side to side relative to a fixed physical frame.</desc>
+
+  <rect width="480" height="566" fill="#ffffff"/>
+
+  <!-- The physical-world reference stays fixed. -->
+  <rect x="50" y="58" width="330" height="448" fill="#ffffff" stroke="#222222"
+        stroke-width="4"/>
+  <rect x="380" y="22" width="30" height="520" fill="#f1f1f1" stroke="#222222"
+        stroke-width="4"/>
+
+  <!-- The intended world-locked location. -->
+  <rect x="170" y="216" width="140" height="140" rx="4" fill="none" stroke="#64748b"
+        stroke-width="3" stroke-dasharray="10 9" opacity="0.55"/>
+
+  <!-- The rendered object moves even though the world anchor does not. -->
+  <g>
+    <animateTransform attributeName="transform" type="translate" dur="4s"
+                      values="0 0;55 0;0 0;-55 0;0 0"
+                      keyTimes="0;0.25;0.5;0.75;1"
+                      calcMode="spline"
+                      keySplines="0.42 0 0.58 1;0.42 0 0.58 1;0.42 0 0.58 1;0.42 0 0.58 1"
+                      repeatCount="indefinite"/>
+    <rect x="170" y="216" width="140" height="140" rx="4" fill="#a8d1f5"
+          stroke="#1e88ee" stroke-width="4"/>
+  </g>
+</svg>
