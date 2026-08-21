@@ -212,6 +212,46 @@ class CheckBannedPatternsTests(unittest.TestCase):
 
         self.assertEqual(1, descriptions.count("complex method (11 decision points; limit 10)"))
 
+    def test_const_baseline_overload_does_not_exempt_nonconst_overload(self):
+        branches = "\n".join(
+            f"  if (value == {index}) {{ value += {index}; }}" for index in range(11)
+        )
+        baseline = "void Example::run(int value) const {\n" + branches + "\n}\n"
+        current = baseline + "void Example::run(int value) {\n" + branches + "\n}\n"
+        source_path = self._write_source(current)
+        descriptions = [
+            error[1]
+            for error in check_banned_patterns.check_file(
+                source_path,
+                check_method_complexity=True,
+                method_complexity_baseline=check_banned_patterns._strip_comments_and_strings(
+                    baseline
+                ),
+            )
+        ]
+
+        self.assertEqual(1, descriptions.count("complex method (11 decision points; limit 10)"))
+
+    def test_lvalue_baseline_overload_does_not_exempt_rvalue_overload(self):
+        branches = "\n".join(
+            f"  if (value == {index}) {{ value += {index}; }}" for index in range(11)
+        )
+        baseline = "void Example::run(int value) & {\n" + branches + "\n}\n"
+        current = baseline + "void Example::run(int value) && {\n" + branches + "\n}\n"
+        source_path = self._write_source(current)
+        descriptions = [
+            error[1]
+            for error in check_banned_patterns.check_file(
+                source_path,
+                check_method_complexity=True,
+                method_complexity_baseline=check_banned_patterns._strip_comments_and_strings(
+                    baseline
+                ),
+            )
+        ]
+
+        self.assertEqual(1, descriptions.count("complex method (11 decision points; limit 10)"))
+
     def _run_lint_in_git_repo(
         self, *, current_decision_points: int, provide_origin_main: bool
     ) -> subprocess.CompletedProcess[str]:
