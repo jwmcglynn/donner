@@ -4672,25 +4672,7 @@ void EditorShell::renderSamplePicker(const ImVec2& paneOrigin, const ImVec2& con
     // input arrives to wake the event-driven browser loop.
     window_.wakeEventLoop();
   }
-  if (actions.openGitHub) {
-#ifdef __EMSCRIPTEN__
-    EM_ASM({
-      const url = 'https://github.com/jwmcglynn/donner';
-      const opened = window.open(url, '_blank', 'noopener');
-      if (!opened) {
-        window.location.assign(url);
-      }
-    });
-#elif defined(__APPLE__)
-    const std::string openCommand =
-        std::string("open \"") + std::string(kSamplePickerGitHubUrl) + "\"";
-    std::system(openCommand.c_str());
-#else
-    const std::string openCommand =
-        std::string("xdg-open \"") + std::string(kSamplePickerGitHubUrl) + "\"";
-    std::system(openCommand.c_str());
-#endif
-  }
+  (void)samplePickerController_.applyExternalActions(actions);
   if (actions.loadSample) {
     queuePendingSampleLoad(actions.sampleId);
     // Start a clean, idle replacement after this frame's document UI work has already finished.

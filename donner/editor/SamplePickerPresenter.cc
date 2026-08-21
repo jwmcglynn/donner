@@ -5,6 +5,7 @@
 #include <span>
 
 #include "donner/editor/EditorTheme.h"
+#include "donner/editor/ExternalUrlLauncher.h"
 #include "donner/editor/ImGuiIncludes.h"
 
 namespace donner::editor {
@@ -185,7 +186,7 @@ SamplePickerActions SamplePickerPresenter::render(
   const float linkY =
       ImGui::GetCursorPosY() + (kSamplePickerMinTouchTarget - ImGui::GetTextLineHeight()) * 0.5f;
   ImGui::SetCursorPosY(linkY);
-  if (ImGui::TextLink(kSamplePickerGitHubUrl.data())) {
+  if (ImGui::TextLink(ExternalUrlValue(ExternalUrlTarget::DonnerRepository).data())) {
     ApplySamplePickerCommand(true, SamplePickerCommand::OpenGitHub, {}, &actions);
   }
   if (ImGui::IsItemHovered()) {

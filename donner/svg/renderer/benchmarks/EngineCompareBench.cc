@@ -48,6 +48,7 @@
 #include "donner/svg/renderer/RendererImageIO.h"
 #include "donner/svg/renderer/RendererTinySkia.h"
 #include "donner/svg/renderer/benchmarks/AllocationTracker.h"
+#include "donner/svg/renderer/benchmarks/ProcStatusParser.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
 
 namespace {
@@ -122,9 +123,9 @@ std::uint64_t readProcStatusKb(std::string_view field) {
   std::string line;
   while (std::getline(status, line)) {
     if (line.starts_with(field)) {
-      std::uint64_t value = 0;
-      if (std::sscanf(line.c_str() + field.size(), "%" PRIu64, &value) == 1) {
-        return static_cast<std::uint64_t>(value);
+      if (const std::optional<std::uint64_t> value =
+              donner::benchmarks::ParseProcStatusKilobytes(line, field)) {
+        return *value;
       }
       return 0;
     }
@@ -350,8 +351,8 @@ void printAllocation(std::string_view engine, std::string_view phase,
   // scope=cpp_heap_only: only C++ operator new/delete are counted, so
   // wgpu-native's Rust-side allocations are invisible; do not compare these
   // numbers across engines (see the file header).
-  std::printf("ALLOC engine=%.*s phase=%.*s calls=%" PRIu64 " bytes=%" PRIu64
-              " frees=%" PRIu64 " scope=cpp_heap_only\n",
+  std::printf("ALLOC engine=%.*s phase=%.*s calls=%" PRIu64 " bytes=%" PRIu64 " frees=%" PRIu64
+              " scope=cpp_heap_only\n",
               static_cast<int>(engine.size()), engine.data(), static_cast<int>(phase.size()),
               phase.data(), static_cast<std::uint64_t>(snapshot.allocationCalls),
               static_cast<std::uint64_t>(snapshot.allocationBytes),
@@ -432,11 +433,10 @@ int main(int argc, char* argv[]) {
   AllocationSnapshot firstAllocations;
   AllocationSnapshot secondAllocations;
   if (geodeMode) {
-    if (!runAllocationPass(source,
-                           [&sharedDevice] {
-                             return donner::svg::RendererGeode(sharedDevice, /*verbose=*/false);
-                           },
-                           parseAllocations, firstAllocations, secondAllocations)) {
+    if (!runAllocationPass(
+            source,
+            [&sharedDevice] { return donner::svg::RendererGeode(sharedDevice, /*verbose=*/false); },
+            parseAllocations, firstAllocations, secondAllocations)) {
       return 1;
     }
   } else {

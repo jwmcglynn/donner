@@ -302,6 +302,27 @@ donner_cc_library(
 )
 
 donner_cc_library(
+    name = "external_url_launcher",
+    srcs = ["ExternalUrl.cc"] + select({
+        "@platforms//os:macos": [],
+        "//conditions:default": ["ExternalUrlLauncher.cc"],
+    }),
+    hdrs = ["ExternalUrlLauncher.h"],
+    deps = [],
+)
+
+objc_library(
+    name = "external_url_launcher_macos",
+    srcs = ["ExternalUrlLauncherMac.mm"],
+    sdk_frameworks = ["AppKit"],
+    target_compatible_with = select({
+        "@platforms//os:macos": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    deps = [":external_url_launcher"],
+)
+
+donner_cc_library(
     name = "native_file_dialog",
     srcs = select({
         "@platforms//os:macos": [],
@@ -1076,6 +1097,7 @@ donner_cc_library(
         ":render_coordinator",
         ":render_pane_presenter",
         ":rotate_cursor_set",
+        ":sample_picker_controller",
         ":sample_picker_presenter",
         ":select_tool",
         ":selection_transform_handles",
@@ -1400,12 +1422,26 @@ donner_cc_library(
 )
 
 donner_cc_library(
+    name = "sample_picker_controller",
+    srcs = ["SamplePickerController.cc"],
+    hdrs = ["SamplePickerController.h"],
+    deps = [
+        ":external_url_launcher",
+        ":sample_picker_presenter",
+    ] + select({
+        "@platforms//os:macos": [":external_url_launcher_macos"],
+        "//conditions:default": [],
+    }),
+)
+
+donner_cc_library(
     name = "sample_picker_presenter",
     srcs = ["SamplePickerPresenter.cc"],
     hdrs = ["SamplePickerPresenter.h"],
     deps = [
         ":editor_sample_catalog",
         ":editor_theme",
+        ":external_url_launcher",
         ":imgui_headers",
         "@imgui",
     ],
