@@ -126,6 +126,8 @@ declare global {
       pending: boolean;
       active: boolean;
       resultReady: boolean;
+      foregroundHandoffWaits: number;
+      firstAttemptCompleted: boolean;
     };
     __donnerLayerThumbnailStats?: {
       rowCount: number;
@@ -840,6 +842,67 @@ test("WGPU diagnostics do not block the first carousel interaction", async ({ pa
   // an unblocked main thread.
   expect(carouselHeartbeatGapMs).toBeLessThan(scaledMs(100));
   expect(heartbeat?.maxGapMs).toBeLessThan(scaledMs(100));
+  expect(fatalMessages).toEqual([]);
+});
+
+test("Firefox hands the first active thumbnail to a foreground sample load", async ({
+  browserName,
+  page,
+}) => {
+  test.skip(browserName !== "firefox", "Firefox worker-owned WebGPU handoff regression");
+  const fatalMessages = await openEditor(page, { postInitializationDwellMs: 0 });
+  const canvas = page.locator("canvas#canvas");
+  const bounds = await canvas.boundingBox();
+  expect(bounds).not.toBeNull();
+  if (bounds === null) {
+    return;
+  }
+
+  await expect
+    .poll(
+      () =>
+        page.evaluate(() => {
+          const stats = window.__donnerSampleThumbnailStats;
+          return Boolean(stats && stats.started > 0 && stats.completed === 0 && stats.active);
+        }),
+      {
+        message: "the first worker-owned offscreen thumbnail must be active before replacement",
+        timeout: scaledMs(10_000),
+        intervals: [8, 16, 25, 50],
+      },
+    )
+    .toBe(true);
+
+  const completedBefore = await page.evaluate(
+    () => window.__donnerWorkerStats?.completedResults ?? 0,
+  );
+  await page.mouse.click(bounds.x + bounds.width * 0.24, bounds.y + 282);
+  await expect(canvas).toHaveAttribute("data-active-sample-id", "donner-splash", {
+    timeout: scaledMs(1000),
+  });
+  await expect
+    .poll(
+      () =>
+        page.evaluate((before) => {
+          const thumbnails = window.__donnerSampleThumbnailStats;
+          return {
+            firstAttemptCompleted: thumbnails?.firstAttemptCompleted ?? false,
+            foregroundHandoffWaits: thumbnails?.foregroundHandoffWaits ?? 0,
+            foregroundResultCompleted:
+              (window.__donnerWorkerStats?.completedResults ?? 0) > before,
+          };
+        }, completedBefore),
+      {
+        message: "the first offscreen attempt must release before the foreground document result",
+        timeout: scaledMs(20_000),
+        intervals: [16, 25, 50, 100],
+      },
+    )
+    .toEqual({
+      firstAttemptCompleted: true,
+      foregroundHandoffWaits: 1,
+      foregroundResultCompleted: true,
+    });
   expect(fatalMessages).toEqual([]);
 });
 

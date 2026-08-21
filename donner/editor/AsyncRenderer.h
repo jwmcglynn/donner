@@ -47,7 +47,6 @@
 #include <variant>
 #include <vector>
 
-
 #include "donner/base/EcsRegistry.h"
 #include "donner/base/Transform.h"
 #include "donner/base/Vector2.h"
@@ -73,7 +72,6 @@ class GeodeDevice;
 }
 
 namespace donner::editor {
-
 
 /// Non-null renderer/document handoff for a render request.
 struct RenderLease {
@@ -425,6 +423,10 @@ struct SampleThumbnailRenderStats {
   std::uint64_t rendered = 0;
   std::uint64_t cancelled = 0;
   std::uint64_t offscreenRendererCreations = 0;
+  /// Foreground renders queued while the first worker-local offscreen attempt was still active.
+  std::uint64_t foregroundHandoffWaits = 0;
+  /// True once the first worker-local offscreen thumbnail attempt has released its renderer.
+  bool firstAttemptCompleted = false;
   bool pending = false;
   bool active = false;
   bool resultReady = false;

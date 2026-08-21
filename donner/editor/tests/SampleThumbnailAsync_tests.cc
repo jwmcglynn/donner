@@ -31,6 +31,7 @@ namespace {
 using namespace std::chrono_literals;
 using svg::test::RgbaEq;
 using testing::ByMove;
+using testing::Invoke;
 using testing::NiceMock;
 using testing::Return;
 
@@ -212,6 +213,59 @@ TEST(SampleThumbnailAsyncTest, MainDocumentPreemptsThumbnailDuringSnapshotReadba
   ASSERT_TRUE(cancelled.has_value());
   EXPECT_EQ(cancelled->key, 51u);
   EXPECT_EQ(cancelled->outcome, SampleThumbnailRenderOutcome::Cancelled);
+}
+
+TEST(SampleThumbnailAsyncTest, FirstOffscreenCreationCompletesBeforeForegroundHandoff) {
+  struct CreationGate {
+    std::atomic<bool> entered{false};
+    std::atomic<bool> release{false};
+  };
+  const auto gate = std::make_shared<CreationGate>();
+  NiceMock<svg::tests::MockRendererInterface> thumbnailRoot;
+  EXPECT_CALL(thumbnailRoot, createOffscreenInstance())
+      .WillOnce(Invoke([gate]() -> std::unique_ptr<svg::RendererInterface> {
+        gate->entered.store(true, std::memory_order_release);
+        while (!gate->release.load(std::memory_order_acquire)) {
+          std::this_thread::sleep_for(1ms);
+        }
+        return std::make_unique<svg::Renderer>();
+      }));
+
+  AsyncRenderer renderer;
+  ASSERT_TRUE(renderer.requestSampleThumbnail(ThumbnailRequest(52u, kRedSvg, thumbnailRoot)));
+  ASSERT_TRUE(WaitUntil([&] { return gate->entered.load(std::memory_order_acquire); }));
+
+  ParseWarningSink warnings = ParseWarningSink::Disabled();
+  auto parsed = svg::parser::SVGParser::ParseSVG(kBlueSvg, warnings);
+  ASSERT_FALSE(parsed.hasError());
+  svg::SVGDocument document = std::move(parsed.result());
+  document.setCanvasSize(64, 48);
+  svg::Renderer documentRenderer;
+  RenderRequest mainRequest(documentRenderer, document);
+  mainRequest.version = 3u;
+  mainRequest.documentGeneration = 3u;
+  mainRequest.rasterViewport = EditorRasterViewport{
+      .documentRect = Box2d::FromXYWH(0.0, 0.0, 64.0, 48.0),
+      .outputSizePx = Vector2i(64, 48),
+      .semanticCanvasSizePx = Vector2i(64, 48),
+      .outputFromDocument = Transform2d(),
+  };
+
+  renderer.cancelSampleThumbnailWork();
+  renderer.requestRender(mainRequest);
+  gate->release.store(true, std::memory_order_release);
+  ASSERT_TRUE(WaitUntil([&] { return renderer.sampleThumbnailRenderStats().completed == 1u; }));
+
+  const SampleThumbnailRenderStats stats = renderer.sampleThumbnailRenderStats();
+  EXPECT_EQ(stats.foregroundHandoffWaits, 1u);
+  EXPECT_TRUE(stats.firstAttemptCompleted);
+
+  std::optional<RenderResult> mainResult;
+  ASSERT_TRUE(WaitUntil([&] {
+    mainResult = renderer.pollResult();
+    return mainResult.has_value();
+  }));
+  EXPECT_EQ(mainResult->version, 3u);
 }
 
 TEST(SampleThumbnailAsyncTest, ShutdownRejectsBothPriorityLanesWithoutResurrectingWorker) {
