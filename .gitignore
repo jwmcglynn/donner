@@ -7,8 +7,7 @@ index.scip
 *.bloaty.csv
 build-binary-size
 
-# The Bzlmod lockfile is platform-dependent with Python and thus hard
-# to keep up-to-date in CI. It still speeds up local development.
+# Bzlmod lock state is generated per platform/toolchain and remains local.
 MODULE.bazel.lock
 
 # VS Code

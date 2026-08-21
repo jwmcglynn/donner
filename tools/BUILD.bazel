@@ -153,9 +153,9 @@ py_test(
     size = "small",
     srcs = ["security_workflow_policy_tests.py"],
     data = [
-        "//:.github/workflows/codeql.yml",
-        "//:.github/workflows/fuzz.yml",
-        "//:.github/workflows/sanitizers.yml",
+        "//:github_action_definitions",
+        "//build_defs:rules.bzl",
+        "//third_party:bazel/non_bcr_deps.bzl",
     ],
     deps = ["@rules_python//python/runfiles"],
 )

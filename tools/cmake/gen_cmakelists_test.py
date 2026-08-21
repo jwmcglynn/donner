@@ -6,6 +6,7 @@ build-validation helper exercised against synthetic source trees.
 """
 
 import os
+import re
 import sys
 import tempfile
 import textwrap
@@ -18,6 +19,18 @@ _SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(_SCRIPT_DIR))
 
 import gen_cmakelists as g
+
+
+class BazelStartupArgsTest(unittest.TestCase):
+    def tearDown(self):
+        g._set_bazel_startup_args([])
+
+    def test_configures_startup_args_before_command(self):
+        g._set_bazel_startup_args(["--host_jvm_args=-Xmx4g", "--batch"])
+        self.assertEqual(
+            g.BAZEL_PREFIX,
+            ["bazel", "--host_jvm_args=-Xmx4g", "--batch"],
+        )
 
 
 class NormalizeVersionTest(unittest.TestCase):
@@ -81,10 +94,10 @@ class FetchContentExternalsTest(unittest.TestCase):
         self.assertIn("rules_cc", names)
         self.assertIn("absl", names)  # hardcoded
 
-    def test_no_bcr_suffix_in_tags(self):
+    def test_all_fetchcontent_revisions_are_immutable_commits(self):
         externals = g.get_fetchcontent_externals()
-        for name, url, tag in externals:
-            self.assertNotIn(".bcr.", tag, f"{name} has BCR suffix: {tag}")
+        for name, url, revision in externals:
+            self.assertRegex(revision, r"^[0-9a-f]{40}$", f"{name} is mutable: {revision}")
 
 
 class ExternalDepManifestTest(unittest.TestCase):
@@ -248,6 +261,8 @@ class GeneratedRootCmakeTest(unittest.TestCase):
         self.assertNotIn("DONNER_BUILD_EXAMPLES", contents)
         self.assertIn("if(DONNER_BUILD_TESTS)", contents)
         self.assertIn("add_library(donner INTERFACE)", contents)
+        for revision in re.findall(r"GIT_TAG\s+(\S+)", contents):
+            self.assertRegex(revision, r"^[0-9a-f]{40}$")
         self.assertNotIn("examples/cmake_consumer", contents)
 
 
