@@ -35,7 +35,11 @@ public:
   explicit ParsedPayloadResourceBudget(
       Limits limits, std::shared_ptr<DocumentResourceFamilyBudget> family = nullptr)
       : limits_(limits), family_(std::move(family)) {}
-  ~ParsedPayloadResourceBudget() = default;
+  ~ParsedPayloadResourceBudget() {
+    if (family_) {
+      family_->release(DocumentResourceFamilyBudget::Kind::ParsedPayload, stats_.retainedBytes);
+    }
+  }
 
   ParsedPayloadResourceBudget(const ParsedPayloadResourceBudget&) = delete;
   ParsedPayloadResourceBudget& operator=(const ParsedPayloadResourceBudget&) = delete;
@@ -53,10 +57,26 @@ public:
 
   /// Return whether replacing one entity/category reservation would fit the local envelope.
   bool canReserve(Entity entity, std::size_t bytes, Category category) const {
-    (void)entity;
-    (void)bytes;
     const std::size_t index = static_cast<std::size_t>(category);
-    return index < reservations_.size();
+    if (index >= reservations_.size()) {
+      return false;
+    }
+    const auto it = reservations_[index].find(entity);
+    const std::size_t previous = it == reservations_[index].end() ? 0 : it->second;
+    if (previous > stats_.retainedBytes) {
+      return false;
+    }
+    const std::size_t retainedWithoutPrevious = stats_.retainedBytes - previous;
+    if (retainedWithoutPrevious > limits_.maximumRetainedBytes ||
+        bytes > limits_.maximumRetainedBytes - retainedWithoutPrevious) {
+      return false;
+    }
+    if (bytes <= previous) {
+      return true;
+    }
+    const std::size_t additional = bytes - previous;
+    return family_ == nullptr ||
+           family_->canReserve(DocumentResourceFamilyBudget::Kind::ParsedPayload, additional);
   }
 
   /// Atomically replace one entity/category reservation.
@@ -72,12 +92,20 @@ public:
     const std::size_t previous = it == categoryReservations.end() ? 0 : it->second;
     if (bytes > previous) {
       const std::size_t additional = bytes - previous;
+      if (family_ &&
+          !family_->reserve(DocumentResourceFamilyBudget::Kind::ParsedPayload, additional)) {
+        recordRejection();
+        return false;
+      }
       stats_.retainedBytes += additional;
       categoryBytes(category) += additional;
     } else {
       const std::size_t released = previous - bytes;
       stats_.retainedBytes -= released;
       categoryBytes(category) -= released;
+      if (family_) {
+        family_->release(DocumentResourceFamilyBudget::Kind::ParsedPayload, released);
+      }
     }
 
     if (bytes == 0) {
@@ -99,12 +127,23 @@ public:
       const std::size_t bytes = it->second;
       stats_.retainedBytes -= bytes;
       categoryBytes(static_cast<Category>(index)) -= bytes;
+      if (family_) {
+        family_->release(DocumentResourceFamilyBudget::Kind::ParsedPayload, bytes);
+      }
       categoryReservations.erase(it);
     }
   }
 
   /// Add an unowned reservation for callers whose payload has no document entity.
   bool reserve(std::size_t bytes, Category category) {
+    if (stats_.retainedBytes > limits_.maximumRetainedBytes ||
+        bytes > limits_.maximumRetainedBytes - stats_.retainedBytes ||
+        (family_ && !family_->reserve(DocumentResourceFamilyBudget::Kind::ParsedPayload, bytes))) {
+      ++stats_.rejectedReservations;
+      stats_.rejected = true;
+      return false;
+    }
+
     stats_.retainedBytes += bytes;
     switch (category) {
       case Category::Attribute: stats_.attributeBytes += bytes; break;
