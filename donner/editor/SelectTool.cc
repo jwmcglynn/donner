@@ -628,32 +628,25 @@ void SelectTool::onMouseMove(EditorApp& editor, const Vector2d& documentPoint, b
     return;
   }
 
-  // When the mutation queue is empty, the DOM represents the previous active preview. Preserve
-  // that baseline before advancing the pointer preview and queueing its next transform. If a
-  // render is already in flight, the queue remains non-empty and this baseline stays at the last
-  // transform that actually reached the registry.
-  const std::uint64_t documentFrameVersion = editor.document().currentFrameVersion();
-  if (!editor.document().hasPendingMutations() ||
-      documentFrameVersion != dragState_->committedDocumentFrameVersion) {
-    dragState_->committedDocumentDelta = dragState_->currentDocumentDelta;
-    dragState_->committedDocumentFromStartDocument = dragState_->currentDocumentFromStartDocument;
-    dragState_->committedDocumentFrameVersion = documentFrameVersion;
-  }
-
-  dragState_->currentDocumentDelta = deltaDoc;
-  dragState_->currentDocumentFromStartDocument = *documentFromStartDocument;
   const auto parentFromEntityAfterGesture =
       [&documentFromStartDocument](
           const PerElementDrag& participant) -> std::optional<Transform2d> {
-    if (std::abs(participant.documentFromParent.determinant()) < kMinScaleDenominator) {
+    const double determinant = participant.documentFromParent.determinant();
+    if (!IsFinite(determinant) || determinant == 0.0) {
       return std::nullopt;
     }
 
     const Transform2d parentFromDocument = participant.documentFromParent.inverse();
+    if (!IsFinite(parentFromDocument)) {
+      return std::nullopt;
+    }
     if (documentFromStartDocument->isTranslation()) {
       const Vector2d translationParent =
           parentFromDocument.transformVector(documentFromStartDocument->translation());
-      return participant.startTransform * Transform2d::Translate(translationParent);
+      const Transform2d parentFromEntity =
+          participant.startTransform * Transform2d::Translate(translationParent);
+      return IsFinite(parentFromEntity) ? std::optional<Transform2d>(parentFromEntity)
+                                        : std::nullopt;
     }
 
     const Transform2d parentFromEntity = participant.startTransform *
@@ -677,6 +670,21 @@ void SelectTool::onMouseMove(EditorApp& editor, const Vector2d& documentPoint, b
     extraNewTransforms.push_back(*extraNewTransform);
   }
 
+  // When the mutation queue is empty, the DOM represents the previous active preview. Preserve
+  // that baseline before advancing the pointer preview and queueing its next transform. If a
+  // render is already in flight, the queue remains non-empty and this baseline stays at the last
+  // transform that actually reached the registry. Conversion must succeed for every participant
+  // first, so an invalid parent cannot advance the overlay without a matching DOM mutation.
+  const std::uint64_t documentFrameVersion = editor.document().currentFrameVersion();
+  if (!editor.document().hasPendingMutations() ||
+      documentFrameVersion != dragState_->committedDocumentFrameVersion) {
+    dragState_->committedDocumentDelta = dragState_->currentDocumentDelta;
+    dragState_->committedDocumentFromStartDocument = dragState_->currentDocumentFromStartDocument;
+    dragState_->committedDocumentFrameVersion = documentFrameVersion;
+  }
+
+  dragState_->currentDocumentDelta = deltaDoc;
+  dragState_->currentDocumentFromStartDocument = *documentFromStartDocument;
   dragState_->primary.currentTransform = *primaryNewTransform;
   dragState_->hasMoved = true;
 
