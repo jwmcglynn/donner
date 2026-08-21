@@ -601,18 +601,51 @@ void storeBoundingPolygon(EncodedPath& result, const std::vector<CurveWithRange>
 /// its strip boundaries and `xMin`/`xMax` are the curves' X-extent. For `BandAxis::X`
 /// (vertical bands, vertical ray) the roles transpose: `xMin`/`xMax` are the strip
 /// boundaries and `yMin`/`yMax` are the curves' Y-extent.
-void bandCurves(const std::vector<CurveWithRange>& allCurves, const Box2d& bounds, BandAxis axis,
+bool bandCurves(const std::vector<CurveWithRange>& allCurves, const Box2d& bounds, BandAxis axis,
                 std::vector<EncodedPath::Band>& outBands,
                 std::vector<EncodedPath::Curve>& outCurves, std::vector<uint32_t>& outCurveIndices,
                 uint16_t bandCount, std::vector<uint32_t>& outGrid,
-                EncodedPath::AxisStats& outStats) {
+                EncodedPath::AxisStats& outStats, std::size_t maximumItems) {
   // The fixed-size count/scratch arrays below index up to bandCount.
   UTILS_RELEASE_ASSERT(bandCount <= kMaxBands);
   // Dense cell → band-slot map (kNoBand for empty cells). Sized to the full grid even when
   // some cells are empty, so the fragment shader can index it directly by position.
   outGrid.assign(bandCount, EncodedPath::kNoBand);
   if (bandCount == 0 || allCurves.empty()) {
-    return;
+    return true;
+  }
+
+  std::size_t retainedItems = 0;
+  for (const std::size_t count :
+       {outBands.size(), outCurves.size(), outCurveIndices.size(), outGrid.size()}) {
+    if (retainedItems > maximumItems || count > maximumItems - retainedItems) {
+      return false;
+    }
+    retainedItems += count;
+  }
+  if (allCurves.size() > maximumItems - retainedItems) {
+    return false;
+  }
+
+  std::array<uint32_t, kMaxBands> preflightBandCounts;
+  std::fill_n(preflightBandCounts.begin(), bandCount, 0u);
+  for (const CurveWithRange& curve : allCurves) {
+    const std::optional<BandSpan> curveSpan = curveBandSpan(curve.range, bounds, axis, bandCount);
+    if (!curveSpan) continue;
+    for (uint16_t band = curveSpan->first; band <= curveSpan->last; ++band) {
+      ++preflightBandCounts[band];
+    }
+  }
+  std::uint64_t totalReferencesPreflight = 0;
+  std::size_t nonemptyBands = 0;
+  for (uint16_t band = 0; band < bandCount; ++band) {
+    totalReferencesPreflight += preflightBandCounts[band];
+    nonemptyBands += preflightBandCounts[band] != 0u;
+  }
+  const std::size_t afterCanonical = retainedItems + allCurves.size();
+  if (nonemptyBands > maximumItems - afterCanonical ||
+      totalReferencesPreflight > maximumItems - afterCanonical - nonemptyBands) {
+    return false;
   }
 
   UTILS_RELEASE_ASSERT_MSG(
@@ -711,6 +744,7 @@ void bandCurves(const std::vector<CurveWithRange>& allCurves, const Box2d& bound
     outStats.meanCurvesPerBand =
         static_cast<double>(totalReferences) / static_cast<double>(nonemptyCount);
   }
+  return true;
 }
 
 std::optional<Path> CubicToQuadraticBounded(const Path& path, double tolerance,
@@ -792,6 +826,43 @@ std::optional<Path> CubicToQuadraticBounded(const Path& path, double tolerance,
   return builder.build();
 }
 
+bool MonotonicExpansionFits(const Path& path, Path::MonotonicAxis axis, std::size_t maximumItems) {
+  std::size_t commandCount = 0;
+  std::size_t pointCount = 0;
+  Vector2d currentPoint;
+  Vector2d subpathStart;
+  for (const Path::Command& command : path.commands()) {
+    std::size_t addedCommands = 1;
+    std::size_t addedPoints = Path::pointsPerVerb(command.verb);
+    if (command.verb == Path::Verb::QuadTo) {
+      const Vector2d& control = path.points()[command.pointIndex];
+      const Vector2d& end = path.points()[command.pointIndex + 1u];
+      const bool hasExtremum = axis == Path::MonotonicAxis::X
+                                   ? !QuadraticXExtrema(currentPoint, control, end).empty()
+                                   : !QuadraticYExtrema(currentPoint, control, end).empty();
+      if (hasExtremum) {
+        addedCommands = 2;
+        addedPoints = 4;
+      }
+      currentPoint = end;
+    } else if (command.verb == Path::Verb::MoveTo) {
+      currentPoint = path.points()[command.pointIndex];
+      subpathStart = currentPoint;
+    } else if (command.verb == Path::Verb::LineTo) {
+      currentPoint = path.points()[command.pointIndex];
+    } else if (command.verb == Path::Verb::ClosePath) {
+      currentPoint = subpathStart;
+    }
+    if (commandCount > maximumItems || pointCount > maximumItems ||
+        addedCommands > maximumItems - commandCount || addedPoints > maximumItems - pointCount) {
+      return false;
+    }
+    commandCount += addedCommands;
+    pointCount += addedPoints;
+  }
+  return true;
+}
+
 }  // namespace
 
 EncodedPath GeodePathEncoder::encode(const Path& path, FillRule fillRule, double tolerance) {
@@ -805,13 +876,16 @@ EncodedPath GeodePathEncoder::encode(const Path& path, FillRule /*fillRule*/, do
   if (path.empty()) {
     return result;
   }
-  if (!std::isfinite(tolerance) || tolerance < 0.0 || !PathCoordinatesFit(path)) {
+  if (!std::isfinite(tolerance) || tolerance < 0.0 || !PathCoordinatesFit(path) ||
+      path.commands().size() > limits.maximumEncodedGeometryItems ||
+      path.points().size() > limits.maximumEncodedGeometryItems) {
     return RejectedEncode();
   }
 
   // Cubic→quadratic once; the two monotonic splits share it.
-  const std::optional<Path> converted =
-      CubicToQuadraticBounded(path, tolerance, limits.maximumConvertedCommands);
+  const std::optional<Path> converted = CubicToQuadraticBounded(
+      path, tolerance,
+      std::min(limits.maximumConvertedCommands, limits.maximumEncodedGeometryItems));
   if (!converted.has_value()) {
     return RejectedEncode();
   }
@@ -821,6 +895,10 @@ EncodedPath GeodePathEncoder::encode(const Path& path, FillRule /*fillRule*/, do
   }
 
   // Bounds from the Y-monotonic form (same point set as X-monotonic; bounds are identical).
+  if (!MonotonicExpansionFits(quadPath, Path::MonotonicAxis::Y,
+                              limits.maximumEncodedGeometryItems)) {
+    return RejectedEncode();
+  }
   const Path monoPathY = quadPath.toMonotonic(Path::MonotonicAxis::Y);
   if (monoPathY.empty()) {
     return result;
@@ -854,8 +932,11 @@ EncodedPath GeodePathEncoder::encode(const Path& path, FillRule /*fillRule*/, do
     return result;
   }
   const uint16_t hBandCount = chooseBandCount(hCurves, bounds, BandAxis::Y);
-  bandCurves(hCurves, bounds, BandAxis::Y, result.bands, result.curves, result.curveIndices,
-             hBandCount, result.hBandGrid, result.stats.horizontal);
+  if (!bandCurves(hCurves, bounds, BandAxis::Y, result.bands, result.curves, result.curveIndices,
+                  hBandCount, result.hBandGrid, result.stats.horizontal,
+                  limits.maximumEncodedGeometryItems)) {
+    return RejectedEncode();
+  }
   if (result.bands.empty()) {
     return result;
   }
@@ -867,6 +948,10 @@ EncodedPath GeodePathEncoder::encode(const Path& path, FillRule /*fillRule*/, do
   // Degenerate-width paths (e.g. a vertical hairline) skip vertical banding; the
   // horizontal ray alone covers them.
   if (!NearZero(pathWidth)) {
+    if (!MonotonicExpansionFits(quadPath, Path::MonotonicAxis::X,
+                                limits.maximumEncodedGeometryItems)) {
+      return RejectedEncode();
+    }
     const Path monoPathX = quadPath.toMonotonic(Path::MonotonicAxis::X);
     const std::vector<CurveWithRange> vExtracted = extractCurves(monoPathX);
     const std::vector<CurveWithRange> vAll = omitRayParallelCurves(vExtracted, BandAxis::X);
@@ -874,14 +959,20 @@ EncodedPath GeodePathEncoder::encode(const Path& path, FillRule /*fillRule*/, do
         static_cast<uint32_t>(vExtracted.size() - vAll.size());
     if (!vAll.empty()) {
       const uint16_t vBandCount = chooseBandCount(vAll, bounds, BandAxis::X);
-      bandCurves(vAll, bounds, BandAxis::X, result.vBands, result.vCurves, result.vCurveIndices,
-                 vBandCount, result.vBandGrid, result.stats.vertical);
+      if (!bandCurves(vAll, bounds, BandAxis::X, result.vBands, result.vCurves,
+                      result.vCurveIndices, vBandCount, result.vBandGrid, result.stats.vertical,
+                      limits.maximumEncodedGeometryItems)) {
+        return RejectedEncode();
+      }
       result.xBase = static_cast<float>(bounds.topLeft.x);
       result.vStride = pathWidth / static_cast<float>(vBandCount);
       result.vBandCount = vBandCount;
     }
   }
 
+  if (result.geometryItemCount() > limits.maximumEncodedGeometryItems) {
+    return RejectedEncode();
+  }
   result.outcome = EncodedPath::Outcome::Ready;
   return result;
 }

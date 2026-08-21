@@ -5,6 +5,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <span>
 #include <vector>
 
@@ -117,6 +118,38 @@ struct EncodedPath {
 
   EncodingStats stats;  ///< Encode diagnostics; does not affect rendering.
   Outcome outcome = Outcome::Empty;
+
+  [[nodiscard]] std::size_t geometryItemCount() const {
+    std::size_t total = 0;
+    for (const std::size_t count :
+         {curves.size(), curveIndices.size(), bands.size(), vCurves.size(), vCurveIndices.size(),
+          vBands.size(), hBandGrid.size(), vBandGrid.size()}) {
+      if (count > std::numeric_limits<std::size_t>::max() - total) {
+        return std::numeric_limits<std::size_t>::max();
+      }
+      total += count;
+    }
+    return total;
+  }
+
+  [[nodiscard]] std::size_t retainedBytes() const {
+    std::size_t total = 0;
+    const auto add = [&](std::size_t capacity, std::size_t itemSize) {
+      if (capacity > std::numeric_limits<std::size_t>::max() / itemSize) return false;
+      const std::size_t bytes = capacity * itemSize;
+      if (bytes > std::numeric_limits<std::size_t>::max() - total) return false;
+      total += bytes;
+      return true;
+    };
+    if (!add(curves.capacity(), sizeof(Curve)) || !add(curveIndices.capacity(), sizeof(uint32_t)) ||
+        !add(bands.capacity(), sizeof(Band)) || !add(vCurves.capacity(), sizeof(Curve)) ||
+        !add(vCurveIndices.capacity(), sizeof(uint32_t)) || !add(vBands.capacity(), sizeof(Band)) ||
+        !add(hBandGrid.capacity(), sizeof(uint32_t)) ||
+        !add(vBandGrid.capacity(), sizeof(uint32_t))) {
+      return std::numeric_limits<std::size_t>::max();
+    }
+    return total;
+  }
 
   /// Triangle-list vertex count emitted by the vertex shader for the bounding fan.
   uint32_t boundingDrawVertexCount() const {
