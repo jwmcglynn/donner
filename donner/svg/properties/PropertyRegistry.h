@@ -511,6 +511,9 @@ public:
       const PropertyRegistry& parent,
       PropertyInheritOptions options = PropertyInheritOptions::All) const;
 
+  /// Dynamic bytes in inheritable complex property values that copying would retain.
+  [[nodiscard]] std::size_t complexPropertyBytes() const;
+
   /**
    * Resolve font-size from relative units (em, %, ex) to absolute pixels. Must be called after CSS
    * cascade with the parent's computed font-size, since font-size percentages and em units resolve
@@ -557,7 +560,7 @@ public:
    *
    * @param str Input string from a style attribute, e.g. "fill: red; stroke: blue".
    */
-  void parseStyle(std::string_view str);
+  bool parseStyle(std::string_view str);
 
   /**
    * Clear every property that was set from a `style=""` attribute, leaving presentation

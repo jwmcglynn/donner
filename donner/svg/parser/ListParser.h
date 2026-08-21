@@ -46,6 +46,9 @@ concept ListParserItemCallback = std::invocable<F, std::string_view> &&
  */
 class ListParser {
 public:
+  /// Maximum items delivered to a caller from one untrusted list attribute.
+  static constexpr size_t kMaximumItems = 16 * 1024;
+
   /**
    * Parses the SVG comma-or-space separated list from the given \c std::string_view.
    *

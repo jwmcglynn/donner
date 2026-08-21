@@ -1,5 +1,5 @@
-load("//build_defs:rules.bzl", "donner_cc_library", "donner_cc_test")
 load("//build_defs:package.bzl", "donner_package")
+load("//build_defs:rules.bzl", "donner_cc_fuzzer", "donner_cc_library", "donner_cc_test")
 
 donner_cc_library(
     name = "svg_document_context",
@@ -65,6 +65,7 @@ donner_cc_library(
         "ConditionalProcessingComponent.h",
         "DescriptiveTextComponent.h",
         "DirtyFlagsComponent.h",
+        "DocumentResourceFamilyBudget.h",
         "ElementTypeComponent.h",
         "EvaluatedReferenceComponent.h",
         "HyperlinkComponent.h",
@@ -114,6 +115,28 @@ donner_cc_library(
         "//donner/svg/components/shape:shape_system",
         "//donner/svg/components/text:text_system",
         "//donner/svg/properties",
+    ],
+)
+
+donner_cc_test(
+    name = "document_resource_family_budget_tests",
+    srcs = [
+        "tests/DocumentResourceFamilyBudget_tests.cc",
+    ],
+    deps = [
+        ":components_core",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_fuzzer(
+    name = "document_resource_family_budget_fuzzer",
+    srcs = [
+        "tests/DocumentResourceFamilyBudget_fuzzer.cc",
+    ],
+    corpus = "tests/document_resource_family_budget_corpus",
+    deps = [
+        ":components_core",
     ],
 )
 

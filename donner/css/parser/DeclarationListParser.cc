@@ -187,18 +187,28 @@ private:
 
 }  // namespace
 
-std::vector<DeclarationOrAtRule> DeclarationListParser::Parse(std::string_view str) {
+std::vector<DeclarationOrAtRule> DeclarationListParser::Parse(std::string_view str,
+                                                              SecurityStats* securityStats) {
   DeclarationListParserImpl parser(str);
-  return parser.parse();
+  std::vector<DeclarationOrAtRule> result = parser.parse();
+  if (securityStats != nullptr) {
+    securityStats->declarations = result.size();
+  }
+  return result;
 }
 
-std::vector<Declaration> DeclarationListParser::ParseOnlyDeclarations(std::string_view str) {
+std::vector<Declaration> DeclarationListParser::ParseOnlyDeclarations(
+    std::string_view str, SecurityStats* securityStats) {
   DeclarationListParserImpl parser(str);
-  return parser.parseDeclarations();
+  std::vector<Declaration> result = parser.parseDeclarations();
+  if (securityStats != nullptr) {
+    securityStats->declarations = result.size();
+  }
+  return result;
 }
 
 std::vector<Declaration> DeclarationListParser::ParseRuleDeclarations(
-    std::span<ComponentValue> components) {
+    std::span<ComponentValue> components, SecurityStats* securityStats) {
   std::vector<Declaration> result;
   if (components.empty()) {
     return result;
@@ -223,6 +233,9 @@ std::vector<Declaration> DeclarationListParser::ParseRuleDeclarations(
     // before this is called.
   }
 
+  if (securityStats != nullptr) {
+    securityStats->declarations = result.size();
+  }
   return result;
 }
 

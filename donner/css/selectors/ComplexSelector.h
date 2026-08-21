@@ -145,6 +145,9 @@ struct ComplexSelector {
       std::optional<T> currentElement;
       ElementTraversalGenerator<T> elements = elementsGenerator();
       while (elements.next()) {
+        if (options.traversalBudget != nullptr && !options.traversalBudget->consume()) {
+          return SelectorMatchResult::None();
+        }
         const T element = elements.getValue();
         if (entry.compoundSelector.matches(element, /* requirePrimary */ it == entries.rbegin(),
                                            options)) {
@@ -160,8 +163,8 @@ struct ComplexSelector {
       // If this is the last entry (first in reverse order) and relativeToElement is set,
       // we need to check the combinator against the relativeToElement
       if (it == entries.rbegin() && options.relativeToElement) {
-        if (!matchesRelativeTo(currentElement.value(), *options.relativeToElement,
-                               entry.combinator)) {
+        if (!matchesRelativeTo(currentElement.value(), *options.relativeToElement, entry.combinator,
+                               options.traversalBudget)) {
           return SelectorMatchResult::None();
         }
       }
@@ -221,12 +224,15 @@ private:
    * the relativeToElement will be the parent.
    */
   template <ElementLike T>
-  bool matchesRelativeTo(const T& currentElement, const T& relativeToElement,
-                         Combinator combinator) const {
+  bool matchesRelativeTo(const T& currentElement, const T& relativeToElement, Combinator combinator,
+                         SelectorTraversalBudget* traversalBudget) const {
     switch (combinator) {
       case Combinator::Descendant: {
         auto elements = parentsGenerator<T>(currentElement);
         while (elements.next()) {
+          if (traversalBudget != nullptr && !traversalBudget->consume()) {
+            return false;
+          }
           if (elements.getValue() == relativeToElement) {
             return true;
           }
@@ -238,6 +244,9 @@ private:
       case Combinator::SubsequentSibling: {
         auto elements = previousSiblingsGenerator<T>(currentElement);
         while (elements.next()) {
+          if (traversalBudget != nullptr && !traversalBudget->consume()) {
+            return false;
+          }
           if (elements.getValue() == relativeToElement) {
             return true;
           }

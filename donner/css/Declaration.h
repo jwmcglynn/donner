@@ -1,6 +1,7 @@
 #pragma once
 /// @file
 
+#include <cstddef>
 #include <ostream>
 #include <span>
 #include <string>
@@ -52,7 +53,10 @@ struct Declaration {
   Declaration& operator=(Declaration&& other) noexcept = default;
 
   /// Equality operator.
-  bool operator==(const Declaration& other) const = default;
+  bool operator==(const Declaration& other) const {
+    return name == other.name && values == other.values && sourceOffset == other.sourceOffset &&
+           sourceRange == other.sourceRange && important == other.important;
+  }
 
   /**
    * Serialize this declaration back to its CSS text representation, e.g. `fill: red`.
@@ -86,6 +90,8 @@ struct Declaration {
    * going through `DeclarationListParser`.
    */
   SourceRange sourceRange;
+  /// Serialized declaration bytes, computed once by the parser for cascade-work accounting.
+  std::size_t sourceByteSize = 0;
   bool important = false;  ///< Whether the declaration ends with `!important`.
 };
 

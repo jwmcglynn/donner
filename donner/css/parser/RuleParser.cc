@@ -178,14 +178,22 @@ private:
 
 }  // namespace
 
-std::vector<Rule> RuleParser::ParseStylesheet(std::string_view str) {
+std::vector<Rule> RuleParser::ParseStylesheet(std::string_view str, SecurityStats* securityStats) {
   RuleParserImpl parser(RuleParserImpl::maybeRemoveCharset(str));
-  return parser.parseStylesheet();
+  std::vector<Rule> result = parser.parseStylesheet();
+  if (securityStats != nullptr) {
+    securityStats->rules = result.size();
+  }
+  return result;
 }
 
-std::vector<Rule> RuleParser::ParseListOfRules(std::string_view str) {
+std::vector<Rule> RuleParser::ParseListOfRules(std::string_view str, SecurityStats* securityStats) {
   RuleParserImpl parser(RuleParserImpl::maybeRemoveCharset(str));
-  return parser.parseListOfRules(ListOfRulesFlags::None);
+  std::vector<Rule> result = parser.parseListOfRules(ListOfRulesFlags::None);
+  if (securityStats != nullptr) {
+    securityStats->rules = result.size();
+  }
+  return result;
 }
 
 std::optional<Rule> RuleParser::ParseRule(std::string_view str) {

@@ -30,6 +30,9 @@ namespace donner::svg::parser {
  */
 class PointsListParser {
 public:
+  /// Maximum coordinate pairs retained from one points attribute.
+  static constexpr size_t kMaximumPoints = 16 * 1024;
+
   /**
    * Parse a SVG "points" attribute, used to specify line paths for \ref xml_polyline and \ref
    * xml_polygon elements. See https://www.w3.org/TR/SVG2/shapes.html#DataTypePoints

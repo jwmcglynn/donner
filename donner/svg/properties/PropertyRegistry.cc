@@ -2346,11 +2346,16 @@ std::optional<ParseDiagnostic> PropertyRegistry::parseProperty(const css::Declar
   return std::nullopt;
 }
 
-void PropertyRegistry::parseStyle(std::string_view str) {
+std::size_t PropertyRegistry::complexPropertyBytes() const {
+  return 0;
+}
+
+bool PropertyRegistry::parseStyle(std::string_view str) {
   const std::vector<css::Declaration> declarations = css::CSS::ParseStyleAttribute(str);
   for (const auto& declaration : declarations) {
     std::ignore = parseProperty(declaration, css::Specificity::StyleAttribute());
   }
+  return true;
 }
 
 void PropertyRegistry::clearStyleAttributeProperties() {

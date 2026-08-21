@@ -80,8 +80,13 @@ struct Selector {
   template <ElementLike T>
   SelectorMatchResult matches(const T& targetElement, const SelectorMatchOptions<T>& options =
                                                           SelectorMatchOptions<T>()) const {
+    SelectorTraversalBudget localBudget;
+    SelectorMatchOptions<T> boundedOptions = options;
+    if (boundedOptions.traversalBudget == nullptr) {
+      boundedOptions.traversalBudget = &localBudget;
+    }
     for (const auto& entry : entries) {
-      if (auto result = entry.matches(targetElement, options)) {
+      if (auto result = entry.matches(targetElement, boundedOptions)) {
         return result;
       }
     }
@@ -95,94 +100,128 @@ struct Selector {
 };
 
 template <ElementLike T>
-PseudoClassSelector::PseudoMatchResult PseudoClassSelector::matches(
+std::optional<PseudoClassSelector::PseudoMatchResult> PseudoClassSelector::matchesSimpleState(
     const T& element, const SelectorMatchOptions<T>& options) const {
-  if (!argsIfFunction.has_value()) {
-    if (ident.equalsLowercase("root")) {
-      return !element.parentElement().has_value();
-    } else if (ident.equalsLowercase("scope")) {
-      if (options.scopeElement) {
-        return PseudoMatchResult(element == *options.scopeElement, /* isPrimary */ false);
-      } else {
-        return PseudoMatchResult(!element.parentElement().has_value(), /* isPrimary */ false);
-      }
-    } else if (ident.equalsLowercase("empty")) {
-      return !element.firstChild().has_value();
-    } else if (ident.equalsLowercase("first-child")) {
-      return !element.previousSibling().has_value();
-    } else if (ident.equalsLowercase("last-child")) {
-      return !element.nextSibling().has_value();
-    } else if (ident.equalsLowercase("only-child")) {
-      return !element.previousSibling().has_value() && !element.nextSibling().has_value();
-    } else if (ident.equalsLowercase("first-of-type")) {
-      return isFirstOfType(element, element.tagName());
-    } else if (ident.equalsLowercase("last-of-type")) {
-      return isLastOfType(element, element.tagName());
-    } else if (ident.equalsLowercase("only-of-type")) {
-      return isFirstOfType(element, element.tagName()) && isLastOfType(element, element.tagName());
-    } else if (ident.equalsLowercase("defined")) {
-      return element.isKnownType();
-    }
-  } else {
-    // It's a function.
+  if (ident.equalsLowercase("root")) {
+    return !element.parentElement().has_value();
+  }
+  if (ident.equalsLowercase("scope")) {
+    const bool matched = options.scopeElement ? element == *options.scopeElement
+                                              : !element.parentElement().has_value();
+    return PseudoMatchResult(matched, /* isPrimary */ false);
+  }
+  if (ident.equalsLowercase("empty")) {
+    return !element.firstChild().has_value();
+  }
+  if (ident.equalsLowercase("first-child")) {
+    return !element.previousSibling().has_value();
+  }
+  if (ident.equalsLowercase("last-child")) {
+    return !element.nextSibling().has_value();
+  }
+  if (ident.equalsLowercase("only-child")) {
+    return !element.previousSibling().has_value() && !element.nextSibling().has_value();
+  }
+  if (ident.equalsLowercase("defined")) {
+    return element.isKnownType();
+  }
+  return std::nullopt;
+}
 
-    if (ident.equalsLowercase("not")) {
-      if (!selector) {
-        return false;
-      }
+template <ElementLike T>
+std::optional<PseudoClassSelector::PseudoMatchResult> PseudoClassSelector::matchesTypeState(
+    const T& element, const SelectorMatchOptions<T>& options) const {
+  if (ident.equalsLowercase("first-of-type")) {
+    return isFirstOfType(element, element.tagName(), options.traversalBudget);
+  }
+  if (ident.equalsLowercase("last-of-type")) {
+    return isLastOfType(element, element.tagName(), options.traversalBudget);
+  }
+  if (ident.equalsLowercase("only-of-type")) {
+    return isFirstOfType(element, element.tagName(), options.traversalBudget) &&
+           isLastOfType(element, element.tagName(), options.traversalBudget);
+  }
+  return std::nullopt;
+}
 
-      return !selector->matches(element, options).matched;
-    } else if (ident.equalsLowercase("is") || ident.equalsLowercase("where")) {
-      if (!selector) {
-        return false;
-      }
+template <ElementLike T>
+std::optional<PseudoClassSelector::PseudoMatchResult> PseudoClassSelector::matchesSelectorFunction(
+    const T& element, const SelectorMatchOptions<T>& options) const {
+  if (ident.equalsLowercase("not")) {
+    return selector ? PseudoMatchResult(!selector->matches(element, options).matched)
+                    : PseudoMatchResult(false);
+  }
+  if (ident.equalsLowercase("is") || ident.equalsLowercase("where")) {
+    return selector ? PseudoMatchResult(selector->matches(element, options).matched)
+                    : PseudoMatchResult(false);
+  }
+  if (!ident.equalsLowercase("has")) {
+    return std::nullopt;
+  }
+  return matchesHasFunction(element, options);
+}
 
-      return selector->matches(element, options).matched;
-    } else if (ident.equalsLowercase("has")) {
-      if (!selector) {
-        return false;
-      }
-
-      SelectorMatchOptions<T> optionsOverride = options;
-      optionsOverride.relativeToElement = &element;
-
-      // Iterate over all children and match.
-      ElementTraversalGenerator<T> elements = allChildrenRecursiveGenerator(element);
-      while (elements.next()) {
-        const T childElement = elements.getValue();
-        if (selector->matches(childElement, optionsOverride).matched) {
-          return true;
-        }
-      }
-
-      return false;
-    } else {
-      const std::optional<T> maybeParent = element.parentElement();
-      if (!maybeParent) {
-        return false;
-      }
-
-      if (ident.equalsLowercase("nth-child") && anbValueIfAnb) {
-        const int childIndex = getIndexInParent(*maybeParent, element, /*fromEnd*/ false, selector);
-        return anbValueIfAnb->evaluate(childIndex);
-      } else if (ident.equalsLowercase("nth-last-child") && anbValueIfAnb) {
-        const int childIndex = getIndexInParent(*maybeParent, element, /*fromEnd*/ true, selector);
-        return anbValueIfAnb->evaluate(childIndex);
-      } else if (ident.equalsLowercase("nth-of-type") && anbValueIfAnb) {
-        const int childIndex =
-            getIndexInParent(*maybeParent, element, /*fromEnd*/ false,
-                             std::make_optional<TypeSelector>(element.tagName()));
-        return anbValueIfAnb->evaluate(childIndex);
-      } else if (ident.equalsLowercase("nth-last-of-type") && anbValueIfAnb) {
-        const int childIndex =
-            getIndexInParent(*maybeParent, element, /*fromEnd*/ true,
-                             std::make_optional<TypeSelector>(element.tagName()));
-        return anbValueIfAnb->evaluate(childIndex);
-      }
-    }
+template <ElementLike T>
+PseudoClassSelector::PseudoMatchResult PseudoClassSelector::matchesHasFunction(
+    const T& element, const SelectorMatchOptions<T>& options) const {
+  if (!selector) {
+    return PseudoMatchResult(false);
   }
 
+  SelectorMatchOptions<T> optionsOverride = options;
+  optionsOverride.relativeToElement = &element;
+  ElementTraversalGenerator<T> elements = allChildrenRecursiveGenerator(element);
+  while (elements.next()) {
+    if (options.traversalBudget != nullptr && !options.traversalBudget->consume()) {
+      return PseudoMatchResult(false);
+    }
+    if (selector->matches(elements.getValue(), optionsOverride).matched) {
+      return PseudoMatchResult(true);
+    }
+  }
+  return PseudoMatchResult(false);
+}
+
+template <ElementLike T>
+PseudoClassSelector::PseudoMatchResult PseudoClassSelector::matchesNthFunction(
+    const T& element, const SelectorMatchOptions<T>& options) const {
+  const std::optional<T> maybeParent = element.parentElement();
+  if (!maybeParent || !anbValueIfAnb) {
+    return false;
+  }
+  if (ident.equalsLowercase("nth-child")) {
+    return anbValueIfAnb->evaluate(
+        getIndexInParent(*maybeParent, element, /*fromEnd*/ false, selector, options));
+  }
+  if (ident.equalsLowercase("nth-last-child")) {
+    return anbValueIfAnb->evaluate(
+        getIndexInParent(*maybeParent, element, /*fromEnd*/ true, selector, options));
+  }
+  const auto matchingType = std::make_optional<TypeSelector>(element.tagName());
+  if (ident.equalsLowercase("nth-of-type")) {
+    return anbValueIfAnb->evaluate(
+        getIndexInParent(*maybeParent, element, /*fromEnd*/ false, matchingType, options));
+  }
+  if (ident.equalsLowercase("nth-last-of-type")) {
+    return anbValueIfAnb->evaluate(
+        getIndexInParent(*maybeParent, element, /*fromEnd*/ true, matchingType, options));
+  }
   return false;
+}
+
+template <ElementLike T>
+PseudoClassSelector::PseudoMatchResult PseudoClassSelector::matches(
+    const T& element, const SelectorMatchOptions<T>& options) const {
+  if (!argsIfFunction) {
+    if (auto result = matchesSimpleState(element, options)) {
+      return *result;
+    }
+    return matchesTypeState(element, options).value_or(PseudoMatchResult(false));
+  }
+  if (auto result = matchesSelectorFunction(element, options)) {
+    return *result;
+  }
+  return matchesNthFunction(element, options);
 }
 
 }  // namespace donner::css

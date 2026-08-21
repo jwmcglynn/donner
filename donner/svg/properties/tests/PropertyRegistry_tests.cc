@@ -269,6 +269,19 @@ TEST(PropertyRegistry, ParseDeclaration) {
 )"));
 }
 
+TEST(PropertyRegistry, ComplexPropertyBytesIncludesUnparsedComponentTrees) {
+  std::string style = "transform:";
+  for (std::size_t i = 0; i < 1024; ++i) {
+    style += "translate(1px) ";
+  }
+
+  PropertyRegistry registry;
+  registry.parseStyle(style);
+
+  ASSERT_THAT(registry.unparsedProperties, testing::SizeIs(1));
+  EXPECT_GT(registry.complexPropertyBytes(), 1024 * sizeof(ComponentValue));
+}
+
 TEST(PropertyRegistry, ParseDeclarationError) {
   std::optional<ParseDiagnostic> parseProperty(const css::Declaration& declaration);
 

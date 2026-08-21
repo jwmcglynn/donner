@@ -47,6 +47,10 @@ bool Reference::isExternal() const {
   return true;
 }
 
+bool Reference::hasSafeRepresentation() const {
+  return true;
+}
+
 std::string_view Reference::documentUrl() const {
   const std::string_view sv(href);
   if (sv.empty() || sv[0] == '#') {

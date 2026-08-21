@@ -166,4 +166,29 @@ TEST(DeclarationListParser, SourceRangeSpansNameToLastValueToken) {
       << "function value's sourceRange.end is the function's name offset";
 }
 
+TEST(DeclarationListParser, BoundsAggregateInlineComponentValuesAndAtRules) {
+  std::string declaration = "unknown:";
+  for (std::size_t i = 0; i <= DeclarationListParser::kMaximumComponentValues; ++i) {
+    declaration += "0 ";
+  }
+
+  DeclarationListParser::SecurityStats declarationStats;
+  EXPECT_TRUE(DeclarationListParser::ParseOnlyDeclarations(declaration, &declarationStats).empty());
+  EXPECT_TRUE(declarationStats.rejected);
+  EXPECT_EQ(declarationStats.componentValues, DeclarationListParser::kMaximumComponentValues);
+
+  std::string atRules;
+  for (std::size_t rule = 0; rule < 5; ++rule) {
+    atRules += "@unknown ";
+    for (std::size_t i = 0; i < 8000; ++i) {
+      atRules += "0 ";
+    }
+    atRules += ";";
+  }
+  DeclarationListParser::SecurityStats atRuleStats;
+  (void)DeclarationListParser::Parse(atRules, &atRuleStats);
+  EXPECT_TRUE(atRuleStats.rejected);
+  EXPECT_EQ(atRuleStats.componentValues, DeclarationListParser::kMaximumComponentValues);
+}
+
 }  // namespace donner::css::parser
