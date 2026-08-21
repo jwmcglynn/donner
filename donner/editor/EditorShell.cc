@@ -651,6 +651,11 @@ bool SamplePickerActionsNeedFollowupFrame(bool dismiss, bool openFile, bool newD
   return dismiss || openFile || newDocument;
 }
 
+bool ShouldAdvanceSampleThumbnails(bool showSamplePicker, bool samplePresentationPending) noexcept {
+  (void)samplePresentationPending;
+  return showSamplePicker;
+}
+
 DeferredRenderAction DeferredRenderActionForState(bool hasDocument, bool penDragFlushed,
                                                   bool rendererBusy) noexcept {
   if (!hasDocument) {
@@ -6666,7 +6671,7 @@ void EditorShell::revealSourceRange(SourceByteRange byteRange) {
 
 void EditorShell::prepareFrame() {
   const ScopedHeapDelta inputHeapDelta(MemoryStage::AppInput);
-  if (showSamplePicker_) {
+  if (internal::ShouldAdvanceSampleThumbnails(showSamplePicker_, samplePresentationPending_)) {
     ensureSampleThumbnails();
   }
 }

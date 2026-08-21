@@ -127,6 +127,8 @@ template <typename Resolver>
 
 [[nodiscard]] bool SamplePickerActionsNeedFollowupFrame(bool dismiss, bool openFile,
                                                         bool newDocument) noexcept;
+[[nodiscard]] bool ShouldAdvanceSampleThumbnails(bool showSamplePicker,
+                                                 bool samplePresentationPending) noexcept;
 [[nodiscard]] DeferredRenderAction DeferredRenderActionForState(bool hasDocument,
                                                                 bool penDragFlushed,
                                                                 bool rendererBusy) noexcept;
