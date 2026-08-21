@@ -9,6 +9,8 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <optional>
+
 #include "donner/base/Path.h"
 
 namespace donner::geode {
@@ -30,6 +32,15 @@ EncodedPath MakeEncodeWithCurves(size_t curveCount) {
   EncodedPath encoded;
   encoded.curves.resize(curveCount);
   return encoded;
+}
+
+Path MakeOutlineWithPoints(size_t pointCount) {
+  PathBuilder builder;
+  builder.moveTo(Vector2d(0.0, 0.0));
+  for (size_t index = 1; index < pointCount; ++index) {
+    builder.lineTo(Vector2d(static_cast<double>(index), static_cast<double>(index & 1u)));
+  }
+  return builder.build();
 }
 
 /// Insert `key` and immediately mark it used in `frame`, which is what the
@@ -93,6 +104,28 @@ TEST(GeodeGlyphCacheTest, MissingEntryReportsAMiss) {
   GeodeGlyphCache cache(/*deviceId=*/1u);
   EXPECT_EQ(cache.find(MakeKey(/*glyphIndex=*/1)), nullptr);
   EXPECT_EQ(cache.size(), 0u);
+}
+
+TEST(GeodeGlyphCacheTest, RetainedBytesIncludeOutlineCapacity) {
+  GeodeGlyphCache cache(/*deviceId=*/1u);
+  Path outline = MakeOutlineWithPoints(128u);
+  const std::optional<std::size_t> outlineBytes = outline.retainedBytes();
+  ASSERT_TRUE(outlineBytes.has_value());
+
+  ASSERT_NE(cache.insert(MakeKey(/*glyphIndex=*/1), std::move(outline), EncodedPath()), nullptr);
+  EXPECT_GE(cache.retainedBytes(), *outlineBytes);
+}
+
+TEST(GeodeGlyphCacheTest, RetainedByteAdmissionRejectsBeforeTakingOutlineOwnership) {
+  GeodeGlyphCache cache(/*deviceId=*/1u);
+  Path outline = MakeOutlineWithPoints(128u);
+
+  EXPECT_EQ(cache.insertWithinBudget(MakeKey(/*glyphIndex=*/1), std::move(outline), EncodedPath(),
+                                     /*oldestOpenFrame=*/1, /*maxEntries=*/100,
+                                     /*maxRetainedBytes=*/1),
+            nullptr);
+  EXPECT_EQ(cache.size(), 0u);
+  EXPECT_EQ(cache.retainedBytes(), 0u);
 }
 
 TEST(GeodeGlyphCacheTest, EntryCountBudgetDropsTheLeastRecentlyUsedFirst) {

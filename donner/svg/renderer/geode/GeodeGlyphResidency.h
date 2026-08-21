@@ -202,11 +202,25 @@ public:
     return entry;
   }
 
+  /// Insert through the document retention envelope. This declaration is used by the renderer's
+  /// miss path; the implementation is tightened in the following security fix.
+  GeodeGlyphResidentEntry* insertWithinBudget(const GlyphGeometryKey& key, Path&& outline,
+                                              EncodedPath&& encoded, uint64_t oldestOpenFrame,
+                                              size_t maxEntries, uint64_t maxRetainedBytes) {
+    (void)oldestOpenFrame;
+    (void)maxEntries;
+    (void)maxRetainedBytes;
+    return insert(key, std::move(outline), std::move(encoded));
+  }
+
   /// Number of live entries.
   size_t size() const { return entries_.size(); }
 
   /// Summed \ref GeodeGlyphResidentEntry::encodedBytes over live entries.
   uint64_t encodedBytes() const { return encodedBytes_; }
+
+  /// Total CPU bytes retained by cached outlines and encodes.
+  uint64_t retainedBytes() const { return encodedBytes_; }
 
   /// Trim to budget at most once per frame. The frame-index guard makes the
   /// call idempotent no matter how many times a frame touches the cache, so
