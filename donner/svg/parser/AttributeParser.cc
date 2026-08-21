@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cctype>
+#include <cmath>
 #include <entt/entity/fwd.hpp>  // entt::type_list, entt::type_list_element
 #include <limits>
 #include <string>
@@ -73,6 +74,14 @@ std::optional<double> ParseNumberNoSuffix(std::string_view str) {
   } else {
     return std::nullopt;
   }
+}
+
+std::optional<int> CheckedInteger(double value, int minimum, int maximum) {
+  if (!std::isfinite(value) || value < static_cast<double>(minimum) ||
+      value > static_cast<double>(maximum)) {
+    return std::nullopt;
+  }
+  return static_cast<int>(value);
 }
 
 std::optional<Lengthd> ParseLengthAttribute(SVGParserContext& context, std::string_view value) {
@@ -1299,8 +1308,12 @@ std::optional<ParseDiagnostic> ParseAttribute<SVGFEConvolveMatrixElement>(
     auto& comp = element.entityHandle().get<components::FEConvolveMatrixComponent>();
     const auto firstNumber = donner::parser::NumberParser::Parse(value);
     if (firstNumber.hasResult()) {
-      int orderX = static_cast<int>(firstNumber.result().number);
-      int orderY = orderX;
+      const std::optional<int> orderX =
+          CheckedInteger(firstNumber.result().number, 1, components::kMaximumFilterConvolveOrder);
+      if (!orderX.has_value()) {
+        return std::nullopt;
+      }
+      int orderY = *orderX;
       std::string_view remaining = value.substr(firstNumber.result().consumedChars);
       while (!remaining.empty() && (remaining.front() == ' ' || remaining.front() == ',')) {
         remaining.remove_prefix(1);
@@ -1308,10 +1321,12 @@ std::optional<ParseDiagnostic> ParseAttribute<SVGFEConvolveMatrixElement>(
       if (!remaining.empty()) {
         const auto secondNumber = donner::parser::NumberParser::Parse(remaining);
         if (secondNumber.hasResult()) {
-          orderY = static_cast<int>(secondNumber.result().number);
+          orderY = CheckedInteger(secondNumber.result().number, 1,
+                                  components::kMaximumFilterConvolveOrder)
+                       .value_or(orderY);
         }
       }
-      comp.orderX = orderX;
+      comp.orderX = *orderX;
       comp.orderY = orderY;
     }
   } else if (name == XMLQualifiedNameRef("kernelMatrix")) {
@@ -1351,13 +1366,15 @@ std::optional<ParseDiagnostic> ParseAttribute<SVGFEConvolveMatrixElement>(
     auto& comp = element.entityHandle().get<components::FEConvolveMatrixComponent>();
     const auto maybeNumber = donner::parser::NumberParser::Parse(value);
     if (maybeNumber.hasResult()) {
-      comp.targetX = static_cast<int>(maybeNumber.result().number);
+      comp.targetX = CheckedInteger(maybeNumber.result().number, 0,
+                                    components::kMaximumFilterConvolveOrder - 1);
     }
   } else if (name == XMLQualifiedNameRef("targetY")) {
     auto& comp = element.entityHandle().get<components::FEConvolveMatrixComponent>();
     const auto maybeNumber = donner::parser::NumberParser::Parse(value);
     if (maybeNumber.hasResult()) {
-      comp.targetY = static_cast<int>(maybeNumber.result().number);
+      comp.targetY = CheckedInteger(maybeNumber.result().number, 0,
+                                    components::kMaximumFilterConvolveOrder - 1);
     }
   } else if (name == XMLQualifiedNameRef("edgeMode")) {
     auto& comp = element.entityHandle().get<components::FEConvolveMatrixComponent>();
@@ -1406,7 +1423,8 @@ std::optional<ParseDiagnostic> ParseAttribute<SVGFETurbulenceElement>(
   } else if (name == XMLQualifiedNameRef("numOctaves")) {
     auto& comp = element.entityHandle().get<components::FETurbulenceComponent>();
     if (auto maybeNumber = ParseNumberNoSuffix(value)) {
-      comp.numOctaves = static_cast<int>(*maybeNumber);
+      comp.numOctaves = CheckedInteger(*maybeNumber, 1, components::kMaximumFilterTurbulenceOctaves)
+                            .value_or(comp.numOctaves);
     }
   } else if (name == XMLQualifiedNameRef("seed")) {
     auto& comp = element.entityHandle().get<components::FETurbulenceComponent>();

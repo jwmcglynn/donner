@@ -222,6 +222,22 @@ double boundedSignedFilterPixels(double value) {
                     static_cast<double>(svg::components::kMaximumFilterPixelOffset));
 }
 
+double boundedTurbulenceFrequency(double value) {
+  if (!std::isfinite(value)) {
+    return 0.0;
+  }
+  return std::clamp(value, -svg::components::kMaximumFilterTurbulenceFrequency,
+                    svg::components::kMaximumFilterTurbulenceFrequency);
+}
+
+double boundedTurbulenceSeed(double value) {
+  if (!std::isfinite(value)) {
+    return 0.0;
+  }
+  return std::clamp(value, -svg::components::kMaximumFilterTurbulenceSeed,
+                    svg::components::kMaximumFilterTurbulenceSeed);
+}
+
 int32_t boundedRoundedInt32(double value, int32_t minimum, int32_t maximum) {
   if (std::isnan(value)) {
     return 0;
@@ -406,6 +422,7 @@ float srgbToLinearChannel(float c) {
 /// Generate permutation + gradient tables from seed, matching tiny-skia exactly.
 void generateTurbulenceTables(double seedVal, TurbulenceTables& tables) {
   // Seed clamping matching resvg.
+  seedVal = boundedTurbulenceSeed(seedVal);
   long seed;  // NOLINT
   if (seedVal <= 0) {
     seed = -(static_cast<long>(seedVal)) % (kRandM - 1) + 1;  // NOLINT
@@ -3103,10 +3120,13 @@ wgpu::Texture GeodeFilterEngine::applyTurbulence(
     const svg::components::filter_primitive::Turbulence& primitive,
     const Transform2d& deviceFromFilter) {
   const wgpu::Device& dev = device_.device();
+  const double baseFrequencyX = boundedTurbulenceFrequency(primitive.baseFrequencyX);
+  const double baseFrequencyY = boundedTurbulenceFrequency(primitive.baseFrequencyY);
+  const double seed = boundedTurbulenceSeed(primitive.seed);
 
   // Negative baseFrequency is invalid per SVG Filter Effects §15.20.3; produce transparent black
   // (matching resvg/tiny-skia behavior).
-  if (primitive.baseFrequencyX < 0.0 || primitive.baseFrequencyY < 0.0) {
+  if (baseFrequencyX < 0.0 || baseFrequencyY < 0.0) {
     return createTransparentIntermediateTexture(arena, width, height,
                                                 "FilterTurbulenceTransparent");
   }
@@ -3115,10 +3135,10 @@ wgpu::Texture GeodeFilterEngine::applyTurbulence(
       createIntermediateTexture(arena, dev, width, height, "FilterTurbulenceOutput");
 
   TurbulenceParams params{};
-  params.baseFreqX = static_cast<float>(primitive.baseFrequencyX);
-  params.baseFreqY = static_cast<float>(primitive.baseFrequencyY);
+  params.baseFreqX = static_cast<float>(baseFrequencyX);
+  params.baseFreqY = static_cast<float>(baseFrequencyY);
   params.numOctaves = primitive.numOctaves;
-  params.seed = boundedRoundedInt32(primitive.seed, std::numeric_limits<int32_t>::min(),
+  params.seed = boundedRoundedInt32(seed, std::numeric_limits<int32_t>::min(),
                                     std::numeric_limits<int32_t>::max());
   params.stitchTiles = primitive.stitchTiles ? 1u : 0u;
   params.typeFlag =
@@ -3143,7 +3163,7 @@ wgpu::Texture GeodeFilterEngine::applyTurbulence(
 
   // Generate permutation + gradient tables from the seed.
   TurbulenceTables tables{};
-  generateTurbulenceTables(primitive.seed, tables);
+  generateTurbulenceTables(seed, tables);
 
   // Upload params as storage buffer.
   wgpu::BufferDescriptor bufDesc{};

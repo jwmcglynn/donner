@@ -96,6 +96,9 @@ inline constexpr double kMaximumFilterTurbulenceFrequency = 1024.0;
 /// Maximum accepted feTurbulence seed magnitude (Park-Miller modulus minus one).
 inline constexpr double kMaximumFilterTurbulenceSeed = 2147483646.0;
 
+/// Maximum accepted feTurbulence octave count.
+inline constexpr int kMaximumFilterTurbulenceOctaves = 16;
+
 /**
  * Standard named inputs available to filter primitives.
  *
@@ -543,7 +546,7 @@ inline bool FilterGraphExecutionCost(const FilterGraph& graph, std::uint64_t pix
                        4;
     } else if (const auto* turbulence =
                    std::get_if<filter_primitive::Turbulence>(&node.primitive)) {
-      if (turbulence->numOctaves > 16) {
+      if (turbulence->numOctaves > kMaximumFilterTurbulenceOctaves) {
         return false;
       }
       const std::uint64_t octaves = static_cast<std::uint64_t>(std::max(turbulence->numOctaves, 1));
