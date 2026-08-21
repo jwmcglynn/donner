@@ -18,7 +18,8 @@ Rules enforced:
   - No imgui / GLFW / Tracy headers outside `donner/editor/**` (path-scoped)
   - No ImGui `AddImageQuad`: present document textures through direct framebuffer composition
   - No direct TreeComponent structural mutation outside approved low-level code
-  - No new or worsened out-of-line C++ method above the local decision-point complexity limit
+  - No new or worsened supported out-of-line C++ method definition above the local
+    decision-point complexity limit
 
 Usage:
   python3 build_defs/check_banned_patterns.py            # Check all files
@@ -364,7 +365,8 @@ _METHOD_DEFINITION_RE = re.compile(
     (?:[A-Za-z_][A-Za-z0-9_:<>,~*&\[\] ]*[ \t]+)?
     (?P<name>(?:[A-Za-z_][A-Za-z0-9_]*::)+~?[A-Za-z_][A-Za-z0-9_]*)
     \s*\((?P<params>[^;{}]*)\)
-    \s*(?:const\s*)?(?:noexcept(?:\s*\([^)]*\))?\s*)?(?:override\s*)?(?:final\s*)?
+    \s*(?P<cv>(?:(?:const|volatile)\s*)*)(?P<ref>&&?)?\s*
+    (?:noexcept(?:\s*\([^)]*\))?\s*)?(?:override\s*)?(?:final\s*)?
     \{
     """,
     re.MULTILINE | re.VERBOSE,
@@ -390,11 +392,14 @@ def _method_body_end(stripped: str, opening_brace: int) -> int:
 def _method_signature(match: re.Match) -> str:
     """Return a stable-enough signature key that distinguishes method overloads."""
     params = re.sub(r"\s+", " ", match.group("params").strip())
-    return f"{match.group('name')}({params})"
+    cv_qualifiers = " ".join(match.group("cv").split())
+    ref_qualifier = match.group("ref") or ""
+    suffix = " ".join(part for part in (cv_qualifiers, ref_qualifier) if part)
+    return f"{match.group('name')}({params})" + (f" {suffix}" if suffix else "")
 
 
 def _method_complexities(stripped: str) -> Dict[str, int]:
-    """Return the decision-point count for each out-of-line method signature."""
+    """Return decision-point counts for supported out-of-line method definitions."""
     result: Dict[str, int] = {}
     for match in _METHOD_DEFINITION_RE.finditer(stripped):
         opening_brace = stripped.find("{", match.start(), match.end())
@@ -408,7 +413,7 @@ def _method_complexities(stripped: str) -> Dict[str, int]:
 def _check_method_complexity(
     stripped: str, baseline_stripped: str | None = None
 ) -> List[Tuple[int, str, str]]:
-    """Flag out-of-line C++ methods with too many local decision points."""
+    """Flag supported out-of-line C++ method definitions with too many decision points."""
     baseline = _method_complexities(baseline_stripped) if baseline_stripped is not None else {}
     errors: List[Tuple[int, str, str]] = []
     for match in _METHOD_DEFINITION_RE.finditer(stripped):

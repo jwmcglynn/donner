@@ -14,8 +14,8 @@
 # Checks enforced (see docs/coding_style.md "Language and Library Features" and
 # build_defs/check_banned_patterns.py): no `long long`, no `std::aligned_storage`,
 # no user-defined literal operators, no hidden Unicode whitespace or typographic
-# punctuation, and no new or worsened out-of-line method above the local
-# decision-point complexity limit.
+# punctuation, and no new or worsened supported out-of-line method definition
+# above the local decision-point complexity limit.
 #
 # Usage:
 #   tools/lint.sh                 # lint donner/ and examples/
