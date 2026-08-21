@@ -1342,5 +1342,27 @@ TEST(FocusViewTest, ReturnsEmptyPartitionWithoutSourceLocations) {
   EXPECT_TRUE(ComputeFocusPartition(document, child).empty());
 }
 
+TEST(FocusViewTest, BoundsLongForwardReferenceChains) {
+  std::string source = "<svg xmlns='http://www.w3.org/2000/svg'><defs>";
+  for (std::size_t i = 0; i < kMaximumFocusElements + 8u; ++i) {
+    source += "<linearGradient id='g" + std::to_string(i) + "'";
+    if (i + 1u < kMaximumFocusElements + 8u) {
+      source += " href='#g" + std::to_string(i + 1u) + "'";
+    }
+    source += "/>";
+  }
+  source += "</defs><rect id='target' fill='url(#g0)'/></svg>";
+
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(source));
+  const std::optional<svg::SVGElement> target = app.document().document().querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+
+  const FocusPartition partition = ComputeFocusPartition(app.document().document(), *target);
+  EXPECT_FALSE(partition.empty());
+  EXPECT_LE(partition.referenceLinks.size(), kMaximumFocusReferenceLinks);
+  EXPECT_TRUE(partition.resourceLimitExceeded);
+}
+
 }  // namespace
 }  // namespace donner::editor

@@ -1,6 +1,7 @@
 #pragma once
 /// @file
 
+#include <cstddef>
 #include <optional>
 #include <span>
 #include <vector>
@@ -9,6 +10,24 @@
 #include "donner/svg/SVGElement.h"
 
 namespace donner::editor {
+
+/// Maximum elements retained while expanding one source-focus reference graph.
+inline constexpr std::size_t kMaximumFocusElements = 1024;
+
+/// Maximum source-reference connectors retained by one focus partition.
+inline constexpr std::size_t kMaximumFocusReferenceLinks = 1024;
+
+/// Maximum retained source-line ranges in each focus partition class.
+inline constexpr std::size_t kMaximumFocusLineRanges = 4096;
+
+/// Maximum aggregate node and rule visits during one focus computation.
+inline constexpr std::size_t kMaximumFocusTraversalWork = 64 * 1024;
+
+/// Maximum recursive traversal depth accepted by focus helpers.
+inline constexpr std::size_t kMaximumFocusTraversalDepth = 256;
+
+/// Maximum source-reference connector layouts evaluated in one editor frame.
+inline constexpr std::size_t kMaximumFocusReferenceLayoutsPerFrame = 256;
 
 /// Half-open line range in zero-based editor line coordinates.
 struct LineRange {
@@ -44,6 +63,7 @@ struct FocusPartition {
   std::vector<LineRange> dimmed;                   ///< Ancestor opening/closing tag context.
   std::vector<LineRange> hidden;                   ///< Lines hidden by focus mode.
   std::vector<FocusReferenceLink> referenceLinks;  ///< Attribute-reference connectors.
+  bool resourceLimitExceeded = false;              ///< True when focus analysis was truncated.
 
   /// Return true when the partition should be treated as "show everything".
   [[nodiscard]] bool empty() const {
