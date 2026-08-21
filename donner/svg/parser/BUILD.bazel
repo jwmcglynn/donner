@@ -25,7 +25,16 @@ donner_cc_binary(
     name = "svg_parser_tool",
     srcs = ["svg_parser_tool.cc"],
     tags = ["codeql_default"],
-    deps = [":parser"],
+    deps = [
+        ":parser",
+        "//donner/base",
+    ],
+)
+
+sh_test(
+    name = "svg_parser_tool_tests",
+    srcs = ["tests/svg_parser_tool_tests.sh"],
+    data = [":svg_parser_tool"],
 )
 
 ##

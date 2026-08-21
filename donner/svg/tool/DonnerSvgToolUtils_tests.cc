@@ -1,5 +1,6 @@
 #include "donner/svg/tool/DonnerSvgToolUtils.h"
 
+#include <limits>
 #include <span>
 
 #include "donner/base/ParseWarningSink.h"
@@ -11,6 +12,15 @@
 
 namespace donner::svg {
 namespace {
+
+TEST(DonnerSvgToolUtils, EscapesTerminalControlCharactersAndInvalidUtf8) {
+  const std::string input = std::string("safe\x1b") + "[31m\n" + "\xc2\x9b" + "\xff" +
+                            "\xe2\x80\xae" + "reordered" + "\xe2\x81\xa6";
+
+  EXPECT_EQ(EscapeTerminalText(input), R"(safe\x1b[31m\x0a\u009b\xff\u202ereordered\u2066)");
+  EXPECT_EQ(EscapeTerminalText(input, /*preserveNewlines=*/true),
+            std::string(R"(safe\x1b[31m)") + "\n" + R"(\u009b\xff\u202ereordered\u2066)");
+}
 
 using testing::Eq;
 using testing::Optional;
@@ -180,6 +190,24 @@ TEST(CompositeAABBRect, NonAlignedBoundsSnapToNearestSubPixel) {
 ....................
 ....................
 )"));
+}
+
+TEST(CompositeAABBRect, ExtremeOrNonFiniteBoundsFailSafely) {
+  const SampledImageInfo info{10, 10, 5.0, 5.0};
+  RendererBitmap bmp = MakeBlackBitmap(100, 100);
+
+  CompositeAABBRect(
+      bmp, Box2d(Vector2d(std::numeric_limits<double>::infinity(), 0.0), Vector2d(10.0, 10.0)),
+      info);
+  EXPECT_THAT(bmp.pixels, testing::Each(0));
+
+  CompositeAABBRect(
+      bmp,
+      Box2d(Vector2d(-std::numeric_limits<double>::max(), -std::numeric_limits<double>::max()),
+            Vector2d(std::numeric_limits<double>::max(), std::numeric_limits<double>::max())),
+      info);
+  EXPECT_EQ(bmp.pixels.size(), 100u * 100u * 4u);
+  EXPECT_THAT(bmp.pixels, testing::Contains(0xff));
 }
 
 }  // namespace
