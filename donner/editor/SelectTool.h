@@ -297,6 +297,16 @@ private:
     bool hasMoved = false;
   };
 
+  /**
+   * Convert one participant's document-space gesture into its parent-local transform.
+   *
+   * @param participant Element and parent transform captured at gesture start.
+   * @param documentFromStartDocument Shared document-space gesture transform.
+   * @return Parent-local result, or nullopt when inversion or composition is invalid.
+   */
+  [[nodiscard]] static std::optional<Transform2d> parentFromEntityAfterDocumentGesture(
+      const PerElementDrag& participant, const Transform2d& documentFromStartDocument);
+
   /// Active marquee drag. Records the start point (the document
   /// position of the `onMouseDown` that hit empty space), the
   /// current point (updated on every `onMouseMove`), and whether

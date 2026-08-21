@@ -575,6 +575,30 @@ std::optional<SelectTool::LockedRejectionFlash> SelectTool::lockedRejectionFlash
   };
 }
 
+std::optional<Transform2d> SelectTool::parentFromEntityAfterDocumentGesture(
+    const PerElementDrag& participant, const Transform2d& documentFromStartDocument) {
+  const double determinant = participant.documentFromParent.determinant();
+  if (!IsFinite(determinant) || determinant == 0.0) {
+    return std::nullopt;
+  }
+
+  const Transform2d parentFromDocument = participant.documentFromParent.inverse();
+  if (!IsFinite(parentFromDocument)) {
+    return std::nullopt;
+  }
+
+  Transform2d parentFromEntity;
+  if (documentFromStartDocument.isTranslation()) {
+    const Vector2d translationParent =
+        parentFromDocument.transformVector(documentFromStartDocument.translation());
+    parentFromEntity = participant.startTransform * Transform2d::Translate(translationParent);
+  } else {
+    parentFromEntity = participant.startTransform * participant.documentFromParent *
+                       documentFromStartDocument * parentFromDocument;
+  }
+  return IsFinite(parentFromEntity) ? std::optional<Transform2d>(parentFromEntity) : std::nullopt;
+}
+
 void SelectTool::onMouseMove(EditorApp& editor, const Vector2d& documentPoint, bool buttonHeld) {
   onMouseMove(editor, documentPoint, buttonHeld, MouseModifiers{});
 }
@@ -628,42 +652,16 @@ void SelectTool::onMouseMove(EditorApp& editor, const Vector2d& documentPoint, b
     return;
   }
 
-  const auto parentFromEntityAfterGesture =
-      [&documentFromStartDocument](
-          const PerElementDrag& participant) -> std::optional<Transform2d> {
-    const double determinant = participant.documentFromParent.determinant();
-    if (!IsFinite(determinant) || determinant == 0.0) {
-      return std::nullopt;
-    }
-
-    const Transform2d parentFromDocument = participant.documentFromParent.inverse();
-    if (!IsFinite(parentFromDocument)) {
-      return std::nullopt;
-    }
-    if (documentFromStartDocument->isTranslation()) {
-      const Vector2d translationParent =
-          parentFromDocument.transformVector(documentFromStartDocument->translation());
-      const Transform2d parentFromEntity =
-          participant.startTransform * Transform2d::Translate(translationParent);
-      return IsFinite(parentFromEntity) ? std::optional<Transform2d>(parentFromEntity)
-                                        : std::nullopt;
-    }
-
-    const Transform2d parentFromEntity = participant.startTransform *
-                                         participant.documentFromParent *
-                                         *documentFromStartDocument * parentFromDocument;
-    return IsFinite(parentFromEntity) ? std::optional<Transform2d>(parentFromEntity) : std::nullopt;
-  };
-
   const std::optional<Transform2d> primaryNewTransform =
-      parentFromEntityAfterGesture(dragState_->primary);
+      parentFromEntityAfterDocumentGesture(dragState_->primary, *documentFromStartDocument);
   if (!primaryNewTransform.has_value()) {
     return;
   }
   std::vector<Transform2d> extraNewTransforms;
   extraNewTransforms.reserve(dragState_->extras.size());
   for (const PerElementDrag& extra : dragState_->extras) {
-    const std::optional<Transform2d> extraNewTransform = parentFromEntityAfterGesture(extra);
+    const std::optional<Transform2d> extraNewTransform =
+        parentFromEntityAfterDocumentGesture(extra, *documentFromStartDocument);
     if (!extraNewTransform.has_value()) {
       return;
     }
