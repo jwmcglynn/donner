@@ -249,6 +249,24 @@ TEST_F(GeodeGlyphInstancingTest, EvictionUnderPressureKeepsRenderingCorrect) {
   EXPECT_EQ(nonTransparentPixels(restored.bitmap), covered);
 }
 
+TEST_F(GeodeGlyphInstancingTest, FirstFrameAdmissionHonorsResidencyEntryBudget) {
+  SVGDocument document = parse(R"svg(
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200"
+           font-family="Noto Sans" font-size="24">
+        <text x="10" y="60" fill="black">abcdefghij</text>
+      </svg>)svg");
+
+  RendererGeode renderer(sharedDevice());
+  constexpr size_t kMaximumEntries = 2u;
+  renderer.setGlyphResidencyBudgetForTesting(kMaximumEntries,
+                                             /*maxEncodedBytes=*/1u << 30);
+
+  const Frame frame = render(renderer, document);
+  ASSERT_GT(nonTransparentPixels(frame.bitmap), 0u) << "Text did not render at all.";
+  EXPECT_LE(renderer.residentGlyphCountForTesting(document), kMaximumEntries)
+      << "A single frame must not retain more glyph entries than the configured admission cap.";
+}
+
 /// The cache key carries every parameter that changes the outline. A font-size
 /// change alters the scale the outline is built at, so it must mint new entries
 /// and draw the new size rather than serving the old geometry.
