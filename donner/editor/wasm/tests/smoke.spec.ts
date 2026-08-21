@@ -129,6 +129,7 @@ declare global {
       foregroundHandoffWaits: number;
       firstAttemptCompleted: boolean;
     };
+    __donnerSampleThumbnailRendererCreationBlocked?: boolean;
     __donnerLayerThumbnailStats?: {
       rowCount: number;
       renderedCount: number;
@@ -168,6 +169,8 @@ interface WgpuCarouselThumbnailStats extends WgpuReadbackColorStats {
 interface OpenEditorOptions {
   wgpuReadbackStats?: boolean;
   postInitializationDwellMs?: number;
+  sampleThumbnailRendererCreationRequest?: number;
+  sampleThumbnailRendererCreationDelayMs?: number;
 }
 
 const kFatalRuntimePattern =
@@ -292,6 +295,16 @@ async function openEditor(page: Page, options: OpenEditorOptions = {}): Promise<
   // not include that debug-only work unless they are explicitly guarding it.
   if (options.wgpuReadbackStats === true) {
     url.searchParams.set("wgpuReadbackStats", "1");
+  }
+  if ((options.sampleThumbnailRendererCreationRequest ?? 0) > 0) {
+    url.searchParams.set(
+      "sampleThumbnailRendererCreationRequest",
+      String(options.sampleThumbnailRendererCreationRequest),
+    );
+    url.searchParams.set(
+      "sampleThumbnailRendererCreationDelayMs",
+      String(options.sampleThumbnailRendererCreationDelayMs ?? 0),
+    );
   }
   const fatalMessages: string[] = [];
   const recordFatalMessage = (message: string) => {
@@ -845,7 +858,7 @@ test("WGPU diagnostics do not block the first carousel interaction", async ({ pa
   expect(fatalMessages).toEqual([]);
 });
 
-test("Firefox hands the first active thumbnail to a foreground sample load", async ({
+test("Firefox hands a blocked thumbnail renderer to a foreground sample load", async ({
   browserName,
   page,
 }) => {
@@ -858,7 +871,11 @@ test("Firefox hands the first active thumbnail to a foreground sample load", asy
   page.on("pageerror", (error) => {
     console.log(`firefox-handoff-pageerror: ${error.stack || error.message}`);
   });
-  const fatalMessages = await openEditor(page, { postInitializationDwellMs: 0 });
+  const fatalMessages = await openEditor(page, {
+    postInitializationDwellMs: 0,
+    sampleThumbnailRendererCreationRequest: 2,
+    sampleThumbnailRendererCreationDelayMs: 5000,
+  });
   const canvas = page.locator("canvas#canvas");
   const bounds = await canvas.boundingBox();
   expect(bounds).not.toBeNull();
@@ -869,12 +886,9 @@ test("Firefox hands the first active thumbnail to a foreground sample load", asy
   await expect
     .poll(
       () =>
-        page.evaluate(() => {
-          const stats = window.__donnerSampleThumbnailStats;
-          return Boolean(stats && stats.started > 0 && stats.completed === 0 && stats.active);
-        }),
+        page.evaluate(() => window.__donnerSampleThumbnailRendererCreationBlocked === true),
       {
-        message: "the first worker-owned offscreen thumbnail must be active before replacement",
+        message: "the second worker-owned offscreen renderer must be blocked before replacement",
         timeout: scaledMs(10_000),
         intervals: [8, 16, 25, 50],
       },

@@ -89,6 +89,24 @@
 namespace donner::editor {
 
 #ifdef __EMSCRIPTEN__
+int SampleThumbnailRendererCreationRequestForTesting() {
+  return MAIN_THREAD_EM_ASM_INT({
+    const raw =
+        new URLSearchParams(window.location.search).get('sampleThumbnailRendererCreationRequest');
+    const value = Number(raw || 0);
+    return Number.isFinite(value) ? Math.max(0, Math.min(64, Math.floor(value))) : 0;
+  });
+}
+
+int SampleThumbnailRendererCreationDelayMsForTesting() {
+  return MAIN_THREAD_EM_ASM_INT({
+    const raw =
+        new URLSearchParams(window.location.search).get('sampleThumbnailRendererCreationDelayMs');
+    const value = Number(raw || 0);
+    return Number.isFinite(value) ? Math.max(0, Math.min(5000, Math.floor(value))) : 0;
+  });
+}
+
 // The app runs on a pthread in the browser build, where `window` and
 // `document` do not exist; every publish below proxies to the browser main
 // thread. Fire-and-forget: none of these are read back by the app.
@@ -1168,6 +1186,11 @@ EditorShell::EditorShell(gui::EditorWindow& window, EditorShellOptions options)
     installFramebufferUnderlayPlan(std::move(plan));
   });
   renderCoordinator_.asyncRenderer().setCompositorDiagnosticsEnabled(false);
+#ifdef __EMSCRIPTEN__
+  renderCoordinator_.asyncRenderer().setSampleThumbnailRendererCreationPlanForTesting(
+      SampleThumbnailRendererCreationRequestForTesting(),
+      std::chrono::milliseconds(SampleThumbnailRendererCreationDelayMsForTesting()));
+#endif
   // Install the embedded + system font catalog as the process-wide default provider, so every
   // document FontManager created by the render paths resolves font-family names against embedded
   // Google Fonts and macOS system fonts before falling back to Public Sans (Design 0013 W3).

@@ -592,6 +592,10 @@ public:
   /// Inject a cancellation-aware delay before thumbnail parsing for deterministic priority tests.
   void setSampleThumbnailRenderDelayForTesting(std::chrono::milliseconds delay);
 
+  /// Recreate and pause one numbered offscreen renderer construction for browser handoff tests.
+  void setSampleThumbnailRendererCreationPlanForTesting(int requestNumber,
+                                                        std::chrono::milliseconds delay);
+
   /// Install a callback that the worker thread invokes when a render
   /// result or cancellation completes. Used by the editor's on-demand
   /// render loop to wake the UI thread (e.g. via `glfwPostEmptyEvent`)
@@ -810,6 +814,11 @@ public:
 
 private:
   void workerLoop();
+  bool prepareSampleThumbnailRendererForRequest(std::unique_ptr<svg::RendererInterface>& renderer,
+                                                svg::RendererInterface*& rendererRoot,
+                                                svg::RendererInterface* requestedRoot);
+  void delaySampleThumbnailRendererCreationForTesting(bool shouldDelay) const;
+  void finishSampleThumbnailRendererCreation();
 
   std::thread thread_;
   mutable std::mutex mutex_;
@@ -853,6 +862,8 @@ private:
   SampleThumbnailRenderStats sampleThumbnailCounters_;
   svg::compositor::CancellationToken cancelSampleThumbnail_;
   std::atomic<std::chrono::milliseconds::rep> sampleThumbnailRenderDelayMsForTesting_{0};
+  std::atomic<int> sampleThumbnailRendererCreationRequestForTesting_{0};
+  std::atomic<std::chrono::milliseconds::rep> sampleThumbnailRendererCreationDelayMsForTesting_{0};
   /// Offscreen-only cache preparation left over after publishing a correct first document frame.
   /// It shares the worker but not `WorkerState`, so input can post a foreground render immediately;
   /// that request cancels this work at the compositor's existing safe points.
