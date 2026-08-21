@@ -6,6 +6,7 @@ donner_cc_library(
     name = "base",
     srcs = [
         "BezierUtils.cc",
+        "FileUtils.cc",
         "FormatNumber.cc",
         "ParseDiagnostic.cc",
         "Path.cc",
@@ -20,6 +21,7 @@ donner_cc_library(
         "EcsRegistry.h",
         "EcsRegistry_fwd.h",
         "FileOffset.h",
+        "FileUtils.h",
         "FillRule.h",
         "FormatNumber.h",
         "Length.h",
@@ -35,6 +37,7 @@ donner_cc_library(
         "RelativeLengthMetrics.h",
         "SmallVector.h",
         "StringUtils.h",
+        "TerminalEscape.h",
         "Transform.h",
         "Utf8.h",
         "Utils.h",
@@ -169,6 +172,7 @@ donner_cc_test(
         "tests/ChunkedString_tests.cc",
         "tests/CompileTimeMap_tests.cc",
         "tests/DiagnosticRenderer_tests.cc",
+        "tests/FileUtils_tests.cc",
         "tests/Length_tests.cc",
         "tests/MathUtils_tests.cc",
         "tests/MemoryAttribution_tests.cc",
@@ -259,6 +263,17 @@ donner_cc_fuzzer(
     ],
     corpus = "tests/path_corpus",
     tags = ["fuzz_ubsan"],
+    deps = [
+        ":base",
+    ],
+)
+
+donner_cc_fuzzer(
+    name = "parse_warning_sink_fuzzer",
+    srcs = [
+        "tests/ParseWarningSink_fuzzer.cc",
+    ],
+    corpus = "tests/parse_warning_sink_corpus",
     deps = [
         ":base",
     ],

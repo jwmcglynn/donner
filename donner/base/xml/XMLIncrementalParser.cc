@@ -18,6 +18,11 @@ ParseResult<XMLDocument> XMLIncrementalParser::ParseAttribute(std::string_view a
 }
 
 ParseResult<XMLDocument> XMLIncrementalParser::ParseOpeningTag(std::string_view openingTagSource) {
+  return ParseOpeningTag(openingTagSource, XMLParser::Options());
+}
+
+ParseResult<XMLDocument> XMLIncrementalParser::ParseOpeningTag(std::string_view openingTagSource,
+                                                               const XMLParser::Options& options) {
   if (openingTagSource.empty() || openingTagSource.back() != '>') {
     return ParseDiagnostic::Error("Opening tag is missing '>'", FileOffset::Offset(0));
   }
@@ -27,7 +32,9 @@ ParseResult<XMLDocument> XMLIncrementalParser::ParseOpeningTag(std::string_view 
     fragment.insert(fragment.end() - 1, '/');
   }
 
-  return XMLParser::Parse(fragment);
+  XMLParser::Options fragmentOptions = options;
+  fragmentOptions.maximumInputSize = fragment.size();
+  return XMLParser::Parse(fragment, fragmentOptions);
 }
 
 ParseResult<XMLDocument> XMLIncrementalParser::ParsePcdata(std::string_view textSource) {
@@ -45,6 +52,11 @@ ParseResult<XMLDocument> XMLIncrementalParser::ParseTextLikeNode(std::string_vie
 
 ParseResult<XMLDocument> XMLIncrementalParser::ParseElement(std::string_view elementSource) {
   return XMLParser::Parse(elementSource);
+}
+
+ParseResult<XMLDocument> XMLIncrementalParser::ParseElement(std::string_view elementSource,
+                                                            const XMLParser::Options& options) {
+  return XMLParser::Parse(elementSource, options);
 }
 
 }  // namespace donner::xml

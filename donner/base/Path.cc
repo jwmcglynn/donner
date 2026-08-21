@@ -2,8 +2,10 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <optional>
 #include <span>
+#include <utility>
 
 #include "donner/base/BezierUtils.h"
 #include "donner/base/FormatNumber.h"
@@ -125,21 +127,64 @@ Box2d Path::transformedBounds(const Transform2d& transform) const {
 
 namespace {
 
-constexpr double kPathLengthTolerance = 0.001;
-constexpr int kMaxSubdivisionDepth = 10;
+constexpr int kMaximumRoundStrokeSubdivisionSteps = 4096;
+constexpr std::size_t kMaximumStrokeOutputPoints = 1024 * 1024;
 
-/// Approximate the arc length of a cubic Bezier via recursive subdivision.
-double subdivideCubicLength(const std::array<Vector2d, 4>& pts, double tolerance, int depth) {
-  if (depth > kMaxSubdivisionDepth) {
-    return (pts[3] - pts[0]).length();
+int BoundedRoundStrokeSubdivisionSteps(double requestedSteps, int minimumSteps) {
+  if (!(requestedSteps > static_cast<double>(minimumSteps))) {
+    return minimumSteps;
+  }
+  if (requestedSteps >= static_cast<double>(kMaximumRoundStrokeSubdivisionSteps)) {
+    return kMaximumRoundStrokeSubdivisionSteps;
+  }
+  return static_cast<int>(std::ceil(requestedSteps));
+}
+
+constexpr double kPathLengthTolerance = 0.001;
+
+class GeometryQueryWorkBudget {
+public:
+  bool consume() {
+    if (consumed_ >= Path::kMaximumGeometryQueryWork) {
+      return false;
+    }
+    ++consumed_;
+    return true;
+  }
+
+  std::size_t consumed() const { return consumed_; }
+
+private:
+  std::size_t consumed_ = 0;
+};
+
+/// Approximate the arc length of a cubic Bezier and retain its adaptive samples.
+template <typename AppendSample>
+std::optional<double> SubdivideCubicLength(const std::array<Vector2d, 4>& pts, double tolerance,
+                                           int depth, double tStart, double tEnd,
+                                           GeometryQueryWorkBudget& workBudget,
+                                           double& cumulativeLength, AppendSample& appendSample) {
+  if (!workBudget.consume()) {
+    return std::nullopt;
   }
 
   const double chordLength = (pts[3] - pts[0]).length();
   const double netLength =
       (pts[1] - pts[0]).length() + (pts[2] - pts[1]).length() + (pts[3] - pts[2]).length();
+  const Vector2d chordThird = (pts[3] - pts[0]) / 3.0;
+  const double parameterizationDeviation = std::max(
+      (pts[1] - (pts[0] + chordThird)).length(), (pts[2] - (pts[0] + chordThird * 2.0)).length());
 
-  if ((netLength - chordLength) <= tolerance) {
-    return (netLength + chordLength) / 2.0;
+  if ((netLength - chordLength) <= tolerance && parameterizationDeviation <= tolerance) {
+    const double length = (netLength + chordLength) / 2.0;
+    cumulativeLength += length;
+    if (!std::isfinite(cumulativeLength) || !appendSample(tEnd, cumulativeLength)) {
+      return std::nullopt;
+    }
+    return length;
+  }
+  if (depth >= Path::kMaximumArcLengthSubdivisionDepth) {
+    return std::nullopt;
   }
 
   // De Casteljau subdivision at t=0.5.
@@ -152,63 +197,21 @@ double subdivideCubicLength(const std::array<Vector2d, 4>& pts, double tolerance
 
   const std::array<Vector2d, 4> left = {pts[0], p01, p012, p0123};
   const std::array<Vector2d, 4> right = {p0123, p123, p23, pts[3]};
+  const double tMid = (tStart + tEnd) * 0.5;
 
-  return subdivideCubicLength(left, tolerance, depth + 1) +
-         subdivideCubicLength(right, tolerance, depth + 1);
-}
-
-/// Measure the arc length of a cubic Bezier from t=0 to \p tEnd via De Casteljau split.
-double measureCubicPartial(const std::array<Vector2d, 4>& pts, double tEnd, double tolerance,
-                           int depth = 0) {
-  if (depth > kMaxSubdivisionDepth || tEnd <= 0.0) {
-    return 0.0;
-  }
-  if (tEnd >= 1.0) {
-    return subdivideCubicLength(pts, tolerance, 0);
+  const auto leftLength = SubdivideCubicLength(left, tolerance, depth + 1, tStart, tMid, workBudget,
+                                               cumulativeLength, appendSample);
+  if (!leftLength.has_value()) {
+    return std::nullopt;
   }
 
-  // De Casteljau split at tEnd to get the left sub-curve [0, tEnd].
-  const auto lerp = [](const Vector2d& a, const Vector2d& b, double t) { return a + (b - a) * t; };
-  const Vector2d p01 = lerp(pts[0], pts[1], tEnd);
-  const Vector2d p12 = lerp(pts[1], pts[2], tEnd);
-  const Vector2d p23 = lerp(pts[2], pts[3], tEnd);
-  const Vector2d p012 = lerp(p01, p12, tEnd);
-  const Vector2d p123 = lerp(p12, p23, tEnd);
-  const Vector2d p0123 = lerp(p012, p123, tEnd);
-
-  const std::array<Vector2d, 4> left = {pts[0], p01, p012, p0123};
-  return subdivideCubicLength(left, tolerance, 0);
-}
-
-/// Binary-search for the t parameter on a cubic Bezier where arc length equals \p targetDist.
-double findTForArcLength(const std::array<Vector2d, 4>& pts, double targetDist, double totalSegLen,
-                         double tolerance) {
-  if (targetDist <= 0.0) {
-    return 0.0;
-  }
-  if (targetDist >= totalSegLen) {
-    return 1.0;
+  const auto rightLength = SubdivideCubicLength(right, tolerance, depth + 1, tMid, tEnd, workBudget,
+                                                cumulativeLength, appendSample);
+  if (!rightLength.has_value()) {
+    return std::nullopt;
   }
 
-  double lo = 0.0;
-  double hi = 1.0;
-  double mid = targetDist / totalSegLen;  // Linear initial estimate.
-
-  for (int iter = 0; iter < 30; ++iter) {
-    const double len = measureCubicPartial(pts, mid, tolerance);
-    const double error = len - targetDist;
-    if (std::abs(error) < tolerance * 0.1) {
-      break;
-    }
-    if (error > 0.0) {
-      hi = mid;
-    } else {
-      lo = mid;
-    }
-    mid = (lo + hi) * 0.5;
-  }
-
-  return mid;
+  return *leftLength + *rightLength;
 }
 
 /// Evaluate a cubic Bezier at parameter \p t.
@@ -256,163 +259,293 @@ Vector2d startPointOfCommand(const std::vector<Path::Command>& commands,
   return endPointOfCommand(commands, points, i - 1);
 }
 
-}  // namespace
+template <typename SegmentVector, typename ArcSampleVector>
+void InvalidateMeasurement(bool& valid, double& totalLength, SegmentVector& segments,
+                           ArcSampleVector& arcSamples) {
+  valid = false;
+  totalLength = std::numeric_limits<double>::infinity();
+  SegmentVector().swap(segments);
+  ArcSampleVector().swap(arcSamples);
+}
 
-double Path::pathLength() const {
-  double totalLength = 0.0;
-  Vector2d currentPoint;
-
-  for (size_t i = 0; i < commands_.size(); ++i) {
-    const auto& cmd = commands_[i];
-    switch (cmd.verb) {
-      case Verb::MoveTo: {
-        currentPoint = points_[cmd.pointIndex];
-        break;
-      }
-      case Verb::LineTo: {
-        const Vector2d& endPt = points_[cmd.pointIndex];
-        totalLength += currentPoint.distance(endPt);
-        currentPoint = endPt;
-        break;
-      }
-      case Verb::QuadTo: {
-        // Elevate quadratic to cubic for arc length measurement.
-        const Vector2d& control = points_[cmd.pointIndex];
-        const Vector2d& endPt = points_[cmd.pointIndex + 1];
-        // Quadratic-to-cubic elevation: cubic c1 = start + 2/3*(control - start),
-        // cubic c2 = end + 2/3*(control - end).
-        const Vector2d c1 = currentPoint + (control - currentPoint) * (2.0 / 3.0);
-        const Vector2d c2 = endPt + (control - endPt) * (2.0 / 3.0);
-        const std::array<Vector2d, 4> cubicPts = {currentPoint, c1, c2, endPt};
-        totalLength += subdivideCubicLength(cubicPts, kPathLengthTolerance, 0);
-        currentPoint = endPt;
-        break;
-      }
-      case Verb::CurveTo: {
-        const std::array<Vector2d, 4> cubicPts = {currentPoint, points_[cmd.pointIndex],
-                                                  points_[cmd.pointIndex + 1],
-                                                  points_[cmd.pointIndex + 2]};
-        totalLength += subdivideCubicLength(cubicPts, kPathLengthTolerance, 0);
-        currentPoint = points_[cmd.pointIndex + 2];
-        break;
-      }
-      case Verb::ClosePath: {
-        // ClosePath draws a line back to the last MoveTo point.
-        Vector2d moveToPoint;
-        for (size_t j = i; j-- > 0;) {
-          if (commands_[j].verb == Verb::MoveTo) {
-            moveToPoint = points_[commands_[j].pointIndex];
-            break;
-          }
-        }
-        totalLength += currentPoint.distance(moveToPoint);
-        currentPoint = moveToPoint;
-        break;
-      }
+template <typename ArcSampleVector, typename RetainedBytes>
+bool AppendMeasuredArcSample(ArcSampleVector& arcSamples, RetainedBytes&& retainedBytes, double t,
+                             double length) {
+  const std::size_t required = arcSamples.size() + 1;
+  if (required > arcSamples.capacity()) {
+    const auto retained = retainedBytes();
+    if (!retained.has_value() || *retained > Path::kMaximumMeasuredPathRetainedBytes) {
+      return false;
+    }
+    const std::size_t availableBytes = Path::kMaximumMeasuredPathRetainedBytes - *retained;
+    const std::size_t maximumAdditionalSamples =
+        availableBytes / sizeof(typename ArcSampleVector::value_type);
+    if (maximumAdditionalSamples == 0) {
+      return false;
+    }
+    const std::size_t maximumCapacity = arcSamples.capacity() + maximumAdditionalSamples;
+    const std::size_t doubled = arcSamples.capacity() == 0 ? 8 : arcSamples.capacity() * 2;
+    const std::size_t newCapacity = std::min(maximumCapacity, std::max(required, doubled));
+    if (newCapacity < required) {
+      return false;
+    }
+    arcSamples.reserve(newCapacity);
+    const auto grownRetained = retainedBytes();
+    if (!grownRetained.has_value() || *grownRetained > Path::kMaximumMeasuredPathRetainedBytes) {
+      return false;
     }
   }
+  arcSamples.push_back(typename ArcSampleVector::value_type{t, length});
+  return true;
+}
 
-  return totalLength;
+template <typename SegmentVector, typename SegmentType>
+void AppendMeasuredLine(SegmentVector& segments, SegmentType lineType, double& totalLength,
+                        bool& valid, const Vector2d& start, const Vector2d& end) {
+  const double segmentLength = start.distance(end);
+  if (!std::isfinite(segmentLength) ||
+      segmentLength > std::numeric_limits<double>::max() - totalLength) {
+    valid = false;
+    totalLength = std::numeric_limits<double>::infinity();
+    return;
+  }
+  segments.push_back(typename SegmentVector::value_type{lineType,
+                                                        {start, end, Vector2d(), Vector2d()},
+                                                        totalLength,
+                                                        totalLength + segmentLength,
+                                                        0,
+                                                        0});
+  totalLength += segmentLength;
+}
+
+template <typename SegmentVector, typename ArcSampleVector, typename SegmentType,
+          typename RetainedBytes>
+void AppendMeasuredCubic(SegmentVector& segments, ArcSampleVector& arcSamples,
+                         SegmentType cubicType, double& totalLength, bool& valid,
+                         GeometryQueryWorkBudget& workBudget,
+                         const std::array<Vector2d, 4>& cubicPoints,
+                         RetainedBytes&& retainedBytes) {
+  const std::size_t firstSample = arcSamples.size();
+  const auto appendSample = [&](double t, double length) {
+    return AppendMeasuredArcSample(arcSamples, retainedBytes, t, length);
+  };
+  if (!appendSample(0.0, 0.0)) {
+    valid = false;
+    return;
+  }
+  double cumulativeLength = 0.0;
+  const auto segmentLength = SubdivideCubicLength(cubicPoints, kPathLengthTolerance, 0, 0.0, 1.0,
+                                                  workBudget, cumulativeLength, appendSample);
+  if (!segmentLength.has_value()) {
+    arcSamples.resize(firstSample);
+    valid = false;
+    return;
+  }
+  if (!std::isfinite(*segmentLength) ||
+      *segmentLength > std::numeric_limits<double>::max() - totalLength) {
+    arcSamples.resize(firstSample);
+    valid = false;
+    totalLength = std::numeric_limits<double>::infinity();
+    return;
+  }
+  segments.push_back(typename SegmentVector::value_type{cubicType, cubicPoints, totalLength,
+                                                        totalLength + *segmentLength, firstSample,
+                                                        arcSamples.size() - firstSample});
+  totalLength += *segmentLength;
+}
+
+template <typename AddLine, typename AddCubic>
+void MeasureCommand(const Path::Command& command, std::span<const Vector2d> points,
+                    Vector2d& currentPoint, Vector2d& subpathStart, AddLine&& addLine,
+                    AddCubic&& addCubic) {
+  switch (command.verb) {
+    case Path::Verb::MoveTo:
+      currentPoint = points[command.pointIndex];
+      subpathStart = currentPoint;
+      break;
+    case Path::Verb::LineTo: {
+      const Vector2d& end = points[command.pointIndex];
+      addLine(currentPoint, end);
+      currentPoint = end;
+      break;
+    }
+    case Path::Verb::QuadTo: {
+      const Vector2d& control = points[command.pointIndex];
+      const Vector2d& end = points[command.pointIndex + 1];
+      const Vector2d c1 = currentPoint + (control - currentPoint) * (2.0 / 3.0);
+      const Vector2d c2 = end + (control - end) * (2.0 / 3.0);
+      addCubic(std::array<Vector2d, 4>{currentPoint, c1, c2, end});
+      currentPoint = end;
+      break;
+    }
+    case Path::Verb::CurveTo: {
+      const Vector2d& end = points[command.pointIndex + 2];
+      addCubic(std::array<Vector2d, 4>{currentPoint, points[command.pointIndex],
+                                       points[command.pointIndex + 1], end});
+      currentPoint = end;
+      break;
+    }
+    case Path::Verb::ClosePath:
+      addLine(currentPoint, subpathStart);
+      currentPoint = subpathStart;
+      break;
+  }
+}
+
+template <typename AddLine, typename AddCubic>
+void MeasureCommands(std::span<const Path::Command> commands, std::span<const Vector2d> points,
+                     GeometryQueryWorkBudget& workBudget, Vector2d& endpoint, bool& valid,
+                     AddLine&& addLine, AddCubic&& addCubic) {
+  Vector2d currentPoint;
+  Vector2d subpathStart;
+  for (const Path::Command& command : commands) {
+    if (!workBudget.consume()) {
+      valid = false;
+      break;
+    }
+    MeasureCommand(command, points, currentPoint, subpathStart, addLine, addCubic);
+    endpoint = currentPoint;
+    if (!valid) {
+      break;
+    }
+  }
+}
+
+template <typename Segment>
+Path::PointOnPath PointOnMeasuredLine(const Segment& segment, double remaining,
+                                      double segmentLength) {
+  const Vector2d& start = segment.points[0];
+  const Vector2d& end = segment.points[1];
+  const double t = segmentLength > 0.0 ? remaining / segmentLength : 0.0;
+  const Vector2d tangent = end - start;
+  return {start + tangent * t, tangent, std::atan2(tangent.y, tangent.x), true};
+}
+
+template <typename ArcSampleIterator>
+double InterpolateArcSampleParameter(ArcSampleIterator samplesBegin, ArcSampleIterator sample,
+                                     double remaining) {
+  double t = sample->t;
+  if (sample == samplesBegin) {
+    return t;
+  }
+  const auto& previous = *std::prev(sample);
+  const double sampleLength = sample->length - previous.length;
+  if (sampleLength > 0.0) {
+    const double fraction = (remaining - previous.length) / sampleLength;
+    t = previous.t + (sample->t - previous.t) * fraction;
+  }
+  return t;
+}
+
+template <typename Segment, typename ArcSampleVector>
+Path::PointOnPath PointOnMeasuredCubic(const Segment& segment, const ArcSampleVector& arcSamples,
+                                       double remaining, const Vector2d& endpoint) {
+  const auto samplesBegin = arcSamples.begin() + static_cast<std::ptrdiff_t>(segment.firstSample);
+  const auto samplesEnd = samplesBegin + static_cast<std::ptrdiff_t>(segment.sampleCount);
+  const auto sample = std::lower_bound(
+      samplesBegin, samplesEnd, remaining,
+      [](const auto& arcSample, double target) { return arcSample.length < target; });
+  if (sample == samplesEnd) {
+    return {endpoint, {}, 0.0, false};
+  }
+
+  const double t = InterpolateArcSampleParameter(samplesBegin, sample, remaining);
+  const Vector2d point = evalCubic(segment.points, t);
+  const Vector2d tangent = evalCubicTangent(segment.points, t);
+  return {point, tangent, std::atan2(tangent.y, tangent.x), true};
+}
+
+}  // namespace
+
+std::optional<std::size_t> Path::MeasuredPath::retainedBytes() const {
+  constexpr std::size_t kMaximum = std::numeric_limits<std::size_t>::max();
+  if (segments_.capacity() > (kMaximum - sizeof(*this)) / sizeof(Segment)) {
+    return std::nullopt;
+  }
+  const std::size_t withSegments = sizeof(*this) + segments_.capacity() * sizeof(Segment);
+  if (arcSamples_.capacity() > (kMaximum - withSegments) / sizeof(ArcSample)) {
+    return std::nullopt;
+  }
+  return withSegments + arcSamples_.capacity() * sizeof(ArcSample);
+}
+
+std::optional<std::size_t> Path::measurementBaseRetainedBytes() const {
+  constexpr std::size_t kMaximum = std::numeric_limits<std::size_t>::max();
+  if (commands_.size() > kMaximumGeometryQueryWork ||
+      commands_.size() > (kMaximum - sizeof(MeasuredPath)) / sizeof(MeasuredPath::Segment)) {
+    return std::nullopt;
+  }
+  const std::size_t bytes = sizeof(MeasuredPath) + commands_.size() * sizeof(MeasuredPath::Segment);
+  return bytes <= kMaximumMeasuredPathRetainedBytes ? std::optional(bytes) : std::nullopt;
+}
+
+double Path::pathLength() const {
+  return measure().pathLength();
+}
+
+Path::MeasuredPath Path::measure() const {
+  MeasuredPath result;
+  GeometryQueryWorkBudget workBudget;
+
+  if (!measurementBaseRetainedBytes().has_value()) {
+    InvalidateMeasurement(result.valid_, result.totalLength_, result.segments_, result.arcSamples_);
+    return result;
+  }
+  result.segments_.reserve(commands_.size());
+  const auto baseRetainedBytes = result.retainedBytes();
+  if (!baseRetainedBytes.has_value() || *baseRetainedBytes > kMaximumMeasuredPathRetainedBytes) {
+    InvalidateMeasurement(result.valid_, result.totalLength_, result.segments_, result.arcSamples_);
+    return result;
+  }
+
+  const auto addLine = [&](const Vector2d& start, const Vector2d& end) {
+    AppendMeasuredLine(result.segments_, MeasuredPath::SegmentType::Line, result.totalLength_,
+                       result.valid_, start, end);
+  };
+
+  const auto addCubic = [&](const std::array<Vector2d, 4>& cubicPoints) {
+    const auto retainedBytes = [&]() { return result.retainedBytes(); };
+    AppendMeasuredCubic(result.segments_, result.arcSamples_, MeasuredPath::SegmentType::Cubic,
+                        result.totalLength_, result.valid_, workBudget, cubicPoints, retainedBytes);
+  };
+
+  MeasureCommands(commands_, points_, workBudget, result.endpoint_, result.valid_, addLine,
+                  addCubic);
+
+  result.measurementWorkUnits_ = workBudget.consumed();
+  if (!result.valid_) {
+    InvalidateMeasurement(result.valid_, result.totalLength_, result.segments_, result.arcSamples_);
+  }
+
+  return result;
 }
 
 Path::PointOnPath Path::pointAtArcLength(double distance) const {
-  if (commands_.empty() || distance < 0.0) {
+  return measure().pointAtArcLength(distance);
+}
+
+Path::PointOnPath Path::MeasuredPath::pointAtArcLength(double distance) const {
+  if (!valid_ || segments_.empty() || !std::isfinite(distance) || distance < 0.0) {
     return {{}, {}, 0.0, false};
   }
 
-  double accumulated = 0.0;
-  Vector2d currentPoint;
-  Vector2d subpathStart;
-
-  for (size_t i = 0; i < commands_.size(); ++i) {
-    const auto& cmd = commands_[i];
-
-    switch (cmd.verb) {
-      case Verb::MoveTo: {
-        currentPoint = points_[cmd.pointIndex];
-        subpathStart = currentPoint;
-        break;
-      }
-
-      case Verb::LineTo: {
-        const Vector2d& endPt = points_[cmd.pointIndex];
-        const double segLen = currentPoint.distance(endPt);
-
-        if (accumulated + segLen >= distance) {
-          const double remaining = distance - accumulated;
-          const double t = (segLen > 0.0) ? remaining / segLen : 0.0;
-          const Vector2d pt = currentPoint + (endPt - currentPoint) * t;
-          const Vector2d tang = endPt - currentPoint;
-          return {pt, tang, std::atan2(tang.y, tang.x), true};
-        }
-
-        accumulated += segLen;
-        currentPoint = endPt;
-        break;
-      }
-
-      case Verb::QuadTo: {
-        // Elevate quadratic to cubic for arc length measurement and interpolation.
-        const Vector2d& control = points_[cmd.pointIndex];
-        const Vector2d& endPt = points_[cmd.pointIndex + 1];
-        const Vector2d c1 = currentPoint + (control - currentPoint) * (2.0 / 3.0);
-        const Vector2d c2 = endPt + (control - endPt) * (2.0 / 3.0);
-        const std::array<Vector2d, 4> cubicPts = {currentPoint, c1, c2, endPt};
-        const double segLen = subdivideCubicLength(cubicPts, kPathLengthTolerance, 0);
-
-        if (accumulated + segLen >= distance) {
-          const double remaining = distance - accumulated;
-          const double t = findTForArcLength(cubicPts, remaining, segLen, kPathLengthTolerance);
-          const Vector2d pt = evalCubic(cubicPts, t);
-          const Vector2d tang = evalCubicTangent(cubicPts, t);
-          return {pt, tang, std::atan2(tang.y, tang.x), true};
-        }
-
-        accumulated += segLen;
-        currentPoint = endPt;
-        break;
-      }
-
-      case Verb::CurveTo: {
-        const std::array<Vector2d, 4> cubicPts = {currentPoint, points_[cmd.pointIndex],
-                                                  points_[cmd.pointIndex + 1],
-                                                  points_[cmd.pointIndex + 2]};
-        const double segLen = subdivideCubicLength(cubicPts, kPathLengthTolerance, 0);
-
-        if (accumulated + segLen >= distance) {
-          const double remaining = distance - accumulated;
-          const double t = findTForArcLength(cubicPts, remaining, segLen, kPathLengthTolerance);
-          const Vector2d pt = evalCubic(cubicPts, t);
-          const Vector2d tang = evalCubicTangent(cubicPts, t);
-          return {pt, tang, std::atan2(tang.y, tang.x), true};
-        }
-
-        accumulated += segLen;
-        currentPoint = points_[cmd.pointIndex + 2];
-        break;
-      }
-
-      case Verb::ClosePath: {
-        // ClosePath draws a line back to the last MoveTo point.
-        const double segLen = currentPoint.distance(subpathStart);
-
-        if (accumulated + segLen >= distance) {
-          const double remaining = distance - accumulated;
-          const double t = (segLen > 0.0) ? remaining / segLen : 0.0;
-          const Vector2d pt = currentPoint + (subpathStart - currentPoint) * t;
-          const Vector2d tang = subpathStart - currentPoint;
-          return {pt, tang, std::atan2(tang.y, tang.x), true};
-        }
-
-        accumulated += segLen;
-        currentPoint = subpathStart;
-        break;
-      }
-    }
+  if (distance > totalLength_) {
+    return {endpoint_, {}, 0.0, false};
   }
 
-  // Distance exceeds path length - return endpoint.
-  return {currentPoint, {}, 0.0, false};
+  const auto it = std::lower_bound(
+      segments_.begin(), segments_.end(), distance,
+      [](const Segment& segment, double target) { return segment.endLength < target; });
+  if (it == segments_.end()) {
+    return {endpoint_, {}, 0.0, false};
+  }
+
+  const double segmentLength = it->endLength - it->startLength;
+  const double remaining = distance - it->startLength;
+  if (it->type == SegmentType::Line) {
+    return PointOnMeasuredLine(*it, remaining, segmentLength);
+  }
+  return PointOnMeasuredCubic(*it, arcSamples_, remaining, endpoint_);
 }
 
 Vector2d Path::pointAt(size_t index, double t) const {
@@ -648,8 +781,6 @@ namespace {
 // ---- Hit-testing helpers ----
 
 constexpr double kHitTestTolerance = 0.001;
-constexpr int kHitTestMaxDepth = 10;
-
 /// Distance from point \p p to the line segment (a, b).
 double DistanceFromPointToLine(const Vector2d& p, const Vector2d& a, const Vector2d& b) {
   const Vector2d ab = b - a;
@@ -684,11 +815,20 @@ int WindingNumberContribution(const Vector2d& p0, const Vector2d& p1, const Vect
 }
 
 /// Recursive winding-number contribution for a cubic Bezier curve.
-int WindingNumberContributionCurve(const Vector2d& p0, const Vector2d& p1, const Vector2d& p2,
-                                   const Vector2d& p3, const Vector2d& point, double tolerance,
-                                   int depth = 0) {
-  if (depth > kHitTestMaxDepth || IsCurveFlatEnough(p0, p1, p2, p3, tolerance)) {
+std::optional<int> WindingNumberContributionCurve(const Vector2d& p0, const Vector2d& p1,
+                                                  const Vector2d& p2, const Vector2d& p3,
+                                                  const Vector2d& point, double tolerance,
+                                                  GeometryQueryWorkBudget& workBudget,
+                                                  int depth = 0) {
+  if (!workBudget.consume()) {
+    return std::nullopt;
+  }
+
+  if (IsCurveFlatEnough(p0, p1, p2, p3, tolerance)) {
     return WindingNumberContribution(p0, p3, point);
+  }
+  if (depth >= Path::kMaximumHitTestSubdivisionDepth) {
+    return std::nullopt;
   }
 
   const Vector2d p01 = (p0 + p1) * 0.5;
@@ -698,15 +838,33 @@ int WindingNumberContributionCurve(const Vector2d& p0, const Vector2d& p1, const
   const Vector2d p123 = (p12 + p23) * 0.5;
   const Vector2d p0123 = (p012 + p123) * 0.5;
 
-  return WindingNumberContributionCurve(p0, p01, p012, p0123, point, tolerance, depth + 1) +
-         WindingNumberContributionCurve(p0123, p123, p23, p3, point, tolerance, depth + 1);
+  const auto left =
+      WindingNumberContributionCurve(p0, p01, p012, p0123, point, tolerance, workBudget, depth + 1);
+  if (!left.has_value()) {
+    return std::nullopt;
+  }
+  const auto right =
+      WindingNumberContributionCurve(p0123, p123, p23, p3, point, tolerance, workBudget, depth + 1);
+  if (!right.has_value()) {
+    return std::nullopt;
+  }
+  return *left + *right;
 }
 
 /// Recursive check whether a point is within \p tolerance of a cubic Bezier.
-bool IsPointOnCubicBezier(const Vector2d& point, const Vector2d& p0, const Vector2d& p1,
-                          const Vector2d& p2, const Vector2d& p3, double tolerance, int depth = 0) {
-  if (depth > kHitTestMaxDepth || IsCurveFlatEnough(p0, p1, p2, p3, tolerance)) {
+std::optional<bool> IsPointOnCubicBezier(const Vector2d& point, const Vector2d& p0,
+                                         const Vector2d& p1, const Vector2d& p2, const Vector2d& p3,
+                                         double tolerance, GeometryQueryWorkBudget& workBudget,
+                                         int depth = 0) {
+  if (!workBudget.consume()) {
+    return std::nullopt;
+  }
+
+  if (IsCurveFlatEnough(p0, p1, p2, p3, tolerance)) {
     return DistanceFromPointToLine(point, p0, p3) <= tolerance;
+  }
+  if (depth >= Path::kMaximumHitTestSubdivisionDepth) {
+    return std::nullopt;
   }
 
   const Vector2d p01 = (p0 + p1) * 0.5;
@@ -716,142 +874,217 @@ bool IsPointOnCubicBezier(const Vector2d& point, const Vector2d& p0, const Vecto
   const Vector2d p123 = (p12 + p23) * 0.5;
   const Vector2d p0123 = (p012 + p123) * 0.5;
 
-  return IsPointOnCubicBezier(point, p0, p01, p012, p0123, tolerance, depth + 1) ||
-         IsPointOnCubicBezier(point, p0123, p123, p23, p3, tolerance, depth + 1);
+  const auto left =
+      IsPointOnCubicBezier(point, p0, p01, p012, p0123, tolerance, workBudget, depth + 1);
+  if (!left.has_value() || *left) {
+    return left;
+  }
+  return IsPointOnCubicBezier(point, p0123, p123, p23, p3, tolerance, workBudget, depth + 1);
+}
+
+enum class PathHitResult : uint8_t { Continue, Hit, Rejected };
+
+struct InsidePathResult {
+  int windingNumber = 0;
+  bool boundaryHit = false;
+  bool valid = true;
+};
+
+PathHitResult AccumulateInsideLine(const Vector2d& point, const Vector2d& start,
+                                   const Vector2d& end, double tolerance, int& windingNumber) {
+  if (DistanceFromPointToLine(point, start, end) <= tolerance) {
+    return PathHitResult::Hit;
+  }
+  windingNumber += WindingNumberContribution(start, end, point);
+  return PathHitResult::Continue;
+}
+
+PathHitResult AccumulateInsideCubic(const Vector2d& point, const Vector2d& start,
+                                    const Vector2d& c1, const Vector2d& c2, const Vector2d& end,
+                                    double boundaryTolerance, int& windingNumber,
+                                    GeometryQueryWorkBudget& workBudget) {
+  const auto isOnCurve =
+      IsPointOnCubicBezier(point, start, c1, c2, end, boundaryTolerance, workBudget);
+  if (!isOnCurve.has_value()) {
+    return PathHitResult::Rejected;
+  }
+  if (*isOnCurve) {
+    return PathHitResult::Hit;
+  }
+  const auto contribution =
+      WindingNumberContributionCurve(start, c1, c2, end, point, kHitTestTolerance, workBudget);
+  if (!contribution.has_value()) {
+    return PathHitResult::Rejected;
+  }
+  windingNumber += *contribution;
+  return PathHitResult::Continue;
+}
+
+PathHitResult AccumulateInsideCommand(const Path::Command& command,
+                                      std::span<const Vector2d> points, const Vector2d& point,
+                                      double boundaryTolerance, Vector2d& currentPoint,
+                                      Vector2d& subpathStart, int& windingNumber,
+                                      GeometryQueryWorkBudget& workBudget) {
+  switch (command.verb) {
+    case Path::Verb::MoveTo:
+      currentPoint = points[command.pointIndex];
+      subpathStart = currentPoint;
+      return PathHitResult::Continue;
+    case Path::Verb::LineTo: {
+      const Vector2d& end = points[command.pointIndex];
+      const PathHitResult result =
+          AccumulateInsideLine(point, currentPoint, end, boundaryTolerance, windingNumber);
+      currentPoint = end;
+      return result;
+    }
+    case Path::Verb::QuadTo: {
+      const Vector2d& control = points[command.pointIndex];
+      const Vector2d& end = points[command.pointIndex + 1];
+      const Vector2d c1 = currentPoint + (control - currentPoint) * (2.0 / 3.0);
+      const Vector2d c2 = end + (control - end) * (2.0 / 3.0);
+      const PathHitResult result = AccumulateInsideCubic(
+          point, currentPoint, c1, c2, end, boundaryTolerance, windingNumber, workBudget);
+      currentPoint = end;
+      return result;
+    }
+    case Path::Verb::CurveTo: {
+      const Vector2d& c1 = points[command.pointIndex];
+      const Vector2d& c2 = points[command.pointIndex + 1];
+      const Vector2d& end = points[command.pointIndex + 2];
+      const PathHitResult result = AccumulateInsideCubic(
+          point, currentPoint, c1, c2, end, boundaryTolerance, windingNumber, workBudget);
+      currentPoint = end;
+      return result;
+    }
+    case Path::Verb::ClosePath: {
+      const PathHitResult result =
+          AccumulateInsideLine(point, currentPoint, subpathStart, boundaryTolerance, windingNumber);
+      currentPoint = subpathStart;
+      return result;
+    }
+  }
+  UTILS_UNREACHABLE();
+}
+
+InsidePathResult AccumulateInsidePath(std::span<const Path::Command> commands,
+                                      std::span<const Vector2d> points, const Vector2d& point,
+                                      double boundaryTolerance) {
+  GeometryQueryWorkBudget workBudget;
+  InsidePathResult result;
+  Vector2d currentPoint;
+  Vector2d subpathStart;
+  for (const Path::Command& command : commands) {
+    if (!workBudget.consume()) {
+      result.valid = false;
+      return result;
+    }
+    const PathHitResult commandResult =
+        AccumulateInsideCommand(command, points, point, boundaryTolerance, currentPoint,
+                                subpathStart, result.windingNumber, workBudget);
+    if (commandResult == PathHitResult::Hit) {
+      result.boundaryHit = true;
+      return result;
+    }
+    if (commandResult == PathHitResult::Rejected) {
+      result.valid = false;
+      return result;
+    }
+  }
+  return result;
+}
+
+PathHitResult HitTestCubic(const Vector2d& point, const Vector2d& start, const Vector2d& c1,
+                           const Vector2d& c2, const Vector2d& end, double tolerance,
+                           GeometryQueryWorkBudget& workBudget) {
+  const auto isOnCurve = IsPointOnCubicBezier(point, start, c1, c2, end, tolerance, workBudget);
+  if (!isOnCurve.has_value()) {
+    return PathHitResult::Rejected;
+  }
+  return *isOnCurve ? PathHitResult::Hit : PathHitResult::Continue;
+}
+
+PathHitResult HitTestStrokeCommand(const Path::Command& command, std::span<const Vector2d> points,
+                                   const Vector2d& point, double tolerance, Vector2d& currentPoint,
+                                   Vector2d& subpathStart, GeometryQueryWorkBudget& workBudget) {
+  switch (command.verb) {
+    case Path::Verb::MoveTo:
+      currentPoint = points[command.pointIndex];
+      subpathStart = currentPoint;
+      return PathHitResult::Continue;
+    case Path::Verb::LineTo: {
+      const Vector2d& end = points[command.pointIndex];
+      const bool hit = DistanceFromPointToLine(point, currentPoint, end) <= tolerance;
+      currentPoint = end;
+      return hit ? PathHitResult::Hit : PathHitResult::Continue;
+    }
+    case Path::Verb::QuadTo: {
+      const Vector2d& control = points[command.pointIndex];
+      const Vector2d& end = points[command.pointIndex + 1];
+      const Vector2d c1 = currentPoint + (control - currentPoint) * (2.0 / 3.0);
+      const Vector2d c2 = end + (control - end) * (2.0 / 3.0);
+      const PathHitResult result =
+          HitTestCubic(point, currentPoint, c1, c2, end, tolerance, workBudget);
+      currentPoint = end;
+      return result;
+    }
+    case Path::Verb::CurveTo: {
+      const Vector2d& c1 = points[command.pointIndex];
+      const Vector2d& c2 = points[command.pointIndex + 1];
+      const Vector2d& end = points[command.pointIndex + 2];
+      const PathHitResult result =
+          HitTestCubic(point, currentPoint, c1, c2, end, tolerance, workBudget);
+      currentPoint = end;
+      return result;
+    }
+    case Path::Verb::ClosePath: {
+      const bool hit = DistanceFromPointToLine(point, currentPoint, subpathStart) <= tolerance;
+      currentPoint = subpathStart;
+      return hit ? PathHitResult::Hit : PathHitResult::Continue;
+    }
+  }
+  UTILS_UNREACHABLE();
+}
+
+PathHitResult HitTestPathStroke(std::span<const Path::Command> commands,
+                                std::span<const Vector2d> points, const Vector2d& point,
+                                double tolerance) {
+  GeometryQueryWorkBudget workBudget;
+  Vector2d currentPoint;
+  Vector2d subpathStart;
+  for (const Path::Command& command : commands) {
+    if (!workBudget.consume()) {
+      return PathHitResult::Rejected;
+    }
+    const PathHitResult result = HitTestStrokeCommand(command, points, point, tolerance,
+                                                      currentPoint, subpathStart, workBudget);
+    if (result != PathHitResult::Continue) {
+      return result;
+    }
+  }
+  return PathHitResult::Continue;
 }
 
 }  // namespace
 
 bool Path::isInside(const Vector2d& point, FillRule fillRule) const {
   constexpr double kIsInsideTolerance = 0.1;
-
-  int windingNumber = 0;
-  Vector2d currentPoint;
-  Vector2d subpathStart;
-
-  for (size_t i = 0; i < commands_.size(); ++i) {
-    const Command& cmd = commands_[i];
-    switch (cmd.verb) {
-      case Verb::MoveTo: {
-        currentPoint = points_[cmd.pointIndex];
-        subpathStart = currentPoint;
-        break;
-      }
-
-      case Verb::LineTo: {
-        const Vector2d& endPt = points_[cmd.pointIndex];
-        if (DistanceFromPointToLine(point, currentPoint, endPt) <= kIsInsideTolerance) {
-          return true;
-        }
-        windingNumber += WindingNumberContribution(currentPoint, endPt, point);
-        currentPoint = endPt;
-        break;
-      }
-
-      case Verb::QuadTo: {
-        // Elevate to cubic for hit testing.
-        const Vector2d& control = points_[cmd.pointIndex];
-        const Vector2d& endPt = points_[cmd.pointIndex + 1];
-        const Vector2d c1 = currentPoint + (control - currentPoint) * (2.0 / 3.0);
-        const Vector2d c2 = endPt + (control - endPt) * (2.0 / 3.0);
-        if (IsPointOnCubicBezier(point, currentPoint, c1, c2, endPt, kIsInsideTolerance)) {
-          return true;
-        }
-        windingNumber +=
-            WindingNumberContributionCurve(currentPoint, c1, c2, endPt, point, kHitTestTolerance);
-        currentPoint = endPt;
-        break;
-      }
-
-      case Verb::CurveTo: {
-        const Vector2d& c1 = points_[cmd.pointIndex];
-        const Vector2d& c2 = points_[cmd.pointIndex + 1];
-        const Vector2d& endPt = points_[cmd.pointIndex + 2];
-        if (IsPointOnCubicBezier(point, currentPoint, c1, c2, endPt, kIsInsideTolerance)) {
-          return true;
-        }
-        windingNumber +=
-            WindingNumberContributionCurve(currentPoint, c1, c2, endPt, point, kHitTestTolerance);
-        currentPoint = endPt;
-        break;
-      }
-
-      case Verb::ClosePath: {
-        if (DistanceFromPointToLine(point, currentPoint, subpathStart) <= kIsInsideTolerance) {
-          return true;
-        }
-        windingNumber += WindingNumberContribution(currentPoint, subpathStart, point);
-        currentPoint = subpathStart;
-        break;
-      }
-    }
+  const InsidePathResult result =
+      AccumulateInsidePath(commands_, points_, point, kIsInsideTolerance);
+  if (!result.valid) {
+    return false;
   }
-
-  if (fillRule == FillRule::NonZero) {
-    return windingNumber != 0;
-  } else if (fillRule == FillRule::EvenOdd) {
-    return (windingNumber % 2) != 0;
+  if (result.boundaryHit) {
+    return true;
   }
-
+  switch (fillRule) {
+    case FillRule::NonZero: return result.windingNumber != 0;
+    case FillRule::EvenOdd: return (result.windingNumber % 2) != 0;
+  }
   UTILS_UNREACHABLE();  // LCOV_EXCL_LINE
 }
 
 bool Path::isOnPath(const Vector2d& point, double strokeWidth) const {
-  Vector2d currentPoint;
-  Vector2d subpathStart;
-
-  for (const Command& cmd : commands_) {
-    switch (cmd.verb) {
-      case Verb::MoveTo: {
-        currentPoint = points_[cmd.pointIndex];
-        subpathStart = currentPoint;
-        break;
-      }
-
-      case Verb::LineTo: {
-        const Vector2d& endPt = points_[cmd.pointIndex];
-        if (DistanceFromPointToLine(point, currentPoint, endPt) <= strokeWidth) {
-          return true;
-        }
-        currentPoint = endPt;
-        break;
-      }
-
-      case Verb::QuadTo: {
-        // Elevate to cubic for hit testing.
-        const Vector2d& control = points_[cmd.pointIndex];
-        const Vector2d& endPt = points_[cmd.pointIndex + 1];
-        const Vector2d c1 = currentPoint + (control - currentPoint) * (2.0 / 3.0);
-        const Vector2d c2 = endPt + (control - endPt) * (2.0 / 3.0);
-        if (IsPointOnCubicBezier(point, currentPoint, c1, c2, endPt, strokeWidth)) {
-          return true;
-        }
-        currentPoint = endPt;
-        break;
-      }
-
-      case Verb::CurveTo: {
-        const Vector2d& c1 = points_[cmd.pointIndex];
-        const Vector2d& c2 = points_[cmd.pointIndex + 1];
-        const Vector2d& endPt = points_[cmd.pointIndex + 2];
-        if (IsPointOnCubicBezier(point, currentPoint, c1, c2, endPt, strokeWidth)) {
-          return true;
-        }
-        currentPoint = endPt;
-        break;
-      }
-
-      case Verb::ClosePath: {
-        if (DistanceFromPointToLine(point, currentPoint, subpathStart) <= strokeWidth) {
-          return true;
-        }
-        currentPoint = subpathStart;
-        break;
-      }
-    }
-  }
-
-  return false;
+  return HitTestPathStroke(commands_, points_, point, strokeWidth) == PathHitResult::Hit;
 }
 
 namespace {
@@ -1360,37 +1593,51 @@ std::ostream& operator<<(std::ostream& os, const Path& path) {
 
 namespace {
 
-constexpr int kMaxFlattenDepth = 10;
-
-void flattenQuadratic(PathBuilder& builder, const Vector2d& p0, const Vector2d& p1,
+bool flattenQuadratic(PathBuilder& builder, const Vector2d& p0, const Vector2d& p1,
                       const Vector2d& p2, double tolerance, int depth) {
+  if (builder.exceededMaximumPoints()) {
+    return false;
+  }
   const Vector2d mid = (p0 + p2) * 0.5;
   const double dist = (p1 - mid).length();
 
-  if (dist <= tolerance || depth >= kMaxFlattenDepth) {
+  if (dist <= tolerance) {
     builder.lineTo(p2);
-    return;
+    return !builder.exceededMaximumPoints();
+  }
+  if (depth >= Path::kMaximumFlattenSubdivisionDepth) {
+    return false;
   }
 
   auto [left, right] = SplitQuadratic(p0, p1, p2, 0.5);
-  flattenQuadratic(builder, left[0], left[1], left[2], tolerance, depth + 1);
-  flattenQuadratic(builder, right[0], right[1], right[2], tolerance, depth + 1);
+  if (!flattenQuadratic(builder, left[0], left[1], left[2], tolerance, depth + 1)) {
+    return false;
+  }
+  return flattenQuadratic(builder, right[0], right[1], right[2], tolerance, depth + 1);
 }
 
-void flattenCubic(PathBuilder& builder, const Vector2d& p0, const Vector2d& p1, const Vector2d& p2,
+bool flattenCubic(PathBuilder& builder, const Vector2d& p0, const Vector2d& p1, const Vector2d& p2,
                   const Vector2d& p3, double tolerance, int depth) {
+  if (builder.exceededMaximumPoints()) {
+    return false;
+  }
   const Vector2d d1 = p1 - (p0 * (2.0 / 3.0) + p3 * (1.0 / 3.0));
   const Vector2d d2 = p2 - (p0 * (1.0 / 3.0) + p3 * (2.0 / 3.0));
   const double dist = std::max(d1.length(), d2.length());
 
-  if (dist <= tolerance || depth >= kMaxFlattenDepth) {
+  if (dist <= tolerance) {
     builder.lineTo(p3);
-    return;
+    return !builder.exceededMaximumPoints();
+  }
+  if (depth >= Path::kMaximumFlattenSubdivisionDepth) {
+    return false;
   }
 
   auto [left, right] = SplitCubic(p0, p1, p2, p3, 0.5);
-  flattenCubic(builder, left[0], left[1], left[2], left[3], tolerance, depth + 1);
-  flattenCubic(builder, right[0], right[1], right[2], right[3], tolerance, depth + 1);
+  if (!flattenCubic(builder, left[0], left[1], left[2], left[3], tolerance, depth + 1)) {
+    return false;
+  }
+  return flattenCubic(builder, right[0], right[1], right[2], right[3], tolerance, depth + 1);
 }
 
 }  // namespace
@@ -1398,7 +1645,17 @@ void flattenCubic(PathBuilder& builder, const Vector2d& p0, const Vector2d& p1, 
 Path Path::flatten(double tolerance) const {
   PathBuilder builder;
 
+  if (!flattenInto(builder, tolerance)) {
+    return Path();
+  }
+  return builder.build();
+}
+
+bool Path::flattenInto(PathBuilder& builder, double tolerance) const {
   for (size_t i = 0; i < commands_.size(); ++i) {
+    if (builder.exceededMaximumPoints()) {
+      return false;
+    }
     const auto& cmd = commands_[i];
     switch (cmd.verb) {
       case Verb::MoveTo: builder.moveTo(points_[cmd.pointIndex]); break;
@@ -1409,7 +1666,9 @@ Path Path::flatten(double tolerance) const {
         const Vector2d start = findStartPoint(commands_, points_, i);
         const Vector2d& control = points_[cmd.pointIndex];
         const Vector2d& end = points_[cmd.pointIndex + 1];
-        flattenQuadratic(builder, start, control, end, tolerance, 0);
+        if (!flattenQuadratic(builder, start, control, end, tolerance, 0)) {
+          return false;
+        }
         break;
       }
 
@@ -1418,15 +1677,16 @@ Path Path::flatten(double tolerance) const {
         const Vector2d& c1 = points_[cmd.pointIndex];
         const Vector2d& c2 = points_[cmd.pointIndex + 1];
         const Vector2d& end = points_[cmd.pointIndex + 2];
-        flattenCubic(builder, start, c1, c2, end, tolerance, 0);
+        if (!flattenCubic(builder, start, c1, c2, end, tolerance, 0)) {
+          return false;
+        }
         break;
       }
 
       case Verb::ClosePath: builder.closePath(); break;
     }
   }
-
-  return builder.build();
+  return !builder.exceededMaximumPoints();
 }
 
 namespace {
@@ -1523,6 +1783,9 @@ void emitJoin(const Vector2d& prevEnd, const Vector2d& curStart, const Vector2d&
               const Vector2d& prevNormal, const Vector2d& curNormal, double halfWidth,
               LineJoin join, double miterLimit, double prevSegmentLength, double curSegmentLength,
               PathBuilder& builder, bool isLeftSide) {
+  if (builder.exceededMaximumPoints()) {
+    return;
+  }
   // Determine the turn direction. The cross product of the two normals tells us
   // whether the join is on the inside or outside of the turn.
   // For a left turn (counter-clockwise), the outside is on the left side.
@@ -1630,8 +1893,8 @@ void emitJoin(const Vector2d& prevEnd, const Vector2d& curStart, const Vector2d&
       }
 
       // Subdivide into small arcs.
-      const int numSteps = std::max(4, static_cast<int>(std::ceil(Abs(sweep) * halfWidth / 2.0)));
-      for (int s = 1; s <= numSteps; ++s) {
+      const int numSteps = BoundedRoundStrokeSubdivisionSteps(Abs(sweep) * halfWidth / 2.0, 4);
+      for (int s = 1; s <= numSteps && !builder.exceededMaximumPoints(); ++s) {
         const double t = static_cast<double>(s) / static_cast<double>(numSteps);
         const double angle = startAngle + sweep * t;
         const Vector2d pt = vertex + Vector2d(std::cos(angle), std::sin(angle)) * halfWidth;
@@ -1683,6 +1946,9 @@ void emitJoin(const Vector2d& prevEnd, const Vector2d& curStart, const Vector2d&
 /// \p builder is the PathBuilder to emit to.
 void emitCap(const Vector2d& point, const Vector2d& direction, double halfWidth, LineCap cap,
              PathBuilder& builder) {
+  if (builder.exceededMaximumPoints()) {
+    return;
+  }
   const Vector2d normal = Vector2d(-direction.y, direction.x);
   const Vector2d leftPt = point + normal * halfWidth;
   const Vector2d rightPt = point - normal * halfWidth;
@@ -1708,8 +1974,8 @@ void emitCap(const Vector2d& point, const Vector2d& direction, double halfWidth,
       // Sweep PI radians (semicircle) in the direction from left to right around the cap.
       const double sweep = -MathConstants<double>::kPi;
 
-      const int numSteps = std::max(8, static_cast<int>(std::ceil(halfWidth * 2.0)));
-      for (int s = 1; s <= numSteps; ++s) {
+      const int numSteps = BoundedRoundStrokeSubdivisionSteps(halfWidth * 2.0, 8);
+      for (int s = 1; s <= numSteps && !builder.exceededMaximumPoints(); ++s) {
         const double t = static_cast<double>(s) / static_cast<double>(numSteps);
         const double angle = startAngle + sweep * t;
         const Vector2d pt = point + Vector2d(std::cos(angle), std::sin(angle)) * halfWidth;
@@ -1745,11 +2011,22 @@ struct FlatSubpath {
   std::vector<TangentOverride> tangentOverrides;
 };
 
-/// Extract subpaths from a flattened path.
-std::vector<FlatSubpath> extractSubpaths(const Path& path) {
+/// Extract subpaths from a flattened path without exceeding @p maximumPoints.
+std::optional<std::vector<FlatSubpath>> extractSubpaths(const Path& path,
+                                                        std::size_t maximumPoints) {
   std::vector<FlatSubpath> subpaths;
   FlatSubpath current;
   Vector2d moveToPoint;
+  std::size_t extractedPoints = 0;
+
+  auto appendPoint = [&](const Vector2d& point) {
+    if (extractedPoints >= maximumPoints) {
+      return false;
+    }
+    current.points.push_back(point);
+    ++extractedPoints;
+    return true;
+  };
 
   for (const auto& cmd : path.commands()) {
     switch (cmd.verb) {
@@ -1759,20 +2036,30 @@ std::vector<FlatSubpath> extractSubpaths(const Path& path) {
         }
         current = FlatSubpath();
         moveToPoint = path.points()[cmd.pointIndex];
-        current.points.push_back(moveToPoint);
+        if (!appendPoint(moveToPoint)) {
+          return std::nullopt;
+        }
         break;
 
-      case Path::Verb::LineTo: current.points.push_back(path.points()[cmd.pointIndex]); break;
+      case Path::Verb::LineTo:
+        if (!appendPoint(path.points()[cmd.pointIndex])) {
+          return std::nullopt;
+        }
+        break;
 
       case Path::Verb::ClosePath:
         // Close: add closing line back to moveTo if needed.
         if (!current.points.empty() && current.points.back().distanceSquared(moveToPoint) > 1e-20) {
-          current.points.push_back(moveToPoint);
+          if (!appendPoint(moveToPoint)) {
+            return std::nullopt;
+          }
         }
         current.closed = true;
         subpaths.push_back(std::move(current));
         current = FlatSubpath();
-        current.points.push_back(moveToPoint);
+        if (!appendPoint(moveToPoint)) {
+          return std::nullopt;
+        }
         break;
 
       case Path::Verb::QuadTo:
@@ -1965,6 +2252,9 @@ void computeCurveBoundaryOverrides(const Path& originalPath, std::vector<FlatSub
 
 /// Build the stroke outline for a single subpath.
 void strokeSubpath(const FlatSubpath& subpath, const StrokeStyle& style, PathBuilder& builder) {
+  if (builder.exceededMaximumPoints()) {
+    return;
+  }
   const auto& pts = subpath.points;
   const size_t n = pts.size();
   if (n < 2) {
@@ -2012,9 +2302,9 @@ void strokeSubpath(const FlatSubpath& subpath, const StrokeStyle& style, PathBui
     // Round: full circle approximated as a polygon. Use the same
     // step-per-pixel heuristic as `emitCap`'s round-cap branch - 8 minimum,
     // otherwise proportional to the circumference.
-    const int numSteps = std::max(16, static_cast<int>(std::ceil(halfWidth * 4.0)));
+    const int numSteps = BoundedRoundStrokeSubdivisionSteps(halfWidth * 4.0, 16);
     builder.moveTo(Vector2d(p.x + halfWidth, p.y));
-    for (int s = 1; s < numSteps; ++s) {
+    for (int s = 1; s < numSteps && !builder.exceededMaximumPoints(); ++s) {
       const double angle = (static_cast<double>(s) / static_cast<double>(numSteps)) * 2.0 *
                            MathConstants<double>::kPi;
       builder.lineTo(
@@ -2069,7 +2359,7 @@ void strokeSubpath(const FlatSubpath& subpath, const StrokeStyle& style, PathBui
   // Each iteration processes the join at `pts[i]` between segment (i-1)
   // and segment i. emitJoin handles the end-of-prev-offset / start-of-cur-
   // offset bookkeeping itself.
-  for (size_t i = 1; i < numSegments; ++i) {
+  for (size_t i = 1; i < numSegments && !builder.exceededMaximumPoints(); ++i) {
     const Vector2d prevEnd = pts[i] + normals[i - 1] * halfWidth;
     const Vector2d curStart = pts[i] + normals[i] * halfWidth;
 
@@ -2105,7 +2395,7 @@ void strokeSubpath(const FlatSubpath& subpath, const StrokeStyle& style, PathBui
     const Vector2d rightStart = pts[0] - normals[0] * halfWidth;
     builder.moveTo(rightStart);
 
-    for (size_t i = 1; i < numSegments; ++i) {
+    for (size_t i = 1; i < numSegments && !builder.exceededMaximumPoints(); ++i) {
       const Vector2d prevEnd = pts[i] - normals[i - 1] * halfWidth;
       const Vector2d curStart = pts[i] - normals[i] * halfWidth;
 
@@ -2151,7 +2441,7 @@ void strokeSubpath(const FlatSubpath& subpath, const StrokeStyle& style, PathBui
     // (the start of the right-contour traversal, which is where the end
     // cap ended). Each iteration processes the join at `pts[i]` between
     // segment i (previous, in the backward walk) and segment i-1 (current).
-    for (size_t i = numSegments - 1; i > 0; --i) {
+    for (size_t i = numSegments - 1; i > 0 && !builder.exceededMaximumPoints(); --i) {
       const Vector2d prevEnd = pts[i] - normals[i] * halfWidth;
       const Vector2d curStart = pts[i] - normals[i - 1] * halfWidth;
 
@@ -2172,19 +2462,6 @@ void strokeSubpath(const FlatSubpath& subpath, const StrokeStyle& style, PathBui
 
     builder.closePath();
   }
-}
-
-/// Compute the total arc length of a flat subpath (sum of segment lengths).
-double subpathLength(const FlatSubpath& subpath) {
-  const auto& pts = subpath.points;
-  if (pts.size() < 2) {
-    return 0.0;
-  }
-  double total = 0.0;
-  for (size_t i = 1; i < pts.size(); ++i) {
-    total += (pts[i] - pts[i - 1]).length();
-  }
-  return total;
 }
 
 /// Resolve the effective (repeat-doubled) dash pattern and the normalized
@@ -2282,135 +2559,146 @@ std::optional<ResolvedDashPattern> resolveDashPattern(const std::vector<double>&
   return result;
 }
 
-/// Extract a sub-polyline of a subpath in the arc-length range
-/// [startDist, endDist], producing a FlatSubpath containing the polyline
-/// points at the exact start/end cuts (interpolated along the original
-/// segment if the cut falls mid-segment). Both distances must be within
-/// [0, total arc length]. Empty result if the range is degenerate.
-///
-/// For closed subpaths, callers handle wrap-around by calling this twice.
-FlatSubpath extractPolylineRange(const FlatSubpath& subpath, double startDist, double endDist) {
-  FlatSubpath result;
-  const auto& pts = subpath.points;
-  if (pts.size() < 2 || endDist <= startDist) {
+enum class DashedStrokeResult {
+  Emitted,
+  FallbackToSolid,
+  Rejected,
+};
+
+class DashPatternWorkBudget {
+public:
+  static constexpr std::size_t kMaximumIterations = 4 * 65536;
+
+  bool consume(std::size_t amount = 1) {
+    if (amount > kMaximumIterations - iterations_) {
+      return false;
+    }
+    iterations_ += amount;
+    return true;
+  }
+
+private:
+  std::size_t iterations_ = 0;
+};
+
+/** Cumulative arc-length index for one flattened subpath. */
+class FlatSubpathArcIndex {
+public:
+  static std::optional<FlatSubpathArcIndex> Build(const FlatSubpath& subpath,
+                                                  DashPatternWorkBudget& workBudget) {
+    const std::size_t segmentCount = subpath.points.empty() ? 0 : subpath.points.size() - 1;
+    if (!workBudget.consume(segmentCount)) {
+      return std::nullopt;
+    }
+
+    FlatSubpathArcIndex result(subpath);
+    result.cumulativeLengths_.reserve(subpath.points.size());
+    result.cumulativeLengths_.push_back(0.0);
+    for (std::size_t i = 0; i < segmentCount; ++i) {
+      const double segmentLength = (subpath.points[i + 1] - subpath.points[i]).length();
+      const double next = result.cumulativeLengths_.back() + segmentLength;
+      if (!std::isfinite(next)) {
+        return std::nullopt;
+      }
+      result.cumulativeLengths_.push_back(next);
+    }
     return result;
   }
 
-  // Walk segments accumulating arc length.
-  double cursor = 0.0;
-  bool started = false;
-  for (size_t i = 0; i + 1 < pts.size(); ++i) {
-    const Vector2d& a = pts[i];
-    const Vector2d& b = pts[i + 1];
-    const double segLen = (b - a).length();
-    if (segLen <= 0.0) {
-      continue;
-    }
-    const double segEnd = cursor + segLen;
+  double totalLength() const {
+    return cumulativeLengths_.empty() ? 0.0 : cumulativeLengths_.back();
+  }
 
-    // If this entire segment is before startDist, skip.
-    if (segEnd <= startDist) {
-      cursor = segEnd;
-      continue;
+  Vector2d pointAt(double distance) const {
+    const auto segment = segmentAt(distance);
+    if (!segment.has_value()) {
+      return subpath_.points.empty() ? Vector2d() : subpath_.points.back();
     }
-    // If this entire segment is past endDist, we're done.
-    if (cursor >= endDist) {
-      break;
-    }
+    const double start = cumulativeLengths_[*segment];
+    const double length = cumulativeLengths_[*segment + 1] - start;
+    const double t = std::clamp((distance - start) / length, 0.0, 1.0);
+    return subpath_.points[*segment] +
+           (subpath_.points[*segment + 1] - subpath_.points[*segment]) * t;
+  }
 
-    // The segment overlaps [startDist, endDist]. Compute the clipped portion.
-    const double tStart = std::max(0.0, (startDist - cursor) / segLen);
-    const double tEnd = std::min(1.0, (endDist - cursor) / segLen);
+  Vector2d tangentAt(double distance) const {
+    const auto segment = segmentAt(distance);
+    return segment.has_value() ? subpath_.points[*segment + 1] - subpath_.points[*segment]
+                               : Vector2d();
+  }
 
-    if (!started) {
-      const Vector2d startPt = a + (b - a) * tStart;
-      result.points.push_back(startPt);
-      started = true;
+  FlatSubpath extractRange(double startDistance, double endDistance) const {
+    FlatSubpath result;
+    if (subpath_.points.size() < 2 || endDistance <= startDistance ||
+        startDistance >= totalLength()) {
+      return result;
     }
 
-    if (tEnd >= 1.0) {
-      // Segment's full remainder is included; emit b (or skip if equal to
-      // the previous point due to floating-point slop).
-      if (result.points.empty() || result.points.back().distanceSquared(b) > 1e-24) {
-        result.points.push_back(b);
+    const auto firstEnd = std::upper_bound(cumulativeLengths_.begin(), cumulativeLengths_.end(),
+                                           std::max(startDistance, 0.0));
+    if (firstEnd == cumulativeLengths_.end()) {
+      return result;
+    }
+
+    std::size_t segment = static_cast<std::size_t>(firstEnd - cumulativeLengths_.begin() - 1);
+    for (; segment + 1 < subpath_.points.size() && cumulativeLengths_[segment] < endDistance;
+         ++segment) {
+      const double segmentStart = cumulativeLengths_[segment];
+      const double segmentLength = cumulativeLengths_[segment + 1] - segmentStart;
+      if (segmentLength <= 0.0) {
+        continue;
       }
-    } else {
-      // End cut falls inside this segment; emit the interpolated endpoint.
-      const Vector2d endPt = a + (b - a) * tEnd;
-      if (result.points.empty() || result.points.back().distanceSquared(endPt) > 1e-24) {
-        result.points.push_back(endPt);
+
+      const double tStart = std::clamp((startDistance - segmentStart) / segmentLength, 0.0, 1.0);
+      const double tEnd = std::clamp((endDistance - segmentStart) / segmentLength, 0.0, 1.0);
+      const Vector2d& a = subpath_.points[segment];
+      const Vector2d& b = subpath_.points[segment + 1];
+      if (result.points.empty()) {
+        result.points.push_back(a + (b - a) * tStart);
+      }
+      const Vector2d endPoint = a + (b - a) * tEnd;
+      if (result.points.back().distanceSquared(endPoint) > 1e-24) {
+        result.points.push_back(endPoint);
+      }
+      if (tEnd < 1.0) {
+        break;
       }
     }
-
-    cursor = segEnd;
+    return result;
   }
 
-  return result;
-}
+private:
+  explicit FlatSubpathArcIndex(const FlatSubpath& subpath) : subpath_(subpath) {}
 
-/// Return the point at an arc-length distance along a flattened subpath.
-Vector2d pointAtPolylineDistance(const FlatSubpath& subpath, double distance) {
-  const auto& pts = subpath.points;
-  if (pts.empty()) {
-    return Vector2d();
-  }
-  if (distance <= 0.0) {
-    return pts.front();
-  }
-
-  double cursor = 0.0;
-  for (size_t i = 0; i + 1 < pts.size(); ++i) {
-    const Vector2d& a = pts[i];
-    const Vector2d& b = pts[i + 1];
-    const double segLen = (b - a).length();
-    if (segLen <= 0.0) {
-      continue;
+  std::optional<std::size_t> segmentAt(double distance) const {
+    if (subpath_.points.size() < 2 || totalLength() <= 0.0) {
+      return std::nullopt;
     }
 
-    const double segEnd = cursor + segLen;
-    if (distance <= segEnd) {
-      return a + (b - a) * ((distance - cursor) / segLen);
+    const double clamped = std::clamp(distance, 0.0, totalLength());
+    auto segmentEnd =
+        clamped < totalLength()
+            ? std::upper_bound(cumulativeLengths_.begin(), cumulativeLengths_.end(), clamped)
+            : std::lower_bound(cumulativeLengths_.begin() + 1, cumulativeLengths_.end(), clamped);
+    if (segmentEnd == cumulativeLengths_.end()) {
+      return std::nullopt;
     }
-    cursor = segEnd;
+    return static_cast<std::size_t>(segmentEnd - cumulativeLengths_.begin() - 1);
   }
 
-  return pts.back();
-}
+  const FlatSubpath& subpath_;
+  std::vector<double> cumulativeLengths_;
+};
 
-/// Return the path tangent at an arc-length distance along a flattened subpath.
-Vector2d tangentAtPolylineDistance(const FlatSubpath& subpath, double distance) {
-  const auto& pts = subpath.points;
-  Vector2d lastTangent;
-  double cursor = 0.0;
-  for (size_t i = 0; i + 1 < pts.size(); ++i) {
-    const Vector2d tangent = pts[i + 1] - pts[i];
-    const double segmentLength = tangent.length();
-    if (segmentLength <= 0.0) {
-      continue;
-    }
-
-    lastTangent = tangent;
-    if (distance <= cursor + segmentLength) {
-      return tangent;
-    }
-    cursor += segmentLength;
+/// Dash a single subpath and emit its stroked dashes to the builder.
+DashedStrokeResult strokeDashedSubpath(const FlatSubpath& subpath, const StrokeStyle& style,
+                                       const FlatSubpathArcIndex& arcIndex,
+                                       const ResolvedDashPattern& pattern,
+                                       DashPatternWorkBudget& workBudget, PathBuilder& builder) {
+  const double totalArc = arcIndex.totalLength();
+  if (totalArc <= 0.0) {
+    return DashedStrokeResult::FallbackToSolid;
   }
-
-  return lastTangent;
-}
-
-/// Dash a single subpath and emit its stroked dashes to the builder. Returns
-/// true if any dashes were emitted, false if the pattern was invalid or the
-/// subpath was too degenerate to dash.
-bool strokeDashedSubpath(const FlatSubpath& subpath, const StrokeStyle& style, double totalPathArc,
-                         PathBuilder& builder) {
-  const double totalArc = subpathLength(subpath);
-  auto maybePattern = resolveDashPattern(style.dashArray, style.dashOffset, totalArc, totalPathArc,
-                                         style.pathLength);
-  if (!maybePattern.has_value()) {
-    return false;
-  }
-  const ResolvedDashPattern& pattern = *maybePattern;
 
   // Compute the list of (onStart, onEnd) arc-length ranges covered by the
   // dashed pattern over the subpath. Each range becomes its own open-subpath
@@ -2434,6 +2722,9 @@ bool strokeDashedSubpath(const FlatSubpath& subpath, const StrokeStyle& style, d
     double acc = 0.0;
     const double boundaryEpsilon = std::max(1.0, pattern.totalLength) * 1e-12;
     for (size_t i = 0; i < numEntries; ++i) {
+      if (!workBudget.consume()) {
+        return DashedStrokeResult::Rejected;
+      }
       const double entryLength = pattern.lengths[i];
       if ((entryLength == 0.0 && std::abs(patternPos - acc) <= boundaryEpsilon) ||
           patternPos < acc + entryLength) {
@@ -2442,14 +2733,9 @@ bool strokeDashedSubpath(const FlatSubpath& subpath, const StrokeStyle& style, d
       }
       acc += entryLength;
     }
-    // Fractional offset within the current entry:
-    double consumed = 0.0;
-    for (size_t i = 0; i < idx; ++i) {
-      consumed += pattern.lengths[i];
-    }
     // `remainingInEntry` = length left in this entry from the starting path
     // position. We use this to "resume" mid-entry.
-    double remainingInEntry = pattern.lengths[idx] - (patternPos - consumed);
+    double remainingInEntry = pattern.lengths[idx] - (patternPos - acc);
 
     // Safety cap on dash segment count (pathological dash arrays on very
     // long paths). A single subpath emitting more than this many dashes is
@@ -2469,7 +2755,10 @@ bool strokeDashedSubpath(const FlatSubpath& subpath, const StrokeStyle& style, d
     // the final "on" dash would wrap across the start, we emit it as two
     // pieces (the tail at end-of-path and the head at start-of-path).
     double cursor = 0.0;
-    while (cursor < totalArc) {
+    while (cursor < totalArc && !builder.exceededMaximumPoints()) {
+      if (!workBudget.consume()) {
+        return DashedStrokeResult::Rejected;
+      }
       const double entryLen = (remainingInEntry > 0.0) ? remainingInEntry : pattern.lengths[idx];
       const bool isOn = (idx % 2u == 0u);
       if (entryLen <= 0.0) {
@@ -2479,16 +2768,16 @@ bool strokeDashedSubpath(const FlatSubpath& subpath, const StrokeStyle& style, d
         // zero-length-subpath cap handling without advancing the dash cursor.
         if (isOn && style.cap != LineCap::Butt) {
           if (++dashesEmitted > kMaxDashes) {
-            return true;
+            return DashedStrokeResult::Emitted;
           }
-          const Vector2d point = pointAtPolylineDistance(subpath, cursor);
+          const Vector2d point = arcIndex.pointAt(cursor);
           FlatSubpath dash;
           dash.points = {point, point};
-          dash.zeroLengthTangent = tangentAtPolylineDistance(subpath, cursor);
+          dash.zeroLengthTangent = arcIndex.tangentAt(cursor);
           strokeSubpath(dash, style, builder);
         }
         if (++iterationsWithoutProgress >= kMaxStalledIters) {
-          break;
+          return DashedStrokeResult::Rejected;
         }
         remainingInEntry = 0.0;
         idx = (idx + 1u) % numEntries;
@@ -2496,10 +2785,13 @@ bool strokeDashedSubpath(const FlatSubpath& subpath, const StrokeStyle& style, d
       }
       iterationsWithoutProgress = 0;
       const double next = cursor + entryLen;
+      if (!std::isfinite(next) || next <= cursor) {
+        return DashedStrokeResult::Rejected;
+      }
 
       if (isOn && entryLen > 0.0) {
         if (++dashesEmitted > kMaxDashes) {
-          return true;  // Truncate; caller treats us as having emitted dashes.
+          return DashedStrokeResult::Emitted;
         }
         // Truncate the dash at `totalArc` for both closed and open
         // subpaths. For closed subpaths, the first dash emitted by the
@@ -2516,7 +2808,7 @@ bool strokeDashedSubpath(const FlatSubpath& subpath, const StrokeStyle& style, d
         // first dash cover the head region matches tiny-skia's
         // behavior and produces the expected continuous visual.
         const double dashEnd = std::min(next, totalArc);
-        FlatSubpath dash = extractPolylineRange(subpath, cursor, dashEnd);
+        FlatSubpath dash = arcIndex.extractRange(cursor, dashEnd);
         if (dash.points.size() >= 2) {
           strokeSubpath(dash, style, builder);
         }
@@ -2528,57 +2820,329 @@ bool strokeDashedSubpath(const FlatSubpath& subpath, const StrokeStyle& style, d
     }
   }
 
-  return true;
+  return DashedStrokeResult::Emitted;
+}
+
+std::size_t CountSubpathPoints(std::span<const FlatSubpath> subpaths) {
+  std::size_t result = 0;
+  for (const FlatSubpath& subpath : subpaths) {
+    result += subpath.points.size();
+  }
+  return result;
+}
+
+std::optional<std::vector<FlatSubpathArcIndex>> BuildDashArcIndexes(
+    std::span<const FlatSubpath> subpaths, bool hasDashes, double& totalPathArc,
+    DashPatternWorkBudget& workBudget) {
+  std::vector<FlatSubpathArcIndex> result;
+  if (!hasDashes) {
+    return result;
+  }
+  // SVG pathLength scales the entire path, so every subpath must share one total arc length.
+  result.reserve(subpaths.size());
+  for (const FlatSubpath& subpath : subpaths) {
+    auto arcIndex = FlatSubpathArcIndex::Build(subpath, workBudget);
+    if (!arcIndex.has_value() ||
+        arcIndex->totalLength() > std::numeric_limits<double>::max() - totalPathArc) {
+      return std::nullopt;
+    }
+    totalPathArc += arcIndex->totalLength();
+    result.push_back(std::move(*arcIndex));
+  }
+  return result;
+}
+
+bool StrokePreparedSubpath(const FlatSubpath& subpath, const StrokeStyle& style,
+                           const FlatSubpathArcIndex* arcIndex,
+                           const std::optional<ResolvedDashPattern>& dashPattern,
+                           DashPatternWorkBudget& workBudget, PathBuilder& builder) {
+  if (dashPattern.has_value()) {
+    const DashedStrokeResult result =
+        strokeDashedSubpath(subpath, style, *arcIndex, *dashPattern, workBudget, builder);
+    if (result == DashedStrokeResult::Emitted) {
+      return !builder.exceededMaximumPoints();
+    }
+    if (result == DashedStrokeResult::Rejected) {
+      return false;
+    }
+  }
+  strokeSubpath(subpath, style, builder);
+  return !builder.exceededMaximumPoints();
+}
+
+Path BuildStrokeOutline(const Path& originalPath, std::vector<FlatSubpath>& subpaths,
+                        std::size_t maximumOutputPoints, const StrokeStyle& style) {
+  computeCurveBoundaryOverrides(originalPath, subpaths);
+
+  PathBuilder builder(maximumOutputPoints);
+  const bool hasDashes = !style.dashArray.empty();
+  double totalPathArc = 0.0;
+  DashPatternWorkBudget dashWorkBudget;
+  auto dashArcIndexes = BuildDashArcIndexes(subpaths, hasDashes, totalPathArc, dashWorkBudget);
+  if (!dashArcIndexes.has_value()) {
+    return Path();
+  }
+  const std::optional<ResolvedDashPattern> dashPattern =
+      hasDashes ? resolveDashPattern(style.dashArray, style.dashOffset, totalPathArc, totalPathArc,
+                                     style.pathLength)
+                : std::nullopt;
+  for (std::size_t i = 0; i < subpaths.size(); ++i) {
+    const FlatSubpathArcIndex* arcIndex = hasDashes ? &(*dashArcIndexes)[i] : nullptr;
+    if (!StrokePreparedSubpath(subpaths[i], style, arcIndex, dashPattern, dashWorkBudget,
+                               builder)) {
+      return Path();
+    }
+  }
+  return builder.build();
+}
+
+bool IsFiniteVector(const Vector2d& value) {
+  return std::isfinite(value.x) && std::isfinite(value.y);
+}
+
+enum class ArcDisposition : uint8_t { NoOp, Line, Cubic };
+
+struct ArcFrame {
+  Vector2d radius;
+  Vector2d centerNoRotation;
+  Vector2d center;
+  Vector2d direction;
+  Vector2d majorAxis;
+};
+
+struct ArcAngles {
+  double start = 0.0;
+  double delta = 0.0;
+};
+
+struct ArcParameters {
+  ArcDisposition disposition = ArcDisposition::NoOp;
+  Vector2d radius;
+  Vector2d center;
+  Vector2d direction;
+  double startAngle = 0.0;
+  double deltaAngle = 0.0;
+  std::size_t segmentCount = 0;
+};
+
+struct ArcCubicSegment {
+  Vector2d control0;
+  Vector2d control1;
+  Vector2d end;
+};
+
+ArcDisposition ClassifyArc(const Vector2d& start, const Vector2d& radius, double rotationRadians,
+                           const Vector2d& end) {
+  constexpr double kDistanceSqEpsilon = 1e-14;
+  if (!IsFiniteVector(start) || !IsFiniteVector(radius) || !std::isfinite(rotationRadians) ||
+      !IsFiniteVector(end)) {
+    return IsFiniteVector(end) ? ArcDisposition::Line : ArcDisposition::NoOp;
+  }
+  if (NearZero(start.distanceSquared(end), kDistanceSqEpsilon)) {
+    return ArcDisposition::NoOp;
+  }
+  if (NearZero(radius.x) || NearZero(radius.y)) {
+    return ArcDisposition::Line;
+  }
+  return ArcDisposition::Cubic;
+}
+
+std::optional<Vector2d> CorrectArcRadii(const Vector2d& majorAxis, const Vector2d& radius) {
+  const Vector2d absoluteRadius(Abs(radius.x), Abs(radius.y));
+  const double lambda = (majorAxis.x * majorAxis.x) / (absoluteRadius.x * absoluteRadius.x) +
+                        (majorAxis.y * majorAxis.y) / (absoluteRadius.y * absoluteRadius.y);
+  const Vector2d correctedRadius =
+      (lambda > 1.0) ? absoluteRadius * std::sqrt(lambda) : absoluteRadius;
+  if (!std::isfinite(lambda) || !IsFiniteVector(correctedRadius)) {
+    return std::nullopt;
+  }
+  return correctedRadius;
+}
+
+std::optional<std::pair<Vector2d, Vector2d>> ComputeArcCenter(
+    const Vector2d& start, const Vector2d& end, const Vector2d& majorAxis, const Vector2d& radius,
+    double cosRotation, double sinRotation, bool largeArc, bool sweep) {
+  double k = radius.x * radius.x * majorAxis.y * majorAxis.y +
+             radius.y * radius.y * majorAxis.x * majorAxis.x;
+  if (!std::isfinite(k) || NearZero(k)) {
+    return std::nullopt;
+  }
+  k = std::sqrt(Abs((radius.x * radius.x * radius.y * radius.y) / k - 1.0));
+  if (!std::isfinite(k)) {
+    return std::nullopt;
+  }
+  if (sweep == largeArc) {
+    k = -k;
+  }
+  const Vector2d centerNoRotation(k * radius.x * majorAxis.y / radius.y,
+                                  -k * radius.y * majorAxis.x / radius.x);
+  const Vector2d center = centerNoRotation.rotate(cosRotation, sinRotation) + (start + end) * 0.5;
+  if (!IsFiniteVector(centerNoRotation) || !IsFiniteVector(center)) {
+    return std::nullopt;
+  }
+  return std::pair(centerNoRotation, center);
+}
+
+std::optional<ArcFrame> ComputeArcFrame(const Vector2d& start, const Vector2d& radius,
+                                        double rotationRadians, const Vector2d& end, bool largeArc,
+                                        bool sweep) {
+  const double sinRotation = std::sin(rotationRadians);
+  const double cosRotation = std::cos(rotationRadians);
+  const Vector2d extent = (start - end) * 0.5;
+  const Vector2d majorAxis = extent.rotate(cosRotation, -sinRotation);
+  if (!IsFiniteVector(extent) || !IsFiniteVector(majorAxis)) {
+    return std::nullopt;
+  }
+  const auto correctedRadius = CorrectArcRadii(majorAxis, radius);
+  if (!correctedRadius.has_value()) {
+    return std::nullopt;
+  }
+  const auto center = ComputeArcCenter(start, end, majorAxis, *correctedRadius, cosRotation,
+                                       sinRotation, largeArc, sweep);
+  if (!center.has_value()) {
+    return std::nullopt;
+  }
+  return ArcFrame{*correctedRadius, center->first, center->second,
+                  Vector2d(cosRotation, sinRotation), majorAxis};
+}
+
+std::optional<double> ComputeArcStartAngle(const Vector2d& internalStart) {
+  const double length = internalStart.length();
+  if (!std::isfinite(length) || NearZero(length)) {
+    return std::nullopt;
+  }
+  const double angle =
+      std::acos(Clamp(internalStart.x / length, -1.0, 1.0)) * (internalStart.y < 0.0 ? -1.0 : 1.0);
+  return std::isfinite(angle) ? std::optional(angle) : std::nullopt;
+}
+
+std::optional<double> ComputeArcDeltaAngle(const Vector2d& internalStart,
+                                           const Vector2d& internalEnd, bool sweep) {
+  const double crossLength = std::sqrt(internalStart.lengthSquared() * internalEnd.lengthSquared());
+  if (!std::isfinite(crossLength) || NearZero(crossLength)) {
+    return std::nullopt;
+  }
+  double delta = std::acos(Clamp(internalStart.dot(internalEnd) / crossLength, -1.0, 1.0));
+  if (internalStart.x * internalEnd.y - internalEnd.x * internalStart.y < 0.0) {
+    delta = -delta;
+  }
+  if (sweep && delta < 0.0) {
+    delta += MathConstants<double>::kPi * 2.0;
+  } else if (!sweep && delta > 0.0) {
+    delta -= MathConstants<double>::kPi * 2.0;
+  }
+  return delta;
+}
+
+std::optional<ArcAngles> ComputeArcAngles(const ArcFrame& frame, bool sweep) {
+  const Vector2d internalStart = (frame.majorAxis - frame.centerNoRotation) / frame.radius;
+  const Vector2d internalEnd = (-frame.majorAxis - frame.centerNoRotation) / frame.radius;
+  if (!IsFiniteVector(internalStart) || !IsFiniteVector(internalEnd)) {
+    return std::nullopt;
+  }
+  const auto start = ComputeArcStartAngle(internalStart);
+  if (!start.has_value()) {
+    return std::nullopt;
+  }
+  const auto delta = ComputeArcDeltaAngle(internalStart, internalEnd, sweep);
+  if (!delta.has_value()) {
+    return std::nullopt;
+  }
+  return ArcAngles{*start, *delta};
+}
+
+std::optional<std::size_t> ComputeArcSegmentCount(double deltaAngle) {
+  constexpr std::size_t kMaximumArcSegments = 8;
+  const double segmentCount =
+      std::ceil(Abs(deltaAngle / (MathConstants<double>::kPi * 0.5 + 0.001)));
+  if (!std::isfinite(deltaAngle) || !std::isfinite(segmentCount) || segmentCount < 1.0 ||
+      segmentCount > static_cast<double>(kMaximumArcSegments)) {
+    return std::nullopt;
+  }
+  return static_cast<std::size_t>(segmentCount);
+}
+
+ArcParameters ResolveArcParameters(const Vector2d& start, const Vector2d& radius,
+                                   double rotationRadians, bool largeArc, bool sweep,
+                                   const Vector2d& end) {
+  // SVG arc decomposition follows Appendix F.6 of the implementation notes.
+  const ArcDisposition disposition = ClassifyArc(start, radius, rotationRadians, end);
+  if (disposition != ArcDisposition::Cubic) {
+    return ArcParameters{.disposition = disposition};
+  }
+  const auto frame = ComputeArcFrame(start, radius, rotationRadians, end, largeArc, sweep);
+  if (!frame.has_value()) {
+    return ArcParameters{.disposition = ArcDisposition::Line};
+  }
+  const auto angles = ComputeArcAngles(*frame, sweep);
+  if (!angles.has_value()) {
+    return ArcParameters{.disposition = ArcDisposition::Line};
+  }
+  const auto segmentCount = ComputeArcSegmentCount(angles->delta);
+  if (!segmentCount.has_value()) {
+    return ArcParameters{.disposition = ArcDisposition::Line};
+  }
+  return ArcParameters{ArcDisposition::Cubic, frame->radius, frame->center, frame->direction,
+                       angles->start,         angles->delta, *segmentCount};
+}
+
+std::optional<ArcCubicSegment> ComputeArcCubicSegment(const ArcParameters& arc, std::size_t index) {
+  const double thetaIncrement = arc.deltaAngle / static_cast<double>(arc.segmentCount);
+  const double startAngle = arc.startAngle + static_cast<double>(index) * thetaIncrement;
+  const double endAngle = arc.startAngle + static_cast<double>(index + 1) * thetaIncrement;
+  const double halfTheta = 0.5 * (endAngle - startAngle);
+  const double sinHalfHalf = std::sin(halfTheta * 0.5);
+  const double t = (8.0 / 3.0) * sinHalfHalf * sinHalfHalf / std::sin(halfTheta);
+
+  const double cosStart = std::cos(startAngle);
+  const double sinStart = std::sin(startAngle);
+  const Vector2d p0 = arc.radius * Vector2d(cosStart - t * sinStart, sinStart + t * cosStart);
+  const double cosEnd = std::cos(endAngle);
+  const double sinEnd = std::sin(endAngle);
+  const Vector2d p2 = arc.radius * Vector2d(cosEnd, sinEnd);
+  const Vector2d p1 = p2 + arc.radius * Vector2d(t * sinEnd, -t * cosEnd);
+
+  const ArcCubicSegment result{arc.center + p0.rotate(arc.direction.x, arc.direction.y),
+                               arc.center + p1.rotate(arc.direction.x, arc.direction.y),
+                               arc.center + p2.rotate(arc.direction.x, arc.direction.y)};
+  if (!std::isfinite(t) || !IsFiniteVector(result.control0) || !IsFiniteVector(result.control1) ||
+      !IsFiniteVector(result.end)) {
+    return std::nullopt;
+  }
+  return result;
 }
 
 }  // namespace
 
 Path Path::strokeToFill(const StrokeStyle& style, double flattenTolerance) const {
-  if (commands_.empty() || style.width <= 0.0) {
+  if (commands_.empty() || style.width <= 0.0 || !std::isfinite(style.width)) {
     return Path();
   }
 
-  // Step 1: Flatten curves to line segments.
-  const Path flattened = flatten(flattenTolerance);
+  // Step 1: Flatten curves to line segments under the same aggregate geometry budget used by
+  // extraction and outline generation. Without this cap, each cubic can expand to 1024 points
+  // before the output builder has a chance to reject the stroke.
+  PathBuilder flattenBuilder(kMaximumStrokeOutputPoints);
+  if (!flattenInto(flattenBuilder, flattenTolerance)) {
+    return Path();
+  }
+  const Path flattened = flattenBuilder.build();
+  if (flattened.points().size() >= kMaximumStrokeOutputPoints) {
+    return Path();
+  }
 
   // Step 2: Extract subpaths.
-  std::vector<FlatSubpath> subpaths = extractSubpaths(flattened);
-
-  // Step 2b: Annotate curve-command boundary vertices with exact tangent
-  // normals so that the stroker's miter/bevel decision uses the true
-  // curvature instead of the approximate flattened-segment direction.
-  computeCurveBoundaryOverrides(*this, subpaths);
-
-  // Step 3: Build the stroke outline for each subpath. When a dash pattern
-  // is set, each subpath is split into on-dash sub-polylines (each treated
-  // as an open subpath with its own caps) before offsetting.
-  //
-  // We compute the TOTAL arc length (sum across all subpaths) up front and
-  // pass it into the per-subpath dasher. This is the reference length for
-  // the SVG `pathLength` attribute - pathLength describes the entire
-  // `<path>`'s length, so the scaling ratio must be consistent for every
-  // subpath. Computing it per-subpath would give different-sized dashes on
-  // different subpaths of the same stroke.
-  PathBuilder builder;
-  const bool hasDashes = !style.dashArray.empty();
-  double totalPathArc = 0.0;
-  if (hasDashes && style.pathLength > 0.0) {
-    for (const auto& subpath : subpaths) {
-      totalPathArc += subpathLength(subpath);
-    }
+  const std::size_t extractionBudget = kMaximumStrokeOutputPoints - flattened.points().size();
+  auto maybeSubpaths = extractSubpaths(flattened, extractionBudget);
+  if (!maybeSubpaths.has_value()) {
+    return Path();
   }
-  for (const auto& subpath : subpaths) {
-    if (hasDashes) {
-      if (strokeDashedSubpath(subpath, style, totalPathArc, builder)) {
-        continue;
-      }
-      // Fallback: dash pattern was degenerate (all-zero, etc.) - SVG says
-      // render as solid stroke.
-    }
-    strokeSubpath(subpath, style, builder);
+  std::vector<FlatSubpath> subpaths = std::move(*maybeSubpaths);
+  const std::size_t extractedPoints = CountSubpathPoints(subpaths);
+  if (extractedPoints >= extractionBudget) {
+    return Path();
   }
-
-  return builder.build();
+  return BuildStrokeOutline(*this, subpaths, extractionBudget - extractedPoints, style);
 }
 
 // ============================================================================
@@ -2586,6 +3150,9 @@ Path Path::strokeToFill(const StrokeStyle& style, double flattenTolerance) const
 // ============================================================================
 
 PathBuilder& PathBuilder::moveTo(const Vector2d& point) {
+  if (!canAppendPoints(1)) {
+    return *this;
+  }
   moveToPointIndex_ = static_cast<uint32_t>(path_.points_.size());
   path_.commands_.push_back({Path::Verb::MoveTo, moveToPointIndex_});
   path_.points_.push_back(point);
@@ -2596,6 +3163,9 @@ PathBuilder& PathBuilder::moveTo(const Vector2d& point) {
 
 PathBuilder& PathBuilder::lineTo(const Vector2d& point) {
   ensureMoveTo();
+  if (!canAppendPoints(1)) {
+    return *this;
+  }
   path_.commands_.push_back({Path::Verb::LineTo, static_cast<uint32_t>(path_.points_.size())});
   path_.points_.push_back(point);
   return *this;
@@ -2603,6 +3173,9 @@ PathBuilder& PathBuilder::lineTo(const Vector2d& point) {
 
 PathBuilder& PathBuilder::quadTo(const Vector2d& control, const Vector2d& end) {
   ensureMoveTo();
+  if (!canAppendPoints(2)) {
+    return *this;
+  }
   path_.commands_.push_back({Path::Verb::QuadTo, static_cast<uint32_t>(path_.points_.size())});
   path_.points_.push_back(control);
   path_.points_.push_back(end);
@@ -2611,6 +3184,9 @@ PathBuilder& PathBuilder::quadTo(const Vector2d& control, const Vector2d& end) {
 
 PathBuilder& PathBuilder::curveTo(const Vector2d& c1, const Vector2d& c2, const Vector2d& end) {
   ensureMoveTo();
+  if (!canAppendPoints(3)) {
+    return *this;
+  }
   path_.commands_.push_back({Path::Verb::CurveTo, static_cast<uint32_t>(path_.points_.size())});
   path_.points_.push_back(c1);
   path_.points_.push_back(c2);
@@ -2622,101 +3198,28 @@ PathBuilder& PathBuilder::arcTo(const Vector2d& radius, double rotationRadians, 
                                 bool sweep, const Vector2d& end) {
   ensureMoveTo();
   const Vector2d start = currentPoint();
-
-  // SVG arc decomposition per Appendix F.6:
-  // https://www.w3.org/TR/SVG/implnote.html#ArcImplementationNotes
-
-  constexpr double kDistanceSqEpsilon = 1e-14;
-
-  if (NearZero(start.distanceSquared(end), kDistanceSqEpsilon)) {
-    return *this;  // No-op: end point equals start.
-  }
-
-  if (NearZero(radius.x) || NearZero(radius.y)) {
-    lineTo(end);  // Zero radius: fallback to line segment.
+  const ArcParameters arc =
+      ResolveArcParameters(start, radius, rotationRadians, largeArc, sweep, end);
+  if (arc.disposition == ArcDisposition::NoOp) {
     return *this;
   }
-
-  const double sinRot = std::sin(rotationRadians);
-  const double cosRot = std::cos(rotationRadians);
-
-  // Rotate extent to find major axis.
-  const Vector2d extent = (start - end) * 0.5;
-  const Vector2d majorAxis = extent.rotate(cosRot, -sinRot);
-
-  // B.2.5 Correct out-of-range radii.
-  const Vector2d absR(Abs(radius.x), Abs(radius.y));
-  const double lambda = (majorAxis.x * majorAxis.x) / (absR.x * absR.x) +
-                        (majorAxis.y * majorAxis.y) / (absR.y * absR.y);
-  const Vector2d r = (lambda > 1.0) ? absR * std::sqrt(lambda) : absR;
-
-  // Eq 5.2: Ellipse center.
-  double k = r.x * r.x * majorAxis.y * majorAxis.y + r.y * r.y * majorAxis.x * majorAxis.x;
-  if (NearZero(k)) {
-    lineTo(end);
-    return *this;
-  }
-  k = std::sqrt(Abs((r.x * r.x * r.y * r.y) / k - 1.0));
-  if (sweep == largeArc) {
-    k = -k;
-  }
-  const Vector2d centerNoRot(k * r.x * majorAxis.y / r.y, -k * r.y * majorAxis.x / r.x);
-  const Vector2d center = centerNoRot.rotate(cosRot, sinRot) + (start + end) * 0.5;
-
-  // Compute start angle and delta.
-  const Vector2d intStart = (majorAxis - centerNoRot) / r;
-  const Vector2d intEnd = (-majorAxis - centerNoRot) / r;
-
-  double intStartLen = intStart.length();
-  if (NearZero(intStartLen)) {
-    lineTo(end);
-    return *this;
-  }
-  const double theta =
-      std::acos(Clamp(intStart.x / intStartLen, -1.0, 1.0)) * (intStart.y < 0.0 ? -1.0 : 1.0);
-
-  double crossLen = std::sqrt(intStart.lengthSquared() * intEnd.lengthSquared());
-  if (NearZero(crossLen)) {
+  if (arc.disposition == ArcDisposition::Line) {
     lineTo(end);
     return *this;
   }
 
-  double deltaTheta = std::acos(Clamp(intStart.dot(intEnd) / crossLen, -1.0, 1.0));
-  if (intStart.x * intEnd.y - intEnd.x * intStart.y < 0.0) {
-    deltaTheta = -deltaTheta;
-  }
-  if (sweep && deltaTheta < 0.0) {
-    deltaTheta += MathConstants<double>::kPi * 2.0;
-  } else if (!sweep && deltaTheta > 0.0) {
-    deltaTheta -= MathConstants<double>::kPi * 2.0;
-  }
-
-  // Emit cubic Bézier segments.
-  const size_t numSegs =
-      static_cast<size_t>(std::ceil(Abs(deltaTheta / (MathConstants<double>::kPi * 0.5 + 0.001))));
-  const Vector2d dir(cosRot, sinRot);
-  const double thetaInc = deltaTheta / static_cast<double>(numSegs);
-
-  for (size_t i = 0; i < numSegs; ++i) {
-    const double ts = theta + static_cast<double>(i) * thetaInc;
-    const double te = theta + static_cast<double>(i + 1) * thetaInc;
-    const double halfTheta = 0.5 * (te - ts);
-    const double sinHalfHalf = std::sin(halfTheta * 0.5);
-    const double t = (8.0 / 3.0) * sinHalfHalf * sinHalfHalf / std::sin(halfTheta);
-
-    const double cosTs = std::cos(ts);
-    const double sinTs = std::sin(ts);
-    const Vector2d p0 = r * Vector2d(cosTs - t * sinTs, sinTs + t * cosTs);
-
-    const double cosTe = std::cos(te);
-    const double sinTe = std::sin(te);
-    const Vector2d p2 = r * Vector2d(cosTe, sinTe);
-    const Vector2d p1 = p2 + r * Vector2d(t * sinTe, -t * cosTe);
-
-    curveTo(center + p0.rotate(dir.x, dir.y), center + p1.rotate(dir.x, dir.y),
-            center + p2.rotate(dir.x, dir.y));
+  for (std::size_t i = 0; i < arc.segmentCount; ++i) {
+    const auto segment = ComputeArcCubicSegment(arc, i);
+    if (!segment.has_value()) {
+      lineTo(end);
+      return *this;
+    }
+    curveTo(segment->control0, segment->control1, segment->end);
+    if (exceededMaximumPoints_) {
+      return *this;
+    }
     // Mark all intermediate arc segments so vertices() skips them for marker placement.
-    if (i < numSegs - 1) {
+    if (i < arc.segmentCount - 1) {
       path_.commands_.back().isInternal = true;
     }
   }
@@ -2725,7 +3228,7 @@ PathBuilder& PathBuilder::arcTo(const Vector2d& radius, double rotationRadians, 
 }
 
 PathBuilder& PathBuilder::closePath() {
-  if (!hasMoveTo_) {
+  if (!hasMoveTo_ || exceededMaximumPoints_) {
     return *this;  // No open subpath - consecutive closePaths are no-ops.
   }
   path_.commands_.push_back({Path::Verb::ClosePath, moveToPointIndex_});
@@ -2830,7 +3333,17 @@ Path PathBuilder::build() {
   lastMoveTo_ = Vector2d();
   moveToPointIndex_ = 0;
   hasMoveTo_ = false;
+  exceededMaximumPoints_ = false;
   return result;
+}
+
+bool PathBuilder::canAppendPoints(std::size_t count) {
+  if (exceededMaximumPoints_ || path_.points_.size() > maximumPoints_ ||
+      count > maximumPoints_ - path_.points_.size()) {
+    exceededMaximumPoints_ = true;
+    return false;
+  }
+  return true;
 }
 
 void PathBuilder::ensureMoveTo() {

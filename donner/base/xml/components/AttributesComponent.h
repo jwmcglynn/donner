@@ -1,6 +1,7 @@
 #pragma once
 /// @file
 
+#include <cstddef>
 #include <cstdint>
 #include <map>
 #include <optional>
@@ -123,6 +124,9 @@ struct AttributesComponent {
     }
     return result;
   }
+
+  /// Number of attributes retained by this component, without allocating a name list.
+  std::size_t attributeCount() const { return attributes_.size(); }
 
   /**
    * Find attributes matching the given name matcher.
