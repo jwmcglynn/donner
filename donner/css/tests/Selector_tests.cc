@@ -522,6 +522,21 @@ TEST_F(SelectorTests, PseudoClassSelectorIsNotWhereHas) {
   EXPECT_TRUE(doesNotMatch(":has(type1)", children["child1"]));
 }
 
+TEST_F(SelectorTests, BudgetExhaustionDoesNotSatisfyNotHas) {
+  FakeElement root("root");
+  FakeElement child("child");
+  root.appendChild(child);
+
+  auto maybeSelector = SelectorParser::Parse(":not(:has(*))");
+  ASSERT_THAT(maybeSelector, NoParseError());
+  SelectorTraversalBudget budget(2);
+  SelectorMatchOptions<FakeElement> options;
+  options.traversalBudget = &budget;
+
+  EXPECT_FALSE(maybeSelector.result().matches(root, options).matched);
+  EXPECT_TRUE(budget.rejected());
+}
+
 TEST_F(SelectorTests, RelativeSelectorMatchingCoversSiblingAndColumnCombinators) {
   FakeElement root("root");
   FakeElement childA("a");

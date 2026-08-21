@@ -15,6 +15,7 @@
 #include "donner/base/ParseWarningSink.h"
 #include "donner/base/tests/BaseTestUtils.h"
 #include "donner/base/tests/ParseResultTestUtils.h"
+#include "donner/css/parser/DeclarationListParser.h"
 #include "donner/svg/components/DirtyFlagsComponent.h"
 #include "donner/svg/components/StylesheetComponent.h"
 #include "donner/svg/components/resources/ResourceManagerContext.h"
@@ -424,6 +425,27 @@ TEST_F(StyleSystemTest, UpdateStyleMergesAndInvalidatesComputedStyle) {
             PaintServer(PaintServer::Solid(css::Color(css::RGBA(0, 128, 0, 0xFF)))));
   EXPECT_EQ(computed.properties->stroke.get().value(),
             PaintServer(PaintServer::Solid(css::Color(css::RGBA(0, 0, 0xFF, 0xFF)))));
+}
+
+TEST_F(StyleSystemTest, RejectedStyleUpdateDoesNotMutateAttributeOrComputedStyle) {
+  auto document = ParseAndComputeStyles(R"(
+    <svg xmlns="http://www.w3.org/2000/svg"><rect id="r" style="fill: red"/></svg>
+  )");
+  auto element = document.querySelector("#r");
+  ASSERT_TRUE(element.has_value());
+  const auto before = element->getAttribute("style");
+  const auto* computedBefore = element->entityHandle().try_get<ComputedStyleComponent>();
+  ASSERT_THAT(computedBefore, NotNull());
+
+  std::string update;
+  for (std::size_t index = 0; index <= css::parser::DeclarationListParser::kMaximumDeclarations;
+       ++index) {
+    update += "stroke: blue;";
+  }
+  styleSystem.updateStyle(element->entityHandle(), update);
+
+  EXPECT_EQ(element->getAttribute("style"), before);
+  EXPECT_EQ(element->entityHandle().try_get<ComputedStyleComponent>(), computedBefore);
 }
 
 TEST_F(StyleSystemTest, ComputeAllStylesDirtyOnlyRecomputesStyleDirtyEntities) {

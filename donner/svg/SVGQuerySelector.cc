@@ -52,4 +52,9 @@ std::optional<SVGElement> QuerySelectorSearch(const css::Selector& selector, Ent
   return std::nullopt;
 }
 
+std::optional<SVGElement> QuerySelectorSearch(const css::Selector& selector, EntityHandle root,
+                                              css::SelectorTraversalBudget&) {
+  return QuerySelectorSearch(selector, root);
+}
+
 }  // namespace donner::svg::details
