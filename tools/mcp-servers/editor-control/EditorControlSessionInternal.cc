@@ -112,22 +112,6 @@ json BitmapPixelSample(const svg::RendererBitmap& bitmap, int x, int y) {
   };
 }
 
-std::optional<std::string> EncodeBitmapPngBase64(const svg::RendererBitmap& bitmap) {
-  if (bitmap.empty()) {
-    return std::nullopt;
-  }
-
-  const size_t strideInPixels =
-      bitmap.rowBytes > 0 ? bitmap.rowBytes / 4 : static_cast<size_t>(bitmap.dimensions.x);
-  std::vector<uint8_t> png = svg::RendererImageIO::writeRgbaPixelsToPngMemory(
-      bitmap.pixels, bitmap.dimensions.x, bitmap.dimensions.y, strideInPixels);
-  if (png.empty()) {
-    return std::nullopt;
-  }
-
-  return Base64Encode(png);
-}
-
 json RenderResultJson(const RenderResult& result, const svg::RendererBitmap* presentedBitmap,
                       ToolCallResult* out, const EditorControlSession::CaptureOptions& capture,
                       std::string_view imagePrefix) {
@@ -540,8 +524,45 @@ std::size_t BitmapRowBytes(const svg::RendererBitmap& bitmap) {
 
 int AttachBitmapImage(ToolCallResult* out, const std::string& label,
                       const svg::RendererBitmap& bitmap, bool embedBase64, json* metadata) {
-  std::optional<std::string> base64 = EncodeBitmapPngBase64(bitmap);
-  if (!base64.has_value()) {
+  if (bitmap.pixels.size() > ToolCallResult::kMaximumCaptureSourceBytes) {
+    out->captureBudgetExceeded = true;
+    (*metadata)["png_attached"] = false;
+    (*metadata)["png_error"] = "capture resource budget exceeded";
+    return -1;
+  }
+
+  const size_t strideInPixels =
+      bitmap.rowBytes > 0 ? bitmap.rowBytes / 4 : static_cast<size_t>(bitmap.dimensions.x);
+  std::vector<uint8_t> png = svg::RendererImageIO::writeRgbaPixelsToPngMemory(
+      bitmap.pixels, bitmap.dimensions.x, bitmap.dimensions.y, strideInPixels);
+  if (png.empty()) {
+    (*metadata)["png_attached"] = false;
+    return -1;
+  }
+  return AttachPngBytes(out, label, png, embedBase64, metadata);
+}
+
+int AttachPngBytes(ToolCallResult* out, const std::string& label, std::span<const uint8_t> png,
+                   bool embedBase64, json* metadata) {
+  if (png.size() > (std::numeric_limits<std::size_t>::max() - 2u) / 4u * 3u) {
+    out->captureBudgetExceeded = true;
+    (*metadata)["png_attached"] = false;
+    (*metadata)["png_error"] = "capture resource budget exceeded";
+    return -1;
+  }
+  const std::size_t encodedBytes = ((png.size() + 2u) / 3u) * 4u;
+  const std::size_t copies = embedBase64 ? 2u : 1u;
+  if (out->images.size() >= ToolCallResult::kMaximumCaptureItems ||
+      encodedBytes > ToolCallResult::kMaximumCaptureBytes / copies ||
+      encodedBytes * copies > ToolCallResult::kMaximumCaptureBytes - out->retainedCaptureBytes) {
+    out->captureBudgetExceeded = true;
+    (*metadata)["png_attached"] = false;
+    (*metadata)["png_error"] = "capture resource budget exceeded";
+    return -1;
+  }
+
+  std::string base64 = Base64Encode(png);
+  if (base64.size() != encodedBytes) {
     (*metadata)["png_attached"] = false;
     return -1;
   }
@@ -550,29 +571,13 @@ int AttachBitmapImage(ToolCallResult* out, const std::string& label,
   out->images.push_back(EncodedImage{
       .label = label,
       .mimeType = "image/png",
-      .dataBase64 = *base64,
-  });
-  (*metadata)["png_attached"] = true;
-  (*metadata)["image_index"] = imageIndex;
-  if (embedBase64) {
-    (*metadata)["png_base64"] = *base64;
-  }
-  return imageIndex;
-}
-
-int AttachPngBytes(ToolCallResult* out, const std::string& label, std::span<const uint8_t> png,
-                   bool embedBase64, json* metadata) {
-  const std::string base64 = Base64Encode(png);
-  const int imageIndex = static_cast<int>(out->images.size());
-  out->images.push_back(EncodedImage{
-      .label = label,
-      .mimeType = "image/png",
       .dataBase64 = base64,
   });
+  out->retainedCaptureBytes += encodedBytes * copies;
   (*metadata)["png_attached"] = true;
   (*metadata)["image_index"] = imageIndex;
   if (embedBase64) {
-    (*metadata)["png_base64"] = base64;
+    (*metadata)["png_base64"] = std::move(base64);
   }
   return imageIndex;
 }

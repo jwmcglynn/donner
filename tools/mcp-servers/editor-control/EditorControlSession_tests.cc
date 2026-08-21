@@ -1581,6 +1581,27 @@ TEST(EditorControlSessionTest, RejectsExcessiveReplayFrameResultsBeforeReadingFi
   EXPECT_THAT(result.body.value("error", ""), ::testing::HasSubstr("response limit"));
 }
 
+TEST(EditorControlSessionTest, ReplayUsesBoundedFrameResultDefault) {
+  const std::filesystem::path rnrPath = TestTempDir() / "mcp_replay_default_results.rnr";
+  repro::ReproFile replay;
+  replay.metadata.svgPath = "embedded.svg";
+  replay.metadata.svgSource = "<svg xmlns='http://www.w3.org/2000/svg'/>";
+  replay.metadata.windowWidth = 32;
+  replay.metadata.windowHeight = 32;
+  replay.metadata.displayScale = 1.0;
+  replay.frames.push_back(repro::ReproFrame{});
+  ASSERT_TRUE(repro::WriteReproFile(rnrPath, replay));
+
+  EditorControlSession session;
+  const ToolCallResult result =
+      session.handleToolCall("replay_rnr", json{{"rnr_path", rnrPath.string()},
+                                                {"render_each_frame", false},
+                                                {"include_frame_results", false}});
+
+  EXPECT_FALSE(result.isError) << result.body.dump(2);
+  EXPECT_TRUE(result.body.value("ok", false)) << result.body.dump(2);
+}
+
 TEST(EditorControlSessionTest, BoundsGlReplayHelperOutputBeforeRetention) {
   std::string output(kMaximumGlReplayProcessOutputBytes - 1u, 'a');
   EXPECT_FALSE(AppendBoundedGlReplayProcessOutput(&output, "bc"));

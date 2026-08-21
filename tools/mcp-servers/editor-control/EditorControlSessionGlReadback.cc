@@ -31,8 +31,12 @@
 namespace donner::editor::mcp {
 
 bool AppendBoundedGlReplayProcessOutput(std::string* output, std::string_view bytes) {
-  output->append(bytes);
-  return true;
+  if (output->size() >= kMaximumGlReplayProcessOutputBytes) {
+    return bytes.empty() && output->size() == kMaximumGlReplayProcessOutputBytes;
+  }
+  const std::size_t remaining = kMaximumGlReplayProcessOutputBytes - output->size();
+  output->append(bytes.substr(0, remaining));
+  return bytes.size() <= remaining;
 }
 
 namespace {
@@ -43,6 +47,7 @@ struct ProcessRunResult {
   bool ok = false;
   int exitCode = -1;
   bool timedOut = false;
+  bool outputLimitExceeded = false;
   std::string stdoutText;
   std::string stderrText;
   std::string error;
@@ -121,12 +126,15 @@ bool PreparePipe(int pipeFds[2], std::string* error) {
   return true;
 }
 
-void ReadAvailableFd(int fd, std::string* output, bool* isOpen) {
+void ReadAvailableFd(int fd, std::string* output, bool* isOpen, bool* outputLimitExceeded) {
   char buffer[4096];
   while (true) {
     const ssize_t count = ::read(fd, buffer, sizeof(buffer));
     if (count > 0) {
-      output->append(buffer, static_cast<std::size_t>(count));
+      if (!AppendBoundedGlReplayProcessOutput(
+              output, std::string_view(buffer, static_cast<std::size_t>(count)))) {
+        *outputLimitExceeded = true;
+      }
       continue;
     }
     if (count == 0) {
@@ -242,14 +250,16 @@ ProcessRunResult RunProcess(std::span<const std::string> args, std::chrono::mill
     PollChildExit(childPid, &childRunning, &result.exitCode);
     if (!childRunning) {
       if (stdoutOpen) {
-        ReadAvailableFd(stdoutPipe[0], &result.stdoutText, &stdoutOpen);
+        ReadAvailableFd(stdoutPipe[0], &result.stdoutText, &stdoutOpen,
+                        &result.outputLimitExceeded);
         if (stdoutOpen) {
           CloseFd(&stdoutPipe[0]);
         }
         stdoutOpen = false;
       }
       if (stderrOpen) {
-        ReadAvailableFd(stderrPipe[0], &result.stderrText, &stderrOpen);
+        ReadAvailableFd(stderrPipe[0], &result.stderrText, &stderrOpen,
+                        &result.outputLimitExceeded);
         if (stderrOpen) {
           CloseFd(&stderrPipe[0]);
         }
@@ -259,6 +269,11 @@ ProcessRunResult RunProcess(std::span<const std::string> args, std::chrono::mill
     }
 
     const auto now = std::chrono::steady_clock::now();
+    if (childRunning && result.outputLimitExceeded && !sentTerminate) {
+      sentTerminate = true;
+      terminateDeadline = now + std::chrono::seconds(2);
+      ::kill(-childPid, SIGTERM);
+    }
     if (childRunning && now >= deadline && !sentTerminate) {
       result.timedOut = true;
       sentTerminate = true;
@@ -287,9 +302,11 @@ ProcessRunResult RunProcess(std::span<const std::string> args, std::chrono::mill
             continue;
           }
           if (fds[i].fd == stdoutPipe[0]) {
-            ReadAvailableFd(stdoutPipe[0], &result.stdoutText, &stdoutOpen);
+            ReadAvailableFd(stdoutPipe[0], &result.stdoutText, &stdoutOpen,
+                            &result.outputLimitExceeded);
           } else if (fds[i].fd == stderrPipe[0]) {
-            ReadAvailableFd(stderrPipe[0], &result.stderrText, &stderrOpen);
+            ReadAvailableFd(stderrPipe[0], &result.stderrText, &stderrOpen,
+                            &result.outputLimitExceeded);
           }
         }
       }
@@ -298,6 +315,10 @@ ProcessRunResult RunProcess(std::span<const std::string> args, std::chrono::mill
     }
   }
 
+  if (result.outputLimitExceeded) {
+    result.error = "command output exceeded the 16 MiB resource limit";
+    return result;
+  }
   if (result.timedOut) {
     result.error = "command timed out after " + std::to_string(timeout.count()) + "ms";
     if (!result.stderrText.empty()) {

@@ -1679,7 +1679,7 @@ std::optional<std::filesystem::path> WriteDonnerDDragZoomReplay(
       R"(<path id="Donner_D" d="M270 365 H315 V420 H270 Z" fill="#31c6b3"/></svg>)";
   file.metadata.windowWidth = 1600;
   file.metadata.windowHeight = 900;
-  file.metadata.displayScale = 2.0;
+  file.metadata.displayScale = 1.0;
   file.metadata.expect = repro::ReproExpectation{
       .proofKind = repro::ReproExpectationProofKind::Selection,
       .leftMouseDownOrdinal = 1,
@@ -1744,7 +1744,7 @@ std::optional<std::filesystem::path> WriteDonnerDZoomThenDragReplay(
       R"(<path id="Donner_D" d="M270 365 H315 V420 H270 Z" fill="#31c6b3"/></svg>)";
   file.metadata.windowWidth = 1600;
   file.metadata.windowHeight = 900;
-  file.metadata.displayScale = 2.0;
+  file.metadata.displayScale = 1.0;
   file.metadata.expect = repro::ReproExpectation{
       .proofKind = repro::ReproExpectationProofKind::Selection,
       .leftMouseDownOrdinal = 2,

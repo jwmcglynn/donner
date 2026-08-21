@@ -18,8 +18,6 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
-#include <fstream>
-#include <iterator>
 #include <limits>
 #include <optional>
 #include <span>
@@ -31,6 +29,7 @@
 #include <vector>
 
 #include "donner/base/Box.h"
+#include "donner/base/FileUtils.h"
 #include "donner/base/Transform.h"
 #include "donner/base/Vector2.h"
 #include "donner/editor/AttributeWriteback.h"
@@ -38,8 +37,10 @@
 #include "donner/editor/PresentationRenderScheduler.h"
 #include "donner/editor/ViewportState.h"
 #include "donner/editor/repro/GlRnrReplay.h"
+#include "donner/editor/repro/ReplayResourceBudget.h"
 #include "donner/editor/repro/ReproFile.h"
 #include "donner/svg/SVGDocument.h"
+#include "donner/svg/parser/SVGParser.h"
 #include "donner/svg/renderer/RendererImageIO.h"
 #include "nlohmann/json.hpp"
 #include "tools/mcp-servers/editor-control/EditorControlSessionGlReadback.h"
@@ -225,22 +226,19 @@ void AddBitmapDiffArtifacts(json* diff, const std::optional<svg::RendererBitmap>
 }
 
 std::optional<std::vector<uint8_t>> ReadBinaryFile(const std::filesystem::path& path) {
-  std::ifstream stream(path, std::ios::binary);
-  if (!stream) {
-    return std::nullopt;
+  FileReadResult result = ReadFileBounded(path, ToolCallResult::kMaximumCaptureSourceBytes);
+  if (auto* contents = std::get_if<std::string>(&result)) {
+    return std::vector<uint8_t>(contents->begin(), contents->end());
   }
-
-  return std::vector<uint8_t>(std::istreambuf_iterator<char>(stream),
-                              std::istreambuf_iterator<char>());
+  return std::nullopt;
 }
 
 std::optional<std::string> ReadTextFile(const std::filesystem::path& path) {
-  std::ifstream stream(path, std::ios::binary);
-  if (!stream) {
-    return std::nullopt;
+  FileReadResult result = ReadFileBounded(path, svg::parser::SVGParser::kDefaultMaximumInputSize);
+  if (auto* contents = std::get_if<std::string>(&result)) {
+    return std::move(*contents);
   }
-
-  return std::string(std::istreambuf_iterator<char>(stream), std::istreambuf_iterator<char>());
+  return std::nullopt;
 }
 
 int AttachPngFile(ToolCallResult* out, const std::string& label, const std::filesystem::path& path,
@@ -251,19 +249,7 @@ int AttachPngFile(ToolCallResult* out, const std::string& label, const std::file
     return -1;
   }
 
-  const std::string base64 = Base64Encode(*bytes);
-  const int imageIndex = static_cast<int>(out->images.size());
-  out->images.push_back(EncodedImage{
-      .label = label,
-      .mimeType = "image/png",
-      .dataBase64 = base64,
-  });
-  (*metadata)["png_attached"] = true;
-  (*metadata)["image_index"] = imageIndex;
-  if (embedBase64) {
-    (*metadata)["png_base64"] = base64;
-  }
-  return imageIndex;
+  return AttachPngBytes(out, label, *bytes, embedBase64, metadata);
 }
 
 bool DrainWritebackAndReparseSource(EditorApp* app, SelectTool* selectTool, std::string* source) {
@@ -397,6 +383,25 @@ ToolCallResult EditorControlSession::startRnrRecording(const json& arguments) {
       !ReadOptionalDouble(arguments, "frame_delta_ms", 1000.0 / 60.0, &frameDeltaMs, &error)) {
     return MakeErrorResult(error);
   }
+  const double physicalWidth = static_cast<double>(windowWidth) * displayScale;
+  const double physicalHeight = static_cast<double>(windowHeight) * displayScale;
+  if (windowWidth <= 0 || windowWidth > repro::kMaximumReproDimension || windowHeight <= 0 ||
+      windowHeight > repro::kMaximumReproDimension || !std::isfinite(displayScale) ||
+      displayScale <= 0.0 || displayScale > repro::kMaximumReproDevicePixelRatio ||
+      !std::isfinite(physicalWidth) || !std::isfinite(physicalHeight) || physicalWidth <= 0.0 ||
+      physicalHeight <= 0.0 || physicalWidth > repro::kMaximumReproPixelDimension ||
+      physicalHeight > repro::kMaximumReproPixelDimension ||
+      physicalWidth * physicalHeight > static_cast<double>(repro::kMaximumReproPixels)) {
+    return MakeErrorResult("recording window and display scale exceed the pixel surface budget");
+  }
+  if (!std::isfinite(frameDeltaMs) || frameDeltaMs <= 0.0 ||
+      frameDeltaMs > repro::kMaximumReproDeltaMilliseconds) {
+    return MakeErrorResult("frame_delta_ms must be finite and within the replay timing limit");
+  }
+  if (svgPath.size() > repro::kMaximumReproSvgPathBytes ||
+      svgPath.find('\0') != std::string::npos) {
+    return MakeErrorResult("svg_path exceeds the replay metadata path limit");
+  }
   if (svgPath.empty() || svgPath == "<memory>") {
     svgPath = "embedded.svg";
   }
@@ -406,14 +411,14 @@ ToolCallResult EditorControlSession::startRnrRecording(const json& arguments) {
   if (!outputPath.empty()) {
     rnrRecording_.outputPath = std::filesystem::path(outputPath);
   }
-  rnrRecording_.frameDeltaMs = frameDeltaMs > 0.0 ? frameDeltaMs : 1000.0 / 60.0;
+  rnrRecording_.frameDeltaMs = frameDeltaMs;
   rnrRecording_.file.metadata.svgPath = svgPath;
   rnrRecording_.file.metadata.svgBasename = std::filesystem::path(svgPath).filename().string();
   rnrRecording_.file.metadata.svgContentHash = ReproContentHash(currentSourceText_);
   rnrRecording_.file.metadata.svgSource = currentSourceText_;
-  rnrRecording_.file.metadata.windowWidth = windowWidth > 0 ? windowWidth : canvasWidth_;
-  rnrRecording_.file.metadata.windowHeight = windowHeight > 0 ? windowHeight : canvasHeight_;
-  rnrRecording_.file.metadata.displayScale = displayScale > 0.0 ? displayScale : 1.0;
+  rnrRecording_.file.metadata.windowWidth = windowWidth;
+  rnrRecording_.file.metadata.windowHeight = windowHeight;
+  rnrRecording_.file.metadata.displayScale = displayScale;
 
   ToolCallResult out;
   out.body = json{
@@ -509,7 +514,7 @@ ToolCallResult EditorControlSession::replayRnr(const json& arguments) {
   std::string glOutputDir;
   bool includeFrameResults = true;
   bool includeDisplayDiff = false;
-  int maxFrameResults = 200;
+  int maxFrameResults = kMaximumRetainedReplayFrameResults;
   int stopAfterMouseUps = 0;
   int comparePresentedAfterLeftMouseDown = 0;
   int comparePresentedFrameOffsetAfterLeftMouseDown = 0;
@@ -535,7 +540,8 @@ ToolCallResult EditorControlSession::replayRnr(const json& arguments) {
       !ReadOptionalString(arguments, "gl_output_dir", "", &glOutputDir, &error) ||
       !ReadOptionalBool(arguments, "include_frame_results", true, &includeFrameResults, &error) ||
       !ReadOptionalBool(arguments, "include_display_diff", false, &includeDisplayDiff, &error) ||
-      !ReadOptionalInt(arguments, "max_frame_results", 200, &maxFrameResults, &error) ||
+      !ReadOptionalInt(arguments, "max_frame_results", kMaximumRetainedReplayFrameResults,
+                       &maxFrameResults, &error) ||
       !ReadOptionalInt(arguments, "stop_after_mouse_ups", 0, &stopAfterMouseUps, &error) ||
       !ReadOptionalInt(arguments, "compare_presented_after_left_mouse_down", 0,
                        &comparePresentedAfterLeftMouseDown, &error) ||
@@ -543,6 +549,9 @@ ToolCallResult EditorControlSession::replayRnr(const json& arguments) {
                        &comparePresentedFrameOffsetAfterLeftMouseDown, &error) ||
       !ReadCaptureOptions(arguments, false, &capture, &error)) {
     return MakeErrorResult(error);
+  }
+  if (maxFrameResults < 0 || maxFrameResults > kMaximumRetainedReplayFrameResults) {
+    return MakeErrorResult("max_frame_results exceeds the replay response limit");
   }
 
   if (glReadback) {
@@ -560,8 +569,8 @@ ToolCallResult EditorControlSession::replayRnr(const json& arguments) {
     if (glMaxFrame < -1) {
       return MakeErrorResult("gl_max_frame must be non-negative");
     }
-    if (glTimeoutMs <= 0) {
-      return MakeErrorResult("gl_timeout_ms must be positive");
+    if (glTimeoutMs <= 0 || glTimeoutMs > kMaximumGlReplayTimeoutMs) {
+      return MakeErrorResult("gl_timeout_ms exceeds the GL replay timeout limit");
     }
 
     repro::GlRnrReplayOptions replayOptions;
@@ -667,18 +676,14 @@ ToolCallResult EditorControlSession::replayRnr(const json& arguments) {
     liveSource = *replay->metadata.svgSource;
     usedEmbeddedSvgSource = true;
   } else {
-    std::optional<std::filesystem::path> resolvedSvgPath =
-        resolveRnrSvgPath(rnrPath, replay->metadata.svgPath);
-    if (!resolvedSvgPath.has_value()) {
-      return MakeErrorResult("failed to resolve SVG path from .rnr metadata: " +
+    std::optional<repro::ReproSvgFile> svgFile =
+        repro::ReadReproSvgFile(rnrPath, replay->metadata.svgPath);
+    if (!svgFile.has_value()) {
+      return MakeErrorResult("failed to safely open replay-relative SVG: " +
                              replay->metadata.svgPath);
     }
-    svgDisplayPath = *resolvedSvgPath;
-    std::optional<std::string> source = ReadTextFile(svgDisplayPath);
-    if (!source.has_value()) {
-      return MakeErrorResult("failed to open SVG for .rnr replay: " + svgDisplayPath.string());
-    }
-    liveSource = std::move(*source);
+    svgDisplayPath = std::move(svgFile->path);
+    liveSource = std::move(svgFile->contents);
   }
 
   LoadOptions loadOptions;
@@ -724,6 +729,49 @@ ToolCallResult EditorControlSession::replayRnr(const json& arguments) {
       {"mouse_up_count", 0},
       {"stopped_early", false},
       {"frames", json::array()},
+  };
+
+  repro::ReplayExecutionResourceBudget executionBudget;
+  repro::ReplayHeldMutationKeyState heldMutationKeys;
+  const auto reserveFrame = [&](const repro::ReproFrame& frame) {
+    const Vector2i frameSize = viewport.desiredCanvasSize();
+    if (frameSize.x <= 0 || frameSize.y <= 0) {
+      error =
+          "replay frame has an invalid pixel surface before frame " + std::to_string(frame.index);
+      return false;
+    }
+    const std::size_t width = static_cast<std::size_t>(frameSize.x);
+    const std::size_t height = static_cast<std::size_t>(frameSize.y);
+    if (height > std::numeric_limits<std::size_t>::max() / width ||
+        !executionBudget.reserveFrame(width * height)) {
+      error = "replay execution frame budget exceeded before frame " + std::to_string(frame.index);
+      return false;
+    }
+    return true;
+  };
+  const auto reserveAction = [&](const repro::ReproFrame& frame, const repro::ReproAction& action) {
+    const std::size_t selectedElementCount = app_.selectedElements().size();
+    const repro::ReplaySemanticActionCost cost = repro::EstimateReplaySemanticActionCost(
+        action, currentSourceText_.size(), selectedElementCount);
+    if (!executionBudget.reserveAction(cost)) {
+      error = "replay semantic action resource budget exceeded before frame " +
+              std::to_string(frame.index);
+      return false;
+    }
+    return true;
+  };
+  const auto reserveInput = [&](const repro::ReproFrame& frame) {
+    const std::size_t selectedElementCount = app_.selectedElements().size();
+    const std::size_t heldRepeatSourceRewriteUnits = heldMutationKeys.advanceFrame(frame);
+    const repro::ReplayInputFrameCost cost = repro::EstimateReplayInputFrameCost(
+        frame, currentSourceText_.size(), selectedElementCount,
+        app_.document().document().elementCount(), heldRepeatSourceRewriteUnits);
+    if (!executionBudget.reserveInput(cost)) {
+      error = "replay input mutation resource budget exceeded before frame " +
+              std::to_string(frame.index);
+      return false;
+    }
+    return true;
   };
 
   if (simulateEditorShellFrameLoop) {
@@ -837,6 +885,9 @@ ToolCallResult EditorControlSession::replayRnr(const json& arguments) {
       if (frame.viewport.has_value()) {
         ApplyReproViewport(&viewport, *frame.viewport);
       }
+      if (!reserveFrame(frame)) {
+        return MakeErrorResult(error);
+      }
       const bool preInputRenderRequested = maybeRequestGuiRender();
 
       const Vector2d mouseScreen(frame.mouseX, frame.mouseY);
@@ -853,6 +904,9 @@ ToolCallResult EditorControlSession::replayRnr(const json& arguments) {
       }
       if (!asyncRenderer_.isBusy()) {
         for (const repro::ReproAction& action : frame.actions) {
+          if (!reserveAction(frame, action)) {
+            return MakeErrorResult(error);
+          }
           if (!applyReproAction(action, &error)) {
             return MakeErrorResult("action failed while replaying .rnr frame " +
                                    std::to_string(frame.index) + ": " + error);
@@ -863,6 +917,9 @@ ToolCallResult EditorControlSession::replayRnr(const json& arguments) {
           (void)app_.flushFrame();
           syncSourceTextFromDocumentIfChanged();
         }
+      }
+      if (!reserveInput(frame)) {
+        return MakeErrorResult(error);
       }
       for (const repro::ReproEvent& event : frame.events) {
         if (event.kind == repro::ReproEvent::Kind::MouseDown && event.mouseButton == 0) {
@@ -1044,17 +1101,23 @@ ToolCallResult EditorControlSession::replayRnr(const json& arguments) {
     const bool nowHeld = (frame.mouseButtonMask & 1) != 0;
     const bool viewportUnchanged =
         !frame.viewport.has_value() || ReproViewportMatches(viewport, *frame.viewport);
-    if (!frameNeedsRender && !nowHeld && !leftButtonHeld && frame.actions.empty() &&
-        frame.events.empty() && viewportUnchanged) {
-      ++skippedIdleFrameCount;
-      continue;
-    }
-    ++processedFrameCount;
-
     if (frame.viewport.has_value()) {
       ApplyReproViewport(&viewport, *frame.viewport);
       frameNeedsRender |= syncCanvasSize(viewport);
     }
+    if (!reserveFrame(frame)) {
+      return MakeErrorResult(error);
+    }
+
+    if (!frameNeedsRender && !nowHeld && !leftButtonHeld && frame.actions.empty() &&
+        frame.events.empty() && viewportUnchanged) {
+      if (!reserveInput(frame)) {
+        return MakeErrorResult(error);
+      }
+      ++skippedIdleFrameCount;
+      continue;
+    }
+    ++processedFrameCount;
 
     const Vector2d mouseScreen(frame.mouseX, frame.mouseY);
     const Vector2d mouseDoc = frame.mouseDocX.has_value() && frame.mouseDocY.has_value()
@@ -1062,11 +1125,21 @@ ToolCallResult EditorControlSession::replayRnr(const json& arguments) {
                                   : viewport.screenToDocument(mouseScreen);
 
     for (const repro::ReproAction& action : frame.actions) {
+      if (!reserveAction(frame, action)) {
+        return MakeErrorResult(error);
+      }
       if (!applyReproAction(action, &error)) {
         return MakeErrorResult("action failed while replaying .rnr frame " +
                                std::to_string(frame.index) + ": " + error);
       }
       frameNeedsRender = true;
+    }
+    if (!frame.actions.empty()) {
+      frameNeedsRender |= app_.flushFrame();
+      syncSourceTextFromDocumentIfChanged();
+    }
+    if (!reserveInput(frame)) {
+      return MakeErrorResult(error);
     }
 
     MouseModifiers modifiers;
@@ -1178,7 +1251,7 @@ ToolCallResult EditorControlSession::replayRnr(const json& arguments) {
 
 void EditorControlSession::appendRnrFrame(const Vector2d& documentPoint, int mouseButtonMask,
                                           int modifierMask, std::vector<repro::ReproEvent> events) {
-  if (!rnrRecording_.active) {
+  if (!rnrRecording_.active || !recordingCanAppendFrames(1)) {
     return;
   }
 
@@ -1200,7 +1273,7 @@ void EditorControlSession::appendRnrFrame(const Vector2d& documentPoint, int mou
 }
 
 void EditorControlSession::appendRnrActionFrame(repro::ReproAction action) {
-  if (!rnrRecording_.active) {
+  if (!rnrRecording_.active || !recordingCanAppendFrames(1)) {
     return;
   }
 
@@ -1222,6 +1295,44 @@ void EditorControlSession::appendRnrActionFrame(repro::ReproAction action) {
   frame.actions.push_back(std::move(action));
   rnrRecording_.file.frames.push_back(std::move(frame));
   rnrRecording_.timestampSeconds += rnrRecording_.frameDeltaMs / 1000.0;
+}
+
+bool EditorControlSession::recordingCanAppendFrames(std::size_t frameCount) const {
+  if (!rnrRecording_.active || frameCount == 0) {
+    return true;
+  }
+  if (rnrRecording_.file.frames.size() > repro::kMaximumReproPlaybackFrames ||
+      frameCount > repro::kMaximumReproPlaybackFrames - rnrRecording_.file.frames.size()) {
+    return false;
+  }
+  const repro::ReproMetadata& metadata = rnrRecording_.file.metadata;
+  const double physicalWidthValue =
+      std::ceil(static_cast<double>(metadata.windowWidth) * metadata.displayScale);
+  const double physicalHeightValue =
+      std::ceil(static_cast<double>(metadata.windowHeight) * metadata.displayScale);
+  if (!std::isfinite(physicalWidthValue) || !std::isfinite(physicalHeightValue) ||
+      physicalWidthValue <= 0.0 || physicalHeightValue <= 0.0 ||
+      physicalWidthValue > static_cast<double>(std::numeric_limits<std::size_t>::max()) ||
+      physicalHeightValue > static_cast<double>(std::numeric_limits<std::size_t>::max())) {
+    return false;
+  }
+  const std::size_t physicalWidth = static_cast<std::size_t>(physicalWidthValue);
+  const std::size_t physicalHeight = static_cast<std::size_t>(physicalHeightValue);
+  if (physicalHeight > std::numeric_limits<std::size_t>::max() / physicalWidth) {
+    return false;
+  }
+  const std::size_t pixelsPerFrame = physicalWidth * physicalHeight;
+  const std::size_t maximumPixelFrames =
+      std::min(repro::kMaximumParsedReproPixelFrames,
+               repro::ReplayExecutionResourceBudget::kMaximumPixelFrames);
+  const std::size_t totalFrames = rnrRecording_.file.frames.size() + frameCount;
+  if (pixelsPerFrame > maximumPixelFrames / totalFrames) {
+    return false;
+  }
+  const double lastTimestamp =
+      rnrRecording_.timestampSeconds +
+      static_cast<double>(frameCount - 1u) * rnrRecording_.frameDeltaMs / 1000.0;
+  return std::isfinite(lastTimestamp) && lastTimestamp <= repro::kMaximumReproDurationSeconds;
 }
 
 repro::ReproViewport EditorControlSession::currentReproViewport() const {
@@ -1259,29 +1370,6 @@ Vector2d EditorControlSession::currentRecordingScreenPoint(const Vector2d& docum
   const Vector2d panDoc(viewport.panDocX, viewport.panDocY);
   const Vector2d panScreen(viewport.panScreenX, viewport.panScreenY);
   return panScreen + (documentPoint - panDoc) * viewport.zoom;
-}
-
-std::optional<std::filesystem::path> EditorControlSession::resolveRnrSvgPath(
-    const std::filesystem::path& rnrPath, std::string_view recordingSvgPath) const {
-  const std::filesystem::path direct(recordingSvgPath);
-  std::error_code ec;
-  if (std::filesystem::exists(direct, ec)) {
-    return direct;
-  }
-
-  ec.clear();
-  const std::filesystem::path alongside = rnrPath.parent_path() / direct;
-  if (std::filesystem::exists(alongside, ec)) {
-    return alongside;
-  }
-
-  ec.clear();
-  const std::filesystem::path fromCurrent = std::filesystem::path(".") / direct;
-  if (std::filesystem::exists(fromCurrent, ec)) {
-    return fromCurrent;
-  }
-
-  return std::nullopt;
 }
 
 bool EditorControlSession::setActiveToolForReplay(std::string_view tool, std::string* error) {

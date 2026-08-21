@@ -193,8 +193,6 @@ private:
   void appendRnrActionFrame(repro::ReproAction action);
   [[nodiscard]] repro::ReproViewport currentReproViewport() const;
   [[nodiscard]] Vector2d currentRecordingScreenPoint(const Vector2d& documentPoint) const;
-  [[nodiscard]] std::optional<std::filesystem::path> resolveRnrSvgPath(
-      const std::filesystem::path& rnrPath, std::string_view recordingSvgPath) const;
   [[nodiscard]] bool syncCanvasSize(const ViewportState& viewport);
   [[nodiscard]] bool drainPendingWritebacks();
   void syncSourceTextFromDocumentIfChanged();
@@ -239,6 +237,7 @@ private:
   };
 
   RnrRecordingState rnrRecording_;
+  [[nodiscard]] bool recordingCanAppendFrames(std::size_t frameCount) const;
   std::string currentSourcePath_;
   std::string currentSourceText_;
   std::uint64_t sourceRevision_ = 0;
