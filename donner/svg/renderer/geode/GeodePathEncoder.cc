@@ -21,6 +21,35 @@ namespace {
 /// Maximum number of bands - prevents runaway memory for huge paths.
 constexpr uint16_t kMaxBands = 256;
 
+EncodedPath RejectedEncode() {
+  EncodedPath result;
+  result.outcome = EncodedPath::Outcome::Rejected;
+  return result;
+}
+
+bool PathCoordinatesFit(const Path& path) {
+  constexpr double kMaximumFloat = static_cast<double>(std::numeric_limits<float>::max());
+  for (const Vector2d& point : path.points()) {
+    if (!std::isfinite(point.x) || !std::isfinite(point.y) || std::abs(point.x) > kMaximumFloat ||
+        std::abs(point.y) > kMaximumFloat) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool BoundsFitFloat(const Box2d& bounds) {
+  constexpr double kMaximumFloat = static_cast<double>(std::numeric_limits<float>::max());
+  return std::isfinite(bounds.topLeft.x) && std::isfinite(bounds.topLeft.y) &&
+         std::isfinite(bounds.bottomRight.x) && std::isfinite(bounds.bottomRight.y) &&
+         std::abs(bounds.topLeft.x) <= kMaximumFloat &&
+         std::abs(bounds.topLeft.y) <= kMaximumFloat &&
+         std::abs(bounds.bottomRight.x) <= kMaximumFloat &&
+         std::abs(bounds.bottomRight.y) <= kMaximumFloat && std::isfinite(bounds.width()) &&
+         std::isfinite(bounds.height()) && bounds.width() <= kMaximumFloat &&
+         bounds.height() <= kMaximumFloat;
+}
+
 /// Axis-aligned extent of a quadratic Bézier (control-point hull bounds).
 struct CurveRange {
   float yMin;
@@ -776,13 +805,15 @@ EncodedPath GeodePathEncoder::encode(const Path& path, FillRule /*fillRule*/, do
   if (path.empty()) {
     return result;
   }
+  if (!std::isfinite(tolerance) || tolerance < 0.0 || !PathCoordinatesFit(path)) {
+    return RejectedEncode();
+  }
 
   // Cubic→quadratic once; the two monotonic splits share it.
   const std::optional<Path> converted =
       CubicToQuadraticBounded(path, tolerance, limits.maximumConvertedCommands);
   if (!converted.has_value()) {
-    result.outcome = EncodedPath::Outcome::Rejected;
-    return result;
+    return RejectedEncode();
   }
   const Path& quadPath = *converted;
   if (quadPath.empty()) {
@@ -797,6 +828,9 @@ EncodedPath GeodePathEncoder::encode(const Path& path, FillRule /*fillRule*/, do
   const Box2d bounds = monoPathY.bounds();
   if (bounds.isEmpty()) {
     return result;
+  }
+  if (!BoundsFitFloat(bounds)) {
+    return RejectedEncode();
   }
   result.pathBounds = bounds;
   result.stats.aabbArea = bounds.width() * bounds.height();
