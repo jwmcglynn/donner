@@ -142,11 +142,14 @@ std::optional<ByteRange> ResolveSourceRange(std::string_view source, const Sourc
   return ByteRange{.start = clampedStart, .end = clampedEnd};
 }
 
-std::vector<std::size_t> BuildLineStarts(std::string_view source) {
+std::optional<std::vector<std::size_t>> BuildLineStarts(std::string_view source) {
   std::vector<std::size_t> result;
   result.push_back(0);
   for (std::size_t i = 0; i < source.size(); ++i) {
     if (source[i] == '\n') {
+      if (result.size() >= kMaximumFocusLineStarts) {
+        return std::nullopt;
+      }
       result.push_back(i + 1);
     }
   }
@@ -536,13 +539,22 @@ bool ReferencesAnyFragmentId(std::span<const FragmentReference> references,
 
 void AppendMatchedCssFragmentReferencesInSubtree(std::string_view source,
                                                  const svg::SVGElement& root,
-                                                 std::vector<FragmentReference>* references) {
-  if (!HasLiveSvgTreeComponents(root)) {
+                                                 std::vector<FragmentReference>* references,
+                                                 FocusTraversalBudget* budget = nullptr,
+                                                 std::size_t depth = 0) {
+  if (depth > kMaximumFocusTraversalDepth) {
+    if (budget != nullptr) budget->reject();
+    return;
+  }
+  if (!HasLiveSvgTreeComponents(root) || (budget != nullptr && !budget->consume())) {
     return;
   }
 
   if (IsRenderedStyleTarget(root)) {
     for (const svg::SVGMatchedStyleRule& matchedRule : svg::CollectMatchedStyleRules(root)) {
+      if (budget != nullptr && !budget->consume()) {
+        return;
+      }
       if (!matchedRule.ruleSourceRange.has_value()) {
         continue;
       }
@@ -558,12 +570,16 @@ void AppendMatchedCssFragmentReferencesInSubtree(std::string_view source,
   for (auto child = SafeFirstChild(root); child.has_value();) {
     svg::SVGElement current = *child;
     child = SafeNextSibling(current);
-    AppendMatchedCssFragmentReferencesInSubtree(source, current, references);
+    AppendMatchedCssFragmentReferencesInSubtree(source, current, references, budget, depth + 1u);
+    if (budget != nullptr && budget->rejected()) {
+      return;
+    }
   }
 }
 
 void AppendDocumentElements(const svg::SVGElement& root, std::vector<svg::SVGElement>* elements,
-                            FocusTraversalBudget* budget = nullptr, std::size_t depth = 0) {
+                            FocusTraversalBudget* budget = nullptr, std::size_t depth = 0,
+                            std::size_t maximumElements = std::numeric_limits<std::size_t>::max()) {
   if (depth > kMaximumFocusTraversalDepth) {
     if (budget != nullptr) budget->reject();
     return;
@@ -571,12 +587,16 @@ void AppendDocumentElements(const svg::SVGElement& root, std::vector<svg::SVGEle
   if (!HasLiveSvgTreeComponents(root) || (budget != nullptr && !budget->consume())) {
     return;
   }
+  if (elements->size() >= maximumElements) {
+    if (budget != nullptr) budget->reject();
+    return;
+  }
 
   elements->push_back(root);
   for (auto child = SafeFirstChild(root); child.has_value();) {
     svg::SVGElement current = *child;
     child = SafeNextSibling(current);
-    AppendDocumentElements(current, elements, budget, depth + 1u);
+    AppendDocumentElements(current, elements, budget, depth + 1u, maximumElements);
     if (budget != nullptr && budget->rejected()) {
       return;
     }
@@ -600,14 +620,17 @@ std::unordered_map<std::string, svg::SVGElement> BuildElementByIdIndex(
   return result;
 }
 
-bool ContainsEntity(std::span<const Entity> entities, Entity entity) {
-  return std::ranges::find(entities, entity) != entities.end();
-}
-
-bool HasSelectedAncestor(const svg::SVGElement& element, std::span<const Entity> selectedEntities) {
+bool HasSelectedAncestor(const svg::SVGElement& element,
+                         const std::unordered_set<Entity>& selectedEntities,
+                         FocusTraversalBudget* budget) {
+  std::size_t depth = 0;
   for (std::optional<svg::SVGElement> ancestor = SafeParentElement(element); ancestor.has_value();
        ancestor = SafeParentElement(*ancestor)) {
-    if (ContainsEntity(selectedEntities, ancestor->unsafeEntityHandle().entity())) {
+    if (depth++ >= kMaximumFocusTraversalDepth || !budget->consume()) {
+      budget->reject();
+      return true;
+    }
+    if (selectedEntities.contains(ancestor->unsafeEntityHandle().entity())) {
       return true;
     }
   }
@@ -616,12 +639,16 @@ bool HasSelectedAncestor(const svg::SVGElement& element, std::span<const Entity>
 }
 
 bool MatchedCssReferencesAnyFragmentId(std::string_view source, const svg::SVGElement& element,
-                                       const std::unordered_set<std::string>& fragmentIds) {
+                                       const std::unordered_set<std::string>& fragmentIds,
+                                       FocusTraversalBudget* budget) {
   if (!IsRenderedStyleTarget(element)) {
     return false;
   }
 
   for (const svg::SVGMatchedStyleRule& matchedRule : svg::CollectMatchedStyleRules(element)) {
+    if (!budget->consume()) {
+      return false;
+    }
     if (!matchedRule.ruleSourceRange.has_value()) {
       continue;
     }
@@ -642,24 +669,50 @@ bool MatchedCssReferencesAnyFragmentId(std::string_view source, const svg::SVGEl
   return false;
 }
 
+bool AddUniqueSummaryElement(const svg::SVGElement& element, std::vector<svg::SVGElement>* elements,
+                             std::unordered_set<Entity>* elementEntities,
+                             FocusTraversalBudget* budget) {
+  if (!HasLiveSvgTreeComponents(element)) {
+    return false;
+  }
+  const Entity entity = element.unsafeEntityHandle().entity();
+  if (!elementEntities->insert(entity).second) {
+    return false;
+  }
+  if (elements->size() >= kMaximumFocusElements) {
+    budget->reject();
+    return false;
+  }
+  elements->push_back(element);
+  return true;
+}
+
 void AppendReverseReferenceElementsForSelectedIds(
     std::string_view source, std::span<const svg::SVGElement> documentElements,
-    const std::unordered_set<std::string>& selectedIds, std::span<const Entity> selectedEntities,
-    std::vector<svg::SVGElement>* referencingElements) {
+    const std::unordered_set<std::string>& selectedIds,
+    const std::unordered_set<Entity>& selectedEntities,
+    std::vector<svg::SVGElement>* referencingElements,
+    std::unordered_set<Entity>* referencingEntities, FocusTraversalBudget* budget) {
   if (selectedIds.empty()) {
     return;
   }
 
   for (const svg::SVGElement& element : documentElements) {
+    if (!budget->consume()) {
+      return;
+    }
     const Entity entity = element.unsafeEntityHandle().entity();
-    if (ContainsEntity(selectedEntities, entity)) {
+    if (selectedEntities.contains(entity)) {
       continue;
     }
 
     const std::vector<FragmentReference> attributeReferences = ReferencedFragments(source, element);
     if (ReferencesAnyFragmentId(attributeReferences, selectedIds) ||
-        MatchedCssReferencesAnyFragmentId(source, element, selectedIds)) {
-      AddUniqueElement(element, referencingElements);
+        MatchedCssReferencesAnyFragmentId(source, element, selectedIds, budget)) {
+      AddUniqueSummaryElement(element, referencingElements, referencingEntities, budget);
+      if (budget->rejected()) {
+        return;
+      }
     }
   }
 }
@@ -1288,19 +1341,27 @@ FocusElementCollection CollectFocusElements(const svg::SVGDocument& document,
 void AppendForwardReferenceElements(
     std::string_view source, const svg::SVGElement& element,
     const std::unordered_map<std::string, svg::SVGElement>& elementById,
-    std::vector<svg::SVGElement>* elements) {
-  if (!HasLiveSvgTreeComponents(element)) {
+    std::vector<svg::SVGElement>* elements, std::unordered_set<Entity>* elementEntities,
+    FocusTraversalBudget* budget) {
+  if (!HasLiveSvgTreeComponents(element) || !budget->consume()) {
     return;
   }
 
   std::vector<FragmentReference> references;
-  AppendMatchedCssFragmentReferencesInSubtree(source, element, &references);
-  AppendReferencedFragmentsInSubtree(source, element, FocusLinkSourceMode::All, &references);
+  AppendMatchedCssFragmentReferencesInSubtree(source, element, &references, budget);
+  AppendReferencedFragmentsInSubtree(source, element, FocusLinkSourceMode::All, &references,
+                                     budget);
 
   for (const FragmentReference& reference : references) {
+    if (!budget->consume()) {
+      return;
+    }
     auto referenced = elementById.find(reference.fragmentId);
     if (referenced != elementById.end()) {
-      AddUniqueElement(referenced->second, elements);
+      AddUniqueSummaryElement(referenced->second, elements, elementEntities, budget);
+      if (budget->rejected()) {
+        return;
+      }
     }
   }
 }
@@ -1449,7 +1510,10 @@ FocusPartition ComputeFocusPartition(const svg::SVGDocument& document,
   }
 
   const std::string_view source = document.source();
-  const std::vector<std::size_t> lineStarts = BuildLineStarts(source);
+  const std::optional<std::vector<std::size_t>> lineStarts = BuildLineStarts(source);
+  if (!lineStarts.has_value()) {
+    return FocusPartition{.resourceLimitExceeded = true};
+  }
   std::vector<svg::SVGElement> initialElements;
   initialElements.reserve(selectedElements.size());
   std::vector<Entity> selectedEntities;
@@ -1465,7 +1529,7 @@ FocusPartition ComputeFocusPartition(const svg::SVGDocument& document,
 
   FocusPartition partition;
   FocusElementCollection focusElements =
-      CollectFocusElements(document, std::move(initialElements), {}, lineStarts);
+      CollectFocusElements(document, std::move(initialElements), {}, *lineStarts);
 
   for (std::size_t i = 0; i < focusElements.elements.size(); ++i) {
     std::optional<ByteRange> elementRange = NodeRange(source, focusElements.elements[i]);
@@ -1475,26 +1539,26 @@ FocusPartition ComputeFocusPartition(const svg::SVGDocument& document,
         selectedEntities.end();
     if (elementRange.has_value()) {
       AppendFocusLineRange(selectedElement ? &partition.fullColor : &partition.referenceColor,
-                           RangeToLines(lineStarts, *elementRange));
+                           RangeToLines(*lineStarts, *elementRange));
     }
 
-    if (!AddAncestorTagLineRanges(source, lineStarts, focusElements.elements[i], &partition,
+    if (!AddAncestorTagLineRanges(source, *lineStarts, focusElements.elements[i], &partition,
                                   /*required=*/selectedElement, &focusElements.traversalBudget)) {
       return {};
     }
   }
 
   for (const FocusCssRule& cssRule : focusElements.cssRules) {
-    AppendFocusLineRange(&partition.referenceColor, RangeToLines(lineStarts, cssRule.ruleRange));
+    AppendFocusLineRange(&partition.referenceColor, RangeToLines(*lineStarts, cssRule.ruleRange));
     if (cssRule.stylesheetNodeRange.has_value()) {
-      AddNodeTagLineRanges(source, lineStarts, *cssRule.stylesheetNodeRange, &partition);
+      AddNodeTagLineRanges(source, *lineStarts, *cssRule.stylesheetNodeRange, &partition);
     }
   }
 
   partition.referenceLinks.insert(partition.referenceLinks.end(), focusElements.cssLinks.begin(),
                                   focusElements.cssLinks.end());
 
-  AppendElementReferenceLinks(source, lineStarts, focusElements.links, &partition,
+  AppendElementReferenceLinks(source, *lineStarts, focusElements.links, &partition,
                               &focusElements.traversalBudget);
 
   Normalize(&partition.fullColor);
@@ -1506,7 +1570,7 @@ FocusPartition ComputeFocusPartition(const svg::SVGDocument& document,
   visible.insert(visible.end(), partition.referenceColor.begin(), partition.referenceColor.end());
   visible.insert(visible.end(), partition.dimmed.begin(), partition.dimmed.end());
   Normalize(&visible);
-  partition.hidden = HiddenLineRanges(static_cast<int>(lineStarts.size()), visible);
+  partition.hidden = HiddenLineRanges(static_cast<int>(lineStarts->size()), visible);
   partition.traversalWork = focusElements.traversalBudget.work();
   partition.resourceLimitExceeded = focusElements.traversalBudget.rejected();
   return partition;
@@ -1526,7 +1590,13 @@ std::optional<StyleFocus> ComputeStyleFocusAtSourceOffset(const svg::SVGDocument
     return std::nullopt;
   }
 
-  const std::vector<std::size_t> lineStarts = BuildLineStarts(source);
+  const std::optional<std::vector<std::size_t>> lineStarts = BuildLineStarts(source);
+  if (!lineStarts.has_value()) {
+    return StyleFocus{
+        .partition = FocusPartition{.resourceLimitExceeded = true},
+        .reverseReferenceExpansionSuppressed = true,
+    };
+  }
   std::optional<svg::SVGStyleRuleAtSourceOffset> sourceRule =
       svg::FindStyleRuleAtSourceOffset(document, sourceOffset);
   if (!sourceRule.has_value()) {
@@ -1552,42 +1622,42 @@ std::optional<StyleFocus> ComputeStyleFocusAtSourceOffset(const svg::SVGDocument
   AppendCssFragmentReferences(source, *ruleRange, &cssReferences);
   FocusElementCollection focusElements;
   if (!suppressReverseReferenceExpansion) {
-    focusElements = CollectFocusElements(document, impactedElements, cssReferences, lineStarts);
+    focusElements = CollectFocusElements(document, impactedElements, cssReferences, *lineStarts);
   }
 
   FocusPartition partition;
-  AppendFocusLineRange(&partition.fullColor, RangeToLines(lineStarts, *ruleRange));
+  AppendFocusLineRange(&partition.fullColor, RangeToLines(*lineStarts, *ruleRange));
 
   if (std::optional<ByteRange> stylesheetNodeRange =
           NodeRangeForEntity(source, registry, sourceRule->stylesheetEntity)) {
-    AddNodeTagLineRanges(source, lineStarts, *stylesheetNodeRange, &partition);
+    AddNodeTagLineRanges(source, *lineStarts, *stylesheetNodeRange, &partition);
   }
   if (std::optional<xml::XMLNode> stylesheetNode =
           xml::XMLNode::TryCast(EntityHandle(registry, sourceRule->stylesheetEntity))) {
-    AddXmlAncestorTagLineRanges(source, lineStarts, *stylesheetNode, &partition,
+    AddXmlAncestorTagLineRanges(source, *lineStarts, *stylesheetNode, &partition,
                                 &focusElements.traversalBudget);
   }
 
   if (!suppressReverseReferenceExpansion) {
     for (const svg::SVGElement& element : focusElements.elements) {
       if (std::optional<ByteRange> elementRange = NodeRange(source, element)) {
-        AppendFocusLineRange(&partition.referenceColor, RangeToLines(lineStarts, *elementRange));
+        AppendFocusLineRange(&partition.referenceColor, RangeToLines(*lineStarts, *elementRange));
       }
 
-      std::ignore = AddAncestorTagLineRanges(source, lineStarts, element, &partition,
+      std::ignore = AddAncestorTagLineRanges(source, *lineStarts, element, &partition,
                                              /*required=*/false, &focusElements.traversalBudget);
     }
 
     for (const FocusCssRule& cssRule : focusElements.cssRules) {
-      AppendFocusLineRange(&partition.referenceColor, RangeToLines(lineStarts, cssRule.ruleRange));
+      AppendFocusLineRange(&partition.referenceColor, RangeToLines(*lineStarts, cssRule.ruleRange));
       if (cssRule.stylesheetNodeRange.has_value()) {
-        AddNodeTagLineRanges(source, lineStarts, *cssRule.stylesheetNodeRange, &partition);
+        AddNodeTagLineRanges(source, *lineStarts, *cssRule.stylesheetNodeRange, &partition);
       }
     }
     partition.referenceLinks.insert(partition.referenceLinks.end(), focusElements.cssLinks.begin(),
                                     focusElements.cssLinks.end());
 
-    AppendElementReferenceLinks(source, lineStarts, focusElements.links, &partition,
+    AppendElementReferenceLinks(source, *lineStarts, focusElements.links, &partition,
                                 &focusElements.traversalBudget);
   }
 
@@ -1600,7 +1670,7 @@ std::optional<StyleFocus> ComputeStyleFocusAtSourceOffset(const svg::SVGDocument
   visible.insert(visible.end(), partition.referenceColor.begin(), partition.referenceColor.end());
   visible.insert(visible.end(), partition.dimmed.begin(), partition.dimmed.end());
   Normalize(&visible);
-  partition.hidden = HiddenLineRanges(static_cast<int>(lineStarts.size()), visible);
+  partition.hidden = HiddenLineRanges(static_cast<int>(lineStarts->size()), visible);
   partition.traversalWork = focusElements.traversalBudget.work();
   partition.resourceLimitExceeded = focusElements.traversalBudget.rejected();
   return StyleFocus{
@@ -1624,6 +1694,7 @@ std::optional<FocusPartition> ComputeStyleFocusPartitionAtSourceOffset(
 ReferenceHighlightSummary ComputeReferenceHighlightSummary(
     const svg::SVGDocument& document, std::span<const svg::SVGElement> selectedElements) {
   ReferenceHighlightSummary summary;
+  FocusTraversalBudget budget;
   [[maybe_unused]] const svg::DocumentReadAccess focusReadAccess = document.readAccess();
   if (!document.hasSourceStore() || selectedElements.empty()) {
     return summary;
@@ -1631,20 +1702,29 @@ ReferenceHighlightSummary ComputeReferenceHighlightSummary(
 
   const svg::SVGElement root = document.svgElement();
   std::vector<svg::SVGElement> documentElements;
-  AppendDocumentElements(root, &documentElements);
+  AppendDocumentElements(root, &documentElements, &budget, 0, kMaximumFocusElements);
   const std::unordered_map<std::string, svg::SVGElement> elementById =
-      BuildElementByIdIndex(documentElements);
+      BuildElementByIdIndex(documentElements, &budget);
 
   std::vector<svg::SVGElement> liveSelectedElements;
-  std::vector<Entity> selectedEntities;
+  std::unordered_set<Entity> selectedEntities;
   std::unordered_set<std::string> selectedIds;
   for (const svg::SVGElement& selected : selectedElements) {
+    if (!budget.consume()) {
+      break;
+    }
     if (!HasLiveSvgTreeComponents(selected)) {
       continue;
     }
-
+    const Entity entity = selected.unsafeEntityHandle().entity();
+    if (!selectedEntities.insert(entity).second) {
+      continue;
+    }
+    if (liveSelectedElements.size() >= kMaximumFocusElements) {
+      budget.reject();
+      break;
+    }
     liveSelectedElements.push_back(selected);
-    selectedEntities.push_back(selected.unsafeEntityHandle().entity());
 
     const RcString id = SafeId(selected);
     if (!id.empty()) {
@@ -1653,21 +1733,34 @@ ReferenceHighlightSummary ComputeReferenceHighlightSummary(
   }
 
   if (liveSelectedElements.empty()) {
+    summary.traversalWork = budget.work();
+    summary.resourceLimitExceeded = budget.rejected();
     return summary;
   }
 
   const std::string_view source = document.source();
+  std::unordered_set<Entity> referencedEntities;
+  std::unordered_set<Entity> referencingEntities;
   for (const svg::SVGElement& selected : liveSelectedElements) {
-    if (!HasSelectedAncestor(selected, selectedEntities)) {
-      AppendForwardReferenceElements(source, selected, elementById, &summary.referencedElements);
+    if (!budget.consume()) {
+      break;
+    }
+    if (!HasSelectedAncestor(selected, selectedEntities, &budget)) {
+      AppendForwardReferenceElements(source, selected, elementById, &summary.referencedElements,
+                                     &referencedEntities, &budget);
+    }
+    if (budget.rejected()) {
+      break;
     }
   }
 
-  AppendReverseReferenceElementsForSelectedIds(source, documentElements, selectedIds,
-                                               selectedEntities, &summary.referencingElements);
-  std::erase_if(summary.referencingElements, [&](const svg::SVGElement& element) {
-    return ContainsEntity(selectedEntities, element.unsafeEntityHandle().entity());
-  });
+  if (!budget.rejected()) {
+    AppendReverseReferenceElementsForSelectedIds(source, documentElements, selectedIds,
+                                                 selectedEntities, &summary.referencingElements,
+                                                 &referencingEntities, &budget);
+  }
+  summary.traversalWork = budget.work();
+  summary.resourceLimitExceeded = budget.rejected();
 
   return summary;
 }
