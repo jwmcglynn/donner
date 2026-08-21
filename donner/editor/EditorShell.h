@@ -63,6 +63,9 @@ class RendererGeode;
 namespace donner::editor::repro {
 class ReproRecorder;
 struct ReproAction;
+struct ReproFrame;
+struct ReplayInputFrameCost;
+struct ReplaySemanticActionCost;
 }  // namespace donner::editor::repro
 
 namespace donner::editor {
@@ -81,6 +84,10 @@ struct EditorShellOptions {
   std::string svgPath;
   std::optional<std::string> initialSource;
   std::optional<std::string> initialPath;
+  /// Permit open, save, save-as, and export actions to access the host filesystem.
+  bool allowFileSystemActions = true;
+  /// Permit source and shape clipboard actions to access the host clipboard.
+  bool allowHostClipboardAccess = true;
   /// Show the in-workspace welcome and sample picker on the first frame.
   bool showWelcome = false;
   std::string editorNoticeText;
@@ -294,6 +301,12 @@ public:
   ///
   /// @param visible True to open the source pane.
   void setSourcePaneVisibleForReplay(bool visible) { setSourcePaneVisible(visible); }
+  /// Estimate source and selection work before applying one semantic replay action.
+  [[nodiscard]] repro::ReplaySemanticActionCost estimateReplayActionCostForTesting(
+      const repro::ReproAction& action) const;
+  /// Estimate source-mutation work reachable through raw replay input for one frame.
+  [[nodiscard]] repro::ReplayInputFrameCost estimateReplayInputCostForTesting(
+      const repro::ReproFrame& frame, std::size_t heldRepeatSourceRewriteUnits = 0) const;
   /// Current selection label for replay/readback harnesses.
   [[nodiscard]] std::optional<std::string> selectedElementLabelForReadback() const;
 

@@ -68,11 +68,13 @@
 #include "donner/editor/ViewportSvgExport.h"
 #include "donner/editor/XmlAutocomplete.h"
 #include "donner/editor/gui/EditorWindow.h"
+#include "donner/editor/repro/ReplayResourceBudget.h"
 #include "donner/editor/repro/ReproFile.h"
 #include "donner/editor/repro/ReproRecorder.h"
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/SVGTSpanElement.h"
 #include "donner/svg/SVGTextElement.h"
+#include "donner/svg/components/ElementTypeComponent.h"
 #include "donner/svg/parser/SVGParser.h"
 #include "donner/svg/properties/PaintServer.h"
 #include "donner/svg/renderer/RendererInterface.h"
@@ -87,6 +89,20 @@
 #include "embed_resources/RobotoFont.h"
 
 namespace donner::editor {
+
+namespace {
+
+thread_local std::string gIsolatedReplayClipboard;
+
+const char* GetIsolatedReplayClipboard(ImGuiContext*) {
+  return gIsolatedReplayClipboard.c_str();
+}
+
+void SetIsolatedReplayClipboard(ImGuiContext*, const char* text) {
+  gIsolatedReplayClipboard = text != nullptr ? text : "";
+}
+
+}  // namespace
 
 #ifdef __EMSCRIPTEN__
 int SampleThumbnailRendererCreationRequestForTesting() {
@@ -1186,6 +1202,12 @@ EditorShell::EditorShell(gui::EditorWindow& window, EditorShellOptions options)
       inputBridge_(window_, kWheelZoomStep),
       compositorDebugPanel_(window.geodeDevice()),
       dialogPresenter_(options_.editorNoticeText, options_.editorBuildInfo) {
+  if (!options_.allowHostClipboardAccess) {
+    gIsolatedReplayClipboard.clear();
+    ImGuiPlatformIO& platformIo = ImGui::GetPlatformIO();
+    platformIo.Platform_GetClipboardTextFn = GetIsolatedReplayClipboard;
+    platformIo.Platform_SetClipboardTextFn = SetIsolatedReplayClipboard;
+  }
   // One presenter owns where document pixels land for the whole session.
   documentPresenter_ = MakeDocumentPresenter([this](std::optional<FramebufferUnderlayPlan> plan) {
     installFramebufferUnderlayPlan(std::move(plan));
@@ -1276,10 +1298,12 @@ EditorShell::EditorShell(gui::EditorWindow& window, EditorShellOptions options)
   if (!app_.loadFromString(*initialSource)) {
     // Keep the shell alive so the user can still edit/fix the file from the source pane.
   }
-  if (options_.initialPath.has_value()) {
-    app_.setCurrentFilePath(*options_.initialPath);
-  } else if (!options_.svgPath.empty()) {
-    app_.setCurrentFilePath(options_.svgPath);
+  if (options_.allowFileSystemActions) {
+    if (options_.initialPath.has_value()) {
+      app_.setCurrentFilePath(*options_.initialPath);
+    } else if (!options_.svgPath.empty()) {
+      app_.setCurrentFilePath(options_.svgPath);
+    }
   }
   // Route the clean baseline through `textEditor_.getText()` so it matches
   // what `syncDirtyFromSource` will later compare against. `TextBuffer`
@@ -1412,6 +1436,30 @@ void EditorShell::queueDocumentSpaceReplayInputForTesting(EditorShellDocumentRep
 
 void EditorShell::queueScrollEventForReplayForTesting(RenderPaneScrollEvent event) {
   inputBridge_.events().push_back(event);
+}
+
+repro::ReplaySemanticActionCost EditorShell::estimateReplayActionCostForTesting(
+    const repro::ReproAction& action) const {
+  const std::size_t documentSourceBytes =
+      app_.hasDocument() ? app_.document().document().source().size() : 0;
+  return repro::EstimateReplaySemanticActionCost(action, documentSourceBytes,
+                                                 app_.selectedElements().size());
+}
+
+repro::ReplayInputFrameCost EditorShell::estimateReplayInputCostForTesting(
+    const repro::ReproFrame& frame, std::size_t heldRepeatSourceRewriteUnits) const {
+  const std::size_t documentSourceBytes =
+      app_.hasDocument() ? app_.document().document().source().size() : 0;
+  const std::size_t selectedElementCount = app_.selectedElements().size();
+  const std::size_t potentialDocumentElementCount =
+      app_.hasDocument()
+          ? app_.document().document().withReadAccess([](svg::DocumentReadAccess& access) {
+              return access.registry().storage<svg::components::ElementTypeComponent>().size();
+            })
+          : 0;
+  return repro::EstimateReplayInputFrameCost(frame, documentSourceBytes, selectedElementCount,
+                                             potentialDocumentElementCount,
+                                             heldRepeatSourceRewriteUnits);
 }
 
 void EditorShell::applyReplayActionForTesting(const repro::ReproAction& action) {
@@ -1855,6 +1903,10 @@ void EditorShell::maybeLogFrameMissTelemetry(const FrameCostBreakdown& frameCost
 }
 
 bool EditorShell::tryOpenPath(std::string_view path, std::string* error) {
+  if (!options_.allowFileSystemActions) {
+    *error = "File operations are disabled for this session.";
+    return false;
+  }
   cancelPendingSampleLoad();
   auto contents = LoadFile(std::string(path));
   if (!contents.has_value()) {
@@ -2084,6 +2136,10 @@ bool EditorShell::synchronizeSourceBeforeSave(std::string* error) {
 }
 
 bool EditorShell::trySavePath(std::string_view path, std::string* error) {
+  if (!options_.allowFileSystemActions) {
+    *error = "File operations are disabled for this session.";
+    return false;
+  }
   if (path.empty()) {
     *error = "Choose a file path.";
     return false;
@@ -2119,11 +2175,17 @@ bool EditorShell::trySavePath(std::string_view path, std::string* error) {
 }
 
 void EditorShell::requestSaveAs(std::string error) {
+  if (!options_.allowFileSystemActions) {
+    return;
+  }
   pendingViewportExport_ = false;
   dialogPresenter_.requestSaveFile(app_.currentFilePath(), std::move(error));
 }
 
 void EditorShell::requestExportViewportSvg(bool includeOverlay, std::string error) {
+  if (!options_.allowFileSystemActions) {
+    return;
+  }
   pendingViewportExport_ = true;
   pendingViewportExportOverlay_ = includeOverlay;
   // Default export filename: "<stem>_viewport.svg" beside the source document,
@@ -2141,6 +2203,10 @@ void EditorShell::requestExportViewportSvg(bool includeOverlay, std::string erro
 }
 
 bool EditorShell::tryExportViewportSvgToPath(std::string_view path, std::string* error) {
+  if (!options_.allowFileSystemActions) {
+    *error = "File operations are disabled for this session.";
+    return false;
+  }
   if (!app_.hasDocument()) {
     *error = "No document is open to export.";
     return false;
@@ -2197,6 +2263,9 @@ bool EditorShell::tryExportViewportSvgToPath(std::string_view path, std::string*
 }
 
 void EditorShell::requestSave() {
+  if (!options_.allowFileSystemActions) {
+    return;
+  }
   if (!app_.currentFilePath().has_value()) {
     requestSaveAs();
     return;
@@ -2228,6 +2297,15 @@ void EditorShell::requestRevert() {
 }
 
 void EditorShell::serviceNativeDialogs() {
+  if (!options_.allowFileSystemActions) {
+    if (dialogPresenter_.openFileModalRequested()) {
+      dialogPresenter_.consumeOpenFileModalRequest();
+    }
+    if (dialogPresenter_.saveFileModalRequested()) {
+      dialogPresenter_.consumeSaveFileModalRequest();
+    }
+    return;
+  }
   if (!nativeDialogs_.available()) {
     return;  // Non-macOS: the ImGui modal handles open/save.
   }
@@ -2331,7 +2409,7 @@ void EditorShell::applyMenuActions(const MenuBarActions& menuActions) {
     cancelPendingSampleLoad();
     requestNewDocument();
   }
-  if (menuActions.openFile) {
+  if (menuActions.openFile && options_.allowFileSystemActions) {
     cancelSampleThumbnailGeneration();
     cancelPendingSampleLoad();
     dialogPresenter_.requestOpenFile(app_.currentFilePath());
@@ -2528,7 +2606,8 @@ void EditorShell::handleGlobalShortcuts() {
     requestNewDocument();
   }
 
-  if (!anyPopupOpen && cmd && !shift && ImGui::IsKeyPressed(ImGuiKey_O, /*repeat=*/false)) {
+  if (options_.allowFileSystemActions && !anyPopupOpen && cmd && !shift &&
+      ImGui::IsKeyPressed(ImGuiKey_O, /*repeat=*/false)) {
     dialogPresenter_.requestOpenFile(app_.currentFilePath());
   }
 
@@ -2536,7 +2615,8 @@ void EditorShell::handleGlobalShortcuts() {
     glfwSetWindowShouldClose(window_.rawHandle(), GLFW_TRUE);
   }
 
-  if (!anyPopupOpen && cmd && ImGui::IsKeyPressed(ImGuiKey_S, /*repeat=*/false)) {
+  if (options_.allowFileSystemActions && !anyPopupOpen && cmd &&
+      ImGui::IsKeyPressed(ImGuiKey_S, /*repeat=*/false)) {
     if (shift) {
       requestSaveAs();
     } else {
@@ -4703,7 +4783,7 @@ void EditorShell::renderSamplePicker(const ImVec2& paneOrigin, const ImVec2& con
       showSamplePicker_ = false;
     }
   }
-  if (actions.openFile) {
+  if (actions.openFile && options_.allowFileSystemActions) {
     cancelSampleThumbnailGeneration();
     cancelPendingSampleLoad();
     if (!welcomePlaceholderActive_) {
@@ -6758,7 +6838,7 @@ void EditorShell::renderMenuBarAndDialogs(bool compactUi) {
   const bool rendererIdle = !renderCoordinator_.asyncRenderer().isBusy();
   MenuBarState menuState{
       .sourcePaneFocused = !compactUi && sourcePaneVisible_ && textEditor_.isFocused(),
-      .canSave = app_.hasDocument(),
+      .canSave = options_.allowFileSystemActions && app_.hasDocument(),
       .canRevert = app_.hasDocument() && app_.isDirty() && !app_.cleanSourceText().empty(),
       .canUndo = app_.canUndo(),
       .canRedo = app_.canRedo(),
