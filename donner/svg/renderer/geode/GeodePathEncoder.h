@@ -148,6 +148,7 @@ class GeodePathEncoder {
 public:
   struct Limits {
     std::size_t maximumConvertedCommands = 1u << 20;
+    std::size_t maximumEncodedGeometryItems = 1u << 20;
   };
 
   /**
