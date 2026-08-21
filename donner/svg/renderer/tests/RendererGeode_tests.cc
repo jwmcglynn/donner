@@ -2992,6 +2992,27 @@ TEST_F(RendererGeodeTest, FilterComponentTransferGammaInverts) {
       << "Gamma component transfer should square the red channel";
 }
 
+TEST_F(RendererGeodeTest, FilterTurbulenceBoundsNonFiniteSeedAndFrequency) {
+  RendererGeode renderer = createRenderer();
+  beginFrame(renderer);
+
+  components::FilterGraph graph;
+  components::FilterNode node;
+  components::filter_primitive::Turbulence turbulence;
+  turbulence.baseFrequencyX = std::numeric_limits<double>::infinity();
+  turbulence.baseFrequencyY = std::numeric_limits<double>::quiet_NaN();
+  turbulence.numOctaves = 1;
+  turbulence.seed = -std::numeric_limits<double>::infinity();
+  node.primitive = turbulence;
+  graph.nodes.push_back(node);
+
+  renderer.pushFilterLayer(graph, Box2d({0, 0}, {kViewportSize, kViewportSize}));
+  renderer.popFilterLayer();
+  renderer.endFrame();
+
+  EXPECT_FALSE(renderer.takeSnapshot().empty());
+}
+
 /// feConvolveMatrix box blur: 3×3 kernel of all 1s / divisor=9.
 TEST_F(RendererGeodeTest, FilterConvolveMatrixBoxBlur) {
   RendererGeode renderer = createRenderer();

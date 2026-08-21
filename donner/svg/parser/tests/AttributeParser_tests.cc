@@ -1933,10 +1933,10 @@ TEST(AttributeParserTest, LengthTrailingDataWarnsAndKeepsDefault) {
   EXPECT_EQ(mask.width(), std::nullopt);
   EXPECT_EQ(mask.height(), std::nullopt);
 
-  EXPECT_THAT(warningSink.warnings(),
-              testing::Contains(
-                  testing::Field(&ParseDiagnostic::reason,
-                                 testing::HasSubstr("Unexpected data at end of attribute"))));
+  EXPECT_THAT(
+      warningSink.warnings(),
+      testing::Contains(testing::Field(&ParseDiagnostic::reason,
+                                       testing::HasSubstr("Unexpected data at end of attribute"))));
 }
 
 TEST(AttributeParserTest, MarkerOrientTrailingDataAndInvalidLengths) {
@@ -1964,10 +1964,10 @@ TEST(AttributeParserTest, MarkerOrientTrailingDataAndInvalidLengths) {
   EXPECT_THAT(marker.refX(), LengthIs(DoubleNear(0.0, 0.001), Lengthd::Unit::None));
   EXPECT_THAT(marker.refY(), LengthIs(DoubleNear(0.0, 0.001), Lengthd::Unit::None));
 
-  EXPECT_THAT(warningSink.warnings(),
-              testing::Contains(
-                  testing::Field(&ParseDiagnostic::reason,
-                                 testing::HasSubstr("Unexpected data after angle value"))));
+  EXPECT_THAT(
+      warningSink.warnings(),
+      testing::Contains(testing::Field(&ParseDiagnostic::reason,
+                                       testing::HasSubstr("Unexpected data after angle value"))));
 }
 
 TEST(AttributeParserTest, ImageInvalidPreserveAspectRatioKeepsDefault) {
@@ -1984,9 +1984,8 @@ TEST(AttributeParserTest, ImageInvalidPreserveAspectRatioKeepsDefault) {
   auto image = QueryElement<SVGImageElement>(document, "#img");
   EXPECT_EQ(image.preserveAspectRatio(), PreserveAspectRatio());
 
-  EXPECT_THAT(warningSink.warnings(),
-              testing::Contains(testing::Field(&ParseDiagnostic::reason,
-                                               testing::HasSubstr("align"))));
+  EXPECT_THAT(warningSink.warnings(), testing::Contains(testing::Field(
+                                          &ParseDiagnostic::reason, testing::HasSubstr("align"))));
 }
 
 // --- Filter enum and separator edge cases ---
@@ -2202,6 +2201,25 @@ TEST(AttributeParserTest, RotateListTrailingCommaWarnsAndKeepsParsedValues) {
               testing::Contains(testing::Field(&ParseDiagnostic::reason,
                                                testing::HasSubstr("Unexpected trailing comma")))
                   .Times(4));
+}
+
+TEST(AttributeParserTest, FilterIntegerAttributesRejectNonFiniteNumbers) {
+  auto document = ParseSVGExperimental(R"(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <filter>
+        <feConvolveMatrix id="conv" order="1e20 -1e20"
+                          targetX="1e20" targetY="-1e20"/>
+        <feTurbulence id="turb" numOctaves="1e20"/>
+      </filter>
+    </svg>
+  )");
+
+  const auto& convolve = QueryComponent<components::FEConvolveMatrixComponent>(document, "#conv");
+  EXPECT_EQ(convolve.orderX, 3);
+  EXPECT_EQ(convolve.orderY, 3);
+  EXPECT_EQ(convolve.targetX, std::nullopt);
+  EXPECT_EQ(convolve.targetY, std::nullopt);
+  EXPECT_EQ(QueryComponent<components::FETurbulenceComponent>(document, "#turb").numOctaves, 1);
 }
 
 }  // namespace donner::svg::parser
