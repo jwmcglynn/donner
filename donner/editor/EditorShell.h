@@ -455,6 +455,7 @@ private:
   void renderCompactTopBar();
   void renderSidebars();
   void ensureSampleThumbnails();
+  void publishSampleThumbnailStats() const;
   void cancelSampleThumbnailGeneration();
   void requestFontPreviews(const std::vector<std::string>& families);
   void advanceFontPreviewGeneration();

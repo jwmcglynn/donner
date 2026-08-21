@@ -272,6 +272,8 @@ test("the presentation regression gates print the worker health they wait on", (
       "gpuWaitTimeoutMs",
       "publishReason",
       "sampleThumbnail",
+      "sampleThumbnailPublishedAtMs",
+      "sampleThumbnailPublicationGeneration",
       "frameLoop",
       "interaction",
     ]

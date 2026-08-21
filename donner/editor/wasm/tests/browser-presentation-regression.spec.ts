@@ -56,6 +56,8 @@ declare global {
       pointerY: number;
     };
     __donnerSampleThumbnailStats?: {
+      publishedAtMs?: number;
+      publicationGeneration?: number;
       requested: number;
       started: number;
       completed: number;
@@ -416,6 +418,8 @@ interface WorkerHealth {
   gpuWaitTimeoutMs: number;
   publishReason: string;
   sampleThumbnail: Window["__donnerSampleThumbnailStats"] | null;
+  sampleThumbnailPublishedAtMs: number;
+  sampleThumbnailPublicationGeneration: number;
   frameLoop: FrameLoopStats | null;
   interaction: Window["__donnerInteractionStats"] | null;
 }
@@ -431,6 +435,9 @@ async function readWorkerHealth(page: Page): Promise<WorkerHealth> {
     gpuWaitTimeoutMs: window.__donnerWorkerStats?.gpuWaitTimeoutMs ?? -1,
     publishReason: window.__donnerWorkerStats?.publishReason ?? "unpublished",
     sampleThumbnail: window.__donnerSampleThumbnailStats ?? null,
+    sampleThumbnailPublishedAtMs: window.__donnerSampleThumbnailStats?.publishedAtMs ?? -1,
+    sampleThumbnailPublicationGeneration: window.__donnerSampleThumbnailStats?.publicationGeneration
+      ?? -1,
     frameLoop: window.__donnerFrameLoopStats ?? null,
     interaction: window.__donnerInteractionStats ?? null,
   }));
