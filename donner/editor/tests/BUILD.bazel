@@ -5,8 +5,10 @@ load(
     "donner_cc_fuzzer",
     "donner_cc_library",
     "donner_cc_test",
+    "donner_multi_transitioned_test",
     "donner_perf_cc_test",
 )
+load("//donner/editor:editor_product_config.bzl", "EDITOR_TEXT", "EDITOR_TEXT_FULL")
 
 donner_cc_library(
     name = "bitmap_golden_compare",
@@ -73,6 +75,30 @@ donner_cc_test(
         "@com_google_gtest//:gtest_main",
         "@stb//:truetype",
     ],
+)
+
+donner_cc_test(
+    name = "editor_embedded_font_render_test_impl",
+    srcs = ["EditorEmbeddedFontRender_tests.cc"],
+    data = ["//donner/svg/renderer/testdata"],
+    tags = ["manual"],
+    visibility = ["//visibility:private"],
+    deps = [
+        ":bitmap_golden_compare",
+        "//donner/base:base_test_utils",
+        "//donner/editor:editor_app",
+        "//donner/svg/renderer",
+        "//donner/svg/renderer/tests:image_comparison_test_fixture",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_multi_transitioned_test(
+    name = "editor_embedded_font_render_tests",
+    dep = ":editor_embedded_font_render_test_impl",
+    renderer_backend = "tiny_skia",
+    text = EDITOR_TEXT,
+    text_full = EDITOR_TEXT_FULL,
 )
 
 donner_cc_test(

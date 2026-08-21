@@ -335,20 +335,26 @@ py_test(
         # renderer code to the editor package. Measured at this layer:
         # wasm 11,243,015 raw and package 11,455,433 raw. Budgets keep about
         # 1 percent headroom over the measured values.
+        #
+        # Full-text editor retune: length-aware document-font decoding adds
+        # FreeType, HarfBuzz, WOFF2, and Brotli to the browser product.
+        # Measured at this layer: wasm 12,780,770 raw / 5,076,932 gzip,
+        # js 174,075 raw / 49,060 gzip, and package 12,996,401 raw. Each
+        # transfer and decode budget keeps about 1 percent headroom.
         "--max-wasm-raw-bytes",
-        "11360000",
+        "12909000",
         "--max-wasm-gzip-bytes",
-        "4535000",
+        "5128000",
         "--max-wasm-function-body-bytes",
         "46000",
         "--max-wasm-data-segments",
         "64",
         "--max-js-raw-bytes",
-        "172500",
+        "175900",
         "--max-js-gzip-bytes",
-        "48800",
+        "49560",
         "--max-total-raw-bytes",
-        "11570000",
+        "13127000",
         "--expected-js-property",
         "__donnerLastScrollEvent",
         # SHIP BLOCKER, tracked with the deferred WebKit decision: the WebGPU diagnostic
