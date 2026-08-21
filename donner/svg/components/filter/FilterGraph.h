@@ -38,6 +38,13 @@ inline constexpr int kMaximumFilterPixelOffset = 4096;
 /// Maximum blur standard deviation or morphology radius after conversion to device pixels.
 inline constexpr int kMaximumFilterPixelRadius = 256;
 
+/// Geode decomposes morphology into shader passes whose per-axis radius is at most 31.
+inline constexpr std::uint64_t kMaximumFilterMorphologyPassesPerAxis = 9;
+inline constexpr std::uint64_t kMaximumFilterMorphologyWorkMultiplier =
+    2 * (2 * kMaximumFilterPixelRadius + kMaximumFilterMorphologyPassesPerAxis) + 5;
+inline constexpr std::uint64_t kMaximumFilterMorphologyRetainedBuffers =
+    2 * kMaximumFilterMorphologyPassesPerAxis + 3;
+
 /// Maximum dimension of a filter-specific intermediate surface.
 inline constexpr int kMaximumFilterSurfaceDimension = 4096;
 
@@ -572,6 +579,11 @@ inline bool FilterGraphExecutionCost(const FilterGraph& graph, std::uint64_t pix
       // Drop shadow adds alpha extraction, flood, composite, offset, and merge passes around the
       // blur, with additional color conversions in linear RGB.
       workMultiplier = shadow->stdDeviationX > 0.0 || shadow->stdDeviationY > 0.0 ? 20 : 12;
+    } else if (const auto* morphology =
+                   std::get_if<filter_primitive::Morphology>(&node.primitive)) {
+      workMultiplier = morphology->radiusX > 0.0 || morphology->radiusY > 0.0
+                           ? kMaximumFilterMorphologyWorkMultiplier
+                           : 5;
     } else if (const auto* image = std::get_if<filter_primitive::Image>(&node.primitive)) {
       // TinySkia's default Mitchell sampling visits a 4x4 source footprint for each of four
       // channels. Pixelated sampling and Geode use a single-sample GPU path plus clipping.
@@ -668,6 +680,10 @@ inline bool FilterGraphExecutionCost(const FilterGraph& graph, std::uint64_t pix
         retainedBuffers += linearRgb ? 9 : 7;
       } else if (std::holds_alternative<filter_primitive::DropShadow>(node.primitive)) {
         retainedBuffers += 8;
+      } else if (const auto* morphology =
+                     std::get_if<filter_primitive::Morphology>(&node.primitive);
+                 morphology && (morphology->radiusX > 0.0 || morphology->radiusY > 0.0)) {
+        retainedBuffers += kMaximumFilterMorphologyRetainedBuffers;
       } else {
         // Linear two-input primitives retain up to four conversion/primitive textures, followed
         // by the mandatory per-node subregion clip.
