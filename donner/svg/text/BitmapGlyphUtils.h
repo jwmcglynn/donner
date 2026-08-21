@@ -4,7 +4,6 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <limits>
 #include <optional>
 
 namespace donner::svg::details {
@@ -27,16 +26,17 @@ struct BgraBitmapLayout {
 
 /// Return the checked RGBA output size for bounded bitmap dimensions.
 inline std::optional<std::size_t> ValidatedBgraOutputBytes(unsigned int width, unsigned int rows) {
-  if (width == 0 || rows == 0) {
+  if (width == 0 || rows == 0 || width > kMaximumBitmapGlyphDimension ||
+      rows > kMaximumBitmapGlyphDimension) {
     return std::nullopt;
   }
 
   constexpr std::size_t kBytesPerPixel = 4;
-  if (width > std::numeric_limits<std::size_t>::max() / kBytesPerPixel) {
+  if (width > kMaximumBitmapGlyphBytes / kBytesPerPixel) {
     return std::nullopt;
   }
   const std::size_t rowBytes = static_cast<std::size_t>(width) * kBytesPerPixel;
-  if (rows > std::numeric_limits<std::size_t>::max() / rowBytes) {
+  if (rows > kMaximumBitmapGlyphBytes / rowBytes) {
     return std::nullopt;
   }
 
