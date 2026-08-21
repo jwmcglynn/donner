@@ -2,9 +2,26 @@
 timing for the Geode WebGPU/Slug backend."""
 
 load("//build_defs:package.bzl", "donner_package")
-load("//build_defs:rules.bzl", "donner_cc_binary")
+load("//build_defs:rules.bzl", "donner_cc_binary", "donner_cc_library", "donner_cc_test")
 
 package(default_visibility = ["//visibility:public"])
+
+donner_cc_library(
+    name = "proc_status_parser",
+    srcs = ["ProcStatusParser.cc"],
+    hdrs = ["ProcStatusParser.h"],
+    deps = [],
+)
+
+donner_cc_test(
+    name = "proc_status_parser_tests",
+    size = "small",
+    srcs = ["ProcStatusParser_tests.cc"],
+    deps = [
+        ":proc_status_parser",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
 
 donner_cc_binary(
     name = "shape_prepare_perf_bench",
@@ -55,6 +72,7 @@ donner_cc_binary(
         "//conditions:default": ["@platforms//:incompatible"],
     }),
     deps = [
+        ":proc_status_parser",
         "//donner/base",
         "//donner/svg",
         "//donner/svg/parser",

@@ -22,10 +22,6 @@ inline constexpr float kSamplePickerNarrowBreakpoint = 640.0f;
 inline constexpr std::size_t kSamplePickerMaxColumns = 3;
 inline constexpr std::size_t kSamplePickerMaxVisibleSamples = 8;
 
-/// Public destination for the presenter's GitHub action. The presenter only
-/// reports the action; the host decides whether and how to navigate to it.
-inline constexpr std::string_view kSamplePickerGitHubUrl = "https://github.com/jwmcglynn/donner";
-
 enum class SamplePickerLayoutMode {
   Narrow,
   Wide,

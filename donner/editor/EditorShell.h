@@ -33,6 +33,7 @@
 #include "donner/editor/RenderCoordinator.h"
 #include "donner/editor/RenderPanePresenter.h"
 #include "donner/editor/RotateCursorSet.h"
+#include "donner/editor/SamplePickerController.h"
 #include "donner/editor/SamplePickerPresenter.h"
 #include "donner/editor/SelectTool.h"
 #include "donner/editor/SidebarPresenter.h"
@@ -639,6 +640,7 @@ private:
   bool penDragFlushedThisFrame_ = false;
   EditorInputBridge inputBridge_;
   MenuBarPresenter menuBarPresenter_;
+  SamplePickerController samplePickerController_;
   SamplePickerPresenter samplePickerPresenter_;
   TextFormatBarPresenter textFormatBarPresenter_;
   SidebarPresenter sidebarPresenter_;
