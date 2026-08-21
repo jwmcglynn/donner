@@ -428,6 +428,15 @@ TEST(GeodePathEncoder, ConvertedCommandLimitRejectsBeforeExpansion) {
   EXPECT_TRUE(encoded.rejected());
 }
 
+TEST(GeodePathEncoder, NonRepresentableCoordinatesReportRejectedOutcome) {
+  const Path path =
+      PathBuilder().moveTo({0.0, 0.0}).lineTo({1.0e300, 1.0e300}).lineTo({0.0, 1.0}).build();
+  const EncodedPath encoded = GeodePathEncoder::encode(path, FillRule::NonZero);
+
+  EXPECT_TRUE(encoded.empty());
+  EXPECT_TRUE(encoded.rejected());
+}
+
 TEST(GeodePathEncoder, BoundingPolygonIsSmallAndCounterClockwise) {
   Path path = PathBuilder().addRect(Box2d({0, 0}, {100, 100})).build();
 
