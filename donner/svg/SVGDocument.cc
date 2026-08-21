@@ -626,6 +626,12 @@ bool SVGDocument::hasPendingRenderInvalidation() const {
   return state->needsFullRebuild || state->needsFullStyleRecompute;
 }
 
+std::size_t SVGDocument::elementCount() const {
+  return withReadAccess([](DocumentReadAccess& access) {
+    return access.registry().storage<components::ElementTypeComponent>().size();
+  });
+}
+
 bool SVGDocument::hasSourceStore() const {
   if (!documentState_->registry().ctx().contains<xml::components::XMLDocumentContext>()) {
     return false;

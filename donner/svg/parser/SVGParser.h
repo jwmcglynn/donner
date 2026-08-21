@@ -19,6 +19,18 @@ public:
   /// Default maximum number of source or expanded SVG bytes accepted from untrusted input.
   static constexpr size_t kDefaultMaximumInputSize = 16 * 1024 * 1024;
 
+  /// Default retained dynamic payload envelope for one untrusted SVG document.
+  static constexpr size_t kDefaultMaximumParsedPayloadSize = 64 * 1024 * 1024;
+
+  /// Default maximum direct text/CDATA chunks projected into one SVG element.
+  static constexpr size_t kDefaultMaximumContentProjectionChunks = 4096;
+
+  /// Default maximum XML tree nodes visited while converting a document into SVG components.
+  static constexpr size_t kDefaultMaximumTreeNodes = 8 * 1024;
+
+  /// Default maximum SVG element depth visited during XML-to-SVG conversion.
+  static constexpr size_t kDefaultMaximumTreeDepth = 256;
+
   /**
    * Options to modify the parsing behavior.
    */
@@ -84,6 +96,21 @@ public:
      * compressed and expanded forms, preventing decompression bombs.
      */
     size_t maximumInputSize = kDefaultMaximumInputSize;
+
+    /**
+     * Maximum estimated bytes retained by parsed lists, stylesheets, and deferred geometry.
+     * This is aggregate across the document, rather than a per-attribute limit.
+     */
+    size_t maximumParsedPayloadSize = kDefaultMaximumParsedPayloadSize;
+
+    /** Maximum direct text/CDATA chunks joined into one text, style, or descriptive element. */
+    size_t maximumContentProjectionChunks = kDefaultMaximumContentProjectionChunks;
+
+    /** Maximum XML tree nodes visited while converting either parser entry point. */
+    size_t maximumTreeNodes = kDefaultMaximumTreeNodes;
+
+    /** Maximum nested SVG element depth converted from an XML document. */
+    size_t maximumTreeDepth = kDefaultMaximumTreeDepth;
   };
 
   /**

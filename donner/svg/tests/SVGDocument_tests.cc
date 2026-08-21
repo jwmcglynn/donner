@@ -9,6 +9,8 @@
 #include "donner/svg/SVGRectElement.h"
 #include "donner/svg/SVGStyleElement.h"
 #include "donner/svg/components/DirtyFlagsComponent.h"
+#include "donner/svg/components/DocumentResourceFamilyBudget.h"
+#include "donner/svg/components/ParsedPayloadResourceBudget.h"
 #include "donner/svg/components/RenderingBehaviorComponent.h"
 #include "donner/svg/components/StylesheetComponent.h"
 #include "donner/svg/components/filter/FilterComponent.h"
@@ -26,8 +28,7 @@ namespace donner::svg {
 namespace {
 
 /// Helper to parse an SVG string and return the resulting document.
-SVGDocument ParseSVG(std::string_view input) {
-  parser::SVGParser::Options options;
+SVGDocument ParseSVG(std::string_view input, parser::SVGParser::Options options = {}) {
   options.disableUserAttributes = false;
 
   ParseWarningSink disabled = ParseWarningSink::Disabled();
@@ -968,6 +969,311 @@ TEST(SVGDocument, SubtreeEditProjectsMixedTextChunks) {
   const auto& soloText = solo.entityHandle().get<components::TextComponent>();
   EXPECT_EQ(soloText.text, "solo");
   EXPECT_THAT(soloText.textChunks, testing::ElementsAre(RcString("solo")));
+}
+
+TEST(SVGDocument, RejectedTextProjectionPreservesLastValidText) {
+  parser::SVGParser::Options options;
+  options.maximumContentProjectionChunks = 3;
+  auto document = ParseSVG(
+      R"(<svg xmlns="http://www.w3.org/2000/svg"><text id="label">stable<tspan id="a"/><tspan id="b"/></text></svg>)",
+      options);
+  const std::size_t editStart = document.source().find(R"(<tspan id="a"/>)");
+  const std::size_t lastChild = document.source().find(R"(<tspan id="b"/>)");
+  ASSERT_NE(editStart, std::string_view::npos);
+  ASSERT_NE(lastChild, std::string_view::npos);
+  const std::size_t editEnd = lastChild + std::string_view(R"(<tspan id="b"/>)").size();
+
+  std::string oversizedReplacement;
+  for (std::size_t i = 0; i <= options.maximumContentProjectionChunks; ++i) {
+    oversizedReplacement += "<tspan/>";
+  }
+
+  xml::ApplySourceEditResult result = document.applySourceEdit(xml::XMLEditIntent{
+      .range = SourceRange{FileOffset::Offset(editStart), FileOffset::Offset(editEnd)},
+      .replacement = oversizedReplacement,
+      .sourceVersion = document.sourceVersion(),
+  });
+
+  EXPECT_TRUE(result.applied);
+  EXPECT_EQ(result.scope, xml::ReparseScope::ElementSubtree);
+  ASSERT_TRUE(result.diagnostic.has_value());
+  EXPECT_THAT(result.diagnostic->reason, testing::HasSubstr("too many chunks"));
+  SVGElement text = document.querySelector("#label").value();
+  const auto& textComponent = text.entityHandle().get<components::TextComponent>();
+  EXPECT_EQ(textComponent.text, "stable");
+  EXPECT_THAT(textComponent.textChunks,
+              testing::ElementsAre(RcString("stable"), RcString(""), RcString("")));
+}
+
+TEST(SVGDocument, IncrementalAttributePayloadReplacementEnforcesCapPlusOne) {
+  parser::SVGParser::Options options;
+  options.maximumParsedPayloadSize = 4608;
+  auto document =
+      ParseSVG(R"(<svg xmlns="http://www.w3.org/2000/svg"><rect id="r" x="0"/></svg>)", options);
+
+  const std::string acceptedValue(31, '1');
+  const std::size_t attributeOffset = document.source().find(R"(x="0")");
+  ASSERT_NE(attributeOffset, std::string_view::npos);
+  std::size_t valueOffset = attributeOffset + 3;
+  xml::ApplySourceEditResult accepted = document.applySourceEdit(xml::XMLEditIntent{
+      .range = SourceRange{FileOffset::Offset(valueOffset), FileOffset::Offset(valueOffset + 1)},
+      .replacement = acceptedValue,
+      .sourceVersion = document.sourceVersion(),
+  });
+  ASSERT_TRUE(accepted.applied);
+  ASSERT_THAT(accepted.diagnostic, Eq(std::nullopt));
+
+  const auto* budget = document.registry().ctx().find<components::ParsedPayloadResourceBudget>();
+  ASSERT_NE(budget, nullptr);
+  EXPECT_EQ(budget->securityStats().attributeBytes, options.maximumParsedPayloadSize);
+
+  valueOffset = document.source().find(acceptedValue);
+  ASSERT_NE(valueOffset, std::string_view::npos);
+  const std::string rejectedValue(32, '2');
+  xml::ApplySourceEditResult rejected = document.applySourceEdit(xml::XMLEditIntent{
+      .range = SourceRange{FileOffset::Offset(valueOffset),
+                           FileOffset::Offset(valueOffset + acceptedValue.size())},
+      .replacement = rejectedValue,
+      .sourceVersion = document.sourceVersion(),
+  });
+
+  EXPECT_TRUE(rejected.applied);
+  ASSERT_TRUE(rejected.diagnostic.has_value());
+  EXPECT_THAT(rejected.diagnostic->reason, testing::HasSubstr("parsed-payload budget"));
+  EXPECT_EQ(budget->securityStats().attributeBytes, options.maximumParsedPayloadSize);
+  EXPECT_TRUE(budget->securityStats().rejected);
+}
+
+TEST(SVGDocument, AttributePayloadCountsQualifiedNameBytesAtBoundary) {
+  parser::SVGParser::Options options;
+  options.maximumParsedPayloadSize = 4224;
+  const auto makeSource = [](std::size_t nameBytes) {
+    return std::string(R"(<svg xmlns="http://www.w3.org/2000/svg"><rect )") +
+           std::string(nameBytes, 'a') + R"(=""/></svg>)";
+  };
+
+  SVGDocument accepted = ParseSVG(makeSource(31), options);
+  const auto* acceptedBudget =
+      accepted.registry().ctx().find<components::ParsedPayloadResourceBudget>();
+  ASSERT_NE(acceptedBudget, nullptr);
+  EXPECT_FALSE(acceptedBudget->securityStats().rejected);
+  EXPECT_EQ(acceptedBudget->securityStats().attributeBytes, options.maximumParsedPayloadSize);
+
+  SVGDocument rejected = ParseSVG(makeSource(32), options);
+  const auto* rejectedBudget =
+      rejected.registry().ctx().find<components::ParsedPayloadResourceBudget>();
+  ASSERT_NE(rejectedBudget, nullptr);
+  EXPECT_TRUE(rejectedBudget->securityStats().rejected);
+  EXPECT_EQ(rejectedBudget->securityStats().attributeBytes, 2112u);
+}
+
+TEST(SVGDocument, IncrementalTextPayloadReplacementEnforcesCapPlusOneAndRemovalReleases) {
+  parser::SVGParser::Options options;
+  options.maximumParsedPayloadSize = 4608;
+  auto document =
+      ParseSVG(R"(<svg xmlns="http://www.w3.org/2000/svg"><text id="t"></text></svg>)", options);
+  SVGElement text = *document.querySelector("#t");
+
+  const std::string acceptedText(2112, 'a');
+  xml::ApplySourceEditResult accepted = document.setElementTextContent(text, acceptedText);
+  ASSERT_TRUE(accepted.applied);
+  ASSERT_THAT(accepted.diagnostic, Eq(std::nullopt));
+
+  const auto* budget = document.registry().ctx().find<components::ParsedPayloadResourceBudget>();
+  ASSERT_NE(budget, nullptr);
+  EXPECT_EQ(budget->securityStats().retainedBytes, options.maximumParsedPayloadSize);
+
+  const std::string rejectedText(2113, 'b');
+  xml::ApplySourceEditResult rejected = document.setElementTextContent(text, rejectedText);
+  EXPECT_TRUE(rejected.applied);
+  ASSERT_TRUE(rejected.diagnostic.has_value());
+  EXPECT_THAT(rejected.diagnostic->reason, testing::HasSubstr("parsed-payload budget"));
+  EXPECT_EQ(text.entityHandle().get<components::TextComponent>().text, acceptedText);
+  EXPECT_EQ(budget->securityStats().retainedBytes, options.maximumParsedPayloadSize);
+
+  xml::ApplySourceEditResult removed = document.removeElement(text);
+  ASSERT_TRUE(removed.applied);
+  EXPECT_LT(budget->securityStats().retainedBytes, options.maximumParsedPayloadSize);
+  EXPECT_EQ(budget->securityStats().projectedTextBytes, 0u);
+}
+
+TEST(SVGDocument, IncrementalStylesheetPreflightsFamilyCapacityBeforeReplacingProjection) {
+  components::DocumentResourceFamilyBudget::Limits familyLimits;
+  familyLimits.parsedPayloadBytes = 5800;
+  familyLimits.maximumTotalRetainedBytes = 5800;
+  auto family = std::make_shared<components::DocumentResourceFamilyBudget>(familyLimits);
+  SVGDocument::Settings settings;
+  settings.resourceFamilyBudget = family;
+  ParseWarningSink warnings;
+  auto parsed = parser::SVGParser::ParseSVG(
+      R"(<svg xmlns="http://www.w3.org/2000/svg"><style id="s">a{x:0}</style></svg>)", warnings,
+      parser::SVGParser::Options(), std::move(settings));
+  ASSERT_THAT(parsed, NoParseError());
+  SVGDocument document = std::move(parsed).result();
+
+  const std::string_view initialCss = "a{x:0}";
+  std::size_t cssOffset = document.source().find(initialCss);
+  ASSERT_NE(cssOffset, std::string_view::npos);
+  const std::string acceptedCss = "a{x:1}";
+  xml::ApplySourceEditResult accepted = document.applySourceEdit(xml::XMLEditIntent{
+      .range = SourceRange{FileOffset::Offset(cssOffset),
+                           FileOffset::Offset(cssOffset + initialCss.size())},
+      .replacement = acceptedCss,
+      .sourceVersion = document.sourceVersion(),
+  });
+  ASSERT_TRUE(accepted.applied);
+  ASSERT_THAT(accepted.diagnostic, Eq(std::nullopt));
+  const std::size_t retainedBeforeRejection = family->totalRetainedBytes();
+  const auto* payloadBudget =
+      document.registry().ctx().find<components::ParsedPayloadResourceBudget>();
+  ASSERT_NE(payloadBudget, nullptr);
+  const SVGElement styleElement = *document.querySelector("#s");
+  const Entity styleEntity = styleElement.unsafeEntityHandle().entity();
+  EXPECT_FALSE(styleElement.entityHandle().all_of<components::TextComponent>());
+  EXPECT_TRUE(styleElement.entityHandle().get<components::StylesheetComponent>().isCssType());
+  const auto rejectedPreflight =
+      components::ParsedPayloadResourceBudget::estimateStylesheetPreflightBytes(7, 7 + 64);
+  ASSERT_TRUE(rejectedPreflight.has_value());
+  EXPECT_EQ(*rejectedPreflight, 7u * 512u + 7u + 64u);
+  EXPECT_FALSE(
+      payloadBudget->canReserve(styleEntity, *rejectedPreflight,
+                                components::ParsedPayloadResourceBudget::Category::Stylesheet));
+
+  cssOffset = document.source().find(acceptedCss);
+  ASSERT_NE(cssOffset, std::string_view::npos);
+  const std::string rejectedCss = "a{x:00}";
+  xml::ApplySourceEditResult rejected = document.applySourceEdit(xml::XMLEditIntent{
+      .range = SourceRange{FileOffset::Offset(cssOffset),
+                           FileOffset::Offset(cssOffset + acceptedCss.size())},
+      .replacement = rejectedCss,
+      .sourceVersion = document.sourceVersion(),
+  });
+
+  EXPECT_TRUE(rejected.applied);
+  ASSERT_THAT(rejected.mutations, testing::Not(testing::IsEmpty()));
+  EXPECT_EQ(rejected.mutations.front().kind, xml::XMLMutation::Kind::NodeValueChanged);
+  EXPECT_TRUE(payloadBudget->securityStats().rejected);
+  const auto styleNode = xml::XMLNode::TryCast(styleElement.entityHandle());
+  ASSERT_TRUE(styleNode.has_value());
+  EXPECT_THAT(styleNode->value(), Optional(Eq(rejectedCss)));
+  ASSERT_TRUE(rejected.diagnostic.has_value());
+  EXPECT_THAT(rejected.diagnostic->reason, testing::HasSubstr("parsed-payload budget"));
+  const auto& stylesheet =
+      document.querySelector("#s")->entityHandle().get<components::StylesheetComponent>();
+  EXPECT_EQ(stylesheet.text, acceptedCss);
+  EXPECT_EQ(family->totalRetainedBytes(), retainedBeforeRejection);
+}
+
+TEST(SVGDocument, IncrementalSourceEditsEnforceCumulativeTreeNodeLimitTransactionally) {
+  parser::SVGParser::Options options;
+  options.maximumTreeNodes = 4;
+  auto document = ParseSVG(
+      R"(<svg xmlns="http://www.w3.org/2000/svg"><g id="host"><rect id="a"/></g></svg>)", options);
+
+  const std::string_view firstChild = R"(<rect id="a"/>)";
+  std::size_t editStart = document.source().find(firstChild);
+  ASSERT_NE(editStart, std::string_view::npos);
+  xml::ApplySourceEditResult accepted = document.applySourceEdit(xml::XMLEditIntent{
+      .range = SourceRange{FileOffset::Offset(editStart),
+                           FileOffset::Offset(editStart + firstChild.size())},
+      .replacement = R"(<rect id="a"/><circle id="b"/>)",
+      .sourceVersion = document.sourceVersion(),
+  });
+  ASSERT_TRUE(accepted.applied);
+  ASSERT_THAT(accepted.diagnostic, Eq(std::nullopt));
+  EXPECT_EQ(document.elementCount(), 4u);
+
+  const std::string_view currentChildren = R"(<rect id="a"/><circle id="b"/>)";
+  editStart = document.source().find(currentChildren);
+  ASSERT_NE(editStart, std::string_view::npos);
+  const std::string sourceBefore = std::string(document.source());
+  const std::uint64_t versionBefore = document.sourceVersion();
+  xml::ApplySourceEditResult rejected = document.applySourceEdit(xml::XMLEditIntent{
+      .range = SourceRange{FileOffset::Offset(editStart),
+                           FileOffset::Offset(editStart + currentChildren.size())},
+      .replacement = R"(<rect id="a"/><circle id="b"/><ellipse id="c"/>)",
+      .sourceVersion = versionBefore,
+  });
+
+  EXPECT_FALSE(rejected.applied);
+  EXPECT_EQ(rejected.scope, xml::ReparseScope::ElementSubtree);
+  ASSERT_TRUE(rejected.diagnostic.has_value());
+  EXPECT_THAT(rejected.diagnostic->reason, testing::HasSubstr("tree-node limit"));
+  EXPECT_EQ(document.source(), sourceBefore);
+  EXPECT_EQ(document.sourceVersion(), versionBefore);
+  EXPECT_THAT(document.querySelector("#c"), Eq(std::nullopt));
+  EXPECT_EQ(document.elementCount(), 4u);
+}
+
+TEST(SVGDocument, IncrementalSourceEditAllowsIdentityPreservingMoveAtNodeLimit) {
+  parser::SVGParser::Options options;
+  options.maximumTreeNodes = 4;
+  auto document = ParseSVG(
+      R"(<svg xmlns="http://www.w3.org/2000/svg"><g id="host"><rect id="a"/><circle id="b"/></g></svg>)",
+      options);
+  const SVGElement originalA = *document.querySelector("#a");
+  const SVGElement originalB = *document.querySelector("#b");
+
+  const std::string_view children = R"(<rect id="a"/><circle id="b"/>)";
+  const std::size_t editStart = document.source().find(children);
+  ASSERT_NE(editStart, std::string_view::npos);
+  xml::ApplySourceEditResult result = document.applySourceEdit(xml::XMLEditIntent{
+      .range = SourceRange{FileOffset::Offset(editStart),
+                           FileOffset::Offset(editStart + children.size())},
+      .replacement = R"(<circle id="b"/><rect id="a"/>)",
+      .sourceVersion = document.sourceVersion(),
+  });
+
+  EXPECT_TRUE(result.applied);
+  EXPECT_THAT(result.diagnostic, Eq(std::nullopt));
+  EXPECT_EQ(*document.querySelector("#a"), originalA);
+  EXPECT_EQ(*document.querySelector("#b"), originalB);
+  SVGElement host = *document.querySelector("#host");
+  ASSERT_TRUE(host.firstChild().has_value());
+  EXPECT_EQ(host.firstChild()->id(), "b");
+  ASSERT_TRUE(host.firstChild()->nextSibling().has_value());
+  EXPECT_EQ(host.firstChild()->nextSibling()->id(), "a");
+}
+
+TEST(SVGDocument, IncrementalSourceEditsEnforceResultingGlobalTreeDepthTransactionally) {
+  parser::SVGParser::Options options;
+  options.maximumTreeNodes = 10;
+  options.maximumTreeDepth = 4;
+  auto document = ParseSVG(
+      R"(<svg xmlns="http://www.w3.org/2000/svg"><g id="host"><rect id="a"/></g></svg>)", options);
+
+  const std::string_view initialChild = R"(<rect id="a"/>)";
+  std::size_t editStart = document.source().find(initialChild);
+  ASSERT_NE(editStart, std::string_view::npos);
+  xml::ApplySourceEditResult accepted = document.applySourceEdit(xml::XMLEditIntent{
+      .range = SourceRange{FileOffset::Offset(editStart),
+                           FileOffset::Offset(editStart + initialChild.size())},
+      .replacement = R"(<g id="nested"><rect id="a"/></g>)",
+      .sourceVersion = document.sourceVersion(),
+  });
+  ASSERT_TRUE(accepted.applied);
+  ASSERT_THAT(accepted.diagnostic, Eq(std::nullopt));
+
+  const std::string_view nestedChild = R"(<rect id="a"/>)";
+  editStart = document.source().find(nestedChild);
+  ASSERT_NE(editStart, std::string_view::npos);
+  const std::string sourceBefore = std::string(document.source());
+  const std::uint64_t versionBefore = document.sourceVersion();
+  xml::ApplySourceEditResult rejected = document.applySourceEdit(xml::XMLEditIntent{
+      .range = SourceRange{FileOffset::Offset(editStart),
+                           FileOffset::Offset(editStart + nestedChild.size())},
+      .replacement = R"(<g id="too-deep"><rect id="a"/></g>)",
+      .sourceVersion = versionBefore,
+  });
+
+  EXPECT_FALSE(rejected.applied);
+  EXPECT_EQ(rejected.scope, xml::ReparseScope::ElementSubtree);
+  ASSERT_TRUE(rejected.diagnostic.has_value());
+  EXPECT_THAT(rejected.diagnostic->reason, testing::HasSubstr("tree-depth limit"));
+  EXPECT_EQ(document.source(), sourceBefore);
+  EXPECT_EQ(document.sourceVersion(), versionBefore);
+  EXPECT_THAT(document.querySelector("#too-deep"), Eq(std::nullopt));
+  EXPECT_THAT(document.querySelector("#nested"), Optional(ElementIdEq("nested")));
 }
 
 TEST(SVGDocument, SourceBackedInsertAndRemoveElementUpdateSource) {

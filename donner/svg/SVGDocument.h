@@ -3,6 +3,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <string_view>
 #include <type_traits>
@@ -22,6 +23,10 @@
 #include "donner/svg/resources/ResourceLoaderInterface.h"
 
 namespace donner::svg {
+
+namespace components {
+class DocumentResourceFamilyBudget;
+}
 
 class SVGElement;     // Forward declaration, #include "donner/svg/SVGElement.h"
 class SVGSVGElement;  // Forward declaration, #include "donner/svg/SVGSVGElement.h"
@@ -203,6 +208,9 @@ public:
    * canvas renderer.
    */
   bool hasPendingRenderInvalidation() const;
+
+  /// Return the number of SVG element entities currently owned by the document.
+  std::size_t elementCount() const;
 
   /**
    * Return the current XML source text owned by this parsed SVG document.
@@ -410,6 +418,8 @@ private:
    * @param mutation XML mutation emitted by the source-edit layer.
    */
   std::optional<ParseDiagnostic> applyXMLMutation(const xml::XMLMutation& mutation);
+  std::optional<ParseDiagnostic> applyAttributeXMLMutation(const xml::XMLMutation& mutation,
+                                                           EntityHandle handle);
 
   /**
    * Project an XML element subtree into SVG semantic components.
@@ -568,6 +578,9 @@ struct SVGDocument::Settings {
 
   /// Callback to parse SVG content into sub-documents.
   SvgParseCallback svgParseCallback;
+
+  /// Shared live-memory envelope for this document and parsed external SVG subdocuments.
+  std::shared_ptr<components::DocumentResourceFamilyBudget> resourceFamilyBudget;
 };
 
 }  // namespace donner::svg
