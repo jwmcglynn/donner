@@ -200,6 +200,21 @@ class AdmissionTests(unittest.TestCase):
         self.assertEqual(decision["blockers"], ["10 (pending)", "12 (active)"])
 
 
+class WorkflowResolutionTests(unittest.TestCase):
+    def test_matching_pool_workflows_are_resolved_by_filename(self):
+        payload = {
+            "workflows": [
+                {"id": 1413161, "path": ".github/workflows/main.yml"},
+                {"id": 6956149, "path": ".github/workflows/coverage.yml"},
+                {"id": 261869672, "path": ".github/workflows/editor_wasm.yml"},
+            ]
+        }
+        self.assertEqual(
+            admission.workflow_ids(payload, ["main.yml", "coverage.yml"]),
+            [1413161, 6956149],
+        )
+
+
 class TurnstileWiringTests(unittest.TestCase):
     """The rules only help if both lanes actually share one pool."""
 
@@ -267,6 +282,10 @@ class TurnstileWiringTests(unittest.TestCase):
 
     def test_action_defaults_preserve_single_lane_behavior(self):
         self.assertRegex(self.action, r"capacity:\n(?:.*\n)*?\s+default: \"1\"")
+
+    def test_action_uses_tested_workflow_resolution(self):
+        self.assertIn('"${admission}" workflow-ids', self.action)
+        self.assertNotIn('$wanted[] | select($w.path | endswith("/" + .))', self.action)
 
 
 if __name__ == "__main__":
