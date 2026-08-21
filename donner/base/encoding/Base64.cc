@@ -1,5 +1,7 @@
 #include "donner/base/encoding/Base64.h"
 
+#include <algorithm>
+
 namespace donner {
 
 namespace {
@@ -33,9 +35,10 @@ bool IsWhitespace(char ch) {
 
 ParseResult<std::vector<uint8_t>> DecodeBase64Data(std::string_view base64String) {
   std::vector<uint8_t> decodedData;
-  decodedData.reserve(base64String.size() * 3 / 4);
+  decodedData.reserve((base64String.size() / 4) * 3 +
+                      std::min<std::size_t>(base64String.size() % 4, 3));
 
-  int accumulator = 0;
+  uint32_t accumulator = 0;
   int bitCount = -8;
 
   for (size_t i = 0; i < base64String.size(); ++i) {

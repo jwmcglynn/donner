@@ -17,6 +17,7 @@
 #include <string_view>
 #include <vector>
 
+#include "donner/base/parser/LineOffsets.h"
 #include "donner/base/xml/XMLParser.h"
 
 namespace donner::xml {
@@ -234,9 +235,228 @@ std::string BuildXmlString(FuzzedDataProvider& provider) {
   return xml;
 }
 
+void ExerciseAggregateLimitMarkers(std::string_view input) {
+  if (input.starts_with("element-lifecycle-budget")) {
+    XMLParser::Options options;
+    options.maxElements = 128;
+    std::string xml = "<root>";
+    for (std::size_t i = 0; i < options.maxElements; ++i) {
+      xml += "<g/>";
+    }
+    xml += "</root>";
+    const auto result = XMLParser::Parse(xml, options);
+    if (result.hasResult() ||
+        result.error().reason.str().find("element") == std::string_view::npos) {
+      std::abort();
+    }
+  } else if (input.starts_with("data-node-budget")) {
+    XMLParser::Options options;
+    options.parseComments = false;
+    options.maxElements = 128;
+    std::string xml = "<root>";
+    for (std::size_t i = 0; i < options.maxElements; ++i) {
+      xml += "x<!---->";
+    }
+    xml += "</root>";
+    const auto result = XMLParser::Parse(xml, options);
+    if (result.hasResult() ||
+        result.error().reason.str().find("element count") == std::string_view::npos) {
+      std::abort();
+    }
+  } else if (input.starts_with("total-attribute-budget")) {
+    XMLParser::Options options;
+    options.maxAttributesPerElement = 16;
+    options.maxTotalAttributes = 16;
+    const auto result = XMLParser::Parse(
+        "<root><a a0='0' a1='1' a2='2' a3='3' a4='4' a5='5' a6='6' a7='7' a8='8'/><b "
+        "b0='0' b1='1' b2='2' b3='3' b4='4' b5='5' b6='6' b7='7'/></root>",
+        options);
+    if (result.hasResult() ||
+        result.error().reason.str().find("total attribute") == std::string_view::npos) {
+      std::abort();
+    }
+  } else if (input.starts_with("entity-declaration-count-budget")) {
+    XMLParser::Options options = XMLParser::Options::ParseAll();
+    options.maxEntityDeclarations = 4;
+    const auto result = XMLParser::Parse(
+        "<!DOCTYPE root [<!ENTITY a 'a'><!ENTITY b 'b'><!ENTITY c 'c'><!ENTITY d 'd'>"
+        "<!ENTITY e 'e'>]><root/>",
+        options);
+    if (result.hasResult() ||
+        result.error().reason.str().find("entity declaration") == std::string_view::npos) {
+      std::abort();
+    }
+  } else if (input.starts_with("entity-declaration-byte-budget")) {
+    XMLParser::Options options = XMLParser::Options::ParseAll();
+    options.maxEntityDeclarationBytes = 8;
+    const auto result =
+        XMLParser::Parse("<!DOCTYPE root [<!ENTITY longname 'longvalue'>]><root/>", options);
+    if (result.hasResult() ||
+        result.error().reason.str().find("entity declaration") == std::string_view::npos) {
+      std::abort();
+    }
+  } else if (input.starts_with("invalid-xml-null-entity")) {
+    const auto result = XMLParser::Parse("<svg href='..&#0;ignored/secret.bin'/>");
+    if (result.hasResult() ||
+        result.error().reason.str().find("Invalid numeric character") == std::string_view::npos) {
+      std::abort();
+    }
+  } else if (input.starts_with("invalid-xml-control-entity")) {
+    const auto result = XMLParser::Parse("<svg href='safe/&#11;ignored.bin'/>");
+    if (result.hasResult() ||
+        result.error().reason.str().find("Invalid numeric character") == std::string_view::npos) {
+      std::abort();
+    }
+  } else if (input.starts_with("newline-index-budget")) {
+    std::string xml = "<root>";
+    xml.append(parser::LineOffsets::kMaximumStoredLineOffsets + 1, '\n');
+    for (int attribute = 0; attribute < 64; ++attribute) {
+      xml += "<g a='v'/>\n";
+    }
+    xml += "</root>";
+
+    parser::LineOffsets offsets(xml, 1024);
+    if (!offsets.truncated() || offsets.offsets().size() != 1024) {
+      std::abort();
+    }
+    if (!XMLParser::Parse(xml).hasResult()) {
+      std::abort();
+    }
+  } else if (input.starts_with("incremental-source-size-budget")) {
+    XMLParser::Options options;
+    options.maximumInputSize = 64;
+    auto parsed = XMLParser::Parse("<root/>", options);
+    if (!parsed.hasResult()) {
+      std::abort();
+    }
+    XMLDocument document = std::move(parsed.result());
+
+    const std::string nearLimit = "<root>" + std::string(50, 'a') + "</root>";
+    const auto accepted = document.applySourceEdit(XMLEditIntent{
+        .range = SourceRange{FileOffset::Offset(0), FileOffset::Offset(document.source().size())},
+        .replacement = nearLimit,
+        .sourceVersion = document.sourceVersion(),
+    });
+    if (!accepted.applied || document.source() != nearLimit) {
+      std::abort();
+    }
+
+    const std::uint64_t version = document.sourceVersion();
+    const std::string oversized = "<root>" + std::string(52, 'a') + "</root>";
+    const auto rejected = document.applySourceEdit(XMLEditIntent{
+        .range = SourceRange{FileOffset::Offset(0), FileOffset::Offset(document.source().size())},
+        .replacement = oversized,
+        .sourceVersion = version,
+    });
+    if (rejected.applied || document.source() != nearLimit || document.sourceVersion() != version) {
+      std::abort();
+    }
+  } else if (input.starts_with("source-anchor-history-budget")) {
+    constexpr std::size_t kChildCount = 64;
+    constexpr std::size_t kEditCount = 16;
+    std::string children;
+    for (std::size_t index = 0; index < kChildCount; ++index) {
+      children += "<item id='" + std::to_string(index) + "'/>";
+    }
+
+    XMLParser::Options options;
+    options.maxElements = kChildCount + 2;
+    auto parsed = XMLParser::Parse("<root>" + children + "</root>", options);
+    if (!parsed.hasResult()) {
+      std::abort();
+    }
+    XMLDocument document = std::move(parsed.result());
+    XMLSourceStore* store = document.sourceStore();
+    if (store == nullptr) {
+      std::abort();
+    }
+
+    const std::size_t editStart = document.source().find("<item");
+    const std::size_t editEnd = document.source().find("</root>");
+    const XMLSourceStore::ResourceStats initialStats = store->resourceStats();
+    if (editStart == std::string_view::npos || editEnd == std::string_view::npos ||
+        initialStats.liveAnchorCount == 0) {
+      std::abort();
+    }
+    XMLSourceStore::ResourceLimits limits = store->resourceLimits();
+    limits.maximumAnchorUpdateWorkPerEdit = initialStats.liveAnchorCount;
+    if (!store->setResourceLimits(limits)) {
+      std::abort();
+    }
+
+    for (std::size_t edit = 0; edit < kEditCount; ++edit) {
+      const auto result = document.applySourceEdit(XMLEditIntent{
+          .range = SourceRange{FileOffset::Offset(editStart), FileOffset::Offset(editEnd)},
+          .replacement = children,
+          .sourceVersion = document.sourceVersion(),
+      });
+      if (!result.applied || result.scope != ReparseScope::ElementSubtree ||
+          result.diagnostic.has_value() ||
+          store->resourceStats().liveAnchorCount != initialStats.liveAnchorCount) {
+        std::abort();
+      }
+    }
+
+    const XMLSourceStore::ResourceStats repeatedStats = store->resourceStats();
+    if (repeatedStats.liveAnchorCount != initialStats.liveAnchorCount ||
+        repeatedStats.peakLiveAnchorCount > initialStats.liveAnchorCount + 4 ||
+        repeatedStats.totalCreatedAnchors <= initialStats.totalCreatedAnchors ||
+        repeatedStats.totalRetiredAnchors <= initialStats.totalRetiredAnchors ||
+        repeatedStats.lastAnchorUpdateWork != initialStats.liveAnchorCount ||
+        repeatedStats.totalAnchorUpdateWork !=
+            initialStats.totalAnchorUpdateWork + kEditCount * initialStats.liveAnchorCount) {
+      std::abort();
+    }
+
+    XMLNode root = document.root().firstChild().value();
+    std::vector<XMLNode> childrenBeforeRejection;
+    for (std::optional<XMLNode> child = root.firstChild(); child.has_value();
+         child = child->nextSibling()) {
+      childrenBeforeRejection.push_back(*child);
+    }
+    if (childrenBeforeRejection.size() != kChildCount) {
+      std::abort();
+    }
+    limits.maximumAnchorUpdateWorkPerEdit = initialStats.liveAnchorCount - 1;
+    if (!store->setResourceLimits(limits)) {
+      std::abort();
+    }
+    const std::string sourceBeforeRejection(document.source());
+    const std::string treeBeforeRejection(
+        std::string_view(root.serializeToString(0, /*prettyPrint=*/false)));
+    const std::uint64_t versionBeforeRejection = document.sourceVersion();
+
+    const auto rejected = document.applySourceEdit(XMLEditIntent{
+        .range = SourceRange{FileOffset::Offset(editStart), FileOffset::Offset(editEnd)},
+        .replacement = children,
+        .sourceVersion = document.sourceVersion(),
+    });
+    std::vector<XMLNode> childrenAfterRejection;
+    for (std::optional<XMLNode> child = root.firstChild(); child.has_value();
+         child = child->nextSibling()) {
+      childrenAfterRejection.push_back(*child);
+    }
+    const XMLSourceStore::ResourceStats rejectedStats = store->resourceStats();
+    if (rejected.applied || document.source() != sourceBeforeRejection ||
+        root.serializeToString(0, /*prettyPrint=*/false) != treeBeforeRejection ||
+        document.sourceVersion() != versionBeforeRejection ||
+        childrenAfterRejection != childrenBeforeRejection ||
+        rejectedStats.liveAnchorCount != repeatedStats.liveAnchorCount ||
+        rejectedStats.totalCreatedAnchors != repeatedStats.totalCreatedAnchors ||
+        rejectedStats.totalRetiredAnchors != repeatedStats.totalRetiredAnchors ||
+        rejectedStats.totalAnchorUpdateWork != repeatedStats.totalAnchorUpdateWork ||
+        rejectedStats.lastAnchorUpdateWork != 0 ||
+        rejectedStats.anchorUpdateWorkRejections != repeatedStats.anchorUpdateWorkRejections + 1) {
+      std::abort();
+    }
+  }
+}
+
 }  // namespace
 
 extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
+  ExerciseAggregateLimitMarkers(
+      std::string_view(reinterpret_cast<const char*>(data), size));  // NOLINT
   FuzzedDataProvider provider(data, size);
 
   // 1. Construct a structured XML payload.

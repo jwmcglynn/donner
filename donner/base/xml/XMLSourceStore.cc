@@ -1,5 +1,6 @@
 #include "donner/base/xml/XMLSourceStore.h"
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -9,7 +10,20 @@ namespace donner::xml {
 
 namespace {
 
-constexpr std::uint32_t kFirstAnchorId = 1;
+void SaturatingIncrement(std::uint64_t& value) {
+  if (value != std::numeric_limits<std::uint64_t>::max()) {
+    ++value;
+  }
+}
+
+void SaturatingAdd(std::uint64_t& value, std::size_t amount) {
+  const std::uint64_t unsignedAmount = static_cast<std::uint64_t>(amount);
+  if (unsignedAmount > std::numeric_limits<std::uint64_t>::max() - value) {
+    value = std::numeric_limits<std::uint64_t>::max();
+  } else {
+    value += unsignedAmount;
+  }
+}
 
 bool IsContinuationByte(unsigned char byte) {
   return (byte & 0xC0U) == 0x80U;
@@ -85,24 +99,101 @@ bool IsValidXmlSourceCodepoint(std::int32_t codepoint) {
   return true;
 }
 
+bool ReplacementRangeIsValid(std::size_t sourceSize, std::size_t offset, std::size_t length) {
+  return offset <= sourceSize && length <= sourceSize - offset;
+}
+
+bool ReplacementFitsLimit(std::size_t sourceSize, std::size_t removedLength,
+                          std::size_t insertedLength, std::size_t maximumSourceSize) {
+  const std::size_t retainedSourceSize = sourceSize - removedLength;
+  return retainedSourceSize <= maximumSourceSize &&
+         insertedLength <= maximumSourceSize - retainedSourceSize;
+}
+
+template <typename AnchorT>
+bool UpdateAnchorForReplacement(AnchorT& anchor, std::size_t offset, std::size_t removedLength,
+                                std::size_t end, std::size_t insertedLength) {
+  if (removedLength == 0) {
+    if (anchor.offset > offset ||
+        (anchor.offset == offset && anchor.bias == SourceAnchorBias::After)) {
+      anchor.offset += insertedLength;
+    }
+    return false;
+  }
+  if (anchor.offset < offset) {
+    return false;
+  }
+  if (anchor.offset > end) {
+    anchor.offset = anchor.offset - removedLength + insertedLength;
+    return false;
+  }
+  if (anchor.offset == offset || anchor.offset == end) {
+    anchor.offset = anchor.bias == SourceAnchorBias::After ? offset + insertedLength : offset;
+    return false;
+  }
+  return true;
+}
+
+template <typename AnchorMapT, typename RetireCallbackT>
+void UpdateAnchorsForReplacement(AnchorMapT& anchors, std::size_t offset, std::size_t removedLength,
+                                 std::size_t insertedLength, RetireCallbackT&& retireCallback) {
+  const std::size_t end = offset + removedLength;
+  for (auto it = anchors.begin(); it != anchors.end();) {
+    if (UpdateAnchorForReplacement(it->second, offset, removedLength, end, insertedLength)) {
+      it = anchors.erase(it);
+      retireCallback();
+    } else {
+      ++it;
+    }
+  }
+}
+
 }  // namespace
 
-XMLSourceStore::XMLSourceStore(std::string source) : source_(std::move(source)) {}
+XMLSourceStore::XMLSourceStore(std::string source, std::size_t maximumSourceSize)
+    : XMLSourceStore(std::move(source), ResourceLimits{.maximumSourceSize = maximumSourceSize}) {}
+
+XMLSourceStore::XMLSourceStore(std::string source, ResourceLimits limits)
+    : source_(std::move(source)), resourceLimits_(limits) {
+  resourceLimits_.maximumSourceSize = std::max(resourceLimits_.maximumSourceSize, source_.size());
+}
+
+XMLSourceStore::ResourceStats XMLSourceStore::resourceStats() const {
+  return ResourceStats{
+      .liveAnchorCount = anchors_.size(),
+      .peakLiveAnchorCount = peakLiveAnchorCount_,
+      .totalCreatedAnchors = totalCreatedAnchors_,
+      .totalRetiredAnchors = totalRetiredAnchors_,
+      .totalAnchorUpdateWork = totalAnchorUpdateWork_,
+      .lastAnchorUpdateWork = lastAnchorUpdateWork_,
+      .anchorUpdateWorkRejections = anchorUpdateWorkRejections_,
+  };
+}
+
+bool XMLSourceStore::setResourceLimits(ResourceLimits limits) {
+  if (limits.maximumSourceSize < source_.size() ||
+      limits.maximumLiveAnchorCount < anchors_.size()) {
+    return false;
+  }
+
+  resourceLimits_ = limits;
+  return true;
+}
 
 std::optional<SourceAnchorId> XMLSourceStore::createAnchor(std::size_t offset,
                                                            SourceAnchorBias bias) {
-  if (!isBoundary(offset) ||
-      anchors_.size() >=
-          static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max() - kFirstAnchorId)) {
+  if (!isBoundary(offset) || anchors_.size() >= resourceLimits_.maximumLiveAnchorCount ||
+      nextAnchorId_ == 0) {
     return std::nullopt;
   }
 
-  anchors_.push_back(Anchor{
-      .offset = offset,
-      .bias = bias,
-      .valid = true,
-  });
-  return SourceAnchorId{static_cast<std::uint32_t>(anchors_.size() - 1 + kFirstAnchorId)};
+  const SourceAnchorId id{nextAnchorId_++};
+  anchors_.emplace(id.value, Anchor{
+                                 .offset = offset,
+                                 .bias = bias,
+                             });
+  recordCreatedAnchor();
+  return id;
 }
 
 std::optional<SourceAnchorSpan> XMLSourceStore::createSpan(std::size_t start, std::size_t end,
@@ -131,7 +222,7 @@ std::optional<SourceAnchorSpan> XMLSourceStore::createSpan(std::size_t start, st
 
 std::optional<std::size_t> XMLSourceStore::resolveAnchor(SourceAnchorId id) const {
   const Anchor* anchor = findAnchor(id);
-  if (anchor == nullptr || !anchor->valid) {
+  if (anchor == nullptr) {
     return std::nullopt;
   }
 
@@ -152,15 +243,18 @@ std::optional<ResolvedSourceSpan> XMLSourceStore::resolveSpan(SourceAnchorSpan s
 }
 
 void XMLSourceStore::invalidateAnchor(SourceAnchorId id) {
-  Anchor* anchor = findAnchor(id);
-  if (anchor != nullptr) {
-    anchor->valid = false;
+  if (id.isValid() && anchors_.erase(id.value) != 0) {
+    recordRetiredAnchor();
   }
 }
 
 std::optional<XMLSourceDelta> XMLSourceStore::replace(std::size_t offset, std::size_t length,
                                                       std::string_view replacement) {
-  if (offset > source_.size() || length > source_.size() - offset) {
+  if (!ReplacementRangeIsValid(source_.size(), offset, length)) {
+    return std::nullopt;
+  }
+  if (!ReplacementFitsLimit(source_.size(), length, replacement.size(),
+                            resourceLimits_.maximumSourceSize)) {
     return std::nullopt;
   }
 
@@ -169,39 +263,21 @@ std::optional<XMLSourceDelta> XMLSourceStore::replace(std::size_t offset, std::s
     return std::nullopt;
   }
 
+  lastAnchorUpdateWork_ = 0;
+  if (anchors_.size() > resourceLimits_.maximumAnchorUpdateWorkPerEdit) {
+    SaturatingIncrement(anchorUpdateWorkRejections_);
+    return std::nullopt;
+  }
+
   source_.replace(offset, length, replacement);
   ++sourceVersion_;
 
   const std::size_t insertedLength = replacement.size();
-  for (Anchor& anchor : anchors_) {
-    if (!anchor.valid) {
-      continue;
-    }
-
-    if (length == 0) {
-      if (anchor.offset > offset ||
-          (anchor.offset == offset && anchor.bias == SourceAnchorBias::After)) {
-        anchor.offset += insertedLength;
-      }
-      continue;
-    }
-
-    if (anchor.offset < offset) {
-      continue;
-    }
-
-    if (anchor.offset > end) {
-      anchor.offset = anchor.offset - length + insertedLength;
-      continue;
-    }
-
-    if (anchor.offset == offset || anchor.offset == end) {
-      anchor.offset = (anchor.bias == SourceAnchorBias::After) ? offset + insertedLength : offset;
-      continue;
-    }
-
-    anchor.valid = false;
-  }
+  const std::size_t anchorUpdateWork = anchors_.size();
+  UpdateAnchorsForReplacement(anchors_, offset, length, insertedLength,
+                              [this]() { recordRetiredAnchor(); });
+  lastAnchorUpdateWork_ = anchorUpdateWork;
+  SaturatingAdd(totalAnchorUpdateWork_, anchorUpdateWork);
 
   return XMLSourceDelta{
       .offset = offset,
@@ -254,11 +330,8 @@ XMLSourceStore::Anchor* XMLSourceStore::findAnchor(SourceAnchorId id) {
     return nullptr;
   }
 
-  const std::size_t index = static_cast<std::size_t>(id.value - kFirstAnchorId);
-  if (index >= anchors_.size()) {
-    return nullptr;
-  }
-  return &anchors_[index];
+  auto it = anchors_.find(id.value);
+  return it != anchors_.end() ? &it->second : nullptr;
 }
 
 const XMLSourceStore::Anchor* XMLSourceStore::findAnchor(SourceAnchorId id) const {
@@ -266,11 +339,17 @@ const XMLSourceStore::Anchor* XMLSourceStore::findAnchor(SourceAnchorId id) cons
     return nullptr;
   }
 
-  const std::size_t index = static_cast<std::size_t>(id.value - kFirstAnchorId);
-  if (index >= anchors_.size()) {
-    return nullptr;
-  }
-  return &anchors_[index];
+  auto it = anchors_.find(id.value);
+  return it != anchors_.end() ? &it->second : nullptr;
+}
+
+void XMLSourceStore::recordCreatedAnchor() {
+  SaturatingIncrement(totalCreatedAnchors_);
+  peakLiveAnchorCount_ = std::max(peakLiveAnchorCount_, anchors_.size());
+}
+
+void XMLSourceStore::recordRetiredAnchor() {
+  SaturatingIncrement(totalRetiredAnchors_);
 }
 
 }  // namespace donner::xml

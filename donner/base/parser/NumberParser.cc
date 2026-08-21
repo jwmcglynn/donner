@@ -91,7 +91,7 @@ ParseDigitsResult ParseDigitsSaturating(std::string_view str) {
 
   for (size_t i = 0; i < str.size(); ++i) {
     unsigned char c = static_cast<unsigned char>(str[i]);
-    if (!std::isdigit(c)) {
+    if (!std::isdigit(static_cast<unsigned char>(c))) {
       break;
     }
 
@@ -206,7 +206,7 @@ ParseResult<NumberParser::Result> NumberParser::Parse(std::string_view str, Opti
 
   if (!str.empty() && str.front() == '.') {
     // Only consume '.' if there's at least 1 digit after it
-    if (str.size() > 1 && std::isdigit(str[1])) {
+    if (str.size() > 1 && std::isdigit(static_cast<unsigned char>(str[1]))) {
       str.remove_prefix(1);
       totalConsumed++;
 

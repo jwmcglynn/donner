@@ -17,16 +17,23 @@ namespace donner::parser {
  */
 class LineOffsets {
 public:
+  static constexpr size_t kMaximumStoredLineOffsets = 64 * 1024;
+
   /**
    * Construct a LineOffsets object for the given input string.
    *
    * @param input Input string.
    */
-  explicit LineOffsets(std::string_view input) {
+  explicit LineOffsets(std::string_view input,
+                       size_t maximumStoredOffsets = kMaximumStoredLineOffsets) {
     // Compute the offsets for the start of each line. The line isn't considered started until
     // *after* the line break characters.
     for (size_t i = 0; i < input.size(); ++i) {
       if (input[i] == '\n') {
+        if (offsets_.size() >= maximumStoredOffsets) {
+          truncated_ = true;
+          break;
+        }
         offsets_.push_back(i + 1);
       } else if (input[i] == '\r') {
         // If there is a \r\n, it should only count as one line, skip over the \n if it exists.
@@ -34,15 +41,27 @@ public:
           ++i;
         }
 
+        if (offsets_.size() >= maximumStoredOffsets) {
+          truncated_ = true;
+          break;
+        }
         offsets_.push_back(i + 1);
       }
     }
   }
 
+  LineOffsets(const LineOffsets&) = delete;
+  LineOffsets& operator=(const LineOffsets&) = delete;
+  LineOffsets(LineOffsets&&) noexcept = default;
+  LineOffsets& operator=(LineOffsets&&) noexcept = default;
+
   /**
    * Return the offsets of the start of each line.
    */
   const std::vector<size_t>& offsets() const { return offsets_; }
+
+  /** Whether line metadata after the retained prefix was intentionally omitted. */
+  bool truncated() const { return truncated_; }
 
   /**
    * Return line numbers for the given offset.
@@ -90,6 +109,7 @@ public:
 private:
   /// 0-indexed offsets of the start of each line.
   std::vector<size_t> offsets_;
+  bool truncated_ = false;
 };
 
 }  // namespace donner::parser

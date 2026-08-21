@@ -24,6 +24,12 @@ TEST(Base64, ValidBase64WithWhitespace) {
   EXPECT_THAT(DecodeBase64Data("\nTWE=\n"), ParseResultIs(std::vector<uint8_t>{'M', 'a'}));
 }
 
+TEST(Base64, DecodesMultipleQuantaWithoutSignedOverflow) {
+  EXPECT_THAT(
+      DecodeBase64Data("AAECAwQFBgcICQoLDA0ODw=="),
+      ParseResultIs(std::vector<uint8_t>{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15}));
+}
+
 TEST(Base64, InvalidCharacter) {
   EXPECT_THAT(DecodeBase64Data("TW@="), ParseErrorIs(HasSubstr("Invalid base64 char '@'")));
   EXPECT_THAT(DecodeBase64Data("TWE*"), ParseErrorIs(HasSubstr("Invalid base64 char '*'")));

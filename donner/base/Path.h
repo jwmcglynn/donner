@@ -1,8 +1,11 @@
 #pragma once
 /// @file
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
+#include <optional>
 #include <ostream>
 #include <span>
 #include <vector>
@@ -135,6 +138,21 @@ public:
    */
   static constexpr double kLocalFlattenTolerance = 0.25;
 
+  /// Maximum command visits and recursive subdivisions in one geometric query.
+  static constexpr std::size_t kMaximumGeometryQueryWork = 1024 * 1024;
+
+  /// Maximum zero-based recursion depth used by adaptive arc-length subdivision.
+  static constexpr int kMaximumArcLengthSubdivisionDepth = 19;
+
+  /// Maximum zero-based recursion depth used by cubic hit-test subdivision.
+  static constexpr int kMaximumHitTestSubdivisionDepth = 10;
+
+  /// Maximum zero-based recursion depth used while flattening one curve.
+  static constexpr int kMaximumFlattenSubdivisionDepth = 10;
+
+  /// Maximum heap retained by one measured-path arc index.
+  static constexpr std::size_t kMaximumMeasuredPathRetainedBytes = 32 * 1024 * 1024;
+
   /// Construct an empty path.
   Path() = default;
 
@@ -164,6 +182,19 @@ public:
 
   /// Returns the number of commands (verbs) in the path.
   size_t verbCount() const { return commands_.size(); }
+
+  /// Dynamic bytes reserved by the path's command and point vectors.
+  std::optional<std::size_t> retainedBytes() const {
+    constexpr std::size_t kMaximum = std::numeric_limits<std::size_t>::max();
+    if (commands_.capacity() > kMaximum / sizeof(Command)) {
+      return std::nullopt;
+    }
+    const std::size_t commandBytes = commands_.capacity() * sizeof(Command);
+    if (points_.capacity() > (kMaximum - commandBytes) / sizeof(Vector2d)) {
+      return std::nullopt;
+    }
+    return commandBytes + points_.capacity() * sizeof(Vector2d);
+  }
 
   /// @}
 
@@ -202,6 +233,71 @@ public:
     double angle;       ///< Tangent angle in radians (atan2).
     bool valid = true;  ///< False if distance exceeds path length.
   };
+
+  /**
+   * Precomputed arc-length index for repeated path sampling.
+   *
+   * Construction is linear in the number of path commands. Sampling uses a
+   * binary search over drawable segments, so text-on-path does not rescan the
+   * complete source path once per glyph.
+   */
+  class MeasuredPath {
+  public:
+    /// Return the total measured arc length.
+    [[nodiscard]] double pathLength() const { return totalLength_; }
+
+    /// Sample this measured path at the given arc length.
+    [[nodiscard]] PointOnPath pointAtArcLength(double distance) const;
+
+    /// Number of drawable segments retained by this index.
+    [[nodiscard]] std::size_t segmentCount() const { return segments_.size(); }
+
+    /// Return true when measurement completed within its numeric and work limits.
+    [[nodiscard]] bool valid() const { return valid_; }
+
+    /// Number of command visits and recursive subdivisions used to build this index.
+    [[nodiscard]] std::size_t measurementWorkUnits() const { return measurementWorkUnits_; }
+
+    /// Exact object and vector-capacity bytes retained by this index, or nullopt on overflow.
+    [[nodiscard]] std::optional<std::size_t> retainedBytes() const;
+
+  private:
+    friend class Path;
+
+    enum class SegmentType : uint8_t { Line, Cubic };
+
+    struct ArcSample {
+      double t = 0.0;
+      double length = 0.0;
+    };
+
+    struct Segment {
+      SegmentType type = SegmentType::Line;
+      std::array<Vector2d, 4> points{};
+      double startLength = 0.0;
+      double endLength = 0.0;
+      std::size_t firstSample = 0;
+      std::size_t sampleCount = 0;
+    };
+
+    std::vector<Segment> segments_;
+    std::vector<ArcSample> arcSamples_;
+    Vector2d endpoint_;
+    double totalLength_ = 0.0;
+    std::size_t measurementWorkUnits_ = 0;
+    bool valid_ = true;
+  };
+
+  /// Build a reusable arc-length index for this path.
+  [[nodiscard]] MeasuredPath measure() const;
+
+  /**
+   * Bytes needed to reserve the maximum possible segment array before measurement starts.
+   *
+   * Callers retaining a MeasuredPath can preflight this base allocation before calling measure().
+   * Returns nullopt if the estimate overflows or exceeds the per-index retained-memory cap.
+   */
+  [[nodiscard]] std::optional<std::size_t> measurementBaseRetainedBytes() const;
 
   /// Compute the total arc length of the path.
   ///
@@ -436,6 +532,8 @@ public:
 private:
   friend class PathBuilder;
 
+  [[nodiscard]] bool flattenInto(PathBuilder& builder, double tolerance) const;
+
   std::vector<Vector2d> points_;
   std::vector<Command> commands_;
 };
@@ -456,6 +554,9 @@ private:
 class PathBuilder {
 public:
   PathBuilder() = default;
+
+  /// Create a builder that fails closed after accepting @p maximumPoints points.
+  explicit PathBuilder(std::size_t maximumPoints) : maximumPoints_(maximumPoints) {}
 
   /// @name Path construction
   /// @{
@@ -520,6 +621,9 @@ public:
   /// Returns true if no commands have been added.
   bool empty() const { return path_.commands_.empty(); }
 
+  /// Returns true if a command was rejected because the configured point limit was reached.
+  bool exceededMaximumPoints() const { return exceededMaximumPoints_; }
+
   /// @}
 
   /// Build the immutable Path. The builder is reset after this call.
@@ -527,11 +631,14 @@ public:
 
 private:
   void ensureMoveTo();
+  bool canAppendPoints(std::size_t count);
 
   Path path_;
   Vector2d lastMoveTo_;
   uint32_t moveToPointIndex_ = 0;
   bool hasMoveTo_ = false;
+  std::size_t maximumPoints_ = std::numeric_limits<std::size_t>::max();
+  bool exceededMaximumPoints_ = false;
 };
 
 }  // namespace donner

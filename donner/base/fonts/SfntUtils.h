@@ -64,6 +64,12 @@ public:
     uint32_t length = 0;
   };
 
+  /// Allocation and CPU-work ceiling proved for one TrueType glyph.
+  struct GlyphOutlineComplexity {
+    uint32_t maximumVertices = 0;
+    uint32_t work = 0;
+  };
+
   SfntFont();
   ~SfntFont();
   SfntFont(SfntFont&&) noexcept;
@@ -101,6 +107,9 @@ public:
   /// Number of glyphs represented by the retained `loca` index, or zero for non-TrueType fonts.
   size_t numGlyphs() const { return numGlyphs_; }
 
+  /// Return the validation-time outline bound for a TrueType glyph.
+  std::optional<GlyphOutlineComplexity> glyphOutlineComplexity(size_t glyphIndex) const;
+
   /// Exact dynamic bytes retained by the sorted directory and `loca` index.
   size_t retainedBytes() const;
 
@@ -110,6 +119,7 @@ private:
   std::unique_ptr<TableRecord[]> tables_;
   size_t numTables_ = 0;
   std::unique_ptr<uint32_t[]> glyphOffsets_;
+  std::unique_ptr<GlyphOutlineComplexity[]> glyphComplexities_;
   size_t numGlyphs_ = 0;
 };
 

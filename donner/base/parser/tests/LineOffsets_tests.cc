@@ -104,4 +104,14 @@ TEST(LineOffsets, LineOffsetErrors) {
   }
 }
 
+TEST(LineOffsets, BoundsRetainedMetadataAndRemainsUsableAfterTruncation) {
+  constexpr size_t kTestLimit = 4;
+  LineOffsets offsets("\n\n\n\n\n\nlast", kTestLimit);
+
+  EXPECT_TRUE(offsets.truncated());
+  EXPECT_THAT(offsets.offsets(), ElementsAre(1, 2, 3, 4));
+  EXPECT_EQ(offsets.offsetToLine(100), kTestLimit + 1);
+  EXPECT_EQ(offsets.fileOffset(100).lineInfo->line, kTestLimit + 1);
+}
+
 }  // namespace donner::parser

@@ -5,11 +5,13 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <limits>
 #include <map>
 #include <memory>
 #include <optional>
 #include <type_traits>
 #include <unordered_map>
+#include <unordered_set>
 
 #include "donner/base/EcsRegistry.h"
 #include "donner/base/RcString.h"
@@ -17,6 +19,7 @@
 #include "donner/base/xml/XMLQualifiedName.h"
 #include "donner/base/xml/components/AttributesComponent.h"
 #include "donner/base/xml/components/TreeComponent.h"
+#include "donner/base/xml/components/XMLDocumentContext.h"
 
 namespace donner::xml::components {
 
@@ -30,6 +33,9 @@ namespace donner::xml::components {
  */
 class XMLNamespaceContext {
 public:
+  /// Maximum aggregate prefix bindings retained across cached namespace-scope maps.
+  static constexpr std::size_t kMaximumCachedScopeBindings = 64 * 1024;
+
   /**
    * Constructor, this should only be called once to construct on the given \ref Registry, with
    * `registry.ctx().emplace<XMLNamespaceContext>(registry)`.
@@ -41,7 +47,9 @@ public:
    *
    * @param registry Underlying registry for the document.
    */
-  explicit XMLNamespaceContext(Registry& registry) {
+  explicit XMLNamespaceContext(Registry& registry,
+                               std::size_t maximumCachedScopeBindings = kMaximumCachedScopeBindings)
+      : maximumCachedScopeBindings_(maximumCachedScopeBindings) {
     registry.on_destroy<donner::components::AttributesComponent>()
         .connect<&XMLNamespaceContext::onEntityDestroy>(*this);
   }
@@ -103,7 +111,17 @@ public:
    */
   std::optional<RcString> getNamespaceUri(Registry& registry, Entity entity,
                                           const RcString& prefix) const {
+    if (scopeCacheRejected_) {
+      return resolveNamespaceUriUncached(registry, entity, prefix);
+    }
+
     const ScopeMap& scope = *resolveScope(registry, entity);
+
+    // Cache admission can fail while resolving this lookup. Falling back to a direct ancestor
+    // walk preserves namespace semantics without retaining another amplified scope map.
+    if (scopeCacheRejected_) {
+      return resolveNamespaceUriUncached(registry, entity, prefix);
+    }
 
     const auto it = scope.find(prefix);
     if (it == scope.end()) {
@@ -134,6 +152,12 @@ public:
   [[nodiscard]] std::uint64_t scopeResolutionCountForTesting() const {
     return scopeResolutionCount_;
   }
+
+  /// Number of unique prefix bindings retained by cached scope maps.
+  [[nodiscard]] std::size_t cachedScopeBindingsForTesting() const { return cachedScopeBindings_; }
+
+  /// True after namespace-scope cache admission exceeded its aggregate bound.
+  [[nodiscard]] bool scopeCacheRejectedForTesting() const { return scopeCacheRejected_; }
 
 private:
   /// Namespace declarations made by a single element, mapping prefix to URI. The default
@@ -171,6 +195,37 @@ private:
     return kEmpty;
   }
 
+  /** Resolve one prefix without materializing an in-scope namespace map. */
+  std::optional<RcString> resolveNamespaceUriUncached(Registry& registry, Entity entity,
+                                                      const RcString& prefix) const {
+    std::uint64_t maximumNodes = XMLDocumentContext::kDefaultMaximumSourceEditTreeNodes;
+    if (const auto* documentContext = registry.ctx().find<XMLDocumentContext>()) {
+      maximumNodes = documentContext->maximumSourceEditTreeNodes;
+    }
+
+    // One extra step permits the synthetic XML document root after every bounded tree node.
+    std::uint64_t remaining =
+        maximumNodes == std::numeric_limits<std::uint64_t>::max() ? maximumNodes : maximumNodes + 1;
+    Entity current = entity;
+    while (current != entt::null && remaining > 0) {
+      const auto declarations = declarations_.find(current);
+      if (declarations != declarations_.end()) {
+        const auto match = declarations->second.find(prefix);
+        if (match != declarations->second.end()) {
+          return match->second;
+        }
+      }
+
+      if (const auto* tree = registry.try_get<donner::components::TreeComponent>(current)) {
+        current = tree->parent();
+      } else {
+        current = entt::null;
+      }
+      --remaining;
+    }
+    return std::nullopt;
+  }
+
   /**
    * Return every prefix in scope for \p entity, computing and caching it if needed.
    *
@@ -181,7 +236,7 @@ private:
    * @param entity Entity to resolve the scope for.
    */
   const std::shared_ptr<const ScopeMap>& resolveScope(Registry& registry, Entity entity) const {
-    if (entity == entt::null) {
+    if (entity == entt::null || scopeCacheRejected_) {
       return EmptyScope();
     }
 
@@ -210,6 +265,9 @@ private:
     for (size_t i = pending.size(); i > 0; --i) {
       const Entity pendingEntity = pending[i - 1];
       scope = extendScope(registry, pendingEntity, std::move(scope));
+      if (scopeCacheRejected_) {
+        return EmptyScope();
+      }
       scopeCache_.insert_or_assign(pendingEntity, scope);
       ++scopeResolutionCount_;
     }
@@ -241,17 +299,38 @@ private:
       return parentScope;
     }
 
+    if (parentScope->size() > maximumCachedScopeBindings_ - cachedScopeBindings_ ||
+        it->second.size() >
+            maximumCachedScopeBindings_ - cachedScopeBindings_ - parentScope->size()) {
+      scopeCache_.clear();
+      cachedScopeBindings_ = 0;
+      scopeCacheRejected_ = true;
+      return EmptyScope();
+    }
+
     auto extended = std::make_shared<ScopeMap>(*parentScope);
     for (const auto& [prefix, uri] : it->second) {
       extended->insert_or_assign(prefix, uri);
     }
+
+    if (extended->size() > maximumCachedScopeBindings_ - cachedScopeBindings_) {
+      scopeCache_.clear();
+      cachedScopeBindings_ = 0;
+      scopeCacheRejected_ = true;
+      return EmptyScope();
+    }
+    cachedScopeBindings_ += extended->size();
 
     return extended;
   }
 
   /// Drop all cached scopes, after a declaration change that may apply anywhere below the
   /// declaring element.
-  void invalidateScopes() { scopeCache_.clear(); }
+  void invalidateScopes() {
+    scopeCache_.clear();
+    cachedScopeBindings_ = 0;
+    scopeCacheRejected_ = false;
+  }
 
   /// Drop cached scopes for \p entity and everything below it.
   void invalidateSubtreeScopes(Registry& registry, Entity entity) {
@@ -274,16 +353,31 @@ private:
         }
       }
     }
+    recomputeCachedScopeBindings();
+  }
+
+  void recomputeCachedScopeBindings() {
+    std::unordered_set<const ScopeMap*> seen;
+    std::size_t total = 0;
+    for (const auto& [entity, scope] : scopeCache_) {
+      (void)entity;
+      if (scope && seen.insert(scope.get()).second) {
+        total += scope->size();
+      }
+    }
+    cachedScopeBindings_ = total;
   }
 
   /// Called when an entity is destroyed.
   void onEntityDestroy(Registry& registry, Entity entity) {
-    scopeCache_.erase(entity);
+    const bool removedCachedScope = scopeCache_.erase(entity) != 0;
 
     const auto& attributes = registry.get<donner::components::AttributesComponent>(entity);
     if (attributes.hasNamespaceOverrides()) {
       declarations_.erase(entity);
       invalidateScopes();
+    } else if (removedCachedScope) {
+      recomputeCachedScopeBindings();
     }
   }
 
@@ -302,6 +396,10 @@ private:
    * different key and can never hit a stale entry.
    */
   mutable std::unordered_map<Entity, std::shared_ptr<const ScopeMap>, EntityHash> scopeCache_;
+
+  std::size_t maximumCachedScopeBindings_ = kMaximumCachedScopeBindings;
+  mutable std::size_t cachedScopeBindings_ = 0;
+  mutable bool scopeCacheRejected_ = false;
 
   /// Counts entities whose scope was computed rather than read from \ref scopeCache_.
   mutable std::uint64_t scopeResolutionCount_ = 0;

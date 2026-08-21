@@ -2,6 +2,7 @@
 
 #include <cassert>  // For assert
 #include <cstddef>
+#include <cstdint>
 #include <cstdlib>  // For std::size_t
 #include <string>
 #include <string_view>
@@ -20,6 +21,7 @@
 #include "donner/base/xml/XMLNode.h"
 #include "donner/base/xml/XMLQualifiedName.h"
 #include "donner/base/xml/components/EntityDeclarationsContext.h"
+#include "donner/base/xml/components/XMLDocumentContext.h"
 
 namespace donner::xml {
 
@@ -230,18 +232,25 @@ struct NoParameterEntityPredicate {
   static bool test(char ch) { return kLookupNoEntity[static_cast<unsigned char>(ch)] != 0; }
 };
 
+bool IsValidXmlCharacter(std::uint64_t codepoint) {
+  return codepoint == 0x9 || codepoint == 0xA || codepoint == 0xD ||
+         (codepoint >= 0x20 && codepoint <= 0xD7FF) ||
+         (codepoint >= 0xE000 && codepoint <= 0xFFFD) ||
+         (codepoint >= 0x10000 && codepoint <= 0x10FFFF);
+}
+
 /// Append a codepoint as a new string to the pieces vector.
-std::optional<ParseDiagnostic> AppendUnicodeCharToNewString(char32_t codepoint,
+std::optional<ParseDiagnostic> AppendUnicodeCharToNewString(std::uint64_t codepoint,
                                                             ChunkedString& chunkedString,
                                                             size_t offset) {
   // Validate the codepoint per XML specs.
-  if (!Utf8::IsValidCodepoint(codepoint) || codepoint == 0xFFFE || codepoint == 0xFFFF) {
+  if (!IsValidXmlCharacter(codepoint)) {
     return ParseDiagnostic::Error("Invalid numeric character entity", FileOffset::Offset(offset));
   }
 
   // Allocate a new string, append UTF-8, and record its view.
   std::string str;
-  Utf8::Append(codepoint, std::back_inserter(str));
+  Utf8::Append(static_cast<char32_t>(codepoint), std::back_inserter(str));
   chunkedString.append(RcString(str));
   return std::nullopt;
 }
@@ -264,9 +273,15 @@ private:
   const uint64_t maxEntitySubstitutions_;
   const uint64_t maxElements_;
   const uint64_t maxAttributesPerElement_;
+  const uint64_t maxTotalAttributes_;
+  const uint64_t maxEntityDeclarations_;
+  const uint64_t maxEntityDeclarationBytes_;
   const int maxNestingDepth_;
   uint64_t entitySubstitutionCount_ = 0;
   uint64_t elementCount_ = 0;
+  uint64_t totalAttributeCount_ = 0;
+  uint64_t entityDeclarationCount_ = 0;
+  uint64_t entityDeclarationBytes_ = 0;
   int nestingDepth_ = 0;
 
 public:
@@ -279,8 +294,15 @@ public:
         maxEntitySubstitutions_(options.maxEntitySubstitutions),
         maxElements_(options.maxElements),
         maxAttributesPerElement_(options.maxAttributesPerElement),
+        maxTotalAttributes_(options.maxTotalAttributes),
+        maxEntityDeclarations_(options.maxEntityDeclarations),
+        maxEntityDeclarationBytes_(options.maxEntityDeclarationBytes),
         maxNestingDepth_(options.maxNestingDepth) {
-    document_.setSource(std::string(text));
+    document_.setSource(std::string(text), options.maximumInputSize);
+    auto& documentContext = document_.registry().ctx().get<components::XMLDocumentContext>();
+    documentContext.maximumSourceEditTreeNodes = options.maxElements;
+    documentContext.maximumSourceEditTreeDepth = options.maxNestingDepth;
+    documentContext.maximumSourceEditTotalAttributes = options.maxTotalAttributes;
   }
 
   bool isWhitespace(char ch) const {
@@ -440,7 +462,7 @@ private:
       lineOffsets_.emplace(str_);
     }
 
-    return lineOffsets_.value();
+    return *lineOffsets_;
   }
 
   /**
@@ -488,7 +510,7 @@ private:
   template <std::output_iterator<char> OutputIterator>
   [[nodiscard]] std::optional<ParseDiagnostic> insertUtf8(char32_t ch, OutputIterator it) {
     // Reject bad codepoints as defined by https://www.w3.org/TR/xml/#NT-Char
-    if (UTILS_PREDICT_FALSE(!Utf8::IsValidCodepoint(ch) || ch == 0xFFFE || ch == 0xFFFF)) {
+    if (UTILS_PREDICT_FALSE(!IsValidXmlCharacter(ch))) {
       return createParseError("Invalid numeric character entity");
     }
 
@@ -1276,6 +1298,10 @@ private:
     ChunkedString& dataStr = maybeData.result();
 
     if (!dataStr.empty()) {
+      if (auto maybeError = countTreeNode(startOffset)) {
+        return maybeError;
+      }
+
       const RcString dataStrAllocated = dataStr.toSingleRcString();
 
       // Create new data node
@@ -1425,11 +1451,19 @@ private:
       return createParseError("Expected '>' at end of entity declaration");
     }
 
+    const uint64_t declarationBytes = entityName.size() + maybePieces.result().size();
+    if (entityDeclarationCount_ >= maxEntityDeclarations_ ||
+        declarationBytes > maxEntityDeclarationBytes_ - entityDeclarationBytes_) {
+      return createParseError("Maximum entity declaration budget exceeded");
+    }
+
     RcString expandedEntityValue = maybePieces.result().toSingleRcString();
 
     // Store in the entity declarations
     entityCtx_.addEntityDeclaration(entityType, entityName.toSingleRcString(), expandedEntityValue,
                                     isExternal);
+    ++entityDeclarationCount_;
+    entityDeclarationBytes_ += declarationBytes;
     return std::nullopt;
   }
 
@@ -1437,9 +1471,8 @@ private:
    * Parsing an element of form `<tag ...>` or `<tag .../>`.
    */
   ParseResult<XMLNode> parseElement(FileOffset startOffset) {
-    // Enforce the element count cap. Any element-ish node (including comments, doctype,
-    // PI, CDATA) also counts toward this budget via `countTreeNode` so an attacker can't
-    // route around it by piling comments.
+    // Enforce the element count cap. Every allocated tree node (including data, comments,
+    // doctype, PI, and CDATA) also counts via `countTreeNode`.
     if (auto maybeError = countTreeNode(startOffset)) {
       return std::move(maybeError.value());
     }
@@ -1465,8 +1498,7 @@ private:
 
     // Determine ending type
     if (tryConsume(remaining_, ">")) {
-      element.setOpeningTagLocation(
-          SourceRange{startOffset, currentOffset(remaining_)});
+      element.setOpeningTagLocation(SourceRange{startOffset, currentOffset(remaining_)});
       // Enter the element - bump nesting depth before recursing, restore on exit.
       if (nestingDepth_ >= maxNestingDepth_) {
         return createParseError("Maximum element nesting depth exceeded", startOffset);
@@ -1480,8 +1512,7 @@ private:
 
     } else if (tryConsume(remaining_, "/>")) {
       // Self-closing tag
-      element.setOpeningTagLocation(
-          SourceRange{startOffset, currentOffset(remaining_)});
+      element.setOpeningTagLocation(SourceRange{startOffset, currentOffset(remaining_)});
     } else {
       return createParseError("Node not closed with '>' or '/>'");
     }
@@ -1491,8 +1522,8 @@ private:
   }
 
   /// Increment the element/tree-node counter and return an error if it would exceed
-  /// the configured cap. Called once per parsed element, comment, doctype, CDATA,
-  /// processing instruction, or XML declaration.
+  /// the configured cap. Called once per parsed element, data, comment, doctype,
+  /// CDATA, processing instruction, or XML declaration.
   [[nodiscard]] std::optional<ParseDiagnostic> countTreeNode(const FileOffset& where) {
     if (elementCount_ >= maxElements_) {
       return createParseError("Maximum element count exceeded", where);
@@ -1623,8 +1654,7 @@ private:
             return createParseError("Expected '>' for closing tag");
           }
 
-          node.setClosingTagLocation(
-              SourceRange{closingTagOpenStart, currentOffset(remaining_)});
+          node.setClosingTagLocation(SourceRange{closingTagOpenStart, currentOffset(remaining_)});
           return std::nullopt;  // Node closed, finished parsing contents
         } else {
           FileOffset startOffset = currentOffset(remaining_);
@@ -1749,7 +1779,11 @@ private:
         if (attributeCount >= maxAttributesPerElement_) {
           return createParseError("Maximum attributes-per-element count exceeded", beforeAttribute);
         }
+        if (totalAttributeCount_ >= maxTotalAttributes_) {
+          return createParseError("Maximum total attribute count exceeded", beforeAttribute);
+        }
         ++attributeCount;
+        ++totalAttributeCount_;
         const ParsedAttribute& attribute = maybeAttribute.result().value();
         node.setAttribute(attribute.name, attribute.value);
         node.setAttributeSourceLocation(attribute.name, attribute.fullRange, attribute.valueRange,

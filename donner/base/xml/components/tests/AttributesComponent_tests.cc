@@ -414,4 +414,41 @@ TEST(AttributesComponent, NamespaceCacheSurvivesUnrelatedTreeChange) {
   EXPECT_GT(namespaceContext.scopeResolutionCountForTesting(), warmed);
 }
 
+TEST(AttributesComponent, NamespaceScopeCacheRejectsAggregateBindingAmplification) {
+  Registry registry;
+  auto& namespaceContext = registry.ctx().emplace<XMLNamespaceContext>(registry, 3);
+
+  const auto createNode = [&registry](const char* tagName) {
+    const Entity entity = registry.create();
+    registry.emplace<AttributesComponent>(entity);
+    registry.emplace<TreeComponent>(entity, tagName);
+    return entity;
+  };
+
+  const Entity root = createNode("root");
+  const Entity child = createNode("child");
+  const Entity grandchild = createNode("grandchild");
+  registry.get<TreeComponent>(root).appendChild(registry, child);
+  registry.get<TreeComponent>(child).appendChild(registry, grandchild);
+
+  registry.get<AttributesComponent>(root).setAttribute(
+      registry, XMLQualifiedNameRef("xmlns", "one"), "https://example.com/one");
+  registry.get<AttributesComponent>(child).setAttribute(
+      registry, XMLQualifiedNameRef("xmlns", "two"), "https://example.com/two");
+  registry.get<AttributesComponent>(grandchild)
+      .setAttribute(registry, XMLQualifiedNameRef("xmlns", "three"), "https://example.com/three");
+
+  EXPECT_EQ(namespaceContext.getNamespaceUri(registry, grandchild, "three"),
+            "https://example.com/three");
+  EXPECT_TRUE(namespaceContext.scopeCacheRejectedForTesting());
+  EXPECT_EQ(namespaceContext.cachedScopeBindingsForTesting(), 0u);
+
+  // Once admission is closed, direct bounded ancestor resolution must retain normal shadowing
+  // semantics instead of treating every prefix as absent.
+  EXPECT_EQ(namespaceContext.getNamespaceUri(registry, grandchild, "two"),
+            "https://example.com/two");
+  EXPECT_EQ(namespaceContext.getNamespaceUri(registry, grandchild, "one"),
+            "https://example.com/one");
+}
+
 }  // namespace donner::components

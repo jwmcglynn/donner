@@ -135,6 +135,19 @@ public:
     return {codepoint, codepointSize};
   }
 
+  /// Return true when every byte in the string belongs to a canonical UTF-8 scalar encoding.
+  static inline bool IsValidString(std::string_view str) {
+    while (!str.empty()) {
+      const auto [codepoint, codepointSize] = NextCodepoint(str);
+      if (codepointSize <= 0 || codepointSize > static_cast<int>(str.size()) ||
+          (codepoint == kUnicodeReplacementCharacter && codepointSize == 1)) {
+        return false;
+      }
+      str.remove_prefix(static_cast<std::size_t>(codepointSize));
+    }
+    return true;
+  }
+
   /// Appends the UTF-8 encoding of the given Unicode codepoint to the output iterator.
   /// @tparam OutputIterator An output iterator that accepts `char` elements.
   /// @param ch The Unicode codepoint to encode and append.

@@ -52,7 +52,16 @@ cc_binary(
     name = "xml_tool",
     srcs = ["xml_tool.cc"],
     tags = ["codeql_default"],
-    deps = [":xml"],
+    deps = [
+        ":xml",
+        "//donner/base",
+    ],
+)
+
+sh_test(
+    name = "xml_tool_tests",
+    srcs = ["tests/xml_tool_tests.sh"],
+    data = [":xml_tool"],
 )
 
 donner_cc_test(
@@ -79,6 +88,15 @@ donner_cc_test(
     deps = [
         ":xml",
         "//donner/base:base_test_utils",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
+    name = "xml_incremental_limits_tests",
+    srcs = ["tests/XMLIncrementalLimits_tests.cc"],
+    deps = [
+        ":xml",
         "@com_google_gtest//:gtest_main",
     ],
 )

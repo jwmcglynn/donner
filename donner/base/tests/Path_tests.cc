@@ -491,23 +491,25 @@ TEST(Path, FlattenFlatCurvesUseSingleLineSegments) {
   EXPECT_EQ(lineCount, 2u);
 }
 
-TEST(Path, FlattenZeroToleranceStillTerminatesDeepSubdivision) {
+TEST(Path, FlattenZeroToleranceFailsClosedAtSubdivisionDepthLimit) {
   Path path = PathBuilder()
                   .moveTo({0, 0})
                   .quadTo({50, 100}, {100, 0})
                   .curveTo({100, -100}, {200, -100}, {200, 0})
                   .build();
 
-  Path result = path.flatten(0.0);
+  EXPECT_TRUE(path.flatten(0.0).empty());
+}
 
-  size_t lineCount = 0;
-  result.forEach([&](Path::Verb verb, std::span<const Vector2d>) {
-    if (verb == Path::Verb::LineTo) {
-      ++lineCount;
-    }
-  });
-  EXPECT_GT(lineCount, 100u);
-  EXPECT_LT(lineCount, 3000u);
+TEST(Path, FlattenPositiveToleranceEmitsBoundedApproximationAtSubdivisionDepthLimit) {
+  const Path path =
+      PathBuilder().moveTo({0.0, 0.0}).curveTo({0.0, 1e6}, {1e6, 1e6}, {1e6, 0.0}).build();
+
+  const Path flattened = path.flatten(1e-4);
+  EXPECT_FALSE(flattened.empty());
+  EXPECT_LE(flattened.verbCount(),
+            1u + (1u << static_cast<unsigned int>(Path::kMaximumFlattenSubdivisionDepth)));
+  EXPECT_FALSE(path.strokeToFill({.width = 1.0}, 1e-4).empty());
 }
 
 // =============================================================================
@@ -659,6 +661,97 @@ TEST(Path, PathLengthCubic) {
   EXPECT_NEAR(path.pathLength(), 10.0, 1e-3);
 }
 
+TEST(Path, RecursiveGeometryQueriesFailClosedAtAggregateWorkLimit) {
+  PathBuilder builder;
+  constexpr std::size_t kCurveCount = 512;
+  for (std::size_t i = 0; i < kCurveCount; ++i) {
+    builder.moveTo({1000.0, 0.0})
+        .curveTo({1000.0, 552.2847498}, {552.2847498, 1000.0}, {0.0, 1000.0});
+  }
+  const Path path = builder.build();
+
+  const Path::MeasuredPath measured = path.measure();
+  EXPECT_FALSE(measured.valid());
+  EXPECT_EQ(measured.measurementWorkUnits(), Path::kMaximumGeometryQueryWork);
+  EXPECT_EQ(measured.segmentCount(), 0);
+  EXPECT_TRUE(std::isinf(measured.pathLength()));
+  EXPECT_FALSE(measured.pointAtArcLength(0.0).valid);
+  EXPECT_TRUE(std::isinf(path.pathLength()));
+  EXPECT_FALSE(path.isInside({2000.0, 2000.0}));
+  EXPECT_FALSE(path.isOnPath({2000.0, 2000.0}, 0.001));
+}
+
+TEST(Path, RecursiveSubdivisionDepthLimitsBoundWork) {
+  const Path path =
+      PathBuilder().moveTo({0.0, 0.0}).curveTo({1e100, 1e100}, {-1e100, 1e100}, {0.0, 0.0}).build();
+
+  const Path::MeasuredPath measured = path.measure();
+  EXPECT_FALSE(measured.valid());
+  EXPECT_EQ(
+      measured.measurementWorkUnits(),
+      path.verbCount() + static_cast<std::size_t>(Path::kMaximumArcLengthSubdivisionDepth + 1));
+  EXPECT_TRUE(std::isinf(path.pathLength()));
+
+  const Vector2d midpoint(0.0, 7.5e99);
+  EXPECT_FALSE(path.isOnPath(midpoint, 0.001));
+  EXPECT_FALSE(path.isInside(midpoint));
+  const Path flattened = path.flatten(0.001);
+  EXPECT_FALSE(flattened.empty());
+  EXPECT_LE(flattened.verbCount(),
+            1u + (1u << static_cast<unsigned int>(Path::kMaximumFlattenSubdivisionDepth)));
+  EXPECT_FALSE(path.strokeToFill({.width = 1.0}, 0.001).empty());
+}
+
+TEST(Path, MeasuredPathRetainedBytesUseCheckedCapacityModel) {
+  const Path empty;
+  const auto emptyBase = empty.measurementBaseRetainedBytes();
+  const auto emptyRetained = empty.measure().retainedBytes();
+  ASSERT_TRUE(emptyBase.has_value());
+  ASSERT_TRUE(emptyRetained.has_value());
+  EXPECT_EQ(*emptyBase, *emptyRetained);
+
+  const Path oneCommand = PathBuilder().moveTo({0, 0}).build();
+  const auto oneCommandBase = oneCommand.measurementBaseRetainedBytes();
+  ASSERT_TRUE(oneCommandBase.has_value());
+  ASSERT_GT(*oneCommandBase, *emptyBase);
+  const std::size_t bytesPerCommand = *oneCommandBase - *emptyBase;
+  const std::size_t maximumCommands =
+      (Path::kMaximumMeasuredPathRetainedBytes - *emptyBase) / bytesPerCommand;
+
+  PathBuilder boundaryBuilder;
+  for (std::size_t i = 0; i < maximumCommands; ++i) {
+    boundaryBuilder.moveTo({static_cast<double>(i), 0.0});
+  }
+  const Path boundary = boundaryBuilder.build();
+  ASSERT_TRUE(boundary.measurementBaseRetainedBytes().has_value());
+  EXPECT_EQ(*boundary.measurementBaseRetainedBytes(),
+            *emptyBase + maximumCommands * bytesPerCommand);
+
+  PathBuilder overBoundaryBuilder;
+  for (std::size_t i = 0; i <= maximumCommands; ++i) {
+    overBoundaryBuilder.moveTo({static_cast<double>(i), 0.0});
+  }
+  const Path overBoundary = overBoundaryBuilder.build();
+  EXPECT_FALSE(overBoundary.measurementBaseRetainedBytes().has_value());
+  const Path::MeasuredPath rejected = overBoundary.measure();
+  EXPECT_FALSE(rejected.valid());
+  ASSERT_TRUE(rejected.retainedBytes().has_value());
+  EXPECT_EQ(*rejected.retainedBytes(), *emptyRetained);
+}
+
+TEST(Path, MeasuredPathRetainedBytesIncludeAdaptiveSampleCapacity) {
+  const Path path = PathBuilder().moveTo({0, 0}).curveTo({0, 0}, {0, 0}, {10, 0}).build();
+  const auto base = path.measurementBaseRetainedBytes();
+  const Path::MeasuredPath measured = path.measure();
+  const auto retained = measured.retainedBytes();
+
+  ASSERT_TRUE(base.has_value());
+  ASSERT_TRUE(measured.valid());
+  ASSERT_TRUE(retained.has_value());
+  EXPECT_GT(*retained, *base);
+  EXPECT_LE(*retained, Path::kMaximumMeasuredPathRetainedBytes);
+}
+
 // =============================================================================
 // Path::pointAtArcLength
 // =============================================================================
@@ -667,6 +760,14 @@ TEST(Path, PointAtArcLengthEmpty) {
   Path path;
   Path::PointOnPath result = path.pointAtArcLength(1.0);
   EXPECT_FALSE(result.valid);
+}
+
+TEST(Path, PointAtArcLengthMoveOnlyReturnsFinalMoveEndpoint) {
+  const Path path = PathBuilder().moveTo({3, 4}).moveTo({7, 8}).build();
+
+  const Path::PointOnPath result = path.pointAtArcLength(0.0);
+  EXPECT_FALSE(result.valid);
+  ExpectNear(result.point, Vector2d(7, 8));
 }
 
 TEST(Path, PointAtArcLengthNegative) {
@@ -722,6 +823,18 @@ TEST(Path, PointAtArcLengthOnCubic) {
   Path::PointOnPath result = path.pointAtArcLength(5.0);
   EXPECT_TRUE(result.valid);
   ExpectNear(result.point, Vector2d(5, 0), 1e-3);
+}
+
+TEST(Path, PointAtArcLengthOnCollinearCubicWithNonlinearParameterSpeed) {
+  const Path slowStart = PathBuilder().moveTo({0, 0}).curveTo({0, 0}, {0, 0}, {10, 0}).build();
+  const Path slowEnd = PathBuilder().moveTo({0, 0}).curveTo({10, 0}, {10, 0}, {10, 0}).build();
+
+  const Path::MeasuredPath slowStartMeasurement = slowStart.measure();
+  const Path::MeasuredPath slowEndMeasurement = slowEnd.measure();
+  ASSERT_TRUE(slowStartMeasurement.valid());
+  ASSERT_TRUE(slowEndMeasurement.valid());
+  ExpectNear(slowStartMeasurement.pointAtArcLength(5.0).point, Vector2d(5, 0), 1e-3);
+  ExpectNear(slowEndMeasurement.pointAtArcLength(5.0).point, Vector2d(5, 0), 1e-3);
 }
 
 TEST(Path, PointAtArcLengthOnClosePath) {
@@ -2489,6 +2602,16 @@ TEST(PathBuilder, ArcToNegativeSmallRadiiAreAbsScaled) {
   ExpectNear(path.points().back(), Vector2d(20, 0), 1e-6);
 }
 
+TEST(PathBuilder, ArcToExtremeFiniteGeometryFallsBackToLine) {
+  const Path path =
+      PathBuilder().moveTo({0, 0}).arcTo({1e308, 1e308}, 0.0, false, false, {1e308, 1e308}).build();
+
+  ASSERT_EQ(path.verbCount(), 2u);
+  EXPECT_THAT(path.commands(), testing::ElementsAre(PathCommandVerbIs(Path::Verb::MoveTo),
+                                                    PathCommandVerbIs(Path::Verb::LineTo)));
+  EXPECT_EQ(path.points().back(), Vector2d(1e308, 1e308));
+}
+
 // =============================================================================
 // Path equality
 // =============================================================================
@@ -2945,6 +3068,101 @@ TEST(Path, StrokeToFillDashCountIsCapped) {
   EXPECT_EQ(countSubpaths(filled), 65536u);
   // 65536 on/off pairs of 0.001 each cover exactly [0, 131.072].
   EXPECT_NEAR(filled.bounds().bottomRight.x, 131.072, 0.01);
+}
+
+TEST(Path, StrokeToFillSubnormalDashProgressIsIterationBounded) {
+  const Path path = PathBuilder().moveTo({0, 0}).lineTo({1, 0}).build();
+  StrokeStyle style;
+  style.width = 1.0;
+  style.dashArray = {0.0, std::numeric_limits<double>::denorm_min()};
+
+  EXPECT_TRUE(path.strokeToFill(style, kFlattenTolerance).empty());
+}
+
+TEST(Path, StrokeToFillDashWorkIsBoundedAcrossSubpaths) {
+  PathBuilder builder;
+  for (std::size_t i = 0; i < 3; ++i) {
+    const double x = static_cast<double>(i) * 2.0;
+    builder.moveTo({x, 0.0}).lineTo({x + 0.5, 0.0});
+  }
+
+  StrokeStyle style;
+  style.width = 1.0;
+  for (std::size_t i = 0; i < 127; ++i) {
+    style.dashArray.insert(style.dashArray.end(), {0.0, 1.0e-8});
+  }
+  style.dashArray.insert(style.dashArray.end(), {0.001, 0.0});
+
+  EXPECT_TRUE(builder.build().strokeToFill(style, kFlattenTolerance).empty());
+}
+
+TEST(Path, StrokeToFillRejectsDashStepRoundedToCurrentCursor) {
+  const Path path = PathBuilder().moveTo({0, 0}).lineTo({2.0e16, 0}).build();
+  StrokeStyle style;
+  style.width = 1.0;
+  style.dashArray = {1.0e16, 1.0};
+
+  EXPECT_TRUE(path.strokeToFill(style, kFlattenTolerance).empty());
+}
+
+TEST(Path, StrokeToFillIndexesLargePolylineBeforeExtractingManyDashes) {
+  constexpr std::size_t kSegments = 32767;
+  PathBuilder builder;
+  builder.moveTo({0, 0});
+  for (std::size_t i = 1; i <= kSegments; ++i) {
+    builder.lineTo({static_cast<double>(i), 0.0});
+  }
+
+  StrokeStyle style;
+  style.width = 1.0;
+  style.dashArray = {2.0, 2.0};
+
+  const Path result = builder.build().strokeToFill(style, kFlattenTolerance);
+  EXPECT_FALSE(result.empty());
+  EXPECT_GT(result.verbCount(), kSegments);
+}
+
+TEST(Path, StrokeToFillHugeRoundStrokeHasBoundedSubdivision) {
+  const Path line = PathBuilder().moveTo({0, 0}).lineTo({1, 0}).build();
+  StrokeStyle style;
+  style.width = 1e300;
+  style.cap = LineCap::Round;
+  style.join = LineJoin::Round;
+
+  const Path filled = line.strokeToFill(style, kFlattenTolerance);
+
+  EXPECT_FALSE(filled.empty());
+  EXPECT_LE(filled.verbCount(), 2u * 4096u + 16u);
+}
+
+TEST(Path, StrokeToFillAggregateRoundDashGeometryIsBounded) {
+  const Path line = PathBuilder().moveTo({0, 0}).lineTo({1, 0}).build();
+  StrokeStyle style;
+  style.width = 1e300;
+  style.cap = LineCap::Round;
+  style.join = LineJoin::Round;
+  style.dashArray = {0.0, 0.0001};
+
+  EXPECT_TRUE(line.strokeToFill(style, kFlattenTolerance).empty());
+}
+
+TEST(Path, StrokeToFillCurveFlatteningSharesAggregateGeometryBudget) {
+  PathBuilder builder;
+  builder.moveTo({0.0, 0.0});
+  for (int i = 0; i < 2048; ++i) {
+    const double x = static_cast<double>(i);
+    builder.curveTo({x + 0.25, 1.0e12}, {x + 0.75, -1.0e12}, {x + 1.0, 0.0});
+  }
+
+  const StrokeStyle style{.width = 10.0, .cap = LineCap::Round, .join = LineJoin::Round};
+  EXPECT_TRUE(builder.build().strokeToFill(style, 0.0).empty());
+}
+
+TEST(Path, StrokeToFillNonFiniteWidthReturnsEmpty) {
+  const Path line = PathBuilder().moveTo({0, 0}).lineTo({1, 0}).build();
+  StrokeStyle style;
+  style.width = std::numeric_limits<double>::infinity();
+  EXPECT_TRUE(line.strokeToFill(style, kFlattenTolerance).empty());
 }
 
 TEST(PathBuilder, ArcToDegenerateTinyGeometryFallsBackToLine) {

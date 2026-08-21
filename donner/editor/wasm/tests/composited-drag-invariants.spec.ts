@@ -135,6 +135,34 @@ async function openDonnerSplash(page: Page): Promise<{ editorBounds: Rect; docum
   if (editorBounds === null) {
     throw new Error("editor canvas is missing");
   }
+  // The carousel's first thumbnail initializes and exercises the worker-owned offscreen WebGPU
+  // renderer. Replacing it while that first-use operation is active forces the foreground render
+  // through a cancellation handoff that is unrelated to the drag invariant and can monopolize the
+  // first Firefox worker frame on a loaded runner. Let that one bounded initialization finish; the
+  // document-worker result below remains the actual proof that the selected sample is live.
+  await expect
+    .poll(
+      () =>
+        page.evaluate(() => {
+          const stats = (window as unknown as {
+            __donnerSampleThumbnailStats?: {
+              completed?: number;
+              ready?: number;
+              active?: boolean;
+              pending?: boolean;
+            };
+          }).__donnerSampleThumbnailStats;
+          if (!stats) return false;
+          const completed = stats.completed ?? 0;
+          return completed > 0 && (stats.ready ?? 0) > 0 && !stats.active && !stats.pending;
+        }),
+      {
+        message: "the first offscreen thumbnail must settle before the drag sample replaces it",
+        timeout: scaledMs(20_000),
+        intervals: [16, 25, 50, 100],
+      },
+    )
+    .toBe(true);
   const beforeSampleResults = await page.evaluate(
     () =>
       (window as unknown as { __donnerWorkerStats?: { completedResults?: number } })

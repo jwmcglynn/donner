@@ -25,6 +25,15 @@ TEST(DataUrlParser, RejectsInputLargerThanLimit) {
               VariantWith<DataUrlParserError>(Eq(DataUrlParserError::InputTooLarge)));
 }
 
+TEST(DataUrlParser, RejectsExternalUrlBeforeCopyingOversizedPayload) {
+  DataUrlParser::Options options;
+  options.maximumExternalUrlSize = 3;
+  EXPECT_THAT(DataUrlParser::Parse("asset.png", options),
+              VariantWith<DataUrlParserError>(Eq(DataUrlParserError::InputTooLarge)));
+  EXPECT_TRUE(std::holds_alternative<DataUrlParser::Result>(
+      DataUrlParser::Parse("data:,asset.png", options)));
+}
+
 TEST(DataUrlParser, ExternalUrl) {
   auto result = DataUrlParser::Parse("http://example.com/foo.png");
   ASSERT_TRUE(std::holds_alternative<DataUrlParser::Result>(result));

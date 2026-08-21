@@ -119,4 +119,39 @@ TEST(ParseWarningSink, MultipleWarnings) {
               ElementsAre(WarningAt("first", 0), WarningAt("second", 5), WarningAt("third", 10)));
 }
 
+TEST(ParseWarningSink, BoundsWarningCount) {
+  ParseWarningSink sink;
+  for (std::size_t i = 0; i <= ParseWarningSink::kMaximumWarnings; ++i) {
+    sink.add(ParseDiagnostic::Warning("x", FileOffset::Offset(i)));
+  }
+
+  EXPECT_EQ(sink.warnings().size(), ParseWarningSink::kMaximumWarnings);
+  EXPECT_EQ(sink.warningBytes(), ParseWarningSink::kMaximumWarnings);
+  EXPECT_TRUE(sink.resourceLimitExceeded());
+}
+
+TEST(ParseWarningSink, BoundsWarningBytes) {
+  ParseWarningSink sink;
+  sink.add(ParseDiagnostic::Warning(
+      RcString(std::string(ParseWarningSink::kMaximumWarningBytes + 1, 'x')),
+      FileOffset::Offset(0)));
+
+  EXPECT_TRUE(sink.warnings().empty());
+  EXPECT_EQ(sink.warningBytes(), 0u);
+  EXPECT_TRUE(sink.resourceLimitExceeded());
+}
+
+TEST(ParseWarningSink, MergeRespectsDestinationBudget) {
+  ParseWarningSink destination;
+  ParseWarningSink source;
+  for (std::size_t i = 0; i <= ParseWarningSink::kMaximumWarnings; ++i) {
+    source.add(ParseDiagnostic::Warning("x", FileOffset::Offset(i)));
+  }
+
+  destination.merge(std::move(source));
+  EXPECT_LE(destination.warnings().size(), ParseWarningSink::kMaximumWarnings);
+  EXPECT_LE(destination.warningBytes(), ParseWarningSink::kMaximumWarningBytes);
+  EXPECT_TRUE(destination.resourceLimitExceeded());
+}
+
 }  // namespace donner

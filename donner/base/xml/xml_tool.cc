@@ -1,21 +1,24 @@
-#include <fstream>
 #include <iostream>
-#include <vector>
+#include <sstream>
 
+#include "donner/base/FileUtils.h"
+#include "donner/base/TerminalEscape.h"
 #include "donner/base/xml/XMLNode.h"
 #include "donner/base/xml/XMLParser.h"
 
 namespace donner::xml {
 
-void DumpTree(const XMLNode& element, int depth) {
+void DumpTree(const XMLNode& element, std::ostream& output, int depth) {
   for (int i = 0; i < depth; ++i) {
-    std::cout << "  ";
+    output << "  ";
   }
 
-  std::cout << element.type() << ": " << element.tagName();
-  std::cout << "\n";
-  for (auto elm = element.firstChild(); elm; elm = elm->nextSibling()) {
-    DumpTree(elm.value(), depth + 1);
+  std::ostringstream tagName;
+  tagName << element.tagName();
+  output << element.type() << ": " << EscapeTerminalText(tagName.str()) << '\n';
+  for (std::optional<XMLNode> child = element.firstChild(); child.has_value();
+       child = child->nextSibling()) {
+    DumpTree(*child, output, depth + 1);
   }
 }
 
@@ -28,31 +31,27 @@ int main(int argc, char* argv[]) {
     return 1;
   }
 
-  std::ifstream file(argv[1]);
-  if (!file) {
-    std::cerr << "Could not open file " << argv[1] << "\n";
+  const size_t maximumInputSize = donner::xml::XMLParser::Options().maximumInputSize;
+  auto fileResult = donner::ReadFileBounded(argv[1], maximumInputSize);
+  const auto* fileData = std::get_if<std::string>(&fileResult);
+  if (fileData == nullptr) {
+    std::cerr << donner::FileReadErrorMessage(std::get<donner::FileReadError>(fileResult)) << ": "
+              << donner::EscapeTerminalText(argv[1]) << "\n";
     return 2;
   }
 
-  file.seekg(0, std::ios::end);
-  const std::streamsize fileLength = file.tellg();
-  file.seekg(0);
-
-  std::vector<char> fileData;
-  fileData.resize(fileLength);
-  file.read(fileData.data(), fileLength);
-
-  auto maybeResult =
-      donner::xml::XMLParser::Parse(std::string_view(fileData.data(), fileData.size()));
+  auto maybeResult = donner::xml::XMLParser::Parse(*fileData);
   if (maybeResult.hasError()) {
     const auto& e = maybeResult.error();
-    std::cerr << "Parse Error " << e << "\n";
+    std::ostringstream diagnostic;
+    diagnostic << e;
+    std::cerr << "Parse Error " << donner::EscapeTerminalText(diagnostic.str()) << "\n";
     return 3;
   }
 
   std::cout << "Parsed successfully.\n";
 
   std::cout << "Tree:\n";
-  DumpTree(maybeResult.result().root(), 0);
+  donner::xml::DumpTree(maybeResult.result().root(), std::cout, 0);
   return 0;
 }

@@ -44,13 +44,15 @@ enum class StringComparison : uint8_t {
  * `std::char_traits`.
  */
 struct CaseInsensitiveCharTraits : public std::char_traits<char> {
+  static int lower(char ch) { return std::tolower(static_cast<unsigned char>(ch)); }
+
   /**
    * Compare two characters for equality.
    *
    * @param lhs Left-hand side character.
    * @param rhs Right-hand side character.
    */
-  static bool eq(char lhs, char rhs) { return std::tolower(lhs) == std::tolower(rhs); }
+  static bool eq(char lhs, char rhs) { return lower(lhs) == lower(rhs); }
 
   /**
    * Compare two characters for inequality.
@@ -58,7 +60,7 @@ struct CaseInsensitiveCharTraits : public std::char_traits<char> {
    * @param lhs Left-hand side character.
    * @param rhs Right-hand side character.
    */
-  static bool ne(char lhs, char rhs) { return std::tolower(lhs) != std::tolower(rhs); }
+  static bool ne(char lhs, char rhs) { return lower(lhs) != lower(rhs); }
 
   /**
    * Compare two characters for less-than.
@@ -66,7 +68,7 @@ struct CaseInsensitiveCharTraits : public std::char_traits<char> {
    * @param lhs Left-hand side character.
    * @param rhs Right-hand side character.
    */
-  static bool lt(char lhs, char rhs) { return std::tolower(lhs) < std::tolower(rhs); }
+  static bool lt(char lhs, char rhs) { return lower(lhs) < lower(rhs); }
 
   /**
    * Compare two strings for equality, returning -1 if \p lhs is less than \p rhs, 0 if they are
@@ -78,8 +80,8 @@ struct CaseInsensitiveCharTraits : public std::char_traits<char> {
    */
   static int compare(const char* lhs, const char* rhs, size_t sizeToCompare) {
     for (size_t i = 0; i < sizeToCompare; ++i) {
-      const char lhsCh = static_cast<char>(std::tolower(lhs[i]));
-      const char rhsCh = static_cast<char>(std::tolower(rhs[i]));
+      const char lhsCh = static_cast<char>(lower(lhs[i]));
+      const char rhsCh = static_cast<char>(lower(rhs[i]));
       if (lhsCh < rhsCh) {
         return -1;
       } else if (lhsCh > rhsCh) {
@@ -98,9 +100,9 @@ struct CaseInsensitiveCharTraits : public std::char_traits<char> {
    * @param ch The character to search for.
    */
   static const char* find(const char* str, size_t size, char ch) {
-    const char lowerCh = static_cast<char>(std::tolower(ch));
+    const int lowerCh = lower(ch);
     for (size_t i = 0; i < size; ++i) {
-      if (std::tolower(str[i]) == lowerCh) {
+      if (lower(str[i]) == lowerCh) {
         return &str[i];
       }
     }
@@ -141,7 +143,8 @@ public:
     const char* lhsData = lhs.data();
     const char* rhsData = lowercaseRhs.data();
     for (size_t i = 0; i < lowercaseRhs.size(); ++i) {
-      if (std::tolower(lhsData[i]) != rhsData[i]) {
+      if (std::tolower(static_cast<unsigned char>(lhsData[i])) !=
+          static_cast<unsigned char>(rhsData[i])) {
         return false;
       }
     }

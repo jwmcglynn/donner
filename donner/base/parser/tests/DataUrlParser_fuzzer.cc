@@ -1,4 +1,5 @@
 #include <cstdlib>
+#include <string>
 
 #include "donner/base/parser/DataUrlParser.h"
 
@@ -10,8 +11,18 @@ namespace donner::parser {
 /// passthrough, both of which are reachable from untrusted SVG/CSS `url(...)` and `xlink:href`
 /// attribute values.
 extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
+  constexpr std::string_view kExternalUrlBudgetSeed = "EXTERNAL_URL_BUDGET\n";
   // NOLINTNEXTLINE: Allow reinterpret_cast
   const std::string_view buffer(reinterpret_cast<const char*>(data), size);
+
+  if (buffer == kExternalUrlBudgetSeed) {
+    const std::string oversized(DataUrlParser::kDefaultMaximumExternalUrlSize + 1, 'a');
+    const auto oversizedResult = DataUrlParser::Parse(oversized);
+    if (!std::holds_alternative<DataUrlParserError>(oversizedResult) ||
+        std::get<DataUrlParserError>(oversizedResult) != DataUrlParserError::InputTooLarge) {
+      std::abort();
+    }
+  }
 
   auto result = DataUrlParser::Parse(buffer);
   if (std::holds_alternative<DataUrlParser::Result>(result)) {
