@@ -13,48 +13,63 @@ public:
   explicit TraversalElement(EntityHandle handle) : SVGElement(handle) {}
 };
 
-void PushTraversalChildrenReverse(EntityHandle element, SmallVector<Entity, 16>& stack) {
+bool PushTraversalChildrenReverse(EntityHandle element, SmallVector<Entity, 16>& stack,
+                                  css::SelectorTraversalBudget& traversalBudget) {
   if (element.all_of<components::ShadowTreeComponent>()) {
-    return;
+    return true;
   }
 
   const auto& tree = element.get<donner::components::TreeComponent>();
   Registry& registry = *element.registry();
   for (Entity child = tree.lastChild(); child != entt::null;
        child = registry.get<donner::components::TreeComponent>(child).previousSibling()) {
+    if (!traversalBudget.consume()) {
+      return false;
+    }
     stack.push_back(child);
   }
+  return true;
 }
 
 }  // namespace
 
 std::optional<SVGElement> QuerySelectorSearch(const css::Selector& selector, EntityHandle root) {
+  css::SelectorTraversalBudget traversalBudget;
+  return QuerySelectorSearch(selector, root, traversalBudget);
+}
+
+std::optional<SVGElement> QuerySelectorSearch(const css::Selector& selector, EntityHandle root,
+                                              css::SelectorTraversalBudget& traversalBudget) {
   css::SelectorMatchOptions<SVGElement> options;
   TraversalElement scope(root);
   options.scopeElement = &scope;
+  options.traversalBudget = &traversalBudget;
 
   Registry& registry = *root.registry();
   SmallVector<Entity, 16> stack;
-  PushTraversalChildrenReverse(root, stack);
+  if (!PushTraversalChildrenReverse(root, stack, traversalBudget)) {
+    return std::nullopt;
+  }
   while (!stack.empty()) {
     EntityHandle childHandle(registry, stack[stack.size() - 1]);
     stack.pop_back();
 
     TraversalElement childElement(childHandle);
     const SVGElement& childElementBase = childElement;
-    if (selector.matches(childElementBase, options).matched) {
+    const css::SelectorMatchResult result = selector.matches(childElementBase, options);
+    if (traversalBudget.rejected()) {
+      return std::nullopt;
+    }
+    if (result.matched) {
       return childElement;
     }
 
-    PushTraversalChildrenReverse(childHandle, stack);
+    if (!PushTraversalChildrenReverse(childHandle, stack, traversalBudget)) {
+      return std::nullopt;
+    }
   }
 
   return std::nullopt;
-}
-
-std::optional<SVGElement> QuerySelectorSearch(const css::Selector& selector, EntityHandle root,
-                                              css::SelectorTraversalBudget&) {
-  return QuerySelectorSearch(selector, root);
 }
 
 }  // namespace donner::svg::details

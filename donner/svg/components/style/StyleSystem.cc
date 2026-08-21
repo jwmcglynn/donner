@@ -7,6 +7,7 @@
 #include "donner/base/xml/components/TreeComponent.h"
 #include "donner/css/CSS.h"
 #include "donner/css/Declaration.h"
+#include "donner/css/parser/DeclarationListParser.h"
 #include "donner/svg/components/ClassComponent.h"
 #include "donner/svg/components/DirtyFlagsComponent.h"
 #include "donner/svg/components/ElementTypeComponent.h"
@@ -145,11 +146,19 @@ struct MatchedSelectorEntry {
 };
 
 std::optional<MatchedSelectorEntry> MatchSelectorRule(const css::SelectorRule& rule,
-                                                      const ShadowedElementAdapter& adapter) {
+                                                      const ShadowedElementAdapter& adapter,
+                                                      css::SelectorTraversalBudget& budget) {
+  css::SelectorMatchOptions<ShadowedElementAdapter> options;
+  options.traversalBudget = &budget;
   for (std::size_t i = 0; i < rule.selector.entries.size(); ++i) {
-    if (css::SelectorMatchResult match = rule.selector.entries[i].matches(
-            adapter, css::SelectorMatchOptions<ShadowedElementAdapter>());
-        match) {
+    if (budget.rejected()) {
+      return std::nullopt;
+    }
+    const css::SelectorMatchResult match = rule.selector.entries[i].matches(adapter, options);
+    if (budget.rejected()) {
+      return std::nullopt;
+    }
+    if (match) {
       return MatchedSelectorEntry{
           .selectorEntryIndex = i,
           .specificity = match.specificity,
@@ -176,15 +185,24 @@ bool LocalRangeContainsOffset(const SourceRange& range, std::size_t localOffset)
 
 const ComputedStyleComponent& StyleSystem::computeStyle(EntityHandle handle,
                                                         ParseWarningSink& warningSink) {
+  css::SelectorTraversalBudget selectorTraversalBudget;
+  return computeStyleWithBudget(handle, warningSink, selectorTraversalBudget);
+}
+
+const ComputedStyleComponent& StyleSystem::computeStyleWithBudget(
+    EntityHandle handle, ParseWarningSink& warningSink,
+    css::SelectorTraversalBudget& selectorTraversalBudget) {
   auto& computedStyle = handle.get_or_emplace<ComputedStyleComponent>();
-  computePropertiesInto(handle, computedStyle, warningSink);
+  computePropertiesInto(handle, computedStyle, warningSink, selectorTraversalBudget);
   return computedStyle;
 }
 
 void StyleSystem::updateStyle(EntityHandle handle, std::string_view style) {
-  // Update the PropertyRegistry with the new declarations.
   auto& styleComponent = handle.get_or_emplace<StyleComponent>();
-  styleComponent.updateStyle(style);
+  StyleComponent candidate = styleComponent;
+  if (!candidate.updateStyle(style)) {
+    return;
+  }
 
   // Merge the new style string with the existing style attribute.
   auto& attributes = handle.get_or_emplace<donner::components::AttributesComponent>();
@@ -193,20 +211,28 @@ void StyleSystem::updateStyle(EntityHandle handle, std::string_view style) {
   const std::string_view existingStyle =
       existingStyleValue.has_value() ? std::string_view(*existingStyleValue) : std::string_view();
 
+  css::parser::DeclarationListParser::SecurityStats existingStats;
+  css::parser::DeclarationListParser::SecurityStats updateStats;
   const std::vector<css::Declaration> existingDeclarations =
-      css::CSS::ParseStyleAttribute(existingStyle);
-  const std::vector<css::Declaration> updateDeclarations = css::CSS::ParseStyleAttribute(style);
+      css::parser::DeclarationListParser::ParseOnlyDeclarations(existingStyle, &existingStats);
+  const std::vector<css::Declaration> updateDeclarations =
+      css::parser::DeclarationListParser::ParseOnlyDeclarations(style, &updateStats);
+  if (existingStats.rejected || updateStats.rejected) {
+    return;
+  }
   const std::string mergedStyle =
       css::mergeStyleDeclarations(existingDeclarations, updateDeclarations);
 
   attributes.setAttribute(*handle.registry(), xml::XMLQualifiedName("style"),
                           RcString(mergedStyle));
+  styleComponent = std::move(candidate);
 
   invalidateComputed(handle);
 }
 
 void StyleSystem::computePropertiesInto(EntityHandle handle, ComputedStyleComponent& computedStyle,
-                                        ParseWarningSink& warningSink) {
+                                        ParseWarningSink& warningSink,
+                                        css::SelectorTraversalBudget& selectorTraversalBudget) {
   if (computedStyle.properties) {
     return;  // Already computed.
   }
@@ -229,8 +255,12 @@ void StyleSystem::computePropertiesInto(EntityHandle handle, ComputedStyleCompon
     auto [stylesheet] = view.get(stylesheetEntity);
 
     for (const css::SelectorRule& rule : stylesheet.stylesheet.rules()) {
-      if (std::optional<MatchedSelectorEntry> match = MatchSelectorRule(
-              rule, ShadowedElementAdapter(registry, handle.entity(), dataEntity));
+      if (selectorTraversalBudget.rejected()) {
+        break;
+      }
+      if (std::optional<MatchedSelectorEntry> match =
+              MatchSelectorRule(rule, ShadowedElementAdapter(registry, handle.entity(), dataEntity),
+                                selectorTraversalBudget);
           match.has_value()) {
         css::Specificity specificity = match->specificity;
         if (stylesheet.isUserAgentStylesheet) {
@@ -250,7 +280,8 @@ void StyleSystem::computePropertiesInto(EntityHandle handle, ComputedStyleCompon
   const Entity parent = handle.get<donner::components::TreeComponent>().parent();
   if (parent != entt::null) {
     auto& parentStyleComponent = registry.get_or_emplace<ComputedStyleComponent>(parent);
-    computePropertiesInto(EntityHandle(registry, parent), parentStyleComponent, warningSink);
+    computePropertiesInto(EntityHandle(registry, parent), parentStyleComponent, warningSink,
+                          selectorTraversalBudget);
 
     // <pattern> elements can't inherit 'fill' or 'stroke' or it creates recursion in the shadow
     // tree.
@@ -306,14 +337,19 @@ std::vector<MatchedStyleRule> StyleSystem::collectMatchedStyleRules(EntityHandle
   const Entity dataEntity = shadowComponent ? shadowComponent->lightEntity : handle.entity();
 
   std::vector<MatchedStyleRule> result;
+  css::SelectorTraversalBudget selectorTraversalBudget;
   for (auto view = registry.view<StylesheetComponent>(); auto stylesheetEntity : view) {
     const auto& stylesheet = view.get<StylesheetComponent>(stylesheetEntity);
     const std::span<const css::SelectorRule> rules = stylesheet.stylesheet.rules();
 
     for (std::size_t ruleIndex = 0; ruleIndex < rules.size(); ++ruleIndex) {
+      if (selectorTraversalBudget.rejected()) {
+        break;
+      }
       const css::SelectorRule& rule = rules[ruleIndex];
       std::optional<MatchedSelectorEntry> match =
-          MatchSelectorRule(rule, ShadowedElementAdapter(registry, handle.entity(), dataEntity));
+          MatchSelectorRule(rule, ShadowedElementAdapter(registry, handle.entity(), dataEntity),
+                            selectorTraversalBudget);
       if (!match.has_value()) {
         continue;
       }
@@ -411,6 +447,7 @@ std::optional<StyleRuleAtSourceOffset> StyleSystem::findStyleRuleAtSourceOffset(
 }
 
 void StyleSystem::computeAllStyles(Registry& registry, ParseWarningSink& warningSink) {
+  css::SelectorTraversalBudget selectorTraversalBudget;
   const auto* renderState = registry.ctx().find<RenderTreeState>();
   const bool hasBeenBuilt = renderState != nullptr && renderState->hasBeenBuilt;
   const bool needsFullStyleRecompute =
@@ -438,7 +475,7 @@ void StyleSystem::computeAllStyles(Registry& registry, ParseWarningSink& warning
       }
 
       std::ignore = registry.get_or_emplace<ComputedStyleComponent>(entity);
-      computeStyle(EntityHandle(registry, entity), warningSink);
+      computeStyleWithBudget(EntityHandle(registry, entity), warningSink, selectorTraversalBudget);
     }
 
     ResourceManagerContext& resourceManager = registry.ctx().get<ResourceManagerContext>();
@@ -464,7 +501,7 @@ void StyleSystem::computeAllStyles(Registry& registry, ParseWarningSink& warning
 
   // Compute the styles for all elements.
   for (auto entity : view) {
-    computeStyle(EntityHandle(registry, entity), warningSink);
+    computeStyleWithBudget(EntityHandle(registry, entity), warningSink, selectorTraversalBudget);
   }
 
   ResourceManagerContext& resourceManager = registry.ctx().get<ResourceManagerContext>();
@@ -477,8 +514,9 @@ void StyleSystem::computeAllStyles(Registry& registry, ParseWarningSink& warning
 
 void StyleSystem::computeStylesFor(Registry& registry, std::span<const Entity> entities,
                                    ParseWarningSink& warningSink) {
+  css::SelectorTraversalBudget selectorTraversalBudget;
   for (Entity entity : entities) {
-    computeStyle(EntityHandle(registry, entity), warningSink);
+    computeStyleWithBudget(EntityHandle(registry, entity), warningSink, selectorTraversalBudget);
   }
 }
 

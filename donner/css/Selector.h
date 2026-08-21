@@ -86,7 +86,11 @@ struct Selector {
       boundedOptions.traversalBudget = &localBudget;
     }
     for (const auto& entry : entries) {
-      if (auto result = entry.matches(targetElement, boundedOptions)) {
+      const SelectorMatchResult result = entry.matches(targetElement, boundedOptions);
+      if (boundedOptions.traversalBudget->rejected()) {
+        return SelectorMatchResult::None();
+      }
+      if (result) {
         return result;
       }
     }
@@ -148,8 +152,14 @@ template <ElementLike T>
 std::optional<PseudoClassSelector::PseudoMatchResult> PseudoClassSelector::matchesSelectorFunction(
     const T& element, const SelectorMatchOptions<T>& options) const {
   if (ident.equalsLowercase("not")) {
-    return selector ? PseudoMatchResult(!selector->matches(element, options).matched)
-                    : PseudoMatchResult(false);
+    if (!selector) {
+      return PseudoMatchResult(false);
+    }
+    const SelectorMatchResult result = selector->matches(element, options);
+    if (options.traversalBudget != nullptr && options.traversalBudget->rejected()) {
+      return PseudoMatchResult(false);
+    }
+    return PseudoMatchResult(!result.matched);
   }
   if (ident.equalsLowercase("is") || ident.equalsLowercase("where")) {
     return selector ? PseudoMatchResult(selector->matches(element, options).matched)

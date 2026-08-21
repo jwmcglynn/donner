@@ -8,6 +8,7 @@
 #include "donner/base/FileOffset.h"
 #include "donner/base/ParseWarningSink.h"
 #include "donner/css/Specificity.h"
+#include "donner/css/selectors/SelectorMatchOptions.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
 
 namespace donner::svg::components {
@@ -139,8 +140,12 @@ public:
   void invalidateAll(EntityHandle handle);
 
 private:
+  const ComputedStyleComponent& computeStyleWithBudget(
+      EntityHandle handle, ParseWarningSink& warningSink,
+      css::SelectorTraversalBudget& selectorTraversalBudget);
   void computePropertiesInto(EntityHandle handle, ComputedStyleComponent& computedStyle,
-                             ParseWarningSink& warningSink);
+                             ParseWarningSink& warningSink,
+                             css::SelectorTraversalBudget& selectorTraversalBudget);
 };
 
 }  // namespace donner::svg::components

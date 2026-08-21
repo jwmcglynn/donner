@@ -30,9 +30,14 @@ struct StyleComponent {
    *
    * @param style The value of the `style` attribute.
    */
-  void setStyle(std::string_view style) {
-    properties.clearStyleAttributeProperties();
-    properties.parseStyle(style);
+  bool setStyle(std::string_view style) {
+    PropertyRegistry candidate = properties;
+    candidate.clearStyleAttributeProperties();
+    if (!candidate.parseStyle(style)) {
+      return false;
+    }
+    properties = std::move(candidate);
+    return true;
   }
 
   /**
@@ -42,7 +47,7 @@ struct StyleComponent {
    *
    * @param style The update style to apply, as a CSS style string (e.g. "fill:red;").
    */
-  void updateStyle(std::string_view style) { properties.parseStyle(style); }
+  bool updateStyle(std::string_view style) { return properties.parseStyle(style); }
 
   /**
    * Tries to set a common presentation attribute (fill, stroke, opacity, transform, etc.).
