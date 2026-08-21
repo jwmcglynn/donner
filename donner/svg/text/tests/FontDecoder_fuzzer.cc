@@ -287,11 +287,17 @@ void ExerciseLoadedFont(FontManager& fontManager, Registry& registry, FontHandle
   // shared-tail seed deliberately selects a high glyph index at the exact depth-32 boundary.
   (void)backend.glyphOutline(font, outlineGlyph, 1.0f);
 
-  constexpr std::string_view kText = "Az";
+  constexpr std::string_view kText = "Az\xF0\x9F\x98\x81";
   const TextBackend::ShapedRun shaped =
       backend.shapeRun(font, 16.0f, kText, 0, kText.size(), false, FontVariant::Normal, false);
+  constexpr size_t kMaximumDecodedGlyphs = 8;
+  size_t decodedGlyphs = 0;
   for (const TextBackend::ShapedGlyph& glyph : shaped.glyphs) {
+    if (decodedGlyphs++ == kMaximumDecodedGlyphs) {
+      break;
+    }
     (void)backend.glyphOutline(font, glyph.glyphIndex, 1.0f);
+    (void)backend.bitmapGlyph(font, glyph.glyphIndex, 1.0f);
   }
   (void)backend.crossSpanKern(font, 16.0f, font, 16.0f, 'A', 'z', false);
 }
@@ -322,6 +328,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
   // Single-byte corpus seeds select trusted synthetic fonts. The malformed CFF sentinel and every
   // arbitrary input remain untrusted document-equivalent bytes.
   constexpr std::string_view kMalformedFinalCffSeed = "MALFORMED_FINAL_CFF\n";
+  constexpr std::string_view kZeroLengthTableSeed = "ZERO_LENGTH_SFNT_TABLES\n";
   StructuredFont structured;
   std::span<const uint8_t> fontBytes(data, size);
   FontDataTrust trust = FontDataTrust::Untrusted;
@@ -329,7 +336,15 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
   const bool isMalformedFinalCffSeed =
       size == kMalformedFinalCffSeed.size() &&
       std::equal(kMalformedFinalCffSeed.begin(), kMalformedFinalCffSeed.end(), data);
-  if (isMalformedFinalCffSeed) {
+  const bool isZeroLengthTableSeed =
+      size == kZeroLengthTableSeed.size() &&
+      std::equal(kZeroLengthTableSeed.begin(), kZeroLengthTableSeed.end(), data);
+  if (isZeroLengthTableSeed) {
+    structured.bytes =
+        MakeSfnt({TableSpec{"cmap", {}}, TableSpec{"glyf", {}}, TableSpec{"head", {}},
+                  TableSpec{"hhea", {}}, TableSpec{"hmtx", {}}, TableSpec{"loca", {}}});
+    fontBytes = structured.bytes;
+  } else if (isMalformedFinalCffSeed) {
     structured = MakeMalformedFinalCff();
     fontBytes = structured.bytes;
   } else if (isStructuredSeed) {

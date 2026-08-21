@@ -90,7 +90,10 @@ donner_cc_library(
 donner_cc_library(
     name = "text_backend_full",
     srcs = ["TextBackendFull.cc"],
-    hdrs = ["TextBackendFull.h"],
+    hdrs = [
+        "BitmapGlyphUtils.h",
+        "TextBackendFull.h",
+    ],
     target_compatible_with = select({
         "//donner/svg/renderer:text_full_enabled": [],
         "//conditions:default": ["@platforms//:incompatible"],
@@ -124,6 +127,10 @@ donner_cc_fuzzer(
 filegroup(
     name = "font_decoder_fuzzer_corpus",
     srcs = [
+        # Single-glyph subset of NotoColorEmoji.ttf; see
+        # //third_party/resvg-test-suite/fonts/Noto-LICENSE-OFL.txt.
+        "tests/font_decoder_corpus/bitmap_emoji_subset.ttf",
+        "tests/font_decoder_corpus/zero_length_sfnt_tables",
         "//donner/base/fonts:testdata/valid-001.woff",
         "//donner/base/fonts:testdata/valid-001.woff2",
         "//third_party/public-sans:PublicSans-Medium.otf",
@@ -152,6 +159,22 @@ donner_cc_fuzzer(
         ],
         "//conditions:default": [":text_backend_simple"],
     }),
+)
+
+donner_cc_test(
+    name = "text_backend_full_bitmap_tests",
+    srcs = ["tests/TextBackendFullBitmap_tests.cc"],
+    data = ["tests/font_decoder_corpus/bitmap_emoji_subset.ttf"],
+    target_compatible_with = select({
+        "//donner/svg/renderer:text_full_enabled": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    deps = [
+        ":text_backend_full",
+        "//donner/base:base_test_utils",
+        "//donner/svg/resources:font_manager",
+        "@com_google_gtest//:gtest_main",
+    ],
 )
 
 donner_cc_test(
