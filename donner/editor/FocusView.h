@@ -20,6 +20,9 @@ inline constexpr std::size_t kMaximumFocusReferenceLinks = 1024;
 /// Maximum retained source-line ranges in each focus partition class.
 inline constexpr std::size_t kMaximumFocusLineRanges = 4096;
 
+/// Maximum source lines indexed by one focus computation.
+inline constexpr std::size_t kMaximumFocusLineStarts = 64 * 1024;
+
 /// Maximum aggregate node and rule visits during one focus computation.
 inline constexpr std::size_t kMaximumFocusTraversalWork = 64 * 1024;
 
@@ -86,6 +89,8 @@ struct ReferenceHighlightSummary {
   std::vector<svg::SVGElement> referencedElements;
   /// Elements that directly reference the active selection.
   std::vector<svg::SVGElement> referencingElements;
+  std::size_t traversalWork = 0;         ///< Aggregate nodes and selected entities visited.
+  bool resourceLimitExceeded = false;    ///< True when summary construction was truncated.
 
   /// Number of references represented by this summary.
   [[nodiscard]] std::size_t totalCount() const {

@@ -1431,5 +1431,56 @@ TEST(FocusViewTest, BoundsDeepReferencedSubtreeTraversal) {
   EXPECT_LE(partition.traversalWork, kMaximumFocusTraversalWork);
 }
 
+TEST(FocusViewTest, BoundsLineIndexBeforeRetainingNewlineOffsets) {
+  std::string source =
+      "<svg xmlns='http://www.w3.org/2000/svg'><style>#target{fill:red}</style>"
+      "<rect id='target'/>";
+  source.append(kMaximumFocusLineStarts, '\n');
+  source += "</svg>";
+
+  ParseWarningSink warnings = ParseWarningSink::Disabled();
+  auto parsed = svg::parser::SVGParser::ParseSVG(source, warnings);
+  ASSERT_FALSE(parsed.hasError());
+  svg::SVGDocument document = std::move(parsed.result());
+  const std::optional<svg::SVGElement> target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+
+  const FocusPartition elementFocus = ComputeFocusPartition(document, *target);
+  EXPECT_TRUE(elementFocus.resourceLimitExceeded);
+  EXPECT_LE(elementFocus.traversalWork, kMaximumFocusTraversalWork);
+
+  const std::optional<StyleFocus> styleFocus =
+      ComputeStyleFocusAtSourceOffset(document, source.find("#target"));
+  ASSERT_TRUE(styleFocus.has_value());
+  EXPECT_TRUE(styleFocus->partition.resourceLimitExceeded);
+  EXPECT_LE(styleFocus->partition.traversalWork, kMaximumFocusTraversalWork);
+}
+
+TEST(FocusViewTest, BoundsSelectAllReferenceSummaryTraversal) {
+  constexpr std::size_t kSelectionCount = 8191;
+  std::string source = "<svg xmlns='http://www.w3.org/2000/svg'>";
+  for (std::size_t i = 0; i < kSelectionCount; ++i) {
+    source += "<g id='selected" + std::to_string(i) + "'/>";
+  }
+  source += "</svg>";
+
+  EditorApp app;
+  ASSERT_TRUE(app.loadFromString(source));
+  std::vector<svg::SVGElement> selection;
+  selection.reserve(kSelectionCount);
+  for (std::optional<svg::SVGElement> child = app.document().document().svgElement().firstChild();
+       child.has_value(); child = child->nextSibling()) {
+    selection.push_back(*child);
+  }
+  ASSERT_EQ(selection.size(), kSelectionCount);
+
+  const ReferenceHighlightSummary summary =
+      ComputeReferenceHighlightSummary(app.document().document(), selection);
+  EXPECT_TRUE(summary.resourceLimitExceeded);
+  EXPECT_GT(summary.traversalWork, 0u);
+  EXPECT_LE(summary.traversalWork, kMaximumFocusTraversalWork);
+  EXPECT_LE(summary.totalCount(), kMaximumFocusElements);
+}
+
 }  // namespace
 }  // namespace donner::editor
