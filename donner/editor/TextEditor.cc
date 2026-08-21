@@ -2274,12 +2274,10 @@ void TextEditor::renderFocusReferenceLinks(ImDrawList* drawList) {
     return bounds;
   };
   drawList->PushClipRect(clipMin, clipMax, true);
-  std::size_t layoutCount = 0;
-  for (const FocusReferenceLink& link : focusPartition_.referenceLinks) {
-    if (layoutCount >= kMaximumFocusReferenceLayoutsPerFrame) {
-      break;
-    }
-    ++layoutCount;
+  const std::size_t layoutCount =
+      std::min(focusPartition_.referenceLinks.size(), kMaximumFocusReferenceLayoutsPerFrame);
+  for (std::size_t layoutIndex = 0; layoutIndex < layoutCount; ++layoutIndex) {
+    const FocusReferenceLink& link = focusPartition_.referenceLinks[layoutIndex];
     const auto layoutStart = std::chrono::steady_clock::now();
     std::optional<FocusReferenceConnectorLayout> layout =
         focusReferenceConnectorLayout(link, visibleLinkIndex);

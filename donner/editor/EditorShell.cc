@@ -74,7 +74,6 @@
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/SVGTSpanElement.h"
 #include "donner/svg/SVGTextElement.h"
-#include "donner/svg/components/ElementTypeComponent.h"
 #include "donner/svg/parser/SVGParser.h"
 #include "donner/svg/properties/PaintServer.h"
 #include "donner/svg/renderer/RendererInterface.h"
@@ -100,6 +99,19 @@ const char* GetIsolatedReplayClipboard(ImGuiContext*) {
 
 void SetIsolatedReplayClipboard(ImGuiContext*, const char* text) {
   gIsolatedReplayClipboard = text != nullptr ? text : "";
+}
+
+bool ShouldRequestFileAction(bool allowed, bool requested) {
+  return allowed && requested;
+}
+
+bool ShouldRequestOpenShortcut(bool allowed, bool anyPopupOpen, bool command, bool shift,
+                               bool keyPressed) {
+  return allowed && !anyPopupOpen && command && !shift && keyPressed;
+}
+
+bool ShouldRequestSaveShortcut(bool allowed, bool anyPopupOpen, bool command, bool keyPressed) {
+  return allowed && !anyPopupOpen && command && keyPressed;
 }
 
 }  // namespace
@@ -1202,12 +1214,7 @@ EditorShell::EditorShell(gui::EditorWindow& window, EditorShellOptions options)
       inputBridge_(window_, kWheelZoomStep),
       compositorDebugPanel_(window.geodeDevice()),
       dialogPresenter_(options_.editorNoticeText, options_.editorBuildInfo) {
-  if (!options_.allowHostClipboardAccess) {
-    gIsolatedReplayClipboard.clear();
-    ImGuiPlatformIO& platformIo = ImGui::GetPlatformIO();
-    platformIo.Platform_GetClipboardTextFn = GetIsolatedReplayClipboard;
-    platformIo.Platform_SetClipboardTextFn = SetIsolatedReplayClipboard;
-  }
+  configureClipboardCapability();
   // One presenter owns where document pixels land for the whole session.
   documentPresenter_ = MakeDocumentPresenter([this](std::optional<FramebufferUnderlayPlan> plan) {
     installFramebufferUnderlayPlan(std::move(plan));
@@ -1298,13 +1305,7 @@ EditorShell::EditorShell(gui::EditorWindow& window, EditorShellOptions options)
   if (!app_.loadFromString(*initialSource)) {
     // Keep the shell alive so the user can still edit/fix the file from the source pane.
   }
-  if (options_.allowFileSystemActions) {
-    if (options_.initialPath.has_value()) {
-      app_.setCurrentFilePath(*options_.initialPath);
-    } else if (!options_.svgPath.empty()) {
-      app_.setCurrentFilePath(options_.svgPath);
-    }
-  }
+  assignInitialFilePathIfAllowed();
   // Route the clean baseline through `textEditor_.getText()` so it matches
   // what `syncDirtyFromSource` will later compare against. `TextBuffer`
   // canonicalizes line endings (e.g. drops a trailing `\n`), so comparing
@@ -1426,6 +1427,26 @@ EditorShell::~EditorShell() {
   }
 }
 
+void EditorShell::configureClipboardCapability() {
+  if (!options_.allowHostClipboardAccess) {
+    gIsolatedReplayClipboard.clear();
+    ImGuiPlatformIO& platformIo = ImGui::GetPlatformIO();
+    platformIo.Platform_GetClipboardTextFn = GetIsolatedReplayClipboard;
+    platformIo.Platform_SetClipboardTextFn = SetIsolatedReplayClipboard;
+  }
+}
+
+void EditorShell::assignInitialFilePathIfAllowed() {
+  if (!options_.allowFileSystemActions) {
+    return;
+  }
+  if (options_.initialPath.has_value()) {
+    app_.setCurrentFilePath(*options_.initialPath);
+  } else if (!options_.svgPath.empty()) {
+    app_.setCurrentFilePath(options_.svgPath);
+  }
+}
+
 void EditorShell::overrideViewportForReplay(const ViewportState& viewport) {
   pendingViewportReplayOverride_ = viewport;
 }
@@ -1452,11 +1473,7 @@ repro::ReplayInputFrameCost EditorShell::estimateReplayInputCostForTesting(
       app_.hasDocument() ? app_.document().document().source().size() : 0;
   const std::size_t selectedElementCount = app_.selectedElements().size();
   const std::size_t potentialDocumentElementCount =
-      app_.hasDocument()
-          ? app_.document().document().withReadAccess([](svg::DocumentReadAccess& access) {
-              return access.registry().storage<svg::components::ElementTypeComponent>().size();
-            })
-          : 0;
+      app_.hasDocument() ? app_.document().document().elementCount() : 0;
   return repro::EstimateReplayInputFrameCost(frame, documentSourceBytes, selectedElementCount,
                                              potentialDocumentElementCount,
                                              heldRepeatSourceRewriteUnits);
@@ -2297,13 +2314,7 @@ void EditorShell::requestRevert() {
 }
 
 void EditorShell::serviceNativeDialogs() {
-  if (!options_.allowFileSystemActions) {
-    if (dialogPresenter_.openFileModalRequested()) {
-      dialogPresenter_.consumeOpenFileModalRequest();
-    }
-    if (dialogPresenter_.saveFileModalRequested()) {
-      dialogPresenter_.consumeSaveFileModalRequest();
-    }
+  if (discardDisabledFileDialogRequests()) {
     return;
   }
   if (!nativeDialogs_.available()) {
@@ -2343,6 +2354,19 @@ void EditorShell::serviceNativeDialogs() {
     }
     window_.wakeEventLoop();
   }
+}
+
+bool EditorShell::discardDisabledFileDialogRequests() {
+  if (options_.allowFileSystemActions) {
+    return false;
+  }
+  if (dialogPresenter_.openFileModalRequested()) {
+    dialogPresenter_.consumeOpenFileModalRequest();
+  }
+  if (dialogPresenter_.saveFileModalRequested()) {
+    dialogPresenter_.consumeSaveFileModalRequest();
+  }
+  return true;
 }
 
 void EditorShell::updateWindowTitle() {
@@ -2409,7 +2433,7 @@ void EditorShell::applyMenuActions(const MenuBarActions& menuActions) {
     cancelPendingSampleLoad();
     requestNewDocument();
   }
-  if (menuActions.openFile && options_.allowFileSystemActions) {
+  if (ShouldRequestFileAction(options_.allowFileSystemActions, menuActions.openFile)) {
     cancelSampleThumbnailGeneration();
     cancelPendingSampleLoad();
     dialogPresenter_.requestOpenFile(app_.currentFilePath());
@@ -2606,8 +2630,8 @@ void EditorShell::handleGlobalShortcuts() {
     requestNewDocument();
   }
 
-  if (options_.allowFileSystemActions && !anyPopupOpen && cmd && !shift &&
-      ImGui::IsKeyPressed(ImGuiKey_O, /*repeat=*/false)) {
+  if (ShouldRequestOpenShortcut(options_.allowFileSystemActions, anyPopupOpen, cmd, shift,
+                                ImGui::IsKeyPressed(ImGuiKey_O, /*repeat=*/false))) {
     dialogPresenter_.requestOpenFile(app_.currentFilePath());
   }
 
@@ -2615,8 +2639,8 @@ void EditorShell::handleGlobalShortcuts() {
     glfwSetWindowShouldClose(window_.rawHandle(), GLFW_TRUE);
   }
 
-  if (options_.allowFileSystemActions && !anyPopupOpen && cmd &&
-      ImGui::IsKeyPressed(ImGuiKey_S, /*repeat=*/false)) {
+  if (ShouldRequestSaveShortcut(options_.allowFileSystemActions, anyPopupOpen, cmd,
+                                ImGui::IsKeyPressed(ImGuiKey_S, /*repeat=*/false))) {
     if (shift) {
       requestSaveAs();
     } else {
@@ -4783,7 +4807,7 @@ void EditorShell::renderSamplePicker(const ImVec2& paneOrigin, const ImVec2& con
       showSamplePicker_ = false;
     }
   }
-  if (actions.openFile && options_.allowFileSystemActions) {
+  if (ShouldRequestFileAction(options_.allowFileSystemActions, actions.openFile)) {
     cancelSampleThumbnailGeneration();
     cancelPendingSampleLoad();
     if (!welcomePlaceholderActive_) {

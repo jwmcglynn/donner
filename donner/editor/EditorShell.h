@@ -331,6 +331,9 @@ public:
   }
 
 private:
+  void configureClipboardCapability();
+  void assignInitialFilePathIfAllowed();
+  [[nodiscard]] bool discardDisabledFileDialogRequests();
   enum class HistoryAction : std::uint8_t {
     Undo,
     Redo,

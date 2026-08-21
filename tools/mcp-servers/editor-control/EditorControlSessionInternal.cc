@@ -1,5 +1,5 @@
 /// @file
-/// Shared helper implementations for the EditorControlSession tool files —
+/// Shared helper implementations for the EditorControlSession tool files -
 /// argument parsing, JSON serialization, content hashing, and bitmap
 /// summaries/attachments.
 

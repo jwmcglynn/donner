@@ -252,6 +252,164 @@ int AttachPngFile(ToolCallResult* out, const std::string& label, const std::file
   return AttachPngBytes(out, label, *bytes, embedBase64, metadata);
 }
 
+struct GlReplayRequest {
+  std::string rnrPath;
+  std::string svgPathOverride;
+  std::string crop;
+  std::string outputDir;
+  bool includeImages = true;
+  bool visible = false;
+  bool pace = true;
+  bool driveDocumentInput = false;
+  bool sourcePaneVisible = false;
+  int captureFrame = -1;
+  int captureLeftMouseDown = 0;
+  int maxFrame = -1;
+  int timeoutMs = 120000;
+  EditorControlSession::CaptureOptions capture;
+};
+
+ToolCallResult ReplayGlRnr(const GlReplayRequest& request) {
+  const std::optional<repro::GlRnrReplayCropMode> cropMode =
+      repro::ParseGlRnrReplayCropMode(request.crop);
+  if (!cropMode.has_value()) {
+    return MakeErrorResult("gl_crop must be one of: full, render-pane, document-canvas");
+  }
+  if (request.captureFrame < -1) {
+    return MakeErrorResult("gl_capture_frame must be non-negative");
+  }
+  if (request.captureLeftMouseDown < 0) {
+    return MakeErrorResult("gl_capture_left_mousedown must be positive");
+  }
+  if (request.maxFrame < -1) {
+    return MakeErrorResult("gl_max_frame must be non-negative");
+  }
+  if (request.timeoutMs <= 0 || request.timeoutMs > kMaximumGlReplayTimeoutMs) {
+    return MakeErrorResult("gl_timeout_ms exceeds the GL replay timeout limit");
+  }
+
+  repro::GlRnrReplayOptions replayOptions;
+  replayOptions.rnrPath = std::filesystem::path(request.rnrPath);
+  if (!request.svgPathOverride.empty()) {
+    replayOptions.svgPathOverride = std::filesystem::path(request.svgPathOverride);
+  }
+  replayOptions.outputDir = request.outputDir.empty() ? (DiagnosticOutputDir() / "gl_rnr_replay")
+                                                      : std::filesystem::path(request.outputDir);
+  if (request.captureFrame >= 0) {
+    replayOptions.captureFrames.insert(static_cast<std::uint64_t>(request.captureFrame));
+    if (request.maxFrame < 0) {
+      replayOptions.maxFrame = static_cast<std::uint64_t>(request.captureFrame);
+    }
+  }
+  if (request.captureLeftMouseDown > 0) {
+    replayOptions.captureLeftMouseDownOrdinal = request.captureLeftMouseDown;
+  }
+  if (request.maxFrame >= 0) {
+    replayOptions.maxFrame = static_cast<std::uint64_t>(request.maxFrame);
+  }
+  replayOptions.cropMode = *cropMode;
+  replayOptions.pace = request.pace;
+  replayOptions.visible = request.visible;
+  replayOptions.driveDocumentSpaceInput = request.driveDocumentInput;
+  replayOptions.sourcePaneVisible = request.sourcePaneVisible;
+
+  std::string error;
+  GlReadbackRunner glReadbackRunner = GlReadbackRunner::InProcess;
+  if (!SelectGlReadbackRunner(&glReadbackRunner, &error)) {
+    return MakeErrorResult(error);
+  }
+
+  repro::GlRnrReplayResult replayResult;
+  switch (glReadbackRunner) {
+    case GlReadbackRunner::InProcess:
+      if (!repro::RunGlRnrReplay(replayOptions, &replayResult, &error)) {
+        return MakeErrorResult(error);
+      }
+      break;
+    case GlReadbackRunner::BazelRun:
+      if (!RunBazelGlRnrReplay(replayOptions, std::chrono::milliseconds(request.timeoutMs),
+                               &replayResult, &error)) {
+        return MakeErrorResult(error);
+      }
+      break;
+  }
+
+  ToolCallResult out;
+  out.body = json{
+      {"ok", true},
+      {"mode", "gl_readback"},
+      {"gl_readback_runner", GlReadbackRunnerName(glReadbackRunner)},
+      {"rnr_path", request.rnrPath},
+      {"svg_path", request.svgPathOverride.empty() ? json(nullptr) : json(request.svgPathOverride)},
+      {"output_dir", replayOptions.outputDir.string()},
+      {"crop", request.crop},
+      {"gl_drive_document_input", replayOptions.driveDocumentSpaceInput},
+      {"gl_source_pane_visible", replayOptions.sourcePaneVisible},
+      {"capture_count", replayResult.captures.size()},
+      {"captures", json::array()},
+  };
+  for (const repro::GlRnrReplayCapture& captureResult : replayResult.captures) {
+    json captureJson{
+        {"frame_index", captureResult.frameIndex},
+        {"reason", captureResult.reason},
+        {"path", captureResult.path.string()},
+    };
+    if (request.includeImages) {
+      AttachPngFile(&out,
+                    "replay_rnr_gl_frame_" + std::to_string(captureResult.frameIndex) + "_" +
+                        captureResult.reason,
+                    captureResult.path, request.capture.embedPngBase64, &captureJson);
+    }
+    out.body["captures"].push_back(std::move(captureJson));
+  }
+  out.body["attached_image_count"] = out.images.size();
+  return out;
+}
+
+std::optional<std::string> ValidateRecordingOptions(int windowWidth, int windowHeight,
+                                                    double displayScale, double frameDeltaMs,
+                                                    std::string_view svgPath) {
+  const double physicalWidth = static_cast<double>(windowWidth) * displayScale;
+  const double physicalHeight = static_cast<double>(windowHeight) * displayScale;
+  if (windowWidth <= 0 || windowWidth > repro::kMaximumReproDimension || windowHeight <= 0 ||
+      windowHeight > repro::kMaximumReproDimension || !std::isfinite(displayScale) ||
+      displayScale <= 0.0 || displayScale > repro::kMaximumReproDevicePixelRatio ||
+      !std::isfinite(physicalWidth) || !std::isfinite(physicalHeight) || physicalWidth <= 0.0 ||
+      physicalHeight <= 0.0 || physicalWidth > repro::kMaximumReproPixelDimension ||
+      physicalHeight > repro::kMaximumReproPixelDimension ||
+      physicalWidth * physicalHeight > static_cast<double>(repro::kMaximumReproPixels)) {
+    return "recording window and display scale exceed the pixel surface budget";
+  }
+  if (!std::isfinite(frameDeltaMs) || frameDeltaMs <= 0.0 ||
+      frameDeltaMs > repro::kMaximumReproDeltaMilliseconds) {
+    return "frame_delta_ms must be finite and within the replay timing limit";
+  }
+  if (svgPath.size() > repro::kMaximumReproSvgPathBytes ||
+      svgPath.find('\0') != std::string_view::npos) {
+    return "svg_path exceeds the replay metadata path limit";
+  }
+  return std::nullopt;
+}
+
+std::optional<std::size_t> RecordingPixelsPerFrame(const repro::ReproMetadata& metadata) {
+  const double physicalWidthValue =
+      std::ceil(static_cast<double>(metadata.windowWidth) * metadata.displayScale);
+  const double physicalHeightValue =
+      std::ceil(static_cast<double>(metadata.windowHeight) * metadata.displayScale);
+  if (!std::isfinite(physicalWidthValue) || !std::isfinite(physicalHeightValue) ||
+      physicalWidthValue <= 0.0 || physicalHeightValue <= 0.0 ||
+      physicalWidthValue > static_cast<double>(std::numeric_limits<std::size_t>::max()) ||
+      physicalHeightValue > static_cast<double>(std::numeric_limits<std::size_t>::max())) {
+    return std::nullopt;
+  }
+  const std::size_t physicalWidth = static_cast<std::size_t>(physicalWidthValue);
+  const std::size_t physicalHeight = static_cast<std::size_t>(physicalHeightValue);
+  if (physicalHeight > std::numeric_limits<std::size_t>::max() / physicalWidth) {
+    return std::nullopt;
+  }
+  return physicalWidth * physicalHeight;
+}
+
 bool DrainWritebackAndReparseSource(EditorApp* app, SelectTool* selectTool, std::string* source) {
   std::optional<SelectTool::CompletedDragWriteback> completed =
       selectTool->consumeCompletedDragWriteback();
@@ -383,24 +541,9 @@ ToolCallResult EditorControlSession::startRnrRecording(const json& arguments) {
       !ReadOptionalDouble(arguments, "frame_delta_ms", 1000.0 / 60.0, &frameDeltaMs, &error)) {
     return MakeErrorResult(error);
   }
-  const double physicalWidth = static_cast<double>(windowWidth) * displayScale;
-  const double physicalHeight = static_cast<double>(windowHeight) * displayScale;
-  if (windowWidth <= 0 || windowWidth > repro::kMaximumReproDimension || windowHeight <= 0 ||
-      windowHeight > repro::kMaximumReproDimension || !std::isfinite(displayScale) ||
-      displayScale <= 0.0 || displayScale > repro::kMaximumReproDevicePixelRatio ||
-      !std::isfinite(physicalWidth) || !std::isfinite(physicalHeight) || physicalWidth <= 0.0 ||
-      physicalHeight <= 0.0 || physicalWidth > repro::kMaximumReproPixelDimension ||
-      physicalHeight > repro::kMaximumReproPixelDimension ||
-      physicalWidth * physicalHeight > static_cast<double>(repro::kMaximumReproPixels)) {
-    return MakeErrorResult("recording window and display scale exceed the pixel surface budget");
-  }
-  if (!std::isfinite(frameDeltaMs) || frameDeltaMs <= 0.0 ||
-      frameDeltaMs > repro::kMaximumReproDeltaMilliseconds) {
-    return MakeErrorResult("frame_delta_ms must be finite and within the replay timing limit");
-  }
-  if (svgPath.size() > repro::kMaximumReproSvgPathBytes ||
-      svgPath.find('\0') != std::string::npos) {
-    return MakeErrorResult("svg_path exceeds the replay metadata path limit");
+  if (const std::optional<std::string> validationError = ValidateRecordingOptions(
+          windowWidth, windowHeight, displayScale, frameDeltaMs, svgPath)) {
+    return MakeErrorResult(*validationError);
   }
   if (svgPath.empty() || svgPath == "<memory>") {
     svgPath = "embedded.svg";
@@ -555,101 +698,23 @@ ToolCallResult EditorControlSession::replayRnr(const json& arguments) {
   }
 
   if (glReadback) {
-    const std::optional<repro::GlRnrReplayCropMode> cropMode =
-        repro::ParseGlRnrReplayCropMode(glCrop);
-    if (!cropMode.has_value()) {
-      return MakeErrorResult("gl_crop must be one of: full, render-pane, document-canvas");
-    }
-    if (glCaptureFrame < -1) {
-      return MakeErrorResult("gl_capture_frame must be non-negative");
-    }
-    if (glCaptureLeftMouseDown < 0) {
-      return MakeErrorResult("gl_capture_left_mousedown must be positive");
-    }
-    if (glMaxFrame < -1) {
-      return MakeErrorResult("gl_max_frame must be non-negative");
-    }
-    if (glTimeoutMs <= 0 || glTimeoutMs > kMaximumGlReplayTimeoutMs) {
-      return MakeErrorResult("gl_timeout_ms exceeds the GL replay timeout limit");
-    }
-
-    repro::GlRnrReplayOptions replayOptions;
-    replayOptions.rnrPath = std::filesystem::path(rnrPathString);
-    if (!svgPathOverride.empty()) {
-      replayOptions.svgPathOverride = std::filesystem::path(svgPathOverride);
-    }
-    replayOptions.outputDir = glOutputDir.empty() ? (DiagnosticOutputDir() / "gl_rnr_replay")
-                                                  : std::filesystem::path(glOutputDir);
-    if (glCaptureFrame >= 0) {
-      replayOptions.captureFrames.insert(static_cast<std::uint64_t>(glCaptureFrame));
-      if (glMaxFrame < 0) {
-        replayOptions.maxFrame = static_cast<std::uint64_t>(glCaptureFrame);
-      }
-    }
-    if (glCaptureLeftMouseDown > 0) {
-      replayOptions.captureLeftMouseDownOrdinal = glCaptureLeftMouseDown;
-    }
-    if (glMaxFrame >= 0) {
-      replayOptions.maxFrame = static_cast<std::uint64_t>(glMaxFrame);
-    }
-    replayOptions.cropMode = *cropMode;
-    replayOptions.pace = glPace;
-    replayOptions.visible = glVisible;
-    replayOptions.driveDocumentSpaceInput = glDriveDocumentInput;
-    replayOptions.sourcePaneVisible = glSourcePaneVisible;
-
-    GlReadbackRunner glReadbackRunner = GlReadbackRunner::InProcess;
-    if (!SelectGlReadbackRunner(&glReadbackRunner, &error)) {
-      return MakeErrorResult(error);
-    }
-
-    repro::GlRnrReplayResult replayResult;
-    switch (glReadbackRunner) {
-      case GlReadbackRunner::InProcess:
-        if (!repro::RunGlRnrReplay(replayOptions, &replayResult, &error)) {
-          return MakeErrorResult(error);
-        }
-        break;
-      case GlReadbackRunner::BazelRun:
-        if (!RunBazelGlRnrReplay(replayOptions, std::chrono::milliseconds(glTimeoutMs),
-                                 &replayResult, &error)) {
-          return MakeErrorResult(error);
-        }
-        break;
-    }
-
-    ToolCallResult out;
-    out.body = json{
-        {"ok", true},
-        {"mode", "gl_readback"},
-        {"gl_readback_runner", GlReadbackRunnerName(glReadbackRunner)},
-        {"rnr_path", rnrPathString},
-        {"svg_path", svgPathOverride.empty() ? json(nullptr) : json(svgPathOverride)},
-        {"output_dir", replayOptions.outputDir.string()},
-        {"crop", glCrop},
-        {"gl_drive_document_input", replayOptions.driveDocumentSpaceInput},
-        {"gl_source_pane_visible", replayOptions.sourcePaneVisible},
-        {"capture_count", replayResult.captures.size()},
-        {"captures", json::array()},
-    };
-    for (const repro::GlRnrReplayCapture& captureResult : replayResult.captures) {
-      json captureJson{
-          {"frame_index", captureResult.frameIndex},
-          {"reason", captureResult.reason},
-          {"path", captureResult.path.string()},
-      };
-      if (includeGlImages) {
-        AttachPngFile(&out,
-                      "replay_rnr_gl_frame_" + std::to_string(captureResult.frameIndex) + "_" +
-                          captureResult.reason,
-                      captureResult.path, capture.embedPngBase64, &captureJson);
-      }
-      out.body["captures"].push_back(std::move(captureJson));
-    }
-    out.body["attached_image_count"] = out.images.size();
-    return out;
+    return ReplayGlRnr(GlReplayRequest{
+        .rnrPath = rnrPathString,
+        .svgPathOverride = svgPathOverride,
+        .crop = glCrop,
+        .outputDir = glOutputDir,
+        .includeImages = includeGlImages,
+        .visible = glVisible,
+        .pace = glPace,
+        .driveDocumentInput = glDriveDocumentInput,
+        .sourcePaneVisible = glSourcePaneVisible,
+        .captureFrame = glCaptureFrame,
+        .captureLeftMouseDown = glCaptureLeftMouseDown,
+        .maxFrame = glMaxFrame,
+        .timeoutMs = glTimeoutMs,
+        .capture = capture,
+    });
   }
-
   const std::filesystem::path rnrPath(rnrPathString);
   std::optional<repro::ReproFile> replay = repro::ReadReproFile(rnrPath);
   if (!replay.has_value()) {
@@ -1305,28 +1370,16 @@ bool EditorControlSession::recordingCanAppendFrames(std::size_t frameCount) cons
       frameCount > repro::kMaximumReproPlaybackFrames - rnrRecording_.file.frames.size()) {
     return false;
   }
-  const repro::ReproMetadata& metadata = rnrRecording_.file.metadata;
-  const double physicalWidthValue =
-      std::ceil(static_cast<double>(metadata.windowWidth) * metadata.displayScale);
-  const double physicalHeightValue =
-      std::ceil(static_cast<double>(metadata.windowHeight) * metadata.displayScale);
-  if (!std::isfinite(physicalWidthValue) || !std::isfinite(physicalHeightValue) ||
-      physicalWidthValue <= 0.0 || physicalHeightValue <= 0.0 ||
-      physicalWidthValue > static_cast<double>(std::numeric_limits<std::size_t>::max()) ||
-      physicalHeightValue > static_cast<double>(std::numeric_limits<std::size_t>::max())) {
+  const std::optional<std::size_t> pixelsPerFrame =
+      RecordingPixelsPerFrame(rnrRecording_.file.metadata);
+  if (!pixelsPerFrame.has_value()) {
     return false;
   }
-  const std::size_t physicalWidth = static_cast<std::size_t>(physicalWidthValue);
-  const std::size_t physicalHeight = static_cast<std::size_t>(physicalHeightValue);
-  if (physicalHeight > std::numeric_limits<std::size_t>::max() / physicalWidth) {
-    return false;
-  }
-  const std::size_t pixelsPerFrame = physicalWidth * physicalHeight;
   const std::size_t maximumPixelFrames =
       std::min(repro::kMaximumParsedReproPixelFrames,
                repro::ReplayExecutionResourceBudget::kMaximumPixelFrames);
   const std::size_t totalFrames = rnrRecording_.file.frames.size() + frameCount;
-  if (pixelsPerFrame > maximumPixelFrames / totalFrames) {
+  if (*pixelsPerFrame > maximumPixelFrames / totalFrames) {
     return false;
   }
   const double lastTimestamp =
