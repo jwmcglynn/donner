@@ -7,7 +7,11 @@
 `//donner/editor` is Donner's in-tree SVG editor. The native GLFW host and the
 WebAssembly browser host share one Dear ImGui application that presents a document
 as synchronized interactive canvas and XML source views. Native and Wasm release
-targets use the Geode GPU backend and the basic text tier.
+targets use the Geode GPU backend and the full text tier. The full tier uses the
+length-aware FreeType path for validated document-provided fonts, while HarfBuzz
+provides OpenType shaping. `//donner/editor/tests:editor_embedded_font_render_tests`
+compares an untrusted embedded font against the same trusted reference, and
+`//donner/editor/wasm:editor_wasm_transition_tests` pins the browser product to this tier.
 
 Two properties shape the whole design:
 

@@ -2,4 +2,4 @@
 
 EDITOR_RENDERER_BACKEND = "geode"
 EDITOR_TEXT = "true"
-EDITOR_TEXT_FULL = "false"
+EDITOR_TEXT_FULL = "true"

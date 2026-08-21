@@ -19,7 +19,7 @@ linkopt_oz=True
 renderer_backend=geode
 renderer_wasm_enabled=True
 text=True
-text_full=False
+text_full=True
 """
         self.assertEqual(actual, expected)
 

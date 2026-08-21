@@ -15,7 +15,7 @@ def _editor_wasm_geode_transition_impl(settings, _attr):
         "//donner/svg/renderer/wasm:enable_wasm": True,
         "//donner/svg/renderer:renderer_backend": "geode",
         "//donner/svg/renderer:text": True,
-        "//donner/svg/renderer:text_full": False,
+        "//donner/svg/renderer:text_full": True,
         "//donner/svg/renderer/geode:enable_geode": True,
         "//command_line_option:compilation_mode": "opt",
         "//command_line_option:copt": _append_once(

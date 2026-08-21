@@ -21,7 +21,7 @@ worker.
 - Ship one immutable editor package containing only Geode.
 - Render the canvas, overlays, carousel images, and Layers panel thumbnails through Geode.
 - Fail at Bazel analysis if an enabled editor Wasm target selects another renderer.
-- Preserve editor text and embedded UI fonts.
+- Preserve editor text, document-provided fonts, and embedded UI fonts.
 - Start only when WebGPU, shared memory, and cross-origin isolation are available.
 - Keep browser pixel regressions tied to the renderer users actually run.
 
@@ -59,7 +59,7 @@ presentation versions remain blocked.
 ## Build and Packaging Contract
 
 - `bazel run //donner/editor/wasm:serve_http` applies the editor transition automatically.
-- `--config=editor-wasm` selects Geode, text support, pthreads, and size optimization.
+- `--config=editor-wasm` selects Geode, the full text tier, pthreads, and size optimization.
 - The package size test rejects software-renderer names in shipped JavaScript.
 - The editor workflow builds, tests, stages, and records provenance for one package and one Bazel
   config.
@@ -68,7 +68,9 @@ presentation versions remain blocked.
 ## Testing and Validation
 
 - `//donner/editor/wasm:editor_wasm_transition_tests` proves the default run transition selects the
-  complete Geode configuration and runtime options.
+  complete Geode and full-text configuration plus its runtime options.
+- `//donner/editor/tests:editor_embedded_font_render_tests` proves validated untrusted
+  document-provided fonts render identically to their trusted test-data reference.
 - A negative build with editor Wasm enabled and another renderer selected must fail with the
   Geode-only analysis error.
 - `//donner/editor/wasm:wasm_geode_package_size_tests` proves the package size and forbidden-token
@@ -81,8 +83,9 @@ presentation versions remain blocked.
 
 ## Security and Rollout
 
-SVG, XML, CSS, and font inputs remain untrusted. This change removes one executable renderer and its
-runtime selector from the editor package, reducing the shipped surface. The service worker remains
+SVG, XML, CSS, and font inputs remain untrusted. Document fonts use the full text tier's
+length-aware FreeType decoder rather than entering the compact backend's length-unaware parser.
+The package contains one executable renderer and no runtime selector. The service worker remains
 restricted to the editor origin and only establishes the isolation headers required by pthreads.
 
 CI builds one immutable Geode candidate and records its source revision, package files, hashes,

@@ -186,7 +186,7 @@ build:wasm-size --linkopt=-sFILESYSTEM=0
 common:editor-wasm --config=wasm-geode
 common:editor-wasm --//donner/editor/wasm:enable_wasm=true
 common:editor-wasm --//donner/svg/renderer:text=true
-common:editor-wasm --//donner/svg/renderer:text_full=false
+common:editor-wasm --//donner/svg/renderer:text_full=true
 build:editor-wasm --copt=-pthread
 build:editor-wasm --copt=-Oz
 build:editor-wasm --linkopt=-pthread
