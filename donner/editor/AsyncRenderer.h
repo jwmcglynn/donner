@@ -425,7 +425,7 @@ struct SampleThumbnailRenderStats {
   std::uint64_t offscreenRendererCreations = 0;
   /// Foreground renders queued while the first worker-local offscreen attempt was still active.
   std::uint64_t foregroundHandoffWaits = 0;
-  /// True once the first worker-local offscreen thumbnail attempt has released its renderer.
+  /// True once the first worker-local offscreen renderer initialization has completed.
   bool firstAttemptCompleted = false;
   bool pending = false;
   bool active = false;
@@ -844,6 +844,12 @@ private:
   std::optional<SampleThumbnailRenderResult> sampleThumbnailResult_;
   bool sampleThumbnailActive_ = false;
   bool discardActiveSampleThumbnailResult_ = false;
+  /// Renderer construction itself cannot poll the thumbnail cancellation token. Foreground work
+  /// arriving in this window defers that signal until construction returns, avoiding a browser
+  /// WebGPU cancellation handoff while preserving priority before thumbnail rendering starts.
+  bool sampleThumbnailRendererCreationActive_ = false;
+  bool cancelSampleThumbnailAfterRendererCreation_ = false;
+  bool foregroundHandoffCountedForRendererCreation_ = false;
   SampleThumbnailRenderStats sampleThumbnailCounters_;
   svg::compositor::CancellationToken cancelSampleThumbnail_;
   std::atomic<std::chrono::milliseconds::rep> sampleThumbnailRenderDelayMsForTesting_{0};

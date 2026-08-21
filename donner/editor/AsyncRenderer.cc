@@ -468,8 +468,18 @@ void AsyncRenderer::requestRender(const RenderRequest& request) {
     }
     if (sampleThumbnailActive_) {
       // Main-document presentation always preempts background preview work. The thumbnail
-      // traversal polls its independent token between rendered entities.
-      cancelSampleThumbnail_.cancel();
+      // traversal polls its independent token between rendered entities. Worker-local offscreen
+      // renderer construction cannot poll, so let that one first-use operation return before
+      // applying the cancellation signal.
+      if (sampleThumbnailRendererCreationActive_) {
+        cancelSampleThumbnailAfterRendererCreation_ = true;
+        if (!foregroundHandoffCountedForRendererCreation_) {
+          foregroundHandoffCountedForRendererCreation_ = true;
+          ++sampleThumbnailCounters_.foregroundHandoffWaits;
+        }
+      } else {
+        cancelSampleThumbnail_.cancel();
+      }
     }
   }
   cv_.notify_one();
@@ -600,7 +610,11 @@ void AsyncRenderer::cancelSampleThumbnailWork() {
   sampleThumbnailResult_.reset();
   if (sampleThumbnailActive_) {
     discardActiveSampleThumbnailResult_ = true;
-    cancelSampleThumbnail_.cancel();
+    if (sampleThumbnailRendererCreationActive_) {
+      cancelSampleThumbnailAfterRendererCreation_ = true;
+    } else {
+      cancelSampleThumbnail_.cancel();
+    }
   }
 }
 
@@ -686,6 +700,16 @@ void AsyncRenderer::workerLoop() {
           cancelSampleThumbnail_.reset();
           sampleThumbnailActive_ = true;
           discardActiveSampleThumbnailResult_ = false;
+          cancelSampleThumbnailAfterRendererCreation_ = false;
+          foregroundHandoffCountedForRendererCreation_ = false;
+#if   defined(__EMSCRIPTEN__)
+          sampleThumbnailRendererCreationActive_ =
+              sampleThumbnailRenderer == nullptr || sampleThumbnailRendererRoot != &workerRenderer;
+#else
+          sampleThumbnailRendererCreationActive_ =
+              sampleThumbnailRenderer == nullptr ||
+              sampleThumbnailRendererRoot != sampleThumbnailStorage->nativeRenderer;
+#endif
           ++sampleThumbnailCounters_.started;
         }
       }
@@ -748,6 +772,21 @@ void AsyncRenderer::workerLoop() {
       }
       offscreenRenderer = requestedRoot != nullptr ? sampleThumbnailRenderer.get() : nullptr;
 #endif
+
+      bool cancelAfterRendererCreation = false;
+      {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (sampleThumbnailRendererCreationActive_) {
+          sampleThumbnailRendererCreationActive_ = false;
+          sampleThumbnailCounters_.firstAttemptCompleted = true;
+          cancelAfterRendererCreation = cancelSampleThumbnailAfterRendererCreation_;
+          cancelSampleThumbnailAfterRendererCreation_ = false;
+          foregroundHandoffCountedForRendererCreation_ = false;
+        }
+      }
+      if (cancelAfterRendererCreation) {
+        cancelSampleThumbnail_.cancel();
+      }
 
       SampleThumbnailRenderResult result;
       if (offscreenRenderer == nullptr) {

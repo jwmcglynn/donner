@@ -14,6 +14,7 @@ module.exports = defineConfig({
         /Firefox keeps the dragged shape and its selection outline in every drag frame/,
         /Firefox never exposes the checkerboard while dragging a Splash letter/,
         /Firefox renders every visible Splash layer thumbnail/,
+        /Firefox hands the first active thumbnail to a foreground sample load/,
       ],
       use: {
         ...devices["Desktop Firefox"],

@@ -850,6 +850,14 @@ test("Firefox hands the first active thumbnail to a foreground sample load", asy
   page,
 }) => {
   test.skip(browserName !== "firefox", "Firefox worker-owned WebGPU handoff regression");
+  page.on("console", (message) => {
+    if (message.type() === "error" || message.type() === "warning") {
+      console.log(`firefox-handoff-console[${message.type()}]: ${message.text()}`);
+    }
+  });
+  page.on("pageerror", (error) => {
+    console.log(`firefox-handoff-pageerror: ${error.stack || error.message}`);
+  });
   const fatalMessages = await openEditor(page, { postInitializationDwellMs: 0 });
   const canvas = page.locator("canvas#canvas");
   const bounds = await canvas.boundingBox();
