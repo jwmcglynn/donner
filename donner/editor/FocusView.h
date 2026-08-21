@@ -63,6 +63,7 @@ struct FocusPartition {
   std::vector<LineRange> dimmed;                   ///< Ancestor opening/closing tag context.
   std::vector<LineRange> hidden;                   ///< Lines hidden by focus mode.
   std::vector<FocusReferenceLink> referenceLinks;  ///< Attribute-reference connectors.
+  std::size_t traversalWork = 0;                   ///< Aggregate nodes and rules visited.
   bool resourceLimitExceeded = false;              ///< True when focus analysis was truncated.
 
   /// Return true when the partition should be treated as "show everything".

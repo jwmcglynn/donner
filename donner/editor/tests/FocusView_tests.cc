@@ -16,6 +16,7 @@
 #include "donner/editor/TextEditor.h"
 #include "donner/svg/DocumentState.h"
 #include "donner/svg/SVGUnknownElement.h"
+#include "donner/svg/parser/SVGParser.h"
 
 namespace donner::editor {
 
@@ -1353,15 +1354,81 @@ TEST(FocusViewTest, BoundsLongForwardReferenceChains) {
   }
   source += "</defs><rect id='target' fill='url(#g0)'/></svg>";
 
-  EditorApp app;
-  ASSERT_TRUE(app.loadFromString(source));
-  const std::optional<svg::SVGElement> target = app.document().document().querySelector("#target");
+  ParseWarningSink warnings = ParseWarningSink::Disabled();
+  svg::parser::SVGParser::Options options;
+  options.maximumTreeDepth = kMaximumFocusTraversalDepth + 8u;
+  auto parsed = svg::parser::SVGParser::ParseSVG(source, warnings, options);
+  ASSERT_FALSE(parsed.hasError());
+  svg::SVGDocument document = std::move(parsed.result());
+  const std::optional<svg::SVGElement> target = document.querySelector("#target");
   ASSERT_TRUE(target.has_value());
 
-  const FocusPartition partition = ComputeFocusPartition(app.document().document(), *target);
+  const FocusPartition partition = ComputeFocusPartition(document, *target);
   EXPECT_FALSE(partition.empty());
   EXPECT_LE(partition.referenceLinks.size(), kMaximumFocusReferenceLinks);
   EXPECT_TRUE(partition.resourceLimitExceeded);
+}
+
+TEST(FocusViewTest, BoundsSharedTraversalAcrossWideReferenceChain) {
+  std::string source = "<svg xmlns='http://www.w3.org/2000/svg'><defs>";
+  constexpr std::size_t kGradientCount = 800u;
+  for (std::size_t i = 0; i < kGradientCount; ++i) {
+    source += "<linearGradient id='wide" + std::to_string(i) + "'";
+    if (i + 1u < kGradientCount) {
+      source += " href='#wide" + std::to_string(i + 1u) + "'";
+    }
+    source += "/>";
+  }
+  source += "</defs>";
+  for (std::size_t i = 0; i < 7000u; ++i) {
+    source += "<rect/>";
+  }
+  source += "</svg>";
+
+  ParseWarningSink warnings = ParseWarningSink::Disabled();
+  svg::parser::SVGParser::Options options;
+  options.maximumTreeDepth = kMaximumFocusTraversalDepth + 8u;
+  auto parsed = svg::parser::SVGParser::ParseSVG(source, warnings, options);
+  ASSERT_FALSE(parsed.hasError());
+  svg::SVGDocument document = std::move(parsed.result());
+  std::vector<svg::SVGElement> selected;
+  selected.reserve(kGradientCount);
+  for (std::size_t i = 0; i < kGradientCount; ++i) {
+    const std::optional<svg::SVGElement> gradient =
+        document.querySelector("#wide" + std::to_string(i));
+    ASSERT_TRUE(gradient.has_value());
+    selected.push_back(*gradient);
+  }
+
+  const FocusPartition partition = ComputeFocusPartition(document, selected);
+  EXPECT_TRUE(partition.resourceLimitExceeded);
+  EXPECT_EQ(partition.traversalWork, kMaximumFocusTraversalWork);
+}
+
+TEST(FocusViewTest, BoundsDeepReferencedSubtreeTraversal) {
+  std::string source = "<svg xmlns='http://www.w3.org/2000/svg'><defs><linearGradient id='deep'>";
+  for (std::size_t depth = 0; depth <= kMaximumFocusTraversalDepth; ++depth) {
+    source += "<g>";
+  }
+  source += "<stop offset='0'/>";
+  for (std::size_t depth = 0; depth <= kMaximumFocusTraversalDepth; ++depth) {
+    source += "</g>";
+  }
+  source += "</linearGradient></defs><rect id='target' fill='url(#deep)'/></svg>";
+
+  ParseWarningSink warnings = ParseWarningSink::Disabled();
+  svg::parser::SVGParser::Options options;
+  options.maximumTreeDepth = kMaximumFocusTraversalDepth + 8u;
+  auto parsed = svg::parser::SVGParser::ParseSVG(source, warnings, options);
+  ASSERT_FALSE(parsed.hasError());
+  svg::SVGDocument document = std::move(parsed.result());
+  const std::optional<svg::SVGElement> target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+
+  const FocusPartition partition = ComputeFocusPartition(document, *target);
+  EXPECT_TRUE(partition.resourceLimitExceeded);
+  EXPECT_GT(partition.traversalWork, 0u);
+  EXPECT_LE(partition.traversalWork, kMaximumFocusTraversalWork);
 }
 
 }  // namespace

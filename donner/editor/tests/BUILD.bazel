@@ -323,6 +323,7 @@ donner_cc_test(
         "//donner/editor:focus_view",
         "//donner/editor:text_editor",
         "//donner/svg",
+        "//donner/svg/parser",
         "@com_google_gtest//:gtest_main",
         "@imgui",
     ],
