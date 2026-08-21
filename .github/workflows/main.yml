@@ -43,6 +43,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - id: dup_push
         name: Detect duplicate push (PR already open for this branch)
@@ -229,6 +230,7 @@ jobs:
     if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' && (github.ref == 'refs/heads/main' || github.event_name == 'pull_request') && (github.event_name != 'pull_request' || needs.gatekeeper.outputs.docs_only != 'true') }}
     env:
       BAZEL_DIFF_TAG: "v18.1.0"
+      BAZEL_DIFF_SHA256: "eadec6d0ca0991de78bd9e063bfed993a359ed3bc60e507818077c300b6f58e0"
     outputs:
       fallback: ${{ steps.determine.outputs.fallback }}
       affected: ${{ steps.determine.outputs.affected }}
@@ -238,6 +240,7 @@ jobs:
         uses: actions/checkout@v7
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Setup Java
         uses: actions/setup-java@v5
@@ -266,7 +269,11 @@ jobs:
             if curl -fsSL --retry 4 --retry-delay 2 --retry-all-errors \
                 --connect-timeout 15 --max-time 300 -o "$out" "$url" \
                 && [[ -s "$out" ]]; then
-              exit 0
+              if printf '%s  %s\n' "$BAZEL_DIFF_SHA256" "$out" \
+                  | sha256sum --check --status; then
+                exit 0
+              fi
+              echo "bazel-diff digest mismatch for ${BAZEL_DIFF_TAG}; refusing artifact." >&2
             fi
             rm -f "$out"
             if [[ "$delay" -eq 0 ]]; then
@@ -493,6 +500,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       - name: Install system dependencies
         uses: ./.github/actions/apt-install
@@ -510,11 +519,6 @@ jobs:
           repository-cache: true
           external-cache: true
           cache-save: ${{ github.ref == 'refs/heads/main' }}
-
-      - name: Configure BuildBuddy remote cache
-        uses: ./.github/actions/buildbuddy-cache
-        with:
-          api-key: ${{ secrets.BUILDBUDDY_API_KEY }}
 
       - name: Build
         shell: bash
@@ -578,6 +582,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       - name: Install system dependencies
         uses: ./.github/actions/apt-install
@@ -601,11 +607,6 @@ jobs:
       # instead of only surfacing on a dev box whose default linker isn't lld.
       # See #665. Targets are the minimal set proven to reach every
       # link-order-sensitive library in that fix.
-      - name: Configure BuildBuddy remote cache
-        uses: ./.github/actions/buildbuddy-cache
-        with:
-          api-key: ${{ secrets.BUILDBUDDY_API_KEY }}
-
       - name: Linker canary (non-lld linker support)
         shell: bash
         run: |
@@ -1034,6 +1035,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       - name: Install clang-tidy
         uses: nick-fields/retry@v4
@@ -1053,11 +1056,6 @@ jobs:
           repository-cache: true
           external-cache: true
           cache-save: ${{ github.ref == 'refs/heads/main' }}
-
-      - name: Configure BuildBuddy remote cache
-        uses: ./.github/actions/buildbuddy-cache
-        with:
-          api-key: ${{ secrets.BUILDBUDDY_API_KEY }}
 
       - name: Build
         shell: bash

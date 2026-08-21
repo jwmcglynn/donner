@@ -27,6 +27,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       - name: Decide whether nightly build should run
         id: decide
@@ -75,6 +77,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       - name: Install system dependencies
         uses: ./.github/actions/apt-install
@@ -94,6 +98,7 @@ jobs:
           cache-save: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
 
       - name: Configure BuildBuddy remote cache
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && github.event_name != 'pull_request_target'
         uses: ./.github/actions/buildbuddy-cache
         with:
           api-key: ${{ secrets.BUILDBUDDY_API_KEY }}

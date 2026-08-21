@@ -19,6 +19,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       - name: Decide whether nightly perf jobs should run
         id: decide
@@ -60,6 +62,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       - name: Setup Bazel
         uses: bazel-contrib/setup-bazel@0.19.0

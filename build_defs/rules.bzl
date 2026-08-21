@@ -778,6 +778,14 @@ def donner_cc_fuzzer(name, corpus, deps = [], per_input_timeout_seconds = 2, tag
 
     fuzzer_runtime_linkopts = fuzzer_linkopts()
     fuzzer_additional_linker_inputs = fuzzer_linker_inputs()
+    ubsan_tags = [tag for tag in tags if tag.startswith("fuzz_ubsan")]
+    common_tags = [tag for tag in tags if not tag.startswith("fuzz_ubsan")]
+    if "fuzz_text_full" in common_tags and "fuzz_ubsan_text_full" not in ubsan_tags:
+        ubsan_tags.append("fuzz_ubsan_text_full")
+    if "fuzz_geode" in common_tags and "fuzz_ubsan_geode" not in ubsan_tags:
+        ubsan_tags.append("fuzz_ubsan_geode")
+    common_target_tags = ["fuzz_target"] + common_tags
+    corpus_tags = ["fuzz_target", "fuzz_ubsan"] + common_tags + ubsan_tags
 
     cc_binary(
         name = name + "_bin",
@@ -786,7 +794,7 @@ def donner_cc_fuzzer(name, corpus, deps = [], per_input_timeout_seconds = 2, tag
         linkstatic = 1,
         deps = deps + libc_compat_deps(),
         target_compatible_with = fuzzer_compatible_with(),
-        tags = ["fuzz_target"],
+        tags = common_target_tags,
         **kwargs
     )
 
@@ -819,7 +827,7 @@ def donner_cc_fuzzer(name, corpus, deps = [], per_input_timeout_seconds = 2, tag
             "@platforms//os:macos": ["@llvm_toolchain//:linker-components-aarch64-darwin"],
             "//conditions:default": [],
         }),
-        tags = ["fuzz_target"] + tags,
+        tags = common_target_tags,
         **kwargs
     )
 
@@ -835,7 +843,7 @@ def donner_cc_fuzzer(name, corpus, deps = [], per_input_timeout_seconds = 2, tag
             "//conditions:default": [],
         }),
         target_compatible_with = fuzzer_compatible_with(),
-        tags = ["fuzz_target"] + tags,
+        tags = corpus_tags,
         **kwargs
     )
 

@@ -1,16 +1,30 @@
 name: Release
 
-# Trigger on when a release is created or changed.
+# Build and publish an immutable artifact set exactly once for each release.
 on:
   release:
-    types: [published, edited]
-  workflow_dispatch:
+    types: [published]
+
+permissions:
+  contents: read
 
 jobs:
   linux:
+    if: github.run_attempt == 1
     runs-on: ubuntu-24.04
+    env:
+      RELEASE_TAG: ${{ github.event.release.tag_name }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ github.event.release.tag_name }}
+
+      - name: Verify release source
+        run: |
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git rev-list -n 1 "refs/tags/${RELEASE_TAG}")" = "$GITHUB_SHA"
 
       - name: Install Clang dependencies
         run: |
@@ -28,20 +42,39 @@ jobs:
       - name: Build Binaries
         run: |
           mkdir release
-          bazelisk build -c opt //donner/svg/tool:donner-svg
+          bazelisk build --lockfile_mode=off -c opt //donner/svg/tool:donner-svg
           cp bazel-bin/donner/svg/tool/donner-svg release/donner-svg_linux_x86_64
+          (cd release && sha256sum donner-svg_linux_x86_64 > donner-svg_linux_x86_64.sha256)
+          {
+            echo "source_commit=${GITHUB_SHA}"
+            echo "release_tag=${RELEASE_TAG}"
+            sha256sum .bazelversion .bazelrc MODULE.bazel third_party/bazel/non_bcr_deps.bzl
+          } > release/donner-svg_linux_x86_64.provenance
 
-      - name: Upload the Binaries
-        uses: svenstaro/upload-release-action@v2
+      - name: Upload immutable build artifact
+        uses: actions/upload-artifact@v7
         with:
-          repo_token: ${{ secrets.GITHUB_TOKEN }}
-          tag: ${{ github.ref }}
-          file: ./release/donner-svg_linux_x86_64
+          name: donner-svg-linux-x86-64-${{ github.sha }}
+          path: release/
+          if-no-files-found: error
+          retention-days: 7
 
   macos:
+    if: github.run_attempt == 1
     runs-on: macos-26
+    env:
+      RELEASE_TAG: ${{ github.event.release.tag_name }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ github.event.release.tag_name }}
+
+      - name: Verify release source
+        run: |
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git rev-list -n 1 "refs/tags/${RELEASE_TAG}")" = "$GITHUB_SHA"
 
       - name: Cache Bazel
         uses: actions/cache@v6
@@ -55,45 +88,87 @@ jobs:
       - name: Build Binaries
         run: |
           mkdir release
-          bazelisk build -c opt //donner/svg/tool:donner-svg
+          bazelisk build --lockfile_mode=off -c opt //donner/svg/tool:donner-svg
           cp bazel-bin/donner/svg/tool/donner-svg release/donner-svg_darwin_arm64
+          (cd release && shasum -a 256 donner-svg_darwin_arm64 > donner-svg_darwin_arm64.sha256)
+          {
+            echo "source_commit=${GITHUB_SHA}"
+            echo "release_tag=${RELEASE_TAG}"
+            shasum -a 256 .bazelversion .bazelrc MODULE.bazel third_party/bazel/non_bcr_deps.bzl
+          } > release/donner-svg_darwin_arm64.provenance
 
-      - name: Upload the Binaries
-        uses: svenstaro/upload-release-action@v2
+      - name: Upload immutable build artifact
+        uses: actions/upload-artifact@v7
         with:
-          repo_token: ${{ secrets.GITHUB_TOKEN }}
-          tag: ${{ github.ref }}
-          file: ./release/donner-svg_darwin_arm64
+          name: donner-svg-darwin-arm64-${{ github.sha }}
+          path: release/
+          if-no-files-found: error
+          retention-days: 7
 
-  # Publish a new entry to the Bazel Central Registry when a GitHub Release
-  # is published. Uses the bazel-contrib Publish-to-BCR reusable workflow,
-  # which reads .bcr/ templates from this repo (config.yml, metadata.template.json,
-  # source.template.json, presubmit.yml) and opens a PR on
-  # bazelbuild/bazel-central-registry from a maintainer's fork.
-  #
-  # One-time setup required:
-  #   1. Fork bazelbuild/bazel-central-registry as jwmcglynn/bazel-central-registry
-  #   2. Create a Classic PAT with `repo` + `workflow` scopes and save it as
-  #      the BCR_PUBLISH_TOKEN repo secret (fine-grained PATs still cannot
-  #      open PRs against public repos)
-  #   3. Optional but recommended for org-owned releases: use a dedicated
-  #      machine user PAT instead of a maintainer's personal token
-  #
-  # This workflow intentionally does not use the legacy Publish-to-BCR GitHub
-  # App, which upstream has marked deprecated and scheduled for discontinuation
-  # after June 30, 2026.
-  #
-  # See docs/design_docs/0018-bcr_release.md for the full runbook.
-  publish-to-bcr:
-    if: github.event_name == 'release' && github.event.action == 'published'
+  publish-release-artifacts:
+    if: github.run_attempt == 1
     needs: [linux, macos]
+    runs-on: ubuntu-24.04
+    env:
+      RELEASE_ID: ${{ github.event.release.id }}
+      RELEASE_TAG: ${{ github.event.release.tag_name }}
+      RELEASE_UPLOAD_URL: ${{ github.event.release.upload_url }}
     permissions:
-      id-token: write       # Needed to attest provenance
-      attestations: write   # Needed to attest provenance
-      contents: write       # Needed to upload release files
-    uses: bazel-contrib/publish-to-bcr/.github/workflows/publish.yaml@v1.4.2
-    with:
-      tag_name: ${{ github.event.release.tag_name }}
-      registry_fork: jwmcglynn/bazel-central-registry
-    secrets:
-      publish_token: ${{ secrets.BCR_PUBLISH_TOKEN }}
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - name: Checkout verified release source
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ github.event.release.tag_name }}
+
+      - name: Reverify release source
+        run: |
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git rev-list -n 1 "refs/tags/${RELEASE_TAG}")" = "$GITHUB_SHA"
+
+      - name: Download Linux artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: donner-svg-linux-x86-64-${{ github.sha }}
+          path: release/linux
+
+      - name: Download macOS artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: donner-svg-darwin-arm64-${{ github.sha }}
+          path: release/macos
+
+      - name: Verify immutable artifacts
+        run: |
+          (cd release/linux && sha256sum --check --strict donner-svg_linux_x86_64.sha256)
+          (cd release/macos && sha256sum --check --strict donner-svg_darwin_arm64.sha256)
+          {
+            echo "source_commit=${GITHUB_SHA}"
+            echo "release_tag=${RELEASE_TAG}"
+            sha256sum .bazelversion .bazelrc MODULE.bazel third_party/bazel/non_bcr_deps.bzl
+          } > expected.provenance
+          cmp --silent expected.provenance release/linux/donner-svg_linux_x86_64.provenance
+          cmp --silent expected.provenance release/macos/donner-svg_darwin_arm64.provenance
+
+      - name: Attest release binaries
+        uses: actions/attest-build-provenance@v3.2.0
+        with:
+          subject-path: |
+            release/linux/donner-svg_linux_x86_64
+            release/macos/donner-svg_darwin_arm64
+
+      - name: Upload verified release artifacts without replacement
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 tools/release_artifact_publisher.py \
+            release/linux/donner-svg_linux_x86_64 \
+            release/linux/donner-svg_linux_x86_64.sha256 \
+            release/linux/donner-svg_linux_x86_64.provenance \
+            release/macos/donner-svg_darwin_arm64 \
+            release/macos/donner-svg_darwin_arm64.sha256 \
+            release/macos/donner-svg_darwin_arm64.provenance

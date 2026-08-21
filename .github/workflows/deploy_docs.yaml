@@ -8,11 +8,8 @@ on:
   # Allows you to run this workflow manually from the Actions tab
   workflow_dispatch:
 
-# Sets permissions of the GITHUB_TOKEN to allow deployment to GitHub Pages
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
 # Allow one concurrent deployment
 concurrency:
@@ -23,6 +20,8 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       - name: Install graphviz
         run: |
@@ -30,9 +29,14 @@ jobs:
           sudo apt-get install graphviz -y
 
       - name: Install Doxygen
+        env:
+          DOXYGEN_SHA256: "0ec2e5b2c3cd82b7106d19cb42d8466450730b8cb7a9e85af712be38bf4523a1"
         run: |
           mkdir -p ${{ github.workspace }}/doxygen
-          curl -L https://github.com/doxygen/doxygen/releases/download/Release_1_15_0/doxygen-1.15.0.linux.bin.tar.gz | tar xz -C ${{ github.workspace }}/doxygen
+          archive="${{ github.workspace }}/doxygen/doxygen.tar.gz"
+          curl -fL https://github.com/doxygen/doxygen/releases/download/Release_1_15_0/doxygen-1.15.0.linux.bin.tar.gz -o "$archive"
+          echo "${DOXYGEN_SHA256}  ${archive}" | sha256sum --check --strict
+          tar xzf "$archive" -C ${{ github.workspace }}/doxygen
           echo "${{ github.workspace }}/doxygen/doxygen-1.15.0/bin" >> $GITHUB_PATH # Add Doxygen to PATH
 
       - name: Generate Doxygen documentation
@@ -47,6 +51,10 @@ jobs:
           # Upload build folder
           path: "./generated-doxygen/html"
   deploy:
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url || steps.deployment_retry.outputs.page_url }}

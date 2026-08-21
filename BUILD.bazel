@@ -55,6 +55,16 @@ filegroup(
     visibility = ["//visibility:public"],
 )
 
+filegroup(
+    name = "github_action_definitions",
+    srcs = glob([
+        ".github/actions/*/action.yml",
+        ".github/workflows/*.yaml",
+        ".github/workflows/*.yml",
+    ]),
+    visibility = ["//tools:__pkg__"],
+)
+
 exports_files(
     [
         "donner_icon.svg",
