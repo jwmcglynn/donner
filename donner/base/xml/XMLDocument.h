@@ -196,6 +196,14 @@ public:
   ApplySourceEditResult applySourceEdit(const XMLEditIntent& intent);
 
   /**
+   * Set document-wide tree limits enforced transactionally by incremental source edits.
+   *
+   * @param maximumTreeNodes Maximum live non-document XML nodes after an edit.
+   * @param maximumTreeDepth Maximum attached element depth after an edit.
+   */
+  void setSourceEditTreeLimits(std::size_t maximumTreeNodes, std::size_t maximumTreeDepth);
+
+  /**
    * Set an XML attribute through this document and update owned source text.
    *
    * This is the DOM-side structured editing entry point for source-backed attribute writes. It
@@ -265,8 +273,9 @@ public:
    * Install owned source text for this document.
    *
    * @param source XML source text to own.
+   * @param maximumSourceSize Maximum source size retained after later structured edits.
    */
-  void setSource(std::string source);
+  void setSource(std::string source, std::size_t maximumSourceSize = 16 * 1024 * 1024);
 
 private:
   /// Internal constructor used to rehydrate an XMLDocument from an existing Registry.

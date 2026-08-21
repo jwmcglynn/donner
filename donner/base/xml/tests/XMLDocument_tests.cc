@@ -56,8 +56,8 @@ bool HasCompatibleNodeIdentity(const XMLNode& target, const XMLNode& parsedNode)
 namespace {
 
 /// Parse \p xml and return the resulting source-backed document, asserting no parse error.
-XMLDocument ParseDocument(std::string_view xml) {
-  ParseResult<XMLDocument> maybeDocument = XMLParser::Parse(xml);
+XMLDocument ParseDocument(std::string_view xml, const XMLParser::Options& options = {}) {
+  ParseResult<XMLDocument> maybeDocument = XMLParser::Parse(xml, options);
   EXPECT_THAT(maybeDocument, NoParseError());
   return std::move(maybeDocument.result());
 }
@@ -126,6 +126,11 @@ TEST_F(XMLDocumentTests, DefaultConstructedDocumentHasDocumentRootAndNoSource) {
   EXPECT_THAT(doc.source(), IsEmpty());
   EXPECT_EQ(doc.sourceVersion(), 0u);
   EXPECT_THAT(doc.sourceStore(), IsNull());
+
+  const auto& context = doc.registry().ctx().get<donner::xml::components::XMLDocumentContext>();
+  EXPECT_EQ(context.maximumSourceEditTreeNodes, XMLParser::Options().maxElements);
+  EXPECT_EQ(context.maximumSourceEditTreeDepth, XMLParser::Options().maxNestingDepth);
+  EXPECT_EQ(context.maximumSourceEditTotalAttributes, XMLParser::Options().maxTotalAttributes);
 
   // const overload also returns nullptr.
   const XMLDocument& constDoc = doc;
@@ -520,6 +525,38 @@ TEST_F(XMLDocumentTests, ApplySourceEditVersionMismatchFails) {
   EXPECT_THAT(result, DiagnosticReasonContains("Source version mismatch"));
 }
 
+TEST_F(XMLDocumentTests, ApplySourceEditCannotGrowPastParserInputLimit) {
+  XMLParser::Options options;
+  options.maximumInputSize = 64;
+  ParseResult<XMLDocument> maybeDocument = XMLParser::Parse("<root/>", options);
+  ASSERT_THAT(maybeDocument, NoParseError());
+  XMLDocument document = std::move(maybeDocument.result());
+
+  const std::string nearLimit = "<root>" + std::string(50, 'a') + "</root>";
+  ASSERT_EQ(nearLimit.size(), 63u);
+  ApplySourceEditResult accepted = document.applySourceEdit(XMLEditIntent{
+      .range = SourceRange{FileOffset::Offset(0), FileOffset::Offset(document.source().size())},
+      .replacement = nearLimit,
+      .sourceVersion = document.sourceVersion(),
+  });
+  ASSERT_TRUE(accepted.applied);
+  ASSERT_EQ(document.source(), nearLimit);
+
+  const std::uint64_t acceptedVersion = document.sourceVersion();
+  const std::string oversized = "<root>" + std::string(52, 'a') + "</root>";
+  ASSERT_EQ(oversized.size(), 65u);
+  ApplySourceEditResult rejected = document.applySourceEdit(XMLEditIntent{
+      .range = SourceRange{FileOffset::Offset(0), FileOffset::Offset(document.source().size())},
+      .replacement = oversized,
+      .sourceVersion = acceptedVersion,
+  });
+
+  EXPECT_FALSE(rejected.applied);
+  EXPECT_THAT(rejected, DiagnosticReasonContains("Invalid source replacement"));
+  EXPECT_EQ(document.source(), nearLimit);
+  EXPECT_EQ(document.sourceVersion(), acceptedVersion);
+}
+
 TEST_F(XMLDocumentTests, ApplySourceEditInvalidRangeFails) {
   XMLDocument doc = ParseDocument(R"(<svg/>)");
   // end < start is an invalid edit range.
@@ -746,6 +783,125 @@ TEST_F(XMLDocumentTests, ApplySourceEditOpeningTagUpdatesAttributeSet) {
   EXPECT_THAT(MutationKinds(result), testing::ElementsAre(XMLMutation::Kind::AttributeRemoved,
                                                           XMLMutation::Kind::AttributeRemoved,
                                                           XMLMutation::Kind::AttributeSet));
+}
+
+TEST_F(XMLDocumentTests, ParsedLimitsRejectRepeatedOpeningTagAttributeGrowthTransactionally) {
+  XMLParser::Options options;
+  options.maxElements = 2;
+  options.maxNestingDepth = 2;
+  options.maxTotalAttributes = 3;
+  XMLDocument doc = ParseDocument(R"(<root a="1"><child b="2"/></root>)", options);
+
+  const auto& context = doc.registry().ctx().get<donner::xml::components::XMLDocumentContext>();
+  EXPECT_EQ(context.maximumSourceEditTreeNodes, options.maxElements);
+  EXPECT_EQ(context.maximumSourceEditTreeDepth, options.maxNestingDepth);
+  EXPECT_EQ(context.maximumSourceEditTotalAttributes, options.maxTotalAttributes);
+
+  std::size_t insertion = doc.source().find("/>", doc.source().find("<child"));
+  ASSERT_NE(insertion, std::string_view::npos);
+  ApplySourceEditResult accepted = doc.applySourceEdit(XMLEditIntent{
+      .range = SourceRange{FileOffset::Offset(insertion), FileOffset::Offset(insertion)},
+      .replacement = R"( c="3")",
+      .sourceVersion = doc.sourceVersion(),
+  });
+  ASSERT_TRUE(accepted.applied);
+  ASSERT_THAT(accepted.diagnostic, Eq(std::nullopt));
+  XMLNode child = doc.root().firstChild()->firstChild().value();
+  EXPECT_THAT(child.getAttribute("c"), Optional(Eq("3")));
+
+  insertion = doc.source().find("/>", doc.source().find("<child"));
+  ASSERT_NE(insertion, std::string_view::npos);
+  const std::string sourceBefore = std::string(doc.source());
+  const std::uint64_t versionBefore = doc.sourceVersion();
+  ApplySourceEditResult rejected = doc.applySourceEdit(XMLEditIntent{
+      .range = SourceRange{FileOffset::Offset(insertion), FileOffset::Offset(insertion)},
+      .replacement = R"( d="4")",
+      .sourceVersion = versionBefore,
+  });
+
+  EXPECT_FALSE(rejected.applied);
+  EXPECT_EQ(rejected.scope, ReparseScope::OpeningTag);
+  EXPECT_THAT(rejected, DiagnosticReasonContains("total-attribute limit"));
+  EXPECT_EQ(doc.source(), sourceBefore);
+  EXPECT_EQ(doc.sourceVersion(), versionBefore);
+  EXPECT_FALSE(child.hasAttribute("d"));
+}
+
+TEST_F(XMLDocumentTests, ParsedNodeLimitRejectsSubtreeGrowthTransactionally) {
+  XMLParser::Options options;
+  options.maxElements = 4;
+  options.maxNestingDepth = 4;
+  XMLDocument doc = ParseDocument(R"(<root><host/></root>)", options);
+
+  const std::string_view initialHost = R"(<host/>)";
+  std::size_t editStart = doc.source().find(initialHost);
+  ASSERT_NE(editStart, std::string_view::npos);
+  ApplySourceEditResult accepted = doc.applySourceEdit(XMLEditIntent{
+      .range = SourceRange{FileOffset::Offset(editStart),
+                           FileOffset::Offset(editStart + initialHost.size())},
+      .replacement = R"(<host><child/></host>)",
+      .sourceVersion = doc.sourceVersion(),
+  });
+  ASSERT_TRUE(accepted.applied);
+  ASSERT_THAT(accepted.diagnostic, Eq(std::nullopt));
+
+  const std::size_t insertion = doc.source().find("</host>");
+  ASSERT_NE(insertion, std::string_view::npos);
+  const std::string sourceBefore = std::string(doc.source());
+  const std::uint64_t versionBefore = doc.sourceVersion();
+  ApplySourceEditResult rejected = doc.applySourceEdit(XMLEditIntent{
+      .range = SourceRange{FileOffset::Offset(insertion), FileOffset::Offset(insertion)},
+      .replacement = "<extra/><too/>",
+      .sourceVersion = versionBefore,
+  });
+
+  EXPECT_FALSE(rejected.applied);
+  EXPECT_THAT(rejected, DiagnosticReasonContains("tree-node limit"));
+  EXPECT_EQ(doc.source(), sourceBefore);
+  EXPECT_EQ(doc.sourceVersion(), versionBefore);
+  XMLNode host = doc.root().firstChild()->firstChild().value();
+  ASSERT_TRUE(host.firstChild().has_value());
+  EXPECT_EQ(host.firstChild()->tagName(), XMLQualifiedNameRef("child"));
+  EXPECT_THAT(host.firstChild()->nextSibling(), Eq(std::nullopt));
+}
+
+TEST_F(XMLDocumentTests, ParsedDepthLimitRejectsSubtreeGrowthTransactionally) {
+  XMLParser::Options options;
+  options.maxElements = 8;
+  options.maxNestingDepth = 3;
+  XMLDocument doc = ParseDocument(R"(<root><host/></root>)", options);
+
+  const std::string_view initialHost = R"(<host/>)";
+  std::size_t editStart = doc.source().find(initialHost);
+  ASSERT_NE(editStart, std::string_view::npos);
+  ApplySourceEditResult accepted = doc.applySourceEdit(XMLEditIntent{
+      .range = SourceRange{FileOffset::Offset(editStart),
+                           FileOffset::Offset(editStart + initialHost.size())},
+      .replacement = R"(<host><level/></host>)",
+      .sourceVersion = doc.sourceVersion(),
+  });
+  ASSERT_TRUE(accepted.applied);
+  ASSERT_THAT(accepted.diagnostic, Eq(std::nullopt));
+
+  const std::string_view currentLevel = R"(<level/>)";
+  editStart = doc.source().find(currentLevel);
+  ASSERT_NE(editStart, std::string_view::npos);
+  const std::string sourceBefore = std::string(doc.source());
+  const std::uint64_t versionBefore = doc.sourceVersion();
+  ApplySourceEditResult rejected = doc.applySourceEdit(XMLEditIntent{
+      .range = SourceRange{FileOffset::Offset(editStart),
+                           FileOffset::Offset(editStart + currentLevel.size())},
+      .replacement = R"(<level><too/></level>)",
+      .sourceVersion = versionBefore,
+  });
+
+  EXPECT_FALSE(rejected.applied);
+  EXPECT_THAT(rejected, DiagnosticReasonContains("tree-depth limit"));
+  EXPECT_EQ(doc.source(), sourceBefore);
+  EXPECT_EQ(doc.sourceVersion(), versionBefore);
+  XMLNode level = doc.root().firstChild()->firstChild()->firstChild().value();
+  EXPECT_EQ(level.tagName(), XMLQualifiedNameRef("level"));
+  EXPECT_THAT(level.firstChild(), Eq(std::nullopt));
 }
 
 TEST_F(XMLDocumentTests, ApplySourceEditOpeningTagRenameReportsDiagnostic) {
@@ -1243,6 +1399,134 @@ TEST_F(XMLDocumentTests, ApplySourceEditElementSubtreeReusesAndReplacesChildren)
   EXPECT_THAT(MutationKinds(result), testing::Contains(XMLMutation::Kind::SubtreeReplaced));
   EXPECT_THAT(MutationKinds(result), testing::Contains(XMLMutation::Kind::NodeInserted));
   EXPECT_THAT(MutationKinds(result), testing::Contains(XMLMutation::Kind::NodeRemoved));
+}
+
+TEST_F(XMLDocumentTests, RepeatedSubtreeEditsEnforceLiveTotalAttributeLimitTransactionally) {
+  XMLParser::Options options;
+  options.maxTotalAttributes = 6;
+  XMLDocument doc =
+      ParseDocument(R"(<root a="1"><host id="h"><child id="c" x="1"/></host></root>)", options);
+
+  const std::string_view initialChild = R"(<child id="c" x="1"/>)";
+  std::size_t editStart = doc.source().find(initialChild);
+  ASSERT_NE(editStart, std::string_view::npos);
+  ApplySourceEditResult accepted = doc.applySourceEdit(XMLEditIntent{
+      .range = SourceRange{FileOffset::Offset(editStart),
+                           FileOffset::Offset(editStart + initialChild.size())},
+      .replacement = R"(<child id="c" x="1"/><new id="n" y="1"/>)",
+      .sourceVersion = doc.sourceVersion(),
+  });
+  ASSERT_TRUE(accepted.applied);
+  ASSERT_THAT(accepted.diagnostic, Eq(std::nullopt));
+
+  const std::string_view currentChildren = R"(<child id="c" x="1"/><new id="n" y="1"/>)";
+  editStart = doc.source().find(currentChildren);
+  ASSERT_NE(editStart, std::string_view::npos);
+  const std::string sourceBefore = std::string(doc.source());
+  const std::uint64_t versionBefore = doc.sourceVersion();
+  ApplySourceEditResult rejected = doc.applySourceEdit(XMLEditIntent{
+      .range = SourceRange{FileOffset::Offset(editStart),
+                           FileOffset::Offset(editStart + currentChildren.size())},
+      .replacement = R"(<child id="c" x="1"/><new id="n" y="1"/><extra id="e"/>)",
+      .sourceVersion = versionBefore,
+  });
+
+  EXPECT_FALSE(rejected.applied);
+  EXPECT_EQ(rejected.scope, ReparseScope::ElementSubtree);
+  EXPECT_THAT(rejected, DiagnosticReasonContains("total-attribute limit"));
+  EXPECT_EQ(doc.source(), sourceBefore);
+  EXPECT_EQ(doc.sourceVersion(), versionBefore);
+  XMLNode host = doc.root().firstChild()->firstChild().value();
+  ASSERT_TRUE(host.firstChild().has_value());
+  EXPECT_EQ(host.firstChild()->tagName(), XMLQualifiedNameRef("child"));
+  ASSERT_TRUE(host.firstChild()->nextSibling().has_value());
+  EXPECT_EQ(host.firstChild()->nextSibling()->tagName(), XMLQualifiedNameRef("new"));
+  EXPECT_THAT(host.firstChild()->nextSibling()->nextSibling(), Eq(std::nullopt));
+}
+
+TEST_F(XMLDocumentTests, RepeatedElementSubtreeEditsRetireHistoricalSourceAnchors) {
+  constexpr std::size_t kChildCount = 32;
+  constexpr std::size_t kEditCount = 16;
+  std::string children;
+  for (std::size_t index = 0; index < kChildCount; ++index) {
+    children += "<item id='" + std::to_string(index) + "'/>";
+  }
+
+  XMLDocument document = ParseDocument("<root>" + children + "</root>");
+  XMLSourceStore* store = document.sourceStore();
+  ASSERT_NE(store, nullptr);
+  XMLNode root = document.root().firstChild().value();
+  const std::size_t editStart = document.source().find("<item");
+  const std::size_t editEnd = document.source().find("</root>");
+  ASSERT_NE(editStart, std::string_view::npos);
+  ASSERT_NE(editEnd, std::string_view::npos);
+
+  const XMLSourceStore::ResourceStats initialStats = store->resourceStats();
+  ASSERT_GT(initialStats.liveAnchorCount, 0u);
+  XMLSourceStore::ResourceLimits limits = store->resourceLimits();
+  limits.maximumAnchorUpdateWorkPerEdit = initialStats.liveAnchorCount;
+  ASSERT_TRUE(store->setResourceLimits(limits));
+
+  for (std::size_t edit = 0; edit < kEditCount; ++edit) {
+    ApplySourceEditResult result = document.applySourceEdit(XMLEditIntent{
+        .range = SourceRange{FileOffset::Offset(editStart), FileOffset::Offset(editEnd)},
+        .replacement = children,
+        .sourceVersion = document.sourceVersion(),
+    });
+    ASSERT_TRUE(result.applied) << "edit " << edit;
+    ASSERT_EQ(result.scope, ReparseScope::ElementSubtree) << "edit " << edit;
+    ASSERT_EQ(result.diagnostic, std::nullopt) << "edit " << edit;
+    EXPECT_EQ(store->resourceStats().liveAnchorCount, initialStats.liveAnchorCount);
+  }
+
+  const XMLSourceStore::ResourceStats repeatedEditStats = store->resourceStats();
+  EXPECT_EQ(repeatedEditStats.liveAnchorCount, initialStats.liveAnchorCount);
+  EXPECT_LE(repeatedEditStats.peakLiveAnchorCount, initialStats.liveAnchorCount + 4);
+  EXPECT_GT(repeatedEditStats.totalCreatedAnchors, initialStats.totalCreatedAnchors);
+  EXPECT_GT(repeatedEditStats.totalRetiredAnchors, initialStats.totalRetiredAnchors);
+  EXPECT_EQ(repeatedEditStats.lastAnchorUpdateWork, initialStats.liveAnchorCount);
+  EXPECT_EQ(repeatedEditStats.totalAnchorUpdateWork,
+            initialStats.totalAnchorUpdateWork + kEditCount * initialStats.liveAnchorCount);
+
+  std::vector<XMLNode> childrenBeforeRejection;
+  for (std::optional<XMLNode> child = root.firstChild(); child.has_value();
+       child = child->nextSibling()) {
+    childrenBeforeRejection.push_back(*child);
+  }
+  ASSERT_EQ(childrenBeforeRejection.size(), kChildCount);
+  limits.maximumAnchorUpdateWorkPerEdit = initialStats.liveAnchorCount - 1;
+  ASSERT_TRUE(store->setResourceLimits(limits));
+  const std::string sourceBeforeRejection(document.source());
+  const std::string treeBeforeRejection(
+      std::string_view(root.serializeToString(0, /*prettyPrint=*/false)));
+  const std::uint64_t versionBeforeRejection = document.sourceVersion();
+
+  ApplySourceEditResult rejected = document.applySourceEdit(XMLEditIntent{
+      .range = SourceRange{FileOffset::Offset(editStart), FileOffset::Offset(editEnd)},
+      .replacement = children,
+      .sourceVersion = document.sourceVersion(),
+  });
+
+  EXPECT_FALSE(rejected.applied);
+  EXPECT_THAT(rejected, DiagnosticReasonContains("Invalid source replacement"));
+  EXPECT_EQ(document.source(), sourceBeforeRejection);
+  EXPECT_EQ(root.serializeToString(0, /*prettyPrint=*/false), treeBeforeRejection);
+  EXPECT_EQ(document.sourceVersion(), versionBeforeRejection);
+  std::vector<XMLNode> childrenAfterRejection;
+  for (std::optional<XMLNode> child = root.firstChild(); child.has_value();
+       child = child->nextSibling()) {
+    childrenAfterRejection.push_back(*child);
+  }
+  EXPECT_EQ(childrenAfterRejection, childrenBeforeRejection);
+
+  const XMLSourceStore::ResourceStats rejectedStats = store->resourceStats();
+  EXPECT_EQ(rejectedStats.liveAnchorCount, repeatedEditStats.liveAnchorCount);
+  EXPECT_EQ(rejectedStats.totalCreatedAnchors, repeatedEditStats.totalCreatedAnchors);
+  EXPECT_EQ(rejectedStats.totalRetiredAnchors, repeatedEditStats.totalRetiredAnchors);
+  EXPECT_EQ(rejectedStats.totalAnchorUpdateWork, repeatedEditStats.totalAnchorUpdateWork);
+  EXPECT_EQ(rejectedStats.lastAnchorUpdateWork, 0u);
+  EXPECT_EQ(rejectedStats.anchorUpdateWorkRejections,
+            repeatedEditStats.anchorUpdateWorkRejections + 1);
 }
 
 TEST_F(XMLDocumentTests, ApplySourceEditElementSubtreeReusedChildRemovesAttribute) {

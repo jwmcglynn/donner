@@ -284,6 +284,174 @@ bool ValidateDependencyGraph(std::span<const DependencyRange> ranges,
   return true;
 }
 
+struct ParsedTableDirectory {
+  std::unique_ptr<SfntFont::TableRecord[]> tables;
+  size_t count = 0;
+};
+
+std::optional<size_t> ReadTableCount(std::span<const uint8_t> data) {
+  if (data.size() < 12 || !IsSfntMagic(ReadBe32(data.data()))) {
+    return std::nullopt;
+  }
+  const size_t count = ReadBe16(data.data() + 4);
+  if (count > kMaximumSfntTables || count > (data.size() - 12) / 16) {
+    return std::nullopt;
+  }
+  return count;
+}
+
+std::optional<ParsedTableDirectory> LoadTableDirectory(std::span<const uint8_t> data,
+                                                       size_t count) {
+  ParsedTableDirectory directory;
+  directory.count = count;
+  if (count != 0) {
+    directory.tables = std::make_unique<SfntFont::TableRecord[]>(count);
+  }
+  for (size_t index = 0; index < count; ++index) {
+    const size_t recordOffset = 12 + index * 16;
+    const uint32_t tableOffset = ReadBe32(data.data() + recordOffset + 8);
+    const uint32_t tableLength = ReadBe32(data.data() + recordOffset + 12);
+    if (!HasBytes(data, tableOffset, tableLength)) {
+      return std::nullopt;
+    }
+    directory.tables[index] =
+        SfntFont::TableRecord{ReadBe32(data.data() + recordOffset), tableOffset, tableLength};
+  }
+  return directory;
+}
+
+bool SortAndValidateUniqueTables(ParsedTableDirectory& directory) {
+  if (directory.count > 1) {
+    std::sort(directory.tables.get(), directory.tables.get() + directory.count,
+              [](const SfntFont::TableRecord& lhs, const SfntFont::TableRecord& rhs) {
+                return lhs.tag < rhs.tag;
+              });
+  }
+  for (size_t index = 1; index < directory.count; ++index) {
+    if (directory.tables[index - 1].tag == directory.tables[index].tag) {
+      return false;
+    }
+  }
+  return true;
+}
+
+std::optional<ParsedTableDirectory> ParseTableDirectory(std::span<const uint8_t> data) {
+  const std::optional<size_t> count = ReadTableCount(data);
+  if (!count.has_value()) {
+    return std::nullopt;
+  }
+  std::optional<ParsedTableDirectory> directory = LoadTableDirectory(data, *count);
+  if (!directory.has_value() || !SortAndValidateUniqueTables(*directory)) {
+    return std::nullopt;
+  }
+  return directory;
+}
+
+struct TrueTypeMetadata {
+  std::span<const uint8_t> head;
+  std::span<const uint8_t> maxp;
+  std::span<const uint8_t> loca;
+};
+
+std::optional<TrueTypeMetadata> FindTrueTypeMetadata(const SfntFont& font,
+                                                     std::span<const uint8_t> data) {
+  const auto head = font.findTable(data, "head");
+  const auto maxp = font.findTable(data, "maxp");
+  const auto loca = font.findTable(data, "loca");
+  if (!head || head->size() < 54 || !maxp || maxp->size() < 6 || !loca) {
+    return std::nullopt;
+  }
+  return TrueTypeMetadata{*head, *maxp, *loca};
+}
+
+struct ParsedLocaIndex {
+  std::unique_ptr<uint32_t[]> offsets;
+  size_t numGlyphs = 0;
+};
+
+std::optional<ParsedLocaIndex> ParseLocaIndex(const TrueTypeMetadata& metadata,
+                                              std::span<const uint8_t> glyf) {
+  const int16_t format = static_cast<int16_t>(ReadBe16(metadata.head.data() + 50));
+  if (format != 0 && format != 1) {
+    return std::nullopt;
+  }
+  ParsedLocaIndex index;
+  index.numGlyphs = ReadBe16(metadata.maxp.data() + 4);
+  const size_t count = index.numGlyphs + 1;
+  const size_t entrySize = format == 0 ? 2 : 4;
+  if (count > metadata.loca.size() / entrySize) {
+    return std::nullopt;
+  }
+  index.offsets = std::make_unique<uint32_t[]>(count);
+
+  uint32_t previousOffset = 0;
+  for (size_t entry = 0; entry < count; ++entry) {
+    const uint32_t offset =
+        format == 0 ? static_cast<uint32_t>(ReadBe16(metadata.loca.data() + entry * 2)) * 2
+                    : ReadBe32(metadata.loca.data() + entry * 4);
+    if (offset < previousOffset || offset > glyf.size()) {
+      return std::nullopt;
+    }
+    index.offsets[entry] = offset;
+    previousOffset = offset;
+  }
+  return index;
+}
+
+bool ValidateGlyph(size_t glyphIndex, std::span<const uint8_t> glyf,
+                   std::span<const uint32_t> offsets, std::vector<DependencyRange>& ranges,
+                   std::vector<GlyphComplexity>& complexities, std::vector<uint16_t>& dependencies,
+                   size_t& totalComponents, size_t& totalPoints) {
+  const size_t start = offsets[glyphIndex];
+  const size_t end = offsets[glyphIndex + 1];
+  if (start == end) {
+    return true;
+  }
+  const std::span<const uint8_t> glyph = glyf.subspan(start, end - start);
+  if (glyph.size() < 10) {
+    return false;
+  }
+
+  const int16_t contourCount = static_cast<int16_t>(ReadBe16(glyph.data()));
+  if (contourCount >= 0) {
+    return contourCount == 0 || ValidateSimpleGlyph(glyph, static_cast<uint16_t>(contourCount),
+                                                    &totalPoints, &complexities[glyphIndex]);
+  }
+  if (contourCount != -1) {
+    return false;
+  }
+
+  const size_t dependencyStart = dependencies.size();
+  if (!ParseCompoundGlyph(glyph, complexities.size(), &dependencies, &totalComponents)) {
+    return false;
+  }
+  ranges[glyphIndex] =
+      DependencyRange{static_cast<uint32_t>(dependencyStart),
+                      static_cast<uint32_t>(dependencies.size() - dependencyStart)};
+  return true;
+}
+
+std::optional<std::vector<GlyphComplexity>> ValidateGlyphOutlines(std::span<const uint8_t> glyf,
+                                                                  std::span<const uint32_t> offsets,
+                                                                  size_t numGlyphs) {
+  std::vector<DependencyRange> ranges(numGlyphs);
+  std::vector<GlyphComplexity> complexities(numGlyphs);
+  std::vector<uint16_t> dependencies;
+  dependencies.reserve(std::min(glyf.size() / 4, kMaximumCompoundComponentRecords));
+  size_t totalComponents = 0;
+  size_t totalPoints = 0;
+  for (size_t glyph = 0; glyph < numGlyphs; ++glyph) {
+    if (!ValidateGlyph(glyph, glyf, offsets, ranges, complexities, dependencies, totalComponents,
+                       totalPoints)) {
+      return std::nullopt;
+    }
+  }
+  if (!ValidateDependencyGraph(ranges, dependencies, complexities)) {
+    return std::nullopt;
+  }
+  return complexities;
+}
+
 }  // namespace
 
 uint32_t SfntTag(std::string_view tag) {
@@ -302,117 +470,44 @@ SfntFont::SfntFont(SfntFont&&) noexcept = default;
 SfntFont& SfntFont::operator=(SfntFont&&) noexcept = default;
 
 std::optional<SfntFont> SfntFont::Validate(std::span<const uint8_t> data) {
-  if (data.size() < 12 || !IsSfntMagic(ReadBe32(data.data()))) {
-    return std::nullopt;
-  }
-
-  const size_t numTables = ReadBe16(data.data() + 4);
-  if (numTables > kMaximumSfntTables || numTables > (data.size() - 12) / 16) {
+  std::optional<ParsedTableDirectory> directory = ParseTableDirectory(data);
+  if (!directory.has_value()) {
     return std::nullopt;
   }
 
   SfntFont font;
-  font.numTables_ = numTables;
-  if (numTables != 0) {
-    font.tables_ = std::make_unique<TableRecord[]>(numTables);
-  }
-
-  for (size_t i = 0; i < numTables; ++i) {
-    const size_t recordOffset = 12 + i * 16;
-    const uint32_t tableOffset = ReadBe32(data.data() + recordOffset + 8);
-    const uint32_t tableLength = ReadBe32(data.data() + recordOffset + 12);
-    if (!HasBytes(data, tableOffset, tableLength)) {
-      return std::nullopt;
-    }
-    font.tables_[i] = TableRecord{ReadBe32(data.data() + recordOffset), tableOffset, tableLength};
-  }
-
-  if (numTables > 1) {
-    std::sort(font.tables_.get(), font.tables_.get() + numTables,
-              [](const TableRecord& lhs, const TableRecord& rhs) { return lhs.tag < rhs.tag; });
-  }
-  for (size_t i = 1; i < numTables; ++i) {
-    if (font.tables_[i - 1].tag == font.tables_[i].tag) {
-      return std::nullopt;
-    }
-  }
-
+  font.numTables_ = directory->count;
+  font.tables_ = std::move(directory->tables);
   const auto glyf = font.findTable(data, "glyf");
-  if (!glyf) {
+  if (!glyf.has_value()) {
     return font;
   }
 
-  const auto head = font.findTable(data, "head");
-  const auto maxp = font.findTable(data, "maxp");
-  const auto loca = font.findTable(data, "loca");
-  if (!head || head->size() < 54 || !maxp || maxp->size() < 6 || !loca) {
+  const std::optional<TrueTypeMetadata> metadata = FindTrueTypeMetadata(font, data);
+  if (!metadata.has_value()) {
+    return std::nullopt;
+  }
+  std::optional<ParsedLocaIndex> loca = ParseLocaIndex(*metadata, *glyf);
+  if (!loca.has_value()) {
     return std::nullopt;
   }
 
-  const int16_t locaFormat = static_cast<int16_t>(ReadBe16(head->data() + 50));
-  if (locaFormat != 0 && locaFormat != 1) {
+  std::optional<std::vector<GlyphComplexity>> complexities = ValidateGlyphOutlines(
+      *glyf, std::span<const uint32_t>(loca->offsets.get(), loca->numGlyphs + 1), loca->numGlyphs);
+  if (!complexities.has_value()) {
     return std::nullopt;
   }
-  font.numGlyphs_ = ReadBe16(maxp->data() + 4);
-  const size_t locaCount = font.numGlyphs_ + 1;
-  const size_t locaEntrySize = locaFormat == 0 ? 2 : 4;
-  if (locaCount > loca->size() / locaEntrySize) {
-    return std::nullopt;
-  }
-  font.glyphOffsets_ = std::make_unique<uint32_t[]>(locaCount);
 
-  uint32_t previousOffset = 0;
-  for (size_t i = 0; i < locaCount; ++i) {
-    const uint32_t offset = locaFormat == 0
-                                ? static_cast<uint32_t>(ReadBe16(loca->data() + i * 2)) * 2
-                                : ReadBe32(loca->data() + i * 4);
-    if (offset < previousOffset || offset > glyf->size()) {
-      return std::nullopt;
+  font.numGlyphs_ = loca->numGlyphs;
+  font.glyphOffsets_ = std::move(loca->offsets);
+  if (font.numGlyphs_ != 0) {
+    font.glyphComplexities_ = std::make_unique<SfntFont::GlyphOutlineComplexity[]>(font.numGlyphs_);
+    for (size_t glyph = 0; glyph < font.numGlyphs_; ++glyph) {
+      font.glyphComplexities_[glyph] = {
+          .maximumVertices = (*complexities)[glyph].vertices,
+          .work = (*complexities)[glyph].work,
+      };
     }
-    font.glyphOffsets_[i] = offset;
-    previousOffset = offset;
-  }
-
-  std::vector<DependencyRange> ranges(font.numGlyphs_);
-  std::vector<GlyphComplexity> complexities(font.numGlyphs_);
-  std::vector<uint16_t> dependencies;
-  dependencies.reserve(std::min(glyf->size() / 4, kMaximumCompoundComponentRecords));
-  size_t totalComponents = 0;
-  size_t totalPoints = 0;
-  for (size_t glyphIndex = 0; glyphIndex < font.numGlyphs_; ++glyphIndex) {
-    const size_t start = font.glyphOffsets_[glyphIndex];
-    const size_t end = font.glyphOffsets_[glyphIndex + 1];
-    if (start == end) {
-      continue;
-    }
-
-    const std::span<const uint8_t> glyph = glyf->subspan(start, end - start);
-    if (glyph.size() < 10) {
-      return std::nullopt;
-    }
-    const int16_t contourCount = static_cast<int16_t>(ReadBe16(glyph.data()));
-    if (contourCount >= 0) {
-      if (contourCount != 0 && !ValidateSimpleGlyph(glyph, static_cast<uint16_t>(contourCount),
-                                                    &totalPoints, &complexities[glyphIndex])) {
-        return std::nullopt;
-      }
-      continue;
-    }
-    if (contourCount != -1) {
-      return std::nullopt;
-    }
-
-    const size_t dependencyStart = dependencies.size();
-    if (!ParseCompoundGlyph(glyph, font.numGlyphs_, &dependencies, &totalComponents)) {
-      return std::nullopt;
-    }
-    ranges[glyphIndex] =
-        DependencyRange{static_cast<uint32_t>(dependencyStart),
-                        static_cast<uint32_t>(dependencies.size() - dependencyStart)};
-  }
-
-  if (!ValidateDependencyGraph(ranges, dependencies, complexities)) {
-    return std::nullopt;
   }
   return font;
 }
@@ -445,9 +540,18 @@ bool SfntFont::hasTable(std::string_view tag) const {
   return tag.size() == 4 && findRecord(SfntTag(tag)) != nullptr;
 }
 
+std::optional<SfntFont::GlyphOutlineComplexity> SfntFont::glyphOutlineComplexity(
+    size_t glyphIndex) const {
+  if (!glyphComplexities_ || glyphIndex >= numGlyphs_) {
+    return std::nullopt;
+  }
+  return glyphComplexities_[glyphIndex];
+}
+
 size_t SfntFont::retainedBytes() const {
   return numTables_ * sizeof(TableRecord) +
-         (glyphOffsets_ ? (numGlyphs_ + 1) * sizeof(uint32_t) : 0);
+         (glyphOffsets_ ? (numGlyphs_ + 1) * sizeof(uint32_t) : 0) +
+         (glyphComplexities_ ? numGlyphs_ * sizeof(GlyphOutlineComplexity) : 0);
 }
 
 bool ValidateSfnt(std::span<const uint8_t> data) {

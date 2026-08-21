@@ -5,6 +5,7 @@
 
 #include "donner/base/ParseResult.h"
 #include "donner/base/xml/XMLDocument.h"
+#include "donner/base/xml/XMLParser.h"
 
 namespace donner::xml {
 
@@ -37,6 +38,10 @@ public:
    */
   static ParseResult<XMLDocument> ParseOpeningTag(std::string_view openingTagSource);
 
+  /** Parse one opening tag using explicit XML parser resource limits. */
+  static ParseResult<XMLDocument> ParseOpeningTag(std::string_view openingTagSource,
+                                                  const XMLParser::Options& options);
+
   /**
    * Parse parsed-character-data source by wrapping it in a synthetic element.
    *
@@ -62,6 +67,10 @@ public:
    * @return Parsed temporary XML document, or a parse diagnostic.
    */
   static ParseResult<XMLDocument> ParseElement(std::string_view elementSource);
+
+  /** Parse one element subtree using explicit XML parser resource limits. */
+  static ParseResult<XMLDocument> ParseElement(std::string_view elementSource,
+                                               const XMLParser::Options& options);
 };
 
 }  // namespace donner::xml

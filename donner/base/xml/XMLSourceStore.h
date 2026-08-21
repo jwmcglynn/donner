@@ -7,7 +7,7 @@
 #include <ostream>
 #include <string>
 #include <string_view>
-#include <vector>
+#include <unordered_map>
 
 #include "donner/base/FileOffset.h"
 #include "donner/base/Utils.h"
@@ -74,6 +74,29 @@ struct XMLSourceDelta {
  */
 class XMLSourceStore {
 public:
+  /// Resource limits for retained anchors and anchor-update work.
+  struct ResourceLimits {
+    /// Maximum source bytes retained after an edit.
+    std::size_t maximumSourceSize = 16 * 1024 * 1024;
+
+    /// Maximum simultaneously live source anchors.
+    std::size_t maximumLiveAnchorCount = 1024 * 1024;
+
+    /// Maximum live anchors visited by one source edit.
+    std::size_t maximumAnchorUpdateWorkPerEdit = 1024 * 1024;
+  };
+
+  /// Exact resource accounting for source anchors and edit work.
+  struct ResourceStats {
+    std::size_t liveAnchorCount = 0;          ///< Anchors that can currently be resolved.
+    std::size_t peakLiveAnchorCount = 0;      ///< Highest live-anchor count reached.
+    std::uint64_t totalCreatedAnchors = 0;    ///< Anchors created over this store's lifetime.
+    std::uint64_t totalRetiredAnchors = 0;    ///< Anchors invalidated over this store's lifetime.
+    std::uint64_t totalAnchorUpdateWork = 0;  ///< Live anchors visited by accepted edits.
+    std::size_t lastAnchorUpdateWork = 0;     ///< Live anchors visited by the last accepted edit.
+    std::uint64_t anchorUpdateWorkRejections = 0;  ///< Edits rejected before an anchor scan.
+  };
+
   /// Construct an empty source store.
   XMLSourceStore() = default;
 
@@ -82,13 +105,38 @@ public:
    *
    * @param source Initial XML source text.
    */
-  explicit XMLSourceStore(std::string source);
+  explicit XMLSourceStore(std::string source, std::size_t maximumSourceSize = 16 * 1024 * 1024);
+
+  /**
+   * Construct a source store with explicit resource limits.
+   *
+   * @param source Initial XML source text.
+   * @param limits Source, live-anchor, and per-edit anchor-work limits.
+   */
+  XMLSourceStore(std::string source, ResourceLimits limits);
 
   /// Return the current source bytes.
   [[nodiscard]] std::string_view source() const UTILS_LIFETIME_BOUND { return source_; }
 
   /// Return the monotonically increasing source version.
   [[nodiscard]] std::uint64_t sourceVersion() const { return sourceVersion_; }
+
+  /// Return the configured source-anchor resource limits.
+  [[nodiscard]] const ResourceLimits& resourceLimits() const { return resourceLimits_; }
+
+  /// Return exact source-anchor resource accounting.
+  [[nodiscard]] ResourceStats resourceStats() const;
+
+  /**
+   * Replace the resource limits without changing source or anchors.
+   *
+   * The source and live-anchor limits cannot be lowered below current retained state. The
+   * per-edit work limit may be lower than the current live-anchor count, in which case later edits
+   * fail transactionally until the limit is raised or anchors are retired.
+   *
+   * @return True if the new limits were installed.
+   */
+  [[nodiscard]] bool setResourceLimits(ResourceLimits limits);
 
   /**
    * Create an anchor at \p offset.
@@ -169,7 +217,6 @@ private:
   struct Anchor {
     std::size_t offset = 0;
     SourceAnchorBias bias = SourceAnchorBias::Before;
-    bool valid = true;
   };
 
   [[nodiscard]] bool isBoundary(std::size_t offset) const;
@@ -177,9 +224,20 @@ private:
   [[nodiscard]] Anchor* findAnchor(SourceAnchorId id);
   [[nodiscard]] const Anchor* findAnchor(SourceAnchorId id) const;
 
+  void recordCreatedAnchor();
+  void recordRetiredAnchor();
+
   std::string source_;
+  ResourceLimits resourceLimits_;
   std::uint64_t sourceVersion_ = 0;
-  std::vector<Anchor> anchors_;
+  std::uint32_t nextAnchorId_ = 1;
+  std::unordered_map<std::uint32_t, Anchor> anchors_;
+  std::size_t peakLiveAnchorCount_ = 0;
+  std::uint64_t totalCreatedAnchors_ = 0;
+  std::uint64_t totalRetiredAnchors_ = 0;
+  std::uint64_t totalAnchorUpdateWork_ = 0;
+  std::size_t lastAnchorUpdateWork_ = 0;
+  std::uint64_t anchorUpdateWorkRejections_ = 0;
 
   /// Line table for \ref source_, built on demand by \ref resolveLineInfo.
   mutable std::optional<donner::parser::LineOffsets> lineOffsets_;

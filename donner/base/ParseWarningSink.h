@@ -2,6 +2,7 @@
 /// @file
 
 #include <concepts>
+#include <cstddef>
 #include <type_traits>
 #include <vector>
 
@@ -27,6 +28,12 @@ namespace donner {
  */
 class ParseWarningSink {
 public:
+  /// Maximum warning objects retained by one sink.
+  static constexpr std::size_t kMaximumWarnings = 1024;
+
+  /// Maximum aggregate warning-reason bytes retained by one sink.
+  static constexpr std::size_t kMaximumWarningBytes = 1024 * 1024;
+
   /// Construct a sink that collects warnings.
   ParseWarningSink() = default;
 
@@ -49,15 +56,19 @@ public:
   template <typename Factory>
     requires std::invocable<Factory> && std::same_as<std::invoke_result_t<Factory>, ParseDiagnostic>
   void add(Factory&& factory) {
-    if (enabled_) {
-      warnings_.push_back(std::forward<Factory>(factory)());
+    if (enabled_ && !resourceLimitExceeded_) {
+      if (warnings_.size() >= kMaximumWarnings) {
+        resourceLimitExceeded_ = true;
+        return;
+      }
+      tryAdd(std::forward<Factory>(factory)());
     }
   }
 
   /// Add a pre-constructed warning (for cases where the diagnostic is already built).
   void add(ParseDiagnostic&& warning) {
-    if (enabled_) {
-      warnings_.push_back(std::move(warning));
+    if (enabled_ && !resourceLimitExceeded_) {
+      tryAdd(std::move(warning));
     }
   }
 
@@ -67,11 +78,19 @@ public:
   /// Returns true if any warnings have been added.
   bool hasWarnings() const { return !warnings_.empty(); }
 
+  /// Returns true if warnings were discarded to enforce a resource limit.
+  bool resourceLimitExceeded() const { return resourceLimitExceeded_; }
+
+  /// Aggregate bytes retained for warning messages.
+  std::size_t warningBytes() const { return warningBytes_; }
+
   /// Merge all warnings from another sink into this one.
   void merge(ParseWarningSink&& other) {
     if (enabled_) {
-      warnings_.insert(warnings_.end(), std::make_move_iterator(other.warnings_.begin()),
-                       std::make_move_iterator(other.warnings_.end()));
+      for (ParseDiagnostic& warning : other.warnings_) {
+        add(std::move(warning));
+      }
+      resourceLimitExceeded_ |= other.resourceLimitExceeded_;
     }
   }
 
@@ -86,18 +105,30 @@ public:
    */
   void mergeFromSubparser(ParseWarningSink&& other, FileOffset parentOffset) {
     if (enabled_) {
-      warnings_.reserve(warnings_.size() + other.warnings_.size());
       for (auto& warning : other.warnings_) {
         warning.range.start = warning.range.start.addParentOffset(parentOffset);
         warning.range.end = warning.range.end.addParentOffset(parentOffset);
-        warnings_.push_back(std::move(warning));
+        add(std::move(warning));
       }
+      resourceLimitExceeded_ |= other.resourceLimitExceeded_;
     }
   }
 
 private:
+  void tryAdd(ParseDiagnostic&& warning) {
+    if (warnings_.size() >= kMaximumWarnings ||
+        warning.reason.size() > kMaximumWarningBytes - warningBytes_) {
+      resourceLimitExceeded_ = true;
+      return;
+    }
+    warningBytes_ += warning.reason.size();
+    warnings_.push_back(std::move(warning));
+  }
+
   std::vector<ParseDiagnostic> warnings_;
+  std::size_t warningBytes_ = 0;
   bool enabled_ = true;
+  bool resourceLimitExceeded_ = false;
 };
 
 }  // namespace donner

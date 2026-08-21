@@ -16,10 +16,14 @@ std::variant<DataUrlParser::Result, DataUrlParserError> DataUrlParser::Parse(
     return DataUrlParserError::InputTooLarge;
   }
 
+  constexpr std::string_view dataPrefix = "data:";
+  if (!StringUtils::StartsWith(uri, dataPrefix) && uri.size() > options.maximumExternalUrlSize) {
+    return DataUrlParserError::InputTooLarge;
+  }
+
   Result result;
 
   // If the URI is of format "data:image/png;base64,...", it is a data URL.
-  constexpr std::string_view dataPrefix = "data:";
   if (!StringUtils::StartsWith(uri, dataPrefix)) {
     result.kind = Result::Kind::ExternalUrl;
     result.payload = RcString(uri);

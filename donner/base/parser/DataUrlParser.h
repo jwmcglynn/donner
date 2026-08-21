@@ -41,9 +41,15 @@ public:
   /// Default maximum URI length accepted from untrusted input.
   static constexpr size_t kDefaultMaximumInputSize = 16 * 1024 * 1024;
 
+  /// Default maximum external URL length retained by the parser.
+  static constexpr size_t kDefaultMaximumExternalUrlSize = 4096;
+
   struct Options {
     /// Maximum number of encoded URI bytes accepted before decoding.
     size_t maximumInputSize = kDefaultMaximumInputSize;
+
+    /// Maximum number of bytes accepted for a non-data URL before copying it.
+    size_t maximumExternalUrlSize = kDefaultMaximumExternalUrlSize;
   };
 
   /**
