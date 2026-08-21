@@ -305,6 +305,25 @@ test("the composited drag sample gate waits for the document worker, not sidebar
   assert.doesNotMatch(helper, /__donnerLayerThumbnailStats/);
 });
 
+test("the composited drag gate does not cancel first-use offscreen WebGPU work", () => {
+  const helperStart = compositedDragSource.indexOf("async function openDonnerSplash(");
+  const helperEnd = compositedDragSource.indexOf("* The Donner_D left stem", helperStart);
+  assert.ok(helperStart >= 0 && helperEnd > helperStart, "expected the Splash open helper");
+  const helper = compositedDragSource.slice(helperStart, helperEnd);
+
+  const thumbnailPrecondition = helper.indexOf("__donnerSampleThumbnailStats");
+  const sampleClick = helper.indexOf("page.mouse.click");
+  assert.ok(
+    thumbnailPrecondition >= 0 && thumbnailPrecondition < sampleClick,
+    "the Firefox drag gate must let first-use offscreen rendering settle before replacing it",
+  );
+  assert.match(helper, /completed\s*>\s*0/);
+  assert.match(helper, /\(stats\.ready\s*\?\?\s*0\)\s*>\s*0/);
+  assert.match(helper, /!stats\.active/);
+  assert.match(helper, /!stats\.pending/);
+  assert.match(helper.slice(0, sampleClick), /timeout:\s*scaledMs\(20_000\)/);
+});
+
 test("worker WebGPU startup keeps its browser Promise bridge private and single-purpose", () => {
   assert.doesNotMatch(geodeDeviceHeader, /CreateHeadlessAsync/);
   assert.doesNotMatch(geodeDeviceHeader, /donnerGeodeCompleteHeadlessImport/);
