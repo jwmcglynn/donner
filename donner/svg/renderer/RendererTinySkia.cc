@@ -6,6 +6,7 @@
 #include <cstring>
 #include <functional>
 #include <iostream>
+#include <limits>
 #include <optional>
 #include <span>
 #include <utility>
@@ -744,6 +745,133 @@ std::vector<std::uint8_t> PremultiplyRgba(std::span<const std::uint8_t> rgbaPixe
 #ifdef DONNER_FILTERS_ENABLED
 // Blur implementation moved to tiny_skia::filter::gaussianBlur (GaussianBlur.h).
 
+int BoundedFloorToInt(double value, int minimum, int maximum) {
+  if (std::isnan(value)) {
+    return 0;
+  }
+  if (value <= static_cast<double>(minimum)) {
+    return minimum;
+  }
+  if (value >= static_cast<double>(maximum)) {
+    return maximum;
+  }
+  return static_cast<int>(std::floor(value));
+}
+
+std::optional<int> CheckedFilterRasterDimension(double value) {
+  if (!std::isfinite(value) || value <= 0.0 ||
+      value > static_cast<double>(components::kMaximumFilterSurfaceDimension)) {
+    return std::nullopt;
+  }
+  return std::max(1, static_cast<int>(std::ceil(value)));
+}
+
+bool graphHasSpatialShift(const components::FilterGraph& filterGraph);
+bool isEligibleForTransformedBlurPath(const components::FilterGraph& filterGraph);
+bool shouldUseTransformedBlurPath(const components::FilterGraph& filterGraph,
+                                  const Transform2d& deviceFromFilter);
+double computeBlurPadding(const components::FilterGraph& filterGraph);
+
+struct FilterBufferMetrics {
+  int width = 0;
+  int height = 0;
+  int offsetX = 0;
+  int offsetY = 0;
+};
+
+FilterBufferMetrics ComputeFilterBufferMetrics(const components::FilterGraph& filterGraph,
+                                               const std::optional<Box2d>& filterRegion,
+                                               const Transform2d& deviceFromFilter,
+                                               int viewportWidth, int viewportHeight) {
+  constexpr int kMaxExpansion = 4096;
+  int bufferX0 = 0;
+  int bufferY0 = 0;
+  if (filterRegion.has_value()) {
+    const Box2d deviceRegion = deviceFromFilter.transformBox(*filterRegion);
+    bufferX0 = std::min(0, BoundedFloorToInt(deviceRegion.topLeft.x, -kMaxExpansion, 0));
+    bufferY0 = std::min(0, BoundedFloorToInt(deviceRegion.topLeft.y, -kMaxExpansion, 0));
+  }
+
+  FilterBufferMetrics result{viewportWidth, viewportHeight, 0, 0};
+  if ((bufferX0 >= 0 && bufferY0 >= 0) || !graphHasSpatialShift(filterGraph)) {
+    return result;
+  }
+  result.offsetX = std::min(-bufferX0, std::max(0, kMaxExpansion - viewportWidth));
+  result.offsetY = std::min(-bufferY0, std::max(0, kMaxExpansion - viewportHeight));
+  result.width = viewportWidth + result.offsetX;
+  result.height = viewportHeight + result.offsetY;
+  const std::uint64_t pixels =
+      static_cast<std::uint64_t>(result.width) * static_cast<std::uint64_t>(result.height);
+  if (pixels > components::kMaximumFilterSurfacePixels) {
+    return {viewportWidth, viewportHeight, 0, 0};
+  }
+  return result;
+}
+
+bool CanUseLocalFilterRaster(const components::FilterGraph& filterGraph,
+                             const std::optional<Box2d>& filterRegion,
+                             const Transform2d& deviceFromFilter, bool fullExecutionFits) {
+  if (!filterRegion.has_value() || filterRegion->width() <= 0.0 || filterRegion->height() <= 0.0 ||
+      NearZero(deviceFromFilter.determinant())) {
+    return false;
+  }
+  return isEligibleForTransformedBlurPath(filterGraph) &&
+         (shouldUseTransformedBlurPath(filterGraph, deviceFromFilter) || !fullExecutionFits);
+}
+
+struct LocalFilterRasterGeometry {
+  double scaleX = 1.0;
+  double scaleY = 1.0;
+  double blurPadding = 0.0;
+  Box2d paddedRegion;
+  int width = 0;
+  int height = 0;
+};
+
+std::optional<LocalFilterRasterGeometry> ComputeLocalFilterRasterGeometry(
+    const components::FilterGraph& filterGraph, const std::optional<Box2d>& filterRegion,
+    const Transform2d& deviceFromFilter, bool fullExecutionFits) {
+  if (!CanUseLocalFilterRaster(filterGraph, filterRegion, deviceFromFilter, fullExecutionFits)) {
+    return std::nullopt;
+  }
+  const double scaleX =
+      std::max(1.0, deviceFromFilter.transformVector(Vector2d(1.0, 0.0)).length());
+  const double scaleY =
+      std::max(1.0, deviceFromFilter.transformVector(Vector2d(0.0, 1.0)).length());
+  const double blurPadding = computeBlurPadding(filterGraph);
+  const Box2d paddedRegion(filterRegion->topLeft - Vector2d(blurPadding, blurPadding),
+                           filterRegion->bottomRight + Vector2d(blurPadding, blurPadding));
+  const std::optional<int> width = CheckedFilterRasterDimension(paddedRegion.width() * scaleX);
+  const std::optional<int> height = CheckedFilterRasterDimension(paddedRegion.height() * scaleY);
+  if (!width || !height) {
+    return std::nullopt;
+  }
+  const std::uint64_t pixels =
+      static_cast<std::uint64_t>(*width) * static_cast<std::uint64_t>(*height);
+  if (pixels > components::kMaximumFilterSurfacePixels) {
+    return std::nullopt;
+  }
+  return LocalFilterRasterGeometry{scaleX, scaleY, blurPadding, paddedRegion, *width, *height};
+}
+
+std::optional<std::uint64_t> ComputeLocalFilterPixels(const components::FilterGraph& filterGraph,
+                                                      const std::optional<Box2d>& filterRegion,
+                                                      const Transform2d& deviceFromFilter,
+                                                      bool fullExecutionFits) {
+  const std::optional<LocalFilterRasterGeometry> geometry = ComputeLocalFilterRasterGeometry(
+      filterGraph, filterRegion, deviceFromFilter, fullExecutionFits);
+  if (!geometry.has_value()) {
+    return std::nullopt;
+  }
+  const std::uint64_t pixels =
+      static_cast<std::uint64_t>(geometry->width) * static_cast<std::uint64_t>(geometry->height);
+  if (!components::FilterGraphFitsExecutionBudget(
+          filterGraph, pixels, components::FilterMemoryModel::CpuFloatNamedResults)) {
+    return std::nullopt;
+  }
+  return pixels;
+}
+
 /**
  * Returns true if the filter graph is a linear chain of single-input blur-family primitives
  * eligible for the transformed local-raster path.
@@ -955,6 +1083,11 @@ void RendererTinySkia::beginFrame(const RenderViewport& viewport) {
   currentClipMask_.reset();
   clipStack_.clear();
   surfaceStack_.clear();
+  filterLayerStack_.clear();
+  rejectedFilterDepth_ = 0;
+  if (ownsFilterExecutionBudget_) {
+    filterExecutionBudget_->reset();
+  }
   patternFillPaint_.reset();
   patternStrokePaint_.reset();
   frameCounters_ = RendererTinySkiaFrameCounters();
@@ -982,6 +1115,8 @@ void RendererTinySkia::endFrame() {
   }
 
   surfaceStack_.clear();
+  filterLayerStack_.clear();
+  rejectedFilterDepth_ = 0;
   deviceFromLocalTransform_ = Transform2d();
   deviceFromLocalTransformStack_.clear();
   currentClipMask_.reset();
@@ -1026,6 +1161,10 @@ void RendererTinySkia::popTransform() {
 void RendererTinySkia::pushClip(const ResolvedClip& clip) {
   clipStack_.push_back(currentClipMask_);
   clipEpochStack_.push_back(clipEpoch_);
+
+  if (rejectedFilterDepth_ != 0) {
+    return;
+  }
 
   std::optional<tiny_skia::Mask> clipMask = buildClipMask(clip);
   if (!clipMask.has_value()) {
@@ -1143,6 +1282,11 @@ void RendererTinySkia::pushIsolatedLayer(double opacity, MixBlendMode blendMode)
   frame.kind = SurfaceKind::IsolatedLayer;
   frame.opacity = opacity;
   frame.blendMode = blendMode;
+  if (rejectedFilterDepth_ != 0) {
+    frame.allocationRejected = true;
+    surfaceStack_.push_back(std::move(frame));
+    return;
+  }
   const int width = static_cast<int>(currentPixmap().width());
   const int height = static_cast<int>(currentPixmap().height());
   frame.pixmap = createTransparentPixmap(width, height);
@@ -1165,6 +1309,9 @@ void RendererTinySkia::popIsolatedLayer() {
 
   SurfaceFrame frame = std::move(surfaceStack_.back());
   surfaceStack_.pop_back();
+  if (frame.allocationRejected) {
+    return;
+  }
   compositePixmap(frame.pixmap, frame.opacity, frame.blendMode);
   if (!surfaceStack_.empty()) {
     SurfaceFrame& parent = surfaceStack_.back();
@@ -1177,9 +1324,86 @@ void RendererTinySkia::popIsolatedLayer() {
   }
 }
 
+#ifdef DONNER_FILTERS_ENABLED
+std::optional<RendererTinySkia::FilterAdmission> RendererTinySkia::admitFilterLayer(
+    const components::FilterGraph& filterGraph, const std::optional<Box2d>& filterRegion,
+    const Transform2d& deviceFromFilter, int viewportWidth, int viewportHeight) {
+  const FilterBufferMetrics buffer = ComputeFilterBufferMetrics(
+      filterGraph, filterRegion, deviceFromFilter, viewportWidth, viewportHeight);
+  const bool usesFillPaint =
+      graphUsesStandardInput(filterGraph, components::FilterStandardInput::FillPaint);
+  const bool usesStrokePaint =
+      graphUsesStandardInput(filterGraph, components::FilterStandardInput::StrokePaint);
+  const std::uint64_t surfaceCount =
+      1u + static_cast<std::uint64_t>(usesFillPaint) + static_cast<std::uint64_t>(usesStrokePaint);
+  if (buffer.width <= 0 || buffer.height <= 0) {
+    filterExecutionBudget_->reject();
+    return std::nullopt;
+  }
+
+  const std::uint64_t pixelCount =
+      static_cast<std::uint64_t>(buffer.width) * static_cast<std::uint64_t>(buffer.height);
+  if (pixelCount > components::kMaximumFilterSurfacePixels ||
+      pixelCount > std::numeric_limits<std::uint64_t>::max() / 4u / surfaceCount) {
+    filterExecutionBudget_->reject();
+    return std::nullopt;
+  }
+  const bool fullExecutionFits = components::FilterGraphFitsExecutionBudget(
+      filterGraph, pixelCount, components::FilterMemoryModel::CpuFloatNamedResults);
+  const std::optional<std::uint64_t> localPixelCount =
+      ComputeLocalFilterPixels(filterGraph, filterRegion, deviceFromFilter, fullExecutionFits);
+  if (!fullExecutionFits && !localPixelCount.has_value()) {
+    filterExecutionBudget_->reject();
+    return std::nullopt;
+  }
+
+  std::uint64_t executionPixelCount = pixelCount;
+  std::uint64_t captureBytes = pixelCount * 4u * surfaceCount;
+  if (localPixelCount.has_value()) {
+    executionPixelCount =
+        fullExecutionFits ? std::max(pixelCount, *localPixelCount) : *localPixelCount;
+    captureBytes += *localPixelCount * 4u;
+  }
+  auto reservation = filterExecutionBudget_->reserve(
+      filterGraph, executionPixelCount, components::FilterMemoryModel::CpuFloatNamedResults,
+      captureBytes);
+  if (!reservation.has_value()) {
+    return std::nullopt;
+  }
+  return FilterAdmission{buffer.width,  buffer.height,   buffer.offsetX,     buffer.offsetY,
+                         usesFillPaint, usesStrokePaint, !fullExecutionFits, *reservation};
+}
+
+bool RendererTinySkia::initializeFilterSurface(SurfaceFrame& frame,
+                                               const FilterAdmission& admission) {
+  frame.pixmap = createTransparentPixmap(admission.width, admission.height);
+  if (admission.usesFillPaint) {
+    frame.fillPaintPixmap = createTransparentPixmap(admission.width, admission.height);
+  }
+  if (admission.usesStrokePaint) {
+    frame.strokePaintPixmap = createTransparentPixmap(admission.width, admission.height);
+  }
+  const bool allocationFailed = frame.pixmap.width() == 0 || frame.pixmap.height() == 0 ||
+                                (admission.usesFillPaint && !frame.fillPaintPixmap.has_value()) ||
+                                (admission.usesStrokePaint && !frame.strokePaintPixmap.has_value());
+  if (!allocationFailed) {
+    return true;
+  }
+  filterExecutionBudget_->release(frame.filterReservation);
+  filterExecutionBudget_->reject();
+  return false;
+}
+#endif  // DONNER_FILTERS_ENABLED
+
 void RendererTinySkia::pushFilterLayer(const components::FilterGraph& filterGraph,
                                        const std::optional<Box2d>& filterRegion) {
 #ifdef DONNER_FILTERS_ENABLED
+  if (rejectedFilterDepth_ != 0) {
+    filterLayerStack_.push_back(false);
+    ++rejectedFilterDepth_;
+    return;
+  }
+
   SurfaceFrame frame;
   frame.kind = SurfaceKind::FilterLayer;
   frame.filterGraph = filterGraph;
@@ -1188,58 +1412,22 @@ void RendererTinySkia::pushFilterLayer(const components::FilterGraph& filterGrap
 
   const int viewportWidth = static_cast<int>(currentPixmap().width());
   const int viewportHeight = static_cast<int>(currentPixmap().height());
-
-  // Compute the filter buffer dimensions. When the filter region's AABB in device space extends
-  // beyond the viewport (e.g., due to skew or rotation placing content at negative coordinates),
-  // expand the buffer so the SourceGraphic captures all content. This is needed because feOffset
-  // or other spatial primitives may shift content into the viewport later.
-  int bufferX0 = 0;
-  int bufferY0 = 0;
-  int width = viewportWidth;
-  int height = viewportHeight;
-
-  if (filterRegion.has_value()) {
-    const Box2d deviceRegion = deviceFromLocalTransform_.transformBox(*filterRegion);
-    const int regionX0 = static_cast<int>(std::floor(deviceRegion.topLeft.x));
-    const int regionY0 = static_cast<int>(std::floor(deviceRegion.topLeft.y));
-    const int regionX1 = static_cast<int>(std::ceil(deviceRegion.bottomRight.x));
-    const int regionY1 = static_cast<int>(std::ceil(deviceRegion.bottomRight.y));
-
-    // Expand buffer to cover the union of viewport and filter region AABB.
-    bufferX0 = std::min(0, regionX0);
-    bufferY0 = std::min(0, regionY0);
-    const int bufferX1 = std::max(viewportWidth, regionX1);
-    const int bufferY1 = std::max(viewportHeight, regionY1);
-    width = bufferX1 - bufferX0;
-    height = bufferY1 - bufferY0;
-
-    // Cap to a reasonable maximum to avoid huge allocations.
-    constexpr int kMaxBufferDim = 4096;
-    width = std::min(width, kMaxBufferDim);
-    height = std::min(height, kMaxBufferDim);
+  const std::optional<FilterAdmission> admission = admitFilterLayer(
+      filterGraph, filterRegion, frame.deviceFromFilter, viewportWidth, viewportHeight);
+  if (!admission.has_value()) {
+    filterLayerStack_.push_back(false);
+    ++rejectedFilterDepth_;
+    return;
   }
-
-  // Expand the buffer into negative device coordinates only when the filter graph contains
-  // spatial primitives (feOffset, feDisplacementMap) that can shift content into the viewport
-  // from outside. Without such primitives, content at negative coordinates would never be
-  // visible, so expansion is unnecessary.
-  if ((bufferX0 < 0 || bufferY0 < 0) && graphHasSpatialShift(filterGraph)) {
-    constexpr int kMaxExpansion = 4096;
-    frame.filterBufferOffsetX = std::min(-bufferX0, std::max(0, kMaxExpansion - viewportWidth));
-    frame.filterBufferOffsetY = std::min(-bufferY0, std::max(0, kMaxExpansion - viewportHeight));
-    width = viewportWidth + frame.filterBufferOffsetX;
-    height = viewportHeight + frame.filterBufferOffsetY;
-  } else {
-    // No expansion needed - use viewport dimensions.
-    width = viewportWidth;
-    height = viewportHeight;
-  }
-  frame.pixmap = createTransparentPixmap(width, height);
-  if (graphUsesStandardInput(filterGraph, components::FilterStandardInput::FillPaint)) {
-    frame.fillPaintPixmap = createTransparentPixmap(width, height);
-  }
-  if (graphUsesStandardInput(filterGraph, components::FilterStandardInput::StrokePaint)) {
-    frame.strokePaintPixmap = createTransparentPixmap(width, height);
+  frame.filterReservation = admission->reservation;
+  frame.localRasterRequiredForBudget = admission->localRasterRequired;
+  frame.filterBufferOffsetX = admission->bufferOffsetX;
+  frame.filterBufferOffsetY = admission->bufferOffsetY;
+  filterLayerStack_.push_back(true);
+  if (!initializeFilterSurface(frame, *admission)) {
+    filterLayerStack_.back() = false;
+    ++rejectedFilterDepth_;
+    return;
   }
 
   // Per SVG spec, the rendering order is: paint → filter → clip-path → mask → opacity.
@@ -1273,8 +1461,124 @@ void RendererTinySkia::pushFilterLayer(const components::FilterGraph& filterGrap
 #endif
 }
 
+#ifdef DONNER_FILTERS_ENABLED
+bool RendererTinySkia::compositeTransformedFilter(SurfaceFrame& frame) {
+  const std::optional<LocalFilterRasterGeometry> geometry =
+      ComputeLocalFilterRasterGeometry(frame.filterGraph, frame.filterRegion,
+                                       frame.deviceFromFilter, !frame.localRasterRequiredForBudget);
+  if (!geometry.has_value()) {
+    return false;
+  }
+
+  tiny_skia::Pixmap localPixmap = createTransparentPixmap(geometry->width, geometry->height);
+  if (localPixmap.width() == 0 || localPixmap.height() == 0) {
+    return false;
+  }
+  const Transform2d filterFromDevice = frame.deviceFromFilter.inverse();
+  const Transform2d localFromDevice =
+      filterFromDevice *
+      Transform2d::Translate(-geometry->paddedRegion.topLeft.x, -geometry->paddedRegion.topLeft.y) *
+      Transform2d::Scale(geometry->scaleX, geometry->scaleY);
+  tiny_skia::PixmapPaint resamplePaint =
+      makePixmapPaint(localPixmap, tiny_skia::FilterQuality::Bilinear);
+  resamplePaint.opacity = 1.0f;
+  resamplePaint.blendMode = tiny_skia::BlendMode::Source;
+  auto localView = localPixmap.mutableView();
+  tiny_skia::Painter::drawPixmap(localView, 0, 0, frame.pixmap.view(), resamplePaint,
+                                 toTinyTransform(localFromDevice));
+
+  const Transform2d localFromFilter = Transform2d::Scale(geometry->scaleX, geometry->scaleY);
+  const Box2d localFilterRegion(Vector2d(geometry->blurPadding, geometry->blurPadding),
+                                Vector2d(geometry->blurPadding + frame.filterRegion->width(),
+                                         geometry->blurPadding + frame.filterRegion->height()));
+  ApplyFilterGraphToPixmap(localPixmap, frame.filterGraph, localFromFilter, localFilterRegion,
+                           false);
+  ClipFilterOutputToRegion(localPixmap, localFilterRegion, localFromFilter);
+
+  const Transform2d deviceFromLocal =
+      Transform2d::Scale(1.0 / geometry->scaleX, 1.0 / geometry->scaleY) *
+      Transform2d::Translate(geometry->paddedRegion.topLeft.x, geometry->paddedRegion.topLeft.y) *
+      frame.deviceFromFilter;
+  tiny_skia::PixmapPaint compositePaint =
+      makePixmapPaint(currentPixmap(), tiny_skia::FilterQuality::Bilinear);
+  compositePaint.opacity = 1.0f;
+  compositePaint.blendMode = tiny_skia::BlendMode::SourceOver;
+  const tiny_skia::Mask* mask = currentClipMask_.has_value() ? &*currentClipMask_ : nullptr;
+  auto pixmapView = currentPixmapView();
+  tiny_skia::Painter::drawPixmap(pixmapView, 0, 0, localPixmap.view(), compositePaint,
+                                 toTinyTransform(deviceFromLocal), mask);
+  return true;
+}
+
+tiny_skia::Pixmap RendererTinySkia::extractFilterViewport(const SurfaceFrame& frame, int width,
+                                                          int height) {
+  tiny_skia::Pixmap viewport = createTransparentPixmap(width, height);
+  const auto source = frame.pixmap.data();
+  auto destination = viewport.data();
+  const int sourceWidth = static_cast<int>(frame.pixmap.width());
+  const int sourceHeight = static_cast<int>(frame.pixmap.height());
+  for (int y = 0; y < height; ++y) {
+    const int sourceY = y + frame.filterBufferOffsetY;
+    if (sourceY < 0 || sourceY >= sourceHeight) {
+      continue;
+    }
+    const int sourceXStart = std::max(0, frame.filterBufferOffsetX);
+    const int sourceXEnd = std::min(sourceWidth, frame.filterBufferOffsetX + width);
+    if (sourceXStart >= sourceXEnd) {
+      continue;
+    }
+    const int destinationX = sourceXStart - frame.filterBufferOffsetX;
+    const auto sourceOffset = static_cast<std::size_t>((sourceY * sourceWidth + sourceXStart) * 4);
+    const auto destinationOffset = static_cast<std::size_t>((y * width + destinationX) * 4);
+    const auto count = static_cast<std::size_t>((sourceXEnd - sourceXStart) * 4);
+    std::memcpy(&destination[destinationOffset], &source[sourceOffset], count);
+  }
+  return viewport;
+}
+
+void RendererTinySkia::compositeDeviceFilter(SurfaceFrame& frame) {
+  const bool hasOffset = frame.filterBufferOffsetX != 0 || frame.filterBufferOffsetY != 0;
+  const Transform2d bufferDeviceFromFilter =
+      hasOffset ? frame.deviceFromFilter *
+                      Transform2d::Translate(frame.filterBufferOffsetX, frame.filterBufferOffsetY)
+                : frame.deviceFromFilter;
+  ApplyFilterGraphToPixmap(
+      frame.pixmap, frame.filterGraph, bufferDeviceFromFilter, frame.filterRegion, true,
+      frame.fillPaintPixmap.has_value() ? &*frame.fillPaintPixmap : nullptr,
+      frame.strokePaintPixmap.has_value() ? &*frame.strokePaintPixmap : nullptr);
+  ClipFilterOutputToRegion(frame.pixmap, frame.filterRegion, bufferDeviceFromFilter);
+
+  tiny_skia::PixmapPaint paint =
+      makePixmapPaint(currentPixmap(), tiny_skia::FilterQuality::Nearest);
+  paint.opacity = 1.0f;
+  paint.blendMode = tiny_skia::BlendMode::SourceOver;
+  const tiny_skia::Mask* mask = currentClipMask_.has_value() ? &*currentClipMask_ : nullptr;
+  auto pixmapView = currentPixmapView();
+  if (hasOffset) {
+    tiny_skia::Pixmap viewport = extractFilterViewport(frame, static_cast<int>(pixmapView.width()),
+                                                       static_cast<int>(pixmapView.height()));
+    tiny_skia::Painter::drawPixmap(pixmapView, 0, 0, viewport.view(), paint,
+                                   tiny_skia::Transform::identity(), mask);
+    return;
+  }
+  tiny_skia::Painter::drawPixmap(pixmapView, 0, 0, frame.pixmap.view(), paint,
+                                 tiny_skia::Transform::identity(), mask);
+}
+#endif  // DONNER_FILTERS_ENABLED
+
 void RendererTinySkia::popFilterLayer() {
 #ifdef DONNER_FILTERS_ENABLED
+  if (filterLayerStack_.empty()) {
+    return;
+  }
+  const bool layerAccepted = filterLayerStack_.back();
+  filterLayerStack_.pop_back();
+  if (!layerAccepted) {
+    if (rejectedFilterDepth_ != 0) {
+      --rejectedFilterDepth_;
+    }
+    return;
+  }
   if (surfaceStack_.empty() || surfaceStack_.back().kind != SurfaceKind::FilterLayer) {
     return;
   }
@@ -1290,163 +1594,17 @@ void RendererTinySkia::popFilterLayer() {
   clipEpoch_ = frame.savedClipEpoch;
   clipEpochStack_ = std::move(frame.savedClipEpochStack);
 
-  // Transform is maintained by RendererDriver via setTransform. The filter buffer offset
-  // (if any) was applied in setTransform and is automatically removed when the surface is
-  // popped, since setTransform checks surfaceStack_.back().
-
-  // Use the transformed local-raster path for eligible simple blur chains with
-  // rotation or skew transforms. This resamples device content into an axis-aligned local
-  // raster, applies the blur in filter-local coordinates, and composites back. This produces
-  // correct blur orientation for rotated/skewed elements.
-  // Only activate when the transform has rotation/skew (off-diagonal elements non-zero).
-  // For pure scale+translate, the device-space blur is already correct.
-  const bool useTransformedBlurPath =
-      frame.filterRegion.has_value() && frame.filterRegion->width() > 0 &&
-      frame.filterRegion->height() > 0 && !NearZero(frame.deviceFromFilter.determinant()) &&
-      isEligibleForTransformedBlurPath(frame.filterGraph) &&
-      shouldUseTransformedBlurPath(frame.filterGraph, frame.deviceFromFilter);
-
-  if (useTransformedBlurPath) {
-    const Transform2d& deviceFromFilter = frame.deviceFromFilter;
-    const Box2d& filterRegion = *frame.filterRegion;
-
-    // Compute local raster density from the filter transform basis vectors.
-    const double scaleX =
-        std::max(1.0, deviceFromFilter.transformVector(Vector2d(1.0, 0.0)).length());
-    const double scaleY =
-        std::max(1.0, deviceFromFilter.transformVector(Vector2d(0.0, 1.0)).length());
-
-    const double blurPadding = computeBlurPadding(frame.filterGraph);
-    const Box2d paddedRegion(filterRegion.topLeft - Vector2d(blurPadding, blurPadding),
-                             filterRegion.bottomRight + Vector2d(blurPadding, blurPadding));
-
-    const int localWidth = std::max(1, static_cast<int>(std::ceil(paddedRegion.width() * scaleX)));
-    const int localHeight =
-        std::max(1, static_cast<int>(std::ceil(paddedRegion.height() * scaleY)));
-
-    // Allocate local-raster pixmap.
-    tiny_skia::Pixmap localPixmap = createTransparentPixmap(localWidth, localHeight);
-    if (localPixmap.width() == 0 || localPixmap.height() == 0) {
-      goto device_space_fallback;
-    }
-
-    {
-      // Resample device pixels into local filter coordinates.
-      // Transform chain: device → filter (inverse of deviceFromFilter) → padded origin
-      // (translate) → local raster pixels (scale).
-      // Operator* convention: (A * B)(p) = B(A(p)), so A is applied first.
-      const Transform2d filterFromDevice = deviceFromFilter.inverse();
-      const Transform2d localFromDevice =
-          filterFromDevice *
-          Transform2d::Translate(-paddedRegion.topLeft.x, -paddedRegion.topLeft.y) *
-          Transform2d::Scale(scaleX, scaleY);
-
-      {
-        tiny_skia::PixmapPaint resamplePaint =
-            makePixmapPaint(localPixmap, tiny_skia::FilterQuality::Bilinear);
-        resamplePaint.opacity = 1.0f;
-        resamplePaint.blendMode = tiny_skia::BlendMode::Source;
-
-        auto localView = localPixmap.mutableView();
-        tiny_skia::Painter::drawPixmap(localView, 0, 0, frame.pixmap.view(), resamplePaint,
-                                       toTinyTransform(localFromDevice));
-      }
-
-      // Execute the filter graph in local raster space.
-      const Transform2d localTransform = Transform2d::Scale(scaleX, scaleY);
-      const Box2d localFilterRegion(
-          Vector2d(blurPadding, blurPadding),
-          Vector2d(blurPadding + filterRegion.width(), blurPadding + filterRegion.height()));
-
-      ApplyFilterGraphToPixmap(localPixmap, frame.filterGraph, localTransform, localFilterRegion,
-                               false);
-
-      // Clip to the original filter region within the padded raster.
-      ClipFilterOutputToRegion(localPixmap, localFilterRegion, localTransform);
-
-      // Composite the filtered local raster back to the parent device pixmap.
-      // Transform chain: local raster → filter coords (inverse scale + translate back) → device.
-      // Operator* convention: (A * B)(p) = B(A(p)), so A is applied first.
-      const Transform2d deviceFromLocal =
-          Transform2d::Scale(1.0 / scaleX, 1.0 / scaleY) *
-          Transform2d::Translate(paddedRegion.topLeft.x, paddedRegion.topLeft.y) * deviceFromFilter;
-
-      tiny_skia::PixmapPaint compositePaint =
-          makePixmapPaint(currentPixmap(), tiny_skia::FilterQuality::Bilinear);
-      compositePaint.opacity = 1.0f;
-      compositePaint.blendMode = tiny_skia::BlendMode::SourceOver;
-
-      const tiny_skia::Mask* mask = currentClipMask_.has_value() ? &*currentClipMask_ : nullptr;
-      auto pixmapView = currentPixmapView();
-      tiny_skia::Painter::drawPixmap(pixmapView, 0, 0, localPixmap.view(), compositePaint,
-                                     toTinyTransform(deviceFromLocal), mask);
-    }
-  } else {
-  device_space_fallback: {
-    // When the filter buffer is offset (expanded to capture content at negative device
-    // coordinates), adjust the deviceFromFilter transform to include the offset.
-    const Transform2d bufferDeviceFromFilter =
-        (frame.filterBufferOffsetX != 0 || frame.filterBufferOffsetY != 0)
-            ? frame.deviceFromFilter *
-                  Transform2d::Translate(frame.filterBufferOffsetX, frame.filterBufferOffsetY)
-            : frame.deviceFromFilter;
-
-    ApplyFilterGraphToPixmap(
-        frame.pixmap, frame.filterGraph, bufferDeviceFromFilter, frame.filterRegion, true,
-        frame.fillPaintPixmap.has_value() ? &*frame.fillPaintPixmap : nullptr,
-        frame.strokePaintPixmap.has_value() ? &*frame.strokePaintPixmap : nullptr);
-    ClipFilterOutputToRegion(frame.pixmap, frame.filterRegion, bufferDeviceFromFilter);
-
-    {
-      // Composite the filter result with the restored clip mask applied, so the clip-path
-      // clips the filter output rather than the input.
-      tiny_skia::PixmapPaint paint =
-          makePixmapPaint(currentPixmap(), tiny_skia::FilterQuality::Nearest);
-      paint.opacity = 1.0f;
-      paint.blendMode = tiny_skia::BlendMode::SourceOver;
-
-      const tiny_skia::Mask* mask = currentClipMask_.has_value() ? &*currentClipMask_ : nullptr;
-      auto pixmapView = currentPixmapView();
-
-      if (frame.filterBufferOffsetX != 0 || frame.filterBufferOffsetY != 0) {
-        // The filter buffer is expanded beyond the viewport. Extract the viewport-sized region
-        // at the buffer offset and composite that. drawPixmap doesn't support negative dest
-        // coordinates, so we copy the relevant region into a viewport-sized pixmap first.
-        const int vpW = static_cast<int>(pixmapView.width());
-        const int vpH = static_cast<int>(pixmapView.height());
-        tiny_skia::Pixmap viewportRegion = createTransparentPixmap(vpW, vpH);
-        const auto srcData = frame.pixmap.data();
-        auto dstData = viewportRegion.data();
-        const int bufW = static_cast<int>(frame.pixmap.width());
-        const int bufH = static_cast<int>(frame.pixmap.height());
-        const int ox = frame.filterBufferOffsetX;
-        const int oy = frame.filterBufferOffsetY;
-        for (int y = 0; y < vpH; ++y) {
-          const int srcY = y + oy;
-          if (srcY < 0 || srcY >= bufH) {
-            continue;
-          }
-          // Copy the overlapping row segment.
-          const int srcXStart = std::max(0, ox);
-          const int srcXEnd = std::min(bufW, ox + vpW);
-          if (srcXStart >= srcXEnd) {
-            continue;
-          }
-          const int dstX = srcXStart - ox;
-          const auto srcOff = static_cast<std::size_t>((srcY * bufW + srcXStart) * 4);
-          const auto dstOff = static_cast<std::size_t>((y * vpW + dstX) * 4);
-          const auto count = static_cast<std::size_t>((srcXEnd - srcXStart) * 4);
-          std::memcpy(&dstData[dstOff], &srcData[srcOff], count);
-        }
-        tiny_skia::Painter::drawPixmap(pixmapView, 0, 0, viewportRegion.view(), paint,
-                                       tiny_skia::Transform::identity(), mask);
-      } else {
-        tiny_skia::Painter::drawPixmap(pixmapView, 0, 0, frame.pixmap.view(), paint,
-                                       tiny_skia::Transform::identity(), mask);
-      }
-    }
+  if (compositeTransformedFilter(frame)) {
+    filterExecutionBudget_->release(frame.filterReservation);
+    return;
   }
+  if (frame.localRasterRequiredForBudget) {
+    filterExecutionBudget_->reject();
+    filterExecutionBudget_->release(frame.filterReservation);
+    return;
   }
+  compositeDeviceFilter(frame);
+  filterExecutionBudget_->release(frame.filterReservation);
 #endif  // DONNER_FILTERS_ENABLED
 }
 
@@ -1456,6 +1614,11 @@ void RendererTinySkia::pushMask(const std::optional<Box2d>& maskBounds, MaskType
   frame.maskBounds = maskBounds;
   frame.maskBoundsTransform = deviceFromLocalTransform_;
   frame.maskType = maskType;
+  if (rejectedFilterDepth_ != 0) {
+    frame.allocationRejected = true;
+    surfaceStack_.push_back(std::move(frame));
+    return;
+  }
   frame.pixmap = createTransparentPixmap(static_cast<int>(currentPixmap().width()),
                                          static_cast<int>(currentPixmap().height()));
   surfaceStack_.push_back(std::move(frame));
@@ -1467,6 +1630,10 @@ void RendererTinySkia::transitionMaskToContent() {
   }
 
   SurfaceFrame& frame = surfaceStack_.back();
+  if (frame.allocationRejected) {
+    frame.kind = SurfaceKind::MaskContent;
+    return;
+  }
   const tiny_skia::MaskType tinyMaskType = frame.maskType == MaskType::Alpha
                                                ? tiny_skia::MaskType::Alpha
                                                : tiny_skia::MaskType::Luminance;
@@ -1531,6 +1698,10 @@ void RendererTinySkia::popMask() {
 
 bool RendererTinySkia::beginPatternTile(const Box2d& tileRect,
                                         const Transform2d& targetFromPattern) {
+  if (rejectedFilterDepth_ != 0) {
+    return false;
+  }
+
   SurfaceFrame frame;
   frame.kind = SurfaceKind::PatternTile;
   frame.savedTransform = deviceFromLocalTransform_;
@@ -1974,6 +2145,9 @@ void RendererTinySkia::drawImagePixmap(const tiny_skia::PixmapView& source, int 
 }
 
 void RendererTinySkia::drawImage(const ImageResource& image, const ImageParams& params) {
+  if (rejectedFilterDepth_ != 0) {
+    return;
+  }
   if (!HasExactRgbaPayload(image.data, image.width, image.height)) {
     return;
   }
@@ -1996,6 +2170,9 @@ void RendererTinySkia::drawImage(const ImageResource& image, const ImageParams& 
 }
 
 void RendererTinySkia::drawBitmap(const RendererBitmap& bitmap, const ImageParams& params) {
+  if (rejectedFilterDepth_ != 0) {
+    return;
+  }
   if (bitmap.empty()) {
     return;
   }
@@ -2628,7 +2805,10 @@ bool RendererTinySkia::save(const char* filename) {
 }
 
 std::unique_ptr<RendererInterface> RendererTinySkia::createOffscreenInstance() const {
-  return std::make_unique<RendererTinySkia>(verbose_);
+  auto renderer = std::make_unique<RendererTinySkia>(verbose_);
+  renderer->filterExecutionBudget_ = filterExecutionBudget_;
+  renderer->ownsFilterExecutionBudget_ = false;
+  return renderer;
 }
 
 int RendererTinySkia::width() const {
@@ -2640,10 +2820,16 @@ int RendererTinySkia::height() const {
 }
 
 tiny_skia::Pixmap& RendererTinySkia::currentPixmap() {
+  if (rejectedFilterDepth_ != 0) {
+    return rejectedPixmap_;
+  }
   return surfaceStack_.empty() ? frame_ : surfaceStack_.back().pixmap;
 }
 
 const tiny_skia::Pixmap& RendererTinySkia::currentPixmap() const {
+  if (rejectedFilterDepth_ != 0) {
+    return rejectedPixmap_;
+  }
   return surfaceStack_.empty() ? frame_ : surfaceStack_.back().pixmap;
 }
 

@@ -45,12 +45,21 @@ donner_cc_library(
 )
 
 donner_cc_library(
+    name = "computed_filter_resource_budget",
+    hdrs = ["ComputedFilterResourceBudget.h"],
+    visibility = ["//donner/svg:__subpackages__"],
+    deps = [
+        "//donner/base",
+        "//donner/svg/components:components_core",
+    ],
+)
+
+donner_cc_library(
     name = "filter_system",
     srcs = [
         "FilterSystem.cc",
     ],
     hdrs = [
-        "ComputedFilterResourceBudget.h",
         "FilterSystem.h",
     ],
     visibility = [
@@ -58,9 +67,11 @@ donner_cc_library(
     ],
     deps = [
         ":components",
+        ":computed_filter_resource_budget",
         "//donner/base",
         "//donner/css/parser",
         "//donner/svg/components:components_core",
+        "//donner/svg/components:reference_resolution_budget",
         "//donner/svg/components/resources:components",
         "//donner/svg/components/style:components",
         "//donner/svg/properties:property_parsing",

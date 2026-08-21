@@ -207,6 +207,60 @@ namespace {
 
 constexpr wgpu::TextureFormat kFormat = wgpu::TextureFormat::RGBA8Unorm;
 
+double boundedPositiveFilterPixels(double value) {
+  if (!std::isfinite(value) || value <= 0.0) {
+    return 0.0;
+  }
+  return std::min(value, static_cast<double>(svg::components::kMaximumFilterPixelRadius));
+}
+
+double boundedSignedFilterPixels(double value) {
+  if (!std::isfinite(value)) {
+    return 0.0;
+  }
+  return std::clamp(value, -static_cast<double>(svg::components::kMaximumFilterPixelOffset),
+                    static_cast<double>(svg::components::kMaximumFilterPixelOffset));
+}
+
+int32_t boundedRoundedInt32(double value, int32_t minimum, int32_t maximum) {
+  if (std::isnan(value)) {
+    return 0;
+  }
+  if (value <= static_cast<double>(minimum)) {
+    return minimum;
+  }
+  if (value >= static_cast<double>(maximum)) {
+    return maximum;
+  }
+  return static_cast<int32_t>(std::round(value));
+}
+
+int32_t boundedFloorInt32(double value, int32_t minimum, int32_t maximum) {
+  if (std::isnan(value)) {
+    return minimum;
+  }
+  if (value <= static_cast<double>(minimum)) {
+    return minimum;
+  }
+  if (value >= static_cast<double>(maximum)) {
+    return maximum;
+  }
+  return static_cast<int32_t>(std::floor(value));
+}
+
+int32_t boundedCeilInt32(double value, int32_t minimum, int32_t maximum) {
+  if (std::isnan(value)) {
+    return minimum;
+  }
+  if (value <= static_cast<double>(minimum)) {
+    return minimum;
+  }
+  if (value >= static_cast<double>(maximum)) {
+    return maximum;
+  }
+  return static_cast<int32_t>(std::ceil(value));
+}
+
 /// Uniform buffer layout matching the WGSL `BlurParams` struct.
 struct BlurParams {
   float stdDeviation;
@@ -778,7 +832,6 @@ void dispatchTwoInputUniform(FilterResourceArena& arena, GeodeDevice& device,
                              const wgpu::Texture& in2, const wgpu::Texture& output,
                              const wgpu::Buffer& uniformBuffer, uint64_t uniformOffset,
                              size_t uniformSize, const char* label) {
-  const wgpu::Device& dev = device.device();
   const uint32_t width = output.getWidth();
   const uint32_t height = output.getHeight();
 
@@ -1507,13 +1560,357 @@ void GeodeFilterEngine::beginFrame() {
   }
 }
 
+struct FilterExecutionCoordinates {
+  using FilterGraph = svg::components::FilterGraph;
+  using FilterInput = svg::components::FilterInput;
+  using FilterNode = svg::components::FilterNode;
+
+  FilterExecutionCoordinates(const FilterGraph& graph, const wgpu::Texture& sourceGraphic,
+                             const Box2d& filterRegion, const Transform2d& deviceFromFilter)
+      : graph(graph),
+        filterRegion(filterRegion),
+        deviceFromFilter(deviceFromFilter),
+        scaleX(std::max(deviceFromFilter.transformVector(Vector2d(1.0, 0.0)).length(), 1e-12)),
+        scaleY(NearZero(scaleX, 1e-12)
+                   ? std::abs(deviceFromFilter.data[3])
+                   : std::max(std::abs(deviceFromFilter.determinant()) / scaleX, 1e-12)),
+        isObjectBoundingBox(graph.primitiveUnits == svg::PrimitiveUnits::ObjectBoundingBox),
+        boundingBoxWidth(graph.elementBoundingBox.has_value() ? graph.elementBoundingBox->width()
+                                                              : 1.0),
+        boundingBoxHeight(graph.elementBoundingBox.has_value() ? graph.elementBoundingBox->height()
+                                                               : 1.0),
+        boundingBoxX(graph.elementBoundingBox.has_value() ? graph.elementBoundingBox->topLeft.x
+                                                          : 0.0),
+        boundingBoxY(graph.elementBoundingBox.has_value() ? graph.elementBoundingBox->topLeft.y
+                                                          : 0.0),
+        filterFromDevice(deviceFromFilter.inverse()),
+        primitiveUnitsBounds(computePrimitiveUnitsBounds(sourceGraphic)),
+        previousOutputSubregion(filterRegion) {}
+
+  double toPixelX(double value) const {
+    return std::abs(isObjectBoundingBox ? value * boundingBoxWidth : value) * scaleX;
+  }
+
+  double toPixelY(double value) const {
+    return std::abs(isObjectBoundingBox ? value * boundingBoxHeight : value) * scaleY;
+  }
+
+  Vector2d toPixelOffset(double dx, double dy) const {
+    const Vector2d userOffset = isObjectBoundingBox
+                                    ? Vector2d(dx * boundingBoxWidth, dy * boundingBoxHeight)
+                                    : Vector2d(dx, dy);
+    return deviceFromFilter.transformVector(userOffset);
+  }
+
+  Box2d resolveInputSubregion(const FilterInput& input) const {
+    if (const auto* named = std::get_if<FilterInput::Named>(&input.value)) {
+      auto it = namedSubregions.find(named->name.str());
+      return it != namedSubregions.end() ? it->second : previousOutputSubregion;
+    }
+    return std::holds_alternative<FilterInput::Previous>(input.value) ? previousOutputSubregion
+                                                                      : filterRegion;
+  }
+
+  Box2d computeNodeSubregion(const FilterNode& node) const {
+    using namespace svg::components;
+    const bool sourceGenerator =
+        std::holds_alternative<filter_primitive::Flood>(node.primitive) ||
+        std::holds_alternative<filter_primitive::Turbulence>(node.primitive) ||
+        std::holds_alternative<filter_primitive::Image>(node.primitive) ||
+        std::holds_alternative<filter_primitive::Tile>(node.primitive);
+    const bool explicitSubregion = node.x.has_value() || node.y.has_value() ||
+                                   node.width.has_value() || node.height.has_value();
+    if (explicitSubregion) {
+      return explicitNodeSubregion(node);
+    }
+    const size_t slots = filterInputSlotCount(node);
+    if (sourceGenerator || slots == 0) {
+      return filterRegion;
+    }
+    Box2d inputBounds = resolveInputSubregion(filterInputOrDefault(node, 0));
+    for (size_t index = 1; index < slots; ++index) {
+      inputBounds =
+          Box2d::Union(inputBounds, resolveInputSubregion(filterInputOrDefault(node, index)));
+    }
+    expandPrimitiveBounds(node, inputBounds);
+    return intersect(inputBounds, filterRegion);
+  }
+
+  double resolvePrimitivePosition(const Lengthd& length, Lengthd::Extent extent, double origin,
+                                  double boundingBoxDimension) const {
+    return resolvePosition(length, extent, origin, boundingBoxDimension);
+  }
+
+  double resolvePrimitiveSize(const Lengthd& length, Lengthd::Extent extent,
+                              double boundingBoxDimension) const {
+    return resolveSize(length, extent, boundingBoxDimension);
+  }
+
+  const FilterGraph& graph;
+  Box2d filterRegion;
+  const Transform2d& deviceFromFilter;
+  double scaleX = 1.0;
+  double scaleY = 1.0;
+  bool isObjectBoundingBox = false;
+  double boundingBoxWidth = 1.0;
+  double boundingBoxHeight = 1.0;
+  double boundingBoxX = 0.0;
+  double boundingBoxY = 0.0;
+  Transform2d filterFromDevice;
+  Box2d primitiveUnitsBounds;
+  Box2d previousOutputSubregion;
+  std::unordered_map<std::string, Box2d> namedSubregions;
+
+private:
+  Box2d computePrimitiveUnitsBounds(const wgpu::Texture& sourceGraphic) const {
+    if (isObjectBoundingBox) {
+      return graph.elementBoundingBox.value_or(Box2d(Vector2d(0.0, 0.0), Vector2d(1.0, 1.0)));
+    }
+    const double userWidth = NearZero(scaleX, 1e-12)
+                                 ? static_cast<double>(sourceGraphic.getWidth())
+                                 : static_cast<double>(sourceGraphic.getWidth()) / scaleX;
+    const double userHeight = NearZero(scaleY, 1e-12)
+                                  ? static_cast<double>(sourceGraphic.getHeight())
+                                  : static_cast<double>(sourceGraphic.getHeight()) / scaleY;
+    return Box2d::FromXYWH(0.0, 0.0, userWidth, userHeight);
+  }
+
+  double resolvePosition(const Lengthd& length, Lengthd::Extent extent, double origin,
+                         double boundingBoxDimension) const {
+    if (isObjectBoundingBox && length.unit == Lengthd::Unit::None) {
+      return origin + length.value * boundingBoxDimension;
+    }
+    if (length.unit == Lengthd::Unit::Percent) {
+      const double referenceOrigin =
+          isObjectBoundingBox ? (extent == Lengthd::Extent::X ? boundingBoxX : boundingBoxY) : 0.0;
+      const double referenceSize =
+          isObjectBoundingBox ? boundingBoxDimension
+                              : (extent == Lengthd::Extent::X ? primitiveUnitsBounds.width()
+                                                              : primitiveUnitsBounds.height());
+      return referenceOrigin + referenceSize * length.value / 100.0;
+    }
+    return length.toPixels(primitiveUnitsBounds, FontMetrics(), extent);
+  }
+
+  double resolveSize(const Lengthd& length, Lengthd::Extent extent,
+                     double boundingBoxDimension) const {
+    if (isObjectBoundingBox && length.unit == Lengthd::Unit::None) {
+      return length.value * boundingBoxDimension;
+    }
+    if (length.unit == Lengthd::Unit::Percent) {
+      const double referenceSize =
+          isObjectBoundingBox ? boundingBoxDimension
+                              : (extent == Lengthd::Extent::X ? primitiveUnitsBounds.width()
+                                                              : primitiveUnitsBounds.height());
+      return referenceSize * length.value / 100.0;
+    }
+    return length.toPixels(primitiveUnitsBounds, FontMetrics(), extent);
+  }
+
+  static Box2d intersect(const Box2d& first, const Box2d& second) {
+    return Box2d(Vector2d(std::max(first.topLeft.x, second.topLeft.x),
+                          std::max(first.topLeft.y, second.topLeft.y)),
+                 Vector2d(std::min(first.bottomRight.x, second.bottomRight.x),
+                          std::min(first.bottomRight.y, second.bottomRight.y)));
+  }
+
+  Box2d explicitNodeSubregion(const FilterNode& node) const {
+    const double x = node.x.has_value() ? resolvePosition(*node.x, Lengthd::Extent::X,
+                                                          isObjectBoundingBox ? boundingBoxX : 0.0,
+                                                          boundingBoxWidth)
+                                        : filterRegion.topLeft.x;
+    const double y = node.y.has_value() ? resolvePosition(*node.y, Lengthd::Extent::Y,
+                                                          isObjectBoundingBox ? boundingBoxY : 0.0,
+                                                          boundingBoxHeight)
+                                        : filterRegion.topLeft.y;
+    const double width = node.width.has_value()
+                             ? resolveSize(*node.width, Lengthd::Extent::X, boundingBoxWidth)
+                             : filterRegion.width();
+    const double height = node.height.has_value()
+                              ? resolveSize(*node.height, Lengthd::Extent::Y, boundingBoxHeight)
+                              : filterRegion.height();
+    return intersect(Box2d(Vector2d(x, y), Vector2d(x + width, y + height)), filterRegion);
+  }
+
+  void expandPrimitiveBounds(const FilterNode& node, Box2d& inputBounds) const {
+    using namespace svg::components;
+    if (const auto* blur = std::get_if<filter_primitive::GaussianBlur>(&node.primitive)) {
+      const double x = std::ceil((blur->stdDeviationX >= 0
+                                      ? boundedPositiveFilterPixels(toPixelX(blur->stdDeviationX))
+                                      : 0.0) *
+                                 3.0);
+      const double y = std::ceil((blur->stdDeviationY >= 0
+                                      ? boundedPositiveFilterPixels(toPixelY(blur->stdDeviationY))
+                                      : 0.0) *
+                                 3.0);
+      inputBounds = Box2d(Vector2d(inputBounds.topLeft.x - x, inputBounds.topLeft.y - y),
+                          Vector2d(inputBounds.bottomRight.x + x, inputBounds.bottomRight.y + y));
+      return;
+    }
+    if (const auto* drop = std::get_if<filter_primitive::DropShadow>(&node.primitive)) {
+      expandDropShadow(*drop, inputBounds);
+      return;
+    }
+    if (const auto* morphology = std::get_if<filter_primitive::Morphology>(&node.primitive);
+        morphology && morphology->op == filter_primitive::Morphology::Operator::Dilate) {
+      const double x = boundedPositiveFilterPixels(toPixelX(morphology->radiusX));
+      const double y = boundedPositiveFilterPixels(toPixelY(morphology->radiusY));
+      inputBounds = Box2d(Vector2d(inputBounds.topLeft.x - x, inputBounds.topLeft.y - y),
+                          Vector2d(inputBounds.bottomRight.x + x, inputBounds.bottomRight.y + y));
+    }
+  }
+
+  void expandDropShadow(const svg::components::filter_primitive::DropShadow& drop,
+                        Box2d& inputBounds) const {
+    const double x = std::ceil((drop.stdDeviationX >= 0
+                                    ? boundedPositiveFilterPixels(toPixelX(drop.stdDeviationX))
+                                    : 0.0) *
+                               3.0);
+    const double y = std::ceil((drop.stdDeviationY >= 0
+                                    ? boundedPositiveFilterPixels(toPixelY(drop.stdDeviationY))
+                                    : 0.0) *
+                               3.0);
+    const Vector2d offset = toPixelOffset(drop.dx, drop.dy);
+    const Vector2d boundedOffset(boundedSignedFilterPixels(offset.x),
+                                 boundedSignedFilterPixels(offset.y));
+    const Box2d shadow(Vector2d(inputBounds.topLeft.x + boundedOffset.x - x,
+                                inputBounds.topLeft.y + boundedOffset.y - y),
+                       Vector2d(inputBounds.bottomRight.x + boundedOffset.x + x,
+                                inputBounds.bottomRight.y + boundedOffset.y + y));
+    inputBounds = Box2d::Union(inputBounds, shadow);
+  }
+};
+
+struct FilterGraphExecution {
+  FilterGraphExecution(GeodeFilterEngine& engine, const svg::components::FilterGraph& graph,
+                       const wgpu::Texture& sourceGraphic, const Box2d& filterRegion,
+                       const Transform2d& deviceFromFilter,
+                       FilterTextureAllocator& textureAllocator,
+                       ScopedWgpuHandle<wgpu::CommandEncoder>& commandEncoder,
+                       svg::components::FilterExecutionBudget* executionBudget)
+      : engine(engine),
+        graph(graph),
+        sourceGraphic(sourceGraphic),
+        filterRegion(filterRegion),
+        deviceFromFilter(deviceFromFilter),
+        textureAllocator(textureAllocator),
+        commandEncoder(commandEncoder),
+        executionBudget(executionBudget),
+        device_(engine.device_),
+        framePassesInCommandBuffer_(engine.framePassesInCommandBuffer_),
+        verbose_(engine.verbose_),
+        warnedUnsupported_(engine.warnedUnsupported_) {}
+
+  wgpu::Texture run();
+
+#define DONNER_FORWARD_FILTER_OPERATION(name)        \
+  template <typename... Args>                        \
+  decltype(auto) name(Args&&... args) {              \
+    return engine.name(std::forward<Args>(args)...); \
+  }
+  DONNER_FORWARD_FILTER_OPERATION(applySourceAlpha)
+  DONNER_FORWARD_FILTER_OPERATION(applyGaussianBlur)
+  DONNER_FORWARD_FILTER_OPERATION(applyColorSpaceConversion)
+  DONNER_FORWARD_FILTER_OPERATION(applySubregionClip)
+  DONNER_FORWARD_FILTER_OPERATION(applyOffset)
+  DONNER_FORWARD_FILTER_OPERATION(applyColorMatrix)
+  DONNER_FORWARD_FILTER_OPERATION(applyFlood)
+  DONNER_FORWARD_FILTER_OPERATION(applyMerge)
+  DONNER_FORWARD_FILTER_OPERATION(applyComposite)
+  DONNER_FORWARD_FILTER_OPERATION(applyBlend)
+  DONNER_FORWARD_FILTER_OPERATION(applyMorphology)
+  DONNER_FORWARD_FILTER_OPERATION(applyComponentTransfer)
+  DONNER_FORWARD_FILTER_OPERATION(applyConvolveMatrix)
+  DONNER_FORWARD_FILTER_OPERATION(applyTurbulence)
+  DONNER_FORWARD_FILTER_OPERATION(applyDisplacementMap)
+  DONNER_FORWARD_FILTER_OPERATION(applyDiffuseLighting)
+  DONNER_FORWARD_FILTER_OPERATION(applySpecularLighting)
+  DONNER_FORWARD_FILTER_OPERATION(applyDropShadow)
+  DONNER_FORWARD_FILTER_OPERATION(applyImage)
+  DONNER_FORWARD_FILTER_OPERATION(applyTile)
+#undef DONNER_FORWARD_FILTER_OPERATION
+
+  GeodeFilterEngine& engine;
+  const svg::components::FilterGraph& graph;
+  const wgpu::Texture& sourceGraphic;
+  const Box2d& filterRegion;
+  const Transform2d& deviceFromFilter;
+  FilterTextureAllocator& textureAllocator;
+  ScopedWgpuHandle<wgpu::CommandEncoder>& commandEncoder;
+  svg::components::FilterExecutionBudget* executionBudget;
+  GeodeDevice& device_;
+  size_t& framePassesInCommandBuffer_;
+  bool& verbose_;
+  bool& warnedUnsupported_;
+};
+
+wgpu::Texture RunFilterGraphExecution(FilterGraphExecution& execution);
+
 wgpu::Texture GeodeFilterEngine::execute(const svg::components::FilterGraph& graph,
                                          const wgpu::Texture& sourceGraphic,
                                          const Box2d& filterRegion,
                                          const Transform2d& deviceFromFilter,
                                          FilterTextureAllocator& textureAllocator,
-                                         ScopedWgpuHandle<wgpu::CommandEncoder>& commandEncoder) {
+                                         ScopedWgpuHandle<wgpu::CommandEncoder>& commandEncoder,
+                                         svg::components::FilterExecutionBudget* executionBudget) {
+  return FilterGraphExecution(*this, graph, sourceGraphic, filterRegion, deviceFromFilter,
+                              textureAllocator, commandEncoder, executionBudget)
+      .run();
+}
+
+wgpu::Texture FilterGraphExecution::run() {
+  return RunFilterGraphExecution(*this);
+}
+
+wgpu::Texture RunFilterGraphExecution(FilterGraphExecution& execution) {
+  const auto& graph = execution.graph;
+  const auto& sourceGraphic = execution.sourceGraphic;
+  const auto& filterRegion = execution.filterRegion;
+  const auto& deviceFromFilter = execution.deviceFromFilter;
+  auto& textureAllocator = execution.textureAllocator;
+  auto& commandEncoder = execution.commandEncoder;
+  auto* executionBudget = execution.executionBudget;
+  auto& device_ = execution.device_;
+  auto& framePassesInCommandBuffer_ = execution.framePassesInCommandBuffer_;
+  auto& verbose_ = execution.verbose_;
+  auto& warnedUnsupported_ = execution.warnedUnsupported_;
+#define DONNER_BIND_FILTER_OPERATION(name)                        \
+  const auto name = [&](auto&&... args) -> decltype(auto) {       \
+    return execution.name(std::forward<decltype(args)>(args)...); \
+  }
+  DONNER_BIND_FILTER_OPERATION(applySourceAlpha);
+  DONNER_BIND_FILTER_OPERATION(applyGaussianBlur);
+  DONNER_BIND_FILTER_OPERATION(applyColorSpaceConversion);
+  DONNER_BIND_FILTER_OPERATION(applySubregionClip);
+  DONNER_BIND_FILTER_OPERATION(applyOffset);
+  DONNER_BIND_FILTER_OPERATION(applyColorMatrix);
+  DONNER_BIND_FILTER_OPERATION(applyFlood);
+  DONNER_BIND_FILTER_OPERATION(applyMerge);
+  DONNER_BIND_FILTER_OPERATION(applyComposite);
+  DONNER_BIND_FILTER_OPERATION(applyBlend);
+  DONNER_BIND_FILTER_OPERATION(applyMorphology);
+  DONNER_BIND_FILTER_OPERATION(applyComponentTransfer);
+  DONNER_BIND_FILTER_OPERATION(applyConvolveMatrix);
+  DONNER_BIND_FILTER_OPERATION(applyTurbulence);
+  DONNER_BIND_FILTER_OPERATION(applyDisplacementMap);
+  DONNER_BIND_FILTER_OPERATION(applyDiffuseLighting);
+  DONNER_BIND_FILTER_OPERATION(applySpecularLighting);
+  DONNER_BIND_FILTER_OPERATION(applyDropShadow);
+  DONNER_BIND_FILTER_OPERATION(applyImage);
+  DONNER_BIND_FILTER_OPERATION(applyTile);
+#undef DONNER_BIND_FILTER_OPERATION
+
   using namespace svg::components;
+
+  const std::uint64_t pixelCount =
+      static_cast<std::uint64_t>(sourceGraphic.getWidth()) * sourceGraphic.getHeight();
+  const bool fitsBudget =
+      executionBudget != nullptr
+          ? executionBudget->consume(graph, pixelCount, FilterMemoryModel::GpuAllNodes)
+          : FilterGraphFitsExecutionBudget(graph, pixelCount, FilterMemoryModel::GpuAllNodes);
+  if (!fitsBudget) {
+    return sourceGraphic;
+  }
 
   FilterResourceArena arena(device_, textureAllocator, commandEncoder, framePassesInCommandBuffer_);
   std::unordered_map<std::string, wgpu::Texture> namedBuffers;
@@ -1523,201 +1920,33 @@ wgpu::Texture GeodeFilterEngine::execute(const svg::components::FilterGraph& gra
     sourceAlpha = applySourceAlpha(arena, sourceGraphic);
   }
 
-  // Derive per-axis scale factors from the full CTM's basis vectors so
-  // that rotation/skew in the ancestor transform is accounted for.
-  // This matches the CPU FilterGraphExecutor's decomposition.
-  const Vector2d transformedXAxis = deviceFromFilter.transformVector(Vector2d(1.0, 0.0));
-  const double scaleX = std::max(transformedXAxis.length(), 1e-12);
-  const double determinant = deviceFromFilter.determinant();
-  const double scaleY = NearZero(scaleX, 1e-12) ? std::abs(deviceFromFilter.data[3])
-                                                : std::max(std::abs(determinant) / scaleX, 1e-12);
-
-  // For objectBoundingBox primitiveUnits, values are relative to the element
-  // bounding box.  Scale through the bbox dimensions first, then to pixels.
-  const bool isOBB = graph.primitiveUnits == svg::PrimitiveUnits::ObjectBoundingBox;
-  const double bboxW =
-      graph.elementBoundingBox.has_value() ? graph.elementBoundingBox->width() : 1.0;
-  const double bboxH =
-      graph.elementBoundingBox.has_value() ? graph.elementBoundingBox->height() : 1.0;
-  auto toPixelX = [&](double val) -> double {
-    return std::abs(isOBB ? val * bboxW : val) * scaleX;
+  FilterExecutionCoordinates coordinates(graph, sourceGraphic, filterRegion, deviceFromFilter);
+  const double scaleX = coordinates.scaleX;
+  const double scaleY = coordinates.scaleY;
+  const bool isOBB = coordinates.isObjectBoundingBox;
+  const double bboxW = coordinates.boundingBoxWidth;
+  const double bboxH = coordinates.boundingBoxHeight;
+  const double bboxX = coordinates.boundingBoxX;
+  const double bboxY = coordinates.boundingBoxY;
+  const Box2d& filterRegionSubregion = coordinates.filterRegion;
+  const Transform2d& filterFromDevice = coordinates.filterFromDevice;
+  auto& previousOutputSubregion = coordinates.previousOutputSubregion;
+  auto& namedSubregions = coordinates.namedSubregions;
+  const auto toPixelX = [&](double value) { return coordinates.toPixelX(value); };
+  const auto toPixelY = [&](double value) { return coordinates.toPixelY(value); };
+  const auto toPixelOffset = [&](double dx, double dy) {
+    return coordinates.toPixelOffset(dx, dy);
   };
-  auto toPixelY = [&](double val) -> double {
-    return std::abs(isOBB ? val * bboxH : val) * scaleY;
+  const auto resolveInputSubregion = [&](const FilterInput& input) {
+    return coordinates.resolveInputSubregion(input);
   };
-
-  // Transform a user-space offset vector through the full CTM so that
-  // rotation/skew is preserved (used by feOffset, feDropShadow).
-  auto toPixelOffset = [&](double dx, double dy) -> Vector2d {
-    const Vector2d userOffset = isOBB ? Vector2d(dx * bboxW, dy * bboxH) : Vector2d(dx, dy);
-    return deviceFromFilter.transformVector(userOffset);
+  const auto resolvePrimitivePosition = [&](const Lengthd& length, Lengthd::Extent extent,
+                                            double origin, double boundingBoxDimension) {
+    return coordinates.resolvePrimitivePosition(length, extent, origin, boundingBoxDimension);
   };
-
-  // Bounding-box origin for OBB position resolution.
-  const double bboxX =
-      graph.elementBoundingBox.has_value() ? graph.elementBoundingBox->topLeft.x : 0.0;
-  const double bboxY =
-      graph.elementBoundingBox.has_value() ? graph.elementBoundingBox->topLeft.y : 0.0;
-
-  // Inverse CTM for rotation-aware subregion clipping.
-  const Transform2d filterFromDevice = deviceFromFilter.inverse();
-
-  // Reference bounds for Length::toPixels in the non-OBB case.
-  const Box2d primitiveUnitsBounds = [&]() -> Box2d {
-    if (isOBB) {
-      return graph.elementBoundingBox.value_or(Box2d(Vector2d(0.0, 0.0), Vector2d(1.0, 1.0)));
-    }
-    const double userW = NearZero(scaleX, 1e-12)
-                             ? static_cast<double>(sourceGraphic.getWidth())
-                             : static_cast<double>(sourceGraphic.getWidth()) / scaleX;
-    const double userH = NearZero(scaleY, 1e-12)
-                             ? static_cast<double>(sourceGraphic.getHeight())
-                             : static_cast<double>(sourceGraphic.getHeight()) / scaleY;
-    return Box2d::FromXYWH(0.0, 0.0, userW, userH);
-  }();
-
-  // Resolve a primitive subregion length to user-space position.
-  auto resolvePrimitivePosition = [&](const Lengthd& len, Lengthd::Extent extent, double origin,
-                                      double bboxDim) -> double {
-    if (isOBB && len.unit == Lengthd::Unit::None) {
-      return origin + len.value * bboxDim;
-    }
-    if (len.unit == Lengthd::Unit::Percent) {
-      const double refOrigin = isOBB ? (extent == Lengthd::Extent::X ? bboxX : bboxY) : 0.0;
-      const double refSize = isOBB ? bboxDim
-                                   : (extent == Lengthd::Extent::X ? primitiveUnitsBounds.width()
-                                                                   : primitiveUnitsBounds.height());
-      return refOrigin + refSize * len.value / 100.0;
-    }
-    return len.toPixels(primitiveUnitsBounds, FontMetrics(), extent);
-  };
-
-  // Resolve a primitive subregion length to user-space size.
-  auto resolvePrimitiveSize = [&](const Lengthd& len, Lengthd::Extent extent,
-                                  double bboxDim) -> double {
-    if (isOBB && len.unit == Lengthd::Unit::None) {
-      return len.value * bboxDim;
-    }
-    if (len.unit == Lengthd::Unit::Percent) {
-      const double refSize = isOBB ? bboxDim
-                                   : (extent == Lengthd::Extent::X ? primitiveUnitsBounds.width()
-                                                                   : primitiveUnitsBounds.height());
-      return refSize * len.value / 100.0;
-    }
-    return len.toPixels(primitiveUnitsBounds, FontMetrics(), extent);
-  };
-
-  // Per-node subregion tracking in user space, mirroring tiny-skia's
-  // defaultNodeSubregion / resolveInputSubregion / previousOutputSubregion.
-  // Used to propagate subregion bounds through the filter graph so that
-  // non-source-generator nodes (feOffset, feComposite, etc.) clip to their
-  // input bounds rather than the full filter region.
-  const Box2d filterRegionSubregion = filterRegion;
-  Box2d previousOutputSubregion = filterRegionSubregion;
-  std::unordered_map<std::string, Box2d> namedSubregions;
-
-  // Resolve the user-space subregion for a filter input reference.
-  auto resolveInputSubregion = [&](const FilterInput& input) -> Box2d {
-    if (const auto* named = std::get_if<FilterInput::Named>(&input.value)) {
-      auto it = namedSubregions.find(named->name.str());
-      if (it != namedSubregions.end()) {
-        return it->second;
-      }
-      return previousOutputSubregion;
-    }
-    if (std::holds_alternative<FilterInput::Previous>(input.value)) {
-      return previousOutputSubregion;
-    }
-    // StandardInput (SourceGraphic, SourceAlpha, etc.) → full filter region.
-    return filterRegionSubregion;
-  };
-
-  // Intersect two user-space boxes.
-  auto boxIntersect = [](const Box2d& a, const Box2d& b) -> Box2d {
-    return Box2d(Vector2d(std::max(a.topLeft.x, b.topLeft.x), std::max(a.topLeft.y, b.topLeft.y)),
-                 Vector2d(std::min(a.bottomRight.x, b.bottomRight.x),
-                          std::min(a.bottomRight.y, b.bottomRight.y)));
-  };
-
-  // User-space subregion for a node, mirroring tiny-skia's
-  // defaultNodeSubregion: source generators and nodes with no inputs
-  // default to the filter region; other nodes inherit the union of their
-  // input subregions with primitive-specific expansion (blur, drop-shadow,
-  // dilate). Explicit x/y/width/height attributes override and are
-  // intersected with the filter region. Computed once per node up front so
-  // the blur path can fold the per-primitive clip into its final pass.
-  auto computeNodeSubregion = [&](const FilterNode& node) -> Box2d {
-    const bool isSourceGenerator =
-        std::holds_alternative<filter_primitive::Flood>(node.primitive) ||
-        std::holds_alternative<filter_primitive::Turbulence>(node.primitive) ||
-        std::holds_alternative<filter_primitive::Image>(node.primitive) ||
-        std::holds_alternative<filter_primitive::Tile>(node.primitive);
-
-    const bool hasExplicitSubregion = node.x.has_value() || node.y.has_value() ||
-                                      node.width.has_value() || node.height.has_value();
-
-    // The slot count and not the populated list: a two-input primitive with nothing filled in
-    // still reads two defaulted inputs, so its bounds come from those defaults rather than from
-    // the whole filter region.
-    const size_t slots = filterInputSlotCount(node);
-
-    Box2d nodeSubregion = filterRegionSubregion;
-    if (hasExplicitSubregion) {
-      const double ux =
-          node.x.has_value() ? resolvePrimitivePosition(*node.x, Lengthd::Extent::X,
-                                                        isOBB ? bboxX : 0.0, bboxW)
-                             : filterRegion.topLeft.x;
-      const double uy =
-          node.y.has_value() ? resolvePrimitivePosition(*node.y, Lengthd::Extent::Y,
-                                                        isOBB ? bboxY : 0.0, bboxH)
-                             : filterRegion.topLeft.y;
-      const double uw =
-          node.width.has_value() ? resolvePrimitiveSize(*node.width, Lengthd::Extent::X, bboxW)
-                                 : filterRegion.width();
-      const double uh =
-          node.height.has_value() ? resolvePrimitiveSize(*node.height, Lengthd::Extent::Y, bboxH)
-                                  : filterRegion.height();
-      nodeSubregion = boxIntersect(Box2d(Vector2d(ux, uy), Vector2d(ux + uw, uy + uh)),
-                                   filterRegionSubregion);
-    } else if (!isSourceGenerator && slots > 0) {
-      // Walk every slot the primitive reads, so a defaulted `in2` contributes its subregion
-      // the same way an explicit one would.
-      Box2d inputBounds = resolveInputSubregion(filterInputOrDefault(node, 0));
-      for (size_t i = 1; i < slots; ++i) {
-        inputBounds =
-            Box2d::Union(inputBounds, resolveInputSubregion(filterInputOrDefault(node, i)));
-      }
-      if (const auto* blur = std::get_if<filter_primitive::GaussianBlur>(&node.primitive)) {
-        const double expandX =
-            std::ceil((blur->stdDeviationX >= 0 ? toPixelX(blur->stdDeviationX) : 0.0) * 3.0);
-        const double expandY =
-            std::ceil((blur->stdDeviationY >= 0 ? toPixelY(blur->stdDeviationY) : 0.0) * 3.0);
-        inputBounds = Box2d(
-            Vector2d(inputBounds.topLeft.x - expandX, inputBounds.topLeft.y - expandY),
-            Vector2d(inputBounds.bottomRight.x + expandX, inputBounds.bottomRight.y + expandY));
-      } else if (const auto* drop = std::get_if<filter_primitive::DropShadow>(&node.primitive)) {
-        const double expandX =
-            std::ceil((drop->stdDeviationX >= 0 ? toPixelX(drop->stdDeviationX) : 0.0) * 3.0);
-        const double expandY =
-            std::ceil((drop->stdDeviationY >= 0 ? toPixelY(drop->stdDeviationY) : 0.0) * 3.0);
-        const Vector2d pixOff = toPixelOffset(drop->dx, drop->dy);
-        Box2d shadowBounds = Box2d(Vector2d(inputBounds.topLeft.x + pixOff.x - expandX,
-                                            inputBounds.topLeft.y + pixOff.y - expandY),
-                                   Vector2d(inputBounds.bottomRight.x + pixOff.x + expandX,
-                                            inputBounds.bottomRight.y + pixOff.y + expandY));
-        inputBounds = Box2d::Union(inputBounds, shadowBounds);
-      } else if (const auto* morph = std::get_if<filter_primitive::Morphology>(&node.primitive)) {
-        if (morph->op == filter_primitive::Morphology::Operator::Dilate) {
-          const double rx = toPixelX(morph->radiusX);
-          const double ry = toPixelY(morph->radiusY);
-          inputBounds =
-              Box2d(Vector2d(inputBounds.topLeft.x - rx, inputBounds.topLeft.y - ry),
-                    Vector2d(inputBounds.bottomRight.x + rx, inputBounds.bottomRight.y + ry));
-        }
-      }
-      nodeSubregion = boxIntersect(inputBounds, filterRegionSubregion);
-    }
-    return nodeSubregion;
+  const auto resolvePrimitiveSize = [&](const Lengthd& length, Lengthd::Extent extent,
+                                        double boundingBoxDimension) {
+    return coordinates.resolvePrimitiveSize(length, extent, boundingBoxDimension);
   };
 
   for (const FilterNode& node : graph.nodes) {
@@ -1725,7 +1954,7 @@ wgpu::Texture GeodeFilterEngine::execute(const svg::components::FilterGraph& gra
     // blur path can fold the per-primitive clip into its final pass.
     const bool hasExplicitSubregion = node.x.has_value() || node.y.has_value() ||
                                       node.width.has_value() || node.height.has_value();
-    const Box2d nodeSubregion = computeNodeSubregion(node);
+    const Box2d nodeSubregion = coordinates.computeNodeSubregion(node);
     const bool ctmAxisAligned =
         NearZero(deviceFromFilter.data[1], 1e-6) && NearZero(deviceFromFilter.data[2], 1e-6);
     bool clipMergedIntoBlur = false;
@@ -1738,8 +1967,12 @@ wgpu::Texture GeodeFilterEngine::execute(const svg::components::FilterGraph& gra
     // Dispatch based on primitive type.
     wgpu::Texture outputTex;
     if (const auto* blur = std::get_if<filter_primitive::GaussianBlur>(&node.primitive)) {
-      const double sx = blur->stdDeviationX >= 0 ? toPixelX(blur->stdDeviationX) : 0.0;
-      const double sy = blur->stdDeviationY >= 0 ? toPixelY(blur->stdDeviationY) : 0.0;
+      const double sx = blur->stdDeviationX >= 0
+                            ? boundedPositiveFilterPixels(toPixelX(blur->stdDeviationX))
+                            : 0.0;
+      const double sy = blur->stdDeviationY >= 0
+                            ? boundedPositiveFilterPixels(toPixelY(blur->stdDeviationY))
+                            : 0.0;
       const uint32_t em = toShaderEdgeMode(blur->edgeMode);
       const bool nodeLinearRGB =
           node.colorInterpolationFilters.value_or(graph.colorInterpolationFilters) !=
@@ -1789,8 +2022,8 @@ wgpu::Texture GeodeFilterEngine::execute(const svg::components::FilterGraph& gra
       // maps correctly to device pixels.
       const Vector2d pixelOffset = toPixelOffset(offset->dx, offset->dy);
       filter_primitive::Offset scaled = *offset;
-      scaled.dx = pixelOffset.x;
-      scaled.dy = pixelOffset.y;
+      scaled.dx = boundedSignedFilterPixels(pixelOffset.x);
+      scaled.dy = boundedSignedFilterPixels(pixelOffset.y);
       outputTex = applyOffset(arena, inputTex, scaled);
     } else if (const auto* cm = std::get_if<filter_primitive::ColorMatrix>(&node.primitive)) {
       // Per SVG spec, feColorMatrix operates in linearRGB by default (the
@@ -1873,8 +2106,10 @@ wgpu::Texture GeodeFilterEngine::execute(const svg::components::FilterGraph& gra
       if (morphDisabled) {
         outputTex = inputTex;
       } else {
-        const int rx = static_cast<int>(std::round(toPixelX(morph->radiusX)));
-        const int ry = static_cast<int>(std::round(toPixelY(morph->radiusY)));
+        const int rx = boundedRoundedInt32(toPixelX(morph->radiusX), 0,
+                                           svg::components::kMaximumFilterPixelRadius);
+        const int ry = boundedRoundedInt32(toPixelY(morph->radiusY), 0,
+                                           svg::components::kMaximumFilterPixelRadius);
         // feMorphology operates in the filter's color-interpolation-filters
         // space (linearRGB by default). Erode/dilate are component-wise min/max
         // on PREMULTIPLIED channels, and the un-premultiply → linearize →
@@ -1994,10 +2229,16 @@ wgpu::Texture GeodeFilterEngine::execute(const svg::components::FilterGraph& gra
     } else if (const auto* drop = std::get_if<filter_primitive::DropShadow>(&node.primitive)) {
       // stdDeviation is magnitude only; dx/dy are directional and need
       // the full CTM projection (matching feOffset).
-      double sx = drop->stdDeviationX >= 0 ? toPixelX(drop->stdDeviationX) : 0.0;
-      double sy = drop->stdDeviationY >= 0 ? toPixelY(drop->stdDeviationY) : 0.0;
+      double sx = drop->stdDeviationX >= 0
+                      ? boundedPositiveFilterPixels(toPixelX(drop->stdDeviationX))
+                      : 0.0;
+      double sy = drop->stdDeviationY >= 0
+                      ? boundedPositiveFilterPixels(toPixelY(drop->stdDeviationY))
+                      : 0.0;
       const Vector2d pixelOffset = toPixelOffset(drop->dx, drop->dy);
-      outputTex = applyDropShadow(arena, inputTex, *drop, sx, sy, pixelOffset.x, pixelOffset.y);
+      outputTex =
+          applyDropShadow(arena, inputTex, *drop, sx, sy, boundedSignedFilterPixels(pixelOffset.x),
+                          boundedSignedFilterPixels(pixelOffset.y));
     } else if (const auto* image = std::get_if<filter_primitive::Image>(&node.primitive)) {
       // Resolve the feImage placement rect in user space, honoring percent/OBB
       // units (via the same helpers used for subregion clipping) and defaulting
@@ -2036,12 +2277,15 @@ wgpu::Texture GeodeFilterEngine::execute(const svg::components::FilterGraph& gra
         outputTex = applyTile(arena, inputTex, 0, 0, 0, 0);
       } else {
         const Box2d sourcePixels = deviceFromFilter.transformBox(tileSourceSubregion);
-        int32_t srcX = static_cast<int32_t>(std::floor(sourcePixels.topLeft.x));
-        int32_t srcY = static_cast<int32_t>(std::floor(sourcePixels.topLeft.y));
-        int32_t srcW =
-            static_cast<int32_t>(std::ceil(sourcePixels.bottomRight.x - sourcePixels.topLeft.x));
-        int32_t srcH =
-            static_cast<int32_t>(std::ceil(sourcePixels.bottomRight.y - sourcePixels.topLeft.y));
+        constexpr int32_t kMaximumTileExtent = svg::components::kMaximumFilterPixelOffset;
+        int32_t srcX =
+            boundedFloorInt32(sourcePixels.topLeft.x, -kMaximumTileExtent, kMaximumTileExtent);
+        int32_t srcY =
+            boundedFloorInt32(sourcePixels.topLeft.y, -kMaximumTileExtent, kMaximumTileExtent);
+        int32_t srcW = boundedCeilInt32(sourcePixels.bottomRight.x - sourcePixels.topLeft.x, 0,
+                                        kMaximumTileExtent);
+        int32_t srcH = boundedCeilInt32(sourcePixels.bottomRight.y - sourcePixels.topLeft.y, 0,
+                                        kMaximumTileExtent);
         outputTex = applyTile(arena, inputTex, srcX, srcY, srcW, srcH);
       }
     } else {
@@ -2138,7 +2382,7 @@ struct BoxBlurPlan {
 
 BoxBlurPlan computeBoxPasses(double sigma) {
   // Same window-size formula as tiny-skia: window = round(sigma * 3*sqrt(2π)/4).
-  constexpr double kMaxSigma = 10000.0;
+  constexpr double kMaxSigma = svg::components::kMaximumFilterPixelRadius;
   if (!std::isfinite(sigma) || sigma > kMaxSigma) {
     sigma = kMaxSigma;
   }
@@ -2262,8 +2506,6 @@ wgpu::Texture GeodeFilterEngine::runBlurPass(FilterResourceArena& arena, const w
                                              const wgpu::Texture& output, uint32_t width,
                                              uint32_t height, float stdDeviation, uint32_t axis,
                                              uint32_t edgeMode, const Box2d* clip) {
-  const wgpu::Device& dev = device_.device();
-
   BlurParams params{};
   params.stdDeviation = stdDeviation;
   params.axis = axis;
@@ -2295,8 +2537,6 @@ wgpu::Texture GeodeFilterEngine::runBoxBlurPass(FilterResourceArena& arena,
                                                 uint32_t height, int32_t boxLeft, int32_t boxRight,
                                                 uint32_t axis, uint32_t edgeMode,
                                                 const Box2d* clip) {
-  const wgpu::Device& dev = device_.device();
-
   BlurParams params{};
   params.stdDeviation = 0.0f;
   params.axis = axis;
@@ -2878,7 +3118,8 @@ wgpu::Texture GeodeFilterEngine::applyTurbulence(
   params.baseFreqX = static_cast<float>(primitive.baseFrequencyX);
   params.baseFreqY = static_cast<float>(primitive.baseFrequencyY);
   params.numOctaves = primitive.numOctaves;
-  params.seed = static_cast<int32_t>(primitive.seed);
+  params.seed = boundedRoundedInt32(primitive.seed, std::numeric_limits<int32_t>::min(),
+                                    std::numeric_limits<int32_t>::max());
   params.stitchTiles = primitive.stitchTiles ? 1u : 0u;
   params.typeFlag =
       primitive.type == svg::components::filter_primitive::Turbulence::Type::Turbulence ? 1u : 0u;
@@ -3145,14 +3386,13 @@ wgpu::Texture GeodeFilterEngine::applyDiffuseLighting(
                   &params.pixelToUser4, &params.pixelToUser5, &params.hasShear);
 
   const Box2d samplePixels = deviceFromFilter.transformBox(sampleSubregion);
-  params.sampleMinX = std::clamp(static_cast<int32_t>(std::floor(samplePixels.topLeft.x)),
-                                 int32_t(0), static_cast<int32_t>(width) - 1);
-  params.sampleMinY = std::clamp(static_cast<int32_t>(std::floor(samplePixels.topLeft.y)),
-                                 int32_t(0), static_cast<int32_t>(height) - 1);
-  params.sampleMaxX = std::clamp(static_cast<int32_t>(std::ceil(samplePixels.bottomRight.x)) - 1,
-                                 int32_t(0), static_cast<int32_t>(width) - 1);
-  params.sampleMaxY = std::clamp(static_cast<int32_t>(std::ceil(samplePixels.bottomRight.y)) - 1,
-                                 int32_t(0), static_cast<int32_t>(height) - 1);
+  params.sampleMinX = boundedFloorInt32(samplePixels.topLeft.x, 0, static_cast<int32_t>(width) - 1);
+  params.sampleMinY =
+      boundedFloorInt32(samplePixels.topLeft.y, 0, static_cast<int32_t>(height) - 1);
+  params.sampleMaxX =
+      boundedCeilInt32(samplePixels.bottomRight.x, 1, static_cast<int32_t>(width)) - 1;
+  params.sampleMaxY =
+      boundedCeilInt32(samplePixels.bottomRight.y, 1, static_cast<int32_t>(height)) - 1;
 
   // Upload as storage buffer.
   wgpu::BufferDescriptor bufDesc{};
@@ -3259,14 +3499,13 @@ wgpu::Texture GeodeFilterEngine::applySpecularLighting(
   }
 
   const Box2d samplePixels = deviceFromFilter.transformBox(sampleSubregion);
-  params.sampleMinX = std::clamp(static_cast<int32_t>(std::floor(samplePixels.topLeft.x)),
-                                 int32_t(0), static_cast<int32_t>(width) - 1);
-  params.sampleMinY = std::clamp(static_cast<int32_t>(std::floor(samplePixels.topLeft.y)),
-                                 int32_t(0), static_cast<int32_t>(height) - 1);
-  params.sampleMaxX = std::clamp(static_cast<int32_t>(std::ceil(samplePixels.bottomRight.x)) - 1,
-                                 int32_t(0), static_cast<int32_t>(width) - 1);
-  params.sampleMaxY = std::clamp(static_cast<int32_t>(std::ceil(samplePixels.bottomRight.y)) - 1,
-                                 int32_t(0), static_cast<int32_t>(height) - 1);
+  params.sampleMinX = boundedFloorInt32(samplePixels.topLeft.x, 0, static_cast<int32_t>(width) - 1);
+  params.sampleMinY =
+      boundedFloorInt32(samplePixels.topLeft.y, 0, static_cast<int32_t>(height) - 1);
+  params.sampleMaxX =
+      boundedCeilInt32(samplePixels.bottomRight.x, 1, static_cast<int32_t>(width)) - 1;
+  params.sampleMaxY =
+      boundedCeilInt32(samplePixels.bottomRight.y, 1, static_cast<int32_t>(height)) - 1;
 
   // Upload as storage buffer.
   wgpu::BufferDescriptor bufDesc{};
@@ -3361,6 +3600,57 @@ wgpu::Texture GeodeFilterEngine::applyDropShadow(
   return output;
 }
 
+bool HasSafeFilterImageSource(const svg::components::filter_primitive::Image& primitive,
+                              std::span<const uint8_t> imageData,
+                              uint32_t maximumTextureDimension) {
+  return svg::HasExactRgbaPayload(imageData, primitive.imageWidth, primitive.imageHeight) &&
+         static_cast<uint32_t>(primitive.imageWidth) <= maximumTextureDimension &&
+         static_cast<uint32_t>(primitive.imageHeight) <= maximumTextureDimension &&
+         static_cast<uint32_t>(primitive.imageWidth) <= std::numeric_limits<uint32_t>::max() / 4u;
+}
+
+std::optional<ImageParams> CreateFragmentImageParams(
+    const svg::components::filter_primitive::Image& primitive,
+    const svg::components::FilterGraph& graph, const Transform2d& deviceFromFilter) {
+  if (!primitive.isFragmentReference) {
+    return std::nullopt;
+  }
+  ImageParams params{};
+  const bool hasRotation =
+      !NearZero(deviceFromFilter.data[1], 1e-6) || !NearZero(deviceFromFilter.data[2], 1e-6);
+  if (hasRotation && !NearZero(deviceFromFilter.determinant(), 1e-12)) {
+    const double scaleX = graph.userToPixelScale.x;
+    const double scaleY = graph.userToPixelScale.y;
+    const Transform2d viewBoxScaleInv = Transform2d::Scale(
+        NearZero(scaleX, 1e-12) ? 1.0 : 1.0 / scaleX, NearZero(scaleY, 1e-12) ? 1.0 : 1.0 / scaleY);
+    const Transform2d regionOffset = Transform2d::Translate(primitive.fragmentRegionTopLeft.x,
+                                                            primitive.fragmentRegionTopLeft.y);
+    const Transform2d deviceFromFragment = viewBoxScaleInv * regionOffset * deviceFromFilter;
+    const Transform2d fragmentFromDevice = deviceFromFragment.inverse();
+    params.m00 = static_cast<float>(fragmentFromDevice.data[0]);
+    params.m01 = static_cast<float>(fragmentFromDevice.data[2]);
+    params.m02 = static_cast<float>(fragmentFromDevice.data[4]);
+    params.m10 = static_cast<float>(fragmentFromDevice.data[1]);
+    params.m11 = static_cast<float>(fragmentFromDevice.data[3]);
+    params.m12 = static_cast<float>(fragmentFromDevice.data[5]);
+    params.pixelatedScaleX =
+        static_cast<float>(deviceFromFragment.transformVector(Vector2d(1.0, 0.0)).length());
+    params.pixelatedScaleY =
+        static_cast<float>(deviceFromFragment.transformVector(Vector2d(0.0, 1.0)).length());
+  } else {
+    const double scaleX = graph.userToPixelScale.x > 0.0 ? graph.userToPixelScale.x : 1.0;
+    const double scaleY = graph.userToPixelScale.y > 0.0 ? graph.userToPixelScale.y : 1.0;
+    params.m00 = 1.0f;
+    params.m02 = static_cast<float>(-primitive.fragmentRegionTopLeft.x * scaleX);
+    params.m11 = 1.0f;
+    params.m12 = static_cast<float>(-primitive.fragmentRegionTopLeft.y * scaleY);
+    params.pixelatedScaleX = 1.0f;
+    params.pixelatedScaleY = 1.0f;
+  }
+  params.samplingMode = ImageSamplingMode(primitive.imageRendering);
+  return params;
+}
+
 wgpu::Texture GeodeFilterEngine::applyImage(
     FilterResourceArena& arena, const svg::components::filter_primitive::Image& primitive,
     uint32_t width, uint32_t height, const svg::components::FilterGraph& graph,
@@ -3368,13 +3658,11 @@ wgpu::Texture GeodeFilterEngine::applyImage(
     const Box2d& placementRegionUser) {
   const wgpu::Device& dev = device_.device();
 
-  const bool hasExactPayload =
-      svg::HasExactRgbaPayload(primitive.imageData, primitive.imageWidth, primitive.imageHeight);
+  const std::span<const uint8_t> imageData = primitive.imageData
+                                                 ? std::span<const uint8_t>(*primitive.imageData)
+                                                 : std::span<const uint8_t>();
   const bool hasSafeTextureExtent =
-      hasExactPayload &&
-      static_cast<uint32_t>(primitive.imageWidth) <= device_.maxTextureDimension2D() &&
-      static_cast<uint32_t>(primitive.imageHeight) <= device_.maxTextureDimension2D() &&
-      static_cast<uint32_t>(primitive.imageWidth) <= std::numeric_limits<uint32_t>::max() / 4u;
+      HasSafeFilterImageSource(primitive, imageData, device_.maxTextureDimension2D());
   wgpu::Texture output = createIntermediateTexture(arena, dev, width, height, "FilterImageOutput");
 
   const auto renderTransparentOutput = [&]() {
@@ -3417,7 +3705,7 @@ wgpu::Texture GeodeFilterEngine::applyImage(
   // (consistent with feFlood / feMerge).
   const uint32_t imgW = static_cast<uint32_t>(primitive.imageWidth);
   const uint32_t imgH = static_cast<uint32_t>(primitive.imageHeight);
-  const std::vector<uint8_t> premul = svg::PremultiplyRgba(primitive.imageData);
+  const std::vector<uint8_t> premul = svg::PremultiplyRgba(imageData);
 
   wgpu::TextureDescriptor imgDesc{};
   imgDesc.label = wgpuLabel("FilterImageSource");
@@ -3441,69 +3729,10 @@ wgpu::Texture GeodeFilterEngine::applyImage(
   device_.queue().writeTexture(dstInfo, premul.data(), premul.size(), layout, extent);
   device_.countTextureWrite(premul.size());
 
-  // Fragment references with a non-axis-aligned ancestor transform: project the fragment image
-  // through the full CTM (rotation/skew) so placement matches the CPU path. The transform
-  // chain is:
-  //   fragment pixel → (÷ viewBoxScale) → document user space
-  //   → (+ filterRegion.topLeft) → host user space
-  //   → (× deviceFromFilter) → device pixels
-  // The shader receives the inverse: device pixel → fragment pixel.
-  const bool hasRotation =
-      !NearZero(deviceFromFilter.data[1], 1e-6) || !NearZero(deviceFromFilter.data[2], 1e-6);
-  if (primitive.isFragmentReference && hasRotation &&
-      !NearZero(deviceFromFilter.determinant(), 1e-12)) {
-    const double uScaleX = graph.userToPixelScale.x;
-    const double uScaleY = graph.userToPixelScale.y;
-    const Transform2d viewBoxScaleInv =
-        Transform2d::Scale(NearZero(uScaleX, 1e-12) ? 1.0 : 1.0 / uScaleX,
-                           NearZero(uScaleY, 1e-12) ? 1.0 : 1.0 / uScaleY);
-    const Transform2d regionOffset = Transform2d::Translate(primitive.fragmentRegionTopLeft.x,
-                                                            primitive.fragmentRegionTopLeft.y);
-    const Transform2d deviceFromFragment = viewBoxScaleInv * regionOffset * deviceFromFilter;
-    const Transform2d fragmentFromDevice = deviceFromFragment.inverse();
-
-    ImageParams params{};
-    params.m00 = static_cast<float>(fragmentFromDevice.data[0]);
-    params.m01 = static_cast<float>(fragmentFromDevice.data[2]);
-    params.m02 = static_cast<float>(fragmentFromDevice.data[4]);
-    params.m10 = static_cast<float>(fragmentFromDevice.data[1]);
-    params.m11 = static_cast<float>(fragmentFromDevice.data[3]);
-    params.m12 = static_cast<float>(fragmentFromDevice.data[5]);
-    params.samplingMode = ImageSamplingMode(primitive.imageRendering);
-    params.pixelatedScaleX =
-        static_cast<float>(deviceFromFragment.transformVector(Vector2d(1.0, 0.0)).length());
-    params.pixelatedScaleY =
-        static_cast<float>(deviceFromFragment.transformVector(Vector2d(0.0, 1.0)).length());
-    params.pad1 = 0;
-
-    auto uniformBuffer = writeUniformSlot(*resourceCache_, device_, &params, sizeof(params));
-    dispatchInputOutputUniform(arena, device_, imageBindGroupLayout_.get(), imagePipeline_.get(),
-                               imgTex, output, uniformBuffer.buffer, uniformBuffer.offset,
-                               sizeof(ImageParams), "FilterImageFragRefPass");
-    return output;
-  }
-
-  // Fragment references without rotation: simple device-space post-translation to position
-  // content at the filter region origin, matching the CPU path's non-rotated fragment case.
-  if (primitive.isFragmentReference) {
-    const double uScaleX = graph.userToPixelScale.x > 0.0 ? graph.userToPixelScale.x : 1.0;
-    const double uScaleY = graph.userToPixelScale.y > 0.0 ? graph.userToPixelScale.y : 1.0;
-    const double deviceOffsetX = primitive.fragmentRegionTopLeft.x * uScaleX;
-    const double deviceOffsetY = primitive.fragmentRegionTopLeft.y * uScaleY;
-
-    ImageParams params{};
-    params.m00 = 1.0f;
-    params.m01 = 0.0f;
-    params.m02 = static_cast<float>(-deviceOffsetX);
-    params.m10 = 0.0f;
-    params.m11 = 1.0f;
-    params.m12 = static_cast<float>(-deviceOffsetY);
-    params.samplingMode = ImageSamplingMode(primitive.imageRendering);
-    params.pixelatedScaleX = 1.0f;
-    params.pixelatedScaleY = 1.0f;
-    params.pad1 = 0;
-
-    auto uniformBuffer = writeUniformSlot(*resourceCache_, device_, &params, sizeof(params));
+  if (std::optional<ImageParams> fragmentParams =
+          CreateFragmentImageParams(primitive, graph, deviceFromFilter)) {
+    auto uniformBuffer =
+        writeUniformSlot(*resourceCache_, device_, &*fragmentParams, sizeof(*fragmentParams));
     dispatchInputOutputUniform(arena, device_, imageBindGroupLayout_.get(), imagePipeline_.get(),
                                imgTex, output, uniformBuffer.buffer, uniformBuffer.offset,
                                sizeof(ImageParams), "FilterImageFragRefPass");

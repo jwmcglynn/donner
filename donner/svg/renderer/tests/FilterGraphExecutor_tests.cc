@@ -176,6 +176,352 @@ TEST(FilterGraphExecutorTest, ClipsCompletelyOffscreenFilterRegion) {
   }
 }
 
+TEST(FilterGraphExecutorTest, ExtremeFilterValuesStayWithinNumericAndWorkBounds) {
+  auto maybePixmap = tiny_skia::Pixmap::fromSize(8, 8);
+  ASSERT_TRUE(maybePixmap.has_value());
+  tiny_skia::Pixmap pixmap = std::move(*maybePixmap);
+  SetPixel(pixmap, 1, 1, Pixel{255, 0, 0, 255});
+
+  components::FilterGraph graph;
+  components::FilterNode offset;
+  offset.inputs.push_back(components::FilterInput{});
+  offset.primitive = components::filter_primitive::Offset{.dx = 1e300, .dy = -1e300};
+  graph.nodes.push_back(std::move(offset));
+
+  components::FilterNode morphology;
+  morphology.inputs.push_back(components::FilterInput{});
+  morphology.primitive = components::filter_primitive::Morphology{
+      .op = components::filter_primitive::Morphology::Operator::Dilate,
+      .radiusX = 1e300,
+      .radiusY = 1e300,
+  };
+  graph.nodes.push_back(std::move(morphology));
+
+  ApplyFilterGraphToPixmap(pixmap, graph, Transform2d::Scale(1e300),
+                           Box2d::FromXYWH(-1e300, -1e300, 2e300, 2e300));
+  ClipFilterOutputToRegion(pixmap, Box2d::FromXYWH(1e300, 1e300, 1e300, 1e300),
+                           Transform2d::Scale(1e300));
+
+  EXPECT_EQ(pixmap.width(), 8u);
+  EXPECT_EQ(pixmap.height(), 8u);
+}
+
+TEST(FilterGraphExecutorTest, RejectsAggregateConvolveWorkAndNamedBufferMemory) {
+  components::FilterGraph graph;
+  components::FilterNode convolve;
+  convolve.primitive = components::filter_primitive::ConvolveMatrix{
+      .orderX = 32,
+      .orderY = 32,
+      .kernelMatrix = std::vector<double>(32 * 32, 1.0),
+  };
+  convolve.result = RcString("convolve");
+  graph.nodes.push_back(std::move(convolve));
+  for (size_t i = 1; i < components::kMaximumFilterGraphNodes; ++i) {
+    components::FilterNode flood;
+    flood.primitive = components::filter_primitive::Flood{};
+    flood.result = RcString("retained-" + std::to_string(i));
+    graph.nodes.push_back(std::move(flood));
+  }
+
+  constexpr std::uint64_t kPixels = 1024ULL * 1024;
+  EXPECT_FALSE(components::FilterGraphFitsExecutionBudget(
+      graph, kPixels, components::FilterMemoryModel::CpuFloatNamedResults));
+  EXPECT_FALSE(components::FilterGraphFitsExecutionBudget(
+      graph, kPixels, components::FilterMemoryModel::GpuAllNodes));
+}
+
+TEST(FilterGraphExecutorTest, AccountsForCpuBaselineFilterBuffers) {
+  components::FilterGraph graph;
+  components::FilterNode flood;
+  flood.primitive = components::filter_primitive::Flood{};
+  graph.nodes.push_back(std::move(flood));
+
+  EXPECT_FALSE(components::FilterGraphFitsExecutionBudget(
+      graph, components::kMaximumFilterSurfacePixels,
+      components::FilterMemoryModel::CpuFloatNamedResults));
+
+  components::FilterNode secondFlood;
+  secondFlood.primitive = components::filter_primitive::Flood{};
+  graph.nodes.push_back(std::move(secondFlood));
+  EXPECT_FALSE(components::FilterGraphFitsExecutionBudget(
+      graph, components::kMaximumFilterSurfacePixels,
+      components::FilterMemoryModel::CpuFloatNamedResults));
+}
+
+TEST(FilterGraphExecutorTest, AccountsForTurbulenceOctaveWork) {
+  components::FilterGraph graph;
+  components::FilterNode turbulence;
+  turbulence.primitive = components::filter_primitive::Turbulence{.numOctaves = 16};
+  graph.nodes.push_back(std::move(turbulence));
+
+  EXPECT_FALSE(components::FilterGraphFitsExecutionBudget(
+      graph, 1024ULL * 1024, components::FilterMemoryModel::CpuFloatNamedResults));
+  EXPECT_TRUE(components::FilterGraphFitsExecutionBudget(
+      graph, 1024ULL * 1024, components::FilterMemoryModel::GpuAllNodes));
+}
+
+TEST(FilterGraphExecutorTest, AccountsForBlurPassWorkAndScratchMemory) {
+  components::FilterGraph graph;
+  for (int i = 0; i < 21; ++i) {
+    components::FilterNode blur;
+    blur.primitive = components::filter_primitive::GaussianBlur{
+        .stdDeviationX = 3.0,
+        .stdDeviationY = 3.0,
+    };
+    graph.nodes.push_back(std::move(blur));
+  }
+
+  constexpr std::uint64_t kExactWorkBudgetPixels = 1024ULL * 1024;
+  EXPECT_TRUE(components::FilterGraphFitsExecutionBudget(
+      graph, kExactWorkBudgetPixels, components::FilterMemoryModel::CpuFloatNamedResults));
+  graph.nodes.push_back(graph.nodes.front());
+  EXPECT_FALSE(components::FilterGraphFitsExecutionBudget(
+      graph, kExactWorkBudgetPixels, components::FilterMemoryModel::CpuFloatNamedResults));
+
+  graph.nodes.resize(1);
+  EXPECT_TRUE(components::FilterGraphFitsExecutionBudget(
+      graph, components::kMaximumFilterSurfacePixels,
+      components::FilterMemoryModel::CpuFloatNamedResults));
+  graph.nodes.push_back(graph.nodes.front());
+  EXPECT_FALSE(components::FilterGraphFitsExecutionBudget(
+      graph, components::kMaximumFilterSurfacePixels,
+      components::FilterMemoryModel::CpuFloatNamedResults));
+  EXPECT_FALSE(components::FilterGraphFitsExecutionBudget(
+      graph, components::kMaximumFilterSurfacePixels, components::FilterMemoryModel::GpuAllNodes));
+
+  constexpr std::uint64_t kLinearRgbGpuBoundaryPixels = 3'800'000;
+  EXPECT_FALSE(components::FilterGraphFitsExecutionBudget(
+      graph, kLinearRgbGpuBoundaryPixels, components::FilterMemoryModel::GpuAllNodes));
+  graph.colorInterpolationFilters = ColorInterpolationFilters::SRGB;
+  EXPECT_TRUE(components::FilterGraphFitsExecutionBudget(
+      graph, kLinearRgbGpuBoundaryPixels, components::FilterMemoryModel::GpuAllNodes));
+}
+
+TEST(FilterGraphExecutorTest, AccountsForGpuPerNodeSubregionTextures) {
+  components::FilterGraph graph;
+  for (int i = 0; i < 3; ++i) {
+    components::FilterNode blend;
+    blend.primitive = components::filter_primitive::Blend{};
+    graph.nodes.push_back(std::move(blend));
+  }
+
+  constexpr std::uint64_t kGpuNodeClipBoundaryPixels = 4'200'000;
+  EXPECT_FALSE(components::FilterGraphFitsExecutionBudget(
+      graph, kGpuNodeClipBoundaryPixels, components::FilterMemoryModel::GpuAllNodes));
+}
+
+TEST(FilterGraphExecutorTest, AccountsForGenericPrimitivePassWork) {
+  components::FilterGraph graph;
+  graph.colorInterpolationFilters = ColorInterpolationFilters::SRGB;
+  for (int i = 0; i < 12; ++i) {
+    components::FilterNode blend;
+    blend.primitive = components::filter_primitive::Blend{};
+    graph.nodes.push_back(std::move(blend));
+  }
+
+  constexpr std::uint64_t kGenericWorkBoundaryPixels = 4'800'000;
+  EXPECT_FALSE(components::FilterGraphFitsExecutionBudget(
+      graph, kGenericWorkBoundaryPixels, components::FilterMemoryModel::CpuFloatNamedResults));
+}
+
+TEST(FilterGraphExecutorTest, AccountsForZeroDeviationBlurAndShadowWork) {
+  components::FilterGraph zeroBlurGraph;
+  for (int i = 0; i < 32; ++i) {
+    components::FilterNode blur;
+    blur.primitive = components::filter_primitive::GaussianBlur{};
+    zeroBlurGraph.nodes.push_back(std::move(blur));
+  }
+  EXPECT_FALSE(components::FilterGraphFitsExecutionBudget(
+      zeroBlurGraph, 2'000'000, components::FilterMemoryModel::CpuFloatNamedResults));
+
+  components::FilterGraph zeroShadowGraph;
+  for (int i = 0; i < 16; ++i) {
+    components::FilterNode shadow;
+    shadow.primitive = components::filter_primitive::DropShadow{};
+    zeroShadowGraph.nodes.push_back(std::move(shadow));
+  }
+  EXPECT_FALSE(components::FilterGraphFitsExecutionBudget(
+      zeroShadowGraph, 1'500'000, components::FilterMemoryModel::CpuFloatNamedResults));
+}
+
+TEST(FilterGraphExecutorTest, AccountsForBicubicImageSamplingWork) {
+  components::FilterGraph graph;
+  components::FilterNode imageNode;
+  imageNode.primitive = components::filter_primitive::Image{};
+  graph.nodes.push_back(std::move(imageNode));
+
+  EXPECT_FALSE(components::FilterGraphFitsExecutionBudget(
+      graph, 4'000'000, components::FilterMemoryModel::CpuFloatNamedResults));
+  auto& image = std::get<components::filter_primitive::Image>(graph.nodes[0].primitive);
+  image.imageRendering = ImageRendering::Pixelated;
+  EXPECT_TRUE(components::FilterGraphFitsExecutionBudget(
+      graph, 4'000'000, components::FilterMemoryModel::CpuFloatNamedResults));
+  EXPECT_TRUE(components::FilterGraphFitsExecutionBudget(
+      graph, 4'000'000, components::FilterMemoryModel::GpuAllNodes));
+}
+
+TEST(FilterGraphExecutorTest, AccountsForDropShadowBlurWorkAndMemory) {
+  components::FilterGraph graph;
+  for (int i = 0; i < 13; ++i) {
+    components::FilterNode shadow;
+    shadow.primitive = components::filter_primitive::DropShadow{
+        .stdDeviationX = 3.0,
+        .stdDeviationY = 3.0,
+    };
+    graph.nodes.push_back(std::move(shadow));
+  }
+
+  EXPECT_FALSE(components::FilterGraphFitsExecutionBudget(
+      graph, 1024ULL * 1024, components::FilterMemoryModel::CpuFloatNamedResults));
+
+  graph.nodes.resize(1);
+  EXPECT_FALSE(components::FilterGraphFitsExecutionBudget(
+      graph, components::kMaximumFilterSurfacePixels,
+      components::FilterMemoryModel::CpuFloatNamedResults));
+  EXPECT_FALSE(components::FilterGraphFitsExecutionBudget(
+      graph, 7'000'000, components::FilterMemoryModel::GpuAllNodes));
+}
+
+TEST(FilterGraphExecutorTest, RejectsAggregateWorkAcrossSeparateFilterExecutions) {
+  components::FilterGraph graph;
+  components::FilterNode blur;
+  blur.primitive = components::filter_primitive::GaussianBlur{
+      .stdDeviationX = 3.0,
+      .stdDeviationY = 3.0,
+  };
+  graph.nodes.push_back(std::move(blur));
+
+  components::FilterExecutionBudget budget;
+  constexpr std::uint64_t kPixels = 1024ULL * 1024;
+  for (int i = 0; i < 42; ++i) {
+    EXPECT_TRUE(
+        budget.consume(graph, kPixels, components::FilterMemoryModel::CpuFloatNamedResults));
+  }
+  EXPECT_FALSE(budget.consume(graph, kPixels, components::FilterMemoryModel::CpuFloatNamedResults));
+
+  budget.reset();
+  std::size_t maximumSurfaceExecutions = 0;
+  while (budget.consume(graph, components::kMaximumFilterSurfacePixels,
+                        components::FilterMemoryModel::CpuFloatNamedResults)) {
+    ++maximumSurfaceExecutions;
+  }
+  EXPECT_GT(maximumSurfaceExecutions, 0u);
+  EXPECT_LT(maximumSurfaceExecutions, components::FilterExecutionBudget::kMaximumExecutions);
+  EXPECT_TRUE(budget.rejected());
+  EXPECT_LE(budget.workUnits(), components::kMaximumFilterFrameWorkUnits);
+}
+
+TEST(FilterGraphExecutorTest, ReservesCaptureMemoryBeforeAllocationAndLatchesRejection) {
+  components::FilterGraph graph;
+  components::FilterNode blur;
+  blur.primitive = components::filter_primitive::GaussianBlur{
+      .stdDeviationX = 3.0,
+      .stdDeviationY = 3.0,
+  };
+  graph.nodes.push_back(std::move(blur));
+
+  constexpr std::uint64_t kCaptureBytes = components::kMaximumFilterSurfacePixels * 4;
+  components::FilterExecutionBudget cpuBudget;
+  auto outer =
+      cpuBudget.reserve(graph, components::kMaximumFilterSurfacePixels,
+                        components::FilterMemoryModel::CpuFloatNamedResults, kCaptureBytes);
+  ASSERT_TRUE(outer.has_value());
+  EXPECT_FALSE(cpuBudget
+                   .reserve(graph, components::kMaximumFilterSurfacePixels,
+                            components::FilterMemoryModel::CpuFloatNamedResults, kCaptureBytes)
+                   .has_value());
+  EXPECT_TRUE(cpuBudget.rejected());
+  EXPECT_FALSE(cpuBudget.reserve(graph, 1, components::FilterMemoryModel::CpuFloatNamedResults, 4)
+                   .has_value());
+
+  components::FilterExecutionBudget gpuBudget;
+  EXPECT_FALSE(gpuBudget
+                   .reserve(graph, components::kMaximumFilterSurfacePixels,
+                            components::FilterMemoryModel::GpuAllNodes, kCaptureBytes)
+                   .has_value());
+}
+
+TEST(FilterGraphExecutorTest, RejectsNestedCaptureMemoryBeforeAllocation) {
+  components::FilterGraph graph;
+  components::FilterNode dropShadow;
+  dropShadow.primitive = components::filter_primitive::DropShadow{
+      .stdDeviationX = 0.1,
+      .stdDeviationY = 0.1,
+  };
+  graph.nodes.push_back(std::move(dropShadow));
+
+  constexpr std::uint64_t kPixels = 1024ULL * 1024;
+  constexpr std::uint64_t kCaptureBytes = kPixels * 4;
+
+  components::FilterExecutionBudget cpuBudget;
+  std::vector<components::FilterExecutionBudget::Reservation> cpuReservations;
+  while (true) {
+    auto reservation = cpuBudget.reserve(
+        graph, kPixels, components::FilterMemoryModel::CpuFloatNamedResults, kCaptureBytes);
+    if (!reservation.has_value()) {
+      break;
+    }
+    cpuReservations.push_back(*reservation);
+  }
+  EXPECT_FALSE(cpuReservations.empty());
+  EXPECT_TRUE(cpuBudget.rejected());
+  EXPECT_EQ(cpuBudget.captureBytesReserved(), cpuReservations.size() * kCaptureBytes);
+  EXPECT_EQ(cpuBudget.retainedBytes(), cpuReservations.size() * kCaptureBytes);
+  EXPECT_LE(cpuBudget.retainedBytes(), components::kMaximumFilterFrameBytes);
+  for (auto& reservation : cpuReservations) {
+    cpuBudget.release(reservation);
+  }
+  EXPECT_EQ(cpuBudget.retainedBytes(), 0);
+
+  components::FilterExecutionBudget gpuBudget;
+  std::size_t gpuReservations = 0;
+  while (gpuBudget.reserve(graph, kPixels, components::FilterMemoryModel::GpuAllNodes,
+                           kCaptureBytes)) {
+    ++gpuReservations;
+  }
+  EXPECT_GT(gpuReservations, 0u);
+  EXPECT_TRUE(gpuBudget.rejected());
+  EXPECT_EQ(gpuBudget.captureBytesReserved(), gpuReservations * kCaptureBytes);
+  EXPECT_LE(gpuBudget.retainedBytes(), components::kMaximumFilterFrameBytes);
+}
+
+TEST(FilterGraphExecutorTest, AccountsForMergeFanInWorkAndMemory) {
+  components::FilterGraph graph;
+  components::FilterNode merge;
+  merge.primitive = components::filter_primitive::Merge{};
+  merge.inputs.resize(components::kMaximumFilterMergeInputs,
+                      components::FilterInput{components::FilterInput::Previous{}});
+  graph.nodes.push_back(std::move(merge));
+
+  EXPECT_FALSE(components::FilterGraphFitsExecutionBudget(
+      graph, 2049ULL * 1024, components::FilterMemoryModel::CpuFloatNamedResults));
+
+  graph.nodes[0].inputs.push_back(components::FilterInput{components::FilterInput::Previous{}});
+  EXPECT_FALSE(components::FilterGraphFitsExecutionBudget(
+      graph, 1, components::FilterMemoryModel::CpuFloatNamedResults));
+  EXPECT_FALSE(components::FilterGraphFitsExecutionBudget(
+      graph, 1, components::FilterMemoryModel::GpuAllNodes));
+}
+
+TEST(FilterGraphExecutorTest, InvalidConvolveDivisorFailsClosed) {
+  auto maybePixmap = tiny_skia::Pixmap::fromSize(2, 2);
+  ASSERT_TRUE(maybePixmap.has_value());
+  tiny_skia::Pixmap pixmap = std::move(*maybePixmap);
+
+  components::FilterGraph graph;
+  components::FilterNode node;
+  node.primitive = components::filter_primitive::ConvolveMatrix{
+      .orderX = 1,
+      .orderY = 1,
+      .kernelMatrix = {1.0},
+      .divisor = 0.0,
+  };
+  graph.nodes.push_back(std::move(node));
+  ApplyFilterGraphToPixmap(pixmap, graph, Transform2d(), std::nullopt);
+  EXPECT_EQ(pixmap.width(), 2u);
+  EXPECT_EQ(pixmap.height(), 2u);
+}
+
 // Regression: a filter region whose origin x maps past the pixmap width writes out of bounds.
 // In the axis-aligned clip, x0 = max(0, floor(originX)) was clamped at the low end but NOT the high
 // end, while x1 = clamp(ceil(right), 0, width) was clamped to width. With originX = 15 on a 10-wide
@@ -1461,7 +1807,8 @@ tiny_skia::Pixmap RenderTwoColumnFeImage(bool pixelated, int width = 8, int heig
 
   components::filter_primitive::Image image;
   // Straight-alpha RGBA, two columns: red then blue, duplicated across both rows.
-  image.imageData = {255, 0, 0, 255, 0, 0, 255, 255, 255, 0, 0, 255, 0, 0, 255, 255};
+  image.imageData = std::make_shared<const std::vector<uint8_t>>(std::initializer_list<uint8_t>{
+      255, 0, 0, 255, 0, 0, 255, 255, 255, 0, 0, 255, 0, 0, 255, 255});
   image.imageWidth = 2;
   image.imageHeight = 2;
   image.imageRendering = pixelated ? ImageRendering::Pixelated : ImageRendering::Auto;
@@ -1509,7 +1856,8 @@ TEST(FilterGraphExecutorTest, FeImageRejectsTrailingPayloadBytes) {
   tiny_skia::Pixmap pixmap = std::move(*maybePixmap);
 
   components::filter_primitive::Image image;
-  image.imageData = {255, 0, 0, 255, 17};
+  image.imageData = std::make_shared<const std::vector<uint8_t>>(
+      std::initializer_list<uint8_t>{255, 0, 0, 255, 17});
   image.imageWidth = 1;
   image.imageHeight = 1;
 

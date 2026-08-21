@@ -17,6 +17,40 @@ namespace donner::svg {
 
 namespace {
 
+double BoundedPositiveFilterPixels(double value) {
+  if (!std::isfinite(value) || value <= 0.0) {
+    return 0.0;
+  }
+  return std::min(value, static_cast<double>(components::kMaximumFilterPixelRadius));
+}
+
+int BoundedRoundedFilterPixels(double value, int magnitudeLimit) {
+  if (!std::isfinite(value)) {
+    return 0;
+  }
+  const double bounded =
+      std::clamp(value, -static_cast<double>(magnitudeLimit), static_cast<double>(magnitudeLimit));
+  return static_cast<int>(std::round(bounded));
+}
+
+double BoundedPixelEdge(double value, double minimum, double maximum) {
+  if (std::isnan(value)) {
+    return minimum;
+  }
+  return std::clamp(value, minimum, maximum);
+}
+
+tiny_skia::filter::PixelRect BoundedPixelRect(const Box2d& box, int width, int height) {
+  const double minimum = -static_cast<double>(components::kMaximumFilterPixelOffset);
+  const double maximumX = static_cast<double>(width + components::kMaximumFilterPixelOffset);
+  const double maximumY = static_cast<double>(height + components::kMaximumFilterPixelOffset);
+  const double x0 = BoundedPixelEdge(box.topLeft.x, minimum, maximumX);
+  const double y0 = BoundedPixelEdge(box.topLeft.y, minimum, maximumY);
+  const double x1 = BoundedPixelEdge(box.bottomRight.x, minimum, maximumX);
+  const double y1 = BoundedPixelEdge(box.bottomRight.y, minimum, maximumY);
+  return tiny_skia::filter::PixelRect{x0, y0, std::max(0.0, x1 - x0), std::max(0.0, y1 - y0)};
+}
+
 namespace fp = components::filter_primitive;
 namespace gp = tiny_skia::filter::graph_primitive;
 
@@ -246,9 +280,13 @@ tiny_skia::filter::GraphPrimitive ConvertPrimitive(const fp::GaussianBlur& primi
                                                    const PrimitiveConversionState& state) {
   gp::GaussianBlur blur;
   blur.sigmaX =
-      primitive.stdDeviationX >= 0 ? state.context.primitiveToPixelX(primitive.stdDeviationX) : 0.0;
+      primitive.stdDeviationX >= 0
+          ? BoundedPositiveFilterPixels(state.context.primitiveToPixelX(primitive.stdDeviationX))
+          : 0.0;
   blur.sigmaY =
-      primitive.stdDeviationY >= 0 ? state.context.primitiveToPixelY(primitive.stdDeviationY) : 0.0;
+      primitive.stdDeviationY >= 0
+          ? BoundedPositiveFilterPixels(state.context.primitiveToPixelY(primitive.stdDeviationY))
+          : 0.0;
   blur.edgeMode = static_cast<tiny_skia::filter::BlurEdgeMode>(primitive.edgeMode);
   return blur;
 }
@@ -262,8 +300,10 @@ tiny_skia::filter::GraphPrimitive ConvertPrimitive(const fp::Flood& primitive,
 tiny_skia::filter::GraphPrimitive ConvertPrimitive(const fp::Offset& primitive,
                                                    const PrimitiveConversionState& state) {
   const Vector2d offset = state.context.primitiveToPixelOffset(primitive.dx, primitive.dy);
-  return gp::Offset{static_cast<int>(std::lround(offset.x)),
-                    static_cast<int>(std::lround(offset.y))};
+  return gp::Offset{
+      BoundedRoundedFilterPixels(offset.x, components::kMaximumFilterPixelOffset),
+      BoundedRoundedFilterPixels(offset.y, components::kMaximumFilterPixelOffset),
+  };
 }
 
 tiny_skia::filter::GraphPrimitive ConvertPrimitive(const fp::Composite& primitive,
@@ -345,12 +385,16 @@ tiny_skia::filter::GraphPrimitive ConvertPrimitive(const fp::DropShadow& primiti
   dropShadow.g = color.g;
   dropShadow.b = color.b;
   dropShadow.a = color.a;
-  dropShadow.dx = static_cast<int>(std::lround(offset.x));
-  dropShadow.dy = static_cast<int>(std::lround(offset.y));
+  dropShadow.dx = BoundedRoundedFilterPixels(offset.x, components::kMaximumFilterPixelOffset);
+  dropShadow.dy = BoundedRoundedFilterPixels(offset.y, components::kMaximumFilterPixelOffset);
   dropShadow.sigmaX =
-      primitive.stdDeviationX >= 0 ? state.context.primitiveToPixelX(primitive.stdDeviationX) : 0.0;
+      primitive.stdDeviationX >= 0
+          ? BoundedPositiveFilterPixels(state.context.primitiveToPixelX(primitive.stdDeviationX))
+          : 0.0;
   dropShadow.sigmaY =
-      primitive.stdDeviationY >= 0 ? state.context.primitiveToPixelY(primitive.stdDeviationY) : 0.0;
+      primitive.stdDeviationY >= 0
+          ? BoundedPositiveFilterPixels(state.context.primitiveToPixelY(primitive.stdDeviationY))
+          : 0.0;
   return dropShadow;
 }
 
@@ -365,10 +409,10 @@ tiny_skia::filter::GraphPrimitive ConvertPrimitive(const fp::Morphology& primiti
     morphology.op = primitive.op == fp::Morphology::Operator::Erode
                         ? tiny_skia::filter::MorphologyOp::Erode
                         : tiny_skia::filter::MorphologyOp::Dilate;
-    morphology.radiusX =
-        static_cast<int>(std::round(state.context.primitiveToPixelX(primitive.radiusX)));
-    morphology.radiusY =
-        static_cast<int>(std::round(state.context.primitiveToPixelY(primitive.radiusY)));
+    morphology.radiusX = BoundedRoundedFilterPixels(
+        state.context.primitiveToPixelX(primitive.radiusX), components::kMaximumFilterPixelRadius);
+    morphology.radiusY = BoundedRoundedFilterPixels(
+        state.context.primitiveToPixelY(primitive.radiusY), components::kMaximumFilterPixelRadius);
   }
   return morphology;
 }
@@ -567,11 +611,14 @@ tiny_skia::filter::GraphPrimitive ConvertPrimitive(const fp::Image& primitive,
                                                    const PrimitiveConversionState& state) {
   gp::Image image;
   image.sampling = ConvertImageSampling(primitive.imageRendering);
-  if (!HasExactRgbaPayload(primitive.imageData, primitive.imageWidth, primitive.imageHeight)) {
+  const std::span<const uint8_t> imageData = primitive.imageData
+                                                 ? std::span<const uint8_t>(*primitive.imageData)
+                                                 : std::span<const uint8_t>();
+  if (!HasExactRgbaPayload(imageData, primitive.imageWidth, primitive.imageHeight)) {
     return image;
   }
 
-  const std::vector<std::uint8_t> premultiplied = PremultiplyRgba(primitive.imageData);
+  const std::vector<std::uint8_t> premultiplied = PremultiplyRgba(imageData);
   if (primitive.isFragmentReference && state.graph.filterFromDevice.has_value()) {
     PopulateTransformedFragmentImage(image, primitive, state, premultiplied);
   } else if (primitive.isFragmentReference) {
@@ -640,10 +687,7 @@ tiny_skia::filter::FilterGraph CreateExecutableGraph(const FilterConversionConte
 
   if (context.filterRegion.has_value()) {
     const Box2d pixelRegion = context.deviceFromFilter.transformBox(*context.filterRegion);
-    graph.filterRegion =
-        tiny_skia::filter::PixelRect{pixelRegion.topLeft.x, pixelRegion.topLeft.y,
-                                     pixelRegion.bottomRight.x - pixelRegion.topLeft.x,
-                                     pixelRegion.bottomRight.y - pixelRegion.topLeft.y};
+    graph.filterRegion = BoundedPixelRect(pixelRegion, context.outputWidth, context.outputHeight);
   }
 
   const bool hasRotation = !NearZero(context.deviceFromFilter.data[1], 1e-6) ||
@@ -686,10 +730,7 @@ void PopulateSubregion(const components::FilterNode& node, const FilterConversio
 
   const Box2d pixelRegion =
       context.deviceFromFilter.transformBox(Box2d::FromXYWH(userX, userY, userWidth, userHeight));
-  graphNode.subregion =
-      tiny_skia::filter::PixelRect{pixelRegion.topLeft.x, pixelRegion.topLeft.y,
-                                   pixelRegion.bottomRight.x - pixelRegion.topLeft.x,
-                                   pixelRegion.bottomRight.y - pixelRegion.topLeft.y};
+  graphNode.subregion = BoundedPixelRect(pixelRegion, context.outputWidth, context.outputHeight);
   if (graph.filterFromDevice.has_value()) {
     graphNode.userSpaceSubregion =
         tiny_skia::filter::PixelRect{userX, userY, userWidth, userHeight};
@@ -727,7 +768,20 @@ void ApplyFilterGraphToPixmap(tiny_skia::Pixmap& pixmap, const components::Filte
                               const std::optional<Box2d>& filterRegion,
                               bool clipSourceToFilterRegion,
                               const tiny_skia::Pixmap* fillPaintInput,
-                              const tiny_skia::Pixmap* strokePaintInput) {
+                              const tiny_skia::Pixmap* strokePaintInput,
+                              components::FilterExecutionBudget* executionBudget) {
+  const std::uint64_t width = pixmap.width();
+  const std::uint64_t height = pixmap.height();
+  const std::uint64_t pixelCount = width * height;
+  const bool fitsBudget =
+      executionBudget != nullptr
+          ? executionBudget->consume(filterGraph, pixelCount,
+                                     components::FilterMemoryModel::CpuFloatNamedResults)
+          : components::FilterGraphFitsExecutionBudget(
+                filterGraph, pixelCount, components::FilterMemoryModel::CpuFloatNamedResults);
+  if (!fitsBudget) {
+    return;
+  }
   const FilterConversionContext context(filterGraph, deviceFromFilter, filterRegion,
                                         static_cast<int>(pixmap.width()),
                                         static_cast<int>(pixmap.height()));
@@ -785,13 +839,19 @@ void ClipFilterOutputToRegion(tiny_skia::Pixmap& pixmap, const std::optional<Box
   // This is the same rule used by the non-axis-aligned path above. Convert each continuous edge to
   // the first integer pixel index whose center is on or beyond that edge. Clamp both sides so a
   // fully offscreen region collapses to an empty kept rectangle without an out-of-bounds clear.
-  const auto firstPixelAtOrBeyond = [](double edge) {
+  const auto firstPixelAtOrBeyond = [](double edge, int limit) {
+    if (std::isnan(edge) || edge <= 0.5) {
+      return 0;
+    }
+    if (!std::isfinite(edge) || edge >= static_cast<double>(limit) + 0.5) {
+      return limit;
+    }
     return static_cast<int>(std::ceil(edge - 0.5));
   };
-  const int x0 = std::clamp(firstPixelAtOrBeyond(pixelRegion.topLeft.x), 0, width);
-  const int y0 = std::clamp(firstPixelAtOrBeyond(pixelRegion.topLeft.y), 0, height);
-  const int x1 = std::clamp(firstPixelAtOrBeyond(pixelRegion.bottomRight.x), 0, width);
-  const int y1 = std::clamp(firstPixelAtOrBeyond(pixelRegion.bottomRight.y), 0, height);
+  const int x0 = firstPixelAtOrBeyond(pixelRegion.topLeft.x, width);
+  const int y0 = firstPixelAtOrBeyond(pixelRegion.topLeft.y, height);
+  const int x1 = firstPixelAtOrBeyond(pixelRegion.bottomRight.x, width);
+  const int y1 = firstPixelAtOrBeyond(pixelRegion.bottomRight.y, height);
 
   auto data = pixmap.data();
   for (int y = 0; y < y0; ++y) {

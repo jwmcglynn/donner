@@ -1,11 +1,14 @@
 #pragma once
 /// @file
 
+#include <cstdint>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <span>
 #include <unordered_map>
 #include <unordered_set>
+#include <vector>
 
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/components/filter/FilterGraph.h"
@@ -25,11 +28,36 @@ namespace donner::svg {
  */
 class RendererDriver {
 public:
+  /// Aggregate limits for per-instance filter graph preparation and feImage snapshots.
+  static constexpr std::size_t kMaximumPreparedFilterGraphs =
+      components::FilterExecutionBudget::kMaximumExecutions;
+  static constexpr std::size_t kMaximumPreparedFilterNodes =
+      kMaximumPreparedFilterGraphs * components::kMaximumFilterGraphNodes;
+  static constexpr std::uint64_t kMaximumPreparedFilterImageBytes = 4ULL * 1024 * 1024;
+  static constexpr std::uint64_t kMaximumPreparedFilterPayloadBytes = 16ULL * 1024 * 1024;
+  static constexpr std::size_t kMaximumPreparedFilterShadowEntities = 4096;
+
+  /// Optional diagnostics for structured fuzzers and embedders auditing rejected preparation.
+  struct SecurityStats {
+    std::size_t filterPreparationAttempts = 0;
+    std::size_t preparedFilterGraphs = 0;
+    std::size_t preparedFilterNodes = 0;
+    std::uint64_t preparedFilterImageBytes = 0;
+    std::uint64_t preparedFilterPayloadBytes = 0;
+    std::size_t preparedFilterShadowEntities = 0;
+    bool filterPreparationRejected = false;
+  };
+
   /**
    * Create a renderer driver that will forward traversal output to the given
    * backend implementation.
+   *
+   * @param renderer Backend receiving prepared draw calls.
+   * @param verbose Whether to emit diagnostic warnings.
+   * @param securityStats Optional preparation diagnostics destination.
    */
-  explicit RendererDriver(RendererInterface& renderer, bool verbose = false);
+  explicit RendererDriver(RendererInterface& renderer, bool verbose = false,
+                          SecurityStats* securityStats = nullptr);
 
   /**
    * Render the given \ref SVGDocument using the configured backend.
@@ -190,6 +218,22 @@ public:
   [[nodiscard]] RendererBitmap takeSnapshot() const;
 
 private:
+  struct FilterPreparationBudget {
+    std::size_t attempts = 0;
+    std::size_t graphs = 0;
+    std::size_t nodes = 0;
+    std::uint64_t imageBytes = 0;
+    std::uint64_t payloadBytes = 0;
+    std::size_t shadowEntities = 0;
+    bool rejected = false;
+
+    bool beginGraph(SecurityStats* stats);
+    bool reserveNodes(std::size_t nodeCount, SecurityStats* stats);
+    bool reserveImageBytes(std::uint64_t byteCount, SecurityStats* stats);
+    bool reservePayloadBytes(std::uint64_t byteCount, SecurityStats* stats);
+    bool reserveShadowEntities(std::size_t entityCount, SecurityStats* stats);
+  };
+
   /**
    * Resolve and pre-render the filter graph for every entity with a resolved filter in `entities`,
    * caching each result in \ref preparedFilterGraphs_. Must be called BEFORE any `traverse` pass
@@ -202,6 +246,13 @@ private:
    * `RenderingInstanceComponent` pool).
    */
   void prepareFilterGraphs(Registry& registry, std::span<const Entity> entities);
+  const components::RenderingInstanceComponent* beginPreparingFilterEntity(Registry& registry,
+                                                                           Entity entity);
+  bool reservePreparedFilterGraph(const components::FilterGraph& filterGraph);
+  std::optional<std::uint64_t> reservePreparedFilterImage(Vector2i size);
+  bool reservePreparedFilterShadowTree(Registry& registry, Entity targetEntity);
+  std::shared_ptr<const std::vector<std::uint8_t>> adoptPreparedFilterSnapshot(
+      RendererBitmap snapshot, std::uint64_t reservedBytes, Registry& registry);
 
   /// Fetch a prepared filter graph for an entity, if any. Returns nullptr if the entity has no
   /// filter or if the pre-pass didn't record one for it.
@@ -213,6 +264,7 @@ private:
   void drawPreparedDocument(SVGDocument& document);
   void drawPreparedDocument(SVGDocument& document, const RenderViewport& viewport,
                             const Transform2d& surfaceFromCanvas);
+  void resetOwnedFilterPreparationBudget();
   [[nodiscard]] bool drawPreparedEntityRange(Registry& registry, Entity firstEntity,
                                              Entity lastEntity,
                                              const std::function<bool()>& shouldCancel);
@@ -278,7 +330,7 @@ private:
                        const Transform2d& parentAbsoluteTransform);
   void drawSubDocumentElement(SVGDocument& subDocument, std::string_view fragmentId,
                               const Transform2d& parentAbsoluteTransform, double opacity);
-  void preRenderSvgFeImages(components::FilterGraph& filterGraph);
+  void preRenderSvgFeImages(components::FilterGraph& filterGraph, Registry& registry);
   void preRenderFeImageFragments(components::FilterGraph& filterGraph, Registry& registry,
                                  Entity hostEntity, const std::optional<Box2d>& filterRegion);
   static void setSubDocumentContextPaint(SVGDocument& subDocument,
@@ -349,6 +401,10 @@ private:
   /// invariant. Shared across nested `RendererDriver` instances by copying the parent's value into
   /// the sub-driver (see `preRenderFeImageFragments`).
   int feImageFragmentDepth_ = 0;
+
+  FilterPreparationBudget ownedFilterPreparationBudget_;
+  FilterPreparationBudget* filterPreparationBudget_ = &ownedFilterPreparationBudget_;
+  SecurityStats* securityStats_ = nullptr;
 
   /// Filter graphs resolved and pre-rendered by \ref prepareFilterGraphs. Keyed by the entity
   /// whose filter produced the graph. Populated in a pre-pass before \ref traverse so the main

@@ -2347,9 +2347,8 @@ TEST_F(RendererGeodeTest, FilterImagePixelatedSmoothsFromNearestIntegerScale) {
   beginFrame(renderer);
 
   components::filter_primitive::Image image;
-  image.imageData = {
-      255, 0, 0, 255, 0, 0, 255, 255, 255, 0, 0, 255, 0, 0, 255, 255,
-  };
+  image.imageData = std::make_shared<const std::vector<uint8_t>>(std::initializer_list<uint8_t>{
+      255, 0, 0, 255, 0, 0, 255, 255, 255, 0, 0, 255, 0, 0, 255, 255});
   image.imageWidth = 2;
   image.imageHeight = 2;
   image.imageRendering = ImageRendering::Pixelated;
@@ -2374,7 +2373,8 @@ TEST_F(RendererGeodeTest, FilterImageWithTrailingPayloadIsTransparent) {
   beginFrame(renderer);
 
   components::filter_primitive::Image image;
-  image.imageData = {255, 0, 0, 255, 17};
+  image.imageData = std::make_shared<const std::vector<uint8_t>>(
+      std::initializer_list<uint8_t>{255, 0, 0, 255, 17});
   image.imageWidth = 1;
   image.imageHeight = 1;
 
@@ -2400,7 +2400,8 @@ TEST_F(RendererGeodeTest, FilterImageOverTextureAxisLimitIsTransparent) {
             static_cast<uint32_t>(std::numeric_limits<int>::max()));
   const int overLimitWidth = static_cast<int>(sharedDevice()->maxTextureDimension2D()) + 1;
   components::filter_primitive::Image image;
-  image.imageData.resize(static_cast<std::size_t>(overLimitWidth) * 4u, 255);
+  image.imageData = std::make_shared<const std::vector<uint8_t>>(
+      static_cast<std::size_t>(overLimitWidth) * 4u, 255);
   image.imageWidth = overLimitWidth;
   image.imageHeight = 1;
 

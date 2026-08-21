@@ -8,6 +8,7 @@
 /// conversion is done in uint8 space.
 
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -37,7 +38,7 @@ class FloatPixmap {
     // primitives' caps so a `FloatPixmap` can hold the float conversion of
     // any `Pixmap` the allocator already accepted. The prior 64 MiB capped
     // float pixmaps at ~2048×2048, which contributed to filters silently
-    // failing at high editor zoom — see `GaussianBlur.cpp` and
+    // failing at high editor zoom - see `GaussianBlur.cpp` and
     // `ZoomFilterRepro_tests.cc`.
     constexpr std::size_t kMaxAllocationBytes = 1024ULL * 1024ULL * 1024ULL;
     if (count * sizeof(float) > kMaxAllocationBytes) {
@@ -236,8 +237,9 @@ class FloatPixmap {
     }
 #endif
     for (; i < count; ++i) {
-      bytes[i] = static_cast<std::uint8_t>(
-          std::clamp(data_[i] * 255.0f + 0.5f, 0.0f, 255.0f));
+      const float scaled = data_[i] * 255.0f + 0.5f;
+      bytes[i] =
+          std::isfinite(scaled) ? static_cast<std::uint8_t>(std::clamp(scaled, 0.0f, 255.0f)) : 0;
     }
     return *Pixmap::fromVec(std::move(bytes), IntSize::fromWH(width_, height_).value());
   }
@@ -251,9 +253,7 @@ class FloatPixmap {
   }
 
   /// Mutable float data.
-  [[nodiscard]] std::span<float> data() {
-    return std::span<float>(data_.data(), data_.size());
-  }
+  [[nodiscard]] std::span<float> data() { return std::span<float>(data_.data(), data_.size()); }
 
   /// Fill with a color (values already in [0,1] premultiplied).
   void fill(float r, float g, float b, float a) {

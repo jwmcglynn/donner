@@ -13,8 +13,10 @@
 #include "donner/base/xml/components/TreeComponent.h"
 #include "donner/css/Specificity.h"
 #include "donner/svg/components/ComputedClipPathsComponent.h"
+#include "donner/svg/components/DocumentResourceFamilyBudget.h"
 #include "donner/svg/components/IdComponent.h"
 #include "donner/svg/components/PreserveAspectRatioComponent.h"
+#include "donner/svg/components/filter/ComputedFilterResourceBudget.h"
 #include "donner/svg/components/filter/FilterComponent.h"
 #include "donner/svg/components/filter/FilterGraph.h"
 #include "donner/svg/components/layout/SizedElementComponent.h"
@@ -941,6 +943,67 @@ TEST_F(RendererDriverTest, InterruptibleDocumentRedrawIgnoresFeImageShadowSentin
   EXPECT_TRUE(driver.drawInterruptibly(document, viewport, Transform2d(), neverCancel));
   EXPECT_EQ(drawPathCount, firstDrawPathCount)
       << "a lingering OffscreenFeImage shadow must not become the interruptible range sentinel";
+}
+
+TEST_F(RendererDriverTest, FilterPreparationStopsAtAggregateGraphLimit) {
+  std::string svg = R"svg(<defs><filter id="f"><feFlood/></filter></defs>)svg";
+  for (std::size_t i = 0; i < RendererDriver::kMaximumPreparedFilterGraphs + 1; ++i) {
+    svg += R"svg(<rect width="1" height="1" filter="url(#f)"/>)svg";
+  }
+  SVGDocument document = makeDocument(svg, Vector2i(1, 1));
+  RendererDriver::SecurityStats stats;
+  RendererDriver boundedDriver(renderer, /*verbose=*/false, &stats);
+
+  EXPECT_CALL(renderer, pushFilterLayer(_, _))
+      .Times(static_cast<int>(RendererDriver::kMaximumPreparedFilterGraphs));
+  boundedDriver.draw(document);
+
+  EXPECT_TRUE(stats.filterPreparationRejected);
+  EXPECT_EQ(stats.filterPreparationAttempts, RendererDriver::kMaximumPreparedFilterGraphs);
+  EXPECT_EQ(stats.preparedFilterGraphs, RendererDriver::kMaximumPreparedFilterGraphs);
+  EXPECT_EQ(stats.preparedFilterNodes, RendererDriver::kMaximumPreparedFilterGraphs);
+}
+
+TEST_F(RendererDriverTest, PreparedFragmentImageKeepsFamilyReservationWithSharedPixels) {
+  SVGDocument document = makeDocument(R"svg(
+    <defs>
+      <filter id="filter"><feImage href="#source"/></filter>
+      <rect id="source" width="1" height="1" fill="red"/>
+    </defs>
+    <rect width="1" height="1" filter="url(#filter)"/>
+  )svg",
+                                      Vector2i(1, 1));
+  auto family = std::make_shared<components::DocumentResourceFamilyBudget>();
+  document.registry().ctx().emplace<components::ComputedFilterResourceBudget>(family);
+
+  ON_CALL(renderer, createOffscreenInstance()).WillByDefault([]() {
+    auto offscreen = std::make_unique<::testing::NiceMock<MockRendererInterface>>();
+    ON_CALL(*offscreen, takeSnapshot())
+        .WillByDefault(::testing::Return(MockRendererInterface::makeDummyBitmap()));
+    return offscreen;
+  });
+
+  std::shared_ptr<const std::vector<uint8_t>> retainedPixels;
+  EXPECT_CALL(renderer, pushFilterLayer(_, _))
+      .WillOnce([&](const components::FilterGraph& graph, const std::optional<Box2d>&) {
+        ASSERT_THAT(graph.nodes, SizeIs(1));
+        const auto* image =
+            std::get_if<components::filter_primitive::Image>(&graph.nodes[0].primitive);
+        ASSERT_NE(image, nullptr);
+        ASSERT_THAT(image->imageData, testing::NotNull());
+        retainedPixels = image->imageData;
+      });
+
+  driver.draw(document);
+
+  ASSERT_THAT(retainedPixels, testing::NotNull());
+  const std::size_t pixelBytes = retainedPixels->size();
+  const std::size_t retainedWithPixels =
+      family->retainedBytes(components::DocumentResourceFamilyBudget::Kind::ComputedFilter);
+  retainedPixels.reset();
+  const std::size_t retainedWithoutPixels =
+      family->retainedBytes(components::DocumentResourceFamilyBudget::Kind::ComputedFilter);
+  EXPECT_EQ(retainedWithPixels, retainedWithoutPixels + pixelBytes);
 }
 
 TEST_F(RendererDriverTest, DrawEntityRangeConvertsCssFilterFunctionsToFilterGraph) {
