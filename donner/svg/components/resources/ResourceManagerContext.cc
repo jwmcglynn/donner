@@ -13,6 +13,7 @@
 #include "donner/css/FontFace.h"
 #include "donner/svg/components/ParsedPayloadResourceBudget.h"
 #include "donner/svg/components/SVGDocumentContext.h"
+#include "donner/svg/components/StylesheetComponent.h"
 #include "donner/svg/components/resources/ImageComponent.h"
 #include "donner/svg/components/resources/SubDocumentCache.h"
 #include "donner/svg/resources/ImageLoader.h"
@@ -329,7 +330,14 @@ ResourceManagerContext::ResourceManagerContext(Registry& registry,
                                                size_t maximumExternalFetchAttempts)
     : registry_(registry),
       remainingResourceBytes_(maximumAggregateResourceSize),
-      remainingResourceFetchAttempts_(maximumExternalFetchAttempts) {}
+      remainingResourceFetchAttempts_(maximumExternalFetchAttempts) {
+  registry_.on_destroy<StylesheetComponent>().connect<&ResourceManagerContext::onStylesheetDestroy>(
+      this);
+}
+
+void ResourceManagerContext::onStylesheetDestroy(Registry&, Entity entity) {
+  stylesheetFontFaceRegistrations_.erase(entity);
+}
 
 void ResourceManagerContext::setResourceLoader(std::unique_ptr<ResourceLoaderInterface>&& loader) {
   failedImageUrls_.clear();
@@ -466,12 +474,23 @@ void ResourceManagerContext::synchronizeStylesheetFontFaces(
   if (registration.data == fontFaces.data() && registration.size == fontFaces.size()) return;
   registration = {.data = fontFaces.data(), .size = fontFaces.size()};
 
-  const size_t remaining =
-      kMaximumStylesheetFontFaces - std::min(stylesheetFontFaceCount_, kMaximumStylesheetFontFaces);
-  const size_t insertCount = std::min(fontFaces.size(), remaining);
-  addFontFaces(fontFaces.first(insertCount));
-  stylesheetFontFaceCount_ += insertCount;
-  if (insertCount != fontFaces.size()) stylesheetFontFaceLimitRejected_ = true;
+  for (const css::FontFace& fontFace : fontFaces) {
+    std::string identity = css::FontFaceIdentityKey(fontFace);
+    if (const auto it = fontFaceIndexByIdentity_.find(identity);
+        it != fontFaceIndexByIdentity_.end()) {
+      fontFaceIndexesToLoad_.push_back(it->second);
+      continue;
+    }
+    if (stylesheetFontFaceCount_ >= kMaximumStylesheetFontFaces) {
+      stylesheetFontFaceLimitRejected_ = true;
+      break;
+    }
+
+    fontFaceIndexByIdentity_.emplace(std::move(identity), fontFaces_.size());
+    fontFaceIndexesToLoad_.push_back(fontFaces_.size());
+    fontFaces_.push_back(fontFace);
+    ++stylesheetFontFaceCount_;
+  }
 }
 
 std::optional<Vector2i> ResourceManagerContext::getImageSize(Entity entity) const {

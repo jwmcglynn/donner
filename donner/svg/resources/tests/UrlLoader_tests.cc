@@ -167,11 +167,12 @@ TEST(UrlLoader, RejectsOversizedOrInvalidExternalUriBeforeCallback) {
   EXPECT_THAT(urlLoader.fromUri(std::string(UrlLoader::kMaximumExternalUriSize + 1, 'a')),
               VariantWith<UrlLoaderError>(UrlLoaderError::ResourceTooLarge));
   EXPECT_EQ(remainingResourceBytes, 0u);
+  UrlLoader freshUrlLoader(loader);
   constexpr char kInvalidUtf8[] = "invalid-\xED\xA0\x80.png";
-  EXPECT_THAT(urlLoader.fromUri(std::string_view(kInvalidUtf8, sizeof(kInvalidUtf8) - 1)),
+  EXPECT_THAT(freshUrlLoader.fromUri(std::string_view(kInvalidUtf8, sizeof(kInvalidUtf8) - 1)),
               VariantWith<UrlLoaderError>(UrlLoaderError::InvalidDataUrl));
   constexpr char kEmbeddedNull[] = "prefix\0suffix.png";
-  EXPECT_THAT(urlLoader.fromUri(std::string_view(kEmbeddedNull, sizeof(kEmbeddedNull) - 1)),
+  EXPECT_THAT(freshUrlLoader.fromUri(std::string_view(kEmbeddedNull, sizeof(kEmbeddedNull) - 1)),
               VariantWith<UrlLoaderError>(UrlLoaderError::InvalidDataUrl));
   EXPECT_EQ(loader.fetchCount(), 0u);
 }

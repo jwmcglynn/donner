@@ -145,6 +145,7 @@ std::variant<UrlLoader::Result, UrlLoaderError> UrlLoader::fromUri(std::string_v
   // because their payload is the resource itself and is bounded again after decoding.
   if (!uri.starts_with("data:")) {
     if (const auto representationError = validateExternalUriRepresentation(uri)) {
+      LatchAggregateRejection(*representationError, remainingResourceBytes_);
       return *representationError;
     }
   }

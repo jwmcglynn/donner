@@ -137,6 +137,8 @@ public:
   }
 
 private:
+  void onStylesheetDestroy(Registry& registry, Entity entity);
+
   /**
    * Get the \ref LoadedImageComponent for an entity. This will synchronously load the image if it
    * hasn't been loaded yet.
