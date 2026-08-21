@@ -44,6 +44,17 @@ Vector2d CenterOf(const Box2d& box) {
   return (box.topLeft + box.bottomRight) * 0.5;
 }
 
+Transform2d DocumentFromParentTransform(const svg::SVGElement& element) {
+  const std::optional<svg::SVGElement> parent = element.parentElement();
+  if (!parent.has_value()) {
+    return Transform2d();
+  }
+
+  return parent->isa<svg::SVGGraphicsElement>()
+             ? parent->cast<svg::SVGGraphicsElement>().elementFromWorld()
+             : Transform2d();
+}
+
 std::optional<Transform2d> ResizeTransform(const Box2d& startBounds,
                                            SelectionTransformCorner corner,
                                            const Vector2d& documentPoint, bool preserveAspectRatio,
@@ -267,6 +278,7 @@ bool SelectTool::tryStartRedragOnSelected(EditorApp& editor, const Vector2d& doc
               .element = element,
               .startTransform = primaryStartTransform,
               .currentTransform = primaryStartTransform,
+              .documentFromParent = DocumentFromParentTransform(element),
               .writebackTarget = primaryWritebackTarget,
               .sourceTransformAttributeValue = sourceTransformAttributeValue,
           },
@@ -342,6 +354,7 @@ void SelectTool::onMouseDown(EditorApp& editor, const Vector2d& documentPoint,
         .element = element,
         .startTransform = startTransform,
         .currentTransform = startTransform,
+        .documentFromParent = DocumentFromParentTransform(element),
         .writebackTarget = captureAttributeWritebackTarget(element),
         .sourceTransformAttributeValue = sourceTransformAttributeValue,
     };
@@ -598,9 +611,8 @@ void SelectTool::onMouseMove(EditorApp& editor, const Vector2d& documentPoint, b
   std::optional<Transform2d> documentFromStartDocument;
   switch (dragState_->gestureKind) {
     case DragState::GestureKind::Move:
-      // Donner's Transform2 uses row-vector post-multiply semantics, so
-      // `start * Translate(delta)` applies the element's existing transform
-      // first and then moves the resulting document-space geometry by delta.
+      // Keep the gesture in document coordinates. Each participant converts it to its own
+      // parent coordinate system after the shared gesture has been resolved.
       documentFromStartDocument = Transform2d::Translate(deltaDoc);
       break;
     case DragState::GestureKind::Resize:
@@ -630,9 +642,42 @@ void SelectTool::onMouseMove(EditorApp& editor, const Vector2d& documentPoint, b
 
   dragState_->currentDocumentDelta = deltaDoc;
   dragState_->currentDocumentFromStartDocument = *documentFromStartDocument;
-  const Transform2d primaryNewTransform =
-      dragState_->primary.startTransform * *documentFromStartDocument;
-  dragState_->primary.currentTransform = primaryNewTransform;
+  const auto parentFromEntityAfterGesture =
+      [&documentFromStartDocument](
+          const PerElementDrag& participant) -> std::optional<Transform2d> {
+    if (std::abs(participant.documentFromParent.determinant()) < kMinScaleDenominator) {
+      return std::nullopt;
+    }
+
+    const Transform2d parentFromDocument = participant.documentFromParent.inverse();
+    if (documentFromStartDocument->isTranslation()) {
+      const Vector2d translationParent =
+          parentFromDocument.transformVector(documentFromStartDocument->translation());
+      return participant.startTransform * Transform2d::Translate(translationParent);
+    }
+
+    const Transform2d parentFromEntity = participant.startTransform *
+                                         participant.documentFromParent *
+                                         *documentFromStartDocument * parentFromDocument;
+    return IsFinite(parentFromEntity) ? std::optional<Transform2d>(parentFromEntity) : std::nullopt;
+  };
+
+  const std::optional<Transform2d> primaryNewTransform =
+      parentFromEntityAfterGesture(dragState_->primary);
+  if (!primaryNewTransform.has_value()) {
+    return;
+  }
+  std::vector<Transform2d> extraNewTransforms;
+  extraNewTransforms.reserve(dragState_->extras.size());
+  for (const PerElementDrag& extra : dragState_->extras) {
+    const std::optional<Transform2d> extraNewTransform = parentFromEntityAfterGesture(extra);
+    if (!extraNewTransform.has_value()) {
+      return;
+    }
+    extraNewTransforms.push_back(*extraNewTransform);
+  }
+
+  dragState_->primary.currentTransform = *primaryNewTransform;
   dragState_->hasMoved = true;
 
   // DOM is the source of truth during drag. Every drag frame applies a
@@ -646,9 +691,10 @@ void SelectTool::onMouseMove(EditorApp& editor, const Vector2d& documentPoint, b
   // disagreement was the source of the drag-release "pop back" class of
   // bugs where the cached bitmap offset diverged from the DOM transform.
   editor.applyMutation(
-      EditorCommand::SetTransformCommand(dragState_->primary.element, primaryNewTransform));
-  for (auto& extra : dragState_->extras) {
-    extra.currentTransform = extra.startTransform * *documentFromStartDocument;
+      EditorCommand::SetTransformCommand(dragState_->primary.element, *primaryNewTransform));
+  for (std::size_t i = 0; i < dragState_->extras.size(); ++i) {
+    auto& extra = dragState_->extras[i];
+    extra.currentTransform = extraNewTransforms[i];
     editor.applyMutation(EditorCommand::SetTransformCommand(extra.element, extra.currentTransform));
   }
 }

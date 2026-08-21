@@ -231,14 +231,15 @@ public:
   void tickLockedRejectionFlash(float deltaSeconds);
 
 private:
-  /// Per-element bookkeeping for one participant in a drag. Carries the
-  /// start transform (for computing `startTransform * translate(delta)`
-  /// on each mouse move), the current preview transform, and the stable
-  /// locator for later canvas→text writeback.
+  /// Per-element bookkeeping for one participant in a drag. Carries the parent-local start and
+  /// current transforms, the parent-to-document transform used to convert the shared gesture, and
+  /// the stable locator for later canvas-to-text writeback.
   struct PerElementDrag {
     svg::SVGElement element;
     Transform2d startTransform;
     Transform2d currentTransform;
+    /// Document-space transform of the element's parent captured at gesture start.
+    Transform2d documentFromParent;
     std::optional<AttributeWritebackTarget> writebackTarget;
     /// Original `transform` attribute value captured at drag start. Used
     /// for `UndoSnapshot::sourceTransformAttributeValue` on release.
