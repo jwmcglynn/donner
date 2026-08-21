@@ -318,6 +318,10 @@ donner_cc_test(
     srcs = [
         "RendererPublicApi_tests.cc",
     ],
+    defines = select({
+        "//donner/svg/renderer:text_enabled": ["DONNER_TEXT_ENABLED"],
+        "//conditions:default": [],
+    }),
     opens_gpu_device = True,
     # Variant lanes (doc 0031 M2.3): tiny / text_full / geode wrappers run
     # automatically under `bazel test //...`. The base test still runs at

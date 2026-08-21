@@ -1,6 +1,7 @@
 #pragma once
 /// @file
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -120,6 +121,240 @@ struct RendererReadbackStats {
   /// Wall time that wait spent before giving up, in milliseconds. Zero while
   /// \ref timedOutWaitSite is \ref GpuWaitTimeoutSite::None.
   int timedOutWaitMs = 0;
+};
+
+/** Aggregate budget for render targets, layers, masks, clips, and pattern tiles. */
+class RendererSurfaceBudget {
+public:
+  static constexpr std::uint64_t kMaximumBytes = 256ULL * 1024 * 1024;
+  static constexpr std::size_t kMaximumSurfaces = 256;
+
+  void reset() {
+    bytes_ = 0;
+    surfaces_ = 0;
+    rejected_ = false;
+  }
+
+  [[nodiscard]] bool reserve(int width, int height, std::size_t surfaceCount = 1,
+                             std::uint64_t bytesPerPixel = 4) {
+    if (rejected_ || width < 0 || height < 0 || bytesPerPixel == 0 ||
+        surfaceCount > kMaximumSurfaces - surfaces_) {
+      rejected_ = true;
+      return false;
+    }
+    if (width == 0 || height == 0 || surfaceCount == 0) {
+      return true;
+    }
+
+    const std::uint64_t pixelWidth = static_cast<std::uint64_t>(width);
+    const std::uint64_t pixelHeight = static_cast<std::uint64_t>(height);
+    if (pixelWidth > kMaximumBytes / pixelHeight ||
+        pixelWidth * pixelHeight > kMaximumBytes / bytesPerPixel ||
+        pixelWidth * pixelHeight * bytesPerPixel > kMaximumBytes / surfaceCount) {
+      rejected_ = true;
+      return false;
+    }
+    const std::uint64_t byteCount = pixelWidth * pixelHeight * bytesPerPixel * surfaceCount;
+    if (byteCount > kMaximumBytes - bytes_) {
+      rejected_ = true;
+      return false;
+    }
+
+    bytes_ += byteCount;
+    surfaces_ += surfaceCount;
+    return true;
+  }
+
+  [[nodiscard]] std::uint64_t bytes() const { return bytes_; }
+  [[nodiscard]] std::size_t surfaces() const { return surfaces_; }
+  [[nodiscard]] bool rejected() const { return rejected_; }
+
+private:
+  std::uint64_t bytes_ = 0;
+  std::size_t surfaces_ = 0;
+  bool rejected_ = false;
+};
+
+/** Aggregate conversion, rasterization, and upload work shared by a render frame. */
+class RendererDrawBudget {
+public:
+  static constexpr std::size_t kMaximumDrawCalls = 64 * 1024;
+  static constexpr std::size_t kMaximumPathCommands = 256 * 1024;
+  static constexpr std::size_t kMaximumPathMeasurementWorkUnits = Path::kMaximumGeometryQueryWork;
+  static constexpr std::size_t kMaximumGradientStops = 256 * 1024;
+  static constexpr std::size_t kMaximumImageDraws = 128;
+  static constexpr std::uint64_t kMaximumImageBytes = 256ULL * 1024 * 1024;
+
+  struct Cost {
+    std::size_t drawCalls = 0;
+    std::size_t pathCommands = 0;
+    std::size_t pathMeasurementWorkUnits = 0;
+    std::size_t gradientStops = 0;
+    std::size_t imageDraws = 0;
+    std::uint64_t imageBytes = 0;
+  };
+
+  void reset() { *this = {}; }
+  void reject() { rejected_ = true; }
+
+  [[nodiscard]] bool reserve(const Cost& cost) {
+    if (rejected_ || cost.drawCalls > kMaximumDrawCalls - drawCalls_ ||
+        cost.pathCommands > kMaximumPathCommands - pathCommands_ ||
+        cost.pathMeasurementWorkUnits >
+            kMaximumPathMeasurementWorkUnits - pathMeasurementWorkUnits_ ||
+        cost.gradientStops > kMaximumGradientStops - gradientStops_ ||
+        cost.imageDraws > kMaximumImageDraws - imageDraws_ ||
+        cost.imageBytes > kMaximumImageBytes - imageBytes_) {
+      rejected_ = true;
+      return false;
+    }
+    drawCalls_ += cost.drawCalls;
+    pathCommands_ += cost.pathCommands;
+    pathMeasurementWorkUnits_ += cost.pathMeasurementWorkUnits;
+    gradientStops_ += cost.gradientStops;
+    imageDraws_ += cost.imageDraws;
+    imageBytes_ += cost.imageBytes;
+    return true;
+  }
+
+  [[nodiscard]] std::size_t drawCalls() const { return drawCalls_; }
+  [[nodiscard]] std::size_t pathCommands() const { return pathCommands_; }
+  [[nodiscard]] std::size_t pathMeasurementWorkUnits() const { return pathMeasurementWorkUnits_; }
+  [[nodiscard]] std::size_t gradientStops() const { return gradientStops_; }
+  [[nodiscard]] std::size_t imageDraws() const { return imageDraws_; }
+  [[nodiscard]] std::uint64_t imageBytes() const { return imageBytes_; }
+  [[nodiscard]] bool rejected() const { return rejected_; }
+
+private:
+  std::size_t drawCalls_ = 0;
+  std::size_t pathCommands_ = 0;
+  std::size_t pathMeasurementWorkUnits_ = 0;
+  std::size_t gradientStops_ = 0;
+  std::size_t imageDraws_ = 0;
+  std::uint64_t imageBytes_ = 0;
+  bool rejected_ = false;
+};
+
+/** Aggregate decoded-outline and path-copy budget shared by one renderer frame. */
+class RendererTextMaterializationBudget {
+public:
+  static constexpr std::size_t kMaximumUniqueOutlines = 1024;
+  static constexpr std::size_t kMaximumCommands = 4 * 1024 * 1024;
+  static constexpr std::size_t kMaximumPoints = 8 * 1024 * 1024;
+  static constexpr std::uint64_t kMaximumBytes = 64ULL * 1024 * 1024;
+  static constexpr std::size_t kMaximumDecodeWork = 64 * 1024 * 1024;
+
+  struct Cost {
+    std::size_t uniqueOutlines = 0;
+    std::size_t commands = 0;
+    std::size_t points = 0;
+    std::uint64_t bytes = 0;
+    std::size_t decodeWork = 0;
+  };
+
+  void reset() {
+    uniqueOutlines_ = 0;
+    commands_ = 0;
+    points_ = 0;
+    bytes_ = 0;
+    decodeWork_ = 0;
+    rejected_ = false;
+  }
+
+  [[nodiscard]] bool reserve(const Cost& cost) {
+    if (rejected_ || uniqueOutlines_ > limits_.uniqueOutlines || commands_ > limits_.commands ||
+        points_ > limits_.points || bytes_ > limits_.bytes || decodeWork_ > limits_.decodeWork ||
+        cost.uniqueOutlines > limits_.uniqueOutlines - uniqueOutlines_ ||
+        cost.commands > limits_.commands - commands_ || cost.points > limits_.points - points_ ||
+        cost.bytes > limits_.bytes - bytes_ || cost.decodeWork > limits_.decodeWork - decodeWork_) {
+      rejected_ = true;
+      return false;
+    }
+    uniqueOutlines_ += cost.uniqueOutlines;
+    commands_ += cost.commands;
+    points_ += cost.points;
+    bytes_ += cost.bytes;
+    decodeWork_ += cost.decodeWork;
+    return true;
+  }
+
+  void reject() { rejected_ = true; }
+
+  [[nodiscard]] bool reservePathCopy(const Path& path) {
+    const std::size_t commands = path.commands().size();
+    const std::size_t points = path.points().size();
+    const std::optional<std::size_t> retainedBytes = path.retainedBytes();
+    if (commands > kMaximumCommands || points > kMaximumPoints || !retainedBytes.has_value() ||
+        *retainedBytes > kMaximumBytes / 2) {
+      rejected_ = true;
+      return false;
+    }
+    return reserve({.commands = commands, .points = points, .bytes = *retainedBytes * 2});
+  }
+
+  void setLimitsForTesting(Cost limits) {
+    limits_.uniqueOutlines = std::min(limits_.uniqueOutlines, limits.uniqueOutlines);
+    limits_.commands = std::min(limits_.commands, limits.commands);
+    limits_.points = std::min(limits_.points, limits.points);
+    limits_.bytes = std::min(limits_.bytes, limits.bytes);
+    limits_.decodeWork = std::min(limits_.decodeWork, limits.decodeWork);
+  }
+
+  [[nodiscard]] const Cost& limits() const { return limits_; }
+  [[nodiscard]] std::size_t uniqueOutlines() const { return uniqueOutlines_; }
+  [[nodiscard]] std::size_t commands() const { return commands_; }
+  [[nodiscard]] std::size_t points() const { return points_; }
+  [[nodiscard]] std::uint64_t bytes() const { return bytes_; }
+  [[nodiscard]] std::size_t decodeWork() const { return decodeWork_; }
+  [[nodiscard]] bool rejected() const { return rejected_; }
+
+private:
+  Cost limits_{.uniqueOutlines = kMaximumUniqueOutlines,
+               .commands = kMaximumCommands,
+               .points = kMaximumPoints,
+               .bytes = kMaximumBytes,
+               .decodeWork = kMaximumDecodeWork};
+  std::size_t uniqueOutlines_ = 0;
+  std::size_t commands_ = 0;
+  std::size_t points_ = 0;
+  std::uint64_t bytes_ = 0;
+  std::size_t decodeWork_ = 0;
+  bool rejected_ = false;
+};
+
+/** Bounded-resource diagnostics for the most recently started render frame. */
+struct RendererResourceStats {
+  bool filterBudgetSupported = false;
+  std::uint64_t filterExecutions = 0;
+  std::uint64_t filterWorkUnits = 0;
+  std::uint64_t filterRetainedBytes = 0;
+  std::uint64_t filterCaptureBytesReserved = 0;
+  bool filterBudgetRejected = false;
+  bool geometryBudgetSupported = false;
+  std::size_t geometryDraws = 0;
+  std::size_t geometryItems = 0;
+  std::size_t geometryRetainedBytes = 0;
+  bool geometryBudgetRejected = false;
+  bool surfaceBudgetSupported = false;
+  std::size_t surfaceCount = 0;
+  std::uint64_t surfaceBytes = 0;
+  bool surfaceBudgetRejected = false;
+  bool drawBudgetSupported = false;
+  std::size_t drawCalls = 0;
+  std::size_t pathCommands = 0;
+  bool pathMeasurementWorkSupported = false;
+  std::size_t pathMeasurementWorkUnits = 0;
+  std::size_t gradientStops = 0;
+  std::size_t imageDraws = 0;
+  std::uint64_t imageBytes = 0;
+  bool drawBudgetRejected = false;
+  bool textMaterializationBudgetSupported = false;
+  std::size_t textUniqueOutlines = 0;
+  std::size_t textMaterializationCommands = 0;
+  std::size_t textMaterializationPoints = 0;
+  std::uint64_t textMaterializationBytes = 0;
+  std::size_t textGlyphDecodeWork = 0;
+  bool textMaterializationBudgetRejected = false;
 };
 
 /// Backend type for \ref RendererTextureSnapshot payloads.
@@ -662,6 +897,12 @@ public:
    * Backends without asynchronous GPU readback return zeroed stats.
    */
   [[nodiscard]] virtual RendererReadbackStats consumeReadbackStats() { return {}; }
+
+  /// Return resource-admission diagnostics for the current frame.
+  [[nodiscard]] virtual RendererResourceStats resourceStats() const { return {}; }
+
+  /// Cause the next local filter raster allocation to fail in a boundary test.
+  virtual void injectFilterLocalRasterAllocationFailureForTesting() {}
 
   /**
    * Captures the current frame buffer as a backend-owned GPU texture.

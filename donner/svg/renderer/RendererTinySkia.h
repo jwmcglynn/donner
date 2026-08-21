@@ -41,6 +41,9 @@ struct RendererTinySkiaFrameCounters {
   /// outside the cache and are not counted.
   /// @see pathConversions
   uint64_t imagePremultiplies = 0;
+
+  /// Vector-outline or bitmap materializations attempted for text glyphs in this frame.
+  uint64_t textGlyphMaterializations = 0;
 };
 
 /**
@@ -240,6 +243,15 @@ public:
    */
   [[nodiscard]] RendererBitmap takeSnapshot() const override;
   [[nodiscard]] std::unique_ptr<RendererInterface> createOffscreenInstance() const override;
+
+  /// Reduce generated-dash work for a boundary test.
+  void setDashWorkBudgetForTesting(std::size_t) {}
+  /// Reduce materialized gradient stops for a boundary test.
+  void setGradientStopBudgetForTesting(std::size_t) {}
+  /// Reduce admitted text glyphs for a boundary test.
+  void setTextGlyphBudgetForTesting(std::size_t) {}
+  /// Reduce decoded-outline and path-copy ceilings for a boundary test.
+  void setTextMaterializationBudgetForTesting(RendererTextMaterializationBudget::Cost) {}
 
   /**
    * Saves the last rendered frame to a PNG file.

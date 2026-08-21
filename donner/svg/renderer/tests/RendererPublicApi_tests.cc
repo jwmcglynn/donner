@@ -14,6 +14,7 @@
 #include "donner/svg/SVGTextElement.h"
 #include "donner/svg/SVGUseElement.h"
 #include "donner/svg/renderer/Renderer.h"
+#include "donner/svg/renderer/RendererTinySkia.h"
 #include "donner/svg/renderer/tests/MockRendererInterface.h"
 #include "donner/svg/renderer/tests/RendererTestBackend.h"
 #include "donner/svg/resources/FontManager.h"
@@ -62,6 +63,121 @@ RendererBitmap NormalizeSnapshot(RendererBitmap snapshot) {
   }
 
   return normalized;
+}
+
+TEST(RendererSurfaceBudgetTest, RejectsAggregateBytesAndSurfaceCountWithoutOvershoot) {
+  RendererSurfaceBudget byteBudget;
+  EXPECT_TRUE(byteBudget.reserve(4096, 4096, 4));
+  EXPECT_FALSE(byteBudget.reserve(1, 1));
+  EXPECT_EQ(byteBudget.bytes(), RendererSurfaceBudget::kMaximumBytes);
+  EXPECT_TRUE(byteBudget.rejected());
+
+  RendererSurfaceBudget countBudget;
+  EXPECT_TRUE(countBudget.reserve(1, 1, RendererSurfaceBudget::kMaximumSurfaces));
+  EXPECT_FALSE(countBudget.reserve(1, 1));
+  EXPECT_EQ(countBudget.surfaces(), RendererSurfaceBudget::kMaximumSurfaces);
+  EXPECT_LE(countBudget.bytes(), RendererSurfaceBudget::kMaximumBytes);
+}
+
+TEST(RendererDrawBudgetTest, RejectsEveryAggregateDimensionWithoutOvershoot) {
+  RendererDrawBudget budget;
+  EXPECT_TRUE(budget.reserve(
+      {.drawCalls = RendererDrawBudget::kMaximumDrawCalls,
+       .pathCommands = RendererDrawBudget::kMaximumPathCommands,
+       .pathMeasurementWorkUnits = RendererDrawBudget::kMaximumPathMeasurementWorkUnits,
+       .gradientStops = RendererDrawBudget::kMaximumGradientStops,
+       .imageDraws = RendererDrawBudget::kMaximumImageDraws,
+       .imageBytes = RendererDrawBudget::kMaximumImageBytes}));
+  EXPECT_FALSE(budget.reserve({.drawCalls = 1}));
+  EXPECT_TRUE(budget.rejected());
+  EXPECT_EQ(budget.drawCalls(), RendererDrawBudget::kMaximumDrawCalls);
+  EXPECT_EQ(budget.pathCommands(), RendererDrawBudget::kMaximumPathCommands);
+  EXPECT_EQ(budget.pathMeasurementWorkUnits(),
+            RendererDrawBudget::kMaximumPathMeasurementWorkUnits);
+  EXPECT_EQ(budget.gradientStops(), RendererDrawBudget::kMaximumGradientStops);
+  EXPECT_EQ(budget.imageDraws(), RendererDrawBudget::kMaximumImageDraws);
+  EXPECT_EQ(budget.imageBytes(), RendererDrawBudget::kMaximumImageBytes);
+}
+
+#ifdef DONNER_TEXT_ENABLED
+TEST(RendererTinySkiaSecurityTest, TextGlyphCapRejectsNextRenderableGlyphBeforeMaterialization) {
+  SVGDocument limitedDocument = ParseDocument(
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="48" height="20">
+           <text x="2" y="14">A</text><text x="24" y="14">A</text>
+         </svg>)");
+  RendererTinySkia limitedRenderer;
+  limitedRenderer.setTextGlyphBudgetForTesting(1);
+  limitedRenderer.draw(limitedDocument);
+
+  const RendererResourceStats limitedStats = limitedRenderer.resourceStats();
+  EXPECT_EQ(limitedStats.drawCalls, 2u);
+  EXPECT_TRUE(limitedStats.drawBudgetRejected);
+  EXPECT_EQ(limitedRenderer.frameCounters().textGlyphMaterializations, 1u);
+
+  SVGDocument referenceDocument = ParseDocument(
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="48" height="20">
+           <text x="2" y="14">A</text>
+         </svg>)");
+  RendererTinySkia referenceRenderer;
+  referenceRenderer.setTextGlyphBudgetForTesting(1);
+  referenceRenderer.draw(referenceDocument);
+  EXPECT_EQ(referenceRenderer.frameCounters().textGlyphMaterializations, 1u);
+
+  const RendererBitmap limitedSnapshot = limitedRenderer.takeSnapshot();
+  const RendererBitmap referenceSnapshot = referenceRenderer.takeSnapshot();
+  ASSERT_FALSE(limitedSnapshot.empty());
+  ASSERT_FALSE(referenceSnapshot.empty());
+  EXPECT_EQ(limitedSnapshot.dimensions, referenceSnapshot.dimensions);
+  EXPECT_THAT(limitedSnapshot.pixels, testing::ContainerEq(referenceSnapshot.pixels));
+}
+#endif
+
+void SetStrokePaint(RendererInterface& renderer) {
+  PaintParams paint;
+  paint.fill = PaintServer::None{};
+  paint.stroke = PaintServer::Solid{css::Color(css::RGBA(0, 0, 0, 255))};
+  renderer.setPaint(paint);
+}
+
+TEST(RendererPublicApiTest, TinyDashWorkCountsContoursAndZeroLengthPhaseBeforeRasterizing) {
+  RendererTinySkia renderer;
+  renderer.setDashWorkBudgetForTesting(8);
+  std::unique_ptr<RendererInterface> offscreen = renderer.createOffscreenInstance();
+  ASSERT_NE(offscreen, nullptr);
+  renderer.beginFrame(RenderViewport{.size = Vector2d(16.0, 16.0), .devicePixelRatio = 1.0});
+  offscreen->beginFrame(RenderViewport{.size = Vector2d(16.0, 16.0), .devicePixelRatio = 1.0});
+  SetStrokePaint(renderer);
+  SetStrokePaint(*offscreen);
+  renderer.setTransform(Transform2d::Scale(8.0));
+  offscreen->setTransform(Transform2d::Scale(8.0));
+
+  const Path acceptedPath = PathBuilder()
+                                .moveTo({0.25, 0.5})
+                                .lineTo({0.75, 0.5})
+                                .moveTo({0.25, 1.5})
+                                .lineTo({0.75, 1.5})
+                                .build();
+  const Path rejectedPath = PathBuilder().moveTo({0.25, 1.0}).lineTo({0.75, 1.0}).build();
+  const StrokeParams stroke{.strokeWidth = 0.25, .dashArray = {0.0, 0.0, 0.0, 0.0, 1.0, 1.0}};
+  renderer.drawPath(PathShape{.path = &acceptedPath}, stroke);
+
+  RendererResourceStats stats = renderer.resourceStats();
+  EXPECT_EQ(stats.drawCalls, 1u);
+  EXPECT_FALSE(stats.drawBudgetRejected);
+
+  offscreen->drawPath(PathShape{.path = &rejectedPath}, stroke);
+  stats = renderer.resourceStats();
+  EXPECT_EQ(stats.drawCalls, 2u);
+  EXPECT_TRUE(stats.drawBudgetRejected);
+
+  const RendererBitmap acceptedSnapshot = renderer.takeSnapshot();
+  const RendererBitmap rejectedSnapshot = offscreen->takeSnapshot();
+  ASSERT_FALSE(acceptedSnapshot.empty());
+  ASSERT_FALSE(rejectedSnapshot.empty());
+  EXPECT_THAT(acceptedSnapshot.pixels, testing::Not(testing::Each(0)));
+  EXPECT_THAT(rejectedSnapshot.pixels, testing::Each(0));
+  offscreen->endFrame();
+  renderer.endFrame();
 }
 
 // -- Pixel access and custom matchers --
