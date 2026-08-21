@@ -3,13 +3,17 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
+#include <fstream>
+#include <iterator>
 #include <span>
+#include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
 
 #include "donner/base/EcsRegistry.h"
 #include "donner/base/fonts/SfntUtils.h"
+#include "donner/base/tests/Runfiles.h"
 #ifdef DONNER_TEXT_FULL
 #include "donner/svg/text/TextBackendFull.h"
 #else
@@ -43,6 +47,14 @@ struct TableSpec {
   std::string_view tag;
   std::vector<uint8_t> bytes;
 };
+
+std::vector<uint8_t> LoadTrustedBitmapSeed() {
+  const std::string path = Runfiles::instance().Rlocation(
+      "donner/svg/text/tests/font_decoder_corpus/bitmap_emoji_subset.ttf");
+  std::ifstream file(path, std::ios::binary);
+  return std::vector<uint8_t>(std::istreambuf_iterator<char>(file),
+                              std::istreambuf_iterator<char>());
+}
 
 std::vector<uint8_t> MakeSfnt(std::vector<TableSpec> tables, uint32_t magic = 0x00010000) {
   const size_t directorySize = 12 + tables.size() * 16;
@@ -340,7 +352,17 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
       size == kZeroLengthTableSeed.size() &&
       std::equal(kZeroLengthTableSeed.begin(), kZeroLengthTableSeed.end(), data);
   const bool isTrustedBitmapMutationSeed = size >= 1 && data[0] == 'Y';
-  if (isZeroLengthTableSeed) {
+  const bool isTrustedBitmapOracle =
+      isTrustedBitmapMutationSeed && (size == 1 || (size == 2 && data[1] == '\n'));
+  if (isTrustedBitmapMutationSeed) {
+    structured.bytes = LoadTrustedBitmapSeed();
+    const size_t mutationEnd = isTrustedBitmapOracle ? 1 : size;
+    for (size_t index = 1; index < mutationEnd && !structured.bytes.empty(); ++index) {
+      structured.bytes[(index - 1) % structured.bytes.size()] ^= data[index];
+    }
+    fontBytes = structured.bytes;
+    trust = FontDataTrust::Trusted;
+  } else if (isZeroLengthTableSeed) {
     structured.bytes =
         MakeSfnt({TableSpec{"cmap", {}}, TableSpec{"glyf", {}}, TableSpec{"head", {}},
                   TableSpec{"hhea", {}}, TableSpec{"hmtx", {}}, TableSpec{"loca", {}}});
@@ -367,7 +389,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
   FontManager fontManager(registry);
   const FontHandle font = fontManager.loadFontData(fontBytes, trust);
 #ifdef DONNER_TEXT_FULL
-  if (isTrustedBitmapMutationSeed) {
+  if (isTrustedBitmapOracle) {
     if (!font || !fontManager.isTrustedFont(font)) {
       std::abort();
     }
