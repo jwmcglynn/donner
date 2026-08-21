@@ -1366,15 +1366,15 @@ std::optional<ParseDiagnostic> ParseAttribute<SVGFEConvolveMatrixElement>(
     auto& comp = element.entityHandle().get<components::FEConvolveMatrixComponent>();
     const auto maybeNumber = donner::parser::NumberParser::Parse(value);
     if (maybeNumber.hasResult()) {
-      comp.targetX = CheckedInteger(maybeNumber.result().number, 0,
-                                    components::kMaximumFilterConvolveOrder - 1);
+      comp.targetX = CheckedInteger(maybeNumber.result().number, std::numeric_limits<int>::min(),
+                                    std::numeric_limits<int>::max());
     }
   } else if (name == XMLQualifiedNameRef("targetY")) {
     auto& comp = element.entityHandle().get<components::FEConvolveMatrixComponent>();
     const auto maybeNumber = donner::parser::NumberParser::Parse(value);
     if (maybeNumber.hasResult()) {
-      comp.targetY = CheckedInteger(maybeNumber.result().number, 0,
-                                    components::kMaximumFilterConvolveOrder - 1);
+      comp.targetY = CheckedInteger(maybeNumber.result().number, std::numeric_limits<int>::min(),
+                                    std::numeric_limits<int>::max());
     }
   } else if (name == XMLQualifiedNameRef("edgeMode")) {
     auto& comp = element.entityHandle().get<components::FEConvolveMatrixComponent>();
@@ -1423,7 +1423,8 @@ std::optional<ParseDiagnostic> ParseAttribute<SVGFETurbulenceElement>(
   } else if (name == XMLQualifiedNameRef("numOctaves")) {
     auto& comp = element.entityHandle().get<components::FETurbulenceComponent>();
     if (auto maybeNumber = ParseNumberNoSuffix(value)) {
-      comp.numOctaves = CheckedInteger(*maybeNumber, 1, components::kMaximumFilterTurbulenceOctaves)
+      comp.numOctaves = CheckedInteger(*maybeNumber, std::numeric_limits<int>::min(),
+                                       std::numeric_limits<int>::max())
                             .value_or(comp.numOctaves);
     }
   } else if (name == XMLQualifiedNameRef("seed")) {

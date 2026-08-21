@@ -344,12 +344,11 @@ Entity NextFilterChild(Registry& registry, Entity current, std::size_t retainedN
 void AppendColorMatrixNode(FilterGraph& graph, const FEColorMatrixComponent& component,
                            const FilterPrimitiveComponent& attributes,
                            std::optional<ColorInterpolationFilters> colorInterpolation) {
-  if (component.values.size() > kMaximumFilterColorMatrixValues) {
-    return;
-  }
   filter_primitive::ColorMatrix primitive;
   primitive.type = static_cast<filter_primitive::ColorMatrix::Type>(component.type);
-  primitive.values = component.values;
+  if (component.values.size() <= kMaximumFilterColorMatrixValues) {
+    primitive.values = component.values;
+  }
   graph.nodes.push_back(makeFilterNode(std::move(primitive), attributes, colorInterpolation));
 }
 
