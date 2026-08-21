@@ -63,10 +63,12 @@
 ///   - `a`: ordered action objects for tool/paint operations that are not raw
 ///     pointer input.
 
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace donner::editor::repro {
@@ -80,6 +82,64 @@ namespace donner::editor::repro {
 /// - v3: adds optional embedded SVG source snapshots
 /// - v4: adds semantic frame actions (`a`)
 constexpr int kReproFileVersion = 4;
+
+/// Maximum accepted `.donner-repro` file size.
+constexpr size_t kMaximumReproFileSize = 64 * 1024 * 1024;
+
+/// Maximum accepted metadata-line size, including an embedded SVG snapshot.
+constexpr size_t kMaximumReproMetadataLineBytes = 32 * 1024 * 1024;
+
+/// Maximum accepted frame-line size.
+constexpr size_t kMaximumReproFrameLineBytes = 2 * 1024 * 1024;
+
+/// Maximum decoded bytes accepted for one semantic action property value.
+constexpr size_t kMaximumReproActionPropertyValueBytes = 64 * 1024;
+
+/// Maximum aggregate decoded string bytes accepted while parsing one replay.
+constexpr size_t kMaximumReproRetainedStringBytes = 24 * 1024 * 1024;
+
+/// Maximum aggregate structural scan work accepted while parsing one replay.
+constexpr size_t kMaximumReproScanWorkBytes = 128 * 1024 * 1024;
+
+/// Maximum number of frames accepted from one replay file.
+constexpr size_t kMaximumReproFrames = 10'000;
+
+/// Maximum number of frames that one untrusted replay may execute.
+constexpr size_t kMaximumReproPlaybackFrames = 1'024;
+
+/// Maximum aggregate physical-pixel frames that one replay may request.
+constexpr size_t kMaximumReproPixelFrames = 128 * 1024 * 1024;
+
+/// Maximum aggregate physical-pixel frame metadata accepted while parsing one replay.
+///
+/// Parsing does not allocate a surface per frame. This larger, still finite ceiling preserves
+/// compatibility with archived recordings that callers compact before playback; execution always
+/// enforces the stricter kMaximumReproPixelFrames limit.
+constexpr size_t kMaximumParsedReproPixelFrames = 8ULL * 1024 * 1024 * 1024;
+
+/// Maximum number of actions or events accepted in one frame.
+constexpr size_t kMaximumReproItemsPerFrame = 1'024;
+
+/// Maximum combined number of actions and events accepted from one replay file.
+constexpr size_t kMaximumReproItems = 100'000;
+
+/// Maximum accepted logical window dimension in replay metadata and resize events.
+constexpr int kMaximumReproDimension = 8'192;
+
+/// Maximum accepted physical-pixel dimension derived from replay metadata.
+constexpr int kMaximumReproPixelDimension = 8'192;
+
+/// Maximum accepted physical-pixel area derived from replay metadata (64 MiB RGBA).
+constexpr size_t kMaximumReproPixels = 16 * 1024 * 1024;
+
+/// Maximum accepted device-pixel ratio in replay metadata and viewport snapshots.
+constexpr double kMaximumReproDevicePixelRatio = 4.0;
+
+/// Maximum accepted duration of a paced replay.
+constexpr double kMaximumReproDurationSeconds = 30.0;
+
+/// Maximum accepted time step for one replay frame.
+constexpr double kMaximumReproDeltaMilliseconds = 5'000.0;
 
 /// Maximum number of mouse buttons recorded. Matches ImGui's
 /// `ImGuiMouseButton_COUNT`.
@@ -301,11 +361,70 @@ struct ReproFile {
   std::vector<ReproFrame> frames;
 };
 
+/// Ambient capabilities granted while replaying an untrusted recording.
+struct ReproReplaySecurityPolicy {
+  /// Recorded keyboard and pointer input must never invoke open/save/export filesystem actions.
+  bool allowEditorFileSystemActions = false;
+  /// Recorded clipboard shortcuts must use an isolated in-memory clipboard.
+  bool allowHostClipboardAccess = false;
+  /// Recorded display metadata must never become the editor's writable current file path.
+  bool preserveRecordedPathAsCurrentFile = false;
+};
+
+/// Security policy applied by all untrusted replay entry points.
+inline constexpr ReproReplaySecurityPolicy kUntrustedReproReplaySecurityPolicy{};
+
+/// SVG source loaded from a replay-relative path.
+struct ReproSvgFile {
+  std::filesystem::path path;  ///< Resolved display path beneath the replay directory.
+  std::string contents;        ///< Bounded SVG source bytes.
+};
+
+/// Maximum byte length accepted for a replay-relative SVG path.
+inline constexpr std::size_t kMaximumReproSvgPathBytes = 4096;
+/// Maximum number of components accepted for a replay-relative SVG path.
+inline constexpr std::size_t kMaximumReproSvgPathComponents = 256;
+
+/**
+ * Return a bounded display-only name for replay SVG metadata without constructing a native path.
+ *
+ * Directory components, absolute roots, invalid UTF-8, and embedded NULs are discarded. The
+ * returned value is informational only and must not be used as a current/save path.
+ */
+[[nodiscard]] std::string ReproSvgDisplayName(const ReproMetadata& metadata);
+
+/**
+ * Returns whether a recorded SVG path is a safe replay-directory-relative path.
+ *
+ * Absolute paths, empty paths, and any parent-directory component are rejected. This validation
+ * is also applied while parsing legacy replay metadata that lacks an embedded SVG snapshot.
+ *
+ * @param path Recorded path from replay metadata.
+ * @return True when the path is safe for replay-directory-relative resolution.
+ */
+[[nodiscard]] bool IsSafeReproSvgPath(std::string_view path);
+
+/**
+ * Read a recorded SVG through a descriptor-rooted sandbox beneath the replay directory.
+ *
+ * Symlinks and other filesystem objects that could escape or block the read are rejected.
+ * Explicit caller-supplied SVG overrides do not use this function and remain unrestricted.
+ *
+ * @param rnrPath Path to the replay file.
+ * @param recordedSvgPath Replay metadata path, relative to the replay directory.
+ * @return The bounded SVG source and resolved path, or nullopt on any containment/read failure.
+ */
+[[nodiscard]] std::optional<ReproSvgFile> ReadReproSvgFile(const std::filesystem::path& rnrPath,
+                                                           std::string_view recordedSvgPath);
+
 /// Serialize `file` to the given path in NDJSON form. Returns `true`
 /// on success; on failure writes an error message to `stderr` and
 /// returns `false`. Atomic: writes to `path.tmp` then renames over
 /// `path`, so a crash mid-write never truncates an existing file.
 [[nodiscard]] bool WriteReproFile(const std::filesystem::path& path, const ReproFile& file);
+
+/// Parse an in-memory NDJSON repro document.
+[[nodiscard]] std::optional<ReproFile> ParseReproFile(std::string_view contents);
 
 /// Parse an NDJSON repro file. Returns `std::nullopt` on any error
 /// (file missing, version mismatch, malformed line); writes details

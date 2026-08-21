@@ -560,6 +560,23 @@ int AttachBitmapImage(ToolCallResult* out, const std::string& label,
   return imageIndex;
 }
 
+int AttachPngBytes(ToolCallResult* out, const std::string& label, std::span<const uint8_t> png,
+                   bool embedBase64, json* metadata) {
+  const std::string base64 = Base64Encode(png);
+  const int imageIndex = static_cast<int>(out->images.size());
+  out->images.push_back(EncodedImage{
+      .label = label,
+      .mimeType = "image/png",
+      .dataBase64 = base64,
+  });
+  (*metadata)["png_attached"] = true;
+  (*metadata)["image_index"] = imageIndex;
+  if (embedBase64) {
+    (*metadata)["png_base64"] = base64;
+  }
+  return imageIndex;
+}
+
 json DisplayFrameJson(const EditorControlSession::DisplayFrameSnapshot& display) {
   json displayJson{
       {"path", display.path},

@@ -30,6 +30,11 @@
 
 namespace donner::editor::mcp {
 
+bool AppendBoundedGlReplayProcessOutput(std::string* output, std::string_view bytes) {
+  output->append(bytes);
+  return true;
+}
+
 namespace {
 
 using nlohmann::json;
