@@ -265,7 +265,17 @@ test("the presentation regression gates print the worker health they wait on", (
     /async function readWorkerHealth\([\s\S]*?\n\}/,
   );
   assert.ok(health, "expected a worker health snapshot helper");
-  for (const field of ["deviceLost", "gpuWaitTimeoutSite", "gpuWaitTimeoutMs", "publishReason"]) {
+  for (
+    const field of [
+      "deviceLost",
+      "gpuWaitTimeoutSite",
+      "gpuWaitTimeoutMs",
+      "publishReason",
+      "sampleThumbnail",
+      "frameLoop",
+      "interaction",
+    ]
+  ) {
     assert.match(health[0], new RegExp(`${field}:`), `health snapshot must carry ${field}`);
   }
 

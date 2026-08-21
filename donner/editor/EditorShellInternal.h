@@ -127,6 +127,7 @@ template <typename Resolver>
 
 [[nodiscard]] bool SamplePickerActionsNeedFollowupFrame(bool dismiss, bool openFile,
                                                         bool newDocument) noexcept;
+/// Background carousel work yields while a selected sample owns the next document render.
 [[nodiscard]] bool ShouldAdvanceSampleThumbnails(bool showSamplePicker,
                                                  bool samplePresentationPending) noexcept;
 [[nodiscard]] DeferredRenderAction DeferredRenderActionForState(bool hasDocument,

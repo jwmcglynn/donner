@@ -652,8 +652,7 @@ bool SamplePickerActionsNeedFollowupFrame(bool dismiss, bool openFile, bool newD
 }
 
 bool ShouldAdvanceSampleThumbnails(bool showSamplePicker, bool samplePresentationPending) noexcept {
-  (void)samplePresentationPending;
-  return showSamplePicker;
+  return showSamplePicker && !samplePresentationPending;
 }
 
 DeferredRenderAction DeferredRenderActionForState(bool hasDocument, bool penDragFlushed,
