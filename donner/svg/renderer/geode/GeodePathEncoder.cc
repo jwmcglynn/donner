@@ -8,6 +8,7 @@
 #include <optional>
 #include <tuple>
 
+#include "donner/base/BezierUtils.h"
 #include "donner/base/FillRule.h"
 #include "donner/base/MathUtils.h"
 #include "donner/base/Path.h"
@@ -683,9 +684,93 @@ void bandCurves(const std::vector<CurveWithRange>& allCurves, const Box2d& bound
   }
 }
 
+std::optional<Path> CubicToQuadraticBounded(const Path& path, double tolerance,
+                                            std::size_t maximumCommands) {
+  if (!std::isfinite(tolerance) || tolerance < 0.0) {
+    return std::nullopt;
+  }
+
+  PathBuilder builder;
+  std::size_t outputCommands = 0;
+  Vector2d currentPoint;
+  Vector2d subpathStart;
+  bool hasCurrentPoint = false;
+  const std::span<const Vector2d> points = path.points();
+
+  const auto admitCommand = [&]() {
+    if (outputCommands >= maximumCommands) {
+      return false;
+    }
+    ++outputCommands;
+    return true;
+  };
+
+  for (const Path::Command& command : path.commands()) {
+    switch (command.verb) {
+      case Path::Verb::MoveTo:
+        if (!admitCommand()) return std::nullopt;
+        currentPoint = points[command.pointIndex];
+        subpathStart = currentPoint;
+        hasCurrentPoint = true;
+        builder.moveTo(currentPoint);
+        break;
+
+      case Path::Verb::LineTo:
+        if (!hasCurrentPoint || !admitCommand()) return std::nullopt;
+        currentPoint = points[command.pointIndex];
+        builder.lineTo(currentPoint);
+        break;
+
+      case Path::Verb::QuadTo:
+        if (!hasCurrentPoint || !admitCommand()) return std::nullopt;
+        currentPoint = points[command.pointIndex + 1u];
+        builder.quadTo(points[command.pointIndex], currentPoint);
+        break;
+
+      case Path::Verb::CurveTo: {
+        if (!hasCurrentPoint || outputCommands >= maximumCommands) return std::nullopt;
+        const std::size_t remainingCommands = maximumCommands - outputCommands;
+        const std::size_t maximumOutputPoints =
+            remainingCommands > std::numeric_limits<std::size_t>::max() / 2u
+                ? std::numeric_limits<std::size_t>::max()
+                : remainingCommands * 2u;
+        std::vector<Vector2d> quadratics;
+        if (!ApproximateCubicWithQuadratics(
+                currentPoint, points[command.pointIndex], points[command.pointIndex + 1u],
+                points[command.pointIndex + 2u], tolerance, maximumOutputPoints, quadratics)) {
+          return std::nullopt;
+        }
+        const std::size_t quadraticCount = quadratics.size() / 2u;
+        if (quadraticCount > remainingCommands) return std::nullopt;
+        for (std::size_t index = 0; index < quadratics.size(); index += 2u) {
+          builder.quadTo(quadratics[index], quadratics[index + 1u]);
+        }
+        outputCommands += quadraticCount;
+        currentPoint = points[command.pointIndex + 2u];
+        break;
+      }
+
+      case Path::Verb::ClosePath:
+        if (!hasCurrentPoint || !admitCommand()) return std::nullopt;
+        builder.closePath();
+        currentPoint = subpathStart;
+        break;
+    }
+    if (builder.exceededMaximumPoints()) {
+      return std::nullopt;
+    }
+  }
+  return builder.build();
+}
+
 }  // namespace
 
-EncodedPath GeodePathEncoder::encode(const Path& path, FillRule /*fillRule*/, double tolerance) {
+EncodedPath GeodePathEncoder::encode(const Path& path, FillRule fillRule, double tolerance) {
+  return encode(path, fillRule, tolerance, Limits{});
+}
+
+EncodedPath GeodePathEncoder::encode(const Path& path, FillRule /*fillRule*/, double tolerance,
+                                     Limits limits) {
   EncodedPath result;
 
   if (path.empty()) {
@@ -693,7 +778,13 @@ EncodedPath GeodePathEncoder::encode(const Path& path, FillRule /*fillRule*/, do
   }
 
   // Cubic→quadratic once; the two monotonic splits share it.
-  const Path quadPath = path.cubicToQuadratic(tolerance);
+  const std::optional<Path> converted =
+      CubicToQuadraticBounded(path, tolerance, limits.maximumConvertedCommands);
+  if (!converted.has_value()) {
+    result.outcome = EncodedPath::Outcome::Rejected;
+    return result;
+  }
+  const Path& quadPath = *converted;
   if (quadPath.empty()) {
     return result;
   }
@@ -757,6 +848,7 @@ EncodedPath GeodePathEncoder::encode(const Path& path, FillRule /*fillRule*/, do
     }
   }
 
+  result.outcome = EncodedPath::Outcome::Ready;
   return result;
 }
 

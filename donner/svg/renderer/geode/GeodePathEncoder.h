@@ -160,11 +160,8 @@ public:
    */
   static EncodedPath encode(const Path& path, FillRule fillRule, double tolerance = 0.1);
 
-  /// Resource-limited encode overload. The following implementation commit enforces `limits`.
-  static EncodedPath encode(const Path& path, FillRule fillRule, double tolerance, Limits limits) {
-    (void)limits;
-    return encode(path, fillRule, tolerance);
-  }
+  /// Resource-limited encode overload.
+  static EncodedPath encode(const Path& path, FillRule fillRule, double tolerance, Limits limits);
 };
 
 }  // namespace donner::geode
