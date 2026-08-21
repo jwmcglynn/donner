@@ -1067,15 +1067,16 @@ TEST(SVGDocument, AttributePayloadCountsQualifiedNameBytesAtBoundary) {
   EXPECT_EQ(rejectedBudget->securityStats().attributeBytes, 2112u);
 }
 
-TEST(SVGDocument, IncrementalTextPayloadReplacementEnforcesCapPlusOneAndRemovalReleases) {
+TEST(SVGDocument, IncrementalTextPayloadReplacementReleasesAfterDetachedHandle) {
   parser::SVGParser::Options options;
   options.maximumParsedPayloadSize = 4608;
   auto document =
       ParseSVG(R"(<svg xmlns="http://www.w3.org/2000/svg"><text id="t"></text></svg>)", options);
-  SVGElement text = *document.querySelector("#t");
+  std::optional<SVGElement> text = document.querySelector("#t");
+  ASSERT_TRUE(text.has_value());
 
   const std::string acceptedText(2112, 'a');
-  xml::ApplySourceEditResult accepted = document.setElementTextContent(text, acceptedText);
+  xml::ApplySourceEditResult accepted = document.setElementTextContent(*text, acceptedText);
   ASSERT_TRUE(accepted.applied);
   ASSERT_THAT(accepted.diagnostic, Eq(std::nullopt));
 
@@ -1084,15 +1085,19 @@ TEST(SVGDocument, IncrementalTextPayloadReplacementEnforcesCapPlusOneAndRemovalR
   EXPECT_EQ(budget->securityStats().retainedBytes, options.maximumParsedPayloadSize);
 
   const std::string rejectedText(2113, 'b');
-  xml::ApplySourceEditResult rejected = document.setElementTextContent(text, rejectedText);
+  xml::ApplySourceEditResult rejected = document.setElementTextContent(*text, rejectedText);
   EXPECT_TRUE(rejected.applied);
   ASSERT_TRUE(rejected.diagnostic.has_value());
   EXPECT_THAT(rejected.diagnostic->reason, testing::HasSubstr("parsed-payload budget"));
-  EXPECT_EQ(text.entityHandle().get<components::TextComponent>().text, acceptedText);
+  EXPECT_EQ(text->entityHandle().get<components::TextComponent>().text, acceptedText);
   EXPECT_EQ(budget->securityStats().retainedBytes, options.maximumParsedPayloadSize);
 
-  xml::ApplySourceEditResult removed = document.removeElement(text);
+  xml::ApplySourceEditResult removed = document.removeElement(*text);
   ASSERT_TRUE(removed.applied);
+  EXPECT_EQ(budget->securityStats().retainedBytes, options.maximumParsedPayloadSize);
+  EXPECT_GT(budget->securityStats().projectedTextBytes, 0u);
+
+  text.reset();
   EXPECT_LT(budget->securityStats().retainedBytes, options.maximumParsedPayloadSize);
   EXPECT_EQ(budget->securityStats().projectedTextBytes, 0u);
 }

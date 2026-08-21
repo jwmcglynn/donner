@@ -114,17 +114,6 @@ std::optional<std::size_t> StylesheetPayloadBytes(std::size_t projectedSourceByt
   return projectedSourceBytes;
 }
 
-void ReleaseProjectedPayload(const xml::XMLNode& node) {
-  Registry& registry = *node.entityHandle().registry();
-  if (auto* budget = registry.ctx().find<components::ParsedPayloadResourceBudget>()) {
-    budget->release(node.entityHandle().entity());
-  }
-  for (std::optional<xml::XMLNode> child = node.firstChild(); child.has_value();
-       child = child->nextSibling()) {
-    ReleaseProjectedPayload(*child);
-  }
-}
-
 void MarkStylesheetChanged(EntityHandle handle);
 std::optional<ParseDiagnostic> ProjectStyleContents(EntityHandle handle, const xml::XMLNode& node);
 
@@ -1148,7 +1137,6 @@ std::optional<ParseDiagnostic> SVGDocument::applyXMLMutation(const xml::XMLMutat
   }
 
   if (mutation.kind == xml::XMLMutation::Kind::NodeRemoved) {
-    ReleaseProjectedPayload(mutation.node);
     MarkSubtreeReplaced(rootEntityHandle());
     return std::nullopt;
   }

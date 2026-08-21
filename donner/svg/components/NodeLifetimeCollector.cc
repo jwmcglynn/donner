@@ -5,7 +5,9 @@
 #include <vector>
 
 #include "donner/base/xml/components/TreeComponent.h"
+#include "donner/svg/components/GeometryPreparationResourceBudget.h"
 #include "donner/svg/components/NodeLifetimeComponent.h"
+#include "donner/svg/components/ParsedPayloadResourceBudget.h"
 #include "donner/svg/components/SVGDocumentContext.h"
 
 namespace donner::svg::components {
@@ -154,6 +156,12 @@ void NodeLifetimeCollector::Collect(Registry& registry) {
 
       if (auto* nodeLifetime = registry.try_get<NodeLifetimeComponent>(entity)) {
         nodeLifetime->markDestroying();
+      }
+      if (auto* budget = registry.ctx().find<ParsedPayloadResourceBudget>()) {
+        budget->release(entity);
+      }
+      if (auto* budget = registry.ctx().find<GeometryPreparationResourceBudget>()) {
+        budget->release(entity);
       }
       registry.destroy(entity);
     }
