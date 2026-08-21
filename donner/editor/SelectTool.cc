@@ -44,6 +44,17 @@ Vector2d CenterOf(const Box2d& box) {
   return (box.topLeft + box.bottomRight) * 0.5;
 }
 
+Transform2d DocumentFromParentTransform(const svg::SVGElement& element) {
+  const std::optional<svg::SVGElement> parent = element.parentElement();
+  if (!parent.has_value()) {
+    return Transform2d();
+  }
+
+  return parent->isa<svg::SVGGraphicsElement>()
+             ? parent->cast<svg::SVGGraphicsElement>().elementFromWorld()
+             : Transform2d();
+}
+
 std::optional<Transform2d> ResizeTransform(const Box2d& startBounds,
                                            SelectionTransformCorner corner,
                                            const Vector2d& documentPoint, bool preserveAspectRatio,
@@ -267,6 +278,7 @@ bool SelectTool::tryStartRedragOnSelected(EditorApp& editor, const Vector2d& doc
               .element = element,
               .startTransform = primaryStartTransform,
               .currentTransform = primaryStartTransform,
+              .documentFromParent = DocumentFromParentTransform(element),
               .writebackTarget = primaryWritebackTarget,
               .sourceTransformAttributeValue = sourceTransformAttributeValue,
           },
@@ -342,6 +354,7 @@ void SelectTool::onMouseDown(EditorApp& editor, const Vector2d& documentPoint,
         .element = element,
         .startTransform = startTransform,
         .currentTransform = startTransform,
+        .documentFromParent = DocumentFromParentTransform(element),
         .writebackTarget = captureAttributeWritebackTarget(element),
         .sourceTransformAttributeValue = sourceTransformAttributeValue,
     };
@@ -562,6 +575,66 @@ std::optional<SelectTool::LockedRejectionFlash> SelectTool::lockedRejectionFlash
   };
 }
 
+std::optional<Transform2d> SelectTool::documentFromStartDocumentForPointer(
+    const DragState& state, const Vector2d& deltaDocument, const Vector2d& documentPoint,
+    MouseModifiers modifiers) {
+  switch (state.gestureKind) {
+    case DragState::GestureKind::Move: return Transform2d::Translate(deltaDocument);
+    case DragState::GestureKind::Resize:
+      return ResizeTransform(state.startBoundsDoc, state.corner, documentPoint, modifiers.shift,
+                             modifiers.option);
+    case DragState::GestureKind::Rotate:
+      return RotateTransform(state.centerDocumentPoint, state.startAngleRadians, documentPoint);
+  }
+  return std::nullopt;
+}
+
+std::optional<Transform2d> SelectTool::parentFromEntityAfterDocumentGesture(
+    const PerElementDrag& participant, const Transform2d& documentFromStartDocument) {
+  const double determinant = participant.documentFromParent.determinant();
+  if (!IsFinite(determinant) || determinant == 0.0) {
+    return std::nullopt;
+  }
+
+  const Transform2d parentFromDocument = participant.documentFromParent.inverse();
+  if (!IsFinite(parentFromDocument)) {
+    return std::nullopt;
+  }
+
+  Transform2d parentFromEntity;
+  if (documentFromStartDocument.isTranslation()) {
+    const Vector2d translationParent =
+        parentFromDocument.transformVector(documentFromStartDocument.translation());
+    parentFromEntity = participant.startTransform * Transform2d::Translate(translationParent);
+  } else {
+    parentFromEntity = participant.startTransform * participant.documentFromParent *
+                       documentFromStartDocument * parentFromDocument;
+  }
+  return IsFinite(parentFromEntity) ? std::optional<Transform2d>(parentFromEntity) : std::nullopt;
+}
+
+std::optional<SelectTool::ParentFromEntityTransforms>
+SelectTool::parentFromEntityTransformsAfterDocumentGesture(
+    const DragState& state, const Transform2d& documentFromStartDocument) {
+  const std::optional<Transform2d> primary =
+      parentFromEntityAfterDocumentGesture(state.primary, documentFromStartDocument);
+  if (!primary.has_value()) {
+    return std::nullopt;
+  }
+
+  ParentFromEntityTransforms result{.primary = *primary};
+  result.extras.reserve(state.extras.size());
+  for (const PerElementDrag& extra : state.extras) {
+    const std::optional<Transform2d> converted =
+        parentFromEntityAfterDocumentGesture(extra, documentFromStartDocument);
+    if (!converted.has_value()) {
+      return std::nullopt;
+    }
+    result.extras.push_back(*converted);
+  }
+  return result;
+}
+
 void SelectTool::onMouseMove(EditorApp& editor, const Vector2d& documentPoint, bool buttonHeld) {
   onMouseMove(editor, documentPoint, buttonHeld, MouseModifiers{});
 }
@@ -595,31 +668,23 @@ void SelectTool::onMouseMove(EditorApp& editor, const Vector2d& documentPoint, b
     return;
   }
 
-  std::optional<Transform2d> documentFromStartDocument;
-  switch (dragState_->gestureKind) {
-    case DragState::GestureKind::Move:
-      // Donner's Transform2 uses row-vector post-multiply semantics, so
-      // `start * Translate(delta)` applies the element's existing transform
-      // first and then moves the resulting document-space geometry by delta.
-      documentFromStartDocument = Transform2d::Translate(deltaDoc);
-      break;
-    case DragState::GestureKind::Resize:
-      documentFromStartDocument = ResizeTransform(dragState_->startBoundsDoc, dragState_->corner,
-                                                  documentPoint, modifiers.shift, modifiers.option);
-      break;
-    case DragState::GestureKind::Rotate:
-      documentFromStartDocument = RotateTransform(dragState_->centerDocumentPoint,
-                                                  dragState_->startAngleRadians, documentPoint);
-      break;
-  }
+  const std::optional<Transform2d> documentFromStartDocument =
+      documentFromStartDocumentForPointer(*dragState_, deltaDoc, documentPoint, modifiers);
   if (!documentFromStartDocument.has_value()) {
+    return;
+  }
+
+  const std::optional<ParentFromEntityTransforms> parentFromEntityTransforms =
+      parentFromEntityTransformsAfterDocumentGesture(*dragState_, *documentFromStartDocument);
+  if (!parentFromEntityTransforms.has_value()) {
     return;
   }
 
   // When the mutation queue is empty, the DOM represents the previous active preview. Preserve
   // that baseline before advancing the pointer preview and queueing its next transform. If a
   // render is already in flight, the queue remains non-empty and this baseline stays at the last
-  // transform that actually reached the registry.
+  // transform that actually reached the registry. Conversion must succeed for every participant
+  // first, so an invalid parent cannot advance the overlay without a matching DOM mutation.
   const std::uint64_t documentFrameVersion = editor.document().currentFrameVersion();
   if (!editor.document().hasPendingMutations() ||
       documentFrameVersion != dragState_->committedDocumentFrameVersion) {
@@ -630,9 +695,7 @@ void SelectTool::onMouseMove(EditorApp& editor, const Vector2d& documentPoint, b
 
   dragState_->currentDocumentDelta = deltaDoc;
   dragState_->currentDocumentFromStartDocument = *documentFromStartDocument;
-  const Transform2d primaryNewTransform =
-      dragState_->primary.startTransform * *documentFromStartDocument;
-  dragState_->primary.currentTransform = primaryNewTransform;
+  dragState_->primary.currentTransform = parentFromEntityTransforms->primary;
   dragState_->hasMoved = true;
 
   // DOM is the source of truth during drag. Every drag frame applies a
@@ -645,10 +708,11 @@ void SelectTool::onMouseMove(EditorApp& editor, const Vector2d& documentPoint, b
   // way so the canvas view and the backing document never disagree. That
   // disagreement was the source of the drag-release "pop back" class of
   // bugs where the cached bitmap offset diverged from the DOM transform.
-  editor.applyMutation(
-      EditorCommand::SetTransformCommand(dragState_->primary.element, primaryNewTransform));
-  for (auto& extra : dragState_->extras) {
-    extra.currentTransform = extra.startTransform * *documentFromStartDocument;
+  editor.applyMutation(EditorCommand::SetTransformCommand(dragState_->primary.element,
+                                                          parentFromEntityTransforms->primary));
+  for (std::size_t i = 0; i < dragState_->extras.size(); ++i) {
+    auto& extra = dragState_->extras[i];
+    extra.currentTransform = parentFromEntityTransforms->extras[i];
     editor.applyMutation(EditorCommand::SetTransformCommand(extra.element, extra.currentTransform));
   }
 }

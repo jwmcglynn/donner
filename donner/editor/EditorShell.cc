@@ -128,6 +128,8 @@ void PublishSampleThumbnailStats(int requested, int started, int completed, int 
         window['__donnerSampleThumbnailStats'] = ({
           'carouselFrame' : Number(previous['carouselFrame'] || frame),
           'firstRequestFrame' : Number(previous['firstRequestFrame'] || ($0 > 0 ? frame : 0)),
+          'publishedAtMs' : performance.now(),
+          'publicationGeneration' : Number(previous['publicationGeneration'] || 0) + 1,
           'requested' : $0,
           'started' : $1,
           'completed' : $2,
@@ -649,6 +651,10 @@ bool SidebarSnapshotRefreshPendingAfterPass(std::size_t deferredThumbnailCount) 
 
 bool SamplePickerActionsNeedFollowupFrame(bool dismiss, bool openFile, bool newDocument) noexcept {
   return dismiss || openFile || newDocument;
+}
+
+bool ShouldAdvanceSampleThumbnails(bool showSamplePicker, bool samplePresentationPending) noexcept {
+  return showSamplePicker && !samplePresentationPending;
 }
 
 DeferredRenderAction DeferredRenderActionForState(bool hasDocument, bool penDragFlushed,
@@ -4388,6 +4394,21 @@ void EditorShell::renderRenderPanePresentation(
   }
 }
 
+void EditorShell::publishSampleThumbnailStats() const {
+#ifdef __EMSCRIPTEN__
+  std::size_t ready = 0u;
+  for (const std::optional<svg::RendererBitmap>& bitmap : sampleThumbnailBitmaps_) {
+    ready += bitmap.has_value() ? 1u : 0u;
+  }
+  const SampleThumbnailRenderStats stats =
+      renderCoordinator_.asyncRenderer().sampleThumbnailRenderStats();
+  PublishSampleThumbnailStats(static_cast<int>(stats.requested), static_cast<int>(stats.started),
+                              static_cast<int>(stats.completed), static_cast<int>(stats.rendered),
+                              static_cast<int>(ready), stats.pending ? 1 : 0, stats.active ? 1 : 0,
+                              stats.resultReady ? 1 : 0);
+#endif
+}
+
 void EditorShell::ensureSampleThumbnails() {
   const std::span<const EditorSample> samples = GetEditorSampleCatalog();
   constexpr int kThumbnailWidthPx = 192;
@@ -4397,25 +4418,12 @@ void EditorShell::ensureSampleThumbnails() {
   }
 
   AsyncRenderer& asyncRenderer = renderCoordinator_.asyncRenderer();
-  const auto publishStats = [&] {
-#ifdef __EMSCRIPTEN__
-    std::size_t ready = 0u;
-    for (const std::optional<svg::RendererBitmap>& bitmap : sampleThumbnailBitmaps_) {
-      ready += bitmap.has_value() ? 1u : 0u;
-    }
-    const SampleThumbnailRenderStats stats = asyncRenderer.sampleThumbnailRenderStats();
-    PublishSampleThumbnailStats(static_cast<int>(stats.requested), static_cast<int>(stats.started),
-                                static_cast<int>(stats.completed), static_cast<int>(stats.rendered),
-                                static_cast<int>(ready), stats.pending ? 1 : 0,
-                                stats.active ? 1 : 0, stats.resultReady ? 1 : 0);
-#endif
-  };
 
   // The first picker frame is presentation-only. Posting even a worker task here can contend with
   // Wasm startup and delay the carousel itself, so arm one explicit follow-up frame and return.
   if (!samplePickerHasPresentedFrame_) {
     samplePickerHasPresentedFrame_ = true;
-    publishStats();
+    publishSampleThumbnailStats();
     window_.wakeEventLoop();
     return;
   }
@@ -4449,13 +4457,13 @@ void EditorShell::ensureSampleThumbnails() {
 
   if (sampleThumbnailGenerationCursor_ >= samples.size()) {
     sampleThumbnailRetryPending_ = false;
-    publishStats();
+    publishSampleThumbnailStats();
     return;
   }
   if (sampleThumbnailInFlightIndex_.has_value() || asyncRenderer.isBusy()) {
     // Work in flight ends in a completion callback, which wakes the loop.
     sampleThumbnailRetryPending_ = false;
-    publishStats();
+    publishSampleThumbnailStats();
     return;
   }
 
@@ -4480,7 +4488,7 @@ void EditorShell::ensureSampleThumbnails() {
     // instead of blocking the frame on worker readiness.
     sampleThumbnailRetryPending_ = true;
   }
-  publishStats();
+  publishSampleThumbnailStats();
 }
 
 void EditorShell::cancelSampleThumbnailGeneration() {
@@ -4491,6 +4499,7 @@ void EditorShell::cancelSampleThumbnailGeneration() {
     pendingFontPreviews_.push_front(std::move(*fontPreviewInFlight_));
     fontPreviewInFlight_.reset();
   }
+  publishSampleThumbnailStats();
 }
 
 void EditorShell::requestFontPreviews(const std::vector<std::string>& families) {
@@ -6666,8 +6675,11 @@ void EditorShell::revealSourceRange(SourceByteRange byteRange) {
 
 void EditorShell::prepareFrame() {
   const ScopedHeapDelta inputHeapDelta(MemoryStage::AppInput);
-  if (showSamplePicker_) {
+  if (internal::ShouldAdvanceSampleThumbnails(showSamplePicker_, samplePresentationPending_)) {
     ensureSampleThumbnails();
+  } else if (showSamplePicker_) {
+    // Keep browser failure diagnostics current without letting carousel work re-enter the worker.
+    publishSampleThumbnailStats();
   }
 }
 

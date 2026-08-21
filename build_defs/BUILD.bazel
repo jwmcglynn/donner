@@ -17,6 +17,7 @@ py_test(
         "check_banned_patterns.py",
         "check_banned_patterns_tests.py",
     ],
+    data = ["//tools:lint.sh"],
 )
 
 py_test(

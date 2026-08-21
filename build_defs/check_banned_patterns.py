@@ -18,6 +18,8 @@ Rules enforced:
   - No imgui / GLFW / Tracy headers outside `donner/editor/**` (path-scoped)
   - No ImGui `AddImageQuad`: present document textures through direct framebuffer composition
   - No direct TreeComponent structural mutation outside approved low-level code
+  - No new or worsened supported out-of-line C++ method definition above the local
+    decision-point complexity limit
 
 Usage:
   python3 build_defs/check_banned_patterns.py            # Check all files
@@ -29,6 +31,7 @@ from __future__ import annotations
 import argparse
 import os
 import re
+import subprocess
 import sys
 import unicodedata
 from pathlib import Path
@@ -355,6 +358,88 @@ _REF_RETURN_EXEMPT_PATHS = (
     "donner/base/RcStringOrRef.h",
 )
 
+_MAX_METHOD_DECISION_POINTS = 10
+_METHOD_DEFINITION_RE = re.compile(
+    r"""
+    ^[ \t]*
+    (?:[A-Za-z_][A-Za-z0-9_:<>,~*&\[\] ]*[ \t]+)?
+    (?P<name>(?:[A-Za-z_][A-Za-z0-9_]*::)+~?[A-Za-z_][A-Za-z0-9_]*)
+    \s*\((?P<params>[^;{}]*)\)
+    \s*(?P<cv>(?:(?:const|volatile)\s*)*)(?P<ref>&&?)?\s*
+    (?:noexcept(?:\s*\([^)]*\))?\s*)?(?:override\s*)?(?:final\s*)?
+    \{
+    """,
+    re.MULTILINE | re.VERBOSE,
+)
+_METHOD_DECISION_RE = re.compile(
+    r"\b(?:if|for|while|catch)\s*\(|\bcase\b|&&|\|\||(?<!\?)\?(?!\?)"
+)
+
+
+def _method_body_end(stripped: str, opening_brace: int) -> int:
+    """Return the matching closing brace offset, or the end of the source."""
+    depth = 0
+    for offset in range(opening_brace, len(stripped)):
+        if stripped[offset] == "{":
+            depth += 1
+        elif stripped[offset] == "}":
+            depth -= 1
+            if depth == 0:
+                return offset
+    return len(stripped)
+
+
+def _method_signature(match: re.Match) -> str:
+    """Return a stable-enough signature key that distinguishes method overloads."""
+    params = re.sub(r"\s+", " ", match.group("params").strip())
+    cv_qualifiers = " ".join(match.group("cv").split())
+    ref_qualifier = match.group("ref") or ""
+    suffix = " ".join(part for part in (cv_qualifiers, ref_qualifier) if part)
+    return f"{match.group('name')}({params})" + (f" {suffix}" if suffix else "")
+
+
+def _method_complexities(stripped: str) -> Dict[str, int]:
+    """Return decision-point counts for supported out-of-line method definitions."""
+    result: Dict[str, int] = {}
+    for match in _METHOD_DEFINITION_RE.finditer(stripped):
+        opening_brace = stripped.find("{", match.start(), match.end())
+        body_end = _method_body_end(stripped, opening_brace)
+        decision_points = len(_METHOD_DECISION_RE.findall(stripped[opening_brace:body_end]))
+        signature = _method_signature(match)
+        result[signature] = max(result.get(signature, 0), decision_points)
+    return result
+
+
+def _check_method_complexity(
+    stripped: str, baseline_stripped: str | None = None
+) -> List[Tuple[int, str, str]]:
+    """Flag supported out-of-line C++ method definitions with too many decision points."""
+    baseline = _method_complexities(baseline_stripped) if baseline_stripped is not None else {}
+    errors: List[Tuple[int, str, str]] = []
+    for match in _METHOD_DEFINITION_RE.finditer(stripped):
+        opening_brace = stripped.find("{", match.start(), match.end())
+        body_end = _method_body_end(stripped, opening_brace)
+        decision_points = len(_METHOD_DECISION_RE.findall(stripped[opening_brace:body_end]))
+        baseline_decision_points = baseline.get(_method_signature(match), 0)
+        if decision_points <= max(_MAX_METHOD_DECISION_POINTS, baseline_decision_points):
+            continue
+        line = stripped.count("\n", 0, match.start("name")) + 1
+        errors.append(
+            (
+                line,
+                (
+                    f"complex method ({decision_points} decision points; "
+                    f"limit {_MAX_METHOD_DECISION_POINTS})"
+                ),
+                (
+                    f"Extract focused helpers until `{match.group('name')}` has at most "
+                    f"{_MAX_METHOD_DECISION_POINTS} decision points. This mirrors the external "
+                    "Complex Method gate in the local lint command."
+                ),
+            )
+        )
+    return errors
+
 
 def _looks_like_parameter_list(params: str) -> bool:
     """Return true if `params` looks like C++ parameter declarations, not ctor arguments."""
@@ -405,7 +490,12 @@ def _check_ref_return_types(
     return errors
 
 
-def check_file(path: Path) -> List[Tuple[int, str, str]]:
+def check_file(
+    path: Path,
+    *,
+    check_method_complexity: bool = False,
+    method_complexity_baseline: str | None = None,
+) -> List[Tuple[int, str, str]]:
     """Check a single file; return list of (line_number, description, remediation).
 
     Lines marked `// NOLINT(banned_patterns)` or `// NOLINT(banned_patterns: reason)`
@@ -434,6 +524,8 @@ def check_file(path: Path) -> List[Tuple[int, str, str]]:
             errors.append((line, rule.description, rule.remediation))
 
     errors.extend(_check_ref_return_types(stripped, raw_lines, posix_path))
+    if check_method_complexity:
+        errors.extend(_check_method_complexity(stripped, method_complexity_baseline))
 
     return sorted(errors)
 
@@ -473,6 +565,18 @@ def main(argv: List[str]) -> int:
         nargs="*",
         help="Files or directories to check (default: donner/ and examples/)",
     )
+    parser.add_argument(
+        "--check-method-complexity",
+        action="store_true",
+        help="Apply the local Complex Method decision-point limit to the selected C++ files.",
+    )
+    parser.add_argument(
+        "--complexity-baseline-ref",
+        help=(
+            "Git ref used to suppress methods that already exceeded the complexity limit. "
+            "Requires --check-method-complexity."
+        ),
+    )
     args = parser.parse_args(argv[1:])
 
     inputs = [Path(p) for p in args.paths] if args.paths else [Path("donner"), Path("examples")]
@@ -483,7 +587,22 @@ def main(argv: List[str]) -> int:
 
     total_errors = 0
     for f in files:
-        errors = check_file(f)
+        baseline = None
+        if args.check_method_complexity and args.complexity_baseline_ref:
+            relative_path = os.path.relpath(f, Path.cwd())
+            completed = subprocess.run(
+                ["git", "show", f"{args.complexity_baseline_ref}:{relative_path}"],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            if completed.returncode == 0:
+                baseline = _strip_comments_and_strings(completed.stdout)
+        errors = check_file(
+            f,
+            check_method_complexity=args.check_method_complexity,
+            method_complexity_baseline=baseline,
+        )
         for line, desc, remediation in errors:
             total_errors += 1
             print(f"{f}:{line}: {desc}")

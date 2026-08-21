@@ -135,23 +135,40 @@ async function openDonnerSplash(page: Page): Promise<{ editorBounds: Rect; docum
   if (editorBounds === null) {
     throw new Error("editor canvas is missing");
   }
+  const beforeSampleResults = await page.evaluate(
+    () =>
+      (window as unknown as { __donnerWorkerStats?: { completedResults?: number } })
+        .__donnerWorkerStats?.completedResults ?? 0,
+  );
   await page.mouse.click(editorBounds.x + editorBounds.width * 0.24, editorBounds.y + 282);
   await expect(editorCanvas).toHaveAttribute("data-active-sample-id", "donner-splash");
   await expect(editorCanvas).toBeVisible();
   await expect
     .poll(
       () =>
-        page.evaluate(() =>
-          (window as unknown as { __donnerLayerThumbnailStats?: { rowCount?: number } })
-            .__donnerLayerThumbnailStats?.rowCount ?? 0
-        ),
+        page.evaluate((before) => {
+          const diagnostics = window as unknown as {
+            __donnerWorkerStats?: { completedResults?: number };
+            __donnerSampleThumbnailStats?: unknown;
+            __donnerFrameLoopStats?: unknown;
+            __donnerInteractionStats?: unknown;
+          };
+          const worker = diagnostics.__donnerWorkerStats ?? null;
+          return {
+            reached: (worker?.completedResults ?? 0) > before,
+            worker,
+            sampleThumbnail: diagnostics.__donnerSampleThumbnailStats ?? null,
+            frameLoop: diagnostics.__donnerFrameLoopStats ?? null,
+            interaction: diagnostics.__donnerInteractionStats ?? null,
+          };
+        }, beforeSampleResults),
       {
         message: "Donner Splash must become the editor's live document",
         timeout: scaledMs(20_000),
         intervals: [16, 25, 50, 100],
       },
     )
-    .toBeGreaterThan(0);
+    .toEqual(expect.objectContaining({ reached: true }));
   const viewport = await readSettledViewportStats(page);
   await expect
     .poll(() => readDocumentArtWidth(page, visibleDocumentRegion(viewport)), {
@@ -748,7 +765,9 @@ test.describe("dragRegressions classifier (pure)", () => {
     for (let i = 0; i < 18; ++i) {
       const t = 60 + i * 30;
       const laggedT = t - 60;
-      const lagged = laggedT < 300 ? 100 + (laggedT / 10) * 3 : 100 + 90 - ((laggedT - 300) / 10) * 3;
+      const lagged = laggedT < 300
+        ? 100 + (laggedT / 10) * 3
+        : 100 + 90 - ((laggedT - 300) / 10) * 3;
       samples.push(sampleAt(t, lagged));
     }
     expect(dragRegressions(samples, trace)).toEqual([]);
@@ -765,7 +784,9 @@ test.describe("dragRegressions classifier (pure)", () => {
     for (let i = 0; i < 36; ++i) {
       const t = 300 + i * 30;
       const laggedT = t - 300;
-      const lagged = laggedT < 600 ? 100 + (laggedT / 10) * 3 : 100 + 180 - ((laggedT - 600) / 10) * 3;
+      const lagged = laggedT < 600
+        ? 100 + (laggedT / 10) * 3
+        : 100 + 180 - ((laggedT - 600) / 10) * 3;
       samples.push(sampleAt(t, lagged));
     }
     expect(dragRegressions(samples, trace, 1.0, 2.0, 600).length).toBe(0);
@@ -785,7 +806,9 @@ test.describe("dragRegressions classifier (pure)", () => {
     for (let i = 0; i < 30; ++i) {
       const t = 350 + i * 30;
       const laggedT = t - 350;
-      const lagged = laggedT < 600 ? 100 + (laggedT / 10) * 3 : 100 + 180 - ((laggedT - 600) / 10) * 3;
+      const lagged = laggedT < 600
+        ? 100 + (laggedT / 10) * 3
+        : 100 + 180 - ((laggedT - 600) / 10) * 3;
       samples.push(sampleAt(t, lagged));
     }
     expect(dragRegressions(samples, trace, 1.0, 2.0, 600)).toEqual([]);
@@ -801,7 +824,9 @@ test.describe("dragRegressions classifier (pure)", () => {
     for (let i = 0; i < 30; ++i) {
       const t = 60 + i * 30;
       const laggedT = t - 60;
-      const lagged = laggedT < 300 ? 100 + (laggedT / 10) * 3 : 100 + 90 - ((laggedT - 300) / 10) * 3;
+      const lagged = laggedT < 300
+        ? 100 + (laggedT / 10) * 3
+        : 100 + 90 - ((laggedT - 300) / 10) * 3;
       samples.push(sampleAt(t, Math.max(lagged, 40)));
     }
     // Sample 29 (t=930) re-presents a position 20 px to the RIGHT of the

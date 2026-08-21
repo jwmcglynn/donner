@@ -231,14 +231,15 @@ public:
   void tickLockedRejectionFlash(float deltaSeconds);
 
 private:
-  /// Per-element bookkeeping for one participant in a drag. Carries the
-  /// start transform (for computing `startTransform * translate(delta)`
-  /// on each mouse move), the current preview transform, and the stable
-  /// locator for later canvas→text writeback.
+  /// Per-element bookkeeping for one participant in a drag. Carries the parent-local start and
+  /// current transforms, the parent-to-document transform used to convert the shared gesture, and
+  /// the stable locator for later canvas-to-text writeback.
   struct PerElementDrag {
     svg::SVGElement element;
     Transform2d startTransform;
     Transform2d currentTransform;
+    /// Document-space transform of the element's parent captured at gesture start.
+    Transform2d documentFromParent;
     std::optional<AttributeWritebackTarget> writebackTarget;
     /// Original `transform` attribute value captured at drag start. Used
     /// for `UndoSnapshot::sourceTransformAttributeValue` on release.
@@ -295,6 +296,45 @@ private:
     /// click-without-drag shouldn't leave an undo entry behind.
     bool hasMoved = false;
   };
+
+  struct ParentFromEntityTransforms {
+    Transform2d primary;
+    std::vector<Transform2d> extras;
+  };
+
+  /**
+   * Resolve the active pointer gesture in document coordinates.
+   *
+   * @param state Gesture state captured at pointer-down.
+   * @param deltaDocument Pointer movement from the gesture start.
+   * @param documentPoint Current pointer position in document coordinates.
+   * @param modifiers Current resize modifiers.
+   * @return Document-space gesture transform, or nullopt for an invalid resize.
+   */
+  [[nodiscard]] static std::optional<Transform2d> documentFromStartDocumentForPointer(
+      const DragState& state, const Vector2d& deltaDocument, const Vector2d& documentPoint,
+      MouseModifiers modifiers);
+
+  /**
+   * Convert one participant's document-space gesture into its parent-local transform.
+   *
+   * @param participant Element and parent transform captured at gesture start.
+   * @param documentFromStartDocument Shared document-space gesture transform.
+   * @return Parent-local result, or nullopt when inversion or composition is invalid.
+   */
+  [[nodiscard]] static std::optional<Transform2d> parentFromEntityAfterDocumentGesture(
+      const PerElementDrag& participant, const Transform2d& documentFromStartDocument);
+
+  /**
+   * Convert the shared gesture for every selected participant before any mutation is queued.
+   *
+   * @param state Selected participants captured at gesture start.
+   * @param documentFromStartDocument Shared document-space gesture transform.
+   * @return Parent-local transforms for all participants, or nullopt when any conversion fails.
+   */
+  [[nodiscard]] static std::optional<ParentFromEntityTransforms>
+  parentFromEntityTransformsAfterDocumentGesture(const DragState& state,
+                                                 const Transform2d& documentFromStartDocument);
 
   /// Active marquee drag. Records the start point (the document
   /// position of the `onMouseDown` that hit empty space), the

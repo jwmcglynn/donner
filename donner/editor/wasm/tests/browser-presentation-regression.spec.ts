@@ -4,11 +4,11 @@ import {
   type CssRegion,
   isSplashCaptureUsable,
   type PixelBounds,
-  readEditorBackgroundCoverage,
   readCssPngPixelDifferenceStats,
+  readEditorBackgroundCoverage,
+  readEditorPixelBounds,
   readEditorPixelBoundsFromPng,
   readEditorResizePixelBounds,
-  readEditorPixelBounds,
   readElementColorStats,
   readPngPixelDifferenceStats,
   readSplashCompositeFrameStats,
@@ -54,6 +54,18 @@ declare global {
       workerBusy: boolean;
       pointerX: number;
       pointerY: number;
+    };
+    __donnerSampleThumbnailStats?: {
+      publishedAtMs?: number;
+      publicationGeneration?: number;
+      requested: number;
+      started: number;
+      completed: number;
+      rendered: number;
+      ready: number;
+      pending: boolean;
+      active: boolean;
+      resultReady: boolean;
     };
     __donnerFrameLoopStats?: FrameLoopStats;
     __donnerOverlayStats?: {
@@ -405,6 +417,11 @@ interface WorkerHealth {
   gpuWaitTimeoutSite: string;
   gpuWaitTimeoutMs: number;
   publishReason: string;
+  sampleThumbnail: Window["__donnerSampleThumbnailStats"] | null;
+  sampleThumbnailPublishedAtMs: number;
+  sampleThumbnailPublicationGeneration: number;
+  frameLoop: FrameLoopStats | null;
+  interaction: Window["__donnerInteractionStats"] | null;
 }
 
 // `unpublished` and -1 distinguish "the worker never published stats at all"
@@ -417,6 +434,12 @@ async function readWorkerHealth(page: Page): Promise<WorkerHealth> {
     gpuWaitTimeoutSite: window.__donnerWorkerStats?.gpuWaitTimeoutSite ?? "unpublished",
     gpuWaitTimeoutMs: window.__donnerWorkerStats?.gpuWaitTimeoutMs ?? -1,
     publishReason: window.__donnerWorkerStats?.publishReason ?? "unpublished",
+    sampleThumbnail: window.__donnerSampleThumbnailStats ?? null,
+    sampleThumbnailPublishedAtMs: window.__donnerSampleThumbnailStats?.publishedAtMs ?? -1,
+    sampleThumbnailPublicationGeneration: window.__donnerSampleThumbnailStats?.publicationGeneration
+      ?? -1,
+    frameLoop: window.__donnerFrameLoopStats ?? null,
+    interaction: window.__donnerInteractionStats ?? null,
   }));
 }
 
@@ -628,7 +651,10 @@ async function openBasicShapes(page: Page): Promise<{
   await expectWorkerResultsToReach(
     page,
     (completedResults) => completedResults > beforeSampleResults,
-    { message: "Basic Shapes must have its own document render before capture", timeout: scaledMs(5_000) },
+    {
+      message: "Basic Shapes must have its own document render before capture",
+      timeout: scaledMs(5_000),
+    },
   );
   await waitForBrowserComposite(page);
 
@@ -841,7 +867,10 @@ test("Geode Wasm View overlays render tile metadata and sparse Slug triangle edg
   await expectWorkerResultsToReach(
     page,
     (completedResults) => completedResults > beforeCompositorResults,
-    { message: "Compositor Tile Overlay must rasterize a fresh document render", timeout: scaledMs(2_000) },
+    {
+      message: "Compositor Tile Overlay must rasterize a fresh document render",
+      timeout: scaledMs(2_000),
+    },
   );
   await waitForBrowserComposite(page);
   const compositorOverlay = await page.screenshot({ clip: documentClip });
@@ -921,7 +950,10 @@ test("Geode Wasm View overlays render tile metadata and sparse Slug triangle edg
   await expectWorkerResultsToReach(
     page,
     (completedResults) => completedResults > beforeGeometryResults,
-    { message: "Geometry Debug Overlay must schedule a freshly rasterized document render", timeout: scaledMs(2_000) },
+    {
+      message: "Geometry Debug Overlay must schedule a freshly rasterized document render",
+      timeout: scaledMs(2_000),
+    },
   );
   await waitForBrowserComposite(page);
   const geometryOverlay = await page.screenshot({ clip: documentClip });
@@ -933,12 +965,17 @@ test("Geode Wasm View overlays render tile metadata and sparse Slug triangle edg
     geometryOverlay.equals(geometryBaseline),
     "Geometry Debug Overlay was checked and accepted, but contributed no visible canvas pixels",
   ).toBe(false);
-  const edgeDifference = readCssPngPixelDifferenceStats(geometryBaseline, geometryOverlay, documentClip, {
-    x: sharedTriangleEdge.x - 3,
-    y: sharedTriangleEdge.y - 3,
-    width: 7,
-    height: 7,
-  });
+  const edgeDifference = readCssPngPixelDifferenceStats(
+    geometryBaseline,
+    geometryOverlay,
+    documentClip,
+    {
+      x: sharedTriangleEdge.x - 3,
+      y: sharedTriangleEdge.y - 3,
+      width: 7,
+      height: 7,
+    },
+  );
   expect(
     edgeDifference.changedPixels,
     "Geometry Debug Overlay must expose the shared edge from the actual Slug triangles",
@@ -948,10 +985,10 @@ test("Geode Wasm View overlays render tile metadata and sparse Slug triangle edg
     geometryOverlay,
     documentClip,
     {
-    x: dilatedOuterTriangleEdge.x - 4,
-    y: dilatedOuterTriangleEdge.y - 4,
-    width: 9,
-    height: 9,
+      x: dilatedOuterTriangleEdge.x - 4,
+      y: dilatedOuterTriangleEdge.y - 4,
+      width: 9,
+      height: 9,
     },
   );
   expect(
@@ -963,10 +1000,10 @@ test("Geode Wasm View overlays render tile metadata and sparse Slug triangle edg
     geometryOverlay,
     documentClip,
     {
-    x: untouchedBlueInterior.x - 6,
-    y: untouchedBlueInterior.y - 6,
-    width: 13,
-    height: 13,
+      x: untouchedBlueInterior.x - 6,
+      y: untouchedBlueInterior.y - 6,
+      width: 13,
+      height: 13,
     },
   );
   expect(
@@ -976,10 +1013,7 @@ test("Geode Wasm View overlays render tile metadata and sparse Slug triangle edg
   expect(failures).toEqual([]);
 });
 
-test("Firefox keeps the dragged shape and its selection outline in every drag frame", async ({
-  browserName,
-  page,
-}) => {
+test("Firefox keeps the dragged shape and its selection outline in every drag frame", async ({ browserName, page }) => {
   // The single-canvas replacement removed the two-surface epoch handoff that used to let a drag
   // frame show the shape at one position and its outline at another. What
   // survives is the user-visible claim: every frame the drag produces shows the
@@ -1154,7 +1188,10 @@ test("Firefox keeps the dragged shape and its selection outline in every drag fr
   await expectWorkerResultsToReach(
     page,
     (completedResults) => completedResults === resultsDuringDrag + 1,
-    { message: "expected the pointer release to commit exactly one document render", timeout: scaledMs(2_000) },
+    {
+      message: "expected the pointer release to commit exactly one document render",
+      timeout: scaledMs(2_000),
+    },
   );
   const centerX = (bounds: PixelBounds) => (bounds.minX + bounds.maxX) * 0.5;
   const centerY = (bounds: PixelBounds) => (bounds.minY + bounds.maxY) * 0.5;
@@ -1180,10 +1217,7 @@ test("Firefox keeps the dragged shape and its selection outline in every drag fr
   expect(failures).toEqual([]);
 });
 
-test("Firefox never exposes the checkerboard while dragging a Splash letter", async ({
-  browserName,
-  page,
-}) => {
+test("Firefox never exposes the checkerboard while dragging a Splash letter", async ({ browserName, page }) => {
   test.skip(browserName !== "firefox", "Firefox Geode regression");
   const failures = await openEditor(page);
   // Open through the shared helper so the sample's first document render has to
@@ -1475,7 +1509,10 @@ test("Firefox never exposes the checkerboard while dragging a Splash letter", as
   await expectWorkerResultsToReach(
     page,
     (completedResults) => completedResults === resultsDuringDrag + 1,
-    { message: "expected the pointer release to commit exactly one Splash document render", timeout: scaledMs(2_000) },
+    {
+      message: "expected the pointer release to commit exactly one Splash document render",
+      timeout: scaledMs(2_000),
+    },
   );
   expect(failures).toEqual([]);
 });
@@ -1498,7 +1535,10 @@ test("WebKit Geode survives a burst of drag wakeups without fatal errors", async
   await expectWorkerResultsToReach(
     page,
     (completedResults) => completedResults > beforeSample,
-    { message: "expected Basic Shapes to finish presenting before the WebKit drag burst", timeout: scaledMs(2_000) },
+    {
+      message: "expected Basic Shapes to finish presenting before the WebKit drag burst",
+      timeout: scaledMs(2_000),
+    },
   );
 
   const dragStart = {
@@ -1518,7 +1558,10 @@ test("WebKit Geode survives a burst of drag wakeups without fatal errors", async
   await expectWorkerResultsToReach(
     page,
     (completedResults) => completedResults > beforeDrag,
-    { message: "expected WebKit to complete a render after the drag wakeup burst", timeout: scaledMs(2_000) },
+    {
+      message: "expected WebKit to complete a render after the drag wakeup burst",
+      timeout: scaledMs(2_000),
+    },
   );
   expect(failures).toEqual([]);
 });
@@ -1591,6 +1634,7 @@ async function openDonnerSplash(page: Page): Promise<{
     (completedResults) => completedResults > beforeSampleResults,
     { message: "Donner Splash must produce a document render", timeout: scaledMs(5_000) },
   );
+  await waitForBrowserComposite(page);
   return { editorBounds };
 }
 
@@ -1882,7 +1926,6 @@ test("browser trackpad pinch matches the desktop zoom identity", async ({ page }
   expect(failures).toEqual([]);
 });
 
-
 // Reads the main-loop frame gate probe published by donner/editor/main.cc.
 async function readFrameLoopStats(page: Page): Promise<FrameLoopStats> {
   const stats = await page.evaluate(() => window.__donnerFrameLoopStats);
@@ -1955,8 +1998,8 @@ test("a gesture storm runs frames only while the gesture is live", async ({ page
   const afterStormDocument = await readDocumentPresentationState(page);
   const inputFrames = afterStorm.inputTriggeredFrames - before.inputTriggeredFrames;
   const stormFrames = afterStorm.renderedFrames - before.renderedFrames;
-  const detail = `frames=${stormFrames} input=${inputFrames}` +
-    ` document=${beforeDocument.completedResults}->${afterStormDocument.completedResults}`;
+  const detail = `frames=${stormFrames} input=${inputFrames}`
+    + ` document=${beforeDocument.completedResults}->${afterStormDocument.completedResults}`;
 
   // The document advanced across the storm, and the frames that carried it were the ones the storm
   // asked for. Every presented frame is a full UI frame in the single-canvas architecture, so the

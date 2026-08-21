@@ -62,6 +62,39 @@ constexpr std::string_view kResizeRectSvg =
          <rect id="target" x="20" y="20" width="40" height="20" fill="red"/>
        </svg>)";
 
+constexpr std::string_view kTransformedAncestorSvg =
+    R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="300" height="300">
+      <g transform="rotate(10) translate(100, 10)">
+        <rect id="target" x="10" y="10" width="80" height="40" fill="red"/>
+      </g>
+    </svg>)svg";
+
+constexpr std::string_view kSmallScaleAncestorSvg =
+    R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+      <g transform="scale(0.00001)">
+        <rect id="target" x="1000000" y="1000000" width="2000000" height="1000000"
+              fill="red"/>
+      </g>
+    </svg>)svg";
+
+constexpr std::string_view kSingularExtraAncestorSvg =
+    R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="120" height="120">
+      <rect id="primary" x="10" y="10" width="20" height="20" fill="red"/>
+      <g transform="scale(0)">
+        <rect id="singular" x="1000000" y="1000000" width="20" height="20" fill="blue"/>
+      </g>
+    </svg>)svg";
+
+constexpr std::string_view kDifferentlyTransformedParentsSvg =
+    R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="500" height="300">
+      <g transform="rotate(10) translate(40, 20)">
+        <rect id="first" x="10" y="10" width="40" height="30" fill="red"/>
+      </g>
+      <g transform="scale(1.5, 0.75) translate(180, 50)">
+        <rect id="second" x="10" y="10" width="40" height="30" fill="blue"/>
+      </g>
+    </svg>)svg";
+
 constexpr std::string_view kRotateRingNeighborSvg =
     R"(<svg xmlns="http://www.w3.org/2000/svg" width="120" height="120">
          <rect id="target" x="10" y="10" width="20" height="20" fill="red"/>
@@ -96,6 +129,10 @@ protected:
     auto element = app.document().document().querySelector(id);
     EXPECT_TRUE(element.has_value());
     return element->cast<svg::SVGGraphicsElement>().transform();
+  }
+
+  Transform2d documentFromElementOf(std::string_view id) {
+    return elementById(id).cast<svg::SVGGraphicsElement>().elementFromWorld();
   }
 
   std::vector<std::string> selectedElementIds() {
@@ -960,6 +997,98 @@ TEST_F(SelectToolTest, DragAfterScaleTranslatesInDocumentSpace) {
               TransformIs(2.0, 0.0, 0.0, 2.0, r1Start.data[4] + 30.0, r1Start.data[5] + 15.0));
 }
 
+TEST_F(SelectToolTest, DragInsideTransformedAncestorTranslatesInDocumentSpace) {
+  loadSvg(kTransformedAncestorSvg);
+  app.setSelection(elementById("#target"));
+
+  const Box2d before = worldBoundsOf("#target");
+  const Vector2d start = (before.topLeft + before.bottomRight) * 0.5;
+  const Vector2d dragDeltaDoc(48.0, 24.0);
+
+  tool.onMouseDown(app, start, MouseModifiers{});
+  tool.onMouseMove(app, start + dragDeltaDoc, /*buttonHeld=*/true);
+  ASSERT_TRUE(app.flushFrame());
+
+  const Box2d after = worldBoundsOf("#target");
+  EXPECT_THAT(after.topLeft - before.topLeft, Vector2NearExact(48.0, 24.0))
+      << "a document-space pointer drag must not be rotated again by the ancestor transform";
+  EXPECT_THAT(after.bottomRight - before.bottomRight, Vector2NearExact(48.0, 24.0));
+}
+
+TEST_F(SelectToolTest, DragInsideSmallScaleAncestorTranslatesInDocumentSpace) {
+  loadSvg(kSmallScaleAncestorSvg);
+  app.setSelection(elementById("#target"));
+
+  const Box2d before = worldBoundsOf("#target");
+  const Vector2d start = (before.topLeft + before.bottomRight) * 0.5;
+  const Vector2d dragDeltaDoc(10.0, 5.0);
+
+  tool.onMouseDown(app, start, MouseModifiers{});
+  tool.onMouseMove(app, start + dragDeltaDoc, /*buttonHeld=*/true);
+  ASSERT_THAT(app.flushFrame(), testing::IsTrue())
+      << "An invertible small-scale parent must not discard the drag mutation";
+
+  const Box2d after = worldBoundsOf("#target");
+  EXPECT_THAT(after.topLeft - before.topLeft, Vector2NearExact(10.0, 5.0));
+  EXPECT_THAT(after.bottomRight - before.bottomRight, Vector2NearExact(10.0, 5.0));
+}
+
+TEST_F(SelectToolTest, MultiSelectDragUsesEachParticipantsTransformedParent) {
+  loadSvg(kDifferentlyTransformedParentsSvg);
+  app.setSelection(std::vector<svg::SVGElement>{elementById("#first"), elementById("#second")});
+
+  const Transform2d documentFromFirstBefore = documentFromElementOf("#first");
+  const Transform2d documentFromSecondBefore = documentFromElementOf("#second");
+  const Box2d firstBoundsBefore = worldBoundsOf("#first");
+  const Box2d secondBoundsBefore = worldBoundsOf("#second");
+  const Vector2d start = (firstBoundsBefore.topLeft + firstBoundsBefore.bottomRight) * 0.5;
+  const Vector2d dragDeltaDoc(35.0, 18.0);
+
+  tool.onMouseDown(app, start, MouseModifiers{});
+  ASSERT_TRUE(tool.isDragging());
+  tool.onMouseMove(app, start + dragDeltaDoc, /*buttonHeld=*/true);
+  tool.onMouseUp(app, start + dragDeltaDoc);
+  ASSERT_TRUE(app.flushFrame());
+
+  const Transform2d dragDocumentFromDocument = Transform2d::Translate(dragDeltaDoc);
+  EXPECT_THAT(documentFromElementOf("#first"),
+              TransformEq(documentFromFirstBefore * dragDocumentFromDocument));
+  EXPECT_THAT(documentFromElementOf("#second"),
+              TransformEq(documentFromSecondBefore * dragDocumentFromDocument));
+  EXPECT_THAT(worldBoundsOf("#first").topLeft - firstBoundsBefore.topLeft,
+              Vector2NearExact(35.0, 18.0));
+  EXPECT_THAT(worldBoundsOf("#second").topLeft - secondBoundsBefore.topLeft,
+              Vector2NearExact(35.0, 18.0));
+}
+
+TEST_F(SelectToolTest, SingularExtraLeavesMultiSelectDomAndPreviewAtPriorTransform) {
+  loadSvg(kSingularExtraAncestorSvg);
+  app.setSelection(std::vector<svg::SVGElement>{elementById("#primary"), elementById("#singular")});
+
+  const Transform2d primaryBefore = transformOf("#primary");
+  const Transform2d singularBefore = transformOf("#singular");
+  const Vector2d start(20.0, 20.0);
+
+  tool.onMouseDown(app, start, MouseModifiers{});
+  ASSERT_THAT(tool.isDragging(), testing::IsTrue());
+  const std::optional<SelectTool::ActiveDragPreview> activeBefore = tool.activeDragPreview();
+  const std::optional<SelectTool::ActiveDragPreview> committedBefore =
+      tool.documentDragPreview(app);
+  ASSERT_THAT(activeBefore, testing::Optional(testing::_));
+  ASSERT_THAT(committedBefore, testing::Optional(testing::_));
+
+  tool.onMouseMove(app, start + Vector2d(10.0, 5.0), /*buttonHeld=*/true);
+
+  EXPECT_THAT(app.document().hasPendingMutations(), testing::IsFalse());
+  EXPECT_THAT(transformOf("#primary"), TransformEq(primaryBefore));
+  EXPECT_THAT(transformOf("#singular"), TransformEq(singularBefore));
+  EXPECT_THAT(tool.activeDragPreview()->translation, Vector2NearExact(0.0, 0.0));
+  EXPECT_THAT(tool.activeDragPreview()->documentFromCachedDocument, TransformEq(Transform2d()));
+  EXPECT_THAT(tool.documentDragPreview(app)->translation, Vector2NearExact(0.0, 0.0));
+  EXPECT_THAT(tool.documentDragPreview(app)->documentFromCachedDocument,
+              TransformEq(Transform2d()));
+}
+
 TEST_F(SelectToolTest, MultiSelectDragPreservesExtraElementTransforms) {
   // Give r2 a prior transform so we can verify its start transform is
   // captured and delta is composed relative to the right starting point.
@@ -1392,6 +1521,37 @@ TEST_F(SelectToolTest, CornerHandleResizesSelectionFromOppositeCorner) {
   EXPECT_EQ(*app.undoTimeline().nextUndoLabel(), "Resize element");
 }
 
+TEST_F(SelectToolTest, CornerHandleResizeInsideTransformedAncestorUsesDocumentSpace) {
+  loadSvg(kTransformedAncestorSvg);
+  app.setSelection(elementById("#target"));
+
+  const Transform2d documentFromElementBefore = documentFromElementOf("#target");
+  const Box2d boundsBefore = worldBoundsOf("#target");
+  const Vector2d anchoredCorner = boundsBefore.topLeft;
+  const Vector2d grabbedCorner = boundsBefore.bottomRight;
+  const Vector2d resizeDeltaDoc(30.0, 15.0);
+
+  tool.onMouseDown(app, grabbedCorner, MouseModifiers{});
+  tool.onMouseMove(app, grabbedCorner + resizeDeltaDoc, /*buttonHeld=*/true);
+  const auto resizeGesture = tool.activeGesturePreview();
+  ASSERT_TRUE(resizeGesture.has_value());
+  ASSERT_EQ(resizeGesture->kind, SelectTool::ActiveGestureKind::Resize);
+  tool.onMouseUp(app, grabbedCorner + resizeDeltaDoc);
+  ASSERT_TRUE(app.flushFrame());
+
+  const double scaleX = (boundsBefore.width() + resizeDeltaDoc.x) / boundsBefore.width();
+  const double scaleY = (boundsBefore.height() + resizeDeltaDoc.y) / boundsBefore.height();
+  const Transform2d resizedDocumentFromDocument =
+      TransformDocumentAroundPoint(anchoredCorner, Transform2d::Scale(scaleX, scaleY));
+  EXPECT_THAT(documentFromElementOf("#target"),
+              TransformEq(documentFromElementBefore * resizedDocumentFromDocument));
+
+  const Box2d boundsAfter = worldBoundsOf("#target");
+  EXPECT_THAT(boundsAfter.topLeft, Vector2NearExact(anchoredCorner.x, anchoredCorner.y));
+  EXPECT_THAT(boundsAfter.bottomRight, Vector2NearExact(grabbedCorner.x + resizeDeltaDoc.x,
+                                                        grabbedCorner.y + resizeDeltaDoc.y));
+}
+
 TEST_F(SelectToolTest, CornerHandleResizesTextSelection) {
   constexpr std::string_view kTextSvg =
       R"(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200">
@@ -1685,6 +1845,31 @@ TEST_F(SelectToolTest, RotateZoneRotatesAroundSelectionCenter) {
   EXPECT_THAT(transform, TransformIs(0.0, 1.0, -1.0, 0.0, 40.0, 0.0));
   ASSERT_TRUE(app.undoTimeline().nextUndoLabel().has_value());
   EXPECT_EQ(*app.undoTimeline().nextUndoLabel(), "Rotate element");
+}
+
+TEST_F(SelectToolTest, RotateInsideTransformedAncestorUsesDocumentSpace) {
+  loadSvg(kTransformedAncestorSvg);
+  app.setSelection(elementById("#target"));
+
+  const Transform2d documentFromElementBefore = documentFromElementOf("#target");
+  const Box2d boundsBefore = worldBoundsOf("#target");
+  const Vector2d center = (boundsBefore.topLeft + boundsBefore.bottomRight) * 0.5;
+  const Vector2d topRight(boundsBefore.bottomRight.x, boundsBefore.topLeft.y);
+  const Vector2d rotateStart = topRight + Vector2d(14.0, -10.0);
+  const Transform2d rotatedDocumentFromDocument =
+      TransformDocumentAroundPoint(center, Transform2d::Rotate(MathConstants<double>::kHalfPi));
+  const Vector2d rotateEnd = rotatedDocumentFromDocument.transformPosition(rotateStart);
+
+  tool.onMouseDown(app, rotateStart, MouseModifiers{});
+  tool.onMouseMove(app, rotateEnd, /*buttonHeld=*/true);
+  const auto rotateGesture = tool.activeGesturePreview();
+  ASSERT_TRUE(rotateGesture.has_value());
+  ASSERT_EQ(rotateGesture->kind, SelectTool::ActiveGestureKind::Rotate);
+  tool.onMouseUp(app, rotateEnd);
+  ASSERT_TRUE(app.flushFrame());
+
+  EXPECT_THAT(documentFromElementOf("#target"),
+              TransformEq(documentFromElementBefore * rotatedDocumentFromDocument));
 }
 
 TEST_F(SelectToolTest, ActiveRotationBoundsPreviewClearsOnMouseUp) {

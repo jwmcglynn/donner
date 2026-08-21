@@ -499,6 +499,16 @@ TEST(EditorShellInternalTest, LateSamplePickerActionsRequestAHostFollowupFrame) 
                                                              /*newDocument=*/true));
 }
 
+TEST(EditorShellInternalTest, PendingSamplePresentationOwnsTheRenderWorker) {
+  EXPECT_FALSE(internal::ShouldAdvanceSampleThumbnails(/*showSamplePicker=*/false,
+                                                       /*samplePresentationPending=*/false));
+  EXPECT_TRUE(internal::ShouldAdvanceSampleThumbnails(/*showSamplePicker=*/true,
+                                                      /*samplePresentationPending=*/false));
+  EXPECT_FALSE(internal::ShouldAdvanceSampleThumbnails(/*showSamplePicker=*/true,
+                                                       /*samplePresentationPending=*/true))
+      << "A selected sample's first document render must not race a carousel thumbnail.";
+}
+
 TEST(EditorShellInternalTest, BusyDeferredRenderWaitsForWorkerCompletionInsteadOfSpinning) {
   EXPECT_EQ(internal::DeferredRenderActionForState(
                 /*hasDocument=*/true, /*penDragFlushed=*/false, /*rendererBusy=*/true),
