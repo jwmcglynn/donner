@@ -12,11 +12,12 @@ class DocumentResourceFamilyBudget {
 public:
   static constexpr std::size_t kDefaultMaximumTotalRetainedBytes = 128 * 1024 * 1024;
 
-  enum class Kind : std::size_t { ParsedPayload, Geometry, ComputedStyle, Count };
+  enum class Kind : std::size_t { ParsedPayload, Geometry, ComputedFilter, ComputedStyle, Count };
 
   struct Limits {
     std::size_t parsedPayloadBytes = 64 * 1024 * 1024;
     std::size_t geometryBytes = 64 * 1024 * 1024;
+    std::size_t computedFilterBytes = 64 * 1024 * 1024;
     std::size_t computedStyleBytes = 64 * 1024 * 1024;
     std::size_t maximumTotalRetainedBytes = kDefaultMaximumTotalRetainedBytes;
   };
@@ -80,6 +81,7 @@ private:
     switch (kind) {
       case Kind::ParsedPayload: return limits_.parsedPayloadBytes;
       case Kind::Geometry: return limits_.geometryBytes;
+      case Kind::ComputedFilter: return limits_.computedFilterBytes;
       case Kind::ComputedStyle: return limits_.computedStyleBytes;
       case Kind::Count: return 0;
     }

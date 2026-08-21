@@ -22,6 +22,7 @@ DocumentResourceFamilyBudget::Limits MakeLimits(std::size_t perKindBytes, std::s
   return DocumentResourceFamilyBudget::Limits{
       .parsedPayloadBytes = perKindBytes,
       .geometryBytes = perKindBytes,
+      .computedFilterBytes = perKindBytes,
       .computedStyleBytes = perKindBytes,
       .maximumTotalRetainedBytes = totalBytes,
   };

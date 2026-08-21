@@ -17,6 +17,7 @@ DocumentResourceFamilyBudget::Limits MakeLimits(std::size_t perKindBytes, std::s
   return DocumentResourceFamilyBudget::Limits{
       .parsedPayloadBytes = perKindBytes,
       .geometryBytes = perKindBytes,
+      .computedFilterBytes = perKindBytes,
       .computedStyleBytes = perKindBytes,
       .maximumTotalRetainedBytes = totalBytes,
   };
@@ -35,16 +36,17 @@ TEST(DocumentResourceFamilyBudgetTest, DefaultPreservesTwoFullCategoryReservatio
 }
 
 TEST(DocumentResourceFamilyBudgetTest, EnforcesAggregateBoundaryAcrossAllKinds) {
-  DocumentResourceFamilyBudget budget(MakeLimits(64, 57));
+  DocumentResourceFamilyBudget budget(MakeLimits(64, 76));
 
   EXPECT_THAT(budget.reserve(DocumentResourceFamilyBudget::Kind::ParsedPayload, 19), IsTrue());
   EXPECT_THAT(budget.reserve(DocumentResourceFamilyBudget::Kind::Geometry, 19), IsTrue());
+  EXPECT_THAT(budget.reserve(DocumentResourceFamilyBudget::Kind::ComputedFilter, 19), IsTrue());
   EXPECT_THAT(budget.reserve(DocumentResourceFamilyBudget::Kind::ComputedStyle, 19), IsTrue());
-  EXPECT_EQ(budget.totalRetainedBytes(), 57u);
+  EXPECT_EQ(budget.totalRetainedBytes(), 76u);
 
   EXPECT_THAT(budget.reserve(DocumentResourceFamilyBudget::Kind::ParsedPayload, 1), IsFalse());
-  EXPECT_THAT(budget.securityStats().retainedBytes, ElementsAre(19, 19, 19));
-  EXPECT_EQ(budget.totalRetainedBytes(), 57u);
+  EXPECT_THAT(budget.securityStats().retainedBytes, ElementsAre(19, 19, 19, 19));
+  EXPECT_EQ(budget.totalRetainedBytes(), 76u);
   EXPECT_EQ(budget.securityStats().rejectedReservations, 1u);
   EXPECT_THAT(budget.securityStats().rejected, IsTrue());
 }
@@ -54,7 +56,7 @@ TEST(DocumentResourceFamilyBudgetTest, RejectionIsAtomicAndLatches) {
   EXPECT_THAT(budget.reserve(DocumentResourceFamilyBudget::Kind::ParsedPayload, 30), IsTrue());
 
   EXPECT_THAT(budget.reserve(DocumentResourceFamilyBudget::Kind::Geometry, 21), IsFalse());
-  EXPECT_THAT(budget.securityStats().retainedBytes, ElementsAre(30, 0, 0));
+  EXPECT_THAT(budget.securityStats().retainedBytes, ElementsAre(30, 0, 0, 0));
   EXPECT_EQ(budget.totalRetainedBytes(), 30u);
 
   budget.release(DocumentResourceFamilyBudget::Kind::ParsedPayload, 30);
@@ -66,10 +68,10 @@ TEST(DocumentResourceFamilyBudgetTest, RejectionIsAtomicAndLatches) {
 
 TEST(DocumentResourceFamilyBudgetTest, RejectsPerKindBoundaryWithoutChargingTotal) {
   DocumentResourceFamilyBudget budget(MakeLimits(10, 100));
-  EXPECT_THAT(budget.reserve(DocumentResourceFamilyBudget::Kind::ComputedStyle, 10), IsTrue());
+  EXPECT_THAT(budget.reserve(DocumentResourceFamilyBudget::Kind::ComputedFilter, 10), IsTrue());
 
-  EXPECT_THAT(budget.reserve(DocumentResourceFamilyBudget::Kind::ComputedStyle, 1), IsFalse());
-  EXPECT_EQ(budget.retainedBytes(DocumentResourceFamilyBudget::Kind::ComputedStyle), 10u);
+  EXPECT_THAT(budget.reserve(DocumentResourceFamilyBudget::Kind::ComputedFilter, 1), IsFalse());
+  EXPECT_EQ(budget.retainedBytes(DocumentResourceFamilyBudget::Kind::ComputedFilter), 10u);
   EXPECT_EQ(budget.totalRetainedBytes(), 10u);
 }
 

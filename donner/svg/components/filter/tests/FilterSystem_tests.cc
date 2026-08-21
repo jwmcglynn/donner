@@ -10,10 +10,14 @@
 #include <string>
 #include <string_view>
 #include <variant>
+#include <vector>
 
 #include "donner/base/ParseWarningSink.h"
 #include "donner/base/tests/BaseTestUtils.h"
 #include "donner/base/tests/ParseResultTestUtils.h"
+#include "donner/svg/components/DocumentResourceFamilyBudget.h"
+#include "donner/svg/components/ReferenceResolutionBudget.h"
+#include "donner/svg/components/filter/ComputedFilterResourceBudget.h"
 #include "donner/svg/components/filter/FilterComponent.h"
 #include "donner/svg/components/resources/ImageComponent.h"
 #include "donner/svg/components/style/StyleSystem.h"
@@ -502,6 +506,124 @@ TEST_F(FilterSystemTest, HrefWarningsForInvalidAndCircularReferences) {
               testing::AllOf(testing::HasSubstr("failed to resolve"),
                              testing::HasSubstr("does not reference a <filter>"),
                              testing::HasSubstr("Circular filter inheritance detected")));
+}
+
+TEST_F(FilterSystemTest, FilterHrefTraversalRespectsDepthLimit) {
+  auto document = ParseSVG(R"(
+    <svg xmlns="http://www.w3.org/2000/svg"><defs>
+      <filter id="base"><feFlood/></filter>
+      <filter id="middle" href="#base"/>
+      <filter id="deep" href="#middle"/>
+    </defs></svg>
+  )");
+  auto& registry = document.registry();
+  registry.ctx().emplace<ReferenceResolutionBudget>(
+      ReferenceResolutionBudget::Limits{.maximumReferenceDepth = 1, .maximumHopsPerKind = 8});
+
+  ParseWarningSink warningSink;
+  StyleSystem().computeAllStyles(registry, warningSink);
+  filterSystem.instantiateAllComputedComponents(registry, warningSink);
+
+  const auto& budget = registry.ctx().get<ReferenceResolutionBudget>();
+  EXPECT_EQ(budget.stats(ReferenceResolutionBudget::Kind::Filter).hops, 2u);
+  EXPECT_TRUE(budget.stats(ReferenceResolutionBudget::Kind::Filter).rejected);
+  EXPECT_THAT(testing::PrintToString(warningSink.warnings()),
+              testing::HasSubstr("Filter inheritance resource limit exceeded"));
+  ASSERT_TRUE(document.querySelector("#middle").has_value());
+  EXPECT_TRUE(document.querySelector("#middle")->entityHandle().all_of<ComputedFilterComponent>());
+  ASSERT_TRUE(document.querySelector("#deep").has_value());
+  EXPECT_FALSE(document.querySelector("#deep")->entityHandle().all_of<ComputedFilterComponent>());
+}
+
+TEST_F(FilterSystemTest, FilterHrefTraversalSharesAggregateHopLimit) {
+  auto document = ParseSVG(R"(
+    <svg xmlns="http://www.w3.org/2000/svg"><defs>
+      <filter id="base"><feFlood/></filter>
+      <filter id="first" href="#base"/>
+      <filter id="second" href="#base"/>
+    </defs></svg>
+  )");
+  auto& registry = document.registry();
+  registry.ctx().emplace<ReferenceResolutionBudget>(
+      ReferenceResolutionBudget::Limits{.maximumReferenceDepth = 8, .maximumHopsPerKind = 1});
+
+  ParseWarningSink warningSink;
+  StyleSystem().computeAllStyles(registry, warningSink);
+  filterSystem.instantiateAllComputedComponents(registry, warningSink);
+
+  const auto& stats = registry.ctx().get<ReferenceResolutionBudget>().stats(
+      ReferenceResolutionBudget::Kind::Filter);
+  EXPECT_EQ(stats.hops, 1u);
+  EXPECT_TRUE(stats.rejected);
+  EXPECT_THAT(testing::PrintToString(warningSink.warnings()),
+              testing::HasSubstr("Filter inheritance resource limit exceeded"));
+  ASSERT_TRUE(document.querySelector("#first").has_value());
+  EXPECT_TRUE(document.querySelector("#first")->entityHandle().all_of<ComputedFilterComponent>());
+  ASSERT_TRUE(document.querySelector("#second").has_value());
+  EXPECT_FALSE(document.querySelector("#second")->entityHandle().all_of<ComputedFilterComponent>());
+}
+
+TEST_F(FilterSystemTest, ComputedFilterStructuralReservationsReleaseFamilyBytes) {
+  DocumentResourceFamilyBudget::Limits familyLimits;
+  familyLimits.computedFilterBytes = 64;
+  familyLimits.maximumTotalRetainedBytes = 64;
+  auto family = std::make_shared<DocumentResourceFamilyBudget>(familyLimits);
+  Registry registry;
+  const Entity filter = registry.create();
+
+  {
+    ComputedFilterResourceBudget budget(family,
+                                        ComputedFilterResourceBudget::Limits{.maximumBytes = 64});
+    ASSERT_TRUE(budget.reserve(filter, 32));
+    EXPECT_EQ(family->retainedBytes(DocumentResourceFamilyBudget::Kind::ComputedFilter), 32u);
+    ASSERT_TRUE(budget.reserve(filter, 8));
+    EXPECT_EQ(family->retainedBytes(DocumentResourceFamilyBudget::Kind::ComputedFilter), 8u);
+    budget.release(filter);
+    EXPECT_EQ(family->retainedBytes(DocumentResourceFamilyBudget::Kind::ComputedFilter), 0u);
+    ASSERT_TRUE(budget.reserve(filter, 16));
+  }
+  EXPECT_EQ(family->retainedBytes(DocumentResourceFamilyBudget::Kind::ComputedFilter), 0u);
+}
+
+TEST_F(FilterSystemTest, SharedImageReservationFollowsSharedAllocationLifetime) {
+  DocumentResourceFamilyBudget::Limits familyLimits;
+  familyLimits.computedFilterBytes = 64;
+  familyLimits.maximumTotalRetainedBytes = 64;
+  auto family = std::make_shared<DocumentResourceFamilyBudget>(familyLimits);
+  ComputedFilterResourceBudget budget(family,
+                                      ComputedFilterResourceBudget::Limits{.maximumBytes = 64});
+  Registry registry;
+  const Entity source = registry.create();
+  const std::vector<uint8_t> pixels(24, 0x7f);
+
+  auto first = budget.shareImage(source, pixels);
+  auto second = budget.shareImage(source, pixels);
+  ASSERT_THAT(first, NotNull());
+  ASSERT_THAT(second, NotNull());
+  EXPECT_EQ(first.get(), second.get());
+  EXPECT_EQ(budget.sharedImageMaterializations(), 1u);
+  EXPECT_EQ(family->retainedBytes(DocumentResourceFamilyBudget::Kind::ComputedFilter), 24u);
+
+  first.reset();
+  EXPECT_EQ(family->retainedBytes(DocumentResourceFamilyBudget::Kind::ComputedFilter), 24u);
+  second.reset();
+  EXPECT_EQ(budget.retainedBytes(), 0u);
+  EXPECT_EQ(family->retainedBytes(DocumentResourceFamilyBudget::Kind::ComputedFilter), 0u);
+}
+
+TEST_F(FilterSystemTest, SharedImageBudgetRejectsBeforeMaterializingPixels) {
+  auto family = std::make_shared<DocumentResourceFamilyBudget>();
+  ComputedFilterResourceBudget budget(family,
+                                      ComputedFilterResourceBudget::Limits{.maximumBytes = 3});
+  Registry registry;
+  const Entity source = registry.create();
+  const std::vector<uint8_t> pixels(4, 0xff);
+
+  EXPECT_EQ(budget.shareImage(source, pixels), nullptr);
+  EXPECT_TRUE(budget.rejected());
+  EXPECT_EQ(budget.sharedImageMaterializations(), 0u);
+  EXPECT_EQ(budget.retainedBytes(), 0u);
+  EXPECT_EQ(family->retainedBytes(DocumentResourceFamilyBudget::Kind::ComputedFilter), 0u);
 }
 
 TEST_F(FilterSystemTest, FeImageUsesLoadedSvgSubDocument) {
