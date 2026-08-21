@@ -138,6 +138,7 @@ donner_cc_fuzzer(
         "//donner/svg/renderer:text_full_enabled": ["DONNER_TEXT_FULL"],
         "//conditions:default": [],
     }),
+    tags = ["fuzz_text_full"],
     deps = [
         ":text_backend",
         "//donner/base",

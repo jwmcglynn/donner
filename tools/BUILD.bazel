@@ -160,6 +160,18 @@ py_test(
     deps = ["@rules_python//python/runfiles"],
 )
 
+py_library(
+    name = "release_artifact_publisher",
+    srcs = ["release_artifact_publisher.py"],
+)
+
+py_test(
+    name = "release_artifact_publisher_tests",
+    size = "small",
+    srcs = ["release_artifact_publisher_tests.py"],
+    deps = [":release_artifact_publisher"],
+)
+
 py_test(
     name = "coverage_lane_routing_tests",
     size = "small",

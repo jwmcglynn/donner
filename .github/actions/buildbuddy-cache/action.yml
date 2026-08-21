@@ -51,14 +51,13 @@ runs:
         # Never let the key surface in logs, even if a later step prints flags.
         echo "::add-mask::${BUILDBUDDY_API_KEY}"
 
-        # PRs are read-only against the shared cache: they may READ hits but
-        # must never WRITE, so a broken or malicious PR cannot poison the cache
-        # that main relies on. Only trusted main-push / scheduled lanes upload.
+        # Workflow policy must never pass a credential to PR-controlled code.
+        # Keep this guard as a fail-closed backstop for future call sites.
         if [[ "${EVENT_NAME}" == "pull_request" ]]; then
-          upload_local_results="false"
-        else
-          upload_local_results="true"
+          echo "BuildBuddy credentials are disabled for pull requests."
+          exit 1
         fi
+        upload_local_results="true"
 
         fragment="${GITHUB_WORKSPACE}/.buildbuddy.bazelrc"
         {

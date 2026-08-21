@@ -8,6 +8,9 @@ on:
       - "donner/svg/renderer/RendererDriver.*"
       - "donner/svg/renderer/RendererGeode.*"
 
+permissions:
+  contents: read
+
 # Superseded PR pushes cancel their in-flight sanitizer run so a rapid push
 # storm does not pile up redundant hosted sanitizer builds.
 concurrency:
@@ -32,6 +35,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       - name: Install system dependencies
         uses: ./.github/actions/apt-install
@@ -49,11 +54,6 @@ jobs:
           repository-cache: true
           external-cache: true
           cache-save: ${{ github.ref == 'refs/heads/main' }}
-
-      - name: Configure BuildBuddy remote cache
-        uses: ./.github/actions/buildbuddy-cache
-        with:
-          api-key: ${{ secrets.BUILDBUDDY_API_KEY }}
 
       - name: Test (Geode ASan) — informational, non-blocking
         shell: bash

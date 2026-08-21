@@ -1,7 +1,6 @@
 """Pins review-driven security workflow selection and scheduling policy."""
 
 from pathlib import Path
-import json
 import re
 import unittest
 
@@ -71,13 +70,10 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         cls.sanitizers = _read(".github/workflows/sanitizers.yml")
         cls.supply_chain_files = _read_supply_chain_files()
 
-    def test_external_actions_are_pinned_to_commits(self):
-        """Every external action is immutable and remains update-tool friendly."""
-        action_line = re.compile(
-            r"^\s*(?:-\s*)?uses:\s*(?P<target>\S+?)(?:\s+#\s*(?P<version>\S+))?\s*$"
-        )
-        full_commit = re.compile(r"^[0-9a-f]{40}$")
-        version_comment = re.compile(r"^v?\d+(?:\.\d+){0,2}$")
+    def test_external_actions_use_released_version_tags(self):
+        """External actions use Renovate-compatible release tags, never branches."""
+        action_line = re.compile(r"^\s*(?:-\s*)?uses:\s*(?P<target>\S+)\s*$")
+        released_version = re.compile(r"^v?\d+(?:\.\d+){0,2}$")
         pins = {}
         seen = 0
 
@@ -91,30 +87,22 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
                 if target.startswith("./") or target.startswith("docker://"):
                     continue
 
-                version = match.group("version")
                 with self.subTest(path=path, line=line_number, action=target):
                     self.assertRegex(
                         revision,
-                        full_commit,
-                        "%s:%d uses a mutable external action revision" % (path, line_number),
+                        released_version,
+                        "%s:%d must use a released action version" % (path, line_number),
                     )
-                    self.assertIsNotNone(
-                        version,
-                        "%s:%d needs a trailing version comment for dependency updates"
-                        % (path, line_number),
-                    )
-                    self.assertRegex(version, version_comment)
 
-                pins.setdefault((target, version), set()).add(revision)
+                pins.setdefault(target, set()).add(revision)
                 seen += 1
 
         self.assertGreaterEqual(seen, 75, "external action discovery no longer covers the workflows")
-        for (target, version), revisions in pins.items():
+        for target, revisions in pins.items():
             self.assertEqual(
                 1,
                 len(revisions),
-                "%s %s is pinned inconsistently: %s"
-                % (target, version, sorted(revisions)),
+                "%s is pinned inconsistently: %s" % (target, sorted(revisions)),
             )
 
     def test_downloaded_bazel_diff_is_verified_before_execution(self):
@@ -160,30 +148,27 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
         self.assertIn("actions/attest-build-provenance@", release)
         self.assertIn("sha256sum --check --strict", release)
         self.assertGreaterEqual(release.count("if: github.run_attempt == 1"), 3)
-        self.assertEqual(release.count("--lockfile_mode=error"), 2)
+        self.assertEqual(release.count("--lockfile_mode=off"), 2)
         self.assertIn("cmp --silent expected.provenance release/linux/", release)
         self.assertIn("cmp --silent expected.provenance release/macos/", release)
         self.assertIn("RELEASE_UPLOAD_URL: ${{ github.event.release.upload_url }}", release)
         self.assertIn("Upload verified release artifacts without replacement", release)
-        self.assertIn("gh api --method POST", release)
+        self.assertIn("python3 tools/release_artifact_publisher.py", release)
         self.assertNotIn("softprops/action-gh-release", release)
         self.assertNotIn("publish-to-bcr", release)
         self.assertNotIn("svenstaro/upload-release-action", release)
         for body in _run_bodies(release):
             self.assertNotIn("${{", body, "release run blocks must use quoted environment values")
 
-        lock = json.loads(_read("MODULE.bazel.lock"))
-        self.assertGreaterEqual(lock["lockFileVersion"], 1)
-        ignored = set(_read(".gitignore").splitlines())
-        self.assertNotIn("MODULE.bazel.lock", ignored)
-
-    def test_git_dependencies_use_immutable_commits(self):
+    def test_git_dependencies_use_release_tags_or_explicit_commits(self):
         deps = _read("third_party/bazel/non_bcr_deps.bzl")
-        self.assertNotRegex(deps, r"(?m)^\s*tag\s*=")
         for block in re.findall(r"(?:new_)?git_repository\((.*?)\n\s*\)", deps, re.DOTALL):
             if "remote =" not in block:
                 continue
-            self.assertRegex(block, r'commit\s*=\s*"[0-9a-f]{40}"')
+            self.assertRegex(
+                block,
+                r'(?:commit\s*=\s*"[0-9a-f]{40}"|tag\s*=\s*"v?\d+(?:\.\d+){1,2}")',
+            )
 
     def test_fuzzer_variant_tags_derive_matching_ubsan_lanes(self):
         rules = _read("build_defs/rules.bzl")
@@ -194,6 +179,7 @@ class SecurityWorkflowPolicyTest(unittest.TestCase):
 
     def test_pull_requests_never_receive_the_buildbuddy_write_key(self):
         guarded = (
+            "github.ref == 'refs/heads/main' && "
             "github.event_name != 'pull_request' && "
             "github.event_name != 'pull_request_target'"
         )

@@ -51,6 +51,12 @@ from typing import (
 # Use bzlmod-aware queries since this repository relies on MODULE.bazel.
 BAZEL_PREFIX = ["bazel"]
 
+
+def _set_bazel_startup_args(startup_args: Iterable[str]) -> None:
+    """Configure Bazel startup arguments used by generator queries."""
+    global BAZEL_PREFIX
+    BAZEL_PREFIX = ["bazel", *startup_args]
+
 # When running in --check mode, warn about unmapped deps instead of silently dropping them.
 _check_mode = False
 _unmapped_deps: List[str] = []
@@ -249,18 +255,30 @@ def extract_versions_from_module_bazel() -> Dict[str, str]:
     return versions
 
 
-# Map from MODULE.bazel dep name to (FetchContent name, git URL, use_v_prefix).
-# use_v_prefix: True for repos whose git tags have a 'v' prefix (e.g., v1.17.0),
-#               False for repos that use bare versions (e.g., 0.2.17).
-_MODULE_TO_FETCHCONTENT: Dict[str, Tuple[str, str, bool]] = {
-    "googletest": ("googletest", "https://github.com/google/googletest.git", True),
-    "nlohmann_json": ("nlohmann_json", "https://github.com/nlohmann/json.git", True),
-    "zlib": ("zlib", "https://github.com/madler/zlib.git", True),
-    "rules_cc": ("rules_cc", "https://github.com/bazelbuild/rules_cc.git", False),
+# Map from MODULE.bazel dep name to
+# (FetchContent name, git URL, expected normalized release, immutable commit).
+_MODULE_TO_FETCHCONTENT: Dict[str, Tuple[str, str, str, str]] = {
+    "googletest": (
+        "googletest", "https://github.com/google/googletest.git",
+        "v1.17.0", "52eb8108c5bdec04579160ae17225d66034bd723",
+    ),
+    "nlohmann_json": (
+        "nlohmann_json", "https://github.com/nlohmann/json.git",
+        "v3.12.0", "55f93686c01528224f448c19128836e7df245f72",
+    ),
+    "zlib": (
+        "zlib", "https://github.com/madler/zlib.git",
+        "v1.3.2", "da607da739fa6047df13e66a2af6b8bec7c2a498",
+    ),
+    "rules_cc": (
+        "rules_cc", "https://github.com/bazelbuild/rules_cc.git",
+        "0.2.22", "21e14308c2afc7691f43295acc9852d9a6844f04",
+    ),
     "pixelmatch-cpp17": (
         "pixelmatch-cpp17",
         "https://github.com/jwmcglynn/pixelmatch-cpp17.git",
-        True,
+        "v1.0.3",
+        "220b3bcf08919e8045033bc4cb1e6e6ba2a1cfa3",
     ),
 }
 
@@ -272,8 +290,14 @@ _MODULE_TO_FETCHCONTENT: Dict[str, Tuple[str, str, bool]] = {
 #   bumping entt. CMake users still FetchContent entt as before; only Bazel
 #   uses the vendored tree.
 _HARDCODED_FETCHCONTENT = {
-    "absl": ("absl", "https://github.com/abseil/abseil-cpp.git", "20250512.0"),
-    "entt": ("entt", "https://github.com/skypjack/entt.git", "v3.16.0"),
+    "absl": (
+        "absl", "https://github.com/abseil/abseil-cpp.git",
+        "bc257a88f7c1939f24e0379f14a3589e926c950c",
+    ),
+    "entt": (
+        "entt", "https://github.com/skypjack/entt.git",
+        "b4e58bdd364ad72246c123a0c28538eab3252672",
+    ),
 }
 
 
@@ -306,18 +330,28 @@ def get_fetchcontent_externals() -> List[Tuple[str, str, str]]:
     module_versions = extract_versions_from_module_bazel()
     result: List[Tuple[str, str, str]] = []
 
-    for module_name, (fc_name, git_url, use_v_prefix) in _MODULE_TO_FETCHCONTENT.items():
+    for module_name, (
+        fc_name,
+        git_url,
+        expected_release,
+        commit,
+    ) in _MODULE_TO_FETCHCONTENT.items():
         version = module_versions.get(module_name)
         if version is None:
             print(f"WARNING: Could not find version for '{module_name}' in MODULE.bazel")
             continue
 
-        tag = _normalize_version(version, use_v_prefix)
-        result.append((fc_name, git_url, tag))
+        use_v_prefix = expected_release.startswith("v")
+        normalized = _normalize_version(version, use_v_prefix)
+        if normalized != expected_release:
+            raise RuntimeError(
+                f"CMake commit pin for {module_name} must be updated with {normalized}"
+            )
+        result.append((fc_name, git_url, commit))
 
     # Add hardcoded entries
-    for fc_name, git_url, tag in _HARDCODED_FETCHCONTENT.values():
-        result.append((fc_name, git_url, tag))
+    for fc_name, git_url, revision in _HARDCODED_FETCHCONTENT.values():
+        result.append((fc_name, git_url, revision))
 
     # Sort for deterministic output
     result.sort(key=lambda x: x[0])
@@ -1053,9 +1087,9 @@ def generate_root() -> None:
 
         # External dependencies via FetchContent (versions from MODULE.bazel)
         externals = get_fetchcontent_externals()
-        for name, repo, tag in externals:
+        for name, repo, revision in externals:
             f.write(f"FetchContent_Declare(\n  {name}\n  GIT_REPOSITORY {repo}\n")
-            f.write(f"  GIT_TAG        {tag}\n)\n")
+            f.write(f"  GIT_TAG        {revision}\n)\n")
             f.write(f"FetchContent_MakeAvailable({name})\n\n")
 
         # Build / install rules for STB (header-only + impl)
@@ -1112,7 +1146,7 @@ def generate_root() -> None:
         f.write(
             "FetchContent_Declare(brotli\n"
             "  GIT_REPOSITORY https://github.com/google/brotli.git\n"
-            "  GIT_TAG        v1.2.0\n"
+            "  GIT_TAG        028fb5a23661f123017c060daa546b55cf4bde29\n"
             ")\n"
         )
         f.write("FetchContent_MakeAvailable(brotli)\n")
@@ -1826,9 +1860,17 @@ def main() -> None:
         default=None,
         help="Write generated files to this directory instead of the workspace.",
     )
+    parser.add_argument(
+        "--bazel-startup-arg",
+        action="append",
+        default=[],
+        help=("Pass a startup argument to Bazel before cquery. May be specified "
+              "more than once, for example --bazel-startup-arg=--host_jvm_args=-Xmx4g."),
+    )
     args = parser.parse_args()
     if args.build and not args.check:
         parser.error("--build requires --check")
+    _set_bazel_startup_args(args.bazel_startup_arg)
     _check_mode = args.check
 
     if args.check:

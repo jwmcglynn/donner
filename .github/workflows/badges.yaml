@@ -5,6 +5,9 @@ on:
     branches:
       - main
 
+permissions:
+  contents: read
+
 jobs:
   update-badges:
     name: Update Badges
@@ -12,11 +15,16 @@ jobs:
 
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       - name: Install cloc
+        env:
+          CLOC_SHA256: "73570f9da159fab13846038de7c3d8772554117c04117281dcbe6e5c7b988264"
         run: |
           mkdir -p "${GITHUB_WORKSPACE}/tmp"
           wget https://github.com/AlDanial/cloc/releases/download/v1.92/cloc-1.92.tar.gz -O "${GITHUB_WORKSPACE}/tmp/cloc.tar.gz"
+          echo "${CLOC_SHA256}  ${GITHUB_WORKSPACE}/tmp/cloc.tar.gz" | sha256sum --check --strict
           tar xvfz "${GITHUB_WORKSPACE}/tmp/cloc.tar.gz" -C "${GITHUB_WORKSPACE}/tmp"
           echo "${GITHUB_WORKSPACE}/tmp/cloc-1.92" >> $GITHUB_PATH
 
