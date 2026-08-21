@@ -501,6 +501,17 @@ TEST(Path, FlattenZeroToleranceFailsClosedAtSubdivisionDepthLimit) {
   EXPECT_TRUE(path.flatten(0.0).empty());
 }
 
+TEST(Path, FlattenPositiveToleranceEmitsBoundedApproximationAtSubdivisionDepthLimit) {
+  const Path path =
+      PathBuilder().moveTo({0.0, 0.0}).curveTo({0.0, 1e6}, {1e6, 1e6}, {1e6, 0.0}).build();
+
+  const Path flattened = path.flatten(1e-4);
+  EXPECT_FALSE(flattened.empty());
+  EXPECT_LE(flattened.verbCount(),
+            1u + (1u << static_cast<unsigned int>(Path::kMaximumFlattenSubdivisionDepth)));
+  EXPECT_FALSE(path.strokeToFill({.width = 1.0}, 1e-4).empty());
+}
+
 // =============================================================================
 // pointsPerVerb
 // =============================================================================
@@ -746,6 +757,14 @@ TEST(Path, PointAtArcLengthEmpty) {
   Path path;
   Path::PointOnPath result = path.pointAtArcLength(1.0);
   EXPECT_FALSE(result.valid);
+}
+
+TEST(Path, PointAtArcLengthMoveOnlyReturnsFinalMoveEndpoint) {
+  const Path path = PathBuilder().moveTo({3, 4}).moveTo({7, 8}).build();
+
+  const Path::PointOnPath result = path.pointAtArcLength(0.0);
+  EXPECT_FALSE(result.valid);
+  ExpectNear(result.point, Vector2d(7, 8));
 }
 
 TEST(Path, PointAtArcLengthNegative) {
