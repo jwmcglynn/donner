@@ -69,6 +69,22 @@ constexpr std::string_view kTransformedAncestorSvg =
       </g>
     </svg>)svg";
 
+constexpr std::string_view kSmallScaleAncestorSvg =
+    R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+      <g transform="scale(0.00001)">
+        <rect id="target" x="1000000" y="1000000" width="2000000" height="1000000"
+              fill="red"/>
+      </g>
+    </svg>)svg";
+
+constexpr std::string_view kSingularExtraAncestorSvg =
+    R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="120" height="120">
+      <rect id="primary" x="10" y="10" width="20" height="20" fill="red"/>
+      <g transform="scale(0)">
+        <rect id="singular" x="1000000" y="1000000" width="20" height="20" fill="blue"/>
+      </g>
+    </svg>)svg";
+
 constexpr std::string_view kDifferentlyTransformedParentsSvg =
     R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="500" height="300">
       <g transform="rotate(10) translate(40, 20)">
@@ -999,6 +1015,24 @@ TEST_F(SelectToolTest, DragInsideTransformedAncestorTranslatesInDocumentSpace) {
   EXPECT_THAT(after.bottomRight - before.bottomRight, Vector2NearExact(48.0, 24.0));
 }
 
+TEST_F(SelectToolTest, DragInsideSmallScaleAncestorTranslatesInDocumentSpace) {
+  loadSvg(kSmallScaleAncestorSvg);
+  app.setSelection(elementById("#target"));
+
+  const Box2d before = worldBoundsOf("#target");
+  const Vector2d start = (before.topLeft + before.bottomRight) * 0.5;
+  const Vector2d dragDeltaDoc(10.0, 5.0);
+
+  tool.onMouseDown(app, start, MouseModifiers{});
+  tool.onMouseMove(app, start + dragDeltaDoc, /*buttonHeld=*/true);
+  ASSERT_THAT(app.flushFrame(), testing::IsTrue())
+      << "An invertible small-scale parent must not discard the drag mutation";
+
+  const Box2d after = worldBoundsOf("#target");
+  EXPECT_THAT(after.topLeft - before.topLeft, Vector2NearExact(10.0, 5.0));
+  EXPECT_THAT(after.bottomRight - before.bottomRight, Vector2NearExact(10.0, 5.0));
+}
+
 TEST_F(SelectToolTest, MultiSelectDragUsesEachParticipantsTransformedParent) {
   loadSvg(kDifferentlyTransformedParentsSvg);
   app.setSelection(std::vector<svg::SVGElement>{elementById("#first"), elementById("#second")});
@@ -1025,6 +1059,34 @@ TEST_F(SelectToolTest, MultiSelectDragUsesEachParticipantsTransformedParent) {
               Vector2NearExact(35.0, 18.0));
   EXPECT_THAT(worldBoundsOf("#second").topLeft - secondBoundsBefore.topLeft,
               Vector2NearExact(35.0, 18.0));
+}
+
+TEST_F(SelectToolTest, SingularExtraLeavesMultiSelectDomAndPreviewAtPriorTransform) {
+  loadSvg(kSingularExtraAncestorSvg);
+  app.setSelection(std::vector<svg::SVGElement>{elementById("#primary"), elementById("#singular")});
+
+  const Transform2d primaryBefore = transformOf("#primary");
+  const Transform2d singularBefore = transformOf("#singular");
+  const Vector2d start(20.0, 20.0);
+
+  tool.onMouseDown(app, start, MouseModifiers{});
+  ASSERT_THAT(tool.isDragging(), testing::IsTrue());
+  const std::optional<SelectTool::ActiveDragPreview> activeBefore = tool.activeDragPreview();
+  const std::optional<SelectTool::ActiveDragPreview> committedBefore =
+      tool.documentDragPreview(app);
+  ASSERT_THAT(activeBefore, testing::Optional(testing::_));
+  ASSERT_THAT(committedBefore, testing::Optional(testing::_));
+
+  tool.onMouseMove(app, start + Vector2d(10.0, 5.0), /*buttonHeld=*/true);
+
+  EXPECT_THAT(app.document().hasPendingMutations(), testing::IsFalse());
+  EXPECT_THAT(transformOf("#primary"), TransformEq(primaryBefore));
+  EXPECT_THAT(transformOf("#singular"), TransformEq(singularBefore));
+  EXPECT_THAT(tool.activeDragPreview()->translation, Vector2NearExact(0.0, 0.0));
+  EXPECT_THAT(tool.activeDragPreview()->documentFromCachedDocument, TransformEq(Transform2d()));
+  EXPECT_THAT(tool.documentDragPreview(app)->translation, Vector2NearExact(0.0, 0.0));
+  EXPECT_THAT(tool.documentDragPreview(app)->documentFromCachedDocument,
+              TransformEq(Transform2d()));
 }
 
 TEST_F(SelectToolTest, MultiSelectDragPreservesExtraElementTransforms) {
