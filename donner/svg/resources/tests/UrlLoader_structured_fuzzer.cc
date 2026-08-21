@@ -20,11 +20,15 @@ public:
 
   std::variant<std::vector<uint8_t>, ResourceLoaderError> fetchExternalResource(
       std::string_view /*url*/) override {
+    ++fetchCount_;
     return payload_;
   }
 
+  size_t fetchCount() const { return fetchCount_; }
+
 private:
   std::vector<uint8_t> payload_;
+  size_t fetchCount_ = 0;
 };
 
 std::string PercentEncode(std::span<const uint8_t> data) {
@@ -42,6 +46,8 @@ std::string PercentEncode(std::span<const uint8_t> data) {
 }  // namespace
 
 extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
+  const std::string_view input(reinterpret_cast<const char*>(data), size);  // NOLINT
+  const bool forceExternalUriLimit = input.starts_with("external-uri-representation-budget");
   FuzzedDataProvider provider(data, size);
   const size_t maximumResourceSize = provider.ConsumeIntegralInRange<size_t>(0, 128);
   size_t remainingResourceBytes = provider.ConsumeIntegralInRange<size_t>(0, 256);
@@ -53,6 +59,15 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
   UrlLoader urlLoader(resourceLoader, maximumResourceSize, &remainingResourceBytes);
   const std::string externalUrl = "asset/" + provider.ConsumeRandomLengthString(32);
   const std::string dataUrl = PercentEncode(payload);
+
+  if (forceExternalUriLimit) {
+    const auto result = urlLoader.fromUri(std::string(UrlLoader::kMaximumExternalUriSize + 1, 'a'));
+    if (!std::holds_alternative<UrlLoaderError>(result) ||
+        std::get<UrlLoaderError>(result) != UrlLoaderError::ResourceTooLarge ||
+        resourceLoader.fetchCount() != 0) {
+      std::abort();
+    }
+  }
 
   for (std::string_view uri :
        {std::string_view(externalUrl), std::string_view(dataUrl), std::string_view(externalUrl)}) {

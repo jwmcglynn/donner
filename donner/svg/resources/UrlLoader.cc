@@ -63,6 +63,11 @@ std::string MimeTypeFromUrl(std::string_view url) {
 
 }  // namespace
 
+std::optional<UrlLoaderError> UrlLoader::validateExternalUriRepresentation(std::string_view uri) {
+  (void)uri;
+  return std::nullopt;
+}
+
 bool UrlLoader::consumeResourceBytes(size_t size) {
   if (size > maximumResourceSize_ ||
       (remainingResourceBytes_ != nullptr && size > *remainingResourceBytes_)) {

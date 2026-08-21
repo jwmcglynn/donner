@@ -150,6 +150,29 @@ TEST(UrlLoader, LoaderReportedOverageLatchesAggregateBudget) {
   EXPECT_EQ(remainingResourceBytes, 0u);
 }
 
+TEST(UrlLoader, ExhaustedAggregateBudgetDoesNotFetchExternalResource) {
+  InProcResourceLoader loader;
+  size_t remainingResourceBytes = 0;
+  UrlLoader urlLoader(loader, UrlLoader::kDefaultMaximumResourceSize, &remainingResourceBytes);
+
+  EXPECT_THAT(urlLoader.fromUri("test.txt"),
+              VariantWith<UrlLoaderError>(UrlLoaderError::ResourceTooLarge));
+  EXPECT_EQ(loader.fetchCount(), 0u);
+}
+TEST(UrlLoader, RejectsOversizedOrInvalidExternalUriBeforeCallback) {
+  InProcResourceLoader loader;
+  UrlLoader urlLoader(loader);
+
+  EXPECT_THAT(urlLoader.fromUri(std::string(UrlLoader::kMaximumExternalUriSize + 1, 'a')),
+              VariantWith<UrlLoaderError>(UrlLoaderError::ResourceTooLarge));
+  constexpr char kInvalidUtf8[] = "invalid-\xED\xA0\x80.png";
+  EXPECT_THAT(urlLoader.fromUri(std::string_view(kInvalidUtf8, sizeof(kInvalidUtf8) - 1)),
+              VariantWith<UrlLoaderError>(UrlLoaderError::InvalidDataUrl));
+  constexpr char kEmbeddedNull[] = "prefix\0suffix.png";
+  EXPECT_THAT(urlLoader.fromUri(std::string_view(kEmbeddedNull, sizeof(kEmbeddedNull) - 1)),
+              VariantWith<UrlLoaderError>(UrlLoaderError::InvalidDataUrl));
+  EXPECT_EQ(loader.fetchCount(), 0u);
+}
 /// @test that a valid URL-encoded data URL with an explicit MIME type is decoded.
 TEST(UrlLoader, FetchDataUrlUrlEncodedWithMime) {
   InProcResourceLoader loader;

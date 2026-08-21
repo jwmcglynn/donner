@@ -11,6 +11,14 @@
 
 namespace donner::svg {
 
+struct SandboxedFileResourceLoader::RootDirectoryHandle {};
+
+SandboxedFileResourceLoader::~SandboxedFileResourceLoader() = default;
+
+bool SandboxedFileResourceLoader::hasValidRootHandle() const {
+  return false;
+}
+
 namespace {
 
 bool IsPathUnderRoot(const std::filesystem::path& root, const std::filesystem::path& path) {

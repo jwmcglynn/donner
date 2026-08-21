@@ -116,8 +116,11 @@ SubDocumentCache::ParseCallback GuardSvgParseCallback(
 }  // namespace
 
 ResourceManagerContext::ResourceManagerContext(Registry& registry,
-                                               size_t maximumAggregateResourceSize)
-    : registry_(registry), remainingResourceBytes_(maximumAggregateResourceSize) {}
+                                               size_t maximumAggregateResourceSize,
+                                               size_t maximumExternalFetchAttempts)
+    : registry_(registry),
+      remainingResourceBytes_(maximumAggregateResourceSize),
+      remainingResourceFetchAttempts_(maximumExternalFetchAttempts) {}
 
 void ResourceManagerContext::setResourceLoader(std::unique_ptr<ResourceLoaderInterface>&& loader) {
   failedImageUrls_.clear();
@@ -301,7 +304,8 @@ void ResourceManagerContext::loadResources(ParseWarningSink& warningSink) {
 }
 
 std::optional<SVGDocumentHandle> ResourceManagerContext::loadExternalSVG(
-    const RcString& url, ParseWarningSink& warningSink) {
+    std::string_view url, ParseWarningSink& warningSink) {
+  const RcString boundedUrl(url);
   // In secure modes, external resource loading is disabled.
   if (processingMode_ == ProcessingMode::SecureStatic ||
       processingMode_ == ProcessingMode::SecureAnimated) {
@@ -329,10 +333,10 @@ std::optional<SVGDocumentHandle> ResourceManagerContext::loadExternalSVG(
   auto& cache = registry_.ctx().get<SubDocumentCache>();
 
   // Check if already cached.
-  if (auto cached = cache.get(url)) {
+  if (auto cached = cache.get(boundedUrl)) {
     return cached;
   }
-  if (cache.isRejected(url)) {
+  if (cache.isRejected(boundedUrl)) {
     return std::nullopt;
   }
 
@@ -349,14 +353,14 @@ std::optional<SVGDocumentHandle> ResourceManagerContext::loadExternalSVG(
     err.reason = std::string("Failed to load external SVG '") + std::string(url) +
                  "': " + std::string(ToString(loaderError));
     warningSink.add(std::move(err));
-    cache.rememberFailure(url);
+    cache.rememberFailure(boundedUrl);
     return std::nullopt;
   }
 
   auto& data = std::get<UrlLoader::Result>(fetchResult).data;
   SubDocumentCache::ParseCallback guardedParseCallback =
       GuardSvgParseCallback(registry_, svgParseCallback_, remainingResourceBytes_);
-  return cache.getOrParse(url, data, guardedParseCallback, warningSink);
+  return cache.getOrParse(boundedUrl, data, guardedParseCallback, warningSink);
 }
 
 void ResourceManagerContext::addFontFaces(std::span<const css::FontFace> fontFaces) {
