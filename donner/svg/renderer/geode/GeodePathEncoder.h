@@ -3,6 +3,7 @@
 /// CPU-side Slug band decomposition: converts a Path into GPU-ready band data.
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <span>
 #include <vector>
@@ -31,6 +32,8 @@ namespace donner::geode {
  *   triangulates and dilates it from `vertex_index`, so no resident vertex buffer is required.
  */
 struct EncodedPath {
+  enum class Outcome { Empty, Ready, Rejected };
+
   /// A quadratic Bézier curve segment (3 control points) stored as floats for GPU consumption.
   struct Curve {
     float p0x, p0y;  ///< Start point.
@@ -113,6 +116,7 @@ struct EncodedPath {
   uint32_t vBandCount = 0;          ///< Number of vertical band cells.
 
   EncodingStats stats;  ///< Encode diagnostics; does not affect rendering.
+  Outcome outcome = Outcome::Empty;
 
   /// Triangle-list vertex count emitted by the vertex shader for the bounding fan.
   uint32_t boundingDrawVertexCount() const {
@@ -125,6 +129,7 @@ struct EncodedPath {
 
   /// Returns true if the encoded path has no bands (empty or degenerate path).
   bool empty() const { return bands.empty(); }
+  bool rejected() const { return outcome == Outcome::Rejected; }
 };
 
 /**
@@ -141,6 +146,10 @@ struct EncodedPath {
  */
 class GeodePathEncoder {
 public:
+  struct Limits {
+    std::size_t maximumConvertedCommands = 1u << 20;
+  };
+
   /**
    * Encode a path for GPU rendering.
    *
@@ -150,6 +159,12 @@ public:
    * @return Encoded path data ready for GPU upload, or empty if the path is degenerate.
    */
   static EncodedPath encode(const Path& path, FillRule fillRule, double tolerance = 0.1);
+
+  /// Resource-limited encode overload. The following implementation commit enforces `limits`.
+  static EncodedPath encode(const Path& path, FillRule fillRule, double tolerance, Limits limits) {
+    (void)limits;
+    return encode(path, fillRule, tolerance);
+  }
 };
 
 }  // namespace donner::geode
