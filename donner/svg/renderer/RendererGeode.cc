@@ -2602,11 +2602,11 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
     return static_cast<bool>(slot.recordSlot.buffer);
   }
 
-  /// Glyph-residency budget, in distinct cached outlines and in summed encode
-  /// bytes. Defaults come from `GeodeGlyphCache`; a test shrinks them to reach
+  /// Glyph-residency budget, in distinct cached outlines and summed retained
+  /// outline plus encode bytes. Defaults come from `GeodeGlyphCache`; a test shrinks them to reach
   /// eviction without building a font-sized working set.
   size_t glyphCacheMaxEntries = geode::GeodeGlyphCache::kDefaultMaxEntries;
-  uint64_t glyphCacheMaxEncodedBytes = geode::GeodeGlyphCache::kDefaultMaxEncodedBytes;
+  uint64_t glyphCacheMaxRetainedBytes = geode::GeodeGlyphCache::kDefaultMaxRetainedBytes;
 
   /// Non-cached glyphs needed after the document cache reaches its admission cap. The deque keeps
   /// entry addresses stable for the frame's pending scene batches; beginFrame clears it only after
@@ -2635,7 +2635,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
     // covers the multi-document tile paths that never reach `draw()`.
     device->countGlyphResidencyEvictions(
         cache->beginFrame(currentFrameIndex, device->oldestOpenFrameGeneration(),
-                          glyphCacheMaxEntries, glyphCacheMaxEncodedBytes));
+                          glyphCacheMaxEntries, glyphCacheMaxRetainedBytes));
     return cache;
   }
 
@@ -2743,7 +2743,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
       if (cacheAdmissionAvailable && cache->size() >= glyphCacheMaxEntries) {
         const size_t evicted =
             cache->evictToBudget(device->oldestOpenFrameGeneration(), glyphCacheMaxEntries - 1u,
-                                 glyphCacheMaxEncodedBytes);
+                                 glyphCacheMaxRetainedBytes);
         device->countGlyphResidencyEvictions(evicted);
         if (cache->size() >= glyphCacheMaxEntries) {
           cacheAdmissionAvailable = false;
@@ -2756,9 +2756,16 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
         encoded = geode::GeodePathEncoder::encode(outline, FillRule::NonZero);
       }
       if (cacheAdmissionAvailable) {
-        entry = cache->insert(key, std::move(outline), std::move(encoded));
-        device->countGlyphResidencyUpload();
-      } else {
+        size_t evicted = 0;
+        entry = cache->insertWithinBudget(key, std::move(outline), std::move(encoded),
+                                          device->oldestOpenFrameGeneration(), glyphCacheMaxEntries,
+                                          glyphCacheMaxRetainedBytes, &evicted);
+        device->countGlyphResidencyEvictions(evicted);
+        if (entry != nullptr) {
+          device->countGlyphResidencyUpload();
+        }
+      }
+      if (entry == nullptr) {
         transientGlyphEntries.emplace_back();
         entry = &transientGlyphEntries.back();
         entry->outline = std::move(outline);
@@ -4277,9 +4284,10 @@ bool RendererGeode::sceneBatchingEnabledForTesting() {
   return kEnableSceneBatching;
 }
 
-void RendererGeode::setGlyphResidencyBudgetForTesting(size_t maxEntries, uint64_t maxEncodedBytes) {
+void RendererGeode::setGlyphResidencyBudgetForTesting(size_t maxEntries,
+                                                      uint64_t maxRetainedBytes) {
   impl_->glyphCacheMaxEntries = maxEntries;
-  impl_->glyphCacheMaxEncodedBytes = maxEncodedBytes;
+  impl_->glyphCacheMaxRetainedBytes = maxRetainedBytes;
 }
 
 size_t RendererGeode::residentGlyphCountForTesting(SVGDocument& document) {

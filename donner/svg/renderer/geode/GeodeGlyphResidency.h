@@ -22,7 +22,9 @@
 #include <cstdint>
 #include <cstring>
 #include <deque>
+#include <limits>
 #include <memory>
+#include <optional>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -144,6 +146,8 @@ struct GeodeGlyphResidentEntry {
   /// Approximate CPU footprint of the encode, used as the residence budget's
   /// unit. Slab capacity is not usable here: the slab reports whole chunks.
   uint64_t encodedBytes = 0;
+  /// Total retained CPU bytes for the outline and encode.
+  uint64_t retainedBytes = 0;
 };
 
 /**
@@ -185,6 +189,16 @@ public:
   /// The returned address is stable for the entry's lifetime.
   GeodeGlyphResidentEntry* insert(const GlyphGeometryKey& key, Path&& outline,
                                   EncodedPath&& encoded) {
+    const std::optional<uint64_t> entryBytes = EntryRetainedBytes(outline, encoded);
+    if (!entryBytes.has_value() ||
+        *entryBytes > std::numeric_limits<uint64_t>::max() - retainedBytes_) {
+      return nullptr;
+    }
+    const std::optional<uint64_t> encodedBytes = EncodedBytes(encoded);
+    if (!encodedBytes.has_value() ||
+        *encodedBytes > std::numeric_limits<uint64_t>::max() - encodedBytes_) {
+      return nullptr;
+    }
     // try_emplace, not emplace: emplace constructs the node before it checks
     // for a duplicate key and destroys it on collision, which would hand the
     // caller a pointer into freed storage and leave the byte total crediting an
@@ -197,8 +211,10 @@ public:
     GeodeGlyphResidentEntry* entry = it->second.get();
     entry->outline = std::move(outline);
     entry->encoded = std::move(encoded);
-    entry->encodedBytes = EncodedBytes(entry->encoded);
+    entry->encodedBytes = *encodedBytes;
+    entry->retainedBytes = *entryBytes;
     encodedBytes_ += entry->encodedBytes;
+    retainedBytes_ += entry->retainedBytes;
     return entry;
   }
 
@@ -206,10 +222,23 @@ public:
   /// miss path; the implementation is tightened in the following security fix.
   GeodeGlyphResidentEntry* insertWithinBudget(const GlyphGeometryKey& key, Path&& outline,
                                               EncodedPath&& encoded, uint64_t oldestOpenFrame,
-                                              size_t maxEntries, uint64_t maxRetainedBytes) {
-    (void)oldestOpenFrame;
-    (void)maxEntries;
-    (void)maxRetainedBytes;
+                                              size_t maxEntries, uint64_t maxRetainedBytes,
+                                              size_t* evictedOut = nullptr) {
+    if (GeodeGlyphResidentEntry* existing = find(key)) {
+      return existing;
+    }
+    const std::optional<uint64_t> entryBytes = EntryRetainedBytes(outline, encoded);
+    if (maxEntries == 0u || !entryBytes.has_value() || *entryBytes > maxRetainedBytes) {
+      return nullptr;
+    }
+    const size_t evicted =
+        evictToBudget(oldestOpenFrame, maxEntries - 1u, maxRetainedBytes - *entryBytes);
+    if (evictedOut != nullptr) {
+      *evictedOut += evicted;
+    }
+    if (entries_.size() >= maxEntries || retainedBytes_ > maxRetainedBytes - *entryBytes) {
+      return nullptr;
+    }
     return insert(key, std::move(outline), std::move(encoded));
   }
 
@@ -220,19 +249,19 @@ public:
   uint64_t encodedBytes() const { return encodedBytes_; }
 
   /// Total CPU bytes retained by cached outlines and encodes.
-  uint64_t retainedBytes() const { return encodedBytes_; }
+  uint64_t retainedBytes() const { return retainedBytes_; }
 
   /// Trim to budget at most once per frame. The frame-index guard makes the
   /// call idempotent no matter how many times a frame touches the cache, so
   /// the caller can put it on the accessor and cover every draw entry point.
   /// Returns the number of entries dropped.
   size_t beginFrame(uint64_t frameIndex, uint64_t oldestOpenFrame, size_t maxEntries,
-                    uint64_t maxEncodedBytes) {
+                    uint64_t maxRetainedBytes) {
     if (frameIndex == lastEvictedFrame_) {
       return 0;
     }
     lastEvictedFrame_ = frameIndex;
-    return evictToBudget(oldestOpenFrame, maxEntries, maxEncodedBytes);
+    return evictToBudget(oldestOpenFrame, maxEntries, maxRetainedBytes);
   }
 
   /// Drop entries until the cache fits the budget, oldest-unused first.
@@ -243,8 +272,8 @@ public:
   /// later allocation to overwrite. `oldestOpenFrame` is device-scoped, so an
   /// offscreen pass nested inside an outer frame cannot free the outer frame's
   /// geometry out from under it. Returns the number of entries dropped.
-  size_t evictToBudget(uint64_t oldestOpenFrame, size_t maxEntries, uint64_t maxEncodedBytes) {
-    if (entries_.size() <= maxEntries && encodedBytes_ <= maxEncodedBytes) {
+  size_t evictToBudget(uint64_t oldestOpenFrame, size_t maxEntries, uint64_t maxRetainedBytes) {
+    if (entries_.size() <= maxEntries && retainedBytes_ <= maxRetainedBytes) {
       return 0;
     }
 
@@ -264,7 +293,7 @@ public:
 
     size_t evicted = 0;
     for (const auto& [unusedFrame, keyPtr] : candidates) {
-      if (entries_.size() <= maxEntries && encodedBytes_ <= maxEncodedBytes) {
+      if (entries_.size() <= maxEntries && retainedBytes_ <= maxRetainedBytes) {
         break;
       }
       auto it = entries_.find(*keyPtr);
@@ -272,6 +301,7 @@ public:
         continue;
       }
       encodedBytes_ -= it->second->encodedBytes;
+      retainedBytes_ -= it->second->retainedBytes;
       entries_.erase(it);
       ++evicted;
     }
@@ -282,30 +312,51 @@ public:
   /// in one font needs a few hundred; the cap bounds a document that animates
   /// font-size continuously, where every frame mints new keys.
   static constexpr size_t kDefaultMaxEntries = 1024u;
-  /// Default cap on summed encode bytes.
-  static constexpr uint64_t kDefaultMaxEncodedBytes = 8u << 20;
+  /// Default cap on summed retained outline and encode bytes.
+  static constexpr uint64_t kDefaultMaxRetainedBytes = 8u << 20;
 
 private:
-  /// CPU size of an encode. Used as the budget unit because it tracks the GPU
-  /// residence byte-for-byte (the resident slot uploads exactly these arrays).
-  ///
-  /// The entry's retained `Path outline` is NOT counted: it is CPU-only, it is
-  /// small next to the banded encode, and the entry-count cap already bounds
-  /// how many of them can be live. Add it here if the outline ever grows a
-  /// representation where that stops being true.
-  static uint64_t EncodedBytes(const EncodedPath& encoded) {
-    return encoded.bands.size() * sizeof(EncodedPath::Band) +
-           encoded.curves.size() * 6u * sizeof(float) +
-           encoded.curveIndices.size() * sizeof(uint32_t) +
-           encoded.vBands.size() * sizeof(EncodedPath::Band) +
-           encoded.vCurves.size() * 6u * sizeof(float) +
-           encoded.vCurveIndices.size() * sizeof(uint32_t) +
-           encoded.hBandGrid.size() * sizeof(uint32_t) +
-           encoded.vBandGrid.size() * sizeof(uint32_t);
+  template <typename T>
+  static bool AddCapacityBytes(uint64_t& total, const std::vector<T>& values) {
+    if (values.capacity() > std::numeric_limits<uint64_t>::max() / sizeof(T)) {
+      return false;
+    }
+    const uint64_t bytes = static_cast<uint64_t>(values.capacity()) * sizeof(T);
+    if (bytes > std::numeric_limits<uint64_t>::max() - total) {
+      return false;
+    }
+    total += bytes;
+    return true;
+  }
+
+  /// CPU vector capacities retained by one encoded path.
+  static std::optional<uint64_t> EncodedBytes(const EncodedPath& encoded) {
+    uint64_t total = 0;
+    if (!AddCapacityBytes(total, encoded.bands) || !AddCapacityBytes(total, encoded.curves) ||
+        !AddCapacityBytes(total, encoded.curveIndices) ||
+        !AddCapacityBytes(total, encoded.vBands) || !AddCapacityBytes(total, encoded.vCurves) ||
+        !AddCapacityBytes(total, encoded.vCurveIndices) ||
+        !AddCapacityBytes(total, encoded.hBandGrid) ||
+        !AddCapacityBytes(total, encoded.vBandGrid)) {
+      return std::nullopt;
+    }
+    return total;
+  }
+
+  static std::optional<uint64_t> EntryRetainedBytes(const Path& outline,
+                                                    const EncodedPath& encoded) {
+    const std::optional<std::size_t> outlineBytes = outline.retainedBytes();
+    const std::optional<uint64_t> encodedBytes = EncodedBytes(encoded);
+    if (!outlineBytes.has_value() || !encodedBytes.has_value() ||
+        *outlineBytes > std::numeric_limits<uint64_t>::max() - *encodedBytes) {
+      return std::nullopt;
+    }
+    return static_cast<uint64_t>(*outlineBytes) + *encodedBytes;
   }
 
   uint64_t owningDeviceId_ = 0;
   uint64_t encodedBytes_ = 0;
+  uint64_t retainedBytes_ = 0;
   /// Frame index of the last trim; `~0` = never trimmed. See beginFrame().
   uint64_t lastEvictedFrame_ = ~uint64_t{0};
   std::unordered_map<GlyphGeometryKey, std::unique_ptr<GeodeGlyphResidentEntry>,

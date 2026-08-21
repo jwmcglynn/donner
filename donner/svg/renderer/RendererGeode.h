@@ -414,9 +414,9 @@ public:
    * building a font-sized working set.
    *
    * @param maxEntries Distinct cached glyph outlines to keep.
-   * @param maxEncodedBytes Summed encode bytes to keep.
+   * @param maxRetainedBytes Summed outline and encode bytes to keep.
    */
-  void setGlyphResidencyBudgetForTesting(size_t maxEntries, uint64_t maxEncodedBytes);
+  void setGlyphResidencyBudgetForTesting(size_t maxEntries, uint64_t maxRetainedBytes);
 
   /// Number of glyph outlines currently resident for `document`.
   [[nodiscard]] size_t residentGlyphCountForTesting(SVGDocument& document);
