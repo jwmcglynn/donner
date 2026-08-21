@@ -1,3 +1,5 @@
+#include <cstdlib>
+
 #include "donner/base/fonts/Woff2Parser.h"
 
 namespace donner::fonts {
@@ -28,15 +30,27 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
     (void)result;
   }
 
-  Woff2Parser::Options options;
-  options.maximumInputSize = size / 2;
-  options.maximumOutputSize = size;
-  auto limitedResult = Woff2Parser::Decompress(std::span<const uint8_t>(data, size), options);
-  if (size > options.maximumInputSize && limitedResult.hasResult()) {
-    std::abort();
+  {
+    Woff2Parser::Options options;
+    options.maximumInputSize = size / 2;
+    options.maximumOutputSize = size;
+    auto limitedResult = Woff2Parser::Decompress(input, options);
+    if (size > options.maximumInputSize && limitedResult.hasResult()) {
+      std::abort();
+    }
+    if (limitedResult.hasResult() && limitedResult.result().size() > options.maximumOutputSize) {
+      std::abort();
+    }
   }
-  if (limitedResult.hasResult() && limitedResult.result().size() > options.maximumOutputSize) {
-    std::abort();
+
+  {
+    Woff2Parser::Options options;
+    options.maximumInputSize = size;
+    options.maximumOutputSize = size / 2;
+    auto limitedResult = Woff2Parser::Decompress(input, options);
+    if (limitedResult.hasResult() && limitedResult.result().size() > options.maximumOutputSize) {
+      std::abort();
+    }
   }
 
   return 0;

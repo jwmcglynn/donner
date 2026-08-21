@@ -32,6 +32,25 @@ TEST(XMLParserLimits, RejectsInputLargerThanLimit) {
   EXPECT_THAT(std::string_view(result.error().reason), testing::HasSubstr("maximum input size"));
 }
 
+TEST(XMLParserLimits, RejectsNumericEntitiesOutsideXmlCharacterSet) {
+  for (const std::string_view entity :
+       {"&#0;", "&#1;", "&#11;", "&#31;", "&#xFFFE;", "&#xFFFF;", "&#x110000;"}) {
+    SCOPED_TRACE(entity);
+    const auto result = XMLParser::Parse("<svg href='.." + std::string(entity) + "ignored'/>");
+    ASSERT_TRUE(result.hasError());
+    EXPECT_THAT(result.error().reason.str(), testing::HasSubstr("Invalid numeric character"));
+  }
+  EXPECT_TRUE(XMLParser::Parse("<svg value='&#x100000000;'/>").hasError());
+}
+
+TEST(XMLParserLimits, AcceptsNumericEntitiesWithinXmlCharacterSet) {
+  for (const std::string_view entity : {"&#9;", "&#10;", "&#13;", "&#32;", "&#xD7FF;", "&#xE000;",
+                                        "&#xFFFD;", "&#x10000;", "&#x10FFFF;"}) {
+    SCOPED_TRACE(entity);
+    EXPECT_TRUE(XMLParser::Parse("<svg value='" + std::string(entity) + "'/>").hasResult());
+  }
+}
+
 auto MutationKindIs(XMLMutation::Kind kind) {
   return Field("kind", &XMLMutation::kind, kind);
 }
@@ -2679,6 +2698,15 @@ TEST_F(XMLParserTests, MaxElementsLimitAppliesToNonElementNodes) {
               ParseErrorIs("Maximum element count exceeded"));
 }
 
+TEST_F(XMLParserTests, MaxElementsLimitAppliesToDataSplitByIgnoredComments) {
+  XMLParser::Options options;
+  options.parseComments = false;
+  options.maxElements = 4;
+
+  EXPECT_THAT(XMLParser::Parse("<svg>x<!---->x<!---->x<!---->x</svg>", options),
+              ParseErrorIs("Maximum element count exceeded"));
+}
+
 TEST_F(XMLParserTests, MaxElementsLimitAllowsRealisticDocuments) {
   // The default cap (100k) is far above any realistic SVG; this test
   // documents that a 50-element input parses cleanly without bumping caps.
@@ -2715,6 +2743,34 @@ TEST_F(XMLParserTests, MaxAttributesCapIsPerElement) {
   )",
                                  options);
   EXPECT_TRUE(result.hasResult()) << result.error();
+}
+
+TEST_F(XMLParserTests, MaxTotalAttributesLimitExceeded) {
+  XMLParser::Options options;
+  options.maxAttributesPerElement = 4;
+  options.maxTotalAttributes = 3;
+
+  EXPECT_THAT(XMLParser::Parse(R"(<root><a x="1" y="2"/><b x="1" y="2"/></root>)", options),
+              ParseErrorIs("Maximum total attribute count exceeded"));
+}
+
+TEST_F(XMLParserTests, MaxEntityDeclarationCountExceeded) {
+  XMLParser::Options options = XMLParser::Options::ParseAll();
+  options.maxEntityDeclarations = 2;
+
+  EXPECT_THAT(XMLParser::Parse(R"(<!DOCTYPE root [
+    <!ENTITY a "a"><!ENTITY b "b"><!ENTITY c "c">
+  ]><root/>)",
+                               options),
+              ParseErrorIs("Maximum entity declaration budget exceeded"));
+}
+
+TEST_F(XMLParserTests, MaxEntityDeclarationBytesExceeded) {
+  XMLParser::Options options = XMLParser::Options::ParseAll();
+  options.maxEntityDeclarationBytes = 5;
+
+  EXPECT_THAT(XMLParser::Parse(R"(<!DOCTYPE root [<!ENTITY name "value">]><root/>)", options),
+              ParseErrorIs("Maximum entity declaration budget exceeded"));
 }
 
 TEST_F(XMLParserTests, MaxNestingDepthLimitExceeded) {

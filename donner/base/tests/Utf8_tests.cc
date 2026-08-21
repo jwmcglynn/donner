@@ -133,6 +133,18 @@ TEST(Utf8Test, NextCodepointRejectsEmptyAndTruncatedSequences) {
   }
 }
 
+TEST(Utf8Test, ValidatesCompleteStrings) {
+  EXPECT_TRUE(Utf8::IsValidString(""));
+  EXPECT_TRUE(Utf8::IsValidString("plain/ascii"));
+  EXPECT_TRUE(Utf8::IsValidString("caf\xC3\xA9/\xEF\xBF\xBD"));
+
+  EXPECT_FALSE(Utf8::IsValidString("\x80"));
+  EXPECT_FALSE(Utf8::IsValidString("\xC3"));
+  EXPECT_FALSE(Utf8::IsValidString("\xC0\xAF"));
+  EXPECT_FALSE(Utf8::IsValidString("\xED\xA0\x80"));
+  EXPECT_FALSE(Utf8::IsValidString("\xF4\x90\x80\x80"));
+}
+
 TEST(Utf8Test, NextCodepointLenient) {
   struct TestCase {
     std::string_view input;

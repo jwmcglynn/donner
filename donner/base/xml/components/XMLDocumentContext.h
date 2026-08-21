@@ -1,6 +1,8 @@
 #pragma once
 /// @file
 
+#include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <optional>
 
@@ -38,6 +40,11 @@ private:
   struct InternalCtorTag {};
 
 public:
+  /// Bounded incremental-edit defaults, kept in sync with XMLParser::Options.
+  static constexpr std::uint64_t kDefaultMaximumSourceEditTreeNodes = 8'192;
+  static constexpr int kDefaultMaximumSourceEditTreeDepth = 256;
+  static constexpr std::uint64_t kDefaultMaximumSourceEditTotalAttributes = 100'000;
+
   /**
    * Internal constructor, creates a context on the given \ref XMLDocument.
    *
@@ -58,6 +65,15 @@ public:
 
   /// Current source diagnostic for a dirty structured-editing region, if any.
   std::optional<ParseDiagnostic> sourceDiagnostic;
+
+  /// Maximum live non-document XML nodes admitted by one incremental source edit.
+  std::uint64_t maximumSourceEditTreeNodes = kDefaultMaximumSourceEditTreeNodes;
+
+  /// Maximum attached element depth admitted by one incremental source edit.
+  int maximumSourceEditTreeDepth = kDefaultMaximumSourceEditTreeDepth;
+
+  /// Maximum live attributes admitted by one incremental source edit.
+  std::uint64_t maximumSourceEditTotalAttributes = kDefaultMaximumSourceEditTotalAttributes;
 };
 
 }  // namespace donner::xml::components

@@ -53,6 +53,22 @@ TEST(XMLSourceStore, BoundaryInsertionHonorsAnchorBias) {
   EXPECT_EQ(store.resolveAnchor(*after), std::optional<std::size_t>(4));
 }
 
+TEST(XMLSourceStore, ReplacementCannotGrowPastConfiguredSourceLimit) {
+  XMLSourceStore store("<root/>", 16);
+  const std::string original(store.source());
+  const std::optional<SourceAnchorId> anchor =
+      store.createAnchor(original.size(), SourceAnchorBias::After);
+  ASSERT_TRUE(anchor.has_value());
+
+  EXPECT_FALSE(store.replace(0, original.size(), "<root>1234</root>").has_value());
+  EXPECT_EQ(store.source(), original);
+  EXPECT_EQ(store.sourceVersion(), 0u);
+  EXPECT_EQ(store.resolveAnchor(*anchor), std::optional<std::size_t>(original.size()));
+
+  ASSERT_TRUE(store.replace(0, original.size(), "<root>12</root>").has_value());
+  EXPECT_EQ(store.source().size(), 15u);
+}
+
 TEST(XMLSourceStore, ReplacementMovesBoundaryAnchorsAndInvalidatesInteriorAnchors) {
   XMLSourceStore store("0123456789");
   std::optional<SourceAnchorSpan> span = store.createSpan(2, 7);
@@ -149,6 +165,96 @@ TEST(XMLSourceStore, ReplaceSkipsInvalidAnchors) {
 
   EXPECT_EQ(store.resolveAnchor(*invalidated), std::nullopt);
   EXPECT_EQ(store.resolveAnchor(*after), std::optional<std::size_t>(7));
+}
+
+TEST(XMLSourceStore, RetiresInvalidAnchorsWithoutReusingIds) {
+  XMLSourceStore store("abcdef");
+  const std::optional<SourceAnchorId> first = store.createAnchor(1);
+  const std::optional<SourceAnchorId> retired = store.createAnchor(3);
+  const std::optional<SourceAnchorId> last = store.createAnchor(5);
+  ASSERT_TRUE(first.has_value());
+  ASSERT_TRUE(retired.has_value());
+  ASSERT_TRUE(last.has_value());
+
+  store.invalidateAnchor(*retired);
+  const XMLSourceStore::ResourceStats afterRetirement = store.resourceStats();
+  EXPECT_EQ(afterRetirement.liveAnchorCount, 2u);
+  EXPECT_EQ(afterRetirement.peakLiveAnchorCount, 3u);
+  EXPECT_EQ(afterRetirement.totalCreatedAnchors, 3u);
+  EXPECT_EQ(afterRetirement.totalRetiredAnchors, 1u);
+
+  const std::optional<SourceAnchorId> replacement = store.createAnchor(3);
+  ASSERT_TRUE(replacement.has_value());
+  EXPECT_NE(*replacement, *retired);
+  EXPECT_EQ(store.resolveAnchor(*retired), std::nullopt);
+  EXPECT_EQ(store.resolveAnchor(*replacement), std::optional<std::size_t>(3));
+}
+
+TEST(XMLSourceStore, LiveAnchorLimitCanReuseCapacityButNotIdentifiers) {
+  XMLSourceStore store("abcdef", XMLSourceStore::ResourceLimits{
+                                     .maximumSourceSize = 16,
+                                     .maximumLiveAnchorCount = 2,
+                                     .maximumAnchorUpdateWorkPerEdit = 2,
+                                 });
+  const std::optional<SourceAnchorId> first = store.createAnchor(1);
+  const std::optional<SourceAnchorId> second = store.createAnchor(2);
+  ASSERT_TRUE(first.has_value());
+  ASSERT_TRUE(second.has_value());
+  EXPECT_FALSE(store.createAnchor(3).has_value());
+
+  store.invalidateAnchor(*first);
+  const std::optional<SourceAnchorId> replacement = store.createAnchor(3);
+  ASSERT_TRUE(replacement.has_value());
+  EXPECT_NE(*replacement, *first);
+  EXPECT_EQ(store.resolveAnchor(*first), std::nullopt);
+
+  const XMLSourceStore::ResourceStats stats = store.resourceStats();
+  EXPECT_EQ(stats.liveAnchorCount, 2u);
+  EXPECT_EQ(stats.peakLiveAnchorCount, 2u);
+  EXPECT_EQ(stats.totalCreatedAnchors, 3u);
+  EXPECT_EQ(stats.totalRetiredAnchors, 1u);
+}
+
+TEST(XMLSourceStore, AnchorUpdateWorkLimitRejectsTransactionally) {
+  XMLSourceStore store("abcdef", XMLSourceStore::ResourceLimits{
+                                     .maximumSourceSize = 16,
+                                     .maximumLiveAnchorCount = 8,
+                                     .maximumAnchorUpdateWorkPerEdit = 2,
+                                 });
+  const std::optional<SourceAnchorId> before = store.createAnchor(1);
+  const std::optional<SourceAnchorId> retired = store.createAnchor(3);
+  const std::optional<SourceAnchorId> after = store.createAnchor(5);
+  ASSERT_TRUE(before.has_value());
+  ASSERT_TRUE(retired.has_value());
+  ASSERT_TRUE(after.has_value());
+  store.invalidateAnchor(*retired);
+
+  ASSERT_TRUE(store.replace(2, 1, "XY").has_value());
+  XMLSourceStore::ResourceStats stats = store.resourceStats();
+  EXPECT_EQ(stats.liveAnchorCount, 2u);
+  EXPECT_EQ(stats.lastAnchorUpdateWork, 2u);
+  EXPECT_EQ(stats.totalAnchorUpdateWork, 2u);
+  EXPECT_EQ(stats.anchorUpdateWorkRejections, 0u);
+
+  XMLSourceStore::ResourceLimits limits = store.resourceLimits();
+  limits.maximumAnchorUpdateWorkPerEdit = 1;
+  ASSERT_TRUE(store.setResourceLimits(limits));
+  const std::string sourceBeforeRejection(store.source());
+  const std::uint64_t versionBeforeRejection = store.sourceVersion();
+  const std::optional<std::size_t> beforeOffset = store.resolveAnchor(*before);
+  const std::optional<std::size_t> afterOffset = store.resolveAnchor(*after);
+
+  EXPECT_FALSE(store.replace(0, 1, "Z").has_value());
+  EXPECT_EQ(store.source(), sourceBeforeRejection);
+  EXPECT_EQ(store.sourceVersion(), versionBeforeRejection);
+  EXPECT_EQ(store.resolveAnchor(*before), beforeOffset);
+  EXPECT_EQ(store.resolveAnchor(*after), afterOffset);
+
+  stats = store.resourceStats();
+  EXPECT_EQ(stats.liveAnchorCount, 2u);
+  EXPECT_EQ(stats.lastAnchorUpdateWork, 0u);
+  EXPECT_EQ(stats.totalAnchorUpdateWork, 2u);
+  EXPECT_EQ(stats.anchorUpdateWorkRejections, 1u);
 }
 
 TEST(XMLSourceStore, RejectsOutOfBoundsEditsWithoutChangingVersion) {

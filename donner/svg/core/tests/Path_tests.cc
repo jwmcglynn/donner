@@ -476,7 +476,7 @@ TEST(Path, PathLengthClosedPath) {
   EXPECT_DOUBLE_EQ(spline.pathLength(), expectedLength);
 }
 
-TEST(Path, PathLengthSubdivideExceedsMaxRecursion) {
+TEST(Path, PathLengthHighlyCurvedCubicStaysWithinTolerance) {
   Path spline = PathBuilder()
                     .moveTo(Vector2d(0.0, 0.0))
                     // Create an extremely "curvy" cubic Bezier curve:
@@ -487,13 +487,13 @@ TEST(Path, PathLengthSubdivideExceedsMaxRecursion) {
                     //
                     // The chord from p0 to p3 is length 1.0. However, the control polygon has
                     // a very large length. This forces the recursion to never satisfy the flatness
-                    // criterion, so eventually the function will hit the branch that returns the
-                    // chord length.
+                    // criterion until deep subdivision.
                     .curveTo(Vector2d(0.0, 10000.0), Vector2d(0.0, -10000.0), Vector2d(1.0, 0.0))
                     .build();
 
-  // Because the maximum recursion depth is exceeded, a slightly inprecise value is returned.
-  EXPECT_NEAR(spline.pathLength(), 11547.003595164915, 1e-6);
+  // Numerical integration gives approximately 11547.00574694. The adaptive measurement must stay
+  // within its documented 0.001 path-length tolerance without exhausting its work bound.
+  EXPECT_NEAR(spline.pathLength(), 11547.00574694, 0.001);
 }
 
 TEST(Path, BoundsEmpty) {

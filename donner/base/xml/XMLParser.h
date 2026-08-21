@@ -22,6 +22,12 @@ public:
    * Options to modify the parsing behavior.
    */
   struct Options {
+    /// Default tree-node envelope sized for downstream ECS/style allocation on desktop and Wasm.
+    static constexpr uint64_t kDefaultMaximumElements = 8'192;
+    /// Default aggregate attribute envelope retained across one document.
+    static constexpr uint64_t kDefaultMaximumTotalAttributes = 100'000;
+    /// Default maximum element nesting depth.
+    static constexpr int kDefaultMaximumNestingDepth = 256;
     /// Default options.
     constexpr Options() {}
 
@@ -88,11 +94,11 @@ public:
 
     /**
      * Maximum total number of elements (and other tree-nodes) allowed in a single document
-     * parse. Defaults to 100'000 - larger than any realistic SVG but small enough to refuse
-     * a "billion-rect" DoS in bounded time. Failing to stay under this limit causes parsing
-     * to fail with a resource exhaustion error.
+     * parse. Defaults to 8'192, bounding downstream ECS and computed-style storage as well as the
+     * XML tree itself. Failing to stay under this limit causes parsing to fail with a resource
+     * exhaustion error.
      */
-    uint64_t maxElements = 100'000;
+    uint64_t maxElements = kDefaultMaximumElements;
 
     /**
      * Maximum number of attributes permitted on a single element. Defaults to 1'000, which is
@@ -102,6 +108,15 @@ public:
      */
     uint64_t maxAttributesPerElement = 1'000;
 
+    /** Maximum attributes retained across the whole document. */
+    uint64_t maxTotalAttributes = kDefaultMaximumTotalAttributes;
+
+    /** Maximum entity declarations retained from a document type definition. */
+    uint64_t maxEntityDeclarations = 1'024;
+
+    /** Maximum aggregate entity-name and replacement bytes retained. */
+    uint64_t maxEntityDeclarationBytes = 1024 * 1024;
+
     /**
      * Maximum element nesting depth in the parsed tree. Defaults to 256. This is the
      * structural depth of `<a><b><c>...</c></b></a>`, orthogonal to \ref maxEntityDepth.
@@ -109,7 +124,7 @@ public:
      * both the parser (which recurses into `parseNodeContents`) and later consumers
      * (CSS cascade, renderers) from unbounded stacks.
      */
-    int maxNestingDepth = 256;
+    int maxNestingDepth = kDefaultMaximumNestingDepth;
   };
 
   /**
