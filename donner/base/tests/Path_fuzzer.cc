@@ -207,8 +207,11 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
     assert(std::isinf(path.pathLength()));
     assert(!path.isOnPath({0.0, 7.5e99}, 0.001));
     assert(!path.isInside({0.0, 7.5e99}));
-    assert(path.flatten(0.001).empty());
-    assert(path.strokeToFill({.width = 1.0}, 0.001).empty());
+    const Path flattened = path.flatten(0.001);
+    assert(!flattened.empty());
+    assert(flattened.verbCount() <=
+           1u + (1u << static_cast<unsigned int>(Path::kMaximumFlattenSubdivisionDepth)));
+    assert(!path.strokeToFill({.width = 1.0}, 0.001).empty());
     return 0;
   }
 
