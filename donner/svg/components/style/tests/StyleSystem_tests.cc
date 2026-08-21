@@ -601,6 +601,40 @@ TEST_F(StyleSystemTest, ComputeStylesForSubsetOnlyComputesRequestedEntities) {
   EXPECT_FALSE(document.registry().all_of<ComputedStyleComponent>(b));
 }
 
+TEST(StyleResourceBudgetTest, SharesRetainedBytesAcrossDocumentFamily) {
+  DocumentResourceFamilyBudget::Limits familyLimits;
+  familyLimits.computedStyleBytes = 1024;
+  auto family = std::make_shared<DocumentResourceFamilyBudget>(familyLimits);
+
+  StyleResourceBudget::Limits localLimits;
+  localLimits.complexPropertyBytes = 1024;
+  Registry registry;
+  const Entity firstEntity = registry.create();
+  const Entity secondEntity = registry.create();
+
+  {
+    StyleResourceBudget first(localLimits, family);
+    StyleResourceBudget second(localLimits, family);
+    EXPECT_TRUE(first.reserveComplexPropertyBytes(firstEntity, 768));
+    EXPECT_FALSE(second.reserveComplexPropertyBytes(secondEntity, 512));
+    EXPECT_EQ(family->retainedBytes(DocumentResourceFamilyBudget::Kind::ComputedStyle), 768u);
+  }
+
+  EXPECT_EQ(family->retainedBytes(DocumentResourceFamilyBudget::Kind::ComputedStyle), 0u);
+}
+
+TEST(StyleResourceBudgetTest, ChargesDeclarationSourceBytesPerApplication) {
+  StyleResourceBudget::Limits limits;
+  limits.declarationByteWork = 1024;
+  StyleResourceBudget budget(limits);
+
+  EXPECT_TRUE(budget.reserveDeclarationApplication(1, 768));
+  EXPECT_FALSE(budget.reserveDeclarationApplication(1, 512));
+  EXPECT_EQ(budget.declarationApplications(), 1u);
+  EXPECT_EQ(budget.declarationByteWork(), 768u);
+  EXPECT_TRUE(budget.rejected());
+}
+
 TEST_F(StyleSystemTest, ShadowTreeSelectorsMatchSiblingAndAttributeState) {
   auto document = ParseSVG(R"(
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">

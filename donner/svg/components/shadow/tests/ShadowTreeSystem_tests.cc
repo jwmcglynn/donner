@@ -7,6 +7,8 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <sstream>
+
 #include "donner/base/ParseWarningSink.h"
 #include "donner/base/tests/BaseTestUtils.h"
 #include "donner/base/tests/ParseResultTestUtils.h"
@@ -109,16 +111,28 @@ TEST_F(ShadowTreeSystemTest, SelfRecursionDetected) {
 // --- Indirect recursion detection ---
 
 TEST_F(ShadowTreeSystemTest, IndirectRecursionDetected) {
-  ParseWarningSink parseSink;
-  auto maybeResult = parser::SVGParser::ParseSVG(R"(
+  auto document = ParseSVG(R"(
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
-      <g id="a"><use href="#b"/></g>
-      <g id="b"><use href="#a"/></g>
+      <g id="target"><use id="inner" href="#outer"/></g>
+      <use id="outer" href="#target"/>
     </svg>
-  )",
-                                                 parseSink);
+  )");
 
-  ASSERT_TRUE(maybeResult.hasResult());
+  auto outer = document.querySelector("#outer")->entityHandle();
+  const Entity target = document.querySelector("#target")->entityHandle().entity();
+  ComputedShadowTreeComponent shadow;
+  ShadowTreeSystem system;
+  ParseWarningSink warnings;
+
+  EXPECT_FALSE(system
+                   .populateInstance(outer, shadow, ShadowBranchType::Main, target,
+                                     RcString("#target"), warnings)
+                   .has_value());
+  ASSERT_TRUE(shadow.mainBranch.has_value());
+  EXPECT_EQ(shadow.mainBranch->shadowEntities.size(), 4u);
+  EXPECT_THAT(warnings.warnings(), SizeIs(1));
+  EXPECT_THAT(warnings.warnings().front().reason,
+              testing::HasSubstr("Shadow tree recursion detected"));
 }
 
 // --- Multiple <use> elements referencing the same target ---
@@ -471,6 +485,70 @@ TEST_F(ShadowTreeSystemTest, PopulateInstanceMirrorsChildrenInNonNestedBranch) {
   ASSERT_TRUE(shadow.mainBranch.has_value());
   EXPECT_GE(shadow.mainBranch->shadowEntities.size(), 3u);
   EXPECT_THAT(warnings.warnings(), IsEmpty());
+}
+
+TEST_F(ShadowTreeSystemTest, RejectsAcyclicReferenceChainAtomicallyBeforeEntityCreation) {
+  std::ostringstream svg;
+  svg << R"(<svg xmlns="http://www.w3.org/2000/svg"><defs>)";
+  for (std::size_t i = 0; i <= ShadowTreeResourceBudget::kMaximumReferenceDepth; ++i) {
+    svg << "<use id=\"chain" << i << "\" href=\"#chain" << (i + 1) << "\"/>";
+  }
+  svg << "<rect id=\"chain" << (ShadowTreeResourceBudget::kMaximumReferenceDepth + 1)
+      << R"("/><g id="host"/></defs></svg>)";
+
+  auto document = ParseSVG(svg.str());
+  auto host = document.querySelector("#host")->entityHandle();
+  const Entity target = document.querySelector("#chain0")->unsafeEntityHandle().entity();
+  ComputedShadowTreeComponent shadow;
+  ParseWarningSink warnings;
+
+  ShadowTreeSystem().populateInstance(host, shadow, ShadowBranchType::Main, target,
+                                      RcString("#chain0"), warnings);
+
+  EXPECT_FALSE(shadow.mainBranch.has_value());
+  const auto* budget = document.registry().ctx().find<ShadowTreeResourceBudget>();
+  ASSERT_NE(budget, nullptr);
+  EXPECT_TRUE(budget->rejected());
+  EXPECT_EQ(budget->generatedEntities(), 0u);
+}
+
+TEST_F(ShadowTreeSystemTest, RejectsCompactExponentialDagBeforeEntityCreation) {
+  std::ostringstream svg;
+  svg << R"(<svg xmlns="http://www.w3.org/2000/svg"><defs>)";
+  constexpr std::size_t kLevels = 15;
+  for (std::size_t i = 0; i < kLevels; ++i) {
+    svg << "<g id=\"dag" << i << "\"><use href=\"#dag" << (i + 1) << "\"/><use href=\"#dag"
+        << (i + 1) << "\"/></g>";
+  }
+  svg << "<rect id=\"dag" << kLevels << R"("/><g id="host"/></defs></svg>)";
+
+  auto document = ParseSVG(svg.str());
+  auto host = document.querySelector("#host")->entityHandle();
+  const Entity target = document.querySelector("#dag0")->unsafeEntityHandle().entity();
+  ComputedShadowTreeComponent shadow;
+  ParseWarningSink warnings;
+
+  ShadowTreeSystem().populateInstance(host, shadow, ShadowBranchType::Main, target,
+                                      RcString("#dag0"), warnings);
+
+  EXPECT_FALSE(shadow.mainBranch.has_value());
+  const auto* budget = document.registry().ctx().find<ShadowTreeResourceBudget>();
+  ASSERT_NE(budget, nullptr);
+  EXPECT_TRUE(budget->rejected());
+  EXPECT_EQ(budget->generatedEntities(), 0u);
+}
+
+TEST_F(ShadowTreeSystemTest, FullRebuildResetsLatchedResourceBudget) {
+  Registry registry;
+  auto& budget = registry.ctx().emplace<ShadowTreeResourceBudget>();
+  ASSERT_TRUE(budget.reserve(3, 1, 1));
+  budget.reject();
+
+  ShadowTreeSystem::beginRebuild(registry);
+
+  EXPECT_FALSE(budget.rejected());
+  EXPECT_EQ(budget.instances(), 0u);
+  EXPECT_EQ(budget.generatedEntities(), 0u);
 }
 
 TEST_F(ShadowTreeSystemTest, PopulateInstanceOffscreenPaintTargetParentRecursionWarns) {

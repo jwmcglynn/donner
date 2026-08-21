@@ -16,6 +16,37 @@
 
 namespace donner::svg::components {
 
+/** Aggregate generated-entity and recursion budget shared by every shadow-tree source. */
+class ShadowTreeResourceBudget {
+public:
+  /// Maximum shadow branches instantiated during one render-tree rebuild.
+  static constexpr std::size_t kMaximumInstances = 4096;
+  /// Maximum generated shadow entities retained during one render-tree rebuild.
+  static constexpr std::size_t kMaximumGeneratedEntities = 16 * 1024;
+  /// Maximum acyclic href-reference nesting within one branch.
+  static constexpr std::size_t kMaximumReferenceDepth = 64;
+  /// Maximum combined source-tree and href traversal depth within one branch.
+  static constexpr std::size_t kMaximumTraversalDepth = 256;
+
+  /// Reset counters before a full render-tree rebuild.
+  void reset() { *this = {}; }
+
+  /// Atomically reserve one fully preflighted branch before creating any entities.
+  [[nodiscard]] bool reserve(std::size_t generatedEntities, std::size_t referenceDepth,
+                             std::size_t traversalDepth);
+  /// Latch rejection when preflight itself crosses a hard limit.
+  void reject() { rejected_ = true; }
+
+  [[nodiscard]] std::size_t instances() const { return instances_; }
+  [[nodiscard]] std::size_t generatedEntities() const { return generatedEntities_; }
+  [[nodiscard]] bool rejected() const { return rejected_; }
+
+private:
+  std::size_t instances_ = 0;
+  std::size_t generatedEntities_ = 0;
+  bool rejected_ = false;
+};
+
 /**
  * Type definition for a callback to process sized elements.
  * This allows systems that can't directly depend on LayoutSystem to request
@@ -43,6 +74,9 @@ using ShadowSizedElementHandler = std::function<bool(
  */
 class ShadowTreeSystem {
 public:
+  /// Reset aggregate shadow admission before a full render-tree rebuild.
+  static void beginRebuild(Registry& registry);
+
   /**
    * Constructor.
    *

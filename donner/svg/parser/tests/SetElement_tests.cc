@@ -4,6 +4,7 @@
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/SVGSetElement.h"
 #include "donner/svg/components/animation/AnimatedValuesComponent.h"
+#include "donner/svg/components/animation/AnimationResourceBudget.h"
 #include "donner/svg/components/animation/AnimationStateComponent.h"
 #include "donner/svg/components/animation/AnimationSystem.h"
 #include "donner/svg/components/animation/AnimationTimingComponent.h"
@@ -88,7 +89,8 @@ TEST(SVGSetElement, AnimationBeforeBeginTime) {
   // The rect should NOT have animated overrides
   auto rect = document.querySelector("#r");
   ASSERT_TRUE(rect.has_value());
-  EXPECT_FALSE(registry.try_get<components::AnimatedValuesComponent>(rect->entityHandle().entity()));
+  EXPECT_FALSE(
+      registry.try_get<components::AnimatedValuesComponent>(rect->entityHandle().entity()));
 }
 
 TEST(SVGSetElement, AnimationDuringActiveInterval) {
@@ -132,7 +134,8 @@ TEST(SVGSetElement, AnimationAfterEndRemove) {
   // Default fill="remove", so no override should be present
   auto rect = document.querySelector("#r");
   ASSERT_TRUE(rect.has_value());
-  EXPECT_FALSE(registry.try_get<components::AnimatedValuesComponent>(rect->entityHandle().entity()));
+  EXPECT_FALSE(
+      registry.try_get<components::AnimatedValuesComponent>(rect->entityHandle().entity()));
 }
 
 TEST(SVGSetElement, AnimationAfterEndFreeze) {
@@ -214,6 +217,28 @@ TEST(SVGSetElement, MissingAttributeNameProducesNoOverride) {
   auto rect = document.querySelector("#r");
   ASSERT_TRUE(rect.has_value());
   EXPECT_EQ(registry.try_get<components::AnimatedValuesComponent>(rect->entityHandle().entity()),
+            nullptr);
+}
+
+TEST(SVGSetElement, OversizedSetValueConsumesSourceBudgetBeforeCopyingOutput) {
+  auto document = parseSVGWithExperimental(R"(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <rect id="r"><set attributeName="fill" to="blue" begin="0s" dur="2s" /></rect>
+    </svg>
+  )");
+  auto& registry = document.registry();
+  auto view = registry.view<components::SetAnimationComponent>();
+  ASSERT_NE(view.begin(), view.end());
+  registry.get<components::SetAnimationComponent>(*view.begin())
+      .to.assign(components::AnimationResourceBudget::kMaximumSourceBytes + 1, 'x');
+
+  components::AnimationSystem().advance(registry, 1.0, nullptr);
+
+  const auto* budget = registry.ctx().find<components::AnimationResourceBudget>();
+  ASSERT_NE(budget, nullptr);
+  EXPECT_TRUE(budget->rejected());
+  EXPECT_EQ(registry.try_get<components::AnimatedValuesComponent>(
+                document.querySelector("#r")->entityHandle().entity()),
             nullptr);
 }
 

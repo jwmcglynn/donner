@@ -14,6 +14,24 @@
 
 namespace donner::svg::components {
 
+bool ShadowTreeResourceBudget::reserve(std::size_t generatedEntities, std::size_t referenceDepth,
+                                       std::size_t traversalDepth) {
+  (void)referenceDepth;
+  (void)traversalDepth;
+  ++instances_;
+  generatedEntities_ += generatedEntities;
+  return true;
+}
+
+void ShadowTreeSystem::beginRebuild(Registry& registry) {
+  auto* budget = registry.ctx().find<ShadowTreeResourceBudget>();
+  if (budget == nullptr) {
+    registry.ctx().emplace<ShadowTreeResourceBudget>();
+  } else {
+    budget->reset();
+  }
+}
+
 namespace {
 
 /**
