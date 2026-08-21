@@ -51,6 +51,22 @@ ABSENT = "absent"
 CLEAR = "clear"
 
 
+def workflow_ids(workflows_payload, wanted_names):
+    """Return IDs whose workflow paths end in one of the requested filenames."""
+    wanted = tuple(
+        name for name in wanted_names if isinstance(name, str) and name
+    )
+    matches = []
+    for workflow in workflows_payload.get("workflows") or []:
+        path = workflow.get("path")
+        workflow_id = workflow.get("id")
+        if not isinstance(path, str) or not isinstance(workflow_id, int):
+            continue
+        if any(path.endswith("/" + name) for name in wanted):
+            matches.append(workflow_id)
+    return matches
+
+
 def pool_state(jobs_payload, pool):
     """Reduce one run's jobs payload to how it occupies the pool.
 
@@ -126,6 +142,14 @@ def decide(request):
 
 
 def main():
+    if sys.argv[1:] == ["workflow-ids"]:
+        request = json.load(sys.stdin)
+        for workflow_id in workflow_ids(request, request.get("wanted") or []):
+            print(workflow_id)
+        return 0
+    if len(sys.argv) != 1:
+        return 2
+
     json.dump(decide(json.load(sys.stdin)), sys.stdout)
     sys.stdout.write("\n")
     return 0

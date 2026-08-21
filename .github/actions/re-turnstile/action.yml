@@ -134,8 +134,10 @@ runs:
               elif all_workflows=$(gh_get "${api}/repos/${repo}/actions/workflows?per_page=100"); then
                 # shellcheck disable=SC2086 # deliberate word splitting into a JSON array
                 wanted=$(printf '%s\n' ${TURNSTILE_POOL_WORKFLOWS} | jq -Rsc 'split("\n") | map(select(length > 0))')
-                workflow_ids=$(printf '%s' "${all_workflows}" | jq -r --argjson wanted "${wanted}" \
-                  '.workflows[]? | . as $w | select([$wanted[] | select($w.path | endswith("/" + .))] | length > 0) | .id' 2>/dev/null)
+                workflow_request=$(printf '%s' "${all_workflows}" | jq -c --argjson wanted "${wanted}" \
+                  '{workflows: (.workflows // []), wanted: $wanted}' 2>/dev/null) || workflow_request=""
+                workflow_ids=$(printf '%s' "${workflow_request}" | \
+                  python3 "${admission}" workflow-ids 2>/dev/null) || workflow_ids=""
               fi
             fi
           fi
