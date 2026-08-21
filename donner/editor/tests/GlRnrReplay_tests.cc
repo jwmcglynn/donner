@@ -9,6 +9,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <iterator>
 #include <optional>
@@ -3909,6 +3910,127 @@ TEST(GlRnrReplayTest, FilteredElementOThenRDragDoesNotPopOBackOnRClick) {
   EXPECT_NEAR(*firstCentroidY, *settledCentroidY, 1.0)
       << "The first R-click frame should keep O at its post-drag position instead of popping "
          "back for one presented frame.";
+
+  RemoveDiagnosticOutputOnSuccess(outputDir);
+}
+
+TEST(GlRnrReplayTest, RejectsSameFrameSelectAllDeleteBeforeGlDispatch) {
+  const std::filesystem::path outputDir = DiagnosticOutputDir() / "gl_replay_input_budget";
+  std::error_code createDirError;
+  std::filesystem::create_directories(outputDir, createDirError);
+  ASSERT_FALSE(createDirError) << createDirError.message();
+
+  std::string source = "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 10'>";
+  const std::string padding(2048, 'a');
+  for (std::size_t i = 0; i < 256u; ++i) {
+    source += "<rect data-padding='" + padding + "'/>";
+  }
+  source += "</svg>";
+
+  repro::ReproFile file;
+  file.metadata.svgPath = "embedded.svg";
+  file.metadata.svgSource = std::move(source);
+  file.metadata.windowWidth = 64;
+  file.metadata.windowHeight = 64;
+  file.metadata.displayScale = 1.0;
+  repro::ReproFrame frame;
+  frame.index = 0;
+  frame.modifiers = 1 << 0;
+  repro::ReproEvent selectAll;
+  selectAll.kind = repro::ReproEvent::Kind::KeyDown;
+  selectAll.key = static_cast<int>(ImGuiKey_A);
+  repro::ReproEvent deleteSelection;
+  deleteSelection.kind = repro::ReproEvent::Kind::KeyDown;
+  deleteSelection.key = static_cast<int>(ImGuiKey_Delete);
+  frame.events = {selectAll, deleteSelection};
+  file.frames.push_back(std::move(frame));
+
+  const std::filesystem::path replayPath = outputDir / "input_budget.rnr";
+  ASSERT_TRUE(repro::WriteReproFile(replayPath, file));
+
+  repro::GlRnrReplayOptions options;
+  options.rnrPath = replayPath;
+  options.outputDir = outputDir;
+  options.captureFrames = {0};
+  options.pace = false;
+  options.workerScheduling = repro::GlRnrReplayWorkerScheduling::DrainEachFrame;
+
+  repro::GlRnrReplayResult result;
+  std::string error;
+  const bool replayed = repro::RunGlRnrReplay(options, &result, &error);
+  if (!replayed && result.glUnavailable) {
+    GTEST_SKIP() << error;
+  }
+  EXPECT_FALSE(replayed);
+  EXPECT_THAT(error, testing::HasSubstr("input mutation resource budget"));
+  if (!::testing::Test::HasFailure()) {
+    RemoveDiagnosticOutputOnSuccess(outputDir);
+  }
+}
+
+TEST(GlRnrReplayTest, RecordedSaveShortcutCannotOverwriteEmbeddedSourceDisplayPath) {
+  const std::filesystem::path outputDir = DiagnosticOutputDir() / "gl_replay_file_action_policy";
+  std::error_code createDirError;
+  std::filesystem::create_directories(outputDir, createDirError);
+  ASSERT_FALSE(createDirError) << createDirError.message();
+
+  const std::filesystem::path victimPath = outputDir / "victim.svg";
+  constexpr std::string_view kVictimContents = "user-owned sentinel";
+  {
+    std::ofstream victim(victimPath, std::ios::binary | std::ios::trunc);
+    ASSERT_TRUE(victim.good());
+    victim << kVictimContents;
+  }
+
+  repro::ReproFile file;
+  file.metadata.svgBasename = victimPath.string();
+  file.metadata.svgSource =
+      R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><rect width="10" height="10"/></svg>)";
+  file.metadata.windowWidth = 640;
+  file.metadata.windowHeight = 480;
+  file.metadata.displayScale = 1.0;
+  for (std::uint64_t index = 0; index <= 4; ++index) {
+    repro::ReproFrame frame;
+    frame.index = index;
+    frame.timestampSeconds = static_cast<double>(index) / 60.0;
+    frame.deltaMs = 1000.0 / 60.0;
+    frame.mouseX = 320.0;
+    frame.mouseY = 240.0;
+    if (index == 3) {
+      frame.modifiers = 1 << 0;
+      repro::ReproEvent save;
+      save.kind = repro::ReproEvent::Kind::KeyDown;
+      save.key = static_cast<int>(ImGuiKey_S);
+      frame.events.push_back(save);
+    } else if (index == 4) {
+      repro::ReproEvent saveUp;
+      saveUp.kind = repro::ReproEvent::Kind::KeyUp;
+      saveUp.key = static_cast<int>(ImGuiKey_S);
+      frame.events.push_back(saveUp);
+    }
+    file.frames.push_back(std::move(frame));
+  }
+
+  const std::filesystem::path replayPath = outputDir / "recorded_save_shortcut.rnr";
+  ASSERT_TRUE(repro::WriteReproFile(replayPath, file));
+
+  repro::GlRnrReplayOptions options;
+  options.rnrPath = replayPath;
+  options.outputDir = outputDir;
+  options.captureFrames = {4};
+  options.maxFrame = 4;
+  options.pace = false;
+  options.workerScheduling = repro::GlRnrReplayWorkerScheduling::DrainEachFrame;
+
+  repro::GlRnrReplayResult result;
+  std::string error;
+  ASSERT_GL_REPLAY_OR_SKIP(options, result, error);
+
+  std::ifstream victim(victimPath, std::ios::binary);
+  ASSERT_TRUE(victim.good());
+  const std::string victimAfter((std::istreambuf_iterator<char>(victim)),
+                                std::istreambuf_iterator<char>());
+  EXPECT_EQ(victimAfter, kVictimContents);
 
   RemoveDiagnosticOutputOnSuccess(outputDir);
 }
