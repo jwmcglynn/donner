@@ -541,6 +541,24 @@ TEST(RendererPublicApiTest, RejectedFilterSuppressesItsSubtreeAndRestoresParent)
   EXPECT_THAT(PixelAt(snapshot, 12, 4), IsBlueish());
 }
 
+TEST(RendererPublicApiTest, FacadeRejectsNonFiniteAndOutOfRangeFrameDimensionsBeforeCasting) {
+  Renderer renderer;
+  constexpr double kInfinity = std::numeric_limits<double>::infinity();
+  constexpr double kNaN = std::numeric_limits<double>::quiet_NaN();
+
+  for (const RenderViewport viewport : {
+           RenderViewport{.size = Vector2d(kInfinity, 16.0), .devicePixelRatio = 1.0},
+           RenderViewport{.size = Vector2d(kNaN, 16.0), .devicePixelRatio = 1.0},
+           RenderViewport{.size = Vector2d(1.0e300, 16.0), .devicePixelRatio = 1.0},
+           RenderViewport{.size = Vector2d(16.0, 16.0), .devicePixelRatio = kInfinity},
+       }) {
+    renderer.beginFrame(viewport);
+    renderer.endFrame();
+    EXPECT_EQ(renderer.width(), 0);
+    EXPECT_EQ(renderer.height(), 0);
+  }
+}
+
 TEST(RendererPublicApiTest, PatternTileRejectsUnsafeDimensionsWithoutChangingFrameState) {
   Renderer renderer;
   renderer.beginFrame(RenderViewport{
