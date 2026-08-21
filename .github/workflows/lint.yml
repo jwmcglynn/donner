@@ -59,6 +59,9 @@ jobs:
     if: ${{ needs.gatekeeper.outputs.is_duplicate_push != 'true' }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          # Local complexity lint compares the whole PR diff to its target branch.
+          fetch-depth: 0
 
       - name: Cache Bazel
         uses: actions/cache@v6

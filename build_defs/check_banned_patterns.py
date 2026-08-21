@@ -18,7 +18,7 @@ Rules enforced:
   - No imgui / GLFW / Tracy headers outside `donner/editor/**` (path-scoped)
   - No ImGui `AddImageQuad`: present document textures through direct framebuffer composition
   - No direct TreeComponent structural mutation outside approved low-level code
-  - No C++ method above the local decision-point complexity limit
+  - No new or worsened out-of-line C++ method above the local decision-point complexity limit
 
 Usage:
   python3 build_defs/check_banned_patterns.py            # Check all files
@@ -363,7 +363,7 @@ _METHOD_DEFINITION_RE = re.compile(
     ^[ \t]*
     (?:[A-Za-z_][A-Za-z0-9_:<>,~*&\[\] ]*[ \t]+)?
     (?P<name>(?:[A-Za-z_][A-Za-z0-9_]*::)+~?[A-Za-z_][A-Za-z0-9_]*)
-    \s*\([^;{}]*\)
+    \s*\((?P<params>[^;{}]*)\)
     \s*(?:const\s*)?(?:noexcept(?:\s*\([^)]*\))?\s*)?(?:override\s*)?(?:final\s*)?
     \{
     """,
@@ -387,15 +387,21 @@ def _method_body_end(stripped: str, opening_brace: int) -> int:
     return len(stripped)
 
 
+def _method_signature(match: re.Match) -> str:
+    """Return a stable-enough signature key that distinguishes method overloads."""
+    params = re.sub(r"\s+", " ", match.group("params").strip())
+    return f"{match.group('name')}({params})"
+
+
 def _method_complexities(stripped: str) -> Dict[str, int]:
-    """Return the maximum decision-point count for each out-of-line method name."""
+    """Return the decision-point count for each out-of-line method signature."""
     result: Dict[str, int] = {}
     for match in _METHOD_DEFINITION_RE.finditer(stripped):
         opening_brace = stripped.find("{", match.start(), match.end())
         body_end = _method_body_end(stripped, opening_brace)
         decision_points = len(_METHOD_DECISION_RE.findall(stripped[opening_brace:body_end]))
-        name = match.group("name")
-        result[name] = max(result.get(name, 0), decision_points)
+        signature = _method_signature(match)
+        result[signature] = max(result.get(signature, 0), decision_points)
     return result
 
 
@@ -409,9 +415,8 @@ def _check_method_complexity(
         opening_brace = stripped.find("{", match.start(), match.end())
         body_end = _method_body_end(stripped, opening_brace)
         decision_points = len(_METHOD_DECISION_RE.findall(stripped[opening_brace:body_end]))
-        if decision_points <= _MAX_METHOD_DECISION_POINTS:
-            continue
-        if baseline.get(match.group("name"), 0) > _MAX_METHOD_DECISION_POINTS:
+        baseline_decision_points = baseline.get(_method_signature(match), 0)
+        if decision_points <= max(_MAX_METHOD_DECISION_POINTS, baseline_decision_points):
             continue
         line = stripped.count("\n", 0, match.start("name")) + 1
         errors.append(
