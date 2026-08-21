@@ -11,7 +11,6 @@
 #include <charconv>
 #include <chrono>
 #include <filesystem>
-#include <fstream>
 #include <limits>
 #include <optional>
 #include <ostream>
@@ -19,10 +18,12 @@
 #include <string>
 #include <string_view>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #include "donner/base/Box.h"
 #include "donner/base/DiagnosticRenderer.h"
+#include "donner/base/FileUtils.h"
 #include "donner/base/ParseDiagnostic.h"
 #include "donner/base/ParseWarningSink.h"
 #include "donner/base/Utils.h"
@@ -138,6 +139,12 @@ bool TryParseIntWithMin(std::string_view value, int minimumValue, int* outValue)
   return true;
 }
 
+std::string TerminalDiagnostic(const ParseDiagnostic& diagnostic) {
+  std::ostringstream formatted;
+  formatted << diagnostic;
+  return EscapeTerminalText(formatted.str(), /*preserveNewlines=*/true);
+}
+
 /**
  * Parse command line arguments.
  *
@@ -197,12 +204,12 @@ bool ParseArgs(int argc, char* argv[], CliOptions* options, std::ostream& out, s
         options->outputFileSet = true;
       } else if (arg == "--width") {
         if (!TryParseIntWithMin(value, 1, &options->width)) {
-          err << "Invalid --width value: " << value << "\n";
+          err << "Invalid --width value: " << EscapeTerminalText(value) << "\n";
           return false;
         }
       } else {
         if (!TryParseIntWithMin(value, 1, &options->height)) {
-          err << "Invalid --height value: " << value << "\n";
+          err << "Invalid --height value: " << EscapeTerminalText(value) << "\n";
           return false;
         }
       }
@@ -210,7 +217,7 @@ bool ParseArgs(int argc, char* argv[], CliOptions* options, std::ostream& out, s
     }
 
     if (!arg.empty() && arg[0] == '-') {
-      err << "Unknown option: " << arg << "\n";
+      err << "Unknown option: " << EscapeTerminalText(arg) << "\n";
       return false;
     }
 
@@ -231,25 +238,12 @@ bool ParseArgs(int argc, char* argv[], CliOptions* options, std::ostream& out, s
 
 /** Read an input file into memory. */
 std::optional<std::string> ReadFile(std::string_view filename) {
-  std::ifstream file(std::string(filename), std::ios::binary);
-  if (!file) {
+  FileReadResult result =
+      ReadFileBounded(std::string(filename), parser::SVGParser::kDefaultMaximumInputSize);
+  if (!std::holds_alternative<std::string>(result)) {
     return std::nullopt;
   }
-
-  file.seekg(0, std::ios::end);
-  const std::streamsize length = file.tellg();
-  file.seekg(0);
-
-  if (length <= 0) {
-    return std::string();
-  }
-  if (static_cast<uint64_t>(length) > parser::SVGParser::kDefaultMaximumInputSize) {
-    return std::nullopt;
-  }
-
-  std::string data(static_cast<size_t>(length), '\0');
-  file.read(data.data(), length);
-  return data;
+  return std::move(std::get<std::string>(result));
 }
 
 /** Parse SVG data into an SVGDocument. */
@@ -260,20 +254,30 @@ std::optional<SVGDocument> ParseDocument(const CliOptions& options, const std::s
   parserOptions.enableExperimental = options.experimental;
 
   SVGDocument::Settings settings;
-  settings.resourceLoader = std::make_unique<SandboxedFileResourceLoader>(
-      std::filesystem::current_path(), options.inputFile);
+  std::error_code pathError;
+  const std::filesystem::path absoluteInputPath =
+      std::filesystem::absolute(options.inputFile, pathError).lexically_normal();
+  const auto sandboxRoot =
+      pathError ? std::nullopt : ResourceSandboxRootForAbsoluteInput(absoluteInputPath);
+  if (sandboxRoot) {
+    // An input document grants access only to resources beside or below that document. The
+    // process working directory may contain unrelated files and is not a trust boundary.
+    settings.resourceLoader =
+        std::make_unique<SandboxedFileResourceLoader>(*sandboxRoot, absoluteInputPath);
+  }
 
   auto result =
       parser::SVGParser::ParseSVG(fileData, warningSink, parserOptions, std::move(settings));
   if (result.hasError()) {
-    err << "Parse error: " << result.error() << "\n";
+    err << "Parse error: " << TerminalDiagnostic(result.error()) << "\n";
     return std::nullopt;
   }
 
   if (!options.quiet && warningSink.hasWarnings()) {
     out << "Parse warnings:\n";
-    out << DiagnosticRenderer::formatAll(fileData, warningSink,
-                                         {.filename = options.inputFile, .colorize = true});
+    const std::string formatted = DiagnosticRenderer::formatAll(
+        fileData, warningSink, {.filename = options.inputFile, .colorize = false});
+    out << EscapeTerminalText(formatted, /*preserveNewlines=*/true);
   }
 
   return std::move(result.result());
@@ -554,7 +558,7 @@ void RunInteractiveSelection(SVGDocument document, RendererTinySkia& renderer,
       const TerminalImageView highlightView = MakeView(highlighted);
 
       RedrawImage(highlightView, imageInfo.rows, out, viewerConfig);
-      out << "\r\x1b[2KSelected: " << BuildCssSelectorPath(*selected);
+      out << "\r\x1b[2KSelected: " << EscapeTerminalText(BuildCssSelectorPath(*selected));
       out.flush();
 
       std::this_thread::sleep_for(std::chrono::milliseconds(300));
@@ -570,7 +574,7 @@ void RunInteractiveSelection(SVGDocument document, RendererTinySkia& renderer,
       const TerminalImageView selectedImageView = MakeView(selectedView);
 
       RedrawImage(selectedImageView, imageInfo.rows, out, viewerConfig);
-      out << "\r\x1b[2KSelected: " << BuildCssSelectorPath(*selected);
+      out << "\r\x1b[2KSelected: " << EscapeTerminalText(BuildCssSelectorPath(*selected));
       out.flush();
     }
   }
@@ -594,7 +598,7 @@ int RunDonnerSvgTool(int argc, char* argv[], std::ostream& out, std::ostream& er
 
   const auto fileData = ReadFile(options.inputFile);
   if (!fileData) {
-    err << "Failed to read input SVG: " << options.inputFile << "\n";
+    err << "Failed to read input SVG: " << EscapeTerminalText(options.inputFile) << "\n";
     return 2;
   }
 
@@ -618,11 +622,13 @@ int RunDonnerSvgTool(int argc, char* argv[], std::ostream& out, std::ostream& er
   if (shouldSavePng) {
     const bool saved = renderer.save(options.outputFile.c_str());
     if (!saved) {
-      err << "Failed to save PNG: " << std::filesystem::absolute(options.outputFile) << "\n";
+      err << "Failed to save PNG: "
+          << EscapeTerminalText(std::filesystem::absolute(options.outputFile).string()) << "\n";
       return 4;
     }
 
-    out << "Saved PNG: " << std::filesystem::absolute(options.outputFile) << "\n";
+    out << "Saved PNG: "
+        << EscapeTerminalText(std::filesystem::absolute(options.outputFile).string()) << "\n";
   }
 
   out << "Rendered size: " << renderer.width() << "x" << renderer.height() << "\n";

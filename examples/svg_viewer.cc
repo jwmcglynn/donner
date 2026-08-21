@@ -29,8 +29,10 @@
 
 #include "donner/base/Box.h"
 #include "donner/base/FileOffset.h"
+#include "donner/base/FileUtils.h"
 #include "donner/base/ParseDiagnostic.h"
 #include "donner/base/ParseWarningSink.h"
+#include "donner/base/TerminalEscape.h"
 #include "donner/base/Vector2.h"
 #include "donner/base/xml/XMLNode.h"
 #include "donner/editor/TextBuffer.h"
@@ -65,14 +67,15 @@ void GlfwErrorCallback(int error, const char* description) {
 }
 
 std::string LoadFile(const std::string& filename) {
-  std::ifstream file(filename, std::ios::binary);
-  if (!file) {
-    std::cerr << "Could not open file " << filename << "\n";
+  auto result =
+      donner::ReadFileBounded(filename, donner::svg::parser::SVGParser::kDefaultMaximumInputSize);
+  if (const auto* contents = std::get_if<std::string>(&result)) {
+    return *contents;
+  } else {
+    std::cerr << donner::FileReadErrorMessage(std::get<donner::FileReadError>(result)) << ": "
+              << donner::EscapeTerminalText(filename) << "\n";
     return {};
   }
-  std::ostringstream out;
-  out << file.rdbuf();
-  return std::move(out).str();
 }
 
 /// Bundles the loaded document with its hit-test controller and the

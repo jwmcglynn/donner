@@ -14,11 +14,12 @@
 
 #include <cstdlib>
 #include <filesystem>
-#include <fstream>
 #include <iostream>
-#include <vector>
+#include <sstream>
 
+#include "donner/base/FileUtils.h"
 #include "donner/base/ParseWarningSink.h"
+#include "donner/base/TerminalEscape.h"
 #include "donner/svg/SVG.h"
 #include "donner/svg/renderer/Renderer.h"
 
@@ -43,20 +44,13 @@ int main(int argc, char* argv[]) {
   }
 
   //! [load_file]
-  // Load the file and store it in a mutable std::vector<char>.
-  std::ifstream file(argv[1]);
-  if (!file) {
-    std::cerr << "Could not open file " << argv[1] << "\n";
+  auto fileResult = ReadFileBounded(argv[1], SVGParser::kDefaultMaximumInputSize);
+  const auto* fileData = std::get_if<std::string>(&fileResult);
+  if (fileData == nullptr) {
+    std::cerr << FileReadErrorMessage(std::get<FileReadError>(fileResult)) << ": "
+              << EscapeTerminalText(argv[1]) << "\n";
     return 1;  // Return an error code from main.
   }
-
-  std::string fileData;
-  file.seekg(0, std::ios::end);
-  const size_t fileLength = file.tellg();
-  file.seekg(0);
-
-  fileData.resize(fileLength);
-  file.read(fileData.data(), static_cast<std::streamsize>(fileLength));
   //! [load_file]
 
   // Parse the SVG. Note that the lifetime of the vector must be longer than the returned
@@ -69,13 +63,15 @@ int main(int argc, char* argv[]) {
 
   ParseWarningSink warnings;
   // warnings and options are optional, call ParseSVG(fileData) to use defaults and ignore warnings.
-  ParseResult<SVGDocument> maybeDocument = SVGParser::ParseSVG(fileData, warnings, options);
+  ParseResult<SVGDocument> maybeDocument = SVGParser::ParseSVG(*fileData, warnings, options);
   //! [parse]
 
   //! [handle_errors]
   // ParseResult either contains an SVGDocument or an error.
   if (maybeDocument.hasError()) {
-    std::cerr << "Parse Error: " << maybeDocument.error() << "\n";
+    std::ostringstream diagnostic;
+    diagnostic << maybeDocument.error();
+    std::cerr << "Parse Error: " << EscapeTerminalText(diagnostic.str()) << "\n";
     return 1;  // Return an error code from main.
   }
 
@@ -84,7 +80,9 @@ int main(int argc, char* argv[]) {
   if (warnings.hasWarnings()) {
     std::cout << "Warnings:\n";
     for (const ParseDiagnostic& w : warnings.warnings()) {
-      std::cout << "  " << w << "\n";
+      std::ostringstream diagnostic;
+      diagnostic << w;
+      std::cout << "  " << EscapeTerminalText(diagnostic.str()) << "\n";
     }
   }
 

@@ -37,11 +37,15 @@
 #include <fstream>
 #include <iostream>
 #include <memory>
+#include <sstream>
 #include <string>
 #include <webgpu/webgpu.hpp>
 
+#include "donner/base/FileUtils.h"
 #include "donner/base/ParseWarningSink.h"
+#include "donner/base/TerminalEscape.h"
 #include "donner/svg/SVG.h"
+#include "donner/svg/parser/SVGParser.h"
 #include "donner/svg/renderer/RendererGeode.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
 #include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
@@ -60,18 +64,13 @@ void GlfwErrorCallback(int error, const char* description) {
   std::fprintf(stderr, "GLFW error %d: %s\n", error, description);
 }
 
-/// Slurp a file into a string. Matches the idiom in `svg_to_png.cc`.
 std::string LoadFile(const char* path) {
-  std::ifstream file(path, std::ios::binary);
-  if (!file) {
-    return {};
+  auto result =
+      donner::ReadFileBounded(path, donner::svg::parser::SVGParser::kDefaultMaximumInputSize);
+  if (const auto* contents = std::get_if<std::string>(&result)) {
+    return *contents;
   }
-  std::string data;
-  file.seekg(0, std::ios::end);
-  data.resize(static_cast<size_t>(file.tellg()));
-  file.seekg(0);
-  file.read(data.data(), static_cast<std::streamsize>(data.size()));
-  return data;
+  return {};
 }
 
 /// Pick a surface format. The first entry in `formats` is the adapter's
@@ -103,14 +102,17 @@ int main(int argc, char* argv[]) {
   // --- Parse the SVG once up front ---
   const std::string svgData = LoadFile(argv[1]);
   if (svgData.empty()) {
-    std::fprintf(stderr, "Failed to open or empty SVG: %s\n", argv[1]);
+    const std::string safePath = donner::EscapeTerminalText(argv[1]);
+    std::fprintf(stderr, "Failed to open or empty SVG: %s\n", safePath.c_str());
     return 1;
   }
 
   donner::ParseWarningSink warnings;
   auto maybeDocument = donner::svg::parser::SVGParser::ParseSVG(svgData, warnings);
   if (maybeDocument.hasError()) {
-    std::cerr << "SVG parse error: " << maybeDocument.error() << "\n";
+    std::ostringstream diagnostic;
+    diagnostic << maybeDocument.error();
+    std::cerr << "SVG parse error: " << donner::EscapeTerminalText(diagnostic.str()) << "\n";
     return 1;
   }
   donner::svg::SVGDocument document = std::move(maybeDocument.result());

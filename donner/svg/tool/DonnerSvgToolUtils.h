@@ -21,16 +21,14 @@ namespace donner::svg {
  */
 std::string BuildCssSelectorPath(const SVGElement& element);
 
-/** Return the sandbox root selected for an absolute input document path. */
-inline std::optional<std::filesystem::path> ResourceSandboxRootForAbsoluteInput(
-    const std::filesystem::path& absoluteInputPath) {
-  if (!absoluteInputPath.is_absolute() || !absoluteInputPath.has_filename()) {
-    return std::nullopt;
-  }
-  std::error_code error;
-  const std::filesystem::path root = std::filesystem::current_path(error);
-  return error ? std::nullopt : std::optional<std::filesystem::path>(root);
-}
+/**
+ * Return the narrowest sandbox root for an absolute input document path.
+ *
+ * A document grants access only to its containing directory, never to an ambient process working
+ * directory.
+ */
+std::optional<std::filesystem::path> ResourceSandboxRootForAbsoluteInput(
+    const std::filesystem::path& absoluteInputPath);
 
 using ::donner::EscapeTerminalText;
 
