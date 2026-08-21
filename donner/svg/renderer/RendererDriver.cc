@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstring>
 #include <iostream>
+#include <limits>
 #include <optional>
 #include <span>
 #include <unordered_set>
@@ -79,6 +80,16 @@ inline constexpr int kMaxFeImageFragmentDepth = 32;
 /// culling. Keeps fractional-pixel strokes at the viewport edge safely on-screen
 /// - we'd rather do a little extra work than cull content the user should see.
 inline constexpr double kViewportCullSlackDevicePx = 1.0;
+
+Vector2i CheckedRenderingSize(const RenderViewport& viewport) {
+  constexpr double kMaximumDimension = static_cast<double>(std::numeric_limits<int>::max());
+  if (!std::isfinite(viewport.size.x) || !std::isfinite(viewport.size.y) || viewport.size.x < 0.0 ||
+      viewport.size.y < 0.0 || viewport.size.x > kMaximumDimension ||
+      viewport.size.y > kMaximumDimension) {
+    return Vector2i::Zero();
+  }
+  return Vector2i(static_cast<int>(viewport.size.x), static_cast<int>(viewport.size.y));
+}
 
 /// Compute the draw call's local-space AABB (inclusive of stroke width) for
 /// the given entity, or `std::nullopt` if the entity has no drawable content
@@ -1286,7 +1297,7 @@ void RendererDriver::drawPreparedDocument(SVGDocument& document) {
 void RendererDriver::drawPreparedDocument(SVGDocument& document, const RenderViewport& viewport,
                                           const Transform2d& surfaceFromCanvas) {
   resetOwnedFilterPreparationBudget();
-  renderingSize_ = Vector2i(static_cast<int>(viewport.size.x), static_cast<int>(viewport.size.y));
+  renderingSize_ = CheckedRenderingSize(viewport);
   surfaceFromCanvasTransform_ = surfaceFromCanvas;
 
   renderer_.beginFrame(viewport);
@@ -1333,7 +1344,7 @@ void RendererDriver::drawEntityRange(Registry& registry, Entity firstEntity, Ent
                                      const RenderViewport& viewport,
                                      const Transform2d& surfaceFromCanvas) {
   resetOwnedFilterPreparationBudget();
-  renderingSize_ = Vector2i(static_cast<int>(viewport.size.x), static_cast<int>(viewport.size.y));
+  renderingSize_ = CheckedRenderingSize(viewport);
   surfaceFromCanvasTransform_ = surfaceFromCanvas;
 
   renderer_.beginFrame(viewport);
@@ -1349,7 +1360,7 @@ bool RendererDriver::drawEntityRangeInterruptibly(Registry& registry, Entity fir
                                                   const Transform2d& surfaceFromCanvas,
                                                   const std::function<bool()>& shouldCancel) {
   resetOwnedFilterPreparationBudget();
-  renderingSize_ = Vector2i(static_cast<int>(viewport.size.x), static_cast<int>(viewport.size.y));
+  renderingSize_ = CheckedRenderingSize(viewport);
   surfaceFromCanvasTransform_ = surfaceFromCanvas;
 
   renderer_.beginFrame(viewport);
@@ -1391,7 +1402,7 @@ void RendererDriver::drawEntityRangeIntoCurrentFrame(Registry& registry, Entity 
                                                      Entity lastEntity,
                                                      const RenderViewport& viewport,
                                                      const Transform2d& surfaceFromCanvas) {
-  renderingSize_ = Vector2i(static_cast<int>(viewport.size.x), static_cast<int>(viewport.size.y));
+  renderingSize_ = CheckedRenderingSize(viewport);
   surfaceFromCanvasTransform_ = surfaceFromCanvas;
 
   (void)drawPreparedEntityRange(registry, firstEntity, lastEntity, {});
