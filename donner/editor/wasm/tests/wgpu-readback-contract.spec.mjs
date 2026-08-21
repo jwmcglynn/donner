@@ -27,6 +27,10 @@ const presentationRegressionSource = await readFile(
   new URL("./browser-presentation-regression.spec.ts", import.meta.url),
   "utf8",
 );
+const compositedDragSource = await readFile(
+  new URL("./composited-drag-invariants.spec.ts", import.meta.url),
+  "utf8",
+);
 const geodeDeviceSource = await readFile(
   new URL("../../../svg/renderer/geode/GeodeDevice.cc", import.meta.url),
   "utf8",
@@ -288,6 +292,17 @@ test("the presentation regression gates print the worker health they wait on", (
     presentationRegressionSource,
     /\.poll\((?:async )?\(\) => page\.evaluate\(\(\) => window\.__donnerWorkerStats\?\.completedResults/,
   );
+});
+
+test("the composited drag sample gate waits for the document worker, not sidebar thumbnails", () => {
+  const helperStart = compositedDragSource.indexOf("async function openDonnerSplash(");
+  const helperEnd = compositedDragSource.indexOf("* The Donner_D left stem", helperStart);
+  assert.ok(helperStart >= 0 && helperEnd > helperStart, "expected the Splash open helper");
+  const helper = compositedDragSource.slice(helperStart, helperEnd);
+
+  assert.match(helper, /__donnerWorkerStats/);
+  assert.match(helper, /\.toEqual\(expect\.objectContaining\(\{ reached: true \}\)\)/);
+  assert.doesNotMatch(helper, /__donnerLayerThumbnailStats/);
 });
 
 test("worker WebGPU startup keeps its browser Promise bridge private and single-purpose", () => {
