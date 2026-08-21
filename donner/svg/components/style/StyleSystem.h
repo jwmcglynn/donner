@@ -35,15 +35,12 @@ public:
   };
 
   explicit StyleResourceBudget(std::shared_ptr<DocumentResourceFamilyBudget> family = nullptr)
-      : family_(nullptr) {
-    (void)family;
-  }
+      : family_(std::move(family)) {}
   explicit StyleResourceBudget(Limits limits,
                                std::shared_ptr<DocumentResourceFamilyBudget> family = nullptr)
-      : family_(nullptr) {
-    (void)limits;
-    (void)family;
-  }
+      : limits_(limits),
+        selectorTraversal_(limits.selectorTraversalSteps),
+        family_(std::move(family)) {}
   ~StyleResourceBudget() {
     if (family_) {
       family_->release(DocumentResourceFamilyBudget::Kind::ComputedStyle, complexPropertyBytes_);
@@ -77,12 +74,26 @@ public:
   }
 
   [[nodiscard]] bool reserveRuleElementMatch() {
+    if (rejected_ || selectorTraversal_.rejected() ||
+        ruleElementMatches_ >= limits_.ruleElementMatches) {
+      rejected_ = true;
+      return false;
+    }
     ++ruleElementMatches_;
     return true;
   }
 
   [[nodiscard]] bool reserveDeclarationApplication(std::size_t componentCount = 0,
                                                    std::size_t sourceBytes = 0) {
+    if (rejected_ || selectorTraversal_.rejected() ||
+        declarationApplications_ >= limits_.declarationApplications ||
+        declarationComponentWork_ > limits_.declarationComponentWork ||
+        componentCount > limits_.declarationComponentWork - declarationComponentWork_ ||
+        declarationByteWork_ > limits_.declarationByteWork ||
+        sourceBytes > limits_.declarationByteWork - declarationByteWork_) {
+      rejected_ = true;
+      return false;
+    }
     ++declarationApplications_;
     declarationComponentWork_ += componentCount;
     declarationByteWork_ += sourceBytes;
@@ -102,6 +113,13 @@ public:
     }
 
     const std::size_t additional = byteCount - previous;
+    if (rejected_ || complexPropertyBytes_ > limits_.complexPropertyBytes ||
+        additional > limits_.complexPropertyBytes - complexPropertyBytes_ ||
+        (family_ &&
+         !family_->reserve(DocumentResourceFamilyBudget::Kind::ComputedStyle, additional))) {
+      rejected_ = true;
+      return false;
+    }
     complexPropertyBytes_ += additional;
     reservations_[entity] = byteCount;
     return true;
@@ -135,7 +153,7 @@ public:
   [[nodiscard]] std::size_t declarationComponentWork() const { return declarationComponentWork_; }
   [[nodiscard]] std::size_t declarationByteWork() const { return declarationByteWork_; }
   [[nodiscard]] std::size_t complexPropertyBytes() const { return complexPropertyBytes_; }
-  [[nodiscard]] bool rejected() const { return false; }
+  [[nodiscard]] bool rejected() const { return rejected_ || selectorTraversal_.rejected(); }
   [[nodiscard]] const Limits& limits() const { return limits_; }
 
 private:
@@ -279,18 +297,6 @@ public:
 
 private:
   void applyStylesheetRules(Registry& registry, Entity treeEntity, Entity dataEntity,
-                            PropertyRegistry& properties,
-                            css::SelectorTraversalBudget& selectorTraversalBudget,
-                            ParseWarningSink& warningSink);
-  PropertyRegistry inheritProperties(Registry& registry, Entity parent, PropertyRegistry properties,
-                                     ParseWarningSink& warningSink,
-                                     css::SelectorTraversalBudget& selectorTraversalBudget);
-  static void resolveRelativeFontProperties(Registry& registry, Entity parent,
-                                            PropertyRegistry& properties);
-  const ComputedStyleComponent& computeStyleWithBudget(
-      EntityHandle handle, ParseWarningSink& warningSink,
-      css::SelectorTraversalBudget& selectorTraversalBudget);
-  void applyStylesheetRules(Registry& registry, Entity treeEntity, Entity dataEntity,
                             PropertyRegistry& properties, StyleResourceBudget& styleBudget,
                             ParseWarningSink& warningSink);
   PropertyRegistry inheritProperties(Registry& registry, Entity parent, PropertyRegistry properties,
@@ -298,8 +304,7 @@ private:
   static void resolveRelativeFontProperties(Registry& registry, Entity parent,
                                             PropertyRegistry& properties);
   void computePropertiesInto(EntityHandle handle, ComputedStyleComponent& computedStyle,
-                             ParseWarningSink& warningSink,
-                             css::SelectorTraversalBudget& selectorTraversalBudget);
+                             ParseWarningSink& warningSink);
 };
 
 }  // namespace donner::svg::components

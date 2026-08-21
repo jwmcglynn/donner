@@ -1,5 +1,9 @@
 #include "donner/svg/components/shadow/ShadowTreeSystem.h"
 
+#include <algorithm>
+#include <unordered_set>
+#include <vector>
+
 #include "donner/base/ParseWarningSink.h"
 #include "donner/base/Utils.h"
 #include "donner/base/xml/components/TreeComponent.h"
@@ -14,25 +18,82 @@
 
 namespace donner::svg::components {
 
-bool ShadowTreeResourceBudget::reserve(std::size_t generatedEntities, std::size_t referenceDepth,
-                                       std::size_t traversalDepth) {
-  (void)referenceDepth;
-  (void)traversalDepth;
-  ++instances_;
-  generatedEntities_ += generatedEntities;
-  return true;
-}
-
-void ShadowTreeSystem::beginRebuild(Registry& registry) {
-  auto* budget = registry.ctx().find<ShadowTreeResourceBudget>();
-  if (budget == nullptr) {
-    registry.ctx().emplace<ShadowTreeResourceBudget>();
-  } else {
-    budget->reset();
-  }
-}
-
 namespace {
+
+struct ShadowExpansionCost {
+  std::size_t generatedEntities = 0;
+  std::size_t maximumReferenceDepth = 0;
+  std::size_t maximumTraversalDepth = 0;
+};
+
+std::optional<ShadowExpansionCost> PreflightShadowExpansion(
+    Registry& registry, Entity lightTarget, const std::set<Entity>& shadowHostParents) {
+  struct WorkItem {
+    Entity entity = entt::null;
+    Entity leavingReference = entt::null;
+    std::size_t referenceDepth = 0;
+    std::size_t traversalDepth = 0;
+  };
+
+  std::vector<WorkItem> stack = {{.entity = lightTarget, .referenceDepth = 0, .traversalDepth = 1}};
+  std::unordered_set<Entity> activeReferences;
+  ShadowExpansionCost cost;
+
+  while (!stack.empty()) {
+    const WorkItem work = stack.back();
+    stack.pop_back();
+    if (work.leavingReference != entt::null) {
+      activeReferences.erase(work.leavingReference);
+      continue;
+    }
+    if (work.entity == entt::null) {
+      continue;
+    }
+    if (work.traversalDepth > ShadowTreeResourceBudget::kMaximumTraversalDepth) {
+      return std::nullopt;
+    }
+
+    const auto* nestedShadow = registry.try_get<ShadowTreeComponent>(work.entity);
+    std::optional<ResolvedReference> nestedTarget;
+    if (nestedShadow != nullptr) {
+      nestedTarget = nestedShadow->mainTargetEntity(registry);
+      if (!nestedTarget.has_value() || shadowHostParents.count(nestedTarget->handle) != 0 ||
+          activeReferences.count(nestedTarget->handle) != 0) {
+        continue;
+      }
+    }
+
+    if (cost.generatedEntities >= ShadowTreeResourceBudget::kMaximumGeneratedEntities) {
+      return std::nullopt;
+    }
+    ++cost.generatedEntities;
+    cost.maximumReferenceDepth = std::max(cost.maximumReferenceDepth, work.referenceDepth);
+    cost.maximumTraversalDepth = std::max(cost.maximumTraversalDepth, work.traversalDepth);
+
+    if (nestedTarget.has_value()) {
+      const std::size_t nextReferenceDepth = work.referenceDepth + 1;
+      if (nextReferenceDepth > ShadowTreeResourceBudget::kMaximumReferenceDepth) {
+        return std::nullopt;
+      }
+      activeReferences.insert(nestedTarget->handle);
+      stack.push_back({.leavingReference = nestedTarget->handle});
+      stack.push_back({.entity = nestedTarget->handle,
+                       .referenceDepth = nextReferenceDepth,
+                       .traversalDepth = work.traversalDepth + 1});
+      continue;
+    }
+
+    const auto& tree = registry.get<donner::components::TreeComponent>(work.entity);
+    for (Entity child = tree.lastChild(); child != entt::null;
+         child = registry.get<donner::components::TreeComponent>(child).previousSibling()) {
+      stack.push_back({.entity = child,
+                       .referenceDepth = work.referenceDepth,
+                       .traversalDepth = work.traversalDepth + 1});
+    }
+  }
+
+  return cost;
+}
 
 /**
  * Get the target entity for a 'fill' or 'stroke' paint server reference.
@@ -54,7 +115,55 @@ inline std::tuple<Entity, RcString> GetPaintTarget(Registry& registry, Entity li
   return std::make_tuple(entt::null, "");
 }
 
+std::set<Entity> CollectShadowHostParents(EntityHandle entity) {
+  std::set<Entity> parents;
+  for (Entity current = entity.get<donner::components::TreeComponent>().parent();
+       current != entt::null;
+       current = entity.registry()->get<donner::components::TreeComponent>(current).parent()) {
+    parents.insert(current);
+  }
+  return parents;
+}
+
+bool AdmitShadowExpansion(Registry& registry, Entity lightTarget,
+                          const std::set<Entity>& shadowHostParents,
+                          ShadowTreeResourceBudget& resourceBudget) {
+  const auto cost = PreflightShadowExpansion(registry, lightTarget, shadowHostParents);
+  if (!cost) {
+    resourceBudget.reject();
+    return false;
+  }
+  if (!resourceBudget.reserve(cost->generatedEntities, cost->maximumReferenceDepth,
+                              cost->maximumTraversalDepth)) {
+    resourceBudget.reject();
+    return false;
+  }
+  return true;
+}
+
 }  // namespace
+
+bool ShadowTreeResourceBudget::reserve(std::size_t generatedEntities, std::size_t referenceDepth,
+                                       std::size_t traversalDepth) {
+  if (rejected_ || instances_ >= kMaximumInstances ||
+      generatedEntities > kMaximumGeneratedEntities - generatedEntities_ ||
+      referenceDepth > kMaximumReferenceDepth || traversalDepth > kMaximumTraversalDepth) {
+    rejected_ = true;
+    return false;
+  }
+
+  ++instances_;
+  generatedEntities_ += generatedEntities;
+  return true;
+}
+
+void ShadowTreeSystem::beginRebuild(Registry& registry) {
+  if (registry.ctx().contains<ShadowTreeResourceBudget>()) {
+    registry.ctx().get<ShadowTreeResourceBudget>().reset();
+  } else {
+    registry.ctx().emplace<ShadowTreeResourceBudget>();
+  }
+}
 
 void ShadowTreeSystem::teardown(Registry& registry, ComputedShadowTreeComponent& shadow) {
   // TODO(jwmcglynn): Ideally TreeComponents should automatically cleanup when the Entity is
@@ -115,11 +224,7 @@ std::optional<size_t> ShadowTreeSystem::populateInstance(EntityHandle entity,
     return std::nullopt;
   }
 
-  std::set<Entity> shadowHostParents;
-  for (auto cur = entity.get<donner::components::TreeComponent>().parent(); cur != entt::null;
-       cur = entity.registry()->get<donner::components::TreeComponent>(cur).parent()) {
-    shadowHostParents.insert(cur);
-  }
+  const std::set<Entity> shadowHostParents = CollectShadowHostParents(entity);
 
   if (shadowHostParents.count(lightTarget)) {
     ParseDiagnostic err;
@@ -131,6 +236,16 @@ std::optional<size_t> ShadowTreeSystem::populateInstance(EntityHandle entity,
   }
 
   Registry& registry = *entity.registry();
+
+  auto& resourceBudget = registry.ctx().contains<ShadowTreeResourceBudget>()
+                             ? registry.ctx().get<ShadowTreeResourceBudget>()
+                             : registry.ctx().emplace<ShadowTreeResourceBudget>();
+  if (!AdmitShadowExpansion(registry, lightTarget, shadowHostParents, resourceBudget)) {
+    ParseDiagnostic err;
+    err.reason = "Shadow tree resource budget exceeded for '" + std::string(href) + "'";
+    warningSink.add(std::move(err));
+    return std::nullopt;
+  }
 
   RecursionGuard guard;
   Entity shadowEntity = createShadowAndChildren(registry, branchType, storage, guard, entity,
@@ -266,7 +381,10 @@ Entity ShadowTreeSystem::createShadowAndChildren(
     for (auto child = registry.get<donner::components::TreeComponent>(lightTarget).firstChild();
          child != entt::null;
          child = registry.get<donner::components::TreeComponent>(child).nextSibling()) {
-      RecursionGuard childGuard = guard.with(child);
+      // The guard tracks href targets, not ordinary source-tree traversal. Adding a child here
+      // makes a legal descent back through a referenced container look like a duplicate before
+      // the nested href can be checked, and RecursionGuard::with() asserts. The nested-shadow path
+      // above atomically checks and adds every followed target.
       std::ignore = createShadowAndChildren(registry, branchType, storage, guard, shadow, child,
                                             shadowHostParents, warningSink);
     }

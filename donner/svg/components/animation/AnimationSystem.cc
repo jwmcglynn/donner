@@ -14,6 +14,7 @@
 #include "donner/svg/components/animation/AnimateTransformComponent.h"
 #include "donner/svg/components/animation/AnimateValueComponent.h"
 #include "donner/svg/components/animation/AnimatedValuesComponent.h"
+#include "donner/svg/components/animation/AnimationResourceBudget.h"
 #include "donner/svg/components/animation/AnimationStateComponent.h"
 #include "donner/svg/components/animation/AnimationTimingComponent.h"
 #include "donner/svg/components/animation/SetAnimationComponent.h"
@@ -222,6 +223,9 @@ std::vector<double> parseNumbers(std::string_view str) {
     if (maybeNumber.hasError()) {
       break;
     }
+    if (result.size() >= AnimationResourceBudget::kMaximumNumbersPerValue) {
+      break;
+    }
     result.push_back(maybeNumber.result().number);
     str.remove_prefix(maybeNumber.result().consumedChars);
   }
@@ -289,9 +293,7 @@ std::string interpolatePaths(const Path& from, const Path& to, double t) {
         oss << "C" << c1x << "," << c1y << " " << c2x << "," << c2y << " " << ex << "," << ey;
         break;
       }
-      case Path::Verb::ClosePath:
-        oss << "Z";
-        break;
+      case Path::Verb::ClosePath: oss << "Z"; break;
     }
   }
 
@@ -301,6 +303,10 @@ std::string interpolatePaths(const Path& from, const Path& to, double t) {
 /// Try to interpolate SVG path data strings.
 /// Returns empty string if paths are not structurally compatible.
 std::string tryInterpolatePaths(const std::string& fromStr, const std::string& toStr, double t) {
+  if (fromStr.size() > AnimationResourceBudget::kMaximumPathValueBytes ||
+      toStr.size() > AnimationResourceBudget::kMaximumPathValueBytes) {
+    return {};
+  }
   auto fromResult = parser::PathParser::Parse(fromStr);
   auto toResult = parser::PathParser::Parse(toStr);
   if (!fromResult.hasResult() || !toResult.hasResult()) {
@@ -403,8 +409,8 @@ std::string interpolateAnimateValue(double progress, const AnimateValueComponent
   }
 
   // Try path data interpolation (for animating the 'd' attribute).
-  auto pathResult = tryInterpolatePaths(*effectiveValues[interval],
-                                        *effectiveValues[interval + 1], localT);
+  auto pathResult =
+      tryInterpolatePaths(*effectiveValues[interval], *effectiveValues[interval + 1], localT);
   if (!pathResult.empty()) {
     return pathResult;
   }
@@ -485,12 +491,8 @@ std::string formatTransform(TransformAnimationType type, const std::vector<doubl
       }
       oss << ")";
       break;
-    case TransformAnimationType::SkewX:
-      oss << "skewX(" << values[0] << ")";
-      break;
-    case TransformAnimationType::SkewY:
-      oss << "skewY(" << values[0] << ")";
-      break;
+    case TransformAnimationType::SkewX: oss << "skewX(" << values[0] << ")"; break;
+    case TransformAnimationType::SkewY: oss << "skewY(" << values[0] << ")"; break;
   }
   return oss.str();
 }
@@ -534,9 +536,8 @@ std::string interpolateTransformValue(double progress,
   } else if (transformComp.by.has_value()) {
     // by-animation: from -> from + by. An absent from is the neutral value for this transform
     // type, so e.g. a by-only scale animates from scale(1) to scale(1 + by).
-    std::vector<double> fromNums = transformComp.from.has_value()
-                                       ? parsePadded(*transformComp.from)
-                                       : identityTransformValues(type);
+    std::vector<double> fromNums = transformComp.from.has_value() ? parsePadded(*transformComp.from)
+                                                                  : identityTransformValues(type);
     const std::vector<double> byNums = parsePadded(*transformComp.by);
     std::vector<double> toNums = fromNums;
     for (size_t i = 0; i < toNums.size() && i < byNums.size(); ++i) {
@@ -576,83 +577,134 @@ std::string interpolateTransformValue(double progress,
   return formatTransform(type, result);
 }
 
+void AddAnimationSourceBytes(std::string_view value, std::size_t& sourceBytes) {
+  if (sourceBytes <= AnimationResourceBudget::kMaximumSourceBytes) {
+    sourceBytes += std::min(value.size(), AnimationResourceBudget::kMaximumSourceBytes + 1);
+  }
+}
+
+void AddOptionalAnimationSourceBytes(const std::optional<std::string>& value,
+                                     std::size_t& sourceBytes) {
+  if (value.has_value()) {
+    AddAnimationSourceBytes(*value, sourceBytes);
+  }
+}
+
+std::size_t AnimationSourceBytes(const SetAnimationComponent* setComp,
+                                 const AnimateValueComponent* valueComp,
+                                 const AnimateTransformComponent* transformComp) {
+  std::size_t sourceBytes = 0;
+  const auto addValues = [&](const auto& component) {
+    AddOptionalAnimationSourceBytes(component.from, sourceBytes);
+    AddOptionalAnimationSourceBytes(component.to, sourceBytes);
+    AddOptionalAnimationSourceBytes(component.by, sourceBytes);
+    for (const std::string& value : component.values) {
+      AddAnimationSourceBytes(value, sourceBytes);
+      if (sourceBytes > AnimationResourceBudget::kMaximumSourceBytes) {
+        break;
+      }
+    }
+  };
+  if (setComp) {
+    AddAnimationSourceBytes(setComp->attributeName, sourceBytes);
+    AddAnimationSourceBytes(setComp->to, sourceBytes);
+    AddOptionalAnimationSourceBytes(setComp->href, sourceBytes);
+  } else if (valueComp) {
+    addValues(*valueComp);
+  } else if (transformComp) {
+    addValues(*transformComp);
+  }
+  return sourceBytes;
+}
+
+std::optional<std::pair<std::string_view, std::string>> SampleAnimationValue(
+    double progress, const SetAnimationComponent* setComp, const AnimateValueComponent* valueComp,
+    const AnimateTransformComponent* transformComp) {
+  if (setComp) {
+    if (setComp->attributeName.empty()) {
+      return std::nullopt;
+    }
+    return std::pair<std::string_view, std::string>{setComp->attributeName, setComp->to};
+  }
+  if (valueComp) {
+    if (valueComp->attributeName.empty()) {
+      return std::nullopt;
+    }
+    return std::pair<std::string_view, std::string>{valueComp->attributeName,
+                                                    interpolateAnimateValue(progress, *valueComp)};
+  }
+  return std::pair<std::string_view, std::string>{
+      "transform", interpolateTransformValue(progress, *transformComp)};
+}
+
+bool ProcessAnimation(Registry& registry, Entity entity, double documentTime,
+                      AnimationResourceBudget& resourceBudget) {
+  const auto& timing = registry.get<AnimationTimingComponent>(entity);
+  auto& state = registry.get_or_emplace<AnimationStateComponent>(entity);
+  const auto* setComp = registry.try_get<SetAnimationComponent>(entity);
+  const auto* valueComp = registry.try_get<AnimateValueComponent>(entity);
+  const auto* transformComp = registry.try_get<AnimateTransformComponent>(entity);
+
+  if (!resourceBudget.reserveAnimation(AnimationSourceBytes(setComp, valueComp, transformComp))) {
+    return false;
+  }
+  if (state.targetEntity == entt::null) {
+    const std::optional<std::string>& href =
+        setComp ? setComp->href : (valueComp ? valueComp->href : transformComp->href);
+    state.targetEntity = resolveTargetByHrefOrParent(registry, entity, href);
+  }
+  computeTimingState(state, timing, documentTime, /*isSetElement=*/setComp != nullptr);
+  if (!registry.valid(state.targetEntity) || !shouldApplyValue(state.phase, timing.fill)) {
+    return true;
+  }
+
+  const double sampleTime =
+      (state.phase == AnimationPhase::Active || !std::isfinite(state.activeDuration))
+          ? documentTime
+          : state.beginTime + state.activeDuration;
+  const double progress =
+      computeProgress(sampleTime, state.beginTime, state.simpleDuration, state.activeDuration);
+  auto sampled = SampleAnimationValue(progress, setComp, valueComp, transformComp);
+  if (!sampled || sampled->second.empty()) {
+    return true;
+  }
+  if (!resourceBudget.reserveOutput(sampled->second.size())) {
+    return false;
+  }
+  auto& values = registry.get_or_emplace<AnimatedValuesComponent>(state.targetEntity);
+  values.overrides[std::string(sampled->first)] = std::move(sampled->second);
+  return true;
+}
+
+std::vector<Entity> CollectAnimationEntities(Registry& registry) {
+  std::vector<Entity> entities;
+  for (auto [entity, timing] : registry.view<AnimationTimingComponent>().each()) {
+    if (registry.any_of<SetAnimationComponent, AnimateValueComponent, AnimateTransformComponent>(
+            entity)) {
+      entities.push_back(entity);
+    }
+  }
+  std::sort(entities.begin(), entities.end());
+  return entities;
+}
+
 }  // namespace
 
 void AnimationSystem::advance(Registry& registry, double documentTime,
                               std::vector<ParseDiagnostic>* /*outWarnings*/) {
+  if (registry.ctx().contains<AnimationResourceBudget>()) {
+    registry.ctx().erase<AnimationResourceBudget>();
+  }
+  auto& resourceBudget = registry.ctx().emplace<AnimationResourceBudget>();
   // Clear all animated overrides from previous frame.
   for (auto [entity, animValues] : registry.view<AnimatedValuesComponent>().each()) {
     animValues.overrides.clear();
   }
 
-  // Collect all animation entities and process them in document order (ascending entity ID).
-  // Replace-mode sandwich priority: the last animation in document order wins, regardless of
-  // element type, so all animation element types share a single ordered pass.
-  std::vector<Entity> animationEntities;
-  for (auto [entity, timing] : registry.view<AnimationTimingComponent>().each()) {
-    if (registry.any_of<SetAnimationComponent, AnimateValueComponent, AnimateTransformComponent>(
-            entity)) {
-      animationEntities.push_back(entity);
+  for (const Entity entity : CollectAnimationEntities(registry)) {
+    if (!ProcessAnimation(registry, entity, documentTime, resourceBudget)) {
+      break;
     }
-  }
-  std::sort(animationEntities.begin(), animationEntities.end());
-
-  for (const Entity entity : animationEntities) {
-    const auto& timing = registry.get<AnimationTimingComponent>(entity);
-    auto& state = registry.get_or_emplace<AnimationStateComponent>(entity);
-
-    const auto* setComp = registry.try_get<SetAnimationComponent>(entity);
-    const auto* valueComp = registry.try_get<AnimateValueComponent>(entity);
-    const auto* transformComp = registry.try_get<AnimateTransformComponent>(entity);
-
-    if (state.targetEntity == entt::null) {
-      const std::optional<std::string>& href =
-          setComp ? setComp->href : (valueComp ? valueComp->href : transformComp->href);
-      state.targetEntity = resolveTargetByHrefOrParent(registry, entity, href);
-    }
-
-    computeTimingState(state, timing, documentTime, /*isSetElement=*/setComp != nullptr);
-
-    if (!registry.valid(state.targetEntity) || !shouldApplyValue(state.phase, timing.fill)) {
-      continue;
-    }
-
-    // While active, sample at the current time. When frozen (After phase with fill="freeze"),
-    // sample at the end of the active interval, so an active duration truncated by end/max/
-    // repeatDur freezes at the last value actually reached instead of the simple-duration
-    // endpoint.
-    const double sampleTime =
-        (state.phase == AnimationPhase::Active || !std::isfinite(state.activeDuration))
-            ? documentTime
-            : state.beginTime + state.activeDuration;
-    const double progress =
-        computeProgress(sampleTime, state.beginTime, state.simpleDuration, state.activeDuration);
-
-    std::string_view attributeName;
-    std::string newValue;
-    if (setComp) {
-      if (setComp->attributeName.empty()) {
-        continue;
-      }
-      attributeName = setComp->attributeName;
-      newValue = setComp->to;
-    } else if (valueComp) {
-      if (valueComp->attributeName.empty()) {
-        continue;
-      }
-      attributeName = valueComp->attributeName;
-      newValue = interpolateAnimateValue(progress, *valueComp);
-    } else {
-      attributeName = "transform";
-      newValue = interpolateTransformValue(progress, *transformComp);
-    }
-
-    if (newValue.empty()) {
-      continue;
-    }
-
-    auto& animValues = registry.get_or_emplace<AnimatedValuesComponent>(state.targetEntity);
-    animValues.overrides[std::string(attributeName)] = std::move(newValue);
   }
 
   // Clean up empty AnimatedValuesComponent instances.

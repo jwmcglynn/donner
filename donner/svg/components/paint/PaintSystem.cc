@@ -5,6 +5,7 @@
 #include "donner/svg/components/ElementTypeComponent.h"
 #include "donner/svg/components/EvaluatedReferenceComponent.h"
 #include "donner/svg/components/PreserveAspectRatioComponent.h"
+#include "donner/svg/components/ReferenceResolutionBudget.h"
 #include "donner/svg/components/layout/LayoutSystem.h"
 #include "donner/svg/components/layout/ViewBoxComponent.h"
 #include "donner/svg/components/paint/GradientComponent.h"
@@ -19,6 +20,13 @@
 namespace donner::svg::components {
 
 namespace {
+
+ReferenceResolutionBudget& GetReferenceResolutionBudget(Registry& registry) {
+  if (!registry.ctx().contains<ReferenceResolutionBudget>()) {
+    registry.ctx().emplace<ReferenceResolutionBudget>();
+  }
+  return registry.ctx().get<ReferenceResolutionBudget>();
+}
 
 /**
  * Returns true if the given component does not have any child content other than descriptive
@@ -104,6 +112,9 @@ void PaintSystem::instantiateAllComputedComponents(Registry& registry,
 }
 
 void PaintSystem::createShadowTrees(Registry& registry, ParseWarningSink& warningSink) {
+  auto& budget = GetReferenceResolutionBudget(registry);
+  budget.reset(ReferenceResolutionBudget::Kind::Gradient);
+  budget.reset(ReferenceResolutionBudget::Kind::Pattern);
   createGradientShadowTrees(registry, warningSink);
   createPatternShadowTrees(registry, warningSink);
 }
@@ -241,9 +252,21 @@ std::vector<Entity> PaintSystem::getInheritanceChain(EntityHandle handle,
   // If there's an href, first fill the computed component with defaults from that.
   {
     RecursionGuard guard;
+    auto& budget = GetReferenceResolutionBudget(*handle.registry());
+    const ReferenceResolutionBudget::Kind kind = handle.all_of<PatternComponent>()
+                                                     ? ReferenceResolutionBudget::Kind::Pattern
+                                                     : ReferenceResolutionBudget::Kind::Gradient;
 
     EntityHandle current = handle;
     while (const auto* ref = current.try_get<EvaluatedReferenceComponent<PaintSystem>>()) {
+      const bool alreadyRejected = budget.stats(kind).rejected;
+      if (!budget.reserve(kind, inheritanceChain.size())) {
+        if (!alreadyRejected) {
+          warningSink.add(ParseDiagnostic::Warning("Paint inheritance resource limit exceeded",
+                                                   FileOffset::Offset(0)));
+        }
+        break;
+      }
       if (guard.hasRecursion(ref->target)) {
         {
           ParseDiagnostic err;
@@ -276,10 +299,16 @@ const ComputedStopComponent& PaintSystem::createComputedStopWithStyle(
 // Instantiate shadow trees for valid "href" attributes in gradient elements for all elements in
 // the registry
 void PaintSystem::createGradientShadowTrees(Registry& registry, ParseWarningSink& warningSink) {
+  auto& budget = GetReferenceResolutionBudget(registry);
   for (auto view = registry.view<GradientComponent>(); auto entity : view) {
     const auto& [gradient] = view.get(entity);
 
     if (gradient.href) {
+      if (!budget.reserve(ReferenceResolutionBudget::Kind::Gradient, 1)) {
+        warningSink.add(ParseDiagnostic::Warning("Gradient reference resource limit exceeded",
+                                                 FileOffset::Offset(0)));
+        break;
+      }
       // Resolve the href to its entity and confirm its a gradient
       if (auto resolvedReference = gradient.href.value().resolve(registry)) {
         const EntityHandle resolvedHandle = resolvedReference.value().handle;
@@ -311,10 +340,16 @@ void PaintSystem::createGradientShadowTrees(Registry& registry, ParseWarningSink
 }
 
 void PaintSystem::createPatternShadowTrees(Registry& registry, ParseWarningSink& warningSink) {
+  auto& budget = GetReferenceResolutionBudget(registry);
   for (auto view = registry.view<PatternComponent>(); auto entity : view) {
     const auto& [pattern] = view.get(entity);
 
     if (pattern.href) {
+      if (!budget.reserve(ReferenceResolutionBudget::Kind::Pattern, 1)) {
+        warningSink.add(ParseDiagnostic::Warning("Pattern reference resource limit exceeded",
+                                                 FileOffset::Offset(0)));
+        break;
+      }
       if (auto resolvedReference = pattern.href.value().resolve(registry)) {
         const EntityHandle resolvedHandle = resolvedReference.value().handle;
         if (resolvedHandle.all_of<PatternComponent>()) {

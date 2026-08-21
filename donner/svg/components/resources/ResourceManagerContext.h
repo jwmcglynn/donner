@@ -103,6 +103,10 @@ public:
    */
   void addFontFaces(std::span<const css::FontFace> fontFaces);
 
+  /** Register one stylesheet's current font-face storage once per parsed generation. */
+  void synchronizeStylesheetFontFaces(Entity stylesheetEntity,
+                                      std::span<const css::FontFace> fontFaces);
+
   /**
    * Get all registered `@font-face` declarations.
    */
@@ -135,6 +139,12 @@ private:
 
   /// Indexes into \ref fontFaces_ for font faces with URL sources that need hydration.
   std::vector<size_t> fontFaceIndexesToLoad_;
+
+  struct StylesheetFontFaceRegistration {
+    const css::FontFace* data = nullptr;
+    size_t size = 0;
+  };
+  std::unordered_map<Entity, StylesheetFontFaceRegistration> stylesheetFontFaceRegistrations_;
 
   /// Processing mode for this document.
   ProcessingMode processingMode_ = ProcessingMode::DynamicInteractive;

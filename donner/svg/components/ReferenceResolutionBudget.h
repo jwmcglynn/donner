@@ -20,8 +20,11 @@ public:
   };
 
   bool reserve(Kind kind, std::size_t depth) {
-    (void)depth;
     Stats& current = stats_[static_cast<std::size_t>(kind)];
+    if (current.rejected || depth > kMaximumReferenceDepth || current.hops >= kMaximumHopsPerKind) {
+      current.rejected = true;
+      return false;
+    }
     ++current.hops;
     return true;
   }
