@@ -84,6 +84,7 @@ public:
   }
 
   void reject() { rejected_ = true; }
+  [[nodiscard]] std::size_t work() const { return work_; }
   [[nodiscard]] bool rejected() const { return rejected_; }
 
 private:
@@ -1506,6 +1507,7 @@ FocusPartition ComputeFocusPartition(const svg::SVGDocument& document,
   visible.insert(visible.end(), partition.dimmed.begin(), partition.dimmed.end());
   Normalize(&visible);
   partition.hidden = HiddenLineRanges(static_cast<int>(lineStarts.size()), visible);
+  partition.traversalWork = focusElements.traversalBudget.work();
   partition.resourceLimitExceeded = focusElements.traversalBudget.rejected();
   return partition;
 }
@@ -1599,6 +1601,7 @@ std::optional<StyleFocus> ComputeStyleFocusAtSourceOffset(const svg::SVGDocument
   visible.insert(visible.end(), partition.dimmed.begin(), partition.dimmed.end());
   Normalize(&visible);
   partition.hidden = HiddenLineRanges(static_cast<int>(lineStarts.size()), visible);
+  partition.traversalWork = focusElements.traversalBudget.work();
   partition.resourceLimitExceeded = focusElements.traversalBudget.rejected();
   return StyleFocus{
       .partition = std::move(partition),
