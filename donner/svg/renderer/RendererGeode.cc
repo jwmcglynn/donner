@@ -1259,7 +1259,9 @@ std::optional<GeodeFilterAdmission> AdmitGeodeFilter(const components::FilterGra
 /// record slab, its buffers and its per-entity slots entirely uncreated.
 constexpr bool kEnableSceneBatching = true;
 
-struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::FilterTextureAllocator {
+struct RendererGeode::Impl : public geode::GeometryDebugSink,
+                             public geode::GeometryAdmission,
+                             public geode::FilterTextureAllocator {
   bool verbose = false;
   bool antialias = true;
   std::function<void()> offscreenCreationHookForTesting;
@@ -1280,8 +1282,22 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
   bool ownsTextMaterializationBudget = true;
   std::shared_ptr<geode::GeodeDocumentGeometryBudget::Limits> documentGeometryLimits =
       std::make_shared<geode::GeodeDocumentGeometryBudget::Limits>();
-  std::shared_ptr<std::weak_ptr<geode::GeodeDocumentGeometryBudget>> lastDocumentGeometryBudget =
-      std::make_shared<std::weak_ptr<geode::GeodeDocumentGeometryBudget>>();
+  struct DocumentGeometryFrameState {
+    std::vector<std::shared_ptr<geode::GeodeDocumentGeometryBudget>> touched;
+
+    void reset() { touched.clear(); }
+
+    void touch(const std::shared_ptr<geode::GeodeDocumentGeometryBudget>& budget) {
+      const auto existing = std::find_if(touched.begin(), touched.end(), [&](const auto& value) {
+        return value.get() == budget.get();
+      });
+      if (existing == touched.end()) {
+        touched.push_back(budget);
+      }
+    }
+  };
+  std::shared_ptr<DocumentGeometryFrameState> documentGeometryFrameState =
+      std::make_shared<DocumentGeometryFrameState>();
 
   // GPU resources. Created in the constructor; if device creation fails,
   // `device` is null and the renderer enters a no-op state.
@@ -1475,6 +1491,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
   /// this renderer constructs: arena buffer recycling and the antialias mode.
   void configureEncoder(geode::GeoEncoder& encoderToConfigure) {
     encoderToConfigure.setBufferPool(&arenaBufferPool);
+    encoderToConfigure.setGeometryAdmission(this);
     encoderToConfigure.setAntialias(antialias);
   }
 
@@ -2588,6 +2605,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
   Path strokeScratchPath;
   std::optional<geode::EncodedPath> fillScratchEncode;
   std::optional<geode::EncodedPath> strokeScratchEncode;
+  geode::EncodedPath emptyGeometry;
   geode::EncodedPath rejectedGeometry = [] {
     geode::EncodedPath encoded;
     encoded.outcome = geode::EncodedPath::Outcome::Rejected;
@@ -2618,17 +2636,39 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
     FillRule fillRule = FillRule::NonZero;
   };
 
-  [[nodiscard]] bool reserveEncodedGeometry(const geode::EncodedPath& encoded) {
+  bool admitGeometry(const geode::EncodedPath& encoded, std::size_t logicalDraws) override {
     if (encoded.rejected()) {
       geometryBudget->reject();
       return false;
     }
     const std::size_t retainedBytes = encoded.retainedBytes();
-    if (retainedBytes == std::numeric_limits<std::size_t>::max()) {
+    const std::size_t items = encoded.geometryItemCount();
+    if (encoded.empty()) {
+      return true;
+    }
+    if (logicalDraws == 0u || retainedBytes == std::numeric_limits<std::size_t>::max() ||
+        items > std::numeric_limits<std::size_t>::max() / logicalDraws ||
+        retainedBytes > std::numeric_limits<std::uint64_t>::max() / logicalDraws) {
       geometryBudget->reject();
       return false;
     }
-    return geometryBudget->reserve(/*draws=*/1u, encoded.geometryItemCount(), retainedBytes);
+    return geometryBudget->reserve(logicalDraws, items * logicalDraws,
+                                   static_cast<std::uint64_t>(retainedBytes) * logicalDraws);
+  }
+
+  void releaseGeometry(const geode::EncodedPath& encoded, std::size_t logicalDraws) override {
+    if (encoded.empty() || encoded.rejected() || logicalDraws == 0u) {
+      return;
+    }
+    const std::size_t retainedBytes = encoded.retainedBytes();
+    const std::size_t items = encoded.geometryItemCount();
+    if (retainedBytes == std::numeric_limits<std::size_t>::max() ||
+        items > std::numeric_limits<std::size_t>::max() / logicalDraws ||
+        retainedBytes > std::numeric_limits<std::uint64_t>::max() / logicalDraws) {
+      return;
+    }
+    geometryBudget->release(logicalDraws, items * logicalDraws,
+                            static_cast<std::uint64_t>(retainedBytes) * logicalDraws);
   }
 
   std::optional<geode::EncodedPath> encodeGeometry(const Path& path, FillRule rule) {
@@ -2637,7 +2677,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
     }
     device->countPathEncode();
     geode::EncodedPath encoded = geode::GeodePathEncoder::encode(path, rule);
-    if (!reserveEncodedGeometry(encoded)) {
+    if (encoded.rejected()) {
+      geometryBudget->reject();
       return std::nullopt;
     }
     return encoded;
@@ -2659,10 +2700,11 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
       return {fillScratchEncode ? &*fillScratchEncode : &rejectedGeometry, false};
     }
     ensureCacheInvalidationWired(*source.registry());
+    std::shared_ptr<geode::GeodeDocumentGeometryBudget> documentBudget =
+        documentGeometryBudget(*source.registry());
     auto& cache = source.get_or_emplace<geode::GeodePathCacheComponent>();
     if (cache.fillEncode) {
-      return reserveEncodedGeometry(*cache.fillEncode) ? AdmittedEncode{&*cache.fillEncode, true}
-                                                       : AdmittedEncode{&rejectedGeometry, false};
+      return {&*cache.fillEncode, true};
     }
 
     std::optional<geode::EncodedPath> encoded = encodeGeometry(path, rule);
@@ -2670,8 +2712,6 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
       return {&rejectedGeometry, false};
     }
     const std::size_t retainedBytes = encoded->retainedBytes();
-    std::shared_ptr<geode::GeodeDocumentGeometryBudget> documentBudget =
-        documentGeometryBudget(*source.registry());
     if (retainedBytes != std::numeric_limits<std::size_t>::max() &&
         cache.fillReservation.replace(documentBudget, retainedBytes)) {
       cache.fillEncode = std::move(*encoded);
@@ -2679,6 +2719,13 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
     }
     fillScratchEncode = std::move(*encoded);
     return {&*fillScratchEncode, false};
+  }
+
+  AdmittedEncode getFillEncodeForPaint(EntityHandle source, const Path& path, FillRule rule) {
+    if (!paint.drawFillComponent || std::holds_alternative<PaintServer::None>(paint.fill)) {
+      return {&emptyGeometry, false};
+    }
+    return getFillEncode(source, path, rule);
   }
 
   /// GPU-residence slot for `source`'s fill encode. Returns null for a null
@@ -2694,6 +2741,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
   /// batching). Mirrors `residentSlab`'s registry-context wiring: one slab
   /// per document, swapped when a different device renders the document.
   std::shared_ptr<geode::GeodeRecordSlab> recordSlab(Registry& registry) {
+    std::shared_ptr<geode::GeodeDocumentGeometryBudget> documentBudget =
+        documentGeometryBudget(registry);
     auto* slabPtr = registry.ctx().find<std::shared_ptr<geode::GeodeRecordSlab>>();
     if (slabPtr == nullptr) {
       registry.ctx().emplace<std::shared_ptr<geode::GeodeRecordSlab>>(nullptr);
@@ -2701,8 +2750,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
     }
     std::shared_ptr<geode::GeodeRecordSlab>& slab = *slabPtr;
     if (!slab || slab->owningDeviceId() != device->deviceId()) {
-      slab = std::make_shared<geode::GeodeRecordSlab>(device->deviceId(),
-                                                      documentGeometryBudget(registry));
+      slab =
+          std::make_shared<geode::GeodeRecordSlab>(device->deviceId(), std::move(documentBudget));
     }
     return slab;
   }
@@ -3073,11 +3122,13 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
     }
     std::shared_ptr<geode::GeodeDocumentGeometryBudget> budget = *budgetPtr;
     budget->setLimitsForTesting(*documentGeometryLimits);
-    *lastDocumentGeometryBudget = budget;
+    documentGeometryFrameState->touch(budget);
     return budget;
   }
 
   std::shared_ptr<geode::GeodeResidentSlab> residentSlab(Registry& registry) {
+    std::shared_ptr<geode::GeodeDocumentGeometryBudget> documentBudget =
+        documentGeometryBudget(registry);
     auto* slabPtr = registry.ctx().find<std::shared_ptr<geode::GeodeResidentSlab>>();
     if (slabPtr == nullptr) {
       registry.ctx().emplace<std::shared_ptr<geode::GeodeResidentSlab>>(nullptr);
@@ -3086,7 +3137,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
     std::shared_ptr<geode::GeodeResidentSlab>& slab = *slabPtr;
     if (!slab || slab->owningDeviceId() != device->deviceId()) {
       slab = std::make_shared<geode::GeodeResidentSlab>(device->deviceId(),
-                                                        documentGeometryBudget(registry));
+                                                        std::move(documentBudget));
     }
     // Merge the previous frame's freed ranges, at most once per frame (the
     // slab gates on the index). Gating here rather than at one draw entry
@@ -3778,12 +3829,11 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
     const double flattenTolerance = strokeFlattenTolerance();
     if (source) {
       ensureCacheInvalidationWired(*source.registry());
+      std::shared_ptr<geode::GeodeDocumentGeometryBudget> documentBudget =
+          documentGeometryBudget(*source.registry());
       auto& cache = source.get_or_emplace<geode::GeodePathCacheComponent>();
       if (cache.strokeSlot && cache.strokeSlot->strokeKey == strokeStyle &&
           cache.strokeSlot->flattenTolerance == flattenTolerance) {
-        if (!reserveEncodedGeometry(cache.strokeSlot->strokedEncode)) {
-          return result;
-        }
         result.strokedPath = &cache.strokeSlot->strokedPath;
         result.encoded = &cache.strokeSlot->strokedEncode;
         result.persistent = true;
@@ -3817,20 +3867,18 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
         if (!encoded.has_value()) {
           return result;
         }
-        const std::optional<std::size_t> strokedBytes = stroked.retainedBytes();
-        const std::size_t encodedBytes = encoded->retainedBytes();
-        const bool retainedBytesValid =
-            strokedBytes.has_value() && encodedBytes != std::numeric_limits<std::size_t>::max() &&
-            *strokedBytes <= std::numeric_limits<std::size_t>::max() - encodedBytes;
-        const std::size_t retainedBytes = retainedBytesValid
-                                              ? *strokedBytes + encodedBytes
-                                              : std::numeric_limits<std::size_t>::max();
-        std::shared_ptr<geode::GeodeDocumentGeometryBudget> documentBudget =
-            documentGeometryBudget(*source.registry());
-        if (!retainedBytesValid ||
-            !cache.strokeReservation.replace(documentBudget, retainedBytes)) {
-          strokeScratchPath = std::move(stroked);
-          strokeScratchEncode = std::move(*encoded);
+        geode::GeodePathCacheComponent::StrokeSlot candidate{
+            .strokeKey = strokeStyle,
+            .flattenTolerance = flattenTolerance,
+            .strokedPath = std::move(stroked),
+            .strokedEncode = std::move(*encoded),
+            .strokeFillRule = fillRule,
+        };
+        const std::optional<std::size_t> retainedBytes = candidate.retainedBytes();
+        if (!retainedBytes.has_value() ||
+            !cache.strokeReservation.replace(documentBudget, *retainedBytes)) {
+          strokeScratchPath = std::move(candidate.strokedPath);
+          strokeScratchEncode = std::move(candidate.strokedEncode);
           result.strokedPath = &strokeScratchPath;
           result.encoded = &*strokeScratchEncode;
           result.fillRule = fillRule;
@@ -3844,16 +3892,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
           resident->strokeSlot.reset();
           resident->gradientStrokeSlot.reset();
         }
-        // GCC 14 libstdc++ rejects `.emplace()` here with "is_constructible_v<StrokeSlot> was not
-        // satisfied"; clang + libc++ accepts it. Build the value explicitly and assign to sidestep
-        // the toolchain disagreement.
-        cache.strokeSlot = geode::GeodePathCacheComponent::StrokeSlot{
-            .strokeKey = strokeStyle,
-            .flattenTolerance = flattenTolerance,
-            .strokedPath = std::move(stroked),
-            .strokedEncode = std::move(*encoded),
-            .strokeFillRule = fillRule,
-        };
+        cache.strokeSlot = std::move(candidate);
       }
       result.strokedPath = &cache.strokeSlot->strokedPath;
       result.encoded = &cache.strokeSlot->strokedEncode;
@@ -4120,6 +4159,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
     }
     if (ownsGeometryBudget) {
       geometryBudget->reset();
+      documentGeometryFrameState->reset();
     }
     if (ownsSurfaceBudget) {
       surfaceBudget->reset();
@@ -4556,8 +4596,8 @@ void RendererGeode::setGeometryBudgetForTesting(std::size_t maximumDraws, std::s
       std::min(impl_->documentGeometryLimits->cacheBytes, maximumCacheBytes);
   impl_->documentGeometryLimits->residentBytes =
       std::min(impl_->documentGeometryLimits->residentBytes, maximumResidentBytes);
-  if (std::shared_ptr<geode::GeodeDocumentGeometryBudget> document =
-          impl_->lastDocumentGeometryBudget->lock()) {
+  for (const std::shared_ptr<geode::GeodeDocumentGeometryBudget>& document :
+       impl_->documentGeometryFrameState->touched) {
     document->setLimitsForTesting(*impl_->documentGeometryLimits);
   }
 }
@@ -4574,10 +4614,16 @@ void RendererGeode::setTextMaterializationBudgetForTesting(
 }
 
 RendererResourceStats RendererGeode::resourceStats() const {
-  std::shared_ptr<geode::GeodeDocumentGeometryBudget> document =
-      impl_->lastDocumentGeometryBudget->lock();
-  const std::uint64_t documentBytes =
-      document ? document->cacheBytes() + document->residentBytes() : 0;
+  std::uint64_t documentBytes = 0;
+  bool documentRejected = false;
+  for (const std::shared_ptr<geode::GeodeDocumentGeometryBudget>& document :
+       impl_->documentGeometryFrameState->touched) {
+    const std::uint64_t retained = document->cacheBytes() + document->residentBytes();
+    documentBytes = retained > std::numeric_limits<std::uint64_t>::max() - documentBytes
+                        ? std::numeric_limits<std::uint64_t>::max()
+                        : documentBytes + retained;
+    documentRejected = documentRejected || document->rejected();
+  }
   const std::uint64_t geometryBytes = impl_->geometryBudget->retainedBytes();
   const std::uint64_t totalGeometryBytes =
       documentBytes > std::numeric_limits<std::uint64_t>::max() - geometryBytes
@@ -4598,8 +4644,7 @@ RendererResourceStats RendererGeode::resourceStats() const {
       .geometryDraws = impl_->geometryBudget->draws(),
       .geometryItems = impl_->geometryBudget->items(),
       .geometryRetainedBytes = reportedGeometryBytes,
-      .geometryBudgetRejected =
-          impl_->geometryBudget->rejected() || (document && document->rejected()),
+      .geometryBudgetRejected = impl_->geometryBudget->rejected() || documentRejected,
       .surfaceBudgetSupported = true,
       .surfaceCount = impl_->surfaceBudget->surfaces(),
       .surfaceBytes = impl_->surfaceBudget->bytes(),
@@ -5623,7 +5668,7 @@ void RendererGeode::drawPath(const PathShape& path, const StrokeParams& stroke) 
   // overlay, test-harness direct draws) returns nullptr and `GeoEncoder`
   // falls back to the inline encode path.
   const Impl::AdmittedEncode fillAdmission =
-      impl_->getFillEncode(path.sourceEntity, drawPathGeometry, path.fillRule);
+      impl_->getFillEncodeForPaint(path.sourceEntity, drawPathGeometry, path.fillRule);
   const geode::EncodedPath* fillEncoded = fillAdmission.encoded;
 
   // Try to append to a pending batch. Preconditions:
@@ -6576,7 +6621,7 @@ std::unique_ptr<RendererInterface> RendererGeode::createOffscreenInstance() cons
   renderer->impl_->textMaterializationBudget = impl_->textMaterializationBudget;
   renderer->impl_->ownsTextMaterializationBudget = false;
   renderer->impl_->documentGeometryLimits = impl_->documentGeometryLimits;
-  renderer->impl_->lastDocumentGeometryBudget = impl_->lastDocumentGeometryBudget;
+  renderer->impl_->documentGeometryFrameState = impl_->documentGeometryFrameState;
   return renderer;
 }
 
