@@ -77,6 +77,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
   for (std::string_view uri :
        {std::string_view(externalUrl), std::string_view(dataUrl), std::string_view(externalUrl)}) {
     const size_t before = remainingResourceBytes;
+    const size_t fetchCountBefore = resourceLoader.fetchCount();
     auto result = urlLoader.fromUri(uri);
     if (const auto* loaded = std::get_if<UrlLoader::Result>(&result)) {
       if (loaded->data.size() > maximumResourceSize || loaded->data.size() > before ||
@@ -85,7 +86,12 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
       }
     } else {
       const UrlLoaderError error = std::get<UrlLoaderError>(result);
-      if ((error == UrlLoaderError::ResourceTooLarge && remainingResourceBytes != 0) ||
+      const bool zeroPerResourceLimitRejectedBeforeFetch =
+          error == UrlLoaderError::ResourceTooLarge && maximumResourceSize == 0 &&
+          !uri.starts_with("data:") && remainingResourceBytes == before &&
+          resourceLoader.fetchCount() == fetchCountBefore;
+      if ((error == UrlLoaderError::ResourceTooLarge && remainingResourceBytes != 0 &&
+           !zeroPerResourceLimitRejectedBeforeFetch) ||
           (error != UrlLoaderError::ResourceTooLarge && remainingResourceBytes != before)) {
         std::abort();
       }
