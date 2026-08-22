@@ -125,6 +125,14 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
                 job = self._job_body(job_name)
                 self.assertEqual(1, job.count("--test_tag_filters=-manual,-perf"))
 
+    def test_coverage_excludes_opt_in_tests_from_selection_and_execution(self):
+        """Coverage must not execute manual or wall-clock performance tests."""
+        self.assertIn(
+            "coverage --test_tag_filters=-fuzz_target,-lint,-manual,-perf",
+            self.bazelrc,
+        )
+        self.assertIn("(fuzz_target|lint|manual|perf)", self.coverage)
+
     def test_every_change_based_test_step_handles_an_empty_selection(self):
         """A selection with no test targets must not fail a change-based lane.
 
