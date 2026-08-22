@@ -23,6 +23,7 @@
 #include "donner/svg/components/style/StyleSystem.h"
 #include "donner/svg/parser/SVGParser.h"
 
+using testing::ElementsAre;
 using testing::Gt;
 using testing::IsEmpty;
 using testing::Not;
@@ -626,6 +627,27 @@ TEST_F(FilterSystemTest, SharedImageReservationFollowsSharedAllocationLifetime) 
   EXPECT_TRUE(adoptedBudget.rejected());
   EXPECT_EQ(adoptedBudget.sharedImageMaterializations(), 0u);
   EXPECT_EQ(family->retainedBytes(DocumentResourceFamilyBudget::Kind::ComputedFilter), 0u);
+}
+
+TEST_F(FilterSystemTest, SharedImageIdentityTracksInPlacePixelChanges) {
+  auto family = std::make_shared<DocumentResourceFamilyBudget>();
+  ComputedFilterResourceBudget budget(family);
+  Registry registry;
+  const Entity source = registry.create();
+  std::vector<uint8_t> pixels = {0xff, 0, 0, 0xff};
+
+  auto first = budget.shareImage(source, pixels);
+  ASSERT_THAT(first, NotNull());
+  EXPECT_THAT(*first, ElementsAre(0xff, 0, 0, 0xff));
+
+  pixels[0] = 0;
+  pixels[1] = 0xff;
+  auto second = budget.shareImage(source, pixels);
+  ASSERT_THAT(second, NotNull());
+  EXPECT_NE(first.get(), second.get());
+  EXPECT_THAT(*first, ElementsAre(0xff, 0, 0, 0xff));
+  EXPECT_THAT(*second, ElementsAre(0, 0xff, 0, 0xff));
+  EXPECT_EQ(budget.sharedImageMaterializations(), 2u);
 }
 
 TEST_F(FilterSystemTest, SharedImageBudgetRejectsBeforeMaterializingPixels) {
