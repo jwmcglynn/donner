@@ -345,6 +345,8 @@ private:
                                     FontDataTrust trust);
   bool isValidationRejectedSource(const std::shared_ptr<const std::vector<uint8_t>>& data,
                                   const std::shared_ptr<FontBudgetState>& budgetState) const;
+  bool exhaustedValidationBudgetRejects(std::span<const uint8_t> data, FontDataTrust trust,
+                                        const std::shared_ptr<FontBudgetState>& budgetState) const;
   void rememberValidationRejectedSource(const std::shared_ptr<const std::vector<uint8_t>>& data,
                                         bool workLimitExceeded,
                                         const std::shared_ptr<FontBudgetState>& budgetState);

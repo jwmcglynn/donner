@@ -69,6 +69,19 @@ uint32_t readBE32(const uint8_t* p) {
          (static_cast<uint32_t>(p[2]) << 8) | static_cast<uint32_t>(p[3]);
 }
 
+bool HasCffFlavor(std::span<const uint8_t> data) {
+  if (data.size() < 4) return false;
+  const uint32_t magic = readBE32(data.data());
+  if (magic == kSfntCff) return true;
+  return (magic == kWoffMagic || magic == kWoff2Magic) && data.size() >= 8 &&
+         readBE32(data.data() + 4) == kSfntCff;
+}
+
+bool IsSupportedFontMagic(uint32_t magic) {
+  return magic == kWoffMagic || magic == kWoff2Magic || magic == kSfntTrueType ||
+         magic == kSfntCff || magic == kSfntApple || magic == kSfntType1;
+}
+
 /**
  * Reconstruct a flat sfnt byte stream from a WoffFont's decompressed tables.
  *
@@ -163,7 +176,8 @@ struct FontManager::FontBudgetState {
   size_t usedBytes = 0;
   size_t usedFonts = 0;
   size_t usedValidationWork = 0;
-  std::vector<std::weak_ptr<const std::vector<uint8_t>>> validationRejectedSources;
+  std::unordered_map<const std::vector<uint8_t>*, std::weak_ptr<const std::vector<uint8_t>>>
+      validationRejectedSources;
 };
 
 struct FontManager::FontBudgetContext {
@@ -492,15 +506,21 @@ bool FontManager::loadFontDataSharedIntoEntity(
     return false;
   }
 
+  const uint32_t magic = readBE32(data->data());
+  if (!IsSupportedFontMagic(magic)) {
+    return false;
+  }
+
   const std::shared_ptr<FontBudgetState> budgetState = budgetStateForWrite();
-  if (isValidationRejectedSource(data, budgetState)) return false;
+  if (exhaustedValidationBudgetRejects(*data, trust, budgetState) ||
+      isValidationRejectedSource(data, budgetState)) {
+    return false;
+  }
   bool workLimitExceeded = false;
   const auto finishLoad = [&](bool loaded) {
     rememberValidationRejectedSource(data, workLimitExceeded, budgetState);
     return loaded;
   };
-
-  const uint32_t magic = readBE32(data->data());
 
   // WOFF fonts need decompression/reconstruction, so they create new owned buffers.
   if (magic == kWoffMagic) {
@@ -517,10 +537,6 @@ bool FontManager::loadFontDataSharedIntoEntity(
 #endif
   }
 
-  if (magic != kSfntTrueType && magic != kSfntCff && magic != kSfntApple && magic != kSfntType1) {
-    return false;
-  }
-
   // Raw TTF/OTF: share the data via shared_ptr (no copy).
   return finishLoad(setRawFontData(entity, data, trust, &workLimitExceeded));
 }
@@ -528,18 +544,27 @@ bool FontManager::loadFontDataSharedIntoEntity(
 bool FontManager::isValidationRejectedSource(
     const std::shared_ptr<const std::vector<uint8_t>>& data,
     const std::shared_ptr<FontBudgetState>& budgetState) const {
-  std::erase_if(budgetState->validationRejectedSources,
-                [](const auto& source) { return source.expired(); });
-  return std::any_of(budgetState->validationRejectedSources.begin(),
-                     budgetState->validationRejectedSources.end(),
-                     [&](const auto& source) { return source.lock() == data; });
+  const auto found = budgetState->validationRejectedSources.find(data.get());
+  if (found == budgetState->validationRejectedSources.end()) return false;
+  if (found->second.lock() == data) return true;
+  budgetState->validationRejectedSources.erase(found);
+  return false;
+}
+
+bool FontManager::exhaustedValidationBudgetRejects(
+    std::span<const uint8_t> data, FontDataTrust trust,
+    const std::shared_ptr<FontBudgetState>& budgetState) const {
+  return trust == FontDataTrust::Untrusted &&
+         budgetState->usedValidationWork >= budgetState->maximumValidationWork &&
+         HasCffFlavor(data);
 }
 
 void FontManager::rememberValidationRejectedSource(
     const std::shared_ptr<const std::vector<uint8_t>>& data, bool workLimitExceeded,
     const std::shared_ptr<FontBudgetState>& budgetState) {
-  if (workLimitExceeded) {
-    budgetState->validationRejectedSources.push_back(data);
+  if (workLimitExceeded &&
+      budgetState->validationRejectedSources.size() < budgetState->maximumFonts) {
+    budgetState->validationRejectedSources.insert_or_assign(data.get(), data);
   }
 }
 
@@ -606,11 +631,7 @@ size_t FontManager::fontValidationWork() const {
 }
 
 size_t FontManager::numValidationRejectedSources() const {
-  size_t count = 0;
-  for (const auto& source : budgetStateForRead()->validationRejectedSources) {
-    count += source.expired() ? 0u : 1u;
-  }
-  return count;
+  return budgetStateForRead()->validationRejectedSources.size();
 }
 
 FontHandle FontManager::fallbackFont() {
@@ -640,6 +661,12 @@ std::optional<fonts::SfntFont> FontManager::validateSfntForLoad(
     *validationWorkLimitExceeded = false;
   }
   if (!canStoreLoadedFont(entity, data.size(), 0, budgetState)) {
+    return std::nullopt;
+  }
+  if (exhaustedValidationBudgetRejects(data, trust, budgetState)) {
+    if (validationWorkLimitExceeded) {
+      *validationWorkLimitExceeded = true;
+    }
     return std::nullopt;
   }
 
@@ -785,6 +812,13 @@ bool FontManager::loadFontDataIntoEntity(Entity entity, std::span<const uint8_t>
 
   const uint32_t magic = readBE32(data.data());
 
+  if (!IsSupportedFontMagic(magic)) {
+    return false;
+  }
+
+  const std::shared_ptr<FontBudgetState> budgetState = budgetStateForWrite();
+  if (exhaustedValidationBudgetRejects(data, trust, budgetState)) return false;
+
   if (magic == kWoffMagic) {
     return loadWoff1(entity, data, trust);
   }
@@ -799,12 +833,7 @@ bool FontManager::loadFontDataIntoEntity(Entity entity, std::span<const uint8_t>
 #endif
   }
 
-  if (magic != kSfntTrueType && magic != kSfntCff && magic != kSfntApple && magic != kSfntType1) {
-    return false;
-  }
-
   // Validate and budget the retained index before copying the untrusted byte stream.
-  const std::shared_ptr<FontBudgetState> budgetState = budgetStateForWrite();
   auto sfnt = validateSfntForLoad(entity, data, trust, budgetState);
   if (!sfnt) {
     return false;
