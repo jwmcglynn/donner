@@ -571,6 +571,10 @@ RendererBitmap RenderSnapshotRecorder::takeSnapshot() const {
   return RendererBitmap();
 }
 
+RendererFilterPreparationBudget* RenderSnapshotRecorder::filterPreparationBudget() {
+  return offscreenFactory_.filterPreparationBudget();
+}
+
 std::unique_ptr<RendererInterface> RenderSnapshotRecorder::createOffscreenInstance() const {
   return offscreenFactory_.createOffscreenInstance();
 }

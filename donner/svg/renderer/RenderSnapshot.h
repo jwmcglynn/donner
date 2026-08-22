@@ -124,6 +124,7 @@ public:
   void drawText(Registry& registry, const components::ComputedTextComponent& text,
                 const TextParams& params) override;
   [[nodiscard]] RendererBitmap takeSnapshot() const override;
+  [[nodiscard]] RendererFilterPreparationBudget* filterPreparationBudget() override;
   [[nodiscard]] std::unique_ptr<RendererInterface> createOffscreenInstance() const override;
 
 private:

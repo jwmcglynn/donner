@@ -81,6 +81,18 @@ inline constexpr int kMaxFeImageFragmentDepth = 32;
 /// - we'd rather do a little extra work than cull content the user should see.
 inline constexpr double kViewportCullSlackDevicePx = 1.0;
 
+class ScopedFrameResourceScope {
+public:
+  explicit ScopedFrameResourceScope(RendererInterface& renderer) : renderer_(renderer) {
+    renderer_.beginFrameResourceScope();
+  }
+
+  ~ScopedFrameResourceScope() { renderer_.endFrameResourceScope(); }
+
+private:
+  RendererInterface& renderer_;
+};
+
 Vector2i CheckedRenderingSize(const RenderViewport& viewport) {
   constexpr double kMaximumDimension = static_cast<double>(std::numeric_limits<int>::max());
   if (!std::isfinite(viewport.size.x) || !std::isfinite(viewport.size.y) || viewport.size.x < 0.0 ||
@@ -1139,11 +1151,16 @@ void RendererDriver::resetOwnedSecurityBudgets() {
   }
   if (clipGeometryCopyBudget_ == &ownedClipGeometryCopyBudget_) {
     ownedClipGeometryCopyBudget_.reset();
+    if (securityStats_) {
+      securityStats_->clipGeometryPathsPreflighted = 0;
+      securityStats_->clipGeometryCopyRejected = false;
+    }
   }
 }
 
 void RendererDriver::draw(SVGDocument& document) {
   if (document.threadingMode() == ThreadingMode::ConcurrentDom) {
+    const ScopedFrameResourceScope resourceScope(renderer_);
     RenderSnapshot snapshot = captureRenderSnapshot(document);
     draw(snapshot);
     return;
@@ -1166,6 +1183,7 @@ void RendererDriver::draw(SVGDocument& document) {
 void RendererDriver::draw(SVGDocument& document, const RenderViewport& viewport,
                           const Transform2d& surfaceFromCanvas) {
   if (document.threadingMode() == ThreadingMode::ConcurrentDom) {
+    const ScopedFrameResourceScope resourceScope(renderer_);
     RenderSnapshot snapshot;
     {
       DocumentWriteAccess access = document.writeAccess();
@@ -1238,6 +1256,7 @@ bool RendererDriver::drawInterruptibly(SVGDocument& document, const RenderViewpo
 }
 
 RenderSnapshot RendererDriver::captureRenderSnapshot(SVGDocument& document) {
+  const ScopedFrameResourceScope resourceScope(renderer_);
   RenderSnapshot snapshot;
   DocumentWriteAccess access = document.writeAccess();
 
