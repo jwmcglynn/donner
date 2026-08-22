@@ -274,6 +274,30 @@ TEST_F(RendererDriverTest, ClipGeometryAdmissionStopsBeforeCopyingTheFirstOverCa
   driver.draw(overDocument);
 }
 
+TEST_F(RendererDriverTest, ClipGeometryAdmissionAggregatesAcrossTheTraversal) {
+  constexpr std::size_t kMaximumClipShapes =
+      RendererTextMaterializationBudget::kMaximumUniqueOutlines;
+  std::string svg = R"svg(<defs><clipPath id="exact">)svg";
+  for (std::size_t i = 0; i < kMaximumClipShapes; ++i) {
+    svg += R"svg(<path d="M0 0L1 1"/>)svg";
+  }
+  svg += R"svg(</clipPath><clipPath id="extra"><path d="M0 0L1 1"/></clipPath></defs>
+              <rect width="1" height="1" clip-path="url(#exact)"/>
+              <rect width="1" height="1" clip-path="url(#extra)"/>)svg";
+  SVGDocument document = makeDocument(svg, Vector2i(1, 1));
+
+  EXPECT_CALL(renderer, pushClip(_))
+      .WillOnce([=](const ResolvedClip& clip) {
+        EXPECT_THAT(clip.clipPaths, SizeIs(kMaximumClipShapes));
+      })
+      .WillOnce([](const ResolvedClip& clip) {
+        ASSERT_THAT(clip.clipPaths, SizeIs(1));
+        EXPECT_TRUE(clip.clipPaths.front().path.empty());
+      });
+
+  driver.draw(document);
+}
+
 TEST_F(RendererDriverTest, EmitsTextDrawCallsForSolidFill) {
   SVGDocument document = makeDocument(R"svg(
     <text x="2" y="3" fill="#00FF00">hi</text>
