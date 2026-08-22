@@ -520,6 +520,10 @@ Path::MeasuredPath Path::measure() const {
   return result;
 }
 
+Path::MeasuredPath Path::measure(std::size_t /*maximumWorkUnits*/) const {
+  return measure();
+}
+
 Path::PointOnPath Path::pointAtArcLength(double distance) const {
   return measure().pointAtArcLength(distance);
 }

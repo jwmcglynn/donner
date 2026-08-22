@@ -292,6 +292,18 @@ public:
   [[nodiscard]] MeasuredPath measure() const;
 
   /**
+   * Builds an arc-length index without consuming more than p maximumWorkUnits command visits
+   * and recursive subdivisions.
+   *
+   * Values above ef kMaximumGeometryQueryWork are clamped to that existing per-query ceiling.
+   * If the supplied allowance is exhausted, the returned measurement is invalid and reports the
+   * work it consumed.
+   *
+   * @param maximumWorkUnits Caller-provided work allowance for this query.
+   */
+  [[nodiscard]] MeasuredPath measure(std::size_t maximumWorkUnits) const;
+
+  /**
    * Bytes needed to reserve the maximum possible segment array before measurement starts.
    *
    * Callers retaining a MeasuredPath can preflight this base allocation before calling measure().

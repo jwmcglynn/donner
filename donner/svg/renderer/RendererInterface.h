@@ -205,6 +205,22 @@ public:
     std::uint64_t imageBytes = 0;
   };
 
+  /** Exclusive reservation for one bounded path-measurement query. */
+  class PathMeasurementReservation {
+  public:
+    /// Maximum work the reserved query may consume.
+    [[nodiscard]] std::size_t maximumWorkUnits() const { return maximumWorkUnits_; }
+
+  private:
+    friend class RendererDrawBudget;
+
+    PathMeasurementReservation(std::size_t previousWorkUnits, std::size_t maximumWorkUnits)
+        : previousWorkUnits_(previousWorkUnits), maximumWorkUnits_(maximumWorkUnits) {}
+
+    std::size_t previousWorkUnits_ = 0;
+    std::size_t maximumWorkUnits_ = 0;
+  };
+
   void reset() {
     drawCalls_ = 0;
     pathCommands_ = 0;
@@ -212,6 +228,7 @@ public:
     gradientStops_ = 0;
     imageDraws_ = 0;
     imageBytes_ = 0;
+    pathMeasurementReservationActive_ = false;
     rejected_ = false;
   }
   void reject() { rejected_ = true; }
@@ -220,7 +237,8 @@ public:
   }
 
   [[nodiscard]] bool reserve(const Cost& cost) {
-    if (rejected_ || cost.drawCalls > kMaximumDrawCalls - drawCalls_ ||
+    if (rejected_ || pathMeasurementReservationActive_ ||
+        cost.drawCalls > kMaximumDrawCalls - drawCalls_ ||
         cost.pathCommands > kMaximumPathCommands - pathCommands_ ||
         cost.pathMeasurementWorkUnits >
             kMaximumPathMeasurementWorkUnits - pathMeasurementWorkUnits_ ||
@@ -240,6 +258,54 @@ public:
     return true;
   }
 
+  /**
+   * Reserves all remaining path-measurement work before a bounded query starts.
+   *
+   * The caller must pass the returned maximum to the query, then call
+   * ef reconcilePathMeasurement with the query's actual work and completion outcome.
+   */
+  [[nodiscard]] std::optional<PathMeasurementReservation> reservePathMeasurement() {
+    if (rejected_ || pathMeasurementReservationActive_ ||
+        pathMeasurementWorkUnits_ >= kMaximumPathMeasurementWorkUnits) {
+      rejected_ = true;
+      return std::nullopt;
+    }
+
+    const std::size_t previousWorkUnits = pathMeasurementWorkUnits_;
+    const std::size_t maximumWorkUnits = kMaximumPathMeasurementWorkUnits - previousWorkUnits;
+    pathMeasurementWorkUnits_ = kMaximumPathMeasurementWorkUnits;
+    pathMeasurementReservationActive_ = true;
+    return PathMeasurementReservation(previousWorkUnits, maximumWorkUnits);
+  }
+
+  /**
+   * Reconciles an exclusive path-measurement reservation to work actually consumed.
+   *
+   * An incomplete query consumes its reported work and rejects the aggregate budget.
+   */
+  [[nodiscard]] bool reconcilePathMeasurement(const PathMeasurementReservation& reservation,
+                                              std::size_t actualWorkUnits, bool completed) {
+    const bool reservationMatches =
+        pathMeasurementReservationActive_ &&
+        reservation.previousWorkUnits_ <= kMaximumPathMeasurementWorkUnits &&
+        reservation.maximumWorkUnits_ ==
+            kMaximumPathMeasurementWorkUnits - reservation.previousWorkUnits_ &&
+        pathMeasurementWorkUnits_ == kMaximumPathMeasurementWorkUnits;
+    if (!reservationMatches || actualWorkUnits > reservation.maximumWorkUnits_) {
+      pathMeasurementReservationActive_ = false;
+      rejected_ = true;
+      return false;
+    }
+
+    pathMeasurementWorkUnits_ = reservation.previousWorkUnits_ + actualWorkUnits;
+    pathMeasurementReservationActive_ = false;
+    if (!completed) {
+      rejected_ = true;
+      return false;
+    }
+    return true;
+  }
+
   [[nodiscard]] std::size_t drawCalls() const { return drawCalls_; }
   [[nodiscard]] std::size_t pathCommands() const { return pathCommands_; }
   [[nodiscard]] std::size_t pathMeasurementWorkUnits() const { return pathMeasurementWorkUnits_; }
@@ -256,6 +322,7 @@ private:
   std::size_t imageDraws_ = 0;
   std::uint64_t imageBytes_ = 0;
   std::size_t gradientStopLimit_ = kMaximumGradientStops;
+  bool pathMeasurementReservationActive_ = false;
   bool rejected_ = false;
 };
 

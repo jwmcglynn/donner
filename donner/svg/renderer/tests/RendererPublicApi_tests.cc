@@ -99,6 +99,44 @@ TEST(RendererDrawBudgetTest, RejectsEveryAggregateDimensionWithoutOvershoot) {
   EXPECT_EQ(budget.imageBytes(), RendererDrawBudget::kMaximumImageBytes);
 }
 
+TEST(RendererDrawBudgetTest, ReconcilesBoundedPathQueriesAtTheExactAggregateCap) {
+  RendererDrawBudget budget;
+  const std::optional<RendererDrawBudget::PathMeasurementReservation> first =
+      budget.reservePathMeasurement();
+  ASSERT_TRUE(first.has_value());
+  EXPECT_EQ(first->maximumWorkUnits(), RendererDrawBudget::kMaximumPathMeasurementWorkUnits);
+  EXPECT_EQ(budget.pathMeasurementWorkUnits(),
+            RendererDrawBudget::kMaximumPathMeasurementWorkUnits);
+
+  ASSERT_TRUE(budget.reconcilePathMeasurement(
+      *first, RendererDrawBudget::kMaximumPathMeasurementWorkUnits - 1u, /*completed=*/true));
+  EXPECT_EQ(budget.pathMeasurementWorkUnits(),
+            RendererDrawBudget::kMaximumPathMeasurementWorkUnits - 1u);
+  EXPECT_FALSE(budget.rejected());
+
+  const std::optional<RendererDrawBudget::PathMeasurementReservation> last =
+      budget.reservePathMeasurement();
+  ASSERT_TRUE(last.has_value());
+  EXPECT_EQ(last->maximumWorkUnits(), 1u);
+  ASSERT_TRUE(budget.reconcilePathMeasurement(*last, 1u, /*completed=*/true));
+  EXPECT_EQ(budget.pathMeasurementWorkUnits(),
+            RendererDrawBudget::kMaximumPathMeasurementWorkUnits);
+  EXPECT_FALSE(budget.rejected());
+
+  EXPECT_FALSE(budget.reservePathMeasurement().has_value());
+  EXPECT_EQ(budget.pathMeasurementWorkUnits(),
+            RendererDrawBudget::kMaximumPathMeasurementWorkUnits);
+  EXPECT_TRUE(budget.rejected());
+
+  budget.reset();
+  const std::optional<RendererDrawBudget::PathMeasurementReservation> incomplete =
+      budget.reservePathMeasurement();
+  ASSERT_TRUE(incomplete.has_value());
+  EXPECT_FALSE(budget.reconcilePathMeasurement(*incomplete, 5u, /*completed=*/false));
+  EXPECT_EQ(budget.pathMeasurementWorkUnits(), 5u);
+  EXPECT_TRUE(budget.rejected());
+}
+
 #ifdef DONNER_TEXT_ENABLED
 TEST(RendererTinySkiaSecurityTest, TextGlyphCapRejectsNextRenderableGlyphBeforeMaterialization) {
   SVGDocument limitedDocument = ParseDocument(
@@ -203,6 +241,41 @@ TEST(RendererTinySkiaSecurityTest, PathMeasurementWorkTracksActualAggregateAcros
   stats = renderer.resourceStats();
   EXPECT_EQ(stats.pathMeasurementWorkUnits, actualWork * 2u);
   EXPECT_FALSE(stats.drawBudgetRejected);
+  renderer.endFrame();
+}
+
+TEST(RendererTinySkiaSecurityTest, PathMeasurementQueriesStopAtExactAggregateCapPlusOne) {
+  PathBuilder builder;
+  for (int i = 0; i < 10; ++i) {
+    builder.moveTo({0.0, 0.0}).curveTo({0.0, 1.0}, {1.0, 0.0}, {1.0, 1.0});
+  }
+  for (int i = 0; i < 54; ++i) {
+    builder.lineTo({1.0, 1.0});
+  }
+  const Path exactWorkPath = builder.build();
+  const std::size_t workPerQuery = exactWorkPath.measure().measurementWorkUnits();
+  ASSERT_EQ(workPerQuery, 1024u);
+  ASSERT_EQ(RendererDrawBudget::kMaximumPathMeasurementWorkUnits % workPerQuery, 0u);
+
+  RendererTinySkia renderer;
+  renderer.beginFrame(RenderViewport{.size = Vector2d(2.0, 2.0), .devicePixelRatio = 1.0});
+  SetStrokePaint(renderer);
+  const StrokeParams measuredStroke{
+      .strokeWidth = 0.25, .dashArray = {1000.0, 1000.0}, .pathLength = 1.0};
+  const std::size_t admittedQueries =
+      RendererDrawBudget::kMaximumPathMeasurementWorkUnits / workPerQuery;
+  for (std::size_t i = 0; i < admittedQueries; ++i) {
+    renderer.drawPath(PathShape{.path = &exactWorkPath}, measuredStroke);
+  }
+
+  RendererResourceStats stats = renderer.resourceStats();
+  EXPECT_EQ(stats.pathMeasurementWorkUnits, RendererDrawBudget::kMaximumPathMeasurementWorkUnits);
+  EXPECT_FALSE(stats.drawBudgetRejected);
+
+  renderer.drawPath(PathShape{.path = &exactWorkPath}, measuredStroke);
+  stats = renderer.resourceStats();
+  EXPECT_EQ(stats.pathMeasurementWorkUnits, RendererDrawBudget::kMaximumPathMeasurementWorkUnits);
+  EXPECT_TRUE(stats.drawBudgetRejected);
   renderer.endFrame();
 }
 
