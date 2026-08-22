@@ -7,9 +7,9 @@
 /// inline `style="..."` attributes to a medium stylesheet typical of an SVG
 /// `<style>` block.
 ///
-/// Allocation counts are intentionally not collected here - run this binary
-/// under `heaptrack` (Linux) or Instruments (macOS) to attribute allocations
-/// per call site if the wall-time numbers suggest the parser is a hotspot.
+/// The `BM_Allocations_*` cases report C++ `operator new` calls and requested
+/// bytes in a separate, single-iteration pass so allocation accounting does not
+/// distort the timed cases.
 ///
 /// Usage:
 /// ```
@@ -19,15 +19,21 @@
 
 #include <benchmark/benchmark.h>
 
+#include <cstddef>
 #include <string_view>
 
 #include "donner/base/ParseWarningSink.h"
 #include "donner/css/CSS.h"
+#include "donner/css/parser/details/Tokenizer.h"
+#include "donner/svg/renderer/benchmarks/AllocationTracker.h"
 
 namespace {
 
 using donner::ParseWarningSink;
+using donner::benchmarks::allocations::Scope;
+using donner::benchmarks::allocations::Snapshot;
 using donner::css::CSS;
+using donner::css::parser::details::Tokenizer;
 
 // Representative CSS inputs of increasing complexity. These are the corpus the
 // design doc references; they are intentionally synthetic so the benchmark is
@@ -73,6 +79,36 @@ constexpr std::string_view kSelectorComplex =
     "div.container > .row[data-role=\"primary\"]:nth-child(2n+1):hover";
 
 // ---- Benchmarks ----
+
+std::size_t ConsumeTokens(std::string_view input) {
+  Tokenizer tokenizer(input);
+  std::size_t tokenCount = 0;
+  while (!tokenizer.isEOF()) {
+    auto token = tokenizer.next();
+    benchmark::DoNotOptimize(token);
+    ++tokenCount;
+  }
+  return tokenCount;
+}
+
+void BM_Tokenize_SingleToken(benchmark::State& state) {
+  for (auto _ : state) {
+    std::size_t tokenCount = ConsumeTokens(";");
+    benchmark::DoNotOptimize(tokenCount);
+  }
+  state.SetBytesProcessed(static_cast<int64_t>(state.iterations()));
+}
+BENCHMARK(BM_Tokenize_SingleToken);
+
+void BM_Tokenize_StylesheetMedium(benchmark::State& state) {
+  for (auto _ : state) {
+    std::size_t tokenCount = ConsumeTokens(kStylesheetMedium);
+    benchmark::DoNotOptimize(tokenCount);
+  }
+  state.SetBytesProcessed(static_cast<int64_t>(state.iterations()) *
+                          static_cast<int64_t>(kStylesheetMedium.size()));
+}
+BENCHMARK(BM_Tokenize_StylesheetMedium);
 
 void BM_ParseStyleAttribute_Short(benchmark::State& state) {
   for (auto _ : state) {
@@ -125,6 +161,42 @@ void BM_ParseSelector_Complex(benchmark::State& state) {
                           static_cast<int64_t>(kSelectorComplex.size()));
 }
 BENCHMARK(BM_ParseSelector_Complex);
+
+template <typename Operation>
+void MeasureAllocations(benchmark::State& state, Operation operation) {
+  Snapshot snapshot;
+  for (auto _ : state) {
+    Scope scope;
+    auto result = operation();
+    benchmark::DoNotOptimize(result);
+    snapshot = scope.stop();
+  }
+
+  state.counters["allocation_calls"] = static_cast<double>(snapshot.allocationCalls);
+  state.counters["allocation_bytes"] = static_cast<double>(snapshot.allocationBytes);
+}
+
+void BM_Allocations_TokenizeSingleToken(benchmark::State& state) {
+  MeasureAllocations(state, [] { return ConsumeTokens(";"); });
+  state.counters["tokenizer_bytes"] = static_cast<double>(sizeof(Tokenizer));
+}
+BENCHMARK(BM_Allocations_TokenizeSingleToken)->Iterations(1);
+
+void BM_Allocations_TokenizeStylesheetMedium(benchmark::State& state) {
+  MeasureAllocations(state, [] { return ConsumeTokens(kStylesheetMedium); });
+}
+BENCHMARK(BM_Allocations_TokenizeStylesheetMedium)->Iterations(1);
+
+void BM_Allocations_ParseStyleAttributeMedium(benchmark::State& state) {
+  MeasureAllocations(state, [] { return CSS::ParseStyleAttribute(kInlineStyleMedium); });
+}
+BENCHMARK(BM_Allocations_ParseStyleAttributeMedium)->Iterations(1);
+
+void BM_Allocations_ParseStylesheetMedium(benchmark::State& state) {
+  ParseWarningSink sink;
+  MeasureAllocations(state, [&sink] { return CSS::ParseStylesheet(kStylesheetMedium, sink); });
+}
+BENCHMARK(BM_Allocations_ParseStylesheetMedium)->Iterations(1);
 
 }  // namespace
 
