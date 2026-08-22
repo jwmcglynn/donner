@@ -47,11 +47,14 @@ public:
     return allow;
   }
 
+  bool canEncodeGeometry() const override { return encodeOpen; }
+
   void releaseGeometry(const EncodedPath& /*encoded*/, std::size_t logicalDraws) override {
     releasedDraws += logicalDraws;
   }
 
   bool allow = true;
+  bool encodeOpen = true;
   std::size_t admittedDraws = 0;
   std::size_t releasedDraws = 0;
 };

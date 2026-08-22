@@ -1723,6 +1723,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     Box2d pixelRect;
     bool valid = false;
     bool hasPolygon = false;
+    bool allocationRejected = false;
     Vector2d polygonCorners[4];
     /// Path-clip mask. When non-null, `maskResolveView`
     /// references a 1-sample R8Unorm texture sampled by the fill /
@@ -1967,6 +1968,12 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     const ClipStackEntry* polygonEntry = nullptr;
     const ClipStackEntry* maskEntry = nullptr;
     for (const ClipStackEntry& entry : clipStack) {
+      if (entry.allocationRejected) {
+        encoder->clearClipPolygon();
+        encoder->clearClipMask();
+        encoder->setScissorRect(0, 0, 0, 0);
+        return;
+      }
       if (entry.valid) {
         if (!active.has_value()) {
           active = entry.pixelRect;
@@ -2655,6 +2662,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     return geometryBudget->reserve(logicalDraws, items * logicalDraws,
                                    static_cast<std::uint64_t>(retainedBytes) * logicalDraws);
   }
+
+  bool canEncodeGeometry() const override { return !geometryBudget->rejected(); }
 
   void releaseGeometry(const geode::EncodedPath& encoded, std::size_t logicalDraws) override {
     if (encoded.empty() || encoded.rejected() || logicalDraws == 0u) {
@@ -4907,7 +4916,8 @@ void RendererGeode::pushClip(const ResolvedClip& clip) {
       wgpu::TextureDescriptor maskDesc = {};
       wgpu::Texture maskTexture = makeMaskTexture("RendererGeodeClipMask", maskDesc);
       if (!maskTexture) {
-        continue;
+        entry.allocationRejected = true;
+        break;
       }
 
       // Bind the previously-rendered nested mask (if any) so this

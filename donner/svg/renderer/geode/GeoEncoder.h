@@ -57,6 +57,9 @@ public:
   /** Reserve one or more logical submissions of `encoded` before GPU work is recorded. */
   virtual bool admitGeometry(const EncodedPath& encoded, std::size_t logicalDraws) = 0;
 
+  /** Whether another inline path encode may start in the current frame. */
+  [[nodiscard]] virtual bool canEncodeGeometry() const = 0;
+
   /** Release a successful reservation when submission preparation cannot complete. */
   virtual void releaseGeometry(const EncodedPath& encoded, std::size_t logicalDraws) = 0;
 };

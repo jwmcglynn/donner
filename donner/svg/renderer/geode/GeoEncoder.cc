@@ -982,6 +982,10 @@ struct GeoEncoder::Impl : public GeodeTextureEncoder::UniformScratch {
     return geometryAdmission->admitGeometry(encoded, logicalDraws);
   }
 
+  bool canEncodeGeometry() const {
+    return geometryAdmission == nullptr || geometryAdmission->canEncodeGeometry();
+  }
+
   bool admitReadyGeometry(const EncodedPath& encoded, std::size_t logicalDraws) {
     return admitGeometry(encoded, logicalDraws) && !encoded.empty();
   }
@@ -1521,6 +1525,9 @@ void GeoEncoder::fillPathIntoMask(const Path& path, FillRule rule,
   EncodedPath ownedEncoded;
   const EncodedPath* encodedPtr = precomputedEncoded;
   if (!encodedPtr) {
+    if (!impl_->canEncodeGeometry()) {
+      return;
+    }
     impl_->device->countPathEncode();
     ownedEncoded = GeodePathEncoder::encode(path, rule);
     encodedPtr = &ownedEncoded;
@@ -2648,6 +2655,9 @@ void GeoEncoder::fillPathPattern(const Path& path, FillRule rule, const PatternP
   EncodedPath ownedEncoded;
   const EncodedPath* encoded = precomputedEncoded;
   if (encoded == nullptr) {
+    if (!impl_->canEncodeGeometry()) {
+      return;
+    }
     impl_->device->countPathEncode();
     ownedEncoded = GeodePathEncoder::encode(path, rule);
     encoded = &ownedEncoded;
@@ -2705,6 +2715,9 @@ void GeoEncoder::submitFillDraw(const FillDrawArgs& args, std::span<const float>
   EncodedPath ownedEncoded;
   const EncodedPath* encodedPtr = args.precomputedEncoded;
   if (!encodedPtr) {
+    if (!impl_->canEncodeGeometry()) {
+      return;
+    }
     impl_->device->countPathEncode();
     ownedEncoded = GeodePathEncoder::encode(*args.path, args.rule);
     encodedPtr = &ownedEncoded;
@@ -3162,6 +3175,9 @@ void GeoEncoder::fillPathLinearGradient(const Path& path, const LinearGradientPa
   EncodedPath ownedEncoded;
   const EncodedPath* encodedPtr = precomputedEncoded;
   if (!encodedPtr) {
+    if (!impl_->canEncodeGeometry()) {
+      return;
+    }
     impl_->device->countPathEncode();
     ownedEncoded = GeodePathEncoder::encode(path, rule);
     encodedPtr = &ownedEncoded;
@@ -3191,6 +3207,9 @@ void GeoEncoder::fillPathRadialGradient(const Path& path, const RadialGradientPa
   EncodedPath ownedEncoded;
   const EncodedPath* encodedPtr = precomputedEncoded;
   if (!encodedPtr) {
+    if (!impl_->canEncodeGeometry()) {
+      return;
+    }
     impl_->device->countPathEncode();
     ownedEncoded = GeodePathEncoder::encode(path, rule);
     encodedPtr = &ownedEncoded;

@@ -262,7 +262,7 @@ public:
    * Reserves all remaining path-measurement work before a bounded query starts.
    *
    * The caller must pass the returned maximum to the query, then call
-   * ef reconcilePathMeasurement with the query's actual work and completion outcome.
+   * @ref reconcilePathMeasurement with the query's actual work and completion outcome.
    */
   [[nodiscard]] std::optional<PathMeasurementReservation> reservePathMeasurement() {
     if (rejected_ || pathMeasurementReservationActive_ ||
