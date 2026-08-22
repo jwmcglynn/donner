@@ -3,6 +3,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <unordered_map>
 #include <vector>
@@ -107,6 +108,12 @@ public:
       for (auto entry = existing->second.begin(); entry != existing->second.end();) {
         if (auto pixels = entry->pixels.lock()) {
           if (*pixels == sourcePixels) {
+            if (sourcePixels.size() >
+                std::numeric_limits<std::size_t>::max() - sharedImageComparedBytes_) {
+              sharedImageComparedBytes_ = std::numeric_limits<std::size_t>::max();
+            } else {
+              sharedImageComparedBytes_ += sourcePixels.size();
+            }
             return pixels;
           }
           ++entry;
@@ -160,6 +167,7 @@ public:
     return structuralBytes_ + sharedImageBytes_;
   }
   std::size_t sharedImageMaterializations() const { return sharedImageMaterializations_; }
+  std::size_t sharedImageComparedBytes() const { return sharedImageComparedBytes_; }
   bool rejected() const { return rejected_; }
   const Limits& limits() const { return limits_; }
 
@@ -247,6 +255,7 @@ private:
   std::size_t structuralBytes_ = 0;
   mutable std::size_t sharedImageBytes_ = 0;
   std::size_t sharedImageMaterializations_ = 0;
+  std::size_t sharedImageComparedBytes_ = 0;
   bool rejected_ = false;
   Limits limits_;
   std::unordered_map<Entity, std::size_t> reservations_;

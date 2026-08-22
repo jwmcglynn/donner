@@ -738,6 +738,31 @@ TEST_F(FilterSystemTest, InheritedComputedFiltersShareOneAccountedImageAllocatio
   EXPECT_EQ(family->retainedBytes(DocumentResourceFamilyBudget::Kind::ComputedFilter), 0u);
 }
 
+TEST_F(FilterSystemTest, InheritedFilterFanoutDoesNotRescanSharedImagePixels) {
+  constexpr std::size_t kDerivedFilterCount = 256;
+  std::string source = R"(<svg xmlns="http://www.w3.org/2000/svg"><defs>
+    <filter id="base"><feImage id="image" href="image.png"/></filter>)";
+  for (std::size_t i = 0; i < kDerivedFilterCount; ++i) {
+    source += "<filter id='derived-" + std::to_string(i) + "' href='#base'/>";
+  }
+  source += "</defs></svg>";
+
+  auto document = ParseSVG(source);
+  auto imageElement = document.querySelector("#image");
+  ASSERT_TRUE(imageElement.has_value());
+  imageElement->entityHandle().emplace<LoadedImageComponent>(
+      ImageResource{std::vector<uint8_t>(4096, 0x7f), 1, 1024});
+
+  ParseWarningSink sink = ParseWarningSink::Disabled();
+  StyleSystem().computeAllStyles(document.registry(), sink);
+  filterSystem.instantiateAllComputedComponents(document.registry(), sink);
+
+  auto& budget = document.registry().ctx().get<ComputedFilterResourceBudget>();
+  EXPECT_EQ(budget.sharedImageMaterializations(), 1u);
+  EXPECT_EQ(budget.sharedImageComparedBytes(), 0u);
+  EXPECT_FALSE(budget.rejected());
+}
+
 TEST_F(FilterSystemTest, DestroyingComputedComponentReleasesStructuralFamilyReservation) {
   auto document = ParseSVG(R"(
     <svg xmlns="http://www.w3.org/2000/svg"><defs>
