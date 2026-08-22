@@ -3094,6 +3094,24 @@ Box2d EditorShell::canvasZoomControlScreenRect() const {
   return Box2d::FromXYWH(x, y, width, height);
 }
 
+std::optional<Entity> EditorShell::toolbarPaintSelectionIdentity(
+    bool rendererBusy, const svg::SVGDocumentHandle& currentPaintDocument) {
+  if (app_.selectedElements().empty()) {
+    return std::nullopt;
+  }
+
+  if (rendererBusy) {
+    // The render worker may be traversing or rebuilding the shared registry. Reuse the stable
+    // identity captured before handoff instead of resolving an ElementAnchor against that registry
+    // from the UI thread.
+    return toolbarPaintSnapshotDocument_ == currentPaintDocument ? toolbarPaintSnapshotSelection_
+                                                                 : std::nullopt;
+  }
+
+  ++toolbarLiveSelectionIdentityReadsForTesting_;
+  return app_.selectedElements().front().unsafeEntityHandle().entity();
+}
+
 void EditorShell::renderFillStrokeToolbarWidget() {
   const bool rendererBusy = renderCoordinator_.asyncRenderer().isBusy();
   const bool canvasInteractionActive = selectTool_.isDragging() || selectTool_.isMarqueeing() ||
@@ -3103,10 +3121,7 @@ void EditorShell::renderFillStrokeToolbarWidget() {
   std::optional<Entity> currentPaintSelection;
   if (app_.hasDocument()) {
     currentPaintDocument = app_.document().document().handle();
-    if (!app_.selectedElements().empty()) {
-      ++toolbarLiveSelectionIdentityReadsForTesting_;
-      currentPaintSelection = app_.selectedElements().front().unsafeEntityHandle().entity();
-    }
+    currentPaintSelection = toolbarPaintSelectionIdentity(rendererBusy, currentPaintDocument);
   }
   const bool paintSnapshotMatchesSelection =
       toolbarPaintSnapshot_ != nullptr && toolbarPaintSnapshotDocument_ == currentPaintDocument &&

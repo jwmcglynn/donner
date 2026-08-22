@@ -452,6 +452,8 @@ private:
   void renderToolPalette(const ImVec2& paneOrigin, const ImVec2& contentRegion);
   void renderEditingScopeBreadcrumb();
   void renderCanvasZoomControl();
+  [[nodiscard]] std::optional<Entity> toolbarPaintSelectionIdentity(
+      bool rendererBusy, const svg::SVGDocumentHandle& currentPaintDocument);
   void renderFillStrokeToolbarWidget();
   void renderCompactTopBar();
   void renderSidebars();
