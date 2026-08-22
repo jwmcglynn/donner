@@ -73,6 +73,22 @@ bool HasCachedOutlineTables(const FontManager& fontManager, FontHandle font) {
          fontManager.sfntTable(font, "CFF2").has_value();
 }
 
+bool CanDecodeGlyphOutline(const FontManager& fontManager, FontHandle font, int glyphIndex,
+                           float scale) {
+  return glyphIndex >= 0 && std::isfinite(scale) && scale >= 0.0f &&
+         (fontManager.isTrustedFont(font) ||
+          fontManager.glyphOutlineComplexity(font, glyphIndex).has_value());
+}
+
+std::optional<float> CheckedFontSizePx(float scale, unsigned int unitsPerEm) {
+  const float fontSizePx = scale * static_cast<float>(unitsPerEm);
+  constexpr float kMaximumFontSizePx =
+      static_cast<float>(std::numeric_limits<FT_F26Dot6>::max() / 64);
+  return std::isfinite(fontSizePx) && fontSizePx <= kMaximumFontSizePx
+             ? std::optional<float>(fontSizePx)
+             : std::nullopt;
+}
+
 /// Small-caps synthesis scale factor.
 constexpr float kSmallCapScale = 0.8f;
 
@@ -375,6 +391,9 @@ std::optional<SubSuperMetrics> TextBackendFull::subSuperMetrics(FontHandle font)
 // ---------------------------------------------------------------------------
 
 Path TextBackendFull::glyphOutline(FontHandle font, int glyphIndex, float scale) const {
+  if (!CanDecodeGlyphOutline(fontManager_, font, glyphIndex, scale)) {
+    return {};
+  }
   hb_font_t* hbFont = getOrCreateHbFont(font);
   if (!hbFont) {
     return {};
@@ -383,14 +402,17 @@ Path TextBackendFull::glyphOutline(FontHandle font, int glyphIndex, float scale)
   // The `scale` parameter is fontSizePx / upem (same as stbtt_ScaleForMappingEmToPixels).
   // Convert back to fontSizePx for FreeType.
   const unsigned int upem = hb_face_get_upem(hb_font_get_face(hbFont));
-  const float fontSizePx = scale * static_cast<float>(upem);
+  const std::optional<float> fontSizePx = CheckedFontSizePx(scale, upem);
+  if (!fontSizePx.has_value()) {
+    return {};
+  }
 
   // Get the FreeType face and set it to the correct size.
   FT_Face ftFace = hb_ft_font_get_ft_face(hbFont);
   if (!ftFace) {
     return {};
   }
-  FT_Set_Char_Size(ftFace, 0, static_cast<FT_F26Dot6>(fontSizePx * 64.0f), 72, 72);
+  FT_Set_Char_Size(ftFace, 0, static_cast<FT_F26Dot6>(*fontSizePx * 64.0f), 72, 72);
 
   // Use NO_HINTING to match the HarfBuzz font configuration (set in getOrCreateHbFont).
   // Hinted outlines differ from unhinted metrics, causing shape/position mismatches
@@ -409,8 +431,8 @@ Path TextBackendFull::glyphOutline(FontHandle font, int glyphIndex, float scale)
   // Dividing by 64 gives the pixel coordinates, which match the caller's expected scale
   // because we set FreeType's size to `scale * upem`.
   PathBuilder builder;
-  const double ftScaleX = pixelScaleForPpem(ftFace, fontSizePx, true);
-  const double ftScaleY = pixelScaleForPpem(ftFace, fontSizePx, false);
+  const double ftScaleX = pixelScaleForPpem(ftFace, *fontSizePx, true);
+  const double ftScaleY = pixelScaleForPpem(ftFace, *fontSizePx, false);
 
   FT_Outline_Funcs funcs{};
   struct FtCtx {

@@ -533,8 +533,22 @@ bool FontManager::isTrustedFont(FontHandle handle) const {
 }
 
 std::optional<FontManager::GlyphOutlineComplexity> FontManager::glyphOutlineComplexity(
-    FontHandle /*handle*/, int /*glyphIndex*/) const {
-  return std::nullopt;
+    FontHandle handle, int glyphIndex) const {
+  if (!isValidHandle(handle) || glyphIndex < 0) {
+    return std::nullopt;
+  }
+  const auto* font = registry_.try_get<LoadedFontComponent>(handle.entity());
+  if (!font) {
+    return std::nullopt;
+  }
+  const auto complexity = font->sfnt.glyphOutlineComplexity(static_cast<std::size_t>(glyphIndex));
+  if (!complexity) {
+    return std::nullopt;
+  }
+  return GlyphOutlineComplexity{
+      .maximumVertices = complexity->maximumVertices,
+      .work = complexity->work,
+  };
 }
 
 std::optional<std::span<const uint8_t>> FontManager::sfntTable(FontHandle handle,

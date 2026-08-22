@@ -51,9 +51,9 @@ uint32_t SfntTag(std::string_view tag);
  * caps. The work model includes repeated and shared descendants, simple point decoding, component
  * transforms, and stb_truetype's repeated prefix copies.
  *
- * CFF/CFF2 tables receive bounded directory validation only. They must be consumed by an
- * exact-span parser such as FreeType; stb_truetype's CFF parser uses a synthetic 512 MiB span and
- * must not be initialized for these fonts.
+ * CFF and non-variable CFF2 outlines also receive bounded CharString validation. CFF tables must
+ * still be consumed by an exact-span parser such as FreeType; stb_truetype's CFF parser uses a
+ * synthetic 512 MiB span and must not be initialized for untrusted CFF fonts.
  */
 class SfntFont {
 public:
@@ -64,7 +64,7 @@ public:
     uint32_t length = 0;
   };
 
-  /// Allocation and CPU-work ceiling proved for one TrueType glyph.
+  /// Allocation and CPU-work ceiling proved for one glyph outline.
   struct GlyphOutlineComplexity {
     uint32_t maximumVertices = 0;
     uint32_t work = 0;
@@ -104,13 +104,13 @@ public:
   /// Number of validated directory entries.
   size_t numTables() const { return numTables_; }
 
-  /// Number of glyphs represented by the retained `loca` index, or zero for non-TrueType fonts.
+  /// Number of glyphs with retained outline bounds, or zero when validation was unavailable.
   size_t numGlyphs() const { return numGlyphs_; }
 
-  /// Return the validation-time outline bound for a TrueType glyph.
+  /// Return the validation-time outline bound for a glyph.
   std::optional<GlyphOutlineComplexity> glyphOutlineComplexity(size_t glyphIndex) const;
 
-  /// Exact dynamic bytes retained by the sorted directory and `loca` index.
+  /// Exact dynamic bytes retained by the sorted directory and outline indexes.
   size_t retainedBytes() const;
 
 private:
