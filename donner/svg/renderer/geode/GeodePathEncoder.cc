@@ -869,8 +869,9 @@ EncodedPath GeodePathEncoder::encode(const Path& path, FillRule fillRule, double
   return encode(path, fillRule, tolerance, Limits{});
 }
 
-EncodedPath GeodePathEncoder::encode(const Path& path, FillRule /*fillRule*/, double tolerance,
-                                     Limits limits) {
+namespace {
+
+EncodedPath EncodeBoundedPath(const Path& path, double tolerance, GeodePathEncoder::Limits limits) {
   EncodedPath result;
 
   if (path.empty()) {
@@ -975,6 +976,13 @@ EncodedPath GeodePathEncoder::encode(const Path& path, FillRule /*fillRule*/, do
   }
   result.outcome = EncodedPath::Outcome::Ready;
   return result;
+}
+
+}  // namespace
+
+EncodedPath GeodePathEncoder::encode(const Path& path, FillRule /*fillRule*/, double tolerance,
+                                     Limits limits) {
+  return EncodeBoundedPath(path, tolerance, limits);
 }
 
 }  // namespace donner::geode

@@ -19,6 +19,10 @@
 
 namespace donner::svg {
 
+class FontManager;
+class FontHandle;
+struct TextRun;
+
 /**
  * Per-frame counts of the conversions \ref RendererTinySkia caches.
  *
@@ -243,15 +247,16 @@ public:
    */
   [[nodiscard]] RendererBitmap takeSnapshot() const override;
   [[nodiscard]] std::unique_ptr<RendererInterface> createOffscreenInstance() const override;
+  [[nodiscard]] RendererResourceStats resourceStats() const override;
 
   /// Reduce generated-dash work for a boundary test.
-  void setDashWorkBudgetForTesting(std::size_t) {}
+  void setDashWorkBudgetForTesting(std::size_t maximumWorkUnits);
   /// Reduce materialized gradient stops for a boundary test.
-  void setGradientStopBudgetForTesting(std::size_t) {}
+  void setGradientStopBudgetForTesting(std::size_t maximumStops);
   /// Reduce admitted text glyphs for a boundary test.
-  void setTextGlyphBudgetForTesting(std::size_t) {}
+  void setTextGlyphBudgetForTesting(std::size_t maximumGlyphs);
   /// Reduce decoded-outline and path-copy ceilings for a boundary test.
-  void setTextMaterializationBudgetForTesting(RendererTextMaterializationBudget::Cost) {}
+  void setTextMaterializationBudgetForTesting(RendererTextMaterializationBudget::Cost limits);
 
   /**
    * Saves the last rendered frame to a PNG file.
@@ -312,6 +317,9 @@ public:
   }
 
 private:
+  struct DashedPathWorkBudget;
+  struct TextGlyphWorkBudget;
+
   struct PatternPaintState {
     tiny_skia::Pixmap pixmap;
     Transform2d targetFromPattern;
@@ -418,6 +426,10 @@ private:
   bool compositeTransformedFilter(SurfaceFrame& frame);
   void compositeDeviceFilter(SurfaceFrame& frame);
   tiny_skia::Pixmap extractFilterViewport(const SurfaceFrame& frame, int width, int height);
+  bool admitTextGlyphBatch(const std::vector<TextRun>& runs);
+  bool admitGlyphPredecode(const FontManager& fontManager, FontHandle font, int glyphIndex,
+                           bool& hasComplexity);
+  bool admitPlacedGlyph(bool hasPredecodeComplexity, const Path& path);
   [[nodiscard]] std::optional<tiny_skia::Paint> makeFillPaint(const Box2d& bounds);
   [[nodiscard]] std::optional<tiny_skia::Paint> makeStrokePaint(const Box2d& bounds,
                                                                 const StrokeParams& stroke);
@@ -488,6 +500,15 @@ private:
   std::shared_ptr<components::FilterExecutionBudget> filterExecutionBudget_ =
       std::make_shared<components::FilterExecutionBudget>();
   bool ownsFilterExecutionBudget_ = true;
+  std::shared_ptr<RendererDrawBudget> drawBudget_ = std::make_shared<RendererDrawBudget>();
+  bool ownsDrawBudget_ = true;
+  std::shared_ptr<RendererSurfaceBudget> surfaceBudget_ = std::make_shared<RendererSurfaceBudget>();
+  bool ownsSurfaceBudget_ = true;
+  std::shared_ptr<RendererTextMaterializationBudget> textMaterializationBudget_ =
+      std::make_shared<RendererTextMaterializationBudget>();
+  bool ownsTextMaterializationBudget_ = true;
+  std::shared_ptr<TextGlyphWorkBudget> textGlyphWorkBudget_;
+  std::shared_ptr<DashedPathWorkBudget> dashedPathWorkBudget_;
   std::optional<PatternPaintState> patternFillPaint_;
   std::optional<PatternPaintState> patternStrokePaint_;
 

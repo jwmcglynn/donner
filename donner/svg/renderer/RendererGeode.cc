@@ -134,6 +134,19 @@ const Box2d kUnitPathBounds(Vector2d::Zero(), Vector2d(1, 1));
 /// Source UV rect that samples an entire texture.
 const Box2d kWholeTextureUv(Vector2d::Zero(), Vector2d(1, 1));
 
+std::optional<Vector2i> CheckedViewportPixels(const RenderViewport& viewport) {
+  const double width = viewport.size.x * viewport.devicePixelRatio;
+  const double height = viewport.size.y * viewport.devicePixelRatio;
+  constexpr double kMaximum = static_cast<double>(std::numeric_limits<int>::max());
+  if (!std::isfinite(viewport.size.x) || !std::isfinite(viewport.size.y) ||
+      !std::isfinite(viewport.devicePixelRatio) || viewport.size.x < 0.0 || viewport.size.y < 0.0 ||
+      viewport.devicePixelRatio <= 0.0 || !std::isfinite(width) || !std::isfinite(height) ||
+      width > kMaximum || height > kMaximum) {
+    return std::nullopt;
+  }
+  return Vector2i(static_cast<int>(width), static_cast<int>(height));
+}
+
 bool IsBgraTextureFormat(wgpu::TextureFormat format) {
   return static_cast<WGPUTextureFormat>(format) == WGPUTextureFormat_BGRA8Unorm;
 }
@@ -3875,17 +3888,9 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
       device->drainDeferredDestroys();
     }
     viewport = nextViewport;
-    const double nextPixelWidth = nextViewport.size.x * nextViewport.devicePixelRatio;
-    const double nextPixelHeight = nextViewport.size.y * nextViewport.devicePixelRatio;
-    constexpr double kMaximumPixelDimension = static_cast<double>(std::numeric_limits<int>::max());
-    const bool invalidViewport =
-        !std::isfinite(nextViewport.size.x) || !std::isfinite(nextViewport.size.y) ||
-        !std::isfinite(nextViewport.devicePixelRatio) || nextViewport.size.x < 0.0 ||
-        nextViewport.size.y < 0.0 || nextViewport.devicePixelRatio <= 0.0 ||
-        !std::isfinite(nextPixelWidth) || !std::isfinite(nextPixelHeight) ||
-        nextPixelWidth > kMaximumPixelDimension || nextPixelHeight > kMaximumPixelDimension;
-    pixelWidth = invalidViewport ? 0 : static_cast<int>(nextPixelWidth);
-    pixelHeight = invalidViewport ? 0 : static_cast<int>(nextPixelHeight);
+    const Vector2i pixelSize = CheckedViewportPixels(nextViewport).value_or(Vector2i::Zero());
+    pixelWidth = pixelSize.x;
+    pixelHeight = pixelSize.y;
     deviceFromLocalTransform = Transform2d();
     deviceFromLocalTransformStack.clear();
     paint = PaintParams();

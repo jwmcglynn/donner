@@ -194,15 +194,27 @@ public:
     std::uint64_t imageBytes = 0;
   };
 
-  void reset() { *this = {}; }
+  void reset() {
+    drawCalls_ = 0;
+    pathCommands_ = 0;
+    pathMeasurementWorkUnits_ = 0;
+    gradientStops_ = 0;
+    imageDraws_ = 0;
+    imageBytes_ = 0;
+    rejected_ = false;
+  }
   void reject() { rejected_ = true; }
+  void setGradientStopLimitForTesting(std::size_t maximum) {
+    gradientStopLimit_ = std::min(gradientStopLimit_, maximum);
+  }
 
   [[nodiscard]] bool reserve(const Cost& cost) {
     if (rejected_ || cost.drawCalls > kMaximumDrawCalls - drawCalls_ ||
         cost.pathCommands > kMaximumPathCommands - pathCommands_ ||
         cost.pathMeasurementWorkUnits >
             kMaximumPathMeasurementWorkUnits - pathMeasurementWorkUnits_ ||
-        cost.gradientStops > kMaximumGradientStops - gradientStops_ ||
+        gradientStops_ > gradientStopLimit_ ||
+        cost.gradientStops > gradientStopLimit_ - gradientStops_ ||
         cost.imageDraws > kMaximumImageDraws - imageDraws_ ||
         cost.imageBytes > kMaximumImageBytes - imageBytes_) {
       rejected_ = true;
@@ -232,6 +244,7 @@ private:
   std::size_t gradientStops_ = 0;
   std::size_t imageDraws_ = 0;
   std::uint64_t imageBytes_ = 0;
+  std::size_t gradientStopLimit_ = kMaximumGradientStops;
   bool rejected_ = false;
 };
 

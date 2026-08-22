@@ -39,6 +39,7 @@
 #include "donner/svg/text/TextLayoutParams.h"
 #endif
 #include "tiny_skia/Painter.h"
+#include "tiny_skia/Path.h"
 #include "tiny_skia/PathBuilder.h"
 #include "tiny_skia/shaders/Shaders.h"
 
@@ -72,9 +73,189 @@ TextLayoutParams toTextLayoutParams(const TextParams& params) {
   layoutParams.inlineSizePx = params.inlineSizePx;
   return layoutParams;
 }
+
+std::optional<RendererTextMaterializationBudget::Cost> GlyphPredecodeCost(
+    const FontManager::GlyphOutlineComplexity& complexity) {
+  constexpr std::size_t kCommandCopiesPerVertex = 6;
+  constexpr std::size_t kPointCopiesPerVertex = 9;
+  if (complexity.maximumVertices >
+      std::numeric_limits<std::size_t>::max() / kPointCopiesPerVertex) {
+    return std::nullopt;
+  }
+  const std::size_t commands = complexity.maximumVertices * kCommandCopiesPerVertex;
+  const std::size_t points = complexity.maximumVertices * kPointCopiesPerVertex;
+  if (commands > std::numeric_limits<std::size_t>::max() / sizeof(Path::Command) ||
+      points > std::numeric_limits<std::size_t>::max() / sizeof(Vector2d)) {
+    return std::nullopt;
+  }
+  const std::size_t commandBytes = commands * sizeof(Path::Command);
+  const std::size_t pointBytes = points * sizeof(Vector2d);
+  if (pointBytes > std::numeric_limits<std::size_t>::max() - commandBytes) {
+    return std::nullopt;
+  }
+  return RendererTextMaterializationBudget::Cost{.uniqueOutlines = 1,
+                                                 .commands = commands,
+                                                 .points = points,
+                                                 .bytes = commandBytes + pointBytes,
+                                                 .decodeWork = complexity.work};
+}
 #endif
 
 const Box2d kUnitPathBounds(Vector2d::Zero(), Vector2d(1, 1));
+constexpr std::size_t kMaximumTinySkiaDashWorkUnits = 1000000;
+
+std::optional<std::size_t> EstimateDashWorkUnits(const tiny_skia::Path& path,
+                                                 const tiny_skia::StrokeDash& dash) {
+  double intervalLength = 0.0;
+  for (const float interval : dash.array) {
+    if (!std::isfinite(interval) || interval < 0.0 ||
+        intervalLength > std::numeric_limits<double>::max() - interval) {
+      return std::nullopt;
+    }
+    intervalLength += interval;
+  }
+  if (dash.array.size() < 2 || (dash.array.size() & 1u) != 0u || intervalLength <= 0.0) {
+    return std::nullopt;
+  }
+
+  const std::span<const tiny_skia::Point> points = path.points();
+  std::size_t pointIndex = 0;
+  std::optional<tiny_skia::Point> contourStart;
+  std::optional<tiny_skia::Point> current;
+  double contourLength = 0.0;
+  std::size_t workUnits = 0;
+  const std::size_t dashPairCount = dash.array.size() / 2;
+  const auto finishContour = [&]() -> bool {
+    if (contourLength == 0.0) {
+      return true;
+    }
+    const double repeatedWork =
+        std::ceil(contourLength * static_cast<double>(dashPairCount) / intervalLength);
+    contourLength = 0.0;
+    if (!std::isfinite(repeatedWork) || repeatedWork < 0.0) {
+      return false;
+    }
+    if (repeatedWork > static_cast<double>(kMaximumTinySkiaDashWorkUnits) ||
+        dashPairCount > kMaximumTinySkiaDashWorkUnits - static_cast<std::size_t>(repeatedWork)) {
+      workUnits = kMaximumTinySkiaDashWorkUnits + 1;
+      return true;
+    }
+    const std::size_t contourWork = static_cast<std::size_t>(repeatedWork) + dashPairCount;
+    if (workUnits > kMaximumTinySkiaDashWorkUnits ||
+        contourWork > kMaximumTinySkiaDashWorkUnits - workUnits) {
+      workUnits = kMaximumTinySkiaDashWorkUnits + 1;
+    } else {
+      workUnits += contourWork;
+    }
+    return true;
+  };
+  const auto addEdge = [&](tiny_skia::Point start, tiny_skia::Point end) -> bool {
+    const double length =
+        std::hypot(static_cast<double>(end.x) - start.x, static_cast<double>(end.y) - start.y);
+    if (!std::isfinite(length) || contourLength > std::numeric_limits<double>::max() - length) {
+      return false;
+    }
+    contourLength += length;
+    return true;
+  };
+
+  for (const tiny_skia::PathVerb verb : path.verbs()) {
+    switch (verb) {
+      case tiny_skia::PathVerb::Move:
+        if (!finishContour() || pointIndex >= points.size()) return std::nullopt;
+        current = points[pointIndex++];
+        contourStart = current;
+        break;
+      case tiny_skia::PathVerb::Line:
+        if (!current.has_value() || pointIndex >= points.size() ||
+            !addEdge(*current, points[pointIndex])) {
+          return std::nullopt;
+        }
+        current = points[pointIndex++];
+        break;
+      case tiny_skia::PathVerb::Quad:
+        if (!current.has_value() || pointIndex > points.size() || points.size() - pointIndex < 2 ||
+            !addEdge(*current, points[pointIndex]) ||
+            !addEdge(points[pointIndex], points[pointIndex + 1])) {
+          return std::nullopt;
+        }
+        current = points[pointIndex + 1];
+        pointIndex += 2;
+        break;
+      case tiny_skia::PathVerb::Cubic:
+        if (!current.has_value() || pointIndex > points.size() || points.size() - pointIndex < 3 ||
+            !addEdge(*current, points[pointIndex]) ||
+            !addEdge(points[pointIndex], points[pointIndex + 1]) ||
+            !addEdge(points[pointIndex + 1], points[pointIndex + 2])) {
+          return std::nullopt;
+        }
+        current = points[pointIndex + 2];
+        pointIndex += 3;
+        break;
+      case tiny_skia::PathVerb::Close:
+        if (current.has_value() && contourStart.has_value() && !addEdge(*current, *contourStart)) {
+          return std::nullopt;
+        }
+        if (!finishContour()) return std::nullopt;
+        current = contourStart;
+        break;
+    }
+  }
+  if (!finishContour() || pointIndex != points.size()) {
+    return std::nullopt;
+  }
+  return workUnits;
+}
+
+template <typename ResolvePath, typename Reserve>
+void ReserveEstimatedDashWork(const std::optional<tiny_skia::StrokeDash>& dash,
+                              std::size_t targetCount, ResolvePath&& resolvePath, Reserve&& reserve,
+                              RendererDrawBudget& drawBudget) {
+  if (!dash.has_value()) {
+    return;
+  }
+  const std::optional<std::size_t> workUnits = EstimateDashWorkUnits(resolvePath(), *dash);
+  if (!workUnits.has_value() ||
+      *workUnits > std::numeric_limits<std::size_t>::max() / targetCount ||
+      !reserve(*workUnits * targetCount)) {
+    drawBudget.reject();
+  }
+}
+
+bool HasOpenDashSeam(const std::optional<tiny_skia::StrokeDash>& dash,
+                     bool dashHasOnlyZeroLengthGaps) {
+  return dash.has_value() && dashHasOnlyZeroLengthGaps;
+}
+
+#ifdef DONNER_TEXT_ENABLED
+bool CanRenderTextRun(bool isBitmapFont, float scale) {
+  return isBitmapFont || scale != 0.0f;
+}
+
+template <typename Bitmap>
+std::optional<Bitmap> AdmitBitmapGlyph(std::optional<Bitmap> bitmap,
+                                       RendererTextMaterializationBudget& materializationBudget,
+                                       RendererDrawBudget& drawBudget) {
+  if (!bitmap.has_value()) {
+    return std::nullopt;
+  }
+  const std::size_t bytes = bitmap->rgbaPixels.size();
+  if (bytes > std::numeric_limits<std::size_t>::max() / 2u ||
+      !materializationBudget.reserve({.uniqueOutlines = 1, .bytes = bytes * 2u})) {
+    drawBudget.reject();
+    return std::nullopt;
+  }
+  return bitmap;
+}
+
+std::vector<TextRun> CachedTextRuns(Registry& registry, Entity textRootEntity) {
+  if (textRootEntity == entt::null) {
+    return {};
+  }
+  const auto* cache = registry.try_get<components::ComputedTextGeometryComponent>(textRootEntity);
+  return cache ? cache->runs : std::vector<TextRun>();
+}
+#endif
 
 tiny_skia::Color toTinyColor(const css::RGBA& rgba) {
   return tiny_skia::Color::fromRgba8(rgba.r, rgba.g, rgba.b, rgba.a);
@@ -95,6 +276,16 @@ std::optional<tiny_skia::Rect> toTinyRect(const Box2d& box) {
   return tiny_skia::Rect::fromLTRB(NarrowToFloat(box.topLeft.x), NarrowToFloat(box.topLeft.y),
                                    NarrowToFloat(box.bottomRight.x),
                                    NarrowToFloat(box.bottomRight.y));
+}
+
+std::optional<tiny_skia::Rect> AdmittedEllipseRect(RendererDrawBudget& drawBudget,
+                                                   const tiny_skia::Pixmap& pixmap,
+                                                   const Box2d& bounds) {
+  (void)drawBudget.reserve({.drawCalls = 1, .pathCommands = 6});
+  if (pixmap.width() == 0 || pixmap.height() == 0) {
+    return std::nullopt;
+  }
+  return toTinyRect(bounds);
 }
 
 tiny_skia::FillRule toTinyFillRule(FillRule fillRule) {
@@ -490,8 +681,8 @@ Transform2d resolveGradientTransform(
 }
 
 std::optional<tiny_skia::Shader> instantiateGradientShader(
-    const components::PaintResolvedReference& ref, const Box2d& pathBounds, const Box2d& viewBox,
-    const css::RGBA& currentColor, float opacity) {
+    RendererDrawBudget& drawBudget, const components::PaintResolvedReference& ref,
+    const Box2d& pathBounds, const Box2d& viewBox, const css::RGBA& currentColor, float opacity) {
   const EntityHandle handle = ref.reference.handle;
   if (!handle) {
     return std::nullopt;
@@ -538,6 +729,9 @@ std::optional<tiny_skia::Shader> instantiateGradientShader(
 
   const Box2d& bounds = objectBoundingBox ? kUnitPathBounds : viewBox;
 
+  if (!drawBudget.reserve({.gradientStops = computedGradient->stops.size()})) {
+    return std::nullopt;
+  }
   std::vector<tiny_skia::GradientStop> stops;
   stops.reserve(computedGradient->stops.size());
   for (const GradientStop& stop : computedGradient->stops) {
@@ -1045,7 +1239,48 @@ double computeBlurPadding(const components::FilterGraph& filterGraph) {
 
 }  // namespace
 
-RendererTinySkia::RendererTinySkia(bool verbose) : verbose_(verbose) {}
+struct RendererTinySkia::DashedPathWorkBudget {
+  void reset() {
+    workUnits = 0;
+    rejected = false;
+  }
+
+  [[nodiscard]] bool reserve(std::size_t count) {
+    if (rejected || workUnits > maximumWorkUnits || count > maximumWorkUnits - workUnits) {
+      rejected = true;
+      return false;
+    }
+    workUnits += count;
+    return true;
+  }
+
+  std::size_t maximumWorkUnits = kMaximumTinySkiaDashWorkUnits;
+  std::size_t workUnits = 0;
+  bool rejected = false;
+};
+
+struct RendererTinySkia::TextGlyphWorkBudget {
+  void reset() {
+    glyphs = 0;
+    rejected = false;
+  }
+
+  [[nodiscard]] bool canReserve(std::size_t count) const {
+    return !rejected && glyphs <= maximumGlyphs && count <= maximumGlyphs - glyphs;
+  }
+
+  void commit(std::size_t count) { glyphs += count; }
+  void reject() { rejected = true; }
+
+  std::size_t maximumGlyphs = RendererDrawBudget::kMaximumDrawCalls / 2;
+  std::size_t glyphs = 0;
+  bool rejected = false;
+};
+
+RendererTinySkia::RendererTinySkia(bool verbose)
+    : verbose_(verbose),
+      textGlyphWorkBudget_(std::make_shared<TextGlyphWorkBudget>()),
+      dashedPathWorkBudget_(std::make_shared<DashedPathWorkBudget>()) {}
 
 RendererTinySkia::~RendererTinySkia() = default;
 RendererTinySkia::RendererTinySkia(RendererTinySkia&&) noexcept = default;
@@ -1070,10 +1305,19 @@ void RendererTinySkia::draw(SVGDocument& document) {
 
 void RendererTinySkia::beginFrame(const RenderViewport& viewport) {
   viewport_ = viewport;
-  const int pixelWidth =
-      CheckedPixelDimension(viewport.size.x, viewport.devicePixelRatio).value_or(0);
-  const int pixelHeight =
-      CheckedPixelDimension(viewport.size.y, viewport.devicePixelRatio).value_or(0);
+  if (ownsDrawBudget_) {
+    drawBudget_->reset();
+    textGlyphWorkBudget_->reset();
+    dashedPathWorkBudget_->reset();
+    textMaterializationBudget_->reset();
+    surfaceBudget_->reset();
+  }
+  int pixelWidth = CheckedPixelDimension(viewport.size.x, viewport.devicePixelRatio).value_or(0);
+  int pixelHeight = CheckedPixelDimension(viewport.size.y, viewport.devicePixelRatio).value_or(0);
+  if (!surfaceBudget_->reserve(pixelWidth, pixelHeight)) {
+    pixelWidth = 0;
+    pixelHeight = 0;
+  }
 
   // Keep the frame buffer's allocation across frames. A renderer that draws the
   // same viewport repeatedly (editor, compositor, animation loop) otherwise
@@ -1301,6 +1545,15 @@ void RendererTinySkia::pushIsolatedLayer(double opacity, MixBlendMode blendMode)
   }
   const int width = static_cast<int>(currentPixmap().width());
   const int height = static_cast<int>(currentPixmap().height());
+  std::size_t surfaceCount = 1;
+  if (!surfaceStack_.empty()) {
+    surfaceCount += surfaceStack_.back().fillPaintPixmap.has_value() ? 1u : 0u;
+    surfaceCount += surfaceStack_.back().strokePaintPixmap.has_value() ? 1u : 0u;
+  }
+  if (!surfaceBudget_->reserve(width, height, surfaceCount)) {
+    surfaceStack_.push_back(std::move(frame));
+    return;
+  }
   frame.pixmap = createTransparentPixmap(width, height);
   if (!surfaceStack_.empty()) {
     const SurfaceFrame& parent = surfaceStack_.back();
@@ -1631,8 +1884,19 @@ void RendererTinySkia::pushMask(const std::optional<Box2d>& maskBounds, MaskType
     surfaceStack_.push_back(std::move(frame));
     return;
   }
-  frame.pixmap = createTransparentPixmap(static_cast<int>(currentPixmap().width()),
-                                         static_cast<int>(currentPixmap().height()));
+  const int width = static_cast<int>(currentPixmap().width());
+  const int height = static_cast<int>(currentPixmap().height());
+  std::size_t surfaceCount = 2u + (maskBounds.has_value() ? 1u : 0u);
+  if (!surfaceStack_.empty()) {
+    surfaceCount += surfaceStack_.back().fillPaintPixmap.has_value() ? 1u : 0u;
+    surfaceCount += surfaceStack_.back().strokePaintPixmap.has_value() ? 1u : 0u;
+  }
+  if (!surfaceBudget_->reserve(width, height, surfaceCount)) {
+    frame.allocationRejected = true;
+    surfaceStack_.push_back(std::move(frame));
+    return;
+  }
+  frame.pixmap = createTransparentPixmap(width, height);
   surfaceStack_.push_back(std::move(frame));
 }
 
@@ -1727,6 +1991,9 @@ bool RendererTinySkia::beginPatternTile(const Box2d& tileRect,
   frame.patternRasterFromTile = Transform2d::Scale(rasterMetrics->rasterFromPatternScale);
   frame.targetFromPattern =
       TargetFromPatternRaster(targetFromPattern, rasterMetrics->rasterFromPatternScale);
+  if (!surfaceBudget_->reserve(rasterMetrics->pixelWidth, rasterMetrics->pixelHeight)) {
+    return false;
+  }
   frame.pixmap = createTransparentPixmap(rasterMetrics->pixelWidth, rasterMetrics->pixelHeight);
   if (frame.pixmap.width() == 0 || frame.pixmap.height() == 0) {
     return false;
@@ -1792,11 +2059,12 @@ void RendererTinySkia::setPaint(const PaintParams& paint) {
 }
 
 void RendererTinySkia::drawPath(const PathShape& path, const StrokeParams& stroke) {
+  const Path& pathGeometry = path.pathOrEmpty();
+  (void)drawBudget_->reserve(
+      {.drawCalls = 1, .pathCommands = static_cast<std::size_t>(pathGeometry.verbCount())});
   if (currentPixmap().width() == 0 || currentPixmap().height() == 0) {
     return;
   }
-
-  const Path& pathGeometry = path.pathOrEmpty();
 
   const tiny_skia::Mask* mask = currentClipMask_.has_value() ? &*currentClipMask_ : nullptr;
   tiny_skia::Pixmap* fillPaintPixmap =
@@ -1916,7 +2184,7 @@ void RendererTinySkia::drawPath(const PathShape& path, const StrokeParams& strok
     // those ranges across ClosePath, filling the seam as if the stroke were solid. Replace only
     // the stroke's ClosePath commands with explicit closing lines so the dash stroker emits caps
     // at that boundary; fills and ordinary dashed/solid strokes keep their closed contours.
-    const bool openDashSeam = tinyStroke.dash.has_value() && dashHasOnlyZeroLengthGaps;
+    const bool openDashSeam = HasOpenDashSeam(tinyStroke.dash, dashHasOnlyZeroLengthGaps);
     tiny_skia::Path uncachedDashSeamPath;
     const tiny_skia::Path* resolvedDashSeamPath = nullptr;
     const auto strokePath = [&]() -> const tiny_skia::Path& {
@@ -1930,6 +2198,14 @@ void RendererTinySkia::drawPath(const PathShape& path, const StrokeParams& strok
       }
       return *resolvedDashSeamPath;
     };
+
+    const std::size_t targetCount = 1u + static_cast<std::size_t>(strokePaintPixmap != nullptr);
+    ReserveEstimatedDashWork(
+        tinyStroke.dash, targetCount, strokePath,
+        [&](std::size_t work) { return dashedPathWorkBudget_->reserve(work); }, *drawBudget_);
+    if (drawBudget_->rejected()) {
+      return;
+    }
 
     auto pixmapView = currentPixmapView();
 
@@ -1984,6 +2260,7 @@ void RendererTinySkia::drawPath(const PathShape& path, const StrokeParams& strok
 }
 
 void RendererTinySkia::drawRect(const Box2d& rect, const StrokeParams& stroke) {
+  (void)drawBudget_->reserve({.drawCalls = 1, .pathCommands = 5});
   if (currentPixmap().width() == 0 || currentPixmap().height() == 0) {
     return;
   }
@@ -2046,7 +2323,8 @@ void RendererTinySkia::drawRect(const Box2d& rect, const StrokeParams& stroke) {
 }
 
 void RendererTinySkia::drawEllipse(const Box2d& bounds, const StrokeParams& stroke) {
-  const std::optional<tiny_skia::Rect> oval = toTinyRect(bounds);
+  const std::optional<tiny_skia::Rect> oval =
+      AdmittedEllipseRect(*drawBudget_, currentPixmap(), bounds);
   if (!oval.has_value()) {
     return;
   }
@@ -2163,6 +2441,9 @@ void RendererTinySkia::drawImage(const ImageResource& image, const ImageParams& 
   if (!HasExactRgbaPayload(image.data, image.width, image.height)) {
     return;
   }
+  if (!drawBudget_->reserve({.drawCalls = 1, .imageDraws = 1, .imageBytes = image.data.size()})) {
+    return;
+  }
 
   // `ImageResource` publishes straight alpha and tiny-skia samples premultiplied, so the
   // conversion is unavoidable, but it does not have to recur. The pixels belong to the element's
@@ -2186,6 +2467,10 @@ void RendererTinySkia::drawBitmap(const RendererBitmap& bitmap, const ImageParam
     return;
   }
   if (bitmap.empty()) {
+    return;
+  }
+  if (!drawBudget_->reserve(
+          {.drawCalls = 1, .imageDraws = 1, .imageBytes = bitmap.pixels.size()})) {
     return;
   }
 
@@ -2237,31 +2522,88 @@ void RendererTinySkia::drawBitmap(const RendererBitmap& bitmap, const ImageParam
   drawImagePixmap(*sourceView, bitmap.dimensions.x, bitmap.dimensions.y, params);
 }
 
+#ifdef DONNER_TEXT_ENABLED
+bool RendererTinySkia::admitTextGlyphBatch(const std::vector<TextRun>& runs) {
+  constexpr std::size_t kMaximumGlyphs = RendererDrawBudget::kMaximumDrawCalls / 2;
+  std::size_t glyphCount = 0;
+  for (const TextRun& run : runs) {
+    if (run.glyphs.size() > kMaximumGlyphs - glyphCount) {
+      drawBudget_->reject();
+      return false;
+    }
+    glyphCount += run.glyphs.size();
+  }
+  if (!textGlyphWorkBudget_->canReserve(glyphCount) ||
+      !drawBudget_->reserve({.drawCalls = glyphCount * 2})) {
+    textGlyphWorkBudget_->reject();
+    drawBudget_->reject();
+    return false;
+  }
+  textGlyphWorkBudget_->commit(glyphCount);
+  return true;
+}
+
+bool RendererTinySkia::admitGlyphPredecode(const FontManager& fontManager, FontHandle font,
+                                           int glyphIndex, bool& hasComplexity) {
+  if (drawBudget_->rejected()) {
+    return false;
+  }
+  const std::optional<FontManager::GlyphOutlineComplexity> complexity =
+      fontManager.glyphOutlineComplexity(font, glyphIndex);
+  hasComplexity = complexity.has_value();
+  if (complexity.has_value()) {
+    const std::optional<RendererTextMaterializationBudget::Cost> cost =
+        GlyphPredecodeCost(*complexity);
+    return cost.has_value() && textMaterializationBudget_->reserve(*cost);
+  }
+  if (!fontManager.isTrustedFont(font)) {
+    textMaterializationBudget_->reject();
+    return false;
+  }
+  return true;
+}
+
+bool RendererTinySkia::admitPlacedGlyph(bool hasPredecodeComplexity, const Path& path) {
+  if (hasPredecodeComplexity || path.empty()) {
+    return true;
+  }
+  const std::optional<std::size_t> retainedBytes = path.retainedBytes();
+  if (!retainedBytes.has_value() ||
+      path.commands().size() > std::numeric_limits<std::size_t>::max() / 2u ||
+      path.points().size() > std::numeric_limits<std::size_t>::max() / 2u ||
+      *retainedBytes > std::numeric_limits<std::size_t>::max() / 2u) {
+    textMaterializationBudget_->reject();
+    return false;
+  }
+  return textMaterializationBudget_->reserve({.uniqueOutlines = 1,
+                                              .commands = path.commands().size() * 2u,
+                                              .points = path.points().size() * 2u,
+                                              .bytes = *retainedBytes * 2u});
+}
+
+#endif  // DONNER_TEXT_ENABLED
+
 void RendererTinySkia::drawText(Registry& registry, const components::ComputedTextComponent& text,
                                 const TextParams& params) {
 #ifdef DONNER_TEXT_ENABLED
-  if (currentPixmap().width() == 0 || currentPixmap().height() == 0) {
-    return;
-  }
-
   if (!registry.ctx().contains<TextEngine>()) {
     maybeWarnUnsupportedText();
     return;
   }
 
   auto& textEngine = registry.ctx().get<TextEngine>();
+  auto& fontManager = registry.ctx().get<FontManager>();
 
   // Use cached layout runs from ComputedTextGeometryComponent when available.
-  std::vector<TextRun> runs;
-  if (params.textRootEntity != entt::null) {
-    if (const auto* cache =
-            registry.try_get<components::ComputedTextGeometryComponent>(params.textRootEntity)) {
-      runs = cache->runs;
-    }
-  }
+  std::vector<TextRun> runs = CachedTextRuns(registry, params.textRootEntity);
   if (runs.empty()) {
     const TextLayoutParams layoutParams = toTextLayoutParams(params);
     runs = textEngine.layout(text, layoutParams);
+  }
+
+  (void)admitTextGlyphBatch(runs);
+  if (currentPixmap().width() == 0 || currentPixmap().height() == 0) {
+    return;
   }
 
   float scale = 0.0f;
@@ -2318,7 +2660,7 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
     }
 
     const bool isBitmapFont = run.font && textEngine.isBitmapOnly(run.font);
-    if (!isBitmapFont && scale == 0.0f) {
+    if (!CanRenderTextRun(isBitmapFont, scale)) {
       continue;
     }
 
@@ -2346,7 +2688,7 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
         // Per-span gradient/pattern fill. Uses the text element's bbox (textBounds)
         // for objectBoundingBox mapping, per SVG spec ("tspan doesn't have a bbox").
         const float combinedOpacity = spanFillOpacity * static_cast<float>(span.opacity);
-        if (auto shader = instantiateGradientShader(*ref, textBounds, paint_.viewBox,
+        if (auto shader = instantiateGradientShader(*drawBudget_, *ref, textBounds, paint_.viewBox,
                                                     spanCurrentColor, combinedOpacity)) {
           tiny_skia::Paint paint = makeBasePaint(antialias_);
           paint.shader = std::move(*shader);
@@ -2382,8 +2724,9 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
         } else if (const auto* ref =
                        std::get_if<components::PaintResolvedReference>(&span.resolvedStroke)) {
           const float combinedOpacity = spanStrokeOpacity * static_cast<float>(span.opacity);
-          if (auto shader = instantiateGradientShader(*ref, textBounds, paint_.viewBox,
-                                                      spanCurrentColor, combinedOpacity)) {
+          if (auto shader =
+                  instantiateGradientShader(*drawBudget_, *ref, textBounds, paint_.viewBox,
+                                            spanCurrentColor, combinedOpacity)) {
             tiny_skia::Paint paint = makeBasePaint(antialias_);
             paint.shader = std::move(*shader);
             spanStrokePaint = paint;
@@ -2414,6 +2757,7 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
       if (glyph.glyphIndex == 0) {
         continue;  // .notdef glyph, skip.
       }
+      ++frameCounters_.textGlyphMaterializations;
 
       // Placed outline in document space (outline -> stretch -> translate ->
       // rotate). Shared with RendererGeode via PlacedTextGeometry so the two
@@ -2422,13 +2766,25 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
       // exactly as before.
       Path glyphPath;
       if (!isBitmapFont) {
+        bool hasComplexity = false;
+        if (!admitGlyphPredecode(fontManager, run.font, glyph.glyphIndex, hasComplexity)) {
+          drawBudget_->reject();
+          return;
+        }
         glyphPath = PlacedGlyphOutline(textEngine, run.font, glyph, scale);
+        if (!admitPlacedGlyph(hasComplexity, glyphPath)) {
+          drawBudget_->reject();
+          return;
+        }
       }
 
       // For bitmap fonts (color emoji), extract and draw the bitmap directly.
       if (glyphPath.empty()) {
-        auto bitmap = textEngine.bitmapGlyph(run.font, glyph.glyphIndex, scale);
-        // DEBUG
+        auto bitmap = AdmitBitmapGlyph(textEngine.bitmapGlyph(run.font, glyph.glyphIndex, scale),
+                                       *textMaterializationBudget_, *drawBudget_);
+        if (drawBudget_->rejected()) {
+          return;
+        }
         if (bitmap) {
           // Premultiply alpha for correct blending.
           std::vector<uint8_t> premul = PremultiplyRgba(bitmap->rgbaPixels);
@@ -2559,7 +2915,7 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
         const css::RGBA spanCurrentColor = paint_.currentColor.rgba();
         const float combinedOpacity =
             NarrowToFloat(span.decorationFillOpacity) * static_cast<float>(span.opacity);
-        if (auto shader = instantiateGradientShader(*ref, textBounds, paint_.viewBox,
+        if (auto shader = instantiateGradientShader(*drawBudget_, *ref, textBounds, paint_.viewBox,
                                                     spanCurrentColor, combinedOpacity)) {
           tiny_skia::Paint paint = makeBasePaint(antialias_);
           paint.shader = std::move(*shader);
@@ -2582,7 +2938,7 @@ void RendererTinySkia::drawText(Registry& registry, const components::ComputedTe
         const css::RGBA spanCurrentColor = paint_.currentColor.rgba();
         const float combinedOpacity =
             NarrowToFloat(span.decorationStrokeOpacity) * static_cast<float>(span.opacity);
-        if (auto shader = instantiateGradientShader(*ref, textBounds, paint_.viewBox,
+        if (auto shader = instantiateGradientShader(*drawBudget_, *ref, textBounds, paint_.viewBox,
                                                     spanCurrentColor, combinedOpacity)) {
           tiny_skia::Paint paint = makeBasePaint(antialias_);
           paint.shader = std::move(*shader);
@@ -2820,7 +3176,59 @@ std::unique_ptr<RendererInterface> RendererTinySkia::createOffscreenInstance() c
   auto renderer = std::make_unique<RendererTinySkia>(verbose_);
   renderer->filterExecutionBudget_ = filterExecutionBudget_;
   renderer->ownsFilterExecutionBudget_ = false;
+  renderer->drawBudget_ = drawBudget_;
+  renderer->ownsDrawBudget_ = false;
+  renderer->surfaceBudget_ = surfaceBudget_;
+  renderer->ownsSurfaceBudget_ = false;
+  renderer->textGlyphWorkBudget_ = textGlyphWorkBudget_;
+  renderer->dashedPathWorkBudget_ = dashedPathWorkBudget_;
+  renderer->textMaterializationBudget_ = textMaterializationBudget_;
+  renderer->ownsTextMaterializationBudget_ = false;
   return renderer;
+}
+
+void RendererTinySkia::setDashWorkBudgetForTesting(std::size_t maximumWorkUnits) {
+  dashedPathWorkBudget_->maximumWorkUnits =
+      std::min(dashedPathWorkBudget_->maximumWorkUnits, maximumWorkUnits);
+}
+
+void RendererTinySkia::setGradientStopBudgetForTesting(std::size_t maximumStops) {
+  drawBudget_->setGradientStopLimitForTesting(maximumStops);
+}
+
+void RendererTinySkia::setTextGlyphBudgetForTesting(std::size_t maximumGlyphs) {
+  textGlyphWorkBudget_->maximumGlyphs =
+      std::min(textGlyphWorkBudget_->maximumGlyphs, maximumGlyphs);
+}
+
+void RendererTinySkia::setTextMaterializationBudgetForTesting(
+    RendererTextMaterializationBudget::Cost limits) {
+  textMaterializationBudget_->setLimitsForTesting(limits);
+}
+
+RendererResourceStats RendererTinySkia::resourceStats() const {
+  return RendererResourceStats{
+      .surfaceBudgetSupported = true,
+      .surfaceCount = surfaceBudget_->surfaces(),
+      .surfaceBytes = surfaceBudget_->bytes(),
+      .surfaceBudgetRejected = surfaceBudget_->rejected(),
+      .drawBudgetSupported = true,
+      .drawCalls = drawBudget_->drawCalls(),
+      .pathCommands = drawBudget_->pathCommands(),
+      .pathMeasurementWorkSupported = true,
+      .pathMeasurementWorkUnits = drawBudget_->pathMeasurementWorkUnits(),
+      .gradientStops = drawBudget_->gradientStops(),
+      .imageDraws = drawBudget_->imageDraws(),
+      .imageBytes = drawBudget_->imageBytes(),
+      .drawBudgetRejected = drawBudget_->rejected(),
+      .textMaterializationBudgetSupported = true,
+      .textUniqueOutlines = textMaterializationBudget_->uniqueOutlines(),
+      .textMaterializationCommands = textMaterializationBudget_->commands(),
+      .textMaterializationPoints = textMaterializationBudget_->points(),
+      .textMaterializationBytes = textMaterializationBudget_->bytes(),
+      .textGlyphDecodeWork = textMaterializationBudget_->decodeWork(),
+      .textMaterializationBudgetRejected = textMaterializationBudget_->rejected(),
+  };
 }
 
 int RendererTinySkia::width() const {
@@ -2832,14 +3240,14 @@ int RendererTinySkia::height() const {
 }
 
 tiny_skia::Pixmap& RendererTinySkia::currentPixmap() {
-  if (rejectedFilterDepth_ != 0) {
+  if (rejectedFilterDepth_ != 0 || drawBudget_->rejected()) {
     return rejectedPixmap_;
   }
   return surfaceStack_.empty() ? frame_ : surfaceStack_.back().pixmap;
 }
 
 const tiny_skia::Pixmap& RendererTinySkia::currentPixmap() const {
-  if (rejectedFilterDepth_ != 0) {
+  if (rejectedFilterDepth_ != 0 || drawBudget_->rejected()) {
     return rejectedPixmap_;
   }
   return surfaceStack_.empty() ? frame_ : surfaceStack_.back().pixmap;
@@ -2991,8 +3399,8 @@ std::optional<tiny_skia::Paint> RendererTinySkia::makeFillPaint(const Box2d& bou
   }
 
   if (const auto* ref = std::get_if<components::PaintResolvedReference>(&paint_.fill)) {
-    if (std::optional<tiny_skia::Shader> shader =
-            instantiateGradientShader(*ref, bounds, paint_.viewBox, currentColor, fillOpacity)) {
+    if (std::optional<tiny_skia::Shader> shader = instantiateGradientShader(
+            *drawBudget_, *ref, bounds, paint_.viewBox, currentColor, fillOpacity)) {
       paint.shader = std::move(*shader);
       return paint;
     }
@@ -3031,8 +3439,8 @@ std::optional<tiny_skia::Paint> RendererTinySkia::makeStrokePaint(const Box2d& b
   }
 
   if (const auto* ref = std::get_if<components::PaintResolvedReference>(&paint_.stroke)) {
-    if (std::optional<tiny_skia::Shader> shader =
-            instantiateGradientShader(*ref, bounds, paint_.viewBox, currentColor, strokeOpacity)) {
+    if (std::optional<tiny_skia::Shader> shader = instantiateGradientShader(
+            *drawBudget_, *ref, bounds, paint_.viewBox, currentColor, strokeOpacity)) {
       paint.shader = std::move(*shader);
       return paint;
     }
