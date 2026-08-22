@@ -14,6 +14,7 @@
 #include "donner/svg/SVGTextElement.h"
 #include "donner/svg/SVGUseElement.h"
 #include "donner/svg/renderer/Renderer.h"
+#include "donner/svg/renderer/RendererDriver.h"
 #include "donner/svg/renderer/RendererTinySkia.h"
 #include "donner/svg/renderer/tests/MockRendererInterface.h"
 #include "donner/svg/renderer/tests/RendererTestBackend.h"
@@ -117,6 +118,38 @@ TEST(RendererPublicApiTest, FrameResourceScopeKeepsOffscreenAndRootSurfaceCharge
   renderer->endFrame();
   EXPECT_EQ(renderer->resourceStats().surfaceCount, 1u)
       << "the next standalone frame starts a fresh budget epoch";
+}
+
+TEST(RendererPublicApiTest, FrameResourceScopeSharesFilterPreparationAcrossIndependentDrivers) {
+  std::string firstSource = R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="1" height="1">
+      <defs><filter id="f"><feFlood/></filter></defs>
+  )svg";
+  for (std::size_t i = 0; i < RendererDriver::kMaximumPreparedFilterGraphs; ++i) {
+    firstSource += R"svg(<rect width="1" height="1" filter="url(#f)"/>)svg";
+  }
+  firstSource += "</svg>";
+  SVGDocument firstDocument = ParseDocument(firstSource);
+  SVGDocument plusOneDocument = ParseDocument(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="1" height="1">
+      <defs><filter id="f"><feFlood/></filter></defs>
+      <rect width="1" height="1" filter="url(#f)"/>
+    </svg>
+  )svg");
+
+  RendererTinySkia renderer;
+  RendererDriver::SecurityStats stats;
+  RendererDriver firstDriver(renderer, /*verbose=*/false, &stats);
+  RendererDriver plusOneDriver(renderer, /*verbose=*/false, &stats);
+
+  renderer.beginFrameResourceScope();
+  firstDriver.draw(firstDocument);
+  plusOneDriver.draw(plusOneDocument);
+  renderer.endFrameResourceScope();
+
+  EXPECT_EQ(stats.filterPreparationAttempts, RendererDriver::kMaximumPreparedFilterGraphs);
+  EXPECT_EQ(stats.preparedFilterGraphs, RendererDriver::kMaximumPreparedFilterGraphs);
+  EXPECT_TRUE(stats.filterPreparationRejected);
 }
 
 TEST(RendererDrawBudgetTest, RejectsEveryAggregateDimensionWithoutOvershoot) {

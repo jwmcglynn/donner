@@ -1137,10 +1137,14 @@ TEST_F(RendererDriverTest, PreparedFragmentImageKeepsFamilyReservationWithShared
         retainedPixels = image->imageData;
       });
 
-  driver.draw(document);
+  RendererDriver::SecurityStats stats;
+  RendererDriver boundedDriver(renderer, /*verbose=*/false, &stats);
+  boundedDriver.draw(document);
 
   ASSERT_THAT(retainedPixels, testing::NotNull());
   const std::size_t pixelBytes = retainedPixels->size();
+  EXPECT_EQ(stats.preparedFilterImageBytes, pixelBytes);
+  EXPECT_EQ(stats.preparedFilterMaterializationBytes, pixelBytes * 2u);
   const std::size_t retainedWithPixels =
       family->retainedBytes(components::DocumentResourceFamilyBudget::Kind::ComputedFilter);
   retainedPixels.reset();

@@ -45,6 +45,7 @@ public:
     std::size_t preparedFilterGraphs = 0;
     std::size_t preparedFilterNodes = 0;
     std::uint64_t preparedFilterImageBytes = 0;
+    std::uint64_t preparedFilterMaterializationBytes = 0;
     std::uint64_t preparedFilterPayloadBytes = 0;
     std::size_t preparedFilterShadowEntities = 0;
     bool filterPreparationRejected = false;
