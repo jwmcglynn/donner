@@ -50,6 +50,8 @@ namespace donner::geode {
 namespace {
 
 #ifndef __EMSCRIPTEN__
+std::atomic<std::size_t> gOutstandingDeviceLostCallbacks{0};
+
 /// Error callback wired onto the WebGPU device via
 /// `DeviceDescriptor::uncapturedErrorCallbackInfo`. Any driver-level
 /// validation errors (missing bindings, bad draw parameters, etc.)
@@ -75,6 +77,7 @@ void OnDeviceLost(WGPUDevice const* /*device*/, WGPUDeviceLostReason reason, WGP
                   void* userdata1, void* /*userdata2*/) {
   const std::shared_ptr<GeodeDeviceLostState> state =
       takeWgpuCallbackState<GeodeDeviceLostState>(userdata1);
+  gOutstandingDeviceLostCallbacks.fetch_sub(1, std::memory_order_acq_rel);
   if (reason == WGPUDeviceLostReason_Destroyed || reason == WGPUDeviceLostReason_InstanceDropped) {
     // Expected teardown paths, not a driver failure.
     return;
@@ -429,6 +432,14 @@ int GeodeDevice::headlessCreationCountForTesting() {
   return gHeadlessCreationCount.load(std::memory_order_relaxed);
 }
 
+std::size_t GeodeDevice::outstandingDeviceLostCallbacksForTesting() {
+#ifdef __EMSCRIPTEN__
+  return 0;
+#else
+  return gOutstandingDeviceLostCallbacks.load(std::memory_order_acquire);
+#endif
+}
+
 std::unique_ptr<GeodeDevice> GeodeDevice::CreateHeadless(wgpu::TextureFormat textureFormat) {
 #ifdef __EMSCRIPTEN__
   gHeadlessCreationCount.fetch_add(1, std::memory_order_relaxed);
@@ -623,6 +634,7 @@ std::unique_ptr<GeodeDevice> GeodeDevice::CreateHeadless(wgpu::TextureFormat tex
     // that returns a null device strands at most one small retained block,
     // bounded by the retry count.
     deviceDesc.deviceLostCallbackInfo.userdata1 = retainWgpuCallbackState(result->lostState_);
+    gOutstandingDeviceLostCallbacks.fetch_add(1, std::memory_order_release);
     result->device_ = result->adapter_.requestDevice(deviceDesc);
     if (result->device_) {
       break;  // Device created successfully.
