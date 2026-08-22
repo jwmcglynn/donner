@@ -264,7 +264,7 @@ private:
   void drawPreparedDocument(SVGDocument& document);
   void drawPreparedDocument(SVGDocument& document, const RenderViewport& viewport,
                             const Transform2d& surfaceFromCanvas);
-  void resetOwnedFilterPreparationBudget();
+  void resetOwnedSecurityBudgets();
   [[nodiscard]] bool drawPreparedEntityRange(Registry& registry, Entity firstEntity,
                                              Entity lastEntity,
                                              const std::function<bool()>& shouldCancel);
@@ -404,6 +404,8 @@ private:
 
   FilterPreparationBudget ownedFilterPreparationBudget_;
   FilterPreparationBudget* filterPreparationBudget_ = &ownedFilterPreparationBudget_;
+  RendererTextMaterializationBudget ownedClipGeometryCopyBudget_;
+  RendererTextMaterializationBudget* clipGeometryCopyBudget_ = &ownedClipGeometryCopyBudget_;
   SecurityStats* securityStats_ = nullptr;
 
   /// Filter graphs resolved and pre-rendered by \ref prepareFilterGraphs. Keyed by the entity

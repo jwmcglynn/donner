@@ -1185,13 +1185,15 @@ RendererDriver::RendererDriver(RendererInterface& renderer, bool verbose,
                                SecurityStats* securityStats)
     : renderer_(renderer), verbose_(verbose), securityStats_(securityStats) {}
 
-void RendererDriver::resetOwnedFilterPreparationBudget() {
-  if (filterPreparationBudget_ != &ownedFilterPreparationBudget_) {
-    return;
+void RendererDriver::resetOwnedSecurityBudgets() {
+  if (filterPreparationBudget_ == &ownedFilterPreparationBudget_) {
+    ownedFilterPreparationBudget_ = {};
+    if (securityStats_) {
+      *securityStats_ = {};
+    }
   }
-  ownedFilterPreparationBudget_ = {};
-  if (securityStats_) {
-    *securityStats_ = {};
+  if (clipGeometryCopyBudget_ == &ownedClipGeometryCopyBudget_) {
+    ownedClipGeometryCopyBudget_.reset();
   }
 }
 
@@ -1326,7 +1328,7 @@ void RendererDriver::drawPreparedDocument(SVGDocument& document) {
 
 void RendererDriver::drawPreparedDocument(SVGDocument& document, const RenderViewport& viewport,
                                           const Transform2d& surfaceFromCanvas) {
-  resetOwnedFilterPreparationBudget();
+  resetOwnedSecurityBudgets();
   renderingSize_ = CheckedRenderingSize(viewport);
   surfaceFromCanvasTransform_ = surfaceFromCanvas;
 
@@ -1373,7 +1375,7 @@ void RendererDriver::drawPreparedDocument(SVGDocument& document, const RenderVie
 void RendererDriver::drawEntityRange(Registry& registry, Entity firstEntity, Entity lastEntity,
                                      const RenderViewport& viewport,
                                      const Transform2d& surfaceFromCanvas) {
-  resetOwnedFilterPreparationBudget();
+  resetOwnedSecurityBudgets();
   renderingSize_ = CheckedRenderingSize(viewport);
   surfaceFromCanvasTransform_ = surfaceFromCanvas;
 
@@ -1389,7 +1391,7 @@ bool RendererDriver::drawEntityRangeInterruptibly(Registry& registry, Entity fir
                                                   Entity lastEntity, const RenderViewport& viewport,
                                                   const Transform2d& surfaceFromCanvas,
                                                   const std::function<bool()>& shouldCancel) {
-  resetOwnedFilterPreparationBudget();
+  resetOwnedSecurityBudgets();
   renderingSize_ = CheckedRenderingSize(viewport);
   surfaceFromCanvasTransform_ = surfaceFromCanvas;
 
@@ -1487,7 +1489,6 @@ bool RendererDriver::drawPreparedEntityRange(Registry& registry, Entity firstEnt
   }
 
   // Traverse from first to last (inclusive).
-  RendererTextMaterializationBudget clipGeometryCopyBudget;
   bool reachedLast = false;
   bool completed = true;
   while (!view.done() && !reachedLast) {
@@ -1547,7 +1548,7 @@ bool RendererDriver::drawPreparedEntityRange(Registry& registry, Entity firstEnt
       subtreeConsumedBySubRendering = true;
     }
 
-    ResolvedClip entityClip = toResolvedClip(instance, style, registry, clipGeometryCopyBudget);
+    ResolvedClip entityClip = toResolvedClip(instance, style, registry, *clipGeometryCopyBudget_);
     entityClip.clipRect = std::nullopt;
     // Mask is handled separately from clip - access it directly from instance.
     const bool hasEntityClip = !entityClip.empty();
@@ -2018,7 +2019,6 @@ void RendererDriver::prepareFilterGraphs(Registry& registry, std::span<const Ent
 }
 
 void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
-  RendererTextMaterializationBudget clipGeometryCopyBudget;
   while (!view.done()) {
     const components::RenderingInstanceComponent& instance = view.get();
     const Entity entity = view.currentEntity();
@@ -2083,7 +2083,7 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
     // Per SVG spec, the rendering order is: paint → filter → clip-path → mask → opacity.
     // Push in reverse so pop order applies the effects in spec order: mask outermost,
     // then clip-path, then filter innermost.
-    ResolvedClip entityClip = toResolvedClip(instance, style, registry, clipGeometryCopyBudget);
+    ResolvedClip entityClip = toResolvedClip(instance, style, registry, *clipGeometryCopyBudget_);
     entityClip.clipRect = std::nullopt;  // Already handled above as viewport clip.
     const bool hasEntityClip = !entityClip.empty();
     if (hasEntityClip) {
@@ -2309,7 +2309,6 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
 
   // Use a local deferred-pop stack for the marker subtree.
   std::vector<DeferredPop> localDeferred;
-  RendererTextMaterializationBudget clipGeometryCopyBudget;
 
   // Draw until (and including) the end entity.
   bool foundEnd = false;
@@ -2358,7 +2357,7 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
     }
 
     // Per SVG spec, apply paint → filter → clip-path → mask.
-    ResolvedClip entityClip = toResolvedClip(instance, style, registry, clipGeometryCopyBudget);
+    ResolvedClip entityClip = toResolvedClip(instance, style, registry, *clipGeometryCopyBudget_);
     entityClip.clipRect = std::nullopt;
     const bool hasEntityClip = !entityClip.empty();
     if (hasEntityClip) {
@@ -3262,6 +3261,7 @@ void RendererDriver::preRenderSvgFeImages(components::FilterGraph& filterGraph,
     RendererDriver subDriver(*offscreen, verbose_);
     subDriver.renderingSize_ = targetSize;
     subDriver.filterPreparationBudget_ = filterPreparationBudget_;
+    subDriver.clipGeometryCopyBudget_ = clipGeometryCopyBudget_;
     subDriver.securityStats_ = securityStats_;
     subDriver.drawSubDocument(subDoc, Box2d::FromXYWH(0.0, 0.0, targetSize.x, targetSize.y),
                               imageNode->preserveAspectRatio, 1.0, Transform2d());
@@ -3409,6 +3409,7 @@ void RendererDriver::preRenderFeImageFragments(components::FilterGraph& filterGr
     subDriver.feImageFragmentGuard_ = feImageFragmentGuard_;
     subDriver.feImageFragmentDepth_ = feImageFragmentDepth_ + 1;
     subDriver.filterPreparationBudget_ = filterPreparationBudget_;
+    subDriver.clipGeometryCopyBudget_ = clipGeometryCopyBudget_;
     subDriver.securityStats_ = securityStats_;
 
     // The fragment is rendered at its natural position in the document coordinate system
