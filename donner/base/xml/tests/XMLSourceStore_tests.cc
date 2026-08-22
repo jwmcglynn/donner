@@ -39,20 +39,6 @@ TEST(XMLSourceStore, InsertBeforeSpanMovesResolvedOffsets) {
   EXPECT_EQ(MustResolve(store, *span), (ResolvedSourceSpan{9, 16}));
 }
 
-TEST(XMLSourceStore, SharedSourceReferenceSurvivesCopyOnWriteReplacement) {
-  constexpr std::string_view kSource =
-      "<root long-attribute-name=\"a-long-attribute-value-that-uses-shared-storage\"/>";
-  XMLSourceStore store{std::string(kSource)};
-  const RcString sourceReference = store.sourceReference();
-  EXPECT_GT(store.sourceStorageUseCountForTesting(), 1u);
-
-  ASSERT_TRUE(store.replace(0, 0, " ").has_value());
-
-  EXPECT_EQ(sourceReference, kSource);
-  EXPECT_EQ(store.source(), " " + std::string(kSource));
-  EXPECT_EQ(store.sourceStorageUseCountForTesting(), 1u);
-}
-
 TEST(XMLSourceStore, BoundaryInsertionHonorsAnchorBias) {
   XMLSourceStore store("abcd");
   std::optional<SourceAnchorId> before = store.createAnchor(2, SourceAnchorBias::Before);

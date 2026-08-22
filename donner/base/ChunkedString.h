@@ -180,8 +180,7 @@ public:
     }
 
     if (pieces_.size() == 1) {
-      const RcString value(pieces_[0]);
-      return value.fitsInlineStorage() ? RcString(std::string_view(value)) : value;
+      return RcString(pieces_[0]);
     }
 
     // Multiple pieces => flatten

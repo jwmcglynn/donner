@@ -60,8 +60,8 @@ donner_cc_binary(
 donner_cc_test(
     name = "svg_parse_allocation_tests",
     srcs = [
+        "SvgParseAllocationTracker.h",
         "SvgParseAllocation_tests.cc",
-        "//donner/svg/renderer/benchmarks:AllocationTracker.h",
     ],
     data = ["//:donner_splash.svg"],
     deps = [

@@ -1,148 +1,144 @@
-# Design: Source-Backed XML Parse Strings
+# Retrospective: XML Parse String Storage Experiment
 
-**Status:** Implemented. Source-backed strings and copy-on-write storage are retained; compact
-finalization was measured and rejected.
+**Status:** Retrospective
+**Type:** Retrospective
 **Author:** GPT-5
 **Created:** 2026-08-22
 
 ## Summary
 
-XML parsing now constructs eligible persistent strings as `RcString` substrings of the document's
-owned source snapshot. This removes one allocation for each ordinary long XML name or value without
-depending on the caller's input buffer.
+- We prototyped direct source-backed XML strings and a post-parse compact/intern mode.
+- Source slices reduced allocation calls but violated string-boundary and retained-memory safety;
+  compacting saved about 7% of tracked live requested bytes but remained about 6% slower.
+- Neither representation ships. Permanent allocation, peak-live-requested-byte, and splash timing
+  benchmarks remain so a simpler future approach can be evaluated from a stable baseline.
 
-`XMLSourceStore` owns that snapshot through shared storage. Before a structured edit mutates shared
-source bytes, it copies the current source once. Existing DOM strings continue to reference the
-immutable prior snapshot, while anchors, diagnostics, and subsequent edits use the new source.
+## Scope
 
-Short persistent results are copied into `RcString` inline storage. The parser cursor itself remains
-reference-backed, so this detaches common short XML names and values without copying the entire
-parse input or changing source-offset calculations.
+- Reviewed XML parse strings, `RcString` boundary semantics, `XMLSourceStore`, incremental structured
+  edits, allocation tracking, the repeated-attribute fixture, and `donner_splash.svg`.
+- Recorded candidates: parent `6982fe5aa`, source slices `ce1838a0d`, and compact finalization
+  `357a60666` plus the later short-string detachment experiment.
+- This retrospective does not change production string/value APIs, ship either result mode,
+  redesign standalone CSS ownership, remove editable source storage, or treat requested C++ payload
+  bytes as allocator-resident memory or RSS.
 
-An alternative compact/intern finalization pass was implemented and benchmarked. It reduced
-retained memory by about 7%, but increased allocation work and peak memory and remained about 6%
-slower. The compact API and traversal were therefore removed; their allocation and timing results
-remain as evidence for the decision.
+## Outcome
 
-## Goals
+- Production parser, `RcString`, `XMLSourceStore`, structured-editing, and diagnostic behavior match
+  the parent implementation.
+- `//donner/benchmarks:svg_parse_allocation_tests` monitors allocation calls, total requested bytes,
+  live requested bytes, and peak live requested bytes for repeated attributes and Donner Splash.
+- Peak-live tracking is isolated to that dedicated untimed test binary. Existing timing and renderer
+  comparison binaries retain their prior allocator, so the richer tracker cannot distort their
+  wall-clock workloads.
+- `//donner/benchmarks:svg_parse_perf_bench` carries the splash as a Bazel runfile.
 
-- Avoid allocating string bytes for direct long XML source substrings during parsing.
-- Remove all dependence on the caller-owned input buffer.
-- Preserve source retention, structured editing, source anchors, and diagnostic byte offsets.
-- Measure complete-parse allocation calls, requested bytes, retained bytes, and peak live bytes on
-  a repeated-attribute fixture and `donner_splash.svg`.
-- Keep the implementation linear and bounded for hostile input.
+The final owned-string baseline on arm64 macOS 26.5.2, Bazel 8.7.0, and Apple clang 21.0.0 is:
 
-## Non-Goals
+| Workload            |  Calls | Requested bytes | Live requested bytes | Peak live requested bytes |
+| ------------------- | -----: | --------------: | -------------------: | ------------------------: |
+| Repeated attributes | 14,358 |       6,411,849 |            6,066,487 |                 6,066,487 |
+| Donner Splash       | 23,000 |       9,042,703 |            8,243,148 |                 8,243,268 |
 
-- Removing `XMLSourceStore`; structured editing requires it.
-- Returning public non-owning views or changing public DOM/CSS value APIs.
-- Shipping compact/intern finalization when its measured cost exceeds its benefit.
-- Interning strings created by runtime mutations or standalone CSS parsing.
+The tracker overrides C++ `operator new` in the dedicated test process. These figures exclude its
+headers/alignment padding, allocator metadata, direct `malloc`, other runtimes, and process RSS. CI
+assertions are broad cross-platform resource ceilings, not proof of an optimization.
 
-## Architecture
+## Code Review Findings
 
-```text
-caller bytes
-    |
-    v
-XMLSourceStore-owned shared snapshot
-    |
-    +--> XMLParser cursor and direct substrings
-    |       long persistent result -> shared RcString slice
-    |       short persistent result -> RcString inline copy
-    |       entity/normalized result -> existing owned flattening path
-    |
-    +--> returned editable document
-            source store retains current snapshot
-            first mutation copies if DOM strings still share it
-            anchors and diagnostics continue against current source
+1. **Source-backed public values were not NUL-terminated - fixed by removal.** A direct long
+   attribute slice ends before an XML quote or delimiter, so `value.data()[value.size()]` is not
+   NUL. Ordinary parsed long values previously used terminated owning storage. The candidate could
+   expose adjacent XML bytes to C-string consumers, so it was removed before publication.
+2. **Incremental edits could retain quadratic fragment history - fixed by removal.** Opening-tag and
+   subtree edits reparse growing fragments but import only changed values. Direct slices could retain
+   one historical fragment per edit, outside the current-source limit. Copy-on-write protected
+   mutation but did not bound aggregate retained snapshots.
+3. **Small public values could retain whole source snapshots - fixed by removal.** Copying one
+   attribute or node value could preserve unrelated input bytes after the document died, changing
+   memory and data-retention expectations.
+4. **Compact finalization missed its tradeoff gate - accepted as a rejected experiment.** The final
+   candidate used 13,852 calls / 5,643,255 live requested bytes on repeated attributes and 22,764
+   calls / 7,689,194 live requested bytes on the splash. Compared with source slices, live requested
+   bytes fell about 7.0% and 6.7%, but allocation and peak work rose and alternating splash parse
+   means changed from about 2.579 ms to 2.733 ms, a 5.95% regression.
+5. **The first live-byte tracker protocol was generation-racy - fixed.** Independent review found
+   that separate atomic counter and generation operations could split one allocation across scope
+   transitions. The dedicated tracker now serializes scope, allocation, and free accounting and
+   ignores frees from untracked or older generations.
+6. **Putting the stronger tracker in a timing binary changed the workload - fixed.** Header
+   allocation and lock serialization apply even outside an active measurement scope. The permanent
+   tracker therefore lives only in `svg_parse_allocation_tests`; existing timed binaries are
+   unchanged.
+
+## Fragility and Refactoring Opportunities
+
+- `RcString::substr()` can intentionally share a non-terminal interior range. A future source-slice
+  design needs an explicit non-C-string value type or a NUL-terminated arena, rather than silently
+  broadening that sharp edge to routine DOM parse results.
+- A NUL-terminated parse arena could copy persistent values into one bounded page without interning,
+  but it duplicates bytes beside editor source and still needs explicit incremental-import policy.
+- Aggregate retained-snapshot budgeting would bound amplification but would not solve termination or
+  hidden whole-source retention at public value boundaries.
+- The test-only peak tracker and older timing-benchmark tracker deliberately remain separate to keep
+  timed workloads stable. If they are unified later, allocator isolation must be preserved by
+  separate binaries rather than a disabled runtime flag.
+
+## Testing Review
+
+- Parser, XML source-store, SVG parser, structured-editing, and sanitizer tests were green on the
+  unsafe source candidate. They checked value equality and mutation behavior, but not NUL at a
+  parsed long value boundary or retained bytes across adversarial edit sequences.
+- Independent code and security reviews supplied the missing lifetime and amplification analysis;
+  the production representation was then removed.
+- The permanent allocation target tests exact basic accounting, prior/untracked generation frees,
+  aligned allocation, zero-sized/nothrow allocation, concurrent allocation/free accounting, and
+  rejection of overlapping scopes.
+- Focused final validation:
+
+```sh
+bazel test //donner/benchmarks:svg_parse_allocation_tests \
+  //donner/base/xml:xml_tests //donner/svg/parser:parser_tests \
+  //donner/editor/tests:structured_editing_stress_tests --test_output=errors
 ```
 
-`RcString` long storage has an internal type-erased shared owner. A private friend factory allows
-`XMLSourceStore` to create an owning full-source value whose substrings preserve the shared owner,
-including short intermediate slices. `ChunkedString::toSingleRcString()` then copies a short
-persistent result into inline storage, while a long direct substring keeps the snapshot owner.
+- Allocation evidence:
 
-`XMLSourceStore::replace()` validates the edit and its resource limits before calling
-`ensureUniqueSource()`. If parsed strings still share the current source, the store clones it and
-then applies the mutation. This is ordinary copy-on-write: the parse result is safe, the caller's
-input may disappear immediately, and unchanged DOM strings remain valid after edits.
+```sh
+bazel test //donner/benchmarks:svg_parse_allocation_tests --test_output=all
+```
 
-## Invariants
+- Compact timing used optimized builds, 25 timed parses after three warmups, and six alternated
+  source/compact runs. `--compact` exists only at the recorded experimental checkpoint:
 
-- `XMLParser::Parse` returns only strings whose bytes outlive the returned document.
-- Source-backed `RcString` values never refer to caller-owned memory.
-- `XMLSourceStore` never mutates a source buffer while parsed strings share it.
-- Parser cursor slices remain reference-backed so source locations retain their original offsets.
-- Short persistent strings use inline storage and do not keep an otherwise unneeded snapshot alive.
-- Entity expansion and other multi-piece values retain the existing owned flattening behavior.
-- The optimization does not alter node locations, anchors, diagnostic ranges, or public string APIs.
+```sh
+bazel run -c opt //donner/benchmarks:svg_parse_perf_bench -- \
+  --iterations=25 --warmup=3 --repeat=1 donner_splash.svg
+bazel run -c opt //donner/benchmarks:svg_parse_perf_bench -- \
+  --iterations=25 --warmup=3 --repeat=1 --compact donner_splash.svg
+```
 
-## Measured Results
+## Process Review
 
-Complete `SVGParser::ParseSVG` allocation results on the measured macOS system, with the returned
-document alive at the sample point:
+- Measurement-first discipline worked for compacting: the mode was removed when its retained-byte
+  benefit did not justify CPU and implementation complexity.
+- Equality and structured-editing tests created false confidence in source slices because they did
+  not encode the complete public value and aggregate-retention contracts. Independent review before
+  publication was the effective gate.
+- Review also caught measurement observer effects in the shared timing binary. Isolating the strong
+  allocator in an untimed test keeps the retained benchmark evidence honest.
+- Experimental commits preserve the prototypes and measurements, while the final review diff
+  deletes dead production paths and exposes only the benchmark infrastructure and retrospective.
 
-| Workload            | Version       |  Calls | Requested bytes | Retained bytes | Peak live bytes |
-| ------------------- | ------------- | -----: | --------------: | -------------: | --------------: |
-| Repeated attributes | Parent        | 14,358 |       6,411,849 |      6,066,487 |       6,066,487 |
-| Repeated attributes | Source-backed | 13,847 |       6,388,081 |      6,066,527 |       6,066,527 |
-| Donner Splash       | Parent        | 23,000 |       9,042,703 |      8,243,148 |       8,243,268 |
-| Donner Splash       | Source-backed | 22,759 |       9,006,570 |      8,237,725 |       8,237,845 |
+## Actions
 
-The source-backed path removes 511 complete-parse allocations from the repeated-attribute fixture
-and 241 from the splash. Total retained memory changes little because source bytes were already
-retained for editing and SVG geometry, styles, and ECS containers dominate the full parse.
-
-### Rejected Compact/Intern Experiment
-
-The final compact experiment kept short values inline and interned only long values:
-
-| Workload            |  Calls | Requested bytes | Retained bytes | Peak live bytes |
-| ------------------- | -----: | --------------: | -------------: | --------------: |
-| Repeated attributes | 13,852 |       6,396,574 |      5,643,255 |       6,066,687 |
-| Donner Splash       | 22,764 |       9,043,238 |      7,689,194 |       8,265,306 |
-
-Compared with source retention, compact mode saved about 7.0% retained memory on repeated
-attributes and 6.7% on the splash. It added five allocation calls in each workload, increased
-requested and peak bytes slightly, and changed the alternating splash parse mean from about
-2.579 ms to 2.733 ms, a 5.95% regression. The traversal, public mode switch, and map rebuilding were
-not justified by that tradeoff, so the production implementation was removed.
-
-## Tests and Benchmarks
-
-- `SvgParseAllocation_tests.cc` gates allocation calls, requested bytes, retained live bytes, and
-  peak live bytes for repeated attributes and the canonical splash.
-- `SvgParsePerfBench.cpp` accepts the splash as a Bazel runfile and reports repeatable median parse
-  timing without renderer work.
-- XML tests prove a shared long attribute survives source copy-on-write and a short persistent
-  attribute uses inline storage without retaining the snapshot.
-- `XMLSourceStore` tests prove an owning source reference survives replacement.
-- Existing XML/SVG parser, node-location, structured-editing, and diagnostic tests remain the
-  compatibility gates; structured XML and SVG fuzzers remain the hostile-input gates.
-
-## Security and Resource Behavior
-
-The change introduces no new parsing loops or attacker-controlled recursion. Input, tree, depth,
-attribute, and entity limits remain authoritative. Source replacement still validates range,
-UTF-8, source-size, and anchor work limits before copying or mutating storage. Copy-on-write is at
-most one full-source allocation for a particular shared snapshot; later edits use the store's
-unique current source unless new parsed values share it.
-
-## Alternatives Considered
-
-- **Compact and intern at parse end:** Rejected after the measured experiment above.
-- **Copy every string at parse end:** Lifetime-safe but retains the allocation traffic this change
-  is intended to avoid.
-- **Mutate the shared source in place:** Rejected because it invalidates or changes DOM strings.
-- **Permanent document interner:** Rejected because it retains dead values and adds lifetime policy
-  to all later mutations.
-- **Non-owning public views:** Rejected because callers could outlive the parser or source buffer.
-
-## Future Work
-
-- Revisit compacting only if a non-editing workload demonstrates a materially larger retained-memory
-  win or a finalization strategy meets the 5% CPU budget.
-- Evaluate the same owned-substring technique for standalone CSS only after defining its source
-  lifetime boundary.
+- [x] Remove source-slice, copy-on-write, and compact/intern production paths.
+- [x] Retain repeated-attribute and Donner Splash allocation/peak-live-requested-byte coverage in
+      `//donner/benchmarks:svg_parse_allocation_tests`.
+- [x] Isolate the stronger allocator from timed benchmark binaries.
+- [x] Add cross-generation, aligned, zero-sized, concurrent, and overlapping-scope tracker tests.
+- [ ] Run the repository-wide `//...` gate on the exact final candidate before publication.
+- [ ] If source slices are revisited, first design explicit termination semantics, public value
+      retention, incremental-import detachment, and aggregate snapshot budgets, with CI tests for
+      each invariant.

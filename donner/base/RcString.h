@@ -15,10 +15,6 @@
 
 namespace donner {
 
-namespace xml {
-class XMLSourceStore;
-}
-
 /**
  * A reference counted string, that is copy-on-write and implements the small-string
  * optimization.
@@ -241,9 +237,6 @@ public:
    */
   size_t size() const { return data_.isLong() ? data_.long_.size() : data_.short_.size(); }
 
-  /// Return whether this value can be stored entirely in the inline short-string representation.
-  bool fitsInlineStorage() const { return size() <= kShortStringCapacity; }
-
   /**
    * @return the string as a std::string.
    */
@@ -297,9 +290,8 @@ public:
   RcString substr(size_t pos, size_t len = npos) const {
     const std::string_view slice = std::string_view(*this).substr(pos, len);
 
-    if (data_.isLong() &&
-        (slice.size() > kShortStringCapacity || data_.long_.preservesSubstrings())) {
-      return RcString(data_.long_.storage, slice, data_.long_.preservesSubstrings());
+    if (data_.isLong() && slice.size() > kShortStringCapacity) {
+      return RcString(data_.long_.storage, slice);
     } else {
       return RcString(slice);
     }
@@ -319,8 +311,8 @@ public:
   }
 
 private:
-  // Two bits are reserved for the long-string and preserve-substrings tags.
-  static constexpr size_t kMaxSize = size_t(1) << ((sizeof(size_t) * 8) - 2);
+  // One bit is reserved.
+  static constexpr size_t kMaxSize = size_t(1) << ((sizeof(size_t) * 8) - 1);
 
   struct LongStringData {
     struct InitOnlySharedPtr {};
@@ -329,11 +321,8 @@ private:
     // NOLINTNEXTLINE: Only one field is initialized as an optimization.
     constexpr LongStringData(InitOnlySharedPtr) : storage(nullptr) {}
 
-    LongStringData(std::shared_ptr<const void> storageRef, std::string_view view,
-                   bool preserveSubstrings)
-        : shiftedSize((view.size() << 2) | 1 | (preserveSubstrings ? 2 : 0)),
-          data(view.data()),
-          storage(std::move(storageRef)) {}
+    LongStringData(std::shared_ptr<std::vector<char>> storageRef, std::string_view view)
+        : shiftedSize((view.size() << 1) | 1), data(view.data()), storage(std::move(storageRef)) {}
 
     ~LongStringData() { storage = nullptr; }
 
@@ -345,10 +334,9 @@ private:
 
     size_t shiftedSize;
     const char* data;
-    std::shared_ptr<const void> storage;
+    std::shared_ptr<std::vector<char>> storage;
 
-    size_t size() const { return shiftedSize >> 2; }
-    bool preservesSubstrings() const { return (shiftedSize & 2) != 0; }
+    size_t size() const { return shiftedSize >> 1; }
     std::string_view view() const { return std::string_view(data, size()); }
   };
 
@@ -370,13 +358,8 @@ private:
   static_assert(sizeof(LongStringData) == sizeof(ShortStringData),
                 "Long and short string data must be the same size.");
 
-  explicit RcString(std::shared_ptr<const void> storage, std::string_view view,
-                    bool preserveSubstrings = false)
-      : data_(std::move(storage), view, preserveSubstrings) {}
-
-  static RcString FromSharedStorage(std::shared_ptr<const void> storage, std::string_view view) {
-    return RcString(std::move(storage), view, true);
-  }
+  explicit RcString(std::shared_ptr<std::vector<char>> storage, std::string_view view)
+      : data_(std::move(storage), view) {}
 
   /**
    * Construct an RcString from an existing vector.
@@ -391,7 +374,7 @@ private:
     if (data.empty() || data.back() != '\0') {
       data.push_back('\0');
     }
-    data_.long_.shiftedSize = (originalSize << 2) | 1;
+    data_.long_.shiftedSize = (originalSize << 1) | 1;
     data_.long_.data = data.data();
     data_.long_.storage = std::make_shared<std::vector<char>>(std::move(data));
   }
@@ -463,7 +446,7 @@ private:
       }
 
       data_.clear();
-      data_.long_.shiftedSize = (size << 2) | 1;
+      data_.long_.shiftedSize = (size << 1) | 1;
       data_.long_.data = storage->data();
       data_.long_.storage = std::move(storage);
     }
@@ -478,9 +461,8 @@ private:
       // we don't need to zero the entire short_ buffer.
       new (&long_) LongStringData(LongStringData::InitOnlySharedPtr());
     }
-    explicit Storage(std::shared_ptr<const void> storage, std::string_view view,
-                     bool preserveSubstrings)
-        : long_(std::move(storage), view, preserveSubstrings) {}
+    explicit Storage(std::shared_ptr<std::vector<char>> storage, std::string_view view)
+        : long_(std::move(storage), view) {}
 
     ~Storage() { clear(); }
 
@@ -553,8 +535,6 @@ private:
   };
 
   Storage data_;
-
-  friend class xml::XMLSourceStore;
 };
 
 }  // namespace donner

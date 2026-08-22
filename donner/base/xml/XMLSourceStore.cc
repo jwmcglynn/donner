@@ -154,12 +154,8 @@ XMLSourceStore::XMLSourceStore(std::string source, std::size_t maximumSourceSize
     : XMLSourceStore(std::move(source), ResourceLimits{.maximumSourceSize = maximumSourceSize}) {}
 
 XMLSourceStore::XMLSourceStore(std::string source, ResourceLimits limits)
-    : source_(std::make_shared<std::string>(std::move(source))), resourceLimits_(limits) {
-  resourceLimits_.maximumSourceSize = std::max(resourceLimits_.maximumSourceSize, source_->size());
-}
-
-RcString XMLSourceStore::sourceReference() const {
-  return RcString::FromSharedStorage(source_, std::string_view(*source_));
+    : source_(std::move(source)), resourceLimits_(limits) {
+  resourceLimits_.maximumSourceSize = std::max(resourceLimits_.maximumSourceSize, source_.size());
 }
 
 XMLSourceStore::ResourceStats XMLSourceStore::resourceStats() const {
@@ -175,7 +171,7 @@ XMLSourceStore::ResourceStats XMLSourceStore::resourceStats() const {
 }
 
 bool XMLSourceStore::setResourceLimits(ResourceLimits limits) {
-  if (limits.maximumSourceSize < source_->size() ||
+  if (limits.maximumSourceSize < source_.size() ||
       limits.maximumLiveAnchorCount < anchors_.size()) {
     return false;
   }
@@ -254,10 +250,10 @@ void XMLSourceStore::invalidateAnchor(SourceAnchorId id) {
 
 std::optional<XMLSourceDelta> XMLSourceStore::replace(std::size_t offset, std::size_t length,
                                                       std::string_view replacement) {
-  if (!ReplacementRangeIsValid(source_->size(), offset, length)) {
+  if (!ReplacementRangeIsValid(source_.size(), offset, length)) {
     return std::nullopt;
   }
-  if (!ReplacementFitsLimit(source_->size(), length, replacement.size(),
+  if (!ReplacementFitsLimit(source_.size(), length, replacement.size(),
                             resourceLimits_.maximumSourceSize)) {
     return std::nullopt;
   }
@@ -273,8 +269,7 @@ std::optional<XMLSourceDelta> XMLSourceStore::replace(std::size_t offset, std::s
     return std::nullopt;
   }
 
-  ensureUniqueSource();
-  source_->replace(offset, length, replacement);
+  source_.replace(offset, length, replacement);
   ++sourceVersion_;
 
   const std::size_t insertedLength = replacement.size();
@@ -298,7 +293,7 @@ FileOffset XMLSourceStore::resolveLineInfo(FileOffset offset) const {
   }
 
   if (!lineOffsets_.has_value() || lineOffsetsVersion_ != sourceVersion_) {
-    lineOffsets_.emplace(std::string_view(*source_));
+    lineOffsets_.emplace(std::string_view(source_));
     lineOffsetsVersion_ = sourceVersion_;
   }
 
@@ -306,17 +301,11 @@ FileOffset XMLSourceStore::resolveLineInfo(FileOffset offset) const {
 }
 
 bool XMLSourceStore::isBoundary(std::size_t offset) const {
-  if (offset > source_->size()) {
+  if (offset > source_.size()) {
     return false;
   }
-  return offset == source_->size() ||
-         !IsContinuationByte(static_cast<unsigned char>((*source_)[offset]));
-}
-
-void XMLSourceStore::ensureUniqueSource() {
-  if (source_.use_count() != 1) {
-    source_ = std::make_shared<std::string>(*source_);
-  }
+  return offset == source_.size() ||
+         !IsContinuationByte(static_cast<unsigned char>(source_[offset]));
 }
 
 bool XMLSourceStore::IsValidUtf8(std::string_view value) {

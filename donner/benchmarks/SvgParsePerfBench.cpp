@@ -15,8 +15,8 @@
 /// Usage:
 ///   svg_parse_perf_bench [--iterations=N] [--warmup=N] [--repeat=N] FILE...
 ///
-/// Each input file produces one `RESULT scene=<name> parse_ms=<median>` line per
-/// repeat. Repeats interleave at file granularity, not at iteration
+/// Each input file produces one `RESULT scene=<name> parse_ms=<median>` line
+/// per repeat. Repeats interleave at file granularity, not at iteration
 /// granularity: one repeat runs every iteration of the first file, then every
 /// iteration of the second, and so on, before the next repeat starts again from
 /// the first file. That spreads slow machine intervals across the repeats of
@@ -116,9 +116,8 @@ int main(int argc, char* argv[]) {
   }
 
   if (inputs.empty()) {
-    std::fprintf(stderr,
-                 "usage: svg_parse_perf_bench [--iterations=N] [--warmup=N] [--repeat=N] "
-                 "FILE...\n");
+    std::fprintf(
+        stderr, "usage: svg_parse_perf_bench [--iterations=N] [--warmup=N] [--repeat=N] FILE...\n");
     return 2;
   }
 

@@ -352,13 +352,11 @@ void printAllocation(std::string_view engine, std::string_view phase,
   // wgpu-native's Rust-side allocations are invisible; do not compare these
   // numbers across engines (see the file header).
   std::printf("ALLOC engine=%.*s phase=%.*s calls=%" PRIu64 " bytes=%" PRIu64 " frees=%" PRIu64
-              " live_bytes=%" PRIu64 " peak_live_bytes=%" PRIu64 " scope=cpp_heap_only\n",
+              " scope=cpp_heap_only\n",
               static_cast<int>(engine.size()), engine.data(), static_cast<int>(phase.size()),
               phase.data(), static_cast<std::uint64_t>(snapshot.allocationCalls),
               static_cast<std::uint64_t>(snapshot.allocationBytes),
-              static_cast<std::uint64_t>(snapshot.freeCalls),
-              static_cast<std::uint64_t>(snapshot.liveBytes),
-              static_cast<std::uint64_t>(snapshot.peakLiveBytes));
+              static_cast<std::uint64_t>(snapshot.freeCalls));
 }
 
 }  // namespace
