@@ -984,6 +984,10 @@ struct GeoEncoder::Impl : public GeodeTextureEncoder::UniformScratch {
     return admitGeometry(encoded, logicalDraws) && !encoded.empty();
   }
 
+  bool admitResidentRadialGeometry(const EncodedPath& encoded, const RadialGradientParams& params) {
+    return !params.stops.empty() && params.radius > 0.0 && admitReadyGeometry(encoded, 1u);
+  }
+
   void releaseGeometry(const EncodedPath& encoded, std::size_t logicalDraws) {
     if (geometryAdmission != nullptr) {
       geometryAdmission->releaseGeometry(encoded, logicalDraws);
@@ -2463,6 +2467,14 @@ bool GeoEncoder::ensureResidentSceneRecord(GeodeResidentSlot& slot, const Encode
   return prepared;
 }
 
+void GeoEncoder::releasePreparedSceneAdmission(const EncodedPath& encoded) {
+  if (impl_->geometryAdmission == nullptr || impl_->pendingSceneAdmissions == 0u) {
+    return;
+  }
+  --impl_->pendingSceneAdmissions;
+  impl_->releaseGeometry(encoded, 1u);
+}
+
 void GeoEncoder::fillPathSceneBatch(const css::RGBA& color, FillRule rule,
                                     const SceneBatchBinding& binding) {
   if (!impl_->validateAndConsumeSceneBatch(binding)) {
@@ -2619,6 +2631,17 @@ void GeoEncoder::fillPathPattern(const Path& path, FillRule rule, const PatternP
     return;
   }
 
+  EncodedPath ownedEncoded;
+  const EncodedPath* encoded = precomputedEncoded;
+  if (encoded == nullptr) {
+    impl_->device->countPathEncode();
+    ownedEncoded = GeodePathEncoder::encode(path, rule);
+    encoded = &ownedEncoded;
+  }
+  if (!impl_->admitReadyGeometry(*encoded, 1u)) {
+    return;
+  }
+
   ++impl_->patternGpuPreparations;
   // Build a sampler for the tile. We use linear filtering with Repeat
   // wrap mode; the shader also performs explicit modulo-style wrapping
@@ -2638,7 +2661,7 @@ void GeoEncoder::fillPathPattern(const Path& path, FillRule rule, const PatternP
   FillDrawArgs args = {};
   args.path = &path;
   args.rule = rule;
-  args.precomputedEncoded = precomputedEncoded;
+  args.precomputedEncoded = encoded;
   args.paintMode = 1u;
   args.patternView = impl_->transientResources.retain(paint.tile.createView());
   args.patternSampler = sampler;
@@ -2646,7 +2669,7 @@ void GeoEncoder::fillPathPattern(const Path& path, FillRule rule, const PatternP
   args.tileSize = paint.tileSize;
   args.patternOpacity = static_cast<float>(paint.opacity);
 
-  submitFillDraw(args);
+  submitFillDraw(args, {}, /*requireAdmission=*/false);
 }
 
 void GeoEncoder::submitFillDraw(const FillDrawArgs& args, std::span<const float> instanceTransforms,
@@ -3201,12 +3224,7 @@ void GeoEncoder::fillPathRadialGradientResident(GeodeResidentGradientSlot& slot,
                                                 const EncodedPath& encoded,
                                                 const RadialGradientParams& params, FillRule rule,
                                                 uint64_t frameId) {
-  if (params.stops.empty() || !impl_->admitReadyGeometry(encoded, 1u)) {
-    return;
-  }
-  // Degenerate radius: nothing to draw meaningfully - match tiny-skia's
-  // early return.
-  if (params.radius <= 0.0) {
+  if (!impl_->admitResidentRadialGeometry(encoded, params)) {
     return;
   }
 

@@ -3136,8 +3136,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     }
     std::shared_ptr<geode::GeodeResidentSlab>& slab = *slabPtr;
     if (!slab || slab->owningDeviceId() != device->deviceId()) {
-      slab = std::make_shared<geode::GeodeResidentSlab>(device->deviceId(),
-                                                        std::move(documentBudget));
+      slab =
+          std::make_shared<geode::GeodeResidentSlab>(device->deviceId(), std::move(documentBudget));
     }
     // Merge the previous frame's freed ranges, at most once per frame (the
     // slab gates on the index). Gating here rather than at one draw entry
@@ -3689,6 +3689,9 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
           // referenced by any batch).
           claimSceneSlot(*residentSlot, paint);
           flushPendingBatch();
+          if (!paint.isGradient()) {
+            encoder->releasePreparedSceneAdmission(*encoded);
+          }
           startPending(sourceRegistry, sourceEntity, path, paint, rule, encoded, residentSlot,
                        chunk, recordBuf, chunkId, recordBufId, recordIndex,
                        effectiveRecordSlot.offset, clipVersion, current);
