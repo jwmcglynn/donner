@@ -5,6 +5,7 @@
 /// server's environment cannot create a GL context.
 
 #include <chrono>
+#include <cstddef>
 #include <string>
 #include <string_view>
 
@@ -19,6 +20,15 @@ enum class GlReadbackRunner {
   InProcess,
   BazelRun,
 };
+
+inline constexpr std::size_t kMaximumGlReplayProcessOutputBytes = 16 * 1024 * 1024;
+
+/// Append helper output while retaining at most the process-output byte budget.
+bool AppendBoundedGlReplayProcessOutput(std::string* output, std::string_view bytes);
+
+/// Drain currently available helper output without exceeding the retained-output limit.
+void ReadAvailableGlReplayProcessOutput(int fd, std::string* output, bool* isOpen,
+                                        bool* outputLimitExceeded);
 
 std::string_view GlReadbackRunnerName(GlReadbackRunner runner);
 

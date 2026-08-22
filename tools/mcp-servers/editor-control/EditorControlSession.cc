@@ -34,7 +34,6 @@
 #include "donner/base/EcsRegistry.h"
 #include "donner/base/Transform.h"
 #include "donner/base/Vector2.h"
-#include "donner/base/xml/components/TreeComponent.h"
 #include "donner/editor/AttributeWriteback.h"
 #include "donner/editor/EditorCommand.h"
 #include "donner/editor/LayersPanel.h"
@@ -48,10 +47,6 @@
 #include "donner/svg/SVGElement.h"
 #include "donner/svg/SVGGeometryElement.h"
 #include "donner/svg/SVGGraphicsElement.h"
-#include "donner/svg/components/DirtyFlagsComponent.h"
-#include "donner/svg/components/IdComponent.h"
-#include "donner/svg/components/RenderingInstanceComponent.h"
-#include "donner/svg/components/style/ComputedStyleComponent.h"
 #include "donner/svg/compositor/CompositorController.h"
 #include "donner/svg/compositor/ScopedCompositorHint.h"
 #include "donner/svg/renderer/RendererImageIO.h"
@@ -313,7 +308,8 @@ json EditorControlSession::toolList() {
                              {"y", {{"type", "number"}}},
                          }},
                         {"required", json::array({"x", "y"})}}},
-                      {"minItems", 1}}},
+                      {"minItems", 1},
+                      {"maxItems", kMaximumPenPathPoints}}},
                     {"close", {{"type", "boolean"}, {"default", false}}},
                     {"commit_open", {{"type", "boolean"}, {"default", true}}},
                     {"render_after_path", {{"type", "boolean"}, {"default", true}}},
@@ -471,10 +467,18 @@ json EditorControlSession::toolList() {
                     {"gl_pace", {{"type", "boolean"}, {"default", true}}},
                     {"gl_drive_document_input", {{"type", "boolean"}, {"default", false}}},
                     {"gl_source_pane_visible", {{"type", "boolean"}, {"default", false}}},
-                    {"gl_timeout_ms", {{"type", "integer"}, {"minimum", 1}, {"default", 120000}}},
+                    {"gl_timeout_ms",
+                     {{"type", "integer"},
+                      {"minimum", 1},
+                      {"maximum", kMaximumGlReplayTimeoutMs},
+                      {"default", 120000}}},
                     {"include_gl_images", {{"type", "boolean"}, {"default", true}}},
                     {"include_frame_results", {{"type", "boolean"}, {"default", true}}},
-                    {"max_frame_results", {{"type", "integer"}, {"minimum", 0}}},
+                    {"max_frame_results",
+                     {{"type", "integer"},
+                      {"minimum", 0},
+                      {"maximum", kMaximumRetainedReplayFrameResults},
+                      {"default", kMaximumRetainedReplayFrameResults}}},
                     {"stop_after_mouse_ups", {{"type", "integer"}, {"minimum", 0}}},
                     {"compare_presented_after_left_mouse_down",
                      {{"type", "integer"}, {"minimum", 0}}},

@@ -111,6 +111,69 @@ Vector2d RotateHandlePointForCorner(const Box2d& bounds, SelectionTransformCorne
   return SelectionTransformCornerPoint(bounds, corner) + direction * axisOffsetDoc;
 }
 
+bool ReadPenPathPoints(const json& pointsJson, std::vector<Vector2d>* points, std::string* error) {
+  if (pointsJson.size() > kMaximumPenPathPoints) {
+    *error = "points exceeds the maximum pen path point count";
+    return false;
+  }
+  points->reserve(pointsJson.size());
+  int pointIndex = 0;
+  for (const json& pointJson : pointsJson) {
+    if (!pointJson.is_object()) {
+      *error = "point " + std::to_string(pointIndex) + " must be an object";
+      return false;
+    }
+    const auto xIt = pointJson.find("x");
+    const auto yIt = pointJson.find("y");
+    if (xIt == pointJson.end() || yIt == pointJson.end() || !xIt->is_number() ||
+        !yIt->is_number()) {
+      *error = "point " + std::to_string(pointIndex) + " requires numeric x and y";
+      return false;
+    }
+    points->push_back(Vector2d(xIt->get<double>(), yIt->get<double>()));
+    ++pointIndex;
+  }
+  if (points->empty()) {
+    *error = "points must contain at least one point";
+    return false;
+  }
+  return true;
+}
+
+std::size_t PenPathRecordingFrameCount(std::size_t pointCount, bool close, bool commitOpen) {
+  if (close && pointCount >= 3u) {
+    return 1u + pointCount * 2u + 2u;
+  }
+  return 1u + pointCount * 2u + (commitOpen ? 1u : 0u);
+}
+
+std::size_t DragRecordingFrameCount(int frames, bool release) {
+  return static_cast<std::size_t>(frames) + (release ? 2u : 1u);
+}
+
+std::size_t PointerRecordingFrameCount(int clickCount, bool dragging, int frames, int idleFrames) {
+  return static_cast<std::size_t>(clickCount) * (2u + (dragging ? frames : 0u)) + idleFrames;
+}
+
+int VisibleDragFrameCount(bool dragging, int frames) {
+  return dragging ? frames : 0;
+}
+
+const EditorControlSession::DisplayFrameSnapshot& DisplayAfterRender(
+    const std::vector<EditorControlSession::CapturedRenderResult>& results,
+    const EditorControlSession::DisplayFrameSnapshot& fallback) {
+  return results.empty() ? fallback : results.back().displayFrame;
+}
+
+template <typename BuildFrame>
+void AppendBoundedGestureFrame(ToolCallResult* out, BuildFrame&& buildFrame) {
+  if (out->body["frames"].size() < kMaximumRetainedGestureFrameResults) {
+    out->body["frames"].push_back(buildFrame());
+  } else {
+    out->body["frame_results_truncated"] = true;
+  }
+}
+
 }  // namespace
 
 ToolCallResult EditorControlSession::selectBySelector(const json& arguments) {
@@ -302,6 +365,9 @@ ToolCallResult EditorControlSession::setActiveTool(const json& arguments) {
   if (!ReadRequiredString(arguments, "tool", &tool, &error)) {
     return MakeErrorResult(error);
   }
+  if (!recordingCanAppendFrames(1)) {
+    return MakeErrorResult(".rnr recording frame budget exceeded");
+  }
   if (!setActiveToolForReplay(tool, &error)) {
     return MakeErrorResult(error);
   }
@@ -340,6 +406,9 @@ ToolCallResult EditorControlSession::setStyleProperty(const json& arguments) {
       !ReadOptionalBool(arguments, "render_after_set", true, &renderAfterSet, &error) ||
       !ReadCaptureOptions(arguments, false, &capture, &error)) {
     return MakeErrorResult(error);
+  }
+  if (!recordingCanAppendFrames(1)) {
+    return MakeErrorResult(".rnr recording frame budget exceeded");
   }
 
   repro::ReproAction action;
@@ -386,25 +455,9 @@ ToolCallResult EditorControlSession::penPath(const json& arguments) {
   if (pointsIt == arguments.end() || !pointsIt->is_array()) {
     return MakeErrorResult("missing array argument: points");
   }
-
   std::vector<Vector2d> points;
-  points.reserve(pointsIt->size());
-  int pointIndex = 0;
-  for (const json& pointJson : *pointsIt) {
-    if (!pointJson.is_object()) {
-      return MakeErrorResult("point " + std::to_string(pointIndex) + " must be an object");
-    }
-    const auto xIt = pointJson.find("x");
-    const auto yIt = pointJson.find("y");
-    if (xIt == pointJson.end() || yIt == pointJson.end() || !xIt->is_number() ||
-        !yIt->is_number()) {
-      return MakeErrorResult("point " + std::to_string(pointIndex) + " requires numeric x and y");
-    }
-    points.push_back(Vector2d(xIt->get<double>(), yIt->get<double>()));
-    ++pointIndex;
-  }
-  if (points.empty()) {
-    return MakeErrorResult("points must contain at least one point");
+  if (!ReadPenPathPoints(*pointsIt, &points, &error)) {
+    return MakeErrorResult(error);
   }
 
   bool close = false;
@@ -416,6 +469,10 @@ ToolCallResult EditorControlSession::penPath(const json& arguments) {
       !ReadOptionalBool(arguments, "render_after_path", true, &renderAfterPath, &error) ||
       !ReadCaptureOptions(arguments, false, &capture, &error)) {
     return MakeErrorResult(error);
+  }
+  const std::size_t recordingFrames = PenPathRecordingFrameCount(points.size(), close, commitOpen);
+  if (!recordingCanAppendFrames(recordingFrames)) {
+    return MakeErrorResult(".rnr recording frame budget exceeded");
   }
 
   if (!setActiveToolForReplay("pen", &error)) {
@@ -508,6 +565,9 @@ ToolCallResult EditorControlSession::dragSelector(const json& arguments) {
     return MakeErrorResult(error);
   }
   const int frames = std::clamp(requestedFrames, 1, kMaxDragFrames);
+  if (!recordingCanAppendFrames(DragRecordingFrameCount(frames, release))) {
+    return MakeErrorResult(".rnr recording frame budget exceeded");
+  }
 
   std::optional<svg::SVGElement> element = querySelector(selector);
   if (!element.has_value()) {
@@ -619,20 +679,22 @@ ToolCallResult EditorControlSession::dragSelector(const json& arguments) {
     if (!renderCurrentFrame(&renderResults, &error)) {
       return MakeErrorResult(error);
     }
-    json frameJson{
-        {"label", "move_" + std::to_string(i)},
-        {"point_doc", VectorToJson(point)},
-        {"display_before_render", DisplayFrameJson(displayBeforeRender)},
-        {"stages", RenderResultsJson(renderResults, &out, capture,
-                                     "drag_selector/move_" + std::to_string(i))},
-    };
-    attachDisplayBitmap(&frameJson, "display_before_render_bitmap", displayBeforeRender,
-                        "drag_selector/move_" + std::to_string(i) + "/display_before_render");
-    const DisplayFrameSnapshot displayAfterRender =
-        renderResults.empty() ? displayBeforeRender : renderResults.back().displayFrame;
-    attachDisplayBitmap(&frameJson, "display_after_render_bitmap", displayAfterRender,
-                        "drag_selector/move_" + std::to_string(i) + "/display_after_render");
-    out.body["frames"].push_back(std::move(frameJson));
+    AppendBoundedGestureFrame(&out, [&] {
+      json frameJson{
+          {"label", "move_" + std::to_string(i)},
+          {"point_doc", VectorToJson(point)},
+          {"display_before_render", DisplayFrameJson(displayBeforeRender)},
+          {"stages", RenderResultsJson(renderResults, &out, capture,
+                                       "drag_selector/move_" + std::to_string(i))},
+      };
+      attachDisplayBitmap(&frameJson, "display_before_render_bitmap", displayBeforeRender,
+                          "drag_selector/move_" + std::to_string(i) + "/display_before_render");
+      const DisplayFrameSnapshot& displayAfterRender =
+          DisplayAfterRender(renderResults, displayBeforeRender);
+      attachDisplayBitmap(&frameJson, "display_after_render_bitmap", displayAfterRender,
+                          "drag_selector/move_" + std::to_string(i) + "/display_after_render");
+      return frameJson;
+    });
   }
 
   if (release) {
@@ -724,6 +786,9 @@ ToolCallResult EditorControlSession::transformSelector(const json& arguments) {
         "corner must be 'top_left', 'top_right', 'bottom_right', or 'bottom_left'");
   }
   const int frames = std::clamp(requestedFrames, 1, kMaxDragFrames);
+  if (!recordingCanAppendFrames(DragRecordingFrameCount(frames, release))) {
+    return MakeErrorResult(".rnr recording frame budget exceeded");
+  }
 
   std::optional<svg::SVGElement> element = querySelector(selector);
   if (!element.has_value()) {
@@ -840,20 +905,22 @@ ToolCallResult EditorControlSession::transformSelector(const json& arguments) {
     if (!renderCurrentFrame(&renderResults, &error)) {
       return MakeErrorResult(error);
     }
-    json frameJson{
-        {"label", "move_" + std::to_string(i)},
-        {"point_doc", VectorToJson(point)},
-        {"active_gesture_preview", ActiveGesturePreviewJson(selectTool_->activeGesturePreview())},
-        {"display_before_render", DisplayFrameJson(displayBeforeRender)},
-        {"stages", RenderResultsJson(renderResults, &out, capture,
-                                     "transform_selector/move_" + std::to_string(i))},
-    };
-    const DisplayFrameSnapshot displayAfterRender =
-        renderResults.empty() ? displayBeforeRender : renderResults.back().displayFrame;
-    attachDisplayAfterRenderBitmap(
-        &frameJson, displayAfterRender,
-        "transform_selector/move_" + std::to_string(i) + "/display_after_render");
-    out.body["frames"].push_back(std::move(frameJson));
+    AppendBoundedGestureFrame(&out, [&] {
+      json frameJson{
+          {"label", "move_" + std::to_string(i)},
+          {"point_doc", VectorToJson(point)},
+          {"active_gesture_preview", ActiveGesturePreviewJson(selectTool_->activeGesturePreview())},
+          {"display_before_render", DisplayFrameJson(displayBeforeRender)},
+          {"stages", RenderResultsJson(renderResults, &out, capture,
+                                       "transform_selector/move_" + std::to_string(i))},
+      };
+      const DisplayFrameSnapshot& displayAfterRender =
+          DisplayAfterRender(renderResults, displayBeforeRender);
+      attachDisplayAfterRenderBitmap(
+          &frameJson, displayAfterRender,
+          "transform_selector/move_" + std::to_string(i) + "/display_after_render");
+      return frameJson;
+    });
   }
 
   if (release) {
@@ -938,6 +1005,11 @@ ToolCallResult EditorControlSession::pointerGesture(const json& arguments) {
 
   const int frames = std::clamp(requestedFrames, 1, kMaxDragFrames);
   const int idleFrames = std::clamp(requestedIdleFrames, 0, kMaxDragFrames);
+  const std::size_t recordingFrames =
+      PointerRecordingFrameCount(clickCount, dragging, frames, idleFrames);
+  if (!recordingCanAppendFrames(recordingFrames)) {
+    return MakeErrorResult(".rnr recording frame budget exceeded");
+  }
   MouseModifiers modifiers;
   modifiers.shift = shift;
   modifiers.option = option;
@@ -991,7 +1063,7 @@ ToolCallResult EditorControlSession::pointerGesture(const json& arguments) {
       {"start_doc", VectorToJson(start)},
       {"end_doc", VectorToJson(end)},
       {"click_count", clickCount},
-      {"drag_frames", dragging ? frames : 0},
+      {"drag_frames", VisibleDragFrameCount(dragging, frames)},
       {"idle_frames", idleFrames},
       {"text_editing", textTool_.isEditing()},
       {"text_caret_index", textTool_.isEditing() ? json(textTool_.caretIndex()) : json(nullptr)},

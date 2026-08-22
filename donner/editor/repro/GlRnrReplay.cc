@@ -8,6 +8,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <span>
@@ -20,6 +21,7 @@
 #include "donner/editor/EditorShell.h"
 #include "donner/editor/ViewportState.h"
 #include "donner/editor/gui/EditorWindow.h"
+#include "donner/editor/repro/ReplayResourceBudget.h"
 #include "donner/editor/repro/ReproFile.h"
 #include "donner/svg/renderer/RendererImageIO.h"
 #include "donner/svg/renderer/RendererInterface.h"
@@ -64,35 +66,10 @@ enum class PixelSnapMode {
   return std::string(std::istreambuf_iterator<char>(stream), std::istreambuf_iterator<char>());
 }
 
-[[nodiscard]] std::filesystem::path ResolveSvgPath(const std::filesystem::path& rnrPath,
-                                                   const std::string& recordedPath) {
-  const std::filesystem::path direct(recordedPath);
-  if (std::filesystem::exists(direct)) {
-    return direct;
-  }
-
-  const std::filesystem::path besideRnr = rnrPath.parent_path() / recordedPath;
-  if (std::filesystem::exists(besideRnr)) {
-    return besideRnr;
-  }
-
-  return direct;
-}
-
 struct ReproSvgInput {
-  std::filesystem::path displayPath;
+  std::string displayName;
   std::string source;
 };
-
-[[nodiscard]] std::filesystem::path EmbeddedSvgDisplayPath(const ReproMetadata& metadata) {
-  if (!metadata.svgBasename.empty()) {
-    return std::filesystem::path(metadata.svgBasename);
-  }
-  if (!metadata.svgPath.empty()) {
-    return std::filesystem::path(metadata.svgPath).filename();
-  }
-  return "embedded.svg";
-}
 
 [[nodiscard]] std::optional<ReproSvgInput> LoadReproSvgInput(const GlRnrReplayOptions& options,
                                                              const ReproMetadata& metadata,
@@ -104,27 +81,26 @@ struct ReproSvgInput {
       return std::nullopt;
     }
     return ReproSvgInput{
-        .displayPath = *options.svgPathOverride,
+        .displayName = options.svgPathOverride->filename().string(),
         .source = *source,
     };
   }
 
   if (metadata.svgSource.has_value()) {
     return ReproSvgInput{
-        .displayPath = EmbeddedSvgDisplayPath(metadata),
+        .displayName = ReproSvgDisplayName(metadata),
         .source = *metadata.svgSource,
     };
   }
 
-  const std::filesystem::path svgPath = ResolveSvgPath(options.rnrPath, metadata.svgPath);
-  const std::optional<std::string> source = ReadTextFile(svgPath);
-  if (!source.has_value()) {
-    (void)SetError(error, "could not read SVG " + svgPath.string());
+  const std::optional<ReproSvgFile> svgFile = ReadReproSvgFile(options.rnrPath, metadata.svgPath);
+  if (!svgFile.has_value()) {
+    (void)SetError(error, "could not safely read replay-relative SVG " + metadata.svgPath);
     return std::nullopt;
   }
   return ReproSvgInput{
-      .displayPath = svgPath,
-      .source = *source,
+      .displayName = svgFile->path.filename().string(),
+      .source = svgFile->contents,
   };
 }
 
@@ -546,12 +522,17 @@ bool RunGlRnrReplay(const GlRnrReplayOptions& options, GlRnrReplayResult* result
     return SetError(error, "failed to initialize editor window");
   }
 
-  EditorShell shell(window, EditorShellOptions{
-                                .svgPath = svgInput->displayPath.string(),
-                                .initialSource = svgInput->source,
-                                .initialPath = svgInput->displayPath.string(),
-                                .editorNoticeText = "",
-                            });
+  EditorShell shell(
+      window,
+      EditorShellOptions{
+          .svgPath = svgInput->displayName,
+          .initialSource = svgInput->source,
+          .initialPath = std::nullopt,
+          .allowFileSystemActions =
+              kUntrustedReproReplaySecurityPolicy.allowEditorFileSystemActions,
+          .allowHostClipboardAccess = kUntrustedReproReplaySecurityPolicy.allowHostClipboardAccess,
+          .editorNoticeText = "",
+      });
   if (!shell.valid()) {
     return SetError(error, "failed to initialize editor shell");
   }
@@ -569,10 +550,25 @@ bool RunGlRnrReplay(const GlRnrReplayOptions& options, GlRnrReplayResult* result
   std::optional<double> lastLeftMousePressSeconds;
   Vector2d lastLeftMousePressDoc = Vector2d::Zero();
   const std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
+  ReplayExecutionResourceBudget executionBudget;
+  ReplayHeldMutationKeyState heldMutationKeys;
+  const std::size_t physicalWidth =
+      static_cast<std::size_t>(std::ceil(initialWidth * recordedScale));
+  const std::size_t physicalHeight =
+      static_cast<std::size_t>(std::ceil(initialHeight * recordedScale));
+  if (physicalWidth == 0 || physicalHeight == 0 ||
+      physicalHeight > std::numeric_limits<std::size_t>::max() / physicalWidth) {
+    return SetError(error, "replay has an invalid physical frame surface");
+  }
+  const std::size_t framePixels = physicalWidth * physicalHeight;
 
   for (const ReproFrame& frame : repro->frames) {
     if (options.maxFrame.has_value() && frame.index > *options.maxFrame) {
       break;
+    }
+    if (!executionBudget.reserveFrame(framePixels)) {
+      return SetError(error, "replay execution frame budget exceeded before frame " +
+                                 std::to_string(frame.index));
     }
 
     if (options.pace) {
@@ -601,36 +597,50 @@ bool RunGlRnrReplay(const GlRnrReplayOptions& options, GlRnrReplayResult* result
     const std::uint64_t holdPollCountBefore = replayRenderer.replayResultHoldPollCountForTesting();
     window.pollEvents();
     shell.prepareFrame();
-    window.beginFrameWithInput(options.driveDocumentSpaceInput ? NonCanvasInputFromFrame(frame)
-                                                               : InputFromFrame(frame));
-    if (frame.viewport.has_value()) {
-      shell.overrideViewportForReplay(ViewportFromReproViewport(*frame.viewport));
+    const ReplayFrameDispatchResult dispatchResult = DispatchReplayFrameWithResourceBudget(
+        executionBudget, frame.actions,
+        [&shell](const ReproAction& action) {
+          return shell.estimateReplayActionCostForTesting(action);
+        },
+        [&shell](const ReproAction& action) { shell.applyReplayActionForTesting(action); },
+        [&shell, &frame, &heldMutationKeys] {
+          return shell.estimateReplayInputCostForTesting(frame,
+                                                         heldMutationKeys.advanceFrame(frame));
+        },
+        [&] {
+          window.beginFrameWithInput(options.driveDocumentSpaceInput
+                                         ? NonCanvasInputFromFrame(frame)
+                                         : InputFromFrame(frame));
+          if (frame.viewport.has_value()) {
+            shell.overrideViewportForReplay(ViewportFromReproViewport(*frame.viewport));
+          }
+          if (options.driveDocumentSpaceInput) {
+            std::optional<EditorShellDocumentReplayInput> documentInput =
+                DocumentReplayInputFromFrame(frame);
+            if (documentInput.has_value()) {
+              if (documentInput->leftMousePressed) {
+                constexpr double kDoubleClickSeconds = 0.30;
+                constexpr double kDoubleClickMaxDistanceDoc = 6.0;
+                documentInput->modifiers.doubleClick =
+                    lastLeftMousePressSeconds.has_value() &&
+                    frame.timestampSeconds - *lastLeftMousePressSeconds <= kDoubleClickSeconds &&
+                    (documentInput->documentPoint - lastLeftMousePressDoc).length() <=
+                        kDoubleClickMaxDistanceDoc;
+                lastLeftMousePressSeconds = frame.timestampSeconds;
+                lastLeftMousePressDoc = documentInput->documentPoint;
+              }
+              shell.queueDocumentSpaceReplayInputForTesting(*documentInput);
+            }
+          }
+          QueueRecordedScrollEvents(shell, frame);
+        });
+    if (dispatchResult == ReplayFrameDispatchResult::ActionBudgetExceeded) {
+      return SetError(error, "replay semantic action resource budget exceeded before frame " +
+                                 std::to_string(frame.index));
     }
-    if (options.driveDocumentSpaceInput) {
-      std::optional<EditorShellDocumentReplayInput> documentInput =
-          DocumentReplayInputFromFrame(frame);
-      if (documentInput.has_value()) {
-        // Mirror the OS double-click contract for document-space input:
-        // a second press close (in time and position) to the previous one
-        // carries the double-click modifier, matching what ImGui's
-        // IsMouseDoubleClicked reports on the live-pointer path.
-        if (documentInput->leftMousePressed) {
-          constexpr double kDoubleClickSeconds = 0.30;
-          constexpr double kDoubleClickMaxDistanceDoc = 6.0;
-          documentInput->modifiers.doubleClick =
-              lastLeftMousePressSeconds.has_value() &&
-              frame.timestampSeconds - *lastLeftMousePressSeconds <= kDoubleClickSeconds &&
-              (documentInput->documentPoint - lastLeftMousePressDoc).length() <=
-                  kDoubleClickMaxDistanceDoc;
-          lastLeftMousePressSeconds = frame.timestampSeconds;
-          lastLeftMousePressDoc = documentInput->documentPoint;
-        }
-        shell.queueDocumentSpaceReplayInputForTesting(*documentInput);
-      }
-    }
-    QueueRecordedScrollEvents(shell, frame);
-    for (const ReproAction& action : frame.actions) {
-      shell.applyReplayActionForTesting(action);
+    if (dispatchResult == ReplayFrameDispatchResult::InputBudgetExceeded) {
+      return SetError(error, "replay input mutation resource budget exceeded before frame " +
+                                 std::to_string(frame.index));
     }
     shell.setContentOnlyCaptureForNextFrameForReplay(options.contentOnlyCapture &&
                                                      captureReason.has_value());

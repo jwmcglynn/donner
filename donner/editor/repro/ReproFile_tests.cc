@@ -12,7 +12,9 @@
 #include <utility>
 
 #include "donner/editor/ImGuiIncludes.h"
+#include "donner/editor/repro/ReplayResourceBudget.h"
 #include "donner/editor/repro/ReproRecorder.h"
+#include "donner/svg/parser/SVGParser.h"
 
 namespace donner::editor::repro {
 
@@ -181,6 +183,109 @@ TEST(ReproFileTest, RoundTripMetadataOnly) {
   std::filesystem::remove(path, ec);
 }
 
+TEST(ReproFileTest, RejectsUnsafeNumericConversions) {
+  const std::vector<std::string> inputs = {
+      R"({"v":1e300,"wnd":[100,100],"scale":1,"exp":0})"
+      "\n",
+      R"({"v":3.5,"wnd":[100,100],"scale":1,"exp":0})"
+      "\n",
+      MetadataLineWith("") + R"({"f":1e300,"t":0,"dt":16,"mx":1,"my":2,"btn":0,"mod":0})"
+                             "\n",
+      MetadataLineWith("") + R"({"f":0.5,"t":0,"dt":16,"mx":1,"my":2,"btn":0,"mod":0})"
+                             "\n",
+      MetadataLineWith("") + FrameLineWith(R"(,"e":[{"k":"mdown","hit":{"empty":0,"idx":1e300}}])"),
+  };
+
+  for (const std::string& input : inputs) {
+    EXPECT_FALSE(ParseReproFile(input).has_value()) << input;
+  }
+}
+
+TEST(ReproFileTest, UnsafeOptionalNumbersFallBackWithoutConversion) {
+  const std::string input =
+      R"({"v":3,"wnd":[1e300,100],"scale":1e300,"exp":1e300})"
+      "\n" +
+      FrameLineWith(
+          R"(,"e":[{"k":"resize","w":1e300,"h":100},{"k":"chr","c":1e300},{"k":"wheel","dx":1e300,"dy":0}])");
+
+  const auto parsed = ParseReproFile(input);
+  ASSERT_TRUE(parsed.has_value());
+  EXPECT_EQ(parsed->metadata.windowWidth, 0);
+  EXPECT_EQ(parsed->metadata.windowHeight, 0);
+  EXPECT_DOUBLE_EQ(parsed->metadata.displayScale, 1.0);
+  EXPECT_FALSE(parsed->metadata.experimentalMode);
+  ASSERT_THAT(parsed->frames, testing::SizeIs(1));
+  ASSERT_THAT(parsed->frames[0].events, testing::SizeIs(3));
+  EXPECT_EQ(parsed->frames[0].events[0].width, 0);
+  EXPECT_EQ(parsed->frames[0].events[0].height, 100);
+  EXPECT_EQ(parsed->frames[0].events[1].codepoint, 0u);
+  EXPECT_FLOAT_EQ(parsed->frames[0].events[2].wheelDeltaX, 0.0f);
+}
+
+TEST(ReproFileTest, UnsafePixelSurfaceMetadataFallsBackToDefaults) {
+  const std::vector<std::string> inputs = {
+      R"({"v":3,"wnd":[8192,8192],"scale":1,"exp":0})"
+      "\n",
+      R"({"v":3,"wnd":[8192,8192],"scale":64,"exp":0})"
+      "\n",
+      R"({"v":3,"wnd":[1600,900],"scale":4,"exp":0})"
+      "\n",
+  };
+
+  for (const std::string& input : inputs) {
+    const auto parsed = ParseReproFile(input);
+    ASSERT_TRUE(parsed.has_value()) << input;
+    EXPECT_EQ(parsed->metadata.windowWidth, 0) << input;
+    EXPECT_EQ(parsed->metadata.windowHeight, 0) << input;
+    EXPECT_DOUBLE_EQ(parsed->metadata.displayScale, 1.0) << input;
+  }
+}
+
+TEST(ReproFileTest, UnsafeResizePixelSurfaceFallsBackToZero) {
+  const std::string input =
+      MetadataLineWith("") + FrameLineWith(R"(,"e":[{"k":"resize","w":8192,"h":8192}])");
+
+  const auto parsed = ParseReproFile(input);
+  ASSERT_TRUE(parsed.has_value());
+  ASSERT_THAT(parsed->frames, testing::SizeIs(1));
+  ASSERT_THAT(parsed->frames[0].events, testing::SizeIs(1));
+  EXPECT_EQ(parsed->frames[0].events[0].width, 0);
+  EXPECT_EQ(parsed->frames[0].events[0].height, 0);
+}
+
+TEST(ReproFileTest, RejectsTooManyItemsInOneFrame) {
+  std::string actions = R"(,"a":[)";
+  for (size_t i = 0; i <= kMaximumReproItemsPerFrame; ++i) {
+    if (i != 0) actions += ',';
+    actions += R"({"k":"commit_pen_path"})";
+  }
+  actions += ']';
+
+  EXPECT_FALSE(ParseReproFile(MetadataLineWith("") + FrameLineWith(actions)).has_value());
+}
+
+TEST(ReproFileTest, RejectsUnsafeReplayTiming) {
+  const std::vector<std::string> inputs = {
+      MetadataLineWith("") + R"({"f":0,"t":1000000000,"dt":16,"mx":1,"my":2,"btn":0,"mod":0})"
+                             "\n",
+      MetadataLineWith("") + R"({"f":0,"t":-1,"dt":16,"mx":1,"my":2,"btn":0,"mod":0})"
+                             "\n",
+      MetadataLineWith("") + R"({"f":0,"t":0,"dt":5001,"mx":1,"my":2,"btn":0,"mod":0})"
+                             "\n",
+      MetadataLineWith("") + R"({"f":0,"t":0,"dt":-1,"mx":1,"my":2,"btn":0,"mod":0})"
+                             "\n",
+      MetadataLineWith("") +
+          R"({"f":0,"t":2,"dt":16,"mx":1,"my":2,"btn":0,"mod":0})"
+          "\n" +
+          R"({"f":1,"t":1,"dt":16,"mx":1,"my":2,"btn":0,"mod":0})"
+          "\n",
+  };
+
+  for (const std::string& input : inputs) {
+    EXPECT_FALSE(ParseReproFile(input).has_value()) << input;
+  }
+}
+
 TEST(ReproFileTest, RoundTripEmbeddedSvgSourceMetadata) {
   ReproFile file = MakeFileWithOneFrame();
   file.metadata.svgBasename = "input.svg";
@@ -229,6 +334,7 @@ TEST(ReproFileTest, ReproRecorderSnapshotsInputEdgesAndFrameContext) {
   ReproRecorderOptions options;
   options.outputPath = path;
   options.svgPath = "/tmp/donner/input.svg";
+  options.svgSource = "<svg/>";
   options.windowWidth = 640;
   options.windowHeight = 480;
   options.displayScale = 2.0;
@@ -732,7 +838,7 @@ TEST(ReproFileTest, IgnoresMalformedOptionalEventFields) {
   const auto path = TempFile("optional_event_fields");
   WriteTextFile(path,
                 MetadataLineWith("") +
-                    FrameLineWith(R"(,"e":[{"k":"kdown","key":bad,"m":bad},)"
+                    FrameLineWith(R"(,"e":[{"k":"kdown","key":542,"m":bad},)"
                                   R"({"k":"chr","c":bad},{"k":"wheel","dx":bad,"dy":bad},)"
                                   R"({"k":"focus","on":bad},)"
                                   R"({"k":"mdown","b":bad,"hit":{"empty":0,"tag":"path"}}])"));
@@ -743,7 +849,7 @@ TEST(ReproFileTest, IgnoresMalformedOptionalEventFields) {
               ElementsAre(Field(
                   "events", &ReproFrame::events,
                   ElementsAre(AllOf(ReproEventKindIs(ReproEvent::Kind::KeyDown),
-                                    Field("key", &ReproEvent::key, 0),
+                                    Field("key", &ReproEvent::key, 542),
                                     Field("modifiers", &ReproEvent::modifiers, 0)),
                               AllOf(ReproEventKindIs(ReproEvent::Kind::Char),
                                     Field("codepoint", &ReproEvent::codepoint, 0u)),
@@ -764,6 +870,21 @@ TEST(ReproFileTest, ReadMissingFileReturnsNullopt) {
   const auto path = TempFile("does_not_exist");
 
   EXPECT_FALSE(ReadReproFile(path).has_value());
+}
+
+TEST(ReproFileTest, RejectsFileOverSizeLimitBeforeParsing) {
+  const auto path = TempFile("too_large");
+  {
+    std::ofstream output(path, std::ios::binary);
+    ASSERT_TRUE(output);
+    output.seekp(static_cast<std::streamoff>(kMaximumReproFileSize));
+    output.put('x');
+  }
+
+  EXPECT_FALSE(ReadReproFile(path).has_value());
+
+  std::error_code error;
+  std::filesystem::remove(path, error);
 }
 
 TEST(ReproFileTest, ReadsV1FileWithV2FieldsDefaultConstructed) {
@@ -1079,6 +1200,14 @@ TEST(ReproFileTest, RejectsMalformedViewportVariants) {
        R"("ox":0,"oy":0,"pw":10,"ph":20,"dpr":1,"z":1,"pdx":0,"pdy":0,"psx":0,"psy":0,"vbx":0,"vby":0,"vbh":20)"},
       {"bad_origin_x",
        R"("ox":bad,"oy":0,"pw":10,"ph":20,"dpr":1,"z":1,"pdx":0,"pdy":0,"psx":0,"psy":0,"vbx":0,"vby":0,"vbw":10,"vbh":20)"},
+      {"unsafe_origin_x",
+       R"("ox":1000000000,"oy":0,"pw":10,"ph":20,"dpr":4,"z":1,"pdx":0,"pdy":0,"psx":0,"psy":0,"vbx":0,"vby":0,"vbw":10,"vbh":20)"},
+      {"unsafe_device_pixel_ratio",
+       R"("ox":0,"oy":0,"pw":10,"ph":20,"dpr":5,"z":1,"pdx":0,"pdy":0,"psx":0,"psy":0,"vbx":0,"vby":0,"vbw":10,"vbh":20)"},
+      {"unsafe_pixel_area",
+       R"("ox":0,"oy":0,"pw":8192,"ph":8192,"dpr":1,"z":1,"pdx":0,"pdy":0,"psx":0,"psy":0,"vbx":0,"vby":0,"vbw":10,"vbh":20)"},
+      {"unsafe_zoom",
+       R"("ox":0,"oy":0,"pw":10,"ph":20,"dpr":1,"z":33,"pdx":0,"pdy":0,"psx":0,"psy":0,"vbx":0,"vby":0,"vbw":10,"vbh":20)"},
   };
 
   for (const auto& testCase : cases) {
@@ -1103,6 +1232,10 @@ TEST(ReproFileTest, RejectsMalformedEventAndHitVariants) {
       {"event_missing_kind", R"(,"e":[{}])"},
       {"event_kind_not_string", R"(,"e":[{"k":123}])"},
       {"event_array_non_object", R"(,"e":[42])"},
+      {"key_down_missing_key", R"(,"e":[{"k":"kdown"}])"},
+      {"key_down_malformed_key", R"(,"e":[{"k":"kdown","key":bad}])"},
+      {"key_down_out_of_range", R"(,"e":[{"k":"kdown","key":2147483647}])"},
+      {"key_up_out_of_range", R"(,"e":[{"k":"kup","key":511}])"},
       {"hit_not_object", R"(,"e":[{"k":"mdown","hit":[]}])"},
       {"hit_empty_not_number", R"(,"e":[{"k":"mdown","hit":{"empty":"bad"}}])"},
       {"hit_tag_not_string", R"(,"e":[{"k":"mdown","hit":{"tag":123}}])"},
@@ -1151,6 +1284,15 @@ TEST(ReproFileTest, RejectsMalformedActionVariants) {
     std::error_code ec;
     std::filesystem::remove(path, ec);
   }
+}
+
+TEST(ReproFileTest, RejectsInvalidUtf8HiddenBehindUnknownStringEscape) {
+  std::string actionSuffix = R"(,"a":[{"k":"active_tool","tool":"\)";
+  actionSuffix.push_back(static_cast<char>(0xFF));
+  actionSuffix += R"("}])";
+
+  const std::string input = MetadataLineWith("") + FrameLineWith(actionSuffix);
+  EXPECT_FALSE(ParseReproFile(input).has_value());
 }
 
 TEST(ReproFileTest, ReadsWhitespacePrefixedNestedBlocksAndEmptyArrays) {
@@ -1300,6 +1442,164 @@ TEST(ReproFileTest, ReadsMetadataWithoutWindowArray) {
 
   std::error_code ec;
   std::filesystem::remove(path, ec);
+}
+
+TEST(ReproFileTest, RejectsUnsafeExternalSvgMetadataPaths) {
+  EXPECT_FALSE(
+      ParseReproFile(R"({"v":3,"svg":"../../outside.svg","wnd":[100,100],"scale":1})").has_value());
+  EXPECT_FALSE(
+      ParseReproFile(R"({"v":3,"svg":"/absolute.svg","wnd":[100,100],"scale":1})").has_value());
+  EXPECT_FALSE(
+      ParseReproFile(R"({"v":3,"svg":"..\u0000ignored/secret.svg","wnd":[100,100],"scale":1})")
+          .has_value());
+  EXPECT_FALSE(ParseReproFile(R"({"v":3,"svg":"invalid-\uD800.svg","wnd":[100,100],"scale":1})")
+                   .has_value());
+
+  std::string components;
+  for (std::size_t i = 0; i <= kMaximumReproSvgPathComponents; ++i) {
+    components += "a/";
+  }
+  EXPECT_FALSE(IsSafeReproSvgPath(components));
+  EXPECT_FALSE(IsSafeReproSvgPath(std::string(kMaximumReproSvgPathBytes + 1, 'a')));
+
+  EXPECT_TRUE(
+      ParseReproFile(
+          R"({"v":3,"svg":"/display-only.svg","svg_src":"<svg/>","wnd":[100,100],"scale":1})")
+          .has_value());
+}
+
+TEST(ReproFileTest, ReadsExternalSvgOnlyWithinReplayDirectory) {
+  const std::filesystem::path root = TempFile("external_svg_sandbox");
+  const std::filesystem::path nested = root / "nested";
+  std::filesystem::create_directories(nested);
+  const std::filesystem::path rnrPath = root / "recording.rnr";
+  const std::filesystem::path svgPath = nested / "input.svg";
+  WriteTextFile(rnrPath, R"({"v":3,"svg":"nested/input.svg","wnd":[100,100],"scale":1})");
+  WriteTextFile(svgPath, "<svg/>\n");
+
+  const std::optional<ReproSvgFile> loaded = ReadReproSvgFile(rnrPath, "nested/input.svg");
+  ASSERT_TRUE(loaded.has_value());
+  EXPECT_EQ(loaded->path, svgPath);
+  EXPECT_EQ(loaded->contents, "<svg/>\n");
+
+  EXPECT_FALSE(ReadReproSvgFile(rnrPath, "../outside.svg").has_value());
+  EXPECT_FALSE(ReadReproSvgFile(rnrPath, svgPath.string()).has_value());
+
+  std::error_code cleanupError;
+  std::filesystem::remove_all(root, cleanupError);
+}
+
+TEST(ReproFileTest, RejectsAggregateReplayPixelWork) {
+  std::string input = R"({"v":3,"wnd":[8192,2048],"scale":1,"exp":0})";
+  input.push_back('\n');
+  const std::size_t framePixels = static_cast<std::size_t>(8192) * 2048;
+  for (std::size_t frame = 0; frame <= kMaximumParsedReproPixelFrames / framePixels; ++frame) {
+    input += "{\"f\":" + std::to_string(frame) +
+             ",\"t\":0,\"dt\":0,\"mx\":0,\"my\":0,\"btn\":0,\"mod\":0}\n";
+  }
+  EXPECT_FALSE(ParseReproFile(input).has_value());
+}
+
+TEST(ReproFileTest, ResizeEventsCannotUnderchargeImmutableReplaySurface) {
+  std::string input = R"({"v":3,"wnd":[8192,2048],"scale":1,"exp":0})";
+  input.push_back('\n');
+  const std::size_t framePixels = static_cast<std::size_t>(8192) * 2048;
+  for (std::size_t frame = 0; frame <= kMaximumParsedReproPixelFrames / framePixels; ++frame) {
+    input += "{\"f\":" + std::to_string(frame) +
+             ",\"t\":0,\"dt\":0,\"mx\":0,\"my\":0,\"btn\":0,\"mod\":0,"
+             "\"e\":[{\"k\":\"resize\",\"w\":1,\"h\":1}]}\n";
+  }
+  EXPECT_FALSE(ParseReproFile(input).has_value());
+}
+
+TEST(ReproFileTest, ParsesArchivedFramesBeyondPlaybackLimit) {
+  std::string input = R"({"v":3,"wnd":[1,1],"scale":1,"exp":0})";
+  input.push_back('\n');
+  for (std::size_t frame = 0; frame <= kMaximumReproPlaybackFrames; ++frame) {
+    input += "{\"f\":" + std::to_string(frame) +
+             ",\"t\":0,\"dt\":0,\"mx\":0,\"my\":0,\"btn\":0,\"mod\":0}\n";
+  }
+  const std::optional<ReproFile> parsed = ParseReproFile(input);
+  ASSERT_TRUE(parsed.has_value());
+  EXPECT_EQ(parsed->frames.size(), kMaximumReproPlaybackFrames + 1u);
+}
+
+TEST(ReproFileTest, RejectsOversizedEmbeddedSvgSource) {
+  std::string oversized(svg::parser::SVGParser::kDefaultMaximumInputSize + 1, 'a');
+  const std::string input =
+      "{\"v\":3,\"svg_src\":\"" + oversized + "\",\"wnd\":[1,1],\"scale\":1,\"exp\":0}\n";
+  EXPECT_FALSE(ParseReproFile(input).has_value());
+}
+
+TEST(ReproFileTest, RejectsOversizedFrameLineBeforeReturningActions) {
+  std::string oversized(kMaximumReproFrameLineBytes + 1, 'a');
+  const std::string input =
+      MetadataLineWith("") +
+      FrameLineWith(",\"a\":[{\"k\":\"style\",\"p\":\"fill\",\"v\":\"" + oversized + "\"}]");
+  EXPECT_FALSE(ParseReproFile(input).has_value());
+}
+
+TEST(ReproFileTest, RejectsOversizedStyleActionValue) {
+  std::string oversized(kMaximumReproActionPropertyValueBytes + 1, 'a');
+  const std::string input =
+      MetadataLineWith("") +
+      FrameLineWith(",\"a\":[{\"k\":\"style\",\"p\":\"fill\",\"v\":\"" + oversized + "\"}]");
+  EXPECT_FALSE(ParseReproFile(input).has_value());
+}
+
+TEST(ReproFileTest, RejectsOversizedNumericToken) {
+  const std::string input =
+      "{\"v\":" + std::string(1024, '1') + ",\"wnd\":[1,1],\"scale\":1,\"exp\":0}\n";
+  EXPECT_FALSE(ParseReproFile(input).has_value());
+}
+
+TEST(ReproFileTest, RejectsAggregateDecodedStringRetention) {
+  std::string input =
+      "{\"v\":3,\"svg\":\"\",\"at\":\"\",\"svg_base\":\"\",\"svg_hash\":\"\","
+      "\"svg_src\":\"" +
+      std::string(svg::parser::SVGParser::kDefaultMaximumInputSize, 'a') +
+      "\",\"wnd\":[1,1],\"scale\":1,\"exp\":0}\n";
+  const std::string value(kMaximumReproActionPropertyValueBytes, 'a');
+  const size_t frameCount =
+      (kMaximumReproRetainedStringBytes - svg::parser::SVGParser::kDefaultMaximumInputSize) /
+          kMaximumReproActionPropertyValueBytes +
+      1;
+  for (size_t frame = 0; frame < frameCount; ++frame) {
+    input += "{\"f\":" + std::to_string(frame) +
+             ",\"t\":0,\"dt\":0,\"mx\":0,\"my\":0,\"btn\":0,\"mod\":0,"
+             "\"a\":[{\"k\":\"style\",\"p\":\"fill\",\"v\":\"" +
+             value + "\"}]}\n";
+  }
+  EXPECT_FALSE(ParseReproFile(input).has_value());
+}
+
+TEST(ReproFileTest, RejectsExcessiveAggregateStructuralScanWork) {
+  const std::string input = "{\"v\":3,\"svg_src\":\"" +
+                            std::string(svg::parser::SVGParser::kDefaultMaximumInputSize, 'a') +
+                            "\",\"wnd\":[1,1],\"scale\":1,\"exp\":0}\n";
+  EXPECT_FALSE(ParseReproFile(input).has_value());
+}
+
+TEST(ReproFileTest, IgnoresKeySyntaxInsideJsonStrings) {
+  EXPECT_FALSE(ParseReproFile(R"({"svg_src":"<svg data-fake='\"v\":4'/>","wnd":[1,1],"scale":1})")
+                   .has_value());
+
+  const std::string input =
+      MetadataLineWith("") +
+      R"({"t":0,"dt":16,"mx":1,"my":2,"btn":0,"mod":0,"a":[{"k":"style","p":"fill","v":"\"f\":0"}]})"
+      "\n";
+  EXPECT_FALSE(ParseReproFile(input).has_value());
+}
+
+TEST(ReproFileTest, BoundsAggregateReplayDiagnosticsRetention) {
+  ReplayDiagnosticsResourceBudget budget;
+  EXPECT_TRUE(budget.reserve(ReplayDiagnosticsResourceBudget::kMaximumBytes, 1));
+  EXPECT_FALSE(budget.reserve(1, 0));
+  EXPECT_TRUE(budget.rejected());
+
+  ReplayDiagnosticsResourceBudget itemBudget;
+  EXPECT_TRUE(itemBudget.reserve(1, ReplayDiagnosticsResourceBudget::kMaximumItems));
+  EXPECT_FALSE(itemBudget.reserve(0, 1));
 }
 
 TEST(ReproFileTest, WriteFailureWhenDestinationIsDirectory) {

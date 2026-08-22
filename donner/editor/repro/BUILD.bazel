@@ -4,12 +4,20 @@ load("//build_defs:rules.bzl", "donner_cc_library", "donner_cc_test")
 donner_cc_library(
     name = "repro_file",
     srcs = ["ReproFile.cc"],
-    hdrs = ["ReproFile.h"],
+    hdrs = [
+        "ReplayResourceBudget.h",
+        "ReproFile.h",
+    ],
     visibility = [
         "//donner/editor:__subpackages__",
         "//tools/mcp-servers/editor-control:__pkg__",
     ],
-    deps = [],
+    deps = [
+        "//donner/base",
+        "//donner/editor:imgui_headers",
+        "//donner/svg/parser",
+        "//donner/svg/resources:sandboxed_file_resource_loader",
+    ],
 )
 
 donner_cc_library(
@@ -63,6 +71,7 @@ donner_cc_test(
         ":repro_file",
         ":repro_recorder",
         "//donner/editor:imgui_headers",
+        "//donner/svg/parser",
         "@com_google_gtest//:gtest_main",
         "@imgui",
     ],

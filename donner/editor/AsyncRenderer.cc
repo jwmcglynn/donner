@@ -408,6 +408,12 @@ bool AsyncRenderer::hasRenderInFlightForTesting() const {
          compositorWarmupActive_;
 }
 
+bool AsyncRenderer::hasPendingRenderForTesting() const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  const auto* rendering = std::get_if<RenderingState>(&workerState_);
+  return rendering != nullptr && rendering->pendingRequest.has_value();
+}
+
 bool AsyncRenderer::waitUntilNoRenderInFlightForTesting(
     std::chrono::steady_clock::time_point deadline) {
   std::unique_lock<std::mutex> lock(mutex_);
@@ -436,6 +442,10 @@ void AsyncRenderer::requestRender(const RenderRequest& request) {
     }
     RenderRequest stagedRequest = request;
     stagedRequest.queuedAt = std::chrono::steady_clock::now();
+    svg::SVGDocument& stagedDocument = stagedRequest.lease.document();
+    if (stagedDocument.threadingMode() != svg::ThreadingMode::ConcurrentDom) {
+      stagedDocument.setThreadingMode(svg::ThreadingMode::ConcurrentDom);
+    }
     if (!request.structuralRemap.empty()) {
       retainedStructuralRemaps_[request.documentGeneration] = request.structuralRemap;
     } else {
@@ -953,17 +963,11 @@ void AsyncRenderer::workerLoop() {
         std::chrono::duration<double, std::milli>(workerStart - workerDequeuedAt).count();
     std::optional<RenderResult::CompositedPreview> compositedPreview;
 
-    // §concurrent-dom: serialize this worker render against UI-thread DOM reads. The lease shares
-    // the live registry (it does not snapshot), and the worker cannot touch the document in
-    // SingleThreaded mode (owner-thread assert). The document is flipped to ConcurrentDom on first
-    // render and stays there for the editor's lifetime - UI-thread reads are responsible for
-    // holding their own access guard (`withReadAccess` / a scoped `DocumentReadAccess`) where they
-    // touch the live document. The worker holds a write guard across the document-reading render
-    // work and releases it via `releaseDocumentAccess()` before every `mutex_` section below to
-    // avoid a lock-order inversion against UI threads holding `mutex_` while reading the DOM.
-    if (requestDocument.threadingMode() != svg::ThreadingMode::ConcurrentDom) {
-      requestDocument.setThreadingMode(svg::ThreadingMode::ConcurrentDom);
-    }
+    // §concurrent-dom: serialize this worker render against UI-thread DOM reads. requestRender()
+    // transitions the shared document before publishing it to this worker, so no UI read can
+    // acquire a SingleThreaded guard while the worker concurrently changes the mode. The worker
+    // holds a write guard across document-reading work and releases it via releaseDocumentAccess()
+    // before every mutex_ section below to avoid a lock-order inversion.
     std::optional<svg::DocumentWriteAccess> documentAccess;
     documentAccess.emplace(requestDocument.writeAccess());
     const auto releaseDocumentAccess = [&]() { documentAccess.reset(); };

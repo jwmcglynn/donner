@@ -1,6 +1,7 @@
 #pragma once
 /// @file
 
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <memory>
@@ -33,9 +34,18 @@ struct EncodedImage {
 
 /// Result of an editor-control tool call.
 struct ToolCallResult {
+  /// Maximum encoded image bytes retained by one MCP tool response.
+  static constexpr std::size_t kMaximumCaptureBytes = 32 * 1024 * 1024;
+  /// Maximum image items retained by one MCP tool response.
+  static constexpr std::size_t kMaximumCaptureItems = 32;
+  /// Maximum raw bitmap bytes encoded for one attachment.
+  static constexpr std::size_t kMaximumCaptureSourceBytes = 24 * 1024 * 1024;
+
   nlohmann::json body;
   std::vector<EncodedImage> images;
   bool isError = false;
+  std::size_t retainedCaptureBytes = 0;
+  bool captureBudgetExceeded = false;
 };
 
 /// Headless editor session exposed through the editor-control MCP server.
@@ -183,8 +193,6 @@ private:
   void appendRnrActionFrame(repro::ReproAction action);
   [[nodiscard]] repro::ReproViewport currentReproViewport() const;
   [[nodiscard]] Vector2d currentRecordingScreenPoint(const Vector2d& documentPoint) const;
-  [[nodiscard]] std::optional<std::filesystem::path> resolveRnrSvgPath(
-      const std::filesystem::path& rnrPath, std::string_view recordingSvgPath) const;
   [[nodiscard]] bool syncCanvasSize(const ViewportState& viewport);
   [[nodiscard]] bool drainPendingWritebacks();
   void syncSourceTextFromDocumentIfChanged();
@@ -229,6 +237,7 @@ private:
   };
 
   RnrRecordingState rnrRecording_;
+  [[nodiscard]] bool recordingCanAppendFrames(std::size_t frameCount) const;
   std::string currentSourcePath_;
   std::string currentSourceText_;
   std::uint64_t sourceRevision_ = 0;

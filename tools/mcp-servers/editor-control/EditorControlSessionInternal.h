@@ -29,6 +29,10 @@ namespace donner::editor::mcp {
 inline constexpr int kDefaultCanvasWidth = 892;
 inline constexpr int kDefaultCanvasHeight = 512;
 inline constexpr int kMaxDragFrames = 240;
+inline constexpr std::size_t kMaximumRetainedGestureFrameResults = 32;
+inline constexpr int kMaximumRetainedReplayFrameResults = 64;
+inline constexpr std::size_t kMaximumPenPathPoints = 1024;
+inline constexpr int kMaximumGlReplayTimeoutMs = 5 * 60 * 1000;
 
 Entity SelectedGraphicsEntity(EditorApp& app);
 
@@ -78,6 +82,8 @@ nlohmann::json BitmapSummary(const svg::RendererBitmap& bitmap);
 int AttachBitmapImage(ToolCallResult* out, const std::string& label,
                       const svg::RendererBitmap& bitmap, bool embedBase64,
                       nlohmann::json* metadata);
+int AttachPngBytes(ToolCallResult* out, const std::string& label, std::span<const uint8_t> png,
+                   bool embedBase64, nlohmann::json* metadata);
 
 nlohmann::json DisplayFrameJson(const EditorControlSession::DisplayFrameSnapshot& display);
 nlohmann::json RenderResultsJson(

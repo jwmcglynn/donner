@@ -820,7 +820,8 @@ bool LineRangeContains(const std::vector<LineRange>& ranges, int lineNo) {
 bool FocusPartitionsEqual(const FocusPartition& lhs, const FocusPartition& rhs) {
   return lhs.fullColor == rhs.fullColor && lhs.referenceColor == rhs.referenceColor &&
          lhs.dimmed == rhs.dimmed && lhs.hidden == rhs.hidden &&
-         lhs.referenceLinks == rhs.referenceLinks;
+         lhs.referenceLinks == rhs.referenceLinks &&
+         lhs.resourceLimitExceeded == rhs.resourceLimitExceeded;
 }
 
 std::string LineToString(const Line& line) {
@@ -2273,7 +2274,10 @@ void TextEditor::renderFocusReferenceLinks(ImDrawList* drawList) {
     return bounds;
   };
   drawList->PushClipRect(clipMin, clipMax, true);
-  for (const FocusReferenceLink& link : focusPartition_.referenceLinks) {
+  const std::size_t layoutCount =
+      std::min(focusPartition_.referenceLinks.size(), kMaximumFocusReferenceLayoutsPerFrame);
+  for (std::size_t layoutIndex = 0; layoutIndex < layoutCount; ++layoutIndex) {
+    const FocusReferenceLink& link = focusPartition_.referenceLinks[layoutIndex];
     const auto layoutStart = std::chrono::steady_clock::now();
     std::optional<FocusReferenceConnectorLayout> layout =
         focusReferenceConnectorLayout(link, visibleLinkIndex);

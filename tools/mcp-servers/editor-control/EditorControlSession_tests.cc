@@ -1,5 +1,8 @@
 #include "tools/mcp-servers/editor-control/EditorControlSession.h"
 
+#include <fcntl.h>
+#include <unistd.h>
+
 #include <algorithm>
 #include <array>
 #include <cstdint>
@@ -14,12 +17,15 @@
 #include <vector>
 
 #include "donner/base/tests/TestTempDir.h"
+#include "donner/editor/repro/ReplayResourceBudget.h"
 #include "donner/editor/repro/ReproFile.h"
 #include "donner/editor/tests/BitmapGoldenCompare.h"
 #include "donner/svg/renderer/Renderer.h"
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
 #include "nlohmann/json.hpp"
+#include "tools/mcp-servers/editor-control/EditorControlSessionGlReadback.h"
+#include "tools/mcp-servers/editor-control/EditorControlSessionInternal.h"
 
 namespace donner::editor::mcp {
 namespace {
@@ -40,6 +46,13 @@ using nlohmann::json;
 using ::testing::ElementsAreArray;
 
 using donner::TestTempDir;
+
+json ReadSourceState(EditorControlSession* session) {
+  const ToolCallResult source =
+      session->handleToolCall("get_svg_source", json{{"offset", 0}, {"length", 0}});
+  EXPECT_FALSE(source.isError) << source.body.dump(2);
+  return source.body.value("source", json::object());
+}
 
 constexpr std::string_view kFilteredScene = R"svg(
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 80" width="120" height="80">
@@ -516,10 +529,10 @@ TEST(EditorControlSessionTest, DraggingSplashBackgroundDropsGhostPixelsFromPrese
   // it through the same Layers-panel handler the UI uses before dragging it.
   ToolCallResult unlock =
       session.handleToolCall("click_layer_button", json{{"selector", "#Background"},
-                                                       {"button", "lock"},
-                                                       {"include_display_before_render", false},
-                                                       {"include_final_frame", false},
-                                                       {"include_display_frame", false}});
+                                                        {"button", "lock"},
+                                                        {"include_display_before_render", false},
+                                                        {"include_final_frame", false},
+                                                        {"include_display_frame", false}});
   ASSERT_TRUE(unlock.body.value("ok", false)) << unlock.body.dump(2);
   ASSERT_EQ(unlock.body["after"].value("locked", true), false) << unlock.body.dump(2);
 
@@ -1505,6 +1518,200 @@ TEST(EditorControlSessionTest, ChangingFillOnNewPenPathUpdatesSettledFrame) {
   ToolCallResult source = session.handleToolCall("get_svg_source", json::object());
   ASSERT_TRUE(source.body.value("ok", false)) << source.body.dump(2);
   EXPECT_NE(source.body.value("text", "").find("fill: #ff0000"), std::string::npos);
+}
+
+TEST(EditorControlSessionTest, RejectsPenPathPointAmplificationTransactionally) {
+  EditorControlSession session;
+  ASSERT_TRUE(session
+                  .handleToolCall("load_svg",
+                                  json{{"svg_source", "<svg xmlns='http://www.w3.org/2000/svg'/>"},
+                                       {"render_after_load", false}})
+                  .body.value("ok", false));
+  const json sourceBefore = ReadSourceState(&session);
+
+  json points = json::array();
+  for (std::size_t i = 0; i <= kMaximumPenPathPoints; ++i) {
+    points.push_back(json{{"x", static_cast<double>(i)}, {"y", 0.0}});
+  }
+  const ToolCallResult result = session.handleToolCall(
+      "pen_path", json{{"points", std::move(points)}, {"render_after_path", false}});
+
+  EXPECT_TRUE(result.isError) << result.body.dump(2);
+  EXPECT_THAT(result.body.value("error", ""), ::testing::HasSubstr("maximum pen path point count"));
+  EXPECT_EQ(ReadSourceState(&session), sourceBefore);
+}
+
+TEST(EditorControlSessionTest, BoundsCaptureItemsAndBytesBeforeEncoding) {
+  ToolCallResult itemLimited;
+  for (std::size_t i = 0; i < ToolCallResult::kMaximumCaptureItems; ++i) {
+    json metadata;
+    EXPECT_EQ(AttachPngBytes(&itemLimited, "image", std::array<uint8_t, 1>{0}, false, &metadata),
+              static_cast<int>(i));
+  }
+  json itemMetadata;
+  EXPECT_EQ(
+      AttachPngBytes(&itemLimited, "overflow", std::array<uint8_t, 1>{0}, false, &itemMetadata),
+      -1);
+  EXPECT_TRUE(itemLimited.captureBudgetExceeded);
+  EXPECT_EQ(itemLimited.images.size(), ToolCallResult::kMaximumCaptureItems);
+
+  ToolCallResult byteLimited;
+  const std::vector<uint8_t> oversizedPng(ToolCallResult::kMaximumCaptureSourceBytes + 1u, 0u);
+  json byteMetadata;
+  EXPECT_EQ(AttachPngBytes(&byteLimited, "oversized", oversizedPng, false, &byteMetadata), -1);
+  EXPECT_TRUE(byteLimited.captureBudgetExceeded);
+  EXPECT_TRUE(byteLimited.images.empty());
+}
+
+TEST(EditorControlSessionTest, RejectsExcessiveGlReplayTimeoutBeforeLaunchingHelper) {
+  EditorControlSession session;
+  const ToolCallResult result =
+      session.handleToolCall("replay_rnr", json{{"rnr_path", "missing.rnr"},
+                                                {"gl_readback", true},
+                                                {"gl_timeout_ms", kMaximumGlReplayTimeoutMs + 1}});
+
+  EXPECT_TRUE(result.isError);
+  EXPECT_THAT(result.body.value("error", ""), ::testing::HasSubstr("timeout limit"));
+}
+
+TEST(EditorControlSessionTest, RejectsExcessiveReplayFrameResultsBeforeReadingFile) {
+  EditorControlSession session;
+  const ToolCallResult result = session.handleToolCall(
+      "replay_rnr", json{{"rnr_path", "missing.rnr"},
+                         {"max_frame_results", kMaximumRetainedReplayFrameResults + 1}});
+
+  EXPECT_TRUE(result.isError);
+  EXPECT_THAT(result.body.value("error", ""), ::testing::HasSubstr("response limit"));
+}
+
+TEST(EditorControlSessionTest, ReplayUsesBoundedFrameResultDefault) {
+  const std::filesystem::path rnrPath = TestTempDir() / "mcp_replay_default_results.rnr";
+  repro::ReproFile replay;
+  replay.metadata.svgPath = "embedded.svg";
+  replay.metadata.svgSource = "<svg xmlns='http://www.w3.org/2000/svg'/>";
+  replay.metadata.windowWidth = 32;
+  replay.metadata.windowHeight = 32;
+  replay.metadata.displayScale = 1.0;
+  replay.frames.push_back(repro::ReproFrame{});
+  ASSERT_TRUE(repro::WriteReproFile(rnrPath, replay));
+
+  EditorControlSession session;
+  const ToolCallResult result =
+      session.handleToolCall("replay_rnr", json{{"rnr_path", rnrPath.string()},
+                                                {"render_each_frame", false},
+                                                {"include_frame_results", false}});
+
+  EXPECT_FALSE(result.isError) << result.body.dump(2);
+  EXPECT_TRUE(result.body.value("ok", false)) << result.body.dump(2);
+}
+
+TEST(EditorControlSessionTest, BoundsGlReplayHelperOutputBeforeRetention) {
+  std::string output(kMaximumGlReplayProcessOutputBytes - 1u, 'a');
+  EXPECT_FALSE(AppendBoundedGlReplayProcessOutput(&output, "bc"));
+  EXPECT_EQ(output.size(), kMaximumGlReplayProcessOutputBytes);
+  EXPECT_EQ(output.back(), 'b');
+}
+
+TEST(EditorControlSessionTest, ClosesGlReplayOutputPipeAtRetentionLimit) {
+  int pipeFds[2] = {-1, -1};
+  ASSERT_EQ(::pipe(pipeFds), 0);
+  ASSERT_NE(::fcntl(pipeFds[0], F_SETFL, O_NONBLOCK), -1);
+  ASSERT_EQ(::write(pipeFds[1], "bc", 2), 2);
+
+  std::string output(kMaximumGlReplayProcessOutputBytes - 1u, 'a');
+  bool isOpen = true;
+  bool outputLimitExceeded = false;
+  ReadAvailableGlReplayProcessOutput(pipeFds[0], &output, &isOpen, &outputLimitExceeded);
+
+  EXPECT_TRUE(outputLimitExceeded);
+  EXPECT_FALSE(isOpen);
+  EXPECT_EQ(output.size(), kMaximumGlReplayProcessOutputBytes);
+  EXPECT_EQ(::fcntl(pipeFds[0], F_GETFD), -1);
+  EXPECT_EQ(errno, EBADF);
+  ::close(pipeFds[1]);
+}
+
+TEST(EditorControlSessionTest, AppliesExecutionFrameBudgetToEveryMcpReplayMode) {
+  const std::filesystem::path tempDir = TestTempDir();
+  const std::filesystem::path rnrPath = tempDir / "mcp_replay_frame_budget.rnr";
+  repro::ReproFile replay;
+  replay.metadata.svgPath = "embedded.svg";
+  replay.metadata.svgSource = "<svg xmlns='http://www.w3.org/2000/svg'/>";
+  replay.metadata.windowWidth = 1024;
+  replay.metadata.windowHeight = 1024;
+  replay.metadata.displayScale = 1.0;
+  for (std::size_t i = 0;
+       i <= repro::ReplayExecutionResourceBudget::kMaximumPixelFrames / (1024u * 1024u); ++i) {
+    repro::ReproFrame frame;
+    frame.index = i;
+    replay.frames.push_back(std::move(frame));
+  }
+  ASSERT_TRUE(repro::WriteReproFile(rnrPath, replay));
+
+  for (const bool simulateShellLoop : {false, true}) {
+    EditorControlSession session;
+    const ToolCallResult result = session.handleToolCall(
+        "replay_rnr", json{{"rnr_path", rnrPath.string()},
+                           {"render_each_frame", false},
+                           {"simulate_editor_shell_frame_loop", simulateShellLoop},
+                           {"include_frame_results", false}});
+    EXPECT_TRUE(result.isError) << result.body.dump(2);
+    EXPECT_THAT(result.body.value("error", ""), ::testing::HasSubstr("execution frame budget"));
+  }
+}
+
+TEST(EditorControlSessionTest, RecordingAdmissionRejectsUnreplayableDurationTransactionally) {
+  EditorControlSession session;
+  ASSERT_TRUE(session
+                  .handleToolCall("load_svg",
+                                  json{{"svg_source", "<svg xmlns='http://www.w3.org/2000/svg'/>"},
+                                       {"render_after_load", false}})
+                  .body.value("ok", false));
+  ASSERT_TRUE(session
+                  .handleToolCall("start_rnr_recording",
+                                  json{{"frame_delta_ms", 5000.0}, {"write_file", false}})
+                  .body.value("ok", false));
+  ASSERT_TRUE(session
+                  .handleToolCall("pointer_gesture",
+                                  json{{"start_x", 0.0}, {"start_y", 0.0}, {"click_count", 2}})
+                  .body.value("ok", false));
+  const ToolCallResult stateBefore = session.handleToolCall("rnr_recording_state", json::object());
+  ASSERT_EQ(stateBefore.body.value("frame_count", 0u), 4u);
+
+  const ToolCallResult rejected = session.handleToolCall(
+      "pointer_gesture", json{{"start_x", 0.0}, {"start_y", 0.0}, {"click_count", 2}});
+  EXPECT_TRUE(rejected.isError);
+  EXPECT_THAT(rejected.body.value("error", ""), ::testing::HasSubstr("recording frame budget"));
+  const ToolCallResult stateAfter = session.handleToolCall("rnr_recording_state", json::object());
+  EXPECT_EQ(stateAfter.body.value("frame_count", 0u), 4u);
+}
+
+TEST(EditorControlSessionTest, RecordingAdmissionEnforcesAggregatePixelFrames) {
+  EditorControlSession session;
+  ASSERT_TRUE(session
+                  .handleToolCall("load_svg",
+                                  json{{"svg_source", "<svg xmlns='http://www.w3.org/2000/svg'/>"},
+                                       {"render_after_load", false}})
+                  .body.value("ok", false));
+  ASSERT_TRUE(session
+                  .handleToolCall("start_rnr_recording", json{{"window_width", 8192},
+                                                              {"window_height", 2048},
+                                                              {"display_scale", 1.0},
+                                                              {"frame_delta_ms", 1.0}})
+                  .body.value("ok", false));
+  const json doubleClick = {{"start_x", 0.0}, {"start_y", 0.0}, {"click_count", 2}};
+  ASSERT_TRUE(session.handleToolCall("pointer_gesture", doubleClick).body.value("ok", false));
+  ASSERT_TRUE(session.handleToolCall("pointer_gesture", doubleClick).body.value("ok", false));
+  ASSERT_EQ(
+      session.handleToolCall("rnr_recording_state", json::object()).body.value("frame_count", 0u),
+      8u);
+
+  const ToolCallResult rejected = session.handleToolCall("pointer_gesture", doubleClick);
+  EXPECT_TRUE(rejected.isError);
+  EXPECT_THAT(rejected.body.value("error", ""), ::testing::HasSubstr("recording frame budget"));
+  EXPECT_EQ(
+      session.handleToolCall("rnr_recording_state", json::object()).body.value("frame_count", 0u),
+      8u);
 }
 
 }  // namespace

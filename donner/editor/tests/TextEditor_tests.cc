@@ -3446,6 +3446,33 @@ TEST_F(TextEditorTests, FocusReferenceRopesDoNotCountOffscreenRoutesAgainstAnima
   EXPECT_NE(FocusReferenceRope(saggingLink), nullptr);
 }
 
+TEST_F(TextEditorTests, FocusReferenceLayoutWorkIsBoundedPerFrame) {
+  const std::size_t linkCount = kMaximumFocusReferenceLayoutsPerFrame + 32u;
+  editor.setWordWrapEnabled(false);
+  editor.setText(std::string(linkCount * 2u + 1u, 'x'));
+  editor.resetTextChanged();
+
+  std::vector<FocusReferenceLink> links;
+  links.reserve(linkCount);
+  for (std::size_t i = 0; i < linkCount; ++i) {
+    links.push_back(FocusReferenceLink{
+        .from = SourcePoint{.line = 0, .column = static_cast<int>(i * 2u)},
+        .to = SourcePoint{.line = 0, .column = 0},
+    });
+  }
+  editor.setFocusPartition(FocusPartition{
+      .fullColor = {LineRange{.startLine = 0, .endLine = 1}},
+      .referenceLinks = std::move(links),
+  });
+
+  RenderEditorFrame(ImVec2(760.0f, 160.0f));
+
+  const FrameCostBreakdown::SourceRopes& ropeCost = editor.lastSourceRopeCost();
+  EXPECT_EQ(ropeCost.candidateCount, static_cast<int>(linkCount));
+  EXPECT_EQ(ropeCost.laidOutCount, static_cast<int>(kMaximumFocusReferenceLayoutsPerFrame));
+  EXPECT_LE(ropeCost.drawnCount, static_cast<int>(kMaximumFocusReferenceLayoutsPerFrame));
+}
+
 TEST_F(TextEditorTests, FocusReferenceRopesClipToScrolledSourceViewport) {
   editor.setText(LongFocusReferenceSource());
   editor.resetTextChanged();
