@@ -770,6 +770,10 @@ struct GeoEncoder::Impl : public GeodeTextureEncoder::UniformScratch {
   bool submitResidentGradientDraw(GeodeResidentGradientSlot& slot, const EncodedPath& encoded,
                                   GradientUniforms& u);
 
+  /// Write and retain one gradient uniform snapshot when it changed. A
+  /// rejected CPU-mirror reservation keeps rendering but skips the cache.
+  void publishGradientUniform(GeodeResidentGradientSlot& slot, const GradientUniforms& u);
+
   /// Fill the common prefix of a gradient uniform (mvp, viewport, stops,
   /// spread, kind, clip flags, AA) for the linear variant, plus the
   /// linear-specific endpoints. Shared by the arena and resident paths so
@@ -984,6 +988,20 @@ struct GeoEncoder::Impl : public GeodeTextureEncoder::UniformScratch {
 
   bool canEncodeGeometry() const {
     return geometryAdmission == nullptr || geometryAdmission->canEncodeGeometry();
+  }
+
+  const EncodedPath* resolveEncodedPath(const Path* path, FillRule rule,
+                                        const EncodedPath* precomputedEncoded,
+                                        EncodedPath& ownedEncoded) {
+    if (precomputedEncoded != nullptr) {
+      return precomputedEncoded;
+    }
+    if (path == nullptr || !canEncodeGeometry()) {
+      return nullptr;
+    }
+    device->countPathEncode();
+    ownedEncoded = GeodePathEncoder::encode(*path, rule);
+    return &ownedEncoded;
   }
 
   bool admitReadyGeometry(const EncodedPath& encoded, std::size_t logicalDraws) {
@@ -1523,14 +1541,10 @@ void GeoEncoder::fillPathIntoMask(const Path& path, FillRule rule,
   // the bind group is always complete, even if `beginMaskPass` fires
   // before any main draw.
   EncodedPath ownedEncoded;
-  const EncodedPath* encodedPtr = precomputedEncoded;
-  if (!encodedPtr) {
-    if (!impl_->canEncodeGeometry()) {
-      return;
-    }
-    impl_->device->countPathEncode();
-    ownedEncoded = GeodePathEncoder::encode(path, rule);
-    encodedPtr = &ownedEncoded;
+  const EncodedPath* encodedPtr =
+      impl_->resolveEncodedPath(&path, rule, precomputedEncoded, ownedEncoded);
+  if (encodedPtr == nullptr) {
+    return;
   }
   const EncodedPath& encoded = *encodedPtr;
   if (!impl_->admitGeometry(encoded, 1u) || encoded.empty()) {
@@ -2161,7 +2175,9 @@ void GeoEncoder::Impl::publishSlotPaint(GeodeResidentSlot& slot, const FillDrawA
       std::memcmp(slot.lastPaint.data(), bytes, sizeof(rows)) != 0) {
     device->queue().writeBuffer(slot.buffer, slot.paint.offset, rows, sizeof(rows));
     device->countBufferWrite(sizeof(rows));
-    slot.lastPaint.assign(bytes, bytes + sizeof(rows));
+    if (slot.reservePaintMirror(sizeof(rows))) {
+      slot.lastPaint.assign(bytes, bytes + sizeof(rows));
+    }
   }
 }
 
@@ -2300,7 +2316,9 @@ void GeoEncoder::Impl::publishSoloUniform(GeodeResidentSlot& slot, const FillDra
 
   device->queue().writeBuffer(slot.buffer, slot.uniform.offset, &u, sizeof(Uniforms));
   device->countBufferWrite(sizeof(Uniforms));
-  slot.lastUniform.assign(uBytes, uBytes + sizeof(Uniforms));
+  if (slot.reserveUniformMirror(sizeof(Uniforms))) {
+    slot.lastUniform.assign(uBytes, uBytes + sizeof(Uniforms));
+  }
 }
 
 bool GeoEncoder::Impl::publishInstanceRecord(GeodeResidentSlot& slot, const InstanceRecord& record,
@@ -2327,7 +2345,9 @@ bool GeoEncoder::Impl::publishInstanceRecord(GeodeResidentSlot& slot, const Inst
                               sizeof(InstanceRecord));
   device->countBufferWrite(sizeof(InstanceRecord));
   if (cache != nullptr) {
-    cache->assign(rBytes, rBytes + sizeof(InstanceRecord));
+    if (recordSlotOverride != nullptr || slot.reserveRecordMirror(sizeof(InstanceRecord))) {
+      cache->assign(rBytes, rBytes + sizeof(InstanceRecord));
+    }
   }
   return true;
 }
@@ -2653,14 +2673,10 @@ void GeoEncoder::fillPathPattern(const Path& path, FillRule rule, const PatternP
   }
 
   EncodedPath ownedEncoded;
-  const EncodedPath* encoded = precomputedEncoded;
+  const EncodedPath* encoded =
+      impl_->resolveEncodedPath(&path, rule, precomputedEncoded, ownedEncoded);
   if (encoded == nullptr) {
-    if (!impl_->canEncodeGeometry()) {
-      return;
-    }
-    impl_->device->countPathEncode();
-    ownedEncoded = GeodePathEncoder::encode(path, rule);
-    encoded = &ownedEncoded;
+    return;
   }
   if (!impl_->admitReadyGeometry(*encoded, 1u)) {
     return;
@@ -2713,14 +2729,10 @@ void GeoEncoder::submitFillDraw(const FillDrawArgs& args, std::span<const float>
   // (`GeodePathCacheComponent`). Cache hits skip both the encode
   // work and the `pathEncodes` counter bump.
   EncodedPath ownedEncoded;
-  const EncodedPath* encodedPtr = args.precomputedEncoded;
-  if (!encodedPtr) {
-    if (!impl_->canEncodeGeometry()) {
-      return;
-    }
-    impl_->device->countPathEncode();
-    ownedEncoded = GeodePathEncoder::encode(*args.path, args.rule);
-    encodedPtr = &ownedEncoded;
+  const EncodedPath* encodedPtr =
+      impl_->resolveEncodedPath(args.path, args.rule, args.precomputedEncoded, ownedEncoded);
+  if (encodedPtr == nullptr) {
+    return;
   }
   const EncodedPath& encoded = *encodedPtr;
   if ((requireAdmission && !impl_->admitGeometry(encoded, args.instanceCount)) || encoded.empty()) {
@@ -3143,15 +3155,7 @@ bool GeoEncoder::Impl::submitResidentGradientDraw(GeodeResidentGradientSlot& slo
     return false;
   }
 
-  // Rewrite the gradient uniform only when it actually changed, mirroring
-  // the fill path. A static re-render produces byte-identical uniforms.
-  const auto* uBytes = reinterpret_cast<const uint8_t*>(&u);
-  if (slot.lastUniform.size() != sizeof(GradientUniforms) ||
-      std::memcmp(slot.lastUniform.data(), uBytes, sizeof(GradientUniforms)) != 0) {
-    device->queue().writeBuffer(slot.buffer, slot.uniform.offset, &u, sizeof(GradientUniforms));
-    device->countBufferWrite(sizeof(GradientUniforms));
-    slot.lastUniform.assign(uBytes, uBytes + sizeof(GradientUniforms));
-  }
+  publishGradientUniform(slot, u);
 
   if (!slot.bindGroup) {
     buildResidentGradientBindGroup(slot);
@@ -3164,6 +3168,20 @@ bool GeoEncoder::Impl::submitResidentGradientDraw(GeodeResidentGradientSlot& slo
   return true;
 }
 
+void GeoEncoder::Impl::publishGradientUniform(GeodeResidentGradientSlot& slot,
+                                              const GradientUniforms& u) {
+  const auto* uBytes = reinterpret_cast<const uint8_t*>(&u);
+  if (slot.lastUniform.size() == sizeof(GradientUniforms) &&
+      std::memcmp(slot.lastUniform.data(), uBytes, sizeof(GradientUniforms)) == 0) {
+    return;
+  }
+  device->queue().writeBuffer(slot.buffer, slot.uniform.offset, &u, sizeof(GradientUniforms));
+  device->countBufferWrite(sizeof(GradientUniforms));
+  if (slot.reserveUniformMirror(sizeof(GradientUniforms))) {
+    slot.lastUniform.assign(uBytes, uBytes + sizeof(GradientUniforms));
+  }
+}
+
 void GeoEncoder::fillPathLinearGradient(const Path& path, const LinearGradientParams& params,
                                         FillRule rule, const EncodedPath* precomputedEncoded) {
   if (params.stops.empty()) {
@@ -3173,14 +3191,10 @@ void GeoEncoder::fillPathLinearGradient(const Path& path, const LinearGradientPa
   // 1. CPU encode the path into Slug band data (same as fillPath) -
   // unless the path-encode cache already has a precomputed encode.
   EncodedPath ownedEncoded;
-  const EncodedPath* encodedPtr = precomputedEncoded;
-  if (!encodedPtr) {
-    if (!impl_->canEncodeGeometry()) {
-      return;
-    }
-    impl_->device->countPathEncode();
-    ownedEncoded = GeodePathEncoder::encode(path, rule);
-    encodedPtr = &ownedEncoded;
+  const EncodedPath* encodedPtr =
+      impl_->resolveEncodedPath(&path, rule, precomputedEncoded, ownedEncoded);
+  if (encodedPtr == nullptr) {
+    return;
   }
   const EncodedPath& encoded = *encodedPtr;
   if (!impl_->admitGeometry(encoded, 1u) || encoded.empty()) {
@@ -3205,14 +3219,10 @@ void GeoEncoder::fillPathRadialGradient(const Path& path, const RadialGradientPa
   }
 
   EncodedPath ownedEncoded;
-  const EncodedPath* encodedPtr = precomputedEncoded;
-  if (!encodedPtr) {
-    if (!impl_->canEncodeGeometry()) {
-      return;
-    }
-    impl_->device->countPathEncode();
-    ownedEncoded = GeodePathEncoder::encode(path, rule);
-    encodedPtr = &ownedEncoded;
+  const EncodedPath* encodedPtr =
+      impl_->resolveEncodedPath(&path, rule, precomputedEncoded, ownedEncoded);
+  if (encodedPtr == nullptr) {
+    return;
   }
   const EncodedPath& encoded = *encodedPtr;
   if (!impl_->admitGeometry(encoded, 1u) || encoded.empty()) {

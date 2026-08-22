@@ -2812,7 +2812,10 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     }
     std::shared_ptr<geode::GeodeGlyphCache>& cache = *cachePtr;
     if (!cache || cache->owningDeviceId() != device->deviceId()) {
-      cache = std::make_shared<geode::GeodeGlyphCache>(device->deviceId());
+      cache = std::make_shared<geode::GeodeGlyphCache>(device->deviceId(),
+                                                       documentGeometryBudget(registry));
+    } else {
+      (void)documentGeometryBudget(registry);
     }
     // Trim to budget at the first touch of each frame, the same shape (and for
     // the same reason) as the slabs' pending-free merge: dropping an entry
@@ -2885,9 +2888,15 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     if (cursor.component != nullptr) {
       auto& occurrences = cursor.component->occurrences;
       if (cursor.next == occurrences.size() && cursor.component->recordSlab) {
-        geode::GeodeRecordSlab::Slot slot;
-        if (cursor.component->recordSlab->allocateSlot(*device, slot)) {
-          occurrences.push_back(geode::GeodeTextInstanceRecordComponent::Occurrence{slot, {}});
+        std::shared_ptr<geode::GeodeDocumentGeometryBudget> documentBudget =
+            documentGeometryBudget(registry);
+        if (cursor.component->reserveOccurrence(documentBudget)) {
+          geode::GeodeRecordSlab::Slot slot;
+          if (cursor.component->recordSlab->allocateSlot(*device, slot)) {
+            occurrences.push_back(geode::GeodeTextInstanceRecordComponent::Occurrence{slot, {}});
+          } else {
+            cursor.component->rollbackOccurrence();
+          }
         }
       }
       if (cursor.next < occurrences.size()) {
