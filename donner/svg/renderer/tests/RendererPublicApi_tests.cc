@@ -79,6 +79,46 @@ TEST(RendererSurfaceBudgetTest, RejectsAggregateBytesAndSurfaceCountWithoutOvers
   EXPECT_LE(countBudget.bytes(), RendererSurfaceBudget::kMaximumBytes);
 }
 
+TEST(RendererSurfaceBudgetTest, ReleasedSurfacesRestoreActiveCapacity) {
+  RendererSurfaceBudget budget;
+  EXPECT_TRUE(budget.reserve(4096, 4096, 4));
+  EXPECT_EQ(budget.bytes(), RendererSurfaceBudget::kMaximumBytes);
+  EXPECT_EQ(budget.surfaces(), 4u);
+
+  EXPECT_TRUE(budget.release(4096, 4096));
+  EXPECT_EQ(budget.bytes(), RendererSurfaceBudget::kMaximumBytes * 3u / 4u);
+  EXPECT_EQ(budget.surfaces(), 3u);
+
+  EXPECT_TRUE(budget.reserve(4096, 4096));
+  EXPECT_EQ(budget.bytes(), RendererSurfaceBudget::kMaximumBytes);
+  EXPECT_EQ(budget.surfaces(), 4u);
+  EXPECT_FALSE(budget.rejected());
+}
+
+TEST(RendererPublicApiTest, FrameResourceScopeKeepsOffscreenAndRootSurfaceCharges) {
+  std::unique_ptr<RendererInterface> renderer = CreateActiveRendererInstance();
+  ASSERT_NE(renderer, nullptr);
+  std::unique_ptr<RendererInterface> offscreen = renderer->createOffscreenInstance();
+  ASSERT_NE(offscreen, nullptr);
+  const RenderViewport viewport{.size = Vector2d(1.0, 1.0), .devicePixelRatio = 1.0};
+
+  renderer->beginFrameResourceScope();
+  offscreen->beginFrame(viewport);
+  offscreen->endFrame();
+  EXPECT_EQ(renderer->resourceStats().surfaceCount, 1u);
+
+  renderer->beginFrame(viewport);
+  renderer->endFrame();
+  EXPECT_EQ(renderer->resourceStats().surfaceCount, 2u)
+      << "the root pass must not erase an earlier offscreen charge in the same outer frame";
+  renderer->endFrameResourceScope();
+
+  renderer->beginFrame(viewport);
+  renderer->endFrame();
+  EXPECT_EQ(renderer->resourceStats().surfaceCount, 1u)
+      << "the next standalone frame starts a fresh budget epoch";
+}
+
 TEST(RendererDrawBudgetTest, RejectsEveryAggregateDimensionWithoutOvershoot) {
   RendererDrawBudget budget;
   EXPECT_TRUE(budget.reserve(

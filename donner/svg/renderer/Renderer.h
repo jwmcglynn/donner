@@ -152,6 +152,9 @@ public:
    */
   [[nodiscard]] RendererImage renderElement(SVGElement element, Vector2i sizePx);
 
+  void beginFrameResourceScope() override;
+  void endFrameResourceScope() override;
+
   /**
    * Begins a render pass for the given viewport.
    *

@@ -170,6 +170,12 @@ public:
     return true;
   }
 
+  /// Releases surfaces whose GPU use has completed. Implemented by the resource-budget repair.
+  [[nodiscard]] bool release(int /*width*/, int /*height*/, std::size_t /*surfaceCount*/ = 1,
+                             std::uint64_t /*bytesPerPixel*/ = 4) {
+    return true;
+  }
+
   [[nodiscard]] std::uint64_t bytes() const { return bytes_; }
   [[nodiscard]] std::size_t surfaces() const { return surfaces_; }
   [[nodiscard]] bool rejected() const { return rejected_; }
@@ -787,6 +793,19 @@ public:
 
   /// Returns the rendered height in device pixels.
   [[nodiscard]] virtual int height() const = 0;
+
+  /**
+   * Begins one aggregate resource-budget scope around a controller-managed frame.
+   *
+   * A controller may render several offscreen passes before the root render pass. Backends that
+   * share frame budgets with their offscreen instances override this pair so every pass consumes
+   * one budget epoch instead of resetting independently. Ordinary single-pass callers may omit
+   * the scope and continue to rely on \ref beginFrame.
+   */
+  virtual void beginFrameResourceScope() {}
+
+  /// Completes a scope opened by \ref beginFrameResourceScope.
+  virtual void endFrameResourceScope() {}
 
   /**
    * Begins a render pass with the given viewport. Implementations may allocate or reset
