@@ -454,6 +454,41 @@ std::optional<std::vector<GlyphComplexity>> ValidateGlyphOutlines(std::span<cons
   return complexities;
 }
 
+struct CffComplexityIndex {
+  std::unique_ptr<SfntFont::GlyphOutlineComplexity[]> glyphs;
+  std::size_t count = 0;
+};
+
+std::optional<CffComplexityIndex> BuildCffComplexityIndex(const SfntFont& font,
+                                                          std::span<const uint8_t> data,
+                                                          std::span<const uint8_t> cff,
+                                                          bool isCff2) {
+  const auto maxp = font.findTable(data, "maxp");
+  if (!maxp.has_value() || maxp->size() < 6 || (isCff2 && font.hasTable("fvar"))) {
+    return std::nullopt;
+  }
+  const std::size_t expectedGlyphs = ReadBe16(maxp->data() + 4);
+  const CffOutlineValidationResult validated =
+      ValidateCffOutlineComplexities(cff, isCff2, expectedGlyphs);
+  if (validated.status != CffOutlineValidationStatus::Complete ||
+      validated.glyphs.size() != expectedGlyphs) {
+    return std::nullopt;
+  }
+
+  CffComplexityIndex index;
+  index.count = expectedGlyphs;
+  if (index.count != 0) {
+    index.glyphs = std::make_unique<SfntFont::GlyphOutlineComplexity[]>(index.count);
+    for (std::size_t glyph = 0; glyph < index.count; ++glyph) {
+      index.glyphs[glyph] = {
+          .maximumVertices = validated.glyphs[glyph].maximumVertices,
+          .work = validated.glyphs[glyph].work,
+      };
+    }
+  }
+  return index;
+}
+
 }  // namespace
 
 uint32_t SfntTag(std::string_view tag) {
@@ -490,27 +525,10 @@ std::optional<SfntFont> SfntFont::Validate(std::span<const uint8_t> data) {
     return font;
   }
   if (!glyf.has_value()) {
-    const auto maxp = font.findTable(data, "maxp");
-    if (!maxp.has_value() || maxp->size() < 6 || (cff2.has_value() && font.hasTable("fvar"))) {
-      return font;
-    }
-    const std::size_t expectedGlyphs = ReadBe16(maxp->data() + 4);
-    const CffOutlineValidationResult validated = ValidateCffOutlineComplexities(
-        cff2.has_value() ? *cff2 : *cff1, cff2.has_value(), expectedGlyphs);
-    if (validated.status != CffOutlineValidationStatus::Complete ||
-        validated.glyphs.size() != expectedGlyphs) {
-      return font;
-    }
-    font.numGlyphs_ = expectedGlyphs;
-    if (font.numGlyphs_ != 0) {
-      font.glyphComplexities_ =
-          std::make_unique<SfntFont::GlyphOutlineComplexity[]>(font.numGlyphs_);
-      for (std::size_t glyph = 0; glyph < font.numGlyphs_; ++glyph) {
-        font.glyphComplexities_[glyph] = {
-            .maximumVertices = validated.glyphs[glyph].maximumVertices,
-            .work = validated.glyphs[glyph].work,
-        };
-      }
+    if (auto cffIndex = BuildCffComplexityIndex(font, data, cff2.has_value() ? *cff2 : *cff1,
+                                                cff2.has_value())) {
+      font.numGlyphs_ = cffIndex->count;
+      font.glyphComplexities_ = std::move(cffIndex->glyphs);
     }
     return font;
   }
