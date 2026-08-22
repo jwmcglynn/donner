@@ -485,6 +485,9 @@ public:
   /// Unlike `isBusy()`, a staged result waiting in `DoneState` is not in flight.
   [[nodiscard]] bool hasRenderInFlightForTesting() const;
 
+  /// Whether a render request is still queued rather than owned by the worker.
+  [[nodiscard]] bool hasPendingRenderForTesting() const;
+
   /**
    * Wait until no worker render is actively in flight.
    *

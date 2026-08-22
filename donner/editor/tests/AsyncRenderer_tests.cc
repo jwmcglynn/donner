@@ -370,6 +370,43 @@ TEST(AsyncRendererTest, GeometryOverlayForcesFlatFrameThenRepromotesSelectionWhe
   EXPECT_EQ(asyncRenderer.compositorResetCountForTesting(), resetCountAfterEnable + 1u);
 }
 
+TEST(AsyncRendererTest, StagedDocumentEntersConcurrentModeBeforeWorkerHandoff) {
+  svg::Renderer renderer;
+  AsyncRenderer asyncRenderer;
+
+  svg::SVGDocument blockingDocument = svg::instantiateSubtree(
+      R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 8 8"><rect width="8" height="8"/></svg>)");
+  blockingDocument.setCanvasSize(8, 8);
+  blockingDocument.setThreadingMode(svg::ThreadingMode::ConcurrentDom);
+  std::optional<svg::DocumentReadAccess> blockingAccess;
+  blockingAccess.emplace(blockingDocument.readAccess());
+
+  RenderRequest blockingRequest(renderer, blockingDocument);
+  blockingRequest.version = 1;
+  asyncRenderer.requestRender(blockingRequest);
+  ASSERT_TRUE(WaitUntil(
+      [&] {
+        return asyncRenderer.hasRenderInFlightForTesting() &&
+               !asyncRenderer.hasPendingRenderForTesting();
+      },
+      std::chrono::steady_clock::now() + std::chrono::seconds(5)));
+
+  svg::SVGDocument stagedDocument = svg::instantiateSubtree(
+      R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 8 8"><circle cx="4" cy="4" r="3"/></svg>)");
+  stagedDocument.setCanvasSize(8, 8);
+  ASSERT_EQ(stagedDocument.threadingMode(), svg::ThreadingMode::SingleThreaded);
+
+  RenderRequest stagedRequest(renderer, stagedDocument);
+  stagedRequest.version = 2;
+  asyncRenderer.requestRender(stagedRequest);
+  EXPECT_EQ(stagedDocument.threadingMode(), svg::ThreadingMode::ConcurrentDom);
+
+  blockingAccess.reset();
+  const std::optional<RenderResult> result = WaitForRenderResult(asyncRenderer);
+  ASSERT_TRUE(result.has_value());
+  EXPECT_EQ(result->version, 2u);
+}
+
 /// The worker's GPU-wait failure record is read by an edge-triggered
 /// publisher, so its generation is the whole contract: device loss is sticky
 /// and every later frame re-reports it, and a generation that moved each time

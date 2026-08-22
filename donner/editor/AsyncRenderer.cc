@@ -408,6 +408,12 @@ bool AsyncRenderer::hasRenderInFlightForTesting() const {
          compositorWarmupActive_;
 }
 
+bool AsyncRenderer::hasPendingRenderForTesting() const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  const auto* rendering = std::get_if<RenderingState>(&workerState_);
+  return rendering != nullptr && rendering->pendingRequest.has_value();
+}
+
 bool AsyncRenderer::waitUntilNoRenderInFlightForTesting(
     std::chrono::steady_clock::time_point deadline) {
   std::unique_lock<std::mutex> lock(mutex_);
