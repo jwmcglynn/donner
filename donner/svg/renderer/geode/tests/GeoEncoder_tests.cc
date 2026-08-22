@@ -40,6 +40,22 @@ using svg::test::Near;
 using svg::test::Rgba;
 using svg::test::RgbaEq;
 
+class ProbeGeometryAdmission final : public GeometryAdmission {
+public:
+  bool admitGeometry(const EncodedPath& /*encoded*/, std::size_t logicalDraws) override {
+    admittedDraws += logicalDraws;
+    return allow;
+  }
+
+  void releaseGeometry(const EncodedPath& /*encoded*/, std::size_t logicalDraws) override {
+    releasedDraws += logicalDraws;
+  }
+
+  bool allow = true;
+  std::size_t admittedDraws = 0;
+  std::size_t releasedDraws = 0;
+};
+
 /// Test fixture: shares a process-wide device and creates per-test render
 /// targets + readback buffer.
 ///
@@ -193,6 +209,44 @@ TEST_F(GeoEncoderTest, FillRect) {
   // Top-left corner should be black (outside the rect).
   auto corner = pixelAt(pixels, 4, 4);
   EXPECT_THAT(corner, RgbaEq(0, 0, 0, 255)) << "Corner should be clear black";
+}
+
+TEST_F(GeoEncoderTest, RejectedPatternGeometryAllocatesNoPatternGpuState) {
+  const Path path = PathBuilder().addRect(Box2d({16, 16}, {48, 48})).build();
+  const EncodedPath encoded = GeodePathEncoder::encode(path, FillRule::NonZero);
+  ASSERT_FALSE(encoded.empty());
+  ProbeGeometryAdmission admission;
+  admission.allow = false;
+
+  GeoEncoder encoder(*device_, *pipeline_, *gradientPipeline_, *imagePipeline_, target_);
+  encoder.setGeometryAdmission(&admission);
+  GeoEncoder::PatternPaint paint;
+  paint.tile = target_;
+  paint.tileSize = Vector2d(8.0, 8.0);
+  encoder.fillPathPattern(path, FillRule::NonZero, paint, &encoded);
+
+  EXPECT_EQ(admission.admittedDraws, 1u);
+  EXPECT_EQ(encoder.patternGpuPreparationsForTesting(), 0u)
+      << "Pattern sampler/view creation must follow successful geometry admission.";
+  encoder.finish();
+}
+
+TEST_F(GeoEncoderTest, DegenerateResidentRadialDoesNotConsumeGeometryAdmission) {
+  const Path path = PathBuilder().addRect(Box2d({16, 16}, {48, 48})).build();
+  const EncodedPath encoded = GeodePathEncoder::encode(path, FillRule::NonZero);
+  ASSERT_FALSE(encoded.empty());
+  ProbeGeometryAdmission admission;
+  RadialGradientParams::Stop stop;
+  RadialGradientParams params;
+  params.radius = 0.0;
+  params.stops = std::span<const RadialGradientParams::Stop>(&stop, 1u);
+  GeodeResidentGradientSlot slot;
+
+  GeoEncoder encoder(*device_, *pipeline_, *gradientPipeline_, *imagePipeline_, target_);
+  encoder.setGeometryAdmission(&admission);
+  encoder.fillPathRadialGradientResident(slot, encoded, params, FillRule::NonZero, 1u);
+  EXPECT_EQ(admission.admittedDraws, 0u);
+  encoder.finish();
 }
 
 TEST_F(GeoEncoderTest, TinyUniformScaleStillRasterizesHalfPixelHalo) {

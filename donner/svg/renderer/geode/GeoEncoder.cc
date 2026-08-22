@@ -971,6 +971,7 @@ struct GeoEncoder::Impl : public GeodeTextureEncoder::UniformScratch {
   Transform2d geometryDebugRootFromTarget;
   GeometryAdmission* geometryAdmission = nullptr;
   std::size_t pendingSceneAdmissions = 0;
+  std::size_t patternGpuPreparations = 0;
 
   bool admitGeometry(const EncodedPath& encoded, std::size_t logicalDraws) {
     if (geometryAdmission == nullptr) {
@@ -1690,6 +1691,14 @@ void GeoEncoder::setBufferPool(GeodeBufferPool* pool) {
 
 void GeoEncoder::setGeometryAdmission(GeometryAdmission* admission) {
   impl_->geometryAdmission = admission;
+}
+
+std::size_t GeoEncoder::patternGpuPreparationsForTesting() const {
+  return impl_->patternGpuPreparations;
+}
+
+std::size_t GeoEncoder::pendingSceneAdmissionsForTesting() const {
+  return impl_->pendingSceneAdmissions;
 }
 
 void GeoEncoder::recordGeometryDebugInstance(const EncodedPath& encoded,
@@ -2610,6 +2619,7 @@ void GeoEncoder::fillPathPattern(const Path& path, FillRule rule, const PatternP
     return;
   }
 
+  ++impl_->patternGpuPreparations;
   // Build a sampler for the tile. We use linear filtering with Repeat
   // wrap mode; the shader also performs explicit modulo-style wrapping
   // via `fract()` so texture sampling never steps outside [0,1] UVs, but

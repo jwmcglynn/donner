@@ -214,6 +214,12 @@ public:
   /** Install the mandatory geometry admission gate for renderer-owned encoders. */
   void setGeometryAdmission(GeometryAdmission* admission);
 
+  /// Number of pattern sampler/view preparation attempts made by this encoder.
+  [[nodiscard]] std::size_t patternGpuPreparationsForTesting() const;
+
+  /// Number of admitted scene instances not yet consumed by a batch draw.
+  [[nodiscard]] std::size_t pendingSceneAdmissionsForTesting() const;
+
   /**
    * Observe Slug draws recorded by this encoder.
    *
@@ -655,6 +661,9 @@ public:
                                  const GeodeRecordSlab::Slot* recordSlotOverride = nullptr,
                                  std::vector<uint8_t>* overrideRecordCache = nullptr,
                                  SceneRecordState* recordState = nullptr, bool publishPaint = true);
+
+  /** Cancel one prepared scene instance before demoting it to a different draw path. */
+  void releasePreparedSceneAdmission(const EncodedPath& encoded);
 
   /// One cross-entity ordered batch: consecutive resident slots of one
   /// slab chunk plus a run of consecutive record-slab slots.
