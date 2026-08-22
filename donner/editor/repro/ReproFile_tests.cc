@@ -1304,9 +1304,10 @@ TEST(ReproFileTest, ReadsWhitespacePrefixedNestedBlocksAndEmptyArrays) {
       R"("left_mouse_down_ordinal":1,"frame_offset_after_left_mouse_down":2,)"
       R"("min_frame_index":3,"max_frame_index":4,"target_selector":"#target",)"
       R"("crop_mode":"document","crop": 	{"x":5,"y":6,"w":7,"h":8})";
-  WriteTextFile(path, MetadataLineWith(std::string(R"(,"expect": 	{)") + expect + "}") +
-                          FrameLineWith(std::string(R"(,"vp": 	{)") + viewport +
-                                        R"(},"a":[],"e":[{"k":"mdown","hit": 	{"tag":"rect"}}])"));
+  WriteTextFile(path,
+                MetadataLineWith(std::string(R"(,"expect": 	{)") + expect + "}") +
+                    FrameLineWith(std::string(R"(,"vp": 	{)") + viewport +
+                                  R"(},"a":[],"e":[{"k":"mdown","hit": 	{"tag":"rect"}}])"));
 
   auto loaded = ReadReproFile(path);
   ASSERT_TRUE(loaded.has_value());
@@ -1518,14 +1519,16 @@ TEST(ReproFileTest, ResizeEventsCannotUnderchargeImmutableReplaySurface) {
   EXPECT_FALSE(ParseReproFile(input).has_value());
 }
 
-TEST(ReproFileTest, RejectsAggregateReplayFrameWork) {
+TEST(ReproFileTest, ParsesArchivedFramesBeyondPlaybackLimit) {
   std::string input = R"({"v":3,"wnd":[1,1],"scale":1,"exp":0})";
   input.push_back('\n');
   for (std::size_t frame = 0; frame <= kMaximumReproPlaybackFrames; ++frame) {
     input += "{\"f\":" + std::to_string(frame) +
              ",\"t\":0,\"dt\":0,\"mx\":0,\"my\":0,\"btn\":0,\"mod\":0}\n";
   }
-  EXPECT_FALSE(ParseReproFile(input).has_value());
+  const std::optional<ReproFile> parsed = ParseReproFile(input);
+  ASSERT_TRUE(parsed.has_value());
+  EXPECT_EQ(parsed->frames.size(), kMaximumReproPlaybackFrames + 1u);
 }
 
 TEST(ReproFileTest, RejectsOversizedEmbeddedSvgSource) {

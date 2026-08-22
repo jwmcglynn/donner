@@ -39,6 +39,33 @@ bool AppendBoundedGlReplayProcessOutput(std::string* output, std::string_view by
   return bytes.size() <= remaining;
 }
 
+void ReadAvailableGlReplayProcessOutput(int fd, std::string* output, bool* isOpen,
+                                        bool* outputLimitExceeded) {
+  char buffer[4096];
+  while (true) {
+    const ssize_t count = ::read(fd, buffer, sizeof(buffer));
+    if (count > 0) {
+      if (!AppendBoundedGlReplayProcessOutput(
+              output, std::string_view(buffer, static_cast<std::size_t>(count)))) {
+        *outputLimitExceeded = true;
+      }
+      continue;
+    }
+    if (count == 0) {
+      *isOpen = false;
+      ::close(fd);
+      return;
+    }
+    if (errno == EAGAIN || errno == EWOULDBLOCK) {
+      return;
+    }
+
+    *isOpen = false;
+    ::close(fd);
+    return;
+  }
+}
+
 namespace {
 
 using nlohmann::json;
@@ -124,32 +151,6 @@ bool PreparePipe(int pipeFds[2], std::string* error) {
     return false;
   }
   return true;
-}
-
-void ReadAvailableFd(int fd, std::string* output, bool* isOpen, bool* outputLimitExceeded) {
-  char buffer[4096];
-  while (true) {
-    const ssize_t count = ::read(fd, buffer, sizeof(buffer));
-    if (count > 0) {
-      if (!AppendBoundedGlReplayProcessOutput(
-              output, std::string_view(buffer, static_cast<std::size_t>(count)))) {
-        *outputLimitExceeded = true;
-      }
-      continue;
-    }
-    if (count == 0) {
-      *isOpen = false;
-      ::close(fd);
-      return;
-    }
-    if (errno == EAGAIN || errno == EWOULDBLOCK) {
-      return;
-    }
-
-    *isOpen = false;
-    ::close(fd);
-    return;
-  }
 }
 
 void PollChildExit(pid_t childPid, bool* childRunning, int* exitCode) {
@@ -250,16 +251,16 @@ ProcessRunResult RunProcess(std::span<const std::string> args, std::chrono::mill
     PollChildExit(childPid, &childRunning, &result.exitCode);
     if (!childRunning) {
       if (stdoutOpen) {
-        ReadAvailableFd(stdoutPipe[0], &result.stdoutText, &stdoutOpen,
-                        &result.outputLimitExceeded);
+        ReadAvailableGlReplayProcessOutput(stdoutPipe[0], &result.stdoutText, &stdoutOpen,
+                                           &result.outputLimitExceeded);
         if (stdoutOpen) {
           CloseFd(&stdoutPipe[0]);
         }
         stdoutOpen = false;
       }
       if (stderrOpen) {
-        ReadAvailableFd(stderrPipe[0], &result.stderrText, &stderrOpen,
-                        &result.outputLimitExceeded);
+        ReadAvailableGlReplayProcessOutput(stderrPipe[0], &result.stderrText, &stderrOpen,
+                                           &result.outputLimitExceeded);
         if (stderrOpen) {
           CloseFd(&stderrPipe[0]);
         }
@@ -302,11 +303,11 @@ ProcessRunResult RunProcess(std::span<const std::string> args, std::chrono::mill
             continue;
           }
           if (fds[i].fd == stdoutPipe[0]) {
-            ReadAvailableFd(stdoutPipe[0], &result.stdoutText, &stdoutOpen,
-                            &result.outputLimitExceeded);
+            ReadAvailableGlReplayProcessOutput(stdoutPipe[0], &result.stdoutText, &stdoutOpen,
+                                               &result.outputLimitExceeded);
           } else if (fds[i].fd == stderrPipe[0]) {
-            ReadAvailableFd(stderrPipe[0], &result.stderrText, &stderrOpen,
-                            &result.outputLimitExceeded);
+            ReadAvailableGlReplayProcessOutput(stderrPipe[0], &result.stderrText, &stderrOpen,
+                                               &result.outputLimitExceeded);
           }
         }
       }

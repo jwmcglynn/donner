@@ -26,6 +26,10 @@ inline constexpr std::size_t kMaximumGlReplayProcessOutputBytes = 16 * 1024 * 10
 /// Append helper output while retaining at most the process-output byte budget.
 bool AppendBoundedGlReplayProcessOutput(std::string* output, std::string_view bytes);
 
+/// Drain currently available helper output without exceeding the retained-output limit.
+void ReadAvailableGlReplayProcessOutput(int fd, std::string* output, bool* isOpen,
+                                        bool* outputLimitExceeded);
+
 std::string_view GlReadbackRunnerName(GlReadbackRunner runner);
 
 bool SelectGlReadbackRunner(GlReadbackRunner* out, std::string* error);

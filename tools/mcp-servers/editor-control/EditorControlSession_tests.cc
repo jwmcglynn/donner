@@ -1,5 +1,8 @@
 #include "tools/mcp-servers/editor-control/EditorControlSession.h"
 
+#include <fcntl.h>
+#include <unistd.h>
+
 #include <algorithm>
 #include <array>
 #include <cstdint>
@@ -1607,6 +1610,25 @@ TEST(EditorControlSessionTest, BoundsGlReplayHelperOutputBeforeRetention) {
   EXPECT_FALSE(AppendBoundedGlReplayProcessOutput(&output, "bc"));
   EXPECT_EQ(output.size(), kMaximumGlReplayProcessOutputBytes);
   EXPECT_EQ(output.back(), 'b');
+}
+
+TEST(EditorControlSessionTest, ClosesGlReplayOutputPipeAtRetentionLimit) {
+  int pipeFds[2] = {-1, -1};
+  ASSERT_EQ(::pipe(pipeFds), 0);
+  ASSERT_NE(::fcntl(pipeFds[0], F_SETFL, O_NONBLOCK), -1);
+  ASSERT_EQ(::write(pipeFds[1], "bc", 2), 2);
+
+  std::string output(kMaximumGlReplayProcessOutputBytes - 1u, 'a');
+  bool isOpen = true;
+  bool outputLimitExceeded = false;
+  ReadAvailableGlReplayProcessOutput(pipeFds[0], &output, &isOpen, &outputLimitExceeded);
+
+  EXPECT_TRUE(outputLimitExceeded);
+  EXPECT_FALSE(isOpen);
+  EXPECT_EQ(output.size(), kMaximumGlReplayProcessOutputBytes);
+  EXPECT_EQ(::fcntl(pipeFds[0], F_GETFD), -1);
+  EXPECT_EQ(errno, EBADF);
+  ::close(pipeFds[1]);
 }
 
 TEST(EditorControlSessionTest, AppliesExecutionFrameBudgetToEveryMcpReplayMode) {

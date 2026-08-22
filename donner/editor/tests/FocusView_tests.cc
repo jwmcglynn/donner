@@ -1456,6 +1456,32 @@ TEST(FocusViewTest, BoundsLineIndexBeforeRetainingNewlineOffsets) {
   EXPECT_LE(styleFocus->partition.traversalWork, kMaximumFocusTraversalWork);
 }
 
+TEST(FocusViewTest, ReportsFocusLineRangeTruncation) {
+  constexpr std::size_t kSelectionCount = 512;
+  std::string source = "<svg xmlns='http://www.w3.org/2000/svg'>";
+  for (std::size_t i = 0; i < kSelectionCount; ++i) {
+    source += "<g><g><g><g><g><rect id='selected" + std::to_string(i) + "'/></g></g></g></g></g>";
+  }
+  source += "</svg>";
+
+  ParseWarningSink warnings = ParseWarningSink::Disabled();
+  auto parsed = svg::parser::SVGParser::ParseSVG(source, warnings);
+  ASSERT_FALSE(parsed.hasError());
+  svg::SVGDocument document = std::move(parsed.result());
+  std::vector<svg::SVGElement> selection;
+  selection.reserve(kSelectionCount);
+  for (std::size_t i = 0; i < kSelectionCount; ++i) {
+    const std::optional<svg::SVGElement> element =
+        document.querySelector("#selected" + std::to_string(i));
+    ASSERT_TRUE(element.has_value());
+    selection.push_back(*element);
+  }
+
+  const FocusPartition partition = ComputeFocusPartition(document, selection);
+  EXPECT_TRUE(partition.resourceLimitExceeded);
+  EXPECT_LE(partition.dimmed.size(), kMaximumFocusLineRanges);
+}
+
 TEST(FocusViewTest, BoundsSelectAllReferenceSummaryTraversal) {
   constexpr std::size_t kSelectionCount = 8191;
   std::string source = "<svg xmlns='http://www.w3.org/2000/svg'>";
