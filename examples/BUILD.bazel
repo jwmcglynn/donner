@@ -20,6 +20,7 @@ donner_cc_binary(
         "codeql_text_full",
     ],
     deps = [
+        "//donner/base",
         "@donner",
     ],
 )
@@ -74,6 +75,7 @@ donner_cc_binary(
     }),
     deps = [
         "//:donner",
+        "//donner/base",
         # The viewer is intentionally minimal: donner core for the DOM,
         # parser, hit-test, and renderer; glad/glfw/imgui for the ImGui
         # shell; and exactly one library from //donner/editor — the
@@ -166,6 +168,7 @@ donner_cc_binary(
     deps = [
         ":geode_embed_surface",
         "//:donner",
+        "//donner/base",
         "//donner/svg/renderer:renderer_geode",
         "//donner/svg/renderer/geode:geode_device",
         "//donner/svg/renderer/geode:geode_wgpu_util",

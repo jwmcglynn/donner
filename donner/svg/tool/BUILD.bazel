@@ -1,6 +1,12 @@
-load("//build_defs:package.bzl", "donner_package")
 load("//build_defs:dep_audit.bzl", "forbidden_transitive_dep_test")
-load("//build_defs:rules.bzl", "donner_cc_binary", "donner_cc_library", "donner_cc_test")
+load("//build_defs:package.bzl", "donner_package")
+load(
+    "//build_defs:rules.bzl",
+    "donner_cc_binary",
+    "donner_cc_fuzzer",
+    "donner_cc_library",
+    "donner_cc_test",
+)
 
 alias(
     name = "tool",
@@ -62,6 +68,13 @@ donner_cc_test(
         "//donner/svg/renderer:terminal_image_viewer",
         "@com_google_gtest//:gtest_main",
     ],
+)
+
+donner_cc_fuzzer(
+    name = "donner_svg_tool_utils_fuzzer",
+    srcs = ["DonnerSvgToolUtils_fuzzer.cc"],
+    corpus = "testdata/donner_svg_tool_utils_corpus",
+    deps = [":donner_svg_tool_utils"],
 )
 
 donner_cc_test(

@@ -1,9 +1,13 @@
 #pragma once
 /// @file
 
+#include <filesystem>
+#include <optional>
 #include <string>
+#include <string_view>
 
 #include "donner/base/Box.h"
+#include "donner/base/TerminalEscape.h"
 #include "donner/svg/SVGElement.h"
 #include "donner/svg/renderer/RendererInterface.h"
 
@@ -16,6 +20,17 @@ namespace donner::svg {
  * @return Selector path from the root to the element.
  */
 std::string BuildCssSelectorPath(const SVGElement& element);
+
+/**
+ * Return the narrowest sandbox root for an absolute input document path.
+ *
+ * A document grants access only to its containing directory, never to an ambient process working
+ * directory.
+ */
+std::optional<std::filesystem::path> ResourceSandboxRootForAbsoluteInput(
+    const std::filesystem::path& absoluteInputPath);
+
+using ::donner::EscapeTerminalText;
 
 /** Sampled image dimensions and scaling for coordinate mapping. */
 struct SampledImageInfo {

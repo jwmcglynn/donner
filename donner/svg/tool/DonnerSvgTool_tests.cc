@@ -66,6 +66,11 @@ protected:
     return magic;
   }
 
+  std::string ReadFile(const std::filesystem::path& path) {
+    std::ifstream file(path, std::ios::binary);
+    return std::string(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>());
+  }
+
   std::filesystem::path tmpDir_;
 };
 
@@ -116,6 +121,22 @@ private:
   bool active_ = false;
 };
 
+class ScopedWorkingDirectory {
+public:
+  explicit ScopedWorkingDirectory(const std::filesystem::path& path)
+      : previous_(std::filesystem::current_path()) {
+    std::filesystem::current_path(path);
+  }
+
+  ~ScopedWorkingDirectory() {
+    std::error_code error;
+    std::filesystem::current_path(previous_, error);
+  }
+
+private:
+  std::filesystem::path previous_;
+};
+
 constexpr std::string_view kSimpleSvg =
     R"(<svg xmlns="http://www.w3.org/2000/svg" width="4" height="3" viewBox="0 0 4 3">
          <rect width="4" height="3" fill="#ff0000"/>
@@ -142,6 +163,18 @@ TEST(DonnerSvgTool, UnknownFlagReturnsOne) {
   std::ostringstream err;
   EXPECT_EQ(RunDonnerSvgTool(2, argv, out, err), 1);
   EXPECT_THAT(err.str(), testing::HasSubstr("Unknown option: --bogus"));
+}
+
+TEST(DonnerSvgTool, EscapesTerminalControlsInRejectedArguments) {
+  std::ostringstream out;
+  std::ostringstream err;
+
+  const std::string argument =
+      std::string("--bad\x1b]8;;https://example.test\a") + "\xe2\x80\xae" + "txt";
+  EXPECT_EQ(RunTool({argument}, &out, &err), 1);
+  EXPECT_THAT(err.str(), testing::HasSubstr(R"(--bad\x1b]8;;https://example.test\x07\u202etxt)"));
+  EXPECT_THAT(err.str(), testing::Not(testing::HasSubstr("\x1b]8")));
+  EXPECT_THAT(err.str(), testing::Not(testing::HasSubstr(std::string("\xe2\x80\xae", 3))));
 }
 
 TEST(DonnerSvgTool, MissingInputFileReturnsUsageError) {
@@ -236,6 +269,60 @@ TEST_F(DonnerSvgToolFileTest, RendersSvgToPngWithCanvasOverrides) {
               testing::ElementsAre(0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n'));
 }
 
+TEST_F(DonnerSvgToolFileTest, ResourcesAreSandboxedToTheInputDocumentsDirectory) {
+  const std::filesystem::path untrustedDirectory = tmpDir_ / "untrusted";
+  const std::filesystem::path privateDirectory = tmpDir_ / "private";
+  std::filesystem::create_directories(untrustedDirectory);
+  std::filesystem::create_directories(privateDirectory);
+
+  const std::filesystem::path privateSvg = privateDirectory / "secret.svg";
+  {
+    std::ofstream file(privateSvg, std::ios::binary);
+    file << R"(<svg xmlns="http://www.w3.org/2000/svg" width="4" height="4">
+                  <rect width="4" height="4" fill="#ff0000"/>
+                </svg>)";
+  }
+
+  const std::filesystem::path inputPath = untrustedDirectory / "input.svg";
+  {
+    std::ofstream file(inputPath, std::ios::binary);
+    file << R"(<svg xmlns="http://www.w3.org/2000/svg" width="4" height="4">
+                  <image href="../private/secret.svg" width="4" height="4"/>
+                </svg>)";
+  }
+  const std::filesystem::path blankPath = untrustedDirectory / "blank.svg";
+  {
+    std::ofstream file(blankPath, std::ios::binary);
+    file << R"(<svg xmlns="http://www.w3.org/2000/svg" width="4" height="4"/>)";
+  }
+  const std::filesystem::path inlinePath = untrustedDirectory / "inline.svg";
+  {
+    std::ofstream file(inlinePath, std::ios::binary);
+    file << R"(<svg xmlns="http://www.w3.org/2000/svg" width="4" height="4">
+                  <rect width="4" height="4" fill="#ff0000"/>
+                </svg>)";
+  }
+
+  const std::filesystem::path escapedOutput = tmpDir_ / "escaped.png";
+  const std::filesystem::path blankOutput = tmpDir_ / "blank.png";
+  const std::filesystem::path inlineOutput = tmpDir_ / "inline.png";
+  {
+    ScopedWorkingDirectory workingDirectory(tmpDir_);
+    std::ostringstream out;
+    std::ostringstream err;
+    EXPECT_EQ(RunTool({"--output", escapedOutput.string(), "untrusted/input.svg"}, &out, &err), 0);
+    out.str("");
+    err.str("");
+    EXPECT_EQ(RunTool({"--output", blankOutput.string(), "untrusted/blank.svg"}, &out, &err), 0);
+    out.str("");
+    err.str("");
+    EXPECT_EQ(RunTool({"--output", inlineOutput.string(), "untrusted/inline.svg"}, &out, &err), 0);
+  }
+
+  EXPECT_EQ(ReadFile(escapedOutput), ReadFile(blankOutput));
+  EXPECT_NE(ReadFile(escapedOutput), ReadFile(inlineOutput));
+}
+
 TEST_F(DonnerSvgToolFileTest, HeightOnlyOverrideIsAccepted) {
   const std::filesystem::path inputPath = WriteSvg("input.svg", kSimpleSvg);
   const std::filesystem::path outputPath = tmpDir_ / "height-only.png";
@@ -300,6 +387,21 @@ TEST_F(DonnerSvgToolFileTest, ParseWarningsArePrintedUnlessQuiet) {
   EXPECT_TRUE(quietErr.str().empty());
   EXPECT_THAT(quietOut.str(), testing::Not(testing::HasSubstr("Parse warnings:")));
   EXPECT_THAT(quietOut.str(), testing::HasSubstr("Rendered size: 4x4"));
+}
+
+TEST_F(DonnerSvgToolFileTest, ParseWarningsEscapeUnicodeTerminalControls) {
+  std::string source = R"(<svg xmlns="http://www.w3.org/2000/svg" width="4" height="4"><rect x=")";
+  source.append("\xc2\x9b", 2);
+  source += R"(" width="2" height="2"/></svg>)";
+  const std::filesystem::path inputPath = WriteSvg("terminal-control.svg", source);
+
+  std::ostringstream out;
+  std::ostringstream err;
+  EXPECT_EQ(RunTool({"--preview", inputPath.string()}, &out, &err), 0);
+
+  EXPECT_TRUE(err.str().empty());
+  EXPECT_THAT(out.str(), testing::HasSubstr(R"(\u009b)"));
+  EXPECT_THAT(out.str(), testing::Not(testing::HasSubstr(std::string("\xc2\x9b", 2))));
 }
 
 TEST_F(DonnerSvgToolFileTest, SaveFailureReturnsDistinctExitCode) {

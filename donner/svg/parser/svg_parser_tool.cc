@@ -1,8 +1,9 @@
-#include <fstream>
 #include <iostream>
-#include <vector>
+#include <sstream>
 
+#include "donner/base/FileUtils.h"
 #include "donner/base/ParseWarningSink.h"
+#include "donner/base/TerminalEscape.h"
 #include "donner/svg/SVGElement.h"
 #include "donner/svg/parser/SVGParser.h"
 
@@ -13,7 +14,7 @@ void DumpTree(SVGElement element, int depth) {
     std::cout << "  ";
   }
 
-  std::cout << element.type() << ", id: '" << element.id() << "'";
+  std::cout << element.type() << ", id: '" << EscapeTerminalText(element.id()) << "'";
   if (element.type() == ElementType::SVG) {
     if (auto viewBox = element.cast<SVGSVGElement>().viewBox()) {
       std::cout << ", viewBox: " << *viewBox;
@@ -34,25 +35,22 @@ int main(int argc, char* argv[]) {
     return 1;
   }
 
-  std::ifstream file(argv[1]);
-  if (!file) {
-    std::cerr << "Could not open file " << argv[1] << "\n";
+  auto fileResult =
+      donner::ReadFileBounded(argv[1], donner::svg::parser::SVGParser::kDefaultMaximumInputSize);
+  const auto* fileData = std::get_if<std::string>(&fileResult);
+  if (fileData == nullptr) {
+    std::cerr << donner::FileReadErrorMessage(std::get<donner::FileReadError>(fileResult)) << ": "
+              << donner::EscapeTerminalText(argv[1]) << "\n";
     return 2;
   }
 
-  file.seekg(0, std::ios::end);
-  const std::streamsize fileLength = file.tellg();
-  file.seekg(0);
-
-  std::string fileData;
-  fileData.resize(fileLength);
-  file.read(fileData.data(), fileLength);
-
   donner::ParseWarningSink warnings;
-  auto maybeResult = donner::svg::parser::SVGParser::ParseSVG(fileData, warnings);
+  auto maybeResult = donner::svg::parser::SVGParser::ParseSVG(*fileData, warnings);
   if (maybeResult.hasError()) {
     const auto& e = maybeResult.error();
-    std::cerr << "Parse Error " << e << "\n";
+    std::ostringstream diagnostic;
+    diagnostic << e;
+    std::cerr << "Parse Error " << donner::EscapeTerminalText(diagnostic.str()) << "\n";
     return 3;
   }
 
@@ -61,7 +59,9 @@ int main(int argc, char* argv[]) {
   if (warnings.hasWarnings()) {
     std::cout << "Warnings:\n";
     for (auto& w : warnings.warnings()) {
-      std::cout << "  " << w << "\n";
+      std::ostringstream diagnostic;
+      diagnostic << w;
+      std::cout << "  " << donner::EscapeTerminalText(diagnostic.str()) << "\n";
     }
   }
 
