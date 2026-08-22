@@ -247,6 +247,9 @@ public:
   /// CFF validation work permanently consumed by load attempts in this registry.
   size_t fontValidationWork() const;
 
+  /// Compressed-font decompression attempts performed for this registry.
+  size_t compressedFontDecompressionAttempts() const;
+
   /**
    * Get the number of registered `@font-face` rules.
    */

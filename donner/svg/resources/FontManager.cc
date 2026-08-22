@@ -176,6 +176,7 @@ struct FontManager::FontBudgetState {
   size_t usedBytes = 0;
   size_t usedFonts = 0;
   size_t usedValidationWork = 0;
+  size_t compressedFontDecompressionAttempts = 0;
   std::unordered_map<const std::vector<uint8_t>*, std::weak_ptr<const std::vector<uint8_t>>>
       validationRejectedSources;
 };
@@ -630,6 +631,10 @@ size_t FontManager::fontValidationWork() const {
   return budgetStateForRead()->usedValidationWork;
 }
 
+size_t FontManager::compressedFontDecompressionAttempts() const {
+  return budgetStateForRead()->compressedFontDecompressionAttempts;
+}
+
 size_t FontManager::numValidationRejectedSources() const {
   return budgetStateForRead()->validationRejectedSources.size();
 }
@@ -791,6 +796,7 @@ bool FontManager::canStoreLoadedFont(Entity entity, size_t rawBytes, size_t inde
 bool FontManager::loadWoff1(Entity entity, std::span<const uint8_t> data, FontDataTrust trust,
                             bool* validationWorkLimitExceeded) {
   const std::shared_ptr<FontBudgetState> budgetState = budgetStateForWrite();
+  ++budgetState->compressedFontDecompressionAttempts;
   fonts::WoffParser::Options options;
   options.maximumSfntSize = std::min(options.maximumSfntSize, budgetState->maximumBytes);
   auto maybeFont = fonts::WoffParser::Parse(data, options);
@@ -852,6 +858,7 @@ bool FontManager::loadFontDataIntoEntity(Entity entity, std::span<const uint8_t>
 bool FontManager::loadWoff2(Entity entity, std::span<const uint8_t> data, FontDataTrust trust,
                             bool* validationWorkLimitExceeded) {
   const std::shared_ptr<FontBudgetState> budgetState = budgetStateForWrite();
+  ++budgetState->compressedFontDecompressionAttempts;
   fonts::Woff2Parser::Options options;
   options.maximumOutputSize = std::min(options.maximumOutputSize, budgetState->maximumBytes);
   auto result = fonts::Woff2Parser::Decompress(data, options);
