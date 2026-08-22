@@ -207,12 +207,14 @@ static std::tuple<RcString, size_t> consumeName(std::string_view remaining) {
   }
 
   // Avoid a temporary vector so ordinary short names stay in RcString's inline storage.
-  if (i == remainingSize ||
-      (remaining[i] != '\0' && !isValidEscape(remaining.substr(i)))) {
+  if (i == remainingSize || (remaining[i] != '\0' && !isValidEscape(remaining.substr(i)))) {
     return {RcString(remaining.substr(0, i)), i};
   }
 
-  std::vector<char> str(remaining.begin(), remaining.begin() + i);
+  std::vector<char> str;
+  for (size_t prefixIndex = 0; prefixIndex < i; ++prefixIndex) {
+    str.push_back(remaining[prefixIndex]);
+  }
   while (i < remainingSize) {
     const char ch = remaining[i];
 
