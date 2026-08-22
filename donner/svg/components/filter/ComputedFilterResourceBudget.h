@@ -104,10 +104,17 @@ public:
 
     const SharedImageKey key{sourceEntity, sourcePixels.data(), sourcePixels.size()};
     if (const auto existing = sharedImages_.find(key); existing != sharedImages_.end()) {
-      if (auto pixels = existing->second.pixels.lock()) {
-        return pixels;
+      for (auto entry = existing->second.begin(); entry != existing->second.end();) {
+        if (auto pixels = entry->pixels.lock()) {
+          if (*pixels == sourcePixels) {
+            return pixels;
+          }
+          ++entry;
+        } else {
+          sharedImageBytes_ -= entry->bytes;
+          entry = existing->second.erase(entry);
+        }
       }
-      sharedImages_.erase(existing);
     }
 
     const std::size_t bytes = sourcePixels.size();
@@ -118,7 +125,7 @@ public:
     }
 
     auto pixels = makeSharedPixels(std::vector<std::uint8_t>(sourcePixels));
-    sharedImages_.insert_or_assign(key, SharedImageEntry{pixels, bytes});
+    sharedImages_[key].push_back(SharedImageEntry{pixels, bytes});
     return pixels;
   }
 
@@ -144,7 +151,7 @@ public:
 
     auto pixels = makeSharedPixels(std::move(sourcePixels));
     const SharedImageKey key{entt::null, pixels->data(), pixels->size()};
-    sharedImages_.insert_or_assign(key, SharedImageEntry{pixels, bytes});
+    sharedImages_[key].push_back(SharedImageEntry{pixels, bytes});
     return pixels;
   }
 
@@ -213,11 +220,19 @@ private:
 
   void pruneExpiredSharedImages() const {
     for (auto it = sharedImages_.begin(); it != sharedImages_.end();) {
-      if (!it->second.pixels.expired()) {
+      auto& entries = it->second;
+      for (auto entry = entries.begin(); entry != entries.end();) {
+        if (!entry->pixels.expired()) {
+          ++entry;
+          continue;
+        }
+        sharedImageBytes_ -= entry->bytes;
+        entry = entries.erase(entry);
+      }
+      if (!entries.empty()) {
         ++it;
         continue;
       }
-      sharedImageBytes_ -= it->second.bytes;
       it = sharedImages_.erase(it);
     }
   }
@@ -235,7 +250,8 @@ private:
   bool rejected_ = false;
   Limits limits_;
   std::unordered_map<Entity, std::size_t> reservations_;
-  mutable std::unordered_map<SharedImageKey, SharedImageEntry, SharedImageKeyHash> sharedImages_;
+  mutable std::unordered_map<SharedImageKey, std::vector<SharedImageEntry>, SharedImageKeyHash>
+      sharedImages_;
 };
 
 }  // namespace donner::svg::components
