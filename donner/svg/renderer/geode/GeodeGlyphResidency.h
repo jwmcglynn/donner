@@ -170,7 +170,9 @@ struct GeodeGlyphResidentEntry {
 class GeodeGlyphCache {
 public:
   /// Create an empty cache bound to `deviceId`.
-  explicit GeodeGlyphCache(uint64_t deviceId) : owningDeviceId_(deviceId) {}
+  explicit GeodeGlyphCache(uint64_t deviceId,
+                           std::shared_ptr<GeodeDocumentGeometryBudget> budget = nullptr)
+      : owningDeviceId_(deviceId), budget_(std::move(budget)) {}
 
   GeodeGlyphCache(const GeodeGlyphCache&) = delete;
   GeodeGlyphCache& operator=(const GeodeGlyphCache&) = delete;
@@ -355,6 +357,7 @@ private:
   }
 
   uint64_t owningDeviceId_ = 0;
+  std::shared_ptr<GeodeDocumentGeometryBudget> budget_;
   uint64_t encodedBytes_ = 0;
   uint64_t retainedBytes_ = 0;
   /// Frame index of the last trim; `~0` = never trimmed. See beginFrame().
