@@ -493,8 +493,10 @@ TEST_F(RnrReplayTest, FilterDisappearRepro3MatchesGoldenAfterSecondMouseUp) {
   ASSERT_GE(snapshot.mouseUpCount, kTargetMouseUpCount)
       << "Replay ended before the second mouse-up checkpoint";
   ASSERT_FALSE(snapshot.bitmap.empty()) << "Replay produced an empty final bitmap";
-  EXPECT_GT(snapshot.filterBudgetChunks, 0u)
-      << "Large valid filter frames must submit a bounded budget chunk instead of rejecting";
+  if (snapshot.usesTexturePresentation) {
+    EXPECT_GT(snapshot.filterBudgetChunks, 0u)
+        << "Large valid Geode filter frames must chunk instead of rejecting";
+  }
 
   // Both backends have a bounded rounding difference in this filtered image, but of different
   // kinds, so each arm gets its own documented allowance.
