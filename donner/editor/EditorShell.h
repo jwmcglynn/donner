@@ -521,6 +521,7 @@ private:
   void renderTextToolHint();
   [[nodiscard]] SelectionChromeDetail selectionChromeDetailForActiveTool() const;
   bool flushQueuedMutationAndRefreshOverlay();
+  void applyPendingWritebacksWhenRendererIdle(bool rendererBusy);
   bool flushInteractiveDragMutationAndRequestRender();
   /// Re-run the post-flush presentation refresh after a tool that flushes the
   /// document internally (the text tool's wrap measurement).

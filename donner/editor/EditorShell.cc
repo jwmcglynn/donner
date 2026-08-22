@@ -6281,7 +6281,7 @@ void EditorShell::refreshAfterToolDrivenFlush() {
   app_.flushFrame();
   renderCoordinator_.invalidatePresentationAfterDocumentFlush(app_,
                                                               app_.document().lastFlushResult());
-  documentSyncController_.applyPendingWritebacks(app_, selectTool_, textEditor_);
+  applyPendingWritebacksWhenRendererIdle(renderCoordinator_.asyncRenderer().isBusy());
   renderCoordinator_.refreshSelectionBoundsCache(app_);
   updatePenLivePreviewTarget();
   renderCoordinator_.rasterizeOverlayForCurrentSelection(
@@ -6324,6 +6324,17 @@ bool EditorShell::flushQueuedMutationAndRefreshOverlay() {
   requestRenderAtEndOfFrame_ = true;
   window_.wakeEventLoop();
   return true;
+}
+
+void EditorShell::applyPendingWritebacksWhenRendererIdle(bool rendererBusy) {
+  if (rendererBusy) {
+    // The writebacks remain queued in the app/tool/controller until this helper reaches an idle
+    // frame. AsyncRenderer's completion callback wakes the event loop for that transition; waking
+    // here would recursively schedule every busy frame and defeat the completion-driven wait.
+    return;
+  }
+
+  documentSyncController_.applyPendingWritebacks(app_, selectTool_, textEditor_);
 }
 
 bool EditorShell::flushInteractiveDragMutationAndRequestRender() {
@@ -7184,7 +7195,7 @@ void EditorShell::runFrame() {
   markPhase(mainFrameCost.overlayRefreshMs);
 
   documentSyncController_.syncParseErrorMarkers(app_, textEditor_);
-  documentSyncController_.applyPendingWritebacks(app_, selectTool_, textEditor_);
+  applyPendingWritebacksWhenRendererIdle(documentUiSnapshotRendererBusy);
   markPhase(mainFrameCost.documentSyncMs);
 
   if (!app_.hasDocument()) {
