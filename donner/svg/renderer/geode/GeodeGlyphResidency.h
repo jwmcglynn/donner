@@ -506,7 +506,7 @@ struct GeodeTextInstanceRecordComponent {
         }
         targetCapacity *= 2u;
       }
-      if (targetCapacity > std::numeric_limits<uint64_t>::max() / sizeof(OccurrenceOwner)) {
+      if (targetCapacity > occurrences.max_size()) {
         return false;
       }
       const uint64_t projectedOwnerBytes =
@@ -518,10 +518,6 @@ struct GeodeTextInstanceRecordComponent {
 
       std::vector<OccurrenceOwner> replacement;
       replacement.reserve(targetCapacity);
-      if (replacement.capacity() > std::numeric_limits<uint64_t>::max() / sizeof(OccurrenceOwner)) {
-        (void)cpuReservation.replace(budget, oldBytes);
-        return false;
-      }
       const uint64_t actualOwnerBytes =
           static_cast<uint64_t>(replacement.capacity()) * sizeof(OccurrenceOwner);
       if (payloadBytes > std::numeric_limits<uint64_t>::max() - actualOwnerBytes ||
