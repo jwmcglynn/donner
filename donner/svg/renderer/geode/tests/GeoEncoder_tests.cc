@@ -526,7 +526,7 @@ TEST_F(GeoEncoderTest, BatchUniformCpuMirrorStopsAtCapPlusOneAndReleases) {
   ASSERT_TRUE(entryBytes.has_value());
   auto budget = std::make_shared<GeodeDocumentGeometryBudget>();
   budget->setLimitsForTesting(
-      {.cacheBytes = *entryBytes * 2u - 1u, .residentBytes = kUniformBytes * 2u});
+      {.cacheBytes = *entryBytes + kUniformBytes - 1u, .residentBytes = kUniformBytes * 2u});
 
   {
     GeodeRecordSlab slab(device_->deviceId(), budget);

@@ -236,10 +236,11 @@ public:
   };
 
   static std::optional<uint64_t> batchUniformRetainedBytes(uint64_t uniformBytes) {
-    if (uniformBytes > std::numeric_limits<uint64_t>::max() - sizeof(BatchUniform)) {
+    constexpr uint64_t kMetadataBytes = kMaxBatchUniforms * sizeof(BatchUniform);
+    if (uniformBytes > std::numeric_limits<uint64_t>::max() - kMetadataBytes) {
       return std::nullopt;
     }
-    return sizeof(BatchUniform) + uniformBytes;
+    return kMetadataBytes + uniformBytes;
   }
 
   /**
@@ -270,8 +271,31 @@ public:
     if (budget_ && !budget_->reserveResidentBytes(size)) {
       return BatchUniformHandle{};
     }
-    const std::optional<uint64_t> cpuBytes = batchUniformRetainedBytes(size);
-    if (!cpuBytes.has_value() || !reserveCpuBytes(*cpuBytes)) {
+    if (size > std::numeric_limits<uint64_t>::max() - cpuPayloadBytes_) {
+      if (budget_) {
+        budget_->releaseResidentBytes(size);
+      }
+      return BatchUniformHandle{};
+    }
+    const uint64_t previousCpuBytes = cpuRetainedBytes_;
+    const uint64_t nextPayloadBytes = cpuPayloadBytes_ + size;
+    if (batchUniforms_.capacity() < kMaxBatchUniforms) {
+      const std::optional<uint64_t> projectedBytes = batchUniformRetainedBytes(nextPayloadBytes);
+      if (!projectedBytes.has_value() || !replaceCpuBytes(*projectedBytes)) {
+        if (budget_) {
+          budget_->releaseResidentBytes(size);
+        }
+        return BatchUniformHandle{};
+      }
+      batchUniforms_.reserve(kMaxBatchUniforms);
+    }
+    const uint64_t metadataBytes = batchUniformMetadataBytesForTesting();
+    if (nextPayloadBytes > std::numeric_limits<uint64_t>::max() - metadataBytes ||
+        !replaceCpuBytes(metadataBytes + nextPayloadBytes)) {
+      if (batchUniforms_.empty()) {
+        std::vector<BatchUniform>().swap(batchUniforms_);
+      }
+      (void)replaceCpuBytes(previousCpuBytes);
       if (budget_) {
         budget_->releaseResidentBytes(size);
       }
@@ -286,7 +310,7 @@ public:
       if (budget_) {
         budget_->releaseResidentBytes(size);
       }
-      releaseCpuBytes(*cpuBytes);
+      (void)replaceCpuBytes(metadataBytes + cpuPayloadBytes_);
       return BatchUniformHandle{};
     }
     device.countBuffer();
@@ -295,6 +319,7 @@ public:
     batchUniforms_.push_back(BatchUniform{std::move(buffer),
                                           std::vector<uint8_t>(first, first + size),
                                           GeodeDevice::AllocateBufferId()});
+    cpuPayloadBytes_ = nextPayloadBytes;
     accountedBytes_ += size;
     return BatchUniformHandle{batchUniforms_.back().buffer.get(), batchUniforms_.back().bufferId};
   }
@@ -340,24 +365,16 @@ private:
   /// batch.
   static constexpr size_t kMaxBatchUniforms = 8u;
 
-  bool reserveCpuBytes(uint64_t bytes) {
+  bool replaceCpuBytes(uint64_t bytes) {
     if (!budget_) {
+      cpuRetainedBytes_ = bytes;
       return true;
     }
-    if (bytes > std::numeric_limits<uint64_t>::max() - cpuRetainedBytes_ ||
-        !cpuReservation_.replace(budget_, cpuRetainedBytes_ + bytes)) {
+    if (!cpuReservation_.replace(budget_, bytes)) {
       return false;
     }
-    cpuRetainedBytes_ += bytes;
+    cpuRetainedBytes_ = bytes;
     return true;
-  }
-
-  void releaseCpuBytes(uint64_t bytes) {
-    if (!budget_ || bytes > cpuRetainedBytes_) {
-      return;
-    }
-    cpuRetainedBytes_ -= bytes;
-    (void)cpuReservation_.replace(budget_, cpuRetainedBytes_);
   }
 
   Slot slotAt(uint32_t index) const {
@@ -382,6 +399,7 @@ private:
   std::shared_ptr<GeodeDocumentGeometryBudget> budget_;
   GeodeGeometryCacheReservation cpuReservation_;
   uint64_t cpuRetainedBytes_ = 0;
+  uint64_t cpuPayloadBytes_ = 0;
   uint64_t accountedBytes_ = 0;
 };
 

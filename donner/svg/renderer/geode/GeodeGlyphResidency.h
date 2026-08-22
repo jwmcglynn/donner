@@ -454,7 +454,7 @@ struct GeodeTextInstanceRecordComponent {
         cpuBudget(std::move(other.cpuBudget)),
         cpuReservation(std::move(other.cpuReservation)),
         cpuRetainedBytes(other.cpuRetainedBytes) {
-    other.occurrences.clear();
+    std::deque<Occurrence>().swap(other.occurrences);
     other.cpuRetainedBytes = 0;
   }
 
@@ -472,7 +472,7 @@ struct GeodeTextInstanceRecordComponent {
       cpuBudget = std::move(other.cpuBudget);
       cpuReservation = std::move(other.cpuReservation);
       cpuRetainedBytes = other.cpuRetainedBytes;
-      other.occurrences.clear();
+      std::deque<Occurrence>().swap(other.occurrences);
       other.cpuRetainedBytes = 0;
     }
     return *this;
@@ -507,7 +507,7 @@ struct GeodeTextInstanceRecordComponent {
         }
       }
     }
-    occurrences.clear();
+    std::deque<Occurrence>().swap(occurrences);
     cpuReservation.reset();
     cpuBudget.reset();
     cpuRetainedBytes = 0;
