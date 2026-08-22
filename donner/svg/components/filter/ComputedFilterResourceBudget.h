@@ -210,9 +210,10 @@ private:
     auto familyReservation = std::make_shared<FamilyReservation>(family_, bytes);
     auto pixels = std::shared_ptr<const std::vector<std::uint8_t>>(
         new std::vector<std::uint8_t>(std::move(sourcePixels)),
-        [reservation = std::move(familyReservation)](const std::vector<std::uint8_t>* value) {
-          (void)reservation;
+        [reservation =
+             std::move(familyReservation)](const std::vector<std::uint8_t>* value) mutable {
           delete value;
+          reservation.reset();
         });
     sharedImageBytes_ += bytes;
     ++sharedImageMaterializations_;
