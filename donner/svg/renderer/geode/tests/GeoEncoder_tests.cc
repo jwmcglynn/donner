@@ -484,6 +484,65 @@ TEST(GeodeResourceBudgetTest, CacheReplacementIsAtomicAndReleasesAtOwnerDestruct
   EXPECT_EQ(budget->cacheBytes(), 0u);
 }
 
+TEST(GeodeResourceBudgetTest, ResidentSlotMirrorReplacementPreservesExactReservation) {
+  constexpr uint64_t kUniformBytes = 100u;
+  auto budget = std::make_shared<GeodeDocumentGeometryBudget>();
+  budget->setLimitsForTesting({.cacheBytes = kUniformBytes, .residentBytes = 64u << 20});
+  auto slab = std::make_shared<GeodeResidentSlab>(/*deviceId=*/1u, budget);
+
+  {
+    GeodeResidentSlot slot;
+    slot.slab = slab;
+    ASSERT_TRUE(slot.reserveUniformMirror(kUniformBytes));
+    EXPECT_FALSE(slot.reservePaintMirror(1u));
+    EXPECT_EQ(budget->cacheBytes(), kUniformBytes)
+        << "A cap+1 mirror must preserve the previously admitted reservation.";
+  }
+
+  EXPECT_EQ(budget->cacheBytes(), 0u);
+}
+
+TEST(GeodeResourceBudgetTest, ResidentGradientMirrorReleasesAtOwnerDestruction) {
+  constexpr uint64_t kUniformBytes = 672u;
+  auto budget = std::make_shared<GeodeDocumentGeometryBudget>();
+  budget->setLimitsForTesting({.cacheBytes = kUniformBytes, .residentBytes = 64u << 20});
+  auto slab = std::make_shared<GeodeResidentSlab>(/*deviceId=*/1u, budget);
+
+  {
+    GeodeResidentGradientSlot slot;
+    slot.slab = slab;
+    ASSERT_TRUE(slot.reserveUniformMirror(kUniformBytes));
+    EXPECT_FALSE(slot.reserveUniformMirror(kUniformBytes + 1u));
+    EXPECT_EQ(budget->cacheBytes(), kUniformBytes);
+  }
+
+  EXPECT_EQ(budget->cacheBytes(), 0u);
+}
+
+TEST_F(GeoEncoderTest, BatchUniformCpuMirrorStopsAtCapPlusOneAndReleases) {
+  constexpr uint64_t kUniformBytes = 16u;
+  const std::optional<uint64_t> entryBytes =
+      GeodeRecordSlab::batchUniformRetainedBytes(kUniformBytes);
+  ASSERT_TRUE(entryBytes.has_value());
+  auto budget = std::make_shared<GeodeDocumentGeometryBudget>();
+  budget->setLimitsForTesting(
+      {.cacheBytes = *entryBytes * 2u - 1u, .residentBytes = kUniformBytes * 2u});
+
+  {
+    GeodeRecordSlab slab(device_->deviceId(), budget);
+    const uint32_t first[4] = {1u, 2u, 3u, 4u};
+    const uint32_t second[4] = {5u, 6u, 7u, 8u};
+    ASSERT_TRUE(slab.acquireBatchUniform(*device_, first, sizeof(first)).buffer);
+    EXPECT_FALSE(slab.acquireBatchUniform(*device_, second, sizeof(second)).buffer);
+    EXPECT_EQ(budget->cacheBytes(), *entryBytes);
+    EXPECT_EQ(budget->residentBytes(), kUniformBytes)
+        << "The rejected CPU mirror must roll back its tentative GPU reservation.";
+  }
+
+  EXPECT_EQ(budget->cacheBytes(), 0u);
+  EXPECT_EQ(budget->residentBytes(), 0u);
+}
+
 TEST(GeodeResourceBudgetTest, ResidentRejectionPreservesCpuCacheFallback) {
   auto budget = std::make_shared<GeodeDocumentGeometryBudget>();
   budget->setLimitsForTesting({.cacheBytes = 100u, .residentBytes = 0u});

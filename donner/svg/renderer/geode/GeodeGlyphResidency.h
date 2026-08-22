@@ -191,6 +191,9 @@ public:
   /// The returned address is stable for the entry's lifetime.
   GeodeGlyphResidentEntry* insert(const GlyphGeometryKey& key, Path&& outline,
                                   EncodedPath&& encoded) {
+    if (GeodeGlyphResidentEntry* existing = find(key)) {
+      return existing;
+    }
     const std::optional<uint64_t> entryBytes = EntryRetainedBytes(outline, encoded);
     if (!entryBytes.has_value() ||
         *entryBytes > std::numeric_limits<uint64_t>::max() - retainedBytes_) {
@@ -201,12 +204,18 @@ public:
         *encodedBytes > std::numeric_limits<uint64_t>::max() - encodedBytes_) {
       return nullptr;
     }
+    if (budget_ && !budgetReservation_.replace(budget_, retainedBytes_ + *entryBytes)) {
+      return nullptr;
+    }
     // try_emplace, not emplace: emplace constructs the node before it checks
     // for a duplicate key and destroys it on collision, which would hand the
     // caller a pointer into freed storage and leave the byte total crediting an
     // entry that is not in the map.
     auto [it, inserted] = entries_.try_emplace(key);
     if (!inserted) {
+      if (budget_) {
+        (void)budgetReservation_.replace(budget_, retainedBytes_);
+      }
       return it->second.get();
     }
     it->second = std::make_unique<GeodeGlyphResidentEntry>();
@@ -220,8 +229,9 @@ public:
     return entry;
   }
 
-  /// Insert through the document retention envelope. This declaration is used by the renderer's
-  /// miss path; the implementation is tightened in the following security fix.
+  /// Insert through the per-cache entry/byte envelope after evicting entries
+  /// old enough to be safe. The family reservation in @ref insert remains
+  /// the aggregate cross-document admission gate.
   GeodeGlyphResidentEntry* insertWithinBudget(const GlyphGeometryKey& key, Path&& outline,
                                               EncodedPath&& encoded, uint64_t oldestOpenFrame,
                                               size_t maxEntries, uint64_t maxRetainedBytes,
@@ -304,6 +314,9 @@ public:
       }
       encodedBytes_ -= it->second->encodedBytes;
       retainedBytes_ -= it->second->retainedBytes;
+      if (budget_) {
+        (void)budgetReservation_.replace(budget_, retainedBytes_);
+      }
       entries_.erase(it);
       ++evicted;
     }
@@ -358,6 +371,7 @@ private:
 
   uint64_t owningDeviceId_ = 0;
   std::shared_ptr<GeodeDocumentGeometryBudget> budget_;
+  GeodeGeometryCacheReservation budgetReservation_;
   uint64_t encodedBytes_ = 0;
   uint64_t retainedBytes_ = 0;
   /// Frame index of the last trim; `~0` = never trimmed. See beginFrame().
@@ -406,6 +420,8 @@ struct GeodeTextInstanceRecordComponent {
     GeodeRecordSlab::Slot slot;
     std::vector<uint8_t> lastRecord;
   };
+  static constexpr uint64_t kProjectedBytesPerOccurrence =
+      sizeof(Occurrence) + sizeof(InstanceRecord);
 
   /// Occurrence slots in paint order. Index is the occurrence's ordinal
   /// within the element's draw, so it is stable across unchanged frames. A
@@ -421,6 +437,9 @@ struct GeodeTextInstanceRecordComponent {
   /// this as "older than every open frame", which is what an untouched
   /// component is.
   uint64_t lastFrame = 0;
+  std::shared_ptr<GeodeDocumentGeometryBudget> cpuBudget;
+  GeodeGeometryCacheReservation cpuReservation;
+  uint64_t cpuRetainedBytes = 0;
 
   GeodeTextInstanceRecordComponent() = default;
   ~GeodeTextInstanceRecordComponent() { freeRecordSlots(); }
@@ -431,8 +450,12 @@ struct GeodeTextInstanceRecordComponent {
   GeodeTextInstanceRecordComponent(GeodeTextInstanceRecordComponent&& other) noexcept
       : occurrences(std::move(other.occurrences)),
         recordSlab(std::move(other.recordSlab)),
-        lastFrame(other.lastFrame) {
+        lastFrame(other.lastFrame),
+        cpuBudget(std::move(other.cpuBudget)),
+        cpuReservation(std::move(other.cpuReservation)),
+        cpuRetainedBytes(other.cpuRetainedBytes) {
     other.occurrences.clear();
+    other.cpuRetainedBytes = 0;
   }
 
   GeodeTextInstanceRecordComponent& operator=(GeodeTextInstanceRecordComponent&& other) noexcept {
@@ -446,9 +469,32 @@ struct GeodeTextInstanceRecordComponent {
       occurrences = std::move(other.occurrences);
       recordSlab = std::move(other.recordSlab);
       lastFrame = other.lastFrame;
+      cpuBudget = std::move(other.cpuBudget);
+      cpuReservation = std::move(other.cpuReservation);
+      cpuRetainedBytes = other.cpuRetainedBytes;
       other.occurrences.clear();
+      other.cpuRetainedBytes = 0;
     }
     return *this;
+  }
+
+  bool reserveOccurrence(std::shared_ptr<GeodeDocumentGeometryBudget> budget) {
+    if (cpuRetainedBytes > std::numeric_limits<uint64_t>::max() - kProjectedBytesPerOccurrence ||
+        !budget ||
+        !cpuReservation.replace(budget, cpuRetainedBytes + kProjectedBytesPerOccurrence)) {
+      return false;
+    }
+    cpuBudget = std::move(budget);
+    cpuRetainedBytes += kProjectedBytesPerOccurrence;
+    return true;
+  }
+
+  void rollbackOccurrence() {
+    if (cpuRetainedBytes < kProjectedBytesPerOccurrence || !cpuBudget) {
+      return;
+    }
+    cpuRetainedBytes -= kProjectedBytesPerOccurrence;
+    (void)cpuReservation.replace(cpuBudget, cpuRetainedBytes);
   }
 
   /// Return every slot to the slab (deferred to the next frame's merge, like
@@ -462,6 +508,9 @@ struct GeodeTextInstanceRecordComponent {
       }
     }
     occurrences.clear();
+    cpuReservation.reset();
+    cpuBudget.reset();
+    cpuRetainedBytes = 0;
   }
 };
 

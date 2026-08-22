@@ -128,14 +128,16 @@ TEST(GeodeGlyphCacheTest, RetainedByteAdmissionRejectsBeforeTakingOutlineOwnersh
   EXPECT_EQ(cache.retainedBytes(), 0u);
 }
 
-TEST(GeodeGlyphCacheTest, SharedDocumentFamilyRejectsSecondSubdocumentBeforeInsertion) {
+TEST(GeodeGlyphCacheTest, SharedDocumentFamilyRejectsSecondSubdocumentAtCapPlusOne) {
   Path firstOutline = MakeOutlineWithPoints(128u);
   const std::optional<std::size_t> entryBytes = firstOutline.retainedBytes();
   ASSERT_TRUE(entryBytes.has_value());
+  Path secondOutline = MakeOutlineWithPoints(128u);
+  ASSERT_EQ(secondOutline.retainedBytes(), entryBytes);
 
   svg::components::DocumentResourceFamilyBudget::Limits familyLimits;
-  familyLimits.geometryBytes = *entryBytes;
-  familyLimits.maximumTotalRetainedBytes = *entryBytes;
+  familyLimits.geometryBytes = *entryBytes * 2u - 1u;
+  familyLimits.maximumTotalRetainedBytes = *entryBytes * 2u - 1u;
   auto family = std::make_shared<svg::components::DocumentResourceFamilyBudget>(familyLimits);
   auto firstDocument = std::make_shared<GeodeDocumentGeometryBudget>(family);
   auto secondDocument = std::make_shared<GeodeDocumentGeometryBudget>(family);
@@ -148,7 +150,6 @@ TEST(GeodeGlyphCacheTest, SharedDocumentFamilyRejectsSecondSubdocumentBeforeInse
     EXPECT_EQ(family->retainedBytes(svg::components::DocumentResourceFamilyBudget::Kind::Geometry),
               *entryBytes);
 
-    Path secondOutline = MakeOutlineWithPoints(128u);
     EXPECT_EQ(
         secondCache.insert(MakeKey(/*glyphIndex=*/2), std::move(secondOutline), EncodedPath()),
         nullptr)
@@ -159,6 +160,45 @@ TEST(GeodeGlyphCacheTest, SharedDocumentFamilyRejectsSecondSubdocumentBeforeInse
   EXPECT_EQ(family->retainedBytes(svg::components::DocumentResourceFamilyBudget::Kind::Geometry),
             0u)
       << "Destroying every subdocument cache must release the exact family reservation.";
+}
+
+TEST(GeodeGlyphCacheTest, FamilyReservationTracksDuplicateAndEvictionExactly) {
+  svg::components::DocumentResourceFamilyBudget::Limits familyLimits;
+  familyLimits.geometryBytes = 1u << 20;
+  familyLimits.maximumTotalRetainedBytes = 1u << 20;
+  auto family = std::make_shared<svg::components::DocumentResourceFamilyBudget>(familyLimits);
+  auto document = std::make_shared<GeodeDocumentGeometryBudget>(family);
+
+  {
+    GeodeGlyphCache cache(/*deviceId=*/1u, document);
+    const GlyphGeometryKey firstKey = MakeKey(/*glyphIndex=*/1);
+    GeodeGlyphResidentEntry* first =
+        cache.insert(firstKey, Path(), MakeEncodeWithCurves(/*curveCount=*/4u));
+    ASSERT_NE(first, nullptr);
+    first->lastUsedFrame = 1u;
+    const uint64_t firstBytes = cache.retainedBytes();
+    ASSERT_GT(firstBytes, 0u);
+    EXPECT_EQ(document->cacheBytes(), firstBytes);
+
+    EXPECT_EQ(cache.insert(firstKey, Path(), MakeEncodeWithCurves(/*curveCount=*/8u)), first);
+    EXPECT_EQ(document->cacheBytes(), firstBytes)
+        << "A duplicate key must not acquire a second family reservation.";
+
+    GeodeGlyphResidentEntry* second =
+        cache.insert(MakeKey(/*glyphIndex=*/2), Path(), MakeEncodeWithCurves(/*curveCount=*/6u));
+    ASSERT_NE(second, nullptr);
+    second->lastUsedFrame = 2u;
+    EXPECT_EQ(document->cacheBytes(), cache.retainedBytes());
+
+    ASSERT_EQ(cache.evictToBudget(/*oldestOpenFrame=*/3u, /*maxEntries=*/1u,
+                                  /*maxRetainedBytes=*/1u << 20),
+              1u);
+    EXPECT_EQ(document->cacheBytes(), cache.retainedBytes());
+  }
+
+  EXPECT_EQ(document->cacheBytes(), 0u);
+  EXPECT_EQ(family->retainedBytes(svg::components::DocumentResourceFamilyBudget::Kind::Geometry),
+            0u);
 }
 
 TEST(GeodeGlyphCacheTest, EntryCountBudgetDropsTheLeastRecentlyUsedFirst) {
@@ -255,6 +295,28 @@ TEST(GeodeTextInstanceRecordComponentTest, OccurrenceAddressesSurviveGrowth) {
   }
 
   EXPECT_EQ(&component.occurrences.front(), first);
+}
+
+TEST(GeodeTextInstanceRecordComponentTest, SharedFamilyBoundsProjectedOccurrenceStorage) {
+  const uint64_t occurrenceBytes = GeodeTextInstanceRecordComponent::kProjectedBytesPerOccurrence;
+  svg::components::DocumentResourceFamilyBudget::Limits familyLimits;
+  familyLimits.geometryBytes = occurrenceBytes;
+  familyLimits.maximumTotalRetainedBytes = occurrenceBytes;
+  auto family = std::make_shared<svg::components::DocumentResourceFamilyBudget>(familyLimits);
+  auto firstDocument = std::make_shared<GeodeDocumentGeometryBudget>(family);
+  auto secondDocument = std::make_shared<GeodeDocumentGeometryBudget>(family);
+
+  {
+    GeodeTextInstanceRecordComponent first;
+    GeodeTextInstanceRecordComponent second;
+    ASSERT_TRUE(first.reserveOccurrence(firstDocument));
+    EXPECT_FALSE(second.reserveOccurrence(secondDocument));
+    EXPECT_EQ(family->retainedBytes(svg::components::DocumentResourceFamilyBudget::Kind::Geometry),
+              occurrenceBytes);
+  }
+
+  EXPECT_EQ(family->retainedBytes(svg::components::DocumentResourceFamilyBudget::Kind::Geometry),
+            0u);
 }
 
 TEST(GeodeTextInstanceRecordComponentTest, MoveLeavesTheSourceWithNoSlotsToRelease) {

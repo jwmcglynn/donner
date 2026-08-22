@@ -27,6 +27,7 @@
 #include <cstring>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <vector>
 
 #include "donner/svg/renderer/geode/GeodeDevice.h"
@@ -146,6 +147,8 @@ public:
 
   uint64_t owningDeviceId() const { return owningDeviceId_; }
 
+  const std::shared_ptr<GeodeDocumentGeometryBudget>& documentBudget() const { return budget_; }
+
   /// Merge the previous frame's freed slots into the reusable free list.
   /// The frame-index guard makes the merge idempotent per frame (mirrors
   /// the geometry slab's contract: a second renderer on the same device
@@ -232,6 +235,13 @@ public:
     uint64_t bufferId = 0;
   };
 
+  static std::optional<uint64_t> batchUniformRetainedBytes(uint64_t uniformBytes) {
+    if (uniformBytes > std::numeric_limits<uint64_t>::max() - sizeof(BatchUniform)) {
+      return std::nullopt;
+    }
+    return sizeof(BatchUniform) + uniformBytes;
+  }
+
   /**
    * Persistent buffer holding one distinct scene-batch uniform value.
    *
@@ -260,6 +270,13 @@ public:
     if (budget_ && !budget_->reserveResidentBytes(size)) {
       return BatchUniformHandle{};
     }
+    const std::optional<uint64_t> cpuBytes = batchUniformRetainedBytes(size);
+    if (!cpuBytes.has_value() || !reserveCpuBytes(*cpuBytes)) {
+      if (budget_) {
+        budget_->releaseResidentBytes(size);
+      }
+      return BatchUniformHandle{};
+    }
     wgpu::BufferDescriptor desc = {};
     desc.label = wgpuLabel("GeodeSceneBatchUniform");
     desc.size = size;
@@ -269,6 +286,7 @@ public:
       if (budget_) {
         budget_->releaseResidentBytes(size);
       }
+      releaseCpuBytes(*cpuBytes);
       return BatchUniformHandle{};
     }
     device.countBuffer();
@@ -318,6 +336,26 @@ private:
   /// batch.
   static constexpr size_t kMaxBatchUniforms = 8u;
 
+  bool reserveCpuBytes(uint64_t bytes) {
+    if (!budget_) {
+      return true;
+    }
+    if (bytes > std::numeric_limits<uint64_t>::max() - cpuRetainedBytes_ ||
+        !cpuReservation_.replace(budget_, cpuRetainedBytes_ + bytes)) {
+      return false;
+    }
+    cpuRetainedBytes_ += bytes;
+    return true;
+  }
+
+  void releaseCpuBytes(uint64_t bytes) {
+    if (!budget_ || bytes > cpuRetainedBytes_) {
+      return;
+    }
+    cpuRetainedBytes_ -= bytes;
+    (void)cpuReservation_.replace(budget_, cpuRetainedBytes_);
+  }
+
   Slot slotAt(uint32_t index) const {
     // Slots are never moved; walk the chunk sizes to find the owner.
     uint64_t offset = static_cast<uint64_t>(index) * sizeof(InstanceRecord);
@@ -338,6 +376,8 @@ private:
   std::vector<uint32_t> pendingFrees_;
   std::vector<BatchUniform> batchUniforms_;
   std::shared_ptr<GeodeDocumentGeometryBudget> budget_;
+  GeodeGeometryCacheReservation cpuReservation_;
+  uint64_t cpuRetainedBytes_ = 0;
   uint64_t accountedBytes_ = 0;
 };
 
@@ -404,6 +444,8 @@ public:
 
   /// Device this slab's chunks were created on.
   uint64_t owningDeviceId() const { return owningDeviceId_; }
+
+  const std::shared_ptr<GeodeDocumentGeometryBudget>& documentBudget() const { return budget_; }
 
   /// Merge the previous frame's freed ranges into the reusable free list.
   /// Gated on `frameIndex` (the renderer's frame counter) so the merge runs
@@ -740,6 +782,20 @@ struct GeodeResidentSlot {
   /// static frame => zero buffer writes); a camera/color change rewrites
   /// only this 416-byte region and keeps the cached bind group.
   std::vector<uint8_t> lastUniform;
+  GeodeGeometryCacheReservation cpuMirrorReservation;
+  uint64_t cpuUniformBytes = 0;
+  uint64_t cpuRecordBytes = 0;
+  uint64_t cpuPaintBytes = 0;
+
+  bool reserveUniformMirror(uint64_t bytes) {
+    return reserveCpuMirrors(bytes, cpuRecordBytes, cpuPaintBytes);
+  }
+  bool reserveRecordMirror(uint64_t bytes) {
+    return reserveCpuMirrors(cpuUniformBytes, bytes, cpuPaintBytes);
+  }
+  bool reservePaintMirror(uint64_t bytes) {
+    return reserveCpuMirrors(cpuUniformBytes, cpuRecordBytes, bytes);
+  }
 
   GeodeResidentSlot() = default;
   ~GeodeResidentSlot() {
@@ -794,12 +850,19 @@ struct GeodeResidentSlot {
       lastUniform = std::move(other.lastUniform);
       lastRecord = std::move(other.lastRecord);
       lastPaint = std::move(other.lastPaint);
+      cpuMirrorReservation = std::move(other.cpuMirrorReservation);
+      cpuUniformBytes = other.cpuUniformBytes;
+      cpuRecordBytes = other.cpuRecordBytes;
+      cpuPaintBytes = other.cpuPaintBytes;
       paintMode = other.paintMode;
       gradientSpread = other.gradientSpread;
       gradientStopCount = other.gradientStopCount;
       other.resident = false;
       other.encodedKey = nullptr;
       other.owningDeviceId = 0;
+      other.cpuUniformBytes = 0;
+      other.cpuRecordBytes = 0;
+      other.cpuPaintBytes = 0;
     }
     return *this;
   }
@@ -835,12 +898,34 @@ struct GeodeResidentSlot {
     encodedKey = nullptr;
     encodedFingerprint = 0;
     owningDeviceId = 0;
-    lastUniform.clear();
-    lastRecord.clear();
-    lastPaint.clear();
+    std::vector<uint8_t>().swap(lastUniform);
+    std::vector<uint8_t>().swap(lastRecord);
+    std::vector<uint8_t>().swap(lastPaint);
+    cpuMirrorReservation.reset();
+    cpuUniformBytes = 0;
+    cpuRecordBytes = 0;
+    cpuPaintBytes = 0;
     paintMode = 0;
     gradientSpread = 0;
     gradientStopCount = 0;
+  }
+
+private:
+  bool reserveCpuMirrors(uint64_t uniformBytes, uint64_t recordBytes, uint64_t paintBytes) {
+    if (uniformBytes > std::numeric_limits<uint64_t>::max() - recordBytes ||
+        uniformBytes + recordBytes > std::numeric_limits<uint64_t>::max() - paintBytes) {
+      return false;
+    }
+    const uint64_t total = uniformBytes + recordBytes + paintBytes;
+    const std::shared_ptr<GeodeDocumentGeometryBudget> budget =
+        slab ? slab->documentBudget() : nullptr;
+    if (budget && !cpuMirrorReservation.replace(budget, total)) {
+      return false;
+    }
+    cpuUniformBytes = uniformBytes;
+    cpuRecordBytes = recordBytes;
+    cpuPaintBytes = paintBytes;
+    return true;
   }
 };
 
@@ -914,6 +999,18 @@ struct GeodeResidentGradientSlot {
 
   /// Bytes last written to the uniform region; unchanged draws skip the write.
   std::vector<uint8_t> lastUniform;
+  GeodeGeometryCacheReservation cpuMirrorReservation;
+  uint64_t cpuUniformBytes = 0;
+
+  bool reserveUniformMirror(uint64_t bytes) {
+    const std::shared_ptr<GeodeDocumentGeometryBudget> budget =
+        slab ? slab->documentBudget() : nullptr;
+    if (budget && !cpuMirrorReservation.replace(budget, bytes)) {
+      return false;
+    }
+    cpuUniformBytes = bytes;
+    return true;
+  }
 
   GeodeResidentGradientSlot() = default;
   ~GeodeResidentGradientSlot() { reset(); }
@@ -950,9 +1047,12 @@ struct GeodeResidentGradientSlot {
       encodedFingerprint = other.encodedFingerprint;
       owningDeviceId = other.owningDeviceId;
       lastUniform = std::move(other.lastUniform);
+      cpuMirrorReservation = std::move(other.cpuMirrorReservation);
+      cpuUniformBytes = other.cpuUniformBytes;
       other.resident = false;
       other.encodedKey = nullptr;
       other.owningDeviceId = 0;
+      other.cpuUniformBytes = 0;
     }
     return *this;
   }
@@ -977,7 +1077,9 @@ struct GeodeResidentGradientSlot {
     encodedKey = nullptr;
     encodedFingerprint = 0;
     owningDeviceId = 0;
-    lastUniform.clear();
+    std::vector<uint8_t>().swap(lastUniform);
+    cpuMirrorReservation.reset();
+    cpuUniformBytes = 0;
   }
 };
 
