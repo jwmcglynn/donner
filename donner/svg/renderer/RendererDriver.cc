@@ -503,7 +503,34 @@ ResolvedClip toResolvedClip(const components::RenderingInstanceComponent& instan
       }
     }
 
-    clip.clipPaths.reserve(clipPaths->clipPaths.size());
+    RendererTextMaterializationBudget copyBudget;
+    const std::size_t shapeCount = clipPaths->clipPaths.size();
+    const bool shapeStorageFits =
+        shapeCount <= std::numeric_limits<std::size_t>::max() / sizeof(ClipPathShape) &&
+        copyBudget.reserve({.bytes = shapeCount * sizeof(ClipPathShape), .decodeWork = shapeCount});
+    bool geometryFits = shapeStorageFits;
+    for (const auto& path : clipPaths->clipPaths) {
+      const std::size_t commands = path.path.commands().size();
+      const std::size_t points = path.path.points().size();
+      const std::optional<std::size_t> retainedBytes = path.path.retainedBytes();
+      if (!geometryFits || !retainedBytes.has_value() ||
+          commands > std::numeric_limits<std::size_t>::max() - points ||
+          !copyBudget.reserve({.uniqueOutlines = 1,
+                               .commands = commands,
+                               .points = points,
+                               .bytes = *retainedBytes,
+                               .decodeWork = commands + points})) {
+        geometryFits = false;
+        break;
+      }
+    }
+
+    if (!geometryFits) {
+      clip.clipPaths.emplace_back();
+      return clip;
+    }
+
+    clip.clipPaths.reserve(shapeCount);
     for (const auto& path : clipPaths->clipPaths) {
       ClipPathShape shape;
       shape.path = path.path;

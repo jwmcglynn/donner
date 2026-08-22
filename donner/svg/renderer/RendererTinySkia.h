@@ -358,6 +358,7 @@ private:
     std::vector<Transform2d> savedTransformStack;
     std::optional<tiny_skia::Mask> savedClipMask;
     std::vector<std::optional<tiny_skia::Mask>> savedClipStack;
+    std::vector<bool> savedClipRestoreStack;
     /// Pattern paints pending at `beginPatternTile` time, saved so tile-content draws don't
     /// consume the outer element's pattern shaders (e.g. a `context-fill` pattern shared between
     /// several consumers re-rendering the same tile subtree). Restored by `endPatternTile`.
@@ -418,7 +419,7 @@ private:
   [[nodiscard]] tiny_skia::Pixmap& currentPixmap();
   [[nodiscard]] const tiny_skia::Pixmap& currentPixmap() const;
   [[nodiscard]] tiny_skia::MutablePixmapView currentPixmapView();
-  [[nodiscard]] std::optional<tiny_skia::Mask> buildClipMask(const ResolvedClip& clip) const;
+  [[nodiscard]] std::optional<tiny_skia::Mask> buildClipMask(const ResolvedClip& clip);
   [[nodiscard]] std::optional<FilterAdmission> admitFilterLayer(
       const components::FilterGraph& filterGraph, const std::optional<Box2d>& filterRegion,
       const Transform2d& deviceFromFilter, int viewportWidth, int viewportHeight);
@@ -493,6 +494,8 @@ private:
   std::vector<Transform2d> deviceFromLocalTransformStack_;
   std::optional<tiny_skia::Mask> currentClipMask_;
   std::vector<std::optional<tiny_skia::Mask>> clipStack_;
+  std::vector<bool> clipRestoreStack_;
+  bool clipMaskAllocationRejected_ = false;
   tiny_skia::Pixmap rejectedPixmap_;
   std::vector<SurfaceFrame> surfaceStack_;
   std::vector<bool> filterLayerStack_;
@@ -550,6 +553,7 @@ private:
   std::uint64_t nextClipEpoch_ = 1;
   std::vector<std::uint64_t> clipEpochStack_;
   std::vector<ClipEpochSlot> clipEpochSlots_;
+  bool clipEpochRetentionActive_ = false;
   /// Surface size the remembered clip masks were built against.
   tiny_skia::IntSize previousFrameSize_;
 };

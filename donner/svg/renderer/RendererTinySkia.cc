@@ -47,6 +47,15 @@ namespace donner::svg {
 
 namespace {
 
+std::size_t ConservativePathMeasurementWorkUnits(const Path& path) {
+  for (const Path::Command& command : path.commands()) {
+    if (command.verb == Path::Verb::QuadTo || command.verb == Path::Verb::CurveTo) {
+      return RendererDrawBudget::kMaximumPathMeasurementWorkUnits;
+    }
+  }
+  return std::min(path.commands().size(), RendererDrawBudget::kMaximumPathMeasurementWorkUnits);
+}
+
 std::optional<int> CheckedPixelDimension(double logicalDimension, double devicePixelRatio) {
   const double pixelDimension = logicalDimension * devicePixelRatio;
   if (!std::isfinite(logicalDimension) || !std::isfinite(devicePixelRatio) ||
@@ -1319,6 +1328,26 @@ void RendererTinySkia::beginFrame(const RenderViewport& viewport) {
     pixelHeight = 0;
   }
 
+  const tiny_skia::IntSize admittedFrameSize(static_cast<std::uint32_t>(pixelWidth),
+                                             static_cast<std::uint32_t>(pixelHeight));
+  if (admittedFrameSize != previousFrameSize_) {
+    clipEpochSlots_.clear();
+  }
+
+  clipEpochRetentionActive_ = false;
+  if (retainedSpansEnabled_ && pixelWidth > 0 && pixelHeight > 0) {
+    RendererSurfaceBudget withClipEpochEnvelope = *surfaceBudget_;
+    if (withClipEpochEnvelope.reserve(pixelWidth, pixelHeight, kMaxRetainedClipDepth,
+                                      /*bytesPerPixel=*/1)) {
+      *surfaceBudget_ = withClipEpochEnvelope;
+      clipEpochRetentionActive_ = true;
+    } else {
+      clipEpochSlots_.clear();
+    }
+  } else {
+    clipEpochSlots_.clear();
+  }
+
   // Keep the frame buffer's allocation across frames. A renderer that draws the
   // same viewport repeatedly (editor, compositor, animation loop) otherwise
   // releases and re-acquires the whole buffer every frame, which costs a
@@ -1338,6 +1367,8 @@ void RendererTinySkia::beginFrame(const RenderViewport& viewport) {
   deviceFromLocalTransformStack_.clear();
   currentClipMask_.reset();
   clipStack_.clear();
+  clipRestoreStack_.clear();
+  clipMaskAllocationRejected_ = false;
   surfaceStack_.clear();
   filterLayerStack_.clear();
   rejectedFilterDepth_ = 0;
@@ -1377,6 +1408,8 @@ void RendererTinySkia::endFrame() {
   deviceFromLocalTransformStack_.clear();
   currentClipMask_.reset();
   clipStack_.clear();
+  clipRestoreStack_.clear();
+  clipMaskAllocationRejected_ = false;
   cacheWiringCheckedRegistry_ = nullptr;
 }
 
@@ -1415,8 +1448,15 @@ void RendererTinySkia::popTransform() {
 }
 
 void RendererTinySkia::pushClip(const ResolvedClip& clip) {
-  clipStack_.push_back(currentClipMask_);
   clipEpochStack_.push_back(clipEpoch_);
+  if (clip.empty()) {
+    clipStack_.emplace_back();
+    clipRestoreStack_.push_back(false);
+    return;
+  }
+
+  clipStack_.push_back(std::move(currentClipMask_));
+  clipRestoreStack_.push_back(true);
 
   if (rejectedFilterDepth_ != 0) {
     return;
@@ -1424,11 +1464,12 @@ void RendererTinySkia::pushClip(const ResolvedClip& clip) {
 
   std::optional<tiny_skia::Mask> clipMask = buildClipMask(clip);
   if (!clipMask.has_value()) {
+    clipMaskAllocationRejected_ = true;
     return;
   }
 
-  if (currentClipMask_.has_value()) {
-    intersectMaskInPlace(*clipMask, *currentClipMask_);
+  if (clipStack_.back().has_value()) {
+    intersectMaskInPlace(*clipMask, *clipStack_.back());
   }
 
   currentClipMask_ = std::move(clipMask);
@@ -1444,8 +1485,11 @@ void RendererTinySkia::popClip() {
     return;
   }
 
-  currentClipMask_ = std::move(clipStack_.back());
+  if (clipRestoreStack_.back()) {
+    currentClipMask_ = std::move(clipStack_.back());
+  }
   clipStack_.pop_back();
+  clipRestoreStack_.pop_back();
   clipEpoch_ = clipEpochStack_.back();
   clipEpochStack_.pop_back();
 }
@@ -1453,6 +1497,10 @@ void RendererTinySkia::popClip() {
 std::uint64_t RendererTinySkia::assignClipEpoch(std::size_t depth) {
   if (!retainedSpansEnabled_ || !currentClipMask_.has_value()) {
     return 0;
+  }
+
+  if (!clipEpochRetentionActive_ || !surfaceStack_.empty()) {
+    return nextClipEpoch_++;
   }
 
   // Remembering one mask per depth is what makes the identity useful: a document's clip stack
@@ -1701,10 +1749,12 @@ void RendererTinySkia::pushFilterLayer(const components::FilterGraph& filterGrap
   // The clip mask is restored in popFilterLayer and applied when compositing the filter output.
   frame.savedClipMask = std::move(currentClipMask_);
   frame.savedClipStack = std::move(clipStack_);
+  frame.savedClipRestoreStack = std::move(clipRestoreStack_);
   frame.savedClipEpoch = clipEpoch_;
   frame.savedClipEpochStack = std::move(clipEpochStack_);
   currentClipMask_.reset();
   clipStack_.clear();
+  clipRestoreStack_.clear();
   clipEpoch_ = 0;
   clipEpochStack_.clear();
 
@@ -1856,6 +1906,7 @@ void RendererTinySkia::popFilterLayer() {
   // paint → filter → clip-path → mask → opacity.
   currentClipMask_ = std::move(frame.savedClipMask);
   clipStack_ = std::move(frame.savedClipStack);
+  clipRestoreStack_ = std::move(frame.savedClipRestoreStack);
   clipEpoch_ = frame.savedClipEpoch;
   clipEpochStack_ = std::move(frame.savedClipEpochStack);
 
@@ -2008,6 +2059,7 @@ bool RendererTinySkia::beginPatternTile(const Box2d& tileRect,
   frame.savedTransformStack = std::move(deviceFromLocalTransformStack_);
   frame.savedClipMask = std::move(currentClipMask_);
   frame.savedClipStack = std::move(clipStack_);
+  frame.savedClipRestoreStack = std::move(clipRestoreStack_);
   frame.savedClipEpoch = clipEpoch_;
   frame.savedClipEpochStack = std::move(clipEpochStack_);
 
@@ -2024,6 +2076,7 @@ bool RendererTinySkia::beginPatternTile(const Box2d& tileRect,
   deviceFromLocalTransformStack_.clear();
   currentClipMask_.reset();
   clipStack_.clear();
+  clipRestoreStack_.clear();
   clipEpoch_ = 0;
   clipEpochStack_.clear();
   return true;
@@ -2041,6 +2094,7 @@ void RendererTinySkia::endPatternTile(bool forStroke) {
   deviceFromLocalTransformStack_ = std::move(frame.savedTransformStack);
   currentClipMask_ = std::move(frame.savedClipMask);
   clipStack_ = std::move(frame.savedClipStack);
+  clipRestoreStack_ = std::move(frame.savedClipRestoreStack);
   clipEpoch_ = frame.savedClipEpoch;
   clipEpochStack_ = std::move(frame.savedClipEpochStack);
   patternFillPaint_ = std::move(frame.savedPatternFillPaint);
@@ -2138,6 +2192,10 @@ void RendererTinySkia::drawPath(const PathShape& path, const StrokeParams& strok
   StrokeParams adjustedStroke = stroke;
   if (!adjustedStroke.dashArray.empty() && adjustedStroke.pathLength > 0.0 &&
       !NearZero(adjustedStroke.pathLength)) {
+    if (!drawBudget_->reserve(
+            {.pathMeasurementWorkUnits = ConservativePathMeasurementWorkUnits(pathGeometry)})) {
+      return;
+    }
     const double actualLength = pathGeometry.pathLength();
     const double dashUnitsScale = actualLength / adjustedStroke.pathLength;
     for (double& dash : adjustedStroke.dashArray) {
@@ -3240,14 +3298,14 @@ int RendererTinySkia::height() const {
 }
 
 tiny_skia::Pixmap& RendererTinySkia::currentPixmap() {
-  if (rejectedFilterDepth_ != 0 || drawBudget_->rejected()) {
+  if (rejectedFilterDepth_ != 0 || drawBudget_->rejected() || clipMaskAllocationRejected_) {
     return rejectedPixmap_;
   }
   return surfaceStack_.empty() ? frame_ : surfaceStack_.back().pixmap;
 }
 
 const tiny_skia::Pixmap& RendererTinySkia::currentPixmap() const {
-  if (rejectedFilterDepth_ != 0 || drawBudget_->rejected()) {
+  if (rejectedFilterDepth_ != 0 || drawBudget_->rejected() || clipMaskAllocationRejected_) {
     return rejectedPixmap_;
   }
   return surfaceStack_.empty() ? frame_ : surfaceStack_.back().pixmap;
@@ -3257,7 +3315,7 @@ tiny_skia::MutablePixmapView RendererTinySkia::currentPixmapView() {
   return currentPixmap().mutableView();
 }
 
-std::optional<tiny_skia::Mask> RendererTinySkia::buildClipMask(const ResolvedClip& clip) const {
+std::optional<tiny_skia::Mask> RendererTinySkia::buildClipMask(const ResolvedClip& clip) {
   if (clip.empty()) {
     return std::nullopt;
   }
@@ -3274,11 +3332,21 @@ std::optional<tiny_skia::Mask> RendererTinySkia::buildClipMask(const ResolvedCli
               << "  clipPathUnitsTransform=" << clip.clipPathUnitsTransform;
   }
 
+  const int maskWidth = static_cast<int>(currentPixmap().width());
+  const int maskHeight = static_cast<int>(currentPixmap().height());
+  bool allocationFailed = false;
   const auto createMask = [&]() {
-    std::optional<tiny_skia::Mask> mask =
-        createMaskForSize(currentPixmap().width(), currentPixmap().height());
+    if (!surfaceBudget_->reserve(maskWidth, maskHeight, /*surfaceCount=*/1,
+                                 /*bytesPerPixel=*/1)) {
+      allocationFailed = true;
+      return std::optional<tiny_skia::Mask>();
+    }
+    std::optional<tiny_skia::Mask> mask = createMaskForSize(static_cast<std::uint32_t>(maskWidth),
+                                                            static_cast<std::uint32_t>(maskHeight));
     if (mask.has_value()) {
       std::fill(mask->data().begin(), mask->data().end(), 0);
+    } else {
+      allocationFailed = true;
     }
     return mask;
   };
@@ -3372,6 +3440,9 @@ std::optional<tiny_skia::Mask> RendererTinySkia::buildClipMask(const ResolvedCli
     std::cout << "\n";
   }
 
+  if (allocationFailed) {
+    return std::nullopt;
+  }
   return result;
 }
 
