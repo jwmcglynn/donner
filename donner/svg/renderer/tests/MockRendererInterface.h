@@ -57,6 +57,7 @@ public:
               (const std::function<bool()>& shouldCancel), (const, override));
   MOCK_METHOD(std::shared_ptr<const RendererTextureSnapshot>, takeTextureSnapshot, (), (override));
   MOCK_METHOD(bool, requiresTextureSnapshotPresentation, (), (const, override));
+  MOCK_METHOD(RendererFilterPreparationBudget*, filterPreparationBudget, (), (override));
   MOCK_METHOD(std::unique_ptr<RendererInterface>, createOffscreenInstance, (), (const, override));
   MOCK_METHOD(void, setDebugGeometryOverlay, (bool enabled), (override));
   MOCK_METHOD(bool, debugGeometryOverlay, (), (const, override));
