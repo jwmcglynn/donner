@@ -78,6 +78,7 @@ void CheckResult(const std::variant<std::vector<uint8_t>, ResourceLoaderError>& 
 
 extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
   static SandboxFixture fixture;
+  const std::string_view input(reinterpret_cast<const char*>(data), size);  // NOLINT
   FuzzedDataProvider provider(data, size);
 
   CheckResult(fixture.loader().fetchExternalResource("inside.bin"));
@@ -85,6 +86,36 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
   CheckResult(fixture.loader().fetchExternalResource("../root-sibling/secret.bin"));
   if (fixture.hasSymlink()) {
     CheckResult(fixture.loader().fetchExternalResource("escape-link/secret.bin"));
+  }
+  if (input.starts_with("embedded-null-path")) {
+    constexpr char kEmbeddedNullPath[] = "..\0ignored/root-sibling/secret.bin";
+    const std::string path(kEmbeddedNullPath, sizeof(kEmbeddedNullPath) - 1);
+    const auto result = fixture.loader().fetchExternalResource(path);
+    CheckResult(result);
+    const auto* error = std::get_if<ResourceLoaderError>(&result);
+    if (error == nullptr || *error != ResourceLoaderError::SandboxViolation) {
+      std::abort();
+    }
+  }
+  if (input.starts_with("path-representation-bounds")) {
+    std::string path;
+    for (std::size_t i = 0; i <= SandboxedFileResourceLoader::kMaximumPathComponents; ++i) {
+      path += "a/";
+    }
+    const auto result = fixture.loader().fetchExternalResource(path);
+    const auto* error = std::get_if<ResourceLoaderError>(&result);
+    if (error == nullptr || *error != ResourceLoaderError::SandboxViolation) {
+      std::abort();
+    }
+  }
+  if (input.starts_with("invalid-utf8-path")) {
+    constexpr char kInvalidUtf8Path[] = "invalid-\xED\xA0\x80.bin";
+    const auto result = fixture.loader().fetchExternalResource(
+        std::string_view(kInvalidUtf8Path, sizeof(kInvalidUtf8Path) - 1));
+    const auto* error = std::get_if<ResourceLoaderError>(&result);
+    if (error == nullptr || *error != ResourceLoaderError::SandboxViolation) {
+      std::abort();
+    }
   }
   CheckResult(fixture.loader().fetchExternalResource(provider.ConsumeRandomLengthString(256)));
   return 0;

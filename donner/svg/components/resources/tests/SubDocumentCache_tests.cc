@@ -10,6 +10,7 @@
 #include "donner/base/ParseWarningSink.h"
 #include "donner/base/encoding/Base64.h"
 #include "donner/svg/SVGDocument.h"
+#include "donner/svg/components/ParsedPayloadResourceBudget.h"
 #define private public
 #include "donner/svg/components/resources/ResourceManagerContext.h"
 #undef private
@@ -199,6 +200,7 @@ TEST(SubDocumentCacheTest, ParseFailureIsNegativeCached) {
   EXPECT_FALSE(cache.getOrParse("bad.svg", content, callback, warnings).has_value());
   EXPECT_EQ(parseCount, 1);
   EXPECT_TRUE(cache.isRejected("bad.svg"));
+  EXPECT_EQ(cache.securityStats().negativeCacheHits, 1u);
 }
 
 TEST(SubDocumentCacheTest, NegativeCacheLatchesAfterBoundedEntries) {
@@ -209,6 +211,59 @@ TEST(SubDocumentCacheTest, NegativeCacheLatchesAfterBoundedEntries) {
   }
 
   EXPECT_TRUE(cache.isRejected("never-seen.svg"));
+}
+
+TEST(SubDocumentCacheTest, EnforcesAggregateEntityBudget) {
+  SubDocumentCache cache(SubDocumentCache::Limits{
+      .maximumDocuments = 4,
+      .maximumParseAttempts = 4,
+      .maximumAggregateEntities = 10,
+  });
+  cache.setRootEntityCount(4);
+  const std::vector<uint8_t> content{'x'};
+  int parseCount = 0;
+  const SubDocumentCache::ParseCallback callback =
+      [&parseCount](const std::vector<uint8_t>&,
+                    ParseWarningSink&) -> std::optional<SVGDocumentHandle> {
+    ++parseCount;
+    SVGDocument document;
+    for (int i = 0; i < 4; ++i) {
+      (void)document.registry().create();
+    }
+    return document.handle();
+  };
+
+  ParseWarningSink disabledSink = ParseWarningSink::Disabled();
+  EXPECT_TRUE(cache.getOrParse("one.svg", content, callback, disabledSink).has_value());
+  EXPECT_FALSE(cache.getOrParse("two.svg", content, callback, disabledSink).has_value());
+  EXPECT_EQ(parseCount, 2);
+  EXPECT_EQ(cache.securityStats().documents, 1u);
+  EXPECT_EQ(cache.securityStats().entities, 5u);
+  EXPECT_TRUE(cache.securityStats().rejected);
+}
+
+TEST(SubDocumentCacheTest, EnforcesAggregateParsedPayloadBudget) {
+  SubDocumentCache cache(SubDocumentCache::Limits{
+      .maximumDocuments = 4,
+      .maximumParseAttempts = 4,
+      .maximumAggregateEntities = 100,
+      .maximumAggregatePayloadBytes = 10,
+  });
+  ParseWarningSink warnings;
+  const SubDocumentCache::ParseCallback callback =
+      [](const std::vector<uint8_t>&, ParseWarningSink&) -> std::optional<SVGDocumentHandle> {
+    SVGDocument document;
+    auto& budget = document.registry().ctx().emplace<ParsedPayloadResourceBudget>(
+        ParsedPayloadResourceBudget::Limits{.maximumRetainedBytes = 64});
+    EXPECT_TRUE(budget.reserve(6, ParsedPayloadResourceBudget::Category::Attribute));
+    return document.handle();
+  };
+
+  EXPECT_TRUE(cache.getOrParse("one.svg", {}, callback, warnings));
+  EXPECT_FALSE(cache.getOrParse("two.svg", {}, callback, warnings));
+  EXPECT_EQ(cache.securityStats().documents, 1u);
+  EXPECT_EQ(cache.securityStats().payloadBytes, 6u);
+  EXPECT_TRUE(cache.securityStats().rejected);
 }
 
 TEST(SubDocumentCacheTest, RecursionDetection) {
@@ -455,6 +510,25 @@ TEST_F(ResourceManagerContextTest, FailedExternalSvgProbeDoesNotSuppressRasterIm
   EXPECT_TRUE(registry_.get<LoadedImageComponent>(image).image.has_value());
 }
 
+TEST_F(ResourceManagerContextTest, RejectsOversizedExternalSvgUrlBeforeCacheOrCallback) {
+  int fetchCount = 0;
+  setResourceLoader(std::make_unique<TestResourceLoader>([&fetchCount]() { ++fetchCount; }));
+  setSvgParseCallback(
+      [](const std::vector<uint8_t>&, ParseWarningSink&) -> std::optional<SVGDocumentHandle> {
+        ADD_FAILURE() << "oversized URL reached the SVG parser callback";
+        return std::nullopt;
+      });
+
+  ParseWarningSink warnings;
+  const std::string oversized(UrlLoader::kMaximumExternalUriSize + 1, 'a');
+  EXPECT_FALSE(resourceManager_->loadExternalSVG(oversized, warnings).has_value());
+  EXPECT_EQ(fetchCount, 0);
+  EXPECT_EQ(resourceManager_->fetchSecurityStats().attempts, 0u);
+  EXPECT_TRUE(resourceManager_->fetchSecurityStats().rejected);
+  ASSERT_TRUE(warnings.hasWarnings());
+  EXPECT_LT(warnings.warnings().front().reason.size(), 256u);
+}
+
 TEST_F(ResourceManagerContextTest, LoadExternalSVGSuccess) {
   auto loader = std::make_unique<TestResourceLoader>();
   const std::vector<uint8_t> svgContent{'<', 's', 'v', 'g', '>'};
@@ -690,7 +764,6 @@ TEST(ResourceManagerContextAggregateBudgetTest,
   EXPECT_EQ(registry.ctx().get<SubDocumentCache>().size(), 0u);
   EXPECT_TRUE(warnings.hasWarnings());
 }
-
 TEST_F(ResourceManagerContextTest, UserCallbacksRunOutsideDocumentWriteAccess) {
   SVGDocument document;
   document.setThreadingMode(ThreadingMode::ConcurrentDom);
@@ -780,6 +853,39 @@ TEST_F(ResourceManagerContextTest, LoadResourcesWithoutLoaderWarnsForExternalIma
 
   EXPECT_TRUE(registry_.all_of<LoadedImageComponent>(imageEntity));
   EXPECT_TRUE(warnings.hasWarnings());
+}
+
+TEST_F(ResourceManagerContextTest, CachesFailedExternalImageFetches) {
+  int fetchCount = 0;
+  setResourceLoader(std::make_unique<TestResourceLoader>([&fetchCount]() { ++fetchCount; }));
+  addImage("same-missing.png");
+  addImage("same-missing.png");
+
+  ParseWarningSink warnings;
+  resourceManager_->loadResources(warnings);
+
+  EXPECT_EQ(fetchCount, 1);
+  EXPECT_EQ(resourceManager_->fetchSecurityStats().attempts, 1u);
+  EXPECT_EQ(resourceManager_->fetchSecurityStats().cacheHits, 1u);
+}
+
+TEST(ResourceManagerContextFetchBudgetTest, CapsUniqueExternalFetchAttempts) {
+  Registry registry;
+  auto& resourceManager = registry.ctx().emplace<ResourceManagerContext>(registry, 1024 * 1024, 2);
+  int fetchCount = 0;
+  resourceManager.setResourceLoader(
+      std::make_unique<TestResourceLoader>([&fetchCount]() { ++fetchCount; }));
+  for (std::string_view url : {"a.png", "b.png", "c.png"}) {
+    const Entity entity = registry.create();
+    registry.emplace<ImageComponent>(entity, ImageComponent{RcString(url)});
+  }
+
+  ParseWarningSink warnings;
+  resourceManager.loadResources(warnings);
+
+  EXPECT_EQ(fetchCount, 2);
+  EXPECT_EQ(resourceManager.fetchSecurityStats().attempts, 2u);
+  EXPECT_TRUE(resourceManager.fetchSecurityStats().rejected);
 }
 
 TEST_F(ResourceManagerContextTest, LoadResourcesSkipsEmptyImageHref) {
@@ -982,6 +1088,24 @@ TEST_F(ResourceManagerContextTest, AddFontFacesHydratesUrlFontSources) {
   ASSERT_EQ(faces[1].sources.size(), 1u);
   EXPECT_EQ(faces[1].sources[0].kind, css::FontFaceSource::Kind::Data);
   EXPECT_FALSE(warnings.hasWarnings());
+}
+
+TEST_F(ResourceManagerContextTest, StylesheetFontFacesAreIdempotentForStableParsedStorage) {
+  css::FontFace face;
+  face.familyName = "StableFont";
+  css::FontFaceSource source;
+  source.kind = css::FontFaceSource::Kind::Local;
+  source.payload = RcString("StableFont");
+  face.sources.push_back(std::move(source));
+  const std::array<css::FontFace, 1> faces{std::move(face)};
+  const Entity stylesheetEntity = registry_.create();
+
+  resourceManager_->synchronizeStylesheetFontFaces(stylesheetEntity, faces);
+  resourceManager_->synchronizeStylesheetFontFaces(stylesheetEntity, faces);
+
+  EXPECT_EQ(resourceManager_->fontFaces().size(), 1u);
+  EXPECT_EQ(resourceManager_->pendingFontFaceCount(), 1u);
+  EXPECT_FALSE(resourceManager_->stylesheetFontFaceLimitRejected());
 }
 
 TEST_F(ResourceManagerContextTest, LoadResourcesWarnsForUnsupportedAndMissingFontSources) {

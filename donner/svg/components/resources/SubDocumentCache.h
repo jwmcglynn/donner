@@ -26,6 +26,22 @@ namespace donner::svg::components {
  */
 class SubDocumentCache {
 public:
+  struct Limits {
+    size_t maximumDocuments = 64;
+    size_t maximumParseAttempts = 128;
+    size_t maximumAggregateEntities = 32 * 1024;
+    size_t maximumAggregatePayloadBytes = 64 * 1024 * 1024;
+  };
+
+  struct SecurityStats {
+    size_t parseAttempts = 0;
+    size_t documents = 0;
+    size_t entities = 0;
+    size_t payloadBytes = 0;
+    size_t negativeCacheHits = 0;
+    bool rejected = false;
+  };
+
   /**
    * Callback type for parsing SVG content into a document. Called by \ref getOrParse when the URL
    * is not cached. Should return an \ref SVGDocumentHandle on success, or `std::nullopt` on
@@ -36,6 +52,7 @@ public:
 
   /// Constructor.
   SubDocumentCache() = default;
+  explicit SubDocumentCache(Limits limits) : limits_(limits) {}
 
   /// Destructor.
   ~SubDocumentCache() = default;
@@ -87,8 +104,19 @@ public:
   /// Returns the number of cached sub-documents.
   size_t size() const { return cache_.size(); }
 
+  /// Include root-document entities in the aggregate retained-node envelope.
+  void setRootEntityCount(size_t count) { rootEntityCount_ = count; }
+
+  /// Include root-document parsed payload in the aggregate retained-payload envelope.
+  void setRootPayloadBytes(size_t count) { rootPayloadBytes_ = count; }
+
+  const SecurityStats& securityStats() const { return securityStats_; }
+
 private:
   static constexpr size_t kMaximumRejectedEntries = 256;
+
+  bool admissionAvailable() const;
+  bool candidateFits(size_t entityCount, size_t payloadBytes) const;
 
   /// Cached sub-documents keyed by resolved URL.
   std::unordered_map<RcString, SVGDocumentHandle> cache_;
@@ -101,6 +129,11 @@ private:
 
   /// True after the bounded negative cache fills, rejecting every uncached URL.
   bool rejectAll_ = false;
+
+  Limits limits_;
+  SecurityStats securityStats_;
+  size_t rootEntityCount_ = 0;
+  size_t rootPayloadBytes_ = 0;
 };
 
 }  // namespace donner::svg::components

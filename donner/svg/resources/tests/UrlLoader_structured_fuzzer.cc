@@ -20,11 +20,15 @@ public:
 
   std::variant<std::vector<uint8_t>, ResourceLoaderError> fetchExternalResource(
       std::string_view /*url*/) override {
+    ++fetchCount_;
     return payload_;
   }
 
+  size_t fetchCount() const { return fetchCount_; }
+
 private:
   std::vector<uint8_t> payload_;
+  size_t fetchCount_ = 0;
 };
 
 std::string PercentEncode(std::span<const uint8_t> data) {
@@ -42,21 +46,38 @@ std::string PercentEncode(std::span<const uint8_t> data) {
 }  // namespace
 
 extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
+  const std::string_view input(reinterpret_cast<const char*>(data), size);  // NOLINT
+  const bool forceExternalUriLimit = input.starts_with("external-uri-representation-budget");
+  const bool forceZeroPerResourceLimit = input.starts_with("zero-per-resource-limit");
   FuzzedDataProvider provider(data, size);
-  const size_t maximumResourceSize = provider.ConsumeIntegralInRange<size_t>(0, 128);
-  size_t remainingResourceBytes = provider.ConsumeIntegralInRange<size_t>(0, 256);
+  const size_t maximumResourceSize =
+      forceZeroPerResourceLimit ? 0 : provider.ConsumeIntegralInRange<size_t>(0, 128);
+  size_t remainingResourceBytes =
+      forceZeroPerResourceLimit ? 44 : provider.ConsumeIntegralInRange<size_t>(0, 256);
   const std::vector<uint8_t> payload =
-      provider.ConsumeBytes<uint8_t>(provider.ConsumeIntegralInRange<size_t>(
-          0, std::min<size_t>(128, provider.remaining_bytes())));
+      forceZeroPerResourceLimit
+          ? std::vector<uint8_t>{}
+          : provider.ConsumeBytes<uint8_t>(provider.ConsumeIntegralInRange<size_t>(
+                0, std::min<size_t>(128, provider.remaining_bytes())));
 
   PayloadResourceLoader resourceLoader(payload);
   UrlLoader urlLoader(resourceLoader, maximumResourceSize, &remainingResourceBytes);
   const std::string externalUrl = "asset/" + provider.ConsumeRandomLengthString(32);
   const std::string dataUrl = PercentEncode(payload);
 
+  if (forceExternalUriLimit) {
+    const auto result = urlLoader.fromUri(std::string(UrlLoader::kMaximumExternalUriSize + 1, 'a'));
+    if (!std::holds_alternative<UrlLoaderError>(result) ||
+        std::get<UrlLoaderError>(result) != UrlLoaderError::ResourceTooLarge ||
+        resourceLoader.fetchCount() != 0) {
+      std::abort();
+    }
+  }
+
   for (std::string_view uri :
        {std::string_view(externalUrl), std::string_view(dataUrl), std::string_view(externalUrl)}) {
     const size_t before = remainingResourceBytes;
+    const size_t fetchCountBefore = resourceLoader.fetchCount();
     auto result = urlLoader.fromUri(uri);
     if (const auto* loaded = std::get_if<UrlLoader::Result>(&result)) {
       if (loaded->data.size() > maximumResourceSize || loaded->data.size() > before ||
@@ -65,7 +86,12 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
       }
     } else {
       const UrlLoaderError error = std::get<UrlLoaderError>(result);
-      if ((error == UrlLoaderError::ResourceTooLarge && remainingResourceBytes != 0) ||
+      const bool zeroPerResourceLimitRejectedBeforeFetch =
+          error == UrlLoaderError::ResourceTooLarge && maximumResourceSize == 0 &&
+          !uri.starts_with("data:") && remainingResourceBytes == before &&
+          resourceLoader.fetchCount() == fetchCountBefore;
+      if ((error == UrlLoaderError::ResourceTooLarge && remainingResourceBytes != 0 &&
+           !zeroPerResourceLimitRejectedBeforeFetch) ||
           (error != UrlLoaderError::ResourceTooLarge && remainingResourceBytes != before)) {
         std::abort();
       }

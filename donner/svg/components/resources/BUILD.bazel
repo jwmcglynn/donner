@@ -42,6 +42,7 @@ donner_cc_library(
         "//donner/base/encoding:decompress",
         "//donner/css:core",
         "//donner/svg:svg_document_handle",
+        "//donner/svg/components:components_core",
         "//donner/svg/resources:image_loader",
         "//donner/svg/resources:resource_loader_interface",
         "//donner/svg/resources:url_loader",

@@ -11,7 +11,9 @@
 #include "donner/base/Utils.h"
 #include "donner/base/encoding/Decompress.h"
 #include "donner/css/FontFace.h"
+#include "donner/svg/components/ParsedPayloadResourceBudget.h"
 #include "donner/svg/components/SVGDocumentContext.h"
+#include "donner/svg/components/StylesheetComponent.h"
 #include "donner/svg/components/resources/ImageComponent.h"
 #include "donner/svg/components/resources/SubDocumentCache.h"
 #include "donner/svg/resources/ImageLoader.h"
@@ -47,28 +49,69 @@ private:
   ResourceLoaderInterface& loader_;
 };
 
-class BoundedResourceLoader : public ResourceLoaderInterface {
+class BudgetedCachingResourceLoader : public ResourceLoaderInterface {
 public:
-  BoundedResourceLoader(ResourceLoaderInterface& loader, size_t& remainingAttempts,
-                        size_t& remainingResourceBytes)
+  using CachedFetchResult = std::variant<std::vector<uint8_t>, ResourceLoaderError>;
+
+  BudgetedCachingResourceLoader(ResourceLoaderInterface& loader,
+                                std::unordered_map<std::string, CachedFetchResult>& cache,
+                                ResourceManagerContext::FetchSecurityStats& securityStats,
+                                size_t& remainingAttempts, size_t maximumResourceSize,
+                                size_t& remainingResourceBytes)
       : loader_(loader),
+        cache_(cache),
+        securityStats_(securityStats),
         remainingAttempts_(remainingAttempts),
+        maximumResourceSize_(maximumResourceSize),
         remainingResourceBytes_(remainingResourceBytes) {}
 
   std::variant<std::vector<uint8_t>, ResourceLoaderError> fetchExternalResource(
       std::string_view url) override {
+    const std::string key(url);
+    if (const auto it = cache_.find(key); it != cache_.end()) {
+      ++securityStats_.cacheHits;
+      if (const auto* bytes = std::get_if<std::vector<uint8_t>>(&it->second);
+          bytes != nullptr &&
+          (bytes->size() > maximumResourceSize_ || bytes->size() > remainingResourceBytes_)) {
+        // Inspect the resident vector before returning the variant by value. Otherwise a resource
+        // that fit earlier in the document can be copied on every cache hit after the remaining
+        // aggregate budget has fallen below its size, even though UrlLoader rejects each copy.
+        securityStats_.rejected = true;
+        return ResourceLoaderError::TooLarge;
+      }
+      return it->second;
+    }
+
     if (remainingAttempts_ == 0 || remainingResourceBytes_ == 0) {
       remainingResourceBytes_ = 0;
+      securityStats_.rejected = true;
       return ResourceLoaderError::TooLarge;
     }
 
     --remainingAttempts_;
-    return loader_.fetchExternalResource(url);
+    ++securityStats_.attempts;
+    CachedFetchResult result = loader_.fetchExternalResource(url);
+    if (const auto* bytes = std::get_if<std::vector<uint8_t>>(&result);
+        bytes != nullptr &&
+        (bytes->size() > maximumResourceSize_ || bytes->size() > remainingResourceBytes_)) {
+      // Validate before transferring ownership into the persistent cache. UrlLoader performs the
+      // authoritative byte charge after this callback returns, but rejected positive results must
+      // not remain resident merely because they never consume that downstream budget.
+      securityStats_.rejected = true;
+      result = ResourceLoaderError::TooLarge;
+    } else if (bytes != nullptr) {
+      securityStats_.cachedBytes += bytes->size();
+    }
+    cache_.emplace(key, result);
+    return result;
   }
 
 private:
   ResourceLoaderInterface& loader_;
+  std::unordered_map<std::string, CachedFetchResult>& cache_;
+  ResourceManagerContext::FetchSecurityStats& securityStats_;
   size_t& remainingAttempts_;
+  size_t maximumResourceSize_;
   size_t& remainingResourceBytes_;
 };
 
@@ -113,14 +156,192 @@ SubDocumentCache::ParseCallback GuardSvgParseCallback(
   };
 }
 
+bool NeedsExternalLoader(std::string_view uri) {
+  return !uri.empty() && !uri.starts_with("data:") && !uri.starts_with("#");
+}
+
+bool HasExternalImagesToLoad(Registry& registry) {
+  for (auto view = registry.view<ImageComponent>(); auto entity : view) {
+    if (registry.all_of<LoadedImageComponent>(entity) ||
+        registry.all_of<LoadedSVGImageComponent>(entity)) {
+      continue;
+    }
+    if (NeedsExternalLoader(view.get<ImageComponent>(entity).href)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool HasExternalFontFacesToLoad(std::span<const css::FontFace> fontFaces,
+                                std::span<const size_t> indexes) {
+  for (const size_t index : indexes) {
+    for (const css::FontFaceSource& source : fontFaces[index].sources) {
+      if (source.kind == css::FontFaceSource::Kind::Url &&
+          NeedsExternalLoader(std::get<RcString>(source.payload))) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+void RememberImageFailure(std::unordered_set<RcString>& failedUrls, const RcString& href) {
+  if (failedUrls.size() < ResourceManagerContext::kMaximumResourceFetchAttempts) {
+    failedUrls.insert(href);
+  }
+}
+
+SubDocumentCache& PrepareSubDocumentCache(Registry& registry) {
+  if (!registry.ctx().contains<SubDocumentCache>()) {
+    registry.ctx().emplace<SubDocumentCache>();
+  }
+  auto& cache = registry.ctx().get<SubDocumentCache>();
+  cache.setRootEntityCount(registry.storage<Entity>().size());
+  if (const auto* payload = registry.ctx().find<ParsedPayloadResourceBudget>()) {
+    cache.setRootPayloadBytes(payload->securityStats().retainedBytes);
+  }
+  return cache;
+}
+
+bool AttachCachedSubDocument(Registry& registry, Entity entity, const RcString& href) {
+  auto* cache = registry.ctx().find<SubDocumentCache>();
+  if (!cache) {
+    return false;
+  }
+  auto cachedDocument = cache->get(href);
+  if (!cachedDocument) {
+    return false;
+  }
+  registry.emplace<LoadedSVGImageComponent>(entity, std::move(*cachedDocument));
+  return true;
+}
+
+void LoadSvgImage(Registry& registry, Entity entity, const ImageComponent& image,
+                  SvgImageContent& svgContent,
+                  const SubDocumentCache::ParseCallback& svgParseCallback,
+                  size_t& remainingResourceBytes, std::unordered_set<RcString>& failedUrls,
+                  ParseWarningSink& warningSink) {
+  if (!svgParseCallback) {
+    warningSink.add(ParseDiagnostic::Error("SVG image references require an SVG parse callback",
+                                           FileOffset::Offset(0)));
+    RememberImageFailure(failedUrls, image.href);
+    registry.emplace<LoadedImageComponent>(entity);
+    return;
+  }
+
+  auto& cache = PrepareSubDocumentCache(registry);
+  auto guardedParseCallback =
+      GuardSvgParseCallback(registry, svgParseCallback, remainingResourceBytes);
+  auto subDocument =
+      cache.getOrParse(image.href, svgContent.data, guardedParseCallback, warningSink);
+  if (subDocument) {
+    registry.emplace<LoadedSVGImageComponent>(entity, std::move(*subDocument));
+    return;
+  }
+  RememberImageFailure(failedUrls, image.href);
+  registry.emplace<LoadedImageComponent>(entity);
+}
+
+void LoadImageEntity(Registry& registry, Entity entity, ResourceLoaderInterface& loader,
+                     const SubDocumentCache::ParseCallback& svgParseCallback,
+                     size_t& remainingResourceBytes, std::unordered_set<RcString>& failedUrls,
+                     ResourceManagerContext::FetchSecurityStats& securityStats,
+                     ParseWarningSink& warningSink) {
+  if (registry.all_of<LoadedImageComponent>(entity) ||
+      registry.all_of<LoadedSVGImageComponent>(entity)) {
+    return;
+  }
+  const auto& image = registry.get<ImageComponent>(entity);
+  if (image.href.empty() || std::string_view(image.href).starts_with("#")) {
+    return;
+  }
+  if (failedUrls.contains(image.href)) {
+    ++securityStats.cacheHits;
+    registry.emplace<LoadedImageComponent>(entity);
+    return;
+  }
+  if (AttachCachedSubDocument(registry, entity, image.href)) {
+    return;
+  }
+
+  ImageLoader imageLoader(loader, UrlLoader::kDefaultMaximumResourceSize, &remainingResourceBytes);
+  auto imageResult = imageLoader.fromUri(image.href);
+  if (const auto* error = std::get_if<UrlLoaderError>(&imageResult)) {
+    warningSink.add(
+        ParseDiagnostic::Error(RcString(std::string(ToString(*error))), FileOffset::Offset(0)));
+    RememberImageFailure(failedUrls, image.href);
+    registry.emplace<LoadedImageComponent>(entity);
+    return;
+  }
+  if (auto* svgContent = std::get_if<SvgImageContent>(&imageResult)) {
+    LoadSvgImage(registry, entity, image, *svgContent, svgParseCallback, remainingResourceBytes,
+                 failedUrls, warningSink);
+    return;
+  }
+  registry.emplace<LoadedImageComponent>(entity, std::get<ImageResource>(std::move(imageResult)));
+}
+
+void LoadImages(Registry& registry, ResourceLoaderInterface& loader,
+                const SubDocumentCache::ParseCallback& svgParseCallback,
+                size_t& remainingResourceBytes, std::unordered_set<RcString>& failedUrls,
+                ResourceManagerContext::FetchSecurityStats& securityStats,
+                ParseWarningSink& warningSink) {
+  for (auto view = registry.view<ImageComponent>(); auto entity : view) {
+    LoadImageEntity(registry, entity, loader, svgParseCallback, remainingResourceBytes, failedUrls,
+                    securityStats, warningSink);
+  }
+}
+
+void LoadFontFaces(std::vector<css::FontFace>& fontFaces, std::span<const size_t> indexes,
+                   bool loaderAvailable, ResourceLoaderInterface& loader,
+                   size_t& remainingResourceBytes, ParseWarningSink& warningSink) {
+  UrlLoader urlLoader(loader, UrlLoader::kDefaultMaximumResourceSize, &remainingResourceBytes);
+  for (const size_t index : indexes) {
+    for (css::FontFaceSource& source : fontFaces[index].sources) {
+      if (source.kind == css::FontFaceSource::Kind::Url) {
+        const RcString& url = std::get<RcString>(source.payload);
+        if (!loaderAvailable && NeedsExternalLoader(url)) {
+          continue;
+        }
+        auto maybeFontData = urlLoader.fromUri(url);
+        if (const auto* error = std::get_if<UrlLoaderError>(&maybeFontData)) {
+          warningSink.add(
+              ParseDiagnostic::Error(RcString(std::string("Could not load font ") + url + ": " +
+                                              std::string(ToString(*error))),
+                                     FileOffset::Offset(0)));
+          continue;
+        }
+        UrlLoader::Result fontData = std::get<UrlLoader::Result>(std::move(maybeFontData));
+        source.kind = css::FontFaceSource::Kind::Data;
+        source.payload = std::make_shared<const std::vector<uint8_t>>(std::move(fontData.data));
+      } else if (source.kind != css::FontFaceSource::Kind::Data) {
+        warningSink.add(
+            ParseDiagnostic::Error("Unsupported font face source kind", FileOffset::Offset(0)));
+      }
+    }
+  }
+}
+
 }  // namespace
 
 ResourceManagerContext::ResourceManagerContext(Registry& registry,
-                                               size_t maximumAggregateResourceSize)
-    : registry_(registry), remainingResourceBytes_(maximumAggregateResourceSize) {}
+                                               size_t maximumAggregateResourceSize,
+                                               size_t maximumExternalFetchAttempts)
+    : registry_(registry),
+      remainingResourceBytes_(maximumAggregateResourceSize),
+      remainingResourceFetchAttempts_(maximumExternalFetchAttempts) {
+  registry_.on_destroy<StylesheetComponent>().connect<&ResourceManagerContext::onStylesheetDestroy>(
+      this);
+}
+
+void ResourceManagerContext::onStylesheetDestroy(Registry&, Entity entity) {
+  stylesheetFontFaceRegistrations_.erase(entity);
+}
 
 void ResourceManagerContext::setResourceLoader(std::unique_ptr<ResourceLoaderInterface>&& loader) {
   failedImageUrls_.clear();
+  externalFetchCache_.clear();
   if (auto* cache = registry_.ctx().find<SubDocumentCache>()) {
     cache->clearFailures();
   }
@@ -134,174 +355,42 @@ void ResourceManagerContext::loadResources(ParseWarningSink& warningSink) {
     return;
   }
 
-  auto imageView = registry_.view<ImageComponent>();
-
   NullResourceLoader nullLoader;
   WriteAccessGuardedResourceLoader guardedLoader(
       registry_, loader_ ? *loader_ : static_cast<ResourceLoaderInterface&>(nullLoader));
   ResourceLoaderInterface& uncappedLoader =
       loader_ ? static_cast<ResourceLoaderInterface&>(guardedLoader)
               : static_cast<ResourceLoaderInterface&>(nullLoader);
-  BoundedResourceLoader boundedLoader(uncappedLoader, remainingResourceFetchAttempts_,
-                                      remainingResourceBytes_);
-  ResourceLoaderInterface& loader = boundedLoader;
+  BudgetedCachingResourceLoader cachedLoader(
+      uncappedLoader, externalFetchCache_, fetchSecurityStats_, remainingResourceFetchAttempts_,
+      UrlLoader::kDefaultMaximumResourceSize, remainingResourceBytes_);
 
-  // Only warn about a missing loader if we actually have something that
-  // would need one. `data:` URLs are decoded inline in `UrlLoader::fromUri`
-  // without touching the resource loader, so their presence alone doesn't
-  // justify the warning.
-  const auto needsExternalLoader = [](std::string_view uri) {
-    return !uri.empty() && !uri.starts_with("data:");
-  };
-
-  const bool hasExternalImage = [&] {
-    for (auto entity : imageView) {
-      if (registry_.all_of<LoadedImageComponent>(entity) ||
-          registry_.all_of<LoadedSVGImageComponent>(entity)) {
-        continue;
-      }
-      if (needsExternalLoader(imageView.get<ImageComponent>(entity).href)) {
-        return true;
-      }
-    }
-    return false;
-  }();
-  const bool hasExternalFontFace = [&] {
-    for (const size_t fontFaceIndex : fontFaceIndexesToLoad_) {
-      const css::FontFace& fontFace = fontFaces_[fontFaceIndex];
-      for (const css::FontFaceSource& source : fontFace.sources) {
-        if (source.kind == css::FontFaceSource::Kind::Url &&
-            needsExternalLoader(std::get<RcString>(source.payload))) {
-          return true;
-        }
-      }
-    }
-    return false;
-  }();
-
-  if (!loader_ && (hasExternalImage || hasExternalFontFace)) {
-    ParseDiagnostic err;
-    err.reason = "Could not load external resources, no ResourceLoader provided";
-    warningSink.add(std::move(err));
+  if (!loader_ && (HasExternalImagesToLoad(registry_) ||
+                   HasExternalFontFacesToLoad(fontFaces_, fontFaceIndexesToLoad_))) {
+    warningSink.add(ParseDiagnostic::Error(
+        "Could not load external resources, no ResourceLoader provided", FileOffset::Offset(0)));
   }
 
-  // Iterate over all ImageComponents and load them.
-  for (auto view = imageView; auto entity : view) {
-    // Skip entities that already have a loaded image or SVG sub-document.
-    if (registry_.all_of<LoadedImageComponent>(entity) ||
-        registry_.all_of<LoadedSVGImageComponent>(entity)) {
-      continue;
-    }
-
-    auto [image] = view.get(entity);
-    if (image.href.empty()) {
-      continue;
-    }
-
-    if (failedImageUrls_.contains(image.href)) {
-      registry_.emplace<LoadedImageComponent>(entity);
-      continue;
-    }
-
-    if (auto* cache = registry_.ctx().find<SubDocumentCache>()) {
-      if (auto cachedDocument = cache->get(image.href)) {
-        registry_.emplace<LoadedSVGImageComponent>(entity, std::move(*cachedDocument));
-        continue;
-      }
-    }
-
-    ImageLoader imageLoader(loader, UrlLoader::kDefaultMaximumResourceSize,
-                            &remainingResourceBytes_);
-
-    auto imageResult = imageLoader.fromUri(image.href);
-    if (std::holds_alternative<UrlLoaderError>(imageResult)) {
-      ParseDiagnostic err;
-      err.reason = std::string(ToString(std::get<UrlLoaderError>(imageResult)));
-      warningSink.add(std::move(err));
-
-      if (failedImageUrls_.size() < kMaximumResourceFetchAttempts) {
-        failedImageUrls_.insert(image.href);
-      }
-
-      // Create an empty LoadedImageComponent to prevent loading again.
-      registry_.emplace<LoadedImageComponent>(entity);
-    } else if (std::holds_alternative<SvgImageContent>(imageResult)) {
-      if (!svgParseCallback_) {
-        // No SVG parser available - skip.
-        ParseDiagnostic err;
-        err.reason = "SVG image references require an SVG parse callback";
-        warningSink.add(std::move(err));
-        if (failedImageUrls_.size() < kMaximumResourceFetchAttempts) {
-          failedImageUrls_.insert(image.href);
-        }
-        registry_.emplace<LoadedImageComponent>(entity);
-        continue;
-      }
-
-      auto& svgContent = std::get<SvgImageContent>(imageResult);
-
-      // Get or create the SubDocumentCache on this registry.
-      if (!registry_.ctx().contains<SubDocumentCache>()) {
-        registry_.ctx().emplace<SubDocumentCache>();
-      }
-      auto& cache = registry_.ctx().get<SubDocumentCache>();
-
-      SubDocumentCache::ParseCallback guardedParseCallback =
-          GuardSvgParseCallback(registry_, svgParseCallback_, remainingResourceBytes_);
-      auto subDoc =
-          cache.getOrParse(image.href, svgContent.data, guardedParseCallback, warningSink);
-      if (subDoc) {
-        registry_.emplace<LoadedSVGImageComponent>(entity, std::move(*subDoc));
-      } else {
-        // Parse failed - create an empty LoadedImageComponent to prevent retrying.
-        if (failedImageUrls_.size() < kMaximumResourceFetchAttempts) {
-          failedImageUrls_.insert(image.href);
-        }
-        registry_.emplace<LoadedImageComponent>(entity);
-      }
-    } else {
-      ImageResource imageResource = std::get<ImageResource>(std::move(imageResult));
-      registry_.emplace<LoadedImageComponent>(entity, std::move(imageResource));
-    }
-  }
-
-  // Hydrate URL font sources into data sources. FontManager owns parsing and caches decoded font
-  // handles on demand; ResourceManager only resolves bytes while the document resource loader is
-  // available.
-  UrlLoader urlLoader(loader, UrlLoader::kDefaultMaximumResourceSize, &remainingResourceBytes_);
-  for (const size_t fontFaceIndex : fontFaceIndexesToLoad_) {
-    css::FontFace& fontFace = fontFaces_[fontFaceIndex];
-    for (css::FontFaceSource& source : fontFace.sources) {
-      if (source.kind == css::FontFaceSource::Kind::Url) {
-        const RcString& url = std::get<RcString>(source.payload);
-        if (!loader_ && needsExternalLoader(url)) {
-          continue;
-        }
-
-        auto maybeFontData = urlLoader.fromUri(url);
-        if (std::holds_alternative<UrlLoaderError>(maybeFontData)) {
-          ParseDiagnostic err;
-          err.reason = std::string("Could not load font ") + url + ": " +
-                       std::string(ToString(std::get<UrlLoaderError>(maybeFontData)));
-          warningSink.add(std::move(err));
-        } else {
-          UrlLoader::Result fontData = std::get<UrlLoader::Result>(std::move(maybeFontData));
-          source.kind = css::FontFaceSource::Kind::Data;
-          source.payload = std::make_shared<const std::vector<uint8_t>>(std::move(fontData.data));
-        }
-      } else if (source.kind != css::FontFaceSource::Kind::Data) {
-        ParseDiagnostic err;
-        err.reason = "Unsupported font face source kind";
-        warningSink.add(std::move(err));
-      }
-    }
-  }
+  LoadImages(registry_, cachedLoader, svgParseCallback_, remainingResourceBytes_, failedImageUrls_,
+             fetchSecurityStats_, warningSink);
+  LoadFontFaces(fontFaces_, fontFaceIndexesToLoad_, loader_ != nullptr, cachedLoader,
+                remainingResourceBytes_, warningSink);
 
   fontFaceIndexesToLoad_.clear();
 }
 
 std::optional<SVGDocumentHandle> ResourceManagerContext::loadExternalSVG(
-    const RcString& url, ParseWarningSink& warningSink) {
+    std::string_view url, ParseWarningSink& warningSink) {
+  if (UrlLoader::validateExternalUriRepresentation(url)) {
+    fetchSecurityStats_.rejected = true;
+    warningSink.add([] {
+      ParseDiagnostic err;
+      err.reason = "Rejected external SVG reference with an invalid or oversized URL";
+      return err;
+    });
+    return std::nullopt;
+  }
+  const RcString boundedUrl(url);
   // In secure modes, external resource loading is disabled.
   if (processingMode_ == ProcessingMode::SecureStatic ||
       processingMode_ == ProcessingMode::SecureAnimated) {
@@ -327,20 +416,25 @@ std::optional<SVGDocumentHandle> ResourceManagerContext::loadExternalSVG(
     registry_.ctx().emplace<SubDocumentCache>();
   }
   auto& cache = registry_.ctx().get<SubDocumentCache>();
+  cache.setRootEntityCount(registry_.storage<Entity>().size());
+  if (const auto* payload = registry_.ctx().find<ParsedPayloadResourceBudget>()) {
+    cache.setRootPayloadBytes(payload->securityStats().retainedBytes);
+  }
 
   // Check if already cached.
-  if (auto cached = cache.get(url)) {
+  if (auto cached = cache.get(boundedUrl)) {
     return cached;
   }
-  if (cache.isRejected(url)) {
+  if (cache.isRejected(boundedUrl)) {
     return std::nullopt;
   }
 
   // Fetch the file content using the same per-resource and aggregate budgets as images and fonts.
   WriteAccessGuardedResourceLoader guardedLoader(registry_, *loader_);
-  BoundedResourceLoader boundedLoader(guardedLoader, remainingResourceFetchAttempts_,
-                                      remainingResourceBytes_);
-  UrlLoader urlLoader(boundedLoader, UrlLoader::kDefaultMaximumResourceSize,
+  BudgetedCachingResourceLoader cachedLoader(
+      guardedLoader, externalFetchCache_, fetchSecurityStats_, remainingResourceFetchAttempts_,
+      UrlLoader::kDefaultMaximumResourceSize, remainingResourceBytes_);
+  UrlLoader urlLoader(cachedLoader, UrlLoader::kDefaultMaximumResourceSize,
                       &remainingResourceBytes_);
   auto fetchResult = urlLoader.fromUri(url);
   if (std::holds_alternative<UrlLoaderError>(fetchResult)) {
@@ -349,14 +443,13 @@ std::optional<SVGDocumentHandle> ResourceManagerContext::loadExternalSVG(
     err.reason = std::string("Failed to load external SVG '") + std::string(url) +
                  "': " + std::string(ToString(loaderError));
     warningSink.add(std::move(err));
-    cache.rememberFailure(url);
+    cache.rememberFailure(boundedUrl);
     return std::nullopt;
   }
-
   auto& data = std::get<UrlLoader::Result>(fetchResult).data;
   SubDocumentCache::ParseCallback guardedParseCallback =
       GuardSvgParseCallback(registry_, svgParseCallback_, remainingResourceBytes_);
-  return cache.getOrParse(url, data, guardedParseCallback, warningSink);
+  return cache.getOrParse(boundedUrl, data, guardedParseCallback, warningSink);
 }
 
 void ResourceManagerContext::addFontFaces(std::span<const css::FontFace> fontFaces) {
@@ -380,7 +473,24 @@ void ResourceManagerContext::synchronizeStylesheetFontFaces(
   auto& registration = stylesheetFontFaceRegistrations_[stylesheetEntity];
   if (registration.data == fontFaces.data() && registration.size == fontFaces.size()) return;
   registration = {.data = fontFaces.data(), .size = fontFaces.size()};
-  addFontFaces(fontFaces);
+
+  for (const css::FontFace& fontFace : fontFaces) {
+    std::string identity = css::FontFaceIdentityKey(fontFace);
+    if (const auto it = fontFaceIndexByIdentity_.find(identity);
+        it != fontFaceIndexByIdentity_.end()) {
+      fontFaceIndexesToLoad_.push_back(it->second);
+      continue;
+    }
+    if (stylesheetFontFaceCount_ >= kMaximumStylesheetFontFaces) {
+      stylesheetFontFaceLimitRejected_ = true;
+      break;
+    }
+
+    fontFaceIndexByIdentity_.emplace(std::move(identity), fontFaces_.size());
+    fontFaceIndexesToLoad_.push_back(fontFaces_.size());
+    fontFaces_.push_back(fontFace);
+    ++stylesheetFontFaceCount_;
+  }
 }
 
 std::optional<Vector2i> ResourceManagerContext::getImageSize(Entity entity) const {
@@ -403,6 +513,7 @@ const LoadedImageComponent* ResourceManagerContext::getLoadedImageComponent(Enti
     return nullptr;
   }
   if (failedImageUrls_.contains(image->href)) {
+    ++fetchSecurityStats_.cacheHits;
     return nullptr;
   }
 
@@ -412,10 +523,11 @@ const LoadedImageComponent* ResourceManagerContext::getLoadedImageComponent(Enti
   ResourceLoaderInterface& uncappedLoader =
       loader_ ? static_cast<ResourceLoaderInterface&>(guardedLoader)
               : static_cast<ResourceLoaderInterface&>(nullLoader);
-  BoundedResourceLoader boundedLoader(uncappedLoader, remainingResourceFetchAttempts_,
-                                      remainingResourceBytes_);
-  ResourceLoaderInterface& loader = boundedLoader;
-  ImageLoader imageLoader(loader, UrlLoader::kDefaultMaximumResourceSize, &remainingResourceBytes_);
+  BudgetedCachingResourceLoader cachedLoader(
+      uncappedLoader, externalFetchCache_, fetchSecurityStats_, remainingResourceFetchAttempts_,
+      UrlLoader::kDefaultMaximumResourceSize, remainingResourceBytes_);
+  ImageLoader imageLoader(cachedLoader, UrlLoader::kDefaultMaximumResourceSize,
+                          &remainingResourceBytes_);
 
   auto imageResult = imageLoader.fromUri(image->href);
   if (std::holds_alternative<ImageResource>(imageResult)) {

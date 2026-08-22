@@ -23,6 +23,9 @@ struct ImageComponent {
  * raster image (PNG, JPEG, GIF).
  */
 struct LoadedImageComponent {
+  LoadedImageComponent() = default;
+  explicit LoadedImageComponent(ImageResource loadedImage) : image(std::move(loadedImage)) {}
+
   std::optional<ImageResource> image;  //!< Loaded image resource.
 };
 

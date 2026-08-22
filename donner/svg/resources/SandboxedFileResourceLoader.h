@@ -3,6 +3,7 @@
 
 #include <cstddef>
 #include <filesystem>
+#include <memory>
 
 #include "donner/svg/resources/ResourceLoaderInterface.h"
 
@@ -15,6 +16,10 @@ class SandboxedFileResourceLoader : public ResourceLoaderInterface {
 public:
   /// Default maximum size of one external resource.
   static constexpr size_t kDefaultMaximumResourceSize = 16 * 1024 * 1024;
+  /// Maximum byte length accepted for an untrusted filesystem URL.
+  static constexpr size_t kMaximumPathBytes = 4096;
+  /// Maximum number of components accepted for an untrusted filesystem URL.
+  static constexpr size_t kMaximumPathComponents = 256;
 
   /**
    * Create a new resource loader that loads files sandboxed within the given root directory.
@@ -37,7 +42,7 @@ public:
   SandboxedFileResourceLoader& operator=(SandboxedFileResourceLoader&&) = delete;
 
   /// Destructor.
-  ~SandboxedFileResourceLoader() override = default;
+  ~SandboxedFileResourceLoader() override;
 
   /**
    * Fetch external resource from a given URL.
@@ -49,9 +54,14 @@ public:
       std::string_view url) override;
 
 private:
-  std::filesystem::path root_;          //!< Root directory of the sandbox.
-  std::filesystem::path documentPath_;  //!< Path to the document being loaded.
-  size_t maximumResourceSize_;          //!< Maximum bytes accepted from one resource.
+  struct RootDirectoryHandle;
+
+  bool hasValidRootHandle() const;
+
+  std::filesystem::path root_;                       //!< Root directory of the sandbox.
+  std::filesystem::path documentPath_;               //!< Path to the document being loaded.
+  size_t maximumResourceSize_;                       //!< Maximum bytes accepted from one resource.
+  std::unique_ptr<RootDirectoryHandle> rootHandle_;  //!< Pinned sandbox root.
 };
 
 }  // namespace donner::svg

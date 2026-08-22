@@ -1304,10 +1304,9 @@ TEST(ReproFileTest, ReadsWhitespacePrefixedNestedBlocksAndEmptyArrays) {
       R"("left_mouse_down_ordinal":1,"frame_offset_after_left_mouse_down":2,)"
       R"("min_frame_index":3,"max_frame_index":4,"target_selector":"#target",)"
       R"("crop_mode":"document","crop": 	{"x":5,"y":6,"w":7,"h":8})";
-  WriteTextFile(path,
-                MetadataLineWith(std::string(R"(,"expect": 	{)") + expect + "}") +
-                    FrameLineWith(std::string(R"(,"vp": 	{)") + viewport +
-                                  R"(},"a":[],"e":[{"k":"mdown","hit": 	{"tag":"rect"}}])"));
+  WriteTextFile(path, MetadataLineWith(std::string(R"(,"expect": 	{)") + expect + "}") +
+                          FrameLineWith(std::string(R"(,"vp": 	{)") + viewport +
+                                        R"(},"a":[],"e":[{"k":"mdown","hit": 	{"tag":"rect"}}])"));
 
   auto loaded = ReadReproFile(path);
   ASSERT_TRUE(loaded.has_value());
@@ -1484,6 +1483,13 @@ TEST(ReproFileTest, ReadsExternalSvgOnlyWithinReplayDirectory) {
 
   EXPECT_FALSE(ReadReproSvgFile(rnrPath, "../outside.svg").has_value());
   EXPECT_FALSE(ReadReproSvgFile(rnrPath, svgPath.string()).has_value());
+
+  std::error_code symlinkError;
+  const std::filesystem::path symlinkPath = root / "linked.svg";
+  std::filesystem::create_symlink(svgPath, symlinkPath, symlinkError);
+  if (!symlinkError) {
+    EXPECT_FALSE(ReadReproSvgFile(rnrPath, "linked.svg").has_value());
+  }
 
   std::error_code cleanupError;
   std::filesystem::remove_all(root, cleanupError);

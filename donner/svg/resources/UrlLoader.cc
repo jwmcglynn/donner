@@ -1,9 +1,13 @@
 #include "donner/svg/resources/UrlLoader.h"
 
 #include "donner/base/StringUtils.h"
+#include "donner/base/Utf8.h"
 #include "donner/base/parser/DataUrlParser.h"
 
 namespace donner::svg {
+
+static_assert(UrlLoader::kMaximumExternalUriSize ==
+              parser::DataUrlParser::kDefaultMaximumExternalUrlSize);
 
 using parser::DataUrlParser;
 using parser::DataUrlParserError;
@@ -61,21 +65,74 @@ std::string MimeTypeFromUrl(std::string_view url) {
   return "";
 }
 
-}  // namespace
-
-bool UrlLoader::consumeResourceBytes(size_t size) {
-  if (size > maximumResourceSize_ ||
-      (remainingResourceBytes_ != nullptr && size > *remainingResourceBytes_)) {
-    if (remainingResourceBytes_ != nullptr) {
-      *remainingResourceBytes_ = 0;
+bool ConsumeResourceBytes(size_t size, size_t maximumResourceSize, size_t* remainingResourceBytes) {
+  if (size > maximumResourceSize ||
+      (remainingResourceBytes != nullptr && size > *remainingResourceBytes)) {
+    if (remainingResourceBytes != nullptr) {
+      *remainingResourceBytes = 0;
     }
     return false;
   }
 
-  if (remainingResourceBytes_ != nullptr) {
-    *remainingResourceBytes_ -= size;
+  if (remainingResourceBytes != nullptr) {
+    *remainingResourceBytes -= size;
   }
   return true;
+}
+
+void LatchAggregateRejection(UrlLoaderError error, size_t* remainingResourceBytes) {
+  if (error == UrlLoaderError::ResourceTooLarge && remainingResourceBytes != nullptr) {
+    *remainingResourceBytes = 0;
+  }
+}
+
+std::variant<UrlLoader::Result, UrlLoaderError> LoadDataUrl(DataUrlParser::Result& parsedUrl,
+                                                            size_t maximumResourceSize,
+                                                            size_t* remainingResourceBytes) {
+  UrlLoader::Result result;
+  result.data = std::move(std::get<std::vector<uint8_t>>(parsedUrl.payload));
+  if (!ConsumeResourceBytes(result.data.size(), maximumResourceSize, remainingResourceBytes)) {
+    return UrlLoaderError::ResourceTooLarge;
+  }
+  result.mimeType = parsedUrl.mimeType;
+  return result;
+}
+
+std::variant<UrlLoader::Result, UrlLoaderError> LoadExternalUrl(
+    DataUrlParser::Result& parsedUrl, ResourceLoaderInterface& resourceLoader,
+    size_t maximumResourceSize, size_t* remainingResourceBytes) {
+  if (maximumResourceSize == 0 ||
+      (remainingResourceBytes != nullptr && *remainingResourceBytes == 0)) {
+    return UrlLoaderError::ResourceTooLarge;
+  }
+
+  const RcString& url = std::get<RcString>(parsedUrl.payload);
+  auto maybeLoadedData = resourceLoader.fetchExternalResource(url);
+  if (std::holds_alternative<ResourceLoaderError>(maybeLoadedData)) {
+    const UrlLoaderError error = MapError(std::get<ResourceLoaderError>(maybeLoadedData));
+    LatchAggregateRejection(error, remainingResourceBytes);
+    return error;
+  }
+
+  UrlLoader::Result result;
+  result.data = std::get<std::vector<uint8_t>>(std::move(maybeLoadedData));
+  if (!ConsumeResourceBytes(result.data.size(), maximumResourceSize, remainingResourceBytes)) {
+    return UrlLoaderError::ResourceTooLarge;
+  }
+  result.mimeType = MimeTypeFromUrl(url);
+  return result;
+}
+
+}  // namespace
+
+std::optional<UrlLoaderError> UrlLoader::validateExternalUriRepresentation(std::string_view uri) {
+  if (uri.size() > kMaximumExternalUriSize) {
+    return UrlLoaderError::ResourceTooLarge;
+  }
+  if (uri.find('\0') != std::string_view::npos || !Utf8::IsValidString(uri)) {
+    return UrlLoaderError::InvalidDataUrl;
+  }
+  return std::nullopt;
 }
 
 std::variant<UrlLoader::Result, UrlLoaderError> UrlLoader::fromUri(std::string_view uri) {
@@ -83,49 +140,30 @@ std::variant<UrlLoader::Result, UrlLoaderError> UrlLoader::fromUri(std::string_v
     return UrlLoaderError::ResourceTooLarge;
   }
 
-  Result result;
+  // Reject attacker-sized external identifiers before DataUrlParser copies them into RcString and
+  // before caching loaders copy/hash them again. Data URLs retain the larger encoded-input limit
+  // because their payload is the resource itself and is bounded again after decoding.
+  if (!uri.starts_with("data:")) {
+    if (const auto representationError = validateExternalUriRepresentation(uri)) {
+      LatchAggregateRejection(*representationError, remainingResourceBytes_);
+      return *representationError;
+    }
+  }
 
   std::variant<DataUrlParser::Result, DataUrlParserError> maybeParsedUrl =
       DataUrlParser::Parse(uri);
 
   if (std::holds_alternative<DataUrlParserError>(maybeParsedUrl)) {
     const UrlLoaderError error = MapError(std::get<DataUrlParserError>(maybeParsedUrl));
-    if (error == UrlLoaderError::ResourceTooLarge && remainingResourceBytes_ != nullptr) {
-      *remainingResourceBytes_ = 0;
-    }
+    LatchAggregateRejection(error, remainingResourceBytes_);
     return error;
   }
 
   DataUrlParser::Result& parsedUrl = std::get<DataUrlParser::Result>(maybeParsedUrl);
-
   if (parsedUrl.kind == DataUrlParser::Result::Kind::Data) {
-    result.data = std::move(std::get<std::vector<uint8_t>>(parsedUrl.payload));
-    if (!consumeResourceBytes(result.data.size())) {
-      return UrlLoaderError::ResourceTooLarge;
-    }
-    result.mimeType = parsedUrl.mimeType;
-    return result;
-  } else {
-    const RcString& url = std::get<RcString>(parsedUrl.payload);
-
-    // It's an external URL, fetch it.
-    auto maybeLoadedData = resourceLoader_.fetchExternalResource(url);
-    if (std::holds_alternative<ResourceLoaderError>(maybeLoadedData)) {
-      const UrlLoaderError error = MapError(std::get<ResourceLoaderError>(maybeLoadedData));
-      if (error == UrlLoaderError::ResourceTooLarge && remainingResourceBytes_ != nullptr) {
-        *remainingResourceBytes_ = 0;
-      }
-      return error;
-    }
-
-    result.data = std::get<std::vector<uint8_t>>(std::move(maybeLoadedData));
-    if (!consumeResourceBytes(result.data.size())) {
-      return UrlLoaderError::ResourceTooLarge;
-    }
-    result.mimeType = MimeTypeFromUrl(url);
+    return LoadDataUrl(parsedUrl, maximumResourceSize_, remainingResourceBytes_);
   }
-
-  return result;
+  return LoadExternalUrl(parsedUrl, resourceLoader_, maximumResourceSize_, remainingResourceBytes_);
 }
 
 }  // namespace donner::svg

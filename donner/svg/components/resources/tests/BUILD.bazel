@@ -1,5 +1,5 @@
 load("//build_defs:package.bzl", "donner_package")
-load("//build_defs:rules.bzl", "donner_cc_test")
+load("//build_defs:rules.bzl", "donner_cc_fuzzer", "donner_cc_test")
 
 donner_cc_test(
     name = "sub_document_cache_tests",
@@ -20,6 +20,17 @@ donner_cc_test(
         "//donner/svg/components/resources:resource_manager_context",
         "//donner/svg/parser",
         "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_fuzzer(
+    name = "resource_manager_context_fuzzer",
+    srcs = ["ResourceManagerContext_fuzzer.cc"],
+    corpus = "resource_manager_context_corpus",
+    deps = [
+        "//donner/base",
+        "//donner/svg",
+        "//donner/svg/components/resources:resource_manager_context",
     ],
 )
 

@@ -583,6 +583,60 @@ TEST_F(StyleSystemTest, RepeatedStylePassesRegisterEachFontFaceOnce) {
   }
 }
 
+TEST_F(StyleSystemTest, EquivalentStylesheetReparseCountsOnlyNewFontFaces) {
+  auto document = ParseSVG(R"(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <style>@font-face { font-family: TestFont; src: local(TestFont); }</style>
+      <rect id="r"/>
+    </svg>
+  )");
+  auto style = document.querySelector("style");
+  auto element = document.querySelector("#r")->entityHandle();
+  ASSERT_TRUE(style.has_value());
+  auto& stylesheet = style->entityHandle().get<StylesheetComponent>();
+  auto& resourceManager = document.registry().ctx().get<ResourceManagerContext>();
+  ParseWarningSink warningSink;
+
+  for (int pass = 0; pass < 5; ++pass) {
+    stylesheet.parseStylesheet(pass % 2 == 0
+                                   ? "@font-face { font-family: TestFont; src: local(TestFont); }"
+                                   : " @font-face{font-family:TestFont;src:local(TestFont)}");
+    SetRenderTreeState(document.registry(), RenderTreeState{.needsFullRebuild = false,
+                                                            .needsFullStyleRecompute = false,
+                                                            .hasBeenBuilt = true});
+    document.registry()
+        .emplace_or_replace<DirtyFlagsComponent>(element.entity())
+        .mark(DirtyFlagsComponent::Style);
+    styleSystem.computeAllStyles(document.registry(), warningSink);
+  }
+
+  EXPECT_EQ(resourceManager.fontFaces().size(), 1u);
+  EXPECT_EQ(resourceManager.stylesheetFontFaceCountForTesting(), 1u);
+}
+
+TEST_F(StyleSystemTest, DestroyedStylesheetRemovesRegistrationState) {
+  auto document = ParseSVG(R"(
+    <svg xmlns="http://www.w3.org/2000/svg">
+      <style>@font-face { font-family: TestFont; src: local(TestFont); }</style>
+    </svg>
+  )");
+  std::optional<SVGElement> style = document.querySelector("style");
+  ASSERT_TRUE(style.has_value());
+  auto root = document.svgElement();
+  ParseWarningSink warningSink;
+  styleSystem.computeAllStyles(document.registry(), warningSink);
+  auto& resourceManager = document.registry().ctx().get<ResourceManagerContext>();
+  const std::size_t registrationsBeforeRemoval =
+      resourceManager.stylesheetFontFaceRegistrationCountForTesting();
+  ASSERT_GT(registrationsBeforeRemoval, 0u);
+
+  root.removeChild(*style);
+  style.reset();
+
+  EXPECT_EQ(resourceManager.stylesheetFontFaceRegistrationCountForTesting(),
+            registrationsBeforeRemoval - 1);
+}
+
 TEST_F(StyleSystemTest, ComputeStylesForSubsetOnlyComputesRequestedEntities) {
   auto document = ParseSVG(R"(
     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">

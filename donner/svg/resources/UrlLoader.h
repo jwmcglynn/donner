@@ -2,6 +2,7 @@
 /// @file
 
 #include <cstddef>
+#include <optional>
 #include <string>
 
 #include "donner/base/Utils.h"
@@ -47,6 +48,12 @@ public:
   /// Default maximum decoded or fetched resource size.
   static constexpr size_t kDefaultMaximumResourceSize = 16 * 1024 * 1024;
 
+  /// Maximum external URI bytes accepted before copying, hashing, or invoking a callback.
+  static constexpr size_t kMaximumExternalUriSize = 4096;
+
+  /// Validate an external URI before any copy, hash, cache lookup, or callback.
+  static std::optional<UrlLoaderError> validateExternalUriRepresentation(std::string_view uri);
+
   /**
    * Result of loading a URI or decoding a data URL.
    */
@@ -89,8 +96,6 @@ public:
   std::variant<Result, UrlLoaderError> fromUri(std::string_view uri);
 
 private:
-  bool consumeResourceBytes(size_t size);
-
   /// Resource loader to use for fetching external resources.
   ResourceLoaderInterface& resourceLoader_;  // NOLINT
 
