@@ -746,7 +746,36 @@ def donner_cc_library(name, srcs = [], hdrs = [], copts = [], tags = [], visibil
         tags = tags,
     )
 
-def donner_cc_fuzzer(name, corpus, deps = [], per_input_timeout_seconds = 2, tags = [], **kwargs):
+def _fuzzer_routing_manifest_impl(ctx):
+    lines = []
+    for suffix, tags in [
+        ("", ctx.attr.corpus_tags),
+        ("_bin", ctx.attr.common_tags),
+        ("_soak", ctx.attr.common_tags),
+    ]:
+        for tag in sorted(tags):
+            lines.append("%s%s\t%s" % (ctx.attr.fuzzer_name, suffix, tag))
+    ctx.actions.write(ctx.outputs.out, "\n".join(lines) + "\n")
+    return [DefaultInfo(files = depset([ctx.outputs.out]))]
+
+_fuzzer_routing_manifest = rule(
+    implementation = _fuzzer_routing_manifest_impl,
+    attrs = {
+        "common_tags": attr.string_list(),
+        "corpus_tags": attr.string_list(),
+        "fuzzer_name": attr.string(mandatory = True),
+    },
+    outputs = {"out": "%{name}.txt"},
+)
+
+def donner_cc_fuzzer(
+        name,
+        corpus,
+        deps = [],
+        per_input_timeout_seconds = 2,
+        tags = [],
+        routing_manifest = None,
+        **kwargs):
     """
     Create a libfuzzer-based fuzz target.
 
@@ -756,6 +785,8 @@ def donner_cc_fuzzer(name, corpus, deps = [], per_input_timeout_seconds = 2, tag
       deps: List of dependencies.
       per_input_timeout_seconds: Maximum time for one generated input in the timed fuzz test.
       tags: Additional Bazel tags used to select configuration-specific corpus and soak lanes.
+      routing_manifest: Optional target name for a dependency-free manifest of the exact tags
+        assigned to each generated fuzzer target.
       **kwargs: Additional arguments, matching the implementation of cc_test.
 
     Generated targets:
@@ -786,6 +817,14 @@ def donner_cc_fuzzer(name, corpus, deps = [], per_input_timeout_seconds = 2, tag
         ubsan_tags.append("fuzz_ubsan_geode")
     common_target_tags = ["fuzz_target"] + common_tags
     corpus_tags = ["fuzz_target", "fuzz_ubsan"] + common_tags + ubsan_tags
+
+    if routing_manifest:
+        _fuzzer_routing_manifest(
+            name = routing_manifest,
+            common_tags = common_target_tags,
+            corpus_tags = corpus_tags,
+            fuzzer_name = name,
+        )
 
     cc_binary(
         name = name + "_bin",
@@ -818,12 +857,13 @@ def donner_cc_fuzzer(name, corpus, deps = [], per_input_timeout_seconds = 2, tag
         linkopts = fuzzer_runtime_linkopts,
         args = fuzz_time_args + [
             "-timeout=%d" % per_input_timeout_seconds,
+            "$(locations %s)" % corpus_name,
         ],
         linkstatic = 1,
         deps = deps,
         target_compatible_with = fuzzer_compatible_with(),
         size = "small",
-        data = select({
+        data = [corpus_name] + select({
             "@platforms//os:macos": ["@llvm_toolchain//:linker-components-aarch64-darwin"],
             "//conditions:default": [],
         }),
