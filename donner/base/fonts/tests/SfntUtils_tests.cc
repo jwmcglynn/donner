@@ -30,10 +30,10 @@ struct TableSpec {
   std::vector<uint8_t> bytes;
 };
 
-std::vector<uint8_t> MakeSfnt(std::vector<TableSpec> tables) {
+std::vector<uint8_t> MakeSfnt(std::vector<TableSpec> tables, uint32_t magic = 0x00010000) {
   const size_t directorySize = 12 + tables.size() * 16;
   std::vector<uint8_t> result(directorySize, 0);
-  WriteBe32(&result, 0, 0x00010000);
+  WriteBe32(&result, 0, magic);
   WriteBe16(&result, 4, static_cast<uint16_t>(tables.size()));
 
   size_t dataOffset = directorySize;
@@ -49,6 +49,80 @@ std::vector<uint8_t> MakeSfnt(std::vector<TableSpec> tables) {
     dataOffset += tables[i].bytes.size();
   }
   return result;
+}
+
+uint8_t EncodeSmallInteger(size_t value) {
+  EXPECT_LE(value, 107u);
+  return static_cast<uint8_t>(value + 139);
+}
+
+std::vector<uint8_t> MakeCff1() {
+  constexpr size_t kCharStringsOffset = 21;
+  return {
+      1,   0,   4,  4,              // Header.
+      0,   1,   1,  1,   2,   'A',  // Name INDEX.
+      0,   1,   1,  1,   3,   EncodeSmallInteger(kCharStringsOffset),
+      17,                    // Top DICT INDEX.
+      0,   0,                // String INDEX.
+      0,   0,                // Global Subr INDEX.
+      0,   1,   1,  1,   8,  // CharStrings INDEX.
+      139, 139, 21, 149, 139, 5,
+      14,  // Move, line, endchar.
+  };
+}
+
+std::vector<uint8_t> MakeCff2(bool variableCharString = false) {
+  constexpr size_t kCharStringsOffset = 14;
+  constexpr size_t kFdArrayOffset = 27;
+  std::vector<uint8_t> result = {
+      2,
+      0,
+      5,
+      0,
+      5,  // Header.
+      EncodeSmallInteger(kCharStringsOffset),
+      17,  // CharStrings.
+      EncodeSmallInteger(kFdArrayOffset),
+      12,
+      36,  // FDArray.
+      0,
+      0,
+      0,
+      0,  // Global Subr INDEX.
+      0,
+      0,
+      0,
+      1,
+      1,
+      1,
+      7,  // CharStrings INDEX.
+      139,
+      139,
+      21,
+      149,
+      139,
+      5,  // Move and line.
+      0,
+      0,
+      0,
+      1,
+      1,
+      1,
+      4,
+      139,
+      176,
+      18,  // FDArray and empty Private.
+  };
+  if (variableCharString) {
+    result[26] = 16;  // Replace rlineto with the unsupported CFF2 blend operator.
+  }
+  return result;
+}
+
+std::vector<uint8_t> MakeCffSfnt(std::string_view tag, std::vector<uint8_t> cff) {
+  std::vector<uint8_t> maxp(6, 0);
+  WriteBe16(&maxp, 4, 1);
+  return MakeSfnt({{tag, std::move(cff)}, {"maxp", std::move(maxp)}}, 0x4F54544F);
 }
 
 std::vector<uint8_t> CompoundGlyph(std::span<const uint16_t> dependencies) {
@@ -314,6 +388,29 @@ TEST(SfntUtils, CffUsesBoundedDirectoryWithoutTrueTypeDependencyIndex) {
   ASSERT_TRUE(font.has_value());
   EXPECT_EQ(font->numGlyphs(), 0u);
   EXPECT_EQ(font->retainedBytes(), sizeof(SfntFont::TableRecord));
+}
+
+TEST(SfntUtils, RetainsCff1PerGlyphComplexity) {
+  const std::vector<uint8_t> data = MakeCffSfnt("CFF ", MakeCff1());
+  const auto font = SfntFont::Validate(data);
+  ASSERT_TRUE(font.has_value());
+
+  const auto complexity = font->glyphOutlineComplexity(0);
+  ASSERT_TRUE(complexity.has_value());
+  EXPECT_EQ(complexity->maximumVertices, 3u);
+  EXPECT_GT(complexity->work, 0u);
+}
+
+TEST(SfntUtils, RetainsNonVariableCff2ComplexityAndFailsClosedForBlend) {
+  const std::vector<uint8_t> staticData = MakeCffSfnt("CFF2", MakeCff2());
+  const auto staticFont = SfntFont::Validate(staticData);
+  ASSERT_TRUE(staticFont.has_value());
+  EXPECT_TRUE(staticFont->glyphOutlineComplexity(0).has_value());
+
+  const std::vector<uint8_t> variableData = MakeCffSfnt("CFF2", MakeCff2(true));
+  const auto variableFont = SfntFont::Validate(variableData);
+  ASSERT_TRUE(variableFont.has_value());
+  EXPECT_FALSE(variableFont->glyphOutlineComplexity(0).has_value());
 }
 
 TEST(SfntUtils, ReportsExactRetainedIndexBytes) {
