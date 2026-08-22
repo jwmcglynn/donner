@@ -1520,7 +1520,10 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
   }
 
   bool submitFilterBudgetChunk() {
-    if (!device || !frameCommandEncoder || !target) {
+    if (!device || !frameCommandEncoder || !target || !filterStack.empty() ||
+        filterExecutionBudget->rejectionReason() !=
+            components::FilterExecutionBudget::RejectionReason::MemoryLimit ||
+        filterExecutionBudget->activeGpuReservations() != 0) {
       return false;
     }
 
@@ -1547,8 +1550,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
     configurePathEncoder(*encoder);
     encoder->setLoadPreserve();
     updateEncoderScissor();
-    filterExecutionBudget->beginChunkAfterSubmit();
-    return true;
+    return filterExecutionBudget->beginChunkAfterSubmit();
   }
 
   /// A saved encoder + target state for an in-progress isolated layer
@@ -4876,6 +4878,7 @@ void RendererGeode::popFilterLayer() {
   // intermediates have already been queued for frame-end pool release
   // through `FilterTextureAllocator`; recycle the layer capture here.
   impl_->releaseTextureAtFrameEnd(std::move(frame.layerTexture), frame.layerDesc);
+  impl_->filterExecutionBudget->release(frame.filterReservation);
 }
 
 void RendererGeode::pushMask(const std::optional<Box2d>& maskBounds, MaskType maskType) {

@@ -753,9 +753,11 @@ public:
 
   /** Release GPU-retained accounting after submitting one ordered command-buffer chunk. */
   bool beginChunkAfterSubmit() {
+    if (rejectionReason_ != RejectionReason::MemoryLimit || activeGpuReservations_ != 0) {
+      return false;
+    }
     intermediateBytes_ = 0;
     liveCpuCaptureBytes_ = 0;
-    activeGpuReservations_ = 0;
     rejectionReason_ = RejectionReason::None;
     rejected_ = false;
     ++chunks_;
@@ -824,7 +826,7 @@ public:
     }
     if (reservation.memoryModel == FilterMemoryModel::CpuFloatNamedResults) {
       liveCpuCaptureBytes_ -= reservation.captureBytes;
-    } else {
+    } else if (activeGpuReservations_ != 0) {
       --activeGpuReservations_;
     }
     reservation.active = false;
