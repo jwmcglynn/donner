@@ -47,15 +47,6 @@ namespace donner::svg {
 
 namespace {
 
-std::size_t ConservativePathMeasurementWorkUnits(const Path& path) {
-  for (const Path::Command& command : path.commands()) {
-    if (command.verb == Path::Verb::QuadTo || command.verb == Path::Verb::CurveTo) {
-      return RendererDrawBudget::kMaximumPathMeasurementWorkUnits;
-    }
-  }
-  return std::min(path.commands().size(), RendererDrawBudget::kMaximumPathMeasurementWorkUnits);
-}
-
 std::optional<int> CheckedPixelDimension(double logicalDimension, double devicePixelRatio) {
   const double pixelDimension = logicalDimension * devicePixelRatio;
   if (!std::isfinite(logicalDimension) || !std::isfinite(devicePixelRatio) ||
@@ -2263,12 +2254,19 @@ bool RendererTinySkia::applyPathLengthAdjustment(const Path& path, StrokeParams&
   if (stroke.dashArray.empty() || stroke.pathLength <= 0.0 || NearZero(stroke.pathLength)) {
     return true;
   }
-  if (!drawBudget_->reserve(
-          {.pathMeasurementWorkUnits = ConservativePathMeasurementWorkUnits(path)})) {
+  const std::optional<RendererDrawBudget::PathMeasurementReservation> reservation =
+      drawBudget_->reservePathMeasurement();
+  if (!reservation.has_value()) {
     return false;
   }
 
-  const double dashUnitsScale = path.pathLength() / stroke.pathLength;
+  const Path::MeasuredPath measured = path.measure(reservation->maximumWorkUnits());
+  if (!drawBudget_->reconcilePathMeasurement(*reservation, measured.measurementWorkUnits(),
+                                             measured.valid())) {
+    return false;
+  }
+
+  const double dashUnitsScale = measured.pathLength() / stroke.pathLength;
   for (double& dash : stroke.dashArray) {
     dash *= dashUnitsScale;
   }
