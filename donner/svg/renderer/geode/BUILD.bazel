@@ -70,15 +70,25 @@ genquery(
     scope = [":geode_geometry_fuzzer_routing_scope"],
 )
 
+genquery(
+    name = "geode_geometry_fuzzer_exclusive_query",
+    expression = "kind('.*_test rule', attr('tags', 'exclusive-if-local', deps(//donner/svg/renderer/geode:geode_geometry_fuzzer_routing_scope)))",
+    scope = [":geode_geometry_fuzzer_routing_scope"],
+)
+
 py_test(
     name = "geode_geometry_fuzzer_routing_tests",
     srcs = ["tests/GeodeGeometryFuzzerRouting_tests.py"],
     args = [
         "$(rootpath :geode_geometry_fuzzer_asan_query)",
         "$(rootpath :geode_geometry_fuzzer_ubsan_query)",
+        "$(rootpath :geode_geometry_fuzzer_exclusive_query)",
+        "$(rootpath tests/GeodeSvgGeometryBudget_fuzzer.cc)",
     ],
     data = [
+        "tests/GeodeSvgGeometryBudget_fuzzer.cc",
         ":geode_geometry_fuzzer_asan_query",
+        ":geode_geometry_fuzzer_exclusive_query",
         ":geode_geometry_fuzzer_ubsan_query",
     ],
     main = "tests/GeodeGeometryFuzzerRouting_tests.py",
