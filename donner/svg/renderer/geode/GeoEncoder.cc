@@ -147,8 +147,6 @@ constexpr uint32_t kPaintBlockRows = kGradientPaintBlockRows;
 constexpr uint64_t kPaintBlockBytes = kPaintBlockRows * 16u;
 
 /// Paint modes shared with `shaders/slug_fill.wgsl`.
-constexpr uint32_t kPaintModeSolid = 0u;
-constexpr uint32_t kPaintModePattern = 1u;
 constexpr uint32_t kPaintModeLinearGradient = 2u;
 constexpr uint32_t kPaintModeRadialGradient = 3u;
 
