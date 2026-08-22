@@ -200,10 +200,22 @@ static std::tuple<char32_t, int> consumeEscapedCodepoint(std::string_view remain
 ///
 /// @return A tuple containing the parsed name and the number of bytes consumed.
 static std::tuple<RcString, size_t> consumeName(std::string_view remaining) {
-  std::vector<char> str;
-
   const size_t remainingSize = remaining.size();
   size_t i = 0;
+  while (i < remainingSize && isNameCodepoint(remaining[i]) && remaining[i] != '\0') {
+    ++i;
+  }
+
+  // Avoid a temporary vector so ordinary short names stay in RcString's inline storage.
+  if (i == remainingSize || (remaining[i] != '\0' && !isValidEscape(remaining.substr(i)))) {
+    return {RcString(remaining.substr(0, i)), i};
+  }
+
+  std::vector<char> str;
+  // Preserve incremental growth instead of pre-sizing storage from the untrusted prefix length.
+  for (size_t prefixIndex = 0; prefixIndex < i; ++prefixIndex) {
+    str.push_back(remaining[prefixIndex]);
+  }
   while (i < remainingSize) {
     const char ch = remaining[i];
 

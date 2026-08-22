@@ -347,6 +347,8 @@ TEST(Tokenizer, AtKeyword) {
 TEST(Tokenizer, IdentLikeToken) {
   EXPECT_THAT(AllTokens(Tokenizer("ident")), ElementsAre(Token(Token::Ident("ident"), 0)));
   EXPECT_THAT(AllTokens(Tokenizer("--ident")), ElementsAre(Token(Token::Ident("--ident"), 0)));
+  EXPECT_THAT(AllTokens(Tokenizer("abcdefghijklmnopqrstuvwxyz-0123456789-long")),
+              ElementsAre(Token(Token::Ident("abcdefghijklmnopqrstuvwxyz-0123456789-long"), 0)));
 
   EXPECT_THAT(AllTokens(Tokenizer("func()")),
               ElementsAre(Token(Token::Function("func"), 0), Token(Token::CloseParenthesis(), 5)));
@@ -364,6 +366,8 @@ TEST(Tokenizer, IdentLikeToken) {
 
 TEST(Tokenizer, Escapes) {
   EXPECT_THAT(AllTokens(Tokenizer("\\20ident")), ElementsAre(Token(Token::Ident(" ident"), 0)));
+  EXPECT_THAT(AllTokens(Tokenizer("identifier-prefix\\20suffix")),
+              ElementsAre(Token(Token::Ident("identifier-prefix suffix"), 0)));
   EXPECT_THAT(AllTokens(Tokenizer("\\")), ElementsAre(Token(Token::Delim('\\'), 0)));
 
   EXPECT_THAT(AllTokens(Tokenizer("r\\êd")), ElementsAre(Token(Token::Ident("rêd"), 0)));
