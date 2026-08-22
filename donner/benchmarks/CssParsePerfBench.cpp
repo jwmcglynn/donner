@@ -28,8 +28,10 @@ namespace {
 
 using donner::ParseWarningSink;
 using donner::benchmarks::ConsumeCssTokens;
+using donner::benchmarks::kEscapedLongName;
 using donner::benchmarks::kInlineStyleMedium;
 using donner::benchmarks::kInlineStyleShort;
+using donner::benchmarks::kNulLongName;
 using donner::benchmarks::kSelectorComplex;
 using donner::benchmarks::kStylesheetMedium;
 using donner::benchmarks::kStylesheetSmall;
@@ -55,6 +57,26 @@ void BM_Tokenize_StylesheetMedium(benchmark::State& state) {
                           static_cast<int64_t>(kStylesheetMedium.size()));
 }
 BENCHMARK(BM_Tokenize_StylesheetMedium);
+
+void BM_Tokenize_EscapedLongName(benchmark::State& state) {
+  for (auto _ : state) {
+    std::size_t tokenCount = ConsumeCssTokens(kEscapedLongName);
+    benchmark::DoNotOptimize(tokenCount);
+  }
+  state.SetBytesProcessed(static_cast<int64_t>(state.iterations()) *
+                          static_cast<int64_t>(kEscapedLongName.size()));
+}
+BENCHMARK(BM_Tokenize_EscapedLongName);
+
+void BM_Tokenize_NulLongName(benchmark::State& state) {
+  for (auto _ : state) {
+    std::size_t tokenCount = ConsumeCssTokens(kNulLongName);
+    benchmark::DoNotOptimize(tokenCount);
+  }
+  state.SetBytesProcessed(static_cast<int64_t>(state.iterations()) *
+                          static_cast<int64_t>(kNulLongName.size()));
+}
+BENCHMARK(BM_Tokenize_NulLongName);
 
 void BM_ParseStyleAttribute_Short(benchmark::State& state) {
   for (auto _ : state) {

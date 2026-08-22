@@ -46,6 +46,14 @@ use[href="#icon-warn"] { fill: orange; }
 inline constexpr std::string_view kSelectorComplex =
     "div.container > .row[data-role=\"primary\"]:nth-child(2n+1):hover";
 
+/// Long identifier which requires escape decoding after an ordinary prefix.
+inline constexpr std::string_view kEscapedLongName =
+    "abcdefghijklmnopqrstuvwxyz-long-prefix\\20suffix";
+
+/// Long identifier which requires NUL replacement after an ordinary prefix.
+inline constexpr char kNulLongNameData[] = "abcdefghijklmnopqrstuvwxyz-long-prefix\0suffix";
+inline constexpr std::string_view kNulLongName(kNulLongNameData, sizeof(kNulLongNameData) - 1);
+
 /// Consume every token in \p input and return the number consumed.
 inline std::size_t ConsumeCssTokens(std::string_view input) {
   css::parser::details::Tokenizer tokenizer(input);

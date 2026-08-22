@@ -21,7 +21,9 @@ namespace {
 
 using donner::ParseWarningSink;
 using donner::benchmarks::ConsumeCssTokens;
+using donner::benchmarks::kEscapedLongName;
 using donner::benchmarks::kInlineStyleMedium;
+using donner::benchmarks::kNulLongName;
 using donner::benchmarks::kStylesheetMedium;
 using donner::benchmarks::allocations::Scope;
 using donner::benchmarks::allocations::Snapshot;
@@ -52,6 +54,16 @@ void BM_Allocations_TokenizeStylesheetMedium(benchmark::State& state) {
   MeasureAllocations(state, [] { return ConsumeCssTokens(kStylesheetMedium); });
 }
 BENCHMARK(BM_Allocations_TokenizeStylesheetMedium)->Iterations(1);
+
+void BM_Allocations_TokenizeEscapedLongName(benchmark::State& state) {
+  MeasureAllocations(state, [] { return ConsumeCssTokens(kEscapedLongName); });
+}
+BENCHMARK(BM_Allocations_TokenizeEscapedLongName)->Iterations(1);
+
+void BM_Allocations_TokenizeNulLongName(benchmark::State& state) {
+  MeasureAllocations(state, [] { return ConsumeCssTokens(kNulLongName); });
+}
+BENCHMARK(BM_Allocations_TokenizeNulLongName)->Iterations(1);
 
 void BM_Allocations_ParseStyleAttributeMedium(benchmark::State& state) {
   MeasureAllocations(state, [] { return CSS::ParseStyleAttribute(kInlineStyleMedium); });

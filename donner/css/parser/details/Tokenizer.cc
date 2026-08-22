@@ -212,6 +212,7 @@ static std::tuple<RcString, size_t> consumeName(std::string_view remaining) {
   }
 
   std::vector<char> str;
+  // Preserve incremental growth instead of pre-sizing storage from the untrusted prefix length.
   for (size_t prefixIndex = 0; prefixIndex < i; ++prefixIndex) {
     str.push_back(remaining[prefixIndex]);
   }
