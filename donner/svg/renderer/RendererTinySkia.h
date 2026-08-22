@@ -84,6 +84,9 @@ public:
    */
   void draw(SVGDocument& document) override;
 
+  void beginFrameResourceScope() override;
+  void endFrameResourceScope() override;
+
   /**
    * Begins a render pass for the given viewport.
    *
@@ -419,6 +422,7 @@ private:
   [[nodiscard]] tiny_skia::Pixmap& currentPixmap();
   [[nodiscard]] const tiny_skia::Pixmap& currentPixmap() const;
   [[nodiscard]] tiny_skia::MutablePixmapView currentPixmapView();
+  void resetOwnedFrameBudgets();
   void prepareRetainedClipEpochBudget(int pixelWidth, int pixelHeight);
   [[nodiscard]] bool applyPathLengthAdjustment(const Path& path, StrokeParams& stroke);
   [[nodiscard]] std::optional<tiny_skia::Mask> buildClipMask(const ResolvedClip& clip);
@@ -512,6 +516,7 @@ private:
   std::shared_ptr<RendererTextMaterializationBudget> textMaterializationBudget_ =
       std::make_shared<RendererTextMaterializationBudget>();
   bool ownsTextMaterializationBudget_ = true;
+  std::size_t frameResourceScopeDepth_ = 0;
   std::shared_ptr<TextGlyphWorkBudget> textGlyphWorkBudget_;
   std::shared_ptr<DashedPathWorkBudget> dashedPathWorkBudget_;
   std::optional<PatternPaintState> patternFillPaint_;

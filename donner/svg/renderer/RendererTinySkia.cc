@@ -1468,14 +1468,39 @@ void RendererTinySkia::prepareRetainedClipEpochBudget(int pixelWidth, int pixelH
   }
 }
 
-void RendererTinySkia::beginFrame(const RenderViewport& viewport) {
-  viewport_ = viewport;
+void RendererTinySkia::resetOwnedFrameBudgets() {
   if (ownsDrawBudget_) {
     drawBudget_->reset();
     textGlyphWorkBudget_->reset();
     dashedPathWorkBudget_->reset();
+  }
+  if (ownsTextMaterializationBudget_) {
     textMaterializationBudget_->reset();
+  }
+  if (ownsSurfaceBudget_) {
     surfaceBudget_->reset();
+  }
+  if (ownsFilterExecutionBudget_) {
+    filterExecutionBudget_->reset();
+  }
+}
+
+void RendererTinySkia::beginFrameResourceScope() {
+  if (frameResourceScopeDepth_ == 0) {
+    resetOwnedFrameBudgets();
+  }
+  ++frameResourceScopeDepth_;
+}
+
+void RendererTinySkia::endFrameResourceScope() {
+  UTILS_RELEASE_ASSERT(frameResourceScopeDepth_ > 0);
+  --frameResourceScopeDepth_;
+}
+
+void RendererTinySkia::beginFrame(const RenderViewport& viewport) {
+  viewport_ = viewport;
+  if (frameResourceScopeDepth_ == 0) {
+    resetOwnedFrameBudgets();
   }
   int pixelWidth = CheckedPixelDimension(viewport.size.x, viewport.devicePixelRatio).value_or(0);
   int pixelHeight = CheckedPixelDimension(viewport.size.y, viewport.devicePixelRatio).value_or(0);
@@ -1510,9 +1535,6 @@ void RendererTinySkia::beginFrame(const RenderViewport& viewport) {
   surfaceStack_.clear();
   filterLayerStack_.clear();
   rejectedFilterDepth_ = 0;
-  if (ownsFilterExecutionBudget_) {
-    filterExecutionBudget_->reset();
-  }
   patternFillPaint_.reset();
   patternStrokePaint_.reset();
   frameCounters_ = RendererTinySkiaFrameCounters();

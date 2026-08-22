@@ -1280,6 +1280,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   std::shared_ptr<RendererTextMaterializationBudget> textMaterializationBudget =
       std::make_shared<RendererTextMaterializationBudget>();
   bool ownsTextMaterializationBudget = true;
+  std::size_t frameResourceScopeDepth = 0;
   std::shared_ptr<geode::GeodeDocumentGeometryBudget::Limits> documentGeometryLimits =
       std::make_shared<geode::GeodeDocumentGeometryBudget::Limits>();
   struct DocumentGeometryFrameState {
@@ -1555,6 +1556,13 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     if (!texture) {
       return;
     }
+    const bool releasedSurface =
+        desc.size.width <= static_cast<uint32_t>(std::numeric_limits<int>::max()) &&
+        desc.size.height <= static_cast<uint32_t>(std::numeric_limits<int>::max()) &&
+        surfaceBudget->release(static_cast<int>(desc.size.width),
+                               static_cast<int>(desc.size.height),
+                               static_cast<std::size_t>(desc.size.depthOrArrayLayers));
+    UTILS_RELEASE_ASSERT(releasedSurface);
     if (texturePool) {
       texturePool->release(std::move(texture), desc);
     } else {
@@ -4177,18 +4185,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     frameFinishedEncoders.clear();
     geometryDebugEdges.clear();
     rejectedFilterDepth = 0;
-    if (ownsFilterExecutionBudget) {
-      filterExecutionBudget->reset();
-    }
-    if (ownsGeometryBudget) {
-      geometryBudget->reset();
-      documentGeometryFrameState->reset();
-    }
-    if (ownsSurfaceBudget) {
-      surfaceBudget->reset();
-    }
-    if (ownsTextMaterializationBudget) {
-      textMaterializationBudget->reset();
+    if (frameResourceScopeDepth == 0) {
+      resetOwnedFrameBudgets();
     }
     if (device) {
       device->filterEngine().beginFrame();
@@ -4208,6 +4206,22 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     transientGlyphEntries.clear();
     transientTextEncodes.clear();
     counters.reset();
+  }
+
+  void resetOwnedFrameBudgets() {
+    if (ownsFilterExecutionBudget) {
+      filterExecutionBudget->reset();
+    }
+    if (ownsGeometryBudget) {
+      geometryBudget->reset();
+      documentGeometryFrameState->reset();
+    }
+    if (ownsSurfaceBudget) {
+      surfaceBudget->reset();
+    }
+    if (ownsTextMaterializationBudget) {
+      textMaterializationBudget->reset();
+    }
   }
 
   bool prepareFrameTarget() {
@@ -4700,6 +4714,18 @@ size_t RendererGeode::residentGlyphCountForTesting(SVGDocument& document) {
     return 0;
   }
   return (*cachePtr)->size();
+}
+
+void RendererGeode::beginFrameResourceScope() {
+  if (impl_->frameResourceScopeDepth == 0) {
+    impl_->resetOwnedFrameBudgets();
+  }
+  ++impl_->frameResourceScopeDepth;
+}
+
+void RendererGeode::endFrameResourceScope() {
+  UTILS_RELEASE_ASSERT(impl_->frameResourceScopeDepth > 0);
+  --impl_->frameResourceScopeDepth;
 }
 
 int RendererGeode::width() const {

@@ -170,9 +170,33 @@ public:
     return true;
   }
 
-  /// Releases surfaces whose GPU use has completed. Implemented by the resource-budget repair.
-  [[nodiscard]] bool release(int /*width*/, int /*height*/, std::size_t /*surfaceCount*/ = 1,
-                             std::uint64_t /*bytesPerPixel*/ = 4) {
+  /// Releases surfaces after their last submitted GPU use, restoring active-capacity accounting.
+  [[nodiscard]] bool release(int width, int height, std::size_t surfaceCount = 1,
+                             std::uint64_t bytesPerPixel = 4) {
+    if (width < 0 || height < 0 || bytesPerPixel == 0) {
+      rejected_ = true;
+      return false;
+    }
+    if (width == 0 || height == 0 || surfaceCount == 0) {
+      return true;
+    }
+
+    const std::uint64_t pixelWidth = static_cast<std::uint64_t>(width);
+    const std::uint64_t pixelHeight = static_cast<std::uint64_t>(height);
+    if (pixelWidth > limits_.bytes / pixelHeight ||
+        pixelWidth * pixelHeight > limits_.bytes / bytesPerPixel ||
+        pixelWidth * pixelHeight * bytesPerPixel > limits_.bytes / surfaceCount) {
+      rejected_ = true;
+      return false;
+    }
+    const std::uint64_t byteCount = pixelWidth * pixelHeight * bytesPerPixel * surfaceCount;
+    if (surfaceCount > surfaces_ || byteCount > bytes_) {
+      rejected_ = true;
+      return false;
+    }
+
+    bytes_ -= byteCount;
+    surfaces_ -= surfaceCount;
     return true;
   }
 

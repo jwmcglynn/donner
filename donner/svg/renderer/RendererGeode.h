@@ -280,6 +280,8 @@ public:
   [[nodiscard]] int width() const override;
   [[nodiscard]] int height() const override;
 
+  void beginFrameResourceScope() override;
+  void endFrameResourceScope() override;
   void beginFrame(const RenderViewport& viewport) override;
   void endFrame() override;
 
