@@ -354,6 +354,35 @@ TEST_F(GeodeGlyphInstancingTest, ResidentGlyphHitsStillRequireGeometrySubmission
       << "A resident hit must not bypass a rejected geometry submission.";
 }
 
+TEST_F(GeodeGlyphInstancingTest, SceneBatchChargesEachLogicalGlyphExactlyOnce) {
+  SVGDocument document = parse(R"svg(
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200"
+           font-family="Noto Sans" font-size="48">
+        <text x="10" y="80" fill="black">eeee</text>
+      </svg>)svg");
+
+  RendererGeode renderer(sharedDevice());
+  renderer.setGeometryBudgetForTesting(/*maximumDraws=*/4u, /*maximumItems=*/1u << 20,
+                                       /*maximumFrameBytes=*/64u << 20,
+                                       /*maximumCacheBytes=*/64u << 20,
+                                       /*maximumResidentBytes=*/64u << 20);
+  const Frame exact = render(renderer, document);
+  ASSERT_GT(nonTransparentPixels(exact.bitmap), 0u);
+  EXPECT_EQ(renderer.resourceStats().geometryDraws, 4u);
+  EXPECT_FALSE(renderer.resourceStats().geometryBudgetRejected)
+      << "The final batch draw must consume the four append-time reservations, not charge again.";
+
+  renderer.setGeometryBudgetForTesting(/*maximumDraws=*/3u, /*maximumItems=*/1u << 20,
+                                       /*maximumFrameBytes=*/64u << 20,
+                                       /*maximumCacheBytes=*/64u << 20,
+                                       /*maximumResidentBytes=*/64u << 20);
+  const Frame capPlusOne = render(renderer, document);
+  EXPECT_EQ(renderer.resourceStats().geometryDraws, 3u);
+  EXPECT_TRUE(renderer.resourceStats().geometryBudgetRejected);
+  EXPECT_GT(nonTransparentPixels(capPlusOne.bitmap), 0u)
+      << "Accepted glyphs must remain drawable when the cap+1 occurrence is rejected.";
+}
+
 /// The cache key carries every parameter that changes the outline. A font-size
 /// change alters the scale the outline is built at, so it must mint new entries
 /// and draw the new size rather than serving the old geometry.

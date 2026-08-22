@@ -15,6 +15,8 @@
 /// `emplaceComputedPathIfChanged`) ensures those signals only fire when
 /// the path actually changed, so idle re-renders leave the cache intact.
 
+#include <cstddef>
+#include <limits>
 #include <optional>
 
 #include "donner/base/Path.h"
@@ -73,6 +75,23 @@ struct GeodePathCacheComponent {
     /// NonZero vs EvenOdd based on subpath topology, so this is
     /// derived and cached alongside the encode.
     FillRule strokeFillRule = FillRule::NonZero;
+
+    /// Exact dynamic capacity retained by this cached stroke entry.
+    std::optional<std::size_t> retainedBytes() const {
+      const std::optional<std::size_t> pathBytes = strokedPath.retainedBytes();
+      const std::size_t encodedBytes = strokedEncode.retainedBytes();
+      if (!pathBytes.has_value() || encodedBytes == std::numeric_limits<std::size_t>::max() ||
+          strokeKey.dashArray.capacity() >
+              std::numeric_limits<std::size_t>::max() / sizeof(double)) {
+        return std::nullopt;
+      }
+      const std::size_t dashBytes = strokeKey.dashArray.capacity() * sizeof(double);
+      if (*pathBytes > std::numeric_limits<std::size_t>::max() - encodedBytes ||
+          *pathBytes + encodedBytes > std::numeric_limits<std::size_t>::max() - dashBytes) {
+        return std::nullopt;
+      }
+      return *pathBytes + encodedBytes + dashBytes;
+    }
   };
   std::optional<StrokeSlot> strokeSlot;
   /// Live retained-byte charge for `strokeSlot`.

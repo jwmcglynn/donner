@@ -2594,7 +2594,8 @@ void GeoEncoder::fillPathPattern(const Path& path, FillRule rule, const PatternP
 }
 
 void GeoEncoder::submitFillDraw(const FillDrawArgs& args,
-                                std::span<const float> instanceTransforms) {
+                                std::span<const float> instanceTransforms,
+                                bool /*requireAdmission*/) {
   // Dummy resources are pre-created in the encoder constructor; no
   // per-draw ensure call is needed.
   impl_->ensurePassOpen();

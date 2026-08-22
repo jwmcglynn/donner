@@ -20,6 +20,7 @@
 #include "donner/svg/renderer/geode/GeodeDevice.h"
 #include "donner/svg/renderer/geode/GeodeGpuWait.h"
 #include "donner/svg/renderer/geode/GeodeImagePipeline.h"
+#include "donner/svg/renderer/geode/GeodePathCacheComponent.h"
 #include "donner/svg/renderer/geode/GeodePipeline.h"
 #include "donner/svg/renderer/geode/GeodeResourceBudget.h"
 #include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
@@ -409,13 +410,34 @@ TEST(GeodeResourceBudgetTest, ResidentRejectionPreservesCpuCacheFallback) {
   EXPECT_EQ(budget->residentBytes(), 0u);
 }
 
+TEST(GeodeResourceBudgetTest, StrokeCacheReplacementIncludesRetainedDashCapacity) {
+  GeodePathCacheComponent::StrokeSlot previous;
+  previous.strokeKey.dashArray.reserve(1u);
+  const std::optional<std::size_t> previousBytes = previous.retainedBytes();
+  ASSERT_TRUE(previousBytes.has_value());
+
+  GeodePathCacheComponent::StrokeSlot replacement;
+  replacement.strokeKey.dashArray.reserve(previous.strokeKey.dashArray.capacity() + 1u);
+  const std::optional<std::size_t> replacementBytes = replacement.retainedBytes();
+  ASSERT_TRUE(replacementBytes.has_value());
+  ASSERT_GT(*replacementBytes, *previousBytes);
+
+  auto budget = std::make_shared<GeodeDocumentGeometryBudget>();
+  budget->setLimitsForTesting({.cacheBytes = *previousBytes, .residentBytes = 64u << 20});
+  GeodeGeometryCacheReservation reservation;
+  ASSERT_TRUE(reservation.replace(budget, *previousBytes));
+  EXPECT_FALSE(reservation.replace(budget, *replacementBytes));
+  EXPECT_EQ(reservation.bytes(), *previousBytes);
+  EXPECT_EQ(budget->cacheBytes(), *previousBytes);
+}
+
 TEST(GeodeResourceBudgetTest, FrameGeometryStopsAtExactAggregateBoundary) {
   GeodeFrameGeometryBudget budget;
   budget.setLimitsForTesting({.draws = 2u, .items = 5u, .retainedBytes = 7u});
 
-  ASSERT_TRUE(budget.reserve(/*items=*/2u, /*retainedBytes=*/3u));
-  ASSERT_TRUE(budget.reserve(/*items=*/3u, /*retainedBytes=*/4u));
-  EXPECT_FALSE(budget.reserve(/*items=*/1u, /*retainedBytes=*/1u));
+  ASSERT_TRUE(budget.reserve(/*draws=*/1u, /*items=*/2u, /*retainedBytes=*/3u));
+  ASSERT_TRUE(budget.reserve(/*draws=*/1u, /*items=*/3u, /*retainedBytes=*/4u));
+  EXPECT_FALSE(budget.reserve(/*draws=*/1u, /*items=*/1u, /*retainedBytes=*/1u));
   EXPECT_EQ(budget.draws(), 2u);
   EXPECT_EQ(budget.items(), 5u);
   EXPECT_EQ(budget.retainedBytes(), 7u);

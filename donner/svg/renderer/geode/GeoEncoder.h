@@ -2,6 +2,7 @@
 /// @file
 /// Drawing API for the Geode GPU renderer.
 
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <span>
@@ -46,6 +47,18 @@ public:
   virtual void recordSlugDraw(const EncodedPath& encoded, const Transform2d& targetFromPath,
                               const Transform2d& rootFromTarget,
                               std::span<const float> instanceTransforms) = 0;
+};
+
+/** Frame-wide admission gate invoked before every Slug geometry upload or draw. */
+class GeometryAdmission {
+public:
+  virtual ~GeometryAdmission() = default;
+
+  /** Reserve one or more logical submissions of `encoded` before GPU work is recorded. */
+  virtual bool admitGeometry(const EncodedPath& encoded, std::size_t logicalDraws) = 0;
+
+  /** Release a successful reservation when submission preparation cannot complete. */
+  virtual void releaseGeometry(const EncodedPath& encoded, std::size_t logicalDraws) = 0;
 };
 
 class GeodeBufferPool;
@@ -197,6 +210,9 @@ public:
    * to disable (default).
    */
   void setBufferPool(GeodeBufferPool* pool);
+
+  /** Install the mandatory geometry admission gate for renderer-owned encoders. */
+  void setGeometryAdmission(GeometryAdmission* admission);
 
   /**
    * Observe Slug draws recorded by this encoder.
@@ -802,7 +818,8 @@ private:
 
   /// Shared path for solid and pattern fills: encode path, upload buffers,
   /// build bind group, record draw call.
-  void submitFillDraw(const FillDrawArgs& args, std::span<const float> instanceTransforms = {});
+  void submitFillDraw(const FillDrawArgs& args, std::span<const float> instanceTransforms = {},
+                      bool requireAdmission = true);
 
   /// Shared construction helpers used by both constructors. Factored out
   /// to avoid duplicating ~20 lines of setup. See GeoEncoder.cc.

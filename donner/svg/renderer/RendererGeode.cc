@@ -2628,7 +2628,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
       geometryBudget->reject();
       return false;
     }
-    return geometryBudget->reserve(encoded.geometryItemCount(), retainedBytes);
+    return geometryBudget->reserve(/*draws=*/1u, encoded.geometryItemCount(), retainedBytes);
   }
 
   std::optional<geode::EncodedPath> encodeGeometry(const Path& path, FillRule rule) {

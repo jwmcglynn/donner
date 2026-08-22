@@ -673,6 +673,7 @@ donner_cc_test(
         ":geo_encoder",
         ":geode_device",
         ":geode_gpu_wait",
+        ":geode_path_cache_component",
         ":geode_resource_budget",
         ":geode_wgpu_util",
         "//donner/base",

@@ -33,17 +33,24 @@ public:
     rejected_ = false;
   }
 
-  [[nodiscard]] bool reserve(std::size_t items, std::uint64_t retainedBytes) {
-    if (rejected_ || draws_ >= limits_.draws || items_ > limits_.items ||
-        items > limits_.items - items_ || retainedBytes_ > limits_.retainedBytes ||
+  [[nodiscard]] bool reserve(std::size_t draws, std::size_t items, std::uint64_t retainedBytes) {
+    if (rejected_ || draws_ > limits_.draws || draws > limits_.draws - draws_ ||
+        items_ > limits_.items || items > limits_.items - items_ ||
+        retainedBytes_ > limits_.retainedBytes ||
         retainedBytes > limits_.retainedBytes - retainedBytes_) {
       rejected_ = true;
       return false;
     }
-    ++draws_;
+    draws_ += draws;
     items_ += items;
     retainedBytes_ += retainedBytes;
     return true;
+  }
+
+  void release(std::size_t draws, std::size_t items, std::uint64_t retainedBytes) {
+    draws_ = draws > draws_ ? 0 : draws_ - draws;
+    items_ = items > items_ ? 0 : items_ - items;
+    retainedBytes_ = retainedBytes > retainedBytes_ ? 0 : retainedBytes_ - retainedBytes;
   }
 
   void reject() { rejected_ = true; }
