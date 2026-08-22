@@ -425,6 +425,8 @@ struct SampleThumbnailRenderStats {
   std::uint64_t offscreenRendererCreations = 0;
   /// Offscreen constructors entered before any test-only construction block.
   std::uint64_t offscreenRendererConstructionStarts = 0;
+  /// True only while the test-controlled block is active inside construction.
+  bool offscreenRendererConstructionBlocked = false;
   /// Foreground renders queued while the first worker-local offscreen attempt was still active.
   std::uint64_t foregroundHandoffWaits = 0;
   /// True once the first worker-local offscreen renderer initialization has completed.
@@ -819,7 +821,8 @@ private:
   bool prepareSampleThumbnailRendererForRequest(std::unique_ptr<svg::RendererInterface>& renderer,
                                                 svg::RendererInterface*& rendererRoot,
                                                 svg::RendererInterface* requestedRoot);
-  void delaySampleThumbnailRendererCreationForTesting(bool shouldDelay) const;
+  void delaySampleThumbnailRendererCreationForTesting(bool shouldDelay,
+                                                      int constructionStart) const;
   void finishSampleThumbnailRendererCreation();
 
   std::thread thread_;

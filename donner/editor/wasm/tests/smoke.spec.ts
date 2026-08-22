@@ -129,8 +129,12 @@ declare global {
       foregroundHandoffWaits: number;
       firstAttemptCompleted: boolean;
       offscreenRendererConstructionStarts: number;
+      offscreenRendererConstructionBlocked: boolean;
     };
-    __donnerSampleThumbnailRendererCreationBlocked?: boolean;
+    __donnerSampleThumbnailRendererCreationBlocked?: {
+      blocked: boolean;
+      constructionStarts: number;
+    };
     __donnerLayerThumbnailStats?: {
       rowCount: number;
       renderedCount: number;
@@ -884,11 +888,13 @@ test("Firefox hands a blocked thumbnail renderer to a foreground sample load", a
   await expect
     .poll(
       () =>
-        page.evaluate(() => ({
-          blocked: window.__donnerSampleThumbnailRendererCreationBlocked === true,
-          constructionStarts:
-            window.__donnerSampleThumbnailStats?.offscreenRendererConstructionStarts ?? 0,
-        })),
+        page.evaluate(
+          () =>
+            window.__donnerSampleThumbnailRendererCreationBlocked ?? {
+              blocked: false,
+              constructionStarts: 0,
+            },
+        ),
       {
         message: "the second worker-owned offscreen renderer must be blocked before replacement",
         timeout: scaledMs(10_000),

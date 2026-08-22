@@ -1049,6 +1049,7 @@ constexpr bool kEnableSceneBatching = true;
 struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::FilterTextureAllocator {
   bool verbose = false;
   bool antialias = true;
+  std::function<void()> offscreenCreationHookForTesting;
 
   // Per-frame perf counters. Reset at `beginFrame`, read via
   // `lastFrameTimings()`; `GeodePerf_tests.cc` pins their ceilings.
@@ -3621,6 +3622,10 @@ RendererGeode::RendererGeode(bool verbose) : impl_(std::make_unique<Impl>()) {
 }
 
 RendererGeode::RendererGeode(std::shared_ptr<geode::GeodeDevice> device, bool verbose)
+    : RendererGeode(std::move(device), verbose, {}) {}
+
+RendererGeode::RendererGeode(std::shared_ptr<geode::GeodeDevice> device, bool verbose,
+                             std::function<void()> constructionHook)
     : impl_(std::make_unique<Impl>()) {
   impl_->verbose = verbose;
   impl_->device = std::move(device);
@@ -3629,6 +3634,9 @@ RendererGeode::RendererGeode(std::shared_ptr<geode::GeodeDevice> device, bool ve
       std::cerr << "RendererGeode: null GeodeDevice passed - entering no-op mode\n";
     }
     return;
+  }
+  if (constructionHook) {
+    constructionHook();
   }
   impl_->initPipelines(verbose);
 }
@@ -6029,8 +6037,12 @@ std::unique_ptr<RendererInterface> RendererGeode::createOffscreenInstance() cons
   if (!impl_->device) {
     return nullptr;
   }
-  auto renderer = std::make_unique<RendererGeode>(impl_->device, impl_->verbose);
-  return renderer;
+  return std::unique_ptr<RendererInterface>(
+      new RendererGeode(impl_->device, impl_->verbose, impl_->offscreenCreationHookForTesting));
+}
+
+void RendererGeode::setOffscreenCreationHookForTesting(std::function<void()> hook) {
+  impl_->offscreenCreationHookForTesting = std::move(hook);
 }
 
 std::shared_ptr<const RendererTextureSnapshot> RendererGeode::takeTextureSnapshot() {

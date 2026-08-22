@@ -642,6 +642,10 @@ std::unique_ptr<RendererInterface> Renderer::createOffscreenInstance() const {
   return impl_->createOffscreenInstance();
 }
 
+void Renderer::setOffscreenCreationHookForTesting(std::function<void()> hook) {
+  impl_->setOffscreenCreationHookForTesting(std::move(hook));
+}
+
 void Renderer::setDebugGeometryOverlay(bool enabled) {
   impl_->setDebugGeometryOverlay(enabled);
 }

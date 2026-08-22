@@ -700,6 +700,9 @@ public:
     return nullptr;
   }
 
+  /// Install a zero-default hook entered from inside offscreen backend construction.
+  virtual void setOffscreenCreationHookForTesting(std::function<void()> /*hook*/) {}
+
   /**
    * Enable or disable the backend's geometry debug overlay.
    *

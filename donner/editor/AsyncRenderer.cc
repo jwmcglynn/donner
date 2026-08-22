@@ -667,7 +667,8 @@ bool AsyncRenderer::prepareSampleThumbnailRendererForRequest(
   return forceRecreate;
 }
 
-void AsyncRenderer::delaySampleThumbnailRendererCreationForTesting(bool shouldDelay) const {
+void AsyncRenderer::delaySampleThumbnailRendererCreationForTesting(bool shouldDelay,
+                                                                   int constructionStart) const {
   if (!shouldDelay) {
     return;
   }
@@ -677,11 +678,19 @@ void AsyncRenderer::delaySampleThumbnailRendererCreationForTesting(bool shouldDe
     return;
   }
 #ifdef __EMSCRIPTEN__
-  MAIN_THREAD_ASYNC_EM_ASM({ window['__donnerSampleThumbnailRendererCreationBlocked'] = true; });
+  MAIN_THREAD_EM_ASM(
+      {
+        window['__donnerSampleThumbnailRendererCreationBlocked'] = ({
+          'blocked' : true,
+          'constructionStarts' : $0,
+        });
+      },
+      constructionStart);
 #endif
   std::this_thread::sleep_for(delay);
 #ifdef __EMSCRIPTEN__
-  MAIN_THREAD_ASYNC_EM_ASM({ window['__donnerSampleThumbnailRendererCreationBlocked'] = false; });
+  MAIN_THREAD_EM_ASM(
+      { window['__donnerSampleThumbnailRendererCreationBlocked']['blocked'] = false; });
 #endif
 }
 
@@ -715,7 +724,7 @@ void AsyncRenderer::workerLoop() {
     std::optional<RenderRequest> requestStorage;
     std::optional<SampleThumbnailRenderRequest> sampleThumbnailStorage;
     bool runCompositorWarmup = false;
-    bool delaySampleThumbnailRendererCreation = false;
+    [[maybe_unused]] bool delaySampleThumbnailRendererCreation = false;
     {
       std::unique_lock<std::mutex> lock(mutex_);
       cv_.wait(lock, [this] {
@@ -811,11 +820,28 @@ void AsyncRenderer::workerLoop() {
     }
 
     if (sampleThumbnailStorage.has_value()) {
-      delaySampleThumbnailRendererCreationForTesting(delaySampleThumbnailRendererCreation);
       svg::RendererInterface* offscreenRenderer = nullptr;
 #if defined(__EMSCRIPTEN__)
       if (sampleThumbnailRenderer == nullptr || sampleThumbnailRendererRoot != &workerRenderer) {
+        workerRenderer.setOffscreenCreationHookForTesting([this,
+                                                           delaySampleThumbnailRendererCreation] {
+          int constructionStart = 0;
+          {
+            std::lock_guard<std::mutex> lock(mutex_);
+            constructionStart =
+                static_cast<int>(++sampleThumbnailCounters_.offscreenRendererConstructionStarts);
+            sampleThumbnailCounters_.offscreenRendererConstructionBlocked =
+                delaySampleThumbnailRendererCreation;
+          }
+          delaySampleThumbnailRendererCreationForTesting(delaySampleThumbnailRendererCreation,
+                                                         constructionStart);
+          {
+            std::lock_guard<std::mutex> lock(mutex_);
+            sampleThumbnailCounters_.offscreenRendererConstructionBlocked = false;
+          }
+        });
         sampleThumbnailRenderer = workerRenderer.createOffscreenInstance();
+        workerRenderer.setOffscreenCreationHookForTesting({});
         sampleThumbnailRendererRoot = &workerRenderer;
         if (sampleThumbnailRenderer != nullptr) {
           std::lock_guard<std::mutex> lock(mutex_);

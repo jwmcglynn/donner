@@ -336,6 +336,9 @@ public:
   /// Creates an offscreen renderer of the active backend type.
   [[nodiscard]] std::unique_ptr<RendererInterface> createOffscreenInstance() const override;
 
+  /// Forwards the test-only in-constructor hook to the active backend.
+  void setOffscreenCreationHookForTesting(std::function<void()> hook) override;
+
   /// Forwards \ref RendererInterface::setDebugGeometryOverlay to the
   /// active backend (no-op for backends without a debug overlay).
   void setDebugGeometryOverlay(bool enabled) override;
