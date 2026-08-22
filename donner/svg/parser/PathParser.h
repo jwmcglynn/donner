@@ -225,6 +225,12 @@ namespace donner::svg::parser {
  */
 class PathParser {
 public:
+  /// Maximum number of path commands accepted from one untrusted `d` attribute.
+  static constexpr std::size_t kMaximumCommands = 128 * 1024;
+
+  /// Maximum number of points retained while parsing one untrusted `d` attribute.
+  static constexpr std::size_t kMaximumPoints = 256 * 1024;
+
   /**
    * Parse an SVG path "d"-string, see \ref path_data.
    *

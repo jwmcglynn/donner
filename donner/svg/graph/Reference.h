@@ -49,6 +49,9 @@ struct ResolvedReference {
  * the external document's registry.
  */
 struct Reference {
+  /// Maximum bytes accepted for an SVG href identifier before lookup, hashing, or diagnostics.
+  static constexpr size_t kMaximumHrefBytes = 4096;
+
   RcString href;  //!< The href string identifying the referenced entity, e.g. `#id`
 
   /**
@@ -68,6 +71,9 @@ struct Reference {
    * component). A reference like `#id` is same-document; `file.svg` or `file.svg#id` is external.
    */
   bool isExternal() const;
+
+  /// Return true when the href is bounded, NUL-free, and valid UTF-8.
+  bool hasSafeRepresentation() const;
 
   /**
    * Returns the document URL component of the reference, or an empty string if this is a

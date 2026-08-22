@@ -46,6 +46,9 @@ concept ListParserItemCallback = std::invocable<F, std::string_view> &&
  */
 class ListParser {
 public:
+  /// Maximum items delivered to a caller from one untrusted list attribute.
+  static constexpr size_t kMaximumItems = 16 * 1024;
+
   /**
    * Parses the SVG comma-or-space separated list from the given \c std::string_view.
    *
@@ -62,6 +65,7 @@ public:
     size_t i = 0;
     bool expectItem = true;               // Start expecting an item
     bool processedNonWhitespace = false;  // Track if we've seen non-whitespace
+    size_t itemCount = 0;
 
     while (i < length) {
       SkipWhitespace(value, i);
@@ -93,6 +97,10 @@ public:
       // whitespace/comma/end-of-string before.
       assert(start != i && "Parser did not advance, potential infinite loop.");
 
+      if (itemCount >= kMaximumItems) {
+        return ParseDiagnostic::Error("List item limit exceeded", FileOffset::Offset(start));
+      }
+      ++itemCount;
       fn(value.substr(start, i - start));
 
       // After an item, expect a comma or end-of-string (or whitespace then comma/end)

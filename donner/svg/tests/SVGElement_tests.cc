@@ -9,8 +9,10 @@
 #include "donner/base/tests/BaseTestUtils.h"
 #include "donner/base/tests/ParseResultTestUtils.h"
 #include "donner/base/xml/components/TreeComponent.h"
+#include "donner/css/parser/SelectorParser.h"
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/SVGGElement.h"
+#include "donner/svg/SVGQuerySelector.h"
 #include "donner/svg/SVGRectElement.h"
 #include "donner/svg/SVGUnknownElement.h"
 #include "donner/svg/components/DirtyFlagsComponent.h"
@@ -79,6 +81,17 @@ protected:
 
   SVGDocument document_;
 };
+
+TEST_F(SVGElementTests, QuerySelectorSharesTraversalBudgetAcrossCandidates) {
+  SVGDocument document = parseSVG(R"(<svg><rect/><circle/></svg>)");
+  auto maybeSelector = css::parser::SelectorParser::Parse("*");
+  ASSERT_THAT(maybeSelector, NoParseError());
+  css::SelectorTraversalBudget budget(1);
+
+  EXPECT_FALSE(details::QuerySelectorSearch(maybeSelector.result(),
+                                            document.svgElement().entityHandle(), budget));
+  EXPECT_TRUE(budget.rejected());
+}
 
 MATCHER_P(ElementIdEq, id, "") {
   return arg.id() == id;

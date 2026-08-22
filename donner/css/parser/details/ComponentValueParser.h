@@ -1,6 +1,7 @@
 #pragma once
 
 #include <concepts>
+#include <cstddef>
 #include <functional>
 
 #include "donner/css/Declaration.h"
@@ -12,8 +13,32 @@ namespace donner::css::parser::details {
 
 enum class WhitespaceHandling { Keep, TrimLeadingAndTrailing };
 
+struct ComponentValueParsingBudget {
+  static constexpr std::size_t kMaximumComponentValues = 64 * 1024;
+
+  [[nodiscard]] bool reserveValue() {
+    if (resourceLimitExceeded_ || componentValues_ >= kMaximumComponentValues) {
+      resourceLimitExceeded_ = true;
+      return false;
+    }
+    ++componentValues_;
+    return true;
+  }
+
+  [[nodiscard]] std::size_t componentValues() const { return componentValues_; }
+  [[nodiscard]] bool resourceLimitExceeded() const { return resourceLimitExceeded_; }
+  void reject() { resourceLimitExceeded_ = true; }
+
+private:
+  std::size_t componentValues_ = 0;
+  bool resourceLimitExceeded_ = false;
+};
+
 struct ComponentValueParsingContext {
-  ComponentValueParsingContext() = default;
+  explicit ComponentValueParsingContext(ComponentValueParsingBudget* aggregateBudget = nullptr)
+      : aggregateBudget_(aggregateBudget) {}
+
+  static constexpr std::size_t kMaximumComponentValues = 16 * 1024;
 
   struct RecursionGuard {
     explicit RecursionGuard(ComponentValueParsingContext& context) : context_(context) {
@@ -35,8 +60,29 @@ struct ComponentValueParsingContext {
 
   [[nodiscard]] bool hitLimit() const { return depth_ > 64; }
 
+  [[nodiscard]] bool reserveValue() {
+    if (resourceLimitExceeded_ || componentValues_ >= kMaximumComponentValues) {
+      if (aggregateBudget_ != nullptr) {
+        aggregateBudget_->reject();
+      }
+      resourceLimitExceeded_ = true;
+      return false;
+    }
+    if (aggregateBudget_ != nullptr && !aggregateBudget_->reserveValue()) {
+      resourceLimitExceeded_ = true;
+      return false;
+    }
+    ++componentValues_;
+    return true;
+  }
+
+  [[nodiscard]] bool resourceLimitExceeded() const { return resourceLimitExceeded_; }
+
 private:
   int depth_ = 0;
+  std::size_t componentValues_ = 0;
+  bool resourceLimitExceeded_ = false;
+  ComponentValueParsingBudget* aggregateBudget_ = nullptr;
 };
 
 [[maybe_unused]] static inline TokenIndex simpleBlockEnding(TokenIndex startTokenIndex) {
@@ -63,6 +109,9 @@ SimpleBlock consumeSimpleBlock(T& tokenizer, Token&& firstToken, ParseMode mode,
 template <TokenizerLike<Token> T>
 ComponentValue consumeComponentValue(T& tokenizer, Token&& token, ParseMode mode,
                                      ComponentValueParsingContext& parsingContext) {
+  if (!parsingContext.reserveValue()) {
+    return ComponentValue(std::move(token));
+  }
   if (token.is<Token::CurlyBracket>() || token.is<Token::SquareBracket>() ||
       token.is<Token::Parenthesis>()) {
     // If the current input token is a <{-token>, <[-token>, or <(-token>, consume a simple
@@ -94,8 +143,11 @@ std::vector<ComponentValue> parseListOfComponentValues(
     }
 
     if (!token.is<Token::EofToken>()) {
-      result.emplace_back(
-          consumeComponentValue(tokenizer, std::move(token), ParseMode::Keep, parsingContext));
+      ComponentValue value =
+          consumeComponentValue(tokenizer, std::move(token), ParseMode::Keep, parsingContext);
+      if (!parsingContext.resourceLimitExceeded()) {
+        result.emplace_back(std::move(value));
+      }
     }
   }
 
@@ -130,7 +182,7 @@ SimpleBlock consumeSimpleBlock(T& tokenizer, Token&& firstToken, ParseMode mode,
       // anything else: Reconsume the current input token. Consume a component value and append
       // it to the value of the block.
       auto component = consumeComponentValue(tokenizer, std::move(token), mode, parsingContext);
-      if (mode == ParseMode::Keep) {
+      if (mode == ParseMode::Keep && !parsingContext.resourceLimitExceeded()) {
         result.values.emplace_back(std::move(component));
       }
     }
@@ -163,7 +215,7 @@ Function consumeFunction(T& tokenizer, Token::Function&& functionToken, const Fi
       auto componentValue =
           consumeComponentValue(tokenizer, std::move(token), mode, parsingContext);
 
-      if (mode == ParseMode::Keep) {
+      if (mode == ParseMode::Keep && !parsingContext.resourceLimitExceeded()) {
         result.values.emplace_back(std::move(componentValue));
       }
     }
@@ -175,9 +227,10 @@ Function consumeFunction(T& tokenizer, Token::Function&& functionToken, const Fi
 
 /// Consume an at-rule, per https://www.w3.org/TR/css-syntax-3/#consume-at-rule
 template <TokenizerLike<Token> T>
-AtRule consumeAtRule(T& tokenizer, Token::AtKeyword&& atKeyword, ParseMode mode) {
+AtRule consumeAtRule(T& tokenizer, Token::AtKeyword&& atKeyword, ParseMode mode,
+                     ComponentValueParsingBudget* aggregateBudget = nullptr) {
   AtRule result(std::move(atKeyword.value));
-  ComponentValueParsingContext parsingContext;
+  ComponentValueParsingContext parsingContext(aggregateBudget);
 
   while (!tokenizer.isEOF()) {
     Token token = tokenizer.next();
@@ -195,7 +248,7 @@ AtRule consumeAtRule(T& tokenizer, Token::AtKeyword&& atKeyword, ParseMode mode)
       // returned value to the at-rule's prelude.
       auto component = consumeComponentValue(tokenizer, std::move(token), mode, parsingContext);
 
-      if (mode == ParseMode::Keep) {
+      if (mode == ParseMode::Keep && !parsingContext.resourceLimitExceeded()) {
         result.prelude.emplace_back(std::move(component));
       }
     }

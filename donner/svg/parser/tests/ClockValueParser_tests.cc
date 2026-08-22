@@ -98,4 +98,10 @@ TEST(ClockValueParser, InvalidMetric) {
   EXPECT_TRUE(result.hasError());
 }
 
+TEST(ClockValueParser, RejectsNonFiniteValues) {
+  EXPECT_TRUE(ClockValueParser::Parse("nan").hasError());
+  EXPECT_TRUE(ClockValueParser::Parse("1e999s").hasError());
+  EXPECT_TRUE(ClockValueParser::Parse("1e308h").hasError());
+}
+
 }  // namespace donner::svg::parser

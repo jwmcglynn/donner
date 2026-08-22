@@ -5,6 +5,7 @@
 #include "donner/svg/components/animation/AnimateTransformComponent.h"
 #include "donner/svg/components/animation/AnimatedValuesComponent.h"
 #include "donner/svg/components/animation/AnimationSystem.h"
+#include "donner/svg/parser/ListParser.h"
 #include "donner/svg/parser/SVGParser.h"
 
 namespace donner::svg {
@@ -19,6 +20,15 @@ SVGDocument parseSVGWithExperimental(std::string_view svg) {
   auto result = parser::SVGParser::ParseSVG(svg, warnings, options);
   EXPECT_THAT(result, NoParseError()) << "Failed to parse SVG";
   return std::move(result.result());
+}
+
+std::string repeatedTransformValues(std::size_t count) {
+  std::string values;
+  values.reserve(count * 2);
+  for (std::size_t i = 0; i < count; ++i) {
+    values += "1;";
+  }
+  return values;
 }
 
 std::optional<std::string> getAnimatedTransform(SVGDocument& document, const char* selector,
@@ -103,6 +113,24 @@ TEST(SVGAnimateTransformElement, ParseScale) {
   auto entity = *view.begin();
   auto& comp = registry.get<components::AnimateTransformComponent>(entity);
   EXPECT_EQ(comp.type, components::TransformAnimationType::Scale);
+}
+
+TEST(SVGAnimateTransformElement, ValuesListCapRejectsOverflowTransactionally) {
+  const auto parsedValueCount = [](std::size_t count) {
+    const std::string svg =
+        "<svg xmlns='http://www.w3.org/2000/svg'><rect><animateTransform "
+        "attributeName='transform' type='scale' values='" +
+        repeatedTransformValues(count) + "'/></rect></svg>";
+    auto document = parseSVGWithExperimental(svg);
+    auto view = document.registry().view<components::AnimateTransformComponent>();
+    EXPECT_FALSE(view.begin() == view.end());
+    return document.registry()
+        .get<components::AnimateTransformComponent>(*view.begin())
+        .values.size();
+  };
+
+  EXPECT_EQ(parsedValueCount(parser::ListParser::kMaximumItems), parser::ListParser::kMaximumItems);
+  EXPECT_EQ(parsedValueCount(parser::ListParser::kMaximumItems + 1), 0u);
 }
 
 // --- Interpolation tests ---

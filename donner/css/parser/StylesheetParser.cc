@@ -222,147 +222,200 @@ std::optional<FontFaceSource> TryParseFontFaceSourceFromUrl(std::string_view url
   return std::nullopt;
 }
 
-}  // namespace
+bool ChargeDeclarations(Stylesheet::SecurityStats& stylesheetStats,
+                        const DeclarationListParser::SecurityStats& declarationStats,
+                        std::size_t declarationCount) {
+  stylesheetStats.rejected |= declarationStats.rejected;
+  if (declarationCount > Stylesheet::kMaximumDeclarations - stylesheetStats.declarations) {
+    stylesheetStats.rejected = true;
+    return false;
+  }
+  stylesheetStats.declarations += declarationCount;
+  return true;
+}
 
-Stylesheet StylesheetParser::Parse(std::string_view str, ParseWarningSink& warningSink) {
-  std::vector<Rule> rules = RuleParser::ParseStylesheet(str);
+std::optional<RcString> FirstFunctionString(const Function& function) {
+  if (function.values.empty()) {
+    return std::nullopt;
+  }
+  const Token* token = std::get_if<Token>(&function.values.front().value);
+  if (!token) {
+    return std::nullopt;
+  }
+  if (token->is<Token::Ident>()) {
+    return token->get<Token::Ident>().value;
+  }
+  if (token->is<Token::String>()) {
+    return token->get<Token::String>().value;
+  }
+  if (token->is<Token::Url>()) {
+    return token->get<Token::Url>().value;
+  }
+  return std::nullopt;
+}
 
-  std::vector<SelectorRule> selectorRules;
-  std::vector<FontFace> fontFaces;
-  for (auto&& rule : rules) {
-    // If the rule is a QualifiedRule, then we need to parse the selector and add it to our list.
-    if (QualifiedRule* qualifiedRule = std::get_if<QualifiedRule>(&rule.value)) {
-      auto selectorResult = SelectorParser::ParseComponents(qualifiedRule->prelude);
-      if (selectorResult.hasError()) {
-        warningSink.add(std::move(selectorResult.error()));
-        continue;
+void ApplyFontFaceHints(std::span<const ComponentValue> items, FontFaceSource& source) {
+  for (const ComponentValue& component : items) {
+    const Function* function = std::get_if<Function>(&component.value);
+    if (!function) {
+      continue;
+    }
+    if (function->name.equalsLowercase("format")) {
+      if (const auto hint = FirstFunctionString(*function)) {
+        source.formatHint = *hint;
       }
-
-      std::vector<Declaration> declarations =
-          DeclarationListParser::ParseRuleDeclarations(qualifiedRule->block.values);
-
-      SelectorRule selectorRule;
-      selectorRule.selector = std::move(selectorResult.result());
-      selectorRule.declarations = std::move(declarations);
-      PopulateSelectorRuleSourceRanges(str, *qualifiedRule, &selectorRule);
-      selectorRules.emplace_back(std::move(selectorRule));
-    } else if (AtRule* atRule = std::get_if<AtRule>(&rule.value)) {
-      if (atRule->name.equalsLowercase("font-face") && atRule->block) {
-        std::vector<Declaration> declarations =
-            DeclarationListParser::ParseRuleDeclarations(atRule->block->values);
-
-        FontFace fontFace;
-
-        auto addSrc = [&](std::vector<ComponentValue> items) {
-          if (items.empty()) {
-            return;
-          }
-
-          std::optional<FontFaceSource> source;
-
-          const ComponentValue& first = items.front();
-          if (const Function* func = std::get_if<Function>(&first.value)) {
-            if (func->name.equalsLowercase("local") && !func->values.empty()) {
-              if (const Token* t = std::get_if<Token>(&func->values.front().value)) {
-                RcString name;
-                if (t->is<Token::Ident>()) {
-                  name = t->get<Token::Ident>().value;
-                } else if (t->is<Token::String>()) {
-                  name = t->get<Token::String>().value;
-                }
-                source = FontFaceSource{FontFaceSource::Kind::Local, std::move(name), "", {}};
-              }
-            } else if (func->name.equalsLowercase("url") && !func->values.empty()) {
-              RcString url;
-              if (const Token* t = std::get_if<Token>(&func->values.front().value)) {
-                // The tokenizer will produce a String or Ident for url("...") or url(foo), so we
-                // need to handle both.
-                if (t->is<Token::String>()) {
-                  url = t->get<Token::String>().value;
-                } else if (t->is<Token::Ident>()) {
-                  url = t->get<Token::Ident>().value;
-                } else if (t->is<Token::Url>()) {
-                  url = t->get<Token::Url>().value;
-                }
-              }
-
-              if (auto maybeSource = TryParseFontFaceSourceFromUrl(url)) {
-                source = std::move(*maybeSource);
-              }
-            }
-          } else if (const Token* urlTok = std::get_if<Token>(&first.value)) {
-            if (urlTok->is<Token::Url>()) {
-              const RcString& url = urlTok->get<Token::Url>().value;
-              if (auto maybeSource = TryParseFontFaceSourceFromUrl(url)) {
-                source = std::move(*maybeSource);
-              }
-            }
-          }
-
-          if (source) {
-            // parse additional format() or tech() hints
-            for (size_t i = 1; i < items.size(); ++i) {
-              const ComponentValue& cv = items[i];
-              if (const Function* f = std::get_if<Function>(&cv.value)) {
-                if (f->name.equalsLowercase("format") && !f->values.empty()) {
-                  if (const Token* tok = std::get_if<Token>(&f->values.front().value)) {
-                    if (tok->is<Token::Ident>()) {
-                      source->formatHint = tok->get<Token::Ident>().value;
-                    } else if (tok->is<Token::String>()) {
-                      source->formatHint = tok->get<Token::String>().value;
-                    }
-                  }
-                } else if (f->name.equalsLowercase("tech")) {
-                  for (const auto& val : f->values) {
-                    if (const Token* tok = std::get_if<Token>(&val.value)) {
-                      if (tok->is<Token::Ident>()) {
-                        source->techHints.push_back(tok->get<Token::Ident>().value);
-                      } else if (tok->is<Token::String>()) {
-                        source->techHints.push_back(tok->get<Token::String>().value);
-                      }
-                    }
-                  }
-                }
-              }
-            }
-
-            fontFace.sources.push_back(std::move(source.value()));
-          }
-        };
-
-        for (const auto& decl : declarations) {
-          if (StringUtils::EqualsLowercase(decl.name, std::string_view("font-family")) &&
-              !decl.values.empty()) {
-            if (const Token* token = std::get_if<Token>(&decl.values.front().value)) {
-              if (token->is<Token::Ident>()) {
-                fontFace.familyName = token->get<Token::Ident>().value;
-              } else if (token->is<Token::String>()) {
-                fontFace.familyName = token->get<Token::String>().value;
-              }
-            }
-          } else if (StringUtils::EqualsLowercase(decl.name, std::string_view("src"))) {
-            std::vector<ComponentValue> current;
-            for (const ComponentValue& cv : decl.values) {
-              if (const Token* token = std::get_if<Token>(&cv.value);
-                  token && token->is<Token::Comma>()) {
-                addSrc(std::move(current));
-                current.clear();
-              } else {
-                current.push_back(cv);
-              }
-            }
-            addSrc(std::move(current));
-          }
-        }
-
-        if (!fontFace.familyName.empty() && !fontFace.sources.empty()) {
-          fontFaces.push_back(std::move(fontFace));
+      continue;
+    }
+    if (!function->name.equalsLowercase("tech")) {
+      continue;
+    }
+    for (const ComponentValue& value : function->values) {
+      if (const Token* token = std::get_if<Token>(&value.value)) {
+        if (token->is<Token::Ident>()) {
+          source.techHints.push_back(token->get<Token::Ident>().value);
+        } else if (token->is<Token::String>()) {
+          source.techHints.push_back(token->get<Token::String>().value);
         }
       }
     }
   }
+}
 
-  return Stylesheet(std::move(selectorRules), std::move(fontFaces));
+std::optional<FontFaceSource> ParseFontFaceSourceItem(std::span<const ComponentValue> items) {
+  if (items.empty()) {
+    return std::nullopt;
+  }
+
+  std::optional<FontFaceSource> source;
+  if (const Function* function = std::get_if<Function>(&items.front().value)) {
+    const auto value = FirstFunctionString(*function);
+    if (value && function->name.equalsLowercase("local")) {
+      source = FontFaceSource{FontFaceSource::Kind::Local, *value, "", {}};
+    } else if (value && function->name.equalsLowercase("url")) {
+      source = TryParseFontFaceSourceFromUrl(*value);
+    }
+  } else if (const Token* token = std::get_if<Token>(&items.front().value);
+             token && token->is<Token::Url>()) {
+    source = TryParseFontFaceSourceFromUrl(token->get<Token::Url>().value);
+  }
+
+  if (source) {
+    ApplyFontFaceHints(items.subspan(1), *source);
+  }
+  return source;
+}
+
+void AppendFontFaceSources(std::span<const ComponentValue> values, FontFace& fontFace) {
+  std::size_t itemStart = 0;
+  for (std::size_t i = 0; i <= values.size(); ++i) {
+    const bool atEnd = i == values.size();
+    const Token* token = atEnd ? nullptr : std::get_if<Token>(&values[i].value);
+    if (!atEnd && (!token || !token->is<Token::Comma>())) {
+      continue;
+    }
+    if (auto source = ParseFontFaceSourceItem(values.subspan(itemStart, i - itemStart))) {
+      fontFace.sources.push_back(std::move(*source));
+    }
+    itemStart = i + 1;
+  }
+}
+
+std::optional<FontFace> BuildFontFace(std::span<const Declaration> declarations) {
+  FontFace fontFace;
+  for (const Declaration& declaration : declarations) {
+    if (StringUtils::EqualsLowercase(declaration.name, std::string_view("font-family")) &&
+        !declaration.values.empty()) {
+      if (const Token* token = std::get_if<Token>(&declaration.values.front().value)) {
+        if (token->is<Token::Ident>()) {
+          fontFace.familyName = token->get<Token::Ident>().value;
+        } else if (token->is<Token::String>()) {
+          fontFace.familyName = token->get<Token::String>().value;
+        }
+      }
+    } else if (StringUtils::EqualsLowercase(declaration.name, std::string_view("src"))) {
+      AppendFontFaceSources(declaration.values, fontFace);
+    }
+  }
+  if (fontFace.familyName.empty() || fontFace.sources.empty()) {
+    return std::nullopt;
+  }
+  return fontFace;
+}
+
+std::optional<SelectorRule> ParseQualifiedSelectorRule(std::string_view source,
+                                                       QualifiedRule& qualifiedRule,
+                                                       ParseWarningSink& warningSink,
+                                                       Stylesheet::SecurityStats& securityStats) {
+  auto selectorResult = SelectorParser::ParseComponents(qualifiedRule.prelude);
+  if (selectorResult.hasError()) {
+    warningSink.add(std::move(selectorResult.error()));
+    return std::nullopt;
+  }
+
+  DeclarationListParser::SecurityStats declarationStats;
+  std::vector<Declaration> declarations =
+      DeclarationListParser::ParseRuleDeclarations(qualifiedRule.block.values, &declarationStats);
+  if (!ChargeDeclarations(securityStats, declarationStats, declarations.size())) {
+    return std::nullopt;
+  }
+
+  SelectorRule selectorRule;
+  selectorRule.selector = std::move(selectorResult.result());
+  selectorRule.declarations = std::move(declarations);
+  PopulateSelectorRuleSourceRanges(source, qualifiedRule, &selectorRule);
+  return selectorRule;
+}
+
+std::optional<FontFace> ParseFontFaceRule(AtRule& atRule,
+                                          Stylesheet::SecurityStats& securityStats) {
+  if (!atRule.name.equalsLowercase("font-face") || !atRule.block) {
+    return std::nullopt;
+  }
+  DeclarationListParser::SecurityStats declarationStats;
+  std::vector<Declaration> declarations =
+      DeclarationListParser::ParseRuleDeclarations(atRule.block->values, &declarationStats);
+  if (!ChargeDeclarations(securityStats, declarationStats, declarations.size())) {
+    return std::nullopt;
+  }
+  return BuildFontFace(declarations);
+}
+
+}  // namespace
+
+Stylesheet StylesheetParser::Parse(std::string_view str, ParseWarningSink& warningSink) {
+  RuleParser::SecurityStats ruleStats;
+  std::vector<Rule> rules = RuleParser::ParseStylesheet(str, &ruleStats);
+
+  Stylesheet::SecurityStats securityStats;
+  securityStats.rejected = ruleStats.rejected;
+  securityStats.componentValues = ruleStats.componentValues;
+
+  std::vector<SelectorRule> selectorRules;
+  std::vector<FontFace> fontFaces;
+  for (auto&& rule : rules) {
+    if (QualifiedRule* qualifiedRule = std::get_if<QualifiedRule>(&rule.value)) {
+      if (auto selectorRule =
+              ParseQualifiedSelectorRule(str, *qualifiedRule, warningSink, securityStats)) {
+        selectorRules.push_back(std::move(*selectorRule));
+        ++securityStats.rules;
+      }
+      if (securityStats.rejected) {
+        break;
+      }
+      continue;
+    }
+    if (AtRule* atRule = std::get_if<AtRule>(&rule.value)) {
+      if (auto fontFace = ParseFontFaceRule(*atRule, securityStats)) {
+        fontFaces.push_back(std::move(*fontFace));
+        ++securityStats.rules;
+      }
+      if (securityStats.rejected) {
+        break;
+      }
+    }
+  }
+
+  return Stylesheet(std::move(selectorRules), std::move(fontFaces), securityStats);
 }
 
 }  // namespace donner::css::parser

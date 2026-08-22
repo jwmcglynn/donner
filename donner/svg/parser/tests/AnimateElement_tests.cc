@@ -1,12 +1,15 @@
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <sstream>
+#include <string>
 
 #include "donner/base/tests/ParseResultTestUtils.h"
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/components/animation/AnimateValueComponent.h"
 #include "donner/svg/components/animation/AnimatedValuesComponent.h"
 #include "donner/svg/components/animation/AnimationSystem.h"
+#include "donner/svg/parser/ListParser.h"
 #include "donner/svg/parser/SVGParser.h"
 
 namespace donner::svg {
@@ -21,6 +24,15 @@ SVGDocument parseSVGWithExperimental(std::string_view svg) {
   auto result = parser::SVGParser::ParseSVG(svg, warnings, options);
   EXPECT_THAT(result, NoParseError()) << "Failed to parse SVG";
   return std::move(result.result());
+}
+
+std::string repeatedAnimationValues(std::size_t count) {
+  std::string values;
+  values.reserve(count * 2);
+  for (std::size_t i = 0; i < count; ++i) {
+    values += "1;";
+  }
+  return values;
 }
 
 /// Helper to run the animation system and return the override value for a given attribute on an
@@ -93,6 +105,65 @@ TEST(SVGAnimateElement, ParseValues) {
   EXPECT_EQ(valueComp.values[0], "10");
   EXPECT_EQ(valueComp.values[1], "50");
   EXPECT_EQ(valueComp.values[2], "100");
+}
+
+TEST(SVGAnimateElement, ValuesListCapRejectsOverflowTransactionally) {
+  const auto parsedValueCount = [](std::size_t count) {
+    const std::string svg =
+        "<svg xmlns='http://www.w3.org/2000/svg'><rect><animate attributeName='width' values='" +
+        repeatedAnimationValues(count) + "'/></rect></svg>";
+    auto document = parseSVGWithExperimental(svg);
+    auto view = document.registry().view<components::AnimateValueComponent>();
+    EXPECT_FALSE(view.begin() == view.end());
+    return document.registry().get<components::AnimateValueComponent>(*view.begin()).values.size();
+  };
+
+  EXPECT_EQ(parsedValueCount(parser::ListParser::kMaximumItems), parser::ListParser::kMaximumItems);
+  EXPECT_EQ(parsedValueCount(parser::ListParser::kMaximumItems + 1), 0u);
+}
+
+TEST(SVGAnimateElement, TimingListOverflowReportsTheRejectedItem) {
+  std::string timings;
+  timings.reserve((parser::ListParser::kMaximumItems + 1) * 3);
+  for (std::size_t i = 0; i <= parser::ListParser::kMaximumItems; ++i) {
+    timings += "1s;";
+  }
+  const std::string svg =
+      "<svg xmlns='http://www.w3.org/2000/svg'><rect><animate attributeName='width' begin='" +
+      timings + "'/></rect></svg>";
+
+  parser::SVGParser::Options options;
+  options.enableExperimental = true;
+  ParseWarningSink warnings;
+  auto result = parser::SVGParser::ParseSVG(svg, warnings, options);
+  ASSERT_THAT(result, NoParseError());
+  EXPECT_THAT(warnings.warnings(), testing::Contains(testing::Field(
+                                       &ParseDiagnostic::reason,
+                                       testing::HasSubstr("Animation list item limit exceeded"))));
+}
+
+TEST(SVGAnimateElement, NumericKeyTimesOverflowReportsTheRejectedNumber) {
+  std::string keyTimes;
+  keyTimes.reserve((parser::ListParser::kMaximumItems + 1) * 2);
+  for (std::size_t i = 0; i <= parser::ListParser::kMaximumItems; ++i) {
+    keyTimes += "0 ";
+  }
+  const std::string prefix =
+      "<svg xmlns='http://www.w3.org/2000/svg'><rect><animate attributeName='width' keyTimes='";
+  const std::string svg = prefix + keyTimes + "'/></rect></svg>";
+
+  parser::SVGParser::Options options;
+  options.enableExperimental = true;
+  ParseWarningSink warnings;
+  auto result = parser::SVGParser::ParseSVG(svg, warnings, options);
+  ASSERT_THAT(result, NoParseError());
+  const auto warning = std::ranges::find_if(warnings.warnings(), [](const ParseDiagnostic& item) {
+    return std::string_view(item.reason).find("Animation numeric list item limit exceeded") !=
+           std::string_view::npos;
+  });
+  ASSERT_NE(warning, warnings.warnings().end());
+  ASSERT_TRUE(warning->range.start.offset.has_value());
+  EXPECT_GT(*warning->range.start.offset, prefix.size() + parser::ListParser::kMaximumItems);
 }
 
 TEST(SVGAnimateElement, ParseCalcModeDiscrete) {

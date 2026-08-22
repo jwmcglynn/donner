@@ -185,14 +185,48 @@ struct PseudoClassSelector {
   friend std::ostream& operator<<(std::ostream& os, const PseudoClassSelector& obj);
 
 private:
+  template <ElementLike T>
+  std::optional<PseudoMatchResult> matchesSimpleState(const T& element,
+                                                      const SelectorMatchOptions<T>& options) const;
+
+  template <ElementLike T>
+  std::optional<PseudoMatchResult> matchesTypeState(const T& element,
+                                                    const SelectorMatchOptions<T>& options) const;
+
+  template <ElementLike T>
+  std::optional<PseudoMatchResult> matchesSelectorFunction(
+      const T& element, const SelectorMatchOptions<T>& options) const;
+
+  template <ElementLike T>
+  PseudoMatchResult matchesHasFunction(const T& element,
+                                       const SelectorMatchOptions<T>& options) const;
+
+  template <ElementLike T>
+  PseudoMatchResult matchesNthFunction(const T& element,
+                                       const SelectorMatchOptions<T>& options) const;
+
   template <ElementLike T, details::OptionalSelectorLike<T> SelectorType>
   static int getIndexInParent(const T& parent, const T& element, bool fromEnd,
-                              const SelectorType& matchingType) {
+                              const SelectorType& matchingType,
+                              const SelectorMatchOptions<T>& options) {
+    const auto matchesType = [&](const T& child) {
+      if (!matchingType) {
+        return true;
+      }
+      if constexpr (requires { matchingType->matches(child, options); }) {
+        return matchingType->matches(child, options).matched;
+      } else {
+        return matchingType->matches(child);
+      }
+    };
     int childIndex = 1;
     if (!fromEnd) {
       for (std::optional<T> child = parent.firstChild(); child;
            child = child.value().nextSibling()) {
-        if (matchingType && !matchingType->matches(child.value())) {
+        if (options.traversalBudget != nullptr && !options.traversalBudget->consume()) {
+          return -1;
+        }
+        if (!matchesType(child.value())) {
           continue;
         }
 
@@ -205,7 +239,10 @@ private:
     } else {
       for (std::optional<T> child = parent.lastChild(); child;
            child = child.value().previousSibling()) {
-        if (matchingType && !matchingType->matches(child.value())) {
+        if (options.traversalBudget != nullptr && !options.traversalBudget->consume()) {
+          return -1;
+        }
+        if (!matchesType(child.value())) {
           continue;
         }
 
@@ -223,9 +260,13 @@ private:
   }
 
   template <ElementLike T>
-  static bool isFirstOfType(const T& element, const xml::XMLQualifiedNameRef& type) {
+  static bool isFirstOfType(const T& element, const xml::XMLQualifiedNameRef& type,
+                            SelectorTraversalBudget* traversalBudget) {
     for (std::optional<T> child = element.previousSibling(); child;
          child = child.value().previousSibling()) {
+      if (traversalBudget != nullptr && !traversalBudget->consume()) {
+        return false;
+      }
       if (child.value().tagName() == type) {
         return false;
       }
@@ -235,9 +276,13 @@ private:
   }
 
   template <ElementLike T>
-  static bool isLastOfType(const T& element, const xml::XMLQualifiedNameRef& type) {
+  static bool isLastOfType(const T& element, const xml::XMLQualifiedNameRef& type,
+                           SelectorTraversalBudget* traversalBudget) {
     for (std::optional<T> child = element.nextSibling(); child;
          child = child.value().nextSibling()) {
+      if (traversalBudget != nullptr && !traversalBudget->consume()) {
+        return false;
+      }
       if (child.value().tagName() == type) {
         return false;
       }

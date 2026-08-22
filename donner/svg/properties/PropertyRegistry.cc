@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cstdio>
+#include <limits>
 #include <span>
 #include <string>
 #include <string_view>
@@ -11,8 +12,8 @@
 #include "donner/base/CompileTimeMap.h"
 #include "donner/base/MathUtils.h"
 #include "donner/base/SmallVector.h"
-#include "donner/css/CSS.h"
 #include "donner/css/parser/ColorParser.h"
+#include "donner/css/parser/DeclarationListParser.h"
 #include "donner/svg/components/filter/FilterEffect.h"
 #include "donner/svg/components/layout/TransformComponent.h"
 #include "donner/svg/core/Stroke.h"
@@ -25,6 +26,31 @@
 namespace donner::svg {
 
 namespace {
+
+void SaturatingAdd(std::size_t& destination, std::size_t value) {
+  destination = value > std::numeric_limits<std::size_t>::max() - destination
+                    ? std::numeric_limits<std::size_t>::max()
+                    : destination + value;
+}
+
+void AddComponentValueBytes(std::size_t& destination, const css::ComponentValue& component) {
+  const auto addValues = [&](std::span<const css::ComponentValue> values) {
+    if (values.size() > std::numeric_limits<std::size_t>::max() / sizeof(css::ComponentValue)) {
+      destination = std::numeric_limits<std::size_t>::max();
+      return;
+    }
+    SaturatingAdd(destination, values.size() * sizeof(css::ComponentValue));
+    for (const css::ComponentValue& value : values) {
+      AddComponentValueBytes(destination, value);
+    }
+  };
+
+  if (component.is<css::Function>()) {
+    addValues(component.get<css::Function>().values);
+  } else if (component.is<css::SimpleBlock>()) {
+    addValues(component.get<css::SimpleBlock>().values);
+  }
+}
 
 template <typename T>
 bool TrySkipToken(std::span<const css::ComponentValue>& components) {
@@ -2322,6 +2348,37 @@ size_t PropertyRegistry::numPropertiesSet() const {
   return result;
 }
 
+std::size_t PropertyRegistry::complexPropertyBytes() const {
+  std::size_t result = 0;
+  if (const StrokeDasharray* dasharray = strokeDasharray.getStoredValue()) {
+    result += dasharray->size() * sizeof(Lengthd);
+  }
+  if (const SmallVector<RcString, 1>* families = fontFamily.getStoredValue()) {
+    result += families->size() * sizeof(RcString);
+    for (const RcString& family : *families) {
+      result += family.size();
+    }
+  }
+  if (const std::vector<FilterEffect>* effects = filter.getStoredValue()) {
+    SaturatingAdd(result, effects->size() * sizeof(FilterEffect));
+  }
+  for (const auto& entry : unparsedProperties) {
+    const parser::UnparsedProperty& property = entry.second;
+    using MapValue = decltype(unparsedProperties)::value_type;
+    SaturatingAdd(result, sizeof(MapValue) + 3 * sizeof(void*));
+
+    const std::span<const css::ComponentValue> values(property.declaration.values);
+    if (values.size() > std::numeric_limits<std::size_t>::max() / sizeof(css::ComponentValue)) {
+      return std::numeric_limits<std::size_t>::max();
+    }
+    SaturatingAdd(result, values.size() * sizeof(css::ComponentValue));
+    for (const css::ComponentValue& component : values) {
+      AddComponentValueBytes(result, component);
+    }
+  }
+  return result;
+}
+
 std::optional<ParseDiagnostic> PropertyRegistry::parseProperty(const css::Declaration& declaration,
                                                                css::Specificity specificity) {
   const std::string_view name(declaration.name);
@@ -2346,11 +2403,17 @@ std::optional<ParseDiagnostic> PropertyRegistry::parseProperty(const css::Declar
   return std::nullopt;
 }
 
-void PropertyRegistry::parseStyle(std::string_view str) {
-  const std::vector<css::Declaration> declarations = css::CSS::ParseStyleAttribute(str);
+bool PropertyRegistry::parseStyle(std::string_view str) {
+  css::parser::DeclarationListParser::SecurityStats securityStats;
+  const std::vector<css::Declaration> declarations =
+      css::parser::DeclarationListParser::ParseOnlyDeclarations(str, &securityStats);
+  if (securityStats.rejected) {
+    return false;
+  }
   for (const auto& declaration : declarations) {
     std::ignore = parseProperty(declaration, css::Specificity::StyleAttribute());
   }
+  return true;
 }
 
 void PropertyRegistry::clearStyleAttributeProperties() {

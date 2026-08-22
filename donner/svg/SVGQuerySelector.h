@@ -19,4 +19,8 @@ namespace donner::svg::details {
  */
 std::optional<SVGElement> QuerySelectorSearch(const css::Selector& selector, EntityHandle root);
 
+/// Test seam that uses an explicitly reduced shared traversal budget.
+std::optional<SVGElement> QuerySelectorSearch(const css::Selector& selector, EntityHandle root,
+                                              css::SelectorTraversalBudget& traversalBudget);
+
 }  // namespace donner::svg::details

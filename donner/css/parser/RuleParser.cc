@@ -14,12 +14,15 @@ using details::ParseMode;
 
 class RuleParserImpl {
 public:
-  RuleParserImpl(std::string_view str) : tokenizer_(str) {}
+  RuleParserImpl(std::string_view str, RuleParser::SecurityStats* securityStats = nullptr)
+      : tokenizer_(str), securityStats_(securityStats) {}
 
-  std::vector<Rule> parseStylesheet() { return parseListOfRules(ListOfRulesFlags::TopLevel); }
+  std::vector<Rule> parseStylesheet() {
+    return consumeListOfRules(tokenizer_, ListOfRulesFlags::TopLevel, securityStats_);
+  }
 
   std::vector<Rule> parseListOfRules(ListOfRulesFlags flags) {
-    return consumeListOfRules(tokenizer_, flags);
+    return consumeListOfRules(tokenizer_, flags, securityStats_);
   }
 
   std::optional<Rule> parseRule() {
@@ -98,11 +101,18 @@ public:
   }
 
   /// Consume a list of rules, per https://www.w3.org/TR/css-syntax-3/#consume-list-of-rules
-  static std::vector<Rule> consumeListOfRules(details::Tokenizer& tokenizer,
-                                              ListOfRulesFlags flags) {
+  static std::vector<Rule> consumeListOfRules(details::Tokenizer& tokenizer, ListOfRulesFlags flags,
+                                              RuleParser::SecurityStats* securityStats = nullptr) {
     std::vector<Rule> result;
+    details::ComponentValueParsingBudget aggregateBudget;
 
     while (!tokenizer.isEOF()) {
+      if (result.size() >= RuleParser::kMaximumRules) {
+        if (securityStats != nullptr) {
+          securityStats->rejected = true;
+        }
+        break;
+      }
       Token token = tokenizer.next();
       if (token.is<Token::Whitespace>() || token.is<Token::EofToken>()) {
         // <whitespace-token>: Do nothing.
@@ -114,7 +124,8 @@ public:
         } else {
           // Otherwise, reconsume the current input token. Consume a qualified rule. If anything is
           // returned, append it to the list of rules.
-          if (auto maybeQualifiedRule = consumeQualifiedRule(tokenizer, std::move(token))) {
+          if (auto maybeQualifiedRule =
+                  consumeQualifiedRule(tokenizer, std::move(token), &aggregateBudget)) {
             result.emplace_back(std::move(maybeQualifiedRule.value()));
           } else {
             result.emplace_back(InvalidRule());
@@ -123,8 +134,8 @@ public:
       } else if (token.is<Token::AtKeyword>()) {
         // <at-keyword-token>: Reconsume the current input token. Consume an at-rule, and append the
         // returned value to the list of rules.
-        auto atRule =
-            consumeAtRule(tokenizer, std::move(token.get<Token::AtKeyword>()), ParseMode::Keep);
+        auto atRule = consumeAtRule(tokenizer, std::move(token.get<Token::AtKeyword>()),
+                                    ParseMode::Keep, &aggregateBudget);
         if (!atRule.name.equalsLowercase("charset")) {
           result.emplace_back(std::move(atRule));
         } else {
@@ -133,21 +144,33 @@ public:
       } else {
         // anything else: Reconsume the current input token. Consume a qualified rule. If anything
         // is returned, append it to the list of rules.
-        if (auto maybeQualifiedRule = consumeQualifiedRule(tokenizer, std::move(token))) {
+        if (auto maybeQualifiedRule =
+                consumeQualifiedRule(tokenizer, std::move(token), &aggregateBudget)) {
           result.emplace_back(std::move(maybeQualifiedRule.value()));
         } else {
           result.emplace_back(InvalidRule());
         }
       }
+      if (aggregateBudget.resourceLimitExceeded()) {
+        if (securityStats != nullptr) {
+          securityStats->rejected = true;
+        }
+        break;
+      }
     }
 
+    if (securityStats != nullptr) {
+      securityStats->rules = result.size();
+      securityStats->componentValues = aggregateBudget.componentValues();
+    }
     return result;
   }
 
-  static std::optional<QualifiedRule> consumeQualifiedRule(details::Tokenizer& tokenizer,
-                                                           Token&& firstToken) {
+  static std::optional<QualifiedRule> consumeQualifiedRule(
+      details::Tokenizer& tokenizer, Token&& firstToken,
+      details::ComponentValueParsingBudget* aggregateBudget = nullptr) {
     std::vector<ComponentValue> prelude;
-    details::ComponentValueParsingContext parsingContext;
+    details::ComponentValueParsingContext parsingContext(aggregateBudget);
     Token token = std::move(firstToken);
 
     while (true) {
@@ -165,7 +188,9 @@ public:
         // returned value to the qualified rule's prelude.
         auto component =
             consumeComponentValue(tokenizer, std::move(token), ParseMode::Keep, parsingContext);
-        prelude.emplace_back(std::move(component));
+        if (!parsingContext.resourceLimitExceeded()) {
+          prelude.emplace_back(std::move(component));
+        }
       }
 
       token = tokenizer.next();
@@ -174,17 +199,18 @@ public:
 
 private:
   details::Tokenizer tokenizer_;
+  RuleParser::SecurityStats* securityStats_ = nullptr;
 };
 
 }  // namespace
 
-std::vector<Rule> RuleParser::ParseStylesheet(std::string_view str) {
-  RuleParserImpl parser(RuleParserImpl::maybeRemoveCharset(str));
+std::vector<Rule> RuleParser::ParseStylesheet(std::string_view str, SecurityStats* securityStats) {
+  RuleParserImpl parser(RuleParserImpl::maybeRemoveCharset(str), securityStats);
   return parser.parseStylesheet();
 }
 
-std::vector<Rule> RuleParser::ParseListOfRules(std::string_view str) {
-  RuleParserImpl parser(RuleParserImpl::maybeRemoveCharset(str));
+std::vector<Rule> RuleParser::ParseListOfRules(std::string_view str, SecurityStats* securityStats) {
+  RuleParserImpl parser(RuleParserImpl::maybeRemoveCharset(str), securityStats);
   return parser.parseListOfRules(ListOfRulesFlags::None);
 }
 

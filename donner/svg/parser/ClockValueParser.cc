@@ -1,6 +1,7 @@
 #include "donner/svg/parser/ClockValueParser.h"
 
 #include <charconv>
+#include <cmath>
 #include <cstdlib>
 #include <string>
 #include <string_view>
@@ -23,7 +24,7 @@ int parseDouble(std::string_view str, double& out) {
   std::string temp(str);
   char* endPtr = nullptr;
   out = std::strtod(temp.c_str(), &endPtr);
-  if (endPtr == temp.c_str()) {
+  if (endPtr == temp.c_str() || !std::isfinite(out)) {
     return -1;
   }
   return static_cast<int>(endPtr - temp.c_str());
@@ -43,16 +44,103 @@ int parseInt(std::string_view str, int& out) {
   return static_cast<int>(ptr - begin);
 }
 
-}  // namespace
-
-ParseResult<components::ClockValue> ClockValueParser::Parse(std::string_view str) {
-  // Trim leading/trailing whitespace.
+std::string_view TrimClockValue(std::string_view str) {
   while (!str.empty() && (str.front() == ' ' || str.front() == '\t')) {
     str.remove_prefix(1);
   }
   while (!str.empty() && (str.back() == ' ' || str.back() == '\t')) {
     str.remove_suffix(1);
   }
+  return str;
+}
+
+ParseDiagnostic InvalidClockFormat() {
+  return ParseDiagnostic::Error("Invalid clock value format", FileOffset::Offset(0));
+}
+
+ParseResult<components::ClockValue> FinishClockValue(double seconds, bool negative) {
+  if (!std::isfinite(seconds)) {
+    return ParseDiagnostic::Error("Clock value is out of range", FileOffset::Offset(0));
+  }
+  return components::ClockValue::Seconds(negative ? -seconds : seconds);
+}
+
+ParseResult<components::ClockValue> ParseFullClock(int hours, int minutes, std::string_view seconds,
+                                                   bool negative) {
+  double parsedSeconds = 0.0;
+  const int consumed = parseDouble(seconds, parsedSeconds);
+  if (consumed <= 0 || static_cast<size_t>(consumed) != seconds.size()) {
+    return InvalidClockFormat();
+  }
+  return FinishClockValue(
+      static_cast<double>(hours) * 3600.0 + static_cast<double>(minutes) * 60.0 + parsedSeconds,
+      negative);
+}
+
+ParseResult<components::ClockValue> ParsePartialClock(int minutes, int parsedSeconds,
+                                                      std::string_view secondsText, int consumed,
+                                                      bool negative) {
+  double seconds = static_cast<double>(parsedSeconds);
+  const std::string_view remaining = secondsText.substr(consumed);
+  if (!remaining.empty()) {
+    if (remaining.front() != '.') {
+      return ParseDiagnostic::Error("Unexpected characters in clock value", FileOffset::Offset(0));
+    }
+    const int fractionalConsumed = parseDouble(secondsText, seconds);
+    if (fractionalConsumed <= 0 || static_cast<size_t>(fractionalConsumed) != secondsText.size()) {
+      return InvalidClockFormat();
+    }
+  }
+  return FinishClockValue(static_cast<double>(minutes) * 60.0 + seconds, negative);
+}
+
+ParseResult<components::ClockValue> ParseColonClock(std::string_view str, bool negative) {
+  int first = 0;
+  int consumed = parseInt(str, first);
+  if (consumed <= 0 || static_cast<size_t>(consumed) >= str.size() || str[consumed] != ':') {
+    return InvalidClockFormat();
+  }
+  str.remove_prefix(consumed + 1);
+
+  int second = 0;
+  consumed = parseInt(str, second);
+  if (consumed <= 0) {
+    return InvalidClockFormat();
+  }
+  if (static_cast<size_t>(consumed) < str.size() && str[consumed] == ':') {
+    return ParseFullClock(first, second, str.substr(consumed + 1), negative);
+  }
+  return ParsePartialClock(first, second, str, consumed, negative);
+}
+
+ParseResult<components::ClockValue> ParseTimecount(std::string_view str, bool negative) {
+  double number = 0.0;
+  const int consumed = parseDouble(str, number);
+  if (consumed <= 0) {
+    return ParseDiagnostic::Error("Invalid clock value: expected a number", FileOffset::Offset(0));
+  }
+
+  const std::string_view suffix = str.substr(consumed);
+  if (suffix.empty() || suffix == "s") {
+    return FinishClockValue(number, negative);
+  }
+  if (suffix == "ms") {
+    return FinishClockValue(number / 1000.0, negative);
+  }
+  if (suffix == "min") {
+    return FinishClockValue(number * 60.0, negative);
+  }
+  if (suffix == "h") {
+    return FinishClockValue(number * 3600.0, negative);
+  }
+  return ParseDiagnostic::Error(
+      RcString("Invalid clock value metric: '" + std::string(suffix) + "'"), FileOffset::Offset(0));
+}
+
+}  // namespace
+
+ParseResult<components::ClockValue> ClockValueParser::Parse(std::string_view str) {
+  str = TrimClockValue(str);
 
   if (str.empty()) {
     ParseDiagnostic err;
@@ -76,90 +164,9 @@ ParseResult<components::ClockValue> ClockValueParser::Parse(std::string_view str
 
   // Try to parse clock values with colons (full or partial clock).
   if (str.find(':') != std::string_view::npos) {
-    // Could be HH:MM:SS.frac or MM:SS.frac
-    int first = 0;
-    int consumed = parseInt(str, first);
-    if (consumed <= 0 || static_cast<size_t>(consumed) >= str.size() || str[consumed] != ':') {
-      ParseDiagnostic err;
-      err.reason = "Invalid clock value format";
-      return err;
-    }
-    str.remove_prefix(consumed + 1);  // skip past ':'
-
-    int second = 0;
-    consumed = parseInt(str, second);
-    if (consumed <= 0) {
-      ParseDiagnostic err;
-      err.reason = "Invalid clock value format";
-      return err;
-    }
-
-    if (static_cast<size_t>(consumed) < str.size() && str[consumed] == ':') {
-      // Full clock: HH:MM:SS.frac
-      str.remove_prefix(consumed + 1);
-      double seconds = 0.0;
-      consumed = parseDouble(str, seconds);
-      if (consumed <= 0 || static_cast<size_t>(consumed) != str.size()) {
-        ParseDiagnostic err;
-        err.reason = "Invalid clock value format";
-        return err;
-      }
-      double total = static_cast<double>(first) * 3600.0 + static_cast<double>(second) * 60.0 +
-                     seconds;
-      return components::ClockValue::Seconds(negative ? -total : total);
-    }
-
-    // Partial clock: MM:SS.frac
-    double seconds = 0.0;
-    std::string_view remaining = str.substr(consumed);
-    if (remaining.empty()) {
-      seconds = static_cast<double>(second);
-    } else if (remaining.front() == '.') {
-      // MM:SS.frac - parse the full SS.frac from current position
-      double fullSeconds = 0.0;
-      consumed = parseDouble(str, fullSeconds);
-      if (consumed <= 0 || static_cast<size_t>(consumed) != str.size()) {
-        ParseDiagnostic err;
-        err.reason = "Invalid clock value format";
-        return err;
-      }
-      seconds = fullSeconds;
-    } else {
-      ParseDiagnostic err;
-      err.reason = "Unexpected characters in clock value";
-      return err;
-    }
-    double total = static_cast<double>(first) * 60.0 + seconds;
-    return components::ClockValue::Seconds(negative ? -total : total);
+    return ParseColonClock(str, negative);
   }
-
-  // Timecount value: <number><metric> or bare number (seconds).
-  double number = 0.0;
-  int consumed = parseDouble(str, number);
-  if (consumed <= 0) {
-    ParseDiagnostic err;
-    err.reason = "Invalid clock value: expected a number";
-    return err;
-  }
-
-  std::string_view suffix = str.substr(consumed);
-  double seconds = 0.0;
-
-  if (suffix.empty() || suffix == "s") {
-    seconds = number;
-  } else if (suffix == "ms") {
-    seconds = number / 1000.0;
-  } else if (suffix == "min") {
-    seconds = number * 60.0;
-  } else if (suffix == "h") {
-    seconds = number * 3600.0;
-  } else {
-    ParseDiagnostic err;
-    err.reason = "Invalid clock value metric: '" + std::string(suffix) + "'";
-    return err;
-  }
-
-  return components::ClockValue::Seconds(negative ? -seconds : seconds);
+  return ParseTimecount(str, negative);
 }
 
 }  // namespace donner::svg::parser

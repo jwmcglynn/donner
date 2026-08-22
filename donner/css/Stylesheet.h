@@ -1,6 +1,7 @@
 #pragma once
 /// @file
 
+#include <cstddef>
 #include <ostream>
 
 #include "donner/base/Utils.h"
@@ -54,6 +55,17 @@ struct SelectorRule {
  */
 class Stylesheet {
 public:
+  /// Resource-limit accounting produced while parsing an untrusted stylesheet.
+  struct SecurityStats {
+    std::size_t rules = 0;
+    std::size_t declarations = 0;
+    std::size_t componentValues = 0;
+    bool rejected = false;
+  };
+
+  /// Maximum declarations retained across one stylesheet.
+  static constexpr std::size_t kMaximumDeclarations = 16 * 1024;
+
   /// Default constructor.
   Stylesheet() = default;
 
@@ -64,7 +76,12 @@ public:
    * @param fontFaces Optional list of `@font-face` declarations, ownership is taken.
    */
   explicit Stylesheet(std::vector<SelectorRule>&& rules, std::vector<FontFace>&& fontFaces = {})
-      : rules_(std::move(rules)), fontFaces_(std::move(fontFaces)) {}
+      : Stylesheet(std::move(rules), std::move(fontFaces), SecurityStats{}) {}
+
+  /** Construct a stylesheet with parser resource-limit accounting. */
+  Stylesheet(std::vector<SelectorRule>&& rules, std::vector<FontFace>&& fontFaces,
+             SecurityStats securityStats)
+      : rules_(std::move(rules)), fontFaces_(std::move(fontFaces)), securityStats_(securityStats) {}
 
   // Copyable and moveable.
   /// Copy constructor.
@@ -89,6 +106,9 @@ public:
    */
   std::span<const FontFace> fontFaces() const UTILS_LIFETIME_BOUND { return fontFaces_; }
 
+  /// Return resource-limit accounting from parsing this stylesheet.
+  const SecurityStats& securityStats() const { return securityStats_; }
+
   /**
    * Output a human-readable representation of the stylesheet to a stream.
    *
@@ -105,6 +125,7 @@ public:
 private:
   std::vector<SelectorRule> rules_;
   std::vector<FontFace> fontFaces_;
+  SecurityStats securityStats_;
 };
 
 }  // namespace donner::css

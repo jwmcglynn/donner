@@ -5,7 +5,9 @@
 #include <vector>
 
 #include "donner/base/ParseWarningSink.h"
+#include "donner/svg/components/animation/AnimateValueComponent.h"
 #include "donner/svg/components/animation/AnimationSystem.h"
+#include "donner/svg/parser/ListParser.h"
 #include "donner/svg/parser/SVGParser.h"
 
 namespace donner::svg {
@@ -15,16 +17,27 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
   // NOLINTNEXTLINE: Allow reinterpret_cast
   const std::string_view input(reinterpret_cast<const char*>(data), size);
 
-  // Limit input size to prevent excessive allocation inside the SVG parser.
-  const size_t clampedSize = std::min(input.size(), size_t(512));
+  const bool limitMarker = input.starts_with("animation-list-budget");
+  std::string generated;
+  if (limitMarker) {
+    generated.reserve((parser::ListParser::kMaximumItems + 1) * 2);
+    for (std::size_t i = 0; i <= parser::ListParser::kMaximumItems; ++i) {
+      generated += "1;";
+    }
+  }
+  const std::string_view values = limitMarker
+                                      ? std::string_view(generated)
+                                      : input.substr(0, std::min(input.size(), size_t(512)));
 
   // Build a minimal SVG with the fuzzed value as animate values.
-  std::string svg = "<svg xmlns='http://www.w3.org/2000/svg'>"
-                    "<rect id='r' width='100' height='100'>"
-                    "<animate attributeName='width' values='";
-  svg.append(input.substr(0, clampedSize));
-  svg += "' begin='0s' dur='2s' />"
-         "</rect></svg>";
+  std::string svg =
+      "<svg xmlns='http://www.w3.org/2000/svg'>"
+      "<rect id='r' width='100' height='100'>"
+      "<animate id='budget' attributeName='width' values='";
+  svg.append(values);
+  svg +=
+      "' begin='0s' dur='2s' />"
+      "</rect></svg>";
 
   parser::SVGParser::Options options;
   options.enableExperimental = true;
@@ -33,6 +46,15 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
   auto result = parser::SVGParser::ParseSVG(svg, warnings, options);
   if (result.hasResult()) {
     auto& registry = result.result().registry();
+    if (limitMarker) {
+      const auto element = result.result().querySelector("#budget");
+      const auto* component =
+          element.has_value() ? element->entityHandle().try_get<components::AnimateValueComponent>()
+                              : nullptr;
+      if (component == nullptr || !component->values.empty()) {
+        std::abort();
+      }
+    }
     // Advance at a few time points to exercise interpolation.
     components::AnimationSystem().advance(registry, 0.5, nullptr);
     components::AnimationSystem().advance(registry, 1.0, nullptr);

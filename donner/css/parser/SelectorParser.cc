@@ -894,7 +894,7 @@ private:
         // message.
         std::string foundStr;
         if (auto maybeDelim = peekNextDelim()) {
-          if (std::isprint(maybeDelim.value())) {
+          if (std::isprint(static_cast<unsigned char>(maybeDelim.value()))) {
             foundStr = " ";
             foundStr[0] = maybeDelim.value();
           } else {

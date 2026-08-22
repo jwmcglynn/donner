@@ -31,8 +31,10 @@ struct DeclarationTokenTokenizer {
   struct Item {
     Token value;
     std::reference_wrapper<T> tokenizer;
+    ComponentValueParsingBudget* aggregateBudget = nullptr;
 
-    Item(Token&& value, T& tokenizer) : value(std::move(value)), tokenizer(tokenizer) {}
+    Item(Token&& value, T& tokenizer, ComponentValueParsingBudget* aggregateBudget)
+        : value(std::move(value)), tokenizer(tokenizer), aggregateBudget(aggregateBudget) {}
 
     // Default copy and move.
     Item(Item&&) noexcept = default;
@@ -49,20 +51,23 @@ struct DeclarationTokenTokenizer {
     FileOffset offset() const { return value.offset(); }
 
     ComponentValue asComponentValue(ParseMode parseMode = ParseMode::Keep) {
-      ComponentValueParsingContext parsingContext;
+      ComponentValueParsingContext parsingContext(aggregateBudget);
       return consumeComponentValue(tokenizer.get(), std::move(value), parseMode, parsingContext);
     }
   };
 
   using ItemType = Token;
 
-  explicit DeclarationTokenTokenizer(T& tokenizer) : tokenizer_(tokenizer) {}
+  explicit DeclarationTokenTokenizer(T& tokenizer,
+                                     ComponentValueParsingBudget* aggregateBudget = nullptr)
+      : tokenizer_(tokenizer), aggregateBudget_(aggregateBudget) {}
 
   bool isEOF() const { return tokenizer_.isEOF(); }
-  Item next() { return Item(tokenizer_.next(), tokenizer_); }
+  Item next() { return Item(tokenizer_.next(), tokenizer_, aggregateBudget_); }
 
 private:
   T& tokenizer_;
+  ComponentValueParsingBudget* aggregateBudget_ = nullptr;
 };
 
 template <TokenizerLike<ComponentValue> T>
@@ -95,8 +100,9 @@ private:
 
 /// Consume a declaration, per https://www.w3.org/TR/css-syntax-3/#consume-declaration
 template <DeclarationTokenizer T>
-std::optional<Declaration> consumeDeclarationGeneric(T& tokenizer, Token::Ident&& ident,
-                                                     const FileOffset& offset) {
+std::optional<Declaration> consumeDeclarationGeneric(
+    T& tokenizer, Token::Ident&& ident, const FileOffset& offset,
+    ComponentValueParsingBudget* aggregateBudget = nullptr) {
   {
     bool hadColon = false;
 
@@ -138,7 +144,11 @@ std::optional<Declaration> consumeDeclarationGeneric(T& tokenizer, Token::Ident&
     if (token.template isToken<Token::Whitespace>()) {
       // While the next input token is a <whitespace-token>, consume the next input token.
       if (hitNonWhitespace) {
-        declaration.values.emplace_back(std::move(token.asComponentValue()));
+        ComponentValue componentValue = token.asComponentValue();
+        if (aggregateBudget != nullptr && aggregateBudget->resourceLimitExceeded()) {
+          return std::nullopt;
+        }
+        declaration.values.emplace_back(std::move(componentValue));
         ++trailingWhitespace;
       }
     } else {
@@ -148,6 +158,9 @@ std::optional<Declaration> consumeDeclarationGeneric(T& tokenizer, Token::Ident&
       // As long as the next input token is anything other than an <EOF-token>, consume a
       // component value and append it to the declaration's value.
       auto componentValue = token.asComponentValue();
+      if (aggregateBudget != nullptr && aggregateBudget->resourceLimitExceeded()) {
+        return std::nullopt;
+      }
 
       // Scan for important.
       if (Token* valueToken = std::get_if<Token>(&componentValue.value)) {
@@ -187,15 +200,20 @@ std::optional<Declaration> consumeDeclarationGeneric(T& tokenizer, Token::Ident&
   }
 
   declaration.sourceRange = SourceRange{offset, lastConsumedNonWhitespaceOffset};
+  if (aggregateBudget != nullptr && aggregateBudget->resourceLimitExceeded()) {
+    return std::nullopt;
+  }
+  declaration.sourceByteSize = declaration.toCssText().size();
   return declaration;
 }
 
 /// Consume a declaration, per https://www.w3.org/TR/css-syntax-3/#consume-declaration
 template <TokenizerLike<Token> T>
-std::optional<Declaration> consumeDeclaration(T& tokenizer, Token::Ident&& ident,
-                                              const FileOffset& offset) {
-  DeclarationTokenTokenizer declarationTokenizer(tokenizer);
-  return consumeDeclarationGeneric(declarationTokenizer, std::move(ident), offset);
+std::optional<Declaration> consumeDeclaration(
+    T& tokenizer, Token::Ident&& ident, const FileOffset& offset,
+    ComponentValueParsingBudget* aggregateBudget = nullptr) {
+  DeclarationTokenTokenizer declarationTokenizer(tokenizer, aggregateBudget);
+  return consumeDeclarationGeneric(declarationTokenizer, std::move(ident), offset, aggregateBudget);
 }
 
 /// Consume a declaration, starting with an partially parsed set of ComponentValues.

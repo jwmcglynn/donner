@@ -1,5 +1,6 @@
 #include "donner/svg/graph/Reference.h"
 
+#include "donner/base/Utf8.h"
 #include "donner/svg/components/AttachedIdLookup.h"
 
 namespace donner::svg {
@@ -47,6 +48,12 @@ bool Reference::isExternal() const {
   return true;
 }
 
+bool Reference::hasSafeRepresentation() const {
+  const std::string_view value(href);
+  return value.size() <= kMaximumHrefBytes && value.find('\0') == std::string_view::npos &&
+         Utf8::IsValidString(value);
+}
+
 std::string_view Reference::documentUrl() const {
   const std::string_view sv(href);
   if (sv.empty() || sv[0] == '#') {
@@ -87,6 +94,9 @@ std::string_view Reference::fragment() const {
 }
 
 std::optional<ResolvedReference> Reference::resolve(Registry& registry) const {
+  if (!hasSafeRepresentation()) {
+    return std::nullopt;
+  }
   if (StringUtils::StartsWith(href, std::string_view("#"))) {
     return ResolveAttachedEntityById(registry, href.substr(1));
   }
@@ -95,6 +105,9 @@ std::optional<ResolvedReference> Reference::resolve(Registry& registry) const {
 }
 
 std::optional<ResolvedReference> Reference::resolveFragment(Registry& registry) const {
+  if (!hasSafeRepresentation()) {
+    return std::nullopt;
+  }
   const std::string_view frag = fragment();
   if (frag.empty()) {
     return std::nullopt;

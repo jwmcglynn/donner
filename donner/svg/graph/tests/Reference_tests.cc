@@ -2,6 +2,9 @@
 
 #include <gtest/gtest.h>
 
+#include <string>
+#include <string_view>
+
 namespace donner::svg {
 namespace {
 
@@ -59,6 +62,15 @@ TEST(ReferenceTest, ExternalWithTrailingHash) {
   EXPECT_TRUE(ref.isExternal());
   EXPECT_EQ(ref.documentUrl(), "file.svg");
   EXPECT_EQ(ref.fragment(), "");
+}
+
+TEST(ReferenceTest, RejectsOversizedNullAndInvalidUtf8RepresentationsBeforeLookup) {
+  EXPECT_FALSE(Reference(RcString(std::string(Reference::kMaximumHrefBytes + 1, 'a')))
+                   .hasSafeRepresentation());
+  EXPECT_FALSE(Reference(RcString(std::string_view("#a\0b", 4))).hasSafeRepresentation());
+  constexpr char kInvalidUtf8[] = "#\xED\xA0\x80";
+  EXPECT_FALSE(Reference(RcString(std::string_view(kInvalidUtf8, sizeof(kInvalidUtf8) - 1)))
+                   .hasSafeRepresentation());
 }
 
 }  // namespace

@@ -27,6 +27,12 @@ public:
     skipWhitespace();
 
     while (!remaining_.empty()) {
+      if (points_.size() >= PointsListParser::kMaximumPoints) {
+        ParseDiagnostic err;
+        err.reason = "Points list item limit exceeded";
+        err.range = currentRange(0, 0);
+        return resultAndError(std::move(err));
+      }
       if (!points_.empty()) {
         // Allow commas after the first coordinate.
         skipCommaWhitespace();
