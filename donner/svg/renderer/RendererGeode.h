@@ -325,6 +325,9 @@ public:
   /// Install a zero-default hook entered after the new renderer owns its device.
   void setOffscreenCreationHookForTesting(std::function<void()> hook) override;
 
+  /// Number of filter-budget command-buffer chunks submitted in the current frame.
+  [[nodiscard]] std::uint64_t filterBudgetChunksForTesting() const override;
+
   [[nodiscard]] RendererBitmap takeSnapshot() const override;
   [[nodiscard]] RendererBitmap takeSnapshotInterruptibly(
       const std::function<bool()>& shouldCancel) const override;

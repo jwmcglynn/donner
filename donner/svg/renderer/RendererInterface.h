@@ -703,6 +703,9 @@ public:
   /// Install a zero-default hook entered from inside offscreen backend construction.
   virtual void setOffscreenCreationHookForTesting(std::function<void()> /*hook*/) {}
 
+  /// Number of filter-budget command-buffer chunks submitted in the current frame.
+  [[nodiscard]] virtual std::uint64_t filterBudgetChunksForTesting() const { return 0; }
+
   /**
    * Enable or disable the backend's geometry debug overlay.
    *

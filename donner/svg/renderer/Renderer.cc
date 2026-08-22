@@ -646,6 +646,10 @@ void Renderer::setOffscreenCreationHookForTesting(std::function<void()> hook) {
   impl_->setOffscreenCreationHookForTesting(std::move(hook));
 }
 
+std::uint64_t Renderer::filterBudgetChunksForTesting() const {
+  return impl_->filterBudgetChunksForTesting();
+}
+
 void Renderer::setDebugGeometryOverlay(bool enabled) {
   impl_->setDebugGeometryOverlay(enabled);
 }

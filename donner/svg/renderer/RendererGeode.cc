@@ -6155,6 +6155,10 @@ void RendererGeode::setOffscreenCreationHookForTesting(std::function<void()> hoo
   impl_->offscreenCreationHookForTesting = std::move(hook);
 }
 
+std::uint64_t RendererGeode::filterBudgetChunksForTesting() const {
+  return 0;
+}
+
 std::shared_ptr<const RendererTextureSnapshot> RendererGeode::takeTextureSnapshot() {
   impl_->borrowedTargetSnapshot.reset();
   if (!impl_->device || !impl_->ownedTarget || impl_->hostTarget || impl_->pixelWidth <= 0 ||
