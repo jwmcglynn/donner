@@ -512,14 +512,15 @@ ResolvedClip toResolvedClip(const components::RenderingInstanceComponent& instan
         candidateBudget.reserve(
             {.bytes = shapeCount * sizeof(ClipPathShape), .decodeWork = shapeCount});
     bool geometryFits = shapeStorageFits;
-    for (const auto& path : clipPaths->clipPaths) {
+    for (auto path = clipPaths->clipPaths.begin();
+         geometryFits && path != clipPaths->clipPaths.end(); ++path) {
       if (securityStats) {
         ++securityStats->clipGeometryPathsPreflighted;
       }
-      const std::size_t commands = path.path.commands().size();
-      const std::size_t points = path.path.points().size();
-      const std::optional<std::size_t> retainedBytes = path.path.retainedBytes();
-      if (!geometryFits || !retainedBytes.has_value() ||
+      const std::size_t commands = path->path.commands().size();
+      const std::size_t points = path->path.points().size();
+      const std::optional<std::size_t> retainedBytes = path->path.retainedBytes();
+      if (!retainedBytes.has_value() ||
           commands > std::numeric_limits<std::size_t>::max() - points ||
           !candidateBudget.reserve({.uniqueOutlines = 1,
                                     .commands = commands,
@@ -532,6 +533,7 @@ ResolvedClip toResolvedClip(const components::RenderingInstanceComponent& instan
     }
 
     if (!geometryFits) {
+      copyBudget.reject();
       if (securityStats) {
         securityStats->clipGeometryCopyRejected = true;
       }
