@@ -2893,15 +2893,17 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
         if (cursor.component->reserveOccurrence(documentBudget)) {
           geode::GeodeRecordSlab::Slot slot;
           if (cursor.component->recordSlab->allocateSlot(*device, slot)) {
-            occurrences.push_back(geode::GeodeTextInstanceRecordComponent::Occurrence{slot, {}});
+            if (!cursor.component->appendReservedOccurrence(slot)) {
+              cursor.component->recordSlab->freeSlot(slot);
+            }
           } else {
             cursor.component->rollbackOccurrence();
           }
         }
       }
       if (cursor.next < occurrences.size()) {
-        outSlot = &occurrences[cursor.next].slot;
-        outCache = &occurrences[cursor.next].lastRecord;
+        outSlot = &occurrences[cursor.next]->slot;
+        outCache = &occurrences[cursor.next]->lastRecord;
         ++cursor.next;
         return;
       }

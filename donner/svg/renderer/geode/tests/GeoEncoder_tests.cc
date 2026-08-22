@@ -521,20 +521,19 @@ TEST(GeodeResourceBudgetTest, ResidentGradientMirrorReleasesAtOwnerDestruction) 
 
 TEST_F(GeoEncoderTest, BatchUniformCpuMirrorStopsAtCapPlusOneAndReleases) {
   constexpr uint64_t kUniformBytes = 16u;
-  const std::optional<uint64_t> entryBytes =
-      GeodeRecordSlab::batchUniformRetainedBytes(kUniformBytes);
-  ASSERT_TRUE(entryBytes.has_value());
   auto budget = std::make_shared<GeodeDocumentGeometryBudget>();
-  budget->setLimitsForTesting(
-      {.cacheBytes = *entryBytes + kUniformBytes - 1u, .residentBytes = kUniformBytes * 2u});
 
   {
     GeodeRecordSlab slab(device_->deviceId(), budget);
     const uint32_t first[4] = {1u, 2u, 3u, 4u};
     const uint32_t second[4] = {5u, 6u, 7u, 8u};
     ASSERT_TRUE(slab.acquireBatchUniform(*device_, first, sizeof(first)).buffer);
+    const uint64_t entryBytes = budget->cacheBytes();
+    const uint64_t payloadBytes = slab.batchUniformPayloadBytesForTesting();
+    budget->setLimitsForTesting(
+        {.cacheBytes = entryBytes + payloadBytes - 1u, .residentBytes = kUniformBytes * 2u});
     EXPECT_FALSE(slab.acquireBatchUniform(*device_, second, sizeof(second)).buffer);
-    EXPECT_EQ(budget->cacheBytes(), *entryBytes);
+    EXPECT_EQ(budget->cacheBytes(), entryBytes);
     EXPECT_EQ(budget->residentBytes(), kUniformBytes)
         << "The rejected CPU mirror must roll back its tentative GPU reservation.";
   }
@@ -553,7 +552,9 @@ TEST_F(GeoEncoderTest, BatchUniformCpuReservationIncludesVectorSpareCapacity) {
       const uint32_t value[4] = {index, index + 1u, index + 2u, index + 3u};
       ASSERT_TRUE(slab.acquireBatchUniform(*device_, value, sizeof(value)).buffer);
     }
-    EXPECT_EQ(budget->cacheBytes(), slab.batchUniformMetadataBytesForTesting() + 5u * kUniformBytes)
+    EXPECT_GE(slab.batchUniformPayloadBytesForTesting(), 5u * kUniformBytes);
+    EXPECT_EQ(budget->cacheBytes(), slab.batchUniformMetadataBytesForTesting() +
+                                        slab.batchUniformPayloadBytesForTesting())
         << "The family reservation must include spare vector slots, not only live entries.";
   }
 

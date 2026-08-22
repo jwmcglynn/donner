@@ -301,6 +301,21 @@ public:
       }
       return BatchUniformHandle{};
     }
+    std::vector<uint8_t> retainedBytes(first, first + size);
+    const uint64_t retainedCapacity = retainedBytes.capacity();
+    if (retainedCapacity > std::numeric_limits<uint64_t>::max() - cpuPayloadBytes_ ||
+        cpuPayloadBytes_ + retainedCapacity >
+            std::numeric_limits<uint64_t>::max() - metadataBytes ||
+        !replaceCpuBytes(metadataBytes + cpuPayloadBytes_ + retainedCapacity)) {
+      if (batchUniforms_.empty()) {
+        std::vector<BatchUniform>().swap(batchUniforms_);
+      }
+      (void)replaceCpuBytes(previousCpuBytes);
+      if (budget_) {
+        budget_->releaseResidentBytes(size);
+      }
+      return BatchUniformHandle{};
+    }
     wgpu::BufferDescriptor desc = {};
     desc.label = wgpuLabel("GeodeSceneBatchUniform");
     desc.size = size;
@@ -316,10 +331,9 @@ public:
     device.countBuffer();
     device.queue().writeBuffer(buffer.get(), 0, first, size);
     device.countBufferWrite(size);
-    batchUniforms_.push_back(BatchUniform{std::move(buffer),
-                                          std::vector<uint8_t>(first, first + size),
-                                          GeodeDevice::AllocateBufferId()});
-    cpuPayloadBytes_ = nextPayloadBytes;
+    batchUniforms_.push_back(
+        BatchUniform{std::move(buffer), std::move(retainedBytes), GeodeDevice::AllocateBufferId()});
+    cpuPayloadBytes_ += retainedCapacity;
     accountedBytes_ += size;
     return BatchUniformHandle{batchUniforms_.back().buffer.get(), batchUniforms_.back().bufferId};
   }
@@ -344,6 +358,7 @@ public:
   uint64_t batchUniformMetadataBytesForTesting() const {
     return batchUniforms_.capacity() * sizeof(BatchUniform);
   }
+  uint64_t batchUniformPayloadBytesForTesting() const { return cpuPayloadBytes_; }
 
 private:
   struct Chunk {

@@ -287,18 +287,26 @@ TEST(GeodeTextInstanceRecordComponentTest, OccurrenceAddressesSurviveGrowth) {
   // are still appending; a reallocating container would leave the batch
   // writing through dangling pointers at flush.
   GeodeTextInstanceRecordComponent component;
-  component.occurrences.push_back(GeodeTextInstanceRecordComponent::Occurrence{});
-  const GeodeTextInstanceRecordComponent::Occurrence* first = &component.occurrences.front();
+  component.occurrences.push_back(std::make_unique<GeodeTextInstanceRecordComponent::Occurrence>());
+  const GeodeTextInstanceRecordComponent::Occurrence* first = component.occurrences.front().get();
 
   for (int i = 0; i < 512; ++i) {
-    component.occurrences.push_back(GeodeTextInstanceRecordComponent::Occurrence{});
+    component.occurrences.push_back(
+        std::make_unique<GeodeTextInstanceRecordComponent::Occurrence>());
   }
 
-  EXPECT_EQ(&component.occurrences.front(), first);
+  EXPECT_EQ(component.occurrences.front().get(), first);
 }
 
 TEST(GeodeTextInstanceRecordComponentTest, SharedFamilyBoundsProjectedOccurrenceStorage) {
-  const uint64_t occurrenceBytes = GeodeTextInstanceRecordComponent::kProjectedBytesPerOccurrence;
+  uint64_t occurrenceBytes = 0;
+  {
+    auto probeBudget = std::make_shared<GeodeDocumentGeometryBudget>();
+    GeodeTextInstanceRecordComponent probe;
+    ASSERT_TRUE(probe.reserveOccurrence(probeBudget));
+    ASSERT_TRUE(probe.appendReservedOccurrence(GeodeRecordSlab::Slot{}));
+    occurrenceBytes = probe.cpuRetainedBytesForTesting();
+  }
   svg::components::DocumentResourceFamilyBudget::Limits familyLimits;
   familyLimits.geometryBytes = occurrenceBytes;
   familyLimits.maximumTotalRetainedBytes = occurrenceBytes;
@@ -310,6 +318,7 @@ TEST(GeodeTextInstanceRecordComponentTest, SharedFamilyBoundsProjectedOccurrence
     GeodeTextInstanceRecordComponent first;
     GeodeTextInstanceRecordComponent second;
     ASSERT_TRUE(first.reserveOccurrence(firstDocument));
+    ASSERT_TRUE(first.appendReservedOccurrence(GeodeRecordSlab::Slot{}));
     EXPECT_FALSE(second.reserveOccurrence(secondDocument));
     EXPECT_EQ(family->retainedBytes(svg::components::DocumentResourceFamilyBudget::Kind::Geometry),
               occurrenceBytes);
@@ -320,13 +329,13 @@ TEST(GeodeTextInstanceRecordComponentTest, SharedFamilyBoundsProjectedOccurrence
 }
 
 TEST(GeodeTextInstanceRecordComponentTest, ChargedOccurrenceMovesAndReleasesExactlyOnce) {
-  const uint64_t occurrenceBytes = GeodeTextInstanceRecordComponent::kProjectedBytesPerOccurrence;
   auto budget = std::make_shared<GeodeDocumentGeometryBudget>();
 
   {
     GeodeTextInstanceRecordComponent source;
     ASSERT_TRUE(source.reserveOccurrence(budget));
-    source.occurrences.emplace_back();
+    ASSERT_TRUE(source.appendReservedOccurrence(GeodeRecordSlab::Slot{}));
+    const uint64_t occurrenceBytes = source.cpuRetainedBytesForTesting();
     GeodeTextInstanceRecordComponent moved(std::move(source));
     GeodeTextInstanceRecordComponent assigned;
     assigned = std::move(moved);
@@ -341,7 +350,7 @@ TEST(GeodeTextInstanceRecordComponentTest, MoveLeavesTheSourceWithNoSlotsToRelea
   // removed one; a source that kept its slots would free the survivor's
   // records from its own destructor.
   GeodeTextInstanceRecordComponent source;
-  source.occurrences.push_back(GeodeTextInstanceRecordComponent::Occurrence{});
+  source.occurrences.push_back(std::make_unique<GeodeTextInstanceRecordComponent::Occurrence>());
   source.lastFrame = 5u;
 
   GeodeTextInstanceRecordComponent moved = std::move(source);

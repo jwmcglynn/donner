@@ -21,7 +21,6 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
-#include <deque>
 #include <limits>
 #include <memory>
 #include <optional>
@@ -420,15 +419,16 @@ struct GeodeTextInstanceRecordComponent {
     GeodeRecordSlab::Slot slot;
     std::vector<uint8_t> lastRecord;
   };
+  using OccurrenceOwner = std::unique_ptr<Occurrence>;
+  static constexpr uint64_t kOccurrencePayloadBytes = sizeof(Occurrence) + sizeof(InstanceRecord);
   static constexpr uint64_t kProjectedBytesPerOccurrence =
-      sizeof(Occurrence) + sizeof(InstanceRecord);
+      sizeof(OccurrenceOwner) + kOccurrencePayloadBytes;
 
   /// Occurrence slots in paint order. Index is the occurrence's ordinal
-  /// within the element's draw, so it is stable across unchanged frames. A
-  /// deque, not a vector: a pending batch holds pointers into these entries
-  /// while later occurrences are still appending, and a reallocating growth
-  /// would leave the batch writing through dangling pointers at flush.
-  std::deque<Occurrence> occurrences;
+  /// within the element's draw, so it is stable across unchanged frames.
+  /// Owners may move when the vector grows, but each separately allocated
+  /// occurrence stays put while a pending batch holds pointers into it.
+  std::vector<OccurrenceOwner> occurrences;
   /// Slab the slots were allocated from; also keeps that slab alive so a
   /// device change cannot leave the slots pointing at a destroyed slab.
   std::shared_ptr<GeodeRecordSlab> recordSlab;
@@ -453,9 +453,13 @@ struct GeodeTextInstanceRecordComponent {
         lastFrame(other.lastFrame),
         cpuBudget(std::move(other.cpuBudget)),
         cpuReservation(std::move(other.cpuReservation)),
-        cpuRetainedBytes(other.cpuRetainedBytes) {
-    std::deque<Occurrence>().swap(other.occurrences);
+        cpuRetainedBytes(other.cpuRetainedBytes),
+        cpuOccurrenceBytes(other.cpuOccurrenceBytes),
+        occurrenceReservationPending(other.occurrenceReservationPending) {
+    std::vector<OccurrenceOwner>().swap(other.occurrences);
     other.cpuRetainedBytes = 0;
+    other.cpuOccurrenceBytes = 0;
+    other.occurrenceReservationPending = false;
   }
 
   GeodeTextInstanceRecordComponent& operator=(GeodeTextInstanceRecordComponent&& other) noexcept {
@@ -472,46 +476,146 @@ struct GeodeTextInstanceRecordComponent {
       cpuBudget = std::move(other.cpuBudget);
       cpuReservation = std::move(other.cpuReservation);
       cpuRetainedBytes = other.cpuRetainedBytes;
-      std::deque<Occurrence>().swap(other.occurrences);
+      cpuOccurrenceBytes = other.cpuOccurrenceBytes;
+      occurrenceReservationPending = other.occurrenceReservationPending;
+      std::vector<OccurrenceOwner>().swap(other.occurrences);
       other.cpuRetainedBytes = 0;
+      other.cpuOccurrenceBytes = 0;
+      other.occurrenceReservationPending = false;
     }
     return *this;
   }
 
   bool reserveOccurrence(std::shared_ptr<GeodeDocumentGeometryBudget> budget) {
-    if (cpuRetainedBytes > std::numeric_limits<uint64_t>::max() - kProjectedBytesPerOccurrence ||
-        !budget ||
-        !cpuReservation.replace(budget, cpuRetainedBytes + kProjectedBytesPerOccurrence)) {
+    if (occurrenceReservationPending || !budget || (cpuBudget && cpuBudget.get() != budget.get()) ||
+        occurrences.size() == std::numeric_limits<size_t>::max()) {
       return false;
     }
+    const size_t nextSize = occurrences.size() + 1u;
+    if (kOccurrencePayloadBytes > std::numeric_limits<uint64_t>::max() - cpuOccurrenceBytes) {
+      return false;
+    }
+    const uint64_t payloadBytes = cpuOccurrenceBytes + kOccurrencePayloadBytes;
+    const uint64_t oldBytes = cpuRetainedBytes;
+
+    if (nextSize > occurrences.capacity()) {
+      size_t targetCapacity = occurrences.capacity() == 0u ? 1u : occurrences.capacity();
+      while (targetCapacity < nextSize) {
+        if (targetCapacity > std::numeric_limits<size_t>::max() / 2u) {
+          return false;
+        }
+        targetCapacity *= 2u;
+      }
+      if (targetCapacity > std::numeric_limits<uint64_t>::max() / sizeof(OccurrenceOwner)) {
+        return false;
+      }
+      const uint64_t projectedOwnerBytes =
+          static_cast<uint64_t>(targetCapacity) * sizeof(OccurrenceOwner);
+      if (payloadBytes > std::numeric_limits<uint64_t>::max() - projectedOwnerBytes ||
+          !cpuReservation.replace(budget, projectedOwnerBytes + payloadBytes)) {
+        return false;
+      }
+
+      std::vector<OccurrenceOwner> replacement;
+      replacement.reserve(targetCapacity);
+      if (replacement.capacity() > std::numeric_limits<uint64_t>::max() / sizeof(OccurrenceOwner)) {
+        (void)cpuReservation.replace(budget, oldBytes);
+        return false;
+      }
+      const uint64_t actualOwnerBytes =
+          static_cast<uint64_t>(replacement.capacity()) * sizeof(OccurrenceOwner);
+      if (payloadBytes > std::numeric_limits<uint64_t>::max() - actualOwnerBytes ||
+          !cpuReservation.replace(budget, actualOwnerBytes + payloadBytes)) {
+        (void)cpuReservation.replace(budget, oldBytes);
+        return false;
+      }
+      for (OccurrenceOwner& occurrence : occurrences) {
+        replacement.push_back(std::move(occurrence));
+      }
+      occurrences.swap(replacement);
+      cpuRetainedBytes = actualOwnerBytes + payloadBytes;
+    } else {
+      const uint64_t ownerBytes =
+          static_cast<uint64_t>(occurrences.capacity()) * sizeof(OccurrenceOwner);
+      if (payloadBytes > std::numeric_limits<uint64_t>::max() - ownerBytes ||
+          !cpuReservation.replace(budget, ownerBytes + payloadBytes)) {
+        return false;
+      }
+      cpuRetainedBytes = ownerBytes + payloadBytes;
+    }
     cpuBudget = std::move(budget);
-    cpuRetainedBytes += kProjectedBytesPerOccurrence;
+    occurrenceReservationPending = true;
+    return true;
+  }
+
+  bool appendReservedOccurrence(const GeodeRecordSlab::Slot& slot) {
+    if (!occurrenceReservationPending) {
+      return false;
+    }
+    if (!cpuBudget || occurrences.size() == occurrences.capacity()) {
+      rollbackOccurrence();
+      return false;
+    }
+    auto occurrence = std::make_unique<Occurrence>();
+    occurrence->slot = slot;
+    occurrence->lastRecord.reserve(sizeof(InstanceRecord));
+    const uint64_t lastRecordBytes = occurrence->lastRecord.capacity();
+    if (lastRecordBytes > std::numeric_limits<uint64_t>::max() - sizeof(Occurrence) ||
+        sizeof(Occurrence) + lastRecordBytes >
+            std::numeric_limits<uint64_t>::max() - cpuOccurrenceBytes) {
+      rollbackOccurrence();
+      return false;
+    }
+    const uint64_t occurrenceBytes = sizeof(Occurrence) + lastRecordBytes;
+    const uint64_t ownerBytes =
+        static_cast<uint64_t>(occurrences.capacity()) * sizeof(OccurrenceOwner);
+    if (cpuOccurrenceBytes + occurrenceBytes > std::numeric_limits<uint64_t>::max() - ownerBytes ||
+        !cpuReservation.replace(cpuBudget, ownerBytes + cpuOccurrenceBytes + occurrenceBytes)) {
+      rollbackOccurrence();
+      return false;
+    }
+    occurrences.push_back(std::move(occurrence));
+    cpuOccurrenceBytes += occurrenceBytes;
+    cpuRetainedBytes = ownerBytes + cpuOccurrenceBytes;
+    occurrenceReservationPending = false;
     return true;
   }
 
   void rollbackOccurrence() {
-    if (cpuRetainedBytes < kProjectedBytesPerOccurrence || !cpuBudget) {
+    if (!cpuBudget) {
+      occurrenceReservationPending = false;
       return;
     }
-    cpuRetainedBytes -= kProjectedBytesPerOccurrence;
+    const uint64_t ownerBytes =
+        static_cast<uint64_t>(occurrences.capacity()) * sizeof(OccurrenceOwner);
+    cpuRetainedBytes = ownerBytes + cpuOccurrenceBytes;
     (void)cpuReservation.replace(cpuBudget, cpuRetainedBytes);
+    occurrenceReservationPending = false;
   }
+
+  uint64_t cpuRetainedBytesForTesting() const { return cpuRetainedBytes; }
 
   /// Return every slot to the slab (deferred to the next frame's merge, like
   /// every other record free) and drop them.
   void freeRecordSlots() {
     if (recordSlab) {
-      for (const Occurrence& occurrence : occurrences) {
-        if (occurrence.slot.buffer) {
-          recordSlab->freeSlot(occurrence.slot);
+      for (const OccurrenceOwner& occurrence : occurrences) {
+        if (occurrence && occurrence->slot.buffer) {
+          recordSlab->freeSlot(occurrence->slot);
         }
       }
     }
-    std::deque<Occurrence>().swap(occurrences);
+    std::vector<OccurrenceOwner>().swap(occurrences);
     cpuReservation.reset();
     cpuBudget.reset();
     cpuRetainedBytes = 0;
+    cpuOccurrenceBytes = 0;
+    occurrenceReservationPending = false;
   }
+
+private:
+  uint64_t cpuOccurrenceBytes = 0;
+  bool occurrenceReservationPending = false;
 };
 
 }  // namespace donner::geode
