@@ -466,7 +466,9 @@ donner_cc_test(
     srcs = ["TextEngineScripted_tests.cc"],
     deps = [
         "//donner/base/xml/components",
+        "//donner/svg",
         "//donner/svg/components/layout:components",
+        "//donner/svg/components/resources:resource_manager_context",
         "//donner/svg/components/style:components",
         "//donner/svg/components/text:components",
         "//donner/svg/text:text_backend",

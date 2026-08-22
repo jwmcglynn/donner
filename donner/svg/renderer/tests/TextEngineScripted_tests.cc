@@ -12,7 +12,9 @@
 #include "donner/base/xml/components/TreeComponent.h"
 #include "donner/css/FontFace.h"
 #include "donner/css/Specificity.h"
+#include "donner/svg/SVG.h"
 #include "donner/svg/components/layout/ViewBoxComponent.h"
+#include "donner/svg/components/resources/ResourceManagerContext.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
 #include "donner/svg/components/text/TextComponent.h"
 #include "donner/svg/components/text/TextRootComponent.h"
@@ -845,6 +847,38 @@ TEST(TextEngineScriptedTest, PrepareForElementRequiresResourceManagerContext) {
   // Without a ResourceManagerContext the engine bails out before installing anything.
   EXPECT_FALSE(registry.ctx().contains<FontManager>());
   EXPECT_EQ(registry.try_get<components::ComputedTextComponent>(root), nullptr);
+}
+
+TEST(TextEngineScriptedTest, PrepareForElementCapsInitialStylesheetFontFaces) {
+  std::string source = R"(<svg xmlns="http://www.w3.org/2000/svg">)";
+  for (std::size_t i = 0; i < components::ResourceManagerContext::kMaximumStylesheetFontFaces + 1;
+       ++i) {
+    source += "<style>@font-face{font-family:F" + std::to_string(i) + ";src:local(F" +
+              std::to_string(i) + ")}</style>";
+  }
+  source += R"(<text id="target">x</text></svg>)";
+
+  ParseWarningSink parseWarnings;
+  ParseResult<SVGDocument> parsed = parser::SVGParser::ParseSVG(source, parseWarnings);
+  ASSERT_TRUE(parsed.hasResult());
+  SVGDocument document = std::move(parsed).result();
+  std::optional<SVGElement> target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+
+  Registry& registry = document.registry();
+  auto& resourceManager = registry.ctx().get<components::ResourceManagerContext>();
+  ASSERT_THAT(resourceManager.fontFaces(), IsEmpty());
+
+  FontManager fontManager(registry);
+  TextEngine engine = MakeScriptedEngine(registry, fontManager);
+  ParseWarningSink renderWarnings;
+  engine.prepareForElement(target->unsafeEntityHandle(), renderWarnings);
+
+  EXPECT_THAT(resourceManager.fontFaces(),
+              SizeIs(components::ResourceManagerContext::kMaximumStylesheetFontFaces));
+  EXPECT_EQ(resourceManager.stylesheetFontFaceCountForTesting(),
+            components::ResourceManagerContext::kMaximumStylesheetFontFaces);
+  EXPECT_TRUE(resourceManager.stylesheetFontFaceLimitRejected());
 }
 
 TEST(TextEngineScriptedTest, AddFontFaceRegistersSingleFaceAndBatchSkipsAlreadyRegistered) {
