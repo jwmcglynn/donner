@@ -3689,6 +3689,9 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
           // referenced by any batch).
           claimSceneSlot(*residentSlot, paint);
           flushPendingBatch();
+          if (!paint.isGradient()) {
+            encoder->releasePreparedSceneAdmission(*encoded);
+          }
           startPending(sourceRegistry, sourceEntity, path, paint, rule, encoded, residentSlot,
                        chunk, recordBuf, chunkId, recordBufId, recordIndex,
                        effectiveRecordSlot.offset, clipVersion, current);
