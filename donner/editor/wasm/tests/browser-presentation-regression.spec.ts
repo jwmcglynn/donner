@@ -643,6 +643,26 @@ async function openBasicShapes(page: Page): Promise<{
     throw new Error("editor canvas is missing");
   }
 
+  // These callers measure overlays and presentation pixels, not the thumbnail-to-foreground
+  // scheduler transition. The dedicated Firefox handoff regression below forces that collision
+  // deterministically. Let first-use offscreen WebGPU work settle here so a visual oracle cannot
+  // spend its entire deadline on an unrelated thumbnail cancellation.
+  await expect
+    .poll(
+      () =>
+        page.evaluate(() => {
+          const stats = window.__donnerSampleThumbnailStats;
+          if (!stats) return false;
+          const completed = stats.completed ?? 0;
+          return completed > 0 && (stats.ready ?? 0) > 0 && !stats.active && !stats.pending;
+        }),
+      {
+        message: "the first offscreen thumbnail must settle before a visual sample replaces it",
+        timeout: scaledMs(20_000),
+        intervals: [16, 25, 50, 100],
+      },
+    )
+    .toBe(true);
   const beforeSampleResults = await page.evaluate(
     () => window.__donnerWorkerStats?.completedResults || 0,
   );
