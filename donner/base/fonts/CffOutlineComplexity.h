@@ -15,6 +15,7 @@ inline constexpr std::size_t kMaximumCffOutlineValidationWork = 64 * 1024 * 1024
 struct CffGlyphOutlineComplexity {
   uint32_t maximumVertices = 0;
   uint32_t work = 0;
+  /// False when the glyph uses a legacy composite form that untrusted decoders must not enter.
   bool renderable = true;
 };
 
@@ -29,6 +30,7 @@ enum class CffOutlineValidationStatus : uint8_t {
 /// Per-glyph complexities returned by the bounded CFF interpreter.
 struct CffOutlineValidationResult {
   CffOutlineValidationStatus status = CffOutlineValidationStatus::Invalid;
+  /// Structure and CharString work actually consumed, including failed validation.
   std::size_t work = 0;
   std::vector<CffGlyphOutlineComplexity> glyphs;
 };
@@ -38,6 +40,12 @@ struct CffOutlineValidationResult {
  *
  * Variable CFF2 operators return \ref CffOutlineValidationStatus::UnsupportedVariation so callers
  * can retain directory validation while failing closed before an untrusted outline decoder.
+ * Legacy CFF1 endchar composites validate successfully but return a non-renderable glyph bound.
+ *
+ * @param table Exact CFF or CFF2 table bytes.
+ * @param cff2 Whether @p table uses CFF2 structures and CharStrings.
+ * @param expectedGlyphs Glyph count from the sfnt `maxp` table.
+ * @param maximumWork Caller-owned work remaining for this validation.
  */
 CffOutlineValidationResult ValidateCffOutlineComplexities(
     std::span<const uint8_t> table, bool cff2, std::size_t expectedGlyphs,

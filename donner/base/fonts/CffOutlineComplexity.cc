@@ -19,18 +19,22 @@ constexpr std::size_t kMaximumStemHints = 96;
 constexpr std::size_t kMaximumCharStringLength = 65535;
 constexpr std::size_t kMaximumVertices = 1024 * 1024;
 constexpr std::size_t kMaximumGlyphWork = 16 * 1024 * 1024;
-constexpr std::size_t kMaximumFontValidationWork = 64 * 1024 * 1024;
-
 struct ValidationBudget {
+  explicit ValidationBudget(std::size_t maximumWork) : maximumWork(maximumWork) {}
+
   bool charge(std::size_t count) {
-    if (work > kMaximumFontValidationWork || count > kMaximumFontValidationWork - work) {
+    if (work > maximumWork || count > maximumWork - work) {
+      work = maximumWork;
+      exhausted = true;
       return false;
     }
     work += count;
     return true;
   }
 
+  std::size_t maximumWork = 0;
   std::size_t work = 0;
+  bool exhausted = false;
 };
 
 bool HasBytes(std::span<const uint8_t> data, std::size_t offset, std::size_t length) {
@@ -532,7 +536,10 @@ public:
       return {.status = CffOutlineValidationStatus::Invalid};
     }
     return {.status = CffOutlineValidationStatus::Complete,
-            .glyphs = {{static_cast<uint32_t>(vertices_), static_cast<uint32_t>(work_)}}};
+            .work = work_,
+            .glyphs = {{.maximumVertices = static_cast<uint32_t>(vertices_),
+                        .work = static_cast<uint32_t>(work_),
+                        .renderable = renderable_}}};
   }
 
 private:
@@ -770,7 +777,22 @@ private:
   }
 
   Flow finishCff1() {
-    if (!consumeOptionalWidth(0) || stackSize_ != 0 || !closeContour()) return Flow::Error;
+    if (stackSize_ == 0 || (!widthSeen_ && stackSize_ == 1)) {
+      if (!consumeOptionalWidth(0) || stackSize_ != 0 || !closeContour()) return Flow::Error;
+      return Flow::EndGlyph;
+    }
+    if (!consumeOptionalWidth(4) || stackSize_ != 4) return Flow::Error;
+    for (const std::size_t index : {std::size_t{2}, std::size_t{3}}) {
+      const Number& character = stack_[index];
+      if (!character.known || !std::isfinite(character.value) ||
+          std::floor(character.value) != character.value || character.value < 0.0 ||
+          character.value > 255.0) {
+        return Flow::Error;
+      }
+    }
+    stackSize_ = 0;
+    renderable_ = false;
+    if (!closeContour()) return Flow::Error;
     return Flow::EndGlyph;
   }
 
@@ -831,6 +853,7 @@ private:
   std::size_t work_ = 0;
   bool widthSeen_ = false;
   bool contourOpen_ = false;
+  bool renderable_ = true;
 };
 
 }  // namespace
@@ -838,33 +861,41 @@ private:
 CffOutlineValidationResult ValidateCffOutlineComplexities(std::span<const uint8_t> table, bool cff2,
                                                           std::size_t expectedGlyphs,
                                                           std::size_t maximumWork) {
-  static_cast<void>(maximumWork);
   if (expectedGlyphs == 0 || expectedGlyphs > kMaximumGlyphs) {
     return {};
   }
-  ValidationBudget validationBudget;
+  ValidationBudget validationBudget(maximumWork);
   const std::optional<ParsedCff> parsed = cff2
                                               ? ParseCff2(table, expectedGlyphs, &validationBudget)
                                               : ParseCff1(table, expectedGlyphs, &validationBudget);
   if (!parsed.has_value()) {
-    return {};
+    return {.status = validationBudget.exhausted ? CffOutlineValidationStatus::WorkLimitExceeded
+                                                 : CffOutlineValidationStatus::Invalid,
+            .work = validationBudget.work};
   }
   if (parsed->unsupportedVariation) {
-    return {.status = CffOutlineValidationStatus::UnsupportedVariation};
+    return {.status = CffOutlineValidationStatus::UnsupportedVariation,
+            .work = validationBudget.work};
   }
 
-  CffOutlineValidationResult result{.status = CffOutlineValidationStatus::Complete};
+  CffOutlineValidationResult result{.status = CffOutlineValidationStatus::Complete,
+                                    .work = validationBudget.work};
   result.glyphs.reserve(expectedGlyphs);
   for (std::size_t glyph = 0; glyph < expectedGlyphs; ++glyph) {
     const auto bytes = IndexItem(parsed->charStrings, glyph);
-    if (!bytes.has_value() || parsed->glyphFd[glyph] >= parsed->localSubrs.size()) return {};
+    if (!bytes.has_value() || parsed->glyphFd[glyph] >= parsed->localSubrs.size()) {
+      return {.status = CffOutlineValidationStatus::Invalid, .work = validationBudget.work};
+    }
     CharStringValidator validator(*parsed, cff2, parsed->glyphFd[glyph], &validationBudget);
     CffOutlineValidationResult glyphResult = validator.validate(*bytes);
     if (glyphResult.status != CffOutlineValidationStatus::Complete) {
-      return {.status = glyphResult.status};
+      return {.status = validationBudget.exhausted ? CffOutlineValidationStatus::WorkLimitExceeded
+                                                   : glyphResult.status,
+              .work = validationBudget.work};
     }
     result.glyphs.push_back(glyphResult.glyphs.front());
   }
+  result.work = validationBudget.work;
   return result;
 }
 

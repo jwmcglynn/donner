@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "donner/base/EcsRegistry.h"
+#include "donner/base/fonts/SfntUtils.h"
 #include "donner/css/FontFace.h"
 #include "donner/svg/resources/FontCatalogTypes.h"
 
@@ -97,15 +98,16 @@ public:
   static constexpr size_t kDefaultMaximumLoadedFonts = 1024;
 
   /// Default aggregate CFF validation work admitted for one registry.
-  static constexpr size_t kDefaultMaximumFontValidationWork = 64 * 1024 * 1024;
+  static constexpr size_t kDefaultMaximumFontValidationWork =
+      fonts::kMaximumCffOutlineValidationWork;
 
   /**
    * Construct a FontManager tied to the provided ECS @p registry.
    *
    * The first manager to perform a serialized font load for a registry establishes its aggregate
-   * byte and item limits. Read-only queries never establish or replace that state. Later manager
-   * instances for the same registry share it so loaded components remain accounted across manager
-   * lifetimes.
+   * byte, item, and untrusted CFF-validation limits. Read-only queries never establish or replace
+   * that state. Later manager instances for the same registry share it so loaded components and
+   * validation attempts remain accounted across manager lifetimes.
    *
    * Construction does not access the registry context, so a FontManager can itself be safely
    * constructed by `registry.ctx().emplace<FontManager>(registry)`.
@@ -319,9 +321,10 @@ private:
    * @param data Owned font data buffer. Must remain valid for the lifetime of the FontManager.
    * @return True on success.
    */
-  bool setRawFontData(Entity entity, std::vector<uint8_t> data, FontDataTrust trust);
+  bool setRawFontData(Entity entity, std::vector<uint8_t> data, FontDataTrust trust,
+                      bool* validationWorkLimitExceeded = nullptr);
   bool setRawFontData(Entity entity, std::shared_ptr<const std::vector<uint8_t>> sharedData,
-                      FontDataTrust trust);
+                      FontDataTrust trust, bool* validationWorkLimitExceeded = nullptr);
 
   /** Return the registry budget when installed, otherwise this manager's private candidate. */
   std::shared_ptr<const FontBudgetState> budgetStateForRead() const;
@@ -340,6 +343,15 @@ private:
   bool loadFontDataSharedIntoEntity(Entity entity,
                                     const std::shared_ptr<const std::vector<uint8_t>>& data,
                                     FontDataTrust trust);
+  bool isValidationRejectedSource(const std::shared_ptr<const std::vector<uint8_t>>& data,
+                                  const std::shared_ptr<FontBudgetState>& budgetState) const;
+  void rememberValidationRejectedSource(const std::shared_ptr<const std::vector<uint8_t>>& data,
+                                        bool workLimitExceeded,
+                                        const std::shared_ptr<FontBudgetState>& budgetState);
+  std::optional<fonts::SfntFont> validateSfntForLoad(
+      Entity entity, std::span<const uint8_t> data, FontDataTrust trust,
+      const std::shared_ptr<FontBudgetState>& budgetState,
+      bool* validationWorkLimitExceeded = nullptr);
 
   /**
    * Internal: load a WOFF 1.0 font by parsing and reconstructing the sfnt byte stream.
@@ -348,7 +360,8 @@ private:
    * @param data Raw WOFF data.
    * @return True on success.
    */
-  bool loadWoff1(Entity entity, std::span<const uint8_t> data, FontDataTrust trust);
+  bool loadWoff1(Entity entity, std::span<const uint8_t> data, FontDataTrust trust,
+                 bool* validationWorkLimitExceeded = nullptr);
 
 #ifdef DONNER_TEXT_WOFF2_ENABLED
   /**
@@ -360,7 +373,8 @@ private:
    * @param data Raw WOFF2 data.
    * @return True on success.
    */
-  bool loadWoff2(Entity entity, std::span<const uint8_t> data, FontDataTrust trust);
+  bool loadWoff2(Entity entity, std::span<const uint8_t> data, FontDataTrust trust,
+                 bool* validationWorkLimitExceeded = nullptr);
 #endif
 
   /**
