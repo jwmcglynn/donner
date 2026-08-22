@@ -341,20 +341,26 @@ py_test(
         # Measured at this layer: wasm 12,780,770 raw / 5,076,932 gzip,
         # js 174,075 raw / 49,060 gzip, and package 12,996,401 raw. Each
         # transfer and decode budget keeps about 1 percent headroom.
+        #
+        # Editor security-controls retune: bounded replay/MCP execution,
+        # focus traversal, GL capability isolation, and the Firefox worker
+        # handoff add deliberate shipped code. Measured at this layer: wasm
+        # 12,911,112 raw / 5,120,158 gzip, js 174,731 raw / 49,206 gzip,
+        # and package 13,127,399 raw. Budgets retain about 1 percent headroom.
         "--max-wasm-raw-bytes",
-        "12909000",
+        "13041000",
         "--max-wasm-gzip-bytes",
-        "5128000",
+        "5172000",
         "--max-wasm-function-body-bytes",
         "46000",
         "--max-wasm-data-segments",
         "64",
         "--max-js-raw-bytes",
-        "175900",
+        "176500",
         "--max-js-gzip-bytes",
-        "49560",
+        "49700",
         "--max-total-raw-bytes",
-        "13127000",
+        "13259000",
         "--expected-js-property",
         "__donnerLastScrollEvent",
         # SHIP BLOCKER, tracked with the deferred WebKit decision: the WebGPU diagnostic
