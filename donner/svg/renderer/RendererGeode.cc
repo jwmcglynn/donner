@@ -4304,6 +4304,22 @@ void RendererGeode::setGlyphResidencyBudgetForTesting(size_t maxEntries,
   impl_->glyphCacheMaxRetainedBytes = maxRetainedBytes;
 }
 
+void RendererGeode::setGeometryBudgetForTesting(std::size_t /*maximumDraws*/,
+                                                std::size_t /*maximumItems*/,
+                                                std::uint64_t /*maximumFrameBytes*/,
+                                                std::uint64_t /*maximumCacheBytes*/,
+                                                std::uint64_t /*maximumResidentBytes*/) {}
+
+void RendererGeode::setSurfaceBudgetForTesting(std::size_t /*maximumSurfaces*/,
+                                               std::uint64_t /*maximumBytes*/) {}
+
+void RendererGeode::setTextMaterializationBudgetForTesting(
+    RendererTextMaterializationBudget::Cost /*limits*/, std::size_t /*maximumGlyphOccurrences*/) {}
+
+RendererResourceStats RendererGeode::resourceStats() const {
+  return {};
+}
+
 size_t RendererGeode::residentGlyphCountForTesting(SVGDocument& document) {
   if (!impl_->device) {
     return 0;

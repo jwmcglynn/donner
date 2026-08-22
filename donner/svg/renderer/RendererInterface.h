@@ -367,6 +367,7 @@ struct RendererResourceStats {
   std::size_t textMaterializationPoints = 0;
   std::uint64_t textMaterializationBytes = 0;
   std::size_t textGlyphDecodeWork = 0;
+  std::size_t textGlyphOccurrences = 0;
   bool textMaterializationBudgetRejected = false;
 };
 

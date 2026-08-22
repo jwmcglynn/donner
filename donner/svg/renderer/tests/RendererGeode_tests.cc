@@ -753,6 +753,63 @@ TEST_F(RendererGeodeTest, TransientTexturePoolStaysWithinGlobalMemoryBudgetAcros
       << "Unique texture sizes must not bypass the global pool budget";
 }
 
+TEST_F(RendererGeodeTest, SurfaceBudgetCountsPoolReuseAndNestedOffscreensBeforeAllocation) {
+  ASSERT_TRUE(sharedDevice() != nullptr);
+
+  RendererGeode renderer = createRenderer();
+  renderer.setSurfaceBudgetForTesting(/*maximumSurfaces=*/3u, /*maximumBytes=*/4096u);
+  std::unique_ptr<RendererInterface> offscreen = renderer.createOffscreenInstance();
+  ASSERT_NE(offscreen, nullptr);
+
+  RenderViewport viewport;
+  viewport.size = Vector2d(8.0, 8.0);
+  renderer.beginFrame(viewport);
+  offscreen->beginFrame(viewport);
+  renderer.pushIsolatedLayer(1.0, MixBlendMode::Normal);
+  offscreen->pushIsolatedLayer(1.0, MixBlendMode::Normal);
+
+  const RendererResourceStats stats = renderer.resourceStats();
+  EXPECT_TRUE(stats.surfaceBudgetSupported);
+  EXPECT_EQ(stats.surfaceCount, 3u);
+  EXPECT_EQ(stats.surfaceBytes, 3u * 8u * 8u * 4u);
+  EXPECT_TRUE(stats.surfaceBudgetRejected);
+
+  offscreen->popIsolatedLayer();
+  renderer.popIsolatedLayer();
+  offscreen->endFrame();
+  renderer.endFrame();
+}
+
+TEST_F(RendererGeodeTest, GeometryBudgetIsSharedAcrossOffscreensAtExactDrawBoundary) {
+  ASSERT_TRUE(sharedDevice() != nullptr);
+
+  RendererGeode renderer = createRenderer();
+  renderer.setGeometryBudgetForTesting(/*maximumDraws=*/2u, /*maximumItems=*/1u << 20,
+                                       /*maximumFrameBytes=*/64u << 20,
+                                       /*maximumCacheBytes=*/64u << 20,
+                                       /*maximumResidentBytes=*/64u << 20);
+  std::unique_ptr<RendererInterface> offscreen = renderer.createOffscreenInstance();
+  ASSERT_NE(offscreen, nullptr);
+
+  RenderViewport viewport;
+  viewport.size = Vector2d(16.0, 16.0);
+  renderer.beginFrame(viewport);
+  offscreen->beginFrame(viewport);
+  renderer.setPaint(solidFill(css::RGBA(255, 0, 0, 255)));
+  offscreen->setPaint(solidFill(css::RGBA(0, 255, 0, 255)));
+  renderer.drawRect(Box2d({0.0, 0.0}, {4.0, 4.0}), StrokeParams{});
+  offscreen->drawRect(Box2d({4.0, 0.0}, {8.0, 4.0}), StrokeParams{});
+  renderer.drawRect(Box2d({8.0, 0.0}, {12.0, 4.0}), StrokeParams{});
+
+  const RendererResourceStats stats = renderer.resourceStats();
+  EXPECT_TRUE(stats.geometryBudgetSupported);
+  EXPECT_EQ(stats.geometryDraws, 2u);
+  EXPECT_TRUE(stats.geometryBudgetRejected);
+
+  offscreen->endFrame();
+  renderer.endFrame();
+}
+
 TEST_F(RendererGeodeTest, DrawTextureSnapshotPreservesPremultipliedAlpha) {
   ASSERT_TRUE(sharedDevice() != nullptr);
 

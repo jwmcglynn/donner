@@ -267,6 +267,33 @@ TEST_F(GeodeGlyphInstancingTest, FirstFrameAdmissionHonorsResidencyEntryBudget) 
       << "A single frame must not retain more glyph entries than the configured admission cap.";
 }
 
+TEST_F(GeodeGlyphInstancingTest, MaterializationBudgetRejectsBeforeSecondOutlineDecode) {
+  SVGDocument document = parse(R"svg(
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200"
+           font-family="Noto Sans" font-size="48">
+        <text x="10" y="80" fill="black">ab</text>
+      </svg>)svg");
+
+  RendererGeode renderer(sharedDevice());
+  renderer.setTextMaterializationBudgetForTesting(
+      {.uniqueOutlines = 1u,
+       .commands = RendererTextMaterializationBudget::kMaximumCommands,
+       .points = RendererTextMaterializationBudget::kMaximumPoints,
+       .bytes = RendererTextMaterializationBudget::kMaximumBytes,
+       .decodeWork = RendererTextMaterializationBudget::kMaximumDecodeWork},
+      /*maximumGlyphOccurrences=*/2u);
+
+  const Frame frame = render(renderer, document);
+  const RendererResourceStats stats = renderer.resourceStats();
+  EXPECT_TRUE(stats.textMaterializationBudgetSupported);
+  EXPECT_EQ(stats.textUniqueOutlines, 1u);
+  EXPECT_EQ(stats.textGlyphOccurrences, 2u);
+  EXPECT_TRUE(stats.textMaterializationBudgetRejected);
+  EXPECT_EQ(frame.counters.glyphResidencyUploads, 1u)
+      << "The cap+1 glyph must be rejected before its outline reaches the cache miss builder.";
+  EXPECT_EQ(renderer.residentGlyphCountForTesting(document), 1u);
+}
+
 /// The cache key carries every parameter that changes the outline. A font-size
 /// change alters the scale the outline is built at, so it must mint new entries
 /// and draw the new size rather than serving the old geometry.
