@@ -430,6 +430,9 @@ public:
   void setTextMaterializationBudgetForTesting(RendererTextMaterializationBudget::Cost limits,
                                               std::size_t maximumGlyphOccurrences);
 
+  /// Fail one scene preparation after the requested number of successful preparations.
+  void injectScenePreparationFailureAfterForTesting(std::size_t successfulPreparations);
+
   /// Return aggregate resource-admission diagnostics for the current frame.
   [[nodiscard]] RendererResourceStats resourceStats() const override;
 

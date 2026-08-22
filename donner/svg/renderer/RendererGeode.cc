@@ -3689,9 +3689,6 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
           // referenced by any batch).
           claimSceneSlot(*residentSlot, paint);
           flushPendingBatch();
-          if (!paint.isGradient()) {
-            encoder->releasePreparedSceneAdmission(*encoded);
-          }
           startPending(sourceRegistry, sourceEntity, path, paint, rule, encoded, residentSlot,
                        chunk, recordBuf, chunkId, recordBufId, recordIndex,
                        effectiveRecordSlot.offset, clipVersion, current);
@@ -4614,6 +4611,13 @@ void RendererGeode::setTextMaterializationBudgetForTesting(
     RendererTextMaterializationBudget::Cost limits, std::size_t maximumGlyphOccurrences) {
   impl_->textMaterializationBudget->setLimitsForTesting(limits);
   impl_->textMaterializationBudget->setGlyphOccurrenceLimitForTesting(maximumGlyphOccurrences);
+}
+
+void RendererGeode::injectScenePreparationFailureAfterForTesting(
+    std::size_t successfulPreparations) {
+  if (impl_->encoder) {
+    impl_->encoder->injectScenePreparationFailureAfterForTesting(successfulPreparations);
+  }
 }
 
 RendererResourceStats RendererGeode::resourceStats() const {

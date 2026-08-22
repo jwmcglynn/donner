@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cstring>
 #include <iterator>
+#include <optional>
 #include <vector>
 
 #include "donner/svg/renderer/PixelFormatUtils.h"
@@ -972,6 +973,7 @@ struct GeoEncoder::Impl : public GeodeTextureEncoder::UniformScratch {
   GeometryAdmission* geometryAdmission = nullptr;
   std::size_t pendingSceneAdmissions = 0;
   std::size_t patternGpuPreparations = 0;
+  std::optional<std::size_t> scenePreparationFailureCountdown;
 
   bool admitGeometry(const EncodedPath& encoded, std::size_t logicalDraws) {
     if (geometryAdmission == nullptr) {
@@ -1705,6 +1707,10 @@ std::size_t GeoEncoder::pendingSceneAdmissionsForTesting() const {
   return impl_->pendingSceneAdmissions;
 }
 
+void GeoEncoder::injectScenePreparationFailureAfterForTesting(std::size_t successfulPreparations) {
+  impl_->scenePreparationFailureCountdown = successfulPreparations;
+}
+
 void GeoEncoder::recordGeometryDebugInstance(const EncodedPath& encoded,
                                              std::span<const float> instanceTransforms) {
   impl_->recordGeometryDebugDraw(encoded, instanceTransforms);
@@ -2435,6 +2441,14 @@ bool GeoEncoder::ensureResidentSceneRecord(GeodeResidentSlot& slot, const Encode
   }
   if (encoded.empty()) {
     return false;
+  }
+  if (publishPaint && impl_->scenePreparationFailureCountdown.has_value()) {
+    if (*impl_->scenePreparationFailureCountdown == 0u) {
+      impl_->scenePreparationFailureCountdown.reset();
+      impl_->releaseGeometry(encoded, 1u);
+      return false;
+    }
+    --*impl_->scenePreparationFailureCountdown;
   }
   const css::RGBA& color = paint.color;
   // Build the same solid-fill args fillPath would, so the shared ensure

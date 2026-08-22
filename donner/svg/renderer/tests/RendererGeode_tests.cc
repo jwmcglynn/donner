@@ -996,6 +996,42 @@ TEST_F(RendererGeodeTest, ResourceStatsAggregateEveryDocumentTouchedInTheFrame) 
   renderer.endFrame();
 }
 
+TEST_F(RendererGeodeTest, SingletonConversionFailureRefundsCurrentSceneAdmission) {
+  ASSERT_TRUE(sharedDevice() != nullptr);
+
+  Registry firstRegistry;
+  const Entity firstEntity = firstRegistry.create();
+  Registry secondRegistry;
+  const Entity secondEntity = secondRegistry.create();
+  const Path firstPath = PathBuilder().addRect(Box2d({1.0, 1.0}, {6.0, 6.0})).build();
+  const Path secondPath = PathBuilder().addRect(Box2d({10.0, 1.0}, {15.0, 6.0})).build();
+
+  RendererGeode renderer = createRenderer();
+  renderer.setGeometryBudgetForTesting(/*maximumDraws=*/2u, /*maximumItems=*/1u << 20,
+                                       /*maximumFrameBytes=*/64u << 20,
+                                       /*maximumCacheBytes=*/64u << 20,
+                                       /*maximumResidentBytes=*/64u << 20);
+  beginFrame(renderer);
+  renderer.setPaint(solidFill(css::RGBA(255, 0, 0, 255)));
+  renderer.drawPath(
+      PathShape{.path = &firstPath, .sourceEntity = EntityHandle(firstRegistry, firstEntity)},
+      StrokeParams{});
+  renderer.injectScenePreparationFailureAfterForTesting(/*successfulPreparations=*/1u);
+  renderer.drawPath(
+      PathShape{.path = &secondPath, .sourceEntity = EntityHandle(secondRegistry, secondEntity)},
+      StrokeParams{});
+  renderer.endFrame();
+
+  const RendererResourceStats stats = renderer.resourceStats();
+  EXPECT_EQ(stats.geometryDraws, 2u);
+  EXPECT_FALSE(stats.geometryBudgetRejected)
+      << "Demoting the prepared current draw must refund its scene token before solo replay.";
+  const RendererBitmap bitmap = renderer.takeSnapshot();
+  ASSERT_FALSE(bitmap.empty());
+  EXPECT_THAT(pixelAt(bitmap, 3, 3), RgbaEq(255, 0, 0, 255));
+  EXPECT_THAT(pixelAt(bitmap, 12, 3), RgbaEq(255, 0, 0, 255));
+}
+
 TEST_F(RendererGeodeTest, CacheBudgetRejectsBeforeInsertionAndUsesTransientFallback) {
   ASSERT_TRUE(sharedDevice() != nullptr);
 

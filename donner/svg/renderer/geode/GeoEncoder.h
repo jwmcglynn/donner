@@ -220,6 +220,9 @@ public:
   /// Number of admitted scene instances not yet consumed by a batch draw.
   [[nodiscard]] std::size_t pendingSceneAdmissionsForTesting() const;
 
+  /// Fail one scene preparation after `successfulPreparations` successful calls.
+  void injectScenePreparationFailureAfterForTesting(std::size_t successfulPreparations);
+
   /**
    * Observe Slug draws recorded by this encoder.
    *
