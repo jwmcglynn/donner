@@ -14,6 +14,8 @@ namespace donner::svg::components {
 struct StyleComponent {
   /// The properties of the element, which are parsed from the `style=""` attribute.
   PropertyRegistry properties;
+  /// True when the most recent inline-style parse exceeded its resource budget.
+  bool styleParseRejected = false;
 
   /**
    * Sets the properties from the value of the element's `style=""` attribute, replacing the
@@ -34,9 +36,11 @@ struct StyleComponent {
     PropertyRegistry candidate = properties;
     candidate.clearStyleAttributeProperties();
     if (!candidate.parseStyle(style)) {
+      styleParseRejected = true;
       return false;
     }
     properties = std::move(candidate);
+    styleParseRejected = false;
     return true;
   }
 
@@ -47,7 +51,11 @@ struct StyleComponent {
    *
    * @param style The update style to apply, as a CSS style string (e.g. "fill:red;").
    */
-  bool updateStyle(std::string_view style) { return properties.parseStyle(style); }
+  bool updateStyle(std::string_view style) {
+    const bool accepted = properties.parseStyle(style);
+    styleParseRejected = !accepted;
+    return accepted;
+  }
 
   /**
    * Tries to set a common presentation attribute (fill, stroke, opacity, transform, etc.).

@@ -1373,6 +1373,7 @@ void RenderingContext::ensureComputedComponents(ParseWarningSink& warningSink) {
   // Full rebuild path: tear down shadow trees and recompute everything.
   // TODO(jwmcglynn): Support partial invalidation, where we only recompute dirty entities
   // instead of the full tree.
+  ShadowTreeSystem::beginRebuild(registry_);
   for (auto view = registry_.view<ComputedShadowTreeComponent>(); auto entity : view) {
     auto& shadow = view.get<ComputedShadowTreeComponent>(entity);
     createShadowTreeSystem().teardown(registry_, shadow);

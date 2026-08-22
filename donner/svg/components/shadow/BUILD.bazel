@@ -1,5 +1,5 @@
-load("//build_defs:rules.bzl", "donner_cc_library", "donner_cc_test")
 load("//build_defs:package.bzl", "donner_package")
+load("//build_defs:rules.bzl", "donner_cc_library", "donner_cc_test")
 
 donner_cc_library(
     name = "components",
@@ -28,7 +28,7 @@ donner_cc_library(
         "ShadowTreeSystem.h",
     ],
     visibility = [
-        "//donner/svg/components:__subpackages__",
+        "//donner/svg:__subpackages__",
     ],
     deps = [
         ":components",

@@ -472,8 +472,7 @@ TEST(SVGParser, GzipErrors) {
     corrupt += std::string(32, 'x');
 
     ParseWarningSink warnings;
-    EXPECT_THAT(SVGParser::ParseSVG(corrupt, warnings),
-                ParseErrorIs(testing::HasSubstr("gzip")));
+    EXPECT_THAT(SVGParser::ParseSVG(corrupt, warnings), ParseErrorIs(testing::HasSubstr("gzip")));
   }
 }
 
@@ -534,6 +533,57 @@ TEST(SVGParser, ParseXMLDocumentSuccessAndRootError) {
   }
 }
 
+TEST(SVGParser, ParseXMLDocumentEnforcesConversionTreeNodeLimit) {
+  xml::XMLDocument xmlDocument;
+  xml::XMLNode svg = xml::XMLNode::CreateElementNode(xmlDocument, "svg");
+  svg.setAttribute("xmlns", "http://www.w3.org/2000/svg");
+  xmlDocument.root().appendChild(svg);
+  svg.appendChild(xml::XMLNode::CreateElementNode(xmlDocument, "rect"));
+  svg.appendChild(xml::XMLNode::CreateElementNode(xmlDocument, "circle"));
+
+  SVGParser::Options options;
+  options.maximumTreeNodes = 2;
+  ParseWarningSink warnings;
+  EXPECT_THAT(SVGParser::ParseXMLDocument(std::move(xmlDocument), warnings, options),
+              ParseErrorIs(testing::HasSubstr("tree-node count")));
+}
+
+TEST(SVGParser, ParseXMLDocumentEnforcesConversionTreeDepthLimit) {
+  xml::XMLDocument xmlDocument;
+  xml::XMLNode svg = xml::XMLNode::CreateElementNode(xmlDocument, "svg");
+  svg.setAttribute("xmlns", "http://www.w3.org/2000/svg");
+  xmlDocument.root().appendChild(svg);
+  xml::XMLNode group = xml::XMLNode::CreateElementNode(xmlDocument, "g");
+  svg.appendChild(group);
+  group.appendChild(xml::XMLNode::CreateElementNode(xmlDocument, "rect"));
+
+  SVGParser::Options options;
+  options.maximumTreeDepth = 2;
+  ParseWarningSink warnings;
+  EXPECT_THAT(SVGParser::ParseXMLDocument(std::move(xmlDocument), warnings, options),
+              ParseErrorIs(testing::HasSubstr("element depth")));
+}
+
+TEST(SVGParser, ParseSVGAppliesConversionLimitsToRawInput) {
+  SVGParser::Options options;
+  options.maximumTreeNodes = 2;
+  ParseWarningSink warnings;
+  EXPECT_THAT(
+      SVGParser::ParseSVG(R"(<svg xmlns="http://www.w3.org/2000/svg"><rect/><circle/></svg>)",
+                          warnings, options),
+      ParseErrorIs(testing::HasSubstr("element count")));
+}
+
+TEST(SVGParser, ParseSVGAppliesConversionDepthLimitToRawInput) {
+  SVGParser::Options options;
+  options.maximumTreeDepth = 2;
+  ParseWarningSink warnings;
+  EXPECT_THAT(SVGParser::ParseSVG(R"(<svg xmlns="http://www.w3.org/2000/svg"><g><rect/></g></svg>)",
+                                  warnings, options),
+              ParseErrorIs(testing::AnyOf(testing::HasSubstr("nesting depth"),
+                                          testing::HasSubstr("element depth"))));
+}
+
 TEST(SVGParser, ProgrammaticDocumentStyleWithoutSourceLocations) {
   // Build an XML document via the DOM API. Its nodes have no source offsets, exercising the
   // <style> source-map fallback paths.
@@ -553,8 +603,7 @@ TEST(SVGParser, ProgrammaticDocumentStyleWithoutSourceLocations) {
 
   auto styleElement = result.result().querySelector("style");
   ASSERT_TRUE(styleElement.has_value());
-  const auto& stylesheet =
-      styleElement->entityHandle().get<components::StylesheetComponent>();
+  const auto& stylesheet = styleElement->entityHandle().get<components::StylesheetComponent>();
   EXPECT_EQ(stylesheet.text, "rect { fill: red; }");
   EXPECT_FALSE(stylesheet.stylesheet.rules().empty());
 }
@@ -571,8 +620,7 @@ TEST(SVGParser, DescriptiveElementsCaptureTextContent) {
 
   auto title = result.result().querySelector("#t");
   ASSERT_TRUE(title.has_value());
-  const auto& descriptiveText =
-      title->entityHandle().get<components::DescriptiveTextComponent>();
+  const auto& descriptiveText = title->entityHandle().get<components::DescriptiveTextComponent>();
   EXPECT_EQ(descriptiveText.text, "Hello World");
 }
 
@@ -608,10 +656,10 @@ TEST(SVGParser, SubDocumentParseErrorsReportedAsWarnings) {
   SVGDocument document = result.result();
   RendererUtils::prepareDocumentForRendering(document, /*verbose*/ false, renderWarnings);
 
-  EXPECT_THAT(renderWarnings.warnings(),
-              testing::Contains(
-                  testing::Field(&ParseDiagnostic::reason,
-                                 testing::HasSubstr("Unexpected element <notsvg> at root"))));
+  EXPECT_THAT(
+      renderWarnings.warnings(),
+      testing::Contains(testing::Field(&ParseDiagnostic::reason,
+                                       testing::HasSubstr("Unexpected element <notsvg> at root"))));
 }
 
 TEST(SVGParser, SecureStaticModeDisablesSubDocumentParsing) {

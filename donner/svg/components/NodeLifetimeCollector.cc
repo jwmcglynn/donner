@@ -5,7 +5,9 @@
 #include <vector>
 
 #include "donner/base/xml/components/TreeComponent.h"
+#include "donner/svg/components/GeometryPreparationResourceBudget.h"
 #include "donner/svg/components/NodeLifetimeComponent.h"
+#include "donner/svg/components/ParsedPayloadResourceBudget.h"
 #include "donner/svg/components/SVGDocumentContext.h"
 
 namespace donner::svg::components {
@@ -53,6 +55,15 @@ bool IsCollectibleDetachedRoot(Registry& registry, Entity root) {
   const auto* lifetime = registry.try_get<NodeLifetimeComponent>(root);
   return lifetime != nullptr && !lifetime->isAttached() &&
          MaxPublicHandlesInSubtree(registry, root) == 0;
+}
+
+void ReleaseEntityResourceReservations(Registry& registry, Entity entity) {
+  if (auto* budget = registry.ctx().find<ParsedPayloadResourceBudget>()) {
+    budget->release(entity);
+  }
+  if (auto* budget = registry.ctx().find<GeometryPreparationResourceBudget>()) {
+    budget->release(entity);
+  }
 }
 
 }  // namespace
@@ -155,6 +166,7 @@ void NodeLifetimeCollector::Collect(Registry& registry) {
       if (auto* nodeLifetime = registry.try_get<NodeLifetimeComponent>(entity)) {
         nodeLifetime->markDestroying();
       }
+      ReleaseEntityResourceReservations(registry, entity);
       registry.destroy(entity);
     }
   }

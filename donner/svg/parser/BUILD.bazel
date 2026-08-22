@@ -117,8 +117,8 @@ donner_cc_test(
         "tests/PathParser_tests.cc",
         "tests/PointsListParser_tests.cc",
         "tests/PreserveAspectRatioParser_tests.cc",
-        "tests/SVGParser_tests.cc",
         "tests/SVGParserContext_tests.cc",
+        "tests/SVGParser_tests.cc",
         "tests/SetElement_tests.cc",
         "tests/TransformParser_tests.cc",
         "tests/ViewBoxParser_tests.cc",
@@ -190,7 +190,9 @@ donner_cc_fuzzer(
     ],
     deps = [
         ":parser",
+        "//donner/svg/components:components_core",
         "//donner/svg/components/layout:layout_system",
+        "//donner/svg/renderer:renderer_utils",
     ],
 )
 

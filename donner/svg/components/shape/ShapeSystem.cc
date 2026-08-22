@@ -4,6 +4,8 @@
 
 #include "donner/base/ParseWarningSink.h"
 #include "donner/base/xml/components/TreeComponent.h"
+#include "donner/svg/components/DocumentResourceFamilyBudget.h"
+#include "donner/svg/components/GeometryPreparationResourceBudget.h"
 #include "donner/svg/components/SVGDocumentContext.h"
 #include "donner/svg/components/layout/LayoutSystem.h"
 #ifdef DONNER_TEXT_ENABLED
@@ -89,6 +91,29 @@ ParseResult<RcString> ParseD(std::span<const css::ComponentValue> components) {
   return err;
 }
 
+bool ReserveComputedPathPayload(EntityHandle handle, const Path& path) {
+  auto& registryContext = handle.registry()->ctx();
+  if (!registryContext.contains<GeometryPreparationResourceBudget>()) {
+    std::shared_ptr<DocumentResourceFamilyBudget> family;
+    if (const auto* context = registryContext.find<DocumentResourceFamilyContext>()) {
+      family = context->budget;
+    }
+    registryContext.emplace<GeometryPreparationResourceBudget>(std::move(family));
+  }
+
+  const std::optional<std::size_t> retainedBytes = path.retainedBytes();
+  return retainedBytes.has_value() &&
+         registryContext.get<GeometryPreparationResourceBudget>().reserve(handle.entity(),
+                                                                          *retainedBytes);
+}
+
+void RemoveComputedPath(EntityHandle handle) {
+  handle.remove<ComputedPathComponent>();
+  if (auto* budget = handle.registry()->ctx().find<GeometryPreparationResourceBudget>()) {
+    budget->release(handle.entity());
+  }
+}
+
 std::optional<ParseDiagnostic> ParseDFromAttributes(PathComponent& properties,
                                                     const parser::PropertyParseFnParams& params) {
   if (params.explicitState != PropertyState::NotSet) {
@@ -122,14 +147,18 @@ std::optional<ParseDiagnostic> ParseDFromAttributes(PathComponent& properties,
 /// can recognize the spline as still current and skip the parse. Callers that did not produce
 /// the spline by parsing path data leave it unset, which clears any key a previous producer
 /// left behind - only a parse of path data may leave a key that matches a path-data string.
-ComputedPathComponent& emplaceComputedPathIfChanged(
+ComputedPathComponent* emplaceComputedPathIfChanged(
     EntityHandle handle, Path newPath, std::optional<RcString> sourcePathData = std::nullopt) {
+  if (!ReserveComputedPathPayload(handle, newPath)) {
+    RemoveComputedPath(handle);
+    return nullptr;
+  }
   if (auto* existing = handle.try_get<ComputedPathComponent>()) {
     if (existing->spline == newPath) {
       // Assign through the reference rather than re-emplacing, so the unchanged-geometry case
       // still does not fire on_update<ComputedPathComponent>.
       existing->sourcePathData = std::move(sourcePathData);
-      return *existing;
+      return existing;
     }
   }
 
@@ -137,7 +166,7 @@ ComputedPathComponent& emplaceComputedPathIfChanged(
   // afterwards: `on_construct` and `on_update` listeners run inside `emplace_or_replace`, and a
   // two-step write would let them observe a keyless component. The arguments are positional, so
   // they track ComputedPathComponent's member order.
-  return handle.emplace_or_replace<ComputedPathComponent>(
+  return &handle.emplace_or_replace<ComputedPathComponent>(
       std::move(newPath), /*cachedLocalBounds=*/std::nullopt, std::move(sourcePathData));
 }
 
@@ -326,8 +355,9 @@ ComputedPathComponent* ShapeSystem::createComputedShapeWithStyle(
   if (radius > 0.0) {
     Path path = PathBuilder().addCircle(center, radius).build();
 
-    return &emplaceComputedPathIfChanged(handle, std::move(path));
+    return emplaceComputedPathIfChanged(handle, std::move(path));
   } else {
+    RemoveComputedPath(handle);
     return nullptr;
   }
 }
@@ -350,8 +380,9 @@ ComputedPathComponent* ShapeSystem::createComputedShapeWithStyle(
   if (radius.x > 0.0 && radius.y > 0.0) {
     Path path = PathBuilder().addEllipse(Box2d(center - radius, center + radius)).build();
 
-    return &emplaceComputedPathIfChanged(handle, std::move(path));
+    return emplaceComputedPathIfChanged(handle, std::move(path));
   } else {
+    RemoveComputedPath(handle);
     return nullptr;
   }
 }
@@ -367,7 +398,7 @@ ComputedPathComponent* ShapeSystem::createComputedShapeWithStyle(
                      line.y2.toPixels(viewport, fontMetrics, Lengthd::Extent::Y));
 
   Path path = PathBuilder().moveTo(start).lineTo(end).build();
-  return &emplaceComputedPathIfChanged(handle, std::move(path));
+  return emplaceComputedPathIfChanged(handle, std::move(path));
 }
 
 ComputedPathComponent* ShapeSystem::createComputedShapeWithStyle(
@@ -388,7 +419,7 @@ ComputedPathComponent* ShapeSystem::createComputedShapeWithStyle(
   }
 
   if (path.splineOverride) {
-    return &emplaceComputedPathIfChanged(handle, path.splineOverride.value());
+    return emplaceComputedPathIfChanged(handle, path.splineOverride.value());
   } else if (actualD.isSpecified()) {
     // `Property::get()` hands back a fresh optional, so this has to be a value rather than a
     // reference into a temporary. Copying an RcString shares its buffer.
@@ -420,13 +451,13 @@ ComputedPathComponent* ShapeSystem::createComputedShapeWithStyle(
         cacheKey = pathData;
       }
 
-      return &emplaceComputedPathIfChanged(handle, std::move(maybePath.result()),
-                                           std::move(cacheKey));
+      return emplaceComputedPathIfChanged(handle, std::move(maybePath.result()),
+                                          std::move(cacheKey));
     }
   }
 
   // Failed: Could not parse path
-  handle.remove<ComputedPathComponent>();
+  RemoveComputedPath(handle);
   return nullptr;
 }
 
@@ -447,7 +478,7 @@ ComputedPathComponent* ShapeSystem::createComputedShapeWithStyle(
     builder.closePath();
   }
 
-  return &emplaceComputedPathIfChanged(handle, builder.build());
+  return emplaceComputedPathIfChanged(handle, builder.build());
 }
 
 ComputedPathComponent* ShapeSystem::createComputedShapeWithStyle(
@@ -477,18 +508,18 @@ ComputedPathComponent* ShapeSystem::createComputedShapeWithStyle(
       // Success: Draw a rect with rounded corners.
       Path path = PathBuilder().addRoundedRect(Box2d(pos, pos + size), radius.x, radius.y).build();
 
-      return &emplaceComputedPathIfChanged(handle, std::move(path));
+      return emplaceComputedPathIfChanged(handle, std::move(path));
 
     } else {
       // Success: Draw a rect with sharp corners
       Path path = PathBuilder().addRect(Box2d(pos, pos + size)).build();
 
-      return &emplaceComputedPathIfChanged(handle, std::move(path));
+      return emplaceComputedPathIfChanged(handle, std::move(path));
     }
   }
 
   // Failed: Invalid width or height, don't generate a path.
-  handle.remove<ComputedPathComponent>();
+  RemoveComputedPath(handle);
   return nullptr;
 }
 
@@ -503,7 +534,7 @@ ParseResult<bool> ParsePathPresentationAttribute(EntityHandle handle, std::strin
       // computed path so on-demand readers (computedSpline, worldBounds, editor
       // overlay chrome) see the new geometry instead of a stale cache - matching
       // SVGPathElement::setD().
-      handle.remove<ComputedPathComponent>();
+      RemoveComputedPath(handle);
       return true;
     }
   }

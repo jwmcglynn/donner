@@ -1,5 +1,7 @@
 #include "donner/svg/SVGDocument.h"
 
+#include <cmath>
+#include <limits>
 #include <string>
 
 #include "donner/base/element/ElementTraversalGenerators.h"
@@ -12,9 +14,11 @@
 #include "donner/svg/SVGQuerySelector.h"
 #include "donner/svg/SVGSVGElement.h"
 #include "donner/svg/components/DirtyFlagsComponent.h"
+#include "donner/svg/components/DocumentResourceFamilyBudget.h"
 #include "donner/svg/components/ElementTypeComponent.h"
 #include "donner/svg/components/NodeLifetimeCollector.h"
 #include "donner/svg/components/NodeLifetimeComponent.h"
+#include "donner/svg/components/ParsedPayloadResourceBudget.h"
 #include "donner/svg/components/RenderingBehaviorComponent.h"
 #include "donner/svg/components/SVGDocumentContext.h"
 #include "donner/svg/components/StylesheetComponent.h"
@@ -26,6 +30,8 @@
 #include "donner/svg/components/paint/ClipPathComponent.h"
 #include "donner/svg/components/resources/ResourceManagerContext.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
+#include "donner/svg/components/style/StyleSystem.h"
+#include "donner/svg/components/text/ComputedTextGeometryComponent.h"
 #include "donner/svg/components/text/TextComponent.h"
 #include "donner/svg/components/text/TextInvalidation.h"
 #include "donner/svg/components/text/TextPositioningComponent.h"
@@ -35,6 +41,78 @@
 namespace donner::svg {
 
 namespace {
+
+SourceRange FallbackRange();
+
+bool CheckedAddProjectionSize(std::size_t& total, std::size_t value) {
+  if (value > std::numeric_limits<std::size_t>::max() - total) {
+    return false;
+  }
+  total += value;
+  return true;
+}
+
+std::optional<std::size_t> ProjectedContentBytes(std::size_t contentBytes, std::size_t chunkCount) {
+  constexpr std::size_t kEstimatedBytesPerChunk = 64;
+  if (chunkCount > std::numeric_limits<std::size_t>::max() / kEstimatedBytesPerChunk) {
+    return std::nullopt;
+  }
+  if (!CheckedAddProjectionSize(contentBytes, chunkCount * kEstimatedBytesPerChunk)) {
+    return std::nullopt;
+  }
+  return contentBytes;
+}
+
+std::optional<std::size_t> AttributePayloadBytes(const xml::XMLNode& node) {
+  std::size_t sourceBytes = 0;
+  std::size_t attributeCount = 0;
+  for (const xml::XMLQualifiedNameRef& name : node.attributes()) {
+    const std::optional<RcString> value = node.getAttribute(name);
+    if (!value.has_value() || !CheckedAddProjectionSize(sourceBytes, name.namespacePrefix.size()) ||
+        !CheckedAddProjectionSize(sourceBytes, name.name.size()) ||
+        !CheckedAddProjectionSize(sourceBytes, value->size())) {
+      return std::nullopt;
+    }
+    ++attributeCount;
+  }
+  return components::ParsedPayloadResourceBudget::estimateAttributeBytes(sourceBytes,
+                                                                         attributeCount);
+}
+
+std::optional<ParseDiagnostic> ReserveProjectedAttributes(EntityHandle handle,
+                                                          const xml::XMLNode& node) {
+  auto& budget = handle.registry()->ctx().get<components::ParsedPayloadResourceBudget>();
+  const std::optional<std::size_t> bytes = AttributePayloadBytes(node);
+  if (bytes.has_value() &&
+      budget.reserve(handle.entity(), *bytes,
+                     components::ParsedPayloadResourceBudget::Category::Attribute)) {
+    return std::nullopt;
+  }
+  if (!bytes.has_value()) {
+    budget.recordRejection();
+  }
+  return ParseDiagnostic::Error("Attributes exceed the document parsed-payload budget",
+                                node.getNodeLocation().value_or(FallbackRange()));
+}
+
+std::optional<std::size_t> StylesheetPayloadBytes(std::size_t projectedSourceBytes,
+                                                  const css::Stylesheet::SecurityStats& stats) {
+  constexpr std::size_t kEstimatedBytesPerComponentValue = 64;
+  constexpr std::size_t kEstimatedBytesPerDeclaration = 128;
+  constexpr std::size_t kEstimatedBytesPerRule = 128;
+  constexpr std::size_t kMaximum = std::numeric_limits<std::size_t>::max();
+  if (stats.componentValues > kMaximum / kEstimatedBytesPerComponentValue ||
+      stats.declarations > kMaximum / kEstimatedBytesPerDeclaration ||
+      stats.rules > kMaximum / kEstimatedBytesPerRule ||
+      !CheckedAddProjectionSize(projectedSourceBytes,
+                                stats.componentValues * kEstimatedBytesPerComponentValue) ||
+      !CheckedAddProjectionSize(projectedSourceBytes,
+                                stats.declarations * kEstimatedBytesPerDeclaration) ||
+      !CheckedAddProjectionSize(projectedSourceBytes, stats.rules * kEstimatedBytesPerRule)) {
+    return std::nullopt;
+  }
+  return projectedSourceBytes;
+}
 
 void MarkStylesheetChanged(EntityHandle handle);
 std::optional<ParseDiagnostic> ProjectStyleContents(EntityHandle handle, const xml::XMLNode& node);
@@ -91,6 +169,18 @@ std::optional<ParseDiagnostic> ApplyNodeValueChanged(std::string_view source,
   }
 
   if (targetHandle->all_of<components::TextComponent>()) {
+    const std::optional<std::size_t> projectedBytes =
+        ProjectedContentBytes(mutation.value->size(), 1);
+    auto& budget = targetHandle->registry()->ctx().get<components::ParsedPayloadResourceBudget>();
+    if (!projectedBytes.has_value() ||
+        !budget.reserve(targetHandle->entity(), *projectedBytes,
+                        components::ParsedPayloadResourceBudget::Category::ProjectedText)) {
+      if (!projectedBytes.has_value()) {
+        budget.recordRejection();
+      }
+      return ParseDiagnostic::Error("Text content exceeds the document parsed-payload budget",
+                                    MutationRange(source, mutation));
+    }
     auto& text = targetHandle->get<components::TextComponent>();
     text.text = *mutation.value;
     text.textChunks.clear();
@@ -266,6 +356,9 @@ components::RenderTreeState& GetRenderTreeState(EntityHandle handle) {
 
 void MarkStylesheetChanged(EntityHandle handle) {
   Registry& registry = *handle.registry();
+  if (auto* budget = registry.ctx().find<components::StyleResourceBudget>()) {
+    budget->releaseAll();
+  }
   registry.clear<components::ComputedStyleComponent>();
 
   components::RenderTreeState& renderState = GetRenderTreeState(handle);
@@ -340,39 +433,95 @@ xml::XMLNode EnsureXMLSubtreeForSVGElement(xml::XMLDocument& document, const SVG
   return *node;
 }
 
-void ProjectTextContents(EntityHandle handle, const xml::XMLNode& node) {
+std::optional<ParseDiagnostic> ProjectTextContents(EntityHandle handle, const xml::XMLNode& node) {
   if (!handle.all_of<components::TextComponent>()) {
-    return;
+    return std::nullopt;
   }
 
-  auto& text = handle.get<components::TextComponent>();
-  text.text = RcString("");
-  text.textChunks.clear();
+  std::size_t contentBytes = 0;
+  std::size_t chunkCount = 0;
+  bool foundContentChild = false;
+  const std::size_t maximumChunks =
+      handle.registry()->ctx().get<components::SVGDocumentContext>().maximumContentProjectionChunks;
+  for (std::optional<xml::XMLNode> child = node.firstChild(); child.has_value();
+       child = child->nextSibling()) {
+    if (child->type() == xml::XMLNode::Type::Data || child->type() == xml::XMLNode::Type::CData) {
+      foundContentChild = true;
+      ++chunkCount;
+      if (const auto value = child->value();
+          value && !CheckedAddProjectionSize(contentBytes, value->size())) {
+        return ParseDiagnostic::Error("Text content size overflow",
+                                      node.getNodeLocation().value_or(FallbackRange()));
+      }
+    } else if (child->type() == xml::XMLNode::Type::Element) {
+      ++chunkCount;
+    }
+    if (chunkCount > maximumChunks) {
+      return ParseDiagnostic::Error("Text content has too many chunks",
+                                    node.getNodeLocation().value_or(FallbackRange()));
+    }
+  }
+  if (!foundContentChild) {
+    if (const std::optional<RcString> value = node.value(); value.has_value()) {
+      contentBytes = value->size();
+      if (!value->empty()) {
+        ++chunkCount;
+      }
+    }
+  }
+  if (chunkCount > maximumChunks) {
+    return ParseDiagnostic::Error("Text content has too many chunks",
+                                  node.getNodeLocation().value_or(FallbackRange()));
+  }
+
+  const std::optional<std::size_t> projectedBytes = ProjectedContentBytes(contentBytes, chunkCount);
+  auto& budget = handle.registry()->ctx().get<components::ParsedPayloadResourceBudget>();
+  if (!projectedBytes.has_value() ||
+      !budget.reserve(handle.entity(), *projectedBytes,
+                      components::ParsedPayloadResourceBudget::Category::ProjectedText)) {
+    if (!projectedBytes.has_value()) {
+      budget.recordRejection();
+    }
+    return ParseDiagnostic::Error("Text content exceeds the document parsed-payload budget",
+                                  node.getNodeLocation().value_or(FallbackRange()));
+  }
+
+  std::string combined;
+  combined.reserve(contentBytes);
+  SmallVector<RcString, 1> textChunks;
 
   for (std::optional<xml::XMLNode> child = node.firstChild(); child.has_value();
        child = child->nextSibling()) {
     if (child->type() == xml::XMLNode::Type::Data || child->type() == xml::XMLNode::Type::CData) {
       const RcString value = child->value().value_or(RcString(""));
-      if (text.text.empty()) {
-        text.text = value;
-      } else {
-        text.text = text.text + value;
-      }
+      combined.append(value.data(), value.size());
 
-      if (text.textChunks.empty()) {
-        text.textChunks.emplace_back(value);
-      } else if (text.textChunks.back().empty()) {
-        text.textChunks.back() = value;
+      if (textChunks.empty()) {
+        textChunks.emplace_back(value);
+      } else if (textChunks.back().empty()) {
+        textChunks.back() = value;
       } else {
-        text.textChunks.emplace_back(value);
+        textChunks.emplace_back(value);
       }
     } else if (child->type() == xml::XMLNode::Type::Element) {
-      if (text.textChunks.empty()) {
-        text.textChunks.emplace_back(RcString(""));
+      if (textChunks.empty()) {
+        textChunks.emplace_back(RcString(""));
       }
-      text.textChunks.emplace_back(RcString(""));
+      textChunks.emplace_back(RcString(""));
     }
   }
+  if (!foundContentChild) {
+    const RcString value = node.value().value_or(RcString(""));
+    combined.append(value.data(), value.size());
+    if (!value.empty()) {
+      textChunks.emplace_back(value);
+    }
+  }
+
+  auto& text = handle.get<components::TextComponent>();
+  text.text = RcString(combined);
+  text.textChunks = std::move(textChunks);
+  return std::nullopt;
 }
 
 std::optional<ParseDiagnostic> ProjectStyleContents(EntityHandle handle, const xml::XMLNode& node) {
@@ -382,11 +531,64 @@ std::optional<ParseDiagnostic> ProjectStyleContents(EntityHandle handle, const x
   }
 
   auto* stylesheet = handle.try_get<components::StylesheetComponent>();
-  if (stylesheet == nullptr || !stylesheet->isCssType()) {
+  if (stylesheet == nullptr) {
+    return std::nullopt;
+  }
+  auto& budget = handle.registry()->ctx().get<components::ParsedPayloadResourceBudget>();
+  if (!stylesheet->isCssType()) {
+    (void)budget.reserve(handle.entity(), 0,
+                         components::ParsedPayloadResourceBudget::Category::Stylesheet);
     return std::nullopt;
   }
 
+  std::size_t contentBytes = 0;
+  std::size_t chunkCount = 0;
+  bool foundContentChild = false;
+  const std::size_t maximumChunks =
+      handle.registry()->ctx().get<components::SVGDocumentContext>().maximumContentProjectionChunks;
+  for (std::optional<xml::XMLNode> child = node.firstChild(); child.has_value();
+       child = child->nextSibling()) {
+    if (child->type() == xml::XMLNode::Type::Data || child->type() == xml::XMLNode::Type::CData) {
+      foundContentChild = true;
+      ++chunkCount;
+      if (const auto value = child->value();
+          value && !CheckedAddProjectionSize(contentBytes, value->size())) {
+        return ParseDiagnostic::Error("Stylesheet content size overflow", FileOffset::Offset(0));
+      }
+      if (chunkCount > maximumChunks) {
+        return ParseDiagnostic::Error("Stylesheet has too many content chunks",
+                                      FileOffset::Offset(0));
+      }
+    }
+  }
+  if (!foundContentChild) {
+    if (const std::optional<RcString> value = node.value(); value.has_value()) {
+      contentBytes = value->size();
+      chunkCount = value->empty() ? 0 : 1;
+    }
+  }
+  if (chunkCount > maximumChunks) {
+    return ParseDiagnostic::Error("Stylesheet has too many content chunks",
+                                  node.getNodeLocation().value_or(FallbackRange()));
+  }
+
+  const std::optional<std::size_t> projectedSourceBytes =
+      ProjectedContentBytes(contentBytes, chunkCount);
+  const std::optional<std::size_t> preflightBytes =
+      projectedSourceBytes.has_value()
+          ? components::ParsedPayloadResourceBudget::estimateStylesheetPreflightBytes(
+                contentBytes, *projectedSourceBytes)
+          : std::nullopt;
+  if (!preflightBytes.has_value() ||
+      !budget.canReserve(handle.entity(), *preflightBytes,
+                         components::ParsedPayloadResourceBudget::Category::Stylesheet)) {
+    budget.recordRejection();
+    return ParseDiagnostic::Error("Stylesheet exceeds the document parsed-payload budget",
+                                  node.getNodeLocation().value_or(FallbackRange()));
+  }
+
   std::string combined;
+  combined.reserve(contentBytes);
   components::StylesheetSourceMap sourceMap;
   bool foundTextChild = false;
   for (std::optional<xml::XMLNode> child = node.firstChild(); child.has_value();
@@ -421,8 +623,28 @@ std::optional<ParseDiagnostic> ProjectStyleContents(EntityHandle handle, const x
     combined = node.value().value_or(RcString(""));
   }
 
-  stylesheet->parseStylesheet(std::string_view(combined), std::move(sourceMap));
+  components::StylesheetComponent projected;
+  projected.type = stylesheet->type;
+  projected.isUserAgentStylesheet = stylesheet->isUserAgentStylesheet;
+  projected.parseStylesheet(std::string_view(combined), std::move(sourceMap));
+  const std::optional<std::size_t> retainedBytes =
+      StylesheetPayloadBytes(*projectedSourceBytes, projected.stylesheet.securityStats());
+  if (!retainedBytes.has_value() ||
+      !budget.reserve(handle.entity(), *retainedBytes,
+                      components::ParsedPayloadResourceBudget::Category::Stylesheet)) {
+    if (!retainedBytes.has_value()) {
+      budget.recordRejection();
+    }
+    return ParseDiagnostic::Error("Stylesheet exceeds the document parsed-payload budget",
+                                  node.getNodeLocation().value_or(FallbackRange()));
+  }
+  *stylesheet = std::move(projected);
   return std::nullopt;
+}
+
+bool IsAttributeMutation(xml::XMLMutation::Kind kind) {
+  return kind == xml::XMLMutation::Kind::AttributeSet ||
+         kind == xml::XMLMutation::Kind::AttributeRemoved;
 }
 
 }  // namespace
@@ -431,6 +653,22 @@ SVGDocument::SVGDocument(SVGDocumentHandle documentState, Settings settings,
                          EntityHandle ontoEntityHandle)
     : documentState_(std::move(documentState)) {
   Registry& registry = documentState_->registry();
+  std::shared_ptr<components::DocumentResourceFamilyBudget> resourceFamily =
+      settings.resourceFamilyBudget;
+  if (!resourceFamily) {
+    if (const auto* existing = registry.ctx().find<components::DocumentResourceFamilyContext>()) {
+      resourceFamily = existing->budget;
+    } else {
+      resourceFamily = std::make_shared<components::DocumentResourceFamilyBudget>();
+    }
+  }
+  if (!registry.ctx().contains<components::DocumentResourceFamilyContext>()) {
+    registry.ctx().emplace<components::DocumentResourceFamilyContext>(resourceFamily);
+  }
+  if (!registry.ctx().contains<components::ParsedPayloadResourceBudget>()) {
+    registry.ctx().emplace<components::ParsedPayloadResourceBudget>(
+        components::ParsedPayloadResourceBudget::Limits{}, resourceFamily);
+  }
   // TreeMutationContext is now always installed (XMLDocument's ctor installs the basic-XML
   // defaults when the registry is created via the XML path); on a fresh SVG-only registry we
   // install it here, then override the individual callbacks with the SVG-specific implementations
@@ -549,6 +787,9 @@ void SVGDocument::setCanvasSize(int width, int height) {
 }
 
 void SVGDocument::setTime(double seconds) {
+  if (!std::isfinite(seconds)) {
+    return;
+  }
   DocumentMutationBatch mutation(*documentState_, true);
   DocumentWriteAccess& access = mutation.access();
   Registry& registry = access.registry();
@@ -624,6 +865,12 @@ bool SVGDocument::hasPendingRenderInvalidation() const {
     return true;
   }
   return state->needsFullRebuild || state->needsFullStyleRecompute;
+}
+
+std::size_t SVGDocument::elementCount() const {
+  return withReadAccess([](DocumentReadAccess& access) {
+    return access.registry().storage<components::ElementTypeComponent>().size();
+  });
 }
 
 bool SVGDocument::hasSourceStore() const {
@@ -908,43 +1155,48 @@ std::optional<ParseDiagnostic> SVGDocument::applyXMLMutation(const xml::XMLMutat
                                   MutationRange(source(), mutation));
   }
 
-  SVGElement element(handle);
-  switch (mutation.kind) {
-    case xml::XMLMutation::Kind::AttributeSet:
-      if (!mutation.value.has_value()) {
-        return ParseDiagnostic::Error("XML AttributeSet mutation is missing a value",
-                                      MutationRange(source(), mutation));
-      }
-
-      if (std::optional<ParseDiagnostic> diagnostic =
-              element.setAttributeFromXMLMutation(mutation.attributeName, *mutation.value)) {
-        diagnostic->range = MutationRange(source(), mutation);
-        return diagnostic;
-      }
-
-      return std::nullopt;
-
-    case xml::XMLMutation::Kind::AttributeRemoved:
-      element.removeAttributeFromXMLMutation(mutation.attributeName);
-      return std::nullopt;
-
-    case xml::XMLMutation::Kind::SourceDiagnosticChanged: UTILS_UNREACHABLE();
-
-    case xml::XMLMutation::Kind::NodeValueChanged: UTILS_UNREACHABLE();
-
-    case xml::XMLMutation::Kind::NodeInserted: UTILS_UNREACHABLE();
-
-    case xml::XMLMutation::Kind::NodeRemoved: UTILS_UNREACHABLE();
-
-    case xml::XMLMutation::Kind::SubtreeReplaced:
-      if (std::optional<ParseDiagnostic> diagnostic = projectXMLSubtree(mutation.node)) {
-        return diagnostic;
-      }
-      MarkSubtreeReplaced(handle);
-      return std::nullopt;
+  if (IsAttributeMutation(mutation.kind)) {
+    return applyAttributeXMLMutation(mutation, handle);
+  }
+  if (mutation.kind == xml::XMLMutation::Kind::SubtreeReplaced) {
+    if (std::optional<ParseDiagnostic> diagnostic = projectXMLSubtree(mutation.node)) {
+      return diagnostic;
+    }
+    MarkSubtreeReplaced(handle);
+    return std::nullopt;
   }
 
   UTILS_UNREACHABLE();
+}
+
+std::optional<ParseDiagnostic> SVGDocument::applyAttributeXMLMutation(
+    const xml::XMLMutation& mutation, EntityHandle handle) {
+  SVGElement element(handle);
+  if (mutation.kind == xml::XMLMutation::Kind::AttributeSet) {
+    if (!mutation.value.has_value()) {
+      return ParseDiagnostic::Error("XML AttributeSet mutation is missing a value",
+                                    MutationRange(source(), mutation));
+    }
+    if (std::optional<ParseDiagnostic> diagnostic =
+            ReserveProjectedAttributes(handle, mutation.node)) {
+      diagnostic->range = MutationRange(source(), mutation);
+      return diagnostic;
+    }
+    if (std::optional<ParseDiagnostic> diagnostic =
+            element.setAttributeFromXMLMutation(mutation.attributeName, *mutation.value)) {
+      diagnostic->range = MutationRange(source(), mutation);
+      return diagnostic;
+    }
+    return std::nullopt;
+  }
+
+  if (std::optional<ParseDiagnostic> diagnostic =
+          ReserveProjectedAttributes(handle, mutation.node)) {
+    diagnostic->range = MutationRange(source(), mutation);
+    return diagnostic;
+  }
+  element.removeAttributeFromXMLMutation(mutation.attributeName);
+  return std::nullopt;
 }
 
 std::optional<ParseDiagnostic> SVGDocument::projectXMLSubtree(const xml::XMLNode& node) {
@@ -954,6 +1206,10 @@ std::optional<ParseDiagnostic> SVGDocument::projectXMLSubtree(const xml::XMLNode
 
   const EntityHandle handle = node.entityHandle();
   EnsureProjectedElementComponents(handle, node.tagName());
+
+  if (std::optional<ParseDiagnostic> diagnostic = ReserveProjectedAttributes(handle, node)) {
+    return diagnostic;
+  }
 
   SVGElement element(handle);
   for (const xml::XMLQualifiedNameRef& attributeName : node.attributes()) {
@@ -969,7 +1225,9 @@ std::optional<ParseDiagnostic> SVGDocument::projectXMLSubtree(const xml::XMLNode
     }
   }
 
-  ProjectTextContents(handle, node);
+  if (std::optional<ParseDiagnostic> diagnostic = ProjectTextContents(handle, node)) {
+    return diagnostic;
+  }
   if (std::optional<ParseDiagnostic> diagnostic = ProjectStyleContents(handle, node)) {
     return diagnostic;
   }

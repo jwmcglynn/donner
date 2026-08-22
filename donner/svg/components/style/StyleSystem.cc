@@ -23,6 +23,18 @@ namespace donner::svg::components {
 
 namespace {
 
+StyleResourceBudget& GetStyleResourceBudget(Registry& registry) {
+  if (registry.ctx().contains<StyleResourceBudget>()) {
+    return registry.ctx().get<StyleResourceBudget>();
+  }
+
+  std::shared_ptr<DocumentResourceFamilyBudget> family;
+  if (const auto* context = registry.ctx().find<DocumentResourceFamilyContext>()) {
+    family = context->budget;
+  }
+  return registry.ctx().emplace<StyleResourceBudget>(std::move(family));
+}
+
 struct ShadowedElementAdapter {
   ShadowedElementAdapter(Registry& registry, Entity treeEntity, Entity dataEntity)
       : registry_(registry), treeEntity_(treeEntity), dataEntity_(dataEntity) {}
@@ -147,15 +159,15 @@ struct MatchedSelectorEntry {
 
 std::optional<MatchedSelectorEntry> MatchSelectorRule(const css::SelectorRule& rule,
                                                       const ShadowedElementAdapter& adapter,
-                                                      css::SelectorTraversalBudget& budget) {
+                                                      css::SelectorTraversalBudget* budget) {
   css::SelectorMatchOptions<ShadowedElementAdapter> options;
-  options.traversalBudget = &budget;
+  options.traversalBudget = budget;
   for (std::size_t i = 0; i < rule.selector.entries.size(); ++i) {
-    if (budget.rejected()) {
+    if (budget != nullptr && budget->rejected()) {
       return std::nullopt;
     }
     const css::SelectorMatchResult match = rule.selector.entries[i].matches(adapter, options);
-    if (budget.rejected()) {
+    if (budget != nullptr && budget->rejected()) {
       return std::nullopt;
     }
     if (match) {
@@ -181,19 +193,31 @@ bool LocalRangeContainsOffset(const SourceRange& range, std::size_t localOffset)
   return start.has_value() && end.has_value() && *start <= localOffset && localOffset < *end;
 }
 
+void ApplyRuleDeclarations(const css::SelectorRule& rule, css::Specificity specificity,
+                           PropertyRegistry& properties, StyleResourceBudget& styleBudget,
+                           ParseWarningSink& warningSink) {
+  for (const auto& declaration : rule.declarations) {
+    if (!styleBudget.reserveDeclarationApplication(declaration.values.size(),
+                                                   declaration.sourceByteSize)) {
+      return;
+    }
+    if (auto error = properties.parseProperty(declaration, specificity)) {
+      constexpr std::size_t kMaximumStyleDiagnosticBytes = 4096;
+      if (error->reason.size() > kMaximumStyleDiagnosticBytes) {
+        error->reason =
+            RcString(std::string_view(error->reason).substr(0, kMaximumStyleDiagnosticBytes));
+      }
+      warningSink.add(std::move(*error));
+    }
+  }
+}
+
 }  // namespace
 
 const ComputedStyleComponent& StyleSystem::computeStyle(EntityHandle handle,
                                                         ParseWarningSink& warningSink) {
-  css::SelectorTraversalBudget selectorTraversalBudget;
-  return computeStyleWithBudget(handle, warningSink, selectorTraversalBudget);
-}
-
-const ComputedStyleComponent& StyleSystem::computeStyleWithBudget(
-    EntityHandle handle, ParseWarningSink& warningSink,
-    css::SelectorTraversalBudget& selectorTraversalBudget) {
   auto& computedStyle = handle.get_or_emplace<ComputedStyleComponent>();
-  computePropertiesInto(handle, computedStyle, warningSink, selectorTraversalBudget);
+  computePropertiesInto(handle, computedStyle, warningSink);
   return computedStyle;
 }
 
@@ -232,42 +256,36 @@ void StyleSystem::updateStyle(EntityHandle handle, std::string_view style) {
 
 void StyleSystem::applyStylesheetRules(Registry& registry, Entity treeEntity, Entity dataEntity,
                                        PropertyRegistry& properties,
-                                       css::SelectorTraversalBudget& selectorTraversalBudget,
+                                       StyleResourceBudget& styleBudget,
                                        ParseWarningSink& warningSink) {
   const ShadowedElementAdapter adapter(registry, treeEntity, dataEntity);
   for (auto view = registry.view<StylesheetComponent>(); auto stylesheetEntity : view) {
     const auto& stylesheet = view.get<StylesheetComponent>(stylesheetEntity);
     for (const css::SelectorRule& rule : stylesheet.stylesheet.rules()) {
-      if (selectorTraversalBudget.rejected()) {
+      if (!styleBudget.reserveRuleElementMatch()) {
         return;
       }
-      const std::optional<MatchedSelectorEntry> match =
-          MatchSelectorRule(rule, adapter, selectorTraversalBudget);
-      if (!match.has_value()) {
+      auto match = MatchSelectorRule(rule, adapter, &styleBudget.selectorTraversal());
+      if (!match) {
         continue;
       }
       css::Specificity specificity = match->specificity;
       if (stylesheet.isUserAgentStylesheet) {
         specificity = specificity.toUserAgentSpecificity();
       }
-      for (const auto& declaration : rule.declarations) {
-        if (auto error = properties.parseProperty(declaration, specificity)) {
-          warningSink.add(std::move(error.value()));
-        }
-      }
+      ApplyRuleDeclarations(rule, specificity, properties, styleBudget, warningSink);
     }
   }
 }
 
-PropertyRegistry StyleSystem::inheritProperties(
-    Registry& registry, Entity parent, PropertyRegistry properties, ParseWarningSink& warningSink,
-    css::SelectorTraversalBudget& selectorTraversalBudget) {
+PropertyRegistry StyleSystem::inheritProperties(Registry& registry, Entity parent,
+                                                PropertyRegistry properties,
+                                                ParseWarningSink& warningSink) {
   if (parent == entt::null) {
     return properties;
   }
   auto& parentStyleComponent = registry.get_or_emplace<ComputedStyleComponent>(parent);
-  computePropertiesInto(EntityHandle(registry, parent), parentStyleComponent, warningSink,
-                        selectorTraversalBudget);
+  computePropertiesInto(EntityHandle(registry, parent), parentStyleComponent, warningSink);
   const PropertyInheritOptions inheritOptions = registry.all_of<DoNotInheritFillOrStrokeTag>(parent)
                                                     ? PropertyInheritOptions::NoPaint
                                                     : PropertyInheritOptions::All;
@@ -293,13 +311,13 @@ void StyleSystem::resolveRelativeFontProperties(Registry& registry, Entity paren
 }
 
 void StyleSystem::computePropertiesInto(EntityHandle handle, ComputedStyleComponent& computedStyle,
-                                        ParseWarningSink& warningSink,
-                                        css::SelectorTraversalBudget& selectorTraversalBudget) {
+                                        ParseWarningSink& warningSink) {
   if (computedStyle.properties) {
     return;  // Already computed.
   }
 
   Registry& registry = *handle.registry();
+  auto& styleBudget = GetStyleResourceBudget(registry);
 
   const auto* shadowComponent = handle.try_get<ShadowEntityComponent>();
   const Entity dataEntity = shadowComponent ? shadowComponent->lightEntity : handle.entity();
@@ -312,12 +330,24 @@ void StyleSystem::computePropertiesInto(EntityHandle handle, ComputedStyleCompon
     properties = PropertyRegistry();
   }
 
-  applyStylesheetRules(registry, handle.entity(), dataEntity, properties, selectorTraversalBudget,
-                       warningSink);
+  applyStylesheetRules(registry, handle.entity(), dataEntity, properties, styleBudget, warningSink);
 
+  // Inherit from parent, then charge the dynamic bytes retained by the final computed style.
+  // Charging the parent's source value alone misses large locally parsed vectors and can also
+  // differ from the actual value selected by the cascade.
   const Entity parent = handle.get<donner::components::TreeComponent>().parent();
-  computedStyle.properties = inheritProperties(registry, parent, std::move(properties), warningSink,
-                                               selectorTraversalBudget);
+  PropertyRegistry finalProperties =
+      inheritProperties(registry, parent, std::move(properties), warningSink);
+
+  if (styleBudget.reserveComplexPropertyBytes(handle.entity(),
+                                              finalProperties.complexPropertyBytes())) {
+    computedStyle.properties = std::move(finalProperties);
+  } else {
+    // Once the aggregate retained-byte budget is exhausted, use bounded initial styles for the
+    // remainder of the pass instead of retaining attacker-sized local or inherited vectors.
+    styleBudget.release(handle.entity());
+    computedStyle.properties = PropertyRegistry();
+  }
 
   // Resolve font-size to absolute pixels. CSS spec requires the computed value of font-size to
   // always be an absolute length. Relative units (em, %, ex) resolve against the parent's computed
@@ -334,19 +364,19 @@ std::vector<MatchedStyleRule> StyleSystem::collectMatchedStyleRules(EntityHandle
   const Entity dataEntity = shadowComponent ? shadowComponent->lightEntity : handle.entity();
 
   std::vector<MatchedStyleRule> result;
-  css::SelectorTraversalBudget selectorTraversalBudget;
+  StyleResourceBudget styleBudget;
   for (auto view = registry.view<StylesheetComponent>(); auto stylesheetEntity : view) {
     const auto& stylesheet = view.get<StylesheetComponent>(stylesheetEntity);
     const std::span<const css::SelectorRule> rules = stylesheet.stylesheet.rules();
 
     for (std::size_t ruleIndex = 0; ruleIndex < rules.size(); ++ruleIndex) {
-      if (selectorTraversalBudget.rejected()) {
+      if (!styleBudget.reserveRuleElementMatch()) {
         break;
       }
       const css::SelectorRule& rule = rules[ruleIndex];
       std::optional<MatchedSelectorEntry> match =
           MatchSelectorRule(rule, ShadowedElementAdapter(registry, handle.entity(), dataEntity),
-                            selectorTraversalBudget);
+                            &styleBudget.selectorTraversal());
       if (!match.has_value()) {
         continue;
       }
@@ -444,7 +474,8 @@ std::optional<StyleRuleAtSourceOffset> StyleSystem::findStyleRuleAtSourceOffset(
 }
 
 void StyleSystem::computeAllStyles(Registry& registry, ParseWarningSink& warningSink) {
-  css::SelectorTraversalBudget selectorTraversalBudget;
+  auto& styleBudget = GetStyleResourceBudget(registry);
+  styleBudget.reset();
   const auto* renderState = registry.ctx().find<RenderTreeState>();
   const bool hasBeenBuilt = renderState != nullptr && renderState->hasBeenBuilt;
   const bool needsFullStyleRecompute =
@@ -472,19 +503,21 @@ void StyleSystem::computeAllStyles(Registry& registry, ParseWarningSink& warning
       }
 
       std::ignore = registry.get_or_emplace<ComputedStyleComponent>(entity);
-      computeStyleWithBudget(EntityHandle(registry, entity), warningSink, selectorTraversalBudget);
+      computeStyle(EntityHandle(registry, entity), warningSink);
     }
 
     ResourceManagerContext& resourceManager = registry.ctx().get<ResourceManagerContext>();
     for (auto view = registry.view<StylesheetComponent>(); auto stylesheetEntity : view) {
       auto [stylesheet] = view.get(stylesheetEntity);
-      resourceManager.addFontFaces(stylesheet.stylesheet.fontFaces());
+      resourceManager.synchronizeStylesheetFontFaces(stylesheetEntity,
+                                                     stylesheet.stylesheet.fontFaces());
     }
 
     return;
   }
 
   if (hasBeenBuilt && needsFullStyleRecompute) {
+    styleBudget.releaseAll();
     registry.clear<ComputedStyleComponent>();
   }
 
@@ -498,22 +531,22 @@ void StyleSystem::computeAllStyles(Registry& registry, ParseWarningSink& warning
 
   // Compute the styles for all elements.
   for (auto entity : view) {
-    computeStyleWithBudget(EntityHandle(registry, entity), warningSink, selectorTraversalBudget);
+    computeStyle(EntityHandle(registry, entity), warningSink);
   }
 
   ResourceManagerContext& resourceManager = registry.ctx().get<ResourceManagerContext>();
   for (auto view = registry.view<StylesheetComponent>(); auto stylesheetEntity : view) {
     auto [stylesheet] = view.get(stylesheetEntity);
 
-    resourceManager.addFontFaces(stylesheet.stylesheet.fontFaces());
+    resourceManager.synchronizeStylesheetFontFaces(stylesheetEntity,
+                                                   stylesheet.stylesheet.fontFaces());
   }
 }
 
 void StyleSystem::computeStylesFor(Registry& registry, std::span<const Entity> entities,
                                    ParseWarningSink& warningSink) {
-  css::SelectorTraversalBudget selectorTraversalBudget;
   for (Entity entity : entities) {
-    computeStyleWithBudget(EntityHandle(registry, entity), warningSink, selectorTraversalBudget);
+    computeStyle(EntityHandle(registry, entity), warningSink);
   }
 }
 
@@ -529,6 +562,9 @@ bool StyleSystem::anyStylesheetUsesAttributeInSelector(Registry& registry,
 }
 
 void StyleSystem::invalidateComputed(EntityHandle handle) {
+  if (auto* budget = handle.registry()->ctx().find<StyleResourceBudget>()) {
+    budget->release(handle.entity());
+  }
   handle.remove<ComputedStyleComponent>();
 }
 

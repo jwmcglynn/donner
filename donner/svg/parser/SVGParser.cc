@@ -1,8 +1,11 @@
 #include "donner/svg/parser/SVGParser.h"
 
 #include <array>
+#include <limits>
+#include <memory>
 #include <ostream>
 #include <sstream>
+#include <string>
 #include <string_view>
 #include <tuple>
 #include <utility>
@@ -17,7 +20,11 @@
 #include "donner/svg/AllSVGElements.h"
 #include "donner/svg/SVGElement.h"
 #include "donner/svg/components/DescriptiveTextComponent.h"
+#include "donner/svg/components/DocumentResourceFamilyBudget.h"
+#include "donner/svg/components/ParsedPayloadResourceBudget.h"
+#include "donner/svg/components/SVGDocumentContext.h"
 #include "donner/svg/components/StylesheetComponent.h"
+#include "donner/svg/components/text/TextComponent.h"
 #include "donner/svg/parser/AttributeParser.h"
 #include "donner/svg/parser/details/SVGParserContext.h"
 
@@ -28,6 +35,122 @@ using xml::XMLParser;
 using xml::XMLQualifiedNameRef;
 
 namespace {
+
+constexpr std::size_t kEstimatedProjectionBytesPerChunk = 64;
+
+bool CheckedAdd(std::size_t& total, std::size_t value) {
+  if (value > std::numeric_limits<std::size_t>::max() - total) {
+    return false;
+  }
+  total += value;
+  return true;
+}
+
+bool ReserveContentProjection(SVGParserContext& context, EntityHandle handle,
+                              std::size_t contentBytes, std::size_t chunkCount,
+                              components::ParsedPayloadResourceBudget::Category category,
+                              std::string_view description, std::size_t* reservedBytes = nullptr) {
+  auto& budget = handle.registry()->ctx().get<components::ParsedPayloadResourceBudget>();
+  std::size_t estimatedBytes = contentBytes;
+  if (chunkCount > context.options().maximumContentProjectionChunks ||
+      chunkCount > std::numeric_limits<std::size_t>::max() / kEstimatedProjectionBytesPerChunk ||
+      !CheckedAdd(estimatedBytes, chunkCount * kEstimatedProjectionBytesPerChunk)) {
+    budget.recordRejection();
+  } else if (budget.reserve(handle.entity(), estimatedBytes, category)) {
+    if (reservedBytes != nullptr) {
+      *reservedBytes = estimatedBytes;
+    }
+    return true;
+  }
+
+  ParseDiagnostic warning;
+  warning.reason = std::string(description) + " exceeds the document content-projection budget";
+  context.addWarning(std::move(warning));
+  return false;
+}
+
+std::optional<std::size_t> AttributePayloadBytes(const XMLNode& node) {
+  std::size_t sourceBytes = 0;
+  std::size_t attributeCount = 0;
+  for (const XMLQualifiedNameRef& name : node.attributes()) {
+    const std::optional<RcString> value = node.getAttribute(name);
+    if (!value.has_value() || !CheckedAdd(sourceBytes, name.namespacePrefix.size()) ||
+        !CheckedAdd(sourceBytes, name.name.size()) || !CheckedAdd(sourceBytes, value->size())) {
+      return std::nullopt;
+    }
+    ++attributeCount;
+  }
+  return components::ParsedPayloadResourceBudget::estimateAttributeBytes(sourceBytes,
+                                                                         attributeCount);
+}
+
+bool ReserveAttributePayload(SVGParserContext& context, EntityHandle handle, const XMLNode& node) {
+  auto& budget = handle.registry()->ctx().get<components::ParsedPayloadResourceBudget>();
+  const std::optional<std::size_t> bytes = AttributePayloadBytes(node);
+  if (bytes.has_value() &&
+      budget.reserve(handle.entity(), *bytes,
+                     components::ParsedPayloadResourceBudget::Category::Attribute)) {
+    return true;
+  }
+  if (!bytes.has_value()) {
+    budget.recordRejection();
+  }
+  ParseDiagnostic warning;
+  warning.reason = "Attributes exceed the document parsed-payload budget";
+  context.addWarning(std::move(warning));
+  return false;
+}
+
+template <typename T>
+void ParseTextContents(SVGParserContext& context, T element, const XMLNode& node) {
+  std::size_t contentBytes = 0;
+  std::size_t chunkCount = 0;
+  for (auto child = node.firstChild(); child; child = child->nextSibling()) {
+    if (child->type() == XMLNode::Type::Data || child->type() == XMLNode::Type::CData) {
+      ++chunkCount;
+      if (auto value = child->value(); value && !CheckedAdd(contentBytes, value->size())) {
+        auto& budget = element.entityHandle()
+                           .registry()
+                           ->ctx()
+                           .template get<components::ParsedPayloadResourceBudget>();
+        budget.recordRejection();
+        return;
+      }
+    } else if (child->type() == XMLNode::Type::Element) {
+      ++chunkCount;
+    }
+  }
+
+  if (!ReserveContentProjection(context, element.entityHandle(), contentBytes, chunkCount,
+                                components::ParsedPayloadResourceBudget::Category::ProjectedText,
+                                "Text content")) {
+    return;
+  }
+
+  std::string combined;
+  combined.reserve(contentBytes);
+  auto& textComponent = element.entityHandle().template get_or_emplace<components::TextComponent>();
+  textComponent.textChunks.clear();
+  for (auto child = node.firstChild(); child; child = child->nextSibling()) {
+    if (child->type() == XMLNode::Type::Data || child->type() == XMLNode::Type::CData) {
+      const RcString value = child->value().value_or(RcString(""));
+      combined.append(value.data(), value.size());
+      if (textComponent.textChunks.empty()) {
+        textComponent.textChunks.emplace_back(value);
+      } else if (textComponent.textChunks.back().empty()) {
+        textComponent.textChunks.back() = value;
+      } else {
+        textComponent.textChunks.emplace_back(value);
+      }
+    } else if (child->type() == XMLNode::Type::Element) {
+      if (textComponent.textChunks.empty()) {
+        textComponent.textChunks.emplace_back(RcString(""));
+      }
+      textComponent.textChunks.emplace_back(RcString(""));
+    }
+  }
+  textComponent.text = RcString(combined);
+}
 
 template <typename T>
 concept HasPathLength =
@@ -47,7 +170,50 @@ std::optional<ParseDiagnostic> ParseNodeContents<SVGStyleElement>(SVGParserConte
     // Concatenate all text/CDATA children into a single string before parsing.
     // Multiple Data/CData nodes can occur when whitespace text nodes are preserved
     // between or around CDATA sections.
+    std::size_t contentBytes = 0;
+    std::size_t chunkCount = 0;
+    for (auto child = node.firstChild(); child; child = child->nextSibling()) {
+      if (child->type() == XMLNode::Type::Data || child->type() == XMLNode::Type::CData) {
+        ++chunkCount;
+        if (auto value = child->value(); value && !CheckedAdd(contentBytes, value->size())) {
+          return ParseDiagnostic::Error("Stylesheet content size overflow", FileOffset::Offset(0));
+        }
+      } else {
+        ParseDiagnostic err;
+        std::ostringstream ss;
+        ss << "Unexpected <style> element contents, expected text or CDATA, "
+              "found '"
+           << child->type() << "'";
+        err.reason = ss.str();
+        if (auto sourceOffset = child->sourceStartOffset()) {
+          err.range.start = sourceOffset.value();
+        }
+        return err;
+      }
+    }
+    std::size_t projectedSourceBytes = 0;
+    if (!ReserveContentProjection(context, element.entityHandle(), contentBytes, chunkCount,
+                                  components::ParsedPayloadResourceBudget::Category::Stylesheet,
+                                  "Stylesheet content", &projectedSourceBytes)) {
+      return std::nullopt;
+    }
+    auto& payloadBudget =
+        element.entityHandle().registry()->ctx().get<components::ParsedPayloadResourceBudget>();
+    const std::optional<std::size_t> preflightBytes =
+        components::ParsedPayloadResourceBudget::estimateStylesheetPreflightBytes(
+            contentBytes, projectedSourceBytes);
+    if (!preflightBytes.has_value() ||
+        !payloadBudget.canReserve(element.entityHandle().entity(), *preflightBytes,
+                                  components::ParsedPayloadResourceBudget::Category::Stylesheet)) {
+      payloadBudget.recordRejection();
+      ParseDiagnostic warning;
+      warning.reason = "Stylesheet exceeds the document parsed-payload budget";
+      context.addWarning(std::move(warning));
+      return std::nullopt;
+    }
+
     std::string combined;
+    combined.reserve(contentBytes);
     components::StylesheetSourceMap sourceMap;
     for (auto child = node.firstChild(); child; child = child->nextSibling()) {
       if (child->type() == XMLNode::Type::Data || child->type() == XMLNode::Type::CData) {
@@ -69,24 +235,35 @@ std::optional<ParseDiagnostic> ParseNodeContents<SVGStyleElement>(SVGParserConte
             sourceMap.addSegment(cssStartOffset, cssEndOffset, childValueLocation->start);
           }
         }
-      } else {
-        ParseDiagnostic err;
-        std::ostringstream ss;
-        ss << "Unexpected <style> element contents, expected text or CDATA, "
-              "found '"
-           << child->type() << "'";
-
-        err.reason = ss.str();
-        if (auto sourceOffset = child->sourceStartOffset()) {
-          err.range.start = sourceOffset.value();
-        }
-        return err;
       }
     }
     if (!combined.empty()) {
       auto& stylesheetComponent =
           element.entityHandle().get_or_emplace<components::StylesheetComponent>();
       stylesheetComponent.parseStylesheet(std::string_view(combined), std::move(sourceMap));
+
+      const auto& stats = stylesheetComponent.stylesheet.securityStats();
+      constexpr std::size_t kEstimatedBytesPerComponentValue = 64;
+      constexpr std::size_t kEstimatedBytesPerDeclaration = 128;
+      constexpr std::size_t kEstimatedBytesPerRule = 128;
+      std::size_t retainedBytes = projectedSourceBytes;
+      const bool estimateValid =
+          stats.componentValues <=
+              std::numeric_limits<std::size_t>::max() / kEstimatedBytesPerComponentValue &&
+          stats.declarations <=
+              std::numeric_limits<std::size_t>::max() / kEstimatedBytesPerDeclaration &&
+          stats.rules <= std::numeric_limits<std::size_t>::max() / kEstimatedBytesPerRule &&
+          CheckedAdd(retainedBytes, stats.componentValues * kEstimatedBytesPerComponentValue) &&
+          CheckedAdd(retainedBytes, stats.declarations * kEstimatedBytesPerDeclaration) &&
+          CheckedAdd(retainedBytes, stats.rules * kEstimatedBytesPerRule);
+      if (!estimateValid ||
+          !payloadBudget.reserve(element.entityHandle().entity(), retainedBytes,
+                                 components::ParsedPayloadResourceBudget::Category::Stylesheet)) {
+        stylesheetComponent = components::StylesheetComponent{};
+        ParseDiagnostic warning;
+        warning.reason = "Stylesheet exceeds the document parsed-payload budget";
+        context.addWarning(std::move(warning));
+      }
     }
   }
 
@@ -105,15 +282,7 @@ template <>
 std::optional<ParseDiagnostic> ParseNodeContents<SVGTextElement>(SVGParserContext& context,
                                                                  SVGTextElement element,
                                                                  const XMLNode& node) {
-  for (auto child = node.firstChild(); child; child = child->nextSibling()) {
-    if (child->type() == XMLNode::Type::Data || child->type() == XMLNode::Type::CData) {
-      if (auto maybeValue = child->value()) {
-        element.appendText(maybeValue.value());
-      }
-    } else if (child->type() == XMLNode::Type::Element) {
-      element.advanceTextChunk();
-    }
-  }
+  ParseTextContents(context, element, node);
   return std::nullopt;
 }
 
@@ -134,15 +303,7 @@ template <>
 std::optional<ParseDiagnostic> ParseNodeContents<SVGAElement>(SVGParserContext& context,
                                                               SVGAElement element,
                                                               const XMLNode& node) {
-  for (auto child = node.firstChild(); child; child = child->nextSibling()) {
-    if (child->type() == XMLNode::Type::Data || child->type() == XMLNode::Type::CData) {
-      if (auto maybeValue = child->value()) {
-        element.appendText(maybeValue.value());
-      }
-    } else if (child->type() == XMLNode::Type::Element) {
-      element.advanceTextChunk();
-    }
-  }
+  ParseTextContents(context, element, node);
   return std::nullopt;
 }
 
@@ -158,15 +319,7 @@ template <>
 std::optional<ParseDiagnostic> ParseNodeContents<SVGTSpanElement>(SVGParserContext& context,
                                                                   SVGTSpanElement element,
                                                                   const XMLNode& node) {
-  for (auto child = node.firstChild(); child; child = child->nextSibling()) {
-    if (child->type() == XMLNode::Type::Data || child->type() == XMLNode::Type::CData) {
-      if (auto maybeValue = child->value()) {
-        element.appendText(maybeValue.value());
-      }
-    } else if (child->type() == XMLNode::Type::Element) {
-      element.advanceTextChunk();
-    }
-  }
+  ParseTextContents(context, element, node);
   return std::nullopt;
 }
 
@@ -182,15 +335,7 @@ template <>
 std::optional<ParseDiagnostic> ParseNodeContents<SVGTextPathElement>(SVGParserContext& context,
                                                                      SVGTextPathElement element,
                                                                      const XMLNode& node) {
-  for (auto child = node.firstChild(); child; child = child->nextSibling()) {
-    if (child->type() == XMLNode::Type::Data || child->type() == XMLNode::Type::CData) {
-      if (auto maybeValue = child->value()) {
-        element.appendText(maybeValue.value());
-      }
-    } else if (child->type() == XMLNode::Type::Element) {
-      element.advanceTextChunk();
-    }
-  }
+  ParseTextContents(context, element, node);
   return std::nullopt;
 }
 
@@ -204,12 +349,35 @@ std::optional<ParseDiagnostic> ParseNodeContents<SVGTextPathElement>(SVGParserCo
  * @param node The XML node containing the text content.
  */
 template <typename T>
-void ParseDescriptiveText(T element, const XMLNode& node) {
+void ParseDescriptiveText(SVGParserContext& context, T element, const XMLNode& node) {
+  std::size_t contentBytes = 0;
+  std::size_t chunkCount = 0;
+  for (auto child = node.firstChild(); child; child = child->nextSibling()) {
+    if (child->type() == XMLNode::Type::Data || child->type() == XMLNode::Type::CData) {
+      ++chunkCount;
+      if (auto value = child->value(); value && !CheckedAdd(contentBytes, value->size())) {
+        element.entityHandle()
+            .registry()
+            ->ctx()
+            .template get<components::ParsedPayloadResourceBudget>()
+            .recordRejection();
+        return;
+      }
+    }
+  }
+
+  if (!ReserveContentProjection(context, element.entityHandle(), contentBytes, chunkCount,
+                                components::ParsedPayloadResourceBudget::Category::ProjectedText,
+                                "Descriptive content")) {
+    return;
+  }
+
   std::string combined;
+  combined.reserve(contentBytes);
   for (auto child = node.firstChild(); child; child = child->nextSibling()) {
     if (child->type() == XMLNode::Type::Data || child->type() == XMLNode::Type::CData) {
       if (auto value = child->value()) {
-        combined += value.value();
+        combined.append(value->data(), value->size());
       }
     }
   }
@@ -225,7 +393,7 @@ template <>
 std::optional<ParseDiagnostic> ParseNodeContents<SVGTitleElement>(SVGParserContext& context,
                                                                   SVGTitleElement element,
                                                                   const XMLNode& node) {
-  ParseDescriptiveText(element, node);
+  ParseDescriptiveText(context, element, node);
   return std::nullopt;
 }
 
@@ -233,7 +401,7 @@ template <>
 std::optional<ParseDiagnostic> ParseNodeContents<SVGDescElement>(SVGParserContext& context,
                                                                  SVGDescElement element,
                                                                  const XMLNode& node) {
-  ParseDescriptiveText(element, node);
+  ParseDescriptiveText(context, element, node);
   return std::nullopt;
 }
 
@@ -241,7 +409,7 @@ template <>
 std::optional<ParseDiagnostic> ParseNodeContents<SVGMetadataElement>(SVGParserContext& context,
                                                                      SVGMetadataElement element,
                                                                      const XMLNode& node) {
-  ParseDescriptiveText(element, node);
+  ParseDescriptiveText(context, element, node);
   return std::nullopt;
 }
 
@@ -280,6 +448,9 @@ void ParseXmlNsAttribute(SVGParserContext& context, const XMLNode& node) {
 
 template <typename T>
 ParseResult<SVGElement> ParseAttributes(SVGParserContext& context, T element, const XMLNode& node) {
+  if (!ReserveAttributePayload(context, element.entityHandle(), node)) {
+    return std::move(element);
+  }
   for (const XMLQualifiedNameRef& attributeName : node.attributes()) {
     const RcString value = node.getAttribute(attributeName).value();
 
@@ -336,6 +507,7 @@ private:
   std::optional<SVGDocument> document_;
   SVGDocumentHandle documentState_;
   SVGDocument::Settings settings_;
+  std::size_t visitedTreeNodes_ = 0;
 
   /// Creates an element of type \p ElementT on \p node and parses its attributes. Experimental
   /// types fall back to an unknown element unless experimental support is enabled, matching the
@@ -381,11 +553,30 @@ private:
   static const CreateElementFn* lookupElementFactory(std::string_view tagName);
 
 public:
-  explicit SVGParserImpl(SVGParserContext& context, std::shared_ptr<Registry> registry,
+  explicit SVGParserImpl(SVGParserContext& context, std::shared_ptr<Registry> sharedRegistry,
                          SVGDocument::Settings settings)
       : context_(context),
-        documentState_(std::make_shared<DocumentState>(std::move(registry))),
-        settings_(std::move(settings)) {}
+        documentState_(std::make_shared<DocumentState>(std::move(sharedRegistry))),
+        settings_(std::move(settings)) {
+    Registry& registry = documentState_->registry();
+    if (!settings_.resourceFamilyBudget) {
+      settings_.resourceFamilyBudget = std::make_shared<components::DocumentResourceFamilyBudget>(
+          components::DocumentResourceFamilyBudget::Limits{
+              .parsedPayloadBytes = context.options().maximumParsedPayloadSize,
+          });
+    }
+    if (!registry.ctx().contains<components::DocumentResourceFamilyContext>()) {
+      registry.ctx().emplace<components::DocumentResourceFamilyContext>(
+          settings_.resourceFamilyBudget);
+    }
+    if (!registry.ctx().contains<components::ParsedPayloadResourceBudget>()) {
+      registry.ctx().emplace<components::ParsedPayloadResourceBudget>(
+          components::ParsedPayloadResourceBudget::Limits{
+              .maximumRetainedBytes = context.options().maximumParsedPayloadSize,
+          },
+          settings_.resourceFamilyBudget);
+    }
+  }
 
   std::optional<SVGDocument> document() const { return document_; }
 
@@ -412,10 +603,20 @@ public:
   }
 
   std::optional<ParseDiagnostic> walkChildren(std::optional<SVGElement> element,
-                                              const XMLNode& rootNode) {
+                                              const XMLNode& rootNode, std::size_t parentDepth) {
     bool foundRootSvg = false;
 
     for (auto child = rootNode.firstChild(); child;) {
+      if (visitedTreeNodes_ >= context_.options().maximumTreeNodes) {
+        ParseDiagnostic err;
+        err.reason = "Maximum SVG conversion tree-node count exceeded";
+        if (auto sourceOffset = child->sourceStartOffset()) {
+          err.range.start = *sourceOffset;
+        }
+        return err;
+      }
+      ++visitedTreeNodes_;
+
       const XMLQualifiedNameRef name = child->tagName();
 
       const XMLNode::Type type = child->type();
@@ -425,6 +626,16 @@ public:
         child = child->nextSibling();
         nodeToRemove.remove();
         continue;
+      }
+
+      const std::size_t childDepth = parentDepth + 1;
+      if (childDepth > context_.options().maximumTreeDepth) {
+        ParseDiagnostic err;
+        err.reason = "Maximum SVG conversion element depth exceeded";
+        if (auto sourceOffset = child->sourceStartOffset()) {
+          err.range.start = *sourceOffset;
+        }
+        return err;
       }
 
       if (element) {
@@ -457,7 +668,7 @@ public:
           return std::move(maybeNewElement.error());
         }
 
-        if (auto error = walkChildren(maybeNewElement.result(), child.value())) {
+        if (auto error = walkChildren(maybeNewElement.result(), child.value(), childDepth)) {
           return error;
         }
       } else {
@@ -490,6 +701,10 @@ public:
           }
 
           document_ = SVGDocument(documentState_, std::move(settings_), child->entityHandle());
+          documentState_->registry()
+              .ctx()
+              .get<components::SVGDocumentContext>()
+              .maximumContentProjectionChunks = context_.options().maximumContentProjectionChunks;
 
           auto maybeSvgElement = ParseAttributes(context_, document_->svgElement(), child.value());
           if (maybeSvgElement.hasError()) {
@@ -497,7 +712,7 @@ public:
           }
 
           foundRootSvg = true;
-          if (auto error = walkChildren(maybeSvgElement.result(), child.value())) {
+          if (auto error = walkChildren(maybeSvgElement.result(), child.value(), childDepth)) {
             return error;
           }
         } else {
@@ -527,36 +742,50 @@ const CreateElementFn* SVGParserImpl::lookupElementFactory(std::string_view tagN
   return kElementFactories.find(tagName);
 }
 
-ParseResult<SVGDocument> SVGParser::ParseSVG(std::string_view source, ParseWarningSink& warningSink,
-                                             SVGParser::Options options,
-                                             SVGDocument::Settings settings) noexcept {
-  if (source.size() > options.maximumInputSize) {
-    return ParseDiagnostic::Error("SVG source exceeds maximum input size", FileOffset::Offset(0));
+namespace {
+
+SVGDocument::Settings PrepareDocumentSettings(const SVGParser::Options& options,
+                                              SVGDocument::Settings settings) {
+  if (!settings.resourceFamilyBudget) {
+    settings.resourceFamilyBudget = std::make_shared<components::DocumentResourceFamilyBudget>(
+        components::DocumentResourceFamilyBudget::Limits{
+            .parsedPayloadBytes = options.maximumParsedPayloadSize,
+        });
+  }
+  if (settings.svgParseCallback || settings.processingMode != ProcessingMode::DynamicInteractive) {
+    return settings;
   }
 
-  // Inject the SVG parse callback for sub-document loading, unless we're already in secure mode
-  // (sub-documents cannot load their own sub-documents).
-  if (!settings.svgParseCallback && settings.processingMode == ProcessingMode::DynamicInteractive) {
-    settings.svgParseCallback = [](const std::vector<uint8_t>& svgContent,
-                                   ParseWarningSink& warnings) -> std::optional<SVGDocumentHandle> {
-      SVGDocument::Settings subSettings;
-      subSettings.processingMode = ProcessingMode::SecureStatic;
-      // No resource loader - secure mode sub-documents cannot load external resources.
+  const std::shared_ptr<components::DocumentResourceFamilyBudget> resourceFamily =
+      settings.resourceFamilyBudget;
+  settings.svgParseCallback = [resourceFamily](
+                                  const std::vector<uint8_t>& svgContent,
+                                  ParseWarningSink& warnings) -> std::optional<SVGDocumentHandle> {
+    SVGDocument::Settings subSettings;
+    subSettings.processingMode = ProcessingMode::SecureStatic;
+    subSettings.resourceFamilyBudget = resourceFamily;
 
-      const std::string_view subSource(reinterpret_cast<const char*>(svgContent.data()),
-                                       svgContent.size());
-      auto result = SVGParser::ParseSVG(subSource, warnings, Options(), std::move(subSettings));
-      if (result.hasError()) {
-        warnings.add(ParseDiagnostic(result.error()));
-        return std::nullopt;
-      }
-      return result.result().handle();
-    };
-  }
+    const std::string_view subSource(reinterpret_cast<const char*>(svgContent.data()),
+                                     svgContent.size());
+    auto result =
+        SVGParser::ParseSVG(subSource, warnings, SVGParser::Options(), std::move(subSettings));
+    if (result.hasError()) {
+      warnings.add(ParseDiagnostic(result.error()));
+      return std::nullopt;
+    }
+    return result.result().handle();
+  };
+  return settings;
+}
 
+ParseResult<xml::XMLDocument> ParseXmlDocument(std::string_view source,
+                                               const SVGParser::Options& options) {
   xml::XMLParser::Options xmlOptions;
   xmlOptions.parseCustomEntities = true;
   xmlOptions.maximumInputSize = options.maximumInputSize;
+  xmlOptions.maxElements = options.maximumTreeNodes;
+  xmlOptions.maxNestingDepth = static_cast<int>(std::min(
+      options.maximumTreeDepth, static_cast<std::size_t>(std::numeric_limits<int>::max())));
 
   std::vector<uint8_t> decompressedData;
   if (source.size() >= 2 && static_cast<unsigned char>(source[0]) == 0x1F &&
@@ -565,7 +794,6 @@ ParseResult<SVGDocument> SVGParser::ParseSVG(std::string_view source, ParseWarni
     if (maybeDecompressedData.hasError()) {
       return std::move(maybeDecompressedData.error());
     }
-
     decompressedData = std::move(maybeDecompressedData.result());
     source =
         std::string_view(reinterpret_cast<char*>(decompressedData.data()), decompressedData.size());
@@ -575,12 +803,29 @@ ParseResult<SVGDocument> SVGParser::ParseSVG(std::string_view source, ParseWarni
   if (maybeDocument.hasError()) {
     return std::move(maybeDocument.error());
   }
+  xml::XMLDocument document(maybeDocument.result());
+  document.setSourceEditTreeLimits(options.maximumTreeNodes, options.maximumTreeDepth);
+  return document;
+}
 
-  xml::XMLDocument xmlDocument(maybeDocument.result());
+}  // namespace
 
-  SVGParserContext context(source, warningSink, options);
+ParseResult<SVGDocument> SVGParser::ParseSVG(std::string_view source, ParseWarningSink& warningSink,
+                                             SVGParser::Options options,
+                                             SVGDocument::Settings settings) noexcept {
+  if (source.size() > options.maximumInputSize) {
+    return ParseDiagnostic::Error("SVG source exceeds maximum input size", FileOffset::Offset(0));
+  }
+
+  settings = PrepareDocumentSettings(options, std::move(settings));
+  auto maybeXmlDocument = ParseXmlDocument(source, options);
+  if (maybeXmlDocument.hasError()) {
+    return std::move(maybeXmlDocument.error());
+  }
+  xml::XMLDocument xmlDocument(maybeXmlDocument.result());
+  SVGParserContext context(xmlDocument.source(), warningSink, options);
   SVGParserImpl parser(context, xmlDocument.sharedRegistry(), std::move(settings));
-  if (auto error = parser.walkChildren(std::nullopt, xmlDocument.root())) {
+  if (auto error = parser.walkChildren(std::nullopt, xmlDocument.root(), 0)) {
     return std::move(error.value());
   }
 
@@ -598,9 +843,10 @@ ParseResult<SVGDocument> SVGParser::ParseXMLDocument(xml::XMLDocument&& xmlDocum
                                                      ParseWarningSink& warningSink,
                                                      SVGParser::Options options,
                                                      SVGDocument::Settings settings) noexcept {
+  xmlDocument.setSourceEditTreeLimits(options.maximumTreeNodes, options.maximumTreeDepth);
   SVGParserContext context(std::string_view(), warningSink, options);
   SVGParserImpl parser(context, xmlDocument.sharedRegistry(), std::move(settings));
-  if (auto error = parser.walkChildren(std::nullopt, xmlDocument.root())) {
+  if (auto error = parser.walkChildren(std::nullopt, xmlDocument.root(), 0)) {
     return std::move(error.value());
   }
 

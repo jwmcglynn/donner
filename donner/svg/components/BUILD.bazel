@@ -20,6 +20,12 @@ donner_cc_library(
 )
 
 donner_cc_library(
+    name = "reference_resolution_budget",
+    hdrs = ["ReferenceResolutionBudget.h"],
+    visibility = ["//donner/svg:__subpackages__"],
+)
+
+donner_cc_library(
     name = "attached_id_lookup",
     srcs = [
         "AttachedIdLookup.cc",
@@ -68,8 +74,10 @@ donner_cc_library(
         "DocumentResourceFamilyBudget.h",
         "ElementTypeComponent.h",
         "EvaluatedReferenceComponent.h",
+        "GeometryPreparationResourceBudget.h",
         "HyperlinkComponent.h",
         "NodeLifetimeCollector.h",
+        "ParsedPayloadResourceBudget.h",
         "PathLengthComponent.h",
         "PreserveAspectRatioComponent.h",
         "RenderingBehaviorComponent.h",

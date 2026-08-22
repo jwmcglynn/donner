@@ -11,8 +11,10 @@
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/SVGGElement.h"
 #include "donner/svg/SVGRectElement.h"
+#include "donner/svg/components/GeometryPreparationResourceBudget.h"
 #include "donner/svg/components/NodeLifetimeCollector.h"
 #include "donner/svg/components/NodeLifetimeComponent.h"
+#include "donner/svg/components/ParsedPayloadResourceBudget.h"
 #include "donner/svg/graph/Reference.h"
 #include "donner/svg/parser/SVGParser.h"
 
@@ -226,6 +228,36 @@ TEST(SVGElementLifetimeTests, DetachedElementCollectedAfterLastHandleIsReleased)
   rect.reset();
 
   EXPECT_FALSE(document.registry().valid(rectEntity));
+}
+
+TEST(SVGElementLifetimeTests, DetachedPayloadAndGeometryStayChargedUntilEntityDestruction) {
+  ParseWarningSink warnings;
+  auto parsed = parser::SVGParser::ParseSVG(
+      R"(<svg xmlns="http://www.w3.org/2000/svg"><rect id="target" data-value="payload"/></svg>)",
+      warnings);
+  ASSERT_FALSE(parsed.hasError());
+  SVGDocument document = std::move(parsed.result());
+  SVGSVGElement root = document.svgElement();
+  std::optional<SVGElement> rect = document.querySelector("#target");
+  ASSERT_TRUE(rect.has_value());
+  const Entity entity = rect->unsafeEntityHandle().entity();
+
+  auto& payloadBudget = document.registry().ctx().get<components::ParsedPayloadResourceBudget>();
+  auto& geometryBudget =
+      document.registry().ctx().emplace<components::GeometryPreparationResourceBudget>();
+  const std::size_t payloadBeforeRemoval = payloadBudget.securityStats().retainedBytes;
+  ASSERT_GT(payloadBeforeRemoval, 0u);
+  ASSERT_TRUE(geometryBudget.reserve(entity, 128));
+
+  root.removeChild(*rect);
+  EXPECT_TRUE(document.registry().valid(entity));
+  EXPECT_EQ(payloadBudget.securityStats().retainedBytes, payloadBeforeRemoval);
+  EXPECT_EQ(geometryBudget.retainedBytes(), 128u);
+
+  rect.reset();
+  EXPECT_FALSE(document.registry().valid(entity));
+  EXPECT_LT(payloadBudget.securityStats().retainedBytes, payloadBeforeRemoval);
+  EXPECT_EQ(geometryBudget.retainedBytes(), 0u);
 }
 
 TEST(SVGElementLifetimeTests, DetachedElementReleasedInsideConcurrentReadUsesUpgrade) {

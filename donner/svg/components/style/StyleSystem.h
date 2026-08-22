@@ -1,7 +1,9 @@
 #pragma once
 /// @file
 
+#include <memory>
 #include <optional>
+#include <unordered_map>
 #include <vector>
 
 #include "donner/base/EcsRegistry.h"
@@ -9,9 +11,163 @@
 #include "donner/base/ParseWarningSink.h"
 #include "donner/css/Specificity.h"
 #include "donner/css/selectors/SelectorMatchOptions.h"
+#include "donner/svg/components/DocumentResourceFamilyBudget.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
 
 namespace donner::svg::components {
+
+/** Aggregate stylesheet cascade and selector traversal budget for one style-computation pass. */
+class StyleResourceBudget {
+public:
+  static constexpr std::size_t kMaximumRuleElementMatches = 1024 * 1024;
+  static constexpr std::size_t kMaximumDeclarationApplications = 1024 * 1024;
+  static constexpr std::size_t kMaximumDeclarationComponentWork = 16 * 1024 * 1024;
+  static constexpr std::size_t kMaximumDeclarationByteWork = 16 * 1024 * 1024;
+  static constexpr std::size_t kMaximumComplexPropertyBytes = 64 * 1024 * 1024;
+
+  struct Limits {
+    std::size_t ruleElementMatches = kMaximumRuleElementMatches;
+    std::size_t declarationApplications = kMaximumDeclarationApplications;
+    std::size_t declarationComponentWork = kMaximumDeclarationComponentWork;
+    std::size_t declarationByteWork = kMaximumDeclarationByteWork;
+    std::size_t complexPropertyBytes = kMaximumComplexPropertyBytes;
+    std::size_t selectorTraversalSteps = css::SelectorTraversalBudget::kMaximumSteps;
+  };
+
+  explicit StyleResourceBudget(std::shared_ptr<DocumentResourceFamilyBudget> family = nullptr)
+      : family_(std::move(family)) {}
+  explicit StyleResourceBudget(Limits limits,
+                               std::shared_ptr<DocumentResourceFamilyBudget> family = nullptr)
+      : limits_(limits),
+        selectorTraversal_(limits.selectorTraversalSteps),
+        family_(std::move(family)) {}
+  ~StyleResourceBudget() {
+    if (family_) {
+      family_->release(DocumentResourceFamilyBudget::Kind::ComputedStyle, complexPropertyBytes_);
+    }
+  }
+
+  StyleResourceBudget(const StyleResourceBudget&) = delete;
+  StyleResourceBudget& operator=(const StyleResourceBudget&) = delete;
+  StyleResourceBudget(StyleResourceBudget&& other) noexcept
+      : limits_(other.limits_),
+        selectorTraversal_(std::move(other.selectorTraversal_)),
+        ruleElementMatches_(other.ruleElementMatches_),
+        declarationApplications_(other.declarationApplications_),
+        declarationComponentWork_(other.declarationComponentWork_),
+        declarationByteWork_(other.declarationByteWork_),
+        complexPropertyBytes_(other.complexPropertyBytes_),
+        rejected_(other.rejected_),
+        family_(std::move(other.family_)),
+        reservations_(std::move(other.reservations_)) {
+    other.complexPropertyBytes_ = 0;
+  }
+  StyleResourceBudget& operator=(StyleResourceBudget&&) = delete;
+
+  void reset() {
+    selectorTraversal_.reset();
+    ruleElementMatches_ = 0;
+    declarationApplications_ = 0;
+    declarationComponentWork_ = 0;
+    declarationByteWork_ = 0;
+    rejected_ = false;
+  }
+
+  [[nodiscard]] bool reserveRuleElementMatch() {
+    if (rejected_ || selectorTraversal_.rejected() ||
+        ruleElementMatches_ >= limits_.ruleElementMatches) {
+      rejected_ = true;
+      return false;
+    }
+    ++ruleElementMatches_;
+    return true;
+  }
+
+  [[nodiscard]] bool reserveDeclarationApplication(std::size_t componentCount = 0,
+                                                   std::size_t sourceBytes = 0) {
+    if (rejected_ || selectorTraversal_.rejected() ||
+        declarationApplications_ >= limits_.declarationApplications ||
+        declarationComponentWork_ > limits_.declarationComponentWork ||
+        componentCount > limits_.declarationComponentWork - declarationComponentWork_ ||
+        declarationByteWork_ > limits_.declarationByteWork ||
+        sourceBytes > limits_.declarationByteWork - declarationByteWork_) {
+      rejected_ = true;
+      return false;
+    }
+    ++declarationApplications_;
+    declarationComponentWork_ += componentCount;
+    declarationByteWork_ += sourceBytes;
+    return true;
+  }
+
+  [[nodiscard]] bool reserveComplexPropertyBytes(Entity entity, std::size_t byteCount) {
+    const std::size_t previous = reservations_[entity];
+    if (byteCount <= previous) {
+      const std::size_t released = previous - byteCount;
+      complexPropertyBytes_ -= released;
+      reservations_[entity] = byteCount;
+      if (family_) {
+        family_->release(DocumentResourceFamilyBudget::Kind::ComputedStyle, released);
+      }
+      return true;
+    }
+
+    const std::size_t additional = byteCount - previous;
+    if (rejected_ || complexPropertyBytes_ > limits_.complexPropertyBytes ||
+        additional > limits_.complexPropertyBytes - complexPropertyBytes_ ||
+        (family_ &&
+         !family_->reserve(DocumentResourceFamilyBudget::Kind::ComputedStyle, additional))) {
+      rejected_ = true;
+      return false;
+    }
+    complexPropertyBytes_ += additional;
+    reservations_[entity] = byteCount;
+    return true;
+  }
+
+  void release(Entity entity) {
+    const auto it = reservations_.find(entity);
+    if (it == reservations_.end()) return;
+    const std::size_t bytes = it->second;
+    complexPropertyBytes_ -= bytes;
+    reservations_.erase(it);
+    if (family_) {
+      family_->release(DocumentResourceFamilyBudget::Kind::ComputedStyle, bytes);
+    }
+  }
+
+  void releaseAll() {
+    if (family_) {
+      family_->release(DocumentResourceFamilyBudget::Kind::ComputedStyle, complexPropertyBytes_);
+    }
+    reservations_.clear();
+    complexPropertyBytes_ = 0;
+  }
+
+  [[nodiscard]] css::SelectorTraversalBudget& selectorTraversal() { return selectorTraversal_; }
+  [[nodiscard]] const css::SelectorTraversalBudget& selectorTraversal() const {
+    return selectorTraversal_;
+  }
+  [[nodiscard]] std::size_t ruleElementMatches() const { return ruleElementMatches_; }
+  [[nodiscard]] std::size_t declarationApplications() const { return declarationApplications_; }
+  [[nodiscard]] std::size_t declarationComponentWork() const { return declarationComponentWork_; }
+  [[nodiscard]] std::size_t declarationByteWork() const { return declarationByteWork_; }
+  [[nodiscard]] std::size_t complexPropertyBytes() const { return complexPropertyBytes_; }
+  [[nodiscard]] bool rejected() const { return rejected_ || selectorTraversal_.rejected(); }
+  [[nodiscard]] const Limits& limits() const { return limits_; }
+
+private:
+  Limits limits_;
+  css::SelectorTraversalBudget selectorTraversal_;
+  std::size_t ruleElementMatches_ = 0;
+  std::size_t declarationApplications_ = 0;
+  std::size_t declarationComponentWork_ = 0;
+  std::size_t declarationByteWork_ = 0;
+  std::size_t complexPropertyBytes_ = 0;
+  bool rejected_ = false;
+  std::shared_ptr<DocumentResourceFamilyBudget> family_;
+  std::unordered_map<Entity, std::size_t> reservations_;
+};
 
 /// Diagnostic record for one stylesheet rule that matched an element.
 struct MatchedStyleRule {
@@ -141,20 +297,14 @@ public:
 
 private:
   void applyStylesheetRules(Registry& registry, Entity treeEntity, Entity dataEntity,
-                            PropertyRegistry& properties,
-                            css::SelectorTraversalBudget& selectorTraversalBudget,
+                            PropertyRegistry& properties, StyleResourceBudget& styleBudget,
                             ParseWarningSink& warningSink);
   PropertyRegistry inheritProperties(Registry& registry, Entity parent, PropertyRegistry properties,
-                                     ParseWarningSink& warningSink,
-                                     css::SelectorTraversalBudget& selectorTraversalBudget);
+                                     ParseWarningSink& warningSink);
   static void resolveRelativeFontProperties(Registry& registry, Entity parent,
                                             PropertyRegistry& properties);
-  const ComputedStyleComponent& computeStyleWithBudget(
-      EntityHandle handle, ParseWarningSink& warningSink,
-      css::SelectorTraversalBudget& selectorTraversalBudget);
   void computePropertiesInto(EntityHandle handle, ComputedStyleComponent& computedStyle,
-                             ParseWarningSink& warningSink,
-                             css::SelectorTraversalBudget& selectorTraversalBudget);
+                             ParseWarningSink& warningSink);
 };
 
 }  // namespace donner::svg::components

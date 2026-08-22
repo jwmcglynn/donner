@@ -1,6 +1,7 @@
 #pragma once
 /// @file
 
+#include <cstddef>
 #include <cstdint>
 #include <vector>
 
@@ -89,6 +90,9 @@ public:
 
   /// Root entity of the document, which contains the \ref xml_svg element.
   Entity rootEntity = entt::null;
+
+  /// Maximum direct content chunks projected by later incremental source edits.
+  std::size_t maximumContentProjectionChunks = 4096;
 
   /**
    * Get the entity with the given ID, using the internal id-to-entity mapping.
