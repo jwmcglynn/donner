@@ -2,14 +2,13 @@
 /// @brief CSS parser micro-benchmark suite.
 ///
 /// Baseline measurement harness for the `css_token_stream` design doc
-/// (`docs/design_docs/css_token_stream.md`). Measures wall time for the three
+/// (`docs/design_docs/0019-css_token_stream.md`). Measures wall time for the three
 /// public CSS parser entry points on a set of representative inputs, from small
 /// inline `style="..."` attributes to a medium stylesheet typical of an SVG
 /// `<style>` block.
 ///
-/// The `BM_Allocations_*` cases report C++ `operator new` calls and requested
-/// bytes in a separate, single-iteration pass so allocation accounting does not
-/// distort the timed cases.
+/// Allocation measurements live in the separate `css_parse_allocation_bench`
+/// binary so its global allocation instrumentation cannot distort these timings.
 ///
 /// Usage:
 /// ```
@@ -20,80 +19,27 @@
 #include <benchmark/benchmark.h>
 
 #include <cstddef>
-#include <string_view>
 
 #include "donner/base/ParseWarningSink.h"
+#include "donner/benchmarks/CssParserBenchInputs.h"
 #include "donner/css/CSS.h"
-#include "donner/css/parser/details/Tokenizer.h"
-#include "donner/svg/renderer/benchmarks/AllocationTracker.h"
 
 namespace {
 
 using donner::ParseWarningSink;
-using donner::benchmarks::allocations::Scope;
-using donner::benchmarks::allocations::Snapshot;
+using donner::benchmarks::ConsumeCssTokens;
+using donner::benchmarks::kInlineStyleMedium;
+using donner::benchmarks::kInlineStyleShort;
+using donner::benchmarks::kSelectorComplex;
+using donner::benchmarks::kStylesheetMedium;
+using donner::benchmarks::kStylesheetSmall;
 using donner::css::CSS;
-using donner::css::parser::details::Tokenizer;
-
-// Representative CSS inputs of increasing complexity. These are the corpus the
-// design doc references; they are intentionally synthetic so the benchmark is
-// reproducible across machines and over time.
-
-/// Tiny inline style (SVG presentation-attribute fallback). Single declaration.
-constexpr std::string_view kInlineStyleShort = "fill:red";
-
-/// Moderate inline style with several declarations, the common case for SVG
-/// elements that set a handful of presentation properties in one attribute.
-constexpr std::string_view kInlineStyleMedium =
-    "fill:#ff8040;stroke:rgb(0,128,255);stroke-width:2;stroke-linecap:round;"
-    "stroke-linejoin:bevel;opacity:0.8;stroke-dasharray:4 2 1";
-
-/// Short stylesheet with a handful of simple selectors and declarations.
-constexpr std::string_view kStylesheetSmall =
-    "svg { fill: red; stroke: black; }\n"
-    "rect { fill: blue; }\n"
-    ".outline { stroke-width: 2; stroke: currentColor; }\n";
-
-/// Medium stylesheet with ~15 rules, a mix of type/class/attribute/pseudo-class
-/// selectors, and a nested function value. Modeled on an SVG `<style>` block.
-constexpr std::string_view kStylesheetMedium = R"CSS(
-svg { font-family: sans-serif; font-size: 14px; }
-g.layer { opacity: 0.9; }
-g.layer > rect { fill: #eeeeee; stroke: #333; }
-rect.highlight { fill: url(#grad1); stroke-width: 2; }
-rect.highlight:hover { fill: url(#grad2); }
-circle[data-kind="pin"] { fill: hsl(200, 80%, 50%); }
-circle[data-kind="pin"]:nth-child(2n+1) { fill: hsl(20, 80%, 50%); }
-path.outline { fill: none; stroke: currentColor; stroke-width: 1.5; }
-text { font-weight: 600; fill: #111; }
-text.muted { fill: #888; font-style: italic; }
-.marker { stroke-linecap: round; stroke-linejoin: round; }
-g#legend > rect { fill: white; stroke: #ccc; }
-g#legend > text { font-size: 12px; }
-use[href="#icon-warn"] { fill: orange; }
-.hidden { display: none !important; }
-)CSS";
-
-/// Moderately complex single selector - class, attribute, pseudo-class, combinator.
-constexpr std::string_view kSelectorComplex =
-    "div.container > .row[data-role=\"primary\"]:nth-child(2n+1):hover";
 
 // ---- Benchmarks ----
 
-std::size_t ConsumeTokens(std::string_view input) {
-  Tokenizer tokenizer(input);
-  std::size_t tokenCount = 0;
-  while (!tokenizer.isEOF()) {
-    auto token = tokenizer.next();
-    benchmark::DoNotOptimize(token);
-    ++tokenCount;
-  }
-  return tokenCount;
-}
-
 void BM_Tokenize_SingleToken(benchmark::State& state) {
   for (auto _ : state) {
-    std::size_t tokenCount = ConsumeTokens(";");
+    std::size_t tokenCount = ConsumeCssTokens(";");
     benchmark::DoNotOptimize(tokenCount);
   }
   state.SetBytesProcessed(static_cast<int64_t>(state.iterations()));
@@ -102,7 +48,7 @@ BENCHMARK(BM_Tokenize_SingleToken);
 
 void BM_Tokenize_StylesheetMedium(benchmark::State& state) {
   for (auto _ : state) {
-    std::size_t tokenCount = ConsumeTokens(kStylesheetMedium);
+    std::size_t tokenCount = ConsumeCssTokens(kStylesheetMedium);
     benchmark::DoNotOptimize(tokenCount);
   }
   state.SetBytesProcessed(static_cast<int64_t>(state.iterations()) *
@@ -161,42 +107,6 @@ void BM_ParseSelector_Complex(benchmark::State& state) {
                           static_cast<int64_t>(kSelectorComplex.size()));
 }
 BENCHMARK(BM_ParseSelector_Complex);
-
-template <typename Operation>
-void MeasureAllocations(benchmark::State& state, Operation operation) {
-  Snapshot snapshot;
-  for (auto _ : state) {
-    Scope scope;
-    auto result = operation();
-    benchmark::DoNotOptimize(result);
-    snapshot = scope.stop();
-  }
-
-  state.counters["allocation_calls"] = static_cast<double>(snapshot.allocationCalls);
-  state.counters["allocation_bytes"] = static_cast<double>(snapshot.allocationBytes);
-}
-
-void BM_Allocations_TokenizeSingleToken(benchmark::State& state) {
-  MeasureAllocations(state, [] { return ConsumeTokens(";"); });
-  state.counters["tokenizer_bytes"] = static_cast<double>(sizeof(Tokenizer));
-}
-BENCHMARK(BM_Allocations_TokenizeSingleToken)->Iterations(1);
-
-void BM_Allocations_TokenizeStylesheetMedium(benchmark::State& state) {
-  MeasureAllocations(state, [] { return ConsumeTokens(kStylesheetMedium); });
-}
-BENCHMARK(BM_Allocations_TokenizeStylesheetMedium)->Iterations(1);
-
-void BM_Allocations_ParseStyleAttributeMedium(benchmark::State& state) {
-  MeasureAllocations(state, [] { return CSS::ParseStyleAttribute(kInlineStyleMedium); });
-}
-BENCHMARK(BM_Allocations_ParseStyleAttributeMedium)->Iterations(1);
-
-void BM_Allocations_ParseStylesheetMedium(benchmark::State& state) {
-  ParseWarningSink sink;
-  MeasureAllocations(state, [&sink] { return CSS::ParseStylesheet(kStylesheetMedium, sink); });
-}
-BENCHMARK(BM_Allocations_ParseStylesheetMedium)->Iterations(1);
 
 }  // namespace
 

@@ -2,7 +2,7 @@
 
 load("@rules_shell//shell:sh_test.bzl", "sh_test")
 load("//build_defs:package.bzl", "donner_package")
-load("//build_defs:rules.bzl", "donner_cc_binary")
+load("//build_defs:rules.bzl", "donner_cc_binary", "donner_cc_library")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -17,16 +17,33 @@ donner_cc_binary(
 
 donner_cc_binary(
     name = "css_parse_perf_bench",
+    srcs = ["CssParsePerfBench.cpp"],
+    deps = [
+        ":css_parser_bench_inputs",
+        "//donner/base",
+        "//donner/css",
+        "@google_benchmark//:benchmark_main",
+    ],
+)
+
+donner_cc_binary(
+    name = "css_parse_allocation_bench",
     srcs = [
-        "CssParsePerfBench.cpp",
+        "CssParseAllocationBench.cpp",
         "//donner/svg/renderer/benchmarks:AllocationTracker.h",
     ],
     deps = [
+        ":css_parser_bench_inputs",
         "//donner/base",
         "//donner/css",
-        "//donner/css/parser",
         "@google_benchmark//:benchmark_main",
     ],
+)
+
+donner_cc_library(
+    name = "css_parser_bench_inputs",
+    hdrs = ["CssParserBenchInputs.h"],
+    deps = ["//donner/css/parser"],
 )
 
 donner_cc_binary(
