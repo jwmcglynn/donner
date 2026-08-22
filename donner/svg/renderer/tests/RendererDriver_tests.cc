@@ -298,6 +298,58 @@ TEST_F(RendererDriverTest, ClipGeometryAdmissionAggregatesAcrossTheTraversal) {
   driver.draw(document);
 }
 
+TEST_F(RendererDriverTest, ClipGeometryAdmissionPersistsAcrossCurrentFrameSubTraversals) {
+  constexpr std::size_t kMaximumClipShapes =
+      RendererTextMaterializationBudget::kMaximumUniqueOutlines;
+  std::string svg = R"svg(<defs><clipPath id="exact">)svg";
+  for (std::size_t i = 0; i < kMaximumClipShapes; ++i) {
+    svg += R"svg(<path d="M0 0L1 1"/>)svg";
+  }
+  svg += R"svg(</clipPath><clipPath id="extra"><path d="M0 0L1 1"/></clipPath></defs>
+              <rect width="1" height="1" clip-path="url(#exact)"/>
+              <rect width="1" height="1" clip-path="url(#extra)"/>)svg";
+  SVGDocument document = makeDocument(svg, Vector2i(1, 1));
+
+  ParseWarningSink warnings;
+  RendererUtils::prepareDocumentForRendering(document, false, warnings);
+  ASSERT_FALSE(warnings.hasWarnings());
+
+  Entity exactEntity = entt::null;
+  Entity extraEntity = entt::null;
+  Registry& registry = document.registry();
+  for (auto view = registry.view<components::RenderingInstanceComponent>();
+       const Entity entity : view) {
+    const auto& instance = view.get<components::RenderingInstanceComponent>(entity);
+    const auto* clipPaths =
+        instance.styleHandle(registry).try_get<components::ComputedClipPathsComponent>();
+    if (clipPaths == nullptr) {
+      continue;
+    }
+    if (clipPaths->clipPaths.size() == kMaximumClipShapes) {
+      exactEntity = entity;
+    } else if (clipPaths->clipPaths.size() == 1u) {
+      extraEntity = entity;
+    }
+  }
+  ASSERT_TRUE(exactEntity != entt::null);
+  ASSERT_TRUE(extraEntity != entt::null);
+
+  EXPECT_CALL(renderer, pushClip(_))
+      .WillOnce([=](const ResolvedClip& clip) {
+        EXPECT_THAT(clip.clipPaths, SizeIs(kMaximumClipShapes));
+      })
+      .WillOnce([](const ResolvedClip& clip) {
+        ASSERT_THAT(clip.clipPaths, SizeIs(1));
+        EXPECT_TRUE(clip.clipPaths.front().path.empty());
+      });
+
+  const RenderViewport viewport{.size = Vector2d(1.0, 1.0), .devicePixelRatio = 1.0};
+  driver.drawEntityRangeIntoCurrentFrame(registry, exactEntity, exactEntity, viewport,
+                                         Transform2d());
+  driver.drawEntityRangeIntoCurrentFrame(registry, extraEntity, extraEntity, viewport,
+                                         Transform2d());
+}
+
 TEST_F(RendererDriverTest, EmitsTextDrawCallsForSolidFill) {
   SVGDocument document = makeDocument(R"svg(
     <text x="2" y="3" fill="#00FF00">hi</text>
