@@ -159,6 +159,18 @@ TEST(UrlLoader, ExhaustedAggregateBudgetDoesNotFetchExternalResource) {
               VariantWith<UrlLoaderError>(UrlLoaderError::ResourceTooLarge));
   EXPECT_EQ(loader.fetchCount(), 0u);
 }
+
+TEST(UrlLoader, ZeroPerResourceLimitDoesNotConsumeAggregateBudget) {
+  InProcResourceLoader loader;
+  size_t remainingResourceBytes = 44;
+  UrlLoader urlLoader(loader, /*maximumResourceSize=*/0, &remainingResourceBytes);
+
+  EXPECT_THAT(urlLoader.fromUri("asset/"),
+              VariantWith<UrlLoaderError>(UrlLoaderError::ResourceTooLarge));
+  EXPECT_EQ(loader.fetchCount(), 0u);
+  EXPECT_EQ(remainingResourceBytes, 44u);
+}
+
 TEST(UrlLoader, RejectsOversizedOrInvalidExternalUriBeforeCallback) {
   InProcResourceLoader loader;
   size_t remainingResourceBytes = 16;

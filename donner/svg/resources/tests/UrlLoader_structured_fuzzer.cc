@@ -48,12 +48,17 @@ std::string PercentEncode(std::span<const uint8_t> data) {
 extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
   const std::string_view input(reinterpret_cast<const char*>(data), size);  // NOLINT
   const bool forceExternalUriLimit = input.starts_with("external-uri-representation-budget");
+  const bool forceZeroPerResourceLimit = input.starts_with("zero-per-resource-limit");
   FuzzedDataProvider provider(data, size);
-  const size_t maximumResourceSize = provider.ConsumeIntegralInRange<size_t>(0, 128);
-  size_t remainingResourceBytes = provider.ConsumeIntegralInRange<size_t>(0, 256);
+  const size_t maximumResourceSize =
+      forceZeroPerResourceLimit ? 0 : provider.ConsumeIntegralInRange<size_t>(0, 128);
+  size_t remainingResourceBytes =
+      forceZeroPerResourceLimit ? 44 : provider.ConsumeIntegralInRange<size_t>(0, 256);
   const std::vector<uint8_t> payload =
-      provider.ConsumeBytes<uint8_t>(provider.ConsumeIntegralInRange<size_t>(
-          0, std::min<size_t>(128, provider.remaining_bytes())));
+      forceZeroPerResourceLimit
+          ? std::vector<uint8_t>{}
+          : provider.ConsumeBytes<uint8_t>(provider.ConsumeIntegralInRange<size_t>(
+                0, std::min<size_t>(128, provider.remaining_bytes())));
 
   PayloadResourceLoader resourceLoader(payload);
   UrlLoader urlLoader(resourceLoader, maximumResourceSize, &remainingResourceBytes);
