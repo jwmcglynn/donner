@@ -84,6 +84,12 @@ namespace donner::svg {
  */
 class FontManager {
 public:
+  /// Validation-time allocation/work bound for one font outline.
+  struct GlyphOutlineComplexity {
+    std::size_t maximumVertices = 0;
+    std::size_t work = 0;
+  };
+
   /// Default aggregate byte budget for font data loaded into one registry.
   static constexpr size_t kDefaultMaximumLoadedFontBytes = 64 * 1024 * 1024;
 
@@ -209,6 +215,10 @@ public:
 
   /// Returns whether @p handle was loaded from an explicitly trusted source.
   bool isTrustedFont(FontHandle handle) const;
+
+  /// Return a lifetime-safe O(1) pre-decode bound for a validated glyph.
+  std::optional<GlyphOutlineComplexity> glyphOutlineComplexity(FontHandle handle,
+                                                               int glyphIndex) const;
 
   /**
    * Get a table from the cached, validated sfnt directory for a handle.

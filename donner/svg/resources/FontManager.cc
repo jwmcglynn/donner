@@ -532,6 +532,11 @@ bool FontManager::isTrustedFont(FontHandle handle) const {
   return font != nullptr && font->trust == FontDataTrust::Trusted;
 }
 
+std::optional<FontManager::GlyphOutlineComplexity> FontManager::glyphOutlineComplexity(
+    FontHandle /*handle*/, int /*glyphIndex*/) const {
+  return std::nullopt;
+}
+
 std::optional<std::span<const uint8_t>> FontManager::sfntTable(FontHandle handle,
                                                                std::string_view tag) const {
   if (!isValidHandle(handle)) {
