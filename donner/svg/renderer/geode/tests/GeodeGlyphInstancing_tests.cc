@@ -214,8 +214,8 @@ TEST_F(GeodeGlyphInstancingTest, OverlappingTextElementsCompositeInPaintOrder) {
 }
 
 /// Residency is budgeted. Under a budget smaller than the working set the
-/// oldest unused entries are dropped, the dropped glyphs are re-uploaded when
-/// they come back, and the text keeps rendering identically throughout.
+/// oldest unused entries are dropped, misses that cannot be admitted use
+/// frame-scoped geometry, and the text keeps rendering identically throughout.
 TEST_F(GeodeGlyphInstancingTest, EvictionUnderPressureKeepsRenderingCorrect) {
   SVGDocument document = parse(R"svg(
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200"
@@ -237,8 +237,8 @@ TEST_F(GeodeGlyphInstancingTest, EvictionUnderPressureKeepsRenderingCorrect) {
   const Frame squeezed = render(renderer, document);
   EXPECT_GT(squeezed.counters.glyphResidencyEvictions, 0u)
       << "A budget below the working set must drop entries.";
-  EXPECT_GT(squeezed.counters.glyphResidencyUploads, 0u)
-      << "Glyphs dropped by the trim must be re-uploaded when they are drawn again.";
+  EXPECT_LE(renderer.residentGlyphCountForTesting(document), 2u)
+      << "The current frame must not repopulate the cache past its admission limit.";
   EXPECT_EQ(nonTransparentPixels(squeezed.bitmap), covered)
       << "Eviction must not change what the frame draws.";
 
