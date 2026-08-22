@@ -90,9 +90,20 @@ inline std::optional<BgraBitmapLayout> ValidateBgraBitmapLayout(unsigned int wid
 }
 
 /// Convert one validated BGRA bitmap into tightly packed logical-row-order RGBA pixels.
-inline std::vector<uint8_t> ConvertValidatedBgraToRgba(const uint8_t* /*buffer*/,
-                                                       const BgraBitmapLayout& /*layout*/) {
-  return {};
+inline std::vector<uint8_t> ConvertValidatedBgraToRgba(const uint8_t* buffer,
+                                                       const BgraBitmapLayout& layout) {
+  std::vector<uint8_t> rgba(layout.rgbaBytes);
+  for (int row = 0; row < layout.height; ++row) {
+    const uint8_t* source = buffer + static_cast<std::ptrdiff_t>(row) * layout.pitch;
+    uint8_t* destination = rgba.data() + static_cast<std::size_t>(row) * layout.rowBytes;
+    for (int column = 0; column < layout.width; ++column) {
+      destination[column * 4 + 0] = source[column * 4 + 2];
+      destination[column * 4 + 1] = source[column * 4 + 1];
+      destination[column * 4 + 2] = source[column * 4 + 0];
+      destination[column * 4 + 3] = source[column * 4 + 3];
+    }
+  }
+  return rgba;
 }
 
 }  // namespace donner::svg::details
