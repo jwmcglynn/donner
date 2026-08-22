@@ -2608,6 +2608,11 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
   size_t glyphCacheMaxEntries = geode::GeodeGlyphCache::kDefaultMaxEntries;
   uint64_t glyphCacheMaxEncodedBytes = geode::GeodeGlyphCache::kDefaultMaxEncodedBytes;
 
+  /// Non-cached glyphs needed after the document cache reaches its admission cap. The deque keeps
+  /// entry addresses stable for the frame's pending scene batches; beginFrame clears it only after
+  /// the previous frame has submitted and its pending batch has been discarded.
+  std::deque<geode::GeodeGlyphResidentEntry> transientGlyphEntries;
+
   /// Document-scoped glyph-outline residency. Mirrors `residentSlab`'s
   /// registry-context wiring: one cache per document, replaced when a
   /// different device renders the document, because every cached entry holds
@@ -2729,14 +2734,36 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
     if (entry != nullptr) {
       device->countGlyphResidencyHit();
     } else {
+      // Admission has to happen before outline decoding and before insertion. The frame-start
+      // trim cannot bound a cache that begins below its limit and creates a large working set in
+      // one frame; entries touched by that open frame are intentionally ineligible for eviction.
+      // Reclaim only entries no open frame can still reference, then fail closed if the new entry
+      // still would exceed the configured count cap.
+      bool cacheAdmissionAvailable = glyphCacheMaxEntries != 0u;
+      if (cacheAdmissionAvailable && cache->size() >= glyphCacheMaxEntries) {
+        const size_t evicted =
+            cache->evictToBudget(device->oldestOpenFrameGeneration(), glyphCacheMaxEntries - 1u,
+                                 glyphCacheMaxEncodedBytes);
+        device->countGlyphResidencyEvictions(evicted);
+        if (cache->size() >= glyphCacheMaxEntries) {
+          cacheAdmissionAvailable = false;
+        }
+      }
       Path outline = buildOutline();
       geode::EncodedPath encoded;
       if (!outline.empty()) {
         device->countPathEncode();
         encoded = geode::GeodePathEncoder::encode(outline, FillRule::NonZero);
       }
-      entry = cache->insert(key, std::move(outline), std::move(encoded));
-      device->countGlyphResidencyUpload();
+      if (cacheAdmissionAvailable) {
+        entry = cache->insert(key, std::move(outline), std::move(encoded));
+        device->countGlyphResidencyUpload();
+      } else {
+        transientGlyphEntries.emplace_back();
+        entry = &transientGlyphEntries.back();
+        entry->outline = std::move(outline);
+        entry->encoded = std::move(encoded);
+      }
     }
     entry->lastUsedFrame = currentFrameIndex;
 
@@ -3868,6 +3895,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
     }
     lastDrawSourceEntity = entt::null;
     pendingBatch.reset();
+    transientGlyphEntries.clear();
     counters.reset();
   }
 
