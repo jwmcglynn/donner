@@ -974,7 +974,7 @@ public:
 
   std::optional<std::vector<CffGlyphOutlineComplexity>> resolveAll() {
     for (std::size_t glyph = 0; glyph < raw_.size(); ++glyph) {
-      if (!resolve(glyph)) return std::nullopt;
+      if (!resolve(glyph, 0)) return std::nullopt;
     }
     return resolved_;
   }
@@ -1000,8 +1000,11 @@ private:
     return true;
   }
 
-  bool resolve(std::size_t glyph) {
-    if (states_[glyph] == State::Complete) return true;
+  bool resolve(std::size_t glyph, std::size_t currentDepth) {
+    if (currentDepth > kMaximumSubroutineDepth) return false;
+    if (states_[glyph] == State::Complete) {
+      return depths_[glyph] <= kMaximumSubroutineDepth - currentDepth;
+    }
     if (states_[glyph] == State::Visiting) return false;
     states_[glyph] = State::Visiting;
 
@@ -1009,10 +1012,9 @@ private:
     std::size_t work = raw_[glyph].direct.work;
     std::size_t depth = 0;
     if (raw_[glyph].components.has_value()) {
-      if (!budget_->charge(2)) return false;
-      resolutionWork_ += 2;
+      if (currentDepth >= kMaximumSubroutineDepth) return false;
       for (const std::size_t component : *raw_[glyph].components) {
-        if (component >= raw_.size() || !resolve(component)) return false;
+        if (component >= raw_.size() || !resolve(component, currentDepth + 1)) return false;
         depth = std::max(depth, depths_[component] + 1);
         const CffGlyphOutlineComplexity& child = resolved_[component];
         if (!addVertices(&vertices, child.maximumVertices) || !addWork(&work, child.work) ||
@@ -1021,6 +1023,8 @@ private:
         }
       }
       if (depth > kMaximumSubroutineDepth) return false;
+      if (!budget_->charge(2)) return false;
+      resolutionWork_ += 2;
     }
 
     resolved_[glyph] = {.maximumVertices = static_cast<uint32_t>(vertices),
