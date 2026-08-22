@@ -1,6 +1,7 @@
 # Design: Parse-Lifetime String References and Finalization
 
-**Status:** Draft
+**Status:** In Progress. Allocation and peak-live-memory baselines are gated; source-backed string
+storage is the active milestone.
 **Author:** GPT-5
 **Created:** 2026-08-22
 
@@ -48,19 +49,21 @@ dependence on the caller's input buffer. Only source-retained mode keeps a sourc
 ## Next Steps
 
 - Confirm the two result modes, copy-on-write boundary, and performance rubric.
-- Add phase-separated XML/SVG allocation benchmarks for XML attributes before changing
-  representation.
-- Prototype source-backed `RcString` slices for source-retained parses, then compact mode.
+- Prototype source-backed `RcString` slices for source-retained parses.
+- Preserve the baseline gates while adding copy-on-write source storage.
 
 ## Implementation Plan
 
-- [ ] Milestone 1: Establish allocation, retained-memory, and lifetime baselines.
-  - [ ] Extend the SVG parse benchmark with C++ allocation calls/requested bytes split into XML
-        parse, string finalization, and SVG projection phases.
-  - [ ] Add representative repeated-name, long-value, namespace, entity-expansion, and structured
-        editing inputs.
-  - [ ] Record parent CPU, allocation, requested-byte, and retained-byte results in this design.
+- [x] Milestone 1: Establish allocation, retained-memory, and lifetime baselines.
+  - [x] Add deterministic C++ allocation calls, requested bytes, retained live bytes, and peak live
+        requested bytes to the allocation tracker.
+  - [x] Add repeated-attribute and canonical `donner_splash.svg` parse gates.
+  - [x] Record parent allocation, requested-byte, retained-byte, and peak-live-byte results.
 - [ ] Milestone 2: Add source-backed parse strings and copy-on-write source retention.
+  - [ ] Add shared external backing support to `RcString` without changing its public value API.
+  - [ ] Make `XMLSourceStore` source storage copy-on-write.
+  - [ ] Route direct XML attribute names and values through source-backed slices.
+  - [ ] Prove edited and unchanged attributes remain correct across the first and later edits.
 - [ ] Milestone 3: Add compact/intern finalization for non-source-retained parses.
 - [ ] Milestone 4: Prove structured-editing and diagnostic parity.
 - [ ] Milestone 5: Evaluate SVG/CSS adoption and decide whether to extend or stop.
@@ -207,6 +210,17 @@ The benchmark reports both result modes and separate phases so the optimization 
 - SVG projection CPU and allocations;
 - complete `SVGParser::ParseSVG` CPU and allocations.
 - first structured-edit copy-on-write CPU and retained snapshot bytes for source-retained mode.
+
+Parent allocation baselines on the measured macOS system:
+
+| Workload            |  Calls | Requested bytes | Retained bytes | Peak live bytes |
+| ------------------- | -----: | --------------: | -------------: | --------------: |
+| Repeated attributes | 14,358 |       6,411,849 |      6,066,487 |       6,066,487 |
+| Donner Splash       | 23,000 |       9,042,703 |      8,243,148 |       8,243,268 |
+
+The CI ceilings include portability headroom for standard-library layout differences. Source
+loading is outside the measured scope, and the parsed document remains alive when retained and peak
+bytes are sampled.
 
 Acceptance requires:
 

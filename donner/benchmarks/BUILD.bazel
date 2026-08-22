@@ -2,7 +2,7 @@
 
 load("@rules_shell//shell:sh_test.bzl", "sh_test")
 load("//build_defs:package.bzl", "donner_package")
-load("//build_defs:rules.bzl", "donner_cc_binary", "donner_cc_library")
+load("//build_defs:rules.bzl", "donner_cc_binary", "donner_cc_library", "donner_cc_test")
 
 package(default_visibility = ["//visibility:public"])
 
@@ -53,6 +53,21 @@ donner_cc_binary(
         "//donner/base",
         "//donner/svg",
         "//donner/svg/parser",
+    ],
+)
+
+donner_cc_test(
+    name = "svg_parse_allocation_tests",
+    srcs = [
+        "SvgParseAllocation_tests.cc",
+        "//donner/svg/renderer/benchmarks:AllocationTracker.h",
+    ],
+    data = ["//:donner_splash.svg"],
+    deps = [
+        "//donner/base",
+        "//donner/svg",
+        "//donner/svg/parser",
+        "@com_google_gtest//:gtest_main",
     ],
 )
 

@@ -42,6 +42,8 @@ void MeasureAllocations(benchmark::State& state, Operation operation) {
 
   state.counters["allocation_calls"] = static_cast<double>(snapshot.allocationCalls);
   state.counters["allocation_bytes"] = static_cast<double>(snapshot.allocationBytes);
+  state.counters["live_bytes"] = static_cast<double>(snapshot.liveBytes);
+  state.counters["peak_live_bytes"] = static_cast<double>(snapshot.peakLiveBytes);
 }
 
 void BM_Allocations_TokenizeSingleToken(benchmark::State& state) {
