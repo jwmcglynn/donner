@@ -111,6 +111,12 @@ public:
 
     /** Maximum nested SVG element depth converted from an XML document. */
     size_t maximumTreeDepth = kDefaultMaximumTreeDepth;
+
+    /**
+     * Retain editable XML source and allow persistent strings to share its copy-on-write snapshot.
+     * Disable for parse-and-render documents that prefer compact interned strings.
+     */
+    bool retainSource = true;
   };
 
   /**

@@ -49,6 +49,7 @@ donner_cc_library(
 donner_cc_binary(
     name = "svg_parse_perf_bench",
     srcs = ["SvgParsePerfBench.cpp"],
+    data = ["//:donner_splash.svg"],
     deps = [
         "//donner/base",
         "//donner/svg",

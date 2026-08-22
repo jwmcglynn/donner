@@ -87,6 +87,20 @@ public:
    */
   const xml::XMLQualifiedName& tagName() const UTILS_LIFETIME_BOUND { return tagName_; }
 
+  /// Replace the owned tag-name strings during parse finalization.
+  template <typename RemapFn>
+  void remapStrings(RemapFn&& remap) {
+    tagName_.namespacePrefix = remap(tagName_.namespacePrefix);
+    tagName_.name = remap(tagName_.name);
+  }
+
+  /// Visit every persistent tag-name string before parse finalization.
+  template <typename VisitFn>
+  void visitStrings(VisitFn&& visit) const {
+    visit(tagName_.namespacePrefix);
+    visit(tagName_.name);
+  }
+
   /// Get the parent of this node, if it has one. Returns \c entt::null if this is the root.
   Entity parent() const { return parent_; }
 

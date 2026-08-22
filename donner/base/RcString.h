@@ -241,6 +241,9 @@ public:
    */
   size_t size() const { return data_.isLong() ? data_.long_.size() : data_.short_.size(); }
 
+  /// Return whether this value can be stored entirely in the inline short-string representation.
+  bool fitsInlineStorage() const { return size() <= kShortStringCapacity; }
+
   /**
    * @return the string as a std::string.
    */

@@ -44,6 +44,20 @@ constexpr ParseAllocationBudget kDonnerSplashBudget = {
     .peakLiveBytes = 9'500'000,
 };
 
+constexpr ParseAllocationBudget kRepeatedAttributesCompactBudget = {
+    .allocationCalls = 16'000,
+    .allocationBytes = 7'000'000,
+    .liveBytes = 5'900'000,
+    .peakLiveBytes = 7'100'000,
+};
+
+constexpr ParseAllocationBudget kDonnerSplashCompactBudget = {
+    .allocationCalls = 26'000,
+    .allocationBytes = 10'000'000,
+    .liveBytes = 8'100'000,
+    .peakLiveBytes = 9'000'000,
+};
+
 std::optional<std::string> ReadFile(std::string_view path) {
   std::ifstream file(std::string(path), std::ios::binary);
   if (!file) {
@@ -65,10 +79,12 @@ std::string RepeatedAttributesSvg() {
   return source;
 }
 
-std::optional<Snapshot> MeasureParse(std::string_view source, std::string& error) {
+std::optional<Snapshot> MeasureParse(std::string_view source, bool retainSource,
+                                     std::string& error) {
   ParseWarningSink warningSink = ParseWarningSink::Disabled();
   SVGParser::Options options;
   options.disableUserAttributes = false;
+  options.retainSource = retainSource;
 
   allocations::Scope scope;
   auto parsed = SVGParser::ParseSVG(source, warningSink, options);
@@ -118,10 +134,19 @@ TEST(AllocationTrackerTest, TracksLiveAndPeakRequestedBytes) {
 TEST(SvgParseAllocationTest, RepeatedAttributes) {
   const std::string source = RepeatedAttributesSvg();
   std::string error;
-  const std::optional<Snapshot> snapshot = MeasureParse(source, error);
+  const std::optional<Snapshot> snapshot = MeasureParse(source, true, error);
   ASSERT_TRUE(snapshot.has_value()) << error;
   PrintSnapshot("repeated_attributes", *snapshot);
   ExpectWithinBudget(*snapshot, kRepeatedAttributesBudget);
+}
+
+TEST(SvgParseAllocationTest, RepeatedAttributesCompact) {
+  const std::string source = RepeatedAttributesSvg();
+  std::string error;
+  const std::optional<Snapshot> snapshot = MeasureParse(source, false, error);
+  ASSERT_TRUE(snapshot.has_value()) << error;
+  PrintSnapshot("repeated_attributes_compact", *snapshot);
+  ExpectWithinBudget(*snapshot, kRepeatedAttributesCompactBudget);
 }
 
 TEST(SvgParseAllocationTest, DonnerSplash) {
@@ -130,10 +155,22 @@ TEST(SvgParseAllocationTest, DonnerSplash) {
   ASSERT_FALSE(source->empty());
 
   std::string error;
-  const std::optional<Snapshot> snapshot = MeasureParse(*source, error);
+  const std::optional<Snapshot> snapshot = MeasureParse(*source, true, error);
   ASSERT_TRUE(snapshot.has_value()) << error;
   PrintSnapshot("donner_splash", *snapshot);
   ExpectWithinBudget(*snapshot, kDonnerSplashBudget);
+}
+
+TEST(SvgParseAllocationTest, DonnerSplashCompact) {
+  const std::optional<std::string> source = ReadFile("donner_splash.svg");
+  ASSERT_TRUE(source.has_value()) << "donner_splash.svg not found in runfiles";
+  ASSERT_FALSE(source->empty());
+
+  std::string error;
+  const std::optional<Snapshot> snapshot = MeasureParse(*source, false, error);
+  ASSERT_TRUE(snapshot.has_value()) << error;
+  PrintSnapshot("donner_splash_compact", *snapshot);
+  ExpectWithinBudget(*snapshot, kDonnerSplashCompactBudget);
 }
 
 }  // namespace

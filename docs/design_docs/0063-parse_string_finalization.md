@@ -1,7 +1,8 @@
 # Design: Parse-Lifetime String References and Finalization
 
-**Status:** In Progress. Allocation and peak-live-memory baselines are gated, and source-retained
-copy-on-write storage is implemented. Compact/intern finalization is the active milestone.
+**Status:** In Progress. Source-retained copy-on-write storage and opt-in compact/intern
+finalization are implemented. Compact mode reduces retained memory but misses the CPU and allocation
+call gates; rollout awaits an explicit tradeoff decision.
 **Author:** GPT-5
 **Created:** 2026-08-22
 
@@ -49,8 +50,8 @@ dependence on the caller's input buffer. Only source-retained mode keeps a sourc
 ## Next Steps
 
 - Confirm the two result modes, copy-on-write boundary, and performance rubric.
-- Implement compact/intern finalization for non-source-retained parses.
-- Preserve source-retained structured-editing behavior while releasing compact-mode source storage.
+- Decide whether the compact mode's retained-memory reduction justifies its opt-in CPU cost.
+- If approved, evaluate short-result SSO detachment while preserving reference-backed parser cursors.
 
 ## Implementation Plan
 
@@ -64,7 +65,7 @@ dependence on the caller's input buffer. Only source-retained mode keeps a sourc
   - [x] Make `XMLSourceStore` source storage copy-on-write.
   - [x] Route direct XML attribute names and values through source-backed slices.
   - [x] Prove edited and unchanged attributes remain correct across source reallocation.
-- [ ] Milestone 3: Add compact/intern finalization for non-source-retained parses.
+- [x] Milestone 3: Add compact/intern finalization for non-source-retained parses.
 - [ ] Milestone 4: Prove structured-editing and diagnostic parity.
 - [ ] Milestone 5: Evaluate SVG/CSS adoption and decide whether to extend or stop.
 
@@ -232,6 +233,20 @@ Source-retained results after Milestone 2:
 Source sharing removes 511 complete-parse allocations from the repeated-attribute case and 241
 from the splash. It does not approach the overall 30% goal because typed SVG geometry, styles, and
 ECS containers dominate complete-parse allocation traffic; compact mode is evaluated separately.
+
+Compact-mode results after node-handle map reuse, packed canonical storage, and long-string-only
+interning:
+
+| Workload            |  Calls | Requested bytes | Retained bytes | Peak live bytes |
+| ------------------- | -----: | --------------: | -------------: | --------------: |
+| Repeated attributes | 14,366 |       6,445,758 |      5,643,255 |       6,066,687 |
+| Donner Splash       | 23,650 |       9,091,974 |      7,689,194 |       8,265,306 |
+
+Relative to source-retained mode, compact mode saves about 7.0% retained memory on repeated
+attributes and 6.7% on the splash. It increases allocation calls by about 3.8%, requested bytes by
+about 1%, and splash parse CPU from about 2.63 ms to 3.02 ms (14.8%). Peak requested bytes remain
+approximately flat. This misses the 5% CPU and allocation-reduction gates, so compact mode remains
+explicit opt-in pending a rollout decision.
 
 Acceptance requires:
 

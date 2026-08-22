@@ -18,6 +18,12 @@ namespace donner::xml {
  */
 class XMLParser {
 public:
+  /// Persistent string-storage behavior for a successful parse result.
+  enum class StringStorageMode {
+    SourceRetained,  ///< Keep eligible strings as slices of copy-on-write source storage.
+    Compact,         ///< Intern and detach strings from parse-time source storage.
+  };
+
   /**
    * Options to modify the parsing behavior.
    */
@@ -33,6 +39,12 @@ public:
 
     /// Maximum encoded XML input bytes accepted before parsing.
     size_t maximumInputSize = 16 * 1024 * 1024;
+
+    /// Persistent string-storage behavior.
+    StringStorageMode stringStorageMode = StringStorageMode::SourceRetained;
+
+    /// Keep the source store in the returned document after string finalization.
+    bool retainSourceStore = true;
 
     /**
      * Parse all nodes in the XML document, including comments, the doctype node, and processing
