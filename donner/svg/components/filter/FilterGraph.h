@@ -720,6 +720,15 @@ inline bool FilterGraphFitsExecutionBudget(const FilterGraph& graph, std::uint64
  */
 class FilterExecutionBudget {
 public:
+  enum class RejectionReason : std::uint8_t {
+    None,
+    InvalidGraph,
+    ExecutionLimit,
+    WorkLimit,
+    MemoryLimit,
+    External,
+  };
+
   /// Maximum number of graph executions, including zero-area and otherwise inexpensive graphs.
   static constexpr std::uint64_t kMaximumExecutions = 1024;
 
@@ -736,16 +745,21 @@ public:
     workUnits_ = 0;
     intermediateBytes_ = 0;
     liveCpuCaptureBytes_ = 0;
+    activeGpuReservations_ = 0;
     captureBytesReserved_ = 0;
+    rejectionReason_ = RejectionReason::None;
     rejected_ = false;
   }
 
   /** Release GPU-retained accounting after submitting one ordered command-buffer chunk. */
-  void beginChunkAfterSubmit() {
+  bool beginChunkAfterSubmit() {
     intermediateBytes_ = 0;
     liveCpuCaptureBytes_ = 0;
+    activeGpuReservations_ = 0;
+    rejectionReason_ = RejectionReason::None;
     rejected_ = false;
     ++chunks_;
+    return true;
   }
 
   /**
@@ -759,20 +773,34 @@ public:
                                      FilterMemoryModel memoryModel, std::uint64_t captureBytes) {
     std::uint64_t graphWorkUnits = 0;
     std::uint64_t graphIntermediateBytes = 0;
-    if (rejected_ || !FilterGraphExecutionCost(graph, pixelCount, memoryModel, graphWorkUnits,
-                                               graphIntermediateBytes)) {
+    if (rejected_) {
+      return std::nullopt;
+    }
+    if (!FilterGraphExecutionCost(graph, pixelCount, memoryModel, graphWorkUnits,
+                                  graphIntermediateBytes)) {
+      rejectionReason_ = RejectionReason::InvalidGraph;
       rejected_ = true;
       return std::nullopt;
     }
 
     const bool gpu = memoryModel == FilterMemoryModel::GpuAllNodes;
     const std::uint64_t retainedBeforeExecution = gpu ? intermediateBytes_ : liveCpuCaptureBytes_;
-    if (executions_ >= kMaximumExecutions || workUnits_ > kMaximumFilterFrameWorkUnits ||
-        graphWorkUnits > kMaximumFilterFrameWorkUnits - workUnits_ ||
-        retainedBeforeExecution > kMaximumFilterFrameBytes ||
+    if (executions_ >= kMaximumExecutions) {
+      rejectionReason_ = RejectionReason::ExecutionLimit;
+      rejected_ = true;
+      return std::nullopt;
+    }
+    if (workUnits_ > kMaximumFilterFrameWorkUnits ||
+        graphWorkUnits > kMaximumFilterFrameWorkUnits - workUnits_) {
+      rejectionReason_ = RejectionReason::WorkLimit;
+      rejected_ = true;
+      return std::nullopt;
+    }
+    if (retainedBeforeExecution > kMaximumFilterFrameBytes ||
         captureBytes > kMaximumFilterFrameBytes - retainedBeforeExecution ||
         graphIntermediateBytes >
             kMaximumFilterFrameBytes - retainedBeforeExecution - captureBytes) {
+      rejectionReason_ = RejectionReason::MemoryLimit;
       rejected_ = true;
       return std::nullopt;
     }
@@ -782,6 +810,7 @@ public:
     captureBytesReserved_ += captureBytes;
     if (gpu) {
       intermediateBytes_ += captureBytes + graphIntermediateBytes;
+      ++activeGpuReservations_;
     } else {
       liveCpuCaptureBytes_ += captureBytes;
     }
@@ -795,6 +824,8 @@ public:
     }
     if (reservation.memoryModel == FilterMemoryModel::CpuFloatNamedResults) {
       liveCpuCaptureBytes_ -= reservation.captureBytes;
+    } else {
+      --activeGpuReservations_;
     }
     reservation.active = false;
   }
@@ -810,7 +841,10 @@ public:
   }
 
   /// Latch the frame closed after an allocation or other external preflight failure.
-  void reject() { rejected_ = true; }
+  void reject() {
+    rejectionReason_ = RejectionReason::External;
+    rejected_ = true;
+  }
 
   [[nodiscard]] std::uint64_t executions() const { return executions_; }
   [[nodiscard]] std::uint64_t workUnits() const { return workUnits_; }
@@ -818,17 +852,21 @@ public:
     return intermediateBytes_ + liveCpuCaptureBytes_;
   }
   [[nodiscard]] std::uint64_t captureBytesReserved() const { return captureBytesReserved_; }
+  [[nodiscard]] std::uint64_t activeGpuReservations() const { return activeGpuReservations_; }
   /// Ordered GPU chunks submitted since this budget was constructed.
   [[nodiscard]] std::uint64_t chunks() const { return chunks_; }
   [[nodiscard]] bool rejected() const { return rejected_; }
+  [[nodiscard]] RejectionReason rejectionReason() const { return rejectionReason_; }
 
 private:
   std::uint64_t executions_ = 0;
   std::uint64_t workUnits_ = 0;
   std::uint64_t intermediateBytes_ = 0;
   std::uint64_t liveCpuCaptureBytes_ = 0;
+  std::uint64_t activeGpuReservations_ = 0;
   std::uint64_t captureBytesReserved_ = 0;
   std::uint64_t chunks_ = 0;
+  RejectionReason rejectionReason_ = RejectionReason::None;
   bool rejected_ = false;
 };
 

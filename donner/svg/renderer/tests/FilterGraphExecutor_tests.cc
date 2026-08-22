@@ -469,6 +469,43 @@ TEST(FilterGraphExecutorTest, ReservesCaptureMemoryBeforeAllocationAndLatchesRej
                    .has_value());
 }
 
+TEST(FilterGraphExecutorTest, PermanentRejectionCannotStartMemoryChunk) {
+  components::FilterGraph invalidGraph;
+  invalidGraph.nodes.resize(components::kMaximumFilterGraphNodes + 1u);
+  components::FilterExecutionBudget budget;
+
+  EXPECT_FALSE(
+      budget.reserve(invalidGraph, 1, components::FilterMemoryModel::GpuAllNodes, 4).has_value());
+  EXPECT_EQ(budget.rejectionReason(),
+            components::FilterExecutionBudget::RejectionReason::InvalidGraph);
+  EXPECT_FALSE(budget.beginChunkAfterSubmit());
+  EXPECT_EQ(budget.chunks(), 0u);
+}
+
+TEST(FilterGraphExecutorTest, ActiveGpuReservationBlocksMemoryChunk) {
+  components::FilterGraph graph;
+  components::FilterNode blur;
+  blur.primitive = components::filter_primitive::GaussianBlur{
+      .stdDeviationX = 3.0,
+      .stdDeviationY = 3.0,
+  };
+  graph.nodes.push_back(std::move(blur));
+
+  constexpr std::uint64_t kPixels = 1024ULL * 1024;
+  constexpr std::uint64_t kCaptureBytes = kPixels * 4;
+  components::FilterExecutionBudget budget;
+  ASSERT_TRUE(
+      budget.reserve(graph, kPixels, components::FilterMemoryModel::GpuAllNodes, kCaptureBytes));
+  while (
+      budget.reserve(graph, kPixels, components::FilterMemoryModel::GpuAllNodes, kCaptureBytes)) {}
+
+  EXPECT_EQ(budget.rejectionReason(),
+            components::FilterExecutionBudget::RejectionReason::MemoryLimit);
+  EXPECT_GT(budget.activeGpuReservations(), 0u);
+  EXPECT_FALSE(budget.beginChunkAfterSubmit());
+  EXPECT_EQ(budget.chunks(), 0u);
+}
+
 TEST(FilterGraphExecutorTest, RejectsNestedCaptureMemoryBeforeAllocation) {
   components::FilterGraph graph;
   components::FilterNode dropShadow;
