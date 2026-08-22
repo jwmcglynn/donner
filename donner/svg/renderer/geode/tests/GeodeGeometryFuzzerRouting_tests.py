@@ -6,6 +6,9 @@ import unittest
 
 
 EXPECTED = {"//donner/svg/renderer/geode:geode_svg_geometry_budget_fuzzer"}
+EXPECTED_EXCLUSIVE = EXPECTED | {
+    "//donner/svg/renderer/geode:geode_svg_geometry_budget_fuzzer_soak"
+}
 
 
 def _labels(path):
@@ -20,6 +23,14 @@ class GeodeGeometryFuzzerRoutingTest(unittest.TestCase):
         self.assertEqual(ubsan, EXPECTED)
         self.assertEqual(asan, ubsan)
         self.assertFalse(any(label.endswith("_soak") for label in asan | ubsan))
+
+    def test_gpu_opening_targets_are_serialized(self):
+        self.assertEqual(_labels(sys.argv[3]), EXPECTED_EXCLUSIVE)
+
+    def test_boundary_oracle_skips_when_no_device_is_available(self):
+        source = Path(sys.argv[4]).read_text(encoding="utf-8")
+        self.assertIn("GeodeDevice::CreateHeadless()", source)
+        self.assertIn("if (!device)", source)
 
 
 if __name__ == "__main__":
