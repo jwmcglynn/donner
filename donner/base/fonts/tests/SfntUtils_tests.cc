@@ -163,6 +163,84 @@ std::vector<uint8_t> MakeCff1WithSubrs(std::vector<uint8_t> charString,
   return result;
 }
 
+std::vector<uint8_t> MakeCff1WithCharset(std::vector<std::vector<uint8_t>> charStrings,
+                                         std::vector<uint16_t> charsetSids,
+                                         std::vector<std::vector<uint8_t>> localSubrs = {}) {
+  EXPECT_EQ(charStrings.size(), charsetSids.size());
+  EXPECT_FALSE(charStrings.empty());
+  EXPECT_EQ(charsetSids.front(), 0u);
+  const std::vector<uint8_t> nameIndex = MakeCffIndex({{'A'}}, false);
+  const std::vector<uint8_t> stringIndex = MakeCffIndex({}, false);
+  const std::vector<uint8_t> globalIndex = MakeCffIndex({}, false);
+  const std::vector<uint8_t> localIndex = MakeCffIndex(localSubrs, false);
+  const std::vector<uint8_t> encodedCharStrings = MakeCffIndex(charStrings, false);
+  std::vector<uint8_t> charset{0};
+  for (size_t glyph = 1; glyph < charsetSids.size(); ++glyph) {
+    charset.push_back(static_cast<uint8_t>(charsetSids[glyph] >> 8));
+    charset.push_back(static_cast<uint8_t>(charsetSids[glyph]));
+  }
+
+  std::vector<uint8_t> topDict;
+  std::vector<uint8_t> topIndex;
+  std::vector<uint8_t> privateDict;
+  for (int iteration = 0; iteration < 8; ++iteration) {
+    topIndex = MakeCffIndex({topDict}, false);
+    const size_t charsetOffset =
+        4 + nameIndex.size() + topIndex.size() + stringIndex.size() + globalIndex.size();
+    privateDict.clear();
+    if (!localSubrs.empty()) {
+      privateDict = EncodeDictInteger(2);
+      privateDict.push_back(19);
+    }
+    const size_t privateOffset = charsetOffset + charset.size();
+    const size_t charStringsOffset =
+        privateOffset + privateDict.size() + (localSubrs.empty() ? 0 : localIndex.size());
+
+    std::vector<uint8_t> nextTop = EncodeDictInteger(charsetOffset);
+    nextTop.push_back(15);
+    const std::vector<uint8_t> encodedCharStringsOffset = EncodeDictInteger(charStringsOffset);
+    nextTop.insert(nextTop.end(), encodedCharStringsOffset.begin(), encodedCharStringsOffset.end());
+    nextTop.push_back(17);
+    if (!privateDict.empty()) {
+      const std::vector<uint8_t> privateSize = EncodeDictInteger(privateDict.size());
+      const std::vector<uint8_t> encodedPrivateOffset = EncodeDictInteger(privateOffset);
+      nextTop.insert(nextTop.end(), privateSize.begin(), privateSize.end());
+      nextTop.insert(nextTop.end(), encodedPrivateOffset.begin(), encodedPrivateOffset.end());
+      nextTop.push_back(18);
+    }
+    if (nextTop == topDict) break;
+    topDict = std::move(nextTop);
+  }
+  topIndex = MakeCffIndex({topDict}, false);
+
+  std::vector<uint8_t> result{1, 0, 4, 4};
+  const auto append = [&](const std::vector<uint8_t>& section) {
+    result.insert(result.end(), section.begin(), section.end());
+  };
+  append(nameIndex);
+  append(topIndex);
+  append(stringIndex);
+  append(globalIndex);
+  append(charset);
+  append(privateDict);
+  if (!localSubrs.empty()) result.insert(result.end(), localIndex.begin(), localIndex.end());
+  result.insert(result.end(), encodedCharStrings.begin(), encodedCharStrings.end());
+  return result;
+}
+
+std::vector<uint8_t> MakeCff1SeacChain(size_t depth, std::vector<uint8_t> leaf,
+                                       std::vector<std::vector<uint8_t>> localSubrs = {}) {
+  std::vector<std::vector<uint8_t>> charStrings{{14}, std::move(leaf)};
+  std::vector<uint16_t> charsetSids{0, 34};
+  for (size_t level = 1; level <= depth; ++level) {
+    const uint8_t previousCode = static_cast<uint8_t>(64 + level);
+    const uint8_t encodedPreviousCode = static_cast<uint8_t>(previousCode + 139);
+    charStrings.push_back({139, 139, encodedPreviousCode, encodedPreviousCode, 14});
+    charsetSids.push_back(static_cast<uint16_t>(34 + level));
+  }
+  return MakeCff1WithCharset(std::move(charStrings), std::move(charsetSids), std::move(localSubrs));
+}
+
 std::vector<uint8_t> MakeCff2WithCharString(std::vector<uint8_t> charString) {
   const std::vector<uint8_t> globalIndex = MakeCffIndex({}, true);
   const std::vector<uint8_t> charStrings = MakeCffIndex({std::move(charString)}, true);
@@ -255,9 +333,10 @@ std::vector<uint8_t> MakeCff2(bool variableCharString = false) {
   return result;
 }
 
-std::vector<uint8_t> MakeCffSfnt(std::string_view tag, std::vector<uint8_t> cff) {
+std::vector<uint8_t> MakeCffSfnt(std::string_view tag, std::vector<uint8_t> cff,
+                                 size_t glyphCount = 1) {
   std::vector<uint8_t> maxp(6, 0);
-  WriteBe16(&maxp, 4, 1);
+  WriteBe16(&maxp, 4, static_cast<uint16_t>(glyphCount));
   return MakeSfnt({{tag, std::move(cff)}, {"maxp", std::move(maxp)}}, 0x4F54544F);
 }
 
@@ -570,24 +649,68 @@ TEST(SfntUtils, CffReportsActualWorkAndStopsAtCallerBudget) {
   EXPECT_THAT(limited.glyphs, testing::IsEmpty());
 }
 
-TEST(SfntUtils, Cff1LegacyEndcharCompositeIsValidatedButNotRenderable) {
-  const std::vector<uint8_t> cff = MakeCff1WithSubrs({139, 139, 204, 247, 86, 14}, {});
-  const CffOutlineValidationResult result = ValidateCffOutlineComplexities(cff, false, 1);
+TEST(SfntUtils, Cff1LegacyEndcharCompositeAggregatesRenderableComponents) {
+  const std::vector<uint8_t> base{139, 139, 21, 149, 139, 5, 14};
+  const std::vector<uint8_t> accent{139, 139, 21, 139, 149, 5, 14};
+  const std::vector<uint8_t> cff =
+      MakeCff1WithCharset({{14}, base, accent, {139, 139, 204, 247, 86, 14}}, {0, 34, 125, 150});
+  const CffOutlineValidationResult result = ValidateCffOutlineComplexities(cff, false, 4);
 
   ASSERT_EQ(result.status, CffOutlineValidationStatus::Complete);
-  ASSERT_EQ(result.glyphs.size(), 1u);
-  EXPECT_FALSE(result.glyphs.front().renderable);
+  ASSERT_EQ(result.glyphs.size(), 4u);
+  EXPECT_TRUE(result.glyphs[3].renderable);
+  EXPECT_EQ(result.glyphs[3].maximumVertices,
+            result.glyphs[1].maximumVertices + result.glyphs[2].maximumVertices);
+  EXPECT_GT(result.glyphs[3].work, result.glyphs[1].work + result.glyphs[2].work);
 
-  const CffOutlineValidationResult withWidth = ValidateCffOutlineComplexities(
-      MakeCff1WithSubrs({149, 139, 139, 204, 247, 86, 14}, {}), false, 1);
-  ASSERT_EQ(withWidth.status, CffOutlineValidationStatus::Complete);
-  ASSERT_EQ(withWidth.glyphs.size(), 1u);
-  EXPECT_FALSE(withWidth.glyphs.front().renderable);
-
-  const auto font = SfntFont::Validate(MakeCffSfnt("CFF ", cff));
+  const auto font = SfntFont::Validate(MakeCffSfnt("CFF ", cff, 4));
   ASSERT_TRUE(font.has_value());
-  EXPECT_EQ(font->numGlyphs(), 1u);
-  EXPECT_FALSE(font->glyphOutlineComplexity(0).has_value());
+  EXPECT_EQ(font->numGlyphs(), 4u);
+  EXPECT_TRUE(font->glyphOutlineComplexity(3).has_value());
+}
+
+TEST(SfntUtils, Cff1SeacRejectsMissingComponentsAndCycles) {
+  const std::vector<uint8_t> missing =
+      MakeCff1WithCharset({{14}, {14}, {14}, {139, 139, 204, 247, 86, 14}}, {0, 34, 126, 150});
+  EXPECT_EQ(ValidateCffOutlineComplexities(missing, false, 4).status,
+            CffOutlineValidationStatus::Invalid);
+
+  const std::vector<uint8_t> cycle = MakeCff1WithCharset({{14}, {139, 139, 204, 139, 14}}, {0, 34});
+  EXPECT_EQ(ValidateCffOutlineComplexities(cycle, false, 2).status,
+            CffOutlineValidationStatus::Invalid);
+}
+
+TEST(SfntUtils, Cff1SeacEnforcesComponentDepthPointAndWorkCaps) {
+  const std::vector<uint8_t> leaf{139, 139, 21, 149, 139, 5, 14};
+  EXPECT_EQ(ValidateCffOutlineComplexities(MakeCff1SeacChain(10, leaf), false, 12).status,
+            CffOutlineValidationStatus::Complete);
+  EXPECT_EQ(ValidateCffOutlineComplexities(MakeCff1SeacChain(11, leaf), false, 13).status,
+            CffOutlineValidationStatus::Invalid);
+
+  std::vector<uint8_t> pointLeaf{139, 139, 21};
+  for (size_t batch = 0; batch < 100; ++batch) {
+    pointLeaf.insert(pointLeaf.end(), 48, 139);
+    pointLeaf.push_back(6);
+  }
+  pointLeaf.push_back(14);
+  EXPECT_EQ(
+      ValidateCffOutlineComplexities(MakeCff1SeacChain(8, std::move(pointLeaf)), false, 10).status,
+      CffOutlineValidationStatus::Invalid);
+
+  std::vector<uint8_t> expensiveSubr;
+  for (size_t operation = 0; operation < 5000; ++operation) {
+    expensiveSubr.insert(expensiveSubr.end(), {139, 12, 18});
+  }
+  expensiveSubr.push_back(11);
+  std::vector<uint8_t> workLeaf{139, 139, 21};
+  for (size_t call = 0; call < 400; ++call) {
+    workLeaf.insert(workLeaf.end(), {32, 10});
+  }
+  workLeaf.push_back(14);
+  EXPECT_EQ(ValidateCffOutlineComplexities(
+                MakeCff1SeacChain(2, std::move(workLeaf), {std::move(expensiveSubr)}), false, 4)
+                .status,
+            CffOutlineValidationStatus::Invalid);
 }
 
 TEST(SfntUtils, CffSubroutinesShareOperandsAndHintState) {
