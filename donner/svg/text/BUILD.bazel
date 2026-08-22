@@ -149,7 +149,7 @@ donner_cc_fuzzer(
     deps = [
         ":text_backend",
         "//donner/base",
-        "//donner/base:base_test_utils",
+        "//donner/base:runfiles",
         "//donner/base/fonts",
         "//donner/base/fonts:sfnt_utils",
         "//donner/svg/resources:font_manager",

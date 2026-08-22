@@ -137,6 +137,18 @@ donner_cc_library(
     ],
 )
 
+# Header-only runfiles access for fuzzer binaries and other executable test harnesses whose
+# generated `_bin` target is intentionally not `testonly`.
+donner_cc_library(
+    name = "runfiles",
+    hdrs = ["tests/Runfiles.h"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":base",
+        "@rules_cc//cc/runfiles",
+    ],
+)
+
 # `gtest_main` replacement that aborts any single test case exceeding
 # `--donner_test_timeout_seconds=N` (or the `DONNER_TEST_TIMEOUT_SECONDS`
 # env var, default 30 s). Use in place of `@com_google_gtest//:gtest_main`
