@@ -1109,90 +1109,26 @@ std::optional<ImageParams> toImageParams(const components::RenderingInstanceComp
 
 }  // namespace
 
-bool RendererDriver::FilterPreparationBudget::beginGraph(SecurityStats* stats) {
-  if (rejected || attempts >= kMaximumPreparedFilterGraphs) {
-    rejected = true;
-    if (stats) {
-      stats->filterPreparationRejected = true;
-    }
-    return false;
-  }
-  ++attempts;
-  if (stats) {
-    stats->filterPreparationAttempts = attempts;
-  }
-  return true;
-}
-
-bool RendererDriver::FilterPreparationBudget::reserveNodes(std::size_t nodeCount,
-                                                           SecurityStats* stats) {
-  if (rejected || nodeCount > kMaximumPreparedFilterNodes - nodes) {
-    rejected = true;
-    if (stats) {
-      stats->filterPreparationRejected = true;
-    }
-    return false;
-  }
-  ++graphs;
-  nodes += nodeCount;
-  if (stats) {
-    stats->preparedFilterGraphs = graphs;
-    stats->preparedFilterNodes = nodes;
-  }
-  return true;
-}
-
-bool RendererDriver::FilterPreparationBudget::reserveImageBytes(std::uint64_t byteCount,
-                                                                SecurityStats* stats) {
-  if (rejected || byteCount > kMaximumPreparedFilterImageBytes - imageBytes) {
-    rejected = true;
-    if (stats) {
-      stats->filterPreparationRejected = true;
-    }
-    return false;
-  }
-  imageBytes += byteCount;
-  if (stats) {
-    stats->preparedFilterImageBytes = imageBytes;
-  }
-  return true;
-}
-
-bool RendererDriver::FilterPreparationBudget::reservePayloadBytes(std::uint64_t byteCount,
-                                                                  SecurityStats* stats) {
-  if (rejected || byteCount > kMaximumPreparedFilterPayloadBytes - payloadBytes) {
-    rejected = true;
-    if (stats) {
-      stats->filterPreparationRejected = true;
-    }
-    return false;
-  }
-  payloadBytes += byteCount;
-  if (stats) {
-    stats->preparedFilterPayloadBytes = payloadBytes;
-  }
-  return true;
-}
-
-bool RendererDriver::FilterPreparationBudget::reserveShadowEntities(std::size_t entityCount,
-                                                                    SecurityStats* stats) {
-  if (rejected || entityCount > kMaximumPreparedFilterShadowEntities - shadowEntities) {
-    rejected = true;
-    if (stats) {
-      stats->filterPreparationRejected = true;
-    }
-    return false;
-  }
-  shadowEntities += entityCount;
-  if (stats) {
-    stats->preparedFilterShadowEntities = shadowEntities;
-  }
-  return true;
+void RendererDriver::syncFilterPreparationStats() {
+  if (!securityStats_) return;
+  securityStats_->filterPreparationAttempts = filterPreparationBudget_->attempts();
+  securityStats_->preparedFilterGraphs = filterPreparationBudget_->graphs();
+  securityStats_->preparedFilterNodes = filterPreparationBudget_->nodes();
+  securityStats_->preparedFilterImageBytes = filterPreparationBudget_->imageBytes();
+  securityStats_->preparedFilterMaterializationBytes =
+      filterPreparationBudget_->materializationBytes();
+  securityStats_->preparedFilterPayloadBytes = filterPreparationBudget_->payloadBytes();
+  securityStats_->preparedFilterShadowEntities = filterPreparationBudget_->shadowEntities();
+  securityStats_->filterPreparationRejected = filterPreparationBudget_->rejected();
 }
 
 RendererDriver::RendererDriver(RendererInterface& renderer, bool verbose,
                                SecurityStats* securityStats)
-    : renderer_(renderer), verbose_(verbose), securityStats_(securityStats) {}
+    : renderer_(renderer), verbose_(verbose), securityStats_(securityStats) {
+  if (RendererFilterPreparationBudget* shared = renderer_.filterPreparationBudget()) {
+    filterPreparationBudget_ = shared;
+  }
+}
 
 void RendererDriver::resetOwnedSecurityBudgets() {
   if (filterPreparationBudget_ == &ownedFilterPreparationBudget_) {
@@ -1291,6 +1227,7 @@ bool RendererDriver::drawInterruptibly(SVGDocument& document, const RenderViewpo
 
   if (mainEntities.empty()) {
     renderer_.beginFrame(viewport);
+    syncFilterPreparationStats();
     renderer_.endFrame();
     return true;
   }
@@ -1342,6 +1279,7 @@ void RendererDriver::drawPreparedDocument(SVGDocument& document, const RenderVie
   surfaceFromCanvasTransform_ = surfaceFromCanvas;
 
   renderer_.beginFrame(viewport);
+  syncFilterPreparationStats();
 
   // Snapshot the entities we intend to traverse BEFORE the filter-graph pre-pass, so that shadow
   // entities created by feImage pre-rendering don't get picked up by the main traversal view.
@@ -1389,6 +1327,7 @@ void RendererDriver::drawEntityRange(Registry& registry, Entity firstEntity, Ent
   surfaceFromCanvasTransform_ = surfaceFromCanvas;
 
   renderer_.beginFrame(viewport);
+  syncFilterPreparationStats();
   (void)drawPreparedEntityRange(registry, firstEntity, lastEntity, {});
   renderer_.endFrame();
   surfaceFromCanvasTransform_ = Transform2d();
@@ -1405,6 +1344,7 @@ bool RendererDriver::drawEntityRangeInterruptibly(Registry& registry, Entity fir
   surfaceFromCanvasTransform_ = surfaceFromCanvas;
 
   renderer_.beginFrame(viewport);
+  syncFilterPreparationStats();
   const bool completed = drawPreparedEntityRange(registry, firstEntity, lastEntity, shouldCancel);
   renderer_.endFrame();
   surfaceFromCanvasTransform_ = Transform2d();
@@ -1910,35 +1850,57 @@ bool RendererDriver::reservePreparedFilterGraph(const components::FilterGraph& f
   for (const components::FilterNode& node : filterGraph.nodes) {
     const std::uint64_t nodeBytes = components::FilterPrimitivePayloadBytes(node.primitive);
     if (nodeBytes > kMaximumPreparedFilterPayloadBytes - payloadBytes) {
-      return filterPreparationBudget_->reservePayloadBytes(kMaximumPreparedFilterPayloadBytes + 1,
-                                                           securityStats_);
+      const bool accepted =
+          filterPreparationBudget_->reservePayloadBytes(kMaximumPreparedFilterPayloadBytes + 1);
+      syncFilterPreparationStats();
+      return accepted;
     }
     payloadBytes += nodeBytes;
   }
-  if (!filterPreparationBudget_->reservePayloadBytes(payloadBytes, securityStats_)) {
+  if (!filterPreparationBudget_->reservePayloadBytes(payloadBytes)) {
+    syncFilterPreparationStats();
     return false;
   }
   const std::optional<std::uint64_t> decodedImageBytes = ExistingFilterImageBytes(filterGraph);
   if (!decodedImageBytes.has_value() ||
-      !filterPreparationBudget_->reserveImageBytes(*decodedImageBytes, securityStats_)) {
+      !filterPreparationBudget_->reserveImageBytes(*decodedImageBytes)) {
+    syncFilterPreparationStats();
     return false;
   }
-  return filterPreparationBudget_->reserveNodes(filterGraph.nodes.size(), securityStats_);
+  const bool accepted = filterPreparationBudget_->reserveNodes(filterGraph.nodes.size());
+  syncFilterPreparationStats();
+  return accepted;
+}
+
+bool RendererDriver::reservePreparedFilterMaterialization(
+    const components::FilterGraph& filterGraph) {
+  const std::optional<std::uint64_t> imageBytes = ExistingFilterImageBytes(filterGraph);
+  const std::uint64_t materializationBytes =
+      !imageBytes.has_value() || *imageBytes > kMaximumPreparedFilterMaterializationBytes / 2u
+          ? kMaximumPreparedFilterMaterializationBytes + 1u
+          : *imageBytes * 2u;
+  const bool accepted = filterPreparationBudget_->reserveMaterializationBytes(materializationBytes);
+  syncFilterPreparationStats();
+  return accepted;
 }
 
 std::optional<std::uint64_t> RendererDriver::reservePreparedFilterImage(Vector2i size) {
   const std::optional<std::uint64_t> bytes = BoundedRgbaBytes(size);
-  if (!bytes.has_value() || !filterPreparationBudget_->reserveImageBytes(*bytes, securityStats_)) {
+  if (!bytes.has_value() || !filterPreparationBudget_->reserveImageBytes(*bytes)) {
+    syncFilterPreparationStats();
     return std::nullopt;
   }
+  syncFilterPreparationStats();
   return bytes;
 }
 
 bool RendererDriver::reservePreparedFilterShadowTree(Registry& registry, Entity targetEntity) {
   const std::optional<std::size_t> entityCount =
       BoundedShadowTreeEntityCount(registry, targetEntity, kMaximumPreparedFilterShadowEntities);
-  return entityCount.has_value() &&
-         filterPreparationBudget_->reserveShadowEntities(*entityCount, securityStats_);
+  if (!entityCount.has_value()) return false;
+  const bool accepted = filterPreparationBudget_->reserveShadowEntities(*entityCount);
+  syncFilterPreparationStats();
+  return accepted;
 }
 
 std::shared_ptr<const std::vector<std::uint8_t>> RendererDriver::adoptPreparedFilterSnapshot(
@@ -1966,9 +1928,11 @@ const components::RenderingInstanceComponent* RendererDriver::beginPreparingFilt
   if (!instance || !instance->resolvedFilter.has_value()) {
     return nullptr;
   }
-  if (!filterPreparationBudget_->beginGraph(securityStats_)) {
+  if (!filterPreparationBudget_->beginGraph()) {
+    syncFilterPreparationStats();
     return nullptr;
   }
+  syncFilterPreparationStats();
   const auto& style = instance->styleHandle(registry).get<components::ComputedStyleComponent>();
   return style.properties.has_value() ? instance : nullptr;
 }
@@ -2018,6 +1982,9 @@ void RendererDriver::prepareFilterGraphs(Registry& registry, std::span<const Ent
         // across them - the next iteration of this loop re-fetches via `storage.get(entity)`.
         preRenderSvgFeImages(*filterGraph, registry);
         preRenderFeImageFragments(*filterGraph, registry, entity, filterRegion);
+      }
+      if (!reservePreparedFilterMaterialization(*filterGraph)) {
+        continue;
       }
     }
 

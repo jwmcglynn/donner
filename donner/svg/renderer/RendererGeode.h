@@ -322,6 +322,7 @@ public:
   void drawText(Registry& registry, const components::ComputedTextComponent& text,
                 const TextParams& params) override;
 
+  [[nodiscard]] RendererFilterPreparationBudget* filterPreparationBudget() override;
   [[nodiscard]] std::unique_ptr<RendererInterface> createOffscreenInstance() const override;
 
   /// Install a zero-default hook entered after the new renderer owns its device.

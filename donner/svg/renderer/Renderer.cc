@@ -646,6 +646,10 @@ bool Renderer::requiresTextureSnapshotPresentation() const {
   return impl_->requiresTextureSnapshotPresentation();
 }
 
+RendererFilterPreparationBudget* Renderer::filterPreparationBudget() {
+  return impl_->filterPreparationBudget();
+}
+
 std::unique_ptr<RendererInterface> Renderer::createOffscreenInstance() const {
   return impl_->createOffscreenInstance();
 }

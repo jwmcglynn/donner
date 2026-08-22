@@ -216,6 +216,110 @@ private:
   bool rejected_ = false;
 };
 
+/** Aggregate filter-graph preparation and source-image materialization budget for one frame. */
+class RendererFilterPreparationBudget {
+public:
+  static constexpr std::size_t kMaximumGraphs =
+      components::FilterExecutionBudget::kMaximumExecutions;
+  static constexpr std::size_t kMaximumNodes =
+      kMaximumGraphs * components::kMaximumFilterGraphNodes;
+  static constexpr std::uint64_t kMaximumImageBytes = 4ULL * 1024 * 1024;
+  static constexpr std::uint64_t kMaximumMaterializationBytes = 2 * kMaximumImageBytes;
+  static constexpr std::uint64_t kMaximumPayloadBytes = 16ULL * 1024 * 1024;
+  static constexpr std::size_t kMaximumShadowEntities = 4096;
+
+  struct Limits {
+    std::size_t graphs = kMaximumGraphs;
+    std::size_t nodes = kMaximumNodes;
+    std::uint64_t imageBytes = kMaximumImageBytes;
+    std::uint64_t materializationBytes = kMaximumMaterializationBytes;
+    std::uint64_t payloadBytes = kMaximumPayloadBytes;
+    std::size_t shadowEntities = kMaximumShadowEntities;
+  };
+
+  void reset() {
+    attempts_ = 0;
+    graphs_ = 0;
+    nodes_ = 0;
+    imageBytes_ = 0;
+    materializationBytes_ = 0;
+    payloadBytes_ = 0;
+    shadowEntities_ = 0;
+    rejected_ = false;
+  }
+
+  [[nodiscard]] bool beginGraph() {
+    if (rejected_ || attempts_ >= limits_.graphs) {
+      rejected_ = true;
+      return false;
+    }
+    ++attempts_;
+    return true;
+  }
+
+  [[nodiscard]] bool reserveNodes(std::size_t count) {
+    if (!reserveCounter(nodes_, count, limits_.nodes)) return false;
+    ++graphs_;
+    return true;
+  }
+
+  [[nodiscard]] bool reserveImageBytes(std::uint64_t count) {
+    return reserveCounter(imageBytes_, count, limits_.imageBytes);
+  }
+
+  [[nodiscard]] bool reserveMaterializationBytes(std::uint64_t count) {
+    return reserveCounter(materializationBytes_, count, limits_.materializationBytes);
+  }
+
+  [[nodiscard]] bool reservePayloadBytes(std::uint64_t count) {
+    return reserveCounter(payloadBytes_, count, limits_.payloadBytes);
+  }
+
+  [[nodiscard]] bool reserveShadowEntities(std::size_t count) {
+    return reserveCounter(shadowEntities_, count, limits_.shadowEntities);
+  }
+
+  [[nodiscard]] std::size_t attempts() const { return attempts_; }
+  [[nodiscard]] std::size_t graphs() const { return graphs_; }
+  [[nodiscard]] std::size_t nodes() const { return nodes_; }
+  [[nodiscard]] std::uint64_t imageBytes() const { return imageBytes_; }
+  [[nodiscard]] std::uint64_t materializationBytes() const { return materializationBytes_; }
+  [[nodiscard]] std::uint64_t payloadBytes() const { return payloadBytes_; }
+  [[nodiscard]] std::size_t shadowEntities() const { return shadowEntities_; }
+  [[nodiscard]] bool rejected() const { return rejected_; }
+
+  void setLimitsForTesting(Limits limits) {
+    limits_.graphs = std::min(limits_.graphs, limits.graphs);
+    limits_.nodes = std::min(limits_.nodes, limits.nodes);
+    limits_.imageBytes = std::min(limits_.imageBytes, limits.imageBytes);
+    limits_.materializationBytes =
+        std::min(limits_.materializationBytes, limits.materializationBytes);
+    limits_.payloadBytes = std::min(limits_.payloadBytes, limits.payloadBytes);
+    limits_.shadowEntities = std::min(limits_.shadowEntities, limits.shadowEntities);
+  }
+
+private:
+  template <typename T>
+  [[nodiscard]] bool reserveCounter(T& consumed, T count, T limit) {
+    if (rejected_ || consumed > limit || count > limit - consumed) {
+      rejected_ = true;
+      return false;
+    }
+    consumed += count;
+    return true;
+  }
+
+  Limits limits_;
+  std::size_t attempts_ = 0;
+  std::size_t graphs_ = 0;
+  std::size_t nodes_ = 0;
+  std::uint64_t imageBytes_ = 0;
+  std::uint64_t materializationBytes_ = 0;
+  std::uint64_t payloadBytes_ = 0;
+  std::size_t shadowEntities_ = 0;
+  bool rejected_ = false;
+};
+
 /** Aggregate conversion, rasterization, and upload work shared by a render frame. */
 class RendererDrawBudget {
 public:
@@ -1054,6 +1158,11 @@ public:
 
   /// Return resource-admission diagnostics for the current frame.
   [[nodiscard]] virtual RendererResourceStats resourceStats() const { return {}; }
+
+  /// Shared driver-side filter preparation budget for this renderer family, when supported.
+  [[nodiscard]] virtual RendererFilterPreparationBudget* filterPreparationBudget() {
+    return nullptr;
+  }
 
   /// Cause the next local filter raster allocation to fail in a boundary test.
   virtual void injectFilterLocalRasterAllocationFailureForTesting() {}

@@ -251,6 +251,7 @@ public:
   [[nodiscard]] RendererBitmap takeSnapshot() const override;
   [[nodiscard]] std::unique_ptr<RendererInterface> createOffscreenInstance() const override;
   [[nodiscard]] RendererResourceStats resourceStats() const override;
+  [[nodiscard]] RendererFilterPreparationBudget* filterPreparationBudget() override;
 
   /// Reduce generated-dash work for a boundary test.
   void setDashWorkBudgetForTesting(std::size_t maximumWorkUnits);
@@ -509,6 +510,9 @@ private:
   std::shared_ptr<components::FilterExecutionBudget> filterExecutionBudget_ =
       std::make_shared<components::FilterExecutionBudget>();
   bool ownsFilterExecutionBudget_ = true;
+  std::shared_ptr<RendererFilterPreparationBudget> filterPreparationBudget_ =
+      std::make_shared<RendererFilterPreparationBudget>();
+  bool ownsFilterPreparationBudget_ = true;
   std::shared_ptr<RendererDrawBudget> drawBudget_ = std::make_shared<RendererDrawBudget>();
   bool ownsDrawBudget_ = true;
   std::shared_ptr<RendererSurfaceBudget> surfaceBudget_ = std::make_shared<RendererSurfaceBudget>();
