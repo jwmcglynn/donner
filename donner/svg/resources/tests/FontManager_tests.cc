@@ -300,6 +300,34 @@ TEST(FontManagerTest, PermanentlyRejectedFontFaceSourceIsNotRevalidated) {
   EXPECT_EQ(FontManagerTestAccess::NumValidationRejectedSources(manager), 1u);
 }
 
+TEST(FontManagerTest, ExhaustedCffWorkDoesNotGrowRejectionMetadataForDistinctSources) {
+  Registry registry;
+  FontManager manager(registry, FontManager::kDefaultMaximumLoadedFontBytes, 256, 1);
+  FontHandle fallback;
+
+  for (int sourceIndex = 0; sourceIndex < 128; ++sourceIndex) {
+    css::FontFace face;
+    face.familyName = RcString("RejectedCff" + std::to_string(sourceIndex));
+    css::FontFaceSource source;
+    source.kind = css::FontFaceSource::Kind::Data;
+    source.payload = std::make_shared<const std::vector<uint8_t>>(
+        embedded::kPublicSansMediumOtf.begin(), embedded::kPublicSansMediumOtf.end());
+    face.sources.push_back(std::move(source));
+    manager.addFontFace(face);
+
+    const FontHandle resolved = manager.findFont(face.familyName);
+    ASSERT_TRUE(static_cast<bool>(resolved));
+    if (sourceIndex == 0) {
+      fallback = resolved;
+    } else {
+      EXPECT_EQ(resolved, fallback);
+    }
+  }
+
+  EXPECT_EQ(manager.fontValidationWork(), 1u);
+  EXPECT_EQ(FontManagerTestAccess::NumValidationRejectedSources(manager), 1u);
+}
+
 TEST(FontManagerTest, ReplacementUpdatesExactAggregateCharge) {
   Registry registry;
   const std::vector<uint8_t> original(embedded::kPublicSansMediumOtf.begin(),
