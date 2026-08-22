@@ -373,6 +373,8 @@ TEST(FontManagerTest, LoadWoff1Data) {
   EXPECT_TRUE(static_cast<bool>(handle));
   EXPECT_FALSE(mgr.isTrustedFont(handle));
   EXPECT_FALSE(mgr.fontData(handle).empty());
+  const auto complexity = mgr.glyphOutlineComplexity(handle, 1);
+  ASSERT_TRUE(complexity.has_value());
 
   FontHandle trustedHandle = mgr.loadFontData(woffData, FontDataTrust::Trusted);
   EXPECT_TRUE(static_cast<bool>(trustedHandle));
