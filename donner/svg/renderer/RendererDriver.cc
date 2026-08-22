@@ -488,7 +488,8 @@ PaintParams toPaintParams(Registry& registry,
 
 ResolvedClip toResolvedClip(const components::RenderingInstanceComponent& instance,
                             const components::ComputedStyleComponent& style, Registry& registry,
-                            RendererTextMaterializationBudget& copyBudget) {
+                            RendererTextMaterializationBudget& copyBudget,
+                            RendererDriver::SecurityStats* securityStats) {
   ResolvedClip clip;
   clip.clipRect = instance.clipRect;
   // Note: mask is handled separately by the caller, not through ResolvedClip.
@@ -512,6 +513,9 @@ ResolvedClip toResolvedClip(const components::RenderingInstanceComponent& instan
             {.bytes = shapeCount * sizeof(ClipPathShape), .decodeWork = shapeCount});
     bool geometryFits = shapeStorageFits;
     for (const auto& path : clipPaths->clipPaths) {
+      if (securityStats) {
+        ++securityStats->clipGeometryPathsPreflighted;
+      }
       const std::size_t commands = path.path.commands().size();
       const std::size_t points = path.path.points().size();
       const std::optional<std::size_t> retainedBytes = path.path.retainedBytes();
@@ -528,6 +532,9 @@ ResolvedClip toResolvedClip(const components::RenderingInstanceComponent& instan
     }
 
     if (!geometryFits) {
+      if (securityStats) {
+        securityStats->clipGeometryCopyRejected = true;
+      }
       clip.clipPaths.emplace_back();
       return clip;
     }
@@ -1548,7 +1555,8 @@ bool RendererDriver::drawPreparedEntityRange(Registry& registry, Entity firstEnt
       subtreeConsumedBySubRendering = true;
     }
 
-    ResolvedClip entityClip = toResolvedClip(instance, style, registry, *clipGeometryCopyBudget_);
+    ResolvedClip entityClip =
+        toResolvedClip(instance, style, registry, *clipGeometryCopyBudget_, securityStats_);
     entityClip.clipRect = std::nullopt;
     // Mask is handled separately from clip - access it directly from instance.
     const bool hasEntityClip = !entityClip.empty();
@@ -2083,7 +2091,8 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
     // Per SVG spec, the rendering order is: paint → filter → clip-path → mask → opacity.
     // Push in reverse so pop order applies the effects in spec order: mask outermost,
     // then clip-path, then filter innermost.
-    ResolvedClip entityClip = toResolvedClip(instance, style, registry, *clipGeometryCopyBudget_);
+    ResolvedClip entityClip =
+        toResolvedClip(instance, style, registry, *clipGeometryCopyBudget_, securityStats_);
     entityClip.clipRect = std::nullopt;  // Already handled above as viewport clip.
     const bool hasEntityClip = !entityClip.empty();
     if (hasEntityClip) {
@@ -2357,7 +2366,8 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
     }
 
     // Per SVG spec, apply paint → filter → clip-path → mask.
-    ResolvedClip entityClip = toResolvedClip(instance, style, registry, *clipGeometryCopyBudget_);
+    ResolvedClip entityClip =
+        toResolvedClip(instance, style, registry, *clipGeometryCopyBudget_, securityStats_);
     entityClip.clipRect = std::nullopt;
     const bool hasEntityClip = !entityClip.empty();
     if (hasEntityClip) {

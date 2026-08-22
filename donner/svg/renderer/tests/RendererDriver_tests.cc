@@ -350,6 +350,31 @@ TEST_F(RendererDriverTest, ClipGeometryAdmissionPersistsAcrossCurrentFrameSubTra
                                          Transform2d());
 }
 
+TEST_F(RendererDriverTest, RepeatedOverCapClipStopsPreflightAfterFirstRejection) {
+  constexpr std::size_t kMaximumClipShapes =
+      RendererTextMaterializationBudget::kMaximumUniqueOutlines;
+  std::string svg = R"svg(<defs><clipPath id="over">)svg";
+  for (std::size_t i = 0; i < kMaximumClipShapes + 1u; ++i) {
+    svg += R"svg(<path d="M0 0L1 1"/>)svg";
+  }
+  svg += R"svg(</clipPath></defs>
+              <rect width="1" height="1" clip-path="url(#over)"/>
+              <rect width="1" height="1" clip-path="url(#over)"/>)svg";
+  SVGDocument document = makeDocument(svg, Vector2i(1, 1));
+  RendererDriver::SecurityStats stats;
+  RendererDriver boundedDriver(renderer, /*verbose=*/false, &stats);
+
+  EXPECT_CALL(renderer, pushClip(_)).Times(2).WillRepeatedly([](const ResolvedClip& clip) {
+    ASSERT_THAT(clip.clipPaths, SizeIs(1));
+    EXPECT_TRUE(clip.clipPaths.front().path.empty());
+  });
+
+  boundedDriver.draw(document);
+
+  EXPECT_TRUE(stats.clipGeometryCopyRejected);
+  EXPECT_EQ(stats.clipGeometryPathsPreflighted, kMaximumClipShapes + 1u);
+}
+
 TEST_F(RendererDriverTest, EmitsTextDrawCallsForSolidFill) {
   SVGDocument document = makeDocument(R"svg(
     <text x="2" y="3" fill="#00FF00">hi</text>

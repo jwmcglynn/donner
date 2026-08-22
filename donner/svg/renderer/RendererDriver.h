@@ -39,6 +39,8 @@ public:
 
   /// Optional diagnostics for structured fuzzers and embedders auditing rejected preparation.
   struct SecurityStats {
+    std::size_t clipGeometryPathsPreflighted = 0;
+    bool clipGeometryCopyRejected = false;
     std::size_t filterPreparationAttempts = 0;
     std::size_t preparedFilterGraphs = 0;
     std::size_t preparedFilterNodes = 0;
