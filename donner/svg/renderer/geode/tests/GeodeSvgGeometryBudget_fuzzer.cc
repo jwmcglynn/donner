@@ -1,11 +1,13 @@
 #include <cstdio>
 #include <cstdlib>
 #include <limits>
+#include <memory>
 #include <string_view>
 
 #include "donner/base/ParseWarningSink.h"
 #include "donner/svg/SVG.h"
 #include "donner/svg/renderer/RendererGeode.h"
+#include "donner/svg/renderer/geode/GeodeDevice.h"
 
 namespace donner::svg {
 namespace {
@@ -19,7 +21,7 @@ SVGDocument ParseRequiredDocument(std::string_view source) {
   return std::move(parsed).result();
 }
 
-void RunBoundaryOracle() {
+void RunBoundaryOracle(const std::shared_ptr<geode::GeodeDevice>& device) {
   SVGDocument document = ParseRequiredDocument(R"svg(
     <svg xmlns="http://www.w3.org/2000/svg" width="8" height="4">
       <defs><linearGradient id="g"><stop stop-color="red"/></linearGradient></defs>
@@ -28,7 +30,7 @@ void RunBoundaryOracle() {
     </svg>
   )svg");
 
-  RendererGeode renderer;
+  RendererGeode renderer(device);
   renderer.setGeometryBudgetForTesting(
       /*maximumDraws=*/1, std::numeric_limits<std::size_t>::max(),
       std::numeric_limits<std::uint64_t>::max(), std::numeric_limits<std::uint64_t>::max(),
@@ -46,9 +48,12 @@ void RunBoundaryOracle() {
 }  // namespace
 
 extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
+  static const std::shared_ptr<geode::GeodeDevice> device(geode::GeodeDevice::CreateHeadless());
+  if (!device) return 0;
+
   const std::string_view input(reinterpret_cast<const char*>(data), size);  // NOLINT
   if (input == kBoundaryMarker) {
-    RunBoundaryOracle();
+    RunBoundaryOracle(device);
     return 0;
   }
 
@@ -56,7 +61,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
   auto parsed = parser::SVGParser::ParseSVG(input, warnings);
   if (!parsed.hasResult()) return 0;
 
-  static RendererGeode renderer;
+  static RendererGeode renderer(device);
   SVGDocument document = std::move(parsed).result();
   renderer.draw(document);
   if (!renderer.resourceStats().geometryBudgetSupported) std::abort();

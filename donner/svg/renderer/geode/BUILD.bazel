@@ -51,8 +51,12 @@ donner_cc_fuzzer(
     name = "geode_svg_geometry_budget_fuzzer",
     srcs = ["tests/GeodeSvgGeometryBudget_fuzzer.cc"],
     corpus = "tests/geode_svg_geometry_budget_corpus",
-    tags = ["fuzz_geode"],
+    tags = [
+        "exclusive-if-local",
+        "fuzz_geode",
+    ],
     deps = [
+        ":geode_device",
         "//donner/svg",
         "//donner/svg/renderer:renderer_geode",
     ],
