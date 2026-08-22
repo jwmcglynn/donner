@@ -110,15 +110,15 @@ struct CommandSerializer {
     os << "]";
   }
   void operator()(const SetPipelineCommand& command) {
-    os << "setPipeline " << RefId(RenderPipelineTag::kName, command.pipelineSlot);
+    os << "setPipeline " << RefId(RenderPipelineTag::kName, command.pipelineId.slotIndex);
   }
   void operator()(const SetBindGroupCommand& command) {
     os << "setBindGroup index=" << command.index
-       << " bindGroup=" << RefId(BindGroupTag::kName, command.bindGroupSlot);
+       << " bindGroup=" << RefId(BindGroupTag::kName, command.bindGroupId.slotIndex);
   }
   void operator()(const SetVertexBufferCommand& command) {
     os << "setVertexBuffer slot=" << command.slot
-       << " buffer=" << RefId(BufferTag::kName, command.bufferSlot)
+       << " buffer=" << RefId(BufferTag::kName, command.bufferId.slotIndex)
        << " offsetBytes=" << command.offsetBytes;
   }
   void operator()(const SetScissorRectCommand& command) {
@@ -137,8 +137,8 @@ struct CommandSerializer {
   }
   void operator()(const EndRenderPassCommand&) { os << "endRenderPass"; }
   void operator()(const CopyTextureToBufferCommand& command) {
-    os << "copyTextureToBuffer texture=" << RefId(TextureTag::kName, command.textureSlot)
-       << " buffer=" << RefId(BufferTag::kName, command.bufferSlot)
+    os << "copyTextureToBuffer texture=" << RefId(TextureTag::kName, command.textureId.slotIndex)
+       << " buffer=" << RefId(BufferTag::kName, command.bufferId.slotIndex)
        << " offsetBytes=" << command.layout.offsetBytes
        << " bytesPerRow=" << command.layout.bytesPerRow
        << " rowsPerImage=" << command.layout.rowsPerImage << " copySize=" << command.copySize;
