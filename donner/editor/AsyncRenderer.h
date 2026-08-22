@@ -423,6 +423,8 @@ struct SampleThumbnailRenderStats {
   std::uint64_t rendered = 0;
   std::uint64_t cancelled = 0;
   std::uint64_t offscreenRendererCreations = 0;
+  /// Offscreen constructors entered before any test-only construction block.
+  std::uint64_t offscreenRendererConstructionStarts = 0;
   /// Foreground renders queued while the first worker-local offscreen attempt was still active.
   std::uint64_t foregroundHandoffWaits = 0;
   /// True once the first worker-local offscreen renderer initialization has completed.

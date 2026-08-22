@@ -128,6 +128,7 @@ declare global {
       resultReady: boolean;
       foregroundHandoffWaits: number;
       firstAttemptCompleted: boolean;
+      offscreenRendererConstructionStarts: number;
     };
     __donnerSampleThumbnailRendererCreationBlocked?: boolean;
     __donnerLayerThumbnailStats?: {
@@ -858,10 +859,7 @@ test("WGPU diagnostics do not block the first carousel interaction", async ({ pa
   expect(fatalMessages).toEqual([]);
 });
 
-test("Firefox hands a blocked thumbnail renderer to a foreground sample load", async ({
-  browserName,
-  page,
-}) => {
+test("Firefox hands a blocked thumbnail renderer to a foreground sample load", async ({ browserName, page }) => {
   test.skip(browserName !== "firefox", "Firefox worker-owned WebGPU handoff regression");
   page.on("console", (message) => {
     if (message.type() === "error" || message.type() === "warning") {
@@ -886,14 +884,18 @@ test("Firefox hands a blocked thumbnail renderer to a foreground sample load", a
   await expect
     .poll(
       () =>
-        page.evaluate(() => window.__donnerSampleThumbnailRendererCreationBlocked === true),
+        page.evaluate(() => ({
+          blocked: window.__donnerSampleThumbnailRendererCreationBlocked === true,
+          constructionStarts:
+            window.__donnerSampleThumbnailStats?.offscreenRendererConstructionStarts ?? 0,
+        })),
       {
         message: "the second worker-owned offscreen renderer must be blocked before replacement",
         timeout: scaledMs(10_000),
         intervals: [8, 16, 25, 50],
       },
     )
-    .toBe(true);
+    .toEqual({ blocked: true, constructionStarts: 2 });
 
   const completedBefore = await page.evaluate(
     () => window.__donnerWorkerStats?.completedResults ?? 0,
@@ -910,8 +912,7 @@ test("Firefox hands a blocked thumbnail renderer to a foreground sample load", a
           return {
             firstAttemptCompleted: thumbnails?.firstAttemptCompleted ?? false,
             foregroundHandoffWaits: thumbnails?.foregroundHandoffWaits ?? 0,
-            foregroundResultCompleted:
-              (window.__donnerWorkerStats?.completedResults ?? 0) > before,
+            foregroundResultCompleted: (window.__donnerWorkerStats?.completedResults ?? 0) > before,
           };
         }, completedBefore),
       {

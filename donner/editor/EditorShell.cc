@@ -128,7 +128,8 @@ void PublishActiveSampleId(const char* sampleId) {
 
 void PublishSampleThumbnailStats(int requested, int started, int completed, int rendered, int ready,
                                  int pending, int active, int resultReady,
-                                 int foregroundHandoffWaits, int firstAttemptCompleted) {
+                                 int foregroundHandoffWaits, int firstAttemptCompleted,
+                                 int offscreenRendererConstructionStarts) {
   MAIN_THREAD_ASYNC_EM_ASM(
       {
         const frame = Number(window['__donnerMainLoopRenderedFrames'] || 0) + 1;
@@ -160,10 +161,11 @@ void PublishSampleThumbnailStats(int requested, int started, int completed, int 
           'resultReady' : Boolean($7),
           'foregroundHandoffWaits' : $8,
           'firstAttemptCompleted' : Boolean($9),
+          'offscreenRendererConstructionStarts' : $10,
         });
       },
       requested, started, completed, rendered, ready, pending, active, resultReady,
-      foregroundHandoffWaits, firstAttemptCompleted);
+      foregroundHandoffWaits, firstAttemptCompleted, offscreenRendererConstructionStarts);
 }
 
 void PublishInteractionStats(int selectedCount, int pendingClick, int workerBusy, int dragging,
@@ -4433,7 +4435,8 @@ void EditorShell::publishSampleThumbnailStats() const {
       static_cast<int>(stats.requested), static_cast<int>(stats.started),
       static_cast<int>(stats.completed), static_cast<int>(stats.rendered), static_cast<int>(ready),
       stats.pending ? 1 : 0, stats.active ? 1 : 0, stats.resultReady ? 1 : 0,
-      static_cast<int>(stats.foregroundHandoffWaits), stats.firstAttemptCompleted ? 1 : 0);
+      static_cast<int>(stats.foregroundHandoffWaits), stats.firstAttemptCompleted ? 1 : 0,
+      static_cast<int>(stats.offscreenRendererConstructionStarts));
 #endif
 }
 
