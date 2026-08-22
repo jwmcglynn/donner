@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <vector>
 
 namespace donner::svg::details {
 
@@ -86,6 +87,28 @@ inline std::optional<BgraBitmapLayout> ValidateBgraBitmapLayout(unsigned int wid
       .sourceSpanBytes = sourceSpanBytes,
       .rgbaBytes = *rgbaBytes,
   };
+}
+
+/// Convert one validated BGRA bitmap into tightly packed logical-row-order RGBA pixels.
+inline std::vector<uint8_t> ConvertValidatedBgraToRgba(const uint8_t* buffer,
+                                                       const BgraBitmapLayout& layout) {
+  std::vector<uint8_t> rgba(layout.rgbaBytes);
+  // FreeType stores the first bytes of a negative-pitch buffer in the lower row. Rebase to the
+  // logical upper row, then the signed pitch advances toward each following lower scanline.
+  // https://freetype.org/freetype2/docs/glyphs/glyphs-7.html
+  const uint8_t* logicalFirstRow =
+      layout.pitch < 0 ? buffer + (layout.sourceSpanBytes - layout.rowBytes) : buffer;
+  for (int row = 0; row < layout.height; ++row) {
+    const uint8_t* source = logicalFirstRow + static_cast<std::ptrdiff_t>(row) * layout.pitch;
+    uint8_t* destination = rgba.data() + static_cast<std::size_t>(row) * layout.rowBytes;
+    for (int column = 0; column < layout.width; ++column) {
+      destination[column * 4 + 0] = source[column * 4 + 2];
+      destination[column * 4 + 1] = source[column * 4 + 1];
+      destination[column * 4 + 2] = source[column * 4 + 0];
+      destination[column * 4 + 3] = source[column * 4 + 3];
+    }
+  }
+  return rgba;
 }
 
 }  // namespace donner::svg::details

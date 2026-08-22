@@ -577,22 +577,6 @@ std::optional<double> BitmapPixelScale(hb_font_t* hbFont, FT_Face face, float re
   return fontSizePx / strikePpem;
 }
 
-std::vector<uint8_t> ConvertBgraToRgba(const FT_Bitmap& bitmap,
-                                       const details::BgraBitmapLayout& layout) {
-  std::vector<uint8_t> rgba(layout.rgbaBytes);
-  for (int row = 0; row < layout.height; ++row) {
-    const uint8_t* source = bitmap.buffer + static_cast<std::ptrdiff_t>(row) * layout.pitch;
-    uint8_t* destination = rgba.data() + static_cast<std::size_t>(row) * layout.rowBytes;
-    for (int column = 0; column < layout.width; ++column) {
-      destination[column * 4 + 0] = source[column * 4 + 2];
-      destination[column * 4 + 1] = source[column * 4 + 1];
-      destination[column * 4 + 2] = source[column * 4 + 0];
-      destination[column * 4 + 3] = source[column * 4 + 3];
-    }
-  }
-  return rgba;
-}
-
 }  // namespace
 
 std::optional<TextBackend::BitmapGlyph> TextBackendFull::bitmapGlyph(FontHandle font,
@@ -630,7 +614,7 @@ std::optional<TextBackend::BitmapGlyph> TextBackendFull::bitmapGlyph(FontHandle 
   }
 
   BitmapGlyph result;
-  result.rgbaPixels = ConvertBgraToRgba(bitmap, *layout);
+  result.rgbaPixels = details::ConvertValidatedBgraToRgba(bitmap.buffer, *layout);
   result.width = layout->width;
   result.height = layout->height;
   result.bearingX = static_cast<double>(ftFace->glyph->bitmap_left) * *pixelScale;
