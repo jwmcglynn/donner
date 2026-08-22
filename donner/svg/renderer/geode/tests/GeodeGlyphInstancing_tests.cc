@@ -330,6 +330,30 @@ TEST_F(GeodeGlyphInstancingTest, MaterializationBudgetIsSharedAcrossOffscreenRen
       << "The offscreen cap+1 miss must not decode or populate its document cache.";
 }
 
+TEST_F(GeodeGlyphInstancingTest, ResidentGlyphHitsStillRequireGeometrySubmissionAdmission) {
+  SVGDocument document = parse(R"svg(
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200"
+           font-family="Noto Sans" font-size="48">
+        <text x="10" y="80" fill="black">a</text>
+      </svg>)svg");
+
+  RendererGeode renderer(sharedDevice());
+  const Frame first = render(renderer, document);
+  ASSERT_GT(nonTransparentPixels(first.bitmap), 0u);
+  ASSERT_EQ(renderer.residentGlyphCountForTesting(document), 1u);
+
+  renderer.setGeometryBudgetForTesting(/*maximumDraws=*/0u, /*maximumItems=*/1u << 20,
+                                       /*maximumFrameBytes=*/64u << 20,
+                                       /*maximumCacheBytes=*/64u << 20,
+                                       /*maximumResidentBytes=*/64u << 20);
+  const Frame rejected = render(renderer, document);
+  EXPECT_EQ(rejected.counters.glyphResidencyHits, 1u)
+      << "The second frame must exercise the resident-cache hit path.";
+  EXPECT_TRUE(renderer.resourceStats().geometryBudgetRejected);
+  EXPECT_EQ(nonTransparentPixels(rejected.bitmap), 0u)
+      << "A resident hit must not bypass a rejected geometry submission.";
+}
+
 /// The cache key carries every parameter that changes the outline. A font-size
 /// change alters the scale the outline is built at, so it must mint new entries
 /// and draw the new size rather than serving the old geometry.
