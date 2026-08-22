@@ -487,7 +487,8 @@ PaintParams toPaintParams(Registry& registry,
 }
 
 ResolvedClip toResolvedClip(const components::RenderingInstanceComponent& instance,
-                            const components::ComputedStyleComponent& style, Registry& registry) {
+                            const components::ComputedStyleComponent& style, Registry& registry,
+                            RendererTextMaterializationBudget& copyBudget) {
   ResolvedClip clip;
   clip.clipRect = instance.clipRect;
   // Note: mask is handled separately by the caller, not through ResolvedClip.
@@ -503,11 +504,12 @@ ResolvedClip toResolvedClip(const components::RenderingInstanceComponent& instan
       }
     }
 
-    RendererTextMaterializationBudget copyBudget;
+    RendererTextMaterializationBudget candidateBudget = copyBudget;
     const std::size_t shapeCount = clipPaths->clipPaths.size();
     const bool shapeStorageFits =
         shapeCount <= std::numeric_limits<std::size_t>::max() / sizeof(ClipPathShape) &&
-        copyBudget.reserve({.bytes = shapeCount * sizeof(ClipPathShape), .decodeWork = shapeCount});
+        candidateBudget.reserve(
+            {.bytes = shapeCount * sizeof(ClipPathShape), .decodeWork = shapeCount});
     bool geometryFits = shapeStorageFits;
     for (const auto& path : clipPaths->clipPaths) {
       const std::size_t commands = path.path.commands().size();
@@ -515,11 +517,11 @@ ResolvedClip toResolvedClip(const components::RenderingInstanceComponent& instan
       const std::optional<std::size_t> retainedBytes = path.path.retainedBytes();
       if (!geometryFits || !retainedBytes.has_value() ||
           commands > std::numeric_limits<std::size_t>::max() - points ||
-          !copyBudget.reserve({.uniqueOutlines = 1,
-                               .commands = commands,
-                               .points = points,
-                               .bytes = *retainedBytes,
-                               .decodeWork = commands + points})) {
+          !candidateBudget.reserve({.uniqueOutlines = 1,
+                                    .commands = commands,
+                                    .points = points,
+                                    .bytes = *retainedBytes,
+                                    .decodeWork = commands + points})) {
         geometryFits = false;
         break;
       }
@@ -530,6 +532,7 @@ ResolvedClip toResolvedClip(const components::RenderingInstanceComponent& instan
       return clip;
     }
 
+    copyBudget = std::move(candidateBudget);
     clip.clipPaths.reserve(shapeCount);
     for (const auto& path : clipPaths->clipPaths) {
       ClipPathShape shape;
@@ -1484,6 +1487,7 @@ bool RendererDriver::drawPreparedEntityRange(Registry& registry, Entity firstEnt
   }
 
   // Traverse from first to last (inclusive).
+  RendererTextMaterializationBudget clipGeometryCopyBudget;
   bool reachedLast = false;
   bool completed = true;
   while (!view.done() && !reachedLast) {
@@ -1543,7 +1547,7 @@ bool RendererDriver::drawPreparedEntityRange(Registry& registry, Entity firstEnt
       subtreeConsumedBySubRendering = true;
     }
 
-    ResolvedClip entityClip = toResolvedClip(instance, style, registry);
+    ResolvedClip entityClip = toResolvedClip(instance, style, registry, clipGeometryCopyBudget);
     entityClip.clipRect = std::nullopt;
     // Mask is handled separately from clip - access it directly from instance.
     const bool hasEntityClip = !entityClip.empty();
@@ -2014,6 +2018,7 @@ void RendererDriver::prepareFilterGraphs(Registry& registry, std::span<const Ent
 }
 
 void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
+  RendererTextMaterializationBudget clipGeometryCopyBudget;
   while (!view.done()) {
     const components::RenderingInstanceComponent& instance = view.get();
     const Entity entity = view.currentEntity();
@@ -2078,7 +2083,7 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
     // Per SVG spec, the rendering order is: paint → filter → clip-path → mask → opacity.
     // Push in reverse so pop order applies the effects in spec order: mask outermost,
     // then clip-path, then filter innermost.
-    ResolvedClip entityClip = toResolvedClip(instance, style, registry);
+    ResolvedClip entityClip = toResolvedClip(instance, style, registry, clipGeometryCopyBudget);
     entityClip.clipRect = std::nullopt;  // Already handled above as viewport clip.
     const bool hasEntityClip = !entityClip.empty();
     if (hasEntityClip) {
@@ -2304,6 +2309,7 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
 
   // Use a local deferred-pop stack for the marker subtree.
   std::vector<DeferredPop> localDeferred;
+  RendererTextMaterializationBudget clipGeometryCopyBudget;
 
   // Draw until (and including) the end entity.
   bool foundEnd = false;
@@ -2352,7 +2358,7 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
     }
 
     // Per SVG spec, apply paint → filter → clip-path → mask.
-    ResolvedClip entityClip = toResolvedClip(instance, style, registry);
+    ResolvedClip entityClip = toResolvedClip(instance, style, registry, clipGeometryCopyBudget);
     entityClip.clipRect = std::nullopt;
     const bool hasEntityClip = !entityClip.empty();
     if (hasEntityClip) {
