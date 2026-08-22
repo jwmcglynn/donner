@@ -180,6 +180,118 @@ TEST(RendererPublicApiTest, TinyDashWorkCountsContoursAndZeroLengthPhaseBeforeRa
   renderer.endFrame();
 }
 
+TEST(RendererTinySkiaSecurityTest, PathMeasurementWorkStopsAtTheFrameCapBeforeNextQuery) {
+  RendererTinySkia renderer;
+  renderer.beginFrame(RenderViewport{.size = Vector2d(2.0, 2.0), .devicePixelRatio = 1.0});
+  SetStrokePaint(renderer);
+
+  const Path maximumWorkPath =
+      PathBuilder().moveTo({0.0, 0.0}).curveTo({0.0, 1.0}, {1.0, 0.0}, {1.0, 1.0}).build();
+  const StrokeParams measuredStroke{
+      .strokeWidth = 0.25, .dashArray = {0.5, 0.5}, .pathLength = 1.0};
+  renderer.drawPath(PathShape{.path = &maximumWorkPath}, measuredStroke);
+
+  RendererResourceStats stats = renderer.resourceStats();
+  EXPECT_EQ(stats.pathMeasurementWorkUnits, RendererDrawBudget::kMaximumPathMeasurementWorkUnits);
+  EXPECT_FALSE(stats.drawBudgetRejected);
+
+  const Path nextPath = PathBuilder().moveTo({0.0, 0.0}).lineTo({1.0, 1.0}).build();
+  renderer.drawPath(PathShape{.path = &nextPath}, measuredStroke);
+
+  stats = renderer.resourceStats();
+  EXPECT_EQ(stats.pathMeasurementWorkUnits, RendererDrawBudget::kMaximumPathMeasurementWorkUnits);
+  EXPECT_TRUE(stats.drawBudgetRejected);
+  renderer.endFrame();
+}
+
+TEST(RendererTinySkiaSecurityTest, ClipMaskAllocationsStopAtTheSurfaceCountCap) {
+  RendererTinySkia renderer;
+  renderer.beginFrame(RenderViewport{.size = Vector2d(1.0, 1.0), .devicePixelRatio = 1.0});
+
+  ResolvedClip clip;
+  clip.clipRect = Box2d::FromXYWH(0.0, 0.0, 1.0, 1.0);
+  for (std::size_t i = 1; i < RendererSurfaceBudget::kMaximumSurfaces; ++i) {
+    renderer.pushClip(clip);
+    renderer.popClip();
+  }
+
+  RendererResourceStats stats = renderer.resourceStats();
+  EXPECT_EQ(stats.surfaceCount, RendererSurfaceBudget::kMaximumSurfaces);
+  EXPECT_EQ(stats.surfaceBytes, 4u + RendererSurfaceBudget::kMaximumSurfaces - 1u);
+  EXPECT_FALSE(stats.surfaceBudgetRejected);
+
+  renderer.pushClip(clip);
+  renderer.popClip();
+  stats = renderer.resourceStats();
+  EXPECT_EQ(stats.surfaceCount, RendererSurfaceBudget::kMaximumSurfaces);
+  EXPECT_TRUE(stats.surfaceBudgetRejected);
+  renderer.endFrame();
+}
+
+TEST(RendererTinySkiaSecurityTest, NestedClipShapeMasksStopAtTheSurfaceCountCap) {
+  RendererTinySkia renderer;
+  renderer.beginFrame(RenderViewport{.size = Vector2d(1.0, 1.0), .devicePixelRatio = 1.0});
+
+  const Path shapePath =
+      PathBuilder().moveTo({0.0, 0.0}).lineTo({1.0, 0.0}).lineTo({1.0, 1.0}).closePath().build();
+  ResolvedClip clip;
+  clip.clipRect = Box2d::FromXYWH(0.0, 0.0, 1.0, 1.0);
+  clip.clipPaths.reserve(RendererSurfaceBudget::kMaximumSurfaces - 2u);
+  for (std::size_t i = RendererSurfaceBudget::kMaximumSurfaces - 2u; i > 0; --i) {
+    ClipPathShape shape;
+    shape.path = shapePath;
+    shape.layer = static_cast<int>(i);
+    clip.clipPaths.push_back(std::move(shape));
+  }
+
+  renderer.pushClip(clip);
+  RendererResourceStats stats = renderer.resourceStats();
+  EXPECT_EQ(stats.surfaceCount, RendererSurfaceBudget::kMaximumSurfaces);
+  EXPECT_FALSE(stats.surfaceBudgetRejected);
+  renderer.popClip();
+
+  ResolvedClip extraClip;
+  extraClip.clipRect = Box2d::FromXYWH(0.0, 0.0, 1.0, 1.0);
+  renderer.pushClip(extraClip);
+  renderer.popClip();
+  stats = renderer.resourceStats();
+  EXPECT_EQ(stats.surfaceCount, RendererSurfaceBudget::kMaximumSurfaces);
+  EXPECT_TRUE(stats.surfaceBudgetRejected);
+  renderer.endFrame();
+}
+
+TEST(RendererTinySkiaSecurityTest, RetainedClipEpochMasksHaveAFrameSurfaceEnvelope) {
+  constexpr std::size_t kRetainedClipMasks = 8;
+  RendererTinySkia renderer;
+  renderer.setRetainedSpansEnabled(true);
+
+  const auto beginAndCheckEnvelope = [&]() {
+    renderer.beginFrame(RenderViewport{.size = Vector2d(1.0, 1.0), .devicePixelRatio = 1.0});
+    const RendererResourceStats stats = renderer.resourceStats();
+    EXPECT_EQ(stats.surfaceCount, 1u + kRetainedClipMasks);
+    EXPECT_EQ(stats.surfaceBytes, 4u + kRetainedClipMasks);
+    EXPECT_FALSE(stats.surfaceBudgetRejected);
+  };
+
+  beginAndCheckEnvelope();
+  ResolvedClip clip;
+  clip.clipRect = Box2d::FromXYWH(0.0, 0.0, 1.0, 1.0);
+  const std::size_t admittedClipMasks =
+      RendererSurfaceBudget::kMaximumSurfaces - 1u - kRetainedClipMasks;
+  for (std::size_t i = 0; i < admittedClipMasks; ++i) {
+    renderer.pushClip(clip);
+    renderer.popClip();
+  }
+  EXPECT_EQ(renderer.resourceStats().surfaceCount, RendererSurfaceBudget::kMaximumSurfaces);
+  renderer.pushClip(clip);
+  renderer.popClip();
+  EXPECT_TRUE(renderer.resourceStats().surfaceBudgetRejected);
+  renderer.endFrame();
+
+  beginAndCheckEnvelope();
+  renderer.endFrame();
+}
+
 // -- Pixel access and custom matchers --
 
 /// Return RGBA pixel at (x,y) from a normalized snapshot.
