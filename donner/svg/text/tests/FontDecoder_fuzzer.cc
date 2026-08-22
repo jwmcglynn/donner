@@ -3,13 +3,17 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
+#include <fstream>
+#include <iterator>
 #include <span>
+#include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
 
 #include "donner/base/EcsRegistry.h"
 #include "donner/base/fonts/SfntUtils.h"
+#include "donner/base/tests/Runfiles.h"
 #ifdef DONNER_TEXT_FULL
 #include "donner/svg/text/TextBackendFull.h"
 #else
@@ -43,6 +47,14 @@ struct TableSpec {
   std::string_view tag;
   std::vector<uint8_t> bytes;
 };
+
+std::vector<uint8_t> LoadTrustedBitmapSeed() {
+  const std::string path = Runfiles::instance().Rlocation(
+      "donner/svg/text/tests/font_decoder_corpus/bitmap_emoji_subset.ttf");
+  std::ifstream file(path, std::ios::binary);
+  return std::vector<uint8_t>(std::istreambuf_iterator<char>(file),
+                              std::istreambuf_iterator<char>());
+}
 
 std::vector<uint8_t> MakeSfnt(std::vector<TableSpec> tables, uint32_t magic = 0x00010000) {
   const size_t directorySize = 12 + tables.size() * 16;
@@ -287,11 +299,17 @@ void ExerciseLoadedFont(FontManager& fontManager, Registry& registry, FontHandle
   // shared-tail seed deliberately selects a high glyph index at the exact depth-32 boundary.
   (void)backend.glyphOutline(font, outlineGlyph, 1.0f);
 
-  constexpr std::string_view kText = "Az";
+  constexpr std::string_view kText = "Az\xF0\x9F\x98\x81";
   const TextBackend::ShapedRun shaped =
       backend.shapeRun(font, 16.0f, kText, 0, kText.size(), false, FontVariant::Normal, false);
+  constexpr size_t kMaximumDecodedGlyphs = 8;
+  size_t decodedGlyphs = 0;
   for (const TextBackend::ShapedGlyph& glyph : shaped.glyphs) {
+    if (decodedGlyphs++ == kMaximumDecodedGlyphs) {
+      break;
+    }
     (void)backend.glyphOutline(font, glyph.glyphIndex, 1.0f);
+    (void)backend.bitmapGlyph(font, glyph.glyphIndex, 1.0f);
   }
   (void)backend.crossSpanKern(font, 16.0f, font, 16.0f, 'A', 'z', false);
 }
@@ -322,6 +340,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
   // Single-byte corpus seeds select trusted synthetic fonts. The malformed CFF sentinel and every
   // arbitrary input remain untrusted document-equivalent bytes.
   constexpr std::string_view kMalformedFinalCffSeed = "MALFORMED_FINAL_CFF\n";
+  constexpr std::string_view kZeroLengthTableSeed = "ZERO_LENGTH_SFNT_TABLES\n";
   StructuredFont structured;
   std::span<const uint8_t> fontBytes(data, size);
   FontDataTrust trust = FontDataTrust::Untrusted;
@@ -329,7 +348,26 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
   const bool isMalformedFinalCffSeed =
       size == kMalformedFinalCffSeed.size() &&
       std::equal(kMalformedFinalCffSeed.begin(), kMalformedFinalCffSeed.end(), data);
-  if (isMalformedFinalCffSeed) {
+  const bool isZeroLengthTableSeed =
+      size == kZeroLengthTableSeed.size() &&
+      std::equal(kZeroLengthTableSeed.begin(), kZeroLengthTableSeed.end(), data);
+  const bool isTrustedBitmapMutationSeed = size >= 1 && data[0] == 'Y';
+  const bool isTrustedBitmapOracle =
+      isTrustedBitmapMutationSeed && (size == 1 || (size == 2 && data[1] == '\n'));
+  if (isTrustedBitmapMutationSeed) {
+    structured.bytes = LoadTrustedBitmapSeed();
+    const size_t mutationEnd = isTrustedBitmapOracle ? 1 : size;
+    for (size_t index = 1; index < mutationEnd && !structured.bytes.empty(); ++index) {
+      structured.bytes[(index - 1) % structured.bytes.size()] ^= data[index];
+    }
+    fontBytes = structured.bytes;
+    trust = FontDataTrust::Trusted;
+  } else if (isZeroLengthTableSeed) {
+    structured.bytes =
+        MakeSfnt({TableSpec{"cmap", {}}, TableSpec{"glyf", {}}, TableSpec{"head", {}},
+                  TableSpec{"hhea", {}}, TableSpec{"hmtx", {}}, TableSpec{"loca", {}}});
+    fontBytes = structured.bytes;
+  } else if (isMalformedFinalCffSeed) {
     structured = MakeMalformedFinalCff();
     fontBytes = structured.bytes;
   } else if (isStructuredSeed) {
@@ -350,6 +388,25 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
   Registry registry;
   FontManager fontManager(registry);
   const FontHandle font = fontManager.loadFontData(fontBytes, trust);
+#ifdef DONNER_TEXT_FULL
+  if (isTrustedBitmapOracle) {
+    if (!font || !fontManager.isTrustedFont(font)) {
+      std::abort();
+    }
+    FuzzTextBackend backend(fontManager, registry);
+    constexpr std::string_view kEmoji = "\xF0\x9F\x98\x81";
+    const TextBackend::ShapedRun shaped =
+        backend.shapeRun(font, 32.0f, kEmoji, 0, kEmoji.size(), false, FontVariant::Normal, false);
+    if (shaped.glyphs.empty()) {
+      std::abort();
+    }
+    const float scale = backend.scaleForEmToPixels(font, 32.0f);
+    if (!backend.bitmapGlyph(font, shaped.glyphs.front().glyphIndex, scale).has_value()) {
+      std::abort();
+    }
+    return 0;
+  }
+#endif
   if (font) {
     if (isStructuredSeed && data[0] == 'B') {
       FuzzTextBackend backend(fontManager, registry);

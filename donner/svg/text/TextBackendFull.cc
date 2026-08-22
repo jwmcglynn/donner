@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <optional>
 #include <string>
 
 #include FT_FREETYPE_H
@@ -15,6 +16,7 @@
 #include <hb.h>
 
 #include "donner/base/Utf8.h"
+#include "donner/svg/text/BitmapGlyphUtils.h"
 
 namespace donner::svg {
 
@@ -490,10 +492,92 @@ bool TextBackendFull::isBitmapOnly(FontHandle font) const {
          !HasCachedOutlineTables(fontManager_, font);
 }
 
+namespace {
+
+bool SelectBestBitmapStrike(FT_Face face) {
+  if (face->num_fixed_sizes <= 0) {
+    return true;
+  }
+  constexpr int kMaximumBitmapStrikes = 256;
+  if (!face->available_sizes || face->num_fixed_sizes > kMaximumBitmapStrikes) {
+    return false;
+  }
+
+  std::optional<int> bestIndex;
+  FT_Short bestHeight = 0;
+  constexpr FT_Pos kMaximumPpem = static_cast<FT_Pos>(details::kMaximumBitmapGlyphDimension) * 64;
+  for (int i = 0; i < face->num_fixed_sizes; ++i) {
+    const FT_Bitmap_Size& size = face->available_sizes[i];
+    if (size.width <= 0 || size.height <= 0 ||
+        size.width > static_cast<FT_Short>(details::kMaximumBitmapGlyphDimension) ||
+        size.height > static_cast<FT_Short>(details::kMaximumBitmapGlyphDimension) ||
+        size.x_ppem <= 0 || size.y_ppem <= 0 || size.x_ppem > kMaximumPpem ||
+        size.y_ppem > kMaximumPpem) {
+      continue;
+    }
+    if (!bestIndex || size.height > bestHeight) {
+      bestHeight = size.height;
+      bestIndex = i;
+    }
+  }
+  return bestIndex && FT_Select_Size(face, *bestIndex) == 0;
+}
+
+std::optional<details::BgraBitmapLayout> LoadValidatedBitmap(FT_Face face, int glyphIndex) {
+  constexpr FT_Int32 kMetricsFlags = FT_LOAD_COLOR | FT_LOAD_BITMAP_METRICS_ONLY;
+  if (FT_Load_Glyph(face, static_cast<FT_UInt>(glyphIndex), kMetricsFlags) != 0 ||
+      face->glyph->format != FT_GLYPH_FORMAT_BITMAP ||
+      !details::ValidatedBgraOutputBytes(face->glyph->bitmap.width, face->glyph->bitmap.rows)) {
+    return std::nullopt;
+  }
+  if (FT_Load_Glyph(face, static_cast<FT_UInt>(glyphIndex), FT_LOAD_COLOR) != 0 ||
+      face->glyph->format != FT_GLYPH_FORMAT_BITMAP) {
+    return std::nullopt;
+  }
+  const FT_Bitmap& bitmap = face->glyph->bitmap;
+  if (bitmap.width == 0 || bitmap.rows == 0 || bitmap.pixel_mode != FT_PIXEL_MODE_BGRA) {
+    return std::nullopt;
+  }
+  return details::ValidateBgraBitmapLayout(bitmap.width, bitmap.rows, bitmap.pitch, bitmap.buffer);
+}
+
+std::optional<double> BitmapPixelScale(hb_font_t* hbFont, FT_Face face, float requestedScale) {
+  if (!face->size) {
+    return std::nullopt;
+  }
+  const unsigned int unitsPerEm = hb_face_get_upem(hb_font_get_face(hbFont));
+  const double fontSizePx = static_cast<double>(requestedScale) * static_cast<double>(unitsPerEm);
+  const double strikePpem = static_cast<double>(face->size->metrics.y_ppem);
+  if (!std::isfinite(fontSizePx) || fontSizePx <= 0.0 || !std::isfinite(strikePpem) ||
+      strikePpem <= 0.0) {
+    return std::nullopt;
+  }
+  return fontSizePx / strikePpem;
+}
+
+std::vector<uint8_t> ConvertBgraToRgba(const FT_Bitmap& bitmap,
+                                       const details::BgraBitmapLayout& layout) {
+  std::vector<uint8_t> rgba(layout.rgbaBytes);
+  for (int row = 0; row < layout.height; ++row) {
+    const uint8_t* source = bitmap.buffer + static_cast<std::ptrdiff_t>(row) * layout.pitch;
+    uint8_t* destination = rgba.data() + static_cast<std::size_t>(row) * layout.rowBytes;
+    for (int column = 0; column < layout.width; ++column) {
+      destination[column * 4 + 0] = source[column * 4 + 2];
+      destination[column * 4 + 1] = source[column * 4 + 1];
+      destination[column * 4 + 2] = source[column * 4 + 0];
+      destination[column * 4 + 3] = source[column * 4 + 3];
+    }
+  }
+  return rgba;
+}
+
+}  // namespace
+
 std::optional<TextBackend::BitmapGlyph> TextBackendFull::bitmapGlyph(FontHandle font,
                                                                      int glyphIndex,
                                                                      float requestedScale) const {
-  if (!fontManager_.isTrustedFont(font) || glyphIndex < 0) {
+  if (!fontManager_.isTrustedFont(font) || glyphIndex < 0 || !std::isfinite(requestedScale) ||
+      requestedScale <= 0.0f) {
     return std::nullopt;
   }
 
@@ -509,88 +593,27 @@ std::optional<TextBackend::BitmapGlyph> TextBackendFull::bitmapGlyph(FontHandle 
   }
   FT_Face ftFace = entry->ftFace;
 
-  // For bitmap-only fonts (CBDT), select the best available strike size.
-  if (ftFace->num_fixed_sizes > 0) {
-    int bestIdx = 0;
-    FT_Short bestHeight = 0;
-    for (int i = 0; i < ftFace->num_fixed_sizes; ++i) {
-      if (ftFace->available_sizes[i].height > bestHeight) {
-        bestHeight = ftFace->available_sizes[i].height;
-        bestIdx = i;
-      }
-    }
-    FT_Select_Size(ftFace, bestIdx);
-  }
-
-  // Request the bitmap with FT_LOAD_COLOR for BGRA bitmaps from CBDT.
-  if (FT_Load_Glyph(ftFace, static_cast<FT_UInt>(glyphIndex), FT_LOAD_COLOR) != 0) {
+  if (!SelectBestBitmapStrike(ftFace)) {
     return std::nullopt;
   }
 
-  if (ftFace->glyph->format != FT_GLYPH_FORMAT_BITMAP) {
+  const auto layout = LoadValidatedBitmap(ftFace, glyphIndex);
+  if (!layout) {
     return std::nullopt;
   }
-
   const FT_Bitmap& bitmap = ftFace->glyph->bitmap;
-  if (bitmap.width == 0 || bitmap.rows == 0 || bitmap.pixel_mode != FT_PIXEL_MODE_BGRA) {
+  const auto pixelScale = BitmapPixelScale(hbFont, ftFace, requestedScale);
+  if (!pixelScale) {
     return std::nullopt;
   }
-
-  constexpr size_t kMaximumBitmapGlyphRgbaBytes = 16 * 1024 * 1024;
-  if (bitmap.width > static_cast<unsigned long>(std::numeric_limits<int>::max()) ||
-      bitmap.rows > static_cast<unsigned long>(std::numeric_limits<int>::max()) ||
-      bitmap.pitch <= 0) {
-    return std::nullopt;
-  }
-
-  const size_t width = bitmap.width;
-  const size_t height = bitmap.rows;
-  if (width > kMaximumBitmapGlyphRgbaBytes / 4 ||
-      height > kMaximumBitmapGlyphRgbaBytes / (width * 4)) {
-    return std::nullopt;
-  }
-
-  const size_t rowBytes = width * 4;
-  const size_t rgbaBytes = rowBytes * height;
-  if (static_cast<size_t>(bitmap.pitch) < rowBytes || bitmap.buffer == nullptr) {
-    return std::nullopt;
-  }
-
-  // Convert BGRA to RGBA.
-  const int w = static_cast<int>(width);
-  const int h = static_cast<int>(height);
-  std::vector<uint8_t> rgba(rgbaBytes);
-
-  for (int row = 0; row < h; ++row) {
-    const uint8_t* src = bitmap.buffer + static_cast<size_t>(row) * bitmap.pitch;
-    uint8_t* dst = rgba.data() + static_cast<size_t>(row) * rowBytes;
-    for (int col = 0; col < w; ++col) {
-      dst[col * 4 + 0] = src[col * 4 + 2];  // R <- B
-      dst[col * 4 + 1] = src[col * 4 + 1];  // G <- G
-      dst[col * 4 + 2] = src[col * 4 + 0];  // B <- R
-      dst[col * 4 + 3] = src[col * 4 + 3];  // A <- A
-    }
-  }
-
-  // Compute scale: the bitmap was rendered at the strike's ppem, but we want it at
-  // the requested font size. The requestedScale is fontSizePx / upem.
-  const unsigned int upem = hb_face_get_upem(hb_font_get_face(hbFont));
-  const double fontSizePx = requestedScale * static_cast<double>(upem);
-
-  // The strike ppem determines the native size of the bitmap.
-  const double strikePpem = static_cast<double>(ftFace->size->metrics.y_ppem);
-  const double emScale = strikePpem > 0.0 ? fontSizePx / strikePpem : 1.0;
-
-  // Pre-scale bearings to document space using fontSize/ppem.
-  const double pixelScale = strikePpem > 0.0 ? fontSizePx / strikePpem : 1.0;
 
   BitmapGlyph result;
-  result.rgbaPixels = std::move(rgba);
-  result.width = w;
-  result.height = h;
-  result.bearingX = static_cast<double>(ftFace->glyph->bitmap_left) * pixelScale;
-  result.bearingY = static_cast<double>(ftFace->glyph->bitmap_top) * pixelScale;
-  result.scale = emScale;
+  result.rgbaPixels = ConvertBgraToRgba(bitmap, *layout);
+  result.width = layout->width;
+  result.height = layout->height;
+  result.bearingX = static_cast<double>(ftFace->glyph->bitmap_left) * *pixelScale;
+  result.bearingY = static_cast<double>(ftFace->glyph->bitmap_top) * *pixelScale;
+  result.scale = *pixelScale;
   return result;
 }
 
