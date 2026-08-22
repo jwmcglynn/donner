@@ -740,6 +740,14 @@ public:
     rejected_ = false;
   }
 
+  /** Release GPU-retained accounting after submitting one ordered command-buffer chunk. */
+  void beginChunkAfterSubmit() {
+    intermediateBytes_ = 0;
+    liveCpuCaptureBytes_ = 0;
+    rejected_ = false;
+    ++chunks_;
+  }
+
   /**
    * Reserve graph execution and capture memory before allocating the capture surface.
    *
@@ -810,6 +818,8 @@ public:
     return intermediateBytes_ + liveCpuCaptureBytes_;
   }
   [[nodiscard]] std::uint64_t captureBytesReserved() const { return captureBytesReserved_; }
+  /// Ordered GPU chunks submitted since this budget was constructed.
+  [[nodiscard]] std::uint64_t chunks() const { return chunks_; }
   [[nodiscard]] bool rejected() const { return rejected_; }
 
 private:
@@ -818,6 +828,7 @@ private:
   std::uint64_t intermediateBytes_ = 0;
   std::uint64_t liveCpuCaptureBytes_ = 0;
   std::uint64_t captureBytesReserved_ = 0;
+  std::uint64_t chunks_ = 0;
   bool rejected_ = false;
 };
 

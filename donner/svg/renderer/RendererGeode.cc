@@ -1519,6 +1519,38 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
     framePendingReleases.clear();
   }
 
+  bool submitFilterBudgetChunk() {
+    if (!device || !frameCommandEncoder || !target) {
+      return false;
+    }
+
+    retireActiveEncoder();
+    geode::ScopedWgpuHandle<wgpu::CommandBuffer> commandBuffer(frameCommandEncoder.get().finish());
+    if (!commandBuffer) {
+      return false;
+    }
+    device->queue().submit(1, &commandBuffer.get());
+    device->countSubmit();
+
+    frameFinishedEncoders.clear();
+    framePendingTextureViewReleases.clear();
+    drainPendingReleases();
+
+    wgpu::CommandEncoderDescriptor descriptor = {};
+    descriptor.label = wgpuLabel("RendererGeodeFilterBudgetChunk");
+    frameCommandEncoder.reset(device->device().createCommandEncoder(descriptor));
+    if (!frameCommandEncoder) {
+      return false;
+    }
+    encoder = std::make_unique<geode::GeoEncoder>(
+        *device, *pipeline, *gradientPipeline, *imagePipeline, target, frameCommandEncoder.get());
+    configurePathEncoder(*encoder);
+    encoder->setLoadPreserve();
+    updateEncoderScissor();
+    filterExecutionBudget->beginChunkAfterSubmit();
+    return true;
+  }
+
   /// A saved encoder + target state for an in-progress isolated layer
   /// (`pushIsolatedLayer` / `popIsolatedLayer`). When the driver begins a
   /// group with non-identity opacity or a non-Normal blend mode, we
@@ -4705,9 +4737,15 @@ void RendererGeode::pushFilterLayer(const components::FilterGraph& filterGraph,
     impl_->filterStack.push_back({});
     return;
   }
-  const std::optional<GeodeFilterAdmission> admission =
+  std::optional<GeodeFilterAdmission> admission =
       AdmitGeodeFilter(filterGraph, filterRegion, impl_->deviceFromLocalTransform,
                        impl_->pixelWidth, impl_->pixelHeight, *impl_->filterExecutionBudget);
+  if (!admission.has_value() && impl_->filterExecutionBudget->executions() != 0 &&
+      impl_->submitFilterBudgetChunk()) {
+    admission =
+        AdmitGeodeFilter(filterGraph, filterRegion, impl_->deviceFromLocalTransform,
+                         impl_->pixelWidth, impl_->pixelHeight, *impl_->filterExecutionBudget);
+  }
   if (!admission.has_value()) {
     impl_->pushRejectedFilterFrame();
     return;
@@ -6156,7 +6194,7 @@ void RendererGeode::setOffscreenCreationHookForTesting(std::function<void()> hoo
 }
 
 std::uint64_t RendererGeode::filterBudgetChunksForTesting() const {
-  return 0;
+  return impl_->filterExecutionBudget->chunks();
 }
 
 std::shared_ptr<const RendererTextureSnapshot> RendererGeode::takeTextureSnapshot() {
