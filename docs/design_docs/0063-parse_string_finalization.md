@@ -17,8 +17,8 @@
 
 - Reviewed XML parse strings, `RcString` boundary semantics, `XMLSourceStore`, incremental structured
   edits, allocation tracking, the repeated-attribute fixture, and `donner_splash.svg`.
-- Recorded candidates: parent `6982fe5aa`, source slices `ce1838a0d`, and compact finalization
-  `357a60666` plus the later short-string detachment experiment.
+- Recorded candidates: parent `6982fe5aa`, source slices `e97181234`, and compact finalization
+  `e571adba0` plus the short-string detachment in `e282f3692`.
 - This retrospective does not change production string/value APIs, ship either result mode,
   redesign standalone CSS ownership, remove editable source storage, or treat requested C++ payload
   bytes as allocator-resident memory or RSS.
