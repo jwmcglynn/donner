@@ -936,6 +936,148 @@ void drawRectIntoMask(tiny_skia::Mask& mask, const Box2d& rect, const Transform2
   mask.fillPath(path, tiny_skia::FillRule::Winding, antialias, toTinyTransform(transform));
 }
 
+void LogClipMaskHeader(const ResolvedClip& clip, const Transform2d& deviceFromLocal) {
+  std::cout << "[TinySkia::buildClipMask] clipRect=";
+  if (clip.clipRect.has_value()) {
+    std::cout << *clip.clipRect;
+  } else {
+    std::cout << "none";
+  }
+  std::cout << " clipPaths=" << clip.clipPaths.size() << "\n  currentTransform=" << deviceFromLocal
+            << "  clipPathUnitsTransform=" << clip.clipPathUnitsTransform;
+}
+
+std::optional<tiny_skia::Mask> CombineClipMasks(std::optional<tiny_skia::Mask> rectMask,
+                                                std::optional<tiny_skia::Mask> pathMask) {
+  if (!rectMask.has_value()) {
+    return pathMask;
+  }
+  if (pathMask.has_value()) {
+    intersectMaskInPlace(*rectMask, *pathMask);
+  }
+  return rectMask;
+}
+
+class ClipMaskBuilder {
+public:
+  ClipMaskBuilder(RendererSurfaceBudget& surfaceBudget, int width, int height,
+                  const Transform2d& clipPathUnitsTransform, const Transform2d& deviceFromLocal,
+                  bool antialias, bool verbose)
+      : surfaceBudget_(surfaceBudget),
+        width_(width),
+        height_(height),
+        clipPathUnitsTransform_(clipPathUnitsTransform),
+        deviceFromLocal_(deviceFromLocal),
+        antialias_(antialias),
+        verbose_(verbose) {}
+
+  std::optional<tiny_skia::Mask> buildRect(const std::optional<Box2d>& rect) {
+    if (!rect.has_value()) {
+      return std::nullopt;
+    }
+    std::optional<tiny_skia::Mask> mask = createMask();
+    if (mask.has_value()) {
+      drawRectIntoMask(*mask, *rect, deviceFromLocal_, antialias_);
+    }
+    return mask;
+  }
+
+  std::optional<tiny_skia::Mask> buildPaths(std::span<const ClipPathShape> paths) {
+    if (paths.empty()) {
+      return std::nullopt;
+    }
+    paths_ = paths;
+    index_ = static_cast<std::ptrdiff_t>(paths.size()) - 1;
+    return buildLayer(paths.back().layer);
+  }
+
+  bool allocationFailed() const { return allocationFailed_; }
+
+private:
+  std::optional<tiny_skia::Mask> createMask() {
+    if (!surfaceBudget_.reserve(width_, height_, /*surfaceCount=*/1, /*bytesPerPixel=*/1)) {
+      allocationFailed_ = true;
+      return std::nullopt;
+    }
+    std::optional<tiny_skia::Mask> mask =
+        createMaskForSize(static_cast<std::uint32_t>(width_), static_cast<std::uint32_t>(height_));
+    if (!mask.has_value()) {
+      allocationFailed_ = true;
+      return std::nullopt;
+    }
+    std::fill(mask->data().begin(), mask->data().end(), 0);
+    return mask;
+  }
+
+  std::optional<tiny_skia::Mask> renderShape(const ClipPathShape& shape) {
+    std::optional<tiny_skia::Mask> shapeMask = createMask();
+    if (!shapeMask.has_value()) {
+      return std::nullopt;
+    }
+
+    const tiny_skia::Path path = toTinyPath(shape.path);
+    if (path.empty()) {
+      if (verbose_) {
+        std::cout << "\n  shape layer=" << shape.layer << " empty path";
+      }
+      return shapeMask;
+    }
+
+    const Transform2d clipPathTransform =
+        clipPathUnitsTransform_ * shape.parentFromEntity * deviceFromLocal_;
+    if (verbose_) {
+      const Box2d pathBounds = shape.path.bounds();
+      std::cout << "\n  shape layer=" << shape.layer << " bounds=" << pathBounds
+                << "\n    parentFromEntity=" << shape.parentFromEntity
+                << "    combinedTransform=" << clipPathTransform
+                << "    transformedBounds=" << clipPathTransform.transformBox(pathBounds);
+    }
+    shapeMask->fillPath(path, toTinyFillRule(shape.fillRule), antialias_,
+                        toTinyTransform(clipPathTransform));
+    return shapeMask;
+  }
+
+  std::optional<tiny_skia::Mask> buildLayer(int layer) {
+    std::optional<tiny_skia::Mask> layerMask;
+    while (!allocationFailed_ && index_ >= 0 &&
+           paths_[static_cast<std::size_t>(index_)].layer == layer) {
+      std::optional<tiny_skia::Mask> shapeMask =
+          renderShape(paths_[static_cast<std::size_t>(index_)]);
+      --index_;
+
+      if (shapeMask.has_value() && index_ >= 0 &&
+          paths_[static_cast<std::size_t>(index_)].layer > layer) {
+        std::optional<tiny_skia::Mask> nestedMask =
+            buildLayer(paths_[static_cast<std::size_t>(index_)].layer);
+        if (nestedMask.has_value()) {
+          intersectMaskInPlace(*shapeMask, *nestedMask);
+        }
+      }
+
+      if (!shapeMask.has_value()) {
+        continue;
+      }
+      if (!layerMask.has_value()) {
+        layerMask = std::move(shapeMask);
+      } else {
+        unionMaskInPlace(*layerMask, *shapeMask);
+      }
+    }
+    return layerMask;
+  }
+
+  RendererSurfaceBudget& surfaceBudget_;
+  int width_;
+  int height_;
+  Transform2d clipPathUnitsTransform_;
+  Transform2d deviceFromLocal_;
+  bool antialias_;
+  bool verbose_;
+  bool allocationFailed_ = false;
+  std::span<const ClipPathShape> paths_;
+  std::ptrdiff_t index_ = -1;
+};
+
 #ifndef DONNER_FILTERS_ENABLED
 // When filters are disabled, FilterGraphExecutor.h is not included so PremultiplyRgba is not
 // available. Provide a local copy for drawImage().
@@ -1312,6 +1454,29 @@ void RendererTinySkia::draw(SVGDocument& document) {
   driver.draw(document);
 }
 
+void RendererTinySkia::prepareRetainedClipEpochBudget(int pixelWidth, int pixelHeight) {
+  const tiny_skia::IntSize admittedFrameSize(static_cast<std::uint32_t>(pixelWidth),
+                                             static_cast<std::uint32_t>(pixelHeight));
+  if (admittedFrameSize != previousFrameSize_) {
+    clipEpochSlots_.clear();
+  }
+
+  clipEpochRetentionActive_ = false;
+  if (!retainedSpansEnabled_ || pixelWidth <= 0 || pixelHeight <= 0) {
+    clipEpochSlots_.clear();
+    return;
+  }
+
+  RendererSurfaceBudget withClipEpochEnvelope = *surfaceBudget_;
+  if (withClipEpochEnvelope.reserve(pixelWidth, pixelHeight, kMaxRetainedClipDepth,
+                                    /*bytesPerPixel=*/1)) {
+    *surfaceBudget_ = withClipEpochEnvelope;
+    clipEpochRetentionActive_ = true;
+  } else {
+    clipEpochSlots_.clear();
+  }
+}
+
 void RendererTinySkia::beginFrame(const RenderViewport& viewport) {
   viewport_ = viewport;
   if (ownsDrawBudget_) {
@@ -1328,25 +1493,7 @@ void RendererTinySkia::beginFrame(const RenderViewport& viewport) {
     pixelHeight = 0;
   }
 
-  const tiny_skia::IntSize admittedFrameSize(static_cast<std::uint32_t>(pixelWidth),
-                                             static_cast<std::uint32_t>(pixelHeight));
-  if (admittedFrameSize != previousFrameSize_) {
-    clipEpochSlots_.clear();
-  }
-
-  clipEpochRetentionActive_ = false;
-  if (retainedSpansEnabled_ && pixelWidth > 0 && pixelHeight > 0) {
-    RendererSurfaceBudget withClipEpochEnvelope = *surfaceBudget_;
-    if (withClipEpochEnvelope.reserve(pixelWidth, pixelHeight, kMaxRetainedClipDepth,
-                                      /*bytesPerPixel=*/1)) {
-      *surfaceBudget_ = withClipEpochEnvelope;
-      clipEpochRetentionActive_ = true;
-    } else {
-      clipEpochSlots_.clear();
-    }
-  } else {
-    clipEpochSlots_.clear();
-  }
+  prepareRetainedClipEpochBudget(pixelWidth, pixelHeight);
 
   // Keep the frame buffer's allocation across frames. A renderer that draws the
   // same viewport repeatedly (editor, compositor, animation loop) otherwise
@@ -2112,6 +2259,23 @@ void RendererTinySkia::setPaint(const PaintParams& paint) {
   paintOpacity_ = paint.opacity;
 }
 
+bool RendererTinySkia::applyPathLengthAdjustment(const Path& path, StrokeParams& stroke) {
+  if (stroke.dashArray.empty() || stroke.pathLength <= 0.0 || NearZero(stroke.pathLength)) {
+    return true;
+  }
+  if (!drawBudget_->reserve(
+          {.pathMeasurementWorkUnits = ConservativePathMeasurementWorkUnits(path)})) {
+    return false;
+  }
+
+  const double dashUnitsScale = path.pathLength() / stroke.pathLength;
+  for (double& dash : stroke.dashArray) {
+    dash *= dashUnitsScale;
+  }
+  stroke.dashOffset *= dashUnitsScale;
+  return true;
+}
+
 void RendererTinySkia::drawPath(const PathShape& path, const StrokeParams& stroke) {
   const Path& pathGeometry = path.pathOrEmpty();
   (void)drawBudget_->reserve(
@@ -2190,18 +2354,8 @@ void RendererTinySkia::drawPath(const PathShape& path, const StrokeParams& strok
   }
 
   StrokeParams adjustedStroke = stroke;
-  if (!adjustedStroke.dashArray.empty() && adjustedStroke.pathLength > 0.0 &&
-      !NearZero(adjustedStroke.pathLength)) {
-    if (!drawBudget_->reserve(
-            {.pathMeasurementWorkUnits = ConservativePathMeasurementWorkUnits(pathGeometry)})) {
-      return;
-    }
-    const double actualLength = pathGeometry.pathLength();
-    const double dashUnitsScale = actualLength / adjustedStroke.pathLength;
-    for (double& dash : adjustedStroke.dashArray) {
-      dash *= dashUnitsScale;
-    }
-    adjustedStroke.dashOffset *= dashUnitsScale;
+  if (!applyPathLengthAdjustment(pathGeometry, adjustedStroke)) {
+    return;
   }
 
   const bool usedPatternStroke = patternStrokePaint_.has_value();
@@ -3321,126 +3475,21 @@ std::optional<tiny_skia::Mask> RendererTinySkia::buildClipMask(const ResolvedCli
   }
 
   if (verbose_) {
-    std::cout << "[TinySkia::buildClipMask] clipRect=";
-    if (clip.clipRect.has_value()) {
-      std::cout << *clip.clipRect;
-    } else {
-      std::cout << "none";
-    }
-    std::cout << " clipPaths=" << clip.clipPaths.size()
-              << "\n  currentTransform=" << deviceFromLocalTransform_
-              << "  clipPathUnitsTransform=" << clip.clipPathUnitsTransform;
+    LogClipMaskHeader(clip, deviceFromLocalTransform_);
   }
 
   const int maskWidth = static_cast<int>(currentPixmap().width());
   const int maskHeight = static_cast<int>(currentPixmap().height());
-  bool allocationFailed = false;
-  const auto createMask = [&]() {
-    if (!surfaceBudget_->reserve(maskWidth, maskHeight, /*surfaceCount=*/1,
-                                 /*bytesPerPixel=*/1)) {
-      allocationFailed = true;
-      return std::optional<tiny_skia::Mask>();
-    }
-    std::optional<tiny_skia::Mask> mask = createMaskForSize(static_cast<std::uint32_t>(maskWidth),
-                                                            static_cast<std::uint32_t>(maskHeight));
-    if (mask.has_value()) {
-      std::fill(mask->data().begin(), mask->data().end(), 0);
-    } else {
-      allocationFailed = true;
-    }
-    return mask;
-  };
-
-  std::optional<tiny_skia::Mask> rectMask;
-  if (clip.clipRect.has_value()) {
-    rectMask = createMask();
-    if (rectMask.has_value()) {
-      drawRectIntoMask(*rectMask, *clip.clipRect, deviceFromLocalTransform_, antialias_);
-    }
-  }
-
-  const auto renderShapeMask = [&](const ClipPathShape& shape) -> std::optional<tiny_skia::Mask> {
-    std::optional<tiny_skia::Mask> shapeMask = createMask();
-    if (!shapeMask.has_value()) {
-      return std::nullopt;
-    }
-
-    const tiny_skia::Path path = toTinyPath(shape.path);
-    if (path.empty()) {
-      if (verbose_) {
-        std::cout << "\n  shape layer=" << shape.layer << " empty path";
-      }
-      return shapeMask;
-    }
-
-    const Transform2d clipPathTransform =
-        clip.clipPathUnitsTransform * shape.parentFromEntity * deviceFromLocalTransform_;
-    if (verbose_) {
-      const Box2d pathBounds = shape.path.bounds();
-      std::cout << "\n  shape layer=" << shape.layer << " bounds=" << pathBounds
-                << "\n    parentFromEntity=" << shape.parentFromEntity
-                << "    combinedTransform=" << clipPathTransform
-                << "    transformedBounds=" << clipPathTransform.transformBox(pathBounds);
-    }
-    shapeMask->fillPath(path, toTinyFillRule(shape.fillRule), antialias_,
-                        toTinyTransform(clipPathTransform));
-    return shapeMask;
-  };
-
-  std::optional<tiny_skia::Mask> pathMask;
-  if (!clip.clipPaths.empty()) {
-    std::ptrdiff_t index = static_cast<std::ptrdiff_t>(clip.clipPaths.size()) - 1;
-
-    std::function<std::optional<tiny_skia::Mask>(int)> buildLayerMask =
-        [&](int layer) -> std::optional<tiny_skia::Mask> {
-      std::optional<tiny_skia::Mask> layerMask;
-      while (index >= 0 && clip.clipPaths[static_cast<std::size_t>(index)].layer == layer) {
-        const ClipPathShape& shape = clip.clipPaths[static_cast<std::size_t>(index)];
-        std::optional<tiny_skia::Mask> shapeMask = renderShapeMask(shape);
-        --index;
-
-        if (shapeMask.has_value() && index >= 0 &&
-            clip.clipPaths[static_cast<std::size_t>(index)].layer > layer) {
-          std::optional<tiny_skia::Mask> nestedMask =
-              buildLayerMask(clip.clipPaths[static_cast<std::size_t>(index)].layer);
-          if (nestedMask.has_value()) {
-            intersectMaskInPlace(*shapeMask, *nestedMask);
-          }
-        }
-
-        if (!shapeMask.has_value()) {
-          continue;
-        }
-
-        if (!layerMask.has_value()) {
-          layerMask = std::move(shapeMask);
-        } else {
-          unionMaskInPlace(*layerMask, *shapeMask);
-        }
-      }
-      return layerMask;
-    };
-
-    pathMask = buildLayerMask(clip.clipPaths.back().layer);
-  }
-
-  std::optional<tiny_skia::Mask> result;
-  if (rectMask.has_value()) {
-    result = std::move(rectMask);
-  }
-  if (pathMask.has_value()) {
-    if (result.has_value()) {
-      intersectMaskInPlace(*result, *pathMask);
-    } else {
-      result = std::move(pathMask);
-    }
-  }
+  ClipMaskBuilder builder(*surfaceBudget_, maskWidth, maskHeight, clip.clipPathUnitsTransform,
+                          deviceFromLocalTransform_, antialias_, verbose_);
+  std::optional<tiny_skia::Mask> result =
+      CombineClipMasks(builder.buildRect(clip.clipRect), builder.buildPaths(clip.clipPaths));
 
   if (verbose_) {
     std::cout << "\n";
   }
 
-  if (allocationFailed) {
+  if (builder.allocationFailed()) {
     return std::nullopt;
   }
   return result;

@@ -419,6 +419,8 @@ private:
   [[nodiscard]] tiny_skia::Pixmap& currentPixmap();
   [[nodiscard]] const tiny_skia::Pixmap& currentPixmap() const;
   [[nodiscard]] tiny_skia::MutablePixmapView currentPixmapView();
+  void prepareRetainedClipEpochBudget(int pixelWidth, int pixelHeight);
+  [[nodiscard]] bool applyPathLengthAdjustment(const Path& path, StrokeParams& stroke);
   [[nodiscard]] std::optional<tiny_skia::Mask> buildClipMask(const ResolvedClip& clip);
   [[nodiscard]] std::optional<FilterAdmission> admitFilterLayer(
       const components::FilterGraph& filterGraph, const std::optional<Box2d>& filterRegion,
