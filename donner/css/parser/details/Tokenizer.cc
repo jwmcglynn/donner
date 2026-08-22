@@ -251,28 +251,90 @@ Token Tokenizer::next() {
     return Token(Token::EofToken(), currentOffset());
   }
 
-  const char ch = remaining_[0];
-  if (isWhitespace(ch)) {
-    return consumeWhitespace();
-  }
-  if (isQuote(ch)) {
-    return consumeQuotedString();
-  }
-  if (std::isdigit(static_cast<unsigned char>(ch))) {
-    return consumeNumericToken();
-  }
-  if (isNameStartCodepoint(ch)) {
-    return consumeIdentLikeToken();
-  }
-  if (auto simpleToken = consumeSimpleToken(ch)) {
-    return std::move(simpleToken.value());
-  }
+  switch (remaining_[0]) {
+    // Whitespace defined by https://www.w3.org/TR/css-syntax-3/#whitespace
+    // Note that this also includes whitespace that is normally converted during the preprocessing
+    // step which is not performed here.
+    case ' ': [[fallthrough]];
+    case '\t': [[fallthrough]];
+    case '\f': [[fallthrough]];
+    case '\r': [[fallthrough]];
+    case '\n': return consumeWhitespace();
 
-  return consumeSpecialToken(ch);
-}
+    case '"': [[fallthrough]];
+    case '\'': return consumeQuotedString();
 
-std::optional<Token> Tokenizer::consumeSimpleToken(char ch) {
-  switch (ch) {
+    case '#': {
+      const size_t remainingChars = remaining_.size();
+      if ((remainingChars > 1 && isNameCodepoint(remaining_[1])) ||
+          (remainingChars > 2 && isValidEscape(remaining_[1], remaining_[2]))) {
+        const Token::Hash::Type type = isIdentifierStart(remaining_.substr(1))
+                                           ? Token::Hash::Type::Id
+                                           : Token::Hash::Type::Unrestricted;
+
+        auto [name, charsConsumed] = consumeName(remaining_.substr(1));
+        return token<Token::Hash>(1 + charsConsumed, type, std::move(name));
+      } else {
+        return token<Token::Delim>(1, '#');
+      }
+    }
+
+    case '+': [[fallthrough]];
+    case '.': {
+      if (isNumberStart(remaining_)) {
+        return consumeNumericToken();
+      } else {
+        return token<Token::Delim>(1, remaining_[0]);
+      }
+    }
+
+    case '-': {
+      if (isNumberStart(remaining_)) {
+        return consumeNumericToken();
+      } else if (remaining_.starts_with("-->")) {
+        return token<Token::CDC>(3);
+      } else if (isIdentifierStart(remaining_)) {
+        return consumeIdentLikeToken();
+      } else {
+        return token<Token::Delim>(1, '-');
+      }
+    }
+
+    case '<': {
+      // If the next 3 input code points are U+0021 EXCLAMATION MARK U+002D HYPHEN-MINUS U+002D
+      // HYPHEN-MINUS (!--), consume them and return a <CDO-token>.
+      if (remaining_.starts_with("<!--")) {
+        return token<Token::CDO>(4);
+      }
+
+      // Otherwise, return a <delim-token> with its value set to the current input code point.
+      return token<Token::Delim>(1, remaining_[0]);
+    }
+
+    case '@': {
+      // If the next 3 input code points would start an identifier, consume a name, create an
+      // <at-keyword-token> with its value set to the returned value, and return it.
+      if (isIdentifierStart(remaining_.substr(1))) {
+        auto [name, nameCharsConsumed] = consumeName(remaining_.substr(1));
+        return token<Token::AtKeyword>(nameCharsConsumed + 1, std::move(name));
+      }
+
+      // Otherwise, return a <delim-token> with its value set to the current input code point.
+      return token<Token::Delim>(1, remaining_[0]);
+    }
+
+    case '\\': {
+      // If the input stream starts with a valid escape, reconsume the current input code point,
+      // consume an ident-like token, and return it.
+      if (remaining_.size() > 1 && isValidEscape('\\', remaining_[1])) {
+        return consumeIdentLikeToken();
+      }
+
+      // Otherwise, this is a parse error. Return a <delim-token> with its value set to the
+      // current input code point.
+      return token<Token::Delim>(1, remaining_[0]);
+    }
+
     case '(': return token<Token::Parenthesis>(1);
     case ')': return token<Token::CloseParenthesis>(1);
     case '[': return token<Token::SquareBracket>(1);
@@ -282,83 +344,18 @@ std::optional<Token> Tokenizer::consumeSimpleToken(char ch) {
     case ',': return token<Token::Comma>(1);
     case ':': return token<Token::Colon>(1);
     case ';': return token<Token::Semicolon>(1);
-    default: return std::nullopt;
-  }
-}
-
-Token Tokenizer::consumeSpecialToken(char ch) {
-  switch (ch) {
-    case '#': return consumeHashToken();
-    case '+': [[fallthrough]];
-    case '.': return consumeNumberOrDelimToken();
-    case '-': return consumeHyphenToken();
-    case '<': return consumeLessThanToken();
-    case '@': return consumeAtToken();
-    case '\\': return consumeReverseSolidusToken();
-    default: return token<Token::Delim>(1, ch);
-  }
-}
-
-Token Tokenizer::consumeHashToken() {
-  const size_t remainingChars = remaining_.size();
-  if ((remainingChars > 1 && isNameCodepoint(remaining_[1])) ||
-      (remainingChars > 2 && isValidEscape(remaining_[1], remaining_[2]))) {
-    const Token::Hash::Type type = isIdentifierStart(remaining_.substr(1))
-                                       ? Token::Hash::Type::Id
-                                       : Token::Hash::Type::Unrestricted;
-
-    auto [name, charsConsumed] = consumeName(remaining_.substr(1));
-    return token<Token::Hash>(1 + charsConsumed, type, std::move(name));
+    default: {
+      if (std::isdigit(static_cast<unsigned char>(remaining_[0]))) {
+        return consumeNumericToken();
+      } else if (isNameStartCodepoint(remaining_[0])) {
+        return consumeIdentLikeToken();
+      } else {
+        return token<Token::Delim>(1, remaining_[0]);
+      }
+    }
   }
 
-  return token<Token::Delim>(1, '#');
-}
-
-Token Tokenizer::consumeNumberOrDelimToken() {
-  if (isNumberStart(remaining_)) {
-    return consumeNumericToken();
-  }
-
-  return token<Token::Delim>(1, remaining_[0]);
-}
-
-Token Tokenizer::consumeHyphenToken() {
-  if (isNumberStart(remaining_)) {
-    return consumeNumericToken();
-  }
-  if (remaining_.starts_with("-->")) {
-    return token<Token::CDC>(3);
-  }
-  if (isIdentifierStart(remaining_)) {
-    return consumeIdentLikeToken();
-  }
-
-  return token<Token::Delim>(1, '-');
-}
-
-Token Tokenizer::consumeLessThanToken() {
-  if (remaining_.starts_with("<!--")) {
-    return token<Token::CDO>(4);
-  }
-
-  return token<Token::Delim>(1, '<');
-}
-
-Token Tokenizer::consumeAtToken() {
-  if (isIdentifierStart(remaining_.substr(1))) {
-    auto [name, nameCharsConsumed] = consumeName(remaining_.substr(1));
-    return token<Token::AtKeyword>(nameCharsConsumed + 1, std::move(name));
-  }
-
-  return token<Token::Delim>(1, '@');
-}
-
-Token Tokenizer::consumeReverseSolidusToken() {
-  if (remaining_.size() > 1 && isValidEscape('\\', remaining_[1])) {
-    return consumeIdentLikeToken();
-  }
-
-  return token<Token::Delim>(1, '\\');
+  UTILS_UNREACHABLE();  // LCOV_EXCL_LINE: All cases should be handled above.
 }
 
 bool Tokenizer::isEOF() const {

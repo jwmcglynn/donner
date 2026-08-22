@@ -1,9 +1,7 @@
 #pragma once
 /// @file
 
-#include <optional>
 #include <string_view>
-#include <utility>
 
 #include "donner/css/Token.h"
 
@@ -72,30 +70,6 @@ private:
     remaining_.remove_prefix(length);
     return Token(T(std::forward<Args>(args)...), offset);
   }
-
-  /// Consume punctuation whose token kind depends only on the current character.
-  std::optional<Token> consumeSimpleToken(char ch);
-
-  /// Dispatch punctuation which requires additional input inspection.
-  Token consumeSpecialToken(char ch);
-
-  /// Consume a hash token or a hash delimiter.
-  Token consumeHashToken();
-
-  /// Consume a number or the current delimiter.
-  Token consumeNumberOrDelimToken();
-
-  /// Consume a number, CDC, identifier, or hyphen delimiter.
-  Token consumeHyphenToken();
-
-  /// Consume a CDO token or a less-than delimiter.
-  Token consumeLessThanToken();
-
-  /// Consume an at-keyword or an at-sign delimiter.
-  Token consumeAtToken();
-
-  /// Consume an escaped identifier or a reverse-solidus delimiter.
-  Token consumeReverseSolidusToken();
 
   /// Consume and discard comments in the input string. Returns an error token if the comment is
   /// unterminated.

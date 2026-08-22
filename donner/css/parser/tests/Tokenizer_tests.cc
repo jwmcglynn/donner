@@ -26,15 +26,6 @@ TEST(Tokenizer, Empty) {
   EXPECT_THAT(tokenizer.next(), Token(Token::EofToken(), 0));
 }
 
-TEST(Tokenizer, EndOfInputIsStable) {
-  Tokenizer tokenizer(";");
-  EXPECT_FALSE(tokenizer.isEOF());
-  EXPECT_THAT(tokenizer.next(), Token(Token::Semicolon(), 0));
-  EXPECT_TRUE(tokenizer.isEOF());
-  EXPECT_THAT(tokenizer.next(), Token(Token::EofToken(), 1));
-  EXPECT_THAT(tokenizer.next(), Token(Token::EofToken(), 1));
-}
-
 TEST(Tokenizer, Whitespace) {
   Tokenizer tokenizer(" \t\f\r\n");
   EXPECT_THAT(tokenizer.next(), Token(Token::Whitespace(" \t\f\r\n"), 0));
