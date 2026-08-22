@@ -1,9 +1,7 @@
 #pragma once
 /// @file
 
-#include <cassert>
 #include <map>
-#include <vector>
 
 #include "donner/base/RcStringOrRef.h"
 
@@ -77,20 +75,6 @@ public:
     return std::nullopt;
   }
 
-  /// Rebuild retained entity names and values during parse finalization.
-  template <typename RemapFn>
-  void remapStrings(RemapFn&& remap) {
-    remapDeclarationMap(entityDeclarations_, remap);
-    remapDeclarationMap(parameterEntityDeclarations_, remap);
-  }
-
-  /// Visit every retained entity string before parse finalization.
-  template <typename VisitFn>
-  void visitStrings(VisitFn&& visit) const {
-    visitDeclarationMap(entityDeclarations_, visit);
-    visitDeclarationMap(parameterEntityDeclarations_, visit);
-  }
-
 private:
   /// Information about an entity declaration
   struct EntityDeclarationInfo {
@@ -98,36 +82,11 @@ private:
     bool isExternal;  ///< Whether this is an external entity
   };
 
-  using DeclarationMap = std::map<RcStringOrRef, EntityDeclarationInfo>;
-
-  template <typename RemapFn>
-  static void remapDeclarationMap(DeclarationMap& declarations, RemapFn&& remap) {
-    std::vector<typename DeclarationMap::node_type> nodes;
-    nodes.reserve(declarations.size());
-    while (!declarations.empty()) {
-      nodes.push_back(declarations.extract(declarations.begin()));
-    }
-    for (auto& node : nodes) {
-      node.key() = RcStringOrRef(remap(RcString(node.key())));
-      node.mapped().value = remap(node.mapped().value);
-      const auto insertResult = declarations.insert(std::move(node));
-      assert(insertResult.inserted);
-    }
-  }
-
-  template <typename VisitFn>
-  static void visitDeclarationMap(const DeclarationMap& declarations, VisitFn&& visit) {
-    for (const auto& [name, info] : declarations) {
-      visit(RcString(name));
-      visit(info.value);
-    }
-  }
-
   /// Mapping from entity name to its declaration
-  DeclarationMap entityDeclarations_;
+  std::map<RcStringOrRef, EntityDeclarationInfo> entityDeclarations_;
 
   /// Mapping from parameter entity name to its declaration
-  DeclarationMap parameterEntityDeclarations_;
+  std::map<RcStringOrRef, EntityDeclarationInfo> parameterEntityDeclarations_;
 };
 
 }  // namespace donner::xml::components

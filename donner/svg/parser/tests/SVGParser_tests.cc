@@ -47,27 +47,6 @@ TEST(SVGParser, Simple) {
   EXPECT_THAT(warnings.warnings(), ElementsAre());
 }
 
-TEST(SVGParser, CompactModeDiscardsSourceAndPreservesAttributes) {
-  constexpr std::string_view kAttributeName = "data-repeated-long-attribute-name";
-  constexpr std::string_view kAttributeValue =
-      "a-long-attribute-value-that-survives-source-release";
-  const std::string source = "<svg xmlns=\"http://www.w3.org/2000/svg\"><rect id=\"rect\" " +
-                             std::string(kAttributeName) + "=\"" + std::string(kAttributeValue) +
-                             "\"/></svg>";
-  SVGParser::Options options;
-  options.disableUserAttributes = false;
-  options.retainSource = false;
-
-  ParseWarningSink warnings;
-  auto result = SVGParser::ParseSVG(source, warnings, options);
-  ASSERT_THAT(result, NoParseError());
-  SVGDocument document = std::move(result.result());
-  EXPECT_FALSE(document.hasSourceStore());
-  const std::optional<SVGElement> rect = document.querySelector("#rect");
-  ASSERT_TRUE(rect.has_value());
-  EXPECT_EQ(rect->getAttribute(kAttributeName), std::optional<RcString>(RcString(kAttributeValue)));
-}
-
 TEST(SVGParser, Svgz) {
   // gzip-compressed "<svg xmlns='http://www.w3.org/2000/svg'></svg>"
   static const uint8_t kGzipData[] = {

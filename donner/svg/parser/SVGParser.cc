@@ -17,8 +17,6 @@
 #include "donner/base/xml/XMLDocument.h"
 #include "donner/base/xml/XMLParser.h"
 #include "donner/base/xml/XMLQualifiedName.h"
-#include "donner/base/xml/XMLStringFinalizer.h"
-#include "donner/base/xml/components/XMLDocumentContext.h"
 #include "donner/svg/AllSVGElements.h"
 #include "donner/svg/SVGElement.h"
 #include "donner/svg/components/DescriptiveTextComponent.h"
@@ -769,9 +767,8 @@ SVGDocument::Settings PrepareDocumentSettings(const SVGParser::Options& options,
 
     const std::string_view subSource(reinterpret_cast<const char*>(svgContent.data()),
                                      svgContent.size());
-    SVGParser::Options subOptions;
-    subOptions.retainSource = false;
-    auto result = SVGParser::ParseSVG(subSource, warnings, subOptions, std::move(subSettings));
+    auto result =
+        SVGParser::ParseSVG(subSource, warnings, SVGParser::Options(), std::move(subSettings));
     if (result.hasError()) {
       warnings.add(ParseDiagnostic(result.error()));
       return std::nullopt;
@@ -789,8 +786,6 @@ ParseResult<xml::XMLDocument> ParseXmlDocument(std::string_view source,
   xmlOptions.maxElements = options.maximumTreeNodes;
   xmlOptions.maxNestingDepth = static_cast<int>(std::min(
       options.maximumTreeDepth, static_cast<std::size_t>(std::numeric_limits<int>::max())));
-  xmlOptions.stringStorageMode = options.retainSource ? XMLParser::StringStorageMode::SourceRetained
-                                                      : XMLParser::StringStorageMode::Compact;
 
   std::vector<uint8_t> decompressedData;
   if (source.size() >= 2 && static_cast<unsigned char>(source[0]) == 0x1F &&
@@ -835,14 +830,7 @@ ParseResult<SVGDocument> SVGParser::ParseSVG(std::string_view source, ParseWarni
   }
 
   if (auto maybeDocument = parser.document()) {
-    SVGDocument document = std::move(maybeDocument.value());
-    if (!options.retainSource) {
-      document.unsafeRegistry()
-          .ctx()
-          .get<xml::components::XMLDocumentContext>()
-          .sourceStore.reset();
-    }
-    return document;
+    return std::move(maybeDocument.value());
   } else {
     ParseDiagnostic err;
     err.reason = "No SVG element found in document";
@@ -856,9 +844,6 @@ ParseResult<SVGDocument> SVGParser::ParseXMLDocument(xml::XMLDocument&& xmlDocum
                                                      SVGParser::Options options,
                                                      SVGDocument::Settings settings) noexcept {
   xmlDocument.setSourceEditTreeLimits(options.maximumTreeNodes, options.maximumTreeDepth);
-  if (!options.retainSource) {
-    xml::FinalizeXMLDocumentStrings(xmlDocument);
-  }
   SVGParserContext context(std::string_view(), warningSink, options);
   SVGParserImpl parser(context, xmlDocument.sharedRegistry(), std::move(settings));
   if (auto error = parser.walkChildren(std::nullopt, xmlDocument.root(), 0)) {
@@ -866,14 +851,7 @@ ParseResult<SVGDocument> SVGParser::ParseXMLDocument(xml::XMLDocument&& xmlDocum
   }
 
   if (auto maybeDocument = parser.document()) {
-    SVGDocument document = std::move(maybeDocument.value());
-    if (!options.retainSource) {
-      document.unsafeRegistry()
-          .ctx()
-          .get<xml::components::XMLDocumentContext>()
-          .sourceStore.reset();
-    }
-    return document;
+    return std::move(maybeDocument.value());
   } else {
     ParseDiagnostic err;
     err.reason = "No SVG element found in document";

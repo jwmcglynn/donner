@@ -20,7 +20,6 @@
 #include "donner/base/xml/XMLDocument.h"
 #include "donner/base/xml/XMLNode.h"
 #include "donner/base/xml/XMLQualifiedName.h"
-#include "donner/base/xml/XMLStringFinalizer.h"
 #include "donner/base/xml/components/EntityDeclarationsContext.h"
 #include "donner/base/xml/components/XMLDocumentContext.h"
 
@@ -1813,17 +1812,7 @@ ParseResult<XMLDocument> XMLParser::Parse(std::string_view str, const Options& o
   }
 
   XMLParserImpl parser(str, options);
-  ParseResult<XMLDocument> result = parser.parse();
-  if (result.hasResult()) {
-    XMLDocument& document = result.result();
-    if (options.stringStorageMode == StringStorageMode::Compact || !options.retainSourceStore) {
-      FinalizeXMLDocumentStrings(document);
-    }
-    if (!options.retainSourceStore) {
-      document.registry().ctx().get<components::XMLDocumentContext>().sourceStore.reset();
-    }
-  }
-  return result;
+  return parser.parse();
 }
 
 std::optional<SourceRange> XMLParser::GetAttributeLocation(

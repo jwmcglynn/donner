@@ -222,32 +222,15 @@ TEST_F(XMLParserTests, LongAttributesSurviveSourceStoreCopyOnWrite) {
   EXPECT_EQ(sourceStore->sourceStorageUseCountForTesting(), 1u);
 }
 
-TEST_F(XMLParserTests, CompactModeInternsLongAttributesAndDiscardsSource) {
-  constexpr std::string_view kAttributeName = "data-repeated-long-attribute-name";
-  constexpr std::string_view kAttributeValue = "a-long-attribute-value-that-is-interned-once";
-  std::string xml = "<root><item " + std::string(kAttributeName) + "=\"" +
-                    std::string(kAttributeValue) + "\"/><item " + std::string(kAttributeName) +
-                    "=\"" + std::string(kAttributeValue) + "\"/></root>";
-  XMLParser::Options options;
-  options.stringStorageMode = XMLParser::StringStorageMode::Compact;
-  options.retainSourceStore = false;
-
-  ParseResult<XMLDocument> maybeDocument = XMLParser::Parse(xml, options);
+TEST_F(XMLParserTests, ShortPersistentStringsUseInlineStorageWithoutRetainingSnapshot) {
+  ParseResult<XMLDocument> maybeDocument = XMLParser::Parse("<root attr=\"short\"/>");
   ASSERT_THAT(maybeDocument, NoParseError());
   XMLDocument document = std::move(maybeDocument.result());
-  ASSERT_FALSE(document.hasSourceStore());
-  XMLNode first = document.root().firstChild()->firstChild().value();
-  XMLNode second = first.nextSibling().value();
-  const std::optional<RcString> firstValue = first.getAttribute(kAttributeName);
-  const std::optional<RcString> secondValue = second.getAttribute(kAttributeName);
-  ASSERT_TRUE(firstValue.has_value());
-  ASSERT_TRUE(secondValue.has_value());
-  EXPECT_EQ(*firstValue, kAttributeValue);
-  EXPECT_EQ(*secondValue, kAttributeValue);
-  EXPECT_EQ(firstValue->data(), secondValue->data());
-
-  xml.assign(xml.size(), 'x');
-  EXPECT_EQ(first.getAttribute(kAttributeName), std::optional<RcString>(RcString(kAttributeValue)));
+  ASSERT_NE(document.sourceStore(), nullptr);
+  EXPECT_EQ(document.sourceStore()->sourceStorageUseCountForTesting(), 1u);
+  ASSERT_TRUE(document.root().firstChild()->getNodeLocation().has_value());
+  EXPECT_EQ(document.root().firstChild()->getAttribute("attr"),
+            std::optional<RcString>(RcString("short")));
 }
 
 TEST_F(XMLParserTests, ParsedNodeLocationsFollowSourceStoreEdits) {

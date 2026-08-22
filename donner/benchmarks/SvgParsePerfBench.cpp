@@ -13,10 +13,10 @@
 /// directly comparable for the parse phase.
 ///
 /// Usage:
-///   svg_parse_perf_bench [--iterations=N] [--warmup=N] [--repeat=N] [--compact] FILE...
+///   svg_parse_perf_bench [--iterations=N] [--warmup=N] [--repeat=N] FILE...
 ///
-/// Each input file produces one `RESULT scene=<name> storage=<mode> parse_ms=<median>` line
-/// per repeat. Repeats interleave at file granularity, not at iteration
+/// Each input file produces one `RESULT scene=<name> parse_ms=<median>` line per
+/// repeat. Repeats interleave at file granularity, not at iteration
 /// granularity: one repeat runs every iteration of the first file, then every
 /// iteration of the second, and so on, before the next repeat starts again from
 /// the first file. That spreads slow machine intervals across the repeats of
@@ -78,12 +78,10 @@ struct Scene {
 /// Parses one document, returning false if the source did not parse. Keeping the
 /// document alive until the timer stops means teardown is excluded, matching the
 /// cross-engine benchmark's parse phase.
-bool parseOnce(const std::string& source, bool retainSource, double& elapsedMs) {
+bool parseOnce(const std::string& source, double& elapsedMs) {
   donner::ParseWarningSink warningSink = donner::ParseWarningSink::Disabled();
-  donner::svg::parser::SVGParser::Options options;
-  options.retainSource = retainSource;
   const auto start = Clock::now();
-  auto parsed = donner::svg::parser::SVGParser::ParseSVG(source, warningSink, options);
+  auto parsed = donner::svg::parser::SVGParser::ParseSVG(source, warningSink);
   elapsedMs = toMs(Clock::now() - start);
   if (parsed.hasError()) {
     std::fprintf(stderr, "parse error: %s\n", std::string(parsed.error().reason).c_str());
@@ -102,7 +100,6 @@ int main(int argc, char* argv[]) {
   int iterations = 25;
   int warmup = 3;
   int repeat = 1;
-  bool retainSource = true;
   std::vector<std::string> inputs;
 
   for (int i = 1; i < argc; ++i) {
@@ -113,18 +110,15 @@ int main(int argc, char* argv[]) {
       warmup = std::max(0, std::atoi(std::string(arg.substr(9)).c_str()));
     } else if (arg.starts_with("--repeat=")) {
       repeat = std::max(1, std::atoi(std::string(arg.substr(9)).c_str()));
-    } else if (arg == "--compact") {
-      retainSource = false;
     } else {
       inputs.emplace_back(arg);
     }
   }
 
   if (inputs.empty()) {
-    std::fprintf(
-        stderr,
-        "usage: svg_parse_perf_bench [--iterations=N] [--warmup=N] [--repeat=N] [--compact] "
-        "FILE...\n");
+    std::fprintf(stderr,
+                 "usage: svg_parse_perf_bench [--iterations=N] [--warmup=N] [--repeat=N] "
+                 "FILE...\n");
     return 2;
   }
 
@@ -150,7 +144,7 @@ int main(int argc, char* argv[]) {
       samples.reserve(static_cast<std::size_t>(iterations));
       for (int i = 0; i < warmup + iterations; ++i) {
         double elapsedMs = 0.0;
-        if (!parseOnce(scene.source, retainSource, elapsedMs)) {
+        if (!parseOnce(scene.source, elapsedMs)) {
           return 1;
         }
         if (i >= warmup) {
@@ -158,9 +152,8 @@ int main(int argc, char* argv[]) {
         }
       }
 
-      std::printf("RESULT scene=%s storage=%s run=%d iterations=%d parse_ms=%.4f\n",
-                  scene.name.c_str(), retainSource ? "source-retained" : "compact", run, iterations,
-                  median(samples));
+      std::printf("RESULT scene=%s run=%d iterations=%d parse_ms=%.4f\n", scene.name.c_str(), run,
+                  iterations, median(samples));
       std::fflush(stdout);
     }
   }

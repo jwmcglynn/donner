@@ -12,7 +12,6 @@
 #include <type_traits>
 #include <unordered_map>
 #include <unordered_set>
-#include <vector>
 
 #include "donner/base/EcsRegistry.h"
 #include "donner/base/RcString.h"
@@ -130,38 +129,6 @@ public:
     }
 
     return it->second;
-  }
-
-  /// Rebuild retained namespace strings during parse finalization.
-  template <typename RemapFn>
-  void remapStrings(RemapFn&& remap) {
-    for (auto& entityDeclarations : declarations_) {
-      DeclarationMap& declarations = entityDeclarations.second;
-      std::vector<typename DeclarationMap::node_type> nodes;
-      nodes.reserve(declarations.size());
-      while (!declarations.empty()) {
-        nodes.push_back(declarations.extract(declarations.begin()));
-      }
-      for (auto& node : nodes) {
-        node.key() = remap(node.key());
-        node.mapped() = remap(node.mapped());
-        const auto insertResult = declarations.insert(std::move(node));
-        assert(insertResult.inserted);
-      }
-    }
-    invalidateScopes();
-  }
-
-  /// Visit every retained namespace string before parse finalization.
-  template <typename VisitFn>
-  void visitStrings(VisitFn&& visit) const {
-    for (const auto& entityDeclarations : declarations_) {
-      const DeclarationMap& declarations = entityDeclarations.second;
-      for (const auto& [prefix, uri] : declarations) {
-        visit(prefix);
-        visit(uri);
-      }
-    }
   }
 
   /**

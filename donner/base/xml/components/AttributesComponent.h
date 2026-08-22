@@ -1,14 +1,11 @@
 #pragma once
 /// @file
 
-#include <cassert>
 #include <cstddef>
 #include <cstdint>
 #include <map>
 #include <optional>
 #include <set>
-#include <utility>
-#include <vector>
 
 #include "donner/base/EcsRegistry.h"
 #include "donner/base/RcStringOrRef.h"
@@ -163,52 +160,6 @@ struct AttributesComponent {
    * @param name Name of the attribute to remove.
    */
   void removeAttribute(Registry& registry, const xml::XMLQualifiedNameRef& name);
-
-  /// Rebuild attribute names and values during parse finalization.
-  template <typename RemapFn>
-  void remapStrings(RemapFn&& remap) {
-    std::vector<typename decltype(attributes_)::node_type> attributeNodes;
-    attributeNodes.reserve(attributes_.size());
-    while (!attributes_.empty()) {
-      attributeNodes.push_back(attributes_.extract(attributes_.begin()));
-    }
-
-    std::vector<typename decltype(attrNameStorage_)::node_type> nameNodes;
-    nameNodes.reserve(attrNameStorage_.size());
-    while (!attrNameStorage_.empty()) {
-      nameNodes.push_back(attrNameStorage_.extract(attrNameStorage_.begin()));
-    }
-
-    for (auto& node : nameNodes) {
-      node.value().namespacePrefix = remap(node.value().namespacePrefix);
-      node.value().name = remap(node.value().name);
-      const auto insertResult = attrNameStorage_.insert(std::move(node));
-      assert(insertResult.inserted);
-    }
-
-    for (auto& node : attributeNodes) {
-      Storage& storage = node.mapped();
-      storage.name.namespacePrefix = remap(storage.name.namespacePrefix);
-      storage.name.name = remap(storage.name.name);
-      storage.value = remap(storage.value);
-      const auto nameIt = attrNameStorage_.find(storage.name);
-      assert(nameIt != attrNameStorage_.end());
-      node.key() = xml::XMLQualifiedNameRef(*nameIt);
-      const auto insertResult = attributes_.insert(std::move(node));
-      assert(insertResult.inserted);
-    }
-  }
-
-  /// Visit every persistent attribute string before parse finalization.
-  template <typename VisitFn>
-  void visitStrings(VisitFn&& visit) const {
-    for (const auto& attribute : attributes_) {
-      const Storage& storage = attribute.second;
-      visit(storage.name.namespacePrefix);
-      visit(storage.name.name);
-      visit(storage.value);
-    }
-  }
 
   /// Returns true if the element has any namespace overrides.
   bool hasNamespaceOverrides() const { return numNamespaceOverrides_ > 0; }

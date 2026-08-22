@@ -1,343 +1,148 @@
-# Design: Parse-Lifetime String References and Finalization
+# Design: Source-Backed XML Parse Strings
 
-**Status:** In Progress. Source-retained copy-on-write storage and opt-in compact/intern
-finalization are implemented. Compact mode reduces retained memory but misses the CPU and allocation
-call gates; rollout awaits an explicit tradeoff decision.
+**Status:** Implemented. Source-backed strings and copy-on-write storage are retained; compact
+finalization was measured and rejected.
 **Author:** GPT-5
 **Created:** 2026-08-22
 
 ## Summary
 
-SVG parsing currently converts XML names, attribute values, and text slices into owning
-`RcString` values as the XML tree is built. This is lifetime-safe, but it spreads allocation work
-through the latency-sensitive parse and repeatedly allocates identical names such as `path`,
-`fill`, and `transform`.
+XML parsing now constructs eligible persistent strings as `RcString` substrings of the document's
+owned source snapshot. This removes one allocation for each ordinary long XML name or value without
+depending on the caller's input buffer.
 
-This design introduces a bounded XML parse-string session with two result modes:
+`XMLSourceStore` owns that snapshot through shared storage. Before a structured edit mutates shared
+source bytes, it copies the current source once. Existing DOM strings continue to reference the
+immutable prior snapshot, while anchors, diagnostics, and subsequent edits use the new source.
 
-- **Source-retained:** Direct substrings remain `RcString` slices into an owned immutable source
-  snapshot. `XMLSourceStore` uses copy-on-write before the first source mutation, so existing DOM
-  strings remain valid while structured editing advances the mutable source.
-- **Compact:** A mandatory finalization pass deduplicates retained strings into compact owned pages,
-  then the parse backing and source store are released when the caller does not need source editing.
+Short persistent results are copied into `RcString` inline storage. The parser cursor itself remains
+reference-backed, so this detaches common short XML names and values without copying the entire
+parse input or changing source-offset calculations.
 
-XML attributes are the first proven slice because their names and values dominate ordinary XML
-string traffic and their ordered-map storage makes the lifetime rules testable. Both modes remove
-dependence on the caller's input buffer. Only source-retained mode keeps a source projection.
+An alternative compact/intern finalization pass was implemented and benchmarked. It reduced
+retained memory by about 7%, but increased allocation work and peak memory and remained about 6%
+slower. The compact API and traversal were therefore removed; their allocation and timing results
+remain as evidence for the decision.
 
 ## Goals
 
-- Move ordinary XML string-byte allocation out of the parser loop and into one explicit
-  finalization phase.
-- Intern identical tag names, attribute names, attribute values, and XML node values.
-- Let source-retained documents share immutable source storage safely across structured edits.
-- Ensure compact documents retain neither mutable source bytes nor parse backing.
-- Preserve structured editing, incremental reparsing, source anchors, and diagnostic byte offsets.
-- Reduce XML/SVG parse allocation calls by at least 30% on the retained corpus without regressing
-  parse CPU by more than 5%.
-- Keep finalization time and memory linear and bounded for hostile input.
+- Avoid allocating string bytes for direct long XML source substrings during parsing.
+- Remove all dependence on the caller-owned input buffer.
+- Preserve source retention, structured editing, source anchors, and diagnostic byte offsets.
+- Measure complete-parse allocation calls, requested bytes, retained bytes, and peak live bytes on
+  a repeated-attribute fixture and `donner_splash.svg`.
+- Keep the implementation linear and bounded for hostile input.
 
 ## Non-Goals
 
-- Removing `XMLSourceStore` from source-retained documents. Structured editing requires it.
-- Returning public non-owning string views or changing public DOM/CSS APIs.
-- Interning arbitrary runtime strings created after parsing.
-- Compacting renderer, font, image, or geometry payloads.
-- Applying the first milestone to standalone CSS parsing. CSS can adopt the same session only after
-  the XML ownership boundary is proven.
-- Repacking source-retained documents or every prior compact page after each incremental edit.
+- Removing `XMLSourceStore`; structured editing requires it.
+- Returning public non-owning views or changing public DOM/CSS value APIs.
+- Shipping compact/intern finalization when its measured cost exceeds its benefit.
+- Interning strings created by runtime mutations or standalone CSS parsing.
 
-## Next Steps
-
-- Confirm the two result modes, copy-on-write boundary, and performance rubric.
-- Decide whether the compact mode's retained-memory reduction justifies its opt-in CPU cost.
-- If approved, evaluate short-result SSO detachment while preserving reference-backed parser cursors.
-
-## Implementation Plan
-
-- [x] Milestone 1: Establish allocation, retained-memory, and lifetime baselines.
-  - [x] Add deterministic C++ allocation calls, requested bytes, retained live bytes, and peak live
-        requested bytes to the allocation tracker.
-  - [x] Add repeated-attribute and canonical `donner_splash.svg` parse gates.
-  - [x] Record parent allocation, requested-byte, retained-byte, and peak-live-byte results.
-- [x] Milestone 2: Add source-backed parse strings and copy-on-write source retention.
-  - [x] Add shared external backing support to `RcString` without changing its public value API.
-  - [x] Make `XMLSourceStore` source storage copy-on-write.
-  - [x] Route direct XML attribute names and values through source-backed slices.
-  - [x] Prove edited and unchanged attributes remain correct across source reallocation.
-- [x] Milestone 3: Add compact/intern finalization for non-source-retained parses.
-- [ ] Milestone 4: Prove structured-editing and diagnostic parity.
-- [ ] Milestone 5: Evaluate SVG/CSS adoption and decide whether to extend or stop.
-
-## Requirements and Constraints
-
-- `XMLParser::Parse` must return only strings that remain valid after the caller's input is gone.
-- `XMLSourceStore::replace` must copy source storage before mutating bytes referenced by a DOM
-  string.
-- Fatal diagnostics remain valid without a returned document.
-- Incrementally parsed fragments use compact mode before their values enter a source-retained live
-  document, preventing a whole-source clone on every later edit.
-- Ordered map/set keys must never be mutated in place. Attribute, namespace, and entity maps are
-  rebuilt transactionally during finalization.
-- Finalization failure must not return a partially remapped document.
-- No exceptions, new external dependencies, or public ECS/string-pool APIs.
-
-## Proposed Architecture
+## Architecture
 
 ```text
-caller SVG bytes
-      |
-      v
-XMLSourceStore shared source snapshot and anchors
-      |
-      +--> XMLParser uses source-backed RcString slices
-               direct source text: zero string-byte allocation
-               entities/normalization: owned decoded buffers
-      |
-      +--> source-retained result
-      |        keep immutable snapshot slices
-      |        copy source storage before first mutation
-      |        compact every incremental fragment before merge
-      |
-      +--> compact result
-               collect bounded persistent string fields
-               deduplicate exact byte strings
-               pack long strings into bounded NUL-terminated pages
-               rebuild map/set-backed components transactionally
-               release source store and parse backing
+caller bytes
+    |
+    v
+XMLSourceStore-owned shared snapshot
+    |
+    +--> XMLParser cursor and direct substrings
+    |       long persistent result -> shared RcString slice
+    |       short persistent result -> RcString inline copy
+    |       entity/normalized result -> existing owned flattening path
+    |
+    +--> returned editable document
+            source store retains current snapshot
+            first mutation copies if DOM strings still share it
+            anchors and diagnostics continue against current source
 ```
 
-### Source-Backed `RcString`
+`RcString` long storage has an internal type-erased shared owner. A private friend factory allows
+`XMLSourceStore` to create an owning full-source value whose substrings preserve the shared owner,
+including short intermediate slices. `ChunkedString::toSingleRcString()` then copies a short
+persistent result into inline storage, while a long direct substring keeps the snapshot owner.
 
-`RcString` long storage gains an internal type-erased shared owner so a slice can keep either the
-existing vector storage or an `XMLSourceStore` snapshot alive. `XMLSourceStore` owns its current
-source through `std::shared_ptr<std::string>` and exposes an internal full-source `RcString`
-reference.
+`XMLSourceStore::replace()` validates the edit and its resource limits before calling
+`ensureUniqueSource()`. If parsed strings still share the current source, the store clones it and
+then applies the mutation. This is ordinary copy-on-write: the parse result is safe, the caller's
+input may disappear immediately, and unchanged DOM strings remain valid after edits.
 
-`XMLParserImpl` initializes `ChunkedString` from that owning reference instead of from the caller's
-`std::string_view`. Single-chunk `ChunkedString::toSingleRcString()` then transfers the shared slice
-without copying. Entity-expanded and normalized multi-chunk strings continue to allocate owned
-decoded bytes.
+## Invariants
 
-Source-retained results may keep these `RcString` slices because the referenced snapshot becomes
-immutable. Before `XMLSourceStore::replace` mutates shared storage, it clones the complete current
-source and switches the store to the new unique copy. Compact results replace every source-backed
-slice and release the store before return.
+- `XMLParser::Parse` returns only strings whose bytes outlive the returned document.
+- Source-backed `RcString` values never refer to caller-owned memory.
+- `XMLSourceStore` never mutates a source buffer while parsed strings share it.
+- Parser cursor slices remain reference-backed so source locations retain their original offsets.
+- Short persistent strings use inline storage and do not keep an otherwise unneeded snapshot alive.
+- Entity expansion and other multi-piece values retain the existing owned flattening behavior.
+- The optimization does not alter node locations, anchors, diagnostic ranges, or public string APIs.
 
-Short source substrings continue to use `RcString` inline storage and need neither snapshot
-retention nor finalization. Long XML attribute values provide the first benchmarked shared-slice
-path.
+## Measured Results
 
-### Compact-Mode Finalization
+Complete `SVGParser::ParseSVG` allocation results on the measured macOS system, with the returned
+document alive at the sample point:
 
-The finalizer runs only for compact results, after the complete XML tree is parsed and before
-`XMLParser::Parse` returns. It collects mutable string fields from:
+| Workload            | Version       |  Calls | Requested bytes | Retained bytes | Peak live bytes |
+| ------------------- | ------------- | -----: | --------------: | -------------: | --------------: |
+| Repeated attributes | Parent        | 14,358 |       6,411,849 |      6,066,487 |       6,066,487 |
+| Repeated attributes | Source-backed | 13,847 |       6,388,081 |      6,066,527 |       6,066,527 |
+| Donner Splash       | Parent        | 23,000 |       9,042,703 |      8,243,148 |       8,243,268 |
+| Donner Splash       | Source-backed | 22,759 |       9,006,570 |      8,237,725 |       8,237,845 |
 
-- element `TreeComponent` qualified names;
-- `AttributesComponent` names and values;
-- `XMLValueComponent` values;
-- namespace declarations and caches;
-- retained entity declaration names and values.
+The source-backed path removes 511 complete-parse allocations from the repeated-attribute fixture
+and 241 from the splash. Total retained memory changes little because source bytes were already
+retained for editing and SVG geometry, styles, and ECS containers dominate the full parse.
 
-Short strings remain in `RcString` inline storage. Unique long strings are packed into bounded
-pages with a NUL byte after every value so `RcString::data()` keeps its null-termination contract.
-Each finalized long `RcString` is a slice sharing its compact page.
+### Rejected Compact/Intern Experiment
 
-Components whose ordering depends on string bytes are rebuilt rather than mutated. The finalizer
-constructs replacement attribute/entity/namespace containers, validates them, and swaps only after
-the replacement is complete.
-
-### Result Boundaries
-
-Source-retained SVG parsing becomes:
-
-1. create `XMLSourceStore` and parse against its shared source snapshot;
-2. return the XML tree with eligible `RcString` slices still sharing that immutable snapshot;
-3. project the XML tree into SVG components, transferring shared `RcString` values where possible;
-4. retain the source store and anchors for structured editing;
-5. on the first source mutation, copy shared current source storage before editing it.
-
-Compact SVG parsing becomes:
-
-1. create a parse-lifetime source store and parse against its shared snapshot;
-2. finalize and detach all XML strings;
-3. use the parse source through SVG projection for offsets and line information;
-4. release the source store before returning the SVG document.
-
-Incremental reparsing of a source-retained document always uses compact mode for the fragment. Its
-tree and values therefore enter the live registry with no reference to the current mutable source,
-and later edits do not repeatedly clone the whole document.
-
-## Data and State
-
-In source-retained mode, the source store and long direct XML strings share one snapshot after
-parse. The first structured edit clones that snapshot only when it is still shared. Unchanged DOM
-strings continue to reference the immutable prior snapshot; edited DOM values are replaced with
-new owning strings. Because incremental fragments are compacted, the current source remains unique
-after the first clone instead of cloning once per keystroke.
-
-The source resource budget accounts for both the current source and immutable snapshots still held
-by DOM strings. An edit is rejected transactionally if copy-on-write would exceed the retained
-source-snapshot budget.
-
-The compact pages are owned only through finalized `RcString` values. The document context does not
-need a permanent global interner, and a page is released when its last string is released. Later
-runtime mutations create ordinary owning `RcString` values; compact documents have no source store
-and source-retained fragment parses never add references to the mutable source.
-
-The finalizer uses a bounded list of field handles and exact byte comparisons. Deduplication work
-is charged against a new parse-finalization work budget. If the work budget would be exceeded, the
-parser rejects the document with a resource-limit diagnostic rather than returning source-backed
-strings or silently falling back to unbounded work.
-
-## Diagnostics and Structured Editing
-
-`ParseDiagnostic` stores owning reason text plus `FileOffset`/`SourceRange` byte positions.
-Finalization does not change source bytes, offsets, anchors, or line tables. SVG subparser warnings
-continue to remap through `SVGParserContext` using `XMLSourceStore::source()`.
-
-Structured edits start only after the source-retained parse result is complete. A CI test forces
-copy-on-write reallocation of the complete source and verifies that long tag names, attribute
-names/values, and text values remain unchanged. Compact-mode tests verify `hasSourceStore()` is
-false while diagnostic ranges produced during parsing remain identical. Existing source-anchor and
-incremental-edit suites remain required gates.
-
-## Performance
-
-The benchmark reports both result modes and separate phases so the optimization cannot hide work:
-
-- XML parse CPU and C++ allocation calls/requested bytes;
-- string-finalization CPU, transient bytes, and retained compact-page bytes;
-- SVG projection CPU and allocations;
-- complete `SVGParser::ParseSVG` CPU and allocations.
-- first structured-edit copy-on-write CPU and retained snapshot bytes for source-retained mode.
-
-Parent allocation baselines on the measured macOS system:
+The final compact experiment kept short values inline and interned only long values:
 
 | Workload            |  Calls | Requested bytes | Retained bytes | Peak live bytes |
 | ------------------- | -----: | --------------: | -------------: | --------------: |
-| Repeated attributes | 14,358 |       6,411,849 |      6,066,487 |       6,066,487 |
-| Donner Splash       | 23,000 |       9,042,703 |      8,243,148 |       8,243,268 |
+| Repeated attributes | 13,852 |       6,396,574 |      5,643,255 |       6,066,687 |
+| Donner Splash       | 22,764 |       9,043,238 |      7,689,194 |       8,265,306 |
 
-The CI ceilings include portability headroom for standard-library layout differences. Source
-loading is outside the measured scope, and the parsed document remains alive when retained and peak
-bytes are sampled.
+Compared with source retention, compact mode saved about 7.0% retained memory on repeated
+attributes and 6.7% on the splash. It added five allocation calls in each workload, increased
+requested and peak bytes slightly, and changed the alternating splash parse mean from about
+2.579 ms to 2.733 ms, a 5.95% regression. The traversal, public mode switch, and map rebuilding were
+not justified by that tradeoff, so the production implementation was removed.
 
-Source-retained results after Milestone 2:
+## Tests and Benchmarks
 
-| Workload            |  Calls | Requested bytes | Retained bytes | Peak live bytes |
-| ------------------- | -----: | --------------: | -------------: | --------------: |
-| Repeated attributes | 13,847 |       6,388,081 |      6,066,527 |       6,066,527 |
-| Donner Splash       | 22,759 |       9,006,570 |      8,237,725 |       8,237,845 |
+- `SvgParseAllocation_tests.cc` gates allocation calls, requested bytes, retained live bytes, and
+  peak live bytes for repeated attributes and the canonical splash.
+- `SvgParsePerfBench.cpp` accepts the splash as a Bazel runfile and reports repeatable median parse
+  timing without renderer work.
+- XML tests prove a shared long attribute survives source copy-on-write and a short persistent
+  attribute uses inline storage without retaining the snapshot.
+- `XMLSourceStore` tests prove an owning source reference survives replacement.
+- Existing XML/SVG parser, node-location, structured-editing, and diagnostic tests remain the
+  compatibility gates; structured XML and SVG fuzzers remain the hostile-input gates.
 
-Source sharing removes 511 complete-parse allocations from the repeated-attribute case and 241
-from the splash. It does not approach the overall 30% goal because typed SVG geometry, styles, and
-ECS containers dominate complete-parse allocation traffic; compact mode is evaluated separately.
+## Security and Resource Behavior
 
-Compact-mode results after node-handle map reuse, packed canonical storage, and long-string-only
-interning:
-
-| Workload            |  Calls | Requested bytes | Retained bytes | Peak live bytes |
-| ------------------- | -----: | --------------: | -------------: | --------------: |
-| Repeated attributes | 14,366 |       6,445,758 |      5,643,255 |       6,066,687 |
-| Donner Splash       | 23,650 |       9,091,974 |      7,689,194 |       8,265,306 |
-
-Relative to source-retained mode, compact mode saves about 7.0% retained memory on repeated
-attributes and 6.7% on the splash. It increases allocation calls by about 3.8%, requested bytes by
-about 1%, and splash parse CPU from about 2.63 ms to 3.02 ms (14.8%). Peak requested bytes remain
-approximately flat. This misses the 5% CPU and allocation-reduction gates, so compact mode remains
-explicit opt-in pending a rollout decision.
-
-Acceptance requires:
-
-- at least 30% fewer complete-parse C++ allocation calls on the repeated-name and representative
-  SVG corpora;
-- no more than 5% complete-parse CPU regression;
-- no increase in retained string bytes on the representative corpus;
-- no more than 10% peak requested-byte regression during finalization;
-- no more than one full-source copy across a sequence of incremental edits;
-- source-backed strings observable only in source-retained results.
-
-If finalization merely moves the same allocation cost or increases peak memory materially, stop and
-retain the current owning parse path.
-
-## Security / Privacy
-
-SVG/XML input is hostile. Source size, element count, nesting depth, attribute count, entity
-expansion, and parsed payload budgets remain authoritative. Finalization adds checked arithmetic for
-field counts, page bytes, separators, and offsets.
-
-Compact pages have a fixed maximum size. A value larger than one page receives its own bounded
-storage. Deduplication has an explicit work budget, avoiding attacker-controlled unbounded hash or
-comparison work. Source-retained snapshot bytes have an aggregate budget, and copy-on-write checks
-that budget before cloning. Compact results cannot retain source-backed strings; source-retained
-results cannot mutate shared storage. These invariants are enforced by
-`//donner/base/xml:xml_tests` and the structured XML/SVG fuzzers.
-
-No sensitive data leaves the process, and the change adds no logging, network, or persistence
-surface beyond the existing document source store.
-
-## Testing and Validation
-
-- Unit tests for shared-source `RcString` slices, SSO behavior, NUL termination, and page lifetime.
-- XML parser equality tests for every node type, namespaces, entities, Unicode, empty strings, and
-  repeated names/values.
-- A source-detachment test that forces `XMLSourceStore` reallocation after parse.
-- A source-retained attribute test proving unchanged long values survive copy-on-write while the
-  edited value changes.
-- A multi-edit test proving only the first edit clones the full source and compact fragments do not
-  re-share it.
-- Compact-mode tests proving the returned document has no source store or parse-backing references.
-- Structured editing tests for attribute/text insert, replace, remove, subtree reparse, diagnostics,
-  undo/redo projection, and source-anchor resolution.
-- Exact diagnostic range/message comparisons on parent and candidate.
-- Allocation/timing benchmarks for direct slices and decoded fallbacks.
-- `//donner/base/xml:xml_parser_structured_fuzzer` and
-  `//donner/svg/parser:svg_parser_structured_fuzzer` under ASan/libFuzzer.
-- Full `bazel test //...`, lint, and generated CMake validation before publication.
-
-## Rollout Plan
-
-Land the benchmark first. Add an explicit parser result-mode option, preserving source-retained
-behavior for editor/structured-editing callers and selecting compact mode for secure static
-subdocuments and callers that do not need source projection. Do not infer string lifetime solely
-from `ProcessingMode`; source retention is an orthogonal API choice.
-
-Keep source-backed storage internal and replace the owning path in one XML parser change only after
-copy-on-write and compact detachment tests pass. If either mode misses its performance or memory
-gates, retain the benchmark and revert that mode's representation.
+The change introduces no new parsing loops or attacker-controlled recursion. Input, tree, depth,
+attribute, and entity limits remain authoritative. Source replacement still validates range,
+UTF-8, source-size, and anchor work limits before copying or mutating storage. Copy-on-write is at
+most one full-source allocation for a particular shared snapshot; later edits use the store's
+unique current source unless new parsed values share it.
 
 ## Alternatives Considered
 
-- **Mutate shared source storage in place:** Rejected. `XMLSourceStore` must copy shared storage
-  before mutation so source-retained DOM slices stay valid.
-- **Always compact, including editor documents:** Safe but gives up the largest allocation win when
-  the source snapshot is already retained for structured editing.
-- **Copy every string individually at parse end:** Lifetime-safe but does not intern duplicates or
-  compact long-string storage.
-- **Permanent global document interner:** Simplifies later insertions but retains dead strings and
-  adds synchronization/lifetime policy to every mutation.
-- **Handle-indirected mutable strings:** Allows remapping without a traversal but adds an extra
-  pointer chase to every `RcString::data()` call and changes a foundational value type.
-- **Finalize after SVG projection:** Requires finding and rewriting every `RcString` across all SVG
-  components. Finalizing XML first gives SVG projection only stable owned strings.
-
-## Open Questions
-
-- Should the first implementation compact entity declaration storage, or remove that parse-only
-  context before return when later incremental parsing cannot use it?
-- Should `XMLParser::Parse` default to source-retained mode for compatibility while
-  `SVGParser::Options` exposes an explicit compact choice, or should XML callers opt into retention?
-- What retained-source-snapshot limit preserves editor usability for a maximum-size document while
-  preventing repeated snapshot accumulation?
-- What exact finalization work budget preserves the current accepted-input envelope without opening
-  a comparison-work amplification path?
-- Should compact pages be 32 KiB or 64 KiB after measuring allocator and locality effects?
-- Does the shared-owner `RcString` factory belong in the public base library with an internal tag,
-  or should XML storage be a friend-only construction path?
+- **Compact and intern at parse end:** Rejected after the measured experiment above.
+- **Copy every string at parse end:** Lifetime-safe but retains the allocation traffic this change
+  is intended to avoid.
+- **Mutate the shared source in place:** Rejected because it invalidates or changes DOM strings.
+- **Permanent document interner:** Rejected because it retains dead values and adds lifetime policy
+  to all later mutations.
+- **Non-owning public views:** Rejected because callers could outlive the parser or source buffer.
 
 ## Future Work
 
-- [ ] Reuse the proven parse-string session in standalone CSS parsing.
-- [ ] Evaluate periodic reinterning after many structured edits using explicit operator action or a
-      bounded maintenance threshold.
+- Revisit compacting only if a non-editing workload demonstrates a materially larger retained-memory
+  win or a finalization strategy meets the 5% CPU budget.
+- Evaluate the same owned-substring technique for standalone CSS only after defining its source
+  lifetime boundary.

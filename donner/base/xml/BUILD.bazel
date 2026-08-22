@@ -24,7 +24,6 @@ donner_cc_library(
         "XMLNode.cc",
         "XMLParser.cc",
         "XMLSourceStore.cc",
-        "XMLStringFinalizer.cc",
     ],
     hdrs = [
         "XMLDocument.h",
@@ -33,7 +32,6 @@ donner_cc_library(
         "XMLNode.h",
         "XMLParser.h",
         "XMLSourceStore.h",
-        "XMLStringFinalizer.h",
         "XMLTokenType.h",
         "XMLTokenizer.h",
     ],
