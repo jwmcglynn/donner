@@ -319,6 +319,23 @@ TEST(GeodeTextInstanceRecordComponentTest, SharedFamilyBoundsProjectedOccurrence
             0u);
 }
 
+TEST(GeodeTextInstanceRecordComponentTest, ChargedOccurrenceMovesAndReleasesExactlyOnce) {
+  const uint64_t occurrenceBytes = GeodeTextInstanceRecordComponent::kProjectedBytesPerOccurrence;
+  auto budget = std::make_shared<GeodeDocumentGeometryBudget>();
+
+  {
+    GeodeTextInstanceRecordComponent source;
+    ASSERT_TRUE(source.reserveOccurrence(budget));
+    source.occurrences.emplace_back();
+    GeodeTextInstanceRecordComponent moved(std::move(source));
+    GeodeTextInstanceRecordComponent assigned;
+    assigned = std::move(moved);
+    EXPECT_EQ(budget->cacheBytes(), occurrenceBytes);
+  }
+
+  EXPECT_EQ(budget->cacheBytes(), 0u);
+}
+
 TEST(GeodeTextInstanceRecordComponentTest, MoveLeavesTheSourceWithNoSlotsToRelease) {
   // entt's swap-and-pop removal move-assigns the surviving component over the
   // removed one; a source that kept its slots would free the survivor's

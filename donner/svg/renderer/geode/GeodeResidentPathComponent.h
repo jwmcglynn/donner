@@ -316,6 +316,10 @@ public:
     return total;
   }
 
+  uint64_t batchUniformMetadataBytesForTesting() const {
+    return batchUniforms_.capacity() * sizeof(BatchUniform);
+  }
+
 private:
   struct Chunk {
     ScopedWgpuHandle<wgpu::Buffer> buffer;

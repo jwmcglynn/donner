@@ -543,6 +543,50 @@ TEST_F(GeoEncoderTest, BatchUniformCpuMirrorStopsAtCapPlusOneAndReleases) {
   EXPECT_EQ(budget->residentBytes(), 0u);
 }
 
+TEST_F(GeoEncoderTest, BatchUniformCpuReservationIncludesVectorSpareCapacity) {
+  constexpr uint64_t kUniformBytes = 16u;
+  auto budget = std::make_shared<GeodeDocumentGeometryBudget>();
+
+  {
+    GeodeRecordSlab slab(device_->deviceId(), budget);
+    for (uint32_t index = 0; index < 5u; ++index) {
+      const uint32_t value[4] = {index, index + 1u, index + 2u, index + 3u};
+      ASSERT_TRUE(slab.acquireBatchUniform(*device_, value, sizeof(value)).buffer);
+    }
+    EXPECT_EQ(budget->cacheBytes(), slab.batchUniformMetadataBytesForTesting() + 5u * kUniformBytes)
+        << "The family reservation must include spare vector slots, not only live entries.";
+  }
+
+  EXPECT_EQ(budget->cacheBytes(), 0u);
+}
+
+TEST(GeodeResourceBudgetTest, ChargedResidentMirrorsMoveAndReleaseExactlyOnce) {
+  constexpr uint64_t kSolidBytes = 100u;
+  constexpr uint64_t kGradientBytes = 200u;
+  auto budget = std::make_shared<GeodeDocumentGeometryBudget>();
+  auto slab = std::make_shared<GeodeResidentSlab>(/*deviceId=*/1u, budget);
+
+  {
+    GeodeResidentSlot solid;
+    solid.slab = slab;
+    ASSERT_TRUE(solid.reserveUniformMirror(kSolidBytes));
+    GeodeResidentSlot movedSolid(std::move(solid));
+    GeodeResidentSlot assignedSolid;
+    assignedSolid = std::move(movedSolid);
+
+    GeodeResidentGradientSlot gradient;
+    gradient.slab = slab;
+    ASSERT_TRUE(gradient.reserveUniformMirror(kGradientBytes));
+    GeodeResidentGradientSlot movedGradient(std::move(gradient));
+    GeodeResidentGradientSlot assignedGradient;
+    assignedGradient = std::move(movedGradient);
+
+    EXPECT_EQ(budget->cacheBytes(), kSolidBytes + kGradientBytes);
+  }
+
+  EXPECT_EQ(budget->cacheBytes(), 0u);
+}
+
 TEST(GeodeResourceBudgetTest, ResidentRejectionPreservesCpuCacheFallback) {
   auto budget = std::make_shared<GeodeDocumentGeometryBudget>();
   budget->setLimitsForTesting({.cacheBytes = 100u, .residentBytes = 0u});
