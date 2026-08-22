@@ -17,7 +17,7 @@ load("@bazel_skylib//rules:common_settings.bzl", "bool_flag")
 load("@rules_python//python:defs.bzl", "py_test")
 load("//build_defs:embed_resources.bzl", "embed_resources")
 load("//build_defs:package.bzl", "donner_package")
-load("//build_defs:rules.bzl", "donner_cc_library", "donner_cc_test", "donner_multi_transitioned_test")
+load("//build_defs:rules.bzl", "donner_cc_fuzzer", "donner_cc_library", "donner_cc_test", "donner_multi_transitioned_test")
 
 # Build flag controlling whether Geode's WebGPU-backed targets are compiled.
 bool_flag(
@@ -40,8 +40,22 @@ _GEODE_ONLY = select({
 
 filegroup(
     name = "geode_geometry_fuzzer_routing_scope",
-    srcs = [],
+    srcs = [
+        ":geode_svg_geometry_budget_fuzzer",
+        ":geode_svg_geometry_budget_fuzzer_soak",
+    ],
     visibility = ["//visibility:private"],
+)
+
+donner_cc_fuzzer(
+    name = "geode_svg_geometry_budget_fuzzer",
+    srcs = ["tests/GeodeSvgGeometryBudget_fuzzer.cc"],
+    corpus = "tests/geode_svg_geometry_budget_corpus",
+    tags = ["fuzz_geode"],
+    deps = [
+        "//donner/svg",
+        "//donner/svg/renderer:renderer_geode",
+    ],
 )
 
 genquery(
