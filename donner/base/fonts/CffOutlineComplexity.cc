@@ -909,7 +909,7 @@ private:
       return Flow::Return;
     }
     if (op == 10 || op == 29) return callSubroutine(op == 29, depth);
-    if (op == 11) return !cff2_ && subroutine ? Flow::Return : Flow::Error;
+    if (op == 11) return subroutine ? Flow::Return : Flow::Error;
     if (op == 14) return !cff2_ ? finishCff1() : Flow::Error;
     if (op == 15 || op == 16) return cff2_ ? Flow::Unsupported : Flow::Error;
     return applyPathOperator(op) ? Flow::Return : Flow::Error;
