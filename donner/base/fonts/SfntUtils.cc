@@ -489,7 +489,6 @@ std::optional<CffComplexityIndex> BuildCffComplexityIndex(const SfntFont& font,
       index.glyphs[glyph] = {
           .maximumVertices = validated.glyphs[glyph].maximumVertices,
           .work = validated.glyphs[glyph].work,
-          .renderable = validated.glyphs[glyph].renderable,
       };
     }
   }
@@ -608,8 +607,7 @@ bool SfntFont::hasTable(std::string_view tag) const {
 
 std::optional<SfntFont::GlyphOutlineComplexity> SfntFont::glyphOutlineComplexity(
     size_t glyphIndex) const {
-  if (!glyphComplexities_ || glyphIndex >= numGlyphs_ ||
-      !glyphComplexities_[glyphIndex].renderable) {
+  if (!glyphComplexities_ || glyphIndex >= numGlyphs_) {
     return std::nullopt;
   }
   return glyphComplexities_[glyphIndex];

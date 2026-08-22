@@ -658,7 +658,6 @@ TEST(SfntUtils, Cff1LegacyEndcharCompositeAggregatesRenderableComponents) {
 
   ASSERT_EQ(result.status, CffOutlineValidationStatus::Complete);
   ASSERT_EQ(result.glyphs.size(), 4u);
-  EXPECT_TRUE(result.glyphs[3].renderable);
   EXPECT_EQ(result.glyphs[3].maximumVertices,
             result.glyphs[1].maximumVertices + result.glyphs[2].maximumVertices);
   EXPECT_GT(result.glyphs[3].work, result.glyphs[1].work + result.glyphs[2].work);

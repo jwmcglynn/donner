@@ -82,7 +82,6 @@ public:
   struct GlyphOutlineComplexity {
     uint32_t maximumVertices = 0;
     uint32_t work = 0;
-    bool renderable = true;
   };
 
   SfntFont();

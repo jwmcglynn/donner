@@ -19,6 +19,40 @@ constexpr std::size_t kMaximumStemHints = 96;
 constexpr std::size_t kMaximumCharStringLength = 65535;
 constexpr std::size_t kMaximumVertices = 1024 * 1024;
 constexpr std::size_t kMaximumGlyphWork = 16 * 1024 * 1024;
+
+constexpr std::array<uint16_t, 166> kExpertCharset{
+    0,   1,   229, 230, 231, 232, 233, 234, 235, 236, 237, 238, 13,  14,  15,  99,  239, 240, 241,
+    242, 243, 244, 245, 246, 247, 248, 27,  28,  249, 250, 251, 252, 253, 254, 255, 256, 257, 258,
+    259, 260, 261, 262, 263, 264, 265, 266, 109, 110, 267, 268, 269, 270, 271, 272, 273, 274, 275,
+    276, 277, 278, 279, 280, 281, 282, 283, 284, 285, 286, 287, 288, 289, 290, 291, 292, 293, 294,
+    295, 296, 297, 298, 299, 300, 301, 302, 303, 304, 305, 306, 307, 308, 309, 310, 311, 312, 313,
+    314, 315, 316, 317, 318, 158, 155, 163, 319, 320, 321, 322, 323, 324, 325, 326, 150, 164, 169,
+    327, 328, 329, 330, 331, 332, 333, 334, 335, 336, 337, 338, 339, 340, 341, 342, 343, 344, 345,
+    346, 347, 348, 349, 350, 351, 352, 353, 354, 355, 356, 357, 358, 359, 360, 361, 362, 363, 364,
+    365, 366, 367, 368, 369, 370, 371, 372, 373, 374, 375, 376, 377, 378};
+
+constexpr std::array<uint16_t, 87> kExpertSubsetCharset{
+    0,   1,   231, 232, 235, 236, 237, 238, 13,  14,  15,  99,  239, 240, 241, 242, 243, 244,
+    245, 246, 247, 248, 27,  28,  249, 250, 251, 253, 254, 255, 256, 257, 258, 259, 260, 261,
+    262, 263, 264, 265, 266, 109, 110, 267, 268, 269, 270, 272, 300, 301, 302, 305, 314, 315,
+    158, 155, 163, 320, 321, 322, 323, 324, 325, 326, 150, 164, 169, 327, 328, 329, 330, 331,
+    332, 333, 334, 335, 336, 337, 338, 339, 340, 341, 342, 343, 344, 345, 346};
+
+constexpr std::array<uint16_t, 256> kStandardEncodingSid{
+    0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
+    0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   1,   2,   3,   4,   5,   6,
+    7,   8,   9,   10,  11,  12,  13,  14,  15,  16,  17,  18,  19,  20,  21,  22,  23,  24,  25,
+    26,  27,  28,  29,  30,  31,  32,  33,  34,  35,  36,  37,  38,  39,  40,  41,  42,  43,  44,
+    45,  46,  47,  48,  49,  50,  51,  52,  53,  54,  55,  56,  57,  58,  59,  60,  61,  62,  63,
+    64,  65,  66,  67,  68,  69,  70,  71,  72,  73,  74,  75,  76,  77,  78,  79,  80,  81,  82,
+    83,  84,  85,  86,  87,  88,  89,  90,  91,  92,  93,  94,  95,  0,   0,   0,   0,   0,   0,
+    0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
+    0,   0,   0,   0,   0,   0,   0,   0,   0,   96,  97,  98,  99,  100, 101, 102, 103, 104, 105,
+    106, 107, 108, 109, 110, 0,   111, 112, 113, 114, 0,   115, 116, 117, 118, 119, 120, 121, 122,
+    0,   123, 0,   124, 125, 126, 127, 128, 129, 130, 131, 0,   132, 133, 0,   134, 135, 136, 137,
+    0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   138, 0,   139,
+    0,   0,   0,   0,   140, 141, 142, 143, 0,   0,   0,   0,   0,   144, 0,   0,   0,   145, 0,
+    0,   146, 147, 148, 149, 0,   0,   0,   0};
 struct ValidationBudget {
   explicit ValidationBudget(std::size_t maximumWork) : maximumWork(maximumWork) {}
 
@@ -234,6 +268,7 @@ std::optional<Number> ParseDictNumber(std::span<const uint8_t> bytes, std::size_
 }
 
 struct DictFields {
+  std::optional<std::size_t> charset;
   std::optional<std::size_t> charStrings;
   std::optional<std::size_t> privateSize;
   std::optional<std::size_t> privateOffset;
@@ -257,6 +292,7 @@ bool AssignOffset(std::span<const Number> stack, std::size_t tableSize,
 
 bool ApplyDictOperator(uint16_t op, std::span<const Number> stack, std::size_t tableSize, bool cff2,
                        DictFields* fields) {
+  if (op == 15 && !cff2) return AssignOffset(stack, tableSize, &fields->charset);
   if (op == 17) return AssignOffset(stack, tableSize, &fields->charStrings);
   if (op == 18) {
     const std::optional<std::size_t> size =
@@ -396,11 +432,65 @@ std::optional<std::vector<uint16_t>> ParseFdSelect(std::span<const uint8_t> tabl
   return result;
 }
 
+std::optional<std::vector<uint16_t>> ParseCff1Charset(std::span<const uint8_t> table,
+                                                      std::size_t offset, std::size_t glyphCount,
+                                                      ValidationBudget* budget) {
+  if (!budget->charge(glyphCount)) return std::nullopt;
+  if (offset == 0) {
+    if (glyphCount > 229) return std::nullopt;
+    std::vector<uint16_t> result(glyphCount);
+    for (std::size_t glyph = 0; glyph < glyphCount; ++glyph) {
+      result[glyph] = static_cast<uint16_t>(glyph);
+    }
+    return result;
+  }
+  if (offset == 1 || offset == 2) {
+    const std::span<const uint16_t> predefined =
+        offset == 1 ? std::span<const uint16_t>(kExpertCharset)
+                    : std::span<const uint16_t>(kExpertSubsetCharset);
+    if (glyphCount > predefined.size()) return std::nullopt;
+    return std::vector<uint16_t>(predefined.begin(), predefined.begin() + glyphCount);
+  }
+  if (!HasBytes(table, offset, 1)) return std::nullopt;
+
+  std::vector<uint16_t> result(glyphCount, 0);
+  const uint8_t format = table[offset++];
+  if (format == 0) {
+    const std::size_t entries = glyphCount - 1;
+    if (!HasBytes(table, offset, entries * 2)) return std::nullopt;
+    for (std::size_t glyph = 1; glyph < glyphCount; ++glyph) {
+      result[glyph] = ReadBe16(table.data() + offset);
+      offset += 2;
+    }
+    return result;
+  }
+  if (format != 1 && format != 2) return std::nullopt;
+
+  std::size_t glyph = 1;
+  const std::size_t leftBytes = format == 1 ? 1 : 2;
+  while (glyph < glyphCount) {
+    if (!HasBytes(table, offset, 2 + leftBytes)) return std::nullopt;
+    const uint16_t firstSid = ReadBe16(table.data() + offset);
+    offset += 2;
+    const std::size_t left = leftBytes == 1 ? table[offset] : ReadBe16(table.data() + offset);
+    offset += leftBytes;
+    if (left > std::numeric_limits<uint16_t>::max() - firstSid || left + 1 > glyphCount - glyph) {
+      return std::nullopt;
+    }
+    for (std::size_t item = 0; item <= left; ++item) {
+      result[glyph++] = static_cast<uint16_t>(firstSid + item);
+    }
+  }
+  return result;
+}
+
 struct ParsedCff {
   CffIndexView charStrings;
   CffIndexView globalSubrs;
   std::vector<CffIndexView> localSubrs;
   std::vector<uint16_t> glyphFd;
+  std::vector<uint16_t> charsetSids;
+  bool cid = false;
   bool unsupportedVariation = false;
 };
 
@@ -428,8 +518,13 @@ std::optional<ParsedCff> ParseCff1(std::span<const uint8_t> table, std::size_t g
   }
   ParsedCff result{.charStrings = *chars,
                    .globalSubrs = *globals,
-                   .glyphFd = std::vector<uint16_t>(glyphCount, 0)};
+                   .glyphFd = std::vector<uint16_t>(glyphCount, 0),
+                   .cid = topFields->cid};
   if (!topFields->cid) {
+    const auto charset =
+        ParseCff1Charset(table, topFields->charset.value_or(0), glyphCount, budget);
+    if (!charset.has_value()) return std::nullopt;
+    result.charsetSids = *charset;
     const std::optional<CffIndexView> local = ParsePrivateSubrs(table, *topFields, false, budget);
     if (!local.has_value()) return std::nullopt;
     result.localSubrs.push_back(*local);
@@ -521,13 +616,19 @@ enum class Flow : uint8_t {
   Unsupported,
 };
 
+struct CharStringValidationResult {
+  CffOutlineValidationStatus status = CffOutlineValidationStatus::Invalid;
+  CffGlyphOutlineComplexity complexity;
+  std::optional<std::array<uint8_t, 2>> seacCodes;
+};
+
 class CharStringValidator {
 public:
   CharStringValidator(const ParsedCff& parsed, bool cff2, std::size_t fd,
                       ValidationBudget* validationBudget)
       : parsed_(parsed), cff2_(cff2), fd_(fd), validationBudget_(validationBudget) {}
 
-  CffOutlineValidationResult validate(std::span<const uint8_t> bytes) {
+  CharStringValidationResult validate(std::span<const uint8_t> bytes) {
     const Flow flow = run(bytes, false, 0);
     if (flow == Flow::Unsupported) {
       return {.status = CffOutlineValidationStatus::UnsupportedVariation};
@@ -536,10 +637,9 @@ public:
       return {.status = CffOutlineValidationStatus::Invalid};
     }
     return {.status = CffOutlineValidationStatus::Complete,
-            .work = work_,
-            .glyphs = {{.maximumVertices = static_cast<uint32_t>(vertices_),
-                        .work = static_cast<uint32_t>(work_),
-                        .renderable = renderable_}}};
+            .complexity = {.maximumVertices = static_cast<uint32_t>(vertices_),
+                           .work = static_cast<uint32_t>(work_)},
+            .seacCodes = seacCodes_};
   }
 
 private:
@@ -790,8 +890,9 @@ private:
         return Flow::Error;
       }
     }
+    seacCodes_ = std::array<uint8_t, 2>{static_cast<uint8_t>(stack_[2].value),
+                                        static_cast<uint8_t>(stack_[3].value)};
     stackSize_ = 0;
-    renderable_ = false;
     if (!closeContour()) return Flow::Error;
     return Flow::EndGlyph;
   }
@@ -853,7 +954,84 @@ private:
   std::size_t work_ = 0;
   bool widthSeen_ = false;
   bool contourOpen_ = false;
-  bool renderable_ = true;
+  std::optional<std::array<uint8_t, 2>> seacCodes_;
+};
+
+struct RawCffGlyphComplexity {
+  CffGlyphOutlineComplexity direct;
+  std::optional<std::array<std::size_t, 2>> components;
+};
+
+class CffComponentComplexityResolver {
+public:
+  CffComponentComplexityResolver(std::span<const RawCffGlyphComplexity> raw,
+                                 ValidationBudget* budget)
+      : raw_(raw),
+        budget_(budget),
+        states_(raw.size()),
+        resolved_(raw.size()),
+        depths_(raw.size()) {}
+
+  std::optional<std::vector<CffGlyphOutlineComplexity>> resolveAll() {
+    for (std::size_t glyph = 0; glyph < raw_.size(); ++glyph) {
+      if (!resolve(glyph)) return std::nullopt;
+    }
+    return resolved_;
+  }
+
+private:
+  enum class State : uint8_t {
+    Unvisited,
+    Visiting,
+    Complete,
+  };
+
+  bool addWork(std::size_t* work, std::size_t count) const {
+    if (*work > kMaximumGlyphWork || count > kMaximumGlyphWork - *work) return false;
+    *work += count;
+    return true;
+  }
+
+  bool addVertices(std::size_t* vertices, std::size_t count) const {
+    if (*vertices > kMaximumVertices || count > kMaximumVertices - *vertices) return false;
+    *vertices += count;
+    return true;
+  }
+
+  bool resolve(std::size_t glyph) {
+    if (states_[glyph] == State::Complete) return true;
+    if (states_[glyph] == State::Visiting) return false;
+    states_[glyph] = State::Visiting;
+
+    std::size_t vertices = raw_[glyph].direct.maximumVertices;
+    std::size_t work = raw_[glyph].direct.work;
+    std::size_t depth = 0;
+    if (raw_[glyph].components.has_value()) {
+      if (!budget_->charge(2)) return false;
+      for (const std::size_t component : *raw_[glyph].components) {
+        if (component >= raw_.size() || !resolve(component)) return false;
+        depth = std::max(depth, depths_[component] + 1);
+        const CffGlyphOutlineComplexity& child = resolved_[component];
+        if (!addVertices(&vertices, child.maximumVertices) || !addWork(&work, child.work) ||
+            !addWork(&work, child.maximumVertices * 2)) {
+          return false;
+        }
+      }
+      if (depth > kMaximumSubroutineDepth) return false;
+    }
+
+    resolved_[glyph] = {.maximumVertices = static_cast<uint32_t>(vertices),
+                        .work = static_cast<uint32_t>(work)};
+    depths_[glyph] = depth;
+    states_[glyph] = State::Complete;
+    return true;
+  }
+
+  std::span<const RawCffGlyphComplexity> raw_;
+  ValidationBudget* budget_ = nullptr;
+  std::vector<State> states_;
+  std::vector<CffGlyphOutlineComplexity> resolved_;
+  std::vector<std::size_t> depths_;
 };
 
 }  // namespace
@@ -878,25 +1056,66 @@ CffOutlineValidationResult ValidateCffOutlineComplexities(std::span<const uint8_
             .work = validationBudget.work};
   }
 
-  CffOutlineValidationResult result{.status = CffOutlineValidationStatus::Complete,
-                                    .work = validationBudget.work};
-  result.glyphs.reserve(expectedGlyphs);
+  constexpr uint32_t kMissingGlyph = std::numeric_limits<uint32_t>::max();
+  std::vector<uint32_t> glyphBySid;
+  if (!cff2 && !parsed->cid) {
+    if (parsed->charsetSids.size() != expectedGlyphs || !validationBudget.charge(expectedGlyphs)) {
+      return {.status = validationBudget.exhausted ? CffOutlineValidationStatus::WorkLimitExceeded
+                                                   : CffOutlineValidationStatus::Invalid,
+              .work = validationBudget.work};
+    }
+    glyphBySid.assign(std::numeric_limits<uint16_t>::max() + std::size_t{1}, kMissingGlyph);
+    for (std::size_t glyph = 0; glyph < expectedGlyphs; ++glyph) {
+      const uint16_t sid = parsed->charsetSids[glyph];
+      if (glyphBySid[sid] == kMissingGlyph) {
+        glyphBySid[sid] = static_cast<uint32_t>(glyph);
+      }
+    }
+  }
+
+  std::vector<RawCffGlyphComplexity> rawGlyphs;
+  rawGlyphs.reserve(expectedGlyphs);
   for (std::size_t glyph = 0; glyph < expectedGlyphs; ++glyph) {
     const auto bytes = IndexItem(parsed->charStrings, glyph);
     if (!bytes.has_value() || parsed->glyphFd[glyph] >= parsed->localSubrs.size()) {
       return {.status = CffOutlineValidationStatus::Invalid, .work = validationBudget.work};
     }
     CharStringValidator validator(*parsed, cff2, parsed->glyphFd[glyph], &validationBudget);
-    CffOutlineValidationResult glyphResult = validator.validate(*bytes);
+    CharStringValidationResult glyphResult = validator.validate(*bytes);
     if (glyphResult.status != CffOutlineValidationStatus::Complete) {
       return {.status = validationBudget.exhausted ? CffOutlineValidationStatus::WorkLimitExceeded
                                                    : glyphResult.status,
               .work = validationBudget.work};
     }
-    result.glyphs.push_back(glyphResult.glyphs.front());
+    RawCffGlyphComplexity raw{.direct = glyphResult.complexity};
+    if (glyphResult.seacCodes.has_value()) {
+      if (cff2 || parsed->cid || glyphBySid.empty()) {
+        return {.status = CffOutlineValidationStatus::Invalid, .work = validationBudget.work};
+      }
+      std::array<std::size_t, 2> components{};
+      for (std::size_t component = 0; component < components.size(); ++component) {
+        const uint16_t sid = kStandardEncodingSid[(*glyphResult.seacCodes)[component]];
+        const uint32_t componentGlyph = glyphBySid[sid];
+        if (componentGlyph == kMissingGlyph) {
+          return {.status = CffOutlineValidationStatus::Invalid, .work = validationBudget.work};
+        }
+        components[component] = componentGlyph;
+      }
+      raw.components = components;
+    }
+    rawGlyphs.push_back(raw);
   }
-  result.work = validationBudget.work;
-  return result;
+
+  CffComponentComplexityResolver resolver(rawGlyphs, &validationBudget);
+  auto resolved = resolver.resolveAll();
+  if (!resolved.has_value()) {
+    return {.status = validationBudget.exhausted ? CffOutlineValidationStatus::WorkLimitExceeded
+                                                 : CffOutlineValidationStatus::Invalid,
+            .work = validationBudget.work};
+  }
+  return {.status = CffOutlineValidationStatus::Complete,
+          .work = validationBudget.work,
+          .glyphs = std::move(*resolved)};
 }
 
 }  // namespace donner::fonts
