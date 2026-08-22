@@ -3482,8 +3482,10 @@ std::optional<tiny_skia::Mask> RendererTinySkia::buildClipMask(const ResolvedCli
   const int maskHeight = static_cast<int>(currentPixmap().height());
   ClipMaskBuilder builder(*surfaceBudget_, maskWidth, maskHeight, clip.clipPathUnitsTransform,
                           deviceFromLocalTransform_, antialias_, verbose_);
+  std::optional<tiny_skia::Mask> rectMask = builder.buildRect(clip.clipRect);
+  std::optional<tiny_skia::Mask> pathMask = builder.buildPaths(clip.clipPaths);
   std::optional<tiny_skia::Mask> result =
-      CombineClipMasks(builder.buildRect(clip.clipRect), builder.buildPaths(clip.clipPaths));
+      CombineClipMasks(std::move(rectMask), std::move(pathMask));
 
   if (verbose_) {
     std::cout << "\n";
