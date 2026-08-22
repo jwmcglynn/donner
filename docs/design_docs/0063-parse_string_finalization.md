@@ -1,7 +1,7 @@
 # Design: Parse-Lifetime String References and Finalization
 
-**Status:** In Progress. Allocation and peak-live-memory baselines are gated; source-backed string
-storage is the active milestone.
+**Status:** In Progress. Allocation and peak-live-memory baselines are gated, and source-retained
+copy-on-write storage is implemented. Compact/intern finalization is the active milestone.
 **Author:** GPT-5
 **Created:** 2026-08-22
 
@@ -49,8 +49,8 @@ dependence on the caller's input buffer. Only source-retained mode keeps a sourc
 ## Next Steps
 
 - Confirm the two result modes, copy-on-write boundary, and performance rubric.
-- Prototype source-backed `RcString` slices for source-retained parses.
-- Preserve the baseline gates while adding copy-on-write source storage.
+- Implement compact/intern finalization for non-source-retained parses.
+- Preserve source-retained structured-editing behavior while releasing compact-mode source storage.
 
 ## Implementation Plan
 
@@ -59,11 +59,11 @@ dependence on the caller's input buffer. Only source-retained mode keeps a sourc
         requested bytes to the allocation tracker.
   - [x] Add repeated-attribute and canonical `donner_splash.svg` parse gates.
   - [x] Record parent allocation, requested-byte, retained-byte, and peak-live-byte results.
-- [ ] Milestone 2: Add source-backed parse strings and copy-on-write source retention.
-  - [ ] Add shared external backing support to `RcString` without changing its public value API.
-  - [ ] Make `XMLSourceStore` source storage copy-on-write.
-  - [ ] Route direct XML attribute names and values through source-backed slices.
-  - [ ] Prove edited and unchanged attributes remain correct across the first and later edits.
+- [x] Milestone 2: Add source-backed parse strings and copy-on-write source retention.
+  - [x] Add shared external backing support to `RcString` without changing its public value API.
+  - [x] Make `XMLSourceStore` source storage copy-on-write.
+  - [x] Route direct XML attribute names and values through source-backed slices.
+  - [x] Prove edited and unchanged attributes remain correct across source reallocation.
 - [ ] Milestone 3: Add compact/intern finalization for non-source-retained parses.
 - [ ] Milestone 4: Prove structured-editing and diagnostic parity.
 - [ ] Milestone 5: Evaluate SVG/CSS adoption and decide whether to extend or stop.
@@ -221,6 +221,17 @@ Parent allocation baselines on the measured macOS system:
 The CI ceilings include portability headroom for standard-library layout differences. Source
 loading is outside the measured scope, and the parsed document remains alive when retained and peak
 bytes are sampled.
+
+Source-retained results after Milestone 2:
+
+| Workload            |  Calls | Requested bytes | Retained bytes | Peak live bytes |
+| ------------------- | -----: | --------------: | -------------: | --------------: |
+| Repeated attributes | 13,847 |       6,388,081 |      6,066,527 |       6,066,527 |
+| Donner Splash       | 22,759 |       9,006,570 |      8,237,725 |       8,237,845 |
+
+Source sharing removes 511 complete-parse allocations from the repeated-attribute case and 241
+from the splash. It does not approach the overall 30% goal because typed SVG geometry, styles, and
+ECS containers dominate complete-parse allocation traffic; compact mode is evaluated separately.
 
 Acceptance requires:
 

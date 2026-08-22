@@ -260,8 +260,11 @@ private:
   XMLDocument document_;
   components::EntityDeclarationsContext& entityCtx_;
 
+  /// Owning reference to the source snapshot used by parse-time substrings.
+  RcString sourceOwner_;
+
   /// The original string.
-  const std::string_view str_;
+  std::string_view str_;
 
   /// Remaining characters from \ref str_, potentially modified for entity resolution.
   ChunkedString remaining_;
@@ -287,8 +290,6 @@ private:
 public:
   explicit XMLParserImpl(std::string_view text, const XMLParser::Options& options)
       : entityCtx_(document_.registry().ctx().emplace<components::EntityDeclarationsContext>()),
-        str_(text),
-        remaining_(text),
         options_(options),
         maxEntityDepth_(options.maxEntityDepth),
         maxEntitySubstitutions_(options.maxEntitySubstitutions),
@@ -299,6 +300,9 @@ public:
         maxEntityDeclarationBytes_(options.maxEntityDeclarationBytes),
         maxNestingDepth_(options.maxNestingDepth) {
     document_.setSource(std::string(text), options.maximumInputSize);
+    sourceOwner_ = document_.sourceStore()->sourceReference();
+    str_ = sourceOwner_;
+    remaining_ = ChunkedString(sourceOwner_);
     auto& documentContext = document_.registry().ctx().get<components::XMLDocumentContext>();
     documentContext.maximumSourceEditTreeNodes = options.maxElements;
     documentContext.maximumSourceEditTreeDepth = options.maxNestingDepth;

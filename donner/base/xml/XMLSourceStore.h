@@ -3,6 +3,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <ostream>
 #include <string>
@@ -10,6 +11,7 @@
 #include <unordered_map>
 
 #include "donner/base/FileOffset.h"
+#include "donner/base/RcString.h"
 #include "donner/base/Utils.h"
 #include "donner/base/parser/LineOffsets.h"
 
@@ -116,7 +118,18 @@ public:
   XMLSourceStore(std::string source, ResourceLimits limits);
 
   /// Return the current source bytes.
-  [[nodiscard]] std::string_view source() const UTILS_LIFETIME_BOUND { return source_; }
+  [[nodiscard]] std::string_view source() const UTILS_LIFETIME_BOUND { return *source_; }
+
+  /**
+   * Return an owning reference to the current source snapshot for parse-time substrings.
+   *
+   * A later source mutation first copies shared storage, so strings derived from this value remain
+   * valid.
+   */
+  [[nodiscard]] RcString sourceReference() const;
+
+  /// Number of owners of the current source storage, for copy-on-write tests.
+  [[nodiscard]] std::size_t sourceStorageUseCountForTesting() const { return source_.use_count(); }
 
   /// Return the monotonically increasing source version.
   [[nodiscard]] std::uint64_t sourceVersion() const { return sourceVersion_; }
@@ -226,8 +239,9 @@ private:
 
   void recordCreatedAnchor();
   void recordRetiredAnchor();
+  void ensureUniqueSource();
 
-  std::string source_;
+  std::shared_ptr<std::string> source_ = std::make_shared<std::string>();
   ResourceLimits resourceLimits_;
   std::uint64_t sourceVersion_ = 0;
   std::uint32_t nextAnchorId_ = 1;

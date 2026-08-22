@@ -200,6 +200,28 @@ TEST_F(XMLParserTests, ParsedDocumentOwnsSourceStore) {
   EXPECT_EQ(sourceStore->resolveSpan(*fillSpan), (ResolvedSourceSpan{fillOffset, fillOffset + 4}));
 }
 
+TEST_F(XMLParserTests, LongAttributesSurviveSourceStoreCopyOnWrite) {
+  constexpr std::string_view kAttributeName = "data-repeated-long-attribute-name";
+  constexpr std::string_view kAttributeValue =
+      "a-long-attribute-value-that-shares-the-parse-source";
+  const std::string xml = "<svg><rect " + std::string(kAttributeName) + "=\"" +
+                          std::string(kAttributeValue) + "\"/></svg>";
+
+  ParseResult<XMLDocument> maybeDocument = XMLParser::Parse(xml);
+  ASSERT_THAT(maybeDocument, NoParseError());
+  XMLDocument document = std::move(maybeDocument.result());
+  XMLNode rect = document.root().firstChild()->firstChild().value();
+  ASSERT_EQ(rect.getAttribute(kAttributeName), std::optional<RcString>(RcString(kAttributeValue)));
+
+  XMLSourceStore* sourceStore = document.sourceStore();
+  ASSERT_NE(sourceStore, nullptr);
+  EXPECT_GT(sourceStore->sourceStorageUseCountForTesting(), 1u);
+  ASSERT_TRUE(sourceStore->replace(0, 0, " ").has_value());
+
+  EXPECT_EQ(rect.getAttribute(kAttributeName), std::optional<RcString>(RcString(kAttributeValue)));
+  EXPECT_EQ(sourceStore->sourceStorageUseCountForTesting(), 1u);
+}
+
 TEST_F(XMLParserTests, ParsedNodeLocationsFollowSourceStoreEdits) {
   constexpr std::string_view kXml = R"(<svg><rect id="r" fill="red"/></svg>)";
 
