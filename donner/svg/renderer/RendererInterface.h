@@ -129,6 +129,11 @@ public:
   static constexpr std::uint64_t kMaximumBytes = 256ULL * 1024 * 1024;
   static constexpr std::size_t kMaximumSurfaces = 256;
 
+  struct Limits {
+    std::uint64_t bytes = kMaximumBytes;
+    std::size_t surfaces = kMaximumSurfaces;
+  };
+
   void reset() {
     bytes_ = 0;
     surfaces_ = 0;
@@ -138,7 +143,7 @@ public:
   [[nodiscard]] bool reserve(int width, int height, std::size_t surfaceCount = 1,
                              std::uint64_t bytesPerPixel = 4) {
     if (rejected_ || width < 0 || height < 0 || bytesPerPixel == 0 ||
-        surfaceCount > kMaximumSurfaces - surfaces_) {
+        surfaces_ > limits_.surfaces || surfaceCount > limits_.surfaces - surfaces_) {
       rejected_ = true;
       return false;
     }
@@ -148,14 +153,14 @@ public:
 
     const std::uint64_t pixelWidth = static_cast<std::uint64_t>(width);
     const std::uint64_t pixelHeight = static_cast<std::uint64_t>(height);
-    if (pixelWidth > kMaximumBytes / pixelHeight ||
-        pixelWidth * pixelHeight > kMaximumBytes / bytesPerPixel ||
-        pixelWidth * pixelHeight * bytesPerPixel > kMaximumBytes / surfaceCount) {
+    if (pixelWidth > limits_.bytes / pixelHeight ||
+        pixelWidth * pixelHeight > limits_.bytes / bytesPerPixel ||
+        pixelWidth * pixelHeight * bytesPerPixel > limits_.bytes / surfaceCount) {
       rejected_ = true;
       return false;
     }
     const std::uint64_t byteCount = pixelWidth * pixelHeight * bytesPerPixel * surfaceCount;
-    if (byteCount > kMaximumBytes - bytes_) {
+    if (bytes_ > limits_.bytes || byteCount > limits_.bytes - bytes_) {
       rejected_ = true;
       return false;
     }
@@ -169,7 +174,13 @@ public:
   [[nodiscard]] std::size_t surfaces() const { return surfaces_; }
   [[nodiscard]] bool rejected() const { return rejected_; }
 
+  void setLimitsForTesting(Limits limits) {
+    limits_.bytes = std::min(limits_.bytes, limits.bytes);
+    limits_.surfaces = std::min(limits_.surfaces, limits.surfaces);
+  }
+
 private:
+  Limits limits_;
   std::uint64_t bytes_ = 0;
   std::size_t surfaces_ = 0;
   bool rejected_ = false;
@@ -256,6 +267,7 @@ public:
   static constexpr std::size_t kMaximumPoints = 8 * 1024 * 1024;
   static constexpr std::uint64_t kMaximumBytes = 64ULL * 1024 * 1024;
   static constexpr std::size_t kMaximumDecodeWork = 64 * 1024 * 1024;
+  static constexpr std::size_t kMaximumGlyphOccurrences = 64 * 1024;
 
   struct Cost {
     std::size_t uniqueOutlines = 0;
@@ -271,6 +283,7 @@ public:
     points_ = 0;
     bytes_ = 0;
     decodeWork_ = 0;
+    glyphOccurrences_ = 0;
     rejected_ = false;
   }
 
@@ -293,6 +306,16 @@ public:
 
   void reject() { rejected_ = true; }
 
+  [[nodiscard]] bool reserveGlyphOccurrences(std::size_t count) {
+    if (rejected_ || glyphOccurrences_ > glyphOccurrenceLimit_ ||
+        count > glyphOccurrenceLimit_ - glyphOccurrences_) {
+      rejected_ = true;
+      return false;
+    }
+    glyphOccurrences_ += count;
+    return true;
+  }
+
   [[nodiscard]] bool reservePathCopy(const Path& path) {
     const std::size_t commands = path.commands().size();
     const std::size_t points = path.points().size();
@@ -313,12 +336,17 @@ public:
     limits_.decodeWork = std::min(limits_.decodeWork, limits.decodeWork);
   }
 
+  void setGlyphOccurrenceLimitForTesting(std::size_t maximum) {
+    glyphOccurrenceLimit_ = std::min(glyphOccurrenceLimit_, maximum);
+  }
+
   [[nodiscard]] const Cost& limits() const { return limits_; }
   [[nodiscard]] std::size_t uniqueOutlines() const { return uniqueOutlines_; }
   [[nodiscard]] std::size_t commands() const { return commands_; }
   [[nodiscard]] std::size_t points() const { return points_; }
   [[nodiscard]] std::uint64_t bytes() const { return bytes_; }
   [[nodiscard]] std::size_t decodeWork() const { return decodeWork_; }
+  [[nodiscard]] std::size_t glyphOccurrences() const { return glyphOccurrences_; }
   [[nodiscard]] bool rejected() const { return rejected_; }
 
 private:
@@ -332,6 +360,8 @@ private:
   std::size_t points_ = 0;
   std::uint64_t bytes_ = 0;
   std::size_t decodeWork_ = 0;
+  std::size_t glyphOccurrences_ = 0;
+  std::size_t glyphOccurrenceLimit_ = kMaximumGlyphOccurrences;
   bool rejected_ = false;
 };
 

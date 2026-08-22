@@ -25,6 +25,7 @@
 #include "donner/base/Transform.h"
 #include "donner/base/Vector2.h"
 #include "donner/svg/SVGDocument.h"
+#include "donner/svg/components/DocumentResourceFamilyBudget.h"
 #include "donner/svg/components/RenderingInstanceComponent.h"
 #include "donner/svg/components/filter/FilterGraph.h"
 #include "donner/svg/components/layout/TransformComponent.h"
@@ -48,6 +49,7 @@
 #include "donner/svg/renderer/geode/GeodePathEncoder.h"
 #include "donner/svg/renderer/geode/GeodePipeline.h"
 #include "donner/svg/renderer/geode/GeodeResidentPathComponent.h"
+#include "donner/svg/renderer/geode/GeodeResourceBudget.h"
 #include "donner/svg/renderer/geode/GeodeStrokeTolerance.h"
 #include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
 #include "donner/svg/resources/ImageResource.h"
@@ -55,6 +57,7 @@
 #include "donner/base/MathUtils.h"
 #include "donner/svg/components/text/ComputedTextGeometryComponent.h"
 #include "donner/svg/renderer/PlacedTextGeometry.h"
+#include "donner/svg/resources/FontManager.h"
 #include "donner/svg/text/TextEngine.h"
 #include "donner/svg/text/TextLayoutParams.h"
 #endif
@@ -171,6 +174,32 @@ TextLayoutParams toTextLayoutParams(const TextParams& params) {
   layoutParams.lengthAdjust = params.lengthAdjust;
   layoutParams.inlineSizePx = params.inlineSizePx;
   return layoutParams;
+}
+
+std::optional<RendererTextMaterializationBudget::Cost> GlyphPredecodeCost(
+    const FontManager::GlyphOutlineComplexity& complexity) {
+  constexpr std::size_t kCommandCopiesPerVertex = 6;
+  constexpr std::size_t kPointCopiesPerVertex = 9;
+  if (complexity.maximumVertices >
+      std::numeric_limits<std::size_t>::max() / kPointCopiesPerVertex) {
+    return std::nullopt;
+  }
+  const std::size_t commands = complexity.maximumVertices * kCommandCopiesPerVertex;
+  const std::size_t points = complexity.maximumVertices * kPointCopiesPerVertex;
+  if (commands > std::numeric_limits<std::size_t>::max() / sizeof(Path::Command) ||
+      points > std::numeric_limits<std::size_t>::max() / sizeof(Vector2d)) {
+    return std::nullopt;
+  }
+  const std::size_t commandBytes = commands * sizeof(Path::Command);
+  const std::size_t pointBytes = points * sizeof(Vector2d);
+  if (pointBytes > std::numeric_limits<std::size_t>::max() - commandBytes) {
+    return std::nullopt;
+  }
+  return RendererTextMaterializationBudget::Cost{.uniqueOutlines = 1,
+                                                 .commands = commands,
+                                                 .points = points,
+                                                 .bytes = commandBytes + pointBytes,
+                                                 .decodeWork = complexity.work};
 }
 #endif
 
@@ -1241,6 +1270,18 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
   std::shared_ptr<components::FilterExecutionBudget> filterExecutionBudget =
       std::make_shared<components::FilterExecutionBudget>();
   bool ownsFilterExecutionBudget = true;
+  std::shared_ptr<geode::GeodeFrameGeometryBudget> geometryBudget =
+      std::make_shared<geode::GeodeFrameGeometryBudget>();
+  bool ownsGeometryBudget = true;
+  std::shared_ptr<RendererSurfaceBudget> surfaceBudget = std::make_shared<RendererSurfaceBudget>();
+  bool ownsSurfaceBudget = true;
+  std::shared_ptr<RendererTextMaterializationBudget> textMaterializationBudget =
+      std::make_shared<RendererTextMaterializationBudget>();
+  bool ownsTextMaterializationBudget = true;
+  std::shared_ptr<geode::GeodeDocumentGeometryBudget::Limits> documentGeometryLimits =
+      std::make_shared<geode::GeodeDocumentGeometryBudget::Limits>();
+  std::shared_ptr<std::weak_ptr<geode::GeodeDocumentGeometryBudget>> lastDocumentGeometryBudget =
+      std::make_shared<std::weak_ptr<geode::GeodeDocumentGeometryBudget>>();
 
   // GPU resources. Created in the constructor; if device creation fails,
   // `device` is null and the renderer enters a no-op state.
@@ -1459,11 +1500,25 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
     frameGenerationOpen = false;
   }
 
+  [[nodiscard]] bool reserveTextureSurface(const wgpu::TextureDescriptor& desc) {
+    if (!device || desc.size.width > static_cast<uint32_t>(std::numeric_limits<int>::max()) ||
+        desc.size.height > static_cast<uint32_t>(std::numeric_limits<int>::max()) ||
+        !surfaceBudget->reserve(static_cast<int>(desc.size.width),
+                                static_cast<int>(desc.size.height),
+                                static_cast<std::size_t>(desc.size.depthOrArrayLayers))) {
+      return false;
+    }
+    return true;
+  }
+
   /// Acquire a pooled texture matching `desc`, or create a fresh one
   /// on miss. Always increments the `textureCreates` counter on miss;
   /// never on hit. Returns a null texture on device failure.
   wgpu::Texture acquireTexture(const wgpu::TextureDescriptor& desc) {
-    return texturePool && device ? texturePool->acquire(*device, desc) : wgpu::Texture{};
+    if (!texturePool || !reserveTextureSurface(desc)) {
+      return wgpu::Texture{};
+    }
+    return texturePool->acquire(*device, desc);
   }
 
   wgpu::Texture acquireFilterTexture(const wgpu::TextureDescriptor& desc) override {
@@ -2531,6 +2586,19 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
   /// to live on (e.g. `drawRect` / `drawEllipse` convenience draws). Only
   /// one active draw at a time, so a single slot is safe.
   Path strokeScratchPath;
+  std::optional<geode::EncodedPath> fillScratchEncode;
+  std::optional<geode::EncodedPath> strokeScratchEncode;
+  geode::EncodedPath rejectedGeometry = [] {
+    geode::EncodedPath encoded;
+    encoded.outcome = geode::EncodedPath::Outcome::Rejected;
+    return encoded;
+  }();
+  std::deque<geode::EncodedPath> transientTextEncodes;
+
+  struct AdmittedEncode {
+    const geode::EncodedPath* encoded = nullptr;
+    bool persistent = false;
+  };
 
   /// Value returned by `getFillEncode` / `getStrokeDerived` describing
   /// which encode the caller should pass down to `GeoEncoder`.
@@ -2543,27 +2611,74 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
     /// the stroke came from a cache slot - the no-entity fallback
     /// leaves this null and lets `GeoEncoder` encode inline.
     const geode::EncodedPath* encoded = nullptr;
+    /// True when both `strokedPath` and `encoded` live in the entity cache.
+    bool persistent = false;
     /// Fill rule to use. For open-path strokes, `strokeToFill` emits one
     /// subpath → NonZero; for closed-path strokes, two → EvenOdd.
     FillRule fillRule = FillRule::NonZero;
   };
 
-  /// Encode-side of the cache. If `source` holds a valid entity handle,
-  /// installs / reuses a `GeodePathCacheComponent::fillEncode` on it and
-  /// returns a stable pointer into that component. If `source` is null
-  /// (non-driver callers), returns null and `GeoEncoder` will encode
-  /// inline - the old pre-cache code path.
-  const geode::EncodedPath* getFillEncode(EntityHandle source, const Path& path, FillRule rule) {
+  [[nodiscard]] bool reserveEncodedGeometry(const geode::EncodedPath& encoded) {
+    if (encoded.rejected()) {
+      geometryBudget->reject();
+      return false;
+    }
+    const std::size_t retainedBytes = encoded.retainedBytes();
+    if (retainedBytes == std::numeric_limits<std::size_t>::max()) {
+      geometryBudget->reject();
+      return false;
+    }
+    return geometryBudget->reserve(encoded.geometryItemCount(), retainedBytes);
+  }
+
+  std::optional<geode::EncodedPath> encodeGeometry(const Path& path, FillRule rule) {
+    if (geometryBudget->rejected()) {
+      return std::nullopt;
+    }
+    device->countPathEncode();
+    geode::EncodedPath encoded = geode::GeodePathEncoder::encode(path, rule);
+    if (!reserveEncodedGeometry(encoded)) {
+      return std::nullopt;
+    }
+    return encoded;
+  }
+
+  const geode::EncodedPath* encodeTransientGeometry(const Path& path, FillRule rule) {
+    std::optional<geode::EncodedPath> encoded = encodeGeometry(path, rule);
+    if (!encoded.has_value()) {
+      return &rejectedGeometry;
+    }
+    transientTextEncodes.push_back(std::move(*encoded));
+    return &transientTextEncodes.back();
+  }
+
+  /// Encode-side of the cache. Every path is admitted before insertion or transient upload.
+  AdmittedEncode getFillEncode(EntityHandle source, const Path& path, FillRule rule) {
     if (!source) {
-      return nullptr;
+      fillScratchEncode = encodeGeometry(path, rule);
+      return {fillScratchEncode ? &*fillScratchEncode : &rejectedGeometry, false};
     }
     ensureCacheInvalidationWired(*source.registry());
     auto& cache = source.get_or_emplace<geode::GeodePathCacheComponent>();
-    if (!cache.fillEncode) {
-      device->countPathEncode();
-      cache.fillEncode = geode::GeodePathEncoder::encode(path, rule);
+    if (cache.fillEncode) {
+      return reserveEncodedGeometry(*cache.fillEncode) ? AdmittedEncode{&*cache.fillEncode, true}
+                                                       : AdmittedEncode{&rejectedGeometry, false};
     }
-    return &*cache.fillEncode;
+
+    std::optional<geode::EncodedPath> encoded = encodeGeometry(path, rule);
+    if (!encoded.has_value()) {
+      return {&rejectedGeometry, false};
+    }
+    const std::size_t retainedBytes = encoded->retainedBytes();
+    std::shared_ptr<geode::GeodeDocumentGeometryBudget> documentBudget =
+        documentGeometryBudget(*source.registry());
+    if (retainedBytes != std::numeric_limits<std::size_t>::max() &&
+        cache.fillReservation.replace(documentBudget, retainedBytes)) {
+      cache.fillEncode = std::move(*encoded);
+      return {&*cache.fillEncode, true};
+    }
+    fillScratchEncode = std::move(*encoded);
+    return {&*fillScratchEncode, false};
   }
 
   /// GPU-residence slot for `source`'s fill encode. Returns null for a null
@@ -2586,7 +2701,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
     }
     std::shared_ptr<geode::GeodeRecordSlab>& slab = *slabPtr;
     if (!slab || slab->owningDeviceId() != device->deviceId()) {
-      slab = std::make_shared<geode::GeodeRecordSlab>(device->deviceId());
+      slab = std::make_shared<geode::GeodeRecordSlab>(device->deviceId(),
+                                                      documentGeometryBudget(registry));
     }
     return slab;
   }
@@ -2738,15 +2854,55 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
   /// whose outline comes back empty (a glyph the font has no vector outline
   /// for) is still cached, so that miss also costs one backend call per
   /// document rather than one per occurrence per frame.
+#ifdef DONNER_TEXT_ENABLED
+  void admitTextRuns(std::vector<TextRun>& runs) {
+    std::size_t glyphOccurrences = 0;
+    for (const TextRun& run : runs) {
+      if (run.glyphs.size() > std::numeric_limits<std::size_t>::max() - glyphOccurrences) {
+        textMaterializationBudget->reject();
+        runs.clear();
+        return;
+      }
+      glyphOccurrences += run.glyphs.size();
+    }
+    if (!textMaterializationBudget->reserveGlyphOccurrences(glyphOccurrences)) {
+      runs.clear();
+    }
+  }
+
+  Path materializePlacedGlyph(const Path& outline, const Transform2d& glyphFromLocal) {
+    if (!textMaterializationBudget->reservePathCopy(outline)) {
+      return Path();
+    }
+    return TransformPath(outline, glyphFromLocal);
+  }
+
   template <typename BuildOutlineFn>
-  geode::GeodeGlyphResidentEntry* residentGlyphEntry(Registry& registry,
+  geode::GeodeGlyphResidentEntry* residentGlyphEntry(Registry& registry, FontManager& fontManager,
+                                                     FontHandle font, int glyphIndex,
                                                      const geode::GlyphGeometryKey& key,
                                                      BuildOutlineFn&& buildOutline) {
+    if (textMaterializationBudget->rejected()) {
+      return nullptr;
+    }
     std::shared_ptr<geode::GeodeGlyphCache> cache = glyphCache(registry);
     geode::GeodeGlyphResidentEntry* entry = cache->find(key);
     if (entry != nullptr) {
       device->countGlyphResidencyHit();
     } else {
+      const std::optional<FontManager::GlyphOutlineComplexity> complexity =
+          fontManager.glyphOutlineComplexity(font, glyphIndex);
+      if (complexity.has_value()) {
+        const std::optional<RendererTextMaterializationBudget::Cost> cost =
+            GlyphPredecodeCost(*complexity);
+        if (!cost.has_value() || !textMaterializationBudget->reserve(*cost)) {
+          return nullptr;
+        }
+      } else if (!fontManager.isTrustedFont(font)) {
+        textMaterializationBudget->reject();
+        return nullptr;
+      }
+
       // Admission has to happen before outline decoding and before insertion. The frame-start
       // trim cannot bound a cache that begins below its limit and creates a large working set in
       // one frame; entries touched by that open frame are intentionally ineligible for eviction.
@@ -2763,10 +2919,23 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
         }
       }
       Path outline = buildOutline();
+      if (!complexity.has_value() && !outline.empty()) {
+        const std::optional<std::size_t> retainedBytes = outline.retainedBytes();
+        if (!retainedBytes.has_value() ||
+            !textMaterializationBudget->reserve({.uniqueOutlines = 1,
+                                                 .commands = outline.commands().size(),
+                                                 .points = outline.points().size(),
+                                                 .bytes = *retainedBytes})) {
+          return nullptr;
+        }
+      }
       geode::EncodedPath encoded;
       if (!outline.empty()) {
-        device->countPathEncode();
-        encoded = geode::GeodePathEncoder::encode(outline, FillRule::NonZero);
+        std::optional<geode::EncodedPath> admitted = encodeGeometry(outline, FillRule::NonZero);
+        if (!admitted.has_value()) {
+          return nullptr;
+        }
+        encoded = std::move(*admitted);
       }
       if (cacheAdmissionAvailable) {
         size_t evicted = 0;
@@ -2801,6 +2970,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
     }
     return entry;
   }
+#endif
 
   /// Draw one glyph occurrence over shared resident geometry.
   ///
@@ -2890,6 +3060,23 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
     return true;
   }
 
+  std::shared_ptr<geode::GeodeDocumentGeometryBudget> documentGeometryBudget(Registry& registry) {
+    auto* budgetPtr = registry.ctx().find<std::shared_ptr<geode::GeodeDocumentGeometryBudget>>();
+    if (budgetPtr == nullptr) {
+      std::shared_ptr<components::DocumentResourceFamilyBudget> family;
+      if (const auto* context = registry.ctx().find<components::DocumentResourceFamilyContext>()) {
+        family = context->budget;
+      }
+      registry.ctx().emplace<std::shared_ptr<geode::GeodeDocumentGeometryBudget>>(
+          std::make_shared<geode::GeodeDocumentGeometryBudget>(std::move(family)));
+      budgetPtr = registry.ctx().find<std::shared_ptr<geode::GeodeDocumentGeometryBudget>>();
+    }
+    std::shared_ptr<geode::GeodeDocumentGeometryBudget> budget = *budgetPtr;
+    budget->setLimitsForTesting(*documentGeometryLimits);
+    *lastDocumentGeometryBudget = budget;
+    return budget;
+  }
+
   std::shared_ptr<geode::GeodeResidentSlab> residentSlab(Registry& registry) {
     auto* slabPtr = registry.ctx().find<std::shared_ptr<geode::GeodeResidentSlab>>();
     if (slabPtr == nullptr) {
@@ -2898,7 +3085,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
     }
     std::shared_ptr<geode::GeodeResidentSlab>& slab = *slabPtr;
     if (!slab || slab->owningDeviceId() != device->deviceId()) {
-      slab = std::make_shared<geode::GeodeResidentSlab>(device->deviceId());
+      slab = std::make_shared<geode::GeodeResidentSlab>(device->deviceId(),
+                                                        documentGeometryBudget(registry));
     }
     // Merge the previous frame's freed ranges, at most once per frame (the
     // slab gates on the index). Gating here rather than at one draw entry
@@ -3591,29 +3779,63 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
     if (source) {
       ensureCacheInvalidationWired(*source.registry());
       auto& cache = source.get_or_emplace<geode::GeodePathCacheComponent>();
-      if (!cache.strokeSlot || cache.strokeSlot->strokeKey != strokeStyle ||
-          cache.strokeSlot->flattenTolerance != flattenTolerance) {
+      if (cache.strokeSlot && cache.strokeSlot->strokeKey == strokeStyle &&
+          cache.strokeSlot->flattenTolerance == flattenTolerance) {
+        if (!reserveEncodedGeometry(cache.strokeSlot->strokedEncode)) {
+          return result;
+        }
+        result.strokedPath = &cache.strokeSlot->strokedPath;
+        result.encoded = &cache.strokeSlot->strokedEncode;
+        result.persistent = true;
+        result.fillRule = cache.strokeSlot->strokeFillRule;
+        return result;
+      }
+
+      {
         // Miss (or stroke-params / device-scale changed) - rebuild. De-close
         // zero-area closed subpaths first (see `deCloseZeroAreaSubpaths`) so a
         // degenerate `M L Z` line strokes into a clean rectangle the analytic
         // shader covers correctly, instead of overlapping triangles.
-        // Drop the stale GPU residence FIRST, unconditionally for every
-        // exit of this miss branch: the encode is about to be replaced in
-        // place (or destroyed, in the empty-outline case below) without
-        // removing the entity's components, so the entt listener does not
-        // fire, and a resident slot keyed on the old encode storage would
-        // keep a dangling encodedKey plus a retained slab range. The
-        // GeoEncoder fingerprint guard is a second line of defense; this
-        // keeps the invariant obvious at the single mutation site.
-        //
-        // Drain the pending batch first when it still refers to THIS outline.
-        // Both the cached encode and the residence built from it are about to
-        // be replaced: the encode's storage is reused for the new outline, and
-        // resetting the residence lets the flush-time re-ensure land the
-        // geometry in a different slab chunk than the one the batch captured.
-        // Either way an appended-but-unflushed instance would draw the wrong
-        // shape. A run of DIFFERENT elements' strokes is untouched, so the
-        // ordinary first sight of a stroke does not break up a batch.
+        Path stroked =
+            deCloseZeroAreaSubpaths(geometry).strokeToFill(strokeStyle, flattenTolerance);
+        if (stroked.empty()) {
+          if (cache.strokeSlot.has_value() &&
+              pendingBatchReferences(&cache.strokeSlot->strokedEncode)) {
+            flushPendingBatch();
+          }
+          if (auto* resident = source.try_get<geode::GeodeResidentPathComponent>()) {
+            resident->strokeSlot.reset();
+            resident->gradientStrokeSlot.reset();
+          }
+          cache.strokeReservation.reset();
+          cache.strokeSlot.reset();
+          return result;  // strokedPath stays null.
+        }
+        countStrokeOutline(stroked);
+        const FillRule fillRule = strokeFillRuleFor(stroked, strokeStyle);
+        std::optional<geode::EncodedPath> encoded = encodeGeometry(stroked, fillRule);
+        if (!encoded.has_value()) {
+          return result;
+        }
+        const std::optional<std::size_t> strokedBytes = stroked.retainedBytes();
+        const std::size_t encodedBytes = encoded->retainedBytes();
+        const bool retainedBytesValid =
+            strokedBytes.has_value() && encodedBytes != std::numeric_limits<std::size_t>::max() &&
+            *strokedBytes <= std::numeric_limits<std::size_t>::max() - encodedBytes;
+        const std::size_t retainedBytes = retainedBytesValid
+                                              ? *strokedBytes + encodedBytes
+                                              : std::numeric_limits<std::size_t>::max();
+        std::shared_ptr<geode::GeodeDocumentGeometryBudget> documentBudget =
+            documentGeometryBudget(*source.registry());
+        if (!retainedBytesValid ||
+            !cache.strokeReservation.replace(documentBudget, retainedBytes)) {
+          strokeScratchPath = std::move(stroked);
+          strokeScratchEncode = std::move(*encoded);
+          result.strokedPath = &strokeScratchPath;
+          result.encoded = &*strokeScratchEncode;
+          result.fillRule = fillRule;
+          return result;
+        }
         if (cache.strokeSlot.has_value() &&
             pendingBatchReferences(&cache.strokeSlot->strokedEncode)) {
           flushPendingBatch();
@@ -3622,16 +3844,6 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
           resident->strokeSlot.reset();
           resident->gradientStrokeSlot.reset();
         }
-        Path stroked =
-            deCloseZeroAreaSubpaths(geometry).strokeToFill(strokeStyle, flattenTolerance);
-        if (stroked.empty()) {
-          cache.strokeSlot.reset();
-          return result;  // strokedPath stays null.
-        }
-        countStrokeOutline(stroked);
-        const FillRule fillRule = strokeFillRuleFor(stroked, strokeStyle);
-        device->countPathEncode();
-        geode::EncodedPath encoded = geode::GeodePathEncoder::encode(stroked, fillRule);
         // GCC 14 libstdc++ rejects `.emplace()` here with "is_constructible_v<StrokeSlot> was not
         // satisfied"; clang + libc++ accepts it. Build the value explicitly and assign to sidestep
         // the toolchain disagreement.
@@ -3639,17 +3851,17 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
             .strokeKey = strokeStyle,
             .flattenTolerance = flattenTolerance,
             .strokedPath = std::move(stroked),
-            .strokedEncode = std::move(encoded),
+            .strokedEncode = std::move(*encoded),
             .strokeFillRule = fillRule,
         };
       }
       result.strokedPath = &cache.strokeSlot->strokedPath;
       result.encoded = &cache.strokeSlot->strokedEncode;
+      result.persistent = true;
       result.fillRule = cache.strokeSlot->strokeFillRule;
       return result;
     }
-    // No-entity fallback: compute into the Impl-local scratch buffer.
-    // GeoEncoder will encode inline when `encoded` is left null.
+    // No-entity fallback: compute and admit into Impl-local scratch buffers.
     strokeScratchPath =
         deCloseZeroAreaSubpaths(geometry).strokeToFill(strokeStyle, flattenTolerance);
     if (strokeScratchPath.empty()) {
@@ -3658,6 +3870,11 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
     countStrokeOutline(strokeScratchPath);
     result.strokedPath = &strokeScratchPath;
     result.fillRule = strokeFillRuleFor(strokeScratchPath, strokeStyle);
+    strokeScratchEncode = encodeGeometry(strokeScratchPath, result.fillRule);
+    if (!strokeScratchEncode.has_value()) {
+      return {};
+    }
+    result.encoded = &*strokeScratchEncode;
     return result;
   }
 
@@ -3901,6 +4118,15 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
     if (ownsFilterExecutionBudget) {
       filterExecutionBudget->reset();
     }
+    if (ownsGeometryBudget) {
+      geometryBudget->reset();
+    }
+    if (ownsSurfaceBudget) {
+      surfaceBudget->reset();
+    }
+    if (ownsTextMaterializationBudget) {
+      textMaterializationBudget->reset();
+    }
     if (device) {
       device->filterEngine().beginFrame();
     }
@@ -3917,6 +4143,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
     lastDrawSourceEntity = entt::null;
     pendingBatch.reset();
     transientGlyphEntries.clear();
+    transientTextEncodes.clear();
     counters.reset();
   }
 
@@ -3929,10 +4156,25 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
     device->setCounters(&counters);
     if (hostTarget) {
       retireOwnedTargetAtFrameBoundary();
+      if (hostTarget.getWidth() > static_cast<uint32_t>(std::numeric_limits<int>::max()) ||
+          hostTarget.getHeight() > static_cast<uint32_t>(std::numeric_limits<int>::max())) {
+        (void)surfaceBudget->reserve(-1, -1);
+        target = wgpu::Texture();
+        return false;
+      }
       pixelWidth = static_cast<int>(hostTarget.getWidth());
       pixelHeight = static_cast<int>(hostTarget.getHeight());
+      if (!surfaceBudget->reserve(pixelWidth, pixelHeight)) {
+        target = wgpu::Texture();
+        return false;
+      }
       target = hostTarget;
       return true;
+    }
+
+    if (!surfaceBudget->reserve(pixelWidth, pixelHeight)) {
+      target = wgpu::Texture();
+      return false;
     }
 
     const bool canReuseTargets =
@@ -4304,20 +4546,73 @@ void RendererGeode::setGlyphResidencyBudgetForTesting(size_t maxEntries,
   impl_->glyphCacheMaxRetainedBytes = maxRetainedBytes;
 }
 
-void RendererGeode::setGeometryBudgetForTesting(std::size_t /*maximumDraws*/,
-                                                std::size_t /*maximumItems*/,
-                                                std::uint64_t /*maximumFrameBytes*/,
-                                                std::uint64_t /*maximumCacheBytes*/,
-                                                std::uint64_t /*maximumResidentBytes*/) {}
+void RendererGeode::setGeometryBudgetForTesting(std::size_t maximumDraws, std::size_t maximumItems,
+                                                std::uint64_t maximumFrameBytes,
+                                                std::uint64_t maximumCacheBytes,
+                                                std::uint64_t maximumResidentBytes) {
+  impl_->geometryBudget->setLimitsForTesting(
+      {.draws = maximumDraws, .items = maximumItems, .retainedBytes = maximumFrameBytes});
+  impl_->documentGeometryLimits->cacheBytes =
+      std::min(impl_->documentGeometryLimits->cacheBytes, maximumCacheBytes);
+  impl_->documentGeometryLimits->residentBytes =
+      std::min(impl_->documentGeometryLimits->residentBytes, maximumResidentBytes);
+  if (std::shared_ptr<geode::GeodeDocumentGeometryBudget> document =
+          impl_->lastDocumentGeometryBudget->lock()) {
+    document->setLimitsForTesting(*impl_->documentGeometryLimits);
+  }
+}
 
-void RendererGeode::setSurfaceBudgetForTesting(std::size_t /*maximumSurfaces*/,
-                                               std::uint64_t /*maximumBytes*/) {}
+void RendererGeode::setSurfaceBudgetForTesting(std::size_t maximumSurfaces,
+                                               std::uint64_t maximumBytes) {
+  impl_->surfaceBudget->setLimitsForTesting({.bytes = maximumBytes, .surfaces = maximumSurfaces});
+}
 
 void RendererGeode::setTextMaterializationBudgetForTesting(
-    RendererTextMaterializationBudget::Cost /*limits*/, std::size_t /*maximumGlyphOccurrences*/) {}
+    RendererTextMaterializationBudget::Cost limits, std::size_t maximumGlyphOccurrences) {
+  impl_->textMaterializationBudget->setLimitsForTesting(limits);
+  impl_->textMaterializationBudget->setGlyphOccurrenceLimitForTesting(maximumGlyphOccurrences);
+}
 
 RendererResourceStats RendererGeode::resourceStats() const {
-  return {};
+  std::shared_ptr<geode::GeodeDocumentGeometryBudget> document =
+      impl_->lastDocumentGeometryBudget->lock();
+  const std::uint64_t documentBytes =
+      document ? document->cacheBytes() + document->residentBytes() : 0;
+  const std::uint64_t geometryBytes = impl_->geometryBudget->retainedBytes();
+  const std::uint64_t totalGeometryBytes =
+      documentBytes > std::numeric_limits<std::uint64_t>::max() - geometryBytes
+          ? std::numeric_limits<std::uint64_t>::max()
+          : documentBytes + geometryBytes;
+  const std::size_t reportedGeometryBytes =
+      totalGeometryBytes > std::numeric_limits<std::size_t>::max()
+          ? std::numeric_limits<std::size_t>::max()
+          : static_cast<std::size_t>(totalGeometryBytes);
+  return {
+      .filterBudgetSupported = true,
+      .filterExecutions = impl_->filterExecutionBudget->executions(),
+      .filterWorkUnits = impl_->filterExecutionBudget->workUnits(),
+      .filterRetainedBytes = impl_->filterExecutionBudget->retainedBytes(),
+      .filterCaptureBytesReserved = impl_->filterExecutionBudget->captureBytesReserved(),
+      .filterBudgetRejected = impl_->filterExecutionBudget->rejected(),
+      .geometryBudgetSupported = true,
+      .geometryDraws = impl_->geometryBudget->draws(),
+      .geometryItems = impl_->geometryBudget->items(),
+      .geometryRetainedBytes = reportedGeometryBytes,
+      .geometryBudgetRejected =
+          impl_->geometryBudget->rejected() || (document && document->rejected()),
+      .surfaceBudgetSupported = true,
+      .surfaceCount = impl_->surfaceBudget->surfaces(),
+      .surfaceBytes = impl_->surfaceBudget->bytes(),
+      .surfaceBudgetRejected = impl_->surfaceBudget->rejected(),
+      .textMaterializationBudgetSupported = true,
+      .textUniqueOutlines = impl_->textMaterializationBudget->uniqueOutlines(),
+      .textMaterializationCommands = impl_->textMaterializationBudget->commands(),
+      .textMaterializationPoints = impl_->textMaterializationBudget->points(),
+      .textMaterializationBytes = impl_->textMaterializationBudget->bytes(),
+      .textGlyphDecodeWork = impl_->textMaterializationBudget->decodeWork(),
+      .textGlyphOccurrences = impl_->textMaterializationBudget->glyphOccurrences(),
+      .textMaterializationBudgetRejected = impl_->textMaterializationBudget->rejected(),
+  };
 }
 
 size_t RendererGeode::residentGlyphCountForTesting(SVGDocument& document) {
@@ -5108,6 +5403,9 @@ bool RendererGeode::beginPatternTile(const Box2d& tileRect, const Transform2d& t
   td.mipLevelCount = 1;
   td.sampleCount = 1;
   td.dimension = wgpu::TextureDimension::_2D;
+  if (!impl_->reserveTextureSurface(td)) {
+    return false;
+  }
   geode::ScopedWgpuHandle<wgpu::Texture> tileTexture(impl_->device->device().createTexture(td));
   impl_->device->countTexture();
   if (!tileTexture) {
@@ -5324,8 +5622,9 @@ void RendererGeode::drawPath(const PathShape& path, const StrokeParams& stroke) 
   // Path-encode cache lookup for the fill. Null `sourceEntity` (editor
   // overlay, test-harness direct draws) returns nullptr and `GeoEncoder`
   // falls back to the inline encode path.
-  const geode::EncodedPath* fillEncoded =
+  const Impl::AdmittedEncode fillAdmission =
       impl_->getFillEncode(path.sourceEntity, drawPathGeometry, path.fillRule);
+  const geode::EncodedPath* fillEncoded = fillAdmission.encoded;
 
   // Try to append to a pending batch. Preconditions:
   //  - Source entity valid (non-null handle).
@@ -5356,7 +5655,7 @@ void RendererGeode::drawPath(const PathShape& path, const StrokeParams& stroke) 
   const bool solidFill = std::holds_alternative<PaintServer::Solid>(impl_->paint.fill);
   const bool referenceFill =
       std::holds_alternative<components::PaintResolvedReference>(impl_->paint.fill);
-  const bool fillShapeBatchable = fillEncoded != nullptr &&
+  const bool fillShapeBatchable = fillAdmission.persistent &&
                                   path.sourceEntity.entity() != entt::null &&
                                   !impl_->patternFillPaint.has_value() &&
                                   impl_->encoder != nullptr && impl_->paint.drawFillComponent;
@@ -5390,7 +5689,7 @@ void RendererGeode::drawPath(const PathShape& path, const StrokeParams& stroke) 
   // solid fill re-uploads zero geometry on an unchanged frame however it
   // ends up being drawn.
   geode::GeodeResidentSlot* residentFill =
-      (fillEncoded != nullptr && (solidFill || gradientFillBatchable))
+      (fillAdmission.persistent && (solidFill || gradientFillBatchable))
           ? impl_->residentFillSlot(path.sourceEntity)
           : nullptr;
 
@@ -5399,8 +5698,9 @@ void RendererGeode::drawPath(const PathShape& path, const StrokeParams& stroke) 
   // pass through here and simply never use the slot (the resident
   // gradient methods only run for resolved gradients).
   geode::GeodeResidentGradientSlot* residentGradientFill =
-      (fillEncoded != nullptr && referenceFill) ? impl_->residentGradientFillSlot(path.sourceEntity)
-                                                : nullptr;
+      (fillAdmission.persistent && referenceFill)
+          ? impl_->residentGradientFillSlot(path.sourceEntity)
+          : nullptr;
 
   bool fillAbsorbed = false;
   if (fillBatchable) {
@@ -5514,14 +5814,14 @@ void RendererGeode::drawPath(const PathShape& path, const StrokeParams& stroke) 
   // GPU residence for solid strokes (the stroked outline is a solid
   // fill of the cached stroke encode).
   geode::GeodeResidentSlot* residentStroke =
-      (strokeDerived.encoded != nullptr && std::holds_alternative<PaintServer::Solid>(strokeServer))
+      (strokeDerived.persistent && std::holds_alternative<PaintServer::Solid>(strokeServer))
           ? impl_->residentStrokeSlot(path.sourceEntity)
           : nullptr;
   // Gradient residence for gradient-painted strokes: the cached
   // stroke-outline encode lives in a gradient slot so an unchanged outline
   // with an unchanged resolved gradient re-uploads zero geometry.
   geode::GeodeResidentGradientSlot* residentGradientStroke =
-      (strokeDerived.encoded != nullptr &&
+      (strokeDerived.persistent &&
        std::holds_alternative<components::PaintResolvedReference>(strokeServer))
           ? impl_->residentGradientStrokeSlot(path.sourceEntity)
           : nullptr;
@@ -5537,7 +5837,7 @@ void RendererGeode::drawPath(const PathShape& path, const StrokeParams& stroke) 
   // entity's `GeodePathCacheComponent::strokeSlot`, which is only replaced by
   // a `getStrokeDerived` miss on this same entity, and the pending batch is
   // always flushed within the frame that started it.
-  if (kEnableSceneBatching && residentStroke != nullptr && strokeDerived.encoded != nullptr &&
+  if (kEnableSceneBatching && residentStroke != nullptr && strokeDerived.persistent &&
       path.sourceEntity.entity() != entt::null && !impl_->patternStrokePaint.has_value()) {
     const auto& solidStroke = std::get<PaintServer::Solid>(strokeServer);
     geode::GeoEncoder::ScenePaint strokePaint;
@@ -5646,6 +5946,7 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
   }
 
   auto& textEngine = registry.ctx().get<TextEngine>();
+  auto& fontManager = registry.ctx().get<FontManager>();
 
   // Use cached layout runs from `ComputedTextGeometryComponent` when
   // available; otherwise lay out fresh via the engine. This matches
@@ -5661,6 +5962,8 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
     const TextLayoutParams layoutParams = toTextLayoutParams(params);
     runs = textEngine.layout(text, layoutParams);
   }
+
+  impl_->admitTextRuns(runs);
 
   const float textFontSizePx = static_cast<float>(
       params.fontSize.toPixels(params.viewBox, params.fontMetrics, Lengthd::Extent::Mixed));
@@ -5902,8 +6205,8 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
       key.stretchScaleY = glyph.stretchScaleY;
       key.rotateDegrees = glyph.rotateDegrees;
 
-      geode::GeodeGlyphResidentEntry* entry =
-          impl_->residentGlyphEntry(registry, key, [&]() -> Path {
+      geode::GeodeGlyphResidentEntry* entry = impl_->residentGlyphEntry(
+          registry, fontManager, run.font, glyph.glyphIndex, key, [&]() -> Path {
             return UnplacedGlyphOutline(textEngine, run.font, glyph, scale).outline;
           });
       if (entry == nullptr || entry->outline.empty()) {
@@ -5913,7 +6216,7 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
       const Transform2d glyphFromLocal = GlyphPlacementTransform(glyph);
       runGlyphOccurrences.push_back(RunGlyphOccurrence{entry, glyphFromLocal});
       if (needPlacedGlyphPaths) {
-        runGlyphPaths.push_back(TransformPath(entry->outline, glyphFromLocal));
+        runGlyphPaths.push_back(impl_->materializePlacedGlyph(entry->outline, glyphFromLocal));
       }
     }
 
@@ -5946,11 +6249,15 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
       }
       for (const Path& placed : runGlyphPaths) {
         if (fillIsGradient) {
+          const geode::EncodedPath* encoded =
+              impl_->encodeTransientGeometry(placed, FillRule::NonZero);
           // Gradient fill on text: resolve the gradient against the text bbox
           // (the gradient *geometry*), fill the glyph outline (the *draw* path).
           impl_->drawPaintedPathAgainst(textBoundsPath, placed, fillServer, fillOpacity,
-                                        FillRule::NonZero);
+                                        FillRule::NonZero, encoded);
         } else if (usePatternFill) {
+          const geode::EncodedPath* encoded =
+              impl_->encodeTransientGeometry(placed, FillRule::NonZero);
           // Fill the glyph outline with the staged pattern tile, same as a
           // pattern-filled `<path>` (see Impl::fillResolved). The glyph path is
           // already in the element's local space and `deviceFromLocalTransform`
@@ -5958,7 +6265,8 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
           impl_->syncTransform();
           impl_->encoder->fillPathPattern(
               placed, FillRule::NonZero,
-              impl_->buildPatternPaint(*impl_->patternFillPaint, impl_->paint.fillOpacity));
+              impl_->buildPatternPaint(*impl_->patternFillPaint, impl_->paint.fillOpacity),
+              encoded);
         }
       }
     };
@@ -5976,18 +6284,19 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
           if (!stroked.empty()) {
             impl_->countStrokeOutline(stroked);
             const FillRule strokeRule = Impl::strokeFillRuleFor(stroked, *strokeStyle);
+            const geode::EncodedPath* encoded = impl_->encodeTransientGeometry(stroked, strokeRule);
             if (strokeIsGradient) {
               // Gradient stroke: resolve against the text bbox (the *original*
               // geometry, per SVG), fill the stroked outline.
               impl_->drawPaintedPathAgainst(textBoundsPath, stroked, *strokeServer, strokeOpacity,
-                                            strokeRule);
+                                            strokeRule, encoded);
             } else if (usePatternStroke) {
               impl_->syncTransform();
               impl_->encoder->fillPathPattern(
                   stroked, strokeRule,
-                  impl_->buildPatternPaint(*impl_->patternStrokePaint, strokeOpacity));
+                  impl_->buildPatternPaint(*impl_->patternStrokePaint, strokeOpacity), encoded);
             } else {
-              impl_->encoder->fillPath(stroked, *strokeColor, strokeRule);
+              impl_->encoder->fillPath(stroked, *strokeColor, strokeRule, encoded);
             }
           }
         }
@@ -6077,21 +6386,25 @@ void RendererGeode::drawText(Registry& registry, const components::ComputedTextC
         if (path.empty()) {
           return;
         }
+        const geode::EncodedPath* encoded = impl_->encodeTransientGeometry(path, FillRule::NonZero);
         if (decoUsesPattern) {
           impl_->syncTransform();
           impl_->encoder->fillPathPattern(
               path, FillRule::NonZero,
-              impl_->buildPatternPaint(*impl_->patternFillPaint, impl_->paint.fillOpacity));
+              impl_->buildPatternPaint(*impl_->patternFillPaint, impl_->paint.fillOpacity),
+              encoded);
         } else if (decoFill.a != 0) {
-          impl_->encoder->fillPath(path, decoFill, FillRule::NonZero);
+          impl_->encoder->fillPath(path, decoFill, FillRule::NonZero, encoded);
         }
         if (decoStrokeColor.has_value()) {
           // Device-aware flattening, as in every other renderer-side stroke.
           const Path stroked = path.strokeToFill(*decoStrokeStyle, impl_->strokeFlattenTolerance());
           if (!stroked.empty()) {
             impl_->countStrokeOutline(stroked);
-            impl_->encoder->fillPath(stroked, *decoStrokeColor,
-                                     Impl::strokeFillRuleFor(stroked, *decoStrokeStyle));
+            const FillRule strokeRule = Impl::strokeFillRuleFor(stroked, *decoStrokeStyle);
+            const geode::EncodedPath* strokeEncoded =
+                impl_->encodeTransientGeometry(stroked, strokeRule);
+            impl_->encoder->fillPath(stroked, *decoStrokeColor, strokeRule, strokeEncoded);
           }
         }
       };
@@ -6256,6 +6569,14 @@ std::unique_ptr<RendererInterface> RendererGeode::createOffscreenInstance() cons
       new RendererGeode(impl_->device, impl_->verbose, impl_->offscreenCreationHookForTesting));
   renderer->impl_->filterExecutionBudget = impl_->filterExecutionBudget;
   renderer->impl_->ownsFilterExecutionBudget = false;
+  renderer->impl_->geometryBudget = impl_->geometryBudget;
+  renderer->impl_->ownsGeometryBudget = false;
+  renderer->impl_->surfaceBudget = impl_->surfaceBudget;
+  renderer->impl_->ownsSurfaceBudget = false;
+  renderer->impl_->textMaterializationBudget = impl_->textMaterializationBudget;
+  renderer->impl_->ownsTextMaterializationBudget = false;
+  renderer->impl_->documentGeometryLimits = impl_->documentGeometryLimits;
+  renderer->impl_->lastDocumentGeometryBudget = impl_->lastDocumentGeometryBudget;
   return renderer;
 }
 
