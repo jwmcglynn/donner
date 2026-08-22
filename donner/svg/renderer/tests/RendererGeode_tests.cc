@@ -946,13 +946,48 @@ TEST_F(RendererGeodeTest, ClipMaskGeometryUsesTheSharedSubmissionBudget) {
       {.path = PathBuilder().addRect(Box2d({0.0, 0.0}, {8.0, 8.0})).build(), .layer = 0});
   clip.clipPaths.push_back(
       {.path = PathBuilder().addRect(Box2d({8.0, 8.0}, {16.0, 16.0})).build(), .layer = 0});
+  clip.clipPaths.push_back(
+      {.path = PathBuilder().addRect(Box2d({4.0, 4.0}, {12.0, 12.0})).build(), .layer = 0});
   renderer.pushClip(clip);
 
   const RendererResourceStats stats = renderer.resourceStats();
   EXPECT_EQ(stats.geometryDraws, 1u);
   EXPECT_TRUE(stats.geometryBudgetRejected);
+  EXPECT_EQ(renderer.lastFrameTimings().counters.pathEncodes, 2u)
+      << "Once cap+1 latches rejection, later mask shapes must skip CPU encoding.";
   renderer.popClip();
   renderer.endFrame();
+}
+
+TEST_F(RendererGeodeTest, NestedClipSurfaceRejectionSuppressesTheWholeInnerSubtree) {
+  ASSERT_TRUE(sharedDevice() != nullptr);
+
+  RendererGeode renderer = createRenderer();
+  renderer.setSurfaceBudgetForTesting(/*maximumSurfaces=*/2u, /*maximumBytes=*/4096u);
+  RenderViewport viewport;
+  viewport.size = Vector2d(16.0, 16.0);
+  renderer.beginFrame(viewport);
+
+  ResolvedClip outer;
+  outer.clipPaths.push_back(
+      {.path = PathBuilder().addRect(Box2d({0.0, 0.0}, {16.0, 16.0})).build(), .layer = 0});
+  renderer.pushClip(outer);
+  ResolvedClip rejectedInner;
+  rejectedInner.clipPaths.push_back(
+      {.path = PathBuilder().addRect(Box2d({4.0, 4.0}, {12.0, 12.0})).build(), .layer = 0});
+  renderer.pushClip(rejectedInner);
+
+  renderer.setPaint(solidFill(css::RGBA(255, 0, 0, 255)));
+  renderer.drawRect(Box2d({0.0, 0.0}, {16.0, 16.0}), StrokeParams{});
+  EXPECT_TRUE(renderer.resourceStats().surfaceBudgetRejected);
+  renderer.popClip();
+  renderer.popClip();
+  renderer.endFrame();
+
+  const RendererBitmap bitmap = renderer.takeSnapshot();
+  ASSERT_FALSE(bitmap.empty());
+  EXPECT_THAT(bitmap.pixels, testing::Each(0u))
+      << "A clip whose required mask could not be allocated must fail closed.";
 }
 
 TEST_F(RendererGeodeTest, ResourceStatsAggregateEveryDocumentTouchedInTheFrame) {
