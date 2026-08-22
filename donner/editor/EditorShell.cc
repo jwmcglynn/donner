@@ -3104,6 +3104,7 @@ void EditorShell::renderFillStrokeToolbarWidget() {
   if (app_.hasDocument()) {
     currentPaintDocument = app_.document().document().handle();
     if (!app_.selectedElements().empty()) {
+      ++toolbarLiveSelectionIdentityReadsForTesting_;
       currentPaintSelection = app_.selectedElements().front().unsafeEntityHandle().entity();
     }
   }

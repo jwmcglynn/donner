@@ -656,6 +656,9 @@ private:
   std::unique_ptr<internal::ToolbarPaintState> toolbarPaintSnapshot_;
   svg::SVGDocumentHandle toolbarPaintSnapshotDocument_;
   std::optional<Entity> toolbarPaintSnapshotSelection_;
+  /// Number of live selection-identity reads performed by the paint toolbar. Test-only
+  /// observability for the document-handoff boundary.
+  std::uint64_t toolbarLiveSelectionIdentityReadsForTesting_ = 0;
   /// Document-derived menu/shortcut state from the last idle UI epoch. Busy frames must replay
   /// these values instead of traversing the live registry behind the worker's write guard.
   bool cachedCanvasHasSelectableElements_ = false;
