@@ -322,6 +322,9 @@ public:
 
   [[nodiscard]] std::unique_ptr<RendererInterface> createOffscreenInstance() const override;
 
+  /// Install a zero-default hook entered after the new renderer owns its device.
+  void setOffscreenCreationHookForTesting(std::function<void()> hook) override;
+
   [[nodiscard]] RendererBitmap takeSnapshot() const override;
   [[nodiscard]] RendererBitmap takeSnapshotInterruptibly(
       const std::function<bool()>& shouldCancel) const override;
@@ -446,6 +449,9 @@ public:
   }
 
 private:
+  RendererGeode(std::shared_ptr<geode::GeodeDevice> device, bool verbose,
+                std::function<void()> constructionHook);
+
   struct Impl;
   std::unique_ptr<Impl> impl_;
 };

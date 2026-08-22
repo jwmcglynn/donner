@@ -7,6 +7,10 @@
 #include <thread>
 #include <utility>
 
+#ifdef __EMSCRIPTEN__
+#include <emscripten/threading.h>
+#endif
+
 #include "donner/base/MemoryAttribution.h"
 #include "donner/base/Utils.h"
 #include "donner/editor/OverlayRenderer.h"
@@ -260,7 +264,6 @@ SampleThumbnailRenderResult RenderSampleThumbnail(
 
 }  // namespace
 
-
 PresentationSnapshotPlan ChoosePresentationSnapshotPlan(bool hasCompositedPreview,
                                                         bool requiresTextureSnapshotPresentation,
                                                         bool captureCpuSnapshot) {
@@ -386,8 +389,7 @@ void AsyncRenderer::notePublishedCompositedPreview(
 
 bool AsyncRenderer::workerStateBusy(const WorkerState& state) {
   return std::holds_alternative<RenderingState>(state) ||
-         std::holds_alternative<CancellingState>(state) ||
-         std::holds_alternative<DoneState>(state);
+         std::holds_alternative<CancellingState>(state) || std::holds_alternative<DoneState>(state);
 }
 
 bool AsyncRenderer::workerStateRenderInFlight(const WorkerState& state) {
@@ -468,8 +470,18 @@ void AsyncRenderer::requestRender(const RenderRequest& request) {
     }
     if (sampleThumbnailActive_) {
       // Main-document presentation always preempts background preview work. The thumbnail
-      // traversal polls its independent token between rendered entities.
-      cancelSampleThumbnail_.cancel();
+      // traversal polls its independent token between rendered entities. Worker-local offscreen
+      // renderer construction cannot poll, so let that one first-use operation return before
+      // applying the cancellation signal.
+      if (sampleThumbnailRendererCreationActive_) {
+        cancelSampleThumbnailAfterRendererCreation_ = true;
+        if (!foregroundHandoffCountedForRendererCreation_) {
+          foregroundHandoffCountedForRendererCreation_ = true;
+          ++sampleThumbnailCounters_.foregroundHandoffWaits;
+        }
+      } else {
+        cancelSampleThumbnail_.cancel();
+      }
     }
   }
   cv_.notify_one();
@@ -507,9 +519,8 @@ void AsyncRenderer::cancelInFlight() {
     // input still needs a retry frame. Active render/cancellation states provide their own later
     // completion wake; an active compositor warmup uses the durable waiter above.
     const bool cancellationSettled =
-        !compositorWarmupActive_ &&
-        (std::holds_alternative<IdleState>(workerState_) ||
-         std::holds_alternative<DoneState>(workerState_));
+        !compositorWarmupActive_ && (std::holds_alternative<IdleState>(workerState_) ||
+                                     std::holds_alternative<DoneState>(workerState_));
     if (cancellationSettled) {
       wakeAfterSettledCancellation = wakeCallback_;
     }
@@ -600,7 +611,11 @@ void AsyncRenderer::cancelSampleThumbnailWork() {
   sampleThumbnailResult_.reset();
   if (sampleThumbnailActive_) {
     discardActiveSampleThumbnailResult_ = true;
-    cancelSampleThumbnail_.cancel();
+    if (sampleThumbnailRendererCreationActive_) {
+      cancelSampleThumbnailAfterRendererCreation_ = true;
+    } else {
+      cancelSampleThumbnail_.cancel();
+    }
   }
 }
 
@@ -626,8 +641,78 @@ void AsyncRenderer::setWakeCallback(std::function<void()> callback) {
   wakeCallback_ = std::move(callback);
 }
 
+void AsyncRenderer::setSampleThumbnailRendererCreationPlanForTesting(
+    int requestNumber, std::chrono::milliseconds delay) {
+  constexpr int kMaximumRequestNumber = 64;
+  constexpr std::chrono::milliseconds kMaximumDelay(5000);
+  sampleThumbnailRendererCreationRequestForTesting_.store(
+      std::clamp(requestNumber, 0, kMaximumRequestNumber), std::memory_order_release);
+  sampleThumbnailRendererCreationDelayMsForTesting_.store(
+      std::clamp(delay, std::chrono::milliseconds(0), kMaximumDelay).count(),
+      std::memory_order_release);
+}
+
+bool AsyncRenderer::prepareSampleThumbnailRendererForRequest(
+    std::unique_ptr<svg::RendererInterface>& renderer, svg::RendererInterface*& rendererRoot,
+    svg::RendererInterface* requestedRoot) {
+  const int nextRequest = static_cast<int>(sampleThumbnailCounters_.started + 1);
+  const int recreateRequest =
+      sampleThumbnailRendererCreationRequestForTesting_.load(std::memory_order_acquire);
+  const bool forceRecreate = recreateRequest > 0 && nextRequest == recreateRequest;
+  if (forceRecreate) {
+    renderer.reset();
+    rendererRoot = nullptr;
+  }
+  sampleThumbnailRendererCreationActive_ = renderer == nullptr || rendererRoot != requestedRoot;
+  return forceRecreate;
+}
+
+void AsyncRenderer::delaySampleThumbnailRendererCreationForTesting(bool shouldDelay,
+                                                                   int constructionStart) const {
+  if (!shouldDelay) {
+    return;
+  }
+  const auto delay = std::chrono::milliseconds(
+      sampleThumbnailRendererCreationDelayMsForTesting_.load(std::memory_order_acquire));
+  if (delay.count() <= 0) {
+    return;
+  }
+#ifdef __EMSCRIPTEN__
+  MAIN_THREAD_EM_ASM(
+      {
+        window['__donnerSampleThumbnailRendererCreationBlocked'] = ({
+          'blocked' : true,
+          'constructionStarts' : $0,
+        });
+      },
+      constructionStart);
+#endif
+  std::this_thread::sleep_for(delay);
+#ifdef __EMSCRIPTEN__
+  MAIN_THREAD_EM_ASM(
+      { window['__donnerSampleThumbnailRendererCreationBlocked']['blocked'] = false; });
+#endif
+}
+
+void AsyncRenderer::finishSampleThumbnailRendererCreation() {
+  bool cancelAfterRendererCreation = false;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (sampleThumbnailRendererCreationActive_) {
+      sampleThumbnailRendererCreationActive_ = false;
+      sampleThumbnailCounters_.firstAttemptCompleted = true;
+      cancelAfterRendererCreation = cancelSampleThumbnailAfterRendererCreation_;
+      cancelSampleThumbnailAfterRendererCreation_ = false;
+      foregroundHandoffCountedForRendererCreation_ = false;
+    }
+  }
+  if (cancelAfterRendererCreation) {
+    cancelSampleThumbnail_.cancel();
+  }
+}
+
 void AsyncRenderer::workerLoop() {
-#if   defined(__EMSCRIPTEN__)
+#if defined(__EMSCRIPTEN__)
   // Emscripten's WebGPU object table is per-worker. Construct and use the
   // renderer on this pthread so wgpu handles never cross JS worker boundaries.
   svg::Renderer workerRenderer;
@@ -639,6 +724,7 @@ void AsyncRenderer::workerLoop() {
     std::optional<RenderRequest> requestStorage;
     std::optional<SampleThumbnailRenderRequest> sampleThumbnailStorage;
     bool runCompositorWarmup = false;
+    [[maybe_unused]] bool delaySampleThumbnailRendererCreation = false;
     {
       std::unique_lock<std::mutex> lock(mutex_);
       cv_.wait(lock, [this] {
@@ -686,6 +772,16 @@ void AsyncRenderer::workerLoop() {
           cancelSampleThumbnail_.reset();
           sampleThumbnailActive_ = true;
           discardActiveSampleThumbnailResult_ = false;
+          cancelSampleThumbnailAfterRendererCreation_ = false;
+          foregroundHandoffCountedForRendererCreation_ = false;
+#if defined(__EMSCRIPTEN__)
+          delaySampleThumbnailRendererCreation = prepareSampleThumbnailRendererForRequest(
+              sampleThumbnailRenderer, sampleThumbnailRendererRoot, &workerRenderer);
+#else
+          delaySampleThumbnailRendererCreation = prepareSampleThumbnailRendererForRequest(
+              sampleThumbnailRenderer, sampleThumbnailRendererRoot,
+              sampleThumbnailStorage->nativeRenderer);
+#endif
           ++sampleThumbnailCounters_.started;
         }
       }
@@ -725,9 +821,27 @@ void AsyncRenderer::workerLoop() {
 
     if (sampleThumbnailStorage.has_value()) {
       svg::RendererInterface* offscreenRenderer = nullptr;
-#if   defined(__EMSCRIPTEN__)
+#if defined(__EMSCRIPTEN__)
       if (sampleThumbnailRenderer == nullptr || sampleThumbnailRendererRoot != &workerRenderer) {
+        workerRenderer.setOffscreenCreationHookForTesting([this,
+                                                           delaySampleThumbnailRendererCreation] {
+          int constructionStart = 0;
+          {
+            std::lock_guard<std::mutex> lock(mutex_);
+            constructionStart =
+                static_cast<int>(++sampleThumbnailCounters_.offscreenRendererConstructionStarts);
+            sampleThumbnailCounters_.offscreenRendererConstructionBlocked =
+                delaySampleThumbnailRendererCreation;
+          }
+          delaySampleThumbnailRendererCreationForTesting(delaySampleThumbnailRendererCreation,
+                                                         constructionStart);
+          {
+            std::lock_guard<std::mutex> lock(mutex_);
+            sampleThumbnailCounters_.offscreenRendererConstructionBlocked = false;
+          }
+        });
         sampleThumbnailRenderer = workerRenderer.createOffscreenInstance();
+        workerRenderer.setOffscreenCreationHookForTesting({});
         sampleThumbnailRendererRoot = &workerRenderer;
         if (sampleThumbnailRenderer != nullptr) {
           std::lock_guard<std::mutex> lock(mutex_);
@@ -748,6 +862,8 @@ void AsyncRenderer::workerLoop() {
       }
       offscreenRenderer = requestedRoot != nullptr ? sampleThumbnailRenderer.get() : nullptr;
 #endif
+
+      finishSampleThumbnailRendererCreation();
 
       SampleThumbnailRenderResult result;
       if (offscreenRenderer == nullptr) {
@@ -800,7 +916,7 @@ void AsyncRenderer::workerLoop() {
             ? 0.0
             : std::chrono::duration<double, std::milli>(workerDequeuedAt - request.queuedAt)
                   .count();
-#if   defined(__EMSCRIPTEN__)
+#if defined(__EMSCRIPTEN__)
     svg::Renderer& requestRenderer = workerRenderer;
 #else
     // Geode editor builds intentionally use the request renderer so worker texture snapshots are
@@ -1389,9 +1505,9 @@ void AsyncRenderer::workerLoop() {
           // `verifyPixelIdentity` reference render uses, so pixels match the
           // composited modes by construction.
           svg::RendererDriver directDriver(requestRenderer);
-          renderCompleted = directDriver.drawInterruptibly(
-              requestDocument, viewport, surfaceFromCanvas,
-              [this]() { return cancelRender_.isCancelled(); });
+          renderCompleted =
+              directDriver.drawInterruptibly(requestDocument, viewport, surfaceFromCanvas,
+                                             [this]() { return cancelRender_.isCancelled(); });
         }
       }
       workerTiming.renderFrameMs = elapsedSince(renderFrameStart);
@@ -1593,9 +1709,9 @@ void AsyncRenderer::workerLoop() {
           done.result.version = request.version;
           done.result.documentGeneration = request.documentGeneration;
           done.presentationHoldPollsRemaining = replayResultHoldFramesForTesting_;
-          lastFastPathCounters_ =
-              compositor_ != nullptr ? compositor_->fastPathCountersForTesting()
-                                     : svg::compositor::CompositorController::FastPathCounters{};
+          lastFastPathCounters_ = compositor_ != nullptr
+                                      ? compositor_->fastPathCountersForTesting()
+                                      : svg::compositor::CompositorController::FastPathCounters{};
           lastCompositorRenderFrameStats_ =
               compositor_ != nullptr ? compositor_->lastRenderFrameStats()
                                      : svg::compositor::CompositorController::RenderFrameStats{};
@@ -1628,12 +1744,12 @@ void AsyncRenderer::workerLoop() {
           done.result.workerMs = workerMs;
           done.result.workerTiming = workerTiming;
           done.result.workerCompletedAt = workerEnd;
-            workerState_ = std::move(done);
-            // Snapshot the callback under the lock so a concurrent
-            // `setWakeCallback` swap can't tear the invocation. Fire it
-            // outside the lock to keep the hook cheap and avoid any
-            // chance of deadlock if the caller re-enters AsyncRenderer.
-            wake = wakeCallback_;
+          workerState_ = std::move(done);
+          // Snapshot the callback under the lock so a concurrent
+          // `setWakeCallback` swap can't tear the invocation. Fire it
+          // outside the lock to keep the hook cheap and avoid any
+          // chance of deadlock if the caller re-enters AsyncRenderer.
+          wake = wakeCallback_;
           notifyStateChange = true;
         }
       } else if (std::holds_alternative<CancellingState>(workerState_)) {

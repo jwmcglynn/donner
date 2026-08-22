@@ -1226,6 +1226,10 @@ public:
     shell.renderFillStrokeToolbarWidget();
   }
 
+  static std::uint64_t ToolbarLiveSelectionIdentityReads(const EditorShell& shell) {
+    return shell.toolbarLiveSelectionIdentityReadsForTesting_;
+  }
+
   static void RenderToolPalette(EditorShell& shell, const ImVec2& paneOrigin,
                                 const ImVec2& contentRegion) {
     shell.renderToolPalette(paneOrigin, contentRegion);
@@ -3509,11 +3513,17 @@ TEST(EditorShellTest, FillStrokeToolbarKeepsChosenPaintVisibleWhileRendererIsBus
   EditorShellTestAccess::App(shell).setActiveFill(kDifferentAuthoringFill);
   constexpr ImVec2 kCursor(20.0f, 40.0f);
   RenderToolbarFrame(window, shell, kCursor, ImVec2(-100.0f, -100.0f), /*mouseDown=*/false);
+  const std::uint64_t liveSelectionReadsBeforeHandoff =
+      EditorShellTestAccess::ToolbarLiveSelectionIdentityReads(shell);
   AsyncRenderer& renderer =
       EditorShellTestAccess::BeginDelayedRender(shell, std::chrono::milliseconds(500));
   ASSERT_TRUE(renderer.isBusy());
 
   RenderToolbarFrame(window, shell, kCursor, ImVec2(-100.0f, -100.0f), /*mouseDown=*/false);
+  EXPECT_EQ(EditorShellTestAccess::ToolbarLiveSelectionIdentityReads(shell),
+            liveSelectionReadsBeforeHandoff)
+      << "A busy toolbar frame must reuse the pre-handoff selection identity without resolving "
+         "the worker-owned registry";
   EXPECT_TRUE(DrawDataContainsColor(IM_COL32(0x33, 0x66, 0xcc, 0xff)))
       << "The selected element's fill swatch must not change while its render is in flight";
   EXPECT_FALSE(DrawDataContainsColor(IM_COL32(0xff, 0x00, 0xaa, 0xff)))

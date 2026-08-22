@@ -126,6 +126,14 @@ declare global {
       pending: boolean;
       active: boolean;
       resultReady: boolean;
+      foregroundHandoffWaits: number;
+      firstAttemptCompleted: boolean;
+      offscreenRendererConstructionStarts: number;
+      offscreenRendererConstructionBlocked: boolean;
+    };
+    __donnerSampleThumbnailRendererCreationBlocked?: {
+      blocked: boolean;
+      constructionStarts: number;
     };
     __donnerLayerThumbnailStats?: {
       rowCount: number;
@@ -166,6 +174,8 @@ interface WgpuCarouselThumbnailStats extends WgpuReadbackColorStats {
 interface OpenEditorOptions {
   wgpuReadbackStats?: boolean;
   postInitializationDwellMs?: number;
+  sampleThumbnailRendererCreationRequest?: number;
+  sampleThumbnailRendererCreationDelayMs?: number;
 }
 
 const kFatalRuntimePattern =
@@ -290,6 +300,16 @@ async function openEditor(page: Page, options: OpenEditorOptions = {}): Promise<
   // not include that debug-only work unless they are explicitly guarding it.
   if (options.wgpuReadbackStats === true) {
     url.searchParams.set("wgpuReadbackStats", "1");
+  }
+  if ((options.sampleThumbnailRendererCreationRequest ?? 0) > 0) {
+    url.searchParams.set(
+      "sampleThumbnailRendererCreationRequest",
+      String(options.sampleThumbnailRendererCreationRequest),
+    );
+    url.searchParams.set(
+      "sampleThumbnailRendererCreationDelayMs",
+      String(options.sampleThumbnailRendererCreationDelayMs ?? 0),
+    );
   }
   const fatalMessages: string[] = [];
   const recordFatalMessage = (message: string) => {
@@ -840,6 +860,78 @@ test("WGPU diagnostics do not block the first carousel interaction", async ({ pa
   // an unblocked main thread.
   expect(carouselHeartbeatGapMs).toBeLessThan(scaledMs(100));
   expect(heartbeat?.maxGapMs).toBeLessThan(scaledMs(100));
+  expect(fatalMessages).toEqual([]);
+});
+
+test("Firefox hands a blocked thumbnail renderer to a foreground sample load", async ({ browserName, page }) => {
+  test.skip(browserName !== "firefox", "Firefox worker-owned WebGPU handoff regression");
+  page.on("console", (message) => {
+    if (message.type() === "error" || message.type() === "warning") {
+      console.log(`firefox-handoff-console[${message.type()}]: ${message.text()}`);
+    }
+  });
+  page.on("pageerror", (error) => {
+    console.log(`firefox-handoff-pageerror: ${error.stack || error.message}`);
+  });
+  const fatalMessages = await openEditor(page, {
+    postInitializationDwellMs: 0,
+    sampleThumbnailRendererCreationRequest: 2,
+    sampleThumbnailRendererCreationDelayMs: 5000,
+  });
+  const canvas = page.locator("canvas#canvas");
+  const bounds = await canvas.boundingBox();
+  expect(bounds).not.toBeNull();
+  if (bounds === null) {
+    return;
+  }
+
+  await expect
+    .poll(
+      () =>
+        page.evaluate(
+          () =>
+            window.__donnerSampleThumbnailRendererCreationBlocked ?? {
+              blocked: false,
+              constructionStarts: 0,
+            },
+        ),
+      {
+        message: "the second worker-owned offscreen renderer must be blocked before replacement",
+        timeout: scaledMs(10_000),
+        intervals: [8, 16, 25, 50],
+      },
+    )
+    .toEqual({ blocked: true, constructionStarts: 2 });
+
+  const completedBefore = await page.evaluate(
+    () => window.__donnerWorkerStats?.completedResults ?? 0,
+  );
+  await page.mouse.click(bounds.x + bounds.width * 0.24, bounds.y + 282);
+  await expect(canvas).toHaveAttribute("data-active-sample-id", "donner-splash", {
+    timeout: scaledMs(1000),
+  });
+  await expect
+    .poll(
+      () =>
+        page.evaluate((before) => {
+          const thumbnails = window.__donnerSampleThumbnailStats;
+          return {
+            firstAttemptCompleted: thumbnails?.firstAttemptCompleted ?? false,
+            foregroundHandoffWaits: thumbnails?.foregroundHandoffWaits ?? 0,
+            foregroundResultCompleted: (window.__donnerWorkerStats?.completedResults ?? 0) > before,
+          };
+        }, completedBefore),
+      {
+        message: "the first offscreen attempt must release before the foreground document result",
+        timeout: scaledMs(20_000),
+        intervals: [16, 25, 50, 100],
+      },
+    )
+    .toEqual({
+      firstAttemptCompleted: true,
+      foregroundHandoffWaits: 1,
+      foregroundResultCompleted: true,
+    });
   expect(fatalMessages).toEqual([]);
 });
 

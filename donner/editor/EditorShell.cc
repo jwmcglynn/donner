@@ -89,6 +89,24 @@
 namespace donner::editor {
 
 #ifdef __EMSCRIPTEN__
+int SampleThumbnailRendererCreationRequestForTesting() {
+  return MAIN_THREAD_EM_ASM_INT({
+    const raw =
+        new URLSearchParams(window.location.search).get('sampleThumbnailRendererCreationRequest');
+    const value = Number(raw || 0);
+    return Number.isFinite(value) ? Math.max(0, Math.min(64, Math.floor(value))) : 0;
+  });
+}
+
+int SampleThumbnailRendererCreationDelayMsForTesting() {
+  return MAIN_THREAD_EM_ASM_INT({
+    const raw =
+        new URLSearchParams(window.location.search).get('sampleThumbnailRendererCreationDelayMs');
+    const value = Number(raw || 0);
+    return Number.isFinite(value) ? Math.max(0, Math.min(5000, Math.floor(value))) : 0;
+  });
+}
+
 // The app runs on a pthread in the browser build, where `window` and
 // `document` do not exist; every publish below proxies to the browser main
 // thread. Fire-and-forget: none of these are read back by the app.
@@ -109,7 +127,10 @@ void PublishActiveSampleId(const char* sampleId) {
 }
 
 void PublishSampleThumbnailStats(int requested, int started, int completed, int rendered, int ready,
-                                 int pending, int active, int resultReady) {
+                                 int pending, int active, int resultReady,
+                                 int foregroundHandoffWaits, int firstAttemptCompleted,
+                                 int offscreenRendererConstructionStarts,
+                                 int offscreenRendererConstructionBlocked) {
   MAIN_THREAD_ASYNC_EM_ASM(
       {
         const frame = Number(window['__donnerMainLoopRenderedFrames'] || 0) + 1;
@@ -139,9 +160,15 @@ void PublishSampleThumbnailStats(int requested, int started, int completed, int 
           'pending' : Boolean($5),
           'active' : Boolean($6),
           'resultReady' : Boolean($7),
+          'foregroundHandoffWaits' : $8,
+          'firstAttemptCompleted' : Boolean($9),
+          'offscreenRendererConstructionStarts' : $10,
+          'offscreenRendererConstructionBlocked' : Boolean($11),
         });
       },
-      requested, started, completed, rendered, ready, pending, active, resultReady);
+      requested, started, completed, rendered, ready, pending, active, resultReady,
+      foregroundHandoffWaits, firstAttemptCompleted, offscreenRendererConstructionStarts,
+      offscreenRendererConstructionBlocked);
 }
 
 void PublishInteractionStats(int selectedCount, int pendingClick, int workerBusy, int dragging,
@@ -1164,6 +1191,11 @@ EditorShell::EditorShell(gui::EditorWindow& window, EditorShellOptions options)
     installFramebufferUnderlayPlan(std::move(plan));
   });
   renderCoordinator_.asyncRenderer().setCompositorDiagnosticsEnabled(false);
+#ifdef __EMSCRIPTEN__
+  renderCoordinator_.asyncRenderer().setSampleThumbnailRendererCreationPlanForTesting(
+      SampleThumbnailRendererCreationRequestForTesting(),
+      std::chrono::milliseconds(SampleThumbnailRendererCreationDelayMsForTesting()));
+#endif
   // Install the embedded + system font catalog as the process-wide default provider, so every
   // document FontManager created by the render paths resolves font-family names against embedded
   // Google Fonts and macOS system fonts before falling back to Public Sans (Design 0013 W3).
@@ -3062,6 +3094,24 @@ Box2d EditorShell::canvasZoomControlScreenRect() const {
   return Box2d::FromXYWH(x, y, width, height);
 }
 
+std::optional<Entity> EditorShell::toolbarPaintSelectionIdentity(
+    bool rendererBusy, const svg::SVGDocumentHandle& currentPaintDocument) {
+  if (app_.selectedElements().empty()) {
+    return std::nullopt;
+  }
+
+  if (rendererBusy) {
+    // The render worker may be traversing or rebuilding the shared registry. Reuse the stable
+    // identity captured before handoff instead of resolving an ElementAnchor against that registry
+    // from the UI thread.
+    return toolbarPaintSnapshotDocument_ == currentPaintDocument ? toolbarPaintSnapshotSelection_
+                                                                 : std::nullopt;
+  }
+
+  ++toolbarLiveSelectionIdentityReadsForTesting_;
+  return app_.selectedElements().front().unsafeEntityHandle().entity();
+}
+
 void EditorShell::renderFillStrokeToolbarWidget() {
   const bool rendererBusy = renderCoordinator_.asyncRenderer().isBusy();
   const bool canvasInteractionActive = selectTool_.isDragging() || selectTool_.isMarqueeing() ||
@@ -3071,9 +3121,7 @@ void EditorShell::renderFillStrokeToolbarWidget() {
   std::optional<Entity> currentPaintSelection;
   if (app_.hasDocument()) {
     currentPaintDocument = app_.document().document().handle();
-    if (!app_.selectedElements().empty()) {
-      currentPaintSelection = app_.selectedElements().front().unsafeEntityHandle().entity();
-    }
+    currentPaintSelection = toolbarPaintSelectionIdentity(rendererBusy, currentPaintDocument);
   }
   const bool paintSnapshotMatchesSelection =
       toolbarPaintSnapshot_ != nullptr && toolbarPaintSnapshotDocument_ == currentPaintDocument &&
@@ -4402,10 +4450,13 @@ void EditorShell::publishSampleThumbnailStats() const {
   }
   const SampleThumbnailRenderStats stats =
       renderCoordinator_.asyncRenderer().sampleThumbnailRenderStats();
-  PublishSampleThumbnailStats(static_cast<int>(stats.requested), static_cast<int>(stats.started),
-                              static_cast<int>(stats.completed), static_cast<int>(stats.rendered),
-                              static_cast<int>(ready), stats.pending ? 1 : 0, stats.active ? 1 : 0,
-                              stats.resultReady ? 1 : 0);
+  PublishSampleThumbnailStats(
+      static_cast<int>(stats.requested), static_cast<int>(stats.started),
+      static_cast<int>(stats.completed), static_cast<int>(stats.rendered), static_cast<int>(ready),
+      stats.pending ? 1 : 0, stats.active ? 1 : 0, stats.resultReady ? 1 : 0,
+      static_cast<int>(stats.foregroundHandoffWaits), stats.firstAttemptCompleted ? 1 : 0,
+      static_cast<int>(stats.offscreenRendererConstructionStarts),
+      stats.offscreenRendererConstructionBlocked ? 1 : 0);
 #endif
 }
 

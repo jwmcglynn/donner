@@ -47,7 +47,6 @@
 #include <variant>
 #include <vector>
 
-
 #include "donner/base/EcsRegistry.h"
 #include "donner/base/Transform.h"
 #include "donner/base/Vector2.h"
@@ -73,7 +72,6 @@ class GeodeDevice;
 }
 
 namespace donner::editor {
-
 
 /// Non-null renderer/document handoff for a render request.
 struct RenderLease {
@@ -425,6 +423,14 @@ struct SampleThumbnailRenderStats {
   std::uint64_t rendered = 0;
   std::uint64_t cancelled = 0;
   std::uint64_t offscreenRendererCreations = 0;
+  /// Offscreen constructors entered before any test-only construction block.
+  std::uint64_t offscreenRendererConstructionStarts = 0;
+  /// True only while the test-controlled block is active inside construction.
+  bool offscreenRendererConstructionBlocked = false;
+  /// Foreground renders queued while the first worker-local offscreen attempt was still active.
+  std::uint64_t foregroundHandoffWaits = 0;
+  /// True once the first worker-local offscreen renderer initialization has completed.
+  bool firstAttemptCompleted = false;
   bool pending = false;
   bool active = false;
   bool resultReady = false;
@@ -589,6 +595,10 @@ public:
 
   /// Inject a cancellation-aware delay before thumbnail parsing for deterministic priority tests.
   void setSampleThumbnailRenderDelayForTesting(std::chrono::milliseconds delay);
+
+  /// Recreate and pause one numbered offscreen renderer construction for browser handoff tests.
+  void setSampleThumbnailRendererCreationPlanForTesting(int requestNumber,
+                                                        std::chrono::milliseconds delay);
 
   /// Install a callback that the worker thread invokes when a render
   /// result or cancellation completes. Used by the editor's on-demand
@@ -808,6 +818,12 @@ public:
 
 private:
   void workerLoop();
+  bool prepareSampleThumbnailRendererForRequest(std::unique_ptr<svg::RendererInterface>& renderer,
+                                                svg::RendererInterface*& rendererRoot,
+                                                svg::RendererInterface* requestedRoot);
+  void delaySampleThumbnailRendererCreationForTesting(bool shouldDelay,
+                                                      int constructionStart) const;
+  void finishSampleThumbnailRendererCreation();
 
   std::thread thread_;
   mutable std::mutex mutex_;
@@ -842,9 +858,17 @@ private:
   std::optional<SampleThumbnailRenderResult> sampleThumbnailResult_;
   bool sampleThumbnailActive_ = false;
   bool discardActiveSampleThumbnailResult_ = false;
+  /// Renderer construction itself cannot poll the thumbnail cancellation token. Foreground work
+  /// arriving in this window defers that signal until construction returns, avoiding a browser
+  /// WebGPU cancellation handoff while preserving priority before thumbnail rendering starts.
+  bool sampleThumbnailRendererCreationActive_ = false;
+  bool cancelSampleThumbnailAfterRendererCreation_ = false;
+  bool foregroundHandoffCountedForRendererCreation_ = false;
   SampleThumbnailRenderStats sampleThumbnailCounters_;
   svg::compositor::CancellationToken cancelSampleThumbnail_;
   std::atomic<std::chrono::milliseconds::rep> sampleThumbnailRenderDelayMsForTesting_{0};
+  std::atomic<int> sampleThumbnailRendererCreationRequestForTesting_{0};
+  std::atomic<std::chrono::milliseconds::rep> sampleThumbnailRendererCreationDelayMsForTesting_{0};
   /// Offscreen-only cache preparation left over after publishing a correct first document frame.
   /// It shares the worker but not `WorkerState`, so input can post a foreground render immediately;
   /// that request cancels this work at the compositor's existing safe points.

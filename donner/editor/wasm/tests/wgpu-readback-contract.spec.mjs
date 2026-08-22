@@ -324,6 +324,28 @@ test("the composited drag gate does not cancel first-use offscreen WebGPU work",
   assert.match(helper.slice(0, sampleClick), /timeout:\s*scaledMs\(20_000\)/);
 });
 
+test("shared Basic Shapes visual gates settle first-use thumbnails before replacement", () => {
+  const helperStart = presentationRegressionSource.indexOf("async function openBasicShapes(");
+  const helperEnd = presentationRegressionSource.indexOf(
+    "async function toggleViewMenuItem(",
+    helperStart,
+  );
+  assert.ok(helperStart >= 0 && helperEnd > helperStart, "expected the Basic Shapes open helper");
+  const helper = presentationRegressionSource.slice(helperStart, helperEnd);
+
+  const thumbnailPrecondition = helper.indexOf("__donnerSampleThumbnailStats");
+  const sampleClick = helper.indexOf("page.mouse.click");
+  assert.ok(
+    thumbnailPrecondition >= 0 && thumbnailPrecondition < sampleClick,
+    "visual-only gates must not replace a first-use thumbnail render before it settles",
+  );
+  assert.match(helper, /completed\s*>\s*0/);
+  assert.match(helper, /\(stats\.ready\s*\?\?\s*0\)\s*>\s*0/);
+  assert.match(helper, /!stats\.active/);
+  assert.match(helper, /!stats\.pending/);
+  assert.match(helper.slice(0, sampleClick), /timeout:\s*scaledMs\(20_000\)/);
+});
+
 test("worker WebGPU startup keeps its browser Promise bridge private and single-purpose", () => {
   assert.doesNotMatch(geodeDeviceHeader, /CreateHeadlessAsync/);
   assert.doesNotMatch(geodeDeviceHeader, /donnerGeodeCompleteHeadlessImport/);
