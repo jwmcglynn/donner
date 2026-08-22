@@ -19,6 +19,7 @@
 
 #include "donner/base/Path.h"
 #include "donner/svg/renderer/geode/GeodePathEncoder.h"
+#include "donner/svg/renderer/geode/GeodeResourceBudget.h"
 
 namespace donner::geode {
 
@@ -35,6 +36,8 @@ struct GeodePathCacheComponent {
   /// Fill-slot encode. Populated on first encode; reused on hit.
   /// Reset by the entt signal listener when geometry changes.
   std::optional<EncodedPath> fillEncode;
+  /// Live retained-byte charge for `fillEncode`.
+  GeodeGeometryCacheReservation fillReservation;
 
   /// Stroke-slot cache. Holds both the `Path::strokeToFill` output
   /// path and its encoded form, keyed by the source `StrokeStyle` plus
@@ -72,6 +75,8 @@ struct GeodePathCacheComponent {
     FillRule strokeFillRule = FillRule::NonZero;
   };
   std::optional<StrokeSlot> strokeSlot;
+  /// Live retained-byte charge for `strokeSlot`.
+  GeodeGeometryCacheReservation strokeReservation;
 };
 
 }  // namespace donner::geode

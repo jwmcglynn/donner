@@ -31,6 +31,7 @@
 #include "donner/svg/renderer/StrokeParams.h"
 #include "donner/svg/renderer/geode/GeodeCheckerboardPipeline.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
+#include "donner/svg/renderer/geode/GeodePathCacheComponent.h"
 #include "donner/svg/renderer/tests/RgbaTestMatchers.h"
 #include "donner/svg/resources/ImageResource.h"
 #include "tiny_skia/Pixmap.h"
@@ -780,6 +781,58 @@ TEST_F(RendererGeodeTest, SurfaceBudgetCountsPoolReuseAndNestedOffscreensBeforeA
   renderer.endFrame();
 }
 
+TEST_F(RendererGeodeTest, SurfaceBudgetCoversClipMaskBlendSnapshotMaskAndPatternTargets) {
+  ASSERT_TRUE(sharedDevice() != nullptr);
+  RenderViewport viewport;
+  viewport.size = Vector2d(8.0, 8.0);
+
+  {
+    RendererGeode renderer = createRenderer();
+    renderer.setSurfaceBudgetForTesting(/*maximumSurfaces=*/2u, /*maximumBytes=*/4096u);
+    renderer.beginFrame(viewport);
+    ResolvedClip clip;
+    clip.clipPaths.push_back(
+        {.path = PathBuilder().addRect(Box2d({0.0, 0.0}, {4.0, 4.0})).build()});
+    renderer.pushClip(clip);
+    EXPECT_EQ(renderer.resourceStats().surfaceCount, 2u);
+    renderer.popClip();
+    renderer.endFrame();
+  }
+
+  {
+    RendererGeode renderer = createRenderer();
+    renderer.setSurfaceBudgetForTesting(/*maximumSurfaces=*/3u, /*maximumBytes=*/4096u);
+    renderer.beginFrame(viewport);
+    renderer.pushIsolatedLayer(1.0, MixBlendMode::Multiply);
+    renderer.popIsolatedLayer();
+    EXPECT_EQ(renderer.resourceStats().surfaceCount, 3u)
+        << "The layer and its destination snapshot must both be admitted.";
+    renderer.endFrame();
+  }
+
+  {
+    RendererGeode renderer = createRenderer();
+    renderer.setSurfaceBudgetForTesting(/*maximumSurfaces=*/3u, /*maximumBytes=*/4096u);
+    renderer.beginFrame(viewport);
+    renderer.pushMask(std::nullopt, MaskType::Alpha);
+    renderer.transitionMaskToContent();
+    EXPECT_EQ(renderer.resourceStats().surfaceCount, 3u)
+        << "Mask capture and content surfaces must be charged independently.";
+    renderer.popMask();
+    renderer.endFrame();
+  }
+
+  {
+    RendererGeode renderer = createRenderer();
+    renderer.setSurfaceBudgetForTesting(/*maximumSurfaces=*/2u, /*maximumBytes=*/4096u);
+    renderer.beginFrame(viewport);
+    ASSERT_TRUE(renderer.beginPatternTile(Box2d::FromXYWH(0.0, 0.0, 4.0, 4.0), Transform2d()));
+    EXPECT_EQ(renderer.resourceStats().surfaceCount, 2u);
+    renderer.endPatternTile(/*forStroke=*/false);
+    renderer.endFrame();
+  }
+}
+
 TEST_F(RendererGeodeTest, GeometryBudgetIsSharedAcrossOffscreensAtExactDrawBoundary) {
   ASSERT_TRUE(sharedDevice() != nullptr);
 
@@ -808,6 +861,67 @@ TEST_F(RendererGeodeTest, GeometryBudgetIsSharedAcrossOffscreensAtExactDrawBound
 
   offscreen->endFrame();
   renderer.endFrame();
+}
+
+TEST_F(RendererGeodeTest, GeometryBudgetChargesFillAndStrokeVariantsBeforeUpload) {
+  ASSERT_TRUE(sharedDevice() != nullptr);
+
+  RendererGeode renderer = createRenderer();
+  renderer.setGeometryBudgetForTesting(/*maximumDraws=*/2u, /*maximumItems=*/1u << 20,
+                                       /*maximumFrameBytes=*/64u << 20,
+                                       /*maximumCacheBytes=*/64u << 20,
+                                       /*maximumResidentBytes=*/64u << 20);
+  beginFrame(renderer);
+  renderer.setPaint(solidFillAndStroke(css::RGBA(255, 0, 0, 255), css::RGBA(0, 0, 255, 255)));
+  StrokeParams stroke;
+  stroke.strokeWidth = 1.0;
+  renderer.drawRect(Box2d({1.0, 1.0}, {8.0, 8.0}), stroke);
+
+  RendererResourceStats stats = renderer.resourceStats();
+  EXPECT_EQ(stats.geometryDraws, 2u);
+  EXPECT_FALSE(stats.geometryBudgetRejected);
+
+  renderer.drawRect(Box2d({10.0, 1.0}, {18.0, 8.0}), stroke);
+  stats = renderer.resourceStats();
+  EXPECT_EQ(stats.geometryDraws, 2u);
+  EXPECT_TRUE(stats.geometryBudgetRejected);
+  renderer.endFrame();
+}
+
+TEST_F(RendererGeodeTest, CacheBudgetRejectsBeforeInsertionAndUsesTransientFallback) {
+  ASSERT_TRUE(sharedDevice() != nullptr);
+
+  ParseWarningSink warnings = ParseWarningSink::Disabled();
+  auto parsed = parser::SVGParser::ParseSVG(
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16">
+           <path id="bounded" d="M 1 1 H 12 V 12 H 1 Z" fill="red"/>
+         </svg>)",
+      warnings);
+  ASSERT_FALSE(parsed.hasError());
+  SVGDocument document = std::move(parsed.result());
+  const auto element = document.querySelector("#bounded");
+  ASSERT_TRUE(element.has_value());
+  const Entity entity = element->unsafeEntityHandle().entity();
+
+  RendererGeode renderer = createRenderer();
+  renderer.setGeometryBudgetForTesting(/*maximumDraws=*/4u, /*maximumItems=*/1u << 20,
+                                       /*maximumFrameBytes=*/64u << 20,
+                                       /*maximumCacheBytes=*/0u,
+                                       /*maximumResidentBytes=*/64u << 20);
+  renderer.draw(document);
+
+  const auto* cache = document.registry().try_get<geode::GeodePathCacheComponent>(entity);
+  ASSERT_NE(cache, nullptr);
+  EXPECT_FALSE(cache->fillEncode.has_value())
+      << "Rejected retained geometry must not enter the document cache.";
+  const RendererResourceStats stats = renderer.resourceStats();
+  EXPECT_TRUE(stats.geometryBudgetRejected);
+  EXPECT_EQ(stats.geometryDraws, 1u);
+
+  const RendererBitmap bitmap = renderer.takeSnapshot();
+  ASSERT_FALSE(bitmap.empty());
+  EXPECT_THAT(pixelAt(bitmap, 4, 4), RgbaEq(255, 0, 0, 255))
+      << "A cache rejection must retain the admitted frame-local draw fallback.";
 }
 
 TEST_F(RendererGeodeTest, DrawTextureSnapshotPreservesPremultipliedAlpha) {

@@ -25,11 +25,13 @@
 #include <atomic>
 #include <cstdint>
 #include <cstring>
+#include <limits>
 #include <memory>
 #include <vector>
 
-#include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
+#include "donner/svg/renderer/geode/GeodeResourceBudget.h"
+#include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
 
 namespace donner::geode {
 
@@ -41,34 +43,34 @@ namespace donner::geode {
 /// order. All geometry bases are element offsets relative to the bound
 /// buffer range's start (chunk-relative for resident geometry).
 struct alignas(16) InstanceRecord {
-  float transformRow0[4];     //   0 ..  16 - (a, c, e, 0)
-  float transformRow1[4];     //  16 ..  32 - (b, d, f, 0)
-  float color[4];             //  32 ..  48 - premultiplied
-  uint32_t fillRule;          //  48 ..  52
-  uint32_t paintMode;         //  52 ..  56
-  float patternOpacity;       //  56 ..  60
-  uint32_t _pad0;             //  60 ..  64
-  float gridYBase;            //  64 ..  68
-  float gridHStride;          //  68 ..  72
-  uint32_t gridHBandCount;    //  72 ..  76
-  float gridXBase;            //  76 ..  80
-  float gridVStride;          //  80 ..  84
-  uint32_t gridVBandCount;    //  84 ..  88
-  uint32_t _gridPad0;         //  88 ..  92
-  uint32_t _gridPad1;         //  92 ..  96
-  uint32_t boundingVertexCount;  //  96 .. 100
-  uint32_t _boundingPad0;        // 100 .. 104
-  uint32_t _boundingPad1;        // 104 .. 108
-  uint32_t _boundingPad2;        // 108 .. 112
+  float transformRow0[4];         //   0 ..  16 - (a, c, e, 0)
+  float transformRow1[4];         //  16 ..  32 - (b, d, f, 0)
+  float color[4];                 //  32 ..  48 - premultiplied
+  uint32_t fillRule;              //  48 ..  52
+  uint32_t paintMode;             //  52 ..  56
+  float patternOpacity;           //  56 ..  60
+  uint32_t _pad0;                 //  60 ..  64
+  float gridYBase;                //  64 ..  68
+  float gridHStride;              //  68 ..  72
+  uint32_t gridHBandCount;        //  72 ..  76
+  float gridXBase;                //  76 ..  80
+  float gridVStride;              //  80 ..  84
+  uint32_t gridVBandCount;        //  84 ..  88
+  uint32_t _gridPad0;             //  88 ..  92
+  uint32_t _gridPad1;             //  92 ..  96
+  uint32_t boundingVertexCount;   //  96 .. 100
+  uint32_t _boundingPad0;         // 100 .. 104
+  uint32_t _boundingPad1;         // 104 .. 108
+  uint32_t _boundingPad2;         // 108 .. 112
   float boundingVertices[4 * 4];  // 112 .. 176
-  uint32_t bandBase;           // 176 .. 180
-  uint32_t curveBase;          // 180 .. 184
-  uint32_t vBandBase;          // 184 .. 188
-  uint32_t vCurveBase;         // 188 .. 192
-  uint32_t hGridBase;          // 192 .. 196
-  uint32_t vGridBase;          // 196 .. 200
-  uint32_t hRefsBase;          // 200 .. 204
-  uint32_t vRefsBase;          // 204 .. 208
+  uint32_t bandBase;              // 176 .. 180
+  uint32_t curveBase;             // 180 .. 184
+  uint32_t vBandBase;             // 184 .. 188
+  uint32_t vCurveBase;            // 188 .. 192
+  uint32_t hGridBase;             // 192 .. 196
+  uint32_t vGridBase;             // 196 .. 200
+  uint32_t hRefsBase;             // 200 .. 204
+  uint32_t vRefsBase;             // 204 .. 208
   // Axis-aligned device-pixel clip rectangle as a half-open range
   // `[minX, maxX) x [minY, maxY)` over integer pixel indices, matching what
   // a rasterizer scissor of the same rectangle keeps. Carrying it here
@@ -129,7 +131,15 @@ public:
     uint64_t bufferId = 0;
   };
 
-  explicit GeodeRecordSlab(uint64_t deviceId) : owningDeviceId_(deviceId) {}
+  explicit GeodeRecordSlab(uint64_t deviceId,
+                           std::shared_ptr<GeodeDocumentGeometryBudget> budget = nullptr)
+      : owningDeviceId_(deviceId), budget_(std::move(budget)) {}
+
+  ~GeodeRecordSlab() {
+    if (budget_ && accountedBytes_ != 0) {
+      budget_->releaseResidentBytes(accountedBytes_);
+    }
+  }
 
   GeodeRecordSlab(const GeodeRecordSlab&) = delete;
   GeodeRecordSlab& operator=(const GeodeRecordSlab&) = delete;
@@ -147,8 +157,7 @@ public:
     }
     lastMergedFrame_ = frameIndex;
     for (uint32_t index : pendingFrees_) {
-      freeIndices_.insert(std::upper_bound(freeIndices_.begin(), freeIndices_.end(), index),
-                          index);
+      freeIndices_.insert(std::upper_bound(freeIndices_.begin(), freeIndices_.end(), index), index);
     }
     pendingFrees_.clear();
   }
@@ -171,7 +180,13 @@ public:
     if (chunks_.empty() || usedBytes_ + sizeof(InstanceRecord) > chunks_.back().size) {
       uint64_t newSize = chunks_.empty() ? kInitialRecordSlabBytes : chunks_.back().size * 2u;
       while (newSize < sizeof(InstanceRecord)) {
+        if (newSize > std::numeric_limits<uint64_t>::max() / 2u) {
+          return false;
+        }
         newSize *= 2u;
+      }
+      if (budget_ && !budget_->reserveResidentBytes(newSize)) {
+        return false;
       }
       wgpu::BufferDescriptor desc = {};
       desc.label = wgpuLabel("GeodeRecordSlab");
@@ -179,10 +194,14 @@ public:
       desc.usage = wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopyDst;
       ScopedWgpuHandle<wgpu::Buffer> buffer(device.device().createBuffer(desc));
       if (!buffer) {
+        if (budget_) {
+          budget_->releaseResidentBytes(newSize);
+        }
         return false;
       }
       device.countBuffer();
       chunks_.push_back(Chunk{std::move(buffer), newSize, GeodeDevice::AllocateBufferId()});
+      accountedBytes_ += newSize;
       usedBytes_ = 0;
     }
     out.buffer = chunks_.back().buffer.get();
@@ -238,12 +257,18 @@ public:
     if (batchUniforms_.size() >= kMaxBatchUniforms) {
       return BatchUniformHandle{};
     }
+    if (budget_ && !budget_->reserveResidentBytes(size)) {
+      return BatchUniformHandle{};
+    }
     wgpu::BufferDescriptor desc = {};
     desc.label = wgpuLabel("GeodeSceneBatchUniform");
     desc.size = size;
     desc.usage = wgpu::BufferUsage::Uniform | wgpu::BufferUsage::CopyDst;
     ScopedWgpuHandle<wgpu::Buffer> buffer(device.device().createBuffer(desc));
     if (!buffer) {
+      if (budget_) {
+        budget_->releaseResidentBytes(size);
+      }
       return BatchUniformHandle{};
     }
     device.countBuffer();
@@ -252,6 +277,7 @@ public:
     batchUniforms_.push_back(BatchUniform{std::move(buffer),
                                           std::vector<uint8_t>(first, first + size),
                                           GeodeDevice::AllocateBufferId()});
+    accountedBytes_ += size;
     return BatchUniformHandle{batchUniforms_.back().buffer.get(), batchUniforms_.back().bufferId};
   }
 
@@ -311,6 +337,8 @@ private:
   std::vector<uint32_t> freeIndices_;
   std::vector<uint32_t> pendingFrees_;
   std::vector<BatchUniform> batchUniforms_;
+  std::shared_ptr<GeodeDocumentGeometryBudget> budget_;
+  uint64_t accountedBytes_ = 0;
 };
 
 class GeodeDevice;
@@ -358,9 +386,14 @@ public:
 
   /// Create an empty slab bound to `deviceId` (usually the current
   /// renderer's device). Chunks are allocated lazily on first use.
-  explicit GeodeResidentSlab(uint64_t deviceId) : owningDeviceId_(deviceId) {}
+  explicit GeodeResidentSlab(uint64_t deviceId,
+                             std::shared_ptr<GeodeDocumentGeometryBudget> budget = nullptr)
+      : owningDeviceId_(deviceId), budget_(std::move(budget)) {}
 
   ~GeodeResidentSlab() {
+    if (budget_ && accountedBytes_ > 0) {
+      budget_->releaseResidentBytes(static_cast<uint64_t>(accountedBytes_));
+    }
     if (gauge_ && accountedBytes_ != 0) {
       gauge_->fetch_sub(accountedBytes_, std::memory_order_relaxed);
     }
@@ -465,16 +498,25 @@ public:
     if (chunks_.empty() || alignUp(chunks_.back().cursor, alignment) + size > chunks_.back().size) {
       uint64_t newSize = chunks_.empty() ? kInitialChunkBytes : chunks_.back().size * 2u;
       while (newSize < alignUp(size, alignment)) {
+        if (newSize > std::numeric_limits<uint64_t>::max() / 2u) {
+          return false;
+        }
         newSize *= 2u;
+      }
+      if (budget_ && !budget_->reserveResidentBytes(newSize)) {
+        return false;
       }
       wgpu::BufferDescriptor desc = {};
       desc.label = wgpuLabel("GeodeResidentSlab");
       desc.size = newSize;
-      desc.usage = wgpu::BufferUsage::Storage | wgpu::BufferUsage::Uniform |
-                   wgpu::BufferUsage::CopyDst;
+      desc.usage =
+          wgpu::BufferUsage::Storage | wgpu::BufferUsage::Uniform | wgpu::BufferUsage::CopyDst;
       Chunk chunk;
       chunk.buffer.reset(device.device().createBuffer(desc));
       if (!chunk.buffer) {
+        if (budget_) {
+          budget_->releaseResidentBytes(newSize);
+        }
         return false;
       }
       device.countBuffer();
@@ -547,6 +589,7 @@ private:
   std::vector<FreeRange> freeRanges_;
   std::vector<FreeRange> pendingFrees_;
   std::shared_ptr<std::atomic<int64_t>> gauge_;
+  std::shared_ptr<GeodeDocumentGeometryBudget> budget_;
   int64_t accountedBytes_ = 0;
 };
 
@@ -604,8 +647,8 @@ struct GeodeResidentSlot {
     uint64_t size = 0;
   };
 
-  Region bands;    ///< Horizontal band SSBO (binding 1).
-  Region curves;   ///< Horizontal curve SSBO (binding 2).
+  Region bands;   ///< Horizontal band SSBO (binding 1).
+  Region curves;  ///< Horizontal curve SSBO (binding 2).
   // The four grid classes below share binding 10, whose range covers all of
   // them; each one is reached through an element base in the uniform.
   Region hRefs;    ///< Horizontal curve-reference SSBO (binding 10).

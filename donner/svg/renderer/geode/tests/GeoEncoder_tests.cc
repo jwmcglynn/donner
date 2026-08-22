@@ -21,6 +21,7 @@
 #include "donner/svg/renderer/geode/GeodeGpuWait.h"
 #include "donner/svg/renderer/geode/GeodeImagePipeline.h"
 #include "donner/svg/renderer/geode/GeodePipeline.h"
+#include "donner/svg/renderer/geode/GeodeResourceBudget.h"
 #include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
 #include "donner/svg/renderer/tests/RgbaTestMatchers.h"
 #include "donner/svg/resources/ImageResource.h"
@@ -337,6 +338,89 @@ TEST_F(GeoEncoderTest, RecordSlabFreeListSurvivesChunkGrowth) {
   }
 }
 
+TEST_F(GeoEncoderTest, ResidentSlabRejectsGrowthPastExactDocumentBudget) {
+  auto budget = std::make_shared<GeodeDocumentGeometryBudget>();
+  constexpr uint64_t kInitialBytes = 1u << 20;
+  budget->setLimitsForTesting({.cacheBytes = 64u << 20, .residentBytes = kInitialBytes});
+
+  {
+    GeodeResidentSlab slab(device_->deviceId(), budget);
+    GeodeResidentSlab::Allocation exact;
+    ASSERT_TRUE(slab.allocate(*device_, kInitialBytes, /*alignment=*/256u, exact));
+    EXPECT_EQ(budget->residentBytes(), kInitialBytes);
+
+    GeodeResidentSlab::Allocation capPlusOne;
+    EXPECT_FALSE(slab.allocate(*device_, 1u, /*alignment=*/256u, capPlusOne));
+    EXPECT_EQ(budget->residentBytes(), kInitialBytes)
+        << "A rejected grow must not charge or allocate its next chunk.";
+  }
+
+  EXPECT_EQ(budget->residentBytes(), 0u)
+      << "Destroying the grow-only slab must release its persistent reservation.";
+}
+
+TEST_F(GeoEncoderTest, RecordSlabRejectsGrowthPastExactDocumentBudget) {
+  auto budget = std::make_shared<GeodeDocumentGeometryBudget>();
+  constexpr uint64_t kInitialBytes = 262144u;
+  constexpr std::size_t kInitialSlots = kInitialBytes / sizeof(InstanceRecord);
+  budget->setLimitsForTesting({.cacheBytes = 64u << 20, .residentBytes = kInitialBytes});
+
+  {
+    GeodeRecordSlab slab(device_->deviceId(), budget);
+    GeodeRecordSlab::Slot slot;
+    for (std::size_t i = 0; i < kInitialSlots; ++i) {
+      ASSERT_TRUE(slab.allocateSlot(*device_, slot)) << "slot " << i;
+    }
+    EXPECT_EQ(budget->residentBytes(), kInitialBytes);
+    EXPECT_FALSE(slab.allocateSlot(*device_, slot));
+    EXPECT_EQ(budget->residentBytes(), kInitialBytes);
+  }
+
+  EXPECT_EQ(budget->residentBytes(), 0u);
+}
+
+TEST(GeodeResourceBudgetTest, CacheReplacementIsAtomicAndReleasesAtOwnerDestruction) {
+  auto budget = std::make_shared<GeodeDocumentGeometryBudget>();
+  budget->setLimitsForTesting({.cacheBytes = 100u, .residentBytes = 100u});
+
+  {
+    GeodeGeometryCacheReservation reservation;
+    ASSERT_TRUE(reservation.replace(budget, 60u));
+    EXPECT_EQ(budget->cacheBytes(), 60u);
+    ASSERT_TRUE(reservation.replace(budget, 100u));
+    EXPECT_EQ(budget->cacheBytes(), 100u);
+    EXPECT_FALSE(reservation.replace(budget, 101u));
+    EXPECT_EQ(reservation.bytes(), 100u);
+    EXPECT_EQ(budget->cacheBytes(), 100u)
+        << "A cap+1 replacement must preserve the previously admitted entry.";
+  }
+
+  EXPECT_EQ(budget->cacheBytes(), 0u);
+}
+
+TEST(GeodeResourceBudgetTest, ResidentRejectionPreservesCpuCacheFallback) {
+  auto budget = std::make_shared<GeodeDocumentGeometryBudget>();
+  budget->setLimitsForTesting({.cacheBytes = 100u, .residentBytes = 0u});
+
+  EXPECT_FALSE(budget->reserveResidentBytes(1u));
+  GeodeGeometryCacheReservation reservation;
+  EXPECT_TRUE(reservation.replace(budget, 100u));
+  EXPECT_EQ(budget->cacheBytes(), 100u);
+  EXPECT_EQ(budget->residentBytes(), 0u);
+}
+
+TEST(GeodeResourceBudgetTest, FrameGeometryStopsAtExactAggregateBoundary) {
+  GeodeFrameGeometryBudget budget;
+  budget.setLimitsForTesting({.draws = 2u, .items = 5u, .retainedBytes = 7u});
+
+  ASSERT_TRUE(budget.reserve(/*items=*/2u, /*retainedBytes=*/3u));
+  ASSERT_TRUE(budget.reserve(/*items=*/3u, /*retainedBytes=*/4u));
+  EXPECT_FALSE(budget.reserve(/*items=*/1u, /*retainedBytes=*/1u));
+  EXPECT_EQ(budget.draws(), 2u);
+  EXPECT_EQ(budget.items(), 5u);
+  EXPECT_EQ(budget.retainedBytes(), 7u);
+}
+
 /// The scene-batch bind-group cache lives on the device, which outlives the
 /// documents drawn through it (renderers lease devices from an idle pool).
 /// A destroyed document's slabs release their buffer handles, and those
@@ -481,8 +565,7 @@ TEST_F(GeoEncoderTest, SceneBatchBindGroupCacheDistinguishesSlabGenerations) {
       const float quad[8] = {8.0f, 8.0f, 24.0f, 8.0f, 24.0f, 24.0f, 8.0f, 24.0f};
       std::memcpy(record.boundingVertices, quad, sizeof(quad));
       device_->queue().writeBuffer(generation.recordSlots[i].buffer,
-                                   generation.recordSlots[i].offset, &record,
-                                   sizeof(record));
+                                   generation.recordSlots[i].offset, &record, sizeof(record));
     }
     return generation;
   };
@@ -548,8 +631,7 @@ TEST_F(GeoEncoderTest, SceneBatchBindGroupCacheDistinguishesSlabGenerations) {
            "bind-group lookup must miss. A hit means the cache matched a dead generation's "
            "entry and this batch drew the previous generation's records and geometry.";
     EXPECT_EQ(repeatBatchCreates, 0u)
-        << "Round " << round
-        << ": repeating the identical batch must reuse the cached bind group.";
+        << "Round " << round << ": repeating the identical batch must reuse the cached bind group.";
   }
 }
 

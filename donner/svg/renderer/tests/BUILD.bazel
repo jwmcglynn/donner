@@ -590,6 +590,7 @@ donner_cc_test(
         "//donner/svg/renderer:renderer_utils",
         "//donner/svg/renderer:stroke_params",
         "//donner/svg/renderer/geode:geode_device",
+        "//donner/svg/renderer/geode:geode_path_cache_component",
         "//donner/svg/renderer/tests:rgba_test_matchers",
         "//donner/svg/resources:image_resource",
         "@tiny-skia-cpp//src:tiny_skia_lib",

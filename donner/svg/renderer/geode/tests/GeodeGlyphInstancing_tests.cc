@@ -294,6 +294,42 @@ TEST_F(GeodeGlyphInstancingTest, MaterializationBudgetRejectsBeforeSecondOutline
   EXPECT_EQ(renderer.residentGlyphCountForTesting(document), 1u);
 }
 
+TEST_F(GeodeGlyphInstancingTest, MaterializationBudgetIsSharedAcrossOffscreenRenderers) {
+  SVGDocument firstDocument = parse(R"svg(
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200"
+           font-family="Noto Sans" font-size="48">
+        <text x="10" y="80" fill="black">a</text>
+      </svg>)svg");
+  SVGDocument secondDocument = parse(R"svg(
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200"
+           font-family="Noto Sans" font-size="48">
+        <text x="10" y="80" fill="black">b</text>
+      </svg>)svg");
+
+  RendererGeode renderer(sharedDevice());
+  renderer.setTextMaterializationBudgetForTesting(
+      {.uniqueOutlines = 1u,
+       .commands = RendererTextMaterializationBudget::kMaximumCommands,
+       .points = RendererTextMaterializationBudget::kMaximumPoints,
+       .bytes = RendererTextMaterializationBudget::kMaximumBytes,
+       .decodeWork = RendererTextMaterializationBudget::kMaximumDecodeWork},
+      /*maximumGlyphOccurrences=*/2u);
+  std::unique_ptr<RendererInterface> offscreen = renderer.createOffscreenInstance();
+  ASSERT_NE(offscreen, nullptr);
+
+  const Frame first = render(renderer, firstDocument);
+  ASSERT_GT(nonTransparentPixels(first.bitmap), 0u);
+  offscreen->draw(secondDocument);
+
+  const RendererResourceStats stats = renderer.resourceStats();
+  EXPECT_EQ(stats.textUniqueOutlines, 1u);
+  EXPECT_EQ(stats.textGlyphOccurrences, 2u);
+  EXPECT_TRUE(stats.textMaterializationBudgetRejected);
+  EXPECT_EQ(renderer.residentGlyphCountForTesting(firstDocument), 1u);
+  EXPECT_EQ(renderer.residentGlyphCountForTesting(secondDocument), 0u)
+      << "The offscreen cap+1 miss must not decode or populate its document cache.";
+}
+
 /// The cache key carries every parameter that changes the outline. A font-size
 /// change alters the scale the outline is built at, so it must mint new entries
 /// and draw the new size rather than serving the old geometry.
