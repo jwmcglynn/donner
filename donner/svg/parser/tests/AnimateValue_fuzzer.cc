@@ -51,7 +51,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size) {
       const auto* component =
           element.has_value() ? element->entityHandle().try_get<components::AnimateValueComponent>()
                               : nullptr;
-      if (component == nullptr || component->values.size() > parser::ListParser::kMaximumItems) {
+      if (component == nullptr || !component->values.empty()) {
         std::abort();
       }
     }
