@@ -336,6 +336,8 @@ public:
   /// Returns true when this backend requires direct texture presentation.
   [[nodiscard]] bool requiresTextureSnapshotPresentation() const override;
 
+  [[nodiscard]] RendererFilterPreparationBudget* filterPreparationBudget() override;
+
   /// Creates an offscreen renderer of the active backend type.
   [[nodiscard]] std::unique_ptr<RendererInterface> createOffscreenInstance() const override;
 

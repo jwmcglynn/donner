@@ -375,6 +375,32 @@ TEST_F(RendererDriverTest, RepeatedOverCapClipStopsPreflightAfterFirstRejection)
   EXPECT_EQ(stats.clipGeometryPathsPreflighted, kMaximumClipShapes + 1u);
 }
 
+TEST_F(RendererDriverTest, SharedFilterBudgetStillResetsClipDiagnosticsPerDriverFrame) {
+  RendererFilterPreparationBudget sharedFilterBudget;
+  ON_CALL(renderer, filterPreparationBudget()).WillByDefault(testing::Return(&sharedFilterBudget));
+
+  constexpr std::size_t kMaximumClipShapes =
+      RendererTextMaterializationBudget::kMaximumUniqueOutlines;
+  std::string overSvg = R"svg(<defs><clipPath id="over">)svg";
+  for (std::size_t i = 0; i < kMaximumClipShapes + 1u; ++i) {
+    overSvg += R"svg(<path d="M0 0L1 1"/>)svg";
+  }
+  overSvg += R"svg(</clipPath></defs><rect width="1" height="1" clip-path="url(#over)"/>)svg";
+  SVGDocument overDocument = makeDocument(overSvg, Vector2i(1, 1));
+  SVGDocument cleanDocument = makeDocument(R"svg(<rect width="1" height="1"/>)svg", Vector2i(1, 1));
+
+  RendererDriver::SecurityStats stats;
+  RendererDriver overDriver(renderer, /*verbose=*/false, &stats);
+  RendererDriver cleanDriver(renderer, /*verbose=*/false, &stats);
+  overDriver.draw(overDocument);
+  ASSERT_TRUE(stats.clipGeometryCopyRejected);
+  ASSERT_EQ(stats.clipGeometryPathsPreflighted, kMaximumClipShapes + 1u);
+
+  cleanDriver.draw(cleanDocument);
+  EXPECT_FALSE(stats.clipGeometryCopyRejected);
+  EXPECT_EQ(stats.clipGeometryPathsPreflighted, 0u);
+}
+
 TEST_F(RendererDriverTest, EmitsTextDrawCallsForSolidFill) {
   SVGDocument document = makeDocument(R"svg(
     <text x="2" y="3" fill="#00FF00">hi</text>
@@ -1137,10 +1163,14 @@ TEST_F(RendererDriverTest, PreparedFragmentImageKeepsFamilyReservationWithShared
         retainedPixels = image->imageData;
       });
 
-  driver.draw(document);
+  RendererDriver::SecurityStats stats;
+  RendererDriver boundedDriver(renderer, /*verbose=*/false, &stats);
+  boundedDriver.draw(document);
 
   ASSERT_THAT(retainedPixels, testing::NotNull());
   const std::size_t pixelBytes = retainedPixels->size();
+  EXPECT_EQ(stats.preparedFilterImageBytes, pixelBytes);
+  EXPECT_EQ(stats.preparedFilterMaterializationBytes, pixelBytes * 2u);
   const std::size_t retainedWithPixels =
       family->retainedBytes(components::DocumentResourceFamilyBudget::Kind::ComputedFilter);
   retainedPixels.reset();

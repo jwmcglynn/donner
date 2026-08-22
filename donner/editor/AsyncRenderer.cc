@@ -262,6 +262,21 @@ SampleThumbnailRenderResult RenderSampleThumbnail(
   return result;
 }
 
+class ScopedFrameResourceScope {
+public:
+  explicit ScopedFrameResourceScope(svg::RendererInterface& renderer) : renderer_(renderer) {
+    renderer_.beginFrameResourceScope();
+  }
+
+  ~ScopedFrameResourceScope() { renderer_.endFrameResourceScope(); }
+
+  ScopedFrameResourceScope(const ScopedFrameResourceScope&) = delete;
+  ScopedFrameResourceScope& operator=(const ScopedFrameResourceScope&) = delete;
+
+private:
+  svg::RendererInterface& renderer_;
+};
+
 }  // namespace
 
 PresentationSnapshotPlan ChoosePresentationSnapshotPlan(bool hasCompositedPreview,
@@ -883,6 +898,7 @@ void AsyncRenderer::workerLoop() {
       } else {
         const std::chrono::milliseconds delay(
             sampleThumbnailRenderDelayMsForTesting_.load(std::memory_order_acquire));
+        const ScopedFrameResourceScope resourceScope(*sampleThumbnailRendererRoot);
         result = RenderSampleThumbnail(std::move(*sampleThumbnailStorage), *offscreenRenderer,
                                        cancelSampleThumbnail_, delay);
       }

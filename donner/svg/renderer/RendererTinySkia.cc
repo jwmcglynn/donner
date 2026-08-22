@@ -1483,6 +1483,9 @@ void RendererTinySkia::resetOwnedFrameBudgets() {
   if (ownsFilterExecutionBudget_) {
     filterExecutionBudget_->reset();
   }
+  if (ownsFilterPreparationBudget_) {
+    filterPreparationBudget_->reset();
+  }
 }
 
 void RendererTinySkia::beginFrameResourceScope() {
@@ -3408,6 +3411,8 @@ std::unique_ptr<RendererInterface> RendererTinySkia::createOffscreenInstance() c
   auto renderer = std::make_unique<RendererTinySkia>(verbose_);
   renderer->filterExecutionBudget_ = filterExecutionBudget_;
   renderer->ownsFilterExecutionBudget_ = false;
+  renderer->filterPreparationBudget_ = filterPreparationBudget_;
+  renderer->ownsFilterPreparationBudget_ = false;
   renderer->drawBudget_ = drawBudget_;
   renderer->ownsDrawBudget_ = false;
   renderer->surfaceBudget_ = surfaceBudget_;
@@ -3417,6 +3422,10 @@ std::unique_ptr<RendererInterface> RendererTinySkia::createOffscreenInstance() c
   renderer->textMaterializationBudget_ = textMaterializationBudget_;
   renderer->ownsTextMaterializationBudget_ = false;
   return renderer;
+}
+
+RendererFilterPreparationBudget* RendererTinySkia::filterPreparationBudget() {
+  return filterPreparationBudget_.get();
 }
 
 void RendererTinySkia::setDashWorkBudgetForTesting(std::size_t maximumWorkUnits) {

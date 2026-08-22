@@ -28,14 +28,19 @@ namespace donner::svg {
  */
 class RendererDriver {
 public:
-  /// Aggregate limits for per-instance filter graph preparation and feImage snapshots.
+  /// Aggregate limits for frame-wide filter graph preparation and feImage snapshots.
   static constexpr std::size_t kMaximumPreparedFilterGraphs =
-      components::FilterExecutionBudget::kMaximumExecutions;
+      RendererFilterPreparationBudget::kMaximumGraphs;
   static constexpr std::size_t kMaximumPreparedFilterNodes =
-      kMaximumPreparedFilterGraphs * components::kMaximumFilterGraphNodes;
-  static constexpr std::uint64_t kMaximumPreparedFilterImageBytes = 4ULL * 1024 * 1024;
-  static constexpr std::uint64_t kMaximumPreparedFilterPayloadBytes = 16ULL * 1024 * 1024;
-  static constexpr std::size_t kMaximumPreparedFilterShadowEntities = 4096;
+      RendererFilterPreparationBudget::kMaximumNodes;
+  static constexpr std::uint64_t kMaximumPreparedFilterImageBytes =
+      RendererFilterPreparationBudget::kMaximumImageBytes;
+  static constexpr std::uint64_t kMaximumPreparedFilterMaterializationBytes =
+      RendererFilterPreparationBudget::kMaximumMaterializationBytes;
+  static constexpr std::uint64_t kMaximumPreparedFilterPayloadBytes =
+      RendererFilterPreparationBudget::kMaximumPayloadBytes;
+  static constexpr std::size_t kMaximumPreparedFilterShadowEntities =
+      RendererFilterPreparationBudget::kMaximumShadowEntities;
 
   /// Optional diagnostics for structured fuzzers and embedders auditing rejected preparation.
   struct SecurityStats {
@@ -45,6 +50,7 @@ public:
     std::size_t preparedFilterGraphs = 0;
     std::size_t preparedFilterNodes = 0;
     std::uint64_t preparedFilterImageBytes = 0;
+    std::uint64_t preparedFilterMaterializationBytes = 0;
     std::uint64_t preparedFilterPayloadBytes = 0;
     std::size_t preparedFilterShadowEntities = 0;
     bool filterPreparationRejected = false;
@@ -220,22 +226,6 @@ public:
   [[nodiscard]] RendererBitmap takeSnapshot() const;
 
 private:
-  struct FilterPreparationBudget {
-    std::size_t attempts = 0;
-    std::size_t graphs = 0;
-    std::size_t nodes = 0;
-    std::uint64_t imageBytes = 0;
-    std::uint64_t payloadBytes = 0;
-    std::size_t shadowEntities = 0;
-    bool rejected = false;
-
-    bool beginGraph(SecurityStats* stats);
-    bool reserveNodes(std::size_t nodeCount, SecurityStats* stats);
-    bool reserveImageBytes(std::uint64_t byteCount, SecurityStats* stats);
-    bool reservePayloadBytes(std::uint64_t byteCount, SecurityStats* stats);
-    bool reserveShadowEntities(std::size_t entityCount, SecurityStats* stats);
-  };
-
   /**
    * Resolve and pre-render the filter graph for every entity with a resolved filter in `entities`,
    * caching each result in \ref preparedFilterGraphs_. Must be called BEFORE any `traverse` pass
@@ -251,6 +241,7 @@ private:
   const components::RenderingInstanceComponent* beginPreparingFilterEntity(Registry& registry,
                                                                            Entity entity);
   bool reservePreparedFilterGraph(const components::FilterGraph& filterGraph);
+  bool reservePreparedFilterMaterialization(const components::FilterGraph& filterGraph);
   std::optional<std::uint64_t> reservePreparedFilterImage(Vector2i size);
   bool reservePreparedFilterShadowTree(Registry& registry, Entity targetEntity);
   std::shared_ptr<const std::vector<std::uint8_t>> adoptPreparedFilterSnapshot(
@@ -404,11 +395,13 @@ private:
   /// the sub-driver (see `preRenderFeImageFragments`).
   int feImageFragmentDepth_ = 0;
 
-  FilterPreparationBudget ownedFilterPreparationBudget_;
-  FilterPreparationBudget* filterPreparationBudget_ = &ownedFilterPreparationBudget_;
+  RendererFilterPreparationBudget ownedFilterPreparationBudget_;
+  RendererFilterPreparationBudget* filterPreparationBudget_ = &ownedFilterPreparationBudget_;
   RendererTextMaterializationBudget ownedClipGeometryCopyBudget_;
   RendererTextMaterializationBudget* clipGeometryCopyBudget_ = &ownedClipGeometryCopyBudget_;
   SecurityStats* securityStats_ = nullptr;
+
+  void syncFilterPreparationStats();
 
   /// Filter graphs resolved and pre-rendered by \ref prepareFilterGraphs. Keyed by the entity
   /// whose filter produced the graph. Populated in a pre-pass before \ref traverse so the main

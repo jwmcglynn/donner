@@ -92,6 +92,13 @@ constexpr std::string_view kBlueSvg = R"svg(
 </svg>
 )svg";
 
+constexpr std::string_view kFilteredSvg = R"svg(
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 24">
+  <defs><filter id="f"><feFlood flood-color="#20e080"/></filter></defs>
+  <rect width="32" height="24" fill="#e02020" filter="url(#f)"/>
+</svg>
+)svg";
+
 std::optional<SampleThumbnailRenderResult> WaitForThumbnailResult(
     AsyncRenderer& renderer, std::chrono::seconds timeout = 5s) {
   const auto deadline = std::chrono::steady_clock::now() + timeout;
@@ -351,6 +358,30 @@ TEST(SampleThumbnailAsyncTest, RendersSourceDependentBitmapsThroughOneBoundedWor
   EXPECT_FALSE(stats.pending);
   EXPECT_FALSE(stats.active);
   EXPECT_FALSE(stats.resultReady);
+}
+
+TEST(SampleThumbnailAsyncTest, ReusedOffscreenRendererStartsFreshFilterPreparationFrames) {
+  svg::Renderer thumbnailRoot;
+  svg::RendererFilterPreparationBudget* budget = thumbnailRoot.filterPreparationBudget();
+  ASSERT_NE(budget, nullptr);
+  svg::RendererFilterPreparationBudget::Limits limits;
+  limits.graphs = 1u;
+  budget->setLimitsForTesting(limits);
+
+  AsyncRenderer renderer;
+  ASSERT_TRUE(renderer.requestSampleThumbnail(ThumbnailRequest(21u, kFilteredSvg, thumbnailRoot)));
+  std::optional<SampleThumbnailRenderResult> first = WaitForThumbnailResult(renderer);
+  ASSERT_TRUE(first.has_value());
+  ASSERT_EQ(first->outcome, SampleThumbnailRenderOutcome::Rendered);
+  EXPECT_EQ(budget->attempts(), 1u);
+  EXPECT_FALSE(budget->rejected());
+
+  ASSERT_TRUE(renderer.requestSampleThumbnail(ThumbnailRequest(22u, kFilteredSvg, thumbnailRoot)));
+  std::optional<SampleThumbnailRenderResult> second = WaitForThumbnailResult(renderer);
+  ASSERT_TRUE(second.has_value());
+  ASSERT_EQ(second->outcome, SampleThumbnailRenderOutcome::Rendered);
+  EXPECT_EQ(budget->attempts(), 1u);
+  EXPECT_FALSE(budget->rejected());
 }
 
 TEST(SampleThumbnailAsyncTest, TextAndStyleThumbnailContainsDonnerRenderedGlyphPixels) {

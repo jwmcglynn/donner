@@ -14,6 +14,7 @@
 #include "donner/svg/SVGTextElement.h"
 #include "donner/svg/SVGUseElement.h"
 #include "donner/svg/renderer/Renderer.h"
+#include "donner/svg/renderer/RendererDriver.h"
 #include "donner/svg/renderer/RendererTinySkia.h"
 #include "donner/svg/renderer/tests/MockRendererInterface.h"
 #include "donner/svg/renderer/tests/RendererTestBackend.h"
@@ -117,6 +118,97 @@ TEST(RendererPublicApiTest, FrameResourceScopeKeepsOffscreenAndRootSurfaceCharge
   renderer->endFrame();
   EXPECT_EQ(renderer->resourceStats().surfaceCount, 1u)
       << "the next standalone frame starts a fresh budget epoch";
+}
+
+TEST(RendererPublicApiTest, FrameResourceScopeSharesFilterPreparationAcrossIndependentDrivers) {
+  std::string firstSource = R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="1" height="1">
+      <defs><filter id="f"><feFlood/></filter></defs>
+  )svg";
+  for (std::size_t i = 0; i < RendererDriver::kMaximumPreparedFilterGraphs; ++i) {
+    firstSource += R"svg(<rect width="1" height="1" filter="url(#f)"/>)svg";
+  }
+  firstSource += "</svg>";
+  SVGDocument firstDocument = ParseDocument(firstSource);
+  SVGDocument plusOneDocument = ParseDocument(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="1" height="1">
+      <defs><filter id="f"><feFlood/></filter></defs>
+      <rect width="1" height="1" filter="url(#f)"/>
+    </svg>
+  )svg");
+
+  RendererTinySkia renderer;
+  RendererDriver::SecurityStats stats;
+  RendererDriver firstDriver(renderer, /*verbose=*/false, &stats);
+  RendererDriver plusOneDriver(renderer, /*verbose=*/false, &stats);
+
+  renderer.beginFrameResourceScope();
+  firstDriver.draw(firstDocument);
+  plusOneDriver.draw(plusOneDocument);
+  renderer.endFrameResourceScope();
+
+  EXPECT_EQ(stats.filterPreparationAttempts, RendererDriver::kMaximumPreparedFilterGraphs);
+  EXPECT_EQ(stats.preparedFilterGraphs, RendererDriver::kMaximumPreparedFilterGraphs);
+  EXPECT_TRUE(stats.filterPreparationRejected);
+}
+
+TEST(RendererPublicApiTest, ConcurrentSnapshotCaptureSharesOuterFilterPreparationBudget) {
+  std::string firstSource = R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="1" height="1">
+      <defs><filter id="f"><feFlood/></filter></defs>
+  )svg";
+  for (std::size_t i = 0; i < RendererDriver::kMaximumPreparedFilterGraphs; ++i) {
+    firstSource += R"svg(<rect width="1" height="1" filter="url(#f)"/>)svg";
+  }
+  firstSource += "</svg>";
+  SVGDocument firstDocument = ParseDocument(firstSource);
+  SVGDocument plusOneDocument = ParseDocument(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="1" height="1">
+      <defs><filter id="f"><feFlood/></filter></defs>
+      <rect width="1" height="1" filter="url(#f)"/>
+    </svg>
+  )svg");
+  firstDocument.setThreadingMode(ThreadingMode::ConcurrentDom);
+  plusOneDocument.setThreadingMode(ThreadingMode::ConcurrentDom);
+
+  RendererTinySkia renderer;
+  RendererDriver firstDriver(renderer);
+  RendererDriver plusOneDriver(renderer);
+  renderer.beginFrameResourceScope();
+  firstDriver.draw(firstDocument);
+  plusOneDriver.draw(plusOneDocument);
+  renderer.endFrameResourceScope();
+
+  RendererFilterPreparationBudget* budget = renderer.filterPreparationBudget();
+  ASSERT_NE(budget, nullptr);
+  EXPECT_EQ(budget->attempts(), RendererDriver::kMaximumPreparedFilterGraphs);
+  EXPECT_TRUE(budget->rejected());
+}
+
+TEST(RendererPublicApiTest, ReusedElementRendererStartsFreshFilterPreparationFrames) {
+  SVGDocument document = ParseDocument(R"svg(
+    <svg xmlns="http://www.w3.org/2000/svg" width="8" height="8">
+      <defs><filter id="f"><feFlood flood-color="red"/></filter></defs>
+      <rect id="target" width="8" height="8" filter="url(#f)"/>
+    </svg>
+  )svg");
+  std::optional<SVGElement> target = document.querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+
+  Renderer renderer;
+  RendererFilterPreparationBudget* budget = renderer.filterPreparationBudget();
+  ASSERT_NE(budget, nullptr);
+  RendererFilterPreparationBudget::Limits limits;
+  limits.graphs = 1;
+  budget->setLimitsForTesting(limits);
+
+  EXPECT_FALSE(renderer.renderElement(*target, Vector2i(8, 8)).empty());
+  EXPECT_EQ(budget->attempts(), 1u);
+  EXPECT_FALSE(budget->rejected());
+
+  EXPECT_FALSE(renderer.renderElement(*target, Vector2i(8, 8)).empty());
+  EXPECT_EQ(budget->attempts(), 1u);
+  EXPECT_FALSE(budget->rejected());
 }
 
 TEST(RendererDrawBudgetTest, RejectsEveryAggregateDimensionWithoutOvershoot) {

@@ -1272,6 +1272,9 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   std::shared_ptr<components::FilterExecutionBudget> filterExecutionBudget =
       std::make_shared<components::FilterExecutionBudget>();
   bool ownsFilterExecutionBudget = true;
+  std::shared_ptr<RendererFilterPreparationBudget> filterPreparationBudget =
+      std::make_shared<RendererFilterPreparationBudget>();
+  bool ownsFilterPreparationBudget = true;
   std::shared_ptr<geode::GeodeFrameGeometryBudget> geometryBudget =
       std::make_shared<geode::GeodeFrameGeometryBudget>();
   bool ownsGeometryBudget = true;
@@ -4212,6 +4215,9 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     if (ownsFilterExecutionBudget) {
       filterExecutionBudget->reset();
     }
+    if (ownsFilterPreparationBudget) {
+      filterPreparationBudget->reset();
+    }
     if (ownsGeometryBudget) {
       geometryBudget->reset();
       documentGeometryFrameState->reset();
@@ -6671,6 +6677,8 @@ std::unique_ptr<RendererInterface> RendererGeode::createOffscreenInstance() cons
       new RendererGeode(impl_->device, impl_->verbose, impl_->offscreenCreationHookForTesting));
   renderer->impl_->filterExecutionBudget = impl_->filterExecutionBudget;
   renderer->impl_->ownsFilterExecutionBudget = false;
+  renderer->impl_->filterPreparationBudget = impl_->filterPreparationBudget;
+  renderer->impl_->ownsFilterPreparationBudget = false;
   renderer->impl_->geometryBudget = impl_->geometryBudget;
   renderer->impl_->ownsGeometryBudget = false;
   renderer->impl_->surfaceBudget = impl_->surfaceBudget;
@@ -6680,6 +6688,10 @@ std::unique_ptr<RendererInterface> RendererGeode::createOffscreenInstance() cons
   renderer->impl_->documentGeometryLimits = impl_->documentGeometryLimits;
   renderer->impl_->documentGeometryFrameState = impl_->documentGeometryFrameState;
   return renderer;
+}
+
+RendererFilterPreparationBudget* RendererGeode::filterPreparationBudget() {
+  return impl_->filterPreparationBudget.get();
 }
 
 void RendererGeode::setOffscreenCreationHookForTesting(std::function<void()> hook) {

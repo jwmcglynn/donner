@@ -30,6 +30,18 @@ namespace donner::svg {
 
 namespace {
 
+class ScopedFrameResourceScope {
+public:
+  explicit ScopedFrameResourceScope(RendererInterface& renderer) : renderer_(renderer) {
+    renderer_.beginFrameResourceScope();
+  }
+
+  ~ScopedFrameResourceScope() { renderer_.endFrameResourceScope(); }
+
+private:
+  RendererInterface& renderer_;
+};
+
 void CollectSubtreeEntities(const SVGElement& element, std::unordered_set<Entity>& out) {
   out.insert(element.entityHandle().entity());
   for (std::optional<SVGElement> child = element.firstChild(); child.has_value();
@@ -496,6 +508,7 @@ RendererBitmap RenderDocumentsToAtlasBitmap(RendererInterface& renderer,
 }
 
 RendererImage Renderer::renderElement(SVGElement element, Vector2i sizePx) {
+  const ScopedFrameResourceScope resourceScope(*impl_);
   if (elementThumbnailRenderer_ == nullptr) {
     elementThumbnailRenderer_ = impl_->createOffscreenInstance();
   }
@@ -644,6 +657,10 @@ const RendererTextureSnapshot* Renderer::borrowTextureSnapshot() {
 
 bool Renderer::requiresTextureSnapshotPresentation() const {
   return impl_->requiresTextureSnapshotPresentation();
+}
+
+RendererFilterPreparationBudget* Renderer::filterPreparationBudget() {
+  return impl_->filterPreparationBudget();
 }
 
 std::unique_ptr<RendererInterface> Renderer::createOffscreenInstance() const {
