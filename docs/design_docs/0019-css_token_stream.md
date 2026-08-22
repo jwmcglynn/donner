@@ -1,6 +1,7 @@
 # Design: CSS Parser `TokenStream` — Pull-Based Subparser Handoff
 
-**Status:** Implemented (Milestones 1–3 complete; Milestone 4 verdict: STOP HERE)
+**Status:** Implemented. `ComponentValueStream` is retained, coroutine token generation is rejected
+by measurement, and the manual tokenizer uses a low-allocation name fast path.
 **Author:** Claude Opus 4.6
 **Requested by:** Jeff McGlynn
 **Reviewed by:** DuckBot
@@ -18,19 +19,19 @@ vectors to downstream subparsers. The vectors are cheap per-element (`ComponentV
 variant) but the cumulative allocation/copy cost grows with nesting depth, and the vector handoff
 obscures the natural pull-based control flow the CSS Syntax Module describes.
 
-This doc records a small, reversible experiment: introduce a `ComponentValueStream` — a pull
-interface sub-parsers consume lazily — and port **one** subparser (`SelectorParser`) to it.
-The Milestone 1 benchmark disproved the allocation hypothesis at the scales we care about;
-the port landed anyway because the named abstraction reads better than inline span arithmetic.
-Milestone 4 verdict: stop after one port, revisit only on new signal.
+This design introduces `ComponentValueStream`, a pull interface consumed by `SelectorParser`, and
+retains Donner's existing pull-based `Tokenizer::next()` implementation. A C++20 `co_yield`
+prototype produces the same tokens but is slower and adds one heap-allocated coroutine frame per
+tokenizer. The production tokenizer instead avoids temporary character vectors for ordinary CSS
+names, which reduces both allocation pressure and parse time while preserving the public API.
 
 The doc is driven by a DuckBot conversation that separated three conflated concerns in the
 original framing:
 
-1. **Allocation cost** — may or may not show up in a profile. Unverified.
+1. **Allocation cost** — measured directly by the retained allocation benchmark.
 2. **Error-recovery ergonomics** — probably fine today; the `ParseDiagnostic` system carries
    source spans through recovery points cleanly.
-3. **Handoff protocol** — the *actual* load-bearing question. Vector handoff forces subparsers
+3. **Handoff protocol** — the _actual_ load-bearing question. Vector handoff forces subparsers
    to receive a fully-materialized list even when they only need a prefix.
 
 DuckBot's key insight: we should address (3) directly without betting the farm on (1) or (2).
@@ -42,35 +43,35 @@ to the full rewrite.
 All goals below have concrete, testable acceptance criteria (no "ergonomics improve" hand-waving).
 
 - **G1: Introduce a `TokenStream<ComponentValue>` concept** with `peek()`, `next()`, `isEOF()`
-  methods. *(Accepted when: concept compiles, has unit tests for `VectorTokenStream`, and is
-  used by at least one subparser.)*
+  methods. _(Accepted when: concept compiles, has unit tests for `VectorTokenStream`, and is
+  used by at least one subparser.)_
 - **G2: `SelectorParserImpl` no longer embeds its own cursor.** The ad-hoc `advance()`, inline
   `peek`-via-index, `isEOF`, and `skipWhitespace` methods on `SelectorParserImpl` are replaced
-  by calls to a `TokenStream<ComponentValue>` interface. *(Accepted when: `SelectorParserImpl`
+  by calls to a `TokenStream<ComponentValue>` interface. _(Accepted when: `SelectorParserImpl`
   holds a `TokenStream<ComponentValue>&` rather than a `std::span<const ComponentValue>`, and
   `grep -n "components_\.subspan\|components_\[" donner/css/parser/SelectorParser.cc` returns
-  zero hits.)*
+  zero hits.)_
 - **G3: Zero behavior drift.** Every existing `SelectorParser` test passes unchanged; every
   `ParseDiagnostic` emitted on the fuzzer corpus resolves to byte-identical source offsets;
-  the `SelectorParser` fuzzer runs clean for >= baseline duration. *(Accepted when: all three
-  conditions hold.)*
+  the `SelectorParser` fuzzer runs clean for >= baseline duration. _(Accepted when: all three
+  conditions hold.)_
 - **G4: Baseline benchmark exists.** A repeatable benchmark harness parses a defined corpus
   and reports wall time + allocation count, so "is this faster?" is a number, not a vibe.
-  *(Accepted when: the harness is committed, runs in CI or locally on a single command, and
-  the baseline numbers are in this doc's Performance section.)*
+  _(Accepted when: the harness is committed, runs in CI or locally on a single command, and
+  the baseline numbers are in this doc's Performance section.)_
 - **G5: The experiment is reversible.** Milestone 3 lands as a single PR that can be reverted
-  without touching unrelated code. *(Accepted when: the PR diff touches only `donner/css/parser/`
-  and its tests.)*
+  without touching unrelated code. _(Accepted when: the PR diff touches only `donner/css/parser/`
+  and its tests.)_
 - **G6: No collateral damage.** Parsers outside `donner::css::parser::*` are untouched. The
   public `donner::css::CSS` / `Stylesheet` / `Rule` / `Declaration` / `ComponentValue` API
-  surface does not change. *(Accepted when: `git diff` shows no modifications outside
-  `donner/css/parser/` + docs.)*
+  surface does not change. _(Accepted when: `git diff` shows no modifications outside
+  `donner/css/parser/` + docs.)_
 
 ## Non-Goals
 
 - **Not** rewriting the CSS parser end-to-end in one pass.
-- **Not** introducing C++20 coroutines (`co_await`) as the backing implementation yet — that's
-  the *follow-up* investigation if the experiment succeeds, not the experiment itself.
+- **Not** adopting C++20 coroutine token generation. The prototype is retained in git history for
+  reproducibility, but its performance and allocation results reject it for production.
 - **Not** changing the public `donner::css::CSS` entry points or the `Stylesheet` / `Rule` /
   `Declaration` / `ComponentValue` data model.
 - **Not** changing diagnostic wording or structure — recovery behavior must be byte-for-byte
@@ -151,14 +152,15 @@ The "TokenStream" concept this doc proposes is **already implemented inline** in
    (called from `SelectorParser::Parse(std::string_view)`) and in `RuleParser` — the subparsers
    themselves do not copy.
 
-The scope this experiment bites off is **Milestone 3: rename/extract only**. Chasing the
-upstream allocation story is a separate, larger investigation deferred to a follow-up.
+The shipped scope includes the named component-value cursor, permanent timing and allocation
+benchmarks, and the ordinary-name tokenizer fast path. The semantic `ComponentValue`, rule, and
+declaration vectors remain unchanged because they are owned parser results.
 
-## Status (2026-04-10)
+## Status
 
-Milestones 1–3 complete. Milestone 4 verdict: **STOP HERE** (neither extend nor back-out
-conditions fired). See the Performance section for the numbers and the Milestone 4 rubric below
-for the decision path. Open Questions below were resolved during implementation.
+Milestones 1–5 are complete. The parser keeps `ComponentValueStream` and the manual pull tokenizer.
+The coroutine prototype is rejected. Permanent benchmarks measure raw tokenization, public parser
+entry points, allocation calls, and requested bytes.
 
 ## Implementation Plan
 
@@ -166,8 +168,8 @@ for the decision path. Open Questions below were resolved during implementation.
       requirements. Result: no rewind needed; the concept shape is `peek`/`next`/`isEOF`.
       Selector forgiving recovery uses a warnings vector, not cursor rollback.
 
-- [x] **Milestone 1: Baseline measurement.** *(Exit gate below; result: GO on M2-M3, parked
-      upstream allocation follow-up.)*
+- [x] **Milestone 1: Baseline measurement.** _(Exit gate below; result: GO on M2-M3 and retain
+      the corpus for mechanism comparisons.)_
   - [x] Identify a representative CSS corpus for benchmarking. Chose 5 hardcoded inputs (short/
         medium inline style, small/medium stylesheet, complex selector) for reproducibility
         across machines over fuzzer corpora.
@@ -176,14 +178,12 @@ for the decision path. Open Questions below were resolved during implementation.
   - [x] Record baseline numbers in this doc under the Performance section.
   - [x] **Exit gate:**
         - **GO ahead with Milestone 2-3** unconditionally — Milestone 3 is a pure
-          rename/extract with negligible runtime cost and an ergonomic win.
-        - **ALSO commit to an upstream-allocation follow-up** *only if* the benchmark shows
-          `parseListOfComponentValues` / `ComponentValue` allocations exceed **>5% of wall
-          time OR >20% of allocation count** on the corpus. Otherwise the upstream story is
-          shelved as "not a bottleneck, revisit if PerfBot surfaces it during animation work".
+        rename/extract with negligible runtime cost and an ergonomic win.
+        - **Retain the workload corpus** so later tokenizer and allocation experiments use the
+        same public parser entry points and representative CSS.
 
-- [x] **Milestone 2: `ComponentValueStream` class + unit tests.** *(Landed as a concrete class,
-      not a concept — see "Deviation from plan" below.)*
+- [x] **Milestone 2: `ComponentValueStream` class + unit tests.** _(Landed as a concrete class,
+      not a concept — see "Deviation from plan" below.)_
   - [x] Add `donner/css/parser/details/ComponentValueStream.h`: pull-based cursor with
         `isEOF()`, `remaining()`, `advance(n)`, `currentOffset()`, `peek(n)`, `peekAs<T>(n)`,
         `peekIs<T>(n)`, `peekIsToken<TokenType>(n)`, `peekDelim(n)`, `peekDelimIs(c, n)`,
@@ -195,9 +195,9 @@ for the decision path. Open Questions below were resolved during implementation.
   - **Deviation from plan:** landed as a concrete class, not a `concept`. The plan called
     for a `TokenStream<ComponentValue>` concept + `VectorTokenStream` adapter, but there is
     currently exactly one implementation (a span cursor), so adding a concept layer would
-    be abstraction without a second implementation — pay-when-you-need-it. If a coroutine
-    generator backing lands later (Milestone 4 follow-up, explicitly parked), *that's* when
-    the class graduates to a concept with multiple conformers.
+    be abstraction without a second implementation — pay-when-you-need-it. The rejected
+    coroutine tokenizer prototype is a token source, not a second component-value cursor, so
+    the concrete class remains appropriate.
 
 - [x] **Milestone 3: Port `SelectorParserImpl` to `ComponentValueStream`.** Pure rename/extract
       — no behavior change. Touches only `donner/css/parser/` + its tests.
@@ -217,16 +217,19 @@ for the decision path. Open Questions below were resolved during implementation.
         zero hits.
   - [x] Re-ran benchmarks: all 5 deltas within noise (<0.8% worst case). See Performance.
 
-- [x] **Milestone 4: Decision gate.** *Verdict: **STOP HERE**.*
-  - **EXTEND**? No. No code-review feedback yet (unreviewed) and the Milestone 1 benchmark
-    disproved the upstream-allocation hypothesis (parser is not on the critical path).
-  - **BACK OUT**? No. Benchmark deltas within noise; zero fuzzer crashes; zero diagnostic
-    offset drift; no test regressions.
-  - **Result:** ship Milestones 1-3 as a pure refactor. Extending to `ValueParser` /
-    `DeclarationListParser` and the upstream `parseListOfComponentValues` allocation story
-    are both parked — revisit only if PerfBot surfaces CSS parsing as a hotspot during
-    animation work, or if a reviewer explicitly calls out an ergonomic win from the
-    abstraction on a new call site.
+- [x] **Milestone 4: Cursor decision gate.** Retain `ComponentValueStream`. The extraction has no
+      measurable regression, preserves diagnostics, and removes ad hoc cursor logic.
+
+- [x] **Milestone 5: Tokenizer generator and allocation follow-up.** Retain the benchmarks and the
+      manual tokenizer.
+  - [x] Add raw-tokenizer timing cases to `css_parse_perf_bench`.
+  - [x] Add the separate `css_parse_allocation_bench` binary so global allocation instrumentation
+        cannot perturb timing cases.
+  - [x] Implement and test a `co_yield` tokenizer prototype behind the existing pull API.
+  - [x] Reject the prototype after it adds one 248-byte allocation per tokenizer and slows public
+        parser entry points by 11% to 17%.
+  - [x] Avoid temporary vectors for ordinary CSS names, while retaining decoding for escapes and
+        NUL replacement.
 
 ## Proposed Architecture
 
@@ -234,19 +237,19 @@ The experiment introduces a single new abstraction — a `TokenStream<ComponentV
 and one adapter that fulfills it over an existing `std::vector<ComponentValue>`:
 
 ```
-                   RuleParser
-                       │
-                       │ passes
-                       ▼
-              ┌───────────────────┐
-              │ VectorTokenStream │  ← wraps a const std::vector<ComponentValue>&
-              └──────────┬────────┘
-                         │ models TokenStream<ComponentValue>
-                         ▼
-                  SelectorParser   ← consumes pull-based interface, not vector directly
+     RuleParser
+         │
+         │ passes
+         ▼
+┌───────────────────┐
+│ VectorTokenStream │  ← wraps a const std::vector<ComponentValue>&
+└──────────┬────────┘
+           │ models TokenStream<ComponentValue>
+           ▼
+    SelectorParser   ← consumes pull-based interface, not vector directly
 ```
 
-No change to how `RuleParser` *produces* the vector. No change to `ComponentValue` itself. No
+No change to how `RuleParser` _produces_ the vector. No change to `ComponentValue` itself. No
 change to any other subparser. The architectural footprint is deliberately minimal.
 
 ### Relationship to existing `TokenizerLike`
@@ -262,21 +265,57 @@ This is an extension of the existing pattern, not a replacement. Specifically:
 
 Existing `TokenizerLike<T>` consumers (declaration parsing) remain unchanged.
 
-### Relationship to `co_await` generators
+### Relationship to coroutine generators
 
-Not touched by this experiment. If Milestone 4 concludes the approach is worth extending, a
-follow-up could replace the `VectorTokenStream` backing with a coroutine-based generator that
-constructs ComponentValues lazily from the upstream `TokenizerLike<Token>` — but that's a
-separate, larger investigation with its own lifetime-safety questions.
+The CSS tokenizer is already a lazy pull source: `next()` creates one token at a time and does not
+materialize a `std::vector<Token>`. The measured C++20 prototype uses `co_yield` to suspend after
+each token while preserving the existing `next()` and `isEOF()` contract. It adds coroutine resume
+overhead and a heap-allocated frame without removing any existing token-vector allocation, because
+no such vector exists in the production tokenizer. The manual pull implementation remains the
+production design.
 
 ## Performance
+
+### Current verdict
+
+The coroutine comparison uses the same token scanner on both sides and changes only delivery
+through `co_yield`. Fifteen repetitions show the coroutine path regressing raw medium tokenization
+by 28% and public parser entry points by 11% to 17%. Each tokenizer also adds one allocation, 248
+requested bytes, and grows from 144 to 152 inline bytes.
+
+The production optimization keeps the manual pull stream and copies ordinary names directly into
+`RcString`. Six alternating parent/optimized runs produce these mean CPU times:
+
+| Workload                           |    Parent | Optimized |  Delta |
+| ---------------------------------- | --------: | --------: | -----: |
+| Raw medium stylesheet tokenization | 10,085 ns |  4,704 ns | -53.4% |
+| Medium style attribute             |  2,898 ns |  1,960 ns | -32.4% |
+| Medium stylesheet                  | 29,844 ns | 23,879 ns | -20.0% |
+| Complex selector                   |  2,097 ns |  1,547 ns | -26.2% |
+
+The allocation benchmark records C++ `operator new` calls and requested bytes:
+
+| Workload                           | Parent calls / bytes | Optimized calls / bytes | Call delta |
+| ---------------------------------- | -------------------: | ----------------------: | ---------: |
+| Raw medium stylesheet tokenization |          404 / 5,282 |                24 / 315 |     -94.1% |
+| Medium style attribute             |           78 / 8,029 |              19 / 7,248 |     -75.6% |
+| Medium stylesheet                  |        705 / 111,554 |           325 / 106,587 |     -53.9% |
+
+Run the retained benchmarks with:
+
+```sh
+bazel run -c opt //donner/benchmarks:css_parse_perf_bench -- --benchmark_min_time=0.5s
+bazel run -c opt //donner/benchmarks:css_parse_allocation_bench
+```
+
+### Original cursor-extraction baseline
 
 **Measurement harness**: `donner/benchmarks/CssParsePerfBench.cpp`, run via
 `bazel run -c opt //donner/benchmarks:css_parse_perf_bench`. Hard-coded representative inputs
 (short/medium inline style attributes, small/medium stylesheets, complex selector) so the
 benchmark is reproducible across machines. Allocation-count attribution via `heaptrack`
-(Linux) or Instruments (macOS) is deferred — run the same binary under the profiler if
-wall-time numbers warrant it.
+(Linux) or Instruments (macOS) is no longer required for the headline comparison because
+`css_parse_allocation_bench` reports C++ allocation calls and requested bytes directly.
 
 **Baseline** (2026-04-10, aarch64 @ 2.6 GHz, `-c opt`, Google Benchmark 1.9.5):
 
@@ -305,22 +344,17 @@ BM_ParseSelector_Complex            7296 ns   7286 ns       96174   8.2 MiB/s
 
 - **GO on Milestones 2-3**: yes, unconditionally. The rename/extract is an ergonomic win at
   near-zero runtime cost.
-- **GO on the upstream-allocation follow-up**: **not warranted.** Wall-time numbers are low
-  enough that `parseListOfComponentValues` cannot plausibly be >5% of any real workload. The
-  CSS parser is not on the critical path — parsing a medium stylesheet takes ~100µs, well
-  under any frame budget that matters. Allocation attribution via `heaptrack` is shelved
-  unless PerfBot surfaces CSS parsing during animation work.
-- **Result**: Milestone 3 ships as a pure refactor. The broader `co_await` / upstream-streaming
-  investigation is explicitly parked — **not** a non-goal (we may revisit), just not funded
-  by this experiment's findings.
+- **ComponentValue architecture**: unchanged. The cursor extraction alone does not justify
+  replacing owned semantic vectors.
+- **Tokenizer allocation follow-up**: complete. It identifies ordinary-name decoding, not a
+  token vector, as the high-frequency allocation source and removes that temporary buffer.
 
 **Hypothesis verdict**:
 
-- *"ComponentValue vector materialization accounts for >5% of wall time or >20% of allocation
-  count"* — **not verified, probably false at this scale.** Wall time is already trivial;
-  allocation count would need external profiling to confirm, but the motivation to invest in
-  that is absent.
-- *"Switching one subparser to a pull interface produces a measurable speedup in isolation"*
+- _"ComponentValue vector materialization accounts for >5% of wall time or >20% of allocation
+  count"_ — **not supported.** The measured hot allocation path is the tokenizer's temporary
+  ordinary-name buffer, while `ComponentValue` vectors remain owned output.
+- _"Switching one subparser to a pull interface produces a measurable speedup in isolation"_
   — **confirmed false** (Milestone 3 re-run below): pure refactor, no speedup.
 
 **Milestone 3 post-port measurement** (same machine, same day):
@@ -351,11 +385,8 @@ Benchmark regression guard: **pass**.
   has a single owner — no lifetime gymnastics. Intent preserved: cursor state goes through
   the named abstraction, not raw span arithmetic).
 
-**Result**: Milestones 1-3 complete. The rename/extract landed as a pure refactor. Per the
-Milestone 4 rubric, the decision is **STOP HERE** — neither the extend nor back-out criteria
-fired. Future work (extending to `ValueParser` / `DeclarationListParser`, or the upstream
-`parseListOfComponentValues` allocation follow-up) is parked unless PerfBot or reviewer
-feedback surfaces a reason to revisit.
+**Result**: The cursor extraction remains a pure refactor. The measured tokenizer follow-up keeps
+the manual pull implementation and removes the ordinary-name temporary buffer.
 
 ## Testing and Validation
 
@@ -390,10 +421,9 @@ not require rollback if Milestone 3 is reverted.
 
 ## Alternatives Considered
 
-- **Full `co_await`-based coroutine generator rewrite.** DuckBot's reframe specifically
-  cautioned against this as a first step. Lifetime/allocator concerns with coroutine frames
-  and `ParseDiagnostic` source-span fidelity would dominate the review effort. Deferred until
-  Milestone 4 decides the approach is worth extending.
+- **C++20 coroutine token generator.** The prototype preserves behavior but adds a 248-byte heap
+  frame per tokenizer and slows the measured parser entry points. It is rejected in favor of the
+  existing manual pull stream.
 - **Replace `ComponentValue` with a lighter representation.** Tempting but too invasive —
   `ComponentValue` is in the public API via `Declaration::values`, `Function::values`,
   `SimpleBlock::values`. Out of scope.
@@ -414,10 +444,11 @@ not require rollback if Milestone 3 is reverted.
   `TokenizerLike<Token>` remains the declaration-pipeline pull source; `ComponentValueStream`
   is the span cursor for subparsers that receive a materialized ComponentValue list.
 - ~~**Where does the benchmark harness live?**~~ **Resolved (M1, 2026-04-10):**
-  `donner/benchmarks/CssParsePerfBench.cpp`, colocated with existing `*_perf_bench` targets.
-  No separate CSS-specific benchmark dir.
-- **Is PerfBot currently tracking CSS parser performance anywhere?** Still TBD — but the
-  baseline numbers make this low-priority. Parsing a medium stylesheet is ~100µs, well under
+  `donner/benchmarks/CssParsePerfBench.cpp` and `CssParseAllocationBench.cpp`, colocated with
+  existing benchmark targets. Timing and allocation instrumentation use separate binaries.
+- **Is PerfBot currently tracking CSS parser performance anywhere?** The permanent local targets
+  provide reproducible timing and allocation measurements. CI trend integration remains optional.
+  Parsing a medium stylesheet is well under
   any frame budget that matters; the CSS parser is not plausibly on the animation hot path.
   If PerfBot later plugs the benchmark into a regression tracker, that's purely additive.
 
@@ -427,26 +458,26 @@ Preserved for posterity — this is the conversation that motivated the doc. Pre
 from DuckBot's response so the reasoning stays intact (per user preference to preserve subagent
 voice).
 
-> *Quack?* (roughly: "you're describing a pull-based parser refactor, but the way you framed it
+> _Quack?_ (roughly: "you're describing a pull-based parser refactor, but the way you framed it
 > — 'eliminate intermediate copies, reduce allocation, make recovery natural' — is three
 > different problems wearing one coat. which one is actually hurting?")
 >
 > **The reframe.** "Streaming" is a mechanism. The real questions are: (a) is allocation showing
-> up in a profile, (b) is error recovery *actually* awkward today, or just inelegant, and (c)
+> up in a profile, (b) is error recovery _actually_ awkward today, or just inelegant, and (c)
 > are ComponentValue trees wrong, or is the handoff protocol wrong? Those have very different
 > fixes. If it's only (c), you might not need coroutines at all — you might need a `TokenCursor`
 > that subparsers borrow.
 >
 > **The relevant innovation.** Donner already has the `co_await` generator pattern in a couple
-> of parser/iterator paths — you know this exists, which is why it's tempting. But the *other*
+> of parser/iterator paths — you know this exists, which is why it's tempting. But the _other_
 > thing Donner has is the `ParseDiagnostic` system with source spans and structured recovery
 > metadata. That's the part that makes CSS recovery feel good today. Any streaming rewrite has
 > to preserve span fidelity through the coroutine boundary, and coroutines are famously awkward
 > about lifetimes of referenced data. That's the load-bearing risk, not performance.
 >
 > **A direction to consider.** Before rewriting, try the cheapest experiment: introduce a
-> `TokenStream` abstraction that *wraps* the current ComponentValue vector behind a pull
-> interface. Port one subparser (selectors?) to it. If the ergonomics win is real, *then*
+> `TokenStream` abstraction that _wraps_ the current ComponentValue vector behind a pull
+> interface. Port one subparser (selectors?) to it. If the ergonomics win is real, _then_
 > swap the backing store to a coroutine generator. You get the API shape benefit without
 > betting the farm on coroutine lifetime puzzles.
 >
@@ -457,4 +488,4 @@ voice).
 > Worth looping in PerfBot (is it actually slow?) and checking the existing `co_await` sites
 > before designing a new one.
 >
-> *Quack.* (meaning: "small experiment first, big rewrite second, and let the profiler drive.")
+> _Quack._ (meaning: "small experiment first, big rewrite second, and let the profiler drive.")
