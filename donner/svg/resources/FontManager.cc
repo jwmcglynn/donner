@@ -159,8 +159,10 @@ struct FontManager::FontFaceComponent {
 struct FontManager::FontBudgetState {
   size_t maximumBytes = 0;
   size_t maximumFonts = 0;
+  size_t maximumValidationWork = 0;
   size_t usedBytes = 0;
   size_t usedFonts = 0;
+  size_t usedValidationWork = 0;
 };
 
 struct FontManager::FontBudgetContext {
@@ -244,11 +246,11 @@ const FontFamilyProvider* FontManager::DefaultFontProvider() {
 }
 
 FontManager::FontManager(Registry& registry, size_t maximumLoadedFontBytes,
-                         size_t maximumLoadedFonts)
+                         size_t maximumLoadedFonts, size_t maximumFontValidationWork)
     : registry_(registry),
       provider_(g_defaultFontProvider.load(std::memory_order_acquire)),
-      candidateBudgetState_(std::make_shared<FontBudgetState>(
-          FontBudgetState{maximumLoadedFontBytes, maximumLoadedFonts, 0, 0})) {}
+      candidateBudgetState_(std::make_shared<FontBudgetState>(FontBudgetState{
+          maximumLoadedFontBytes, maximumLoadedFonts, maximumFontValidationWork, 0, 0, 0})) {}
 FontManager::~FontManager() = default;
 
 size_t FontManager::ProviderFontKeyHash::operator()(const ProviderFontKey& key) const noexcept {
@@ -570,6 +572,10 @@ size_t FontManager::loadedFontBytes() const {
 
 size_t FontManager::numLoadedFonts() const {
   return budgetStateForRead()->usedFonts;
+}
+
+size_t FontManager::fontValidationWork() const {
+  return budgetStateForRead()->usedValidationWork;
 }
 
 FontHandle FontManager::fallbackFont() {

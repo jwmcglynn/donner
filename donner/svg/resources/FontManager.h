@@ -96,6 +96,9 @@ public:
   /// Default maximum number of font byte streams retained in one registry.
   static constexpr size_t kDefaultMaximumLoadedFonts = 1024;
 
+  /// Default aggregate CFF validation work admitted for one registry.
+  static constexpr size_t kDefaultMaximumFontValidationWork = 64 * 1024 * 1024;
+
   /**
    * Construct a FontManager tied to the provided ECS @p registry.
    *
@@ -109,7 +112,8 @@ public:
    */
   explicit FontManager(Registry& registry,
                        size_t maximumLoadedFontBytes = kDefaultMaximumLoadedFontBytes,
-                       size_t maximumLoadedFonts = kDefaultMaximumLoadedFonts);
+                       size_t maximumLoadedFonts = kDefaultMaximumLoadedFonts,
+                       size_t maximumFontValidationWork = kDefaultMaximumFontValidationWork);
   /// Destructor.
   ~FontManager();
 
@@ -237,6 +241,9 @@ public:
 
   /// Number of loaded font components currently charged to this registry's budget.
   size_t numLoadedFonts() const;
+
+  /// CFF validation work permanently consumed by load attempts in this registry.
+  size_t fontValidationWork() const;
 
   /**
    * Get the number of registered `@font-face` rules.

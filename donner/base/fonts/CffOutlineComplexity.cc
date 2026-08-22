@@ -836,7 +836,9 @@ private:
 }  // namespace
 
 CffOutlineValidationResult ValidateCffOutlineComplexities(std::span<const uint8_t> table, bool cff2,
-                                                          std::size_t expectedGlyphs) {
+                                                          std::size_t expectedGlyphs,
+                                                          std::size_t maximumWork) {
+  static_cast<void>(maximumWork);
   if (expectedGlyphs == 0 || expectedGlyphs > kMaximumGlyphs) {
     return {};
   }

@@ -558,6 +558,27 @@ TEST(SfntUtils, CffLocalSubroutineEndcharTerminatesEveryCallFrame) {
   EXPECT_EQ(result.glyphs.front().maximumVertices, 3u);
 }
 
+TEST(SfntUtils, CffReportsActualWorkAndStopsAtCallerBudget) {
+  const std::vector<uint8_t> cff = MakeCff1();
+  const CffOutlineValidationResult complete = ValidateCffOutlineComplexities(cff, false, 1);
+  ASSERT_EQ(complete.status, CffOutlineValidationStatus::Complete);
+  EXPECT_GT(complete.work, 1u);
+
+  const CffOutlineValidationResult limited = ValidateCffOutlineComplexities(cff, false, 1, 1);
+  EXPECT_EQ(limited.status, CffOutlineValidationStatus::WorkLimitExceeded);
+  EXPECT_EQ(limited.work, 1u);
+  EXPECT_THAT(limited.glyphs, testing::IsEmpty());
+}
+
+TEST(SfntUtils, Cff1LegacyEndcharCompositeIsValidatedButNotRenderable) {
+  const std::vector<uint8_t> cff = MakeCff1WithSubrs({139, 139, 139, 139, 14}, {});
+  const CffOutlineValidationResult result = ValidateCffOutlineComplexities(cff, false, 1);
+
+  ASSERT_EQ(result.status, CffOutlineValidationStatus::Complete);
+  ASSERT_EQ(result.glyphs.size(), 1u);
+  EXPECT_FALSE(result.glyphs.front().renderable);
+}
+
 TEST(SfntUtils, CffSubroutinesShareOperandsAndHintState) {
   const std::vector<uint8_t> cff =
       MakeCff1WithSubrs({32, 10, 19, 0x80, 33, 10, 21, 149, 139, 5, 14}, {

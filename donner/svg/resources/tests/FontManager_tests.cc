@@ -220,6 +220,56 @@ TEST(FontManagerTest, RejectedFontDoesNotConsumeAggregateBudget) {
   EXPECT_EQ(mgr.numLoadedFonts(), 0u);
 }
 
+TEST(FontManagerTest, CffValidationWorkIsAggregateAcrossManagersAndAttempts) {
+  Registry registry;
+  const std::vector<uint8_t> cff(embedded::kPublicSansMediumOtf.begin(),
+                                 embedded::kPublicSansMediumOtf.end());
+  FontManager first(registry, FontManager::kDefaultMaximumLoadedFontBytes,
+                    FontManager::kDefaultMaximumLoadedFonts, 1);
+
+  EXPECT_FALSE(static_cast<bool>(first.loadFontData(cff)));
+  EXPECT_EQ(first.fontValidationWork(), 1u);
+
+  FontManager peer(registry, FontManager::kDefaultMaximumLoadedFontBytes,
+                   FontManager::kDefaultMaximumLoadedFonts,
+                   FontManager::kDefaultMaximumFontValidationWork);
+  EXPECT_EQ(peer.fontValidationWork(), 1u);
+  EXPECT_FALSE(static_cast<bool>(peer.loadFontData(cff)));
+  EXPECT_EQ(peer.fontValidationWork(), 1u);
+}
+
+TEST(FontManagerTest, ExhaustedCffWorkBudgetPreservesReplacementAndAllowsTrueType) {
+  Registry registry;
+  const std::vector<uint8_t> trueType = readFile("donner/base/fonts/testdata/valid-001.woff");
+  const std::vector<uint8_t> cff(embedded::kPublicSansMediumOtf.begin(),
+                                 embedded::kPublicSansMediumOtf.end());
+  ASSERT_FALSE(trueType.empty());
+  FontManager manager(registry, FontManager::kDefaultMaximumLoadedFontBytes,
+                      FontManager::kDefaultMaximumLoadedFonts, 0);
+
+  const FontHandle handle = manager.loadFontData(trueType);
+  ASSERT_TRUE(static_cast<bool>(handle));
+  const std::vector<uint8_t> original(manager.fontData(handle).begin(),
+                                      manager.fontData(handle).end());
+  EXPECT_FALSE(FontManagerTestAccess::ReplaceFontData(manager, handle, cff));
+  ASSERT_EQ(manager.fontData(handle).size(), original.size());
+  EXPECT_THAT(manager.fontData(handle), testing::ElementsAreArray(original));
+  EXPECT_EQ(manager.fontValidationWork(), 0u);
+
+  EXPECT_TRUE(FontManagerTestAccess::ReplaceFontData(manager, handle, trueType));
+  EXPECT_TRUE(static_cast<bool>(manager.glyphOutlineComplexity(handle, 1)));
+}
+
+TEST(FontManagerTest, SuccessfulCffLoadChargesMeasuredValidationWork) {
+  Registry registry;
+  FontManager manager(registry);
+  const std::vector<uint8_t> cff(embedded::kPublicSansMediumOtf.begin(),
+                                 embedded::kPublicSansMediumOtf.end());
+
+  ASSERT_TRUE(static_cast<bool>(manager.loadFontData(cff)));
+  EXPECT_GT(manager.fontValidationWork(), 0u);
+}
+
 TEST(FontManagerTest, ReplacementUpdatesExactAggregateCharge) {
   Registry registry;
   const std::vector<uint8_t> original(embedded::kPublicSansMediumOtf.begin(),
