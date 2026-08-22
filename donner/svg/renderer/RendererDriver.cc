@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstring>
 #include <iostream>
+#include <limits>
 #include <optional>
 #include <span>
 #include <unordered_set>
@@ -79,6 +80,16 @@ inline constexpr int kMaxFeImageFragmentDepth = 32;
 /// culling. Keeps fractional-pixel strokes at the viewport edge safely on-screen
 /// - we'd rather do a little extra work than cull content the user should see.
 inline constexpr double kViewportCullSlackDevicePx = 1.0;
+
+Vector2i CheckedRenderingSize(const RenderViewport& viewport) {
+  constexpr double kMaximumDimension = static_cast<double>(std::numeric_limits<int>::max());
+  if (!std::isfinite(viewport.size.x) || !std::isfinite(viewport.size.y) || viewport.size.x < 0.0 ||
+      viewport.size.y < 0.0 || viewport.size.x > kMaximumDimension ||
+      viewport.size.y > kMaximumDimension) {
+    return Vector2i::Zero();
+  }
+  return Vector2i(static_cast<int>(viewport.size.x), static_cast<int>(viewport.size.y));
+}
 
 /// Compute the draw call's local-space AABB (inclusive of stroke width) for
 /// the given entity, or `std::nullopt` if the entity has no drawable content
@@ -476,7 +487,9 @@ PaintParams toPaintParams(Registry& registry,
 }
 
 ResolvedClip toResolvedClip(const components::RenderingInstanceComponent& instance,
-                            const components::ComputedStyleComponent& style, Registry& registry) {
+                            const components::ComputedStyleComponent& style, Registry& registry,
+                            RendererTextMaterializationBudget& copyBudget,
+                            RendererDriver::SecurityStats* securityStats) {
   ResolvedClip clip;
   clip.clipRect = instance.clipRect;
   // Note: mask is handled separately by the caller, not through ResolvedClip.
@@ -492,7 +505,44 @@ ResolvedClip toResolvedClip(const components::RenderingInstanceComponent& instan
       }
     }
 
-    clip.clipPaths.reserve(clipPaths->clipPaths.size());
+    RendererTextMaterializationBudget candidateBudget = copyBudget;
+    const std::size_t shapeCount = clipPaths->clipPaths.size();
+    const bool shapeStorageFits =
+        shapeCount <= std::numeric_limits<std::size_t>::max() / sizeof(ClipPathShape) &&
+        candidateBudget.reserve(
+            {.bytes = shapeCount * sizeof(ClipPathShape), .decodeWork = shapeCount});
+    bool geometryFits = shapeStorageFits;
+    for (auto path = clipPaths->clipPaths.begin();
+         geometryFits && path != clipPaths->clipPaths.end(); ++path) {
+      if (securityStats) {
+        ++securityStats->clipGeometryPathsPreflighted;
+      }
+      const std::size_t commands = path->path.commands().size();
+      const std::size_t points = path->path.points().size();
+      const std::optional<std::size_t> retainedBytes = path->path.retainedBytes();
+      if (!retainedBytes.has_value() ||
+          commands > std::numeric_limits<std::size_t>::max() - points ||
+          !candidateBudget.reserve({.uniqueOutlines = 1,
+                                    .commands = commands,
+                                    .points = points,
+                                    .bytes = *retainedBytes,
+                                    .decodeWork = commands + points})) {
+        geometryFits = false;
+        break;
+      }
+    }
+
+    if (!geometryFits) {
+      copyBudget.reject();
+      if (securityStats) {
+        securityStats->clipGeometryCopyRejected = true;
+      }
+      clip.clipPaths.emplace_back();
+      return clip;
+    }
+
+    copyBudget = std::move(candidateBudget);
+    clip.clipPaths.reserve(shapeCount);
     for (const auto& path : clipPaths->clipPaths) {
       ClipPathShape shape;
       shape.path = path.path;
@@ -1144,13 +1194,15 @@ RendererDriver::RendererDriver(RendererInterface& renderer, bool verbose,
                                SecurityStats* securityStats)
     : renderer_(renderer), verbose_(verbose), securityStats_(securityStats) {}
 
-void RendererDriver::resetOwnedFilterPreparationBudget() {
-  if (filterPreparationBudget_ != &ownedFilterPreparationBudget_) {
-    return;
+void RendererDriver::resetOwnedSecurityBudgets() {
+  if (filterPreparationBudget_ == &ownedFilterPreparationBudget_) {
+    ownedFilterPreparationBudget_ = {};
+    if (securityStats_) {
+      *securityStats_ = {};
+    }
   }
-  ownedFilterPreparationBudget_ = {};
-  if (securityStats_) {
-    *securityStats_ = {};
+  if (clipGeometryCopyBudget_ == &ownedClipGeometryCopyBudget_) {
+    ownedClipGeometryCopyBudget_.reset();
   }
 }
 
@@ -1285,8 +1337,8 @@ void RendererDriver::drawPreparedDocument(SVGDocument& document) {
 
 void RendererDriver::drawPreparedDocument(SVGDocument& document, const RenderViewport& viewport,
                                           const Transform2d& surfaceFromCanvas) {
-  resetOwnedFilterPreparationBudget();
-  renderingSize_ = Vector2i(static_cast<int>(viewport.size.x), static_cast<int>(viewport.size.y));
+  resetOwnedSecurityBudgets();
+  renderingSize_ = CheckedRenderingSize(viewport);
   surfaceFromCanvasTransform_ = surfaceFromCanvas;
 
   renderer_.beginFrame(viewport);
@@ -1332,8 +1384,8 @@ void RendererDriver::drawPreparedDocument(SVGDocument& document, const RenderVie
 void RendererDriver::drawEntityRange(Registry& registry, Entity firstEntity, Entity lastEntity,
                                      const RenderViewport& viewport,
                                      const Transform2d& surfaceFromCanvas) {
-  resetOwnedFilterPreparationBudget();
-  renderingSize_ = Vector2i(static_cast<int>(viewport.size.x), static_cast<int>(viewport.size.y));
+  resetOwnedSecurityBudgets();
+  renderingSize_ = CheckedRenderingSize(viewport);
   surfaceFromCanvasTransform_ = surfaceFromCanvas;
 
   renderer_.beginFrame(viewport);
@@ -1348,8 +1400,8 @@ bool RendererDriver::drawEntityRangeInterruptibly(Registry& registry, Entity fir
                                                   Entity lastEntity, const RenderViewport& viewport,
                                                   const Transform2d& surfaceFromCanvas,
                                                   const std::function<bool()>& shouldCancel) {
-  resetOwnedFilterPreparationBudget();
-  renderingSize_ = Vector2i(static_cast<int>(viewport.size.x), static_cast<int>(viewport.size.y));
+  resetOwnedSecurityBudgets();
+  renderingSize_ = CheckedRenderingSize(viewport);
   surfaceFromCanvasTransform_ = surfaceFromCanvas;
 
   renderer_.beginFrame(viewport);
@@ -1391,7 +1443,7 @@ void RendererDriver::drawEntityRangeIntoCurrentFrame(Registry& registry, Entity 
                                                      Entity lastEntity,
                                                      const RenderViewport& viewport,
                                                      const Transform2d& surfaceFromCanvas) {
-  renderingSize_ = Vector2i(static_cast<int>(viewport.size.x), static_cast<int>(viewport.size.y));
+  renderingSize_ = CheckedRenderingSize(viewport);
   surfaceFromCanvasTransform_ = surfaceFromCanvas;
 
   (void)drawPreparedEntityRange(registry, firstEntity, lastEntity, {});
@@ -1505,7 +1557,8 @@ bool RendererDriver::drawPreparedEntityRange(Registry& registry, Entity firstEnt
       subtreeConsumedBySubRendering = true;
     }
 
-    ResolvedClip entityClip = toResolvedClip(instance, style, registry);
+    ResolvedClip entityClip =
+        toResolvedClip(instance, style, registry, *clipGeometryCopyBudget_, securityStats_);
     entityClip.clipRect = std::nullopt;
     // Mask is handled separately from clip - access it directly from instance.
     const bool hasEntityClip = !entityClip.empty();
@@ -2040,7 +2093,8 @@ void RendererDriver::traverse(RenderingInstanceView& view, Registry& registry) {
     // Per SVG spec, the rendering order is: paint → filter → clip-path → mask → opacity.
     // Push in reverse so pop order applies the effects in spec order: mask outermost,
     // then clip-path, then filter innermost.
-    ResolvedClip entityClip = toResolvedClip(instance, style, registry);
+    ResolvedClip entityClip =
+        toResolvedClip(instance, style, registry, *clipGeometryCopyBudget_, securityStats_);
     entityClip.clipRect = std::nullopt;  // Already handled above as viewport clip.
     const bool hasEntityClip = !entityClip.empty();
     if (hasEntityClip) {
@@ -2314,7 +2368,8 @@ void RendererDriver::traverseRange(RenderingInstanceView& view, Registry& regist
     }
 
     // Per SVG spec, apply paint → filter → clip-path → mask.
-    ResolvedClip entityClip = toResolvedClip(instance, style, registry);
+    ResolvedClip entityClip =
+        toResolvedClip(instance, style, registry, *clipGeometryCopyBudget_, securityStats_);
     entityClip.clipRect = std::nullopt;
     const bool hasEntityClip = !entityClip.empty();
     if (hasEntityClip) {
@@ -3218,6 +3273,7 @@ void RendererDriver::preRenderSvgFeImages(components::FilterGraph& filterGraph,
     RendererDriver subDriver(*offscreen, verbose_);
     subDriver.renderingSize_ = targetSize;
     subDriver.filterPreparationBudget_ = filterPreparationBudget_;
+    subDriver.clipGeometryCopyBudget_ = clipGeometryCopyBudget_;
     subDriver.securityStats_ = securityStats_;
     subDriver.drawSubDocument(subDoc, Box2d::FromXYWH(0.0, 0.0, targetSize.x, targetSize.y),
                               imageNode->preserveAspectRatio, 1.0, Transform2d());
@@ -3365,6 +3421,7 @@ void RendererDriver::preRenderFeImageFragments(components::FilterGraph& filterGr
     subDriver.feImageFragmentGuard_ = feImageFragmentGuard_;
     subDriver.feImageFragmentDepth_ = feImageFragmentDepth_ + 1;
     subDriver.filterPreparationBudget_ = filterPreparationBudget_;
+    subDriver.clipGeometryCopyBudget_ = clipGeometryCopyBudget_;
     subDriver.securityStats_ = securityStats_;
 
     // The fragment is rendered at its natural position in the document coordinate system

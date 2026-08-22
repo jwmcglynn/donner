@@ -19,6 +19,10 @@
 
 namespace donner::svg {
 
+class FontManager;
+class FontHandle;
+struct TextRun;
+
 /**
  * Per-frame counts of the conversions \ref RendererTinySkia caches.
  *
@@ -41,6 +45,9 @@ struct RendererTinySkiaFrameCounters {
   /// outside the cache and are not counted.
   /// @see pathConversions
   uint64_t imagePremultiplies = 0;
+
+  /// Vector-outline or bitmap materializations attempted for text glyphs in this frame.
+  uint64_t textGlyphMaterializations = 0;
 };
 
 /**
@@ -76,6 +83,9 @@ public:
    * @param document The SVG document to render.
    */
   void draw(SVGDocument& document) override;
+
+  void beginFrameResourceScope() override;
+  void endFrameResourceScope() override;
 
   /**
    * Begins a render pass for the given viewport.
@@ -240,6 +250,16 @@ public:
    */
   [[nodiscard]] RendererBitmap takeSnapshot() const override;
   [[nodiscard]] std::unique_ptr<RendererInterface> createOffscreenInstance() const override;
+  [[nodiscard]] RendererResourceStats resourceStats() const override;
+
+  /// Reduce generated-dash work for a boundary test.
+  void setDashWorkBudgetForTesting(std::size_t maximumWorkUnits);
+  /// Reduce materialized gradient stops for a boundary test.
+  void setGradientStopBudgetForTesting(std::size_t maximumStops);
+  /// Reduce admitted text glyphs for a boundary test.
+  void setTextGlyphBudgetForTesting(std::size_t maximumGlyphs);
+  /// Reduce decoded-outline and path-copy ceilings for a boundary test.
+  void setTextMaterializationBudgetForTesting(RendererTextMaterializationBudget::Cost limits);
 
   /**
    * Saves the last rendered frame to a PNG file.
@@ -300,6 +320,9 @@ public:
   }
 
 private:
+  struct DashedPathWorkBudget;
+  struct TextGlyphWorkBudget;
+
   struct PatternPaintState {
     tiny_skia::Pixmap pixmap;
     Transform2d targetFromPattern;
@@ -338,6 +361,7 @@ private:
     std::vector<Transform2d> savedTransformStack;
     std::optional<tiny_skia::Mask> savedClipMask;
     std::vector<std::optional<tiny_skia::Mask>> savedClipStack;
+    std::vector<bool> savedClipRestoreStack;
     /// Pattern paints pending at `beginPatternTile` time, saved so tile-content draws don't
     /// consume the outer element's pattern shaders (e.g. a `context-fill` pattern shared between
     /// several consumers re-rendering the same tile subtree). Restored by `endPatternTile`.
@@ -398,7 +422,10 @@ private:
   [[nodiscard]] tiny_skia::Pixmap& currentPixmap();
   [[nodiscard]] const tiny_skia::Pixmap& currentPixmap() const;
   [[nodiscard]] tiny_skia::MutablePixmapView currentPixmapView();
-  [[nodiscard]] std::optional<tiny_skia::Mask> buildClipMask(const ResolvedClip& clip) const;
+  void resetOwnedFrameBudgets();
+  void prepareRetainedClipEpochBudget(int pixelWidth, int pixelHeight);
+  [[nodiscard]] bool applyPathLengthAdjustment(const Path& path, StrokeParams& stroke);
+  [[nodiscard]] std::optional<tiny_skia::Mask> buildClipMask(const ResolvedClip& clip);
   [[nodiscard]] std::optional<FilterAdmission> admitFilterLayer(
       const components::FilterGraph& filterGraph, const std::optional<Box2d>& filterRegion,
       const Transform2d& deviceFromFilter, int viewportWidth, int viewportHeight);
@@ -406,6 +433,10 @@ private:
   bool compositeTransformedFilter(SurfaceFrame& frame);
   void compositeDeviceFilter(SurfaceFrame& frame);
   tiny_skia::Pixmap extractFilterViewport(const SurfaceFrame& frame, int width, int height);
+  bool admitTextGlyphBatch(const std::vector<TextRun>& runs);
+  bool admitGlyphPredecode(const FontManager& fontManager, FontHandle font, int glyphIndex,
+                           bool& hasComplexity);
+  bool admitPlacedGlyph(bool hasPredecodeComplexity, const Path& path);
   [[nodiscard]] std::optional<tiny_skia::Paint> makeFillPaint(const Box2d& bounds);
   [[nodiscard]] std::optional<tiny_skia::Paint> makeStrokePaint(const Box2d& bounds,
                                                                 const StrokeParams& stroke);
@@ -469,6 +500,8 @@ private:
   std::vector<Transform2d> deviceFromLocalTransformStack_;
   std::optional<tiny_skia::Mask> currentClipMask_;
   std::vector<std::optional<tiny_skia::Mask>> clipStack_;
+  std::vector<bool> clipRestoreStack_;
+  bool clipMaskAllocationRejected_ = false;
   tiny_skia::Pixmap rejectedPixmap_;
   std::vector<SurfaceFrame> surfaceStack_;
   std::vector<bool> filterLayerStack_;
@@ -476,6 +509,16 @@ private:
   std::shared_ptr<components::FilterExecutionBudget> filterExecutionBudget_ =
       std::make_shared<components::FilterExecutionBudget>();
   bool ownsFilterExecutionBudget_ = true;
+  std::shared_ptr<RendererDrawBudget> drawBudget_ = std::make_shared<RendererDrawBudget>();
+  bool ownsDrawBudget_ = true;
+  std::shared_ptr<RendererSurfaceBudget> surfaceBudget_ = std::make_shared<RendererSurfaceBudget>();
+  bool ownsSurfaceBudget_ = true;
+  std::shared_ptr<RendererTextMaterializationBudget> textMaterializationBudget_ =
+      std::make_shared<RendererTextMaterializationBudget>();
+  bool ownsTextMaterializationBudget_ = true;
+  std::size_t frameResourceScopeDepth_ = 0;
+  std::shared_ptr<TextGlyphWorkBudget> textGlyphWorkBudget_;
+  std::shared_ptr<DashedPathWorkBudget> dashedPathWorkBudget_;
   std::optional<PatternPaintState> patternFillPaint_;
   std::optional<PatternPaintState> patternStrokePaint_;
 
@@ -517,6 +560,7 @@ private:
   std::uint64_t nextClipEpoch_ = 1;
   std::vector<std::uint64_t> clipEpochStack_;
   std::vector<ClipEpochSlot> clipEpochSlots_;
+  bool clipEpochRetentionActive_ = false;
   /// Surface size the remembered clip masks were built against.
   tiny_skia::IntSize previousFrameSize_;
 };

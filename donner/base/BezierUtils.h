@@ -2,6 +2,7 @@
 /// @file
 
 #include <array>
+#include <cstddef>
 #include <utility>
 #include <vector>
 
@@ -99,6 +100,16 @@ std::pair<std::array<Vector2d, 4>, std::array<Vector2d, 4>> SplitCubic(
 void ApproximateCubicWithQuadratics(const Vector2d& p0, const Vector2d& p1, const Vector2d& p2,
                                     const Vector2d& p3, double tolerance,
                                     std::vector<Vector2d>& out);
+
+/**
+ * Bounded variant of \ref ApproximateCubicWithQuadratics.
+ *
+ * @return False without exceeding \p maximumOutputPoints when the approximation needs more
+ * points than the caller can retain.
+ */
+bool ApproximateCubicWithQuadratics(const Vector2d& p0, const Vector2d& p1, const Vector2d& p2,
+                                    const Vector2d& p3, double tolerance,
+                                    std::size_t maximumOutputPoints, std::vector<Vector2d>& out);
 
 /**
  * Find parameter values where the Y-derivative is zero for a quadratic Bezier curve.

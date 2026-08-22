@@ -39,6 +39,8 @@ public:
 
   /// Optional diagnostics for structured fuzzers and embedders auditing rejected preparation.
   struct SecurityStats {
+    std::size_t clipGeometryPathsPreflighted = 0;
+    bool clipGeometryCopyRejected = false;
     std::size_t filterPreparationAttempts = 0;
     std::size_t preparedFilterGraphs = 0;
     std::size_t preparedFilterNodes = 0;
@@ -264,7 +266,7 @@ private:
   void drawPreparedDocument(SVGDocument& document);
   void drawPreparedDocument(SVGDocument& document, const RenderViewport& viewport,
                             const Transform2d& surfaceFromCanvas);
-  void resetOwnedFilterPreparationBudget();
+  void resetOwnedSecurityBudgets();
   [[nodiscard]] bool drawPreparedEntityRange(Registry& registry, Entity firstEntity,
                                              Entity lastEntity,
                                              const std::function<bool()>& shouldCancel);
@@ -404,6 +406,8 @@ private:
 
   FilterPreparationBudget ownedFilterPreparationBudget_;
   FilterPreparationBudget* filterPreparationBudget_ = &ownedFilterPreparationBudget_;
+  RendererTextMaterializationBudget ownedClipGeometryCopyBudget_;
+  RendererTextMaterializationBudget* clipGeometryCopyBudget_ = &ownedClipGeometryCopyBudget_;
   SecurityStats* securityStats_ = nullptr;
 
   /// Filter graphs resolved and pre-rendered by \ref prepareFilterGraphs. Keyed by the entity

@@ -4,8 +4,14 @@ load("//build_defs:visibility.bzl", "donner_internal_visibility")
 
 donner_cc_library(
     name = "sfnt_utils",
-    srcs = ["SfntUtils.cc"],
-    hdrs = ["SfntUtils.h"],
+    srcs = [
+        "CffOutlineComplexity.cc",
+        "SfntUtils.cc",
+    ],
+    hdrs = [
+        "CffOutlineComplexity.h",
+        "SfntUtils.h",
+    ],
     visibility = ["//donner:__subpackages__"],
 )
 

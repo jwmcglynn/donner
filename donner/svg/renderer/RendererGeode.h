@@ -280,6 +280,8 @@ public:
   [[nodiscard]] int width() const override;
   [[nodiscard]] int height() const override;
 
+  void beginFrameResourceScope() override;
+  void endFrameResourceScope() override;
   void beginFrame(const RenderViewport& viewport) override;
   void endFrame() override;
 
@@ -414,9 +416,27 @@ public:
    * building a font-sized working set.
    *
    * @param maxEntries Distinct cached glyph outlines to keep.
-   * @param maxEncodedBytes Summed encode bytes to keep.
+   * @param maxRetainedBytes Summed outline and encode bytes to keep.
    */
-  void setGlyphResidencyBudgetForTesting(size_t maxEntries, uint64_t maxEncodedBytes);
+  void setGlyphResidencyBudgetForTesting(size_t maxEntries, uint64_t maxRetainedBytes);
+
+  /// Shrink the aggregate geometry budget for boundary tests.
+  void setGeometryBudgetForTesting(std::size_t maximumDraws, std::size_t maximumItems,
+                                   std::uint64_t maximumFrameBytes, std::uint64_t maximumCacheBytes,
+                                   std::uint64_t maximumResidentBytes);
+
+  /// Shrink the aggregate frame-surface budget for boundary tests.
+  void setSurfaceBudgetForTesting(std::size_t maximumSurfaces, std::uint64_t maximumBytes);
+
+  /// Shrink the aggregate text-materialization budget for boundary tests.
+  void setTextMaterializationBudgetForTesting(RendererTextMaterializationBudget::Cost limits,
+                                              std::size_t maximumGlyphOccurrences);
+
+  /// Fail one scene preparation after the requested number of successful preparations.
+  void injectScenePreparationFailureAfterForTesting(std::size_t successfulPreparations);
+
+  /// Return aggregate resource-admission diagnostics for the current frame.
+  [[nodiscard]] RendererResourceStats resourceStats() const override;
 
   /// Number of glyph outlines currently resident for `document`.
   [[nodiscard]] size_t residentGlyphCountForTesting(SVGDocument& document);

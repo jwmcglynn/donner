@@ -404,6 +404,47 @@ TEST(GeodePathEncoder, DegeneratePath) {
 
   EncodedPath encoded = GeodePathEncoder::encode(path, FillRule::NonZero);
   EXPECT_TRUE(encoded.empty());
+  EXPECT_FALSE(encoded.rejected());
+}
+
+TEST(GeodePathEncoder, OrdinaryPathReportsReadyOutcome) {
+  const Path path = PathBuilder().addRect(Box2d({0, 0}, {100, 100})).build();
+  const EncodedPath encoded = GeodePathEncoder::encode(path, FillRule::NonZero);
+
+  ASSERT_FALSE(encoded.empty());
+  EXPECT_EQ(encoded.outcome, EncodedPath::Outcome::Ready);
+}
+
+TEST(GeodePathEncoder, ConvertedCommandLimitRejectsBeforeExpansion) {
+  PathBuilder builder;
+  builder.moveTo({0.0, 0.0});
+  builder.curveTo({0.25, 1.0e12}, {0.75, -1.0e12}, {1.0, 0.0});
+  builder.curveTo({1.25, 1.0e12}, {1.75, -1.0e12}, {2.0, 0.0});
+
+  const EncodedPath encoded =
+      GeodePathEncoder::encode(builder.build(), FillRule::NonZero, /*tolerance=*/0.0,
+                               GeodePathEncoder::Limits{.maximumConvertedCommands = 1u});
+  EXPECT_TRUE(encoded.empty());
+  EXPECT_TRUE(encoded.rejected());
+}
+
+TEST(GeodePathEncoder, NonRepresentableCoordinatesReportRejectedOutcome) {
+  const Path path =
+      PathBuilder().moveTo({0.0, 0.0}).lineTo({1.0e300, 1.0e300}).lineTo({0.0, 1.0}).build();
+  const EncodedPath encoded = GeodePathEncoder::encode(path, FillRule::NonZero);
+
+  EXPECT_TRUE(encoded.empty());
+  EXPECT_TRUE(encoded.rejected());
+}
+
+TEST(GeodePathEncoder, EncodedGeometryItemLimitRejectsBeforeRetainingVectors) {
+  const Path path = PathBuilder().addRect(Box2d({0, 0}, {100, 100})).build();
+  const EncodedPath encoded =
+      GeodePathEncoder::encode(path, FillRule::NonZero, /*tolerance=*/0.1,
+                               GeodePathEncoder::Limits{.maximumEncodedGeometryItems = 1u});
+
+  EXPECT_TRUE(encoded.empty());
+  EXPECT_TRUE(encoded.rejected());
 }
 
 TEST(GeodePathEncoder, BoundingPolygonIsSmallAndCounterClockwise) {

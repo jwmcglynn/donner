@@ -8,6 +8,8 @@
 #include <span>
 #include <string_view>
 
+#include "donner/base/fonts/CffOutlineComplexity.h"
+
 namespace donner::fonts {
 
 /// Maximum number of entries accepted in an sfnt table directory.
@@ -42,6 +44,18 @@ inline uint32_t ReadBe32(const uint8_t* p) {
 /// Convert a four-byte sfnt tag to its big-endian integer representation.
 uint32_t SfntTag(std::string_view tag);
 
+/// Caller-selected limits for one sfnt validation.
+struct SfntValidationOptions {
+  /// Maximum CFF structure and CharString work permitted for this call.
+  std::size_t maximumCffValidationWork = kMaximumCffOutlineValidationWork;
+};
+
+/// Work and limiting outcome observed while validating one sfnt.
+struct SfntValidationMetrics {
+  std::size_t cffValidationWork = 0;  ///< Actual CFF work consumed by this call.
+  bool cffWorkLimitExceeded = false;  ///< True when CFF validation stopped at the caller limit.
+};
+
 /**
  * Validated, allocation-bounded index for one sfnt font.
  *
@@ -51,9 +65,9 @@ uint32_t SfntTag(std::string_view tag);
  * caps. The work model includes repeated and shared descendants, simple point decoding, component
  * transforms, and stb_truetype's repeated prefix copies.
  *
- * CFF/CFF2 tables receive bounded directory validation only. They must be consumed by an
- * exact-span parser such as FreeType; stb_truetype's CFF parser uses a synthetic 512 MiB span and
- * must not be initialized for these fonts.
+ * CFF and non-variable CFF2 outlines also receive bounded CharString validation. CFF tables must
+ * still be consumed by an exact-span parser such as FreeType; stb_truetype's CFF parser uses a
+ * synthetic 512 MiB span and must not be initialized for untrusted CFF fonts.
  */
 class SfntFont {
 public:
@@ -64,7 +78,7 @@ public:
     uint32_t length = 0;
   };
 
-  /// Allocation and CPU-work ceiling proved for one TrueType glyph.
+  /// Allocation and CPU-work ceiling proved for one glyph outline.
   struct GlyphOutlineComplexity {
     uint32_t maximumVertices = 0;
     uint32_t work = 0;
@@ -84,7 +98,9 @@ public:
    * @param data Complete sfnt byte stream.
    * @return A cached index on success, or std::nullopt for malformed or over-limit input.
    */
-  static std::optional<SfntFont> Validate(std::span<const uint8_t> data);
+  static std::optional<SfntFont> Validate(std::span<const uint8_t> data,
+                                          const SfntValidationOptions& options = {},
+                                          SfntValidationMetrics* metrics = nullptr);
 
   /**
    * Find a validated table in @p data.
@@ -104,13 +120,13 @@ public:
   /// Number of validated directory entries.
   size_t numTables() const { return numTables_; }
 
-  /// Number of glyphs represented by the retained `loca` index, or zero for non-TrueType fonts.
+  /// Number of glyphs with retained outline bounds, or zero when validation was unavailable.
   size_t numGlyphs() const { return numGlyphs_; }
 
-  /// Return the validation-time outline bound for a TrueType glyph.
+  /// Return the validation-time outline bound for a glyph.
   std::optional<GlyphOutlineComplexity> glyphOutlineComplexity(size_t glyphIndex) const;
 
-  /// Exact dynamic bytes retained by the sorted directory and `loca` index.
+  /// Exact dynamic bytes retained by the sorted directory and outline indexes.
   size_t retainedBytes() const;
 
 private:

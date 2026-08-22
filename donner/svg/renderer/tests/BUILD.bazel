@@ -318,6 +318,10 @@ donner_cc_test(
     srcs = [
         "RendererPublicApi_tests.cc",
     ],
+    defines = select({
+        "//donner/svg/renderer:text_enabled": ["DONNER_TEXT_ENABLED"],
+        "//conditions:default": [],
+    }),
     opens_gpu_device = True,
     # Variant lanes (doc 0031 M2.3): tiny / text_full / geode wrappers run
     # automatically under `bazel test //...`. The base test still runs at
@@ -586,6 +590,7 @@ donner_cc_test(
         "//donner/svg/renderer:renderer_utils",
         "//donner/svg/renderer:stroke_params",
         "//donner/svg/renderer/geode:geode_device",
+        "//donner/svg/renderer/geode:geode_path_cache_component",
         "//donner/svg/renderer/tests:rgba_test_matchers",
         "//donner/svg/resources:image_resource",
         "@tiny-skia-cpp//src:tiny_skia_lib",

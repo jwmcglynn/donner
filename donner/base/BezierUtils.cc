@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 #include "donner/base/MathUtils.h"
 
@@ -18,9 +19,10 @@ Vector2d Lerp2d(const Vector2d& a, const Vector2d& b, double t) {
 constexpr int kMaxApproximationDepth = 10;
 
 /// Recursive helper for ApproximateCubicWithQuadratics.
-void approximateCubicWithQuadraticsImpl(const Vector2d& p0, const Vector2d& p1, const Vector2d& p2,
+bool approximateCubicWithQuadraticsImpl(const Vector2d& p0, const Vector2d& p1, const Vector2d& p2,
                                         const Vector2d& p3, double tolerance,
-                                        std::vector<Vector2d>& out, int depth) {
+                                        std::size_t maximumOutputPoints, std::vector<Vector2d>& out,
+                                        int depth) {
   // Compute the best-fit quadratic control point: Q1 = (3*(p1+p2) - p0 - p3) / 4
   const Vector2d q1 = (3.0 * (p1 + p2) - p0 - p3) * 0.25;
 
@@ -55,16 +57,22 @@ void approximateCubicWithQuadraticsImpl(const Vector2d& p0, const Vector2d& p1, 
 
   if (error <= tolerance || depth >= kMaxApproximationDepth) {
     // Emit the quadratic: (control point, end point)
+    if (out.size() > maximumOutputPoints || maximumOutputPoints - out.size() < 2u) {
+      return false;
+    }
     out.push_back(q1);
     out.push_back(p3);
-    return;
+    return true;
   }
 
   // Split at t=0.5 and recurse.
   auto [left, right] = SplitCubic(p0, p1, p2, p3, 0.5);
-  approximateCubicWithQuadraticsImpl(left[0], left[1], left[2], left[3], tolerance, out, depth + 1);
-  approximateCubicWithQuadraticsImpl(right[0], right[1], right[2], right[3], tolerance, out,
-                                     depth + 1);
+  if (!approximateCubicWithQuadraticsImpl(left[0], left[1], left[2], left[3], tolerance,
+                                          maximumOutputPoints, out, depth + 1)) {
+    return false;
+  }
+  return approximateCubicWithQuadraticsImpl(right[0], right[1], right[2], right[3], tolerance,
+                                            maximumOutputPoints, out, depth + 1);
 }
 
 }  // namespace
@@ -185,7 +193,17 @@ std::pair<std::array<Vector2d, 4>, std::array<Vector2d, 4>> SplitCubic(
 void ApproximateCubicWithQuadratics(const Vector2d& p0, const Vector2d& p1, const Vector2d& p2,
                                     const Vector2d& p3, double tolerance,
                                     std::vector<Vector2d>& out) {
-  approximateCubicWithQuadraticsImpl(p0, p1, p2, p3, tolerance, out, 0);
+  (void)approximateCubicWithQuadraticsImpl(p0, p1, p2, p3, tolerance,
+                                           std::numeric_limits<std::size_t>::max(), out, 0);
+}
+
+bool ApproximateCubicWithQuadratics(const Vector2d& p0, const Vector2d& p1, const Vector2d& p2,
+                                    const Vector2d& p3, double tolerance,
+                                    std::size_t maximumOutputPoints, std::vector<Vector2d>& out) {
+  if (out.size() > maximumOutputPoints) {
+    return false;
+  }
+  return approximateCubicWithQuadraticsImpl(p0, p1, p2, p3, tolerance, maximumOutputPoints, out, 0);
 }
 
 SmallVector<double, 1> QuadraticYExtrema(const Vector2d& p0, const Vector2d& p1,

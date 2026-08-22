@@ -69,6 +69,19 @@ uint32_t readBE32(const uint8_t* p) {
          (static_cast<uint32_t>(p[2]) << 8) | static_cast<uint32_t>(p[3]);
 }
 
+/// WOFF flavor fields cannot prove that decompressed tables omit CFF, so compressed inputs share
+/// the exhausted-budget path regardless of their advertised flavor.
+bool IsCompressedOrCffFont(std::span<const uint8_t> data) {
+  if (data.size() < 4) return false;
+  const uint32_t magic = readBE32(data.data());
+  return magic == kSfntCff || magic == kWoffMagic || magic == kWoff2Magic;
+}
+
+bool IsSupportedFontMagic(uint32_t magic) {
+  return magic == kWoffMagic || magic == kWoff2Magic || magic == kSfntTrueType ||
+         magic == kSfntCff || magic == kSfntApple || magic == kSfntType1;
+}
+
 /**
  * Reconstruct a flat sfnt byte stream from a WoffFont's decompressed tables.
  *
@@ -159,8 +172,13 @@ struct FontManager::FontFaceComponent {
 struct FontManager::FontBudgetState {
   size_t maximumBytes = 0;
   size_t maximumFonts = 0;
+  size_t maximumValidationWork = 0;
   size_t usedBytes = 0;
   size_t usedFonts = 0;
+  size_t usedValidationWork = 0;
+  size_t compressedFontDecompressionAttempts = 0;
+  std::unordered_map<const std::vector<uint8_t>*, std::weak_ptr<const std::vector<uint8_t>>>
+      validationRejectedSources;
 };
 
 struct FontManager::FontBudgetContext {
@@ -244,11 +262,11 @@ const FontFamilyProvider* FontManager::DefaultFontProvider() {
 }
 
 FontManager::FontManager(Registry& registry, size_t maximumLoadedFontBytes,
-                         size_t maximumLoadedFonts)
+                         size_t maximumLoadedFonts, size_t maximumFontValidationWork)
     : registry_(registry),
       provider_(g_defaultFontProvider.load(std::memory_order_acquire)),
-      candidateBudgetState_(std::make_shared<FontBudgetState>(
-          FontBudgetState{maximumLoadedFontBytes, maximumLoadedFonts, 0, 0})) {}
+      candidateBudgetState_(std::make_shared<FontBudgetState>(FontBudgetState{
+          maximumLoadedFontBytes, maximumLoadedFonts, maximumFontValidationWork, 0, 0, 0, {}})) {}
 FontManager::~FontManager() = default;
 
 size_t FontManager::ProviderFontKeyHash::operator()(const ProviderFontKey& key) const noexcept {
@@ -490,15 +508,29 @@ bool FontManager::loadFontDataSharedIntoEntity(
   }
 
   const uint32_t magic = readBE32(data->data());
+  if (!IsSupportedFontMagic(magic)) {
+    return false;
+  }
+
+  const std::shared_ptr<FontBudgetState> budgetState = budgetStateForWrite();
+  if (exhaustedValidationBudgetRejects(*data, trust, budgetState) ||
+      isValidationRejectedSource(data, budgetState)) {
+    return false;
+  }
+  bool workLimitExceeded = false;
+  const auto finishLoad = [&](bool loaded) {
+    rememberValidationRejectedSource(data, workLimitExceeded, budgetState);
+    return loaded;
+  };
 
   // WOFF fonts need decompression/reconstruction, so they create new owned buffers.
   if (magic == kWoffMagic) {
-    return loadWoff1(entity, *data, trust);
+    return finishLoad(loadWoff1(entity, *data, trust, &workLimitExceeded));
   }
 
   if (magic == kWoff2Magic) {
 #ifdef DONNER_TEXT_WOFF2_ENABLED
-    return loadWoff2(entity, *data, trust);
+    return finishLoad(loadWoff2(entity, *data, trust, &workLimitExceeded));
 #else
     std::cerr << "FontManager: WOFF2 font encountered but WOFF2 support not enabled. "
                  "Build with --config=text-full to enable.\n";
@@ -506,12 +538,35 @@ bool FontManager::loadFontDataSharedIntoEntity(
 #endif
   }
 
-  if (magic != kSfntTrueType && magic != kSfntCff && magic != kSfntApple && magic != kSfntType1) {
-    return false;
-  }
-
   // Raw TTF/OTF: share the data via shared_ptr (no copy).
-  return setRawFontData(entity, data, trust);
+  return finishLoad(setRawFontData(entity, data, trust, &workLimitExceeded));
+}
+
+bool FontManager::isValidationRejectedSource(
+    const std::shared_ptr<const std::vector<uint8_t>>& data,
+    const std::shared_ptr<FontBudgetState>& budgetState) const {
+  const auto found = budgetState->validationRejectedSources.find(data.get());
+  if (found == budgetState->validationRejectedSources.end()) return false;
+  if (found->second.lock() == data) return true;
+  budgetState->validationRejectedSources.erase(found);
+  return false;
+}
+
+bool FontManager::exhaustedValidationBudgetRejects(
+    std::span<const uint8_t> data, FontDataTrust trust,
+    const std::shared_ptr<FontBudgetState>& budgetState) const {
+  return trust == FontDataTrust::Untrusted &&
+         budgetState->usedValidationWork >= budgetState->maximumValidationWork &&
+         IsCompressedOrCffFont(data);
+}
+
+void FontManager::rememberValidationRejectedSource(
+    const std::shared_ptr<const std::vector<uint8_t>>& data, bool workLimitExceeded,
+    const std::shared_ptr<FontBudgetState>& budgetState) {
+  if (workLimitExceeded &&
+      budgetState->validationRejectedSources.size() < budgetState->maximumFonts) {
+    budgetState->validationRejectedSources.insert_or_assign(data.get(), data);
+  }
 }
 
 std::span<const uint8_t> FontManager::fontData(FontHandle handle) const {
@@ -530,6 +585,25 @@ bool FontManager::isTrustedFont(FontHandle handle) const {
 
   const auto* font = registry_.try_get<LoadedFontComponent>(handle.entity());
   return font != nullptr && font->trust == FontDataTrust::Trusted;
+}
+
+std::optional<FontManager::GlyphOutlineComplexity> FontManager::glyphOutlineComplexity(
+    FontHandle handle, int glyphIndex) const {
+  if (!isValidHandle(handle) || glyphIndex < 0) {
+    return std::nullopt;
+  }
+  const auto* font = registry_.try_get<LoadedFontComponent>(handle.entity());
+  if (!font) {
+    return std::nullopt;
+  }
+  const auto complexity = font->sfnt.glyphOutlineComplexity(static_cast<std::size_t>(glyphIndex));
+  if (!complexity) {
+    return std::nullopt;
+  }
+  return GlyphOutlineComplexity{
+      .maximumVertices = complexity->maximumVertices,
+      .work = complexity->work,
+  };
 }
 
 std::optional<std::span<const uint8_t>> FontManager::sfntTable(FontHandle handle,
@@ -553,6 +627,18 @@ size_t FontManager::numLoadedFonts() const {
   return budgetStateForRead()->usedFonts;
 }
 
+size_t FontManager::fontValidationWork() const {
+  return budgetStateForRead()->usedValidationWork;
+}
+
+size_t FontManager::compressedFontDecompressionAttempts() const {
+  return budgetStateForRead()->compressedFontDecompressionAttempts;
+}
+
+size_t FontManager::numValidationRejectedSources() const {
+  return budgetStateForRead()->validationRejectedSources.size();
+}
+
 FontHandle FontManager::fallbackFont() {
   if (isValidHandle(fallbackHandle_)) {
     return fallbackHandle_;
@@ -573,8 +659,49 @@ FontHandle FontManager::fallbackFont() {
   return fallbackHandle_;
 }
 
-bool FontManager::setRawFontData(Entity entity, std::vector<uint8_t> data, FontDataTrust trust) {
-  auto sfnt = fonts::SfntFont::Validate(data);
+std::optional<fonts::SfntFont> FontManager::validateSfntForLoad(
+    Entity entity, std::span<const uint8_t> data, FontDataTrust trust,
+    const std::shared_ptr<FontBudgetState>& budgetState, bool* validationWorkLimitExceeded) {
+  if (validationWorkLimitExceeded) {
+    *validationWorkLimitExceeded = false;
+  }
+  if (!canStoreLoadedFont(entity, data.size(), 0, budgetState)) {
+    return std::nullopt;
+  }
+  if (exhaustedValidationBudgetRejects(data, trust, budgetState)) {
+    if (validationWorkLimitExceeded) {
+      *validationWorkLimitExceeded = true;
+    }
+    return std::nullopt;
+  }
+
+  assert(budgetState->usedValidationWork <= budgetState->maximumValidationWork);
+  const size_t remainingValidationWork =
+      budgetState->maximumValidationWork - budgetState->usedValidationWork;
+  const size_t perCallValidationWork =
+      trust == FontDataTrust::Trusted
+          ? fonts::kMaximumCffOutlineValidationWork
+          : std::min(remainingValidationWork, fonts::kMaximumCffOutlineValidationWork);
+  fonts::SfntValidationMetrics metrics;
+  auto sfnt = fonts::SfntFont::Validate(data, {.maximumCffValidationWork = perCallValidationWork},
+                                        &metrics);
+  if (trust == FontDataTrust::Untrusted) {
+    assert(metrics.cffValidationWork <= remainingValidationWork);
+    budgetState->usedValidationWork += metrics.cffValidationWork;
+  }
+  if (metrics.cffWorkLimitExceeded) {
+    if (validationWorkLimitExceeded) {
+      *validationWorkLimitExceeded = true;
+    }
+    return std::nullopt;
+  }
+  return sfnt;
+}
+
+bool FontManager::setRawFontData(Entity entity, std::vector<uint8_t> data, FontDataTrust trust,
+                                 bool* validationWorkLimitExceeded) {
+  const std::shared_ptr<FontBudgetState> budgetState = budgetStateForWrite();
+  auto sfnt = validateSfntForLoad(entity, data, trust, budgetState, validationWorkLimitExceeded);
   if (!sfnt) {
     return false;
   }
@@ -588,11 +715,13 @@ bool FontManager::setRawFontData(Entity entity, std::vector<uint8_t> data, FontD
 
 bool FontManager::setRawFontData(Entity entity,
                                  std::shared_ptr<const std::vector<uint8_t>> sharedData,
-                                 FontDataTrust trust) {
+                                 FontDataTrust trust, bool* validationWorkLimitExceeded) {
   if (!sharedData) {
     return false;
   }
-  auto sfnt = fonts::SfntFont::Validate(*sharedData);
+  const std::shared_ptr<FontBudgetState> budgetState = budgetStateForWrite();
+  auto sfnt =
+      validateSfntForLoad(entity, *sharedData, trust, budgetState, validationWorkLimitExceeded);
   if (!sfnt) {
     return false;
   }
@@ -664,8 +793,10 @@ bool FontManager::canStoreLoadedFont(Entity entity, size_t rawBytes, size_t inde
   return true;
 }
 
-bool FontManager::loadWoff1(Entity entity, std::span<const uint8_t> data, FontDataTrust trust) {
+bool FontManager::loadWoff1(Entity entity, std::span<const uint8_t> data, FontDataTrust trust,
+                            bool* validationWorkLimitExceeded) {
   const std::shared_ptr<FontBudgetState> budgetState = budgetStateForWrite();
+  ++budgetState->compressedFontDecompressionAttempts;
   fonts::WoffParser::Options options;
   options.maximumSfntSize = std::min(options.maximumSfntSize, budgetState->maximumBytes);
   auto maybeFont = fonts::WoffParser::Parse(data, options);
@@ -676,7 +807,7 @@ bool FontManager::loadWoff1(Entity entity, std::span<const uint8_t> data, FontDa
 
   // Reconstruct sfnt byte stream from decompressed WOFF tables.
   std::vector<uint8_t> sfntData = reconstructSfnt(maybeFont.result());
-  return setRawFontData(entity, std::move(sfntData), trust);
+  return setRawFontData(entity, std::move(sfntData), trust, validationWorkLimitExceeded);
 }
 
 bool FontManager::loadFontDataIntoEntity(Entity entity, std::span<const uint8_t> data,
@@ -686,6 +817,13 @@ bool FontManager::loadFontDataIntoEntity(Entity entity, std::span<const uint8_t>
   }
 
   const uint32_t magic = readBE32(data.data());
+
+  if (!IsSupportedFontMagic(magic)) {
+    return false;
+  }
+
+  const std::shared_ptr<FontBudgetState> budgetState = budgetStateForWrite();
+  if (exhaustedValidationBudgetRejects(data, trust, budgetState)) return false;
 
   if (magic == kWoffMagic) {
     return loadWoff1(entity, data, trust);
@@ -701,16 +839,11 @@ bool FontManager::loadFontDataIntoEntity(Entity entity, std::span<const uint8_t>
 #endif
   }
 
-  if (magic != kSfntTrueType && magic != kSfntCff && magic != kSfntApple && magic != kSfntType1) {
-    return false;
-  }
-
   // Validate and budget the retained index before copying the untrusted byte stream.
-  auto sfnt = fonts::SfntFont::Validate(data);
+  auto sfnt = validateSfntForLoad(entity, data, trust, budgetState);
   if (!sfnt) {
     return false;
   }
-  const std::shared_ptr<FontBudgetState> budgetState = budgetStateForWrite();
   if (!canStoreLoadedFont(entity, data.size(), sfnt->retainedBytes(), budgetState)) {
     return false;
   }
@@ -722,8 +855,10 @@ bool FontManager::loadFontDataIntoEntity(Entity entity, std::span<const uint8_t>
 }
 
 #ifdef DONNER_TEXT_WOFF2_ENABLED
-bool FontManager::loadWoff2(Entity entity, std::span<const uint8_t> data, FontDataTrust trust) {
+bool FontManager::loadWoff2(Entity entity, std::span<const uint8_t> data, FontDataTrust trust,
+                            bool* validationWorkLimitExceeded) {
   const std::shared_ptr<FontBudgetState> budgetState = budgetStateForWrite();
+  ++budgetState->compressedFontDecompressionAttempts;
   fonts::Woff2Parser::Options options;
   options.maximumOutputSize = std::min(options.maximumOutputSize, budgetState->maximumBytes);
   auto result = fonts::Woff2Parser::Decompress(data, options);
@@ -732,7 +867,7 @@ bool FontManager::loadWoff2(Entity entity, std::span<const uint8_t> data, FontDa
     return false;
   }
 
-  return setRawFontData(entity, std::move(result.result()), trust);
+  return setRawFontData(entity, std::move(result.result()), trust, validationWorkLimitExceeded);
 }
 #endif
 

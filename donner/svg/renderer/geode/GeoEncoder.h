@@ -2,6 +2,7 @@
 /// @file
 /// Drawing API for the Geode GPU renderer.
 
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <span>
@@ -46,6 +47,21 @@ public:
   virtual void recordSlugDraw(const EncodedPath& encoded, const Transform2d& targetFromPath,
                               const Transform2d& rootFromTarget,
                               std::span<const float> instanceTransforms) = 0;
+};
+
+/** Frame-wide admission gate invoked before every Slug geometry upload or draw. */
+class GeometryAdmission {
+public:
+  virtual ~GeometryAdmission() = default;
+
+  /** Reserve one or more logical submissions of `encoded` before GPU work is recorded. */
+  virtual bool admitGeometry(const EncodedPath& encoded, std::size_t logicalDraws) = 0;
+
+  /** Whether another inline path encode may start in the current frame. */
+  [[nodiscard]] virtual bool canEncodeGeometry() const = 0;
+
+  /** Release a successful reservation when submission preparation cannot complete. */
+  virtual void releaseGeometry(const EncodedPath& encoded, std::size_t logicalDraws) = 0;
 };
 
 class GeodeBufferPool;
@@ -197,6 +213,18 @@ public:
    * to disable (default).
    */
   void setBufferPool(GeodeBufferPool* pool);
+
+  /** Install the mandatory geometry admission gate for renderer-owned encoders. */
+  void setGeometryAdmission(GeometryAdmission* admission);
+
+  /// Number of pattern sampler/view preparation attempts made by this encoder.
+  [[nodiscard]] std::size_t patternGpuPreparationsForTesting() const;
+
+  /// Number of admitted scene instances not yet consumed by a batch draw.
+  [[nodiscard]] std::size_t pendingSceneAdmissionsForTesting() const;
+
+  /// Fail one scene preparation after `successfulPreparations` successful calls.
+  void injectScenePreparationFailureAfterForTesting(std::size_t successfulPreparations);
 
   /**
    * Observe Slug draws recorded by this encoder.
@@ -640,6 +668,9 @@ public:
                                  std::vector<uint8_t>* overrideRecordCache = nullptr,
                                  SceneRecordState* recordState = nullptr, bool publishPaint = true);
 
+  /** Cancel one prepared scene instance before demoting it to a different draw path. */
+  void releasePreparedSceneAdmission(const EncodedPath& encoded);
+
   /// One cross-entity ordered batch: consecutive resident slots of one
   /// slab chunk plus a run of consecutive record-slab slots.
   struct SceneBatchBinding {
@@ -802,7 +833,8 @@ private:
 
   /// Shared path for solid and pattern fills: encode path, upload buffers,
   /// build bind group, record draw call.
-  void submitFillDraw(const FillDrawArgs& args, std::span<const float> instanceTransforms = {});
+  void submitFillDraw(const FillDrawArgs& args, std::span<const float> instanceTransforms = {},
+                      bool requireAdmission = true);
 
   /// Shared construction helpers used by both constructors. Factored out
   /// to avoid duplicating ~20 lines of setup. See GeoEncoder.cc.

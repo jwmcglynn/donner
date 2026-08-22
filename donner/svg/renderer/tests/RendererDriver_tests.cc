@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <limits>
 #include <memory>
 #include <utility>
 #include <vector>
@@ -195,6 +196,19 @@ TEST_F(RendererDriverTest, ConcurrentDomDrawReplaysBackendCallbacksOutsideWriteA
   EXPECT_EQ(document.handle()->revision(), initialRevision);
 }
 
+TEST_F(RendererDriverTest, NonFiniteViewportDoesNotCastBeforeBackendValidation) {
+  SVGDocument document = makeDocument(R"svg(
+    <rect width="8" height="6" fill="red" />
+  )svg");
+  RenderViewport viewport;
+  viewport.size = Vector2d(std::numeric_limits<double>::infinity(), 16.0);
+  viewport.devicePixelRatio = 1.0;
+
+  EXPECT_CALL(renderer, beginFrame(_)).Times(1);
+  EXPECT_CALL(renderer, endFrame()).Times(1);
+  driver.draw(document, viewport, Transform2d());
+}
+
 TEST_F(RendererDriverTest, EmitsClipPathsWhenPresent) {
   SVGDocument document = makeDocument(R"svg(
     <defs>
@@ -230,6 +244,135 @@ TEST_F(RendererDriverTest, EmitsClipPathsWhenPresent) {
   if (hasClipComponents) {
     EXPECT_GE(clipPushCount, 1);
   }
+}
+
+TEST_F(RendererDriverTest, ClipGeometryAdmissionStopsBeforeCopyingTheFirstOverCapShape) {
+  constexpr std::size_t kMaximumClipShapes =
+      RendererTextMaterializationBudget::kMaximumUniqueOutlines;
+  const auto makeManyShapeClipDocument = [&](std::size_t shapeCount) {
+    std::string svg = R"svg(<defs><clipPath id="clip">)svg";
+    for (std::size_t i = 0; i < shapeCount; ++i) {
+      svg += R"svg(<path d="M0 0L1 1"/>)svg";
+    }
+    svg += R"svg(</clipPath></defs><rect width="1" height="1" clip-path="url(#clip)"/>)svg";
+    return makeDocument(svg, Vector2i(1, 1));
+  };
+
+  SVGDocument exactDocument = makeManyShapeClipDocument(kMaximumClipShapes);
+  SVGDocument overDocument = makeManyShapeClipDocument(kMaximumClipShapes + 1u);
+
+  EXPECT_CALL(renderer, pushClip(_))
+      .WillOnce([=](const ResolvedClip& clip) {
+        EXPECT_THAT(clip.clipPaths, SizeIs(kMaximumClipShapes));
+      })
+      .WillOnce([](const ResolvedClip& clip) {
+        ASSERT_THAT(clip.clipPaths, SizeIs(1));
+        EXPECT_TRUE(clip.clipPaths.front().path.empty());
+      });
+
+  driver.draw(exactDocument);
+  driver.draw(overDocument);
+}
+
+TEST_F(RendererDriverTest, ClipGeometryAdmissionAggregatesAcrossTheTraversal) {
+  constexpr std::size_t kMaximumClipShapes =
+      RendererTextMaterializationBudget::kMaximumUniqueOutlines;
+  std::string svg = R"svg(<defs><clipPath id="exact">)svg";
+  for (std::size_t i = 0; i < kMaximumClipShapes; ++i) {
+    svg += R"svg(<path d="M0 0L1 1"/>)svg";
+  }
+  svg += R"svg(</clipPath><clipPath id="extra"><path d="M0 0L1 1"/></clipPath></defs>
+              <rect width="1" height="1" clip-path="url(#exact)"/>
+              <rect width="1" height="1" clip-path="url(#extra)"/>)svg";
+  SVGDocument document = makeDocument(svg, Vector2i(1, 1));
+
+  EXPECT_CALL(renderer, pushClip(_))
+      .WillOnce([=](const ResolvedClip& clip) {
+        EXPECT_THAT(clip.clipPaths, SizeIs(kMaximumClipShapes));
+      })
+      .WillOnce([](const ResolvedClip& clip) {
+        ASSERT_THAT(clip.clipPaths, SizeIs(1));
+        EXPECT_TRUE(clip.clipPaths.front().path.empty());
+      });
+
+  driver.draw(document);
+}
+
+TEST_F(RendererDriverTest, ClipGeometryAdmissionPersistsAcrossCurrentFrameSubTraversals) {
+  constexpr std::size_t kMaximumClipShapes =
+      RendererTextMaterializationBudget::kMaximumUniqueOutlines;
+  std::string svg = R"svg(<defs><clipPath id="exact">)svg";
+  for (std::size_t i = 0; i < kMaximumClipShapes; ++i) {
+    svg += R"svg(<path d="M0 0L1 1"/>)svg";
+  }
+  svg += R"svg(</clipPath><clipPath id="extra"><path d="M0 0L1 1"/></clipPath></defs>
+              <rect width="1" height="1" clip-path="url(#exact)"/>
+              <rect width="1" height="1" clip-path="url(#extra)"/>)svg";
+  SVGDocument document = makeDocument(svg, Vector2i(1, 1));
+
+  ParseWarningSink warnings;
+  RendererUtils::prepareDocumentForRendering(document, false, warnings);
+  ASSERT_FALSE(warnings.hasWarnings());
+
+  Entity exactEntity = entt::null;
+  Entity extraEntity = entt::null;
+  Registry& registry = document.registry();
+  for (auto view = registry.view<components::RenderingInstanceComponent>();
+       const Entity entity : view) {
+    const auto& instance = view.get<components::RenderingInstanceComponent>(entity);
+    const auto* clipPaths =
+        instance.styleHandle(registry).try_get<components::ComputedClipPathsComponent>();
+    if (clipPaths == nullptr) {
+      continue;
+    }
+    if (clipPaths->clipPaths.size() == kMaximumClipShapes) {
+      exactEntity = entity;
+    } else if (clipPaths->clipPaths.size() == 1u) {
+      extraEntity = entity;
+    }
+  }
+  ASSERT_TRUE(exactEntity != entt::null);
+  ASSERT_TRUE(extraEntity != entt::null);
+
+  EXPECT_CALL(renderer, pushClip(_))
+      .WillOnce([=](const ResolvedClip& clip) {
+        EXPECT_THAT(clip.clipPaths, SizeIs(kMaximumClipShapes));
+      })
+      .WillOnce([](const ResolvedClip& clip) {
+        ASSERT_THAT(clip.clipPaths, SizeIs(1));
+        EXPECT_TRUE(clip.clipPaths.front().path.empty());
+      });
+
+  const RenderViewport viewport{.size = Vector2d(1.0, 1.0), .devicePixelRatio = 1.0};
+  driver.drawEntityRangeIntoCurrentFrame(registry, exactEntity, exactEntity, viewport,
+                                         Transform2d());
+  driver.drawEntityRangeIntoCurrentFrame(registry, extraEntity, extraEntity, viewport,
+                                         Transform2d());
+}
+
+TEST_F(RendererDriverTest, RepeatedOverCapClipStopsPreflightAfterFirstRejection) {
+  constexpr std::size_t kMaximumClipShapes =
+      RendererTextMaterializationBudget::kMaximumUniqueOutlines;
+  std::string svg = R"svg(<defs><clipPath id="over">)svg";
+  for (std::size_t i = 0; i < kMaximumClipShapes + 1u; ++i) {
+    svg += R"svg(<path d="M0 0L1 1"/>)svg";
+  }
+  svg += R"svg(</clipPath></defs>
+              <rect width="1" height="1" clip-path="url(#over)"/>
+              <rect width="1" height="1" clip-path="url(#over)"/>)svg";
+  SVGDocument document = makeDocument(svg, Vector2i(1, 1));
+  RendererDriver::SecurityStats stats;
+  RendererDriver boundedDriver(renderer, /*verbose=*/false, &stats);
+
+  EXPECT_CALL(renderer, pushClip(_)).Times(2).WillRepeatedly([](const ResolvedClip& clip) {
+    ASSERT_THAT(clip.clipPaths, SizeIs(1));
+    EXPECT_TRUE(clip.clipPaths.front().path.empty());
+  });
+
+  boundedDriver.draw(document);
+
+  EXPECT_TRUE(stats.clipGeometryCopyRejected);
+  EXPECT_EQ(stats.clipGeometryPathsPreflighted, kMaximumClipShapes + 1u);
 }
 
 TEST_F(RendererDriverTest, EmitsTextDrawCallsForSolidFill) {

@@ -57,6 +57,13 @@ donner_cc_library(
     ],
 )
 
+donner_cc_library(
+    name = "geode_resource_budget",
+    hdrs = ["GeodeResourceBudget.h"],
+    visibility = ["//donner/svg/renderer:__subpackages__"],
+    deps = ["//donner/svg/components"],
+)
+
 # Header-only ECS component for the M2 Geode path-encode cache. See
 # design doc 0030 §Milestone 2.
 donner_cc_library(
@@ -65,6 +72,7 @@ donner_cc_library(
     visibility = ["//donner/svg/renderer:__subpackages__"],
     deps = [
         ":geode_path_encoder",
+        ":geode_resource_budget",
         "//donner/base",
     ],
 )
@@ -135,6 +143,7 @@ donner_cc_library(
         # `GeodeDevice::AllocateBufferId`, which is defined out of line, so
         # this is a link dependency and not just an include.
         ":geode_device",
+        ":geode_resource_budget",
         ":geode_wgpu_util",
         "//third_party/webgpu-cpp:webgpu_cpp",
     ],
@@ -664,6 +673,8 @@ donner_cc_test(
         ":geo_encoder",
         ":geode_device",
         ":geode_gpu_wait",
+        ":geode_path_cache_component",
+        ":geode_resource_budget",
         ":geode_wgpu_util",
         "//donner/base",
         "//donner/base:gtest_timeout_main",

@@ -6,6 +6,8 @@
 #include <utility>
 #include <vector>
 
+#include "donner/base/fonts/CffOutlineComplexity.h"
+
 namespace donner::fonts {
 
 namespace {
@@ -452,6 +454,53 @@ std::optional<std::vector<GlyphComplexity>> ValidateGlyphOutlines(std::span<cons
   return complexities;
 }
 
+struct CffComplexityIndex {
+  std::unique_ptr<SfntFont::GlyphOutlineComplexity[]> glyphs;
+  std::size_t count = 0;
+};
+
+std::optional<CffComplexityIndex> BuildCffComplexityIndex(const SfntFont& font,
+                                                          std::span<const uint8_t> data,
+                                                          std::span<const uint8_t> cff, bool isCff2,
+                                                          const SfntValidationOptions& options,
+                                                          SfntValidationMetrics* metrics) {
+  const auto maxp = font.findTable(data, "maxp");
+  if (!maxp.has_value() || maxp->size() < 6 || (isCff2 && font.hasTable("fvar"))) {
+    return std::nullopt;
+  }
+  const std::size_t expectedGlyphs = ReadBe16(maxp->data() + 4);
+  const CffOutlineValidationResult validated =
+      ValidateCffOutlineComplexities(cff, isCff2, expectedGlyphs, options.maximumCffValidationWork);
+  if (metrics) {
+    metrics->cffValidationWork = validated.work;
+    metrics->cffWorkLimitExceeded =
+        validated.status == CffOutlineValidationStatus::WorkLimitExceeded;
+  }
+  if (validated.status != CffOutlineValidationStatus::Complete ||
+      validated.glyphs.size() != expectedGlyphs) {
+    return std::nullopt;
+  }
+
+  CffComplexityIndex index;
+  index.count = expectedGlyphs;
+  if (index.count != 0) {
+    index.glyphs = std::make_unique<SfntFont::GlyphOutlineComplexity[]>(index.count);
+    for (std::size_t glyph = 0; glyph < index.count; ++glyph) {
+      index.glyphs[glyph] = {
+          .maximumVertices = validated.glyphs[glyph].maximumVertices,
+          .work = validated.glyphs[glyph].work,
+      };
+    }
+  }
+  return index;
+}
+
+void ResetValidationMetrics(SfntValidationMetrics* metrics) {
+  if (metrics) {
+    *metrics = {};
+  }
+}
+
 }  // namespace
 
 uint32_t SfntTag(std::string_view tag) {
@@ -469,7 +518,10 @@ SfntFont::~SfntFont() = default;
 SfntFont::SfntFont(SfntFont&&) noexcept = default;
 SfntFont& SfntFont::operator=(SfntFont&&) noexcept = default;
 
-std::optional<SfntFont> SfntFont::Validate(std::span<const uint8_t> data) {
+std::optional<SfntFont> SfntFont::Validate(std::span<const uint8_t> data,
+                                           const SfntValidationOptions& options,
+                                           SfntValidationMetrics* metrics) {
+  ResetValidationMetrics(metrics);
   std::optional<ParsedTableDirectory> directory = ParseTableDirectory(data);
   if (!directory.has_value()) {
     return std::nullopt;
@@ -479,7 +531,20 @@ std::optional<SfntFont> SfntFont::Validate(std::span<const uint8_t> data) {
   font.numTables_ = directory->count;
   font.tables_ = std::move(directory->tables);
   const auto glyf = font.findTable(data, "glyf");
+  const auto cff1 = font.findTable(data, "CFF ");
+  const auto cff2 = font.findTable(data, "CFF2");
+  const std::size_t outlineTableCount = static_cast<std::size_t>(glyf.has_value()) +
+                                        static_cast<std::size_t>(cff1.has_value()) +
+                                        static_cast<std::size_t>(cff2.has_value());
+  if (outlineTableCount != 1) {
+    return font;
+  }
   if (!glyf.has_value()) {
+    if (auto cffIndex = BuildCffComplexityIndex(font, data, cff2.has_value() ? *cff2 : *cff1,
+                                                cff2.has_value(), options, metrics)) {
+      font.numGlyphs_ = cffIndex->count;
+      font.glyphComplexities_ = std::move(cffIndex->glyphs);
+    }
     return font;
   }
 

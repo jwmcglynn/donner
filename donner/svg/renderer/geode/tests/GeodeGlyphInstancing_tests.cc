@@ -214,8 +214,8 @@ TEST_F(GeodeGlyphInstancingTest, OverlappingTextElementsCompositeInPaintOrder) {
 }
 
 /// Residency is budgeted. Under a budget smaller than the working set the
-/// oldest unused entries are dropped, the dropped glyphs are re-uploaded when
-/// they come back, and the text keeps rendering identically throughout.
+/// oldest unused entries are dropped, misses that cannot be admitted use
+/// frame-scoped geometry, and the text keeps rendering identically throughout.
 TEST_F(GeodeGlyphInstancingTest, EvictionUnderPressureKeepsRenderingCorrect) {
   SVGDocument document = parse(R"svg(
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200"
@@ -237,8 +237,8 @@ TEST_F(GeodeGlyphInstancingTest, EvictionUnderPressureKeepsRenderingCorrect) {
   const Frame squeezed = render(renderer, document);
   EXPECT_GT(squeezed.counters.glyphResidencyEvictions, 0u)
       << "A budget below the working set must drop entries.";
-  EXPECT_GT(squeezed.counters.glyphResidencyUploads, 0u)
-      << "Glyphs dropped by the trim must be re-uploaded when they are drawn again.";
+  EXPECT_LE(renderer.residentGlyphCountForTesting(document), 2u)
+      << "The current frame must not repopulate the cache past its admission limit.";
   EXPECT_EQ(nonTransparentPixels(squeezed.bitmap), covered)
       << "Eviction must not change what the frame draws.";
 
@@ -247,6 +247,140 @@ TEST_F(GeodeGlyphInstancingTest, EvictionUnderPressureKeepsRenderingCorrect) {
   renderer.setGlyphResidencyBudgetForTesting(/*maxEntries=*/1024, /*maxEncodedBytes=*/1u << 30);
   const Frame restored = render(renderer, document);
   EXPECT_EQ(nonTransparentPixels(restored.bitmap), covered);
+}
+
+TEST_F(GeodeGlyphInstancingTest, FirstFrameAdmissionHonorsResidencyEntryBudget) {
+  SVGDocument document = parse(R"svg(
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200"
+           font-family="Noto Sans" font-size="24">
+        <text x="10" y="60" fill="black">abcdefghij</text>
+      </svg>)svg");
+
+  RendererGeode renderer(sharedDevice());
+  constexpr size_t kMaximumEntries = 2u;
+  renderer.setGlyphResidencyBudgetForTesting(kMaximumEntries,
+                                             /*maxEncodedBytes=*/1u << 30);
+
+  const Frame frame = render(renderer, document);
+  ASSERT_GT(nonTransparentPixels(frame.bitmap), 0u) << "Text did not render at all.";
+  EXPECT_LE(renderer.residentGlyphCountForTesting(document), kMaximumEntries)
+      << "A single frame must not retain more glyph entries than the configured admission cap.";
+}
+
+TEST_F(GeodeGlyphInstancingTest, MaterializationBudgetRejectsBeforeSecondOutlineDecode) {
+  SVGDocument document = parse(R"svg(
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200"
+           font-family="Noto Sans" font-size="48">
+        <text x="10" y="80" fill="black">ab</text>
+      </svg>)svg");
+
+  RendererGeode renderer(sharedDevice());
+  renderer.setTextMaterializationBudgetForTesting(
+      {.uniqueOutlines = 1u,
+       .commands = RendererTextMaterializationBudget::kMaximumCommands,
+       .points = RendererTextMaterializationBudget::kMaximumPoints,
+       .bytes = RendererTextMaterializationBudget::kMaximumBytes,
+       .decodeWork = RendererTextMaterializationBudget::kMaximumDecodeWork},
+      /*maximumGlyphOccurrences=*/2u);
+
+  const Frame frame = render(renderer, document);
+  const RendererResourceStats stats = renderer.resourceStats();
+  EXPECT_TRUE(stats.textMaterializationBudgetSupported);
+  EXPECT_EQ(stats.textUniqueOutlines, 1u);
+  EXPECT_EQ(stats.textGlyphOccurrences, 2u);
+  EXPECT_TRUE(stats.textMaterializationBudgetRejected);
+  EXPECT_EQ(frame.counters.glyphResidencyUploads, 1u)
+      << "The cap+1 glyph must be rejected before its outline reaches the cache miss builder.";
+  EXPECT_EQ(renderer.residentGlyphCountForTesting(document), 1u);
+}
+
+TEST_F(GeodeGlyphInstancingTest, MaterializationBudgetIsSharedAcrossOffscreenRenderers) {
+  SVGDocument firstDocument = parse(R"svg(
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200"
+           font-family="Noto Sans" font-size="48">
+        <text x="10" y="80" fill="black">a</text>
+      </svg>)svg");
+  SVGDocument secondDocument = parse(R"svg(
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200"
+           font-family="Noto Sans" font-size="48">
+        <text x="10" y="80" fill="black">b</text>
+      </svg>)svg");
+
+  RendererGeode renderer(sharedDevice());
+  renderer.setTextMaterializationBudgetForTesting(
+      {.uniqueOutlines = 1u,
+       .commands = RendererTextMaterializationBudget::kMaximumCommands,
+       .points = RendererTextMaterializationBudget::kMaximumPoints,
+       .bytes = RendererTextMaterializationBudget::kMaximumBytes,
+       .decodeWork = RendererTextMaterializationBudget::kMaximumDecodeWork},
+      /*maximumGlyphOccurrences=*/2u);
+  std::unique_ptr<RendererInterface> offscreen = renderer.createOffscreenInstance();
+  ASSERT_NE(offscreen, nullptr);
+
+  const Frame first = render(renderer, firstDocument);
+  ASSERT_GT(nonTransparentPixels(first.bitmap), 0u);
+  offscreen->draw(secondDocument);
+
+  const RendererResourceStats stats = renderer.resourceStats();
+  EXPECT_EQ(stats.textUniqueOutlines, 1u);
+  EXPECT_EQ(stats.textGlyphOccurrences, 2u);
+  EXPECT_TRUE(stats.textMaterializationBudgetRejected);
+  EXPECT_EQ(renderer.residentGlyphCountForTesting(firstDocument), 1u);
+  EXPECT_EQ(renderer.residentGlyphCountForTesting(secondDocument), 0u)
+      << "The offscreen cap+1 miss must not decode or populate its document cache.";
+}
+
+TEST_F(GeodeGlyphInstancingTest, ResidentGlyphHitsStillRequireGeometrySubmissionAdmission) {
+  SVGDocument document = parse(R"svg(
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200"
+           font-family="Noto Sans" font-size="48">
+        <text x="10" y="80" fill="black">a</text>
+      </svg>)svg");
+
+  RendererGeode renderer(sharedDevice());
+  const Frame first = render(renderer, document);
+  ASSERT_GT(nonTransparentPixels(first.bitmap), 0u);
+  ASSERT_EQ(renderer.residentGlyphCountForTesting(document), 1u);
+
+  renderer.setGeometryBudgetForTesting(/*maximumDraws=*/0u, /*maximumItems=*/1u << 20,
+                                       /*maximumFrameBytes=*/64u << 20,
+                                       /*maximumCacheBytes=*/64u << 20,
+                                       /*maximumResidentBytes=*/64u << 20);
+  const Frame rejected = render(renderer, document);
+  EXPECT_EQ(rejected.counters.glyphResidencyHits, 1u)
+      << "The second frame must exercise the resident-cache hit path.";
+  EXPECT_TRUE(renderer.resourceStats().geometryBudgetRejected);
+  EXPECT_EQ(nonTransparentPixels(rejected.bitmap), 0u)
+      << "A resident hit must not bypass a rejected geometry submission.";
+}
+
+TEST_F(GeodeGlyphInstancingTest, SceneBatchChargesEachLogicalGlyphExactlyOnce) {
+  SVGDocument document = parse(R"svg(
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200"
+           font-family="Noto Sans" font-size="48">
+        <text x="10" y="80" fill="black">eeee</text>
+      </svg>)svg");
+
+  RendererGeode renderer(sharedDevice());
+  renderer.setGeometryBudgetForTesting(/*maximumDraws=*/4u, /*maximumItems=*/1u << 20,
+                                       /*maximumFrameBytes=*/64u << 20,
+                                       /*maximumCacheBytes=*/64u << 20,
+                                       /*maximumResidentBytes=*/64u << 20);
+  const Frame exact = render(renderer, document);
+  ASSERT_GT(nonTransparentPixels(exact.bitmap), 0u);
+  EXPECT_EQ(renderer.resourceStats().geometryDraws, 4u);
+  EXPECT_FALSE(renderer.resourceStats().geometryBudgetRejected)
+      << "The final batch draw must consume the four append-time reservations, not charge again.";
+
+  renderer.setGeometryBudgetForTesting(/*maximumDraws=*/3u, /*maximumItems=*/1u << 20,
+                                       /*maximumFrameBytes=*/64u << 20,
+                                       /*maximumCacheBytes=*/64u << 20,
+                                       /*maximumResidentBytes=*/64u << 20);
+  const Frame capPlusOne = render(renderer, document);
+  EXPECT_EQ(renderer.resourceStats().geometryDraws, 3u);
+  EXPECT_TRUE(renderer.resourceStats().geometryBudgetRejected);
+  EXPECT_GT(nonTransparentPixels(capPlusOne.bitmap), 0u)
+      << "Accepted glyphs must remain drawable when the cap+1 occurrence is rejected.";
 }
 
 /// The cache key carries every parameter that changes the outline. A font-size

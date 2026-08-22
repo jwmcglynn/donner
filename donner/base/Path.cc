@@ -144,8 +144,11 @@ constexpr double kPathLengthTolerance = 0.001;
 
 class GeometryQueryWorkBudget {
 public:
+  explicit GeometryQueryWorkBudget(std::size_t maximumWork = Path::kMaximumGeometryQueryWork)
+      : maximumWork_(std::min(maximumWork, Path::kMaximumGeometryQueryWork)) {}
+
   bool consume() {
-    if (consumed_ >= Path::kMaximumGeometryQueryWork) {
+    if (consumed_ >= maximumWork_) {
       return false;
     }
     ++consumed_;
@@ -155,6 +158,7 @@ public:
   std::size_t consumed() const { return consumed_; }
 
 private:
+  std::size_t maximumWork_ = 0;
   std::size_t consumed_ = 0;
 };
 
@@ -484,8 +488,12 @@ double Path::pathLength() const {
 }
 
 Path::MeasuredPath Path::measure() const {
+  return measure(kMaximumGeometryQueryWork);
+}
+
+Path::MeasuredPath Path::measure(std::size_t maximumWorkUnits) const {
   MeasuredPath result;
-  GeometryQueryWorkBudget workBudget;
+  GeometryQueryWorkBudget workBudget(maximumWorkUnits);
 
   if (!measurementBaseRetainedBytes().has_value()) {
     InvalidateMeasurement(result.valid_, result.totalLength_, result.segments_, result.arcSamples_);

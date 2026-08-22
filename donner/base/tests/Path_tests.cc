@@ -681,6 +681,25 @@ TEST(Path, RecursiveGeometryQueriesFailClosedAtAggregateWorkLimit) {
   EXPECT_FALSE(path.isOnPath({2000.0, 2000.0}, 0.001));
 }
 
+TEST(Path, CallerBoundedMeasurementPreservesResultsAndFailsAtOneUnitUnder) {
+  const Path path =
+      PathBuilder().moveTo({0.0, 0.0}).curveTo({0.0, 1.0}, {1.0, 0.0}, {1.0, 1.0}).build();
+  const Path::MeasuredPath full = path.measure();
+  ASSERT_TRUE(full.valid());
+  ASSERT_GT(full.measurementWorkUnits(), 1u);
+
+  const Path::MeasuredPath exact = path.measure(full.measurementWorkUnits());
+  EXPECT_TRUE(exact.valid());
+  EXPECT_EQ(exact.measurementWorkUnits(), full.measurementWorkUnits());
+  EXPECT_DOUBLE_EQ(exact.pathLength(), full.pathLength());
+
+  const Path::MeasuredPath under = path.measure(full.measurementWorkUnits() - 1u);
+  EXPECT_FALSE(under.valid());
+  EXPECT_EQ(under.measurementWorkUnits(), full.measurementWorkUnits() - 1u);
+  EXPECT_EQ(under.segmentCount(), 0u);
+  EXPECT_TRUE(std::isinf(under.pathLength()));
+}
+
 TEST(Path, RecursiveSubdivisionDepthLimitsBoundWork) {
   const Path path =
       PathBuilder().moveTo({0.0, 0.0}).curveTo({1e100, 1e100}, {-1e100, 1e100}, {0.0, 0.0}).build();

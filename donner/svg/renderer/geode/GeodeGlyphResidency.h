@@ -21,8 +21,9 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
-#include <deque>
+#include <limits>
 #include <memory>
+#include <optional>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -144,6 +145,8 @@ struct GeodeGlyphResidentEntry {
   /// Approximate CPU footprint of the encode, used as the residence budget's
   /// unit. Slab capacity is not usable here: the slab reports whole chunks.
   uint64_t encodedBytes = 0;
+  /// Total retained CPU bytes for the outline and encode.
+  uint64_t retainedBytes = 0;
 };
 
 /**
@@ -166,7 +169,9 @@ struct GeodeGlyphResidentEntry {
 class GeodeGlyphCache {
 public:
   /// Create an empty cache bound to `deviceId`.
-  explicit GeodeGlyphCache(uint64_t deviceId) : owningDeviceId_(deviceId) {}
+  explicit GeodeGlyphCache(uint64_t deviceId,
+                           std::shared_ptr<GeodeDocumentGeometryBudget> budget = nullptr)
+      : owningDeviceId_(deviceId), budget_(std::move(budget)) {}
 
   GeodeGlyphCache(const GeodeGlyphCache&) = delete;
   GeodeGlyphCache& operator=(const GeodeGlyphCache&) = delete;
@@ -185,21 +190,67 @@ public:
   /// The returned address is stable for the entry's lifetime.
   GeodeGlyphResidentEntry* insert(const GlyphGeometryKey& key, Path&& outline,
                                   EncodedPath&& encoded) {
+    if (GeodeGlyphResidentEntry* existing = find(key)) {
+      return existing;
+    }
+    const std::optional<uint64_t> entryBytes = EntryRetainedBytes(outline, encoded);
+    if (!entryBytes.has_value() ||
+        *entryBytes > std::numeric_limits<uint64_t>::max() - retainedBytes_) {
+      return nullptr;
+    }
+    const std::optional<uint64_t> encodedBytes = EncodedBytes(encoded);
+    if (!encodedBytes.has_value() ||
+        *encodedBytes > std::numeric_limits<uint64_t>::max() - encodedBytes_) {
+      return nullptr;
+    }
+    if (budget_ && !budgetReservation_.replace(budget_, retainedBytes_ + *entryBytes)) {
+      return nullptr;
+    }
     // try_emplace, not emplace: emplace constructs the node before it checks
     // for a duplicate key and destroys it on collision, which would hand the
     // caller a pointer into freed storage and leave the byte total crediting an
     // entry that is not in the map.
     auto [it, inserted] = entries_.try_emplace(key);
     if (!inserted) {
+      if (budget_) {
+        (void)budgetReservation_.replace(budget_, retainedBytes_);
+      }
       return it->second.get();
     }
     it->second = std::make_unique<GeodeGlyphResidentEntry>();
     GeodeGlyphResidentEntry* entry = it->second.get();
     entry->outline = std::move(outline);
     entry->encoded = std::move(encoded);
-    entry->encodedBytes = EncodedBytes(entry->encoded);
+    entry->encodedBytes = *encodedBytes;
+    entry->retainedBytes = *entryBytes;
     encodedBytes_ += entry->encodedBytes;
+    retainedBytes_ += entry->retainedBytes;
     return entry;
+  }
+
+  /// Insert through the per-cache entry/byte envelope after evicting entries
+  /// old enough to be safe. The family reservation in @ref insert remains
+  /// the aggregate cross-document admission gate.
+  GeodeGlyphResidentEntry* insertWithinBudget(const GlyphGeometryKey& key, Path&& outline,
+                                              EncodedPath&& encoded, uint64_t oldestOpenFrame,
+                                              size_t maxEntries, uint64_t maxRetainedBytes,
+                                              size_t* evictedOut = nullptr) {
+    if (GeodeGlyphResidentEntry* existing = find(key)) {
+      return existing;
+    }
+    const std::optional<uint64_t> entryBytes = EntryRetainedBytes(outline, encoded);
+    if (maxEntries == 0u || !entryBytes.has_value() || *entryBytes > maxRetainedBytes) {
+      return nullptr;
+    }
+    const size_t evicted =
+        evictToBudget(oldestOpenFrame, maxEntries - 1u, maxRetainedBytes - *entryBytes);
+    if (evictedOut != nullptr) {
+      *evictedOut += evicted;
+    }
+    if (entries_.size() >= maxEntries || retainedBytes_ > maxRetainedBytes - *entryBytes) {
+      return nullptr;
+    }
+    return insert(key, std::move(outline), std::move(encoded));
   }
 
   /// Number of live entries.
@@ -208,17 +259,20 @@ public:
   /// Summed \ref GeodeGlyphResidentEntry::encodedBytes over live entries.
   uint64_t encodedBytes() const { return encodedBytes_; }
 
+  /// Total CPU bytes retained by cached outlines and encodes.
+  uint64_t retainedBytes() const { return retainedBytes_; }
+
   /// Trim to budget at most once per frame. The frame-index guard makes the
   /// call idempotent no matter how many times a frame touches the cache, so
   /// the caller can put it on the accessor and cover every draw entry point.
   /// Returns the number of entries dropped.
   size_t beginFrame(uint64_t frameIndex, uint64_t oldestOpenFrame, size_t maxEntries,
-                    uint64_t maxEncodedBytes) {
+                    uint64_t maxRetainedBytes) {
     if (frameIndex == lastEvictedFrame_) {
       return 0;
     }
     lastEvictedFrame_ = frameIndex;
-    return evictToBudget(oldestOpenFrame, maxEntries, maxEncodedBytes);
+    return evictToBudget(oldestOpenFrame, maxEntries, maxRetainedBytes);
   }
 
   /// Drop entries until the cache fits the budget, oldest-unused first.
@@ -229,8 +283,8 @@ public:
   /// later allocation to overwrite. `oldestOpenFrame` is device-scoped, so an
   /// offscreen pass nested inside an outer frame cannot free the outer frame's
   /// geometry out from under it. Returns the number of entries dropped.
-  size_t evictToBudget(uint64_t oldestOpenFrame, size_t maxEntries, uint64_t maxEncodedBytes) {
-    if (entries_.size() <= maxEntries && encodedBytes_ <= maxEncodedBytes) {
+  size_t evictToBudget(uint64_t oldestOpenFrame, size_t maxEntries, uint64_t maxRetainedBytes) {
+    if (entries_.size() <= maxEntries && retainedBytes_ <= maxRetainedBytes) {
       return 0;
     }
 
@@ -250,7 +304,7 @@ public:
 
     size_t evicted = 0;
     for (const auto& [unusedFrame, keyPtr] : candidates) {
-      if (entries_.size() <= maxEntries && encodedBytes_ <= maxEncodedBytes) {
+      if (entries_.size() <= maxEntries && retainedBytes_ <= maxRetainedBytes) {
         break;
       }
       auto it = entries_.find(*keyPtr);
@@ -258,6 +312,10 @@ public:
         continue;
       }
       encodedBytes_ -= it->second->encodedBytes;
+      retainedBytes_ -= it->second->retainedBytes;
+      if (budget_) {
+        (void)budgetReservation_.replace(budget_, retainedBytes_);
+      }
       entries_.erase(it);
       ++evicted;
     }
@@ -268,30 +326,53 @@ public:
   /// in one font needs a few hundred; the cap bounds a document that animates
   /// font-size continuously, where every frame mints new keys.
   static constexpr size_t kDefaultMaxEntries = 1024u;
-  /// Default cap on summed encode bytes.
-  static constexpr uint64_t kDefaultMaxEncodedBytes = 8u << 20;
+  /// Default cap on summed retained outline and encode bytes.
+  static constexpr uint64_t kDefaultMaxRetainedBytes = 8u << 20;
 
 private:
-  /// CPU size of an encode. Used as the budget unit because it tracks the GPU
-  /// residence byte-for-byte (the resident slot uploads exactly these arrays).
-  ///
-  /// The entry's retained `Path outline` is NOT counted: it is CPU-only, it is
-  /// small next to the banded encode, and the entry-count cap already bounds
-  /// how many of them can be live. Add it here if the outline ever grows a
-  /// representation where that stops being true.
-  static uint64_t EncodedBytes(const EncodedPath& encoded) {
-    return encoded.bands.size() * sizeof(EncodedPath::Band) +
-           encoded.curves.size() * 6u * sizeof(float) +
-           encoded.curveIndices.size() * sizeof(uint32_t) +
-           encoded.vBands.size() * sizeof(EncodedPath::Band) +
-           encoded.vCurves.size() * 6u * sizeof(float) +
-           encoded.vCurveIndices.size() * sizeof(uint32_t) +
-           encoded.hBandGrid.size() * sizeof(uint32_t) +
-           encoded.vBandGrid.size() * sizeof(uint32_t);
+  template <typename T>
+  static bool AddCapacityBytes(uint64_t& total, const std::vector<T>& values) {
+    if (values.capacity() > std::numeric_limits<uint64_t>::max() / sizeof(T)) {
+      return false;
+    }
+    const uint64_t bytes = static_cast<uint64_t>(values.capacity()) * sizeof(T);
+    if (bytes > std::numeric_limits<uint64_t>::max() - total) {
+      return false;
+    }
+    total += bytes;
+    return true;
+  }
+
+  /// CPU vector capacities retained by one encoded path.
+  static std::optional<uint64_t> EncodedBytes(const EncodedPath& encoded) {
+    uint64_t total = 0;
+    if (!AddCapacityBytes(total, encoded.bands) || !AddCapacityBytes(total, encoded.curves) ||
+        !AddCapacityBytes(total, encoded.curveIndices) ||
+        !AddCapacityBytes(total, encoded.vBands) || !AddCapacityBytes(total, encoded.vCurves) ||
+        !AddCapacityBytes(total, encoded.vCurveIndices) ||
+        !AddCapacityBytes(total, encoded.hBandGrid) ||
+        !AddCapacityBytes(total, encoded.vBandGrid)) {
+      return std::nullopt;
+    }
+    return total;
+  }
+
+  static std::optional<uint64_t> EntryRetainedBytes(const Path& outline,
+                                                    const EncodedPath& encoded) {
+    const std::optional<std::size_t> outlineBytes = outline.retainedBytes();
+    const std::optional<uint64_t> encodedBytes = EncodedBytes(encoded);
+    if (!outlineBytes.has_value() || !encodedBytes.has_value() ||
+        *outlineBytes > std::numeric_limits<uint64_t>::max() - *encodedBytes) {
+      return std::nullopt;
+    }
+    return static_cast<uint64_t>(*outlineBytes) + *encodedBytes;
   }
 
   uint64_t owningDeviceId_ = 0;
+  std::shared_ptr<GeodeDocumentGeometryBudget> budget_;
+  GeodeGeometryCacheReservation budgetReservation_;
   uint64_t encodedBytes_ = 0;
+  uint64_t retainedBytes_ = 0;
   /// Frame index of the last trim; `~0` = never trimmed. See beginFrame().
   uint64_t lastEvictedFrame_ = ~uint64_t{0};
   std::unordered_map<GlyphGeometryKey, std::unique_ptr<GeodeGlyphResidentEntry>,
@@ -338,13 +419,16 @@ struct GeodeTextInstanceRecordComponent {
     GeodeRecordSlab::Slot slot;
     std::vector<uint8_t> lastRecord;
   };
+  using OccurrenceOwner = std::unique_ptr<Occurrence>;
+  static constexpr uint64_t kOccurrencePayloadBytes = sizeof(Occurrence) + sizeof(InstanceRecord);
+  static constexpr uint64_t kProjectedBytesPerOccurrence =
+      sizeof(OccurrenceOwner) + kOccurrencePayloadBytes;
 
   /// Occurrence slots in paint order. Index is the occurrence's ordinal
-  /// within the element's draw, so it is stable across unchanged frames. A
-  /// deque, not a vector: a pending batch holds pointers into these entries
-  /// while later occurrences are still appending, and a reallocating growth
-  /// would leave the batch writing through dangling pointers at flush.
-  std::deque<Occurrence> occurrences;
+  /// within the element's draw, so it is stable across unchanged frames.
+  /// Owners may move when the vector grows, but each separately allocated
+  /// occurrence stays put while a pending batch holds pointers into it.
+  std::vector<OccurrenceOwner> occurrences;
   /// Slab the slots were allocated from; also keeps that slab alive so a
   /// device change cannot leave the slots pointing at a destroyed slab.
   std::shared_ptr<GeodeRecordSlab> recordSlab;
@@ -353,6 +437,9 @@ struct GeodeTextInstanceRecordComponent {
   /// this as "older than every open frame", which is what an untouched
   /// component is.
   uint64_t lastFrame = 0;
+  std::shared_ptr<GeodeDocumentGeometryBudget> cpuBudget;
+  GeodeGeometryCacheReservation cpuReservation;
+  uint64_t cpuRetainedBytes = 0;
 
   GeodeTextInstanceRecordComponent() = default;
   ~GeodeTextInstanceRecordComponent() { freeRecordSlots(); }
@@ -363,8 +450,16 @@ struct GeodeTextInstanceRecordComponent {
   GeodeTextInstanceRecordComponent(GeodeTextInstanceRecordComponent&& other) noexcept
       : occurrences(std::move(other.occurrences)),
         recordSlab(std::move(other.recordSlab)),
-        lastFrame(other.lastFrame) {
-    other.occurrences.clear();
+        lastFrame(other.lastFrame),
+        cpuBudget(std::move(other.cpuBudget)),
+        cpuReservation(std::move(other.cpuReservation)),
+        cpuRetainedBytes(other.cpuRetainedBytes),
+        cpuOccurrenceBytes(other.cpuOccurrenceBytes),
+        occurrenceReservationPending(other.occurrenceReservationPending) {
+    std::vector<OccurrenceOwner>().swap(other.occurrences);
+    other.cpuRetainedBytes = 0;
+    other.cpuOccurrenceBytes = 0;
+    other.occurrenceReservationPending = false;
   }
 
   GeodeTextInstanceRecordComponent& operator=(GeodeTextInstanceRecordComponent&& other) noexcept {
@@ -378,23 +473,145 @@ struct GeodeTextInstanceRecordComponent {
       occurrences = std::move(other.occurrences);
       recordSlab = std::move(other.recordSlab);
       lastFrame = other.lastFrame;
-      other.occurrences.clear();
+      cpuBudget = std::move(other.cpuBudget);
+      cpuReservation = std::move(other.cpuReservation);
+      cpuRetainedBytes = other.cpuRetainedBytes;
+      cpuOccurrenceBytes = other.cpuOccurrenceBytes;
+      occurrenceReservationPending = other.occurrenceReservationPending;
+      std::vector<OccurrenceOwner>().swap(other.occurrences);
+      other.cpuRetainedBytes = 0;
+      other.cpuOccurrenceBytes = 0;
+      other.occurrenceReservationPending = false;
     }
     return *this;
   }
+
+  bool reserveOccurrence(std::shared_ptr<GeodeDocumentGeometryBudget> budget) {
+    if (occurrenceReservationPending || !budget || (cpuBudget && cpuBudget.get() != budget.get()) ||
+        occurrences.size() == std::numeric_limits<size_t>::max()) {
+      return false;
+    }
+    const size_t nextSize = occurrences.size() + 1u;
+    if (kOccurrencePayloadBytes > std::numeric_limits<uint64_t>::max() - cpuOccurrenceBytes) {
+      return false;
+    }
+    const uint64_t payloadBytes = cpuOccurrenceBytes + kOccurrencePayloadBytes;
+    const uint64_t oldBytes = cpuRetainedBytes;
+
+    if (nextSize > occurrences.capacity()) {
+      size_t targetCapacity = occurrences.capacity() == 0u ? 1u : occurrences.capacity();
+      while (targetCapacity < nextSize) {
+        if (targetCapacity > std::numeric_limits<size_t>::max() / 2u) {
+          return false;
+        }
+        targetCapacity *= 2u;
+      }
+      if (targetCapacity > occurrences.max_size()) {
+        return false;
+      }
+      const uint64_t projectedOwnerBytes =
+          static_cast<uint64_t>(targetCapacity) * sizeof(OccurrenceOwner);
+      if (payloadBytes > std::numeric_limits<uint64_t>::max() - projectedOwnerBytes ||
+          !cpuReservation.replace(budget, projectedOwnerBytes + payloadBytes)) {
+        return false;
+      }
+
+      std::vector<OccurrenceOwner> replacement;
+      replacement.reserve(targetCapacity);
+      const uint64_t actualOwnerBytes =
+          static_cast<uint64_t>(replacement.capacity()) * sizeof(OccurrenceOwner);
+      if (payloadBytes > std::numeric_limits<uint64_t>::max() - actualOwnerBytes ||
+          !cpuReservation.replace(budget, actualOwnerBytes + payloadBytes)) {
+        (void)cpuReservation.replace(budget, oldBytes);
+        return false;
+      }
+      for (OccurrenceOwner& occurrence : occurrences) {
+        replacement.push_back(std::move(occurrence));
+      }
+      occurrences.swap(replacement);
+      cpuRetainedBytes = actualOwnerBytes + payloadBytes;
+    } else {
+      const uint64_t ownerBytes =
+          static_cast<uint64_t>(occurrences.capacity()) * sizeof(OccurrenceOwner);
+      if (payloadBytes > std::numeric_limits<uint64_t>::max() - ownerBytes ||
+          !cpuReservation.replace(budget, ownerBytes + payloadBytes)) {
+        return false;
+      }
+      cpuRetainedBytes = ownerBytes + payloadBytes;
+    }
+    cpuBudget = std::move(budget);
+    occurrenceReservationPending = true;
+    return true;
+  }
+
+  bool appendReservedOccurrence(const GeodeRecordSlab::Slot& slot) {
+    if (!occurrenceReservationPending) {
+      return false;
+    }
+    if (!cpuBudget || occurrences.size() == occurrences.capacity()) {
+      rollbackOccurrence();
+      return false;
+    }
+    auto occurrence = std::make_unique<Occurrence>();
+    occurrence->slot = slot;
+    occurrence->lastRecord.reserve(sizeof(InstanceRecord));
+    const uint64_t lastRecordBytes = occurrence->lastRecord.capacity();
+    if (lastRecordBytes > std::numeric_limits<uint64_t>::max() - sizeof(Occurrence) ||
+        sizeof(Occurrence) + lastRecordBytes >
+            std::numeric_limits<uint64_t>::max() - cpuOccurrenceBytes) {
+      rollbackOccurrence();
+      return false;
+    }
+    const uint64_t occurrenceBytes = sizeof(Occurrence) + lastRecordBytes;
+    const uint64_t ownerBytes =
+        static_cast<uint64_t>(occurrences.capacity()) * sizeof(OccurrenceOwner);
+    if (cpuOccurrenceBytes + occurrenceBytes > std::numeric_limits<uint64_t>::max() - ownerBytes ||
+        !cpuReservation.replace(cpuBudget, ownerBytes + cpuOccurrenceBytes + occurrenceBytes)) {
+      rollbackOccurrence();
+      return false;
+    }
+    occurrences.push_back(std::move(occurrence));
+    cpuOccurrenceBytes += occurrenceBytes;
+    cpuRetainedBytes = ownerBytes + cpuOccurrenceBytes;
+    occurrenceReservationPending = false;
+    return true;
+  }
+
+  void rollbackOccurrence() {
+    if (!cpuBudget) {
+      occurrenceReservationPending = false;
+      return;
+    }
+    const uint64_t ownerBytes =
+        static_cast<uint64_t>(occurrences.capacity()) * sizeof(OccurrenceOwner);
+    cpuRetainedBytes = ownerBytes + cpuOccurrenceBytes;
+    (void)cpuReservation.replace(cpuBudget, cpuRetainedBytes);
+    occurrenceReservationPending = false;
+  }
+
+  uint64_t cpuRetainedBytesForTesting() const { return cpuRetainedBytes; }
 
   /// Return every slot to the slab (deferred to the next frame's merge, like
   /// every other record free) and drop them.
   void freeRecordSlots() {
     if (recordSlab) {
-      for (const Occurrence& occurrence : occurrences) {
-        if (occurrence.slot.buffer) {
-          recordSlab->freeSlot(occurrence.slot);
+      for (const OccurrenceOwner& occurrence : occurrences) {
+        if (occurrence && occurrence->slot.buffer) {
+          recordSlab->freeSlot(occurrence->slot);
         }
       }
     }
-    occurrences.clear();
+    std::vector<OccurrenceOwner>().swap(occurrences);
+    cpuReservation.reset();
+    cpuBudget.reset();
+    cpuRetainedBytes = 0;
+    cpuOccurrenceBytes = 0;
+    occurrenceReservationPending = false;
   }
+
+private:
+  uint64_t cpuOccurrenceBytes = 0;
+  bool occurrenceReservationPending = false;
 };
 
 }  // namespace donner::geode

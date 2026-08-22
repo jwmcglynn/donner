@@ -29,6 +29,14 @@ struct FontManagerTestAccess {
   static bool HasPersistentBudgetState(const Registry& registry) {
     return registry.ctx().contains<FontManager::FontBudgetContext>();
   }
+
+  static size_t NumValidationRejectedSources(const FontManager& manager) {
+    return manager.numValidationRejectedSources();
+  }
+
+  static size_t CompressedFontDecompressionAttempts(const FontManager& manager) {
+    return manager.compressedFontDecompressionAttempts();
+  }
 };
 
 namespace {
@@ -42,6 +50,16 @@ std::vector<uint8_t> readFile(const std::string& path) {
   std::ifstream file(path, std::ios::binary);
   return std::vector<uint8_t>(std::istreambuf_iterator<char>(file),
                               std::istreambuf_iterator<char>());
+}
+
+std::vector<uint8_t> WithCompressedFlavor(std::vector<uint8_t> data, uint32_t flavor) {
+  EXPECT_GE(data.size(), 8u);
+  if (data.size() < 8) return {};
+  data[4] = static_cast<uint8_t>(flavor >> 24);
+  data[5] = static_cast<uint8_t>(flavor >> 16);
+  data[6] = static_cast<uint8_t>(flavor >> 8);
+  data[7] = static_cast<uint8_t>(flavor);
+  return data;
 }
 
 /// A FontFamilyProvider that serves a fixed set of family names (Public Sans bytes for all) and
@@ -178,7 +196,10 @@ TEST(FontManagerTest, EnforcesAggregateLoadedFontBudget) {
   FontManager mgr(registry, RetainedCharge(data));
 
   EXPECT_TRUE(static_cast<bool>(mgr.loadFontData(data)));
+  const size_t validationWorkAfterAdmission = mgr.fontValidationWork();
+  EXPECT_GT(validationWorkAfterAdmission, 0u);
   EXPECT_FALSE(static_cast<bool>(mgr.loadFontData(data)));
+  EXPECT_EQ(mgr.fontValidationWork(), validationWorkAfterAdmission);
 }
 
 TEST(FontManagerTest, AccountsExactFontAndCachedIndexBytes) {
@@ -218,6 +239,107 @@ TEST(FontManagerTest, RejectedFontDoesNotConsumeAggregateBudget) {
   EXPECT_FALSE(static_cast<bool>(mgr.loadFontData(invalid)));
   EXPECT_EQ(mgr.loadedFontBytes(), 0u);
   EXPECT_EQ(mgr.numLoadedFonts(), 0u);
+}
+
+TEST(FontManagerTest, CffValidationWorkIsAggregateAcrossManagersAndAttempts) {
+  Registry registry;
+  const std::vector<uint8_t> cff(embedded::kPublicSansMediumOtf.begin(),
+                                 embedded::kPublicSansMediumOtf.end());
+  FontManager first(registry, FontManager::kDefaultMaximumLoadedFontBytes,
+                    FontManager::kDefaultMaximumLoadedFonts, 1);
+
+  EXPECT_FALSE(static_cast<bool>(first.loadFontData(cff)));
+  EXPECT_EQ(first.fontValidationWork(), 1u);
+
+  FontManager peer(registry, FontManager::kDefaultMaximumLoadedFontBytes,
+                   FontManager::kDefaultMaximumLoadedFonts,
+                   FontManager::kDefaultMaximumFontValidationWork);
+  EXPECT_EQ(peer.fontValidationWork(), 1u);
+  EXPECT_FALSE(static_cast<bool>(peer.loadFontData(cff)));
+  EXPECT_EQ(peer.fontValidationWork(), 1u);
+}
+
+TEST(FontManagerTest, ExhaustedCffWorkBudgetPreservesReplacementAndAllowsTrueType) {
+  Registry registry;
+  const std::vector<uint8_t> trueType = readFile("third_party/roboto/Roboto-Regular.ttf");
+  const std::vector<uint8_t> cff(embedded::kPublicSansMediumOtf.begin(),
+                                 embedded::kPublicSansMediumOtf.end());
+  ASSERT_FALSE(trueType.empty());
+  FontManager manager(registry, FontManager::kDefaultMaximumLoadedFontBytes,
+                      FontManager::kDefaultMaximumLoadedFonts, 0);
+
+  const FontHandle handle = manager.loadFontData(trueType);
+  ASSERT_TRUE(static_cast<bool>(handle));
+  const std::vector<uint8_t> original(manager.fontData(handle).begin(),
+                                      manager.fontData(handle).end());
+  EXPECT_FALSE(FontManagerTestAccess::ReplaceFontData(manager, handle, cff));
+  ASSERT_EQ(manager.fontData(handle).size(), original.size());
+  EXPECT_THAT(manager.fontData(handle), testing::ElementsAreArray(original));
+  EXPECT_EQ(manager.fontValidationWork(), 0u);
+
+  EXPECT_TRUE(FontManagerTestAccess::ReplaceFontData(manager, handle, trueType));
+  EXPECT_TRUE(static_cast<bool>(manager.glyphOutlineComplexity(handle, 1)));
+}
+
+TEST(FontManagerTest, SuccessfulCffLoadChargesMeasuredValidationWork) {
+  Registry registry;
+  FontManager manager(registry);
+  const std::vector<uint8_t> cff(embedded::kPublicSansMediumOtf.begin(),
+                                 embedded::kPublicSansMediumOtf.end());
+
+  ASSERT_TRUE(static_cast<bool>(manager.loadFontData(cff)));
+  EXPECT_GT(manager.fontValidationWork(), 0u);
+}
+
+TEST(FontManagerTest, PermanentlyRejectedFontFaceSourceIsNotRevalidated) {
+  Registry registry;
+  FontManager manager(registry, FontManager::kDefaultMaximumLoadedFontBytes,
+                      FontManager::kDefaultMaximumLoadedFonts, 1);
+  css::FontFace face;
+  face.familyName = RcString("RejectedCff");
+  css::FontFaceSource source;
+  source.kind = css::FontFaceSource::Kind::Data;
+  source.payload = std::make_shared<const std::vector<uint8_t>>(
+      embedded::kPublicSansMediumOtf.begin(), embedded::kPublicSansMediumOtf.end());
+  face.sources.push_back(std::move(source));
+  manager.addFontFace(face);
+
+  const FontHandle first = manager.findFont("RejectedCff");
+  ASSERT_TRUE(static_cast<bool>(first));
+  EXPECT_EQ(manager.fontValidationWork(), 1u);
+  EXPECT_EQ(FontManagerTestAccess::NumValidationRejectedSources(manager), 1u);
+
+  EXPECT_EQ(manager.findFont("RejectedCff"), first);
+  EXPECT_EQ(manager.fontValidationWork(), 1u);
+  EXPECT_EQ(FontManagerTestAccess::NumValidationRejectedSources(manager), 1u);
+}
+
+TEST(FontManagerTest, ExhaustedCffWorkDoesNotGrowRejectionMetadataForDistinctSources) {
+  Registry registry;
+  FontManager manager(registry, FontManager::kDefaultMaximumLoadedFontBytes, 256, 1);
+  FontHandle fallback;
+
+  for (int sourceIndex = 0; sourceIndex < 128; ++sourceIndex) {
+    css::FontFace face;
+    face.familyName = RcString("RejectedCff" + std::to_string(sourceIndex));
+    css::FontFaceSource source;
+    source.kind = css::FontFaceSource::Kind::Data;
+    source.payload = std::make_shared<const std::vector<uint8_t>>(
+        embedded::kPublicSansMediumOtf.begin(), embedded::kPublicSansMediumOtf.end());
+    face.sources.push_back(std::move(source));
+    manager.addFontFace(face);
+
+    const FontHandle resolved = manager.findFont(face.familyName);
+    ASSERT_TRUE(static_cast<bool>(resolved));
+    if (sourceIndex == 0) {
+      fallback = resolved;
+    } else {
+      EXPECT_EQ(resolved, fallback);
+    }
+  }
+
+  EXPECT_EQ(manager.fontValidationWork(), 1u);
+  EXPECT_EQ(FontManagerTestAccess::NumValidationRejectedSources(manager), 1u);
 }
 
 TEST(FontManagerTest, ReplacementUpdatesExactAggregateCharge) {
@@ -373,10 +495,57 @@ TEST(FontManagerTest, LoadWoff1Data) {
   EXPECT_TRUE(static_cast<bool>(handle));
   EXPECT_FALSE(mgr.isTrustedFont(handle));
   EXPECT_FALSE(mgr.fontData(handle).empty());
+  const auto complexity = mgr.glyphOutlineComplexity(handle, 1);
+  ASSERT_TRUE(complexity.has_value());
 
   FontHandle trustedHandle = mgr.loadFontData(woffData, FontDataTrust::Trusted);
   EXPECT_TRUE(static_cast<bool>(trustedHandle));
   EXPECT_TRUE(mgr.isTrustedFont(trustedHandle));
+}
+
+TEST(FontManagerTest, CffWorkExhaustionRejectsMislabeledCompressedFontsBeforeDecompression) {
+  Registry registry;
+  FontManager manager(registry, FontManager::kDefaultMaximumLoadedFontBytes,
+                      FontManager::kDefaultMaximumLoadedFonts, 1);
+  const std::vector<uint8_t> cff(embedded::kPublicSansMediumOtf.begin(),
+                                 embedded::kPublicSansMediumOtf.end());
+  EXPECT_FALSE(static_cast<bool>(manager.loadFontData(cff)));
+  ASSERT_EQ(manager.fontValidationWork(), 1u);
+
+  const std::vector<uint8_t> mislabeledWoff =
+      WithCompressedFlavor(readFile("donner/base/fonts/testdata/valid-001.woff"), 0x00010000);
+  ASSERT_FALSE(mislabeledWoff.empty());
+  EXPECT_FALSE(static_cast<bool>(manager.loadFontData(mislabeledWoff)));
+  EXPECT_FALSE(static_cast<bool>(manager.loadFontData(std::vector<uint8_t>(mislabeledWoff))));
+
+#ifdef DONNER_TEXT_WOFF2_ENABLED
+  const std::vector<uint8_t> mislabeledWoff2 =
+      WithCompressedFlavor(readFile("donner/base/fonts/testdata/valid-001.woff2"), 0x00010000);
+  ASSERT_FALSE(mislabeledWoff2.empty());
+  EXPECT_FALSE(static_cast<bool>(manager.loadFontData(mislabeledWoff2)));
+#endif
+
+  EXPECT_EQ(FontManagerTestAccess::CompressedFontDecompressionAttempts(manager), 0u);
+
+  const std::vector<uint8_t> trueType = readFile("third_party/roboto/Roboto-Regular.ttf");
+  ASSERT_FALSE(trueType.empty());
+  EXPECT_TRUE(static_cast<bool>(manager.loadFontData(trueType)));
+  EXPECT_EQ(FontManagerTestAccess::CompressedFontDecompressionAttempts(manager), 0u);
+}
+
+TEST(FontManagerTest, MislabeledCompressedCffStillLoadsBeforeValidationBudgetExhaustion) {
+  Registry registry;
+  FontManager manager(registry);
+  const std::vector<uint8_t> mislabeledWoff =
+      WithCompressedFlavor(readFile("donner/base/fonts/testdata/valid-001.woff"), 0x00010000);
+  ASSERT_FALSE(mislabeledWoff.empty());
+
+  const FontHandle handle = manager.loadFontData(mislabeledWoff);
+  ASSERT_TRUE(static_cast<bool>(handle));
+  EXPECT_GT(manager.fontValidationWork(), 0u);
+  EXPECT_EQ(FontManagerTestAccess::CompressedFontDecompressionAttempts(manager), 1u);
+  EXPECT_TRUE(FontManagerTestAccess::ReplaceFontData(manager, handle, mislabeledWoff));
+  EXPECT_EQ(FontManagerTestAccess::CompressedFontDecompressionAttempts(manager), 2u);
 }
 
 TEST(FontManagerTest, ReplacementUsesNewTrustAndRejectedReplacementPreservesOldTrust) {

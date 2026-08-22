@@ -503,6 +503,14 @@ RendererImage Renderer::renderElement(SVGElement element, Vector2i sizePx) {
       elementThumbnailRenderer_ != nullptr ? *elementThumbnailRenderer_ : *impl_, element, sizePx);
 }
 
+void Renderer::beginFrameResourceScope() {
+  impl_->beginFrameResourceScope();
+}
+
+void Renderer::endFrameResourceScope() {
+  impl_->endFrameResourceScope();
+}
+
 void Renderer::beginFrame(const RenderViewport& viewport) {
   impl_->beginFrame(viewport);
 }

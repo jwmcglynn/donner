@@ -20,7 +20,9 @@
 #include "donner/svg/renderer/geode/GeodeDevice.h"
 #include "donner/svg/renderer/geode/GeodeGpuWait.h"
 #include "donner/svg/renderer/geode/GeodeImagePipeline.h"
+#include "donner/svg/renderer/geode/GeodePathCacheComponent.h"
 #include "donner/svg/renderer/geode/GeodePipeline.h"
+#include "donner/svg/renderer/geode/GeodeResourceBudget.h"
 #include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
 #include "donner/svg/renderer/tests/RgbaTestMatchers.h"
 #include "donner/svg/resources/ImageResource.h"
@@ -37,6 +39,25 @@ using svg::test::FormatRgba;
 using svg::test::Near;
 using svg::test::Rgba;
 using svg::test::RgbaEq;
+
+class ProbeGeometryAdmission final : public GeometryAdmission {
+public:
+  bool admitGeometry(const EncodedPath& /*encoded*/, std::size_t logicalDraws) override {
+    admittedDraws += logicalDraws;
+    return allow;
+  }
+
+  bool canEncodeGeometry() const override { return encodeOpen; }
+
+  void releaseGeometry(const EncodedPath& /*encoded*/, std::size_t logicalDraws) override {
+    releasedDraws += logicalDraws;
+  }
+
+  bool allow = true;
+  bool encodeOpen = true;
+  std::size_t admittedDraws = 0;
+  std::size_t releasedDraws = 0;
+};
 
 /// Test fixture: shares a process-wide device and creates per-test render
 /// targets + readback buffer.
@@ -193,6 +214,72 @@ TEST_F(GeoEncoderTest, FillRect) {
   EXPECT_THAT(corner, RgbaEq(0, 0, 0, 255)) << "Corner should be clear black";
 }
 
+TEST_F(GeoEncoderTest, RejectedPatternGeometryAllocatesNoPatternGpuState) {
+  const Path path = PathBuilder().addRect(Box2d({16, 16}, {48, 48})).build();
+  const EncodedPath encoded = GeodePathEncoder::encode(path, FillRule::NonZero);
+  ASSERT_FALSE(encoded.empty());
+  ProbeGeometryAdmission admission;
+  admission.allow = false;
+
+  GeoEncoder encoder(*device_, *pipeline_, *gradientPipeline_, *imagePipeline_, target_);
+  encoder.setGeometryAdmission(&admission);
+  GeoEncoder::PatternPaint paint;
+  paint.tile = target_;
+  paint.tileSize = Vector2d(8.0, 8.0);
+  encoder.fillPathPattern(path, FillRule::NonZero, paint, &encoded);
+
+  EXPECT_EQ(admission.admittedDraws, 1u);
+  EXPECT_EQ(encoder.patternGpuPreparationsForTesting(), 0u)
+      << "Pattern sampler/view creation must follow successful geometry admission.";
+  encoder.finish();
+}
+
+TEST_F(GeoEncoderTest, DegenerateResidentRadialDoesNotConsumeGeometryAdmission) {
+  const Path path = PathBuilder().addRect(Box2d({16, 16}, {48, 48})).build();
+  const EncodedPath encoded = GeodePathEncoder::encode(path, FillRule::NonZero);
+  ASSERT_FALSE(encoded.empty());
+  ProbeGeometryAdmission admission;
+  RadialGradientParams::Stop stop;
+  RadialGradientParams params;
+  params.radius = 0.0;
+  params.stops = std::span<const RadialGradientParams::Stop>(&stop, 1u);
+  GeodeResidentGradientSlot slot;
+
+  GeoEncoder encoder(*device_, *pipeline_, *gradientPipeline_, *imagePipeline_, target_);
+  encoder.setGeometryAdmission(&admission);
+  encoder.fillPathRadialGradientResident(slot, encoded, params, FillRule::NonZero, 1u);
+  EXPECT_EQ(admission.admittedDraws, 0u);
+  encoder.finish();
+}
+
+TEST_F(GeoEncoderTest, PreparedSceneAdmissionCanBeRefundedBeforeSingletonFallback) {
+  const Path path = PathBuilder().addRect(Box2d({16, 16}, {48, 48})).build();
+  const EncodedPath encoded = GeodePathEncoder::encode(path, FillRule::NonZero);
+  ASSERT_FALSE(encoded.empty());
+  ProbeGeometryAdmission admission;
+
+  auto geometry = std::make_shared<GeodeResidentSlab>(device_->deviceId());
+  auto records = std::make_shared<GeodeRecordSlab>(device_->deviceId());
+  GeodeResidentSlot slot;
+  slot.slab = geometry;
+  slot.recordSlab = records;
+  ASSERT_TRUE(records->allocateSlot(*device_, slot.recordSlot));
+
+  GeoEncoder encoder(*device_, *pipeline_, *gradientPipeline_, *imagePipeline_, target_);
+  encoder.setGeometryAdmission(&admission);
+  GeoEncoder::SceneRecordState recordState;
+  ASSERT_TRUE(encoder.ensureResidentSceneRecord(
+      slot, encoded, GeoEncoder::ScenePaint{css::RGBA(255, 0, 0, 255)}, FillRule::NonZero,
+      Transform2d(), nullptr, nullptr, &recordState));
+  ASSERT_EQ(encoder.pendingSceneAdmissionsForTesting(), 1u);
+  ASSERT_EQ(admission.admittedDraws, 1u);
+
+  encoder.releasePreparedSceneAdmission(encoded);
+  EXPECT_EQ(encoder.pendingSceneAdmissionsForTesting(), 0u);
+  EXPECT_EQ(admission.releasedDraws, 1u);
+  encoder.finish();
+}
+
 TEST_F(GeoEncoderTest, TinyUniformScaleStillRasterizesHalfPixelHalo) {
   const Path path =
       PathBuilder().addRect(Box2d({264062.5, 264062.5}, {735937.5, 735937.5})).build();
@@ -335,6 +422,214 @@ TEST_F(GeoEncoderTest, RecordSlabFreeListSurvivesChunkGrowth) {
     EXPECT_FALSE(live.buffer == reusedA.buffer && live.offset == reusedA.offset);
     EXPECT_FALSE(live.buffer == reusedB.buffer && live.offset == reusedB.offset);
   }
+}
+
+TEST_F(GeoEncoderTest, ResidentSlabRejectsGrowthPastExactDocumentBudget) {
+  auto budget = std::make_shared<GeodeDocumentGeometryBudget>();
+  constexpr uint64_t kInitialBytes = 1u << 20;
+  budget->setLimitsForTesting({.cacheBytes = 64u << 20, .residentBytes = kInitialBytes});
+
+  {
+    GeodeResidentSlab slab(device_->deviceId(), budget);
+    GeodeResidentSlab::Allocation exact;
+    ASSERT_TRUE(slab.allocate(*device_, kInitialBytes, /*alignment=*/256u, exact));
+    EXPECT_EQ(budget->residentBytes(), kInitialBytes);
+
+    GeodeResidentSlab::Allocation capPlusOne;
+    EXPECT_FALSE(slab.allocate(*device_, 1u, /*alignment=*/256u, capPlusOne));
+    EXPECT_EQ(budget->residentBytes(), kInitialBytes)
+        << "A rejected grow must not charge or allocate its next chunk.";
+  }
+
+  EXPECT_EQ(budget->residentBytes(), 0u)
+      << "Destroying the grow-only slab must release its persistent reservation.";
+}
+
+TEST_F(GeoEncoderTest, RecordSlabRejectsGrowthPastExactDocumentBudget) {
+  auto budget = std::make_shared<GeodeDocumentGeometryBudget>();
+  constexpr uint64_t kInitialBytes = 262144u;
+  constexpr std::size_t kInitialSlots = kInitialBytes / sizeof(InstanceRecord);
+  budget->setLimitsForTesting({.cacheBytes = 64u << 20, .residentBytes = kInitialBytes});
+
+  {
+    GeodeRecordSlab slab(device_->deviceId(), budget);
+    GeodeRecordSlab::Slot slot;
+    for (std::size_t i = 0; i < kInitialSlots; ++i) {
+      ASSERT_TRUE(slab.allocateSlot(*device_, slot)) << "slot " << i;
+    }
+    EXPECT_EQ(budget->residentBytes(), kInitialBytes);
+    EXPECT_FALSE(slab.allocateSlot(*device_, slot));
+    EXPECT_EQ(budget->residentBytes(), kInitialBytes);
+  }
+
+  EXPECT_EQ(budget->residentBytes(), 0u);
+}
+
+TEST(GeodeResourceBudgetTest, CacheReplacementIsAtomicAndReleasesAtOwnerDestruction) {
+  auto budget = std::make_shared<GeodeDocumentGeometryBudget>();
+  budget->setLimitsForTesting({.cacheBytes = 100u, .residentBytes = 100u});
+
+  {
+    GeodeGeometryCacheReservation reservation;
+    ASSERT_TRUE(reservation.replace(budget, 60u));
+    EXPECT_EQ(budget->cacheBytes(), 60u);
+    ASSERT_TRUE(reservation.replace(budget, 100u));
+    EXPECT_EQ(budget->cacheBytes(), 100u);
+    EXPECT_FALSE(reservation.replace(budget, 101u));
+    EXPECT_EQ(reservation.bytes(), 100u);
+    EXPECT_EQ(budget->cacheBytes(), 100u)
+        << "A cap+1 replacement must preserve the previously admitted entry.";
+  }
+
+  EXPECT_EQ(budget->cacheBytes(), 0u);
+}
+
+TEST(GeodeResourceBudgetTest, ResidentSlotMirrorReplacementPreservesExactReservation) {
+  constexpr uint64_t kUniformBytes = 100u;
+  auto budget = std::make_shared<GeodeDocumentGeometryBudget>();
+  budget->setLimitsForTesting({.cacheBytes = kUniformBytes, .residentBytes = 64u << 20});
+  auto slab = std::make_shared<GeodeResidentSlab>(/*deviceId=*/1u, budget);
+
+  {
+    GeodeResidentSlot slot;
+    slot.slab = slab;
+    ASSERT_TRUE(slot.reserveUniformMirror(kUniformBytes));
+    EXPECT_FALSE(slot.reservePaintMirror(1u));
+    EXPECT_EQ(budget->cacheBytes(), kUniformBytes)
+        << "A cap+1 mirror must preserve the previously admitted reservation.";
+  }
+
+  EXPECT_EQ(budget->cacheBytes(), 0u);
+}
+
+TEST(GeodeResourceBudgetTest, ResidentGradientMirrorReleasesAtOwnerDestruction) {
+  constexpr uint64_t kUniformBytes = 672u;
+  auto budget = std::make_shared<GeodeDocumentGeometryBudget>();
+  budget->setLimitsForTesting({.cacheBytes = kUniformBytes, .residentBytes = 64u << 20});
+  auto slab = std::make_shared<GeodeResidentSlab>(/*deviceId=*/1u, budget);
+
+  {
+    GeodeResidentGradientSlot slot;
+    slot.slab = slab;
+    ASSERT_TRUE(slot.reserveUniformMirror(kUniformBytes));
+    EXPECT_FALSE(slot.reserveUniformMirror(kUniformBytes + 1u));
+    EXPECT_EQ(budget->cacheBytes(), kUniformBytes);
+  }
+
+  EXPECT_EQ(budget->cacheBytes(), 0u);
+}
+
+TEST_F(GeoEncoderTest, BatchUniformCpuMirrorStopsAtCapPlusOneAndReleases) {
+  constexpr uint64_t kUniformBytes = 16u;
+  auto budget = std::make_shared<GeodeDocumentGeometryBudget>();
+
+  {
+    GeodeRecordSlab slab(device_->deviceId(), budget);
+    const uint32_t first[4] = {1u, 2u, 3u, 4u};
+    const uint32_t second[4] = {5u, 6u, 7u, 8u};
+    ASSERT_TRUE(slab.acquireBatchUniform(*device_, first, sizeof(first)).buffer);
+    const uint64_t entryBytes = budget->cacheBytes();
+    const uint64_t payloadBytes = slab.batchUniformPayloadBytesForTesting();
+    budget->setLimitsForTesting(
+        {.cacheBytes = entryBytes + payloadBytes - 1u, .residentBytes = kUniformBytes * 2u});
+    EXPECT_FALSE(slab.acquireBatchUniform(*device_, second, sizeof(second)).buffer);
+    EXPECT_EQ(budget->cacheBytes(), entryBytes);
+    EXPECT_EQ(budget->residentBytes(), kUniformBytes)
+        << "The rejected CPU mirror must roll back its tentative GPU reservation.";
+  }
+
+  EXPECT_EQ(budget->cacheBytes(), 0u);
+  EXPECT_EQ(budget->residentBytes(), 0u);
+}
+
+TEST_F(GeoEncoderTest, BatchUniformCpuReservationIncludesVectorSpareCapacity) {
+  constexpr uint64_t kUniformBytes = 16u;
+  auto budget = std::make_shared<GeodeDocumentGeometryBudget>();
+
+  {
+    GeodeRecordSlab slab(device_->deviceId(), budget);
+    for (uint32_t index = 0; index < 5u; ++index) {
+      const uint32_t value[4] = {index, index + 1u, index + 2u, index + 3u};
+      ASSERT_TRUE(slab.acquireBatchUniform(*device_, value, sizeof(value)).buffer);
+    }
+    EXPECT_GE(slab.batchUniformPayloadBytesForTesting(), 5u * kUniformBytes);
+    EXPECT_EQ(budget->cacheBytes(), slab.batchUniformMetadataBytesForTesting() +
+                                        slab.batchUniformPayloadBytesForTesting())
+        << "The family reservation must include spare vector slots, not only live entries.";
+  }
+
+  EXPECT_EQ(budget->cacheBytes(), 0u);
+}
+
+TEST(GeodeResourceBudgetTest, ChargedResidentMirrorsMoveAndReleaseExactlyOnce) {
+  constexpr uint64_t kSolidBytes = 100u;
+  constexpr uint64_t kGradientBytes = 200u;
+  auto budget = std::make_shared<GeodeDocumentGeometryBudget>();
+  auto slab = std::make_shared<GeodeResidentSlab>(/*deviceId=*/1u, budget);
+
+  {
+    GeodeResidentSlot solid;
+    solid.slab = slab;
+    ASSERT_TRUE(solid.reserveUniformMirror(kSolidBytes));
+    GeodeResidentSlot movedSolid(std::move(solid));
+    GeodeResidentSlot assignedSolid;
+    assignedSolid = std::move(movedSolid);
+
+    GeodeResidentGradientSlot gradient;
+    gradient.slab = slab;
+    ASSERT_TRUE(gradient.reserveUniformMirror(kGradientBytes));
+    GeodeResidentGradientSlot movedGradient(std::move(gradient));
+    GeodeResidentGradientSlot assignedGradient;
+    assignedGradient = std::move(movedGradient);
+
+    EXPECT_EQ(budget->cacheBytes(), kSolidBytes + kGradientBytes);
+  }
+
+  EXPECT_EQ(budget->cacheBytes(), 0u);
+}
+
+TEST(GeodeResourceBudgetTest, ResidentRejectionPreservesCpuCacheFallback) {
+  auto budget = std::make_shared<GeodeDocumentGeometryBudget>();
+  budget->setLimitsForTesting({.cacheBytes = 100u, .residentBytes = 0u});
+
+  EXPECT_FALSE(budget->reserveResidentBytes(1u));
+  GeodeGeometryCacheReservation reservation;
+  EXPECT_TRUE(reservation.replace(budget, 100u));
+  EXPECT_EQ(budget->cacheBytes(), 100u);
+  EXPECT_EQ(budget->residentBytes(), 0u);
+}
+
+TEST(GeodeResourceBudgetTest, StrokeCacheReplacementIncludesRetainedDashCapacity) {
+  GeodePathCacheComponent::StrokeSlot previous;
+  previous.strokeKey.dashArray.reserve(1u);
+  const std::optional<std::size_t> previousBytes = previous.retainedBytes();
+  ASSERT_TRUE(previousBytes.has_value());
+
+  GeodePathCacheComponent::StrokeSlot replacement;
+  replacement.strokeKey.dashArray.reserve(previous.strokeKey.dashArray.capacity() + 1u);
+  const std::optional<std::size_t> replacementBytes = replacement.retainedBytes();
+  ASSERT_TRUE(replacementBytes.has_value());
+  ASSERT_GT(*replacementBytes, *previousBytes);
+
+  auto budget = std::make_shared<GeodeDocumentGeometryBudget>();
+  budget->setLimitsForTesting({.cacheBytes = *previousBytes, .residentBytes = 64u << 20});
+  GeodeGeometryCacheReservation reservation;
+  ASSERT_TRUE(reservation.replace(budget, *previousBytes));
+  EXPECT_FALSE(reservation.replace(budget, *replacementBytes));
+  EXPECT_EQ(reservation.bytes(), *previousBytes);
+  EXPECT_EQ(budget->cacheBytes(), *previousBytes);
+}
+
+TEST(GeodeResourceBudgetTest, FrameGeometryStopsAtExactAggregateBoundary) {
+  GeodeFrameGeometryBudget budget;
+  budget.setLimitsForTesting({.draws = 2u, .items = 5u, .retainedBytes = 7u});
+
+  ASSERT_TRUE(budget.reserve(/*draws=*/1u, /*items=*/2u, /*retainedBytes=*/3u));
+  ASSERT_TRUE(budget.reserve(/*draws=*/1u, /*items=*/3u, /*retainedBytes=*/4u));
+  EXPECT_FALSE(budget.reserve(/*draws=*/1u, /*items=*/1u, /*retainedBytes=*/1u));
+  EXPECT_EQ(budget.draws(), 2u);
+  EXPECT_EQ(budget.items(), 5u);
+  EXPECT_EQ(budget.retainedBytes(), 7u);
 }
 
 /// The scene-batch bind-group cache lives on the device, which outlives the
@@ -481,8 +776,7 @@ TEST_F(GeoEncoderTest, SceneBatchBindGroupCacheDistinguishesSlabGenerations) {
       const float quad[8] = {8.0f, 8.0f, 24.0f, 8.0f, 24.0f, 24.0f, 8.0f, 24.0f};
       std::memcpy(record.boundingVertices, quad, sizeof(quad));
       device_->queue().writeBuffer(generation.recordSlots[i].buffer,
-                                   generation.recordSlots[i].offset, &record,
-                                   sizeof(record));
+                                   generation.recordSlots[i].offset, &record, sizeof(record));
     }
     return generation;
   };
@@ -548,8 +842,7 @@ TEST_F(GeoEncoderTest, SceneBatchBindGroupCacheDistinguishesSlabGenerations) {
            "bind-group lookup must miss. A hit means the cache matched a dead generation's "
            "entry and this batch drew the previous generation's records and geometry.";
     EXPECT_EQ(repeatBatchCreates, 0u)
-        << "Round " << round
-        << ": repeating the identical batch must reuse the cached bind group.";
+        << "Round " << round << ": repeating the identical batch must reuse the cached bind group.";
   }
 }
 

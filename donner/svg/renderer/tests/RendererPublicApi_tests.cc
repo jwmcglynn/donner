@@ -14,6 +14,7 @@
 #include "donner/svg/SVGTextElement.h"
 #include "donner/svg/SVGUseElement.h"
 #include "donner/svg/renderer/Renderer.h"
+#include "donner/svg/renderer/RendererTinySkia.h"
 #include "donner/svg/renderer/tests/MockRendererInterface.h"
 #include "donner/svg/renderer/tests/RendererTestBackend.h"
 #include "donner/svg/resources/FontManager.h"
@@ -62,6 +63,348 @@ RendererBitmap NormalizeSnapshot(RendererBitmap snapshot) {
   }
 
   return normalized;
+}
+
+TEST(RendererSurfaceBudgetTest, RejectsAggregateBytesAndSurfaceCountWithoutOvershoot) {
+  RendererSurfaceBudget byteBudget;
+  EXPECT_TRUE(byteBudget.reserve(4096, 4096, 4));
+  EXPECT_FALSE(byteBudget.reserve(1, 1));
+  EXPECT_EQ(byteBudget.bytes(), RendererSurfaceBudget::kMaximumBytes);
+  EXPECT_TRUE(byteBudget.rejected());
+
+  RendererSurfaceBudget countBudget;
+  EXPECT_TRUE(countBudget.reserve(1, 1, RendererSurfaceBudget::kMaximumSurfaces));
+  EXPECT_FALSE(countBudget.reserve(1, 1));
+  EXPECT_EQ(countBudget.surfaces(), RendererSurfaceBudget::kMaximumSurfaces);
+  EXPECT_LE(countBudget.bytes(), RendererSurfaceBudget::kMaximumBytes);
+}
+
+TEST(RendererSurfaceBudgetTest, ReleasedSurfacesRestoreActiveCapacity) {
+  RendererSurfaceBudget budget;
+  EXPECT_TRUE(budget.reserve(4096, 4096, 4));
+  EXPECT_EQ(budget.bytes(), RendererSurfaceBudget::kMaximumBytes);
+  EXPECT_EQ(budget.surfaces(), 4u);
+
+  EXPECT_TRUE(budget.release(4096, 4096));
+  EXPECT_EQ(budget.bytes(), RendererSurfaceBudget::kMaximumBytes * 3u / 4u);
+  EXPECT_EQ(budget.surfaces(), 3u);
+
+  EXPECT_TRUE(budget.reserve(4096, 4096));
+  EXPECT_EQ(budget.bytes(), RendererSurfaceBudget::kMaximumBytes);
+  EXPECT_EQ(budget.surfaces(), 4u);
+  EXPECT_FALSE(budget.rejected());
+}
+
+TEST(RendererPublicApiTest, FrameResourceScopeKeepsOffscreenAndRootSurfaceCharges) {
+  std::unique_ptr<RendererInterface> renderer = CreateActiveRendererInstance();
+  ASSERT_NE(renderer, nullptr);
+  std::unique_ptr<RendererInterface> offscreen = renderer->createOffscreenInstance();
+  ASSERT_NE(offscreen, nullptr);
+  const RenderViewport viewport{.size = Vector2d(1.0, 1.0), .devicePixelRatio = 1.0};
+
+  renderer->beginFrameResourceScope();
+  offscreen->beginFrame(viewport);
+  offscreen->endFrame();
+  EXPECT_EQ(renderer->resourceStats().surfaceCount, 1u);
+
+  renderer->beginFrame(viewport);
+  renderer->endFrame();
+  EXPECT_EQ(renderer->resourceStats().surfaceCount, 2u)
+      << "the root pass must not erase an earlier offscreen charge in the same outer frame";
+  renderer->endFrameResourceScope();
+
+  renderer->beginFrame(viewport);
+  renderer->endFrame();
+  EXPECT_EQ(renderer->resourceStats().surfaceCount, 1u)
+      << "the next standalone frame starts a fresh budget epoch";
+}
+
+TEST(RendererDrawBudgetTest, RejectsEveryAggregateDimensionWithoutOvershoot) {
+  RendererDrawBudget budget;
+  EXPECT_TRUE(budget.reserve(
+      {.drawCalls = RendererDrawBudget::kMaximumDrawCalls,
+       .pathCommands = RendererDrawBudget::kMaximumPathCommands,
+       .pathMeasurementWorkUnits = RendererDrawBudget::kMaximumPathMeasurementWorkUnits,
+       .gradientStops = RendererDrawBudget::kMaximumGradientStops,
+       .imageDraws = RendererDrawBudget::kMaximumImageDraws,
+       .imageBytes = RendererDrawBudget::kMaximumImageBytes}));
+  EXPECT_FALSE(budget.reserve({.drawCalls = 1}));
+  EXPECT_TRUE(budget.rejected());
+  EXPECT_EQ(budget.drawCalls(), RendererDrawBudget::kMaximumDrawCalls);
+  EXPECT_EQ(budget.pathCommands(), RendererDrawBudget::kMaximumPathCommands);
+  EXPECT_EQ(budget.pathMeasurementWorkUnits(),
+            RendererDrawBudget::kMaximumPathMeasurementWorkUnits);
+  EXPECT_EQ(budget.gradientStops(), RendererDrawBudget::kMaximumGradientStops);
+  EXPECT_EQ(budget.imageDraws(), RendererDrawBudget::kMaximumImageDraws);
+  EXPECT_EQ(budget.imageBytes(), RendererDrawBudget::kMaximumImageBytes);
+}
+
+TEST(RendererDrawBudgetTest, ReconcilesBoundedPathQueriesAtTheExactAggregateCap) {
+  RendererDrawBudget budget;
+  const std::optional<RendererDrawBudget::PathMeasurementReservation> first =
+      budget.reservePathMeasurement();
+  ASSERT_TRUE(first.has_value());
+  EXPECT_EQ(first->maximumWorkUnits(), RendererDrawBudget::kMaximumPathMeasurementWorkUnits);
+  EXPECT_EQ(budget.pathMeasurementWorkUnits(),
+            RendererDrawBudget::kMaximumPathMeasurementWorkUnits);
+
+  ASSERT_TRUE(budget.reconcilePathMeasurement(
+      *first, RendererDrawBudget::kMaximumPathMeasurementWorkUnits - 1u, /*completed=*/true));
+  EXPECT_EQ(budget.pathMeasurementWorkUnits(),
+            RendererDrawBudget::kMaximumPathMeasurementWorkUnits - 1u);
+  EXPECT_FALSE(budget.rejected());
+
+  const std::optional<RendererDrawBudget::PathMeasurementReservation> last =
+      budget.reservePathMeasurement();
+  ASSERT_TRUE(last.has_value());
+  EXPECT_EQ(last->maximumWorkUnits(), 1u);
+  ASSERT_TRUE(budget.reconcilePathMeasurement(*last, 1u, /*completed=*/true));
+  EXPECT_EQ(budget.pathMeasurementWorkUnits(),
+            RendererDrawBudget::kMaximumPathMeasurementWorkUnits);
+  EXPECT_FALSE(budget.rejected());
+
+  EXPECT_FALSE(budget.reservePathMeasurement().has_value());
+  EXPECT_EQ(budget.pathMeasurementWorkUnits(),
+            RendererDrawBudget::kMaximumPathMeasurementWorkUnits);
+  EXPECT_TRUE(budget.rejected());
+
+  budget.reset();
+  const std::optional<RendererDrawBudget::PathMeasurementReservation> incomplete =
+      budget.reservePathMeasurement();
+  ASSERT_TRUE(incomplete.has_value());
+  EXPECT_FALSE(budget.reconcilePathMeasurement(*incomplete, 5u, /*completed=*/false));
+  EXPECT_EQ(budget.pathMeasurementWorkUnits(), 5u);
+  EXPECT_TRUE(budget.rejected());
+}
+
+#ifdef DONNER_TEXT_ENABLED
+TEST(RendererTinySkiaSecurityTest, TextGlyphCapRejectsNextRenderableGlyphBeforeMaterialization) {
+  SVGDocument limitedDocument = ParseDocument(
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="48" height="20">
+           <text x="2" y="14">A</text><text x="24" y="14">A</text>
+         </svg>)");
+  RendererTinySkia limitedRenderer;
+  limitedRenderer.setTextGlyphBudgetForTesting(1);
+  limitedRenderer.draw(limitedDocument);
+
+  const RendererResourceStats limitedStats = limitedRenderer.resourceStats();
+  EXPECT_EQ(limitedStats.drawCalls, 2u);
+  EXPECT_TRUE(limitedStats.drawBudgetRejected);
+  EXPECT_EQ(limitedRenderer.frameCounters().textGlyphMaterializations, 1u);
+
+  SVGDocument referenceDocument = ParseDocument(
+      R"(<svg xmlns="http://www.w3.org/2000/svg" width="48" height="20">
+           <text x="2" y="14">A</text>
+         </svg>)");
+  RendererTinySkia referenceRenderer;
+  referenceRenderer.setTextGlyphBudgetForTesting(1);
+  referenceRenderer.draw(referenceDocument);
+  EXPECT_EQ(referenceRenderer.frameCounters().textGlyphMaterializations, 1u);
+
+  const RendererBitmap limitedSnapshot = limitedRenderer.takeSnapshot();
+  const RendererBitmap referenceSnapshot = referenceRenderer.takeSnapshot();
+  ASSERT_FALSE(limitedSnapshot.empty());
+  ASSERT_FALSE(referenceSnapshot.empty());
+  EXPECT_EQ(limitedSnapshot.dimensions, referenceSnapshot.dimensions);
+  EXPECT_THAT(limitedSnapshot.pixels, testing::ContainerEq(referenceSnapshot.pixels));
+}
+#endif
+
+void SetStrokePaint(RendererInterface& renderer) {
+  PaintParams paint;
+  paint.fill = PaintServer::None{};
+  paint.stroke = PaintServer::Solid{css::Color(css::RGBA(0, 0, 0, 255))};
+  renderer.setPaint(paint);
+}
+
+TEST(RendererPublicApiTest, TinyDashWorkCountsContoursAndZeroLengthPhaseBeforeRasterizing) {
+  RendererTinySkia renderer;
+  renderer.setDashWorkBudgetForTesting(8);
+  std::unique_ptr<RendererInterface> offscreen = renderer.createOffscreenInstance();
+  ASSERT_NE(offscreen, nullptr);
+  renderer.beginFrame(RenderViewport{.size = Vector2d(16.0, 16.0), .devicePixelRatio = 1.0});
+  offscreen->beginFrame(RenderViewport{.size = Vector2d(16.0, 16.0), .devicePixelRatio = 1.0});
+  SetStrokePaint(renderer);
+  SetStrokePaint(*offscreen);
+  renderer.setTransform(Transform2d::Scale(8.0));
+  offscreen->setTransform(Transform2d::Scale(8.0));
+
+  const Path acceptedPath = PathBuilder()
+                                .moveTo({0.25, 0.5})
+                                .lineTo({0.75, 0.5})
+                                .moveTo({0.25, 1.5})
+                                .lineTo({0.75, 1.5})
+                                .build();
+  const Path rejectedPath = PathBuilder().moveTo({0.25, 1.0}).lineTo({0.75, 1.0}).build();
+  const StrokeParams stroke{.strokeWidth = 0.25, .dashArray = {0.0, 0.0, 0.0, 0.0, 1.0, 1.0}};
+  renderer.drawPath(PathShape{.path = &acceptedPath}, stroke);
+
+  RendererResourceStats stats = renderer.resourceStats();
+  EXPECT_EQ(stats.drawCalls, 1u);
+  EXPECT_FALSE(stats.drawBudgetRejected);
+
+  offscreen->drawPath(PathShape{.path = &rejectedPath}, stroke);
+  stats = renderer.resourceStats();
+  EXPECT_EQ(stats.drawCalls, 2u);
+  EXPECT_TRUE(stats.drawBudgetRejected);
+
+  const RendererBitmap acceptedSnapshot = renderer.takeSnapshot();
+  const RendererBitmap rejectedSnapshot = offscreen->takeSnapshot();
+  ASSERT_FALSE(acceptedSnapshot.empty());
+  ASSERT_FALSE(rejectedSnapshot.empty());
+  EXPECT_THAT(acceptedSnapshot.pixels, testing::Not(testing::Each(0)));
+  EXPECT_THAT(rejectedSnapshot.pixels, testing::Each(0));
+  offscreen->endFrame();
+  renderer.endFrame();
+}
+
+TEST(RendererTinySkiaSecurityTest, PathMeasurementWorkTracksActualAggregateAcrossCurves) {
+  RendererTinySkia renderer;
+  renderer.beginFrame(RenderViewport{.size = Vector2d(2.0, 2.0), .devicePixelRatio = 1.0});
+  SetStrokePaint(renderer);
+
+  const Path maximumWorkPath =
+      PathBuilder().moveTo({0.0, 0.0}).curveTo({0.0, 1.0}, {1.0, 0.0}, {1.0, 1.0}).build();
+  const std::size_t actualWork = maximumWorkPath.measure().measurementWorkUnits();
+  ASSERT_GT(actualWork, 0u);
+  ASSERT_LE(actualWork, RendererDrawBudget::kMaximumPathMeasurementWorkUnits / 2u);
+  const StrokeParams measuredStroke{
+      .strokeWidth = 0.25, .dashArray = {0.5, 0.5}, .pathLength = 1.0};
+  renderer.drawPath(PathShape{.path = &maximumWorkPath}, measuredStroke);
+
+  RendererResourceStats stats = renderer.resourceStats();
+  EXPECT_EQ(stats.pathMeasurementWorkUnits, actualWork);
+  EXPECT_FALSE(stats.drawBudgetRejected);
+
+  renderer.drawPath(PathShape{.path = &maximumWorkPath}, measuredStroke);
+
+  stats = renderer.resourceStats();
+  EXPECT_EQ(stats.pathMeasurementWorkUnits, actualWork * 2u);
+  EXPECT_FALSE(stats.drawBudgetRejected);
+  renderer.endFrame();
+}
+
+TEST(RendererTinySkiaSecurityTest, PathMeasurementQueriesStopAtExactAggregateCapPlusOne) {
+  PathBuilder builder;
+  for (int i = 0; i < 10; ++i) {
+    builder.moveTo({0.0, 0.0}).curveTo({0.0, 1.0}, {1.0, 0.0}, {1.0, 1.0});
+  }
+  for (int i = 0; i < 54; ++i) {
+    builder.lineTo({1.0, 1.0});
+  }
+  const Path exactWorkPath = builder.build();
+  const std::size_t workPerQuery = exactWorkPath.measure().measurementWorkUnits();
+  ASSERT_EQ(workPerQuery, 1024u);
+  ASSERT_EQ(RendererDrawBudget::kMaximumPathMeasurementWorkUnits % workPerQuery, 0u);
+
+  RendererTinySkia renderer;
+  renderer.beginFrame(RenderViewport{.size = Vector2d(2.0, 2.0), .devicePixelRatio = 1.0});
+  SetStrokePaint(renderer);
+  const StrokeParams measuredStroke{
+      .strokeWidth = 0.25, .dashArray = {1000.0, 1000.0}, .pathLength = 1.0};
+  const std::size_t admittedQueries =
+      RendererDrawBudget::kMaximumPathMeasurementWorkUnits / workPerQuery;
+  for (std::size_t i = 0; i < admittedQueries; ++i) {
+    renderer.drawPath(PathShape{.path = &exactWorkPath}, measuredStroke);
+  }
+
+  RendererResourceStats stats = renderer.resourceStats();
+  EXPECT_EQ(stats.pathMeasurementWorkUnits, RendererDrawBudget::kMaximumPathMeasurementWorkUnits);
+  EXPECT_FALSE(stats.drawBudgetRejected);
+
+  renderer.drawPath(PathShape{.path = &exactWorkPath}, measuredStroke);
+  stats = renderer.resourceStats();
+  EXPECT_EQ(stats.pathMeasurementWorkUnits, RendererDrawBudget::kMaximumPathMeasurementWorkUnits);
+  EXPECT_TRUE(stats.drawBudgetRejected);
+  renderer.endFrame();
+}
+
+TEST(RendererTinySkiaSecurityTest, ClipMaskAllocationsStopAtTheSurfaceCountCap) {
+  RendererTinySkia renderer;
+  renderer.beginFrame(RenderViewport{.size = Vector2d(1.0, 1.0), .devicePixelRatio = 1.0});
+
+  ResolvedClip clip;
+  clip.clipRect = Box2d::FromXYWH(0.0, 0.0, 1.0, 1.0);
+  for (std::size_t i = 1; i < RendererSurfaceBudget::kMaximumSurfaces; ++i) {
+    renderer.pushClip(clip);
+    renderer.popClip();
+  }
+
+  RendererResourceStats stats = renderer.resourceStats();
+  EXPECT_EQ(stats.surfaceCount, RendererSurfaceBudget::kMaximumSurfaces);
+  EXPECT_EQ(stats.surfaceBytes, 4u + RendererSurfaceBudget::kMaximumSurfaces - 1u);
+  EXPECT_FALSE(stats.surfaceBudgetRejected);
+
+  renderer.pushClip(clip);
+  renderer.popClip();
+  stats = renderer.resourceStats();
+  EXPECT_EQ(stats.surfaceCount, RendererSurfaceBudget::kMaximumSurfaces);
+  EXPECT_TRUE(stats.surfaceBudgetRejected);
+  renderer.endFrame();
+}
+
+TEST(RendererTinySkiaSecurityTest, NestedClipShapeMasksStopAtTheSurfaceCountCap) {
+  RendererTinySkia renderer;
+  renderer.beginFrame(RenderViewport{.size = Vector2d(1.0, 1.0), .devicePixelRatio = 1.0});
+
+  const Path shapePath =
+      PathBuilder().moveTo({0.0, 0.0}).lineTo({1.0, 0.0}).lineTo({1.0, 1.0}).closePath().build();
+  ResolvedClip clip;
+  clip.clipRect = Box2d::FromXYWH(0.0, 0.0, 1.0, 1.0);
+  clip.clipPaths.reserve(RendererSurfaceBudget::kMaximumSurfaces - 2u);
+  for (std::size_t i = RendererSurfaceBudget::kMaximumSurfaces - 2u; i > 0; --i) {
+    ClipPathShape shape;
+    shape.path = shapePath;
+    shape.layer = static_cast<int>(i);
+    clip.clipPaths.push_back(std::move(shape));
+  }
+
+  renderer.pushClip(clip);
+  RendererResourceStats stats = renderer.resourceStats();
+  EXPECT_EQ(stats.surfaceCount, RendererSurfaceBudget::kMaximumSurfaces);
+  EXPECT_FALSE(stats.surfaceBudgetRejected);
+  renderer.popClip();
+
+  ResolvedClip extraClip;
+  extraClip.clipRect = Box2d::FromXYWH(0.0, 0.0, 1.0, 1.0);
+  renderer.pushClip(extraClip);
+  renderer.popClip();
+  stats = renderer.resourceStats();
+  EXPECT_EQ(stats.surfaceCount, RendererSurfaceBudget::kMaximumSurfaces);
+  EXPECT_TRUE(stats.surfaceBudgetRejected);
+  renderer.endFrame();
+}
+
+TEST(RendererTinySkiaSecurityTest, RetainedClipEpochMasksHaveAFrameSurfaceEnvelope) {
+  constexpr std::size_t kRetainedClipMasks = 8;
+  RendererTinySkia renderer;
+  renderer.setRetainedSpansEnabled(true);
+
+  const auto beginAndCheckEnvelope = [&]() {
+    renderer.beginFrame(RenderViewport{.size = Vector2d(1.0, 1.0), .devicePixelRatio = 1.0});
+    const RendererResourceStats stats = renderer.resourceStats();
+    EXPECT_EQ(stats.surfaceCount, 1u + kRetainedClipMasks);
+    EXPECT_EQ(stats.surfaceBytes, 4u + kRetainedClipMasks);
+    EXPECT_FALSE(stats.surfaceBudgetRejected);
+  };
+
+  beginAndCheckEnvelope();
+  ResolvedClip clip;
+  clip.clipRect = Box2d::FromXYWH(0.0, 0.0, 1.0, 1.0);
+  const std::size_t admittedClipMasks =
+      RendererSurfaceBudget::kMaximumSurfaces - 1u - kRetainedClipMasks;
+  for (std::size_t i = 0; i < admittedClipMasks; ++i) {
+    renderer.pushClip(clip);
+    renderer.popClip();
+  }
+  EXPECT_EQ(renderer.resourceStats().surfaceCount, RendererSurfaceBudget::kMaximumSurfaces);
+  renderer.pushClip(clip);
+  renderer.popClip();
+  EXPECT_TRUE(renderer.resourceStats().surfaceBudgetRejected);
+  renderer.endFrame();
+
+  beginAndCheckEnvelope();
+  renderer.endFrame();
 }
 
 // -- Pixel access and custom matchers --
@@ -539,6 +882,24 @@ TEST(RendererPublicApiTest, RejectedFilterSuppressesItsSubtreeAndRestoresParent)
   ASSERT_FALSE(snapshot.empty());
   EXPECT_THAT(PixelAt(snapshot, 2, 4), IsTransparent());
   EXPECT_THAT(PixelAt(snapshot, 12, 4), IsBlueish());
+}
+
+TEST(RendererPublicApiTest, FacadeRejectsNonFiniteAndOutOfRangeFrameDimensionsBeforeCasting) {
+  Renderer renderer;
+  constexpr double kInfinity = std::numeric_limits<double>::infinity();
+  constexpr double kNaN = std::numeric_limits<double>::quiet_NaN();
+
+  for (const RenderViewport viewport : {
+           RenderViewport{.size = Vector2d(kInfinity, 16.0), .devicePixelRatio = 1.0},
+           RenderViewport{.size = Vector2d(kNaN, 16.0), .devicePixelRatio = 1.0},
+           RenderViewport{.size = Vector2d(1.0e300, 16.0), .devicePixelRatio = 1.0},
+           RenderViewport{.size = Vector2d(16.0, 16.0), .devicePixelRatio = kInfinity},
+       }) {
+    renderer.beginFrame(viewport);
+    renderer.endFrame();
+    EXPECT_EQ(renderer.width(), 0);
+    EXPECT_EQ(renderer.height(), 0);
+  }
 }
 
 TEST(RendererPublicApiTest, PatternTileRejectsUnsafeDimensionsWithoutChangingFrameState) {

@@ -43,6 +43,18 @@ namespace donner::svg::compositor {
 
 namespace {
 
+class ScopedFrameResourceBudget {
+public:
+  explicit ScopedFrameResourceBudget(RendererInterface& renderer) : renderer_(renderer) {
+    renderer_.beginFrameResourceScope();
+  }
+
+  ~ScopedFrameResourceBudget() { renderer_.endFrameResourceScope(); }
+
+private:
+  RendererInterface& renderer_;
+};
+
 bool HasAssignedDescendant(Registry& registry, Entity entity) {
   using TreeComponent = donner::components::TreeComponent;
   std::vector<Entity> stack;
@@ -1164,6 +1176,7 @@ void CompositorController::renderFrame(const RenderViewport& viewport,
 void CompositorController::renderFrameImpl(const RenderViewport& viewport,
                                            const Transform2d& surfaceFromCanvas) {
   ZoneScopedN("Compositor::renderFrame");
+  const ScopedFrameResourceBudget frameResourceBudget(renderer());
   // Any foreground render supersedes the deferred cold-frame warmup. The normal frame path below
   // will populate whatever retained payloads are still missing, with the current viewport and DOM.
   firstFrameWarmupPending_ = false;

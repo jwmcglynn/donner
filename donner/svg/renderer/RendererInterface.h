@@ -1,6 +1,7 @@
 #pragma once
 /// @file
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -120,6 +121,381 @@ struct RendererReadbackStats {
   /// Wall time that wait spent before giving up, in milliseconds. Zero while
   /// \ref timedOutWaitSite is \ref GpuWaitTimeoutSite::None.
   int timedOutWaitMs = 0;
+};
+
+/** Aggregate budget for render targets, layers, masks, clips, and pattern tiles. */
+class RendererSurfaceBudget {
+public:
+  static constexpr std::uint64_t kMaximumBytes = 256ULL * 1024 * 1024;
+  static constexpr std::size_t kMaximumSurfaces = 256;
+
+  struct Limits {
+    std::uint64_t bytes = kMaximumBytes;
+    std::size_t surfaces = kMaximumSurfaces;
+  };
+
+  void reset() {
+    bytes_ = 0;
+    surfaces_ = 0;
+    rejected_ = false;
+  }
+
+  [[nodiscard]] bool reserve(int width, int height, std::size_t surfaceCount = 1,
+                             std::uint64_t bytesPerPixel = 4) {
+    if (rejected_ || width < 0 || height < 0 || bytesPerPixel == 0 ||
+        surfaces_ > limits_.surfaces || surfaceCount > limits_.surfaces - surfaces_) {
+      rejected_ = true;
+      return false;
+    }
+    if (width == 0 || height == 0 || surfaceCount == 0) {
+      return true;
+    }
+
+    const std::uint64_t pixelWidth = static_cast<std::uint64_t>(width);
+    const std::uint64_t pixelHeight = static_cast<std::uint64_t>(height);
+    if (pixelWidth > limits_.bytes / pixelHeight ||
+        pixelWidth * pixelHeight > limits_.bytes / bytesPerPixel ||
+        pixelWidth * pixelHeight * bytesPerPixel > limits_.bytes / surfaceCount) {
+      rejected_ = true;
+      return false;
+    }
+    const std::uint64_t byteCount = pixelWidth * pixelHeight * bytesPerPixel * surfaceCount;
+    if (bytes_ > limits_.bytes || byteCount > limits_.bytes - bytes_) {
+      rejected_ = true;
+      return false;
+    }
+
+    bytes_ += byteCount;
+    surfaces_ += surfaceCount;
+    return true;
+  }
+
+  /// Releases surfaces after their last submitted GPU use, restoring active-capacity accounting.
+  [[nodiscard]] bool release(int width, int height, std::size_t surfaceCount = 1,
+                             std::uint64_t bytesPerPixel = 4) {
+    if (width < 0 || height < 0 || bytesPerPixel == 0) {
+      rejected_ = true;
+      return false;
+    }
+    if (width == 0 || height == 0 || surfaceCount == 0) {
+      return true;
+    }
+
+    const std::uint64_t pixelWidth = static_cast<std::uint64_t>(width);
+    const std::uint64_t pixelHeight = static_cast<std::uint64_t>(height);
+    if (pixelWidth > limits_.bytes / pixelHeight ||
+        pixelWidth * pixelHeight > limits_.bytes / bytesPerPixel ||
+        pixelWidth * pixelHeight * bytesPerPixel > limits_.bytes / surfaceCount) {
+      rejected_ = true;
+      return false;
+    }
+    const std::uint64_t byteCount = pixelWidth * pixelHeight * bytesPerPixel * surfaceCount;
+    if (surfaceCount > surfaces_ || byteCount > bytes_) {
+      rejected_ = true;
+      return false;
+    }
+
+    bytes_ -= byteCount;
+    surfaces_ -= surfaceCount;
+    return true;
+  }
+
+  [[nodiscard]] std::uint64_t bytes() const { return bytes_; }
+  [[nodiscard]] std::size_t surfaces() const { return surfaces_; }
+  [[nodiscard]] bool rejected() const { return rejected_; }
+
+  void setLimitsForTesting(Limits limits) {
+    limits_.bytes = std::min(limits_.bytes, limits.bytes);
+    limits_.surfaces = std::min(limits_.surfaces, limits.surfaces);
+  }
+
+private:
+  Limits limits_;
+  std::uint64_t bytes_ = 0;
+  std::size_t surfaces_ = 0;
+  bool rejected_ = false;
+};
+
+/** Aggregate conversion, rasterization, and upload work shared by a render frame. */
+class RendererDrawBudget {
+public:
+  static constexpr std::size_t kMaximumDrawCalls = 64 * 1024;
+  static constexpr std::size_t kMaximumPathCommands = 256 * 1024;
+  static constexpr std::size_t kMaximumPathMeasurementWorkUnits = Path::kMaximumGeometryQueryWork;
+  static constexpr std::size_t kMaximumGradientStops = 256 * 1024;
+  static constexpr std::size_t kMaximumImageDraws = 128;
+  static constexpr std::uint64_t kMaximumImageBytes = 256ULL * 1024 * 1024;
+
+  struct Cost {
+    std::size_t drawCalls = 0;
+    std::size_t pathCommands = 0;
+    std::size_t pathMeasurementWorkUnits = 0;
+    std::size_t gradientStops = 0;
+    std::size_t imageDraws = 0;
+    std::uint64_t imageBytes = 0;
+  };
+
+  /** Exclusive reservation for one bounded path-measurement query. */
+  class PathMeasurementReservation {
+  public:
+    /// Maximum work the reserved query may consume.
+    [[nodiscard]] std::size_t maximumWorkUnits() const { return maximumWorkUnits_; }
+
+  private:
+    friend class RendererDrawBudget;
+
+    PathMeasurementReservation(std::size_t previousWorkUnits, std::size_t maximumWorkUnits)
+        : previousWorkUnits_(previousWorkUnits), maximumWorkUnits_(maximumWorkUnits) {}
+
+    std::size_t previousWorkUnits_ = 0;
+    std::size_t maximumWorkUnits_ = 0;
+  };
+
+  void reset() {
+    drawCalls_ = 0;
+    pathCommands_ = 0;
+    pathMeasurementWorkUnits_ = 0;
+    gradientStops_ = 0;
+    imageDraws_ = 0;
+    imageBytes_ = 0;
+    pathMeasurementReservationActive_ = false;
+    rejected_ = false;
+  }
+  void reject() { rejected_ = true; }
+  void setGradientStopLimitForTesting(std::size_t maximum) {
+    gradientStopLimit_ = std::min(gradientStopLimit_, maximum);
+  }
+
+  [[nodiscard]] bool reserve(const Cost& cost) {
+    if (rejected_ || pathMeasurementReservationActive_ ||
+        cost.drawCalls > kMaximumDrawCalls - drawCalls_ ||
+        cost.pathCommands > kMaximumPathCommands - pathCommands_ ||
+        cost.pathMeasurementWorkUnits >
+            kMaximumPathMeasurementWorkUnits - pathMeasurementWorkUnits_ ||
+        gradientStops_ > gradientStopLimit_ ||
+        cost.gradientStops > gradientStopLimit_ - gradientStops_ ||
+        cost.imageDraws > kMaximumImageDraws - imageDraws_ ||
+        cost.imageBytes > kMaximumImageBytes - imageBytes_) {
+      rejected_ = true;
+      return false;
+    }
+    drawCalls_ += cost.drawCalls;
+    pathCommands_ += cost.pathCommands;
+    pathMeasurementWorkUnits_ += cost.pathMeasurementWorkUnits;
+    gradientStops_ += cost.gradientStops;
+    imageDraws_ += cost.imageDraws;
+    imageBytes_ += cost.imageBytes;
+    return true;
+  }
+
+  /**
+   * Reserves all remaining path-measurement work before a bounded query starts.
+   *
+   * The caller must pass the returned maximum to the query, then call
+   * @ref reconcilePathMeasurement with the query's actual work and completion outcome.
+   */
+  [[nodiscard]] std::optional<PathMeasurementReservation> reservePathMeasurement() {
+    if (rejected_ || pathMeasurementReservationActive_ ||
+        pathMeasurementWorkUnits_ >= kMaximumPathMeasurementWorkUnits) {
+      rejected_ = true;
+      return std::nullopt;
+    }
+
+    const std::size_t previousWorkUnits = pathMeasurementWorkUnits_;
+    const std::size_t maximumWorkUnits = kMaximumPathMeasurementWorkUnits - previousWorkUnits;
+    pathMeasurementWorkUnits_ = kMaximumPathMeasurementWorkUnits;
+    pathMeasurementReservationActive_ = true;
+    return PathMeasurementReservation(previousWorkUnits, maximumWorkUnits);
+  }
+
+  /**
+   * Reconciles an exclusive path-measurement reservation to work actually consumed.
+   *
+   * An incomplete query consumes its reported work and rejects the aggregate budget.
+   */
+  [[nodiscard]] bool reconcilePathMeasurement(const PathMeasurementReservation& reservation,
+                                              std::size_t actualWorkUnits, bool completed) {
+    const bool reservationMatches =
+        pathMeasurementReservationActive_ &&
+        reservation.previousWorkUnits_ <= kMaximumPathMeasurementWorkUnits &&
+        reservation.maximumWorkUnits_ ==
+            kMaximumPathMeasurementWorkUnits - reservation.previousWorkUnits_ &&
+        pathMeasurementWorkUnits_ == kMaximumPathMeasurementWorkUnits;
+    if (!reservationMatches || actualWorkUnits > reservation.maximumWorkUnits_) {
+      pathMeasurementReservationActive_ = false;
+      rejected_ = true;
+      return false;
+    }
+
+    pathMeasurementWorkUnits_ = reservation.previousWorkUnits_ + actualWorkUnits;
+    pathMeasurementReservationActive_ = false;
+    if (!completed) {
+      rejected_ = true;
+      return false;
+    }
+    return true;
+  }
+
+  [[nodiscard]] std::size_t drawCalls() const { return drawCalls_; }
+  [[nodiscard]] std::size_t pathCommands() const { return pathCommands_; }
+  [[nodiscard]] std::size_t pathMeasurementWorkUnits() const { return pathMeasurementWorkUnits_; }
+  [[nodiscard]] std::size_t gradientStops() const { return gradientStops_; }
+  [[nodiscard]] std::size_t imageDraws() const { return imageDraws_; }
+  [[nodiscard]] std::uint64_t imageBytes() const { return imageBytes_; }
+  [[nodiscard]] bool rejected() const { return rejected_; }
+
+private:
+  std::size_t drawCalls_ = 0;
+  std::size_t pathCommands_ = 0;
+  std::size_t pathMeasurementWorkUnits_ = 0;
+  std::size_t gradientStops_ = 0;
+  std::size_t imageDraws_ = 0;
+  std::uint64_t imageBytes_ = 0;
+  std::size_t gradientStopLimit_ = kMaximumGradientStops;
+  bool pathMeasurementReservationActive_ = false;
+  bool rejected_ = false;
+};
+
+/** Aggregate decoded-outline and path-copy budget shared by one renderer frame. */
+class RendererTextMaterializationBudget {
+public:
+  static constexpr std::size_t kMaximumUniqueOutlines = 1024;
+  static constexpr std::size_t kMaximumCommands = 4 * 1024 * 1024;
+  static constexpr std::size_t kMaximumPoints = 8 * 1024 * 1024;
+  static constexpr std::uint64_t kMaximumBytes = 64ULL * 1024 * 1024;
+  static constexpr std::size_t kMaximumDecodeWork = 64 * 1024 * 1024;
+  static constexpr std::size_t kMaximumGlyphOccurrences = 64 * 1024;
+
+  struct Cost {
+    std::size_t uniqueOutlines = 0;
+    std::size_t commands = 0;
+    std::size_t points = 0;
+    std::uint64_t bytes = 0;
+    std::size_t decodeWork = 0;
+  };
+
+  void reset() {
+    uniqueOutlines_ = 0;
+    commands_ = 0;
+    points_ = 0;
+    bytes_ = 0;
+    decodeWork_ = 0;
+    glyphOccurrences_ = 0;
+    rejected_ = false;
+  }
+
+  [[nodiscard]] bool reserve(const Cost& cost) {
+    if (rejected_ || uniqueOutlines_ > limits_.uniqueOutlines || commands_ > limits_.commands ||
+        points_ > limits_.points || bytes_ > limits_.bytes || decodeWork_ > limits_.decodeWork ||
+        cost.uniqueOutlines > limits_.uniqueOutlines - uniqueOutlines_ ||
+        cost.commands > limits_.commands - commands_ || cost.points > limits_.points - points_ ||
+        cost.bytes > limits_.bytes - bytes_ || cost.decodeWork > limits_.decodeWork - decodeWork_) {
+      rejected_ = true;
+      return false;
+    }
+    uniqueOutlines_ += cost.uniqueOutlines;
+    commands_ += cost.commands;
+    points_ += cost.points;
+    bytes_ += cost.bytes;
+    decodeWork_ += cost.decodeWork;
+    return true;
+  }
+
+  void reject() { rejected_ = true; }
+
+  [[nodiscard]] bool reserveGlyphOccurrences(std::size_t count) {
+    if (rejected_ || glyphOccurrences_ > glyphOccurrenceLimit_ ||
+        count > glyphOccurrenceLimit_ - glyphOccurrences_) {
+      rejected_ = true;
+      return false;
+    }
+    glyphOccurrences_ += count;
+    return true;
+  }
+
+  [[nodiscard]] bool reservePathCopy(const Path& path) {
+    const std::size_t commands = path.commands().size();
+    const std::size_t points = path.points().size();
+    const std::optional<std::size_t> retainedBytes = path.retainedBytes();
+    if (commands > kMaximumCommands || points > kMaximumPoints || !retainedBytes.has_value() ||
+        *retainedBytes > kMaximumBytes / 2) {
+      rejected_ = true;
+      return false;
+    }
+    return reserve({.commands = commands, .points = points, .bytes = *retainedBytes * 2});
+  }
+
+  void setLimitsForTesting(Cost limits) {
+    limits_.uniqueOutlines = std::min(limits_.uniqueOutlines, limits.uniqueOutlines);
+    limits_.commands = std::min(limits_.commands, limits.commands);
+    limits_.points = std::min(limits_.points, limits.points);
+    limits_.bytes = std::min(limits_.bytes, limits.bytes);
+    limits_.decodeWork = std::min(limits_.decodeWork, limits.decodeWork);
+  }
+
+  void setGlyphOccurrenceLimitForTesting(std::size_t maximum) {
+    glyphOccurrenceLimit_ = std::min(glyphOccurrenceLimit_, maximum);
+  }
+
+  [[nodiscard]] const Cost& limits() const { return limits_; }
+  [[nodiscard]] std::size_t uniqueOutlines() const { return uniqueOutlines_; }
+  [[nodiscard]] std::size_t commands() const { return commands_; }
+  [[nodiscard]] std::size_t points() const { return points_; }
+  [[nodiscard]] std::uint64_t bytes() const { return bytes_; }
+  [[nodiscard]] std::size_t decodeWork() const { return decodeWork_; }
+  [[nodiscard]] std::size_t glyphOccurrences() const { return glyphOccurrences_; }
+  [[nodiscard]] bool rejected() const { return rejected_; }
+
+private:
+  Cost limits_{.uniqueOutlines = kMaximumUniqueOutlines,
+               .commands = kMaximumCommands,
+               .points = kMaximumPoints,
+               .bytes = kMaximumBytes,
+               .decodeWork = kMaximumDecodeWork};
+  std::size_t uniqueOutlines_ = 0;
+  std::size_t commands_ = 0;
+  std::size_t points_ = 0;
+  std::uint64_t bytes_ = 0;
+  std::size_t decodeWork_ = 0;
+  std::size_t glyphOccurrences_ = 0;
+  std::size_t glyphOccurrenceLimit_ = kMaximumGlyphOccurrences;
+  bool rejected_ = false;
+};
+
+/** Bounded-resource diagnostics for the most recently started render frame. */
+struct RendererResourceStats {
+  bool filterBudgetSupported = false;
+  std::uint64_t filterExecutions = 0;
+  std::uint64_t filterWorkUnits = 0;
+  std::uint64_t filterRetainedBytes = 0;
+  std::uint64_t filterCaptureBytesReserved = 0;
+  bool filterBudgetRejected = false;
+  bool geometryBudgetSupported = false;
+  std::size_t geometryDraws = 0;
+  std::size_t geometryItems = 0;
+  std::size_t geometryRetainedBytes = 0;
+  bool geometryBudgetRejected = false;
+  bool surfaceBudgetSupported = false;
+  std::size_t surfaceCount = 0;
+  std::uint64_t surfaceBytes = 0;
+  bool surfaceBudgetRejected = false;
+  bool drawBudgetSupported = false;
+  std::size_t drawCalls = 0;
+  std::size_t pathCommands = 0;
+  bool pathMeasurementWorkSupported = false;
+  std::size_t pathMeasurementWorkUnits = 0;
+  std::size_t gradientStops = 0;
+  std::size_t imageDraws = 0;
+  std::uint64_t imageBytes = 0;
+  bool drawBudgetRejected = false;
+  bool textMaterializationBudgetSupported = false;
+  std::size_t textUniqueOutlines = 0;
+  std::size_t textMaterializationCommands = 0;
+  std::size_t textMaterializationPoints = 0;
+  std::uint64_t textMaterializationBytes = 0;
+  std::size_t textGlyphDecodeWork = 0;
+  std::size_t textGlyphOccurrences = 0;
+  bool textMaterializationBudgetRejected = false;
 };
 
 /// Backend type for \ref RendererTextureSnapshot payloads.
@@ -443,6 +819,19 @@ public:
   [[nodiscard]] virtual int height() const = 0;
 
   /**
+   * Begins one aggregate resource-budget scope around a controller-managed frame.
+   *
+   * A controller may render several offscreen passes before the root render pass. Backends that
+   * share frame budgets with their offscreen instances override this pair so every pass consumes
+   * one budget epoch instead of resetting independently. Ordinary single-pass callers may omit
+   * the scope and continue to rely on \ref beginFrame.
+   */
+  virtual void beginFrameResourceScope() {}
+
+  /// Completes a scope opened by \ref beginFrameResourceScope.
+  virtual void endFrameResourceScope() {}
+
+  /**
    * Begins a render pass with the given viewport. Implementations may allocate or reset
    * backend-specific frame resources here.
    */
@@ -662,6 +1051,12 @@ public:
    * Backends without asynchronous GPU readback return zeroed stats.
    */
   [[nodiscard]] virtual RendererReadbackStats consumeReadbackStats() { return {}; }
+
+  /// Return resource-admission diagnostics for the current frame.
+  [[nodiscard]] virtual RendererResourceStats resourceStats() const { return {}; }
+
+  /// Cause the next local filter raster allocation to fail in a boundary test.
+  virtual void injectFilterLocalRasterAllocationFailureForTesting() {}
 
   /**
    * Captures the current frame buffer as a backend-owned GPU texture.

@@ -152,6 +152,37 @@ std::vector<uint8_t> AddEmptyBitmapTables(std::span<const uint8_t> input) {
   return result;
 }
 
+std::vector<uint8_t> AddEmptyGlyfTable(std::span<const uint8_t> input) {
+  if (input.size() < 12) {
+    return {};
+  }
+  const uint16_t oldTableCount = ReadBe16(input, 4);
+  const size_t oldDirectorySize = 12u + static_cast<size_t>(oldTableCount) * 16u;
+  if (oldDirectorySize > input.size() || oldTableCount == UINT16_MAX) {
+    return {};
+  }
+
+  constexpr size_t kAddedDirectoryBytes = 16;
+  const uint16_t newTableCount = static_cast<uint16_t>(oldTableCount + 1u);
+  const size_t newDirectorySize = oldDirectorySize + kAddedDirectoryBytes;
+  std::vector<uint8_t> result(newDirectorySize + input.size() - oldDirectorySize, 0);
+  std::copy_n(input.begin(), 12, result.begin());
+  WriteBe16(&result, 4, newTableCount);
+  for (uint16_t table = 0; table < oldTableCount; ++table) {
+    const size_t recordOffset = 12u + static_cast<size_t>(table) * 16u;
+    std::copy_n(input.begin() + recordOffset, 16, result.begin() + recordOffset);
+    WriteBe32(&result, recordOffset + 8u,
+              ReadBe32(input, recordOffset + 8u) + kAddedDirectoryBytes);
+  }
+  std::copy(input.begin() + oldDirectorySize, input.end(), result.begin() + newDirectorySize);
+
+  const size_t glyfRecord = oldDirectorySize;
+  constexpr std::string_view kGlyf = "glyf";
+  std::copy(kGlyf.begin(), kGlyf.end(), result.begin() + glyfRecord);
+  WriteBe32(&result, glyfRecord + 8u, static_cast<uint32_t>(result.size()));
+  return result;
+}
+
 auto GlyphIndexIs(auto matcher) {
   return Field("glyphIndex", &TextBackend::ShapedGlyph::glyphIndex, matcher);
 }
@@ -610,6 +641,27 @@ TEST(TextBackendFullCapabilities, UntrustedBitmapFontIsRejectedBeforeFreeTypeSha
           .glyphs,
       IsEmpty());
   EXPECT_FALSE(backend.bitmapGlyph(font, 1, 1.0f).has_value());
+}
+
+TEST(TextBackendFullCapabilities, UntrustedOutlineDecodeRequiresValidatedComplexity) {
+  Registry registry;
+  FontManager fontManager(registry);
+  TextBackendFull backend(fontManager, registry);
+
+  const FontHandle fallback = fontManager.fallbackFont();
+  ASSERT_TRUE(static_cast<bool>(fallback));
+  const std::vector<uint8_t> data = AddEmptyGlyfTable(fontManager.fontData(fallback));
+  ASSERT_FALSE(data.empty());
+  const FontHandle untrusted = fontManager.loadFontData(data);
+  ASSERT_TRUE(static_cast<bool>(untrusted));
+  EXPECT_FALSE(fontManager.isTrustedFont(untrusted));
+  EXPECT_FALSE(fontManager.glyphOutlineComplexity(untrusted, 1).has_value());
+
+  const auto shaped =
+      backend.shapeRun(untrusted, 32.0f, "O", 0, 1, false, FontVariant::Normal, false);
+  ASSERT_THAT(shaped.glyphs, ElementsAre(GlyphIndexIs(Gt(0))));
+  const float scale = backend.scaleForEmToPixels(untrusted, 32.0f);
+  EXPECT_TRUE(backend.glyphOutline(untrusted, shaped.glyphs.front().glyphIndex, scale).empty());
 }
 
 TEST(TextBackendFullCapabilities, UntrustedOutlineFontDisablesEmbeddedBitmapLoading) {
