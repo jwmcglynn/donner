@@ -1,11 +1,9 @@
 /// @file CssParsePerfBench.cpp
 /// @brief CSS parser micro-benchmark suite.
 ///
-/// Baseline measurement harness for the `css_token_stream` design doc
-/// (`docs/design_docs/0019-css_token_stream.md`). Measures wall time for the three
-/// public CSS parser entry points on a set of representative inputs, from small
-/// inline `style="..."` attributes to a medium stylesheet typical of an SVG
-/// `<style>` block.
+/// Measures raw tokenization and the public CSS parser entry points on representative inputs,
+/// from small inline `style="..."` attributes to a medium stylesheet typical of an SVG `<style>`
+/// block. The raw cases isolate token production from component-value and rule construction.
 ///
 /// Allocation measurements live in the separate `css_parse_allocation_bench`
 /// binary so its global allocation instrumentation cannot distort these timings.
