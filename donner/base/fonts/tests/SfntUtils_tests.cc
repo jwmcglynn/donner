@@ -241,8 +241,9 @@ std::vector<uint8_t> MakeCff1SeacChain(size_t depth, std::vector<uint8_t> leaf,
   return MakeCff1WithCharset(std::move(charStrings), std::move(charsetSids), std::move(localSubrs));
 }
 
-std::vector<uint8_t> MakeCff2WithCharString(std::vector<uint8_t> charString) {
-  const std::vector<uint8_t> globalIndex = MakeCffIndex({}, true);
+std::vector<uint8_t> MakeCff2WithCharString(std::vector<uint8_t> charString,
+                                            std::vector<std::vector<uint8_t>> globalSubrs = {}) {
+  const std::vector<uint8_t> globalIndex = MakeCffIndex(globalSubrs, true);
   const std::vector<uint8_t> charStrings = MakeCffIndex({std::move(charString)}, true);
   const std::vector<uint8_t> fdArray = MakeCffIndex({{139, 139, 18}}, true);
 
@@ -626,6 +627,16 @@ TEST(SfntUtils, RetainsNonVariableCff2ComplexityAndFailsClosedForBlend) {
   const auto variableFont = SfntFont::Validate(variableData);
   ASSERT_TRUE(variableFont.has_value());
   EXPECT_FALSE(variableFont->glyphOutlineComplexity(0).has_value());
+}
+
+TEST(SfntUtils, Cff2GlobalSubroutineReturnCompletesTheCaller) {
+  const std::vector<uint8_t> cff =
+      MakeCff2WithCharString({32, 29}, {{139, 139, 21, 149, 139, 5, 11}});
+  const CffOutlineValidationResult result = ValidateCffOutlineComplexities(cff, true, 1);
+
+  ASSERT_EQ(result.status, CffOutlineValidationStatus::Complete);
+  ASSERT_EQ(result.glyphs.size(), 1u);
+  EXPECT_EQ(result.glyphs.front().maximumVertices, 3u);
 }
 
 TEST(SfntUtils, CffLocalSubroutineEndcharTerminatesEveryCallFrame) {
