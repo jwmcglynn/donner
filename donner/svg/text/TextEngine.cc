@@ -978,8 +978,8 @@ void TextEngine::prepareForElement(EntityHandle handle, ParseWarningSink& outWar
 
   if (resourceManager->fontFaces().empty()) {
     for (auto view = registry_.view<components::StylesheetComponent>(); auto entity : view) {
-      resourceManager->addFontFaces(
-          view.get<components::StylesheetComponent>(entity).stylesheet.fontFaces());
+      resourceManager->synchronizeStylesheetFontFaces(
+          entity, view.get<components::StylesheetComponent>(entity).stylesheet.fontFaces());
     }
   }
   resourceManager->loadResources(outWarnings);
