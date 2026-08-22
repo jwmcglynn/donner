@@ -48,6 +48,9 @@ void ReadAvailableGlReplayProcessOutput(int fd, std::string* output, bool* isOpe
       if (!AppendBoundedGlReplayProcessOutput(
               output, std::string_view(buffer, static_cast<std::size_t>(count)))) {
         *outputLimitExceeded = true;
+        *isOpen = false;
+        ::close(fd);
+        return;
       }
       continue;
     }

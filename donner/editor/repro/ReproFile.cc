@@ -1331,7 +1331,6 @@ std::optional<ReproFile> ParseReproFile(std::string_view contents) {
       return std::nullopt;
     }
     if (file.frames.size() >= kMaximumReproFrames ||
-        file.frames.size() >= kMaximumReproPlaybackFrames ||
         frame->actions.size() + frame->events.size() > kMaximumReproItems - itemCount) {
       return std::nullopt;
     }

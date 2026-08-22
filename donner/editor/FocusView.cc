@@ -173,9 +173,12 @@ SourcePoint PointForOffset(const std::vector<std::size_t>& lineStarts, std::size
   return SourcePoint{.line = line, .column = static_cast<int>(offset - lineStarts[line])};
 }
 
-void AppendFocusLineRange(std::vector<LineRange>* ranges, LineRange range) {
+void AppendFocusLineRange(std::vector<LineRange>* ranges, LineRange range,
+                          FocusTraversalBudget* budget) {
   if (ranges->size() < kMaximumFocusLineRanges) {
     ranges->push_back(range);
+  } else {
+    budget->reject();
   }
 }
 
@@ -1391,9 +1394,10 @@ std::vector<ByteRange> AncestorTagRanges(std::string_view source, ByteRange node
 }
 
 void AddNodeTagLineRanges(std::string_view source, const std::vector<std::size_t>& lineStarts,
-                          ByteRange nodeRange, FocusPartition* partition) {
+                          ByteRange nodeRange, FocusPartition* partition,
+                          FocusTraversalBudget* budget) {
   for (ByteRange tagRange : AncestorTagRanges(source, nodeRange)) {
-    AppendFocusLineRange(&partition->dimmed, RangeToLines(lineStarts, tagRange));
+    AppendFocusLineRange(&partition->dimmed, RangeToLines(lineStarts, tagRange), budget);
   }
 }
 
@@ -1407,7 +1411,7 @@ void AddXmlAncestorTagLineRanges(std::string_view source,
       return;
     }
     if (std::optional<ByteRange> ancestorRange = NodeRange(source, *ancestor)) {
-      AddNodeTagLineRanges(source, lineStarts, *ancestorRange, partition);
+      AddNodeTagLineRanges(source, lineStarts, *ancestorRange, partition, budget);
     }
   }
 }
@@ -1425,7 +1429,7 @@ bool AddAncestorTagLineRanges(std::string_view source, const std::vector<std::si
       return !required;
     }
 
-    AddNodeTagLineRanges(source, lineStarts, *ancestorRange, partition);
+    AddNodeTagLineRanges(source, lineStarts, *ancestorRange, partition, budget);
   }
 
   return true;
@@ -1539,7 +1543,8 @@ FocusPartition ComputeFocusPartition(const svg::SVGDocument& document,
         selectedEntities.end();
     if (elementRange.has_value()) {
       AppendFocusLineRange(selectedElement ? &partition.fullColor : &partition.referenceColor,
-                           RangeToLines(*lineStarts, *elementRange));
+                           RangeToLines(*lineStarts, *elementRange),
+                           &focusElements.traversalBudget);
     }
 
     if (!AddAncestorTagLineRanges(source, *lineStarts, focusElements.elements[i], &partition,
@@ -1549,9 +1554,11 @@ FocusPartition ComputeFocusPartition(const svg::SVGDocument& document,
   }
 
   for (const FocusCssRule& cssRule : focusElements.cssRules) {
-    AppendFocusLineRange(&partition.referenceColor, RangeToLines(*lineStarts, cssRule.ruleRange));
+    AppendFocusLineRange(&partition.referenceColor, RangeToLines(*lineStarts, cssRule.ruleRange),
+                         &focusElements.traversalBudget);
     if (cssRule.stylesheetNodeRange.has_value()) {
-      AddNodeTagLineRanges(source, *lineStarts, *cssRule.stylesheetNodeRange, &partition);
+      AddNodeTagLineRanges(source, *lineStarts, *cssRule.stylesheetNodeRange, &partition,
+                           &focusElements.traversalBudget);
     }
   }
 
@@ -1626,11 +1633,13 @@ std::optional<StyleFocus> ComputeStyleFocusAtSourceOffset(const svg::SVGDocument
   }
 
   FocusPartition partition;
-  AppendFocusLineRange(&partition.fullColor, RangeToLines(*lineStarts, *ruleRange));
+  AppendFocusLineRange(&partition.fullColor, RangeToLines(*lineStarts, *ruleRange),
+                       &focusElements.traversalBudget);
 
   if (std::optional<ByteRange> stylesheetNodeRange =
           NodeRangeForEntity(source, registry, sourceRule->stylesheetEntity)) {
-    AddNodeTagLineRanges(source, *lineStarts, *stylesheetNodeRange, &partition);
+    AddNodeTagLineRanges(source, *lineStarts, *stylesheetNodeRange, &partition,
+                         &focusElements.traversalBudget);
   }
   if (std::optional<xml::XMLNode> stylesheetNode =
           xml::XMLNode::TryCast(EntityHandle(registry, sourceRule->stylesheetEntity))) {
@@ -1641,7 +1650,8 @@ std::optional<StyleFocus> ComputeStyleFocusAtSourceOffset(const svg::SVGDocument
   if (!suppressReverseReferenceExpansion) {
     for (const svg::SVGElement& element : focusElements.elements) {
       if (std::optional<ByteRange> elementRange = NodeRange(source, element)) {
-        AppendFocusLineRange(&partition.referenceColor, RangeToLines(*lineStarts, *elementRange));
+        AppendFocusLineRange(&partition.referenceColor, RangeToLines(*lineStarts, *elementRange),
+                             &focusElements.traversalBudget);
       }
 
       std::ignore = AddAncestorTagLineRanges(source, *lineStarts, element, &partition,
@@ -1649,9 +1659,11 @@ std::optional<StyleFocus> ComputeStyleFocusAtSourceOffset(const svg::SVGDocument
     }
 
     for (const FocusCssRule& cssRule : focusElements.cssRules) {
-      AppendFocusLineRange(&partition.referenceColor, RangeToLines(*lineStarts, cssRule.ruleRange));
+      AppendFocusLineRange(&partition.referenceColor, RangeToLines(*lineStarts, cssRule.ruleRange),
+                           &focusElements.traversalBudget);
       if (cssRule.stylesheetNodeRange.has_value()) {
-        AddNodeTagLineRanges(source, *lineStarts, *cssRule.stylesheetNodeRange, &partition);
+        AddNodeTagLineRanges(source, *lineStarts, *cssRule.stylesheetNodeRange, &partition,
+                             &focusElements.traversalBudget);
       }
     }
     partition.referenceLinks.insert(partition.referenceLinks.end(), focusElements.cssLinks.begin(),

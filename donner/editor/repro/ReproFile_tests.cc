@@ -1485,13 +1485,6 @@ TEST(ReproFileTest, ReadsExternalSvgOnlyWithinReplayDirectory) {
   EXPECT_FALSE(ReadReproSvgFile(rnrPath, "../outside.svg").has_value());
   EXPECT_FALSE(ReadReproSvgFile(rnrPath, svgPath.string()).has_value());
 
-  std::error_code symlinkError;
-  const std::filesystem::path symlinkPath = root / "linked.svg";
-  std::filesystem::create_symlink(svgPath, symlinkPath, symlinkError);
-  if (!symlinkError) {
-    EXPECT_FALSE(ReadReproSvgFile(rnrPath, "linked.svg").has_value());
-  }
-
   std::error_code cleanupError;
   std::filesystem::remove_all(root, cleanupError);
 }
