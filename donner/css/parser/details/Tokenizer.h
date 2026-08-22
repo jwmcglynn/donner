@@ -1,13 +1,10 @@
 #pragma once
 /// @file
 
-#include <cassert>
-#include <coroutine>
 #include <optional>
 #include <string_view>
 #include <utility>
 
-#include "donner/base/Utils.h"
 #include "donner/css/Token.h"
 
 namespace donner::css::parser::details {
@@ -58,83 +55,6 @@ public:
   bool isEOF() const;
 
 private:
-  /// Coroutine which lazily yields tokens produced by \ref consumeNextToken().
-  class TokenGenerator {
-  public:
-    class Promise;
-    using promise_type = Promise;
-    using Handle = std::coroutine_handle<Promise>;
-
-    /// Construct a generator which owns \p coroutine.
-    explicit TokenGenerator(Handle coroutine) : coroutine_(coroutine) {}
-
-    /// Destroy the coroutine frame.
-    ~TokenGenerator() {
-      if (coroutine_) {
-        coroutine_.destroy();
-      }
-    }
-
-    TokenGenerator(const TokenGenerator&) = delete;
-    TokenGenerator& operator=(const TokenGenerator&) = delete;
-
-    /// Transfer ownership of a coroutine frame.
-    TokenGenerator(TokenGenerator&& other) noexcept
-        : coroutine_(std::exchange(other.coroutine_, nullptr)) {}
-
-    TokenGenerator& operator=(TokenGenerator&&) = delete;
-
-    /// Resume until the next token is yielded or the coroutine finishes.
-    [[nodiscard]] bool next() {
-      if (!coroutine_ || coroutine_.done()) {
-        return false;
-      }
-
-      coroutine_.resume();
-      return !coroutine_.done();
-    }
-
-    /// Move the most recently yielded token out of the coroutine frame.
-    Token takeValue() {
-      assert(coroutine_ && !coroutine_.done());
-      return std::move(coroutine_.promise().currentToken_.value());
-    }
-
-    /// State and behavior used by the compiler-generated coroutine frame.
-    class Promise {
-    public:
-      TokenGenerator get_return_object() noexcept {
-        return TokenGenerator(Handle::from_promise(*this));
-      }
-
-      std::suspend_always initial_suspend() const noexcept { return {}; }
-      std::suspend_always final_suspend() const noexcept { return {}; }
-      void return_void() const noexcept {}
-
-      std::suspend_always yield_value(Token token) noexcept {
-        currentToken_.emplace(std::move(token));
-        return {};
-      }
-
-      [[noreturn]] void unhandled_exception() const {
-        UTILS_RELEASE_ASSERT_MSG(false, "Unhandled exception in CSS TokenGenerator");
-      }
-
-    private:
-      std::optional<Token> currentToken_;
-      friend class TokenGenerator;
-    };
-
-  private:
-    Handle coroutine_;
-  };
-
-  /// Create the lazy token generator for this tokenizer.
-  TokenGenerator generate();
-
-  /// Consume and return one token from the input string.
-  Token consumeNextToken();
-
   /// Get the current offset in the input string.
   size_t currentOffset() const;
 
@@ -205,7 +125,6 @@ private:
       remaining_;  ///< Remaining input string, as the tokenizer advances this is updated.
 
   std::optional<Token> nextToken_;  ///< Next token to return, if already computed.
-  TokenGenerator generator_;        ///< Lazily produces one token per resume.
 };
 
 }  // namespace donner::css::parser::details

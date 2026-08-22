@@ -232,25 +232,11 @@ static std::tuple<RcString, size_t> consumeName(std::string_view remaining) {
 
 }  // namespace
 
-Tokenizer::Tokenizer(std::string_view str) : str_(str), remaining_(str), generator_(generate()) {}
+Tokenizer::Tokenizer(std::string_view str) : str_(str), remaining_(str) {}
 
 Tokenizer::~Tokenizer() = default;
 
 Token Tokenizer::next() {
-  if (isEOF() || !generator_.next()) {
-    return Token(Token::EofToken(), currentOffset());
-  }
-
-  return generator_.takeValue();
-}
-
-Tokenizer::TokenGenerator Tokenizer::generate() {
-  while (!isEOF()) {
-    co_yield consumeNextToken();
-  }
-}
-
-Token Tokenizer::consumeNextToken() {
   if (nextToken_) {
     auto result = std::move(nextToken_.value());
     nextToken_ = std::nullopt;
