@@ -326,6 +326,14 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
                 self.assertEqual("x" * (iteration + 1), hook_count.read_text())
                 self._assert_sleepers_reaped(hook_pids, iteration + 1)
 
+    def test_progress_watchers_use_interruptible_control_channels(self):
+        """Command completion must wake progress waits without a sleeper race."""
+        script = self._heartbeat_script()
+        self.assertNotIn('sleep "$heartbeat_interval" &', script)
+        self.assertIn('read -r -t "$heartbeat_interval"', script)
+        self.assertNotIn('sleep "$progress_interval" &', self.coverage_script)
+        self.assertIn('read -r -t "$progress_interval"', self.coverage_script)
+
     def test_coverage_cleanup_is_portable_and_prompt_without_ps(self):
         """Coverage remains portable to macOS and owns its heartbeat sleeper."""
         self.assertNotIn("awk -v p=", self.coverage_script)
