@@ -796,6 +796,9 @@ private:
   /// object, hence shared ownership).
   std::shared_ptr<GeodeDeviceLostState> lostState_;
 
+  /// Opaque two-owner token shared with the native headless device-lost callback.
+  void* deviceLostCallbackToken_ = nullptr;
+
   GeodeCounters* counters_ = nullptr;
 
   // Process-lifetime cumulative totals - see `lifetimeTextureCreates()`

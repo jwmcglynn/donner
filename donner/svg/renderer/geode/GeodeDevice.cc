@@ -25,7 +25,6 @@
 #include <emscripten/emscripten.h>
 #endif
 #include "donner/base/StringUtils.h"
-#include "donner/svg/renderer/geode/GeodeCallbackState.h"
 #include "donner/svg/renderer/geode/GeodeCheckerboardPipeline.h"
 #include "donner/svg/renderer/geode/GeodeFilterEngine.h"
 #include "donner/svg/renderer/geode/GeodeGpuWait.h"
@@ -52,6 +51,69 @@ namespace {
 #ifndef __EMSCRIPTEN__
 std::atomic<std::size_t> gOutstandingDeviceLostCallbacks{0};
 
+enum class DeviceLostCallbackStatus : std::uint8_t {
+  Pending,
+  Running,
+  Done,
+  Canceled,
+};
+
+struct DeviceLostCallbackToken {
+  explicit DeviceLostCallbackToken(std::shared_ptr<GeodeDeviceLostState> stateIn)
+      : state(std::move(stateIn)) {}
+
+  std::atomic<DeviceLostCallbackStatus> status{DeviceLostCallbackStatus::Pending};
+  std::atomic<int> references{2};
+  std::shared_ptr<GeodeDeviceLostState> state;
+};
+
+void ReleaseDeviceLostCallbackTokenReference(DeviceLostCallbackToken* token) {
+  if (token->references.fetch_sub(1, std::memory_order_acq_rel) == 1) {
+    delete token;
+  }
+}
+
+void* CreateDeviceLostCallbackToken(const std::shared_ptr<GeodeDeviceLostState>& state) {
+  gOutstandingDeviceLostCallbacks.fetch_add(1, std::memory_order_release);
+  return new DeviceLostCallbackToken(state);
+}
+
+std::shared_ptr<GeodeDeviceLostState> ConsumeDeviceLostCallbackState(void* userdata) {
+  auto* token = static_cast<DeviceLostCallbackToken*>(userdata);
+  DeviceLostCallbackStatus expected = DeviceLostCallbackStatus::Pending;
+  if (!token->status.compare_exchange_strong(expected, DeviceLostCallbackStatus::Running,
+                                             std::memory_order_acq_rel)) {
+    return {};
+  }
+
+  std::shared_ptr<GeodeDeviceLostState> state = token->state;
+  token->status.store(DeviceLostCallbackStatus::Done, std::memory_order_release);
+  const std::size_t previous =
+      gOutstandingDeviceLostCallbacks.fetch_sub(1, std::memory_order_acq_rel);
+  assert(previous > 0);
+  ReleaseDeviceLostCallbackTokenReference(token);
+  return state;
+}
+
+void ReleaseDeviceLostCallbackToken(void*& userdata, bool callbackCannotRun) {
+  if (userdata == nullptr) return;
+
+  auto* token = static_cast<DeviceLostCallbackToken*>(userdata);
+  if (callbackCannotRun) {
+    DeviceLostCallbackStatus expected = DeviceLostCallbackStatus::Pending;
+    if (token->status.compare_exchange_strong(expected, DeviceLostCallbackStatus::Canceled,
+                                              std::memory_order_acq_rel)) {
+      const std::size_t previous =
+          gOutstandingDeviceLostCallbacks.fetch_sub(1, std::memory_order_acq_rel);
+      assert(previous > 0);
+      ReleaseDeviceLostCallbackTokenReference(token);
+    }
+  }
+
+  ReleaseDeviceLostCallbackTokenReference(token);
+  userdata = nullptr;
+}
+
 /// Error callback wired onto the WebGPU device via
 /// `DeviceDescriptor::uncapturedErrorCallbackInfo`. Any driver-level
 /// validation errors (missing bindings, bad draw parameters, etc.)
@@ -75,9 +137,7 @@ void OnUncapturedError(WGPUDevice const* /*device*/, WGPUErrorType type, WGPUStr
 /// detectable device-lost condition.
 void OnDeviceLost(WGPUDevice const* /*device*/, WGPUDeviceLostReason reason, WGPUStringView message,
                   void* userdata1, void* /*userdata2*/) {
-  const std::shared_ptr<GeodeDeviceLostState> state =
-      takeWgpuCallbackState<GeodeDeviceLostState>(userdata1);
-  gOutstandingDeviceLostCallbacks.fetch_sub(1, std::memory_order_acq_rel);
+  const std::shared_ptr<GeodeDeviceLostState> state = ConsumeDeviceLostCallbackState(userdata1);
   if (reason == WGPUDeviceLostReason_Destroyed || reason == WGPUDeviceLostReason_InstanceDropped) {
     // Expected teardown paths, not a driver failure.
     return;
@@ -151,6 +211,10 @@ wgpu::Instance CreateHeadlessInstance(wgpu::BackendType backendType) {
     return wgpu::createInstance(instanceDesc);
   }
   return wgpu::createInstance();
+}
+#else
+void ReleaseDeviceLostCallbackToken(void*& userdata, bool /*callbackCannotRun*/) {
+  assert(userdata == nullptr);
 }
 #endif
 
@@ -301,6 +365,7 @@ GeodeDevice::~GeodeDevice() {
     queue_ = wgpu::Queue();
     device_ = wgpu::Device();
     adapter_ = wgpu::Adapter();
+    ReleaseDeviceLostCallbackToken(deviceLostCallbackToken_, /*callbackCannotRun=*/false);
     return;
   }
 
@@ -315,6 +380,7 @@ GeodeDevice::~GeodeDevice() {
     // refcount drops and deferred-destroy marks that do not wait on GPU
     // completion; only the root-handle destroy/release below, which can
     // trigger a blocking device drain, is skipped.
+    ReleaseDeviceLostCallbackToken(deviceLostCallbackToken_, /*callbackCannotRun=*/false);
     return;
   }
 
@@ -325,6 +391,7 @@ GeodeDevice::~GeodeDevice() {
   ReleaseWgpuHandle(device_);
   ReleaseWgpuHandle(adapter_);
   ReleaseWgpuHandle(instance);
+  ReleaseDeviceLostCallbackToken(deviceLostCallbackToken_, /*callbackCannotRun=*/true);
 }
 
 bool GeodeDevice::pollSuspending(bool wait) const {
@@ -633,12 +700,15 @@ std::unique_ptr<GeodeDevice> GeodeDevice::CreateHeadless(wgpu::TextureFormat tex
     // OnDeviceLost (including the Destroyed-at-teardown delivery). An attempt
     // that returns a null device strands at most one small retained block,
     // bounded by the retry count.
-    deviceDesc.deviceLostCallbackInfo.userdata1 = retainWgpuCallbackState(result->lostState_);
-    gOutstandingDeviceLostCallbacks.fetch_add(1, std::memory_order_release);
+    deviceDesc.deviceLostCallbackInfo.userdata1 = CreateDeviceLostCallbackToken(result->lostState_);
     result->device_ = result->adapter_.requestDevice(deviceDesc);
     if (result->device_) {
+      result->deviceLostCallbackToken_ = deviceDesc.deviceLostCallbackInfo.userdata1;
       break;  // Device created successfully.
     }
+
+    ReleaseDeviceLostCallbackToken(deviceDesc.deviceLostCallbackInfo.userdata1,
+                                   /*callbackCannotRun=*/true);
 
     std::fprintf(stderr, "[Geode/wgpu-native] Failed to create device.\n");
     if (attempt >= kMaxDeviceInitRetries) {
