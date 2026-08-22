@@ -681,10 +681,13 @@ TEST(SfntUtils, Cff1SeacRejectsMissingComponentsAndCycles) {
 
 TEST(SfntUtils, Cff1SeacEnforcesComponentDepthPointAndWorkCaps) {
   const std::vector<uint8_t> leaf{139, 139, 21, 149, 139, 5, 14};
-  EXPECT_EQ(ValidateCffOutlineComplexities(MakeCff1SeacChain(10, leaf), false, 12).status,
-            CffOutlineValidationStatus::Complete);
-  EXPECT_EQ(ValidateCffOutlineComplexities(MakeCff1SeacChain(11, leaf), false, 13).status,
-            CffOutlineValidationStatus::Invalid);
+  const CffOutlineValidationResult maximumDepth =
+      ValidateCffOutlineComplexities(MakeCff1SeacChain(10, leaf), false, 12);
+  ASSERT_EQ(maximumDepth.status, CffOutlineValidationStatus::Complete);
+  const CffOutlineValidationResult excessiveDepth =
+      ValidateCffOutlineComplexities(MakeCff1SeacChain(11, leaf), false, 13);
+  EXPECT_EQ(excessiveDepth.status, CffOutlineValidationStatus::Invalid);
+  EXPECT_EQ(excessiveDepth.componentResolutionWork, maximumDepth.componentResolutionWork);
 
   std::vector<uint8_t> pointLeaf{139, 139, 21};
   for (size_t batch = 0; batch < 100; ++batch) {

@@ -30,6 +30,8 @@ struct CffOutlineValidationResult {
   CffOutlineValidationStatus status = CffOutlineValidationStatus::Invalid;
   /// Structure and CharString work actually consumed, including failed validation.
   std::size_t work = 0;
+  /// Work spent resolving legacy CFF1 endchar component graphs.
+  std::size_t componentResolutionWork = 0;
   std::vector<CffGlyphOutlineComplexity> glyphs;
 };
 

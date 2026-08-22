@@ -979,6 +979,8 @@ public:
     return resolved_;
   }
 
+  std::size_t work() const { return resolutionWork_; }
+
 private:
   enum class State : uint8_t {
     Unvisited,
@@ -1008,6 +1010,7 @@ private:
     std::size_t depth = 0;
     if (raw_[glyph].components.has_value()) {
       if (!budget_->charge(2)) return false;
+      resolutionWork_ += 2;
       for (const std::size_t component : *raw_[glyph].components) {
         if (component >= raw_.size() || !resolve(component)) return false;
         depth = std::max(depth, depths_[component] + 1);
@@ -1032,6 +1035,7 @@ private:
   std::vector<State> states_;
   std::vector<CffGlyphOutlineComplexity> resolved_;
   std::vector<std::size_t> depths_;
+  std::size_t resolutionWork_ = 0;
 };
 
 }  // namespace
@@ -1111,10 +1115,12 @@ CffOutlineValidationResult ValidateCffOutlineComplexities(std::span<const uint8_
   if (!resolved.has_value()) {
     return {.status = validationBudget.exhausted ? CffOutlineValidationStatus::WorkLimitExceeded
                                                  : CffOutlineValidationStatus::Invalid,
-            .work = validationBudget.work};
+            .work = validationBudget.work,
+            .componentResolutionWork = resolver.work()};
   }
   return {.status = CffOutlineValidationStatus::Complete,
           .work = validationBudget.work,
+          .componentResolutionWork = resolver.work(),
           .glyphs = std::move(*resolved)};
 }
 
