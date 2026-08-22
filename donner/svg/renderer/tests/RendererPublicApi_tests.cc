@@ -180,27 +180,29 @@ TEST(RendererPublicApiTest, TinyDashWorkCountsContoursAndZeroLengthPhaseBeforeRa
   renderer.endFrame();
 }
 
-TEST(RendererTinySkiaSecurityTest, PathMeasurementWorkStopsAtTheFrameCapBeforeNextQuery) {
+TEST(RendererTinySkiaSecurityTest, PathMeasurementWorkTracksActualAggregateAcrossCurves) {
   RendererTinySkia renderer;
   renderer.beginFrame(RenderViewport{.size = Vector2d(2.0, 2.0), .devicePixelRatio = 1.0});
   SetStrokePaint(renderer);
 
   const Path maximumWorkPath =
       PathBuilder().moveTo({0.0, 0.0}).curveTo({0.0, 1.0}, {1.0, 0.0}, {1.0, 1.0}).build();
+  const std::size_t actualWork = maximumWorkPath.measure().measurementWorkUnits();
+  ASSERT_GT(actualWork, 0u);
+  ASSERT_LE(actualWork, RendererDrawBudget::kMaximumPathMeasurementWorkUnits / 2u);
   const StrokeParams measuredStroke{
       .strokeWidth = 0.25, .dashArray = {0.5, 0.5}, .pathLength = 1.0};
   renderer.drawPath(PathShape{.path = &maximumWorkPath}, measuredStroke);
 
   RendererResourceStats stats = renderer.resourceStats();
-  EXPECT_EQ(stats.pathMeasurementWorkUnits, RendererDrawBudget::kMaximumPathMeasurementWorkUnits);
+  EXPECT_EQ(stats.pathMeasurementWorkUnits, actualWork);
   EXPECT_FALSE(stats.drawBudgetRejected);
 
-  const Path nextPath = PathBuilder().moveTo({0.0, 0.0}).lineTo({1.0, 1.0}).build();
-  renderer.drawPath(PathShape{.path = &nextPath}, measuredStroke);
+  renderer.drawPath(PathShape{.path = &maximumWorkPath}, measuredStroke);
 
   stats = renderer.resourceStats();
-  EXPECT_EQ(stats.pathMeasurementWorkUnits, RendererDrawBudget::kMaximumPathMeasurementWorkUnits);
-  EXPECT_TRUE(stats.drawBudgetRejected);
+  EXPECT_EQ(stats.pathMeasurementWorkUnits, actualWork * 2u);
+  EXPECT_FALSE(stats.drawBudgetRejected);
   renderer.endFrame();
 }
 
