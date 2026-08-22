@@ -1523,7 +1523,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
     if (!device || !frameCommandEncoder || !target || !filterStack.empty() ||
         filterExecutionBudget->rejectionReason() !=
             components::FilterExecutionBudget::RejectionReason::MemoryLimit ||
-        filterExecutionBudget->activeGpuReservations() != 0) {
+        filterExecutionBudget->activeGpuReservations() != 0 ||
+        filterExecutionBudget->retainedGpuBytes() == 0) {
       return false;
     }
 

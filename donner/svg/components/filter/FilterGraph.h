@@ -753,7 +753,8 @@ public:
 
   /** Release GPU-retained accounting after submitting one ordered command-buffer chunk. */
   bool beginChunkAfterSubmit() {
-    if (rejectionReason_ != RejectionReason::MemoryLimit || activeGpuReservations_ != 0) {
+    if (rejectionReason_ != RejectionReason::MemoryLimit || activeGpuReservations_ != 0 ||
+        intermediateBytes_ == 0) {
       return false;
     }
     intermediateBytes_ = 0;
