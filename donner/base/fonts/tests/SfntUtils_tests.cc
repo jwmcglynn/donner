@@ -571,12 +571,23 @@ TEST(SfntUtils, CffReportsActualWorkAndStopsAtCallerBudget) {
 }
 
 TEST(SfntUtils, Cff1LegacyEndcharCompositeIsValidatedButNotRenderable) {
-  const std::vector<uint8_t> cff = MakeCff1WithSubrs({139, 139, 139, 139, 14}, {});
+  const std::vector<uint8_t> cff = MakeCff1WithSubrs({139, 139, 204, 247, 86, 14}, {});
   const CffOutlineValidationResult result = ValidateCffOutlineComplexities(cff, false, 1);
 
   ASSERT_EQ(result.status, CffOutlineValidationStatus::Complete);
   ASSERT_EQ(result.glyphs.size(), 1u);
   EXPECT_FALSE(result.glyphs.front().renderable);
+
+  const CffOutlineValidationResult withWidth = ValidateCffOutlineComplexities(
+      MakeCff1WithSubrs({149, 139, 139, 204, 247, 86, 14}, {}), false, 1);
+  ASSERT_EQ(withWidth.status, CffOutlineValidationStatus::Complete);
+  ASSERT_EQ(withWidth.glyphs.size(), 1u);
+  EXPECT_FALSE(withWidth.glyphs.front().renderable);
+
+  const auto font = SfntFont::Validate(MakeCffSfnt("CFF ", cff));
+  ASSERT_TRUE(font.has_value());
+  EXPECT_EQ(font->numGlyphs(), 1u);
+  EXPECT_FALSE(font->glyphOutlineComplexity(0).has_value());
 }
 
 TEST(SfntUtils, CffSubroutinesShareOperandsAndHintState) {

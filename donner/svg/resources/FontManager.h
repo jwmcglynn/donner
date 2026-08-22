@@ -372,6 +372,9 @@ private:
    */
   bool loadFontDataIntoEntity(Entity entity, std::span<const uint8_t> data, FontDataTrust trust);
 
+  /// Number of immutable @font-face sources memoized after permanent validation rejection.
+  size_t numValidationRejectedSources() const;
+
   /// Returns true if \p handle refers to a live font entity in the registry.
   bool isValidHandle(FontHandle handle) const;
 

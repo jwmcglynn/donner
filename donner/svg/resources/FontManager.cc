@@ -578,6 +578,10 @@ size_t FontManager::fontValidationWork() const {
   return budgetStateForRead()->usedValidationWork;
 }
 
+size_t FontManager::numValidationRejectedSources() const {
+  return 0u;
+}
+
 FontHandle FontManager::fallbackFont() {
   if (isValidHandle(fallbackHandle_)) {
     return fallbackHandle_;

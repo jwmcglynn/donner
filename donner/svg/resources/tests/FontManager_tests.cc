@@ -29,6 +29,10 @@ struct FontManagerTestAccess {
   static bool HasPersistentBudgetState(const Registry& registry) {
     return registry.ctx().contains<FontManager::FontBudgetContext>();
   }
+
+  static size_t NumValidationRejectedSources(const FontManager& manager) {
+    return manager.numValidationRejectedSources();
+  }
 };
 
 namespace {
@@ -178,7 +182,10 @@ TEST(FontManagerTest, EnforcesAggregateLoadedFontBudget) {
   FontManager mgr(registry, RetainedCharge(data));
 
   EXPECT_TRUE(static_cast<bool>(mgr.loadFontData(data)));
+  const size_t validationWorkAfterAdmission = mgr.fontValidationWork();
+  EXPECT_GT(validationWorkAfterAdmission, 0u);
   EXPECT_FALSE(static_cast<bool>(mgr.loadFontData(data)));
+  EXPECT_EQ(mgr.fontValidationWork(), validationWorkAfterAdmission);
 }
 
 TEST(FontManagerTest, AccountsExactFontAndCachedIndexBytes) {
@@ -240,7 +247,7 @@ TEST(FontManagerTest, CffValidationWorkIsAggregateAcrossManagersAndAttempts) {
 
 TEST(FontManagerTest, ExhaustedCffWorkBudgetPreservesReplacementAndAllowsTrueType) {
   Registry registry;
-  const std::vector<uint8_t> trueType = readFile("donner/base/fonts/testdata/valid-001.woff");
+  const std::vector<uint8_t> trueType = readFile("third_party/roboto/Roboto-Regular.ttf");
   const std::vector<uint8_t> cff(embedded::kPublicSansMediumOtf.begin(),
                                  embedded::kPublicSansMediumOtf.end());
   ASSERT_FALSE(trueType.empty());
@@ -268,6 +275,29 @@ TEST(FontManagerTest, SuccessfulCffLoadChargesMeasuredValidationWork) {
 
   ASSERT_TRUE(static_cast<bool>(manager.loadFontData(cff)));
   EXPECT_GT(manager.fontValidationWork(), 0u);
+}
+
+TEST(FontManagerTest, PermanentlyRejectedFontFaceSourceIsNotRevalidated) {
+  Registry registry;
+  FontManager manager(registry, FontManager::kDefaultMaximumLoadedFontBytes,
+                      FontManager::kDefaultMaximumLoadedFonts, 1);
+  css::FontFace face;
+  face.familyName = RcString("RejectedCff");
+  css::FontFaceSource source;
+  source.kind = css::FontFaceSource::Kind::Data;
+  source.payload = std::make_shared<const std::vector<uint8_t>>(
+      embedded::kPublicSansMediumOtf.begin(), embedded::kPublicSansMediumOtf.end());
+  face.sources.push_back(std::move(source));
+  manager.addFontFace(face);
+
+  const FontHandle first = manager.findFont("RejectedCff");
+  ASSERT_TRUE(static_cast<bool>(first));
+  EXPECT_EQ(manager.fontValidationWork(), 1u);
+  EXPECT_EQ(FontManagerTestAccess::NumValidationRejectedSources(manager), 1u);
+
+  EXPECT_EQ(manager.findFont("RejectedCff"), first);
+  EXPECT_EQ(manager.fontValidationWork(), 1u);
+  EXPECT_EQ(FontManagerTestAccess::NumValidationRejectedSources(manager), 1u);
 }
 
 TEST(FontManagerTest, ReplacementUpdatesExactAggregateCharge) {
