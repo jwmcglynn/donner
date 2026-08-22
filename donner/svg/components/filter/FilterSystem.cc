@@ -438,7 +438,7 @@ void AppendImageNode(Registry& registry, Entity current, FilterGraph& graph,
   }
   if (const auto* loaded = registry.try_get<LoadedImageComponent>(current);
       loaded && loaded->image.has_value()) {
-    primitive.imageData = budget.shareImage(current, loaded->image->data);
+    primitive.imageData = budget.shareImage(current, loaded->revision(), loaded->image->data);
     if (!primitive.imageData) {
       return;
     }

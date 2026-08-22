@@ -3,7 +3,6 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <limits>
 #include <memory>
 #include <unordered_map>
 #include <vector>
@@ -35,6 +34,7 @@ public:
         structuralBytes_(other.structuralBytes_),
         sharedImageBytes_(other.sharedImageBytes_),
         sharedImageMaterializations_(other.sharedImageMaterializations_),
+        sharedImageComparedBytes_(other.sharedImageComparedBytes_),
         rejected_(other.rejected_),
         limits_(other.limits_),
         reservations_(std::move(other.reservations_)),
@@ -93,35 +93,25 @@ public:
    * until the final computed graph or render snapshot releases the pixels.
    *
    * @param sourceEntity Entity that owns the decoded image.
+   * @param sourceRevision Monotonic identity of the decoded image payload.
    * @param sourcePixels Decoded straight-alpha RGBA pixels.
    * @return Shared immutable pixels, or null when admission fails.
    */
   std::shared_ptr<const std::vector<std::uint8_t>> shareImage(
-      Entity sourceEntity, const std::vector<std::uint8_t>& sourcePixels) {
+      Entity sourceEntity, std::uint64_t sourceRevision,
+      const std::vector<std::uint8_t>& sourcePixels) {
     pruneExpiredSharedImages();
     if (sourcePixels.empty()) {
       return nullptr;
     }
 
-    const SharedImageKey key{sourceEntity, sourcePixels.data(), sourcePixels.size()};
+    const SharedImageKey key{sourceEntity, sourceRevision, nullptr, sourcePixels.size()};
     if (const auto existing = sharedImages_.find(key); existing != sharedImages_.end()) {
-      for (auto entry = existing->second.begin(); entry != existing->second.end();) {
-        if (auto pixels = entry->pixels.lock()) {
-          if (*pixels == sourcePixels) {
-            if (sourcePixels.size() >
-                std::numeric_limits<std::size_t>::max() - sharedImageComparedBytes_) {
-              sharedImageComparedBytes_ = std::numeric_limits<std::size_t>::max();
-            } else {
-              sharedImageComparedBytes_ += sourcePixels.size();
-            }
-            return pixels;
-          }
-          ++entry;
-        } else {
-          sharedImageBytes_ -= entry->bytes;
-          entry = existing->second.erase(entry);
-        }
+      if (auto pixels = existing->second.pixels.lock()) {
+        return pixels;
       }
+      sharedImageBytes_ -= existing->second.bytes;
+      sharedImages_.erase(existing);
     }
 
     const std::size_t bytes = sourcePixels.size();
@@ -132,7 +122,7 @@ public:
     }
 
     auto pixels = makeSharedPixels(std::vector<std::uint8_t>(sourcePixels));
-    sharedImages_[key].push_back(SharedImageEntry{pixels, bytes});
+    sharedImages_.insert_or_assign(key, SharedImageEntry{pixels, bytes});
     return pixels;
   }
 
@@ -157,8 +147,8 @@ public:
     }
 
     auto pixels = makeSharedPixels(std::move(sourcePixels));
-    const SharedImageKey key{entt::null, pixels->data(), pixels->size()};
-    sharedImages_[key].push_back(SharedImageEntry{pixels, bytes});
+    const SharedImageKey key{entt::null, 0, pixels->data(), pixels->size()};
+    sharedImages_.insert_or_assign(key, SharedImageEntry{pixels, bytes});
     return pixels;
   }
 
@@ -186,6 +176,7 @@ private:
 
   struct SharedImageKey {
     Entity entity = entt::null;
+    std::uint64_t revision = 0;
     const std::uint8_t* data = nullptr;
     std::size_t size = 0;
     bool operator==(const SharedImageKey&) const = default;
@@ -194,6 +185,8 @@ private:
   struct SharedImageKeyHash {
     std::size_t operator()(const SharedImageKey& key) const {
       std::size_t result = std::hash<Entity>{}(key.entity);
+      result ^=
+          std::hash<std::uint64_t>{}(key.revision) + 0x9e3779b9 + (result << 6) + (result >> 2);
       result ^=
           std::hash<const std::uint8_t*>{}(key.data) + 0x9e3779b9 + (result << 6) + (result >> 2);
       result ^= std::hash<std::size_t>{}(key.size) + 0x9e3779b9 + (result << 6) + (result >> 2);
@@ -228,19 +221,11 @@ private:
 
   void pruneExpiredSharedImages() const {
     for (auto it = sharedImages_.begin(); it != sharedImages_.end();) {
-      auto& entries = it->second;
-      for (auto entry = entries.begin(); entry != entries.end();) {
-        if (!entry->pixels.expired()) {
-          ++entry;
-          continue;
-        }
-        sharedImageBytes_ -= entry->bytes;
-        entry = entries.erase(entry);
-      }
-      if (!entries.empty()) {
+      if (!it->second.pixels.expired()) {
         ++it;
         continue;
       }
+      sharedImageBytes_ -= it->second.bytes;
       it = sharedImages_.erase(it);
     }
   }
@@ -259,8 +244,7 @@ private:
   bool rejected_ = false;
   Limits limits_;
   std::unordered_map<Entity, std::size_t> reservations_;
-  mutable std::unordered_map<SharedImageKey, std::vector<SharedImageEntry>, SharedImageKeyHash>
-      sharedImages_;
+  mutable std::unordered_map<SharedImageKey, SharedImageEntry, SharedImageKeyHash> sharedImages_;
 };
 
 }  // namespace donner::svg::components

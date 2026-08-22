@@ -607,8 +607,8 @@ TEST_F(FilterSystemTest, SharedImageReservationFollowsSharedAllocationLifetime) 
   const Entity source = registry.create();
   const std::vector<uint8_t> pixels(24, 0x7f);
 
-  auto first = budget.shareImage(source, pixels);
-  auto second = budget.shareImage(source, pixels);
+  auto first = budget.shareImage(source, 1, pixels);
+  auto second = budget.shareImage(source, 1, pixels);
   ASSERT_THAT(first, NotNull());
   ASSERT_THAT(second, NotNull());
   EXPECT_EQ(first.get(), second.get());
@@ -634,15 +634,16 @@ TEST_F(FilterSystemTest, SharedImageIdentityTracksInPlacePixelChanges) {
   ComputedFilterResourceBudget budget(family);
   Registry registry;
   const Entity source = registry.create();
-  std::vector<uint8_t> pixels = {0xff, 0, 0, 0xff};
+  LoadedImageComponent loaded(ImageResource{{0xff, 0, 0, 0xff}, 1, 1});
 
-  auto first = budget.shareImage(source, pixels);
+  auto first = budget.shareImage(source, loaded.revision(), loaded.image->data);
   ASSERT_THAT(first, NotNull());
   EXPECT_THAT(*first, ElementsAre(0xff, 0, 0, 0xff));
 
-  pixels[0] = 0;
-  pixels[1] = 0xff;
-  auto second = budget.shareImage(source, pixels);
+  loaded.image->data[0] = 0;
+  loaded.image->data[1] = 0xff;
+  loaded.markImageModified();
+  auto second = budget.shareImage(source, loaded.revision(), loaded.image->data);
   ASSERT_THAT(second, NotNull());
   EXPECT_NE(first.get(), second.get());
   EXPECT_THAT(*first, ElementsAre(0xff, 0, 0, 0xff));
@@ -658,7 +659,7 @@ TEST_F(FilterSystemTest, SharedImageBudgetRejectsBeforeMaterializingPixels) {
   const Entity source = registry.create();
   const std::vector<uint8_t> pixels(4, 0xff);
 
-  EXPECT_EQ(budget.shareImage(source, pixels), nullptr);
+  EXPECT_EQ(budget.shareImage(source, 1, pixels), nullptr);
   EXPECT_TRUE(budget.rejected());
   EXPECT_EQ(budget.sharedImageMaterializations(), 0u);
   EXPECT_EQ(budget.retainedBytes(), 0u);
