@@ -249,6 +249,34 @@ TEST_F(GeoEncoderTest, DegenerateResidentRadialDoesNotConsumeGeometryAdmission) 
   encoder.finish();
 }
 
+TEST_F(GeoEncoderTest, PreparedSceneAdmissionCanBeRefundedBeforeSingletonFallback) {
+  const Path path = PathBuilder().addRect(Box2d({16, 16}, {48, 48})).build();
+  const EncodedPath encoded = GeodePathEncoder::encode(path, FillRule::NonZero);
+  ASSERT_FALSE(encoded.empty());
+  ProbeGeometryAdmission admission;
+
+  auto geometry = std::make_shared<GeodeResidentSlab>(device_->deviceId());
+  auto records = std::make_shared<GeodeRecordSlab>(device_->deviceId());
+  GeodeResidentSlot slot;
+  slot.slab = geometry;
+  slot.recordSlab = records;
+  ASSERT_TRUE(records->allocateSlot(*device_, slot.recordSlot));
+
+  GeoEncoder encoder(*device_, *pipeline_, *gradientPipeline_, *imagePipeline_, target_);
+  encoder.setGeometryAdmission(&admission);
+  GeoEncoder::SceneRecordState recordState;
+  ASSERT_TRUE(encoder.ensureResidentSceneRecord(
+      slot, encoded, GeoEncoder::ScenePaint{css::RGBA(255, 0, 0, 255)}, FillRule::NonZero,
+      Transform2d(), nullptr, nullptr, &recordState));
+  ASSERT_EQ(encoder.pendingSceneAdmissionsForTesting(), 1u);
+  ASSERT_EQ(admission.admittedDraws, 1u);
+
+  encoder.releasePreparedSceneAdmission(encoded);
+  EXPECT_EQ(encoder.pendingSceneAdmissionsForTesting(), 0u);
+  EXPECT_EQ(admission.releasedDraws, 1u);
+  encoder.finish();
+}
+
 TEST_F(GeoEncoderTest, TinyUniformScaleStillRasterizesHalfPixelHalo) {
   const Path path =
       PathBuilder().addRect(Box2d({264062.5, 264062.5}, {735937.5, 735937.5})).build();
