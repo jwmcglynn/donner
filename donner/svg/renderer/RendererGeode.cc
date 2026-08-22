@@ -8,6 +8,7 @@
 #include <cstring>
 #include <deque>
 #include <iostream>
+#include <limits>
 #include <map>
 #include <mutex>
 #include <optional>
@@ -166,6 +167,27 @@ TextLayoutParams toTextLayoutParams(const TextParams& params) {
 /// with a one-shot warning; the follow-up is a texture-based stop lookup
 /// (a `GeodeGradientCacheComponent` holding a stop texture).
 constexpr size_t kMaxGradientStopsClient = 16;
+
+int boundedFloorToInt(double value, int minimum, int maximum) {
+  if (std::isnan(value)) {
+    return minimum;
+  }
+  if (value <= static_cast<double>(minimum)) {
+    return minimum;
+  }
+  if (value >= static_cast<double>(maximum)) {
+    return maximum;
+  }
+  return static_cast<int>(std::floor(value));
+}
+
+std::optional<uint32_t> checkedFilterRasterDimension(double value) {
+  if (!std::isfinite(value) || value <= 0.0 ||
+      value > static_cast<double>(components::kMaximumFilterSurfaceDimension)) {
+    return std::nullopt;
+  }
+  return static_cast<uint32_t>(std::max(1.0, std::ceil(value)));
+}
 
 /// Returns true when the filter graph contains spatial-shift primitives (feOffset) that can bring
 /// content from outside the viewport into view, requiring the filter layer buffer to be expanded.
@@ -1030,6 +1052,155 @@ std::shared_ptr<RendererGeodeTexturePool> TexturePoolForDevice(geode::GeodeDevic
   return pool;
 }
 
+struct GeodeFilterAdmission {
+  Box2d region;
+  int bufferWidth = 0;
+  int bufferHeight = 0;
+  int bufferOffsetX = 0;
+  int bufferOffsetY = 0;
+  bool transformedCaptureReserved = false;
+  bool localRasterRequired = false;
+  components::FilterExecutionBudget::Reservation reservation;
+};
+
+struct GeodeFilterBuffer {
+  Box2d region;
+  int width = 0;
+  int height = 0;
+  int offsetX = 0;
+  int offsetY = 0;
+};
+
+std::optional<GeodeFilterBuffer> ComputeGeodeFilterBuffer(
+    const components::FilterGraph& filterGraph, const std::optional<Box2d>& filterRegion,
+    const Transform2d& deviceFromFilter, int viewportWidth, int viewportHeight) {
+  GeodeFilterBuffer result{
+      filterRegion.value_or(Box2d(Vector2d::Zero(), Vector2d(viewportWidth, viewportHeight))),
+      viewportWidth, viewportHeight, 0, 0};
+  if (filterRegion.has_value()) {
+    constexpr int kMaxExpansion = 4096;
+    const Box2d deviceRegion = deviceFromFilter.transformBox(*filterRegion);
+    const int regionX0 = boundedFloorToInt(deviceRegion.topLeft.x, -kMaxExpansion, 0);
+    const int regionY0 = boundedFloorToInt(deviceRegion.topLeft.y, -kMaxExpansion, 0);
+    if ((regionX0 < 0 || regionY0 < 0) && graphHasSpatialShift(filterGraph)) {
+      result.offsetX = std::min(-regionX0, std::max(0, kMaxExpansion - viewportWidth));
+      result.offsetY = std::min(-regionY0, std::max(0, kMaxExpansion - viewportHeight));
+      result.width += result.offsetX;
+      result.height += result.offsetY;
+    }
+  }
+  const std::uint64_t pixels =
+      static_cast<std::uint64_t>(result.width) * static_cast<std::uint64_t>(result.height);
+  if (pixels > components::kMaximumFilterSurfacePixels) {
+    result.width = viewportWidth;
+    result.height = viewportHeight;
+    result.offsetX = 0;
+    result.offsetY = 0;
+  }
+  if (result.width <= 0 || result.height <= 0) {
+    return std::nullopt;
+  }
+  return result;
+}
+
+bool ShouldPlanGeodeLocalRaster(const components::FilterGraph& filterGraph,
+                                const std::optional<Box2d>& filterRegion,
+                                const Transform2d& deviceFromFilter,
+                                const GeodeFilterBuffer& buffer, bool fullExecutionFits) {
+  if (!filterRegion.has_value() || filterRegion->width() <= 0.0 || filterRegion->height() <= 0.0 ||
+      buffer.offsetX != 0 || buffer.offsetY != 0 ||
+      NearZero(deviceFromFilter.determinant(), 1e-12)) {
+    return false;
+  }
+  return isEligibleForTransformedBlurPath(filterGraph) &&
+         (shouldUseTransformedBlurPath(filterGraph, deviceFromFilter) || !fullExecutionFits);
+}
+
+struct GeodeLocalRasterGeometry {
+  double scaleX = 1.0;
+  double scaleY = 1.0;
+  double blurPadding = 0.0;
+  Box2d paddedRegion;
+  uint32_t width = 0;
+  uint32_t height = 0;
+};
+
+std::optional<GeodeLocalRasterGeometry> ComputeGeodeLocalRasterGeometry(
+    const components::FilterGraph& filterGraph, const std::optional<Box2d>& filterRegion,
+    const Transform2d& deviceFromFilter, const GeodeFilterBuffer& buffer, bool fullExecutionFits) {
+  if (!ShouldPlanGeodeLocalRaster(filterGraph, filterRegion, deviceFromFilter, buffer,
+                                  fullExecutionFits)) {
+    return std::nullopt;
+  }
+  const double scaleX =
+      std::max(1.0, deviceFromFilter.transformVector(Vector2d(1.0, 0.0)).length());
+  const double scaleY =
+      std::max(1.0, deviceFromFilter.transformVector(Vector2d(0.0, 1.0)).length());
+  const double blurPadding = computeBlurPadding(filterGraph);
+  const Box2d paddedRegion(filterRegion->topLeft - Vector2d(blurPadding, blurPadding),
+                           filterRegion->bottomRight + Vector2d(blurPadding, blurPadding));
+  const std::optional<uint32_t> width = checkedFilterRasterDimension(paddedRegion.width() * scaleX);
+  const std::optional<uint32_t> height =
+      checkedFilterRasterDimension(paddedRegion.height() * scaleY);
+  if (!width || !height) {
+    return std::nullopt;
+  }
+  const std::uint64_t pixels =
+      static_cast<std::uint64_t>(*width) * static_cast<std::uint64_t>(*height);
+  if (pixels > components::kMaximumFilterSurfacePixels) {
+    return std::nullopt;
+  }
+  return GeodeLocalRasterGeometry{scaleX, scaleY, blurPadding, paddedRegion, *width, *height};
+}
+
+std::optional<std::uint64_t> ComputeGeodeLocalFilterPixels(
+    const components::FilterGraph& filterGraph, const std::optional<Box2d>& filterRegion,
+    const Transform2d& deviceFromFilter, const GeodeFilterBuffer& buffer, bool fullExecutionFits) {
+  const std::optional<GeodeLocalRasterGeometry> geometry = ComputeGeodeLocalRasterGeometry(
+      filterGraph, filterRegion, deviceFromFilter, buffer, fullExecutionFits);
+  if (!geometry.has_value()) {
+    return std::nullopt;
+  }
+  const std::uint64_t pixels =
+      static_cast<std::uint64_t>(geometry->width) * static_cast<std::uint64_t>(geometry->height);
+  if (!components::FilterGraphFitsExecutionBudget(filterGraph, pixels,
+                                                  components::FilterMemoryModel::GpuAllNodes)) {
+    return std::nullopt;
+  }
+  return pixels;
+}
+
+std::optional<GeodeFilterAdmission> AdmitGeodeFilter(const components::FilterGraph& filterGraph,
+                                                     const std::optional<Box2d>& filterRegion,
+                                                     const Transform2d& deviceFromFilter,
+                                                     int viewportWidth, int viewportHeight,
+                                                     components::FilterExecutionBudget& budget) {
+  const std::optional<GeodeFilterBuffer> buffer = ComputeGeodeFilterBuffer(
+      filterGraph, filterRegion, deviceFromFilter, viewportWidth, viewportHeight);
+  if (!buffer.has_value()) {
+    budget.reject();
+    return std::nullopt;
+  }
+  const std::uint64_t bufferPixels =
+      static_cast<std::uint64_t>(buffer->width) * static_cast<std::uint64_t>(buffer->height);
+  const bool fullExecutionFits = components::FilterGraphFitsExecutionBudget(
+      filterGraph, bufferPixels, components::FilterMemoryModel::GpuAllNodes);
+  const std::optional<std::uint64_t> localPixels = ComputeGeodeLocalFilterPixels(
+      filterGraph, filterRegion, deviceFromFilter, *buffer, fullExecutionFits);
+  const std::uint64_t executionPixels = localPixels.has_value() && fullExecutionFits
+                                            ? std::max(bufferPixels, *localPixels)
+                                            : localPixels.value_or(bufferPixels);
+  const std::uint64_t captureBytes = bufferPixels * 4u + localPixels.value_or(0) * 4u;
+  auto reservation = budget.reserve(filterGraph, executionPixels,
+                                    components::FilterMemoryModel::GpuAllNodes, captureBytes);
+  if (!reservation.has_value()) {
+    return std::nullopt;
+  }
+  return GeodeFilterAdmission{buffer->region,     buffer->width,   buffer->height,
+                              buffer->offsetX,    buffer->offsetY, localPixels.has_value(),
+                              !fullExecutionFits, *reservation};
+}
+
 }  // namespace
 
 /// Gate for ordered cross-entity batching. Enabled: a batch's single draw can
@@ -1054,6 +1225,9 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
   // Per-frame perf counters. Reset at `beginFrame`, read via
   // `lastFrameTimings()`; `GeodePerf_tests.cc` pins their ceilings.
   geode::GeodeCounters counters;
+  std::shared_ptr<components::FilterExecutionBudget> filterExecutionBudget =
+      std::make_shared<components::FilterExecutionBudget>();
+  bool ownsFilterExecutionBudget = true;
 
   // GPU resources. Created in the constructor; if device creation fails,
   // `device` is null and the renderer enters a no-op state.
@@ -1345,6 +1519,41 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
     framePendingReleases.clear();
   }
 
+  bool submitFilterBudgetChunk() {
+    if (!device || !frameCommandEncoder || !target || !filterStack.empty() ||
+        filterExecutionBudget->rejectionReason() !=
+            components::FilterExecutionBudget::RejectionReason::MemoryLimit ||
+        filterExecutionBudget->activeGpuReservations() != 0 ||
+        filterExecutionBudget->retainedGpuBytes() == 0) {
+      return false;
+    }
+
+    retireActiveEncoder();
+    geode::ScopedWgpuHandle<wgpu::CommandBuffer> commandBuffer(frameCommandEncoder.get().finish());
+    if (!commandBuffer) {
+      return false;
+    }
+    device->queue().submit(1, &commandBuffer.get());
+    device->countSubmit();
+
+    frameFinishedEncoders.clear();
+    framePendingTextureViewReleases.clear();
+    drainPendingReleases();
+
+    wgpu::CommandEncoderDescriptor descriptor = {};
+    descriptor.label = wgpuLabel("RendererGeodeFilterBudgetChunk");
+    frameCommandEncoder.reset(device->device().createCommandEncoder(descriptor));
+    if (!frameCommandEncoder) {
+      return false;
+    }
+    encoder = std::make_unique<geode::GeoEncoder>(
+        *device, *pipeline, *gradientPipeline, *imagePipeline, target, frameCommandEncoder.get());
+    configurePathEncoder(*encoder);
+    encoder->setLoadPreserve();
+    updateEncoderScissor();
+    return filterExecutionBudget->beginChunkAfterSubmit();
+  }
+
   /// A saved encoder + target state for an in-progress isolated layer
   /// (`pushIsolatedLayer` / `popIsolatedLayer`). When the driver begins a
   /// group with non-identity opacity or a non-Normal blend mode, we
@@ -1467,14 +1676,199 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
     /// Descriptors captured at push for texture-pool release.
     wgpu::TextureDescriptor layerDesc = {};
     components::FilterGraph filterGraph;
+    components::FilterExecutionBudget::Reservation filterReservation;
     Box2d filterRegion;
     Transform2d deviceFromFilter;  // Full CTM at push time.
-    int filterBufferOffsetX = 0;   // Expansion into negative device X.
-    int filterBufferOffsetY = 0;   // Expansion into negative device Y.
+    bool transformedCaptureReserved = false;
+    bool localRasterRequiredForBudget = false;
+    int filterBufferOffsetX = 0;  // Expansion into negative device X.
+    int filterBufferOffsetY = 0;  // Expansion into negative device Y.
     std::vector<ClipStackEntry> savedClipStack;
+    bool allocationRejected = false;
   };
   std::vector<ClipStackEntry> clipStack;
   std::vector<FilterStackFrame> filterStack;
+  std::size_t rejectedFilterDepth = 0;
+
+  bool initializeClipEntry(const ResolvedClip& clip, ClipStackEntry& entry) {
+    if (rejectedFilterDepth != 0) {
+      clipStack.push_back(std::move(entry));
+      return false;
+    }
+    if (!clip.clipRect.has_value()) {
+      return true;
+    }
+    const Transform2d& deviceFromClip = deviceFromLocalTransform;
+    entry.pixelRect = deviceFromClip.transformBox(*clip.clipRect);
+    entry.valid = true;
+    const double a = deviceFromClip.data[0];
+    const double b = deviceFromClip.data[1];
+    const double c = deviceFromClip.data[2];
+    const double d = deviceFromClip.data[3];
+    constexpr double kAxisAlignedEps = 1e-9;
+    const bool axisAligned = (std::abs(b) < kAxisAlignedEps && std::abs(c) < kAxisAlignedEps) ||
+                             (std::abs(a) < kAxisAlignedEps && std::abs(d) < kAxisAlignedEps);
+    if (axisAligned) {
+      return true;
+    }
+    const Box2d& local = *clip.clipRect;
+    entry.polygonCorners[0] =
+        deviceFromClip.transformPosition(Vector2d(local.topLeft.x, local.topLeft.y));
+    entry.polygonCorners[1] =
+        deviceFromClip.transformPosition(Vector2d(local.bottomRight.x, local.topLeft.y));
+    entry.polygonCorners[2] =
+        deviceFromClip.transformPosition(Vector2d(local.bottomRight.x, local.bottomRight.y));
+    entry.polygonCorners[3] =
+        deviceFromClip.transformPosition(Vector2d(local.topLeft.x, local.bottomRight.y));
+    entry.hasPolygon = true;
+    return true;
+  }
+
+  bool readyForFilterCapture() const {
+    return device && pipeline && gradientPipeline && imagePipeline && encoder && filterEngine;
+  }
+
+  void pushRejectedFilterFrame() {
+    FilterStackFrame frame;
+    frame.savedEncoder = std::move(encoder);
+    frame.savedTarget = target;
+    frame.allocationRejected = true;
+    filterStack.push_back(std::move(frame));
+    ++rejectedFilterDepth;
+  }
+
+  bool beginFilterCapture(const components::FilterGraph& filterGraph,
+                          const GeodeFilterAdmission& admission,
+                          const Transform2d& deviceFromFilter) {
+    wgpu::TextureDescriptor textureDesc{};
+    textureDesc.label = wgpuLabel("RendererGeodeFilterLayer");
+    textureDesc.size = {static_cast<uint32_t>(admission.bufferWidth),
+                        static_cast<uint32_t>(admission.bufferHeight), 1u};
+    textureDesc.format = textureFormat;
+    textureDesc.usage = wgpu::TextureUsage::RenderAttachment | wgpu::TextureUsage::TextureBinding |
+                        wgpu::TextureUsage::CopySrc;
+    textureDesc.mipLevelCount = 1;
+    textureDesc.sampleCount = 1;
+    textureDesc.dimension = wgpu::TextureDimension::_2D;
+    wgpu::Texture layerTexture = acquireTexture(textureDesc);
+    if (!layerTexture) {
+      return false;
+    }
+
+    encoder->finish();
+    FilterStackFrame frame;
+    frame.savedEncoder = std::move(encoder);
+    frame.savedTarget = target;
+    frame.layerTexture = layerTexture;
+    frame.layerDesc = textureDesc;
+    frame.filterGraph = filterGraph;
+    frame.filterReservation = admission.reservation;
+    frame.filterRegion = admission.region;
+    frame.deviceFromFilter = deviceFromFilter;
+    frame.transformedCaptureReserved = admission.transformedCaptureReserved;
+    frame.localRasterRequiredForBudget = admission.localRasterRequired;
+    frame.filterBufferOffsetX = admission.bufferOffsetX;
+    frame.filterBufferOffsetY = admission.bufferOffsetY;
+    frame.savedClipStack = std::move(clipStack);
+    clipStack.clear();
+
+    target = layerTexture;
+    auto newEncoder =
+        std::make_unique<geode::GeoEncoder>(*device, *pipeline, *gradientPipeline, *imagePipeline,
+                                            layerTexture, frameCommandEncoder.get());
+    configurePathEncoder(*newEncoder, /*collectGeometry=*/true, admission.bufferOffsetX,
+                         admission.bufferOffsetY);
+    newEncoder->clear(css::RGBA(0, 0, 0, 0));
+    encoder = std::move(newEncoder);
+    if (admission.bufferOffsetX != 0 || admission.bufferOffsetY != 0) {
+      deviceFromLocalTransform =
+          deviceFromLocalTransform *
+          Transform2d::Translate(admission.bufferOffsetX, admission.bufferOffsetY);
+    }
+    ClipStackEntry filterClipEntry;
+    filterClipEntry.pixelRect = deviceFromLocalTransform.transformBox(admission.region);
+    filterClipEntry.valid = true;
+    clipStack.push_back(std::move(filterClipEntry));
+    filterStack.push_back(std::move(frame));
+    updateEncoderScissor();
+    return true;
+  }
+
+  bool tryCompositeTransformedFilter(FilterStackFrame& frame) {
+    if (!frame.transformedCaptureReserved || !filterEngine || frame.filterGraph.empty()) {
+      return false;
+    }
+    const GeodeFilterBuffer buffer{frame.filterRegion, static_cast<int>(frame.layerDesc.size.width),
+                                   static_cast<int>(frame.layerDesc.size.height),
+                                   frame.filterBufferOffsetX, frame.filterBufferOffsetY};
+    const std::optional<GeodeLocalRasterGeometry> geometry = ComputeGeodeLocalRasterGeometry(
+        frame.filterGraph, frame.filterRegion, frame.deviceFromFilter, buffer,
+        !frame.localRasterRequiredForBudget);
+    if (!geometry.has_value()) {
+      return false;
+    }
+
+    wgpu::TextureDescriptor localDesc{};
+    localDesc.label = wgpuLabel("RendererGeodeBlurLocal");
+    localDesc.size = {geometry->width, geometry->height, 1u};
+    localDesc.format = textureFormat;
+    localDesc.usage = wgpu::TextureUsage::RenderAttachment | wgpu::TextureUsage::TextureBinding |
+                      wgpu::TextureUsage::CopySrc;
+    localDesc.mipLevelCount = 1;
+    localDesc.sampleCount = 1;
+    localDesc.dimension = wgpu::TextureDimension::_2D;
+    wgpu::Texture localTexture = acquireTexture(localDesc);
+    if (!localTexture) {
+      return false;
+    }
+
+    const Transform2d filterFromDevice = frame.deviceFromFilter.inverse();
+    const Transform2d localFromDevice = filterFromDevice *
+                                        Transform2d::Translate(-geometry->paddedRegion.topLeft.x,
+                                                               -geometry->paddedRegion.topLeft.y) *
+                                        Transform2d::Scale(geometry->scaleX, geometry->scaleY);
+    geode::GeoEncoder resampleEncoder(*device, *pipeline, *gradientPipeline, *imagePipeline,
+                                      localTexture, frameCommandEncoder.get());
+    configureEncoder(resampleEncoder);
+    resampleEncoder.setTransform(localFromDevice);
+    resampleEncoder.drawTexture(
+        frame.layerTexture,
+        Box2d::FromXYWH(0.0, 0.0, static_cast<double>(frame.layerDesc.size.width),
+                        static_cast<double>(frame.layerDesc.size.height)),
+        kWholeTextureUv, 1.0, /*pixelated=*/false, /*sourceIsPremultiplied=*/true);
+    resampleEncoder.finish();
+
+    const Transform2d localDeviceFromFilter =
+        Transform2d::Scale(geometry->scaleX, geometry->scaleY);
+    const Box2d localFilterRegion(Vector2d(geometry->blurPadding, geometry->blurPadding),
+                                  Vector2d(geometry->blurPadding + frame.filterRegion.width(),
+                                           geometry->blurPadding + frame.filterRegion.height()));
+    wgpu::Texture localFiltered =
+        filterEngine->execute(frame.filterGraph, localTexture, localFilterRegion,
+                              localDeviceFromFilter, *this, frameCommandEncoder);
+
+    const Transform2d deviceFromLocal =
+        Transform2d::Scale(1.0 / geometry->scaleX, 1.0 / geometry->scaleY) *
+        Transform2d::Translate(geometry->paddedRegion.topLeft.x, geometry->paddedRegion.topLeft.y) *
+        frame.deviceFromFilter;
+    target = frame.savedTarget;
+    auto compositeEncoder =
+        std::make_unique<geode::GeoEncoder>(*device, *pipeline, *gradientPipeline, *imagePipeline,
+                                            frame.savedTarget, frameCommandEncoder.get());
+    configurePathEncoder(*compositeEncoder);
+    compositeEncoder->setLoadPreserve();
+    encoder = std::move(compositeEncoder);
+    updateEncoderScissor();
+    encoder->setTransform(deviceFromLocal);
+    encoder->drawTexture(localFiltered,
+                         Box2d::FromXYWH(0.0, 0.0, static_cast<double>(geometry->width),
+                                         static_cast<double>(geometry->height)),
+                         kWholeTextureUv, 1.0, /*pixelated=*/false, /*sourceIsPremultiplied=*/true);
+    encoder->setTransform(Transform2d());
+    releaseTextureAtFrameEnd(std::move(localTexture), localDesc);
+    frame.localRasterRequiredForBudget = false;
+    return true;
+  }
 
   /// Recompute the intersection of every rectangular clip entry on
   /// `clipStack` and apply it to the active encoder as a scissor,
@@ -3441,6 +3835,93 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink, public geode::Filt
     entries.clear();
   }
 
+  void resetForBeginFrame(const RenderViewport& nextViewport) {
+    borrowedTargetSnapshot.reset();
+    if (device) {
+      device->drainDeferredDestroys();
+    }
+    viewport = nextViewport;
+    pixelWidth = static_cast<int>(nextViewport.size.x * nextViewport.devicePixelRatio);
+    pixelHeight = static_cast<int>(nextViewport.size.y * nextViewport.devicePixelRatio);
+    deviceFromLocalTransform = Transform2d();
+    deviceFromLocalTransformStack.clear();
+    paint = PaintParams();
+    encoder.reset();
+    frameFinishedEncoders.clear();
+    geometryDebugEdges.clear();
+    rejectedFilterDepth = 0;
+    if (ownsFilterExecutionBudget) {
+      filterExecutionBudget->reset();
+    }
+    if (device) {
+      device->filterEngine().beginFrame();
+    }
+    if (texturePool) {
+      texturePool->beginFrame();
+    }
+    closeFrameGeneration();
+    if (device) {
+      currentFrameIndex = device->beginFrameGeneration();
+      frameGenerationOpen = true;
+    } else {
+      ++currentFrameIndex;
+    }
+    lastDrawSourceEntity = entt::null;
+    pendingBatch.reset();
+    counters.reset();
+  }
+
+  bool prepareFrameTarget() {
+    if (!device || !pipeline || !gradientPipeline || !imagePipeline || pixelWidth <= 0 ||
+        pixelHeight <= 0) {
+      retireOwnedTargetAtFrameBoundary();
+      return false;
+    }
+    device->setCounters(&counters);
+    if (hostTarget) {
+      retireOwnedTargetAtFrameBoundary();
+      pixelWidth = static_cast<int>(hostTarget.getWidth());
+      pixelHeight = static_cast<int>(hostTarget.getHeight());
+      target = hostTarget;
+      return true;
+    }
+
+    const bool canReuseTargets =
+        ownedTarget && targetWidth == pixelWidth && targetHeight == pixelHeight;
+    if (!canReuseTargets) {
+      retireOwnedTargetAtFrameBoundary();
+      wgpu::TextureDescriptor td = {};
+      td.label = wgpuLabel("RendererGeodeTarget");
+      td.size = {static_cast<uint32_t>(pixelWidth), static_cast<uint32_t>(pixelHeight), 1};
+      td.format = textureFormat;
+      td.usage = wgpu::TextureUsage::RenderAttachment | wgpu::TextureUsage::CopySrc |
+                 wgpu::TextureUsage::TextureBinding;
+      td.mipLevelCount = 1;
+      td.sampleCount = 1;
+      td.dimension = wgpu::TextureDimension::_2D;
+      ownedTarget.reset(device->device().createTexture(td));
+      device->countTexture();
+      targetWidth = pixelWidth;
+      targetHeight = pixelHeight;
+    }
+    target = ownedTarget.get();
+    return true;
+  }
+
+  void createFrameEncoder() {
+    wgpu::CommandEncoderDescriptor commandEncoderDesc = {};
+    commandEncoderDesc.label = wgpuLabel("RendererGeodeFrameCE");
+    frameCommandEncoder.reset(device->device().createCommandEncoder(commandEncoderDesc));
+    encoder = std::make_unique<geode::GeoEncoder>(
+        *device, *pipeline, *gradientPipeline, *imagePipeline, target, frameCommandEncoder.get());
+    configurePathEncoder(*encoder);
+    if (preserveTargetOnBeginFrame) {
+      encoder->setLoadPreserve();
+    } else {
+      encoder->clear(css::RGBA(0, 0, 0, 0));
+    }
+  }
+
   ~Impl() {
     encoder.reset();
     frameCommandEncoder.reset();
@@ -3793,134 +4274,9 @@ int RendererGeode::height() const {
 }
 
 void RendererGeode::beginFrame(const RenderViewport& viewport) {
-  impl_->borrowedTargetSnapshot.reset();
-
-  // Drain deferred-destroy resources from the previous frame before allocating
-  // new ones. By this point any GPU submission from the prior frame has had a
-  // chance to finish, and WebGPU's internal ref-counting keeps resources alive
-  // for any still-in-flight command buffers.
-  if (impl_->device) {
-    impl_->device->drainDeferredDestroys();
-  }
-
-  impl_->viewport = viewport;
-  impl_->pixelWidth = static_cast<int>(viewport.size.x * viewport.devicePixelRatio);
-  impl_->pixelHeight = static_cast<int>(viewport.size.y * viewport.devicePixelRatio);
-  impl_->deviceFromLocalTransform = Transform2d();
-  impl_->deviceFromLocalTransformStack.clear();
-  impl_->paint = PaintParams();
-  impl_->encoder.reset();
-  impl_->frameFinishedEncoders.clear();
-  impl_->geometryDebugEdges.clear();
-
-  // Reset the filter engine's per-frame state: the uniform scratch cursor
-  // (slots reuse stable buffer+offset pairs across frames) and the
-  // frame-scoped chunk pass counter (so the 64-pass command-buffer bound
-  // spans every filter graph in this frame). Pass bind groups are created
-  // per pass; the pooled textures they bind rotate across frames, so their
-  // identities are not stable cache keys. Runs BEFORE the texture pool's
-  // stale-bucket eviction below.
-  if (impl_->device) {
-    impl_->device->filterEngine().beginFrame();
-  }
-
-  if (impl_->texturePool) {
-    impl_->texturePool->beginFrame();
-  }
-  // A caller that abandons a frame (beginFrame without endFrame) must not leave
-  // its generation open forever, or every later eviction would be held back by
-  // it.
-  impl_->closeFrameGeneration();
-  if (impl_->device) {
-    impl_->currentFrameIndex = impl_->device->beginFrameGeneration();
-    impl_->frameGenerationOpen = true;
-  } else {
-    ++impl_->currentFrameIndex;
-  }
-
-  // `<use>`-batch detection: drop the previous-draw source-entity memo so
-  // cross-frame draws don't show up as "same-source runs".
-  impl_->lastDrawSourceEntity = entt::null;
-
-  // Drop any batch the previous frame left pending. `endFrame` normally flushes it, but an
-  // early-out that skips the flush must not carry a borrowed `ComputedPathComponent` pointer
-  // into a frame that may no longer have that component.
-  impl_->pendingBatch.reset();
-
-  // Reset counters regardless of device state.
-  impl_->counters.reset();
-
-  if (!impl_->device || !impl_->pipeline || !impl_->gradientPipeline || !impl_->imagePipeline ||
-      impl_->pixelWidth <= 0 || impl_->pixelHeight <= 0) {
-    impl_->retireOwnedTargetAtFrameBoundary();
-    return;
-  }
-
-  // Wire the counters onto the device for this frame. A shared GeodeDevice
-  // may have been handed to another renderer between frames - the last
-  // caller wins, which is exactly the serial per-frame access pattern we
-  // want. Must run AFTER the null-device guard above so headless systems
-  // don't null-ptr-crash in draw()→beginFrame().
-  impl_->device->setCounters(&impl_->counters);
-
-  if (impl_->hostTarget) {
-    // Embedded mode: render into the host-provided target texture.
-    // Override pixel dimensions from the texture itself.
-    impl_->retireOwnedTargetAtFrameBoundary();
-    impl_->pixelWidth = static_cast<int>(impl_->hostTarget.getWidth());
-    impl_->pixelHeight = static_cast<int>(impl_->hostTarget.getHeight());
-    impl_->target = impl_->hostTarget;
-
-  } else {
-    // Headless mode: reuse render targets across same-size frames.
-    // Content is cleared by the encoder's first
-    // render-pass `LoadOp::Clear`, so lingering pixels from the previous
-    // frame don't leak into this one.
-    const bool canReuseTargets = impl_->ownedTarget && impl_->targetWidth == impl_->pixelWidth &&
-                                 impl_->targetHeight == impl_->pixelHeight;
-
-    if (!canReuseTargets) {
-      impl_->retireOwnedTargetAtFrameBoundary();
-
-      // Direct render target. Snapshots copy it and layer/pattern blits sample it.
-      wgpu::TextureDescriptor td = {};
-      td.label = wgpuLabel("RendererGeodeTarget");
-      td.size = {static_cast<uint32_t>(impl_->pixelWidth),
-                 static_cast<uint32_t>(impl_->pixelHeight), 1};
-      td.format = impl_->textureFormat;
-      td.usage = wgpu::TextureUsage::RenderAttachment | wgpu::TextureUsage::CopySrc |
-                 wgpu::TextureUsage::TextureBinding;
-      td.mipLevelCount = 1;
-      td.sampleCount = 1;
-      td.dimension = wgpu::TextureDimension::_2D;
-      impl_->ownedTarget.reset(impl_->device->device().createTexture(td));
-      impl_->target = impl_->ownedTarget.get();
-      impl_->device->countTexture();
-
-      impl_->targetWidth = impl_->pixelWidth;
-      impl_->targetHeight = impl_->pixelHeight;
-    } else {
-      impl_->target = impl_->ownedTarget.get();
-    }
-  }
-
-  // Single CommandEncoder for the entire frame - shared across the
-  // base encoder and every push/pop layer/filter/mask helper. One
-  // queue submit at `endFrame`.
-  wgpu::CommandEncoderDescriptor cedesc = {};
-  cedesc.label = wgpuLabel("RendererGeodeFrameCE");
-  impl_->frameCommandEncoder.reset(impl_->device->device().createCommandEncoder(cedesc));
-
-  impl_->encoder = std::make_unique<geode::GeoEncoder>(
-      *impl_->device, *impl_->pipeline, *impl_->gradientPipeline, *impl_->imagePipeline,
-      impl_->target, impl_->frameCommandEncoder.get());
-  impl_->configurePathEncoder(*impl_->encoder);
-  if (impl_->preserveTargetOnBeginFrame) {
-    impl_->encoder->setLoadPreserve();
-  } else {
-    // Default to a transparent clear so an empty frame matches the other
-    // backends' "no document content" appearance.
-    impl_->encoder->clear(css::RGBA(0, 0, 0, 0));
+  impl_->resetForBeginFrame(viewport);
+  if (impl_->prepareFrameTarget()) {
+    impl_->createFrameEncoder();
   }
 }
 
@@ -4035,39 +4391,8 @@ void RendererGeode::pushClip(const ResolvedClip& clip) {
   // transform to get pixel-space coordinates, then push onto the stack.
   // The active scissor is the INTERSECTION of everything on the stack.
   Impl::ClipStackEntry entry;
-  if (clip.clipRect.has_value()) {
-    const Transform2d& t = impl_->deviceFromLocalTransform;
-    entry.pixelRect = t.transformBox(*clip.clipRect);
-    entry.valid = true;
-
-    // Detect a non-axis-aligned ancestor transform - rotation or shear
-    // means the true clip shape is a parallelogram, not a rectangle,
-    // and a rectangular scissor can only describe its AABB. In that
-    // case we carry the 4 transformed corners through to the encoder
-    // as a polygon clip so the fragment shader can do a half-plane
-    // test per sample.
-    const double a = t.data[0];
-    const double b = t.data[1];
-    const double c = t.data[2];
-    const double d = t.data[3];
-    // Axis-aligned iff (no shear: b=c=0) OR (90°-rotation: a=d=0).
-    // Use a small tolerance to absorb floating-point noise in the
-    // composed transform chain.
-    constexpr double kAxisAlignedEps = 1e-9;
-    const bool axisAligned = (std::abs(b) < kAxisAlignedEps && std::abs(c) < kAxisAlignedEps) ||
-                             (std::abs(a) < kAxisAlignedEps && std::abs(d) < kAxisAlignedEps);
-    if (!axisAligned) {
-      const Box2d& local = *clip.clipRect;
-      const Vector2d tl(local.topLeft.x, local.topLeft.y);
-      const Vector2d tr(local.bottomRight.x, local.topLeft.y);
-      const Vector2d br(local.bottomRight.x, local.bottomRight.y);
-      const Vector2d bl(local.topLeft.x, local.bottomRight.y);
-      entry.polygonCorners[0] = t.transformPosition(tl);
-      entry.polygonCorners[1] = t.transformPosition(tr);
-      entry.polygonCorners[2] = t.transformPosition(br);
-      entry.polygonCorners[3] = t.transformPosition(bl);
-      entry.hasPolygon = true;
-    }
+  if (!impl_->initializeClipEntry(clip, entry)) {
+    return;
   }
 
   // Path-clip mask. When the clip has any `clipPaths`,
@@ -4407,116 +4732,34 @@ void RendererGeode::popIsolatedLayer() {
 void RendererGeode::pushFilterLayer(const components::FilterGraph& filterGraph,
                                     const std::optional<Box2d>& filterRegion) {
   impl_->flushPendingBatch();  // Flush any pending `<use>` batch.
-  if (!impl_->device || !impl_->pipeline || !impl_->gradientPipeline || !impl_->imagePipeline ||
-      !impl_->encoder || !impl_->filterEngine) {
-    // Headless or degenerate state - push a placeholder frame so
-    // popFilterLayer stays balanced.
+  if (impl_->rejectedFilterDepth != 0) {
+    impl_->pushRejectedFilterFrame();
+    return;
+  }
+  if (!impl_->readyForFilterCapture()) {
     impl_->filterStack.push_back({});
     return;
   }
-
-  // Compute filter region in device-pixel coordinates. Fall back to the
-  // full target if none was specified.
-  Box2d region = filterRegion.value_or(
-      Box2d(Vector2d::Zero(), Vector2d(impl_->pixelWidth, impl_->pixelHeight)));
-
-  // Compute buffer expansion for spatial-shift primitives (feOffset). When the filter region's
-  // device-space AABB extends to negative coordinates (due to skew/rotation), expand the buffer
-  // so SourceGraphic captures all content that feOffset can shift into view.
-  int filterBufferOffsetX = 0;
-  int filterBufferOffsetY = 0;
-  const int viewportWidth = impl_->pixelWidth;
-  const int viewportHeight = impl_->pixelHeight;
-
-  if (filterRegion.has_value()) {
-    const Box2d deviceRegion = impl_->deviceFromLocalTransform.transformBox(*filterRegion);
-    const int regionX0 = static_cast<int>(std::floor(deviceRegion.topLeft.x));
-    const int regionY0 = static_cast<int>(std::floor(deviceRegion.topLeft.y));
-
-    if ((regionX0 < 0 || regionY0 < 0) && graphHasSpatialShift(filterGraph)) {
-      constexpr int kMaxExpansion = 4096;
-      if (regionX0 < 0) {
-        filterBufferOffsetX = std::min(-regionX0, std::max(0, kMaxExpansion - viewportWidth));
-      }
-      if (regionY0 < 0) {
-        filterBufferOffsetY = std::min(-regionY0, std::max(0, kMaxExpansion - viewportHeight));
-      }
-    }
+  std::optional<GeodeFilterAdmission> admission =
+      AdmitGeodeFilter(filterGraph, filterRegion, impl_->deviceFromLocalTransform,
+                       impl_->pixelWidth, impl_->pixelHeight, *impl_->filterExecutionBudget);
+  if (!admission.has_value() && impl_->filterExecutionBudget->executions() != 0 &&
+      impl_->submitFilterBudgetChunk()) {
+    admission =
+        AdmitGeodeFilter(filterGraph, filterRegion, impl_->deviceFromLocalTransform,
+                         impl_->pixelWidth, impl_->pixelHeight, *impl_->filterExecutionBudget);
   }
-
-  const int bufferWidth = viewportWidth + filterBufferOffsetX;
-  const int bufferHeight = viewportHeight + filterBufferOffsetY;
-
-  // Allocate an offscreen filter layer capture. All draws between push/pop
-  // land here; pop runs the filter graph on it and composites back.
-  wgpu::TextureDescriptor td{};
-  td.label = wgpuLabel("RendererGeodeFilterLayer");
-  td.size = {static_cast<uint32_t>(bufferWidth), static_cast<uint32_t>(bufferHeight), 1u};
-  td.format = impl_->textureFormat;
-  td.usage = wgpu::TextureUsage::RenderAttachment | wgpu::TextureUsage::TextureBinding |
-             wgpu::TextureUsage::CopySrc;
-  td.mipLevelCount = 1;
-  td.sampleCount = 1;
-  td.dimension = wgpu::TextureDimension::_2D;
-  wgpu::Texture layerTexture = impl_->acquireTexture(td);
-  if (!layerTexture) {
-    impl_->filterStack.push_back({});
+  if (!admission.has_value()) {
+    impl_->pushRejectedFilterFrame();
     return;
   }
 
-  // Finish the outer encoder so its queued draws land on the saved
-  // target before we redirect subsequent work into the filter layer.
-  impl_->encoder->finish();
-
-  Impl::FilterStackFrame frame;
-  frame.savedEncoder = std::move(impl_->encoder);
-  frame.savedTarget = impl_->target;
-  frame.layerTexture = layerTexture;
-  frame.layerDesc = td;
-  frame.filterGraph = filterGraph;
-  frame.filterRegion = region;
-  frame.deviceFromFilter = impl_->deviceFromLocalTransform;
-  frame.filterBufferOffsetX = filterBufferOffsetX;
-  frame.filterBufferOffsetY = filterBufferOffsetY;
-  frame.savedClipStack = std::move(impl_->clipStack);
-
-  // SVG 2 §15.5: the SourceGraphic that feeds the filter graph must be
-  // UNCLIPPED (paint → filter → clip → mask → opacity). Clear the outer
-  // clip stack so inner draws into the filter layer aren't gated by the
-  // outer clip-path. The outer mask textures and views stay alive in
-  // frame.savedClipStack, and popFilterLayer
-  // restores the stack and re-binds the mask before the composite blit.
-  impl_->clipStack.clear();
-
-  impl_->target = layerTexture;
-  auto newEncoder = std::make_unique<geode::GeoEncoder>(
-      *impl_->device, *impl_->pipeline, *impl_->gradientPipeline, *impl_->imagePipeline,
-      layerTexture, impl_->frameCommandEncoder.get());
-  impl_->configurePathEncoder(*newEncoder, /*collectGeometry=*/true, filterBufferOffsetX,
-                              filterBufferOffsetY);
-  newEncoder->clear(css::RGBA(0, 0, 0, 0));
-  impl_->encoder = std::move(newEncoder);
-
-  // Apply the buffer offset to the current transform so content at negative device coordinates
-  // renders into the expanded region. Subsequent setTransform calls will also pick up the offset.
-  if (filterBufferOffsetX != 0 || filterBufferOffsetY != 0) {
-    impl_->deviceFromLocalTransform =
-        impl_->deviceFromLocalTransform *
-        Transform2d::Translate(filterBufferOffsetX, filterBufferOffsetY);
+  if (!impl_->beginFilterCapture(filterGraph, *admission, impl_->deviceFromLocalTransform)) {
+    auto reservation = admission->reservation;
+    impl_->filterExecutionBudget->release(reservation);
+    impl_->filterExecutionBudget->reject();
+    impl_->pushRejectedFilterFrame();
   }
-
-  // Per SVG Filter Effects § filter region: pixels outside the filter region are
-  // transparent black for filter-primitive purposes. Scissor source draws to the
-  // filter region's device-space AABB so the SourceGraphic fed into filter
-  // primitives (e.g. feGaussianBlur) respects that boundary.
-  Impl::ClipStackEntry filterClipEntry;
-  filterClipEntry.pixelRect = impl_->deviceFromLocalTransform.transformBox(region);
-  filterClipEntry.valid = true;
-  impl_->clipStack.push_back(std::move(filterClipEntry));
-
-  impl_->filterStack.push_back(std::move(frame));
-  // Refresh scissor to the intersection of the outer clip stack and the filter region.
-  impl_->updateEncoderScissor();
 }
 
 void RendererGeode::popFilterLayer() {
@@ -4527,6 +4770,18 @@ void RendererGeode::popFilterLayer() {
   Impl::FilterStackFrame frame = std::move(impl_->filterStack.back());
   impl_->filterStack.pop_back();
   impl_->clipStack = std::move(frame.savedClipStack);
+
+  if (frame.allocationRejected) {
+    if (impl_->rejectedFilterDepth != 0) {
+      --impl_->rejectedFilterDepth;
+    }
+    if (frame.savedEncoder) {
+      impl_->target = frame.savedTarget;
+      impl_->encoder = std::move(frame.savedEncoder);
+      impl_->updateEncoderScissor();
+    }
+    return;
+  }
 
   if (!frame.layerTexture) {
     return;  // Placeholder frame from the headless/error path.
@@ -4546,132 +4801,20 @@ void RendererGeode::popFilterLayer() {
                 Transform2d::Translate(frame.filterBufferOffsetX, frame.filterBufferOffsetY)
           : frame.deviceFromFilter;
 
-  // ── Transformed-blur path ────────────────────────────────────────────────
-  // An anisotropic blur under a rotated CTM (or any blur under skew) cannot be
-  // reproduced by Geode's device-axis separable blur - the blur would land in
-  // device axes instead of the element's local axes. Mirror tiny-skia: rasterize
-  // the captured device content into an axis-aligned filter-local raster, run the
-  // (now axis-aligned) blur there, then composite the result back through the CTM
-  // so the blur is oriented correctly. Eligible only for the simple blur/offset
-  // chain (see isEligibleForTransformedBlurPath) and only when no buffer offset
-  // is active (the local raster supplies its own blur padding). tiny-skia is the
-  // parity reference.
-  bool transformedBlurComposited = false;
-  if (impl_->filterEngine && !frame.filterGraph.empty() && frame.filterRegion.width() > 0 &&
-      frame.filterRegion.height() > 0 && frame.filterBufferOffsetX == 0 &&
-      frame.filterBufferOffsetY == 0 && !NearZero(frame.deviceFromFilter.determinant(), 1e-12) &&
-      isEligibleForTransformedBlurPath(frame.filterGraph) &&
-      shouldUseTransformedBlurPath(frame.filterGraph, frame.deviceFromFilter)) {
-    const Transform2d& deviceFromFilter = frame.deviceFromFilter;
-    const Box2d& filterRegion = frame.filterRegion;
-
-    // Local raster density from the CTM basis vectors (min 1× to avoid collapse),
-    // matching tiny-skia's transformed-blur raster sizing.
-    const double scaleX =
-        std::max(1.0, deviceFromFilter.transformVector(Vector2d(1.0, 0.0)).length());
-    const double scaleY =
-        std::max(1.0, deviceFromFilter.transformVector(Vector2d(0.0, 1.0)).length());
-
-    const double blurPadding = computeBlurPadding(frame.filterGraph);
-    const Box2d paddedRegion(filterRegion.topLeft - Vector2d(blurPadding, blurPadding),
-                             filterRegion.bottomRight + Vector2d(blurPadding, blurPadding));
-
-    const uint32_t localWidth = static_cast<uint32_t>(
-        std::max(1, static_cast<int>(std::ceil(paddedRegion.width() * scaleX))));
-    const uint32_t localHeight = static_cast<uint32_t>(
-        std::max(1, static_cast<int>(std::ceil(paddedRegion.height() * scaleY))));
-
-    // Cap the local raster to avoid pathological allocations under extreme CTMs.
-    constexpr uint32_t kMaxLocalDim = 8192u;
-    if (localWidth <= kMaxLocalDim && localHeight <= kMaxLocalDim) {
-      // Allocate the local-raster offscreen texture.
-      wgpu::TextureDescriptor localDesc{};
-      localDesc.label = wgpuLabel("RendererGeodeBlurLocal");
-      localDesc.size = {localWidth, localHeight, 1u};
-      localDesc.format = impl_->textureFormat;
-      localDesc.usage = wgpu::TextureUsage::RenderAttachment | wgpu::TextureUsage::TextureBinding |
-                        wgpu::TextureUsage::CopySrc;
-      localDesc.mipLevelCount = 1;
-      localDesc.sampleCount = 1;
-      localDesc.dimension = wgpu::TextureDimension::_2D;
-      wgpu::Texture localTexture = impl_->acquireTexture(localDesc);
-
-      if (localTexture) {
-        // Transform chains mirror tiny-skia (operator* applies the left factor
-        // first): device pixel → filter user space → padded-raster origin → local
-        // raster pixels.
-        const Transform2d filterFromDevice = deviceFromFilter.inverse();
-        const Transform2d localFromDevice =
-            filterFromDevice *
-            Transform2d::Translate(-paddedRegion.topLeft.x, -paddedRegion.topLeft.y) *
-            Transform2d::Scale(scaleX, scaleY);
-
-        // Resample the captured device content into the local raster in the
-        // shared frame command stream.
-        {
-          geode::GeoEncoder resampleEncoder(*impl_->device, *impl_->pipeline,
-                                            *impl_->gradientPipeline, *impl_->imagePipeline,
-                                            localTexture, impl_->frameCommandEncoder.get());
-          impl_->configureEncoder(resampleEncoder);
-          resampleEncoder.setTransform(localFromDevice);
-          resampleEncoder.drawTexture(
-              frame.layerTexture,
-              Box2d::FromXYWH(0.0, 0.0, static_cast<double>(frame.layerDesc.size.width),
-                              static_cast<double>(frame.layerDesc.size.height)),
-              kWholeTextureUv, 1.0, /*pixelated=*/false, /*sourceIsPremultiplied=*/true);
-          resampleEncoder.finish();
-        }
-
-        // Run the filter graph axis-aligned in local-raster space: deviceFromFilter
-        // is a pure Scale, and the filter region is in unscaled local units.
-        const Transform2d localDeviceFromFilter = Transform2d::Scale(scaleX, scaleY);
-        const Box2d localFilterRegion(
-            Vector2d(blurPadding, blurPadding),
-            Vector2d(blurPadding + filterRegion.width(), blurPadding + filterRegion.height()));
-        wgpu::Texture localFiltered =
-            impl_->filterEngine->execute(frame.filterGraph, localTexture, localFilterRegion,
-                                         localDeviceFromFilter, *impl_, impl_->frameCommandEncoder);
-
-        // Restore the outer target + encoder, then composite the local result back
-        // through the CTM. Transform chain (left factor first): local raster pixels
-        // → filter user space → device pixels.
-        const Transform2d deviceFromLocal =
-            Transform2d::Scale(1.0 / scaleX, 1.0 / scaleY) *
-            Transform2d::Translate(paddedRegion.topLeft.x, paddedRegion.topLeft.y) *
-            deviceFromFilter;
-
-        impl_->target = frame.savedTarget;
-        auto compositeEncoder = std::make_unique<geode::GeoEncoder>(
-            *impl_->device, *impl_->pipeline, *impl_->gradientPipeline, *impl_->imagePipeline,
-            frame.savedTarget, impl_->frameCommandEncoder.get());
-        impl_->configurePathEncoder(*compositeEncoder);
-        compositeEncoder->setLoadPreserve();
-        impl_->encoder = std::move(compositeEncoder);
-        impl_->updateEncoderScissor();
-        impl_->encoder->setTransform(deviceFromLocal);
-        impl_->encoder->drawTexture(localFiltered,
-                                    Box2d::FromXYWH(0.0, 0.0, static_cast<double>(localWidth),
-                                                    static_cast<double>(localHeight)),
-                                    kWholeTextureUv, 1.0, /*pixelated=*/false,
-                                    /*sourceIsPremultiplied=*/true);
-        impl_->encoder->setTransform(Transform2d());
-
-        impl_->releaseTextureAtFrameEnd(std::move(localTexture), localDesc);
-        transformedBlurComposited = true;
-      } else {
-        impl_->releaseTexture(std::move(localTexture), localDesc);
-      }
-    }
-  }
-
-  if (transformedBlurComposited) {
+  if (impl_->tryCompositeTransformedFilter(frame)) {
+    impl_->filterExecutionBudget->release(frame.filterReservation);
     impl_->releaseTextureAtFrameEnd(std::move(frame.layerTexture), frame.layerDesc);
     return;
   }
 
   // Run the filter graph on the captured layer texture.
   wgpu::Texture filteredTexture = frame.layerTexture;
-  if (impl_->filterEngine && !frame.filterGraph.empty()) {
+  const bool discardCapturedLayer = frame.localRasterRequiredForBudget;
+  if (frame.localRasterRequiredForBudget) {
+    impl_->filterExecutionBudget->reject();
+  } else if (impl_->filterEngine && !frame.filterGraph.empty() &&
+             static_cast<std::uint64_t>(frame.layerDesc.size.width) * frame.layerDesc.size.height <=
+                 components::kMaximumFilterSurfacePixels) {
     filteredTexture =
         impl_->filterEngine->execute(frame.filterGraph, frame.layerTexture, frame.filterRegion,
                                      bufferDeviceFromFilter, *impl_, impl_->frameCommandEncoder);
@@ -4688,6 +4831,11 @@ void RendererGeode::popFilterLayer() {
   newEncoder->setLoadPreserve();
   impl_->encoder = std::move(newEncoder);
   impl_->updateEncoderScissor();
+  if (discardCapturedLayer) {
+    impl_->filterExecutionBudget->release(frame.filterReservation);
+    impl_->releaseTextureAtFrameEnd(std::move(frame.layerTexture), frame.layerDesc);
+    return;
+  }
   if (frame.filterBufferOffsetX != 0 || frame.filterBufferOffsetY != 0) {
     // The filter result is in an expanded texture. Extract the viewport-sized region at the
     // buffer offset using a GPU texture copy, then blit the viewport-sized result.
@@ -4731,6 +4879,7 @@ void RendererGeode::popFilterLayer() {
   // intermediates have already been queued for frame-end pool release
   // through `FilterTextureAllocator`; recycle the layer capture here.
   impl_->releaseTextureAtFrameEnd(std::move(frame.layerTexture), frame.layerDesc);
+  impl_->filterExecutionBudget->release(frame.filterReservation);
 }
 
 void RendererGeode::pushMask(const std::optional<Box2d>& maskBounds, MaskType maskType) {
@@ -4868,7 +5017,7 @@ void RendererGeode::popMask() {
 }
 
 bool RendererGeode::beginPatternTile(const Box2d& tileRect, const Transform2d& targetFromPattern) {
-  if (!impl_->device || !impl_->pipeline) {
+  if (impl_->rejectedFilterDepth != 0 || !impl_->device || !impl_->pipeline) {
     return false;
   }
 
@@ -6037,12 +6186,19 @@ std::unique_ptr<RendererInterface> RendererGeode::createOffscreenInstance() cons
   if (!impl_->device) {
     return nullptr;
   }
-  return std::unique_ptr<RendererInterface>(
+  auto renderer = std::unique_ptr<RendererGeode>(
       new RendererGeode(impl_->device, impl_->verbose, impl_->offscreenCreationHookForTesting));
+  renderer->impl_->filterExecutionBudget = impl_->filterExecutionBudget;
+  renderer->impl_->ownsFilterExecutionBudget = false;
+  return renderer;
 }
 
 void RendererGeode::setOffscreenCreationHookForTesting(std::function<void()> hook) {
   impl_->offscreenCreationHookForTesting = std::move(hook);
+}
+
+std::uint64_t RendererGeode::filterBudgetChunksForTesting() const {
+  return impl_->filterExecutionBudget->chunks();
 }
 
 std::shared_ptr<const RendererTextureSnapshot> RendererGeode::takeTextureSnapshot() {

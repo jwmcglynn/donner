@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <map>
 #include <memory>
+#include <utility>
 
 #include "tiny_skia/filter/Blend.h"
 #include "tiny_skia/filter/ColorMatrix.h"
@@ -27,6 +28,11 @@
 namespace tiny_skia::filter {
 
 namespace {
+
+template <typename Visitor, typename Variant>
+decltype(auto) VisitPrimitive(Visitor&& visitor, Variant&& variant) {
+  return std::visit(std::forward<Visitor>(visitor), std::forward<Variant>(variant));
+}
 
 /// Internal bounding box for subregion tracking (x0/y0 = top-left, x1/y1 = bottom-right).
 struct Box {
@@ -541,13 +547,15 @@ bool executeFilterGraph(Pixmap& sourceGraphic, const FilterGraph& graph) {
 
     std::optional<NodeOutput> output;
 
-    std::visit(
+    VisitPrimitive(
         [&](const auto& primitive) {
           using T = std::decay_t<decltype(primitive)>;
           using namespace graph_primitive;
 
           if constexpr (std::is_same_v<T, GaussianBlur>) {
-            auto fp = FloatPixmap(input->in(nodeLinearRGB));
+            const bool canConsumeSource = graph.nodes.size() == 1 && input == source;
+            auto fp = canConsumeSource ? input->release(nodeLinearRGB)
+                                       : FloatPixmap(input->in(nodeLinearRGB));
             gaussianBlur(fp, primitive.sigmaX, primitive.sigmaY, primitive.edgeMode);
             output = NodeOutput{std::move(fp), nodeLinearRGB};
 
@@ -645,7 +653,7 @@ bool executeFilterGraph(Pixmap& sourceGraphic, const FilterGraph& graph) {
           } else if constexpr (std::is_same_v<T, graph_primitive::Morphology>) {
             // SVG Filter Effects §15.4: a negative radius, or a zero radius on both axes
             // (which is also the lacuna value 0 used for an absent/empty/invalid `radius`),
-            // disables the effect — the result is the filter input image (pass-through), not
+            // disables the effect - the result is the filter input image (pass-through), not
             // transparent black. A zero radius on only one axis is a no-op along that axis,
             // so the effect still applies (e.g. radius="10 0" erodes horizontally only).
             const bool disabled = primitive.radiusX < 0 || primitive.radiusY < 0 ||
@@ -913,8 +921,8 @@ bool executeFilterGraph(Pixmap& sourceGraphic, const FilterGraph& graph) {
                     out[ch] = std::clamp(static_cast<float>(acc), 0.0f, 1.0f);
                   }
                   // Mitchell's negative lobes can drive a premultiplied input's R/G/B above
-                  // its A on edges; clamp R/G/B to A so downstream filter primitives — which
-                  // consume `FloatPixmap` as premultiplied — don't see ghost-bright halos
+                  // its A on edges; clamp R/G/B to A so downstream filter primitives - which
+                  // consume `FloatPixmap` as premultiplied - don't see ghost-bright halos
                   // (PR #610 Codex P1). For straight-alpha inputs this is a no-op since the
                   // earlier bilinear path stored unclamped values that already satisfied
                   // R/G/B ≤ A on the suite's tests.

@@ -25,6 +25,7 @@
 #include "donner/svg/components/RenderingBehaviorComponent.h"
 #include "donner/svg/components/RenderingInstanceComponent.h"
 #include "donner/svg/components/SVGDocumentContext.h"
+#include "donner/svg/components/filter/ComputedFilterResourceBudget.h"
 #include "donner/svg/components/filter/FilterComponent.h"
 #include "donner/svg/components/layout/LayoutSystem.h"
 #include "donner/svg/components/layout/SizedElementComponent.h"
@@ -36,6 +37,7 @@
 #include "donner/svg/components/resources/ResourceManagerContext.h"
 #include "donner/svg/components/shadow/ComputedShadowTreeComponent.h"
 #include "donner/svg/components/shadow/ShadowBranch.h"
+#include "donner/svg/components/shadow/ShadowTreeComponent.h"
 #include "donner/svg/components/shape/ComputedPathComponent.h"
 #include "donner/svg/components/shape/ShapeSystem.h"
 #include "donner/svg/components/style/ComputedStyleComponent.h"
@@ -579,14 +581,130 @@ std::optional<Vector2i> resolveFeImageRenderSize(const components::FilterGraph& 
 
   const double widthUser = resolveSize(node.width, Lengthd::Extent::X);
   const double heightUser = resolveSize(node.height, Lengthd::Extent::Y);
-  if (widthUser <= 0.0 || heightUser <= 0.0) {
+  if (!std::isfinite(widthUser) || !std::isfinite(heightUser) || widthUser <= 0.0 ||
+      heightUser <= 0.0) {
     return std::nullopt;
   }
 
   const double scaleX = filterGraph.userToPixelScale.x > 0.0 ? filterGraph.userToPixelScale.x : 1.0;
   const double scaleY = filterGraph.userToPixelScale.y > 0.0 ? filterGraph.userToPixelScale.y : 1.0;
-  return Vector2i(std::max(1, static_cast<int>(std::ceil(widthUser * scaleX))),
-                  std::max(1, static_cast<int>(std::ceil(heightUser * scaleY))));
+  const double pixelWidth = widthUser * scaleX;
+  const double pixelHeight = heightUser * scaleY;
+  if (!std::isfinite(pixelWidth) || !std::isfinite(pixelHeight) || pixelWidth <= 0.0 ||
+      pixelHeight <= 0.0 || pixelWidth > components::kMaximumFilterSurfaceDimension ||
+      pixelHeight > components::kMaximumFilterSurfaceDimension ||
+      pixelWidth * pixelHeight > components::kMaximumFilterSurfacePixels) {
+    return std::nullopt;
+  }
+  return Vector2i(std::max(1, static_cast<int>(std::ceil(pixelWidth))),
+                  std::max(1, static_cast<int>(std::ceil(pixelHeight))));
+}
+
+std::optional<std::uint64_t> BoundedRgbaBytes(Vector2i size) {
+  if (size.x <= 0 || size.y <= 0 || size.x > components::kMaximumFilterSurfaceDimension ||
+      size.y > components::kMaximumFilterSurfaceDimension) {
+    return std::nullopt;
+  }
+  const std::uint64_t pixels =
+      static_cast<std::uint64_t>(size.x) * static_cast<std::uint64_t>(size.y);
+  if (pixels > components::kMaximumFilterSurfacePixels) {
+    return std::nullopt;
+  }
+  return pixels * 4u;
+}
+
+bool HasCompleteSnapshotRows(const RendererBitmap& snapshot) {
+  if (snapshot.empty()) {
+    return false;
+  }
+  const std::size_t tightRowBytes = static_cast<std::size_t>(snapshot.dimensions.x) * 4u;
+  const std::size_t height = static_cast<std::size_t>(snapshot.dimensions.y);
+  return snapshot.rowBytes >= tightRowBytes && height <= snapshot.pixels.size() / snapshot.rowBytes;
+}
+
+components::ComputedFilterResourceBudget& GetDriverComputedFilterResourceBudget(
+    Registry& registry) {
+  if (!registry.ctx().contains<components::ComputedFilterResourceBudget>()) {
+    std::shared_ptr<components::DocumentResourceFamilyBudget> family;
+    if (const auto* context = registry.ctx().find<components::DocumentResourceFamilyContext>()) {
+      family = context->budget;
+    }
+    registry.ctx().emplace<components::ComputedFilterResourceBudget>(std::move(family));
+  }
+  return registry.ctx().get<components::ComputedFilterResourceBudget>();
+}
+
+std::optional<std::uint64_t> ExistingFilterImageBytes(const components::FilterGraph& filterGraph) {
+  std::uint64_t bytes = 0;
+  for (const components::FilterNode& node : filterGraph.nodes) {
+    const auto* image = std::get_if<components::filter_primitive::Image>(&node.primitive);
+    if (!image) {
+      continue;
+    }
+    const std::uint64_t imageBytes = static_cast<std::uint64_t>(image->imageDataSize());
+    if (imageBytes > RendererDriver::kMaximumPreparedFilterImageBytes - bytes) {
+      return std::nullopt;
+    }
+    bytes += imageBytes;
+  }
+  return bytes;
+}
+
+std::optional<std::size_t> BoundedShadowTreeEntityCount(Registry& registry, Entity root,
+                                                        std::size_t maximumCount) {
+  struct WorkItem {
+    Entity entity = entt::null;
+    bool leaving = false;
+  };
+
+  std::vector<WorkItem> stack = {{root, false}};
+  std::unordered_set<Entity> activeReferences;
+  std::size_t scheduledEntities = 1;
+  std::size_t count = 0;
+  while (!stack.empty()) {
+    const WorkItem work = stack.back();
+    stack.pop_back();
+    if (work.entity == entt::null) {
+      continue;
+    }
+    if (work.leaving) {
+      activeReferences.erase(work.entity);
+      continue;
+    }
+    if (!activeReferences.insert(work.entity).second) {
+      continue;
+    }
+    if (count >= maximumCount) {
+      return std::nullopt;
+    }
+    ++count;
+    stack.push_back({work.entity, true});
+
+    if (const auto* shadow = registry.try_get<components::ShadowTreeComponent>(work.entity)) {
+      if (const std::optional<ResolvedReference> target = shadow->mainTargetEntity(registry)) {
+        if (scheduledEntities >= maximumCount) {
+          return std::nullopt;
+        }
+        ++scheduledEntities;
+        stack.push_back({target->handle, false});
+      }
+      continue;
+    }
+
+    const auto* tree = registry.try_get<donner::components::TreeComponent>(work.entity);
+    if (!tree) {
+      continue;
+    }
+    for (Entity child = tree->lastChild(); child != entt::null;
+         child = registry.get<donner::components::TreeComponent>(child).previousSibling()) {
+      if (scheduledEntities >= maximumCount) {
+        return std::nullopt;
+      }
+      ++scheduledEntities;
+      stack.push_back({child, false});
+    }
+  }
+  return count;
 }
 
 std::optional<components::FilterGraph> resolveFilterGraph(
@@ -596,6 +714,9 @@ std::optional<components::FilterGraph> resolveFilterGraph(
     // Convert CSS filter functions to a FilterGraph.
     // CSS Filter Effects Level 1 §8: shorthand filter functions use sRGB color space for
     // interpolation, unlike SVG filter elements which default to linearRGB.
+    if (effects->size() > components::kMaximumFilterGraphNodes) {
+      return std::nullopt;
+    }
     components::FilterGraph graph;
     graph.colorInterpolationFilters = ColorInterpolationFilters::SRGB;
     for (const FilterEffect& effect : *effects) {
@@ -743,6 +864,9 @@ std::optional<components::FilterGraph> resolveFilterGraph(
             }
           },
           effect.value);
+      if (graph.nodes.size() > components::kMaximumFilterGraphNodes) {
+        return std::nullopt;
+      }
     }
     return graph;
   }
@@ -935,8 +1059,100 @@ std::optional<ImageParams> toImageParams(const components::RenderingInstanceComp
 
 }  // namespace
 
-RendererDriver::RendererDriver(RendererInterface& renderer, bool verbose)
-    : renderer_(renderer), verbose_(verbose) {}
+bool RendererDriver::FilterPreparationBudget::beginGraph(SecurityStats* stats) {
+  if (rejected || attempts >= kMaximumPreparedFilterGraphs) {
+    rejected = true;
+    if (stats) {
+      stats->filterPreparationRejected = true;
+    }
+    return false;
+  }
+  ++attempts;
+  if (stats) {
+    stats->filterPreparationAttempts = attempts;
+  }
+  return true;
+}
+
+bool RendererDriver::FilterPreparationBudget::reserveNodes(std::size_t nodeCount,
+                                                           SecurityStats* stats) {
+  if (rejected || nodeCount > kMaximumPreparedFilterNodes - nodes) {
+    rejected = true;
+    if (stats) {
+      stats->filterPreparationRejected = true;
+    }
+    return false;
+  }
+  ++graphs;
+  nodes += nodeCount;
+  if (stats) {
+    stats->preparedFilterGraphs = graphs;
+    stats->preparedFilterNodes = nodes;
+  }
+  return true;
+}
+
+bool RendererDriver::FilterPreparationBudget::reserveImageBytes(std::uint64_t byteCount,
+                                                                SecurityStats* stats) {
+  if (rejected || byteCount > kMaximumPreparedFilterImageBytes - imageBytes) {
+    rejected = true;
+    if (stats) {
+      stats->filterPreparationRejected = true;
+    }
+    return false;
+  }
+  imageBytes += byteCount;
+  if (stats) {
+    stats->preparedFilterImageBytes = imageBytes;
+  }
+  return true;
+}
+
+bool RendererDriver::FilterPreparationBudget::reservePayloadBytes(std::uint64_t byteCount,
+                                                                  SecurityStats* stats) {
+  if (rejected || byteCount > kMaximumPreparedFilterPayloadBytes - payloadBytes) {
+    rejected = true;
+    if (stats) {
+      stats->filterPreparationRejected = true;
+    }
+    return false;
+  }
+  payloadBytes += byteCount;
+  if (stats) {
+    stats->preparedFilterPayloadBytes = payloadBytes;
+  }
+  return true;
+}
+
+bool RendererDriver::FilterPreparationBudget::reserveShadowEntities(std::size_t entityCount,
+                                                                    SecurityStats* stats) {
+  if (rejected || entityCount > kMaximumPreparedFilterShadowEntities - shadowEntities) {
+    rejected = true;
+    if (stats) {
+      stats->filterPreparationRejected = true;
+    }
+    return false;
+  }
+  shadowEntities += entityCount;
+  if (stats) {
+    stats->preparedFilterShadowEntities = shadowEntities;
+  }
+  return true;
+}
+
+RendererDriver::RendererDriver(RendererInterface& renderer, bool verbose,
+                               SecurityStats* securityStats)
+    : renderer_(renderer), verbose_(verbose), securityStats_(securityStats) {}
+
+void RendererDriver::resetOwnedFilterPreparationBudget() {
+  if (filterPreparationBudget_ != &ownedFilterPreparationBudget_) {
+    return;
+  }
+  ownedFilterPreparationBudget_ = {};
+  if (securityStats_) {
+    *securityStats_ = {};
+  }
+}
 
 void RendererDriver::draw(SVGDocument& document) {
   if (document.threadingMode() == ThreadingMode::ConcurrentDom) {
@@ -1069,6 +1285,7 @@ void RendererDriver::drawPreparedDocument(SVGDocument& document) {
 
 void RendererDriver::drawPreparedDocument(SVGDocument& document, const RenderViewport& viewport,
                                           const Transform2d& surfaceFromCanvas) {
+  resetOwnedFilterPreparationBudget();
   renderingSize_ = Vector2i(static_cast<int>(viewport.size.x), static_cast<int>(viewport.size.y));
   surfaceFromCanvasTransform_ = surfaceFromCanvas;
 
@@ -1115,6 +1332,7 @@ void RendererDriver::drawPreparedDocument(SVGDocument& document, const RenderVie
 void RendererDriver::drawEntityRange(Registry& registry, Entity firstEntity, Entity lastEntity,
                                      const RenderViewport& viewport,
                                      const Transform2d& surfaceFromCanvas) {
+  resetOwnedFilterPreparationBudget();
   renderingSize_ = Vector2i(static_cast<int>(viewport.size.x), static_cast<int>(viewport.size.y));
   surfaceFromCanvasTransform_ = surfaceFromCanvas;
 
@@ -1130,6 +1348,7 @@ bool RendererDriver::drawEntityRangeInterruptibly(Registry& registry, Entity fir
                                                   Entity lastEntity, const RenderViewport& viewport,
                                                   const Transform2d& surfaceFromCanvas,
                                                   const std::function<bool()>& shouldCancel) {
+  resetOwnedFilterPreparationBudget();
   renderingSize_ = Vector2i(static_cast<int>(viewport.size.x), static_cast<int>(viewport.size.y));
   surfaceFromCanvasTransform_ = surfaceFromCanvas;
 
@@ -1633,21 +1852,85 @@ std::optional<Box2d> RendererDriver::preparedFilterRegionFor(Entity entity) cons
   return std::nullopt;
 }
 
+bool RendererDriver::reservePreparedFilterGraph(const components::FilterGraph& filterGraph) {
+  std::uint64_t payloadBytes = 0;
+  for (const components::FilterNode& node : filterGraph.nodes) {
+    const std::uint64_t nodeBytes = components::FilterPrimitivePayloadBytes(node.primitive);
+    if (nodeBytes > kMaximumPreparedFilterPayloadBytes - payloadBytes) {
+      return filterPreparationBudget_->reservePayloadBytes(kMaximumPreparedFilterPayloadBytes + 1,
+                                                           securityStats_);
+    }
+    payloadBytes += nodeBytes;
+  }
+  if (!filterPreparationBudget_->reservePayloadBytes(payloadBytes, securityStats_)) {
+    return false;
+  }
+  const std::optional<std::uint64_t> decodedImageBytes = ExistingFilterImageBytes(filterGraph);
+  if (!decodedImageBytes.has_value() ||
+      !filterPreparationBudget_->reserveImageBytes(*decodedImageBytes, securityStats_)) {
+    return false;
+  }
+  return filterPreparationBudget_->reserveNodes(filterGraph.nodes.size(), securityStats_);
+}
+
+std::optional<std::uint64_t> RendererDriver::reservePreparedFilterImage(Vector2i size) {
+  const std::optional<std::uint64_t> bytes = BoundedRgbaBytes(size);
+  if (!bytes.has_value() || !filterPreparationBudget_->reserveImageBytes(*bytes, securityStats_)) {
+    return std::nullopt;
+  }
+  return bytes;
+}
+
+bool RendererDriver::reservePreparedFilterShadowTree(Registry& registry, Entity targetEntity) {
+  const std::optional<std::size_t> entityCount =
+      BoundedShadowTreeEntityCount(registry, targetEntity, kMaximumPreparedFilterShadowEntities);
+  return entityCount.has_value() &&
+         filterPreparationBudget_->reserveShadowEntities(*entityCount, securityStats_);
+}
+
+std::shared_ptr<const std::vector<std::uint8_t>> RendererDriver::adoptPreparedFilterSnapshot(
+    RendererBitmap snapshot, std::uint64_t reservedBytes, Registry& registry) {
+  const std::optional<std::uint64_t> actualBytes = BoundedRgbaBytes(snapshot.dimensions);
+  if (!HasCompleteSnapshotRows(snapshot) || !actualBytes.has_value() ||
+      *actualBytes > reservedBytes) {
+    return nullptr;
+  }
+  const std::size_t tightRowBytes = static_cast<std::size_t>(snapshot.dimensions.x) * 4u;
+  if (snapshot.rowBytes == tightRowBytes) {
+    return GetDriverComputedFilterResourceBudget(registry).adoptImage(std::move(snapshot.pixels));
+  }
+  std::vector<uint8_t> tightPixels(tightRowBytes * snapshot.dimensions.y);
+  for (int y = 0; y < snapshot.dimensions.y; ++y) {
+    std::memcpy(tightPixels.data() + y * tightRowBytes,
+                snapshot.pixels.data() + y * snapshot.rowBytes, tightRowBytes);
+  }
+  return GetDriverComputedFilterResourceBudget(registry).adoptImage(std::move(tightPixels));
+}
+
+const components::RenderingInstanceComponent* RendererDriver::beginPreparingFilterEntity(
+    Registry& registry, Entity entity) {
+  const auto* instance = registry.try_get<components::RenderingInstanceComponent>(entity);
+  if (!instance || !instance->resolvedFilter.has_value()) {
+    return nullptr;
+  }
+  if (!filterPreparationBudget_->beginGraph(securityStats_)) {
+    return nullptr;
+  }
+  const auto& style = instance->styleHandle(registry).get<components::ComputedStyleComponent>();
+  return style.properties.has_value() ? instance : nullptr;
+}
+
 void RendererDriver::prepareFilterGraphs(Registry& registry, std::span<const Entity> entities) {
   // Iterate a caller-provided snapshot of entity IDs so that mid-loop storage mutation (from
   // `createFeImageShadowTree` inside `preRenderFeImageFragments`) cannot invalidate the iteration.
   // Each iteration re-reads the component from storage via `storage.get(entity)`, so references
   // are re-bound after any previous iteration's mutation.
-  auto& storage = registry.storage<components::RenderingInstanceComponent>();
   for (const Entity entity : entities) {
-    const auto* instance = storage.contains(entity) ? &storage.get(entity) : nullptr;
-    if (!instance || !instance->resolvedFilter.has_value()) {
+    const auto* instance = beginPreparingFilterEntity(registry, entity);
+    if (!instance) {
       continue;
     }
     const auto& style = instance->styleHandle(registry).get<components::ComputedStyleComponent>();
-    if (!style.properties.has_value()) {
-      continue;
-    }
 
     const Box2d filterViewBox =
         components::LayoutSystem().getViewBox(instance->dataHandle(registry));
@@ -1663,6 +1946,9 @@ void RendererDriver::prepareFilterGraphs(Registry& registry, std::span<const Ent
         computeFilterRegion(registry, instance->resolvedFilter.value(), *instance);
 
     if (filterGraph.has_value()) {
+      if (!reservePreparedFilterGraph(*filterGraph)) {
+        continue;
+      }
       filterGraph->filterRegion = filterRegion;
       if (filterGraph->primitiveUnits == PrimitiveUnits::ObjectBoundingBox) {
         filterGraph->elementBoundingBox =
@@ -1677,7 +1963,7 @@ void RendererDriver::prepareFilterGraphs(Registry& registry, std::span<const Ent
         // These calls may mutate `RenderingInstanceComponent` storage (shadow-tree creation +
         // global sort inside `createFeImageShadowTree`). We do NOT hold the `instance` reference
         // across them - the next iteration of this loop re-fetches via `storage.get(entity)`.
-        preRenderSvgFeImages(*filterGraph);
+        preRenderSvgFeImages(*filterGraph, registry);
         preRenderFeImageFragments(*filterGraph, registry, entity, filterRegion);
       }
     }
@@ -2898,16 +3184,22 @@ void RendererDriver::clearSubDocumentContextPaint(SVGDocument& subDocument) {
   }
 }
 
-void RendererDriver::preRenderSvgFeImages(components::FilterGraph& filterGraph) {
+void RendererDriver::preRenderSvgFeImages(components::FilterGraph& filterGraph,
+                                          Registry& registry) {
   for (auto& node : filterGraph.nodes) {
     auto* imageNode = std::get_if<components::filter_primitive::Image>(&node.primitive);
-    if (!imageNode || !imageNode->svgSubDocument || !imageNode->imageData.empty()) {
+    if (!imageNode || !imageNode->svgSubDocument || imageNode->hasImageData()) {
       continue;
     }
 
     SVGDocument subDoc = SVGDocument::CreateFromHandle(imageNode->svgSubDocument);
     const std::optional<Vector2i> renderSize = resolveFeImageRenderSize(filterGraph, node);
     const Vector2i targetSize = renderSize.value_or(subDoc.canvasSize());
+    const std::optional<std::uint64_t> imageBytes = reservePreparedFilterImage(targetSize);
+    if (!imageBytes.has_value()) {
+      imageNode->svgSubDocument.reset();
+      continue;
+    }
 
     // Create an independent offscreen renderer to render the sub-document.
     auto offscreen = renderer_.createOffscreenInstance();
@@ -2925,32 +3217,19 @@ void RendererDriver::preRenderSvgFeImages(components::FilterGraph& filterGraph) 
 
     RendererDriver subDriver(*offscreen, verbose_);
     subDriver.renderingSize_ = targetSize;
+    subDriver.filterPreparationBudget_ = filterPreparationBudget_;
+    subDriver.securityStats_ = securityStats_;
     subDriver.drawSubDocument(subDoc, Box2d::FromXYWH(0.0, 0.0, targetSize.x, targetSize.y),
                               imageNode->preserveAspectRatio, 1.0, Transform2d());
     offscreen->endFrame();
 
-    // Determine the rendered size from the sub-document's canvas size.
-    if (targetSize.x <= 0 || targetSize.y <= 0) {
-      continue;
-    }
-
     // Capture the rendered pixels.
     RendererBitmap snapshot = offscreen->takeSnapshot();
-    if (!snapshot.empty()) {
-      imageNode->imageWidth = snapshot.dimensions.x;
-      imageNode->imageHeight = snapshot.dimensions.y;
-
-      // The snapshot may have row padding. Convert to tightly packed RGBA.
-      const size_t tightRowBytes = static_cast<size_t>(snapshot.dimensions.x) * 4;
-      if (snapshot.rowBytes == tightRowBytes) {
-        imageNode->imageData = std::move(snapshot.pixels);
-      } else {
-        imageNode->imageData.resize(tightRowBytes * snapshot.dimensions.y);
-        for (int y = 0; y < snapshot.dimensions.y; ++y) {
-          std::memcpy(imageNode->imageData.data() + y * tightRowBytes,
-                      snapshot.pixels.data() + y * snapshot.rowBytes, tightRowBytes);
-        }
-      }
+    const Vector2i snapshotDimensions = snapshot.dimensions;
+    imageNode->imageData = adoptPreparedFilterSnapshot(std::move(snapshot), *imageBytes, registry);
+    if (imageNode->imageData) {
+      imageNode->imageWidth = snapshotDimensions.x;
+      imageNode->imageHeight = snapshotDimensions.y;
     }
 
     // Clear the sub-document pointer since we've now rendered to pixels.
@@ -2980,7 +3259,7 @@ void RendererDriver::preRenderFeImageFragments(components::FilterGraph& filterGr
     }
     for (auto& node : filterGraph.nodes) {
       if (auto* imageNode = std::get_if<components::filter_primitive::Image>(&node.primitive);
-          imageNode && !imageNode->fragmentId.empty() && imageNode->imageData.empty()) {
+          imageNode && !imageNode->fragmentId.empty() && !imageNode->hasImageData()) {
         imageNode->fragmentId = RcString();
       }
     }
@@ -2992,7 +3271,7 @@ void RendererDriver::preRenderFeImageFragments(components::FilterGraph& filterGr
 
   for (auto& node : filterGraph.nodes) {
     auto* imageNode = std::get_if<components::filter_primitive::Image>(&node.primitive);
-    if (!imageNode || imageNode->fragmentId.empty() || !imageNode->imageData.empty()) {
+    if (!imageNode || imageNode->fragmentId.empty() || imageNode->hasImageData()) {
       continue;
     }
 
@@ -3018,6 +3297,12 @@ void RendererDriver::preRenderFeImageFragments(components::FilterGraph& filterGr
       continue;
     }
 
+    const std::optional<std::uint64_t> imageBytes = reservePreparedFilterImage(renderingSize_);
+    if (!imageBytes.has_value()) {
+      imageNode->fragmentId = RcString();
+      continue;
+    }
+
     // Create an offscreen renderer at the same canvas size.
     auto offscreen = renderer_.createOffscreenInstance();
     if (!offscreen) {
@@ -3038,6 +3323,11 @@ void RendererDriver::preRenderFeImageFragments(components::FilterGraph& filterGr
     // to render the target subtree offscreen.
     std::optional<components::RenderingContext::FeImageSubtreeResult> shadowResult;
     if (targetInstance == nullptr) {
+      if (!reservePreparedFilterShadowTree(registry, targetEntity)) {
+        feImageFragmentGuard_->erase(entityId);
+        imageNode->fragmentId = RcString();
+        continue;
+      }
       if (!registry.ctx().contains<components::RenderingContext>()) {
         registry.ctx().emplace<components::RenderingContext>(registry);
       }
@@ -3074,6 +3364,8 @@ void RendererDriver::preRenderFeImageFragments(components::FilterGraph& filterGr
     subDriver.renderingSize_ = renderingSize_;
     subDriver.feImageFragmentGuard_ = feImageFragmentGuard_;
     subDriver.feImageFragmentDepth_ = feImageFragmentDepth_ + 1;
+    subDriver.filterPreparationBudget_ = filterPreparationBudget_;
+    subDriver.securityStats_ = securityStats_;
 
     // The fragment is rendered at its natural position in the document coordinate system
     // (no surfaceFromCanvasTransform_ offset). The filter pipeline applies a device-space
@@ -3114,21 +3406,11 @@ void RendererDriver::preRenderFeImageFragments(components::FilterGraph& filterGr
 
     // Capture the rendered pixels.
     RendererBitmap snapshot = offscreen->takeSnapshot();
-    if (!snapshot.empty()) {
-      imageNode->imageWidth = snapshot.dimensions.x;
-      imageNode->imageHeight = snapshot.dimensions.y;
-
-      // Convert to tightly packed RGBA.
-      const size_t tightRowBytes = static_cast<size_t>(snapshot.dimensions.x) * 4;
-      if (snapshot.rowBytes == tightRowBytes) {
-        imageNode->imageData = std::move(snapshot.pixels);
-      } else {
-        imageNode->imageData.resize(tightRowBytes * snapshot.dimensions.y);
-        for (int y = 0; y < snapshot.dimensions.y; ++y) {
-          std::memcpy(imageNode->imageData.data() + y * tightRowBytes,
-                      snapshot.pixels.data() + y * snapshot.rowBytes, tightRowBytes);
-        }
-      }
+    const Vector2i snapshotDimensions = snapshot.dimensions;
+    imageNode->imageData = adoptPreparedFilterSnapshot(std::move(snapshot), *imageBytes, registry);
+    if (imageNode->imageData) {
+      imageNode->imageWidth = snapshotDimensions.x;
+      imageNode->imageHeight = snapshotDimensions.y;
     }
 
     // Remove from recursion guard after rendering.

@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <numbers>
+#include <span>
 #include <vector>
 
 #include "tiny_skia/filter/SimdVec.h"
@@ -127,15 +128,18 @@ int resolveEdge(int coord, int size, BlurEdgeMode edgeMode) {
     return coord;
   }
   switch (edgeMode) {
-    case BlurEdgeMode::Duplicate: return std::clamp(coord, 0, size - 1);
-    case BlurEdgeMode::Wrap: return ((coord % size) + size) % size;
-    case BlurEdgeMode::None: return -1;
+    case BlurEdgeMode::Duplicate:
+      return std::clamp(coord, 0, size - 1);
+    case BlurEdgeMode::Wrap:
+      return ((coord % size) + size) % size;
+    case BlurEdgeMode::None:
+      return -1;
   }
   return -1;
 }
 
 // ---------------------------------------------------------------------------
-// Weighted convolution (σ < 2.0) — uint8 path.
+// Weighted convolution (sigma < 2.0) - uint8 path.
 // ---------------------------------------------------------------------------
 
 void convolveHorizontalWeighted(const std::uint8_t* src, std::uint8_t* dst, int width, int height,
@@ -168,7 +172,7 @@ void convolveHorizontalWeighted(const std::uint8_t* src, std::uint8_t* dst, int 
 // ---------------------------------------------------------------------------
 // Running-sum box blur (σ ≥ 2.0): O(1) per pixel per pass.
 // Uses Vec4u32 SIMD + ScaledDivider (Phases 1+2).
-// Phase 7: Loop splitting for EdgeMode::None — eliminates edge checks in bulk middle.
+// Phase 7: Loop splitting for EdgeMode::None - eliminates edge checks in bulk middle.
 // ---------------------------------------------------------------------------
 
 void boxBlurHorizontal(const std::uint8_t* src, std::uint8_t* dst, int width, int height,
@@ -191,7 +195,7 @@ void boxBlurHorizontal(const std::uint8_t* src, std::uint8_t* dst, int width, in
       }
       sum.scaledDivide(divider).storeToU8(dstRow);
 
-      // Section 1: Left edge — leaving pixel is out of bounds (x < pass.left + 1).
+      // Section 1: Left edge - leaving pixel is out of bounds (x < pass.left + 1).
       const int leftEdgeEnd = std::min(pass.left + 1, width);
       for (int x = 1; x < leftEdgeEnd; ++x) {
         const int enterX = x + pass.right;
@@ -202,7 +206,7 @@ void boxBlurHorizontal(const std::uint8_t* src, std::uint8_t* dst, int width, in
         sum.scaledDivide(divider).storeToU8(dstRow + static_cast<std::size_t>(x) * 4);
       }
 
-      // Section 2: Bulk middle — both entering and leaving pixels are in bounds.
+      // Section 2: Bulk middle - both entering and leaving pixels are in bounds.
       const int bulkEnd = std::min(width - pass.right, width);
       for (int x = leftEdgeEnd; x < bulkEnd; ++x) {
         sum += Vec4u32::loadFromU8(srcRow + static_cast<std::size_t>(x + pass.right) * 4);
@@ -210,7 +214,7 @@ void boxBlurHorizontal(const std::uint8_t* src, std::uint8_t* dst, int width, in
         sum.scaledDivide(divider).storeToU8(dstRow + static_cast<std::size_t>(x) * 4);
       }
 
-      // Section 3: Right edge — entering pixel is out of bounds.
+      // Section 3: Right edge - entering pixel is out of bounds.
       for (int x = std::max(leftEdgeEnd, bulkEnd); x < width; ++x) {
         // enterX = x + pass.right >= width, no addition needed.
         const int leaveX = x - pass.left - 1;
@@ -246,7 +250,7 @@ void boxBlurHorizontal(const std::uint8_t* src, std::uint8_t* dst, int width, in
 }
 
 // ---------------------------------------------------------------------------
-// Float box blur — uses Vec4f32 SIMD for all paths (Phases 2+6).
+// Float box blur - uses Vec4f32 SIMD for all paths (Phases 2+6).
 // Phase 7: Loop splitting for EdgeMode::None.
 // ---------------------------------------------------------------------------
 
@@ -295,7 +299,7 @@ void boxBlurHorizontalFloat(const float* src, float* dst, int width, int height,
         (sum * invWidth).store(dstRow + static_cast<std::size_t>(x) * 4);
       }
 
-      // Bulk middle — no edge checks.
+      // Bulk middle - no edge checks.
       const int bulkEnd = std::min(width - pass.right, width);
       for (int x = leftEdgeEnd; x < bulkEnd; ++x) {
         sum += Vec4f32::load(srcRow + static_cast<std::size_t>(x + pass.right) * 4);
@@ -336,7 +340,6 @@ void boxBlurHorizontalFloat(const float* src, float* dst, int width, int height,
   }
 }
 
-
 }  // namespace
 
 // ---------------------------------------------------------------------------
@@ -367,12 +370,12 @@ void gaussianBlur(Pixmap& pixmap, double sigmaX, double sigmaY, BlurEdgeMode edg
     if (sigmaX < 2.0) {
       const WeightedKernel kernel = makeGaussianKernel(sigmaX);
       convolveHorizontalWeighted(buffer.data(), scratch.data(), width, height, kernel, edgeMode);
-      buffer.swap(scratch);
+      std::swap(buffer, scratch);
     } else {
       const BoxBlurPlan plan = computeBoxPasses(sigmaX);
       for (int i = 0; i < plan.numPasses; ++i) {
         boxBlurHorizontal(buffer.data(), scratch.data(), width, height, plan.passes[i], edgeMode);
-        buffer.swap(scratch);
+        std::swap(buffer, scratch);
       }
     }
   }
@@ -380,23 +383,23 @@ void gaussianBlur(Pixmap& pixmap, double sigmaX, double sigmaY, BlurEdgeMode edg
   if (sigmaY > 0.0) {
     // Transpose for cache-friendly vertical blur.
     transposeRGBA(buffer.data(), scratch.data(), width, height);
-    buffer.swap(scratch);
+    std::swap(buffer, scratch);
 
     if (sigmaY < 2.0) {
       const WeightedKernel kernel = makeGaussianKernel(sigmaY);
       convolveHorizontalWeighted(buffer.data(), scratch.data(), height, width, kernel, edgeMode);
-      buffer.swap(scratch);
+      std::swap(buffer, scratch);
     } else {
       const BoxBlurPlan plan = computeBoxPasses(sigmaY);
       for (int i = 0; i < plan.numPasses; ++i) {
         boxBlurHorizontal(buffer.data(), scratch.data(), height, width, plan.passes[i], edgeMode);
-        buffer.swap(scratch);
+        std::swap(buffer, scratch);
       }
     }
 
     // Transpose back.
     transposeRGBA(buffer.data(), scratch.data(), height, width);
-    buffer.swap(scratch);
+    std::swap(buffer, scratch);
   }
 
   std::copy(buffer.begin(), buffer.end(), pixmap.data().begin());
@@ -414,12 +417,12 @@ void gaussianBlur(FloatPixmap& pixmap, double sigmaX, double sigmaY, BlurEdgeMod
   }
 
   // Guard against OOM: each buffer is width*height*4 floats. The cap
-  // matches `Pixmap::fromSize`'s 1 GiB defensive ceiling — large enough
+  // matches `Pixmap::fromSize`'s 1 GiB defensive ceiling - large enough
   // to handle a viewport-sized SourceGraphic (e.g. the editor's worst
   // case at the `kMaxCanvasDim=8192` clamp boundary requires ~616 MiB
   // of float buffer per blur scratch), small enough to reject inputs
   // claiming pathological sizes. The prior 64 MiB cap silently no-op'd
-  // the blur whenever the SourceGraphic exceeded ~2048×2048 floats —
+  // the blur whenever the SourceGraphic exceeded ~2048x2048 floats -
   // which is the path the editor hits at high zoom, surfacing as
   // "filters disappear when I zoom in." See `ZoomFilterRepro_tests.cc`.
   constexpr std::size_t kMaxAllocationBytes = 1024ULL * 1024ULL * 1024ULL;
@@ -428,49 +431,59 @@ void gaussianBlur(FloatPixmap& pixmap, double sigmaX, double sigmaY, BlurEdgeMod
     return;
   }
 
-  auto srcSpan = pixmap.data();
-  std::vector<float> buffer(srcSpan.begin(), srcSpan.end());
-  std::vector<float> scratch(buffer.size());
-
-  if (sigmaX > 0.0) {
-    if (sigmaX < 2.0) {
-      const WeightedKernel kernel = makeGaussianKernel(sigmaX);
-      convolveHorizontalWeightedFloat(buffer.data(), scratch.data(), width, height, kernel,
-                                      edgeMode);
-      buffer.swap(scratch);
+  // Process one scanline at a time. This bounds blur scratch to two rows or columns instead of one
+  // full float surface, so a large but admitted SourceGraphic does not transiently triple its
+  // retained memory. Every pass reads a complete line before copying its result back.
+  const auto blurLine = [&](std::span<float> line, std::span<float> scratch, double sigma) {
+    if (!(sigma > 0.0)) {
+      return;
+    }
+    std::span<float> input = line;
+    std::span<float> output = scratch;
+    const int linePixels = static_cast<int>(line.size() / 4);
+    if (sigma < 2.0) {
+      const WeightedKernel kernel = makeGaussianKernel(sigma);
+      convolveHorizontalWeightedFloat(input.data(), output.data(), linePixels, 1, kernel, edgeMode);
+      std::swap(input, output);
     } else {
-      const BoxBlurPlan plan = computeBoxPasses(sigmaX);
+      const BoxBlurPlan plan = computeBoxPasses(sigma);
       for (int i = 0; i < plan.numPasses; ++i) {
-        boxBlurHorizontalFloat(buffer.data(), scratch.data(), width, height, plan.passes[i],
+        boxBlurHorizontalFloat(input.data(), output.data(), linePixels, 1, plan.passes[i],
                                edgeMode);
-        buffer.swap(scratch);
+        std::swap(input, output);
       }
+    }
+    if (input.data() != line.data()) {
+      std::copy(input.begin(), input.end(), line.begin());
+    }
+  };
+
+  std::span<float> pixels = pixmap.data();
+  if (sigmaX > 0.0) {
+    const std::size_t rowFloats = static_cast<std::size_t>(width) * 4;
+    std::vector<float> rowScratch(rowFloats);
+    for (int y = 0; y < height; ++y) {
+      blurLine(pixels.subspan(static_cast<std::size_t>(y) * rowFloats, rowFloats), rowScratch,
+               sigmaX);
     }
   }
 
   if (sigmaY > 0.0) {
-    transposeRGBA(buffer.data(), scratch.data(), width, height);
-    buffer.swap(scratch);
-
-    if (sigmaY < 2.0) {
-      const WeightedKernel kernel = makeGaussianKernel(sigmaY);
-      convolveHorizontalWeightedFloat(buffer.data(), scratch.data(), height, width, kernel,
-                                      edgeMode);
-      buffer.swap(scratch);
-    } else {
-      const BoxBlurPlan plan = computeBoxPasses(sigmaY);
-      for (int i = 0; i < plan.numPasses; ++i) {
-        boxBlurHorizontalFloat(buffer.data(), scratch.data(), height, width, plan.passes[i],
-                               edgeMode);
-        buffer.swap(scratch);
+    std::vector<float> column(static_cast<std::size_t>(height) * 4);
+    std::vector<float> columnScratch(column.size());
+    for (int x = 0; x < width; ++x) {
+      for (int y = 0; y < height; ++y) {
+        const std::size_t source = (static_cast<std::size_t>(y) * width + x) * 4;
+        std::copy_n(pixels.data() + source, 4, column.data() + static_cast<std::size_t>(y) * 4);
+      }
+      blurLine(column, columnScratch, sigmaY);
+      for (int y = 0; y < height; ++y) {
+        const std::size_t destination = (static_cast<std::size_t>(y) * width + x) * 4;
+        std::copy_n(column.data() + static_cast<std::size_t>(y) * 4, 4,
+                    pixels.data() + destination);
       }
     }
-
-    transposeRGBA(buffer.data(), scratch.data(), height, width);
-    buffer.swap(scratch);
   }
-
-  std::copy(buffer.begin(), buffer.end(), pixmap.data().begin());
 }
 
 }  // namespace tiny_skia::filter

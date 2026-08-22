@@ -509,6 +509,38 @@ TEST(RendererPublicApiTest, FacadeForwardsFrameStateAndPrimitiveCalls) {
   EXPECT_GE(renderer.height(), 0);
 }
 
+TEST(RendererPublicApiTest, RejectedFilterSuppressesItsSubtreeAndRestoresParent) {
+  if (!ActiveRendererSupportsFeature(RendererBackendFeature::FilterEffects)) {
+    GTEST_SKIP() << "Filter rendering disabled in this variant (" << ActiveRendererBackendName()
+                 << ")";
+  }
+
+  std::unique_ptr<RendererInterface> renderer = CreateActiveRendererInstance();
+  renderer->beginFrame(RenderViewport{.size = Vector2d(16.0, 8.0), .devicePixelRatio = 1.0});
+  renderer->setTransform(Transform2d());
+
+  components::FilterGraph rejectedGraph;
+  rejectedGraph.nodes.resize(components::kMaximumFilterGraphNodes + 1);
+  renderer->pushFilterLayer(rejectedGraph, Box2d::FromXYWH(0.0, 0.0, 16.0, 8.0));
+
+  PaintParams green;
+  green.fill = PaintServer::Solid{css::Color(css::RGBA(0, 255, 0, 255))};
+  renderer->setPaint(green);
+  renderer->drawRect(Box2d::FromXYWH(0.0, 0.0, 16.0, 8.0), StrokeParams{});
+  renderer->popFilterLayer();
+
+  PaintParams blue;
+  blue.fill = PaintServer::Solid{css::Color(css::RGBA(0, 0, 255, 255))};
+  renderer->setPaint(blue);
+  renderer->drawRect(Box2d::FromXYWH(8.0, 0.0, 8.0, 8.0), StrokeParams{});
+  renderer->endFrame();
+
+  const RendererBitmap snapshot = NormalizeSnapshot(renderer->takeSnapshot());
+  ASSERT_FALSE(snapshot.empty());
+  EXPECT_THAT(PixelAt(snapshot, 2, 4), IsTransparent());
+  EXPECT_THAT(PixelAt(snapshot, 12, 4), IsBlueish());
+}
+
 TEST(RendererPublicApiTest, PatternTileRejectsUnsafeDimensionsWithoutChangingFrameState) {
   Renderer renderer;
   renderer.beginFrame(RenderViewport{

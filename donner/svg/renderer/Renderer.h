@@ -339,6 +339,9 @@ public:
   /// Forwards the test-only in-constructor hook to the active backend.
   void setOffscreenCreationHookForTesting(std::function<void()> hook) override;
 
+  /// Forwards filter-budget chunk diagnostics from the active backend.
+  [[nodiscard]] std::uint64_t filterBudgetChunksForTesting() const override;
+
   /// Forwards \ref RendererInterface::setDebugGeometryOverlay to the
   /// active backend (no-op for backends without a debug overlay).
   void setDebugGeometryOverlay(bool enabled) override;

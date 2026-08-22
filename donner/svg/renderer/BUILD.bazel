@@ -196,6 +196,7 @@ donner_perf_sensitive_cc_library(
         "//donner/base",
         "//donner/svg",
         "//donner/svg/components:attached_id_lookup",
+        "//donner/svg/components/filter:computed_filter_resource_budget",
         "//donner/svg/renderer/common",
     ] + select({
         ":text_enabled": ["//donner/svg/text:text_engine"],

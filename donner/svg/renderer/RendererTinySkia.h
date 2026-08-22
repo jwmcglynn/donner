@@ -316,13 +316,16 @@ private:
   struct SurfaceFrame {
     SurfaceKind kind;
     tiny_skia::Pixmap pixmap;
+    bool allocationRejected = false;
     std::optional<tiny_skia::Pixmap> fillPaintPixmap;
     std::optional<tiny_skia::Pixmap> strokePaintPixmap;
     double opacity = 1.0;
     MixBlendMode blendMode = MixBlendMode::Normal;
     components::FilterGraph filterGraph;
+    components::FilterExecutionBudget::Reservation filterReservation;
     std::optional<Box2d> filterRegion;
     Transform2d deviceFromFilter;
+    bool localRasterRequiredForBudget = false;
     int filterBufferOffsetX = 0;
     int filterBufferOffsetY = 0;
     std::optional<Box2d> maskBounds;
@@ -346,6 +349,17 @@ private:
     std::uint64_t savedClipEpoch = 0;
     /// @see savedClipEpoch
     std::vector<std::uint64_t> savedClipEpochStack;
+  };
+
+  struct FilterAdmission {
+    int width = 0;
+    int height = 0;
+    int bufferOffsetX = 0;
+    int bufferOffsetY = 0;
+    bool usesFillPaint = false;
+    bool usesStrokePaint = false;
+    bool localRasterRequired = false;
+    components::FilterExecutionBudget::Reservation reservation;
   };
 
   /// Last clip mask seen at one clip-stack depth, and the identity assigned to it.
@@ -385,6 +399,13 @@ private:
   [[nodiscard]] const tiny_skia::Pixmap& currentPixmap() const;
   [[nodiscard]] tiny_skia::MutablePixmapView currentPixmapView();
   [[nodiscard]] std::optional<tiny_skia::Mask> buildClipMask(const ResolvedClip& clip) const;
+  [[nodiscard]] std::optional<FilterAdmission> admitFilterLayer(
+      const components::FilterGraph& filterGraph, const std::optional<Box2d>& filterRegion,
+      const Transform2d& deviceFromFilter, int viewportWidth, int viewportHeight);
+  bool initializeFilterSurface(SurfaceFrame& frame, const FilterAdmission& admission);
+  bool compositeTransformedFilter(SurfaceFrame& frame);
+  void compositeDeviceFilter(SurfaceFrame& frame);
+  tiny_skia::Pixmap extractFilterViewport(const SurfaceFrame& frame, int width, int height);
   [[nodiscard]] std::optional<tiny_skia::Paint> makeFillPaint(const Box2d& bounds);
   [[nodiscard]] std::optional<tiny_skia::Paint> makeStrokePaint(const Box2d& bounds,
                                                                 const StrokeParams& stroke);
@@ -448,7 +469,13 @@ private:
   std::vector<Transform2d> deviceFromLocalTransformStack_;
   std::optional<tiny_skia::Mask> currentClipMask_;
   std::vector<std::optional<tiny_skia::Mask>> clipStack_;
+  tiny_skia::Pixmap rejectedPixmap_;
   std::vector<SurfaceFrame> surfaceStack_;
+  std::vector<bool> filterLayerStack_;
+  std::size_t rejectedFilterDepth_ = 0;
+  std::shared_ptr<components::FilterExecutionBudget> filterExecutionBudget_ =
+      std::make_shared<components::FilterExecutionBudget>();
+  bool ownsFilterExecutionBudget_ = true;
   std::optional<PatternPaintState> patternFillPaint_;
   std::optional<PatternPaintState> patternStrokePaint_;
 

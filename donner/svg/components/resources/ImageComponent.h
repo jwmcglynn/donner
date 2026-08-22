@@ -1,6 +1,8 @@
 #pragma once
 /// @file
 
+#include <atomic>
+#include <cstdint>
 #include <optional>
 
 #include "donner/base/RcString.h"
@@ -23,10 +25,25 @@ struct ImageComponent {
  * raster image (PNG, JPEG, GIF).
  */
 struct LoadedImageComponent {
-  LoadedImageComponent() = default;
-  explicit LoadedImageComponent(ImageResource loadedImage) : image(std::move(loadedImage)) {}
+  LoadedImageComponent() : revision_(NextRevision()) {}
+  explicit LoadedImageComponent(ImageResource loadedImage)
+      : image(std::move(loadedImage)), revision_(NextRevision()) {}
+
+  /// Monotonic identity for the current decoded image payload.
+  std::uint64_t revision() const { return revision_; }
+
+  /// Mark a direct mutation of the decoded image payload.
+  void markImageModified() { revision_ = NextRevision(); }
 
   std::optional<ImageResource> image;  //!< Loaded image resource.
+
+private:
+  static std::uint64_t NextRevision() {
+    static std::atomic<std::uint64_t> nextRevision{1};
+    return nextRevision.fetch_add(1, std::memory_order_relaxed);
+  }
+
+  std::uint64_t revision_ = 0;
 };
 
 /**

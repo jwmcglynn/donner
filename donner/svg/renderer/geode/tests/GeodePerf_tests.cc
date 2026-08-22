@@ -288,6 +288,16 @@ constexpr std::string_view kHugeRadiusMorphologySvg = R"SVG(
 </svg>
 )SVG";
 
+constexpr std::string_view kChunkedMorphologySvg = R"SVG(
+<svg viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg">
+  <filter id="filter1">
+    <feMorphology radius="256"/><feMorphology radius="256"/>
+    <feMorphology radius="256"/><feMorphology radius="256"/>
+  </filter>
+  <rect x="20" y="20" width="160" height="160" fill="red" filter="url(#filter1)"/>
+</svg>
+)SVG";
+
 // ---------------------------------------------------------------------------
 // Fixture: image blits - drawImage uniform pooling.
 // ---------------------------------------------------------------------------
@@ -332,7 +342,7 @@ TEST_F(GeodePerfTest, MultiImageBlit_PoolsCompositeUniforms) {
          "blit.";
 }
 
-TEST_F(GeodePerfTest, MorphologyHugeRadius_ChunksFilterCommandBuffers) {
+TEST_F(GeodePerfTest, MorphologyHugeRadiusIsBoundedBeforeEncoding) {
   auto device = sharedDevice();
   ASSERT_TRUE(device) << "GeodeDevice::CreateHeadless failed";
 
@@ -341,23 +351,19 @@ TEST_F(GeodePerfTest, MorphologyHugeRadius_ChunksFilterCommandBuffers) {
   RecordProperty("submits", std::to_string(c.submits));
   printCounters(::testing::UnitTest::GetInstance()->current_test_info()->name(), c);
 
-  // The shared-encoder design keeps a small blur at two submissions (frame
-  // + readback). A pathological morphology (323 X + 323 Y passes here) must
-  // not regress that design into one unbounded command buffer: every 64
-  // passes the filter arena submits its chunk and starts a fresh encoder,
-  // so 646 passes produce 10 chunk submits plus the final frame submit and
-  // the readback submit, 12 in total. Assert a bounded range rather than
-  // the exact count so incidental extra submits (device warm-up, snapshot
-  // plumbing) don't turn this into a change-detector. The pass count
-  // scales with the DEVICE-pixel radius, so this ceiling is only valid at
-  // this fixture's fixed 200x200 canvas at devicePixelRatio 1; rescaling
-  // the fixture requires retuning both bounds.
-  EXPECT_GE(c.submits, 6u)
-      << "Huge-radius morphology should force chunked filter submissions beyond the shared "
-         "frame + readback pair.";
-  EXPECT_LE(c.submits, 20u)
-      << "Chunked filter submissions should bound the command buffer to 64 passes each: "
-         "646 passes chunk into 10 mid-frame submits plus frame and readback submits.";
+  // Untrusted radii are admitted at the shared filter pixel-radius ceiling before command
+  // encoding. The bounded morphology therefore stays below the 64-pass chunk threshold and uses
+  // only the frame and readback submissions instead of scaling work with the raw radius.
+  EXPECT_GE(c.submits, 1u);
+  EXPECT_LE(c.submits, 3u);
+}
+
+TEST_F(GeodePerfTest, MultipleBoundedMorphologyNodesStillChunkCommandBuffers) {
+  auto device = sharedDevice();
+  ASSERT_TRUE(device);
+  const geode::GeodeCounters counters = renderAndGetCounters(kChunkedMorphologySvg, device);
+  EXPECT_GE(counters.submits, 3u);
+  EXPECT_LE(counters.submits, 6u);
 }
 
 TEST_F(GeodePerfTest, GaussianBlur_UsesSingleFrameSubmission) {
@@ -375,7 +381,6 @@ TEST_F(GeodePerfTest, GaussianBlur_UsesSingleFrameSubmission) {
       << "The filter layer, all Gaussian passes, composite, and readback should require only the "
          "shared frame submission plus the snapshot submission.";
 }
-
 
 // ---------------------------------------------------------------------------
 // Fixture: lion.svg - the workhorse SVG used across Donner test suites.

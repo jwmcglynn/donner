@@ -8,6 +8,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <limits>
 #include <utility>
 
 #include "tiny_skia/filter/TurbulenceKernel.h"
@@ -22,9 +23,55 @@ constexpr int kPerlinN = 0x1000;       // 4096: offset added to coordinates to k
 
 // Park-Miller LCG constants (Schrage's method to avoid overflow).
 constexpr long kRandM = 2147483647;  // 2^31 - 1  // NOLINT
-constexpr long kRandA = 16807;                     // NOLINT
-constexpr long kRandQ = 127773;  // kRandM / kRandA  // NOLINT
-constexpr long kRandR = 2836;    // kRandM % kRandA  // NOLINT
+constexpr long kRandA = 16807;       // NOLINT
+constexpr long kRandQ = 127773;      // kRandM / kRandA  // NOLINT
+constexpr long kRandR = 2836;        // kRandM % kRandA  // NOLINT
+constexpr double kMaximumBaseFrequency = 1024.0;
+constexpr double kMaximumTransformCoefficient = 1.0e6;
+
+template <typename T>
+struct SplitNoiseCoordinate {
+  int base = 0;
+  T fraction = 0;
+};
+
+template <typename T>
+SplitNoiseCoordinate<T> splitNoiseCoordinate(T value) {
+  if (!std::isfinite(value)) {
+    value = 0;
+  }
+  const T floored = std::floor(value);
+  int base = 0;
+  if (floored >= static_cast<T>(std::numeric_limits<int>::min()) &&
+      floored <= static_cast<T>(std::numeric_limits<int>::max() - 1)) {
+    base = static_cast<int>(floored);
+  } else {
+    // Only the low eight bits select the permutation-table entry. Reduce huge coordinates before
+    // converting instead of invoking undefined behavior in a floating-point-to-integer cast.
+    base = static_cast<int>(std::fmod(floored, static_cast<T>(kBLen)));
+  }
+  return SplitNoiseCoordinate<T>{base, value - floored};
+}
+
+template <typename T>
+T boundedFinite(T value, T magnitude) {
+  if (std::isnan(value)) {
+    return 0;
+  }
+  return std::clamp(value, -magnitude, magnitude);
+}
+
+template <typename T>
+int boundedStitchExtent(T value) {
+  constexpr int kMaximumExtent = std::numeric_limits<int>::max() - kPerlinN;
+  if (!std::isfinite(value) || value >= static_cast<T>(kMaximumExtent)) {
+    return kMaximumExtent;
+  }
+  if (value <= 1) {
+    return 1;
+  }
+  return static_cast<int>(value);
+}
 
 struct StitchInfo {
   int width = 0;
@@ -34,21 +81,21 @@ struct StitchInfo {
 };
 
 class TurbulenceGenerator {
-public:
+ public:
   explicit TurbulenceGenerator(double seedVal) { init(seedVal); }
 
   // Compute noise at (x, y) for a given color channel (0=R, 1=G, 2=B, 3=A).
   double noise2(int channel, double x, double y, const StitchInfo* stitch) const {
-    double t = x + static_cast<double>(kPerlinN);
-    int bx0 = static_cast<int>(static_cast<int64_t>(t));
+    const auto splitX = splitNoiseCoordinate(x + static_cast<double>(kPerlinN));
+    int bx0 = splitX.base;
     int bx1 = bx0 + 1;
-    double rx0 = t - static_cast<double>(static_cast<int64_t>(t));
+    double rx0 = splitX.fraction;
     double rx1 = rx0 - 1.0;
 
-    t = y + static_cast<double>(kPerlinN);
-    int by0 = static_cast<int>(static_cast<int64_t>(t));
+    const auto splitY = splitNoiseCoordinate(y + static_cast<double>(kPerlinN));
+    int by0 = splitY.base;
     int by1 = by0 + 1;
-    double ry0 = t - static_cast<double>(static_cast<int64_t>(t));
+    double ry0 = splitY.fraction;
     double ry1 = ry0 - 1.0;
 
     // Apply stitching before masking.
@@ -99,16 +146,16 @@ public:
   // Compute noise at (x, y) for all 4 channels simultaneously.
   // Shares lattice lookups and s-curve computation across channels.
   void noise2_4ch(double x, double y, const StitchInfo* stitch, double out[4]) const {
-    double t = x + static_cast<double>(kPerlinN);
-    int bx0 = static_cast<int>(static_cast<int64_t>(t));
+    const auto splitX = splitNoiseCoordinate(x + static_cast<double>(kPerlinN));
+    int bx0 = splitX.base;
     int bx1 = bx0 + 1;
-    double rx0 = t - static_cast<double>(static_cast<int64_t>(t));
+    double rx0 = splitX.fraction;
     double rx1 = rx0 - 1.0;
 
-    t = y + static_cast<double>(kPerlinN);
-    int by0 = static_cast<int>(static_cast<int64_t>(t));
+    const auto splitY = splitNoiseCoordinate(y + static_cast<double>(kPerlinN));
+    int by0 = splitY.base;
     int by1 = by0 + 1;
-    double ry0 = t - static_cast<double>(static_cast<int64_t>(t));
+    double ry0 = splitY.fraction;
     double ry1 = ry0 - 1.0;
 
     // Apply stitching before masking.
@@ -154,16 +201,16 @@ public:
   // Float-precision 4-channel noise, vectorized by `turbulenceBlend4`.
   // Uses SOA gradient tables for cache-friendly 4-channel SIMD loads.
   void noise2_4ch_f(float x, float y, const StitchInfo* stitch, float out[4]) const {
-    float t = x + static_cast<float>(kPerlinN);
-    int bx0 = static_cast<int>(static_cast<int64_t>(t));
+    const auto splitX = splitNoiseCoordinate(x + static_cast<float>(kPerlinN));
+    int bx0 = splitX.base;
     int bx1 = bx0 + 1;
-    float rx0 = t - static_cast<float>(static_cast<int64_t>(t));
+    float rx0 = splitX.fraction;
     float rx1 = rx0 - 1.0f;
 
-    t = y + static_cast<float>(kPerlinN);
-    int by0 = static_cast<int>(static_cast<int64_t>(t));
+    const auto splitY = splitNoiseCoordinate(y + static_cast<float>(kPerlinN));
+    int by0 = splitY.base;
     int by1 = by0 + 1;
-    float ry0 = t - static_cast<float>(static_cast<int64_t>(t));
+    float ry0 = splitY.fraction;
     float ry1 = ry0 - 1.0f;
 
     if (stitch) {
@@ -195,14 +242,13 @@ public:
     turbulenceBlend4(corners, weights, out);
   }
 
-private:
+ private:
   void init(double seedVal) {
     // Seed clamping matching resvg.
+    seedVal = boundedFinite(seedVal, static_cast<double>(kRandM - 1));
     long seed;  // NOLINT
     if (seedVal <= 0) {
-      seed = -(static_cast<long>(seedVal)) % (kRandM - 1) + 1;  // NOLINT
-    } else if (seedVal > kRandM - 1) {
-      seed = kRandM - 1;
+      seed = static_cast<long>(-seedVal) % (kRandM - 1) + 1;  // NOLINT
     } else {
       seed = static_cast<long>(seedVal);  // NOLINT
     }
@@ -218,11 +264,9 @@ private:
 
         // Two random calls per gradient vector.
         seed = random(seed);
-        gradient_[ch][k][0] =
-            static_cast<double>((seed % (kBLen + kBLen)) - kBLen) / kBLen;
+        gradient_[ch][k][0] = static_cast<double>((seed % (kBLen + kBLen)) - kBLen) / kBLen;
         seed = random(seed);
-        gradient_[ch][k][1] =
-            static_cast<double>((seed % (kBLen + kBLen)) - kBLen) / kBLen;
+        gradient_[ch][k][1] = static_cast<double>((seed % (kBLen + kBLen)) - kBLen) / kBLen;
 
         // Normalize to unit length.
         const double mag = std::sqrt(gradient_[ch][k][0] * gradient_[ch][k][0] +
@@ -334,11 +378,13 @@ void turbulence(Pixmap& dst, const TurbulenceParams& params) {
       // inverse transform (handles skew/rotation, not just scale).
       const double px = static_cast<double>(x);
       const double py = static_cast<double>(y);
-      const double ux = params.filterFromDeviceA * px + params.filterFromDeviceB * py;
-      const double uy = params.filterFromDeviceC * px + params.filterFromDeviceD * py;
+      const double ux = boundedFinite(params.filterFromDeviceA, kMaximumTransformCoefficient) * px +
+                        boundedFinite(params.filterFromDeviceB, kMaximumTransformCoefficient) * py;
+      const double uy = boundedFinite(params.filterFromDeviceC, kMaximumTransformCoefficient) * px +
+                        boundedFinite(params.filterFromDeviceD, kMaximumTransformCoefficient) * py;
 
-      double freqX = params.baseFrequencyX;
-      double freqY = params.baseFrequencyY;
+      double freqX = boundedFinite(params.baseFrequencyX, kMaximumBaseFrequency);
+      double freqY = boundedFinite(params.baseFrequencyY, kMaximumBaseFrequency);
       double ratio = 1.0;
 
       for (int octave = 0; octave < numOctaves; octave++) {
@@ -348,10 +394,8 @@ void turbulence(Pixmap& dst, const TurbulenceParams& params) {
         StitchInfo stitch;
         StitchInfo* stitchPtr = nullptr;
         if (params.stitchTiles) {
-          stitch.width = static_cast<int>(static_cast<double>(params.tileWidth) * freqX);
-          stitch.height = static_cast<int>(static_cast<double>(params.tileHeight) * freqY);
-          if (stitch.width < 1) stitch.width = 1;
-          if (stitch.height < 1) stitch.height = 1;
+          stitch.width = boundedStitchExtent(static_cast<double>(params.tileWidth) * freqX);
+          stitch.height = boundedStitchExtent(static_cast<double>(params.tileHeight) * freqY);
           stitch.wrapX = stitch.width + kPerlinN;
           stitch.wrapY = stitch.height + kPerlinN;
           stitchPtr = &stitch;
@@ -446,12 +490,18 @@ void turbulence(FloatPixmap& dst, const TurbulenceParams& params) {
   const bool isFractal = (params.type == TurbulenceType::FractalNoise);
 
   // Pre-convert transform coefficients to float.
-  const float fA = static_cast<float>(params.filterFromDeviceA);
-  const float fB = static_cast<float>(params.filterFromDeviceB);
-  const float fC = static_cast<float>(params.filterFromDeviceC);
-  const float fD = static_cast<float>(params.filterFromDeviceD);
-  const float baseFreqXf = static_cast<float>(params.baseFrequencyX);
-  const float baseFreqYf = static_cast<float>(params.baseFrequencyY);
+  const float fA =
+      static_cast<float>(boundedFinite(params.filterFromDeviceA, kMaximumTransformCoefficient));
+  const float fB =
+      static_cast<float>(boundedFinite(params.filterFromDeviceB, kMaximumTransformCoefficient));
+  const float fC =
+      static_cast<float>(boundedFinite(params.filterFromDeviceC, kMaximumTransformCoefficient));
+  const float fD =
+      static_cast<float>(boundedFinite(params.filterFromDeviceD, kMaximumTransformCoefficient));
+  const float baseFreqXf =
+      static_cast<float>(boundedFinite(params.baseFrequencyX, kMaximumBaseFrequency));
+  const float baseFreqYf =
+      static_cast<float>(boundedFinite(params.baseFrequencyY, kMaximumBaseFrequency));
 
   auto data = dst.data();
 
@@ -475,10 +525,8 @@ void turbulence(FloatPixmap& dst, const TurbulenceParams& params) {
         StitchInfo stitch;
         StitchInfo* stitchPtr = nullptr;
         if (params.stitchTiles) {
-          stitch.width = static_cast<int>(static_cast<float>(params.tileWidth) * freqX);
-          stitch.height = static_cast<int>(static_cast<float>(params.tileHeight) * freqY);
-          if (stitch.width < 1) stitch.width = 1;
-          if (stitch.height < 1) stitch.height = 1;
+          stitch.width = boundedStitchExtent(static_cast<float>(params.tileWidth) * freqX);
+          stitch.height = boundedStitchExtent(static_cast<float>(params.tileHeight) * freqY);
           stitch.wrapX = stitch.width + kPerlinN;
           stitch.wrapY = stitch.height + kPerlinN;
           stitchPtr = &stitch;

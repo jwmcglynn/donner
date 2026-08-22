@@ -1,5 +1,5 @@
-load("//build_defs:rules.bzl", "donner_cc_library", "donner_cc_test")
 load("//build_defs:package.bzl", "donner_package")
+load("//build_defs:rules.bzl", "donner_cc_library", "donner_cc_test")
 
 donner_cc_library(
     name = "components",
@@ -45,6 +45,16 @@ donner_cc_library(
 )
 
 donner_cc_library(
+    name = "computed_filter_resource_budget",
+    hdrs = ["ComputedFilterResourceBudget.h"],
+    visibility = ["//donner/svg:__subpackages__"],
+    deps = [
+        "//donner/base",
+        "//donner/svg/components:components_core",
+    ],
+)
+
+donner_cc_library(
     name = "filter_system",
     srcs = [
         "FilterSystem.cc",
@@ -57,9 +67,11 @@ donner_cc_library(
     ],
     deps = [
         ":components",
+        ":computed_filter_resource_budget",
         "//donner/base",
         "//donner/css/parser",
         "//donner/svg/components:components_core",
+        "//donner/svg/components:reference_resolution_budget",
         "//donner/svg/components/resources:components",
         "//donner/svg/components/style:components",
         "//donner/svg/properties:property_parsing",

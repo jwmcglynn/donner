@@ -22,6 +22,7 @@
 #include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
 
 namespace donner::svg::components {
+class FilterExecutionBudget;
 struct FilterGraph;
 struct FilterNode;
 
@@ -133,13 +134,16 @@ public:
    *   this slot: the current command buffer is submitted and a fresh encoder is installed in the
    *   slot every 64 passes, so no single command buffer grows without bound while small filters
    *   keep the two-submissions-per-frame shape.
+   * @param executionBudget Optional shared per-frame budget. Direct callers may omit it to apply
+   *   only the graph-local limit.
    * @return The filtered output texture (RGBA8Unorm, TextureBinding | CopySrc).
    */
   wgpu::Texture execute(const svg::components::FilterGraph& graph,
                         const wgpu::Texture& sourceGraphic, const Box2d& filterRegion,
                         const Transform2d& deviceFromFilter,
                         FilterTextureAllocator& textureAllocator,
-                        ScopedWgpuHandle<wgpu::CommandEncoder>& commandEncoder);
+                        ScopedWgpuHandle<wgpu::CommandEncoder>& commandEncoder,
+                        svg::components::FilterExecutionBudget* executionBudget = nullptr);
 
   /**
    * Begin a new frame for this engine: reset the frame-scoped chunk pass
@@ -160,6 +164,7 @@ public:
   void beginFrame();
 
 private:
+  friend struct FilterGraphExecution;
   /// Two-pass separable Gaussian blur via compute shader.
   /// @param input The input texture.
   /// @param stdDeviationX Standard deviation in X (pixels).
@@ -195,8 +200,8 @@ private:
   /// @return Output texture for this pass.
   wgpu::Texture runBoxBlurPass(FilterResourceArena& arena, const wgpu::Texture& input,
                                const wgpu::Texture& output, uint32_t width, uint32_t height,
-                               int32_t boxLeft, int32_t boxRight, uint32_t axis,
-                               uint32_t edgeMode, const Box2d* clip = nullptr);
+                               int32_t boxLeft, int32_t boxRight, uint32_t axis, uint32_t edgeMode,
+                               const Box2d* clip = nullptr);
 
   /// Shift pixels by (dx, dy) via compute shader.
   /// @param input The input texture.
