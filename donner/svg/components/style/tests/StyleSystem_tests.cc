@@ -677,6 +677,29 @@ TEST(StyleResourceBudgetTest, SharesRetainedBytesAcrossDocumentFamily) {
   EXPECT_EQ(family->retainedBytes(DocumentResourceFamilyBudget::Kind::ComputedStyle), 0u);
 }
 
+TEST(StyleResourceBudgetTest, SpareVectorCapacityReachesExactCapThenRejectsPlusOne) {
+  StrokeDasharray dasharray;
+  dasharray.reserve(8);
+  dasharray.emplace_back(1.0, Lengthd::Unit::Px);
+  const std::size_t retainedCapacityBytes = dasharray.capacity() * sizeof(Lengthd);
+
+  PropertyRegistry properties;
+  properties.strokeDasharray.set(std::move(dasharray), css::Specificity());
+
+  StyleResourceBudget::Limits limits;
+  limits.complexPropertyBytes = retainedCapacityBytes;
+  StyleResourceBudget budget(limits);
+  Registry registry;
+  const Entity atCap = registry.create();
+  const Entity plusOne = registry.create();
+
+  EXPECT_TRUE(budget.reserveComplexPropertyBytes(atCap, properties.complexPropertyBytes()));
+  EXPECT_EQ(budget.complexPropertyBytes(), retainedCapacityBytes);
+  EXPECT_FALSE(budget.reserveComplexPropertyBytes(plusOne, 1));
+  EXPECT_EQ(budget.complexPropertyBytes(), retainedCapacityBytes);
+  EXPECT_TRUE(budget.rejected());
+}
+
 TEST(StyleResourceBudgetTest, ChargesDeclarationSourceBytesPerApplication) {
   StyleResourceBudget::Limits limits;
   limits.declarationByteWork = 1024;
