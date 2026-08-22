@@ -81,38 +81,19 @@ function run_quiet_with_progress() {
   # names the target, and kill so the job fails fast instead of running out its
   # backstop.
   local stall_limit="${DONNER_COVERAGE_STALL_LIMIT_SECONDS:-900}"
+  local progress_control="${log_file}.progress-control.$$"
+  mkfifo "$progress_control"
+  exec 9<> "$progress_control"
 
   (
     local last_line=""
     local last_change
-    local sleep_pid=""
-    local stop_requested=false
-
-    request_progress_stop() {
-      stop_requested=true
-    }
-
-    stop_progress_watcher() {
-      if [[ -n "$sleep_pid" ]]; then
-        kill "$sleep_pid" 2> /dev/null || true
-        wait "$sleep_pid" 2> /dev/null || true
-      fi
-      exit 0
-    }
-    trap request_progress_stop TERM INT
 
     last_change=$(date +%s)
     while true; do
-      # Defer exit until the newly forked sleeper's PID is published below.
-      trap request_progress_stop TERM INT
-      sleep "$progress_interval" &
-      sleep_pid=$!
-      trap stop_progress_watcher TERM INT
-      if [[ "$stop_requested" == true ]]; then
-        stop_progress_watcher
+      if IFS= read -r -t "$progress_interval" _ <&9; then
+        exit 0
       fi
-      wait "$sleep_pid" || exit 0
-      sleep_pid=""
 
       if ! kill -0 "$command_pid" 2> /dev/null; then
         exit 0
@@ -158,10 +139,10 @@ function run_quiet_with_progress() {
 
   local status=0
   wait "$command_pid" || status=$?
-  # The watcher owns and traps its sleeper, so terminating it cannot leave an
-  # orphan holding the caller's output pipe until the interval expires.
-  kill -TERM "$progress_pid" 2> /dev/null || true
+  printf 'stop\n' >&9
   wait "$progress_pid" 2> /dev/null || true
+  exec 9>&-
+  rm -f "$progress_control"
 
   local end_time
   end_time=$(date +%s)
