@@ -58,6 +58,17 @@ TEST(GeodeDevice, CreateHeadlessSucceeds) {
   EXPECT_TRUE(static_cast<bool>(device->adapter()));
 }
 
+TEST(GeodeDevice, DestructionConsumesDeviceLostCallbackState) {
+  const std::size_t before = GeodeDevice::outstandingDeviceLostCallbacksForTesting();
+  {
+    auto device = GeodeDevice::CreateHeadless();
+    ASSERT_NE(device, nullptr);
+    EXPECT_EQ(GeodeDevice::outstandingDeviceLostCallbacksForTesting(), before + 1u);
+  }
+
+  EXPECT_EQ(GeodeDevice::outstandingDeviceLostCallbacksForTesting(), before);
+}
+
 /// Can we allocate an offscreen render-target texture?
 TEST(GeodeDevice, CanCreateRenderTargetTexture) {
   auto device = GeodeDevice::CreateHeadless();

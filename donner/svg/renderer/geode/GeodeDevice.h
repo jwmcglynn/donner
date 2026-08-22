@@ -169,6 +169,9 @@ public:
   /// sharing by asserting this count stays flat across repeated operations.
   static int headlessCreationCountForTesting();
 
+  /// Number of retained headless-device loss callback states not yet consumed by WebGPU.
+  static std::size_t outstandingDeviceLostCallbacksForTesting();
+
   /// Destructor releases the device and all GPU resources. All teardown
   /// waits are bounded; if the device has been declared lost (see
   /// \ref isDeviceLost) the destructor performs no GPU waits at all and
