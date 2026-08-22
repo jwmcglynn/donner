@@ -855,6 +855,7 @@ public:
   }
   [[nodiscard]] std::uint64_t captureBytesReserved() const { return captureBytesReserved_; }
   [[nodiscard]] std::uint64_t activeGpuReservations() const { return activeGpuReservations_; }
+  [[nodiscard]] std::uint64_t retainedGpuBytes() const { return intermediateBytes_; }
   /// Ordered GPU chunks submitted since this budget was constructed.
   [[nodiscard]] std::uint64_t chunks() const { return chunks_; }
   [[nodiscard]] bool rejected() const { return rejected_; }

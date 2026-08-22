@@ -506,6 +506,39 @@ TEST(FilterGraphExecutorTest, ActiveGpuReservationBlocksMemoryChunk) {
   EXPECT_EQ(budget.chunks(), 0u);
 }
 
+TEST(FilterGraphExecutorTest, EmptyChunkCannotRetryIntrinsicallyOversizedGraph) {
+  components::FilterGraph graph;
+  components::FilterNode blur;
+  blur.primitive = components::filter_primitive::GaussianBlur{
+      .stdDeviationX = 3.0,
+      .stdDeviationY = 3.0,
+  };
+  graph.nodes.push_back(std::move(blur));
+
+  components::FilterExecutionBudget budget;
+  auto small = budget.reserve(graph, 1024, components::FilterMemoryModel::GpuAllNodes, 4096);
+  ASSERT_TRUE(small.has_value());
+  budget.release(*small);
+
+  constexpr std::uint64_t kOversizedPixels = 5'800'000;
+  constexpr std::uint64_t kCaptureBytes = kOversizedPixels * 4;
+  EXPECT_FALSE(budget
+                   .reserve(graph, kOversizedPixels, components::FilterMemoryModel::GpuAllNodes,
+                            kCaptureBytes)
+                   .has_value());
+  EXPECT_GT(budget.retainedGpuBytes(), 0u);
+  ASSERT_TRUE(budget.beginChunkAfterSubmit());
+  EXPECT_EQ(budget.chunks(), 1u);
+
+  EXPECT_FALSE(budget
+                   .reserve(graph, kOversizedPixels, components::FilterMemoryModel::GpuAllNodes,
+                            kCaptureBytes)
+                   .has_value());
+  EXPECT_EQ(budget.retainedGpuBytes(), 0u);
+  EXPECT_FALSE(budget.beginChunkAfterSubmit());
+  EXPECT_EQ(budget.chunks(), 1u);
+}
+
 TEST(FilterGraphExecutorTest, RejectsNestedCaptureMemoryBeforeAllocation) {
   components::FilterGraph graph;
   components::FilterNode dropShadow;
