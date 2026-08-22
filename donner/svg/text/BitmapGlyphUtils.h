@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <vector>
 
 namespace donner::svg::details {
 
@@ -86,6 +87,12 @@ inline std::optional<BgraBitmapLayout> ValidateBgraBitmapLayout(unsigned int wid
       .sourceSpanBytes = sourceSpanBytes,
       .rgbaBytes = *rgbaBytes,
   };
+}
+
+/// Convert one validated BGRA bitmap into tightly packed logical-row-order RGBA pixels.
+inline std::vector<uint8_t> ConvertValidatedBgraToRgba(const uint8_t* /*buffer*/,
+                                                       const BgraBitmapLayout& /*layout*/) {
+  return {};
 }
 
 }  // namespace donner::svg::details

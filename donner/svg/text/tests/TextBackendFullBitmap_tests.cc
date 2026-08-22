@@ -83,6 +83,19 @@ TEST(BitmapGlyphUtils, RejectsMalformedAndUnreasonableLayouts) {
             std::nullopt);
 }
 
+TEST(BitmapGlyphUtils, ConvertsNegativePitchRowsInLogicalOrder) {
+  std::array<uint8_t, 20> storage{
+      9, 10, 11, 12, 13, 14, 15, 16, 0, 0, 0, 0, 1, 2, 3, 4, 5, 6, 7, 8,
+  };
+  const uint8_t* logicalFirstRow = storage.data() + 12;
+  const auto layout = details::ValidateBgraBitmapLayout(
+      /*width=*/2, /*rows=*/2, /*pitch=*/-12, logicalFirstRow);
+  ASSERT_TRUE(layout.has_value());
+
+  EXPECT_THAT(details::ConvertValidatedBgraToRgba(logicalFirstRow, *layout),
+              ElementsAre(3, 2, 1, 4, 7, 6, 5, 8, 11, 10, 9, 12, 15, 14, 13, 16));
+}
+
 TEST(TextBackendFullBitmap, DecodesBoundedTrustedBitmapFontSeed) {
   const std::vector<uint8_t> fontBytes = LoadBitmapFontSeed();
   ASSERT_THAT(fontBytes, Not(SizeIs(0)));
