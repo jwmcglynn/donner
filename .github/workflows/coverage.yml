@@ -588,7 +588,8 @@ jobs:
               # test_suite expansion and rule kinds this workflow does not
               # enumerate are handled by definition rather than by a name
               # heuristic, and subtract the tags the coverage command itself
-              # filters out (--test_tag_filters=-fuzz_target,-lint in .bazelrc),
+              # filters out
+              # (--test_tag_filters=-fuzz_target,-lint,-manual,-perf in .bazelrc),
               # because a subset whose only tests carry those tags leaves the
               # coverage run with the very empty test set this gate exists to
               # keep it out of. `attr` matches its pattern against the string
@@ -597,7 +598,7 @@ jobs:
               # punctuation rather than anchored with ^$. Fail closed: a query
               # failure keeps the coverage run.
               test_query_file="$work_dir/affected-tests-query.txt"
-              printf 'tests(%s) except attr("tags", "[\[ ](fuzz_target|lint)[,\]]", tests(%s))\n' \
+              printf 'tests(%s) except attr("tags", "[\[ ](fuzz_target|lint|manual|perf)[,\]]", tests(%s))\n' \
                 "$resolved_expr" "$resolved_expr" > "$test_query_file"
               affected_tests_file="$work_dir/affected-tests.txt"
               if ( cd "$head_dir" && bazelisk query --query_file="$test_query_file" \
