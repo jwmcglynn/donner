@@ -69,12 +69,12 @@ uint32_t readBE32(const uint8_t* p) {
          (static_cast<uint32_t>(p[2]) << 8) | static_cast<uint32_t>(p[3]);
 }
 
-bool HasCffFlavor(std::span<const uint8_t> data) {
+/// WOFF flavor fields cannot prove that decompressed tables omit CFF, so compressed inputs share
+/// the exhausted-budget path regardless of their advertised flavor.
+bool IsCompressedOrCffFont(std::span<const uint8_t> data) {
   if (data.size() < 4) return false;
   const uint32_t magic = readBE32(data.data());
-  if (magic == kSfntCff) return true;
-  return (magic == kWoffMagic || magic == kWoff2Magic) && data.size() >= 8 &&
-         readBE32(data.data() + 4) == kSfntCff;
+  return magic == kSfntCff || magic == kWoffMagic || magic == kWoff2Magic;
 }
 
 bool IsSupportedFontMagic(uint32_t magic) {
@@ -557,7 +557,7 @@ bool FontManager::exhaustedValidationBudgetRejects(
     const std::shared_ptr<FontBudgetState>& budgetState) const {
   return trust == FontDataTrust::Untrusted &&
          budgetState->usedValidationWork >= budgetState->maximumValidationWork &&
-         HasCffFlavor(data);
+         IsCompressedOrCffFont(data);
 }
 
 void FontManager::rememberValidationRejectedSource(
