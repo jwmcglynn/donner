@@ -116,6 +116,13 @@ class TrimVariantsTest(unittest.TestCase):
 
 
 class ParseLabelKindsTest(unittest.TestCase):
+    def test_wrapper_kind_matches_bazel_label_kind_output(self):
+        """Private Starlark rules include their leading underscore in query output."""
+        label = "//donner/svg/compositor:compositor_tests_geode"
+        kinds = parse_label_kinds(f"_donner_multi_transitioned_test rule {label}\n")
+        self.assertEqual(WRAPPER_KIND, "_donner_multi_transitioned_test")
+        self.assertEqual(kinds[label], WRAPPER_KIND)
+
     def test_parses_label_kind_lines(self):
         text = (
             "cc_test rule //donner/svg/compositor:compositor_tests\n"
