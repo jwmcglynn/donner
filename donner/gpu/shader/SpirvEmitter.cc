@@ -223,6 +223,80 @@ bool ContainsMatrix(const IrType& type) {
   }
 }
 
+/// Picks the float, signed-integer, or unsigned-integer variant of an operation. Used for both
+/// core opcodes and GLSL.std.450 instruction numbers, which are typed the same way.
+/// @param kind Scalar kind of the operands.
+/// @param f32Variant Variant for f32 operands.
+/// @param i32Variant Variant for i32 operands.
+/// @param u32Variant Variant for u32 (and bool) operands.
+uint32_t SelectByScalarKind(ScalarKind kind, uint32_t f32Variant, uint32_t i32Variant,
+                            uint32_t u32Variant) {
+  switch (kind) {
+    case ScalarKind::F32: return f32Variant;
+    case ScalarKind::I32: return i32Variant;
+    default: return u32Variant;
+  }
+}
+
+/// Picks the float, boolean, or integer variant of a comparison.
+/// @param kind Scalar kind of the operands.
+/// @param f32Variant Variant for f32 operands.
+/// @param boolVariant Variant for bool operands.
+/// @param intVariant Variant for integer operands.
+uint32_t SelectByEqualityKind(ScalarKind kind, uint32_t f32Variant, uint32_t boolVariant,
+                              uint32_t intVariant) {
+  switch (kind) {
+    case ScalarKind::F32: return f32Variant;
+    case ScalarKind::Bool: return boolVariant;
+    default: return intVariant;
+  }
+}
+
+/// Maps an IR binary operator plus the scalar kind of its operands onto the SPIR-V opcode that
+/// implements it. Pure lookup: the caller emits the instruction.
+/// @param op Binary operator.
+/// @param operandKind Scalar kind of the operands.
+uint32_t BinaryOpcode(BinaryOp op, ScalarKind operandKind) {
+  const bool isFloat = operandKind == ScalarKind::F32;
+  switch (op) {
+    case BinaryOp::Add: return isFloat ? kOpFAdd : kOpIAdd;
+    case BinaryOp::Sub: return isFloat ? kOpFSub : kOpISub;
+    case BinaryOp::Mul: return isFloat ? kOpFMul : kOpIMul;
+    case BinaryOp::Div: return SelectByScalarKind(operandKind, kOpFDiv, kOpSDiv, kOpUDiv);
+    case BinaryOp::Lt:
+      return SelectByScalarKind(operandKind, kOpFOrdLessThan, kOpSLessThan, kOpULessThan);
+    case BinaryOp::Le:
+      return SelectByScalarKind(operandKind, kOpFOrdLessThanEqual, kOpSLessThanEqual,
+                                kOpULessThanEqual);
+    case BinaryOp::Gt:
+      return SelectByScalarKind(operandKind, kOpFOrdGreaterThan, kOpSGreaterThan, kOpUGreaterThan);
+    case BinaryOp::Ge:
+      return SelectByScalarKind(operandKind, kOpFOrdGreaterThanEqual, kOpSGreaterThanEqual,
+                                kOpUGreaterThanEqual);
+    case BinaryOp::Eq:
+      return SelectByEqualityKind(operandKind, kOpFOrdEqual, kOpLogicalEqual, kOpIEqual);
+    case BinaryOp::Ne:
+      return SelectByEqualityKind(operandKind, kOpFOrdNotEqual, kOpLogicalNotEqual, kOpINotEqual);
+    // IR expressions are side-effect free, so eager logical ops match WGSL short-circuit
+    // semantics.
+    case BinaryOp::And: return kOpLogicalAnd;
+    case BinaryOp::Or: return kOpLogicalOr;
+  }
+  return 0;
+}
+
+/// True for `*` and `/` with one vector and one scalar operand: SPIR-V has no mixed-shape form,
+/// so those are emitted as a broadcast rather than a componentwise op.
+/// @param op Binary operator.
+/// @param lhsType Left operand type.
+/// @param rhsType Right operand type.
+bool IsVectorScalarBroadcast(BinaryOp op, const IrType& lhsType, const IrType& rhsType) {
+  if (op != BinaryOp::Mul && op != BinaryOp::Div) {
+    return false;
+  }
+  return (lhsType.isVector() && rhsType.isScalar()) || (lhsType.isScalar() && rhsType.isVector());
+}
+
 /// Deterministic SPIR-V emitter: single ID counter, fixed traversal order, ordered dedup maps
 /// keyed by structural strings (see the SpirvEmitter.h contract).
 class Emitter {
@@ -302,10 +376,21 @@ private:
 
   /// Undecorated type used for function-local values.
   uint32_t plainTypeId(const IrType& type);
+  /// Undecorated OpTypeArray for a fixed-count array, cached by element type and count.
+  uint32_t plainArrayTypeId(const IrType& type);
+  /// Undecorated OpTypeStruct, cached by struct name and member type ids.
+  uint32_t plainStructTypeId(const IrType& type);
   /// Layout-decorated type used inside buffer blocks (Offset / ArrayStride / ColMajor /
   /// MatrixStride from the IrLayout engine). Scalars, vectors, and matrices share the plain ids;
   /// structs and arrays get distinct decorated ids.
   uint32_t laidTypeId(const IrType& type, AddressSpace space);
+  /// Layout-decorated OpTypeArray, carrying the ArrayStride the layout engine computed.
+  uint32_t laidArrayTypeId(const IrType& type, AddressSpace space);
+  /// Layout-decorated OpTypeRuntimeArray, carrying the ArrayStride the layout engine computed.
+  uint32_t laidRuntimeArrayTypeId(const IrType& type, AddressSpace space);
+  /// Layout-decorated OpTypeStruct, carrying the member Offset decorations the layout engine
+  /// computed plus ColMajor / MatrixStride on matrix members.
+  uint32_t laidStructTypeId(const IrType& type, AddressSpace space);
   /// Block-decorated buffer root struct (distinct from the non-Block laid-out type).
   uint32_t blockStructId(const IrType& structType, AddressSpace space);
   /// Synthesized Block struct wrapping a runtime-array storage buffer root at member 0.
@@ -323,6 +408,23 @@ private:
   void emitBindings();
   void emitModuleConstants();
   void emitFunction(const IrFunction& function);
+  /// Emits a non-entry-point function: its OpTypeFunction, parameters bound as SSA values, and
+  /// its body.
+  void emitPlainFunction(const IrFunction& function);
+  /// Emits a stage entry point: its Input/Output interface variables, its body reading the
+  /// inputs, and its OpEntryPoint / execution modes.
+  void emitEntryPointFunction(const IrFunction& function);
+  /// Declares one Input variable per stage parameter, decorated with its builtin or location,
+  /// and appends each to \p interface. Returns the variable ids in parameter order.
+  /// @param function Entry-point function being emitted.
+  /// @param interface Entry-point interface list to append to.
+  std::vector<uint32_t> declareStageInputVariables(const IrFunction& function,
+                                                   std::vector<uint32_t>& interface);
+  /// Declares one Output variable per stage output, decorated with its builtin or location, and
+  /// appends each to `currentOutputVars_` and \p interface.
+  /// @param function Entry-point function being emitted.
+  /// @param interface Entry-point interface list to append to.
+  void declareStageOutputVariables(const IrFunction& function, std::vector<uint32_t>& interface);
 
   // ----- Function-body emission -----
 
@@ -352,6 +454,25 @@ private:
 
   void emitBlock(const IrBlock& block);
   void emitStatement(const IrStmt& statement);
+  /// Emits a `var` declaration: binds the hoisted OpVariable and stores its initializer.
+  /// @param data Statement payload.
+  void emitVarStatement(const IrStmt::Data& data);
+  /// Emits an if/else as an OpSelectionMerge with then, optional else, and merge blocks.
+  /// @param data Statement payload.
+  void emitIfStatement(const IrStmt::Data& data);
+  /// Emits a for loop as an OpLoopMerge with header, condition, body, continue, and merge
+  /// blocks.
+  /// @param data Statement payload.
+  void emitForStatement(const IrStmt::Data& data);
+  /// Branches to the enclosing loop merge block.
+  void emitBreakStatement();
+  /// Branches to the enclosing loop continue block.
+  void emitContinueStatement();
+  /// Emits a return: stage entry points store into their Output variables first.
+  /// @param data Statement payload.
+  void emitReturnStatement(const IrStmt::Data& data);
+  /// Emits OpKill, rejecting discard in a vertex entry point.
+  void emitDiscardStatement();
   void emitAssign(const IrExpr& lhs, const IrExpr& rhs);
 
   /// True if \p expr is a member/index/single-component-swizzle chain rooted at a `var` or a
@@ -360,6 +481,13 @@ private:
   /// Builds the access chain for a pointer-backed expression, evaluating dynamic indices in
   /// operand order. @pre isPointerBacked(expr).
   Chain emitChain(const IrExpr& expr);
+  /// Starts an access chain at a local variable or a module-scope binding, unwrapping the
+  /// synthesized Block member when the binding is wrapped.
+  /// @param node Ref expression node.
+  Chain emitRefChain(const IrExpr::Node& node);
+  /// Extends an access chain with the index of a named struct member.
+  /// @param node Member expression node.
+  Chain emitMemberChain(const IrExpr::Node& node);
   /// Loads the value a chain points to. Buffer-side struct and sized-array values are rebuilt
   /// member-by-member into their plain types (SPIR-V 1.3 has no OpCopyLogical); runtime arrays
   /// fail closed.
@@ -369,11 +497,75 @@ private:
                              AddressSpace space);
 
   uint32_t emitValue(const IrExpr& expr);
+  /// Emits a member, swizzle, index, or construct expression as a value.
+  /// @param expr Expression to emit.
+  uint32_t emitCompositeValue(const IrExpr& expr);
+  /// Emits a logical-not or negate.
+  /// @param node Unary expression node.
+  uint32_t emitUnaryValue(const IrExpr::Node& node);
+  /// Emits a struct member read, through an access chain when pointer-backed.
+  /// @param expr Member expression.
+  uint32_t emitMemberValue(const IrExpr& expr);
+  /// Emits a vector swizzle: a component extract for one component, OpVectorShuffle otherwise.
+  /// @param expr Swizzle expression.
+  uint32_t emitSwizzleValue(const IrExpr& expr);
+  /// Emits an index read: constant extract, dynamic vector extract, or an access chain.
+  /// @param expr Index expression.
+  uint32_t emitIndexValue(const IrExpr& expr);
+  /// Emits a composite construction, collapsing a scalar-to-vector construction to a splat.
+  /// @param node Construct expression node.
+  uint32_t emitConstructValue(const IrExpr::Node& node);
+  /// Emits a call to a user-defined function.
+  /// @param node CallUser expression node.
+  uint32_t emitUserCallValue(const IrExpr::Node& node);
   uint32_t emitLiteral(const IrExpr::Node& node);
   uint32_t emitRefValue(const IrExpr::Node& node);
+  /// Emits a reference to a module-scope binding: an OpLoad for an opaque texture or sampler
+  /// handle, otherwise a whole-buffer load through an access chain.
+  /// @param node Ref expression node whose refKind is Resource.
+  uint32_t emitResourceRefValue(const IrExpr::Node& node);
   uint32_t emitBinary(const IrExpr::Node& node);
+  /// Emits a matrix times matrix or matrix times vector product.
+  /// @param node Binary expression node.
+  uint32_t emitMatrixProduct(const IrExpr::Node& node);
+  /// Emits `*` or `/` between a vector and a scalar: OpVectorTimesScalar for float
+  /// multiplication, otherwise a splat of the scalar side followed by a componentwise op.
+  /// @param node Binary expression node.
+  uint32_t emitBroadcastArithmetic(const IrExpr::Node& node);
   uint32_t emitConvert(const IrExpr::Node& node);
   uint32_t emitBuiltinCall(const IrExpr::Node& node);
+  /// Emits abs(): the GLSL.std.450 float or signed form, or the identity for unsigned operands.
+  /// @param node CallBuiltin expression node.
+  /// @param typeId Result type id.
+  uint32_t emitAbsBuiltin(const IrExpr::Node& node, uint32_t typeId);
+  /// Emits min() or max() in the form matching the operand scalar kind.
+  /// @param node CallBuiltin expression node.
+  /// @param typeId Result type id.
+  uint32_t emitMinMaxBuiltin(const IrExpr::Node& node, uint32_t typeId);
+  /// Emits clamp() in the form matching the operand scalar kind.
+  /// @param node CallBuiltin expression node.
+  /// @param typeId Result type id.
+  uint32_t emitClampBuiltin(const IrExpr::Node& node, uint32_t typeId);
+  /// Emits saturate() as a clamp against splatted 0 and 1 constants.
+  /// @param node CallBuiltin expression node.
+  /// @param typeId Result type id.
+  uint32_t emitSaturateBuiltin(const IrExpr::Node& node, uint32_t typeId);
+  /// Emits the arithmetic builtins, which all lower to GLSL.std.450 instructions.
+  /// @param node CallBuiltin expression node.
+  /// @param typeId Result type id.
+  uint32_t emitMathBuiltin(const IrExpr::Node& node, uint32_t typeId);
+  /// Emits fwidth(), which is fragment-only.
+  /// @param node CallBuiltin expression node.
+  /// @param typeId Result type id.
+  uint32_t emitFwidthBuiltin(const IrExpr::Node& node, uint32_t typeId);
+  /// Emits select(), splatting the condition for a vector result.
+  /// @param node CallBuiltin expression node.
+  /// @param typeId Result type id.
+  uint32_t emitSelectBuiltin(const IrExpr::Node& node, uint32_t typeId);
+  /// Emits the texture builtins: sample, load, and dimension query.
+  /// @param node CallBuiltin expression node.
+  /// @param typeId Result type id.
+  uint32_t emitTextureBuiltin(const IrExpr::Node& node, uint32_t typeId);
   /// OpExtInst into the GLSL.std.450 import.
   uint32_t emitExtInst(uint32_t typeId, uint32_t instruction, std::vector<uint32_t> operands);
   /// Splats a scalar id across a vector type with OpCompositeConstruct.
@@ -522,31 +714,8 @@ uint32_t Emitter::plainTypeId(const IrType& type) {
     case IrType::Kind::Matrix4x4f: return typeMatrix4x4f();
     case IrType::Kind::Texture2dF32: return typeImage2dF32();
     case IrType::Kind::Sampler: return typeSampler();
-    case IrType::Kind::SizedArray: {
-      const uint32_t elementId = plainTypeId(type.elementType());
-      const std::string key = std::format("arr|{}|{}", elementId, type.arrayCount());
-      if (const uint32_t id = cached(key)) return id;
-      const uint32_t lengthId = constU32(type.arrayCount());
-      const uint32_t id = newId();
-      Instr(globals_, kOpTypeArray, {id, elementId, lengthId});
-      typeIds_[key] = id;
-      return id;
-    }
-    case IrType::Kind::Struct: {
-      std::string key = std::format("struct|{}", type.structName().str());
-      std::vector<uint32_t> memberIds;
-      for (const IrType::Member& member : type.structMembers()) {
-        memberIds.push_back(plainTypeId(member.type));
-        key += std::format("|{}", memberIds.back());
-      }
-      if (const uint32_t id = cached(key)) return id;
-      const uint32_t id = newId();
-      std::vector<uint32_t> operands = {id};
-      operands.insert(operands.end(), memberIds.begin(), memberIds.end());
-      InstrV(globals_, kOpTypeStruct, operands);
-      typeIds_[key] = id;
-      return id;
-    }
+    case IrType::Kind::SizedArray: return plainArrayTypeId(type);
+    case IrType::Kind::Struct: return plainStructTypeId(type);
     case IrType::Kind::RuntimeArray:
       latch(
           "a runtime-sized array has no value type; it can only be accessed through a storage "
@@ -554,6 +723,33 @@ uint32_t Emitter::plainTypeId(const IrType& type) {
       return 0;
   }
   return 0;
+}
+
+uint32_t Emitter::plainArrayTypeId(const IrType& type) {
+  const uint32_t elementId = plainTypeId(type.elementType());
+  const std::string key = std::format("arr|{}|{}", elementId, type.arrayCount());
+  if (const uint32_t id = cached(key)) return id;
+  const uint32_t lengthId = constU32(type.arrayCount());
+  const uint32_t id = newId();
+  Instr(globals_, kOpTypeArray, {id, elementId, lengthId});
+  typeIds_[key] = id;
+  return id;
+}
+
+uint32_t Emitter::plainStructTypeId(const IrType& type) {
+  std::string key = std::format("struct|{}", type.structName().str());
+  std::vector<uint32_t> memberIds;
+  for (const IrType::Member& member : type.structMembers()) {
+    memberIds.push_back(plainTypeId(member.type));
+    key += std::format("|{}", memberIds.back());
+  }
+  if (const uint32_t id = cached(key)) return id;
+  const uint32_t id = newId();
+  std::vector<uint32_t> operands = {id};
+  operands.insert(operands.end(), memberIds.begin(), memberIds.end());
+  InstrV(globals_, kOpTypeStruct, operands);
+  typeIds_[key] = id;
+  return id;
 }
 
 uint32_t Emitter::laidTypeId(const IrType& type, AddressSpace space) {
@@ -564,74 +760,80 @@ uint32_t Emitter::laidTypeId(const IrType& type, AddressSpace space) {
       // Layout decorations for these live on the enclosing struct member; the types are shared
       // with plain use.
       return plainTypeId(type);
-    case IrType::Kind::SizedArray: {
-      ShaderResult<uint32_t> stride = ComputeArrayStride(type, space);
-      if (stride.hasError()) {
-        latchError(std::move(stride).error());
-        return 0;
-      }
-      const uint32_t elementId = laidTypeId(type.elementType(), space);
-      const std::string key =
-          std::format("arrL|{}|{}|{}", elementId, type.arrayCount(), stride.result());
-      if (const uint32_t id = cached(key)) return id;
-      const uint32_t lengthId = constU32(type.arrayCount());
-      const uint32_t id = newId();
-      Instr(globals_, kOpTypeArray, {id, elementId, lengthId});
-      Instr(decorations_, kOpDecorate, {id, kDecorationArrayStride, stride.result()});
-      typeIds_[key] = id;
-      return id;
-    }
-    case IrType::Kind::RuntimeArray: {
-      ShaderResult<uint32_t> stride = ComputeArrayStride(type, space);
-      if (stride.hasError()) {
-        latchError(std::move(stride).error());
-        return 0;
-      }
-      const uint32_t elementId = laidTypeId(type.elementType(), space);
-      const std::string key = std::format("rta|{}|{}", elementId, stride.result());
-      if (const uint32_t id = cached(key)) return id;
-      const uint32_t id = newId();
-      Instr(globals_, kOpTypeRuntimeArray, {id, elementId});
-      Instr(decorations_, kOpDecorate, {id, kDecorationArrayStride, stride.result()});
-      typeIds_[key] = id;
-      return id;
-    }
-    case IrType::Kind::Struct: {
-      ShaderResult<StructLayout> layout = ComputeStructLayout(type, space);
-      if (layout.hasError()) {
-        latchError(std::move(layout).error());
-        return 0;
-      }
-      std::string key = std::format("structL|{}", type.structName().str());
-      std::vector<uint32_t> memberIds;
-      const std::span<const IrType::Member> members = type.structMembers();
-      for (size_t i = 0; i < members.size(); ++i) {
-        memberIds.push_back(laidTypeId(members[i].type, space));
-        key += std::format("|{}@{}", memberIds.back(), layout.result().members[i].offsetBytes);
-      }
-      if (const uint32_t id = cached(key)) return id;
-      const uint32_t id = newId();
-      std::vector<uint32_t> operands = {id};
-      operands.insert(operands.end(), memberIds.begin(), memberIds.end());
-      InstrV(globals_, kOpTypeStruct, operands);
-      for (size_t i = 0; i < members.size(); ++i) {
-        const uint32_t memberIndex = static_cast<uint32_t>(i);
-        Instr(decorations_, kOpMemberDecorate,
-              {id, memberIndex, kDecorationOffset, layout.result().members[i].offsetBytes});
-        if (ContainsMatrix(members[i].type)) {
-          Instr(decorations_, kOpMemberDecorate, {id, memberIndex, kDecorationColMajor});
-          Instr(decorations_, kOpMemberDecorate, {id, memberIndex, kDecorationMatrixStride, 16});
-        }
-      }
-      typeIds_[key] = id;
-      return id;
-    }
+    case IrType::Kind::SizedArray: return laidArrayTypeId(type, space);
+    case IrType::Kind::RuntimeArray: return laidRuntimeArrayTypeId(type, space);
+    case IrType::Kind::Struct: return laidStructTypeId(type, space);
     case IrType::Kind::Texture2dF32:
     case IrType::Kind::Sampler:
       latch(std::format("type {} has no host-shareable layout", type.toString()));
       return 0;
   }
   return 0;
+}
+
+uint32_t Emitter::laidArrayTypeId(const IrType& type, AddressSpace space) {
+  ShaderResult<uint32_t> stride = ComputeArrayStride(type, space);
+  if (stride.hasError()) {
+    latchError(std::move(stride).error());
+    return 0;
+  }
+  const uint32_t elementId = laidTypeId(type.elementType(), space);
+  const std::string key =
+      std::format("arrL|{}|{}|{}", elementId, type.arrayCount(), stride.result());
+  if (const uint32_t id = cached(key)) return id;
+  const uint32_t lengthId = constU32(type.arrayCount());
+  const uint32_t id = newId();
+  Instr(globals_, kOpTypeArray, {id, elementId, lengthId});
+  Instr(decorations_, kOpDecorate, {id, kDecorationArrayStride, stride.result()});
+  typeIds_[key] = id;
+  return id;
+}
+
+uint32_t Emitter::laidRuntimeArrayTypeId(const IrType& type, AddressSpace space) {
+  ShaderResult<uint32_t> stride = ComputeArrayStride(type, space);
+  if (stride.hasError()) {
+    latchError(std::move(stride).error());
+    return 0;
+  }
+  const uint32_t elementId = laidTypeId(type.elementType(), space);
+  const std::string key = std::format("rta|{}|{}", elementId, stride.result());
+  if (const uint32_t id = cached(key)) return id;
+  const uint32_t id = newId();
+  Instr(globals_, kOpTypeRuntimeArray, {id, elementId});
+  Instr(decorations_, kOpDecorate, {id, kDecorationArrayStride, stride.result()});
+  typeIds_[key] = id;
+  return id;
+}
+
+uint32_t Emitter::laidStructTypeId(const IrType& type, AddressSpace space) {
+  ShaderResult<StructLayout> layout = ComputeStructLayout(type, space);
+  if (layout.hasError()) {
+    latchError(std::move(layout).error());
+    return 0;
+  }
+  std::string key = std::format("structL|{}", type.structName().str());
+  std::vector<uint32_t> memberIds;
+  const std::span<const IrType::Member> members = type.structMembers();
+  for (size_t i = 0; i < members.size(); ++i) {
+    memberIds.push_back(laidTypeId(members[i].type, space));
+    key += std::format("|{}@{}", memberIds.back(), layout.result().members[i].offsetBytes);
+  }
+  if (const uint32_t id = cached(key)) return id;
+  const uint32_t id = newId();
+  std::vector<uint32_t> operands = {id};
+  operands.insert(operands.end(), memberIds.begin(), memberIds.end());
+  InstrV(globals_, kOpTypeStruct, operands);
+  for (size_t i = 0; i < members.size(); ++i) {
+    const uint32_t memberIndex = static_cast<uint32_t>(i);
+    Instr(decorations_, kOpMemberDecorate,
+          {id, memberIndex, kDecorationOffset, layout.result().members[i].offsetBytes});
+    if (ContainsMatrix(members[i].type)) {
+      Instr(decorations_, kOpMemberDecorate, {id, memberIndex, kDecorationColMajor});
+      Instr(decorations_, kOpMemberDecorate, {id, memberIndex, kDecorationMatrixStride, 16});
+    }
+  }
+  typeIds_[key] = id;
+  return id;
 }
 
 uint32_t Emitter::blockStructId(const IrType& structType, AddressSpace space) {
@@ -845,116 +1047,133 @@ void Emitter::emitFunction(const IrFunction& function) {
   pushScope();
 
   if (function.stage == StageKind::None) {
-    for (const IrParam& param : function.params) {
-      if (param.type.kind() == IrType::Kind::Texture2dF32 ||
-          param.type.kind() == IrType::Kind::Sampler) {
-        latch(
-            std::format("plain function \"{}\" declares a texture or sampler parameter \"{}\"; "
-                        "opaque handles must be accessed through module-scope bindings",
-                        function.name.str(), param.name.str()));
-        return;
-      }
-    }
-    std::vector<uint32_t> paramTypeIds;
-    for (const IrParam& param : function.params) {
-      paramTypeIds.push_back(plainTypeId(param.type));
-    }
-    const uint32_t returnTypeId =
-        function.returnType ? plainTypeId(*function.returnType) : typeVoid();
-    const uint32_t functionTypeId = typeFunction(returnTypeId, paramTypeIds);
-    const uint32_t functionId = newId();
-    Instr(functions_, kOpFunction,
-          {returnTypeId, functionId, kFunctionControlNone, functionTypeId});
-    for (size_t i = 0; i < function.params.size(); ++i) {
-      const uint32_t paramId = newId();
-      Instr(functions_, kOpFunctionParameter, {paramTypeIds[i], paramId});
-      bindLocal(function.params[i].name, Local{RefKind::Param, paramId, function.params[i].type});
-    }
-    startBlock(newId());
-    hoistFunctionVariables(function.body);
-    emitBlock(function.body);
-    if (!blockTerminated_) {
-      if (function.returnType) {
-        // The builder requires a top-level return, so an unterminated tail block is an
-        // unreachable merge; it still needs a terminator.
-        Instr(functions_, kOpUnreachable, {});
-      } else {
-        Instr(functions_, kOpReturn, {});
-      }
-    }
-    Instr(functions_, kOpFunctionEnd, {});
-    functionIds_.insert_or_assign(function.name.str(), FunctionInfo{functionId, returnTypeId});
+    emitPlainFunction(function);
   } else {
-    // Stage IO variables in parameter-then-output order, then the function type and body.
-    std::vector<uint32_t> interface;
-    std::vector<uint32_t> inputVars;
-    for (const IrParam& param : function.params) {
-      const uint32_t typeId = plainTypeId(param.type);
-      const uint32_t pointerId = typePointer(kStorageClassInput, typeId);
-      const uint32_t varId = newId();
-      Instr(globals_, kOpVariable, {pointerId, varId, kStorageClassInput});
-      if (param.builtin) {
-        const uint32_t builtinValue = *param.builtin == BuiltinInput::InstanceIndex
-                                          ? kBuiltInInstanceIndex
-                                          : kBuiltInFragCoord;
-        Instr(decorations_, kOpDecorate, {varId, kDecorationBuiltIn, builtinValue});
-      } else if (param.location) {
-        Instr(decorations_, kOpDecorate, {varId, kDecorationLocation, *param.location});
-      }
-      const bool integerInput = (param.type.isScalar() || param.type.isVector()) &&
-                                (param.type.scalarKind() == ScalarKind::I32 ||
-                                 param.type.scalarKind() == ScalarKind::U32);
-      if (function.stage == StageKind::Fragment && integerInput) {
-        // WGSL requires integer fragment inputs to be flat-interpolated.
-        Instr(decorations_, kOpDecorate, {varId, kDecorationFlat});
-      }
-      inputVars.push_back(varId);
-      interface.push_back(varId);
-    }
-    for (const IrOutputMember& output : function.outputs) {
-      const uint32_t typeId = plainTypeId(output.type);
-      const uint32_t pointerId = typePointer(kStorageClassOutput, typeId);
-      const uint32_t varId = newId();
-      Instr(globals_, kOpVariable, {pointerId, varId, kStorageClassOutput});
-      if (output.builtin) {
-        Instr(decorations_, kOpDecorate, {varId, kDecorationBuiltIn, kBuiltInPosition});
-      } else if (output.location) {
-        Instr(decorations_, kOpDecorate, {varId, kDecorationLocation, *output.location});
-      }
-      currentOutputVars_.push_back(varId);
-      interface.push_back(varId);
-    }
-
-    const uint32_t voidId = typeVoid();
-    const uint32_t functionTypeId = typeFunction(voidId, {});
-    const uint32_t functionId = newId();
-    Instr(functions_, kOpFunction, {voidId, functionId, kFunctionControlNone, functionTypeId});
-    startBlock(newId());
-    hoistFunctionVariables(function.body);
-    for (size_t i = 0; i < function.params.size(); ++i) {
-      const uint32_t typeId = plainTypeId(function.params[i].type);
-      const uint32_t valueId = newId();
-      Instr(functions_, kOpLoad, {typeId, valueId, inputVars[i]});
-      bindLocal(function.params[i].name, Local{RefKind::Param, valueId, function.params[i].type});
-    }
-    emitBlock(function.body);
-    if (!blockTerminated_) {
-      Instr(functions_, kOpReturn, {});
-    }
-    Instr(functions_, kOpFunctionEnd, {});
-
-    const uint32_t executionModel =
-        function.stage == StageKind::Vertex ? kExecutionModelVertex : kExecutionModelFragment;
-    std::vector<uint32_t> entryOperands = {executionModel, functionId};
-    const std::vector<uint32_t> nameWords = EncodeString(std::string_view(function.name));
-    entryOperands.insert(entryOperands.end(), nameWords.begin(), nameWords.end());
-    entryOperands.insert(entryOperands.end(), interface.begin(), interface.end());
-    InstrV(entryPoints_, kOpEntryPoint, entryOperands);
-    if (function.stage == StageKind::Fragment) {
-      Instr(executionModes_, kOpExecutionMode, {functionId, kExecutionModeOriginUpperLeft});
-    }
+    emitEntryPointFunction(function);
   }
   popScope();
+}
+
+void Emitter::emitPlainFunction(const IrFunction& function) {
+  for (const IrParam& param : function.params) {
+    if (param.type.kind() == IrType::Kind::Texture2dF32 ||
+        param.type.kind() == IrType::Kind::Sampler) {
+      latch(
+          std::format("plain function \"{}\" declares a texture or sampler parameter \"{}\"; "
+                      "opaque handles must be accessed through module-scope bindings",
+                      function.name.str(), param.name.str()));
+      return;
+    }
+  }
+  std::vector<uint32_t> paramTypeIds;
+  for (const IrParam& param : function.params) {
+    paramTypeIds.push_back(plainTypeId(param.type));
+  }
+  const uint32_t returnTypeId =
+      function.returnType ? plainTypeId(*function.returnType) : typeVoid();
+  const uint32_t functionTypeId = typeFunction(returnTypeId, paramTypeIds);
+  const uint32_t functionId = newId();
+  Instr(functions_, kOpFunction, {returnTypeId, functionId, kFunctionControlNone, functionTypeId});
+  for (size_t i = 0; i < function.params.size(); ++i) {
+    const uint32_t paramId = newId();
+    Instr(functions_, kOpFunctionParameter, {paramTypeIds[i], paramId});
+    bindLocal(function.params[i].name, Local{RefKind::Param, paramId, function.params[i].type});
+  }
+  startBlock(newId());
+  hoistFunctionVariables(function.body);
+  emitBlock(function.body);
+  if (!blockTerminated_) {
+    if (function.returnType) {
+      // The builder requires a top-level return, so an unterminated tail block is an
+      // unreachable merge; it still needs a terminator.
+      Instr(functions_, kOpUnreachable, {});
+    } else {
+      Instr(functions_, kOpReturn, {});
+    }
+  }
+  Instr(functions_, kOpFunctionEnd, {});
+  functionIds_.insert_or_assign(function.name.str(), FunctionInfo{functionId, returnTypeId});
+}
+
+std::vector<uint32_t> Emitter::declareStageInputVariables(const IrFunction& function,
+                                                          std::vector<uint32_t>& interface) {
+  std::vector<uint32_t> inputVars;
+  for (const IrParam& param : function.params) {
+    const uint32_t typeId = plainTypeId(param.type);
+    const uint32_t pointerId = typePointer(kStorageClassInput, typeId);
+    const uint32_t varId = newId();
+    Instr(globals_, kOpVariable, {pointerId, varId, kStorageClassInput});
+    if (param.builtin) {
+      const uint32_t builtinValue =
+          *param.builtin == BuiltinInput::InstanceIndex ? kBuiltInInstanceIndex : kBuiltInFragCoord;
+      Instr(decorations_, kOpDecorate, {varId, kDecorationBuiltIn, builtinValue});
+    } else if (param.location) {
+      Instr(decorations_, kOpDecorate, {varId, kDecorationLocation, *param.location});
+    }
+    const bool integerInput =
+        (param.type.isScalar() || param.type.isVector()) &&
+        (param.type.scalarKind() == ScalarKind::I32 || param.type.scalarKind() == ScalarKind::U32);
+    if (function.stage == StageKind::Fragment && integerInput) {
+      // WGSL requires integer fragment inputs to be flat-interpolated.
+      Instr(decorations_, kOpDecorate, {varId, kDecorationFlat});
+    }
+    inputVars.push_back(varId);
+    interface.push_back(varId);
+  }
+  return inputVars;
+}
+
+void Emitter::declareStageOutputVariables(const IrFunction& function,
+                                          std::vector<uint32_t>& interface) {
+  for (const IrOutputMember& output : function.outputs) {
+    const uint32_t typeId = plainTypeId(output.type);
+    const uint32_t pointerId = typePointer(kStorageClassOutput, typeId);
+    const uint32_t varId = newId();
+    Instr(globals_, kOpVariable, {pointerId, varId, kStorageClassOutput});
+    if (output.builtin) {
+      Instr(decorations_, kOpDecorate, {varId, kDecorationBuiltIn, kBuiltInPosition});
+    } else if (output.location) {
+      Instr(decorations_, kOpDecorate, {varId, kDecorationLocation, *output.location});
+    }
+    currentOutputVars_.push_back(varId);
+    interface.push_back(varId);
+  }
+}
+
+void Emitter::emitEntryPointFunction(const IrFunction& function) {
+  // Stage IO variables in parameter-then-output order, then the function type and body.
+  std::vector<uint32_t> interface;
+  const std::vector<uint32_t> inputVars = declareStageInputVariables(function, interface);
+  declareStageOutputVariables(function, interface);
+
+  const uint32_t voidId = typeVoid();
+  const uint32_t functionTypeId = typeFunction(voidId, {});
+  const uint32_t functionId = newId();
+  Instr(functions_, kOpFunction, {voidId, functionId, kFunctionControlNone, functionTypeId});
+  startBlock(newId());
+  hoistFunctionVariables(function.body);
+  for (size_t i = 0; i < function.params.size(); ++i) {
+    const uint32_t typeId = plainTypeId(function.params[i].type);
+    const uint32_t valueId = newId();
+    Instr(functions_, kOpLoad, {typeId, valueId, inputVars[i]});
+    bindLocal(function.params[i].name, Local{RefKind::Param, valueId, function.params[i].type});
+  }
+  emitBlock(function.body);
+  if (!blockTerminated_) {
+    Instr(functions_, kOpReturn, {});
+  }
+  Instr(functions_, kOpFunctionEnd, {});
+
+  const uint32_t executionModel =
+      function.stage == StageKind::Vertex ? kExecutionModelVertex : kExecutionModelFragment;
+  std::vector<uint32_t> entryOperands = {executionModel, functionId};
+  const std::vector<uint32_t> nameWords = EncodeString(std::string_view(function.name));
+  entryOperands.insert(entryOperands.end(), nameWords.begin(), nameWords.end());
+  entryOperands.insert(entryOperands.end(), interface.begin(), interface.end());
+  InstrV(entryPoints_, kOpEntryPoint, entryOperands);
+  if (function.stage == StageKind::Fragment) {
+    Instr(executionModes_, kOpExecutionMode, {functionId, kExecutionModeOriginUpperLeft});
+  }
 }
 
 // ----- Statements -----
@@ -977,134 +1196,143 @@ void Emitter::emitStatement(const IrStmt& statement) {
       bindLocal(data.name, Local{RefKind::Let, valueId, data.exprs[0].type()});
       return;
     }
-    case IrStmt::Kind::Var: {
-      const auto it = hoistedVars_.find(&data);
-      const uint32_t varId = it != hoistedVars_.end() ? it->second : 0;
-      bindLocal(data.name, Local{RefKind::Var, varId, *data.declaredType});
-      if (!data.exprs.empty()) {
-        const uint32_t initId = emitValue(data.exprs[0]);
-        Instr(functions_, kOpStore, {varId, initId});
-      }
-      return;
-    }
+    case IrStmt::Kind::Var: emitVarStatement(data); return;
     case IrStmt::Kind::Assign: emitAssign(data.exprs[0], data.exprs[1]); return;
-    case IrStmt::Kind::If: {
-      const uint32_t conditionId = emitValue(data.exprs[0]);
-      const uint32_t thenLabel = newId();
-      const uint32_t elseLabel = data.elseBody.empty() ? 0 : newId();
-      const uint32_t mergeLabel = newId();
-      Instr(functions_, kOpSelectionMerge, {mergeLabel, kSelectionControlNone});
-      Instr(functions_, kOpBranchConditional,
-            {conditionId, thenLabel, elseLabel != 0 ? elseLabel : mergeLabel});
-      startBlock(thenLabel);
-      pushScope();
-      emitBlock(data.body);
-      popScope();
-      if (!blockTerminated_) {
-        Instr(functions_, kOpBranch, {mergeLabel});
-      }
-      if (elseLabel != 0) {
-        startBlock(elseLabel);
-        pushScope();
-        emitBlock(data.elseBody);
-        popScope();
-        if (!blockTerminated_) {
-          Instr(functions_, kOpBranch, {mergeLabel});
-        }
-      }
-      startBlock(mergeLabel);
-      return;
-    }
-    case IrStmt::Kind::For: {
-      pushScope();  // Scope of the loop variable.
-      if (data.init) {
-        const IrStmt::Data& initData = data.init->data();
-        const auto it = hoistedVars_.find(&initData);
-        const uint32_t varId = it != hoistedVars_.end() ? it->second : 0;
-        bindLocal(initData.name, Local{RefKind::Var, varId, *initData.declaredType});
-        const uint32_t initId = emitValue(initData.exprs[0]);
-        Instr(functions_, kOpStore, {varId, initId});
-      }
-      const uint32_t headerLabel = newId();
-      const uint32_t conditionLabel = data.exprs.empty() ? 0 : newId();
-      const uint32_t bodyLabel = newId();
-      const uint32_t continueLabel = newId();
-      const uint32_t mergeLabel = newId();
-
-      Instr(functions_, kOpBranch, {headerLabel});
-      startBlock(headerLabel);
-      Instr(functions_, kOpLoopMerge, {mergeLabel, continueLabel, kLoopControlNone});
-      Instr(functions_, kOpBranch, {conditionLabel != 0 ? conditionLabel : bodyLabel});
-      if (conditionLabel != 0) {
-        startBlock(conditionLabel);
-        const uint32_t conditionId = emitValue(data.exprs[0]);
-        Instr(functions_, kOpBranchConditional, {conditionId, bodyLabel, mergeLabel});
-      }
-      startBlock(bodyLabel);
-      loopStack_.emplace_back(mergeLabel, continueLabel);
-      pushScope();
-      emitBlock(data.body);
-      popScope();
-      loopStack_.pop_back();
-      if (!blockTerminated_) {
-        Instr(functions_, kOpBranch, {continueLabel});
-      }
-      startBlock(continueLabel);
-      if (data.continuing) {
-        const IrStmt::Data& continuingData = data.continuing->data();
-        emitAssign(continuingData.exprs[0], continuingData.exprs[1]);
-      }
-      Instr(functions_, kOpBranch, {headerLabel});
-      startBlock(mergeLabel);
-      popScope();
-      return;
-    }
-    case IrStmt::Kind::Break:
-      // Defense in depth: the IR builder rejects break outside a loop.
-      if (loopStack_.empty()) {
-        latch(std::format("break outside a loop in function \"{}\" cannot be emitted as SPIR-V",
-                          currentFunctionName_));
-        return;
-      }
-      Instr(functions_, kOpBranch, {loopStack_.back().first});
-      blockTerminated_ = true;
-      return;
-    case IrStmt::Kind::Continue:
-      // Defense in depth: the IR builder rejects continue outside a loop.
-      if (loopStack_.empty()) {
-        latch(std::format("continue outside a loop in function \"{}\" cannot be emitted as SPIR-V",
-                          currentFunctionName_));
-        return;
-      }
-      Instr(functions_, kOpBranch, {loopStack_.back().second});
-      blockTerminated_ = true;
-      return;
-    case IrStmt::Kind::Return: {
-      if (currentStage_ != StageKind::None) {
-        for (size_t i = 0; i < data.exprs.size(); ++i) {
-          const uint32_t valueId = emitValue(data.exprs[i]);
-          Instr(functions_, kOpStore, {currentOutputVars_[i], valueId});
-        }
-        Instr(functions_, kOpReturn, {});
-      } else if (!data.exprs.empty()) {
-        const uint32_t valueId = emitValue(data.exprs[0]);
-        Instr(functions_, kOpReturnValue, {valueId});
-      } else {
-        Instr(functions_, kOpReturn, {});
-      }
-      blockTerminated_ = true;
-      return;
-    }
-    case IrStmt::Kind::Discard:
-      if (currentStage_ == StageKind::Vertex) {
-        latch(std::format("discard cannot appear in vertex entry point \"{}\"",
-                          currentFunctionName_));
-        return;
-      }
-      Instr(functions_, kOpKill, {});
-      blockTerminated_ = true;
-      return;
+    case IrStmt::Kind::If: emitIfStatement(data); return;
+    case IrStmt::Kind::For: emitForStatement(data); return;
+    case IrStmt::Kind::Break: emitBreakStatement(); return;
+    case IrStmt::Kind::Continue: emitContinueStatement(); return;
+    case IrStmt::Kind::Return: emitReturnStatement(data); return;
+    case IrStmt::Kind::Discard: emitDiscardStatement(); return;
   }
+}
+
+void Emitter::emitVarStatement(const IrStmt::Data& data) {
+  const auto it = hoistedVars_.find(&data);
+  const uint32_t varId = it != hoistedVars_.end() ? it->second : 0;
+  bindLocal(data.name, Local{RefKind::Var, varId, *data.declaredType});
+  if (!data.exprs.empty()) {
+    const uint32_t initId = emitValue(data.exprs[0]);
+    Instr(functions_, kOpStore, {varId, initId});
+  }
+}
+
+void Emitter::emitIfStatement(const IrStmt::Data& data) {
+  const uint32_t conditionId = emitValue(data.exprs[0]);
+  const uint32_t thenLabel = newId();
+  const uint32_t elseLabel = data.elseBody.empty() ? 0 : newId();
+  const uint32_t mergeLabel = newId();
+  Instr(functions_, kOpSelectionMerge, {mergeLabel, kSelectionControlNone});
+  Instr(functions_, kOpBranchConditional,
+        {conditionId, thenLabel, elseLabel != 0 ? elseLabel : mergeLabel});
+  startBlock(thenLabel);
+  pushScope();
+  emitBlock(data.body);
+  popScope();
+  if (!blockTerminated_) {
+    Instr(functions_, kOpBranch, {mergeLabel});
+  }
+  if (elseLabel != 0) {
+    startBlock(elseLabel);
+    pushScope();
+    emitBlock(data.elseBody);
+    popScope();
+    if (!blockTerminated_) {
+      Instr(functions_, kOpBranch, {mergeLabel});
+    }
+  }
+  startBlock(mergeLabel);
+}
+
+void Emitter::emitForStatement(const IrStmt::Data& data) {
+  pushScope();  // Scope of the loop variable.
+  if (data.init) {
+    const IrStmt::Data& initData = data.init->data();
+    const auto it = hoistedVars_.find(&initData);
+    const uint32_t varId = it != hoistedVars_.end() ? it->second : 0;
+    bindLocal(initData.name, Local{RefKind::Var, varId, *initData.declaredType});
+    const uint32_t initId = emitValue(initData.exprs[0]);
+    Instr(functions_, kOpStore, {varId, initId});
+  }
+  const uint32_t headerLabel = newId();
+  const uint32_t conditionLabel = data.exprs.empty() ? 0 : newId();
+  const uint32_t bodyLabel = newId();
+  const uint32_t continueLabel = newId();
+  const uint32_t mergeLabel = newId();
+
+  Instr(functions_, kOpBranch, {headerLabel});
+  startBlock(headerLabel);
+  Instr(functions_, kOpLoopMerge, {mergeLabel, continueLabel, kLoopControlNone});
+  Instr(functions_, kOpBranch, {conditionLabel != 0 ? conditionLabel : bodyLabel});
+  if (conditionLabel != 0) {
+    startBlock(conditionLabel);
+    const uint32_t conditionId = emitValue(data.exprs[0]);
+    Instr(functions_, kOpBranchConditional, {conditionId, bodyLabel, mergeLabel});
+  }
+  startBlock(bodyLabel);
+  loopStack_.emplace_back(mergeLabel, continueLabel);
+  pushScope();
+  emitBlock(data.body);
+  popScope();
+  loopStack_.pop_back();
+  if (!blockTerminated_) {
+    Instr(functions_, kOpBranch, {continueLabel});
+  }
+  startBlock(continueLabel);
+  if (data.continuing) {
+    const IrStmt::Data& continuingData = data.continuing->data();
+    emitAssign(continuingData.exprs[0], continuingData.exprs[1]);
+  }
+  Instr(functions_, kOpBranch, {headerLabel});
+  startBlock(mergeLabel);
+  popScope();
+}
+
+void Emitter::emitBreakStatement() {
+  // Defense in depth: the IR builder rejects break outside a loop.
+  if (loopStack_.empty()) {
+    latch(std::format("break outside a loop in function \"{}\" cannot be emitted as SPIR-V",
+                      currentFunctionName_));
+    return;
+  }
+  Instr(functions_, kOpBranch, {loopStack_.back().first});
+  blockTerminated_ = true;
+}
+
+void Emitter::emitContinueStatement() {
+  // Defense in depth: the IR builder rejects continue outside a loop.
+  if (loopStack_.empty()) {
+    latch(std::format("continue outside a loop in function \"{}\" cannot be emitted as SPIR-V",
+                      currentFunctionName_));
+    return;
+  }
+  Instr(functions_, kOpBranch, {loopStack_.back().second});
+  blockTerminated_ = true;
+}
+
+void Emitter::emitReturnStatement(const IrStmt::Data& data) {
+  if (currentStage_ != StageKind::None) {
+    for (size_t i = 0; i < data.exprs.size(); ++i) {
+      const uint32_t valueId = emitValue(data.exprs[i]);
+      Instr(functions_, kOpStore, {currentOutputVars_[i], valueId});
+    }
+    Instr(functions_, kOpReturn, {});
+  } else if (!data.exprs.empty()) {
+    const uint32_t valueId = emitValue(data.exprs[0]);
+    Instr(functions_, kOpReturnValue, {valueId});
+  } else {
+    Instr(functions_, kOpReturn, {});
+  }
+  blockTerminated_ = true;
+}
+
+void Emitter::emitDiscardStatement() {
+  if (currentStage_ == StageKind::Vertex) {
+    latch(std::format("discard cannot appear in vertex entry point \"{}\"", currentFunctionName_));
+    return;
+  }
+  Instr(functions_, kOpKill, {});
+  blockTerminated_ = true;
 }
 
 void Emitter::emitAssign(const IrExpr& lhs, const IrExpr& rhs) {
@@ -1149,43 +1377,47 @@ bool Emitter::isPointerBacked(const IrExpr& expr) const {
   }
 }
 
+Emitter::Chain Emitter::emitRefChain(const IrExpr::Node& node) {
+  if (node.refKind == RefKind::Var) {
+    const Local* local = resolveLocal(node.name.str());
+    Chain chain;
+    chain.base = local != nullptr ? local->id : 0;
+    chain.storageClass = kStorageClassFunction;
+    return chain;
+  }
+  const auto it = bindings_.find(node.name.str());
+  Chain chain;
+  if (it != bindings_.end()) {
+    chain.base = it->second.varId;
+    chain.storageClass = it->second.storageClass;
+    chain.space = it->second.kind == BindingKind::UniformBuffer ? AddressSpace::Uniform
+                                                                : AddressSpace::Storage;
+    if (it->second.wrapped) {
+      chain.indices.push_back(constU32(0));
+    }
+  }
+  return chain;
+}
+
+Emitter::Chain Emitter::emitMemberChain(const IrExpr::Node& node) {
+  Chain chain = emitChain(node.children[0]);
+  uint32_t memberIndex = 0;
+  const std::span<const IrType::Member> members = node.children[0].type().structMembers();
+  for (size_t i = 0; i < members.size(); ++i) {
+    if (members[i].name == node.name) {
+      memberIndex = static_cast<uint32_t>(i);
+      break;
+    }
+  }
+  chain.indices.push_back(constU32(memberIndex));
+  return chain;
+}
+
 Emitter::Chain Emitter::emitChain(const IrExpr& expr) {
   const IrExpr::Node& node = expr.node();
   switch (node.kind) {
-    case IrExpr::Kind::Ref: {
-      if (node.refKind == RefKind::Var) {
-        const Local* local = resolveLocal(node.name.str());
-        Chain chain;
-        chain.base = local != nullptr ? local->id : 0;
-        chain.storageClass = kStorageClassFunction;
-        return chain;
-      }
-      const auto it = bindings_.find(node.name.str());
-      Chain chain;
-      if (it != bindings_.end()) {
-        chain.base = it->second.varId;
-        chain.storageClass = it->second.storageClass;
-        chain.space = it->second.kind == BindingKind::UniformBuffer ? AddressSpace::Uniform
-                                                                    : AddressSpace::Storage;
-        if (it->second.wrapped) {
-          chain.indices.push_back(constU32(0));
-        }
-      }
-      return chain;
-    }
-    case IrExpr::Kind::Member: {
-      Chain chain = emitChain(node.children[0]);
-      uint32_t memberIndex = 0;
-      const std::span<const IrType::Member> members = node.children[0].type().structMembers();
-      for (size_t i = 0; i < members.size(); ++i) {
-        if (members[i].name == node.name) {
-          memberIndex = static_cast<uint32_t>(i);
-          break;
-        }
-      }
-      chain.indices.push_back(constU32(memberIndex));
-      return chain;
-    }
+    case IrExpr::Kind::Ref: return emitRefChain(node);
+    case IrExpr::Kind::Member: return emitMemberChain(node);
     case IrExpr::Kind::Index: {
       Chain chain = emitChain(node.children[0]);
       chain.indices.push_back(emitValue(node.children[1]));
@@ -1272,124 +1504,149 @@ uint32_t Emitter::emitValue(const IrExpr& expr) {
   switch (node.kind) {
     case IrExpr::Kind::Literal: return emitLiteral(node);
     case IrExpr::Kind::Ref: return emitRefValue(node);
-    case IrExpr::Kind::Unary: {
-      const uint32_t operandId = emitValue(node.children[0]);
-      const uint32_t typeId = plainTypeId(node.type);
-      const uint32_t valueId = newId();
-      if (node.unaryOp == IrExpr::UnaryOp::Not) {
-        Instr(functions_, kOpLogicalNot, {typeId, valueId, operandId});
-      } else {
-        const uint32_t opcode = node.type.scalarKind() == ScalarKind::F32 ? kOpFNegate : kOpSNegate;
-        Instr(functions_, opcode, {typeId, valueId, operandId});
-      }
-      return valueId;
-    }
+    case IrExpr::Kind::Unary: return emitUnaryValue(node);
     case IrExpr::Kind::Binary: return emitBinary(node);
-    case IrExpr::Kind::Member: {
-      if (isPointerBacked(expr)) {
-        return loadThroughChain(emitChain(expr), node.type);
-      }
-      const uint32_t baseId = emitValue(node.children[0]);
-      uint32_t memberIndex = 0;
-      const std::span<const IrType::Member> members = node.children[0].type().structMembers();
-      for (size_t i = 0; i < members.size(); ++i) {
-        if (members[i].name == node.name) {
-          memberIndex = static_cast<uint32_t>(i);
-          break;
-        }
-      }
-      const uint32_t typeId = plainTypeId(node.type);
-      const uint32_t valueId = newId();
-      Instr(functions_, kOpCompositeExtract, {typeId, valueId, baseId, memberIndex});
-      return valueId;
-    }
-    case IrExpr::Kind::Swizzle: {
-      if (node.swizzle.size() == 1) {
-        if (isPointerBacked(expr)) {
-          return loadThroughChain(emitChain(expr), node.type);
-        }
-        const uint32_t baseId = emitValue(node.children[0]);
-        const uint32_t typeId = plainTypeId(node.type);
-        const uint32_t valueId = newId();
-        Instr(functions_, kOpCompositeExtract,
-              {typeId, valueId, baseId, SwizzleComponentIndex(node.swizzle[0])});
-        return valueId;
-      }
-      const uint32_t baseId = emitValue(node.children[0]);
-      const uint32_t typeId = plainTypeId(node.type);
-      const uint32_t valueId = newId();
-      std::vector<uint32_t> operands = {typeId, valueId, baseId, baseId};
-      for (const char component : node.swizzle) {
-        operands.push_back(SwizzleComponentIndex(component));
-      }
-      InstrV(functions_, kOpVectorShuffle, operands);
-      return valueId;
-    }
-    case IrExpr::Kind::Index: {
-      if (isPointerBacked(expr)) {
-        return loadThroughChain(emitChain(expr), node.type);
-      }
-      const IrExpr& indexExpr = node.children[1];
-      const uint32_t baseId = emitValue(node.children[0]);
-      if (indexExpr.node().kind == IrExpr::Kind::Literal) {
-        const uint32_t literalIndex =
-            std::holds_alternative<uint32_t>(indexExpr.node().literal)
-                ? std::get<uint32_t>(indexExpr.node().literal)
-                : static_cast<uint32_t>(std::get<int32_t>(indexExpr.node().literal));
-        const uint32_t typeId = plainTypeId(node.type);
-        const uint32_t valueId = newId();
-        Instr(functions_, kOpCompositeExtract, {typeId, valueId, baseId, literalIndex});
-        return valueId;
-      }
-      if (node.children[0].type().kind() == IrType::Kind::Vector) {
-        const uint32_t indexId = emitValue(indexExpr);
-        const uint32_t typeId = plainTypeId(node.type);
-        const uint32_t valueId = newId();
-        Instr(functions_, kOpVectorExtractDynamic, {typeId, valueId, baseId, indexId});
-        return valueId;
-      }
-      latch(
-          std::format("an array value not backed by a pointer cannot be indexed dynamically "
-                      "(function \"{}\")",
-                      currentFunctionName_));
-      return 0;
-    }
-    case IrExpr::Kind::Construct: {
-      std::vector<uint32_t> argIds;
-      for (const IrExpr& child : node.children) {
-        argIds.push_back(emitValue(child));
-      }
-      if (node.type.kind() == IrType::Kind::Vector && argIds.size() == 1 &&
-          node.children[0].type().isScalar()) {
-        return emitSplat(node.type, argIds[0]);
-      }
-      const uint32_t typeId = plainTypeId(node.type);
-      const uint32_t valueId = newId();
-      std::vector<uint32_t> operands = {typeId, valueId};
-      operands.insert(operands.end(), argIds.begin(), argIds.end());
-      InstrV(functions_, kOpCompositeConstruct, operands);
-      return valueId;
-    }
     case IrExpr::Kind::Convert: return emitConvert(node);
     case IrExpr::Kind::CallBuiltin: return emitBuiltinCall(node);
-    case IrExpr::Kind::CallUser: {
-      const auto it = functionIds_.find(node.name.str());
-      if (it == functionIds_.end()) {
-        latch(std::format("call to unknown function \"{}\"", node.name.str()));
-        return 0;
-      }
-      std::vector<uint32_t> argIds;
-      for (const IrExpr& child : node.children) {
-        argIds.push_back(emitValue(child));
-      }
-      const uint32_t valueId = newId();
-      std::vector<uint32_t> operands = {it->second.returnTypeId, valueId, it->second.id};
-      operands.insert(operands.end(), argIds.begin(), argIds.end());
-      InstrV(functions_, kOpFunctionCall, operands);
-      return valueId;
+    case IrExpr::Kind::CallUser: return emitUserCallValue(node);
+    default: return emitCompositeValue(expr);
+  }
+}
+
+// Member, swizzle, and index reach a value the same two ways - through an access chain when the
+// expression is pointer-backed, otherwise by extracting from a materialized composite - and
+// construct is their inverse, so they share a dispatch.
+uint32_t Emitter::emitCompositeValue(const IrExpr& expr) {
+  const IrExpr::Node& node = expr.node();
+  switch (node.kind) {
+    case IrExpr::Kind::Member: return emitMemberValue(expr);
+    case IrExpr::Kind::Swizzle: return emitSwizzleValue(expr);
+    case IrExpr::Kind::Index: return emitIndexValue(expr);
+    case IrExpr::Kind::Construct: return emitConstructValue(node);
+    default: return 0;
+  }
+}
+
+uint32_t Emitter::emitUnaryValue(const IrExpr::Node& node) {
+  const uint32_t operandId = emitValue(node.children[0]);
+  const uint32_t typeId = plainTypeId(node.type);
+  const uint32_t valueId = newId();
+  if (node.unaryOp == IrExpr::UnaryOp::Not) {
+    Instr(functions_, kOpLogicalNot, {typeId, valueId, operandId});
+  } else {
+    const uint32_t opcode = node.type.scalarKind() == ScalarKind::F32 ? kOpFNegate : kOpSNegate;
+    Instr(functions_, opcode, {typeId, valueId, operandId});
+  }
+  return valueId;
+}
+
+uint32_t Emitter::emitMemberValue(const IrExpr& expr) {
+  const IrExpr::Node& node = expr.node();
+  if (isPointerBacked(expr)) {
+    return loadThroughChain(emitChain(expr), node.type);
+  }
+  const uint32_t baseId = emitValue(node.children[0]);
+  uint32_t memberIndex = 0;
+  const std::span<const IrType::Member> members = node.children[0].type().structMembers();
+  for (size_t i = 0; i < members.size(); ++i) {
+    if (members[i].name == node.name) {
+      memberIndex = static_cast<uint32_t>(i);
+      break;
     }
   }
+  const uint32_t typeId = plainTypeId(node.type);
+  const uint32_t valueId = newId();
+  Instr(functions_, kOpCompositeExtract, {typeId, valueId, baseId, memberIndex});
+  return valueId;
+}
+
+uint32_t Emitter::emitSwizzleValue(const IrExpr& expr) {
+  const IrExpr::Node& node = expr.node();
+  if (node.swizzle.size() == 1) {
+    if (isPointerBacked(expr)) {
+      return loadThroughChain(emitChain(expr), node.type);
+    }
+    const uint32_t baseId = emitValue(node.children[0]);
+    const uint32_t typeId = plainTypeId(node.type);
+    const uint32_t valueId = newId();
+    Instr(functions_, kOpCompositeExtract,
+          {typeId, valueId, baseId, SwizzleComponentIndex(node.swizzle[0])});
+    return valueId;
+  }
+  const uint32_t baseId = emitValue(node.children[0]);
+  const uint32_t typeId = plainTypeId(node.type);
+  const uint32_t valueId = newId();
+  std::vector<uint32_t> operands = {typeId, valueId, baseId, baseId};
+  for (const char component : node.swizzle) {
+    operands.push_back(SwizzleComponentIndex(component));
+  }
+  InstrV(functions_, kOpVectorShuffle, operands);
+  return valueId;
+}
+
+uint32_t Emitter::emitIndexValue(const IrExpr& expr) {
+  const IrExpr::Node& node = expr.node();
+  if (isPointerBacked(expr)) {
+    return loadThroughChain(emitChain(expr), node.type);
+  }
+  const IrExpr& indexExpr = node.children[1];
+  const uint32_t baseId = emitValue(node.children[0]);
+  if (indexExpr.node().kind == IrExpr::Kind::Literal) {
+    const uint32_t literalIndex =
+        std::holds_alternative<uint32_t>(indexExpr.node().literal)
+            ? std::get<uint32_t>(indexExpr.node().literal)
+            : static_cast<uint32_t>(std::get<int32_t>(indexExpr.node().literal));
+    const uint32_t typeId = plainTypeId(node.type);
+    const uint32_t valueId = newId();
+    Instr(functions_, kOpCompositeExtract, {typeId, valueId, baseId, literalIndex});
+    return valueId;
+  }
+  if (node.children[0].type().kind() == IrType::Kind::Vector) {
+    const uint32_t indexId = emitValue(indexExpr);
+    const uint32_t typeId = plainTypeId(node.type);
+    const uint32_t valueId = newId();
+    Instr(functions_, kOpVectorExtractDynamic, {typeId, valueId, baseId, indexId});
+    return valueId;
+  }
+  latch(
+      std::format("an array value not backed by a pointer cannot be indexed dynamically "
+                  "(function \"{}\")",
+                  currentFunctionName_));
   return 0;
+}
+
+uint32_t Emitter::emitConstructValue(const IrExpr::Node& node) {
+  std::vector<uint32_t> argIds;
+  for (const IrExpr& child : node.children) {
+    argIds.push_back(emitValue(child));
+  }
+  if (node.type.kind() == IrType::Kind::Vector && argIds.size() == 1 &&
+      node.children[0].type().isScalar()) {
+    return emitSplat(node.type, argIds[0]);
+  }
+  const uint32_t typeId = plainTypeId(node.type);
+  const uint32_t valueId = newId();
+  std::vector<uint32_t> operands = {typeId, valueId};
+  operands.insert(operands.end(), argIds.begin(), argIds.end());
+  InstrV(functions_, kOpCompositeConstruct, operands);
+  return valueId;
+}
+
+uint32_t Emitter::emitUserCallValue(const IrExpr::Node& node) {
+  const auto it = functionIds_.find(node.name.str());
+  if (it == functionIds_.end()) {
+    latch(std::format("call to unknown function \"{}\"", node.name.str()));
+    return 0;
+  }
+  std::vector<uint32_t> argIds;
+  for (const IrExpr& child : node.children) {
+    argIds.push_back(emitValue(child));
+  }
+  const uint32_t valueId = newId();
+  std::vector<uint32_t> operands = {it->second.returnTypeId, valueId, it->second.id};
+  operands.insert(operands.end(), argIds.begin(), argIds.end());
+  InstrV(functions_, kOpFunctionCall, operands);
+  return valueId;
 }
 
 uint32_t Emitter::emitLiteral(const IrExpr::Node& node) {
@@ -1435,86 +1692,82 @@ uint32_t Emitter::emitRefValue(const IrExpr::Node& node) {
       }
       return it->second;
     }
-    case RefKind::Resource: {
-      const auto it = bindings_.find(node.name.str());
-      if (it == bindings_.end()) {
-        latch(std::format("reference to unknown binding \"{}\"", node.name.str()));
-        return 0;
-      }
-      const BindingInfo& info = it->second;
-      if (info.kind == BindingKind::SampledTexture2dF32 ||
-          info.kind == BindingKind::FilteringSampler) {
-        const uint32_t typeId =
-            info.kind == BindingKind::SampledTexture2dF32 ? typeImage2dF32() : typeSampler();
-        const uint32_t valueId = newId();
-        Instr(functions_, kOpLoad, {typeId, valueId, info.varId});
-        return valueId;
-      }
-      // Whole load of a buffer root (member-by-member rebuild; runtime arrays fail closed).
-      Chain chain;
-      chain.base = info.varId;
-      chain.storageClass = info.storageClass;
-      chain.space =
-          info.kind == BindingKind::UniformBuffer ? AddressSpace::Uniform : AddressSpace::Storage;
-      if (info.wrapped) {
-        chain.indices.push_back(constU32(0));
-      }
-      return loadThroughChain(chain, info.type);
-    }
+    case RefKind::Resource: return emitResourceRefValue(node);
   }
   return 0;
+}
+
+uint32_t Emitter::emitResourceRefValue(const IrExpr::Node& node) {
+  const auto it = bindings_.find(node.name.str());
+  if (it == bindings_.end()) {
+    latch(std::format("reference to unknown binding \"{}\"", node.name.str()));
+    return 0;
+  }
+  const BindingInfo& info = it->second;
+  if (info.kind == BindingKind::SampledTexture2dF32 || info.kind == BindingKind::FilteringSampler) {
+    const uint32_t typeId =
+        info.kind == BindingKind::SampledTexture2dF32 ? typeImage2dF32() : typeSampler();
+    const uint32_t valueId = newId();
+    Instr(functions_, kOpLoad, {typeId, valueId, info.varId});
+    return valueId;
+  }
+  // Whole load of a buffer root (member-by-member rebuild; runtime arrays fail closed).
+  Chain chain;
+  chain.base = info.varId;
+  chain.storageClass = info.storageClass;
+  chain.space =
+      info.kind == BindingKind::UniformBuffer ? AddressSpace::Uniform : AddressSpace::Storage;
+  if (info.wrapped) {
+    chain.indices.push_back(constU32(0));
+  }
+  return loadThroughChain(chain, info.type);
+}
+
+uint32_t Emitter::emitMatrixProduct(const IrExpr::Node& node) {
+  const uint32_t lhsId = emitValue(node.children[0]);
+  const uint32_t rhsId = emitValue(node.children[1]);
+  const uint32_t typeId = plainTypeId(node.type);
+  const uint32_t valueId = newId();
+  const uint32_t opcode = node.children[1].type().kind() == IrType::Kind::Matrix4x4f
+                              ? kOpMatrixTimesMatrix
+                              : kOpMatrixTimesVector;
+  Instr(functions_, opcode, {typeId, valueId, lhsId, rhsId});
+  return valueId;
+}
+
+uint32_t Emitter::emitBroadcastArithmetic(const IrExpr::Node& node) {
+  const bool vectorScalar = node.children[0].type().isVector();
+  uint32_t lhsId = emitValue(node.children[0]);
+  uint32_t rhsId = emitValue(node.children[1]);
+  const uint32_t typeId = plainTypeId(node.type);
+  if (node.binaryOp == BinaryOp::Mul && node.type.scalarKind() == ScalarKind::F32) {
+    const uint32_t vectorId = vectorScalar ? lhsId : rhsId;
+    const uint32_t scalarId = vectorScalar ? rhsId : lhsId;
+    const uint32_t valueId = newId();
+    Instr(functions_, kOpVectorTimesScalar, {typeId, valueId, vectorId, scalarId});
+    return valueId;
+  }
+  // Splat the scalar side; division and integer multiplication are componentwise.
+  if (vectorScalar) {
+    rhsId = emitSplat(node.type, rhsId);
+  } else {
+    lhsId = emitSplat(node.type, lhsId);
+  }
+  const uint32_t valueId = newId();
+  Instr(functions_, BinaryOpcode(node.binaryOp, node.type.scalarKind()),
+        {typeId, valueId, lhsId, rhsId});
+  return valueId;
 }
 
 uint32_t Emitter::emitBinary(const IrExpr::Node& node) {
   const IrType& lhsType = node.children[0].type();
   const IrType& rhsType = node.children[1].type();
 
-  // Matrix products.
   if (node.binaryOp == BinaryOp::Mul && lhsType.kind() == IrType::Kind::Matrix4x4f) {
-    const uint32_t lhsId = emitValue(node.children[0]);
-    const uint32_t rhsId = emitValue(node.children[1]);
-    const uint32_t typeId = plainTypeId(node.type);
-    const uint32_t valueId = newId();
-    const uint32_t opcode =
-        rhsType.kind() == IrType::Kind::Matrix4x4f ? kOpMatrixTimesMatrix : kOpMatrixTimesVector;
-    Instr(functions_, opcode, {typeId, valueId, lhsId, rhsId});
-    return valueId;
+    return emitMatrixProduct(node);
   }
-
-  // Vector-scalar broadcast forms of * and /.
-  const bool vectorScalar = lhsType.isVector() && rhsType.isScalar();
-  const bool scalarVector = lhsType.isScalar() && rhsType.isVector();
-  if ((node.binaryOp == BinaryOp::Mul || node.binaryOp == BinaryOp::Div) &&
-      (vectorScalar || scalarVector)) {
-    uint32_t lhsId = emitValue(node.children[0]);
-    uint32_t rhsId = emitValue(node.children[1]);
-    const uint32_t typeId = plainTypeId(node.type);
-    if (node.binaryOp == BinaryOp::Mul && node.type.scalarKind() == ScalarKind::F32) {
-      const uint32_t vectorId = vectorScalar ? lhsId : rhsId;
-      const uint32_t scalarId = vectorScalar ? rhsId : lhsId;
-      const uint32_t valueId = newId();
-      Instr(functions_, kOpVectorTimesScalar, {typeId, valueId, vectorId, scalarId});
-      return valueId;
-    }
-    // Splat the scalar side; division and integer multiplication are componentwise.
-    if (vectorScalar) {
-      rhsId = emitSplat(node.type, rhsId);
-    } else {
-      lhsId = emitSplat(node.type, lhsId);
-    }
-    uint32_t opcode = 0;
-    if (node.binaryOp == BinaryOp::Mul) {
-      opcode = node.type.scalarKind() == ScalarKind::F32 ? kOpFMul : kOpIMul;
-    } else {
-      switch (node.type.scalarKind()) {
-        case ScalarKind::F32: opcode = kOpFDiv; break;
-        case ScalarKind::I32: opcode = kOpSDiv; break;
-        default: opcode = kOpUDiv; break;
-      }
-    }
-    const uint32_t valueId = newId();
-    Instr(functions_, opcode, {typeId, valueId, lhsId, rhsId});
-    return valueId;
+  if (IsVectorScalarBroadcast(node.binaryOp, lhsType, rhsType)) {
+    return emitBroadcastArithmetic(node);
   }
 
   const uint32_t lhsId = emitValue(node.children[0]);
@@ -1522,68 +1775,8 @@ uint32_t Emitter::emitBinary(const IrExpr::Node& node) {
   const uint32_t typeId = plainTypeId(node.type);
   const ScalarKind operandKind =
       lhsType.isScalar() || lhsType.isVector() ? lhsType.scalarKind() : ScalarKind::F32;
-
-  uint32_t opcode = 0;
-  switch (node.binaryOp) {
-    case BinaryOp::Add: opcode = operandKind == ScalarKind::F32 ? kOpFAdd : kOpIAdd; break;
-    case BinaryOp::Sub: opcode = operandKind == ScalarKind::F32 ? kOpFSub : kOpISub; break;
-    case BinaryOp::Mul: opcode = operandKind == ScalarKind::F32 ? kOpFMul : kOpIMul; break;
-    case BinaryOp::Div:
-      switch (operandKind) {
-        case ScalarKind::F32: opcode = kOpFDiv; break;
-        case ScalarKind::I32: opcode = kOpSDiv; break;
-        default: opcode = kOpUDiv; break;
-      }
-      break;
-    case BinaryOp::Lt:
-      switch (operandKind) {
-        case ScalarKind::F32: opcode = kOpFOrdLessThan; break;
-        case ScalarKind::I32: opcode = kOpSLessThan; break;
-        default: opcode = kOpULessThan; break;
-      }
-      break;
-    case BinaryOp::Le:
-      switch (operandKind) {
-        case ScalarKind::F32: opcode = kOpFOrdLessThanEqual; break;
-        case ScalarKind::I32: opcode = kOpSLessThanEqual; break;
-        default: opcode = kOpULessThanEqual; break;
-      }
-      break;
-    case BinaryOp::Gt:
-      switch (operandKind) {
-        case ScalarKind::F32: opcode = kOpFOrdGreaterThan; break;
-        case ScalarKind::I32: opcode = kOpSGreaterThan; break;
-        default: opcode = kOpUGreaterThan; break;
-      }
-      break;
-    case BinaryOp::Ge:
-      switch (operandKind) {
-        case ScalarKind::F32: opcode = kOpFOrdGreaterThanEqual; break;
-        case ScalarKind::I32: opcode = kOpSGreaterThanEqual; break;
-        default: opcode = kOpUGreaterThanEqual; break;
-      }
-      break;
-    case BinaryOp::Eq:
-      switch (operandKind) {
-        case ScalarKind::F32: opcode = kOpFOrdEqual; break;
-        case ScalarKind::Bool: opcode = kOpLogicalEqual; break;
-        default: opcode = kOpIEqual; break;
-      }
-      break;
-    case BinaryOp::Ne:
-      switch (operandKind) {
-        case ScalarKind::F32: opcode = kOpFOrdNotEqual; break;
-        case ScalarKind::Bool: opcode = kOpLogicalNotEqual; break;
-        default: opcode = kOpINotEqual; break;
-      }
-      break;
-    // IR expressions are side-effect free, so eager logical ops match WGSL short-circuit
-    // semantics.
-    case BinaryOp::And: opcode = kOpLogicalAnd; break;
-    case BinaryOp::Or: opcode = kOpLogicalOr; break;
-  }
   const uint32_t valueId = newId();
-  Instr(functions_, opcode, {typeId, valueId, lhsId, rhsId});
+  Instr(functions_, BinaryOpcode(node.binaryOp, operandKind), {typeId, valueId, lhsId, rhsId});
   return valueId;
 }
 
@@ -1638,61 +1831,52 @@ uint32_t Emitter::emitSplat(const IrType& vectorType, uint32_t scalarId) {
   return valueId;
 }
 
-uint32_t Emitter::emitBuiltinCall(const IrExpr::Node& node) {
-  const auto scalarKindOf = [](const IrType& type) { return type.scalarKind(); };
-  const uint32_t typeId = plainTypeId(node.type);
+uint32_t Emitter::emitAbsBuiltin(const IrExpr::Node& node, uint32_t typeId) {
+  const uint32_t argId = emitValue(node.children[0]);
+  switch (node.type.scalarKind()) {
+    case ScalarKind::F32: return emitExtInst(typeId, kGlslFAbs, {argId});
+    case ScalarKind::I32: return emitExtInst(typeId, kGlslSAbs, {argId});
+    default: return argId;  // abs of an unsigned value is the identity.
+  }
+}
 
+uint32_t Emitter::emitMinMaxBuiltin(const IrExpr::Node& node, uint32_t typeId) {
+  const uint32_t lhsId = emitValue(node.children[0]);
+  const uint32_t rhsId = emitValue(node.children[1]);
+  const uint32_t instruction =
+      node.builtin == BuiltinFn::Min
+          ? SelectByScalarKind(node.type.scalarKind(), kGlslFMin, kGlslSMin, kGlslUMin)
+          : SelectByScalarKind(node.type.scalarKind(), kGlslFMax, kGlslSMax, kGlslUMax);
+  return emitExtInst(typeId, instruction, {lhsId, rhsId});
+}
+
+uint32_t Emitter::emitClampBuiltin(const IrExpr::Node& node, uint32_t typeId) {
+  const uint32_t valueArg = emitValue(node.children[0]);
+  const uint32_t lowArg = emitValue(node.children[1]);
+  const uint32_t highArg = emitValue(node.children[2]);
+  const uint32_t instruction =
+      SelectByScalarKind(node.type.scalarKind(), kGlslFClamp, kGlslSClamp, kGlslUClamp);
+  return emitExtInst(typeId, instruction, {valueArg, lowArg, highArg});
+}
+
+uint32_t Emitter::emitSaturateBuiltin(const IrExpr::Node& node, uint32_t typeId) {
+  const uint32_t argId = emitValue(node.children[0]);
+  uint32_t zeroId = constF32(0.0f);
+  uint32_t oneId = constF32(1.0f);
+  if (node.type.isVector()) {
+    zeroId = constSplat(typeId, zeroId, node.type.vectorSize());
+    oneId = constSplat(typeId, oneId, node.type.vectorSize());
+  }
+  return emitExtInst(typeId, kGlslFClamp, {argId, zeroId, oneId});
+}
+
+uint32_t Emitter::emitMathBuiltin(const IrExpr::Node& node, uint32_t typeId) {
   switch (node.builtin) {
-    case BuiltinFn::Abs: {
-      const uint32_t argId = emitValue(node.children[0]);
-      switch (scalarKindOf(node.type)) {
-        case ScalarKind::F32: return emitExtInst(typeId, kGlslFAbs, {argId});
-        case ScalarKind::I32: return emitExtInst(typeId, kGlslSAbs, {argId});
-        default: return argId;  // abs of an unsigned value is the identity.
-      }
-    }
+    case BuiltinFn::Abs: return emitAbsBuiltin(node, typeId);
     case BuiltinFn::Min:
-    case BuiltinFn::Max: {
-      const uint32_t lhsId = emitValue(node.children[0]);
-      const uint32_t rhsId = emitValue(node.children[1]);
-      uint32_t instruction = 0;
-      if (node.builtin == BuiltinFn::Min) {
-        switch (scalarKindOf(node.type)) {
-          case ScalarKind::F32: instruction = kGlslFMin; break;
-          case ScalarKind::I32: instruction = kGlslSMin; break;
-          default: instruction = kGlslUMin; break;
-        }
-      } else {
-        switch (scalarKindOf(node.type)) {
-          case ScalarKind::F32: instruction = kGlslFMax; break;
-          case ScalarKind::I32: instruction = kGlslSMax; break;
-          default: instruction = kGlslUMax; break;
-        }
-      }
-      return emitExtInst(typeId, instruction, {lhsId, rhsId});
-    }
-    case BuiltinFn::Clamp: {
-      const uint32_t valueArg = emitValue(node.children[0]);
-      const uint32_t lowArg = emitValue(node.children[1]);
-      const uint32_t highArg = emitValue(node.children[2]);
-      uint32_t instruction = 0;
-      switch (scalarKindOf(node.type)) {
-        case ScalarKind::F32: instruction = kGlslFClamp; break;
-        case ScalarKind::I32: instruction = kGlslSClamp; break;
-        default: instruction = kGlslUClamp; break;
-      }
-      return emitExtInst(typeId, instruction, {valueArg, lowArg, highArg});
-    }
-    case BuiltinFn::Saturate: {
-      const uint32_t argId = emitValue(node.children[0]);
-      uint32_t zeroId = constF32(0.0f);
-      uint32_t oneId = constF32(1.0f);
-      if (node.type.isVector()) {
-        zeroId = constSplat(typeId, zeroId, node.type.vectorSize());
-        oneId = constSplat(typeId, oneId, node.type.vectorSize());
-      }
-      return emitExtInst(typeId, kGlslFClamp, {argId, zeroId, oneId});
-    }
+    case BuiltinFn::Max: return emitMinMaxBuiltin(node, typeId);
+    case BuiltinFn::Clamp: return emitClampBuiltin(node, typeId);
+    case BuiltinFn::Saturate: return emitSaturateBuiltin(node, typeId);
     case BuiltinFn::Fract: return emitExtInst(typeId, kGlslFract, {emitValue(node.children[0])});
     case BuiltinFn::Sqrt: return emitExtInst(typeId, kGlslSqrt, {emitValue(node.children[0])});
     case BuiltinFn::Length: return emitExtInst(typeId, kGlslLength, {emitValue(node.children[0])});
@@ -1700,38 +1884,45 @@ uint32_t Emitter::emitBuiltinCall(const IrExpr::Node& node) {
       // WGSL round() mandates round-half-to-even; GLSL.std.450 Round leaves halfway cases
       // undefined, so RoundEven is the correct lowering.
       return emitExtInst(typeId, kGlslRoundEven, {emitValue(node.children[0])});
-    case BuiltinFn::Fwidth: {
-      if (currentStage_ == StageKind::Vertex) {
-        latch(
-            std::format("fwidth cannot appear in vertex entry point \"{}\"", currentFunctionName_));
-        return 0;
-      }
-      const uint32_t argId = emitValue(node.children[0]);
-      const uint32_t valueId = newId();
-      Instr(functions_, kOpFwidth, {typeId, valueId, argId});
-      return valueId;
+    default: return 0;
+  }
+}
+
+uint32_t Emitter::emitFwidthBuiltin(const IrExpr::Node& node, uint32_t typeId) {
+  if (currentStage_ == StageKind::Vertex) {
+    latch(std::format("fwidth cannot appear in vertex entry point \"{}\"", currentFunctionName_));
+    return 0;
+  }
+  const uint32_t argId = emitValue(node.children[0]);
+  const uint32_t valueId = newId();
+  Instr(functions_, kOpFwidth, {typeId, valueId, argId});
+  return valueId;
+}
+
+uint32_t Emitter::emitSelectBuiltin(const IrExpr::Node& node, uint32_t typeId) {
+  // IR order is select(falseValue, trueValue, condition); OpSelect takes the condition
+  // first, then the true object, then the false object.
+  const uint32_t falseId = emitValue(node.children[0]);
+  const uint32_t trueId = emitValue(node.children[1]);
+  uint32_t conditionId = emitValue(node.children[2]);
+  if (node.type.isVector()) {
+    // Before SPIR-V 1.4 a vector-result OpSelect requires a bool vector condition.
+    const uint32_t boolVectorId = typeBoolVector(node.type.vectorSize());
+    const uint32_t splatId = newId();
+    std::vector<uint32_t> operands = {boolVectorId, splatId};
+    for (uint32_t i = 0; i < node.type.vectorSize(); ++i) {
+      operands.push_back(conditionId);
     }
-    case BuiltinFn::Select: {
-      // IR order is select(falseValue, trueValue, condition); OpSelect takes the condition
-      // first, then the true object, then the false object.
-      const uint32_t falseId = emitValue(node.children[0]);
-      const uint32_t trueId = emitValue(node.children[1]);
-      uint32_t conditionId = emitValue(node.children[2]);
-      if (node.type.isVector()) {
-        // Before SPIR-V 1.4 a vector-result OpSelect requires a bool vector condition.
-        const uint32_t boolVectorId = typeBoolVector(node.type.vectorSize());
-        const uint32_t splatId = newId();
-        std::vector<uint32_t> operands = {boolVectorId, splatId};
-        for (uint32_t i = 0; i < node.type.vectorSize(); ++i) {
-          operands.push_back(conditionId);
-        }
-        InstrV(functions_, kOpCompositeConstruct, operands);
-        conditionId = splatId;
-      }
-      const uint32_t valueId = newId();
-      Instr(functions_, kOpSelect, {typeId, valueId, conditionId, trueId, falseId});
-      return valueId;
-    }
+    InstrV(functions_, kOpCompositeConstruct, operands);
+    conditionId = splatId;
+  }
+  const uint32_t valueId = newId();
+  Instr(functions_, kOpSelect, {typeId, valueId, conditionId, trueId, falseId});
+  return valueId;
+}
+
+uint32_t Emitter::emitTextureBuiltin(const IrExpr::Node& node, uint32_t typeId) {
+  switch (node.builtin) {
     case BuiltinFn::TextureSample: {
       if (currentStage_ == StageKind::Vertex) {
         latch(std::format("textureSample cannot appear in vertex entry point \"{}\"",
@@ -1763,8 +1954,21 @@ uint32_t Emitter::emitBuiltinCall(const IrExpr::Node& node) {
       Instr(functions_, kOpImageQuerySizeLod, {typeId, valueId, imageId, constU32(0)});
       return valueId;
     }
+    default: return 0;
   }
-  return 0;
+}
+
+uint32_t Emitter::emitBuiltinCall(const IrExpr::Node& node) {
+  const uint32_t typeId = plainTypeId(node.type);
+
+  switch (node.builtin) {
+    case BuiltinFn::TextureSample:
+    case BuiltinFn::TextureLoad:
+    case BuiltinFn::TextureDimensions: return emitTextureBuiltin(node, typeId);
+    case BuiltinFn::Fwidth: return emitFwidthBuiltin(node, typeId);
+    case BuiltinFn::Select: return emitSelectBuiltin(node, typeId);
+    default: return emitMathBuiltin(node, typeId);
+  }
 }
 
 // ----- Assembly -----

@@ -360,6 +360,243 @@ void RecordImageBarrier(VkCommandBuffer commandBuffer, VkImage image, VkImageLay
                        VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
 }
 
+/// Returns the Khronos validation layer if the loader enumerates it, otherwise an empty list.
+std::vector<const char*> EnumerateValidationLayer() {
+  std::vector<const char*> enabledLayers;
+  uint32_t layerCount = 0;
+  if (vkEnumerateInstanceLayerProperties(&layerCount, nullptr) == VK_SUCCESS && layerCount > 0) {
+    std::vector<VkLayerProperties> layers(layerCount);
+    if (vkEnumerateInstanceLayerProperties(&layerCount, layers.data()) == VK_SUCCESS) {
+      for (const VkLayerProperties& layer : layers) {
+        if (std::strcmp(layer.layerName, kValidationLayerName) == 0) {
+          enabledLayers.push_back(kValidationLayerName);
+          break;
+        }
+      }
+    }
+  }
+  return enabledLayers;
+}
+
+/// Returns the debug-utils extension when it is enumerated and the validation layer is active,
+/// otherwise an empty list. The messenger only has anything to report alongside validation.
+/// @param validationLayerEnabled True when the validation layer will be enabled.
+std::vector<const char*> EnumerateDebugUtilsExtension(bool validationLayerEnabled) {
+  std::vector<const char*> enabledExtensions;
+  if (!validationLayerEnabled) {
+    return enabledExtensions;
+  }
+  uint32_t extensionCount = 0;
+  if (vkEnumerateInstanceExtensionProperties(nullptr, &extensionCount, nullptr) == VK_SUCCESS &&
+      extensionCount > 0) {
+    std::vector<VkExtensionProperties> extensions(extensionCount);
+    if (vkEnumerateInstanceExtensionProperties(nullptr, &extensionCount, extensions.data()) ==
+        VK_SUCCESS) {
+      for (const VkExtensionProperties& extension : extensions) {
+        if (std::strcmp(extension.extensionName, VK_EXT_DEBUG_UTILS_EXTENSION_NAME) == 0) {
+          enabledExtensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
+          break;
+        }
+      }
+    }
+  }
+  return enabledExtensions;
+}
+
+/// Selects the first enumerated physical device with the target API version and a graphics queue
+/// family. Returns false when none qualifies.
+/// @param instance Instance to enumerate.
+/// @param selectedDevice Set to the chosen physical device on success.
+/// @param selectedQueueFamily Set to the chosen graphics queue family index on success.
+bool SelectGraphicsPhysicalDevice(VkInstance instance, VkPhysicalDevice& selectedDevice,
+                                  uint32_t& selectedQueueFamily) {
+  uint32_t deviceCount = 0;
+  if (vkEnumeratePhysicalDevices(instance, &deviceCount, nullptr) != VK_SUCCESS ||
+      deviceCount == 0) {
+    return false;
+  }
+  std::vector<VkPhysicalDevice> physicalDevices(deviceCount);
+  if (vkEnumeratePhysicalDevices(instance, &deviceCount, physicalDevices.data()) != VK_SUCCESS) {
+    return false;
+  }
+
+  for (VkPhysicalDevice candidate : physicalDevices) {
+    VkPhysicalDeviceProperties properties = {};
+    vkGetPhysicalDeviceProperties(candidate, &properties);
+    if (properties.apiVersion < kTargetApiVersion) {
+      continue;
+    }
+
+    uint32_t familyCount = 0;
+    vkGetPhysicalDeviceQueueFamilyProperties(candidate, &familyCount, nullptr);
+    std::vector<VkQueueFamilyProperties> families(familyCount);
+    vkGetPhysicalDeviceQueueFamilyProperties(candidate, &familyCount, families.data());
+    for (uint32_t familyIndex = 0; familyIndex < familyCount; ++familyIndex) {
+      if ((families[familyIndex].queueFlags & VK_QUEUE_GRAPHICS_BIT) != 0) {
+        selectedDevice = candidate;
+        selectedQueueFamily = familyIndex;
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+/// A debug-utils messenger plus the entry point that destroys it.
+struct DebugMessengerHandles {
+  VkDebugUtilsMessengerEXT messenger = VK_NULL_HANDLE;      //!< Created messenger, or null.
+  PFN_vkDestroyDebugUtilsMessengerEXT destroyFn = nullptr;  //!< Destroy entry point, or null.
+};
+
+/// Best-effort: creates a debug-utils messenger that latches validation ERROR messages into the
+/// device error state. On any failure the messenger stays null and validation output remains
+/// log-only.
+/// @param instance Instance the messenger is created on.
+/// @param userData Error state passed to the messenger callback.
+DebugMessengerHandles CreateValidationMessenger(VkInstance instance, void* userData) {
+  DebugMessengerHandles handles;
+  const auto createMessengerFn = reinterpret_cast<PFN_vkCreateDebugUtilsMessengerEXT>(
+      vkGetInstanceProcAddr(instance, "vkCreateDebugUtilsMessengerEXT"));
+  handles.destroyFn = reinterpret_cast<PFN_vkDestroyDebugUtilsMessengerEXT>(
+      vkGetInstanceProcAddr(instance, "vkDestroyDebugUtilsMessengerEXT"));
+  if (createMessengerFn == nullptr || handles.destroyFn == nullptr) {
+    return handles;
+  }
+  VkDebugUtilsMessengerCreateInfoEXT messengerInfo = {};
+  messengerInfo.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT;
+  messengerInfo.messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;
+  messengerInfo.messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT;
+  messengerInfo.pfnUserCallback = ValidationMessengerCallback;
+  messengerInfo.pUserData = userData;
+  if (createMessengerFn(instance, &messengerInfo, nullptr, &handles.messenger) != VK_SUCCESS) {
+    handles.messenger = VK_NULL_HANDLE;
+  }
+  return handles;
+}
+
+/// Sizes a descriptor pool to exactly the descriptor counts one bind group layout declares.
+/// @param layoutDescriptor Layout the bind group is created against.
+std::vector<VkDescriptorPoolSize> DescriptorPoolSizesFor(
+    const BindGroupLayoutDescriptor& layoutDescriptor) {
+  std::vector<VkDescriptorPoolSize> poolSizes;
+  for (const BindGroupLayoutEntry& entry : layoutDescriptor.entries) {
+    const VkDescriptorType type = ToVkDescriptorType(entry.type);
+    bool found = false;
+    for (VkDescriptorPoolSize& poolSize : poolSizes) {
+      if (poolSize.type == type) {
+        ++poolSize.descriptorCount;
+        found = true;
+        break;
+      }
+    }
+    if (!found) {
+      poolSizes.push_back(VkDescriptorPoolSize{type, 1});
+    }
+  }
+  return poolSizes;
+}
+
+/// Looks up the descriptor type a layout declares for \p binding. Returns false when the layout
+/// declares no such binding.
+/// @param layoutDescriptor Layout the bind group is created against.
+/// @param binding Binding number to look up.
+/// @param outType Set to the declared descriptor type on success.
+bool FindDescriptorTypeForBinding(const BindGroupLayoutDescriptor& layoutDescriptor,
+                                  uint32_t binding, VkDescriptorType& outType) {
+  for (const BindGroupLayoutEntry& layoutEntry : layoutDescriptor.entries) {
+    if (layoutEntry.binding == binding) {
+      outType = ToVkDescriptorType(layoutEntry.type);
+      return true;
+    }
+  }
+  return false;
+}
+
+/// Builds the color attachments of the compatibility render pass used for pipeline creation.
+/// @param fragment Fragment stage declaring the color targets.
+/// @param attachments Receives one attachment description per target.
+/// @param colorRefs Receives one attachment reference per target.
+void BuildCompatibilityAttachments(const FragmentState& fragment,
+                                   std::vector<VkAttachmentDescription>& attachments,
+                                   std::vector<VkAttachmentReference>& colorRefs) {
+  for (size_t i = 0; i < fragment.targets.size(); ++i) {
+    VkAttachmentDescription attachment = {};
+    attachment.format = ToVkFormat(fragment.targets[i].format);
+    attachment.samples = VK_SAMPLE_COUNT_1_BIT;
+    attachment.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    attachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    attachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    attachment.initialLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    attachment.finalLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    attachments.push_back(attachment);
+    colorRefs.push_back(
+        VkAttachmentReference{static_cast<uint32_t>(i), VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL});
+  }
+}
+
+/// Translates the vertex stage's buffer layouts: vertex buffer slot N maps directly to Vulkan
+/// vertex input binding N.
+/// @param vertex Vertex stage declaring the buffer layouts.
+/// @param vertexBindings Receives one binding description per buffer layout.
+/// @param vertexAttributes Receives one attribute description per attribute.
+void BuildVertexInputDescriptions(
+    const VertexState& vertex, std::vector<VkVertexInputBindingDescription>& vertexBindings,
+    std::vector<VkVertexInputAttributeDescription>& vertexAttributes) {
+  for (size_t bufferIndex = 0; bufferIndex < vertex.buffers.size(); ++bufferIndex) {
+    const VertexBufferLayout& layoutDescriptor = vertex.buffers[bufferIndex];
+    VkVertexInputBindingDescription binding = {};
+    binding.binding = static_cast<uint32_t>(bufferIndex);
+    binding.stride = layoutDescriptor.strideBytes;
+    binding.inputRate = ToVkInputRate(layoutDescriptor.stepMode);
+    vertexBindings.push_back(binding);
+    for (const VertexAttribute& attribute : layoutDescriptor.attributes) {
+      VkVertexInputAttributeDescription attributeDescription = {};
+      attributeDescription.location = attribute.shaderLocation;
+      attributeDescription.binding = static_cast<uint32_t>(bufferIndex);
+      attributeDescription.format = ToVkVertexFormat(attribute.format);
+      attributeDescription.offset = attribute.offsetBytes;
+      vertexAttributes.push_back(attributeDescription);
+    }
+  }
+}
+
+/// Translates each color target's blend state into a Vulkan blend attachment.
+/// @param fragment Fragment stage declaring the color targets.
+std::vector<VkPipelineColorBlendAttachmentState> BuildBlendAttachments(
+    const FragmentState& fragment) {
+  std::vector<VkPipelineColorBlendAttachmentState> blendAttachments;
+  for (const ColorTargetState& target : fragment.targets) {
+    VkPipelineColorBlendAttachmentState blendAttachment = {};
+    if (target.blend.has_value()) {
+      blendAttachment.blendEnable = VK_TRUE;
+      blendAttachment.srcColorBlendFactor = ToVkBlendFactor(target.blend->color.srcFactor);
+      blendAttachment.dstColorBlendFactor = ToVkBlendFactor(target.blend->color.dstFactor);
+      blendAttachment.colorBlendOp = ToVkBlendOp(target.blend->color.operation);
+      blendAttachment.srcAlphaBlendFactor = ToVkBlendFactor(target.blend->alpha.srcFactor);
+      blendAttachment.dstAlphaBlendFactor = ToVkBlendFactor(target.blend->alpha.dstFactor);
+      blendAttachment.alphaBlendOp = ToVkBlendOp(target.blend->alpha.operation);
+    } else {
+      blendAttachment.blendEnable = VK_FALSE;
+    }
+    blendAttachment.colorWriteMask = ToVkColorWriteMask(target.writeMask);
+    blendAttachments.push_back(blendAttachment);
+  }
+  return blendAttachments;
+}
+
+/// Destroys \p handle through \p destroyFn when it is set, then clears it.
+/// @param device Owning logical device.
+/// @param handle Vulkan handle to destroy.
+/// @param destroyFn Vulkan destroy entry point for the handle type.
+template <typename Handle, typename DestroyFn>
+void DestroyIfSet(VkDevice device, Handle& handle, DestroyFn destroyFn) {
+  if (handle != VK_NULL_HANDLE) {
+    destroyFn(device, handle, nullptr);
+    handle = VK_NULL_HANDLE;
+  }
+}
+
 }  // namespace
 
 /// Vulkan state of a VulkanDevice: instance/device/queue handles plus per-resource slot tables
@@ -708,6 +945,186 @@ struct VulkanDevice::Impl {
       instance = VK_NULL_HANDLE;
     }
   }
+
+  /// Mutable state threaded through the encoding of one command stream.
+  struct EncodingState {
+    VkCommandBuffer commandBuffer = VK_NULL_HANDLE;    //!< Command buffer being recorded.
+    std::vector<VkRenderPass> transientRenderPasses;   //!< Render passes created while encoding.
+    std::vector<VkFramebuffer> transientFramebuffers;  //!< Framebuffers created while encoding.
+    bool inRenderPass = false;                         //!< True between begin and end pass.
+    Extent2d passExtent;                               //!< Extent of the active pass.
+    const RenderPipelineRecord* currentPipeline = nullptr;  //!< Pipeline bound in the pass.
+    std::vector<VkDescriptorSet> boundSets;                 //!< Descriptor sets bound by index.
+    /// Layout transitions recorded into this command buffer, committed to the per-texture
+    /// tracked state only after vkQueueSubmit succeeds: a failed encode or submit must not leave
+    /// tracked layouts claiming transitions the GPU never executed (the synchronous
+    /// onWriteTexture upload follows the same commit-after-success pattern).
+    std::map<uint32_t, VkImageLayout> stagedLayouts;
+  };
+
+  /// Returns the layout \p textureSlot will be in at this point of the encoding: the staged
+  /// layout when one was recorded, otherwise the tracked layout.
+  /// @param state Encoding state.
+  /// @param textureSlot Texture slot to query.
+  /// @param record Texture record backing the slot.
+  VkImageLayout encodedLayoutOf(const EncodingState& state, uint32_t textureSlot,
+                                const TextureRecord& record) const;
+
+  /// Destroys the render passes, framebuffers, and command buffer created for an encoding that
+  /// will not be submitted.
+  /// @param state Encoding state.
+  void destroyTransientEncodingObjects(EncodingState& state);
+
+  /// Transitions every sampled texture the upcoming pass binds to the layout its descriptors
+  /// declare. Barriers are illegal inside a render pass, so this pre-scans the pass's commands
+  /// and records the transitions before the pass begins.
+  /// @param state Encoding state.
+  /// @param commands Full command stream.
+  /// @param beginIndex Index of the BeginRenderPassCommand.
+  void transitionPassSampledTextures(EncodingState& state, std::span<const Command> commands,
+                                     size_t beginIndex);
+
+  /// Creates the pass's render pass and framebuffer, transitions its attachments, and begins it
+  /// with the WebGPU-style full-attachment viewport and scissor.
+  /// @param state Encoding state.
+  /// @param beginPass Recorded begin-pass command.
+  Status beginEncodedRenderPass(EncodingState& state, const BeginRenderPassCommand& beginPass);
+
+  /// Binds a recorded pipeline.
+  /// @param state Encoding state.
+  /// @param setPipeline Recorded command.
+  Status encodeSetPipeline(EncodingState& state, const SetPipelineCommand& setPipeline);
+
+  /// Records a recorded bind group for lazy binding at draw.
+  /// @param state Encoding state.
+  /// @param setBindGroup Recorded command.
+  Status encodeSetBindGroup(EncodingState& state, const SetBindGroupCommand& setBindGroup);
+
+  /// Binds a recorded vertex buffer.
+  /// @param state Encoding state.
+  /// @param setVertexBuffer Recorded command.
+  Status encodeSetVertexBuffer(EncodingState& state, const SetVertexBufferCommand& setVertexBuffer);
+
+  /// Sets an explicit scissor rectangle.
+  /// @param state Encoding state.
+  /// @param setScissor Recorded command.
+  Status encodeSetScissorRect(EncodingState& state, const SetScissorRectCommand& setScissor);
+
+  /// Sets an explicit viewport, keeping the pass's y-flip.
+  /// @param state Encoding state.
+  /// @param setViewport Recorded command.
+  Status encodeSetViewport(EncodingState& state, const SetViewportCommand& setViewport);
+
+  /// Binds every descriptor set the pipeline layout declares and issues the draw.
+  /// @param state Encoding state.
+  /// @param draw Recorded command.
+  Status encodeDraw(EncodingState& state, const DrawCommand& draw);
+
+  /// Ends the active render pass and resets the per-pass binding state.
+  /// @param state Encoding state.
+  Status encodeEndRenderPass(EncodingState& state);
+
+  /// Records a texture-to-buffer copy plus the barriers that make it visible to host reads.
+  /// @param state Encoding state.
+  /// @param copy Recorded command.
+  Status encodeCopyTextureToBuffer(EncodingState& state, const CopyTextureToBufferCommand& copy);
+
+  /// Encodes one recorded command.
+  /// @param state Encoding state.
+  /// @param commands Full command stream, for the begin-pass pre-scan.
+  /// @param commandIndex Index of the command to encode.
+  Status encodeCommand(EncodingState& state, std::span<const Command> commands,
+                       size_t commandIndex);
+
+  /// Commits the staged layout transitions to the tracked per-texture state, once the GPU is
+  /// guaranteed to execute them.
+  /// @param state Encoding state.
+  void commitStagedLayouts(EncodingState& state);
+
+  /// Destroys the transient objects of a staged upload, in reverse creation order.
+  /// @param fence Upload fence, or null.
+  /// @param commandBuffer Upload command buffer, or null.
+  /// @param staging Staging buffer record.
+  void destroyUploadObjects(VkFence fence, VkCommandBuffer commandBuffer, BufferRecord& staging);
+
+  /// Records the staged buffer-to-image copy plus the layout transitions around it, and returns
+  /// the layout the image is left in.
+  /// @param commandBuffer Command buffer to record into.
+  /// @param texture Destination texture record.
+  /// @param stagingBuffer Buffer holding the upload bytes.
+  /// @param dataLayout Row layout of the upload bytes.
+  /// @param writeSize Destination extent in texels.
+  VkImageLayout recordTextureUploadCopy(VkCommandBuffer commandBuffer, const TextureRecord& texture,
+                                        VkBuffer stagingBuffer,
+                                        const TexelCopyBufferLayout& dataLayout,
+                                        const Extent2d& writeSize);
+
+  /// Creates \p fence, submits \p commandBuffer on it, and waits for completion. On timeout the
+  /// submission is still pending, so \p objectsStillInUse is set and the caller must not destroy
+  /// the fence, the command buffer, or the staging buffer.
+  /// @param commandBuffer Recorded upload command buffer.
+  /// @param fence Set to the created fence.
+  /// @param objectsStillInUse Set when the submission is still pending after the timeout.
+  Status submitAndWaitTextureUpload(VkCommandBuffer commandBuffer, VkFence& fence,
+                                    bool& objectsStillInUse);
+
+  /// Destroys the Vulkan buffer backing \p slotIndex, if any.
+  /// @param slotIndex Buffer slot.
+  void destroyBufferSlot(uint32_t slotIndex);
+  /// Destroys the Vulkan image backing \p slotIndex, if any.
+  /// @param slotIndex Texture slot.
+  void destroyTextureSlot(uint32_t slotIndex);
+  /// Destroys the Vulkan image view backing \p slotIndex, if any.
+  /// @param slotIndex Texture view slot.
+  void destroyTextureViewSlot(uint32_t slotIndex);
+  /// Destroys the Vulkan sampler backing \p slotIndex, if any.
+  /// @param slotIndex Sampler slot.
+  void destroySamplerSlot(uint32_t slotIndex);
+  /// Destroys the Vulkan descriptor set layout backing \p slotIndex, if any.
+  /// @param slotIndex Bind group layout slot.
+  void destroyBindGroupLayoutSlot(uint32_t slotIndex);
+  /// Destroys the descriptor pool backing \p slotIndex, which frees its descriptor set.
+  /// @param slotIndex Bind group slot.
+  void destroyBindGroupSlot(uint32_t slotIndex);
+  /// Drops the slot's reference to the shared Vulkan pipeline layout.
+  /// @param slotIndex Pipeline layout slot.
+  void destroyPipelineLayoutSlot(uint32_t slotIndex);
+  /// Destroys the Vulkan shader module backing \p slotIndex, if any.
+  /// @param slotIndex Shader module slot.
+  void destroyShaderModuleSlot(uint32_t slotIndex);
+  /// Destroys the Vulkan pipeline and compatibility render pass backing \p slotIndex, if any.
+  /// @param slotIndex Render pipeline slot.
+  void destroyRenderPipelineSlot(uint32_t slotIndex);
+
+  /// Resolves both shader modules a render pipeline references. Returns false when either slot
+  /// has no Vulkan module.
+  /// @param descriptor Render pipeline descriptor.
+  /// @param vertexModule Set to the vertex stage module on success.
+  /// @param fragmentModule Set to the fragment stage module on success.
+  bool lookupShaderModules(const RenderPipelineDescriptor& descriptor, VkShaderModule& vertexModule,
+                           VkShaderModule& fragmentModule) const {
+    const uint32_t vertexModuleSlot = descriptor.vertex.module.slotIndex();
+    const uint32_t fragmentModuleSlot = descriptor.fragment.module.slotIndex();
+    vertexModule =
+        vertexModuleSlot < shaderModules.size() ? shaderModules[vertexModuleSlot] : VK_NULL_HANDLE;
+    fragmentModule = fragmentModuleSlot < shaderModules.size() ? shaderModules[fragmentModuleSlot]
+                                                               : VK_NULL_HANDLE;
+    return vertexModule != VK_NULL_HANDLE && fragmentModule != VK_NULL_HANDLE;
+  }
+
+  /// Resolves the Vulkan object one bind group entry references and points \p write at the
+  /// descriptor info describing it. Fails closed when the entry does not resolve.
+  /// @param entry Bind group entry to resolve.
+  /// @param index Entry index, selecting the info slot backing \p write.
+  /// @param bufferInfos Storage for buffer descriptor infos, indexed by entry.
+  /// @param imageInfos Storage for image descriptor infos, indexed by entry.
+  /// @param sampledTextureSlots Receives the texture slot of a sampled texture view entry.
+  /// @param write Descriptor write to point at the resolved info.
+  Status bindDescriptorResource(const BindGroupEntry& entry, size_t index,
+                                std::vector<VkDescriptorBufferInfo>& bufferInfos,
+                                std::vector<VkDescriptorImageInfo>& imageInfos,
+                                std::vector<uint32_t>& sampledTextureSlots,
+                                VkWriteDescriptorSet& write);
 };
 
 std::unique_ptr<VulkanDevice> VulkanDevice::Create() {
@@ -720,43 +1137,12 @@ std::unique_ptr<VulkanDevice> VulkanDevice::Create() {
     return nullptr;
   }
 
-  // Enable the Khronos validation layer only when the loader enumerates it.
-  std::vector<const char*> enabledLayers;
-  {
-    uint32_t layerCount = 0;
-    if (vkEnumerateInstanceLayerProperties(&layerCount, nullptr) == VK_SUCCESS && layerCount > 0) {
-      std::vector<VkLayerProperties> layers(layerCount);
-      if (vkEnumerateInstanceLayerProperties(&layerCount, layers.data()) == VK_SUCCESS) {
-        for (const VkLayerProperties& layer : layers) {
-          if (std::strcmp(layer.layerName, kValidationLayerName) == 0) {
-            enabledLayers.push_back(kValidationLayerName);
-            break;
-          }
-        }
-      }
-    }
-  }
-
-  // Enable the debug-utils messenger extension only alongside the validation layer, and only
-  // when the loader enumerates it: it turns validation ERROR messages into latched device
-  // errors (see ValidationMessengerCallback) instead of log lines.
-  std::vector<const char*> enabledExtensions;
-  if (!enabledLayers.empty()) {
-    uint32_t extensionCount = 0;
-    if (vkEnumerateInstanceExtensionProperties(nullptr, &extensionCount, nullptr) == VK_SUCCESS &&
-        extensionCount > 0) {
-      std::vector<VkExtensionProperties> extensions(extensionCount);
-      if (vkEnumerateInstanceExtensionProperties(nullptr, &extensionCount, extensions.data()) ==
-          VK_SUCCESS) {
-        for (const VkExtensionProperties& extension : extensions) {
-          if (std::strcmp(extension.extensionName, VK_EXT_DEBUG_UTILS_EXTENSION_NAME) == 0) {
-            enabledExtensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
-            break;
-          }
-        }
-      }
-    }
-  }
+  // Enable the Khronos validation layer only when the loader enumerates it, and the debug-utils
+  // messenger extension only alongside it: the messenger turns validation ERROR messages into
+  // latched device errors (see ValidationMessengerCallback) instead of log lines.
+  const std::vector<const char*> enabledLayers = EnumerateValidationLayer();
+  const std::vector<const char*> enabledExtensions =
+      EnumerateDebugUtilsExtension(!enabledLayers.empty());
 
   VkApplicationInfo applicationInfo = {};
   applicationInfo.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
@@ -784,43 +1170,7 @@ std::unique_ptr<VulkanDevice> VulkanDevice::Create() {
   // First enumerated physical device with 1.1 support and a graphics queue family.
   VkPhysicalDevice selectedDevice = VK_NULL_HANDLE;
   uint32_t selectedQueueFamily = 0;
-  {
-    uint32_t deviceCount = 0;
-    if (vkEnumeratePhysicalDevices(instance, &deviceCount, nullptr) != VK_SUCCESS ||
-        deviceCount == 0) {
-      vkDestroyInstance(instance, nullptr);
-      return nullptr;
-    }
-    std::vector<VkPhysicalDevice> physicalDevices(deviceCount);
-    if (vkEnumeratePhysicalDevices(instance, &deviceCount, physicalDevices.data()) != VK_SUCCESS) {
-      vkDestroyInstance(instance, nullptr);
-      return nullptr;
-    }
-
-    for (VkPhysicalDevice candidate : physicalDevices) {
-      VkPhysicalDeviceProperties properties = {};
-      vkGetPhysicalDeviceProperties(candidate, &properties);
-      if (properties.apiVersion < kTargetApiVersion) {
-        continue;
-      }
-
-      uint32_t familyCount = 0;
-      vkGetPhysicalDeviceQueueFamilyProperties(candidate, &familyCount, nullptr);
-      std::vector<VkQueueFamilyProperties> families(familyCount);
-      vkGetPhysicalDeviceQueueFamilyProperties(candidate, &familyCount, families.data());
-      for (uint32_t familyIndex = 0; familyIndex < familyCount; ++familyIndex) {
-        if ((families[familyIndex].queueFlags & VK_QUEUE_GRAPHICS_BIT) != 0) {
-          selectedDevice = candidate;
-          selectedQueueFamily = familyIndex;
-          break;
-        }
-      }
-      if (selectedDevice != VK_NULL_HANDLE) {
-        break;
-      }
-    }
-  }
-  if (selectedDevice == VK_NULL_HANDLE) {
+  if (!SelectGraphicsPhysicalDevice(instance, selectedDevice, selectedQueueFamily)) {
     vkDestroyInstance(instance, nullptr);
     return nullptr;
   }
@@ -881,24 +1231,10 @@ std::unique_ptr<VulkanDevice> VulkanDevice::Create() {
   vkGetPhysicalDeviceMemoryProperties(selectedDevice, &impl.memoryProperties);
 
   if (!enabledExtensions.empty()) {
-    // Latch validation ERROR messages into the device error state. Best-effort: on any failure
-    // the messenger stays absent and validation output remains log-only.
-    const auto createMessengerFn = reinterpret_cast<PFN_vkCreateDebugUtilsMessengerEXT>(
-        vkGetInstanceProcAddr(instance, "vkCreateDebugUtilsMessengerEXT"));
-    impl.destroyDebugMessengerFn = reinterpret_cast<PFN_vkDestroyDebugUtilsMessengerEXT>(
-        vkGetInstanceProcAddr(instance, "vkDestroyDebugUtilsMessengerEXT"));
-    if (createMessengerFn != nullptr && impl.destroyDebugMessengerFn != nullptr) {
-      VkDebugUtilsMessengerCreateInfoEXT messengerInfo = {};
-      messengerInfo.sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT;
-      messengerInfo.messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;
-      messengerInfo.messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT;
-      messengerInfo.pfnUserCallback = ValidationMessengerCallback;
-      messengerInfo.pUserData = impl.errorState.get();
-      if (createMessengerFn(instance, &messengerInfo, nullptr, &impl.debugMessenger) !=
-          VK_SUCCESS) {
-        impl.debugMessenger = VK_NULL_HANDLE;
-      }
-    }
+    const DebugMessengerHandles messenger =
+        CreateValidationMessenger(instance, impl.errorState.get());
+    impl.destroyDebugMessengerFn = messenger.destroyFn;
+    impl.debugMessenger = messenger.messenger;
   }
   return result;
 }
@@ -1143,11 +1479,58 @@ Status VulkanDevice::onCreateBindGroupLayout(uint32_t slotIndex,
   return OkStatus();
 }
 
+Status VulkanDevice::Impl::bindDescriptorResource(const BindGroupEntry& entry, size_t index,
+                                                  std::vector<VkDescriptorBufferInfo>& bufferInfos,
+                                                  std::vector<VkDescriptorImageInfo>& imageInfos,
+                                                  std::vector<uint32_t>& sampledTextureSlots,
+                                                  VkWriteDescriptorSet& write) {
+  if (const BufferBinding* bufferBinding = std::get_if<BufferBinding>(&entry.resource)) {
+    const BufferRecord* buffer = FindRecord(buffers, bufferBinding->buffer.slotIndex());
+    if (buffer == nullptr) {
+      return GpuError{GpuErrorType::InvalidState,
+                      std::format("bind group binding {} does not resolve to a Vulkan "
+                                  "buffer",
+                                  entry.binding)};
+    }
+    bufferInfos[index] = VkDescriptorBufferInfo{buffer->buffer, bufferBinding->offsetBytes,
+                                                bufferBinding->sizeBytes};
+    write.pBufferInfo = &bufferInfos[index];
+  } else if (const TextureViewBinding* viewBinding =
+                 std::get_if<TextureViewBinding>(&entry.resource)) {
+    const TextureViewRecord* view = FindRecord(textureViews, viewBinding->view.slotIndex());
+    if (view == nullptr) {
+      return GpuError{GpuErrorType::InvalidState,
+                      std::format("bind group binding {} does not resolve to a Vulkan "
+                                  "image view",
+                                  entry.binding)};
+    }
+    imageInfos[index] =
+        VkDescriptorImageInfo{VK_NULL_HANDLE, view->view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    write.pImageInfo = &imageInfos[index];
+    // Snapshot the sampled texture slot so onSubmit can pre-transition it to the layout the
+    // descriptor declares before a pass that binds this group.
+    sampledTextureSlots.push_back(view->textureSlot);
+  } else if (const SamplerBinding* samplerBinding = std::get_if<SamplerBinding>(&entry.resource)) {
+    const uint32_t samplerSlot = samplerBinding->sampler.slotIndex();
+    const VkSampler sampler =
+        samplerSlot < samplers.size() ? samplers[samplerSlot] : VK_NULL_HANDLE;
+    if (sampler == VK_NULL_HANDLE) {
+      return GpuError{GpuErrorType::InvalidState,
+                      std::format("bind group binding {} does not resolve to a Vulkan "
+                                  "sampler",
+                                  entry.binding)};
+    }
+    imageInfos[index] = VkDescriptorImageInfo{sampler, VK_NULL_HANDLE, VK_IMAGE_LAYOUT_UNDEFINED};
+    write.pImageInfo = &imageInfos[index];
+  }
+  return OkStatus();
+}
+
 Status VulkanDevice::onCreateBindGroup(uint32_t slotIndex, const BindGroupDescriptor& descriptor) {
   Impl& impl = *impl_;
   // The base class validated the layout reference before this hook; the layout descriptor was
   // snapshotted at layout creation, so descriptor types come from creation-time state (never a
-  // by-slot lookup at encode time - the packet 3 staleness discipline).
+  // by-slot lookup at encode time).
   const Impl::BindGroupLayoutRecord* layout =
       FindRecord(impl.bindGroupLayouts, descriptor.layout.slotIndex());
   if (layout == nullptr) {
@@ -1158,21 +1541,7 @@ Status VulkanDevice::onCreateBindGroup(uint32_t slotIndex, const BindGroupDescri
 
   // One dedicated pool per bind group, sized exactly to the group's descriptor counts;
   // destroying the pool frees the set.
-  std::vector<VkDescriptorPoolSize> poolSizes;
-  for (const BindGroupLayoutEntry& entry : layout->descriptor.entries) {
-    const VkDescriptorType type = ToVkDescriptorType(entry.type);
-    bool found = false;
-    for (VkDescriptorPoolSize& poolSize : poolSizes) {
-      if (poolSize.type == type) {
-        ++poolSize.descriptorCount;
-        found = true;
-        break;
-      }
-    }
-    if (!found) {
-      poolSizes.push_back(VkDescriptorPoolSize{type, 1});
-    }
-  }
+  const std::vector<VkDescriptorPoolSize> poolSizes = DescriptorPoolSizesFor(layout->descriptor);
 
   Impl::BindGroupRecord record;
   VkDescriptorPoolCreateInfo poolInfo = {};
@@ -1208,15 +1577,7 @@ Status VulkanDevice::onCreateBindGroup(uint32_t slotIndex, const BindGroupDescri
   for (size_t i = 0; i < entryCount; ++i) {
     const BindGroupEntry& entry = descriptor.entries[i];
     VkDescriptorType descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    bool foundLayoutEntry = false;
-    for (const BindGroupLayoutEntry& layoutEntry : layout->descriptor.entries) {
-      if (layoutEntry.binding == entry.binding) {
-        descriptorType = ToVkDescriptorType(layoutEntry.type);
-        foundLayoutEntry = true;
-        break;
-      }
-    }
-    if (!foundLayoutEntry) {
+    if (!FindDescriptorTypeForBinding(layout->descriptor, entry.binding, descriptorType)) {
       bindStatus =
           GpuError{GpuErrorType::InvalidState,
                    std::format("bind group entry binding {} has no layout entry", entry.binding)};
@@ -1231,50 +1592,10 @@ Status VulkanDevice::onCreateBindGroup(uint32_t slotIndex, const BindGroupDescri
     write.descriptorCount = 1;
     write.descriptorType = descriptorType;
 
-    if (const BufferBinding* bufferBinding = std::get_if<BufferBinding>(&entry.resource)) {
-      const Impl::BufferRecord* buffer =
-          FindRecord(impl.buffers, bufferBinding->buffer.slotIndex());
-      if (buffer == nullptr) {
-        bindStatus = GpuError{GpuErrorType::InvalidState,
-                              std::format("bind group binding {} does not resolve to a Vulkan "
-                                          "buffer",
-                                          entry.binding)};
-        break;
-      }
-      bufferInfos[i] = VkDescriptorBufferInfo{buffer->buffer, bufferBinding->offsetBytes,
-                                              bufferBinding->sizeBytes};
-      write.pBufferInfo = &bufferInfos[i];
-    } else if (const TextureViewBinding* viewBinding =
-                   std::get_if<TextureViewBinding>(&entry.resource)) {
-      const Impl::TextureViewRecord* view =
-          FindRecord(impl.textureViews, viewBinding->view.slotIndex());
-      if (view == nullptr) {
-        bindStatus = GpuError{GpuErrorType::InvalidState,
-                              std::format("bind group binding {} does not resolve to a Vulkan "
-                                          "image view",
-                                          entry.binding)};
-        break;
-      }
-      imageInfos[i] = VkDescriptorImageInfo{VK_NULL_HANDLE, view->view,
-                                            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-      write.pImageInfo = &imageInfos[i];
-      // Snapshot the sampled texture slot so onSubmit can pre-transition it to the layout the
-      // descriptor declares before a pass that binds this group.
-      record.sampledTextureSlots.push_back(view->textureSlot);
-    } else if (const SamplerBinding* samplerBinding =
-                   std::get_if<SamplerBinding>(&entry.resource)) {
-      const uint32_t samplerSlot = samplerBinding->sampler.slotIndex();
-      const VkSampler sampler =
-          samplerSlot < impl.samplers.size() ? impl.samplers[samplerSlot] : VK_NULL_HANDLE;
-      if (sampler == VK_NULL_HANDLE) {
-        bindStatus = GpuError{GpuErrorType::InvalidState,
-                              std::format("bind group binding {} does not resolve to a Vulkan "
-                                          "sampler",
-                                          entry.binding)};
-        break;
-      }
-      imageInfos[i] = VkDescriptorImageInfo{sampler, VK_NULL_HANDLE, VK_IMAGE_LAYOUT_UNDEFINED};
-      write.pImageInfo = &imageInfos[i];
+    bindStatus = impl.bindDescriptorResource(entry, i, bufferInfos, imageInfos,
+                                             record.sampledTextureSlots, write);
+    if (bindStatus.hasError()) {
+      break;
     }
     writes.push_back(write);
   }
@@ -1361,15 +1682,9 @@ Status VulkanDevice::onCreateRenderPipeline(uint32_t slotIndex,
         std::format("pipeline layout slot {} has no Vulkan pipeline layout", layoutSlot)};
   }
 
-  const uint32_t vertexModuleSlot = descriptor.vertex.module.slotIndex();
-  const uint32_t fragmentModuleSlot = descriptor.fragment.module.slotIndex();
-  const VkShaderModule vertexModule = vertexModuleSlot < impl.shaderModules.size()
-                                          ? impl.shaderModules[vertexModuleSlot]
-                                          : VK_NULL_HANDLE;
-  const VkShaderModule fragmentModule = fragmentModuleSlot < impl.shaderModules.size()
-                                            ? impl.shaderModules[fragmentModuleSlot]
-                                            : VK_NULL_HANDLE;
-  if (vertexModule == VK_NULL_HANDLE || fragmentModule == VK_NULL_HANDLE) {
+  VkShaderModule vertexModule = VK_NULL_HANDLE;
+  VkShaderModule fragmentModule = VK_NULL_HANDLE;
+  if (!impl.lookupShaderModules(descriptor, vertexModule, fragmentModule)) {
     return GpuError{GpuErrorType::InvalidState,
                     "render pipeline references a shader module with no Vulkan module"};
   }
@@ -1380,20 +1695,8 @@ Status VulkanDevice::onCreateRenderPipeline(uint32_t slotIndex,
   // compatible with this one.
   std::vector<VkAttachmentDescription> attachments;
   std::vector<VkAttachmentReference> colorRefs;
-  for (size_t i = 0; i < descriptor.fragment.targets.size(); ++i) {
-    VkAttachmentDescription attachment = {};
-    attachment.format = ToVkFormat(descriptor.fragment.targets[i].format);
-    attachment.samples = VK_SAMPLE_COUNT_1_BIT;
-    attachment.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-    attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-    attachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-    attachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-    attachment.initialLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-    attachment.finalLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-    attachments.push_back(attachment);
-    colorRefs.push_back(
-        VkAttachmentReference{static_cast<uint32_t>(i), VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL});
-  }
+  BuildCompatibilityAttachments(descriptor.fragment, attachments, colorRefs);
+
   VkSubpassDescription subpass = {};
   subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
   subpass.colorAttachmentCount = static_cast<uint32_t>(colorRefs.size());
@@ -1428,22 +1731,7 @@ Status VulkanDevice::onCreateRenderPipeline(uint32_t slotIndex,
   // Vertex input: vertex buffer slot N maps directly to Vulkan vertex input binding N.
   std::vector<VkVertexInputBindingDescription> vertexBindings;
   std::vector<VkVertexInputAttributeDescription> vertexAttributes;
-  for (size_t bufferIndex = 0; bufferIndex < descriptor.vertex.buffers.size(); ++bufferIndex) {
-    const VertexBufferLayout& layoutDescriptor = descriptor.vertex.buffers[bufferIndex];
-    VkVertexInputBindingDescription binding = {};
-    binding.binding = static_cast<uint32_t>(bufferIndex);
-    binding.stride = layoutDescriptor.strideBytes;
-    binding.inputRate = ToVkInputRate(layoutDescriptor.stepMode);
-    vertexBindings.push_back(binding);
-    for (const VertexAttribute& attribute : layoutDescriptor.attributes) {
-      VkVertexInputAttributeDescription attributeDescription = {};
-      attributeDescription.location = attribute.shaderLocation;
-      attributeDescription.binding = static_cast<uint32_t>(bufferIndex);
-      attributeDescription.format = ToVkVertexFormat(attribute.format);
-      attributeDescription.offset = attribute.offsetBytes;
-      vertexAttributes.push_back(attributeDescription);
-    }
-  }
+  BuildVertexInputDescriptions(descriptor.vertex, vertexBindings, vertexAttributes);
 
   VkPipelineVertexInputStateCreateInfo vertexInput = {};
   vertexInput.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
@@ -1480,23 +1768,8 @@ Status VulkanDevice::onCreateRenderPipeline(uint32_t slotIndex,
   multisample.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
   multisample.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
 
-  std::vector<VkPipelineColorBlendAttachmentState> blendAttachments;
-  for (const ColorTargetState& target : descriptor.fragment.targets) {
-    VkPipelineColorBlendAttachmentState blendAttachment = {};
-    if (target.blend.has_value()) {
-      blendAttachment.blendEnable = VK_TRUE;
-      blendAttachment.srcColorBlendFactor = ToVkBlendFactor(target.blend->color.srcFactor);
-      blendAttachment.dstColorBlendFactor = ToVkBlendFactor(target.blend->color.dstFactor);
-      blendAttachment.colorBlendOp = ToVkBlendOp(target.blend->color.operation);
-      blendAttachment.srcAlphaBlendFactor = ToVkBlendFactor(target.blend->alpha.srcFactor);
-      blendAttachment.dstAlphaBlendFactor = ToVkBlendFactor(target.blend->alpha.dstFactor);
-      blendAttachment.alphaBlendOp = ToVkBlendOp(target.blend->alpha.operation);
-    } else {
-      blendAttachment.blendEnable = VK_FALSE;
-    }
-    blendAttachment.colorWriteMask = ToVkColorWriteMask(target.writeMask);
-    blendAttachments.push_back(blendAttachment);
-  }
+  const std::vector<VkPipelineColorBlendAttachmentState> blendAttachments =
+      BuildBlendAttachments(descriptor.fragment);
 
   VkPipelineColorBlendStateCreateInfo colorBlend = {};
   colorBlend.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
@@ -1543,70 +1816,94 @@ Status VulkanDevice::onCreateRenderPipeline(uint32_t slotIndex,
   return OkStatus();
 }
 
+void VulkanDevice::Impl::destroyBufferSlot(uint32_t slotIndex) {
+  if (BufferRecord* record = FindRecord(buffers, slotIndex)) {
+    destroyBufferRecord(*record);
+    buffers[slotIndex].reset();
+  }
+}
+
+void VulkanDevice::Impl::destroyTextureSlot(uint32_t slotIndex) {
+  if (TextureRecord* record = FindRecord(textures, slotIndex)) {
+    destroyTextureRecord(*record);
+    textures[slotIndex].reset();
+  }
+}
+
+void VulkanDevice::Impl::destroyTextureViewSlot(uint32_t slotIndex) {
+  if (TextureViewRecord* record = FindRecord(textureViews, slotIndex)) {
+    DestroyIfSet(device, record->view, vkDestroyImageView);
+    textureViews[slotIndex].reset();
+  }
+}
+
+void VulkanDevice::Impl::destroySamplerSlot(uint32_t slotIndex) {
+  if (slotIndex < samplers.size()) {
+    DestroyIfSet(device, samplers[slotIndex], vkDestroySampler);
+  }
+}
+
+void VulkanDevice::Impl::destroyBindGroupLayoutSlot(uint32_t slotIndex) {
+  if (BindGroupLayoutRecord* record = FindRecord(bindGroupLayouts, slotIndex)) {
+    DestroyIfSet(device, record->layout, vkDestroyDescriptorSetLayout);
+    bindGroupLayouts[slotIndex].reset();
+  }
+}
+
+void VulkanDevice::Impl::destroyBindGroupSlot(uint32_t slotIndex) {
+  if (BindGroupRecord* record = FindRecord(bindGroups, slotIndex)) {
+    DestroyIfSet(device, record->pool, vkDestroyDescriptorPool);
+    bindGroups[slotIndex].reset();
+  }
+}
+
+void VulkanDevice::Impl::destroyPipelineLayoutSlot(uint32_t slotIndex) {
+  if (slotIndex < pipelineLayouts.size()) {
+    // Pipelines retain the layout through the shared handle; dropping the slot's reference
+    // destroys the VkPipelineLayout once the last pipeline using it is destroyed.
+    pipelineLayouts[slotIndex].reset();
+  }
+}
+
+void VulkanDevice::Impl::destroyShaderModuleSlot(uint32_t slotIndex) {
+  if (slotIndex < shaderModules.size()) {
+    // Per the specification, a shader module may be destroyed while pipelines created from it
+    // are still in use.
+    DestroyIfSet(device, shaderModules[slotIndex], vkDestroyShaderModule);
+  }
+}
+
+void VulkanDevice::Impl::destroyRenderPipelineSlot(uint32_t slotIndex) {
+  if (RenderPipelineRecord* record = FindRecord(renderPipelines, slotIndex)) {
+    DestroyIfSet(device, record->pipeline, vkDestroyPipeline);
+    DestroyIfSet(device, record->compatRenderPass, vkDestroyRenderPass);
+    renderPipelines[slotIndex].reset();  // Releases the retained pipeline layout.
+  }
+}
+
 void VulkanDevice::onDestroyResource(std::string_view resourceName, uint32_t slotIndex) {
   Impl& impl = *impl_;
   // The base class defers this hook until every submission referencing the resource has
-  // completed, so immediate destruction is safe. Unknown resource names (types added by later
-  // packets) are ignored; the base class owns their bookkeeping.
+  // completed, so immediate destruction is safe. Unknown resource names are ignored; the base
+  // class owns their bookkeeping.
   if (resourceName == "buffer") {
-    if (Impl::BufferRecord* record = FindRecord(impl.buffers, slotIndex)) {
-      impl.destroyBufferRecord(*record);
-      impl.buffers[slotIndex].reset();
-    }
+    impl.destroyBufferSlot(slotIndex);
   } else if (resourceName == "texture") {
-    if (Impl::TextureRecord* record = FindRecord(impl.textures, slotIndex)) {
-      impl.destroyTextureRecord(*record);
-      impl.textures[slotIndex].reset();
-    }
+    impl.destroyTextureSlot(slotIndex);
   } else if (resourceName == "textureView") {
-    if (Impl::TextureViewRecord* record = FindRecord(impl.textureViews, slotIndex)) {
-      if (record->view != VK_NULL_HANDLE) {
-        vkDestroyImageView(impl.device, record->view, nullptr);
-      }
-      impl.textureViews[slotIndex].reset();
-    }
+    impl.destroyTextureViewSlot(slotIndex);
   } else if (resourceName == "sampler") {
-    if (slotIndex < impl.samplers.size() && impl.samplers[slotIndex] != VK_NULL_HANDLE) {
-      vkDestroySampler(impl.device, impl.samplers[slotIndex], nullptr);
-      impl.samplers[slotIndex] = VK_NULL_HANDLE;
-    }
+    impl.destroySamplerSlot(slotIndex);
   } else if (resourceName == "bindGroupLayout") {
-    if (Impl::BindGroupLayoutRecord* record = FindRecord(impl.bindGroupLayouts, slotIndex)) {
-      if (record->layout != VK_NULL_HANDLE) {
-        vkDestroyDescriptorSetLayout(impl.device, record->layout, nullptr);
-      }
-      impl.bindGroupLayouts[slotIndex].reset();
-    }
+    impl.destroyBindGroupLayoutSlot(slotIndex);
   } else if (resourceName == "bindGroup") {
-    if (Impl::BindGroupRecord* record = FindRecord(impl.bindGroups, slotIndex)) {
-      if (record->pool != VK_NULL_HANDLE) {
-        vkDestroyDescriptorPool(impl.device, record->pool, nullptr);
-      }
-      impl.bindGroups[slotIndex].reset();
-    }
+    impl.destroyBindGroupSlot(slotIndex);
   } else if (resourceName == "pipelineLayout") {
-    if (slotIndex < impl.pipelineLayouts.size()) {
-      // Pipelines retain the layout through the shared handle; dropping the slot's reference
-      // destroys the VkPipelineLayout once the last pipeline using it is destroyed.
-      impl.pipelineLayouts[slotIndex].reset();
-    }
+    impl.destroyPipelineLayoutSlot(slotIndex);
   } else if (resourceName == "shaderModule") {
-    if (slotIndex < impl.shaderModules.size() && impl.shaderModules[slotIndex] != VK_NULL_HANDLE) {
-      // Per the specification, a shader module may be destroyed while pipelines created from it
-      // are still in use.
-      vkDestroyShaderModule(impl.device, impl.shaderModules[slotIndex], nullptr);
-      impl.shaderModules[slotIndex] = VK_NULL_HANDLE;
-    }
+    impl.destroyShaderModuleSlot(slotIndex);
   } else if (resourceName == "renderPipeline") {
-    if (Impl::RenderPipelineRecord* record = FindRecord(impl.renderPipelines, slotIndex)) {
-      if (record->pipeline != VK_NULL_HANDLE) {
-        vkDestroyPipeline(impl.device, record->pipeline, nullptr);
-      }
-      if (record->compatRenderPass != VK_NULL_HANDLE) {
-        vkDestroyRenderPass(impl.device, record->compatRenderPass, nullptr);
-      }
-      impl.renderPipelines[slotIndex].reset();  // Releases the retained pipeline layout.
-    }
+    impl.destroyRenderPipelineSlot(slotIndex);
   }
 }
 
@@ -1619,6 +1916,80 @@ Status VulkanDevice::onWriteBuffer(uint32_t slotIndex, uint64_t offsetBytes,
   }
   if (!data.empty()) {
     std::memcpy(static_cast<uint8_t*>(record->mapped) + offsetBytes, data.data(), data.size());
+  }
+  return OkStatus();
+}
+
+void VulkanDevice::Impl::destroyUploadObjects(VkFence fence, VkCommandBuffer commandBuffer,
+                                              BufferRecord& staging) {
+  if (fence != VK_NULL_HANDLE) {
+    vkDestroyFence(device, fence, nullptr);
+  }
+  if (commandBuffer != VK_NULL_HANDLE) {
+    vkFreeCommandBuffers(device, commandPool, 1, &commandBuffer);
+  }
+  destroyBufferRecord(staging);
+}
+
+VkImageLayout VulkanDevice::Impl::recordTextureUploadCopy(VkCommandBuffer commandBuffer,
+                                                          const TextureRecord& texture,
+                                                          VkBuffer stagingBuffer,
+                                                          const TexelCopyBufferLayout& dataLayout,
+                                                          const Extent2d& writeSize) {
+  RecordImageBarrier(commandBuffer, texture.image, texture.currentLayout,
+                     VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+
+  const uint32_t texelSize = TextureFormatBytesPerTexel(texture.format);
+  VkBufferImageCopy copyRegion = {};
+  copyRegion.bufferOffset = dataLayout.offsetBytes;
+  copyRegion.bufferRowLength = dataLayout.bytesPerRow / texelSize;  // In texels.
+  copyRegion.bufferImageHeight = dataLayout.rowsPerImage;
+  copyRegion.imageSubresource = VkImageSubresourceLayers{VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+  copyRegion.imageOffset = VkOffset3D{0, 0, 0};
+  copyRegion.imageExtent = VkExtent3D{writeSize.width, writeSize.height, 1};
+  vkCmdCopyBufferToImage(commandBuffer, stagingBuffer, texture.image,
+                         VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copyRegion);
+
+  // Sampled textures move straight to their descriptor layout; others stay transfer-dst until a
+  // later encode transitions them.
+  const VkImageLayout postUploadLayout = HasAllFlags(texture.usage, TextureUsage::Sampled)
+                                             ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+                                             : VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+  if (postUploadLayout != VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL) {
+    RecordImageBarrier(commandBuffer, texture.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                       postUploadLayout);
+  }
+  return postUploadLayout;
+}
+
+Status VulkanDevice::Impl::submitAndWaitTextureUpload(VkCommandBuffer commandBuffer, VkFence& fence,
+                                                      bool& objectsStillInUse) {
+  VkFenceCreateInfo fenceInfo = {};
+  fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+  if (const VkResult result = vkCreateFence(device, &fenceInfo, nullptr, &fence);
+      result != VK_SUCCESS) {
+    return VkError("vkCreateFence", result);
+  }
+
+  VkSubmitInfo submitInfo = {};
+  submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+  submitInfo.commandBufferCount = 1;
+  submitInfo.pCommandBuffers = &commandBuffer;
+  if (const VkResult result = vkQueueSubmit(queue, 1, &submitInfo, fence); result != VK_SUCCESS) {
+    return VkError("vkQueueSubmit (writeTexture)", result);
+  }
+  if (const VkResult result = vkWaitForFences(device, 1, &fence, VK_TRUE, kUploadFenceTimeoutNs);
+      result != VK_SUCCESS) {
+    if (result == VK_TIMEOUT) {
+      // The submission is still pending: destroying its fence, command buffer, or staging
+      // buffer now would violate their in-use requirements, trading a clean failure for
+      // undefined behavior. Deliberately leak them and fail closed; the device destructor's
+      // vkDeviceWaitIdle is the backstop before final teardown.
+      objectsStillInUse = true;
+      return VkError("vkWaitForFences (writeTexture, still pending; leaking upload objects)",
+                     result);
+    }
+    return VkError("vkWaitForFences (writeTexture)", result);
   }
   return OkStatus();
 }
@@ -1658,15 +2029,7 @@ Status VulkanDevice::onWriteTexture(uint32_t slotIndex, std::span<const uint8_t>
   // Fail-closed cleanup for every early return below.
   VkCommandBuffer commandBuffer = VK_NULL_HANDLE;
   VkFence fence = VK_NULL_HANDLE;
-  const auto cleanup = [&]() {
-    if (fence != VK_NULL_HANDLE) {
-      vkDestroyFence(impl.device, fence, nullptr);
-    }
-    if (commandBuffer != VK_NULL_HANDLE) {
-      vkFreeCommandBuffers(impl.device, impl.commandPool, 1, &commandBuffer);
-    }
-    impl.destroyBufferRecord(staging);
-  };
+  const auto cleanup = [&]() { impl.destroyUploadObjects(fence, commandBuffer, staging); };
 
   Result<VkCommandBuffer> commandBufferResult = impl.allocateCommandBuffer();
   if (commandBufferResult.hasError()) {
@@ -1684,70 +2047,405 @@ Status VulkanDevice::onWriteTexture(uint32_t slotIndex, std::span<const uint8_t>
     return VkError("vkBeginCommandBuffer", result);
   }
 
-  RecordImageBarrier(commandBuffer, texture->image, texture->currentLayout,
-                     VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
-
-  const uint32_t texelSize = TextureFormatBytesPerTexel(texture->format);
-  VkBufferImageCopy copyRegion = {};
-  copyRegion.bufferOffset = dataLayout.offsetBytes;
-  copyRegion.bufferRowLength = dataLayout.bytesPerRow / texelSize;  // In texels.
-  copyRegion.bufferImageHeight = dataLayout.rowsPerImage;
-  copyRegion.imageSubresource = VkImageSubresourceLayers{VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-  copyRegion.imageOffset = VkOffset3D{0, 0, 0};
-  copyRegion.imageExtent = VkExtent3D{writeSize.width, writeSize.height, 1};
-  vkCmdCopyBufferToImage(commandBuffer, staging.buffer, texture->image,
-                         VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copyRegion);
-
-  // Sampled textures move straight to their descriptor layout; others stay transfer-dst until a
-  // later encode transitions them.
-  const VkImageLayout postUploadLayout = HasAllFlags(texture->usage, TextureUsage::Sampled)
-                                             ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
-                                             : VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-  if (postUploadLayout != VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL) {
-    RecordImageBarrier(commandBuffer, texture->image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                       postUploadLayout);
-  }
+  const VkImageLayout postUploadLayout =
+      impl.recordTextureUploadCopy(commandBuffer, *texture, staging.buffer, dataLayout, writeSize);
 
   if (const VkResult result = vkEndCommandBuffer(commandBuffer); result != VK_SUCCESS) {
     cleanup();
     return VkError("vkEndCommandBuffer", result);
   }
 
-  VkFenceCreateInfo fenceInfo = {};
-  fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
-  if (const VkResult result = vkCreateFence(impl.device, &fenceInfo, nullptr, &fence);
-      result != VK_SUCCESS) {
-    cleanup();
-    return VkError("vkCreateFence", result);
-  }
-
-  VkSubmitInfo submitInfo = {};
-  submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-  submitInfo.commandBufferCount = 1;
-  submitInfo.pCommandBuffers = &commandBuffer;
-  if (const VkResult result = vkQueueSubmit(impl.queue, 1, &submitInfo, fence);
-      result != VK_SUCCESS) {
-    cleanup();
-    return VkError("vkQueueSubmit (writeTexture)", result);
-  }
-  if (const VkResult result =
-          vkWaitForFences(impl.device, 1, &fence, VK_TRUE, kUploadFenceTimeoutNs);
-      result != VK_SUCCESS) {
-    if (result == VK_TIMEOUT) {
-      // The submission is still pending: destroying its fence, command buffer, or staging
-      // buffer now would violate their in-use requirements, trading a clean failure for
-      // undefined behavior. Deliberately leak them and fail closed; the device destructor's
-      // vkDeviceWaitIdle is the backstop before final teardown.
-      return VkError("vkWaitForFences (writeTexture, still pending; leaking upload objects)",
-                     result);
+  bool objectsStillInUse = false;
+  const Status submitStatus =
+      impl.submitAndWaitTextureUpload(commandBuffer, fence, objectsStillInUse);
+  if (submitStatus.hasError()) {
+    if (!objectsStillInUse) {
+      cleanup();
     }
-    cleanup();
-    return VkError("vkWaitForFences (writeTexture)", result);
+    return submitStatus;
   }
 
   texture->currentLayout = postUploadLayout;
   cleanup();
   return OkStatus();
+}
+
+VkImageLayout VulkanDevice::Impl::encodedLayoutOf(const EncodingState& state, uint32_t textureSlot,
+                                                  const TextureRecord& record) const {
+  const auto it = state.stagedLayouts.find(textureSlot);
+  return it != state.stagedLayouts.end() ? it->second : record.currentLayout;
+}
+
+void VulkanDevice::Impl::destroyTransientEncodingObjects(EncodingState& state) {
+  for (VkFramebuffer framebuffer : state.transientFramebuffers) {
+    vkDestroyFramebuffer(device, framebuffer, nullptr);
+  }
+  for (VkRenderPass renderPass : state.transientRenderPasses) {
+    vkDestroyRenderPass(device, renderPass, nullptr);
+  }
+  // Freeing a command buffer in the recording state is legal; it has not been submitted.
+  vkFreeCommandBuffers(device, commandPool, 1, &state.commandBuffer);
+}
+
+void VulkanDevice::Impl::transitionPassSampledTextures(EncodingState& state,
+                                                       std::span<const Command> commands,
+                                                       size_t beginIndex) {
+  // An UNDEFINED oldLayout for a never-written texture is valid; its contents are undefined
+  // either way.
+  for (size_t scanIndex = beginIndex + 1; scanIndex < commands.size(); ++scanIndex) {
+    if (std::get_if<EndRenderPassCommand>(&commands[scanIndex]) != nullptr) {
+      break;
+    }
+    const auto* scannedBindGroup = std::get_if<SetBindGroupCommand>(&commands[scanIndex]);
+    if (scannedBindGroup == nullptr) {
+      continue;
+    }
+    const BindGroupRecord* scannedGroup =
+        FindRecord(bindGroups, scannedBindGroup->bindGroupId.slotIndex);
+    if (scannedGroup == nullptr) {
+      continue;  // The SetBindGroupCommand handler below fails closed on this.
+    }
+    for (const uint32_t sampledSlot : scannedGroup->sampledTextureSlots) {
+      const TextureRecord* sampled = FindRecord(textures, sampledSlot);
+      if (sampled == nullptr) {
+        continue;  // Submit-time re-validation makes this unreachable.
+      }
+      const VkImageLayout current = encodedLayoutOf(state, sampledSlot, *sampled);
+      if (current != VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) {
+        RecordImageBarrier(state.commandBuffer, sampled->image, current,
+                           VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        state.stagedLayouts[sampledSlot] = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+      }
+    }
+  }
+}
+
+Status VulkanDevice::Impl::beginEncodedRenderPass(EncodingState& state,
+                                                  const BeginRenderPassCommand& beginPass) {
+  const std::vector<RenderPassColorAttachment>& attachmentDescriptors =
+      beginPass.descriptor.colorAttachments;
+
+  std::vector<VkAttachmentDescription> attachments;
+  std::vector<VkAttachmentReference> colorRefs;
+  std::vector<VkImageView> attachmentViews;
+  std::vector<VkClearValue> clearValues;
+
+  for (size_t i = 0; i < attachmentDescriptors.size(); ++i) {
+    const RenderPassColorAttachment& attachment = attachmentDescriptors[i];
+    const TextureViewRecord* view = FindRecord(textureViews, attachment.view.slotIndex());
+    TextureRecord* texture = view != nullptr ? FindRecord(textures, view->textureSlot) : nullptr;
+    if (view == nullptr || texture == nullptr) {
+      return GpuError{
+          GpuErrorType::InvalidState,
+          std::format("render pass attachment {} does not resolve to a Vulkan image", i)};
+    }
+
+    // Conservative explicit transition to the attachment layout; the pass then begins and
+    // ends in COLOR_ATTACHMENT_OPTIMAL.
+    RecordImageBarrier(state.commandBuffer, texture->image,
+                       encodedLayoutOf(state, view->textureSlot, *texture),
+                       VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+    state.stagedLayouts[view->textureSlot] = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+
+    VkAttachmentDescription attachmentDescription = {};
+    attachmentDescription.format = ToVkFormat(texture->format);
+    attachmentDescription.samples = VK_SAMPLE_COUNT_1_BIT;
+    attachmentDescription.loadOp = ToVkLoadOp(attachment.loadOp);
+    attachmentDescription.storeOp = ToVkStoreOp(attachment.storeOp);
+    attachmentDescription.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    attachmentDescription.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    attachmentDescription.initialLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    attachmentDescription.finalLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    attachments.push_back(attachmentDescription);
+    colorRefs.push_back(
+        VkAttachmentReference{static_cast<uint32_t>(i), VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL});
+    attachmentViews.push_back(view->view);
+
+    VkClearValue clearValue = {};
+    clearValue.color.float32[0] = static_cast<float>(attachment.clearColor[0]);
+    clearValue.color.float32[1] = static_cast<float>(attachment.clearColor[1]);
+    clearValue.color.float32[2] = static_cast<float>(attachment.clearColor[2]);
+    clearValue.color.float32[3] = static_cast<float>(attachment.clearColor[3]);
+    clearValues.push_back(clearValue);
+
+    // All attachments share one extent (base-class beginRenderPass validation), so the
+    // last one is authoritative.
+    state.passExtent = texture->size;
+  }
+
+  VkSubpassDescription subpass = {};
+  subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+  subpass.colorAttachmentCount = static_cast<uint32_t>(colorRefs.size());
+  subpass.pColorAttachments = colorRefs.data();
+
+  // Conservative explicit external dependencies (the implicit defaults do not cover memory
+  // access): everything-before -> color output, and color output -> everything-after.
+  VkSubpassDependency dependencies[2] = {};
+  dependencies[0].srcSubpass = VK_SUBPASS_EXTERNAL;
+  dependencies[0].dstSubpass = 0;
+  dependencies[0].srcStageMask = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
+  dependencies[0].srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT;
+  dependencies[0].dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+  dependencies[0].dstAccessMask =
+      VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+  dependencies[1].srcSubpass = 0;
+  dependencies[1].dstSubpass = VK_SUBPASS_EXTERNAL;
+  dependencies[1].srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+  dependencies[1].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+  dependencies[1].dstStageMask = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
+  dependencies[1].dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
+
+  VkRenderPassCreateInfo renderPassInfo = {};
+  renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+  renderPassInfo.attachmentCount = static_cast<uint32_t>(attachments.size());
+  renderPassInfo.pAttachments = attachments.data();
+  renderPassInfo.subpassCount = 1;
+  renderPassInfo.pSubpasses = &subpass;
+  renderPassInfo.dependencyCount = 2;
+  renderPassInfo.pDependencies = dependencies;
+
+  VkRenderPass renderPass = VK_NULL_HANDLE;
+  if (const VkResult result = vkCreateRenderPass(device, &renderPassInfo, nullptr, &renderPass);
+      result != VK_SUCCESS) {
+    return VkError("vkCreateRenderPass", result);
+  }
+  state.transientRenderPasses.push_back(renderPass);
+
+  VkFramebufferCreateInfo framebufferInfo = {};
+  framebufferInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+  framebufferInfo.renderPass = renderPass;
+  framebufferInfo.attachmentCount = static_cast<uint32_t>(attachmentViews.size());
+  framebufferInfo.pAttachments = attachmentViews.data();
+  framebufferInfo.width = state.passExtent.width;
+  framebufferInfo.height = state.passExtent.height;
+  framebufferInfo.layers = 1;
+  VkFramebuffer framebuffer = VK_NULL_HANDLE;
+  if (const VkResult result = vkCreateFramebuffer(device, &framebufferInfo, nullptr, &framebuffer);
+      result != VK_SUCCESS) {
+    return VkError("vkCreateFramebuffer", result);
+  }
+  state.transientFramebuffers.push_back(framebuffer);
+
+  VkRenderPassBeginInfo passBeginInfo = {};
+  passBeginInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+  passBeginInfo.renderPass = renderPass;
+  passBeginInfo.framebuffer = framebuffer;
+  passBeginInfo.renderArea = VkRect2D{{0, 0}, {state.passExtent.width, state.passExtent.height}};
+  passBeginInfo.clearValueCount = static_cast<uint32_t>(clearValues.size());
+  passBeginInfo.pClearValues = clearValues.data();
+  vkCmdBeginRenderPass(state.commandBuffer, &passBeginInfo, VK_SUBPASS_CONTENTS_INLINE);
+  state.inRenderPass = true;
+
+  // WebGPU-style pass defaults: full-attachment viewport and scissor. The negative-height
+  // viewport (VK_KHR_maintenance1, core in 1.1) flips Vulkan's y-down clip space to match
+  // the WebGPU/Metal convention the shared shaders and MVPs assume.
+  VkViewport viewport = {};
+  viewport.x = 0.0f;
+  viewport.y = static_cast<float>(state.passExtent.height);
+  viewport.width = static_cast<float>(state.passExtent.width);
+  viewport.height = -static_cast<float>(state.passExtent.height);
+  viewport.minDepth = 0.0f;
+  viewport.maxDepth = 1.0f;
+  vkCmdSetViewport(state.commandBuffer, 0, 1, &viewport);
+  const VkRect2D scissor = {{0, 0}, {state.passExtent.width, state.passExtent.height}};
+  vkCmdSetScissor(state.commandBuffer, 0, 1, &scissor);
+
+  // Fresh pass state, matching WebGPU render pass semantics.
+  state.currentPipeline = nullptr;
+  std::fill(state.boundSets.begin(), state.boundSets.end(), VK_NULL_HANDLE);
+  return OkStatus();
+}
+
+Status VulkanDevice::Impl::encodeSetPipeline(EncodingState& state,
+                                             const SetPipelineCommand& setPipeline) {
+  const RenderPipelineRecord* pipeline =
+      FindRecord(renderPipelines, setPipeline.pipelineId.slotIndex);
+  if (!state.inRenderPass || pipeline == nullptr || pipeline->pipeline == VK_NULL_HANDLE) {
+    return GpuError{GpuErrorType::InvalidState,
+                    std::format("setPipeline: pipeline slot {} is not encodable",
+                                setPipeline.pipelineId.slotIndex)};
+  }
+  vkCmdBindPipeline(state.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline->pipeline);
+  state.currentPipeline = pipeline;
+  return OkStatus();
+}
+
+Status VulkanDevice::Impl::encodeSetBindGroup(EncodingState& state,
+                                              const SetBindGroupCommand& setBindGroup) {
+  const BindGroupRecord* bindGroup = FindRecord(bindGroups, setBindGroup.bindGroupId.slotIndex);
+  if (!state.inRenderPass || bindGroup == nullptr || setBindGroup.index >= kMaxBindGroups) {
+    return GpuError{GpuErrorType::InvalidState,
+                    std::format("setBindGroup: bind group slot {} is not encodable",
+                                setBindGroup.bindGroupId.slotIndex)};
+  }
+  // Descriptor sets bind lazily at draw: vkCmdBindDescriptorSets needs the pipeline layout,
+  // and the RHI allows setBindGroup before setPipeline.
+  state.boundSets[setBindGroup.index] = bindGroup->set;
+  return OkStatus();
+}
+
+Status VulkanDevice::Impl::encodeSetVertexBuffer(EncodingState& state,
+                                                 const SetVertexBufferCommand& setVertexBuffer) {
+  const BufferRecord* buffer = FindRecord(buffers, setVertexBuffer.bufferId.slotIndex);
+  if (!state.inRenderPass || buffer == nullptr) {
+    return GpuError{GpuErrorType::InvalidState,
+                    std::format("setVertexBuffer: buffer slot {} is not encodable",
+                                setVertexBuffer.bufferId.slotIndex)};
+  }
+  const VkDeviceSize offset = setVertexBuffer.offsetBytes;
+  vkCmdBindVertexBuffers(state.commandBuffer, setVertexBuffer.slot, 1, &buffer->buffer, &offset);
+  return OkStatus();
+}
+
+Status VulkanDevice::Impl::encodeSetScissorRect(EncodingState& state,
+                                                const SetScissorRectCommand& setScissor) {
+  if (!state.inRenderPass) {
+    return GpuError{GpuErrorType::InvalidState, "setScissorRect outside a render pass"};
+  }
+  const VkRect2D scissor = {
+      {static_cast<int32_t>(setScissor.x), static_cast<int32_t>(setScissor.y)},
+      {setScissor.width, setScissor.height}};
+  vkCmdSetScissor(state.commandBuffer, 0, 1, &scissor);
+  return OkStatus();
+}
+
+Status VulkanDevice::Impl::encodeSetViewport(EncodingState& state,
+                                             const SetViewportCommand& setViewport) {
+  if (!state.inRenderPass) {
+    return GpuError{GpuErrorType::InvalidState, "setViewport outside a render pass"};
+  }
+  // Same y-flip as the pass default so explicit viewports keep WebGPU semantics.
+  VkViewport viewport = {};
+  viewport.x = setViewport.x;
+  viewport.y = setViewport.y + setViewport.height;
+  viewport.width = setViewport.width;
+  viewport.height = -setViewport.height;
+  viewport.minDepth = setViewport.minDepth;
+  viewport.maxDepth = setViewport.maxDepth;
+  vkCmdSetViewport(state.commandBuffer, 0, 1, &viewport);
+  return OkStatus();
+}
+
+Status VulkanDevice::Impl::encodeDraw(EncodingState& state, const DrawCommand& draw) {
+  if (!state.inRenderPass || state.currentPipeline == nullptr) {
+    return GpuError{GpuErrorType::InvalidState, "draw without an active pass and pipeline"};
+  }
+  // Bind every set the pipeline layout declares. The encoder's draw-time validation
+  // guarantees each declared group index is bound; this re-check fails closed anyway.
+  for (uint32_t setIndex = 0; setIndex < state.currentPipeline->layout->descriptorSetCount;
+       ++setIndex) {
+    if (state.boundSets[setIndex] == VK_NULL_HANDLE) {
+      return GpuError{
+          GpuErrorType::InvalidState,
+          std::format("draw: pipeline layout requires bind group {} but none is bound", setIndex)};
+    }
+    vkCmdBindDescriptorSets(state.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                            state.currentPipeline->layout->layout, setIndex, 1,
+                            &state.boundSets[setIndex], 0, nullptr);
+  }
+  vkCmdDraw(state.commandBuffer, draw.vertexCount, draw.instanceCount, draw.firstVertex,
+            draw.firstInstance);
+  return OkStatus();
+}
+
+Status VulkanDevice::Impl::encodeEndRenderPass(EncodingState& state) {
+  if (!state.inRenderPass) {
+    return GpuError{GpuErrorType::InvalidState, "endRenderPass without an active render pass"};
+  }
+  vkCmdEndRenderPass(state.commandBuffer);
+  state.inRenderPass = false;
+  state.currentPipeline = nullptr;
+  std::fill(state.boundSets.begin(), state.boundSets.end(), VK_NULL_HANDLE);
+  return OkStatus();
+}
+
+Status VulkanDevice::Impl::encodeCopyTextureToBuffer(EncodingState& state,
+                                                     const CopyTextureToBufferCommand& copy) {
+  if (state.inRenderPass) {
+    return GpuError{GpuErrorType::InvalidState, "copyTextureToBuffer inside a render pass"};
+  }
+  TextureRecord* texture = FindRecord(textures, copy.textureId.slotIndex);
+  const BufferRecord* buffer = FindRecord(buffers, copy.bufferId.slotIndex);
+  if (texture == nullptr || buffer == nullptr) {
+    return GpuError{GpuErrorType::InvalidState,
+                    "copyTextureToBuffer: source texture or destination buffer is missing"};
+  }
+  // The shared validation enforces texel-size alignment; enforce 4-byte alignment on top,
+  // uniformly. Vulkan's buffer-image copy rules ("Copies to and from Buffer Memory")
+  // additionally require 4-byte-aligned bufferOffset for some queue/format combinations, so
+  // rejecting the rare sub-4-byte offset (possible only for R8) keeps every copy portable.
+  if (copy.layout.offsetBytes % 4 != 0) {
+    return GpuError{
+        GpuErrorType::Unsupported,
+        std::format("copyTextureToBuffer: offsetBytes {} is not 4-byte aligned; the Vulkan "
+                    "backend requires 4-byte-aligned copy offsets",
+                    copy.layout.offsetBytes)};
+  }
+
+  RecordImageBarrier(state.commandBuffer, texture->image,
+                     encodedLayoutOf(state, copy.textureId.slotIndex, *texture),
+                     VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+  state.stagedLayouts[copy.textureId.slotIndex] = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+
+  const uint32_t texelSize = TextureFormatBytesPerTexel(texture->format);
+  VkBufferImageCopy copyRegion = {};
+  copyRegion.bufferOffset = copy.layout.offsetBytes;
+  copyRegion.bufferRowLength = copy.layout.bytesPerRow / texelSize;  // In texels.
+  copyRegion.bufferImageHeight = copy.layout.rowsPerImage;
+  copyRegion.imageSubresource = VkImageSubresourceLayers{VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+  copyRegion.imageOffset = VkOffset3D{0, 0, 0};
+  copyRegion.imageExtent = VkExtent3D{copy.copySize.width, copy.copySize.height, 1};
+  vkCmdCopyImageToBuffer(state.commandBuffer, texture->image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                         buffer->buffer, 1, &copyRegion);
+
+  // Make the transfer write visible to host reads (readback maps the buffer after the
+  // fence): TRANSFER write -> HOST read.
+  VkBufferMemoryBarrier bufferBarrier = {};
+  bufferBarrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+  bufferBarrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+  bufferBarrier.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
+  bufferBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+  bufferBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+  bufferBarrier.buffer = buffer->buffer;
+  bufferBarrier.offset = 0;
+  bufferBarrier.size = VK_WHOLE_SIZE;
+  vkCmdPipelineBarrier(state.commandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                       VK_PIPELINE_STAGE_HOST_BIT, 0, 0, nullptr, 1, &bufferBarrier, 0, nullptr);
+  return OkStatus();
+}
+
+Status VulkanDevice::Impl::encodeCommand(EncodingState& state, std::span<const Command> commands,
+                                         size_t commandIndex) {
+  const Command& command = commands[commandIndex];
+  if (const auto* beginPass = std::get_if<BeginRenderPassCommand>(&command)) {
+    transitionPassSampledTextures(state, commands, commandIndex);
+    return beginEncodedRenderPass(state, *beginPass);
+  } else if (const auto* setPipeline = std::get_if<SetPipelineCommand>(&command)) {
+    return encodeSetPipeline(state, *setPipeline);
+  } else if (const auto* setBindGroup = std::get_if<SetBindGroupCommand>(&command)) {
+    return encodeSetBindGroup(state, *setBindGroup);
+  } else if (const auto* setVertexBuffer = std::get_if<SetVertexBufferCommand>(&command)) {
+    return encodeSetVertexBuffer(state, *setVertexBuffer);
+  } else if (const auto* setScissor = std::get_if<SetScissorRectCommand>(&command)) {
+    return encodeSetScissorRect(state, *setScissor);
+  } else if (const auto* setViewport = std::get_if<SetViewportCommand>(&command)) {
+    return encodeSetViewport(state, *setViewport);
+  } else if (const auto* draw = std::get_if<DrawCommand>(&command)) {
+    return encodeDraw(state, *draw);
+  } else if (std::get_if<EndRenderPassCommand>(&command) != nullptr) {
+    return encodeEndRenderPass(state);
+  } else if (const auto* copy = std::get_if<CopyTextureToBufferCommand>(&command)) {
+    return encodeCopyTextureToBuffer(state, *copy);
+  }
+  return OkStatus();
+}
+
+void VulkanDevice::Impl::commitStagedLayouts(EncodingState& state) {
+  for (const auto& [textureSlot, layout] : state.stagedLayouts) {
+    if (TextureRecord* texture = FindRecord(textures, textureSlot)) {
+      texture->currentLayout = layout;
+    }
+  }
 }
 
 Status VulkanDevice::onSubmit(uint64_t submissionSerial, uint32_t commandBufferSlotIndex,
@@ -1759,364 +2457,39 @@ Status VulkanDevice::onSubmit(uint64_t submissionSerial, uint32_t commandBufferS
   if (commandBufferResult.hasError()) {
     return std::move(commandBufferResult).error();
   }
-  VkCommandBuffer commandBuffer = commandBufferResult.result();
 
   // Transient objects created while encoding; on success they move into the in-flight record
   // and are destroyed when the fence signals, on failure they are destroyed here.
-  std::vector<VkRenderPass> transientRenderPasses;
-  std::vector<VkFramebuffer> transientFramebuffers;
-  const auto failEncoding = [&](GpuError error) -> Status {
-    for (VkFramebuffer framebuffer : transientFramebuffers) {
-      vkDestroyFramebuffer(impl.device, framebuffer, nullptr);
-    }
-    for (VkRenderPass renderPass : transientRenderPasses) {
-      vkDestroyRenderPass(impl.device, renderPass, nullptr);
-    }
-    // Freeing a command buffer in the recording state is legal; it has not been submitted.
-    vkFreeCommandBuffers(impl.device, impl.commandPool, 1, &commandBuffer);
-    return std::move(error);
+  Impl::EncodingState state;
+  state.commandBuffer = commandBufferResult.result();
+  state.boundSets.assign(kMaxBindGroups, VK_NULL_HANDLE);
+  const auto failEncoding = [&](Status error) -> Status {
+    impl.destroyTransientEncodingObjects(state);
+    return error;
   };
 
   VkCommandBufferBeginInfo beginInfo = {};
   beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
   beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-  if (const VkResult result = vkBeginCommandBuffer(commandBuffer, &beginInfo);
+  if (const VkResult result = vkBeginCommandBuffer(state.commandBuffer, &beginInfo);
       result != VK_SUCCESS) {
     return failEncoding(VkError("vkBeginCommandBuffer", result));
   }
 
-  bool inRenderPass = false;
-  Extent2d passExtent;
-  const Impl::RenderPipelineRecord* currentPipeline = nullptr;
-  std::vector<VkDescriptorSet> boundSets(kMaxBindGroups, VK_NULL_HANDLE);
-
-  // Layout transitions recorded into this command buffer are staged here and committed to the
-  // per-texture tracked state only after vkQueueSubmit succeeds: a failed encode or submit must
-  // not leave tracked layouts claiming transitions the GPU never executed (the synchronous
-  // onWriteTexture upload follows the same commit-after-success pattern).
-  std::map<uint32_t, VkImageLayout> stagedLayouts;
-  const auto layoutOf = [&stagedLayouts](uint32_t textureSlot, const Impl::TextureRecord& record) {
-    const auto it = stagedLayouts.find(textureSlot);
-    return it != stagedLayouts.end() ? it->second : record.currentLayout;
-  };
-
   for (size_t commandIndex = 0; commandIndex < commands.size(); ++commandIndex) {
-    const Command& command = commands[commandIndex];
-    if (const auto* beginPass = std::get_if<BeginRenderPassCommand>(&command)) {
-      // Barriers are illegal inside a render pass, so pre-scan this pass's commands for bind
-      // groups and transition every referenced sampled texture to SHADER_READ_ONLY_OPTIMAL (the
-      // layout the descriptor writes declare) before the pass begins. An UNDEFINED oldLayout
-      // for a never-written texture is valid; its contents are undefined either way.
-      for (size_t scanIndex = commandIndex + 1; scanIndex < commands.size(); ++scanIndex) {
-        if (std::get_if<EndRenderPassCommand>(&commands[scanIndex]) != nullptr) {
-          break;
-        }
-        const auto* scannedBindGroup = std::get_if<SetBindGroupCommand>(&commands[scanIndex]);
-        if (scannedBindGroup == nullptr) {
-          continue;
-        }
-        const Impl::BindGroupRecord* scannedGroup =
-            FindRecord(impl.bindGroups, scannedBindGroup->bindGroupId.slotIndex);
-        if (scannedGroup == nullptr) {
-          continue;  // The SetBindGroupCommand handler below fails closed on this.
-        }
-        for (const uint32_t sampledSlot : scannedGroup->sampledTextureSlots) {
-          const Impl::TextureRecord* sampled = FindRecord(impl.textures, sampledSlot);
-          if (sampled == nullptr) {
-            continue;  // Submit-time re-validation makes this unreachable.
-          }
-          const VkImageLayout current = layoutOf(sampledSlot, *sampled);
-          if (current != VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) {
-            RecordImageBarrier(commandBuffer, sampled->image, current,
-                               VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-            stagedLayouts[sampledSlot] = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-          }
-        }
-      }
-
-      const std::vector<RenderPassColorAttachment>& attachmentDescriptors =
-          beginPass->descriptor.colorAttachments;
-
-      std::vector<VkAttachmentDescription> attachments;
-      std::vector<VkAttachmentReference> colorRefs;
-      std::vector<VkImageView> attachmentViews;
-      std::vector<VkClearValue> clearValues;
-
-      for (size_t i = 0; i < attachmentDescriptors.size(); ++i) {
-        const RenderPassColorAttachment& attachment = attachmentDescriptors[i];
-        const Impl::TextureViewRecord* view =
-            FindRecord(impl.textureViews, attachment.view.slotIndex());
-        Impl::TextureRecord* texture =
-            view != nullptr ? FindRecord(impl.textures, view->textureSlot) : nullptr;
-        if (view == nullptr || texture == nullptr) {
-          return failEncoding(GpuError{
-              GpuErrorType::InvalidState,
-              std::format("render pass attachment {} does not resolve to a Vulkan image", i)});
-        }
-
-        // Conservative explicit transition to the attachment layout; the pass then begins and
-        // ends in COLOR_ATTACHMENT_OPTIMAL.
-        RecordImageBarrier(commandBuffer, texture->image, layoutOf(view->textureSlot, *texture),
-                           VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
-        stagedLayouts[view->textureSlot] = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-
-        VkAttachmentDescription attachmentDescription = {};
-        attachmentDescription.format = ToVkFormat(texture->format);
-        attachmentDescription.samples = VK_SAMPLE_COUNT_1_BIT;
-        attachmentDescription.loadOp = ToVkLoadOp(attachment.loadOp);
-        attachmentDescription.storeOp = ToVkStoreOp(attachment.storeOp);
-        attachmentDescription.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-        attachmentDescription.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-        attachmentDescription.initialLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-        attachmentDescription.finalLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-        attachments.push_back(attachmentDescription);
-        colorRefs.push_back(VkAttachmentReference{static_cast<uint32_t>(i),
-                                                  VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL});
-        attachmentViews.push_back(view->view);
-
-        VkClearValue clearValue = {};
-        clearValue.color.float32[0] = static_cast<float>(attachment.clearColor[0]);
-        clearValue.color.float32[1] = static_cast<float>(attachment.clearColor[1]);
-        clearValue.color.float32[2] = static_cast<float>(attachment.clearColor[2]);
-        clearValue.color.float32[3] = static_cast<float>(attachment.clearColor[3]);
-        clearValues.push_back(clearValue);
-
-        // All attachments share one extent (base-class beginRenderPass validation), so the
-        // last one is authoritative.
-        passExtent = texture->size;
-      }
-
-      VkSubpassDescription subpass = {};
-      subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
-      subpass.colorAttachmentCount = static_cast<uint32_t>(colorRefs.size());
-      subpass.pColorAttachments = colorRefs.data();
-
-      // Conservative explicit external dependencies (the implicit defaults do not cover memory
-      // access): everything-before -> color output, and color output -> everything-after.
-      VkSubpassDependency dependencies[2] = {};
-      dependencies[0].srcSubpass = VK_SUBPASS_EXTERNAL;
-      dependencies[0].dstSubpass = 0;
-      dependencies[0].srcStageMask = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
-      dependencies[0].srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT;
-      dependencies[0].dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-      dependencies[0].dstAccessMask =
-          VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-      dependencies[1].srcSubpass = 0;
-      dependencies[1].dstSubpass = VK_SUBPASS_EXTERNAL;
-      dependencies[1].srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-      dependencies[1].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-      dependencies[1].dstStageMask = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
-      dependencies[1].dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
-
-      VkRenderPassCreateInfo renderPassInfo = {};
-      renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
-      renderPassInfo.attachmentCount = static_cast<uint32_t>(attachments.size());
-      renderPassInfo.pAttachments = attachments.data();
-      renderPassInfo.subpassCount = 1;
-      renderPassInfo.pSubpasses = &subpass;
-      renderPassInfo.dependencyCount = 2;
-      renderPassInfo.pDependencies = dependencies;
-
-      VkRenderPass renderPass = VK_NULL_HANDLE;
-      if (const VkResult result =
-              vkCreateRenderPass(impl.device, &renderPassInfo, nullptr, &renderPass);
-          result != VK_SUCCESS) {
-        return failEncoding(VkError("vkCreateRenderPass", result));
-      }
-      transientRenderPasses.push_back(renderPass);
-
-      VkFramebufferCreateInfo framebufferInfo = {};
-      framebufferInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
-      framebufferInfo.renderPass = renderPass;
-      framebufferInfo.attachmentCount = static_cast<uint32_t>(attachmentViews.size());
-      framebufferInfo.pAttachments = attachmentViews.data();
-      framebufferInfo.width = passExtent.width;
-      framebufferInfo.height = passExtent.height;
-      framebufferInfo.layers = 1;
-      VkFramebuffer framebuffer = VK_NULL_HANDLE;
-      if (const VkResult result =
-              vkCreateFramebuffer(impl.device, &framebufferInfo, nullptr, &framebuffer);
-          result != VK_SUCCESS) {
-        return failEncoding(VkError("vkCreateFramebuffer", result));
-      }
-      transientFramebuffers.push_back(framebuffer);
-
-      VkRenderPassBeginInfo passBeginInfo = {};
-      passBeginInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-      passBeginInfo.renderPass = renderPass;
-      passBeginInfo.framebuffer = framebuffer;
-      passBeginInfo.renderArea = VkRect2D{{0, 0}, {passExtent.width, passExtent.height}};
-      passBeginInfo.clearValueCount = static_cast<uint32_t>(clearValues.size());
-      passBeginInfo.pClearValues = clearValues.data();
-      vkCmdBeginRenderPass(commandBuffer, &passBeginInfo, VK_SUBPASS_CONTENTS_INLINE);
-      inRenderPass = true;
-
-      // WebGPU-style pass defaults: full-attachment viewport and scissor. The negative-height
-      // viewport (VK_KHR_maintenance1, core in 1.1) flips Vulkan's y-down clip space to match
-      // the WebGPU/Metal convention the shared shaders and MVPs assume.
-      VkViewport viewport = {};
-      viewport.x = 0.0f;
-      viewport.y = static_cast<float>(passExtent.height);
-      viewport.width = static_cast<float>(passExtent.width);
-      viewport.height = -static_cast<float>(passExtent.height);
-      viewport.minDepth = 0.0f;
-      viewport.maxDepth = 1.0f;
-      vkCmdSetViewport(commandBuffer, 0, 1, &viewport);
-      const VkRect2D scissor = {{0, 0}, {passExtent.width, passExtent.height}};
-      vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
-
-      // Fresh pass state, matching WebGPU render pass semantics.
-      currentPipeline = nullptr;
-      std::fill(boundSets.begin(), boundSets.end(), VK_NULL_HANDLE);
-    } else if (const auto* setPipeline = std::get_if<SetPipelineCommand>(&command)) {
-      const Impl::RenderPipelineRecord* pipeline =
-          FindRecord(impl.renderPipelines, setPipeline->pipelineId.slotIndex);
-      if (!inRenderPass || pipeline == nullptr || pipeline->pipeline == VK_NULL_HANDLE) {
-        return failEncoding(GpuError{GpuErrorType::InvalidState,
-                                     std::format("setPipeline: pipeline slot {} is not encodable",
-                                                 setPipeline->pipelineId.slotIndex)});
-      }
-      vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline->pipeline);
-      currentPipeline = pipeline;
-    } else if (const auto* setBindGroup = std::get_if<SetBindGroupCommand>(&command)) {
-      const Impl::BindGroupRecord* bindGroup =
-          FindRecord(impl.bindGroups, setBindGroup->bindGroupId.slotIndex);
-      if (!inRenderPass || bindGroup == nullptr || setBindGroup->index >= kMaxBindGroups) {
-        return failEncoding(
-            GpuError{GpuErrorType::InvalidState,
-                     std::format("setBindGroup: bind group slot {} is not encodable",
-                                 setBindGroup->bindGroupId.slotIndex)});
-      }
-      // Descriptor sets bind lazily at draw: vkCmdBindDescriptorSets needs the pipeline layout,
-      // and the RHI allows setBindGroup before setPipeline.
-      boundSets[setBindGroup->index] = bindGroup->set;
-    } else if (const auto* setVertexBuffer = std::get_if<SetVertexBufferCommand>(&command)) {
-      const Impl::BufferRecord* buffer =
-          FindRecord(impl.buffers, setVertexBuffer->bufferId.slotIndex);
-      if (!inRenderPass || buffer == nullptr) {
-        return failEncoding(GpuError{GpuErrorType::InvalidState,
-                                     std::format("setVertexBuffer: buffer slot {} is not encodable",
-                                                 setVertexBuffer->bufferId.slotIndex)});
-      }
-      const VkDeviceSize offset = setVertexBuffer->offsetBytes;
-      vkCmdBindVertexBuffers(commandBuffer, setVertexBuffer->slot, 1, &buffer->buffer, &offset);
-    } else if (const auto* setScissor = std::get_if<SetScissorRectCommand>(&command)) {
-      if (!inRenderPass) {
-        return failEncoding(
-            GpuError{GpuErrorType::InvalidState, "setScissorRect outside a render pass"});
-      }
-      const VkRect2D scissor = {
-          {static_cast<int32_t>(setScissor->x), static_cast<int32_t>(setScissor->y)},
-          {setScissor->width, setScissor->height}};
-      vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
-    } else if (const auto* setViewport = std::get_if<SetViewportCommand>(&command)) {
-      if (!inRenderPass) {
-        return failEncoding(
-            GpuError{GpuErrorType::InvalidState, "setViewport outside a render pass"});
-      }
-      // Same y-flip as the pass default so explicit viewports keep WebGPU semantics.
-      VkViewport viewport = {};
-      viewport.x = setViewport->x;
-      viewport.y = setViewport->y + setViewport->height;
-      viewport.width = setViewport->width;
-      viewport.height = -setViewport->height;
-      viewport.minDepth = setViewport->minDepth;
-      viewport.maxDepth = setViewport->maxDepth;
-      vkCmdSetViewport(commandBuffer, 0, 1, &viewport);
-    } else if (const auto* draw = std::get_if<DrawCommand>(&command)) {
-      if (!inRenderPass || currentPipeline == nullptr) {
-        return failEncoding(
-            GpuError{GpuErrorType::InvalidState, "draw without an active pass and pipeline"});
-      }
-      // Bind every set the pipeline layout declares. The encoder's draw-time validation
-      // guarantees each declared group index is bound; this re-check fails closed anyway.
-      for (uint32_t setIndex = 0; setIndex < currentPipeline->layout->descriptorSetCount;
-           ++setIndex) {
-        if (boundSets[setIndex] == VK_NULL_HANDLE) {
-          return failEncoding(
-              GpuError{GpuErrorType::InvalidState,
-                       std::format("draw: pipeline layout requires bind group {} but none is bound",
-                                   setIndex)});
-        }
-        vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                currentPipeline->layout->layout, setIndex, 1, &boundSets[setIndex],
-                                0, nullptr);
-      }
-      vkCmdDraw(commandBuffer, draw->vertexCount, draw->instanceCount, draw->firstVertex,
-                draw->firstInstance);
-    } else if (std::get_if<EndRenderPassCommand>(&command) != nullptr) {
-      if (!inRenderPass) {
-        return failEncoding(
-            GpuError{GpuErrorType::InvalidState, "endRenderPass without an active render pass"});
-      }
-      vkCmdEndRenderPass(commandBuffer);
-      inRenderPass = false;
-      currentPipeline = nullptr;
-      std::fill(boundSets.begin(), boundSets.end(), VK_NULL_HANDLE);
-    } else if (const auto* copy = std::get_if<CopyTextureToBufferCommand>(&command)) {
-      if (inRenderPass) {
-        return failEncoding(
-            GpuError{GpuErrorType::InvalidState, "copyTextureToBuffer inside a render pass"});
-      }
-      Impl::TextureRecord* texture = FindRecord(impl.textures, copy->textureId.slotIndex);
-      const Impl::BufferRecord* buffer = FindRecord(impl.buffers, copy->bufferId.slotIndex);
-      if (texture == nullptr || buffer == nullptr) {
-        return failEncoding(
-            GpuError{GpuErrorType::InvalidState,
-                     "copyTextureToBuffer: source texture or destination buffer is missing"});
-      }
-      // The shared validation enforces texel-size alignment; enforce 4-byte alignment on top,
-      // uniformly. Vulkan's buffer-image copy rules ("Copies to and from Buffer Memory")
-      // additionally require 4-byte-aligned bufferOffset for some queue/format combinations, so
-      // rejecting the rare sub-4-byte offset (possible only for R8) keeps every copy portable.
-      if (copy->layout.offsetBytes % 4 != 0) {
-        return failEncoding(GpuError{
-            GpuErrorType::Unsupported,
-            std::format("copyTextureToBuffer: offsetBytes {} is not 4-byte aligned; the Vulkan "
-                        "backend requires 4-byte-aligned copy offsets",
-                        copy->layout.offsetBytes)});
-      }
-
-      RecordImageBarrier(commandBuffer, texture->image,
-                         layoutOf(copy->textureId.slotIndex, *texture),
-                         VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
-      stagedLayouts[copy->textureId.slotIndex] = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-
-      const uint32_t texelSize = TextureFormatBytesPerTexel(texture->format);
-      VkBufferImageCopy copyRegion = {};
-      copyRegion.bufferOffset = copy->layout.offsetBytes;
-      copyRegion.bufferRowLength = copy->layout.bytesPerRow / texelSize;  // In texels.
-      copyRegion.bufferImageHeight = copy->layout.rowsPerImage;
-      copyRegion.imageSubresource = VkImageSubresourceLayers{VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-      copyRegion.imageOffset = VkOffset3D{0, 0, 0};
-      copyRegion.imageExtent = VkExtent3D{copy->copySize.width, copy->copySize.height, 1};
-      vkCmdCopyImageToBuffer(commandBuffer, texture->image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                             buffer->buffer, 1, &copyRegion);
-
-      // Make the transfer write visible to host reads (readback maps the buffer after the
-      // fence): TRANSFER write -> HOST read.
-      VkBufferMemoryBarrier bufferBarrier = {};
-      bufferBarrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
-      bufferBarrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-      bufferBarrier.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
-      bufferBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-      bufferBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-      bufferBarrier.buffer = buffer->buffer;
-      bufferBarrier.offset = 0;
-      bufferBarrier.size = VK_WHOLE_SIZE;
-      vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                           VK_PIPELINE_STAGE_HOST_BIT, 0, 0, nullptr, 1, &bufferBarrier, 0,
-                           nullptr);
+    Status encodeStatus = impl.encodeCommand(state, commands, commandIndex);
+    if (encodeStatus.hasError()) {
+      return failEncoding(std::move(encodeStatus));
     }
   }
 
-  if (inRenderPass) {
+  if (state.inRenderPass) {
     // The encoder state machine guarantees passes are ended before finish; fail closed anyway.
     return failEncoding(
         GpuError{GpuErrorType::InvalidState, "submitted command stream left a render pass open"});
   }
 
-  if (const VkResult result = vkEndCommandBuffer(commandBuffer); result != VK_SUCCESS) {
+  if (const VkResult result = vkEndCommandBuffer(state.commandBuffer); result != VK_SUCCESS) {
     return failEncoding(VkError("vkEndCommandBuffer", result));
   }
 
@@ -2131,7 +2504,7 @@ Status VulkanDevice::onSubmit(uint64_t submissionSerial, uint32_t commandBufferS
   VkSubmitInfo submitInfo = {};
   submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
   submitInfo.commandBufferCount = 1;
-  submitInfo.pCommandBuffers = &commandBuffer;
+  submitInfo.pCommandBuffers = &state.commandBuffer;
   if (const VkResult result = vkQueueSubmit(impl.queue, 1, &submitInfo, fence);
       result != VK_SUCCESS) {
     vkDestroyFence(impl.device, fence, nullptr);
@@ -2140,18 +2513,14 @@ Status VulkanDevice::onSubmit(uint64_t submissionSerial, uint32_t commandBufferS
 
   // The GPU will execute the recorded transitions: commit the staged layouts to the tracked
   // per-texture state.
-  for (const auto& [textureSlot, layout] : stagedLayouts) {
-    if (Impl::TextureRecord* texture = FindRecord(impl.textures, textureSlot)) {
-      texture->currentLayout = layout;
-    }
-  }
+  impl.commitStagedLayouts(state);
 
   Impl::InFlightSubmission submission;
   submission.serial = submissionSerial;
   submission.fence = fence;
-  submission.commandBuffer = commandBuffer;
-  submission.renderPasses = std::move(transientRenderPasses);
-  submission.framebuffers = std::move(transientFramebuffers);
+  submission.commandBuffer = state.commandBuffer;
+  submission.renderPasses = std::move(state.transientRenderPasses);
+  submission.framebuffers = std::move(state.transientFramebuffers);
   impl.inFlight.push_back(std::move(submission));
   return OkStatus();
 }
