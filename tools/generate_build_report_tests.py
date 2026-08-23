@@ -776,7 +776,9 @@ class GenerateBuildReportTests(unittest.TestCase):
             progress_interval_sec=0.01,
             status_stream=io.StringIO(),
         )
-        result = runner.run("python-sleep", ["python3", "-c", "import time; time.sleep(0.03)"])
+        result = runner.run(
+            "python-sleep", [sys.executable, "-c", "import time; time.sleep(0.03)"]
+        )
 
         self.assertTrue(result.success)
         self.assertGreaterEqual(result.duration_sec, 0.02)
