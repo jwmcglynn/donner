@@ -55,6 +55,13 @@ class GeodeTestSchedulingTest(unittest.TestCase):
         """
         self.assertNotIn("exec_properties", self.rules)
 
+    def test_fuzzer_soak_targets_replay_the_checked_in_corpus(self):
+        soak_rule = self.rules.split('name = name + "_soak"', 1)[1].split(
+            'name = name,', 1
+        )[0]
+        self.assertIn('"$(locations %s)" % corpus_name', soak_rule)
+        self.assertIn('data = [corpus_name]', soak_rule)
+
 
 if __name__ == "__main__":
     unittest.main()

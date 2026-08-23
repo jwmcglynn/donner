@@ -14,9 +14,10 @@ To enable:
 """
 
 load("@bazel_skylib//rules:common_settings.bzl", "bool_flag")
+load("@rules_python//python:defs.bzl", "py_test")
 load("//build_defs:embed_resources.bzl", "embed_resources")
 load("//build_defs:package.bzl", "donner_package")
-load("//build_defs:rules.bzl", "donner_cc_library", "donner_cc_test", "donner_multi_transitioned_test")
+load("//build_defs:rules.bzl", "donner_cc_fuzzer", "donner_cc_library", "donner_cc_test", "donner_multi_transitioned_test")
 
 # Build flag controlling whether Geode's WebGPU-backed targets are compiled.
 bool_flag(
@@ -36,6 +37,36 @@ _GEODE_ONLY = select({
     ":geode_enabled": [],
     "//conditions:default": ["@platforms//:incompatible"],
 })
+
+donner_cc_fuzzer(
+    name = "geode_svg_geometry_budget_fuzzer",
+    srcs = ["tests/GeodeSvgGeometryBudget_fuzzer.cc"],
+    corpus = "tests/geode_svg_geometry_budget_corpus",
+    routing_manifest = "geode_geometry_fuzzer_routing_manifest",
+    tags = [
+        "exclusive-if-local",
+        "fuzz_geode",
+    ],
+    deps = [
+        ":geode_device",
+        "//donner/svg",
+        "//donner/svg/renderer:renderer_geode",
+    ],
+)
+
+py_test(
+    name = "geode_geometry_fuzzer_routing_tests",
+    srcs = ["tests/GeodeGeometryFuzzerRouting_tests.py"],
+    args = [
+        "$(rootpath :geode_geometry_fuzzer_routing_manifest)",
+        "$(rootpath tests/GeodeSvgGeometryBudget_fuzzer.cc)",
+    ],
+    data = [
+        "tests/GeodeSvgGeometryBudget_fuzzer.cc",
+        ":geode_geometry_fuzzer_routing_manifest",
+    ],
+    main = "tests/GeodeGeometryFuzzerRouting_tests.py",
+)
 
 # CPU-side Slug band decomposition. Pure path math — no WebGPU dependency,
 # always built regardless of the enable_geode flag. Downstream Geode targets
