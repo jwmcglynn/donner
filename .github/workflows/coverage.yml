@@ -523,6 +523,7 @@ jobs:
           # The alias-resolved affected set, shared by the kind query below and
           # by the test-presence query after it. Keep it single-quoted: `$a` is
           # a bazel query variable, not a shell one.
+          # shellcheck disable=SC2016
           resolved_expr="$(printf 'let a = set(%s) in ($a - kind("^alias rule$", $a)) + labels("actual", kind("^alias rule$", $a))' "$(tr '\n' ' ' < "$work_dir/affected.txt")")"
           kind_query_file="$work_dir/affected-query.txt"
           printf '%s\n' "$resolved_expr" > "$kind_query_file"
@@ -588,7 +589,9 @@ jobs:
               # test_suite expansion and rule kinds this workflow does not
               # enumerate are handled by definition rather than by a name
               # heuristic, and subtract the tags the coverage command itself
-              # filters out (--test_tag_filters=-fuzz_target,-lint in .bazelrc),
+              # filters out
+              # (--test_tag_filters=-fuzz_target,-lint,-manual,-perf in
+              # .bazelrc),
               # because a subset whose only tests carry those tags leaves the
               # coverage run with the very empty test set this gate exists to
               # keep it out of. `attr` matches its pattern against the string
@@ -597,7 +600,7 @@ jobs:
               # punctuation rather than anchored with ^$. Fail closed: a query
               # failure keeps the coverage run.
               test_query_file="$work_dir/affected-tests-query.txt"
-              printf 'tests(%s) except attr("tags", "[\[ ](fuzz_target|lint)[,\]]", tests(%s))\n' \
+              printf 'tests(%s) except attr("tags", "[\[ ](fuzz_target|lint|manual|perf)[,\]]", tests(%s))\n' \
                 "$resolved_expr" "$resolved_expr" > "$test_query_file"
               affected_tests_file="$work_dir/affected-tests.txt"
               if ( cd "$head_dir" && bazelisk query --query_file="$test_query_file" \
@@ -608,6 +611,9 @@ jobs:
                   emit_targets true no_test_targets ""
                   exit 0
                 fi
+                affected="$(
+                  python3 -c 'import pathlib, sys; labels = [line.strip() for line in pathlib.Path(sys.argv[1]).read_text(encoding="utf-8").splitlines() if line.strip()]; print(" ".join(labels))' "$affected_tests_file"
+                )"
               else
                 echo "Test-presence query failed; running coverage on affected subset (guard intact)."
                 cat "$diagnostics_dir/test-query.log" || true
@@ -636,6 +642,8 @@ jobs:
           # untrimmed set / target; variant-only targets (no base sibling)
           # are never dropped. See tools/coverage_variant_trim.py and
           # docs/design_docs/0029-2.
+          # Intentional word splitting: each Bazel label becomes one line.
+          # shellcheck disable=SC2086
           printf '%s\n' $affected > "$work_dir/affected-pretrim.txt"
           if trimmed="$(python3 tools/coverage_variant_trim.py \
               --affected-file "$work_dir/affected-pretrim.txt" \
