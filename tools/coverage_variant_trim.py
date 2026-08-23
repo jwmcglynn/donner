@@ -42,10 +42,10 @@ import sys
 # from being misread as a `_full` variant of `..._text`.
 VARIANT_SUFFIXES = ("_text_full", "_tiny", "_geode")
 
-# The rule kind donner_cc_test's `variants` attr generates for each
+# The private rule kind donner_cc_test's `variants` attr generates for each
 # `{name}_{variant}` wrapper (build_defs/rules.bzl). Only this kind is ever
 # trimmed.
-WRAPPER_KIND = "donner_multi_transitioned_test"
+WRAPPER_KIND = "_donner_multi_transitioned_test"
 
 
 def parse_label_kinds(label_kind_text):

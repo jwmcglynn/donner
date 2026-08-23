@@ -635,7 +635,7 @@ jobs:
           # unique signal (backend/feature-gated lines) stays covered by the
           # main-push FULL multi-variant baseline. Only targets whose rule
           # kind (from the label_kind query above) is the generated
-          # donner_multi_transitioned_test wrapper are ever dropped, so
+          # _donner_multi_transitioned_test wrapper are ever dropped, so
           # handwritten targets that merely share the suffix (e.g. a
           # cc_library named renderer_geode) are untouched. Fail closed: tool
           # failure, a failed kind query, or an unknown kind keeps the

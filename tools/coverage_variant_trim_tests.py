@@ -126,7 +126,7 @@ class ParseLabelKindsTest(unittest.TestCase):
     def test_parses_label_kind_lines(self):
         text = (
             "cc_test rule //donner/svg/compositor:compositor_tests\n"
-            "donner_multi_transitioned_test rule //donner/svg/compositor:compositor_tests_geode\n"
+            "_donner_multi_transitioned_test rule //donner/svg/compositor:compositor_tests_geode\n"
             "cc_library rule //donner/svg/renderer:renderer_geode\n"
         )
         kinds = parse_label_kinds(text)
