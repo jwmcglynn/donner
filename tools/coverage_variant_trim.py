@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Trim redundant variant-wrapper targets from the PR coverage target set.
 
-Policy (operator-approved, 2026-07-11): PR PATCH coverage instruments and runs
-ONE representative variant per test - the base/default target - and the full
-multi-variant matrix stays on the main-push coverage baseline. Rationale: the
+PR patch coverage instruments and runs one representative variant per test,
+using the base/default target, while the full multi-variant matrix stays on the
+main-push coverage baseline. Rationale: the
 `donner_variant_cc_test` wrappers (`{name}_tiny`, `{name}_text_full`,
 `{name}_geode`; see build_defs/rules.bzl `_VARIANT_SPECS`) compile the SAME
 source files under different backend/feature flags, so for Codecov patch
@@ -11,23 +11,27 @@ coverage of a PR's changed lines they are redundant parameterizations - their
 unique coverage is limited to backend/feature-gated lines, which the main-push
 full run keeps covering. The measured cost of the redundancy on the coverage
 lane is a ~7x instrumented compile multiplier on SVG element translation units
-and 90 of 296 test executions (docs/design_docs/0029-2, PR #829 exemplar).
+and 90 of 296 test executions in a representative broad change.
 
 The base variant is the representative because it is the default build graph
 (what `bazel test` and the CI lanes exercise by default), it already accounts
 for the majority of coverage test executions (206 of 296 on the exemplar), and
 its instrumented surface is the broadest default-feature surface.
 
-Fail-safe contract: a target is dropped ONLY when ALL of the following hold:
-(1) its label carries a variant suffix, (2) its base sibling (the label with
-the suffix stripped) is itself present in the affected set, and (3) its rule
-kind, per the caller-provided `bazel query --output label_kind` result, is the
-generated wrapper kind (`donner_multi_transitioned_test`). The kind gate keeps
-handwritten targets that merely share the naming convention (e.g. a
-`cc_library` named `renderer_geode` beside `renderer`) out of the trim. A
-label missing from the kind file, an unreadable kind file, or any error in
-this tool must be treated as "keep the target" / "keep the full set" (fail
-closed toward more coverage).
+Named product matrices use `_default_text` as that representative when no
+unsuffixed wrapper exists; sibling `_max` and `_geode` wrappers are redundant
+for PR patch coverage under the same policy.
+
+Fail-safe contract: a target is dropped only when its rule kind is the generated
+wrapper kind (`_donner_multi_transitioned_test`) and one of two representatives
+is present in the affected set: ordinary suffix variants require the
+suffix-stripped base sibling; named `_max`/`_geode` product variants require a
+`_default_text` sibling whose kind is also the generated wrapper kind. The kind
+gate keeps handwritten targets that merely share the naming convention (e.g. a
+`cc_library` named `renderer_geode` beside `renderer`) out of the trim. A label
+missing from the kind file, an unreadable kind file, or any error in this tool
+must be treated as "keep the target" / "keep the full set" (fail closed toward
+more coverage).
 
 Reads one label per line, writes the trimmed set (one per line) to stdout and
 a summary line to stderr.
@@ -41,17 +45,19 @@ import sys
 # for readability; suffixes are tested longest-first to keep `_text_full`
 # from being misread as a `_full` variant of `..._text`.
 VARIANT_SUFFIXES = ("_text_full", "_tiny", "_geode")
+NAMED_REPRESENTATIVE_SUFFIX = "_default_text"
+NAMED_REDUNDANT_SUFFIXES = ("_max", "_geode")
 
-# The rule kind donner_cc_test's `variants` attr generates for each
+# The private rule kind donner_cc_test's `variants` attr generates for each
 # `{name}_{variant}` wrapper (build_defs/rules.bzl). Only this kind is ever
 # trimmed.
-WRAPPER_KIND = "donner_multi_transitioned_test"
+WRAPPER_KIND = "_donner_multi_transitioned_test"
 
 
 def parse_label_kinds(label_kind_text):
     """Parse `bazel query --output label_kind` text into {label: kind}.
 
-    Lines look like `donner_multi_transitioned_test rule //pkg:name`. Lines
+    Lines look like `_donner_multi_transitioned_test rule //pkg:name`. Lines
     that do not match are skipped (fail-safe: unknown labels are not trimmed).
     """
     kinds = {}
@@ -74,6 +80,21 @@ def trim_variants(labels, label_kinds=None):
     dropped = []
     for label in labels:
         drop = False
+        if kinds.get(label) == WRAPPER_KIND:
+            for suffix in NAMED_REDUNDANT_SUFFIXES:
+                if label.endswith(suffix):
+                    representative = (
+                        label[: -len(suffix)] + NAMED_REPRESENTATIVE_SUFFIX
+                    )
+                    if (
+                        representative in label_set
+                        and kinds.get(representative) == WRAPPER_KIND
+                    ):
+                        drop = True
+                    break
+        if drop:
+            dropped.append(label)
+            continue
         for suffix in VARIANT_SUFFIXES:
             if label.endswith(suffix):
                 base = label[: -len(suffix)]

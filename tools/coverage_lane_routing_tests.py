@@ -193,6 +193,26 @@ class CoverageLaneRoutingTest(unittest.TestCase):
         self.assertNotIn("build_defs/*", case_line)
         self.assertNotIn(".bazelrc", case_line)
 
+    def test_successful_test_query_becomes_the_coverage_target_set(self):
+        """Coverage must run the affected tests, not every affected rule.
+
+        The affected graph contains libraries, binaries, fuzzers, benchmarks,
+        packaging rules, and private implementation targets. The workflow
+        already computes the runnable affected-test set; retaining the broader
+        graph after that query turns a small code change into a near-full build.
+        """
+        test_query = self.text.index('affected_tests_file="$work_dir/affected-tests.txt"')
+        final_assignment = self.text.index('affected="$(', test_query)
+        variant_trim = self.text.index("# Representative-variant trim", test_query)
+        emit = self.text.index('emit_targets false bazel_diff "$affected"', variant_trim)
+
+        self.assertLess(test_query, final_assignment)
+        self.assertLess(final_assignment, variant_trim)
+        self.assertLess(variant_trim, emit)
+        assignment = self.text[final_assignment:variant_trim]
+        self.assertIn('"$affected_tests_file"', assignment)
+        self.assertNotIn('"$work_dir/affected.txt"', assignment)
+
 
 if __name__ == "__main__":
     unittest.main()

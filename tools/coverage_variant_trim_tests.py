@@ -92,6 +92,45 @@ class TrimVariantsTest(unittest.TestCase):
             ["//donner/svg/components/paint:paint_component_tests_text_full"],
         )
 
+    def test_named_product_variants_keep_default_text_representative(self):
+        labels = [
+            "//donner/svg/renderer/tests:resvg_test_suite_default_text",
+            "//donner/svg/renderer/tests:resvg_test_suite_max",
+            "//donner/svg/renderer/tests:resvg_test_suite_geode",
+        ]
+        kept, dropped = trim_variants(labels, kinds_for(wrappers=labels))
+        self.assertEqual(kept, labels[:1])
+        self.assertEqual(dropped, labels[1:])
+
+    def test_named_product_variant_without_representative_is_kept(self):
+        labels = [
+            "//donner/svg/renderer/tests:resvg_test_suite_max",
+            "//donner/svg/renderer/tests:resvg_test_suite_geode",
+        ]
+        kept, dropped = trim_variants(labels, kinds_for(wrappers=labels))
+        self.assertEqual(kept, labels)
+        self.assertEqual(dropped, [])
+
+    def test_named_product_variant_with_nonwrapper_kind_is_kept(self):
+        labels = [
+            "//donner/svg/renderer/tests:resvg_test_suite_default_text",
+            "//donner/svg/renderer/tests:resvg_test_suite_max",
+        ]
+        kinds = kinds_for(wrappers=labels[:1], others=labels[1:])
+        kept, dropped = trim_variants(labels, kinds)
+        self.assertEqual(kept, labels)
+        self.assertEqual(dropped, [])
+
+    def test_named_product_variant_with_nonwrapper_representative_is_kept(self):
+        labels = [
+            "//donner/svg/renderer/tests:resvg_test_suite_default_text",
+            "//donner/svg/renderer/tests:resvg_test_suite_max",
+        ]
+        kinds = kinds_for(wrappers=labels[1:], others=labels[:1])
+        kept, dropped = trim_variants(labels, kinds)
+        self.assertEqual(kept, labels)
+        self.assertEqual(dropped, [])
+
     def test_suffix_only_name_is_kept(self):
         labels = ["//pkg:_geode", "//pkg:_tiny"]
         kept, dropped = trim_variants(labels, kinds_for(wrappers=labels))
@@ -116,10 +155,17 @@ class TrimVariantsTest(unittest.TestCase):
 
 
 class ParseLabelKindsTest(unittest.TestCase):
+    def test_wrapper_kind_matches_bazel_label_kind_output(self):
+        """Private Starlark rules include their leading underscore in query output."""
+        label = "//donner/svg/compositor:compositor_tests_geode"
+        kinds = parse_label_kinds(f"_donner_multi_transitioned_test rule {label}\n")
+        self.assertEqual(WRAPPER_KIND, "_donner_multi_transitioned_test")
+        self.assertEqual(kinds[label], WRAPPER_KIND)
+
     def test_parses_label_kind_lines(self):
         text = (
             "cc_test rule //donner/svg/compositor:compositor_tests\n"
-            "donner_multi_transitioned_test rule //donner/svg/compositor:compositor_tests_geode\n"
+            "_donner_multi_transitioned_test rule //donner/svg/compositor:compositor_tests_geode\n"
             "cc_library rule //donner/svg/renderer:renderer_geode\n"
         )
         kinds = parse_label_kinds(text)

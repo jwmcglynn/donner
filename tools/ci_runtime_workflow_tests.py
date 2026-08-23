@@ -125,6 +125,25 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
                 job = self._job_body(job_name)
                 self.assertEqual(1, job.count("--test_tag_filters=-manual,-perf"))
 
+    def test_coverage_excludes_all_opt_in_test_tags(self):
+        """Coverage must not run manual/perf tests through its own override."""
+        match = re.search(
+            r"^coverage --test_tag_filters=([^\n]+)$", self.bazelrc, re.MULTILINE
+        )
+        self.assertIsNotNone(match)
+        self.assertEqual(
+            {"-fuzz_target", "-lint", "-manual", "-perf"},
+            set(match.group(1).split(",")),
+        )
+        query_match = re.search(
+            r'attr\("tags", "[^"]*\(([^)]+)\)[^"]*"', self.coverage
+        )
+        self.assertIsNotNone(query_match)
+        self.assertEqual(
+            {tag.removeprefix("-") for tag in match.group(1).split(",")},
+            set(query_match.group(1).split("|")),
+        )
+
     def test_every_change_based_test_step_handles_an_empty_selection(self):
         """A selection with no test targets must not fail a change-based lane.
 
