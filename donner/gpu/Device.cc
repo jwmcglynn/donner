@@ -512,6 +512,134 @@ Result<BindGroupLayout> Device::createBindGroupLayout(const BindGroupLayoutDescr
   return handle;
 }
 
+Status Device::findBindGroupEntryForBinding(const BindGroupDescriptor& descriptor,
+                                            const BindGroupLayoutEntry& layoutEntry,
+                                            const BindGroupEntry*& match) const {
+  match = nullptr;
+  for (const BindGroupEntry& entry : descriptor.entries) {
+    if (entry.binding == layoutEntry.binding) {
+      if (match != nullptr) {
+        return Err(GpuErrorType::InvalidDescriptor,
+                   std::format("BindGroupDescriptor has duplicate entries for binding {}",
+                               layoutEntry.binding));
+      }
+      match = &entry;
+    }
+  }
+  if (match == nullptr) {
+    return Err(GpuErrorType::InvalidDescriptor,
+               std::format("BindGroupDescriptor is missing an entry for layout binding {}",
+                           layoutEntry.binding));
+  }
+  return OkStatus();
+}
+
+Status Device::validateBufferBindingRange(const BindGroupEntry& entry,
+                                          const BufferBinding& bufferBinding,
+                                          std::string_view bufferLabel,
+                                          uint64_t bufferByteSize) const {
+  if (bufferBinding.sizeBytes == 0) {
+    return Err(GpuErrorType::InvalidDescriptor,
+               std::format("BindGroupEntry binding {}: sizeBytes is 0", entry.binding));
+  }
+  if (bufferBinding.offsetBytes % kBindingOffsetAlignment != 0) {
+    return Err(GpuErrorType::InvalidDescriptor,
+               std::format("BindGroupEntry binding {}: offsetBytes {} is not a multiple of "
+                           "the {}-byte binding offset alignment",
+                           entry.binding, bufferBinding.offsetBytes, kBindingOffsetAlignment));
+  }
+  const std::optional<uint64_t> bindingEnd =
+      CheckedAdd(bufferBinding.offsetBytes, bufferBinding.sizeBytes);
+  if (!bindingEnd || *bindingEnd > bufferByteSize) {
+    return Err(GpuErrorType::OutOfBounds,
+               std::format("BindGroupEntry binding {}: range offsetBytes={} sizeBytes={} "
+                           "does not fit in buffer \"{}\" of {} bytes",
+                           entry.binding, bufferBinding.offsetBytes, bufferBinding.sizeBytes,
+                           bufferLabel, bufferByteSize));
+  }
+  return OkStatus();
+}
+
+Status Device::validateBufferBindingEntry(const BindGroupLayoutEntry& layoutEntry,
+                                          const BindGroupEntry& entry) const {
+  const BufferBinding* bufferBinding = std::get_if<BufferBinding>(&entry.resource);
+  if (bufferBinding == nullptr) {
+    return Err(
+        GpuErrorType::InvalidDescriptor,
+        std::format("BindGroupEntry binding {} must bind a buffer to match the "
+                    "layout type {}",
+                    entry.binding,
+                    layoutEntry.type == BindingType::UniformBuffer ? "UniformBuffer"
+                                                                   : "ReadOnlyStorageBuffer"));
+  }
+  auto bufferRecord = resolve(buffers_, bufferBinding->buffer, BufferTag::kName);
+  if (bufferRecord.hasError()) {
+    return std::move(bufferRecord).error();
+  }
+  const bool isUniform = layoutEntry.type == BindingType::UniformBuffer;
+  const BufferUsage requiredUsage = isUniform ? BufferUsage::Uniform : BufferUsage::Storage;
+  if (!HasAllFlags(bufferRecord.result()->descriptor.usage, requiredUsage)) {
+    return Err(GpuErrorType::UsageMismatch,
+               std::format("BindGroupEntry binding {}: buffer \"{}\" lacks the {} usage",
+                           entry.binding, bufferRecord.result()->descriptor.label.str(),
+                           isUniform ? "Uniform" : "Storage"));
+  }
+  return validateBufferBindingRange(entry, *bufferBinding,
+                                    bufferRecord.result()->descriptor.label.str(),
+                                    bufferRecord.result()->descriptor.byteSize);
+}
+
+Status Device::validateSampledTextureBindingEntry(const BindGroupEntry& entry) const {
+  const TextureViewBinding* viewBinding = std::get_if<TextureViewBinding>(&entry.resource);
+  if (viewBinding == nullptr) {
+    return Err(GpuErrorType::InvalidDescriptor,
+               std::format("BindGroupEntry binding {} must bind a texture view to match "
+                           "the layout type SampledTexture2dFloat",
+                           entry.binding));
+  }
+  auto viewRecord = resolve(textureViews_, viewBinding->view, TextureViewTag::kName);
+  if (viewRecord.hasError()) {
+    return std::move(viewRecord).error();
+  }
+  auto viewedTexture = resolveViewedTexture(*viewRecord.result());
+  if (viewedTexture.hasError()) {
+    return std::move(viewedTexture).error();
+  }
+  if (!HasAllFlags(viewedTexture.result()->descriptor.usage, TextureUsage::Sampled)) {
+    return Err(GpuErrorType::UsageMismatch,
+               std::format("BindGroupEntry binding {}: texture view \"{}\" lacks the "
+                           "Sampled usage",
+                           entry.binding, viewRecord.result()->descriptor.label.str()));
+  }
+  return OkStatus();
+}
+
+Status Device::validateSamplerBindingEntry(const BindGroupEntry& entry) const {
+  const SamplerBinding* samplerBinding = std::get_if<SamplerBinding>(&entry.resource);
+  if (samplerBinding == nullptr) {
+    return Err(GpuErrorType::InvalidDescriptor,
+               std::format("BindGroupEntry binding {} must bind a sampler to match the "
+                           "layout type FilteringSampler",
+                           entry.binding));
+  }
+  auto samplerRecord = resolve(samplers_, samplerBinding->sampler, SamplerTag::kName);
+  if (samplerRecord.hasError()) {
+    return std::move(samplerRecord).error();
+  }
+  return OkStatus();
+}
+
+Status Device::validateBindGroupEntryForLayout(const BindGroupLayoutEntry& layoutEntry,
+                                               const BindGroupEntry& entry) const {
+  switch (layoutEntry.type) {
+    case BindingType::UniformBuffer:
+    case BindingType::ReadOnlyStorageBuffer: return validateBufferBindingEntry(layoutEntry, entry);
+    case BindingType::SampledTexture2dFloat: return validateSampledTextureBindingEntry(entry);
+    case BindingType::FilteringSampler: return validateSamplerBindingEntry(entry);
+  }
+  return OkStatus();
+}
+
 Result<BindGroup> Device::createBindGroup(const BindGroupDescriptor& descriptor) {
   auto layoutRecord = resolve(bindGroupLayouts_, descriptor.layout, BindGroupLayoutTag::kName);
   if (layoutRecord.hasError()) {
@@ -528,109 +656,13 @@ Result<BindGroup> Device::createBindGroup(const BindGroupDescriptor& descriptor)
 
   for (const BindGroupLayoutEntry& layoutEntry : layoutEntries) {
     const BindGroupEntry* match = nullptr;
-    for (const BindGroupEntry& entry : descriptor.entries) {
-      if (entry.binding == layoutEntry.binding) {
-        if (match != nullptr) {
-          return Err(GpuErrorType::InvalidDescriptor,
-                     std::format("BindGroupDescriptor has duplicate entries for binding {}",
-                                 layoutEntry.binding));
-        }
-        match = &entry;
-      }
+    if (Status matchStatus = findBindGroupEntryForBinding(descriptor, layoutEntry, match);
+        matchStatus.hasError()) {
+      return std::move(matchStatus).error();
     }
-    if (match == nullptr) {
-      return Err(GpuErrorType::InvalidDescriptor,
-                 std::format("BindGroupDescriptor is missing an entry for layout binding {}",
-                             layoutEntry.binding));
-    }
-
-    switch (layoutEntry.type) {
-      case BindingType::UniformBuffer:
-      case BindingType::ReadOnlyStorageBuffer: {
-        const BufferBinding* bufferBinding = std::get_if<BufferBinding>(&match->resource);
-        if (bufferBinding == nullptr) {
-          return Err(GpuErrorType::InvalidDescriptor,
-                     std::format("BindGroupEntry binding {} must bind a buffer to match the "
-                                 "layout type {}",
-                                 match->binding,
-                                 layoutEntry.type == BindingType::UniformBuffer
-                                     ? "UniformBuffer"
-                                     : "ReadOnlyStorageBuffer"));
-        }
-        auto bufferRecord = resolve(buffers_, bufferBinding->buffer, BufferTag::kName);
-        if (bufferRecord.hasError()) {
-          return std::move(bufferRecord).error();
-        }
-        const bool isUniform = layoutEntry.type == BindingType::UniformBuffer;
-        const BufferUsage requiredUsage = isUniform ? BufferUsage::Uniform : BufferUsage::Storage;
-        if (!HasAllFlags(bufferRecord.result()->descriptor.usage, requiredUsage)) {
-          return Err(GpuErrorType::UsageMismatch,
-                     std::format("BindGroupEntry binding {}: buffer \"{}\" lacks the {} usage",
-                                 match->binding, bufferRecord.result()->descriptor.label.str(),
-                                 isUniform ? "Uniform" : "Storage"));
-        }
-        if (bufferBinding->sizeBytes == 0) {
-          return Err(GpuErrorType::InvalidDescriptor,
-                     std::format("BindGroupEntry binding {}: sizeBytes is 0", match->binding));
-        }
-        if (bufferBinding->offsetBytes % kBindingOffsetAlignment != 0) {
-          return Err(
-              GpuErrorType::InvalidDescriptor,
-              std::format("BindGroupEntry binding {}: offsetBytes {} is not a multiple of "
-                          "the {}-byte binding offset alignment",
-                          match->binding, bufferBinding->offsetBytes, kBindingOffsetAlignment));
-        }
-        const std::optional<uint64_t> bindingEnd =
-            CheckedAdd(bufferBinding->offsetBytes, bufferBinding->sizeBytes);
-        if (!bindingEnd || *bindingEnd > bufferRecord.result()->descriptor.byteSize) {
-          return Err(
-              GpuErrorType::OutOfBounds,
-              std::format("BindGroupEntry binding {}: range offsetBytes={} sizeBytes={} "
-                          "does not fit in buffer \"{}\" of {} bytes",
-                          match->binding, bufferBinding->offsetBytes, bufferBinding->sizeBytes,
-                          bufferRecord.result()->descriptor.label.str(),
-                          bufferRecord.result()->descriptor.byteSize));
-        }
-        break;
-      }
-      case BindingType::SampledTexture2dFloat: {
-        const TextureViewBinding* viewBinding = std::get_if<TextureViewBinding>(&match->resource);
-        if (viewBinding == nullptr) {
-          return Err(GpuErrorType::InvalidDescriptor,
-                     std::format("BindGroupEntry binding {} must bind a texture view to match "
-                                 "the layout type SampledTexture2dFloat",
-                                 match->binding));
-        }
-        auto viewRecord = resolve(textureViews_, viewBinding->view, TextureViewTag::kName);
-        if (viewRecord.hasError()) {
-          return std::move(viewRecord).error();
-        }
-        auto viewedTexture = resolveViewedTexture(*viewRecord.result());
-        if (viewedTexture.hasError()) {
-          return std::move(viewedTexture).error();
-        }
-        if (!HasAllFlags(viewedTexture.result()->descriptor.usage, TextureUsage::Sampled)) {
-          return Err(GpuErrorType::UsageMismatch,
-                     std::format("BindGroupEntry binding {}: texture view \"{}\" lacks the "
-                                 "Sampled usage",
-                                 match->binding, viewRecord.result()->descriptor.label.str()));
-        }
-        break;
-      }
-      case BindingType::FilteringSampler: {
-        const SamplerBinding* samplerBinding = std::get_if<SamplerBinding>(&match->resource);
-        if (samplerBinding == nullptr) {
-          return Err(GpuErrorType::InvalidDescriptor,
-                     std::format("BindGroupEntry binding {} must bind a sampler to match the "
-                                 "layout type FilteringSampler",
-                                 match->binding));
-        }
-        auto samplerRecord = resolve(samplers_, samplerBinding->sampler, SamplerTag::kName);
-        if (samplerRecord.hasError()) {
-          return std::move(samplerRecord).error();
-        }
-        break;
-      }
+    if (Status entryStatus = validateBindGroupEntryForLayout(layoutEntry, *match);
+        entryStatus.hasError()) {
+      return std::move(entryStatus).error();
     }
   }
 

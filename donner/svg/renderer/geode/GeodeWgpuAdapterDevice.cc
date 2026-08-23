@@ -757,209 +757,237 @@ gpu::Status GeodeWgpuAdapterDevice::onWriteTexture(uint32_t slotIndex,
   return OkStatus();
 }
 
+gpu::Status GeodeWgpuAdapterDevice::encodeBeginRenderPass(
+    EncodingState& state, const gpu::BeginRenderPassCommand& beginPass) {
+  const auto& attachments = beginPass.descriptor.colorAttachments;
+  std::vector<wgpu::RenderPassColorAttachment> colorAttachments(attachments.size());
+  for (size_t i = 0; i < attachments.size(); ++i) {
+    const gpu::RenderPassColorAttachment& attachment = attachments[i];
+    wgpu::TextureView view = GetHandle(slotTextureViews_, attachment.view.slotIndex());
+    if (!view) {
+      return GpuError{
+          GpuErrorType::InvalidState,
+          std::format("render pass attachment {} does not resolve to a wgpu texture view", i)};
+    }
+    colorAttachments[i].view = view;
+    colorAttachments[i].loadOp = ToWgpuLoadOp(attachment.loadOp);
+    colorAttachments[i].storeOp = ToWgpuStoreOp(attachment.storeOp);
+    colorAttachments[i].clearValue = {attachment.clearColor[0], attachment.clearColor[1],
+                                      attachment.clearColor[2], attachment.clearColor[3]};
+    // Dawn (browser WebGPU) rejects depthSlice=0 on non-3D views; wgpu-native is lenient. Set
+    // the UNDEFINED sentinel for cross-backend compatibility (see GeoEncoder).
+    colorAttachments[i].depthSlice = WGPU_DEPTH_SLICE_UNDEFINED;
+  }
+
+  wgpu::RenderPassDescriptor passDescriptor = {};
+  passDescriptor.label = wgpuLabel(std::string_view(beginPass.descriptor.label));
+  passDescriptor.colorAttachmentCount = colorAttachments.size();
+  passDescriptor.colorAttachments = colorAttachments.data();
+  state.pass.reset(state.encoder.get().beginRenderPass(passDescriptor));
+  if (!state.pass) {
+    return GpuError{GpuErrorType::InvalidState, "wgpu render pass creation failed"};
+  }
+  return OkStatus();
+}
+
+gpu::Status GeodeWgpuAdapterDevice::encodeSetPipeline(EncodingState& state,
+                                                      const gpu::SetPipelineCommand& setPipeline) {
+  wgpu::RenderPipeline pipeline = GetHandle(slotRenderPipelines_, setPipeline.pipelineId.slotIndex);
+  if (!state.pass || !pipeline) {
+    return GpuError{GpuErrorType::InvalidState,
+                    std::format("setPipeline: pipeline slot {} is not encodable",
+                                setPipeline.pipelineId.slotIndex)};
+  }
+  state.pass.get().setPipeline(pipeline);
+  return OkStatus();
+}
+
+gpu::Status GeodeWgpuAdapterDevice::encodeSetBindGroup(
+    EncodingState& state, const gpu::SetBindGroupCommand& setBindGroup) {
+  wgpu::BindGroup group = GetHandle(slotBindGroups_, setBindGroup.bindGroupId.slotIndex);
+  if (!state.pass || !group) {
+    return GpuError{GpuErrorType::InvalidState,
+                    std::format("setBindGroup: bind group slot {} is not encodable",
+                                setBindGroup.bindGroupId.slotIndex)};
+  }
+  state.pass.get().setBindGroup(setBindGroup.index, group, 0, nullptr);
+  return OkStatus();
+}
+
+gpu::Status GeodeWgpuAdapterDevice::encodeSetVertexBuffer(
+    EncodingState& state, const gpu::SetVertexBufferCommand& setVertexBuffer) {
+  wgpu::Buffer buffer = GetHandle(slotBuffers_, setVertexBuffer.bufferId.slotIndex);
+  if (!state.pass || !buffer) {
+    return GpuError{GpuErrorType::InvalidState,
+                    std::format("setVertexBuffer: buffer slot {} is not encodable",
+                                setVertexBuffer.bufferId.slotIndex)};
+  }
+  state.pass.get().setVertexBuffer(setVertexBuffer.slot, buffer, setVertexBuffer.offsetBytes,
+                                   WGPU_WHOLE_SIZE);
+  return OkStatus();
+}
+
+gpu::Status GeodeWgpuAdapterDevice::encodeSetScissorRect(
+    EncodingState& state, const gpu::SetScissorRectCommand& setScissor) {
+  if (!state.pass) {
+    return GpuError{GpuErrorType::InvalidState, "setScissorRect outside a render pass"};
+  }
+  state.pass.get().setScissorRect(setScissor.x, setScissor.y, setScissor.width, setScissor.height);
+  return OkStatus();
+}
+
+gpu::Status GeodeWgpuAdapterDevice::encodeSetViewport(EncodingState& state,
+                                                      const gpu::SetViewportCommand& setViewport) {
+  if (!state.pass) {
+    return GpuError{GpuErrorType::InvalidState, "setViewport outside a render pass"};
+  }
+  state.pass.get().setViewport(setViewport.x, setViewport.y, setViewport.width, setViewport.height,
+                               setViewport.minDepth, setViewport.maxDepth);
+  return OkStatus();
+}
+
+gpu::Status GeodeWgpuAdapterDevice::encodeDraw(EncodingState& state, const gpu::DrawCommand& draw) {
+  if (!state.pass) {
+    return GpuError{GpuErrorType::InvalidState, "draw outside a render pass"};
+  }
+  state.pass.get().draw(draw.vertexCount, draw.instanceCount, draw.firstVertex, draw.firstInstance);
+  geodeDevice_.countDraw();
+  return OkStatus();
+}
+
+gpu::Status GeodeWgpuAdapterDevice::encodeEndRenderPass(EncodingState& state) {
+  if (!state.pass) {
+    return GpuError{GpuErrorType::InvalidState, "endRenderPass without an active render pass"};
+  }
+  state.pass.get().end();
+  state.pass.reset();
+  return OkStatus();
+}
+
+gpu::Status GeodeWgpuAdapterDevice::encodeCopyTextureToBuffer(
+    EncodingState& state, const gpu::CopyTextureToBufferCommand& copy) {
+  if (state.pass) {
+    return GpuError{GpuErrorType::InvalidState, "copyTextureToBuffer inside a render pass"};
+  }
+  wgpu::Texture texture = copy.textureId.slotIndex < slotTextures_.size()
+                              ? slotTextures_[copy.textureId.slotIndex].texture
+                              : wgpu::Texture();
+  wgpu::Buffer buffer = GetHandle(slotBuffers_, copy.bufferId.slotIndex);
+  if (!texture || !buffer) {
+    return GpuError{GpuErrorType::InvalidState,
+                    "copyTextureToBuffer: source texture or destination buffer is missing"};
+  }
+  wgpu::TexelCopyTextureInfo source = {};
+  source.texture = texture;
+  wgpu::TexelCopyBufferInfo destination = {};
+  destination.buffer = buffer;
+  destination.layout.offset = copy.layout.offsetBytes;
+  destination.layout.bytesPerRow = copy.layout.bytesPerRow;
+  destination.layout.rowsPerImage = copy.layout.rowsPerImage;
+  const wgpu::Extent3D extent = {copy.copySize.width, copy.copySize.height, 1u};
+  state.encoder.get().copyTextureToBuffer(source, destination, extent);
+  return OkStatus();
+}
+
+gpu::Status GeodeWgpuAdapterDevice::encodeCopyTextureToTexture(
+    EncodingState& state, const gpu::CopyTextureToTextureCommand& textureCopy) {
+  if (state.pass) {
+    return GpuError{GpuErrorType::InvalidState, "copyTextureToTexture inside a render pass"};
+  }
+  wgpu::Texture sourceTexture = textureCopy.textureSrcId.slotIndex < slotTextures_.size()
+                                    ? slotTextures_[textureCopy.textureSrcId.slotIndex].texture
+                                    : wgpu::Texture();
+  wgpu::Texture destinationTexture = textureCopy.textureDstId.slotIndex < slotTextures_.size()
+                                         ? slotTextures_[textureCopy.textureDstId.slotIndex].texture
+                                         : wgpu::Texture();
+  if (!sourceTexture || !destinationTexture) {
+    return GpuError{GpuErrorType::InvalidState,
+                    "copyTextureToTexture: source or destination texture is missing"};
+  }
+  wgpu::TexelCopyTextureInfo source = {};
+  source.texture = sourceTexture;
+  wgpu::TexelCopyTextureInfo destination = {};
+  destination.texture = destinationTexture;
+  const wgpu::Extent3D extent = {textureCopy.copySize.width, textureCopy.copySize.height, 1u};
+  state.encoder.get().copyTextureToTexture(source, destination, extent);
+  return OkStatus();
+}
+
+gpu::Status GeodeWgpuAdapterDevice::encodeCommand(EncodingState& state,
+                                                  const gpu::Command& command) {
+  // Exhaustive dispatch: every `gpu::Command` alternative has a handler, so adding a new
+  // command to the variant without wiring it here is a compile error instead of a validated,
+  // submitted, "completed", never-executed no-op.
+  return std::visit(
+      Overloaded{
+          [&](const gpu::BeginRenderPassCommand& beginPass) -> gpu::Status {
+            return encodeBeginRenderPass(state, beginPass);
+          },
+          [&](const gpu::SetPipelineCommand& setPipeline) -> gpu::Status {
+            return encodeSetPipeline(state, setPipeline);
+          },
+          [&](const gpu::SetBindGroupCommand& setBindGroup) -> gpu::Status {
+            return encodeSetBindGroup(state, setBindGroup);
+          },
+          [&](const gpu::SetVertexBufferCommand& setVertexBuffer) -> gpu::Status {
+            return encodeSetVertexBuffer(state, setVertexBuffer);
+          },
+          [&](const gpu::SetScissorRectCommand& setScissor) -> gpu::Status {
+            return encodeSetScissorRect(state, setScissor);
+          },
+          [&](const gpu::SetViewportCommand& setViewport) -> gpu::Status {
+            return encodeSetViewport(state, setViewport);
+          },
+          [&](const gpu::DrawCommand& draw) -> gpu::Status { return encodeDraw(state, draw); },
+          [&](const gpu::EndRenderPassCommand&) -> gpu::Status {
+            return encodeEndRenderPass(state);
+          },
+          [&](const gpu::CopyTextureToBufferCommand& copy) -> gpu::Status {
+            return encodeCopyTextureToBuffer(state, copy);
+          },
+          [&](const gpu::CopyTextureToTextureCommand& textureCopy) -> gpu::Status {
+            return encodeCopyTextureToTexture(state, textureCopy);
+          },
+      },
+      command);
+}
+
 gpu::Status GeodeWgpuAdapterDevice::onSubmit(uint64_t submissionSerial,
                                              uint32_t commandBufferSlotIndex,
                                              std::span<const gpu::Command> commands) {
   (void)commandBufferSlotIndex;
 
-  ScopedWgpuHandle<wgpu::CommandEncoder> encoder(geodeDevice_.device().createCommandEncoder());
-  if (!encoder) {
+  EncodingState state;
+  state.encoder.reset(geodeDevice_.device().createCommandEncoder());
+  if (!state.encoder) {
     return GpuError{GpuErrorType::InvalidState, "wgpu command encoder creation failed"};
   }
 
-  ScopedWgpuHandle<wgpu::RenderPassEncoder> pass;
-
   // On any encoding failure, close an open pass before returning so the un-finished command
   // encoder tears down cleanly, then fail closed.
-  const auto failEncoding = [&pass](GpuError error) -> gpu::Status {
-    if (pass) {
-      pass.get().end();
-      pass.reset();
+  const auto failEncoding = [&state](gpu::Status error) -> gpu::Status {
+    if (state.pass) {
+      state.pass.get().end();
+      state.pass.reset();
     }
-    return std::move(error);
+    return error;
   };
 
-  // Exhaustive dispatch: every `gpu::Command` alternative has a handler, so adding a new
-  // command to the variant without wiring it here is a compile error instead of a validated,
-  // submitted, "completed", never-executed no-op.
   for (const gpu::Command& command : commands) {
-    gpu::Status commandStatus = std::visit(
-        Overloaded{
-            [&](const gpu::BeginRenderPassCommand& beginPass) -> gpu::Status {
-              const auto& attachments = beginPass.descriptor.colorAttachments;
-              std::vector<wgpu::RenderPassColorAttachment> colorAttachments(attachments.size());
-              for (size_t i = 0; i < attachments.size(); ++i) {
-                const gpu::RenderPassColorAttachment& attachment = attachments[i];
-                wgpu::TextureView view = GetHandle(slotTextureViews_, attachment.view.slotIndex());
-                if (!view) {
-                  return failEncoding(GpuError{
-                      GpuErrorType::InvalidState,
-                      std::format("render pass attachment {} does not resolve to a wgpu texture "
-                                  "view",
-                                  i)});
-                }
-                colorAttachments[i].view = view;
-                colorAttachments[i].loadOp = ToWgpuLoadOp(attachment.loadOp);
-                colorAttachments[i].storeOp = ToWgpuStoreOp(attachment.storeOp);
-                colorAttachments[i].clearValue = {
-                    attachment.clearColor[0], attachment.clearColor[1], attachment.clearColor[2],
-                    attachment.clearColor[3]};
-                // Dawn (browser WebGPU) rejects depthSlice=0 on non-3D views; wgpu-native is
-                // lenient. Set the UNDEFINED sentinel for cross-backend compatibility (see
-                // GeoEncoder).
-                colorAttachments[i].depthSlice = WGPU_DEPTH_SLICE_UNDEFINED;
-              }
-
-              wgpu::RenderPassDescriptor passDescriptor = {};
-              passDescriptor.label = wgpuLabel(std::string_view(beginPass.descriptor.label));
-              passDescriptor.colorAttachmentCount = colorAttachments.size();
-              passDescriptor.colorAttachments = colorAttachments.data();
-              pass.reset(encoder.get().beginRenderPass(passDescriptor));
-              if (!pass) {
-                return GpuError{GpuErrorType::InvalidState, "wgpu render pass creation failed"};
-              }
-              return OkStatus();
-            },
-            [&](const gpu::SetPipelineCommand& setPipeline) -> gpu::Status {
-              wgpu::RenderPipeline pipeline =
-                  GetHandle(slotRenderPipelines_, setPipeline.pipelineId.slotIndex);
-              if (!pass || !pipeline) {
-                return failEncoding(
-                    GpuError{GpuErrorType::InvalidState,
-                             std::format("setPipeline: pipeline slot {} is not encodable",
-                                         setPipeline.pipelineId.slotIndex)});
-              }
-              pass.get().setPipeline(pipeline);
-              return OkStatus();
-            },
-            [&](const gpu::SetBindGroupCommand& setBindGroup) -> gpu::Status {
-              wgpu::BindGroup group =
-                  GetHandle(slotBindGroups_, setBindGroup.bindGroupId.slotIndex);
-              if (!pass || !group) {
-                return failEncoding(
-                    GpuError{GpuErrorType::InvalidState,
-                             std::format("setBindGroup: bind group slot {} is not encodable",
-                                         setBindGroup.bindGroupId.slotIndex)});
-              }
-              pass.get().setBindGroup(setBindGroup.index, group, 0, nullptr);
-              return OkStatus();
-            },
-            [&](const gpu::SetVertexBufferCommand& setVertexBuffer) -> gpu::Status {
-              wgpu::Buffer buffer = GetHandle(slotBuffers_, setVertexBuffer.bufferId.slotIndex);
-              if (!pass || !buffer) {
-                return failEncoding(
-                    GpuError{GpuErrorType::InvalidState,
-                             std::format("setVertexBuffer: buffer slot {} is not encodable",
-                                         setVertexBuffer.bufferId.slotIndex)});
-              }
-              pass.get().setVertexBuffer(setVertexBuffer.slot, buffer, setVertexBuffer.offsetBytes,
-                                         WGPU_WHOLE_SIZE);
-              return OkStatus();
-            },
-            [&](const gpu::SetScissorRectCommand& setScissor) -> gpu::Status {
-              if (!pass) {
-                return failEncoding(
-                    GpuError{GpuErrorType::InvalidState, "setScissorRect outside a render pass"});
-              }
-              pass.get().setScissorRect(setScissor.x, setScissor.y, setScissor.width,
-                                        setScissor.height);
-              return OkStatus();
-            },
-            [&](const gpu::SetViewportCommand& setViewport) -> gpu::Status {
-              if (!pass) {
-                return failEncoding(
-                    GpuError{GpuErrorType::InvalidState, "setViewport outside a render pass"});
-              }
-              pass.get().setViewport(setViewport.x, setViewport.y, setViewport.width,
-                                     setViewport.height, setViewport.minDepth,
-                                     setViewport.maxDepth);
-              return OkStatus();
-            },
-            [&](const gpu::DrawCommand& draw) -> gpu::Status {
-              if (!pass) {
-                return failEncoding(
-                    GpuError{GpuErrorType::InvalidState, "draw outside a render pass"});
-              }
-              pass.get().draw(draw.vertexCount, draw.instanceCount, draw.firstVertex,
-                              draw.firstInstance);
-              geodeDevice_.countDraw();
-              return OkStatus();
-            },
-            [&](const gpu::EndRenderPassCommand&) -> gpu::Status {
-              if (!pass) {
-                return GpuError{GpuErrorType::InvalidState,
-                                "endRenderPass without an active render pass"};
-              }
-              pass.get().end();
-              pass.reset();
-              return OkStatus();
-            },
-            [&](const gpu::CopyTextureToBufferCommand& copy) -> gpu::Status {
-              if (pass) {
-                return failEncoding(GpuError{GpuErrorType::InvalidState,
-                                             "copyTextureToBuffer inside a render pass"});
-              }
-              wgpu::Texture texture = copy.textureId.slotIndex < slotTextures_.size()
-                                          ? slotTextures_[copy.textureId.slotIndex].texture
-                                          : wgpu::Texture();
-              wgpu::Buffer buffer = GetHandle(slotBuffers_, copy.bufferId.slotIndex);
-              if (!texture || !buffer) {
-                return GpuError{
-                    GpuErrorType::InvalidState,
-                    "copyTextureToBuffer: source texture or destination buffer is missing"};
-              }
-              wgpu::TexelCopyTextureInfo source = {};
-              source.texture = texture;
-              wgpu::TexelCopyBufferInfo destination = {};
-              destination.buffer = buffer;
-              destination.layout.offset = copy.layout.offsetBytes;
-              destination.layout.bytesPerRow = copy.layout.bytesPerRow;
-              destination.layout.rowsPerImage = copy.layout.rowsPerImage;
-              const wgpu::Extent3D extent = {copy.copySize.width, copy.copySize.height, 1u};
-              encoder.get().copyTextureToBuffer(source, destination, extent);
-              return OkStatus();
-            },
-            [&](const gpu::CopyTextureToTextureCommand& textureCopy) -> gpu::Status {
-              if (pass) {
-                return failEncoding(GpuError{GpuErrorType::InvalidState,
-                                             "copyTextureToTexture inside a render pass"});
-              }
-              wgpu::Texture sourceTexture =
-                  textureCopy.textureSrcId.slotIndex < slotTextures_.size()
-                      ? slotTextures_[textureCopy.textureSrcId.slotIndex].texture
-                      : wgpu::Texture();
-              wgpu::Texture destinationTexture =
-                  textureCopy.textureDstId.slotIndex < slotTextures_.size()
-                      ? slotTextures_[textureCopy.textureDstId.slotIndex].texture
-                      : wgpu::Texture();
-              if (!sourceTexture || !destinationTexture) {
-                return GpuError{GpuErrorType::InvalidState,
-                                "copyTextureToTexture: source or destination texture is missing"};
-              }
-              wgpu::TexelCopyTextureInfo source = {};
-              source.texture = sourceTexture;
-              wgpu::TexelCopyTextureInfo destination = {};
-              destination.texture = destinationTexture;
-              const wgpu::Extent3D extent = {textureCopy.copySize.width,
-                                             textureCopy.copySize.height, 1u};
-              encoder.get().copyTextureToTexture(source, destination, extent);
-              return OkStatus();
-            },
-        },
-        command);
+    gpu::Status commandStatus = encodeCommand(state, command);
     if (commandStatus.hasError()) {
-      return commandStatus;
+      return failEncoding(std::move(commandStatus));
     }
   }
 
-  if (pass) {
+  if (state.pass) {
     // The encoder state machine guarantees passes are ended before finish; fail closed anyway.
-    pass.get().end();
-    pass.reset();
+    state.pass.get().end();
+    state.pass.reset();
     return GpuError{GpuErrorType::InvalidState, "submitted command stream left a render pass open"};
   }
 
-  ScopedWgpuHandle<wgpu::CommandBuffer> commandBuffer(encoder.get().finish());
+  ScopedWgpuHandle<wgpu::CommandBuffer> commandBuffer(state.encoder.get().finish());
   if (!commandBuffer) {
     return GpuError{GpuErrorType::InvalidState, "wgpu command buffer finish failed"};
   }
@@ -968,7 +996,7 @@ gpu::Status GeodeWgpuAdapterDevice::onSubmit(uint64_t submissionSerial,
 
   // Advance completedSerial when the queue drains. Callback-mode handling (wgpu-native vs
   // emdawnwebgpu) is centralized in notifyWhenSubmittedWorkDone; waitForSerial's poll loop
-  // drives delivery, mirroring GeodeDevice's WaitForSubmittedWork.
+  // drives delivery.
   struct WorkDoneState {
     std::shared_ptr<CompletionState> completion;  //!< Shared completion counter.
     uint64_t serial = 0;                          //!< Serial this callback completes.
@@ -981,10 +1009,10 @@ gpu::Status GeodeWgpuAdapterDevice::onSubmit(uint64_t submissionSerial,
                  previous, serial, std::memory_order_release, std::memory_order_relaxed)) {}
     }
   };
-  auto state = std::make_shared<WorkDoneState>();
-  state->completion = completionState_;
-  state->serial = submissionSerial;
-  notifyWhenSubmittedWorkDone(geodeDevice_.queue(), state);
+  auto workDoneState = std::make_shared<WorkDoneState>();
+  workDoneState->completion = completionState_;
+  workDoneState->serial = submissionSerial;
+  notifyWhenSubmittedWorkDone(geodeDevice_.queue(), workDoneState);
 
   return OkStatus();
 }

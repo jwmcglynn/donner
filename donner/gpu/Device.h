@@ -650,6 +650,44 @@ private:
   Status checkSubmissionBindGroup(const ResourceIdentity& groupIdentity,
                                   std::vector<SubmissionUse>& uses) const;
 
+  /// Finds the bind group entry matching \p layoutEntry's binding number, failing closed on a
+  /// duplicate or missing entry.
+  /// @param descriptor Bind group descriptor being validated.
+  /// @param layoutEntry Layout entry to match.
+  /// @param match Set to the matching entry on success.
+  Status findBindGroupEntryForBinding(const BindGroupDescriptor& descriptor,
+                                      const BindGroupLayoutEntry& layoutEntry,
+                                      const BindGroupEntry*& match) const;
+
+  /// Validates a buffer binding's offset alignment and that its range fits the buffer.
+  /// @param entry Bind group entry being validated.
+  /// @param bufferBinding Buffer binding carried by \p entry.
+  /// @param bufferLabel Label of the bound buffer, for the error message.
+  /// @param bufferByteSize Creation size of the bound buffer.
+  Status validateBufferBindingRange(const BindGroupEntry& entry, const BufferBinding& bufferBinding,
+                                    std::string_view bufferLabel, uint64_t bufferByteSize) const;
+
+  /// Validates a buffer bind group entry against its layout entry: resource kind, usage, and
+  /// bound range.
+  /// @param layoutEntry Layout entry declaring the binding.
+  /// @param entry Bind group entry being validated.
+  Status validateBufferBindingEntry(const BindGroupLayoutEntry& layoutEntry,
+                                    const BindGroupEntry& entry) const;
+
+  /// Validates a sampled-texture bind group entry: resource kind, live view and texture, usage.
+  /// @param entry Bind group entry being validated.
+  Status validateSampledTextureBindingEntry(const BindGroupEntry& entry) const;
+
+  /// Validates a sampler bind group entry: resource kind and live sampler.
+  /// @param entry Bind group entry being validated.
+  Status validateSamplerBindingEntry(const BindGroupEntry& entry) const;
+
+  /// Validates one bind group entry against the layout entry declaring its binding.
+  /// @param layoutEntry Layout entry declaring the binding.
+  /// @param entry Bind group entry being validated.
+  Status validateBindGroupEntryForLayout(const BindGroupLayoutEntry& layoutEntry,
+                                         const BindGroupEntry& entry) const;
+
   /// Resolves the texture and buffer a recorded texture-to-buffer copy references.
   /// @param command Recorded copy command.
   /// @param uses Accumulator of resources referenced by the submission.

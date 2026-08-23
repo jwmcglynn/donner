@@ -176,6 +176,62 @@ private:
     std::atomic<uint64_t> completedSerial{0};  //!< Highest completed submission serial.
   };
 
+  /// Mutable state threaded through the encoding of one command stream.
+  struct EncodingState {
+    ScopedWgpuHandle<wgpu::CommandEncoder> encoder;  //!< Command encoder being recorded.
+    ScopedWgpuHandle<wgpu::RenderPassEncoder> pass;  //!< Active render pass, or empty.
+  };
+
+  /// Opens a render pass with the recorded color attachments.
+  /// @param state Encoding state.
+  /// @param beginPass Recorded command.
+  gpu::Status encodeBeginRenderPass(EncodingState& state,
+                                    const gpu::BeginRenderPassCommand& beginPass);
+  /// Binds a recorded pipeline.
+  /// @param state Encoding state.
+  /// @param setPipeline Recorded command.
+  gpu::Status encodeSetPipeline(EncodingState& state, const gpu::SetPipelineCommand& setPipeline);
+  /// Binds a recorded bind group.
+  /// @param state Encoding state.
+  /// @param setBindGroup Recorded command.
+  gpu::Status encodeSetBindGroup(EncodingState& state,
+                                 const gpu::SetBindGroupCommand& setBindGroup);
+  /// Binds a recorded vertex buffer.
+  /// @param state Encoding state.
+  /// @param setVertexBuffer Recorded command.
+  gpu::Status encodeSetVertexBuffer(EncodingState& state,
+                                    const gpu::SetVertexBufferCommand& setVertexBuffer);
+  /// Sets an explicit scissor rectangle.
+  /// @param state Encoding state.
+  /// @param setScissor Recorded command.
+  gpu::Status encodeSetScissorRect(EncodingState& state,
+                                   const gpu::SetScissorRectCommand& setScissor);
+  /// Sets an explicit viewport.
+  /// @param state Encoding state.
+  /// @param setViewport Recorded command.
+  gpu::Status encodeSetViewport(EncodingState& state, const gpu::SetViewportCommand& setViewport);
+  /// Issues a draw.
+  /// @param state Encoding state.
+  /// @param draw Recorded command.
+  gpu::Status encodeDraw(EncodingState& state, const gpu::DrawCommand& draw);
+  /// Ends the active render pass.
+  /// @param state Encoding state.
+  gpu::Status encodeEndRenderPass(EncodingState& state);
+  /// Records a texture-to-buffer copy.
+  /// @param state Encoding state.
+  /// @param copy Recorded command.
+  gpu::Status encodeCopyTextureToBuffer(EncodingState& state,
+                                        const gpu::CopyTextureToBufferCommand& copy);
+  /// Records a texture-to-texture copy.
+  /// @param state Encoding state.
+  /// @param textureCopy Recorded command.
+  gpu::Status encodeCopyTextureToTexture(EncodingState& state,
+                                         const gpu::CopyTextureToTextureCommand& textureCopy);
+  /// Encodes one recorded command through the exhaustive command-variant dispatch.
+  /// @param state Encoding state.
+  /// @param command Recorded command.
+  gpu::Status encodeCommand(EncodingState& state, const gpu::Command& command);
+
   GeodeDevice& geodeDevice_;
 
   std::vector<ScopedWgpuHandle<wgpu::Buffer>> slotBuffers_;

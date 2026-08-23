@@ -210,6 +210,23 @@ private:
   /// @param entry Entry to re-resolve.
   Status revalidateBindGroupEntry(const BindGroupEntry& entry);
 
+  /// Validates that a texture-to-texture copy's operands are distinct, share a format, and carry
+  /// the CopySrc / CopyDst usages.
+  /// @param source Source texture handle.
+  /// @param destination Destination texture handle.
+  /// @param sourceDescriptor Descriptor the source was created with.
+  /// @param destinationDescriptor Descriptor the destination was created with.
+  Status validateCopyTexturePair(const Texture& source, const Texture& destination,
+                                 const TextureDescriptor& sourceDescriptor,
+                                 const TextureDescriptor& destinationDescriptor);
+
+  /// Validates that a texture-to-texture copy's extent is non-degenerate and fits both operands.
+  /// @param copySize Copy extent in texels.
+  /// @param sourceDescriptor Descriptor the source was created with.
+  /// @param destinationDescriptor Descriptor the destination was created with.
+  Status validateCopyExtent(const Extent2d& copySize, const TextureDescriptor& sourceDescriptor,
+                            const TextureDescriptor& destinationDescriptor);
+
   // RenderPassEncoder forwards to these.
   Status passSetPipeline(const RenderPipeline& pipeline);
   Status passSetBindGroup(uint32_t index, const BindGroup& bindGroup);

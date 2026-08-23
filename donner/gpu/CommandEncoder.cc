@@ -476,23 +476,9 @@ Status CommandEncoder::copyTextureToBuffer(const TexelCopyTextureInfo& source,
   return OkStatus();
 }
 
-Status CommandEncoder::copyTextureToTexture(const Texture& source, const Texture& destination,
-                                            const Extent2d& copySize) {
-  if (std::optional<GpuError> error = checkRecordable(/*requireActivePass=*/false)) {
-    return fail(std::move(*error));
-  }
-  if (inRenderPass_) {
-    return fail(
-        Err(GpuErrorType::InvalidState, "copyTextureToTexture: not allowed inside a render pass"));
-  }
-  auto sourceRecord = device_->resolve(device_->textures_, source, TextureTag::kName);
-  if (sourceRecord.hasError()) {
-    return fail(std::move(sourceRecord).error());
-  }
-  auto destinationRecord = device_->resolve(device_->textures_, destination, TextureTag::kName);
-  if (destinationRecord.hasError()) {
-    return fail(std::move(destinationRecord).error());
-  }
+Status CommandEncoder::validateCopyTexturePair(const Texture& source, const Texture& destination,
+                                               const TextureDescriptor& sourceDescriptor,
+                                               const TextureDescriptor& destinationDescriptor) {
   // WebGPU forbids self-copy: source and destination must be different textures
   // ("GPUCommandEncoder.copyTextureToTexture" validation; overlapping copies are undefined).
   if (source.slotIndex() == destination.slotIndex() &&
@@ -500,10 +486,8 @@ Status CommandEncoder::copyTextureToTexture(const Texture& source, const Texture
     return fail(Err(GpuErrorType::InvalidDescriptor,
                     std::format("copyTextureToTexture: source and destination are the same "
                                 "texture \"{}\"",
-                                sourceRecord.result()->descriptor.label.str())));
+                                sourceDescriptor.label.str())));
   }
-  const TextureDescriptor& sourceDescriptor = sourceRecord.result()->descriptor;
-  const TextureDescriptor& destinationDescriptor = destinationRecord.result()->descriptor;
   if (sourceDescriptor.format != destinationDescriptor.format) {
     std::ostringstream formats;
     formats << sourceDescriptor.format << " vs " << destinationDescriptor.format;
@@ -523,6 +507,12 @@ Status CommandEncoder::copyTextureToTexture(const Texture& source, const Texture
                     std::format("copyTextureToTexture: texture \"{}\" lacks the CopyDst usage",
                                 destinationDescriptor.label.str())));
   }
+  return OkStatus();
+}
+
+Status CommandEncoder::validateCopyExtent(const Extent2d& copySize,
+                                          const TextureDescriptor& sourceDescriptor,
+                                          const TextureDescriptor& destinationDescriptor) {
   if (copySize.width == 0 || copySize.height == 0) {
     return fail(Err(GpuErrorType::InvalidDescriptor,
                     std::format("copyTextureToTexture: copy size {}x{} has a zero dimension",
@@ -545,6 +535,37 @@ Status CommandEncoder::copyTextureToTexture(const Texture& source, const Texture
         std::format("copyTextureToTexture: copy size {}x{} exceeds destination \"{}\" size {}x{}",
                     copySize.width, copySize.height, destinationDescriptor.label.str(),
                     destinationDescriptor.size.width, destinationDescriptor.size.height)));
+  }
+  return OkStatus();
+}
+
+Status CommandEncoder::copyTextureToTexture(const Texture& source, const Texture& destination,
+                                            const Extent2d& copySize) {
+  if (std::optional<GpuError> error = checkRecordable(/*requireActivePass=*/false)) {
+    return fail(std::move(*error));
+  }
+  if (inRenderPass_) {
+    return fail(
+        Err(GpuErrorType::InvalidState, "copyTextureToTexture: not allowed inside a render pass"));
+  }
+  auto sourceRecord = device_->resolve(device_->textures_, source, TextureTag::kName);
+  if (sourceRecord.hasError()) {
+    return fail(std::move(sourceRecord).error());
+  }
+  auto destinationRecord = device_->resolve(device_->textures_, destination, TextureTag::kName);
+  if (destinationRecord.hasError()) {
+    return fail(std::move(destinationRecord).error());
+  }
+  const TextureDescriptor& sourceDescriptor = sourceRecord.result()->descriptor;
+  const TextureDescriptor& destinationDescriptor = destinationRecord.result()->descriptor;
+  const Status pairStatus =
+      validateCopyTexturePair(source, destination, sourceDescriptor, destinationDescriptor);
+  if (pairStatus.hasError()) {
+    return pairStatus;
+  }
+  const Status extentStatus = validateCopyExtent(copySize, sourceDescriptor, destinationDescriptor);
+  if (extentStatus.hasError()) {
+    return extentStatus;
   }
 
   commands_.push_back(CopyTextureToTextureCommand{
