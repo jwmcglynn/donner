@@ -92,6 +92,16 @@ class TrimVariantsTest(unittest.TestCase):
             ["//donner/svg/components/paint:paint_component_tests_text_full"],
         )
 
+    def test_named_product_variants_keep_default_text_representative(self):
+        labels = [
+            "//donner/svg/renderer/tests:resvg_test_suite_default_text",
+            "//donner/svg/renderer/tests:resvg_test_suite_max",
+            "//donner/svg/renderer/tests:resvg_test_suite_geode",
+        ]
+        kept, dropped = trim_variants(labels, kinds_for(wrappers=labels))
+        self.assertEqual(kept, labels[:1])
+        self.assertEqual(dropped, labels[1:])
+
     def test_suffix_only_name_is_kept(self):
         labels = ["//pkg:_geode", "//pkg:_tiny"]
         kept, dropped = trim_variants(labels, kinds_for(wrappers=labels))
