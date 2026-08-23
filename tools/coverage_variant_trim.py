@@ -11,18 +11,22 @@ coverage of a PR's changed lines they are redundant parameterizations - their
 unique coverage is limited to backend/feature-gated lines, which the main-push
 full run keeps covering. The measured cost of the redundancy on the coverage
 lane is a ~7x instrumented compile multiplier on SVG element translation units
-and 90 of 296 test executions (docs/design_docs/0029-2, PR #829 exemplar).
+and 90 of 296 test executions in a representative broad change.
 
 The base variant is the representative because it is the default build graph
 (what `bazel test` and the CI lanes exercise by default), it already accounts
 for the majority of coverage test executions (206 of 296 on the exemplar), and
 its instrumented surface is the broadest default-feature surface.
 
+Named product matrices use `_default_text` as that representative when no
+unsuffixed wrapper exists; sibling `_max` and `_geode` wrappers are redundant
+for PR patch coverage under the same policy.
+
 Fail-safe contract: a target is dropped ONLY when ALL of the following hold:
 (1) its label carries a variant suffix, (2) its base sibling (the label with
 the suffix stripped) is itself present in the affected set, and (3) its rule
 kind, per the caller-provided `bazel query --output label_kind` result, is the
-generated wrapper kind (`donner_multi_transitioned_test`). The kind gate keeps
+generated wrapper kind (`_donner_multi_transitioned_test`). The kind gate keeps
 handwritten targets that merely share the naming convention (e.g. a
 `cc_library` named `renderer_geode` beside `renderer`) out of the trim. A
 label missing from the kind file, an unreadable kind file, or any error in
@@ -41,6 +45,8 @@ import sys
 # for readability; suffixes are tested longest-first to keep `_text_full`
 # from being misread as a `_full` variant of `..._text`.
 VARIANT_SUFFIXES = ("_text_full", "_tiny", "_geode")
+NAMED_REPRESENTATIVE_SUFFIX = "_default_text"
+NAMED_REDUNDANT_SUFFIXES = ("_max", "_geode")
 
 # The private rule kind donner_cc_test's `variants` attr generates for each
 # `{name}_{variant}` wrapper (build_defs/rules.bzl). Only this kind is ever
@@ -74,6 +80,21 @@ def trim_variants(labels, label_kinds=None):
     dropped = []
     for label in labels:
         drop = False
+        if kinds.get(label) == WRAPPER_KIND:
+            for suffix in NAMED_REDUNDANT_SUFFIXES:
+                if label.endswith(suffix):
+                    representative = (
+                        label[: -len(suffix)] + NAMED_REPRESENTATIVE_SUFFIX
+                    )
+                    if (
+                        representative in label_set
+                        and kinds.get(representative) == WRAPPER_KIND
+                    ):
+                        drop = True
+                    break
+        if drop:
+            dropped.append(label)
+            continue
         for suffix in VARIANT_SUFFIXES:
             if label.endswith(suffix):
                 base = label[: -len(suffix)]
