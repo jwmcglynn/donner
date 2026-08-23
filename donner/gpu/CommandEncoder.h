@@ -191,6 +191,11 @@ private:
   /// @param requireActivePass True for render pass operations.
   std::optional<GpuError> checkRecordable(bool requireActivePass);
 
+  /// Re-resolves the resource one bind group entry references, failing closed when it was
+  /// destroyed after the group was created.
+  /// @param entry Entry to re-resolve.
+  Status revalidateBindGroupEntry(const BindGroupEntry& entry);
+
   // RenderPassEncoder forwards to these.
   Status passSetPipeline(const RenderPipeline& pipeline);
   Status passSetBindGroup(uint32_t index, const BindGroup& bindGroup);

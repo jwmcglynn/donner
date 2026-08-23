@@ -242,36 +242,43 @@ Status CommandEncoder::passSetBindGroup(uint32_t index, const BindGroup& bindGro
                                 record.result()->layoutIdentity.slotIndex)));
   }
   for (const BindGroupEntry& entry : record.result()->descriptor.entries) {
-    if (const BufferBinding* bufferBinding = std::get_if<BufferBinding>(&entry.resource)) {
-      auto bufferRecord =
-          device_->resolve(device_->buffers_, bufferBinding->buffer, BufferTag::kName);
-      if (bufferRecord.hasError()) {
-        return fail(std::move(bufferRecord).error());
-      }
-    } else if (const TextureViewBinding* viewBinding =
-                   std::get_if<TextureViewBinding>(&entry.resource)) {
-      auto viewRecord =
-          device_->resolve(device_->textureViews_, viewBinding->view, TextureViewTag::kName);
-      if (viewRecord.hasError()) {
-        return fail(std::move(viewRecord).error());
-      }
-      auto viewedTexture = device_->resolveViewedTexture(*viewRecord.result());
-      if (viewedTexture.hasError()) {
-        return fail(std::move(viewedTexture).error());
-      }
-    } else if (const SamplerBinding* samplerBinding =
-                   std::get_if<SamplerBinding>(&entry.resource)) {
-      auto samplerRecord =
-          device_->resolve(device_->samplers_, samplerBinding->sampler, SamplerTag::kName);
-      if (samplerRecord.hasError()) {
-        return fail(std::move(samplerRecord).error());
-      }
+    const Status entryStatus = revalidateBindGroupEntry(entry);
+    if (entryStatus.hasError()) {
+      return entryStatus;
     }
   }
 
   boundBindGroups_[index] = BoundBindGroup{bindGroup.slotIndex(), record.result()->layoutIdentity};
   commands_.push_back(
       SetBindGroupCommand{index, ResourceIdentity{bindGroup.slotIndex(), bindGroup.generation()}});
+  return OkStatus();
+}
+
+Status CommandEncoder::revalidateBindGroupEntry(const BindGroupEntry& entry) {
+  if (const BufferBinding* bufferBinding = std::get_if<BufferBinding>(&entry.resource)) {
+    auto bufferRecord =
+        device_->resolve(device_->buffers_, bufferBinding->buffer, BufferTag::kName);
+    if (bufferRecord.hasError()) {
+      return fail(std::move(bufferRecord).error());
+    }
+  } else if (const TextureViewBinding* viewBinding =
+                 std::get_if<TextureViewBinding>(&entry.resource)) {
+    auto viewRecord =
+        device_->resolve(device_->textureViews_, viewBinding->view, TextureViewTag::kName);
+    if (viewRecord.hasError()) {
+      return fail(std::move(viewRecord).error());
+    }
+    auto viewedTexture = device_->resolveViewedTexture(*viewRecord.result());
+    if (viewedTexture.hasError()) {
+      return fail(std::move(viewedTexture).error());
+    }
+  } else if (const SamplerBinding* samplerBinding = std::get_if<SamplerBinding>(&entry.resource)) {
+    auto samplerRecord =
+        device_->resolve(device_->samplers_, samplerBinding->sampler, SamplerTag::kName);
+    if (samplerRecord.hasError()) {
+      return fail(std::move(samplerRecord).error());
+    }
+  }
   return OkStatus();
 }
 

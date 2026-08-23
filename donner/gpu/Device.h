@@ -596,6 +596,48 @@ private:
   Result<std::vector<SubmissionUse>> validateSubmissionResources(
       std::span<const Command> commands) const;
 
+  /// Resolves one recorded identity against \p table and records it in \p uses, failing closed
+  /// with \ref GpuErrorType::InvalidHandle when the slot has been destroyed or reused.
+  /// @param table Table owning the resource kind.
+  /// @param identity Recorded slot and generation.
+  /// @param kind Resource kind stored in \p uses for later table dispatch.
+  /// @param resourceName Resource kind name, for the error message.
+  /// @param context Description of what referenced the resource, for the error message.
+  /// @param uses Accumulator of resources referenced by the submission.
+  template <typename Record>
+  Result<const Record*> checkSubmissionResource(const details::SlotTable<Record>& table,
+                                                const ResourceIdentity& identity, ResourceKind kind,
+                                                std::string_view resourceName,
+                                                std::string_view context,
+                                                std::vector<SubmissionUse>& uses) const;
+
+  /// Resolves a recorded texture view plus the texture behind it: a view of a destroyed texture
+  /// must fail even while the view itself is alive.
+  /// @param viewIdentity Recorded view slot and generation.
+  /// @param context Description of what referenced the view, for the error message.
+  /// @param uses Accumulator of resources referenced by the submission.
+  Status checkSubmissionTextureView(const ResourceIdentity& viewIdentity, std::string_view context,
+                                    std::vector<SubmissionUse>& uses) const;
+
+  /// Resolves every attachment view of a recorded render pass.
+  /// @param descriptor Recorded render pass descriptor.
+  /// @param uses Accumulator of resources referenced by the submission.
+  Status checkSubmissionRenderPass(const RenderPassDescriptor& descriptor,
+                                   std::vector<SubmissionUse>& uses) const;
+
+  /// Resolves a recorded bind group, the layout it was created against, and every resource its
+  /// entries reference, so a destroyed dependency fails closed even though the group object
+  /// itself is alive.
+  /// @param groupIdentity Recorded bind group slot and generation.
+  /// @param uses Accumulator of resources referenced by the submission.
+  Status checkSubmissionBindGroup(const ResourceIdentity& groupIdentity,
+                                  std::vector<SubmissionUse>& uses) const;
+
+  /// Resolves every resource one recorded command references.
+  /// @param command Recorded command.
+  /// @param uses Accumulator of resources referenced by the submission.
+  Status checkSubmissionCommand(const Command& command, std::vector<SubmissionUse>& uses) const;
+
   /// Marks every collected resource as used by \p submissionSerial, deferring its backend
   /// destruction until that submission completes.
   /// @param uses Resources collected by \ref validateSubmissionResources.

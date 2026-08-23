@@ -899,140 +899,154 @@ Result<uint64_t> Device::submit(CommandBuffer commandBuffer) {
   return serial;
 }
 
+template <typename Record>
+Result<const Record*> Device::checkSubmissionResource(const details::SlotTable<Record>& table,
+                                                      const ResourceIdentity& identity,
+                                                      ResourceKind kind,
+                                                      std::string_view resourceName,
+                                                      std::string_view context,
+                                                      std::vector<SubmissionUse>& uses) const {
+  const Record* record = table.find(identity.slotIndex, identity.generation);
+  if (record == nullptr) {
+    return GpuError{GpuErrorType::InvalidHandle,
+                    std::format("submit: {} references destroyed {} (slot {})", context,
+                                resourceName, identity.slotIndex)};
+  }
+  uses.push_back(SubmissionUse{kind, identity.slotIndex});
+  return record;
+}
+
+Status Device::checkSubmissionTextureView(const ResourceIdentity& viewIdentity,
+                                          std::string_view context,
+                                          std::vector<SubmissionUse>& uses) const {
+  auto viewRecord = checkSubmissionResource(textureViews_, viewIdentity, ResourceKind::TextureView,
+                                            TextureViewTag::kName, context, uses);
+  if (viewRecord.hasError()) {
+    return std::move(viewRecord).error();
+  }
+  auto textureRecord =
+      checkSubmissionResource(textures_, viewRecord.result()->textureIdentity,
+                              ResourceKind::Texture, TextureTag::kName, context, uses);
+  if (textureRecord.hasError()) {
+    return std::move(textureRecord).error();
+  }
+  return OkStatus();
+}
+
+Status Device::checkSubmissionRenderPass(const RenderPassDescriptor& descriptor,
+                                         std::vector<SubmissionUse>& uses) const {
+  for (const RenderPassColorAttachment& attachment : descriptor.colorAttachments) {
+    const ResourceIdentity viewIdentity{attachment.view.slotIndex(), attachment.view.generation()};
+    if (Status attachmentStatus =
+            checkSubmissionTextureView(viewIdentity, "render pass attachment", uses);
+        attachmentStatus.hasError()) {
+      return attachmentStatus;
+    }
+  }
+  return OkStatus();
+}
+
+Status Device::checkSubmissionBindGroup(const ResourceIdentity& groupIdentity,
+                                        std::vector<SubmissionUse>& uses) const {
+  auto groupRecord = checkSubmissionResource(bindGroups_, groupIdentity, ResourceKind::BindGroup,
+                                             BindGroupTag::kName, "recorded setBindGroup", uses);
+  if (groupRecord.hasError()) {
+    return std::move(groupRecord).error();
+  }
+  auto layoutRecord = checkSubmissionResource(
+      bindGroupLayouts_, groupRecord.result()->layoutIdentity, ResourceKind::BindGroupLayout,
+      BindGroupLayoutTag::kName,
+      std::format("bind group \"{}\"", groupRecord.result()->descriptor.label.str()), uses);
+  if (layoutRecord.hasError()) {
+    return std::move(layoutRecord).error();
+  }
+  for (const BindGroupEntry& entry : groupRecord.result()->descriptor.entries) {
+    const std::string context =
+        std::format("bind group \"{}\" entry binding {}",
+                    groupRecord.result()->descriptor.label.str(), entry.binding);
+    if (const BufferBinding* bufferBinding = std::get_if<BufferBinding>(&entry.resource)) {
+      const ResourceIdentity bufferIdentity{bufferBinding->buffer.slotIndex(),
+                                            bufferBinding->buffer.generation()};
+      auto bufferRecord = checkSubmissionResource(buffers_, bufferIdentity, ResourceKind::Buffer,
+                                                  BufferTag::kName, context, uses);
+      if (bufferRecord.hasError()) {
+        return std::move(bufferRecord).error();
+      }
+    } else if (const TextureViewBinding* viewBinding =
+                   std::get_if<TextureViewBinding>(&entry.resource)) {
+      const ResourceIdentity viewIdentity{viewBinding->view.slotIndex(),
+                                          viewBinding->view.generation()};
+      if (Status entryStatus = checkSubmissionTextureView(viewIdentity, context, uses);
+          entryStatus.hasError()) {
+        return entryStatus;
+      }
+    } else if (const SamplerBinding* samplerBinding =
+                   std::get_if<SamplerBinding>(&entry.resource)) {
+      const ResourceIdentity samplerIdentity{samplerBinding->sampler.slotIndex(),
+                                             samplerBinding->sampler.generation()};
+      auto samplerRecord = checkSubmissionResource(
+          samplers_, samplerIdentity, ResourceKind::Sampler, SamplerTag::kName, context, uses);
+      if (samplerRecord.hasError()) {
+        return std::move(samplerRecord).error();
+      }
+    }
+  }
+  return OkStatus();
+}
+
+Status Device::checkSubmissionCommand(const Command& command,
+                                      std::vector<SubmissionUse>& uses) const {
+  return std::visit(
+      [&](const auto& typedCommand) -> Status {
+        using CommandType = std::remove_cvref_t<decltype(typedCommand)>;
+
+        if constexpr (std::is_same_v<CommandType, BeginRenderPassCommand>) {
+          return checkSubmissionRenderPass(typedCommand.descriptor, uses);
+        } else if constexpr (std::is_same_v<CommandType, SetPipelineCommand>) {
+          auto pipelineRecord = checkSubmissionResource(
+              renderPipelines_, typedCommand.pipelineId, ResourceKind::RenderPipeline,
+              RenderPipelineTag::kName, "recorded setPipeline", uses);
+          if (pipelineRecord.hasError()) {
+            return std::move(pipelineRecord).error();
+          }
+          return OkStatus();
+        } else if constexpr (std::is_same_v<CommandType, SetBindGroupCommand>) {
+          return checkSubmissionBindGroup(typedCommand.bindGroupId, uses);
+        } else if constexpr (std::is_same_v<CommandType, SetVertexBufferCommand>) {
+          auto bufferRecord =
+              checkSubmissionResource(buffers_, typedCommand.bufferId, ResourceKind::Buffer,
+                                      BufferTag::kName, "recorded setVertexBuffer", uses);
+          if (bufferRecord.hasError()) {
+            return std::move(bufferRecord).error();
+          }
+          return OkStatus();
+        } else if constexpr (std::is_same_v<CommandType, CopyTextureToBufferCommand>) {
+          auto textureRecord =
+              checkSubmissionResource(textures_, typedCommand.textureId, ResourceKind::Texture,
+                                      TextureTag::kName, "recorded copyTextureToBuffer", uses);
+          if (textureRecord.hasError()) {
+            return std::move(textureRecord).error();
+          }
+          auto bufferRecord =
+              checkSubmissionResource(buffers_, typedCommand.bufferId, ResourceKind::Buffer,
+                                      BufferTag::kName, "recorded copyTextureToBuffer", uses);
+          if (bufferRecord.hasError()) {
+            return std::move(bufferRecord).error();
+          }
+          return OkStatus();
+        } else {
+          return OkStatus();
+        }
+      },
+      command);
+}
+
 Result<std::vector<Device::SubmissionUse>> Device::validateSubmissionResources(
     std::span<const Command> commands) const {
   std::vector<SubmissionUse> uses;
 
-  // Resolves one recorded identity against its table, failing closed when it is stale.
-  const auto check = [&uses]<typename Record>(const details::SlotTable<Record>& table,
-                                              const ResourceIdentity& identity, ResourceKind kind,
-                                              std::string_view resourceName,
-                                              std::string_view context) -> Result<const Record*> {
-    const Record* record = table.find(identity.slotIndex, identity.generation);
-    if (record == nullptr) {
-      return GpuError{GpuErrorType::InvalidHandle,
-                      std::format("submit: {} references destroyed {} (slot {})", context,
-                                  resourceName, identity.slotIndex)};
-    }
-    uses.push_back(SubmissionUse{kind, identity.slotIndex});
-    return record;
-  };
-
-  // Resolves a texture view plus the texture behind it (a view of a destroyed texture must fail
-  // even if the view itself is alive).
-  const auto checkViewAndTexture = [this, &check](const ResourceIdentity& viewIdentity,
-                                                  std::string_view context) -> Status {
-    auto viewRecord = check(textureViews_, viewIdentity, ResourceKind::TextureView,
-                            TextureViewTag::kName, context);
-    if (viewRecord.hasError()) {
-      return std::move(viewRecord).error();
-    }
-    auto textureRecord = check(textures_, viewRecord.result()->textureIdentity,
-                               ResourceKind::Texture, TextureTag::kName, context);
-    if (textureRecord.hasError()) {
-      return std::move(textureRecord).error();
-    }
-    return OkStatus();
-  };
-
   for (const Command& command : commands) {
-    Status status = std::visit(
-        [&](const auto& typedCommand) -> Status {
-          using CommandType = std::remove_cvref_t<decltype(typedCommand)>;
-
-          if constexpr (std::is_same_v<CommandType, BeginRenderPassCommand>) {
-            for (const RenderPassColorAttachment& attachment :
-                 typedCommand.descriptor.colorAttachments) {
-              const ResourceIdentity viewIdentity{attachment.view.slotIndex(),
-                                                  attachment.view.generation()};
-              if (Status attachmentStatus =
-                      checkViewAndTexture(viewIdentity, "render pass attachment");
-                  attachmentStatus.hasError()) {
-                return attachmentStatus;
-              }
-            }
-            return OkStatus();
-          } else if constexpr (std::is_same_v<CommandType, SetPipelineCommand>) {
-            auto pipelineRecord =
-                check(renderPipelines_, typedCommand.pipelineId, ResourceKind::RenderPipeline,
-                      RenderPipelineTag::kName, "recorded setPipeline");
-            if (pipelineRecord.hasError()) {
-              return std::move(pipelineRecord).error();
-            }
-            return OkStatus();
-          } else if constexpr (std::is_same_v<CommandType, SetBindGroupCommand>) {
-            auto groupRecord = check(bindGroups_, typedCommand.bindGroupId, ResourceKind::BindGroup,
-                                     BindGroupTag::kName, "recorded setBindGroup");
-            if (groupRecord.hasError()) {
-              return std::move(groupRecord).error();
-            }
-            // Re-validate everything the group references so a destroyed dependency fails
-            // closed even though the group object itself is alive: the layout the group was
-            // created against (backends read it at encode time) and every entry resource.
-            auto layoutRecord = check(
-                bindGroupLayouts_, groupRecord.result()->layoutIdentity,
-                ResourceKind::BindGroupLayout, BindGroupLayoutTag::kName,
-                std::format("bind group \"{}\"", groupRecord.result()->descriptor.label.str()));
-            if (layoutRecord.hasError()) {
-              return std::move(layoutRecord).error();
-            }
-            for (const BindGroupEntry& entry : groupRecord.result()->descriptor.entries) {
-              const std::string context =
-                  std::format("bind group \"{}\" entry binding {}",
-                              groupRecord.result()->descriptor.label.str(), entry.binding);
-              if (const BufferBinding* bufferBinding =
-                      std::get_if<BufferBinding>(&entry.resource)) {
-                const ResourceIdentity bufferIdentity{bufferBinding->buffer.slotIndex(),
-                                                      bufferBinding->buffer.generation()};
-                auto bufferRecord = check(buffers_, bufferIdentity, ResourceKind::Buffer,
-                                          BufferTag::kName, context);
-                if (bufferRecord.hasError()) {
-                  return std::move(bufferRecord).error();
-                }
-              } else if (const TextureViewBinding* viewBinding =
-                             std::get_if<TextureViewBinding>(&entry.resource)) {
-                const ResourceIdentity viewIdentity{viewBinding->view.slotIndex(),
-                                                    viewBinding->view.generation()};
-                if (Status entryStatus = checkViewAndTexture(viewIdentity, context);
-                    entryStatus.hasError()) {
-                  return entryStatus;
-                }
-              } else if (const SamplerBinding* samplerBinding =
-                             std::get_if<SamplerBinding>(&entry.resource)) {
-                const ResourceIdentity samplerIdentity{samplerBinding->sampler.slotIndex(),
-                                                       samplerBinding->sampler.generation()};
-                auto samplerRecord = check(samplers_, samplerIdentity, ResourceKind::Sampler,
-                                           SamplerTag::kName, context);
-                if (samplerRecord.hasError()) {
-                  return std::move(samplerRecord).error();
-                }
-              }
-            }
-            return OkStatus();
-          } else if constexpr (std::is_same_v<CommandType, SetVertexBufferCommand>) {
-            auto bufferRecord = check(buffers_, typedCommand.bufferId, ResourceKind::Buffer,
-                                      BufferTag::kName, "recorded setVertexBuffer");
-            if (bufferRecord.hasError()) {
-              return std::move(bufferRecord).error();
-            }
-            return OkStatus();
-          } else if constexpr (std::is_same_v<CommandType, CopyTextureToBufferCommand>) {
-            auto textureRecord = check(textures_, typedCommand.textureId, ResourceKind::Texture,
-                                       TextureTag::kName, "recorded copyTextureToBuffer");
-            if (textureRecord.hasError()) {
-              return std::move(textureRecord).error();
-            }
-            auto bufferRecord = check(buffers_, typedCommand.bufferId, ResourceKind::Buffer,
-                                      BufferTag::kName, "recorded copyTextureToBuffer");
-            if (bufferRecord.hasError()) {
-              return std::move(bufferRecord).error();
-            }
-            return OkStatus();
-          } else {
-            return OkStatus();
-          }
-        },
-        command);
+    Status status = checkSubmissionCommand(command, uses);
     if (status.hasError()) {
       return std::move(status).error();
     }
