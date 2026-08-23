@@ -135,6 +135,14 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
             {"-fuzz_target", "-lint", "-manual", "-perf"},
             set(match.group(1).split(",")),
         )
+        query_match = re.search(
+            r'attr\("tags", "[^"]*\(([^)]+)\)[^"]*"', self.coverage
+        )
+        self.assertIsNotNone(query_match)
+        self.assertEqual(
+            {tag.removeprefix("-") for tag in match.group(1).split(",")},
+            set(query_match.group(1).split("|")),
+        )
 
     def test_every_change_based_test_step_handles_an_empty_selection(self):
         """A selection with no test targets must not fail a change-based lane.

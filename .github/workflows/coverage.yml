@@ -426,8 +426,8 @@ jobs:
           # workspace checkout, refs/pull/N/merge), not against HEAD_SHA.
           # Hashing base-tip vs HEAD_SHA attributes post-fork drift on main to
           # the PR, inflating the affected set on any branch that has not
-          # rebased (measured up to 126x over-inclusion; see
-          # docs/design_docs/0029-2). In the tip-vs-merge comparison, drift is
+          # rebased (measured up to 126x over-inclusion). In the
+          # tip-vs-merge comparison, drift is
           # present on BOTH sides, so unchanged-by-the-PR targets hash
           # identically and drop out; and because the merge graph is the one
           # hashed, reverse dependencies that exist ONLY in the merge (a dep
@@ -626,10 +626,11 @@ jobs:
             cat "$diagnostics_dir/kind-query.log" || true
           fi
 
-          # Representative-variant trim (operator-approved policy, 2026-07-11):
-          # PR PATCH coverage runs one representative variant per test - the
-          # base/default target - and drops `_tiny`/`_text_full`/`_geode`
-          # variant wrappers whose base sibling is in the set. The wrappers
+          # Representative-variant trim:
+          # PR patch coverage runs one representative variant per test - the
+          # base/default target - and drops generated variant wrappers only
+          # when their ordinary base or named representative is in the set.
+          # The wrappers
           # compile the SAME sources under different backend/feature flags, so
           # for patch coverage they are redundant parameterizations whose
           # unique signal (backend/feature-gated lines) stays covered by the
@@ -639,9 +640,9 @@ jobs:
           # handwritten targets that merely share the suffix (e.g. a
           # cc_library named renderer_geode) are untouched. Fail closed: tool
           # failure, a failed kind query, or an unknown kind keeps the
-          # untrimmed set / target; variant-only targets (no base sibling)
-          # are never dropped. See tools/coverage_variant_trim.py and
-          # docs/design_docs/0029-2.
+          # untrimmed set / target; variant-only targets (no base or named
+          # representative sibling) are never dropped. The full contract is in
+          # tools/coverage_variant_trim.py.
           # Intentional word splitting: each Bazel label becomes one line.
           # shellcheck disable=SC2086
           printf '%s\n' $affected > "$work_dir/affected-pretrim.txt"

@@ -102,6 +102,35 @@ class TrimVariantsTest(unittest.TestCase):
         self.assertEqual(kept, labels[:1])
         self.assertEqual(dropped, labels[1:])
 
+    def test_named_product_variant_without_representative_is_kept(self):
+        labels = [
+            "//donner/svg/renderer/tests:resvg_test_suite_max",
+            "//donner/svg/renderer/tests:resvg_test_suite_geode",
+        ]
+        kept, dropped = trim_variants(labels, kinds_for(wrappers=labels))
+        self.assertEqual(kept, labels)
+        self.assertEqual(dropped, [])
+
+    def test_named_product_variant_with_nonwrapper_kind_is_kept(self):
+        labels = [
+            "//donner/svg/renderer/tests:resvg_test_suite_default_text",
+            "//donner/svg/renderer/tests:resvg_test_suite_max",
+        ]
+        kinds = kinds_for(wrappers=labels[:1], others=labels[1:])
+        kept, dropped = trim_variants(labels, kinds)
+        self.assertEqual(kept, labels)
+        self.assertEqual(dropped, [])
+
+    def test_named_product_variant_with_nonwrapper_representative_is_kept(self):
+        labels = [
+            "//donner/svg/renderer/tests:resvg_test_suite_default_text",
+            "//donner/svg/renderer/tests:resvg_test_suite_max",
+        ]
+        kinds = kinds_for(wrappers=labels[1:], others=labels[:1])
+        kept, dropped = trim_variants(labels, kinds)
+        self.assertEqual(kept, labels)
+        self.assertEqual(dropped, [])
+
     def test_suffix_only_name_is_kept(self):
         labels = ["//pkg:_geode", "//pkg:_tiny"]
         kept, dropped = trim_variants(labels, kinds_for(wrappers=labels))
