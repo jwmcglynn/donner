@@ -33,22 +33,30 @@ void SaturatingAdd(std::size_t& destination, std::size_t value) {
                     : destination + value;
 }
 
-void AddComponentValueBytes(std::size_t& destination, const css::ComponentValue& component) {
-  const auto addValues = [&](std::span<const css::ComponentValue> values) {
-    if (values.size() > std::numeric_limits<std::size_t>::max() / sizeof(css::ComponentValue)) {
-      destination = std::numeric_limits<std::size_t>::max();
-      return;
-    }
-    SaturatingAdd(destination, values.size() * sizeof(css::ComponentValue));
-    for (const css::ComponentValue& value : values) {
-      AddComponentValueBytes(destination, value);
-    }
-  };
+void SaturatingAddArrayBytes(std::size_t& destination, std::size_t capacity,
+                             std::size_t elementSize) {
+  if (elementSize != 0 && capacity > std::numeric_limits<std::size_t>::max() / elementSize) {
+    destination = std::numeric_limits<std::size_t>::max();
+    return;
+  }
+  SaturatingAdd(destination, capacity * elementSize);
+}
 
+void AddComponentValueBytes(std::size_t& destination, const css::ComponentValue& component);
+
+void AddComponentValuesBytes(std::size_t& destination,
+                             const std::vector<css::ComponentValue>& values) {
+  SaturatingAddArrayBytes(destination, values.capacity(), sizeof(css::ComponentValue));
+  for (const css::ComponentValue& value : values) {
+    AddComponentValueBytes(destination, value);
+  }
+}
+
+void AddComponentValueBytes(std::size_t& destination, const css::ComponentValue& component) {
   if (component.is<css::Function>()) {
-    addValues(component.get<css::Function>().values);
+    AddComponentValuesBytes(destination, component.get<css::Function>().values);
   } else if (component.is<css::SimpleBlock>()) {
-    addValues(component.get<css::SimpleBlock>().values);
+    AddComponentValuesBytes(destination, component.get<css::SimpleBlock>().values);
   }
 }
 
@@ -2351,30 +2359,23 @@ size_t PropertyRegistry::numPropertiesSet() const {
 std::size_t PropertyRegistry::complexPropertyBytes() const {
   std::size_t result = 0;
   if (const StrokeDasharray* dasharray = strokeDasharray.getStoredValue()) {
-    result += dasharray->size() * sizeof(Lengthd);
+    SaturatingAddArrayBytes(result, dasharray->capacity(), sizeof(Lengthd));
   }
   if (const SmallVector<RcString, 1>* families = fontFamily.getStoredValue()) {
-    result += families->size() * sizeof(RcString);
+    SaturatingAddArrayBytes(result, families->capacity(), sizeof(RcString));
     for (const RcString& family : *families) {
-      result += family.size();
+      SaturatingAdd(result, family.size());
     }
   }
   if (const std::vector<FilterEffect>* effects = filter.getStoredValue()) {
-    SaturatingAdd(result, effects->size() * sizeof(FilterEffect));
+    SaturatingAddArrayBytes(result, effects->capacity(), sizeof(FilterEffect));
   }
   for (const auto& entry : unparsedProperties) {
     const parser::UnparsedProperty& property = entry.second;
     using MapValue = decltype(unparsedProperties)::value_type;
     SaturatingAdd(result, sizeof(MapValue) + 3 * sizeof(void*));
 
-    const std::span<const css::ComponentValue> values(property.declaration.values);
-    if (values.size() > std::numeric_limits<std::size_t>::max() / sizeof(css::ComponentValue)) {
-      return std::numeric_limits<std::size_t>::max();
-    }
-    SaturatingAdd(result, values.size() * sizeof(css::ComponentValue));
-    for (const css::ComponentValue& component : values) {
-      AddComponentValueBytes(result, component);
-    }
+    AddComponentValuesBytes(result, property.declaration.values);
   }
   return result;
 }

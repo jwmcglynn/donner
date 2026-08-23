@@ -282,6 +282,53 @@ TEST(PropertyRegistry, ComplexPropertyBytesIncludesUnparsedComponentTrees) {
   EXPECT_GT(registry.complexPropertyBytes(), 1024 * sizeof(ComponentValue));
 }
 
+TEST(PropertyRegistry, ComplexPropertyBytesChargesRetainedVectorCapacity) {
+  PropertyRegistry dashRegistry;
+  StrokeDasharray dasharray;
+  dasharray.reserve(8);
+  dasharray.emplace_back(1.0, Lengthd::Unit::Px);
+  const std::size_t dashCapacity = dasharray.capacity();
+  dashRegistry.strokeDasharray.set(std::move(dasharray), Specificity());
+  EXPECT_EQ(dashRegistry.complexPropertyBytes(), dashCapacity * sizeof(Lengthd));
+
+  PropertyRegistry familyRegistry;
+  SmallVector<RcString, 1> families;
+  families.emplace_back(RcString("Alpha"));
+  families.emplace_back(RcString("Beta"));
+  families.emplace_back(RcString("Gamma"));
+  families.emplace_back(RcString("Delta"));
+  families.resize(1);
+  const std::size_t familyCapacity = families.capacity();
+  const std::size_t retainedFamilyStringBytes = families.front().size();
+  familyRegistry.fontFamily.set(std::move(families), Specificity());
+  EXPECT_EQ(familyRegistry.complexPropertyBytes(),
+            familyCapacity * sizeof(RcString) + retainedFamilyStringBytes);
+
+  PropertyRegistry filterRegistry;
+  std::vector<FilterEffect> effects;
+  effects.reserve(8);
+  effects.emplace_back(FilterEffect::None{});
+  const std::size_t filterCapacity = effects.capacity();
+  filterRegistry.filter.set(std::move(effects), Specificity());
+  EXPECT_EQ(filterRegistry.complexPropertyBytes(), filterCapacity * sizeof(FilterEffect));
+
+  css::Function function(RcString("translate"), FileOffset::Offset(0));
+  function.values.reserve(8);
+  function.values.emplace_back(Token(Token::Ident("value"), 0));
+  const std::size_t nestedCapacity = function.values.capacity();
+  std::vector<ComponentValue> topLevelValues;
+  topLevelValues.reserve(8);
+  topLevelValues.emplace_back(std::move(function));
+  const std::size_t topLevelCapacity = topLevelValues.capacity();
+  css::Declaration declaration("transform", std::move(topLevelValues));
+
+  PropertyRegistry unparsedRegistry;
+  unparsedRegistry.unparsedProperties.emplace(
+      RcString("transform"), parser::UnparsedProperty{std::move(declaration), Specificity()});
+  EXPECT_GE(unparsedRegistry.complexPropertyBytes(),
+            (topLevelCapacity + nestedCapacity) * sizeof(ComponentValue));
+}
+
 TEST(PropertyRegistry, ParseDeclarationError) {
   std::optional<ParseDiagnostic> parseProperty(const css::Declaration& declaration);
 

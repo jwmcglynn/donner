@@ -760,6 +760,9 @@ jobs:
           stall_limit="${BAZEL_STALL_LIMIT_SECONDS:-900}"
           heartbeat_interval="${BAZEL_HEARTBEAT_INTERVAL_SECONDS:-60}"
           stall_report="$(dirname "$log_path")/stall.txt"
+          heartbeat_control="${log_path}.heartbeat-control.$$"
+          mkfifo "$heartbeat_control"
+          exec 9<> "$heartbeat_control"
 
           # Killing only the launcher is not enough: bazelisk forks the Bazel
           # client, which keeps the write end of this pipeline open, so `tee`
@@ -793,40 +796,20 @@ jobs:
             kill "-$signal" "$root" 2>/dev/null || true
           }
 
+          set +e
           {
+            set -e
             "$@" &
             command_pid=$!
 
             (
               last_progress=""
               last_change=$SECONDS
-              sleep_pid=""
-              stop_requested=false
-
-              request_heartbeat_stop() {
-                stop_requested=true
-              }
-
-              stop_heartbeat() {
-                if [[ -n "$sleep_pid" ]]; then
-                  kill "$sleep_pid" 2>/dev/null || true
-                  wait "$sleep_pid" 2>/dev/null || true
-                fi
-                exit 0
-              }
-              trap request_heartbeat_stop TERM INT
 
               while kill -0 "$command_pid" 2>/dev/null; do
-                # Defer exit until the newly forked sleeper's PID is published below.
-                trap request_heartbeat_stop TERM INT
-                sleep "$heartbeat_interval" &
-                sleep_pid=$!
-                trap stop_heartbeat TERM INT
-                if [[ "$stop_requested" == true ]]; then
-                  stop_heartbeat
+                if IFS= read -r -t "$heartbeat_interval" _ <&9; then
+                  exit 0
                 fi
-                wait "$sleep_pid" || exit 0
-                sleep_pid=""
                 kill -0 "$command_pid" 2>/dev/null || break
 
                 # Ignore our own annotations so the watchdog cannot see its own
@@ -864,13 +847,15 @@ jobs:
             status=$?
             set -e
 
-            # The watcher owns and traps its sleeper, so terminating it cannot
-            # leave an orphan holding this pipeline until the interval expires.
-            kill -TERM "$heartbeat_pid" 2>/dev/null || true
+            printf 'stop\n' >&9
             wait "$heartbeat_pid" 2>/dev/null || true
             exit "$status"
           } 2>&1 | tee "$log_path"
-          exit "${PIPESTATUS[0]}"
+          status="${PIPESTATUS[0]}"
+          set -e
+          exec 9>&-
+          rm -f "$heartbeat_control"
+          exit "$status"
           EOF
           chmod +x "$DIAG_DIR/run_bazel_with_heartbeat.sh"
 

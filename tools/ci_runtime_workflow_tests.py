@@ -75,38 +75,6 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
                 timeout=timeout,
             )
 
-    def _inject_pre_publish_signal(self, script, sleep_command, hook):
-        """Signal the watcher after sleep forks but before it publishes the PID."""
-        self.assertEqual(1, script.count(sleep_command))
-        return script.replace(sleep_command, f'{sleep_command}\n"{hook}" "$!"', 1)
-
-    def _write_parent_signal_hook(self, directory):
-        hook = directory / "signal-parent.sh"
-        release = Path(f"{hook}.release")
-        os.mkfifo(release)
-        hook.write_text(
-            '#!/bin/sh\nprintf x >> "$0.count"\nprintf "%s\\n" "$1" >> "$0.pids"\n'
-            'printf "go\\n" > "$0.release"\nkill -TERM "$PPID"\n'
-        )
-        hook.chmod(0o755)
-        return hook, Path(f"{hook}.count"), Path(f"{hook}.pids"), release
-
-    def _write_blocking_sleep(self, directory):
-        """Install a sleep whose PID stays alive until the watcher explicitly stops it."""
-        fake_bin = directory / "bin"
-        fake_bin.mkdir()
-        fake_sleep = fake_bin / "sleep"
-        fake_sleep.write_text("#!/bin/sh\nexec /bin/sleep 300\n")
-        fake_sleep.chmod(0o755)
-        return fake_bin
-
-    def _assert_sleepers_reaped(self, pid_file, expected_count):
-        pids = [int(pid) for pid in pid_file.read_text().splitlines()]
-        self.assertEqual(expected_count, len(pids))
-        for pid in pids:
-            with self.assertRaises(ProcessLookupError):
-                os.kill(pid, 0)
-
     def test_coverage_does_not_expand_ci_config_twice(self):
         """The coverage command inherits its CI config from the runner rc."""
         flag_line = re.search(
@@ -287,75 +255,52 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
         )
 
         with tempfile.TemporaryDirectory() as temp_dir:
-            temp_path = Path(temp_dir)
-            hook, hook_count, hook_pids, hook_release = self._write_parent_signal_hook(temp_path)
-            script = self._inject_pre_publish_signal(
-                script, 'sleep "$heartbeat_interval" &', hook
-            )
-            fake_bin = self._write_blocking_sleep(temp_path)
-            fake_ps = fake_bin / "ps"
-            fake_ps.write_text("#!/bin/sh\nexit 127\n")
-            fake_ps.chmod(0o755)
             log = Path(temp_dir) / "command.log"
             wrapper = Path(temp_dir) / "wrapper.sh"
             wrapper.write_text(script)
             wrapper.chmod(0o755)
             env = os.environ.copy()
-            env["BAZEL_HEARTBEAT_INTERVAL_SECONDS"] = "5"
-            env["PATH"] = f"{fake_bin}:{env['PATH']}"
+            env["BAZEL_HEARTBEAT_INTERVAL_SECONDS"] = "300"
 
-            for iteration in range(4):
-                result = subprocess.run(
-                    [
-                        str(wrapper),
-                        str(log),
-                        "bash",
-                        "-c",
-                        'read -r _ < "$1"; exit 17',
-                        "_",
-                        str(hook_release),
-                    ],
-                    check=False,
-                    capture_output=True,
-                    text=True,
-                    env=env,
-                    timeout=10,
-                )
+            result = subprocess.run(
+                [str(wrapper), str(log), "bash", "-c", "exit 17"],
+                check=False,
+                capture_output=True,
+                text=True,
+                env=env,
+                timeout=5,
+            )
 
-                self.assertEqual(17, result.returncode, f"iteration {iteration}: {result.stderr}")
-                self.assertEqual("x" * (iteration + 1), hook_count.read_text())
-                self._assert_sleepers_reaped(hook_pids, iteration + 1)
+            self.assertEqual(17, result.returncode, result.stderr)
+            self.assertEqual([], list(Path(temp_dir).glob("*.heartbeat-control.*")))
+
+    def test_progress_watchers_use_interruptible_control_channels(self):
+        """Command completion must wake progress waits without a sleeper race."""
+        script = self._heartbeat_script()
+        self.assertNotIn('sleep "$heartbeat_interval" &', script)
+        self.assertIn('read -r -t "$heartbeat_interval"', script)
+        self.assertNotIn('sleep "$progress_interval" &', self.coverage_script)
+        self.assertIn('read -r -t "$progress_interval"', self.coverage_script)
 
     def test_coverage_cleanup_is_portable_and_prompt_without_ps(self):
-        """Coverage remains portable to macOS and owns its heartbeat sleeper."""
+        """Coverage remains portable and wakes its progress watcher promptly."""
         self.assertNotIn("awk -v p=", self.coverage_script)
         self.assertNotIn('ps -o pid= --ppid "$root"', self.coverage_script)
         self.assertIn("ps -A -o pid=,ppid=", self.coverage_script)
 
         with tempfile.TemporaryDirectory() as temp_dir:
-            temp_path = Path(temp_dir)
-            hook, hook_count, hook_pids, hook_release = self._write_parent_signal_hook(temp_path)
-            functions = self._inject_pre_publish_signal(
-                self.coverage_script.split("\nTARGETS=()", 1)[0],
-                'sleep "$progress_interval" &',
-                hook,
-            )
+            functions = self.coverage_script.split("\nTARGETS=()", 1)[0]
             fixture = functions + """
 
 ps() { return 127; }
-DONNER_COVERAGE_PROGRESS_INTERVAL_SECONDS=5
+DONNER_COVERAGE_PROGRESS_INTERVAL_SECONDS=300
 export DONNER_COVERAGE_PROGRESS_INTERVAL_SECONDS
-run_quiet_with_progress "fixture" "$1" bash -c 'read -r _ < "$1"; exit 23' _ "$2"
+run_quiet_with_progress "fixture" "$1" bash -c 'exit 23'
 """
-            log = str(temp_path / "coverage.log")
-            fake_bin = self._write_blocking_sleep(temp_path)
-            env = os.environ.copy()
-            env["PATH"] = f"{fake_bin}:{env['PATH']}"
-            for iteration in range(4):
-                result = self._run_script(fixture, [log, str(hook_release)], env=env)
-                self.assertEqual(23, result.returncode, f"iteration {iteration}: {result.stderr}")
-                self.assertEqual("x" * (iteration + 1), hook_count.read_text())
-                self._assert_sleepers_reaped(hook_pids, iteration + 1)
+            log = str(Path(temp_dir) / "coverage.log")
+            result = self._run_script(fixture, [log], timeout=5)
+            self.assertEqual(23, result.returncode, result.stderr)
+            self.assertEqual([], list(Path(temp_dir).glob("*.progress-control.*")))
 
 
 if __name__ == "__main__":
