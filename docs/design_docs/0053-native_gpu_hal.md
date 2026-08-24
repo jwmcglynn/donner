@@ -2,7 +2,7 @@
 
 **Status:** Design\
 **Created:** 2026-07-05\
-**Updated:** 2026-07-10\
+**Updated:** 2026-08-24\
 **Author:** GPT-5.6 Sol
 
 ## Summary
@@ -379,10 +379,10 @@ directory drops.
       an explicit removal gate.
 
 Geode's renderer runs one command encoder for a whole frame, and the filter engine records compute
-passes into that same encoder. The RHI does not model compute passes, so the filter engine cannot
-migrate in this phase, and a frame whose encoder became a `donner::gpu::CommandEncoder` would have
-to split into several command buffers - reinstating the per-boundary submits the single-encoder
-frame removed, and separating the layer-composite texture copy from the draws it must sit between.
+passes into that same encoder. A frame whose encoder became a `donner::gpu::CommandEncoder` would
+otherwise have to split into several command buffers - reinstating the per-boundary submits the
+single-encoder frame removed, and separating the layer-composite texture copy from the draws it
+must sit between.
 
 The Phase 1 transition adapter therefore gains a host-encoder replay mode: while a host encoder is
 installed, a submitted command stream is replayed into it instead of into an encoder the adapter
@@ -393,12 +393,26 @@ reports its queue submit, so no resource is treated as free before the work is e
 mode is removed once the filter engine and the presentation paths record through the RHI, alongside
 the other Phase 1 escape hatches.
 
+Compute passes are modeled, so the filter engine has no remaining structural blocker. The RHI
+carries compute pipelines (whose descriptor declares the workgroup size, because Metal takes the
+threadgroup shape at dispatch rather than from the compiled pipeline state), begin/end compute
+pass, set pipeline, set bind group, and `dispatchWorkgroups`, plus write-only 2D storage textures
+with a declared texel format and the `StorageBinding` texture usage. Render and compute passes are
+mutually exclusive within one encoder but share a command buffer, so a frame can interleave them in
+recording order. Indirect dispatch, atomics, workgroup-shared memory, barriers, read-write storage
+textures, dynamic bind group offsets, and multiple bind groups are deliberately absent: the filter
+pipelines use none of them. The shader IR gained matching compute entry points with
+`global_invocation_id`, write-only storage texture bindings, and `textureStore`, emitted by all
+three backends and validated by the Metal compiler, `spirv-val`, and WebGPU pipeline creation.
+
 ### Phase 2: Shader IR vertical slice
 
 - [ ] Inventory and specify the required shader language subset.
 - [ ] Implement typed IR validation, layout calculation, deterministic serialization, and source
       locations for diagnostics.
 - [ ] Implement WGSL, MSL, and SPIR-V emitters for one solid-fill pipeline.
+- [ ] Extend the IR and emitters with compute entry points, storage textures, and `textureStore`,
+      proven by a compute vertical slice per backend.
 - [ ] Validate all three outputs with platform/browser validators and compare rendered pixels.
 - [ ] Expand pipeline family by pipeline family, deleting each migrated WGSL-only path.
 
