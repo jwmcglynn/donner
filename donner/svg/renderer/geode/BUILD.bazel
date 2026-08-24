@@ -284,6 +284,7 @@ donner_cc_library(
         "GeodeCheckerboardPipeline.h",
         "GeodeDevice.h",
         "GeodeFilterEngine.h",
+        "GeodeGpuContext.h",
         "GeodeImagePipeline.h",
         "GeodePipeline.h",
         "GeodeWgpuAdapterDevice.h",

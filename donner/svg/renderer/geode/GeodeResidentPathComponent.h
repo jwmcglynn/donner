@@ -28,10 +28,15 @@
 #include <limits>
 #include <memory>
 #include <optional>
+#include <span>
+#include <utility>
 #include <vector>
 
+#include "donner/gpu/Descriptors.h"
+#include "donner/gpu/Handles.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
 #include "donner/svg/renderer/geode/GeodeResourceBudget.h"
+#include "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h"
 #include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
 
 namespace donner::geode {
@@ -123,7 +128,7 @@ public:
   /// One record slot: its index in the contiguous array and its absolute
   /// byte offset in the owning buffer.
   struct Slot {
-    wgpu::Buffer buffer;
+    gpu::BufferRef buffer;
     uint64_t offset = 0;
     uint32_t index = 0;
     /// Stable identity of `buffer` (see `GeodeDevice::AllocateBufferId`).
@@ -159,10 +164,26 @@ public:
       return;
     }
     lastMergedFrame_ = frameIndex;
+    retiredBindGroups_.clear();
     for (uint32_t index : pendingFrees_) {
       freeIndices_.insert(std::upper_bound(freeIndices_.begin(), freeIndices_.end(), index), index);
     }
     pendingFrees_.clear();
+  }
+
+  /// Park a bind group a slot is dropping until the next frame boundary.
+  ///
+  /// A slot's cached bind group can be dropped mid-frame (geometry re-upload, component removal,
+  /// device change) while draws recorded earlier in the frame still name it and have not reached
+  /// the backend yet. Destroying it there fails those draws closed, so it is held here and
+  /// released at the next \ref beginFrame, by which point the frame that recorded them has been
+  /// submitted.
+  ///
+  /// @param bindGroup Bind group to release at the next frame boundary.
+  void retireBindGroup(gpu::BindGroup bindGroup) {
+    if (bindGroup.isValid()) {
+      retiredBindGroups_.push_back(std::move(bindGroup));
+    }
   }
 
   /// Allocate the next record slot (free-list first, then bump in the
@@ -171,7 +192,7 @@ public:
     if (!freeIndices_.empty()) {
       const uint32_t index = freeIndices_.front();
       out = slotAt(index);
-      if (!out.buffer) {
+      if (!out.buffer.isValid()) {
         // A stale index that no longer resolves stays out of the free list,
         // but never silently consumes the allocation attempt.
         freeIndices_.erase(freeIndices_.begin());
@@ -191,23 +212,20 @@ public:
       if (budget_ && !budget_->reserveResidentBytes(newSize)) {
         return false;
       }
-      wgpu::BufferDescriptor desc = {};
-      desc.label = wgpuLabel("GeodeRecordSlab");
-      desc.size = newSize;
-      desc.usage = wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopyDst;
-      ScopedWgpuHandle<wgpu::Buffer> buffer(device.device().createBuffer(desc));
-      if (!buffer) {
+      gpu::Result<gpu::Buffer> created = device.adapterDevice().createBuffer(gpu::BufferDescriptor{
+          "GeodeRecordSlab", newSize, gpu::BufferUsage::Storage | gpu::BufferUsage::CopyDst});
+      if (created.hasError()) {
         if (budget_) {
           budget_->releaseResidentBytes(newSize);
         }
         return false;
       }
-      device.countBuffer();
-      chunks_.push_back(Chunk{std::move(buffer), newSize, GeodeDevice::AllocateBufferId()});
+      chunks_.push_back(
+          Chunk{std::move(created).result(), newSize, GeodeDevice::AllocateBufferId()});
       accountedBytes_ += newSize;
       usedBytes_ = 0;
     }
-    out.buffer = chunks_.back().buffer.get();
+    out.buffer = chunks_.back().buffer;
     out.bufferId = chunks_.back().bufferId;
     out.offset = usedBytes_;
     // Indices are GLOBAL across chunks (slotAt walks cumulative chunk
@@ -231,7 +249,7 @@ public:
   /// A batch-uniform buffer plus its stable identity; `buffer` is null when
   /// the slab declined (uniform cache full, or buffer creation failed).
   struct BatchUniformHandle {
-    wgpu::Buffer buffer;
+    gpu::BufferRef buffer;
     uint64_t bufferId = 0;
   };
 
@@ -262,7 +280,7 @@ public:
     const auto* first = static_cast<const uint8_t*>(bytes);
     for (const BatchUniform& entry : batchUniforms_) {
       if (entry.bytes.size() == size && std::memcmp(entry.bytes.data(), first, size) == 0) {
-        return BatchUniformHandle{entry.buffer.get(), entry.bufferId};
+        return BatchUniformHandle{entry.buffer, entry.bufferId};
       }
     }
     if (batchUniforms_.size() >= kMaxBatchUniforms) {
@@ -316,31 +334,40 @@ public:
       }
       return BatchUniformHandle{};
     }
-    wgpu::BufferDescriptor desc = {};
-    desc.label = wgpuLabel("GeodeSceneBatchUniform");
-    desc.size = size;
-    desc.usage = wgpu::BufferUsage::Uniform | wgpu::BufferUsage::CopyDst;
-    ScopedWgpuHandle<wgpu::Buffer> buffer(device.device().createBuffer(desc));
-    if (!buffer) {
+    gpu::Result<gpu::Buffer> created = device.adapterDevice().createBuffer(gpu::BufferDescriptor{
+        "GeodeSceneBatchUniform", size, gpu::BufferUsage::Uniform | gpu::BufferUsage::CopyDst});
+    if (created.hasError()) {
       if (budget_) {
         budget_->releaseResidentBytes(size);
       }
       (void)replaceCpuBytes(metadataBytes + cpuPayloadBytes_);
       return BatchUniformHandle{};
     }
-    device.countBuffer();
-    device.queue().writeBuffer(buffer.get(), 0, first, size);
-    device.countBufferWrite(size);
+    gpu::Buffer buffer = std::move(created).result();
+    (void)device.adapterDevice().writeBuffer(buffer, 0, std::span<const uint8_t>(first, size));
     batchUniforms_.push_back(
         BatchUniform{std::move(buffer), std::move(retainedBytes), GeodeDevice::AllocateBufferId()});
     cpuPayloadBytes_ += retainedCapacity;
     accountedBytes_ += size;
-    return BatchUniformHandle{batchUniforms_.back().buffer.get(), batchUniforms_.back().bufferId};
+    return BatchUniformHandle{batchUniforms_.back().buffer, batchUniforms_.back().bufferId};
+  }
+
+  /// The chunk buffer carrying \p bufferId, or a null handle when this slab does not own it.
+  /// Uploads need the owning handle; \ref Slot and \ref Allocation only carry an identity view.
+  /// @param bufferId Stable buffer id stamped on the slot or allocation.
+  const gpu::Buffer& bufferForId(uint64_t bufferId) const {
+    static const gpu::Buffer kNone;
+    for (const Chunk& chunk : chunks_) {
+      if (chunk.bufferId == bufferId) {
+        return chunk.buffer;
+      }
+    }
+    return kNone;
   }
 
   /// Borrowed handle of the newest buffer (batches bind sub-ranges of it).
-  wgpu::Buffer newestBuffer() const {
-    return chunks_.empty() ? wgpu::Buffer() : chunks_.back().buffer.get();
+  gpu::BufferRef newestBuffer() const {
+    return chunks_.empty() ? gpu::BufferRef() : gpu::BufferRef(chunks_.back().buffer);
   }
 
   /// Bytes currently in use in the newest buffer.
@@ -362,13 +389,13 @@ public:
 
 private:
   struct Chunk {
-    ScopedWgpuHandle<wgpu::Buffer> buffer;
+    gpu::Buffer buffer;
     uint64_t size = 0;
     uint64_t bufferId = 0;
   };
 
   struct BatchUniform {
-    ScopedWgpuHandle<wgpu::Buffer> buffer;
+    gpu::Buffer buffer;
     std::vector<uint8_t> bytes;
     uint64_t bufferId = 0;
   };
@@ -397,11 +424,11 @@ private:
     uint64_t offset = static_cast<uint64_t>(index) * sizeof(InstanceRecord);
     for (const Chunk& chunk : chunks_) {
       if (offset < chunk.size) {
-        return Slot{chunk.buffer.get(), offset, index, chunk.bufferId};
+        return Slot{chunk.buffer, offset, index, chunk.bufferId};
       }
       offset -= chunk.size;
     }
-    return Slot{wgpu::Buffer(), 0, index, 0};
+    return Slot{gpu::BufferRef(), 0, index, 0};
   }
 
   uint64_t owningDeviceId_;
@@ -410,6 +437,8 @@ private:
   std::vector<Chunk> chunks_;
   std::vector<uint32_t> freeIndices_;
   std::vector<uint32_t> pendingFrees_;
+  /// Bind groups dropped by slots this frame, released at the next \ref beginFrame.
+  std::vector<gpu::BindGroup> retiredBindGroups_;
   std::vector<BatchUniform> batchUniforms_;
   std::shared_ptr<GeodeDocumentGeometryBudget> budget_;
   GeodeGeometryCacheReservation cpuReservation_;
@@ -450,9 +479,33 @@ class GeodeDevice;
  */
 class GeodeResidentSlab {
 public:
+  /// The chunk buffer carrying \p bufferId, or a null handle when this slab does not own it.
+  /// Uploads need the owning handle; \ref Slot and \ref Allocation only carry an identity view.
+  /// @param bufferId Stable buffer id stamped on the slot or allocation.
+  const gpu::Buffer& bufferForId(uint64_t bufferId) const {
+    static const gpu::Buffer kNone;
+    for (const Chunk& chunk : chunks_) {
+      if (chunk.bufferId == bufferId) {
+        return chunk.buffer;
+      }
+    }
+    return kNone;
+  }
+
+  /// Byte size of the chunk carrying \p bufferId, or 0 when this slab does not own it.
+  /// @param bufferId Stable buffer id stamped on the slot or allocation.
+  uint64_t chunkBytesForId(uint64_t bufferId) const {
+    for (const Chunk& chunk : chunks_) {
+      if (chunk.bufferId == bufferId) {
+        return chunk.size;
+      }
+    }
+    return 0;
+  }
+
   /// One sub-range of a slab chunk.
   struct Allocation {
-    wgpu::Buffer buffer;  // Borrowed handle; owned by the slab chunk.
+    gpu::BufferRef buffer;  // Borrowed identity; the slab chunk owns the buffer.
     uint64_t offset = 0;
     uint64_t size = 0;
     /// Stable identity of `buffer` (see `GeodeDevice::AllocateBufferId`).
@@ -507,6 +560,7 @@ public:
       return;
     }
     lastMergedFrame_ = frameIndex;
+    retiredBindGroups_.clear();
     for (const FreeRange& range : pendingFrees_) {
       auto it = freeRanges_.begin();
       while (it != freeRanges_.end() &&
@@ -552,7 +606,7 @@ public:
     for (auto it = freeRanges_.begin(); it != freeRanges_.end(); ++it) {
       const uint64_t start = alignUp(it->offset, alignment);
       if (start + size <= it->offset + it->size) {
-        out.buffer = chunks_[it->chunk].buffer.get();
+        out.buffer = chunks_[it->chunk].buffer;
         out.bufferId = chunks_[it->chunk].bufferId;
         out.offset = start;
         out.size = size;
@@ -585,20 +639,17 @@ public:
       if (budget_ && !budget_->reserveResidentBytes(newSize)) {
         return false;
       }
-      wgpu::BufferDescriptor desc = {};
-      desc.label = wgpuLabel("GeodeResidentSlab");
-      desc.size = newSize;
-      desc.usage =
-          wgpu::BufferUsage::Storage | wgpu::BufferUsage::Uniform | wgpu::BufferUsage::CopyDst;
-      Chunk chunk;
-      chunk.buffer.reset(device.device().createBuffer(desc));
-      if (!chunk.buffer) {
+      gpu::Result<gpu::Buffer> created = device.adapterDevice().createBuffer(gpu::BufferDescriptor{
+          "GeodeResidentSlab", newSize,
+          gpu::BufferUsage::Storage | gpu::BufferUsage::Uniform | gpu::BufferUsage::CopyDst});
+      if (created.hasError()) {
         if (budget_) {
           budget_->releaseResidentBytes(newSize);
         }
         return false;
       }
-      device.countBuffer();
+      Chunk chunk;
+      chunk.buffer = std::move(created).result();
       chunk.size = newSize;
       chunk.bufferId = GeodeDevice::AllocateBufferId();
       chunks_.push_back(std::move(chunk));
@@ -610,7 +661,7 @@ public:
     }
 
     Chunk& chunk = chunks_.back();
-    out.buffer = chunk.buffer.get();
+    out.buffer = chunk.buffer;
     out.bufferId = chunk.bufferId;
     out.offset = alignUp(chunk.cursor, alignment);
     out.size = size;
@@ -640,7 +691,25 @@ public:
     pendingFrees_.push_back(FreeRange{chunkIndex, alloc.offset, alloc.size});
   }
 
+  /// Park a bind group a slot is dropping until the next frame boundary.
+  ///
+  /// A slot's cached bind group can be dropped mid-frame (geometry re-upload, component removal,
+  /// device change) while draws recorded earlier in the frame still name it and have not reached
+  /// the backend yet. Destroying it there fails those draws closed, so it is held here and
+  /// released at the next \ref beginFrame, by which point the frame that recorded them has been
+  /// submitted.
+  ///
+  /// @param bindGroup Bind group to release at the next frame boundary.
+  void retireBindGroup(gpu::BindGroup bindGroup) {
+    if (bindGroup.isValid()) {
+      retiredBindGroups_.push_back(std::move(bindGroup));
+    }
+  }
+
 private:
+  /// Bind groups dropped by slots this frame, released at the next \ref beginFrame.
+  std::vector<gpu::BindGroup> retiredBindGroups_;
+
   static constexpr uint64_t kInitialChunkBytes = 1u << 20;  // 1 MiB.
 
   static uint64_t alignUp(uint64_t value, uint64_t alignment) {
@@ -648,7 +717,7 @@ private:
   }
 
   struct Chunk {
-    ScopedWgpuHandle<wgpu::Buffer> buffer;
+    gpu::Buffer buffer;
     uint64_t size = 0;
     uint64_t cursor = 0;
     uint64_t bufferId = 0;
@@ -692,7 +761,7 @@ struct GeodeResidentSlot {
   /// storage binding, whose range spans them. The slot is padded out to the
   /// slab's allocation alignment so consecutive slots leave no unwritten
   /// bytes between them.
-  wgpu::Buffer buffer;
+  gpu::BufferRef buffer;
   /// Stable identity of `buffer` (see `GeodeDevice::AllocateBufferId`).
   /// A cross-entity batch binds the whole chunk and caches the resulting
   /// bind group past the lifetime of the document that owns it, so the
@@ -713,7 +782,7 @@ struct GeodeResidentSlot {
   /// texture/sampler/identity-instance handles), so it survives frames
   /// and encoders. Rebuilt only when the geometry buffer is
   /// re-allocated.
-  ScopedWgpuHandle<wgpu::BindGroup> bindGroup;
+  gpu::BindGroup bindGroup;
 
   /// A byte sub-range of `buffer`. `size == 0` is never bound directly -
   /// empty SSBO regions reserve a zero-filled dummy slot wide enough for one
@@ -836,7 +905,7 @@ struct GeodeResidentSlot {
 
   GeodeResidentSlot() = default;
   ~GeodeResidentSlot() {
-    if (recordSlab && recordSlot.buffer) {
+    if (recordSlab && recordSlot.buffer.isValid()) {
       recordSlab->freeSlot(recordSlot);
     }
     reset();
@@ -850,7 +919,7 @@ struct GeodeResidentSlot {
       reset();
       buffer = other.buffer;
       bufferId = other.bufferId;
-      other.buffer = wgpu::Buffer();
+      other.buffer = gpu::BufferRef();
       other.bufferId = 0;
       slab = std::move(other.slab);
       allocationOffset = other.allocationOffset;
@@ -908,10 +977,10 @@ struct GeodeResidentSlot {
   /// Safe to call on an empty slot. A geometry mutation can remove this
   /// component after a draw has referenced the buffer but before the
   /// frame's command encoder is submitted. Do not call `Buffer::destroy()`
-  /// here: WebGPU makes that buffer unusable immediately, invalidating the
-  /// already-recorded draw. Releasing our references is sufficient because
-  /// the command encoder keeps the referenced resources alive until it is
-  /// done.
+  /// here: that makes the buffer unusable immediately, invalidating the already-recorded draw.
+  /// Releasing our references is enough for the buffer, whose storage the slab owns; the bind
+  /// group is handed to the slab instead of dropped, because draws recorded earlier this frame
+  /// may still name it and have not reached the backend yet.
   void reset() {
     if (slab && allocationSize != 0) {
       GeodeResidentSlab::Allocation alloc{buffer, allocationOffset, allocationSize, bufferId};
@@ -928,9 +997,12 @@ struct GeodeResidentSlot {
     // refresh them when the document crosses devices.
     allocationOffset = 0;
     allocationSize = 0;
-    buffer = wgpu::Buffer();
+    buffer = gpu::BufferRef();
     bufferId = 0;
-    bindGroup.reset();
+    if (slab) {
+      slab->retireBindGroup(std::move(bindGroup));
+    }
+    bindGroup = gpu::BindGroup();
     resident = false;
     encodedKey = nullptr;
     encodedFingerprint = 0;
@@ -981,7 +1053,7 @@ struct GeodeResidentGradientSlot {
   /// `GeodeResidentSlab` chunk; region offsets are ABSOLUTE buffer
   /// offsets. Region layout matches \ref GeodeResidentSlot, with the
   /// uniform region sized for `GradientUniforms` (672 bytes).
-  wgpu::Buffer buffer;
+  gpu::BufferRef buffer;
   /// Stable identity of `buffer` (see `GeodeDevice::AllocateBufferId`), so
   /// returning the allocation matches the owning chunk by identity rather
   /// than by a handle address the allocator can recycle.
@@ -998,7 +1070,7 @@ struct GeodeResidentGradientSlot {
   /// Cached 11-binding gradient bind group. All bindings reference stable
   /// objects (this slot's buffer sub-ranges + device-owned dummy
   /// clip-mask texture/sampler), so it survives frames and encoders.
-  ScopedWgpuHandle<wgpu::BindGroup> bindGroup;
+  gpu::BindGroup bindGroup;
 
   /// A byte sub-range of `buffer` (same semantics as GeodeResidentSlot::Region).
   struct Region {
@@ -1060,7 +1132,7 @@ struct GeodeResidentGradientSlot {
       reset();
       buffer = other.buffer;
       bufferId = other.bufferId;
-      other.buffer = wgpu::Buffer();
+      other.buffer = gpu::BufferRef();
       other.bufferId = 0;
       slab = std::move(other.slab);
       allocationOffset = other.allocationOffset;
@@ -1107,9 +1179,12 @@ struct GeodeResidentGradientSlot {
     // refresh them when the document crosses devices.
     allocationOffset = 0;
     allocationSize = 0;
-    buffer = wgpu::Buffer();
+    buffer = gpu::BufferRef();
     bufferId = 0;
-    bindGroup.reset();
+    if (slab) {
+      slab->retireBindGroup(std::move(bindGroup));
+    }
+    bindGroup = gpu::BindGroup();
     resident = false;
     encodedKey = nullptr;
     encodedFingerprint = 0;

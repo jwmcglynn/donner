@@ -97,9 +97,6 @@ GeodePipeline::GeodePipeline(GeodeWgpuAdapterDevice& adapterDevice, gpu::Texture
   // every draw whose instances share one paint and one encoded path. `batchedPipeline` builds the
   // record-reading variant.
   pipeline_ = buildPipeline("GeodeSlugFill", "vs_main", "fs_main");
-
-  borrowedPipeline_ = adapterDevice.wgpuRenderPipelineOf(pipeline_);
-  borrowedBindGroupLayout_ = adapterDevice.wgpuBindGroupLayoutOf(bindGroupLayout_);
 }
 
 gpu::RenderPipeline GeodePipeline::buildPipeline(const char* label, const char* vertexEntryPoint,
@@ -114,16 +111,15 @@ gpu::RenderPipeline GeodePipeline::buildPipeline(const char* label, const char* 
       label);
 }
 
-const wgpu::RenderPipeline& GeodePipeline::batchedPipeline() const {
+const gpu::RenderPipeline& GeodePipeline::batchedPipeline() const {
   if (!batchedPipeline_.isValid()) {
     // Identical state to the default pipeline - same layout, same shader
     // module, same blending - differing only in the entry points that read
     // paint and geometry from each instance's record. Built on first use
     // because only a cross-entity batch needs it.
     batchedPipeline_ = buildPipeline("GeodeSlugFillBatched", "vs_main_batched", "fs_main_batched");
-    borrowedBatchedPipeline_ = adapterDevice_->wgpuRenderPipelineOf(batchedPipeline_);
   }
-  return borrowedBatchedPipeline_;
+  return batchedPipeline_;
 }
 
 // ============================================================================
@@ -174,9 +170,6 @@ GeodeGradientPipeline::GeodeGradientPipeline(GeodeWgpuAdapterDevice& adapterDevi
                              {gpu::ColorTargetState{colorFormat_, PremultipliedSourceOverBlend()}}},
           gpu::PrimitiveTopology::TriangleList, gpu::CullMode::None}),
       "GeodeSlugGradient createRenderPipeline");
-
-  borrowedPipeline_ = adapterDevice.wgpuRenderPipelineOf(pipeline_);
-  borrowedBindGroupLayout_ = adapterDevice.wgpuBindGroupLayoutOf(bindGroupLayout_);
 }
 
 // ============================================================================
@@ -227,9 +220,6 @@ GeodeMaskPipeline::GeodeMaskPipeline(GeodeWgpuAdapterDevice& adapterDevice) {
                              {gpu::ColorTargetState{gpu::TextureFormat::RGBA8Unorm, maxBlend}}},
           gpu::PrimitiveTopology::TriangleList, gpu::CullMode::None}),
       "GeodeSlugMask createRenderPipeline");
-
-  borrowedPipeline_ = adapterDevice.wgpuRenderPipelineOf(pipeline_);
-  borrowedBindGroupLayout_ = adapterDevice.wgpuBindGroupLayoutOf(bindGroupLayout_);
 }
 
 // ============================================================================

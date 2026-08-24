@@ -100,12 +100,6 @@ GeodeImagePipeline::GeodeImagePipeline(GeodeWgpuAdapterDevice& adapterDevice,
                         "GeodeImageBlitClipMask", gpu::FilterMode::Linear, gpu::FilterMode::Linear,
                         gpu::AddressMode::ClampToEdge, gpu::AddressMode::ClampToEdge}),
                     "GeodeImageBlitClipMask createSampler");
-
-  borrowedPipeline_ = adapterDevice.wgpuRenderPipelineOf(pipeline_);
-  borrowedBindGroupLayout_ = adapterDevice.wgpuBindGroupLayoutOf(bindGroupLayout_);
-  borrowedLinearSampler_ = adapterDevice.wgpuSamplerOf(linearSampler_);
-  borrowedNearestSampler_ = adapterDevice.wgpuSamplerOf(nearestSampler_);
-  borrowedClipMaskSampler_ = adapterDevice.wgpuSamplerOf(clipMaskSampler_);
 }
 
 }  // namespace donner::geode
