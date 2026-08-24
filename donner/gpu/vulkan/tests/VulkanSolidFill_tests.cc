@@ -484,7 +484,9 @@ TEST_F(VulkanSolidFillTest, MatchesProductionWgpuRender) {
       device_->createTexture(TextureDescriptor{"dummy", Extent2d{1, 1}, TextureFormat::RGBA8Unorm,
                                                TextureUsage::Sampled | TextureUsage::CopyDst}),
       "createTexture dummy");
-  const std::array<uint8_t, 4> dummyTexel = {0, 0, 0, 0};
+  // Sized to the row pitch the layout declares, not to the single texel: a backend may copy
+  // whole strided rows out of the source, so a four-byte array would be read past its end.
+  const std::array<uint8_t, 256> dummyTexel = {};
   const Status dummyWrite = device_->writeTexture(dummyTexture, dummyTexel,
                                                   TexelCopyBufferLayout{0, 256, 1}, Extent2d{1, 1});
   ASSERT_FALSE(dummyWrite.hasError()) << dummyWrite.error();

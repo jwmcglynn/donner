@@ -970,8 +970,14 @@ void GeodeDevice::initSharedBindSlotResources() {
                                              "GeodeDeviceDummyPattern", gpu::Extent2d{1, 1},
                                              gpu::TextureFormat::RGBA8Unorm, kDummyTextureUsage}),
                                          "GeodeDeviceDummyPattern createTexture");
+  // The layout below declares a full row pitch, so the source has to carry one. A backend is
+  // free to copy whole strided rows out of it, and handing it only the four texel bytes is a
+  // read past the end of the array. The texel sits in the leading bytes; the rest is padding the
+  // copy never turns into texels.
+  std::array<uint8_t, kSingleTexelRowBytes> patternRow = {};
   const std::array<uint8_t, 4> patternPixel = {0, 0, 0, 255};
-  require(adapterDevice.writeTexture(impl_->gpuDummyPatternTexture, patternPixel,
+  std::copy(patternPixel.begin(), patternPixel.end(), patternRow.begin());
+  require(adapterDevice.writeTexture(impl_->gpuDummyPatternTexture, patternRow,
                                      gpu::TexelCopyBufferLayout{0, kSingleTexelRowBytes, 1},
                                      gpu::Extent2d{1, 1}),
           "GeodeDeviceDummyPattern writeTexture");
@@ -990,8 +996,11 @@ void GeodeDevice::initSharedBindSlotResources() {
                                               "GeodeDeviceDummyClipMask", gpu::Extent2d{1, 1},
                                               gpu::TextureFormat::RGBA8Unorm, kDummyTextureUsage}),
                                           "GeodeDeviceDummyClipMask createTexture");
+  // Padded to the declared row pitch for the same reason as the pattern texel above.
+  std::array<uint8_t, kSingleTexelRowBytes> clipMaskRow = {};
   const std::array<uint8_t, 4> clipMaskPixel = {0xFF, 0xFF, 0xFF, 0xFF};
-  require(adapterDevice.writeTexture(impl_->gpuDummyClipMaskTexture, clipMaskPixel,
+  std::copy(clipMaskPixel.begin(), clipMaskPixel.end(), clipMaskRow.begin());
+  require(adapterDevice.writeTexture(impl_->gpuDummyClipMaskTexture, clipMaskRow,
                                      gpu::TexelCopyBufferLayout{0, kSingleTexelRowBytes, 1},
                                      gpu::Extent2d{1, 1}),
           "GeodeDeviceDummyClipMask writeTexture");
