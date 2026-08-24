@@ -1187,9 +1187,13 @@ struct VulkanDevice::Impl {
   /// @param state Encoding state.
   Status encodeEndComputePass(EncodingState& state);
 
-  /// Encodes a compute-pass command, or returns empty when \p command is not one.
-  /// @param state Encoding state. @param command Recorded command.
-  std::optional<Status> encodeComputeCommand(EncodingState& state, const Command& command);
+  /// Encodes a compute-pass command, or returns empty when the command is not one.
+  /// @param state Encoding state.
+  /// @param commands Full command stream, for the begin-pass pre-scan.
+  /// @param commandIndex Index of the command to encode.
+  std::optional<Status> encodeComputeCommand(EncodingState& state,
+                                             std::span<const Command> commands,
+                                             size_t commandIndex);
 
   /// Encodes a copy command, or returns empty when \p command is not one.
   /// @param state Encoding state. @param command Recorded command.
@@ -2771,8 +2775,13 @@ Status VulkanDevice::Impl::encodeEndComputePass(EncodingState& state) {
 }
 
 std::optional<Status> VulkanDevice::Impl::encodeComputeCommand(EncodingState& state,
-                                                               const Command& command) {
+                                                               std::span<const Command> commands,
+                                                               size_t commandIndex) {
+  const Command& command = commands[commandIndex];
   if (std::get_if<BeginComputePassCommand>(&command) != nullptr) {
+    // Symmetric with the render path: barriers cannot be recorded inside a pass, so the textures
+    // this pass binds are transitioned into the layouts its descriptors declare before it opens.
+    transitionPassBoundTextures(state, commands, commandIndex);
     return beginEncodedComputePass(state);
   } else if (const auto* setPipeline = std::get_if<SetComputePipelineCommand>(&command)) {
     return encodeSetComputePipeline(state, *setPipeline);
@@ -2800,7 +2809,7 @@ Status VulkanDevice::Impl::encodeCommand(EncodingState& state, std::span<const C
   if (std::optional<Status> status = encodeRenderCommand(state, commands, commandIndex)) {
     return *status;
   }
-  if (std::optional<Status> status = encodeComputeCommand(state, commands[commandIndex])) {
+  if (std::optional<Status> status = encodeComputeCommand(state, commands, commandIndex)) {
     return *status;
   }
   if (std::optional<Status> status = encodeCopyCommand(state, commands[commandIndex])) {
