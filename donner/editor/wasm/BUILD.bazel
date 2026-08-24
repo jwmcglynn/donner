@@ -353,10 +353,17 @@ py_test(
         # Measured at this layer: wasm 12,946,259 raw / 5,134,972 gzip,
         # js 174,773 raw / 49,217 gzip, and package 13,162,588 raw. Budgets
         # retain about 1 percent headroom.
+        #
+        # GPU runtime retune: the typed device, its validation, its command
+        # recording and the Geode adapter over the backend are deliberate
+        # shipped code, and the renderer records through them. Measured at the
+        # layer that finishes that move: wasm 13,315,197 raw / 5,237,419 gzip,
+        # js 175,205 raw / 49,318 gzip, and package 13,531,958 raw. Budgets
+        # retain about 1 percent headroom over that measurement.
         "--max-wasm-raw-bytes",
-        "13076000",
+        "13449000",
         "--max-wasm-gzip-bytes",
-        "5187000",
+        "5290000",
         "--max-wasm-function-body-bytes",
         "46000",
         "--max-wasm-data-segments",
@@ -366,7 +373,7 @@ py_test(
         "--max-js-gzip-bytes",
         "49710",
         "--max-total-raw-bytes",
-        "13295000",
+        "13668000",
         "--expected-js-property",
         "__donnerLastScrollEvent",
         # SHIP BLOCKER, tracked with the deferred WebKit decision: the WebGPU diagnostic
