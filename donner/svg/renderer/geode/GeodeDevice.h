@@ -344,6 +344,13 @@ public:
   void deferDestroy(gpu::BindGroup bindGroup);
 
   /**
+   * Enqueue a runtime texture for deferred destruction. Same semantics as the buffer variant: a
+   * render target superseded mid-frame may still be named by work that has been recorded but not
+   * yet submitted, so its slot is released at the next frame boundary instead of immediately.
+   */
+  void deferDestroy(gpu::Texture texture);
+
+  /**
    * Drop all deferred-destroy handles, releasing their GPU resources.
    *
    * Called at the top of each frame (before new allocations) so resources
@@ -811,6 +818,7 @@ private:
   std::vector<ScopedWgpuHandle<wgpu::Buffer>> pendingBuffers_;
   std::vector<ScopedWgpuHandle<wgpu::Texture>> pendingTextures_;
   std::vector<gpu::BindGroup> pendingBindGroups_;
+  std::vector<gpu::Texture> pendingGpuTextures_;
 
   // Scene-batch bind groups cached across frames (see
   // SceneBatchBindGroupKey). Bounded by kSceneBatchBindGroupCacheCap, with
