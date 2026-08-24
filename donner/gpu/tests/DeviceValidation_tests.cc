@@ -631,5 +631,209 @@ TEST_F(WriteTextureTests, RejectsMissingCopyDstUsage) {
               IsGpuErrorWithMessage(GpuErrorType::UsageMismatch, HasSubstr("CopyDst")));
 }
 
+// ----------------------------------------------------------------------------
+// Host buffer mapping.
+
+/// A device whose mapping hooks follow a script, so a test can state exactly what the backend
+/// reports on each wait slice and assert what the runtime does with it.
+class ScriptedMappingDevice : public Device {
+public:
+  /// Submissions complete instantly here; nothing in these tests waits on one.
+  uint64_t completedSerial() const override { return lastSubmittedSerial(); }
+
+  /// What every slice reports until \ref sliceStates runs out.
+  MapSliceState trailingState = MapSliceState::Pending;
+  /// States reported by the first slices, in order.
+  std::vector<MapSliceState> sliceStates;
+  /// Number of slices the runtime asked for.
+  int sliceCalls = 0;
+  /// Bytes handed back once a mapping is ready.
+  std::vector<uint8_t> bytes{1, 2, 3, 4};
+  /// Number of times the runtime released a mapping.
+  int unmapCalls = 0;
+
+protected:
+  // The operations this fake does not model are accepted and ignored: the tests below are about
+  // mapping, and a backend that recorded them would only add noise.
+  Status onCreateBuffer(uint32_t, const BufferDescriptor&) override { return OkStatus(); }
+  Status onCreateTexture(uint32_t, const TextureDescriptor&) override { return OkStatus(); }
+  Status onCreateTextureView(uint32_t, uint32_t, const TextureViewDescriptor&) override {
+    return OkStatus();
+  }
+  Status onCreateSampler(uint32_t, const SamplerDescriptor&) override { return OkStatus(); }
+  Status onCreateBindGroupLayout(uint32_t, const BindGroupLayoutDescriptor&) override {
+    return OkStatus();
+  }
+  Status onCreateBindGroup(uint32_t, const BindGroupDescriptor&) override { return OkStatus(); }
+  Status onCreatePipelineLayout(uint32_t, const PipelineLayoutDescriptor&) override {
+    return OkStatus();
+  }
+  Status onCreateShaderModule(uint32_t, const ShaderModuleDescriptor&) override {
+    return OkStatus();
+  }
+  Status onCreateRenderPipeline(uint32_t, const RenderPipelineDescriptor&) override {
+    return OkStatus();
+  }
+  void onDestroyResource(std::string_view, uint32_t) override {}
+  Status onWriteBuffer(uint32_t, uint64_t, std::span<const uint8_t>) override { return OkStatus(); }
+  Status onWriteTexture(uint32_t, std::span<const uint8_t>, const TexelCopyBufferLayout&,
+                        const Extent2d&) override {
+    return OkStatus();
+  }
+  Status onSubmit(uint64_t, uint32_t, std::span<const Command>) override { return OkStatus(); }
+
+  Status onMapBufferAsync(uint32_t /*mappingSlotIndex*/, uint32_t /*bufferSlotIndex*/,
+                          MapMode /*mode*/, uint64_t /*offsetBytes*/,
+                          uint64_t /*byteCount*/) override {
+    return OkStatus();
+  }
+
+  MapSliceState onWaitMappingSlice(uint32_t /*mappingSlotIndex*/,
+                                   double /*sliceSeconds*/) override {
+    const size_t index = static_cast<size_t>(sliceCalls);
+    ++sliceCalls;
+    return index < sliceStates.size() ? sliceStates[index] : trailingState;
+  }
+
+  Result<std::span<const uint8_t>> onMappedBytes(uint32_t /*mappingSlotIndex*/) const override {
+    return std::span<const uint8_t>(bytes);
+  }
+
+  void onUnmapBuffer(uint32_t /*mappingSlotIndex*/) override { ++unmapCalls; }
+};
+
+class BufferMappingTests : public testing::Test {
+protected:
+  Buffer readableBuffer(uint64_t byteSize = 64) {
+    return GetResultOrFail(device_.createBuffer(
+        BufferDescriptor{"readback", byteSize, BufferUsage::CopyDst | BufferUsage::MapRead}));
+  }
+
+  /// A wait with slices short enough that the budget allows exactly four of them.
+  static MapWaitParams fourSlices() { return MapWaitParams{0.25, 1.0}; }
+
+  ScriptedMappingDevice device_;
+};
+
+TEST_F(BufferMappingTests, RejectsBufferWithoutMapReadUsage) {
+  const Buffer plain =
+      GetResultOrFail(device_.createBuffer(BufferDescriptor{"plain", 64, BufferUsage::CopyDst}));
+  EXPECT_THAT(device_.mapBufferAsync(plain, MapMode::Read, 0, 64),
+              IsGpuErrorWithMessage(GpuErrorType::UsageMismatch, HasSubstr("lacks the MapRead")));
+}
+
+TEST_F(BufferMappingTests, RejectsRangeBeyondTheBuffer) {
+  const Buffer buffer = readableBuffer();
+  EXPECT_THAT(device_.mapBufferAsync(buffer, MapMode::Read, 32, 64),
+              IsGpuError(GpuErrorType::OutOfBounds));
+}
+
+TEST_F(BufferMappingTests, RejectsEmptyRange) {
+  const Buffer buffer = readableBuffer();
+  EXPECT_THAT(device_.mapBufferAsync(buffer, MapMode::Read, 0, 0),
+              IsGpuError(GpuErrorType::InvalidDescriptor));
+}
+
+TEST_F(BufferMappingTests, RejectsWaitBoundsThatCouldNeverTerminate) {
+  const Buffer buffer = readableBuffer();
+  BufferMapping mapping = GetResultOrFail(device_.mapBufferAsync(buffer, MapMode::Read, 0, 64));
+  EXPECT_THAT(device_.waitForMapping(mapping, MapWaitParams{0.0, 1.0}, {}),
+              IsGpuError(GpuErrorType::InvalidDescriptor));
+  EXPECT_THAT(device_.waitForMapping(mapping, MapWaitParams{0.25, 0.0}, {}),
+              IsGpuError(GpuErrorType::InvalidDescriptor));
+}
+
+TEST_F(BufferMappingTests, ReadyMappingHandsBackItsBytes) {
+  const Buffer buffer = readableBuffer();
+  device_.sliceStates = {MapSliceState::Pending, MapSliceState::Ready};
+  BufferMapping mapping = GetResultOrFail(device_.mapBufferAsync(buffer, MapMode::Read, 0, 64));
+
+  EXPECT_EQ(GetResultOrFail(device_.waitForMapping(mapping, fourSlices(), {})),
+            MapWaitOutcome::Ready);
+  EXPECT_THAT(GetResultOrFail(device_.mappedBytes(mapping)), testing::ElementsAre(1, 2, 3, 4));
+}
+
+TEST_F(BufferMappingTests, CancellationIsCheckedBeforeAnySliceRuns) {
+  const Buffer buffer = readableBuffer();
+  BufferMapping mapping = GetResultOrFail(device_.mapBufferAsync(buffer, MapMode::Read, 0, 64));
+
+  EXPECT_EQ(GetResultOrFail(device_.waitForMapping(mapping, fourSlices(), [] { return true; })),
+            MapWaitOutcome::Cancelled);
+  EXPECT_EQ(device_.sliceCalls, 0)
+      << "A caller that has already cancelled must not be made to wait a slice first";
+}
+
+TEST_F(BufferMappingTests, CancellationStopsWithinOneSlice) {
+  const Buffer buffer = readableBuffer();
+  BufferMapping mapping = GetResultOrFail(device_.mapBufferAsync(buffer, MapMode::Read, 0, 64));
+
+  int checks = 0;
+  const auto cancelOnSecondCheck = [&checks] { return ++checks > 1; };
+  EXPECT_EQ(GetResultOrFail(device_.waitForMapping(mapping, fourSlices(), cancelOnSecondCheck)),
+            MapWaitOutcome::Cancelled);
+  EXPECT_EQ(device_.sliceCalls, 1) << "Cancellation must end the wait after the slice in flight";
+}
+
+TEST_F(BufferMappingTests, BudgetExhaustionReportsTimedOut) {
+  const Buffer buffer = readableBuffer();
+  BufferMapping mapping = GetResultOrFail(device_.mapBufferAsync(buffer, MapMode::Read, 0, 64));
+
+  EXPECT_EQ(GetResultOrFail(device_.waitForMapping(mapping, fourSlices(), {})),
+            MapWaitOutcome::TimedOut);
+  EXPECT_EQ(device_.sliceCalls, 4) << "The budget must be spent in slices of the stated length";
+}
+
+TEST_F(BufferMappingTests, DeviceLossEndsTheWaitImmediately) {
+  const Buffer buffer = readableBuffer();
+  device_.sliceStates = {MapSliceState::DeviceLost};
+  BufferMapping mapping = GetResultOrFail(device_.mapBufferAsync(buffer, MapMode::Read, 0, 64));
+
+  EXPECT_EQ(GetResultOrFail(device_.waitForMapping(mapping, fourSlices(), {})),
+            MapWaitOutcome::DeviceLost);
+  EXPECT_EQ(device_.sliceCalls, 1)
+      << "A lost device can never deliver the map, so the budget must not be spent on it";
+}
+
+TEST_F(BufferMappingTests, BackendFailureIsItsOwnOutcome) {
+  const Buffer buffer = readableBuffer();
+  device_.sliceStates = {MapSliceState::Failed};
+  BufferMapping mapping = GetResultOrFail(device_.mapBufferAsync(buffer, MapMode::Read, 0, 64));
+
+  EXPECT_EQ(GetResultOrFail(device_.waitForMapping(mapping, fourSlices(), {})),
+            MapWaitOutcome::Failed);
+}
+
+TEST_F(BufferMappingTests, ReleasingAMappingInvalidatesItsHandle) {
+  const Buffer buffer = readableBuffer();
+  device_.trailingState = MapSliceState::Ready;
+  BufferMapping mapping = GetResultOrFail(device_.mapBufferAsync(buffer, MapMode::Read, 0, 64));
+  ASSERT_EQ(GetResultOrFail(device_.waitForMapping(mapping, fourSlices(), {})),
+            MapWaitOutcome::Ready);
+
+  EXPECT_THAT(device_.unmapBuffer(std::move(mapping)), IsOk());
+  EXPECT_EQ(device_.unmapCalls, 1);
+  EXPECT_THAT(device_.mappedBytes(mapping), IsGpuError(GpuErrorType::InvalidHandle))
+      << "Reading through a released mapping must be reported, not attempted";
+  EXPECT_THAT(device_.waitForMapping(mapping, fourSlices(), {}),
+              IsGpuError(GpuErrorType::InvalidHandle));
+}
+
+TEST_F(BufferMappingTests, DroppingAMappingReleasesItExactlyOnce) {
+  const Buffer buffer = readableBuffer();
+  {
+    BufferMapping mapping = GetResultOrFail(device_.mapBufferAsync(buffer, MapMode::Read, 0, 64));
+    EXPECT_EQ(device_.unmapCalls, 0);
+  }
+  EXPECT_EQ(device_.unmapCalls, 1) << "A dropped mapping must release through the same path";
+}
+
+TEST_F(BufferMappingTests, ABackendWithoutMappingReportsItUnsupported) {
+  RecordingDevice plainDevice;
+  const Buffer buffer = GetResultOrFail(plainDevice.createBuffer(
+      BufferDescriptor{"readback", 64, BufferUsage::CopyDst | BufferUsage::MapRead}));
+  EXPECT_THAT(plainDevice.mapBufferAsync(buffer, MapMode::Read, 0, 64),
+              IsGpuError(GpuErrorType::Unsupported));
+}
+
 }  // namespace
 }  // namespace donner::gpu

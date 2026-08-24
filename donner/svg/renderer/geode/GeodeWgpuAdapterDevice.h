@@ -9,6 +9,7 @@
 #include <atomic>
 #include <cstdint>
 #include <memory>
+#include <span>
 #include <string_view>
 #include <vector>
 #include <webgpu/webgpu.hpp>
@@ -153,6 +154,13 @@ public:
   wgpu::TextureView wgpuTextureViewOf(const gpu::TextureView& textureView) const;
 
 protected:
+  gpu::Status onMapBufferAsync(uint32_t mappingSlotIndex, uint32_t bufferSlotIndex,
+                               gpu::MapMode mode, uint64_t offsetBytes,
+                               uint64_t byteCount) override;
+  gpu::MapSliceState onWaitMappingSlice(uint32_t mappingSlotIndex, double sliceSeconds) override;
+  gpu::Result<std::span<const uint8_t>> onMappedBytes(uint32_t mappingSlotIndex) const override;
+  void onUnmapBuffer(uint32_t mappingSlotIndex) override;
+
   gpu::Status onCreateBuffer(uint32_t slotIndex, const gpu::BufferDescriptor& descriptor) override;
   gpu::Status onCreateTexture(uint32_t slotIndex,
                               const gpu::TextureDescriptor& descriptor) override;
@@ -293,6 +301,33 @@ private:
   /// Highest serial replayed into \ref hostCommandEncoder_ since the last
   /// \ref notifyHostSubmitted; 0 when nothing is awaiting the host's submit.
   uint64_t hostPendingSerial_ = 0;
+
+  /// State of one pending or completed host mapping.
+  ///
+  /// The completion flag is shared with the backend's callback, which may fire from inside any
+  /// call into the backend, so it is atomic and outlives this record through a reference count
+  /// the callback also holds.
+  struct MappingSlot {
+    struct Completion {
+      std::atomic<int> references{2};  //!< This record and the pending callback.
+      std::atomic<bool> done{false};   //!< Set once the callback has run.
+      std::atomic<bool> ok{false};     //!< Whether the map succeeded.
+
+      /// Drops one reference, deleting the state with the last one.
+      void release() {
+        if (references.fetch_sub(1, std::memory_order_acq_rel) == 1) {
+          delete this;
+        }
+      }
+    };
+
+    Completion* completion = nullptr;  //!< Shared completion state, or null for a dead slot.
+    wgpu::Buffer buffer;               //!< Buffer being mapped; borrowed from its slot.
+    uint64_t offsetBytes = 0;          //!< Byte offset of the mapped range.
+    uint64_t byteCount = 0;            //!< Length of the mapped range.
+  };
+
+  std::vector<MappingSlot> slotMappings_;
 
   std::vector<ScopedWgpuHandle<wgpu::Buffer>> slotBuffers_;
   std::vector<TextureSlot> slotTextures_;

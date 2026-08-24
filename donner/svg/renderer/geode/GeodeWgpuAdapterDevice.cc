@@ -374,6 +374,111 @@ gpu::TextureUsage GpuTextureUsageFromWgpu(wgpu::TextureUsage usage) {
   return result;
 }
 
+gpu::Status GeodeWgpuAdapterDevice::onMapBufferAsync(uint32_t mappingSlotIndex,
+                                                     uint32_t bufferSlotIndex, gpu::MapMode mode,
+                                                     uint64_t offsetBytes, uint64_t byteCount) {
+  if (mode != gpu::MapMode::Read) {
+    return GpuError{GpuErrorType::Unsupported, "this adapter maps buffers for reading only"};
+  }
+  wgpu::Buffer buffer = GetHandle(slotBuffers_, bufferSlotIndex);
+  if (!buffer) {
+    return GpuError{GpuErrorType::InvalidState,
+                    std::format("buffer slot {} has no wgpu buffer", bufferSlotIndex)};
+  }
+  if (geodeDevice_.isDeviceLost()) {
+    // A lost device never delivers the completion, so refuse the map rather than hand back a
+    // handle whose wait can only ever run out its budget.
+    return GpuError{GpuErrorType::InvalidState, "the device is lost, so buffers cannot be mapped"};
+  }
+
+  MappingSlot slot;
+  slot.completion = new MappingSlot::Completion();
+  slot.buffer = buffer;
+  slot.offsetBytes = offsetBytes;
+  slot.byteCount = byteCount;
+
+  wgpu::BufferMapCallbackInfo callbackInfo{wgpu::Default};
+  callbackInfo.callback = [](WGPUMapAsyncStatus status, WGPUStringView /*message*/, void* userdata1,
+                             void* /*userdata2*/) {
+    auto* completion = static_cast<MappingSlot::Completion*>(userdata1);
+    completion->ok.store(status == WGPUMapAsyncStatus_Success, std::memory_order_relaxed);
+    completion->done.store(true, std::memory_order_release);
+    completion->release();
+  };
+  callbackInfo.userdata1 = slot.completion;
+  callbackInfo.userdata2 = nullptr;
+  // Spontaneous delivery is what lets a wait slice observe the completion from inside the
+  // backend call it makes, rather than only at an explicit processing point.
+  callbackInfo.mode = wgpu::CallbackMode::AllowSpontaneous;
+  (void)buffer.mapAsync(wgpu::MapMode::Read, offsetBytes, byteCount, callbackInfo);
+
+  SetSlot(slotMappings_, mappingSlotIndex, std::move(slot));
+  return OkStatus();
+}
+
+gpu::MapSliceState GeodeWgpuAdapterDevice::onWaitMappingSlice(uint32_t mappingSlotIndex,
+                                                              double sliceSeconds) {
+  if (mappingSlotIndex >= slotMappings_.size() ||
+      slotMappings_[mappingSlotIndex].completion == nullptr) {
+    return gpu::MapSliceState::Failed;
+  }
+  MappingSlot::Completion& completion = *slotMappings_[mappingSlotIndex].completion;
+  if (completion.done.load(std::memory_order_acquire)) {
+    return completion.ok.load(std::memory_order_relaxed) ? gpu::MapSliceState::Ready
+                                                         : gpu::MapSliceState::Failed;
+  }
+  if (geodeDevice_.isDeviceLost()) {
+    return gpu::MapSliceState::DeviceLost;
+  }
+
+  // One bounded step of backend progress. Polling processes whatever the backend has ready
+  // without blocking past the slice the caller allowed.
+  (void)geodeDevice_.pollSuspending(false);
+  (void)sliceSeconds;
+
+  if (completion.done.load(std::memory_order_acquire)) {
+    return completion.ok.load(std::memory_order_relaxed) ? gpu::MapSliceState::Ready
+                                                         : gpu::MapSliceState::Failed;
+  }
+  return geodeDevice_.isDeviceLost() ? gpu::MapSliceState::DeviceLost : gpu::MapSliceState::Pending;
+}
+
+gpu::Result<std::span<const uint8_t>> GeodeWgpuAdapterDevice::onMappedBytes(
+    uint32_t mappingSlotIndex) const {
+  if (mappingSlotIndex >= slotMappings_.size() ||
+      slotMappings_[mappingSlotIndex].completion == nullptr) {
+    return GpuError{GpuErrorType::InvalidState, "the mapping is no longer live"};
+  }
+  const MappingSlot& slot = slotMappings_[mappingSlotIndex];
+  if (!slot.completion->done.load(std::memory_order_acquire) ||
+      !slot.completion->ok.load(std::memory_order_relaxed)) {
+    return GpuError{GpuErrorType::InvalidState, "the mapping has not completed"};
+  }
+  const void* mapped = slot.buffer.getConstMappedRange(slot.offsetBytes, slot.byteCount);
+  if (mapped == nullptr) {
+    return GpuError{GpuErrorType::InvalidState, "the backend returned no mapped range"};
+  }
+  return std::span<const uint8_t>(static_cast<const uint8_t*>(mapped),
+                                  static_cast<size_t>(slot.byteCount));
+}
+
+void GeodeWgpuAdapterDevice::onUnmapBuffer(uint32_t mappingSlotIndex) {
+  if (mappingSlotIndex >= slotMappings_.size() ||
+      slotMappings_[mappingSlotIndex].completion == nullptr) {
+    return;
+  }
+  MappingSlot& slot = slotMappings_[mappingSlotIndex];
+  if (slot.buffer && slot.completion->done.load(std::memory_order_acquire) &&
+      slot.completion->ok.load(std::memory_order_relaxed)) {
+    slot.buffer.unmap();
+  }
+  // The pending callback holds the other reference and releases it when it runs, so a map that
+  // is still in flight when the mapping is dropped cannot leave the state behind either way.
+  slot.completion->release();
+  slot.completion = nullptr;
+  slot.buffer = wgpu::Buffer();
+}
+
 gpu::Status GeodeWgpuAdapterDevice::onCreateBuffer(uint32_t slotIndex,
                                                    const gpu::BufferDescriptor& descriptor) {
   wgpu::BufferDescriptor bufferDescriptor = {};
