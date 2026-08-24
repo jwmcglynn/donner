@@ -1391,7 +1391,7 @@ Result<SurfaceTexture> Device::acquireCurrentTexture(const Surface& surface) {
     return GpuError{GpuErrorType::InvalidState,
                     "acquireCurrentTexture: the surface has not been configured"};
   }
-  if (record.result()->acquired.isValid()) {
+  if (hasOutstandingFrame(*record.result())) {
     return GpuError{GpuErrorType::InvalidState,
                     "acquireCurrentTexture: the previous texture has not been presented or "
                     "abandoned"};
@@ -1463,6 +1463,11 @@ Status Device::destroySurface(Surface&& surface) {
 
 void Device::releaseAcquiredSurfaceTexture(const Surface& surface) {
   releaseAcquiredSurfaceTextureBySlot(surface.slotIndex(), surface.generation());
+}
+
+bool Device::hasOutstandingFrame(const SurfaceRecord& record) const {
+  return record.acquired.isValid() &&
+         textures_.find(record.acquired.slotIndex(), record.acquired.generation()) != nullptr;
 }
 
 void Device::releaseAcquiredSurfaceTextureBySlot(uint32_t slotIndex, uint32_t generation) {

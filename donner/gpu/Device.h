@@ -808,6 +808,16 @@ private:
   /// @param slotIndex Slot of the surface. @param generation Generation the handle carried.
   void releaseAcquiredSurfaceTextureBySlot(uint32_t slotIndex, uint32_t generation);
 
+  /// Whether \p record still holds a frame the caller could resolve.
+  ///
+  /// The reference a surface keeps to its frame is not evidence on its own: the caller owns the
+  /// handle and may destroy the texture through it, which leaves the reference naming a slot
+  /// that no longer holds it. Only a reference whose texture is still live can name a frame the
+  /// caller has yet to present or abandon; a dead one means the caller already disposed of it.
+  ///
+  /// @param record Already-resolved surface record.
+  bool hasOutstandingFrame(const SurfaceRecord& record) const;
+
   /// Mutable access to an already-validated surface's record, or null if it is not live.
   /// @param surface Already-validated surface handle.
   SurfaceRecord* mutableSurfaceRecord(const Surface& surface);
