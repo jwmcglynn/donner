@@ -8,14 +8,27 @@ load("//build_defs:package.bzl", "donner_package")
 # Minimal vertical slice: host-visible buffers, device-local textures with
 # staged uploads, SPIR-V shader modules, the solid-fill render pipeline
 # family, render pass replay, and texture-to-buffer readback. Compiles on
-# every platform against the hermetic Vulkan-Headers module; the Vulkan
-# loader is linked (and the backend executes) only on Linux targets - see
-# tests/BUILD.bazel for the loader linkopts and OS gating.
+# every platform against the hermetic Vulkan-Headers module and links
+# everywhere: the Vulkan loader is opened at runtime rather than linked, so a
+# build needs no Vulkan library present and a machine without one reports it
+# at device creation. Execution is gated to Linux in tests/BUILD.bazel.
 
 donner_cc_library(
     name = "vulkan_device",
-    srcs = ["VulkanDevice.cc"],
-    hdrs = ["VulkanDevice.h"],
+    srcs = [
+        "VulkanDevice.cc",
+        "VulkanLoader.cc",
+    ],
+    hdrs = [
+        "VulkanDevice.h",
+        "VulkanLoader.h",
+    ],
+    # The loader library is opened with dlopen at runtime; libdl provides that on the platforms
+    # this backend executes on. There is no Vulkan library on the link line by design.
+    linkopts = select({
+        "@platforms//os:linux": ["-ldl"],
+        "//conditions:default": [],
+    }),
     visibility = donner_internal_visibility(),
     deps = [
         "//donner/base",

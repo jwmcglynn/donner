@@ -35,7 +35,6 @@ donner_cc_test(
         "VK_ICD_FILENAMES": "/usr/share/vulkan/icd.d/lvp_icd.json",
         "XDG_RUNTIME_DIR": "/tmp",
     },
-    linkopts = ["-lvulkan"],
     target_compatible_with = ["@platforms//os:linux"] + select({
         "//donner/svg/renderer/geode:geode_enabled": [],
         "//conditions:default": ["@platforms//:incompatible"],
