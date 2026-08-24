@@ -897,6 +897,31 @@ TEST_F(SurfaceTests, RejectsANativeHandleMissingItsPayload) {
               IsGpuErrorWithMessage(GpuErrorType::InvalidDescriptor, HasSubstr("selector")));
 }
 
+TEST_F(SurfaceTests, RejectsAPayloadSlotItsKindDoesNotUse) {
+  SurfaceDescriptor canvasWithWindow;
+  canvasWithWindow.native.kind = NativeSurfaceKind::CanvasSelector;
+  canvasWithWindow.native.selector = "#canvas";
+  canvasWithWindow.native.window = 7;
+  EXPECT_THAT(device_.createSurface(canvasWithWindow),
+              IsGpuErrorWithMessage(GpuErrorType::InvalidDescriptor,
+                                    HasSubstr("does not use a window handle")));
+
+  SurfaceDescriptor layerWithSelector;
+  layerWithSelector.native.kind = NativeSurfaceKind::MetalLayer;
+  layerWithSelector.native.display = &layer_;
+  layerWithSelector.native.selector = "#canvas";
+  EXPECT_THAT(
+      device_.createSurface(layerWithSelector),
+      IsGpuErrorWithMessage(GpuErrorType::InvalidDescriptor, HasSubstr("does not use a selector")));
+
+  SurfaceDescriptor windowKindWithoutWindow;
+  windowKindWithoutWindow.native.kind = NativeSurfaceKind::XlibWindow;
+  windowKindWithoutWindow.native.display = &layer_;
+  EXPECT_THAT(
+      device_.createSurface(windowKindWithoutWindow),
+      IsGpuErrorWithMessage(GpuErrorType::InvalidDescriptor, HasSubstr("needs a window handle")));
+}
+
 TEST_F(SurfaceTests, AcceptsACanvasNamedBySelector) {
   SurfaceDescriptor descriptor;
   descriptor.native.kind = NativeSurfaceKind::CanvasSelector;

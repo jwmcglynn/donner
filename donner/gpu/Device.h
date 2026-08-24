@@ -394,6 +394,11 @@ public:
   /**
    * Presents the texture acquired from \p surface and invalidates it.
    *
+   * Not every platform lets a caller present: where the host drives its own frame loop, the
+   * frame appears when the host shows it, and asking to present is rejected rather than
+   * performed. Such a surface still acquires and still invalidates its texture at the end of the
+   * frame through \ref abandonCurrentTexture.
+   *
    * @param surface Live surface with an acquired texture.
    */
   Result<SurfaceStatus> presentSurface(const Surface& surface);

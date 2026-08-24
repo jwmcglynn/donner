@@ -1,5 +1,6 @@
 #include "donner/gpu/Device.h"
 
+#include <array>
 #include <atomic>
 #include <cmath>
 #include <format>
@@ -1234,20 +1235,59 @@ Status Device::unmapBuffer(BufferMapping&& mapping) {
 
 namespace {
 
-/// Rejects a native handle that does not carry the fields its kind needs.
+/// Which payload slots of a \ref NativeSurfaceHandle one kind uses.
+struct NativeSurfacePayload {
+  bool usesDisplay = false;   //!< The kind names a platform object pointer.
+  bool usesWindow = false;    //!< The kind names a window or surface by integer handle.
+  bool usesSelector = false;  //!< The kind names its target by string.
+};
+
+/// Returns the payload slots \p kind uses. @param kind Surface kind.
+NativeSurfacePayload PayloadForKind(NativeSurfaceKind kind) {
+  switch (kind) {
+    case NativeSurfaceKind::MetalLayer: return NativeSurfacePayload{true, false, false};
+    case NativeSurfaceKind::XlibWindow:
+    case NativeSurfaceKind::WaylandSurface:
+    case NativeSurfaceKind::Win32Window: return NativeSurfacePayload{true, true, false};
+    case NativeSurfaceKind::CanvasSelector: return NativeSurfacePayload{false, false, true};
+  }
+  return NativeSurfacePayload{};
+}
+
+/// Reports one payload slot that disagrees with its kind, or nullopt when the slot is consistent.
+///
+/// A slot the kind needs but that is empty, and a slot the kind does not use but that is filled,
+/// are both disagreements between the caller and the handle about what it names.
+///
+/// @param used Whether the kind uses this slot.
+/// @param populated Whether the caller filled it.
+/// @param slotName Slot name, for the message.
+std::optional<std::string> NativeSurfaceSlotProblem(bool used, bool populated,
+                                                    std::string_view slotName) {
+  if (used && !populated) {
+    return std::format("this surface kind needs {}", slotName);
+  }
+  if (!used && populated) {
+    return std::format("this surface kind does not use {}", slotName);
+  }
+  return std::nullopt;
+}
+
+/// Rejects a native handle whose populated payload slots do not match its kind.
 /// @param native Handle to check.
 Status ValidateNativeSurfaceHandle(const NativeSurfaceHandle& native) {
   if (Status status = CheckEnum(native.kind, "NativeSurfaceHandle.kind"); status.hasError()) {
     return status;
   }
-  const bool needsSelector = native.kind == NativeSurfaceKind::CanvasSelector;
-  if (needsSelector && native.selector.empty()) {
-    return Err(GpuErrorType::InvalidDescriptor,
-               "createSurface: a canvas surface needs a non-empty selector");
-  }
-  if (!needsSelector && native.display == nullptr) {
-    return Err(GpuErrorType::InvalidDescriptor,
-               "createSurface: this surface kind needs a platform object");
+  const NativeSurfacePayload payload = PayloadForKind(native.kind);
+  const std::array<std::optional<std::string>, 3> problems = {
+      NativeSurfaceSlotProblem(payload.usesDisplay, native.display != nullptr, "a platform object"),
+      NativeSurfaceSlotProblem(payload.usesWindow, native.window != 0, "a window handle"),
+      NativeSurfaceSlotProblem(payload.usesSelector, !native.selector.empty(), "a selector")};
+  for (const std::optional<std::string>& problem : problems) {
+    if (problem.has_value()) {
+      return Err(GpuErrorType::InvalidDescriptor, std::format("createSurface: {}", *problem));
+    }
   }
   return OkStatus();
 }

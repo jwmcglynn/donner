@@ -117,7 +117,12 @@ enum class NativeSurfaceKind : uint8_t {
   XlibWindow,      //!< X11 display plus window id.
   WaylandSurface,  //!< Wayland display plus surface.
   Win32Window,     //!< Win32 module instance plus window handle.
-  CanvasSelector,  //!< CSS selector naming a browser canvas element.
+  /// CSS selector naming a browser canvas element.
+  ///
+  /// A browser drives presentation from its own frame loop, so a surface of this kind presents
+  /// when the host says so rather than when the caller asks: an explicit present on it is
+  /// rejected rather than performed. Everything else about the surface behaves the same.
+  CanvasSelector,
 };
 
 /// The platform object a surface presents to.
@@ -127,6 +132,9 @@ enum class NativeSurfaceKind : uint8_t {
 /// closed on a handle that does not carry them.
 struct NativeSurfaceHandle {
   NativeSurfaceKind kind = NativeSurfaceKind::MetalLayer;  //!< Which platform object this names.
+  // Exactly the slots \ref kind uses must be populated: a filled slot the kind does not use means
+  // the caller and the handle disagree about what this names, which is rejected rather than
+  // silently ignored.
   /// MetalLayer: the layer. XlibWindow: the display. WaylandSurface: the display. Win32Window:
   /// the module instance. Null for CanvasSelector.
   void* display = nullptr;
