@@ -5280,14 +5280,11 @@ void RendererGeode::popIsolatedLayer() {
   impl_->target = frame.savedTarget;
 
   if (frame.blendMode != MixBlendMode::Normal) {
-    // SVG `mix-blend-mode`. The fragment shader needs the
-    // parent's current pixels as a backdrop, but WebGPU forbids
-    // reading from the render pass's own color attachment. Snapshot
-    // the parent's 1-sample resolve target into a separate texture
-    // via a CopyTextureToTexture command, then open a fresh parent
-    // encoder with `LoadOp::Clear` (NOT Load - the blend shader
-    // outputs the final pixel directly, incorporating the snapshot
-    // backdrop, so preserving the old contents would double-apply).
+    // SVG `mix-blend-mode`. The fragment shader needs the parent's current pixels as a
+    // backdrop, but a render pass may not read from its own color attachment. Snapshot the
+    // parent's 1-sample resolve target into a separate texture with a texture-to-texture copy,
+    // then open a fresh parent encoder over the parent target; the load-op note further down
+    // covers why that encoder preserves the target's contents.
     wgpu::TextureDescriptor snapDesc = {};
     snapDesc.label = wgpuLabel("RendererGeodeBlendDstSnapshot");
     snapDesc.size = {static_cast<uint32_t>(impl_->pixelWidth),
@@ -5300,21 +5297,18 @@ void RendererGeode::popIsolatedLayer() {
     wgpu::Texture snapshot = impl_->acquireTexture(snapDesc);
 
     if (snapshot) {
-      // Record the snapshot copy into the shared frame CommandEncoder
-      // `impl_->encoder->finish()` above already
-      // ended the layer's render pass, so it's safe to record a
-      // CommandEncoder-level copyTextureToTexture here - no separate
-      // CommandEncoder + submit required.
-      wgpu::TexelCopyTextureInfo src = {};
-      src.texture = frame.savedTarget;
-      wgpu::TexelCopyTextureInfo dst = {};
-      dst.texture = snapshot;
-      const wgpu::Extent3D extent = {static_cast<uint32_t>(impl_->pixelWidth),
-                                     static_cast<uint32_t>(impl_->pixelHeight), 1u};
-      // Everything recorded before this point has already been replayed into the frame command
-      // encoder by the encoder retire above, so the copy lands after those draws and before the
-      // composite recorded below.
-      impl_->frameCommandEncoder.get().copyTextureToTexture(src, dst, extent);
+      const gpu::Texture& savedTargetHandle = impl_->importTarget(frame.savedTarget);
+      const gpu::Texture& snapshotHandle = impl_->importTexture(snapshot, snapDesc);
+
+      // The layer's render pass ended when its encoder was retired above, so the copy can be
+      // recorded outside a pass. It joins the frame's recorded stream after those draws and
+      // before the composite recorded below, which is the order the backdrop has to be frozen in.
+      const gpu::Status copied = impl_->frameGpuEncoder->copyTextureToTexture(
+          savedTargetHandle, snapshotHandle,
+          gpu::Extent2d{static_cast<uint32_t>(impl_->pixelWidth),
+                        static_cast<uint32_t>(impl_->pixelHeight)});
+      UTILS_RELEASE_ASSERT_MSG(!copied.hasError(),
+                               "Failed to record the mix-blend-mode backdrop snapshot copy");
 
       // Open a fresh parent encoder that PRESERVES the target's existing
       // contents (the backdrop pre-push - identical to `snapshot` at
@@ -5332,15 +5326,14 @@ void RendererGeode::popIsolatedLayer() {
       // safe.
       auto newEncoder = std::make_unique<geode::GeoEncoder>(
           *impl_->device, *impl_->pipeline, *impl_->gradientPipeline, *impl_->imagePipeline,
-          impl_->importTarget(frame.savedTarget), impl_->targetExtent(), *impl_->frameGpuEncoder);
+          savedTargetHandle, impl_->targetExtent(), *impl_->frameGpuEncoder);
       impl_->configurePathEncoder(*newEncoder);
       newEncoder->setLoadPreserve();
       impl_->encoder = std::move(newEncoder);
       impl_->updateEncoderScissor();
       impl_->encoder->blitFullTargetBlended(
-          impl_->importTexture(frame.layerTexture, frame.layerDesc),
-          impl_->importTexture(snapshot, snapDesc), static_cast<uint32_t>(frame.blendMode),
-          frame.opacity);
+          impl_->importTexture(frame.layerTexture, frame.layerDesc), snapshotHandle,
+          static_cast<uint32_t>(frame.blendMode), frame.opacity);
       // Defer release: `blitFullTargetBlended` recorded samples from
       // both `frame.layerTexture` and `snapshot` into the shared
       // frameCommandEncoder; they must stay alive until that buffer
