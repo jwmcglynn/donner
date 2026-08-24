@@ -92,6 +92,38 @@ public:
                                                   gpu::TextureUsage usage);
 
   /**
+   * Installs \p encoder as the host command encoder: while one is installed, a submitted
+   * command stream is replayed into it instead of into an encoder this adapter owns, and this
+   * adapter performs no queue submit of its own. One command buffer therefore still carries a
+   * whole frame in recording order, including the spans a caller records directly into the same
+   * encoder around the replayed ones.
+   *
+   * Temporary bridge: it exists because the frame encoder also carries compute passes that the
+   * GPU runtime does not model, so those spans cannot be replayed through it. It is removed once
+   * every subsystem sharing the frame encoder records through the runtime.
+   *
+   * The caller owns \p encoder, must keep it alive until it is replaced or cleared, and must
+   * call \ref notifyHostSubmitted after each queue submit of a command buffer finished from it.
+   * Until then the serials replayed into it are deliberately not observable as complete.
+   *
+   * @param encoder Host-owned command encoder to replay into.
+   */
+  void setHostCommandEncoder(wgpu::CommandEncoder encoder);
+
+  /// Uninstalls the host command encoder, returning this adapter to owning and submitting the
+  /// encoders it records into. Serials already replayed into a host encoder stay incomplete
+  /// until \ref notifyHostSubmitted reports their submit.
+  void clearHostCommandEncoder();
+
+  /**
+   * Reports that the host submitted a command buffer carrying every stream replayed since the
+   * previous report, so their completion can now be observed. Advances \ref completedSerial to
+   * the highest replayed serial once the queue drains, exactly as an adapter-owned submit does.
+   * A no-op when nothing has been replayed since the last report.
+   */
+  void notifyHostSubmitted();
+
+  /**
    * TEMPORARY escape hatch (deleted in packet 11, readback/presentation): returns the wgpu
    * texture behind \p texture, or a null handle if the handle does not name a live texture of
    * this adapter. Borrowed; the adapter (or the external owner) retains ownership.
@@ -178,7 +210,10 @@ private:
 
   /// Mutable state threaded through the encoding of one command stream.
   struct EncodingState {
-    ScopedWgpuHandle<wgpu::CommandEncoder> encoder;  //!< Command encoder being recorded.
+    /// Owned encoder, used when no host encoder is installed; empty while replaying.
+    ScopedWgpuHandle<wgpu::CommandEncoder> ownedEncoder;
+    /// Encoder actually recorded into: \ref ownedEncoder, or the borrowed host encoder.
+    wgpu::CommandEncoder encoder;
     ScopedWgpuHandle<wgpu::RenderPassEncoder> pass;  //!< Active render pass, or empty.
   };
 
@@ -232,7 +267,17 @@ private:
   /// @param command Recorded command.
   gpu::Status encodeCommand(EncodingState& state, const gpu::Command& command);
 
+  /// Attaches the queue work-done callback that advances \ref completedSerial to \p serial.
+  /// @param serial Submission serial the callback completes.
+  void advanceCompletedSerialWhenQueueDrains(uint64_t serial);
+
   GeodeDevice& geodeDevice_;
+
+  /// Host-owned command encoder to replay into, or null when this adapter owns its encoders.
+  wgpu::CommandEncoder hostCommandEncoder_;
+  /// Highest serial replayed into \ref hostCommandEncoder_ since the last
+  /// \ref notifyHostSubmitted; 0 when nothing is awaiting the host's submit.
+  uint64_t hostPendingSerial_ = 0;
 
   std::vector<ScopedWgpuHandle<wgpu::Buffer>> slotBuffers_;
   std::vector<TextureSlot> slotTextures_;

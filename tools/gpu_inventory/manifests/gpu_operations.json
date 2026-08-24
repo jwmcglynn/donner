@@ -1038,6 +1038,7 @@
         "ColorTargetState",
         "ColorWriteMask",
         "CommandBuffer",
+        "CommandEncoder",
         "CullMode",
         "Default",
         "Extent3D",
@@ -1271,6 +1272,7 @@
     "donner/svg/renderer/geode/tests/GeodeWgpuAdapterDevice_tests.cc": {
       "operations": [
         "copyTextureToBuffer",
+        "copyTextureToTexture",
         "createBuffer",
         "createCommandEncoder",
         "createTexture",
@@ -1301,6 +1303,7 @@
         "CallbackMode",
         "CommandBuffer",
         "CommandEncoder",
+        "CommandEncoderDescriptor",
         "Default",
         "Extent3D",
         "MapMode",

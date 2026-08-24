@@ -1,5 +1,6 @@
 #include "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h"
 
+#include <algorithm>
 #include <cassert>
 #include <chrono>
 #include <format>
@@ -783,7 +784,7 @@ gpu::Status GeodeWgpuAdapterDevice::encodeBeginRenderPass(
   passDescriptor.label = wgpuLabel(std::string_view(beginPass.descriptor.label));
   passDescriptor.colorAttachmentCount = colorAttachments.size();
   passDescriptor.colorAttachments = colorAttachments.data();
-  state.pass.reset(state.encoder.get().beginRenderPass(passDescriptor));
+  state.pass.reset(state.encoder.beginRenderPass(passDescriptor));
   if (!state.pass) {
     return GpuError{GpuErrorType::InvalidState, "wgpu render pass creation failed"};
   }
@@ -885,7 +886,7 @@ gpu::Status GeodeWgpuAdapterDevice::encodeCopyTextureToBuffer(
   destination.layout.bytesPerRow = copy.layout.bytesPerRow;
   destination.layout.rowsPerImage = copy.layout.rowsPerImage;
   const wgpu::Extent3D extent = {copy.copySize.width, copy.copySize.height, 1u};
-  state.encoder.get().copyTextureToBuffer(source, destination, extent);
+  state.encoder.copyTextureToBuffer(source, destination, extent);
   return OkStatus();
 }
 
@@ -909,7 +910,7 @@ gpu::Status GeodeWgpuAdapterDevice::encodeCopyTextureToTexture(
   wgpu::TexelCopyTextureInfo destination = {};
   destination.texture = destinationTexture;
   const wgpu::Extent3D extent = {textureCopy.copySize.width, textureCopy.copySize.height, 1u};
-  state.encoder.get().copyTextureToTexture(source, destination, extent);
+  state.encoder.copyTextureToTexture(source, destination, extent);
   return OkStatus();
 }
 
@@ -952,13 +953,60 @@ gpu::Status GeodeWgpuAdapterDevice::encodeCommand(EncodingState& state,
       command);
 }
 
+void GeodeWgpuAdapterDevice::setHostCommandEncoder(wgpu::CommandEncoder encoder) {
+  hostCommandEncoder_ = std::move(encoder);
+}
+
+void GeodeWgpuAdapterDevice::clearHostCommandEncoder() {
+  hostCommandEncoder_ = wgpu::CommandEncoder();
+}
+
+void GeodeWgpuAdapterDevice::notifyHostSubmitted() {
+  if (hostPendingSerial_ == 0) {
+    return;
+  }
+  const uint64_t serial = hostPendingSerial_;
+  hostPendingSerial_ = 0;
+  advanceCompletedSerialWhenQueueDrains(serial);
+}
+
+void GeodeWgpuAdapterDevice::advanceCompletedSerialWhenQueueDrains(uint64_t serial) {
+  // Callback-mode handling (wgpu-native vs emdawnwebgpu) is centralized in
+  // notifyWhenSubmittedWorkDone; waitForSerial's poll loop drives delivery.
+  struct WorkDoneState {
+    std::shared_ptr<CompletionState> completion;  //!< Shared completion counter.
+    uint64_t serial = 0;                          //!< Serial this callback completes.
+
+    /// Monotonic max: callbacks may complete out of order across submissions.
+    void onWorkDone() {
+      uint64_t previous = completion->completedSerial.load(std::memory_order_relaxed);
+      while (previous < serial &&
+             !completion->completedSerial.compare_exchange_weak(
+                 previous, serial, std::memory_order_release, std::memory_order_relaxed)) {}
+    }
+  };
+  auto workDoneState = std::make_shared<WorkDoneState>();
+  workDoneState->completion = completionState_;
+  workDoneState->serial = serial;
+  notifyWhenSubmittedWorkDone(geodeDevice_.queue(), workDoneState);
+}
+
 gpu::Status GeodeWgpuAdapterDevice::onSubmit(uint64_t submissionSerial,
                                              uint32_t commandBufferSlotIndex,
                                              std::span<const gpu::Command> commands) {
   (void)commandBufferSlotIndex;
 
+  // Replay into the host's encoder when one is installed, so a caller that also records spans
+  // this runtime cannot express keeps one command buffer covering the whole frame in order.
+  const bool replayingIntoHost = static_cast<bool>(hostCommandEncoder_);
+
   EncodingState state;
-  state.encoder.reset(geodeDevice_.device().createCommandEncoder());
+  if (replayingIntoHost) {
+    state.encoder = hostCommandEncoder_;
+  } else {
+    state.ownedEncoder.reset(geodeDevice_.device().createCommandEncoder());
+    state.encoder = state.ownedEncoder.get();
+  }
   if (!state.encoder) {
     return GpuError{GpuErrorType::InvalidState, "wgpu command encoder creation failed"};
   }
@@ -987,33 +1035,22 @@ gpu::Status GeodeWgpuAdapterDevice::onSubmit(uint64_t submissionSerial,
     return GpuError{GpuErrorType::InvalidState, "submitted command stream left a render pass open"};
   }
 
-  ScopedWgpuHandle<wgpu::CommandBuffer> commandBuffer(state.encoder.get().finish());
+  if (replayingIntoHost) {
+    // The host owns finish + submit for its encoder. Hold the serial back until it reports that
+    // submit: reporting completion before the work is even submitted would be a lie the deferred
+    // destruction and wait paths both act on.
+    hostPendingSerial_ = std::max(hostPendingSerial_, submissionSerial);
+    return OkStatus();
+  }
+
+  ScopedWgpuHandle<wgpu::CommandBuffer> commandBuffer(state.encoder.finish());
   if (!commandBuffer) {
     return GpuError{GpuErrorType::InvalidState, "wgpu command buffer finish failed"};
   }
   geodeDevice_.queue().submit(1, &commandBuffer.get());
   geodeDevice_.countSubmit();
 
-  // Advance completedSerial when the queue drains. Callback-mode handling (wgpu-native vs
-  // emdawnwebgpu) is centralized in notifyWhenSubmittedWorkDone; waitForSerial's poll loop
-  // drives delivery.
-  struct WorkDoneState {
-    std::shared_ptr<CompletionState> completion;  //!< Shared completion counter.
-    uint64_t serial = 0;                          //!< Serial this callback completes.
-
-    /// Monotonic max: callbacks may complete out of order across submissions.
-    void onWorkDone() {
-      uint64_t previous = completion->completedSerial.load(std::memory_order_relaxed);
-      while (previous < serial &&
-             !completion->completedSerial.compare_exchange_weak(
-                 previous, serial, std::memory_order_release, std::memory_order_relaxed)) {}
-    }
-  };
-  auto workDoneState = std::make_shared<WorkDoneState>();
-  workDoneState->completion = completionState_;
-  workDoneState->serial = submissionSerial;
-  notifyWhenSubmittedWorkDone(geodeDevice_.queue(), workDoneState);
-
+  advanceCompletedSerialWhenQueueDrains(submissionSerial);
   return OkStatus();
 }
 

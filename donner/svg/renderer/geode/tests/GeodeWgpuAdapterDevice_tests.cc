@@ -18,12 +18,14 @@
 #include "donner/gpu/CommandEncoder.h"
 #include "donner/gpu/tests/GpuTestUtils.h"
 #include "donner/svg/renderer/geode/GeodeCallbackState.h"
+#include "donner/svg/renderer/geode/GeodeCounters.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
 #include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
 
 using testing::ElementsAre;
 using testing::Ge;
 using testing::HasSubstr;
+using testing::Lt;
 using testing::Not;
 
 namespace donner::geode {
@@ -283,6 +285,129 @@ TEST_F(GeodeWgpuAdapterDeviceTests, FamilySceneRendersAndCompletes) {
   EXPECT_THAT(PixelAt(copiedPixels, 0, 0), ElementsAre(0, 0, 128, 255));
   EXPECT_THAT(PixelAt(copiedPixels, 2, 2), ElementsAre(0, 0, 128, 255));
   EXPECT_THAT(PixelAt(copiedPixels, 3, 3), ElementsAre(0, 0, 128, 255));
+}
+
+/// The host-encoder replay mode has to hold three properties at once, and they only mean
+/// anything together, so one test drives all three: the replayed span and the spans the host
+/// records itself land in ONE command buffer in recording order, the replay performs no queue
+/// submit of its own, and the replayed serial is not observable as complete until the host
+/// reports its submit. Losing any one of them silently corrupts a frame or lies to the deferred
+/// destruction and wait paths.
+TEST_F(GeodeWgpuAdapterDeviceTests, HostEncoderReplayInterleavesInOneBufferAndDefersCompletion) {
+  const gpu::Texture target = gpu::GetResultOrFail(adapter_->createTexture(
+      gpu::TextureDescriptor{"replayTarget", gpu::Extent2d{4, 4}, gpu::TextureFormat::RGBA8Unorm,
+                             gpu::TextureUsage::RenderAttachment | gpu::TextureUsage::CopySrc}));
+  const gpu::TextureView targetView = gpu::GetResultOrFail(
+      adapter_->createTextureView(target, gpu::TextureViewDescriptor{"replayTargetView"}));
+  const gpu::Texture copyDestination = gpu::GetResultOrFail(adapter_->createTexture(
+      gpu::TextureDescriptor{"replayCopyDst", gpu::Extent2d{4, 4}, gpu::TextureFormat::RGBA8Unorm,
+                             gpu::TextureUsage::CopyDst | gpu::TextureUsage::CopySrc}));
+
+  GeodeCounters counters;
+  geodeDevice_->setCounters(&counters);
+
+  // The host owns this encoder for the whole "frame", exactly as a renderer does.
+  wgpu::CommandEncoderDescriptor hostDescriptor = {};
+  ScopedWgpuHandle<wgpu::CommandEncoder> hostEncoder(
+      geodeDevice_->device().createCommandEncoder(hostDescriptor));
+  ASSERT_TRUE(static_cast<bool>(hostEncoder.get()));
+  adapter_->setHostCommandEncoder(hostEncoder.get());
+
+  // A replayed span: clear the target to a color the copy below can be checked against.
+  std::unique_ptr<gpu::CommandEncoder> encoder =
+      gpu::GetResultOrFail(adapter_->createCommandEncoder());
+  gpu::RenderPassEncoder* pass =
+      gpu::GetResultOrFail(encoder->beginRenderPass(gpu::RenderPassDescriptor{
+          "replayPass",
+          {gpu::RenderPassColorAttachment{
+              targetView, gpu::LoadOp::Clear, gpu::StoreOp::Store, {0, 0, 0.5, 1}}}}));
+  ASSERT_NE(pass, nullptr);
+  EXPECT_THAT(pass->end(), gpu::IsOk());
+  const uint64_t serial =
+      gpu::GetResultOrFail(adapter_->submit(gpu::GetResultOrFail(encoder->finish())));
+  EXPECT_THAT(serial, Ge(uint64_t{1}));
+
+  // Replaying is not submitting: no queue submit happened, so no submit was counted, and the
+  // serial must not be observable as complete yet. A short wait proves the hold-back rather
+  // than merely observing a race.
+  EXPECT_EQ(counters.submits, 0u) << "replay must not perform a queue submit of its own";
+  EXPECT_THAT(adapter_->completedSerial(), Lt(serial));
+  EXPECT_FALSE(adapter_->waitForSerial(serial, /*timeoutSeconds=*/0.25))
+      << "serial " << serial << " reported complete before the host submitted its command buffer";
+
+  // A span the host records itself, AFTER the replayed one. It reads what the replayed clear
+  // wrote, so a wrong replay position (or a second command buffer) shows up as wrong bytes.
+  wgpu::TexelCopyTextureInfo copySource = {};
+  copySource.texture = adapter_->wgpuTextureOf(target);
+  wgpu::TexelCopyTextureInfo copyDest = {};
+  copyDest.texture = adapter_->wgpuTextureOf(copyDestination);
+  const wgpu::Extent3D copyExtent = {4u, 4u, 1u};
+  hostEncoder.get().copyTextureToTexture(copySource, copyDest, copyExtent);
+
+  // The host's single submit covers both spans.
+  {
+    ScopedWgpuHandle<wgpu::CommandBuffer> hostCommands(hostEncoder.get().finish());
+    ASSERT_TRUE(static_cast<bool>(hostCommands.get()));
+    geodeDevice_->queue().submit(1, &hostCommands.get());
+  }
+  adapter_->notifyHostSubmitted();
+  adapter_->clearHostCommandEncoder();
+
+  ASSERT_TRUE(adapter_->waitForSerial(serial, /*timeoutSeconds=*/30.0))
+      << "submission " << serial
+      << " did not complete after the host submit; completedSerial=" << adapter_->completedSerial();
+  EXPECT_THAT(adapter_->completedSerial(), Ge(serial));
+
+  const std::vector<uint8_t> targetPixels =
+      ReadbackTexturePixels(*geodeDevice_, adapter_->wgpuTextureOf(target));
+  ASSERT_THAT(targetPixels, Not(testing::IsEmpty())) << "replay target readback failed";
+  EXPECT_THAT(PixelAt(targetPixels, 0, 0), ElementsAre(0, 0, 128, 255));
+
+  const std::vector<uint8_t> copiedPixels =
+      ReadbackTexturePixels(*geodeDevice_, adapter_->wgpuTextureOf(copyDestination));
+  ASSERT_THAT(copiedPixels, Not(testing::IsEmpty())) << "replay copy destination readback failed";
+  EXPECT_THAT(PixelAt(copiedPixels, 0, 0), ElementsAre(0, 0, 128, 255));
+  EXPECT_THAT(PixelAt(copiedPixels, 3, 3), ElementsAre(0, 0, 128, 255));
+
+  geodeDevice_->setCounters(nullptr);
+}
+
+/// Clearing the host encoder returns the adapter to owning and submitting its own encoders, so
+/// a stream submitted afterwards completes without any host notification.
+TEST_F(GeodeWgpuAdapterDeviceTests, OwnedSubmitResumesAfterClearingTheHostEncoder) {
+  const gpu::Texture target = gpu::GetResultOrFail(adapter_->createTexture(
+      gpu::TextureDescriptor{"ownedTarget", gpu::Extent2d{4, 4}, gpu::TextureFormat::RGBA8Unorm,
+                             gpu::TextureUsage::RenderAttachment | gpu::TextureUsage::CopySrc}));
+  const gpu::TextureView targetView = gpu::GetResultOrFail(
+      adapter_->createTextureView(target, gpu::TextureViewDescriptor{"ownedTargetView"}));
+
+  wgpu::CommandEncoderDescriptor hostDescriptor = {};
+  ScopedWgpuHandle<wgpu::CommandEncoder> hostEncoder(
+      geodeDevice_->device().createCommandEncoder(hostDescriptor));
+  ASSERT_TRUE(static_cast<bool>(hostEncoder.get()));
+  adapter_->setHostCommandEncoder(hostEncoder.get());
+  adapter_->clearHostCommandEncoder();
+
+  GeodeCounters counters;
+  geodeDevice_->setCounters(&counters);
+
+  std::unique_ptr<gpu::CommandEncoder> encoder =
+      gpu::GetResultOrFail(adapter_->createCommandEncoder());
+  gpu::RenderPassEncoder* pass =
+      gpu::GetResultOrFail(encoder->beginRenderPass(gpu::RenderPassDescriptor{
+          "ownedPass",
+          {gpu::RenderPassColorAttachment{
+              targetView, gpu::LoadOp::Clear, gpu::StoreOp::Store, {0, 0, 0.5, 1}}}}));
+  ASSERT_NE(pass, nullptr);
+  EXPECT_THAT(pass->end(), gpu::IsOk());
+  const uint64_t serial =
+      gpu::GetResultOrFail(adapter_->submit(gpu::GetResultOrFail(encoder->finish())));
+
+  EXPECT_EQ(counters.submits, 1u) << "an adapter-owned submit must still count one submit";
+  ASSERT_TRUE(adapter_->waitForSerial(serial, /*timeoutSeconds=*/30.0));
+  EXPECT_THAT(adapter_->completedSerial(), Ge(serial));
+
+  geodeDevice_->setCounters(nullptr);
 }
 
 TEST_F(GeodeWgpuAdapterDeviceTests, ImportedExternalTextureIsUsableAndNotOwned) {
