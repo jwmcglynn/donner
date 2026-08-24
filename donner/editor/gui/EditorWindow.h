@@ -25,6 +25,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <ostream>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -88,6 +89,46 @@ enum class WgpuSurfaceFailureKind {
 };
 
 #ifdef DONNER_EDITOR_WGPU
+/// What the frame loop does about a status its presentation surface reported.
+enum class SurfaceFrameAction {
+  Draw,                 //!< The acquired frame is usable; draw into it.
+  Skip,                 //!< No frame this time; the next one tries again.
+  ReconfigureAndRetry,  //!< Follow the window with a new configuration and acquire again.
+  Release,              //!< The surface can serve no further frames and is given up.
+};
+
+/// Ostream output operator. @param os Output stream. @param value Action to output.
+inline std::ostream& operator<<(std::ostream& os, SurfaceFrameAction value) {
+  switch (value) {
+    case SurfaceFrameAction::Draw: return os << "Draw";
+    case SurfaceFrameAction::Skip: return os << "Skip";
+    case SurfaceFrameAction::ReconfigureAndRetry: return os << "ReconfigureAndRetry";
+    case SurfaceFrameAction::Release: return os << "Release";
+  }
+  return os << "Unknown";
+}
+
+/// Routes a status the presentation surface reported to what the frame loop does about it.
+///
+/// The failures are kept apart because their recoveries differ. A configuration that no longer
+/// matches its window is followed with a new one, which is the operation a resize already
+/// performs; a platform object that is gone and a lost device recover by neither, so the surface
+/// is given up rather than acquired from again; and nothing becoming available in time is simply
+/// a frame not drawn.
+///
+/// @param status Status the surface reported while handing over, or refusing, a frame.
+[[nodiscard]] constexpr SurfaceFrameAction SurfaceFrameActionFor(
+    gpu::SurfaceStatus status) noexcept {
+  switch (status) {
+    case gpu::SurfaceStatus::Success: return SurfaceFrameAction::Draw;
+    case gpu::SurfaceStatus::Outdated: return SurfaceFrameAction::ReconfigureAndRetry;
+    case gpu::SurfaceStatus::Lost:
+    case gpu::SurfaceStatus::DeviceLost: return SurfaceFrameAction::Release;
+    case gpu::SurfaceStatus::Timeout: break;
+  }
+  return SurfaceFrameAction::Skip;
+}
+
 /// Buckets a status the presentation surface reported into the retry classes the event-driven
 /// Wasm loop distinguishes.
 ///
@@ -481,6 +522,28 @@ private:
 
   void beginFrameImpl(const EditorWindowInputOverride* inputOverride);
   void endFrameImpl(svg::RendererBitmap* readback);
+
+#ifdef DONNER_EDITOR_WGPU
+  /**
+   * Acquires this frame's texture from the presentation surface, routing what the surface
+   * reported: a configuration that has drifted out of date is followed and the frame retried
+   * once, and a surface that can serve no further frames is given up.
+   *
+   * @param framebufferWidth Framebuffer width in pixels.
+   * @param framebufferHeight Framebuffer height in pixels.
+   * @param timing Frame timing to record the acquire cost into.
+   * @param[out] status What the surface reported for the frame that is returned, or for the
+   *   frame that never came.
+   * @return This frame's texture, or a null texture when there is no frame to draw.
+   */
+  [[nodiscard]] wgpu::Texture acquirePresentationFrame(int framebufferWidth, int framebufferHeight,
+                                                       EditorWindowFrameTiming& timing,
+                                                       gpu::SurfaceStatus& status);
+
+  /// Gives up a presentation surface that can serve no further frames, so no later frame acquires
+  /// from it. @param deviceLost Whether the surface reported the device itself as lost.
+  void releasePresentationSurface(bool deviceLost);
+#endif
 
   EditorWindowOptions options_;
   GLFWwindow* window_ = nullptr;

@@ -1875,6 +1875,63 @@ svg::RendererBitmap EditorWindow::endFrameAndReadPixels() {
   return readback;
 }
 
+#ifdef DONNER_EDITOR_WGPU
+wgpu::Texture EditorWindow::acquirePresentationFrame(int framebufferWidth, int framebufferHeight,
+                                                     EditorWindowFrameTiming& timing,
+                                                     gpu::SurfaceStatus& status) {
+  internal::PresentationSurface& surface = *wgpuState_->presentation;
+  const auto acquireStart = std::chrono::steady_clock::now();
+  internal::AcquiredFrame frame = surface.acquire();
+  const auto acquireMs = ElapsedMs(acquireStart);
+  timing.surfaceAcquireMs = acquireMs;
+  if (acquireMs > 250.0) {
+    std::fprintf(stderr, "[Editor/WGPU] surface acquire took %.1fms (status=%d, size=%dx%d)\n",
+                 acquireMs, static_cast<int>(frame.status), framebufferWidth, framebufferHeight);
+  }
+
+  if (internal::SurfaceFrameActionFor(frame.status) ==
+      internal::SurfaceFrameAction::ReconfigureAndRetry) {
+    // Following the window is the same operation a resize performs, so a configuration that has
+    // drifted out of date costs a reconfiguration rather than a dropped frame. The recorded
+    // extent is cleared first so a refused reconfiguration is retried on the next frame.
+    surface.abandon();
+    wgpuState_->configuredWidth = 0;
+    wgpuState_->configuredHeight = 0;
+    if (surface.configure(framebufferWidth, framebufferHeight)) {
+      wgpuState_->configuredWidth = framebufferWidth;
+      wgpuState_->configuredHeight = framebufferHeight;
+      frame = surface.acquire();
+    }
+  }
+
+  status = frame.status;
+  const internal::SurfaceFrameAction action = internal::SurfaceFrameActionFor(status);
+  if (action == internal::SurfaceFrameAction::Draw && frame.texture) {
+    return frame.texture;
+  }
+
+  surface.abandon();
+  if (action == internal::SurfaceFrameAction::Release) {
+    releasePresentationSurface(status == gpu::SurfaceStatus::DeviceLost);
+  }
+  return {};
+}
+
+void EditorWindow::releasePresentationSurface(bool deviceLost) {
+  std::fprintf(stderr, "EditorWindow: the presentation surface can serve no further frames\n");
+  wgpuState_->presentation->unconfigure();
+  wgpuState_->presentation.reset();
+  wgpuState_->configuredWidth = 0;
+  wgpuState_->configuredHeight = 0;
+  if (deviceLost && wgpuState_->framebufferGeodeDevice != nullptr) {
+    // Renderers already watch this flag for a driver-reported loss, so a loss the surface reports
+    // reaches them through the same condition instead of needing a path of its own.
+    wgpuState_->framebufferGeodeDevice->markDeviceLost(
+        "the presentation surface reported the device as lost");
+  }
+}
+#endif
+
 void EditorWindow::endFrameImpl(svg::RendererBitmap* readback) {
   ZoneScopedN("EditorWindow::endFrame");
   EditorWindowFrameTiming timing;
@@ -2020,22 +2077,14 @@ void EditorWindow::endFrameImpl(svg::RendererBitmap* readback) {
 
   wgpu::Texture target;
   if (wgpuState_->presentation != nullptr) {
-    const auto acquireStart = std::chrono::steady_clock::now();
-    const internal::AcquiredFrame frame = wgpuState_->presentation->acquire();
-    const auto acquireMs = ElapsedMs(acquireStart);
-    timing.surfaceAcquireMs = acquireMs;
-    if (acquireMs > 250.0) {
-      std::fprintf(stderr, "[Editor/WGPU] surface acquire took %.1fms (status=%d, size=%dx%d)\n",
-                   acquireMs, static_cast<int>(frame.status), displayW, displayH);
-    }
-    if (frame.status != gpu::SurfaceStatus::Success || !frame.texture) {
+    gpu::SurfaceStatus acquireStatus = gpu::SurfaceStatus::Success;
+    target = acquirePresentationFrame(displayW, displayH, timing, acquireStatus);
+    if (!target) {
 #if defined(__EMSCRIPTEN__) && defined(DONNER_EDITOR_WGPU)
-      surfaceFailureKind = internal::WgpuSurfaceFailureKindFor(frame.status);
+      surfaceFailureKind = internal::WgpuSurfaceFailureKindFor(acquireStatus);
 #endif
-      wgpuState_->presentation->abandon();
       return;
     }
-    target = frame.texture;
   } else {
     target = wgpuState_->offscreenTexture.get();
   }

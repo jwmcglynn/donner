@@ -524,6 +524,42 @@ TEST(EditorWindowTest, ComputeUiScaleConfigClampsToOne) {
   EXPECT_FLOAT_EQ(config.fontGlobalScale(), 1.0f);
 }
 
+#if defined(DONNER_EDITOR_WGPU)
+TEST(EditorWindowTest, SurfaceStatusesRouteToTheirOwnRecovery) {
+  using Action = internal::SurfaceFrameAction;
+
+  EXPECT_EQ(internal::SurfaceFrameActionFor(gpu::SurfaceStatus::Success), Action::Draw);
+
+  // A configuration that no longer matches its window is followed with a new one, which is what
+  // the resize path already does, rather than costing the frame.
+  EXPECT_EQ(internal::SurfaceFrameActionFor(gpu::SurfaceStatus::Outdated),
+            Action::ReconfigureAndRetry);
+
+  // Neither a platform object that is gone nor a lost device recovers by reconfiguring, so the
+  // surface is given up instead of acquired from again.
+  EXPECT_EQ(internal::SurfaceFrameActionFor(gpu::SurfaceStatus::Lost), Action::Release);
+  EXPECT_EQ(internal::SurfaceFrameActionFor(gpu::SurfaceStatus::DeviceLost), Action::Release);
+
+  // Nothing became available in time; the next frame asks again.
+  EXPECT_EQ(internal::SurfaceFrameActionFor(gpu::SurfaceStatus::Timeout), Action::Skip);
+}
+
+TEST(EditorWindowTest, SurfaceStatusesKeepTheirBrowserRetryBuckets) {
+  using Failure = internal::WgpuSurfaceFailureKind;
+
+  EXPECT_EQ(internal::WgpuSurfaceFailureKindFor(gpu::SurfaceStatus::Timeout), Failure::Timeout);
+  EXPECT_EQ(internal::WgpuSurfaceFailureKindFor(gpu::SurfaceStatus::Outdated),
+            Failure::OutdatedOrLost);
+  EXPECT_EQ(internal::WgpuSurfaceFailureKindFor(gpu::SurfaceStatus::Lost), Failure::OutdatedOrLost);
+
+  // A lost device must not rearm the event-driven browser loop.
+  EXPECT_EQ(internal::WgpuSurfaceFailureKindFor(gpu::SurfaceStatus::DeviceLost), Failure::Fatal);
+  EXPECT_EQ(internal::WgpuSurfaceRetryDecisionFor(
+                internal::WgpuSurfaceFailureKindFor(gpu::SurfaceStatus::DeviceLost), 0u),
+            (internal::WgpuSurfaceRetryDecision{}));
+}
+#endif
+
 TEST(EditorWindowTest, WasmSurfaceFailuresUseStatusAwareBoundedRetries) {
   using Failure = internal::WgpuSurfaceFailureKind;
 
