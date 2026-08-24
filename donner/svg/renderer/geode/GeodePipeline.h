@@ -129,9 +129,9 @@ public:
   /// Move assignment operator.
   GeodeGradientPipeline& operator=(GeodeGradientPipeline&&) noexcept = default;
 
-  /// The compiled render pipeline (TEMPORARY 8a wgpu alias for the still-wgpu GeoEncoder).
+  /// The compiled render pipeline.
   const gpu::RenderPipeline& pipeline() const { return pipeline_; }
-  /// The bind group layout used by the pipeline (TEMPORARY 8a wgpu alias).
+  /// The bind group layout used by the pipeline.
   const gpu::BindGroupLayout& bindGroupLayout() const { return bindGroupLayout_; }
   /// Color format the pipeline was built for.
   gpu::TextureFormat colorFormat() const { return colorFormat_; }
@@ -180,9 +180,9 @@ public:
   GeodeMaskPipeline(GeodeMaskPipeline&&) noexcept = default;
   GeodeMaskPipeline& operator=(GeodeMaskPipeline&&) noexcept = default;
 
-  /// The compiled render pipeline (TEMPORARY 8a wgpu alias for the still-wgpu GeoEncoder).
+  /// The compiled render pipeline.
   const gpu::RenderPipeline& pipeline() const { return pipeline_; }
-  /// The bind group layout used by the pipeline (TEMPORARY 8a wgpu alias).
+  /// The bind group layout used by the pipeline.
   const gpu::BindGroupLayout& bindGroupLayout() const { return bindGroupLayout_; }
   /// The color format the pipeline targets. Always `RGBA8Unorm`.
   gpu::TextureFormat colorFormat() const { return gpu::TextureFormat::RGBA8Unorm; }

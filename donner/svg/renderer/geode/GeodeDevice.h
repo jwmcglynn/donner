@@ -721,7 +721,7 @@ public:
   GeodeCheckerboardPipeline& checkerboardUnderlayPipeline() const;
   /// @}
 
-  /// The TEMPORARY design-0053 Phase 1 adapter implementing \c donner::gpu::Device over this
+  /// The TEMPORARY transition adapter implementing \c donner::gpu::Device over this
   /// device's wgpu objects. Owned here alongside the shared pipelines (which are created
   /// through it); see GeodeWgpuAdapterDevice.h for the removal gates.
   GeodeWgpuAdapterDevice& adapterDevice() const UTILS_LIFETIME_BOUND;

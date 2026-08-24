@@ -76,9 +76,9 @@ donner_cc_library(
     name = "geode_path_encoder",
     srcs = ["GeodePathEncoder.cc"],
     hdrs = ["GeodePathEncoder.h"],
-    # //donner/gpu: the design 0053 vertical slice tests (Metal, Vulkan)
-    # encode the frozen-baseline paths with the same banding the production
-    # path uses. GeodePathEncoder is pure CPU path math with no GPU dependency.
+    # //donner/gpu: the GPU vertical slice tests (Metal, Vulkan) encode the
+    # frozen-baseline paths with the same banding the production path uses.
+    # GeodePathEncoder is pure CPU path math with no GPU dependency.
     visibility = [
         "//donner/gpu:__subpackages__",
         "//donner/svg/renderer:__subpackages__",
@@ -273,10 +273,10 @@ donner_cc_library(
         "GeodeFilterEngine.cc",
         "GeodeImagePipeline.cc",
         "GeodePipeline.cc",
-        # TEMPORARY design-0053 Phase 1 adapter (see GeodeWgpuAdapterDevice.h
-        # for the removal gates). Folded into geode_device like the pipelines
-        # so GeodeDevice can own the adapter alongside the shared pipelines
-        # it constructs (packet 8a+) without a circular dependency.
+        # TEMPORARY transition adapter (see GeodeWgpuAdapterDevice.h for the
+        # removal gates). Folded into geode_device like the pipelines so
+        # GeodeDevice can own the adapter alongside the shared pipelines it
+        # constructs, without a circular dependency.
         "GeodeWgpuAdapterDevice.cc",
     ],
     hdrs = [
@@ -308,7 +308,7 @@ donner_cc_library(
         "//donner/editor/gui:__pkg__",
         "//donner/editor/tests:__pkg__",
         # The donner::gpu shader IR validation fixture compiles emitted WGSL
-        # through GeodeDevice as a black box (design 0053 transition baseline).
+        # through GeodeDevice as a black box, the transition baseline.
         "//donner/gpu:__subpackages__",
         "//donner/svg/renderer:__subpackages__",
         "//examples:__pkg__",
@@ -707,8 +707,8 @@ donner_cc_library(
         "GeodeBufferPool.h",
     ],
     target_compatible_with = _GEODE_ONLY,
-    # //donner/gpu: the design 0053 frozen-baseline capture tool and the
-    # Vulkan vertical slice test render through GeoEncoder as a black box.
+    # //donner/gpu: the frozen-baseline capture tool and the Vulkan vertical
+    # slice test render through GeoEncoder as a black box.
     visibility = [
         "//donner/gpu:__subpackages__",
         "//donner/svg/renderer:__subpackages__",

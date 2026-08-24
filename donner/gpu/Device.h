@@ -178,7 +178,7 @@ Result<uint64_t> ValidateTexelCopyInternal(const TexelCopyBufferLayout& layout,
  *
  * The public API is non-virtual and validates every descriptor, handle, and byte range before
  * delegating to protected `on*` virtuals (template-method pattern), so every backend - the
- * deterministic \ref RecordingDevice today, platform backends in later packets - inherits
+ * deterministic \ref RecordingDevice and the platform backends - inherits
  * identical fail-closed behavior. Validation runs in release builds too: invalid input returns
  * a \ref GpuError, never asserts.
  *

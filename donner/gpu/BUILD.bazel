@@ -8,7 +8,7 @@ load("//build_defs:package.bzl", "donner_package")
 # Result/Status errors, move-only RAII generation-checked handles, deferred destruction by
 # submission serial, submit-time re-validation of recorded commands, fail-closed validation
 # shared by every backend, and the deterministic recording backend. Production rendering stays
-# on the existing Geode path until the migration packets.
+# on the existing Geode path until each family is migrated.
 
 donner_cc_library(
     name = "gpu",

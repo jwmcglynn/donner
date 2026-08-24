@@ -247,7 +247,7 @@ struct GeodeDevice::Impl {
   // Borrowed wgpu aliases of the shared bind-slot resources below, for the call sites that
   // still build wgpu bind groups. Non-owning: the runtime handles own the backing.
 
-  // TEMPORARY design-0053 Phase 1 adapter (see GeodeWgpuAdapterDevice.h for the removal
+  // TEMPORARY transition adapter (see GeodeWgpuAdapterDevice.h for the removal
   // gates). Declared ABOVE the pipelines: the pipeline classes hold donner::gpu RAII handles
   // whose destructors release through the adapter, so the adapter must destruct after them
   // (reverse-declaration order).
