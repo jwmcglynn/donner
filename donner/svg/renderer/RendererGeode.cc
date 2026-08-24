@@ -1732,7 +1732,6 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     wgpu::TextureDescriptor desc;
   };
   std::vector<PendingRelease> framePendingReleases;
-  std::vector<geode::ScopedWgpuHandle<wgpu::TextureView>> framePendingTextureViewReleases;
 
   void releaseTextureAtFrameEnd(wgpu::Texture texture, const wgpu::TextureDescriptor& desc) {
     if (!texture) {
@@ -1746,18 +1745,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     releaseTextureAtFrameEnd(std::move(texture), desc);
   }
 
-  void releaseTextureViewsAtFrameEnd(
-      std::vector<geode::ScopedWgpuHandle<wgpu::TextureView>>& views) {
-    for (auto& view : views) {
-      if (view) {
-        framePendingTextureViewReleases.push_back(std::move(view));
-      }
-    }
-    views.clear();
-  }
-
   void drainPendingReleases() {
-    framePendingTextureViewReleases.clear();
     for (auto& pending : framePendingReleases) {
       releaseTexture(std::move(pending.texture), pending.desc);
     }
@@ -1786,7 +1774,6 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     closeFrameGpuEncoderAfterSubmit();
 
     frameFinishedEncoders.clear();
-    framePendingTextureViewReleases.clear();
     drainPendingReleases();
 
     wgpu::CommandEncoderDescriptor descriptor = {};
@@ -1893,28 +1880,19 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     bool hasPolygon = false;
     bool allocationRejected = false;
     Vector2d polygonCorners[4];
-    /// Path-clip mask. When non-null, `maskResolveView`
-    /// references a 1-sample R8Unorm texture sampled by the fill /
-    /// gradient pipelines through their clip-mask bindings. The
-    /// texture is allocated per `pushClip` call - the Impl owns the
-    /// wgpu::Texture to keep the resolve alive until `popClip`.
+    /// Path-clip mask. When non-null these name a 1-sample texture sampled
+    /// by the fill / gradient pipelines through their clip-mask bindings.
+    /// The texture is allocated per `pushClip` call and parked in
+    /// `maskLayerTextures`, which keeps it alive until `popClip`.
     ///
     /// For nested `<clipPath>` references, the pushClip code builds
     /// one mask per clip-path layer (deepest first); each outer
     /// layer's mask is rendered with the previous layer's mask as an
     /// input clip mask so every outer shape is intersected with the
-    /// deeper union. The final (outermost) layer's resolve lives in
-    /// `maskResolveView`; the intermediate layer textures are parked
-    /// in `maskLayerTextures` so their wgpu::Texture ownership
-    /// persists until `popClip`.
-    wgpu::Texture maskResolveTexture;
-    /// Owned texture views created for each nested mask layer. Released after
-    /// the frame command buffer is submitted because recorded bind groups may
-    /// still reference them after `popClip`.
-    std::vector<geode::ScopedWgpuHandle<wgpu::TextureView>> maskLayerViews;
-    wgpu::TextureView maskResolveView;
-    /// Runtime aliases for `maskResolveTexture` / `maskResolveView`, owned by the frame's import
-    /// lists. Null exactly when `maskResolveView` is null.
+    /// deeper union. The outermost layer's resolve is the one named here.
+    ///
+    /// Both are aliases owned by the frame's import lists, so they are valid
+    /// for the rest of the frame and are null together.
     const gpu::Texture* maskResolveTextureHandle = nullptr;
     const gpu::TextureView* maskResolveViewHandle = nullptr;
     /// Paired (texture, descriptor) entries. Every clip-mask texture
@@ -2170,7 +2148,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
         // intersection in the shader (see ClipStackEntry docs).
         polygonEntry = &entry;
       }
-      if (entry.maskResolveView) {
+      if (entry.maskResolveViewHandle != nullptr) {
         // Same deal for the path-clip mask - we always bind the
         // topmost one, and nested path-clip intersections are a
         // TODO (would need multiple clip-mask bindings in the
@@ -4345,13 +4323,10 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
 
   static void releaseClipStackTextures(std::vector<ClipStackEntry>& entries) {
     for (ClipStackEntry& entry : entries) {
-      entry.maskLayerViews.clear();
       for (PendingRelease& release : entry.maskLayerTextures) {
         releasePendingTexture(release);
       }
       entry.maskLayerTextures.clear();
-      entry.maskResolveTexture = wgpu::Texture();
-      entry.maskResolveView = wgpu::TextureView();
       entry.maskResolveTextureHandle = nullptr;
       entry.maskResolveViewHandle = nullptr;
     }
@@ -4496,7 +4471,6 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
       device->waitForQueueIdle();
     }
 
-    framePendingTextureViewReleases.clear();
     for (PendingRelease& release : framePendingReleases) {
       releasePendingTexture(release);
     }
@@ -5089,8 +5063,6 @@ void RendererGeode::pushClip(const ResolvedClip& clip) {
   // binding the previously-rendered deeper mask as the input clip.
   if (!clip.clipPaths.empty() && impl_->device && impl_->encoder && impl_->pixelWidth > 0 &&
       impl_->pixelHeight > 0) {
-    const wgpu::Device& dev = impl_->device->device();
-
     const auto makeMaskTexture = [&](const char* label, wgpu::TextureDescriptor& outDesc) {
       outDesc = wgpu::TextureDescriptor{};
       outDesc.label = wgpuLabel(label);
@@ -5140,24 +5112,17 @@ void RendererGeode::pushClip(const ResolvedClip& clip) {
     // with it as it's being rendered. Without this seed the outer
     // ancestor clip would be lost the moment the inner clip lands
     // because `updateEncoderScissor` only binds the topmost entry.
-    wgpu::Texture nestedMaskTexture;
-    wgpu::TextureView nestedMaskView;
-    // Runtime aliases tracking `nestedMaskTexture` / `nestedMaskView`, owned by the frame's
-    // import lists.
+    // Aliases owned by the frame's import lists, so they stay valid for the rest of the frame.
     const gpu::Texture* nestedMaskTextureHandle = nullptr;
     const gpu::TextureView* nestedMaskViewHandle = nullptr;
     for (auto rit = impl_->clipStack.rbegin(); rit != impl_->clipStack.rend(); ++rit) {
-      if (rit->maskResolveView) {
-        nestedMaskTexture = rit->maskResolveTexture;
-        nestedMaskView = rit->maskResolveView;
+      if (rit->maskResolveViewHandle != nullptr) {
         nestedMaskTextureHandle = rit->maskResolveTextureHandle;
         nestedMaskViewHandle = rit->maskResolveViewHandle;
         break;
       }
     }
 
-    (void)dev;  // Kept for potential future use; texture allocation
-                // routes through `impl_->acquireTexture` now.
     for (auto it = runs.rbegin(); it != runs.rend(); ++it) {
       wgpu::TextureDescriptor maskDesc = {};
       wgpu::Texture maskTexture = makeMaskTexture("RendererGeodeClipMask", maskDesc);
@@ -5168,7 +5133,7 @@ void RendererGeode::pushClip(const ResolvedClip& clip) {
 
       // Bind the previously-rendered nested mask (if any) so this
       // layer's fragment shader samples it and intersects.
-      if (nestedMaskView) {
+      if (nestedMaskViewHandle != nullptr) {
         impl_->encoder->setClipMask(*nestedMaskTextureHandle, *nestedMaskViewHandle);
       } else {
         impl_->encoder->clearClipMask();
@@ -5185,14 +5150,8 @@ void RendererGeode::pushClip(const ResolvedClip& clip) {
       }
       impl_->encoder->endMaskPass();
 
-      nestedMaskTexture = maskTexture;
       nestedMaskTextureHandle = &maskTextureHandle;
       nestedMaskViewHandle = &impl_->importTextureView(maskTextureHandle);
-      geode::ScopedWgpuHandle<wgpu::TextureView> maskView(maskTexture.createView());
-      nestedMaskView = maskView.get();
-      if (maskView) {
-        entry.maskLayerViews.push_back(std::move(maskView));
-      }
 
       // Keep the intermediate textures alive until popClip, paired
       // with their descs for texture-pool release.
@@ -5201,8 +5160,6 @@ void RendererGeode::pushClip(const ResolvedClip& clip) {
       // The outermost layer (the LAST one processed by this loop,
       // i.e. the FIRST run in `runs`) provides the mask view the
       // main draws sample as their clip.
-      entry.maskResolveTexture = nestedMaskTexture;
-      entry.maskResolveView = nestedMaskView;
       entry.maskResolveTextureHandle = nestedMaskTextureHandle;
       entry.maskResolveViewHandle = nestedMaskViewHandle;
     }
@@ -5225,11 +5182,10 @@ void RendererGeode::popClip() {
   if (!impl_->clipStack.empty()) {
     // Defer release of the mask textures to endFrame - the main
     // encoder that was just drawing under this clip may have recorded
-    // samples from `maskResolveTexture` into the frame encoder, and
+    // samples from the resolved mask texture into the frame encoder, and
     // recycling mid-frame could hand the texture to a later acquire
     // before the submit.
     Impl::ClipStackEntry& entry = impl_->clipStack.back();
-    impl_->releaseTextureViewsAtFrameEnd(entry.maskLayerViews);
     for (auto& release : entry.maskLayerTextures) {
       impl_->releaseTextureAtFrameEnd(std::move(release.texture), release.desc);
     }

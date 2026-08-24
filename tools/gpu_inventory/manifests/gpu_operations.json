@@ -448,7 +448,6 @@
         "ComputePassDescriptor",
         "ComputePassEncoder",
         "Default",
-        "Device",
         "Extent3D",
         "Future",
         "FutureWaitInfo",
