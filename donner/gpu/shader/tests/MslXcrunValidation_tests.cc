@@ -2,6 +2,10 @@
 /// Out-of-process MSL validation: every emitted MSL module must compile cleanly with the platform
 /// Metal compiler (`xcrun -sdk macosx metal`). Platform compilers run as external verification
 /// tools rather than build dependencies.
+///
+/// A negative control proves the detection mechanism: deliberately invalid MSL must be rejected,
+/// so an acceptance result here means the compiler actually inspected the source rather than the
+/// harness silently reporting success.
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
@@ -108,6 +112,35 @@ void ExpectCompilesWithMetalCompiler(ShaderResult<IrModule>&& module, const std:
   }
 }
 
+/// Compiles \p source and returns the compiler's combined output, setting \p status to its exit
+/// code. Used by the negative control, which needs the failure rather than an assertion on it.
+/// @param source MSL text to compile.
+/// @param name Base file name for the source and its object output.
+/// @param status Set to the compiler's exit status.
+std::string CompileMslForStatus(const std::string& source, const std::string& name, int* status) {
+  const char* testTmpdir = std::getenv("TEST_TMPDIR");
+  if (testTmpdir == nullptr) {
+    *status = -1;
+    return "TEST_TMPDIR is unset";
+  }
+  const std::string sourcePath = std::string(testTmpdir) + "/" + name + ".metal";
+  const std::string outputPath = std::string(testTmpdir) + "/" + name + ".air";
+  {
+    std::ofstream out(sourcePath, std::ios::binary | std::ios::trunc);
+    if (!out.good()) {
+      *status = -1;
+      return "Failed to write " + sourcePath;
+    }
+    out << source;
+  }
+
+  std::string output;
+  *status = RunCommand(
+      "xcrun -sdk macosx metal -std=metal3.0 -c \"" + sourcePath + "\" -o \"" + outputPath + "\"",
+      &output);
+  return output;
+}
+
 TEST(MslXcrunValidation, EmittedSolidFillCompilesWithMetalCompiler) {
   const std::string skipReason = FindMetalCompilerSkipReason();
   if (!skipReason.empty()) {
@@ -122,6 +155,24 @@ TEST(MslXcrunValidation, EmittedColorMatrixComputeCompilesWithMetalCompiler) {
     GTEST_SKIP() << skipReason;
   }
   ExpectCompilesWithMetalCompiler(programs::BuildColorMatrixModule(), "color_matrix");
+}
+
+TEST(MslXcrunValidation, NegativeControlDetectsInvalidMsl) {
+  // Proves the detection mechanism: MSL the compiler must reject has to come back as a nonzero
+  // status with a diagnostic. Without this, a harness that silently reported success would make
+  // the positive results above meaningless.
+  const std::string skipReason = FindMetalCompilerSkipReason();
+  if (!skipReason.empty()) {
+    GTEST_SKIP() << skipReason;
+  }
+
+  int status = 0;
+  const std::string output = CompileMslForStatus(
+      "#include <metal_stdlib>\nkernel void broken(device float* out) { out[0] = nonsense; }\n",
+      "invalid", &status);
+
+  EXPECT_NE(status, 0) << "the Metal compiler accepted deliberately invalid MSL:\n" << output;
+  EXPECT_THAT(output, HasSubstr("error:")) << output;
 }
 
 }  // namespace

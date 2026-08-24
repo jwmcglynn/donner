@@ -2,6 +2,10 @@
 /// Out-of-process SPIR-V validation: every emitted module must pass
 /// `spirv-val --target-env vulkan1.1`. Platform validators run as external verification tools
 /// rather than build dependencies, so the test skips cleanly when spirv-val is not installed.
+///
+/// A negative control proves the detection mechanism: a deliberately malformed module must be
+/// rejected, so an acceptance result here means the validator actually inspected the words rather
+/// than the harness silently reporting success.
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
@@ -51,6 +55,40 @@ std::string FindSpirvVal() {
     }
   }
   return "";
+}
+
+/// Writes \p words under TEST_TMPDIR as \p fileName and returns spirv-val's combined output,
+/// setting \p status to its exit code. Used by the negative control, which needs the failure
+/// itself rather than an assertion on it.
+/// @param spirvVal Path to the spirv-val executable.
+/// @param words SPIR-V word stream to validate.
+/// @param fileName File name to write the words to.
+/// @param status Set to spirv-val's exit status.
+std::string ValidateWordsForStatus(const std::string& spirvVal, const std::vector<uint32_t>& words,
+                                   const std::string& fileName, int* status) {
+  const char* testTmpdir = std::getenv("TEST_TMPDIR");
+  if (testTmpdir == nullptr) {
+    *status = -1;
+    return "TEST_TMPDIR is unset";
+  }
+  const std::string modulePath = std::string(testTmpdir) + "/" + fileName;
+  {
+    std::ofstream out(modulePath, std::ios::binary | std::ios::trunc);
+    if (!out.good()) {
+      *status = -1;
+      return "Failed to write " + modulePath;
+    }
+    for (const uint32_t word : words) {
+      const std::array<char, 4> bytes = {
+          static_cast<char>(word & 0xFF), static_cast<char>((word >> 8) & 0xFF),
+          static_cast<char>((word >> 16) & 0xFF), static_cast<char>((word >> 24) & 0xFF)};
+      out.write(bytes.data(), bytes.size());
+    }
+  }
+
+  std::string output;
+  *status = RunCommand(spirvVal + " --target-env vulkan1.1 \"" + modulePath + "\"", &output);
+  return output;
 }
 
 /// Emits \p module, writes it under TEST_TMPDIR as \p fileName, and asserts spirv-val accepts it.
@@ -104,6 +142,31 @@ TEST(SpirvValValidation, EmittedColorMatrixComputePassesVulkan11Validation) {
     GTEST_SKIP() << "spirv-val (SPIRV-Tools) is not installed";
   }
   ExpectValidatesForVulkan11(spirvVal, programs::BuildColorMatrixModule(), "color_matrix.spv");
+}
+
+TEST(SpirvValValidation, NegativeControlDetectsAMalformedModule) {
+  // Proves the detection mechanism. The emitted solid-fill module is truncated to its header plus
+  // a single word, which is not a decodable instruction stream; spirv-val must reject it. Without
+  // this, a harness that silently reported success would make the acceptance results above
+  // meaningless.
+  const std::string spirvVal = FindSpirvVal();
+  if (spirvVal.empty()) {
+    GTEST_SKIP() << "spirv-val (SPIRV-Tools) is not installed";
+  }
+
+  ShaderResult<IrModule> module = programs::BuildSolidFillModule();
+  ASSERT_THAT(module, HasShaderResult());
+  ShaderResult<std::vector<uint32_t>> spirv = EmitSpirv(module.result());
+  ASSERT_FALSE(spirv.hasError()) << "EmitSpirv failed: " << spirv.error();
+  ASSERT_GT(spirv.result().size(), 6u);
+
+  std::vector<uint32_t> malformed(spirv.result().begin(), spirv.result().begin() + 6);
+
+  int status = 0;
+  const std::string output = ValidateWordsForStatus(spirvVal, malformed, "malformed.spv", &status);
+
+  EXPECT_NE(status, 0) << "spirv-val accepted a truncated module:\n" << output;
+  EXPECT_THAT(output, HasSubstr("error")) << output;
 }
 
 }  // namespace
