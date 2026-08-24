@@ -1,0 +1,65 @@
+load("//build_defs:rules.bzl", "donner_cc_binary", "donner_cc_library", "donner_cc_test", "donner_multi_transitioned_binary", "donner_multi_transitioned_test")
+load("//build_defs:visibility.bzl", "donner_internal_visibility")
+load("//build_defs:package.bzl", "donner_package")
+load("@rules_python//python:defs.bzl", "py_test")
+
+# The frozen pre-cutover baseline: Donner-owned scenes captured from the current production
+# renderer, plus the check-mode targets that re-derive them and diff against what is committed.
+#
+# The split is deliberate. Structural counters come from the CPU path encoder, so they are
+# backend-independent and their freshness gate runs on any machine under plain `bazel test //...`.
+# Pixels come from a real GPU submit, so they are frozen per capture environment and their check
+# runs only where the recorded adapter is live.
+
+filegroup(
+    name = "baselines",
+    srcs = glob(
+        [
+            "baselines/*.json",
+            "baselines/*.png",
+            "baselines/*.txt",
+        ],
+        allow_empty = True,
+    ),
+    visibility = donner_internal_visibility(),
+)
+
+donner_cc_library(
+    name = "baseline_corpus",
+    testonly = 1,
+    srcs = ["BaselineCorpus.cc"],
+    hdrs = ["BaselineCorpus.h"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        "//donner/base",
+        "//donner/css",
+        "//donner/gpu:baseline_scene",
+        "//donner/svg/renderer/geode:geode_path_encoder",
+    ],
+)
+
+donner_cc_binary(
+    name = "dump_baseline_counters",
+    testonly = 1,
+    srcs = ["DumpBaselineCounters.cc"],
+    visibility = donner_internal_visibility(),
+    deps = [":baseline_corpus"],
+)
+
+py_test(
+    name = "baseline_counters_tests",
+    size = "small",
+    srcs = ["baseline_counters_tests.py"],
+    args = [
+        "--dump-binary",
+        "$(rootpath :dump_baseline_counters)",
+        "--committed",
+        "$(rootpath baselines/structural_counters.json)",
+    ],
+    data = [
+        "baselines/structural_counters.json",
+        ":dump_baseline_counters",
+    ],
+)
+
+donner_package()

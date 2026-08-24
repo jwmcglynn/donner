@@ -1,0 +1,185 @@
+{
+  "_comment": "Structural counters of the frozen GPU baseline corpus, derived on the CPU by the production path encoder. Regenerate with: bazel run //donner/gpu/baseline:dump_baseline_counters > donner/gpu/baseline/baselines/structural_counters.json",
+  "schemaVersion": 1,
+  "scenes": [
+    {
+      "name": "solid_fill_baseline",
+      "paths": [
+        {
+          "outcome": "Ready",
+          "horizontal": {"canonicalCurveCount": 8, "curveReferenceCount": 12, "omittedParallelCurves": 0, "gridBandCount": 2, "nonemptyBandCount": 2, "maxCurvesPerBand": 6, "p95CurvesPerBand": 6},
+          "vertical": {"canonicalCurveCount": 8, "curveReferenceCount": 12, "omittedParallelCurves": 1, "gridBandCount": 2, "nonemptyBandCount": 2, "maxCurvesPerBand": 6, "p95CurvesPerBand": 6},
+          "boundingVertexCount": 4,
+          "boundingDrawVertexCount": 6,
+          "geometryItemCount": 48,
+          "bounds": [24.000000, 32.000000, 116.000000, 124.000000]
+        },
+        {
+          "outcome": "Ready",
+          "horizontal": {"canonicalCurveCount": 4, "curveReferenceCount": 4, "omittedParallelCurves": 1, "gridBandCount": 1, "nonemptyBandCount": 1, "maxCurvesPerBand": 4, "p95CurvesPerBand": 4},
+          "vertical": {"canonicalCurveCount": 5, "curveReferenceCount": 5, "omittedParallelCurves": 0, "gridBandCount": 1, "nonemptyBandCount": 1, "maxCurvesPerBand": 5, "p95CurvesPerBand": 5},
+          "boundingVertexCount": 5,
+          "boundingDrawVertexCount": 9,
+          "geometryItemCount": 22,
+          "bounds": [111.034496, 28.000000, 228.965504, 140.159054]
+        },
+        {
+          "outcome": "Ready",
+          "horizontal": {"canonicalCurveCount": 36, "curveReferenceCount": 68, "omittedParallelCurves": 0, "gridBandCount": 16, "nonemptyBandCount": 16, "maxCurvesPerBand": 7, "p95CurvesPerBand": 7},
+          "vertical": {"canonicalCurveCount": 36, "curveReferenceCount": 68, "omittedParallelCurves": 0, "gridBandCount": 16, "nonemptyBandCount": 16, "maxCurvesPerBand": 9, "p95CurvesPerBand": 9},
+          "boundingVertexCount": 4,
+          "boundingDrawVertexCount": 6,
+          "geometryItemCount": 272,
+          "bounds": [56.817703, 110.350197, 207.960955, 223.203290]
+        }
+      ]
+    },
+    {
+      "name": "fill_rule_pair",
+      "paths": [
+        {
+          "outcome": "Ready",
+          "horizontal": {"canonicalCurveCount": 5, "curveReferenceCount": 5, "omittedParallelCurves": 1, "gridBandCount": 1, "nonemptyBandCount": 1, "maxCurvesPerBand": 5, "p95CurvesPerBand": 5},
+          "vertical": {"canonicalCurveCount": 5, "curveReferenceCount": 5, "omittedParallelCurves": 1, "gridBandCount": 1, "nonemptyBandCount": 1, "maxCurvesPerBand": 5, "p95CurvesPerBand": 5},
+          "boundingVertexCount": 4,
+          "boundingDrawVertexCount": 6,
+          "geometryItemCount": 24,
+          "bounds": [24.000000, 24.000000, 136.000000, 176.000000]
+        },
+        {
+          "outcome": "Ready",
+          "horizontal": {"canonicalCurveCount": 5, "curveReferenceCount": 5, "omittedParallelCurves": 1, "gridBandCount": 1, "nonemptyBandCount": 1, "maxCurvesPerBand": 5, "p95CurvesPerBand": 5},
+          "vertical": {"canonicalCurveCount": 5, "curveReferenceCount": 5, "omittedParallelCurves": 1, "gridBandCount": 1, "nonemptyBandCount": 1, "maxCurvesPerBand": 5, "p95CurvesPerBand": 5},
+          "boundingVertexCount": 4,
+          "boundingDrawVertexCount": 6,
+          "geometryItemCount": 24,
+          "bounds": [120.000000, 64.000000, 232.000000, 216.000000]
+        }
+      ]
+    },
+    {
+      "name": "alpha_stack",
+      "paths": [
+        {
+          "outcome": "Ready",
+          "horizontal": {"canonicalCurveCount": 2, "curveReferenceCount": 2, "omittedParallelCurves": 2, "gridBandCount": 1, "nonemptyBandCount": 1, "maxCurvesPerBand": 2, "p95CurvesPerBand": 2},
+          "vertical": {"canonicalCurveCount": 2, "curveReferenceCount": 2, "omittedParallelCurves": 2, "gridBandCount": 1, "nonemptyBandCount": 1, "maxCurvesPerBand": 2, "p95CurvesPerBand": 2},
+          "boundingVertexCount": 4,
+          "boundingDrawVertexCount": 6,
+          "geometryItemCount": 12,
+          "bounds": [32.000000, 32.000000, 160.000000, 160.000000]
+        },
+        {
+          "outcome": "Ready",
+          "horizontal": {"canonicalCurveCount": 2, "curveReferenceCount": 2, "omittedParallelCurves": 2, "gridBandCount": 1, "nonemptyBandCount": 1, "maxCurvesPerBand": 2, "p95CurvesPerBand": 2},
+          "vertical": {"canonicalCurveCount": 2, "curveReferenceCount": 2, "omittedParallelCurves": 2, "gridBandCount": 1, "nonemptyBandCount": 1, "maxCurvesPerBand": 2, "p95CurvesPerBand": 2},
+          "boundingVertexCount": 4,
+          "boundingDrawVertexCount": 6,
+          "geometryItemCount": 12,
+          "bounds": [96.000000, 64.000000, 224.000000, 192.000000]
+        },
+        {
+          "outcome": "Ready",
+          "horizontal": {"canonicalCurveCount": 2, "curveReferenceCount": 2, "omittedParallelCurves": 2, "gridBandCount": 1, "nonemptyBandCount": 1, "maxCurvesPerBand": 2, "p95CurvesPerBand": 2},
+          "vertical": {"canonicalCurveCount": 2, "curveReferenceCount": 2, "omittedParallelCurves": 2, "gridBandCount": 1, "nonemptyBandCount": 1, "maxCurvesPerBand": 2, "p95CurvesPerBand": 2},
+          "boundingVertexCount": 4,
+          "boundingDrawVertexCount": 6,
+          "geometryItemCount": 12,
+          "bounds": [64.000000, 96.000000, 192.000000, 224.000000]
+        }
+      ]
+    },
+    {
+      "name": "cubic_extrema",
+      "paths": [
+        {
+          "outcome": "Ready",
+          "horizontal": {"canonicalCurveCount": 32, "curveReferenceCount": 52, "omittedParallelCurves": 0, "gridBandCount": 8, "nonemptyBandCount": 8, "maxCurvesPerBand": 10, "p95CurvesPerBand": 10},
+          "vertical": {"canonicalCurveCount": 32, "curveReferenceCount": 48, "omittedParallelCurves": 0, "gridBandCount": 8, "nonemptyBandCount": 8, "maxCurvesPerBand": 8, "p95CurvesPerBand": 8},
+          "boundingVertexCount": 4,
+          "boundingDrawVertexCount": 6,
+          "geometryItemCount": 196,
+          "bounds": [48.000000, 44.000000, 208.000000, 212.000000]
+        },
+        {
+          "outcome": "Ready",
+          "horizontal": {"canonicalCurveCount": 24, "curveReferenceCount": 40, "omittedParallelCurves": 0, "gridBandCount": 8, "nonemptyBandCount": 8, "maxCurvesPerBand": 5, "p95CurvesPerBand": 5},
+          "vertical": {"canonicalCurveCount": 28, "curveReferenceCount": 52, "omittedParallelCurves": 0, "gridBandCount": 8, "nonemptyBandCount": 8, "maxCurvesPerBand": 9, "p95CurvesPerBand": 9},
+          "boundingVertexCount": 4,
+          "boundingDrawVertexCount": 6,
+          "geometryItemCount": 176,
+          "bounds": [97.981934, 72.000000, 158.018066, 184.000000]
+        }
+      ]
+    },
+    {
+      "name": "band_grid_stress",
+      "paths": [
+        {
+          "outcome": "Ready",
+          "horizontal": {"canonicalCurveCount": 26, "curveReferenceCount": 40, "omittedParallelCurves": 0, "gridBandCount": 8, "nonemptyBandCount": 8, "maxCurvesPerBand": 5, "p95CurvesPerBand": 5},
+          "vertical": {"canonicalCurveCount": 25, "curveReferenceCount": 25, "omittedParallelCurves": 1, "gridBandCount": 1, "nonemptyBandCount": 1, "maxCurvesPerBand": 25, "p95CurvesPerBand": 25},
+          "boundingVertexCount": 4,
+          "boundingDrawVertexCount": 6,
+          "geometryItemCount": 134,
+          "bounds": [20.000000, 16.000000, 220.000000, 240.000000]
+        }
+      ]
+    },
+    {
+      "name": "degenerate_paths",
+      "paths": [
+        {
+          "outcome": "Empty",
+          "horizontal": {"canonicalCurveCount": 0, "curveReferenceCount": 0, "omittedParallelCurves": 0, "gridBandCount": 0, "nonemptyBandCount": 0, "maxCurvesPerBand": 0, "p95CurvesPerBand": 0},
+          "vertical": {"canonicalCurveCount": 0, "curveReferenceCount": 0, "omittedParallelCurves": 0, "gridBandCount": 0, "nonemptyBandCount": 0, "maxCurvesPerBand": 0, "p95CurvesPerBand": 0},
+          "boundingVertexCount": 0,
+          "boundingDrawVertexCount": 0,
+          "geometryItemCount": 0,
+          "bounds": [0.000000, 0.000000, 0.000000, 0.000000]
+        },
+        {
+          "outcome": "Empty",
+          "horizontal": {"canonicalCurveCount": 0, "curveReferenceCount": 0, "omittedParallelCurves": 0, "gridBandCount": 0, "nonemptyBandCount": 0, "maxCurvesPerBand": 0, "p95CurvesPerBand": 0},
+          "vertical": {"canonicalCurveCount": 0, "curveReferenceCount": 0, "omittedParallelCurves": 0, "gridBandCount": 0, "nonemptyBandCount": 0, "maxCurvesPerBand": 0, "p95CurvesPerBand": 0},
+          "boundingVertexCount": 0,
+          "boundingDrawVertexCount": 0,
+          "geometryItemCount": 0,
+          "bounds": [0.000000, 0.000000, 0.000000, 0.000000]
+        },
+        {
+          "outcome": "Empty",
+          "horizontal": {"canonicalCurveCount": 0, "curveReferenceCount": 0, "omittedParallelCurves": 0, "gridBandCount": 0, "nonemptyBandCount": 0, "maxCurvesPerBand": 0, "p95CurvesPerBand": 0},
+          "vertical": {"canonicalCurveCount": 0, "curveReferenceCount": 0, "omittedParallelCurves": 0, "gridBandCount": 0, "nonemptyBandCount": 0, "maxCurvesPerBand": 0, "p95CurvesPerBand": 0},
+          "boundingVertexCount": 0,
+          "boundingDrawVertexCount": 0,
+          "geometryItemCount": 0,
+          "bounds": [0.000000, 0.000000, 0.000000, 0.000000]
+        }
+      ]
+    },
+    {
+      "name": "rejected_out_of_range",
+      "paths": [
+        {
+          "outcome": "Rejected",
+          "horizontal": {"canonicalCurveCount": 0, "curveReferenceCount": 0, "omittedParallelCurves": 0, "gridBandCount": 0, "nonemptyBandCount": 0, "maxCurvesPerBand": 0, "p95CurvesPerBand": 0},
+          "vertical": {"canonicalCurveCount": 0, "curveReferenceCount": 0, "omittedParallelCurves": 0, "gridBandCount": 0, "nonemptyBandCount": 0, "maxCurvesPerBand": 0, "p95CurvesPerBand": 0},
+          "boundingVertexCount": 0,
+          "boundingDrawVertexCount": 0,
+          "geometryItemCount": 0,
+          "bounds": [0.000000, 0.000000, 0.000000, 0.000000]
+        },
+        {
+          "outcome": "Rejected",
+          "horizontal": {"canonicalCurveCount": 0, "curveReferenceCount": 0, "omittedParallelCurves": 0, "gridBandCount": 0, "nonemptyBandCount": 0, "maxCurvesPerBand": 0, "p95CurvesPerBand": 0},
+          "vertical": {"canonicalCurveCount": 0, "curveReferenceCount": 0, "omittedParallelCurves": 0, "gridBandCount": 0, "nonemptyBandCount": 0, "maxCurvesPerBand": 0, "p95CurvesPerBand": 0},
+          "boundingVertexCount": 0,
+          "boundingDrawVertexCount": 0,
+          "geometryItemCount": 0,
+          "bounds": [0.000000, 0.000000, 0.000000, 0.000000]
+        }
+      ]
+    }
+  ]
+}
