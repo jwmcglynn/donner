@@ -219,18 +219,29 @@ struct MetalDevice::Impl {
   std::vector<std::optional<BindGroupRecord>> bindGroups;                  //!< Bind group slots.
   std::vector<std::optional<PipelineLayoutDescriptor>> pipelineLayouts;    //!< Pipeline layouts.
   std::vector<id<MTLLibrary>> shaderLibraries;                             //!< Shader module slots.
-  std::vector<std::optional<RenderPipelineRecord>> renderPipelines;  //!< Render pipeline slots.
+  /// A compiled compute pipeline plus the threadgroup shape every dispatch through it uses;
+  /// Metal takes that shape at dispatch time rather than from the pipeline state object.
+  struct ComputePipelineRecord {
+    id<MTLComputePipelineState> state = nil;  //!< Compiled pipeline state.
+    WorkgroupSize workgroupSize;              //!< Declared threads per threadgroup.
+  };
+
+  std::vector<std::optional<RenderPipelineRecord>> renderPipelines;    //!< Render pipeline slots.
+  std::vector<std::optional<ComputePipelineRecord>> computePipelines;  //!< Compute pipeline slots.
 
   std::shared_ptr<CompletionState> completionState =
       std::make_shared<CompletionState>();  //!< Shared with completion handlers.
 
   /// Mutable state threaded through the encoding of one command stream.
   struct EncodingState {
-    id<MTLCommandBuffer> commandBuffer = nil;         //!< Command buffer being encoded.
-    id<MTLRenderCommandEncoder> renderEncoder = nil;  //!< Active render encoder, or nil.
+    id<MTLCommandBuffer> commandBuffer = nil;           //!< Command buffer being encoded.
+    id<MTLRenderCommandEncoder> renderEncoder = nil;    //!< Active render encoder, or nil.
+    id<MTLComputeCommandEncoder> computeEncoder = nil;  //!< Active compute encoder, or nil.
     /// Topology of the bound pipeline; Metal takes it per draw call rather than from the
     /// pipeline state object.
     PrimitiveTopology currentTopology = PrimitiveTopology::TriangleList;
+    /// Threadgroup shape of the bound compute pipeline, applied at dispatch.
+    WorkgroupSize currentWorkgroupSize;
   };
 
   /// Opens a render encoder for a recorded pass and configures its color attachments.
@@ -311,6 +322,23 @@ struct MetalDevice::Impl {
   /// Encodes a render-pass command, or returns empty when \p command is not one.
   /// @param state Encoding state. @param command Recorded command.
   std::optional<Status> encodeRenderCommand(EncodingState& state, const Command& command);
+
+  /// Opens a compute encoder for a recorded pass.
+  /// @param state Encoding state.
+  Status beginEncodedComputePass(EncodingState& state);
+
+  /// Binds a recorded compute pipeline and records its threadgroup shape.
+  /// @param state Encoding state. @param setPipeline Recorded command.
+  Status encodeSetComputePipeline(EncodingState& state,
+                                  const SetComputePipelineCommand& setPipeline);
+
+  /// Issues a dispatch with the bound pipeline's threadgroup shape.
+  /// @param state Encoding state. @param dispatch Recorded command.
+  Status encodeDispatchWorkgroups(EncodingState& state, const DispatchWorkgroupsCommand& dispatch);
+
+  /// Closes the active compute encoder.
+  /// @param state Encoding state.
+  Status encodeEndComputePass(EncodingState& state);
 
   /// Encodes a compute-pass command, or returns empty when \p command is not one.
   /// @param state Encoding state. @param command Recorded command.
@@ -428,6 +456,9 @@ Status MetalDevice::onCreateTexture(uint32_t slotIndex, const TextureDescriptor&
   }
   if (HasAllFlags(descriptor.usage, TextureUsage::Sampled)) {
     usage |= MTLTextureUsageShaderRead;
+  }
+  if (HasAllFlags(descriptor.usage, TextureUsage::StorageBinding)) {
+    usage |= MTLTextureUsageShaderWrite;
   }
   textureDescriptor.usage = usage;
   // Shared storage: this backend targets Apple Silicon's unified memory, so render targets stay
@@ -619,15 +650,51 @@ Status MetalDevice::onCreateRenderPipeline(uint32_t slotIndex,
 
 Status MetalDevice::onCreateComputePipeline(uint32_t slotIndex,
                                             const ComputePipelineDescriptor& descriptor) {
-  (void)slotIndex;
-  (void)descriptor;
-  return GpuError{GpuErrorType::Unsupported,
-                  "the Metal backend does not implement compute pipelines yet"};
+  id<MTLLibrary> library = GetSlot(impl_->shaderLibraries, descriptor.compute.module.slotIndex());
+  if (library == nil) {
+    return GpuError{GpuErrorType::InvalidState,
+                    "compute pipeline references a shader module with no compiled Metal library"};
+  }
+
+  NSString* entryPoint = ToNSString(std::string_view(descriptor.compute.entryPoint));
+  id<MTLFunction> function = entryPoint != nil ? [library newFunctionWithName:entryPoint] : nil;
+  if (function == nil) {
+    return GpuError{GpuErrorType::InvalidDescriptor,
+                    std::format("compute entry point '{}' not found in shader module",
+                                std::string_view(descriptor.compute.entryPoint))};
+  }
+
+  NSError* error = nil;
+  id<MTLComputePipelineState> pipelineState =
+      [impl_->device newComputePipelineStateWithFunction:function error:&error];
+  if (pipelineState == nil) {
+    return GpuError{GpuErrorType::InvalidDescriptor,
+                    std::format("Metal compute pipeline creation failed for '{}': {}",
+                                std::string_view(descriptor.label),
+                                DescribeNSError(error, "no pipeline diagnostics"))};
+  }
+  // The declared threadgroup must fit what the compiled kernel can actually launch; a larger
+  // shape would be rejected asynchronously at dispatch instead of here.
+  const uint64_t declaredInvocations = uint64_t{descriptor.workgroupSize.x} *
+                                       descriptor.workgroupSize.y * descriptor.workgroupSize.z;
+  if (declaredInvocations > pipelineState.maxTotalThreadsPerThreadgroup) {
+    return GpuError{
+        GpuErrorType::LimitExceeded,
+        std::format("compute pipeline '{}' declares {} threads per threadgroup but the compiled "
+                    "kernel supports at most {}",
+                    std::string_view(descriptor.label), declaredInvocations,
+                    pipelineState.maxTotalThreadsPerThreadgroup)};
+  }
+
+  SetSlot(impl_->computePipelines, slotIndex,
+          std::optional<Impl::ComputePipelineRecord>(
+              Impl::ComputePipelineRecord{pipelineState, descriptor.workgroupSize}));
+  return OkStatus();
 }
 
 void MetalDevice::onDestroyResource(std::string_view resourceName, uint32_t slotIndex) {
   // Clearing a slot to nil / nullopt releases the ObjC object under ARC. Unknown resource names
-  // (e.g. types added by later packets) are ignored; the base class owns their bookkeeping.
+  // are ignored; the base class owns their bookkeeping.
   if (resourceName == "buffer") {
     SetSlot(impl_->buffers, slotIndex, id<MTLBuffer>(nil));
   } else if (resourceName == "texture") {
@@ -646,6 +713,8 @@ void MetalDevice::onDestroyResource(std::string_view resourceName, uint32_t slot
     SetSlot(impl_->shaderLibraries, slotIndex, id<MTLLibrary>(nil));
   } else if (resourceName == "renderPipeline") {
     SetSlot(impl_->renderPipelines, slotIndex, std::optional<Impl::RenderPipelineRecord>());
+  } else if (resourceName == "computePipeline") {
+    SetSlot(impl_->computePipelines, slotIndex, std::optional<Impl::ComputePipelineRecord>());
   }
 }
 
@@ -747,15 +816,20 @@ Status MetalDevice::Impl::encodeBufferBinding(EncodingState& state, const BindGr
         GpuErrorType::InvalidState,
         std::format("setBindGroup: binding {} does not resolve to a Metal buffer", entry.binding)};
   }
-  if (HasAllFlags(visibility, ShaderStage::Vertex)) {
+  if (state.renderEncoder != nil && HasAllFlags(visibility, ShaderStage::Vertex)) {
     [state.renderEncoder setVertexBuffer:buffer
                                   offset:bufferBinding.offsetBytes
                                  atIndex:shader::MslBufferIndex(entry.binding)];
   }
-  if (HasAllFlags(visibility, ShaderStage::Fragment)) {
+  if (state.renderEncoder != nil && HasAllFlags(visibility, ShaderStage::Fragment)) {
     [state.renderEncoder setFragmentBuffer:buffer
                                     offset:bufferBinding.offsetBytes
                                    atIndex:shader::MslBufferIndex(entry.binding)];
+  }
+  if (state.computeEncoder != nil && HasAllFlags(visibility, ShaderStage::Compute)) {
+    [state.computeEncoder setBuffer:buffer
+                             offset:bufferBinding.offsetBytes
+                            atIndex:shader::MslBufferIndex(entry.binding)];
   }
   return OkStatus();
 }
@@ -771,11 +845,14 @@ Status MetalDevice::Impl::encodeTextureBinding(EncodingState& state, const BindG
         GpuErrorType::InvalidState,
         std::format("setBindGroup: binding {} does not resolve to a Metal texture", entry.binding)};
   }
-  if (HasAllFlags(visibility, ShaderStage::Vertex)) {
+  if (state.renderEncoder != nil && HasAllFlags(visibility, ShaderStage::Vertex)) {
     [state.renderEncoder setVertexTexture:texture atIndex:shader::MslTextureIndex(entry.binding)];
   }
-  if (HasAllFlags(visibility, ShaderStage::Fragment)) {
+  if (state.renderEncoder != nil && HasAllFlags(visibility, ShaderStage::Fragment)) {
     [state.renderEncoder setFragmentTexture:texture atIndex:shader::MslTextureIndex(entry.binding)];
+  }
+  if (state.computeEncoder != nil && HasAllFlags(visibility, ShaderStage::Compute)) {
+    [state.computeEncoder setTexture:texture atIndex:shader::MslTextureIndex(entry.binding)];
   }
   return OkStatus();
 }
@@ -789,13 +866,16 @@ Status MetalDevice::Impl::encodeSamplerBinding(EncodingState& state, const BindG
         GpuErrorType::InvalidState,
         std::format("setBindGroup: binding {} does not resolve to a Metal sampler", entry.binding)};
   }
-  if (HasAllFlags(visibility, ShaderStage::Vertex)) {
+  if (state.renderEncoder != nil && HasAllFlags(visibility, ShaderStage::Vertex)) {
     [state.renderEncoder setVertexSamplerState:sampler
                                        atIndex:shader::MslSamplerIndex(entry.binding)];
   }
-  if (HasAllFlags(visibility, ShaderStage::Fragment)) {
+  if (state.renderEncoder != nil && HasAllFlags(visibility, ShaderStage::Fragment)) {
     [state.renderEncoder setFragmentSamplerState:sampler
                                          atIndex:shader::MslSamplerIndex(entry.binding)];
+  }
+  if (state.computeEncoder != nil && HasAllFlags(visibility, ShaderStage::Compute)) {
+    [state.computeEncoder setSamplerState:sampler atIndex:shader::MslSamplerIndex(entry.binding)];
   }
   return OkStatus();
 }
@@ -828,7 +908,7 @@ Status MetalDevice::Impl::encodeSetBindGroup(EncodingState& state,
                     "the Metal backend maps bind group 0 only in this slice (MslBindingMap.h)"};
   }
   const BindGroupRecord* bindGroup = FindRecord(bindGroups, setBindGroup.bindGroupId.slotIndex);
-  if (state.renderEncoder == nil || bindGroup == nullptr) {
+  if ((state.renderEncoder == nil && state.computeEncoder == nil) || bindGroup == nullptr) {
     return GpuError{GpuErrorType::InvalidState,
                     std::format("setBindGroup: bind group slot {} is not encodable",
                                 setBindGroup.bindGroupId.slotIndex)};
@@ -954,15 +1034,61 @@ std::optional<Status> MetalDevice::Impl::encodeRenderCommand(EncodingState& stat
   return std::nullopt;
 }
 
+Status MetalDevice::Impl::beginEncodedComputePass(EncodingState& state) {
+  state.computeEncoder = [state.commandBuffer computeCommandEncoder];
+  if (state.computeEncoder == nil) {
+    return GpuError{GpuErrorType::InvalidState, "Metal compute command encoder creation failed"};
+  }
+  return OkStatus();
+}
+
+Status MetalDevice::Impl::encodeSetComputePipeline(EncodingState& state,
+                                                   const SetComputePipelineCommand& setPipeline) {
+  const ComputePipelineRecord* pipeline =
+      FindRecord(computePipelines, setPipeline.pipelineId.slotIndex);
+  if (state.computeEncoder == nil || pipeline == nullptr || pipeline->state == nil) {
+    return GpuError{GpuErrorType::InvalidState,
+                    std::format("setPipeline: compute pipeline slot {} is not encodable",
+                                setPipeline.pipelineId.slotIndex)};
+  }
+  [state.computeEncoder setComputePipelineState:pipeline->state];
+  state.currentWorkgroupSize = pipeline->workgroupSize;
+  return OkStatus();
+}
+
+Status MetalDevice::Impl::encodeDispatchWorkgroups(EncodingState& state,
+                                                   const DispatchWorkgroupsCommand& dispatch) {
+  if (state.computeEncoder == nil) {
+    return GpuError{GpuErrorType::InvalidState, "dispatchWorkgroups outside a compute pass"};
+  }
+  const MTLSize threadgroups =
+      MTLSizeMake(dispatch.workgroupCountX, dispatch.workgroupCountY, dispatch.workgroupCountZ);
+  const MTLSize threadsPerThreadgroup = MTLSizeMake(
+      state.currentWorkgroupSize.x, state.currentWorkgroupSize.y, state.currentWorkgroupSize.z);
+  [state.computeEncoder dispatchThreadgroups:threadgroups
+                       threadsPerThreadgroup:threadsPerThreadgroup];
+  return OkStatus();
+}
+
+Status MetalDevice::Impl::encodeEndComputePass(EncodingState& state) {
+  if (state.computeEncoder == nil) {
+    return GpuError{GpuErrorType::InvalidState, "endComputePass without an active compute pass"};
+  }
+  [state.computeEncoder endEncoding];
+  state.computeEncoder = nil;
+  return OkStatus();
+}
+
 std::optional<Status> MetalDevice::Impl::encodeComputeCommand(EncodingState& state,
                                                               const Command& command) {
-  (void)state;
-  if (std::get_if<BeginComputePassCommand>(&command) != nullptr ||
-      std::get_if<SetComputePipelineCommand>(&command) != nullptr ||
-      std::get_if<DispatchWorkgroupsCommand>(&command) != nullptr ||
-      std::get_if<EndComputePassCommand>(&command) != nullptr) {
-    return Status(GpuError{GpuErrorType::Unsupported,
-                           "the Metal backend does not implement compute passes yet"});
+  if (std::get_if<BeginComputePassCommand>(&command) != nullptr) {
+    return beginEncodedComputePass(state);
+  } else if (const auto* setPipeline = std::get_if<SetComputePipelineCommand>(&command)) {
+    return encodeSetComputePipeline(state, *setPipeline);
+  } else if (const auto* dispatch = std::get_if<DispatchWorkgroupsCommand>(&command)) {
+    return encodeDispatchWorkgroups(state, *dispatch);
+  } else if (std::get_if<EndComputePassCommand>(&command) != nullptr) {
+    return encodeEndComputePass(state);
   }
   return std::nullopt;
 }
@@ -1035,6 +1161,10 @@ Status MetalDevice::onSubmit(uint64_t submissionSerial, uint32_t commandBufferSl
       [state.renderEncoder endEncoding];
       state.renderEncoder = nil;
     }
+    if (state.computeEncoder != nil) {
+      [state.computeEncoder endEncoding];
+      state.computeEncoder = nil;
+    }
     return error;
   };
 
@@ -1045,10 +1175,10 @@ Status MetalDevice::onSubmit(uint64_t submissionSerial, uint32_t commandBufferSl
     }
   }
 
-  if (state.renderEncoder != nil) {
+  if (state.renderEncoder != nil || state.computeEncoder != nil) {
     // The encoder state machine guarantees passes are ended before finish; fail closed anyway.
-    [state.renderEncoder endEncoding];
-    return GpuError{GpuErrorType::InvalidState, "submitted command stream left a render pass open"};
+    return failEncoding(
+        GpuError{GpuErrorType::InvalidState, "submitted command stream left a pass open"});
   }
 
   impl_->attachCompletionHandler(state, submissionSerial);

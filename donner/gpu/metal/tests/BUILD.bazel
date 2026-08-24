@@ -1,14 +1,15 @@
 load("//build_defs:rules.bzl", "donner_cc_binary", "donner_cc_library", "donner_cc_test")
 load("//build_defs:package.bzl", "donner_package")
 
-# Tests and tooling for the design 0053 Metal vertical slice: the shared
-# frozen-baseline scene, the geode-gated black-box capture tool that produced
-# the committed baseline PNG, and the Metal solid-fill pixel-comparison test.
+# Tests and tooling for the Metal vertical slices: the shared frozen-baseline
+# scene, the geode-gated black-box capture tool that produced the committed
+# baseline PNG, the Metal solid-fill pixel-comparison test, and the Metal
+# color-matrix compute test.
 
-# Black-box baseline capture (design 0053 phase 3): renders the shared scene
-# through the current production renderer and writes the PNG committed under
-# testdata/. Geode-gated (works on any platform with a WebGPU-capable device,
-# not just macOS); see testdata/README.md for the capture command.
+# Black-box baseline capture: renders the shared scene through the current
+# production renderer and writes the PNG committed under testdata/.
+# Geode-gated (works on any platform with a WebGPU-capable device, not just
+# macOS); see testdata/README.md for the capture command.
 donner_cc_binary(
     name = "baseline_capture_tool",
     testonly = 1,
@@ -48,6 +49,27 @@ donner_cc_test(
         "//donner/gpu/shader",
         "//donner/gpu/shader:programs",
         "//donner/svg/renderer/geode:geode_path_encoder",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+# The Metal compute vertical slice: the color-matrix kernel emitted from the
+# shader IR, dispatched through donner::gpu and compared against the host
+# result. Metal API validation is enabled so validation issues abort loudly.
+donner_cc_test(
+    name = "metal_color_matrix_tests",
+    srcs = ["MetalColorMatrix_tests.cc"],
+    env = {
+        "MTL_DEBUG_LAYER": "1",
+        "MTL_SHADER_VALIDATION": "1",
+    },
+    target_compatible_with = ["@platforms//os:macos"],
+    deps = [
+        "//donner/gpu",
+        "//donner/gpu:color_matrix_slice",
+        "//donner/gpu/metal:metal_device",
+        "//donner/gpu/shader",
+        "//donner/gpu/shader:programs",
         "@com_google_gtest//:gtest_main",
     ],
 )

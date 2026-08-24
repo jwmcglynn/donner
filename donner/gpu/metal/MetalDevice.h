@@ -12,17 +12,17 @@
 namespace donner::gpu::metal {
 
 /**
- * Metal backend of the Donner GPU runtime (the vertical-slice backend).
+ * Metal backend of the Donner GPU runtime.
  *
  * Inherits every fail-closed validation check from \ref donner::gpu::Device; the `on*` hooks
  * receive only validated input and translate it to Metal objects. Any Metal-side failure (nil
  * object, compile error, encoder failure) fails closed with a \ref donner::gpu::GpuError; the
  * backend never crashes on such failures.
  *
- * Scope is exactly the solid-fill vertical slice: shared-storage buffers and textures, MSL
- * shader modules, one render pipeline family with a single vertex buffer layout at slot 0 and
- * bind group 0 only, render passes with color attachments, and texture-to-buffer readback
- * copies. Bindings follow the deterministic argument-table mapping in
+ * Scope: shared-storage buffers and textures, MSL shader modules, render pipelines with a single
+ * vertex buffer layout at slot 0 and bind group 0 only, render passes with color attachments,
+ * compute pipelines and compute passes, and texture-to-buffer readback copies. Bindings follow
+ * the deterministic argument-table mapping in
  * `donner/gpu/shader/MslBindingMap.h`: buffer binding `b` maps to Metal buffer index `1 + b`,
  * texture and sampler bindings map directly, and stage-in vertex data occupies vertex buffer
  * index 30.
@@ -70,8 +70,8 @@ public:
   /**
    * Copies the full contents of \p buffer back to the host and returns the bytes.
    *
-   * Test/readback convenience for the vertical slice, pending the packet-7 buffer mapping API:
-   * it validates only device identity and slot liveness (not the handle generation), then reads
+   * Test/readback convenience, pending a buffer mapping API: it validates device identity, slot
+   * liveness, and the handle generation, then reads
    * the shared-storage Metal buffer contents directly. Callers must ensure relevant GPU work has
    * completed first (see \ref waitForSerial).
    *
