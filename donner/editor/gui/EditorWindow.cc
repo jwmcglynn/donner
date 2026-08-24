@@ -242,7 +242,7 @@ wgpu::TextureUsage SurfaceUsageForCapabilities(const wgpu::SurfaceCapabilities& 
   return wgpu::TextureUsage{usage};
 }
 
-wgpu::TextureUsage OffscreenTextureUsage(bool enableReadback) {
+wgpu::TextureUsage RenderTargetUsage(bool enableReadback) {
   WGPUTextureUsage usage = WGPUTextureUsage_RenderAttachment;
   if (enableReadback) {
     usage |= WGPUTextureUsage_CopySrc;
@@ -1039,9 +1039,9 @@ public:
   /// Releases the acquired frame without showing it, for a frame the caller decided not to draw.
   virtual void abandon() = 0;
 
-  /// Drops the configuration. The surface stays attached, but serves no frame until it is
-  /// configured again.
-  virtual void unconfigure() = 0;
+  /// Gives up the configuration and any resources held for it. The surface serves no further
+  /// frames.
+  virtual void shutdown() = 0;
 
   /// Format acquired textures carry.
   [[nodiscard]] virtual wgpu::TextureFormat format() const = 0;
@@ -1114,7 +1114,7 @@ public:
 
   void abandon() override { acquired_.reset(); }
 
-  void unconfigure() override {
+  void shutdown() override {
     acquired_.reset();
     if (surface_) {
       surface_.unconfigure();
@@ -1137,6 +1137,176 @@ private:
   wgpu::TextureUsage usage_ = wgpu::TextureUsage::RenderAttachment;
   wgpu::CompositeAlphaMode alphaMode_ = wgpu::CompositeAlphaMode::Auto;
 };
+
+#ifdef __APPLE__
+/// Picks how a surface built on the GPU runtime composites its alpha channel.
+///
+/// The editor's desktop window is opaque, so alpha is ignored wherever the surface offers that;
+/// a surface offering something else takes the first mode it does offer.
+///
+/// @param modes Alpha compositing the surface reported it supports.
+gpu::SurfaceAlphaMode ChooseRuntimeAlphaMode(const std::vector<gpu::SurfaceAlphaMode>& modes) {
+  if (modes.empty() ||
+      std::find(modes.begin(), modes.end(), gpu::SurfaceAlphaMode::Opaque) != modes.end()) {
+    return gpu::SurfaceAlphaMode::Opaque;
+  }
+  return modes.front();
+}
+
+/// Presents through the GPU runtime's surface, which reaches the Core Animation Metal layer the
+/// window's content view carries.
+class RuntimePresentationSurface final : public PresentationSurface {
+public:
+  bool attachToWindow(const wgpu::Instance& /*instance*/, GLFWwindow* window) override {
+    metalLayer_ = AttachMetalLayerToGlfwWindow(window);
+    return metalLayer_ != nullptr;
+  }
+
+  /// A Metal layer presents from any Metal adapter the system reports, so adapter selection is
+  /// left unconstrained - which it must be, since a runtime surface cannot exist until adapter
+  /// selection has already produced a device.
+  wgpu::Surface adapterSelectionSurface() const override { return {}; }
+
+  bool chooseConfiguration(const wgpu::Adapter& /*adapter*/, bool enableReadback) override {
+    // A Metal layer presents BGRA8Unorm. The renderer compiles its pipelines for the format
+    // before there is a device to ask for capabilities, so the format is declared here and
+    // checked against what the surface reports as soon as there is one.
+    readback_ = enableReadback;
+    return true;
+  }
+
+  bool attachToDevice(geode::GeodeDevice& device) override {
+    device_ = &device.adapterDevice();
+
+    gpu::SurfaceDescriptor descriptor;
+    descriptor.label = "EditorWindowSurface";
+    descriptor.native.kind = gpu::NativeSurfaceKind::MetalLayer;
+    descriptor.native.display = metalLayer_;
+    gpu::Result<gpu::Surface> created = device_->createSurface(descriptor);
+    if (created.hasError()) {
+      std::fprintf(stderr, "EditorWindow: could not create a surface: %s\n",
+                   created.error().toString().c_str());
+      return false;
+    }
+    surface_ = std::move(created).result();
+
+    gpu::Result<gpu::SurfaceCapabilities> capabilities = device_->surfaceCapabilities(surface_);
+    if (capabilities.hasError()) {
+      std::fprintf(stderr, "EditorWindow: could not read surface capabilities: %s\n",
+                   capabilities.error().toString().c_str());
+      return false;
+    }
+    return applyCapabilities(capabilities.result());
+  }
+
+  bool configure(int width, int height) override {
+    gpu::SurfaceConfiguration configuration;
+    configuration.format = kFormat;
+    configuration.usage = configuredUsage();
+    configuration.size = gpu::Extent2d{static_cast<uint32_t>(width), static_cast<uint32_t>(height)};
+    configuration.presentMode = gpu::PresentMode::Fifo;
+    configuration.alphaMode = alphaMode_;
+    if (gpu::Status status = device_->configureSurface(surface_, configuration);
+        status.hasError()) {
+      std::fprintf(stderr, "EditorWindow: could not configure the surface: %s\n",
+                   status.error().toString().c_str());
+      return false;
+    }
+    return true;
+  }
+
+  AcquiredFrame acquire() override {
+    gpu::Result<gpu::SurfaceTexture> acquired = device_->acquireCurrentTexture(surface_);
+    if (acquired.hasError()) {
+      // The runtime refused the acquire rather than reporting on the surface, so there is no
+      // surface state to recover from and the frame is given up the way a lost device is.
+      std::fprintf(stderr, "EditorWindow: could not acquire a frame: %s\n",
+                   acquired.error().toString().c_str());
+      return AcquiredFrame{wgpu::Texture(), gpu::SurfaceStatus::DeviceLost};
+    }
+
+    const gpu::SurfaceStatus status = acquired.result().status;
+    acquiredTexture_ = std::move(acquired).result().texture;
+    if (!acquiredTexture_.isValid()) {
+      return AcquiredFrame{wgpu::Texture(), status};
+    }
+    return AcquiredFrame{device_->wgpuTextureOf(acquiredTexture_), status};
+  }
+
+  void present() override {
+    if (!acquiredTexture_.isValid()) {
+      return;
+    }
+    if (gpu::Result<gpu::SurfaceStatus> presented = device_->presentSurface(surface_);
+        presented.hasError()) {
+      std::fprintf(stderr, "EditorWindow: could not present the frame: %s\n",
+                   presented.error().toString().c_str());
+    }
+    // The runtime invalidates the frame's texture as part of the handoff whether or not the
+    // platform showed it, so the handle it left behind is dropped either way.
+    acquiredTexture_ = gpu::Texture();
+  }
+
+  void abandon() override {
+    if (!acquiredTexture_.isValid()) {
+      return;
+    }
+    (void)device_->abandonCurrentTexture(surface_);
+    acquiredTexture_ = gpu::Texture();
+  }
+
+  void shutdown() override {
+    abandon();
+    if (surface_.isValid()) {
+      (void)device_->destroySurface(std::move(surface_));
+    }
+  }
+
+  wgpu::TextureFormat format() const override { return wgpu::TextureFormat::BGRA8Unorm; }
+
+  wgpu::TextureUsage usage() const override { return RenderTargetUsage(readback_); }
+
+  bool premultipliedAlpha() const override {
+    return alphaMode_ == gpu::SurfaceAlphaMode::Premultiplied;
+  }
+
+private:
+  /// The format a Core Animation Metal layer presents, and the one the renderer's pipelines are
+  /// compiled for.
+  static constexpr gpu::TextureFormat kFormat = gpu::TextureFormat::BGRA8Unorm;
+
+  /// Narrows what the surface was asked for to what it reported it can do, or reports that it
+  /// cannot serve the editor's frames at all. @param capabilities What the surface reported.
+  bool applyCapabilities(const gpu::SurfaceCapabilities& capabilities) {
+    if (std::find(capabilities.formats.begin(), capabilities.formats.end(), kFormat) ==
+        capabilities.formats.end()) {
+      std::fprintf(stderr, "EditorWindow: the window surface does not present BGRA8Unorm\n");
+      return false;
+    }
+    if (readback_ &&
+        (capabilities.usages & gpu::TextureUsage::CopySrc) == gpu::TextureUsage::None) {
+      // A frame that cannot be copied out of is still a frame worth showing, so the readback is
+      // dropped rather than the whole surface refused.
+      readback_ = false;
+    }
+    alphaMode_ = ChooseRuntimeAlphaMode(capabilities.alphaModes);
+    return true;
+  }
+
+  /// Usage acquired textures are configured to carry.
+  gpu::TextureUsage configuredUsage() const {
+    return readback_ ? (gpu::TextureUsage::RenderAttachment | gpu::TextureUsage::CopySrc)
+                     : gpu::TextureUsage::RenderAttachment;
+  }
+
+  void* metalLayer_ = nullptr;
+  geode::GeodeWgpuAdapterDevice* device_ = nullptr;
+  gpu::Surface surface_;
+  gpu::Texture acquiredTexture_;
+  gpu::SurfaceAlphaMode alphaMode_ = gpu::SurfaceAlphaMode::Opaque;
+  bool readback_ = false;
+};
+#endif  // __APPLE__
 
 /// Builds the presentation surface this platform presents through.
 std::unique_ptr<PresentationSurface> CreateEditorPresentationSurface() {
@@ -1438,7 +1608,7 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
 #endif
   } else {
     wgpuState_->surfaceFormat = wgpu::TextureFormat::BGRA8Unorm;
-    wgpuState_->surfaceUsage = OffscreenTextureUsage(enableSurfaceReadback);
+    wgpuState_->surfaceUsage = RenderTargetUsage(enableSurfaceReadback);
   }
 
   int surfaceWidth = 0;
@@ -1660,7 +1830,7 @@ EditorWindow::~EditorWindow() {
     // The surface is completed against a device and may name runtime resources belonging to it,
     // so it is torn down first.
     if (wgpuState_->presentation != nullptr) {
-      wgpuState_->presentation->unconfigure();
+      wgpuState_->presentation->shutdown();
       wgpuState_->presentation.reset();
     }
     wgpuState_->framebufferGeodeDevice.reset();
@@ -1919,7 +2089,7 @@ wgpu::Texture EditorWindow::acquirePresentationFrame(int framebufferWidth, int f
 
 void EditorWindow::releasePresentationSurface(bool deviceLost) {
   std::fprintf(stderr, "EditorWindow: the presentation surface can serve no further frames\n");
-  wgpuState_->presentation->unconfigure();
+  wgpuState_->presentation->shutdown();
   wgpuState_->presentation.reset();
   wgpuState_->configuredWidth = 0;
   wgpuState_->configuredHeight = 0;
