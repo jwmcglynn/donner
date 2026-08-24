@@ -183,6 +183,35 @@ std::ostream& operator<<(std::ostream& os, ShaderSourceKind value) {
   return os << "Unknown";
 }
 
+bool IsKnownEnumValue(NativeSurfaceKind value) {
+  switch (value) {
+    case NativeSurfaceKind::MetalLayer:
+    case NativeSurfaceKind::XlibWindow:
+    case NativeSurfaceKind::WaylandSurface:
+    case NativeSurfaceKind::Win32Window:
+    case NativeSurfaceKind::CanvasSelector: return true;
+  }
+  return false;
+}
+
+bool IsKnownEnumValue(PresentMode value) {
+  switch (value) {
+    case PresentMode::Fifo:
+    case PresentMode::Immediate:
+    case PresentMode::Mailbox: return true;
+  }
+  return false;
+}
+
+bool IsKnownEnumValue(SurfaceAlphaMode value) {
+  switch (value) {
+    case SurfaceAlphaMode::Opaque:
+    case SurfaceAlphaMode::Premultiplied:
+    case SurfaceAlphaMode::Inherit: return true;
+  }
+  return false;
+}
+
 bool IsKnownEnumValue(TextureFormat value) {
   switch (value) {
     case TextureFormat::RGBA8Unorm:

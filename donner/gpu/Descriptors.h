@@ -107,6 +107,56 @@ enum class BufferUsage : uint32_t {
   MapRead = 1 << 6,  //!< Host-readable after readback.
 };
 
+/// Platform object kind a \ref NativeSurfaceHandle names.
+///
+/// One kind per windowing system this runtime can present to. A browser canvas is named by a CSS
+/// selector rather than by a pointer, which is why the handle below carries a string field
+/// alongside its pointer fields.
+enum class NativeSurfaceKind : uint8_t {
+  MetalLayer,      //!< Core Animation Metal layer.
+  XlibWindow,      //!< X11 display plus window id.
+  WaylandSurface,  //!< Wayland display plus surface.
+  Win32Window,     //!< Win32 module instance plus window handle.
+  CanvasSelector,  //!< CSS selector naming a browser canvas element.
+};
+
+/// The platform object a surface presents to.
+///
+/// A discriminant plus the payload slots every kind needs. Which fields carry meaning depends on
+/// \ref kind; the rest stay empty. Backends validate the fields their kind requires and fail
+/// closed on a handle that does not carry them.
+struct NativeSurfaceHandle {
+  NativeSurfaceKind kind = NativeSurfaceKind::MetalLayer;  //!< Which platform object this names.
+  /// MetalLayer: the layer. XlibWindow: the display. WaylandSurface: the display. Win32Window:
+  /// the module instance. Null for CanvasSelector.
+  void* display = nullptr;
+  /// XlibWindow: the window id. WaylandSurface: the surface. Win32Window: the window handle.
+  /// Zero for MetalLayer and CanvasSelector.
+  uint64_t window = 0;
+  /// CanvasSelector: the selector naming the canvas. Empty for every other kind.
+  RcString selector;
+};
+
+/// How presented frames are paced.
+enum class PresentMode : uint8_t {
+  Fifo,       //!< Queue frames and present on refresh. Always available.
+  Immediate,  //!< Present without waiting for refresh; may tear.
+  Mailbox,    //!< Replace the queued frame; no tearing, no blocking.
+};
+
+/// How a surface composites its alpha channel with what is behind it.
+enum class SurfaceAlphaMode : uint8_t {
+  Opaque,         //!< Alpha is ignored.
+  Premultiplied,  //!< Color channels are already multiplied by alpha.
+  Inherit,        //!< Whatever the platform's default is.
+};
+
+/// Descriptor for `Device::createSurface`.
+struct SurfaceDescriptor {
+  RcString label;              //!< Debug label.
+  NativeSurfaceHandle native;  //!< Platform object to present to.
+};
+
 /// How a mapped buffer range is accessed from the host.
 enum class MapMode : uint8_t {
   Read,  //!< Host reads the range; the buffer needs \ref BufferUsage::MapRead.
@@ -323,6 +373,12 @@ bool IsKnownEnumValue(LoadOp value);
 bool IsKnownEnumValue(StoreOp value);
 /// Returns true if \p value is a known enumerator. @param value Value to check.
 bool IsKnownEnumValue(ShaderSourceKind value);
+/// Returns true if \p value is a known enumerator. @param value Value to check.
+bool IsKnownEnumValue(NativeSurfaceKind value);
+/// Returns true if \p value is a known enumerator. @param value Value to check.
+bool IsKnownEnumValue(PresentMode value);
+/// Returns true if \p value is a known enumerator. @param value Value to check.
+bool IsKnownEnumValue(SurfaceAlphaMode value);
 
 /// Returns true if \p value contains only known flag bits (an empty mask is bit-valid; emptiness
 /// is validated separately where required). @param value Bitmask to check.
@@ -382,6 +438,40 @@ struct TextureDescriptor {
 /// Descriptor for `Device::createTextureView`. Views cover the whole texture.
 struct TextureViewDescriptor {
   RcString label;  //!< Debug label.
+};
+
+/// Configuration a surface presents under.
+///
+/// Reconfiguring is how a surface follows its window: a resize is a new configuration with a new
+/// \ref size, not a new surface. It is also the recovery from \ref SurfaceStatus::Outdated.
+struct SurfaceConfiguration {
+  TextureFormat format = TextureFormat::BGRA8Unorm;       //!< Format of acquired textures.
+  TextureUsage usage = TextureUsage::RenderAttachment;    //!< Usage acquired textures carry.
+  Extent2d size;                                          //!< Extent in texels. Must be nonzero.
+  PresentMode presentMode = PresentMode::Fifo;            //!< Frame pacing.
+  SurfaceAlphaMode alphaMode = SurfaceAlphaMode::Opaque;  //!< Alpha compositing.
+};
+
+/// What a surface supports, for choosing a \ref SurfaceConfiguration.
+struct SurfaceCapabilities {
+  std::vector<TextureFormat> formats;        //!< Formats acquired textures may take.
+  TextureUsage usages = TextureUsage::None;  //!< Usage flags acquired textures may carry.
+  std::vector<PresentMode> presentModes;     //!< Supported frame pacing.
+  std::vector<SurfaceAlphaMode> alphaModes;  //!< Supported alpha compositing.
+};
+
+/// Outcome of acquiring from or presenting to a surface.
+///
+/// The three failures are different problems with different recoveries, so each is its own value.
+/// A surface whose configuration no longer matches its window is \ref Outdated and recovers by
+/// reconfiguring; a surface whose platform object is gone is \ref Lost and recovers only by
+/// creating a new surface from a fresh native handle; a lost device recovers by neither.
+enum class SurfaceStatus : uint8_t {
+  Success,     //!< The operation succeeded.
+  Outdated,    //!< The configuration no longer matches the window. Reconfigure and retry.
+  Lost,        //!< The platform object is gone. A new surface is needed.
+  DeviceLost,  //!< The device was lost.
+  Timeout,     //!< No texture became available in time. Retry.
 };
 
 /// Descriptor for `Device::createSampler`.
