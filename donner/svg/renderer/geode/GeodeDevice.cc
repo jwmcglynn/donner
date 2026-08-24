@@ -864,7 +864,8 @@ GeodeCheckerboardPipeline& GeodeDevice::checkerboardPipeline() const {
     // checkerboard; other consumers should not pay the pipeline-compile cost
     // at startup.
     impl_->checkerboardPipeline = std::make_unique<GeodeCheckerboardPipeline>(
-        device_, textureFormat_, GeodeCheckerboardPipeline::BlendMode::Replace);
+        *impl_->adapterDevice, GpuTextureFormatFromWgpu(textureFormat_),
+        GeodeCheckerboardPipeline::BlendMode::Replace);
   }
   return *impl_->checkerboardPipeline;
 }
@@ -874,7 +875,8 @@ GeodeCheckerboardPipeline& GeodeDevice::checkerboardUnderlayPipeline() const {
     // it because a consumer normally draws through exactly one of the two:
     // before the document pixels (replace) or after them (destination-over).
     impl_->checkerboardUnderlayPipeline = std::make_unique<GeodeCheckerboardPipeline>(
-        device_, textureFormat_, GeodeCheckerboardPipeline::BlendMode::DestinationOver);
+        *impl_->adapterDevice, GpuTextureFormatFromWgpu(textureFormat_),
+        GeodeCheckerboardPipeline::BlendMode::DestinationOver);
   }
   return *impl_->checkerboardUnderlayPipeline;
 }
