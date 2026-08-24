@@ -128,9 +128,9 @@ public:
    * returns the wgpu buffer behind \p buffer, or a null handle if the handle does not name a
    * live buffer of this adapter. Borrowed; the adapter retains ownership.
    *
-   * @param buffer Live buffer handle of this adapter.
+   * @param buffer Live buffer handle or reference of this adapter.
    */
-  wgpu::Buffer wgpuBufferOf(const gpu::Buffer& buffer) const;
+  wgpu::Buffer wgpuBufferOf(const gpu::BufferRef& buffer) const;
 
   /**
    * TEMPORARY escape hatch (deleted in packet 11, readback/presentation): returns the wgpu

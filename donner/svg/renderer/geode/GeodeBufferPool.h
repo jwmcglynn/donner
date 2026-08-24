@@ -1,6 +1,6 @@
 #pragma once
 /// @file
-/// Frame-transient wgpu buffer pool for GeoEncoder arenas.
+/// Frame-transient GPU buffer pool for GeoEncoder arenas.
 ///
 /// `GeoEncoder` instances are recreated every frame (and per layer /
 /// filter / mask push), so without pooling every frame re-creates its
@@ -13,20 +13,22 @@
 /// the renderer's existing lifetime discipline only runs after the
 /// commands referencing those buffers have been submitted (shared-mode
 /// encoders are parked in `frameFinishedEncoders` until the frame's
-/// single `queue.submit`; own-CommandEncoder encoders submit in
-/// `finish()`). Re-acquiring a pooled buffer on a later frame is safe:
-/// `queue.writeBuffer` is queue-ordered after previously submitted work.
+/// single submit; own-encoder encoders submit in `finish()`).
+/// Re-acquiring a pooled buffer on a later frame is safe: a queued buffer
+/// write is ordered after previously submitted work.
 
 #include <cstdint>
 #include <cstring>
+#include <utility>
 #include <vector>
 
-#include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
+#include "donner/gpu/Descriptors.h"
+#include "donner/gpu/Handles.h"
 
 namespace donner::geode {
 
 /**
- * Size-and-usage-keyed free list of wgpu buffers.
+ * Size-and-usage-keyed free list of GPU buffers.
  *
  * Owned by `RendererGeode::Impl` (mirrors the transient
  * render-target texture pool) and handed to every `GeoEncoder` the
@@ -50,8 +52,8 @@ public:
    * @param outCapacity Set to the returned buffer's capacity on success.
    * @return The buffer, or an empty handle if the pool has no match.
    */
-  ScopedWgpuHandle<wgpu::Buffer> acquire(wgpu::BufferUsage usage, const char* label,
-                                         uint64_t minCapacity, uint64_t* outCapacity) {
+  gpu::Buffer acquire(gpu::BufferUsage usage, const char* label, uint64_t minCapacity,
+                      uint64_t* outCapacity) {
     size_t bestIndex = entries_.size();
     bool bestLabelMatch = false;
     for (size_t i = 0; i < entries_.size(); ++i) {
@@ -70,7 +72,7 @@ public:
     if (bestIndex == entries_.size()) {
       return {};
     }
-    ScopedWgpuHandle<wgpu::Buffer> buffer = std::move(entries_[bestIndex].buffer);
+    gpu::Buffer buffer = std::move(entries_[bestIndex].buffer);
     if (outCapacity != nullptr) {
       *outCapacity = entries_[bestIndex].capacity;
     }
@@ -84,9 +86,8 @@ public:
    * pooled VRAM while keeping the large arenas that are expensive to
    * re-grow.
    */
-  void release(ScopedWgpuHandle<wgpu::Buffer> buffer, wgpu::BufferUsage usage, const char* label,
-               uint64_t capacity) {
-    if (!buffer) {
+  void release(gpu::Buffer buffer, gpu::BufferUsage usage, const char* label, uint64_t capacity) {
+    if (!buffer.isValid()) {
       return;
     }
     if (entries_.size() >= kMaxEntries) {
@@ -114,8 +115,8 @@ public:
 
 private:
   struct Entry {
-    ScopedWgpuHandle<wgpu::Buffer> buffer;
-    wgpu::BufferUsage usage;
+    gpu::Buffer buffer;
+    gpu::BufferUsage usage = gpu::BufferUsage::None;
     const char* label = nullptr;  ///< Arena label (string literal).
     uint64_t capacity = 0;
   };

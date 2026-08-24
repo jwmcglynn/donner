@@ -297,7 +297,7 @@ gpu::Result<gpu::Texture> GeodeWgpuAdapterDevice::importExternalTexture(wgpu::Te
   return result;
 }
 
-wgpu::Buffer GeodeWgpuAdapterDevice::wgpuBufferOf(const gpu::Buffer& buffer) const {
+wgpu::Buffer GeodeWgpuAdapterDevice::wgpuBufferOf(const gpu::BufferRef& buffer) const {
   if (!buffer.isValid() || buffer.deviceId() != deviceId()) {
     return wgpu::Buffer();
   }

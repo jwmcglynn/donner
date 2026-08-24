@@ -9,11 +9,13 @@
 #include "donner/svg/renderer/PixelFormatUtils.h"
 #include "donner/svg/renderer/geode/GeodeBufferPool.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
+#include "donner/svg/renderer/geode/GeodeGpuContext.h"
 #include "donner/svg/renderer/geode/GeodeImagePipeline.h"
 #include "donner/svg/renderer/geode/GeodePathEncoder.h"
 #include "donner/svg/renderer/geode/GeodePipeline.h"
 #include "donner/svg/renderer/geode/GeodeResidentPathComponent.h"
 #include "donner/svg/renderer/geode/GeodeTextureEncoder.h"
+#include "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h"
 #include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
 #include "donner/svg/resources/ImageResource.h"
 
@@ -422,6 +424,15 @@ constexpr uint32_t kGradientKindRadial = 1u;
 
 struct GeoEncoder::Impl : public GeodeTextureEncoder::UniformScratch {
   GeodeDevice* device;
+  /// The GPU runtime context this encoder records against; the device's, wired in `initImpl`.
+  const GeodeGpuContext* gpuContext = nullptr;
+
+  /// Resolves the wgpu buffer behind an arena allocation, for the bind groups this encoder still
+  /// builds through wgpu.
+  /// @param buffer Runtime buffer reference.
+  wgpu::Buffer wgpuBufferOf(const gpu::BufferRef& buffer) const {
+    return device->adapterDevice().wgpuBufferOf(buffer);
+  }
   const GeodePipeline* pipeline;
   const GeodeGradientPipeline* gradientPipeline;
   const GeodeImagePipeline* imagePipeline;
@@ -433,7 +444,7 @@ struct GeoEncoder::Impl : public GeodeTextureEncoder::UniformScratch {
   GeodeTextureEncoder::UniformAllocation allocate(const void* data, uint64_t size,
                                                   uint64_t alignment) override {
     const Allocation alloc = allocInArena(uniformArena, data, size, alignment);
-    return {alloc.buffer, alloc.offset, alloc.size};
+    return {wgpuBufferOf(alloc.buffer), alloc.offset, alloc.size};
   }
 
   /// Per-encoder growable GPU buffer used as a bump-allocation arena
@@ -449,11 +460,11 @@ struct GeoEncoder::Impl : public GeodeTextureEncoder::UniformScratch {
   /// Lifetime: when the arena grows, the previous buffer is moved into
   /// `retired` and kept alive for the encoder's lifetime. Commands
   /// already recorded into the command encoder that reference the
-  /// old buffer remain valid because the `wgpu::Buffer` RAII wrapper
-  /// holds the handle until the `Arena` itself is destroyed (at
-  /// encoder destruction, after `finish()` has submitted all work).
+  /// old buffer remain valid because the owning handle keeps the buffer
+  /// alive until the `Arena` itself is destroyed (at encoder destruction,
+  /// after `finish()` has submitted all work).
   struct Arena {
-    ScopedWgpuHandle<wgpu::Buffer> buffer;
+    gpu::Buffer buffer;
     uint64_t capacity = 0;
     uint64_t offset = 0;  // Next unused byte within `buffer`.
     /// Stable identity of `buffer` (see `GeodeDevice::AllocateBufferId`),
@@ -462,8 +473,8 @@ struct GeoEncoder::Impl : public GeodeTextureEncoder::UniformScratch {
     /// same handle address with completely different contents; anything
     /// that caches across frames must compare this id instead.
     uint64_t bufferId = 0;
-    std::vector<ScopedWgpuHandle<wgpu::Buffer>> retired;
-    wgpu::BufferUsage usage = wgpu::BufferUsage::CopyDst;
+    std::vector<gpu::Buffer> retired;
+    gpu::BufferUsage usage = gpu::BufferUsage::CopyDst;
     const char* label = "GeodeArena";
   };
   Arena bandArena;
@@ -494,10 +505,10 @@ struct GeoEncoder::Impl : public GeodeTextureEncoder::UniformScratch {
     // handle without explicitly destroying its backing. Submitted WebGPU
     // commands retain their resources until completion; calling destroy()
     // here can invalidate those in-flight commands on some Vulkan drivers.
-    if (bufferPool != nullptr && arena.buffer) {
+    if (bufferPool != nullptr && arena.buffer.isValid()) {
       bufferPool->release(std::move(arena.buffer), arena.usage, arena.label, arena.capacity);
     }
-    arena.buffer.reset();
+    arena.buffer = gpu::Buffer();
     arena.retired.clear();
   }
 
@@ -529,7 +540,9 @@ struct GeoEncoder::Impl : public GeodeTextureEncoder::UniformScratch {
   /// value snapshot so a later growth of the same arena cannot retarget an
   /// earlier allocation to the replacement buffer.
   struct Allocation {
-    wgpu::Buffer buffer;
+    /// Identity snapshot of the arena buffer at allocation time: a later growth of the same
+    /// arena installs a different buffer, and this reference still names the one written here.
+    gpu::BufferRef buffer;
     uint64_t offset;
     uint64_t size;
     /// Stable identity of `buffer`; see `Arena::bufferId`.
@@ -546,7 +559,8 @@ struct GeoEncoder::Impl : public GeodeTextureEncoder::UniformScratch {
 
   Allocation allocSceneBatchUniform(const Uniforms& u) {
     const auto* bytes = reinterpret_cast<const uint8_t*>(&u);
-    if (sceneBatchUniformAlloc.buffer && sceneBatchUniformBytes.size() == sizeof(Uniforms) &&
+    if (sceneBatchUniformAlloc.buffer.isValid() &&
+        sceneBatchUniformBytes.size() == sizeof(Uniforms) &&
         std::memcmp(sceneBatchUniformBytes.data(), bytes, sizeof(Uniforms)) == 0) {
       return sceneBatchUniformAlloc;
     }
@@ -562,7 +576,7 @@ struct GeoEncoder::Impl : public GeodeTextureEncoder::UniformScratch {
   /// with `arena.offset == 0`.
   void growArena(Arena& arena, uint64_t size) {
     {
-      if (arena.buffer) {
+      if (arena.buffer.isValid()) {
         arena.retired.push_back(std::move(arena.buffer));
       }
       constexpr uint64_t kMinGrow = uint64_t{64} * 1024;
@@ -573,20 +587,17 @@ struct GeoEncoder::Impl : public GeodeTextureEncoder::UniformScratch {
       // back to a fresh allocation when the pool has no fit.
       if (bufferPool != nullptr) {
         uint64_t pooledCapacity = 0;
-        ScopedWgpuHandle<wgpu::Buffer> pooled =
-            bufferPool->acquire(arena.usage, arena.label, newCap, &pooledCapacity);
-        if (pooled) {
+        gpu::Buffer pooled = bufferPool->acquire(arena.usage, arena.label, newCap, &pooledCapacity);
+        if (pooled.isValid()) {
           arena.buffer = std::move(pooled);
           arena.capacity = pooledCapacity;
         }
       }
-      if (!arena.buffer) {
-        wgpu::BufferDescriptor desc = {};
-        desc.label = wgpuLabel(arena.label);
-        desc.size = newCap;
-        desc.usage = arena.usage;
-        arena.buffer.reset(device->device().createBuffer(desc));
-        device->countBuffer();
+      if (!arena.buffer.isValid()) {
+        gpu::Result<gpu::Buffer> created = gpuContext->gpuDevice->createBuffer(
+            gpu::BufferDescriptor{arena.label, newCap, arena.usage});
+        UTILS_RELEASE_ASSERT_MSG(!created.hasError(), "Geode arena buffer creation failed");
+        arena.buffer = std::move(created).result();
         arena.capacity = newCap;
       }
       // Fresh identity for the new backing buffer, pooled or not: the
@@ -660,10 +671,12 @@ struct GeoEncoder::Impl : public GeodeTextureEncoder::UniformScratch {
       growArena(arena, size);
       alignedOffset = 0;
     }
-    device->queue().writeBuffer(arena.buffer.get(), alignedOffset, data, size);
-    device->countBufferWrite(size);
+    const gpu::Status writeStatus = gpuContext->gpuDevice->writeBuffer(
+        arena.buffer, alignedOffset,
+        std::span<const uint8_t>(static_cast<const uint8_t*>(data), size));
+    UTILS_RELEASE_ASSERT_MSG(!writeStatus.hasError(), "Geode arena buffer write failed");
     arena.offset = alignedOffset + size;
-    return {arena.buffer.get(), alignedOffset, size, arena.bufferId};
+    return {arena.buffer, alignedOffset, size, arena.bufferId};
   }
 
   /// Allocate a read-only storage binding for `byteCount` bytes of `data`,
@@ -840,15 +853,15 @@ struct GeoEncoder::Impl : public GeodeTextureEncoder::UniformScratch {
 
     wgpu::BindGroupEntry entries[11] = {};
     entries[0].binding = 0;
-    entries[0].buffer = uniAlloc.buffer;
+    entries[0].buffer = wgpuBufferOf(uniAlloc.buffer);
     entries[0].offset = uniAlloc.offset;
     entries[0].size = uniAlloc.size;
     entries[1].binding = 1;
-    entries[1].buffer = bandsAlloc.buffer;
+    entries[1].buffer = wgpuBufferOf(bandsAlloc.buffer);
     entries[1].offset = bandsAlloc.offset;
     entries[1].size = bandsAlloc.size;
     entries[2].binding = 2;
-    entries[2].buffer = curvesAlloc.buffer;
+    entries[2].buffer = wgpuBufferOf(curvesAlloc.buffer);
     entries[2].offset = curvesAlloc.offset;
     entries[2].size = curvesAlloc.size;
     entries[3].binding = 3;
@@ -856,27 +869,27 @@ struct GeoEncoder::Impl : public GeodeTextureEncoder::UniformScratch {
     entries[4].binding = 4;
     entries[4].sampler = device->dummyClipMaskSampler();
     entries[5].binding = 5;
-    entries[5].buffer = vBandsAlloc.buffer;
+    entries[5].buffer = wgpuBufferOf(vBandsAlloc.buffer);
     entries[5].offset = vBandsAlloc.offset;
     entries[5].size = vBandsAlloc.size;
     entries[6].binding = 6;
-    entries[6].buffer = vCurvesAlloc.buffer;
+    entries[6].buffer = wgpuBufferOf(vCurvesAlloc.buffer);
     entries[6].offset = vCurvesAlloc.offset;
     entries[6].size = vCurvesAlloc.size;
     entries[7].binding = 7;
-    entries[7].buffer = hGridAlloc.buffer;
+    entries[7].buffer = wgpuBufferOf(hGridAlloc.buffer);
     entries[7].offset = hGridAlloc.offset;
     entries[7].size = hGridAlloc.size;
     entries[8].binding = 8;
-    entries[8].buffer = vGridAlloc.buffer;
+    entries[8].buffer = wgpuBufferOf(vGridAlloc.buffer);
     entries[8].offset = vGridAlloc.offset;
     entries[8].size = vGridAlloc.size;
     entries[9].binding = 9;
-    entries[9].buffer = hRefsAlloc.buffer;
+    entries[9].buffer = wgpuBufferOf(hRefsAlloc.buffer);
     entries[9].offset = hRefsAlloc.offset;
     entries[9].size = hRefsAlloc.size;
     entries[10].binding = 10;
-    entries[10].buffer = vRefsAlloc.buffer;
+    entries[10].buffer = wgpuBufferOf(vRefsAlloc.buffer);
     entries[10].offset = vRefsAlloc.offset;
     entries[10].size = vRefsAlloc.size;
 
@@ -1017,8 +1030,8 @@ struct GeoEncoder::Impl : public GeodeTextureEncoder::UniformScratch {
   }
 
   bool validateAndConsumeSceneBatch(const GeoEncoder::SceneBatchBinding& binding) {
-    if (!binding.chunkBuffer || !binding.recordBuffer || binding.instanceCount == 0u ||
-        binding.vertexCount == 0u) {
+    if (!binding.chunkBuffer.isValid() || !binding.recordBuffer.isValid() ||
+        binding.instanceCount == 0u || binding.vertexCount == 0u) {
       return false;
     }
     if (geometryAdmission == nullptr) {
@@ -1300,6 +1313,7 @@ void GeoEncoder::initImpl(GeoEncoder::Impl& impl, GeodeDevice& device,
                           const GeodeGradientPipeline& gradientPipeline,
                           const GeodeImagePipeline& imagePipeline, const wgpu::Texture& target) {
   impl.device = &device;
+  impl.gpuContext = &device.gpuContext();
   impl.pipeline = &fillPipeline;
   impl.gradientPipeline = &gradientPipeline;
   impl.imagePipeline = &imagePipeline;
@@ -1319,19 +1333,19 @@ void GeoEncoder::finalizeImpl(GeoEncoder::Impl& impl) {
   // Configure per-draw arenas (bump-allocated GPU buffers). They stay
   // empty here; the first draw
   // triggers lazy growth to 64 KiB and doubles from there.
-  impl.bandArena.usage = wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopyDst;
+  impl.bandArena.usage = gpu::BufferUsage::Storage | gpu::BufferUsage::CopyDst;
   impl.bandArena.label = "GeodeBandArena";
-  impl.curveArena.usage = wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopyDst;
+  impl.curveArena.usage = gpu::BufferUsage::Storage | gpu::BufferUsage::CopyDst;
   impl.curveArena.label = "GeodeCurveArena";
-  impl.uniformArena.usage = wgpu::BufferUsage::Uniform | wgpu::BufferUsage::CopyDst;
+  impl.uniformArena.usage = gpu::BufferUsage::Uniform | gpu::BufferUsage::CopyDst;
   impl.uniformArena.label = "GeodeUniformArena";
-  impl.instanceRecordArena.usage = wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopyDst;
+  impl.instanceRecordArena.usage = gpu::BufferUsage::Storage | gpu::BufferUsage::CopyDst;
   impl.instanceRecordArena.label = "GeodeInstanceRecordArena";
-  impl.vBandArena.usage = wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopyDst;
+  impl.vBandArena.usage = gpu::BufferUsage::Storage | gpu::BufferUsage::CopyDst;
   impl.vBandArena.label = "GeodeVBandArena";
-  impl.vCurveArena.usage = wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopyDst;
+  impl.vCurveArena.usage = gpu::BufferUsage::Storage | gpu::BufferUsage::CopyDst;
   impl.vCurveArena.label = "GeodeVCurveArena";
-  impl.gridArena.usage = wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopyDst;
+  impl.gridArena.usage = gpu::BufferUsage::Storage | gpu::BufferUsage::CopyDst;
   impl.gridArena.label = "GeodeGridArena";
 }
 
@@ -1616,15 +1630,15 @@ void GeoEncoder::fillPathIntoMask(const Path& path, FillRule rule,
 
   wgpu::BindGroupEntry entries[11] = {};
   entries[0].binding = 0;
-  entries[0].buffer = uniAlloc.buffer;
+  entries[0].buffer = impl_->wgpuBufferOf(uniAlloc.buffer);
   entries[0].offset = uniAlloc.offset;
   entries[0].size = uniAlloc.size;
   entries[1].binding = 1;
-  entries[1].buffer = bandsAlloc.buffer;
+  entries[1].buffer = impl_->wgpuBufferOf(bandsAlloc.buffer);
   entries[1].offset = bandsAlloc.offset;
   entries[1].size = bandsAlloc.size;
   entries[2].binding = 2;
-  entries[2].buffer = curvesAlloc.buffer;
+  entries[2].buffer = impl_->wgpuBufferOf(curvesAlloc.buffer);
   entries[2].offset = curvesAlloc.offset;
   entries[2].size = curvesAlloc.size;
   entries[3].binding = 3;
@@ -1632,27 +1646,27 @@ void GeoEncoder::fillPathIntoMask(const Path& path, FillRule rule,
   entries[4].binding = 4;
   entries[4].sampler = impl_->device->dummyClipMaskSampler();
   entries[5].binding = 5;
-  entries[5].buffer = vBandsAlloc.buffer;
+  entries[5].buffer = impl_->wgpuBufferOf(vBandsAlloc.buffer);
   entries[5].offset = vBandsAlloc.offset;
   entries[5].size = vBandsAlloc.size;
   entries[6].binding = 6;
-  entries[6].buffer = vCurvesAlloc.buffer;
+  entries[6].buffer = impl_->wgpuBufferOf(vCurvesAlloc.buffer);
   entries[6].offset = vCurvesAlloc.offset;
   entries[6].size = vCurvesAlloc.size;
   entries[7].binding = 7;
-  entries[7].buffer = hGridAlloc.buffer;
+  entries[7].buffer = impl_->wgpuBufferOf(hGridAlloc.buffer);
   entries[7].offset = hGridAlloc.offset;
   entries[7].size = hGridAlloc.size;
   entries[8].binding = 8;
-  entries[8].buffer = vGridAlloc.buffer;
+  entries[8].buffer = impl_->wgpuBufferOf(vGridAlloc.buffer);
   entries[8].offset = vGridAlloc.offset;
   entries[8].size = vGridAlloc.size;
   entries[9].binding = 9;
-  entries[9].buffer = hRefsAlloc.buffer;
+  entries[9].buffer = impl_->wgpuBufferOf(hRefsAlloc.buffer);
   entries[9].offset = hRefsAlloc.offset;
   entries[9].size = hRefsAlloc.size;
   entries[10].binding = 10;
-  entries[10].buffer = vRefsAlloc.buffer;
+  entries[10].buffer = impl_->wgpuBufferOf(vRefsAlloc.buffer);
   entries[10].offset = vRefsAlloc.offset;
   entries[10].size = vRefsAlloc.size;
 
@@ -2010,8 +2024,8 @@ void GeoEncoder::Impl::uploadResidentGeometry(GeodeResidentSlot& slot, const Enc
   blit(slot.hGrid, encoded.hBandGrid.data(), hGridBytes);
   blit(slot.vGrid, encoded.vBandGrid.data(), vGridBytes);
 
-  device->queue().writeBuffer(slot.buffer, alloc.offset, staging.data(), totalSize);
-  device->countBufferWrite(totalSize);
+  (void)gpuContext->gpuDevice->writeBuffer(slot.slab->bufferForId(slot.bufferId), alloc.offset,
+                                           std::span<const uint8_t>(staging.data(), totalSize));
 
   // Regions become absolute buffer offsets for the bind groups.
   auto shift = [&](GeodeResidentSlot::Region& r) {
@@ -2044,7 +2058,7 @@ void GeoEncoder::Impl::uploadResidentGeometry(GeodeResidentSlot& slot, const Enc
 
 void GeoEncoder::Impl::buildResidentBindGroup(GeodeResidentSlot& slot) {
   const wgpu::Device& dev = device->device();
-  const wgpu::Buffer& buf = slot.buffer;
+  const wgpu::Buffer buf = wgpuBufferOf(slot.buffer);
 
   wgpu::BindGroupEntry entries[12] = {};
   auto bufEntry = [&](int i, uint32_t binding, const GeodeResidentSlot::Region& r) {
@@ -2171,8 +2185,9 @@ void GeoEncoder::Impl::publishSlotPaint(GeodeResidentSlot& slot, const FillDrawA
   const auto* bytes = reinterpret_cast<const uint8_t*>(rows);
   if (slot.lastPaint.size() != sizeof(rows) ||
       std::memcmp(slot.lastPaint.data(), bytes, sizeof(rows)) != 0) {
-    device->queue().writeBuffer(slot.buffer, slot.paint.offset, rows, sizeof(rows));
-    device->countBufferWrite(sizeof(rows));
+    (void)gpuContext->gpuDevice->writeBuffer(
+        slot.slab->bufferForId(slot.bufferId), slot.paint.offset,
+        std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(rows), sizeof(rows)));
     if (slot.reservePaintMirror(sizeof(rows))) {
       slot.lastPaint.assign(bytes, bytes + sizeof(rows));
     }
@@ -2191,7 +2206,7 @@ bool GeoEncoder::Impl::ensureResidentSceneRecordImpl(
   // second device rendering a document whose residence was filled by a
   // now-different device (WebGPU rejects cross-device buffers / bind groups).
   const uint64_t fingerprint = residentFingerprint(encoded);
-  const bool needUpload = !slot.resident || !slot.buffer || slot.encodedKey != &encoded ||
+  const bool needUpload = !slot.resident || !slot.buffer.isValid() || slot.encodedKey != &encoded ||
                           slot.encodedFingerprint != fingerprint ||
                           slot.owningDeviceId != device->deviceId();
   if (needUpload) {
@@ -2202,7 +2217,7 @@ bool GeoEncoder::Impl::ensureResidentSceneRecordImpl(
 
   // The upload can fail (no slab, a device mismatch that the caller has
   // not re-wired yet, or a chunk allocation failure).
-  if (!slot.resident || !slot.buffer) {
+  if (!slot.resident || !slot.buffer.isValid()) {
     return false;
   }
 
@@ -2312,8 +2327,9 @@ void GeoEncoder::Impl::publishSoloUniform(GeodeResidentSlot& slot, const FillDra
     return;
   }
 
-  device->queue().writeBuffer(slot.buffer, slot.uniform.offset, &u, sizeof(Uniforms));
-  device->countBufferWrite(sizeof(Uniforms));
+  (void)gpuContext->gpuDevice->writeBuffer(
+      slot.slab->bufferForId(slot.bufferId), slot.uniform.offset,
+      std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(&u), sizeof(Uniforms)));
   if (slot.reserveUniformMirror(sizeof(Uniforms))) {
     slot.lastUniform.assign(uBytes, uBytes + sizeof(Uniforms));
   }
@@ -2324,7 +2340,7 @@ bool GeoEncoder::Impl::publishInstanceRecord(GeodeResidentSlot& slot, const Inst
                                              std::vector<uint8_t>* overrideRecordCache) {
   const GeodeRecordSlab::Slot& recordSlot =
       recordSlotOverride != nullptr ? *recordSlotOverride : slot.recordSlot;
-  if (!recordSlot.buffer) {
+  if (!recordSlot.buffer.isValid()) {
     return false;
   }
 
@@ -2339,9 +2355,9 @@ bool GeoEncoder::Impl::publishInstanceRecord(GeodeResidentSlot& slot, const Inst
     return true;
   }
 
-  device->queue().writeBuffer(recordSlot.buffer, recordSlot.offset, &record,
-                              sizeof(InstanceRecord));
-  device->countBufferWrite(sizeof(InstanceRecord));
+  (void)gpuContext->gpuDevice->writeBuffer(
+      slot.recordSlab->bufferForId(recordSlot.bufferId), recordSlot.offset,
+      std::span<const uint8_t>(rBytes, sizeof(InstanceRecord)));
   if (cache != nullptr) {
     if (recordSlotOverride != nullptr || slot.reserveRecordMirror(sizeof(InstanceRecord))) {
       cache->assign(rBytes, rBytes + sizeof(InstanceRecord));
@@ -2554,7 +2570,7 @@ void GeoEncoder::fillPathSceneBatch(const css::RGBA& color, FillRule rule,
     uniAlloc.offset = 0;
     uniAlloc.size = sizeof(Uniforms);
   }
-  if (!uniAlloc.buffer) {
+  if (!uniAlloc.buffer.isValid()) {
     uniAlloc = impl_->allocSceneBatchUniform(u);
   }
 
@@ -2562,19 +2578,19 @@ void GeoEncoder::fillPathSceneBatch(const css::RGBA& color, FillRule rule,
   // maxStorageBufferBindingSize (default 128 MiB); kInitialChunkBytes
   // doubling reaches that only for documents far beyond the current
   // corpus, and the failure is a loud bind-group validation error.
-  const uint64_t chunkBytes = binding.chunkBuffer.getSize();
+  const uint64_t chunkBytes = binding.chunkBytes;
   const uint64_t recordSpanStart = binding.firstRecordOffset;
   const uint64_t recordSpanBytes =
       static_cast<uint64_t>(binding.instanceCount) * sizeof(InstanceRecord);
 
   wgpu::BindGroupEntry entries[12] = {};
   entries[0].binding = 0;
-  entries[0].buffer = uniAlloc.buffer;
+  entries[0].buffer = impl_->wgpuBufferOf(uniAlloc.buffer);
   entries[0].offset = uniAlloc.offset;
   entries[0].size = uniAlloc.size;
   auto chunkEntry = [&](int i, uint32_t bindingIndex) {
     entries[i].binding = bindingIndex;
-    entries[i].buffer = binding.chunkBuffer;
+    entries[i].buffer = impl_->wgpuBufferOf(binding.chunkBuffer);
     entries[i].offset = 0;
     entries[i].size = chunkBytes;
   };
@@ -2589,7 +2605,7 @@ void GeoEncoder::fillPathSceneBatch(const css::RGBA& color, FillRule rule,
   entries[6].binding = 6;
   entries[6].sampler = impl_->device->dummyClipMaskSampler();
   entries[7].binding = 7;
-  entries[7].buffer = binding.recordBuffer;
+  entries[7].buffer = impl_->wgpuBufferOf(binding.recordBuffer);
   entries[7].offset = recordSpanStart;
   entries[7].size = recordSpanBytes;
   chunkEntry(8, 8);
@@ -2817,7 +2833,7 @@ void GeoEncoder::submitFillDraw(const FillDrawArgs& args, std::span<const float>
       const uint64_t recordBytes = static_cast<size_t>(instanceCount) * sizeof(InstanceRecord);
       const auto recordAlloc = impl_->allocInArena(impl_->instanceRecordArena, records.data(),
                                                    recordBytes, kStorageOffsetAlignment);
-      recordBuf = recordAlloc.buffer;
+      recordBuf = impl_->wgpuBufferOf(recordAlloc.buffer);
       recordOffset = recordAlloc.offset;
       recordSize = recordAlloc.size;
     }
@@ -2834,15 +2850,15 @@ void GeoEncoder::submitFillDraw(const FillDrawArgs& args, std::span<const float>
   // dense grid storage, and the gradient paint blocks.
   wgpu::BindGroupEntry entries[12] = {};
   entries[0].binding = 0;
-  entries[0].buffer = uniAlloc.buffer;
+  entries[0].buffer = impl_->wgpuBufferOf(uniAlloc.buffer);
   entries[0].offset = uniAlloc.offset;
   entries[0].size = uniAlloc.size;
   entries[1].binding = 1;
-  entries[1].buffer = bandsAlloc.buffer;
+  entries[1].buffer = impl_->wgpuBufferOf(bandsAlloc.buffer);
   entries[1].offset = bandsAlloc.offset;
   entries[1].size = bandsAlloc.size;
   entries[2].binding = 2;
-  entries[2].buffer = curvesAlloc.buffer;
+  entries[2].buffer = impl_->wgpuBufferOf(curvesAlloc.buffer);
   entries[2].offset = curvesAlloc.offset;
   entries[2].size = curvesAlloc.size;
   entries[3].binding = 3;
@@ -2858,16 +2874,16 @@ void GeoEncoder::submitFillDraw(const FillDrawArgs& args, std::span<const float>
   entries[7].offset = recordOffset;
   entries[7].size = recordSize;
   entries[8].binding = 8;
-  entries[8].buffer = vBandsAlloc.buffer;
+  entries[8].buffer = impl_->wgpuBufferOf(vBandsAlloc.buffer);
   entries[8].offset = vBandsAlloc.offset;
   entries[8].size = vBandsAlloc.size;
   entries[9].binding = 9;
-  entries[9].buffer = vCurvesAlloc.buffer;
+  entries[9].buffer = impl_->wgpuBufferOf(vCurvesAlloc.buffer);
   entries[9].offset = vCurvesAlloc.offset;
   entries[9].size = vCurvesAlloc.size;
   // One binding for all four grid arrays; the record's bases index into it.
   entries[10].binding = 10;
-  entries[10].buffer = gridSpan.alloc.buffer;
+  entries[10].buffer = impl_->wgpuBufferOf(gridSpan.alloc.buffer);
   entries[10].offset = gridSpan.alloc.offset;
   entries[10].size = gridSpan.alloc.size;
   // The per-frame arena path never carries a record-sourced gradient - a
@@ -3057,8 +3073,8 @@ void GeoEncoder::Impl::uploadResidentGradientGeometry(GeodeResidentGradientSlot&
   blit(slot.hGrid, encoded.hBandGrid.data(), hGridBytes);
   blit(slot.vGrid, encoded.vBandGrid.data(), vGridBytes);
 
-  device->queue().writeBuffer(slot.buffer, alloc.offset, staging.data(), totalSize);
-  device->countBufferWrite(totalSize);
+  (void)gpuContext->gpuDevice->writeBuffer(slot.slab->bufferForId(slot.bufferId), alloc.offset,
+                                           std::span<const uint8_t>(staging.data(), totalSize));
 
   // Regions become absolute buffer offsets for the bind groups.
   auto shift = [&](GeodeResidentGradientSlot::Region& r) {
@@ -3084,7 +3100,7 @@ void GeoEncoder::Impl::uploadResidentGradientGeometry(GeodeResidentGradientSlot&
 
 void GeoEncoder::Impl::buildResidentGradientBindGroup(GeodeResidentGradientSlot& slot) {
   const wgpu::Device& dev = device->device();
-  const wgpu::Buffer& buf = slot.buffer;
+  const wgpu::Buffer buf = wgpuBufferOf(slot.buffer);
 
   // Eleven bindings mirroring `submitGradientDraw`, with the clip-mask
   // texture/sampler slots bound to the device-owned dummies. Residence is
@@ -3138,7 +3154,7 @@ bool GeoEncoder::Impl::submitResidentGradientDraw(GeodeResidentGradientSlot& slo
 
   // Same residence / invalidation guards as `submitResidentFillDraw`.
   const uint64_t fingerprint = residentFingerprint(encoded);
-  const bool needUpload = !slot.resident || !slot.buffer || slot.encodedKey != &encoded ||
+  const bool needUpload = !slot.resident || !slot.buffer.isValid() || slot.encodedKey != &encoded ||
                           slot.encodedFingerprint != fingerprint ||
                           slot.owningDeviceId != device->deviceId();
   if (needUpload) {
@@ -3149,7 +3165,7 @@ bool GeoEncoder::Impl::submitResidentGradientDraw(GeodeResidentGradientSlot& slo
 
   // Upload failure: report it so the caller routes the draw through the
   // per-frame arena path.
-  if (!slot.resident || !slot.buffer) {
+  if (!slot.resident || !slot.buffer.isValid()) {
     return false;
   }
 
@@ -3173,8 +3189,9 @@ void GeoEncoder::Impl::publishGradientUniform(GeodeResidentGradientSlot& slot,
       std::memcmp(slot.lastUniform.data(), uBytes, sizeof(GradientUniforms)) == 0) {
     return;
   }
-  device->queue().writeBuffer(slot.buffer, slot.uniform.offset, &u, sizeof(GradientUniforms));
-  device->countBufferWrite(sizeof(GradientUniforms));
+  (void)gpuContext->gpuDevice->writeBuffer(
+      slot.slab->bufferForId(slot.bufferId), slot.uniform.offset,
+      std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(&u), sizeof(GradientUniforms)));
   if (slot.reserveUniformMirror(sizeof(GradientUniforms))) {
     slot.lastUniform.assign(uBytes, uBytes + sizeof(GradientUniforms));
   }

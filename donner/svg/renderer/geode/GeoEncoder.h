@@ -14,6 +14,7 @@
 #include "donner/base/Transform.h"
 #include "donner/base/Vector2.h"
 #include "donner/css/Color.h"
+#include "donner/gpu/Handles.h"
 #include "donner/svg/core/ImageRendering.h"
 #include "donner/svg/core/MaskType.h"
 #include "donner/svg/renderer/geode/GeodeResidentPathComponent.h"
@@ -674,13 +675,15 @@ public:
   /// One cross-entity ordered batch: consecutive resident slots of one
   /// slab chunk plus a run of consecutive record-slab slots.
   struct SceneBatchBinding {
-    wgpu::Buffer chunkBuffer;   ///< Slab chunk holding every instance's geometry.
-    wgpu::Buffer recordBuffer;  ///< Record-slab buffer holding the records.
+    gpu::BufferRef chunkBuffer;   ///< Slab chunk holding every instance's geometry.
+    gpu::BufferRef recordBuffer;  ///< Record-slab buffer holding the records.
     /// Stable identities of `chunkBuffer` / `recordBuffer` (see
     /// `GeodeDevice::AllocateBufferId`). The bind-group cache outlives the
     /// document that owns these buffers, so it keys on these ids; the raw
     /// handle addresses are recycled once that document is destroyed.
     uint64_t chunkBufferId = 0;
+    /// Byte size of `chunkBuffer`; scene batches bind the whole chunk.
+    uint64_t chunkBytes = 0;
     uint64_t recordBufferId = 0;
     /// BYTE offset of the first instance's record inside recordBuffer.
     /// Record-slot indices are global across slab chunks, so an index is

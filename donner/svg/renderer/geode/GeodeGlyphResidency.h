@@ -596,7 +596,7 @@ struct GeodeTextInstanceRecordComponent {
   void freeRecordSlots() {
     if (recordSlab) {
       for (const OccurrenceOwner& occurrence : occurrences) {
-        if (occurrence && occurrence->slot.buffer) {
+        if (occurrence && occurrence->slot.buffer.isValid()) {
           recordSlab->freeSlot(occurrence->slot);
         }
       }

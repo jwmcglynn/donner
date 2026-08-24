@@ -471,7 +471,6 @@
       "operations": [
         "beginRenderPass",
         "createBindGroup",
-        "createBuffer",
         "createCommandEncoder",
         "createSampler",
         "createView",
@@ -480,10 +479,10 @@
         "setBindGroup",
         "setPipeline",
         "setScissorRect",
-        "submit",
-        "writeBuffer"
+        "submit"
       ],
       "wgpuCFunctions": [
+        "wgpuBufferOf",
         "wgpuLabel"
       ],
       "wgpuCppTokens": [
@@ -492,8 +491,6 @@
         "BindGroupDescriptor",
         "BindGroupEntry",
         "Buffer",
-        "BufferDescriptor",
-        "BufferUsage",
         "Color",
         "CommandBuffer",
         "CommandEncoder",
@@ -519,17 +516,10 @@
         "submit"
       ],
       "wgpuCppTokens": [
-        "Buffer",
         "CommandEncoder",
         "Device",
         "Texture",
         "TextureView"
-      ]
-    },
-    "donner/svg/renderer/geode/GeodeBufferPool.h": {
-      "wgpuCppTokens": [
-        "Buffer",
-        "BufferUsage"
       ]
     },
     "donner/svg/renderer/geode/GeodeCallbackState.h": {
@@ -890,14 +880,8 @@
         "createBuffer",
         "writeBuffer"
       ],
-      "wgpuCFunctions": [
-        "wgpuLabel"
-      ],
       "wgpuCppTokens": [
-        "BindGroup",
-        "Buffer",
-        "BufferDescriptor",
-        "BufferUsage"
+        "BindGroup"
       ]
     },
     "donner/svg/renderer/geode/GeodeShaders.cc": {

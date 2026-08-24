@@ -363,12 +363,12 @@ TEST_F(GeoEncoderTest, ResidentSlotMoveTransfersRecordSlot) {
     // component's storage; the moved-from shell is then destroyed.
     geode::GeodeResidentSlot removedStorage;
     removedStorage = std::move(survivor);
-    ASSERT_TRUE(removedStorage.recordSlot.buffer);
+    ASSERT_TRUE(removedStorage.recordSlot.buffer.isValid());
     EXPECT_EQ(removedStorage.recordSlot.index, survivorSlot.index);
     // survivor (the moved-from shell) is destroyed at scope exit of the
     // ORIGINAL object in real usage; simulate by letting it destruct via a
     // fresh scope below. Here, verify the shell no longer owns the slot.
-    EXPECT_FALSE(survivor.recordSlot.buffer)
+    EXPECT_FALSE(survivor.recordSlot.buffer.isValid())
         << "The moved-from slot must not retain the record slot";
     // Destroy the shell explicitly (what entt's pop does to the tail).
     { geode::GeodeResidentSlot shell = std::move(survivor); }
@@ -378,7 +378,7 @@ TEST_F(GeoEncoderTest, ResidentSlotMoveTransfersRecordSlot) {
     slab->beginFrame(1);
     geode::GeodeRecordSlab::Slot next;
     ASSERT_TRUE(slab->allocateSlot(*device_, next));
-    EXPECT_FALSE(next.buffer == survivorSlot.buffer && next.offset == survivorSlot.offset)
+    EXPECT_FALSE(next.bufferId == survivorSlot.bufferId && next.offset == survivorSlot.offset)
         << "The survivor's record slot leaked back to the slab through the moved-from shell";
   }
 }
@@ -393,10 +393,10 @@ TEST_F(GeoEncoderTest, RecordSlabFreeListSurvivesChunkGrowth) {
   for (size_t i = 0; i < kCount; ++i) {
     geode::GeodeRecordSlab::Slot slot;
     ASSERT_TRUE(slab.allocateSlot(*device_, slot)) << "allocation " << i;
-    ASSERT_TRUE(slot.buffer);
+    ASSERT_TRUE(slot.buffer.isValid());
     slots.push_back(slot);
   }
-  ASSERT_NE(slots[0].buffer, slots.back().buffer) << "Fixture must span two chunks";
+  ASSERT_NE(slots[0].bufferId, slots.back().bufferId) << "Fixture must span two chunks";
 
   // Free one slot in each chunk; frees merge at the next frame boundary.
   const geode::GeodeRecordSlab::Slot freedEarly = slots[10];
@@ -412,7 +412,7 @@ TEST_F(GeoEncoderTest, RecordSlabFreeListSurvivesChunkGrowth) {
   ASSERT_TRUE(slab.allocateSlot(*device_, reusedB));
   const auto matches = [](const geode::GeodeRecordSlab::Slot& a,
                           const geode::GeodeRecordSlab::Slot& b) {
-    return a.buffer == b.buffer && a.offset == b.offset && a.index == b.index;
+    return a.bufferId == b.bufferId && a.offset == b.offset && a.index == b.index;
   };
   EXPECT_TRUE(matches(reusedA, freedEarly) || matches(reusedA, freedLate));
   EXPECT_TRUE(matches(reusedB, freedEarly) || matches(reusedB, freedLate));
@@ -423,8 +423,8 @@ TEST_F(GeoEncoderTest, RecordSlabFreeListSurvivesChunkGrowth) {
     if (matches(live, freedEarly) || matches(live, freedLate)) {
       continue;
     }
-    EXPECT_FALSE(live.buffer == reusedA.buffer && live.offset == reusedA.offset);
-    EXPECT_FALSE(live.buffer == reusedB.buffer && live.offset == reusedB.offset);
+    EXPECT_FALSE(live.bufferId == reusedA.bufferId && live.offset == reusedA.offset);
+    EXPECT_FALSE(live.bufferId == reusedB.bufferId && live.offset == reusedB.offset);
   }
 }
 
@@ -531,12 +531,12 @@ TEST_F(GeoEncoderTest, BatchUniformCpuMirrorStopsAtCapPlusOneAndReleases) {
     GeodeRecordSlab slab(device_->deviceId(), budget);
     const uint32_t first[4] = {1u, 2u, 3u, 4u};
     const uint32_t second[4] = {5u, 6u, 7u, 8u};
-    ASSERT_TRUE(slab.acquireBatchUniform(*device_, first, sizeof(first)).buffer);
+    ASSERT_TRUE(slab.acquireBatchUniform(*device_, first, sizeof(first)).buffer.isValid());
     const uint64_t entryBytes = budget->cacheBytes();
     const uint64_t payloadBytes = slab.batchUniformPayloadBytesForTesting();
     budget->setLimitsForTesting(
         {.cacheBytes = entryBytes + payloadBytes - 1u, .residentBytes = kUniformBytes * 2u});
-    EXPECT_FALSE(slab.acquireBatchUniform(*device_, second, sizeof(second)).buffer);
+    EXPECT_FALSE(slab.acquireBatchUniform(*device_, second, sizeof(second)).buffer.isValid());
     EXPECT_EQ(budget->cacheBytes(), entryBytes);
     EXPECT_EQ(budget->residentBytes(), kUniformBytes)
         << "The rejected CPU mirror must roll back its tentative GPU reservation.";
@@ -554,7 +554,7 @@ TEST_F(GeoEncoderTest, BatchUniformCpuReservationIncludesVectorSpareCapacity) {
     GeodeRecordSlab slab(device_->deviceId(), budget);
     for (uint32_t index = 0; index < 5u; ++index) {
       const uint32_t value[4] = {index, index + 1u, index + 2u, index + 3u};
-      ASSERT_TRUE(slab.acquireBatchUniform(*device_, value, sizeof(value)).buffer);
+      ASSERT_TRUE(slab.acquireBatchUniform(*device_, value, sizeof(value)).buffer.isValid());
     }
     EXPECT_GE(slab.batchUniformPayloadBytesForTesting(), 5u * kUniformBytes);
     EXPECT_EQ(budget->cacheBytes(), slab.batchUniformMetadataBytesForTesting() +
@@ -648,9 +648,11 @@ TEST(GeodeResourceBudgetTest, FrameGeometryStopsAtExactAggregateBoundary) {
 /// repeat, no matter what the allocator does with the handles.
 TEST_F(GeoEncoderTest, BufferIdsAreNeverReusedAcrossSlabGenerations) {
   struct SlabGeneration {
-    WGPUBuffer chunkHandle = nullptr;
-    WGPUBuffer recordHandle = nullptr;
-    WGPUBuffer uniformHandle = nullptr;
+    // Resource slots, which the allocator DOES recycle across generations - the point of the
+    // ids below is that they stay distinct even when these repeat.
+    uint32_t chunkSlot = 0;
+    uint32_t recordSlot = 0;
+    uint32_t uniformSlot = 0;
     uint64_t chunkId = 0;
     uint64_t recordId = 0;
     uint64_t uniformId = 0;
@@ -671,9 +673,9 @@ TEST_F(GeoEncoderTest, BufferIdsAreNeverReusedAcrossSlabGenerations) {
         records.acquireBatchUniform(*device_, uniformBytes, sizeof(uniformBytes));
 
     SlabGeneration out;
-    out.chunkHandle = geometryAlloc.buffer;
-    out.recordHandle = recordSlot.buffer;
-    out.uniformHandle = uniform.buffer;
+    out.chunkSlot = geometryAlloc.buffer.slotIndex();
+    out.recordSlot = recordSlot.buffer.slotIndex();
+    out.uniformSlot = uniform.buffer.slotIndex();
     out.chunkId = geometryAlloc.bufferId;
     out.recordId = recordSlot.bufferId;
     out.uniformId = uniform.bufferId;
@@ -721,7 +723,7 @@ TEST_F(GeoEncoderTest, BufferIdsAreNeverReusedAcrossSlabGenerations) {
   geode::GeodeRecordSlab::Slot slotB;
   ASSERT_TRUE(records.allocateSlot(*device_, slotA));
   ASSERT_TRUE(records.allocateSlot(*device_, slotB));
-  ASSERT_EQ(slotA.buffer, slotB.buffer) << "Fixture must keep both slots in one chunk";
+  ASSERT_EQ(slotA.bufferId, slotB.bufferId) << "Fixture must keep both slots in one chunk";
   EXPECT_EQ(slotA.bufferId, slotB.bufferId);
 }
 
@@ -779,8 +781,10 @@ TEST_F(GeoEncoderTest, SceneBatchBindGroupCacheDistinguishesSlabGenerations) {
       record.boundingVertexCount = 4;
       const float quad[8] = {8.0f, 8.0f, 24.0f, 8.0f, 24.0f, 24.0f, 8.0f, 24.0f};
       std::memcpy(record.boundingVertices, quad, sizeof(quad));
-      device_->queue().writeBuffer(generation.recordSlots[i].buffer,
-                                   generation.recordSlots[i].offset, &record, sizeof(record));
+      (void)device_->adapterDevice().writeBuffer(
+          generation.records->bufferForId(generation.recordSlots[i].bufferId),
+          generation.recordSlots[i].offset,
+          std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(&record), sizeof(record)));
     }
     return generation;
   };
@@ -788,6 +792,7 @@ TEST_F(GeoEncoderTest, SceneBatchBindGroupCacheDistinguishesSlabGenerations) {
   const auto bindingFor = [](const Generation& generation) {
     GeoEncoder::SceneBatchBinding binding = {};
     binding.chunkBuffer = generation.chunk.buffer;
+    binding.chunkBytes = generation.geometry->chunkBytesForId(generation.chunk.bufferId);
     binding.recordBuffer = generation.recordSlots[0].buffer;
     binding.chunkBufferId = generation.chunk.bufferId;
     binding.recordBufferId = generation.recordSlots[0].bufferId;
@@ -880,13 +885,16 @@ TEST_F(GeoEncoderTest, SceneBatchBindGroupCacheDistinguishesRecycledArenaUniform
   record.boundingVertexCount = 4;
   const float quad[8] = {8.0f, 8.0f, 24.0f, 8.0f, 24.0f, 24.0f, 8.0f, 24.0f};
   std::memcpy(record.boundingVertices, quad, sizeof(quad));
-  device_->queue().writeBuffer(recordSlot.buffer, recordSlot.offset, &record, sizeof(record));
+  (void)device_->adapterDevice().writeBuffer(
+      records->bufferForId(recordSlot.bufferId), recordSlot.offset,
+      std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(&record), sizeof(record)));
 
   // A null `recordSlab` routes the batch uniform through the encoder's
   // per-frame arena instead of the slab's persistent table, which is the
   // allocation the buffer pool recycles.
   GeoEncoder::SceneBatchBinding binding = {};
   binding.chunkBuffer = chunk.buffer;
+  binding.chunkBytes = geometry->chunkBytesForId(chunk.bufferId);
   binding.recordBuffer = recordSlot.buffer;
   binding.chunkBufferId = chunk.bufferId;
   binding.recordBufferId = recordSlot.bufferId;
