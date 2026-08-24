@@ -164,10 +164,26 @@ public:
       return;
     }
     lastMergedFrame_ = frameIndex;
+    retiredBindGroups_.clear();
     for (uint32_t index : pendingFrees_) {
       freeIndices_.insert(std::upper_bound(freeIndices_.begin(), freeIndices_.end(), index), index);
     }
     pendingFrees_.clear();
+  }
+
+  /// Park a bind group a slot is dropping until the next frame boundary.
+  ///
+  /// A slot's cached bind group can be dropped mid-frame (geometry re-upload, component removal,
+  /// device change) while draws recorded earlier in the frame still name it and have not reached
+  /// the backend yet. Destroying it there fails those draws closed, so it is held here and
+  /// released at the next \ref beginFrame, by which point the frame that recorded them has been
+  /// submitted.
+  ///
+  /// @param bindGroup Bind group to release at the next frame boundary.
+  void retireBindGroup(gpu::BindGroup bindGroup) {
+    if (bindGroup.isValid()) {
+      retiredBindGroups_.push_back(std::move(bindGroup));
+    }
   }
 
   /// Allocate the next record slot (free-list first, then bump in the
@@ -421,6 +437,8 @@ private:
   std::vector<Chunk> chunks_;
   std::vector<uint32_t> freeIndices_;
   std::vector<uint32_t> pendingFrees_;
+  /// Bind groups dropped by slots this frame, released at the next \ref beginFrame.
+  std::vector<gpu::BindGroup> retiredBindGroups_;
   std::vector<BatchUniform> batchUniforms_;
   std::shared_ptr<GeodeDocumentGeometryBudget> budget_;
   GeodeGeometryCacheReservation cpuReservation_;
@@ -542,6 +560,7 @@ public:
       return;
     }
     lastMergedFrame_ = frameIndex;
+    retiredBindGroups_.clear();
     for (const FreeRange& range : pendingFrees_) {
       auto it = freeRanges_.begin();
       while (it != freeRanges_.end() &&
@@ -672,7 +691,25 @@ public:
     pendingFrees_.push_back(FreeRange{chunkIndex, alloc.offset, alloc.size});
   }
 
+  /// Park a bind group a slot is dropping until the next frame boundary.
+  ///
+  /// A slot's cached bind group can be dropped mid-frame (geometry re-upload, component removal,
+  /// device change) while draws recorded earlier in the frame still name it and have not reached
+  /// the backend yet. Destroying it there fails those draws closed, so it is held here and
+  /// released at the next \ref beginFrame, by which point the frame that recorded them has been
+  /// submitted.
+  ///
+  /// @param bindGroup Bind group to release at the next frame boundary.
+  void retireBindGroup(gpu::BindGroup bindGroup) {
+    if (bindGroup.isValid()) {
+      retiredBindGroups_.push_back(std::move(bindGroup));
+    }
+  }
+
 private:
+  /// Bind groups dropped by slots this frame, released at the next \ref beginFrame.
+  std::vector<gpu::BindGroup> retiredBindGroups_;
+
   static constexpr uint64_t kInitialChunkBytes = 1u << 20;  // 1 MiB.
 
   static uint64_t alignUp(uint64_t value, uint64_t alignment) {
@@ -745,7 +782,7 @@ struct GeodeResidentSlot {
   /// texture/sampler/identity-instance handles), so it survives frames
   /// and encoders. Rebuilt only when the geometry buffer is
   /// re-allocated.
-  ScopedWgpuHandle<wgpu::BindGroup> bindGroup;
+  gpu::BindGroup bindGroup;
 
   /// A byte sub-range of `buffer`. `size == 0` is never bound directly -
   /// empty SSBO regions reserve a zero-filled dummy slot wide enough for one
@@ -940,10 +977,10 @@ struct GeodeResidentSlot {
   /// Safe to call on an empty slot. A geometry mutation can remove this
   /// component after a draw has referenced the buffer but before the
   /// frame's command encoder is submitted. Do not call `Buffer::destroy()`
-  /// here: WebGPU makes that buffer unusable immediately, invalidating the
-  /// already-recorded draw. Releasing our references is sufficient because
-  /// the command encoder keeps the referenced resources alive until it is
-  /// done.
+  /// here: that makes the buffer unusable immediately, invalidating the already-recorded draw.
+  /// Releasing our references is enough for the buffer, whose storage the slab owns; the bind
+  /// group is handed to the slab instead of dropped, because draws recorded earlier this frame
+  /// may still name it and have not reached the backend yet.
   void reset() {
     if (slab && allocationSize != 0) {
       GeodeResidentSlab::Allocation alloc{buffer, allocationOffset, allocationSize, bufferId};
@@ -962,7 +999,10 @@ struct GeodeResidentSlot {
     allocationSize = 0;
     buffer = gpu::BufferRef();
     bufferId = 0;
-    bindGroup.reset();
+    if (slab) {
+      slab->retireBindGroup(std::move(bindGroup));
+    }
+    bindGroup = gpu::BindGroup();
     resident = false;
     encodedKey = nullptr;
     encodedFingerprint = 0;
@@ -1030,7 +1070,7 @@ struct GeodeResidentGradientSlot {
   /// Cached 11-binding gradient bind group. All bindings reference stable
   /// objects (this slot's buffer sub-ranges + device-owned dummy
   /// clip-mask texture/sampler), so it survives frames and encoders.
-  ScopedWgpuHandle<wgpu::BindGroup> bindGroup;
+  gpu::BindGroup bindGroup;
 
   /// A byte sub-range of `buffer` (same semantics as GeodeResidentSlot::Region).
   struct Region {
@@ -1141,7 +1181,10 @@ struct GeodeResidentGradientSlot {
     allocationSize = 0;
     buffer = gpu::BufferRef();
     bufferId = 0;
-    bindGroup.reset();
+    if (slab) {
+      slab->retireBindGroup(std::move(bindGroup));
+    }
+    bindGroup = gpu::BindGroup();
     resident = false;
     encodedKey = nullptr;
     encodedFingerprint = 0;

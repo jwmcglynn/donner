@@ -54,6 +54,14 @@ int CaptureBaseline(const char* outputPath) {
   td.sampleCount = 1;
   td.dimension = wgpu::TextureDimension::_2D;
   wgpu::Texture target = device->device().createTexture(td);
+  gpu::Result<gpu::Texture> targetHandleResult = device->adapterDevice().importExternalTexture(
+      target, gpu::Extent2d{kBaselineSize, kBaselineSize}, gpu::TextureFormat::RGBA8Unorm,
+      gpu::TextureUsage::RenderAttachment | gpu::TextureUsage::CopySrc);
+  if (!targetHandleResult.hasResult()) {
+    std::fprintf(stderr, "Failed to name the baseline render target\n");
+    return 1;
+  }
+  const gpu::Texture targetHandle = std::move(targetHandleResult).result();
 
   wgpu::BufferDescriptor bd = {};
   bd.label = geode::wgpuLabel("BaselineReadback");
@@ -62,7 +70,8 @@ int CaptureBaseline(const char* outputPath) {
   wgpu::Buffer readback = device->device().createBuffer(bd);
 
   {
-    geode::GeoEncoder encoder(*device, pipeline, gradientPipeline, imagePipeline, target);
+    geode::GeoEncoder encoder(*device, pipeline, gradientPipeline, imagePipeline, targetHandle,
+                              gpu::Extent2d{kBaselineSize, kBaselineSize});
     encoder.clear(css::RGBA(0, 0, 0, 0));  // Transparent background.
     encoder.setTransform(BaselinePixelFromScene());
     for (const BaselinePathSpec& spec : BaselineScenePaths()) {

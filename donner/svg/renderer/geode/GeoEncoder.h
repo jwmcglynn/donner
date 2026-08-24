@@ -14,6 +14,7 @@
 #include "donner/base/Transform.h"
 #include "donner/base/Vector2.h"
 #include "donner/css/Color.h"
+#include "donner/gpu/CommandEncoder.h"
 #include "donner/gpu/Handles.h"
 #include "donner/svg/core/ImageRendering.h"
 #include "donner/svg/core/MaskType.h"
@@ -170,7 +171,7 @@ public:
   /**
    * Create an encoder targeting the given texture.
    *
-   * @param device The Geode device (owns the wgpu::Device + queue).
+   * @param device The Geode device owning the shared pipelines and counters.
    * @param fillPipeline The Slug fill pipeline.
    * @param gradientPipeline The Slug gradient-fill pipeline.
    * @param imagePipeline The image-blit pipeline.
@@ -180,7 +181,7 @@ public:
    */
   GeoEncoder(GeodeDevice& device, const GeodePipeline& fillPipeline,
              const GeodeGradientPipeline& gradientPipeline, const GeodeImagePipeline& imagePipeline,
-             const wgpu::Texture& target);
+             const gpu::Texture& target, const gpu::Extent2d& targetSize);
 
   /**
    * Shared-CommandEncoder constructor.
@@ -198,7 +199,8 @@ public:
    */
   GeoEncoder(GeodeDevice& device, const GeodePipeline& fillPipeline,
              const GeodeGradientPipeline& gradientPipeline, const GeodeImagePipeline& imagePipeline,
-             const wgpu::Texture& target, wgpu::CommandEncoder sharedCommandEncoder);
+             const gpu::Texture& target, const gpu::Extent2d& targetSize,
+             gpu::CommandEncoder& sharedCommandEncoder);
 
   ~GeoEncoder();
 
@@ -355,7 +357,7 @@ public:
    * @param mask Single-sample RGBA8Unorm target. Sampled by
    *   `setClipMask` after `endMaskPass`.
    */
-  void beginMaskPass(const wgpu::Texture& mask);
+  void beginMaskPass(const gpu::Texture& mask);
 
   /**
    * Fill `path` into the currently open mask pass using the Slug mask
@@ -383,7 +385,7 @@ public:
    * into fragment coverage, so the mask represents a pre-rendered
    * clip region in [0, 1].
    */
-  void setClipMask(const wgpu::TextureView& maskView);
+  void setClipMask(const gpu::TextureView& maskView);
 
   /**
    * Preferred overload: sets both the view AND the parent texture so the
@@ -396,7 +398,7 @@ public:
    * clip stack can free a VkImage while the encoder's
    * `createBindGroup` still references its view.
    */
-  void setClipMask(const wgpu::Texture& maskTexture, const wgpu::TextureView& maskView);
+  void setClipMask(const gpu::Texture& maskTexture, const gpu::TextureView& maskView);
 
   /// Remove any active clip mask, restoring unclipped rasterisation.
   void clearClipMask();
@@ -413,7 +415,7 @@ public:
    * @param src Source texture (RGBA8, premultiplied).
    * @param opacity Overall alpha multiplier in [0, 1].
    */
-  void blitFullTarget(const wgpu::Texture& src, double opacity);
+  void blitFullTarget(const gpu::Texture& src, double opacity);
 
   /**
    * `<mask>` compositing. Same as @ref blitFullTarget but additionally samples a mask texture and
@@ -427,7 +429,7 @@ public:
    * @param maskType Whether mask coverage comes from luminance or alpha.
    * @param maskBounds Optional clip rect in target-pixel space.
    */
-  void blitFullTargetMasked(const wgpu::Texture& content, const wgpu::Texture& mask,
+  void blitFullTargetMasked(const gpu::Texture& content, const gpu::Texture& mask,
                             svg::MaskType maskType, const std::optional<Box2d>& maskBounds);
 
   /**
@@ -454,14 +456,14 @@ public:
    *   combo on the same element composes correctly - the source
    *   colour that enters the blend is `layer * opacity`.
    */
-  void blitFullTargetBlended(const wgpu::Texture& layer, const wgpu::Texture& dstSnapshot,
+  void blitFullTargetBlended(const gpu::Texture& layer, const gpu::Texture& dstSnapshot,
                              uint32_t blendMode, double opacity);
 
   /**
    * Draw a raster image into the given destination rectangle.
    *
    * The image's straight-alpha RGBA8 pixels are uploaded to a fresh
-   * `wgpu::Texture` and sampled through the image-blit pipeline. The
+   * GPU texture and sampled through the image-blit pipeline. The
    * current transform is applied via the MVP matrix, and the destination
    * rectangle is specified in local (pre-transform) coordinates - i.e.,
    * the transform and the rect compose the same way as any other draw
@@ -499,7 +501,7 @@ public:
    *   render-target snapshots are. CPU bitmaps uploaded by host presentation code are
    *   straight-alpha and must pass false.
    */
-  void drawTexture(const wgpu::Texture& texture, const Box2d& destRect, const Box2d& sourceUv,
+  void drawTexture(const gpu::Texture& texture, const Box2d& destRect, const Box2d& sourceUv,
                    double opacity, bool pixelated, bool sourceIsPremultiplied);
 
   /**
@@ -797,7 +799,7 @@ public:
    */
   struct PatternPaint {
     /// Pre-rendered tile texture (RGBA8, premultiplied).
-    wgpu::Texture tile;
+    const gpu::Texture* tile = nullptr;
     /// Size of the tile rectangle in pattern space (width, height). The
     /// shader uses this to wrap sample positions via `fract()`.
     Vector2d tileSize;
@@ -843,7 +845,8 @@ private:
   /// to avoid duplicating ~20 lines of setup. See GeoEncoder.cc.
   static void initImpl(Impl& impl, GeodeDevice& device, const GeodePipeline& fillPipeline,
                        const GeodeGradientPipeline& gradientPipeline,
-                       const GeodeImagePipeline& imagePipeline, const wgpu::Texture& target);
+                       const GeodeImagePipeline& imagePipeline, const gpu::Texture& target,
+                       const gpu::Extent2d& targetSize);
   static void finalizeImpl(Impl& impl);
 
   std::unique_ptr<Impl> impl_;

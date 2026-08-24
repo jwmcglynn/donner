@@ -66,8 +66,6 @@ struct GeodeGpuContext {
   void countTexture() const;
   /// Forwards to `GeodeDevice::countBindGroup` when wired.
   void countBindGroup() const;
-  /// Forwards to `GeodeDevice::countDraw` when wired.
-  void countDraw() const;
   /// Forwards to `GeodeDevice::countPipelineSwitch` when wired.
   void countPipelineSwitch() const;
   /// Forwards to `GeodeDevice::countPathEncode` when wired.

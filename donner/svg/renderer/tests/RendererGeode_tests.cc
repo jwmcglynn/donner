@@ -31,6 +31,7 @@
 #include "donner/svg/renderer/StrokeParams.h"
 #include "donner/svg/renderer/geode/GeodeCheckerboardPipeline.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
+#include "donner/svg/renderer/geode/GeodeGpuContext.h"
 #include "donner/svg/renderer/geode/GeodePathCacheComponent.h"
 #include "donner/svg/renderer/tests/RgbaTestMatchers.h"
 #include "donner/svg/resources/ImageResource.h"
@@ -1397,11 +1398,17 @@ TEST_F(RendererGeodeTest, EmbeddedDeviceDrawPathExportsTextureSnapshot) {
   ASSERT_NE(embeddedUnique, nullptr);
 
   std::shared_ptr<geode::GeodeDevice> embedded(std::move(embeddedUnique));
-  ASSERT_TRUE(static_cast<bool>(embedded->dummyPatternTextureView()));
-  ASSERT_TRUE(static_cast<bool>(embedded->dummyPatternSampler()));
-  ASSERT_TRUE(static_cast<bool>(embedded->dummyClipMaskTextureView()));
-  ASSERT_TRUE(static_cast<bool>(embedded->dummyClipMaskSampler()));
-  ASSERT_TRUE(static_cast<bool>(embedded->identityInstanceRecordBuffer()));
+  const geode::GeodeGpuContext& gpuContext = embedded->gpuContext();
+  ASSERT_NE(gpuContext.dummyPatternTextureView, nullptr);
+  ASSERT_NE(gpuContext.dummyPatternSampler, nullptr);
+  ASSERT_NE(gpuContext.dummyClipMaskTextureView, nullptr);
+  ASSERT_NE(gpuContext.dummyClipMaskSampler, nullptr);
+  ASSERT_NE(gpuContext.identityInstanceRecordBuffer, nullptr);
+  ASSERT_TRUE(gpuContext.dummyPatternTextureView->isValid());
+  ASSERT_TRUE(gpuContext.dummyPatternSampler->isValid());
+  ASSERT_TRUE(gpuContext.dummyClipMaskTextureView->isValid());
+  ASSERT_TRUE(gpuContext.dummyClipMaskSampler->isValid());
+  ASSERT_TRUE(gpuContext.identityInstanceRecordBuffer->isValid());
 
   RendererGeode renderer(embedded);
   beginFrame(renderer);

@@ -218,9 +218,8 @@ TEST_F(GeodeWgpuAdapterDeviceTests, FamilySceneRendersAndCompletes) {
                       gpu::BlendComponent{gpu::BlendFactor::One, gpu::BlendFactor::OneMinusSrcAlpha,
                                           gpu::BlendOperation::Add}}}}}}));
 
-  // The TEMPORARY 8a escape hatches resolve migrated objects for the still-wgpu GeoEncoder.
-  EXPECT_TRUE(static_cast<bool>(adapter_->wgpuRenderPipelineOf(pipeline)));
-  EXPECT_TRUE(static_cast<bool>(adapter_->wgpuBindGroupLayoutOf(uniformLayout)));
+  // The TEMPORARY texture escape hatches resolve render targets for readback and presentation,
+  // which still run on the backend directly.
   EXPECT_TRUE(static_cast<bool>(adapter_->wgpuTextureOf(target)));
   EXPECT_TRUE(static_cast<bool>(adapter_->wgpuTextureViewOf(targetView)));
 

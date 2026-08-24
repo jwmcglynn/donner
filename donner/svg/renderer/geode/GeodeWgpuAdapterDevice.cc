@@ -297,13 +297,6 @@ gpu::Result<gpu::Texture> GeodeWgpuAdapterDevice::importExternalTexture(wgpu::Te
   return result;
 }
 
-wgpu::Buffer GeodeWgpuAdapterDevice::wgpuBufferOf(const gpu::BufferRef& buffer) const {
-  if (!buffer.isValid() || buffer.deviceId() != deviceId()) {
-    return wgpu::Buffer();
-  }
-  return GetHandle(slotBuffers_, buffer.slotIndex());
-}
-
 wgpu::Texture GeodeWgpuAdapterDevice::wgpuTextureOf(const gpu::Texture& texture) const {
   // Full base-class validation (null, device identity, AND generation), so a stale or forged
   // handle cannot bridge the slot's new occupant to raw wgpu.
@@ -325,29 +318,6 @@ wgpu::TextureView GeodeWgpuAdapterDevice::wgpuTextureViewOf(
   return GetHandle(slotTextureViews_, textureView.slotIndex());
 }
 
-wgpu::RenderPipeline GeodeWgpuAdapterDevice::wgpuRenderPipelineOf(
-    const gpu::RenderPipeline& pipeline) const {
-  if (!pipeline.isValid() || pipeline.deviceId() != deviceId()) {
-    return wgpu::RenderPipeline();
-  }
-  return GetHandle(slotRenderPipelines_, pipeline.slotIndex());
-}
-
-wgpu::BindGroupLayout GeodeWgpuAdapterDevice::wgpuBindGroupLayoutOf(
-    const gpu::BindGroupLayout& layout) const {
-  if (!layout.isValid() || layout.deviceId() != deviceId()) {
-    return wgpu::BindGroupLayout();
-  }
-  return GetHandle(slotBindGroupLayouts_, layout.slotIndex());
-}
-
-wgpu::Sampler GeodeWgpuAdapterDevice::wgpuSamplerOf(const gpu::Sampler& sampler) const {
-  if (!sampler.isValid() || sampler.deviceId() != deviceId()) {
-    return wgpu::Sampler();
-  }
-  return GetHandle(slotSamplers_, sampler.slotIndex());
-}
-
 gpu::TextureFormat GpuTextureFormatFromWgpu(wgpu::TextureFormat format) {
   switch (static_cast<WGPUTextureFormat>(format)) {
     case WGPUTextureFormat_RGBA8Unorm: return gpu::TextureFormat::RGBA8Unorm;
@@ -359,6 +329,24 @@ gpu::TextureFormat GpuTextureFormatFromWgpu(wgpu::TextureFormat format) {
                            "wgpu texture format is outside the donner::gpu supported set "
                            "(RGBA8Unorm / BGRA8Unorm / R8Unorm)");
   return gpu::TextureFormat::RGBA8Unorm;
+}
+
+gpu::TextureUsage GpuTextureUsageFromWgpu(wgpu::TextureUsage usage) {
+  const WGPUTextureUsage raw = static_cast<WGPUTextureUsage>(usage);
+  gpu::TextureUsage result = gpu::TextureUsage::None;
+  if ((raw & WGPUTextureUsage_RenderAttachment) != 0) {
+    result = result | gpu::TextureUsage::RenderAttachment;
+  }
+  if ((raw & WGPUTextureUsage_TextureBinding) != 0) {
+    result = result | gpu::TextureUsage::Sampled;
+  }
+  if ((raw & WGPUTextureUsage_CopySrc) != 0) {
+    result = result | gpu::TextureUsage::CopySrc;
+  }
+  if ((raw & WGPUTextureUsage_CopyDst) != 0) {
+    result = result | gpu::TextureUsage::CopyDst;
+  }
+  return result;
 }
 
 gpu::Status GeodeWgpuAdapterDevice::onCreateBuffer(uint32_t slotIndex,

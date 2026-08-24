@@ -329,8 +329,8 @@ TEST(GeodeDevice, SharedPipelinesReturnSameInstance) {
 /// Compile it here on the real device, unconditionally and independent of the
 /// batching switch, so both variants stay covered.
 ///
-/// The returned handle alone proves nothing: wgpu hands back a non-null error
-/// pipeline for a rejected descriptor and reports the reason through the
+/// The returned handle alone proves nothing: the backend hands back a non-null
+/// error pipeline for a rejected descriptor and reports the reason through the
 /// device's uncaptured-error callback, so the real assertion is that the
 /// callback printed nothing. The shader-emitter validation tests keep a
 /// negative control proving this marker does fire on a bad descriptor.
@@ -339,12 +339,12 @@ TEST(GeodeDevice, BatchedFillPipelineCompilesWithoutValidationErrors) {
   ASSERT_NE(device, nullptr);
 
   testing::internal::CaptureStderr();
-  const wgpu::RenderPipeline& batched = device->pipeline().batchedPipeline();
+  const gpu::RenderPipeline& batched = device->pipeline().batchedPipeline();
   const std::string errors = testing::internal::GetCapturedStderr();
 
-  EXPECT_TRUE(static_cast<bool>(batched)) << "Batched fill pipeline creation returned null.";
+  EXPECT_TRUE(batched.isValid()) << "Batched fill pipeline creation returned null.";
   EXPECT_THAT(errors, Not(HasSubstr(kWgpuUncapturedErrorMarker)))
-      << "wgpu rejected the record-reading fill pipeline:\n"
+      << "The backend rejected the record-reading fill pipeline:\n"
       << errors;
 
   // Built on first use, then cached: a second call must hand back the same

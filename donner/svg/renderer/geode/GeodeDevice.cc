@@ -246,14 +246,6 @@ struct GeodeDevice::Impl {
 
   // Borrowed wgpu aliases of the shared bind-slot resources below, for the call sites that
   // still build wgpu bind groups. Non-owning: the runtime handles own the backing.
-  wgpu::Texture dummyPatternTexture;
-  wgpu::TextureView dummyPatternTextureView;
-  wgpu::Sampler dummyPatternSampler;
-  wgpu::Texture dummyClipMaskTexture;
-  wgpu::TextureView dummyClipMaskTextureView;
-  wgpu::Sampler dummyClipMaskSampler;
-  wgpu::Buffer dummyPaintDataBuffer;
-  wgpu::Buffer identityInstanceRecordBuffer;
 
   // TEMPORARY design-0053 Phase 1 adapter (see GeodeWgpuAdapterDevice.h for the removal
   // gates). Declared ABOVE the pipelines: the pipeline classes hold donner::gpu RAII handles
@@ -750,31 +742,6 @@ std::unique_ptr<GeodeDevice> GeodeDevice::CreateHeadless(wgpu::TextureFormat tex
 #endif
 }
 
-const wgpu::Texture& GeodeDevice::dummyPatternTexture() const {
-  return impl_->dummyPatternTexture;
-}
-const wgpu::TextureView& GeodeDevice::dummyPatternTextureView() const {
-  return impl_->dummyPatternTextureView;
-}
-const wgpu::Sampler& GeodeDevice::dummyPatternSampler() const {
-  return impl_->dummyPatternSampler;
-}
-const wgpu::Texture& GeodeDevice::dummyClipMaskTexture() const {
-  return impl_->dummyClipMaskTexture;
-}
-const wgpu::TextureView& GeodeDevice::dummyClipMaskTextureView() const {
-  return impl_->dummyClipMaskTextureView;
-}
-const wgpu::Sampler& GeodeDevice::dummyClipMaskSampler() const {
-  return impl_->dummyClipMaskSampler;
-}
-const wgpu::Buffer& GeodeDevice::identityInstanceRecordBuffer() const {
-  return impl_->identityInstanceRecordBuffer;
-}
-const wgpu::Buffer& GeodeDevice::dummyPaintDataBuffer() const {
-  return impl_->dummyPaintDataBuffer;
-}
-
 GeodePipeline& GeodeDevice::pipeline() const {
   return *impl_->pipeline;
 }
@@ -1078,19 +1045,6 @@ void GeodeDevice::initSharedBindSlotResources() {
             "GeodeDeviceDummyPaintData writeBuffer");
   }
 
-  // Borrowed wgpu aliases for the call sites that still build wgpu bind groups.
-  impl_->dummyPatternTexture = adapterDevice.wgpuTextureOf(impl_->gpuDummyPatternTexture);
-  impl_->dummyPatternTextureView =
-      adapterDevice.wgpuTextureViewOf(impl_->gpuDummyPatternTextureView);
-  impl_->dummyPatternSampler = adapterDevice.wgpuSamplerOf(impl_->gpuDummyPatternSampler);
-  impl_->dummyClipMaskTexture = adapterDevice.wgpuTextureOf(impl_->gpuDummyClipMaskTexture);
-  impl_->dummyClipMaskTextureView =
-      adapterDevice.wgpuTextureViewOf(impl_->gpuDummyClipMaskTextureView);
-  impl_->dummyClipMaskSampler = adapterDevice.wgpuSamplerOf(impl_->gpuDummyClipMaskSampler);
-  impl_->identityInstanceRecordBuffer =
-      adapterDevice.wgpuBufferOf(impl_->gpuIdentityInstanceRecordBuffer);
-  impl_->dummyPaintDataBuffer = adapterDevice.wgpuBufferOf(impl_->gpuDummyPaintDataBuffer);
-
   impl_->gpuContext = GeodeGpuContext{};
   impl_->gpuContext.gpuDevice = &adapterDevice;
   impl_->gpuContext.geodeDevice = this;
@@ -1114,9 +1068,6 @@ void GeodeGpuContext::countTexture() const {
 }
 void GeodeGpuContext::countBindGroup() const {
   if (geodeDevice != nullptr) geodeDevice->countBindGroup();
-}
-void GeodeGpuContext::countDraw() const {
-  if (geodeDevice != nullptr) geodeDevice->countDraw();
 }
 void GeodeGpuContext::countPipelineSwitch() const {
   if (geodeDevice != nullptr) geodeDevice->countPipelineSwitch();
@@ -1157,10 +1108,10 @@ void GeodeDevice::initSharedPipelines() {
   impl_->filterEngine = std::make_unique<GeodeFilterEngine>(*this, /*verbose=*/false);
 }
 
-wgpu::BindGroup GeodeDevice::findSceneBatchBindGroup(const SceneBatchBindGroupKey& key) {
+const gpu::BindGroup* GeodeDevice::findSceneBatchBindGroup(const SceneBatchBindGroupKey& key) {
   const auto it = sceneBatchBindGroups_.find(key);
   if (it == sceneBatchBindGroups_.end()) {
-    return wgpu::BindGroup{};
+    return nullptr;
   }
   // Refresh recency: move the key to the back of the eviction order so the
   // cap evicts least-recently-USED. One linear scan of at most
@@ -1172,11 +1123,11 @@ wgpu::BindGroup GeodeDevice::findSceneBatchBindGroup(const SceneBatchBindGroupKe
     sceneBatchBindGroupOrder_.erase(orderIt);
     sceneBatchBindGroupOrder_.push_back(key);
   }
-  return it->second.get();
+  return &it->second;
 }
 
-void GeodeDevice::storeSceneBatchBindGroup(const SceneBatchBindGroupKey& key,
-                                           wgpu::BindGroup group) {
+const gpu::BindGroup& GeodeDevice::storeSceneBatchBindGroup(const SceneBatchBindGroupKey& key,
+                                                            gpu::BindGroup group) {
   // The deque holds one entry per live map key, in insertion order: a key is
   // pushed only when it was newly inserted, and popped only together with the
   // erase of that same key. Nothing else touches either container, so the two
@@ -1184,14 +1135,21 @@ void GeodeDevice::storeSceneBatchBindGroup(const SceneBatchBindGroupKey& key,
   assert(sceneBatchBindGroupOrder_.size() == sceneBatchBindGroups_.size());
   while (sceneBatchBindGroups_.size() >= kSceneBatchBindGroupCacheCap &&
          !sceneBatchBindGroupOrder_.empty()) {
-    sceneBatchBindGroups_.erase(sceneBatchBindGroupOrder_.front());
+    // Hand the evicted group to the frame-boundary destroy pass rather than dropping it here:
+    // draws recorded earlier in this frame may still name it, and they are only replayed to the
+    // backend later.
+    const auto evicted = sceneBatchBindGroups_.find(sceneBatchBindGroupOrder_.front());
+    if (evicted != sceneBatchBindGroups_.end()) {
+      deferDestroy(std::move(evicted->second));
+      sceneBatchBindGroups_.erase(evicted);
+    }
     sceneBatchBindGroupOrder_.pop_front();
   }
-  if (sceneBatchBindGroups_
-          .insert_or_assign(key, ScopedWgpuHandle<wgpu::BindGroup>(std::move(group)))
-          .second) {
+  const auto inserted = sceneBatchBindGroups_.insert_or_assign(key, std::move(group));
+  if (inserted.second) {
     sceneBatchBindGroupOrder_.push_back(key);
   }
+  return inserted.first->second;
 }
 
 void GeodeDevice::deferDestroy(wgpu::Buffer buffer) {
@@ -1206,9 +1164,16 @@ void GeodeDevice::deferDestroy(wgpu::Texture texture) {
   }
 }
 
+void GeodeDevice::deferDestroy(gpu::BindGroup bindGroup) {
+  if (bindGroup.isValid()) {
+    pendingBindGroups_.push_back(std::move(bindGroup));
+  }
+}
+
 void GeodeDevice::drainDeferredDestroys() {
   pendingBuffers_.clear();
   pendingTextures_.clear();
+  pendingBindGroups_.clear();
 }
 
 }  // namespace donner::geode

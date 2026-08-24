@@ -124,15 +124,6 @@ public:
   void notifyHostSubmitted();
 
   /**
-   * TEMPORARY escape hatch, deleted once every Geode bind group is built through the runtime:
-   * returns the wgpu buffer behind \p buffer, or a null handle if the handle does not name a
-   * live buffer of this adapter. Borrowed; the adapter retains ownership.
-   *
-   * @param buffer Live buffer handle or reference of this adapter.
-   */
-  wgpu::Buffer wgpuBufferOf(const gpu::BufferRef& buffer) const;
-
-  /**
    * TEMPORARY escape hatch (deleted in packet 11, readback/presentation): returns the wgpu
    * texture behind \p texture, or a null handle if the handle does not name a live texture of
    * this adapter. Borrowed; the adapter (or the external owner) retains ownership.
@@ -148,34 +139,6 @@ public:
    * @param textureView Live texture view handle of this adapter.
    */
   wgpu::TextureView wgpuTextureViewOf(const gpu::TextureView& textureView) const;
-
-  /**
-   * TEMPORARY escape hatch for 8a only - deleted in packet 8b when GeoEncoder records through
-   * \c donner::gpu::CommandEncoder: returns the wgpu render pipeline behind \p pipeline so the
-   * still-wgpu GeoEncoder can bind pipelines whose creation already migrated. Borrowed.
-   *
-   * @param pipeline Live render pipeline handle of this adapter.
-   */
-  wgpu::RenderPipeline wgpuRenderPipelineOf(const gpu::RenderPipeline& pipeline) const;
-
-  /**
-   * TEMPORARY escape hatch for 8a only - deleted in packet 8b when GeoEncoder's bind-group
-   * creation migrates: returns the wgpu bind group layout behind \p layout so the still-wgpu
-   * GeoEncoder can create its per-draw bind groups against migrated layouts. Borrowed.
-   *
-   * @param layout Live bind group layout handle of this adapter.
-   */
-  wgpu::BindGroupLayout wgpuBindGroupLayoutOf(const gpu::BindGroupLayout& layout) const;
-
-  /**
-   * TEMPORARY escape hatch for 8a only - deleted in packet 8b when GeoEncoder's and
-   * GeodeTextureEncoder's bind-group creation migrates: returns the wgpu sampler behind
-   * \p sampler so still-wgpu bind groups can reference migrated samplers (e.g. the image-blit
-   * pipeline's shared samplers). Borrowed.
-   *
-   * @param sampler Live sampler handle of this adapter.
-   */
-  wgpu::Sampler wgpuSamplerOf(const gpu::Sampler& sampler) const;
 
 protected:
   gpu::Status onCreateBuffer(uint32_t slotIndex, const gpu::BufferDescriptor& descriptor) override;
@@ -313,5 +276,14 @@ private:
  * @param format wgpu texture format to map.
  */
 gpu::TextureFormat GpuTextureFormatFromWgpu(wgpu::TextureFormat format);
+
+/**
+ * Maps wgpu texture usage flags onto the \c donner::gpu usage flags. Flags with no runtime
+ * equivalent are dropped, so the result describes exactly the capabilities the runtime can
+ * express for the texture.
+ *
+ * @param usage wgpu usage flags to map.
+ */
+gpu::TextureUsage GpuTextureUsageFromWgpu(wgpu::TextureUsage usage);
 
 }  // namespace donner::geode

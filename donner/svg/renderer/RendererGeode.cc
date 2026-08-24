@@ -1352,6 +1352,148 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   // encoder in the slot is the one endFrame submits.
   geode::ScopedWgpuHandle<wgpu::CommandEncoder> frameCommandEncoder;
 
+  // Runtime command encoder for the frame. It records into `frameCommandEncoder`
+  // rather than owning a command buffer of its own: filter passes are still
+  // recorded directly on the backend encoder, and pass ordering only holds if
+  // every pass appends to the same command buffer. Recreated alongside
+  // `frameCommandEncoder` whenever that slot is replaced.
+  //
+  // A runtime encoder is single-use: what it records reaches the backend encoder only when it is
+  // finished and submitted. Because filter passes are recorded on the backend encoder directly,
+  // that replay has to happen at each point in the frame where the two interleave, so the frame
+  // holds a succession of runtime encoders rather than one. Every encoder stays alive until the
+  // frame ends: a finished one records nothing more, but the GeoEncoders that recorded through it
+  // still hold a reference to it.
+  std::deque<std::unique_ptr<gpu::CommandEncoder>> frameGpuEncoders;
+  gpu::CommandEncoder* frameGpuEncoder = nullptr;
+
+  // Runtime handles naming render targets this frame's encoders draw into or
+  // sample. The textures themselves belong to the recycling pool or to the
+  // embedding host; these handles only name them, so they are dropped at the
+  // frame boundary, before a recycled texture could be reached through a stale
+  // handle.
+  std::deque<gpu::Texture> frameImportedTextures;
+  std::deque<gpu::TextureView> frameImportedTextureViews;
+
+  /// Names a backend-owned texture as a runtime texture handle valid for the rest of the frame.
+  /// The extent comes from the texture itself, so a caller can never describe it wrongly.
+  const gpu::Texture& importTexture(const wgpu::Texture& texture, wgpu::TextureFormat format,
+                                    wgpu::TextureUsage usage) {
+    gpu::Result<gpu::Texture> imported = device->adapterDevice().importExternalTexture(
+        texture, gpu::Extent2d{texture.getWidth(), texture.getHeight()},
+        geode::GpuTextureFormatFromWgpu(format), geode::GpuTextureUsageFromWgpu(usage));
+    UTILS_RELEASE_ASSERT_MSG(imported.hasResult(), "Failed to name a render target as a texture");
+    frameImportedTextures.push_back(std::move(imported).result());
+    return frameImportedTextures.back();
+  }
+
+  /// Opens a runtime view over an already-named texture, valid for the rest of the frame. Views
+  /// cover the whole texture, so this addresses exactly the texels any other full-texture view of
+  /// the same texture would.
+  const gpu::TextureView& importTextureView(const gpu::Texture& texture) {
+    gpu::Result<gpu::TextureView> view = device->adapterDevice().createTextureView(
+        texture, gpu::TextureViewDescriptor{"RendererGeodeImportedView"});
+    UTILS_RELEASE_ASSERT_MSG(view.hasResult(), "Failed to open a view of a render target");
+    frameImportedTextureViews.push_back(std::move(view).result());
+    return frameImportedTextureViews.back();
+  }
+
+  /// Names a filter-engine result texture. Filter intermediates are storage-writable, a
+  /// capability the runtime does not model; what survives the mapping is exactly what the
+  /// compositing draw needs, which is the ability to sample it.
+  const gpu::Texture& importFilterResult(const wgpu::Texture& texture) {
+    return importTexture(texture, kFilterIntermediateFormat,
+                         wgpu::TextureUsage::TextureBinding | wgpu::TextureUsage::CopySrc);
+  }
+
+  /// Names a pooled texture as a runtime handle, taking its capabilities from the descriptor it
+  /// was created from.
+  const gpu::Texture& importTexture(const wgpu::Texture& texture,
+                                    const wgpu::TextureDescriptor& desc) {
+    return importTexture(texture, desc.format, desc.usage);
+  }
+
+  /// Names the active render target, which always carries render-attachment, sampled and
+  /// copy-source capability so layers can be composited and read back.
+  const gpu::Texture& importTarget(const wgpu::Texture& texture) {
+    return importTexture(texture, textureFormat,
+                         wgpu::TextureUsage::RenderAttachment | wgpu::TextureUsage::TextureBinding |
+                             wgpu::TextureUsage::CopySrc);
+  }
+
+  /// Extent of the active render target, in texels, read from the target itself.
+  gpu::Extent2d targetExtent() const {
+    return gpu::Extent2d{target.getWidth(), target.getHeight()};
+  }
+
+  /// Extent of a backend texture, in texels, as the runtime spells it.
+  static gpu::Extent2d extentOf(const wgpu::Texture& texture) {
+    return gpu::Extent2d{texture.getWidth(), texture.getHeight()};
+  }
+
+  /// Point the runtime device at the current frame command encoder and open a runtime encoder
+  /// that records into it. Returns false when the runtime refuses the encoder.
+  [[nodiscard]] bool openFrameGpuEncoder() {
+    device->adapterDevice().setHostCommandEncoder(frameCommandEncoder.get());
+    gpu::Result<std::unique_ptr<gpu::CommandEncoder>> created =
+        device->adapterDevice().createCommandEncoder();
+    if (!created.hasResult()) {
+      return false;
+    }
+    frameGpuEncoders.push_back(std::move(created).result());
+    frameGpuEncoder = frameGpuEncoders.back().get();
+    return frameGpuEncoder != nullptr;
+  }
+
+  /// Replay what the runtime encoder has recorded into the frame command encoder and open a fresh
+  /// one. Call before recording on the frame command encoder directly and before finishing it, so
+  /// the two streams reach the backend in the order they were written.
+  [[nodiscard]] bool flushFrameGpuEncoder() {
+    if (frameGpuEncoder == nullptr) {
+      return true;
+    }
+    gpu::Result<gpu::CommandBuffer> commandBuffer = frameGpuEncoder->finish();
+    if (!commandBuffer.hasError()) {
+      gpu::Result<uint64_t> submitted =
+          device->adapterDevice().submit(std::move(commandBuffer).result());
+      if (submitted.hasError()) {
+        std::fprintf(stderr, "[Geode] replaying the frame's recorded draws failed: %s\n",
+                     submitted.error().message.c_str());
+        return false;
+      }
+    } else {
+      std::fprintf(stderr, "[Geode] closing the frame's recorded draws failed: %s\n",
+                   commandBuffer.error().message.c_str());
+      return false;
+    }
+    return openFrameGpuEncoder();
+  }
+
+  /// Re-point the runtime at the frame command encoder after code that may have replaced it.
+  ///
+  /// The filter engine finishes and submits the encoder in this slot mid-frame to bound
+  /// command-buffer size for large filter graphs. Anything the runtime replayed into the old
+  /// encoder is on the queue once that happens, and the runtime has to be told, because it holds
+  /// completion back until the encoder it replayed into reports its submit.
+  ///
+  /// @param before The encoder the slot held before the call that may have replaced it.
+  void rebindHostCommandEncoder(WGPUCommandEncoder before) {
+    if (static_cast<WGPUCommandEncoder>(frameCommandEncoder.get()) == before) {
+      return;
+    }
+    device->adapterDevice().notifyHostSubmitted();
+    device->adapterDevice().setHostCommandEncoder(frameCommandEncoder.get());
+  }
+
+  /// Close the runtime encoder after the frame command encoder it recorded into has been
+  /// submitted, so the runtime can retire the work it recorded.
+  void closeFrameGpuEncoderAfterSubmit() {
+    frameGpuEncoders.clear();
+    frameGpuEncoder = nullptr;
+    device->adapterDevice().notifyHostSubmitted();
+    device->adapterDevice().clearHostCommandEncoder();
+  }
+
   std::unique_ptr<geode::GeoEncoder> encoder;
   std::vector<std::unique_ptr<geode::GeoEncoder>> frameFinishedEncoders;
 
@@ -1366,6 +1508,10 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
       return;
     }
     encoder->finish();
+    // Replay before the encoder's recorded draws can outlive what they name: the resources a
+    // draw references stay alive only as long as whoever recorded it keeps them, and a
+    // subsequent encoder is free to re-upload over them.
+    (void)flushFrameGpuEncoder();
     retireFinishedEncoder(std::move(encoder));
   }
 
@@ -1400,6 +1546,9 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   /// A completed pattern tile ready to be sampled as fill or stroke paint.
   struct PatternPaintSlot {
     geode::ScopedWgpuHandle<wgpu::Texture> tile;
+    /// Runtime alias for `tile`, owned by the frame's import list. Pattern slots do not outlive
+    /// the frame that recorded them, so this never outlives the alias it points at.
+    const gpu::Texture* tileHandle = nullptr;
     Vector2d rasterTileSize;
     Transform2d targetFromRaster;
   };
@@ -1625,12 +1774,16 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     }
 
     retireActiveEncoder();
+    if (!flushFrameGpuEncoder()) {
+      return false;
+    }
     geode::ScopedWgpuHandle<wgpu::CommandBuffer> commandBuffer(frameCommandEncoder.get().finish());
     if (!commandBuffer) {
       return false;
     }
     device->queue().submit(1, &commandBuffer.get());
     device->countSubmit();
+    closeFrameGpuEncoderAfterSubmit();
 
     frameFinishedEncoders.clear();
     framePendingTextureViewReleases.clear();
@@ -1642,8 +1795,12 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     if (!frameCommandEncoder) {
       return false;
     }
-    encoder = std::make_unique<geode::GeoEncoder>(
-        *device, *pipeline, *gradientPipeline, *imagePipeline, target, frameCommandEncoder.get());
+    if (!openFrameGpuEncoder()) {
+      return false;
+    }
+    encoder =
+        std::make_unique<geode::GeoEncoder>(*device, *pipeline, *gradientPipeline, *imagePipeline,
+                                            importTarget(target), targetExtent(), *frameGpuEncoder);
     configurePathEncoder(*encoder);
     encoder->setLoadPreserve();
     updateEncoderScissor();
@@ -1756,6 +1913,10 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     /// still reference them after `popClip`.
     std::vector<geode::ScopedWgpuHandle<wgpu::TextureView>> maskLayerViews;
     wgpu::TextureView maskResolveView;
+    /// Runtime aliases for `maskResolveTexture` / `maskResolveView`, owned by the frame's import
+    /// lists. Null exactly when `maskResolveView` is null.
+    const gpu::Texture* maskResolveTextureHandle = nullptr;
+    const gpu::TextureView* maskResolveViewHandle = nullptr;
     /// Paired (texture, descriptor) entries. Every clip-mask texture
     /// allocated by `pushClip` (across all nested layers) lives here
     /// until `popClip` hands them back to the texture pool.
@@ -1870,9 +2031,9 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     clipStack.clear();
 
     target = layerTexture;
-    auto newEncoder =
-        std::make_unique<geode::GeoEncoder>(*device, *pipeline, *gradientPipeline, *imagePipeline,
-                                            layerTexture, frameCommandEncoder.get());
+    auto newEncoder = std::make_unique<geode::GeoEncoder>(
+        *device, *pipeline, *gradientPipeline, *imagePipeline,
+        importTexture(layerTexture, textureDesc), extentOf(layerTexture), *frameGpuEncoder);
     configurePathEncoder(*newEncoder, /*collectGeometry=*/true, admission.bufferOffsetX,
                          admission.bufferOffsetY);
     newEncoder->clear(css::RGBA(0, 0, 0, 0));
@@ -1925,11 +2086,12 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
                                                                -geometry->paddedRegion.topLeft.y) *
                                         Transform2d::Scale(geometry->scaleX, geometry->scaleY);
     geode::GeoEncoder resampleEncoder(*device, *pipeline, *gradientPipeline, *imagePipeline,
-                                      localTexture, frameCommandEncoder.get());
+                                      importTexture(localTexture, localDesc),
+                                      extentOf(localTexture), *frameGpuEncoder);
     configureEncoder(resampleEncoder);
     resampleEncoder.setTransform(localFromDevice);
     resampleEncoder.drawTexture(
-        frame.layerTexture,
+        importTexture(frame.layerTexture, frame.layerDesc),
         Box2d::FromXYWH(0.0, 0.0, static_cast<double>(frame.layerDesc.size.width),
                         static_cast<double>(frame.layerDesc.size.height)),
         kWholeTextureUv, 1.0, /*pixelated=*/false, /*sourceIsPremultiplied=*/true);
@@ -1940,24 +2102,30 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     const Box2d localFilterRegion(Vector2d(geometry->blurPadding, geometry->blurPadding),
                                   Vector2d(geometry->blurPadding + frame.filterRegion.width(),
                                            geometry->blurPadding + frame.filterRegion.height()));
+    if (!flushFrameGpuEncoder()) {
+      return false;
+    }
+    const WGPUCommandEncoder encoderBeforeFilter =
+        static_cast<WGPUCommandEncoder>(frameCommandEncoder.get());
     wgpu::Texture localFiltered =
         filterEngine->execute(frame.filterGraph, localTexture, localFilterRegion,
                               localDeviceFromFilter, *this, frameCommandEncoder);
+    rebindHostCommandEncoder(encoderBeforeFilter);
 
     const Transform2d deviceFromLocal =
         Transform2d::Scale(1.0 / geometry->scaleX, 1.0 / geometry->scaleY) *
         Transform2d::Translate(geometry->paddedRegion.topLeft.x, geometry->paddedRegion.topLeft.y) *
         frame.deviceFromFilter;
     target = frame.savedTarget;
-    auto compositeEncoder =
-        std::make_unique<geode::GeoEncoder>(*device, *pipeline, *gradientPipeline, *imagePipeline,
-                                            frame.savedTarget, frameCommandEncoder.get());
+    auto compositeEncoder = std::make_unique<geode::GeoEncoder>(
+        *device, *pipeline, *gradientPipeline, *imagePipeline, importTarget(frame.savedTarget),
+        targetExtent(), *frameGpuEncoder);
     configurePathEncoder(*compositeEncoder);
     compositeEncoder->setLoadPreserve();
     encoder = std::move(compositeEncoder);
     updateEncoderScissor();
     encoder->setTransform(deviceFromLocal);
-    encoder->drawTexture(localFiltered,
+    encoder->drawTexture(importFilterResult(localFiltered),
                          Box2d::FromXYWH(0.0, 0.0, static_cast<double>(geometry->width),
                                          static_cast<double>(geometry->height)),
                          kWholeTextureUv, 1.0, /*pixelated=*/false, /*sourceIsPremultiplied=*/true);
@@ -2023,7 +2191,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
       // destroyed. The 1-arg setClipMask overload accidentally left the
       // view dangling across `popClip`→`pop_back`→destructor →
       // `updateEncoderScissor` sequences; see issue #551.
-      encoder->setClipMask(maskEntry->maskResolveTexture, maskEntry->maskResolveView);
+      encoder->setClipMask(*maskEntry->maskResolveTextureHandle, *maskEntry->maskResolveViewHandle);
     } else {
       encoder->clearClipMask();
     }
@@ -2083,7 +2251,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   geode::GeoEncoder::PatternPaint buildPatternPaint(const PatternPaintSlot& slot,
                                                     double opacity) const {
     geode::GeoEncoder::PatternPaint p;
-    p.tile = slot.tile.get();
+    p.tile = slot.tileHandle;
     p.tileSize = slot.rasterTileSize;
     p.patternFromPath = slot.targetFromRaster.inverse();
     p.opacity = opacity;
@@ -2409,8 +2577,9 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
           .closePath();
     }
 
-    encoder = std::make_unique<geode::GeoEncoder>(
-        *device, *pipeline, *gradientPipeline, *imagePipeline, target, frameCommandEncoder.get());
+    encoder =
+        std::make_unique<geode::GeoEncoder>(*device, *pipeline, *gradientPipeline, *imagePipeline,
+                                            importTarget(target), targetExtent(), *frameGpuEncoder);
     configureEncoder(*encoder);
     encoder->setLoadPreserve();
     encoder->setTransform(Transform2d());
@@ -4183,6 +4352,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
       entry.maskLayerTextures.clear();
       entry.maskResolveTexture = wgpu::Texture();
       entry.maskResolveView = wgpu::TextureView();
+      entry.maskResolveTextureHandle = nullptr;
+      entry.maskResolveViewHandle = nullptr;
     }
     entries.clear();
   }
@@ -4301,8 +4472,10 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     wgpu::CommandEncoderDescriptor commandEncoderDesc = {};
     commandEncoderDesc.label = wgpuLabel("RendererGeodeFrameCE");
     frameCommandEncoder.reset(device->device().createCommandEncoder(commandEncoderDesc));
-    encoder = std::make_unique<geode::GeoEncoder>(
-        *device, *pipeline, *gradientPipeline, *imagePipeline, target, frameCommandEncoder.get());
+    UTILS_RELEASE_ASSERT_MSG(openFrameGpuEncoder(), "Failed to open the frame command encoder");
+    encoder =
+        std::make_unique<geode::GeoEncoder>(*device, *pipeline, *gradientPipeline, *imagePipeline,
+                                            importTarget(target), targetExtent(), *frameGpuEncoder);
     configurePathEncoder(*encoder);
     if (preserveTargetOnBeginFrame) {
       encoder->setLoadPreserve();
@@ -4359,6 +4532,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     }
     patternFillPaint.reset();
     patternStrokePaint.reset();
+    frameImportedTextureViews.clear();
+    frameImportedTextures.clear();
 
     releaseTextureBacking(ownedTarget);
     ownedTarget.reset();
@@ -4786,14 +4961,21 @@ void RendererGeode::endFrame() {
   // this one submit, all recorded render passes (base + every pushed
   // layer / filter / mask) execute on the GPU in program order.
   if (impl_->frameCommandEncoder) {
+    UTILS_RELEASE_ASSERT_MSG(impl_->flushFrameGpuEncoder(),
+                             "Failed to replay the frame's recorded draws");
     {
       geode::ScopedWgpuHandle<wgpu::CommandBuffer> cmdBuf(
           impl_->frameCommandEncoder.get().finish());
       impl_->device->queue().submit(1, &cmdBuf.get());
       impl_->device->countSubmit();
     }
+    impl_->closeFrameGpuEncoderAfterSubmit();
     impl_->frameCommandEncoder.reset();
     impl_->frameFinishedEncoders.clear();
+    // Every encoder that could still reach these aliases is gone, and the textures they name are
+    // about to be recycled, so drop them before any of them can be handed out again.
+    impl_->frameImportedTextureViews.clear();
+    impl_->frameImportedTextures.clear();
   }
 
   // The frame's work is submitted, so nothing it recorded can still be waiting
@@ -4960,10 +5142,16 @@ void RendererGeode::pushClip(const ResolvedClip& clip) {
     // because `updateEncoderScissor` only binds the topmost entry.
     wgpu::Texture nestedMaskTexture;
     wgpu::TextureView nestedMaskView;
+    // Runtime aliases tracking `nestedMaskTexture` / `nestedMaskView`, owned by the frame's
+    // import lists.
+    const gpu::Texture* nestedMaskTextureHandle = nullptr;
+    const gpu::TextureView* nestedMaskViewHandle = nullptr;
     for (auto rit = impl_->clipStack.rbegin(); rit != impl_->clipStack.rend(); ++rit) {
       if (rit->maskResolveView) {
         nestedMaskTexture = rit->maskResolveTexture;
         nestedMaskView = rit->maskResolveView;
+        nestedMaskTextureHandle = rit->maskResolveTextureHandle;
+        nestedMaskViewHandle = rit->maskResolveViewHandle;
         break;
       }
     }
@@ -4981,12 +5169,13 @@ void RendererGeode::pushClip(const ResolvedClip& clip) {
       // Bind the previously-rendered nested mask (if any) so this
       // layer's fragment shader samples it and intersects.
       if (nestedMaskView) {
-        impl_->encoder->setClipMask(nestedMaskTexture, nestedMaskView);
+        impl_->encoder->setClipMask(*nestedMaskTextureHandle, *nestedMaskViewHandle);
       } else {
         impl_->encoder->clearClipMask();
       }
 
-      impl_->encoder->beginMaskPass(maskTexture);
+      const gpu::Texture& maskTextureHandle = impl_->importTexture(maskTexture, maskDesc);
+      impl_->encoder->beginMaskPass(maskTextureHandle);
       for (size_t s = it->begin; s < it->end; ++s) {
         const ClipPathShape& shape = clip.clipPaths[s];
         const Transform2d composed =
@@ -4997,6 +5186,8 @@ void RendererGeode::pushClip(const ResolvedClip& clip) {
       impl_->encoder->endMaskPass();
 
       nestedMaskTexture = maskTexture;
+      nestedMaskTextureHandle = &maskTextureHandle;
+      nestedMaskViewHandle = &impl_->importTextureView(maskTextureHandle);
       geode::ScopedWgpuHandle<wgpu::TextureView> maskView(maskTexture.createView());
       nestedMaskView = maskView.get();
       if (maskView) {
@@ -5012,6 +5203,8 @@ void RendererGeode::pushClip(const ResolvedClip& clip) {
       // main draws sample as their clip.
       entry.maskResolveTexture = nestedMaskTexture;
       entry.maskResolveView = nestedMaskView;
+      entry.maskResolveTextureHandle = nestedMaskTextureHandle;
+      entry.maskResolveViewHandle = nestedMaskViewHandle;
     }
 
     // Clear the encoder's internal clip-mask state - the next main
@@ -5098,7 +5291,8 @@ void RendererGeode::pushIsolatedLayer(double opacity, MixBlendMode blendMode) {
   impl_->target = layerTexture;
   auto newEncoder = std::make_unique<geode::GeoEncoder>(
       *impl_->device, *impl_->pipeline, *impl_->gradientPipeline, *impl_->imagePipeline,
-      layerTexture, impl_->frameCommandEncoder.get());
+      impl_->importTexture(layerTexture, td), Impl::extentOf(layerTexture),
+      *impl_->frameGpuEncoder);
   impl_->configurePathEncoder(*newEncoder);
   newEncoder->clear(css::RGBA(0, 0, 0, 0));
   impl_->encoder = std::move(newEncoder);
@@ -5161,6 +5355,9 @@ void RendererGeode::popIsolatedLayer() {
       dst.texture = snapshot;
       const wgpu::Extent3D extent = {static_cast<uint32_t>(impl_->pixelWidth),
                                      static_cast<uint32_t>(impl_->pixelHeight), 1u};
+      // Everything recorded before this point has already been replayed into the frame command
+      // encoder by the encoder retire above, so the copy lands after those draws and before the
+      // composite recorded below.
       impl_->frameCommandEncoder.get().copyTextureToTexture(src, dst, extent);
 
       // Open a fresh parent encoder that PRESERVES the target's existing
@@ -5179,13 +5376,15 @@ void RendererGeode::popIsolatedLayer() {
       // safe.
       auto newEncoder = std::make_unique<geode::GeoEncoder>(
           *impl_->device, *impl_->pipeline, *impl_->gradientPipeline, *impl_->imagePipeline,
-          frame.savedTarget, impl_->frameCommandEncoder.get());
+          impl_->importTarget(frame.savedTarget), impl_->targetExtent(), *impl_->frameGpuEncoder);
       impl_->configurePathEncoder(*newEncoder);
       newEncoder->setLoadPreserve();
       impl_->encoder = std::move(newEncoder);
       impl_->updateEncoderScissor();
-      impl_->encoder->blitFullTargetBlended(frame.layerTexture, snapshot,
-                                            static_cast<uint32_t>(frame.blendMode), frame.opacity);
+      impl_->encoder->blitFullTargetBlended(
+          impl_->importTexture(frame.layerTexture, frame.layerDesc),
+          impl_->importTexture(snapshot, snapDesc), static_cast<uint32_t>(frame.blendMode),
+          frame.opacity);
       // Defer release: `blitFullTargetBlended` recorded samples from
       // both `frame.layerTexture` and `snapshot` into the shared
       // frameCommandEncoder; they must stay alive until that buffer
@@ -5203,12 +5402,13 @@ void RendererGeode::popIsolatedLayer() {
   // texture across the target with the stored opacity as compositing alpha.
   auto newEncoder = std::make_unique<geode::GeoEncoder>(
       *impl_->device, *impl_->pipeline, *impl_->gradientPipeline, *impl_->imagePipeline,
-      frame.savedTarget, impl_->frameCommandEncoder.get());
+      impl_->importTarget(frame.savedTarget), impl_->targetExtent(), *impl_->frameGpuEncoder);
   impl_->configurePathEncoder(*newEncoder);
   newEncoder->setLoadPreserve();
   impl_->encoder = std::move(newEncoder);
   impl_->updateEncoderScissor();
-  impl_->encoder->blitFullTarget(frame.layerTexture, frame.opacity);
+  impl_->encoder->blitFullTarget(impl_->importTexture(frame.layerTexture, frame.layerDesc),
+                                 frame.opacity);
   // Same deferred-release rationale as the blend-mode branch above.
   impl_->releaseTextureAtFrameEnd(std::move(frame.layerTexture), frame.layerDesc);
 }
@@ -5299,9 +5499,14 @@ void RendererGeode::popFilterLayer() {
   } else if (impl_->filterEngine && !frame.filterGraph.empty() &&
              static_cast<std::uint64_t>(frame.layerDesc.size.width) * frame.layerDesc.size.height <=
                  components::kMaximumFilterSurfacePixels) {
+    UTILS_RELEASE_ASSERT_MSG(impl_->flushFrameGpuEncoder(),
+                             "Failed to replay recorded draws before the filter passes");
+    const WGPUCommandEncoder encoderBeforeFilter =
+        static_cast<WGPUCommandEncoder>(impl_->frameCommandEncoder.get());
     filteredTexture =
         impl_->filterEngine->execute(frame.filterGraph, frame.layerTexture, frame.filterRegion,
                                      bufferDeviceFromFilter, *impl_, impl_->frameCommandEncoder);
+    impl_->rebindHostCommandEncoder(encoderBeforeFilter);
   }
 
   // Restore outer target and create a fresh encoder that preserves its
@@ -5310,7 +5515,7 @@ void RendererGeode::popFilterLayer() {
   impl_->target = frame.savedTarget;
   auto newEncoder = std::make_unique<geode::GeoEncoder>(
       *impl_->device, *impl_->pipeline, *impl_->gradientPipeline, *impl_->imagePipeline,
-      frame.savedTarget, impl_->frameCommandEncoder.get());
+      impl_->importTarget(frame.savedTarget), impl_->targetExtent(), *impl_->frameGpuEncoder);
   impl_->configurePathEncoder(*newEncoder);
   newEncoder->setLoadPreserve();
   impl_->encoder = std::move(newEncoder);
@@ -5344,9 +5549,12 @@ void RendererGeode::popFilterLayer() {
       wgpu::TexelCopyTextureInfo dst = {};
       dst.texture = viewportTexture;
       const wgpu::Extent3D extent = {vpW, vpH, 1u};
+      // Everything recorded before this point has already been replayed into the frame command
+      // encoder by the encoder retire above, so the copy lands after those draws and before the
+      // composite recorded below.
       impl_->frameCommandEncoder.get().copyTextureToTexture(src, dst, extent);
 
-      impl_->encoder->blitFullTarget(viewportTexture, 1.0);
+      impl_->encoder->blitFullTarget(impl_->importTexture(viewportTexture, vpDesc), 1.0);
       impl_->releaseTextureAtFrameEnd(std::move(viewportTexture), vpDesc);
     }
   } else {
@@ -5355,7 +5563,7 @@ void RendererGeode::popFilterLayer() {
     // coordinates, not pixel-space; we'd need to transform by the current
     // CTM snapshot before using it as a scissor. Skipping for this PR -
     // all current feGaussianBlur resvg tests pass without the clip.
-    impl_->encoder->blitFullTarget(filteredTexture, 1.0);
+    impl_->encoder->blitFullTarget(impl_->importFilterResult(filteredTexture), 1.0);
   }
   // Defer release to endFrame: `blitFullTarget` recorded a sample from
   // `filteredTexture` (which is `frame.layerTexture` when the filter
@@ -5412,7 +5620,8 @@ void RendererGeode::pushMask(const std::optional<Box2d>& maskBounds, MaskType ma
   impl_->target = frame.maskTexture;
   auto captureEncoder = std::make_unique<geode::GeoEncoder>(
       *impl_->device, *impl_->pipeline, *impl_->gradientPipeline, *impl_->imagePipeline,
-      frame.maskTexture, impl_->frameCommandEncoder.get());
+      impl_->importTexture(frame.maskTexture, frame.maskDesc), Impl::extentOf(frame.maskTexture),
+      *impl_->frameGpuEncoder);
   impl_->configurePathEncoder(*captureEncoder);
   captureEncoder->clear(css::RGBA(0, 0, 0, 0));
   impl_->encoder = std::move(captureEncoder);
@@ -5441,7 +5650,8 @@ void RendererGeode::transitionMaskToContent() {
   impl_->target = frame.contentTexture;
   auto contentEncoder = std::make_unique<geode::GeoEncoder>(
       *impl_->device, *impl_->pipeline, *impl_->gradientPipeline, *impl_->imagePipeline,
-      frame.contentTexture, impl_->frameCommandEncoder.get());
+      impl_->importTexture(frame.contentTexture, frame.contentDesc),
+      Impl::extentOf(frame.contentTexture), *impl_->frameGpuEncoder);
   impl_->configurePathEncoder(*contentEncoder);
   contentEncoder->clear(css::RGBA(0, 0, 0, 0));
   impl_->encoder = std::move(contentEncoder);
@@ -5472,7 +5682,7 @@ void RendererGeode::popMask() {
   impl_->target = frame.savedTarget;
   auto newEncoder = std::make_unique<geode::GeoEncoder>(
       *impl_->device, *impl_->pipeline, *impl_->gradientPipeline, *impl_->imagePipeline,
-      frame.savedTarget, impl_->frameCommandEncoder.get());
+      impl_->importTarget(frame.savedTarget), impl_->targetExtent(), *impl_->frameGpuEncoder);
   impl_->configurePathEncoder(*newEncoder);
   newEncoder->setLoadPreserve();
   impl_->encoder = std::move(newEncoder);
@@ -5490,8 +5700,9 @@ void RendererGeode::popMask() {
   }
 
   // Composite content through the selected luminance or alpha mask onto the outer target.
-  impl_->encoder->blitFullTargetMasked(frame.contentTexture, frame.maskTexture, frame.maskType,
-                                       pixelMaskBounds);
+  impl_->encoder->blitFullTargetMasked(
+      impl_->importTexture(frame.contentTexture, frame.contentDesc),
+      impl_->importTexture(frame.maskTexture, frame.maskDesc), frame.maskType, pixelMaskBounds);
 
   // Defer release to endFrame - `blitFullTargetMasked` recorded
   // samples from both `contentTexture` and `maskTexture` into the
@@ -5604,7 +5815,8 @@ bool RendererGeode::beginPatternTile(const Box2d& tileRect, const Transform2d& t
 
   auto newEncoder = std::make_unique<geode::GeoEncoder>(
       *impl_->device, *impl_->pipeline, *impl_->gradientPipeline, *impl_->imagePipeline,
-      tileTextureHandle, impl_->frameCommandEncoder.get());
+      impl_->importTexture(tileTextureHandle, td), Impl::extentOf(tileTextureHandle),
+      *impl_->frameGpuEncoder);
   impl_->configurePathEncoder(*newEncoder, /*collectGeometry=*/false);
   // Transparent clear so unpainted tile pixels contribute nothing.
   newEncoder->clear(css::RGBA(0, 0, 0, 0));
@@ -5670,7 +5882,7 @@ void RendererGeode::endPatternTile(bool forStroke) {
       frame.savedTarget) {
     auto newEncoder = std::make_unique<geode::GeoEncoder>(
         *impl_->device, *impl_->pipeline, *impl_->gradientPipeline, *impl_->imagePipeline,
-        frame.savedTarget, impl_->frameCommandEncoder.get());
+        impl_->importTarget(frame.savedTarget), impl_->targetExtent(), *impl_->frameGpuEncoder);
     impl_->configurePathEncoder(*newEncoder);
     // Preserve existing target contents: the pattern subtree may have
     // submitted work on the outer target *before* the pattern tile opened
@@ -5695,6 +5907,10 @@ void RendererGeode::endPatternTile(bool forStroke) {
   // Stash the completed tile in raster-pixel space, matching the texture sampled by the shader.
   Impl::PatternPaintSlot slot;
   slot.tile = std::move(frame.tileTexture);
+  slot.tileHandle =
+      &impl_->importTexture(slot.tile.get(), impl_->textureFormat,
+                            wgpu::TextureUsage::RenderAttachment |
+                                wgpu::TextureUsage::TextureBinding | wgpu::TextureUsage::CopySrc);
   slot.rasterTileSize = Vector2d(frame.tilePixelWidth, frame.tilePixelHeight);
   slot.targetFromRaster = TargetFromPatternRaster(frame.targetFromPattern, frame.rasterScale);
 
@@ -6048,8 +6264,11 @@ bool RendererGeode::drawTextureSnapshot(const RendererTextureSnapshot& texture,
                                                   static_cast<double>(textureHeight))));
 
   impl_->syncTransform();
-  impl_->encoder->drawTexture(geodeTexture->texture(), targetRect, sourceUv, opacity, pixelated,
-                              geodeTexture->alphaType() == AlphaType::Premultiplied);
+  impl_->encoder->drawTexture(
+      impl_->importTexture(geodeTexture->texture(), geodeTexture->format(),
+                           wgpu::TextureUsage::TextureBinding | wgpu::TextureUsage::CopyDst),
+      targetRect, sourceUv, opacity, pixelated,
+      geodeTexture->alphaType() == AlphaType::Premultiplied);
   return true;
 }
 
