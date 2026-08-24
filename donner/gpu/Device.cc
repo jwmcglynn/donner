@@ -139,6 +139,14 @@ Status ValidateBindGroupLayoutDescriptor(const BindGroupLayoutDescriptor& descri
     if (Status status = CheckEnum(entry.type, "BindGroupLayoutEntry.type"); status.hasError()) {
       return status;
     }
+    // Checked for every entry, not just storage-texture ones: an out-of-range cast in an ignored
+    // field would otherwise survive validation and reach a backend's format translation the day
+    // the field starts being read.
+    if (Status status =
+            CheckEnum(entry.storageTextureFormat, "BindGroupLayoutEntry.storageTextureFormat");
+        status.hasError()) {
+      return status;
+    }
     if (entry.visibility == ShaderStage::None) {
       return Err(
           GpuErrorType::InvalidDescriptor,

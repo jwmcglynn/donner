@@ -2729,14 +2729,18 @@ Status VulkanDevice::Impl::encodeEndComputePass(EncodingState& state) {
     return GpuError{GpuErrorType::InvalidState, "endComputePass without an active compute pass"};
   }
   // Storage writes are not automatically visible to later reads. One conservative barrier at the
-  // pass boundary covers every consumer - a later pass, a copy, or a host read after the fence.
+  // pass boundary covers every consumer: a later pass, a copy, and a host read of a mapped
+  // buffer after the fence. HOST is named explicitly in both masks because ALL_COMMANDS does not
+  // include the host stage, and every buffer this backend allocates is host-visible, so a
+  // storage buffer a kernel wrote can be read straight from its mapping with no copy in between.
   VkMemoryBarrier barrier = {};
   barrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
   barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-  barrier.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
+  barrier.dstAccessMask =
+      VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT | VK_ACCESS_HOST_READ_BIT;
   api->vkCmdPipelineBarrier(state.commandBuffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                            VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 1, &barrier, 0, nullptr, 0,
-                            nullptr);
+                            VK_PIPELINE_STAGE_ALL_COMMANDS_BIT | VK_PIPELINE_STAGE_HOST_BIT, 0, 1,
+                            &barrier, 0, nullptr, 0, nullptr);
 
   state.inComputePass = false;
   state.currentComputePipeline = nullptr;

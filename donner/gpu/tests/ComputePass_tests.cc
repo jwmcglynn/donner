@@ -12,12 +12,24 @@
 
 #include "donner/gpu/CommandEncoder.h"
 #include "donner/gpu/RecordingDevice.h"
+#include "donner/gpu/shader/IrModule.h"
 #include "donner/gpu/tests/GpuTestUtils.h"
 
 using testing::HasSubstr;
 
 namespace donner::gpu {
 namespace {
+
+// The runtime and the shader IR validate the same workgroup shape at two layers that cannot
+// include each other's headers, so each carries its own copy of the caps. Tying them together
+// here means tuning one side alone fails this build instead of producing a pipeline that passes
+// one layer's check and is rejected by the other's.
+static_assert(kMaxComputeInvocationsPerWorkgroup == shader::kMaxComputeInvocationsPerWorkgroup,
+              "the runtime and shader IR invocation caps must stay in step");
+static_assert(kMaxComputeWorkgroupSizeXY == shader::kMaxComputeWorkgroupSizeXY,
+              "the runtime and shader IR X/Y workgroup caps must stay in step");
+static_assert(kMaxComputeWorkgroupSizeZ == shader::kMaxComputeWorkgroupSizeZ,
+              "the runtime and shader IR Z workgroup caps must stay in step");
 
 /// Builds the color-matrix compute scene: a sampled input texture, a write-only storage output
 /// texture, a uniform params buffer, a read-only storage bias buffer, and the pipeline binding
@@ -183,6 +195,20 @@ TEST_F(ComputePassTests, PassKindsAreMutuallyExclusive) {
       IsGpuErrorWithMessage(GpuErrorType::InvalidState, HasSubstr("already active")));
 }
 
+TEST_F(ComputePassTests, RenderPassBlocksBeginningAComputePass) {
+  // The mirror of PassKindsAreMutuallyExclusive: exclusivity has to hold in both directions, or
+  // one ordering of the same frame would silently open two passes at once.
+  const Texture target = GetResultOrFail(device_.createTexture(TextureDescriptor{
+      "target", Extent2d{4, 4}, TextureFormat::RGBA8Unorm, TextureUsage::RenderAttachment}));
+  const TextureView targetView =
+      GetResultOrFail(device_.createTextureView(target, TextureViewDescriptor{"targetView"}));
+
+  GetResultOrFail(encoder_->beginRenderPass(RenderPassDescriptor{
+      "render", {RenderPassColorAttachment{targetView, LoadOp::Clear, StoreOp::Store, {}}}}));
+  EXPECT_THAT(encoder_->beginComputePass(ComputePassDescriptor{"compute"}),
+              IsGpuErrorWithMessage(GpuErrorType::InvalidState, HasSubstr("already active")));
+}
+
 TEST_F(ComputePassTests, ComputePassOpsAfterEndFail) {
   ComputePassEncoder* pass = beginComputePass();
   EXPECT_THAT(pass->end(), IsOk());
@@ -272,6 +298,15 @@ TEST_F(ComputePassTests, StorageTextureBindingRequiresTheLayoutFormat) {
               IsGpuErrorWithMessage(GpuErrorType::InvalidDescriptor,
                                     HasSubstr("does not match the layout's storageTextureFormat "
                                               "(BGRA8Unorm vs RGBA8Unorm)")));
+}
+
+TEST_F(ComputePassTests, BindGroupLayoutRejectsAnUnknownStorageTextureFormat) {
+  std::vector<BindGroupLayoutEntry> entries = layoutEntries();
+  entries[1].storageTextureFormat = static_cast<TextureFormat>(0x7F);
+  EXPECT_THAT(device_.createBindGroupLayout(BindGroupLayoutDescriptor{"bad", std::move(entries)}),
+              IsGpuErrorWithMessage(GpuErrorType::InvalidDescriptor,
+                                    HasSubstr("BindGroupLayoutEntry.storageTextureFormat has "
+                                              "unknown enum value")));
 }
 
 TEST_F(ComputePassTests, StorageTextureBindingRejectsANonTextureResource) {

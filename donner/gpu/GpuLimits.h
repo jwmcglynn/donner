@@ -36,6 +36,11 @@ inline constexpr uint32_t kMaxVertexAttributes = 16;
 /// Maximum number of color attachments in a render pass or render pipeline.
 inline constexpr uint32_t kMaxColorAttachments = 4;
 
+// The three workgroup-size caps below are duplicated by the shader IR, which validates the same
+// shape one layer down and cannot depend on this header. A static_assert in the compute-pass
+// tests ties the two sets together, so tuning one side alone fails the build rather than letting
+// a pipeline pass one layer's check and fail the other's.
+
 /// Maximum invocations one compute workgroup may declare (x * y * z). 256 is the strictest
 /// common cap across the native APIs this runtime targets.
 inline constexpr uint32_t kMaxComputeInvocationsPerWorkgroup = 256;

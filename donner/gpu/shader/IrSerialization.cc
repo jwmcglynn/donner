@@ -217,11 +217,7 @@ std::string IrModule::serialize() const {
       out += std::format("param {}: {}{}", param.name.str(), param.type.toString(),
                          IoAnnotation(param));
       if (param.builtin) {
-        switch (*param.builtin) {
-          case BuiltinInput::InstanceIndex: out += " @builtin(instance_index)"; break;
-          case BuiltinInput::Position: out += " @builtin(position)"; break;
-          case BuiltinInput::GlobalInvocationId: out += " @builtin(global_invocation_id)"; break;
-        }
+        out += BuiltinInputSuffix(*param.builtin);
       }
       out += "\n";
     }

@@ -89,6 +89,8 @@ donner_cc_test(
     deps = [
         ":gpu",
         ":gpu_test_utils",
+        # For the static_assert tying the runtime's compute caps to the shader IR's copy.
+        "//donner/gpu/shader",
         "@com_google_gtest//:gtest_main",
     ],
 )
