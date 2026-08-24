@@ -378,6 +378,21 @@ directory drops.
 - [ ] Remove every migrated `wgpu` call and type in the same packet; temporary adapter code carries
       an explicit removal gate.
 
+Geode's renderer runs one command encoder for a whole frame, and the filter engine records compute
+passes into that same encoder. The RHI does not model compute passes, so the filter engine cannot
+migrate in this phase, and a frame whose encoder became a `donner::gpu::CommandEncoder` would have
+to split into several command buffers - reinstating the per-boundary submits the single-encoder
+frame removed, and separating the layer-composite texture copy from the draws it must sit between.
+
+The Phase 1 transition adapter therefore gains a host-encoder replay mode: while a host encoder is
+installed, a submitted command stream is replayed into it instead of into an encoder the adapter
+owns, and the adapter performs no queue submit of its own. One command buffer still carries the
+whole frame in recording order, including the spans the host records directly around the replayed
+ones. Completion stays truthful because the adapter holds the replayed serial back until the host
+reports its queue submit, so no resource is treated as free before the work is even submitted. The
+mode is removed once the filter engine and the presentation paths record through the RHI, alongside
+the other Phase 1 escape hatches.
+
 ### Phase 2: Shader IR vertical slice
 
 - [ ] Inventory and specify the required shader language subset.

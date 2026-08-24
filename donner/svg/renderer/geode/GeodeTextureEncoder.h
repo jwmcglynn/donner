@@ -4,19 +4,19 @@
 
 #include <cstdint>
 #include <optional>
-#include <webgpu/webgpu.hpp>
 
 #include "donner/base/Box.h"
+#include "donner/gpu/CommandEncoder.h"
+#include "donner/gpu/Handles.h"
+#include "donner/svg/renderer/geode/GeodeGpuContext.h"
 
 namespace donner::geode {
 
-class GeodeDevice;
 class GeodeImagePipeline;
-class ScopedWgpuResourceArena;
 
 /**
- * Reusable helpers for uploading pixel data to a `wgpu::Texture` and drawing
- * it as a textured quad through `GeodeImagePipeline`.
+ * Reusable helpers for uploading pixel data to a GPU texture and drawing it as a textured quad
+ * through `GeodeImagePipeline`.
  *
  * This is the piece `drawImage` and pattern tile rendering share.
  * Both paths need:
@@ -35,27 +35,23 @@ class ScopedWgpuResourceArena;
 class GeodeTextureEncoder {
 public:
   /**
-   * Upload a tightly packed RGBA8 pixel buffer to a freshly created `wgpu::Texture`
-   * (usage = `TextureBinding | CopyDst`). Alpha interpretation is carried by the draw parameters.
+   * Upload a tightly packed RGBA8 pixel buffer to a freshly created sampled texture. Alpha
+   * interpretation is carried by the draw parameters.
    *
-   * WebGPU requires `bytesPerRow` to be 256-aligned for texture writes, but
-   * the unpadded-row path is exercised by `queue.WriteTexture` on all Dawn
-   * backends regardless of format. This function handles the rare case
-   * where the source buffer's row stride (`width * 4`) is not 256-aligned by
-   * copying rows into a padded staging buffer before the upload.
+   * Texture writes carry a 256-byte row pitch. This function handles the case where the source
+   * buffer's row stride (`width * 4`) is not 256-aligned by copying rows into a padded staging
+   * buffer before the upload.
    *
-   * Returns an empty texture if `device`, `width`, `height`, or `rgbaPixels`
-   * are invalid.
+   * Returns an empty texture if `width`, `height`, or `rgbaPixels` are invalid.
    *
-   * @param device The Geode device wrapper (provides both `wgpu::Device`
-   *   and `wgpu::Queue`).
+   * @param context The recording context providing the GPU runtime device.
    * @param rgbaPixels RGBA8 pixels in row-major order.
    *   Must contain at least `width * height * 4` bytes.
    * @param width  Image width in pixels. Must be > 0.
    * @param height Image height in pixels. Must be > 0.
    */
-  static wgpu::Texture uploadRgba8Texture(GeodeDevice& device, const uint8_t* rgbaPixels,
-                                          uint32_t width, uint32_t height);
+  static gpu::Texture uploadRgba8Texture(const GeodeGpuContext& context, const uint8_t* rgbaPixels,
+                                         uint32_t width, uint32_t height);
 
   /// Uniform-buffer binding offset alignment shared by the blit path and
   /// any UniformScratch implementation. 256 is the WebGPU default
@@ -69,7 +65,7 @@ public:
   /// alive (see UniformScratch's contract below); holders must not retain
   /// the allocation beyond the current frame.
   struct UniformAllocation {
-    wgpu::Buffer buffer;
+    gpu::BufferRef buffer;
     uint64_t offset = 0;
     uint64_t size = 0;
   };
@@ -139,8 +135,8 @@ public:
     /// a second premultiplication that darkens the RGB channel. Straight-alpha
     /// callers leave the default false so the shader premultiplies on output.
     bool sourceIsPremultiplied = false;
-    /// `<mask>` compositing input. Ignored unless `maskMode` is nonzero.
-    wgpu::Texture maskTexture;
+    /// `<mask>` compositing input. Ignored unless `maskMode` is nonzero. Borrowed.
+    const gpu::Texture* maskTexture = nullptr;
     /// Mask coverage selector: 0 disables masking, 1 uses luminance, and 2 uses alpha.
     uint32_t maskMode = 0;
     /// When true, output pixels outside `maskBounds` are discarded.
@@ -159,19 +155,19 @@ public:
     /// Frozen snapshot of the parent render target - see
     /// `RendererGeode::popIsolatedLayer` which copies the prior
     /// parent content into a separate texture before opening the
-    /// blend blit pass. Ignored unless `blendMode != 0`.
-    wgpu::Texture dstSnapshotTexture;
+    /// blend blit pass. Ignored unless `blendMode != 0`. Borrowed.
+    const gpu::Texture* dstSnapshotTexture = nullptr;
     /// Path-clip mask view. When set, the image shader samples
     /// it in target-pixel space and gates the source content before any
-    /// blend/mask compositing.
-    wgpu::TextureView clipMaskView;
+    /// blend/mask compositing. Borrowed.
+    const gpu::TextureView* clipMaskView = nullptr;
   };
 
   /**
    * Record a textured-quad draw call into an already-open render pass.
    *
    * The caller must:
-   *   - Have already called `pass.SetPipeline(pipeline.pipeline())` OR be
+   *   - Have already called `pass.setPipeline(pipeline.pipeline())` OR be
    *     OK with the draw switching the pipeline (we call SetPipeline
    *     internally to keep this helper self-contained).
    *   - Provide an MVP matrix built the same way as `GeoEncoder::Impl::buildMvp`
@@ -183,13 +179,13 @@ public:
    * growth instead of one per blit) or into a fresh per-blit buffer on the
    * legacy path.
    *
-   * @param resourceArena Scoped owner for WebGPU handles created by the draw.
+   * @param resourceArena Scoped owner for GPU handles created by the draw.
    * @param scratch Optional pooled uniform scratch (see `UniformScratch`).
    */
-  static void drawTexturedQuad(GeodeDevice& device, const GeodeImagePipeline& pipeline,
-                               const wgpu::RenderPassEncoder& pass, const wgpu::Texture& texture,
+  static void drawTexturedQuad(const GeodeGpuContext& context, const GeodeImagePipeline& pipeline,
+                               gpu::RenderPassEncoder& pass, const gpu::Texture& texture,
                                const float mvp[16], uint32_t targetWidth, uint32_t targetHeight,
-                               const QuadParams& params, ScopedWgpuResourceArena& resourceArena,
+                               const QuadParams& params, GeodeTransientResources& resourceArena,
                                UniformScratch* scratch = nullptr);
 };
 

@@ -34,6 +34,7 @@ namespace {
 constexpr uint32_t kSize = 64;
 constexpr wgpu::TextureFormat kFormat = wgpu::TextureFormat::RGBA8Unorm;
 constexpr uint32_t kBytesPerRow = 256;  // Padded from kSize*4 = 256.
+constexpr gpu::Extent2d kTargetSize = {kSize, kSize};
 
 using svg::test::FormatRgba;
 using svg::test::Near;
@@ -78,21 +79,25 @@ protected:
     device_ = sharedDevice();
     ASSERT_NE(device_, nullptr);
 
-    pipeline_ = std::make_unique<GeodePipeline>(device_->device(), kFormat);
-    gradientPipeline_ = std::make_unique<GeodeGradientPipeline>(device_->device(), kFormat);
-    imagePipeline_ = std::make_unique<GeodeImagePipeline>(device_->device(), kFormat);
+    // The device-owned shared pipelines target the device's format; the per-test render
+    // targets are created with kFormat, so the two must agree. Pipeline construction lives on
+    // GeodeDevice per the ownership rule.
+    ASSERT_EQ(device_->textureFormat(), kFormat);
+    pipeline_ = &device_->pipeline();
+    gradientPipeline_ = &device_->gradientPipeline();
+    imagePipeline_ = &device_->imagePipeline();
 
-    wgpu::TextureDescriptor td = {};
-    td.label = wgpuLabel("TestTarget");
-    td.size = {kSize, kSize, 1};
-    td.format = kFormat;
-    td.usage = wgpu::TextureUsage::RenderAttachment | wgpu::TextureUsage::CopySrc |
-               wgpu::TextureUsage::TextureBinding;
-    td.mipLevelCount = 1;
-    td.sampleCount = 1;
-    td.dimension = wgpu::TextureDimension::_2D;
-    target_ = device_->device().createTexture(td);
-    ASSERT_TRUE(static_cast<bool>(target_));
+    auto targetResult = device_->adapterDevice().createTexture(
+        gpu::TextureDescriptor{"TestTarget", kTargetSize, gpu::TextureFormat::RGBA8Unorm,
+                               gpu::TextureUsage::RenderAttachment | gpu::TextureUsage::CopySrc |
+                                   gpu::TextureUsage::Sampled});
+    ASSERT_TRUE(targetResult.hasResult()) << "createTexture failed";
+    target_ = std::move(targetResult).result();
+    ASSERT_TRUE(target_.isValid());
+    // Readback below drives the copy through the backend queue directly, so it
+    // needs the backing texture object the runtime handle names.
+    backendTarget_ = device_->adapterDevice().wgpuTextureOf(target_);
+    ASSERT_TRUE(static_cast<bool>(backendTarget_));
 
     wgpu::BufferDescriptor bd = {};
     bd.label = wgpuLabel("TestReadback");
@@ -109,7 +114,7 @@ protected:
     wgpu::CommandEncoder enc = device_->device().createCommandEncoder();
 
     wgpu::TexelCopyTextureInfo src = {};
-    src.texture = target_;
+    src.texture = backendTarget_;
     src.mipLevel = 0;
     src.origin = {0, 0, 0};
 
@@ -174,10 +179,11 @@ protected:
   }
 
   std::shared_ptr<GeodeDevice> device_;
-  std::unique_ptr<GeodePipeline> pipeline_;
-  std::unique_ptr<GeodeGradientPipeline> gradientPipeline_;
-  std::unique_ptr<GeodeImagePipeline> imagePipeline_;
-  wgpu::Texture target_;
+  GeodePipeline* pipeline_ = nullptr;
+  GeodeGradientPipeline* gradientPipeline_ = nullptr;
+  GeodeImagePipeline* imagePipeline_ = nullptr;
+  gpu::Texture target_;
+  wgpu::Texture backendTarget_;
   wgpu::Buffer readback_;
 };
 
@@ -185,7 +191,8 @@ protected:
 
 /// Clear the direct render target and read it back without a resolve attachment.
 TEST_F(GeoEncoderTest, ClearWritesDirectTarget) {
-  GeoEncoder encoder(*device_, *pipeline_, *gradientPipeline_, *imagePipeline_, target_);
+  GeoEncoder encoder(*device_, *pipeline_, *gradientPipeline_, *imagePipeline_, target_,
+                     kTargetSize);
   encoder.clear(css::RGBA(0, 128, 255, 255));  // Half-saturated blue.
   encoder.finish();
 
@@ -198,7 +205,8 @@ TEST_F(GeoEncoderTest, ClearWritesDirectTarget) {
 TEST_F(GeoEncoderTest, FillRect) {
   Path path = PathBuilder().addRect(Box2d({16, 16}, {48, 48})).build();
 
-  GeoEncoder encoder(*device_, *pipeline_, *gradientPipeline_, *imagePipeline_, target_);
+  GeoEncoder encoder(*device_, *pipeline_, *gradientPipeline_, *imagePipeline_, target_,
+                     kTargetSize);
   encoder.clear(css::RGBA(0, 0, 0, 255));  // Black.
   encoder.fillPath(path, css::RGBA(255, 0, 0, 255), FillRule::NonZero);
   encoder.finish();
@@ -221,10 +229,11 @@ TEST_F(GeoEncoderTest, RejectedPatternGeometryAllocatesNoPatternGpuState) {
   ProbeGeometryAdmission admission;
   admission.allow = false;
 
-  GeoEncoder encoder(*device_, *pipeline_, *gradientPipeline_, *imagePipeline_, target_);
+  GeoEncoder encoder(*device_, *pipeline_, *gradientPipeline_, *imagePipeline_, target_,
+                     kTargetSize);
   encoder.setGeometryAdmission(&admission);
   GeoEncoder::PatternPaint paint;
-  paint.tile = target_;
+  paint.tile = &target_;
   paint.tileSize = Vector2d(8.0, 8.0);
   encoder.fillPathPattern(path, FillRule::NonZero, paint, &encoded);
 
@@ -245,7 +254,8 @@ TEST_F(GeoEncoderTest, DegenerateResidentRadialDoesNotConsumeGeometryAdmission) 
   params.stops = std::span<const RadialGradientParams::Stop>(&stop, 1u);
   GeodeResidentGradientSlot slot;
 
-  GeoEncoder encoder(*device_, *pipeline_, *gradientPipeline_, *imagePipeline_, target_);
+  GeoEncoder encoder(*device_, *pipeline_, *gradientPipeline_, *imagePipeline_, target_,
+                     kTargetSize);
   encoder.setGeometryAdmission(&admission);
   encoder.fillPathRadialGradientResident(slot, encoded, params, FillRule::NonZero, 1u);
   EXPECT_EQ(admission.admittedDraws, 0u);
@@ -265,7 +275,8 @@ TEST_F(GeoEncoderTest, PreparedSceneAdmissionCanBeRefundedBeforeSingletonFallbac
   slot.recordSlab = records;
   ASSERT_TRUE(records->allocateSlot(*device_, slot.recordSlot));
 
-  GeoEncoder encoder(*device_, *pipeline_, *gradientPipeline_, *imagePipeline_, target_);
+  GeoEncoder encoder(*device_, *pipeline_, *gradientPipeline_, *imagePipeline_, target_,
+                     kTargetSize);
   encoder.setGeometryAdmission(&admission);
   GeoEncoder::SceneRecordState recordState;
   ASSERT_TRUE(encoder.ensureResidentSceneRecord(
@@ -284,7 +295,8 @@ TEST_F(GeoEncoderTest, TinyUniformScaleStillRasterizesHalfPixelHalo) {
   const Path path =
       PathBuilder().addRect(Box2d({264062.5, 264062.5}, {735937.5, 735937.5})).build();
 
-  GeoEncoder encoder(*device_, *pipeline_, *gradientPipeline_, *imagePipeline_, target_);
+  GeoEncoder encoder(*device_, *pipeline_, *gradientPipeline_, *imagePipeline_, target_,
+                     kTargetSize);
   encoder.clear(css::RGBA(0, 0, 0, 0));
   encoder.setTransform(Transform2d::Scale(0.000064));
   encoder.fillPath(path, css::RGBA(255, 0, 0, 255), FillRule::NonZero);
@@ -321,7 +333,8 @@ TEST_F(GeoEncoderTest, IllConditionedShearStillRasterizesHalfPixelHalo) {
   transform.data[4] = 0.0;
   transform.data[5] = 0.0;
 
-  GeoEncoder encoder(*device_, *pipeline_, *gradientPipeline_, *imagePipeline_, target_);
+  GeoEncoder encoder(*device_, *pipeline_, *gradientPipeline_, *imagePipeline_, target_,
+                     kTargetSize);
   encoder.clear(css::RGBA(0, 0, 0, 0));
   encoder.setTransform(transform);
   encoder.fillPath(path, css::RGBA(255, 0, 0, 255), FillRule::NonZero);
@@ -359,12 +372,12 @@ TEST_F(GeoEncoderTest, ResidentSlotMoveTransfersRecordSlot) {
     // component's storage; the moved-from shell is then destroyed.
     geode::GeodeResidentSlot removedStorage;
     removedStorage = std::move(survivor);
-    ASSERT_TRUE(removedStorage.recordSlot.buffer);
+    ASSERT_TRUE(removedStorage.recordSlot.buffer.isValid());
     EXPECT_EQ(removedStorage.recordSlot.index, survivorSlot.index);
     // survivor (the moved-from shell) is destroyed at scope exit of the
     // ORIGINAL object in real usage; simulate by letting it destruct via a
     // fresh scope below. Here, verify the shell no longer owns the slot.
-    EXPECT_FALSE(survivor.recordSlot.buffer)
+    EXPECT_FALSE(survivor.recordSlot.buffer.isValid())
         << "The moved-from slot must not retain the record slot";
     // Destroy the shell explicitly (what entt's pop does to the tail).
     { geode::GeodeResidentSlot shell = std::move(survivor); }
@@ -374,7 +387,7 @@ TEST_F(GeoEncoderTest, ResidentSlotMoveTransfersRecordSlot) {
     slab->beginFrame(1);
     geode::GeodeRecordSlab::Slot next;
     ASSERT_TRUE(slab->allocateSlot(*device_, next));
-    EXPECT_FALSE(next.buffer == survivorSlot.buffer && next.offset == survivorSlot.offset)
+    EXPECT_FALSE(next.bufferId == survivorSlot.bufferId && next.offset == survivorSlot.offset)
         << "The survivor's record slot leaked back to the slab through the moved-from shell";
   }
 }
@@ -389,10 +402,10 @@ TEST_F(GeoEncoderTest, RecordSlabFreeListSurvivesChunkGrowth) {
   for (size_t i = 0; i < kCount; ++i) {
     geode::GeodeRecordSlab::Slot slot;
     ASSERT_TRUE(slab.allocateSlot(*device_, slot)) << "allocation " << i;
-    ASSERT_TRUE(slot.buffer);
+    ASSERT_TRUE(slot.buffer.isValid());
     slots.push_back(slot);
   }
-  ASSERT_NE(slots[0].buffer, slots.back().buffer) << "Fixture must span two chunks";
+  ASSERT_NE(slots[0].bufferId, slots.back().bufferId) << "Fixture must span two chunks";
 
   // Free one slot in each chunk; frees merge at the next frame boundary.
   const geode::GeodeRecordSlab::Slot freedEarly = slots[10];
@@ -408,7 +421,7 @@ TEST_F(GeoEncoderTest, RecordSlabFreeListSurvivesChunkGrowth) {
   ASSERT_TRUE(slab.allocateSlot(*device_, reusedB));
   const auto matches = [](const geode::GeodeRecordSlab::Slot& a,
                           const geode::GeodeRecordSlab::Slot& b) {
-    return a.buffer == b.buffer && a.offset == b.offset && a.index == b.index;
+    return a.bufferId == b.bufferId && a.offset == b.offset && a.index == b.index;
   };
   EXPECT_TRUE(matches(reusedA, freedEarly) || matches(reusedA, freedLate));
   EXPECT_TRUE(matches(reusedB, freedEarly) || matches(reusedB, freedLate));
@@ -419,8 +432,8 @@ TEST_F(GeoEncoderTest, RecordSlabFreeListSurvivesChunkGrowth) {
     if (matches(live, freedEarly) || matches(live, freedLate)) {
       continue;
     }
-    EXPECT_FALSE(live.buffer == reusedA.buffer && live.offset == reusedA.offset);
-    EXPECT_FALSE(live.buffer == reusedB.buffer && live.offset == reusedB.offset);
+    EXPECT_FALSE(live.bufferId == reusedA.bufferId && live.offset == reusedA.offset);
+    EXPECT_FALSE(live.bufferId == reusedB.bufferId && live.offset == reusedB.offset);
   }
 }
 
@@ -527,12 +540,12 @@ TEST_F(GeoEncoderTest, BatchUniformCpuMirrorStopsAtCapPlusOneAndReleases) {
     GeodeRecordSlab slab(device_->deviceId(), budget);
     const uint32_t first[4] = {1u, 2u, 3u, 4u};
     const uint32_t second[4] = {5u, 6u, 7u, 8u};
-    ASSERT_TRUE(slab.acquireBatchUniform(*device_, first, sizeof(first)).buffer);
+    ASSERT_TRUE(slab.acquireBatchUniform(*device_, first, sizeof(first)).buffer.isValid());
     const uint64_t entryBytes = budget->cacheBytes();
     const uint64_t payloadBytes = slab.batchUniformPayloadBytesForTesting();
     budget->setLimitsForTesting(
         {.cacheBytes = entryBytes + payloadBytes - 1u, .residentBytes = kUniformBytes * 2u});
-    EXPECT_FALSE(slab.acquireBatchUniform(*device_, second, sizeof(second)).buffer);
+    EXPECT_FALSE(slab.acquireBatchUniform(*device_, second, sizeof(second)).buffer.isValid());
     EXPECT_EQ(budget->cacheBytes(), entryBytes);
     EXPECT_EQ(budget->residentBytes(), kUniformBytes)
         << "The rejected CPU mirror must roll back its tentative GPU reservation.";
@@ -550,7 +563,7 @@ TEST_F(GeoEncoderTest, BatchUniformCpuReservationIncludesVectorSpareCapacity) {
     GeodeRecordSlab slab(device_->deviceId(), budget);
     for (uint32_t index = 0; index < 5u; ++index) {
       const uint32_t value[4] = {index, index + 1u, index + 2u, index + 3u};
-      ASSERT_TRUE(slab.acquireBatchUniform(*device_, value, sizeof(value)).buffer);
+      ASSERT_TRUE(slab.acquireBatchUniform(*device_, value, sizeof(value)).buffer.isValid());
     }
     EXPECT_GE(slab.batchUniformPayloadBytesForTesting(), 5u * kUniformBytes);
     EXPECT_EQ(budget->cacheBytes(), slab.batchUniformMetadataBytesForTesting() +
@@ -644,9 +657,11 @@ TEST(GeodeResourceBudgetTest, FrameGeometryStopsAtExactAggregateBoundary) {
 /// repeat, no matter what the allocator does with the handles.
 TEST_F(GeoEncoderTest, BufferIdsAreNeverReusedAcrossSlabGenerations) {
   struct SlabGeneration {
-    WGPUBuffer chunkHandle = nullptr;
-    WGPUBuffer recordHandle = nullptr;
-    WGPUBuffer uniformHandle = nullptr;
+    // Resource slots, which the allocator DOES recycle across generations - the point of the
+    // ids below is that they stay distinct even when these repeat.
+    uint32_t chunkSlot = 0;
+    uint32_t recordSlot = 0;
+    uint32_t uniformSlot = 0;
     uint64_t chunkId = 0;
     uint64_t recordId = 0;
     uint64_t uniformId = 0;
@@ -667,9 +682,9 @@ TEST_F(GeoEncoderTest, BufferIdsAreNeverReusedAcrossSlabGenerations) {
         records.acquireBatchUniform(*device_, uniformBytes, sizeof(uniformBytes));
 
     SlabGeneration out;
-    out.chunkHandle = geometryAlloc.buffer;
-    out.recordHandle = recordSlot.buffer;
-    out.uniformHandle = uniform.buffer;
+    out.chunkSlot = geometryAlloc.buffer.slotIndex();
+    out.recordSlot = recordSlot.buffer.slotIndex();
+    out.uniformSlot = uniform.buffer.slotIndex();
     out.chunkId = geometryAlloc.bufferId;
     out.recordId = recordSlot.bufferId;
     out.uniformId = uniform.bufferId;
@@ -717,7 +732,7 @@ TEST_F(GeoEncoderTest, BufferIdsAreNeverReusedAcrossSlabGenerations) {
   geode::GeodeRecordSlab::Slot slotB;
   ASSERT_TRUE(records.allocateSlot(*device_, slotA));
   ASSERT_TRUE(records.allocateSlot(*device_, slotB));
-  ASSERT_EQ(slotA.buffer, slotB.buffer) << "Fixture must keep both slots in one chunk";
+  ASSERT_EQ(slotA.bufferId, slotB.bufferId) << "Fixture must keep both slots in one chunk";
   EXPECT_EQ(slotA.bufferId, slotB.bufferId);
 }
 
@@ -775,8 +790,10 @@ TEST_F(GeoEncoderTest, SceneBatchBindGroupCacheDistinguishesSlabGenerations) {
       record.boundingVertexCount = 4;
       const float quad[8] = {8.0f, 8.0f, 24.0f, 8.0f, 24.0f, 24.0f, 8.0f, 24.0f};
       std::memcpy(record.boundingVertices, quad, sizeof(quad));
-      device_->queue().writeBuffer(generation.recordSlots[i].buffer,
-                                   generation.recordSlots[i].offset, &record, sizeof(record));
+      (void)device_->adapterDevice().writeBuffer(
+          generation.records->bufferForId(generation.recordSlots[i].bufferId),
+          generation.recordSlots[i].offset,
+          std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(&record), sizeof(record)));
     }
     return generation;
   };
@@ -784,6 +801,7 @@ TEST_F(GeoEncoderTest, SceneBatchBindGroupCacheDistinguishesSlabGenerations) {
   const auto bindingFor = [](const Generation& generation) {
     GeoEncoder::SceneBatchBinding binding = {};
     binding.chunkBuffer = generation.chunk.buffer;
+    binding.chunkBytes = generation.geometry->chunkBytesForId(generation.chunk.bufferId);
     binding.recordBuffer = generation.recordSlots[0].buffer;
     binding.chunkBufferId = generation.chunk.bufferId;
     binding.recordBufferId = generation.recordSlots[0].bufferId;
@@ -807,7 +825,8 @@ TEST_F(GeoEncoderTest, SceneBatchBindGroupCacheDistinguishesSlabGenerations) {
   // `createBindGroup` calls each of the two batches caused.
   const auto drawGeneration = [&](const Generation& generation, uint64_t& firstBatchCreates,
                                   uint64_t& repeatBatchCreates) {
-    GeoEncoder encoder(*device_, *pipeline_, *gradientPipeline_, *imagePipeline_, target_);
+    GeoEncoder encoder(*device_, *pipeline_, *gradientPipeline_, *imagePipeline_, target_,
+                       kTargetSize);
     encoder.clear(css::RGBA(0, 0, 0, 0));
 
     const GeoEncoder::SceneBatchBinding binding = bindingFor(generation);
@@ -876,13 +895,16 @@ TEST_F(GeoEncoderTest, SceneBatchBindGroupCacheDistinguishesRecycledArenaUniform
   record.boundingVertexCount = 4;
   const float quad[8] = {8.0f, 8.0f, 24.0f, 8.0f, 24.0f, 24.0f, 8.0f, 24.0f};
   std::memcpy(record.boundingVertices, quad, sizeof(quad));
-  device_->queue().writeBuffer(recordSlot.buffer, recordSlot.offset, &record, sizeof(record));
+  (void)device_->adapterDevice().writeBuffer(
+      records->bufferForId(recordSlot.bufferId), recordSlot.offset,
+      std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(&record), sizeof(record)));
 
   // A null `recordSlab` routes the batch uniform through the encoder's
   // per-frame arena instead of the slab's persistent table, which is the
   // allocation the buffer pool recycles.
   GeoEncoder::SceneBatchBinding binding = {};
   binding.chunkBuffer = chunk.buffer;
+  binding.chunkBytes = geometry->chunkBytesForId(chunk.bufferId);
   binding.recordBuffer = recordSlot.buffer;
   binding.chunkBufferId = chunk.bufferId;
   binding.recordBufferId = recordSlot.bufferId;
@@ -900,7 +922,8 @@ TEST_F(GeoEncoderTest, SceneBatchBindGroupCacheDistinguishesRecycledArenaUniform
 
   GeodeBufferPool pool;
   const auto drawOneEncoder = [&](uint64_t& bindGroupCreates, uint64_t& bufferCreates) {
-    GeoEncoder encoder(*device_, *pipeline_, *gradientPipeline_, *imagePipeline_, target_);
+    GeoEncoder encoder(*device_, *pipeline_, *gradientPipeline_, *imagePipeline_, target_,
+                       kTargetSize);
     encoder.setBufferPool(&pool);
     encoder.clear(css::RGBA(0, 0, 0, 0));
 
@@ -939,7 +962,8 @@ TEST_F(GeoEncoderTest, ArenaGrowthKeepsEarlierGridBinding) {
   }
   const Path path = builder.build();
 
-  GeoEncoder encoder(*device_, *pipeline_, *gradientPipeline_, *imagePipeline_, target_);
+  GeoEncoder encoder(*device_, *pipeline_, *gradientPipeline_, *imagePipeline_, target_,
+                     kTargetSize);
   encoder.clear(css::RGBA(0, 0, 0, 255));
   encoder.fillPath(path, css::RGBA(255, 0, 0, 255), FillRule::NonZero);
   encoder.finish();
@@ -957,7 +981,8 @@ TEST_F(GeoEncoderTest, FillTriangle) {
                   .closePath()
                   .build();
 
-  GeoEncoder encoder(*device_, *pipeline_, *gradientPipeline_, *imagePipeline_, target_);
+  GeoEncoder encoder(*device_, *pipeline_, *gradientPipeline_, *imagePipeline_, target_,
+                     kTargetSize);
   encoder.clear(css::RGBA(0, 0, 0, 255));
   encoder.fillPath(path, css::RGBA(0, 255, 0, 255), FillRule::NonZero);
   encoder.finish();
@@ -1005,7 +1030,8 @@ TEST_F(GeoEncoderTest, FillLinearGradientUserSpace) {
   params.spreadMode = 0;                    // pad
   params.stops = std::span<const LinearGradientParams::Stop>(stops, 2);
 
-  GeoEncoder encoder(*device_, *pipeline_, *gradientPipeline_, *imagePipeline_, target_);
+  GeoEncoder encoder(*device_, *pipeline_, *gradientPipeline_, *imagePipeline_, target_,
+                     kTargetSize);
   encoder.clear(css::RGBA(0, 0, 0, 255));
   encoder.fillPathLinearGradient(path, params, FillRule::NonZero);
   encoder.finish();
@@ -1049,7 +1075,8 @@ TEST_F(GeoEncoderTest, FillLinearGradientRepeat) {
   params.spreadMode = 2;  // repeat
   params.stops = std::span<const LinearGradientParams::Stop>(stops, 2);
 
-  GeoEncoder encoder(*device_, *pipeline_, *gradientPipeline_, *imagePipeline_, target_);
+  GeoEncoder encoder(*device_, *pipeline_, *gradientPipeline_, *imagePipeline_, target_,
+                     kTargetSize);
   encoder.clear(css::RGBA(0, 0, 0, 255));
   encoder.fillPathLinearGradient(path, params, FillRule::NonZero);
   encoder.finish();
@@ -1091,7 +1118,8 @@ TEST_F(GeoEncoderTest, FillRadialGradientConcentric) {
   params.spreadMode = 0;  // pad
   params.stops = std::span<const RadialGradientParams::Stop>(stops, 2);
 
-  GeoEncoder encoder(*device_, *pipeline_, *gradientPipeline_, *imagePipeline_, target_);
+  GeoEncoder encoder(*device_, *pipeline_, *gradientPipeline_, *imagePipeline_, target_,
+                     kTargetSize);
   encoder.clear(css::RGBA(0, 0, 0, 255));
   encoder.fillPathRadialGradient(path, params, FillRule::NonZero);
   encoder.finish();
@@ -1136,7 +1164,8 @@ TEST_F(GeoEncoderTest, FillRadialGradientFocal) {
   params.spreadMode = 0;
   params.stops = std::span<const RadialGradientParams::Stop>(stops, 2);
 
-  GeoEncoder encoder(*device_, *pipeline_, *gradientPipeline_, *imagePipeline_, target_);
+  GeoEncoder encoder(*device_, *pipeline_, *gradientPipeline_, *imagePipeline_, target_,
+                     kTargetSize);
   encoder.clear(css::RGBA(0, 0, 0, 255));
   encoder.fillPathRadialGradient(path, params, FillRule::NonZero);
   encoder.finish();
@@ -1156,7 +1185,8 @@ TEST_F(GeoEncoderTest, FillRadialGradientFocal) {
 TEST_F(GeoEncoderTest, FillCircle) {
   Path path = PathBuilder().addCircle(Vector2d(32, 32), 20).build();
 
-  GeoEncoder encoder(*device_, *pipeline_, *gradientPipeline_, *imagePipeline_, target_);
+  GeoEncoder encoder(*device_, *pipeline_, *gradientPipeline_, *imagePipeline_, target_,
+                     kTargetSize);
   encoder.clear(css::RGBA(0, 0, 0, 255));
   encoder.fillPath(path, css::RGBA(0, 0, 255, 255), FillRule::NonZero);
   encoder.finish();
@@ -1190,7 +1220,8 @@ svg::ImageResource makeMagentaImage2x2() {
 /// Verify that the destination pixels are magenta and the outside is
 /// untouched.
 TEST_F(GeoEncoderTest, DrawImageFillsDestRect) {
-  GeoEncoder encoder(*device_, *pipeline_, *gradientPipeline_, *imagePipeline_, target_);
+  GeoEncoder encoder(*device_, *pipeline_, *gradientPipeline_, *imagePipeline_, target_,
+                     kTargetSize);
   encoder.clear(css::RGBA(0, 0, 0, 255));
 
   svg::ImageResource image = makeMagentaImage2x2();
@@ -1213,7 +1244,8 @@ TEST_F(GeoEncoderTest, DrawImageFillsDestRect) {
 /// opacity - the result should read back as ~(128, 0, 0, 255) over black
 /// with premultiplied source-over.
 TEST_F(GeoEncoderTest, DrawImageHonorsOpacity) {
-  GeoEncoder encoder(*device_, *pipeline_, *gradientPipeline_, *imagePipeline_, target_);
+  GeoEncoder encoder(*device_, *pipeline_, *gradientPipeline_, *imagePipeline_, target_,
+                     kTargetSize);
   encoder.clear(css::RGBA(0, 0, 0, 255));
 
   svg::ImageResource image;
@@ -1243,7 +1275,8 @@ TEST_F(GeoEncoderTest, DrawImageOverDeviceTextureLimitIsNoOp) {
   image.height = 1;
   image.data.resize(static_cast<std::size_t>(overLimitWidth) * 4u, 255);
 
-  GeoEncoder encoder(*device_, *pipeline_, *gradientPipeline_, *imagePipeline_, target_);
+  GeoEncoder encoder(*device_, *pipeline_, *gradientPipeline_, *imagePipeline_, target_,
+                     kTargetSize);
   encoder.clear(css::RGBA(0, 0, 0, 255));
   encoder.drawImage(image, Box2d({16.0, 16.0}, {48.0, 48.0}), /*opacity=*/1.0,
                     /*pixelated=*/true);
@@ -1256,7 +1289,8 @@ TEST_F(GeoEncoderTest, DrawImageOverDeviceTextureLimitIsNoOp) {
 /// this test shipped, future refactors that forget to re-bind the Slug
 /// fill pipeline between pipeline switches will regress here.
 TEST_F(GeoEncoderTest, FillThenImageThenFill) {
-  GeoEncoder encoder(*device_, *pipeline_, *gradientPipeline_, *imagePipeline_, target_);
+  GeoEncoder encoder(*device_, *pipeline_, *gradientPipeline_, *imagePipeline_, target_,
+                     kTargetSize);
   encoder.clear(css::RGBA(0, 0, 0, 255));
 
   // 1) Fill a red rect covering the top half.
@@ -1323,15 +1357,23 @@ TEST_F(GeoEncoderTest, FillPathPatternSolidTile) {
   wgpu::Extent3D extent = {kTileDim, kTileDim, 1};
   device_->queue().writeTexture(dst, tilePixels.data(), tilePixels.size(), layout, extent);
 
+  // Name the uploaded tile so the encoder can bind it as paint.
+  gpu::Result<gpu::Texture> tileHandleResult = device_->adapterDevice().importExternalTexture(
+      tile, gpu::Extent2d{kTileDim, kTileDim}, gpu::TextureFormat::RGBA8Unorm,
+      gpu::TextureUsage::Sampled | gpu::TextureUsage::CopyDst);
+  ASSERT_TRUE(tileHandleResult.hasResult());
+  const gpu::Texture tileHandle = std::move(tileHandleResult).result();
+
   // 2. Fill a path with the pattern. The tile size in pattern-space is
   // 4x4 so the shader wraps every 4 pixels; since the path spans more than
   // one tile, the wrap logic is exercised.
   Path path = PathBuilder().addRect(Box2d({16, 16}, {48, 48})).build();
 
-  GeoEncoder encoder(*device_, *pipeline_, *gradientPipeline_, *imagePipeline_, target_);
+  GeoEncoder encoder(*device_, *pipeline_, *gradientPipeline_, *imagePipeline_, target_,
+                     kTargetSize);
   encoder.clear(css::RGBA(0, 0, 0, 255));
   GeoEncoder::PatternPaint paint;
-  paint.tile = tile;
+  paint.tile = &tileHandle;
   paint.tileSize = Vector2d(4.0, 4.0);
   paint.patternFromPath = Transform2d();  // Identity: target space == pattern space.
   paint.opacity = 1.0;

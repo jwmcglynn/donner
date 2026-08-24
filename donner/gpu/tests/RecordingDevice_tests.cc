@@ -258,6 +258,24 @@ destroy texture#0
   EXPECT_THAT(device.serialize(), Eq(kExpected));
 }
 
+TEST(RecordingDeviceTests, CopyTextureToTextureSerializesSourceDestinationAndSize) {
+  RecordingDevice device;
+  const Texture source = GetResultOrFail(device.createTexture(TextureDescriptor{
+      "source", Extent2d{4, 4}, TextureFormat::RGBA8Unorm, TextureUsage::CopySrc}));
+  const Texture destination = GetResultOrFail(device.createTexture(TextureDescriptor{
+      "destination", Extent2d{4, 4}, TextureFormat::RGBA8Unorm, TextureUsage::CopyDst}));
+
+  std::unique_ptr<CommandEncoder> encoder = GetResultOrFail(device.createCommandEncoder());
+  ASSERT_THAT(encoder->copyTextureToTexture(source, destination, Extent2d{4, 4}), IsOk());
+  auto commandBuffer = encoder->finish();
+  ASSERT_THAT(commandBuffer, HasResult());
+  ASSERT_THAT(device.submit(std::move(commandBuffer).result()), HasResult());
+
+  // Line format: labeled src and dst identities, then the copy extent.
+  EXPECT_THAT(device.serialize(),
+              HasSubstr("  copyTextureToTexture src=texture#0 dst=texture#1 copySize=4x4\n"));
+}
+
 TEST(RecordingDeviceTests, SpirvShaderModuleSerializesWordCountAndHash) {
   RecordingDevice device;
   const ShaderModule module = GetResultOrFail(device.createShaderModule(ShaderModuleDescriptor{

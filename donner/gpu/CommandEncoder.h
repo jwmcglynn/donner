@@ -153,6 +153,20 @@ public:
                              const Extent2d& copySize);
 
   /**
+   * Records a texture-to-texture copy starting at texel (0, 0) of both textures (the RHI's
+   * whole-rect copy convention). Not allowed inside a render pass. Both textures must be live
+   * handles of this device and share one \ref TextureFormat, \p source needs
+   * \ref TextureUsage::CopySrc, \p destination needs \ref TextureUsage::CopyDst, and
+   * \p copySize must be nonzero and fit inside both texture extents.
+   *
+   * @param source Source texture; needs \ref TextureUsage::CopySrc.
+   * @param destination Destination texture; needs \ref TextureUsage::CopyDst.
+   * @param copySize Copy extent in texels.
+   */
+  Status copyTextureToTexture(const Texture& source, const Texture& destination,
+                              const Extent2d& copySize);
+
+  /**
    * Finishes recording and registers the command buffer with the device. Fails with the first
    * recorded error if any operation failed, or with \ref GpuErrorType::InvalidState if a pass is
    * still active or the encoder already finished.
@@ -195,6 +209,23 @@ private:
   /// destroyed after the group was created.
   /// @param entry Entry to re-resolve.
   Status revalidateBindGroupEntry(const BindGroupEntry& entry);
+
+  /// Validates that a texture-to-texture copy's operands are distinct, share a format, and carry
+  /// the CopySrc / CopyDst usages.
+  /// @param source Source texture handle.
+  /// @param destination Destination texture handle.
+  /// @param sourceDescriptor Descriptor the source was created with.
+  /// @param destinationDescriptor Descriptor the destination was created with.
+  Status validateCopyTexturePair(const Texture& source, const Texture& destination,
+                                 const TextureDescriptor& sourceDescriptor,
+                                 const TextureDescriptor& destinationDescriptor);
+
+  /// Validates that a texture-to-texture copy's extent is non-degenerate and fits both operands.
+  /// @param copySize Copy extent in texels.
+  /// @param sourceDescriptor Descriptor the source was created with.
+  /// @param destinationDescriptor Descriptor the destination was created with.
+  Status validateCopyExtent(const Extent2d& copySize, const TextureDescriptor& sourceDescriptor,
+                            const TextureDescriptor& destinationDescriptor);
 
   // RenderPassEncoder forwards to these.
   Status passSetPipeline(const RenderPipeline& pipeline);

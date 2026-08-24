@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cstddef>
+#include <cstdio>
 #include <cstring>
 #include <format>
 #include <map>
@@ -26,6 +27,7 @@
 
 #include "donner/base/Utils.h"
 #include "donner/gpu/GpuLimits.h"
+#include "donner/gpu/vulkan/VulkanLoader.h"
 
 namespace donner::gpu::vulkan {
 
@@ -342,10 +344,15 @@ VKAPI_ATTR VkBool32 VKAPI_CALL ValidationMessengerCallback(
 
 /// Records a conservative full image layout transition: ALL_COMMANDS to ALL_COMMANDS with
 /// memory-availability source access and read+write destination access. Intentionally maximal
-/// (design 0053 "Vulkan": the first implementation is conservative and validation-clean);
-/// VK_ACCESS_MEMORY_* flags are valid with any pipeline stage.
-void RecordImageBarrier(VkCommandBuffer commandBuffer, VkImage image, VkImageLayout oldLayout,
-                        VkImageLayout newLayout) {
+/// (the first implementation is conservative and validation-clean); VK_ACCESS_MEMORY_* flags are
+/// valid with any pipeline stage.
+/// @param api Resolved device entry points.
+/// @param commandBuffer Command buffer to record into.
+/// @param image Image whose layout changes.
+/// @param oldLayout Layout the image is currently in.
+/// @param newLayout Layout the image transitions to.
+void RecordImageBarrier(const VulkanApi& api, VkCommandBuffer commandBuffer, VkImage image,
+                        VkImageLayout oldLayout, VkImageLayout newLayout) {
   VkImageMemoryBarrier barrier = {};
   barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
   barrier.srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT;
@@ -356,17 +363,20 @@ void RecordImageBarrier(VkCommandBuffer commandBuffer, VkImage image, VkImageLay
   barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
   barrier.image = image;
   barrier.subresourceRange = FullColorRange();
-  vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
-                       VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
+  api.vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                           VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 0, nullptr, 0, nullptr, 1,
+                           &barrier);
 }
 
 /// Returns the Khronos validation layer if the loader enumerates it, otherwise an empty list.
-std::vector<const char*> EnumerateValidationLayer() {
+/// @param api Resolved global entry points.
+std::vector<const char*> EnumerateValidationLayer(const VulkanApi& api) {
   std::vector<const char*> enabledLayers;
   uint32_t layerCount = 0;
-  if (vkEnumerateInstanceLayerProperties(&layerCount, nullptr) == VK_SUCCESS && layerCount > 0) {
+  if (api.vkEnumerateInstanceLayerProperties(&layerCount, nullptr) == VK_SUCCESS &&
+      layerCount > 0) {
     std::vector<VkLayerProperties> layers(layerCount);
-    if (vkEnumerateInstanceLayerProperties(&layerCount, layers.data()) == VK_SUCCESS) {
+    if (api.vkEnumerateInstanceLayerProperties(&layerCount, layers.data()) == VK_SUCCESS) {
       for (const VkLayerProperties& layer : layers) {
         if (std::strcmp(layer.layerName, kValidationLayerName) == 0) {
           enabledLayers.push_back(kValidationLayerName);
@@ -380,17 +390,19 @@ std::vector<const char*> EnumerateValidationLayer() {
 
 /// Returns the debug-utils extension when it is enumerated and the validation layer is active,
 /// otherwise an empty list. The messenger only has anything to report alongside validation.
+/// @param api Resolved global entry points.
 /// @param validationLayerEnabled True when the validation layer will be enabled.
-std::vector<const char*> EnumerateDebugUtilsExtension(bool validationLayerEnabled) {
+std::vector<const char*> EnumerateDebugUtilsExtension(const VulkanApi& api,
+                                                      bool validationLayerEnabled) {
   std::vector<const char*> enabledExtensions;
   if (!validationLayerEnabled) {
     return enabledExtensions;
   }
   uint32_t extensionCount = 0;
-  if (vkEnumerateInstanceExtensionProperties(nullptr, &extensionCount, nullptr) == VK_SUCCESS &&
+  if (api.vkEnumerateInstanceExtensionProperties(nullptr, &extensionCount, nullptr) == VK_SUCCESS &&
       extensionCount > 0) {
     std::vector<VkExtensionProperties> extensions(extensionCount);
-    if (vkEnumerateInstanceExtensionProperties(nullptr, &extensionCount, extensions.data()) ==
+    if (api.vkEnumerateInstanceExtensionProperties(nullptr, &extensionCount, extensions.data()) ==
         VK_SUCCESS) {
       for (const VkExtensionProperties& extension : extensions) {
         if (std::strcmp(extension.extensionName, VK_EXT_DEBUG_UTILS_EXTENSION_NAME) == 0) {
@@ -408,29 +420,30 @@ std::vector<const char*> EnumerateDebugUtilsExtension(bool validationLayerEnable
 /// @param instance Instance to enumerate.
 /// @param selectedDevice Set to the chosen physical device on success.
 /// @param selectedQueueFamily Set to the chosen graphics queue family index on success.
-bool SelectGraphicsPhysicalDevice(VkInstance instance, VkPhysicalDevice& selectedDevice,
-                                  uint32_t& selectedQueueFamily) {
+bool SelectGraphicsPhysicalDevice(const VulkanApi& api, VkInstance instance,
+                                  VkPhysicalDevice& selectedDevice, uint32_t& selectedQueueFamily) {
   uint32_t deviceCount = 0;
-  if (vkEnumeratePhysicalDevices(instance, &deviceCount, nullptr) != VK_SUCCESS ||
+  if (api.vkEnumeratePhysicalDevices(instance, &deviceCount, nullptr) != VK_SUCCESS ||
       deviceCount == 0) {
     return false;
   }
   std::vector<VkPhysicalDevice> physicalDevices(deviceCount);
-  if (vkEnumeratePhysicalDevices(instance, &deviceCount, physicalDevices.data()) != VK_SUCCESS) {
+  if (api.vkEnumeratePhysicalDevices(instance, &deviceCount, physicalDevices.data()) !=
+      VK_SUCCESS) {
     return false;
   }
 
   for (VkPhysicalDevice candidate : physicalDevices) {
     VkPhysicalDeviceProperties properties = {};
-    vkGetPhysicalDeviceProperties(candidate, &properties);
+    api.vkGetPhysicalDeviceProperties(candidate, &properties);
     if (properties.apiVersion < kTargetApiVersion) {
       continue;
     }
 
     uint32_t familyCount = 0;
-    vkGetPhysicalDeviceQueueFamilyProperties(candidate, &familyCount, nullptr);
+    api.vkGetPhysicalDeviceQueueFamilyProperties(candidate, &familyCount, nullptr);
     std::vector<VkQueueFamilyProperties> families(familyCount);
-    vkGetPhysicalDeviceQueueFamilyProperties(candidate, &familyCount, families.data());
+    api.vkGetPhysicalDeviceQueueFamilyProperties(candidate, &familyCount, families.data());
     for (uint32_t familyIndex = 0; familyIndex < familyCount; ++familyIndex) {
       if ((families[familyIndex].queueFlags & VK_QUEUE_GRAPHICS_BIT) != 0) {
         selectedDevice = candidate;
@@ -451,15 +464,15 @@ struct DebugMessengerHandles {
 /// Best-effort: creates a debug-utils messenger that latches validation ERROR messages into the
 /// device error state. On any failure the messenger stays null and validation output remains
 /// log-only.
+/// @param api Resolved instance entry points; the messenger functions are null when the
+///   debug-utils extension was not enabled, and the messenger is then skipped.
 /// @param instance Instance the messenger is created on.
 /// @param userData Error state passed to the messenger callback.
-DebugMessengerHandles CreateValidationMessenger(VkInstance instance, void* userData) {
+DebugMessengerHandles CreateValidationMessenger(const VulkanApi& api, VkInstance instance,
+                                                void* userData) {
   DebugMessengerHandles handles;
-  const auto createMessengerFn = reinterpret_cast<PFN_vkCreateDebugUtilsMessengerEXT>(
-      vkGetInstanceProcAddr(instance, "vkCreateDebugUtilsMessengerEXT"));
-  handles.destroyFn = reinterpret_cast<PFN_vkDestroyDebugUtilsMessengerEXT>(
-      vkGetInstanceProcAddr(instance, "vkDestroyDebugUtilsMessengerEXT"));
-  if (createMessengerFn == nullptr || handles.destroyFn == nullptr) {
+  handles.destroyFn = api.vkDestroyDebugUtilsMessengerEXT;
+  if (api.vkCreateDebugUtilsMessengerEXT == nullptr || handles.destroyFn == nullptr) {
     return handles;
   }
   VkDebugUtilsMessengerCreateInfoEXT messengerInfo = {};
@@ -468,7 +481,8 @@ DebugMessengerHandles CreateValidationMessenger(VkInstance instance, void* userD
   messengerInfo.messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT;
   messengerInfo.pfnUserCallback = ValidationMessengerCallback;
   messengerInfo.pUserData = userData;
-  if (createMessengerFn(instance, &messengerInfo, nullptr, &handles.messenger) != VK_SUCCESS) {
+  if (api.vkCreateDebugUtilsMessengerEXT(instance, &messengerInfo, nullptr, &handles.messenger) !=
+      VK_SUCCESS) {
     handles.messenger = VK_NULL_HANDLE;
   }
   return handles;
@@ -597,11 +611,100 @@ void DestroyIfSet(VkDevice device, Handle& handle, DestroyFn destroyFn) {
   }
 }
 
+/// The Vulkan instance a device is built on, together with the loader that resolved it.
+///
+/// An empty setup (null loader) means instance creation failed; the reason has already been
+/// reported.
+struct InstanceSetup {
+  std::shared_ptr<VulkanLoader> loader;  //!< Loader kept open for the instance's lifetime.
+  VkInstance instance = VK_NULL_HANDLE;  //!< Created instance, or null on failure.
+  bool debugMessengerAvailable = false;  //!< True when debug-utils was enabled on it.
+};
+
+/// Opens the Vulkan loader, checks that it offers the API version this backend targets, and
+/// creates the headless instance with the validation layer and debug-utils messenger extension
+/// when they are available.
+InstanceSetup CreateInstance() {
+  InstanceSetup setup;
+  // Vulkan is reached entirely through the loader this opens: nothing in this backend is a
+  // link-time symbol, so a machine without a Vulkan runtime reports it here instead of failing
+  // to start.
+  Result<std::shared_ptr<VulkanLoader>> loaderResult = VulkanLoader::Open();
+  if (loaderResult.hasError()) {
+    std::fprintf(stderr, "[donner::gpu::vulkan] %s\n", loaderResult.error().message.c_str());
+    return {};
+  }
+  const std::shared_ptr<VulkanLoader> loader = std::move(loaderResult).result();
+  const VulkanApi& api = loader->api();
+
+  // Vulkan 1.1 requires instance-level 1.1 support. On a 1.0-only loader
+  // vkEnumerateInstanceVersion still exists as a loader export in loaders new enough for this
+  // backend's deployment targets; a version below 1.1 fails closed here.
+  uint32_t instanceVersion = 0;
+  if (api.vkEnumerateInstanceVersion(&instanceVersion) != VK_SUCCESS ||
+      instanceVersion < kTargetApiVersion) {
+    return {};
+  }
+
+  // Enable the Khronos validation layer only when the loader enumerates it, and the debug-utils
+  // messenger extension only alongside it: the messenger turns validation ERROR messages into
+  // latched device errors (see ValidationMessengerCallback) instead of log lines.
+  const std::vector<const char*> enabledLayers = EnumerateValidationLayer(api);
+  const std::vector<const char*> enabledExtensions =
+      EnumerateDebugUtilsExtension(api, !enabledLayers.empty());
+
+  VkApplicationInfo applicationInfo = {};
+  applicationInfo.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
+  applicationInfo.pApplicationName = "donner";
+  applicationInfo.applicationVersion = 1;
+  applicationInfo.pEngineName = "donner-gpu";
+  applicationInfo.engineVersion = 1;
+  applicationInfo.apiVersion = kTargetApiVersion;
+
+  VkInstanceCreateInfo instanceInfo = {};
+  instanceInfo.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
+  instanceInfo.pApplicationInfo = &applicationInfo;
+  instanceInfo.enabledLayerCount = static_cast<uint32_t>(enabledLayers.size());
+  instanceInfo.ppEnabledLayerNames = enabledLayers.empty() ? nullptr : enabledLayers.data();
+  // Headless: no surface extensions; debug utils only (see above).
+  instanceInfo.enabledExtensionCount = static_cast<uint32_t>(enabledExtensions.size());
+  instanceInfo.ppEnabledExtensionNames =
+      enabledExtensions.empty() ? nullptr : enabledExtensions.data();
+
+  VkInstance instance = VK_NULL_HANDLE;
+  if (api.vkCreateInstance(&instanceInfo, nullptr, &instance) != VK_SUCCESS) {
+    return {};
+  }
+
+  // Instance-level entry points exist only once an instance does. Nothing below may be called
+  // before this succeeds; on failure the instance is unreachable except through the one entry
+  // point that destroys it, so release it only when that one resolved.
+  if (const Status status = loader->loadInstance(instance, !enabledExtensions.empty());
+      status.hasError()) {
+    std::fprintf(stderr, "[donner::gpu::vulkan] %s\n", status.error().message.c_str());
+    if (api.vkDestroyInstance != nullptr) {
+      api.vkDestroyInstance(instance, nullptr);
+    }
+    return {};
+  }
+
+  setup.loader = loader;
+  setup.instance = instance;
+  setup.debugMessengerAvailable = !enabledExtensions.empty();
+  return setup;
+}
+
 }  // namespace
 
 /// Vulkan state of a VulkanDevice: instance/device/queue handles plus per-resource slot tables
 /// mirroring the validated slot indices handed to the `on*` hooks.
 struct VulkanDevice::Impl {
+  /// Keeps the Vulkan loader library open. Every entry point this device calls is code inside
+  /// that library, so it must outlive every Vulkan object below.
+  std::shared_ptr<VulkanLoader> loader;
+  /// Entry points resolved for this instance and device; owned by \ref loader.
+  const VulkanApi* api = nullptr;
+
   VkInstance instance = VK_NULL_HANDLE;                    //!< Owning instance; set by Create.
   VkPhysicalDevice physicalDevice = VK_NULL_HANDLE;        //!< Selected physical device.
   VkPhysicalDeviceMemoryProperties memoryProperties = {};  //!< Memory heaps/types of the device.
@@ -658,14 +761,18 @@ struct VulkanDevice::Impl {
   /// resource (exempt from submission pinning) is destroyed - the "snapshot or retain"
   /// requirement in Device.h.
   struct PipelineLayoutHandle {
+    /// Entry points used to destroy \ref layout. Held here because this outlives the slot it was
+    /// created for: a pipeline retains its layout, so the destructor can run after the owning
+    /// slot is gone.
+    const VulkanApi* api = nullptr;
     VkDevice device = VK_NULL_HANDLE;          //!< Device that owns \ref layout.
     VkPipelineLayout layout = VK_NULL_HANDLE;  //!< Pipeline layout handle.
     uint32_t descriptorSetCount = 0;           //!< Number of descriptor sets in the layout.
 
     /// Destructor; destroys the pipeline layout.
     ~PipelineLayoutHandle() {
-      if (layout != VK_NULL_HANDLE) {
-        vkDestroyPipelineLayout(device, layout, nullptr);
+      if (layout != VK_NULL_HANDLE && api != nullptr) {
+        api->vkDestroyPipelineLayout(device, layout, nullptr);
       }
     }
   };
@@ -729,16 +836,16 @@ struct VulkanDevice::Impl {
   /// Destroys the transient objects and command buffer of a completed submission.
   void releaseSubmission(InFlightSubmission& submission) {
     for (VkFramebuffer framebuffer : submission.framebuffers) {
-      vkDestroyFramebuffer(device, framebuffer, nullptr);
+      api->vkDestroyFramebuffer(device, framebuffer, nullptr);
     }
     for (VkRenderPass renderPass : submission.renderPasses) {
-      vkDestroyRenderPass(device, renderPass, nullptr);
+      api->vkDestroyRenderPass(device, renderPass, nullptr);
     }
     if (submission.commandBuffer != VK_NULL_HANDLE) {
-      vkFreeCommandBuffers(device, commandPool, 1, &submission.commandBuffer);
+      api->vkFreeCommandBuffers(device, commandPool, 1, &submission.commandBuffer);
     }
     if (submission.fence != VK_NULL_HANDLE) {
-      vkDestroyFence(device, submission.fence, nullptr);
+      api->vkDestroyFence(device, submission.fence, nullptr);
     }
   }
 
@@ -748,7 +855,7 @@ struct VulkanDevice::Impl {
   void pollCompleted() {
     size_t releasedCount = 0;
     for (InFlightSubmission& submission : inFlight) {
-      const VkResult status = vkGetFenceStatus(device, submission.fence);
+      const VkResult status = api->vkGetFenceStatus(device, submission.fence);
       if (status == VK_SUCCESS) {
         releaseSubmission(submission);
         completedSerialValue = submission.serial;
@@ -773,7 +880,8 @@ struct VulkanDevice::Impl {
     allocateInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
     allocateInfo.commandBufferCount = 1;
     VkCommandBuffer commandBuffer = VK_NULL_HANDLE;
-    if (const VkResult result = vkAllocateCommandBuffers(device, &allocateInfo, &commandBuffer);
+    if (const VkResult result =
+            api->vkAllocateCommandBuffers(device, &allocateInfo, &commandBuffer);
         result != VK_SUCCESS) {
       return VkError("vkAllocateCommandBuffers", result);
     }
@@ -792,7 +900,7 @@ struct VulkanDevice::Impl {
     bufferInfo.size = byteSize;
     bufferInfo.usage = usage;
     bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-    if (const VkResult result = vkCreateBuffer(device, &bufferInfo, nullptr, &record.buffer);
+    if (const VkResult result = api->vkCreateBuffer(device, &bufferInfo, nullptr, &record.buffer);
         result != VK_SUCCESS) {
       return GpuError{
           GpuErrorType::InvalidState,
@@ -800,7 +908,7 @@ struct VulkanDevice::Impl {
     }
 
     VkMemoryRequirements requirements = {};
-    vkGetBufferMemoryRequirements(device, record.buffer, &requirements);
+    api->vkGetBufferMemoryRequirements(device, record.buffer, &requirements);
     const std::optional<uint32_t> memoryType =
         FindMemoryType(memoryProperties, requirements.memoryTypeBits,
                        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
@@ -814,20 +922,21 @@ struct VulkanDevice::Impl {
     allocateInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
     allocateInfo.allocationSize = requirements.size;
     allocateInfo.memoryTypeIndex = *memoryType;
-    if (const VkResult result = vkAllocateMemory(device, &allocateInfo, nullptr, &record.memory);
+    if (const VkResult result =
+            api->vkAllocateMemory(device, &allocateInfo, nullptr, &record.memory);
         result != VK_SUCCESS) {
       destroyBufferRecord(record);
       return GpuError{GpuErrorType::InvalidState,
                       std::format("vkAllocateMemory of {} bytes for buffer '{}' failed with {}",
                                   requirements.size, label, VkResultToString(result))};
     }
-    if (const VkResult result = vkBindBufferMemory(device, record.buffer, record.memory, 0);
+    if (const VkResult result = api->vkBindBufferMemory(device, record.buffer, record.memory, 0);
         result != VK_SUCCESS) {
       destroyBufferRecord(record);
       return VkError("vkBindBufferMemory", result);
     }
     if (const VkResult result =
-            vkMapMemory(device, record.memory, 0, VK_WHOLE_SIZE, 0, &record.mapped);
+            api->vkMapMemory(device, record.memory, 0, VK_WHOLE_SIZE, 0, &record.mapped);
         result != VK_SUCCESS) {
       destroyBufferRecord(record);
       return VkError("vkMapMemory", result);
@@ -838,11 +947,11 @@ struct VulkanDevice::Impl {
   /// Destroys a buffer record's Vulkan objects (mapping is released implicitly by the free).
   void destroyBufferRecord(BufferRecord& record) {
     if (record.buffer != VK_NULL_HANDLE) {
-      vkDestroyBuffer(device, record.buffer, nullptr);
+      api->vkDestroyBuffer(device, record.buffer, nullptr);
       record.buffer = VK_NULL_HANDLE;
     }
     if (record.memory != VK_NULL_HANDLE) {
-      vkFreeMemory(device, record.memory, nullptr);
+      api->vkFreeMemory(device, record.memory, nullptr);
       record.memory = VK_NULL_HANDLE;
     }
     record.mapped = nullptr;
@@ -851,11 +960,11 @@ struct VulkanDevice::Impl {
   /// Destroys a texture record's Vulkan objects.
   void destroyTextureRecord(TextureRecord& record) {
     if (record.image != VK_NULL_HANDLE) {
-      vkDestroyImage(device, record.image, nullptr);
+      api->vkDestroyImage(device, record.image, nullptr);
       record.image = VK_NULL_HANDLE;
     }
     if (record.memory != VK_NULL_HANDLE) {
-      vkFreeMemory(device, record.memory, nullptr);
+      api->vkFreeMemory(device, record.memory, nullptr);
       record.memory = VK_NULL_HANDLE;
     }
   }
@@ -866,7 +975,7 @@ struct VulkanDevice::Impl {
     if (device == VK_NULL_HANDLE) {
       destroyDebugMessenger();
       if (instance != VK_NULL_HANDLE) {
-        vkDestroyInstance(instance, nullptr);
+        api->vkDestroyInstance(instance, nullptr);
         instance = VK_NULL_HANDLE;
       }
       return;
@@ -880,10 +989,10 @@ struct VulkanDevice::Impl {
     for (std::optional<RenderPipelineRecord>& record : renderPipelines) {
       if (record.has_value()) {
         if (record->pipeline != VK_NULL_HANDLE) {
-          vkDestroyPipeline(device, record->pipeline, nullptr);
+          api->vkDestroyPipeline(device, record->pipeline, nullptr);
         }
         if (record->compatRenderPass != VK_NULL_HANDLE) {
-          vkDestroyRenderPass(device, record->compatRenderPass, nullptr);
+          api->vkDestroyRenderPass(device, record->compatRenderPass, nullptr);
         }
         record.reset();  // Releases the retained pipeline layout.
       }
@@ -892,31 +1001,31 @@ struct VulkanDevice::Impl {
     pipelineLayouts.clear();  // Releases the remaining VkPipelineLayout handles.
     for (VkShaderModule module : shaderModules) {
       if (module != VK_NULL_HANDLE) {
-        vkDestroyShaderModule(device, module, nullptr);
+        api->vkDestroyShaderModule(device, module, nullptr);
       }
     }
     shaderModules.clear();
     for (std::optional<BindGroupRecord>& record : bindGroups) {
       if (record.has_value() && record->pool != VK_NULL_HANDLE) {
-        vkDestroyDescriptorPool(device, record->pool, nullptr);
+        api->vkDestroyDescriptorPool(device, record->pool, nullptr);
       }
     }
     bindGroups.clear();
     for (std::optional<BindGroupLayoutRecord>& record : bindGroupLayouts) {
       if (record.has_value() && record->layout != VK_NULL_HANDLE) {
-        vkDestroyDescriptorSetLayout(device, record->layout, nullptr);
+        api->vkDestroyDescriptorSetLayout(device, record->layout, nullptr);
       }
     }
     bindGroupLayouts.clear();
     for (VkSampler sampler : samplers) {
       if (sampler != VK_NULL_HANDLE) {
-        vkDestroySampler(device, sampler, nullptr);
+        api->vkDestroySampler(device, sampler, nullptr);
       }
     }
     samplers.clear();
     for (std::optional<TextureViewRecord>& record : textureViews) {
       if (record.has_value() && record->view != VK_NULL_HANDLE) {
-        vkDestroyImageView(device, record->view, nullptr);
+        api->vkDestroyImageView(device, record->view, nullptr);
       }
     }
     textureViews.clear();
@@ -934,14 +1043,14 @@ struct VulkanDevice::Impl {
     buffers.clear();
 
     if (commandPool != VK_NULL_HANDLE) {
-      vkDestroyCommandPool(device, commandPool, nullptr);
+      api->vkDestroyCommandPool(device, commandPool, nullptr);
       commandPool = VK_NULL_HANDLE;
     }
-    vkDestroyDevice(device, nullptr);
+    api->vkDestroyDevice(device, nullptr);
     device = VK_NULL_HANDLE;
     destroyDebugMessenger();
     if (instance != VK_NULL_HANDLE) {
-      vkDestroyInstance(instance, nullptr);
+      api->vkDestroyInstance(instance, nullptr);
       instance = VK_NULL_HANDLE;
     }
   }
@@ -1128,50 +1237,19 @@ struct VulkanDevice::Impl {
 };
 
 std::unique_ptr<VulkanDevice> VulkanDevice::Create() {
-  // Vulkan 1.1 requires instance-level 1.1 support. On a 1.0-only loader
-  // vkEnumerateInstanceVersion still exists as a loader export in loaders new enough for this
-  // backend's deployment targets; a version below 1.1 fails closed here.
-  uint32_t instanceVersion = 0;
-  if (vkEnumerateInstanceVersion(&instanceVersion) != VK_SUCCESS ||
-      instanceVersion < kTargetApiVersion) {
+  InstanceSetup setup = CreateInstance();
+  if (setup.loader == nullptr) {
     return nullptr;
   }
-
-  // Enable the Khronos validation layer only when the loader enumerates it, and the debug-utils
-  // messenger extension only alongside it: the messenger turns validation ERROR messages into
-  // latched device errors (see ValidationMessengerCallback) instead of log lines.
-  const std::vector<const char*> enabledLayers = EnumerateValidationLayer();
-  const std::vector<const char*> enabledExtensions =
-      EnumerateDebugUtilsExtension(!enabledLayers.empty());
-
-  VkApplicationInfo applicationInfo = {};
-  applicationInfo.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
-  applicationInfo.pApplicationName = "donner";
-  applicationInfo.applicationVersion = 1;
-  applicationInfo.pEngineName = "donner-gpu";
-  applicationInfo.engineVersion = 1;
-  applicationInfo.apiVersion = kTargetApiVersion;
-
-  VkInstanceCreateInfo instanceInfo = {};
-  instanceInfo.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
-  instanceInfo.pApplicationInfo = &applicationInfo;
-  instanceInfo.enabledLayerCount = static_cast<uint32_t>(enabledLayers.size());
-  instanceInfo.ppEnabledLayerNames = enabledLayers.empty() ? nullptr : enabledLayers.data();
-  // Headless: no surface extensions; debug utils only (see above).
-  instanceInfo.enabledExtensionCount = static_cast<uint32_t>(enabledExtensions.size());
-  instanceInfo.ppEnabledExtensionNames =
-      enabledExtensions.empty() ? nullptr : enabledExtensions.data();
-
-  VkInstance instance = VK_NULL_HANDLE;
-  if (vkCreateInstance(&instanceInfo, nullptr, &instance) != VK_SUCCESS) {
-    return nullptr;
-  }
+  const std::shared_ptr<VulkanLoader>& loader = setup.loader;
+  const VulkanApi& api = loader->api();
+  const VkInstance instance = setup.instance;
 
   // First enumerated physical device with 1.1 support and a graphics queue family.
   VkPhysicalDevice selectedDevice = VK_NULL_HANDLE;
   uint32_t selectedQueueFamily = 0;
-  if (!SelectGraphicsPhysicalDevice(instance, selectedDevice, selectedQueueFamily)) {
-    vkDestroyInstance(instance, nullptr);
+  if (!SelectGraphicsPhysicalDevice(api, instance, selectedDevice, selectedQueueFamily)) {
+    api.vkDestroyInstance(instance, nullptr);
     return nullptr;
   }
 
@@ -1180,9 +1258,9 @@ std::unique_ptr<VulkanDevice> VulkanDevice::Create() {
   // chapter), so requiring it cannot lose devices. Fail closed anyway if a broken
   // implementation reports it unsupported.
   VkPhysicalDeviceFeatures supportedFeatures = {};
-  vkGetPhysicalDeviceFeatures(selectedDevice, &supportedFeatures);
+  api.vkGetPhysicalDeviceFeatures(selectedDevice, &supportedFeatures);
   if (supportedFeatures.robustBufferAccess != VK_TRUE) {
-    vkDestroyInstance(instance, nullptr);
+    api.vkDestroyInstance(instance, nullptr);
     return nullptr;
   }
   VkPhysicalDeviceFeatures enabledFeatures = {};
@@ -1205,8 +1283,19 @@ std::unique_ptr<VulkanDevice> VulkanDevice::Create() {
   deviceInfo.pEnabledFeatures = &enabledFeatures;
 
   VkDevice device = VK_NULL_HANDLE;
-  if (vkCreateDevice(selectedDevice, &deviceInfo, nullptr, &device) != VK_SUCCESS) {
-    vkDestroyInstance(instance, nullptr);
+  if (api.vkCreateDevice(selectedDevice, &deviceInfo, nullptr, &device) != VK_SUCCESS) {
+    api.vkDestroyInstance(instance, nullptr);
+    return nullptr;
+  }
+
+  // Device-level entry points come from the device itself, so every call this backend records
+  // per frame reaches the implementation directly instead of through the loader's dispatch.
+  if (const Status status = loader->loadDevice(device); status.hasError()) {
+    std::fprintf(stderr, "[donner::gpu::vulkan] %s\n", status.error().message.c_str());
+    if (api.vkDestroyDevice != nullptr) {
+      api.vkDestroyDevice(device, nullptr);
+    }
+    api.vkDestroyInstance(instance, nullptr);
     return nullptr;
   }
 
@@ -1214,25 +1303,27 @@ std::unique_ptr<VulkanDevice> VulkanDevice::Create() {
   VkCommandPoolCreateInfo poolInfo = {};
   poolInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
   poolInfo.queueFamilyIndex = selectedQueueFamily;
-  if (vkCreateCommandPool(device, &poolInfo, nullptr, &commandPool) != VK_SUCCESS) {
-    vkDestroyDevice(device, nullptr);
-    vkDestroyInstance(instance, nullptr);
+  if (api.vkCreateCommandPool(device, &poolInfo, nullptr, &commandPool) != VK_SUCCESS) {
+    api.vkDestroyDevice(device, nullptr);
+    api.vkDestroyInstance(instance, nullptr);
     return nullptr;
   }
 
   std::unique_ptr<VulkanDevice> result(new VulkanDevice());
   Impl& impl = *result->impl_;
+  impl.loader = loader;
+  impl.api = &loader->api();
   impl.instance = instance;
   impl.physicalDevice = selectedDevice;
   impl.device = device;
   impl.queueFamilyIndex = selectedQueueFamily;
   impl.commandPool = commandPool;
-  vkGetDeviceQueue(device, selectedQueueFamily, 0, &impl.queue);
-  vkGetPhysicalDeviceMemoryProperties(selectedDevice, &impl.memoryProperties);
+  api.vkGetDeviceQueue(device, selectedQueueFamily, 0, &impl.queue);
+  api.vkGetPhysicalDeviceMemoryProperties(selectedDevice, &impl.memoryProperties);
 
-  if (!enabledExtensions.empty()) {
+  if (setup.debugMessengerAvailable) {
     const DebugMessengerHandles messenger =
-        CreateValidationMessenger(instance, impl.errorState.get());
+        CreateValidationMessenger(api, instance, impl.errorState.get());
     impl.destroyDebugMessengerFn = messenger.destroyFn;
     impl.debugMessenger = messenger.messenger;
   }
@@ -1248,7 +1339,7 @@ VulkanDevice::~VulkanDevice() {
     if (lastSubmittedSerial() > completedSerial()) {
       waitForSerial(lastSubmittedSerial(), /*timeoutSeconds=*/5.0);
     }
-    vkDeviceWaitIdle(impl_->device);
+    impl_->api->vkDeviceWaitIdle(impl_->device);
     impl_->pollCompleted();
     poll();
   }
@@ -1285,7 +1376,8 @@ bool VulkanDevice::waitForSerial(uint64_t serial, double timeoutSeconds) {
 
   const double clampedSeconds = timeoutSeconds > 0.0 ? timeoutSeconds : 0.0;
   const uint64_t timeoutNs = static_cast<uint64_t>(clampedSeconds * 1e9);
-  const VkResult result = vkWaitForFences(impl.device, 1, &target->fence, VK_TRUE, timeoutNs);
+  const VkResult result =
+      impl_->api->vkWaitForFences(impl.device, 1, &target->fence, VK_TRUE, timeoutNs);
   if (result == VK_TIMEOUT) {
     return false;
   }
@@ -1347,7 +1439,8 @@ Status VulkanDevice::onCreateTexture(uint32_t slotIndex, const TextureDescriptor
   imageInfo.usage = ToVkImageUsage(descriptor.usage);
   imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
   imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-  if (const VkResult result = vkCreateImage(impl.device, &imageInfo, nullptr, &record.image);
+  if (const VkResult result =
+          impl_->api->vkCreateImage(impl.device, &imageInfo, nullptr, &record.image);
       result != VK_SUCCESS) {
     return GpuError{GpuErrorType::InvalidState,
                     std::format("vkCreateImage ({}x{}) for '{}' failed with {}",
@@ -1356,7 +1449,7 @@ Status VulkanDevice::onCreateTexture(uint32_t slotIndex, const TextureDescriptor
   }
 
   VkMemoryRequirements requirements = {};
-  vkGetImageMemoryRequirements(impl.device, record.image, &requirements);
+  impl_->api->vkGetImageMemoryRequirements(impl.device, record.image, &requirements);
   // Prefer device-local image memory; fall back to any compatible type (software
   // implementations may expose a single unified heap).
   std::optional<uint32_t> memoryType = FindMemoryType(
@@ -1375,7 +1468,8 @@ Status VulkanDevice::onCreateTexture(uint32_t slotIndex, const TextureDescriptor
   allocateInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
   allocateInfo.allocationSize = requirements.size;
   allocateInfo.memoryTypeIndex = *memoryType;
-  if (const VkResult result = vkAllocateMemory(impl.device, &allocateInfo, nullptr, &record.memory);
+  if (const VkResult result =
+          impl_->api->vkAllocateMemory(impl.device, &allocateInfo, nullptr, &record.memory);
       result != VK_SUCCESS) {
     impl.destroyTextureRecord(record);
     return GpuError{GpuErrorType::InvalidState,
@@ -1383,7 +1477,8 @@ Status VulkanDevice::onCreateTexture(uint32_t slotIndex, const TextureDescriptor
                                 requirements.size, std::string_view(descriptor.label),
                                 VkResultToString(result))};
   }
-  if (const VkResult result = vkBindImageMemory(impl.device, record.image, record.memory, 0);
+  if (const VkResult result =
+          impl_->api->vkBindImageMemory(impl.device, record.image, record.memory, 0);
       result != VK_SUCCESS) {
     impl.destroyTextureRecord(record);
     return VkError("vkBindImageMemory", result);
@@ -1408,7 +1503,8 @@ Status VulkanDevice::onCreateTextureView(uint32_t slotIndex, uint32_t textureSlo
   viewInfo.format = ToVkFormat(texture->format);
   viewInfo.subresourceRange = FullColorRange();
   VkImageView view = VK_NULL_HANDLE;
-  if (const VkResult result = vkCreateImageView(impl_->device, &viewInfo, nullptr, &view);
+  if (const VkResult result =
+          impl_->api->vkCreateImageView(impl_->device, &viewInfo, nullptr, &view);
       result != VK_SUCCESS) {
     return GpuError{GpuErrorType::InvalidState,
                     std::format("vkCreateImageView for '{}' failed with {}",
@@ -1437,7 +1533,8 @@ Status VulkanDevice::onCreateSampler(uint32_t slotIndex, const SamplerDescriptor
   samplerInfo.unnormalizedCoordinates = VK_FALSE;
 
   VkSampler sampler = VK_NULL_HANDLE;
-  if (const VkResult result = vkCreateSampler(impl_->device, &samplerInfo, nullptr, &sampler);
+  if (const VkResult result =
+          impl_->api->vkCreateSampler(impl_->device, &samplerInfo, nullptr, &sampler);
       result != VK_SUCCESS) {
     return GpuError{GpuErrorType::InvalidState,
                     std::format("vkCreateSampler for '{}' failed with {}",
@@ -1467,7 +1564,7 @@ Status VulkanDevice::onCreateBindGroupLayout(uint32_t slotIndex,
 
   VkDescriptorSetLayout layout = VK_NULL_HANDLE;
   if (const VkResult result =
-          vkCreateDescriptorSetLayout(impl_->device, &layoutInfo, nullptr, &layout);
+          impl_->api->vkCreateDescriptorSetLayout(impl_->device, &layoutInfo, nullptr, &layout);
       result != VK_SUCCESS) {
     return GpuError{GpuErrorType::InvalidState,
                     std::format("vkCreateDescriptorSetLayout for '{}' failed with {}",
@@ -1549,7 +1646,8 @@ Status VulkanDevice::onCreateBindGroup(uint32_t slotIndex, const BindGroupDescri
   poolInfo.maxSets = 1;
   poolInfo.poolSizeCount = static_cast<uint32_t>(poolSizes.size());
   poolInfo.pPoolSizes = poolSizes.data();
-  if (const VkResult result = vkCreateDescriptorPool(impl.device, &poolInfo, nullptr, &record.pool);
+  if (const VkResult result =
+          impl_->api->vkCreateDescriptorPool(impl.device, &poolInfo, nullptr, &record.pool);
       result != VK_SUCCESS) {
     return VkError("vkCreateDescriptorPool", result);
   }
@@ -1559,9 +1657,10 @@ Status VulkanDevice::onCreateBindGroup(uint32_t slotIndex, const BindGroupDescri
   allocateInfo.descriptorPool = record.pool;
   allocateInfo.descriptorSetCount = 1;
   allocateInfo.pSetLayouts = &layout->layout;
-  if (const VkResult result = vkAllocateDescriptorSets(impl.device, &allocateInfo, &record.set);
+  if (const VkResult result =
+          impl_->api->vkAllocateDescriptorSets(impl.device, &allocateInfo, &record.set);
       result != VK_SUCCESS) {
-    vkDestroyDescriptorPool(impl.device, record.pool, nullptr);
+    impl_->api->vkDestroyDescriptorPool(impl.device, record.pool, nullptr);
     return VkError("vkAllocateDescriptorSets", result);
   }
 
@@ -1600,12 +1699,12 @@ Status VulkanDevice::onCreateBindGroup(uint32_t slotIndex, const BindGroupDescri
     writes.push_back(write);
   }
   if (bindStatus.hasError()) {
-    vkDestroyDescriptorPool(impl.device, record.pool, nullptr);
+    impl_->api->vkDestroyDescriptorPool(impl.device, record.pool, nullptr);
     return bindStatus;
   }
 
-  vkUpdateDescriptorSets(impl.device, static_cast<uint32_t>(writes.size()), writes.data(), 0,
-                         nullptr);
+  impl_->api->vkUpdateDescriptorSets(impl.device, static_cast<uint32_t>(writes.size()),
+                                     writes.data(), 0, nullptr);
   SetSlot(impl.bindGroups, slotIndex, std::optional<Impl::BindGroupRecord>(record));
   return OkStatus();
 }
@@ -1632,7 +1731,8 @@ Status VulkanDevice::onCreatePipelineLayout(uint32_t slotIndex,
   layoutInfo.pSetLayouts = setLayouts.empty() ? nullptr : setLayouts.data();
 
   VkPipelineLayout layout = VK_NULL_HANDLE;
-  if (const VkResult result = vkCreatePipelineLayout(impl.device, &layoutInfo, nullptr, &layout);
+  if (const VkResult result =
+          impl_->api->vkCreatePipelineLayout(impl.device, &layoutInfo, nullptr, &layout);
       result != VK_SUCCESS) {
     return GpuError{GpuErrorType::InvalidState,
                     std::format("vkCreatePipelineLayout for '{}' failed with {}",
@@ -1640,6 +1740,7 @@ Status VulkanDevice::onCreatePipelineLayout(uint32_t slotIndex,
   }
 
   auto handle = std::make_shared<Impl::PipelineLayoutHandle>();
+  handle->api = impl.api;
   handle->device = impl.device;
   handle->layout = layout;
   handle->descriptorSetCount = static_cast<uint32_t>(setLayouts.size());
@@ -1659,7 +1760,8 @@ Status VulkanDevice::onCreateShaderModule(uint32_t slotIndex,
   moduleInfo.pCode = descriptor.spirvWords.data();
 
   VkShaderModule module = VK_NULL_HANDLE;
-  if (const VkResult result = vkCreateShaderModule(impl_->device, &moduleInfo, nullptr, &module);
+  if (const VkResult result =
+          impl_->api->vkCreateShaderModule(impl_->device, &moduleInfo, nullptr, &module);
       result != VK_SUCCESS) {
     return GpuError{GpuErrorType::InvalidDescriptor,
                     std::format("vkCreateShaderModule for '{}' failed with {}",
@@ -1711,7 +1813,7 @@ Status VulkanDevice::onCreateRenderPipeline(uint32_t slotIndex,
 
   VkRenderPass compatRenderPass = VK_NULL_HANDLE;
   if (const VkResult result =
-          vkCreateRenderPass(impl.device, &renderPassInfo, nullptr, &compatRenderPass);
+          impl_->api->vkCreateRenderPass(impl.device, &renderPassInfo, nullptr, &compatRenderPass);
       result != VK_SUCCESS) {
     return VkError("vkCreateRenderPass (pipeline compatibility)", result);
   }
@@ -1801,10 +1903,10 @@ Status VulkanDevice::onCreateRenderPipeline(uint32_t slotIndex,
   pipelineInfo.basePipelineIndex = -1;
 
   VkPipeline pipeline = VK_NULL_HANDLE;
-  if (const VkResult result = vkCreateGraphicsPipelines(impl.device, VK_NULL_HANDLE, 1,
-                                                        &pipelineInfo, nullptr, &pipeline);
+  if (const VkResult result = impl_->api->vkCreateGraphicsPipelines(
+          impl.device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &pipeline);
       result != VK_SUCCESS) {
-    vkDestroyRenderPass(impl.device, compatRenderPass, nullptr);
+    impl_->api->vkDestroyRenderPass(impl.device, compatRenderPass, nullptr);
     return GpuError{GpuErrorType::InvalidDescriptor,
                     std::format("vkCreateGraphicsPipelines for '{}' failed with {}",
                                 std::string_view(descriptor.label), VkResultToString(result))};
@@ -1832,27 +1934,27 @@ void VulkanDevice::Impl::destroyTextureSlot(uint32_t slotIndex) {
 
 void VulkanDevice::Impl::destroyTextureViewSlot(uint32_t slotIndex) {
   if (TextureViewRecord* record = FindRecord(textureViews, slotIndex)) {
-    DestroyIfSet(device, record->view, vkDestroyImageView);
+    DestroyIfSet(device, record->view, api->vkDestroyImageView);
     textureViews[slotIndex].reset();
   }
 }
 
 void VulkanDevice::Impl::destroySamplerSlot(uint32_t slotIndex) {
   if (slotIndex < samplers.size()) {
-    DestroyIfSet(device, samplers[slotIndex], vkDestroySampler);
+    DestroyIfSet(device, samplers[slotIndex], api->vkDestroySampler);
   }
 }
 
 void VulkanDevice::Impl::destroyBindGroupLayoutSlot(uint32_t slotIndex) {
   if (BindGroupLayoutRecord* record = FindRecord(bindGroupLayouts, slotIndex)) {
-    DestroyIfSet(device, record->layout, vkDestroyDescriptorSetLayout);
+    DestroyIfSet(device, record->layout, api->vkDestroyDescriptorSetLayout);
     bindGroupLayouts[slotIndex].reset();
   }
 }
 
 void VulkanDevice::Impl::destroyBindGroupSlot(uint32_t slotIndex) {
   if (BindGroupRecord* record = FindRecord(bindGroups, slotIndex)) {
-    DestroyIfSet(device, record->pool, vkDestroyDescriptorPool);
+    DestroyIfSet(device, record->pool, api->vkDestroyDescriptorPool);
     bindGroups[slotIndex].reset();
   }
 }
@@ -1869,14 +1971,14 @@ void VulkanDevice::Impl::destroyShaderModuleSlot(uint32_t slotIndex) {
   if (slotIndex < shaderModules.size()) {
     // Per the specification, a shader module may be destroyed while pipelines created from it
     // are still in use.
-    DestroyIfSet(device, shaderModules[slotIndex], vkDestroyShaderModule);
+    DestroyIfSet(device, shaderModules[slotIndex], api->vkDestroyShaderModule);
   }
 }
 
 void VulkanDevice::Impl::destroyRenderPipelineSlot(uint32_t slotIndex) {
   if (RenderPipelineRecord* record = FindRecord(renderPipelines, slotIndex)) {
-    DestroyIfSet(device, record->pipeline, vkDestroyPipeline);
-    DestroyIfSet(device, record->compatRenderPass, vkDestroyRenderPass);
+    DestroyIfSet(device, record->pipeline, api->vkDestroyPipeline);
+    DestroyIfSet(device, record->compatRenderPass, api->vkDestroyRenderPass);
     renderPipelines[slotIndex].reset();  // Releases the retained pipeline layout.
   }
 }
@@ -1923,10 +2025,10 @@ Status VulkanDevice::onWriteBuffer(uint32_t slotIndex, uint64_t offsetBytes,
 void VulkanDevice::Impl::destroyUploadObjects(VkFence fence, VkCommandBuffer commandBuffer,
                                               BufferRecord& staging) {
   if (fence != VK_NULL_HANDLE) {
-    vkDestroyFence(device, fence, nullptr);
+    api->vkDestroyFence(device, fence, nullptr);
   }
   if (commandBuffer != VK_NULL_HANDLE) {
-    vkFreeCommandBuffers(device, commandPool, 1, &commandBuffer);
+    api->vkFreeCommandBuffers(device, commandPool, 1, &commandBuffer);
   }
   destroyBufferRecord(staging);
 }
@@ -1936,7 +2038,7 @@ VkImageLayout VulkanDevice::Impl::recordTextureUploadCopy(VkCommandBuffer comman
                                                           VkBuffer stagingBuffer,
                                                           const TexelCopyBufferLayout& dataLayout,
                                                           const Extent2d& writeSize) {
-  RecordImageBarrier(commandBuffer, texture.image, texture.currentLayout,
+  RecordImageBarrier(*api, commandBuffer, texture.image, texture.currentLayout,
                      VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
 
   const uint32_t texelSize = TextureFormatBytesPerTexel(texture.format);
@@ -1947,8 +2049,8 @@ VkImageLayout VulkanDevice::Impl::recordTextureUploadCopy(VkCommandBuffer comman
   copyRegion.imageSubresource = VkImageSubresourceLayers{VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
   copyRegion.imageOffset = VkOffset3D{0, 0, 0};
   copyRegion.imageExtent = VkExtent3D{writeSize.width, writeSize.height, 1};
-  vkCmdCopyBufferToImage(commandBuffer, stagingBuffer, texture.image,
-                         VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copyRegion);
+  api->vkCmdCopyBufferToImage(commandBuffer, stagingBuffer, texture.image,
+                              VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copyRegion);
 
   // Sampled textures move straight to their descriptor layout; others stay transfer-dst until a
   // later encode transitions them.
@@ -1956,7 +2058,7 @@ VkImageLayout VulkanDevice::Impl::recordTextureUploadCopy(VkCommandBuffer comman
                                              ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
                                              : VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
   if (postUploadLayout != VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL) {
-    RecordImageBarrier(commandBuffer, texture.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+    RecordImageBarrier(*api, commandBuffer, texture.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                        postUploadLayout);
   }
   return postUploadLayout;
@@ -1966,7 +2068,7 @@ Status VulkanDevice::Impl::submitAndWaitTextureUpload(VkCommandBuffer commandBuf
                                                       bool& objectsStillInUse) {
   VkFenceCreateInfo fenceInfo = {};
   fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
-  if (const VkResult result = vkCreateFence(device, &fenceInfo, nullptr, &fence);
+  if (const VkResult result = api->vkCreateFence(device, &fenceInfo, nullptr, &fence);
       result != VK_SUCCESS) {
     return VkError("vkCreateFence", result);
   }
@@ -1975,10 +2077,12 @@ Status VulkanDevice::Impl::submitAndWaitTextureUpload(VkCommandBuffer commandBuf
   submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
   submitInfo.commandBufferCount = 1;
   submitInfo.pCommandBuffers = &commandBuffer;
-  if (const VkResult result = vkQueueSubmit(queue, 1, &submitInfo, fence); result != VK_SUCCESS) {
+  if (const VkResult result = api->vkQueueSubmit(queue, 1, &submitInfo, fence);
+      result != VK_SUCCESS) {
     return VkError("vkQueueSubmit (writeTexture)", result);
   }
-  if (const VkResult result = vkWaitForFences(device, 1, &fence, VK_TRUE, kUploadFenceTimeoutNs);
+  if (const VkResult result =
+          api->vkWaitForFences(device, 1, &fence, VK_TRUE, kUploadFenceTimeoutNs);
       result != VK_SUCCESS) {
     if (result == VK_TIMEOUT) {
       // The submission is still pending: destroying its fence, command buffer, or staging
@@ -2041,7 +2145,7 @@ Status VulkanDevice::onWriteTexture(uint32_t slotIndex, std::span<const uint8_t>
   VkCommandBufferBeginInfo beginInfo = {};
   beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
   beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-  if (const VkResult result = vkBeginCommandBuffer(commandBuffer, &beginInfo);
+  if (const VkResult result = impl_->api->vkBeginCommandBuffer(commandBuffer, &beginInfo);
       result != VK_SUCCESS) {
     cleanup();
     return VkError("vkBeginCommandBuffer", result);
@@ -2050,7 +2154,7 @@ Status VulkanDevice::onWriteTexture(uint32_t slotIndex, std::span<const uint8_t>
   const VkImageLayout postUploadLayout =
       impl.recordTextureUploadCopy(commandBuffer, *texture, staging.buffer, dataLayout, writeSize);
 
-  if (const VkResult result = vkEndCommandBuffer(commandBuffer); result != VK_SUCCESS) {
+  if (const VkResult result = impl_->api->vkEndCommandBuffer(commandBuffer); result != VK_SUCCESS) {
     cleanup();
     return VkError("vkEndCommandBuffer", result);
   }
@@ -2078,13 +2182,13 @@ VkImageLayout VulkanDevice::Impl::encodedLayoutOf(const EncodingState& state, ui
 
 void VulkanDevice::Impl::destroyTransientEncodingObjects(EncodingState& state) {
   for (VkFramebuffer framebuffer : state.transientFramebuffers) {
-    vkDestroyFramebuffer(device, framebuffer, nullptr);
+    api->vkDestroyFramebuffer(device, framebuffer, nullptr);
   }
   for (VkRenderPass renderPass : state.transientRenderPasses) {
-    vkDestroyRenderPass(device, renderPass, nullptr);
+    api->vkDestroyRenderPass(device, renderPass, nullptr);
   }
   // Freeing a command buffer in the recording state is legal; it has not been submitted.
-  vkFreeCommandBuffers(device, commandPool, 1, &state.commandBuffer);
+  api->vkFreeCommandBuffers(device, commandPool, 1, &state.commandBuffer);
 }
 
 void VulkanDevice::Impl::transitionPassSampledTextures(EncodingState& state,
@@ -2112,7 +2216,7 @@ void VulkanDevice::Impl::transitionPassSampledTextures(EncodingState& state,
       }
       const VkImageLayout current = encodedLayoutOf(state, sampledSlot, *sampled);
       if (current != VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) {
-        RecordImageBarrier(state.commandBuffer, sampled->image, current,
+        RecordImageBarrier(*api, state.commandBuffer, sampled->image, current,
                            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
         state.stagedLayouts[sampledSlot] = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
       }
@@ -2142,7 +2246,7 @@ Status VulkanDevice::Impl::beginEncodedRenderPass(EncodingState& state,
 
     // Conservative explicit transition to the attachment layout; the pass then begins and
     // ends in COLOR_ATTACHMENT_OPTIMAL.
-    RecordImageBarrier(state.commandBuffer, texture->image,
+    RecordImageBarrier(*api, state.commandBuffer, texture->image,
                        encodedLayoutOf(state, view->textureSlot, *texture),
                        VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
     state.stagedLayouts[view->textureSlot] = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
@@ -2205,7 +2309,8 @@ Status VulkanDevice::Impl::beginEncodedRenderPass(EncodingState& state,
   renderPassInfo.pDependencies = dependencies;
 
   VkRenderPass renderPass = VK_NULL_HANDLE;
-  if (const VkResult result = vkCreateRenderPass(device, &renderPassInfo, nullptr, &renderPass);
+  if (const VkResult result =
+          api->vkCreateRenderPass(device, &renderPassInfo, nullptr, &renderPass);
       result != VK_SUCCESS) {
     return VkError("vkCreateRenderPass", result);
   }
@@ -2220,7 +2325,8 @@ Status VulkanDevice::Impl::beginEncodedRenderPass(EncodingState& state,
   framebufferInfo.height = state.passExtent.height;
   framebufferInfo.layers = 1;
   VkFramebuffer framebuffer = VK_NULL_HANDLE;
-  if (const VkResult result = vkCreateFramebuffer(device, &framebufferInfo, nullptr, &framebuffer);
+  if (const VkResult result =
+          api->vkCreateFramebuffer(device, &framebufferInfo, nullptr, &framebuffer);
       result != VK_SUCCESS) {
     return VkError("vkCreateFramebuffer", result);
   }
@@ -2233,7 +2339,7 @@ Status VulkanDevice::Impl::beginEncodedRenderPass(EncodingState& state,
   passBeginInfo.renderArea = VkRect2D{{0, 0}, {state.passExtent.width, state.passExtent.height}};
   passBeginInfo.clearValueCount = static_cast<uint32_t>(clearValues.size());
   passBeginInfo.pClearValues = clearValues.data();
-  vkCmdBeginRenderPass(state.commandBuffer, &passBeginInfo, VK_SUBPASS_CONTENTS_INLINE);
+  api->vkCmdBeginRenderPass(state.commandBuffer, &passBeginInfo, VK_SUBPASS_CONTENTS_INLINE);
   state.inRenderPass = true;
 
   // WebGPU-style pass defaults: full-attachment viewport and scissor. The negative-height
@@ -2246,9 +2352,9 @@ Status VulkanDevice::Impl::beginEncodedRenderPass(EncodingState& state,
   viewport.height = -static_cast<float>(state.passExtent.height);
   viewport.minDepth = 0.0f;
   viewport.maxDepth = 1.0f;
-  vkCmdSetViewport(state.commandBuffer, 0, 1, &viewport);
+  api->vkCmdSetViewport(state.commandBuffer, 0, 1, &viewport);
   const VkRect2D scissor = {{0, 0}, {state.passExtent.width, state.passExtent.height}};
-  vkCmdSetScissor(state.commandBuffer, 0, 1, &scissor);
+  api->vkCmdSetScissor(state.commandBuffer, 0, 1, &scissor);
 
   // Fresh pass state, matching WebGPU render pass semantics.
   state.currentPipeline = nullptr;
@@ -2265,7 +2371,7 @@ Status VulkanDevice::Impl::encodeSetPipeline(EncodingState& state,
                     std::format("setPipeline: pipeline slot {} is not encodable",
                                 setPipeline.pipelineId.slotIndex)};
   }
-  vkCmdBindPipeline(state.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline->pipeline);
+  api->vkCmdBindPipeline(state.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline->pipeline);
   state.currentPipeline = pipeline;
   return OkStatus();
 }
@@ -2293,7 +2399,8 @@ Status VulkanDevice::Impl::encodeSetVertexBuffer(EncodingState& state,
                                 setVertexBuffer.bufferId.slotIndex)};
   }
   const VkDeviceSize offset = setVertexBuffer.offsetBytes;
-  vkCmdBindVertexBuffers(state.commandBuffer, setVertexBuffer.slot, 1, &buffer->buffer, &offset);
+  api->vkCmdBindVertexBuffers(state.commandBuffer, setVertexBuffer.slot, 1, &buffer->buffer,
+                              &offset);
   return OkStatus();
 }
 
@@ -2305,7 +2412,7 @@ Status VulkanDevice::Impl::encodeSetScissorRect(EncodingState& state,
   const VkRect2D scissor = {
       {static_cast<int32_t>(setScissor.x), static_cast<int32_t>(setScissor.y)},
       {setScissor.width, setScissor.height}};
-  vkCmdSetScissor(state.commandBuffer, 0, 1, &scissor);
+  api->vkCmdSetScissor(state.commandBuffer, 0, 1, &scissor);
   return OkStatus();
 }
 
@@ -2322,7 +2429,7 @@ Status VulkanDevice::Impl::encodeSetViewport(EncodingState& state,
   viewport.height = -setViewport.height;
   viewport.minDepth = setViewport.minDepth;
   viewport.maxDepth = setViewport.maxDepth;
-  vkCmdSetViewport(state.commandBuffer, 0, 1, &viewport);
+  api->vkCmdSetViewport(state.commandBuffer, 0, 1, &viewport);
   return OkStatus();
 }
 
@@ -2339,12 +2446,12 @@ Status VulkanDevice::Impl::encodeDraw(EncodingState& state, const DrawCommand& d
           GpuErrorType::InvalidState,
           std::format("draw: pipeline layout requires bind group {} but none is bound", setIndex)};
     }
-    vkCmdBindDescriptorSets(state.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                            state.currentPipeline->layout->layout, setIndex, 1,
-                            &state.boundSets[setIndex], 0, nullptr);
+    api->vkCmdBindDescriptorSets(state.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                 state.currentPipeline->layout->layout, setIndex, 1,
+                                 &state.boundSets[setIndex], 0, nullptr);
   }
-  vkCmdDraw(state.commandBuffer, draw.vertexCount, draw.instanceCount, draw.firstVertex,
-            draw.firstInstance);
+  api->vkCmdDraw(state.commandBuffer, draw.vertexCount, draw.instanceCount, draw.firstVertex,
+                 draw.firstInstance);
   return OkStatus();
 }
 
@@ -2352,7 +2459,7 @@ Status VulkanDevice::Impl::encodeEndRenderPass(EncodingState& state) {
   if (!state.inRenderPass) {
     return GpuError{GpuErrorType::InvalidState, "endRenderPass without an active render pass"};
   }
-  vkCmdEndRenderPass(state.commandBuffer);
+  api->vkCmdEndRenderPass(state.commandBuffer);
   state.inRenderPass = false;
   state.currentPipeline = nullptr;
   std::fill(state.boundSets.begin(), state.boundSets.end(), VK_NULL_HANDLE);
@@ -2382,7 +2489,7 @@ Status VulkanDevice::Impl::encodeCopyTextureToBuffer(EncodingState& state,
                     copy.layout.offsetBytes)};
   }
 
-  RecordImageBarrier(state.commandBuffer, texture->image,
+  RecordImageBarrier(*api, state.commandBuffer, texture->image,
                      encodedLayoutOf(state, copy.textureId.slotIndex, *texture),
                      VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
   state.stagedLayouts[copy.textureId.slotIndex] = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
@@ -2395,8 +2502,8 @@ Status VulkanDevice::Impl::encodeCopyTextureToBuffer(EncodingState& state,
   copyRegion.imageSubresource = VkImageSubresourceLayers{VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
   copyRegion.imageOffset = VkOffset3D{0, 0, 0};
   copyRegion.imageExtent = VkExtent3D{copy.copySize.width, copy.copySize.height, 1};
-  vkCmdCopyImageToBuffer(state.commandBuffer, texture->image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                         buffer->buffer, 1, &copyRegion);
+  api->vkCmdCopyImageToBuffer(state.commandBuffer, texture->image,
+                              VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, buffer->buffer, 1, &copyRegion);
 
   // Make the transfer write visible to host reads (readback maps the buffer after the
   // fence): TRANSFER write -> HOST read.
@@ -2409,8 +2516,9 @@ Status VulkanDevice::Impl::encodeCopyTextureToBuffer(EncodingState& state,
   bufferBarrier.buffer = buffer->buffer;
   bufferBarrier.offset = 0;
   bufferBarrier.size = VK_WHOLE_SIZE;
-  vkCmdPipelineBarrier(state.commandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                       VK_PIPELINE_STAGE_HOST_BIT, 0, 0, nullptr, 1, &bufferBarrier, 0, nullptr);
+  api->vkCmdPipelineBarrier(state.commandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                            VK_PIPELINE_STAGE_HOST_BIT, 0, 0, nullptr, 1, &bufferBarrier, 0,
+                            nullptr);
   return OkStatus();
 }
 
@@ -2436,6 +2544,10 @@ Status VulkanDevice::Impl::encodeCommand(EncodingState& state, std::span<const C
     return encodeEndRenderPass(state);
   } else if (const auto* copy = std::get_if<CopyTextureToBufferCommand>(&command)) {
     return encodeCopyTextureToBuffer(state, *copy);
+  } else if (std::get_if<CopyTextureToTextureCommand>(&command) != nullptr) {
+    return GpuError{GpuErrorType::Unsupported,
+                    "the Vulkan backend does not implement copyTextureToTexture yet; arrives with "
+                    "its presentation/readback packet"};
   }
   return OkStatus();
 }
@@ -2471,7 +2583,7 @@ Status VulkanDevice::onSubmit(uint64_t submissionSerial, uint32_t commandBufferS
   VkCommandBufferBeginInfo beginInfo = {};
   beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
   beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-  if (const VkResult result = vkBeginCommandBuffer(state.commandBuffer, &beginInfo);
+  if (const VkResult result = impl_->api->vkBeginCommandBuffer(state.commandBuffer, &beginInfo);
       result != VK_SUCCESS) {
     return failEncoding(VkError("vkBeginCommandBuffer", result));
   }
@@ -2489,14 +2601,15 @@ Status VulkanDevice::onSubmit(uint64_t submissionSerial, uint32_t commandBufferS
         GpuError{GpuErrorType::InvalidState, "submitted command stream left a render pass open"});
   }
 
-  if (const VkResult result = vkEndCommandBuffer(state.commandBuffer); result != VK_SUCCESS) {
+  if (const VkResult result = impl_->api->vkEndCommandBuffer(state.commandBuffer);
+      result != VK_SUCCESS) {
     return failEncoding(VkError("vkEndCommandBuffer", result));
   }
 
   VkFence fence = VK_NULL_HANDLE;
   VkFenceCreateInfo fenceInfo = {};
   fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
-  if (const VkResult result = vkCreateFence(impl.device, &fenceInfo, nullptr, &fence);
+  if (const VkResult result = impl_->api->vkCreateFence(impl.device, &fenceInfo, nullptr, &fence);
       result != VK_SUCCESS) {
     return failEncoding(VkError("vkCreateFence", result));
   }
@@ -2505,9 +2618,9 @@ Status VulkanDevice::onSubmit(uint64_t submissionSerial, uint32_t commandBufferS
   submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
   submitInfo.commandBufferCount = 1;
   submitInfo.pCommandBuffers = &state.commandBuffer;
-  if (const VkResult result = vkQueueSubmit(impl.queue, 1, &submitInfo, fence);
+  if (const VkResult result = impl_->api->vkQueueSubmit(impl.queue, 1, &submitInfo, fence);
       result != VK_SUCCESS) {
-    vkDestroyFence(impl.device, fence, nullptr);
+    impl_->api->vkDestroyFence(impl.device, fence, nullptr);
     return failEncoding(VkError("vkQueueSubmit", result));
   }
 

@@ -223,6 +223,101 @@ struct MetalDevice::Impl {
 
   std::shared_ptr<CompletionState> completionState =
       std::make_shared<CompletionState>();  //!< Shared with completion handlers.
+
+  /// Mutable state threaded through the encoding of one command stream.
+  struct EncodingState {
+    id<MTLCommandBuffer> commandBuffer = nil;         //!< Command buffer being encoded.
+    id<MTLRenderCommandEncoder> renderEncoder = nil;  //!< Active render encoder, or nil.
+    /// Topology of the bound pipeline; Metal takes it per draw call rather than from the
+    /// pipeline state object.
+    PrimitiveTopology currentTopology = PrimitiveTopology::TriangleList;
+  };
+
+  /// Opens a render encoder for a recorded pass and configures its color attachments.
+  /// @param state Encoding state.
+  /// @param beginPass Recorded command.
+  Status beginEncodedRenderPass(EncodingState& state, const BeginRenderPassCommand& beginPass);
+
+  /// Binds a recorded pipeline plus the encoder state it carries.
+  /// @param state Encoding state.
+  /// @param setPipeline Recorded command.
+  Status encodeSetPipeline(EncodingState& state, const SetPipelineCommand& setPipeline);
+
+  /// Binds one buffer entry to the stages its layout entry declares.
+  /// @param state Encoding state.
+  /// @param entry Bind group entry.
+  /// @param bufferBinding Buffer binding carried by the entry.
+  /// @param visibility Stages the layout entry declares.
+  Status encodeBufferBinding(EncodingState& state, const BindGroupEntry& entry,
+                             const BufferBinding& bufferBinding, ShaderStage visibility);
+
+  /// Binds one texture view entry to the stages its layout entry declares.
+  /// @param state Encoding state.
+  /// @param entry Bind group entry.
+  /// @param viewBinding Texture view binding carried by the entry.
+  /// @param visibility Stages the layout entry declares.
+  Status encodeTextureBinding(EncodingState& state, const BindGroupEntry& entry,
+                              const TextureViewBinding& viewBinding, ShaderStage visibility);
+
+  /// Binds one sampler entry to the stages its layout entry declares.
+  /// @param state Encoding state.
+  /// @param entry Bind group entry.
+  /// @param samplerBinding Sampler binding carried by the entry.
+  /// @param visibility Stages the layout entry declares.
+  Status encodeSamplerBinding(EncodingState& state, const BindGroupEntry& entry,
+                              const SamplerBinding& samplerBinding, ShaderStage visibility);
+
+  /// Binds one bind group entry, looking its stage visibility up in the layout snapshot.
+  /// @param state Encoding state.
+  /// @param layout Layout snapshot the group was created against.
+  /// @param entry Bind group entry.
+  Status encodeBindGroupEntry(EncodingState& state, const BindGroupLayoutDescriptor& layout,
+                              const BindGroupEntry& entry);
+
+  /// Binds every entry of a recorded bind group.
+  /// @param state Encoding state.
+  /// @param setBindGroup Recorded command.
+  Status encodeSetBindGroup(EncodingState& state, const SetBindGroupCommand& setBindGroup);
+
+  /// Binds a recorded vertex buffer.
+  /// @param state Encoding state.
+  /// @param setVertexBuffer Recorded command.
+  Status encodeSetVertexBuffer(EncodingState& state, const SetVertexBufferCommand& setVertexBuffer);
+
+  /// Sets an explicit scissor rectangle.
+  /// @param state Encoding state.
+  /// @param setScissor Recorded command.
+  Status encodeSetScissorRect(EncodingState& state, const SetScissorRectCommand& setScissor);
+
+  /// Sets an explicit viewport.
+  /// @param state Encoding state.
+  /// @param setViewport Recorded command.
+  Status encodeSetViewport(EncodingState& state, const SetViewportCommand& setViewport);
+
+  /// Issues a draw with the bound pipeline's topology.
+  /// @param state Encoding state.
+  /// @param draw Recorded command.
+  Status encodeDraw(EncodingState& state, const DrawCommand& draw);
+
+  /// Closes the active render encoder.
+  /// @param state Encoding state.
+  Status encodeEndRenderPass(EncodingState& state);
+
+  /// Records a texture-to-buffer copy on a blit encoder.
+  /// @param state Encoding state.
+  /// @param copy Recorded command.
+  Status encodeCopyTextureToBuffer(EncodingState& state, const CopyTextureToBufferCommand& copy);
+
+  /// Encodes one recorded command.
+  /// @param state Encoding state.
+  /// @param command Recorded command.
+  Status encodeCommand(EncodingState& state, const Command& command);
+
+  /// Attaches the completion handler that latches execution errors and advances the completed
+  /// serial monotonically.
+  /// @param state Encoding state.
+  /// @param submissionSerial Serial assigned to this submission.
+  void attachCompletionHandler(EncodingState& state, uint64_t submissionSerial);
 };
 
 std::unique_ptr<MetalDevice> MetalDevice::Create() {
@@ -564,6 +659,306 @@ Status MetalDevice::onWriteTexture(uint32_t slotIndex, std::span<const uint8_t> 
   return OkStatus();
 }
 
+Status MetalDevice::Impl::beginEncodedRenderPass(EncodingState& state,
+                                                 const BeginRenderPassCommand& beginPass) {
+  MTLRenderPassDescriptor* passDescriptor = [MTLRenderPassDescriptor renderPassDescriptor];
+  const auto& attachments = beginPass.descriptor.colorAttachments;
+  for (size_t i = 0; i < attachments.size(); ++i) {
+    const RenderPassColorAttachment& attachment = attachments[i];
+    const std::optional<uint32_t> textureSlot =
+        GetSlot(textureViewToTexture, attachment.view.slotIndex());
+    id<MTLTexture> texture = textureSlot.has_value() ? GetSlot(textures, *textureSlot) : nil;
+    if (texture == nil) {
+      return GpuError{
+          GpuErrorType::InvalidState,
+          std::format("render pass attachment {} does not resolve to a Metal texture", i)};
+    }
+
+    MTLRenderPassColorAttachmentDescriptor* colorAttachment = passDescriptor.colorAttachments[i];
+    colorAttachment.texture = texture;
+    colorAttachment.loadAction = ToMtlLoadAction(attachment.loadOp);
+    colorAttachment.storeAction = ToMtlStoreAction(attachment.storeOp);
+    colorAttachment.clearColor =
+        MTLClearColorMake(attachment.clearColor[0], attachment.clearColor[1],
+                          attachment.clearColor[2], attachment.clearColor[3]);
+  }
+
+  state.renderEncoder = [state.commandBuffer renderCommandEncoderWithDescriptor:passDescriptor];
+  if (state.renderEncoder == nil) {
+    return GpuError{GpuErrorType::InvalidState, "Metal render command encoder creation failed"};
+  }
+  return OkStatus();
+}
+
+Status MetalDevice::Impl::encodeSetPipeline(EncodingState& state,
+                                            const SetPipelineCommand& setPipeline) {
+  const RenderPipelineRecord* pipeline =
+      FindRecord(renderPipelines, setPipeline.pipelineId.slotIndex);
+  if (state.renderEncoder == nil || pipeline == nullptr || pipeline->state == nil) {
+    return GpuError{GpuErrorType::InvalidState,
+                    std::format("setPipeline: pipeline slot {} is not encodable",
+                                setPipeline.pipelineId.slotIndex)};
+  }
+  [state.renderEncoder setRenderPipelineState:pipeline->state];
+  // Cull mode is encoder state in Metal; apply the pipeline's recorded mode at bind time.
+  // Behavioral coverage requires winding-controlled geometry, which the solid-fill slice does
+  // not exercise: it always uses CullMode::None.
+  [state.renderEncoder
+      setCullMode:(pipeline->cullMode == CullMode::Back ? MTLCullModeBack : MTLCullModeNone)];
+  state.currentTopology = pipeline->topology;
+  return OkStatus();
+}
+
+Status MetalDevice::Impl::encodeBufferBinding(EncodingState& state, const BindGroupEntry& entry,
+                                              const BufferBinding& bufferBinding,
+                                              ShaderStage visibility) {
+  // Mirror of the MSL emitter's guard: buffer bindings must not reach the reserved
+  // stage-in vertex buffer index (or exceed Metal's argument table).
+  if (shader::MslBufferIndex(entry.binding) >= shader::kMslVertexBufferIndex) {
+    return GpuError{GpuErrorType::Unsupported,
+                    std::format("setBindGroup: binding {} maps to Metal buffer index {}, which "
+                                "collides with or exceeds the reserved vertex buffer index {}",
+                                entry.binding, shader::MslBufferIndex(entry.binding),
+                                shader::kMslVertexBufferIndex)};
+  }
+  id<MTLBuffer> buffer = GetSlot(buffers, bufferBinding.buffer.slotIndex());
+  if (buffer == nil) {
+    return GpuError{
+        GpuErrorType::InvalidState,
+        std::format("setBindGroup: binding {} does not resolve to a Metal buffer", entry.binding)};
+  }
+  if (HasAllFlags(visibility, ShaderStage::Vertex)) {
+    [state.renderEncoder setVertexBuffer:buffer
+                                  offset:bufferBinding.offsetBytes
+                                 atIndex:shader::MslBufferIndex(entry.binding)];
+  }
+  if (HasAllFlags(visibility, ShaderStage::Fragment)) {
+    [state.renderEncoder setFragmentBuffer:buffer
+                                    offset:bufferBinding.offsetBytes
+                                   atIndex:shader::MslBufferIndex(entry.binding)];
+  }
+  return OkStatus();
+}
+
+Status MetalDevice::Impl::encodeTextureBinding(EncodingState& state, const BindGroupEntry& entry,
+                                               const TextureViewBinding& viewBinding,
+                                               ShaderStage visibility) {
+  const std::optional<uint32_t> textureSlot =
+      GetSlot(textureViewToTexture, viewBinding.view.slotIndex());
+  id<MTLTexture> texture = textureSlot.has_value() ? GetSlot(textures, *textureSlot) : nil;
+  if (texture == nil) {
+    return GpuError{
+        GpuErrorType::InvalidState,
+        std::format("setBindGroup: binding {} does not resolve to a Metal texture", entry.binding)};
+  }
+  if (HasAllFlags(visibility, ShaderStage::Vertex)) {
+    [state.renderEncoder setVertexTexture:texture atIndex:shader::MslTextureIndex(entry.binding)];
+  }
+  if (HasAllFlags(visibility, ShaderStage::Fragment)) {
+    [state.renderEncoder setFragmentTexture:texture atIndex:shader::MslTextureIndex(entry.binding)];
+  }
+  return OkStatus();
+}
+
+Status MetalDevice::Impl::encodeSamplerBinding(EncodingState& state, const BindGroupEntry& entry,
+                                               const SamplerBinding& samplerBinding,
+                                               ShaderStage visibility) {
+  id<MTLSamplerState> sampler = GetSlot(samplers, samplerBinding.sampler.slotIndex());
+  if (sampler == nil) {
+    return GpuError{
+        GpuErrorType::InvalidState,
+        std::format("setBindGroup: binding {} does not resolve to a Metal sampler", entry.binding)};
+  }
+  if (HasAllFlags(visibility, ShaderStage::Vertex)) {
+    [state.renderEncoder setVertexSamplerState:sampler
+                                       atIndex:shader::MslSamplerIndex(entry.binding)];
+  }
+  if (HasAllFlags(visibility, ShaderStage::Fragment)) {
+    [state.renderEncoder setFragmentSamplerState:sampler
+                                         atIndex:shader::MslSamplerIndex(entry.binding)];
+  }
+  return OkStatus();
+}
+
+Status MetalDevice::Impl::encodeBindGroupEntry(EncodingState& state,
+                                               const BindGroupLayoutDescriptor& layout,
+                                               const BindGroupEntry& entry) {
+  ShaderStage visibility = ShaderStage::None;
+  for (const BindGroupLayoutEntry& layoutEntry : layout.entries) {
+    if (layoutEntry.binding == entry.binding) {
+      visibility = layoutEntry.visibility;
+      break;
+    }
+  }
+
+  if (const auto* bufferBinding = std::get_if<BufferBinding>(&entry.resource)) {
+    return encodeBufferBinding(state, entry, *bufferBinding, visibility);
+  } else if (const auto* viewBinding = std::get_if<TextureViewBinding>(&entry.resource)) {
+    return encodeTextureBinding(state, entry, *viewBinding, visibility);
+  } else if (const auto* samplerBinding = std::get_if<SamplerBinding>(&entry.resource)) {
+    return encodeSamplerBinding(state, entry, *samplerBinding, visibility);
+  }
+  return OkStatus();
+}
+
+Status MetalDevice::Impl::encodeSetBindGroup(EncodingState& state,
+                                             const SetBindGroupCommand& setBindGroup) {
+  if (setBindGroup.index != 0) {
+    return GpuError{GpuErrorType::Unsupported,
+                    "the Metal backend maps bind group 0 only in this slice (MslBindingMap.h)"};
+  }
+  const BindGroupRecord* bindGroup = FindRecord(bindGroups, setBindGroup.bindGroupId.slotIndex);
+  if (state.renderEncoder == nil || bindGroup == nullptr) {
+    return GpuError{GpuErrorType::InvalidState,
+                    std::format("setBindGroup: bind group slot {} is not encodable",
+                                setBindGroup.bindGroupId.slotIndex)};
+  }
+
+  for (const BindGroupEntry& entry : bindGroup->descriptor.entries) {
+    Status bindStatus = encodeBindGroupEntry(state, bindGroup->layout, entry);
+    if (bindStatus.hasError()) {
+      return bindStatus;
+    }
+  }
+  return OkStatus();
+}
+
+Status MetalDevice::Impl::encodeSetVertexBuffer(EncodingState& state,
+                                                const SetVertexBufferCommand& setVertexBuffer) {
+  if (setVertexBuffer.slot != 0) {
+    return GpuError{GpuErrorType::Unsupported,
+                    "the Metal backend supports vertex buffer slot 0 only in this slice"};
+  }
+  id<MTLBuffer> buffer = GetSlot(buffers, setVertexBuffer.bufferId.slotIndex);
+  if (state.renderEncoder == nil || buffer == nil) {
+    return GpuError{GpuErrorType::InvalidState,
+                    std::format("setVertexBuffer: buffer slot {} is not encodable",
+                                setVertexBuffer.bufferId.slotIndex)};
+  }
+  [state.renderEncoder setVertexBuffer:buffer
+                                offset:setVertexBuffer.offsetBytes
+                               atIndex:shader::kMslVertexBufferIndex];
+  return OkStatus();
+}
+
+Status MetalDevice::Impl::encodeSetScissorRect(EncodingState& state,
+                                               const SetScissorRectCommand& setScissor) {
+  if (state.renderEncoder == nil) {
+    return GpuError{GpuErrorType::InvalidState, "setScissorRect outside a render pass"};
+  }
+  [state.renderEncoder setScissorRect:MTLScissorRect{setScissor.x, setScissor.y, setScissor.width,
+                                                     setScissor.height}];
+  return OkStatus();
+}
+
+Status MetalDevice::Impl::encodeSetViewport(EncodingState& state,
+                                            const SetViewportCommand& setViewport) {
+  if (state.renderEncoder == nil) {
+    return GpuError{GpuErrorType::InvalidState, "setViewport outside a render pass"};
+  }
+  [state.renderEncoder
+      setViewport:MTLViewport{setViewport.x, setViewport.y, setViewport.width, setViewport.height,
+                              setViewport.minDepth, setViewport.maxDepth}];
+  return OkStatus();
+}
+
+Status MetalDevice::Impl::encodeDraw(EncodingState& state, const DrawCommand& draw) {
+  if (state.renderEncoder == nil) {
+    return GpuError{GpuErrorType::InvalidState, "draw outside a render pass"};
+  }
+  [state.renderEncoder drawPrimitives:ToMtlPrimitiveType(state.currentTopology)
+                          vertexStart:draw.firstVertex
+                          vertexCount:draw.vertexCount
+                        instanceCount:draw.instanceCount
+                         baseInstance:draw.firstInstance];
+  return OkStatus();
+}
+
+Status MetalDevice::Impl::encodeEndRenderPass(EncodingState& state) {
+  if (state.renderEncoder == nil) {
+    return GpuError{GpuErrorType::InvalidState, "endRenderPass without an active render pass"};
+  }
+  [state.renderEncoder endEncoding];
+  state.renderEncoder = nil;
+  return OkStatus();
+}
+
+Status MetalDevice::Impl::encodeCopyTextureToBuffer(EncodingState& state,
+                                                    const CopyTextureToBufferCommand& copy) {
+  if (state.renderEncoder != nil) {
+    return GpuError{GpuErrorType::InvalidState, "copyTextureToBuffer inside a render pass"};
+  }
+  id<MTLTexture> texture = GetSlot(textures, copy.textureId.slotIndex);
+  id<MTLBuffer> buffer = GetSlot(buffers, copy.bufferId.slotIndex);
+  if (texture == nil || buffer == nil) {
+    return GpuError{GpuErrorType::InvalidState,
+                    "copyTextureToBuffer: source texture or destination buffer is missing"};
+  }
+  id<MTLBlitCommandEncoder> blitEncoder = [state.commandBuffer blitCommandEncoder];
+  if (blitEncoder == nil) {
+    return GpuError{GpuErrorType::InvalidState, "Metal blit command encoder creation failed"};
+  }
+  [blitEncoder copyFromTexture:texture
+                   sourceSlice:0
+                   sourceLevel:0
+                  sourceOrigin:MTLOriginMake(0, 0, 0)
+                    sourceSize:MTLSizeMake(copy.copySize.width, copy.copySize.height, 1)
+                      toBuffer:buffer
+             destinationOffset:copy.layout.offsetBytes
+        destinationBytesPerRow:copy.layout.bytesPerRow
+      destinationBytesPerImage:static_cast<uint64_t>(copy.layout.bytesPerRow) *
+                               copy.layout.rowsPerImage];
+  [blitEncoder endEncoding];
+  return OkStatus();
+}
+
+Status MetalDevice::Impl::encodeCommand(EncodingState& state, const Command& command) {
+  if (const auto* beginPass = std::get_if<BeginRenderPassCommand>(&command)) {
+    return beginEncodedRenderPass(state, *beginPass);
+  } else if (const auto* setPipeline = std::get_if<SetPipelineCommand>(&command)) {
+    return encodeSetPipeline(state, *setPipeline);
+  } else if (const auto* setBindGroup = std::get_if<SetBindGroupCommand>(&command)) {
+    return encodeSetBindGroup(state, *setBindGroup);
+  } else if (const auto* setVertexBuffer = std::get_if<SetVertexBufferCommand>(&command)) {
+    return encodeSetVertexBuffer(state, *setVertexBuffer);
+  } else if (const auto* setScissor = std::get_if<SetScissorRectCommand>(&command)) {
+    return encodeSetScissorRect(state, *setScissor);
+  } else if (const auto* setViewport = std::get_if<SetViewportCommand>(&command)) {
+    return encodeSetViewport(state, *setViewport);
+  } else if (const auto* draw = std::get_if<DrawCommand>(&command)) {
+    return encodeDraw(state, *draw);
+  } else if (std::get_if<EndRenderPassCommand>(&command) != nullptr) {
+    return encodeEndRenderPass(state);
+  } else if (const auto* copy = std::get_if<CopyTextureToBufferCommand>(&command)) {
+    return encodeCopyTextureToBuffer(state, *copy);
+  } else if (std::get_if<CopyTextureToTextureCommand>(&command) != nullptr) {
+    return GpuError{GpuErrorType::Unsupported,
+                    "the Metal backend does not implement copyTextureToTexture yet; arrives with "
+                    "its presentation/readback packet"};
+  }
+  return OkStatus();
+}
+
+void MetalDevice::Impl::attachCompletionHandler(EncodingState& state, uint64_t submissionSerial) {
+  std::shared_ptr<CompletionState> sharedState = completionState;
+  [state.commandBuffer addCompletedHandler:^(id<MTLCommandBuffer> completedBuffer) {
+    if (completedBuffer.error != nil) {
+      sharedState->hadError.store(true, std::memory_order_release);
+      std::lock_guard<std::mutex> lock(sharedState->mutex);
+      if (sharedState->errorMessage.empty()) {
+        sharedState->errorMessage =
+            DescribeNSError(completedBuffer.error, "Metal command buffer execution failed");
+      }
+    }
+
+    // Monotonic max: handlers may complete out of order across command buffers.
+    uint64_t previous = sharedState->completedSerial.load(std::memory_order_relaxed);
+    while (previous < submissionSerial &&
+           !sharedState->completedSerial.compare_exchange_weak(
+               previous, submissionSerial, std::memory_order_release, std::memory_order_relaxed)) {}
+  }];
+}
+
 Status MetalDevice::onSubmit(uint64_t submissionSerial, uint32_t commandBufferSlotIndex,
                              std::span<const Command> commands) {
   (void)commandBufferSlotIndex;
@@ -575,265 +970,37 @@ Status MetalDevice::onSubmit(uint64_t submissionSerial, uint32_t commandBufferSl
     }
   }
 
-  id<MTLCommandBuffer> commandBuffer = [impl_->commandQueue commandBuffer];
-  if (commandBuffer == nil) {
+  Impl::EncodingState state;
+  state.commandBuffer = [impl_->commandQueue commandBuffer];
+  if (state.commandBuffer == nil) {
     return GpuError{GpuErrorType::InvalidState, "Metal command buffer creation failed"};
   }
 
-  id<MTLRenderCommandEncoder> renderEncoder = nil;
-  PrimitiveTopology currentTopology = PrimitiveTopology::TriangleList;
-
   // On any encoding failure, close an open encoder before returning so the un-committed command
   // buffer tears down cleanly, then fail closed.
-  const auto failEncoding = [&renderEncoder](GpuError error) -> Status {
-    if (renderEncoder != nil) {
-      [renderEncoder endEncoding];
-      renderEncoder = nil;
+  const auto failEncoding = [&state](Status error) -> Status {
+    if (state.renderEncoder != nil) {
+      [state.renderEncoder endEncoding];
+      state.renderEncoder = nil;
     }
-    return std::move(error);
+    return error;
   };
 
   for (const Command& command : commands) {
-    if (const auto* beginPass = std::get_if<BeginRenderPassCommand>(&command)) {
-      MTLRenderPassDescriptor* passDescriptor = [MTLRenderPassDescriptor renderPassDescriptor];
-      const auto& attachments = beginPass->descriptor.colorAttachments;
-      for (size_t i = 0; i < attachments.size(); ++i) {
-        const RenderPassColorAttachment& attachment = attachments[i];
-        const std::optional<uint32_t> textureSlot =
-            GetSlot(impl_->textureViewToTexture, attachment.view.slotIndex());
-        id<MTLTexture> texture =
-            textureSlot.has_value() ? GetSlot(impl_->textures, *textureSlot) : nil;
-        if (texture == nil) {
-          return failEncoding(GpuError{
-              GpuErrorType::InvalidState,
-              std::format("render pass attachment {} does not resolve to a Metal texture", i)});
-        }
-
-        MTLRenderPassColorAttachmentDescriptor* colorAttachment =
-            passDescriptor.colorAttachments[i];
-        colorAttachment.texture = texture;
-        colorAttachment.loadAction = ToMtlLoadAction(attachment.loadOp);
-        colorAttachment.storeAction = ToMtlStoreAction(attachment.storeOp);
-        colorAttachment.clearColor =
-            MTLClearColorMake(attachment.clearColor[0], attachment.clearColor[1],
-                              attachment.clearColor[2], attachment.clearColor[3]);
-      }
-
-      renderEncoder = [commandBuffer renderCommandEncoderWithDescriptor:passDescriptor];
-      if (renderEncoder == nil) {
-        return GpuError{GpuErrorType::InvalidState, "Metal render command encoder creation failed"};
-      }
-    } else if (const auto* setPipeline = std::get_if<SetPipelineCommand>(&command)) {
-      const Impl::RenderPipelineRecord* pipeline =
-          FindRecord(impl_->renderPipelines, setPipeline->pipelineId.slotIndex);
-      if (renderEncoder == nil || pipeline == nullptr || pipeline->state == nil) {
-        return failEncoding(GpuError{GpuErrorType::InvalidState,
-                                     std::format("setPipeline: pipeline slot {} is not encodable",
-                                                 setPipeline->pipelineId.slotIndex)});
-      }
-      [renderEncoder setRenderPipelineState:pipeline->state];
-      // Cull mode is encoder state in Metal; apply the pipeline's recorded mode at bind time.
-      // Behavioral coverage requires winding-controlled geometry, which arrives with the Geode
-      // pipeline migration packets; the solid-fill slice always uses CullMode::None.
-      [renderEncoder
-          setCullMode:(pipeline->cullMode == CullMode::Back ? MTLCullModeBack : MTLCullModeNone)];
-      currentTopology = pipeline->topology;
-    } else if (const auto* setBindGroup = std::get_if<SetBindGroupCommand>(&command)) {
-      if (setBindGroup->index != 0) {
-        return failEncoding(
-            GpuError{GpuErrorType::Unsupported,
-                     "the Metal backend maps bind group 0 only in this slice (MslBindingMap.h)"});
-      }
-      const Impl::BindGroupRecord* bindGroup =
-          FindRecord(impl_->bindGroups, setBindGroup->bindGroupId.slotIndex);
-      if (renderEncoder == nil || bindGroup == nullptr) {
-        return failEncoding(
-            GpuError{GpuErrorType::InvalidState,
-                     std::format("setBindGroup: bind group slot {} is not encodable",
-                                 setBindGroup->bindGroupId.slotIndex)});
-      }
-      const BindGroupLayoutDescriptor* layout = &bindGroup->layout;
-
-      Status bindStatus = OkStatus();
-      for (const BindGroupEntry& entry : bindGroup->descriptor.entries) {
-        ShaderStage visibility = ShaderStage::None;
-        for (const BindGroupLayoutEntry& layoutEntry : layout->entries) {
-          if (layoutEntry.binding == entry.binding) {
-            visibility = layoutEntry.visibility;
-            break;
-          }
-        }
-
-        if (const auto* bufferBinding = std::get_if<BufferBinding>(&entry.resource)) {
-          // Mirror of the MSL emitter's guard: buffer bindings must not reach the reserved
-          // stage-in vertex buffer index (or exceed Metal's argument table).
-          if (shader::MslBufferIndex(entry.binding) >= shader::kMslVertexBufferIndex) {
-            bindStatus = GpuError{
-                GpuErrorType::Unsupported,
-                std::format("setBindGroup: binding {} maps to Metal buffer index {}, which "
-                            "collides with or exceeds the reserved vertex buffer index {}",
-                            entry.binding, shader::MslBufferIndex(entry.binding),
-                            shader::kMslVertexBufferIndex)};
-            break;
-          }
-          id<MTLBuffer> buffer = GetSlot(impl_->buffers, bufferBinding->buffer.slotIndex());
-          if (buffer == nil) {
-            bindStatus =
-                GpuError{GpuErrorType::InvalidState,
-                         std::format("setBindGroup: binding {} does not resolve to a Metal buffer",
-                                     entry.binding)};
-            break;
-          }
-          if (HasAllFlags(visibility, ShaderStage::Vertex)) {
-            [renderEncoder setVertexBuffer:buffer
-                                    offset:bufferBinding->offsetBytes
-                                   atIndex:shader::MslBufferIndex(entry.binding)];
-          }
-          if (HasAllFlags(visibility, ShaderStage::Fragment)) {
-            [renderEncoder setFragmentBuffer:buffer
-                                      offset:bufferBinding->offsetBytes
-                                     atIndex:shader::MslBufferIndex(entry.binding)];
-          }
-        } else if (const auto* viewBinding = std::get_if<TextureViewBinding>(&entry.resource)) {
-          const std::optional<uint32_t> textureSlot =
-              GetSlot(impl_->textureViewToTexture, viewBinding->view.slotIndex());
-          id<MTLTexture> texture =
-              textureSlot.has_value() ? GetSlot(impl_->textures, *textureSlot) : nil;
-          if (texture == nil) {
-            bindStatus =
-                GpuError{GpuErrorType::InvalidState,
-                         std::format("setBindGroup: binding {} does not resolve to a Metal texture",
-                                     entry.binding)};
-            break;
-          }
-          if (HasAllFlags(visibility, ShaderStage::Vertex)) {
-            [renderEncoder setVertexTexture:texture atIndex:shader::MslTextureIndex(entry.binding)];
-          }
-          if (HasAllFlags(visibility, ShaderStage::Fragment)) {
-            [renderEncoder setFragmentTexture:texture
-                                      atIndex:shader::MslTextureIndex(entry.binding)];
-          }
-        } else if (const auto* samplerBinding = std::get_if<SamplerBinding>(&entry.resource)) {
-          id<MTLSamplerState> sampler =
-              GetSlot(impl_->samplers, samplerBinding->sampler.slotIndex());
-          if (sampler == nil) {
-            bindStatus =
-                GpuError{GpuErrorType::InvalidState,
-                         std::format("setBindGroup: binding {} does not resolve to a Metal sampler",
-                                     entry.binding)};
-            break;
-          }
-          if (HasAllFlags(visibility, ShaderStage::Vertex)) {
-            [renderEncoder setVertexSamplerState:sampler
-                                         atIndex:shader::MslSamplerIndex(entry.binding)];
-          }
-          if (HasAllFlags(visibility, ShaderStage::Fragment)) {
-            [renderEncoder setFragmentSamplerState:sampler
-                                           atIndex:shader::MslSamplerIndex(entry.binding)];
-          }
-        }
-      }
-      if (bindStatus.hasError()) {
-        return failEncoding(std::move(bindStatus).error());
-      }
-    } else if (const auto* setVertexBuffer = std::get_if<SetVertexBufferCommand>(&command)) {
-      if (setVertexBuffer->slot != 0) {
-        return failEncoding(
-            GpuError{GpuErrorType::Unsupported,
-                     "the Metal backend supports vertex buffer slot 0 only in this slice"});
-      }
-      id<MTLBuffer> buffer = GetSlot(impl_->buffers, setVertexBuffer->bufferId.slotIndex);
-      if (renderEncoder == nil || buffer == nil) {
-        return failEncoding(GpuError{GpuErrorType::InvalidState,
-                                     std::format("setVertexBuffer: buffer slot {} is not encodable",
-                                                 setVertexBuffer->bufferId.slotIndex)});
-      }
-      [renderEncoder setVertexBuffer:buffer
-                              offset:setVertexBuffer->offsetBytes
-                             atIndex:shader::kMslVertexBufferIndex];
-    } else if (const auto* setScissor = std::get_if<SetScissorRectCommand>(&command)) {
-      if (renderEncoder == nil) {
-        return failEncoding(
-            GpuError{GpuErrorType::InvalidState, "setScissorRect outside a render pass"});
-      }
-      [renderEncoder setScissorRect:MTLScissorRect{setScissor->x, setScissor->y, setScissor->width,
-                                                   setScissor->height}];
-    } else if (const auto* setViewport = std::get_if<SetViewportCommand>(&command)) {
-      if (renderEncoder == nil) {
-        return failEncoding(
-            GpuError{GpuErrorType::InvalidState, "setViewport outside a render pass"});
-      }
-      [renderEncoder setViewport:MTLViewport{setViewport->x, setViewport->y, setViewport->width,
-                                             setViewport->height, setViewport->minDepth,
-                                             setViewport->maxDepth}];
-    } else if (const auto* draw = std::get_if<DrawCommand>(&command)) {
-      if (renderEncoder == nil) {
-        return failEncoding(GpuError{GpuErrorType::InvalidState, "draw outside a render pass"});
-      }
-      [renderEncoder drawPrimitives:ToMtlPrimitiveType(currentTopology)
-                        vertexStart:draw->firstVertex
-                        vertexCount:draw->vertexCount
-                      instanceCount:draw->instanceCount
-                       baseInstance:draw->firstInstance];
-    } else if (std::get_if<EndRenderPassCommand>(&command) != nullptr) {
-      if (renderEncoder == nil) {
-        return GpuError{GpuErrorType::InvalidState, "endRenderPass without an active render pass"};
-      }
-      [renderEncoder endEncoding];
-      renderEncoder = nil;
-    } else if (const auto* copy = std::get_if<CopyTextureToBufferCommand>(&command)) {
-      if (renderEncoder != nil) {
-        return failEncoding(
-            GpuError{GpuErrorType::InvalidState, "copyTextureToBuffer inside a render pass"});
-      }
-      id<MTLTexture> texture = GetSlot(impl_->textures, copy->textureId.slotIndex);
-      id<MTLBuffer> buffer = GetSlot(impl_->buffers, copy->bufferId.slotIndex);
-      if (texture == nil || buffer == nil) {
-        return GpuError{GpuErrorType::InvalidState,
-                        "copyTextureToBuffer: source texture or destination buffer is missing"};
-      }
-      id<MTLBlitCommandEncoder> blitEncoder = [commandBuffer blitCommandEncoder];
-      if (blitEncoder == nil) {
-        return GpuError{GpuErrorType::InvalidState, "Metal blit command encoder creation failed"};
-      }
-      [blitEncoder copyFromTexture:texture
-                       sourceSlice:0
-                       sourceLevel:0
-                      sourceOrigin:MTLOriginMake(0, 0, 0)
-                        sourceSize:MTLSizeMake(copy->copySize.width, copy->copySize.height, 1)
-                          toBuffer:buffer
-                 destinationOffset:copy->layout.offsetBytes
-            destinationBytesPerRow:copy->layout.bytesPerRow
-          destinationBytesPerImage:static_cast<uint64_t>(copy->layout.bytesPerRow) *
-                                   copy->layout.rowsPerImage];
-      [blitEncoder endEncoding];
+    Status encodeStatus = impl_->encodeCommand(state, command);
+    if (encodeStatus.hasError()) {
+      return failEncoding(std::move(encodeStatus));
     }
   }
 
-  if (renderEncoder != nil) {
+  if (state.renderEncoder != nil) {
     // The encoder state machine guarantees passes are ended before finish; fail closed anyway.
-    [renderEncoder endEncoding];
+    [state.renderEncoder endEncoding];
     return GpuError{GpuErrorType::InvalidState, "submitted command stream left a render pass open"};
   }
 
-  std::shared_ptr<CompletionState> completionState = impl_->completionState;
-  [commandBuffer addCompletedHandler:^(id<MTLCommandBuffer> completedBuffer) {
-    if (completedBuffer.error != nil) {
-      completionState->hadError.store(true, std::memory_order_release);
-      std::lock_guard<std::mutex> lock(completionState->mutex);
-      if (completionState->errorMessage.empty()) {
-        completionState->errorMessage =
-            DescribeNSError(completedBuffer.error, "Metal command buffer execution failed");
-      }
-    }
-
-    // Monotonic max: handlers may complete out of order across command buffers.
-    uint64_t previous = completionState->completedSerial.load(std::memory_order_relaxed);
-    while (previous < submissionSerial &&
-           !completionState->completedSerial.compare_exchange_weak(
-               previous, submissionSerial, std::memory_order_release, std::memory_order_relaxed)) {}
-  }];
-  [commandBuffer commit];
+  impl_->attachCompletionHandler(state, submissionSerial);
+  [state.commandBuffer commit];
 
   return OkStatus();
 }

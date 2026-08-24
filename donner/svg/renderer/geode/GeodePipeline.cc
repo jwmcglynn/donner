@@ -1,377 +1,225 @@
 #include "donner/svg/renderer/geode/GeodePipeline.h"
 
+#include <cstdio>
+#include <utility>
+#include <vector>
+
+#include "donner/base/Utils.h"
 #include "donner/svg/renderer/geode/GeodeShaders.h"
+#include "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h"
 #include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
 
 namespace donner::geode {
 
-GeodePipeline::GeodePipeline(const wgpu::Device& device, wgpu::TextureFormat colorFormat)
-    : colorFormat_(colorFormat) {
+namespace {
+
+/// Unwraps a `donner::gpu` creation result, halting on failure: the pipeline family's
+/// descriptors are compile-time-constant shapes against trusted build-embedded WGSL, so a
+/// creation error here is a build defect (or a lost device), not a recoverable runtime state.
+template <typename T>
+T UnwrapOrAbort(gpu::Result<T>&& result, const char* what) {
+  if (result.hasError()) {
+    std::fprintf(stderr, "[Geode] %s failed: %s\n", what, result.error().message.c_str());
+    UTILS_RELEASE_ASSERT_MSG(false, "Geode pipeline construction failed");
+  }
+  return std::move(result).result();
+}
+
+/// Standard premultiplied-alpha source-over blending used by the fill and gradient pipelines.
+gpu::BlendState PremultipliedSourceOverBlend() {
+  return gpu::BlendState{
+      gpu::BlendComponent{gpu::BlendFactor::One, gpu::BlendFactor::OneMinusSrcAlpha,
+                          gpu::BlendOperation::Add},
+      gpu::BlendComponent{gpu::BlendFactor::One, gpu::BlendFactor::OneMinusSrcAlpha,
+                          gpu::BlendOperation::Add}};
+}
+
+/// A fragment-visible read-only storage buffer entry at \p binding.
+gpu::BindGroupLayoutEntry FragmentStorageEntry(uint32_t binding) {
+  return gpu::BindGroupLayoutEntry{binding, gpu::ShaderStage::Fragment,
+                                   gpu::BindingType::ReadOnlyStorageBuffer};
+}
+
+}  // namespace
+
+GeodePipeline::GeodePipeline(GeodeWgpuAdapterDevice& adapterDevice, gpu::TextureFormat colorFormat)
+    : adapterDevice_(&adapterDevice), colorFormat_(colorFormat) {
   // ----- Bind group layout -----
-  // Eleven bindings: uniforms, H bands SSBO, H curves SSBO, pattern
+  // Twelve bindings: uniforms, H bands SSBO, H curves SSBO, pattern
   // texture, pattern sampler, clip-mask texture, clip-mask sampler, the
   // per-instance records SSBO (transform, color, rule, grid parameters,
   // bounding polygon, geometry bases; 256 bytes per record), V bands
-  // SSBO, V curves SSBO, and the combined dense grid storage. The pattern
-  // texture/sampler are only sampled when paintMode == "pattern" and
-  // the clip-mask texture/sampler only when `hasClipMask != 0`; a 1x1
-  // dummy texture is bound for both when the feature is inactive so the
-  // bind group layout is stable across draw calls. Every draw binds at
-  // least one record; instanced and batched draws bind a contiguous
-  // record span indexed by instance_index.
-  wgpu::BindGroupLayoutEntry entries[12] = {};
+  // SSBO, V curves SSBO, the combined dense grid storage, and the gradient
+  // paint blocks. The pattern texture/sampler are only sampled when
+  // paintMode == "pattern" and the clip-mask texture/sampler only when
+  // `hasClipMask != 0`; a 1x1 dummy texture is bound for both when the
+  // feature is inactive so the bind group layout is stable across draw
+  // calls. Every draw binds at least one record; instanced and batched
+  // draws bind a contiguous record span indexed by instance_index.
+  const std::vector<gpu::BindGroupLayoutEntry> entries = {
+      gpu::BindGroupLayoutEntry{0, gpu::ShaderStage::Vertex | gpu::ShaderStage::Fragment,
+                                gpu::BindingType::UniformBuffer},
+      FragmentStorageEntry(1),
+      FragmentStorageEntry(2),
+      gpu::BindGroupLayoutEntry{3, gpu::ShaderStage::Fragment,
+                                gpu::BindingType::SampledTexture2dFloat},
+      gpu::BindGroupLayoutEntry{4, gpu::ShaderStage::Fragment, gpu::BindingType::FilteringSampler},
+      gpu::BindGroupLayoutEntry{5, gpu::ShaderStage::Fragment,
+                                gpu::BindingType::SampledTexture2dFloat},
+      gpu::BindGroupLayoutEntry{6, gpu::ShaderStage::Fragment, gpu::BindingType::FilteringSampler},
+      // Per-instance records: the vertex stage reads the transform + bounding polygon, and the
+      // fragment stage reads color / rule / grid / geometry bases through a flat instance-id
+      // varying, so overlapping batched instances still blend in painter order.
+      gpu::BindGroupLayoutEntry{7, gpu::ShaderStage::Vertex | gpu::ShaderStage::Fragment,
+                                gpu::BindingType::ReadOnlyStorageBuffer},
+      FragmentStorageEntry(8),
+      FragmentStorageEntry(9),
+      // The four dense grid arrays (hBandGrid, vBandGrid, hCurveIndices, vCurveIndices) share ONE
+      // combined u32 storage binding; instance records carry the element bases. This keeps the
+      // fragment stage at seven storage bindings, under the baseline WebGPU limit of eight per
+      // stage.
+      FragmentStorageEntry(10),
+      // Gradient paint blocks, addressed by each record's element base, so a run of differently
+      // painted gradient fills shares one draw instead of rebinding a per-draw gradient uniform.
+      FragmentStorageEntry(11),
+  };
+  bindGroupLayout_ = UnwrapOrAbort(adapterDevice.createBindGroupLayout(
+                                       gpu::BindGroupLayoutDescriptor{"GeodeSlugFillBGL", entries}),
+                                   "GeodeSlugFillBGL createBindGroupLayout");
 
-  entries[0].binding = 0;
-  entries[0].visibility = wgpu::ShaderStage::Vertex | wgpu::ShaderStage::Fragment;
-  entries[0].buffer.type = wgpu::BufferBindingType::Uniform;
-  entries[0].buffer.minBindingSize = 0;
+  pipelineLayout_ = UnwrapOrAbort(adapterDevice.createPipelineLayout(gpu::PipelineLayoutDescriptor{
+                                      "GeodeSlugFillPL", {bindGroupLayout_}}),
+                                  "GeodeSlugFillPL createPipelineLayout");
 
-  entries[1].binding = 1;
-  entries[1].visibility = wgpu::ShaderStage::Fragment;
-  entries[1].buffer.type = wgpu::BufferBindingType::ReadOnlyStorage;
-  entries[1].buffer.minBindingSize = 0;
+  shaderModule_ = UnwrapOrAbort(createSlugFillShader(adapterDevice), "SlugFill shader module");
 
-  entries[2].binding = 2;
-  entries[2].visibility = wgpu::ShaderStage::Fragment;
-  entries[2].buffer.type = wgpu::BufferBindingType::ReadOnlyStorage;
-  entries[2].buffer.minBindingSize = 0;
-
-  entries[3].binding = 3;
-  entries[3].visibility = wgpu::ShaderStage::Fragment;
-  entries[3].texture.sampleType = wgpu::TextureSampleType::Float;
-  entries[3].texture.viewDimension = wgpu::TextureViewDimension::_2D;
-  entries[3].texture.multisampled = false;
-
-  entries[4].binding = 4;
-  entries[4].visibility = wgpu::ShaderStage::Fragment;
-  entries[4].sampler.type = wgpu::SamplerBindingType::Filtering;
-
-  // Clip mask texture + sampler.
-  entries[5].binding = 5;
-  entries[5].visibility = wgpu::ShaderStage::Fragment;
-  entries[5].texture.sampleType = wgpu::TextureSampleType::Float;
-  entries[5].texture.viewDimension = wgpu::TextureViewDimension::_2D;
-  entries[5].texture.multisampled = false;
-
-  entries[6].binding = 6;
-  entries[6].visibility = wgpu::ShaderStage::Fragment;
-  entries[6].sampler.type = wgpu::SamplerBindingType::Filtering;
-
-  // Per-instance records: the vertex stage reads the transform + bounding
-  // polygon, and the fragment stage reads color / rule / grid / geometry
-  // bases through a flat instance-id varying, so overlapping batched
-  // instances still blend in painter order.
-  entries[7].binding = 7;
-  entries[7].visibility = wgpu::ShaderStage::Vertex | wgpu::ShaderStage::Fragment;
-  entries[7].buffer.type = wgpu::BufferBindingType::ReadOnlyStorage;
-  entries[7].buffer.minBindingSize = 0;
-
-  // Analytic dual-ray fill: vertical bands SSBO, vertical curves
-  // SSBO, horizontal band grid, vertical band grid, and compact references
-  // into each canonical curve array. All fragment-read-only.
-  entries[8].binding = 8;
-  entries[8].visibility = wgpu::ShaderStage::Fragment;
-  entries[8].buffer.type = wgpu::BufferBindingType::ReadOnlyStorage;
-  entries[8].buffer.minBindingSize = 0;
-
-  entries[9].binding = 9;
-  entries[9].visibility = wgpu::ShaderStage::Fragment;
-  entries[9].buffer.type = wgpu::BufferBindingType::ReadOnlyStorage;
-  entries[9].buffer.minBindingSize = 0;
-
-  // Analytic dual-ray fill: the four dense grid arrays
-  // (hBandGrid, vBandGrid, hCurveIndices, vCurveIndices) share ONE
-  // combined u32 storage binding; instance records carry the element
-  // bases. This keeps the fragment stage at seven storage bindings, under
-  // the baseline WebGPU limit of eight per stage.
-  entries[10].binding = 10;
-  entries[10].visibility = wgpu::ShaderStage::Fragment;
-  entries[10].buffer.type = wgpu::BufferBindingType::ReadOnlyStorage;
-  entries[10].buffer.minBindingSize = 0;
-
-  // Gradient paint blocks, addressed by each record's element base, so a run
-  // of differently painted gradient fills shares one draw instead of rebinding
-  // a per-draw gradient uniform.
-  entries[11].binding = 11;
-  entries[11].visibility = wgpu::ShaderStage::Fragment;
-  entries[11].buffer.type = wgpu::BufferBindingType::ReadOnlyStorage;
-  entries[11].buffer.minBindingSize = 0;
-
-  wgpu::BindGroupLayoutDescriptor bglDesc = {};
-  bglDesc.label = wgpuLabel("GeodeSlugFillBGL");
-  bglDesc.entryCount = 12;
-  bglDesc.entries = entries;
-  bindGroupLayout_.reset(device.createBindGroupLayout(bglDesc));
-
-  // ----- Pipeline layout -----
-  wgpu::PipelineLayoutDescriptor plDesc = {};
-  plDesc.label = wgpuLabel("GeodeSlugFillPL");
-  plDesc.bindGroupLayoutCount = 1;
-  WGPUBindGroupLayout layouts[1] = {bindGroupLayout_.get()};
-  plDesc.bindGroupLayouts = layouts;
-  pipelineLayout_.reset(device.createPipelineLayout(plDesc));
-
-  // ----- Shader module -----
-  shader_.reset(createSlugFillShader(device));
-
-  // ----- Render pipeline -----
-  // The default entry points take the draw's paint and geometry from the
-  // uniform, which serves every draw whose instances share one paint and one
-  // encoded path. `batchedPipeline` builds the record-reading variant.
-  pipeline_.reset(buildPipeline(device, "GeodeSlugFill", "vs_main", "fs_main"));
+  // The default entry points take the draw's paint and geometry from the uniform, which serves
+  // every draw whose instances share one paint and one encoded path. `batchedPipeline` builds the
+  // record-reading variant.
+  pipeline_ = buildPipeline("GeodeSlugFill", "vs_main", "fs_main");
 }
 
-wgpu::RenderPipeline GeodePipeline::buildPipeline(const wgpu::Device& device, const char* label,
-                                                  const char* vertexEntryPoint,
-                                                  const char* fragmentEntryPoint) const {
-  // Standard premultiplied-alpha source-over blending.
-  wgpu::BlendState blend = {};
-  blend.color.srcFactor = wgpu::BlendFactor::One;
-  blend.color.dstFactor = wgpu::BlendFactor::OneMinusSrcAlpha;
-  blend.color.operation = wgpu::BlendOperation::Add;
-  blend.alpha.srcFactor = wgpu::BlendFactor::One;
-  blend.alpha.dstFactor = wgpu::BlendFactor::OneMinusSrcAlpha;
-  blend.alpha.operation = wgpu::BlendOperation::Add;
-
-  wgpu::ColorTargetState colorTarget = {};
-  colorTarget.format = colorFormat_;
-  colorTarget.blend = &blend;
-  colorTarget.writeMask = wgpu::ColorWriteMask::All;
-
-  wgpu::FragmentState fragmentState = {};
-  fragmentState.module = shader_.get();
-  fragmentState.entryPoint = wgpuLabel(fragmentEntryPoint);
-  fragmentState.targetCount = 1;
-  fragmentState.targets = &colorTarget;
-
-  wgpu::RenderPipelineDescriptor rpDesc = {};
-  rpDesc.label = wgpuLabel(label);
-  rpDesc.layout = pipelineLayout_.get();
-
-  rpDesc.vertex.module = shader_.get();
-  rpDesc.vertex.entryPoint = wgpuLabel(vertexEntryPoint);
-  rpDesc.vertex.bufferCount = 0;
-  rpDesc.vertex.buffers = nullptr;
-
-  rpDesc.primitive.topology = wgpu::PrimitiveTopology::TriangleList;
-  rpDesc.primitive.cullMode = wgpu::CullMode::None;
-
-  rpDesc.fragment = &fragmentState;
-  rpDesc.multisample.count = 1;
-  rpDesc.multisample.mask = 0xFFFFFFFF;
-
-  return device.createRenderPipeline(rpDesc);
+gpu::RenderPipeline GeodePipeline::buildPipeline(const char* label, const char* vertexEntryPoint,
+                                                 const char* fragmentEntryPoint) const {
+  return UnwrapOrAbort(
+      adapterDevice_->createRenderPipeline(gpu::RenderPipelineDescriptor{
+          label, pipelineLayout_, gpu::VertexState{shaderModule_, vertexEntryPoint, {}},
+          gpu::FragmentState{shaderModule_,
+                             fragmentEntryPoint,
+                             {gpu::ColorTargetState{colorFormat_, PremultipliedSourceOverBlend()}}},
+          gpu::PrimitiveTopology::TriangleList, gpu::CullMode::None}),
+      label);
 }
 
-const wgpu::RenderPipeline& GeodePipeline::batchedPipeline(const wgpu::Device& device) const {
-  if (!batchedPipeline_) {
+const gpu::RenderPipeline& GeodePipeline::batchedPipeline() const {
+  if (!batchedPipeline_.isValid()) {
     // Identical state to the default pipeline - same layout, same shader
     // module, same blending - differing only in the entry points that read
     // paint and geometry from each instance's record. Built on first use
     // because only a cross-entity batch needs it.
-    batchedPipeline_.reset(
-        buildPipeline(device, "GeodeSlugFillBatched", "vs_main_batched", "fs_main_batched"));
+    batchedPipeline_ = buildPipeline("GeodeSlugFillBatched", "vs_main_batched", "fs_main_batched");
   }
-  return batchedPipeline_.get();
+  return batchedPipeline_;
 }
 
 // ============================================================================
 // GeodeGradientPipeline
 // ============================================================================
 
-GeodeGradientPipeline::GeodeGradientPipeline(const wgpu::Device& device,
-                                             wgpu::TextureFormat colorFormat)
+GeodeGradientPipeline::GeodeGradientPipeline(GeodeWgpuAdapterDevice& adapterDevice,
+                                             gpu::TextureFormat colorFormat)
     : colorFormat_(colorFormat) {
   // Eleven bindings - uniforms, H bands SSBO, H curves SSBO, clip-mask texture,
   // clip-mask sampler, and (analytic dual-ray) V bands SSBO, V curves
-  // SSBO, H band grid, V band grid. The clip-mask bindings always carry
-  // something valid; when `hasClipMask == 0` a 1x1 dummy texture is bound and
-  // the shader skips the sample work.
-  wgpu::BindGroupLayoutEntry entries[11] = {};
+  // SSBO, H band grid, V band grid, and compact references into each canonical
+  // curve array. The clip-mask bindings always carry something valid; when
+  // `hasClipMask == 0` a 1x1 dummy texture is bound and the shader skips the
+  // sample work.
+  const std::vector<gpu::BindGroupLayoutEntry> entries = {
+      gpu::BindGroupLayoutEntry{0, gpu::ShaderStage::Vertex | gpu::ShaderStage::Fragment,
+                                gpu::BindingType::UniformBuffer},
+      FragmentStorageEntry(1),
+      FragmentStorageEntry(2),
+      gpu::BindGroupLayoutEntry{3, gpu::ShaderStage::Fragment,
+                                gpu::BindingType::SampledTexture2dFloat},
+      gpu::BindGroupLayoutEntry{4, gpu::ShaderStage::Fragment, gpu::BindingType::FilteringSampler},
+      FragmentStorageEntry(5),
+      FragmentStorageEntry(6),
+      FragmentStorageEntry(7),
+      FragmentStorageEntry(8),
+      FragmentStorageEntry(9),
+      FragmentStorageEntry(10),
+  };
+  bindGroupLayout_ =
+      UnwrapOrAbort(adapterDevice.createBindGroupLayout(
+                        gpu::BindGroupLayoutDescriptor{"GeodeSlugGradientBGL", entries}),
+                    "GeodeSlugGradientBGL createBindGroupLayout");
 
-  entries[0].binding = 0;
-  entries[0].visibility = wgpu::ShaderStage::Vertex | wgpu::ShaderStage::Fragment;
-  entries[0].buffer.type = wgpu::BufferBindingType::Uniform;
-  entries[0].buffer.minBindingSize = 0;
+  pipelineLayout_ = UnwrapOrAbort(adapterDevice.createPipelineLayout(gpu::PipelineLayoutDescriptor{
+                                      "GeodeSlugGradientPL", {bindGroupLayout_}}),
+                                  "GeodeSlugGradientPL createPipelineLayout");
 
-  entries[1].binding = 1;
-  entries[1].visibility = wgpu::ShaderStage::Fragment;
-  entries[1].buffer.type = wgpu::BufferBindingType::ReadOnlyStorage;
-  entries[1].buffer.minBindingSize = 0;
+  shaderModule_ =
+      UnwrapOrAbort(createSlugGradientShader(adapterDevice), "SlugGradient shader module");
 
-  entries[2].binding = 2;
-  entries[2].visibility = wgpu::ShaderStage::Fragment;
-  entries[2].buffer.type = wgpu::BufferBindingType::ReadOnlyStorage;
-  entries[2].buffer.minBindingSize = 0;
-
-  // Clip mask texture + sampler.
-  entries[3].binding = 3;
-  entries[3].visibility = wgpu::ShaderStage::Fragment;
-  entries[3].texture.sampleType = wgpu::TextureSampleType::Float;
-  entries[3].texture.viewDimension = wgpu::TextureViewDimension::_2D;
-  entries[3].texture.multisampled = false;
-
-  entries[4].binding = 4;
-  entries[4].visibility = wgpu::ShaderStage::Fragment;
-  entries[4].sampler.type = wgpu::SamplerBindingType::Filtering;
-
-  // Analytic dual-ray: vertical bands/curves + dense band grids.
-  for (int i = 5; i <= 10; ++i) {
-    entries[i].binding = static_cast<uint32_t>(i);
-    entries[i].visibility = wgpu::ShaderStage::Fragment;
-    entries[i].buffer.type = wgpu::BufferBindingType::ReadOnlyStorage;
-    entries[i].buffer.minBindingSize = 0;
-  }
-
-  wgpu::BindGroupLayoutDescriptor bglDesc = {};
-  bglDesc.label = wgpuLabel("GeodeSlugGradientBGL");
-  bglDesc.entryCount = 11;
-  bglDesc.entries = entries;
-  bindGroupLayout_.reset(device.createBindGroupLayout(bglDesc));
-
-  wgpu::PipelineLayoutDescriptor plDesc = {};
-  plDesc.label = wgpuLabel("GeodeSlugGradientPL");
-  plDesc.bindGroupLayoutCount = 1;
-  WGPUBindGroupLayout layouts[1] = {bindGroupLayout_.get()};
-  plDesc.bindGroupLayouts = layouts;
-  ScopedWgpuHandle<wgpu::PipelineLayout> pipelineLayout(device.createPipelineLayout(plDesc));
-
-  ScopedWgpuHandle<wgpu::ShaderModule> shader(createSlugGradientShader(device));
-
-  wgpu::BlendState blend = {};
-  blend.color.srcFactor = wgpu::BlendFactor::One;
-  blend.color.dstFactor = wgpu::BlendFactor::OneMinusSrcAlpha;
-  blend.color.operation = wgpu::BlendOperation::Add;
-  blend.alpha.srcFactor = wgpu::BlendFactor::One;
-  blend.alpha.dstFactor = wgpu::BlendFactor::OneMinusSrcAlpha;
-  blend.alpha.operation = wgpu::BlendOperation::Add;
-
-  wgpu::ColorTargetState colorTarget = {};
-  colorTarget.format = colorFormat_;
-  colorTarget.blend = &blend;
-  colorTarget.writeMask = wgpu::ColorWriteMask::All;
-
-  wgpu::FragmentState fragmentState = {};
-  fragmentState.module = shader.get();
-  fragmentState.entryPoint = wgpuLabel("fs_main");
-  fragmentState.targetCount = 1;
-  fragmentState.targets = &colorTarget;
-
-  wgpu::RenderPipelineDescriptor rpDesc = {};
-  rpDesc.label = wgpuLabel("GeodeSlugGradient");
-  rpDesc.layout = pipelineLayout.get();
-
-  rpDesc.vertex.module = shader.get();
-  rpDesc.vertex.entryPoint = wgpuLabel("vs_main");
-  rpDesc.vertex.bufferCount = 0;
-  rpDesc.vertex.buffers = nullptr;
-
-  rpDesc.primitive.topology = wgpu::PrimitiveTopology::TriangleList;
-  rpDesc.primitive.cullMode = wgpu::CullMode::None;
-
-  rpDesc.fragment = &fragmentState;
-  rpDesc.multisample.count = 1;
-  rpDesc.multisample.mask = 0xFFFFFFFF;
-
-  pipeline_.reset(device.createRenderPipeline(rpDesc));
+  pipeline_ = UnwrapOrAbort(
+      adapterDevice.createRenderPipeline(gpu::RenderPipelineDescriptor{
+          "GeodeSlugGradient", pipelineLayout_, gpu::VertexState{shaderModule_, "vs_main", {}},
+          gpu::FragmentState{shaderModule_,
+                             "fs_main",
+                             {gpu::ColorTargetState{colorFormat_, PremultipliedSourceOverBlend()}}},
+          gpu::PrimitiveTopology::TriangleList, gpu::CullMode::None}),
+      "GeodeSlugGradient createRenderPipeline");
 }
 
 // ============================================================================
 // GeodeMaskPipeline
 // ============================================================================
 
-GeodeMaskPipeline::GeodeMaskPipeline(const wgpu::Device& device) {
+GeodeMaskPipeline::GeodeMaskPipeline(GeodeWgpuAdapterDevice& adapterDevice) {
   // Eleven bindings - uniforms, H bands SSBO, H curves SSBO, nested clip mask
-  // texture, nested clip mask sampler, and (analytic dual-ray) V bands
-  // SSBO, V curves SSBO, H band grid, V band grid. The clip-mask slot is always
-  // bound; a 1x1 dummy is used when `uniforms.hasClipMask == 0`.
-  wgpu::BindGroupLayoutEntry entries[11] = {};
+  // texture, nested clip mask sampler, and (analytic dual-ray) V bands SSBO,
+  // V curves SSBO, H band grid, V band grid, and compact references into each
+  // canonical curve array. The clip-mask slot is always bound; a 1x1 dummy is
+  // used when `uniforms.hasClipMask == 0`.
+  const std::vector<gpu::BindGroupLayoutEntry> entries = {
+      gpu::BindGroupLayoutEntry{0, gpu::ShaderStage::Vertex | gpu::ShaderStage::Fragment,
+                                gpu::BindingType::UniformBuffer},
+      FragmentStorageEntry(1),
+      FragmentStorageEntry(2),
+      gpu::BindGroupLayoutEntry{3, gpu::ShaderStage::Fragment,
+                                gpu::BindingType::SampledTexture2dFloat},
+      gpu::BindGroupLayoutEntry{4, gpu::ShaderStage::Fragment, gpu::BindingType::FilteringSampler},
+      FragmentStorageEntry(5),
+      FragmentStorageEntry(6),
+      FragmentStorageEntry(7),
+      FragmentStorageEntry(8),
+      FragmentStorageEntry(9),
+      FragmentStorageEntry(10),
+  };
+  bindGroupLayout_ = UnwrapOrAbort(adapterDevice.createBindGroupLayout(
+                                       gpu::BindGroupLayoutDescriptor{"GeodeSlugMaskBGL", entries}),
+                                   "GeodeSlugMaskBGL createBindGroupLayout");
 
-  entries[0].binding = 0;
-  entries[0].visibility = wgpu::ShaderStage::Vertex | wgpu::ShaderStage::Fragment;
-  entries[0].buffer.type = wgpu::BufferBindingType::Uniform;
-  entries[0].buffer.minBindingSize = 0;
+  pipelineLayout_ = UnwrapOrAbort(adapterDevice.createPipelineLayout(gpu::PipelineLayoutDescriptor{
+                                      "GeodeSlugMaskPL", {bindGroupLayout_}}),
+                                  "GeodeSlugMaskPL createPipelineLayout");
 
-  entries[1].binding = 1;
-  entries[1].visibility = wgpu::ShaderStage::Fragment;
-  entries[1].buffer.type = wgpu::BufferBindingType::ReadOnlyStorage;
-  entries[1].buffer.minBindingSize = 0;
-
-  entries[2].binding = 2;
-  entries[2].visibility = wgpu::ShaderStage::Fragment;
-  entries[2].buffer.type = wgpu::BufferBindingType::ReadOnlyStorage;
-  entries[2].buffer.minBindingSize = 0;
-
-  entries[3].binding = 3;
-  entries[3].visibility = wgpu::ShaderStage::Fragment;
-  entries[3].texture.sampleType = wgpu::TextureSampleType::Float;
-  entries[3].texture.viewDimension = wgpu::TextureViewDimension::_2D;
-  entries[3].texture.multisampled = false;
-
-  entries[4].binding = 4;
-  entries[4].visibility = wgpu::ShaderStage::Fragment;
-  entries[4].sampler.type = wgpu::SamplerBindingType::Filtering;
-
-  // Analytic dual-ray: vertical bands/curves + dense band grids.
-  for (int i = 5; i <= 10; ++i) {
-    entries[i].binding = static_cast<uint32_t>(i);
-    entries[i].visibility = wgpu::ShaderStage::Fragment;
-    entries[i].buffer.type = wgpu::BufferBindingType::ReadOnlyStorage;
-    entries[i].buffer.minBindingSize = 0;
-  }
-
-  wgpu::BindGroupLayoutDescriptor bglDesc = {};
-  bglDesc.label = wgpuLabel("GeodeSlugMaskBGL");
-  bglDesc.entryCount = 11;
-  bglDesc.entries = entries;
-  bindGroupLayout_.reset(device.createBindGroupLayout(bglDesc));
-
-  wgpu::PipelineLayoutDescriptor plDesc = {};
-  plDesc.label = wgpuLabel("GeodeSlugMaskPL");
-  plDesc.bindGroupLayoutCount = 1;
-  WGPUBindGroupLayout layouts[1] = {bindGroupLayout_.get()};
-  plDesc.bindGroupLayouts = layouts;
-  ScopedWgpuHandle<wgpu::PipelineLayout> pipelineLayout(device.createPipelineLayout(plDesc));
-
-  ScopedWgpuHandle<wgpu::ShaderModule> shader(createSlugMaskShader(device));
+  shaderModule_ = UnwrapOrAbort(createSlugMaskShader(adapterDevice), "SlugMask shader module");
 
   // Max-blend unions scalar analytic coverage from multiple clip paths.
-  wgpu::BlendState blend = {};
-  blend.color.srcFactor = wgpu::BlendFactor::One;
-  blend.color.dstFactor = wgpu::BlendFactor::One;
-  blend.color.operation = wgpu::BlendOperation::Max;
-  blend.alpha.srcFactor = wgpu::BlendFactor::One;
-  blend.alpha.dstFactor = wgpu::BlendFactor::One;
-  blend.alpha.operation = wgpu::BlendOperation::Max;
+  const gpu::BlendState maxBlend{
+      gpu::BlendComponent{gpu::BlendFactor::One, gpu::BlendFactor::One, gpu::BlendOperation::Max},
+      gpu::BlendComponent{gpu::BlendFactor::One, gpu::BlendFactor::One, gpu::BlendOperation::Max}};
 
-  wgpu::ColorTargetState colorTarget = {};
-  colorTarget.format = wgpu::TextureFormat::RGBA8Unorm;
-  colorTarget.blend = &blend;
-  colorTarget.writeMask = wgpu::ColorWriteMask::All;
-
-  wgpu::FragmentState fragmentState = {};
-  fragmentState.module = shader.get();
-  fragmentState.entryPoint = wgpuLabel("fs_main");
-  fragmentState.targetCount = 1;
-  fragmentState.targets = &colorTarget;
-
-  wgpu::RenderPipelineDescriptor rpDesc = {};
-  rpDesc.label = wgpuLabel("GeodeSlugMask");
-  rpDesc.layout = pipelineLayout.get();
-
-  rpDesc.vertex.module = shader.get();
-  rpDesc.vertex.entryPoint = wgpuLabel("vs_main");
-  rpDesc.vertex.bufferCount = 0;
-  rpDesc.vertex.buffers = nullptr;
-
-  rpDesc.primitive.topology = wgpu::PrimitiveTopology::TriangleList;
-  rpDesc.primitive.cullMode = wgpu::CullMode::None;
-
-  rpDesc.fragment = &fragmentState;
-  rpDesc.multisample.count = 1;
-  rpDesc.multisample.mask = 0xFFFFFFFF;
-
-  pipeline_.reset(device.createRenderPipeline(rpDesc));
+  pipeline_ = UnwrapOrAbort(
+      adapterDevice.createRenderPipeline(gpu::RenderPipelineDescriptor{
+          "GeodeSlugMask", pipelineLayout_, gpu::VertexState{shaderModule_, "vs_main", {}},
+          gpu::FragmentState{shaderModule_,
+                             "fs_main",
+                             {gpu::ColorTargetState{gpu::TextureFormat::RGBA8Unorm, maxBlend}}},
+          gpu::PrimitiveTopology::TriangleList, gpu::CullMode::None}),
+      "GeodeSlugMask createRenderPipeline");
 }
 
 // ============================================================================

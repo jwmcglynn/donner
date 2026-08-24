@@ -12,7 +12,9 @@
 #include <vector>
 #include <webgpu/webgpu.hpp>
 
+#include "donner/base/Utils.h"
 #include "donner/svg/renderer/geode/GeodeCounters.h"
+#include "donner/svg/renderer/geode/GeodeGpuContext.h"
 #include "donner/svg/renderer/geode/GeodeGpuWait.h"
 #include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
 
@@ -38,6 +40,7 @@ class GeodeGradientPipeline;
 class GeodeImagePipeline;
 class GeodeMaskPipeline;
 class GeodeFilterEngine;
+class GeodeWgpuAdapterDevice;
 class GeodeSnapshotReadbackPipeline;
 
 /**
@@ -334,6 +337,13 @@ public:
   void deferDestroy(wgpu::Texture texture);
 
   /**
+   * Enqueue a bind group for deferred destruction. Same semantics as the buffer variant: a bind
+   * group evicted from a cache may still be named by draws that have been recorded but not yet
+   * replayed to the backend, and destroying it there fails those draws closed.
+   */
+  void deferDestroy(gpu::BindGroup bindGroup);
+
+  /**
    * Drop all deferred-destroy handles, releasing their GPU resources.
    *
    * Called at the top of each frame (before new allocations) so resources
@@ -420,7 +430,7 @@ public:
   /// the coldest entry rather than the oldest-inserted one - with more than
   /// the cap of live groups, pure insertion order would evict the hottest
   /// steady-state entry every frame.
-  [[nodiscard]] wgpu::BindGroup findSceneBatchBindGroup(const SceneBatchBindGroupKey& key);
+  [[nodiscard]] const gpu::BindGroup* findSceneBatchBindGroup(const SceneBatchBindGroupKey& key);
 
   /// Store a scene-batch bind group under `key`, taking ownership of the
   /// +1 handle. At the cap, the OLDEST entries are evicted one at a time
@@ -431,7 +441,8 @@ public:
   /// Insertion order puts those dead entries first. Recorded command buffers
   /// keep their own references, so dropping the cache's handle mid-frame is
   /// safe either way.
-  void storeSceneBatchBindGroup(const SceneBatchBindGroupKey& key, wgpu::BindGroup group);
+  const gpu::BindGroup& storeSceneBatchBindGroup(const SceneBatchBindGroupKey& key,
+                                                 gpu::BindGroup group);
 
   /**
    * Process-unique identity for this device instance, assigned at
@@ -631,45 +642,9 @@ public:
   /// push/pop. Caching the dummies on the device - one instance per
   /// GeodeDevice - drops that to zero steady-state.
 
-  /// 1×1 opaque-black RGBA8 dummy. Bound into the pattern slot when
-  /// the current draw is solid / gradient (not a pattern). The shader
-  /// does not sample from it, but the bind group layout still requires
-  /// a valid binding.
-  const wgpu::Texture& dummyPatternTexture() const;
-  /// View of `dummyPatternTexture()`.
-  const wgpu::TextureView& dummyPatternTextureView() const;
-  /// Linear-Repeat sampler used for both the dummy and real pattern tiles.
-  const wgpu::Sampler& dummyPatternSampler() const;
-
-  /// 1×1 R8Unorm with value `0xFF` (= 1.0 coverage). Bound into the
-  /// clip-mask slot when no clip mask is active - the shader
-  /// multiplies coverage by this value, so `1.0` is a no-op.
-  const wgpu::Texture& dummyClipMaskTexture() const;
-  /// View of `dummyClipMaskTexture()`.
-  const wgpu::TextureView& dummyClipMaskTextureView() const;
-  /// Linear-ClampToEdge sampler used for both the dummy and real clip masks.
-  const wgpu::Sampler& dummyClipMaskSampler() const;
-
-  /// One-element instance-record storage buffer carrying the identity
-  /// affine and zeroed parameters. Bound at binding 7 of the Slug fill
-  /// bind-group layout by every draw that is not a cross-entity batch, so
-  /// the bind-group layout stays stable across draw calls and those draws
-  /// need no record storage of their own: their transform is baked into
-  /// `uniforms.mvp` and their paint rides in the uniform.
-  ///
-  /// Layout mirrors the WGSL `InstanceRecord` struct in
-  /// `shaders/slug_fill.wgsl`, whose leading member is a row-major affine
-  /// as two `vec4f`, so the identity is `{(1, 0, 0, 0), (0, 1, 0, 0)}`
-  /// followed by zeroes. The `.z` components carry the translation (0 for
-  /// identity).
-  const wgpu::Buffer& identityInstanceRecordBuffer() const;
-
-  /// Zero-filled gradient paint block, one full block long. Bound at binding
-  /// 11 of the Slug fill bind-group layout by draws that have no residence
-  /// slot to bind: those draws are solid or pattern painted and never read
-  /// the array, but the binding must still resolve to a range holding at
-  /// least one whole element of the shader's array stride.
-  const wgpu::Buffer& dummyPaintDataBuffer() const;
+  /// The shared bind-slot resources - 1x1 dummy pattern texture and view, 1x1 full-coverage
+  /// clip-mask texture and view, their samplers, a one-element identity instance record, and a
+  /// zero-filled gradient paint block - are reached through \ref gpuContext.
   /// @}
 
   /// @name Shared render / compute pipelines (issue #575 fix)
@@ -746,6 +721,16 @@ public:
   GeodeCheckerboardPipeline& checkerboardUnderlayPipeline() const;
   /// @}
 
+  /// The TEMPORARY design-0053 Phase 1 adapter implementing \c donner::gpu::Device over this
+  /// device's wgpu objects. Owned here alongside the shared pipelines (which are created
+  /// through it); see GeodeWgpuAdapterDevice.h for the removal gates.
+  GeodeWgpuAdapterDevice& adapterDevice() const UTILS_LIFETIME_BOUND;
+
+  /// The recording context Geode's encoders record a frame against: this device's GPU runtime
+  /// device, its shared bind-slot resources, and its counter sinks. Wired once with the shared
+  /// pipelines and owned here, so it lives exactly as long as this device does.
+  const GeodeGpuContext& gpuContext() const UTILS_LIFETIME_BOUND;
+
 private:
   GeodeDevice();
 
@@ -753,6 +738,10 @@ private:
   /// `queue_`, and `textureFormat_` are finalised. Called from both
   /// `CreateHeadless` and `CreateFromExternal`.
   void initSharedResources();
+  /// Creates the shared bind-slot resources through the GPU runtime and wires \ref gpuContext.
+  /// Runs with the shared pipelines, once the adapter exists.
+  void initSharedBindSlotResources();
+
   void initSharedPipelines();
 
   // Order matters: queue/device/adapter/instance destroy bottom-up.
@@ -821,13 +810,14 @@ private:
   // alive until drainDeferredDestroys() drops them at the next frame boundary.
   std::vector<ScopedWgpuHandle<wgpu::Buffer>> pendingBuffers_;
   std::vector<ScopedWgpuHandle<wgpu::Texture>> pendingTextures_;
+  std::vector<gpu::BindGroup> pendingBindGroups_;
 
   // Scene-batch bind groups cached across frames (see
   // SceneBatchBindGroupKey). Bounded by kSceneBatchBindGroupCacheCap, with
   // `sceneBatchBindGroupOrder_` recording insertion order so the eviction at
   // the cap drops the oldest entries instead of everything.
   static constexpr std::size_t kSceneBatchBindGroupCacheCap = 256;
-  std::map<SceneBatchBindGroupKey, ScopedWgpuHandle<wgpu::BindGroup>> sceneBatchBindGroups_;
+  std::map<SceneBatchBindGroupKey, gpu::BindGroup> sceneBatchBindGroups_;
   std::deque<SceneBatchBindGroupKey> sceneBatchBindGroupOrder_;
 };
 

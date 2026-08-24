@@ -40,7 +40,12 @@ using geode::EncodedPath;
 using gpu::tests::BaselinePathSpec;
 using gpu::tests::BaselinePixelFromScene;
 using gpu::tests::BaselineScenePaths;
+using gpu::tests::BuildLegacyQuad;
+using gpu::tests::ExpandLegacyAxis;
 using gpu::tests::kBaselineSize;
+using gpu::tests::LegacyAxis;
+using gpu::tests::LegacyBand;
+using gpu::tests::LegacyVertex;
 
 constexpr uint32_t kBytesPerRow = kBaselineSize * 4;  // 1024; already 256-byte aligned.
 
@@ -100,73 +105,6 @@ void BuildMvp(const Transform2d& pixelFromScene, float* out16) {
 void BuildIdentity(float* out16) {
   std::memset(out16, 0, 16 * sizeof(float));
   out16[0] = out16[5] = out16[10] = out16[15] = 1.0f;
-}
-
-/// Legacy band layout consumed by BuildSolidFillModule. The generic shader IR intentionally
-/// remains on contiguous per-band curves while Geode's production shaders use compact references.
-struct LegacyBand {
-  uint32_t curveStart;
-  uint32_t curveCount;
-  float yMin = 0.0f;
-  float yMax = 0.0f;
-  float xMin = 0.0f;
-  float xMax = 0.0f;
-  float pad0 = 0.0f;
-  float pad1 = 0.0f;
-};
-static_assert(sizeof(LegacyBand) == 32, "LegacyBand must match the shader IR layout");
-
-struct LegacyAxis {
-  std::vector<LegacyBand> bands;
-  std::vector<EncodedPath::Curve> curves;
-};
-
-/// Vertex layout consumed by BuildSolidFillModule's current vertex-buffer interface.
-struct LegacyVertex {
-  float posX;
-  float posY;
-  float normalX;
-  float normalY;
-  uint32_t bandIndex = 0;
-};
-static_assert(sizeof(LegacyVertex) == 20, "LegacyVertex must match the shader IR layout");
-
-/// Expresses the encoded path's conservative AABB through the generic shader IR's legacy quad.
-std::array<LegacyVertex, 6> BuildLegacyQuad(const Box2d& bounds) {
-  const auto xMin = static_cast<float>(bounds.topLeft.x);
-  const auto yMin = static_cast<float>(bounds.topLeft.y);
-  const auto xMax = static_cast<float>(bounds.bottomRight.x);
-  const auto yMax = static_cast<float>(bounds.bottomRight.y);
-  return {{{xMin, yMin, -1.0f, -1.0f},
-           {xMax, yMin, 1.0f, -1.0f},
-           {xMax, yMax, 1.0f, 1.0f},
-           {xMin, yMin, -1.0f, -1.0f},
-           {xMax, yMax, 1.0f, 1.0f},
-           {xMin, yMax, -1.0f, 1.0f}}};
-}
-
-/// Expands compact per-band curve references into the contiguous layout consumed by the current
-/// generic solid-fill shader IR. Returns false for a malformed reference range or index.
-bool ExpandLegacyAxis(std::span<const EncodedPath::Band> bands,
-                      std::span<const uint32_t> curveIndices,
-                      std::span<const EncodedPath::Curve> canonicalCurves, LegacyAxis& result) {
-  for (const EncodedPath::Band& band : bands) {
-    if (band.curveStart > curveIndices.size() ||
-        band.curveCount > curveIndices.size() - band.curveStart) {
-      return false;
-    }
-
-    LegacyBand legacyBand{static_cast<uint32_t>(result.curves.size()), band.curveCount};
-    for (uint32_t i = 0; i < band.curveCount; ++i) {
-      const uint32_t curveIndex = curveIndices[band.curveStart + i];
-      if (curveIndex >= canonicalCurves.size()) {
-        return false;
-      }
-      result.curves.push_back(canonicalCurves[curveIndex]);
-    }
-    result.bands.push_back(legacyBand);
-  }
-  return true;
 }
 
 /// A storage buffer plus the byte size it was created with, so bind groups can bind the FULL
@@ -259,6 +197,30 @@ TEST_F(MetalSolidFillTest, ReadBackBufferRejectsStaleHandleAfterSlotReuse) {
   EXPECT_EQ(stale.error().type, GpuErrorType::InvalidHandle) << stale.error();
 }
 
+TEST_F(MetalSolidFillTest, CopyTextureToTextureFailsClosedAsUnsupported) {
+  // The RHI records and validates the copy, but the Metal backend does not execute it yet: the
+  // submission must fail closed with Unsupported instead of silently dropping the copy.
+  const Texture source =
+      unwrap(device_->createTexture(TextureDescriptor{
+                 "copySource", Extent2d{4, 4}, TextureFormat::RGBA8Unorm, TextureUsage::CopySrc}),
+             "createTexture copySource");
+  const Texture destination = unwrap(
+      device_->createTexture(TextureDescriptor{"copyDestination", Extent2d{4, 4},
+                                               TextureFormat::RGBA8Unorm, TextureUsage::CopyDst}),
+      "createTexture copyDestination");
+
+  std::unique_ptr<CommandEncoder> encoder =
+      unwrap(device_->createCommandEncoder(), "createCommandEncoder");
+  const Status copyStatus = encoder->copyTextureToTexture(source, destination, Extent2d{4, 4});
+  ASSERT_FALSE(copyStatus.hasError()) << copyStatus.error();
+  CommandBuffer commands = unwrap(encoder->finish(), "finish");
+
+  Result<uint64_t> submitted = device_->submit(std::move(commands));
+  ASSERT_TRUE(submitted.hasError()) << "copyTextureToTexture submission unexpectedly succeeded";
+  EXPECT_EQ(submitted.error().type, GpuErrorType::Unsupported) << submitted.error();
+  EXPECT_THAT(submitted.error().message, testing::HasSubstr("copyTextureToTexture"));
+}
+
 TEST_F(MetalSolidFillTest, MatchesFrozenBaseline) {
   // ----- Shader module and pipeline from the emitted MSL -----
   shader::ShaderResult<shader::IrModule> irModule = shader::programs::BuildSolidFillModule();
@@ -335,7 +297,9 @@ TEST_F(MetalSolidFillTest, MatchesFrozenBaseline) {
       device_->createTexture(TextureDescriptor{"dummy", Extent2d{1, 1}, TextureFormat::RGBA8Unorm,
                                                TextureUsage::Sampled | TextureUsage::CopyDst}),
       "createTexture dummy");
-  const std::array<uint8_t, 4> dummyTexel = {0, 0, 0, 0};
+  // Sized to the row pitch the layout declares, not to the single texel: a backend may copy
+  // whole strided rows out of the source, so a four-byte array would be read past its end.
+  const std::array<uint8_t, 256> dummyTexel = {};
   const Status dummyWrite = device_->writeTexture(dummyTexture, dummyTexel,
                                                   TexelCopyBufferLayout{0, 256, 1}, Extent2d{1, 1});
   ASSERT_FALSE(dummyWrite.hasError()) << dummyWrite.error();

@@ -48,6 +48,20 @@ donner_cc_library(
     deps = [
         "//donner/base",
         "//donner/css",
+        "//donner/svg/renderer/geode:geode_path_encoder",
+    ],
+)
+
+# gmock matchers and unwrap helpers shared by the model tests here and by backend/adapter
+# conformance tests in other packages (e.g. the Geode wgpu adapter).
+donner_cc_library(
+    name = "gpu_test_utils",
+    testonly = 1,
+    hdrs = ["tests/GpuTestUtils.h"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":gpu",
+        "@com_google_gtest//:gtest",
     ],
 )
 
@@ -57,7 +71,6 @@ donner_cc_test(
         "tests/CommandEncoder_tests.cc",
         "tests/DeviceValidation_tests.cc",
         "tests/GpuResult_tests.cc",
-        "tests/GpuTestUtils.h",
         "tests/HandleLifetime_tests.cc",
         "tests/Handles_tests.cc",
         "tests/RecordingDevice_tests.cc",
@@ -65,6 +78,7 @@ donner_cc_test(
     ],
     deps = [
         ":gpu",
+        ":gpu_test_utils",
         "@com_google_gtest//:gtest_main",
     ],
 )

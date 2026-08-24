@@ -4,19 +4,24 @@
 
 #include <webgpu/webgpu.hpp>
 
-#include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
+#include "donner/gpu/Device.h"
 
 namespace donner::geode {
 
+class GeodeWgpuAdapterDevice;
+
 /**
- * Caches a compiled `wgpu::RenderPipeline` for the image-blit shader plus its
- * bind group layout and two reusable samplers (linear and nearest).
+ * Caches a compiled render pipeline for the image-blit shader plus its bind group layout and
+ * two reusable samplers (linear and nearest).
  *
  * One `GeodeImagePipeline` is sufficient per `(device, render-target-format)`
  * pair. It is used both by `drawImage` (SVG `<image>` elements) and by the
  * pattern renderer: the pattern tile is rendered to an
  * offscreen texture and then sampled with this same pipeline as a
  * repeating fill.
+ *
+ * The pipeline and samplers are created through the \c donner::gpu runtime, which owns them
+ * through RAII handles.
  *
  * Bind group layout (matches `shaders/image_blit.wgsl`):
  * - binding 0: uniform buffer (mvp, destRect, srcRect, targetSize, opacity, flags)
@@ -35,11 +40,11 @@ public:
   /**
    * Create an image-blit pipeline for the given device and target format.
    *
-   * @param device The WebGPU device.
+   * @param adapterDevice The Donner GPU device (wgpu adapter) owned by the GeodeDevice.
    * @param colorFormat The pixel format of the render target this pipeline
    *   will draw into. Must match the target texture's format at draw time.
    */
-  GeodeImagePipeline(const wgpu::Device& device, wgpu::TextureFormat colorFormat);
+  GeodeImagePipeline(GeodeWgpuAdapterDevice& adapterDevice, gpu::TextureFormat colorFormat);
 
   ~GeodeImagePipeline() = default;
   GeodeImagePipeline(const GeodeImagePipeline&) = delete;
@@ -50,33 +55,34 @@ public:
   GeodeImagePipeline& operator=(GeodeImagePipeline&&) noexcept = default;
 
   /// The compiled render pipeline.
-  const wgpu::RenderPipeline& pipeline() const { return pipeline_.get(); }
+  const gpu::RenderPipeline& pipeline() const { return pipeline_; }
 
   /// Bind group layout used by the pipeline.
-  const wgpu::BindGroupLayout& bindGroupLayout() const { return bindGroupLayout_.get(); }
+  const gpu::BindGroupLayout& bindGroupLayout() const { return bindGroupLayout_; }
 
-  /// Bilinear (mag/min filter = Linear) sampler, clamped to edge.
-  /// Used for the default `image-rendering` and the SVG spec's
-  /// "smooth" image sampling.
-  const wgpu::Sampler& linearSampler() const { return linearSampler_.get(); }
+  /// Bilinear (mag/min filter = Linear) sampler, clamped to edge. Used for the default
+  /// `image-rendering` and the SVG spec's "smooth" image sampling.
+  const gpu::Sampler& linearSampler() const { return linearSampler_; }
 
   /// Nearest-neighbor sampler, clamped to edge. Used when
   /// `ImageRendering::CrispEdges` or its legacy alias is selected.
-  const wgpu::Sampler& nearestSampler() const { return nearestSampler_.get(); }
+  const gpu::Sampler& nearestSampler() const { return nearestSampler_; }
 
   /// Linear clamp-to-edge sampler used for path-clip mask textures.
-  const wgpu::Sampler& clipMaskSampler() const { return clipMaskSampler_.get(); }
+  const gpu::Sampler& clipMaskSampler() const { return clipMaskSampler_; }
 
   /// Color format the pipeline was built for.
-  wgpu::TextureFormat colorFormat() const { return colorFormat_; }
+  gpu::TextureFormat colorFormat() const { return colorFormat_; }
 
 private:
-  wgpu::TextureFormat colorFormat_;
-  ScopedWgpuHandle<wgpu::BindGroupLayout> bindGroupLayout_;
-  ScopedWgpuHandle<wgpu::RenderPipeline> pipeline_;
-  ScopedWgpuHandle<wgpu::Sampler> linearSampler_;
-  ScopedWgpuHandle<wgpu::Sampler> nearestSampler_;
-  ScopedWgpuHandle<wgpu::Sampler> clipMaskSampler_;
+  gpu::TextureFormat colorFormat_ = gpu::TextureFormat::RGBA8Unorm;
+  gpu::ShaderModule shaderModule_;
+  gpu::BindGroupLayout bindGroupLayout_;
+  gpu::PipelineLayout pipelineLayout_;
+  gpu::RenderPipeline pipeline_;
+  gpu::Sampler linearSampler_;
+  gpu::Sampler nearestSampler_;
+  gpu::Sampler clipMaskSampler_;
 };
 
 }  // namespace donner::geode

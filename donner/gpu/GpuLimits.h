@@ -36,6 +36,12 @@ inline constexpr uint32_t kMaxVertexAttributes = 16;
 /// Maximum number of color attachments in a render pass or render pipeline.
 inline constexpr uint32_t kMaxColorAttachments = 4;
 
+/// Required alignment of \ref BufferBinding::offsetBytes for uniform and read-only storage
+/// buffer bindings. 256 is the strictest dynamic/static buffer-binding offset alignment across
+/// the native APIs this runtime targets, so enforcing it uniformly keeps bind groups portable to
+/// every backend.
+inline constexpr uint32_t kBindingOffsetAlignment = 256;
+
 /// Required alignment of \ref TexelCopyBufferLayout::bytesPerRow. 256 is the strictest row-pitch
 /// alignment across the native APIs this runtime targets, so enforcing it uniformly keeps copies
 /// portable without per-backend repacking. The same portability reasoning requires

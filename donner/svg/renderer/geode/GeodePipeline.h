@@ -4,17 +4,21 @@
 
 #include <webgpu/webgpu.hpp>
 
+#include "donner/gpu/Device.h"
 #include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
 
 namespace donner::geode {
 
+class GeodeWgpuAdapterDevice;
+
 /**
- * Caches a compiled `wgpu::RenderPipeline` for the Slug fill shader, plus its
- * bind group layout.
+ * Caches a compiled render pipeline for the Slug fill shader, plus its bind group layout.
  *
  * One `GeodePipeline` instance is sufficient per `(device, render-target-format)`
  * pair - the actual data (uniforms, bands, curves) varies per
  * draw call but the pipeline state object can be reused.
+ *
+ * The pipeline is created through the \c donner::gpu runtime, which owns it through RAII
  *
  * The bind group layout matches the shader in `shaders/slug_fill.wgsl`:
  * - binding 0: uniform buffer (Uniforms struct: mvp, patternFromPath,
@@ -33,6 +37,7 @@ namespace donner::geode {
  * - bindings 8 and 9: vertical Band[] and canonical curve data.
  * - binding 10: the four dense grid arrays in one combined storage range,
  *   indexed through the per-draw or per-instance element bases.
+ * - binding 11: gradient paint blocks, addressed by each record's element base.
  *
  * The pipeline has no vertex buffer. Its shader expands the uniform bounding polygon into a
  * triangle fan from `vertex_index` and applies the half-pixel AA halo in device space.
@@ -42,11 +47,11 @@ public:
   /**
    * Create a Slug fill pipeline for the given device and color target format.
    *
-   * @param device The WebGPU device.
+   * @param adapterDevice The Donner GPU device (wgpu adapter) owned by the GeodeDevice.
    * @param colorFormat The pixel format of the render target this pipeline
    *   will draw into. Must match the target texture's format at draw time.
    */
-  GeodePipeline(const wgpu::Device& device, wgpu::TextureFormat colorFormat);
+  GeodePipeline(GeodeWgpuAdapterDevice& adapterDevice, gpu::TextureFormat colorFormat);
 
   ~GeodePipeline() = default;
   GeodePipeline(const GeodePipeline&) = delete;
@@ -59,48 +64,47 @@ public:
   /// The compiled render pipeline. Its entry points take the draw's paint
   /// and geometry parameters from the uniform, which serves every draw whose
   /// instances share one paint and one encoded path.
-  const wgpu::RenderPipeline& pipeline() const { return pipeline_.get(); }
+  const gpu::RenderPipeline& pipeline() const { return pipeline_; }
 
   /**
    * The cross-entity batch variant of @ref pipeline: same layout, same
    * shader module and same blending, but the entry points that take paint
    * and geometry from each instance's record. Compiled on first call,
    * because only a cross-entity batch needs it.
-   *
-   * @param device The WebGPU device this pipeline was created for.
    */
-  const wgpu::RenderPipeline& batchedPipeline(const wgpu::Device& device) const;
+  const gpu::RenderPipeline& batchedPipeline() const;
 
   /// The bind group layout used by both pipelines.
-  const wgpu::BindGroupLayout& bindGroupLayout() const { return bindGroupLayout_.get(); }
+  const gpu::BindGroupLayout& bindGroupLayout() const { return bindGroupLayout_; }
 
   /// Color format the pipeline was built for.
-  wgpu::TextureFormat colorFormat() const { return colorFormat_; }
+  gpu::TextureFormat colorFormat() const { return colorFormat_; }
 
 private:
-  /// Compile one variant of the Slug fill pipeline. Both variants share the
-  /// layout, the shader module and the blend state; only the entry points
-  /// differ.
-  wgpu::RenderPipeline buildPipeline(const wgpu::Device& device, const char* label,
-                                     const char* vertexEntryPoint,
-                                     const char* fragmentEntryPoint) const;
+  /// Compile one variant of the Slug fill pipeline through the GPU runtime. Both variants share
+  /// the layout, the shader module and the blend state; only the entry points differ.
+  gpu::RenderPipeline buildPipeline(const char* label, const char* vertexEntryPoint,
+                                    const char* fragmentEntryPoint) const;
 
-  wgpu::TextureFormat colorFormat_;
-  ScopedWgpuHandle<wgpu::BindGroupLayout> bindGroupLayout_;
-  ScopedWgpuHandle<wgpu::PipelineLayout> pipelineLayout_;
-  ScopedWgpuHandle<wgpu::ShaderModule> shader_;
-  ScopedWgpuHandle<wgpu::RenderPipeline> pipeline_;
+  /// The device both pipeline variants are created through. Owned by the GeodeDevice that owns
+  /// this pipeline, so it outlives every use here.
+  GeodeWgpuAdapterDevice* adapterDevice_ = nullptr;
+  gpu::TextureFormat colorFormat_ = gpu::TextureFormat::RGBA8Unorm;
+  gpu::ShaderModule shaderModule_;
+  gpu::BindGroupLayout bindGroupLayout_;
+  gpu::PipelineLayout pipelineLayout_;
+  gpu::RenderPipeline pipeline_;
   /// Lazily compiled by @ref batchedPipeline. The `mutable` build is
   /// deliberately unsynchronized: a device's pipelines are only ever used
   /// from the single thread that owns rendering for that device, so two
   /// callers cannot reach the null check at once and the lazy build cannot
   /// race.
-  mutable ScopedWgpuHandle<wgpu::RenderPipeline> batchedPipeline_;
+  mutable gpu::RenderPipeline batchedPipeline_;
 };
 
 /**
- * Caches a compiled `wgpu::RenderPipeline` for the Slug gradient-fill shader
- * plus its bind-group layout.
+ * Caches a compiled render pipeline for the Slug gradient-fill shader plus its bind-group
+ * layout.
  *
  * Parallel to @ref GeodePipeline but with a larger uniform buffer that carries
  * linear-gradient parameters (pathFromGradient transform, start/end,
@@ -115,7 +119,7 @@ private:
 class GeodeGradientPipeline {
 public:
   /// Construct a gradient pipeline for the given device and color target format.
-  GeodeGradientPipeline(const wgpu::Device& device, wgpu::TextureFormat colorFormat);
+  GeodeGradientPipeline(GeodeWgpuAdapterDevice& adapterDevice, gpu::TextureFormat colorFormat);
 
   ~GeodeGradientPipeline() = default;
   GeodeGradientPipeline(const GeodeGradientPipeline&) = delete;
@@ -125,21 +129,23 @@ public:
   /// Move assignment operator.
   GeodeGradientPipeline& operator=(GeodeGradientPipeline&&) noexcept = default;
 
-  /// The compiled render pipeline.
-  const wgpu::RenderPipeline& pipeline() const { return pipeline_.get(); }
-  /// The bind group layout used by the pipeline.
-  const wgpu::BindGroupLayout& bindGroupLayout() const { return bindGroupLayout_.get(); }
+  /// The compiled render pipeline (TEMPORARY 8a wgpu alias for the still-wgpu GeoEncoder).
+  const gpu::RenderPipeline& pipeline() const { return pipeline_; }
+  /// The bind group layout used by the pipeline (TEMPORARY 8a wgpu alias).
+  const gpu::BindGroupLayout& bindGroupLayout() const { return bindGroupLayout_; }
   /// Color format the pipeline was built for.
-  wgpu::TextureFormat colorFormat() const { return colorFormat_; }
+  gpu::TextureFormat colorFormat() const { return colorFormat_; }
 
 private:
-  wgpu::TextureFormat colorFormat_;
-  ScopedWgpuHandle<wgpu::BindGroupLayout> bindGroupLayout_;
-  ScopedWgpuHandle<wgpu::RenderPipeline> pipeline_;
+  gpu::TextureFormat colorFormat_ = gpu::TextureFormat::RGBA8Unorm;
+  gpu::ShaderModule shaderModule_;
+  gpu::BindGroupLayout bindGroupLayout_;
+  gpu::PipelineLayout pipelineLayout_;
+  gpu::RenderPipeline pipeline_;
 };
 
 /**
- * Caches a compiled `wgpu::RenderPipeline` for the path-clip mask shader
+ * Caches a compiled render pipeline for the path-clip mask shader
  * (`shaders/slug_mask.wgsl`) plus its bind-group layout.
  *
  * The mask pipeline is a stripped-down sibling of @ref GeodePipeline -
@@ -152,21 +158,21 @@ private:
  * - binding 0: uniform buffer (mvp, viewport, fillRule).
  * - binding 1: storage buffer (read-only) - Band[].
  * - binding 2: storage buffer (read-only) - curve data (flat f32[]).
+ * - bindings 3 and 4: nested clip-mask texture + sampler.
  * - bindings 5 and 6: vertical Band[] and canonical curve data.
  * - bindings 7 and 8: horizontal and vertical dense band grids.
  * - bindings 9 and 10: horizontal and vertical curve-reference indexes.
  *
- * No texture / sampler bindings - the mask pipeline doesn't read from
- * any texture input. Multiple paths belonging to a single clip layer
- * are unioned on the hardware side via `BlendOperation::Max`.
+ * Multiple paths belonging to a single clip layer are unioned on the hardware
+ * side via `BlendOperation::Max`.
  */
 class GeodeMaskPipeline {
 public:
   /**
-   * Create a Slug mask pipeline for the given device. Renders into an
+   * Create a Slug mask pipeline for the given device. Renders into a
    * single-sampled RGBA8Unorm texture.
    */
-  explicit GeodeMaskPipeline(const wgpu::Device& device);
+  explicit GeodeMaskPipeline(GeodeWgpuAdapterDevice& adapterDevice);
 
   ~GeodeMaskPipeline() = default;
   GeodeMaskPipeline(const GeodeMaskPipeline&) = delete;
@@ -174,14 +180,18 @@ public:
   GeodeMaskPipeline(GeodeMaskPipeline&&) noexcept = default;
   GeodeMaskPipeline& operator=(GeodeMaskPipeline&&) noexcept = default;
 
-  const wgpu::RenderPipeline& pipeline() const { return pipeline_.get(); }
-  const wgpu::BindGroupLayout& bindGroupLayout() const { return bindGroupLayout_.get(); }
+  /// The compiled render pipeline (TEMPORARY 8a wgpu alias for the still-wgpu GeoEncoder).
+  const gpu::RenderPipeline& pipeline() const { return pipeline_; }
+  /// The bind group layout used by the pipeline (TEMPORARY 8a wgpu alias).
+  const gpu::BindGroupLayout& bindGroupLayout() const { return bindGroupLayout_; }
   /// The color format the pipeline targets. Always `RGBA8Unorm`.
-  wgpu::TextureFormat colorFormat() const { return wgpu::TextureFormat::RGBA8Unorm; }
+  gpu::TextureFormat colorFormat() const { return gpu::TextureFormat::RGBA8Unorm; }
 
 private:
-  ScopedWgpuHandle<wgpu::BindGroupLayout> bindGroupLayout_;
-  ScopedWgpuHandle<wgpu::RenderPipeline> pipeline_;
+  gpu::ShaderModule shaderModule_;
+  gpu::BindGroupLayout bindGroupLayout_;
+  gpu::PipelineLayout pipelineLayout_;
+  gpu::RenderPipeline pipeline_;
 };
 
 /**

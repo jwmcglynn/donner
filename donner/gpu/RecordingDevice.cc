@@ -143,6 +143,11 @@ struct CommandSerializer {
        << " bytesPerRow=" << command.layout.bytesPerRow
        << " rowsPerImage=" << command.layout.rowsPerImage << " copySize=" << command.copySize;
   }
+  void operator()(const CopyTextureToTextureCommand& command) {
+    os << "copyTextureToTexture src=" << RefId(TextureTag::kName, command.textureSrcId.slotIndex)
+       << " dst=" << RefId(TextureTag::kName, command.textureDstId.slotIndex)
+       << " copySize=" << command.copySize;
+  }
 };
 
 }  // namespace

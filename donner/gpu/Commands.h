@@ -78,9 +78,17 @@ struct CopyTextureToBufferCommand {
   Extent2d copySize;             //!< Copy extent in texels.
 };
 
+/// Recorded `copyTextureToTexture` (whole-rect texture copy from texel (0, 0)).
+struct CopyTextureToTextureCommand {
+  ResourceIdentity textureSrcId;  //!< Source texture identity.
+  ResourceIdentity textureDstId;  //!< Destination texture identity.
+  Extent2d copySize;              //!< Copy extent in texels.
+};
+
 /// One recorded command.
-using Command = std::variant<BeginRenderPassCommand, SetPipelineCommand, SetBindGroupCommand,
-                             SetVertexBufferCommand, SetScissorRectCommand, SetViewportCommand,
-                             DrawCommand, EndRenderPassCommand, CopyTextureToBufferCommand>;
+using Command =
+    std::variant<BeginRenderPassCommand, SetPipelineCommand, SetBindGroupCommand,
+                 SetVertexBufferCommand, SetScissorRectCommand, SetViewportCommand, DrawCommand,
+                 EndRenderPassCommand, CopyTextureToBufferCommand, CopyTextureToTextureCommand>;
 
 }  // namespace donner::gpu
