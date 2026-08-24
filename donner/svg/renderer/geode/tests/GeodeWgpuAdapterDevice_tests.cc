@@ -656,5 +656,18 @@ TEST_F(GeodeWgpuAdapterDeviceTests, MisalignedBindOffsetFailsClosedBeforeWgpu) {
                                            "binding offset alignment")));
 }
 
+/// The adapter presents to a Metal layer; the other platform surfaces are still created by the
+/// embedder, so asking it for one reports the capability as unsupported rather than appearing to
+/// work and then failing at the first frame.
+TEST_F(GeodeWgpuAdapterDeviceTests, RejectsSurfaceKindsItDoesNotPresentTo) {
+  gpu::SurfaceDescriptor descriptor;
+  descriptor.label = "window";
+  descriptor.native.kind = gpu::NativeSurfaceKind::XlibWindow;
+  descriptor.native.display = this;
+  descriptor.native.window = 1;
+
+  EXPECT_THAT(adapter_->createSurface(descriptor), gpu::IsGpuError(gpu::GpuErrorType::Unsupported));
+}
+
 }  // namespace
 }  // namespace donner::geode

@@ -154,6 +154,16 @@ public:
   wgpu::TextureView wgpuTextureViewOf(const gpu::TextureView& textureView) const;
 
 protected:
+  gpu::Status onCreateSurface(uint32_t slotIndex,
+                              const gpu::SurfaceDescriptor& descriptor) override;
+  gpu::Result<gpu::SurfaceCapabilities> onSurfaceCapabilities(uint32_t slotIndex) const override;
+  gpu::Status onConfigureSurface(uint32_t slotIndex,
+                                 const gpu::SurfaceConfiguration& configuration) override;
+  gpu::Result<gpu::SurfaceStatus> onAcquireCurrentTexture(uint32_t slotIndex,
+                                                          uint32_t textureSlotIndex) override;
+  gpu::Result<gpu::SurfaceStatus> onPresentSurface(uint32_t slotIndex) override;
+  void onAbandonCurrentTexture(uint32_t slotIndex) override;
+
   gpu::Status onMapBufferAsync(uint32_t mappingSlotIndex, uint32_t bufferSlotIndex,
                                gpu::MapMode mode, uint64_t offsetBytes,
                                uint64_t byteCount) override;
@@ -326,6 +336,18 @@ private:
     uint64_t offsetBytes = 0;          //!< Byte offset of the mapped range.
     uint64_t byteCount = 0;            //!< Length of the mapped range.
   };
+
+  /// One presentation surface and the texture it has handed out this frame.
+  struct SurfaceSlot {
+    ScopedWgpuHandle<wgpu::Surface> surface;  //!< Owned surface, or null for a dead slot.
+    /// Texture the surface handed out for the current frame; borrowed, since the surface owns it.
+    wgpu::Texture acquired;
+    /// Slot the runtime gave that texture, so abandoning can clear the same one.
+    uint32_t acquiredTextureSlot = 0;
+    bool hasAcquired = false;  //!< Whether \ref acquired names this frame's texture.
+  };
+
+  std::vector<SurfaceSlot> slotSurfaces_;
 
   std::vector<MappingSlot> slotMappings_;
 
