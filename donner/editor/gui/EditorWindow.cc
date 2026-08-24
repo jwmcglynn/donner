@@ -155,91 +155,10 @@ wgpu::Instance CreateEditorWgpuInstance() {
 #endif
 }
 
-wgpu::Surface CreateEditorWgpuSurface(const wgpu::Instance& instance, GLFWwindow* window) {
-#ifdef __EMSCRIPTEN__
-  (void)window;
-  WGPUEmscriptenSurfaceSourceCanvasHTMLSelector canvasSource =
-      WGPU_EMSCRIPTEN_SURFACE_SOURCE_CANVAS_HTML_SELECTOR_INIT;
-  canvasSource.selector.data = "#canvas";
-  canvasSource.selector.length = WGPU_STRLEN;
-
-  WGPUSurfaceDescriptor descriptor = WGPU_SURFACE_DESCRIPTOR_INIT;
-  descriptor.nextInChain = &canvasSource.chain;
-  return wgpu::Surface(wgpuInstanceCreateSurface(instance, &descriptor));
-#else
-  return CreateWgpuSurfaceFromGlfwWindow(instance, window);
-#endif
-}
-
-wgpu::TextureFormat ChooseSurfaceFormat(const wgpu::SurfaceCapabilities& caps) {
-  for (size_t i = 0; i < caps.formatCount; ++i) {
-    const auto format = caps.formats[i];
-    if (format == WGPUTextureFormat_BGRA8Unorm || format == WGPUTextureFormat_RGBA8Unorm) {
-      return wgpu::TextureFormat{format};
-    }
-  }
-  return wgpu::TextureFormat::BGRA8Unorm;
-}
-
-/// Picks how the surface composites its alpha channel with what is behind it.
-/// @param caps What the surface reported it supports.
-wgpu::CompositeAlphaMode ChooseSurfaceAlphaMode(const wgpu::SurfaceCapabilities& caps) {
-#ifdef __EMSCRIPTEN__
-  // The page composites the editor's canvas over its own background, so premultiplied alpha is
-  // what lets uncovered pixels stay transparent. Without it the same clear presents as opaque.
-  for (size_t i = 0; i < caps.alphaModeCount; ++i) {
-    if (caps.alphaModes[i] == wgpu::CompositeAlphaMode::Premultiplied) {
-      return wgpu::CompositeAlphaMode::Premultiplied;
-    }
-  }
-  return wgpu::CompositeAlphaMode::Auto;
-#else
-  if (caps.alphaModeCount > 0) {
-    return wgpu::CompositeAlphaMode{caps.alphaModes[0]};
-  }
-  return wgpu::CompositeAlphaMode::Auto;
-#endif
-}
-
-/// Maps what the backend reported while handing over a frame onto the status the frame loop
-/// routes on.
-///
-/// A suboptimal frame is reported as a success because it presents correctly: reconfiguring for
-/// it would cost a frame to fix a difference that never reaches the display.
-///
-/// @param status Backend status.
-gpu::SurfaceStatus SurfaceStatusFromWgpu(WGPUSurfaceGetCurrentTextureStatus status) {
-  switch (status) {
-    case WGPUSurfaceGetCurrentTextureStatus_SuccessOptimal:
-    case WGPUSurfaceGetCurrentTextureStatus_SuccessSuboptimal: return gpu::SurfaceStatus::Success;
-    case WGPUSurfaceGetCurrentTextureStatus_Timeout: return gpu::SurfaceStatus::Timeout;
-    case WGPUSurfaceGetCurrentTextureStatus_Outdated: return gpu::SurfaceStatus::Outdated;
-    case WGPUSurfaceGetCurrentTextureStatus_Lost: return gpu::SurfaceStatus::Lost;
-    default: break;
-  }
-  // Everything else means neither the surface nor its configuration can be recovered from here.
-  return gpu::SurfaceStatus::DeviceLost;
-}
-
 /// WebGPU requires texture-to-buffer rows to be 256-byte aligned.
 constexpr uint32_t AlignTextureCopyBytesPerRow(uint32_t unpaddedBytesPerRow) {
   constexpr uint32_t kAlignment = 256u;
   return (unpaddedBytesPerRow + kAlignment - 1u) & ~(kAlignment - 1u);
-}
-
-wgpu::TextureUsage SurfaceUsageForCapabilities(const wgpu::SurfaceCapabilities& caps,
-                                               bool enableReadback) {
-  WGPUTextureUsage usage = WGPUTextureUsage_RenderAttachment;
-#ifdef __EMSCRIPTEN__
-  if (enableReadback) {
-    usage |= WGPUTextureUsage_CopySrc;
-  }
-#else
-  if (enableReadback && (caps.usages & WGPUTextureUsage_CopySrc) != 0) {
-    usage |= WGPUTextureUsage_CopySrc;
-  }
-#endif
-  return wgpu::TextureUsage{usage};
 }
 
 wgpu::TextureUsage RenderTargetUsage(bool enableReadback) {
@@ -1053,6 +972,90 @@ public:
   [[nodiscard]] virtual bool premultipliedAlpha() const = 0;
 };
 
+// Exactly one implementation is built per platform: macOS presents through the GPU runtime, and
+// every other platform through the wgpu surface below, along with the helpers only it uses.
+#ifndef __APPLE__
+wgpu::Surface CreateEditorWgpuSurface(const wgpu::Instance& instance, GLFWwindow* window) {
+#ifdef __EMSCRIPTEN__
+  (void)window;
+  WGPUEmscriptenSurfaceSourceCanvasHTMLSelector canvasSource =
+      WGPU_EMSCRIPTEN_SURFACE_SOURCE_CANVAS_HTML_SELECTOR_INIT;
+  canvasSource.selector.data = "#canvas";
+  canvasSource.selector.length = WGPU_STRLEN;
+
+  WGPUSurfaceDescriptor descriptor = WGPU_SURFACE_DESCRIPTOR_INIT;
+  descriptor.nextInChain = &canvasSource.chain;
+  return wgpu::Surface(wgpuInstanceCreateSurface(instance, &descriptor));
+#else
+  return CreateWgpuSurfaceFromGlfwWindow(instance, window);
+#endif
+}
+
+wgpu::TextureFormat ChooseSurfaceFormat(const wgpu::SurfaceCapabilities& caps) {
+  for (size_t i = 0; i < caps.formatCount; ++i) {
+    const auto format = caps.formats[i];
+    if (format == WGPUTextureFormat_BGRA8Unorm || format == WGPUTextureFormat_RGBA8Unorm) {
+      return wgpu::TextureFormat{format};
+    }
+  }
+  return wgpu::TextureFormat::BGRA8Unorm;
+}
+
+/// Picks how the surface composites its alpha channel with what is behind it.
+/// @param caps What the surface reported it supports.
+wgpu::CompositeAlphaMode ChooseSurfaceAlphaMode(const wgpu::SurfaceCapabilities& caps) {
+#ifdef __EMSCRIPTEN__
+  // The page composites the editor's canvas over its own background, so premultiplied alpha is
+  // what lets uncovered pixels stay transparent. Without it the same clear presents as opaque.
+  for (size_t i = 0; i < caps.alphaModeCount; ++i) {
+    if (caps.alphaModes[i] == wgpu::CompositeAlphaMode::Premultiplied) {
+      return wgpu::CompositeAlphaMode::Premultiplied;
+    }
+  }
+  return wgpu::CompositeAlphaMode::Auto;
+#else
+  if (caps.alphaModeCount > 0) {
+    return wgpu::CompositeAlphaMode{caps.alphaModes[0]};
+  }
+  return wgpu::CompositeAlphaMode::Auto;
+#endif
+}
+
+/// Maps what the backend reported while handing over a frame onto the status the frame loop
+/// routes on.
+///
+/// A suboptimal frame is reported as a success because it presents correctly: reconfiguring for
+/// it would cost a frame to fix a difference that never reaches the display.
+///
+/// @param status Backend status.
+gpu::SurfaceStatus SurfaceStatusFromWgpu(WGPUSurfaceGetCurrentTextureStatus status) {
+  switch (status) {
+    case WGPUSurfaceGetCurrentTextureStatus_SuccessOptimal:
+    case WGPUSurfaceGetCurrentTextureStatus_SuccessSuboptimal: return gpu::SurfaceStatus::Success;
+    case WGPUSurfaceGetCurrentTextureStatus_Timeout: return gpu::SurfaceStatus::Timeout;
+    case WGPUSurfaceGetCurrentTextureStatus_Outdated: return gpu::SurfaceStatus::Outdated;
+    case WGPUSurfaceGetCurrentTextureStatus_Lost: return gpu::SurfaceStatus::Lost;
+    default: break;
+  }
+  // Everything else means neither the surface nor its configuration can be recovered from here.
+  return gpu::SurfaceStatus::DeviceLost;
+}
+
+wgpu::TextureUsage SurfaceUsageForCapabilities(const wgpu::SurfaceCapabilities& caps,
+                                               bool enableReadback) {
+  WGPUTextureUsage usage = WGPUTextureUsage_RenderAttachment;
+#ifdef __EMSCRIPTEN__
+  if (enableReadback) {
+    usage |= WGPUTextureUsage_CopySrc;
+  }
+#else
+  if (enableReadback && (caps.usages & WGPUTextureUsage_CopySrc) != 0) {
+    usage |= WGPUTextureUsage_CopySrc;
+  }
+#endif
+  return wgpu::TextureUsage{usage};
+}
+
 /// Presents through a wgpu surface built from the window's native handle.
 class WgpuBackendPresentationSurface final : public PresentationSurface {
 public:
@@ -1137,6 +1140,7 @@ private:
   wgpu::TextureUsage usage_ = wgpu::TextureUsage::RenderAttachment;
   wgpu::CompositeAlphaMode alphaMode_ = wgpu::CompositeAlphaMode::Auto;
 };
+#endif  // !__APPLE__
 
 #ifdef __APPLE__
 /// Picks how a surface built on the GPU runtime composites its alpha channel.
@@ -1310,7 +1314,11 @@ private:
 
 /// Builds the presentation surface this platform presents through.
 std::unique_ptr<PresentationSurface> CreateEditorPresentationSurface() {
+#ifdef __APPLE__
+  return std::make_unique<RuntimePresentationSurface>();
+#else
   return std::make_unique<WgpuBackendPresentationSurface>();
+#endif
 }
 
 /// Presents whatever frame is still in flight when the frame loop leaves, however it leaves.

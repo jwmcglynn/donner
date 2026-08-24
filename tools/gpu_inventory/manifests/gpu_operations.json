@@ -107,15 +107,6 @@
         "SurfaceSourceXlibWindow"
       ]
     },
-    "donner/editor/gui/EditorWgpuSurface_macos.mm": {
-      "wgpuCppTokens": [
-        "Default",
-        "Instance",
-        "Surface",
-        "SurfaceDescriptor",
-        "SurfaceSourceMetalLayer"
-      ]
-    },
     "donner/editor/gui/EditorWindow.cc": {
       "operations": [
         "beginRenderPass",
@@ -147,7 +138,7 @@
         "wgpuLabel",
         "wgpuReadbackStats",
         "wgpuState_",
-        "wgpuSurfacePresent",
+        "wgpuTextureOf",
         "wgpuUnderlayRenderCallback_"
       ],
       "wgpuCTypes": [
@@ -163,6 +154,7 @@
         "WGPUMapAsyncStatus_Success",
         "WGPUStringView",
         "WGPUSurfaceDescriptor",
+        "WGPUSurfaceGetCurrentTextureStatus",
         "WGPUSurfaceGetCurrentTextureStatus_Lost",
         "WGPUSurfaceGetCurrentTextureStatus_Outdated",
         "WGPUSurfaceGetCurrentTextureStatus_SuccessOptimal",

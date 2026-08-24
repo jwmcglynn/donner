@@ -18,8 +18,7 @@ namespace donner::editor::gui {
 /// @param window GLFW window whose content view receives the layer.
 /// @return The layer, or null when \p window has no native Cocoa window.
 [[nodiscard]] void* AttachMetalLayerToGlfwWindow(GLFWwindow* window);
-#endif
-
+#else
 /// Create a WebGPU surface backed by the platform-native handle of \p window.
 ///
 /// @param instance WebGPU instance used to create the surface.
@@ -27,5 +26,6 @@ namespace donner::editor::gui {
 /// @return A valid surface, or an invalid surface when native handle extraction fails.
 [[nodiscard]] wgpu::Surface CreateWgpuSurfaceFromGlfwWindow(const wgpu::Instance& instance,
                                                             GLFWwindow* window);
+#endif
 
 }  // namespace donner::editor::gui
