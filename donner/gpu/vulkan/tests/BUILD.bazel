@@ -3,9 +3,11 @@ load("//build_defs:package.bzl", "donner_package")
 
 # The Vulkan solid-fill vertical slice (design 0053 packet 7): renders the
 # shared baseline scene through donner::gpu + the emitted SPIR-V and compares
-# it at strict identity against an in-process render of the identical scene
-# through the production wgpu path (the frozen-baseline pattern executed
-# per-device, valid on software Vulkan and physical GPUs alike).
+# it against an in-process render of the identical scene through the production
+# wgpu path (the frozen-baseline pattern executed per-device, valid on software
+# Vulkan and physical GPUs alike). Opaque texels must match exactly; partially
+# covered ones may differ by one least-significant bit, which is the two
+# pipelines quantizing float results to 8-bit unorm independently.
 #
 # Linux-only: this is the one platform where both halves execute (the Vulkan
 # loader on the RHI side, wgpu-native's Vulkan backend on the production
@@ -21,7 +23,18 @@ donner_cc_test(
     # the target is linux-only and the CI lanes install a software Vulkan
     # implementation, so VulkanDevice::Create() must succeed there. The
     # transition wrapper forwards this env (RunEnvironmentInfo).
-    env = {"DONNER_REQUIRE_VULKAN": "1"},
+    #
+    # Pin the software Vulkan implementation for both halves of the comparison.
+    # Nothing in the lane configuration selects a driver, so on a host with a
+    # discrete GPU each half would otherwise pick up that hardware driver, whose
+    # rasterisation differs from the software one in far more partially covered
+    # texels. Pinning here makes the test hermetic against whatever driver the
+    # execution host happens to expose, on any lane and locally alike.
+    env = {
+        "DONNER_REQUIRE_VULKAN": "1",
+        "VK_ICD_FILENAMES": "/usr/share/vulkan/icd.d/lvp_icd.json",
+        "XDG_RUNTIME_DIR": "/tmp",
+    },
     linkopts = ["-lvulkan"],
     target_compatible_with = ["@platforms//os:linux"] + select({
         "//donner/svg/renderer/geode:geode_enabled": [],
