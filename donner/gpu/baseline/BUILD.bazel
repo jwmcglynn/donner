@@ -1,4 +1,4 @@
-load("//build_defs:rules.bzl", "donner_cc_binary", "donner_cc_library", "donner_multi_transitioned_binary")
+load("//build_defs:rules.bzl", "donner_cc_binary", "donner_cc_library", "donner_cc_test", "donner_multi_transitioned_binary", "donner_multi_transitioned_test")
 load("//build_defs:visibility.bzl", "donner_internal_visibility")
 load("//build_defs:package.bzl", "donner_package")
 load("@rules_python//python:defs.bzl", "py_test")
@@ -16,8 +16,8 @@ filegroup(
     srcs = glob(
         [
             "baselines/*.json",
-            "baselines/*.png",
-            "baselines/*.txt",
+            "baselines/*/*.png",
+            "baselines/*/*.txt",
         ],
         allow_empty = True,
     ),
@@ -54,6 +54,7 @@ donner_cc_library(
     deps = [
         ":baseline_corpus",
         "//donner/gpu",
+        "//donner/svg/renderer:renderer_image_io",
         "//donner/svg/renderer/geode:geo_encoder",
         "//donner/svg/renderer/geode:geode_device",
         "//donner/svg/renderer/geode:geode_gpu_wait",
@@ -71,10 +72,7 @@ donner_cc_binary(
         "//conditions:default": ["@platforms//:incompatible"],
     }),
     visibility = ["//visibility:private"],
-    deps = [
-        ":wgpu_baseline_capture",
-        "//donner/svg/renderer:renderer_image_io",
-    ],
+    deps = [":wgpu_baseline_capture"],
 )
 
 # Transition wrapper so the capture command needs no --config=geode.
@@ -84,6 +82,33 @@ donner_multi_transitioned_binary(
     dep = ":capture_baselines_impl",
     renderer_backend = "geode",
     visibility = donner_internal_visibility(),
+)
+
+donner_cc_test(
+    name = "baseline_pixels_tests_impl",
+    srcs = ["BaselinePixels_tests.cc"],
+    data = [":baselines"],
+    target_compatible_with = select({
+        "//donner/svg/renderer/geode:geode_enabled": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    deps = [
+        ":wgpu_baseline_capture",
+        "//donner/base:base_test_utils",
+        "//donner/editor/tests:bitmap_golden_compare",
+        "//donner/svg/renderer:renderer_interface",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+# Transition wrapper: reachable from plain `bazel test //...` without --config=geode.
+donner_multi_transitioned_test(
+    name = "baseline_pixels_tests",
+    size = "medium",
+    testonly = 1,
+    dep = ":baseline_pixels_tests_impl",
+    opens_gpu_device = True,
+    renderer_backend = "geode",
 )
 
 donner_cc_binary(
@@ -106,6 +131,7 @@ py_test(
     ],
     data = [
         "baselines/structural_counters.json",
+        ":baselines",
         ":dump_baseline_counters",
     ],
 )

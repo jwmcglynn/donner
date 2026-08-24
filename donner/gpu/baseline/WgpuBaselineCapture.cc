@@ -1,9 +1,12 @@
 #include "donner/gpu/baseline/WgpuBaselineCapture.h"
 
 #include <atomic>
+#include <cctype>
+#include <fstream>
 #include <string_view>
 #include <utility>
 
+#include "donner/svg/renderer/RendererImageIO.h"
 #include "donner/svg/renderer/geode/GeoEncoder.h"
 #include "donner/svg/renderer/geode/GeodeCallbackState.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
@@ -179,7 +182,70 @@ std::string ReadPixels(geode::GeodeDevice& device, const wgpu::Buffer& readback,
   return {};
 }
 
+/// Identifies the renderer the frozen bytes came from. The freeze is only an oracle for a
+/// replacement backend if it is unambiguous which implementation produced it.
+constexpr const char* kRendererPath = "wgpu-native Geode production path (GeodeDevice+GeoEncoder)";
+constexpr const char* kRendererBackend = "geode";
+constexpr const char* kTargetFormat = "RGBA8Unorm premultiplied, transparent background";
+
+bool WriteProvenance(const std::filesystem::path& outputDir, const CaptureEnvironment& environment,
+                     std::string_view sourceRevision, std::string_view sourceTree,
+                     const std::string& capturedScenes) {
+  std::ofstream out(outputDir / "capture_provenance.txt", std::ios::binary | std::ios::trunc);
+  if (!out.good()) {
+    return false;
+  }
+  out << "# Written by //donner/gpu/baseline:capture_baselines. Do not edit by hand.\n";
+  out << "# Frozen pixels are only comparable against the adapter recorded here.\n";
+  out << "schemaVersion: 1\n";
+  out << "sourceRevision: " << sourceRevision << "\n";
+  out << "sourceTreeClean: " << sourceTree << "\n";
+  out << "rendererPath: " << kRendererPath << "\n";
+  out << "rendererBackend: " << kRendererBackend << "\n";
+  out << "adapterName: " << environment.adapterName << "\n";
+  out << "adapterBackend: " << environment.adapterBackend << "\n";
+  out << "adapterType: " << environment.adapterType << "\n";
+  out << "targetFormat: " << kTargetFormat << "\n";
+  out << "targetSize: " << kCorpusSize << "x" << kCorpusSize << "\n";
+  out << "capturedScenes: " << capturedScenes << "\n";
+  return out.good();
+}
+
+/// Renders and writes one scene. @return An empty string on success, or the failure reason.
+std::string CaptureOneScene(WgpuBaselineCapturer& capturer, const CorpusScene& scene,
+                            const std::filesystem::path& outputDir) {
+  std::vector<uint8_t> pixels;
+  const std::string error = capturer.capture(scene, pixels);
+  if (!error.empty()) {
+    return error;
+  }
+  const std::string path = (outputDir / (std::string(scene.name) + ".png")).string();
+  if (!svg::RendererImageIO::writeRgbaPixelsToPngFile(path.c_str(), pixels, kCorpusSize,
+                                                      kCorpusSize, kCorpusSize)) {
+    return "failed to write " + path;
+  }
+  return {};
+}
+
 }  // namespace
+
+std::string EnvironmentSlug(const CaptureEnvironment& environment) {
+  const std::string source = environment.adapterName + " " + environment.adapterBackend;
+  std::string slug;
+  bool pendingSeparator = false;
+  for (const char c : source) {
+    if (std::isalnum(static_cast<unsigned char>(c)) != 0) {
+      if (pendingSeparator && !slug.empty()) {
+        slug += '_';
+      }
+      pendingSeparator = false;
+      slug += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    } else {
+      pendingSeparator = true;
+    }
+  }
+  return slug.empty() ? "unknown_adapter" : slug;
+}
 
 WgpuBaselineCapturer::WgpuBaselineCapturer(std::unique_ptr<geode::GeodeDevice> device)
     : device_(std::move(device)), environment_(DescribeAdapter(device_->adapter())) {}
@@ -206,6 +272,44 @@ std::string WgpuBaselineCapturer::capture(const CorpusScene& scene,
   RecordScene(*device_, std::move(targetHandle).result(), scene);
   RecordCopyToReadback(*device_, target, readback);
   return ReadPixels(*device_, readback, pixelsOut);
+}
+
+std::string WriteFrozenBaselineSet(WgpuBaselineCapturer& capturer,
+                                   const std::filesystem::path& baselinesRoot,
+                                   std::string_view sourceRevision, std::string_view sourceTree,
+                                   std::filesystem::path* outputDirOut) {
+  // One directory per adapter: a frozen capture is only comparable against the environment that
+  // produced it, so environments accumulate side by side instead of overwriting each other.
+  const std::filesystem::path outputDir = baselinesRoot / EnvironmentSlug(capturer.environment());
+  if (outputDirOut != nullptr) {
+    *outputDirOut = outputDir;
+  }
+  std::error_code directoryError;
+  std::filesystem::create_directories(outputDir, directoryError);
+  if (directoryError) {
+    return "failed to create " + outputDir.string() + ": " + directoryError.message();
+  }
+
+  std::string capturedScenes;
+  for (const CorpusScene& scene : Corpus()) {
+    if (!scene.capturesPixels) {
+      continue;
+    }
+    const std::string error = CaptureOneScene(capturer, scene, outputDir);
+    if (!error.empty()) {
+      return std::string(scene.name) + ": " + error;
+    }
+    if (!capturedScenes.empty()) {
+      capturedScenes += ",";
+    }
+    capturedScenes += std::string(scene.name);
+  }
+
+  if (!WriteProvenance(outputDir, capturer.environment(), sourceRevision, sourceTree,
+                       capturedScenes)) {
+    return "failed to write the capture provenance record";
+  }
+  return {};
 }
 
 std::string CaptureNamedScene(WgpuBaselineCapturer& capturer, std::string_view sceneName,

@@ -9,8 +9,10 @@
 /// code paths.
 
 #include <cstdint>
+#include <filesystem>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "donner/gpu/baseline/BaselineCorpus.h"
@@ -29,6 +31,11 @@ struct CaptureEnvironment {
   std::string adapterBackend;  //!< "Metal", "Vulkan", "D3D12", "OpenGL", ...
   std::string adapterType;     //!< "DiscreteGPU", "IntegratedGPU", "CPU", or "Unknown".
 };
+
+/// Directory name a capture from `environment` is filed under, for example
+/// `apple_m1_pro_metal`. Lowercase with every run of non-alphanumeric characters collapsed to one
+/// underscore, so one adapter always resolves to one directory on every platform.
+std::string EnvironmentSlug(const CaptureEnvironment& environment);
 
 /// Holds one production device for the whole corpus, because device creation compiles every
 /// shared pipeline and is far more expensive than any single scene.
@@ -61,6 +68,22 @@ private:
   std::unique_ptr<geode::GeodeDevice> device_;
   CaptureEnvironment environment_;
 };
+
+/**
+ * Renders every pixel-capturing corpus scene and writes the frozen set for this capturer's
+ * adapter under `baselinesRoot/<slug>/`: one PNG per scene plus the provenance record.
+ *
+ * @param capturer Live capturer bound to the adapter being frozen.
+ * @param baselinesRoot Directory that holds one subdirectory per adapter.
+ * @param sourceRevision Revision the capture was taken at.
+ * @param sourceTree Whether that tree was `clean` or `dirty`.
+ * @param outputDirOut Receives the directory written, when non-null.
+ * @return An empty string on success, or a human-readable reason the capture failed.
+ */
+std::string WriteFrozenBaselineSet(WgpuBaselineCapturer& capturer,
+                                   const std::filesystem::path& baselinesRoot,
+                                   std::string_view sourceRevision, std::string_view sourceTree,
+                                   std::filesystem::path* outputDirOut);
 
 /// Renders the corpus scene named `sceneName` on `capturer`. Fails when the corpus has no such
 /// scene, which keeps a stale golden filename from silently comparing against nothing.
