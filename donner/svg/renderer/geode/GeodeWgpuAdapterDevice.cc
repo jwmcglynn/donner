@@ -292,6 +292,18 @@ bool GeodeWgpuAdapterDevice::waitForSerial(uint64_t serial, double timeoutSecond
   return completedSerial() >= serial;
 }
 
+gpu::Status GeodeWgpuAdapterDevice::destroyTextureBacking(gpu::Texture&& texture) {
+  // Validate before touching the slot so a stale or foreign handle cannot destroy whatever
+  // occupies that slot now.
+  if (gpu::Status status = validateTextureHandleForBackend(texture); status.hasError()) {
+    return status;
+  }
+  if (texture.slotIndex() < slotTextures_.size()) {
+    slotTextures_[texture.slotIndex()].ownedTexture.destroyBackingAndReset();
+  }
+  return destroyTexture(std::move(texture));
+}
+
 gpu::Result<gpu::Texture> GeodeWgpuAdapterDevice::importExternalTexture(wgpu::Texture texture,
                                                                         const gpu::Extent2d& size,
                                                                         gpu::TextureFormat format,

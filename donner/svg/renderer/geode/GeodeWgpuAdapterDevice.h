@@ -87,6 +87,18 @@ public:
    * @param format Texel format matching the wgpu texture.
    * @param usage Usage flags matching the wgpu texture's capabilities.
    */
+  /**
+   * Destroys the backend object behind \p texture explicitly, then releases its slot.
+   *
+   * Releasing a texture handle on its own only drops this adapter's reference, which leaves the
+   * backend object resident until the host runtime collects it; a succession of resized render
+   * targets is exactly where that shows up as retained memory. Externally imported textures are
+   * left alone: their owner is the embedder, not this adapter.
+   *
+   * @param texture Live texture handle of this adapter; consumed either way.
+   */
+  gpu::Status destroyTextureBacking(gpu::Texture&& texture);
+
   gpu::Result<gpu::Texture> importExternalTexture(wgpu::Texture texture, const gpu::Extent2d& size,
                                                   gpu::TextureFormat format,
                                                   gpu::TextureUsage usage);

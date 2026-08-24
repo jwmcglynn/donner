@@ -364,7 +364,7 @@ public:
   /// Number of textures waiting for the next frame-boundary destroy pass.
   /// Exposed to pin resource-retirement behavior in renderer regression tests.
   [[nodiscard]] std::size_t deferredTextureDestroyCountForTesting() const {
-    return pendingTextures_.size();
+    return pendingTextures_.size() + pendingGpuTextures_.size();
   }
 
   /**
