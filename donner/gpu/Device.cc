@@ -494,6 +494,19 @@ DONNER_GPU_DEFINE_RAII_RELEASE(ComputePipelineTag, computePipelines_, ComputePip
 
 #undef DONNER_GPU_DEFINE_RAII_RELEASE
 
+/// A dropped mapping tells the backend to unmap and releases its slot immediately. There is no
+/// submission lifetime to defer against: a mapping is host-side access to a buffer, not a
+/// resource a recorded command can still name.
+template <>
+void ReleaseHandleFromRaii<BufferMappingTag>(Device& device, uint32_t slotIndex,
+                                             uint32_t generation) {
+  if (device.bufferMappings_.find(slotIndex, generation) == nullptr) {
+    return;  // Already released (consumed); nothing to unmap.
+  }
+  device.onUnmapBuffer(slotIndex);
+  device.bufferMappings_.release(slotIndex);
+}
+
 /// Command buffers have no backend object until submission, so a dropped unsubmitted command
 /// buffer releases its recorded commands immediately with no backend notification.
 template <>
@@ -1074,6 +1087,137 @@ Status Device::destroyRenderPipeline(RenderPipeline&& renderPipeline) {
 Status Device::destroyComputePipeline(ComputePipeline&& computePipeline) {
   return destroyResource(computePipelines_, std::move(computePipeline),
                          ResourceKind::ComputePipeline);
+}
+
+namespace {
+
+/// Rejects wait bounds that could never terminate or could never wait.
+/// @param params Bounds to check.
+Status ValidateMapWaitParams(const MapWaitParams& params) {
+  if (!(params.sliceSeconds > 0.0)) {
+    return Err(GpuErrorType::InvalidDescriptor,
+               std::format("waitForMapping: sliceSeconds {} must be greater than zero",
+                           params.sliceSeconds));
+  }
+  if (!(params.timeoutSeconds > 0.0)) {
+    return Err(GpuErrorType::InvalidDescriptor,
+               std::format("waitForMapping: timeoutSeconds {} must be greater than zero",
+                           params.timeoutSeconds));
+  }
+  return OkStatus();
+}
+
+/// Maps what one backend slice reported onto the outcome a waiter sees, or nullopt to keep
+/// waiting.
+/// @param state What the backend reported.
+std::optional<MapWaitOutcome> OutcomeForSlice(MapSliceState state) {
+  switch (state) {
+    case MapSliceState::Ready: return MapWaitOutcome::Ready;
+    case MapSliceState::DeviceLost: return MapWaitOutcome::DeviceLost;
+    case MapSliceState::Failed: return MapWaitOutcome::Failed;
+    case MapSliceState::Pending: break;
+  }
+  return std::nullopt;
+}
+
+}  // namespace
+
+Status Device::onMapBufferAsync(uint32_t /*mappingSlotIndex*/, uint32_t /*bufferSlotIndex*/,
+                                MapMode /*mode*/, uint64_t /*offsetBytes*/,
+                                uint64_t /*byteCount*/) {
+  return Err(GpuErrorType::Unsupported, "this backend does not support host buffer mapping");
+}
+
+MapSliceState Device::onWaitMappingSlice(uint32_t /*mappingSlotIndex*/, double /*sliceSeconds*/) {
+  return MapSliceState::Failed;
+}
+
+Result<std::span<const uint8_t>> Device::onMappedBytes(uint32_t /*mappingSlotIndex*/) const {
+  return GpuError{GpuErrorType::Unsupported, "this backend does not support host buffer mapping"};
+}
+
+void Device::onUnmapBuffer(uint32_t /*mappingSlotIndex*/) {}
+
+Result<BufferMapping> Device::mapBufferAsync(const Buffer& buffer, MapMode mode,
+                                             uint64_t offsetBytes, uint64_t byteCount) {
+  auto record = resolve(buffers_, buffer, BufferTag::kName);
+  if (record.hasError()) {
+    return std::move(record).error();
+  }
+  if (!HasAllFlags(record.result()->descriptor.usage, BufferUsage::MapRead)) {
+    return GpuError{GpuErrorType::UsageMismatch,
+                    std::format("mapBufferAsync: buffer \"{}\" lacks the MapRead usage",
+                                record.result()->descriptor.label.str())};
+  }
+  if (byteCount == 0) {
+    return GpuError{GpuErrorType::InvalidDescriptor, "mapBufferAsync: byteCount must be nonzero"};
+  }
+  const std::optional<uint64_t> endByte = CheckedAdd(offsetBytes, byteCount);
+  if (!endByte || *endByte > record.result()->descriptor.byteSize) {
+    return GpuError{
+        GpuErrorType::OutOfBounds,
+        std::format("mapBufferAsync: range offsetBytes={} byteCount={} does not fit in buffer "
+                    "\"{}\" of {} bytes",
+                    offsetBytes, byteCount, record.result()->descriptor.label.str(),
+                    record.result()->descriptor.byteSize)};
+  }
+
+  BufferMapping handle = allocateHandle<BufferMappingTag>(
+      bufferMappings_, MappingRecord{buffer.slotIndex(), mode, offsetBytes, byteCount});
+  if (Status status =
+          onMapBufferAsync(handle.slotIndex(), buffer.slotIndex(), mode, offsetBytes, byteCount);
+      status.hasError()) {
+    bufferMappings_.release(handle.slotIndex());
+    return std::move(status).error();
+  }
+  return handle;
+}
+
+Result<MapWaitOutcome> Device::waitForMapping(const BufferMapping& mapping,
+                                              const MapWaitParams& params,
+                                              const std::function<bool()>& shouldCancel) {
+  if (Status status = ValidateMapWaitParams(params); status.hasError()) {
+    return std::move(status).error();
+  }
+  auto record = resolve(bufferMappings_, mapping, BufferMappingTag::kName);
+  if (record.hasError()) {
+    return std::move(record).error();
+  }
+
+  double waited = 0.0;
+  while (true) {
+    if (shouldCancel && shouldCancel()) {
+      return MapWaitOutcome::Cancelled;
+    }
+    const std::optional<MapWaitOutcome> outcome =
+        OutcomeForSlice(onWaitMappingSlice(mapping.slotIndex(), params.sliceSeconds));
+    if (outcome.has_value()) {
+      return *outcome;
+    }
+    waited += params.sliceSeconds;
+    if (waited >= params.timeoutSeconds) {
+      return MapWaitOutcome::TimedOut;
+    }
+  }
+}
+
+Result<std::span<const uint8_t>> Device::mappedBytes(const BufferMapping& mapping) const {
+  auto record = resolve(bufferMappings_, mapping, BufferMappingTag::kName);
+  if (record.hasError()) {
+    return std::move(record).error();
+  }
+  return onMappedBytes(mapping.slotIndex());
+}
+
+Status Device::unmapBuffer(BufferMapping&& mapping) {
+  const BufferMapping consumed = std::move(mapping);
+  auto record = resolve(bufferMappings_, consumed, BufferMappingTag::kName);
+  if (record.hasError()) {
+    return std::move(record).error();
+  }
+  // Letting the consumed handle go out of scope here releases the mapping through exactly the
+  // path a dropped handle takes, so explicit release and RAII cannot disagree.
+  return OkStatus();
 }
 
 Result<std::unique_ptr<CommandEncoder>> Device::createCommandEncoder() {

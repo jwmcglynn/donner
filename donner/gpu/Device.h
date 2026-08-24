@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <format>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <span>
@@ -340,6 +341,56 @@ public:
   Result<std::unique_ptr<CommandEncoder>> createCommandEncoder();
 
   /**
+   * Begins mapping a range of \p buffer for host access, and returns the handle that names the
+   * mapping.
+   *
+   * The mapping is not readable yet: \ref waitForMapping decides when it is. The returned handle
+   * is what keeps the mapped range reachable - \ref unmapBuffer consumes it and every copy of it
+   * goes stale at that moment, so a read through a handle whose mapping has been released is a
+   * reported validation failure rather than a read of memory that is no longer there.
+   *
+   * @param buffer Buffer to map; needs \ref BufferUsage::MapRead.
+   * @param mode How the host will access the range.
+   * @param offsetBytes Byte offset of the mapped range.
+   * @param byteCount Length of the mapped range; must be nonzero and fit the buffer.
+   */
+  Result<BufferMapping> mapBufferAsync(const Buffer& buffer, MapMode mode, uint64_t offsetBytes,
+                                       uint64_t byteCount);
+
+  /**
+   * Waits for a pending mapping in slices, until it completes, the caller stops it, the budget
+   * runs out, or the device is lost.
+   *
+   * \p shouldCancel is consulted before each slice, so a caller that changes its mind stops
+   * within one slice rather than at the end of the budget. Device loss ends the wait
+   * immediately: the mapping can never complete afterwards, and reporting it as a timeout would
+   * describe a permanent failure as a slow one.
+   *
+   * @param mapping Live mapping of this device.
+   * @param params Slice length and total budget; both must be greater than zero.
+   * @param shouldCancel Consulted before each slice; may be empty for an uncancellable wait.
+   */
+  Result<MapWaitOutcome> waitForMapping(const BufferMapping& mapping, const MapWaitParams& params,
+                                        const std::function<bool()>& shouldCancel);
+
+  /**
+   * Returns the mapped bytes of a completed mapping.
+   *
+   * Fails closed when the mapping is stale, belongs to another device, or has not completed: the
+   * span is only valid while the handle names a live, ready mapping.
+   *
+   * @param mapping Live, completed mapping of this device.
+   */
+  Result<std::span<const uint8_t>> mappedBytes(const BufferMapping& mapping) const;
+
+  /**
+   * Releases a mapping, invalidating the handle and every copy of it.
+   *
+   * @param mapping Mapping to release; consumed either way (see the destroy contract above).
+   */
+  Status unmapBuffer(BufferMapping&& mapping);
+
+  /**
    * Writes \p data into \p buffer at \p offsetBytes. Fails closed if the range does not fit
    * (checked arithmetic) or the buffer lacks \ref BufferUsage::CopyDst.
    *
@@ -480,6 +531,35 @@ protected:
    */
   Status validateTextureViewHandleForBackend(const TextureView& textureView) const;
 
+  /**
+   * Backend hook: begin mapping a buffer range. Defaults to reporting the capability as
+   * unsupported, so a backend without host mapping needs no implementation and callers get a
+   * clean unsupported result rather than a missing symbol.
+   *
+   * @param mappingSlotIndex Slot the mapping occupies.
+   * @param bufferSlotIndex Slot of the buffer being mapped.
+   * @param mode How the host will access the range.
+   * @param offsetBytes Byte offset of the mapped range.
+   * @param byteCount Length of the mapped range.
+   */
+  virtual Status onMapBufferAsync(uint32_t mappingSlotIndex, uint32_t bufferSlotIndex, MapMode mode,
+                                  uint64_t offsetBytes, uint64_t byteCount);
+
+  /**
+   * Backend hook: wait up to \p sliceSeconds for a pending mapping and report what it found.
+   * The runtime owns the deadline and the caller's cancellation; this reports only the mapping.
+   *
+   * @param mappingSlotIndex Slot of the pending mapping.
+   * @param sliceSeconds Longest this call may block.
+   */
+  virtual MapSliceState onWaitMappingSlice(uint32_t mappingSlotIndex, double sliceSeconds);
+
+  /// Backend hook: bytes of a completed mapping. @param mappingSlotIndex Slot of the mapping.
+  virtual Result<std::span<const uint8_t>> onMappedBytes(uint32_t mappingSlotIndex) const;
+
+  /// Backend hook: release a mapping. @param mappingSlotIndex Slot of the mapping.
+  virtual void onUnmapBuffer(uint32_t mappingSlotIndex);
+
   /// Backend hook: a validated command buffer was submitted.
   /// @param submissionSerial Serial assigned to this submission.
   /// @param commandBufferSlotIndex Slot the command buffer occupied before being consumed.
@@ -493,6 +573,13 @@ private:
   /// Validated per-buffer state.
   struct BufferRecord {
     BufferDescriptor descriptor;  //!< Creation descriptor.
+  };
+  /// Validated per-mapping state.
+  struct MappingRecord {
+    uint32_t bufferSlotIndex = 0;  //!< Slot of the mapped buffer.
+    MapMode mode = MapMode::Read;  //!< How the host accesses the range.
+    uint64_t offsetBytes = 0;      //!< Byte offset of the mapped range.
+    uint64_t byteCount = 0;        //!< Length of the mapped range.
   };
   /// Validated per-texture state.
   struct TextureRecord {
@@ -786,6 +873,7 @@ private:
   std::vector<PendingDestroy> pendingDestroys_;
 
   details::SlotTable<BufferRecord> buffers_;
+  details::SlotTable<MappingRecord> bufferMappings_;
   details::SlotTable<TextureRecord> textures_;
   details::SlotTable<TextureViewRecord> textureViews_;
   details::SlotTable<SamplerRecord> samplers_;

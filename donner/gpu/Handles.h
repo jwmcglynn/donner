@@ -259,6 +259,10 @@ struct RenderPipelineTag {
 struct ComputePipelineTag {
   static constexpr const char* kName = "computePipeline";  //!< Resource name for diagnostics.
 };
+/// Tag for \ref BufferMapping handles.
+struct BufferMappingTag {
+  static constexpr const char* kName = "bufferMapping";  //!< Resource name for diagnostics.
+};
 /// Tag for \ref CommandBuffer handles.
 struct CommandBufferTag {
   static constexpr const char* kName = "commandBuffer";  //!< Resource name for diagnostics.
@@ -272,6 +276,7 @@ using BindGroupLayout = Handle<BindGroupLayoutTag>;  //!< Bind group layout hand
 using BindGroup = Handle<BindGroupTag>;              //!< Bind group handle.
 using PipelineLayout = Handle<PipelineLayoutTag>;    //!< Pipeline layout handle.
 using ShaderModule = Handle<ShaderModuleTag>;        //!< Shader module handle.
+using BufferMapping = Handle<BufferMappingTag>;      //!< Buffer mapping handle.
 using RenderPipeline = Handle<RenderPipelineTag>;    //!< Render pipeline handle.
 using ComputePipeline = Handle<ComputePipelineTag>;  //!< Compute pipeline handle.
 using CommandBuffer = Handle<CommandBufferTag>;      //!< Finished command buffer handle.

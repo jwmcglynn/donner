@@ -107,6 +107,46 @@ enum class BufferUsage : uint32_t {
   MapRead = 1 << 6,  //!< Host-readable after readback.
 };
 
+/// How a mapped buffer range is accessed from the host.
+enum class MapMode : uint8_t {
+  Read,  //!< Host reads the range; the buffer needs \ref BufferUsage::MapRead.
+};
+
+/// State of a pending buffer mapping after one backend wait slice.
+///
+/// This is what a backend reports; \ref MapWaitOutcome is what the caller of a bounded wait
+/// sees, and the two differ because the deadline and the caller's cancellation are decisions the
+/// runtime makes, not the backend.
+enum class MapSliceState : uint8_t {
+  Pending,     //!< The mapping has not completed yet.
+  Ready,       //!< The mapping completed; its bytes are readable.
+  DeviceLost,  //!< The device was lost, so the mapping can never complete.
+  Failed,      //!< The backend reported the mapping itself failed.
+};
+
+/// Outcome of a bounded wait for a pending buffer mapping.
+///
+/// Every way a wait can end is its own value. A caller that stopped the wait itself, one whose
+/// budget ran out, and one whose device died have different recoveries, so folding them into a
+/// single failure would throw away the only information that distinguishes them.
+enum class MapWaitOutcome : uint8_t {
+  Ready,       //!< The mapping completed; its bytes are readable.
+  TimedOut,    //!< The wait budget elapsed with the mapping still pending.
+  Cancelled,   //!< The caller's predicate asked to stop waiting.
+  DeviceLost,  //!< The device was lost, so the mapping can never complete.
+  Failed,      //!< The backend reported the mapping itself failed.
+};
+
+/// Bounds of a wait for a pending buffer mapping.
+///
+/// Both durations belong to the caller. A slice short enough to keep a UI responsive is a
+/// different number from one that suits a batch tool, so the runtime takes it rather than
+/// picking one.
+struct MapWaitParams {
+  double sliceSeconds = 0.0;    //!< Length of one wait slice. Must be greater than zero.
+  double timeoutSeconds = 0.0;  //!< Total wait budget. Must be greater than zero.
+};
+
 /// Shader stage visibility flags for bindings. Combinable with `|`.
 enum class ShaderStage : uint32_t {
   None = 0,           //!< No stage; invalid for bind group layout entries.
