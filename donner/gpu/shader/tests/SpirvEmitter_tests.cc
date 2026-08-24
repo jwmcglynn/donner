@@ -18,6 +18,7 @@
 #include <vector>
 
 #include "donner/base/tests/Runfiles.h"
+#include "donner/gpu/shader/programs/ColorMatrix.h"
 #include "donner/gpu/shader/programs/SolidFill.h"
 #include "donner/gpu/shader/tests/ShaderTestUtils.h"
 
@@ -54,7 +55,10 @@ constexpr uint32_t kOpCompositeConstruct = 80;
 constexpr uint32_t kOpSampledImage = 86;
 constexpr uint32_t kOpImageSampleImplicitLod = 87;
 constexpr uint32_t kOpImageFetch = 95;
+constexpr uint32_t kOpImageWrite = 99;
 constexpr uint32_t kOpImageQuerySizeLod = 103;
+constexpr uint32_t kOpImageQuerySize = 104;
+constexpr uint32_t kOpTypeImage = 25;
 constexpr uint32_t kOpSelect = 169;
 constexpr uint32_t kOpFwidth = 209;
 constexpr uint32_t kOpLoopMerge = 246;
@@ -77,6 +81,7 @@ constexpr uint32_t kDecorationArrayStride = 6;
 constexpr uint32_t kDecorationMatrixStride = 7;
 constexpr uint32_t kDecorationBuiltIn = 11;
 constexpr uint32_t kDecorationFlat = 14;
+constexpr uint32_t kDecorationNonReadable = 25;
 constexpr uint32_t kDecorationNonWritable = 24;
 constexpr uint32_t kDecorationLocation = 30;
 constexpr uint32_t kDecorationBinding = 33;
@@ -85,13 +90,17 @@ constexpr uint32_t kDecorationOffset = 35;
 
 constexpr uint32_t kBuiltInPosition = 0;
 constexpr uint32_t kBuiltInFragCoord = 15;
+constexpr uint32_t kBuiltInGlobalInvocationId = 28;
 constexpr uint32_t kBuiltInInstanceIndex = 43;
 
 constexpr uint32_t kCapabilityShader = 1;
 constexpr uint32_t kCapabilityImageQuery = 50;
 constexpr uint32_t kExecutionModeOriginUpperLeft = 7;
+constexpr uint32_t kExecutionModeLocalSize = 17;
 constexpr uint32_t kExecutionModelVertex = 0;
 constexpr uint32_t kExecutionModelFragment = 4;
+constexpr uint32_t kExecutionModelGlCompute = 5;
+constexpr uint32_t kStorageClassUniformConstant = 0;
 constexpr uint32_t kStorageClassUniform = 2;
 constexpr uint32_t kStorageClassStorageBuffer = 12;
 constexpr uint32_t kImageOperandsLodMask = 0x2;
@@ -797,6 +806,112 @@ TEST(SpirvEmitterTests, WholeStructLoadFromBufferRebuildsMemberByMember) {
   const std::vector<SpvInstruction> constructs = WithOpcode(instructions, kOpCompositeConstruct);
   ASSERT_THAT(constructs, SizeIs(1u));
   EXPECT_THAT(constructs[0].operands, SizeIs(4u)) << "type, result, and one id per member";
+}
+
+// ----- Compute entry points -----
+
+TEST(SpirvEmitterTests, ComputeEntryPointDeclaresGlComputeAndItsLocalSize) {
+  ModuleBuilder builder;
+  OK(builder.addWriteOnlyStorageTexture2d(0, 1, "outputTexture", StorageTextureFormat::Rgba8Unorm));
+  {
+    auto fn = Fn(
+        builder.createComputeEntryPoint("cs_main",
+                                        {IrParam{"gid", IrType::Vec3(ScalarKind::U32), std::nullopt,
+                                                 BuiltinInput::GlobalInvocationId}},
+                                        WorkgroupSize{8, 4, 2}));
+    const IrExpr gid = V(fn.ref("gid"));
+    const IrExpr coords = V(Convert(IrType::Vec2i(), V(Swizzle(gid, "xy"))));
+    const IrExpr color = V(ConstructVector(
+        IrType::Vec4f(), {LiteralF32(0.0f), LiteralF32(0.0f), LiteralF32(0.0f), LiteralF32(1.0f)}));
+    OK(fn.textureStore(V(fn.ref("outputTexture")), coords, color));
+    OK(fn.finish());
+  }
+  const std::vector<uint32_t> words = EmitOrFail(BuildOrFail(builder));
+  const std::vector<SpvInstruction> instructions = Scan(words);
+
+  const std::vector<SpvInstruction> entryPoints = WithOpcode(instructions, kOpEntryPoint);
+  ASSERT_THAT(entryPoints, SizeIs(1u));
+  EXPECT_EQ(entryPoints[0].operands[0], kExecutionModelGlCompute);
+  const uint32_t entryId = entryPoints[0].operands[1];
+  EXPECT_EQ(DecodeString(entryPoints[0].operands, 2).first, "cs_main");
+
+  const std::vector<SpvInstruction> executionModes = WithOpcode(instructions, kOpExecutionMode);
+  ASSERT_THAT(executionModes, SizeIs(1u));
+  EXPECT_THAT(executionModes[0].operands,
+              ElementsAre(entryId, kExecutionModeLocalSize, 8u, 4u, 2u));
+
+  // The global invocation id arrives as a decorated Input variable listed in the interface.
+  const std::vector<SpvInstruction> variables = WithOpcode(instructions, kOpVariable);
+  bool foundGlobalId = false;
+  for (const SpvInstruction& variable : variables) {
+    const std::optional<std::vector<uint32_t>> builtin =
+        FindDecoration(instructions, variable.operands[1], kDecorationBuiltIn);
+    if (builtin && builtin->at(0) == kBuiltInGlobalInvocationId) {
+      foundGlobalId = true;
+      EXPECT_THAT(entryPoints[0].operands, Contains(variable.operands[1]));
+    }
+  }
+  EXPECT_TRUE(foundGlobalId) << "no GlobalInvocationId builtin variable was declared";
+}
+
+TEST(SpirvEmitterTests, WriteOnlyStorageTextureBindingUsesAFormattedStorageImage) {
+  ModuleBuilder builder;
+  OK(builder.addWriteOnlyStorageTexture2d(0, 1, "outputTexture", StorageTextureFormat::Rgba8Unorm));
+  {
+    auto fn = Fn(
+        builder.createComputeEntryPoint("cs_main",
+                                        {IrParam{"gid", IrType::Vec3(ScalarKind::U32), std::nullopt,
+                                                 BuiltinInput::GlobalInvocationId}},
+                                        WorkgroupSize{8, 8, 1}));
+    const IrExpr texture = V(fn.ref("outputTexture"));
+    const IrExpr extent =
+        V(fn.addLet("extent", V(CallBuiltin(BuiltinFn::TextureDimensions, {texture}))));
+    const IrExpr coords = V(Convert(IrType::Vec2i(), extent));
+    const IrExpr color = V(ConstructVector(
+        IrType::Vec4f(), {LiteralF32(1.0f), LiteralF32(0.0f), LiteralF32(0.0f), LiteralF32(1.0f)}));
+    OK(fn.textureStore(texture, coords, color));
+    OK(fn.finish());
+  }
+  const std::vector<SpvInstruction> instructions = Scan(EmitOrFail(BuildOrFail(builder)));
+
+  const std::optional<BindingVariable> outputBinding = FindBindingVariable(instructions, 0, 1);
+  ASSERT_TRUE(outputBinding.has_value());
+  EXPECT_EQ(outputBinding->storageClass, kStorageClassUniformConstant);
+  // Declared write-only, so the image is NonReadable.
+  EXPECT_TRUE(
+      FindDecoration(instructions, outputBinding->variableId, kDecorationNonReadable).has_value());
+
+  // The image type carries Sampled=2 (accessed without a sampler) and the explicit Rgba8 format,
+  // which is what keeps the module free of the extended-storage-format capability.
+  const std::vector<SpvInstruction> images = WithOpcode(instructions, kOpTypeImage);
+  ASSERT_THAT(images, SizeIs(1u));
+  EXPECT_EQ(images[0].operands[0], outputBinding->pointeeId);
+  EXPECT_THAT(std::vector<uint32_t>(images[0].operands.begin() + 2, images[0].operands.end()),
+              ElementsAre(1u, 0u, 0u, 0u, 2u, 4u))
+      << "Dim2D, non-depth, non-arrayed, single-sampled, Sampled=2, ImageFormat Rgba8";
+
+  // A storage image has no LOD operand, so the dimension query must take the non-Lod form, and
+  // the store must be an OpImageWrite.
+  EXPECT_THAT(WithOpcode(instructions, kOpImageQuerySize), SizeIs(1u));
+  EXPECT_THAT(WithOpcode(instructions, kOpImageQuerySizeLod), SizeIs(0u));
+  EXPECT_THAT(WithOpcode(instructions, kOpImageWrite), SizeIs(1u));
+}
+
+TEST(SpirvEmitterTests, ColorMatrixComputeProgramDeclaresItsFourBindings) {
+  ShaderResult<IrModule> module = programs::BuildColorMatrixModule();
+  ASSERT_THAT(module, HasShaderResult());
+  const std::vector<SpvInstruction> instructions = Scan(EmitOrFail(module.result()));
+
+  // Sampled input, storage output, uniform params, storage bias - all in descriptor set 0.
+  EXPECT_TRUE(FindBindingVariable(instructions, 0, 0).has_value());
+  EXPECT_TRUE(FindBindingVariable(instructions, 0, 1).has_value());
+  const std::optional<BindingVariable> params = FindBindingVariable(instructions, 0, 2);
+  ASSERT_TRUE(params.has_value());
+  EXPECT_EQ(params->storageClass, kStorageClassUniform);
+  const std::optional<BindingVariable> bias = FindBindingVariable(instructions, 0, 3);
+  ASSERT_TRUE(bias.has_value());
+  EXPECT_EQ(bias->storageClass, kStorageClassStorageBuffer);
+  EXPECT_TRUE(FindDecoration(instructions, bias->variableId, kDecorationNonWritable).has_value());
 }
 
 // ----- Golden -----

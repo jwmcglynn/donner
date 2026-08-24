@@ -1,5 +1,6 @@
 #include <format>
 #include <string>
+#include <string_view>
 
 #include "donner/gpu/shader/IrModule.h"
 
@@ -134,7 +135,44 @@ void AppendStatement(std::string& out, const IrStmt& statement, int indent) {
       return;
     }
     case IrStmt::Kind::Discard: out += "discard\n"; return;
+    case IrStmt::Kind::TextureStore:
+      out += std::format("textureStore({}, {}, {})\n", data.exprs[0].toString(),
+                         data.exprs[1].toString(), data.exprs[2].toString());
+      return;
   }
+}
+
+/// Serialized name of a binding kind.
+std::string_view BindingKindName(BindingKind kind) {
+  switch (kind) {
+    case BindingKind::UniformBuffer: return "uniform";
+    case BindingKind::ReadOnlyStorageBuffer: return "storage_read";
+    case BindingKind::SampledTexture2dF32: return "texture_2d_f32";
+    case BindingKind::FilteringSampler: return "sampler";
+    case BindingKind::WriteOnlyStorageTexture2d: return "storage_texture_write";
+  }
+  return "unknown";
+}
+
+/// Serialized ` stage=<name>` suffix of a function, empty for plain functions.
+std::string_view StageSuffix(StageKind stage) {
+  switch (stage) {
+    case StageKind::None: return "";
+    case StageKind::Vertex: return " stage=vertex";
+    case StageKind::Fragment: return " stage=fragment";
+    case StageKind::Compute: return " stage=compute";
+  }
+  return "";
+}
+
+/// Serialized ` @builtin(<name>)` suffix of a stage input.
+std::string_view BuiltinInputSuffix(BuiltinInput builtin) {
+  switch (builtin) {
+    case BuiltinInput::InstanceIndex: return " @builtin(instance_index)";
+    case BuiltinInput::Position: return " @builtin(position)";
+    case BuiltinInput::GlobalInvocationId: return " @builtin(global_invocation_id)";
+  }
+  return "";
 }
 
 /// Appends the IO annotation suffix for a param/output, e.g. ` @location(0)`.
@@ -157,14 +195,9 @@ std::string IrModule::serialize() const {
   }
 
   for (const IrBinding& binding : bindings_) {
-    out += std::format("binding group={} binding={} kind=", binding.group, binding.binding);
-    switch (binding.kind) {
-      case BindingKind::UniformBuffer: out += "uniform"; break;
-      case BindingKind::ReadOnlyStorageBuffer: out += "storage_read"; break;
-      case BindingKind::SampledTexture2dF32: out += "texture_2d_f32"; break;
-      case BindingKind::FilteringSampler: out += "sampler"; break;
-    }
-    out += std::format(" {}: {}\n", binding.name.str(), binding.type.toString());
+    out +=
+        std::format("binding group={} binding={} kind={} {}: {}\n", binding.group, binding.binding,
+                    BindingKindName(binding.kind), binding.name.str(), binding.type.toString());
     std::vector<RcString> emittedStructNames;
     AppendReachableStructs(out, binding.type, 1, emittedStructNames);
   }
@@ -172,10 +205,10 @@ std::string IrModule::serialize() const {
   for (const IrFunction& function : functions_) {
     out += "function ";
     out += function.name.str();
-    switch (function.stage) {
-      case StageKind::None: break;
-      case StageKind::Vertex: out += " stage=vertex"; break;
-      case StageKind::Fragment: out += " stage=fragment"; break;
+    out += StageSuffix(function.stage);
+    if (function.workgroupSize) {
+      out += std::format(" workgroup_size={}x{}x{}", function.workgroupSize->x,
+                         function.workgroupSize->y, function.workgroupSize->z);
     }
     out += "\n";
 
@@ -187,6 +220,7 @@ std::string IrModule::serialize() const {
         switch (*param.builtin) {
           case BuiltinInput::InstanceIndex: out += " @builtin(instance_index)"; break;
           case BuiltinInput::Position: out += " @builtin(position)"; break;
+          case BuiltinInput::GlobalInvocationId: out += " @builtin(global_invocation_id)"; break;
         }
       }
       out += "\n";

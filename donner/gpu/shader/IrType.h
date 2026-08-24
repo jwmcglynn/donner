@@ -2,9 +2,9 @@
 /// @file
 /// Immutable type model for the \c donner::gpu::shader IR.
 ///
-/// The type surface covers exactly what the solid-fill pipeline family requires (design 0053
-/// "Donner shader IR"): scalars, vectors, mat4x4f, sized and runtime arrays, structs, and the
-/// texture_2d<f32> / sampler resource types. Types are immutable values with deep equality, so
+/// The type surface covers exactly what Donner's pipeline families require: scalars, vectors,
+/// mat4x4f, sized and runtime arrays, structs, and the texture_2d<f32> / sampler /
+/// write-only storage texture resource types. Types are immutable values with deep equality, so
 /// identical types compare equal deterministically regardless of construction order.
 
 #include <cstdint>
@@ -35,6 +35,21 @@ enum class ScalarKind : uint8_t {
  */
 std::ostream& operator<<(std::ostream& os, ScalarKind value);
 
+/// Texel format of a write-only storage texture. Only the format the filter pipelines write is
+/// modeled; every backend supports it as a storage-image format without an extended-format
+/// capability.
+enum class StorageTextureFormat : uint8_t {
+  Rgba8Unorm,  //!< 8-bit RGBA, unsigned normalized.
+};
+
+/**
+ * Ostream output operator, e.g. `rgba8unorm`.
+ *
+ * @param os Output stream.
+ * @param value Value to output.
+ */
+std::ostream& operator<<(std::ostream& os, StorageTextureFormat value);
+
 /**
  * An immutable shader IR type with deep value equality.
  *
@@ -54,6 +69,9 @@ public:
     Struct,        //!< Named struct with named members.
     Texture2dF32,  //!< texture_2d<f32>.
     Sampler,       //!< Filtering sampler.
+    /// texture_storage_2d<format, write>; written with `FunctionBuilder::textureStore`, never
+    /// read, so no sampler or load path applies to it.
+    WriteOnlyStorageTexture2d,
   };
 
   /// One named member of a struct type; defined after the class (members hold IrType by value).
@@ -112,6 +130,12 @@ public:
   static IrType Texture2dF32();
   /// Filtering sampler resource type.
   static IrType SamplerType();
+  /**
+   * `texture_storage_2d<format, write>` resource type.
+   *
+   * @param format Texel format written through the texture.
+   */
+  static IrType WriteOnlyStorageTexture2d(StorageTextureFormat format);
 
   /**
    * `array<element, count>` type. Fails closed if \p count is zero or \p element is not plain
@@ -166,6 +190,10 @@ public:
 
   /// Members of a struct type. @pre `kind()` is Struct.
   std::span<const Member> structMembers() const;
+
+  /// Texel format of a write-only storage texture.
+  /// @pre `kind()` is WriteOnlyStorageTexture2d.
+  StorageTextureFormat storageTextureFormat() const;
 
   /// True for bool/i32/u32/f32.
   bool isScalar() const { return kind() == Kind::Scalar; }

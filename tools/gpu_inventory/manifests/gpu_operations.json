@@ -312,6 +312,7 @@
     "donner/gpu/shader/tests/WgslEmitterGeodeValidation_tests.cc": {
       "operations": [
         "createBindGroupLayout",
+        "createComputePipeline",
         "createPipelineLayout",
         "createRenderPipeline",
         "createShaderModule"
@@ -332,6 +333,8 @@
         "BufferBindingType",
         "ColorTargetState",
         "ColorWriteMask",
+        "ComputePipeline",
+        "ComputePipelineDescriptor",
         "CullMode",
         "Default",
         "Device",
@@ -346,6 +349,7 @@
         "ShaderModuleDescriptor",
         "ShaderSourceWGSL",
         "ShaderStage",
+        "StorageTextureAccess",
         "TextureFormat",
         "TextureSampleType",
         "TextureViewDimension",

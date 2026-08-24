@@ -704,5 +704,153 @@ TEST(ModuleBuilderTests, ResourceRefsResolveInsideFunctions) {
   EXPECT_THAT(function.finish(), IsShaderOk());
 }
 
+// == Compute entry points =====================================================================
+
+/// Builds a module with one write-only storage texture at (0, 0) and returns the builder.
+/// @param builder Builder to populate.
+void AddStorageTextureBinding(ModuleBuilder& builder) {
+  EXPECT_THAT(
+      builder.addWriteOnlyStorageTexture2d(0, 0, "outputTexture", StorageTextureFormat::Rgba8Unorm),
+      IsShaderOk());
+}
+
+/// The one legal compute stage input.
+IrParam GlobalIdParam() {
+  return IrParam{"gid", IrType::Vec3(ScalarKind::U32), std::nullopt,
+                 BuiltinInput::GlobalInvocationId};
+}
+
+TEST(ComputeEntryPointTests, AcceptsGlobalInvocationIdAndAWriteOnlyStorageTexture) {
+  ModuleBuilder builder;
+  AddStorageTextureBinding(builder);
+
+  auto entry =
+      builder.createComputeEntryPoint("cs_main", {GlobalIdParam()}, WorkgroupSize{8, 8, 1});
+  ASSERT_THAT(entry, HasShaderResult());
+  FunctionBuilder function = std::move(entry).result();
+
+  const IrExpr gid = GetShaderResultOrFail(function.ref("gid"), LiteralF32(0));
+  const IrExpr coords = GetShaderResultOrFail(
+      Convert(IrType::Vec2i(), GetShaderResultOrFail(Swizzle(gid, "xy"), LiteralF32(0))),
+      LiteralF32(0));
+  const IrExpr texture = GetShaderResultOrFail(function.ref("outputTexture"), LiteralF32(0));
+  EXPECT_THAT(function.textureStore(texture, coords, Vec4fVal()), IsShaderOk());
+  // Compute entry points produce no outputs, so no trailing return is required.
+  EXPECT_THAT(function.finish(), IsShaderOk());
+
+  ShaderResult<IrModule> module = builder.build();
+  ASSERT_THAT(module, HasShaderResult());
+  ASSERT_THAT(module.result().functions(), testing::SizeIs(1u));
+  EXPECT_EQ(module.result().functions()[0].stage, StageKind::Compute);
+  ASSERT_TRUE(module.result().functions()[0].workgroupSize.has_value());
+  EXPECT_EQ(*module.result().functions()[0].workgroupSize, (WorkgroupSize{8, 8, 1}));
+}
+
+TEST(ComputeEntryPointTests, RejectsInvalidWorkgroupSizes) {
+  ModuleBuilder builder;
+  EXPECT_THAT(builder.createComputeEntryPoint("zeroDim", {}, WorkgroupSize{8, 0, 1}),
+              IsShaderError(HasSubstr("8x0x1 has a zero dimension")));
+  EXPECT_THAT(builder.createComputeEntryPoint("tooWideZ", {}, WorkgroupSize{1, 1, 65}),
+              IsShaderError(HasSubstr("exceeds the per-dimension caps")));
+  EXPECT_THAT(builder.createComputeEntryPoint("tooManyInvocations", {}, WorkgroupSize{32, 32, 1}),
+              IsShaderError(HasSubstr("declares 1024 invocations, exceeding the cap of 256")));
+}
+
+TEST(ComputeEntryPointTests, RejectsStageIoThatOnlyRenderStagesHave) {
+  ModuleBuilder builder;
+  EXPECT_THAT(
+      builder.createComputeEntryPoint("located", {IrParam{"uv", IrType::Vec2f(), 0, std::nullopt}},
+                                      WorkgroupSize{8, 8, 1}),
+      IsShaderError(HasSubstr("compute input uv needs a builtin")));
+  EXPECT_THAT(builder.createComputeEntryPoint(
+                  "wrongBuiltin",
+                  {IrParam{"index", IrType::U32(), std::nullopt, BuiltinInput::InstanceIndex}},
+                  WorkgroupSize{8, 8, 1}),
+              IsShaderError(HasSubstr("must be global_invocation_id")));
+  EXPECT_THAT(builder.createComputeEntryPoint(
+                  "wrongType",
+                  {IrParam{"gid", IrType::Vec2u(), std::nullopt, BuiltinInput::GlobalInvocationId}},
+                  WorkgroupSize{8, 8, 1}),
+              IsShaderError(HasSubstr("must be global_invocation_id")));
+}
+
+TEST(ComputeEntryPointTests, RejectsFragmentOnlyBuiltinsAndStageOnlyStatements) {
+  ModuleBuilder builder;
+  EXPECT_THAT(builder.addTexture2d(0, 0, "tex"), IsShaderOk());
+  EXPECT_THAT(builder.addSampler(0, 1, "smp"), IsShaderOk());
+
+  {
+    auto entry =
+        builder.createComputeEntryPoint("cs_discard", {GlobalIdParam()}, WorkgroupSize{8, 8, 1});
+    ASSERT_THAT(entry, HasShaderResult());
+    FunctionBuilder function = std::move(entry).result();
+    EXPECT_THAT(function.discard(), IsShaderError(HasSubstr("only valid in fragment")));
+  }
+  {
+    auto entry =
+        builder.createComputeEntryPoint("cs_outputs", {GlobalIdParam()}, WorkgroupSize{8, 8, 1});
+    ASSERT_THAT(entry, HasShaderResult());
+    FunctionBuilder function = std::move(entry).result();
+    EXPECT_THAT(function.returnOutputs({Vec4fVal()}),
+                IsShaderError(HasSubstr("requires a vertex or fragment entry point")));
+  }
+  {
+    auto entry =
+        builder.createComputeEntryPoint("cs_sample", {GlobalIdParam()}, WorkgroupSize{8, 8, 1});
+    ASSERT_THAT(entry, HasShaderResult());
+    FunctionBuilder function = std::move(entry).result();
+    const IrExpr sampled = GetShaderResultOrFail(
+        CallBuiltin(BuiltinFn::TextureSample,
+                    {GetShaderResultOrFail(function.ref("tex"), LiteralF32(0)),
+                     GetShaderResultOrFail(function.ref("smp"), LiteralF32(0)), Vec2fVal()}),
+        LiteralF32(0));
+    EXPECT_THAT(function.addLet("sampled", sampled), HasShaderResult());
+    EXPECT_THAT(function.finish(),
+                IsShaderError(HasSubstr("compute entry points cannot use fragment-only builtins")));
+  }
+}
+
+TEST(ComputeEntryPointTests, TextureStoreRejectsIllTypedOperands) {
+  ModuleBuilder builder;
+  AddStorageTextureBinding(builder);
+  EXPECT_THAT(builder.addTexture2d(0, 1, "sampledTexture"), IsShaderOk());
+
+  const IrExpr intCoords = GetShaderResultOrFail(
+      ConstructVector(IrType::Vec2i(), {LiteralI32(0), LiteralI32(0)}), LiteralF32(0));
+
+  // The first error latches per function, so each rejected shape gets its own entry point. Each
+  // builder is scoped so the abandoned function releases the module builder for the next one.
+  {
+    auto entry =
+        builder.createComputeEntryPoint("cs_target", {GlobalIdParam()}, WorkgroupSize{8, 8, 1});
+    ASSERT_THAT(entry, HasShaderResult());
+    FunctionBuilder function = std::move(entry).result();
+    const IrExpr sampledTexture =
+        GetShaderResultOrFail(function.ref("sampledTexture"), LiteralF32(0));
+    EXPECT_THAT(function.textureStore(sampledTexture, intCoords, Vec4fVal()),
+                IsShaderError(HasSubstr("must be a write-only storage texture binding")));
+  }
+  {
+    auto entry =
+        builder.createComputeEntryPoint("cs_coords", {GlobalIdParam()}, WorkgroupSize{8, 8, 1});
+    ASSERT_THAT(entry, HasShaderResult());
+    FunctionBuilder function = std::move(entry).result();
+    const IrExpr storageTexture =
+        GetShaderResultOrFail(function.ref("outputTexture"), LiteralF32(0));
+    EXPECT_THAT(function.textureStore(storageTexture, Vec2fVal(), Vec4fVal()),
+                IsShaderError(HasSubstr("coordinates must be vec2<i32> or vec2<u32>")));
+  }
+  {
+    auto entry =
+        builder.createComputeEntryPoint("cs_value", {GlobalIdParam()}, WorkgroupSize{8, 8, 1});
+    ASSERT_THAT(entry, HasShaderResult());
+    FunctionBuilder function = std::move(entry).result();
+    const IrExpr storageTexture =
+        GetShaderResultOrFail(function.ref("outputTexture"), LiteralF32(0));
+    EXPECT_THAT(function.textureStore(storageTexture, intCoords, Vec2fVal()),
+                IsShaderError(HasSubstr("value must be vec4<f32>")));
+  }
+}
+
 }  // namespace
 }  // namespace donner::gpu::shader

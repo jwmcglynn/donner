@@ -3,14 +3,11 @@
 /// Module model and validating builders for the \c donner::gpu::shader IR.
 ///
 /// A module holds module-scope constants, resource bindings, and functions (plain functions
-/// plus vertex/fragment entry points). \c ModuleBuilder and \c FunctionBuilder validate every
-/// construction step and fail closed with \ref ShaderError on ill-typed input; a successfully
-/// built \c IrModule is immutable and serializes deterministically.
-///
-/// Compute entry points are intentionally out of scope for this packet; \c StageKind leaves the
-/// seam (a Compute enumerator would slot next to Vertex/Fragment, with workgroup-size metadata
-/// on IrFunction) for the filter-engine migration packets.
+/// plus vertex/fragment/compute entry points). \c ModuleBuilder and \c FunctionBuilder validate
+/// every construction step and fail closed with \ref ShaderError on ill-typed input; a
+/// successfully built \c IrModule is immutable and serializes deterministically.
 
+#include <array>
 #include <cstdint>
 #include <map>
 #include <memory>
@@ -31,10 +28,11 @@ class FunctionBuilder;
 
 /// Kind of a module-scope resource binding.
 enum class BindingKind : uint8_t {
-  UniformBuffer,          //!< `var<uniform>` with a struct type.
-  ReadOnlyStorageBuffer,  //!< `var<storage, read>` with a runtime array or struct type.
-  SampledTexture2dF32,    //!< `texture_2d<f32>`.
-  FilteringSampler,       //!< `sampler`.
+  UniformBuffer,              //!< `var<uniform>` with a struct type.
+  ReadOnlyStorageBuffer,      //!< `var<storage, read>` with a runtime array or struct type.
+  SampledTexture2dF32,        //!< `texture_2d<f32>`.
+  FilteringSampler,           //!< `sampler`.
+  WriteOnlyStorageTexture2d,  //!< `texture_storage_2d<format, write>`.
 };
 
 /// Ostream output operator, e.g. `uniform`. @param os Output stream. @param value Value to
@@ -46,13 +44,46 @@ enum class StageKind : uint8_t {
   None,      //!< Plain (non-entry-point) function.
   Vertex,    //!< Vertex entry point.
   Fragment,  //!< Fragment entry point.
+  Compute,   //!< Compute entry point; carries a workgroup size and returns nothing.
 };
+
+/// Ostream output operator, e.g. `compute`. @param os Output stream. @param value Value to
+/// output.
+std::ostream& operator<<(std::ostream& os, StageKind value);
 
 /// Builtin input values available to entry point parameters.
 enum class BuiltinInput : uint8_t {
-  InstanceIndex,  //!< `instance_index` (vertex stage, u32).
-  Position,       //!< Framebuffer position (fragment stage, vec4<f32>).
+  InstanceIndex,       //!< `instance_index` (vertex stage, u32).
+  Position,            //!< Framebuffer position (fragment stage, vec4<f32>).
+  GlobalInvocationId,  //!< `global_invocation_id` (compute stage, vec3<u32>).
 };
+
+/// Declared workgroup size of a compute entry point. Every dimension is at least 1, and the
+/// product bounds how many invocations one dispatched workgroup runs.
+struct WorkgroupSize {
+  uint32_t x = 1;  //!< Invocations along X.
+  uint32_t y = 1;  //!< Invocations along Y.
+  uint32_t z = 1;  //!< Invocations along Z.
+
+  /// Equality operator. @param other Size to compare against.
+  bool operator==(const WorkgroupSize& other) const = default;
+
+  /// Ostream output operator, e.g. `8x8x1`.
+  /// @param os Output stream. @param value Size to output.
+  friend std::ostream& operator<<(std::ostream& os, const WorkgroupSize& value) {
+    return os << value.x << "x" << value.y << "x" << value.z;
+  }
+};
+
+/// Maximum invocations one workgroup may declare (x * y * z). 256 is the strictest common cap
+/// across the native APIs this runtime targets.
+inline constexpr uint32_t kMaxComputeInvocationsPerWorkgroup = 256;
+
+/// Maximum invocations a workgroup may declare along X or Y.
+inline constexpr uint32_t kMaxComputeWorkgroupSizeXY = 256;
+
+/// Maximum invocations a workgroup may declare along Z.
+inline constexpr uint32_t kMaxComputeWorkgroupSizeZ = 64;
 
 /// Builtin output values available to entry point outputs.
 enum class BuiltinOutput : uint8_t {
@@ -71,7 +102,7 @@ struct IrBinding {
   uint32_t binding = 0;                           //!< Binding index within the group.
   RcString name;                                  //!< Binding variable name.
   BindingKind kind = BindingKind::UniformBuffer;  //!< Binding kind.
-  IrType type;  //!< Bound type (struct, runtime array, texture, or sampler).
+  IrType type;  //!< Bound type (struct, runtime array, texture, storage texture, or sampler).
 };
 
 /// One entry point parameter or plain function parameter.
@@ -100,8 +131,9 @@ struct IrFunction {
   IrBlock body;                           //!< Function body.
   bool usesFragmentOnlyBuiltins = false;  //!< True if the body (or any user function it calls)
                                           //!< calls an implicit-derivative builtin (fwidth,
-                                          //!< textureSample). Computed at finish(); vertex entry
-                                          //!< points with this flag are rejected.
+                                          //!< textureSample). Computed at finish(); vertex and
+                                          //!< compute entry points with this flag are rejected.
+  std::optional<WorkgroupSize> workgroupSize;  //!< Declared workgroup size (compute entry points).
 };
 
 /**
@@ -249,6 +281,15 @@ public:
   ShaderStatus discard();
 
   /**
+   * Records `textureStore(texture, coords, value);`.
+   *
+   * @param texture Reference to a write-only storage texture binding.
+   * @param coords Texel coordinates; `vec2<i32>` or `vec2<u32>`.
+   * @param value Texel value; `vec4<f32>`.
+   */
+  ShaderStatus textureStore(const IrExpr& texture, const IrExpr& coords, const IrExpr& value);
+
+  /**
    * Calls a previously finished module function.
    *
    * @param name Callee name.
@@ -292,6 +333,9 @@ private:
   ShaderStatus verifyExprInScope(const IrExpr& expr);
   /// True if any enclosing open block is a loop body.
   bool insideLoop() const;
+  /// Records whether the finished body reaches an implicit-derivative builtin and rejects the
+  /// stages that cannot use one.
+  ShaderStatus recordAndCheckFragmentOnlyBuiltins();
 
   ModuleBuilder* moduleBuilder_;
   IrFunction function_;
@@ -366,6 +410,18 @@ public:
   ShaderStatus addSampler(uint32_t group, uint32_t binding, const RcString& name);
 
   /**
+   * Adds a `texture_storage_2d<format, write>` binding. The texture can only be written, through
+   * \ref FunctionBuilder::textureStore, and queried with `textureDimensions`.
+   *
+   * @param group Bind group index.
+   * @param binding Binding index; (group, binding) must be unique.
+   * @param name Binding name; must be unique at module scope.
+   * @param format Texel format written through the texture.
+   */
+  ShaderStatus addWriteOnlyStorageTexture2d(uint32_t group, uint32_t binding, const RcString& name,
+                                            StorageTextureFormat format);
+
+  /**
    * Starts a plain function. Finish it with `FunctionBuilder::finish()` before starting the
    * next function.
    *
@@ -400,6 +456,19 @@ public:
   ShaderResult<FunctionBuilder> createFragmentEntryPoint(const RcString& name,
                                                          std::vector<IrParam> params,
                                                          std::vector<IrOutputMember> outputs);
+
+  /**
+   * Starts a compute entry point. Parameters must all carry a compute builtin (the stage has no
+   * located IO), the entry point produces no outputs, and \p workgroupSize must be nonzero in
+   * every dimension and within \ref kMaxComputeInvocationsPerWorkgroup.
+   *
+   * @param name Entry point name; must be unique at module scope.
+   * @param params Stage inputs; each must carry a compute builtin.
+   * @param workgroupSize Declared workgroup size.
+   */
+  ShaderResult<FunctionBuilder> createComputeEntryPoint(const RcString& name,
+                                                        std::vector<IrParam> params,
+                                                        const WorkgroupSize& workgroupSize);
 
   /// Finalizes and returns the module. Fails if any recorded error is pending.
   ShaderResult<IrModule> build();

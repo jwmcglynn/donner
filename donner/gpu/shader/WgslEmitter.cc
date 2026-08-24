@@ -55,6 +55,8 @@ constexpr std::string_view kReservedWords[] = {
     "struct",
     "switch",
     "texture_2d",
+    "texture_storage_2d",
+    "textureStore",
     "true",
     "u32",
     "uniform",
@@ -164,8 +166,19 @@ std::string TypeToWgsl(const IrType& type) {
     case IrType::Kind::Struct: return type.structName().str();
     case IrType::Kind::Texture2dF32: return "texture_2d<f32>";
     case IrType::Kind::Sampler: return "sampler";
+    case IrType::Kind::WriteOnlyStorageTexture2d: return type.toString();
   }
   return "f32";
+}
+
+/// WGSL `@builtin(...)` annotation, with a trailing space, for a stage input.
+std::string_view BuiltinInputAnnotation(BuiltinInput builtin) {
+  switch (builtin) {
+    case BuiltinInput::InstanceIndex: return "@builtin(instance_index) ";
+    case BuiltinInput::Position: return "@builtin(position) ";
+    case BuiltinInput::GlobalInvocationId: return "@builtin(global_invocation_id) ";
+  }
+  return "";
 }
 
 /// Emitter state: output text plus the first latched error.
@@ -200,6 +213,13 @@ private:
   std::string literalToWgsl(const IrExpr::Node& node);
   std::string exprToWgsl(const IrExpr& expr);
   void emitStatement(const IrStmt& statement, const IrFunction& function);
+  /// Emits `for (init; cond; continuing) { body }`.
+  /// @param data Statement payload. @param function Enclosing function.
+  void emitForStatement(const IrStmt::Data& data, const IrFunction& function);
+  /// Emits a plain-function return, an entry-point output-struct return, or a bare compute
+  /// return.
+  /// @param data Statement payload. @param function Enclosing function.
+  void emitReturnStatement(const IrStmt::Data& data, const IrFunction& function);
   void emitBlock(const IrBlock& block, const IrFunction& function);
 
   void collectStructs(const IrType& type, std::vector<IrType>& out);
@@ -209,6 +229,14 @@ private:
   void emitConstants();
   void emitBindings();
   void emitFunction(const IrFunction& function);
+  /// Emits the generated output struct of a vertex or fragment entry point, rejecting a user
+  /// struct that would collide with its generated name.
+  /// @param function Entry point being emitted.
+  void emitStageOutputStruct(const IrFunction& function);
+  /// Builds the comma-joined parameter list of a function signature, with entry-point IO
+  /// annotations.
+  /// @param function Function being emitted.
+  std::string buildParameterList(const IrFunction& function);
 
   /// Generated output-struct name for an entry point.
   static std::string OutputStructName(const IrFunction& function) {
@@ -364,53 +392,65 @@ void Emitter::emitStatement(const IrStmt& statement, const IrFunction& function)
       }
       line("}");
       return;
-    case IrStmt::Kind::For: {
-      std::string header = "for (";
-      if (data.init) {
-        const IrStmt::Data& init = data.init->data();
-        check(CheckIdentifier(init.name, "for init"));
-        header += std::format("var {}: {} = {}", init.name.str(), TypeToWgsl(*init.declaredType),
-                              exprToWgsl(init.exprs[0]));
-      }
-      header += "; ";
-      if (!data.exprs.empty()) {
-        header += exprToWgsl(data.exprs[0]);
-      }
-      header += "; ";
-      if (data.continuing) {
-        const IrStmt::Data& continuing = data.continuing->data();
-        header += std::format("{} = {}", exprToWgsl(continuing.exprs[0]),
-                              exprToWgsl(continuing.exprs[1]));
-      }
-      header += ") {";
-      line(std::move(header));
-      ++indent_;
-      emitBlock(data.body, function);
-      --indent_;
-      line("}");
-      return;
-    }
+    case IrStmt::Kind::For: emitForStatement(data, function); return;
     case IrStmt::Kind::Break: line("break;"); return;
     case IrStmt::Kind::Continue: line("continue;"); return;
-    case IrStmt::Kind::Return: {
-      if (function.stage != StageKind::None) {
-        std::string result = std::format("return {}(", OutputStructName(function));
-        for (size_t i = 0; i < data.exprs.size(); ++i) {
-          if (i > 0) {
-            result += ", ";
-          }
-          result += exprToWgsl(data.exprs[i]);
-        }
-        result += ");";
-        line(std::move(result));
-      } else if (!data.exprs.empty()) {
-        line(std::format("return {};", exprToWgsl(data.exprs[0])));
-      } else {
-        line("return;");
-      }
-      return;
-    }
+    case IrStmt::Kind::Return: emitReturnStatement(data, function); return;
     case IrStmt::Kind::Discard: line("discard;"); return;
+    case IrStmt::Kind::TextureStore:
+      line(std::format("textureStore({}, {}, {});", exprToWgsl(data.exprs[0]),
+                       exprToWgsl(data.exprs[1]), exprToWgsl(data.exprs[2])));
+      return;
+  }
+}
+
+void Emitter::emitForStatement(const IrStmt::Data& data, const IrFunction& function) {
+  std::string header = "for (";
+  if (data.init) {
+    const IrStmt::Data& init = data.init->data();
+    check(CheckIdentifier(init.name, "for init"));
+    header += std::format("var {}: {} = {}", init.name.str(), TypeToWgsl(*init.declaredType),
+                          exprToWgsl(init.exprs[0]));
+  }
+  header += "; ";
+  if (!data.exprs.empty()) {
+    header += exprToWgsl(data.exprs[0]);
+  }
+  header += "; ";
+  if (data.continuing) {
+    const IrStmt::Data& continuing = data.continuing->data();
+    header +=
+        std::format("{} = {}", exprToWgsl(continuing.exprs[0]), exprToWgsl(continuing.exprs[1]));
+  }
+  header += ") {";
+  line(std::move(header));
+  ++indent_;
+  emitBlock(data.body, function);
+  --indent_;
+  line("}");
+}
+
+void Emitter::emitReturnStatement(const IrStmt::Data& data, const IrFunction& function) {
+  if (function.stage == StageKind::Compute) {
+    line("return;");
+    return;
+  }
+  if (function.stage != StageKind::None) {
+    std::string result = std::format("return {}(", OutputStructName(function));
+    for (size_t i = 0; i < data.exprs.size(); ++i) {
+      if (i > 0) {
+        result += ", ";
+      }
+      result += exprToWgsl(data.exprs[i]);
+    }
+    result += ");";
+    line(std::move(result));
+    return;
+  }
+  if (!data.exprs.empty()) {
+    line(std::format("return {};", exprToWgsl(data.exprs[0])));
+  } else {
+    line("return;");
   }
 }
 
@@ -589,6 +629,9 @@ void Emitter::emitBindings() {
       case BindingKind::FilteringSampler:
         declaration = std::format("var {}: sampler;", binding.name.str());
         break;
+      case BindingKind::WriteOnlyStorageTexture2d:
+        declaration = std::format("var {}: {};", binding.name.str(), TypeToWgsl(binding.type));
+        break;
     }
     line(std::format("@group({}) @binding({}) {}", binding.group, binding.binding, declaration));
   }
@@ -597,59 +640,63 @@ void Emitter::emitBindings() {
   }
 }
 
+void Emitter::emitStageOutputStruct(const IrFunction& function) {
+  // The generated output struct name must not collide with a user struct. Detected here (not
+  // reserved at builder registration) so the target-neutral IR carries no emitter naming rules;
+  // the emitter fails closed instead of declaring two conflicting structs.
+  for (const RcString& userStruct : userStructNames_) {
+    if (std::string_view(userStruct) == OutputStructName(function)) {
+      latch(ShaderError{std::format("struct \"{}\" collides with the generated output struct name "
+                                    "for entry point {}",
+                                    userStruct.str(), std::string_view(function.name)),
+                        "wgsl"});
+    }
+  }
+
+  line(std::format("struct {} {{", OutputStructName(function)));
+  ++indent_;
+  for (const IrOutputMember& output : function.outputs) {
+    check(CheckIdentifier(output.name, "entry point output"));
+    const std::string annotation = output.builtin ? std::string("@builtin(position) ")
+                                                  : std::format("@location({}) ", *output.location);
+    line(std::format("{}{}: {},", annotation, output.name.str(), TypeToWgsl(output.type)));
+  }
+  --indent_;
+  line("}");
+  blank();
+}
+
+std::string Emitter::buildParameterList(const IrFunction& function) {
+  std::string parameters;
+  for (const IrParam& param : function.params) {
+    check(CheckIdentifier(param.name, "parameter"));
+    if (!parameters.empty()) {
+      parameters += ", ";
+    }
+    if (param.builtin) {
+      parameters += BuiltinInputAnnotation(*param.builtin);
+    } else if (param.location) {
+      parameters += std::format("@location({}) ", *param.location);
+    }
+    parameters += std::format("{}: {}", param.name.str(), TypeToWgsl(param.type));
+  }
+  return parameters;
+}
+
 void Emitter::emitFunction(const IrFunction& function) {
   check(CheckIdentifier(function.name, "function"));
 
-  if (function.stage != StageKind::None) {
-    // The generated output struct name must not collide with a user struct. Detected here (not
-    // reserved at builder registration) so the target-neutral IR carries no emitter naming
-    // rules; the emitter fails closed instead of declaring two conflicting structs.
-    for (const RcString& userStruct : userStructNames_) {
-      if (std::string_view(userStruct) == OutputStructName(function)) {
-        latch(ShaderError{
-            std::format("struct \"{}\" collides with the generated output struct name for "
-                        "entry point {}",
-                        userStruct.str(), std::string_view(function.name)),
-            "wgsl"});
-      }
-    }
-
-    // Generated output struct with annotated members.
-    line(std::format("struct {} {{", OutputStructName(function)));
-    ++indent_;
-    for (const IrOutputMember& output : function.outputs) {
-      check(CheckIdentifier(output.name, "entry point output"));
-      std::string annotation;
-      if (output.builtin) {
-        annotation = "@builtin(position) ";
-      } else {
-        annotation = std::format("@location({}) ", *output.location);
-      }
-      line(std::format("{}{}: {},", annotation, output.name.str(), TypeToWgsl(output.type)));
-    }
-    --indent_;
-    line("}");
-    blank();
+  if (function.stage == StageKind::Compute) {
+    const WorkgroupSize& size = *function.workgroupSize;
+    line(std::format("@compute @workgroup_size({}, {}, {})", size.x, size.y, size.z));
+  } else if (function.stage != StageKind::None) {
+    emitStageOutputStruct(function);
     line(function.stage == StageKind::Vertex ? "@vertex" : "@fragment");
   }
 
-  std::string signature = std::format("fn {}(", std::string_view(function.name));
-  for (size_t i = 0; i < function.params.size(); ++i) {
-    const IrParam& param = function.params[i];
-    check(CheckIdentifier(param.name, "parameter"));
-    if (i > 0) {
-      signature += ", ";
-    }
-    if (param.builtin) {
-      signature += *param.builtin == BuiltinInput::InstanceIndex ? "@builtin(instance_index) "
-                                                                 : "@builtin(position) ";
-    } else if (param.location) {
-      signature += std::format("@location({}) ", *param.location);
-    }
-    signature += std::format("{}: {}", param.name.str(), TypeToWgsl(param.type));
-  }
-  signature += ")";
-  if (function.stage != StageKind::None) {
+  std::string signature =
+      std::format("fn {}({})", std::string_view(function.name), buildParameterList(function));
+  if (function.stage == StageKind::Vertex || function.stage == StageKind::Fragment) {
     signature += std::format(" -> {}", OutputStructName(function));
   } else if (function.returnType) {
     signature += std::format(" -> {}", TypeToWgsl(*function.returnType));

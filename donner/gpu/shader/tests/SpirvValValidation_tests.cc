@@ -1,8 +1,7 @@
 /// @file
-/// Out-of-process SPIR-V validation: the emitted solid-fill module must pass
-/// `spirv-val --target-env vulkan1.1`. Per design 0053, platform validators are out-of-process
-/// verification tools, not build dependencies; the test skips cleanly when spirv-val is not
-/// installed.
+/// Out-of-process SPIR-V validation: every emitted module must pass
+/// `spirv-val --target-env vulkan1.1`. Platform validators run as external verification tools
+/// rather than build dependencies, so the test skips cleanly when spirv-val is not installed.
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
@@ -15,6 +14,7 @@
 #include <vector>
 
 #include "donner/gpu/shader/SpirvEmitter.h"
+#include "donner/gpu/shader/programs/ColorMatrix.h"
 #include "donner/gpu/shader/programs/SolidFill.h"
 #include "donner/gpu/shader/tests/ShaderTestUtils.h"
 
@@ -53,20 +53,19 @@ std::string FindSpirvVal() {
   return "";
 }
 
-TEST(SpirvValValidation, EmittedSolidFillPassesVulkan11Validation) {
-  const std::string spirvVal = FindSpirvVal();
-  if (spirvVal.empty()) {
-    GTEST_SKIP() << "spirv-val (SPIRV-Tools) is not installed";
-  }
-
-  ShaderResult<IrModule> module = programs::BuildSolidFillModule();
+/// Emits \p module, writes it under TEST_TMPDIR as \p fileName, and asserts spirv-val accepts it.
+/// @param spirvVal Path to the spirv-val executable.
+/// @param module Built IR module to emit and validate.
+/// @param fileName File name to write the emitted words to.
+void ExpectValidatesForVulkan11(const std::string& spirvVal, ShaderResult<IrModule>&& module,
+                                const std::string& fileName) {
   ASSERT_THAT(module, HasShaderResult());
   ShaderResult<std::vector<uint32_t>> spirv = EmitSpirv(module.result());
   ASSERT_FALSE(spirv.hasError()) << "EmitSpirv failed: " << spirv.error();
 
   const char* testTmpdir = std::getenv("TEST_TMPDIR");
   ASSERT_NE(testTmpdir, nullptr);
-  const std::string modulePath = std::string(testTmpdir) + "/solid_fill.spv";
+  const std::string modulePath = std::string(testTmpdir) + "/" + fileName;
   {
     std::ofstream out(modulePath, std::ios::binary | std::ios::trunc);
     ASSERT_TRUE(out.good()) << "Failed to write " << modulePath;
@@ -82,12 +81,29 @@ TEST(SpirvValValidation, EmittedSolidFillPassesVulkan11Validation) {
   const int validationStatus =
       RunCommand(spirvVal + " --target-env vulkan1.1 \"" + modulePath + "\"", &validationOutput);
 
-  EXPECT_EQ(validationStatus, 0) << "spirv-val rejected the emitted module:\n" << validationOutput;
+  EXPECT_EQ(validationStatus, 0) << "spirv-val rejected " << fileName << ":\n" << validationOutput;
   EXPECT_THAT(validationOutput, Not(HasSubstr("error"))) << validationOutput;
   if (!validationOutput.empty()) {
     // Surface warnings in the test log even when validation succeeds.
-    std::fprintf(stderr, "spirv-val output:\n%s\n", validationOutput.c_str());
+    std::fprintf(stderr, "spirv-val output for %s:\n%s\n", fileName.c_str(),
+                 validationOutput.c_str());
   }
+}
+
+TEST(SpirvValValidation, EmittedSolidFillPassesVulkan11Validation) {
+  const std::string spirvVal = FindSpirvVal();
+  if (spirvVal.empty()) {
+    GTEST_SKIP() << "spirv-val (SPIRV-Tools) is not installed";
+  }
+  ExpectValidatesForVulkan11(spirvVal, programs::BuildSolidFillModule(), "solid_fill.spv");
+}
+
+TEST(SpirvValValidation, EmittedColorMatrixComputePassesVulkan11Validation) {
+  const std::string spirvVal = FindSpirvVal();
+  if (spirvVal.empty()) {
+    GTEST_SKIP() << "spirv-val (SPIRV-Tools) is not installed";
+  }
+  ExpectValidatesForVulkan11(spirvVal, programs::BuildColorMatrixModule(), "color_matrix.spv");
 }
 
 }  // namespace

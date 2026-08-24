@@ -1,7 +1,7 @@
 /// @file
-/// Out-of-process MSL validation: the emitted solid-fill MSL must compile cleanly with the
-/// platform Metal compiler (`xcrun -sdk macosx metal`). Per design 0053, platform compilers are
-/// out-of-process verification tools, not build dependencies.
+/// Out-of-process MSL validation: every emitted MSL module must compile cleanly with the platform
+/// Metal compiler (`xcrun -sdk macosx metal`). Platform compilers run as external verification
+/// tools rather than build dependencies.
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
@@ -13,6 +13,7 @@
 #include <string>
 
 #include "donner/gpu/shader/MslEmitter.h"
+#include "donner/gpu/shader/programs/ColorMatrix.h"
 #include "donner/gpu/shader/programs/SolidFill.h"
 #include "donner/gpu/shader/tests/ShaderTestUtils.h"
 
@@ -37,44 +38,55 @@ int RunCommand(const std::string& command, std::string* output) {
   return pclose(pipe);
 }
 
-TEST(MslXcrunValidation, EmittedSolidFillCompilesWithMetalCompiler) {
-  // Locate the Metal compiler; skip with a clear reason when the toolchain is unavailable.
+/// Probes for a usable offline Metal compiler, returning a skip reason when one is unavailable.
+/// Recent Xcode versions ship it as a downloadable component, so `xcrun --find metal` can succeed
+/// while the tool itself is absent; the probe compiles a trivial kernel to detect that case.
+std::string FindMetalCompilerSkipReason() {
   // Note: recent Xcode versions ship the offline Metal compiler as a downloadable component
   // (xcodebuild -downloadComponent MetalToolchain); `xcrun --find metal` can succeed while the
   // tool itself is absent, so probe-compile a trivial kernel to detect that case.
   std::string findOutput;
-  const int findStatus = RunCommand("xcrun -sdk macosx --find metal", &findOutput);
-  if (findStatus != 0) {
-    GTEST_SKIP() << "xcrun / Metal compiler unavailable: " << findOutput;
-  }
-  {
-    const char* probeTmpdir = std::getenv("TEST_TMPDIR");
-    ASSERT_NE(probeTmpdir, nullptr);
-    const std::string probePath = std::string(probeTmpdir) + "/probe.metal";
-    std::ofstream probe(probePath, std::ios::binary | std::ios::trunc);
-    ASSERT_TRUE(probe.good());
-    probe << "kernel void donnerProbe() {}\n";
-    probe.close();
-    std::string probeOutput;
-    const int probeStatus = RunCommand("xcrun -sdk macosx metal -std=metal3.0 -c \"" + probePath +
-                                           "\" -o \"" + probePath + ".air\"",
-                                       &probeOutput);
-    if (probeStatus != 0 || probeOutput.find("missing Metal Toolchain") != std::string::npos) {
-      GTEST_SKIP() << "Offline Metal compiler unavailable (the runtime Metal framework "
-                      "compiler used by the vertical slice test is unaffected): "
-                   << probeOutput;
-    }
+  if (RunCommand("xcrun -sdk macosx --find metal", &findOutput) != 0) {
+    return "xcrun / Metal compiler unavailable: " + findOutput;
   }
 
-  ShaderResult<IrModule> module = programs::BuildSolidFillModule();
+  const char* probeTmpdir = std::getenv("TEST_TMPDIR");
+  if (probeTmpdir == nullptr) {
+    return "TEST_TMPDIR is unset";
+  }
+  const std::string probePath = std::string(probeTmpdir) + "/probe.metal";
+  {
+    std::ofstream probe(probePath, std::ios::binary | std::ios::trunc);
+    if (!probe.good()) {
+      return "Failed to write " + probePath;
+    }
+    probe << "kernel void donnerProbe() {}\n";
+  }
+  std::string probeOutput;
+  const int probeStatus = RunCommand(
+      "xcrun -sdk macosx metal -std=metal3.0 -c \"" + probePath + "\" -o \"" + probePath + ".air\"",
+      &probeOutput);
+  if (probeStatus != 0 || probeOutput.find("missing Metal Toolchain") != std::string::npos) {
+    return "Offline Metal compiler unavailable (the runtime Metal framework compiler used by the "
+           "vertical slice tests is unaffected): " +
+           probeOutput;
+  }
+  return "";
+}
+
+/// Emits \p module as MSL, writes it under TEST_TMPDIR as `<name>.metal`, and asserts the Metal
+/// compiler accepts it.
+/// @param module Built IR module to emit and compile.
+/// @param name Base file name for the emitted source and its object output.
+void ExpectCompilesWithMetalCompiler(ShaderResult<IrModule>&& module, const std::string& name) {
   ASSERT_THAT(module, HasShaderResult());
   ShaderResult<std::string> msl = EmitMsl(module.result());
   ASSERT_FALSE(msl.hasError()) << "EmitMsl failed: " << msl.error();
 
   const char* testTmpdir = std::getenv("TEST_TMPDIR");
   ASSERT_NE(testTmpdir, nullptr);
-  const std::string sourcePath = std::string(testTmpdir) + "/solid_fill.metal";
-  const std::string outputPath = std::string(testTmpdir) + "/solid_fill.air";
+  const std::string sourcePath = std::string(testTmpdir) + "/" + name + ".metal";
+  const std::string outputPath = std::string(testTmpdir) + "/" + name + ".air";
   {
     std::ofstream out(sourcePath, std::ios::binary | std::ios::trunc);
     ASSERT_TRUE(out.good()) << "Failed to write " << sourcePath;
@@ -86,12 +98,30 @@ TEST(MslXcrunValidation, EmittedSolidFillCompilesWithMetalCompiler) {
       "xcrun -sdk macosx metal -std=metal3.0 -c \"" + sourcePath + "\" -o \"" + outputPath + "\"",
       &compileOutput);
 
-  EXPECT_EQ(compileStatus, 0) << "Metal compiler rejected the emitted MSL:\n" << compileOutput;
+  EXPECT_EQ(compileStatus, 0) << "Metal compiler rejected the emitted MSL for " << name << ":\n"
+                              << compileOutput;
   EXPECT_THAT(compileOutput, Not(HasSubstr("error:"))) << compileOutput;
   if (!compileOutput.empty()) {
     // Surface warnings in the test log even when compilation succeeds.
-    std::fprintf(stderr, "metal compiler output:\n%s\n", compileOutput.c_str());
+    std::fprintf(stderr, "metal compiler output for %s:\n%s\n", name.c_str(),
+                 compileOutput.c_str());
   }
+}
+
+TEST(MslXcrunValidation, EmittedSolidFillCompilesWithMetalCompiler) {
+  const std::string skipReason = FindMetalCompilerSkipReason();
+  if (!skipReason.empty()) {
+    GTEST_SKIP() << skipReason;
+  }
+  ExpectCompilesWithMetalCompiler(programs::BuildSolidFillModule(), "solid_fill");
+}
+
+TEST(MslXcrunValidation, EmittedColorMatrixComputeCompilesWithMetalCompiler) {
+  const std::string skipReason = FindMetalCompilerSkipReason();
+  if (!skipReason.empty()) {
+    GTEST_SKIP() << skipReason;
+  }
+  ExpectCompilesWithMetalCompiler(programs::BuildColorMatrixModule(), "color_matrix");
 }
 
 }  // namespace
