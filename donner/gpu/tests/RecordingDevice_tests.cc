@@ -306,6 +306,37 @@ TEST(RecordingDeviceTests, SpirvShaderModuleSerializationIsDeterministic) {
   EXPECT_THAT(first.serialize(), Eq(second.serialize()));
 }
 
+TEST(RecordingDeviceTests, DestinationOverBlendStateRoundTrips) {
+  RecordingDevice device;
+  const BindGroupLayout bindGroupLayout =
+      GetResultOrFail(device.createBindGroupLayout(BindGroupLayoutDescriptor{
+          "underlayBindings",
+          {BindGroupLayoutEntry{0, ShaderStage::Vertex | ShaderStage::Fragment,
+                                BindingType::UniformBuffer}}}));
+  const PipelineLayout pipelineLayout = GetResultOrFail(
+      device.createPipelineLayout(PipelineLayoutDescriptor{"underlayLayout", {bindGroupLayout}}));
+  const ShaderModule shader = GetResultOrFail(device.createShaderModule(ShaderModuleDescriptor{
+      "underlay", "@vertex fn vsMain() {}\n@fragment fn fsMain() {}", ShaderSourceKind::Wgsl}));
+
+  // `result = dst + src * (1 - dst.alpha)`: the destination-over term a background pass needs to
+  // land underneath premultiplied content already in the attachment.
+  const BlendComponent destinationOver{BlendFactor::OneMinusDstAlpha, BlendFactor::One,
+                                       BlendOperation::Add};
+  const RenderPipeline pipeline =
+      GetResultOrFail(device.createRenderPipeline(RenderPipelineDescriptor{
+          "underlay", pipelineLayout, VertexState{shader, "vsMain", {}},
+          FragmentState{shader,
+                        "fsMain",
+                        {ColorTargetState{TextureFormat::RGBA8Unorm,
+                                          BlendState{destinationOver, destinationOver}}}},
+          PrimitiveTopology::TriangleList, CullMode::None}));
+  EXPECT_TRUE(pipeline.isValid());
+
+  EXPECT_THAT(device.serialize(),
+              HasSubstr("blend={color={srcFactor=OneMinusDstAlpha dstFactor=One operation=Add} "
+                        "alpha={srcFactor=OneMinusDstAlpha dstFactor=One operation=Add}}"));
+}
+
 TEST(RecordingDeviceTests, SerializationContainsNoPointers) {
   RecordingDevice device;
   RecordRepresentativeStream(device);

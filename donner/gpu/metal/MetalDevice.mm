@@ -119,6 +119,7 @@ MTLBlendFactor ToMtlBlendFactor(BlendFactor factor) {
     case BlendFactor::One: return MTLBlendFactorOne;
     case BlendFactor::SrcAlpha: return MTLBlendFactorSourceAlpha;
     case BlendFactor::OneMinusSrcAlpha: return MTLBlendFactorOneMinusSourceAlpha;
+    case BlendFactor::OneMinusDstAlpha: return MTLBlendFactorOneMinusDestinationAlpha;
   }
   UTILS_RELEASE_ASSERT_MSG(false, "validated BlendFactor out of range");
   return MTLBlendFactorZero;

@@ -179,6 +179,7 @@ enum class BlendFactor : uint8_t {
   One,               //!< Factor 1.
   SrcAlpha,          //!< Factor (source alpha).
   OneMinusSrcAlpha,  //!< Factor (1 - source alpha).
+  OneMinusDstAlpha,  //!< Factor (1 - destination alpha); destination-over compositing.
 };
 
 /// Blend operations used by Donner pipelines.
