@@ -114,10 +114,8 @@ private:
  * error. Obtain encoders via `Device::createCommandEncoder`; the encoder must not outlive its
  * device.
  *
- * Known gap: destroying a resource that a recorded-but-unsubmitted command buffer references is
- * not yet validated; commands are checked at recording time only. Deferred-destruction
- * validation arrives with the resource-lifetime and submission packet (design 0053 change
- * sequence step 3).
+ * Commands record full (slot, generation) resource identities, and `Device::submit` re-validates
+ * every one, so destroying a resource between recording and submission fails closed at submit.
  */
 class CommandEncoder {
 public:
@@ -171,8 +169,8 @@ private:
 
   /// Draw-time validation state for the active pipeline.
   struct BoundPipeline {
-    std::vector<VertexBufferLayout> vertexBuffers;             //!< Declared vertex layouts.
-    std::vector<Device::ResourceIdentity> bindGroupLayoutIds;  //!< Required group layouts.
+    std::vector<VertexBufferLayout> vertexBuffers;     //!< Declared vertex layouts.
+    std::vector<ResourceIdentity> bindGroupLayoutIds;  //!< Required group layouts.
   };
   /// Draw-time validation state for one bound vertex buffer slot.
   struct BoundVertexBuffer {
@@ -181,8 +179,8 @@ private:
   };
   /// Draw-time validation state for one bound bind group index.
   struct BoundBindGroup {
-    uint32_t bindGroupSlot = 0;               //!< Bind group slot index.
-    Device::ResourceIdentity layoutIdentity;  //!< Layout the group was created against.
+    uint32_t bindGroupSlot = 0;       //!< Bind group slot index.
+    ResourceIdentity layoutIdentity;  //!< Layout the group was created against.
   };
 
   /// Latches \p error (first error wins, poisoning the encoder) and returns the latched error.
@@ -192,6 +190,11 @@ private:
   /// Returns the poisoned/finished-state error common to all operations, if any.
   /// @param requireActivePass True for render pass operations.
   std::optional<GpuError> checkRecordable(bool requireActivePass);
+
+  /// Re-resolves the resource one bind group entry references, failing closed when it was
+  /// destroyed after the group was created.
+  /// @param entry Entry to re-resolve.
+  Status revalidateBindGroupEntry(const BindGroupEntry& entry);
 
   // RenderPassEncoder forwards to these.
   Status passSetPipeline(const RenderPipeline& pipeline);

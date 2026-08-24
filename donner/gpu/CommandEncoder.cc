@@ -94,7 +94,7 @@ Result<RenderPassEncoder*> CommandEncoder::beginRenderPass(const RenderPassDescr
   Extent2d passExtent;
   std::vector<TextureFormat> attachmentFormats;
   attachmentFormats.reserve(descriptor.colorAttachments.size());
-  std::vector<Device::ResourceIdentity> seenViews;
+  std::vector<ResourceIdentity> seenViews;
   seenViews.reserve(descriptor.colorAttachments.size());
   for (size_t i = 0; i < descriptor.colorAttachments.size(); ++i) {
     const RenderPassColorAttachment& attachment = descriptor.colorAttachments[i];
@@ -104,9 +104,8 @@ Result<RenderPassEncoder*> CommandEncoder::beginRenderPass(const RenderPassDescr
       return fail(std::move(viewRecord).error()).error();
     }
 
-    const Device::ResourceIdentity viewIdentity{attachment.view.slotIndex(),
-                                                attachment.view.generation()};
-    for (const Device::ResourceIdentity& seenView : seenViews) {
+    const ResourceIdentity viewIdentity{attachment.view.slotIndex(), attachment.view.generation()};
+    for (const ResourceIdentity& seenView : seenViews) {
       if (seenView == viewIdentity) {
         return fail(Err(GpuErrorType::InvalidDescriptor,
                         std::format("beginRenderPass: attachment {} view \"{}\" appears in "
@@ -210,7 +209,8 @@ Status CommandEncoder::passSetPipeline(const RenderPipeline& pipeline) {
 
   currentPipeline_ = BoundPipeline{record.result()->descriptor.vertex.buffers,
                                    record.result()->bindGroupLayoutIds};
-  commands_.push_back(SetPipelineCommand{pipeline.slotIndex()});
+  commands_.push_back(
+      SetPipelineCommand{ResourceIdentity{pipeline.slotIndex(), pipeline.generation()}});
   return OkStatus();
 }
 
@@ -228,39 +228,57 @@ Status CommandEncoder::passSetBindGroup(uint32_t index, const BindGroup& bindGro
     return fail(std::move(record).error());
   }
 
-  // Re-resolve every resource the group references: a buffer, texture view (and its texture),
-  // or sampler destroyed after createBindGroup - including slot reuse - must fail closed here
-  // instead of reaching a backend.
+  // Re-resolve everything the group references: the layout it was created against (backends
+  // read it at encode time) plus every entry buffer, texture view (and its texture), and
+  // sampler. A dependency destroyed after createBindGroup - including slot reuse - must fail
+  // closed here instead of reaching a backend.
+  const Device::BindGroupLayoutRecord* layoutRecord = device_->bindGroupLayouts_.find(
+      record.result()->layoutIdentity.slotIndex, record.result()->layoutIdentity.generation);
+  if (layoutRecord == nullptr) {
+    return fail(Err(GpuErrorType::InvalidHandle,
+                    std::format("setBindGroup: bind group \"{}\" is stale; the layout it was "
+                                "created against was destroyed (layout slot {})",
+                                record.result()->descriptor.label.str(),
+                                record.result()->layoutIdentity.slotIndex)));
+  }
   for (const BindGroupEntry& entry : record.result()->descriptor.entries) {
-    if (const BufferBinding* bufferBinding = std::get_if<BufferBinding>(&entry.resource)) {
-      auto bufferRecord =
-          device_->resolve(device_->buffers_, bufferBinding->buffer, BufferTag::kName);
-      if (bufferRecord.hasError()) {
-        return fail(std::move(bufferRecord).error());
-      }
-    } else if (const TextureViewBinding* viewBinding =
-                   std::get_if<TextureViewBinding>(&entry.resource)) {
-      auto viewRecord =
-          device_->resolve(device_->textureViews_, viewBinding->view, TextureViewTag::kName);
-      if (viewRecord.hasError()) {
-        return fail(std::move(viewRecord).error());
-      }
-      auto viewedTexture = device_->resolveViewedTexture(*viewRecord.result());
-      if (viewedTexture.hasError()) {
-        return fail(std::move(viewedTexture).error());
-      }
-    } else if (const SamplerBinding* samplerBinding =
-                   std::get_if<SamplerBinding>(&entry.resource)) {
-      auto samplerRecord =
-          device_->resolve(device_->samplers_, samplerBinding->sampler, SamplerTag::kName);
-      if (samplerRecord.hasError()) {
-        return fail(std::move(samplerRecord).error());
-      }
+    const Status entryStatus = revalidateBindGroupEntry(entry);
+    if (entryStatus.hasError()) {
+      return entryStatus;
     }
   }
 
   boundBindGroups_[index] = BoundBindGroup{bindGroup.slotIndex(), record.result()->layoutIdentity};
-  commands_.push_back(SetBindGroupCommand{index, bindGroup.slotIndex()});
+  commands_.push_back(
+      SetBindGroupCommand{index, ResourceIdentity{bindGroup.slotIndex(), bindGroup.generation()}});
+  return OkStatus();
+}
+
+Status CommandEncoder::revalidateBindGroupEntry(const BindGroupEntry& entry) {
+  if (const BufferBinding* bufferBinding = std::get_if<BufferBinding>(&entry.resource)) {
+    auto bufferRecord =
+        device_->resolve(device_->buffers_, bufferBinding->buffer, BufferTag::kName);
+    if (bufferRecord.hasError()) {
+      return fail(std::move(bufferRecord).error());
+    }
+  } else if (const TextureViewBinding* viewBinding =
+                 std::get_if<TextureViewBinding>(&entry.resource)) {
+    auto viewRecord =
+        device_->resolve(device_->textureViews_, viewBinding->view, TextureViewTag::kName);
+    if (viewRecord.hasError()) {
+      return fail(std::move(viewRecord).error());
+    }
+    auto viewedTexture = device_->resolveViewedTexture(*viewRecord.result());
+    if (viewedTexture.hasError()) {
+      return fail(std::move(viewedTexture).error());
+    }
+  } else if (const SamplerBinding* samplerBinding = std::get_if<SamplerBinding>(&entry.resource)) {
+    auto samplerRecord =
+        device_->resolve(device_->samplers_, samplerBinding->sampler, SamplerTag::kName);
+    if (samplerRecord.hasError()) {
+      return fail(std::move(samplerRecord).error());
+    }
+  }
   return OkStatus();
 }
 
@@ -292,7 +310,8 @@ Status CommandEncoder::passSetVertexBuffer(uint32_t slot, const Buffer& buffer,
 
   boundVertexBuffers_[slot] =
       BoundVertexBuffer{buffer.slotIndex(), record.result()->descriptor.byteSize - offsetBytes};
-  commands_.push_back(SetVertexBufferCommand{slot, buffer.slotIndex(), offsetBytes});
+  commands_.push_back(SetVertexBufferCommand{
+      slot, ResourceIdentity{buffer.slotIndex(), buffer.generation()}, offsetBytes});
   return OkStatus();
 }
 
@@ -451,7 +470,9 @@ Status CommandEncoder::copyTextureToBuffer(const TexelCopyTextureInfo& source,
   }
 
   commands_.push_back(CopyTextureToBufferCommand{
-      source.texture.slotIndex(), destination.slotIndex(), destinationLayout, copySize});
+      ResourceIdentity{source.texture.slotIndex(), source.texture.generation()},
+      ResourceIdentity{destination.slotIndex(), destination.generation()}, destinationLayout,
+      copySize});
   return OkStatus();
 }
 
