@@ -80,6 +80,21 @@ RendererGeodeTextureSnapshot::RendererGeodeTextureSnapshot(
   texture_ = ownedTexture_.get();
 }
 
+RendererGeodeTextureSnapshot RendererGeodeTextureSnapshot::AdoptRuntimeTexture(
+    std::shared_ptr<geode::GeodeDevice> device, gpu::Texture texture, Vector2i dimensions,
+    wgpu::TextureFormat format, AlphaType alphaType) {
+  // The runtime handle is what owns the texture here. The backend alias beside it is only what
+  // the readback path still names it by; it borrows, and holding it does not extend the
+  // texture's life beyond the handle's.
+  wgpu::Texture backendAlias =
+      device ? device->adapterDevice().wgpuTextureOf(texture) : wgpu::Texture();
+  RendererGeodeTextureSnapshot result(std::move(device), wgpu::Texture(), dimensions, format,
+                                      alphaType);
+  result.ownedGpuTexture_ = std::move(texture);
+  result.texture_ = std::move(backendAlias);
+  return result;
+}
+
 RendererGeodeTextureSnapshot::~RendererGeodeTextureSnapshot() {
   destroyOwnedBacking();
 }
@@ -92,6 +107,7 @@ RendererGeodeTextureSnapshot& RendererGeodeTextureSnapshot::operator=(
 
   destroyOwnedBacking();
   device_ = std::move(other.device_);
+  ownedGpuTexture_ = std::move(other.ownedGpuTexture_);
   ownedTexture_ = std::move(other.ownedTexture_);
   texture_ = std::exchange(other.texture_, wgpu::Texture());
   textureView_ = std::move(other.textureView_);
@@ -106,6 +122,9 @@ void RendererGeodeTextureSnapshot::destroyOwnedBacking() noexcept {
   if (ownedTexture_) {
     ownedTexture_.destroyBackingAndReset();
   }
+  // A runtime-owned texture is released by dropping its handle: the slot it names is what holds
+  // the backend object, so there is nothing further to destroy by hand.
+  ownedGpuTexture_ = gpu::Texture();
   texture_ = wgpu::Texture();
 }
 
