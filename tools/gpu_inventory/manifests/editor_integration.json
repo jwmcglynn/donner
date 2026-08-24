@@ -259,7 +259,12 @@
         "wgpuUnderlayRenderCallback_"
       ],
       "wgpuCppTokens": [
-        "Texture"
+        "Adapter",
+        "Instance",
+        "Surface",
+        "Texture",
+        "TextureFormat",
+        "TextureUsage"
       ]
     },
     "donner/editor/tests/EditorRnrGlReplay.cc": {
@@ -288,7 +293,16 @@
       ],
       "usesEditorWgpuDefine": true,
       "wgpuCTypes": [
+        "WGPUTexture",
         "WGPUTextureView"
+      ],
+      "wgpuCppTokens": [
+        "Adapter",
+        "Instance",
+        "Surface",
+        "Texture",
+        "TextureFormat",
+        "TextureUsage"
       ]
     },
     "donner/editor/tests/FrameMissTelemetry_tests.cc": {

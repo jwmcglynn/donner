@@ -558,6 +558,220 @@ TEST(EditorWindowTest, SurfaceStatusesKeepTheirBrowserRetryBuckets) {
                 internal::WgpuSurfaceFailureKindFor(gpu::SurfaceStatus::DeviceLost), 0u),
             (internal::WgpuSurfaceRetryDecision{}));
 }
+
+/// A texture handle that is never dereferenced. The frame-acquisition orchestration only checks
+/// whether a frame came back and passes the handle along, so a distinct non-null value is all a
+/// scripted surface needs to stand in for one.
+wgpu::Texture FakeFrameTexture() {
+  static int storage = 0;
+  return wgpu::Texture(reinterpret_cast<WGPUTexture>(&storage));
+}
+
+/// What the orchestration did to a scripted surface.
+struct SurfaceCalls {
+  int acquires = 0;            //!< Frames asked for.
+  int abandons = 0;            //!< Frames handed back without being shown.
+  int configures = 0;          //!< Configurations applied or refused.
+  int shutdowns = 0;           //!< Times the surface was given up.
+  Vector2i lastConfigureSize;  //!< Extent of the most recent configuration.
+
+  bool operator==(const SurfaceCalls&) const = default;
+};
+
+std::ostream& operator<<(std::ostream& os, const SurfaceCalls& calls) {
+  return os << "{acquires=" << calls.acquires << ", abandons=" << calls.abandons
+            << ", configures=" << calls.configures << ", shutdowns=" << calls.shutdowns
+            << ", lastConfigureSize=" << calls.lastConfigureSize << "}";
+}
+
+/// Hands back the statuses its script names, so the frame loop's recovery can be driven without a
+/// window or a device behind it.
+class ScriptedSurface final : public internal::PresentationSurface {
+public:
+  /// @param script Statuses to report, in order; the last one repeats once the script runs out.
+  /// @param calls Record of what the orchestration did; outlives this surface.
+  ScriptedSurface(std::vector<gpu::SurfaceStatus> script, SurfaceCalls* calls)
+      : script_(std::move(script)), calls_(calls) {}
+
+  /// Makes every configuration refuse, standing in for a window the surface cannot follow.
+  void refuseConfiguration() { configureSucceeds_ = false; }
+
+  bool attachToWindow(const wgpu::Instance&, GLFWwindow*) override { return true; }
+  wgpu::Surface adapterSelectionSurface() const override { return {}; }
+  bool chooseConfiguration(const wgpu::Adapter&, bool) override { return true; }
+  bool attachToDevice(geode::GeodeDevice&) override { return true; }
+
+  bool configure(int width, int height) override {
+    ++calls_->configures;
+    calls_->lastConfigureSize = Vector2i(width, height);
+    return configureSucceeds_;
+  }
+
+  internal::AcquiredFrame acquire() override {
+    ++calls_->acquires;
+    const gpu::SurfaceStatus status =
+        nextStatus_ < script_.size() ? script_[nextStatus_] : script_.back();
+    ++nextStatus_;
+    // A surface that has drifted out of date still hands back a usable frame; the statuses that
+    // report no frame at all hand back nothing.
+    const bool carriesFrame =
+        status == gpu::SurfaceStatus::Success || status == gpu::SurfaceStatus::Outdated;
+    return internal::AcquiredFrame{carriesFrame ? FakeFrameTexture() : wgpu::Texture(), status};
+  }
+
+  void present() override {}
+  void abandon() override { ++calls_->abandons; }
+  void shutdown() override { ++calls_->shutdowns; }
+  wgpu::TextureFormat format() const override { return wgpu::TextureFormat::BGRA8Unorm; }
+  wgpu::TextureUsage usage() const override { return wgpu::TextureUsage::RenderAttachment; }
+  bool premultipliedAlpha() const override { return false; }
+
+private:
+  std::vector<gpu::SurfaceStatus> script_;
+  SurfaceCalls* calls_;
+  std::size_t nextStatus_ = 0;
+  bool configureSucceeds_ = true;
+};
+
+/// Framebuffer the orchestration is asked to present to.
+const Vector2i kFrameSizePx(1280, 720);
+
+/// A scripted surface reporting \p statuses, as the orchestration takes it.
+/// @param statuses Statuses to report, in order. @param calls Record to fill in.
+std::unique_ptr<internal::PresentationSurface> ScriptedSurfaceReporting(
+    std::vector<gpu::SurfaceStatus> statuses, SurfaceCalls* calls) {
+  return std::make_unique<ScriptedSurface>(std::move(statuses), calls);
+}
+
+TEST(EditorWindowTest, AnOutdatedFrameFollowsTheWindowAndIsRetriedOnce) {
+  SurfaceCalls calls;
+  std::unique_ptr<internal::PresentationSurface> surface =
+      ScriptedSurfaceReporting({gpu::SurfaceStatus::Outdated, gpu::SurfaceStatus::Success}, &calls);
+  Vector2i configuredPx(640, 480);
+
+  const internal::PresentationFrameOutcome outcome =
+      internal::AcquirePresentationFrame(surface, kFrameSizePx, configuredPx, nullptr);
+
+  EXPECT_TRUE(static_cast<bool>(outcome.texture))
+      << "following the window produced a frame instead of costing one";
+  EXPECT_EQ(outcome.status, gpu::SurfaceStatus::Success);
+  EXPECT_FALSE(outcome.released);
+  EXPECT_EQ(configuredPx, kFrameSizePx);
+  EXPECT_EQ(calls, (SurfaceCalls{.acquires = 2,
+                                 .abandons = 1,
+                                 .configures = 1,
+                                 .shutdowns = 0,
+                                 .lastConfigureSize = kFrameSizePx}));
+}
+
+TEST(EditorWindowTest, AnOutdatedFrameIsDroppedWhenTheWindowCannotBeFollowed) {
+  SurfaceCalls calls;
+  auto scripted = std::make_unique<ScriptedSurface>(
+      std::vector<gpu::SurfaceStatus>{gpu::SurfaceStatus::Outdated}, &calls);
+  scripted->refuseConfiguration();
+  std::unique_ptr<internal::PresentationSurface> surface = std::move(scripted);
+  Vector2i configuredPx(640, 480);
+
+  const internal::PresentationFrameOutcome outcome =
+      internal::AcquirePresentationFrame(surface, kFrameSizePx, configuredPx, nullptr);
+
+  EXPECT_FALSE(static_cast<bool>(outcome.texture));
+  EXPECT_EQ(outcome.status, gpu::SurfaceStatus::Outdated);
+  EXPECT_FALSE(outcome.released) << "the surface is still usable; only this frame was dropped";
+  EXPECT_NE(surface, nullptr);
+  EXPECT_EQ(configuredPx, Vector2i::Zero())
+      << "the recorded extent is cleared so the next frame configures again";
+  EXPECT_EQ(calls.acquires, 1) << "a refused configuration is not acquired against";
+}
+
+TEST(EditorWindowTest, ALostSurfaceIsRebuiltOnceAndKeepsRendering) {
+  SurfaceCalls lostCalls;
+  SurfaceCalls rebuiltCalls;
+  std::unique_ptr<internal::PresentationSurface> surface =
+      ScriptedSurfaceReporting({gpu::SurfaceStatus::Lost}, &lostCalls);
+  Vector2i configuredPx(640, 480);
+  int rebuilds = 0;
+
+  const internal::PresentationFrameOutcome outcome =
+      internal::AcquirePresentationFrame(surface, kFrameSizePx, configuredPx, [&] {
+        ++rebuilds;
+        return ScriptedSurfaceReporting({gpu::SurfaceStatus::Success}, &rebuiltCalls);
+      });
+
+  EXPECT_EQ(rebuilds, 1);
+  EXPECT_TRUE(static_cast<bool>(outcome.texture));
+  EXPECT_EQ(outcome.status, gpu::SurfaceStatus::Success);
+  EXPECT_FALSE(outcome.released) << "a rebuilt surface keeps the window presenting";
+  EXPECT_NE(surface, nullptr);
+  EXPECT_EQ(configuredPx, kFrameSizePx);
+  EXPECT_EQ(lostCalls.shutdowns, 1) << "the lost surface is given up once its replacement exists";
+  EXPECT_EQ(rebuiltCalls.acquires, 1);
+}
+
+TEST(EditorWindowTest, ALostSurfaceThatCannotBeRebuiltIsGivenUp) {
+  SurfaceCalls calls;
+  std::unique_ptr<internal::PresentationSurface> surface =
+      ScriptedSurfaceReporting({gpu::SurfaceStatus::Lost}, &calls);
+  Vector2i configuredPx(640, 480);
+  int rebuilds = 0;
+
+  const internal::PresentationFrameOutcome outcome = internal::AcquirePresentationFrame(
+      surface, kFrameSizePx, configuredPx, [&]() -> std::unique_ptr<internal::PresentationSurface> {
+        ++rebuilds;
+        return nullptr;
+      });
+
+  EXPECT_EQ(rebuilds, 1) << "rebuilding is attempted once, not repeatedly";
+  EXPECT_FALSE(static_cast<bool>(outcome.texture));
+  EXPECT_EQ(outcome.status, gpu::SurfaceStatus::Lost);
+  EXPECT_TRUE(outcome.released);
+  EXPECT_FALSE(outcome.markDeviceLost) << "the device is fine; only the surface was lost";
+  EXPECT_EQ(surface, nullptr);
+  EXPECT_EQ(configuredPx, Vector2i::Zero());
+  EXPECT_EQ(calls.shutdowns, 1);
+}
+
+TEST(EditorWindowTest, ASecondLostAfterRebuildingGivesTheSurfaceUp) {
+  SurfaceCalls lostCalls;
+  SurfaceCalls rebuiltCalls;
+  std::unique_ptr<internal::PresentationSurface> surface =
+      ScriptedSurfaceReporting({gpu::SurfaceStatus::Lost}, &lostCalls);
+  Vector2i configuredPx(640, 480);
+  int rebuilds = 0;
+
+  const internal::PresentationFrameOutcome outcome =
+      internal::AcquirePresentationFrame(surface, kFrameSizePx, configuredPx, [&] {
+        ++rebuilds;
+        return ScriptedSurfaceReporting({gpu::SurfaceStatus::Lost}, &rebuiltCalls);
+      });
+
+  EXPECT_EQ(rebuilds, 1) << "the replacement is not itself replaced; the loss has settled";
+  EXPECT_TRUE(outcome.released);
+  EXPECT_EQ(outcome.status, gpu::SurfaceStatus::Lost);
+  EXPECT_EQ(surface, nullptr);
+  EXPECT_EQ(rebuiltCalls.shutdowns, 1);
+}
+
+TEST(EditorWindowTest, ALostDeviceIsTerminalAndIsReportedToTheRenderers) {
+  SurfaceCalls calls;
+  std::unique_ptr<internal::PresentationSurface> surface =
+      ScriptedSurfaceReporting({gpu::SurfaceStatus::DeviceLost}, &calls);
+  Vector2i configuredPx(640, 480);
+  int rebuilds = 0;
+
+  const internal::PresentationFrameOutcome outcome =
+      internal::AcquirePresentationFrame(surface, kFrameSizePx, configuredPx, [&] {
+        ++rebuilds;
+        return ScriptedSurfaceReporting({gpu::SurfaceStatus::Success}, &calls);
+      });
+
+  EXPECT_EQ(rebuilds, 0) << "a fresh surface does not bring back a lost device";
+  EXPECT_FALSE(static_cast<bool>(outcome.texture));
+  EXPECT_TRUE(outcome.released);
+  EXPECT_TRUE(outcome.markDeviceLost);
+  EXPECT_EQ(surface, nullptr);
+  EXPECT_EQ(configuredPx, Vector2i::Zero());
+}
 #endif
 
 TEST(EditorWindowTest, WasmSurfaceFailuresUseStatusAwareBoundedRetries) {
