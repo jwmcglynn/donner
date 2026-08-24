@@ -1465,6 +1465,28 @@ Result<std::vector<uint8_t>> VulkanDevice::readBackBuffer(const Buffer& buffer) 
   return std::vector<uint8_t>(contents, contents + record->byteSize);
 }
 
+Result<VulkanDevice::TrackedTextureLayout> VulkanDevice::trackedTextureLayoutForTest(
+    const Texture& texture) const {
+  if (Status status = validateTextureHandleForBackend(texture); status.hasError()) {
+    return std::move(status).error();
+  }
+  const Impl::TextureRecord* record = FindRecord(impl_->textures, texture.slotIndex());
+  if (record == nullptr) {
+    return GpuError{GpuErrorType::InvalidHandle,
+                    std::format("texture handle (slot {}) does not name a live Vulkan image",
+                                texture.slotIndex())};
+  }
+  switch (record->currentLayout) {
+    case VK_IMAGE_LAYOUT_UNDEFINED: return TrackedTextureLayout::Undefined;
+    case VK_IMAGE_LAYOUT_GENERAL: return TrackedTextureLayout::General;
+    case VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL: return TrackedTextureLayout::ShaderReadOnly;
+    case VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL: return TrackedTextureLayout::TransferSrc;
+    case VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL: return TrackedTextureLayout::TransferDst;
+    case VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL: return TrackedTextureLayout::ColorAttachment;
+    default: return TrackedTextureLayout::Other;
+  }
+}
+
 std::string VulkanDevice::lastErrorForTest() const {
   return impl_->errorState->firstMessage();
 }

@@ -48,6 +48,41 @@ std::span<const uint8_t> AsBytes(const T& value) {
   return std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(&value), sizeof(T));
 }
 
+/// Shorthand for the backend's tracked-layout enum.
+using TrackedLayout = VulkanDevice::TrackedTextureLayout;
+
+/// The program's four-entry bind group layout: sampled input, write-only rgba8unorm storage
+/// output, uniform matrix rows, and a read-only storage bias buffer.
+std::vector<BindGroupLayoutEntry> ColorMatrixLayoutEntries() {
+  return {
+      {BindingIndex(ColorMatrixBinding::InputTexture), ShaderStage::Compute,
+       BindingType::SampledTexture2dFloat},
+      {BindingIndex(ColorMatrixBinding::OutputTexture), ShaderStage::Compute,
+       BindingType::WriteOnlyStorageTexture2d, TextureFormat::RGBA8Unorm},
+      {BindingIndex(ColorMatrixBinding::Params), ShaderStage::Compute, BindingType::UniformBuffer},
+      {BindingIndex(ColorMatrixBinding::Bias), ShaderStage::Compute,
+       BindingType::ReadOnlyStorageBuffer}};
+}
+
+/// Entries binding one set of resources to \ref ColorMatrixLayoutEntries.
+/// @param inputView Sampled source view. @param outputView Storage destination view.
+/// @param paramsBuffer Uniform matrix rows. @param biasBuffer Storage bias vectors.
+/// @param biasBytes Byte size of \p biasBuffer.
+std::vector<BindGroupEntry> ColorMatrixBindGroupEntries(const TextureView& inputView,
+                                                        const TextureView& outputView,
+                                                        const Buffer& paramsBuffer,
+                                                        const Buffer& biasBuffer,
+                                                        uint64_t biasBytes) {
+  return {
+      BindGroupEntry{BindingIndex(ColorMatrixBinding::InputTexture), TextureViewBinding{inputView}},
+      BindGroupEntry{BindingIndex(ColorMatrixBinding::OutputTexture),
+                     TextureViewBinding{outputView}},
+      BindGroupEntry{BindingIndex(ColorMatrixBinding::Params),
+                     BufferBinding{paramsBuffer, 0, sizeof(ColorMatrixParams)}},
+      BindGroupEntry{BindingIndex(ColorMatrixBinding::Bias),
+                     BufferBinding{biasBuffer, 0, biasBytes}}};
+}
+
 class VulkanColorMatrixTest : public testing::Test {
 protected:
   void SetUp() override {
@@ -76,6 +111,110 @@ protected:
   std::unique_ptr<VulkanDevice> device_;
 };
 
+/// A compute pass must transition every texture it binds into the layout that pass's descriptors
+/// declare, exactly as a render pass does. The destination texture here is created and then
+/// touched by nothing else before the dispatch, so its layout is whatever the compute pass
+/// itself established: if the pass records no transition it stays UNDEFINED while the descriptor
+/// declares GENERAL, which is invalid use.
+///
+/// The assertion reads the backend's tracked layout rather than pixels because a permissive
+/// driver executes the invalid case anyway and produces the right texels, and because the
+/// Khronos validation layer, which reports this class directly, is not present on every host
+/// that runs this test. The backend enables that layer automatically wherever the loader
+/// enumerates it.
+TEST_F(VulkanColorMatrixTest, ComputePassTransitionsAFreshStorageTextureToGeneral) {
+  shader::ShaderResult<shader::IrModule> irModule = shader::programs::BuildColorMatrixModule();
+  ASSERT_FALSE(irModule.hasError()) << irModule.error();
+  shader::ShaderResult<std::vector<uint32_t>> spirv = shader::EmitSpirv(irModule.result());
+  ASSERT_FALSE(spirv.hasError()) << spirv.error();
+
+  ShaderModule shaderModule =
+      unwrap(device_->createShaderModule(ShaderModuleDescriptor{
+                 "colorMatrix", "", ShaderSourceKind::Spirv, std::move(spirv).result()}),
+             "createShaderModule");
+  BindGroupLayout bindGroupLayout = unwrap(device_->createBindGroupLayout(BindGroupLayoutDescriptor{
+                                               "colorMatrixBGL", ColorMatrixLayoutEntries()}),
+                                           "createBindGroupLayout");
+  PipelineLayout pipelineLayout = unwrap(
+      device_->createPipelineLayout(PipelineLayoutDescriptor{"colorMatrixPL", {bindGroupLayout}}),
+      "createPipelineLayout");
+  ComputePipeline pipeline =
+      unwrap(device_->createComputePipeline(ComputePipelineDescriptor{
+                 "colorMatrix", pipelineLayout, ComputeState{shaderModule, "cs_main"},
+                 WorkgroupSize{kColorMatrixWorkgroupSize, kColorMatrixWorkgroupSize, 1}}),
+             "createComputePipeline");
+
+  const Extent2d extent{kColorMatrixWidth, kColorMatrixHeight};
+  Texture input = unwrap(
+      device_->createTexture(TextureDescriptor{"input", extent, TextureFormat::RGBA8Unorm,
+                                               TextureUsage::Sampled | TextureUsage::CopyDst}),
+      "createTexture input");
+  TextureView inputView = unwrap(
+      device_->createTextureView(input, TextureViewDescriptor{"inputView"}), "createTextureView");
+
+  // Deliberately untouched by any upload, copy, or earlier pass, so the compute pass is the only
+  // thing that can have established its layout.
+  Texture output = unwrap(device_->createTexture(TextureDescriptor{
+                              "freshOutput", extent, TextureFormat::RGBA8Unorm,
+                              TextureUsage::StorageBinding | TextureUsage::CopySrc}),
+                          "createTexture output");
+  TextureView outputView =
+      unwrap(device_->createTextureView(output, TextureViewDescriptor{"freshOutputView"}),
+             "createTextureView output");
+
+  Result<TrackedLayout> beforeLayout = device_->trackedTextureLayoutForTest(output);
+  ASSERT_FALSE(beforeLayout.hasError()) << beforeLayout.error();
+  ASSERT_EQ(beforeLayout.result(), TrackedLayout::Undefined)
+      << "the destination must start untransitioned for this test to mean anything";
+
+  const ColorMatrixParams uniforms = ColorMatrixUniforms();
+  Buffer paramsBuffer =
+      unwrap(device_->createBuffer(BufferDescriptor{"params", sizeof(ColorMatrixParams),
+                                                    BufferUsage::Uniform | BufferUsage::CopyDst}),
+             "createBuffer params");
+  ASSERT_FALSE(device_->writeBuffer(paramsBuffer, 0, AsBytes(uniforms)).hasError());
+  const std::array<float, 8> bias = ColorMatrixBias();
+  Buffer biasBuffer =
+      unwrap(device_->createBuffer(BufferDescriptor{"bias", sizeof(bias),
+                                                    BufferUsage::Storage | BufferUsage::CopyDst}),
+             "createBuffer bias");
+  ASSERT_FALSE(device_->writeBuffer(biasBuffer, 0, AsBytes(bias)).hasError());
+
+  BindGroup bindGroup = unwrap(device_->createBindGroup(BindGroupDescriptor{
+                                   "colorMatrixGroup", bindGroupLayout,
+                                   ColorMatrixBindGroupEntries(inputView, outputView, paramsBuffer,
+                                                               biasBuffer, sizeof(bias))}),
+                               "createBindGroup");
+
+  std::unique_ptr<CommandEncoder> encoder =
+      unwrap(device_->createCommandEncoder(), "createCommandEncoder");
+  Result<ComputePassEncoder*> passResult =
+      encoder->beginComputePass(ComputePassDescriptor{"freshOutputPass"});
+  ASSERT_FALSE(passResult.hasError()) << passResult.error();
+  ComputePassEncoder* pass = passResult.result();
+  ASSERT_FALSE(pass->setPipeline(pipeline).hasError());
+  ASSERT_FALSE(pass->setBindGroup(0, bindGroup).hasError());
+  ASSERT_FALSE(pass->dispatchWorkgroups(
+                       ColorMatrixWorkgroupCount(kColorMatrixWidth, kColorMatrixWorkgroupSize),
+                       ColorMatrixWorkgroupCount(kColorMatrixHeight, kColorMatrixWorkgroupSize), 1)
+                   .hasError());
+  ASSERT_FALSE(pass->end().hasError());
+
+  Result<CommandBuffer> commands = encoder->finish();
+  ASSERT_FALSE(commands.hasError()) << commands.error();
+  Result<uint64_t> serial = device_->submit(std::move(commands).result());
+  ASSERT_FALSE(serial.hasError()) << serial.error();
+  ASSERT_TRUE(device_->waitForSerial(serial.result(), /*timeoutSeconds=*/60.0))
+      << "Command buffer did not complete cleanly: " << device_->lastErrorForTest();
+  EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
+
+  Result<TrackedLayout> afterLayout = device_->trackedTextureLayoutForTest(output);
+  ASSERT_FALSE(afterLayout.hasError()) << afterLayout.error();
+  EXPECT_EQ(afterLayout.result(), TrackedLayout::General)
+      << "the compute pass bound this texture through a storage-texture descriptor, which "
+         "declares GENERAL, so the pass must have transitioned it there";
+}
+
 TEST_F(VulkanColorMatrixTest, DispatchMatchesTheHostComputedResult) {
   shader::ShaderResult<shader::IrModule> irModule = shader::programs::BuildColorMatrixModule();
   ASSERT_FALSE(irModule.hasError()) << irModule.error();
@@ -87,17 +226,9 @@ TEST_F(VulkanColorMatrixTest, DispatchMatchesTheHostComputedResult) {
                  "colorMatrix", "", ShaderSourceKind::Spirv, std::move(spirv).result()}),
              "createShaderModule");
 
-  const std::vector<BindGroupLayoutEntry> layoutEntries = {
-      {BindingIndex(ColorMatrixBinding::InputTexture), ShaderStage::Compute,
-       BindingType::SampledTexture2dFloat},
-      {BindingIndex(ColorMatrixBinding::OutputTexture), ShaderStage::Compute,
-       BindingType::WriteOnlyStorageTexture2d, TextureFormat::RGBA8Unorm},
-      {BindingIndex(ColorMatrixBinding::Params), ShaderStage::Compute, BindingType::UniformBuffer},
-      {BindingIndex(ColorMatrixBinding::Bias), ShaderStage::Compute,
-       BindingType::ReadOnlyStorageBuffer}};
-  BindGroupLayout bindGroupLayout = unwrap(
-      device_->createBindGroupLayout(BindGroupLayoutDescriptor{"colorMatrixBGL", layoutEntries}),
-      "createBindGroupLayout");
+  BindGroupLayout bindGroupLayout = unwrap(device_->createBindGroupLayout(BindGroupLayoutDescriptor{
+                                               "colorMatrixBGL", ColorMatrixLayoutEntries()}),
+                                           "createBindGroupLayout");
   PipelineLayout pipelineLayout = unwrap(
       device_->createPipelineLayout(PipelineLayoutDescriptor{"colorMatrixPL", {bindGroupLayout}}),
       "createPipelineLayout");
@@ -157,19 +288,11 @@ TEST_F(VulkanColorMatrixTest, DispatchMatchesTheHostComputedResult) {
                                BufferUsage::CopyDst | BufferUsage::MapRead}),
                            "createBuffer readback");
 
-  BindGroup bindGroup =
-      unwrap(device_->createBindGroup(BindGroupDescriptor{
-                 "colorMatrixGroup",
-                 bindGroupLayout,
-                 {BindGroupEntry{BindingIndex(ColorMatrixBinding::InputTexture),
-                                 TextureViewBinding{inputView}},
-                  BindGroupEntry{BindingIndex(ColorMatrixBinding::OutputTexture),
-                                 TextureViewBinding{outputView}},
-                  BindGroupEntry{BindingIndex(ColorMatrixBinding::Params),
-                                 BufferBinding{paramsBuffer, 0, sizeof(ColorMatrixParams)}},
-                  BindGroupEntry{BindingIndex(ColorMatrixBinding::Bias),
-                                 BufferBinding{biasBuffer, 0, sizeof(bias)}}}}),
-             "createBindGroup");
+  BindGroup bindGroup = unwrap(device_->createBindGroup(BindGroupDescriptor{
+                                   "colorMatrixGroup", bindGroupLayout,
+                                   ColorMatrixBindGroupEntries(inputView, outputView, paramsBuffer,
+                                                               biasBuffer, sizeof(bias))}),
+                               "createBindGroup");
 
   // ----- Dispatch and read back -----
   std::unique_ptr<CommandEncoder> encoder =
