@@ -651,10 +651,14 @@
       "wgpuCFunctions": [
         "wgpuAdapterGetInfo",
         "wgpuAdapterInfoFreeMembers",
+        "wgpuBufferOf",
         "wgpuCreateInstance",
         "wgpuForceFallbackAdapterRequested",
         "wgpuInstanceRequestAdapter",
-        "wgpuLabel"
+        "wgpuLabel",
+        "wgpuSamplerOf",
+        "wgpuTextureOf",
+        "wgpuTextureViewOf"
       ],
       "wgpuCTypes": [
         "WGPUAdapterInfo",
@@ -693,7 +697,6 @@
       ],
       "wgpuCppTokens": [
         "Adapter",
-        "AddressMode",
         "BackendType",
         "BindGroup",
         "Buffer",
@@ -703,9 +706,7 @@
         "Default",
         "Device",
         "DeviceDescriptor",
-        "Extent3D",
         "FeatureName",
-        "FilterMode",
         "Instance",
         "InstanceDescriptor",
         "InstanceExtras",
@@ -713,11 +714,8 @@
         "Queue",
         "RequestAdapterOptions",
         "Sampler",
-        "SamplerDescriptor",
         "Status",
         "StringView",
-        "TexelCopyBufferLayout",
-        "TexelCopyTextureInfo",
         "Texture",
         "TextureDescriptor",
         "TextureDimension",
@@ -1003,6 +1001,7 @@
       ],
       "wgpuCFunctions": [
         "wgpuBindGroupLayoutOf",
+        "wgpuBufferOf",
         "wgpuLabel",
         "wgpuRenderPipelineOf",
         "wgpuSamplerOf",
@@ -1080,6 +1079,7 @@
     "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h": {
       "wgpuCFunctions": [
         "wgpuBindGroupLayoutOf",
+        "wgpuBufferOf",
         "wgpuRenderPipelineOf",
         "wgpuSamplerOf",
         "wgpuTextureOf",

@@ -124,6 +124,15 @@ public:
   void notifyHostSubmitted();
 
   /**
+   * TEMPORARY escape hatch, deleted once every Geode bind group is built through the runtime:
+   * returns the wgpu buffer behind \p buffer, or a null handle if the handle does not name a
+   * live buffer of this adapter. Borrowed; the adapter retains ownership.
+   *
+   * @param buffer Live buffer handle of this adapter.
+   */
+  wgpu::Buffer wgpuBufferOf(const gpu::Buffer& buffer) const;
+
+  /**
    * TEMPORARY escape hatch (deleted in packet 11, readback/presentation): returns the wgpu
    * texture behind \p texture, or a null handle if the handle does not name a live texture of
    * this adapter. Borrowed; the adapter (or the external owner) retains ownership.

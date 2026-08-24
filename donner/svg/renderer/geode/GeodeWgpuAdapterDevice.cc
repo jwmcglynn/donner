@@ -297,6 +297,13 @@ gpu::Result<gpu::Texture> GeodeWgpuAdapterDevice::importExternalTexture(wgpu::Te
   return result;
 }
 
+wgpu::Buffer GeodeWgpuAdapterDevice::wgpuBufferOf(const gpu::Buffer& buffer) const {
+  if (!buffer.isValid() || buffer.deviceId() != deviceId()) {
+    return wgpu::Buffer();
+  }
+  return GetHandle(slotBuffers_, buffer.slotIndex());
+}
+
 wgpu::Texture GeodeWgpuAdapterDevice::wgpuTextureOf(const gpu::Texture& texture) const {
   // Full base-class validation (null, device identity, AND generation), so a stale or forged
   // handle cannot bridge the slot's new occupant to raw wgpu.

@@ -12,7 +12,9 @@
 #include <vector>
 #include <webgpu/webgpu.hpp>
 
+#include "donner/base/Utils.h"
 #include "donner/svg/renderer/geode/GeodeCounters.h"
+#include "donner/svg/renderer/geode/GeodeGpuContext.h"
 #include "donner/svg/renderer/geode/GeodeGpuWait.h"
 #include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
 
@@ -750,7 +752,12 @@ public:
   /// The TEMPORARY design-0053 Phase 1 adapter implementing \c donner::gpu::Device over this
   /// device's wgpu objects. Owned here alongside the shared pipelines (which are created
   /// through it); see GeodeWgpuAdapterDevice.h for the removal gates.
-  GeodeWgpuAdapterDevice& adapterDevice() const;
+  GeodeWgpuAdapterDevice& adapterDevice() const UTILS_LIFETIME_BOUND;
+
+  /// The recording context Geode's encoders record a frame against: this device's GPU runtime
+  /// device, its shared bind-slot resources, and its counter sinks. Wired once with the shared
+  /// pipelines and owned here, so it lives exactly as long as this device does.
+  const GeodeGpuContext& gpuContext() const UTILS_LIFETIME_BOUND;
 
 private:
   GeodeDevice();
@@ -759,6 +766,10 @@ private:
   /// `queue_`, and `textureFormat_` are finalised. Called from both
   /// `CreateHeadless` and `CreateFromExternal`.
   void initSharedResources();
+  /// Creates the shared bind-slot resources through the GPU runtime and wires \ref gpuContext.
+  /// Runs with the shared pipelines, once the adapter exists.
+  void initSharedBindSlotResources();
+
   void initSharedPipelines();
 
   // Order matters: queue/device/adapter/instance destroy bottom-up.
