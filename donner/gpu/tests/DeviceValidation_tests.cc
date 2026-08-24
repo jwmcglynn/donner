@@ -950,6 +950,20 @@ TEST_F(SurfaceTests, AcquiringTwiceWithoutResolvingTheFirstIsReported) {
   EXPECT_THAT(device_.acquireCurrentTexture(surface), IsGpuError(GpuErrorType::InvalidState));
 }
 
+TEST_F(SurfaceTests, DisposingTheAcquiredTextureLeavesNoFrameOutstanding) {
+  const Surface surface = metalSurface();
+  ASSERT_THAT(device_.configureSurface(surface, configuration()), IsOk());
+  {
+    SurfaceTexture frame = GetResultOrFail(device_.acquireCurrentTexture(surface));
+    ASSERT_TRUE(frame.texture.isValid());
+    // Dropping the handle destroys the texture through the device, which is how every other
+    // resource of this runtime is disposed of.
+  }
+
+  EXPECT_THAT(device_.acquireCurrentTexture(surface), IsOk())
+      << "A surface whose acquired texture is already gone has no frame left to resolve";
+}
+
 TEST_F(SurfaceTests, PresentingInvalidatesTheAcquiredTexture) {
   const Surface surface = metalSurface();
   ASSERT_THAT(device_.configureSurface(surface, configuration()), IsOk());
