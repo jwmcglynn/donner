@@ -80,4 +80,28 @@ donner_multi_transitioned_test(
     renderer_backend = "geode",
 )
 
+# The Vulkan compute vertical slice: dispatches the color-matrix kernel
+# emitted from the shader IR and compares the destination texels against the
+# host result. Unlike the solid-fill slice this half needs no wgpu comparison,
+# so it is a plain Linux-gated test with no geode transition. A missing driver
+# is a red test wherever DONNER_REQUIRE_VULKAN=1 is set.
+donner_cc_test(
+    name = "vulkan_color_matrix_tests",
+    srcs = ["VulkanColorMatrix_tests.cc"],
+    env = {
+        "DONNER_REQUIRE_VULKAN": "1",
+        "VK_ICD_FILENAMES": "/usr/share/vulkan/icd.d/lvp_icd.json",
+        "XDG_RUNTIME_DIR": "/tmp",
+    },
+    target_compatible_with = ["@platforms//os:linux"],
+    deps = [
+        "//donner/gpu",
+        "//donner/gpu:color_matrix_slice",
+        "//donner/gpu/shader",
+        "//donner/gpu/shader:programs",
+        "//donner/gpu/vulkan:vulkan_device",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
 donner_package()

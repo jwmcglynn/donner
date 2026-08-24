@@ -92,6 +92,7 @@ struct VulkanApi {
   PFN_vkCreateFramebuffer vkCreateFramebuffer = nullptr;
   PFN_vkDestroyFramebuffer vkDestroyFramebuffer = nullptr;
   PFN_vkCreateGraphicsPipelines vkCreateGraphicsPipelines = nullptr;
+  PFN_vkCreateComputePipelines vkCreateComputePipelines = nullptr;
   PFN_vkDestroyPipeline vkDestroyPipeline = nullptr;
   PFN_vkCreateCommandPool vkCreateCommandPool = nullptr;
   PFN_vkDestroyCommandPool vkDestroyCommandPool = nullptr;
@@ -111,6 +112,7 @@ struct VulkanApi {
   PFN_vkCmdSetViewport vkCmdSetViewport = nullptr;
   PFN_vkCmdSetScissor vkCmdSetScissor = nullptr;
   PFN_vkCmdDraw vkCmdDraw = nullptr;
+  PFN_vkCmdDispatch vkCmdDispatch = nullptr;
   PFN_vkCmdPipelineBarrier vkCmdPipelineBarrier = nullptr;
   PFN_vkCmdCopyBufferToImage vkCmdCopyBufferToImage = nullptr;
   PFN_vkCmdCopyImageToBuffer vkCmdCopyImageToBuffer = nullptr;
