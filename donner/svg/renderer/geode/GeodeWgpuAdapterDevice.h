@@ -2,14 +2,14 @@
 /// @file
 /// \c donner::geode::GeodeWgpuAdapterDevice - the wgpu-backed \c donner::gpu::Device adapter.
 ///
-/// TEMPORARY design-0053 Phase 1 adapter. Removal gates: deleted per-platform at the Metal
-/// cutover (change-seq 12), Linux/Windows Vulkan cutover (15), browser-bridge cutover (17); each
-/// escape hatch is deleted with the packet that migrates its last caller (filters 10,
-/// readback/presentation 11, ImGui 18, pipeline hatches 8b).
+/// TEMPORARY transition adapter. It is deleted per-platform as each native backend takes over
+/// production rendering, and each escape hatch below is deleted with the change that migrates its
+/// last caller.
 
 #include <atomic>
 #include <cstdint>
 #include <memory>
+#include <string_view>
 #include <vector>
 #include <webgpu/webgpu.hpp>
 
@@ -22,7 +22,7 @@ class GeodeDevice;
 
 /**
  * Implements \c donner::gpu::Device on top of the wgpu device a \ref GeodeDevice already owns,
- * so Geode subsystems can migrate onto the Donner GPU runtime one packet at a time while the
+ * so Geode subsystems can migrate onto the Donner GPU runtime one at a time while the
  * process still renders through wgpu underneath.
  *
  * Every `on*` hook receives input the base class already validated fail-closed, and translates
@@ -56,7 +56,7 @@ public:
   ///
   /// \warning The base class's `Device::poll()` does NOT drive wgpu polling - it only processes
   /// deferred destructions against the serial this method reports. Per-frame destroy+poll churn
-  /// therefore defers unboundedly until something waits: packet 8b's frame loop must call
+  /// therefore defers unboundedly until something waits: a frame loop must call
   /// \ref waitForSerial on its frame cadence (or extend the adapter with a non-blocking wgpu
   /// poll) so completions are observed and deferred destroys drain.
   uint64_t completedSerial() const override;
@@ -76,7 +76,7 @@ public:
   bool waitForSerial(uint64_t serial, double timeoutSeconds);
 
   /**
-   * TEMPORARY escape hatch (deleted in packet 11, readback/presentation): registers an
+   * TEMPORARY escape hatch (deleted with the readback and presentation migration): registers an
    * externally owned wgpu texture - e.g. a render target created by the host or an earlier
    * non-migrated subsystem - as a \c donner::gpu::Texture of this adapter so migrated code can
    * reference it in render passes and copies. The adapter does NOT take ownership; destroying
@@ -98,9 +98,9 @@ public:
    * whole frame in recording order, including the spans a caller records directly into the same
    * encoder around the replayed ones.
    *
-   * Temporary bridge: it exists because the frame encoder also carries compute passes that the
-   * GPU runtime does not model, so those spans cannot be replayed through it. It is removed once
-   * every subsystem sharing the frame encoder records through the runtime.
+   * Temporary bridge: it exists because a frame encoder is shared with subsystems that have not
+   * migrated onto the runtime yet, so their spans cannot be replayed through it. It is removed
+   * once every subsystem sharing the frame encoder records through the runtime.
    *
    * The caller owns \p encoder, must keep it alive until it is replaced or cleared, and must
    * call \ref notifyHostSubmitted after each queue submit of a command buffer finished from it.
@@ -124,8 +124,8 @@ public:
   void notifyHostSubmitted();
 
   /**
-   * TEMPORARY escape hatch (deleted in packet 11, readback/presentation): returns the wgpu
-   * texture behind \p texture, or a null handle if the handle does not name a live texture of
+   * TEMPORARY escape hatch (deleted with the readback and presentation migration): returns the
+   * wgpu texture behind \p texture, or a null handle if the handle does not name a live texture of
    * this adapter. Borrowed; the adapter (or the external owner) retains ownership.
    *
    * @param texture Live texture handle of this adapter.
@@ -133,8 +133,8 @@ public:
   wgpu::Texture wgpuTextureOf(const gpu::Texture& texture) const;
 
   /**
-   * TEMPORARY escape hatch (deleted in packet 11, readback/presentation): returns the wgpu
-   * texture view behind \p textureView, or a null handle if unknown. Borrowed.
+   * TEMPORARY escape hatch (deleted with the readback and presentation migration): returns the
+   * wgpu texture view behind \p textureView, or a null handle if unknown. Borrowed.
    *
    * @param textureView Live texture view handle of this adapter.
    */
@@ -188,7 +188,8 @@ private:
     ScopedWgpuHandle<wgpu::CommandEncoder> ownedEncoder;
     /// Encoder actually recorded into: \ref ownedEncoder, or the borrowed host encoder.
     wgpu::CommandEncoder encoder;
-    ScopedWgpuHandle<wgpu::RenderPassEncoder> pass;  //!< Active render pass, or empty.
+    ScopedWgpuHandle<wgpu::RenderPassEncoder> pass;          //!< Active render pass, or empty.
+    ScopedWgpuHandle<wgpu::ComputePassEncoder> computePass;  //!< Active compute pass, or empty.
   };
 
   /// Opens a render pass with the recorded color attachments.
@@ -226,6 +227,24 @@ private:
   /// Ends the active render pass.
   /// @param state Encoding state.
   gpu::Status encodeEndRenderPass(EncodingState& state);
+  /// Opens a compute pass.
+  /// @param state Encoding state.
+  /// @param beginPass Recorded command.
+  gpu::Status encodeBeginComputePass(EncodingState& state,
+                                     const gpu::BeginComputePassCommand& beginPass);
+  /// Binds a recorded compute pipeline.
+  /// @param state Encoding state.
+  /// @param setPipeline Recorded command.
+  gpu::Status encodeSetComputePipeline(EncodingState& state,
+                                       const gpu::SetComputePipelineCommand& setPipeline);
+  /// Issues a dispatch.
+  /// @param state Encoding state.
+  /// @param dispatch Recorded command.
+  gpu::Status encodeDispatchWorkgroups(EncodingState& state,
+                                       const gpu::DispatchWorkgroupsCommand& dispatch);
+  /// Ends the active compute pass.
+  /// @param state Encoding state.
+  gpu::Status encodeEndComputePass(EncodingState& state);
   /// Records a texture-to-buffer copy.
   /// @param state Encoding state.
   /// @param copy Recorded command.
@@ -240,6 +259,16 @@ private:
   /// @param state Encoding state.
   /// @param command Recorded command.
   gpu::Status encodeCommand(EncodingState& state, const gpu::Command& command);
+
+  /// Clears the slot of one non-pipeline resource kind, or returns false when the name is not
+  /// one of them.
+  /// @param resourceName Resource type name. @param slotIndex Slot to clear.
+  bool clearResourceSlot(std::string_view resourceName, uint32_t slotIndex);
+
+  /// Clears the slot of one pipeline-family resource kind, or returns false when the name is not
+  /// one of them.
+  /// @param resourceName Resource type name. @param slotIndex Slot to clear.
+  bool clearPipelineSlot(std::string_view resourceName, uint32_t slotIndex);
 
   /// Attaches the queue work-done callback that advances \ref completedSerial to \p serial.
   /// @param serial Submission serial the callback completes.
@@ -262,6 +291,7 @@ private:
   std::vector<ScopedWgpuHandle<wgpu::PipelineLayout>> slotPipelineLayouts_;
   std::vector<ScopedWgpuHandle<wgpu::ShaderModule>> slotShaderModules_;
   std::vector<ScopedWgpuHandle<wgpu::RenderPipeline>> slotRenderPipelines_;
+  std::vector<ScopedWgpuHandle<wgpu::ComputePipeline>> slotComputePipelines_;
 
   std::shared_ptr<CompletionState> completionState_ = std::make_shared<CompletionState>();
 
