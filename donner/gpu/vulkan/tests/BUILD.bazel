@@ -1,11 +1,11 @@
 load("//build_defs:rules.bzl", "donner_cc_test", "donner_multi_transitioned_test")
 load("//build_defs:package.bzl", "donner_package")
 
-# The Vulkan solid-fill vertical slice (design 0053 packet 7): renders the
-# shared baseline scene through donner::gpu + the emitted SPIR-V and compares
-# it against an in-process render of the identical scene through the production
-# wgpu path (the frozen-baseline pattern executed per-device, valid on software
-# Vulkan and physical GPUs alike). Opaque texels must match exactly; partially
+# The Vulkan solid-fill vertical slice renders the shared baseline scene
+# through donner::gpu + the emitted SPIR-V and compares it against an
+# in-process render of the identical scene through the production wgpu path
+# (the frozen-baseline pattern executed per-device, valid on software Vulkan
+# and physical GPUs alike). Opaque texels must match exactly; partially
 # covered ones may differ by one least-significant bit, which is the two
 # pipelines quantizing float results to 8-bit unorm independently.
 #
@@ -59,6 +59,15 @@ donner_cc_test(
 
 # Transition wrapper: flips renderer_backend=geode + enable_geode=true so this
 # target is reachable from `bazel test //...` without --config=geode.
+#
+# Deliberately carries no executor-routing properties. The impl target pins the
+# software Vulkan implementation, so this test renders the same result on
+# whatever executor a lane provides and gains nothing from being steered to a
+# particular one. A scheduling property naming a worker class the execution pool
+# does not offer is also not an error: the action is queued until such a worker
+# appears, which never happens. A lane then finishes every other test and sits
+# on this single one until the job's own timeout hours later, with no failing
+# action to point at.
 donner_multi_transitioned_test(
     name = "vulkan_solid_fill_tests",
     # Software Vulkan (lavapipe) rendering is slow in fastbuild; cap explicitly
@@ -68,9 +77,6 @@ donner_multi_transitioned_test(
     timeout = "long",
     testonly = 1,
     dep = ":vulkan_solid_fill_tests_impl",
-    # Route the GPU test action to a remote-execution worker advertising a
-    # hardware GPU. Ignored for local / non-remote execution.
-    exec_properties = {"gpu": "arc"},
     renderer_backend = "geode",
 )
 
