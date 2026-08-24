@@ -3,8 +3,8 @@
 /// Validated command value types recorded by \c donner::gpu::CommandEncoder.
 ///
 /// Commands store only validated Donner value objects and slot-based resource identities, never
-/// raw pointers or native handles (design 0053 "Command model"), so recorded streams serialize
-/// deterministically and contain no process state. Each referenced resource is stored as a
+/// raw pointers or native handles, so recorded streams serialize deterministically and contain no
+/// process state. Each referenced resource is stored as a
 /// \ref ResourceIdentity (slot plus generation): `Device::submit` re-validates every identity, so
 /// a resource destroyed between recording and submission fails closed instead of reaching a
 /// backend.
@@ -23,9 +23,19 @@ struct BeginRenderPassCommand {
   RenderPassDescriptor descriptor;  //!< Validated pass descriptor.
 };
 
-/// Recorded `setPipeline`.
+/// Recorded `beginComputePass`.
+struct BeginComputePassCommand {
+  ComputePassDescriptor descriptor;  //!< Validated pass descriptor.
+};
+
+/// Recorded render pass `setPipeline`.
 struct SetPipelineCommand {
   ResourceIdentity pipelineId;  //!< Render pipeline identity.
+};
+
+/// Recorded compute pass `setPipeline`.
+struct SetComputePipelineCommand {
+  ResourceIdentity pipelineId;  //!< Compute pipeline identity.
 };
 
 /// Recorded `setBindGroup`.
@@ -67,8 +77,18 @@ struct DrawCommand {
   uint32_t firstInstance = 0;  //!< First instance index.
 };
 
+/// Recorded `dispatchWorkgroups`.
+struct DispatchWorkgroupsCommand {
+  uint32_t workgroupCountX = 1;  //!< Workgroups along X.
+  uint32_t workgroupCountY = 1;  //!< Workgroups along Y.
+  uint32_t workgroupCountZ = 1;  //!< Workgroups along Z.
+};
+
 /// Recorded render pass end.
 struct EndRenderPassCommand {};
+
+/// Recorded compute pass end.
+struct EndComputePassCommand {};
 
 /// Recorded `copyTextureToBuffer` (readback staging copy).
 struct CopyTextureToBufferCommand {
@@ -89,6 +109,8 @@ struct CopyTextureToTextureCommand {
 using Command =
     std::variant<BeginRenderPassCommand, SetPipelineCommand, SetBindGroupCommand,
                  SetVertexBufferCommand, SetScissorRectCommand, SetViewportCommand, DrawCommand,
-                 EndRenderPassCommand, CopyTextureToBufferCommand, CopyTextureToTextureCommand>;
+                 EndRenderPassCommand, BeginComputePassCommand, SetComputePipelineCommand,
+                 DispatchWorkgroupsCommand, EndComputePassCommand, CopyTextureToBufferCommand,
+                 CopyTextureToTextureCommand>;
 
 }  // namespace donner::gpu

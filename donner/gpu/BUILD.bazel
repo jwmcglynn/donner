@@ -69,6 +69,7 @@ donner_cc_test(
     name = "gpu_tests",
     srcs = [
         "tests/CommandEncoder_tests.cc",
+        "tests/ComputePass_tests.cc",
         "tests/DeviceValidation_tests.cc",
         "tests/GpuResult_tests.cc",
         "tests/HandleLifetime_tests.cc",

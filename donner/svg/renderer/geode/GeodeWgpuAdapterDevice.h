@@ -158,6 +158,8 @@ protected:
                                    const gpu::ShaderModuleDescriptor& descriptor) override;
   gpu::Status onCreateRenderPipeline(uint32_t slotIndex,
                                      const gpu::RenderPipelineDescriptor& descriptor) override;
+  gpu::Status onCreateComputePipeline(uint32_t slotIndex,
+                                      const gpu::ComputePipelineDescriptor& descriptor) override;
   void onDestroyResource(std::string_view resourceName, uint32_t slotIndex) override;
   gpu::Status onWriteBuffer(uint32_t slotIndex, uint64_t offsetBytes,
                             std::span<const uint8_t> data) override;

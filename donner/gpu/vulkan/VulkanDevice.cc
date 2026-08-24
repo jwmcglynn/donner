@@ -1138,6 +1138,21 @@ struct VulkanDevice::Impl {
   /// @param copy Recorded command.
   Status encodeCopyTextureToBuffer(EncodingState& state, const CopyTextureToBufferCommand& copy);
 
+  /// Encodes a render-pass command, or returns empty when the command is not one.
+  /// @param state Encoding state.
+  /// @param commands Full command stream, for the begin-pass pre-scan.
+  /// @param commandIndex Index of the command to encode.
+  std::optional<Status> encodeRenderCommand(EncodingState& state, std::span<const Command> commands,
+                                            size_t commandIndex);
+
+  /// Encodes a compute-pass command, or returns empty when \p command is not one.
+  /// @param state Encoding state. @param command Recorded command.
+  std::optional<Status> encodeComputeCommand(EncodingState& state, const Command& command);
+
+  /// Encodes a copy command, or returns empty when \p command is not one.
+  /// @param state Encoding state. @param command Recorded command.
+  std::optional<Status> encodeCopyCommand(EncodingState& state, const Command& command);
+
   /// Encodes one recorded command.
   /// @param state Encoding state.
   /// @param commands Full command stream, for the begin-pass pre-scan.
@@ -1983,6 +1998,14 @@ void VulkanDevice::Impl::destroyRenderPipelineSlot(uint32_t slotIndex) {
   }
 }
 
+Status VulkanDevice::onCreateComputePipeline(uint32_t slotIndex,
+                                             const ComputePipelineDescriptor& descriptor) {
+  (void)slotIndex;
+  (void)descriptor;
+  return GpuError{GpuErrorType::Unsupported,
+                  "the Vulkan backend does not implement compute pipelines yet"};
+}
+
 void VulkanDevice::onDestroyResource(std::string_view resourceName, uint32_t slotIndex) {
   Impl& impl = *impl_;
   // The base class defers this hook until every submission referencing the resource has
@@ -2522,8 +2545,9 @@ Status VulkanDevice::Impl::encodeCopyTextureToBuffer(EncodingState& state,
   return OkStatus();
 }
 
-Status VulkanDevice::Impl::encodeCommand(EncodingState& state, std::span<const Command> commands,
-                                         size_t commandIndex) {
+std::optional<Status> VulkanDevice::Impl::encodeRenderCommand(EncodingState& state,
+                                                              std::span<const Command> commands,
+                                                              size_t commandIndex) {
   const Command& command = commands[commandIndex];
   if (const auto* beginPass = std::get_if<BeginRenderPassCommand>(&command)) {
     transitionPassSampledTextures(state, commands, commandIndex);
@@ -2542,12 +2566,44 @@ Status VulkanDevice::Impl::encodeCommand(EncodingState& state, std::span<const C
     return encodeDraw(state, *draw);
   } else if (std::get_if<EndRenderPassCommand>(&command) != nullptr) {
     return encodeEndRenderPass(state);
-  } else if (const auto* copy = std::get_if<CopyTextureToBufferCommand>(&command)) {
+  }
+  return std::nullopt;
+}
+
+std::optional<Status> VulkanDevice::Impl::encodeComputeCommand(EncodingState& state,
+                                                               const Command& command) {
+  (void)state;
+  if (std::get_if<BeginComputePassCommand>(&command) != nullptr ||
+      std::get_if<SetComputePipelineCommand>(&command) != nullptr ||
+      std::get_if<DispatchWorkgroupsCommand>(&command) != nullptr ||
+      std::get_if<EndComputePassCommand>(&command) != nullptr) {
+    return Status(GpuError{GpuErrorType::Unsupported,
+                           "the Vulkan backend does not implement compute passes yet"});
+  }
+  return std::nullopt;
+}
+
+std::optional<Status> VulkanDevice::Impl::encodeCopyCommand(EncodingState& state,
+                                                            const Command& command) {
+  if (const auto* copy = std::get_if<CopyTextureToBufferCommand>(&command)) {
     return encodeCopyTextureToBuffer(state, *copy);
   } else if (std::get_if<CopyTextureToTextureCommand>(&command) != nullptr) {
-    return GpuError{GpuErrorType::Unsupported,
-                    "the Vulkan backend does not implement copyTextureToTexture yet; arrives with "
-                    "its presentation/readback packet"};
+    return Status(GpuError{GpuErrorType::Unsupported,
+                           "the Vulkan backend does not implement copyTextureToTexture yet"});
+  }
+  return std::nullopt;
+}
+
+Status VulkanDevice::Impl::encodeCommand(EncodingState& state, std::span<const Command> commands,
+                                         size_t commandIndex) {
+  if (std::optional<Status> status = encodeRenderCommand(state, commands, commandIndex)) {
+    return *status;
+  }
+  if (std::optional<Status> status = encodeComputeCommand(state, commands[commandIndex])) {
+    return *status;
+  }
+  if (std::optional<Status> status = encodeCopyCommand(state, commands[commandIndex])) {
+    return *status;
   }
   return OkStatus();
 }

@@ -3,8 +3,8 @@
 /// Documented validation limits enforced by \c donner::gpu::Device.
 ///
 /// Limits exist so that untrusted SVG-derived dimensions (geometry volume, image sizes,
-/// render-target extents) fail deterministically with \ref GpuErrorType::LimitExceeded instead of
-/// exhausting a driver (design 0053 "Security and Reliability").
+/// render-target extents, dispatch counts) fail deterministically with
+/// \ref GpuErrorType::LimitExceeded instead of exhausting a driver.
 
 #include <cstdint>
 
@@ -35,6 +35,21 @@ inline constexpr uint32_t kMaxVertexAttributes = 16;
 
 /// Maximum number of color attachments in a render pass or render pipeline.
 inline constexpr uint32_t kMaxColorAttachments = 4;
+
+/// Maximum invocations one compute workgroup may declare (x * y * z). 256 is the strictest
+/// common cap across the native APIs this runtime targets.
+inline constexpr uint32_t kMaxComputeInvocationsPerWorkgroup = 256;
+
+/// Maximum invocations a compute workgroup may declare along X or Y.
+inline constexpr uint32_t kMaxComputeWorkgroupSizeXY = 256;
+
+/// Maximum invocations a compute workgroup may declare along Z.
+inline constexpr uint32_t kMaxComputeWorkgroupSizeZ = 64;
+
+/// Maximum workgroups one dispatch may request along any axis. 65535 is the strictest common cap
+/// across the native APIs this runtime targets, and bounds a dispatch derived from an untrusted
+/// document extent.
+inline constexpr uint32_t kMaxComputeWorkgroupsPerDimension = 65535;
 
 /// Required alignment of \ref BufferBinding::offsetBytes for uniform and read-only storage
 /// buffer bindings. 256 is the strictest dynamic/static buffer-binding offset alignment across

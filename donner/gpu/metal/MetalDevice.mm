@@ -308,6 +308,18 @@ struct MetalDevice::Impl {
   /// @param copy Recorded command.
   Status encodeCopyTextureToBuffer(EncodingState& state, const CopyTextureToBufferCommand& copy);
 
+  /// Encodes a render-pass command, or returns empty when \p command is not one.
+  /// @param state Encoding state. @param command Recorded command.
+  std::optional<Status> encodeRenderCommand(EncodingState& state, const Command& command);
+
+  /// Encodes a compute-pass command, or returns empty when \p command is not one.
+  /// @param state Encoding state. @param command Recorded command.
+  std::optional<Status> encodeComputeCommand(EncodingState& state, const Command& command);
+
+  /// Encodes a copy command, or returns empty when \p command is not one.
+  /// @param state Encoding state. @param command Recorded command.
+  std::optional<Status> encodeCopyCommand(EncodingState& state, const Command& command);
+
   /// Encodes one recorded command.
   /// @param state Encoding state.
   /// @param command Recorded command.
@@ -603,6 +615,14 @@ Status MetalDevice::onCreateRenderPipeline(uint32_t slotIndex,
           std::optional<Impl::RenderPipelineRecord>(
               Impl::RenderPipelineRecord{pipelineState, descriptor.topology, descriptor.cullMode}));
   return OkStatus();
+}
+
+Status MetalDevice::onCreateComputePipeline(uint32_t slotIndex,
+                                            const ComputePipelineDescriptor& descriptor) {
+  (void)slotIndex;
+  (void)descriptor;
+  return GpuError{GpuErrorType::Unsupported,
+                  "the Metal backend does not implement compute pipelines yet"};
 }
 
 void MetalDevice::onDestroyResource(std::string_view resourceName, uint32_t slotIndex) {
@@ -912,7 +932,8 @@ Status MetalDevice::Impl::encodeCopyTextureToBuffer(EncodingState& state,
   return OkStatus();
 }
 
-Status MetalDevice::Impl::encodeCommand(EncodingState& state, const Command& command) {
+std::optional<Status> MetalDevice::Impl::encodeRenderCommand(EncodingState& state,
+                                                             const Command& command) {
   if (const auto* beginPass = std::get_if<BeginRenderPassCommand>(&command)) {
     return beginEncodedRenderPass(state, *beginPass);
   } else if (const auto* setPipeline = std::get_if<SetPipelineCommand>(&command)) {
@@ -929,12 +950,43 @@ Status MetalDevice::Impl::encodeCommand(EncodingState& state, const Command& com
     return encodeDraw(state, *draw);
   } else if (std::get_if<EndRenderPassCommand>(&command) != nullptr) {
     return encodeEndRenderPass(state);
-  } else if (const auto* copy = std::get_if<CopyTextureToBufferCommand>(&command)) {
+  }
+  return std::nullopt;
+}
+
+std::optional<Status> MetalDevice::Impl::encodeComputeCommand(EncodingState& state,
+                                                              const Command& command) {
+  (void)state;
+  if (std::get_if<BeginComputePassCommand>(&command) != nullptr ||
+      std::get_if<SetComputePipelineCommand>(&command) != nullptr ||
+      std::get_if<DispatchWorkgroupsCommand>(&command) != nullptr ||
+      std::get_if<EndComputePassCommand>(&command) != nullptr) {
+    return Status(GpuError{GpuErrorType::Unsupported,
+                           "the Metal backend does not implement compute passes yet"});
+  }
+  return std::nullopt;
+}
+
+std::optional<Status> MetalDevice::Impl::encodeCopyCommand(EncodingState& state,
+                                                           const Command& command) {
+  if (const auto* copy = std::get_if<CopyTextureToBufferCommand>(&command)) {
     return encodeCopyTextureToBuffer(state, *copy);
   } else if (std::get_if<CopyTextureToTextureCommand>(&command) != nullptr) {
-    return GpuError{GpuErrorType::Unsupported,
-                    "the Metal backend does not implement copyTextureToTexture yet; arrives with "
-                    "its presentation/readback packet"};
+    return Status(GpuError{GpuErrorType::Unsupported,
+                           "the Metal backend does not implement copyTextureToTexture yet"});
+  }
+  return std::nullopt;
+}
+
+Status MetalDevice::Impl::encodeCommand(EncodingState& state, const Command& command) {
+  if (std::optional<Status> status = encodeRenderCommand(state, command)) {
+    return *status;
+  }
+  if (std::optional<Status> status = encodeComputeCommand(state, command)) {
+    return *status;
+  }
+  if (std::optional<Status> status = encodeCopyCommand(state, command)) {
+    return *status;
   }
   return OkStatus();
 }

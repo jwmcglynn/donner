@@ -174,7 +174,7 @@ Result<uint64_t> ValidateTexelCopyInternal(const TexelCopyBufferLayout& layout,
 
 /**
  * Abstract GPU device: resource creation, queue writes, and submission with shared fail-closed
- * validation (design 0053 "Proposed Architecture", "Validation layer").
+ * validation.
  *
  * The public API is non-virtual and validates every descriptor, handle, and byte range before
  * delegating to protected `on*` virtuals (template-method pattern), so every backend - the
@@ -186,7 +186,7 @@ Result<uint64_t> ValidateTexelCopyInternal(const TexelCopyBufferLayout& layout,
  * (\ref GpuErrorType::DeviceMismatch) and slot generation (\ref GpuErrorType::InvalidHandle), so
  * destroyed or foreign handles fail before reaching a backend.
  *
- * Lifetime (design 0053 "Core types and ownership"): handles are move-only RAII - dropping a live
+ * Lifetime: handles are move-only RAII - dropping a live
  * handle releases the resource, an explicit `destroy*(std::move(handle))` call releases it early
  * and reports errors, and device teardown frees everything that remains. A handle that outlives
  * its device releases nothing (its device-alive token has expired). Destruction is deferred by
@@ -292,6 +292,15 @@ public:
    */
   Result<RenderPipeline> createRenderPipeline(const RenderPipelineDescriptor& descriptor);
 
+  /**
+   * Creates a compute pipeline. Fails closed on invalid layout/module references, an empty entry
+   * point, or a workgroup size that is zero in any dimension, exceeds a per-axis cap, or declares
+   * more than \ref kMaxComputeInvocationsPerWorkgroup invocations.
+   *
+   * @param descriptor Validated pipeline descriptor.
+   */
+  Result<ComputePipeline> createComputePipeline(const ComputePipelineDescriptor& descriptor);
+
   // The destroy* methods consume the handle: on success it becomes stale immediately (along with
   // all references to it) while the backend object is deferred until in-flight submissions
   // complete; on failure the handle is still consumed, and if it named a live resource of a
@@ -322,6 +331,9 @@ public:
   /// Destroys a render pipeline (see the destroy contract above).
   /// @param renderPipeline Handle to destroy.
   Status destroyRenderPipeline(RenderPipeline&& renderPipeline);
+  /// Destroys a compute pipeline (see the destroy contract above).
+  /// @param computePipeline Handle to destroy.
+  Status destroyComputePipeline(ComputePipeline&& computePipeline);
 
   /// Creates a command encoder recording against this device. The encoder must not outlive the
   /// device.
@@ -420,6 +432,10 @@ protected:
   /// @param slotIndex Slot index of the new resource. @param descriptor Validated descriptor.
   virtual Status onCreateRenderPipeline(uint32_t slotIndex,
                                         const RenderPipelineDescriptor& descriptor) = 0;
+  /// Backend hook: a compute pipeline passed validation and occupies \p slotIndex.
+  /// @param slotIndex Slot index of the new resource. @param descriptor Validated descriptor.
+  virtual Status onCreateComputePipeline(uint32_t slotIndex,
+                                         const ComputePipelineDescriptor& descriptor) = 0;
 
   /// Backend hook: a validated resource was destroyed.
   /// @param resourceName Resource type name, e.g. `"buffer"`.
@@ -515,6 +531,11 @@ private:
     RenderPipelineDescriptor descriptor;               //!< Creation descriptor.
     std::vector<ResourceIdentity> bindGroupLayoutIds;  //!< Pipeline layout's group identities.
   };
+  /// Validated per-pipeline state used for dispatch-time compatibility checks.
+  struct ComputePipelineRecord {
+    ComputePipelineDescriptor descriptor;              //!< Creation descriptor.
+    std::vector<ResourceIdentity> bindGroupLayoutIds;  //!< Pipeline layout's group identities.
+  };
   /// A finished, not-yet-submitted command buffer.
   struct CommandBufferRecord {
     std::vector<Command> commands;  //!< Validated commands in recording order.
@@ -554,6 +575,7 @@ private:
     PipelineLayout,
     ShaderModule,
     RenderPipeline,
+    ComputePipeline,
   };
 
   /// A destroyed resource whose backend object is awaiting submission completion.
@@ -678,6 +700,13 @@ private:
   /// @param entry Bind group entry being validated.
   Status validateSampledTextureBindingEntry(const BindGroupEntry& entry) const;
 
+  /// Validates a storage-texture bind group entry: resource kind, live view and texture, the
+  /// StorageBinding usage, and that the texture's format matches the one the layout declares.
+  /// @param layoutEntry Layout entry declaring the binding.
+  /// @param entry Bind group entry being validated.
+  Status validateStorageTextureBindingEntry(const BindGroupLayoutEntry& layoutEntry,
+                                            const BindGroupEntry& entry) const;
+
   /// Validates a sampler bind group entry: resource kind and live sampler.
   /// @param entry Bind group entry being validated.
   Status validateSamplerBindingEntry(const BindGroupEntry& entry) const;
@@ -704,6 +733,11 @@ private:
   /// @param command Recorded command.
   /// @param uses Accumulator of resources referenced by the submission.
   Status checkSubmissionCommand(const Command& command, std::vector<SubmissionUse>& uses) const;
+
+  /// Marks one resource as used by \p submissionSerial in its own slot table.
+  /// @param kind Resource kind. @param slotIndex Resource slot index.
+  /// @param submissionSerial Serial of the accepted submission.
+  void markResourceUsed(ResourceKind kind, uint32_t slotIndex, uint64_t submissionSerial);
 
   /// Marks every collected resource as used by \p submissionSerial, deferring its backend
   /// destruction until that submission completes.
@@ -738,6 +772,7 @@ private:
   details::SlotTable<PipelineLayoutRecord> pipelineLayouts_;
   details::SlotTable<ShaderModuleRecord> shaderModules_;
   details::SlotTable<RenderPipelineRecord> renderPipelines_;
+  details::SlotTable<ComputePipelineRecord> computePipelines_;
   details::SlotTable<CommandBufferRecord> commandBuffers_;
 };
 

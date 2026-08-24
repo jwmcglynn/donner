@@ -98,6 +98,8 @@ protected:
                               const ShaderModuleDescriptor& descriptor) override;
   Status onCreateRenderPipeline(uint32_t slotIndex,
                                 const RenderPipelineDescriptor& descriptor) override;
+  Status onCreateComputePipeline(uint32_t slotIndex,
+                                 const ComputePipelineDescriptor& descriptor) override;
   void onDestroyResource(std::string_view resourceName, uint32_t slotIndex) override;
   Status onWriteBuffer(uint32_t slotIndex, uint64_t offsetBytes,
                        std::span<const uint8_t> data) override;

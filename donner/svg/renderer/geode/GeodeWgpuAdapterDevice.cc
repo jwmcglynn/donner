@@ -36,6 +36,12 @@ Handle GetHandle(const std::vector<ScopedWgpuHandle<Handle>>& table, uint32_t sl
   return slotIndex < table.size() ? table[slotIndex].get() : Handle{};
 }
 
+/// Fail-closed status for the compute commands the adapter does not encode yet.
+gpu::Status unsupportedCompute() {
+  return GpuError{GpuErrorType::Unsupported,
+                  "the wgpu adapter does not implement compute passes yet"};
+}
+
 /// Overload set for exhaustive std::visit dispatch: adding a new `gpu::Command` alternative
 /// without a matching handler is a compile error instead of a silently dropped command.
 template <typename... Ts>
@@ -680,6 +686,14 @@ gpu::Status GeodeWgpuAdapterDevice::onCreateRenderPipeline(
   return OkStatus();
 }
 
+gpu::Status GeodeWgpuAdapterDevice::onCreateComputePipeline(
+    uint32_t slotIndex, const gpu::ComputePipelineDescriptor& descriptor) {
+  (void)slotIndex;
+  (void)descriptor;
+  return GpuError{GpuErrorType::Unsupported,
+                  "the wgpu adapter does not implement compute pipelines yet"};
+}
+
 void GeodeWgpuAdapterDevice::onDestroyResource(std::string_view resourceName, uint32_t slotIndex) {
   // Clearing a slot releases the owned wgpu reference (imported external textures carry no
   // owned reference, so their backing object is untouched).
@@ -944,6 +958,14 @@ gpu::Status GeodeWgpuAdapterDevice::encodeCommand(EncodingState& state,
           [&](const gpu::CopyTextureToTextureCommand& textureCopy) -> gpu::Status {
             return encodeCopyTextureToTexture(state, textureCopy);
           },
+          [&](const gpu::BeginComputePassCommand&) -> gpu::Status { return unsupportedCompute(); },
+          [&](const gpu::SetComputePipelineCommand&) -> gpu::Status {
+            return unsupportedCompute();
+          },
+          [&](const gpu::DispatchWorkgroupsCommand&) -> gpu::Status {
+            return unsupportedCompute();
+          },
+          [&](const gpu::EndComputePassCommand&) -> gpu::Status { return unsupportedCompute(); },
       },
       command);
 }

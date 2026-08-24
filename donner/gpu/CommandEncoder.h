@@ -1,11 +1,12 @@
 #pragma once
 /// @file
-/// \c donner::gpu::CommandEncoder and \c donner::gpu::RenderPassEncoder - fail-closed command
-/// recording.
+/// \c donner::gpu::CommandEncoder, \c donner::gpu::RenderPassEncoder, and
+/// \c donner::gpu::ComputePassEncoder - fail-closed command recording.
 
 #include <array>
 #include <cstdint>
 #include <optional>
+#include <string_view>
 #include <vector>
 
 #include "donner/gpu/Commands.h"
@@ -16,6 +17,13 @@
 namespace donner::gpu {
 
 class CommandEncoder;
+
+/// Which kind of pass a \ref CommandEncoder currently has open.
+enum class PassKind : uint8_t {
+  None,     //!< No pass is active; copies and pass begins are allowed.
+  Render,   //!< A render pass is active.
+  Compute,  //!< A compute pass is active.
+};
 
 /**
  * Encodes commands inside an active render pass. Obtained from
@@ -105,7 +113,61 @@ private:
 };
 
 /**
- * Records and validates GPU commands for one command buffer (design 0053 "Command model").
+ * Encodes commands inside an active compute pass. Obtained from
+ * \ref CommandEncoder::beginComputePass; owned by the encoder and valid until the encoder is
+ * destroyed (operations after \ref end fail with \ref GpuErrorType::InvalidState).
+ */
+class ComputePassEncoder {
+public:
+  ComputePassEncoder(const ComputePassEncoder&) = delete;
+  ComputePassEncoder& operator=(const ComputePassEncoder&) = delete;
+  ComputePassEncoder(ComputePassEncoder&&) = delete;
+  ComputePassEncoder& operator=(ComputePassEncoder&&) = delete;
+
+  /**
+   * Sets the active compute pipeline.
+   *
+   * @param pipeline Pipeline to bind; must be a live handle of the encoder's device.
+   */
+  Status setPipeline(const ComputePipeline& pipeline);
+
+  /**
+   * Binds \p bindGroup at \p index. Compatibility with the active pipeline's layout is checked
+   * at \ref dispatchWorkgroups time, so bind groups may be set before the pipeline.
+   *
+   * @param index Bind group index; must be below \ref kMaxBindGroups.
+   * @param bindGroup Bind group to bind; must be a live handle of the encoder's device.
+   */
+  Status setBindGroup(uint32_t index, const BindGroup& bindGroup);
+
+  /**
+   * Records a dispatch. Fails closed unless a pipeline is set, every bind group index the
+   * pipeline layout declares holds a bind group created against the same layout, and every
+   * workgroup count is nonzero and within \ref kMaxComputeWorkgroupsPerDimension.
+   *
+   * @param workgroupCountX Workgroups along X.
+   * @param workgroupCountY Workgroups along Y.
+   * @param workgroupCountZ Workgroups along Z.
+   */
+  Status dispatchWorkgroups(uint32_t workgroupCountX, uint32_t workgroupCountY = 1,
+                            uint32_t workgroupCountZ = 1);
+
+  /// Ends the compute pass. Further pass operations fail with
+  /// \ref GpuErrorType::InvalidState until a new pass begins.
+  Status end();
+
+private:
+  friend class CommandEncoder;
+
+  /// Constructs the pass encoder owned by \p encoder.
+  /// @param encoder Owning command encoder.
+  explicit ComputePassEncoder(CommandEncoder& encoder) : encoder_(&encoder) {}
+
+  CommandEncoder* encoder_;
+};
+
+/**
+ * Records and validates GPU commands for one command buffer.
  *
  * The encoder is a fail-closed state machine: every operation validates handle liveness, device
  * identity, usage flags, bounds, and pass state before recording. The first error latches and
@@ -137,6 +199,17 @@ public:
    * @param descriptor Validated render pass descriptor.
    */
   Result<RenderPassEncoder*> beginRenderPass(const RenderPassDescriptor& descriptor);
+
+  /**
+   * Begins a compute pass and returns its pass encoder. Fails with
+   * \ref GpuErrorType::InvalidState if a pass is already active.
+   *
+   * The returned pointer is owned by this encoder and remains valid until the encoder is
+   * destroyed.
+   *
+   * @param descriptor Validated compute pass descriptor.
+   */
+  Result<ComputePassEncoder*> beginComputePass(const ComputePassDescriptor& descriptor);
 
   /**
    * Records a texture-to-buffer copy (readback staging). Not allowed inside a render pass.
@@ -176,10 +249,12 @@ public:
 private:
   friend class Device;
   friend class RenderPassEncoder;
+  friend class ComputePassEncoder;
 
   /// Constructs an encoder recording against \p device.
   /// @param device Owning device; must outlive the encoder.
-  explicit CommandEncoder(Device& device) : device_(&device), passEncoder_(*this) {}
+  explicit CommandEncoder(Device& device)
+      : device_(&device), passEncoder_(*this), computePassEncoder_(*this) {}
 
   /// Draw-time validation state for the active pipeline.
   struct BoundPipeline {
@@ -202,8 +277,17 @@ private:
   Status fail(GpuError&& error);
 
   /// Returns the poisoned/finished-state error common to all operations, if any.
-  /// @param requireActivePass True for render pass operations.
-  std::optional<GpuError> checkRecordable(bool requireActivePass);
+  /// @param requiredPass Pass kind the operation needs open, or \ref PassKind::None when the
+  ///   operation only requires a usable encoder.
+  std::optional<GpuError> checkRecordable(PassKind requiredPass);
+
+  /// Verifies that every bind group index the bound pipeline layout declares holds a group
+  /// created against the same layout. Shared by draw and dispatch.
+  /// @param operation Operation name for diagnostics, e.g. `"draw"`.
+  Status validateBoundBindGroups(std::string_view operation);
+
+  /// Resets the per-pass binding state a begin or end transitions through.
+  void resetPassBindings();
 
   /// Re-resolves the resource one bind group entry references, failing closed when it was
   /// destroyed after the group was created.
@@ -238,11 +322,18 @@ private:
                   uint32_t firstInstance);
   Status passEnd();
 
+  // ComputePassEncoder forwards to these.
+  Status computePassSetPipeline(const ComputePipeline& pipeline);
+  Status computePassDispatch(uint32_t workgroupCountX, uint32_t workgroupCountY,
+                             uint32_t workgroupCountZ);
+  Status computePassEnd();
+
   Device* device_;
   RenderPassEncoder passEncoder_;
+  ComputePassEncoder computePassEncoder_;
   std::vector<Command> commands_;
   std::optional<GpuError> firstError_;
-  bool inRenderPass_ = false;
+  PassKind activePass_ = PassKind::None;
   bool finished_ = false;
 
   Extent2d passExtent_;

@@ -55,6 +55,9 @@ protected:
   Status onCreateRenderPipeline(uint32_t, const RenderPipelineDescriptor&) override {
     return OkStatus();
   }
+  Status onCreateComputePipeline(uint32_t, const ComputePipelineDescriptor&) override {
+    return OkStatus();
+  }
   void onDestroyResource(std::string_view, uint32_t) override {}
   Status onWriteBuffer(uint32_t, uint64_t, std::span<const uint8_t>) override { return OkStatus(); }
   Status onWriteTexture(uint32_t, std::span<const uint8_t>, const TexelCopyBufferLayout&,

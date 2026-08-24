@@ -2,8 +2,8 @@
 /// @file
 /// Move-only RAII, generation-checked resource handles for \c donner::gpu.
 ///
-/// Destroying a live handle releases its resource through the owning device (design 0053 "Core
-/// types and ownership"). Teardown ordering is safe in every direction: an explicit
+/// Destroying a live handle releases its resource through the owning device. Teardown ordering is
+/// safe in every direction: an explicit
 /// `Device::destroy*(std::move(handle))` call makes the RAII release a no-op, and a handle
 /// destroyed after its device holds an expired device-alive token, so the release is skipped
 /// (device teardown already freed everything that remained). Backend objects referenced by
@@ -255,6 +255,10 @@ struct ShaderModuleTag {
 struct RenderPipelineTag {
   static constexpr const char* kName = "renderPipeline";  //!< Resource name for diagnostics.
 };
+/// Tag for \ref ComputePipeline handles.
+struct ComputePipelineTag {
+  static constexpr const char* kName = "computePipeline";  //!< Resource name for diagnostics.
+};
 /// Tag for \ref CommandBuffer handles.
 struct CommandBufferTag {
   static constexpr const char* kName = "commandBuffer";  //!< Resource name for diagnostics.
@@ -269,6 +273,7 @@ using BindGroup = Handle<BindGroupTag>;              //!< Bind group handle.
 using PipelineLayout = Handle<PipelineLayoutTag>;    //!< Pipeline layout handle.
 using ShaderModule = Handle<ShaderModuleTag>;        //!< Shader module handle.
 using RenderPipeline = Handle<RenderPipelineTag>;    //!< Render pipeline handle.
+using ComputePipeline = Handle<ComputePipelineTag>;  //!< Compute pipeline handle.
 using CommandBuffer = Handle<CommandBufferTag>;      //!< Finished command buffer handle.
 
 using BufferRef = HandleRef<BufferTag>;                    //!< Buffer reference.
@@ -280,6 +285,7 @@ using BindGroupRef = HandleRef<BindGroupTag>;              //!< Bind group refer
 using PipelineLayoutRef = HandleRef<PipelineLayoutTag>;    //!< Pipeline layout reference.
 using ShaderModuleRef = HandleRef<ShaderModuleTag>;        //!< Shader module reference.
 using RenderPipelineRef = HandleRef<RenderPipelineTag>;    //!< Render pipeline reference.
+using ComputePipelineRef = HandleRef<ComputePipelineTag>;  //!< Compute pipeline reference.
 
 /**
  * gtest PrintTo support: prints `<name>#<slot>@<generation>` or `<name>(null)`.
