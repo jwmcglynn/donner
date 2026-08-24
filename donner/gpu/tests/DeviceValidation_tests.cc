@@ -634,9 +634,9 @@ TEST_F(WriteTextureTests, RejectsMissingCopyDstUsage) {
 // ----------------------------------------------------------------------------
 // Host buffer mapping.
 
-/// A device whose mapping hooks follow a script, so a test can state exactly what the backend
-/// reports on each wait slice and assert what the runtime does with it.
-class ScriptedMappingDevice : public Device {
+/// A device whose mapping and presentation hooks follow a script, so a test can state exactly
+/// what the backend reports and assert what the runtime does with it.
+class ScriptedDevice : public Device {
 public:
   /// Submissions complete instantly here; nothing in these tests waits on one.
   uint64_t completedSerial() const override { return lastSubmittedSerial(); }
@@ -651,6 +651,12 @@ public:
   std::vector<uint8_t> bytes{1, 2, 3, 4};
   /// Number of times the runtime released a mapping.
   int unmapCalls = 0;
+  /// What acquiring reports.
+  SurfaceStatus acquireStatus = SurfaceStatus::Success;
+  /// What presenting reports.
+  SurfaceStatus presentStatus = SurfaceStatus::Success;
+  /// Number of times the runtime abandoned an acquired texture.
+  int abandonCalls = 0;
 
 protected:
   // The operations this fake does not model are accepted and ignored: the tests below are about
@@ -674,6 +680,9 @@ protected:
   Status onCreateRenderPipeline(uint32_t, const RenderPipelineDescriptor&) override {
     return OkStatus();
   }
+  Status onCreateComputePipeline(uint32_t, const ComputePipelineDescriptor&) override {
+    return OkStatus();
+  }
   void onDestroyResource(std::string_view, uint32_t) override {}
   Status onWriteBuffer(uint32_t, uint64_t, std::span<const uint8_t>) override { return OkStatus(); }
   Status onWriteTexture(uint32_t, std::span<const uint8_t>, const TexelCopyBufferLayout&,
@@ -681,6 +690,25 @@ protected:
     return OkStatus();
   }
   Status onSubmit(uint64_t, uint32_t, std::span<const Command>) override { return OkStatus(); }
+
+  Status onCreateSurface(uint32_t, const SurfaceDescriptor&) override { return OkStatus(); }
+
+  Result<SurfaceCapabilities> onSurfaceCapabilities(uint32_t) const override {
+    return SurfaceCapabilities{{TextureFormat::BGRA8Unorm},
+                               TextureUsage::RenderAttachment,
+                               {PresentMode::Fifo},
+                               {SurfaceAlphaMode::Opaque}};
+  }
+
+  Status onConfigureSurface(uint32_t, const SurfaceConfiguration&) override { return OkStatus(); }
+
+  Result<SurfaceStatus> onAcquireCurrentTexture(uint32_t, uint32_t) override {
+    return acquireStatus;
+  }
+
+  Result<SurfaceStatus> onPresentSurface(uint32_t) override { return presentStatus; }
+
+  void onAbandonCurrentTexture(uint32_t) override { ++abandonCalls; }
 
   Status onMapBufferAsync(uint32_t /*mappingSlotIndex*/, uint32_t /*bufferSlotIndex*/,
                           MapMode /*mode*/, uint64_t /*offsetBytes*/,
@@ -712,7 +740,7 @@ protected:
   /// A wait with slices short enough that the budget allows exactly four of them.
   static MapWaitParams fourSlices() { return MapWaitParams{0.25, 1.0}; }
 
-  ScriptedMappingDevice device_;
+  ScriptedDevice device_;
 };
 
 TEST_F(BufferMappingTests, RejectsBufferWithoutMapReadUsage) {
@@ -833,6 +861,157 @@ TEST_F(BufferMappingTests, ABackendWithoutMappingReportsItUnsupported) {
       BufferDescriptor{"readback", 64, BufferUsage::CopyDst | BufferUsage::MapRead}));
   EXPECT_THAT(plainDevice.mapBufferAsync(buffer, MapMode::Read, 0, 64),
               IsGpuError(GpuErrorType::Unsupported));
+}
+
+// ----------------------------------------------------------------------------
+// Surface presentation.
+
+class SurfaceTests : public testing::Test {
+protected:
+  Surface metalSurface() {
+    SurfaceDescriptor descriptor;
+    descriptor.label = "window";
+    descriptor.native.kind = NativeSurfaceKind::MetalLayer;
+    descriptor.native.display = &layer_;
+    return GetResultOrFail(device_.createSurface(descriptor));
+  }
+
+  static SurfaceConfiguration configuration(uint32_t width = 640, uint32_t height = 480) {
+    return SurfaceConfiguration{TextureFormat::BGRA8Unorm, TextureUsage::RenderAttachment,
+                                Extent2d{width, height}, PresentMode::Fifo,
+                                SurfaceAlphaMode::Opaque};
+  }
+
+  int layer_ = 0;
+  ScriptedDevice device_;
+};
+
+TEST_F(SurfaceTests, RejectsANativeHandleMissingItsPayload) {
+  SurfaceDescriptor withoutLayer;
+  withoutLayer.native.kind = NativeSurfaceKind::MetalLayer;
+  EXPECT_THAT(device_.createSurface(withoutLayer), IsGpuError(GpuErrorType::InvalidDescriptor));
+
+  SurfaceDescriptor withoutSelector;
+  withoutSelector.native.kind = NativeSurfaceKind::CanvasSelector;
+  EXPECT_THAT(device_.createSurface(withoutSelector),
+              IsGpuErrorWithMessage(GpuErrorType::InvalidDescriptor, HasSubstr("selector")));
+}
+
+TEST_F(SurfaceTests, AcceptsACanvasNamedBySelector) {
+  SurfaceDescriptor descriptor;
+  descriptor.native.kind = NativeSurfaceKind::CanvasSelector;
+  descriptor.native.selector = "#canvas";
+  EXPECT_THAT(device_.createSurface(descriptor), IsOk());
+}
+
+TEST_F(SurfaceTests, RejectsAConfigurationWithNoExtent) {
+  const Surface surface = metalSurface();
+  EXPECT_THAT(device_.configureSurface(surface, configuration(0, 480)),
+              IsGpuError(GpuErrorType::InvalidDescriptor));
+}
+
+TEST_F(SurfaceTests, AcquiringBeforeConfiguringIsReported) {
+  const Surface surface = metalSurface();
+  EXPECT_THAT(device_.acquireCurrentTexture(surface),
+              IsGpuErrorWithMessage(GpuErrorType::InvalidState, HasSubstr("not been configured")));
+}
+
+TEST_F(SurfaceTests, AcquiringTwiceWithoutResolvingTheFirstIsReported) {
+  const Surface surface = metalSurface();
+  ASSERT_THAT(device_.configureSurface(surface, configuration()), IsOk());
+  SurfaceTexture first = GetResultOrFail(device_.acquireCurrentTexture(surface));
+  ASSERT_TRUE(first.texture.isValid());
+
+  EXPECT_THAT(device_.acquireCurrentTexture(surface), IsGpuError(GpuErrorType::InvalidState));
+}
+
+TEST_F(SurfaceTests, PresentingInvalidatesTheAcquiredTexture) {
+  const Surface surface = metalSurface();
+  ASSERT_THAT(device_.configureSurface(surface, configuration()), IsOk());
+  SurfaceTexture frame = GetResultOrFail(device_.acquireCurrentTexture(surface));
+
+  EXPECT_EQ(GetResultOrFail(device_.presentSurface(surface)), SurfaceStatus::Success);
+  EXPECT_THAT(device_.createTextureView(frame.texture, TextureViewDescriptor{"view"}),
+              IsGpuError(GpuErrorType::InvalidHandle))
+      << "The platform owns the texture once it has been presented";
+}
+
+TEST_F(SurfaceTests, AbandoningInvalidatesTheAcquiredTexture) {
+  const Surface surface = metalSurface();
+  ASSERT_THAT(device_.configureSurface(surface, configuration()), IsOk());
+  SurfaceTexture frame = GetResultOrFail(device_.acquireCurrentTexture(surface));
+
+  EXPECT_THAT(device_.abandonCurrentTexture(surface), IsOk());
+  EXPECT_EQ(device_.abandonCalls, 1);
+  EXPECT_THAT(device_.createTextureView(frame.texture, TextureViewDescriptor{"view"}),
+              IsGpuError(GpuErrorType::InvalidHandle));
+}
+
+TEST_F(SurfaceTests, ReconfiguringInvalidatesTheAcquiredTexture) {
+  const Surface surface = metalSurface();
+  ASSERT_THAT(device_.configureSurface(surface, configuration()), IsOk());
+  SurfaceTexture frame = GetResultOrFail(device_.acquireCurrentTexture(surface));
+
+  // A resize is a reconfiguration of the same surface, not a new one.
+  EXPECT_THAT(device_.configureSurface(surface, configuration(800, 600)), IsOk());
+  EXPECT_THAT(device_.createTextureView(frame.texture, TextureViewDescriptor{"view"}),
+              IsGpuError(GpuErrorType::InvalidHandle));
+  EXPECT_THAT(device_.acquireCurrentTexture(surface), IsOk())
+      << "A reconfigured surface hands out frames again without being recreated";
+}
+
+TEST_F(SurfaceTests, PresentingWithoutAcquiringIsReported) {
+  const Surface surface = metalSurface();
+  ASSERT_THAT(device_.configureSurface(surface, configuration()), IsOk());
+  EXPECT_THAT(device_.presentSurface(surface), IsGpuError(GpuErrorType::InvalidState));
+}
+
+TEST_F(SurfaceTests, AnOutdatedSurfaceStillHandsBackAUsableFrame) {
+  const Surface surface = metalSurface();
+  ASSERT_THAT(device_.configureSurface(surface, configuration()), IsOk());
+  device_.acquireStatus = SurfaceStatus::Outdated;
+
+  SurfaceTexture frame = GetResultOrFail(device_.acquireCurrentTexture(surface));
+  EXPECT_EQ(frame.status, SurfaceStatus::Outdated);
+  EXPECT_TRUE(frame.texture.isValid())
+      << "A surface that has drifted out of date usually still presents, so the caller chooses";
+}
+
+TEST_F(SurfaceTests, ALostSurfaceHandsBackNoFrame) {
+  const Surface surface = metalSurface();
+  ASSERT_THAT(device_.configureSurface(surface, configuration()), IsOk());
+
+  for (const SurfaceStatus status :
+       {SurfaceStatus::Lost, SurfaceStatus::DeviceLost, SurfaceStatus::Timeout}) {
+    device_.acquireStatus = status;
+    SurfaceTexture frame = GetResultOrFail(device_.acquireCurrentTexture(surface));
+    EXPECT_EQ(frame.status, status);
+    EXPECT_FALSE(frame.texture.isValid());
+  }
+}
+
+TEST_F(SurfaceTests, PresentReportsWhatTheSurfaceSaid) {
+  const Surface surface = metalSurface();
+  ASSERT_THAT(device_.configureSurface(surface, configuration()), IsOk());
+  device_.presentStatus = SurfaceStatus::Lost;
+  (void)GetResultOrFail(device_.acquireCurrentTexture(surface));
+
+  EXPECT_EQ(GetResultOrFail(device_.presentSurface(surface)), SurfaceStatus::Lost);
+}
+
+TEST_F(SurfaceTests, CapabilitiesComeFromTheSurface) {
+  const Surface surface = metalSurface();
+  const SurfaceCapabilities caps = GetResultOrFail(device_.surfaceCapabilities(surface));
+  EXPECT_THAT(caps.formats, testing::ElementsAre(TextureFormat::BGRA8Unorm));
+  EXPECT_THAT(caps.presentModes, testing::ElementsAre(PresentMode::Fifo));
+}
+
+TEST_F(SurfaceTests, ABackendWithoutPresentationReportsItUnsupported) {
+  RecordingDevice plainDevice;
+  SurfaceDescriptor descriptor;
+  descriptor.native.kind = NativeSurfaceKind::MetalLayer;
+  descriptor.native.display = &layer_;
+  EXPECT_THAT(plainDevice.createSurface(descriptor), IsGpuError(GpuErrorType::Unsupported));
 }
 
 }  // namespace
