@@ -55,7 +55,12 @@ using geode::EncodedPath;
 using gpu::tests::BaselinePathSpec;
 using gpu::tests::BaselinePixelFromScene;
 using gpu::tests::BaselineScenePaths;
+using gpu::tests::BuildLegacyQuad;
+using gpu::tests::ExpandLegacyAxis;
 using gpu::tests::kBaselineSize;
+using gpu::tests::LegacyAxis;
+using gpu::tests::LegacyBand;
+using gpu::tests::LegacyVertex;
 
 constexpr uint32_t kBytesPerRow = kBaselineSize * 4;  // 1024; already 256-byte aligned.
 
@@ -128,9 +133,9 @@ std::optional<std::vector<uint8_t>> RenderWgpuBaseline() {
     return std::nullopt;
   }
 
-  geode::GeodePipeline pipeline(device->device(), wgpu::TextureFormat::RGBA8Unorm);
-  geode::GeodeGradientPipeline gradientPipeline(device->device(), wgpu::TextureFormat::RGBA8Unorm);
-  geode::GeodeImagePipeline imagePipeline(device->device(), wgpu::TextureFormat::RGBA8Unorm);
+  geode::GeodePipeline& pipeline = device->pipeline();
+  geode::GeodeGradientPipeline& gradientPipeline = device->gradientPipeline();
+  geode::GeodeImagePipeline& imagePipeline = device->imagePipeline();
 
   wgpu::TextureDescriptor td = {};
   td.label = geode::wgpuLabel("VulkanSliceBaselineTarget");
@@ -264,15 +269,16 @@ protected:
     return std::move(result).result();
   }
 
-  /// Creates a storage buffer holding \p bytes (or a 4-byte zero dummy when empty), mirroring
-  /// the production encoder's empty-region dummies (the shader's band-count gates never
-  /// dereference them). Returns the buffer with its created byte size so bind groups bind the
-  /// full range.
-  SizedBuffer storageBuffer(const char* label, const void* data, size_t byteCount) {
-    const uint32_t dummy = 0;
+  /// Creates a storage buffer holding \p bytes. Empty buffers receive a zero-filled dummy large
+  /// enough for one shader element, mirroring the production encoder's empty-region dummies (the
+  /// shader's band-count gates never dereference them). Returns the buffer with its created byte
+  /// size so bind groups bind the full range.
+  SizedBuffer storageBuffer(const char* label, const void* data, size_t byteCount,
+                            size_t emptyByteCount = sizeof(uint32_t)) {
+    const std::array<uint8_t, sizeof(LegacyBand)> dummy = {};
     if (byteCount == 0) {
-      data = &dummy;
-      byteCount = sizeof(dummy);
+      data = dummy.data();
+      byteCount = emptyByteCount;
     }
     Buffer buffer = unwrap(device_->createBuffer(BufferDescriptor{
                                label, byteCount, BufferUsage::Storage | BufferUsage::CopyDst}),
@@ -418,29 +424,34 @@ TEST_F(VulkanSolidFillTest, MatchesProductionWgpuRender) {
   std::vector<PathDraw> draws;
   for (const BaselinePathSpec& spec : BaselineScenePaths()) {
     const EncodedPath encoded = geode::GeodePathEncoder::encode(spec.path, spec.rule);
-    ASSERT_FALSE(encoded.quadVertices.empty());
+    ASSERT_GE(encoded.boundingVertexCount, 3u);
+    const std::array<LegacyVertex, 6> legacyQuad = BuildLegacyQuad(encoded.pathBounds);
+
+    LegacyAxis horizontal;
+    LegacyAxis vertical;
+    ASSERT_TRUE(ExpandLegacyAxis(encoded.bands, encoded.curveIndices, encoded.curves, horizontal));
+    ASSERT_TRUE(ExpandLegacyAxis(encoded.vBands, encoded.vCurveIndices, encoded.vCurves, vertical));
 
     PathDraw draw;
-    draw.vertexCount = static_cast<uint32_t>(encoded.quadVertices.size());
-    draw.vertexBuffer =
-        unwrap(device_->createBuffer(BufferDescriptor{
-                   "vertices", encoded.quadVertices.size() * sizeof(EncodedPath::Vertex),
-                   BufferUsage::Vertex | BufferUsage::CopyDst}),
-               "createBuffer vertices");
+    draw.vertexCount = static_cast<uint32_t>(legacyQuad.size());
+    draw.vertexBuffer = unwrap(
+        device_->createBuffer(BufferDescriptor{"vertices", legacyQuad.size() * sizeof(LegacyVertex),
+                                               BufferUsage::Vertex | BufferUsage::CopyDst}),
+        "createBuffer vertices");
     const Status vertexWrite = device_->writeBuffer(
         draw.vertexBuffer, 0,
-        std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(encoded.quadVertices.data()),
-                                 encoded.quadVertices.size() * sizeof(EncodedPath::Vertex)));
+        std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(legacyQuad.data()),
+                                 legacyQuad.size() * sizeof(LegacyVertex)));
     ASSERT_FALSE(vertexWrite.hasError()) << vertexWrite.error();
 
-    draw.bands = storageBuffer("bands", encoded.bands.data(),
-                               encoded.bands.size() * sizeof(EncodedPath::Band));
-    draw.curves = storageBuffer("curves", encoded.curves.data(),
-                                encoded.curves.size() * sizeof(EncodedPath::Curve));
-    draw.vBands = storageBuffer("vBands", encoded.vBands.data(),
-                                encoded.vBands.size() * sizeof(EncodedPath::Band));
-    draw.vCurves = storageBuffer("vCurves", encoded.vCurves.data(),
-                                 encoded.vCurves.size() * sizeof(EncodedPath::Curve));
+    draw.bands = storageBuffer("bands", horizontal.bands.data(),
+                               horizontal.bands.size() * sizeof(LegacyBand), sizeof(LegacyBand));
+    draw.curves = storageBuffer("curves", horizontal.curves.data(),
+                                horizontal.curves.size() * sizeof(EncodedPath::Curve));
+    draw.vBands = storageBuffer("vBands", vertical.bands.data(),
+                                vertical.bands.size() * sizeof(LegacyBand), sizeof(LegacyBand));
+    draw.vCurves = storageBuffer("vCurves", vertical.curves.data(),
+                                 vertical.curves.size() * sizeof(EncodedPath::Curve));
     draw.hGrid = storageBuffer("hBandGrid", encoded.hBandGrid.data(),
                                encoded.hBandGrid.size() * sizeof(uint32_t));
     draw.vGrid = storageBuffer("vBandGrid", encoded.vBandGrid.data(),

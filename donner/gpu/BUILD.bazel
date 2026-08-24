@@ -48,6 +48,7 @@ donner_cc_library(
     deps = [
         "//donner/base",
         "//donner/css",
+        "//donner/svg/renderer/geode:geode_path_encoder",
     ],
 )
 
