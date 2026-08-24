@@ -31,6 +31,8 @@
 
 #ifdef DONNER_EDITOR_WGPU
 #include <webgpu/webgpu.hpp>
+
+#include "donner/gpu/Descriptors.h"
 #endif
 
 #include "donner/base/Vector2.h"
@@ -84,6 +86,28 @@ enum class WgpuSurfaceFailureKind {
   Setup,
   Fatal,
 };
+
+#ifdef DONNER_EDITOR_WGPU
+/// Buckets a status the presentation surface reported into the retry classes the event-driven
+/// Wasm loop distinguishes.
+///
+/// A surface that is out of date and one whose platform object is gone share a bucket because
+/// the browser recovers from both the same way: reconfigure and ask for another frame. Anything
+/// else is terminal for the frame and must not rearm the loop.
+///
+/// @param status Status the surface reported.
+[[nodiscard]] constexpr WgpuSurfaceFailureKind WgpuSurfaceFailureKindFor(
+    gpu::SurfaceStatus status) noexcept {
+  switch (status) {
+    case gpu::SurfaceStatus::Timeout: return WgpuSurfaceFailureKind::Timeout;
+    case gpu::SurfaceStatus::Outdated:
+    case gpu::SurfaceStatus::Lost: return WgpuSurfaceFailureKind::OutdatedOrLost;
+    case gpu::SurfaceStatus::Success:
+    case gpu::SurfaceStatus::DeviceLost: break;
+  }
+  return WgpuSurfaceFailureKind::Fatal;
+}
+#endif
 
 struct WgpuSurfaceRetryDecision {
   bool requestFrame = false;
