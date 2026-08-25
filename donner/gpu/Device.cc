@@ -758,6 +758,61 @@ Status Device::validateBindGroupEntryForLayout(const BindGroupLayoutEntry& layou
   return OkStatus();
 }
 
+std::vector<Device::BoundTextureBinding> Device::collectBoundTextures(
+    const BindGroupDescriptor& descriptor, const std::vector<BindGroupLayoutEntry>& layoutEntries,
+    BindingType type) const {
+  std::vector<BoundTextureBinding> bound;
+  for (const BindGroupLayoutEntry& layoutEntry : layoutEntries) {
+    if (layoutEntry.type != type) {
+      continue;
+    }
+    const BindGroupEntry* entry = nullptr;
+    if (findBindGroupEntryForBinding(descriptor, layoutEntry, entry).hasError()) {
+      continue;  // Already reported by the per-binding pass.
+    }
+    const TextureViewBinding* viewBinding = std::get_if<TextureViewBinding>(&entry->resource);
+    if (viewBinding == nullptr) {
+      continue;  // Already reported by the per-binding pass.
+    }
+    const TextureViewRecord* view =
+        textureViews_.find(viewBinding->view.slotIndex(), viewBinding->view.generation());
+    if (view != nullptr) {
+      bound.push_back(BoundTextureBinding{layoutEntry.binding, view->textureIdentity});
+    }
+  }
+  return bound;
+}
+
+Status Device::validateNoTextureAliasing(
+    const BindGroupDescriptor& descriptor,
+    const std::vector<BindGroupLayoutEntry>& layoutEntries) const {
+  // Each binding declares the layout its texture must be in, and one image can only be in one
+  // layout at a time, so a texture named by both a sampled and a storage-write binding is in the
+  // wrong layout for one of them however the backend transitions it. Nothing this runtime serves
+  // aliases a texture both ways inside one group, so the shape is rejected rather than modeled.
+  const std::vector<BoundTextureBinding> sampled =
+      collectBoundTextures(descriptor, layoutEntries, BindingType::SampledTexture2dFloat);
+  const std::vector<BoundTextureBinding> storage =
+      collectBoundTextures(descriptor, layoutEntries, BindingType::WriteOnlyStorageTexture2d);
+
+  for (const BoundTextureBinding& sampledBinding : sampled) {
+    for (const BoundTextureBinding& storageBinding : storage) {
+      if (!(sampledBinding.textureIdentity == storageBinding.textureIdentity)) {
+        continue;
+      }
+      const TextureRecord* texture = textures_.find(sampledBinding.textureIdentity.slotIndex,
+                                                    sampledBinding.textureIdentity.generation);
+      return Err(GpuErrorType::InvalidDescriptor,
+                 std::format("BindGroupDescriptor: texture \"{}\" is bound as a sampled texture "
+                             "at binding {} and as a storage texture at binding {}; one texture "
+                             "cannot be in both layouts at once",
+                             texture != nullptr ? texture->descriptor.label.str() : "",
+                             sampledBinding.binding, storageBinding.binding));
+    }
+  }
+  return OkStatus();
+}
+
 Result<BindGroup> Device::createBindGroup(const BindGroupDescriptor& descriptor) {
   auto layoutRecord = resolve(bindGroupLayouts_, descriptor.layout, BindGroupLayoutTag::kName);
   if (layoutRecord.hasError()) {
@@ -782,6 +837,10 @@ Result<BindGroup> Device::createBindGroup(const BindGroupDescriptor& descriptor)
         entryStatus.hasError()) {
       return std::move(entryStatus).error();
     }
+  }
+  if (Status aliasStatus = validateNoTextureAliasing(descriptor, layoutEntries);
+      aliasStatus.hasError()) {
+    return std::move(aliasStatus).error();
   }
 
   BindGroupRecord record{

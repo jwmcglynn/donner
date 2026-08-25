@@ -711,6 +711,28 @@ private:
   /// @param entry Bind group entry being validated.
   Status validateSamplerBindingEntry(const BindGroupEntry& entry) const;
 
+  /// One texture binding of a bind group: the binding index and the texture its view names.
+  struct BoundTextureBinding {
+    uint32_t binding = 0;              //!< Shader binding index.
+    ResourceIdentity textureIdentity;  //!< Identity of the texture behind the bound view.
+  };
+
+  /// Collects every binding of \p type that resolves to a live texture view.
+  /// @param descriptor Bind group descriptor being validated.
+  /// @param layoutEntries Entries of the layout it was created against.
+  /// @param type Binding type to collect.
+  std::vector<BoundTextureBinding> collectBoundTextures(
+      const BindGroupDescriptor& descriptor, const std::vector<BindGroupLayoutEntry>& layoutEntries,
+      BindingType type) const;
+
+  /// Rejects a bind group that names one texture through both a sampled and a storage-write
+  /// binding: the two declare different layouts for one image, so neither backend transition can
+  /// satisfy both at dispatch.
+  /// @param descriptor Bind group descriptor being validated.
+  /// @param layoutEntries Entries of the layout it was created against.
+  Status validateNoTextureAliasing(const BindGroupDescriptor& descriptor,
+                                   const std::vector<BindGroupLayoutEntry>& layoutEntries) const;
+
   /// Validates one bind group entry against the layout entry declaring its binding.
   /// @param layoutEntry Layout entry declaring the binding.
   /// @param entry Bind group entry being validated.
