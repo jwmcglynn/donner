@@ -2,10 +2,12 @@
 
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <cmath>
 #include <format>
 #include <memory>
 #include <sstream>
+#include <thread>
 #include <utility>
 
 #include "donner/gpu/CheckedArithmetic.h"
@@ -1198,18 +1200,39 @@ Result<MapWaitOutcome> Device::waitForMapping(const BufferMapping& mapping,
     return std::move(record).error();
   }
 
-  double waited = 0.0;
+  // The budget is wall time that actually passed, not slices counted off. A backend whose slice
+  // returns as soon as it has polled did not wait the slice it was offered, so counting it as a
+  // full one declares the budget spent in a burst of fast calls microseconds after the wait
+  // began. Whatever a slice leaves unused is rested here instead, which keeps the budget honest
+  // and keeps a fast slice from turning the wait into a spin.
+  const std::function<std::chrono::steady_clock::time_point()> now =
+      testHooks.now ? testHooks.now : std::function<std::chrono::steady_clock::time_point()>([] {
+        return std::chrono::steady_clock::now();
+      });
+  const std::function<void(std::chrono::microseconds)> rest =
+      testHooks.rest
+          ? testHooks.rest
+          : std::function<void(std::chrono::microseconds)>(
+                [](std::chrono::microseconds duration) { std::this_thread::sleep_for(duration); });
+
+  const std::chrono::steady_clock::time_point start = now();
   while (true) {
     if (shouldCancel && shouldCancel()) {
       return MapWaitOutcome::Cancelled;
     }
+    const std::chrono::steady_clock::time_point sliceStart = now();
     const std::optional<MapWaitOutcome> outcome =
         OutcomeForSlice(onWaitMappingSlice(mapping.slotIndex(), params.sliceSeconds));
     if (outcome.has_value()) {
       return *outcome;
     }
-    waited += params.sliceSeconds;
-    if (waited >= params.timeoutSeconds) {
+
+    const double sliceUsedSeconds = std::chrono::duration<double>(now() - sliceStart).count();
+    if (sliceUsedSeconds < params.sliceSeconds) {
+      rest(std::chrono::duration_cast<std::chrono::microseconds>(
+          std::chrono::duration<double>(params.sliceSeconds - sliceUsedSeconds)));
+    }
+    if (std::chrono::duration<double>(now() - start).count() >= params.timeoutSeconds) {
       return MapWaitOutcome::TimedOut;
     }
   }

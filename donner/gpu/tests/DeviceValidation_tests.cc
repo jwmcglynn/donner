@@ -782,24 +782,48 @@ TEST_F(BufferMappingTests, ReadyMappingHandsBackItsBytes) {
   EXPECT_THAT(GetResultOrFail(device_.mappedBytes(mapping)), testing::ElementsAre(1, 2, 3, 4));
 }
 
-TEST_F(BufferMappingTests, SlicesThatReturnEarlyDoNotSpendBudgetTheyDidNotUse) {
+/// A fake clock advanced only by resting, so a budget is spent deterministically and instantly.
+struct FakeWaitClock {
+  std::chrono::steady_clock::time_point at;  //!< Current time.
+  std::chrono::microseconds rested{0};       //!< Total time spent resting.
+
+  /// Hooks driving \ref donner::gpu::Device::waitForMapping off this clock.
+  Device::MapWaitTestHooks hooks() {
+    Device::MapWaitTestHooks result;
+    result.now = [this] { return at; };
+    result.rest = [this](std::chrono::microseconds duration) {
+      at += duration;
+      rested += duration;
+    };
+    return result;
+  }
+};
+
+TEST_F(BufferMappingTests, ABudgetIsNotSpentUntilItsTimeHasActuallyPassed) {
   const Buffer buffer = readableBuffer();
-  // More pending slices than the budget holds if each is charged in full, followed by a ready
-  // one. A backend whose slice returns as soon as it has polled reports exactly this shape.
-  device_.sliceStates = std::vector<MapSliceState>(20, MapSliceState::Pending);
-  device_.sliceStates.push_back(MapSliceState::Ready);
+  // Every slice reports Pending and returns without waiting, which is what a backend slice built
+  // on a non-blocking poll does.
   BufferMapping mapping = GetResultOrFail(device_.mapBufferAsync(buffer, MapMode::Read, 0, 64));
 
-  std::chrono::steady_clock::time_point clock;
-  Device::MapWaitTestHooks hooks;
-  hooks.now = [&clock] {
-    clock += std::chrono::milliseconds(1);
-    return clock;
-  };
+  FakeWaitClock clock;
+  const Device::MapWaitTestHooks hooks = clock.hooks();
+  EXPECT_EQ(GetResultOrFail(device_.waitForMapping(mapping, fourSlices(), {}, hooks)),
+            MapWaitOutcome::TimedOut);
+  EXPECT_GE(std::chrono::duration<double>(clock.rested).count(), 1.0)
+      << "A one second budget cannot run out before one second of waiting has happened";
+}
 
-  EXPECT_EQ(GetResultOrFail(device_.waitForMapping(mapping, MapWaitParams{0.1, 1.0}, {}, hooks)),
-            MapWaitOutcome::Ready)
-      << "A one second budget cannot be exhausted by slices that together took 21 milliseconds";
+TEST_F(BufferMappingTests, AReadyMappingIsNotHeldForTheRestOfTheBudget) {
+  const Buffer buffer = readableBuffer();
+  device_.sliceStates = {MapSliceState::Pending, MapSliceState::Ready};
+  BufferMapping mapping = GetResultOrFail(device_.mapBufferAsync(buffer, MapMode::Read, 0, 64));
+
+  FakeWaitClock clock;
+  const Device::MapWaitTestHooks hooks = clock.hooks();
+  EXPECT_EQ(GetResultOrFail(device_.waitForMapping(mapping, fourSlices(), {}, hooks)),
+            MapWaitOutcome::Ready);
+  EXPECT_LT(std::chrono::duration<double>(clock.rested).count(), 1.0)
+      << "Waiting stops when the mapping is ready, not when the budget runs out";
 }
 
 TEST_F(BufferMappingTests, CancellationIsCheckedBeforeAnySliceRuns) {
@@ -827,7 +851,9 @@ TEST_F(BufferMappingTests, BudgetExhaustionReportsTimedOut) {
   const Buffer buffer = readableBuffer();
   BufferMapping mapping = GetResultOrFail(device_.mapBufferAsync(buffer, MapMode::Read, 0, 64));
 
-  EXPECT_EQ(GetResultOrFail(device_.waitForMapping(mapping, fourSlices(), {})),
+  FakeWaitClock clock;
+  const Device::MapWaitTestHooks hooks = clock.hooks();
+  EXPECT_EQ(GetResultOrFail(device_.waitForMapping(mapping, fourSlices(), {}, hooks)),
             MapWaitOutcome::TimedOut);
   EXPECT_EQ(device_.sliceCalls, 4) << "The budget must be spent in slices of the stated length";
 }

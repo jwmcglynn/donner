@@ -445,11 +445,13 @@ public:
    * @param params Slice length and total budget; both must be greater than zero.
    * @param shouldCancel Consulted before each slice; may be empty for an uncancellable wait.
    */
-  /// Test seam for \ref waitForMapping. Production callers pass none; a test injects a clock so
-  /// a budget is verified without spending it.
+  /// Test seam for \ref waitForMapping. Production callers pass none; a test injects a clock and
+  /// a rest so a budget is verified deterministically and without spending it.
   struct MapWaitTestHooks {
     /// Clock the budget is measured against. Defaults to `std::chrono::steady_clock::now`.
     std::function<std::chrono::steady_clock::time_point()> now;
+    /// Rests for the given duration. Defaults to `std::this_thread::sleep_for`.
+    std::function<void(std::chrono::microseconds)> rest;
   };
 
   Result<MapWaitOutcome> waitForMapping(const BufferMapping& mapping, const MapWaitParams& params,

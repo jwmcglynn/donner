@@ -11,6 +11,7 @@
 #include "donner/base/Utils.h"
 #include "donner/svg/renderer/geode/GeodeCallbackState.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
+#include "donner/svg/renderer/geode/GeodeGpuWait.h"
 
 namespace donner::geode {
 
@@ -616,10 +617,17 @@ gpu::MapSliceState GeodeWgpuAdapterDevice::onWaitMappingSlice(uint32_t mappingSl
     return gpu::MapSliceState::DeviceLost;
   }
 
-  // One bounded step of backend progress. Polling processes whatever the backend has ready
-  // without blocking past the slice the caller allowed.
-  (void)geodeDevice_.pollSuspending(false);
-  (void)sliceSeconds;
+  // Wait out the slice the caller allowed rather than returning the moment one poll finds
+  // nothing: the waiter's budget is wall time, so a slice that returns immediately turns a map
+  // that is merely not ready yet into a burst of fast calls against that budget.
+  const auto slice = std::chrono::duration_cast<std::chrono::milliseconds>(
+      std::chrono::duration<double>(sliceSeconds));
+  (void)BoundedGpuWait(
+      [&] {
+        (void)geodeDevice_.pollSuspending(false);
+        return completion.done.load(std::memory_order_acquire) || geodeDevice_.isDeviceLost();
+      },
+      std::max(slice, std::chrono::milliseconds(1)));
 
   if (completion.done.load(std::memory_order_acquire)) {
     return completion.ok.load(std::memory_order_relaxed) ? gpu::MapSliceState::Ready
