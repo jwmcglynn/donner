@@ -2,13 +2,13 @@ load("//build_defs:rules.bzl", "donner_cc_library", "donner_cc_test")
 load("//build_defs:visibility.bzl", "donner_internal_visibility")
 load("//build_defs:package.bzl", "donner_package")
 
-# donner::gpu - the Donner-owned GPU runtime (design doc 0053).
+# donner::gpu - the Donner-owned GPU runtime.
 #
-# Packets 2 and 3 of the design's change sequence: typed immutable descriptors, explicit
-# Result/Status errors, move-only RAII generation-checked handles, deferred destruction by
-# submission serial, submit-time re-validation of recorded commands, fail-closed validation
-# shared by every backend, and the deterministic recording backend. Production rendering stays
-# on the existing Geode path until each family is migrated.
+# What the runtime guarantees: typed immutable descriptors, explicit Result/Status errors,
+# move-only RAII generation-checked handles, deferred destruction by submission serial,
+# submit-time re-validation of recorded commands, fail-closed validation shared by every
+# backend, and a deterministic recording backend. Production rendering stays on the existing
+# Geode path until each family is migrated.
 
 donner_cc_library(
     name = "gpu",
