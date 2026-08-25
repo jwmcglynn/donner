@@ -58,9 +58,7 @@ protected:
         PipelineLayoutDescriptor{"colorMatrixLayout", {bindGroupLayout_}}));
     bindGroup_ = GetResultOrFail(device_.createBindGroup(
         BindGroupDescriptor{"colorMatrixGroup", bindGroupLayout_, bindGroupEntries(outputView_)}));
-    shader_ = GetResultOrFail(device_.createShaderModule(
-        ShaderModuleDescriptor{"colorMatrix", "@compute @workgroup_size(8, 8, 1) fn csMain() {}",
-                               ShaderSourceKind::Wgsl}));
+    shader_ = GetResultOrFail(device_.createShaderModule(shaderModuleDescriptor()));
     pipeline_ = GetResultOrFail(device_.createComputePipeline(pipelineDescriptor()));
 
     encoder_ = GetResultOrFail(device_.createCommandEncoder());
@@ -82,6 +80,15 @@ protected:
             BindGroupEntry{1, TextureViewBinding{storageView}},
             BindGroupEntry{2, BufferBinding{params_, 0, 64}},
             BindGroupEntry{3, BufferBinding{bias_, 0, 32}}};
+  }
+
+  /// The module the fixture compiles, declaring the one compute entry point its source carries.
+  static ShaderModuleDescriptor shaderModuleDescriptor() {
+    return ShaderModuleDescriptor{"colorMatrix",
+                                  "@compute @workgroup_size(8, 8, 1) fn csMain() {}",
+                                  ShaderSourceKind::Wgsl,
+                                  {},
+                                  {ComputeEntryPointInfo{"csMain", WorkgroupSize{8, 8, 1}}}};
   }
 
   ComputePipelineDescriptor pipelineDescriptor() const {
@@ -273,6 +280,46 @@ TEST_F(ComputePassTests, CreateComputePipelineRejectsInvalidDescriptors) {
   EXPECT_THAT(device_.createComputePipeline(tooDeep),
               IsGpuErrorWithMessage(GpuErrorType::LimitExceeded,
                                     HasSubstr("exceeds the per-dimension caps")));
+}
+
+TEST_F(ComputePassTests, ComputePipelineRejectsAWorkgroupSizeTheShaderDoesNotDeclare) {
+  // The descriptor's workgroup size is what Metal dispatches with, because Metal takes the
+  // threadgroup shape per dispatch rather than from the compiled pipeline state. Every other
+  // backend uses the size compiled into the shader. A descriptor that disagrees therefore runs a
+  // different invocation grid on one backend than on the others, which shows up as silently
+  // incomplete or overlapping output rather than as an error, so it has to be rejected here.
+  ComputePipelineDescriptor mismatched = pipelineDescriptor();
+  mismatched.workgroupSize = WorkgroupSize{16, 16, 1};
+  EXPECT_THAT(device_.createComputePipeline(mismatched),
+              IsGpuErrorWithMessage(GpuErrorType::InvalidDescriptor,
+                                    HasSubstr("workgroupSize 16x16x1 disagrees with the 8x8x1 "
+                                              "that shader module \"colorMatrix\" declares for "
+                                              "entry point \"csMain\"")));
+}
+
+TEST_F(ComputePassTests, ComputePipelineRejectsAnEntryPointTheModuleDoesNotDeclare) {
+  ComputePipelineDescriptor unknownEntryPoint = pipelineDescriptor();
+  unknownEntryPoint.compute.entryPoint = "csMissing";
+  EXPECT_THAT(device_.createComputePipeline(unknownEntryPoint),
+              IsGpuErrorWithMessage(GpuErrorType::InvalidDescriptor,
+                                    HasSubstr("does not declare a compute entry point named "
+                                              "\"csMissing\"")));
+}
+
+TEST_F(ComputePassTests, ComputePipelineRejectsAModuleThatDeclaresNoComputeEntryPoints) {
+  // A module that never says what it contains cannot be checked, so it cannot back a compute
+  // pipeline; otherwise the guard above would be opt-in and silently absent wherever a caller
+  // forgot to fill the list in.
+  ShaderModuleDescriptor undeclared = shaderModuleDescriptor();
+  undeclared.label = "undeclared";
+  undeclared.computeEntryPoints.clear();
+  const ShaderModule undeclaredModule = GetResultOrFail(device_.createShaderModule(undeclared));
+
+  ComputePipelineDescriptor descriptor = pipelineDescriptor();
+  descriptor.compute.module = undeclaredModule;
+  EXPECT_THAT(device_.createComputePipeline(descriptor),
+              IsGpuErrorWithMessage(GpuErrorType::InvalidDescriptor,
+                                    HasSubstr("declares no compute entry points")));
 }
 
 TEST_F(ComputePassTests, StorageTextureBindingRequiresTheStorageBindingUsage) {

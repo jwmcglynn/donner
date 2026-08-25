@@ -41,6 +41,20 @@ donner_cc_library(
     ],
 )
 
+# Bridges a built IR module to the descriptors the GPU runtime consumes, so a host never
+# transcribes a compute entry point's workgroup size by hand. Split from :shader so the IR core
+# stays free of the runtime's descriptor types.
+donner_cc_library(
+    name = "module_interface",
+    srcs = ["ModuleInterface.cc"],
+    hdrs = ["ModuleInterface.h"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":shader",
+        "//donner/gpu",
+    ],
+)
+
 # Complete shader programs expressed in the IR: the solid-fill render family
 # (whose frozen pixel baseline is rendered by the Donner-owned slug_fill.wgsl
 # it re-expresses) and the color-matrix compute program.

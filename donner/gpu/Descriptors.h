@@ -375,6 +375,42 @@ struct PipelineLayoutDescriptor {
   std::vector<BindGroupLayoutRef> bindGroupLayouts;  //!< Bind group layouts, by group index.
 };
 
+/**
+ * Workgroup size a compute entry point declares.
+ *
+ * The runtime carries it in the pipeline descriptor rather than reading it back from the shader
+ * because Metal takes the threadgroup size at dispatch time, not from the compiled pipeline
+ * state; every backend then dispatches with the same declared shape.
+ * `Device::createComputePipeline` checks the value against the size the shader module reports for
+ * the same entry point, so the two cannot disagree.
+ */
+struct WorkgroupSize {
+  uint32_t x = 1;  //!< Invocations along X. Must be nonzero.
+  uint32_t y = 1;  //!< Invocations along Y. Must be nonzero.
+  uint32_t z = 1;  //!< Invocations along Z. Must be nonzero.
+
+  /// Equality operator. @param other Size to compare against.
+  bool operator==(const WorkgroupSize& other) const = default;
+
+  /// Ostream output operator, e.g. `8x8x1`.
+  /// @param os Output stream. @param value Size to output.
+  friend std::ostream& operator<<(std::ostream& os, const WorkgroupSize& value) {
+    return os << value.x << "x" << value.y << "x" << value.z;
+  }
+};
+
+/**
+ * One compute entry point a shader module contains, with the workgroup size compiled into it.
+ *
+ * The runtime cannot read a workgroup size back out of compiled WGSL, MSL, or SPIR-V, so a module
+ * reports the entry points it carries here and `Device::createComputePipeline` uses that to reject
+ * a pipeline descriptor that disagrees with the shader.
+ */
+struct ComputeEntryPointInfo {
+  RcString name;                //!< Entry point name.
+  WorkgroupSize workgroupSize;  //!< Workgroup size compiled into that entry point.
+};
+
 /// Descriptor for `Device::createShaderModule`. Source is trusted generated build output, never
 /// runtime input from documents. Exactly one source representation must be populated: text kinds
 /// (\ref ShaderSourceKind::Wgsl, \ref ShaderSourceKind::Msl) require nonempty `sourceText` and
@@ -385,6 +421,11 @@ struct ShaderModuleDescriptor {
   RcString sourceText;                                   //!< Shader source text (text kinds only).
   ShaderSourceKind sourceKind = ShaderSourceKind::Wgsl;  //!< Source language.
   std::vector<uint32_t> spirvWords;  //!< SPIR-V words (\ref ShaderSourceKind::Spirv only).
+  /// Compute entry points this module contains, with the workgroup size compiled into each.
+  /// Required to create a compute pipeline against this module; render-only modules leave it
+  /// empty. \ref donner::gpu::shader::ComputeEntryPointsOf fills it from the IR module the
+  /// source was emitted from, so the size is never transcribed by hand.
+  std::vector<ComputeEntryPointInfo> computeEntryPoints;
 };
 
 /// One vertex attribute within a \ref VertexBufferLayout.
@@ -439,28 +480,6 @@ struct FragmentState {
 struct ComputeState {
   ShaderModuleRef module;  //!< Shader module containing the entry point.
   RcString entryPoint;     //!< Entry point name. Must be nonempty.
-};
-
-/**
- * Workgroup size a compute entry point declares.
- *
- * The runtime carries it in the pipeline descriptor rather than reading it back from the shader
- * because Metal takes the threadgroup size at dispatch time, not from the compiled pipeline
- * state; every backend then dispatches with the same declared shape.
- */
-struct WorkgroupSize {
-  uint32_t x = 1;  //!< Invocations along X. Must be nonzero.
-  uint32_t y = 1;  //!< Invocations along Y. Must be nonzero.
-  uint32_t z = 1;  //!< Invocations along Z. Must be nonzero.
-
-  /// Equality operator. @param other Size to compare against.
-  bool operator==(const WorkgroupSize& other) const = default;
-
-  /// Ostream output operator, e.g. `8x8x1`.
-  /// @param os Output stream. @param value Size to output.
-  friend std::ostream& operator<<(std::ostream& os, const WorkgroupSize& value) {
-    return os << value.x << "x" << value.y << "x" << value.z;
-  }
 };
 
 /// Descriptor for `Device::createComputePipeline`.
