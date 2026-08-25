@@ -100,6 +100,7 @@ py_test(
         "//donner/editor/tools:gpu_inventory_srcs",
         "//donner/editor/wasm:gpu_inventory_srcs",
         "//donner/gpu:gpu_inventory_srcs",
+        "//donner/gpu/baseline:gpu_inventory_srcs",
         "//donner/gpu/metal:gpu_inventory_srcs",
         "//donner/gpu/metal/tests:gpu_inventory_srcs",
         "//donner/gpu/shader:gpu_inventory_srcs",

@@ -269,6 +269,64 @@
         "wgpuLifetimeTextureCreates"
       ]
     },
+    "donner/gpu/baseline/WgpuBaselineCapture.cc": {
+      "operations": [
+        "copyTextureToBuffer",
+        "createBuffer",
+        "createCommandEncoder",
+        "createTexture",
+        "finish",
+        "getConstMappedRange",
+        "mapAsync",
+        "poll",
+        "submit",
+        "unmap"
+      ],
+      "wgpuCFunctions": [
+        "wgpuAdapterGetInfo",
+        "wgpuAdapterInfoFreeMembers",
+        "wgpuLabel"
+      ],
+      "wgpuCTypes": [
+        "WGPUAdapterInfo",
+        "WGPUAdapterType",
+        "WGPUAdapterType_CPU",
+        "WGPUAdapterType_DiscreteGPU",
+        "WGPUAdapterType_IntegratedGPU",
+        "WGPUBackendType",
+        "WGPUBackendType_D3D11",
+        "WGPUBackendType_D3D12",
+        "WGPUBackendType_Metal",
+        "WGPUBackendType_Null",
+        "WGPUBackendType_OpenGL",
+        "WGPUBackendType_OpenGLES",
+        "WGPUBackendType_Vulkan",
+        "WGPUBackendType_WebGPU",
+        "WGPUMapAsyncStatus",
+        "WGPUMapAsyncStatus_Success",
+        "WGPUStatus_Success",
+        "WGPUStringView"
+      ],
+      "wgpuCppTokens": [
+        "Adapter",
+        "Buffer",
+        "BufferDescriptor",
+        "BufferMapCallbackInfo",
+        "BufferUsage",
+        "CommandBuffer",
+        "CommandEncoder",
+        "Default",
+        "Extent3D",
+        "MapMode",
+        "TexelCopyBufferInfo",
+        "TexelCopyTextureInfo",
+        "Texture",
+        "TextureDescriptor",
+        "TextureDimension",
+        "TextureFormat",
+        "TextureUsage"
+      ]
+    },
     "donner/gpu/metal/tests/BaselineCaptureTool.cc": {
       "operations": [
         "copyTextureToBuffer",

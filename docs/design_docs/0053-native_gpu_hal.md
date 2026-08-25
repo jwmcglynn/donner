@@ -363,11 +363,42 @@ directory drops.
       unrelated edit to a GPU-using file a manifest change and a CI failure.
 - [ ] Freeze representative pixels, counters, captures, error outcomes, and performance baselines
       from the current implementation using Donner-owned inputs.
+  - [x] Pixels, backend-independent structural counters, and error outcomes over a committed
+        Donner-owned corpus (`donner/gpu/baseline/`). Counters come from the CPU path encoder and
+        are checked on every lane by `//donner/gpu/baseline:baseline_counters_tests`; pixels come
+        from the current wgpu-backed production path and are checked by
+        `//donner/gpu/baseline:baseline_pixels_tests`. The degenerate and out-of-range scenes
+        freeze the encoder's `Empty` and `Rejected` admission outcomes, so a replacement is held to
+        the fail-closed behavior and not only to the successful paths.
+        Pixels are frozen per adapter: two Apple Silicon generations, at one revision through one
+        code path, produce different bytes on two of the six scenes, so an identity gate stated
+        across adapters would report a difference it cannot attribute. Adding an adapter is
+        mechanical (run the check there, commit the capture it leaves behind), and the two Apple
+        generations available today are both frozen.
+  - [ ] Command-stream captures. The recording backend already serializes a validated stream
+        deterministically with no GPU, but `GeoEncoder` and the Geode pipeline classes take the
+        wgpu transition adapter's concrete type rather than the runtime `Device` base, so the
+        production encoder cannot be pointed at the recording backend yet. Widening those
+        signatures belongs to the live-RHI extraction below; the capture freeze follows it rather
+        than duplicating the encoder to get an oracle.
+  - [ ] Performance baselines. Frame-time numbers taken on whatever machine happened to run the
+        capture are a property of that machine, and the counter corpus already gates the
+        CPU-invariant structural numbers. The wall-clock half needs a recorded run on the
+        scheduled performance lane, which is the only place a comparable number exists.
 - [ ] Approve the clean-room input rules and provenance template.
+      The template is written and committed as
+      [`gpu_provenance_template.md`](gpu_provenance_template.md); the input rules are the
+      clean-room section above. Both are waiting on approval, not on drafting.
 - [x] Add the no-Rust-dependency verifier and inert-reference allowlist in report-only mode
       (`tools/gpu_inventory/check_no_rust_dependencies.py`, run by the Lint workflow; phase 6
       switches it to `--blocking`).
-- [ ] Define platform and driver release matrices plus binary-size budgets.
+- [x] Define platform and driver release matrices plus binary-size budgets
+      ([0064: GPU release matrix](0064-gpu_release_matrix.md)). The matrix is derived from the
+      lanes and targets in the tree and labels every combination as executed, compiled but not
+      executed, developer-machine-only, or uncovered; the largest uncovered groups are physical
+      Vulkan drivers, Vulkan validation layers, Windows, and physical iOS. The budgets replace the
+      0.3-0.5 MB estimate with measured code-and-data sizes: 900,049 bytes for a Metal
+      configuration and 974,189 for a Vulkan one, roughly twice the estimate.
 
 ### Phase 1: Live RHI extraction
 
@@ -597,3 +628,4 @@ dependency into a new artifact.
 - [0041: Geode analytical AA](0041-geode_analytical_aa.md)
 - [0042: Geode Slug conformance](0042-geode_slug_conformance.md)
 - [0043: Deterministic replay testing](0043-deterministic_replay_testing.md)
+- [0064: GPU release matrix and binary-size budgets](0064-gpu_release_matrix.md)
