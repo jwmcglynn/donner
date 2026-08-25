@@ -1,155 +1,51 @@
 /// @file
-/// Frozen-baseline capture tool: renders the shared baseline scene
-/// through the CURRENT production renderer as a black box (GeodeDevice + GeoEncoder) and writes
-/// the PNG the Metal vertical slice compares against.
+/// Writes the Metal slice's golden PNG by rendering the shared baseline scene through the current
+/// production renderer as a black box.
 ///
-/// Run on the target machine with:
-///   bazel run --config=geode //donner/gpu/metal/tests:baseline_capture_tool -- \
+/// The rendering itself lives in the frozen-baseline capture library, so this tool and the frozen
+/// corpus cannot drift into two different setups of the same scene. Run on the target machine:
+///   bazel run //donner/gpu/metal/tests:baseline_capture_tool -- \
 ///     $(bazel info workspace)/donner/gpu/metal/tests/testdata/solid_fill_baseline.png
 
-#include <atomic>
 #include <cstdio>
 #include <memory>
 #include <vector>
 
-#include "donner/gpu/tests/BaselineScene.h"
+#include "donner/gpu/baseline/WgpuBaselineCapture.h"
 #include "donner/svg/renderer/RendererImageIO.h"
-#include "donner/svg/renderer/geode/GeoEncoder.h"
-#include "donner/svg/renderer/geode/GeodeCallbackState.h"
-#include "donner/svg/renderer/geode/GeodeDevice.h"
-#include "donner/svg/renderer/geode/GeodeGpuWait.h"
-#include "donner/svg/renderer/geode/GeodeImagePipeline.h"
-#include "donner/svg/renderer/geode/GeodePipeline.h"
-#include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
-
-namespace donner::gpu::metal::tests {
-namespace {
-
-using gpu::tests::BaselinePathSpec;
-using gpu::tests::BaselinePixelFromScene;
-using gpu::tests::BaselineScenePaths;
-using gpu::tests::kBaselineSize;
-
-constexpr uint32_t kBytesPerRow = kBaselineSize * 4;  // 1024; already 256-byte aligned.
-
-int CaptureBaseline(const char* outputPath) {
-  auto device = geode::GeodeDevice::CreateHeadless();
-  if (!device) {
-    std::fprintf(stderr, "No GPU device available for baseline capture\n");
-    return 1;
-  }
-
-  // The device-owned shared pipelines (headless devices default to RGBA8Unorm targets, matching
-  // the baseline scene). Pipeline construction lives on GeodeDevice per the ownership rule.
-  geode::GeodePipeline& pipeline = device->pipeline();
-  geode::GeodeGradientPipeline& gradientPipeline = device->gradientPipeline();
-  geode::GeodeImagePipeline& imagePipeline = device->imagePipeline();
-
-  wgpu::TextureDescriptor td = {};
-  td.label = geode::wgpuLabel("BaselineTarget");
-  td.size = {kBaselineSize, kBaselineSize, 1};
-  td.format = wgpu::TextureFormat::RGBA8Unorm;
-  td.usage = wgpu::TextureUsage::RenderAttachment | wgpu::TextureUsage::CopySrc;
-  td.mipLevelCount = 1;
-  td.sampleCount = 1;
-  td.dimension = wgpu::TextureDimension::_2D;
-  wgpu::Texture target = device->device().createTexture(td);
-  gpu::Result<gpu::Texture> targetHandleResult = device->adapterDevice().importExternalTexture(
-      target, gpu::Extent2d{kBaselineSize, kBaselineSize}, gpu::TextureFormat::RGBA8Unorm,
-      gpu::TextureUsage::RenderAttachment | gpu::TextureUsage::CopySrc);
-  if (!targetHandleResult.hasResult()) {
-    std::fprintf(stderr, "Failed to name the baseline render target\n");
-    return 1;
-  }
-  const gpu::Texture targetHandle = std::move(targetHandleResult).result();
-
-  wgpu::BufferDescriptor bd = {};
-  bd.label = geode::wgpuLabel("BaselineReadback");
-  bd.size = kBytesPerRow * kBaselineSize;
-  bd.usage = wgpu::BufferUsage::CopyDst | wgpu::BufferUsage::MapRead;
-  wgpu::Buffer readback = device->device().createBuffer(bd);
-
-  {
-    geode::GeoEncoder encoder(*device, pipeline, gradientPipeline, imagePipeline, targetHandle,
-                              gpu::Extent2d{kBaselineSize, kBaselineSize});
-    encoder.clear(css::RGBA(0, 0, 0, 0));  // Transparent background.
-    encoder.setTransform(BaselinePixelFromScene());
-    for (const BaselinePathSpec& spec : BaselineScenePaths()) {
-      encoder.fillPath(spec.path, spec.color, spec.rule);
-    }
-    encoder.finish();
-  }
-
-  // Copy the render target into the mappable readback buffer.
-  {
-    wgpu::CommandEncoder enc = device->device().createCommandEncoder();
-    wgpu::TexelCopyTextureInfo src = {};
-    src.texture = target;
-    src.mipLevel = 0;
-    src.origin = {0, 0, 0};
-    wgpu::TexelCopyBufferInfo dst = {};
-    dst.buffer = readback;
-    dst.layout.bytesPerRow = kBytesPerRow;
-    dst.layout.rowsPerImage = kBaselineSize;
-    wgpu::Extent3D copySize = {kBaselineSize, kBaselineSize, 1};
-    enc.copyTextureToBuffer(src, dst, copySize);
-    wgpu::CommandBuffer cmd = enc.finish();
-    device->queue().submit(1, &cmd);
-  }
-
-  // Map and write the PNG.
-  struct MapState {
-    std::atomic<bool> done = false;
-    std::atomic<bool> ok = false;
-  };
-  auto mapState = std::make_shared<MapState>();
-  wgpu::BufferMapCallbackInfo mapCb{wgpu::Default};
-  mapCb.callback = [](WGPUMapAsyncStatus status, WGPUStringView /*message*/, void* userdata1,
-                      void* /*userdata2*/) {
-    const std::shared_ptr<MapState> state = geode::takeWgpuCallbackState<MapState>(userdata1);
-    state->ok.store(status == WGPUMapAsyncStatus_Success, std::memory_order_relaxed);
-    state->done.store(true, std::memory_order_release);
-  };
-  mapCb.userdata1 = geode::retainWgpuCallbackState(mapState);
-  mapCb.userdata2 = nullptr;
-  readback.mapAsync(wgpu::MapMode::Read, 0, kBytesPerRow * kBaselineSize, mapCb);
-  const geode::GpuWaitResult waitResult = geode::BoundedGpuWait(
-      [&] {
-        device->device().poll(false, nullptr);
-        return mapState->done.load(std::memory_order_acquire);
-      },
-      geode::kDefaultGpuWaitTimeout);
-  if (waitResult != geode::GpuWaitResult::Complete) {
-    std::fprintf(stderr, "Readback buffer map wait timed out\n");
-    return 1;
-  }
-  if (!mapState->ok.load(std::memory_order_relaxed)) {
-    std::fprintf(stderr, "Readback buffer map failed\n");
-    return 1;
-  }
-
-  const uint8_t* mapped =
-      static_cast<const uint8_t*>(readback.getConstMappedRange(0, kBytesPerRow * kBaselineSize));
-  const std::vector<uint8_t> pixels(mapped, mapped + kBytesPerRow * kBaselineSize);
-  readback.unmap();
-
-  if (!svg::RendererImageIO::writeRgbaPixelsToPngFile(outputPath, pixels, kBaselineSize,
-                                                      kBaselineSize, kBaselineSize)) {
-    std::fprintf(stderr, "Failed to write %s\n", outputPath);
-    return 1;
-  }
-  std::fprintf(stderr, "Baseline written to %s\n", outputPath);
-  return 0;
-}
-
-}  // namespace
-}  // namespace donner::gpu::metal::tests
 
 /// Entry point. @param argc Argument count. @param argv `argv[1]` is the output PNG path.
+/// @return 0 when the scene was captured and written.
 int main(int argc, char** argv) {
+  using donner::gpu::baseline::kCorpusSize;
+  using donner::gpu::baseline::WgpuBaselineCapturer;
+
   if (argc != 2) {
     std::fprintf(stderr, "usage: baseline_capture_tool <output.png>\n");
     return 2;
   }
-  return donner::gpu::metal::tests::CaptureBaseline(argv[1]);
+
+  std::unique_ptr<WgpuBaselineCapturer> capturer = WgpuBaselineCapturer::Create();
+  if (!capturer) {
+    std::fprintf(stderr, "No GPU adapter available for baseline capture\n");
+    return 1;
+  }
+
+  std::vector<uint8_t> pixels;
+  const std::string error =
+      donner::gpu::baseline::CaptureNamedScene(*capturer, "solid_fill_baseline", pixels);
+  if (!error.empty()) {
+    std::fprintf(stderr, "%s\n", error.c_str());
+    return 1;
+  }
+
+  if (!donner::svg::RendererImageIO::writeRgbaPixelsToPngFile(argv[1], pixels, kCorpusSize,
+                                                              kCorpusSize, kCorpusSize)) {
+    std::fprintf(stderr, "Failed to write %s\n", argv[1]);
+    return 1;
+  }
+  std::fprintf(stderr, "Baseline written to %s on %s (%s)\n", argv[1],
+               capturer->environment().adapterName.c_str(),
+               capturer->environment().adapterBackend.c_str());
+  return 0;
 }
