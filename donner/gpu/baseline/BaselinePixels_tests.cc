@@ -183,8 +183,9 @@ TEST_P(FrozenPixelBaselineTest, MatchesFrozenCapture) {
   }
 
   editor::tests::CompareBitmapToGolden(
-      ToBitmap(std::move(pixels)), "donner/gpu/baseline/baselines/" + sceneName + ".png",
-      "frozen_baseline_" + sceneName, editor::tests::PixelmatchIdentityParams());
+      ToBitmap(std::move(pixels)),
+      std::string(kBaselinesRunfileDir) + "/" + slug_ + "/" + sceneName + ".png",
+      "frozen_baseline_" + slug_ + "_" + sceneName, editor::tests::PixelmatchIdentityParams());
 }
 
 INSTANTIATE_TEST_SUITE_P(Corpus, FrozenPixelBaselineTest,

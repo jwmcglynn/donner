@@ -104,6 +104,8 @@ donner_cc_test(
 # Transition wrapper: reachable from plain `bazel test //...` without --config=geode.
 donner_multi_transitioned_test(
     name = "baseline_pixels_tests",
+    # Sized for software WebGPU, not for the sub-second run a hardware adapter gives: creating the
+    # device compiles every shared pipeline, which dominates the wall clock on llvmpipe.
     size = "medium",
     testonly = 1,
     dep = ":baseline_pixels_tests_impl",
