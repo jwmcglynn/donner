@@ -374,7 +374,9 @@ directory drops.
         code path, produce different bytes on two of the six scenes, so an identity gate stated
         across adapters would report a difference it cannot attribute. Adding an adapter is
         mechanical (run the check there, commit the capture it leaves behind), and the two Apple
-        generations available today are both frozen.
+        generations available today are both frozen. An adapter with no committed baseline skips
+        on a developer machine and fails on an automated lane, because a suite that skips every
+        case still reports its target as passing and the gate would retire itself silently.
   - [ ] Command-stream captures. The recording backend already serializes a validated stream
         deterministically with no GPU, but `GeoEncoder` and the Geode pipeline classes take the
         wgpu transition adapter's concrete type rather than the runtime `Device` base, so the

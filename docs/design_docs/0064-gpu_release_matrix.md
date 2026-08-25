@@ -46,26 +46,47 @@ the document.
 | **Compile-only** | Built by a lane that never executes it. Proves it links, proves nothing else. |
 | **Dev-host**     | Runnable, but only by a person on a machine; no lane executes it.             |
 | **None**         | Nothing in the repository executes this combination.                          |
+| **Fails closed** | Not covered, and an automated lane says so by going red instead of green.     |
 
 A target that self-skips when its device is missing is only coverage on a lane that actually has
-the device. Where that distinction matters it is called out in the notes.
+the device, and Bazel reports an all-skipped target as passing. Where that distinction matters it
+is called out in the notes; a label here describes what a lane asserts, not what it reports.
 
 ## Metal
 
-| Platform                          | Driver / adapter                         | Coverage     | Where                                                                       |
-| --------------------------------- | ---------------------------------------- | ------------ | --------------------------------------------------------------------------- |
-| macOS arm64, deployment 13.3+     | Apple Silicon integrated                 | **PR-gated** | `metal_solid_fill_tests` and the Geode variant wrappers on the macOS lane   |
-| macOS arm64                       | Apple Silicon, ImGui/editor presentation | **PR-gated** | The macOS `--config=geode` editor lane's five explicit targets              |
-| macOS arm64                       | Two or more Apple GPU generations        | **None**     | One macOS lane runs per pull request; nothing compares generations          |
-| macOS x86_64                      | Intel integrated / AMD discrete          | **None**     | Every macOS runner label in the tree is arm64                               |
-| macOS arm64, Metal API validation | Apple Silicon                            | **PR-gated** | `MTL_DEBUG_LAYER` and `MTL_SHADER_VALIDATION` on the Metal slice target     |
-| macOS, offline MSL compilation    | Platform Metal toolchain                 | **Dev-host** | `msl_xcrun_validation_tests` self-skips when the offline compiler is absent |
-| iOS / iPadOS                      | Apple Silicon                            | **None**     | No target, no lane, no runner                                               |
+| Platform                          | Driver / adapter                           | Coverage                         | Where                                                                       |
+| --------------------------------- | ------------------------------------------ | -------------------------------- | --------------------------------------------------------------------------- |
+| macOS arm64, deployment 13.3+     | Apple Silicon integrated                   | **PR-gated, device-conditional** | `metal_solid_fill_tests` and the Geode variant wrappers on the macOS lane   |
+| macOS arm64                       | Apple Silicon, ImGui/editor presentation   | **PR-gated, device-conditional** | The macOS `--config=geode` editor lane's five explicit targets              |
+| macOS arm64                       | Frozen pixel identity, baselined adapter   | **PR-gated**                     | `baseline_pixels_tests`, on an adapter with a committed baseline            |
+| macOS arm64                       | Frozen pixel identity, unbaselined adapter | **None (fails closed)**          | `baseline_pixels_tests` fails on an automated lane rather than skipping     |
+| macOS arm64                       | Two or more Apple GPU generations          | **None**                         | One macOS lane runs per pull request; nothing compares generations          |
+| macOS x86_64                      | Intel integrated / AMD discrete            | **None**                         | Every macOS runner label in the tree is arm64                               |
+| macOS arm64, Metal API validation | Apple Silicon                              | **PR-gated, device-conditional** | `MTL_DEBUG_LAYER` and `MTL_SHADER_VALIDATION` on the Metal slice target     |
+| macOS, offline MSL compilation    | Platform Metal toolchain                   | **Dev-host**                     | `msl_xcrun_validation_tests` self-skips when the offline compiler is absent |
+| iOS / iPadOS                      | Apple Silicon                              | **None**                         | No target, no lane, no runner                                               |
 
 Notes:
 
-- The Metal slice self-skips when no device is present, so it is a real assertion on a runner with
-  a GPU and silently green on one without. It is not a substitute for a device check.
+- "Device-conditional" is the honest label for most of the Metal rows. `metal_solid_fill_tests`
+  calls `GTEST_SKIP` with "No Metal device available" when it cannot create one, and Bazel reports
+  a target whose every case skipped as passing. On a runner with a GPU these rows are real
+  assertions; on one without, they are green and assert nothing, and nothing in the tree
+  distinguishes the two from the summary. Closing that gap means the same fail-closed treatment
+  the frozen pixel gate now has, which is the model to copy rather than a reason to relabel these
+  rows as covered.
+- The frozen pixel gate is the one Metal row that is not device-conditional in that way. On an
+  automated lane an adapter with no committed baseline is a failure, not a skip, because a suite
+  that skips every case reports success while comparing nothing. On a developer machine the same
+  situation captures a baseline into the run's undeclared outputs and skips, so new hardware is
+  onboarded by committing that capture rather than by finding someone with the right machine. The
+  markers that select the automated behavior are named in the target's `env_inherit`, since Bazel
+  scrubs the test environment and an unnamed marker can never be observed.
+- A consequence worth stating plainly: the first automated run on a macOS runner whose adapter has
+  no committed baseline goes red, and its failure message names the adapter and the directory to
+  commit. That is the intended behavior, and freezing that adapter is what turns the lane green.
+  The alternative, which this replaced, was a lane that stayed green forever without running the
+  comparison.
 - macOS 13.3 is the only deployment floor anywhere in the tree (`--macos_minimum_os=13.3`). No
   document states it and no lane tests the floor itself; a build that regressed to requiring a
   newer SDK API would be caught by the compiler, not by a deployment test.

@@ -44,12 +44,28 @@ adapter, named from the adapter and backend the capture ran on, and the pixel ch
 goldens from the live adapter. Adding coverage for another adapter means capturing a baseline set
 on it, not relaxing the comparison.
 
-A run that finds no directory for its adapter captures one into `$TEST_UNDECLARED_OUTPUTS_DIR`
-and skips, naming the directory to commit. That is how an environment nobody can run the capture
-command on interactively gets frozen: run the check there, collect the artifact, commit it. A
-bootstrapped record leaves `sourceRevision` and `sourceTreeClean` as `unknown`, because a test
-cannot see the working tree; set them to the revision and tree state the run happened at before
-committing. The counters gate requires a real revision, so an untraceable baseline cannot land.
+A run that finds no directory for its adapter captures one into `$TEST_UNDECLARED_OUTPUTS_DIR`,
+naming the directory to commit. That is how an environment nobody can run the capture command on
+interactively gets frozen: run the check there, collect the artifact, commit it. A bootstrapped
+record leaves `sourceRevision` and `sourceTreeClean` as `unknown`, because a test cannot see the
+working tree; set them to the revision and tree state the run happened at before committing. The
+counters gate requires a real revision, so an untraceable baseline cannot land.
+
+What the run does next depends on where it is:
+
+- On a developer machine it skips. Meeting new hardware should hand you the capture, not a red
+  build.
+- On an automated lane it fails. A suite that skips every case still reports its target as
+  passing, so skipping there would retire the pixel gate while the summary kept saying it ran.
+  The failure carries the same instructions, so the lane that goes red is the lane that hands
+  over what turns it green.
+
+The markers that select the automated behavior (`GITHUB_ACTIONS`, or `DONNER_BASELINE_REQUIRE_FROZEN_ADAPTER`
+for a lane that does not set it) are listed in the test's `env_inherit`, because Bazel scrubs the
+test environment and a marker that is not named there can never be seen. The rule itself lives in
+`FrozenBaselinePolicy.h` and is covered by `frozen_baseline_policy_tests`, which needs no GPU, so
+the thing that keeps the gate from going quiet is checked on every lane rather than only on the
+ones with a device.
 
 The PNG bytes are versioned in git, which is also their integrity record; the provenance file
 records what produced them, not a second hash of them.
