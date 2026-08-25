@@ -653,6 +653,8 @@ public:
   /// Number of times the runtime released a mapping.
   int unmapCalls = 0;
   /// What acquiring reports.
+  /// Whether the backend is still holding the frame it handed out, as a real one does.
+  bool backendHasFrame = false;
   SurfaceStatus acquireStatus = SurfaceStatus::Success;
   /// What presenting reports.
   SurfaceStatus presentStatus = SurfaceStatus::Success;
@@ -704,12 +706,29 @@ protected:
   Status onConfigureSurface(uint32_t, const SurfaceConfiguration&) override { return OkStatus(); }
 
   Result<SurfaceStatus> onAcquireCurrentTexture(uint32_t, uint32_t) override {
+    // The platform holds its own frame, and it holds exactly one: a backend tracks the frame it
+    // handed out and refuses another until that one is presented or handed back. The wgpu
+    // backend does this with its own per-surface flag, so a runtime that only cleaned up its own
+    // bookkeeping would be refused right here.
+    if (backendHasFrame) {
+      return GpuError{GpuErrorType::InvalidState,
+                      "the backend is still holding the frame it handed out"};
+    }
+    if (acquireStatus == SurfaceStatus::Success || acquireStatus == SurfaceStatus::Outdated) {
+      backendHasFrame = true;
+    }
     return acquireStatus;
   }
 
-  Result<SurfaceStatus> onPresentSurface(uint32_t) override { return presentStatus; }
+  Result<SurfaceStatus> onPresentSurface(uint32_t) override {
+    backendHasFrame = false;
+    return presentStatus;
+  }
 
-  void onAbandonCurrentTexture(uint32_t) override { ++abandonCalls; }
+  void onAbandonCurrentTexture(uint32_t) override {
+    ++abandonCalls;
+    backendHasFrame = false;
+  }
 
   Status onMapBufferAsync(uint32_t /*mappingSlotIndex*/, uint32_t /*bufferSlotIndex*/,
                           MapMode /*mode*/, uint64_t /*offsetBytes*/,
@@ -1009,6 +1028,9 @@ TEST_F(SurfaceTests, DisposingTheAcquiredTextureLeavesNoFrameOutstanding) {
 
   EXPECT_THAT(device_.acquireCurrentTexture(surface), IsOk())
       << "A surface whose acquired texture is already gone has no frame left to resolve";
+  EXPECT_EQ(device_.abandonCalls, 1)
+      << "The platform's frame outlives the handle, so it has to be handed back before the next "
+         "one is asked for";
 }
 
 TEST_F(SurfaceTests, PresentingInvalidatesTheAcquiredTexture) {
