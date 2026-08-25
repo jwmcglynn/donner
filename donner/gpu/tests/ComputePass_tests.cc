@@ -356,6 +356,38 @@ TEST_F(ComputePassTests, BindGroupLayoutRejectsAnUnknownStorageTextureFormat) {
                                               "unknown enum value")));
 }
 
+TEST_F(ComputePassTests, BindGroupRejectsOneTextureBoundBothSampledAndStorageWrite) {
+  // A texture created with both usages can legally be named by a sampled binding and a
+  // storage-write binding of the same group, and every per-entry check passes. The two bindings
+  // then declare different layouts for one image, so whatever the backend transitions it to is
+  // wrong for the other binding at dispatch. Nothing in the pipelines this runtime serves aliases
+  // a texture both ways inside one pass, so the aliasing is rejected rather than modeled.
+  const Texture aliased = GetResultOrFail(device_.createTexture(
+      TextureDescriptor{"aliased", Extent2d{16, 16}, TextureFormat::RGBA8Unorm,
+                        TextureUsage::Sampled | TextureUsage::StorageBinding}));
+  const TextureView sampledView = GetResultOrFail(
+      device_.createTextureView(aliased, TextureViewDescriptor{"aliasedSampledView"}));
+  const TextureView storageView = GetResultOrFail(
+      device_.createTextureView(aliased, TextureViewDescriptor{"aliasedStorageView"}));
+
+  std::vector<BindGroupEntry> entries = bindGroupEntries(storageView);
+  entries[0] = BindGroupEntry{0, TextureViewBinding{sampledView}};
+  EXPECT_THAT(
+      device_.createBindGroup(
+          BindGroupDescriptor{"aliasing", bindGroupLayout_, std::move(entries)}),
+      IsGpuErrorWithMessage(GpuErrorType::InvalidDescriptor,
+                            HasSubstr("texture \"aliased\" is bound as a sampled texture at "
+                                      "binding 0 and as a storage texture at binding 1")));
+}
+
+TEST_F(ComputePassTests, BindGroupAcceptsDistinctSampledAndStorageTextures) {
+  // The guard must not reject the ordinary shape: two different textures, one sampled and one
+  // written, which is what every filter pass binds.
+  EXPECT_THAT(device_.createBindGroup(
+                  BindGroupDescriptor{"distinct", bindGroupLayout_, bindGroupEntries(outputView_)}),
+              HasResult());
+}
+
 TEST_F(ComputePassTests, StorageTextureBindingRejectsANonTextureResource) {
   std::vector<BindGroupEntry> entries = bindGroupEntries(outputView_);
   entries[1] = BindGroupEntry{1, BufferBinding{params_, 0, 64}};
