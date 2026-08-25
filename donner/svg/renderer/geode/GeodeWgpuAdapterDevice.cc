@@ -1083,6 +1083,10 @@ void GeodeWgpuAdapterDevice::clearHostCommandEncoder() {
   hostCommandEncoder_ = wgpu::CommandEncoder();
 }
 
+bool GeodeWgpuAdapterDevice::hasHostCommandEncoder() const {
+  return static_cast<bool>(hostCommandEncoder_);
+}
+
 void GeodeWgpuAdapterDevice::notifyHostSubmitted() {
   if (hostPendingSerial_ == 0) {
     return;

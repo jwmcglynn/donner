@@ -1,6 +1,7 @@
 #include "donner/svg/renderer/geode/GeodeCheckerboardPipeline.h"
 
 #include <cstdint>
+#include <cstdio>
 #include <memory>
 #include <optional>
 #include <span>
@@ -79,6 +80,27 @@ bool CheckerboardRequestIsDrawable(const wgpu::Texture& target, Vector2i targetS
   }
   return !params.scissorPx.has_value() ||
          (params.scissorPx->width != 0 && params.scissorPx->height != 0);
+}
+
+/// True when the device's command stream is free for a submission of our own.
+///
+/// While a renderer has a frame open it owns that stream: the runtime device replays every
+/// submission into the frame's command buffer so the whole frame keeps one recording order.
+/// A checkerboard submitted there would be spliced into a command buffer it does not own, at a
+/// point in that buffer it cannot reason about, and would not reach the target when its caller
+/// expects it to. There is also no ordering it could pick instead: it cannot know whether the
+/// open frame draws to the same target, so queueing itself ahead of that frame would be right
+/// for an overwriting checkerboard and wrong for one that goes underneath. Declining is the
+/// only answer that stays true to `draw`'s contract, and no caller needs the overlap - the
+/// presentation path draws the checkerboard before it opens its frame.
+bool DeviceCommandStreamIsFree(GeodeDevice& device) {
+  if (!device.adapterDevice().hasHostCommandEncoder()) {
+    return true;
+  }
+  std::fprintf(stderr,
+               "[Geode] checkerboard skipped: another frame owns the device's command stream. "
+               "Draw it outside that frame.\n");
+  return false;
 }
 
 /// A surface-owned render target named for the runtime, plus the view a pass attaches.
@@ -236,7 +258,8 @@ bool GeodeCheckerboardPass::ensureResources(GeodeDevice& device,
 bool GeodeCheckerboardPass::draw(GeodeDevice& device, const wgpu::Texture& target,
                                  Vector2i targetSizePx, const CheckerboardUnderlayParams& params,
                                  GeodeCheckerboardPipeline::BlendMode blendMode) {
-  if (!CheckerboardRequestIsDrawable(target, targetSizePx, params)) {
+  if (!CheckerboardRequestIsDrawable(target, targetSizePx, params) ||
+      !DeviceCommandStreamIsFree(device)) {
     return false;
   }
 
