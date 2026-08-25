@@ -857,7 +857,6 @@
         "setVertexBuffer",
         "setViewport",
         "submit",
-        "unmap",
         "writeBuffer",
         "writeTexture"
       ],
@@ -965,6 +964,10 @@
       ]
     },
     "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h": {
+      "operations": [
+        "release",
+        "unmap"
+      ],
       "wgpuCFunctions": [
         "wgpuTextureOf",
         "wgpuTextureViewOf"
