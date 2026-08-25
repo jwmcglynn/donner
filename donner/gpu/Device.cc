@@ -1188,7 +1188,8 @@ Result<BufferMapping> Device::mapBufferAsync(const Buffer& buffer, MapMode mode,
 
 Result<MapWaitOutcome> Device::waitForMapping(const BufferMapping& mapping,
                                               const MapWaitParams& params,
-                                              const std::function<bool()>& shouldCancel) {
+                                              const std::function<bool()>& shouldCancel,
+                                              const MapWaitTestHooks& testHooks) {
   if (Status status = ValidateMapWaitParams(params); status.hasError()) {
     return std::move(status).error();
   }

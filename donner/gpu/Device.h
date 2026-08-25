@@ -2,6 +2,7 @@
 /// @file
 /// \c donner::gpu::Device - the abstract GPU device with shared fail-closed validation.
 
+#include <chrono>
 #include <cstdint>
 #include <format>
 #include <functional>
@@ -444,8 +445,16 @@ public:
    * @param params Slice length and total budget; both must be greater than zero.
    * @param shouldCancel Consulted before each slice; may be empty for an uncancellable wait.
    */
+  /// Test seam for \ref waitForMapping. Production callers pass none; a test injects a clock so
+  /// a budget is verified without spending it.
+  struct MapWaitTestHooks {
+    /// Clock the budget is measured against. Defaults to `std::chrono::steady_clock::now`.
+    std::function<std::chrono::steady_clock::time_point()> now;
+  };
+
   Result<MapWaitOutcome> waitForMapping(const BufferMapping& mapping, const MapWaitParams& params,
-                                        const std::function<bool()>& shouldCancel);
+                                        const std::function<bool()>& shouldCancel,
+                                        const MapWaitTestHooks& testHooks = {});
 
   /**
    * Returns the mapped bytes of a completed mapping.

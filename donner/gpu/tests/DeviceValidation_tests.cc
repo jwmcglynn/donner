@@ -4,6 +4,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <chrono>
 #include <cstdint>
 #include <vector>
 
@@ -779,6 +780,26 @@ TEST_F(BufferMappingTests, ReadyMappingHandsBackItsBytes) {
   EXPECT_EQ(GetResultOrFail(device_.waitForMapping(mapping, fourSlices(), {})),
             MapWaitOutcome::Ready);
   EXPECT_THAT(GetResultOrFail(device_.mappedBytes(mapping)), testing::ElementsAre(1, 2, 3, 4));
+}
+
+TEST_F(BufferMappingTests, SlicesThatReturnEarlyDoNotSpendBudgetTheyDidNotUse) {
+  const Buffer buffer = readableBuffer();
+  // More pending slices than the budget holds if each is charged in full, followed by a ready
+  // one. A backend whose slice returns as soon as it has polled reports exactly this shape.
+  device_.sliceStates = std::vector<MapSliceState>(20, MapSliceState::Pending);
+  device_.sliceStates.push_back(MapSliceState::Ready);
+  BufferMapping mapping = GetResultOrFail(device_.mapBufferAsync(buffer, MapMode::Read, 0, 64));
+
+  std::chrono::steady_clock::time_point clock;
+  Device::MapWaitTestHooks hooks;
+  hooks.now = [&clock] {
+    clock += std::chrono::milliseconds(1);
+    return clock;
+  };
+
+  EXPECT_EQ(GetResultOrFail(device_.waitForMapping(mapping, MapWaitParams{0.1, 1.0}, {}, hooks)),
+            MapWaitOutcome::Ready)
+      << "A one second budget cannot be exhausted by slices that together took 21 milliseconds";
 }
 
 TEST_F(BufferMappingTests, CancellationIsCheckedBeforeAnySliceRuns) {
