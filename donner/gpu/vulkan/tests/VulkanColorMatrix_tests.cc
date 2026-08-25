@@ -17,6 +17,7 @@
 #include <vector>
 
 #include "donner/gpu/CommandEncoder.h"
+#include "donner/gpu/shader/ModuleInterface.h"
 #include "donner/gpu/shader/SpirvEmitter.h"
 #include "donner/gpu/shader/programs/ColorMatrix.h"
 #include "donner/gpu/tests/ColorMatrixSlice.h"
@@ -128,9 +129,12 @@ TEST_F(VulkanColorMatrixTest, ComputePassTransitionsAFreshStorageTextureToGenera
   shader::ShaderResult<std::vector<uint32_t>> spirv = shader::EmitSpirv(irModule.result());
   ASSERT_FALSE(spirv.hasError()) << spirv.error();
 
+  // The entry point declaration comes from the IR the SPIR-V was emitted from, so the size
+  // the runtime dispatches with cannot drift from the size compiled into the kernel.
   ShaderModule shaderModule =
       unwrap(device_->createShaderModule(ShaderModuleDescriptor{
-                 "colorMatrix", "", ShaderSourceKind::Spirv, std::move(spirv).result()}),
+                 "colorMatrix", "", ShaderSourceKind::Spirv, std::move(spirv).result(),
+                 shader::ComputeEntryPointsOf(irModule.result())}),
              "createShaderModule");
   BindGroupLayout bindGroupLayout = unwrap(device_->createBindGroupLayout(BindGroupLayoutDescriptor{
                                                "colorMatrixBGL", ColorMatrixLayoutEntries()}),
@@ -221,9 +225,12 @@ TEST_F(VulkanColorMatrixTest, DispatchMatchesTheHostComputedResult) {
   shader::ShaderResult<std::vector<uint32_t>> spirv = shader::EmitSpirv(irModule.result());
   ASSERT_FALSE(spirv.hasError()) << spirv.error();
 
+  // The entry point declaration comes from the IR the SPIR-V was emitted from, so the size
+  // the runtime dispatches with cannot drift from the size compiled into the kernel.
   ShaderModule shaderModule =
       unwrap(device_->createShaderModule(ShaderModuleDescriptor{
-                 "colorMatrix", "", ShaderSourceKind::Spirv, std::move(spirv).result()}),
+                 "colorMatrix", "", ShaderSourceKind::Spirv, std::move(spirv).result(),
+                 shader::ComputeEntryPointsOf(irModule.result())}),
              "createShaderModule");
 
   BindGroupLayout bindGroupLayout = unwrap(device_->createBindGroupLayout(BindGroupLayoutDescriptor{

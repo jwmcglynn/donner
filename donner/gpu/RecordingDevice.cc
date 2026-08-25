@@ -298,6 +298,17 @@ Status RecordingDevice::onCreateShaderModule(uint32_t slotIndex,
        << HashBytes(std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(source.data()),
                                              source.size()));
   }
+  if (!descriptor.computeEntryPoints.empty()) {
+    os << " computeEntryPoints=[";
+    for (size_t i = 0; i < descriptor.computeEntryPoints.size(); ++i) {
+      if (i > 0) {
+        os << " ";
+      }
+      const ComputeEntryPointInfo& entryPoint = descriptor.computeEntryPoints[i];
+      os << "{" << QuoteLabel(entryPoint.name) << " " << entryPoint.workgroupSize << "}";
+    }
+    os << "]";
+  }
   lines_.push_back(os.str());
   return OkStatus();
 }

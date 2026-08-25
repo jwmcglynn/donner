@@ -170,8 +170,15 @@ ComputeScene MakeComputeScene(GeodeWgpuAdapterDevice& adapter, const char* label
       {gpu::BindGroupEntry{0, gpu::TextureViewBinding{scene.targetView}}}}));
   const gpu::PipelineLayout pipelineLayout = gpu::GetResultOrFail(
       adapter.createPipelineLayout(gpu::PipelineLayoutDescriptor{"computeLayout", {scene.layout}}));
-  const gpu::ShaderModule shader = gpu::GetResultOrFail(adapter.createShaderModule(
-      gpu::ShaderModuleDescriptor{"fillCompute", kFillComputeWgsl, gpu::ShaderSourceKind::Wgsl}));
+  // Hand-written WGSL rather than emitted IR, so the entry point is declared inline; the runtime
+  // checks the pipeline's workgroup size against it.
+  const gpu::ShaderModule shader =
+      gpu::GetResultOrFail(adapter.createShaderModule(gpu::ShaderModuleDescriptor{
+          "fillCompute",
+          kFillComputeWgsl,
+          gpu::ShaderSourceKind::Wgsl,
+          {},
+          {gpu::ComputeEntryPointInfo{"cs_main", gpu::WorkgroupSize{4, 4, 1}}}}));
   scene.pipeline =
       gpu::GetResultOrFail(adapter.createComputePipeline(gpu::ComputePipelineDescriptor{
           "fillCompute", pipelineLayout, gpu::ComputeState{shader, "cs_main"},

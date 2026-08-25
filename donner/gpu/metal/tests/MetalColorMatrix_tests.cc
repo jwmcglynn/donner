@@ -16,6 +16,7 @@
 
 #include "donner/gpu/CommandEncoder.h"
 #include "donner/gpu/metal/MetalDevice.h"
+#include "donner/gpu/shader/ModuleInterface.h"
 #include "donner/gpu/shader/MslEmitter.h"
 #include "donner/gpu/shader/programs/ColorMatrix.h"
 #include "donner/gpu/tests/ColorMatrixSlice.h"
@@ -73,10 +74,13 @@ TEST_F(MetalColorMatrixTest, DispatchMatchesTheHostComputedResult) {
   shader::ShaderResult<std::string> msl = shader::EmitMsl(irModule.result());
   ASSERT_FALSE(msl.hasError()) << msl.error();
 
-  ShaderModule shaderModule =
-      unwrap(device_->createShaderModule(ShaderModuleDescriptor{
-                 "colorMatrix", RcString(msl.result()), ShaderSourceKind::Msl}),
-             "createShaderModule");
+  ShaderModule shaderModule = unwrap(device_->createShaderModule(ShaderModuleDescriptor{
+                                         "colorMatrix",
+                                         RcString(msl.result()),
+                                         ShaderSourceKind::Msl,
+                                         {},
+                                         shader::ComputeEntryPointsOf(irModule.result())}),
+                                     "createShaderModule");
 
   const std::vector<BindGroupLayoutEntry> layoutEntries = {
       {BindingIndex(ColorMatrixBinding::InputTexture), ShaderStage::Compute,

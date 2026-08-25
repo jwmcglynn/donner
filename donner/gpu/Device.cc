@@ -264,6 +264,43 @@ Status ValidateWorkgroupSize(const WorkgroupSize& size) {
   return OkStatus();
 }
 
+/// Rejects a compute pipeline whose declared workgroup size the shader module does not back.
+///
+/// Metal dispatches with the descriptor's size while every other backend uses the size compiled
+/// into the shader, so a disagreement is a different invocation grid per backend rather than an
+/// error anything reports.
+///
+/// @param descriptor Pipeline descriptor being created.
+/// @param moduleDescriptor Descriptor the referenced shader module was created with.
+Status ValidateWorkgroupSizeAgainstModule(const ComputePipelineDescriptor& descriptor,
+                                          const ShaderModuleDescriptor& moduleDescriptor) {
+  if (moduleDescriptor.computeEntryPoints.empty()) {
+    return Err(GpuErrorType::InvalidDescriptor,
+               std::format("shader module \"{}\" declares no compute entry points, so the "
+                           "workgroup size of \"{}\" cannot be checked against the shader",
+                           moduleDescriptor.label.str(), descriptor.compute.entryPoint.str()));
+  }
+  for (const ComputeEntryPointInfo& entryPoint : moduleDescriptor.computeEntryPoints) {
+    if (entryPoint.name != descriptor.compute.entryPoint) {
+      continue;
+    }
+    if (!(entryPoint.workgroupSize == descriptor.workgroupSize)) {
+      std::ostringstream sizes;
+      sizes << descriptor.workgroupSize << " disagrees with the " << entryPoint.workgroupSize;
+      return Err(GpuErrorType::InvalidDescriptor,
+                 std::format("ComputePipelineDescriptor.workgroupSize {} that shader module "
+                             "\"{}\" declares for entry point \"{}\"",
+                             sizes.str(), moduleDescriptor.label.str(),
+                             descriptor.compute.entryPoint.str()));
+    }
+    return OkStatus();
+  }
+  return Err(GpuErrorType::InvalidDescriptor,
+             std::format("shader module \"{}\" does not declare a compute entry point named "
+                         "\"{}\"",
+                         moduleDescriptor.label.str(), descriptor.compute.entryPoint.str()));
+}
+
 }  // namespace
 
 Result<uint64_t> ValidateTexelCopyInternal(const TexelCopyBufferLayout& layout,
@@ -917,6 +954,11 @@ Result<ComputePipeline> Device::createComputePipeline(const ComputePipelineDescr
                "ComputePipelineDescriptor.compute.entryPoint is empty");
   }
   if (Status status = ValidateWorkgroupSize(descriptor.workgroupSize); status.hasError()) {
+    return std::move(status).error();
+  }
+  if (Status status =
+          ValidateWorkgroupSizeAgainstModule(descriptor, computeModule.result()->descriptor);
+      status.hasError()) {
     return std::move(status).error();
   }
 
