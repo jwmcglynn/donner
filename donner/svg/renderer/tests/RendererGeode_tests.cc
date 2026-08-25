@@ -504,6 +504,42 @@ TEST_F(RendererGeodeTest, CheckerboardOriginOffsetShiftsTheAnchor) {
   EXPECT_THAT(shiftedNegative.second, RgbaEq(kCheckerLight, kCheckerLight, kCheckerLight, 255));
 }
 
+TEST_F(RendererGeodeTest, CheckerboardRefusesWhileAnotherFrameOwnsTheDeviceCommandStream) {
+  RendererGeode renderer = createRenderer();
+  beginFrame(renderer);
+  renderer.endFrame();
+
+  const std::shared_ptr<const RendererTextureSnapshot> frame = takeFinishedFrame(renderer);
+  ASSERT_NE(frame, nullptr);
+
+  // A second renderer sharing the device opens a frame. From here until its `endFrame`, that
+  // frame owns the device's command stream: every submission through the shared runtime device
+  // is appended to the frame's command buffer instead of reaching the queue. A checkerboard
+  // spliced in there would neither reach the target now nor land where its caller asked for it.
+  RendererGeode other = createRenderer();
+  beginFrame(other);
+
+  EXPECT_FALSE(drawCheckerboard(*frame, geode::CheckerboardUnderlayParams{}))
+      << "Drawing while another frame owns the device's command stream must fail, not report "
+         "success for a pass that never reaches the queue";
+
+  const RendererBitmap duringOtherFrame = frame->takeSnapshot();
+  ASSERT_FALSE(duringOtherFrame.empty());
+  EXPECT_THAT(pixelAt(duringOtherFrame, kCheckerCell / 2, kCheckerCell / 2), RgbaEq(0, 0, 0, 0))
+      << "A refused pass must leave the target exactly as it was";
+
+  other.endFrame();
+
+  // With that frame closed the identical call succeeds and the pixels land, so the refusal is
+  // scoped to the overlap rather than disabling the pass for the rest of the device's life.
+  ASSERT_TRUE(drawCheckerboard(*frame, geode::CheckerboardUnderlayParams{}));
+  const RendererBitmap afterOtherFrame = frame->takeSnapshot();
+  ASSERT_FALSE(afterOtherFrame.empty());
+  EXPECT_THAT(pixelAt(afterOtherFrame, kCheckerCell / 2, kCheckerCell / 2),
+              RgbaEq(kCheckerLight, kCheckerLight, kCheckerLight, 255))
+      << "Once the device's command stream is free the checkerboard must reach the target";
+}
+
 TEST_F(RendererGeodeTest, CheckerboardCellsAreLogicalPixelsNotDevicePixels) {
   RendererGeode renderer = createRenderer();
   beginFrame(renderer);
