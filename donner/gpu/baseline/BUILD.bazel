@@ -24,6 +24,24 @@ filegroup(
     visibility = donner_internal_visibility(),
 )
 
+# The unbaselined-adapter rule, kept apart from the GPU-bound check so it runs on every lane.
+donner_cc_library(
+    name = "frozen_baseline_policy",
+    testonly = 1,
+    srcs = ["FrozenBaselinePolicy.cc"],
+    hdrs = ["FrozenBaselinePolicy.h"],
+    visibility = donner_internal_visibility(),
+)
+
+donner_cc_test(
+    name = "frozen_baseline_policy_tests",
+    srcs = ["FrozenBaselinePolicy_tests.cc"],
+    deps = [
+        ":frozen_baseline_policy",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
 donner_cc_library(
     name = "baseline_corpus",
     testonly = 1,
