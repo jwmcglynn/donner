@@ -579,6 +579,10 @@ gpu::Status GeodeWgpuAdapterDevice::onMapBufferAsync(uint32_t mappingSlotIndex,
 
   MappingSlot slot;
   slot.completion = new MappingSlot::Completion();
+  // The completion keeps a reference of its own, so a map abandoned in flight still has a buffer
+  // to unmap once it finishes.
+  slot.completion->buffer = buffer;
+  slot.completion->buffer.addRef();
   slot.buffer = buffer;
   slot.offsetBytes = offsetBytes;
   slot.byteCount = byteCount;
@@ -589,6 +593,8 @@ gpu::Status GeodeWgpuAdapterDevice::onMapBufferAsync(uint32_t mappingSlotIndex,
     auto* completion = static_cast<MappingSlot::Completion*>(userdata1);
     completion->ok.store(status == WGPUMapAsyncStatus_Success, std::memory_order_relaxed);
     completion->done.store(true, std::memory_order_release);
+    // The mapping may already be gone, in which case nothing else can give the buffer back.
+    completion->unmapIfAbandoned();
     completion->release();
   };
   callbackInfo.userdata1 = slot.completion;
@@ -661,10 +667,10 @@ void GeodeWgpuAdapterDevice::onUnmapBuffer(uint32_t mappingSlotIndex) {
     return;
   }
   MappingSlot& slot = slotMappings_[mappingSlotIndex];
-  if (slot.buffer && slot.completion->done.load(std::memory_order_acquire) &&
-      slot.completion->ok.load(std::memory_order_relaxed)) {
-    slot.buffer.unmap();
-  }
+  // From here the completion is the only thing that can give the buffer back, whether the map
+  // has already finished or is still in flight.
+  slot.completion->abandoned.store(true, std::memory_order_release);
+  slot.completion->unmapIfAbandoned();
   // The pending callback holds the other reference and releases it when it runs, so a map that
   // is still in flight when the mapping is dropped cannot leave the state behind either way.
   slot.completion->release();

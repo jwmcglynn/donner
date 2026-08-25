@@ -322,10 +322,37 @@ private:
       std::atomic<int> references{2};  //!< This record and the pending callback.
       std::atomic<bool> done{false};   //!< Set once the callback has run.
       std::atomic<bool> ok{false};     //!< Whether the map succeeded.
+      /// Set once the mapping handle is gone, which makes whichever side observes the finished
+      /// map responsible for giving the buffer back.
+      std::atomic<bool> abandoned{false};
+      /// Claimed once by whichever side unmaps, so the two never both unmap and never both
+      /// leave it to the other.
+      std::atomic<bool> unmapClaimed{false};
+      /// The buffer being mapped, holding a reference of its own: a map abandoned in flight
+      /// completes after the mapping's slot is gone and must still have a buffer to unmap.
+      wgpu::Buffer buffer;
+
+      /// Gives the buffer back once the mapping is gone and the map has succeeded.
+      ///
+      /// Both the release and the completion call this, because either can be the one that sees
+      /// both conditions hold. A buffer left mapped with nothing able to unmap it stays mapped
+      /// for the rest of its life, and every later GPU use of it is invalid.
+      void unmapIfAbandoned() {
+        if (!abandoned.load(std::memory_order_acquire) || !done.load(std::memory_order_acquire) ||
+            !ok.load(std::memory_order_relaxed)) {
+          return;
+        }
+        if (!unmapClaimed.exchange(true, std::memory_order_acq_rel) && buffer) {
+          buffer.unmap();
+        }
+      }
 
       /// Drops one reference, deleting the state with the last one.
       void release() {
         if (references.fetch_sub(1, std::memory_order_acq_rel) == 1) {
+          if (buffer) {
+            buffer.release();
+          }
           delete this;
         }
       }
