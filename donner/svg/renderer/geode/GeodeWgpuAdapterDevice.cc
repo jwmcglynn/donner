@@ -555,7 +555,13 @@ void GeodeWgpuAdapterDevice::onAbandonCurrentTexture(uint32_t slotIndex) {
     return;
   }
   SurfaceSlot& slot = slotSurfaces_[slotIndex];
-  SetSlot(slotTextures_, slot.acquiredTextureSlot, TextureSlot{});
+  // Clear the runtime slot only while it still names this frame. A caller that disposed of the
+  // frame's handle frees that slot, and a texture created before the next acquire can be given
+  // the same index; wiping it then would take out a texture this frame never owned.
+  if (slot.acquiredTextureSlot < slotTextures_.size() &&
+      slotTextures_[slot.acquiredTextureSlot].texture == slot.acquired) {
+    SetSlot(slotTextures_, slot.acquiredTextureSlot, TextureSlot{});
+  }
   slot.acquired = wgpu::Texture();
   slot.hasAcquired = false;
 }

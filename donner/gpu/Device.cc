@@ -1395,7 +1395,12 @@ Status Device::configureSurface(const Surface& surface, const SurfaceConfigurati
     return std::move(record).error();
   }
   // A texture acquired under the previous configuration describes a surface that no longer
-  // exists in that shape, so reconfiguring invalidates it rather than leaving it usable.
+  // exists in that shape, so reconfiguring invalidates it rather than leaving it usable. The
+  // platform is holding that frame as well, and holds exactly one, so it is handed back rather
+  // than merely forgotten - otherwise the next acquire is refused by the backend.
+  if (hasOutstandingFrame(*record.result())) {
+    onAbandonCurrentTexture(surface.slotIndex());
+  }
   releaseAcquiredSurfaceTexture(surface);
   if (Status status = onConfigureSurface(surface.slotIndex(), configuration); status.hasError()) {
     return status;
@@ -1415,7 +1420,14 @@ Result<SurfaceTexture> Device::acquireCurrentTexture(const Surface& surface) {
     return GpuError{GpuErrorType::InvalidState,
                     "acquireCurrentTexture: the surface has not been configured"};
   }
-  if (hasOutstandingFrame(*record.result())) {
+  if (record.result()->acquired.isValid() && !hasOutstandingFrame(*record.result())) {
+    // The caller disposed of the frame's texture through its handle, so the runtime has nothing
+    // left to resolve it with - but the platform is still holding the frame itself, and holds
+    // exactly one. Hand it back before asking for the next, or the backend refuses.
+    onAbandonCurrentTexture(surface.slotIndex());
+    releaseAcquiredSurfaceTexture(surface);
+  }
+  if (record.result()->acquired.isValid()) {
     return GpuError{GpuErrorType::InvalidState,
                     "acquireCurrentTexture: the previous texture has not been presented or "
                     "abandoned"};
