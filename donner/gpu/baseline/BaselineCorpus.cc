@@ -174,19 +174,36 @@ std::string FixedNumber(double value) {
   return buffer;
 }
 
-void AppendAxis(std::string& out, std::string_view key, const AxisCounters& axis,
-                std::string_view indent) {
+/// One `"key": value,` line at `indent`, with the trailing comma suppressed on the last field so
+/// the result parses as JSON.
+void AppendField(std::string& out, std::string_view indent, std::string_view key,
+                 const std::string& value, bool last) {
   out += indent;
   out += "\"";
   out += key;
-  out += "\": {";
-  out += "\"canonicalCurveCount\": " + std::to_string(axis.canonicalCurveCount);
-  out += ", \"curveReferenceCount\": " + std::to_string(axis.curveReferenceCount);
-  out += ", \"omittedParallelCurves\": " + std::to_string(axis.omittedParallelCurves);
-  out += ", \"gridBandCount\": " + std::to_string(axis.gridBandCount);
-  out += ", \"nonemptyBandCount\": " + std::to_string(axis.nonemptyBandCount);
-  out += ", \"maxCurvesPerBand\": " + std::to_string(axis.maxCurvesPerBand);
-  out += ", \"p95CurvesPerBand\": " + std::to_string(axis.p95CurvesPerBand);
+  out += "\": ";
+  out += value;
+  out += last ? "\n" : ",\n";
+}
+
+void AppendAxis(std::string& out, std::string_view key, const AxisCounters& axis,
+                std::string_view indent) {
+  const std::string fieldIndent = std::string(indent) + "  ";
+  out += indent;
+  out += "\"";
+  out += key;
+  out += "\": {\n";
+  AppendField(out, fieldIndent, "canonicalCurveCount", std::to_string(axis.canonicalCurveCount),
+              false);
+  AppendField(out, fieldIndent, "curveReferenceCount", std::to_string(axis.curveReferenceCount),
+              false);
+  AppendField(out, fieldIndent, "omittedParallelCurves", std::to_string(axis.omittedParallelCurves),
+              false);
+  AppendField(out, fieldIndent, "gridBandCount", std::to_string(axis.gridBandCount), false);
+  AppendField(out, fieldIndent, "nonemptyBandCount", std::to_string(axis.nonemptyBandCount), false);
+  AppendField(out, fieldIndent, "maxCurvesPerBand", std::to_string(axis.maxCurvesPerBand), false);
+  AppendField(out, fieldIndent, "p95CurvesPerBand", std::to_string(axis.p95CurvesPerBand), true);
+  out += indent;
   out += "},\n";
 }
 
