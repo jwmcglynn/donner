@@ -106,11 +106,18 @@ donner_cc_test(
     name = "baseline_pixels_tests_impl",
     srcs = ["BaselinePixels_tests.cc"],
     data = [":baselines"],
+    # Bazel scrubs the test environment, so the automated-lane markers have to be named here or
+    # the fail-closed rule can never see one and the gate quietly keeps skipping.
+    env_inherit = [
+        "DONNER_BASELINE_REQUIRE_FROZEN_ADAPTER",
+        "GITHUB_ACTIONS",
+    ],
     target_compatible_with = select({
         "//donner/svg/renderer/geode:geode_enabled": [],
         "//conditions:default": ["@platforms//:incompatible"],
     }),
     deps = [
+        ":frozen_baseline_policy",
         ":wgpu_baseline_capture",
         "//donner/base:base_test_utils",
         "//donner/editor/tests:bitmap_golden_compare",

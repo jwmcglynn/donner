@@ -39,9 +39,9 @@ bool RunningUnderContinuousIntegration() {
   return AnyEnvironmentVariableIsSet(ContinuousIntegrationMarkers());
 }
 
-UnbaselinedAdapterDisposition DispositionForUnbaselinedAdapter(
-    bool /*underContinuousIntegration*/) {
-  return UnbaselinedAdapterDisposition::CaptureAndSkip;
+UnbaselinedAdapterDisposition DispositionForUnbaselinedAdapter(bool underContinuousIntegration) {
+  return underContinuousIntegration ? UnbaselinedAdapterDisposition::FailClosed
+                                    : UnbaselinedAdapterDisposition::CaptureAndSkip;
 }
 
 std::string UnbaselinedAdapterMessage(std::string_view adapterName, std::string_view adapterBackend,

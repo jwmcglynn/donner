@@ -7,6 +7,11 @@
 /// capture against a different adapter reports a difference the test cannot attribute to a
 /// regression. This suite therefore refuses that comparison and names the environment that is
 /// missing a baseline, instead of failing on hardware it was never frozen for.
+///
+/// Refusing is not the same as passing. On a developer machine the run leaves a capture behind and
+/// skips, which is the useful answer on new hardware. On an automated lane it fails, because a
+/// suite that skips every case still reports the target as passing, and a gate that compares
+/// nothing while looking green is the failure mode this whole freeze exists to prevent.
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
@@ -21,6 +26,7 @@
 
 #include "donner/base/tests/Runfiles.h"
 #include "donner/editor/tests/BitmapGoldenCompare.h"
+#include "donner/gpu/baseline/FrozenBaselinePolicy.h"
 #include "donner/gpu/baseline/WgpuBaselineCapture.h"
 #include "donner/svg/renderer/RendererInterface.h"
 
@@ -140,25 +146,30 @@ protected:
     slug_ = EnvironmentSlug(capturer_->environment());
     provenance_ = ReadProvenance(ProvenancePathFor(slug_));
     if (provenance_.empty()) {
-      skipUnbaselinedEnvironment();
+      handleUnbaselinedEnvironment();
       return;
     }
   }
 
-  /// Freezes what this adapter renders into the test's undeclared outputs and skips, naming the
-  /// directory to commit. A frozen capture from another adapter is not a usable expectation here:
-  /// two GPUs can round a covered edge texel differently, so a diff against one would report a
-  /// difference this suite cannot attribute to a regression.
-  void skipUnbaselinedEnvironment() {
+  /// Freezes what this adapter renders into the test's undeclared outputs, then either skips with
+  /// the directory to commit or fails with it, depending on where this is running. A frozen
+  /// capture from another adapter is not a usable expectation here, so comparing anyway is not an
+  /// option; the choice is only between handing the capture to a person and refusing to report a
+  /// gate that did not run as a pass.
+  void handleUnbaselinedEnvironment() {
     const CaptureEnvironment& live = capturer_->environment();
     std::filesystem::path written;
-    const std::string error =
+    const std::string captureError =
         WriteFrozenBaselineSet(*capturer_, UndeclaredOutputDir(), "unknown", "unknown", &written);
-    GTEST_SKIP() << "no frozen baseline for " << live.adapterName << " (" << live.adapterBackend
-                 << "). This run captured one at " << written << " ("
-                 << (error.empty() ? "ok" : error)
-                 << "); commit it under donner/gpu/baseline/baselines/" << slug_
-                 << "/ with a real source revision to gate this environment.";
+    const UnbaselinedAdapterDisposition disposition =
+        DispositionForUnbaselinedAdapter(RunningUnderContinuousIntegration());
+    const std::string message = UnbaselinedAdapterMessage(
+        live.adapterName, live.adapterBackend, slug_, written.string(), captureError, disposition);
+
+    if (disposition == UnbaselinedAdapterDisposition::FailClosed) {
+      FAIL() << message;
+    }
+    GTEST_SKIP() << message;
   }
 
   WgpuBaselineCapturer* capturer_ = nullptr;
