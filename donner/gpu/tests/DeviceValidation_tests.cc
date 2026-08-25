@@ -1001,6 +1001,37 @@ TEST_F(SurfaceTests, RejectsAConfigurationWithNoExtent) {
               IsGpuError(GpuErrorType::InvalidDescriptor));
 }
 
+TEST_F(SurfaceTests, RejectsAConfigurationNamingUnknownPacingOrAlphaCompositing) {
+  const Surface surface = metalSurface();
+
+  SurfaceConfiguration unknownPacing = configuration();
+  unknownPacing.presentMode = static_cast<PresentMode>(0x7F);
+  EXPECT_THAT(device_.configureSurface(surface, unknownPacing),
+              IsGpuErrorWithMessage(GpuErrorType::InvalidDescriptor, HasSubstr("presentMode")))
+      << "An unrecognised pacing would otherwise be presented as Fifo without anyone asking";
+
+  SurfaceConfiguration unknownAlpha = configuration();
+  unknownAlpha.alphaMode = static_cast<SurfaceAlphaMode>(0x7F);
+  EXPECT_THAT(device_.configureSurface(surface, unknownAlpha),
+              IsGpuErrorWithMessage(GpuErrorType::InvalidDescriptor, HasSubstr("alphaMode")))
+      << "An unrecognised alpha mode would otherwise be presented as Opaque without anyone asking";
+}
+
+TEST_F(SurfaceTests, AcceptsEveryPacingAndAlphaCompositingItDefines) {
+  const Surface surface = metalSurface();
+  for (const PresentMode mode : {PresentMode::Fifo, PresentMode::Immediate, PresentMode::Mailbox}) {
+    SurfaceConfiguration accepted = configuration();
+    accepted.presentMode = mode;
+    EXPECT_THAT(device_.configureSurface(surface, accepted), IsOk()) << "pacing " << mode;
+  }
+  for (const SurfaceAlphaMode mode :
+       {SurfaceAlphaMode::Opaque, SurfaceAlphaMode::Premultiplied, SurfaceAlphaMode::Inherit}) {
+    SurfaceConfiguration accepted = configuration();
+    accepted.alphaMode = mode;
+    EXPECT_THAT(device_.configureSurface(surface, accepted), IsOk()) << "alpha mode " << mode;
+  }
+}
+
 TEST_F(SurfaceTests, AcquiringBeforeConfiguringIsReported) {
   const Surface surface = metalSurface();
   EXPECT_THAT(device_.acquireCurrentTexture(surface),

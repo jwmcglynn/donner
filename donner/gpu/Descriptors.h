@@ -351,6 +351,12 @@ std::ostream& operator<<(std::ostream& os, LoadOp value);
 std::ostream& operator<<(std::ostream& os, StoreOp value);
 /// Ostream output operator. @param os Output stream. @param value Value to output.
 std::ostream& operator<<(std::ostream& os, ShaderSourceKind value);
+/// Ostream output operator. @param os Output stream. @param value Value to output.
+std::ostream& operator<<(std::ostream& os, NativeSurfaceKind value);
+/// Ostream output operator. @param os Output stream. @param value Value to output.
+std::ostream& operator<<(std::ostream& os, PresentMode value);
+/// Ostream output operator. @param os Output stream. @param value Value to output.
+std::ostream& operator<<(std::ostream& os, SurfaceAlphaMode value);
 
 /// Returns true if \p value is a known enumerator. Every enum arriving through a descriptor is
 /// checked with these overloads so out-of-range casts fail closed with
@@ -481,6 +487,9 @@ enum class SurfaceStatus : uint8_t {
   DeviceLost,  //!< The device was lost.
   Timeout,     //!< No texture became available in time. Retry.
 };
+
+/// Ostream output operator. @param os Output stream. @param value Value to output.
+std::ostream& operator<<(std::ostream& os, SurfaceStatus value);
 
 /// Descriptor for `Device::createSampler`.
 struct SamplerDescriptor {

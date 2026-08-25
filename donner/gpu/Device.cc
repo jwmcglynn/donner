@@ -1330,6 +1330,17 @@ Status ValidateSurfaceConfiguration(const SurfaceConfiguration& configuration) {
   if (configuration.usage == TextureUsage::None) {
     return Err(GpuErrorType::InvalidDescriptor, "SurfaceConfiguration.usage is empty");
   }
+  // Pacing and alpha compositing are checked here rather than left to the backend: the mappings
+  // onto backend values fall back to Fifo and Opaque for anything they do not recognise, so an
+  // unknown value would otherwise be presented under a configuration nobody asked for.
+  if (Status status = CheckEnum(configuration.presentMode, "SurfaceConfiguration.presentMode");
+      status.hasError()) {
+    return status;
+  }
+  if (Status status = CheckEnum(configuration.alphaMode, "SurfaceConfiguration.alphaMode");
+      status.hasError()) {
+    return status;
+  }
   if (configuration.size.width == 0 || configuration.size.height == 0) {
     return Err(GpuErrorType::InvalidDescriptor,
                std::format("SurfaceConfiguration.size {}x{} has a zero dimension",

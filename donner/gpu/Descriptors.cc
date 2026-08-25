@@ -183,6 +183,46 @@ std::ostream& operator<<(std::ostream& os, ShaderSourceKind value) {
   return os << "Unknown";
 }
 
+std::ostream& operator<<(std::ostream& os, NativeSurfaceKind value) {
+  switch (value) {
+    case NativeSurfaceKind::MetalLayer: return os << "MetalLayer";
+    case NativeSurfaceKind::XlibWindow: return os << "XlibWindow";
+    case NativeSurfaceKind::WaylandSurface: return os << "WaylandSurface";
+    case NativeSurfaceKind::Win32Window: return os << "Win32Window";
+    case NativeSurfaceKind::CanvasSelector: return os << "CanvasSelector";
+  }
+  return os << "Unknown";
+}
+
+std::ostream& operator<<(std::ostream& os, PresentMode value) {
+  switch (value) {
+    case PresentMode::Fifo: return os << "Fifo";
+    case PresentMode::Immediate: return os << "Immediate";
+    case PresentMode::Mailbox: return os << "Mailbox";
+  }
+  return os << "Unknown";
+}
+
+std::ostream& operator<<(std::ostream& os, SurfaceAlphaMode value) {
+  switch (value) {
+    case SurfaceAlphaMode::Opaque: return os << "Opaque";
+    case SurfaceAlphaMode::Premultiplied: return os << "Premultiplied";
+    case SurfaceAlphaMode::Inherit: return os << "Inherit";
+  }
+  return os << "Unknown";
+}
+
+std::ostream& operator<<(std::ostream& os, SurfaceStatus value) {
+  switch (value) {
+    case SurfaceStatus::Success: return os << "Success";
+    case SurfaceStatus::Outdated: return os << "Outdated";
+    case SurfaceStatus::Lost: return os << "Lost";
+    case SurfaceStatus::DeviceLost: return os << "DeviceLost";
+    case SurfaceStatus::Timeout: return os << "Timeout";
+  }
+  return os << "Unknown";
+}
+
 bool IsKnownEnumValue(NativeSurfaceKind value) {
   switch (value) {
     case NativeSurfaceKind::MetalLayer:
