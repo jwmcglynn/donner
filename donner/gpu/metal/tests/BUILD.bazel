@@ -46,11 +46,18 @@ donner_cc_test(
         "MTL_DEBUG_LAYER": "1",
         "MTL_SHADER_VALIDATION": "1",
     },
+    # Bazel scrubs the test environment, so the automated-lane markers have to be named here or
+    # the no-device rule can never see one and this slice keeps skipping into a green report.
+    env_inherit = [
+        "DONNER_BASELINE_REQUIRE_FROZEN_ADAPTER",
+        "GITHUB_ACTIONS",
+    ],
     target_compatible_with = ["@platforms//os:macos"],
     deps = [
         "//donner/editor/tests:bitmap_golden_compare",
         "//donner/gpu",
         "//donner/gpu:baseline_scene",
+        "//donner/gpu/baseline:frozen_baseline_policy",
         "//donner/gpu/metal:metal_device",
         "//donner/gpu/shader",
         "//donner/gpu/shader:module_interface",

@@ -44,8 +44,10 @@ MissingComparisonDisposition DispositionForUnbaselinedAdapter(bool underContinuo
                                     : MissingComparisonDisposition::Skip;
 }
 
-MissingComparisonDisposition DispositionForMissingAdapter(bool /*underContinuousIntegration*/) {
-  return MissingComparisonDisposition::Skip;
+MissingComparisonDisposition DispositionForMissingAdapter(bool underContinuousIntegration) {
+  // Deliberately the same rule as the missing-baseline case: both end with nothing compared, and
+  // a lane that reports success for either has retired the gate.
+  return DispositionForUnbaselinedAdapter(underContinuousIntegration);
 }
 
 std::string UnbaselinedAdapterMessage(std::string_view adapterName, std::string_view adapterBackend,

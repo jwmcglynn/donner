@@ -140,7 +140,8 @@ protected:
   void SetUp() override {
     capturer_ = SharedCapturer();
     if (capturer_ == nullptr) {
-      GTEST_SKIP() << "No GPU adapter available; the frozen pixel check needs a real device";
+      handleMissingAdapter();
+      return;
     }
 
     slug_ = EnvironmentSlug(capturer_->environment());
@@ -149,6 +150,19 @@ protected:
       handleUnbaselinedEnvironment();
       return;
     }
+  }
+
+  /// Reports a run that could not create a device at all. Locally that is a skip; on an
+  /// automated lane it is a failure, because a lane that selected this target and then produced
+  /// no device has disabled the comparison rather than passed it.
+  void handleMissingAdapter() {
+    const MissingComparisonDisposition disposition =
+        DispositionForMissingAdapter(RunningUnderContinuousIntegration());
+    const std::string message = NoAdapterMessage("the frozen pixel check", disposition);
+    if (disposition == MissingComparisonDisposition::FailClosed) {
+      FAIL() << message;
+    }
+    GTEST_SKIP() << message;
   }
 
   /// Freezes what this adapter renders into the test's undeclared outputs, then either skips with
