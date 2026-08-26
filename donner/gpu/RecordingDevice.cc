@@ -112,6 +112,17 @@ struct CommandSerializer {
   void operator()(const SetPipelineCommand& command) {
     os << "setPipeline " << RefId(RenderPipelineTag::kName, command.pipelineId.slotIndex);
   }
+  void operator()(const BeginComputePassCommand& command) {
+    os << "beginComputePass label=" << QuoteLabel(command.descriptor.label);
+  }
+  void operator()(const SetComputePipelineCommand& command) {
+    os << "setComputePipeline " << RefId(ComputePipelineTag::kName, command.pipelineId.slotIndex);
+  }
+  void operator()(const DispatchWorkgroupsCommand& command) {
+    os << "dispatchWorkgroups x=" << command.workgroupCountX << " y=" << command.workgroupCountY
+       << " z=" << command.workgroupCountZ;
+  }
+  void operator()(const EndComputePassCommand&) { os << "endComputePass"; }
   void operator()(const SetBindGroupCommand& command) {
     os << "setBindGroup index=" << command.index
        << " bindGroup=" << RefId(BindGroupTag::kName, command.bindGroupId.slotIndex);
@@ -211,7 +222,11 @@ Status RecordingDevice::onCreateBindGroupLayout(uint32_t slotIndex,
     }
     const BindGroupLayoutEntry& entry = descriptor.entries[i];
     os << "{binding=" << entry.binding << " visibility=" << entry.visibility
-       << " type=" << entry.type << "}";
+       << " type=" << entry.type;
+    if (entry.type == BindingType::WriteOnlyStorageTexture2d) {
+      os << " storageTextureFormat=" << entry.storageTextureFormat;
+    }
+    os << "}";
   }
   os << "]";
   lines_.push_back(os.str());
@@ -283,6 +298,17 @@ Status RecordingDevice::onCreateShaderModule(uint32_t slotIndex,
        << HashBytes(std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(source.data()),
                                              source.size()));
   }
+  if (!descriptor.computeEntryPoints.empty()) {
+    os << " computeEntryPoints=[";
+    for (size_t i = 0; i < descriptor.computeEntryPoints.size(); ++i) {
+      if (i > 0) {
+        os << " ";
+      }
+      const ComputeEntryPointInfo& entryPoint = descriptor.computeEntryPoints[i];
+      os << "{" << QuoteLabel(entryPoint.name) << " " << entryPoint.workgroupSize << "}";
+    }
+    os << "]";
+  }
   lines_.push_back(os.str());
   return OkStatus();
 }
@@ -323,6 +349,19 @@ Status RecordingDevice::onCreateRenderPipeline(uint32_t slotIndex,
 
   os << " topology=" << descriptor.topology << " cullMode=" << descriptor.cullMode
      << " multisampleCount=" << descriptor.multisampleCount;
+  lines_.push_back(os.str());
+  return OkStatus();
+}
+
+Status RecordingDevice::onCreateComputePipeline(uint32_t slotIndex,
+                                                const ComputePipelineDescriptor& descriptor) {
+  std::ostringstream os = MakeLineStream();
+  os << "createComputePipeline " << RefId(ComputePipelineTag::kName, slotIndex)
+     << " label=" << QuoteLabel(descriptor.label)
+     << " layout=" << RefId(PipelineLayoutTag::kName, descriptor.layout.slotIndex())
+     << " compute={module=" << RefId(ShaderModuleTag::kName, descriptor.compute.module.slotIndex())
+     << " entryPoint=" << QuoteLabel(descriptor.compute.entryPoint) << "}"
+     << " workgroupSize=" << descriptor.workgroupSize;
   lines_.push_back(os.str());
   return OkStatus();
 }

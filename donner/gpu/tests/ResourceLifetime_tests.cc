@@ -65,6 +65,9 @@ protected:
   Status onCreateRenderPipeline(uint32_t, const RenderPipelineDescriptor&) override {
     return OkStatus();
   }
+  Status onCreateComputePipeline(uint32_t, const ComputePipelineDescriptor&) override {
+    return OkStatus();
+  }
   void onDestroyResource(std::string_view resourceName, uint32_t slotIndex) override {
     backendReleases_.push_back(std::string(resourceName) + "#" + std::to_string(slotIndex));
   }

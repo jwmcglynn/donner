@@ -46,6 +46,7 @@ donner_cc_test(
         "//donner/gpu",
         "//donner/gpu:baseline_scene",
         "//donner/gpu/shader",
+        "//donner/gpu/shader:module_interface",
         "//donner/gpu/shader:programs",
         "//donner/gpu/vulkan:vulkan_device",
         "//donner/svg/renderer:renderer_image_io",
@@ -78,6 +79,38 @@ donner_multi_transitioned_test(
     testonly = 1,
     dep = ":vulkan_solid_fill_tests_impl",
     renderer_backend = "geode",
+)
+
+# The Vulkan compute vertical slice: dispatches the color-matrix kernel
+# emitted from the shader IR and compares the destination texels against the
+# host result. Unlike the solid-fill slice this half needs no wgpu comparison,
+# so it is a plain Linux-gated test with no geode transition. A missing driver
+# is a red test wherever DONNER_REQUIRE_VULKAN=1 is set.
+#
+# No driver is pinned here, deliberately. The solid-fill slice pins the
+# software implementation because it compares two GPU pipelines against each
+# other and needs both halves on one rasterizer. This slice compares against a
+# result computed on the host, and its scene is chosen so every value is exact
+# in 8-bit unorm, so there is no cross-driver quantization freedom to control
+# for - running on whatever driver the host exposes covers the real hardware
+# path a pinned software driver never would.
+donner_cc_test(
+    name = "vulkan_color_matrix_tests",
+    srcs = ["VulkanColorMatrix_tests.cc"],
+    env = {
+        "DONNER_REQUIRE_VULKAN": "1",
+        "XDG_RUNTIME_DIR": "/tmp",
+    },
+    target_compatible_with = ["@platforms//os:linux"],
+    deps = [
+        "//donner/gpu",
+        "//donner/gpu:color_matrix_slice",
+        "//donner/gpu/shader",
+        "//donner/gpu/shader:module_interface",
+        "//donner/gpu/shader:programs",
+        "//donner/gpu/vulkan:vulkan_device",
+        "@com_google_gtest//:gtest_main",
+    ],
 )
 
 donner_package()

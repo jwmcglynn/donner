@@ -37,9 +37,9 @@ donner_cc_library(
     ],
 )
 
-# The frozen-baseline scene shared by the design 0053 vertical slices: the
-# black-box capture tool and the Metal and Vulkan solid-fill slice tests all
-# consume identical inputs from this header.
+# The frozen-baseline scene shared by the vertical slices: the black-box
+# capture tool and the Metal and Vulkan solid-fill slice tests all consume
+# identical inputs from this header.
 donner_cc_library(
     name = "baseline_scene",
     testonly = 1,
@@ -50,6 +50,15 @@ donner_cc_library(
         "//donner/css",
         "//donner/svg/renderer/geode:geode_path_encoder",
     ],
+)
+
+# The color-matrix compute scene shared by the backend compute slices: the
+# same input texels, matrix, bias, dispatch shape, and expected output.
+donner_cc_library(
+    name = "color_matrix_slice",
+    testonly = 1,
+    hdrs = ["tests/ColorMatrixSlice.h"],
+    visibility = donner_internal_visibility(),
 )
 
 # gmock matchers and unwrap helpers shared by the model tests here and by backend/adapter
@@ -69,6 +78,7 @@ donner_cc_test(
     name = "gpu_tests",
     srcs = [
         "tests/CommandEncoder_tests.cc",
+        "tests/ComputePass_tests.cc",
         "tests/DeviceValidation_tests.cc",
         "tests/GpuResult_tests.cc",
         "tests/HandleLifetime_tests.cc",
@@ -79,6 +89,8 @@ donner_cc_test(
     deps = [
         ":gpu",
         ":gpu_test_utils",
+        # For the static_assert tying the runtime's compute caps to the shader IR's copy.
+        "//donner/gpu/shader",
         "@com_google_gtest//:gtest_main",
     ],
 )

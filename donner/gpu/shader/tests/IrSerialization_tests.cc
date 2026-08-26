@@ -315,5 +315,49 @@ function fsMain stage=fragment
   EXPECT_THAT(module.serialize(), testing::Eq(kExpected));
 }
 
+TEST(IrSerializationTests, ComputeEntryPointRecordsStageWorkgroupSizeAndTextureStore) {
+  ModuleBuilder builder;
+  EXPECT_THAT(
+      builder.addWriteOnlyStorageTexture2d(0, 0, "outputTexture", StorageTextureFormat::Rgba8Unorm),
+      IsShaderOk());
+
+  auto result =
+      builder.createComputeEntryPoint("cs_main",
+                                      {IrParam{"gid", IrType::Vec3(ScalarKind::U32), std::nullopt,
+                                               BuiltinInput::GlobalInvocationId}},
+                                      WorkgroupSize{8, 8, 1});
+  ASSERT_THAT(result, HasShaderResult());
+  FunctionBuilder function = std::move(result).result();
+
+  const IrExpr gid = GetShaderResultOrFail(function.ref("gid"), LiteralF32(0));
+  const IrExpr coords = GetShaderResultOrFail(
+      Convert(IrType::Vec2i(), GetShaderResultOrFail(Swizzle(gid, "xy"), LiteralF32(0))),
+      LiteralF32(0));
+  const IrExpr color = GetShaderResultOrFail(
+      ConstructVector(IrType::Vec4f(),
+                      {LiteralF32(1.0f), LiteralF32(0.0f), LiteralF32(0.0f), LiteralF32(1.0f)}),
+      LiteralF32(0));
+  EXPECT_THAT(
+      function.textureStore(GetShaderResultOrFail(function.ref("outputTexture"), LiteralF32(0)),
+                            coords, color),
+      IsShaderOk());
+  EXPECT_THAT(function.finish(), IsShaderOk());
+
+  ShaderResult<IrModule> module = builder.build();
+  ASSERT_THAT(module, HasShaderResult());
+
+  // clang-format off
+  constexpr const char* kExpected = R"(module
+binding group=0 binding=0 kind=storage_texture_write outputTexture: texture_storage_2d<rgba8unorm, write>
+function cs_main stage=compute workgroup_size=8x8x1
+  param gid: vec3<u32> @builtin(global_invocation_id)
+  body:
+    textureStore(ref(outputTexture), convert_vec2<i32>(swizzle(ref(gid), xy)), construct_vec4<f32>(lit_f32(1), lit_f32(0), lit_f32(0), lit_f32(1)))
+)";
+  // clang-format on
+
+  EXPECT_THAT(module.result().serialize(), testing::Eq(kExpected));
+}
+
 }  // namespace
 }  // namespace donner::gpu::shader

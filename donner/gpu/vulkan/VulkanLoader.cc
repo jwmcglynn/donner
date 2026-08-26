@@ -244,6 +244,8 @@ Status VulkanLoader::loadDevice(VkDevice device) {
   missing.store(api_.vkDestroyFramebuffer, "vkDestroyFramebuffer", resolve("vkDestroyFramebuffer"));
   missing.store(api_.vkCreateGraphicsPipelines, "vkCreateGraphicsPipelines",
                 resolve("vkCreateGraphicsPipelines"));
+  missing.store(api_.vkCreateComputePipelines, "vkCreateComputePipelines",
+                resolve("vkCreateComputePipelines"));
   missing.store(api_.vkDestroyPipeline, "vkDestroyPipeline", resolve("vkDestroyPipeline"));
   missing.store(api_.vkCreateCommandPool, "vkCreateCommandPool", resolve("vkCreateCommandPool"));
   missing.store(api_.vkDestroyCommandPool, "vkDestroyCommandPool", resolve("vkDestroyCommandPool"));
@@ -266,6 +268,7 @@ Status VulkanLoader::loadDevice(VkDevice device) {
   missing.store(api_.vkCmdSetViewport, "vkCmdSetViewport", resolve("vkCmdSetViewport"));
   missing.store(api_.vkCmdSetScissor, "vkCmdSetScissor", resolve("vkCmdSetScissor"));
   missing.store(api_.vkCmdDraw, "vkCmdDraw", resolve("vkCmdDraw"));
+  missing.store(api_.vkCmdDispatch, "vkCmdDispatch", resolve("vkCmdDispatch"));
   missing.store(api_.vkCmdPipelineBarrier, "vkCmdPipelineBarrier", resolve("vkCmdPipelineBarrier"));
   missing.store(api_.vkCmdCopyBufferToImage, "vkCmdCopyBufferToImage",
                 resolve("vkCmdCopyBufferToImage"));

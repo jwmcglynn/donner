@@ -2,12 +2,11 @@ load("//build_defs:rules.bzl", "donner_cc_library")
 load("//build_defs:visibility.bzl", "donner_internal_visibility")
 load("//build_defs:package.bzl", "donner_package")
 
-# donner::gpu::vulkan - the Vulkan backend of the Donner GPU runtime (design
-# doc 0053, change sequence packet 7).
+# donner::gpu::vulkan - the Vulkan backend of the Donner GPU runtime.
 #
-# Minimal vertical slice: host-visible buffers, device-local textures with
-# staged uploads, SPIR-V shader modules, the solid-fill render pipeline
-# family, render pass replay, and texture-to-buffer readback. Compiles on
+# Scope: host-visible buffers, device-local textures with staged uploads,
+# SPIR-V shader modules, render pipelines, render pass replay, compute
+# pipelines and compute passes, and texture-to-buffer readback. Compiles on
 # every platform against the hermetic Vulkan-Headers module and links
 # everywhere: the Vulkan loader is opened at runtime rather than linked, so a
 # build needs no Vulkan library present and a machine without one reports it

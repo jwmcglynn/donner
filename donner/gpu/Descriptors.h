@@ -3,8 +3,8 @@
 /// Typed immutable descriptors for \c donner::gpu resource creation.
 ///
 /// The enum and descriptor surface is intentionally narrow: it covers the operations Geode's
-/// rendering and the editor actually use (design 0053 "Command model"), not a general GPU API.
-/// Descriptors are plain value types, immutable by convention; all validation happens in
+/// rendering, filtering, and the editor actually use, not a general GPU API. Descriptors are
+/// plain value types, immutable by convention; all validation happens in
 /// \ref donner::gpu::Device operations, which fail closed on malformed input.
 
 #include <array>
@@ -92,6 +92,7 @@ enum class TextureUsage : uint32_t {
   Sampled = 1 << 1,           //!< Sampled in a shader.
   CopySrc = 1 << 2,           //!< Source of copy operations (readback).
   CopyDst = 1 << 3,           //!< Destination of copies and queue writes.
+  StorageBinding = 1 << 4,    //!< Written through a storage-texture binding in a compute shader.
 };
 
 /// Buffer usage flags. Combinable with `|`.
@@ -188,10 +189,11 @@ enum class BlendOperation : uint8_t {
 
 /// Type of resource a bind group layout entry expects.
 enum class BindingType : uint8_t {
-  UniformBuffer,          //!< Uniform buffer binding.
-  ReadOnlyStorageBuffer,  //!< Read-only storage buffer binding.
-  SampledTexture2dFloat,  //!< Sampled 2D float texture binding.
-  FilteringSampler,       //!< Filtering sampler binding.
+  UniformBuffer,              //!< Uniform buffer binding.
+  ReadOnlyStorageBuffer,      //!< Read-only storage buffer binding.
+  SampledTexture2dFloat,      //!< Sampled 2D float texture binding.
+  FilteringSampler,           //!< Filtering sampler binding.
+  WriteOnlyStorageTexture2d,  //!< Write-only 2D storage texture binding (compute stage only).
 };
 
 /// Load operation for a render pass color attachment.
@@ -356,6 +358,9 @@ struct BindGroupLayoutEntry {
   uint32_t binding = 0;                           //!< Shader binding index.
   ShaderStage visibility = ShaderStage::None;     //!< Stages that may access the binding.
   BindingType type = BindingType::UniformBuffer;  //!< Kind of resource bound.
+  /// Texel format a \ref BindingType::WriteOnlyStorageTexture2d binding writes; the bound
+  /// texture must have been created with this format. Ignored for every other binding type.
+  TextureFormat storageTextureFormat = TextureFormat::RGBA8Unorm;
 };
 
 /// Descriptor for `Device::createBindGroupLayout`.
@@ -370,6 +375,42 @@ struct PipelineLayoutDescriptor {
   std::vector<BindGroupLayoutRef> bindGroupLayouts;  //!< Bind group layouts, by group index.
 };
 
+/**
+ * Workgroup size a compute entry point declares.
+ *
+ * The runtime carries it in the pipeline descriptor rather than reading it back from the shader
+ * because Metal takes the threadgroup size at dispatch time, not from the compiled pipeline
+ * state; every backend then dispatches with the same declared shape.
+ * `Device::createComputePipeline` checks the value against the size the shader module reports for
+ * the same entry point, so the two cannot disagree.
+ */
+struct WorkgroupSize {
+  uint32_t x = 1;  //!< Invocations along X. Must be nonzero.
+  uint32_t y = 1;  //!< Invocations along Y. Must be nonzero.
+  uint32_t z = 1;  //!< Invocations along Z. Must be nonzero.
+
+  /// Equality operator. @param other Size to compare against.
+  bool operator==(const WorkgroupSize& other) const = default;
+
+  /// Ostream output operator, e.g. `8x8x1`.
+  /// @param os Output stream. @param value Size to output.
+  friend std::ostream& operator<<(std::ostream& os, const WorkgroupSize& value) {
+    return os << value.x << "x" << value.y << "x" << value.z;
+  }
+};
+
+/**
+ * One compute entry point a shader module contains, with the workgroup size compiled into it.
+ *
+ * The runtime cannot read a workgroup size back out of compiled WGSL, MSL, or SPIR-V, so a module
+ * reports the entry points it carries here and `Device::createComputePipeline` uses that to reject
+ * a pipeline descriptor that disagrees with the shader.
+ */
+struct ComputeEntryPointInfo {
+  RcString name;                //!< Entry point name.
+  WorkgroupSize workgroupSize;  //!< Workgroup size compiled into that entry point.
+};
+
 /// Descriptor for `Device::createShaderModule`. Source is trusted generated build output, never
 /// runtime input from documents. Exactly one source representation must be populated: text kinds
 /// (\ref ShaderSourceKind::Wgsl, \ref ShaderSourceKind::Msl) require nonempty `sourceText` and
@@ -380,6 +421,11 @@ struct ShaderModuleDescriptor {
   RcString sourceText;                                   //!< Shader source text (text kinds only).
   ShaderSourceKind sourceKind = ShaderSourceKind::Wgsl;  //!< Source language.
   std::vector<uint32_t> spirvWords;  //!< SPIR-V words (\ref ShaderSourceKind::Spirv only).
+  /// Compute entry points this module contains, with the workgroup size compiled into each.
+  /// Required to create a compute pipeline against this module; render-only modules leave it
+  /// empty. \ref donner::gpu::shader::ComputeEntryPointsOf fills it from the IR module the
+  /// source was emitted from, so the size is never transcribed by hand.
+  std::vector<ComputeEntryPointInfo> computeEntryPoints;
 };
 
 /// One vertex attribute within a \ref VertexBufferLayout.
@@ -428,6 +474,25 @@ struct FragmentState {
   ShaderModuleRef module;                 //!< Shader module containing the entry point.
   RcString entryPoint;                    //!< Entry point name. Must be nonempty.
   std::vector<ColorTargetState> targets;  //!< Color targets. Must be nonempty.
+};
+
+/// Compute stage of a \ref ComputePipelineDescriptor.
+struct ComputeState {
+  ShaderModuleRef module;  //!< Shader module containing the entry point.
+  RcString entryPoint;     //!< Entry point name. Must be nonempty.
+};
+
+/// Descriptor for `Device::createComputePipeline`.
+struct ComputePipelineDescriptor {
+  RcString label;               //!< Debug label.
+  PipelineLayoutRef layout;     //!< Pipeline layout.
+  ComputeState compute;         //!< Compute stage.
+  WorkgroupSize workgroupSize;  //!< Workgroup size the entry point declares.
+};
+
+/// Descriptor for `CommandEncoder::beginComputePass`.
+struct ComputePassDescriptor {
+  RcString label;  //!< Pass debug label.
 };
 
 /// Descriptor for `Device::createRenderPipeline`.

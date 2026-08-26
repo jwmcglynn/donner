@@ -687,7 +687,8 @@ ShaderResult<IrType> CheckBuiltin(BuiltinFn fn, std::span<const IrExpr> args,
 
     case BuiltinFn::TextureDimensions:
       if (args.size() != 1) return argCountError(1);
-      if (args[0].type().kind() != IrType::Kind::Texture2dF32) {
+      if (args[0].type().kind() != IrType::Kind::Texture2dF32 &&
+          args[0].type().kind() != IrType::Kind::WriteOnlyStorageTexture2d) {
         return ShaderError{
             std::format("textureDimensions requires a texture, got {}", TypeName(args[0])), label};
       }

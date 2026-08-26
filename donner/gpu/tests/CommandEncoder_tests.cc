@@ -253,9 +253,10 @@ TEST_F(CommandEncoderTests, ViewportWithInvalidDepthRangeFails) {
 
 TEST_F(CommandEncoderTests, CopyTextureToBufferDuringPassFails) {
   beginPass();
-  EXPECT_THAT(encoder_->copyTextureToBuffer(TexelCopyTextureInfo{target_}, readbackBuffer_,
-                                            TexelCopyBufferLayout{0, 256, 4}, Extent2d{4, 4}),
-              IsGpuErrorWithMessage(GpuErrorType::InvalidState, HasSubstr("inside a render pass")));
+  EXPECT_THAT(
+      encoder_->copyTextureToBuffer(TexelCopyTextureInfo{target_}, readbackBuffer_,
+                                    TexelCopyBufferLayout{0, 256, 4}, Extent2d{4, 4}),
+      IsGpuErrorWithMessage(GpuErrorType::InvalidState, HasSubstr("not allowed inside a pass")));
 }
 
 TEST_F(CommandEncoderTests, CopyTextureToBufferRejectsMisalignedBytesPerRow) {
@@ -452,8 +453,9 @@ TEST_F(CopyTextureToTextureTests, SmallerThanBothExtentsIsAccepted) {
 TEST_F(CopyTextureToTextureTests, DuringPassFails) {
   const Texture destination = createDestination();
   beginPass();
-  EXPECT_THAT(encoder_->copyTextureToTexture(target_, destination, Extent2d{4, 4}),
-              IsGpuErrorWithMessage(GpuErrorType::InvalidState, HasSubstr("inside a render pass")));
+  EXPECT_THAT(
+      encoder_->copyTextureToTexture(target_, destination, Extent2d{4, 4}),
+      IsGpuErrorWithMessage(GpuErrorType::InvalidState, HasSubstr("not allowed inside a pass")));
 }
 
 TEST_F(CopyTextureToTextureTests, RejectsFormatMismatch) {

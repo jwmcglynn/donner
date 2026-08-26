@@ -12,7 +12,7 @@
 namespace donner::gpu::vulkan {
 
 /**
- * Vulkan backend of the Donner GPU runtime (design 0053 packet 7, the Vulkan vertical slice).
+ * Vulkan backend of the Donner GPU runtime.
  *
  * Inherits every fail-closed validation check from \ref donner::gpu::Device; the `on*` hooks
  * receive only validated input and translate it to Vulkan objects. Every Vulkan call's VkResult
@@ -39,10 +39,11 @@ namespace donner::gpu::vulkan {
  * DEVICE_LOCAL (when available) with staged uploads through a transient host-visible buffer and
  * explicit image layout transitions.
  *
- * Synchronization is intentionally conservative and validation-clean (design 0053 "Vulkan"):
- * full ALL_COMMANDS / memory-availability barriers around image layout transitions, explicit
- * external subpass dependencies on every render pass, and a HOST-domain buffer barrier after
- * readback copies. Barrier elision is out of scope for this slice.
+ * Synchronization is intentionally conservative and validation-clean: full ALL_COMMANDS /
+ * memory-availability barriers around image layout transitions, explicit external subpass
+ * dependencies on every render pass, and a HOST-domain buffer barrier after readback copies.
+ * Barrier elision is deliberately not attempted; it would need counter and timing evidence
+ * naming the bottleneck it removes.
  *
  * Threading: single-threaded use, matching \ref donner::gpu::Device's thread affinity.
  * Completion is tracked by polling per-submission fences from the owning thread; there are no
@@ -95,6 +96,30 @@ public:
    */
   Result<std::vector<uint8_t>> readBackBuffer(const Buffer& buffer);
 
+  /// The image layout a texture is tracked in, as the backend's own bookkeeping records it.
+  ///
+  /// Reported through a backend-neutral enum so the header stays free of Vulkan types. This is a
+  /// test accessor: a texture the backend never transitioned to the layout its descriptors
+  /// declare is invalid use that a permissive driver executes anyway, so the mistake is not
+  /// observable in the pixels a slice reads back.
+  enum class TrackedTextureLayout : uint8_t {
+    Undefined,        //!< Never transitioned; contents undefined.
+    General,          //!< Readable and writable, the layout a storage-texture binding declares.
+    ShaderReadOnly,   //!< The layout a sampled-texture binding declares.
+    TransferSrc,      //!< Source of a copy.
+    TransferDst,      //!< Destination of a copy or upload.
+    ColorAttachment,  //!< Bound as a render pass color attachment.
+    Other,            //!< Any layout this enum does not name.
+  };
+
+  /**
+   * Returns the layout \p texture is tracked in. Test accessor; fails closed on a handle that
+   * does not name a live texture of this device.
+   *
+   * @param texture Texture to query.
+   */
+  Result<TrackedTextureLayout> trackedTextureLayoutForTest(const Texture& texture) const;
+
   /// Message of the most recent asynchronous Vulkan failure observed while polling or waiting
   /// on fences (e.g. VK_ERROR_DEVICE_LOST), or an empty string if none occurred.
   /// Test/diagnostic accessor.
@@ -115,6 +140,8 @@ protected:
                               const ShaderModuleDescriptor& descriptor) override;
   Status onCreateRenderPipeline(uint32_t slotIndex,
                                 const RenderPipelineDescriptor& descriptor) override;
+  Status onCreateComputePipeline(uint32_t slotIndex,
+                                 const ComputePipelineDescriptor& descriptor) override;
   void onDestroyResource(std::string_view resourceName, uint32_t slotIndex) override;
   Status onWriteBuffer(uint32_t slotIndex, uint64_t offsetBytes,
                        std::span<const uint8_t> data) override;

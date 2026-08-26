@@ -50,7 +50,8 @@ std::ostream& operator<<(std::ostream& os, TextureUsage value) {
                      {{static_cast<uint32_t>(TextureUsage::RenderAttachment), "RenderAttachment"},
                       {static_cast<uint32_t>(TextureUsage::Sampled), "Sampled"},
                       {static_cast<uint32_t>(TextureUsage::CopySrc), "CopySrc"},
-                      {static_cast<uint32_t>(TextureUsage::CopyDst), "CopyDst"}});
+                      {static_cast<uint32_t>(TextureUsage::CopyDst), "CopyDst"},
+                      {static_cast<uint32_t>(TextureUsage::StorageBinding), "StorageBinding"}});
 }
 
 std::ostream& operator<<(std::ostream& os, BufferUsage value) {
@@ -152,6 +153,7 @@ std::ostream& operator<<(std::ostream& os, BindingType value) {
     case BindingType::ReadOnlyStorageBuffer: return os << "ReadOnlyStorageBuffer";
     case BindingType::SampledTexture2dFloat: return os << "SampledTexture2dFloat";
     case BindingType::FilteringSampler: return os << "FilteringSampler";
+    case BindingType::WriteOnlyStorageTexture2d: return os << "WriteOnlyStorageTexture2d";
   }
   return os << "Unknown";
 }
@@ -262,7 +264,8 @@ bool IsKnownEnumValue(BindingType value) {
     case BindingType::UniformBuffer:
     case BindingType::ReadOnlyStorageBuffer:
     case BindingType::SampledTexture2dFloat:
-    case BindingType::FilteringSampler: return true;
+    case BindingType::FilteringSampler:
+    case BindingType::WriteOnlyStorageTexture2d: return true;
   }
   return false;
 }
@@ -293,9 +296,9 @@ bool IsKnownEnumValue(ShaderSourceKind value) {
 }
 
 bool IsValidBitmask(TextureUsage value) {
-  constexpr uint32_t kAllBits =
-      static_cast<uint32_t>(TextureUsage::RenderAttachment | TextureUsage::Sampled |
-                            TextureUsage::CopySrc | TextureUsage::CopyDst);
+  constexpr uint32_t kAllBits = static_cast<uint32_t>(
+      TextureUsage::RenderAttachment | TextureUsage::Sampled | TextureUsage::CopySrc |
+      TextureUsage::CopyDst | TextureUsage::StorageBinding);
   return (static_cast<uint32_t>(value) & ~kAllBits) == 0;
 }
 

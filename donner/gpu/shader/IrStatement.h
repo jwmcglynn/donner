@@ -4,7 +4,7 @@
 ///
 /// Statements are immutable value nodes produced by \c FunctionBuilder, which performs all
 /// scope, type, and stage validation before constructing them; the nodes themselves are plain
-/// data consumed by serialization and (in later packets) the emitters.
+/// data consumed by serialization and the emitters.
 
 #include <memory>
 #include <optional>
@@ -38,6 +38,9 @@ public:
     Continue,  //!< `continue;`
     Return,    //!< `return;` / `return expr;` / entry point output return.
     Discard,   //!< `discard;` (fragment stage only).
+    /// `textureStore(texture, coords, value);` - the one statement-position texture operation,
+    /// modeled here rather than as an expression because it produces no value.
+    TextureStore,
   };
 
   /// Internal storage; public for the builder and serialization implementation.
@@ -46,7 +49,8 @@ public:
     RcString name;                             //!< Let/var name.
     std::optional<IrType> declaredType;        //!< Var declared type.
     std::vector<IrExpr> exprs;                 //!< Kind-dependent expressions: let/var init, assign
-                                               //!< (lhs, rhs), if/for condition, return values.
+                                               //!< (lhs, rhs), if/for condition, return values,
+                                               //!< textureStore (texture, coords, value).
     IrBlock body;                              //!< If-then / for body.
     IrBlock elseBody;                          //!< If-else body.
     std::shared_ptr<const IrStmt> init;        //!< For-loop init statement.

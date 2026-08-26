@@ -50,6 +50,23 @@ Status RenderPassEncoder::end() {
   return encoder_->passEnd();
 }
 
+Status ComputePassEncoder::setPipeline(const ComputePipeline& pipeline) {
+  return encoder_->computePassSetPipeline(pipeline);
+}
+
+Status ComputePassEncoder::setBindGroup(uint32_t index, const BindGroup& bindGroup) {
+  return encoder_->passSetBindGroup(index, bindGroup);
+}
+
+Status ComputePassEncoder::dispatchWorkgroups(uint32_t workgroupCountX, uint32_t workgroupCountY,
+                                              uint32_t workgroupCountZ) {
+  return encoder_->computePassDispatch(workgroupCountX, workgroupCountY, workgroupCountZ);
+}
+
+Status ComputePassEncoder::end() {
+  return encoder_->computePassEnd();
+}
+
 Status CommandEncoder::fail(GpuError&& error) {
   if (!firstError_) {
     firstError_ = std::move(error);
@@ -57,25 +74,51 @@ Status CommandEncoder::fail(GpuError&& error) {
   return *firstError_;
 }
 
-std::optional<GpuError> CommandEncoder::checkRecordable(bool requireActivePass) {
+std::optional<GpuError> CommandEncoder::checkRecordable(PassKind requiredPass) {
   if (firstError_) {
     return *firstError_;
   }
   if (finished_) {
     return Err(GpuErrorType::InvalidState, "encoder already finished");
   }
-  if (requireActivePass && !inRenderPass_) {
-    return Err(GpuErrorType::InvalidState, "no render pass is active");
+  if (requiredPass != PassKind::None && activePass_ != requiredPass) {
+    return Err(GpuErrorType::InvalidState,
+               std::format("no {} pass is active",
+                           requiredPass == PassKind::Render ? "render" : "compute"));
   }
   return std::nullopt;
 }
 
+void CommandEncoder::resetPassBindings() {
+  currentPipeline_.reset();
+  boundVertexBuffers_.fill(std::nullopt);
+  boundBindGroups_.fill(std::nullopt);
+}
+
+Status CommandEncoder::validateBoundBindGroups(std::string_view operation) {
+  for (size_t index = 0; index < currentPipeline_->bindGroupLayoutIds.size(); ++index) {
+    if (!boundBindGroups_[index]) {
+      return fail(Err(GpuErrorType::InvalidState,
+                      std::format("{}: the pipeline layout requires a bind group at index {} "
+                                  "but none is bound",
+                                  operation, index)));
+    }
+    if (!(boundBindGroups_[index]->layoutIdentity == currentPipeline_->bindGroupLayoutIds[index])) {
+      return fail(Err(GpuErrorType::InvalidState,
+                      std::format("{}: the bind group at index {} was created against a "
+                                  "different layout than the pipeline expects",
+                                  operation, index)));
+    }
+  }
+  return OkStatus();
+}
+
 Result<RenderPassEncoder*> CommandEncoder::beginRenderPass(const RenderPassDescriptor& descriptor) {
-  if (std::optional<GpuError> error = checkRecordable(/*requireActivePass=*/false)) {
+  if (std::optional<GpuError> error = checkRecordable(PassKind::None)) {
     return fail(std::move(*error)).error();
   }
-  if (inRenderPass_) {
-    return fail(Err(GpuErrorType::InvalidState, "beginRenderPass: a render pass is already active"))
+  if (activePass_ != PassKind::None) {
+    return fail(Err(GpuErrorType::InvalidState, "beginRenderPass: a pass is already active"))
         .error();
   }
   if (descriptor.colorAttachments.empty()) {
@@ -164,18 +207,16 @@ Result<RenderPassEncoder*> CommandEncoder::beginRenderPass(const RenderPassDescr
     }
   }
 
-  inRenderPass_ = true;
+  activePass_ = PassKind::Render;
   passExtent_ = passExtent;
   passAttachmentFormats_ = std::move(attachmentFormats);
-  currentPipeline_.reset();
-  boundVertexBuffers_.fill(std::nullopt);
-  boundBindGroups_.fill(std::nullopt);
+  resetPassBindings();
   commands_.push_back(BeginRenderPassCommand{descriptor});
   return &passEncoder_;
 }
 
 Status CommandEncoder::passSetPipeline(const RenderPipeline& pipeline) {
-  if (std::optional<GpuError> error = checkRecordable(/*requireActivePass=*/true)) {
+  if (std::optional<GpuError> error = checkRecordable(PassKind::Render)) {
     return fail(std::move(*error));
   }
   auto record = device_->resolve(device_->renderPipelines_, pipeline, RenderPipelineTag::kName);
@@ -215,8 +256,11 @@ Status CommandEncoder::passSetPipeline(const RenderPipeline& pipeline) {
 }
 
 Status CommandEncoder::passSetBindGroup(uint32_t index, const BindGroup& bindGroup) {
-  if (std::optional<GpuError> error = checkRecordable(/*requireActivePass=*/true)) {
+  if (std::optional<GpuError> error = checkRecordable(PassKind::None)) {
     return fail(std::move(*error));
+  }
+  if (activePass_ == PassKind::None) {
+    return fail(Err(GpuErrorType::InvalidState, "setBindGroup: no pass is active"));
   }
   if (index >= kMaxBindGroups) {
     return fail(Err(
@@ -284,7 +328,7 @@ Status CommandEncoder::revalidateBindGroupEntry(const BindGroupEntry& entry) {
 
 Status CommandEncoder::passSetVertexBuffer(uint32_t slot, const Buffer& buffer,
                                            uint64_t offsetBytes) {
-  if (std::optional<GpuError> error = checkRecordable(/*requireActivePass=*/true)) {
+  if (std::optional<GpuError> error = checkRecordable(PassKind::Render)) {
     return fail(std::move(*error));
   }
   if (slot >= kMaxVertexBuffers) {
@@ -316,7 +360,7 @@ Status CommandEncoder::passSetVertexBuffer(uint32_t slot, const Buffer& buffer,
 }
 
 Status CommandEncoder::passSetScissorRect(uint32_t x, uint32_t y, uint32_t width, uint32_t height) {
-  if (std::optional<GpuError> error = checkRecordable(/*requireActivePass=*/true)) {
+  if (std::optional<GpuError> error = checkRecordable(PassKind::Render)) {
     return fail(std::move(*error));
   }
   const std::optional<uint64_t> right = CheckedAdd(x, width);
@@ -334,7 +378,7 @@ Status CommandEncoder::passSetScissorRect(uint32_t x, uint32_t y, uint32_t width
 
 Status CommandEncoder::passSetViewport(float x, float y, float width, float height, float minDepth,
                                        float maxDepth) {
-  if (std::optional<GpuError> error = checkRecordable(/*requireActivePass=*/true)) {
+  if (std::optional<GpuError> error = checkRecordable(PassKind::Render)) {
     return fail(std::move(*error));
   }
   const bool allFinite = std::isfinite(x) && std::isfinite(y) && std::isfinite(width) &&
@@ -354,7 +398,7 @@ Status CommandEncoder::passSetViewport(float x, float y, float width, float heig
 
 Status CommandEncoder::passDraw(uint32_t vertexCount, uint32_t instanceCount, uint32_t firstVertex,
                                 uint32_t firstInstance) {
-  if (std::optional<GpuError> error = checkRecordable(/*requireActivePass=*/true)) {
+  if (std::optional<GpuError> error = checkRecordable(PassKind::Render)) {
     return fail(std::move(*error));
   }
   if (!currentPipeline_) {
@@ -385,19 +429,8 @@ Status CommandEncoder::passDraw(uint32_t vertexCount, uint32_t instanceCount, ui
     }
   }
 
-  for (size_t index = 0; index < currentPipeline_->bindGroupLayoutIds.size(); ++index) {
-    if (!boundBindGroups_[index]) {
-      return fail(Err(GpuErrorType::InvalidState,
-                      std::format("draw: the pipeline layout requires a bind group at index {} "
-                                  "but none is bound",
-                                  index)));
-    }
-    if (!(boundBindGroups_[index]->layoutIdentity == currentPipeline_->bindGroupLayoutIds[index])) {
-      return fail(Err(GpuErrorType::InvalidState,
-                      std::format("draw: the bind group at index {} was created against a "
-                                  "different layout than the pipeline expects",
-                                  index)));
-    }
+  if (Status bindGroupStatus = validateBoundBindGroups("draw"); bindGroupStatus.hasError()) {
+    return bindGroupStatus;
   }
 
   commands_.push_back(DrawCommand{vertexCount, instanceCount, firstVertex, firstInstance});
@@ -405,14 +438,12 @@ Status CommandEncoder::passDraw(uint32_t vertexCount, uint32_t instanceCount, ui
 }
 
 Status CommandEncoder::passEnd() {
-  if (std::optional<GpuError> error = checkRecordable(/*requireActivePass=*/true)) {
+  if (std::optional<GpuError> error = checkRecordable(PassKind::Render)) {
     return fail(std::move(*error));
   }
 
-  inRenderPass_ = false;
-  currentPipeline_.reset();
-  boundVertexBuffers_.fill(std::nullopt);
-  boundBindGroups_.fill(std::nullopt);
+  activePass_ = PassKind::None;
+  resetPassBindings();
   commands_.push_back(EndRenderPassCommand{});
   return OkStatus();
 }
@@ -421,12 +452,11 @@ Status CommandEncoder::copyTextureToBuffer(const TexelCopyTextureInfo& source,
                                            const Buffer& destination,
                                            const TexelCopyBufferLayout& destinationLayout,
                                            const Extent2d& copySize) {
-  if (std::optional<GpuError> error = checkRecordable(/*requireActivePass=*/false)) {
+  if (std::optional<GpuError> error = checkRecordable(PassKind::None)) {
     return fail(std::move(*error));
   }
-  if (inRenderPass_) {
-    return fail(
-        Err(GpuErrorType::InvalidState, "copyTextureToBuffer: not allowed inside a render pass"));
+  if (activePass_ != PassKind::None) {
+    return fail(Err(GpuErrorType::InvalidState, "copyTextureToBuffer: not allowed inside a pass"));
   }
   auto textureRecord = device_->resolve(device_->textures_, source.texture, TextureTag::kName);
   if (textureRecord.hasError()) {
@@ -541,12 +571,11 @@ Status CommandEncoder::validateCopyExtent(const Extent2d& copySize,
 
 Status CommandEncoder::copyTextureToTexture(const Texture& source, const Texture& destination,
                                             const Extent2d& copySize) {
-  if (std::optional<GpuError> error = checkRecordable(/*requireActivePass=*/false)) {
+  if (std::optional<GpuError> error = checkRecordable(PassKind::None)) {
     return fail(std::move(*error));
   }
-  if (inRenderPass_) {
-    return fail(
-        Err(GpuErrorType::InvalidState, "copyTextureToTexture: not allowed inside a render pass"));
+  if (activePass_ != PassKind::None) {
+    return fail(Err(GpuErrorType::InvalidState, "copyTextureToTexture: not allowed inside a pass"));
   }
   auto sourceRecord = device_->resolve(device_->textures_, source, TextureTag::kName);
   if (sourceRecord.hasError()) {
@@ -574,6 +603,82 @@ Status CommandEncoder::copyTextureToTexture(const Texture& source, const Texture
   return OkStatus();
 }
 
+Result<ComputePassEncoder*> CommandEncoder::beginComputePass(
+    const ComputePassDescriptor& descriptor) {
+  if (std::optional<GpuError> error = checkRecordable(PassKind::None)) {
+    return fail(std::move(*error)).error();
+  }
+  if (activePass_ != PassKind::None) {
+    return fail(Err(GpuErrorType::InvalidState, "beginComputePass: a pass is already active"))
+        .error();
+  }
+
+  activePass_ = PassKind::Compute;
+  resetPassBindings();
+  commands_.push_back(BeginComputePassCommand{descriptor});
+  return &computePassEncoder_;
+}
+
+Status CommandEncoder::computePassSetPipeline(const ComputePipeline& pipeline) {
+  if (std::optional<GpuError> error = checkRecordable(PassKind::Compute)) {
+    return fail(std::move(*error));
+  }
+  auto record = device_->resolve(device_->computePipelines_, pipeline, ComputePipelineTag::kName);
+  if (record.hasError()) {
+    return fail(std::move(record).error());
+  }
+
+  currentPipeline_ = BoundPipeline{{}, record.result()->bindGroupLayoutIds};
+  commands_.push_back(
+      SetComputePipelineCommand{ResourceIdentity{pipeline.slotIndex(), pipeline.generation()}});
+  return OkStatus();
+}
+
+Status CommandEncoder::computePassDispatch(uint32_t workgroupCountX, uint32_t workgroupCountY,
+                                           uint32_t workgroupCountZ) {
+  if (std::optional<GpuError> error = checkRecordable(PassKind::Compute)) {
+    return fail(std::move(*error));
+  }
+  if (!currentPipeline_) {
+    return fail(Err(GpuErrorType::InvalidState, "dispatchWorkgroups: no pipeline is set"));
+  }
+  // A zero count is rejected rather than treated as a no-op: Metal's threadgroup grid must be
+  // non-degenerate, so accepting it here would diverge across backends.
+  if (workgroupCountX == 0 || workgroupCountY == 0 || workgroupCountZ == 0) {
+    return fail(Err(GpuErrorType::InvalidDescriptor,
+                    std::format("dispatchWorkgroups: workgroup count {}x{}x{} has a zero "
+                                "dimension",
+                                workgroupCountX, workgroupCountY, workgroupCountZ)));
+  }
+  if (workgroupCountX > kMaxComputeWorkgroupsPerDimension ||
+      workgroupCountY > kMaxComputeWorkgroupsPerDimension ||
+      workgroupCountZ > kMaxComputeWorkgroupsPerDimension) {
+    return fail(Err(GpuErrorType::LimitExceeded,
+                    std::format("dispatchWorkgroups: workgroup count {}x{}x{} exceeds "
+                                "kMaxComputeWorkgroupsPerDimension {}",
+                                workgroupCountX, workgroupCountY, workgroupCountZ,
+                                kMaxComputeWorkgroupsPerDimension)));
+  }
+  if (Status bindGroupStatus = validateBoundBindGroups("dispatchWorkgroups");
+      bindGroupStatus.hasError()) {
+    return bindGroupStatus;
+  }
+
+  commands_.push_back(DispatchWorkgroupsCommand{workgroupCountX, workgroupCountY, workgroupCountZ});
+  return OkStatus();
+}
+
+Status CommandEncoder::computePassEnd() {
+  if (std::optional<GpuError> error = checkRecordable(PassKind::Compute)) {
+    return fail(std::move(*error));
+  }
+
+  activePass_ = PassKind::None;
+  resetPassBindings();
+  commands_.push_back(EndComputePassCommand{});
+  return OkStatus();
+}
+
 Result<CommandBuffer> CommandEncoder::finish() {
   if (firstError_) {
     return *firstError_;
@@ -581,8 +686,8 @@ Result<CommandBuffer> CommandEncoder::finish() {
   if (finished_) {
     return Err(GpuErrorType::InvalidState, "finish: encoder already finished");
   }
-  if (inRenderPass_) {
-    return fail(Err(GpuErrorType::InvalidState, "finish: a render pass is still active")).error();
+  if (activePass_ != PassKind::None) {
+    return fail(Err(GpuErrorType::InvalidState, "finish: a pass is still active")).error();
   }
 
   finished_ = true;

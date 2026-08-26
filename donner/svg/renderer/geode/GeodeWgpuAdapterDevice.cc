@@ -4,6 +4,7 @@
 #include <cassert>
 #include <chrono>
 #include <format>
+#include <string>
 #include <string_view>
 #include <utility>
 
@@ -94,6 +95,9 @@ wgpu::TextureUsage ToWgpuTextureUsage(gpu::TextureUsage usage) {
   }
   if (gpu::HasAllFlags(usage, gpu::TextureUsage::CopyDst)) {
     result |= wgpu::TextureUsage::CopyDst;
+  }
+  if (gpu::HasAllFlags(usage, gpu::TextureUsage::StorageBinding)) {
+    result |= wgpu::TextureUsage::StorageBinding;
   }
   return result;
 }
@@ -222,9 +226,10 @@ wgpu::StoreOp ToWgpuStoreOp(gpu::StoreOp op) {
   return wgpu::StoreOp::Store;
 }
 
-/// Fills the resource-kind union of a wgpu bind group layout entry for \p type.
-void ApplyBindingType(wgpu::BindGroupLayoutEntry& entry, gpu::BindingType type) {
-  switch (type) {
+/// Fills the resource-kind union of a wgpu bind group layout entry from \p layoutEntry.
+void ApplyBindingType(wgpu::BindGroupLayoutEntry& entry,
+                      const gpu::BindGroupLayoutEntry& layoutEntry) {
+  switch (layoutEntry.type) {
     case gpu::BindingType::UniformBuffer:
       entry.buffer.type = wgpu::BufferBindingType::Uniform;
       entry.buffer.minBindingSize = 0;
@@ -240,6 +245,11 @@ void ApplyBindingType(wgpu::BindGroupLayoutEntry& entry, gpu::BindingType type) 
       return;
     case gpu::BindingType::FilteringSampler:
       entry.sampler.type = wgpu::SamplerBindingType::Filtering;
+      return;
+    case gpu::BindingType::WriteOnlyStorageTexture2d:
+      entry.storageTexture.access = wgpu::StorageTextureAccess::WriteOnly;
+      entry.storageTexture.format = ToWgpuTextureFormat(layoutEntry.storageTextureFormat);
+      entry.storageTexture.viewDimension = wgpu::TextureViewDimension::_2D;
       return;
   }
   UTILS_RELEASE_ASSERT_MSG(false, "validated BindingType out of range");
@@ -346,6 +356,9 @@ gpu::TextureUsage GpuTextureUsageFromWgpu(wgpu::TextureUsage usage) {
   if ((raw & WGPUTextureUsage_CopyDst) != 0) {
     result = result | gpu::TextureUsage::CopyDst;
   }
+  if ((raw & WGPUTextureUsage_StorageBinding) != 0) {
+    result = result | gpu::TextureUsage::StorageBinding;
+  }
   return result;
 }
 
@@ -450,7 +463,7 @@ gpu::Status GeodeWgpuAdapterDevice::onCreateBindGroupLayout(
     const gpu::BindGroupLayoutEntry& entry = descriptor.entries[i];
     entries[i].binding = entry.binding;
     entries[i].visibility = ToWgpuShaderStage(entry.visibility);
-    ApplyBindingType(entries[i], entry.type);
+    ApplyBindingType(entries[i], entry);
   }
 
   wgpu::BindGroupLayoutDescriptor layoutDescriptor = {};
@@ -680,9 +693,40 @@ gpu::Status GeodeWgpuAdapterDevice::onCreateRenderPipeline(
   return OkStatus();
 }
 
-void GeodeWgpuAdapterDevice::onDestroyResource(std::string_view resourceName, uint32_t slotIndex) {
-  // Clearing a slot releases the owned wgpu reference (imported external textures carry no
-  // owned reference, so their backing object is untouched).
+gpu::Status GeodeWgpuAdapterDevice::onCreateComputePipeline(
+    uint32_t slotIndex, const gpu::ComputePipelineDescriptor& descriptor) {
+  wgpu::PipelineLayout layout = GetHandle(slotPipelineLayouts_, descriptor.layout.slotIndex());
+  wgpu::ShaderModule module = GetHandle(slotShaderModules_, descriptor.compute.module.slotIndex());
+  if (!layout || !module) {
+    return GpuError{GpuErrorType::InvalidState,
+                    std::format("compute pipeline '{}' references a layout or shader module with "
+                                "no wgpu object",
+                                std::string_view(descriptor.label))};
+  }
+
+  const std::string_view entryPoint(descriptor.compute.entryPoint);
+  wgpu::ComputePipelineDescriptor pipelineDescriptor = {};
+  pipelineDescriptor.label = wgpuLabel(std::string_view(descriptor.label));
+  pipelineDescriptor.layout = layout;
+  pipelineDescriptor.compute.module = module;
+  pipelineDescriptor.compute.entryPoint = wgpuLabel(entryPoint);
+
+  wgpu::ComputePipeline pipeline = geodeDevice_.device().createComputePipeline(pipelineDescriptor);
+  if (!pipeline) {
+    return GpuError{GpuErrorType::InvalidDescriptor,
+                    std::format("wgpu compute pipeline creation failed for '{}'",
+                                std::string_view(descriptor.label))};
+  }
+
+  SetSlot(slotComputePipelines_, slotIndex, ScopedWgpuHandle<wgpu::ComputePipeline>(pipeline));
+  return OkStatus();
+}
+
+/// Clears the slot of one non-pipeline resource kind, returning false when \p resourceName names
+/// no kind this table set tracks.
+/// @param resourceName Resource type name from the base class.
+/// @param slotIndex Slot to clear.
+bool GeodeWgpuAdapterDevice::clearResourceSlot(std::string_view resourceName, uint32_t slotIndex) {
   if (resourceName == "buffer") {
     SetSlot(slotBuffers_, slotIndex, ScopedWgpuHandle<wgpu::Buffer>());
   } else if (resourceName == "texture") {
@@ -695,18 +739,41 @@ void GeodeWgpuAdapterDevice::onDestroyResource(std::string_view resourceName, ui
     SetSlot(slotBindGroupLayouts_, slotIndex, ScopedWgpuHandle<wgpu::BindGroupLayout>());
   } else if (resourceName == "bindGroup") {
     SetSlot(slotBindGroups_, slotIndex, ScopedWgpuHandle<wgpu::BindGroup>());
-  } else if (resourceName == "pipelineLayout") {
+  } else {
+    return false;
+  }
+  return true;
+}
+
+/// Clears the slot of one pipeline-family resource kind, returning false when \p resourceName
+/// names no kind this table set tracks.
+/// @param resourceName Resource type name from the base class.
+/// @param slotIndex Slot to clear.
+bool GeodeWgpuAdapterDevice::clearPipelineSlot(std::string_view resourceName, uint32_t slotIndex) {
+  if (resourceName == "pipelineLayout") {
     SetSlot(slotPipelineLayouts_, slotIndex, ScopedWgpuHandle<wgpu::PipelineLayout>());
   } else if (resourceName == "shaderModule") {
     SetSlot(slotShaderModules_, slotIndex, ScopedWgpuHandle<wgpu::ShaderModule>());
   } else if (resourceName == "renderPipeline") {
     SetSlot(slotRenderPipelines_, slotIndex, ScopedWgpuHandle<wgpu::RenderPipeline>());
+  } else if (resourceName == "computePipeline") {
+    SetSlot(slotComputePipelines_, slotIndex, ScopedWgpuHandle<wgpu::ComputePipeline>());
   } else {
-    // A resource kind this adapter does not track would leak its wgpu object silently. Loud in
-    // debug so a new kind added to the runtime is wired up here; release-safe no-op (the base
-    // class owns the bookkeeping either way).
-    assert(false && "GeodeWgpuAdapterDevice::onDestroyResource: unknown resource kind");
+    return false;
   }
+  return true;
+}
+
+void GeodeWgpuAdapterDevice::onDestroyResource(std::string_view resourceName, uint32_t slotIndex) {
+  // Clearing a slot releases the owned wgpu reference (imported external textures carry no
+  // owned reference, so their backing object is untouched).
+  if (clearResourceSlot(resourceName, slotIndex) || clearPipelineSlot(resourceName, slotIndex)) {
+    return;
+  }
+  // A resource kind this adapter does not track would leak its wgpu object silently. Loud in
+  // debug so a new kind added to the runtime is wired up here; release-safe no-op (the base
+  // class owns the bookkeeping either way).
+  assert(false && "GeodeWgpuAdapterDevice::onDestroyResource: unknown resource kind");
 }
 
 gpu::Status GeodeWgpuAdapterDevice::onWriteBuffer(uint32_t slotIndex, uint64_t offsetBytes,
@@ -801,12 +868,16 @@ gpu::Status GeodeWgpuAdapterDevice::encodeSetPipeline(EncodingState& state,
 gpu::Status GeodeWgpuAdapterDevice::encodeSetBindGroup(
     EncodingState& state, const gpu::SetBindGroupCommand& setBindGroup) {
   wgpu::BindGroup group = GetHandle(slotBindGroups_, setBindGroup.bindGroupId.slotIndex);
-  if (!state.pass || !group) {
+  if ((!state.pass && !state.computePass) || !group) {
     return GpuError{GpuErrorType::InvalidState,
                     std::format("setBindGroup: bind group slot {} is not encodable",
                                 setBindGroup.bindGroupId.slotIndex)};
   }
-  state.pass.get().setBindGroup(setBindGroup.index, group, 0, nullptr);
+  if (state.pass) {
+    state.pass.get().setBindGroup(setBindGroup.index, group, 0, nullptr);
+  } else {
+    state.computePass.get().setBindGroup(setBindGroup.index, group, 0, nullptr);
+  }
   return OkStatus();
 }
 
@@ -860,10 +931,53 @@ gpu::Status GeodeWgpuAdapterDevice::encodeEndRenderPass(EncodingState& state) {
   return OkStatus();
 }
 
+gpu::Status GeodeWgpuAdapterDevice::encodeBeginComputePass(
+    EncodingState& state, const gpu::BeginComputePassCommand& beginPass) {
+  wgpu::ComputePassDescriptor passDescriptor = {};
+  passDescriptor.label = wgpuLabel(std::string_view(beginPass.descriptor.label));
+  state.computePass.reset(state.encoder.beginComputePass(passDescriptor));
+  if (!state.computePass) {
+    return GpuError{GpuErrorType::InvalidState, "wgpu compute pass creation failed"};
+  }
+  return OkStatus();
+}
+
+gpu::Status GeodeWgpuAdapterDevice::encodeSetComputePipeline(
+    EncodingState& state, const gpu::SetComputePipelineCommand& setPipeline) {
+  wgpu::ComputePipeline pipeline =
+      GetHandle(slotComputePipelines_, setPipeline.pipelineId.slotIndex);
+  if (!state.computePass || !pipeline) {
+    return GpuError{GpuErrorType::InvalidState,
+                    std::format("setPipeline: compute pipeline slot {} is not encodable",
+                                setPipeline.pipelineId.slotIndex)};
+  }
+  state.computePass.get().setPipeline(pipeline);
+  return OkStatus();
+}
+
+gpu::Status GeodeWgpuAdapterDevice::encodeDispatchWorkgroups(
+    EncodingState& state, const gpu::DispatchWorkgroupsCommand& dispatch) {
+  if (!state.computePass) {
+    return GpuError{GpuErrorType::InvalidState, "dispatchWorkgroups outside a compute pass"};
+  }
+  state.computePass.get().dispatchWorkgroups(dispatch.workgroupCountX, dispatch.workgroupCountY,
+                                             dispatch.workgroupCountZ);
+  return OkStatus();
+}
+
+gpu::Status GeodeWgpuAdapterDevice::encodeEndComputePass(EncodingState& state) {
+  if (!state.computePass) {
+    return GpuError{GpuErrorType::InvalidState, "endComputePass without an active compute pass"};
+  }
+  state.computePass.get().end();
+  state.computePass.reset();
+  return OkStatus();
+}
+
 gpu::Status GeodeWgpuAdapterDevice::encodeCopyTextureToBuffer(
     EncodingState& state, const gpu::CopyTextureToBufferCommand& copy) {
-  if (state.pass) {
-    return GpuError{GpuErrorType::InvalidState, "copyTextureToBuffer inside a render pass"};
+  if (state.pass || state.computePass) {
+    return GpuError{GpuErrorType::InvalidState, "copyTextureToBuffer inside a pass"};
   }
   wgpu::Texture texture = copy.textureId.slotIndex < slotTextures_.size()
                               ? slotTextures_[copy.textureId.slotIndex].texture
@@ -887,8 +1001,8 @@ gpu::Status GeodeWgpuAdapterDevice::encodeCopyTextureToBuffer(
 
 gpu::Status GeodeWgpuAdapterDevice::encodeCopyTextureToTexture(
     EncodingState& state, const gpu::CopyTextureToTextureCommand& textureCopy) {
-  if (state.pass) {
-    return GpuError{GpuErrorType::InvalidState, "copyTextureToTexture inside a render pass"};
+  if (state.pass || state.computePass) {
+    return GpuError{GpuErrorType::InvalidState, "copyTextureToTexture inside a pass"};
   }
   wgpu::Texture sourceTexture = textureCopy.textureSrcId.slotIndex < slotTextures_.size()
                                     ? slotTextures_[textureCopy.textureSrcId.slotIndex].texture
@@ -943,6 +1057,18 @@ gpu::Status GeodeWgpuAdapterDevice::encodeCommand(EncodingState& state,
           },
           [&](const gpu::CopyTextureToTextureCommand& textureCopy) -> gpu::Status {
             return encodeCopyTextureToTexture(state, textureCopy);
+          },
+          [&](const gpu::BeginComputePassCommand& beginPass) -> gpu::Status {
+            return encodeBeginComputePass(state, beginPass);
+          },
+          [&](const gpu::SetComputePipelineCommand& setPipeline) -> gpu::Status {
+            return encodeSetComputePipeline(state, setPipeline);
+          },
+          [&](const gpu::DispatchWorkgroupsCommand& dispatch) -> gpu::Status {
+            return encodeDispatchWorkgroups(state, dispatch);
+          },
+          [&](const gpu::EndComputePassCommand&) -> gpu::Status {
+            return encodeEndComputePass(state);
           },
       },
       command);
@@ -1013,6 +1139,10 @@ gpu::Status GeodeWgpuAdapterDevice::onSubmit(uint64_t submissionSerial,
       state.pass.get().end();
       state.pass.reset();
     }
+    if (state.computePass) {
+      state.computePass.get().end();
+      state.computePass.reset();
+    }
     return error;
   };
 
@@ -1023,11 +1153,10 @@ gpu::Status GeodeWgpuAdapterDevice::onSubmit(uint64_t submissionSerial,
     }
   }
 
-  if (state.pass) {
+  if (state.pass || state.computePass) {
     // The encoder state machine guarantees passes are ended before finish; fail closed anyway.
-    state.pass.get().end();
-    state.pass.reset();
-    return GpuError{GpuErrorType::InvalidState, "submitted command stream left a render pass open"};
+    return failEncoding(
+        GpuError{GpuErrorType::InvalidState, "submitted command stream left a pass open"});
   }
 
   if (replayingIntoHost) {

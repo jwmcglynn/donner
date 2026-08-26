@@ -103,8 +103,15 @@ std::string TypeToMsl(const IrType& type) {
     case IrType::Kind::Struct: return type.structName().str();
     case IrType::Kind::Texture2dF32: return "texture2d<float>";
     case IrType::Kind::Sampler: return "sampler";
+    case IrType::Kind::WriteOnlyStorageTexture2d: return "texture2d<float, access::write>";
   }
   return "float";
+}
+
+/// True for the stages whose IR parameters arrive through a generated `[[stage_in]]` struct.
+/// Compute entry points take their builtins as direct kernel parameters instead.
+bool HasStageInStruct(StageKind stage) {
+  return stage == StageKind::Vertex || stage == StageKind::Fragment;
 }
 
 /// Rounds \p value up to the next multiple of \p alignment.
@@ -213,6 +220,12 @@ private:
   std::string literalToMsl(const IrExpr::Node& node);
   std::string exprToMsl(const IrExpr& expr);
   void emitStatement(const IrStmt& statement, const IrFunction& function);
+  /// Emits `for (init; cond; continuing) { body }`.
+  /// @param data Statement payload. @param function Enclosing function.
+  void emitForStatement(const IrStmt::Data& data, const IrFunction& function);
+  /// Emits a plain-function return, an entry-point output-struct return, or a bare kernel return.
+  /// @param data Statement payload. @param function Enclosing function.
+  void emitReturnStatement(const IrStmt::Data& data, const IrFunction& function);
   void emitBlock(const IrBlock& block, const IrFunction& function);
 
   void collectStructs(const IrType& type, std::vector<IrType>& out);
@@ -220,6 +233,31 @@ private:
   void emitStructDeclarations();
   void emitConstants();
   void emitFunction(const IrFunction& function);
+  /// Emits the generated `[[stage_in]]` and output structs of a vertex or fragment entry point.
+  /// @param function Entry point being emitted.
+  void emitStageIoStructs(const IrFunction& function);
+  /// Metal attribute of one entry point output member.
+  /// @param function Entry point being emitted. @param output Output member.
+  static std::string stageOutputAnnotation(const IrFunction& function,
+                                           const IrOutputMember& output);
+  /// Return type, name, and opening parenthesis of a function signature.
+  /// @param function Function being emitted.
+  std::string signaturePrefix(const IrFunction& function);
+  /// Parameters of an entry point signature: the stage-in struct or builtin parameters, then
+  /// every module binding.
+  /// @param function Entry point being emitted.
+  std::vector<std::string> entryPointParameters(const IrFunction& function);
+  /// Parameters of a plain function signature: every module binding, then the declared
+  /// parameters.
+  /// @param function Function being emitted.
+  std::vector<std::string> plainFunctionParameters(const IrFunction& function);
+  /// Comma-joined parameter list of a function signature.
+  /// @param function Function being emitted.
+  std::string buildParameterList(const IrFunction& function);
+  /// Emits the entry point body prologue: stage-in field aliases, or the shadow checks a kernel's
+  /// direct builtin parameters need.
+  /// @param function Entry point being emitted.
+  void emitEntryPointPrologue(const IrFunction& function);
 
   /// Binding parameter spelling for plain-function parameter lists (no attributes).
   std::string bindingParam(const IrBinding& binding) const;
@@ -400,13 +438,13 @@ void Emitter::emitStatement(const IrStmt& statement, const IrFunction& function)
   switch (statement.kind()) {
     case IrStmt::Kind::Let:
       check(CheckMslIdentifier(data.name, "let"));
-      check(checkNoImplicitShadow(data.name, "let", function.stage != StageKind::None));
+      check(checkNoImplicitShadow(data.name, "let", HasStageInStruct(function.stage)));
       line(std::format("const {} {} = {};", TypeToMsl(data.exprs[0].type()), data.name.str(),
                        exprToMsl(data.exprs[0])));
       return;
     case IrStmt::Kind::Var:
       check(CheckMslIdentifier(data.name, "var"));
-      check(checkNoImplicitShadow(data.name, "var", function.stage != StageKind::None));
+      check(checkNoImplicitShadow(data.name, "var", HasStageInStruct(function.stage)));
       if (!data.exprs.empty()) {
         line(std::format("{} {} = {};", TypeToMsl(*data.declaredType), data.name.str(),
                          exprToMsl(data.exprs[0])));
@@ -430,54 +468,67 @@ void Emitter::emitStatement(const IrStmt& statement, const IrFunction& function)
       }
       line("}");
       return;
-    case IrStmt::Kind::For: {
-      std::string header = "for (";
-      if (data.init) {
-        const IrStmt::Data& init = data.init->data();
-        check(CheckMslIdentifier(init.name, "for init"));
-        check(checkNoImplicitShadow(init.name, "for init", function.stage != StageKind::None));
-        header += std::format("{} {} = {}", TypeToMsl(*init.declaredType), init.name.str(),
-                              exprToMsl(init.exprs[0]));
-      }
-      header += "; ";
-      if (!data.exprs.empty()) {
-        header += exprToMsl(data.exprs[0]);
-      }
-      header += "; ";
-      if (data.continuing) {
-        const IrStmt::Data& continuing = data.continuing->data();
-        header +=
-            std::format("{} = {}", exprToMsl(continuing.exprs[0]), exprToMsl(continuing.exprs[1]));
-      }
-      header += ") {";
-      line(std::move(header));
-      ++indent_;
-      emitBlock(data.body, function);
-      --indent_;
-      line("}");
-      return;
-    }
+    case IrStmt::Kind::For: emitForStatement(data, function); return;
     case IrStmt::Kind::Break: line("break;"); return;
     case IrStmt::Kind::Continue: line("continue;"); return;
-    case IrStmt::Kind::Return: {
-      if (function.stage != StageKind::None) {
-        std::string result = std::format("return {}{{", OutputStructName(function));
-        for (size_t i = 0; i < data.exprs.size(); ++i) {
-          if (i > 0) {
-            result += ", ";
-          }
-          result += exprToMsl(data.exprs[i]);
-        }
-        result += "};";
-        line(std::move(result));
-      } else if (!data.exprs.empty()) {
-        line(std::format("return {};", exprToMsl(data.exprs[0])));
-      } else {
-        line("return;");
-      }
-      return;
-    }
+    case IrStmt::Kind::Return: emitReturnStatement(data, function); return;
     case IrStmt::Kind::Discard: line("discard_fragment();"); return;
+    case IrStmt::Kind::TextureStore:
+      // Metal's write() takes (value, coord); WGSL's textureStore takes (texture, coord, value).
+      line(std::format("{}.write({}, uint2({}));", exprToMsl(data.exprs[0]),
+                       exprToMsl(data.exprs[2]), exprToMsl(data.exprs[1])));
+      return;
+  }
+}
+
+void Emitter::emitForStatement(const IrStmt::Data& data, const IrFunction& function) {
+  std::string header = "for (";
+  if (data.init) {
+    const IrStmt::Data& init = data.init->data();
+    check(CheckMslIdentifier(init.name, "for init"));
+    check(checkNoImplicitShadow(init.name, "for init", HasStageInStruct(function.stage)));
+    header += std::format("{} {} = {}", TypeToMsl(*init.declaredType), init.name.str(),
+                          exprToMsl(init.exprs[0]));
+  }
+  header += "; ";
+  if (!data.exprs.empty()) {
+    header += exprToMsl(data.exprs[0]);
+  }
+  header += "; ";
+  if (data.continuing) {
+    const IrStmt::Data& continuing = data.continuing->data();
+    header +=
+        std::format("{} = {}", exprToMsl(continuing.exprs[0]), exprToMsl(continuing.exprs[1]));
+  }
+  header += ") {";
+  line(std::move(header));
+  ++indent_;
+  emitBlock(data.body, function);
+  --indent_;
+  line("}");
+}
+
+void Emitter::emitReturnStatement(const IrStmt::Data& data, const IrFunction& function) {
+  if (function.stage == StageKind::Compute) {
+    line("return;");
+    return;
+  }
+  if (function.stage != StageKind::None) {
+    std::string result = std::format("return {}{{", OutputStructName(function));
+    for (size_t i = 0; i < data.exprs.size(); ++i) {
+      if (i > 0) {
+        result += ", ";
+      }
+      result += exprToMsl(data.exprs[i]);
+    }
+    result += "};";
+    line(std::move(result));
+    return;
+  }
+  if (!data.exprs.empty()) {
+    line(std::format("return {};", exprToMsl(data.exprs[0])));
+  } else {
+    line("return;");
   }
 }
 
@@ -653,6 +704,8 @@ std::string Emitter::bindingParam(const IrBinding& binding) const {
     case BindingKind::SampledTexture2dF32:
       return std::format("texture2d<float> {}", binding.name.str());
     case BindingKind::FilteringSampler: return std::format("sampler {}", binding.name.str());
+    case BindingKind::WriteOnlyStorageTexture2d:
+      return std::format("{} {}", TypeToMsl(binding.type), binding.name.str());
   }
   return "";
 }
@@ -664,6 +717,7 @@ std::string Emitter::bindingEntryParam(const IrBinding& binding) const {
       return std::format("{} [[buffer({})]]", bindingParam(binding),
                          MslBufferIndex(binding.binding));
     case BindingKind::SampledTexture2dF32:
+    case BindingKind::WriteOnlyStorageTexture2d:
       return std::format("{} [[texture({})]]", bindingParam(binding),
                          MslTextureIndex(binding.binding));
     case BindingKind::FilteringSampler:
@@ -684,124 +738,154 @@ std::string Emitter::bindingForwardArgs() const {
   return result;
 }
 
-void Emitter::emitFunction(const IrFunction& function) {
-  check(CheckMslIdentifier(function.name, "function"));
-
-  if (function.stage != StageKind::None) {
-    // The generated stage IO struct names must not collide with user structs; fail closed
-    // rather than declaring conflicting types (mirrors the WGSL emitter's check).
-    for (const RcString& userStruct : userStructNames_) {
-      if (std::string_view(userStruct) == InputStructName(function) ||
-          std::string_view(userStruct) == OutputStructName(function)) {
-        latch(ShaderError{
-            std::format("struct \"{}\" collides with a generated stage IO struct name for "
-                        "entry point {}",
-                        userStruct.str(), std::string_view(function.name)),
-            "msl"});
-      }
-    }
-
-    // Generated stage-in struct: location params become [[attribute(N)]] (vertex) or
-    // [[user(locnN)]] (fragment); the fragment position builtin is a [[position]] member.
-    line(std::format("struct {} {{", InputStructName(function)));
-    ++indent_;
-    for (const IrParam& param : function.params) {
-      check(CheckMslIdentifier(param.name, "entry point input"));
-      if (param.builtin && *param.builtin == BuiltinInput::Position) {
-        line(std::format("{} {} [[position]];", TypeToMsl(param.type), param.name.str()));
-      } else if (param.location) {
-        const std::string annotation = function.stage == StageKind::Vertex
-                                           ? std::format("[[attribute({})]]", *param.location)
-                                           : std::format("[[user(locn{})]]", *param.location);
-        line(std::format("{} {} {};", TypeToMsl(param.type), param.name.str(), annotation));
-      }
-      // The instance_index builtin is a direct entry point parameter, not a stage-in field.
-    }
-    --indent_;
-    line("};");
-    blank();
-
-    line(std::format("struct {} {{", OutputStructName(function)));
-    ++indent_;
-    for (const IrOutputMember& output : function.outputs) {
-      check(CheckMslIdentifier(output.name, "entry point output"));
-      std::string annotation;
-      if (output.builtin) {
-        annotation = "[[position]]";
-      } else if (function.stage == StageKind::Vertex) {
-        annotation = std::format("[[user(locn{})]]", *output.location);
-      } else {
-        annotation = std::format("[[color({})]]", *output.location);
-      }
-      line(std::format("{} {} {};", TypeToMsl(output.type), output.name.str(), annotation));
-    }
-    --indent_;
-    line("};");
-    blank();
-  }
-
-  // Signature.
-  std::string signature;
-  if (function.stage == StageKind::Vertex) {
-    signature =
-        std::format("vertex {} {}(", OutputStructName(function), std::string_view(function.name));
-  } else if (function.stage == StageKind::Fragment) {
-    signature =
-        std::format("fragment {} {}(", OutputStructName(function), std::string_view(function.name));
-  } else {
-    signature =
-        std::format("{} {}(", function.returnType ? TypeToMsl(*function.returnType) : "void",
-                    std::string_view(function.name));
-  }
-
-  bool firstParam = true;
-  const auto addParam = [&](std::string text) {
-    if (!firstParam) {
-      signature += ", ";
-    }
-    signature += text;
-    firstParam = false;
-  };
-
-  if (function.stage != StageKind::None) {
-    addParam(std::format("{} in [[stage_in]]", InputStructName(function)));
-    for (const IrParam& param : function.params) {
-      if (param.builtin && *param.builtin == BuiltinInput::InstanceIndex) {
-        addParam(std::format("uint {} [[instance_id]]", param.name.str()));
-      }
-    }
-    // Every module binding is declared on every entry point; a declared-but-unbound argument
-    // slot is legal only while the stage genuinely never references it, which holds because
-    // the Metal backend binds every group entry for each stage its layout declares.
-    for (const IrBinding& binding : module_.bindings()) {
-      addParam(bindingEntryParam(binding));
-    }
-  } else {
-    for (const IrBinding& binding : module_.bindings()) {
-      addParam(bindingParam(binding));
-    }
-    for (const IrParam& param : function.params) {
-      check(CheckMslIdentifier(param.name, "parameter"));
-      check(checkNoImplicitShadow(param.name, "parameter", /*insideEntryPoint=*/false));
-      addParam(std::format("{} {}", TypeToMsl(param.type), param.name.str()));
+void Emitter::emitStageIoStructs(const IrFunction& function) {
+  // The generated stage IO struct names must not collide with user structs; fail closed rather
+  // than declaring conflicting types (mirrors the WGSL emitter's check).
+  for (const RcString& userStruct : userStructNames_) {
+    if (std::string_view(userStruct) == InputStructName(function) ||
+        std::string_view(userStruct) == OutputStructName(function)) {
+      latch(ShaderError{std::format("struct \"{}\" collides with a generated stage IO struct name "
+                                    "for entry point {}",
+                                    userStruct.str(), std::string_view(function.name)),
+                        "msl"});
     }
   }
-  signature += ") {";
-  line(std::move(signature));
 
+  // Generated stage-in struct: location params become [[attribute(N)]] (vertex) or
+  // [[user(locnN)]] (fragment); the fragment position builtin is a [[position]] member. The
+  // instance_index builtin is a direct entry point parameter, not a stage-in field.
+  line(std::format("struct {} {{", InputStructName(function)));
   ++indent_;
-  if (function.stage != StageKind::None) {
+  for (const IrParam& param : function.params) {
+    check(CheckMslIdentifier(param.name, "entry point input"));
+    if (param.builtin && *param.builtin == BuiltinInput::Position) {
+      line(std::format("{} {} [[position]];", TypeToMsl(param.type), param.name.str()));
+    } else if (param.location) {
+      const std::string annotation = function.stage == StageKind::Vertex
+                                         ? std::format("[[attribute({})]]", *param.location)
+                                         : std::format("[[user(locn{})]]", *param.location);
+      line(std::format("{} {} {};", TypeToMsl(param.type), param.name.str(), annotation));
+    }
+  }
+  --indent_;
+  line("};");
+  blank();
+
+  line(std::format("struct {} {{", OutputStructName(function)));
+  ++indent_;
+  for (const IrOutputMember& output : function.outputs) {
+    check(CheckMslIdentifier(output.name, "entry point output"));
+    line(std::format("{} {} {};", TypeToMsl(output.type), output.name.str(),
+                     stageOutputAnnotation(function, output)));
+  }
+  --indent_;
+  line("};");
+  blank();
+}
+
+std::string Emitter::stageOutputAnnotation(const IrFunction& function,
+                                           const IrOutputMember& output) {
+  if (output.builtin) {
+    return "[[position]]";
+  }
+  if (function.stage == StageKind::Vertex) {
+    return std::format("[[user(locn{})]]", *output.location);
+  }
+  return std::format("[[color({})]]", *output.location);
+}
+
+std::string Emitter::signaturePrefix(const IrFunction& function) {
+  switch (function.stage) {
+    case StageKind::Vertex:
+      return std::format("vertex {} {}(", OutputStructName(function),
+                         std::string_view(function.name));
+    case StageKind::Fragment:
+      return std::format("fragment {} {}(", OutputStructName(function),
+                         std::string_view(function.name));
+    case StageKind::Compute: return std::format("kernel void {}(", std::string_view(function.name));
+    case StageKind::None:
+      return std::format("{} {}(", function.returnType ? TypeToMsl(*function.returnType) : "void",
+                         std::string_view(function.name));
+  }
+  return "";
+}
+
+std::vector<std::string> Emitter::entryPointParameters(const IrFunction& function) {
+  std::vector<std::string> parameters;
+  if (HasStageInStruct(function.stage)) {
+    parameters.push_back(std::format("{} in [[stage_in]]", InputStructName(function)));
+  }
+  for (const IrParam& param : function.params) {
+    if (param.builtin && *param.builtin == BuiltinInput::InstanceIndex) {
+      parameters.push_back(std::format("uint {} [[instance_id]]", param.name.str()));
+    } else if (param.builtin && *param.builtin == BuiltinInput::GlobalInvocationId) {
+      parameters.push_back(std::format("uint3 {} [[thread_position_in_grid]]", param.name.str()));
+    }
+  }
+  // Every module binding is declared on every entry point; a declared-but-unbound argument slot
+  // is legal only while the stage genuinely never references it, which holds because the Metal
+  // backend binds every group entry for each stage its layout declares.
+  for (const IrBinding& binding : module_.bindings()) {
+    parameters.push_back(bindingEntryParam(binding));
+  }
+  return parameters;
+}
+
+std::vector<std::string> Emitter::plainFunctionParameters(const IrFunction& function) {
+  std::vector<std::string> parameters;
+  for (const IrBinding& binding : module_.bindings()) {
+    parameters.push_back(bindingParam(binding));
+  }
+  for (const IrParam& param : function.params) {
+    check(CheckMslIdentifier(param.name, "parameter"));
+    check(checkNoImplicitShadow(param.name, "parameter", /*insideEntryPoint=*/false));
+    parameters.push_back(std::format("{} {}", TypeToMsl(param.type), param.name.str()));
+  }
+  return parameters;
+}
+
+std::string Emitter::buildParameterList(const IrFunction& function) {
+  const std::vector<std::string> parameters = function.stage == StageKind::None
+                                                  ? plainFunctionParameters(function)
+                                                  : entryPointParameters(function);
+  std::string joined;
+  for (const std::string& parameter : parameters) {
+    if (!joined.empty()) {
+      joined += ", ";
+    }
+    joined += parameter;
+  }
+  return joined;
+}
+
+void Emitter::emitEntryPointPrologue(const IrFunction& function) {
+  if (HasStageInStruct(function.stage)) {
     // Alias stage-in fields to their IR names so references emit unchanged.
     for (const IrParam& param : function.params) {
-      check(checkNoImplicitShadow(param.name, "entry point input",
-                                  /*insideEntryPoint=*/true));
+      check(checkNoImplicitShadow(param.name, "entry point input", /*insideEntryPoint=*/true));
       if (param.builtin && *param.builtin == BuiltinInput::InstanceIndex) {
         continue;  // Already a direct parameter.
       }
       line(std::format("const {} {} = in.{};", TypeToMsl(param.type), param.name.str(),
                        param.name.str()));
     }
+  } else if (function.stage == StageKind::Compute) {
+    for (const IrParam& param : function.params) {
+      check(checkNoImplicitShadow(param.name, "entry point input", /*insideEntryPoint=*/false));
+    }
   }
+}
+
+void Emitter::emitFunction(const IrFunction& function) {
+  check(CheckMslIdentifier(function.name, "function"));
+
+  if (HasStageInStruct(function.stage)) {
+    emitStageIoStructs(function);
+  }
+
+  line(signaturePrefix(function) + buildParameterList(function) + ") {");
+  ++indent_;
+  emitEntryPointPrologue(function);
   emitBlock(function.body, function);
   --indent_;
   line("}");

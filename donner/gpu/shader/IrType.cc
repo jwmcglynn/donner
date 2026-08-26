@@ -1,6 +1,8 @@
 #include "donner/gpu/shader/IrType.h"
 
 #include <format>
+#include <sstream>
+#include <string_view>
 #include <utility>
 
 namespace donner::gpu::shader {
@@ -14,16 +16,27 @@ struct IrType::Node {
   uint32_t arrayCount = 0;              //!< Sized array element count.
   RcString structName;                  //!< Struct name.
   std::vector<Member> members;          //!< Struct members.
+  StorageTextureFormat storageFormat =
+      StorageTextureFormat::Rgba8Unorm;  //!< Write-only storage texture texel format.
 };
 
-std::ostream& operator<<(std::ostream& os, ScalarKind value) {
-  switch (value) {
-    case ScalarKind::Bool: return os << "bool";
-    case ScalarKind::I32: return os << "i32";
-    case ScalarKind::U32: return os << "u32";
-    case ScalarKind::F32: return os << "f32";
+namespace {
+
+/// Spelling of a scalar kind, shared by the ostream operator and \ref IrType::toString.
+std::string_view ScalarName(ScalarKind kind) {
+  switch (kind) {
+    case ScalarKind::Bool: return "bool";
+    case ScalarKind::I32: return "i32";
+    case ScalarKind::U32: return "u32";
+    case ScalarKind::F32: return "f32";
   }
-  return os << "unknown";
+  return "unknown";
+}
+
+}  // namespace
+
+std::ostream& operator<<(std::ostream& os, ScalarKind value) {
+  return os << ScalarName(value);
 }
 
 IrType IrType::MakeScalarType(ScalarKind kind) {
@@ -39,6 +52,13 @@ IrType IrType::MakeVectorType(ScalarKind kind, uint32_t size) {
   node.scalar = kind;
   node.vectorSize = size;
   return IrType(std::make_shared<const Node>(std::move(node)));
+}
+
+std::ostream& operator<<(std::ostream& os, StorageTextureFormat value) {
+  switch (value) {
+    case StorageTextureFormat::Rgba8Unorm: return os << "rgba8unorm";
+  }
+  return os << "unknown";
 }
 
 IrType IrType::MakeSimpleType(Kind kind) {
@@ -84,6 +104,13 @@ IrType IrType::Texture2dF32() {
 
 IrType IrType::SamplerType() {
   return MakeSimpleType(Kind::Sampler);
+}
+
+IrType IrType::WriteOnlyStorageTexture2d(StorageTextureFormat format) {
+  Node node;
+  node.kind = Kind::WriteOnlyStorageTexture2d;
+  node.storageFormat = format;
+  return IrType(std::make_shared<const Node>(std::move(node)));
 }
 
 ShaderResult<IrType> IrType::SizedArray(const IrType& element, uint32_t count,
@@ -175,6 +202,10 @@ std::span<const IrType::Member> IrType::structMembers() const {
   return node_->members;
 }
 
+StorageTextureFormat IrType::storageTextureFormat() const {
+  return node_->storageFormat;
+}
+
 bool IrType::isNumericScalar() const {
   return kind() == Kind::Scalar && node_->scalar != ScalarKind::Bool;
 }
@@ -196,7 +227,8 @@ bool IrType::isPlainData() const {
     case Kind::Struct: return true;
     case Kind::RuntimeArray:
     case Kind::Texture2dF32:
-    case Kind::Sampler: return false;
+    case Kind::Sampler:
+    case Kind::WriteOnlyStorageTexture2d: return false;
   }
   return false;
 }
@@ -215,6 +247,7 @@ bool IrType::operator==(const IrType& other) const {
     case Kind::Matrix4x4f:
     case Kind::Texture2dF32:
     case Kind::Sampler: return true;
+    case Kind::WriteOnlyStorageTexture2d: return node_->storageFormat == other.node_->storageFormat;
     case Kind::SizedArray:
       return node_->arrayCount == other.node_->arrayCount &&
              node_->element.front() == other.node_->element.front();
@@ -238,25 +271,9 @@ bool IrType::operator==(const IrType& other) const {
 
 std::string IrType::toString() const {
   switch (kind()) {
-    case Kind::Scalar: {
-      switch (node_->scalar) {
-        case ScalarKind::Bool: return "bool";
-        case ScalarKind::I32: return "i32";
-        case ScalarKind::U32: return "u32";
-        case ScalarKind::F32: return "f32";
-      }
-      return "unknown";
-    }
-    case Kind::Vector: {
-      std::string element;
-      switch (node_->scalar) {
-        case ScalarKind::Bool: element = "bool"; break;
-        case ScalarKind::I32: element = "i32"; break;
-        case ScalarKind::U32: element = "u32"; break;
-        case ScalarKind::F32: element = "f32"; break;
-      }
-      return std::format("vec{}<{}>", node_->vectorSize, element);
-    }
+    case Kind::Scalar: return std::string(ScalarName(node_->scalar));
+    case Kind::Vector:
+      return std::format("vec{}<{}>", node_->vectorSize, ScalarName(node_->scalar));
     case Kind::Matrix4x4f: return "mat4x4<f32>";
     case Kind::SizedArray:
       return std::format("array<{}, {}>", node_->element.front().toString(), node_->arrayCount);
@@ -264,6 +281,11 @@ std::string IrType::toString() const {
     case Kind::Struct: return node_->structName.str();
     case Kind::Texture2dF32: return "texture_2d<f32>";
     case Kind::Sampler: return "sampler";
+    case Kind::WriteOnlyStorageTexture2d: {
+      std::ostringstream format;
+      format << node_->storageFormat;
+      return std::format("texture_storage_2d<{}, write>", format.str());
+    }
   }
   return "unknown";
 }

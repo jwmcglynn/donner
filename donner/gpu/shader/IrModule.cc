@@ -1,6 +1,7 @@
 #include "donner/gpu/shader/IrModule.h"
 
 #include <format>
+#include <string>
 #include <utility>
 
 namespace donner::gpu::shader {
@@ -10,6 +11,11 @@ namespace {
 /// Builds a labeled error.
 ShaderError Err(std::string message, const RcString& label) {
   return ShaderError{std::move(message), label};
+}
+
+/// Formats a workgroup size for diagnostics, e.g. `8x8x1`.
+std::string ToString(const WorkgroupSize& size) {
+  return std::format("{}x{}x{}", size.x, size.y, size.z);
 }
 
 /// Validates entry point IO: unique locations and allowed types (numeric scalars/vectors).
@@ -54,6 +60,17 @@ std::ostream& operator<<(std::ostream& os, BindingKind value) {
     case BindingKind::ReadOnlyStorageBuffer: return os << "storage_read";
     case BindingKind::SampledTexture2dF32: return os << "texture_2d<f32>";
     case BindingKind::FilteringSampler: return os << "sampler";
+    case BindingKind::WriteOnlyStorageTexture2d: return os << "storage_texture_write";
+  }
+  return os << "unknown";
+}
+
+std::ostream& operator<<(std::ostream& os, StageKind value) {
+  switch (value) {
+    case StageKind::None: return os << "none";
+    case StageKind::Vertex: return os << "vertex";
+    case StageKind::Fragment: return os << "fragment";
+    case StageKind::Compute: return os << "compute";
   }
   return os << "unknown";
 }
@@ -108,6 +125,53 @@ bool BlockUsesFragmentOnlyBuiltins(const IrBlock& block, const LookupFn& lookupF
     }
   }
   return false;
+}
+
+/// Validates the stage inputs of a compute entry point: every parameter must carry the one
+/// compute builtin, typed as the WGSL specification declares it.
+/// @param params Declared stage inputs.
+/// @param label Entry point name, for diagnostics.
+ShaderStatus ValidateComputeParams(const std::vector<IrParam>& params, const RcString& label) {
+  for (const IrParam& param : params) {
+    if (!param.builtin) {
+      return Err(
+          std::format("compute input {} needs a builtin; the compute stage has no located IO",
+                      param.name.str()),
+          label);
+    }
+    if (*param.builtin != BuiltinInput::GlobalInvocationId ||
+        !(param.type == IrType::Vec3(ScalarKind::U32))) {
+      return Err(std::format("compute builtin input {} must be global_invocation_id: vec3<u32>",
+                             param.name.str()),
+                 label);
+    }
+  }
+  return OkShaderStatus();
+}
+
+/// Validates a declared workgroup size against the per-dimension and total-invocation caps.
+/// @param size Declared workgroup size.
+/// @param label Entry point name, for diagnostics.
+ShaderStatus ValidateWorkgroupSize(const WorkgroupSize& size, const RcString& label) {
+  if (size.x == 0 || size.y == 0 || size.z == 0) {
+    return Err(std::format("workgroup size {} has a zero dimension", ToString(size)), label);
+  }
+  if (size.x > kMaxComputeWorkgroupSizeXY || size.y > kMaxComputeWorkgroupSizeXY ||
+      size.z > kMaxComputeWorkgroupSizeZ) {
+    return Err(std::format("workgroup size {} exceeds the per-dimension caps ({}, {}, {})",
+                           ToString(size), kMaxComputeWorkgroupSizeXY, kMaxComputeWorkgroupSizeXY,
+                           kMaxComputeWorkgroupSizeZ),
+               label);
+  }
+  // Multiplied in 64 bits so a product that overflows 32 bits is rejected rather than wrapping
+  // under the cap.
+  const uint64_t invocations = uint64_t{size.x} * size.y * size.z;
+  if (invocations > kMaxComputeInvocationsPerWorkgroup) {
+    return Err(std::format("workgroup size {} declares {} invocations, exceeding the cap of {}",
+                           ToString(size), invocations, kMaxComputeInvocationsPerWorkgroup),
+               label);
+  }
+  return OkShaderStatus();
 }
 
 }  // namespace
@@ -545,8 +609,10 @@ ShaderStatus FunctionBuilder::returnVoid() {
   if (std::optional<ShaderError> error = checkUsable()) {
     return *error;
   }
-  if (function_.stage != StageKind::None || function_.returnType) {
-    return fail(Err("returnVoid requires a void plain function", function_.name));
+  if ((function_.stage != StageKind::None && function_.stage != StageKind::Compute) ||
+      function_.returnType) {
+    return fail(
+        Err("returnVoid requires a void plain function or a compute entry point", function_.name));
   }
   IrStmt::Data data;
   data.kind = IrStmt::Kind::Return;
@@ -558,8 +624,8 @@ ShaderStatus FunctionBuilder::returnOutputs(std::vector<IrExpr> outputs) {
   if (std::optional<ShaderError> error = checkUsable()) {
     return *error;
   }
-  if (function_.stage == StageKind::None) {
-    return fail(Err("returnOutputs requires an entry point", function_.name));
+  if (function_.stage == StageKind::None || function_.stage == StageKind::Compute) {
+    return fail(Err("returnOutputs requires a vertex or fragment entry point", function_.name));
   }
   if (outputs.size() != function_.outputs.size()) {
     return fail(Err(std::format("entry point declares {} outputs, got {}", function_.outputs.size(),
@@ -599,6 +665,45 @@ ShaderStatus FunctionBuilder::discard() {
   return OkShaderStatus();
 }
 
+ShaderStatus FunctionBuilder::textureStore(const IrExpr& texture, const IrExpr& coords,
+                                           const IrExpr& value) {
+  if (std::optional<ShaderError> error = checkUsable()) {
+    return *error;
+  }
+  if (texture.kind() != IrExpr::Kind::Ref ||
+      texture.type().kind() != IrType::Kind::WriteOnlyStorageTexture2d) {
+    return fail(Err(std::format("textureStore target must be a write-only storage texture "
+                                "binding, got {}",
+                                texture.type().toString()),
+                    function_.name));
+  }
+  if (!(coords.type() == IrType::Vec2i()) && !(coords.type() == IrType::Vec2u())) {
+    return fail(Err(std::format("textureStore coordinates must be vec2<i32> or vec2<u32>, got {}",
+                                coords.type().toString()),
+                    function_.name));
+  }
+  if (!(value.type() == IrType::Vec4f())) {
+    return fail(
+        Err(std::format("textureStore value must be vec4<f32>, got {}", value.type().toString()),
+            function_.name));
+  }
+  if (ShaderStatus status = verifyExprInScope(texture); status.hasError()) {
+    return status;
+  }
+  if (ShaderStatus status = verifyExprInScope(coords); status.hasError()) {
+    return status;
+  }
+  if (ShaderStatus status = verifyExprInScope(value); status.hasError()) {
+    return status;
+  }
+
+  IrStmt::Data data;
+  data.kind = IrStmt::Kind::TextureStore;
+  data.exprs = {texture, coords, value};
+  append(IrStmt(std::move(data)));
+  return OkShaderStatus();
+}
+
 ShaderResult<IrExpr> FunctionBuilder::callFunction(const RcString& name, std::vector<IrExpr> args) {
   if (std::optional<ShaderError> error = checkUsable()) {
     return *error;
@@ -633,6 +738,25 @@ ShaderResult<IrExpr> FunctionBuilder::callFunction(const RcString& name, std::ve
   return MakeCallUser(name, *callee->returnType, std::move(args));
 }
 
+ShaderStatus FunctionBuilder::recordAndCheckFragmentOnlyBuiltins() {
+  // fwidth and textureSample take implicit derivatives and are therefore fragment-only in WGSL.
+  // Each function records whether its body (or any user function it calls, transitively - callees
+  // are always finished before their callers) uses one; vertex and compute entry points with the
+  // flag fail closed. Fragment entry points and plain functions may carry it freely.
+  function_.usesFragmentOnlyBuiltins = BlockUsesFragmentOnlyBuiltins(
+      function_.body, [this](const RcString& name) { return moduleBuilder_->findFunction(name); });
+  if (!function_.usesFragmentOnlyBuiltins) {
+    return OkShaderStatus();
+  }
+  if (function_.stage == StageKind::Vertex || function_.stage == StageKind::Compute) {
+    return fail(Err(std::format("{} entry points cannot use fragment-only builtins (fwidth and "
+                                "textureSample take implicit derivatives)",
+                                function_.stage == StageKind::Vertex ? "vertex" : "compute"),
+                    function_.name));
+  }
+  return OkShaderStatus();
+}
+
 ShaderStatus FunctionBuilder::finish() {
   if (firstError_) {
     return *firstError_;
@@ -644,27 +768,20 @@ ShaderStatus FunctionBuilder::finish() {
     return fail(Err("finish with an open if/for block", function_.name));
   }
 
-  // Conservative structural check: a non-void function or entry point must end with a
-  // top-level return statement (returns inside if/for bodies do not count).
-  const bool needsReturn = function_.stage != StageKind::None || function_.returnType.has_value();
+  // Conservative structural check: a non-void function or a stage-IO entry point must end with a
+  // top-level return statement (returns inside if/for bodies do not count). Compute entry points
+  // produce no outputs, so they need no trailing return.
+  const bool needsReturn = function_.stage == StageKind::Vertex ||
+                           function_.stage == StageKind::Fragment ||
+                           function_.returnType.has_value();
   if (needsReturn &&
       (function_.body.empty() || function_.body.back().kind() != IrStmt::Kind::Return)) {
     return fail(Err("non-void functions and entry points must end with a return statement",
                     function_.name));
   }
 
-  // Stage restriction for implicit-derivative builtins: fwidth and textureSample are
-  // fragment-only in WGSL. Each function records whether its body (or any user function it
-  // calls, transitively - callees are always finished before their callers) uses one; vertex
-  // entry points with the flag fail closed. Fragment entry points and plain functions may carry
-  // the flag freely.
-  function_.usesFragmentOnlyBuiltins = BlockUsesFragmentOnlyBuiltins(
-      function_.body, [this](const RcString& name) { return moduleBuilder_->findFunction(name); });
-  if (function_.stage == StageKind::Vertex && function_.usesFragmentOnlyBuiltins) {
-    return fail(
-        Err("vertex entry points cannot use fragment-only builtins (fwidth and "
-            "textureSample take implicit derivatives)",
-            function_.name));
+  if (ShaderStatus status = recordAndCheckFragmentOnlyBuiltins(); status.hasError()) {
+    return status;
   }
 
   finished_ = true;
@@ -748,6 +865,13 @@ ShaderStatus ModuleBuilder::addTexture2d(uint32_t group, uint32_t binding, const
 ShaderStatus ModuleBuilder::addSampler(uint32_t group, uint32_t binding, const RcString& name) {
   return addBinding(
       IrBinding{group, binding, name, BindingKind::FilteringSampler, IrType::SamplerType()});
+}
+
+ShaderStatus ModuleBuilder::addWriteOnlyStorageTexture2d(uint32_t group, uint32_t binding,
+                                                         const RcString& name,
+                                                         StorageTextureFormat format) {
+  return addBinding(IrBinding{group, binding, name, BindingKind::WriteOnlyStorageTexture2d,
+                              IrType::WriteOnlyStorageTexture2d(format)});
 }
 
 std::optional<IrExpr> ModuleBuilder::resolveModuleName(const RcString& name) const {
@@ -901,6 +1025,33 @@ ShaderResult<FunctionBuilder> ModuleBuilder::createFragmentEntryPoint(
   function.stage = StageKind::Fragment;
   function.params = std::move(params);
   function.outputs = std::move(outputs);
+  functionInProgress_ = true;
+  return FunctionBuilder(*this, std::move(function));
+}
+
+ShaderResult<FunctionBuilder> ModuleBuilder::createComputeEntryPoint(
+    const RcString& name, std::vector<IrParam> params, const WorkgroupSize& workgroupSize) {
+  if (functionInProgress_) {
+    return ShaderError{"finish the previous function before starting a new one", name};
+  }
+  if (ShaderStatus status = checkModuleName(name); status.hasError()) {
+    return std::move(status).error();
+  }
+  if (ShaderStatus status = ValidateStageIo(params, name); status.hasError()) {
+    return std::move(status).error();
+  }
+  if (ShaderStatus status = ValidateComputeParams(params, name); status.hasError()) {
+    return std::move(status).error();
+  }
+  if (ShaderStatus status = ValidateWorkgroupSize(workgroupSize, name); status.hasError()) {
+    return std::move(status).error();
+  }
+
+  IrFunction function;
+  function.name = name;
+  function.stage = StageKind::Compute;
+  function.params = std::move(params);
+  function.workgroupSize = workgroupSize;
   functionInProgress_ = true;
   return FunctionBuilder(*this, std::move(function));
 }

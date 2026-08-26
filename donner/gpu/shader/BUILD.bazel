@@ -2,13 +2,13 @@ load("//build_defs:rules.bzl", "donner_cc_library", "donner_cc_test", "donner_mu
 load("//build_defs:visibility.bzl", "donner_internal_visibility")
 load("//build_defs:package.bzl", "donner_package")
 
-# donner::gpu::shader - the typed shader IR core and WGSL-rule layout engine
-# (design doc 0053, "Donner shader IR"; change sequence packet 4).
+# donner::gpu::shader - the typed shader IR core, its WGSL-rule layout engine,
+# and the WGSL/MSL/SPIR-V emitters.
 #
 # A typed immutable IR with a validating builder, host-shareable layout
-# computation per the WGSL specification's memory layout rules, and
-# deterministic text serialization. Scope is exactly the solid-fill pipeline
-# family; the WGSL/MSL emitters land in later packets.
+# computation per the WGSL specification's memory layout rules, deterministic
+# text serialization, and three emitters that consume the same binding and
+# layout metadata.
 
 donner_cc_library(
     name = "shader",
@@ -41,13 +41,33 @@ donner_cc_library(
     ],
 )
 
-# The complete solid-fill pipeline program (the packet 6 Metal vertical
-# slice consumes this module; the frozen baseline is rendered by the
-# Donner-owned slug_fill.wgsl this program re-expresses).
+# Bridges a built IR module to the descriptors the GPU runtime consumes, so a host never
+# transcribes a compute entry point's workgroup size by hand. Split from :shader so the IR core
+# stays free of the runtime's descriptor types.
+donner_cc_library(
+    name = "module_interface",
+    srcs = ["ModuleInterface.cc"],
+    hdrs = ["ModuleInterface.h"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":shader",
+        "//donner/gpu",
+    ],
+)
+
+# Complete shader programs expressed in the IR: the solid-fill render family
+# (whose frozen pixel baseline is rendered by the Donner-owned slug_fill.wgsl
+# it re-expresses) and the color-matrix compute program.
 donner_cc_library(
     name = "programs",
-    srcs = ["programs/SolidFill.cc"],
-    hdrs = ["programs/SolidFill.h"],
+    srcs = [
+        "programs/ColorMatrix.cc",
+        "programs/SolidFill.cc",
+    ],
+    hdrs = [
+        "programs/ColorMatrix.h",
+        "programs/SolidFill.h",
+    ],
     visibility = donner_internal_visibility(),
     deps = [
         ":shader",
@@ -58,6 +78,7 @@ donner_cc_library(
 donner_cc_test(
     name = "shader_tests",
     srcs = [
+        "tests/ColorMatrixProgram_tests.cc",
         "tests/IrBuilder_tests.cc",
         "tests/IrLayout_tests.cc",
         "tests/IrSerialization_tests.cc",
@@ -68,6 +89,9 @@ donner_cc_test(
         "tests/WgslEmitter_tests.cc",
     ],
     data = [
+        "tests/testdata/color_matrix.msl",
+        "tests/testdata/color_matrix.spv",
+        "tests/testdata/color_matrix.wgsl",
         "tests/testdata/solid_fill.msl",
         "tests/testdata/solid_fill.spv",
         "tests/testdata/solid_fill.wgsl",

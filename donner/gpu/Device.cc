@@ -4,6 +4,7 @@
 #include <cmath>
 #include <format>
 #include <memory>
+#include <sstream>
 #include <utility>
 
 #include "donner/gpu/CheckedArithmetic.h"
@@ -138,6 +139,14 @@ Status ValidateBindGroupLayoutDescriptor(const BindGroupLayoutDescriptor& descri
     if (Status status = CheckEnum(entry.type, "BindGroupLayoutEntry.type"); status.hasError()) {
       return status;
     }
+    // Checked for every entry, not just storage-texture ones: an out-of-range cast in an ignored
+    // field would otherwise survive validation and reach a backend's format translation the day
+    // the field starts being read.
+    if (Status status =
+            CheckEnum(entry.storageTextureFormat, "BindGroupLayoutEntry.storageTextureFormat");
+        status.hasError()) {
+      return status;
+    }
     if (entry.visibility == ShaderStage::None) {
       return Err(
           GpuErrorType::InvalidDescriptor,
@@ -225,6 +234,71 @@ Status ValidateVertexBufferLayouts(const std::vector<VertexBufferLayout>& buffer
     }
   }
   return OkStatus();
+}
+
+/// Validates a declared workgroup size against the per-dimension and total-invocation caps.
+Status ValidateWorkgroupSize(const WorkgroupSize& size) {
+  if (size.x == 0 || size.y == 0 || size.z == 0) {
+    return Err(GpuErrorType::InvalidDescriptor,
+               std::format("ComputePipelineDescriptor.workgroupSize {}x{}x{} has a zero dimension",
+                           size.x, size.y, size.z));
+  }
+  if (size.x > kMaxComputeWorkgroupSizeXY || size.y > kMaxComputeWorkgroupSizeXY ||
+      size.z > kMaxComputeWorkgroupSizeZ) {
+    return Err(GpuErrorType::LimitExceeded,
+               std::format("ComputePipelineDescriptor.workgroupSize {}x{}x{} exceeds the "
+                           "per-dimension caps ({}, {}, {})",
+                           size.x, size.y, size.z, kMaxComputeWorkgroupSizeXY,
+                           kMaxComputeWorkgroupSizeXY, kMaxComputeWorkgroupSizeZ));
+  }
+  // Multiplied in 64 bits so a product that overflows 32 bits is rejected rather than wrapping
+  // under the cap.
+  const uint64_t invocations = uint64_t{size.x} * size.y * size.z;
+  if (invocations > kMaxComputeInvocationsPerWorkgroup) {
+    return Err(
+        GpuErrorType::LimitExceeded,
+        std::format("ComputePipelineDescriptor.workgroupSize {}x{}x{} declares {} "
+                    "invocations, exceeding kMaxComputeInvocationsPerWorkgroup {}",
+                    size.x, size.y, size.z, invocations, kMaxComputeInvocationsPerWorkgroup));
+  }
+  return OkStatus();
+}
+
+/// Rejects a compute pipeline whose declared workgroup size the shader module does not back.
+///
+/// Metal dispatches with the descriptor's size while every other backend uses the size compiled
+/// into the shader, so a disagreement is a different invocation grid per backend rather than an
+/// error anything reports.
+///
+/// @param descriptor Pipeline descriptor being created.
+/// @param moduleDescriptor Descriptor the referenced shader module was created with.
+Status ValidateWorkgroupSizeAgainstModule(const ComputePipelineDescriptor& descriptor,
+                                          const ShaderModuleDescriptor& moduleDescriptor) {
+  if (moduleDescriptor.computeEntryPoints.empty()) {
+    return Err(GpuErrorType::InvalidDescriptor,
+               std::format("shader module \"{}\" declares no compute entry points, so the "
+                           "workgroup size of \"{}\" cannot be checked against the shader",
+                           moduleDescriptor.label.str(), descriptor.compute.entryPoint.str()));
+  }
+  for (const ComputeEntryPointInfo& entryPoint : moduleDescriptor.computeEntryPoints) {
+    if (entryPoint.name != descriptor.compute.entryPoint) {
+      continue;
+    }
+    if (!(entryPoint.workgroupSize == descriptor.workgroupSize)) {
+      std::ostringstream sizes;
+      sizes << descriptor.workgroupSize << " disagrees with the " << entryPoint.workgroupSize;
+      return Err(GpuErrorType::InvalidDescriptor,
+                 std::format("ComputePipelineDescriptor.workgroupSize {} that shader module "
+                             "\"{}\" declares for entry point \"{}\"",
+                             sizes.str(), moduleDescriptor.label.str(),
+                             descriptor.compute.entryPoint.str()));
+    }
+    return OkStatus();
+  }
+  return Err(GpuErrorType::InvalidDescriptor,
+             std::format("shader module \"{}\" does not declare a compute entry point named "
+                         "\"{}\"",
+                         moduleDescriptor.label.str(), descriptor.compute.entryPoint.str()));
 }
 
 }  // namespace
@@ -339,6 +413,10 @@ void Device::recycleRetiredSlot(ResourceKind kind, uint32_t slotIndex) {
       onDestroyResource(RenderPipelineTag::kName, slotIndex);
       renderPipelines_.recycle(slotIndex);
       return;
+    case ResourceKind::ComputePipeline:
+      onDestroyResource(ComputePipelineTag::kName, slotIndex);
+      computePipelines_.recycle(slotIndex);
+      return;
   }
 }
 
@@ -412,6 +490,7 @@ DONNER_GPU_DEFINE_RAII_RELEASE(BindGroupTag, bindGroups_, BindGroup)
 DONNER_GPU_DEFINE_RAII_RELEASE(PipelineLayoutTag, pipelineLayouts_, PipelineLayout)
 DONNER_GPU_DEFINE_RAII_RELEASE(ShaderModuleTag, shaderModules_, ShaderModule)
 DONNER_GPU_DEFINE_RAII_RELEASE(RenderPipelineTag, renderPipelines_, RenderPipeline)
+DONNER_GPU_DEFINE_RAII_RELEASE(ComputePipelineTag, computePipelines_, ComputePipeline)
 
 #undef DONNER_GPU_DEFINE_RAII_RELEASE
 
@@ -614,6 +693,43 @@ Status Device::validateSampledTextureBindingEntry(const BindGroupEntry& entry) c
   return OkStatus();
 }
 
+Status Device::validateStorageTextureBindingEntry(const BindGroupLayoutEntry& layoutEntry,
+                                                  const BindGroupEntry& entry) const {
+  const TextureViewBinding* viewBinding = std::get_if<TextureViewBinding>(&entry.resource);
+  if (viewBinding == nullptr) {
+    return Err(GpuErrorType::InvalidDescriptor,
+               std::format("BindGroupEntry binding {} must bind a texture view to match "
+                           "the layout type WriteOnlyStorageTexture2d",
+                           entry.binding));
+  }
+  auto viewRecord = resolve(textureViews_, viewBinding->view, TextureViewTag::kName);
+  if (viewRecord.hasError()) {
+    return std::move(viewRecord).error();
+  }
+  auto viewedTexture = resolveViewedTexture(*viewRecord.result());
+  if (viewedTexture.hasError()) {
+    return std::move(viewedTexture).error();
+  }
+  const TextureDescriptor& textureDescriptor = viewedTexture.result()->descriptor;
+  if (!HasAllFlags(textureDescriptor.usage, TextureUsage::StorageBinding)) {
+    return Err(GpuErrorType::UsageMismatch,
+               std::format("BindGroupEntry binding {}: texture view \"{}\" lacks the "
+                           "StorageBinding usage",
+                           entry.binding, viewRecord.result()->descriptor.label.str()));
+  }
+  // The shader's storage-texture declaration names one texel format; a texture of a different
+  // format would reinterpret the stores, so the mismatch fails closed here.
+  if (textureDescriptor.format != layoutEntry.storageTextureFormat) {
+    std::ostringstream formats;
+    formats << textureDescriptor.format << " vs " << layoutEntry.storageTextureFormat;
+    return Err(GpuErrorType::InvalidDescriptor,
+               std::format("BindGroupEntry binding {}: texture \"{}\" format does not match the "
+                           "layout's storageTextureFormat ({})",
+                           entry.binding, textureDescriptor.label.str(), formats.str()));
+  }
+  return OkStatus();
+}
+
 Status Device::validateSamplerBindingEntry(const BindGroupEntry& entry) const {
   const SamplerBinding* samplerBinding = std::get_if<SamplerBinding>(&entry.resource);
   if (samplerBinding == nullptr) {
@@ -635,7 +751,64 @@ Status Device::validateBindGroupEntryForLayout(const BindGroupLayoutEntry& layou
     case BindingType::UniformBuffer:
     case BindingType::ReadOnlyStorageBuffer: return validateBufferBindingEntry(layoutEntry, entry);
     case BindingType::SampledTexture2dFloat: return validateSampledTextureBindingEntry(entry);
+    case BindingType::WriteOnlyStorageTexture2d:
+      return validateStorageTextureBindingEntry(layoutEntry, entry);
     case BindingType::FilteringSampler: return validateSamplerBindingEntry(entry);
+  }
+  return OkStatus();
+}
+
+std::vector<Device::BoundTextureBinding> Device::collectBoundTextures(
+    const BindGroupDescriptor& descriptor, const std::vector<BindGroupLayoutEntry>& layoutEntries,
+    BindingType type) const {
+  std::vector<BoundTextureBinding> bound;
+  for (const BindGroupLayoutEntry& layoutEntry : layoutEntries) {
+    if (layoutEntry.type != type) {
+      continue;
+    }
+    const BindGroupEntry* entry = nullptr;
+    if (findBindGroupEntryForBinding(descriptor, layoutEntry, entry).hasError()) {
+      continue;  // Already reported by the per-binding pass.
+    }
+    const TextureViewBinding* viewBinding = std::get_if<TextureViewBinding>(&entry->resource);
+    if (viewBinding == nullptr) {
+      continue;  // Already reported by the per-binding pass.
+    }
+    const TextureViewRecord* view =
+        textureViews_.find(viewBinding->view.slotIndex(), viewBinding->view.generation());
+    if (view != nullptr) {
+      bound.push_back(BoundTextureBinding{layoutEntry.binding, view->textureIdentity});
+    }
+  }
+  return bound;
+}
+
+Status Device::validateNoTextureAliasing(
+    const BindGroupDescriptor& descriptor,
+    const std::vector<BindGroupLayoutEntry>& layoutEntries) const {
+  // Each binding declares the layout its texture must be in, and one image can only be in one
+  // layout at a time, so a texture named by both a sampled and a storage-write binding is in the
+  // wrong layout for one of them however the backend transitions it. Nothing this runtime serves
+  // aliases a texture both ways inside one group, so the shape is rejected rather than modeled.
+  const std::vector<BoundTextureBinding> sampled =
+      collectBoundTextures(descriptor, layoutEntries, BindingType::SampledTexture2dFloat);
+  const std::vector<BoundTextureBinding> storage =
+      collectBoundTextures(descriptor, layoutEntries, BindingType::WriteOnlyStorageTexture2d);
+
+  for (const BoundTextureBinding& sampledBinding : sampled) {
+    for (const BoundTextureBinding& storageBinding : storage) {
+      if (!(sampledBinding.textureIdentity == storageBinding.textureIdentity)) {
+        continue;
+      }
+      const TextureRecord* texture = textures_.find(sampledBinding.textureIdentity.slotIndex,
+                                                    sampledBinding.textureIdentity.generation);
+      return Err(GpuErrorType::InvalidDescriptor,
+                 std::format("BindGroupDescriptor: texture \"{}\" is bound as a sampled texture "
+                             "at binding {} and as a storage texture at binding {}; one texture "
+                             "cannot be in both layouts at once",
+                             texture != nullptr ? texture->descriptor.label.str() : "",
+                             sampledBinding.binding, storageBinding.binding));
+    }
   }
   return OkStatus();
 }
@@ -664,6 +837,10 @@ Result<BindGroup> Device::createBindGroup(const BindGroupDescriptor& descriptor)
         entryStatus.hasError()) {
       return std::move(entryStatus).error();
     }
+  }
+  if (Status aliasStatus = validateNoTextureAliasing(descriptor, layoutEntries);
+      aliasStatus.hasError()) {
+    return std::move(aliasStatus).error();
   }
 
   BindGroupRecord record{
@@ -822,6 +999,37 @@ Result<RenderPipeline> Device::createRenderPipeline(const RenderPipelineDescript
   return handle;
 }
 
+Result<ComputePipeline> Device::createComputePipeline(const ComputePipelineDescriptor& descriptor) {
+  auto layoutRecord = resolve(pipelineLayouts_, descriptor.layout, PipelineLayoutTag::kName);
+  if (layoutRecord.hasError()) {
+    return std::move(layoutRecord).error();
+  }
+  auto computeModule = resolve(shaderModules_, descriptor.compute.module, ShaderModuleTag::kName);
+  if (computeModule.hasError()) {
+    return std::move(computeModule).error();
+  }
+  if (descriptor.compute.entryPoint.empty()) {
+    return Err(GpuErrorType::InvalidDescriptor,
+               "ComputePipelineDescriptor.compute.entryPoint is empty");
+  }
+  if (Status status = ValidateWorkgroupSize(descriptor.workgroupSize); status.hasError()) {
+    return std::move(status).error();
+  }
+  if (Status status =
+          ValidateWorkgroupSizeAgainstModule(descriptor, computeModule.result()->descriptor);
+      status.hasError()) {
+    return std::move(status).error();
+  }
+
+  ComputePipelineRecord record{descriptor, layoutRecord.result()->bindGroupLayoutIds};
+  ComputePipeline handle = allocateHandle<ComputePipelineTag>(computePipelines_, std::move(record));
+  if (Status status = onCreateComputePipeline(handle.slotIndex(), descriptor); status.hasError()) {
+    computePipelines_.release(handle.slotIndex());
+    return std::move(status).error();
+  }
+  return handle;
+}
+
 // Each destroy* consumes the handle: destroyResource retires the identity (so the RAII release
 // of the moved-in parameter is a stale no-op), and on validation failure the dropped parameter's
 // RAII release still runs against the handle's own device, so nothing leaks.
@@ -861,6 +1069,11 @@ Status Device::destroyShaderModule(ShaderModule&& shaderModule) {
 
 Status Device::destroyRenderPipeline(RenderPipeline&& renderPipeline) {
   return destroyResource(renderPipelines_, std::move(renderPipeline), ResourceKind::RenderPipeline);
+}
+
+Status Device::destroyComputePipeline(ComputePipeline&& computePipeline) {
+  return destroyResource(computePipelines_, std::move(computePipeline),
+                         ResourceKind::ComputePipeline);
 }
 
 Result<std::unique_ptr<CommandEncoder>> Device::createCommandEncoder() {
@@ -1101,6 +1314,14 @@ Status Device::checkSubmissionCommand(const Command& command,
             return std::move(pipelineRecord).error();
           }
           return OkStatus();
+        } else if constexpr (std::is_same_v<CommandType, SetComputePipelineCommand>) {
+          auto pipelineRecord = checkSubmissionResource(
+              computePipelines_, typedCommand.pipelineId, ResourceKind::ComputePipeline,
+              ComputePipelineTag::kName, "recorded compute setPipeline", uses);
+          if (pipelineRecord.hasError()) {
+            return std::move(pipelineRecord).error();
+          }
+          return OkStatus();
         } else if constexpr (std::is_same_v<CommandType, SetBindGroupCommand>) {
           return checkSubmissionBindGroup(typedCommand.bindGroupId, uses);
         } else if constexpr (std::is_same_v<CommandType, SetVertexBufferCommand>) {
@@ -1135,29 +1356,32 @@ Result<std::vector<Device::SubmissionUse>> Device::validateSubmissionResources(
   return uses;
 }
 
+void Device::markResourceUsed(ResourceKind kind, uint32_t slotIndex, uint64_t submissionSerial) {
+  switch (kind) {
+    case ResourceKind::Buffer: buffers_.markUsed(slotIndex, submissionSerial); return;
+    case ResourceKind::Texture: textures_.markUsed(slotIndex, submissionSerial); return;
+    case ResourceKind::TextureView: textureViews_.markUsed(slotIndex, submissionSerial); return;
+    case ResourceKind::Sampler: samplers_.markUsed(slotIndex, submissionSerial); return;
+    case ResourceKind::BindGroupLayout:
+      bindGroupLayouts_.markUsed(slotIndex, submissionSerial);
+      return;
+    case ResourceKind::BindGroup: bindGroups_.markUsed(slotIndex, submissionSerial); return;
+    case ResourceKind::PipelineLayout:
+      pipelineLayouts_.markUsed(slotIndex, submissionSerial);
+      return;
+    case ResourceKind::ShaderModule: shaderModules_.markUsed(slotIndex, submissionSerial); return;
+    case ResourceKind::RenderPipeline:
+      renderPipelines_.markUsed(slotIndex, submissionSerial);
+      return;
+    case ResourceKind::ComputePipeline:
+      computePipelines_.markUsed(slotIndex, submissionSerial);
+      return;
+  }
+}
+
 void Device::markSubmissionUses(std::span<const SubmissionUse> uses, uint64_t submissionSerial) {
   for (const SubmissionUse& use : uses) {
-    switch (use.kind) {
-      case ResourceKind::Buffer: buffers_.markUsed(use.slotIndex, submissionSerial); break;
-      case ResourceKind::Texture: textures_.markUsed(use.slotIndex, submissionSerial); break;
-      case ResourceKind::TextureView:
-        textureViews_.markUsed(use.slotIndex, submissionSerial);
-        break;
-      case ResourceKind::Sampler: samplers_.markUsed(use.slotIndex, submissionSerial); break;
-      case ResourceKind::BindGroupLayout:
-        bindGroupLayouts_.markUsed(use.slotIndex, submissionSerial);
-        break;
-      case ResourceKind::BindGroup: bindGroups_.markUsed(use.slotIndex, submissionSerial); break;
-      case ResourceKind::PipelineLayout:
-        pipelineLayouts_.markUsed(use.slotIndex, submissionSerial);
-        break;
-      case ResourceKind::ShaderModule:
-        shaderModules_.markUsed(use.slotIndex, submissionSerial);
-        break;
-      case ResourceKind::RenderPipeline:
-        renderPipelines_.markUsed(use.slotIndex, submissionSerial);
-        break;
-    }
+    markResourceUsed(use.kind, use.slotIndex, submissionSerial);
   }
 }
 

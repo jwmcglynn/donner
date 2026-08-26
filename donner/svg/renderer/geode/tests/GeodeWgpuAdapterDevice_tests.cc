@@ -31,6 +31,21 @@ using testing::Not;
 namespace donner::geode {
 namespace {
 
+/// Minimal compute WGSL writing a constant color into a write-only storage texture, matching the
+/// compute pipeline the conformance and replay tests create.
+constexpr const char* kFillComputeWgsl = R"(
+@group(0) @binding(0) var output_tex: texture_storage_2d<rgba8unorm, write>;
+
+@compute @workgroup_size(4, 4, 1)
+fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
+  let size = textureDimensions(output_tex);
+  if ((gid.x >= size.x) || (gid.y >= size.y)) {
+    return;
+  }
+  textureStore(output_tex, vec2<i32>(gid.xy), vec4f(0.0, 1.0, 0.0, 1.0));
+}
+)";
+
 /// Minimal WGSL exercising a uniform binding and one vertex buffer, matching the pipeline the
 /// conformance scene creates.
 constexpr const char* kSolidWgsl = R"(
@@ -61,9 +76,9 @@ std::vector<uint8_t> MakeBytes(size_t count) {
 constexpr uint32_t kSceneSize = 4;
 constexpr uint32_t kReadbackBytesPerRow = 256;  // 4x4 RGBA rows padded to the copy alignment.
 
-/// Reads a 4x4 RGBA8 texture back to the host through raw wgpu (the adapter's own readback
-/// story arrives in packet 11), mirroring the map-and-poll pattern the existing Geode tests
-/// use. Returns the padded rows (kReadbackBytesPerRow per row), or empty on failure.
+/// Reads a 4x4 RGBA8 texture back to the host through raw wgpu (the adapter has no readback API
+/// of its own yet), mirroring the map-and-poll pattern the existing Geode tests use. Returns the
+/// padded rows (kReadbackBytesPerRow per row), or empty on failure.
 std::vector<uint8_t> ReadbackTexturePixels(GeodeDevice& device, wgpu::Texture texture) {
   const uint64_t byteSize = uint64_t{kReadbackBytesPerRow} * kSceneSize;
   wgpu::BufferDescriptor bufferDescriptor = {};
@@ -122,6 +137,53 @@ std::vector<uint8_t> ReadbackTexturePixels(GeodeDevice& device, wgpu::Texture te
 std::vector<uint8_t> PixelAt(const std::vector<uint8_t>& pixels, uint32_t x, uint32_t y) {
   const size_t base = size_t{y} * kReadbackBytesPerRow + size_t{x} * 4;
   return std::vector<uint8_t>(pixels.begin() + base, pixels.begin() + base + 4);
+}
+
+/// Resources for the compute conformance scene: a write-only storage texture bound to the
+/// single-entry layout the fill kernel declares.
+struct ComputeScene {
+  gpu::Texture target;            //!< Storage destination the kernel writes.
+  gpu::TextureView targetView;    //!< View bound at binding 0.
+  gpu::BindGroupLayout layout;    //!< Single write-only storage texture entry.
+  gpu::BindGroup bindGroup;       //!< The bound group.
+  gpu::ComputePipeline pipeline;  //!< Pipeline over kFillComputeWgsl.
+};
+
+/// Creates the compute conformance scene on \p adapter.
+/// @param adapter Adapter to create through.
+/// @param label Debug label prefix for the created resources.
+ComputeScene MakeComputeScene(GeodeWgpuAdapterDevice& adapter, const char* label) {
+  ComputeScene scene;
+  scene.target = gpu::GetResultOrFail(adapter.createTexture(gpu::TextureDescriptor{
+      label, gpu::Extent2d{kSceneSize, kSceneSize}, gpu::TextureFormat::RGBA8Unorm,
+      gpu::TextureUsage::StorageBinding | gpu::TextureUsage::CopySrc}));
+  scene.targetView = gpu::GetResultOrFail(
+      adapter.createTextureView(scene.target, gpu::TextureViewDescriptor{"computeTargetView"}));
+  scene.layout = gpu::GetResultOrFail(adapter.createBindGroupLayout(gpu::BindGroupLayoutDescriptor{
+      "computeBindings",
+      {gpu::BindGroupLayoutEntry{0, gpu::ShaderStage::Compute,
+                                 gpu::BindingType::WriteOnlyStorageTexture2d,
+                                 gpu::TextureFormat::RGBA8Unorm}}}));
+  scene.bindGroup = gpu::GetResultOrFail(adapter.createBindGroup(gpu::BindGroupDescriptor{
+      "computeGroup",
+      scene.layout,
+      {gpu::BindGroupEntry{0, gpu::TextureViewBinding{scene.targetView}}}}));
+  const gpu::PipelineLayout pipelineLayout = gpu::GetResultOrFail(
+      adapter.createPipelineLayout(gpu::PipelineLayoutDescriptor{"computeLayout", {scene.layout}}));
+  // Hand-written WGSL rather than emitted IR, so the entry point is declared inline; the runtime
+  // checks the pipeline's workgroup size against it.
+  const gpu::ShaderModule shader =
+      gpu::GetResultOrFail(adapter.createShaderModule(gpu::ShaderModuleDescriptor{
+          "fillCompute",
+          kFillComputeWgsl,
+          gpu::ShaderSourceKind::Wgsl,
+          {},
+          {gpu::ComputeEntryPointInfo{"cs_main", gpu::WorkgroupSize{4, 4, 1}}}}));
+  scene.pipeline =
+      gpu::GetResultOrFail(adapter.createComputePipeline(gpu::ComputePipelineDescriptor{
+          "fillCompute", pipelineLayout, gpu::ComputeState{shader, "cs_main"},
+          gpu::WorkgroupSize{4, 4, 1}}));
+  return scene;
 }
 
 class GeodeWgpuAdapterDeviceTests : public testing::Test {
@@ -405,6 +467,103 @@ TEST_F(GeodeWgpuAdapterDeviceTests, OwnedSubmitResumesAfterClearingTheHostEncode
   EXPECT_EQ(counters.submits, 1u) << "an adapter-owned submit must still count one submit";
   ASSERT_TRUE(adapter_->waitForSerial(serial, /*timeoutSeconds=*/30.0));
   EXPECT_THAT(adapter_->completedSerial(), Ge(serial));
+
+  geodeDevice_->setCounters(nullptr);
+}
+
+TEST_F(GeodeWgpuAdapterDeviceTests, OwnedSubmitEncodesAComputePassThatWritesItsStorageTexture) {
+  ComputeScene scene = MakeComputeScene(*adapter_, "computeTarget");
+
+  std::unique_ptr<gpu::CommandEncoder> encoder =
+      gpu::GetResultOrFail(adapter_->createCommandEncoder());
+  gpu::ComputePassEncoder* pass =
+      gpu::GetResultOrFail(encoder->beginComputePass(gpu::ComputePassDescriptor{"fillPass"}));
+  ASSERT_NE(pass, nullptr);
+  EXPECT_THAT(pass->setPipeline(scene.pipeline), gpu::IsOk());
+  EXPECT_THAT(pass->setBindGroup(0, scene.bindGroup), gpu::IsOk());
+  EXPECT_THAT(pass->dispatchWorkgroups(1, 1, 1), gpu::IsOk());
+  EXPECT_THAT(pass->end(), gpu::IsOk());
+
+  const uint64_t serial =
+      gpu::GetResultOrFail(adapter_->submit(gpu::GetResultOrFail(encoder->finish())));
+  ASSERT_TRUE(adapter_->waitForSerial(serial, /*timeoutSeconds=*/30.0))
+      << "compute submission " << serial
+      << " did not complete; completedSerial=" << adapter_->completedSerial();
+
+  // The kernel stores opaque green into every texel of the 4x4 destination, so a dropped
+  // dispatch, a wrong bind group, or a pass that never opened shows up as untouched bytes.
+  const std::vector<uint8_t> pixels =
+      ReadbackTexturePixels(*geodeDevice_, adapter_->wgpuTextureOf(scene.target));
+  ASSERT_THAT(pixels, Not(testing::IsEmpty())) << "compute target readback failed";
+  EXPECT_THAT(PixelAt(pixels, 0, 0), ElementsAre(0, 255, 0, 255));
+  EXPECT_THAT(PixelAt(pixels, 2, 2), ElementsAre(0, 255, 0, 255));
+  EXPECT_THAT(PixelAt(pixels, 3, 3), ElementsAre(0, 255, 0, 255));
+}
+
+/// The replay-mode properties the render path holds must hold for compute passes too: the
+/// replayed compute span lands in the host's command buffer ahead of the spans the host records
+/// afterwards, the replay performs no queue submit of its own, and the replayed serial is not
+/// observable as complete until the host reports its submit.
+TEST_F(GeodeWgpuAdapterDeviceTests, HostEncoderReplaysAComputePassAheadOfHostRecordedSpans) {
+  ComputeScene scene = MakeComputeScene(*adapter_, "replayComputeTarget");
+  const gpu::Texture copyDestination = gpu::GetResultOrFail(adapter_->createTexture(
+      gpu::TextureDescriptor{"replayComputeCopyDst", gpu::Extent2d{kSceneSize, kSceneSize},
+                             gpu::TextureFormat::RGBA8Unorm,
+                             gpu::TextureUsage::CopyDst | gpu::TextureUsage::CopySrc}));
+
+  GeodeCounters counters;
+  geodeDevice_->setCounters(&counters);
+
+  wgpu::CommandEncoderDescriptor hostDescriptor = {};
+  ScopedWgpuHandle<wgpu::CommandEncoder> hostEncoder(
+      geodeDevice_->device().createCommandEncoder(hostDescriptor));
+  ASSERT_TRUE(static_cast<bool>(hostEncoder.get()));
+  adapter_->setHostCommandEncoder(hostEncoder.get());
+
+  std::unique_ptr<gpu::CommandEncoder> encoder =
+      gpu::GetResultOrFail(adapter_->createCommandEncoder());
+  gpu::ComputePassEncoder* pass =
+      gpu::GetResultOrFail(encoder->beginComputePass(gpu::ComputePassDescriptor{"replayFillPass"}));
+  ASSERT_NE(pass, nullptr);
+  EXPECT_THAT(pass->setPipeline(scene.pipeline), gpu::IsOk());
+  EXPECT_THAT(pass->setBindGroup(0, scene.bindGroup), gpu::IsOk());
+  EXPECT_THAT(pass->dispatchWorkgroups(1, 1, 1), gpu::IsOk());
+  EXPECT_THAT(pass->end(), gpu::IsOk());
+  const uint64_t serial =
+      gpu::GetResultOrFail(adapter_->submit(gpu::GetResultOrFail(encoder->finish())));
+  EXPECT_THAT(serial, Ge(uint64_t{1}));
+
+  EXPECT_EQ(counters.submits, 0u) << "replay must not perform a queue submit of its own";
+  EXPECT_THAT(adapter_->completedSerial(), Lt(serial));
+  EXPECT_FALSE(adapter_->waitForSerial(serial, /*timeoutSeconds=*/0.25))
+      << "serial " << serial << " reported complete before the host submitted its command buffer";
+
+  // A span the host records itself, AFTER the replayed compute pass. It copies what the kernel
+  // wrote, so a wrong replay position (or a second command buffer) shows up as wrong bytes.
+  wgpu::TexelCopyTextureInfo copySource = {};
+  copySource.texture = adapter_->wgpuTextureOf(scene.target);
+  wgpu::TexelCopyTextureInfo copyDest = {};
+  copyDest.texture = adapter_->wgpuTextureOf(copyDestination);
+  const wgpu::Extent3D copyExtent = {kSceneSize, kSceneSize, 1u};
+  hostEncoder.get().copyTextureToTexture(copySource, copyDest, copyExtent);
+
+  {
+    ScopedWgpuHandle<wgpu::CommandBuffer> hostCommands(hostEncoder.get().finish());
+    ASSERT_TRUE(static_cast<bool>(hostCommands.get()));
+    geodeDevice_->queue().submit(1, &hostCommands.get());
+  }
+  adapter_->notifyHostSubmitted();
+  adapter_->clearHostCommandEncoder();
+
+  ASSERT_TRUE(adapter_->waitForSerial(serial, /*timeoutSeconds=*/30.0))
+      << "compute submission " << serial << " did not complete after the host submit";
+  EXPECT_THAT(adapter_->completedSerial(), Ge(serial));
+
+  const std::vector<uint8_t> copiedPixels =
+      ReadbackTexturePixels(*geodeDevice_, adapter_->wgpuTextureOf(copyDestination));
+  ASSERT_THAT(copiedPixels, Not(testing::IsEmpty())) << "replay copy destination readback failed";
+  EXPECT_THAT(PixelAt(copiedPixels, 0, 0), ElementsAre(0, 255, 0, 255));
+  EXPECT_THAT(PixelAt(copiedPixels, 3, 3), ElementsAre(0, 255, 0, 255));
 
   geodeDevice_->setCounters(nullptr);
 }

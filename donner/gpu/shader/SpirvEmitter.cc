@@ -68,6 +68,8 @@ constexpr uint32_t kOpCompositeExtract = 81;
 constexpr uint32_t kOpSampledImage = 86;
 constexpr uint32_t kOpImageSampleImplicitLod = 87;
 constexpr uint32_t kOpImageFetch = 95;
+constexpr uint32_t kOpImageWrite = 99;
+constexpr uint32_t kOpImageQuerySize = 104;
 constexpr uint32_t kOpImageQuerySizeLod = 103;
 constexpr uint32_t kOpConvertFToU = 109;
 constexpr uint32_t kOpConvertFToS = 110;
@@ -153,6 +155,7 @@ constexpr uint32_t kDecorationArrayStride = 6;
 constexpr uint32_t kDecorationMatrixStride = 7;
 constexpr uint32_t kDecorationBuiltIn = 11;
 constexpr uint32_t kDecorationFlat = 14;
+constexpr uint32_t kDecorationNonReadable = 25;
 constexpr uint32_t kDecorationNonWritable = 24;
 constexpr uint32_t kDecorationLocation = 30;
 constexpr uint32_t kDecorationBinding = 33;
@@ -162,12 +165,15 @@ constexpr uint32_t kDecorationOffset = 35;
 // BuiltIn values.
 constexpr uint32_t kBuiltInPosition = 0;
 constexpr uint32_t kBuiltInFragCoord = 15;
+constexpr uint32_t kBuiltInGlobalInvocationId = 28;
 constexpr uint32_t kBuiltInInstanceIndex = 43;
 
 // Execution models, modes, and module-level enums.
 constexpr uint32_t kExecutionModelVertex = 0;
 constexpr uint32_t kExecutionModelFragment = 4;
+constexpr uint32_t kExecutionModelGlCompute = 5;
 constexpr uint32_t kExecutionModeOriginUpperLeft = 7;
+constexpr uint32_t kExecutionModeLocalSize = 17;
 constexpr uint32_t kAddressingModelLogical = 0;
 constexpr uint32_t kMemoryModelGlsl450 = 1;
 constexpr uint32_t kCapabilityShader = 1;
@@ -175,6 +181,9 @@ constexpr uint32_t kCapabilityImageQuery = 50;
 constexpr uint32_t kImageOperandsLodMask = 0x2;
 constexpr uint32_t kDim2D = 1;
 constexpr uint32_t kImageFormatUnknown = 0;
+// Rgba8 is one of the storage-image formats every Vulkan implementation must support without
+// the StorageImageExtendedFormats capability.
+constexpr uint32_t kImageFormatRgba8 = 4;
 constexpr uint32_t kFunctionControlNone = 0;
 constexpr uint32_t kSelectionControlNone = 0;
 constexpr uint32_t kLoopControlNone = 0;
@@ -297,6 +306,17 @@ bool IsVectorScalarBroadcast(BinaryOp op, const IrType& lhsType, const IrType& r
   return (lhsType.isVector() && rhsType.isScalar()) || (lhsType.isScalar() && rhsType.isVector());
 }
 
+/// SPIR-V BuiltIn decoration value of an IR stage input builtin.
+/// @param builtin IR builtin input.
+uint32_t BuiltInValue(BuiltinInput builtin) {
+  switch (builtin) {
+    case BuiltinInput::InstanceIndex: return kBuiltInInstanceIndex;
+    case BuiltinInput::Position: return kBuiltInFragCoord;
+    case BuiltinInput::GlobalInvocationId: return kBuiltInGlobalInvocationId;
+  }
+  return kBuiltInFragCoord;
+}
+
 /// Deterministic SPIR-V emitter: single ID counter, fixed traversal order, ordered dedup maps
 /// keyed by structural strings (see the SpirvEmitter.h contract).
 class Emitter {
@@ -369,6 +389,9 @@ private:
   uint32_t typeBoolVector(uint32_t size);
   uint32_t typeMatrix4x4f();
   uint32_t typeImage2dF32();
+  /// Storage-image type for a write-only 2D storage texture, keyed by its SPIR-V image format.
+  /// @param format IR texel format of the storage texture.
+  uint32_t typeStorageImage2d(StorageTextureFormat format);
   uint32_t typeSampledImage();
   uint32_t typeSampler();
   uint32_t typePointer(uint32_t storageClass, uint32_t pointeeId);
@@ -471,8 +494,11 @@ private:
   /// Emits a return: stage entry points store into their Output variables first.
   /// @param data Statement payload.
   void emitReturnStatement(const IrStmt::Data& data);
-  /// Emits OpKill, rejecting discard in a vertex entry point.
+  /// Emits OpKill, rejecting discard outside a fragment entry point.
   void emitDiscardStatement();
+  /// Emits OpImageWrite for a `textureStore` statement.
+  /// @param data Statement payload holding (texture, coords, value).
+  void emitTextureStoreStatement(const IrStmt::Data& data);
   void emitAssign(const IrExpr& lhs, const IrExpr& rhs);
 
   /// True if \p expr is a member/index/single-component-swizzle chain rooted at a `var` or a
@@ -665,6 +691,22 @@ uint32_t Emitter::typeImage2dF32() {
   return id;
 }
 
+uint32_t Emitter::typeStorageImage2d(StorageTextureFormat format) {
+  const uint32_t sampledType = typeScalar(ScalarKind::F32);
+  uint32_t imageFormat = kImageFormatRgba8;
+  switch (format) {
+    case StorageTextureFormat::Rgba8Unorm: imageFormat = kImageFormatRgba8; break;
+  }
+  const std::string key = std::format("storageimage2d|{}", imageFormat);
+  if (const uint32_t id = cached(key)) return id;
+  const uint32_t id = newId();
+  // 2D, non-depth, non-arrayed, single-sampled, Sampled=2 (accessed without a sampler), with an
+  // explicit texel format so no extended-format capability is required.
+  Instr(globals_, kOpTypeImage, {id, sampledType, kDim2D, 0, 0, 0, 2, imageFormat});
+  typeIds_[key] = id;
+  return id;
+}
+
 uint32_t Emitter::typeSampledImage() {
   const uint32_t imageId = typeImage2dF32();
   const std::string key = "sampledimage";
@@ -713,6 +755,8 @@ uint32_t Emitter::plainTypeId(const IrType& type) {
     case IrType::Kind::Vector: return typeVector(type.scalarKind(), type.vectorSize());
     case IrType::Kind::Matrix4x4f: return typeMatrix4x4f();
     case IrType::Kind::Texture2dF32: return typeImage2dF32();
+    case IrType::Kind::WriteOnlyStorageTexture2d:
+      return typeStorageImage2d(type.storageTextureFormat());
     case IrType::Kind::Sampler: return typeSampler();
     case IrType::Kind::SizedArray: return plainArrayTypeId(type);
     case IrType::Kind::Struct: return plainStructTypeId(type);
@@ -765,6 +809,7 @@ uint32_t Emitter::laidTypeId(const IrType& type, AddressSpace space) {
     case IrType::Kind::Struct: return laidStructTypeId(type, space);
     case IrType::Kind::Texture2dF32:
     case IrType::Kind::Sampler:
+    case IrType::Kind::WriteOnlyStorageTexture2d:
       latch(std::format("type {} has no host-shareable layout", type.toString()));
       return 0;
   }
@@ -994,6 +1039,17 @@ void Emitter::emitBindings() {
         Instr(globals_, kOpVariable, {pointerId, info.varId, kStorageClassUniformConstant});
         break;
       }
+      case BindingKind::WriteOnlyStorageTexture2d: {
+        info.storageClass = kStorageClassUniformConstant;
+        const uint32_t imageId = typeStorageImage2d(binding.type.storageTextureFormat());
+        const uint32_t pointerId = typePointer(kStorageClassUniformConstant, imageId);
+        info.varId = newId();
+        Instr(globals_, kOpVariable, {pointerId, info.varId, kStorageClassUniformConstant});
+        // The IR only ever writes this image, and declaring that lets a driver skip read
+        // hazards on it.
+        Instr(decorations_, kOpDecorate, {info.varId, kDecorationNonReadable});
+        break;
+      }
     }
     Instr(decorations_, kOpDecorate, {info.varId, kDecorationDescriptorSet, binding.group});
     Instr(decorations_, kOpDecorate, {info.varId, kDecorationBinding, binding.binding});
@@ -1104,9 +1160,7 @@ std::vector<uint32_t> Emitter::declareStageInputVariables(const IrFunction& func
     const uint32_t varId = newId();
     Instr(globals_, kOpVariable, {pointerId, varId, kStorageClassInput});
     if (param.builtin) {
-      const uint32_t builtinValue =
-          *param.builtin == BuiltinInput::InstanceIndex ? kBuiltInInstanceIndex : kBuiltInFragCoord;
-      Instr(decorations_, kOpDecorate, {varId, kDecorationBuiltIn, builtinValue});
+      Instr(decorations_, kOpDecorate, {varId, kDecorationBuiltIn, BuiltInValue(*param.builtin)});
     } else if (param.location) {
       Instr(decorations_, kOpDecorate, {varId, kDecorationLocation, *param.location});
     }
@@ -1164,8 +1218,12 @@ void Emitter::emitEntryPointFunction(const IrFunction& function) {
   }
   Instr(functions_, kOpFunctionEnd, {});
 
-  const uint32_t executionModel =
-      function.stage == StageKind::Vertex ? kExecutionModelVertex : kExecutionModelFragment;
+  uint32_t executionModel = kExecutionModelFragment;
+  switch (function.stage) {
+    case StageKind::Vertex: executionModel = kExecutionModelVertex; break;
+    case StageKind::Compute: executionModel = kExecutionModelGlCompute; break;
+    default: executionModel = kExecutionModelFragment; break;
+  }
   std::vector<uint32_t> entryOperands = {executionModel, functionId};
   const std::vector<uint32_t> nameWords = EncodeString(std::string_view(function.name));
   entryOperands.insert(entryOperands.end(), nameWords.begin(), nameWords.end());
@@ -1173,6 +1231,10 @@ void Emitter::emitEntryPointFunction(const IrFunction& function) {
   InstrV(entryPoints_, kOpEntryPoint, entryOperands);
   if (function.stage == StageKind::Fragment) {
     Instr(executionModes_, kOpExecutionMode, {functionId, kExecutionModeOriginUpperLeft});
+  } else if (function.stage == StageKind::Compute) {
+    const WorkgroupSize& size = *function.workgroupSize;
+    Instr(executionModes_, kOpExecutionMode,
+          {functionId, kExecutionModeLocalSize, size.x, size.y, size.z});
   }
 }
 
@@ -1204,6 +1266,7 @@ void Emitter::emitStatement(const IrStmt& statement) {
     case IrStmt::Kind::Continue: emitContinueStatement(); return;
     case IrStmt::Kind::Return: emitReturnStatement(data); return;
     case IrStmt::Kind::Discard: emitDiscardStatement(); return;
+    case IrStmt::Kind::TextureStore: emitTextureStoreStatement(data); return;
   }
 }
 
@@ -1327,12 +1390,20 @@ void Emitter::emitReturnStatement(const IrStmt::Data& data) {
 }
 
 void Emitter::emitDiscardStatement() {
-  if (currentStage_ == StageKind::Vertex) {
-    latch(std::format("discard cannot appear in vertex entry point \"{}\"", currentFunctionName_));
+  if (currentStage_ != StageKind::Fragment) {
+    latch(std::format("discard cannot appear outside a fragment entry point (function \"{}\")",
+                      currentFunctionName_));
     return;
   }
   Instr(functions_, kOpKill, {});
   blockTerminated_ = true;
+}
+
+void Emitter::emitTextureStoreStatement(const IrStmt::Data& data) {
+  const uint32_t imageId = emitValue(data.exprs[0]);
+  const uint32_t coordsId = emitValue(data.exprs[1]);
+  const uint32_t valueId = emitValue(data.exprs[2]);
+  Instr(functions_, kOpImageWrite, {imageId, coordsId, valueId});
 }
 
 void Emitter::emitAssign(const IrExpr& lhs, const IrExpr& rhs) {
@@ -1704,9 +1775,16 @@ uint32_t Emitter::emitResourceRefValue(const IrExpr::Node& node) {
     return 0;
   }
   const BindingInfo& info = it->second;
-  if (info.kind == BindingKind::SampledTexture2dF32 || info.kind == BindingKind::FilteringSampler) {
-    const uint32_t typeId =
-        info.kind == BindingKind::SampledTexture2dF32 ? typeImage2dF32() : typeSampler();
+  if (info.kind == BindingKind::SampledTexture2dF32 || info.kind == BindingKind::FilteringSampler ||
+      info.kind == BindingKind::WriteOnlyStorageTexture2d) {
+    uint32_t typeId = 0;
+    switch (info.kind) {
+      case BindingKind::SampledTexture2dF32: typeId = typeImage2dF32(); break;
+      case BindingKind::WriteOnlyStorageTexture2d:
+        typeId = typeStorageImage2d(info.type.storageTextureFormat());
+        break;
+      default: typeId = typeSampler(); break;
+    }
     const uint32_t valueId = newId();
     Instr(functions_, kOpLoad, {typeId, valueId, info.varId});
     return valueId;
@@ -1949,9 +2027,17 @@ uint32_t Emitter::emitTextureBuiltin(const IrExpr::Node& node, uint32_t typeId) 
     }
     case BuiltinFn::TextureDimensions: {
       usesImageQuery_ = true;
+      const bool isStorageImage =
+          node.children[0].type().kind() == IrType::Kind::WriteOnlyStorageTexture2d;
       const uint32_t imageId = emitValue(node.children[0]);
       const uint32_t valueId = newId();
-      Instr(functions_, kOpImageQuerySizeLod, {typeId, valueId, imageId, constU32(0)});
+      // A storage image is declared Sampled=2 and therefore has no LOD operand; a sampled image
+      // must take the Lod form.
+      if (isStorageImage) {
+        Instr(functions_, kOpImageQuerySize, {typeId, valueId, imageId});
+      } else {
+        Instr(functions_, kOpImageQuerySizeLod, {typeId, valueId, imageId, constU32(0)});
+      }
       return valueId;
     }
     default: return 0;
