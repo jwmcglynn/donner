@@ -60,6 +60,11 @@ What the run does next depends on where it is:
   The failure carries the same instructions, so the lane that goes red is the lane that hands
   over what turns it green.
 
+The same rule covers a run that cannot create a device at all. That is a different situation from
+a missing baseline, with the same consequence - nothing is compared - so it gets the same answer:
+skip locally, fail on an automated lane. `metal_solid_fill_tests` uses the rule too, so a driver
+or runner that stops providing an adapter turns those lanes red instead of quietly green.
+
 The markers that select the automated behavior (`GITHUB_ACTIONS`, or `DONNER_BASELINE_REQUIRE_FROZEN_ADAPTER`
 for a lane that does not set it) are listed in the test's `env_inherit`, because Bazel scrubs the
 test environment and a marker that is not named there can never be seen. The rule itself lives in

@@ -56,32 +56,34 @@ is called out in the notes; a label here describes what a lane asserts, not what
 
 | Platform                          | Driver / adapter                           | Coverage                         | Where                                                                       |
 | --------------------------------- | ------------------------------------------ | -------------------------------- | --------------------------------------------------------------------------- |
-| macOS arm64, deployment 13.3+     | Apple Silicon integrated                   | **PR-gated, device-conditional** | `metal_solid_fill_tests` and the Geode variant wrappers on the macOS lane   |
+| macOS arm64, deployment 13.3+     | Apple Silicon integrated                   | **PR-gated**                     | `metal_solid_fill_tests`, which fails rather than skips without a device    |
+| macOS arm64                       | Apple Silicon, Geode variant wrappers      | **PR-gated, device-conditional** | The `*_geode` wrappers on the macOS lane                                    |
 | macOS arm64                       | Apple Silicon, ImGui/editor presentation   | **PR-gated, device-conditional** | The macOS `--config=geode` editor lane's five explicit targets              |
 | macOS arm64                       | Frozen pixel identity, baselined adapter   | **PR-gated**                     | `baseline_pixels_tests`, on an adapter with a committed baseline            |
 | macOS arm64                       | Frozen pixel identity, unbaselined adapter | **None (fails closed)**          | `baseline_pixels_tests` fails on an automated lane rather than skipping     |
 | macOS arm64                       | Two or more Apple GPU generations          | **None**                         | One macOS lane runs per pull request; nothing compares generations          |
 | macOS x86_64                      | Intel integrated / AMD discrete            | **None**                         | Every macOS runner label in the tree is arm64                               |
-| macOS arm64, Metal API validation | Apple Silicon                              | **PR-gated, device-conditional** | `MTL_DEBUG_LAYER` and `MTL_SHADER_VALIDATION` on the Metal slice target     |
+| macOS arm64, Metal API validation | Apple Silicon                              | **PR-gated**                     | `MTL_DEBUG_LAYER` and `MTL_SHADER_VALIDATION` on the Metal slice target     |
 | macOS, offline MSL compilation    | Platform Metal toolchain                   | **Dev-host**                     | `msl_xcrun_validation_tests` self-skips when the offline compiler is absent |
 | iOS / iPadOS                      | Apple Silicon                              | **None**                         | No target, no lane, no runner                                               |
 
 Notes:
 
-- "Device-conditional" is the honest label for most of the Metal rows. `metal_solid_fill_tests`
-  calls `GTEST_SKIP` with "No Metal device available" when it cannot create one, and Bazel reports
-  a target whose every case skipped as passing. On a runner with a GPU these rows are real
-  assertions; on one without, they are green and assert nothing, and nothing in the tree
-  distinguishes the two from the summary. Closing that gap means the same fail-closed treatment
-  the frozen pixel gate now has, which is the model to copy rather than a reason to relabel these
-  rows as covered.
-- The frozen pixel gate is the one Metal row that is not device-conditional in that way. On an
-  automated lane an adapter with no committed baseline is a failure, not a skip, because a suite
-  that skips every case reports success while comparing nothing. On a developer machine the same
-  situation captures a baseline into the run's undeclared outputs and skips, so new hardware is
-  onboarded by committing that capture rather than by finding someone with the right machine. The
-  markers that select the automated behavior are named in the target's `env_inherit`, since Bazel
-  scrubs the test environment and an unnamed marker can never be observed.
+- Two Metal targets fail closed rather than skipping when no device can be created: the frozen
+  pixel gate and `metal_solid_fill_tests`. Both call the same rule, so a runner or driver that
+  stops providing an adapter turns those lanes red instead of green. This matters because Bazel
+  reports a target whose every case skipped as passing, so the old unconditional skip was
+  indistinguishable from a real pass in the summary.
+- "Device-conditional" still describes the Geode variant wrappers and the editor lane's targets.
+  They skip when they cannot reach a device, and on a runner without one they are green and
+  assert nothing. The two rows above are the model for closing that, not an argument that these
+  rows are already covered.
+- The frozen pixel gate has a second fail-closed door. On an automated lane an adapter with no
+  committed baseline is a failure, not a skip; on a developer machine the same situation captures
+  a baseline into the run's undeclared outputs and skips, so new hardware is onboarded by
+  committing that capture rather than by finding someone with the right machine. The markers that
+  select the automated behavior are named in each target's `env_inherit`, since Bazel scrubs the
+  test environment and an unnamed marker can never be observed.
 - A consequence worth stating plainly: the first automated run on a macOS runner whose adapter has
   no committed baseline goes red, and its failure message names the adapter and the directory to
   commit. That is the intended behavior, and freezing that adapter is what turns the lane green.
@@ -97,18 +99,19 @@ Notes:
 
 ## Vulkan
 
-| Platform                 | Driver / adapter         | Coverage        | Where                                                            |
-| ------------------------ | ------------------------ | --------------- | ---------------------------------------------------------------- |
-| Linux x86_64             | Mesa lavapipe (software) | **PR-gated**    | `vulkan_solid_fill_tests`, ICD pinned to `lvp_icd.json`          |
-| Linux arm64              | Mesa lavapipe (software) | **PR-gated**    | The self-hosted Linux routing, when it is the selected lane      |
-| Linux, SPIR-V validation | `spirv-val`              | **PR-gated**    | `spirv_val_validation_tests`; only one lane installs SPIRV-Tools |
-| Linux                    | Vulkan validation layers | **None**        | No lane enables them; the design requires zero validation errors |
-| Linux x86_64/arm64       | Intel physical           | **None**        | No lane has a GPU device; the shared executor advertises none    |
-| Linux x86_64             | AMD physical             | **None**        | As above                                                         |
-| Linux x86_64             | NVIDIA physical          | **None**        | As above                                                         |
-| Linux, Geode + ASan      | Mesa lavapipe            | **Conditional** | Fires only when the Geode renderer paths change                  |
-| Linux, Geode fuzzing     | Mesa lavapipe            | **Scheduled**   | Nightly                                                          |
-| Windows                  | Any Vulkan driver        | **None**        | No Windows runner, no Windows platform constraint, no D3D        |
+| Platform                 | Driver / adapter                        | Coverage        | Where                                                            |
+| ------------------------ | --------------------------------------- | --------------- | ---------------------------------------------------------------- |
+| Linux x86_64             | Mesa lavapipe (software)                | **PR-gated**    | `vulkan_solid_fill_tests`, ICD pinned to `lvp_icd.json`          |
+| Linux arm64              | Mesa lavapipe (software)                | **PR-gated**    | The self-hosted Linux routing, when it is the selected lane      |
+| Linux x86_64/arm64       | Frozen pixel identity, software adapter | **PR-gated**    | `baseline_pixels_tests`, against the committed lavapipe baseline |
+| Linux, SPIR-V validation | `spirv-val`                             | **PR-gated**    | `spirv_val_validation_tests`; only one lane installs SPIRV-Tools |
+| Linux                    | Vulkan validation layers                | **None**        | No lane enables them; the design requires zero validation errors |
+| Linux x86_64/arm64       | Intel physical                          | **None**        | No lane has a GPU device; the shared executor advertises none    |
+| Linux x86_64             | AMD physical                            | **None**        | As above                                                         |
+| Linux x86_64             | NVIDIA physical                         | **None**        | As above                                                         |
+| Linux, Geode + ASan      | Mesa lavapipe                           | **Conditional** | Fires only when the Geode renderer paths change                  |
+| Linux, Geode fuzzing     | Mesa lavapipe                           | **Scheduled**   | Nightly                                                          |
+| Windows                  | Any Vulkan driver                       | **None**        | No Windows runner, no Windows platform constraint, no D3D        |
 
 Notes:
 
