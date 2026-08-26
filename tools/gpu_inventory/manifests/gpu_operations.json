@@ -448,7 +448,6 @@
         "ComputePassDescriptor",
         "ComputePassEncoder",
         "Default",
-        "Device",
         "Extent3D",
         "Future",
         "FutureWaitInfo",
@@ -499,7 +498,6 @@
         "createPipelineLayout",
         "createRenderPipeline",
         "createShaderModule",
-        "createView",
         "draw",
         "finish",
         "setBindGroup",
@@ -508,48 +506,8 @@
         "submit",
         "writeBuffer"
       ],
-      "wgpuCFunctions": [
-        "wgpuLabel"
-      ],
-      "wgpuCTypes": [
-        "WGPUBindGroupLayout"
-      ],
       "wgpuCppTokens": [
-        "BindGroupDescriptor",
-        "BindGroupEntry",
-        "BindGroupLayoutDescriptor",
-        "BindGroupLayoutEntry",
-        "BlendFactor",
-        "BlendOperation",
-        "BlendState",
-        "BufferBindingType",
-        "BufferDescriptor",
-        "BufferUsage",
-        "ColorTargetState",
-        "ColorWriteMask",
-        "CommandBuffer",
-        "CommandEncoder",
-        "CommandEncoderDescriptor",
-        "CullMode",
-        "Default",
-        "Device",
-        "FragmentState",
-        "LoadOp",
-        "PipelineLayout",
-        "PipelineLayoutDescriptor",
-        "PrimitiveTopology",
-        "RenderPassColorAttachment",
-        "RenderPassDescriptor",
-        "RenderPassEncoder",
-        "RenderPipelineDescriptor",
-        "ShaderModule",
-        "ShaderModuleDescriptor",
-        "ShaderSourceWGSL",
-        "ShaderStage",
-        "StoreOp",
-        "Texture",
-        "TextureFormat",
-        "TextureView"
+        "Texture"
       ]
     },
     "donner/svg/renderer/geode/GeodeCheckerboardPipeline.h": {
@@ -557,13 +515,7 @@
         "draw"
       ],
       "wgpuCppTokens": [
-        "BindGroup",
-        "BindGroupLayout",
-        "Buffer",
-        "Device",
-        "RenderPipeline",
-        "Texture",
-        "TextureFormat"
+        "Texture"
       ]
     },
     "donner/svg/renderer/geode/GeodeCounters.h": {

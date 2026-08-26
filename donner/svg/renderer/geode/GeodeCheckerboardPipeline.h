@@ -8,11 +8,12 @@
 #include <webgpu/webgpu.hpp>
 
 #include "donner/base/Vector2.h"
-#include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
+#include "donner/gpu/Device.h"
 
 namespace donner::geode {
 
 class GeodeDevice;
+class GeodeWgpuAdapterDevice;
 
 /**
  * Appearance of the transparency checkerboard drawn behind see-through
@@ -75,12 +76,12 @@ struct CheckerboardUnderlayParams {
 };
 
 /**
- * Caches the compiled `wgpu::RenderPipeline` that draws the transparency
- * checkerboard behind see-through document regions, plus its bind group layout.
+ * Caches the compiled render pipeline that draws the transparency checkerboard
+ * behind see-through document regions, plus its bind group layout.
  *
  * Owned by `GeodeDevice` (lazily, via `GeodeDevice::checkerboardPipeline()` and
  * `GeodeDevice::checkerboardUnderlayPipeline()`) so every consumer sharing the
- * device reuses one compiled pipeline per blend mode - wgpu-native retains every
+ * device reuses one compiled pipeline per blend mode - the backend retains every
  * pipeline ever constructed, so per-consumer construction leaks (issue #575).
  *
  * Bind group layout:
@@ -125,12 +126,12 @@ public:
   /**
    * Create the checkerboard pipeline for the given device and target format.
    *
-   * @param device The WebGPU device.
+   * @param adapterDevice The Donner GPU device owned by the GeodeDevice.
    * @param colorFormat The pixel format of the render target this pipeline
    *   will draw into. Must match the target texture's format at draw time.
    * @param blendMode How the emitted checkerboard combines with the target.
    */
-  GeodeCheckerboardPipeline(const wgpu::Device& device, wgpu::TextureFormat colorFormat,
+  GeodeCheckerboardPipeline(GeodeWgpuAdapterDevice& adapterDevice, gpu::TextureFormat colorFormat,
                             BlendMode blendMode = BlendMode::Replace);
 
   ~GeodeCheckerboardPipeline() = default;
@@ -142,17 +143,19 @@ public:
   GeodeCheckerboardPipeline& operator=(GeodeCheckerboardPipeline&&) noexcept = default;
 
   /// True when the shader, bind group layout, and pipeline all compiled.
-  bool valid() const { return static_cast<bool>(pipeline_) && static_cast<bool>(bindGroupLayout_); }
+  bool valid() const { return pipeline_.isValid() && bindGroupLayout_.isValid(); }
 
   /// The compiled render pipeline.
-  const wgpu::RenderPipeline& pipeline() const { return pipeline_; }
+  const gpu::RenderPipeline& pipeline() const { return pipeline_; }
 
   /// Bind group layout used by the pipeline.
-  const wgpu::BindGroupLayout& bindGroupLayout() const { return bindGroupLayout_; }
+  const gpu::BindGroupLayout& bindGroupLayout() const { return bindGroupLayout_; }
 
 private:
-  wgpu::BindGroupLayout bindGroupLayout_;
-  wgpu::RenderPipeline pipeline_;
+  gpu::ShaderModule shaderModule_;
+  gpu::BindGroupLayout bindGroupLayout_;
+  gpu::PipelineLayout pipelineLayout_;
+  gpu::RenderPipeline pipeline_;
 };
 
 /**
@@ -192,8 +195,8 @@ public:
    * partial alpha blends as `destination-over` does.
    *
    * @param device Device that owns @p target and the shared pipeline.
-   * @param target Render target. Needs `RenderAttachment` usage and the
-   *   device's texture format.
+   * @param target Render target owned by the embedding surface. Needs
+   *   `RenderAttachment` usage and the device's texture format.
    * @param targetSizePx Target size in device pixels.
    * @param params Checkerboard placement and appearance.
    * @param blendMode How the checkerboard combines with the target's contents.
@@ -211,8 +214,8 @@ private:
   [[nodiscard]] bool ensureResources(GeodeDevice& device, const GeodeCheckerboardPipeline& pipeline,
                                      GeodeCheckerboardPipeline::BlendMode blendMode);
 
-  ScopedWgpuHandle<wgpu::Buffer> uniformBuffer_;
-  ScopedWgpuHandle<wgpu::BindGroup> bindGroup_;
+  gpu::Buffer uniformBuffer_;
+  gpu::BindGroup bindGroup_;
   /// Blend mode \ref bindGroup_ was built against; a different one rebuilds it
   /// because each blend mode has its own pipeline and bind group layout.
   std::optional<GeodeCheckerboardPipeline::BlendMode> bindGroupBlendMode_;

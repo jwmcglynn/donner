@@ -135,6 +135,7 @@ std::ostream& operator<<(std::ostream& os, BlendFactor value) {
     case BlendFactor::One: return os << "One";
     case BlendFactor::SrcAlpha: return os << "SrcAlpha";
     case BlendFactor::OneMinusSrcAlpha: return os << "OneMinusSrcAlpha";
+    case BlendFactor::OneMinusDstAlpha: return os << "OneMinusDstAlpha";
   }
   return os << "Unknown";
 }
@@ -246,7 +247,8 @@ bool IsKnownEnumValue(BlendFactor value) {
     case BlendFactor::Zero:
     case BlendFactor::One:
     case BlendFactor::SrcAlpha:
-    case BlendFactor::OneMinusSrcAlpha: return true;
+    case BlendFactor::OneMinusSrcAlpha:
+    case BlendFactor::OneMinusDstAlpha: return true;
   }
   return false;
 }

@@ -194,6 +194,7 @@ wgpu::BlendFactor ToWgpuBlendFactor(gpu::BlendFactor factor) {
     case gpu::BlendFactor::One: return wgpu::BlendFactor::One;
     case gpu::BlendFactor::SrcAlpha: return wgpu::BlendFactor::SrcAlpha;
     case gpu::BlendFactor::OneMinusSrcAlpha: return wgpu::BlendFactor::OneMinusSrcAlpha;
+    case gpu::BlendFactor::OneMinusDstAlpha: return wgpu::BlendFactor::OneMinusDstAlpha;
   }
   UTILS_RELEASE_ASSERT_MSG(false, "validated BlendFactor out of range");
   return wgpu::BlendFactor::Zero;
@@ -1080,6 +1081,10 @@ void GeodeWgpuAdapterDevice::setHostCommandEncoder(wgpu::CommandEncoder encoder)
 
 void GeodeWgpuAdapterDevice::clearHostCommandEncoder() {
   hostCommandEncoder_ = wgpu::CommandEncoder();
+}
+
+bool GeodeWgpuAdapterDevice::hasHostCommandEncoder() const {
+  return static_cast<bool>(hostCommandEncoder_);
 }
 
 void GeodeWgpuAdapterDevice::notifyHostSubmitted() {

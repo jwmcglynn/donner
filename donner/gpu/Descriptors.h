@@ -179,6 +179,7 @@ enum class BlendFactor : uint8_t {
   One,               //!< Factor 1.
   SrcAlpha,          //!< Factor (source alpha).
   OneMinusSrcAlpha,  //!< Factor (1 - source alpha).
+  OneMinusDstAlpha,  //!< Factor (1 - destination alpha); destination-over compositing.
 };
 
 /// Blend operations used by Donner pipelines.
@@ -335,8 +336,8 @@ struct TextureDescriptor {
   Extent2d size;                                     //!< Extent in texels. Must be nonzero.
   TextureFormat format = TextureFormat::RGBA8Unorm;  //!< Texel format.
   TextureUsage usage = TextureUsage::None;           //!< Usage flags. Must not be empty.
-  uint32_t sampleCount = 1;  //!< Samples per texel. Must be 1: the runtime is single-sample by
-                             //!< design (analytical coverage, design 0041).
+  uint32_t sampleCount = 1;  //!< Samples per texel. Must be 1: the runtime resolves coverage
+                             //!< analytically instead of by multisampling.
 };
 
 /// Descriptor for `Device::createTextureView`. Views cover the whole texture.
@@ -503,8 +504,8 @@ struct RenderPipelineDescriptor {
   FragmentState fragment;                                        //!< Fragment stage.
   PrimitiveTopology topology = PrimitiveTopology::TriangleList;  //!< Primitive topology.
   CullMode cullMode = CullMode::None;                            //!< Face culling mode.
-  uint32_t multisampleCount = 1;  //!< Samples per pixel. Must be 1: the runtime is single-sample
-                                  //!< by design (analytical coverage, design 0041).
+  uint32_t multisampleCount = 1;  //!< Samples per pixel. Must be 1: the runtime resolves
+                                  //!< coverage analytically instead of by multisampling.
 };
 
 /// One color attachment of a \ref RenderPassDescriptor.

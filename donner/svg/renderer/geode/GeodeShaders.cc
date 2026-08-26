@@ -58,7 +58,7 @@ wgpu::ShaderModule createShaderFromWgsl(const wgpu::Device& device, const char* 
 }
 
 /// Build a `donner::gpu` WGSL shader module from an embedded source blob: the pipeline-family
-/// path through the Donner GPU runtime (design 0053 packet 8). The source bytes are identical
+/// path through the Donner GPU runtime. The source bytes are identical
 /// to what the raw-wgpu helper above fed the driver, so migrated pipelines compile
 /// byte-identical WGSL.
 gpu::Result<gpu::ShaderModule> createGpuShaderFromWgsl(gpu::Device& device, const char* label,

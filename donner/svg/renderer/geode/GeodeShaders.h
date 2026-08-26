@@ -8,9 +8,9 @@
 
 namespace donner::geode {
 
-// The four pipeline-family creators below build shader modules through the donner::gpu runtime
-// (design 0053 packet 8); the filter creators further down still compile through wgpu directly
-// and migrate with the filter packet.
+// The four pipeline-family creators below build shader modules through the donner::gpu runtime;
+// the filter creators further down still compile through wgpu directly, because the runtime
+// does not model the compute passes they feed.
 
 /**
  * Compile the Slug fill shader for the given device.

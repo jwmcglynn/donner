@@ -247,7 +247,7 @@ struct GeodeDevice::Impl {
   // Borrowed wgpu aliases of the shared bind-slot resources below, for the call sites that
   // still build wgpu bind groups. Non-owning: the runtime handles own the backing.
 
-  // TEMPORARY design-0053 Phase 1 adapter (see GeodeWgpuAdapterDevice.h for the removal
+  // TEMPORARY transition adapter (see GeodeWgpuAdapterDevice.h for the removal
   // gates). Declared ABOVE the pipelines: the pipeline classes hold donner::gpu RAII handles
   // whose destructors release through the adapter, so the adapter must destruct after them
   // (reverse-declaration order).
@@ -864,7 +864,8 @@ GeodeCheckerboardPipeline& GeodeDevice::checkerboardPipeline() const {
     // checkerboard; other consumers should not pay the pipeline-compile cost
     // at startup.
     impl_->checkerboardPipeline = std::make_unique<GeodeCheckerboardPipeline>(
-        device_, textureFormat_, GeodeCheckerboardPipeline::BlendMode::Replace);
+        *impl_->adapterDevice, GpuTextureFormatFromWgpu(textureFormat_),
+        GeodeCheckerboardPipeline::BlendMode::Replace);
   }
   return *impl_->checkerboardPipeline;
 }
@@ -874,7 +875,8 @@ GeodeCheckerboardPipeline& GeodeDevice::checkerboardUnderlayPipeline() const {
     // it because a consumer normally draws through exactly one of the two:
     // before the document pixels (replace) or after them (destination-over).
     impl_->checkerboardUnderlayPipeline = std::make_unique<GeodeCheckerboardPipeline>(
-        device_, textureFormat_, GeodeCheckerboardPipeline::BlendMode::DestinationOver);
+        *impl_->adapterDevice, GpuTextureFormatFromWgpu(textureFormat_),
+        GeodeCheckerboardPipeline::BlendMode::DestinationOver);
   }
   return *impl_->checkerboardUnderlayPipeline;
 }

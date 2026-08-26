@@ -164,6 +164,7 @@ VkBlendFactor ToVkBlendFactor(BlendFactor factor) {
     case BlendFactor::One: return VK_BLEND_FACTOR_ONE;
     case BlendFactor::SrcAlpha: return VK_BLEND_FACTOR_SRC_ALPHA;
     case BlendFactor::OneMinusSrcAlpha: return VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+    case BlendFactor::OneMinusDstAlpha: return VK_BLEND_FACTOR_ONE_MINUS_DST_ALPHA;
   }
   UTILS_RELEASE_ASSERT_MSG(false, "validated BlendFactor out of range");
   return VK_BLEND_FACTOR_ZERO;

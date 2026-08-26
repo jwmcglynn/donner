@@ -1,9 +1,17 @@
 #include "donner/svg/renderer/geode/GeodeCheckerboardPipeline.h"
 
+#include <cstdint>
+#include <cstdio>
+#include <memory>
+#include <optional>
+#include <span>
 #include <string_view>
+#include <utility>
 
+#include "donner/base/RcString.h"
+#include "donner/gpu/CommandEncoder.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
-#include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
+#include "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h"
 
 namespace donner::geode {
 
@@ -60,126 +68,188 @@ GeodeCheckerboardPipeline& PipelineForBlendMode(GeodeDevice& device,
              : device.checkerboardPipeline();
 }
 
+/// True when the requested pass has a target to draw into and an appearance that produces
+/// visible cells. A degenerate request is not an error; the caller simply draws nothing.
+bool CheckerboardRequestIsDrawable(const wgpu::Texture& target, Vector2i targetSizePx,
+                                   const CheckerboardUnderlayParams& params) {
+  if (!target || targetSizePx.x <= 0 || targetSizePx.y <= 0) {
+    return false;
+  }
+  if (!(params.devicePixelRatio > 0.0) || !(params.cellSizeLogicalPx > 0.0)) {
+    return false;
+  }
+  return !params.scissorPx.has_value() ||
+         (params.scissorPx->width != 0 && params.scissorPx->height != 0);
+}
+
+/// True when the device's command stream is free for a submission of our own.
+///
+/// While a renderer has a frame open it owns that stream: the runtime device replays every
+/// submission into the frame's command buffer so the whole frame keeps one recording order.
+/// A checkerboard submitted there would be spliced into a command buffer it does not own, at a
+/// point in that buffer it cannot reason about, and would not reach the target when its caller
+/// expects it to. There is also no ordering it could pick instead: it cannot know whether the
+/// open frame draws to the same target, so queueing itself ahead of that frame would be right
+/// for an overwriting checkerboard and wrong for one that goes underneath. Declining is the
+/// only answer that stays true to `draw`'s contract, and no caller needs the overlap - the
+/// presentation path draws the checkerboard before it opens its frame.
+bool DeviceCommandStreamIsFree(GeodeDevice& device) {
+  if (!device.adapterDevice().hasHostCommandEncoder()) {
+    return true;
+  }
+  std::fprintf(stderr,
+               "[Geode] checkerboard skipped: another frame owns the device's command stream. "
+               "Draw it outside that frame.\n");
+  return false;
+}
+
+/// A surface-owned render target named for the runtime, plus the view a pass attaches.
+struct NamedTarget {
+  gpu::Texture texture;   //!< Runtime name for the borrowed target; owns no backing.
+  gpu::TextureView view;  //!< Whole-texture view used as the pass attachment.
+};
+
+/// Names @p target for the runtime so a pass can attach it. The target belongs to the embedding
+/// surface, so its capabilities are read from the texture itself and cannot be described wrongly.
+/// Returns nothing when the runtime refuses either handle.
+std::optional<NamedTarget> NameTargetForPass(GeodeWgpuAdapterDevice& adapterDevice,
+                                             const wgpu::Texture& target) {
+  gpu::Result<gpu::Texture> texture = adapterDevice.importExternalTexture(
+      target, gpu::Extent2d{target.getWidth(), target.getHeight()},
+      GpuTextureFormatFromWgpu(target.getFormat()), GpuTextureUsageFromWgpu(target.getUsage()));
+  if (texture.hasError()) {
+    return std::nullopt;
+  }
+  gpu::Result<gpu::TextureView> view = adapterDevice.createTextureView(
+      texture.result(), gpu::TextureViewDescriptor{"GeodeCheckerboardTargetView"});
+  if (view.hasError()) {
+    return std::nullopt;
+  }
+  return NamedTarget{std::move(texture).result(), std::move(view).result()};
+}
+
+/// Records the fullscreen-triangle pass into its own command buffer and submits it. The pass
+/// encoder latches its first error and reports it from `finish`, so the individual pass
+/// operations are checked once there rather than one at a time.
+bool RecordAndSubmitCheckerboardPass(GeodeDevice& device,
+                                     const GeodeCheckerboardPipeline& checkerboard,
+                                     const gpu::TextureView& targetView,
+                                     const gpu::BindGroup& bindGroup,
+                                     const std::optional<CheckerboardScissorPx>& scissorPx) {
+  GeodeWgpuAdapterDevice& adapterDevice = device.adapterDevice();
+  gpu::Result<std::unique_ptr<gpu::CommandEncoder>> encoder = adapterDevice.createCommandEncoder();
+  if (encoder.hasError()) {
+    return false;
+  }
+  gpu::CommandEncoder& commands = *encoder.result();
+
+  gpu::Result<gpu::RenderPassEncoder*> pass = commands.beginRenderPass(gpu::RenderPassDescriptor{
+      "GeodeCheckerboardPass",
+      {gpu::RenderPassColorAttachment{targetView, gpu::LoadOp::Load, gpu::StoreOp::Store}}});
+  if (pass.hasError()) {
+    return false;
+  }
+
+  gpu::RenderPassEncoder& renderPass = *pass.result();
+  if (scissorPx.has_value()) {
+    (void)renderPass.setScissorRect(scissorPx->x, scissorPx->y, scissorPx->width,
+                                    scissorPx->height);
+  }
+  (void)renderPass.setPipeline(checkerboard.pipeline());
+  device.countPipelineSwitch();
+  (void)renderPass.setBindGroup(0, bindGroup);
+  (void)renderPass.draw(3, 1, 0, 0);
+  (void)renderPass.end();
+
+  gpu::Result<gpu::CommandBuffer> commandBuffer = commands.finish();
+  if (commandBuffer.hasError()) {
+    return false;
+  }
+  return !adapterDevice.submit(std::move(commandBuffer).result()).hasError();
+}
+
 }  // namespace
 
-GeodeCheckerboardPipeline::GeodeCheckerboardPipeline(const wgpu::Device& device,
-                                                     wgpu::TextureFormat colorFormat,
+GeodeCheckerboardPipeline::GeodeCheckerboardPipeline(GeodeWgpuAdapterDevice& adapterDevice,
+                                                     gpu::TextureFormat colorFormat,
                                                      BlendMode blendMode) {
-  wgpu::BindGroupLayoutEntry layoutEntry = {};
-  layoutEntry.binding = 0;
-  layoutEntry.visibility = wgpu::ShaderStage::Vertex | wgpu::ShaderStage::Fragment;
-  layoutEntry.buffer.type = wgpu::BufferBindingType::Uniform;
-  layoutEntry.buffer.minBindingSize = sizeof(Uniforms);
-
-  wgpu::BindGroupLayoutDescriptor layoutDesc = {};
-  layoutDesc.label = wgpuLabel("GeodeCheckerboardBGL");
-  layoutDesc.entryCount = 1;
-  layoutDesc.entries = &layoutEntry;
-  bindGroupLayout_ = device.createBindGroupLayout(layoutDesc);
-  if (!bindGroupLayout_) {
+  gpu::Result<gpu::BindGroupLayout> bindGroupLayout =
+      adapterDevice.createBindGroupLayout(gpu::BindGroupLayoutDescriptor{
+          "GeodeCheckerboardBGL",
+          {gpu::BindGroupLayoutEntry{0, gpu::ShaderStage::Vertex | gpu::ShaderStage::Fragment,
+                                     gpu::BindingType::UniformBuffer}}});
+  if (bindGroupLayout.hasError()) {
     return;
   }
+  bindGroupLayout_ = std::move(bindGroupLayout).result();
 
-  wgpu::ShaderSourceWGSL wgslSource{wgpu::Default};
-  wgslSource.code.data = kCheckerboardWgsl.data();
-  wgslSource.code.length = kCheckerboardWgsl.size();
-
-  wgpu::ShaderModuleDescriptor shaderDesc{wgpu::Default};
-  shaderDesc.label = wgpuLabel("GeodeCheckerboard");
-  shaderDesc.nextInChain = &wgslSource.chain;
-  ScopedWgpuHandle<wgpu::ShaderModule> shader(device.createShaderModule(shaderDesc));
-  if (!shader) {
+  gpu::Result<gpu::PipelineLayout> pipelineLayout = adapterDevice.createPipelineLayout(
+      gpu::PipelineLayoutDescriptor{"GeodeCheckerboardPL", {bindGroupLayout_}});
+  if (pipelineLayout.hasError()) {
     return;
   }
+  pipelineLayout_ = std::move(pipelineLayout).result();
 
-  wgpu::PipelineLayoutDescriptor pipelineLayoutDesc = {};
-  pipelineLayoutDesc.label = wgpuLabel("GeodeCheckerboardPL");
-  pipelineLayoutDesc.bindGroupLayoutCount = 1;
-  WGPUBindGroupLayout bindGroupLayouts[1] = {bindGroupLayout_};
-  pipelineLayoutDesc.bindGroupLayouts = bindGroupLayouts;
-  ScopedWgpuHandle<wgpu::PipelineLayout> pipelineLayout(
-      device.createPipelineLayout(pipelineLayoutDesc));
-  if (!pipelineLayout) {
+  gpu::Result<gpu::ShaderModule> shaderModule =
+      adapterDevice.createShaderModule(gpu::ShaderModuleDescriptor{
+          "GeodeCheckerboard", RcString(kCheckerboardWgsl), gpu::ShaderSourceKind::Wgsl});
+  if (shaderModule.hasError()) {
     return;
   }
+  shaderModule_ = std::move(shaderModule).result();
 
   // `result = dst + src * (1 - dst.alpha)` on both color and alpha. The shader
   // emits an opaque checker color, so fully-transparent destination pixels take
   // the checker outright, fully-opaque ones are untouched, and partially
   // transparent premultiplied content blends over it exactly as `destination-
   // over` does in Canvas2D / Skia.
-  wgpu::BlendState destinationOver = {};
-  destinationOver.color.operation = wgpu::BlendOperation::Add;
-  destinationOver.color.srcFactor = wgpu::BlendFactor::OneMinusDstAlpha;
-  destinationOver.color.dstFactor = wgpu::BlendFactor::One;
-  destinationOver.alpha.operation = wgpu::BlendOperation::Add;
-  destinationOver.alpha.srcFactor = wgpu::BlendFactor::OneMinusDstAlpha;
-  destinationOver.alpha.dstFactor = wgpu::BlendFactor::One;
+  const gpu::BlendComponent destinationOver{gpu::BlendFactor::OneMinusDstAlpha,
+                                            gpu::BlendFactor::One, gpu::BlendOperation::Add};
 
-  wgpu::ColorTargetState colorTarget = {};
-  colorTarget.format = colorFormat;
-  colorTarget.writeMask = wgpu::ColorWriteMask::All;
+  gpu::ColorTargetState colorTarget{colorFormat};
   if (blendMode == BlendMode::DestinationOver) {
-    colorTarget.blend = &destinationOver;
+    colorTarget.blend = gpu::BlendState{destinationOver, destinationOver};
   }
 
-  wgpu::FragmentState fragmentState = {};
-  fragmentState.module = shader.get();
-  fragmentState.entryPoint = wgpuLabel("fs_main");
-  fragmentState.targetCount = 1;
-  fragmentState.targets = &colorTarget;
-
-  wgpu::RenderPipelineDescriptor pipelineDesc = {};
-  pipelineDesc.label = wgpuLabel("GeodeCheckerboard");
-  pipelineDesc.layout = pipelineLayout.get();
-  pipelineDesc.vertex.module = shader.get();
-  pipelineDesc.vertex.entryPoint = wgpuLabel("vs_main");
-  pipelineDesc.vertex.bufferCount = 0;
-  pipelineDesc.vertex.buffers = nullptr;
-  pipelineDesc.primitive.topology = wgpu::PrimitiveTopology::TriangleList;
-  pipelineDesc.primitive.cullMode = wgpu::CullMode::None;
-  pipelineDesc.fragment = &fragmentState;
-  pipelineDesc.multisample.count = 1;
-  pipelineDesc.multisample.mask = 0xFFFFFFFF;
-  pipeline_ = device.createRenderPipeline(pipelineDesc);
+  gpu::Result<gpu::RenderPipeline> pipeline =
+      adapterDevice.createRenderPipeline(gpu::RenderPipelineDescriptor{
+          "GeodeCheckerboard", pipelineLayout_, gpu::VertexState{shaderModule_, "vs_main", {}},
+          gpu::FragmentState{shaderModule_, "fs_main", {colorTarget}},
+          gpu::PrimitiveTopology::TriangleList, gpu::CullMode::None});
+  if (pipeline.hasError()) {
+    return;
+  }
+  pipeline_ = std::move(pipeline).result();
 }
 
 bool GeodeCheckerboardPass::ensureResources(GeodeDevice& device,
                                             const GeodeCheckerboardPipeline& pipeline,
                                             GeodeCheckerboardPipeline::BlendMode blendMode) {
-  if (bindGroup_ && bindGroupBlendMode_ == blendMode) {
+  if (bindGroup_.isValid() && bindGroupBlendMode_ == blendMode) {
     return true;
   }
-  bindGroup_.reset();
+  bindGroup_ = gpu::BindGroup();
 
-  if (!uniformBuffer_) {
-    wgpu::BufferDescriptor bufferDesc = {};
-    bufferDesc.label = wgpuLabel("GeodeCheckerboardUniforms");
-    bufferDesc.size = sizeof(GeodeCheckerboardPipeline::Uniforms);
-    bufferDesc.usage = wgpu::BufferUsage::Uniform | wgpu::BufferUsage::CopyDst;
-    uniformBuffer_.reset(device.device().createBuffer(bufferDesc));
-    device.countBuffer();
-    if (!uniformBuffer_) {
+  GeodeWgpuAdapterDevice& adapterDevice = device.adapterDevice();
+  if (!uniformBuffer_.isValid()) {
+    gpu::Result<gpu::Buffer> uniformBuffer = adapterDevice.createBuffer(gpu::BufferDescriptor{
+        "GeodeCheckerboardUniforms", sizeof(GeodeCheckerboardPipeline::Uniforms),
+        gpu::BufferUsage::Uniform | gpu::BufferUsage::CopyDst});
+    if (uniformBuffer.hasError()) {
       return false;
     }
+    uniformBuffer_ = std::move(uniformBuffer).result();
   }
 
-  wgpu::BindGroupEntry bindGroupEntry = {};
-  bindGroupEntry.binding = 0;
-  bindGroupEntry.buffer = uniformBuffer_.get();
-  bindGroupEntry.offset = 0;
-  bindGroupEntry.size = sizeof(GeodeCheckerboardPipeline::Uniforms);
-
-  wgpu::BindGroupDescriptor bindGroupDesc = {};
-  bindGroupDesc.label = wgpuLabel("GeodeCheckerboardBG");
-  bindGroupDesc.layout = pipeline.bindGroupLayout();
-  bindGroupDesc.entryCount = 1;
-  bindGroupDesc.entries = &bindGroupEntry;
-  bindGroup_.reset(device.device().createBindGroup(bindGroupDesc));
-  device.countBindGroup();
-  if (!bindGroup_) {
+  gpu::Result<gpu::BindGroup> bindGroup = adapterDevice.createBindGroup(gpu::BindGroupDescriptor{
+      "GeodeCheckerboardBG",
+      pipeline.bindGroupLayout(),
+      {gpu::BindGroupEntry{
+          0, gpu::BufferBinding{uniformBuffer_, 0, sizeof(GeodeCheckerboardPipeline::Uniforms)}}}});
+  if (bindGroup.hasError()) {
     return false;
   }
+  bindGroup_ = std::move(bindGroup).result();
 
   bindGroupBlendMode_ = blendMode;
   return true;
@@ -188,14 +258,8 @@ bool GeodeCheckerboardPass::ensureResources(GeodeDevice& device,
 bool GeodeCheckerboardPass::draw(GeodeDevice& device, const wgpu::Texture& target,
                                  Vector2i targetSizePx, const CheckerboardUnderlayParams& params,
                                  GeodeCheckerboardPipeline::BlendMode blendMode) {
-  if (!target || targetSizePx.x <= 0 || targetSizePx.y <= 0) {
-    return false;
-  }
-  if (!(params.devicePixelRatio > 0.0) || !(params.cellSizeLogicalPx > 0.0)) {
-    return false;
-  }
-  if (params.scissorPx.has_value() &&
-      (params.scissorPx->width == 0 || params.scissorPx->height == 0)) {
+  if (!CheckerboardRequestIsDrawable(target, targetSizePx, params) ||
+      !DeviceCommandStreamIsFree(device)) {
     return false;
   }
 
@@ -216,56 +280,21 @@ bool GeodeCheckerboardPass::draw(GeodeDevice& device, const wgpu::Texture& targe
                          static_cast<float>(params.originOffsetPx.y)},
       .padding = {0.0f, 0.0f},
   };
-  device.queue().writeBuffer(uniformBuffer_.get(), 0, &uniforms, sizeof(uniforms));
-  device.countBufferWrite(sizeof(uniforms));
 
-  ScopedWgpuHandle<wgpu::TextureView> view(target.createView());
-  if (!view) {
+  GeodeWgpuAdapterDevice& adapterDevice = device.adapterDevice();
+  if (adapterDevice
+          .writeBuffer(uniformBuffer_, 0,
+                       std::span(reinterpret_cast<const uint8_t*>(&uniforms), sizeof(uniforms)))
+          .hasError()) {
     return false;
   }
 
-  wgpu::CommandEncoderDescriptor encoderDesc = {};
-  encoderDesc.label = wgpuLabel("GeodeCheckerboardEncoder");
-  ScopedWgpuHandle<wgpu::CommandEncoder> encoder(device.device().createCommandEncoder(encoderDesc));
-  if (!encoder) {
+  const std::optional<NamedTarget> named = NameTargetForPass(adapterDevice, target);
+  if (!named.has_value()) {
     return false;
   }
-
-  wgpu::RenderPassColorAttachment color = {};
-  color.view = view.get();
-  color.loadOp = wgpu::LoadOp::Load;
-  color.storeOp = wgpu::StoreOp::Store;
-  color.clearValue = {0.0, 0.0, 0.0, 0.0};
-  color.depthSlice = WGPU_DEPTH_SLICE_UNDEFINED;
-
-  wgpu::RenderPassDescriptor passDesc = {};
-  passDesc.label = wgpuLabel("GeodeCheckerboardPass");
-  passDesc.colorAttachmentCount = 1;
-  passDesc.colorAttachments = &color;
-  ScopedWgpuHandle<wgpu::RenderPassEncoder> pass(encoder.get().beginRenderPass(passDesc));
-  if (!pass) {
-    return false;
-  }
-
-  if (params.scissorPx.has_value()) {
-    pass.get().setScissorRect(params.scissorPx->x, params.scissorPx->y, params.scissorPx->width,
-                              params.scissorPx->height);
-  }
-  pass.get().setPipeline(checkerboard.pipeline());
-  pass.get().setBindGroup(0, bindGroup_.get(), 0, nullptr);
-  pass.get().draw(3, 1, 0, 0);
-  device.countPipelineSwitch();
-  device.countDraw();
-  pass.get().end();
-  pass.reset();
-
-  ScopedWgpuHandle<wgpu::CommandBuffer> commands(encoder.get().finish());
-  if (!commands) {
-    return false;
-  }
-  device.queue().submit(1, &commands.get());
-  device.countSubmit();
-  return true;
+  return RecordAndSubmitCheckerboardPass(device, checkerboard, named->view, bindGroup_,
+                                         params.scissorPx);
 }
 
 }  // namespace donner::geode

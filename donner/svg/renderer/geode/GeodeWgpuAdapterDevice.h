@@ -115,6 +115,17 @@ public:
   /// until \ref notifyHostSubmitted reports their submit.
   void clearHostCommandEncoder();
 
+  /// True while a host command encoder is installed, i.e. while submissions are replayed into
+  /// it instead of reaching the queue.
+  ///
+  /// This device is shared by everything drawing through one \ref GeodeDevice, but a host
+  /// encoder belongs to the single caller that installed it. Anything else submitting during
+  /// that window would be spliced into a command buffer it does not own, at a point in that
+  /// buffer it cannot reason about, and its \ref submit would report success for work that has
+  /// not reached the queue. A caller whose submission must stand on its own checks this first
+  /// and declines.
+  bool hasHostCommandEncoder() const;
+
   /**
    * Reports that the host submitted a command buffer carrying every stream replayed since the
    * previous report, so their completion can now be observed. Advances \ref completedSerial to
