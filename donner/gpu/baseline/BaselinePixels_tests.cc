@@ -161,12 +161,12 @@ protected:
     std::filesystem::path written;
     const std::string captureError =
         WriteFrozenBaselineSet(*capturer_, UndeclaredOutputDir(), "unknown", "unknown", &written);
-    const UnbaselinedAdapterDisposition disposition =
+    const MissingComparisonDisposition disposition =
         DispositionForUnbaselinedAdapter(RunningUnderContinuousIntegration());
     const std::string message = UnbaselinedAdapterMessage(
         live.adapterName, live.adapterBackend, slug_, written.string(), captureError, disposition);
 
-    if (disposition == UnbaselinedAdapterDisposition::FailClosed) {
+    if (disposition == MissingComparisonDisposition::FailClosed) {
       FAIL() << message;
     }
     GTEST_SKIP() << message;

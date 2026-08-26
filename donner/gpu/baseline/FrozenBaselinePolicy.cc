@@ -13,12 +13,12 @@ constexpr std::array<std::string_view, 2> kContinuousIntegrationMarkers = {
 
 }  // namespace
 
-std::ostream& operator<<(std::ostream& os, UnbaselinedAdapterDisposition disposition) {
+std::ostream& operator<<(std::ostream& os, MissingComparisonDisposition disposition) {
   switch (disposition) {
-    case UnbaselinedAdapterDisposition::CaptureAndSkip: return os << "CaptureAndSkip";
-    case UnbaselinedAdapterDisposition::FailClosed: return os << "FailClosed";
+    case MissingComparisonDisposition::Skip: return os << "Skip";
+    case MissingComparisonDisposition::FailClosed: return os << "FailClosed";
   }
-  return os << "UnbaselinedAdapterDisposition(unknown)";
+  return os << "MissingComparisonDisposition(unknown)";
 }
 
 std::span<const std::string_view> ContinuousIntegrationMarkers() {
@@ -39,15 +39,19 @@ bool RunningUnderContinuousIntegration() {
   return AnyEnvironmentVariableIsSet(ContinuousIntegrationMarkers());
 }
 
-UnbaselinedAdapterDisposition DispositionForUnbaselinedAdapter(bool underContinuousIntegration) {
-  return underContinuousIntegration ? UnbaselinedAdapterDisposition::FailClosed
-                                    : UnbaselinedAdapterDisposition::CaptureAndSkip;
+MissingComparisonDisposition DispositionForUnbaselinedAdapter(bool underContinuousIntegration) {
+  return underContinuousIntegration ? MissingComparisonDisposition::FailClosed
+                                    : MissingComparisonDisposition::Skip;
+}
+
+MissingComparisonDisposition DispositionForMissingAdapter(bool /*underContinuousIntegration*/) {
+  return MissingComparisonDisposition::Skip;
 }
 
 std::string UnbaselinedAdapterMessage(std::string_view adapterName, std::string_view adapterBackend,
                                       std::string_view slug, std::string_view capturedPath,
                                       std::string_view captureError,
-                                      UnbaselinedAdapterDisposition disposition) {
+                                      MissingComparisonDisposition disposition) {
   std::string message = "no frozen pixel baseline for ";
   message += adapterName;
   message += " (";
@@ -63,10 +67,23 @@ std::string UnbaselinedAdapterMessage(std::string_view adapterName, std::string_
     message += "Capturing one here also failed: ";
     message += captureError;
   }
-  if (disposition == UnbaselinedAdapterDisposition::FailClosed) {
+  if (disposition == MissingComparisonDisposition::FailClosed) {
     message +=
         " Failing rather than skipping: on an automated lane a skip reports success while "
         "comparing nothing, so the pixel gate would silently stop running.";
+  }
+  return message;
+}
+
+std::string NoAdapterMessage(std::string_view gateLabel, MissingComparisonDisposition disposition) {
+  std::string message = "no GPU device could be created for ";
+  message += gateLabel;
+  message += ".";
+  if (disposition == MissingComparisonDisposition::FailClosed) {
+    message +=
+        " Failing rather than skipping: this lane selected a target that needs a device, so a "
+        "driver or runner that stopped providing one has disabled the gate, and a skip would "
+        "report that as success.";
   }
   return message;
 }

@@ -15,14 +15,14 @@
 
 namespace donner::gpu::baseline {
 
-/// What a run should do when its adapter has no committed pixel baseline.
-enum class UnbaselinedAdapterDisposition {
-  CaptureAndSkip,  //!< Leave a capture for the committer and skip the comparison.
-  FailClosed,      //!< Fail: skipping here would silently retire the gate.
+/// What a run should do when it cannot perform the comparison it exists to perform.
+enum class MissingComparisonDisposition {
+  Skip,        //!< Report the case as skipped, leaving any artifact a person needs.
+  FailClosed,  //!< Fail: skipping here would silently retire the gate.
 };
 
 /// Streams the disposition name. @param os Stream. @param disposition Value. @return `os`.
-std::ostream& operator<<(std::ostream& os, UnbaselinedAdapterDisposition disposition);
+std::ostream& operator<<(std::ostream& os, MissingComparisonDisposition disposition);
 
 /**
  * Environment variables whose presence marks an automated lane.
@@ -46,12 +46,26 @@ bool AnyEnvironmentVariableIsSet(std::span<const std::string_view> names);
 bool RunningUnderContinuousIntegration();
 
 /**
+ * The disposition for a run that cannot create a GPU device at all.
+ *
+ * A missing device is not the same situation as a missing baseline, but it has the same
+ * consequence: the comparison does not happen. On a developer machine without a working driver
+ * that is a skip. On an automated lane it is a failure, because a lane selected this target and
+ * then compared nothing, and a driver or runner regression that silently disables a gate is
+ * indistinguishable from the gate passing.
+ *
+ * @param underContinuousIntegration Whether this process is on an automated lane.
+ * @return What the run should do.
+ */
+MissingComparisonDisposition DispositionForMissingAdapter(bool underContinuousIntegration);
+
+/**
  * The disposition for an adapter with no committed baseline.
  *
  * @param underContinuousIntegration Whether this process is on an automated lane.
  * @return What the run should do.
  */
-UnbaselinedAdapterDisposition DispositionForUnbaselinedAdapter(bool underContinuousIntegration);
+MissingComparisonDisposition DispositionForUnbaselinedAdapter(bool underContinuousIntegration);
 
 /**
  * The message a run reports when its adapter has no committed baseline.
@@ -67,6 +81,15 @@ UnbaselinedAdapterDisposition DispositionForUnbaselinedAdapter(bool underContinu
 std::string UnbaselinedAdapterMessage(std::string_view adapterName, std::string_view adapterBackend,
                                       std::string_view slug, std::string_view capturedPath,
                                       std::string_view captureError,
-                                      UnbaselinedAdapterDisposition disposition);
+                                      MissingComparisonDisposition disposition);
+
+/**
+ * The message a run reports when it cannot create a GPU device.
+ *
+ * @param gateLabel What the gate is, for a reader who sees only this line.
+ * @param disposition What the run is about to do.
+ * @return A message naming the gate and, when failing, why skipping was not an option.
+ */
+std::string NoAdapterMessage(std::string_view gateLabel, MissingComparisonDisposition disposition);
 
 }  // namespace donner::gpu::baseline

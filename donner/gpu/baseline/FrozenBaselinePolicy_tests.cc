@@ -15,6 +15,7 @@ namespace donner::gpu::baseline {
 namespace {
 
 using testing::HasSubstr;
+using testing::Not;
 
 /// Sets an environment variable for one test and restores the previous state afterwards, so the
 /// cases can force the automated-lane path without depending on where they are run.
@@ -51,12 +52,12 @@ private:
 
 TEST(FrozenBaselinePolicyTests, AnAutomatedLaneFailsInsteadOfSkipping) {
   EXPECT_THAT(DispositionForUnbaselinedAdapter(/*underContinuousIntegration=*/true),
-              testing::Eq(UnbaselinedAdapterDisposition::FailClosed));
+              testing::Eq(MissingComparisonDisposition::FailClosed));
 }
 
-TEST(FrozenBaselinePolicyTests, ADeveloperMachineKeepsTheCaptureAndSkipConvenience) {
+TEST(FrozenBaselinePolicyTests, ADeveloperMachineKeepsTheSkipConvenience) {
   EXPECT_THAT(DispositionForUnbaselinedAdapter(/*underContinuousIntegration=*/false),
-              testing::Eq(UnbaselinedAdapterDisposition::CaptureAndSkip));
+              testing::Eq(MissingComparisonDisposition::Skip));
 }
 
 TEST(FrozenBaselinePolicyTests, TheHostedRunnerMarkerSelectsTheFailClosedDisposition) {
@@ -65,7 +66,7 @@ TEST(FrozenBaselinePolicyTests, TheHostedRunnerMarkerSelectsTheFailClosedDisposi
 
   EXPECT_TRUE(RunningUnderContinuousIntegration());
   EXPECT_THAT(DispositionForUnbaselinedAdapter(RunningUnderContinuousIntegration()),
-              testing::Eq(UnbaselinedAdapterDisposition::FailClosed));
+              testing::Eq(MissingComparisonDisposition::FailClosed));
 }
 
 TEST(FrozenBaselinePolicyTests, TheExplicitOverrideSelectsTheFailClosedDisposition) {
@@ -81,7 +82,7 @@ TEST(FrozenBaselinePolicyTests, NoMarkerMeansNoAutomatedLane) {
 
   EXPECT_FALSE(RunningUnderContinuousIntegration());
   EXPECT_THAT(DispositionForUnbaselinedAdapter(RunningUnderContinuousIntegration()),
-              testing::Eq(UnbaselinedAdapterDisposition::CaptureAndSkip));
+              testing::Eq(MissingComparisonDisposition::Skip));
 }
 
 TEST(FrozenBaselinePolicyTests, AnEmptyMarkerDoesNotCountAsAnAutomatedLane) {
@@ -91,10 +92,44 @@ TEST(FrozenBaselinePolicyTests, AnEmptyMarkerDoesNotCountAsAnAutomatedLane) {
   EXPECT_FALSE(RunningUnderContinuousIntegration());
 }
 
+TEST(FrozenBaselinePolicyTests, AnAutomatedLaneWithNoDeviceFailsInsteadOfSkipping) {
+  EXPECT_THAT(DispositionForMissingAdapter(/*underContinuousIntegration=*/true),
+              testing::Eq(MissingComparisonDisposition::FailClosed));
+}
+
+TEST(FrozenBaselinePolicyTests, ADeveloperMachineWithNoDeviceStillSkips) {
+  EXPECT_THAT(DispositionForMissingAdapter(/*underContinuousIntegration=*/false),
+              testing::Eq(MissingComparisonDisposition::Skip));
+}
+
+TEST(FrozenBaselinePolicyTests, TheMissingDeviceRuleFollowsTheSameMarkersAsTheMissingBaselineRule) {
+  const ScopedEnvironmentVariable githubActions("GITHUB_ACTIONS", "true");
+  const ScopedEnvironmentVariable donnerOverride("DONNER_BASELINE_REQUIRE_FROZEN_ADAPTER", nullptr);
+
+  EXPECT_THAT(DispositionForMissingAdapter(RunningUnderContinuousIntegration()),
+              testing::Eq(DispositionForUnbaselinedAdapter(RunningUnderContinuousIntegration())));
+}
+
+TEST(FrozenBaselinePolicyTests, TheNoDeviceMessageNamesTheGate) {
+  const std::string message =
+      NoAdapterMessage("the frozen pixel check", MissingComparisonDisposition::Skip);
+
+  EXPECT_THAT(message, HasSubstr("the frozen pixel check"));
+  EXPECT_THAT(message, Not(HasSubstr("Failing rather than skipping")));
+}
+
+TEST(FrozenBaselinePolicyTests, TheFailingNoDeviceMessageExplainsWhySkippingWasNotAnOption) {
+  const std::string message =
+      NoAdapterMessage("the frozen pixel check", MissingComparisonDisposition::FailClosed);
+
+  EXPECT_THAT(message, HasSubstr("the frozen pixel check"));
+  EXPECT_THAT(message, HasSubstr("disabled the gate"));
+}
+
 TEST(FrozenBaselinePolicyTests, TheMessageNamesTheDirectoryToCommit) {
-  const std::string message = UnbaselinedAdapterMessage(
-      "Example GPU", "Metal", "example_gpu_metal", "/outputs/example_gpu_metal", "",
-      UnbaselinedAdapterDisposition::CaptureAndSkip);
+  const std::string message = UnbaselinedAdapterMessage("Example GPU", "Metal", "example_gpu_metal",
+                                                        "/outputs/example_gpu_metal", "",
+                                                        MissingComparisonDisposition::Skip);
 
   EXPECT_THAT(message, HasSubstr("Example GPU"));
   EXPECT_THAT(message, HasSubstr("Metal"));
@@ -105,7 +140,7 @@ TEST(FrozenBaselinePolicyTests, TheMessageNamesTheDirectoryToCommit) {
 TEST(FrozenBaselinePolicyTests, TheFailingMessageExplainsWhySkippingWasNotAnOption) {
   const std::string message = UnbaselinedAdapterMessage("Example GPU", "Metal", "example_gpu_metal",
                                                         "/outputs/example_gpu_metal", "",
-                                                        UnbaselinedAdapterDisposition::FailClosed);
+                                                        MissingComparisonDisposition::FailClosed);
 
   EXPECT_THAT(message, HasSubstr("donner/gpu/baseline/baselines/example_gpu_metal/"));
   EXPECT_THAT(message, HasSubstr("silently stop running"));
@@ -114,7 +149,7 @@ TEST(FrozenBaselinePolicyTests, TheFailingMessageExplainsWhySkippingWasNotAnOpti
 TEST(FrozenBaselinePolicyTests, AFailedCaptureIsReportedInsteadOfAMissingPath) {
   const std::string message = UnbaselinedAdapterMessage("Example GPU", "Metal", "example_gpu_metal",
                                                         "", "device lost while capturing",
-                                                        UnbaselinedAdapterDisposition::FailClosed);
+                                                        MissingComparisonDisposition::FailClosed);
 
   EXPECT_THAT(message, HasSubstr("device lost while capturing"));
 }
