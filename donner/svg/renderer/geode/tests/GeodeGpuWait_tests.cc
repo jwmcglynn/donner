@@ -112,6 +112,28 @@ TEST(BoundedGpuWait, ZeroTimeoutPollsOnceThenTimesOut) {
   EXPECT_TRUE(clock.sleeps.empty());
 }
 
+TEST(BoundedGpuWait, ASubMillisecondBudgetIsNotRoundedUp) {
+  // The snapshot readback waits one poll interval at a time, so its budget is smaller than a
+  // millisecond. A budget expressed in whole milliseconds would round a 100 us slice up to
+  // 1 ms and coarsen the poll cadence tenfold, which is a cadence the readback path is tuned to
+  // and the perf ceilings assume.
+  FakeClock clock;
+  int pollCount = 0;
+  const GpuWaitResult result = BoundedGpuWait(
+      [&pollCount] {
+        ++pollCount;
+        return false;
+      },
+      100us, 100us, clock.hooks());
+
+  EXPECT_EQ(result, GpuWaitResult::TimedOut);
+  // One sleep of the whole budget, then the poll that observes the deadline. A budget rounded up
+  // to a millisecond would sleep ten times instead.
+  EXPECT_EQ(clock.sleeps.size(), 1u);
+  EXPECT_EQ(pollCount, 2);
+  EXPECT_EQ(clock.current.time_since_epoch(), std::chrono::microseconds(100));
+}
+
 /// A device-lost record starts with no timeout attribution, so "lost with no
 /// site" is a meaningful state: it says the driver reported the loss rather
 /// than a deadline discovering it.

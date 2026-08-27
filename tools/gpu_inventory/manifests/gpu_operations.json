@@ -432,27 +432,21 @@
         "createCommandEncoder",
         "createTexture",
         "createView",
-        "destroy",
         "dispatchWorkgroups",
         "draw",
         "finish",
-        "getConstMappedRange",
-        "mapAsync",
         "setBindGroup",
         "setPipeline",
-        "submit",
-        "unmap"
+        "submit"
       ],
       "wgpuCFunctions": [
+        "wgpuBufferOf",
         "wgpuDevicePoll",
         "wgpuLabel",
         "wgpuTextureOf"
       ],
       "wgpuCTypes": [
         "WGPUCommandEncoder",
-        "WGPUMapAsyncStatus",
-        "WGPUMapAsyncStatus_Success",
-        "WGPUStringView",
         "WGPUTexture",
         "WGPUTextureFormat",
         "WGPUTextureFormat_BGRA8Unorm",
@@ -463,20 +457,12 @@
         "BindGroupDescriptor",
         "BindGroupEntry",
         "Buffer",
-        "BufferDescriptor",
-        "BufferMapCallbackInfo",
-        "BufferUsage",
-        "CallbackMode",
         "CommandBuffer",
         "CommandEncoder",
         "CommandEncoderDescriptor",
         "ComputePassDescriptor",
         "ComputePassEncoder",
-        "Default",
         "Extent3D",
-        "Future",
-        "FutureWaitInfo",
-        "MapMode",
         "TexelCopyBufferInfo",
         "TexelCopyTextureInfo",
         "Texture",
@@ -484,8 +470,7 @@
         "TextureDimension",
         "TextureFormat",
         "TextureUsage",
-        "TextureView",
-        "WaitStatus"
+        "TextureView"
       ]
     },
     "donner/svg/renderer/RendererGeode.h": {
@@ -612,8 +597,6 @@
         "Adapter",
         "BackendType",
         "Buffer",
-        "BufferDescriptor",
-        "BufferUsage",
         "CallbackMode",
         "Default",
         "Device",
@@ -827,6 +810,7 @@
         "writeTexture"
       ],
       "wgpuCFunctions": [
+        "wgpuBufferOf",
         "wgpuLabel",
         "wgpuTextureOf",
         "wgpuTextureViewOf"
@@ -886,6 +870,7 @@
         "Extent3D",
         "FilterMode",
         "FragmentState",
+        "FutureWaitInfo",
         "LoadOp",
         "MapMode",
         "PipelineLayout",
@@ -926,7 +911,8 @@
         "VertexAttribute",
         "VertexBufferLayout",
         "VertexFormat",
-        "VertexStepMode"
+        "VertexStepMode",
+        "WaitStatus"
       ]
     },
     "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h": {
@@ -935,6 +921,7 @@
         "unmap"
       ],
       "wgpuCFunctions": [
+        "wgpuBufferOf",
         "wgpuTextureOf",
         "wgpuTextureViewOf"
       ],
@@ -946,6 +933,7 @@
         "ComputePassEncoder",
         "ComputePipeline",
         "Device",
+        "Future",
         "PipelineLayout",
         "RenderPassEncoder",
         "RenderPipeline",
@@ -1147,6 +1135,7 @@
         "writeTexture"
       ],
       "wgpuCFunctions": [
+        "wgpuBufferOf",
         "wgpuLabel",
         "wgpuTextureOf",
         "wgpuTextureViewOf"

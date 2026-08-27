@@ -7,6 +7,7 @@
 /// last caller.
 
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <memory>
 #include <span>
@@ -100,6 +101,44 @@ public:
    */
   gpu::Status destroyTextureBacking(gpu::Texture&& texture);
 
+  /**
+   * Destroys the backend object behind \p buffer explicitly, then releases its slot.
+   *
+   * The buffer counterpart of \ref destroyTextureBacking, and needed for the same reason:
+   * releasing a buffer handle on its own only drops this adapter's reference, which leaves the
+   * backend object resident until the host runtime collects it. A readback buffer whose map was
+   * cancelled, and a pooled readback set evicted to keep the pool inside its ceiling, both have
+   * to release their memory at that moment rather than whenever a collector next runs.
+   *
+   * @param buffer Live buffer handle of this adapter; consumed either way.
+   */
+  gpu::Status destroyBufferBacking(gpu::Buffer&& buffer);
+
+  /**
+   * Whether any wait slice of \p mapping waited on the map's completion event rather than
+   * polling for it.
+   *
+   * The distinction is a property of how this adapter waited, so it is reported here rather than
+   * inferred by the caller; the readback statistics carry it because a browser frame that fell
+   * back to polling takes orders of magnitude longer to observe the same completion.
+   *
+   * @param mapping Live mapping handle of this adapter.
+   * @return True if a completion-event wait was used; false for a polled wait, an unknown
+   *   handle, or a mapping no slice ever waited on.
+   */
+  bool mappingUsedTimedWaitAny(const gpu::BufferMapping& mapping) const;
+
+  /**
+   * Test seam: makes a wait slice behave as the browser's timed wait does when it expires
+   * without the map completing - it reports that it handled the slice, having learned nothing.
+   *
+   * That arm is compiled out on every platform the test suites run on, so its contract is
+   * otherwise checked only by the browser lane, which is exactly where it went unchecked.
+   *
+   * @param simulate Whether slices should take the simulated event-wait path.
+   */
+  void setSimulateEventWaitForTest(bool simulate) { simulateEventWaitForTest_ = simulate; }
+
   gpu::Result<gpu::Texture> importExternalTexture(wgpu::Texture texture, const gpu::Extent2d& size,
                                                   gpu::TextureFormat format,
                                                   gpu::TextureUsage usage);
@@ -155,6 +194,15 @@ public:
    * @param texture Live texture handle of this adapter.
    */
   wgpu::Texture wgpuTextureOf(const gpu::Texture& texture) const;
+
+  /**
+   * TEMPORARY escape hatch (deleted with the readback and presentation migration): returns the
+   * wgpu buffer behind \p buffer, or a null handle if the handle does not name a live buffer of
+   * this adapter. Borrowed; this adapter retains ownership.
+   *
+   * @param buffer Live buffer handle of this adapter.
+   */
+  wgpu::Buffer wgpuBufferOf(const gpu::Buffer& buffer) const;
 
   /**
    * TEMPORARY escape hatch (deleted with the readback and presentation migration): returns the
@@ -373,7 +421,32 @@ private:
     wgpu::Buffer buffer;               //!< Buffer being mapped; borrowed from its slot.
     uint64_t offsetBytes = 0;          //!< Byte offset of the mapped range.
     uint64_t byteCount = 0;            //!< Length of the mapped range.
+    /// Future the map request returned, so a wait slice can wait on the completion event itself
+    /// where the platform supports it rather than polling for it.
+    wgpu::Future mapFuture{};
+    /// Whether any slice of this mapping waited on \ref mapFuture instead of polling. Reported
+    /// out through \ref GeodeWgpuAdapterDevice::mappingUsedTimedWaitAny, because the readback
+    /// stats distinguish the two and a browser frame that fell back to polling is a regression
+    /// worth seeing.
+    bool usedTimedWaitAny = false;
   };
+
+  /// The mapping's state right now: Ready or Failed once the map has completed, DeviceLost on a
+  /// lost device, and Pending until then.
+  /// @param completion Completion state to read.
+  gpu::MapSliceState sliceStateOf(const MappingSlot::Completion& completion) const;
+
+  /// Waits out one slice on the map's completion event where the platform supports it.
+  /// @param mappingSlotIndex Slot of the mapping to wait on.
+  /// @param slice Length of this wait slice.
+  /// @return True if the slice was waited on the event (so the caller re-reads the completion
+  ///   rather than polling), false if this platform or this thread cannot event-wait it.
+  bool waitOnMapFutureSlice(uint32_t mappingSlotIndex, std::chrono::microseconds slice);
+
+  /// Makes \ref waitOnMapFutureSlice report that an event wait handled the slice without one
+  /// having happened, so the browser arm's contract can be checked where that arm is compiled
+  /// out. See \ref simulateEventWaitForTest.
+  bool simulateEventWaitForTest_ = false;
 
   /// One presentation surface and the texture it has handed out this frame.
   struct SurfaceSlot {
