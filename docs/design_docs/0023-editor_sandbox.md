@@ -83,8 +83,8 @@ whole stack falls out of one decision.
   editor's WASM build (M6) continues to run the parser in-process, with the
   browser's own sandbox as the trust boundary. The IPC abstraction exists,
   but `SandboxedParseSVG` is a direct call in WASM builds.
-- **Not Windows in milestone 1.** Editor M3 targets macOS + Linux; the
-  sandbox follows the same platform cut. Windows is Future Work.
+- **Not Windows.** Editor M3 targets macOS + Linux; the sandbox follows
+  the same platform cut. Windows is out of scope for the project.
 - **Not a replacement for the fuzzer.** `SVGParser_fuzzer` continues to find
   bugs at the parser level. The sandbox is defense-in-depth, not defense-in-first.
 - **Not a general-purpose IPC framework.** This is one protocol
@@ -966,9 +966,6 @@ Three new fuzzers:
   currently out of scope. Most interesting path forward: route through the
   host via a request-from-sandbox protocol. Delayed until after S6.
 - **Shared memory for `ImageResource`**: measure first.
-- **Windows sandboxing**: requires a separate story (Job Objects +
-  AppContainer). Not blocking M1; Windows editor support is itself Future
-  Work in [editor.md](./0020-editor.md).
 - **DOM mirror strategy**: S3 ships read-only (option 3 from Proposed
   Architecture). Decision on option 1 vs. option 2 happens when S3 closes.
 
@@ -978,7 +975,6 @@ Three new fuzzers:
       returns bytes). Allows `<image href>`, `<use href>` cross-document,
       `@font-face src=url()`.
 - [ ] Shared-memory fast path for `drawImage` payloads larger than 1 MB.
-- [ ] Windows sandbox via Job Object + AppContainer.
 - [ ] `kDomStructure` wire message for structured editor DOM mirror
       (replaces the "re-parse on host" path).
 - [ ] C++26 reflection migration (S5) assuming toolchain support lands.

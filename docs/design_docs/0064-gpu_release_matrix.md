@@ -15,7 +15,8 @@ The matrix below is derived from the lanes and targets in this repository, not f
 row says which of three things is true today: the combination is exercised by a CI lane, it is
 only reachable on a developer machine, or nothing anywhere runs it. Several rows in the third
 category are combinations 0053 names as release-blocking, and stating that plainly is the point of
-the document.
+the document. A fourth label separates the combinations the project has decided not to ship from
+the ones it has not gotten to: an uncovered target is a gap, a non-target is not.
 
 ## Goals
 
@@ -46,6 +47,7 @@ the document.
 | **Compile-only** | Built by a lane that never executes it. Proves it links, proves nothing else. |
 | **Dev-host**     | Runnable, but only by a person on a machine; no lane executes it.             |
 | **None**         | Nothing in the repository executes this combination.                          |
+| **Out of scope** | Not a target: the project has decided not to ship it, so it is not a gap.     |
 | **Fails closed** | Not covered, and an automated lane says so by going red instead of green.     |
 
 A target that self-skips when its device is missing is only coverage on a lane that actually has
@@ -99,19 +101,19 @@ Notes:
 
 ## Vulkan
 
-| Platform                 | Driver / adapter                        | Coverage        | Where                                                            |
-| ------------------------ | --------------------------------------- | --------------- | ---------------------------------------------------------------- |
-| Linux x86_64             | Mesa lavapipe (software)                | **PR-gated**    | `vulkan_solid_fill_tests`, ICD pinned to `lvp_icd.json`          |
-| Linux arm64              | Mesa lavapipe (software)                | **PR-gated**    | The self-hosted Linux routing, when it is the selected lane      |
-| Linux x86_64/arm64       | Frozen pixel identity, software adapter | **PR-gated**    | `baseline_pixels_tests`, against the committed lavapipe baseline |
-| Linux, SPIR-V validation | `spirv-val`                             | **PR-gated**    | `spirv_val_validation_tests`; only one lane installs SPIRV-Tools |
-| Linux                    | Vulkan validation layers                | **None**        | No lane enables them; the design requires zero validation errors |
-| Linux x86_64/arm64       | Intel physical                          | **None**        | No lane has a GPU device; the shared executor advertises none    |
-| Linux x86_64             | AMD physical                            | **None**        | As above                                                         |
-| Linux x86_64             | NVIDIA physical                         | **None**        | As above                                                         |
-| Linux, Geode + ASan      | Mesa lavapipe                           | **Conditional** | Fires only when the Geode renderer paths change                  |
-| Linux, Geode fuzzing     | Mesa lavapipe                           | **Scheduled**   | Nightly                                                          |
-| Windows                  | Any Vulkan driver                       | **None**        | No Windows runner, no Windows platform constraint, no D3D        |
+| Platform                 | Driver / adapter                        | Coverage         | Where                                                            |
+| ------------------------ | --------------------------------------- | ---------------- | ---------------------------------------------------------------- |
+| Linux x86_64             | Mesa lavapipe (software)                | **PR-gated**     | `vulkan_solid_fill_tests`, ICD pinned to `lvp_icd.json`          |
+| Linux arm64              | Mesa lavapipe (software)                | **PR-gated**     | The self-hosted Linux routing, when it is the selected lane      |
+| Linux x86_64/arm64       | Frozen pixel identity, software adapter | **PR-gated**     | `baseline_pixels_tests`, against the committed lavapipe baseline |
+| Linux, SPIR-V validation | `spirv-val`                             | **PR-gated**     | `spirv_val_validation_tests`; only one lane installs SPIRV-Tools |
+| Linux                    | Vulkan validation layers                | **None**         | No lane enables them; the design requires zero validation errors |
+| Linux x86_64/arm64       | Intel physical                          | **None**         | No lane has a GPU device; the shared executor advertises none    |
+| Linux x86_64             | AMD physical                            | **None**         | As above                                                         |
+| Linux x86_64             | NVIDIA physical                         | **None**         | As above                                                         |
+| Linux, Geode + ASan      | Mesa lavapipe                           | **Conditional**  | Fires only when the Geode renderer paths change                  |
+| Linux, Geode fuzzing     | Mesa lavapipe                           | **Scheduled**    | Nightly                                                          |
+| Windows                  | Any Vulkan driver                       | **Out of scope** | Windows is not a target platform; nothing is planned for it      |
 
 Notes:
 
@@ -127,17 +129,17 @@ Notes:
 
 ## Browser WebGPU
 
-| Browser                              | Host         | Coverage        | Where                                                 |
-| ------------------------------------ | ------------ | --------------- | ----------------------------------------------------- |
-| Chromium, headless                   | macOS arm64  | **Conditional** | Browser suites, path-filtered pull requests           |
-| Chromium, headless                   | macOS arm64  | **Scheduled**   | The same suites, nightly                              |
-| Chromium, headed on the platform GPU | macOS arm64  | **Conditional** | The composited-output lane, ANGLE over Metal          |
-| Firefox                              | macOS arm64  | **Conditional** | Resize and composited-invariant projects              |
-| WebKit (Playwright)                  | macOS arm64  | **Conditional** | Carousel project                                      |
-| Safari (the shipping browser)        | macOS        | **Dev-host**    | A regression script exists; no workflow invokes it    |
-| Any browser                          | Linux        | **None**        | The pixel-presenting smoke target is macOS-arm64 only |
-| Any browser                          | Windows      | **None**        | No runner                                             |
-| Mobile Safari                        | iOS / iPadOS | **None**        | 0053 requires physical iOS presentation checks        |
+| Browser                              | Host         | Coverage         | Where                                                 |
+| ------------------------------------ | ------------ | ---------------- | ----------------------------------------------------- |
+| Chromium, headless                   | macOS arm64  | **Conditional**  | Browser suites, path-filtered pull requests           |
+| Chromium, headless                   | macOS arm64  | **Scheduled**    | The same suites, nightly                              |
+| Chromium, headed on the platform GPU | macOS arm64  | **Conditional**  | The composited-output lane, ANGLE over Metal          |
+| Firefox                              | macOS arm64  | **Conditional**  | Resize and composited-invariant projects              |
+| WebKit (Playwright)                  | macOS arm64  | **Conditional**  | Carousel project                                      |
+| Safari (the shipping browser)        | macOS        | **Dev-host**     | A regression script exists; no workflow invokes it    |
+| Any browser                          | Linux        | **None**         | The pixel-presenting smoke target is macOS-arm64 only |
+| Any browser                          | Windows      | **Out of scope** | Windows is not a target platform                      |
+| Mobile Safari                        | iOS / iPadOS | **None**         | 0053 requires physical iOS presentation checks        |
 
 Notes:
 
@@ -151,20 +153,21 @@ Notes:
 
 ## Cross-cutting gaps
 
-These are the combinations 0053's gates depend on that nothing currently executes:
+These are the combinations 0053's gates depend on that nothing currently executes. Windows is not
+among them: it is a non-target, listed as out of scope in the tables above rather than counted as a
+gap.
 
 1. Any physical Vulkan driver. Intel, AMD, and NVIDIA are all unqualified, and the executor pool
    advertises no GPU worker class, so adding one is a hardware and scheduling decision rather than
    a lane edit.
 2. Vulkan validation layers. The synchronization model 0053 calls its load-bearing subsystem has
    no validation gate.
-3. Windows, entirely.
-4. Physical iOS presentation.
-5. More than one Apple GPU generation per change.
-6. Geode through CMake. The CMake lanes build the CPU backend on both platforms, while the README
+3. Physical iOS presentation.
+4. More than one Apple GPU generation per change.
+5. Geode through CMake. The CMake lanes build the CPU backend on both platforms, while the README
    describes both backends as selectable. 0053 requires CMake to gain equivalent native GPU targets
    as each backend reaches production, so this gap is on the cutover path.
-7. macOS Geode fuzzing. The Linux nightly fuzz job has a Geode step; the macOS one does not.
+6. macOS Geode fuzzing. The Linux nightly fuzz job has a Geode step; the macOS one does not.
 
 ## Binary-size budgets
 
@@ -305,7 +308,6 @@ checklist item, not as an invariant.
   emitted artifacts are produced at build time and the emitters are dropped from the product. That
   choice moves roughly 435 KiB and changes every budget above.
 - Whether `RecordingDevice` ships.
-- The Windows release floor and required Vulkan driver versions, unchanged from 0053.
 
 ## Related Designs
 
