@@ -15,6 +15,7 @@
 #include "donner/base/tests/Runfiles.h"
 #include "donner/gpu/shader/programs/SolidFill.h"
 #include "donner/gpu/shader/tests/ShaderTestUtils.h"
+#include "donner/gpu/shader/tests/StageIoTestModules.h"
 
 using testing::HasSubstr;
 
@@ -40,11 +41,30 @@ TEST(MslEmitterTests, OutputHasNoTrailingWhitespaceOrCr) {
   EXPECT_THAT(msl, testing::Not(HasSubstr(" \n")));
 }
 
+TEST(MslEmitterTests, APositionOnlyFragmentEntryStillCarriesItsInput) {
+  ShaderResult<IrModule> module = BuildPositionOnlyFragmentModule();
+  ASSERT_THAT(module, HasShaderResult());
+  ShaderResult<std::string> msl = EmitMsl(module.result());
+  ASSERT_THAT(msl, HasShaderResult());
+
+  // The stage-in struct is omitted only when nothing would go in it. Position has no
+  // direct-parameter spelling here, so this entry keeps its struct; dropping it would leave the
+  // body referencing an input that no parameter carries.
+  EXPECT_THAT(msl.result(), HasSubstr("struct fs_position_only_Input {"));
+  EXPECT_THAT(msl.result(), HasSubstr("float4 frag_pos [[position]];"));
+  EXPECT_THAT(msl.result(), HasSubstr("fragment fs_position_only_Output fs_position_only("
+                                      "fs_position_only_Input in [[stage_in]]"));
+  EXPECT_THAT(msl.result(), HasSubstr("const float4 frag_pos = in.frag_pos;"));
+}
+
 TEST(MslEmitterTests, ContainsSolidFillSurface) {
   const std::string msl = EmitSolidFillMsl();
 
-  EXPECT_THAT(msl, HasSubstr("vertex vs_main_Output vs_main(vs_main_Input in [[stage_in]], "
+  // The vertex stage builds its geometry from vertex_index, so it takes both builtins as
+  // direct parameters and declares no (empty, and therefore invalid) [[stage_in]] struct.
+  EXPECT_THAT(msl, HasSubstr("vertex vs_main_Output vs_main(uint vertex_index [[vertex_id]], "
                              "uint instance_index [[instance_id]]"));
+  EXPECT_THAT(msl, testing::Not(HasSubstr("struct vs_main_Input")));
   EXPECT_THAT(msl, HasSubstr("fragment fs_main_Output fs_main(fs_main_Input in [[stage_in]]"));
   // The argument-table map from MslBindingMap.h: uniforms at buffer(1), vBandGrid at
   // buffer(12), textures/samplers at their binding indices.

@@ -53,6 +53,9 @@ ShaderResult<TypeLayout> ComputeTypeLayout(const IrType& type, AddressSpace addr
       return ShaderError{std::format("vector size {} has no layout", type.vectorSize()), "layout"};
     }
 
+    // WGSL: AlignOf(matCxR<f32>) is AlignOf(vecR<f32>) and SizeOf is C * that alignment, so
+    // mat2x2f is two 8-byte-aligned vec2f columns and mat4x4f is four 16-byte-aligned vec4f ones.
+    case IrType::Kind::Matrix2x2f: return TypeLayout{8, 16};
     case IrType::Kind::Matrix4x4f: return TypeLayout{16, 64};
 
     case IrType::Kind::SizedArray: {

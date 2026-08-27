@@ -17,10 +17,12 @@
 #include <string>
 #include <vector>
 
+#include "donner/gpu/shader/IrModule.h"
 #include "donner/gpu/shader/SpirvEmitter.h"
 #include "donner/gpu/shader/programs/ColorMatrix.h"
 #include "donner/gpu/shader/programs/SolidFill.h"
 #include "donner/gpu/shader/tests/ShaderTestUtils.h"
+#include "donner/gpu/shader/tests/StageIoTestModules.h"
 
 using testing::HasSubstr;
 using testing::Not;
@@ -128,6 +130,55 @@ void ExpectValidatesForVulkan11(const std::string& spirvVal, ShaderResult<IrModu
   }
 }
 
+/// Builds a module whose read-only storage block holds both matrix types, so the per-member
+/// MatrixStride decoration is exercised for each. mat2x2f is function-local in the shipped
+/// programs, which leaves the buffer-layout path for it uncovered; this is the module that covers
+/// it.
+ShaderResult<IrModule> BuildMatrixBlockModule() {
+  ModuleBuilder builder;
+
+  ShaderResult<IrType> axesStruct =
+      IrType::Struct("Axes", {{"axes", IrType::Mat2x2f()}, {"mvp", IrType::Mat4x4f()}});
+  if (axesStruct.hasError()) {
+    return std::move(axesStruct).error();
+  }
+  ShaderResult<IrType> axesArray = IrType::RuntimeArray(axesStruct.result());
+  if (axesArray.hasError()) {
+    return std::move(axesArray).error();
+  }
+  if (ShaderStatus status = builder.addReadOnlyStorageBuffer(0, 0, "shapes", axesArray.result());
+      status.hasError()) {
+    return std::move(status).error();
+  }
+
+  ShaderResult<FunctionBuilder> entry = builder.createVertexEntryPoint(
+      "vs_test", {IrParam{"vertex_index", IrType::U32(), std::nullopt, BuiltinInput::VertexIndex}},
+      {IrOutputMember{"clip_pos", IrType::Vec4f(), std::nullopt, BuiltinOutput::Position}});
+  if (entry.hasError()) {
+    return std::move(entry).error();
+  }
+  FunctionBuilder fn = std::move(entry).result();
+
+  ShaderResult<IrExpr> shape = Index(GetShaderResultOrFail(fn.ref("shapes"), LiteralF32(0.0f)),
+                                     GetShaderResultOrFail(fn.ref("vertex_index"), LiteralU32(0u)));
+  const IrExpr axes = GetShaderResultOrFail(Member(shape.result(), "axes"), LiteralF32(0.0f));
+  const IrExpr column = GetShaderResultOrFail(Index(axes, LiteralU32(0u)), LiteralF32(0.0f));
+  const IrExpr mapped = GetShaderResultOrFail(Mul(axes, column), LiteralF32(0.0f));
+  const IrExpr mvp = GetShaderResultOrFail(Member(shape.result(), "mvp"), LiteralF32(0.0f));
+  const IrExpr clip = GetShaderResultOrFail(
+      Mul(mvp, GetShaderResultOrFail(
+                   ConstructVector(IrType::Vec4f(), {mapped, LiteralF32(0.0f), LiteralF32(1.0f)}),
+                   LiteralF32(0.0f))),
+      LiteralF32(0.0f));
+  if (ShaderStatus status = fn.returnOutputs({clip}); status.hasError()) {
+    return std::move(status).error();
+  }
+  if (ShaderStatus status = fn.finish(); status.hasError()) {
+    return std::move(status).error();
+  }
+  return builder.build();
+}
+
 TEST(SpirvValValidation, EmittedSolidFillPassesVulkan11Validation) {
   const std::string spirvVal = FindSpirvVal();
   if (spirvVal.empty()) {
@@ -142,6 +193,28 @@ TEST(SpirvValValidation, EmittedColorMatrixComputePassesVulkan11Validation) {
     GTEST_SKIP() << "spirv-val (SPIRV-Tools) is not installed";
   }
   ExpectValidatesForVulkan11(spirvVal, programs::BuildColorMatrixModule(), "color_matrix.spv");
+}
+
+TEST(SpirvValValidation, AStorageBlockHoldingBothMatrixTypesPassesVulkan11Validation) {
+  // The MatrixStride decoration is per member, and a validator checks it against the member's
+  // own layout: one hardcoded stride would decorate mat2x2f's 8-byte columns as 16 and be
+  // rejected here.
+  const std::string spirvVal = FindSpirvVal();
+  if (spirvVal.empty()) {
+    GTEST_SKIP() << "spirv-val (SPIRV-Tools) is not installed";
+  }
+  ExpectValidatesForVulkan11(spirvVal, BuildMatrixBlockModule(), "matrix_block.spv");
+}
+
+TEST(SpirvValValidation, APositionOnlyFragmentEntryPassesVulkan11Validation) {
+  // Position is location-less in every emitter, so each decides on its own how such an input
+  // reaches the stage. SPIR-V declares it as its own Input variable, decorated FragCoord rather
+  // than the vertex stage's Position; the validator is what says so out of process.
+  const std::string spirvVal = FindSpirvVal();
+  if (spirvVal.empty()) {
+    GTEST_SKIP() << "spirv-val (SPIRV-Tools) is not installed";
+  }
+  ExpectValidatesForVulkan11(spirvVal, BuildPositionOnlyFragmentModule(), "position_only.spv");
 }
 
 TEST(SpirvValValidation, NegativeControlDetectsAMalformedModule) {

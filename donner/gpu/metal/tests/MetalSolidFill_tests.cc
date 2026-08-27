@@ -15,20 +15,26 @@
 #include <gtest/gtest.h>
 
 #include <array>
+#include <cstdint>
 #include <cstring>
+#include <filesystem>
 #include <memory>
 #include <optional>
 #include <span>
+#include <string_view>
+#include <system_error>
 #include <utility>
 #include <vector>
 
 #include "donner/base/Transform.h"
+#include "donner/base/tests/Runfiles.h"
 #include "donner/editor/tests/BitmapGoldenCompare.h"
 #include "donner/gpu/CommandEncoder.h"
 #include "donner/gpu/baseline/FrozenBaselinePolicy.h"
 #include "donner/gpu/metal/MetalDevice.h"
 #include "donner/gpu/shader/MslEmitter.h"
 #include "donner/gpu/shader/programs/SolidFill.h"
+#include "donner/gpu/shader/tests/StageIoTestModules.h"
 #include "donner/gpu/tests/BaselineScene.h"
 #include "donner/svg/renderer/geode/GeodePathEncoder.h"
 
@@ -41,72 +47,19 @@ using geode::EncodedPath;
 using gpu::tests::BaselinePathSpec;
 using gpu::tests::BaselinePixelFromScene;
 using gpu::tests::BaselineScenePaths;
-using gpu::tests::BuildLegacyQuad;
+using gpu::tests::BuildIdentity4x4;
+using gpu::tests::BuildSolidFillMvp;
 using gpu::tests::ExpandLegacyAxis;
 using gpu::tests::kBaselineSize;
 using gpu::tests::LegacyAxis;
 using gpu::tests::LegacyBand;
-using gpu::tests::LegacyVertex;
+using gpu::tests::SolidFillUniforms;
+using gpu::tests::WriteBoundingPolygon;
 
 constexpr uint32_t kBytesPerRow = kBaselineSize * 4;  // 1024; already 256-byte aligned.
 
 /// C++ mirror of the shader's 288-byte Uniforms struct (layout anchored by the shader IR layout
 /// tests; field order matches slug_fill/the solid-fill IR program).
-struct alignas(16) Uniforms {
-  float mvp[16];                //!< Column-major clip-from-scene matrix.
-  float patternFromPath[16];    //!< Pattern transform (identity for solid fills).
-  float viewport[2];            //!< Viewport size in pixels.
-  float tileSize[2];            //!< Pattern tile size (unused for solid fills).
-  float color[4];               //!< Premultiplied fill color.
-  uint32_t fillRule;            //!< 0 = non-zero, 1 = even-odd.
-  uint32_t paintMode;           //!< 0 = solid color.
-  float patternOpacity;         //!< 1.0 for solid fills.
-  uint32_t hasClipPolygon;      //!< 0 = no clip polygon.
-  uint32_t hasClipMask;         //!< 0 = no clip mask.
-  uint32_t pad0;                //!< Padding to the grid block.
-  uint32_t pad1;                //!< Padding.
-  uint32_t pad2;                //!< Padding.
-  float gridYBase;              //!< Horizontal band grid base.
-  float gridHStride;            //!< Horizontal band stride.
-  uint32_t gridHBandCount;      //!< Horizontal band count.
-  float gridXBase;              //!< Vertical band grid base.
-  float gridVStride;            //!< Vertical band stride.
-  uint32_t gridVBandCount;      //!< Vertical band count.
-  uint32_t gridPad0;            //!< Padding.
-  uint32_t gridPad1;            //!< Padding.
-  float clipPolygonPlanes[16];  //!< Four vec4 half-planes (unused: hasClipPolygon == 0).
-};
-static_assert(sizeof(Uniforms) == 288, "Uniforms must match the shader layout");
-
-/// Builds the same clip-space MVP the production encoder computes: scene -> pixel via
-/// \p pixelFromScene, then pixel -> clip with x_clip = 2x/W - 1 and y_clip = -2y/H + 1 (the Y
-/// flip for a top-left pixel origin). Column-major mat4.
-void BuildMvp(const Transform2d& pixelFromScene, float* out16) {
-  const double sx = 2.0 / static_cast<double>(kBaselineSize);
-  const double sy = -2.0 / static_cast<double>(kBaselineSize);
-  const double a = pixelFromScene.data[0];
-  const double b = pixelFromScene.data[1];
-  const double c = pixelFromScene.data[2];
-  const double d = pixelFromScene.data[3];
-  const double e = pixelFromScene.data[4];
-  const double f = pixelFromScene.data[5];
-
-  std::memset(out16, 0, 16 * sizeof(float));
-  out16[0] = static_cast<float>(sx * a);
-  out16[1] = static_cast<float>(sy * b);
-  out16[4] = static_cast<float>(sx * c);
-  out16[5] = static_cast<float>(sy * d);
-  out16[10] = 1.0f;
-  out16[12] = static_cast<float>(sx * e - 1.0);
-  out16[13] = static_cast<float>(sy * f + 1.0);
-  out16[15] = 1.0f;
-}
-
-/// Writes an identity 4x4 into \p out16 (column-major).
-void BuildIdentity(float* out16) {
-  std::memset(out16, 0, 16 * sizeof(float));
-  out16[0] = out16[5] = out16[10] = out16[15] = 1.0f;
-}
 
 /// A storage buffer plus the byte size it was created with, so bind groups can bind the FULL
 /// range honestly. Vulkan enforces VkDescriptorBufferInfo.range, so binding a smaller range than
@@ -117,10 +70,12 @@ struct SizedBuffer {
   uint64_t sizeBytes = 0;  //!< Byte size the buffer was created with.
 };
 
+/// Where the frozen per-adapter baselines live in the runfiles tree.
+constexpr const char* kBaselinesRunfileDir = "donner/gpu/baseline/baselines";
+
 /// One path's GPU resources.
 struct PathDraw {
-  Buffer vertexBuffer;       //!< Legacy conservative quad vertices (6 x 20 bytes).
-  Buffer uniformBuffer;      //!< 288-byte Uniforms.
+  Buffer uniformBuffer;      //!< The solid-fill uniform block.
   SizedBuffer bands;         //!< Horizontal bands (or one zero band).
   SizedBuffer curves;        //!< Horizontal curves (or 4-byte dummy).
   SizedBuffer vBands;        //!< Vertical bands (or one zero band).
@@ -147,6 +102,36 @@ protected:
       }
       GTEST_SKIP() << message;
     }
+  }
+
+  /**
+   * Runfiles path of the frozen baseline filed for \p adapterName, or empty when no directory
+   * matches.
+   *
+   * Two GPUs running the same shaders round a covered edge texel differently, so the frozen
+   * pixels are filed one directory per adapter and this slice resolves its own. Sharing the
+   * corpus rather than keeping a second copy of the same bytes is deliberate: a private golden is
+   * what let this slice drift away from the renderer it exists to validate.
+   *
+   * The lookup deliberately does NOT live in SetUp. The baseline is an input to the pixel
+   * comparison and to nothing else in this fixture; gating every case on it would let a corpus
+   * that has not caught up with new hardware take unrelated regressions down with it, red on an
+   * automated lane and silent locally.
+   *
+   * @param adapterName Adapter to resolve a baseline for.
+   * @return The runfiles path, or an empty string when this adapter has no committed baseline.
+   */
+  static std::string baselinePathFor(std::string_view adapterName) {
+    const std::string path = std::string(kBaselinesRunfileDir) + "/" +
+                             baseline::AdapterSlug(adapterName, "Metal") +
+                             "/solid_fill_baseline.png";
+    // Rlocation composes a path without looking for the file, so the existence test has to be
+    // explicit. Returning a path for an adapter with no committed directory would walk straight
+    // past the unbaselined rule and fail later as a golden that would not open, which reports a
+    // missing baseline as a pixel mismatch.
+    std::error_code error;
+    return std::filesystem::exists(Runfiles::instance().Rlocation(path), error) ? path
+                                                                                : std::string();
   }
 
   /// Unwraps an RHI result, failing the test on error.
@@ -181,6 +166,16 @@ protected:
 };
 
 TEST_F(MetalSolidFillTest, ReadBackBufferRejectsStaleHandleAfterSlotReuse) {
+  // This case must run on any adapter, including one the corpus has no baseline for: it compares
+  // no pixels, and gating it on the corpus would let hardware the baselines have not caught up
+  // with hide a real buffer regression - red on an automated lane, silent everywhere else.
+  //
+  // Two things hold that. Structurally, SetUp resolves no baseline and this fixture stores none,
+  // so nothing but the pixel case can be gated on one. And the unbaselined branch is reachable
+  // rather than dead: an adapter name no directory can match comes back empty here, which is only
+  // true because the resolver tests for the file rather than trusting a composed runfiles path.
+  EXPECT_TRUE(baselinePathFor("no adapter is named this").empty());
+
   // The readback helper must validate the handle's generation: after destroy + recreate the
   // freed slot is reused, and a stale handle must fail closed instead of reading the wrong
   // buffer.
@@ -207,7 +202,45 @@ TEST_F(MetalSolidFillTest, ReadBackBufferRejectsStaleHandleAfterSlotReuse) {
   EXPECT_EQ(stale.error().type, GpuErrorType::InvalidHandle) << stale.error();
 }
 
+TEST_F(MetalSolidFillTest, EmittedMslForAPositionOnlyFragmentEntryCompilesOnTheDevice) {
+  // The offline Metal compiler ships as a downloadable Xcode component, so the out-of-process MSL
+  // validation skips wherever it is absent. The runtime compiler behind createShaderModule is
+  // there on any machine with a device, which makes it the one that holds the emitter's stage IO
+  // shapes everywhere this slice runs.
+  //
+  // This entry declares no location at all: its only input is the position builtin. Each emitter
+  // decides for itself how such an input reaches the stage, so it is the shape one of them can
+  // get wrong while every shipped program keeps working.
+  shader::ShaderResult<shader::IrModule> module = shader::BuildPositionOnlyFragmentModule();
+  ASSERT_FALSE(module.hasError()) << module.error();
+  shader::ShaderResult<std::string> msl = shader::EmitMsl(module.result());
+  ASSERT_FALSE(msl.hasError()) << msl.error();
+
+  Result<ShaderModule> compiled = device_->createShaderModule(ShaderModuleDescriptor{
+      "positionOnlyFragment", RcString(msl.result()), ShaderSourceKind::Msl});
+  EXPECT_FALSE(compiled.hasError())
+      << "the device rejected the emitted MSL: " << compiled.error() << "\n"
+      << msl.result();
+}
+
 TEST_F(MetalSolidFillTest, MatchesFrozenBaseline) {
+  // ----- The frozen baseline for this run's adapter -----
+  const std::string goldenPath = baselinePathFor(device_->adapterName());
+  if (goldenPath.empty()) {
+    const baseline::MissingComparisonDisposition disposition =
+        baseline::DispositionForUnbaselinedAdapter(baseline::RunningUnderContinuousIntegration());
+    const std::string message = baseline::UnbaselinedAdapterMessage(
+        device_->adapterName(), "Metal", baseline::AdapterSlug(device_->adapterName(), "Metal"),
+        /*capturedPath=*/"",
+        "this slice renders through donner::gpu, not the production path the baselines come "
+        "from; capture one with //donner/gpu/baseline:capture_baselines",
+        disposition);
+    if (disposition == baseline::MissingComparisonDisposition::FailClosed) {
+      FAIL() << message;
+    }
+    GTEST_SKIP() << message;
+  }
+
   // ----- Shader module and pipeline from the emitted MSL -----
   shader::ShaderResult<shader::IrModule> irModule = shader::programs::BuildSolidFillModule();
   ASSERT_FALSE(irModule.hasError()) << irModule.error();
@@ -243,16 +276,9 @@ TEST_F(MetalSolidFillTest, MatchesFrozenBaseline) {
       device_->createPipelineLayout(PipelineLayoutDescriptor{"solidFillPL", {bindGroupLayout}}),
       "createPipelineLayout");
 
-  // Vertex layout: pos (vec2f) + normal (vec2f) + bandIndex (u32) = 20 bytes.
+  // No vertex buffers: the stage builds the bounding fan from vertex_index.
   RenderPipelineDescriptor pipelineDescriptor{
-      "solidFill", pipelineLayout,
-      VertexState{shaderModule,
-                  "vs_main",
-                  {VertexBufferLayout{20,
-                                      VertexStepMode::Vertex,
-                                      {VertexAttribute{VertexFormat::Float32x2, 0, 0},
-                                       VertexAttribute{VertexFormat::Float32x2, 8, 1},
-                                       VertexAttribute{VertexFormat::Uint32, 16, 2}}}}},
+      "solidFill", pipelineLayout, VertexState{shaderModule, "vs_main", {}},
       FragmentState{shaderModule,
                     "fs_main",
                     {ColorTargetState{
@@ -309,24 +335,14 @@ TEST_F(MetalSolidFillTest, MatchesFrozenBaseline) {
   for (const BaselinePathSpec& spec : BaselineScenePaths()) {
     const EncodedPath encoded = geode::GeodePathEncoder::encode(spec.path, spec.rule);
     ASSERT_GE(encoded.boundingVertexCount, 3u);
-    const std::array<LegacyVertex, 6> legacyQuad = BuildLegacyQuad(encoded.pathBounds);
-
     LegacyAxis horizontal;
     LegacyAxis vertical;
     ASSERT_TRUE(ExpandLegacyAxis(encoded.bands, encoded.curveIndices, encoded.curves, horizontal));
     ASSERT_TRUE(ExpandLegacyAxis(encoded.vBands, encoded.vCurveIndices, encoded.vCurves, vertical));
 
     PathDraw draw;
-    draw.vertexCount = static_cast<uint32_t>(legacyQuad.size());
-    draw.vertexBuffer = unwrap(
-        device_->createBuffer(BufferDescriptor{"vertices", legacyQuad.size() * sizeof(LegacyVertex),
-                                               BufferUsage::Vertex | BufferUsage::CopyDst}),
-        "createBuffer vertices");
-    const Status vertexWrite = device_->writeBuffer(
-        draw.vertexBuffer, 0,
-        std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(legacyQuad.data()),
-                                 legacyQuad.size() * sizeof(LegacyVertex)));
-    ASSERT_FALSE(vertexWrite.hasError()) << vertexWrite.error();
+    // The vertex shader expands the bounding fan from vertex_index; there is no vertex buffer.
+    draw.vertexCount = encoded.boundingDrawVertexCount();
 
     draw.bands = storageBuffer("bands", horizontal.bands.data(),
                                horizontal.bands.size() * sizeof(LegacyBand), sizeof(LegacyBand));
@@ -342,9 +358,9 @@ TEST_F(MetalSolidFillTest, MatchesFrozenBaseline) {
                                encoded.vBandGrid.size() * sizeof(uint32_t));
 
     // Uniforms: exactly the production populateFillUniform values for a solid fill.
-    Uniforms uniforms = {};
-    BuildMvp(pixelFromScene, uniforms.mvp);
-    BuildIdentity(uniforms.patternFromPath);
+    SolidFillUniforms uniforms = {};
+    BuildSolidFillMvp(pixelFromScene, uniforms.mvp);
+    BuildIdentity4x4(uniforms.patternFromPath);
     uniforms.viewport[0] = static_cast<float>(kBaselineSize);
     uniforms.viewport[1] = static_cast<float>(kBaselineSize);
     uniforms.tileSize[0] = 1.0f;
@@ -363,9 +379,10 @@ TEST_F(MetalSolidFillTest, MatchesFrozenBaseline) {
     uniforms.gridXBase = encoded.xBase;
     uniforms.gridVStride = encoded.vStride;
     uniforms.gridVBandCount = encoded.vBandCount;
+    WriteBoundingPolygon(encoded, uniforms);
 
     draw.uniformBuffer =
-        unwrap(device_->createBuffer(BufferDescriptor{"uniforms", sizeof(Uniforms),
+        unwrap(device_->createBuffer(BufferDescriptor{"uniforms", sizeof(SolidFillUniforms),
                                                       BufferUsage::Uniform | BufferUsage::CopyDst}),
                "createBuffer uniforms");
     const Status uniformWrite = device_->writeBuffer(
@@ -377,7 +394,7 @@ TEST_F(MetalSolidFillTest, MatchesFrozenBaseline) {
     // element 0, and Vulkan enforces the bound range (Metal ignores it, but both slices bind
     // the same honest sizes).
     std::vector<BindGroupEntry> entries;
-    entries.push_back({0, BufferBinding{draw.uniformBuffer, 0, sizeof(Uniforms)}});
+    entries.push_back({0, BufferBinding{draw.uniformBuffer, 0, sizeof(SolidFillUniforms)}});
     entries.push_back({1, BufferBinding{draw.bands.buffer, 0, draw.bands.sizeBytes}});
     entries.push_back({2, BufferBinding{draw.curves.buffer, 0, draw.curves.sizeBytes}});
     entries.push_back({3, TextureViewBinding{dummyView}});
@@ -410,8 +427,6 @@ TEST_F(MetalSolidFillTest, MatchesFrozenBaseline) {
     ASSERT_FALSE(pipelineStatus.hasError()) << pipelineStatus.error();
     const Status bindGroupStatus = pass->setBindGroup(0, draw.bindGroup);
     ASSERT_FALSE(bindGroupStatus.hasError()) << bindGroupStatus.error();
-    const Status vertexBufferStatus = pass->setVertexBuffer(0, draw.vertexBuffer);
-    ASSERT_FALSE(vertexBufferStatus.hasError()) << vertexBufferStatus.error();
     const Status drawStatus = pass->draw(draw.vertexCount);
     ASSERT_FALSE(drawStatus.hasError()) << drawStatus.error();
   }
@@ -444,9 +459,8 @@ TEST_F(MetalSolidFillTest, MatchesFrozenBaseline) {
 
   // Strict identity: the Metal slice must reproduce the frozen baseline byte-for-byte (zero
   // mismatched pixels, anti-aliased pixels included).
-  editor::tests::CompareBitmapToGolden(
-      bitmap, "donner/gpu/metal/tests/testdata/solid_fill_baseline.png", "metal_solid_fill",
-      editor::tests::PixelmatchIdentityParams());
+  editor::tests::CompareBitmapToGolden(bitmap, goldenPath, "metal_solid_fill",
+                                       editor::tests::PixelmatchIdentityParams());
 }
 
 }  // namespace

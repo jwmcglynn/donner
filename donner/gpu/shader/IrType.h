@@ -63,7 +63,8 @@ public:
   enum class Kind : uint8_t {
     Scalar,        //!< bool / i32 / u32 / f32.
     Vector,        //!< vecN<T>, N in 2..4.
-    Matrix4x4f,    //!< mat4x4f (the only matrix type in scope).
+    Matrix2x2f,    //!< mat2x2f (column-major, two vec2f columns).
+    Matrix4x4f,    //!< mat4x4f.
     SizedArray,    //!< array<E, N>.
     RuntimeArray,  //!< array<E>; storage buffer roots only.
     Struct,        //!< Named struct with named members.
@@ -122,6 +123,9 @@ public:
   static IrType Vec2i() { return Vec2(ScalarKind::I32); }
   /// `vec2<u32>` convenience factory.
   static IrType Vec2u() { return Vec2(ScalarKind::U32); }
+
+  /// `mat2x2<f32>` type.
+  static IrType Mat2x2f();
 
   /// `mat4x4<f32>` type.
   static IrType Mat4x4f();

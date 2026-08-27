@@ -53,6 +53,7 @@ std::ostream& operator<<(std::ostream& os, StageKind value);
 
 /// Builtin input values available to entry point parameters.
 enum class BuiltinInput : uint8_t {
+  VertexIndex,         //!< `vertex_index` (vertex stage, u32).
   InstanceIndex,       //!< `instance_index` (vertex stage, u32).
   Position,            //!< Framebuffer position (fragment stage, vec4<f32>).
   GlobalInvocationId,  //!< `global_invocation_id` (compute stage, vec3<u32>).

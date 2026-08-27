@@ -211,7 +211,8 @@
       ],
       "builtins": [
         "instance_index",
-        "position"
+        "position",
+        "vertex_index"
       ],
       "entryPoints": [
         {
@@ -230,6 +231,7 @@
         "const",
         "continue",
         "discard",
+        "dot",
         "for",
         "fract",
         "fwidth",
@@ -238,6 +240,7 @@
         "let",
         "max",
         "min",
+        "normalize",
         "return",
         "round",
         "saturate",

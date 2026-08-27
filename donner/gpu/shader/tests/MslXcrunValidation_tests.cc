@@ -20,6 +20,7 @@
 #include "donner/gpu/shader/programs/ColorMatrix.h"
 #include "donner/gpu/shader/programs/SolidFill.h"
 #include "donner/gpu/shader/tests/ShaderTestUtils.h"
+#include "donner/gpu/shader/tests/StageIoTestModules.h"
 
 using testing::HasSubstr;
 using testing::Not;
@@ -139,6 +140,19 @@ std::string CompileMslForStatus(const std::string& source, const std::string& na
       "xcrun -sdk macosx metal -std=metal3.0 -c \"" + sourcePath + "\" -o \"" + outputPath + "\"",
       &output);
   return output;
+}
+
+TEST(MslXcrunValidation, APositionOnlyFragmentEntryCompilesWithMetalCompiler) {
+  // The emitter omits the [[stage_in]] struct when nothing would go in it, because Metal rejects
+  // an empty one. A fragment entry whose only input is the position builtin declares no location,
+  // but position has no direct-parameter spelling in this emitter, so omitting the struct would
+  // leave the body referencing an input that no parameter carries. The compiler is the check that
+  // catches that; a string-shape assertion would not.
+  const std::string skipReason = FindMetalCompilerSkipReason();
+  if (!skipReason.empty()) {
+    GTEST_SKIP() << skipReason;
+  }
+  ExpectCompilesWithMetalCompiler(BuildPositionOnlyFragmentModule(), "position_only_fragment");
 }
 
 TEST(MslXcrunValidation, EmittedSolidFillCompilesWithMetalCompiler) {

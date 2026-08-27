@@ -1,6 +1,7 @@
 #include "donner/gpu/baseline/FrozenBaselinePolicy.h"
 
 #include <array>
+#include <cctype>
 #include <cstdlib>
 
 namespace donner::gpu::baseline {
@@ -75,6 +76,27 @@ std::string UnbaselinedAdapterMessage(std::string_view adapterName, std::string_
         "comparing nothing, so the pixel gate would silently stop running.";
   }
   return message;
+}
+
+std::string AdapterSlug(std::string_view adapterName, std::string_view adapterBackend) {
+  std::string source(adapterName);
+  source += ' ';
+  source += adapterBackend;
+
+  std::string slug;
+  bool pendingSeparator = false;
+  for (const char c : source) {
+    if (std::isalnum(static_cast<unsigned char>(c)) != 0) {
+      if (pendingSeparator && !slug.empty()) {
+        slug += '_';
+      }
+      pendingSeparator = false;
+      slug += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    } else {
+      pendingSeparator = true;
+    }
+  }
+  return slug.empty() ? "unknown_adapter" : slug;
 }
 
 std::string NoAdapterMessage(std::string_view gateLabel, MissingComparisonDisposition disposition) {

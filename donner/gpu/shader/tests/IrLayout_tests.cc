@@ -45,7 +45,37 @@ TEST(IrLayoutTests, ScalarAndVectorLayouts) {
   EXPECT_THAT(LayoutOrFail(IrType::Vec2f(), AddressSpace::Storage), Eq(TypeLayout{8, 8}));
   EXPECT_THAT(LayoutOrFail(IrType::Vec3f(), AddressSpace::Storage), Eq(TypeLayout{16, 12}));
   EXPECT_THAT(LayoutOrFail(IrType::Vec4f(), AddressSpace::Storage), Eq(TypeLayout{16, 16}));
+  // Both matrix types: a matCxR<f32> takes its alignment from vecR<f32> and its size from C
+  // columns at that alignment, so the two do not share a layout and cannot share a stride.
+  EXPECT_THAT(LayoutOrFail(IrType::Mat2x2f(), AddressSpace::Storage), Eq(TypeLayout{8, 16}));
+  EXPECT_THAT(LayoutOrFail(IrType::Mat2x2f(), AddressSpace::Uniform), Eq(TypeLayout{8, 16}));
   EXPECT_THAT(LayoutOrFail(IrType::Mat4x4f(), AddressSpace::Storage), Eq(TypeLayout{16, 64}));
+  EXPECT_THAT(LayoutOrFail(IrType::Mat4x4f(), AddressSpace::Uniform), Eq(TypeLayout{16, 64}));
+}
+
+TEST(IrLayoutTests, AStructHoldingMat2x2fPacksOnItsOwnAlignment) {
+  // mat2x2f aligns to 8, not to mat4x4f's 16: a scalar ahead of it advances to 8 rather than 16,
+  // and one behind it lands at 24. A layout that assumed one matrix alignment for both would put
+  // every one of these somewhere else.
+  const IrType type = GetShaderResultOrFail(IrType::Struct("Axes",
+                                                           {
+                                                               {"lead", IrType::F32()},
+                                                               {"axes", IrType::Mat2x2f()},
+                                                               {"trail", IrType::F32()},
+                                                           }),
+                                            IrType::F32());
+
+  const StructLayout storage = StructLayoutOrFail(type, AddressSpace::Storage);
+  EXPECT_THAT(storage.members, ElementsAre(OffsetIs(0), OffsetIs(8), OffsetIs(24)));
+  EXPECT_THAT(storage.alignBytes, Eq(8u));
+  EXPECT_THAT(storage.sizeBytes, Eq(32u));
+
+  // The uniform address space rounds nested structs and array elements up to 16, not a matrix and
+  // not the enclosing struct itself, so this layout is the same in both.
+  const StructLayout uniform = StructLayoutOrFail(type, AddressSpace::Uniform);
+  EXPECT_THAT(uniform.members, ElementsAre(OffsetIs(0), OffsetIs(8), OffsetIs(24)));
+  EXPECT_THAT(uniform.alignBytes, Eq(8u));
+  EXPECT_THAT(uniform.sizeBytes, Eq(32u));
 }
 
 TEST(IrLayoutTests, NonHostShareableTypesHaveNoLayout) {

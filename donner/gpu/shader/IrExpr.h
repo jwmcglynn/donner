@@ -26,8 +26,10 @@ namespace donner::gpu::shader {
 enum class BinaryOp : uint8_t {
   Add,  //!< `+`
   Sub,  //!< `-`
-  Mul,  //!< `*` (scalars, vectors, vector*scalar, mat4x4f*vec4f, mat4x4f*mat4x4f)
+  Mul,  //!< `*` (scalars, vectors, vector*scalar, mat2x2f*vec2f, mat4x4f*vec4f,
+        //!< mat4x4f*mat4x4f)
   Div,  //!< `/`
+  Mod,  //!< `%` (integer scalars only)
   Lt,   //!< `<`
   Le,   //!< `<=`
   Gt,   //!< `>`
@@ -51,6 +53,8 @@ enum class BuiltinFn : uint8_t {
   Fract,              //!< `fract(x)`
   Sqrt,               //!< `sqrt(x)`
   Length,             //!< `length(v)`
+  Dot,                //!< `dot(a, b)`
+  Normalize,          //!< `normalize(v)`
   Fwidth,             //!< `fwidth(x)` (fragment stage)
   Round,              //!< `round(x)`
   Select,             //!< `select(falseVal, trueVal, cond)`
@@ -58,6 +62,14 @@ enum class BuiltinFn : uint8_t {
   TextureLoad,        //!< `textureLoad(texture, coords, level)`
   TextureDimensions,  //!< `textureDimensions(texture)`
 };
+
+/**
+ * The builtin's spelling. WGSL, MSL, and the IR's own serialization all use it, because every
+ * builtin in scope is named identically in both target languages.
+ *
+ * @param fn Builtin to name.
+ */
+std::string_view BuiltinFnName(BuiltinFn fn);
 
 /// Ostream output operator, e.g. `clamp`. @param os Output stream. @param value Value to output.
 std::ostream& operator<<(std::ostream& os, BuiltinFn value);
@@ -222,6 +234,15 @@ ShaderResult<IrExpr> Sub(const IrExpr& lhs, const IrExpr& rhs, const RcString& l
 ShaderResult<IrExpr> Mul(const IrExpr& lhs, const IrExpr& rhs, const RcString& label = "mul");
 /// `lhs / rhs` for matching numeric scalar/vector types.
 /// @param lhs Left operand. @param rhs Right operand. @param label Diagnostic label.
+/**
+ * Integer remainder `lhs % rhs`.
+ *
+ * @param lhs Left operand (i32 or u32 scalar).
+ * @param rhs Right operand (same type as \p lhs).
+ * @param label Diagnostic label.
+ */
+ShaderResult<IrExpr> Mod(const IrExpr& lhs, const IrExpr& rhs, const RcString& label = RcString());
+
 ShaderResult<IrExpr> Div(const IrExpr& lhs, const IrExpr& rhs, const RcString& label = "div");
 
 /// `lhs < rhs` for matching numeric scalar types; yields bool.
@@ -284,6 +305,15 @@ ShaderResult<IrExpr> Index(const IrExpr& base, const IrExpr& index,
  */
 ShaderResult<IrExpr> ConstructVector(const IrType& target, std::vector<IrExpr> args,
                                      const RcString& label = "construct");
+
+/**
+ * `mat2x2<f32>` constructor from two vec2<f32> columns.
+ *
+ * @param columns Exactly two vec2<f32> columns, in column-major order.
+ * @param label Diagnostic label.
+ */
+ShaderResult<IrExpr> ConstructMat2x2f(std::vector<IrExpr> columns,
+                                      const RcString& label = RcString());
 
 /**
  * Matrix constructor: `mat4x4f(c0, c1, c2, c3)` from four vec4f columns.

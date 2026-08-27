@@ -20,9 +20,10 @@ struct Uniforms {
   xBase: f32,
   vStride: f32,
   vBandCount: u32,
-  _gridPad0: u32,
+  boundingVertexCount: u32,
   _gridPad1: u32,
   clipPolygonPlanes: array<vec4<f32>, 4>,
+  boundingVertices: array<vec4<f32>, 4>,
 }
 
 struct Band {
@@ -213,21 +214,168 @@ fn sample_in_clip_polygon(pixel_pos: vec2<f32>) -> bool {
   return true;
 }
 
+fn load_bounding_vertex(index: u32) -> vec2<f32> {
+  let pair = uniforms.boundingVertices[(index / 2u)];
+  return select(pair.xy, pair.zw, ((index % 2u) != 0u));
+}
+
+fn fan_polygon_index(vertex_index: u32) -> u32 {
+  let triangle = (vertex_index / 3u);
+  let corner = (vertex_index % 3u);
+  return select((triangle + corner), 0u, (corner == 0u));
+}
+
+fn axes_determinant(axes: mat2x2<f32>) -> f32 {
+  return ((axes[0u].x * axes[1u].y) - (axes[0u].y * axes[1u].x));
+}
+
+fn axes_are_well_conditioned(axes: mat2x2<f32>) -> bool {
+  let axis_scale = (length(axes[0u]) * length(axes[1u]));
+  let determinant = axes_determinant(axes);
+  return (((axis_scale > 0f) && (axis_scale < 1e+30f)) && (abs(determinant) > (axis_scale * 1e-06f)));
+}
+
+fn path_from_pixel_delta(axes: mat2x2<f32>, pixel_delta: vec2<f32>) -> vec2<f32> {
+  let determinant = axes_determinant(axes);
+  return (vec2<f32>(((axes[1u].y * pixel_delta.x) - (axes[1u].x * pixel_delta.y)), (((-axes[0u].y) * pixel_delta.x) + (axes[0u].x * pixel_delta.y))) / determinant);
+}
+
+fn pixel_axes(effective_mvp: mat4x4<f32>) -> mat2x2<f32> {
+  let pixel_scale = vec2<f32>((uniforms.viewport.x * 0.5f), ((-uniforms.viewport.y) * 0.5f));
+  let origin_pixel = ((effective_mvp * vec4<f32>(0f, 0f, 0f, 1f)).xy * pixel_scale);
+  let x_axis_pixel = (((effective_mvp * vec4<f32>(1f, 0f, 0f, 1f)).xy * pixel_scale) - origin_pixel);
+  let y_axis_pixel = (((effective_mvp * vec4<f32>(0f, 1f, 0f, 1f)).xy * pixel_scale) - origin_pixel);
+  return mat2x2<f32>(x_axis_pixel, y_axis_pixel);
+}
+
+fn conservative_path_aabb_expansion(axes: mat2x2<f32>) -> f32 {
+  let max_component = max(max(abs(axes[0u].x), abs(axes[0u].y)), max(abs(axes[1u].x), abs(axes[1u].y)));
+  if ((!((max_component > 0f) && (max_component < 1e+30f)))) {
+    return 0f;
+  }
+  let scaled_axes = mat2x2<f32>((axes[0u] / max_component), (axes[1u] / max_component));
+  let scaled_determinant = abs(axes_determinant(scaled_axes));
+  if ((!(scaled_determinant > 0f))) {
+    return 0f;
+  }
+  let scaled_frobenius = sqrt((dot(scaled_axes[0u], scaled_axes[0u]) + dot(scaled_axes[1u], scaled_axes[1u])));
+  let expansion = ((0.7071068f * scaled_frobenius) / (max_component * scaled_determinant));
+  return select(0f, expansion, ((expansion > 0f) && (expansion < 1e+30f)));
+}
+
+fn needs_device_aabb_fallback(axes: mat2x2<f32>) -> bool {
+  if ((!axes_are_well_conditioned(axes))) {
+    return false;
+  }
+  let orientation = select(-1f, 1f, (axes_determinant(axes) > 0f));
+  for (var i: u32 = 0u; (i < uniforms.boundingVertexCount); i = (i + 1u)) {
+    let previous = load_bounding_vertex((((i + uniforms.boundingVertexCount) - 1u) % uniforms.boundingVertexCount));
+    let position = load_bounding_vertex(i);
+    let next = load_bounding_vertex(((i + 1u) % uniforms.boundingVertexCount));
+    let incoming = (axes * (position - previous));
+    let outgoing = (axes * (next - position));
+    let incoming_length = length(incoming);
+    let outgoing_length = length(outgoing);
+    if ((!((((incoming_length > 1e-06f) && (incoming_length < 1e+30f)) && (outgoing_length > 1e-06f)) && (outgoing_length < 1e+30f)))) {
+      return true;
+    }
+    let incoming_edge = (incoming / incoming_length);
+    let outgoing_edge = (outgoing / outgoing_length);
+    let incoming_normal = (orientation * vec2<f32>(incoming_edge.y, (-incoming_edge.x)));
+    let outgoing_normal = (orientation * vec2<f32>(outgoing_edge.y, (-outgoing_edge.x)));
+    let denominator = (1f + dot(incoming_normal, outgoing_normal));
+    if ((!(denominator > 1e-06f))) {
+      return true;
+    }
+    let miter = ((0.5f * (incoming_normal + outgoing_normal)) / denominator);
+    if ((!(length(miter) <= 2f))) {
+      return true;
+    }
+  }
+  return false;
+}
+
+fn load_device_aabb_vertex(effective_mvp: mat4x4<f32>, axes: mat2x2<f32>, polygon_index: u32) -> vec2<f32> {
+  let pixel_scale = vec2<f32>((uniforms.viewport.x * 0.5f), ((-uniforms.viewport.y) * 0.5f));
+  let origin_pixel = ((effective_mvp * vec4<f32>(0f, 0f, 0f, 1f)).xy * pixel_scale);
+  var pixel_min: vec2<f32> = vec2<f32>(1e+30f, 1e+30f);
+  var pixel_max: vec2<f32> = vec2<f32>(-1e+30f, -1e+30f);
+  for (var i: u32 = 0u; (i < uniforms.boundingVertexCount); i = (i + 1u)) {
+    let pixel = (origin_pixel + (axes * load_bounding_vertex(i)));
+    pixel_min = min(pixel_min, pixel);
+    pixel_max = max(pixel_max, pixel);
+  }
+  let left = ((polygon_index == 0u) || (polygon_index == 3u));
+  let top = (polygon_index < 2u);
+  let pixel_corner = vec2<f32>(select((pixel_max.x + 0.5f), (pixel_min.x - 0.5f), left), select((pixel_max.y + 0.5f), (pixel_min.y - 0.5f), top));
+  return path_from_pixel_delta(axes, (pixel_corner - origin_pixel));
+}
+
+fn load_path_aabb_vertex(expansion: f32, polygon_index: u32) -> vec2<f32> {
+  var path_min: vec2<f32> = vec2<f32>(1e+30f, 1e+30f);
+  var path_max: vec2<f32> = vec2<f32>(-1e+30f, -1e+30f);
+  for (var i: u32 = 0u; (i < uniforms.boundingVertexCount); i = (i + 1u)) {
+    let position = load_bounding_vertex(i);
+    path_min = min(path_min, position);
+    path_max = max(path_max, position);
+  }
+  let left = ((polygon_index == 0u) || (polygon_index == 3u));
+  let lower = (polygon_index < 2u);
+  return vec2<f32>(select((path_max.x + expansion), (path_min.x - expansion), left), select((path_max.y + expansion), (path_min.y - expansion), lower));
+}
+
+fn dilated_bounding_vertex(axes: mat2x2<f32>, polygon_index: u32) -> vec2<f32> {
+  let count = uniforms.boundingVertexCount;
+  let previous_index = (((polygon_index + count) - 1u) % count);
+  let next_index = ((polygon_index + 1u) % count);
+  let previous = load_bounding_vertex(previous_index);
+  let position = load_bounding_vertex(polygon_index);
+  let next = load_bounding_vertex(next_index);
+  if ((!axes_are_well_conditioned(axes))) {
+    return position;
+  }
+  let previous_edge = normalize((axes * (position - previous)));
+  let next_edge = normalize((axes * (next - position)));
+  let orientation = select(-1f, 1f, (axes_determinant(axes) > 0f));
+  let previous_normal = (orientation * vec2<f32>(previous_edge.y, (-previous_edge.x)));
+  let next_normal = (orientation * vec2<f32>(next_edge.y, (-next_edge.x)));
+  let miter_denominator = (1f + dot(previous_normal, next_normal));
+  let pixel_delta = ((0.5f * (previous_normal + next_normal)) / miter_denominator);
+  return (position + path_from_pixel_delta(axes, pixel_delta));
+}
+
+fn effective_bounding_vertex(effective_mvp: mat4x4<f32>, vertex_index: u32) -> vec2<f32> {
+  let axes = pixel_axes(effective_mvp);
+  let path_aabb_expansion = conservative_path_aabb_expansion(axes);
+  let use_path_aabb = ((!axes_are_well_conditioned(axes)) && (path_aabb_expansion > 0f));
+  let use_device_aabb = needs_device_aabb_fallback(axes);
+  let use_aabb = (use_path_aabb || use_device_aabb);
+  let effective_count = select(uniforms.boundingVertexCount, 4u, use_aabb);
+  let triangle = (vertex_index / 3u);
+  var polygon_index: u32 = 0u;
+  if ((triangle < (effective_count - 2u))) {
+    polygon_index = fan_polygon_index(vertex_index);
+  }
+  if (use_path_aabb) {
+    return load_path_aabb_vertex(path_aabb_expansion, polygon_index);
+  }
+  if (use_device_aabb) {
+    return load_device_aabb_vertex(effective_mvp, axes, polygon_index);
+  }
+  return dilated_bounding_vertex(axes, polygon_index);
+}
+
 struct vs_main_Output {
   @builtin(position) clip_pos: vec4<f32>,
   @location(0) sample_pos: vec2<f32>,
 }
 
 @vertex
-fn vs_main(@builtin(instance_index) instance_index: u32, @location(0) pos: vec2<f32>, @location(1) normal: vec2<f32>, @location(2) bandIndex: u32) -> vs_main_Output {
+fn vs_main(@builtin(vertex_index) vertex_index: u32, @builtin(instance_index) instance_index: u32) -> vs_main_Output {
   let xf = instanceTransforms[instance_index];
   let instance_mat = mat4x4<f32>(vec4<f32>(xf.row0.x, xf.row1.x, 0f, 0f), vec4<f32>(xf.row0.y, xf.row1.y, 0f, 0f), vec4<f32>(0f, 0f, 1f, 0f), vec4<f32>(xf.row0.z, xf.row1.z, 0f, 1f));
   let effective_mvp = (uniforms.mvp * instance_mat);
-  let world_normal = (effective_mvp * vec4<f32>(normal, 0f, 0f)).xy;
-  let viewport_normal = ((world_normal * uniforms.viewport) * 0.5f);
-  let viewport_len = length(viewport_normal);
-  let d = (1f / max(viewport_len, 0.001f));
-  let dilated = (pos + (normal * d));
+  let dilated = effective_bounding_vertex(effective_mvp, vertex_index);
   return vs_main_Output((effective_mvp * vec4<f32>(dilated, 0f, 1f)), dilated);
 }
 

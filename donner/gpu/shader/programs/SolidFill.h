@@ -11,10 +11,11 @@ namespace donner::gpu::shader::programs {
  * Builds the complete solid-fill IR module: a faithful semantic re-expression of the Donner-owned
  * `donner/svg/renderer/geode/shaders/slug_fill.wgsl` (the analytic dual-ray coverage algorithm).
  *
- * Contents mirror the WGSL shader function by function: the 288-byte `Uniforms` struct, `Band`
+ * Contents mirror the WGSL shader function by function: the 352-byte `Uniforms` struct, `Band`
  * (32 bytes) and `InstanceTransform` (32 bytes) storage layouts, all 12 bindings at group 0 with
  * identical binding numbers, the `kNoBand` sentinel constant, the `vs_main` vertex stage
- * (per-instance matrix construction and dynamic half-pixel dilation), and the `fs_main` fragment
+ * (per-instance matrix construction, the convex bounding fan expanded from `vertex_index`, and
+ * its per-edge half-pixel dilation with both AABB fallbacks), and the `fs_main` fragment
  * stage (dense band-grid lookup, `accumulateHoriz`/`accumulateVert` analytic ray coverage with
  * `owns_axis_sample` and the Citardauq-form `solve_quadratic`, `calc_coverage` blending,
  * non-zero and even-odd fill rules, convex clip-polygon planes, clip-mask coverage, and the

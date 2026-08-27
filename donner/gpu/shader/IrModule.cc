@@ -18,6 +18,28 @@ std::string ToString(const WorkgroupSize& size) {
   return std::format("{}x{}x{}", size.x, size.y, size.z);
 }
 
+/// Validates a vertex entry point's inputs: every parameter carries either a location or one of
+/// the two vertex builtins, and a builtin one is u32.
+ShaderStatus ValidateVertexInputs(const std::vector<IrParam>& params, const RcString& label) {
+  for (const IrParam& param : params) {
+    if (!param.builtin) {
+      if (!param.location) {
+        return Err(std::format("vertex input {} needs a location or builtin", param.name.str()),
+                   label);
+      }
+      continue;
+    }
+    const bool vertexBuiltin = *param.builtin == BuiltinInput::VertexIndex ||
+                               *param.builtin == BuiltinInput::InstanceIndex;
+    if (!vertexBuiltin || !(param.type == IrType::U32())) {
+      return Err(std::format("vertex builtin input {} must be vertex_index or instance_index: u32",
+                             param.name.str()),
+                 label);
+    }
+  }
+  return OkShaderStatus();
+}
+
 /// Validates entry point IO: unique locations and allowed types (numeric scalars/vectors).
 template <typename IoList>
 ShaderStatus ValidateStageIo(const IoList& io, const RcString& label) {
@@ -941,17 +963,8 @@ ShaderResult<FunctionBuilder> ModuleBuilder::createVertexEntryPoint(
   if (ShaderStatus status = ValidateStageIo(outputs, name); status.hasError()) {
     return std::move(status).error();
   }
-  for (const IrParam& param : params) {
-    if (param.builtin) {
-      if (*param.builtin != BuiltinInput::InstanceIndex || !(param.type == IrType::U32())) {
-        return ShaderError{
-            std::format("vertex builtin input {} must be instance_index: u32", param.name.str()),
-            name};
-      }
-    } else if (!param.location) {
-      return ShaderError{
-          std::format("vertex input {} needs a location or builtin", param.name.str()), name};
-    }
+  if (ShaderStatus status = ValidateVertexInputs(params, name); status.hasError()) {
+    return std::move(status).error();
   }
   size_t positionCount = 0;
   for (const IrOutputMember& output : outputs) {

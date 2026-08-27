@@ -95,6 +95,7 @@ std::string TypeToMsl(const IrType& type) {
       }
       return std::format("{}{}", element, type.vectorSize());
     }
+    case IrType::Kind::Matrix2x2f: return "float2x2";
     case IrType::Kind::Matrix4x4f: return "float4x4";
     case IrType::Kind::SizedArray:
       // Only valid as a struct member; spelled as a C array at the member site.
@@ -108,10 +109,48 @@ std::string TypeToMsl(const IrType& type) {
   return "float";
 }
 
-/// True for the stages whose IR parameters arrive through a generated `[[stage_in]]` struct.
-/// Compute entry points take their builtins as direct kernel parameters instead.
-bool HasStageInStruct(StageKind stage) {
+/// True for the stages that declare generated stage IO structs at all.
+bool HasStageIoStructs(StageKind stage) {
   return stage == StageKind::Vertex || stage == StageKind::Fragment;
+}
+
+/**
+ * The entry point parameter \p builtin is taken as, or nullopt when it arrives through the
+ * generated `[[stage_in]]` struct instead.
+ *
+ * This is the single place that decides which builtins are direct parameters. The struct
+ * predicate and the prologue both read it, because a builtin the predicate treats as direct while
+ * the parameter list does not emit is one the body references and nothing declares.
+ *
+ * @param builtin Builtin input to spell.
+ * @param name Parameter name to spell it with.
+ */
+std::optional<std::string> DirectEntryPointParameter(BuiltinInput builtin, const RcString& name) {
+  switch (builtin) {
+    case BuiltinInput::VertexIndex: return std::format("uint {} [[vertex_id]]", name.str());
+    case BuiltinInput::InstanceIndex: return std::format("uint {} [[instance_id]]", name.str());
+    case BuiltinInput::GlobalInvocationId:
+      return std::format("uint3 {} [[thread_position_in_grid]]", name.str());
+    // A fragment's position is a [[position]] member of the stage-in struct here.
+    case BuiltinInput::Position: return std::nullopt;
+  }
+  return std::nullopt;
+}
+
+/// True when \p function needs a generated `[[stage_in]]` struct, which is exactly when some
+/// input arrives through one. Metal rejects an empty struct, so a stage whose every input is a
+/// direct builtin parameter declares none; anything else, a location or a builtin with no direct
+/// spelling, keeps it.
+bool HasStageInStruct(const IrFunction& function) {
+  if (!HasStageIoStructs(function.stage)) {
+    return false;
+  }
+  for (const IrParam& param : function.params) {
+    if (!param.builtin || !DirectEntryPointParameter(*param.builtin, param.name).has_value()) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /// Rounds \p value up to the next multiple of \p alignment.
@@ -145,6 +184,7 @@ std::optional<MslLayout> ComputeMslLayout(const IrType& type) {
         default: return std::nullopt;
       }
     }
+    case IrType::Kind::Matrix2x2f: return MslLayout{8, 16};
     case IrType::Kind::Matrix4x4f: return MslLayout{16, 64};
     case IrType::Kind::SizedArray: {
       const std::optional<MslLayout> element = ComputeMslLayout(type.elementType());
@@ -343,6 +383,7 @@ std::string Emitter::exprToMsl(const IrExpr& expr) {
         case BinaryOp::Sub: op = "-"; break;
         case BinaryOp::Mul: op = "*"; break;
         case BinaryOp::Div: op = "/"; break;
+        case BinaryOp::Mod: op = "%"; break;
         case BinaryOp::Lt: op = "<"; break;
         case BinaryOp::Le: op = "<="; break;
         case BinaryOp::Gt: op = ">"; break;
@@ -392,21 +433,8 @@ std::string Emitter::exprToMsl(const IrExpr& expr) {
         default: break;
       }
 
-      std::string name;
-      switch (node.builtin) {
-        case BuiltinFn::Abs: name = "abs"; break;
-        case BuiltinFn::Min: name = "min"; break;
-        case BuiltinFn::Max: name = "max"; break;
-        case BuiltinFn::Clamp: name = "clamp"; break;
-        case BuiltinFn::Saturate: name = "saturate"; break;
-        case BuiltinFn::Fract: name = "fract"; break;
-        case BuiltinFn::Sqrt: name = "sqrt"; break;
-        case BuiltinFn::Length: name = "length"; break;
-        case BuiltinFn::Fwidth: name = "fwidth"; break;
-        case BuiltinFn::Round: name = "round"; break;
-        default: name = "abs"; break;
-      }
-      std::string result = name + "(";
+      // Every remaining builtin is spelled the same in MSL as in WGSL.
+      std::string result = std::string(BuiltinFnName(node.builtin)) + "(";
       for (size_t i = 0; i < node.children.size(); ++i) {
         if (i > 0) {
           result += ", ";
@@ -438,13 +466,13 @@ void Emitter::emitStatement(const IrStmt& statement, const IrFunction& function)
   switch (statement.kind()) {
     case IrStmt::Kind::Let:
       check(CheckMslIdentifier(data.name, "let"));
-      check(checkNoImplicitShadow(data.name, "let", HasStageInStruct(function.stage)));
+      check(checkNoImplicitShadow(data.name, "let", HasStageInStruct(function)));
       line(std::format("const {} {} = {};", TypeToMsl(data.exprs[0].type()), data.name.str(),
                        exprToMsl(data.exprs[0])));
       return;
     case IrStmt::Kind::Var:
       check(CheckMslIdentifier(data.name, "var"));
-      check(checkNoImplicitShadow(data.name, "var", HasStageInStruct(function.stage)));
+      check(checkNoImplicitShadow(data.name, "var", HasStageInStruct(function)));
       if (!data.exprs.empty()) {
         line(std::format("{} {} = {};", TypeToMsl(*data.declaredType), data.name.str(),
                          exprToMsl(data.exprs[0])));
@@ -486,7 +514,7 @@ void Emitter::emitForStatement(const IrStmt::Data& data, const IrFunction& funct
   if (data.init) {
     const IrStmt::Data& init = data.init->data();
     check(CheckMslIdentifier(init.name, "for init"));
-    check(checkNoImplicitShadow(init.name, "for init", HasStageInStruct(function.stage)));
+    check(checkNoImplicitShadow(init.name, "for init", HasStageInStruct(function)));
     header += std::format("{} {} = {}", TypeToMsl(*init.declaredType), init.name.str(),
                           exprToMsl(init.exprs[0]));
   }
@@ -753,22 +781,25 @@ void Emitter::emitStageIoStructs(const IrFunction& function) {
 
   // Generated stage-in struct: location params become [[attribute(N)]] (vertex) or
   // [[user(locnN)]] (fragment); the fragment position builtin is a [[position]] member. The
-  // instance_index builtin is a direct entry point parameter, not a stage-in field.
-  line(std::format("struct {} {{", InputStructName(function)));
-  ++indent_;
-  for (const IrParam& param : function.params) {
-    check(CheckMslIdentifier(param.name, "entry point input"));
-    if (param.builtin && *param.builtin == BuiltinInput::Position) {
-      line(std::format("{} {} [[position]];", TypeToMsl(param.type), param.name.str()));
-    } else if (param.location) {
-      const std::string annotation = function.stage == StageKind::Vertex
-                                         ? std::format("[[attribute({})]]", *param.location)
-                                         : std::format("[[user(locn{})]]", *param.location);
-      line(std::format("{} {} {};", TypeToMsl(param.type), param.name.str(), annotation));
+  // vertex_index and instance_index builtins are direct entry point parameters, not stage-in
+  // fields, so a stage whose only inputs are those declares no struct at all.
+  if (HasStageInStruct(function)) {
+    line(std::format("struct {} {{", InputStructName(function)));
+    ++indent_;
+    for (const IrParam& param : function.params) {
+      check(CheckMslIdentifier(param.name, "entry point input"));
+      if (param.builtin && *param.builtin == BuiltinInput::Position) {
+        line(std::format("{} {} [[position]];", TypeToMsl(param.type), param.name.str()));
+      } else if (param.location) {
+        const std::string annotation = function.stage == StageKind::Vertex
+                                           ? std::format("[[attribute({})]]", *param.location)
+                                           : std::format("[[user(locn{})]]", *param.location);
+        line(std::format("{} {} {};", TypeToMsl(param.type), param.name.str(), annotation));
+      }
     }
+    --indent_;
+    line("};");
   }
-  --indent_;
-  line("};");
   blank();
 
   line(std::format("struct {} {{", OutputStructName(function)));
@@ -812,14 +843,15 @@ std::string Emitter::signaturePrefix(const IrFunction& function) {
 
 std::vector<std::string> Emitter::entryPointParameters(const IrFunction& function) {
   std::vector<std::string> parameters;
-  if (HasStageInStruct(function.stage)) {
+  if (HasStageInStruct(function)) {
     parameters.push_back(std::format("{} in [[stage_in]]", InputStructName(function)));
   }
   for (const IrParam& param : function.params) {
-    if (param.builtin && *param.builtin == BuiltinInput::InstanceIndex) {
-      parameters.push_back(std::format("uint {} [[instance_id]]", param.name.str()));
-    } else if (param.builtin && *param.builtin == BuiltinInput::GlobalInvocationId) {
-      parameters.push_back(std::format("uint3 {} [[thread_position_in_grid]]", param.name.str()));
+    if (!param.builtin) {
+      continue;
+    }
+    if (std::optional<std::string> direct = DirectEntryPointParameter(*param.builtin, param.name)) {
+      parameters.push_back(*std::move(direct));
     }
   }
   // Every module binding is declared on every entry point; a declared-but-unbound argument slot
@@ -859,17 +891,18 @@ std::string Emitter::buildParameterList(const IrFunction& function) {
 }
 
 void Emitter::emitEntryPointPrologue(const IrFunction& function) {
-  if (HasStageInStruct(function.stage)) {
+  if (HasStageInStruct(function)) {
     // Alias stage-in fields to their IR names so references emit unchanged.
     for (const IrParam& param : function.params) {
       check(checkNoImplicitShadow(param.name, "entry point input", /*insideEntryPoint=*/true));
-      if (param.builtin && *param.builtin == BuiltinInput::InstanceIndex) {
+      if (param.builtin && DirectEntryPointParameter(*param.builtin, param.name)) {
         continue;  // Already a direct parameter.
       }
       line(std::format("const {} {} = in.{};", TypeToMsl(param.type), param.name.str(),
                        param.name.str()));
     }
-  } else if (function.stage == StageKind::Compute) {
+  } else {
+    // Compute, and any vertex stage whose inputs are all direct builtin parameters.
     for (const IrParam& param : function.params) {
       check(checkNoImplicitShadow(param.name, "entry point input", /*insideEntryPoint=*/false));
     }
@@ -879,7 +912,7 @@ void Emitter::emitEntryPointPrologue(const IrFunction& function) {
 void Emitter::emitFunction(const IrFunction& function) {
   check(CheckMslIdentifier(function.name, "function"));
 
-  if (HasStageInStruct(function.stage)) {
+  if (HasStageIoStructs(function.stage)) {
     emitStageIoStructs(function);
   }
 

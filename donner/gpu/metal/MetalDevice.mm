@@ -426,6 +426,11 @@ Result<std::vector<uint8_t>> MetalDevice::readBackBuffer(const Buffer& buffer) {
   return std::vector<uint8_t>(contents, contents + metalBuffer.length);
 }
 
+std::string MetalDevice::adapterName() const {
+  NSString* name = [impl_->device name];
+  return name != nil ? std::string([name UTF8String]) : std::string();
+}
+
 std::string MetalDevice::lastErrorForTest() const {
   CompletionState& state = *impl_->completionState;
   std::lock_guard<std::mutex> lock(state.mutex);

@@ -6,6 +6,7 @@
 #include <string_view>
 #include <utility>
 
+#include "donner/gpu/baseline/FrozenBaselinePolicy.h"
 #include "donner/svg/renderer/RendererImageIO.h"
 #include "donner/svg/renderer/geode/GeoEncoder.h"
 #include "donner/svg/renderer/geode/GeodeCallbackState.h"
@@ -230,21 +231,7 @@ std::string CaptureOneScene(WgpuBaselineCapturer& capturer, const CorpusScene& s
 }  // namespace
 
 std::string EnvironmentSlug(const CaptureEnvironment& environment) {
-  const std::string source = environment.adapterName + " " + environment.adapterBackend;
-  std::string slug;
-  bool pendingSeparator = false;
-  for (const char c : source) {
-    if (std::isalnum(static_cast<unsigned char>(c)) != 0) {
-      if (pendingSeparator && !slug.empty()) {
-        slug += '_';
-      }
-      pendingSeparator = false;
-      slug += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-    } else {
-      pendingSeparator = true;
-    }
-  }
-  return slug.empty() ? "unknown_adapter" : slug;
+  return AdapterSlug(environment.adapterName, environment.adapterBackend);
 }
 
 WgpuBaselineCapturer::WgpuBaselineCapturer(std::unique_ptr<geode::GeodeDevice> device)

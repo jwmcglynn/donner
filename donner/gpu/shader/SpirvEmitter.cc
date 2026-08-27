@@ -87,9 +87,13 @@ constexpr uint32_t kOpFMul = 133;
 constexpr uint32_t kOpUDiv = 134;
 constexpr uint32_t kOpSDiv = 135;
 constexpr uint32_t kOpFDiv = 136;
+constexpr uint32_t kOpUMod = 137;
+constexpr uint32_t kOpSRem = 138;
+constexpr uint32_t kOpFRem = 140;
 constexpr uint32_t kOpVectorTimesScalar = 142;
 constexpr uint32_t kOpMatrixTimesVector = 145;
 constexpr uint32_t kOpMatrixTimesMatrix = 146;
+constexpr uint32_t kOpDot = 148;
 constexpr uint32_t kOpLogicalEqual = 164;
 constexpr uint32_t kOpLogicalNotEqual = 165;
 constexpr uint32_t kOpLogicalOr = 166;
@@ -139,6 +143,7 @@ constexpr uint32_t kGlslFClamp = 43;
 constexpr uint32_t kGlslUClamp = 44;
 constexpr uint32_t kGlslSClamp = 45;
 constexpr uint32_t kGlslLength = 66;
+constexpr uint32_t kGlslNormalize = 69;
 
 // Storage classes.
 constexpr uint32_t kStorageClassUniformConstant = 0;
@@ -166,6 +171,7 @@ constexpr uint32_t kDecorationOffset = 35;
 constexpr uint32_t kBuiltInPosition = 0;
 constexpr uint32_t kBuiltInFragCoord = 15;
 constexpr uint32_t kBuiltInGlobalInvocationId = 28;
+constexpr uint32_t kBuiltInVertexIndex = 42;
 constexpr uint32_t kBuiltInInstanceIndex = 43;
 
 // Execution models, modes, and module-level enums.
@@ -221,14 +227,18 @@ uint32_t SwizzleComponentIndex(char component) {
   }
 }
 
-/// True if \p type is or contains a matrix (the struct member holding it needs ColMajor and
-/// MatrixStride decorations in laid-out buffer types).
-bool ContainsMatrix(const IrType& type) {
+/// Column stride, in bytes, of the matrix \p type is or contains, or nullopt when it holds none.
+///
+/// A struct member holding a matrix needs ColMajor and MatrixStride decorations in a laid-out
+/// buffer type, and the stride is the column's alignment: 8 for mat2x2f's vec2f columns, 16 for
+/// mat4x4f's vec4f columns. One value for both would decorate one of them wrongly.
+std::optional<uint32_t> MatrixColumnStride(const IrType& type) {
   switch (type.kind()) {
-    case IrType::Kind::Matrix4x4f: return true;
+    case IrType::Kind::Matrix2x2f: return 8;
+    case IrType::Kind::Matrix4x4f: return 16;
     case IrType::Kind::SizedArray:
-    case IrType::Kind::RuntimeArray: return ContainsMatrix(type.elementType());
-    default: return false;
+    case IrType::Kind::RuntimeArray: return MatrixColumnStride(type.elementType());
+    default: return std::nullopt;
   }
 }
 
@@ -272,6 +282,7 @@ uint32_t BinaryOpcode(BinaryOp op, ScalarKind operandKind) {
     case BinaryOp::Sub: return isFloat ? kOpFSub : kOpISub;
     case BinaryOp::Mul: return isFloat ? kOpFMul : kOpIMul;
     case BinaryOp::Div: return SelectByScalarKind(operandKind, kOpFDiv, kOpSDiv, kOpUDiv);
+    case BinaryOp::Mod: return SelectByScalarKind(operandKind, kOpFRem, kOpSRem, kOpUMod);
     case BinaryOp::Lt:
       return SelectByScalarKind(operandKind, kOpFOrdLessThan, kOpSLessThan, kOpULessThan);
     case BinaryOp::Le:
@@ -310,6 +321,7 @@ bool IsVectorScalarBroadcast(BinaryOp op, const IrType& lhsType, const IrType& r
 /// @param builtin IR builtin input.
 uint32_t BuiltInValue(BuiltinInput builtin) {
   switch (builtin) {
+    case BuiltinInput::VertexIndex: return kBuiltInVertexIndex;
     case BuiltinInput::InstanceIndex: return kBuiltInInstanceIndex;
     case BuiltinInput::Position: return kBuiltInFragCoord;
     case BuiltinInput::GlobalInvocationId: return kBuiltInGlobalInvocationId;
@@ -387,6 +399,8 @@ private:
   uint32_t typeScalar(ScalarKind kind);
   uint32_t typeVector(ScalarKind kind, uint32_t size);
   uint32_t typeBoolVector(uint32_t size);
+  uint32_t typeMatrix2x2f();
+
   uint32_t typeMatrix4x4f();
   uint32_t typeImage2dF32();
   /// Storage-image type for a write-only 2D storage texture, keyed by its SPIR-V image format.
@@ -416,6 +430,11 @@ private:
   uint32_t laidStructTypeId(const IrType& type, AddressSpace space);
   /// Block-decorated buffer root struct (distinct from the non-Block laid-out type).
   uint32_t blockStructId(const IrType& structType, AddressSpace space);
+
+  /// Emits the Offset decoration for every member of \p structId, plus ColMajor and the member's
+  /// own MatrixStride wherever the member is or contains a matrix.
+  void decorateStructMembers(uint32_t structId, std::span<const IrType::Member> members,
+                             const StructLayout& layout);
   /// Synthesized Block struct wrapping a runtime-array storage buffer root at member 0.
   uint32_t runtimeArrayBlockId(uint32_t runtimeArrayTypeId);
 
@@ -670,6 +689,16 @@ uint32_t Emitter::typeBoolVector(uint32_t size) {
   return typeVector(ScalarKind::Bool, size);
 }
 
+uint32_t Emitter::typeMatrix2x2f() {
+  const uint32_t columnId = typeVector(ScalarKind::F32, 2);
+  const std::string key = "mat2x2f";
+  if (const uint32_t id = cached(key)) return id;
+  const uint32_t id = newId();
+  Instr(globals_, kOpTypeMatrix, {id, columnId, 2});
+  typeIds_[key] = id;
+  return id;
+}
+
 uint32_t Emitter::typeMatrix4x4f() {
   const uint32_t columnId = typeVector(ScalarKind::F32, 4);
   const std::string key = "mat4x4f";
@@ -753,6 +782,7 @@ uint32_t Emitter::plainTypeId(const IrType& type) {
   switch (type.kind()) {
     case IrType::Kind::Scalar: return typeScalar(type.scalarKind());
     case IrType::Kind::Vector: return typeVector(type.scalarKind(), type.vectorSize());
+    case IrType::Kind::Matrix2x2f: return typeMatrix2x2f();
     case IrType::Kind::Matrix4x4f: return typeMatrix4x4f();
     case IrType::Kind::Texture2dF32: return typeImage2dF32();
     case IrType::Kind::WriteOnlyStorageTexture2d:
@@ -800,6 +830,7 @@ uint32_t Emitter::laidTypeId(const IrType& type, AddressSpace space) {
   switch (type.kind()) {
     case IrType::Kind::Scalar:
     case IrType::Kind::Vector:
+    case IrType::Kind::Matrix2x2f:
     case IrType::Kind::Matrix4x4f:
       // Layout decorations for these live on the enclosing struct member; the types are shared
       // with plain use.
@@ -868,17 +899,23 @@ uint32_t Emitter::laidStructTypeId(const IrType& type, AddressSpace space) {
   std::vector<uint32_t> operands = {id};
   operands.insert(operands.end(), memberIds.begin(), memberIds.end());
   InstrV(globals_, kOpTypeStruct, operands);
+  decorateStructMembers(id, members, layout.result());
+  typeIds_[key] = id;
+  return id;
+}
+
+void Emitter::decorateStructMembers(uint32_t structId, std::span<const IrType::Member> members,
+                                    const StructLayout& layout) {
   for (size_t i = 0; i < members.size(); ++i) {
     const uint32_t memberIndex = static_cast<uint32_t>(i);
     Instr(decorations_, kOpMemberDecorate,
-          {id, memberIndex, kDecorationOffset, layout.result().members[i].offsetBytes});
-    if (ContainsMatrix(members[i].type)) {
-      Instr(decorations_, kOpMemberDecorate, {id, memberIndex, kDecorationColMajor});
-      Instr(decorations_, kOpMemberDecorate, {id, memberIndex, kDecorationMatrixStride, 16});
+          {structId, memberIndex, kDecorationOffset, layout.members[i].offsetBytes});
+    if (const std::optional<uint32_t> stride = MatrixColumnStride(members[i].type)) {
+      Instr(decorations_, kOpMemberDecorate, {structId, memberIndex, kDecorationColMajor});
+      Instr(decorations_, kOpMemberDecorate,
+            {structId, memberIndex, kDecorationMatrixStride, *stride});
     }
   }
-  typeIds_[key] = id;
-  return id;
 }
 
 uint32_t Emitter::blockStructId(const IrType& structType, AddressSpace space) {
@@ -900,15 +937,7 @@ uint32_t Emitter::blockStructId(const IrType& structType, AddressSpace space) {
   operands.insert(operands.end(), memberIds.begin(), memberIds.end());
   InstrV(globals_, kOpTypeStruct, operands);
   Instr(decorations_, kOpDecorate, {id, kDecorationBlock});
-  for (size_t i = 0; i < members.size(); ++i) {
-    const uint32_t memberIndex = static_cast<uint32_t>(i);
-    Instr(decorations_, kOpMemberDecorate,
-          {id, memberIndex, kDecorationOffset, layout.result().members[i].offsetBytes});
-    if (ContainsMatrix(members[i].type)) {
-      Instr(decorations_, kOpMemberDecorate, {id, memberIndex, kDecorationColMajor});
-      Instr(decorations_, kOpMemberDecorate, {id, memberIndex, kDecorationMatrixStride, 16});
-    }
-  }
+  decorateStructMembers(id, members, layout.result());
   typeIds_[key] = id;
   return id;
 }
@@ -1806,9 +1835,11 @@ uint32_t Emitter::emitMatrixProduct(const IrExpr::Node& node) {
   const uint32_t rhsId = emitValue(node.children[1]);
   const uint32_t typeId = plainTypeId(node.type);
   const uint32_t valueId = newId();
-  const uint32_t opcode = node.children[1].type().kind() == IrType::Kind::Matrix4x4f
-                              ? kOpMatrixTimesMatrix
-                              : kOpMatrixTimesVector;
+  const IrType::Kind rhsKind = node.children[1].type().kind();
+  const uint32_t opcode =
+      (rhsKind == IrType::Kind::Matrix2x2f || rhsKind == IrType::Kind::Matrix4x4f)
+          ? kOpMatrixTimesMatrix
+          : kOpMatrixTimesVector;
   Instr(functions_, opcode, {typeId, valueId, lhsId, rhsId});
   return valueId;
 }
@@ -1841,7 +1872,8 @@ uint32_t Emitter::emitBinary(const IrExpr::Node& node) {
   const IrType& lhsType = node.children[0].type();
   const IrType& rhsType = node.children[1].type();
 
-  if (node.binaryOp == BinaryOp::Mul && lhsType.kind() == IrType::Kind::Matrix4x4f) {
+  if (node.binaryOp == BinaryOp::Mul &&
+      (lhsType.kind() == IrType::Kind::Matrix2x2f || lhsType.kind() == IrType::Kind::Matrix4x4f)) {
     return emitMatrixProduct(node);
   }
   if (IsVectorScalarBroadcast(node.binaryOp, lhsType, rhsType)) {
@@ -1948,20 +1980,38 @@ uint32_t Emitter::emitSaturateBuiltin(const IrExpr::Node& node, uint32_t typeId)
   return emitExtInst(typeId, kGlslFClamp, {argId, zeroId, oneId});
 }
 
+/// GLSL.std.450 instruction lowering a builtin that takes one argument and returns it unchanged
+/// in shape, or nullopt for a builtin that needs its own emitter.
+std::optional<uint32_t> SingleArgumentGlslInstruction(BuiltinFn fn) {
+  switch (fn) {
+    case BuiltinFn::Fract: return kGlslFract;
+    case BuiltinFn::Sqrt: return kGlslSqrt;
+    case BuiltinFn::Length: return kGlslLength;
+    case BuiltinFn::Normalize: return kGlslNormalize;
+    // WGSL round() mandates round-half-to-even; GLSL.std.450 Round leaves halfway cases
+    // undefined, so RoundEven is the correct lowering.
+    case BuiltinFn::Round: return kGlslRoundEven;
+    default: return std::nullopt;
+  }
+}
+
 uint32_t Emitter::emitMathBuiltin(const IrExpr::Node& node, uint32_t typeId) {
+  if (const std::optional<uint32_t> instruction = SingleArgumentGlslInstruction(node.builtin)) {
+    return emitExtInst(typeId, *instruction, {emitValue(node.children[0])});
+  }
   switch (node.builtin) {
     case BuiltinFn::Abs: return emitAbsBuiltin(node, typeId);
     case BuiltinFn::Min:
     case BuiltinFn::Max: return emitMinMaxBuiltin(node, typeId);
     case BuiltinFn::Clamp: return emitClampBuiltin(node, typeId);
     case BuiltinFn::Saturate: return emitSaturateBuiltin(node, typeId);
-    case BuiltinFn::Fract: return emitExtInst(typeId, kGlslFract, {emitValue(node.children[0])});
-    case BuiltinFn::Sqrt: return emitExtInst(typeId, kGlslSqrt, {emitValue(node.children[0])});
-    case BuiltinFn::Length: return emitExtInst(typeId, kGlslLength, {emitValue(node.children[0])});
-    case BuiltinFn::Round:
-      // WGSL round() mandates round-half-to-even; GLSL.std.450 Round leaves halfway cases
-      // undefined, so RoundEven is the correct lowering.
-      return emitExtInst(typeId, kGlslRoundEven, {emitValue(node.children[0])});
+    case BuiltinFn::Dot: {
+      const uint32_t lhsId = emitValue(node.children[0]);
+      const uint32_t rhsId = emitValue(node.children[1]);
+      const uint32_t valueId = newId();
+      Instr(functions_, kOpDot, {typeId, valueId, lhsId, rhsId});
+      return valueId;
+    }
     default: return 0;
   }
 }

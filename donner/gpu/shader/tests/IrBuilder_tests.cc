@@ -33,6 +33,12 @@ IrExpr Mat4Val() {
   return GetShaderResultOrFail(ConstructMat4x4f({Vec4fVal(), Vec4fVal(), Vec4fVal(), Vec4fVal()}),
                                LiteralF32(0));
 }
+IrExpr Mat2Val() {
+  return GetShaderResultOrFail(ConstructMat2x2f({Vec2fVal(), Vec2fVal()}), LiteralF32(0));
+}
+IrExpr U32Val() {
+  return LiteralU32(7u);
+}
 
 // == Types ====================================================================================
 
@@ -91,6 +97,37 @@ TEST(IrExprTests, MulSupportsMatrixAndScalarVectorForms) {
   const IrExpr matMat = GetShaderResultOrFail(Mul(Mat4Val(), Mat4Val()), LiteralF32(0));
   EXPECT_EQ(matMat.type(), IrType::Mat4x4f());
   EXPECT_THAT(Mul(Mat4Val(), Vec2fVal()), IsShaderError(HasSubstr("mat4x4<f32> can multiply")));
+
+  // mat2x2f * vec2f (slug_fill's vertex stage maps path-space deltas into pixel space).
+  const IrExpr axesVec = GetShaderResultOrFail(Mul(Mat2Val(), Vec2fVal()), LiteralF32(0));
+  EXPECT_EQ(axesVec.type(), IrType::Vec2f());
+  EXPECT_THAT(Mul(Mat2Val(), Vec4fVal()), IsShaderError(HasSubstr("mat2x2<f32> can multiply")));
+  EXPECT_THAT(ConstructMat2x2f({Vec2fVal()}), IsShaderError(HasSubstr("needs 2 columns")));
+  EXPECT_THAT(ConstructMat2x2f({Vec4fVal(), Vec4fVal()}),
+              IsShaderError(HasSubstr("columns must be vec2<f32>")));
+
+  // Matrix columns are indexable; the column is a vec2f.
+  const IrExpr column = GetShaderResultOrFail(Index(Mat2Val(), LiteralU32(0)), LiteralF32(0));
+  EXPECT_EQ(column.type(), IrType::Vec2f());
+
+  // Integer remainder, restricted to integer scalars.
+  const IrExpr remainder = GetShaderResultOrFail(Mod(U32Val(), LiteralU32(3u)), LiteralF32(0));
+  EXPECT_EQ(remainder.type(), IrType::U32());
+  EXPECT_THAT(Mod(F32Val(), F32Val()), IsShaderError(HasSubstr("matching integer scalars")));
+  // A new operator has to reach the serializer too, or it stringifies as nothing at all.
+  EXPECT_THAT(remainder.toString(), HasSubstr("mod("));
+
+  // dot collapses to a scalar; normalize keeps the vector's type.
+  const IrExpr dotted =
+      GetShaderResultOrFail(CallBuiltin(BuiltinFn::Dot, {Vec2fVal(), Vec2fVal()}), LiteralF32(0));
+  EXPECT_EQ(dotted.type(), IrType::F32());
+  EXPECT_THAT(CallBuiltin(BuiltinFn::Dot, {Vec2fVal(), Vec4fVal()}),
+              IsShaderError(HasSubstr("two matching float vectors")));
+  const IrExpr normalized =
+      GetShaderResultOrFail(CallBuiltin(BuiltinFn::Normalize, {Vec2fVal()}), LiteralF32(0));
+  EXPECT_EQ(normalized.type(), IrType::Vec2f());
+  EXPECT_THAT(CallBuiltin(BuiltinFn::Normalize, {F32Val()}),
+              IsShaderError(HasSubstr("normalize requires a float vector")));
 
   // vector * scalar and scalar * vector.
   const IrExpr vecScalar = GetShaderResultOrFail(Mul(Vec2fVal(), F32Val()), LiteralF32(0));
@@ -230,8 +267,10 @@ TEST(IrExprTests, BuiltinCallsTypeCheck) {
 
 TEST(IrExprTests, UnknownBuiltinNameIsRejected) {
   EXPECT_THAT(CallBuiltinNamed("clamp", {F32Val(), F32Val(), F32Val()}), HasShaderResult());
-  EXPECT_THAT(CallBuiltinNamed("dot", {Vec2fVal(), Vec2fVal()}),
-              IsShaderError(HasSubstr("unknown builtin function \"dot\"")));
+  EXPECT_THAT(CallBuiltinNamed("dot", {Vec2fVal(), Vec2fVal()}), HasShaderResult());
+  EXPECT_THAT(CallBuiltinNamed("normalize", {Vec2fVal()}), HasShaderResult());
+  EXPECT_THAT(CallBuiltinNamed("reflect", {Vec2fVal(), Vec2fVal()}),
+              IsShaderError(HasSubstr("unknown builtin function \"reflect\"")));
 }
 
 // == Module and function builders =============================================================

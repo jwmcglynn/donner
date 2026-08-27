@@ -94,6 +94,7 @@ std::ostream& operator<<(std::ostream& os, BinaryOp value) {
     case BinaryOp::Sub: return os << "sub";
     case BinaryOp::Mul: return os << "mul";
     case BinaryOp::Div: return os << "div";
+    case BinaryOp::Mod: return os << "mod";
     case BinaryOp::Lt: return os << "lt";
     case BinaryOp::Le: return os << "le";
     case BinaryOp::Gt: return os << "gt";
@@ -106,24 +107,30 @@ std::ostream& operator<<(std::ostream& os, BinaryOp value) {
   return os << "unknown";
 }
 
-std::ostream& operator<<(std::ostream& os, BuiltinFn value) {
-  switch (value) {
-    case BuiltinFn::Abs: return os << "abs";
-    case BuiltinFn::Min: return os << "min";
-    case BuiltinFn::Max: return os << "max";
-    case BuiltinFn::Clamp: return os << "clamp";
-    case BuiltinFn::Saturate: return os << "saturate";
-    case BuiltinFn::Fract: return os << "fract";
-    case BuiltinFn::Sqrt: return os << "sqrt";
-    case BuiltinFn::Length: return os << "length";
-    case BuiltinFn::Fwidth: return os << "fwidth";
-    case BuiltinFn::Round: return os << "round";
-    case BuiltinFn::Select: return os << "select";
-    case BuiltinFn::TextureSample: return os << "textureSample";
-    case BuiltinFn::TextureLoad: return os << "textureLoad";
-    case BuiltinFn::TextureDimensions: return os << "textureDimensions";
+std::string_view BuiltinFnName(BuiltinFn fn) {
+  switch (fn) {
+    case BuiltinFn::Abs: return "abs";
+    case BuiltinFn::Min: return "min";
+    case BuiltinFn::Max: return "max";
+    case BuiltinFn::Clamp: return "clamp";
+    case BuiltinFn::Saturate: return "saturate";
+    case BuiltinFn::Fract: return "fract";
+    case BuiltinFn::Sqrt: return "sqrt";
+    case BuiltinFn::Length: return "length";
+    case BuiltinFn::Dot: return "dot";
+    case BuiltinFn::Normalize: return "normalize";
+    case BuiltinFn::Fwidth: return "fwidth";
+    case BuiltinFn::Round: return "round";
+    case BuiltinFn::Select: return "select";
+    case BuiltinFn::TextureSample: return "textureSample";
+    case BuiltinFn::TextureLoad: return "textureLoad";
+    case BuiltinFn::TextureDimensions: return "textureDimensions";
   }
-  return os << "unknown";
+  return "unknown";
+}
+
+std::ostream& operator<<(std::ostream& os, BuiltinFn value) {
+  return os << BuiltinFnName(value);
 }
 
 std::ostream& operator<<(std::ostream& os, RefKind value) {
@@ -191,6 +198,7 @@ std::string IrExpr::toString() const {
         case BinaryOp::Sub: result = "sub"; break;
         case BinaryOp::Mul: result = "mul"; break;
         case BinaryOp::Div: result = "div"; break;
+        case BinaryOp::Mod: result = "mod"; break;
         case BinaryOp::Lt: result = "lt"; break;
         case BinaryOp::Le: result = "le"; break;
         case BinaryOp::Gt: result = "gt"; break;
@@ -221,23 +229,7 @@ std::string IrExpr::toString() const {
       } else if (node.kind == Kind::CallUser) {
         head = std::format("call({}", node.name.str());
       } else {
-        head = "builtin_";
-        switch (node.builtin) {
-          case BuiltinFn::Abs: head += "abs"; break;
-          case BuiltinFn::Min: head += "min"; break;
-          case BuiltinFn::Max: head += "max"; break;
-          case BuiltinFn::Clamp: head += "clamp"; break;
-          case BuiltinFn::Saturate: head += "saturate"; break;
-          case BuiltinFn::Fract: head += "fract"; break;
-          case BuiltinFn::Sqrt: head += "sqrt"; break;
-          case BuiltinFn::Length: head += "length"; break;
-          case BuiltinFn::Fwidth: head += "fwidth"; break;
-          case BuiltinFn::Round: head += "round"; break;
-          case BuiltinFn::Select: head += "select"; break;
-          case BuiltinFn::TextureSample: head += "textureSample"; break;
-          case BuiltinFn::TextureLoad: head += "textureLoad"; break;
-          case BuiltinFn::TextureDimensions: head += "textureDimensions"; break;
-        }
+        head = std::format("builtin_{}", BuiltinFnName(node.builtin));
       }
 
       std::string result = node.kind == Kind::CallUser ? head : head + "(";
@@ -303,9 +295,34 @@ ShaderResult<IrExpr> Sub(const IrExpr& lhs, const IrExpr& rhs, const RcString& l
   return MakeArithmetic(BinaryOp::Sub, lhs, rhs, label);
 }
 
+ShaderResult<IrExpr> Mod(const IrExpr& lhs, const IrExpr& rhs, const RcString& label) {
+  const bool integerScalar = lhs.type().isScalar() && (lhs.type().scalarKind() == ScalarKind::I32 ||
+                                                       lhs.type().scalarKind() == ScalarKind::U32);
+  if (!(lhs.type() == rhs.type()) || !integerScalar) {
+    return ShaderError{std::format("% operands must be matching integer scalars, got {} and {}",
+                                   TypeName(lhs), TypeName(rhs)),
+                       label};
+  }
+  return MakeArithmetic(BinaryOp::Mod, lhs, rhs, label);
+}
+
 ShaderResult<IrExpr> Mul(const IrExpr& lhs, const IrExpr& rhs, const RcString& label) {
   const IrType& lt = lhs.type();
   const IrType& rt = rhs.type();
+
+  // mat2x2f * vec2f (the vertex stage's pixel-space axis transform).
+  if (lt.kind() == IrType::Kind::Matrix2x2f) {
+    if (rt == IrType::Vec2f()) {
+      IrExpr::Node node;
+      node.kind = IrExpr::Kind::Binary;
+      node.type = rt;
+      node.binaryOp = BinaryOp::Mul;
+      node.children = {lhs, rhs};
+      return MakeNode(std::move(node));
+    }
+    return ShaderError{std::format("mat2x2<f32> can multiply vec2<f32>, got {}", rt.toString()),
+                       label};
+  }
 
   // mat4x4f * vec4f and mat4x4f * mat4x4f (the vertex stage composes matrices).
   if (lt.kind() == IrType::Kind::Matrix4x4f) {
@@ -484,6 +501,14 @@ ShaderResult<IrExpr> Index(const IrExpr& base, const IrExpr& index, const RcStri
     node.children = {base, index};
     return MakeNode(std::move(node));
   }
+  if (baseType.kind() == IrType::Kind::Matrix2x2f) {
+    IrExpr::Node node;
+    node.kind = IrExpr::Kind::Index;
+    node.type = IrType::Vec2f();
+    node.mutableLvalue = base.isMutableLvalue();
+    node.children = {base, index};
+    return MakeNode(std::move(node));
+  }
   if (baseType.isVector()) {
     IrExpr::Node node;
     node.kind = IrExpr::Kind::Index;
@@ -493,7 +518,8 @@ ShaderResult<IrExpr> Index(const IrExpr& base, const IrExpr& index, const RcStri
     return MakeNode(std::move(node));
   }
   return ShaderError{
-      std::format("type {} is not indexable (arrays and vectors are)", TypeName(base)), label};
+      std::format("type {} is not indexable (arrays, matrices, and vectors are)", TypeName(base)),
+      label};
 }
 
 ShaderResult<IrExpr> ConstructVector(const IrType& target, std::vector<IrExpr> args,
@@ -539,6 +565,26 @@ ShaderResult<IrExpr> ConstructVector(const IrType& target, std::vector<IrExpr> a
   node.kind = IrExpr::Kind::Construct;
   node.type = target;
   node.children = std::move(args);
+  return MakeNode(std::move(node));
+}
+
+ShaderResult<IrExpr> ConstructMat2x2f(std::vector<IrExpr> columns, const RcString& label) {
+  if (columns.size() != 2) {
+    return ShaderError{
+        std::format("mat2x2<f32> constructor needs 2 columns, got {}", columns.size()), label};
+  }
+  for (const IrExpr& column : columns) {
+    if (!(column.type() == IrType::Vec2f())) {
+      return ShaderError{
+          std::format("mat2x2<f32> columns must be vec2<f32>, got {}", column.type().toString()),
+          label};
+    }
+  }
+
+  IrExpr::Node node;
+  node.kind = IrExpr::Kind::Construct;
+  node.type = IrType::Mat2x2f();
+  node.children = std::move(columns);
   return MakeNode(std::move(node));
 }
 
@@ -647,6 +693,24 @@ ShaderResult<IrType> CheckBuiltin(BuiltinFn fn, std::span<const IrExpr> args,
       }
       return IrType::F32();
 
+    case BuiltinFn::Normalize:
+      if (args.size() != 1) return argCountError(1);
+      if (!args[0].type().isVector() || args[0].type().scalarKind() != ScalarKind::F32) {
+        return ShaderError{
+            std::format("normalize requires a float vector, got {}", TypeName(args[0])), label};
+      }
+      return args[0].type();
+
+    case BuiltinFn::Dot:
+      if (args.size() != 2) return argCountError(2);
+      if (!args[0].type().isVector() || args[0].type().scalarKind() != ScalarKind::F32 ||
+          !(args[0].type() == args[1].type())) {
+        return ShaderError{std::format("dot requires two matching float vectors, got {} and {}",
+                                       TypeName(args[0]), TypeName(args[1])),
+                           label};
+      }
+      return IrType::F32();
+
     case BuiltinFn::Select:
       if (args.size() != 3) return argCountError(3);
       if (!(args[0].type() == args[1].type())) {
@@ -725,6 +789,8 @@ ShaderResult<IrExpr> CallBuiltinNamed(std::string_view name, std::vector<IrExpr>
       {"fract", BuiltinFn::Fract},
       {"sqrt", BuiltinFn::Sqrt},
       {"length", BuiltinFn::Length},
+      {"dot", BuiltinFn::Dot},
+      {"normalize", BuiltinFn::Normalize},
       {"fwidth", BuiltinFn::Fwidth},
       {"round", BuiltinFn::Round},
       {"select", BuiltinFn::Select},

@@ -158,6 +158,7 @@ std::string TypeToWgsl(const IrType& type) {
       }
       return std::format("vec{}<{}>", type.vectorSize(), element);
     }
+    case IrType::Kind::Matrix2x2f: return "mat2x2<f32>";
     case IrType::Kind::Matrix4x4f: return "mat4x4<f32>";
     case IrType::Kind::SizedArray:
       return std::format("array<{}, {}>", TypeToWgsl(type.elementType()), type.arrayCount());
@@ -174,6 +175,7 @@ std::string TypeToWgsl(const IrType& type) {
 /// WGSL `@builtin(...)` annotation, with a trailing space, for a stage input.
 std::string_view BuiltinInputAnnotation(BuiltinInput builtin) {
   switch (builtin) {
+    case BuiltinInput::VertexIndex: return "@builtin(vertex_index) ";
     case BuiltinInput::InstanceIndex: return "@builtin(instance_index) ";
     case BuiltinInput::Position: return "@builtin(position) ";
     case BuiltinInput::GlobalInvocationId: return "@builtin(global_invocation_id) ";
@@ -286,6 +288,7 @@ std::string Emitter::exprToWgsl(const IrExpr& expr) {
         case BinaryOp::Sub: op = "-"; break;
         case BinaryOp::Mul: op = "*"; break;
         case BinaryOp::Div: op = "/"; break;
+        case BinaryOp::Mod: op = "%"; break;
         case BinaryOp::Lt: op = "<"; break;
         case BinaryOp::Le: op = "<="; break;
         case BinaryOp::Gt: op = ">"; break;
@@ -318,24 +321,7 @@ std::string Emitter::exprToWgsl(const IrExpr& expr) {
       return result;
     }
     case IrExpr::Kind::CallBuiltin: {
-      std::string name;
-      switch (node.builtin) {
-        case BuiltinFn::Abs: name = "abs"; break;
-        case BuiltinFn::Min: name = "min"; break;
-        case BuiltinFn::Max: name = "max"; break;
-        case BuiltinFn::Clamp: name = "clamp"; break;
-        case BuiltinFn::Saturate: name = "saturate"; break;
-        case BuiltinFn::Fract: name = "fract"; break;
-        case BuiltinFn::Sqrt: name = "sqrt"; break;
-        case BuiltinFn::Length: name = "length"; break;
-        case BuiltinFn::Fwidth: name = "fwidth"; break;
-        case BuiltinFn::Round: name = "round"; break;
-        case BuiltinFn::Select: name = "select"; break;
-        case BuiltinFn::TextureSample: name = "textureSample"; break;
-        case BuiltinFn::TextureLoad: name = "textureLoad"; break;
-        case BuiltinFn::TextureDimensions: name = "textureDimensions"; break;
-      }
-      std::string result = name + "(";
+      std::string result = std::string(BuiltinFnName(node.builtin)) + "(";
       for (size_t i = 0; i < node.children.size(); ++i) {
         if (i > 0) {
           result += ", ";
