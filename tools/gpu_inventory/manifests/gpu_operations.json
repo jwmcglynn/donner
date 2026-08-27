@@ -427,7 +427,6 @@
       "operations": [
         "beginComputePass",
         "copyTextureToBuffer",
-        "copyTextureToTexture",
         "createBindGroup",
         "createBuffer",
         "createCommandEncoder",

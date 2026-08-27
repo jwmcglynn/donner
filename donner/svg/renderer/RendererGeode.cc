@@ -5563,19 +5563,20 @@ void RendererGeode::popFilterLayer() {
     wgpu::Texture viewportTexture = impl_->acquireTexture(vpDesc);
 
     if (viewportTexture) {
-      wgpu::TexelCopyTextureInfo src = {};
-      src.texture = filteredTexture;
-      src.origin = {static_cast<uint32_t>(frame.filterBufferOffsetX),
-                    static_cast<uint32_t>(frame.filterBufferOffsetY), 0u};
-      wgpu::TexelCopyTextureInfo dst = {};
-      dst.texture = viewportTexture;
-      const wgpu::Extent3D extent = {vpW, vpH, 1u};
+      const gpu::Texture& filteredHandle = impl_->importFilterResult(filteredTexture);
+      const gpu::Texture& viewportHandle = impl_->importTexture(viewportTexture, vpDesc);
+
       // Everything recorded before this point has already been replayed into the frame command
       // encoder by the encoder retire above, so the copy lands after those draws and before the
       // composite recorded below.
-      impl_->frameCommandEncoder.get().copyTextureToTexture(src, dst, extent);
+      const gpu::Status copied = impl_->frameGpuEncoder->copyTextureToTexture(
+          filteredHandle, viewportHandle, gpu::Extent2d{vpW, vpH},
+          gpu::Origin2d{static_cast<uint32_t>(frame.filterBufferOffsetX),
+                        static_cast<uint32_t>(frame.filterBufferOffsetY)});
+      UTILS_RELEASE_ASSERT_MSG(!copied.hasError(),
+                               "Failed to record the filter viewport extraction copy");
 
-      impl_->encoder->blitFullTarget(impl_->importTexture(viewportTexture, vpDesc), 1.0);
+      impl_->encoder->blitFullTarget(viewportHandle, 1.0);
       impl_->releaseTextureAtFrameEnd(std::move(viewportTexture), vpDesc);
     }
   } else {
