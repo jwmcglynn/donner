@@ -189,7 +189,6 @@ std::ostream& operator<<(std::ostream& os, NativeSurfaceKind value) {
     case NativeSurfaceKind::MetalLayer: return os << "MetalLayer";
     case NativeSurfaceKind::XlibWindow: return os << "XlibWindow";
     case NativeSurfaceKind::WaylandSurface: return os << "WaylandSurface";
-    case NativeSurfaceKind::Win32Window: return os << "Win32Window";
     case NativeSurfaceKind::CanvasSelector: return os << "CanvasSelector";
   }
   return os << "Unknown";
@@ -229,7 +228,6 @@ bool IsKnownEnumValue(NativeSurfaceKind value) {
     case NativeSurfaceKind::MetalLayer:
     case NativeSurfaceKind::XlibWindow:
     case NativeSurfaceKind::WaylandSurface:
-    case NativeSurfaceKind::Win32Window:
     case NativeSurfaceKind::CanvasSelector: return true;
   }
   return false;

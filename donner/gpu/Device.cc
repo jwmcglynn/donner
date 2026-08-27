@@ -1271,8 +1271,7 @@ NativeSurfacePayload PayloadForKind(NativeSurfaceKind kind) {
   switch (kind) {
     case NativeSurfaceKind::MetalLayer: return NativeSurfacePayload{true, false, false};
     case NativeSurfaceKind::XlibWindow:
-    case NativeSurfaceKind::WaylandSurface:
-    case NativeSurfaceKind::Win32Window: return NativeSurfacePayload{true, true, false};
+    case NativeSurfaceKind::WaylandSurface: return NativeSurfacePayload{true, true, false};
     case NativeSurfaceKind::CanvasSelector: return NativeSurfacePayload{false, false, true};
   }
   return NativeSurfacePayload{};

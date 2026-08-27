@@ -2,15 +2,15 @@
 
 **Status:** Design\
 **Created:** 2026-07-05\
-**Updated:** 2026-08-24\
+**Updated:** 2026-08-27\
 **Author:** GPT-5.6 Sol
 
 ## Summary
 
 Donner will replace its native `wgpu-native` dependency with an original C++20 GPU runtime built
 inside Donner. The runtime will expose a narrow Donner-owned rendering hardware interface, not the
-WebGPU C ABI. It will target Metal on Apple platforms, Vulkan on Linux and Windows, and the browser's
-WebGPU service through a small Donner-owned WebAssembly bridge.
+WebGPU C ABI. It will target Metal on Apple platforms, Vulkan on Linux, and the browser's WebGPU
+service through a small Donner-owned WebAssembly bridge.
 
 This is a clean-room, specification-led implementation. It must not copy, translate, vendor, link,
 or ship implementation code from `wgpu`, `wgpu-native`, Naga, Dawn, or Tint. Those projects may not
@@ -89,6 +89,8 @@ sunsetted, output-only transition baseline.
   allowlisted upstream reference snapshot remain separate from the GPU runtime.
 - Rewriting Git history. The requirement applies to the checked-out release tree, generated source
   archives, build dependency closure, and shipped artifacts.
+- Supporting Windows. Windows is out of scope for the project, so the Vulkan backend targets Linux
+  only and no Windows surface type, release floor, driver qualification, or CI lane is planned.
 
 ## Clean-Room and Provenance Rules
 
@@ -288,9 +290,8 @@ compute chains, readback, and editor presentation.
 
 ### Vulkan
 
-Vulkan supports Linux and Windows. It owns instance/device selection, queue families, descriptor
-pools, memory allocation, pipeline caches, surfaces/swapchains, submission fences, and device-loss
-recovery.
+Vulkan supports Linux. It owns instance/device selection, queue families, descriptor pools, memory
+allocation, pipeline caches, surfaces/swapchains, submission fences, and device-loss recovery.
 
 The load-bearing subsystem is explicit synchronization. Every resource tracks its last writer,
 stage/access state, image layout, queue ownership, and submission serial. Encoders derive barriers
@@ -398,7 +399,7 @@ directory drops.
       ([0064: GPU release matrix](0064-gpu_release_matrix.md)). The matrix is derived from the
       lanes and targets in the tree and labels every combination as executed, compiled but not
       executed, developer-machine-only, or uncovered; the largest uncovered groups are physical
-      Vulkan drivers, Vulkan validation layers, Windows, and physical iOS. The budgets replace the
+      Vulkan drivers, Vulkan validation layers, and physical iOS. The budgets replace the
       0.3-0.5 MB estimate with measured code-and-data sizes: 900,049 bytes for a Metal
       configuration and 974,189 for a Vulkan one, roughly twice the estimate.
 
@@ -464,10 +465,10 @@ three backends and validated by the Metal compiler, `spirv-val`, and WebGPU pipe
 - [ ] Implement device selection, resource allocation, descriptors, pipelines, synchronization,
       submission, readback, and swapchains.
 - [ ] Prove the resource-state model with model tests and Vulkan validation layers.
-- [ ] Replace Linux and Windows editor presentation.
+- [ ] Replace Linux editor presentation.
 - [ ] Pass software and physical-driver matrices, deterministic replay, goldens, fuzzing,
       performance, memory, and device-loss tests.
-- [ ] Cut Linux/Windows production builds to Vulkan and remove their `wgpu-native` archives.
+- [ ] Cut Linux production builds to Vulkan and remove the Linux `wgpu-native` archives.
 
 ### Phase 5: Browser bridge
 
@@ -517,13 +518,12 @@ The expected sequence is 16 to 24 normal-sized pull requests:
 13. Vulkan synchronization/resource manager.
 14. Vulkan presentation and editor integration.
 15. Linux cutover and dependency deletion.
-16. Windows Vulkan enablement and physical-device qualification.
-17. Browser bridge and generated WGSL path.
-18. Donner ImGui renderer and WebGPU integration deletion.
-19. Tiny-skia Rust FFI removal, inert-reference quarantine, and replacement tests.
-20. Bzlmod/CMake/CI/source-package Rust dependency purge.
-21. Security and provenance fixes from independent review.
-22. Documentation, release qualification, and final size/performance report.
+16. Browser bridge and generated WGSL path.
+17. Donner ImGui renderer and WebGPU integration deletion.
+18. Tiny-skia Rust FFI removal, inert-reference quarantine, and replacement tests.
+19. Bzlmod/CMake/CI/source-package Rust dependency purge.
+20. Security and provenance fixes from independent review.
+21. Documentation, release qualification, and final size/performance report.
 
 Packets may split when review surface becomes too large. They may not combine backend code,
 shader migration, build-graph deletion, and broad golden updates into one unreviewable change.
@@ -614,7 +614,6 @@ dependency into a new artifact.
   device adoption after platform cutover?
 - Vulkan memory allocator scope: implement only the allocation patterns in the manifest, or add
   suballocation in the first production backend?
-- Windows release floor and required Vulkan driver versions.
 - Whether iOS uses the Metal backend natively in v1.0 or remains browser-only until a native host
   exists.
 - Which exact physical GPUs are release-blocking rather than best-effort.

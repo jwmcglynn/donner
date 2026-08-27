@@ -266,7 +266,9 @@ Rust `wgpu` crate's C ABI surface) and uses
 [eliemichel/WebGPU-distribution](https://github.com/eliemichel/WebGPU-distribution)'s
 single-header `webgpu.hpp` C++ wrapper for idiomatic RAII handles. This gives us:
 
-- Cross-platform support (Windows, macOS, Linux, Android, iOS, Web via wasm)
+- Cross-platform support across Donner's targets (macOS, Linux, Web via wasm,
+  with iOS planned); the underlying API is broader, but Windows is out of scope
+  for this project
 - Modern GPU features (compute shaders for v2 filters, storage buffers)
 - No platform-specific code in the renderer
 - Future path to native Vulkan/Metal for applications that need it
@@ -281,8 +283,10 @@ cmake-from-source build to a prebuilt-binary drop.
 #### Bazel vendoring strategy (wgpu-native)
 
 wgpu-native publishes pre-built release archives on its GitHub Releases page
-for `{linux, macos, windows} × {x86_64, aarch64}`. We consume those directly
-via `http_archive`: one repository per platform tuple, each carrying an
+for `{linux, macos, windows} × {x86_64, aarch64}`. We consume the four
+Linux and macOS tuples directly via `http_archive` (Windows is out of scope
+for this project, so its archives are not wired): one repository per consumed
+platform tuple, each carrying an
 overlay `BUILD.wgpu_native_platform` file that exposes
 `lib/libwgpu_native.{so,dylib}` plus the `include/webgpu/{webgpu,wgpu}.h`
 headers as a single `cc_library`. `//third_party/webgpu-cpp` then `select()`s
