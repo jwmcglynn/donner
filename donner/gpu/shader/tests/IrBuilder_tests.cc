@@ -29,6 +29,13 @@ IrExpr Vec4fVal() {
                       {LiteralF32(1.0f), LiteralF32(2.0f), LiteralF32(3.0f), LiteralF32(4.0f)}),
       LiteralF32(0));
 }
+IrExpr Vec2uVal() {
+  return GetShaderResultOrFail(ConstructVector(IrType::Vec2u(), {LiteralU32(1), LiteralU32(2)}),
+                               LiteralF32(0));
+}
+IrExpr Vec2BoolVal() {
+  return GetShaderResultOrFail(Ge(Vec2uVal(), Vec2uVal()), LiteralF32(0));
+}
 IrExpr Mat4Val() {
   return GetShaderResultOrFail(ConstructMat4x4f({Vec4fVal(), Vec4fVal(), Vec4fVal(), Vec4fVal()}),
                                LiteralF32(0));
@@ -148,11 +155,11 @@ TEST(IrExprTests, DivSupportsVectorScalarForms) {
   EXPECT_THAT(Div(LiteralI32(1), Vec2fVal()), IsShaderError(HasSubstr("matching numeric")));
 }
 
-TEST(IrExprTests, ComparisonsAreScalarOnlyAndYieldBool) {
+TEST(IrExprTests, ScalarComparisonsYieldBool) {
   const IrExpr cmp = GetShaderResultOrFail(Lt(F32Val(), F32Val()), LiteralF32(0));
   EXPECT_EQ(cmp.type(), IrType::Bool());
-  EXPECT_THAT(Ge(Vec2fVal(), Vec2fVal()), IsShaderError(HasSubstr("scalar")));
   EXPECT_THAT(Eq(LiteralBool(true), LiteralBool(false)), HasShaderResult());
+  // Ordered comparisons stay numeric-only; bool has no ordering to compare.
   EXPECT_THAT(Lt(LiteralBool(true), LiteralBool(false)), IsShaderError(HasSubstr("numeric")));
 }
 
@@ -235,6 +242,56 @@ TEST(IrExprTests, ConversionsValidateShapes) {
   EXPECT_THAT(Convert(IrType::Vec4f(), Vec2fVal()), IsShaderError(HasSubstr("cannot convert")));
   EXPECT_THAT(Convert(IrType::Bool(), F32Val()),
               IsShaderError(HasSubstr("numeric scalar or vector")));
+}
+
+TEST(IrExprTests, VectorComparisonsYieldABoolVector) {
+  // A componentwise comparison of two vectors is a bool vector, not a scalar: reducing it to one
+  // bool would have to pick any() or all() silently, and the two disagree on every input where
+  // the components differ.
+  const ShaderResult<IrExpr> compared = Ge(Vec2uVal(), Vec2uVal());
+  ASSERT_THAT(compared, HasShaderResult());
+  EXPECT_TRUE(compared.result().type() == IrType::Vec2(ScalarKind::Bool));
+
+  const ShaderResult<IrExpr> scalarCompared = Ge(LiteralU32(1), LiteralU32(2));
+  ASSERT_THAT(scalarCompared, HasShaderResult());
+  EXPECT_TRUE(scalarCompared.result().type() == IrType::Bool());
+
+  EXPECT_THAT(Ge(Vec2uVal(), Vec2fVal()),
+              IsShaderError(HasSubstr("matching numeric scalar or vector")));
+  EXPECT_THAT(Eq(Vec2uVal(), Vec2fVal()), IsShaderError(HasSubstr("matching scalar or vector")));
+}
+
+TEST(IrExprTests, ShiftRightRequiresMatchingUnsignedOperands) {
+  EXPECT_THAT(Shr(LiteralU32(8), LiteralU32(1)), HasShaderResult());
+
+  const ShaderResult<IrExpr> vectorShift = Shr(Vec2uVal(), Vec2uVal());
+  ASSERT_THAT(vectorShift, HasShaderResult());
+  EXPECT_TRUE(vectorShift.result().type() == IrType::Vec2u());
+
+  // Signed and float shifts are rejected rather than silently emitted: an arithmetic shift is a
+  // different instruction on every backend, and no shader in this set shifts a signed value.
+  EXPECT_THAT(Shr(LiteralI32(8), LiteralI32(1)),
+              IsShaderError(HasSubstr("matching u32 scalar or vector")));
+  EXPECT_THAT(Shr(F32Val(), F32Val()), IsShaderError(HasSubstr("matching u32 scalar or vector")));
+  EXPECT_THAT(Shr(Vec2uVal(), LiteralU32(1)),
+              IsShaderError(HasSubstr("matching u32 scalar or vector")));
+}
+
+TEST(IrExprTests, AnyAndAllReduceOnlyBoolVectors) {
+  EXPECT_THAT(CallBuiltin(BuiltinFn::Any, {Vec2BoolVal()}), HasShaderResult());
+  EXPECT_THAT(CallBuiltin(BuiltinFn::All, {Vec2BoolVal()}), HasShaderResult());
+
+  const ShaderResult<IrExpr> reduced = CallBuiltin(BuiltinFn::Any, {Vec2BoolVal()});
+  ASSERT_THAT(reduced, HasShaderResult());
+  EXPECT_TRUE(reduced.result().type() == IrType::Bool());
+
+  EXPECT_THAT(CallBuiltin(BuiltinFn::Any, {Vec2BoolVal(), Vec2BoolVal()}),
+              IsShaderError(HasSubstr("expects 1 arguments")));
+  // A scalar bool reduction is a no-op that hides a mistake; a numeric vector would need an
+  // implicit truthiness rule none of the three backends has.
+  EXPECT_THAT(CallBuiltin(BuiltinFn::All, {LiteralBool(true)}),
+              IsShaderError(HasSubstr("bool vector")));
+  EXPECT_THAT(CallBuiltin(BuiltinFn::Any, {Vec2uVal()}), IsShaderError(HasSubstr("bool vector")));
 }
 
 TEST(IrExprTests, BuiltinCallsTypeCheck) {

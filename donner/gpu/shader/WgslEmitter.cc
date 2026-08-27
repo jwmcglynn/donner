@@ -13,6 +13,29 @@ namespace donner::gpu::shader {
 
 namespace {
 
+/// The infix operator text for \p op. WGSL, MSL, and (for the operators the IR carries) C-family
+/// syntax agree on every spelling here, so both text emitters share one table.
+/// @param op Binary operator.
+std::string_view BinaryOperatorText(BinaryOp op) {
+  switch (op) {
+    case BinaryOp::Add: return "+";
+    case BinaryOp::Sub: return "-";
+    case BinaryOp::Mul: return "*";
+    case BinaryOp::Div: return "/";
+    case BinaryOp::Mod: return "%";
+    case BinaryOp::Lt: return "<";
+    case BinaryOp::Le: return "<=";
+    case BinaryOp::Gt: return ">";
+    case BinaryOp::Ge: return ">=";
+    case BinaryOp::Eq: return "==";
+    case BinaryOp::Ne: return "!=";
+    case BinaryOp::And: return "&&";
+    case BinaryOp::Or: return "||";
+    case BinaryOp::Shr: return ">>";
+  }
+  return "";
+}
+
 /// WGSL reserved and predeclared words that IR identifiers must not collide with. Small,
 /// deliberately conservative subset covering keywords, types, address spaces, and the builtin
 /// functions this IR can call.
@@ -281,26 +304,9 @@ std::string Emitter::exprToWgsl(const IrExpr& expr) {
     case IrExpr::Kind::Unary:
       return std::format("({}{})", node.unaryOp == IrExpr::UnaryOp::Neg ? "-" : "!",
                          exprToWgsl(node.children[0]));
-    case IrExpr::Kind::Binary: {
-      std::string_view op;
-      switch (node.binaryOp) {
-        case BinaryOp::Add: op = "+"; break;
-        case BinaryOp::Sub: op = "-"; break;
-        case BinaryOp::Mul: op = "*"; break;
-        case BinaryOp::Div: op = "/"; break;
-        case BinaryOp::Mod: op = "%"; break;
-        case BinaryOp::Lt: op = "<"; break;
-        case BinaryOp::Le: op = "<="; break;
-        case BinaryOp::Gt: op = ">"; break;
-        case BinaryOp::Ge: op = ">="; break;
-        case BinaryOp::Eq: op = "=="; break;
-        case BinaryOp::Ne: op = "!="; break;
-        case BinaryOp::And: op = "&&"; break;
-        case BinaryOp::Or: op = "||"; break;
-      }
-      return std::format("({} {} {})", exprToWgsl(node.children[0]), op,
-                         exprToWgsl(node.children[1]));
-    }
+    case IrExpr::Kind::Binary:
+      return std::format("({} {} {})", exprToWgsl(node.children[0]),
+                         BinaryOperatorText(node.binaryOp), exprToWgsl(node.children[1]));
     case IrExpr::Kind::Member:
       return std::format("{}.{}", exprToWgsl(node.children[0]), node.name.str());
     case IrExpr::Kind::Swizzle:

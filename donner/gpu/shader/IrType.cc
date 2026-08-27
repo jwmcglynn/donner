@@ -5,6 +5,8 @@
 #include <string_view>
 #include <utility>
 
+#include "donner/base/Utils.h"
+
 namespace donner::gpu::shader {
 
 /// Internal storage for \ref IrType. One node per type; children held by value (IrType handles).
@@ -92,6 +94,11 @@ IrType IrType::Vec3(ScalarKind element) {
 }
 IrType IrType::Vec4(ScalarKind element) {
   return MakeVectorType(element, 4);
+}
+
+IrType IrType::Vector(ScalarKind element, uint32_t size) {
+  UTILS_RELEASE_ASSERT_MSG(size >= 2 && size <= 4, "vector size must be 2, 3, or 4");
+  return MakeVectorType(element, size);
 }
 
 IrType IrType::Mat2x2f() {

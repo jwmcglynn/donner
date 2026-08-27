@@ -113,6 +113,15 @@ public:
    */
   static IrType Vec4(ScalarKind element);
 
+  /**
+   * `vec<size, element>` type, for code that carries a vector's size as a value - a componentwise
+   * comparison building its bool result, for instance.
+   *
+   * @param element Component scalar kind.
+   * @param size Component count; must be 2, 3, or 4.
+   */
+  static IrType Vector(ScalarKind element, uint32_t size);
+
   /// `vec2<f32>` convenience factory.
   static IrType Vec2f() { return Vec2(ScalarKind::F32); }
   /// `vec3<f32>` convenience factory.
