@@ -224,32 +224,31 @@ ShaderResult<IrModule> BuildSolidFillModule() {
 
   // ----- Struct types (byte layouts anchored by the layout tests) -----
   const IrType planesArray = e(IrType::SizedArray(vec4f, 4));
-  const IrType uniformsType =
-      e(IrType::Struct("Uniforms", {
-                                       {"mvp", mat4x4f},
-                                       {"patternFromPath", mat4x4f},
-                                       {"viewport", vec2f},
-                                       {"tileSize", vec2f},
-                                       {"color", vec4f},
-                                       {"fillRule", u32},
-                                       {"paintMode", u32},
-                                       {"patternOpacity", f32},
-                                       {"hasClipPolygon", u32},
-                                       {"hasClipMask", u32},
-                                       {"_pad0", u32},
-                                       {"_pad1", u32},
-                                       {"_pad2", u32},
-                                       {"yBase", f32},
-                                       {"hStride", f32},
-                                       {"hBandCount", u32},
-                                       {"xBase", f32},
-                                       {"vStride", f32},
-                                       {"vBandCount", u32},
-                                       {"boundingVertexCount", u32},
-                                       {"_gridPad1", u32},
-                                       {"clipPolygonPlanes", planesArray},
-                                       {"boundingVertices", planesArray},
-                                   }));
+  const IrType uniformsType = e(IrType::Struct("Uniforms", {
+                                                               {"mvp", mat4x4f},
+                                                               {"patternFromPath", mat4x4f},
+                                                               {"viewport", vec2f},
+                                                               {"tileSize", vec2f},
+                                                               {"color", vec4f},
+                                                               {"fillRule", u32},
+                                                               {"paintMode", u32},
+                                                               {"patternOpacity", f32},
+                                                               {"hasClipPolygon", u32},
+                                                               {"hasClipMask", u32},
+                                                               {"_pad0", u32},
+                                                               {"_pad1", u32},
+                                                               {"_pad2", u32},
+                                                               {"yBase", f32},
+                                                               {"hStride", f32},
+                                                               {"hBandCount", u32},
+                                                               {"xBase", f32},
+                                                               {"vStride", f32},
+                                                               {"vBandCount", u32},
+                                                               {"boundingVertexCount", u32},
+                                                               {"_gridPad1", u32},
+                                                               {"clipPolygonPlanes", planesArray},
+                                                               {"boundingVertices", planesArray},
+                                                           }));
   const IrType bandType = e(IrType::Struct("Band", {
                                                        {"curveStart", u32},
                                                        {"curveCount", u32},
@@ -497,19 +496,19 @@ ShaderResult<IrModule> BuildSolidFillModule() {
 
     const IrExpr index = e(fn.ref("index"));
     const IrExpr pair = e(fn.addLet(
-        "pair", e(Index(e(Member(e(fn.ref("uniforms")), "boundingVertices")), e(Div(index, U(2)))))));
+        "pair",
+        e(Index(e(Member(e(fn.ref("uniforms")), "boundingVertices")), e(Div(index, U(2)))))));
     // The WGSL writes `(index & 1u) != 0u`. The IR has no bitwise and; on u32 the remainder is
     // the same value, and integer arithmetic admits no rounding difference.
-    e.ok(fn.returnValue(e(CallBuiltin(
-        BuiltinFn::Select,
-        {e(Swizzle(pair, "xy")), e(Swizzle(pair, "zw")), e(Ne(e(Mod(index, U(2))), U(0)))}))));
+    e.ok(fn.returnValue(
+        e(CallBuiltin(BuiltinFn::Select, {e(Swizzle(pair, "xy")), e(Swizzle(pair, "zw")),
+                                          e(Ne(e(Mod(index, U(2))), U(0)))}))));
     e.ok(fn.finish());
   }
 
   // ----- fan_polygon_index(vertex_index) -> u32 -----
   {
-    auto result =
-        builder.createFunction("fan_polygon_index", {IrParam{"vertex_index", u32}}, u32);
+    auto result = builder.createFunction("fan_polygon_index", {IrParam{"vertex_index", u32}}, u32);
     if (result.hasError()) {
       return std::move(result).error();
     }
@@ -518,8 +517,8 @@ ShaderResult<IrModule> BuildSolidFillModule() {
     const IrExpr vertexIndex = e(fn.ref("vertex_index"));
     const IrExpr triangle = e(fn.addLet("triangle", e(Div(vertexIndex, U(3)))));
     const IrExpr corner = e(fn.addLet("corner", e(Mod(vertexIndex, U(3)))));
-    e.ok(fn.returnValue(e(CallBuiltin(
-        BuiltinFn::Select, {e(Add(triangle, corner)), U(0), e(Eq(corner, U(0)))}))));
+    e.ok(fn.returnValue(
+        e(CallBuiltin(BuiltinFn::Select, {e(Add(triangle, corner)), U(0), e(Eq(corner, U(0)))}))));
     e.ok(fn.finish());
   }
 
@@ -549,9 +548,9 @@ ShaderResult<IrModule> BuildSolidFillModule() {
     FunctionBuilder fn = std::move(result).result();
 
     const IrExpr axes = e(fn.ref("axes"));
-    const IrExpr axisScale = e(fn.addLet(
-        "axis_scale", e(Mul(e(CallBuiltin(BuiltinFn::Length, {e(Index(axes, U(0)))})),
-                            e(CallBuiltin(BuiltinFn::Length, {e(Index(axes, U(1)))}))))));
+    const IrExpr axisScale = e(
+        fn.addLet("axis_scale", e(Mul(e(CallBuiltin(BuiltinFn::Length, {e(Index(axes, U(0)))})),
+                                      e(CallBuiltin(BuiltinFn::Length, {e(Index(axes, U(1)))}))))));
     const IrExpr determinant =
         e(fn.addLet("determinant", e(fn.callFunction("axes_determinant", {axes}))));
     e.ok(fn.returnValue(
@@ -585,7 +584,8 @@ ShaderResult<IrModule> BuildSolidFillModule() {
 
   // ----- pixel_axes(effective_mvp) -> mat2x2f -----
   {
-    auto result = builder.createFunction("pixel_axes", {IrParam{"effective_mvp", mat4x4f}}, mat2x2f);
+    auto result =
+        builder.createFunction("pixel_axes", {IrParam{"effective_mvp", mat4x4f}}, mat2x2f);
     if (result.hasError()) {
       return std::move(result).error();
     }
@@ -593,26 +593,27 @@ ShaderResult<IrModule> BuildSolidFillModule() {
 
     const IrExpr mvp = e(fn.ref("effective_mvp"));
     const IrExpr viewport = e(Member(e(fn.ref("uniforms")), "viewport"));
-    const IrExpr pixelScale = e(fn.addLet(
-        "pixel_scale",
-        e(ConstructVector(vec2f, {e(Mul(e(Swizzle(viewport, "x")), F(0.5f))),
-                                  e(Mul(e(Neg(e(Swizzle(viewport, "y")))), F(0.5f)))}))));
+    const IrExpr pixelScale = e(
+        fn.addLet("pixel_scale",
+                  e(ConstructVector(vec2f, {e(Mul(e(Swizzle(viewport, "x")), F(0.5f))),
+                                            e(Mul(e(Neg(e(Swizzle(viewport, "y")))), F(0.5f)))}))));
     const IrExpr originPixel = e(fn.addLet(
         "origin_pixel",
-        e(Mul(e(Swizzle(e(Mul(mvp, e(ConstructVector(vec4f, {F(0.0f), F(0.0f), F(0.0f), F(1.0f)})))),
-                        "xy")),
-              pixelScale))));
+        e(Mul(
+            e(Swizzle(e(Mul(mvp, e(ConstructVector(vec4f, {F(0.0f), F(0.0f), F(0.0f), F(1.0f)})))),
+                      "xy")),
+            pixelScale))));
     const IrExpr xAxis = e(fn.addLet(
         "x_axis_pixel",
-        e(Sub(e(Mul(e(Swizzle(e(Mul(mvp, e(ConstructVector(
-                                            vec4f, {F(1.0f), F(0.0f), F(0.0f), F(1.0f)})))),
+        e(Sub(e(Mul(e(Swizzle(e(Mul(mvp, e(ConstructVector(vec4f,
+                                                           {F(1.0f), F(0.0f), F(0.0f), F(1.0f)})))),
                               "xy")),
                     pixelScale)),
               originPixel))));
     const IrExpr yAxis = e(fn.addLet(
         "y_axis_pixel",
-        e(Sub(e(Mul(e(Swizzle(e(Mul(mvp, e(ConstructVector(
-                                            vec4f, {F(0.0f), F(1.0f), F(0.0f), F(1.0f)})))),
+        e(Sub(e(Mul(e(Swizzle(e(Mul(mvp, e(ConstructVector(vec4f,
+                                                           {F(0.0f), F(1.0f), F(0.0f), F(1.0f)})))),
                               "xy")),
                     pixelScale)),
               originPixel))));
@@ -622,8 +623,8 @@ ShaderResult<IrModule> BuildSolidFillModule() {
 
   // ----- conservative_path_aabb_expansion(axes) -> f32 -----
   {
-    auto result = builder.createFunction("conservative_path_aabb_expansion",
-                                         {IrParam{"axes", mat2x2f}}, f32);
+    auto result =
+        builder.createFunction("conservative_path_aabb_expansion", {IrParam{"axes", mat2x2f}}, f32);
     if (result.hasError()) {
       return std::move(result).error();
     }
@@ -636,9 +637,9 @@ ShaderResult<IrModule> BuildSolidFillModule() {
         "max_component",
         e(CallBuiltin(
             BuiltinFn::Max,
-            {e(CallBuiltin(BuiltinFn::Max, {e(CallBuiltin(BuiltinFn::Abs, {e(Swizzle(col0, "x"))})),
-                                            e(CallBuiltin(BuiltinFn::Abs,
-                                                          {e(Swizzle(col0, "y"))}))})),
+            {e(CallBuiltin(BuiltinFn::Max,
+                           {e(CallBuiltin(BuiltinFn::Abs, {e(Swizzle(col0, "x"))})),
+                            e(CallBuiltin(BuiltinFn::Abs, {e(Swizzle(col0, "y"))}))})),
              e(CallBuiltin(BuiltinFn::Max,
                            {e(CallBuiltin(BuiltinFn::Abs, {e(Swizzle(col1, "x"))})),
                             e(CallBuiltin(BuiltinFn::Abs, {e(Swizzle(col1, "y"))}))}))}))));
@@ -651,8 +652,9 @@ ShaderResult<IrModule> BuildSolidFillModule() {
     // path-space AABB by the radius below therefore makes its transformed image contain the
     // complete half-pixel device-space square. Normalize first so high-shear transforms do not
     // overflow the determinant.
-    const IrExpr scaledAxes = e(fn.addLet(
-        "scaled_axes", e(ConstructMat2x2f({e(Div(col0, maxComponent)), e(Div(col1, maxComponent))}))));
+    const IrExpr scaledAxes =
+        e(fn.addLet("scaled_axes",
+                    e(ConstructMat2x2f({e(Div(col0, maxComponent)), e(Div(col1, maxComponent))}))));
     const IrExpr scaledDeterminant = e(fn.addLet(
         "scaled_determinant",
         e(CallBuiltin(BuiltinFn::Abs, {e(fn.callFunction("axes_determinant", {scaledAxes}))}))));
@@ -669,12 +671,11 @@ ShaderResult<IrModule> BuildSolidFillModule() {
                       {e(Add(e(CallBuiltin(BuiltinFn::Dot, {scaledCol0, scaledCol0})),
                              e(CallBuiltin(BuiltinFn::Dot, {scaledCol1, scaledCol1}))))}))));
     const IrExpr expansion = e(fn.addLet(
-        "expansion", e(Div(e(Mul(F(0.7071068f), scaledFrobenius)),
-                           e(Mul(maxComponent, scaledDeterminant))))));
+        "expansion",
+        e(Div(e(Mul(F(0.7071068f), scaledFrobenius)), e(Mul(maxComponent, scaledDeterminant))))));
     e.ok(fn.returnValue(e(CallBuiltin(
         BuiltinFn::Select,
-        {F(0.0f), expansion,
-         e(And(e(Gt(expansion, F(0.0f))), e(Lt(expansion, F(1e30f)))))}))));
+        {F(0.0f), expansion, e(And(e(Gt(expansion, F(0.0f))), e(Lt(expansion, F(1e30f)))))}))));
     e.ok(fn.finish());
   }
 
@@ -696,9 +697,9 @@ ShaderResult<IrModule> BuildSolidFillModule() {
 
     const IrExpr orientation = e(fn.addLet(
         "orientation",
-        e(CallBuiltin(BuiltinFn::Select,
-                      {F(-1.0f), F(1.0f),
-                       e(Gt(e(fn.callFunction("axes_determinant", {axes})), F(0.0f)))}))));
+        e(CallBuiltin(
+            BuiltinFn::Select,
+            {F(-1.0f), F(1.0f), e(Gt(e(fn.callFunction("axes_determinant", {axes})), F(0.0f)))}))));
 
     const IrExpr i = e(fn.beginFor("i", U(0)));
     e.ok(fn.forCondition(e(Lt(i, count))));
@@ -711,25 +712,22 @@ ShaderResult<IrModule> BuildSolidFillModule() {
           e(fn.addLet("position", e(fn.callFunction("load_bounding_vertex", {i}))));
       const IrExpr next = e(fn.addLet(
           "next", e(fn.callFunction("load_bounding_vertex", {e(Mod(e(Add(i, U(1))), count))}))));
-      const IrExpr incoming =
-          e(fn.addLet("incoming", e(Mul(axes, e(Sub(position, previous))))));
+      const IrExpr incoming = e(fn.addLet("incoming", e(Mul(axes, e(Sub(position, previous))))));
       const IrExpr outgoing = e(fn.addLet("outgoing", e(Mul(axes, e(Sub(next, position))))));
       const IrExpr incomingLength =
           e(fn.addLet("incoming_length", e(CallBuiltin(BuiltinFn::Length, {incoming}))));
       const IrExpr outgoingLength =
           e(fn.addLet("outgoing_length", e(CallBuiltin(BuiltinFn::Length, {outgoing}))));
 
-      e.ok(fn.beginIf(e(Not(e(And(
-          e(And(e(And(e(Gt(incomingLength, F(1e-6f))), e(Lt(incomingLength, F(1e30f))))),
-                e(Gt(outgoingLength, F(1e-6f))))),
-          e(Lt(outgoingLength, F(1e30f)))))))));
+      e.ok(fn.beginIf(e(
+          Not(e(And(e(And(e(And(e(Gt(incomingLength, F(1e-6f))), e(Lt(incomingLength, F(1e30f))))),
+                          e(Gt(outgoingLength, F(1e-6f))))),
+                    e(Lt(outgoingLength, F(1e30f)))))))));
       e.ok(fn.returnValue(LiteralBool(true)));
       e.ok(fn.endIf());
 
-      const IrExpr incomingEdge =
-          e(fn.addLet("incoming_edge", e(Div(incoming, incomingLength))));
-      const IrExpr outgoingEdge =
-          e(fn.addLet("outgoing_edge", e(Div(outgoing, outgoingLength))));
+      const IrExpr incomingEdge = e(fn.addLet("incoming_edge", e(Div(incoming, incomingLength))));
+      const IrExpr outgoingEdge = e(fn.addLet("outgoing_edge", e(Div(outgoing, outgoingLength))));
       const IrExpr incomingNormal = e(fn.addLet(
           "incoming_normal",
           e(Mul(orientation, e(ConstructVector(vec2f, {e(Swizzle(incomingEdge, "y")),
@@ -761,11 +759,10 @@ ShaderResult<IrModule> BuildSolidFillModule() {
 
   // ----- load_device_aabb_vertex(effective_mvp, axes, polygon_index) -> vec2f -----
   {
-    auto result = builder.createFunction(
-        "load_device_aabb_vertex",
-        {IrParam{"effective_mvp", mat4x4f}, IrParam{"axes", mat2x2f},
-         IrParam{"polygon_index", u32}},
-        vec2f);
+    auto result = builder.createFunction("load_device_aabb_vertex",
+                                         {IrParam{"effective_mvp", mat4x4f},
+                                          IrParam{"axes", mat2x2f}, IrParam{"polygon_index", u32}},
+                                         vec2f);
     if (result.hasError()) {
       return std::move(result).error();
     }
@@ -777,34 +774,35 @@ ShaderResult<IrModule> BuildSolidFillModule() {
     const IrExpr uniforms = e(fn.ref("uniforms"));
     const IrExpr viewport = e(Member(uniforms, "viewport"));
 
-    const IrExpr pixelScale = e(fn.addLet(
-        "pixel_scale",
-        e(ConstructVector(vec2f, {e(Mul(e(Swizzle(viewport, "x")), F(0.5f))),
-                                  e(Mul(e(Neg(e(Swizzle(viewport, "y")))), F(0.5f)))}))));
+    const IrExpr pixelScale = e(
+        fn.addLet("pixel_scale",
+                  e(ConstructVector(vec2f, {e(Mul(e(Swizzle(viewport, "x")), F(0.5f))),
+                                            e(Mul(e(Neg(e(Swizzle(viewport, "y")))), F(0.5f)))}))));
     const IrExpr originPixel = e(fn.addLet(
         "origin_pixel",
-        e(Mul(e(Swizzle(e(Mul(mvp, e(ConstructVector(vec4f, {F(0.0f), F(0.0f), F(0.0f), F(1.0f)})))),
-                        "xy")),
-              pixelScale))));
-    const IrExpr pixelMin = e(fn.addVar(
-        "pixel_min", vec2f, e(ConstructVector(vec2f, {F(1e30f), F(1e30f)}))));
-    const IrExpr pixelMax = e(fn.addVar(
-        "pixel_max", vec2f, e(ConstructVector(vec2f, {F(-1e30f), F(-1e30f)}))));
+        e(Mul(
+            e(Swizzle(e(Mul(mvp, e(ConstructVector(vec4f, {F(0.0f), F(0.0f), F(0.0f), F(1.0f)})))),
+                      "xy")),
+            pixelScale))));
+    const IrExpr pixelMin =
+        e(fn.addVar("pixel_min", vec2f, e(ConstructVector(vec2f, {F(1e30f), F(1e30f)}))));
+    const IrExpr pixelMax =
+        e(fn.addVar("pixel_max", vec2f, e(ConstructVector(vec2f, {F(-1e30f), F(-1e30f)}))));
 
     const IrExpr i = e(fn.beginFor("i", U(0)));
     e.ok(fn.forCondition(e(Lt(i, e(Member(uniforms, "boundingVertexCount"))))));
     e.ok(fn.forContinuing(i, e(Add(i, U(1)))));
     {
       const IrExpr pixel = e(fn.addLet(
-          "pixel", e(Add(originPixel,
-                         e(Mul(axes, e(fn.callFunction("load_bounding_vertex", {i}))))))));
+          "pixel",
+          e(Add(originPixel, e(Mul(axes, e(fn.callFunction("load_bounding_vertex", {i}))))))));
       e.ok(fn.assign(pixelMin, e(CallBuiltin(BuiltinFn::Min, {pixelMin, pixel}))));
       e.ok(fn.assign(pixelMax, e(CallBuiltin(BuiltinFn::Max, {pixelMax, pixel}))));
     }
     e.ok(fn.endFor());
 
-    const IrExpr left = e(fn.addLet(
-        "left", e(Or(e(Eq(polygonIndex, U(0))), e(Eq(polygonIndex, U(3)))))));
+    const IrExpr left =
+        e(fn.addLet("left", e(Or(e(Eq(polygonIndex, U(0))), e(Eq(polygonIndex, U(3)))))));
     const IrExpr top = e(fn.addLet("top", e(Lt(polygonIndex, U(2)))));
     const IrExpr pixelCorner = e(fn.addLet(
         "pixel_corner",
@@ -812,11 +810,11 @@ ShaderResult<IrModule> BuildSolidFillModule() {
             vec2f,
             {e(CallBuiltin(BuiltinFn::Select, {e(Add(e(Swizzle(pixelMax, "x")), F(0.5f))),
                                                e(Sub(e(Swizzle(pixelMin, "x")), F(0.5f))), left})),
-             e(CallBuiltin(BuiltinFn::Select, {e(Add(e(Swizzle(pixelMax, "y")), F(0.5f))),
-                                               e(Sub(e(Swizzle(pixelMin, "y")), F(0.5f))),
-                                               top}))}))));
-    e.ok(fn.returnValue(e(fn.callFunction("path_from_pixel_delta",
-                                          {axes, e(Sub(pixelCorner, originPixel))}))));
+             e(CallBuiltin(BuiltinFn::Select,
+                           {e(Add(e(Swizzle(pixelMax, "y")), F(0.5f))),
+                            e(Sub(e(Swizzle(pixelMin, "y")), F(0.5f))), top}))}))));
+    e.ok(fn.returnValue(
+        e(fn.callFunction("path_from_pixel_delta", {axes, e(Sub(pixelCorner, originPixel))}))));
     e.ok(fn.finish());
   }
 
@@ -849,24 +847,24 @@ ShaderResult<IrModule> BuildSolidFillModule() {
     }
     e.ok(fn.endFor());
 
-    const IrExpr left = e(fn.addLet(
-        "left", e(Or(e(Eq(polygonIndex, U(0))), e(Eq(polygonIndex, U(3)))))));
+    const IrExpr left =
+        e(fn.addLet("left", e(Or(e(Eq(polygonIndex, U(0))), e(Eq(polygonIndex, U(3)))))));
     const IrExpr lower = e(fn.addLet("lower", e(Lt(polygonIndex, U(2)))));
     e.ok(fn.returnValue(e(ConstructVector(
         vec2f,
         {e(CallBuiltin(BuiltinFn::Select, {e(Add(e(Swizzle(pathMax, "x")), expansion)),
                                            e(Sub(e(Swizzle(pathMin, "x")), expansion)), left})),
-         e(CallBuiltin(BuiltinFn::Select, {e(Add(e(Swizzle(pathMax, "y")), expansion)),
-                                           e(Sub(e(Swizzle(pathMin, "y")), expansion)),
-                                           lower}))}))));
+         e(CallBuiltin(BuiltinFn::Select,
+                       {e(Add(e(Swizzle(pathMax, "y")), expansion)),
+                        e(Sub(e(Swizzle(pathMin, "y")), expansion)), lower}))}))));
     e.ok(fn.finish());
   }
 
   // ----- dilated_bounding_vertex(axes, polygon_index) -> vec2f -----
   {
-    auto result = builder.createFunction(
-        "dilated_bounding_vertex", {IrParam{"axes", mat2x2f}, IrParam{"polygon_index", u32}},
-        vec2f);
+    auto result =
+        builder.createFunction("dilated_bounding_vertex",
+                               {IrParam{"axes", mat2x2f}, IrParam{"polygon_index", u32}}, vec2f);
     if (result.hasError()) {
       return std::move(result).error();
     }
@@ -877,10 +875,9 @@ ShaderResult<IrModule> BuildSolidFillModule() {
 
     const IrExpr count =
         e(fn.addLet("count", e(Member(e(fn.ref("uniforms")), "boundingVertexCount"))));
-    const IrExpr previousIndex = e(fn.addLet(
-        "previous_index", e(Mod(e(Sub(e(Add(polygonIndex, count)), U(1))), count))));
-    const IrExpr nextIndex =
-        e(fn.addLet("next_index", e(Mod(e(Add(polygonIndex, U(1))), count))));
+    const IrExpr previousIndex =
+        e(fn.addLet("previous_index", e(Mod(e(Sub(e(Add(polygonIndex, count)), U(1))), count))));
+    const IrExpr nextIndex = e(fn.addLet("next_index", e(Mod(e(Add(polygonIndex, U(1))), count))));
     const IrExpr previous =
         e(fn.addLet("previous", e(fn.callFunction("load_bounding_vertex", {previousIndex}))));
     const IrExpr position =
@@ -899,13 +896,12 @@ ShaderResult<IrModule> BuildSolidFillModule() {
         "previous_edge",
         e(CallBuiltin(BuiltinFn::Normalize, {e(Mul(axes, e(Sub(position, previous))))}))));
     const IrExpr nextEdge = e(fn.addLet(
-        "next_edge",
-        e(CallBuiltin(BuiltinFn::Normalize, {e(Mul(axes, e(Sub(next, position))))}))));
+        "next_edge", e(CallBuiltin(BuiltinFn::Normalize, {e(Mul(axes, e(Sub(next, position))))}))));
     const IrExpr orientation = e(fn.addLet(
         "orientation",
-        e(CallBuiltin(BuiltinFn::Select,
-                      {F(-1.0f), F(1.0f),
-                       e(Gt(e(fn.callFunction("axes_determinant", {axes})), F(0.0f)))}))));
+        e(CallBuiltin(
+            BuiltinFn::Select,
+            {F(-1.0f), F(1.0f), e(Gt(e(fn.callFunction("axes_determinant", {axes})), F(0.0f)))}))));
     const IrExpr previousNormal = e(fn.addLet(
         "previous_normal",
         e(Mul(orientation, e(ConstructVector(vec2f, {e(Swizzle(previousEdge, "y")),
@@ -914,14 +910,14 @@ ShaderResult<IrModule> BuildSolidFillModule() {
         "next_normal",
         e(Mul(orientation, e(ConstructVector(vec2f, {e(Swizzle(nextEdge, "y")),
                                                      e(Neg(e(Swizzle(nextEdge, "x"))))}))))));
-    const IrExpr miterDenominator = e(fn.addLet(
-        "miter_denominator",
-        e(Add(F(1.0f), e(CallBuiltin(BuiltinFn::Dot, {previousNormal, nextNormal}))))));
-    const IrExpr pixelDelta = e(fn.addLet(
-        "pixel_delta",
-        e(Div(e(Mul(F(0.5f), e(Add(previousNormal, nextNormal)))), miterDenominator))));
-    e.ok(fn.returnValue(e(Add(
-        position, e(fn.callFunction("path_from_pixel_delta", {axes, pixelDelta}))))));
+    const IrExpr miterDenominator =
+        e(fn.addLet("miter_denominator",
+                    e(Add(F(1.0f), e(CallBuiltin(BuiltinFn::Dot, {previousNormal, nextNormal}))))));
+    const IrExpr pixelDelta =
+        e(fn.addLet("pixel_delta",
+                    e(Div(e(Mul(F(0.5f), e(Add(previousNormal, nextNormal)))), miterDenominator))));
+    e.ok(fn.returnValue(
+        e(Add(position, e(fn.callFunction("path_from_pixel_delta", {axes, pixelDelta}))))));
     e.ok(fn.finish());
   }
 
@@ -942,11 +938,10 @@ ShaderResult<IrModule> BuildSolidFillModule() {
     const IrExpr pathAabbExpansion = e(fn.addLet(
         "path_aabb_expansion", e(fn.callFunction("conservative_path_aabb_expansion", {axes}))));
     const IrExpr usePathAabb = e(fn.addLet(
-        "use_path_aabb",
-        e(And(e(Not(e(fn.callFunction("axes_are_well_conditioned", {axes})))),
-              e(Gt(pathAabbExpansion, F(0.0f)))))));
-    const IrExpr useDeviceAabb = e(fn.addLet(
-        "use_device_aabb", e(fn.callFunction("needs_device_aabb_fallback", {axes}))));
+        "use_path_aabb", e(And(e(Not(e(fn.callFunction("axes_are_well_conditioned", {axes})))),
+                               e(Gt(pathAabbExpansion, F(0.0f)))))));
+    const IrExpr useDeviceAabb =
+        e(fn.addLet("use_device_aabb", e(fn.callFunction("needs_device_aabb_fallback", {axes}))));
     const IrExpr useAabb = e(fn.addLet("use_aabb", e(Or(usePathAabb, useDeviceAabb))));
     const IrExpr effectiveCount = e(fn.addLet(
         "effective_count",
@@ -965,8 +960,7 @@ ShaderResult<IrModule> BuildSolidFillModule() {
     e.ok(fn.endIf());
 
     e.ok(fn.beginIf(useDeviceAabb));
-    e.ok(fn.returnValue(
-        e(fn.callFunction("load_device_aabb_vertex", {mvp, axes, polygonIndex}))));
+    e.ok(fn.returnValue(e(fn.callFunction("load_device_aabb_vertex", {mvp, axes, polygonIndex}))));
     e.ok(fn.endIf());
 
     e.ok(fn.returnValue(e(fn.callFunction("dilated_bounding_vertex", {axes, polygonIndex}))));
@@ -1006,9 +1000,9 @@ ShaderResult<IrModule> BuildSolidFillModule() {
     const IrExpr effectiveMvp =
         e(fn.addLet("effective_mvp", e(Mul(e(Member(uniforms, "mvp")), instanceMat))));
 
-    const IrExpr dilated = e(fn.addLet(
-        "dilated",
-        e(fn.callFunction("effective_bounding_vertex", {effectiveMvp, e(fn.ref("vertex_index"))}))));
+    const IrExpr dilated =
+        e(fn.addLet("dilated", e(fn.callFunction("effective_bounding_vertex",
+                                                 {effectiveMvp, e(fn.ref("vertex_index"))}))));
 
     const IrExpr clipPos =
         e(Mul(effectiveMvp, e(ConstructVector(vec4f, {dilated, F(0.0f), F(1.0f)}))));

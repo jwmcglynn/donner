@@ -191,8 +191,7 @@ TEST_F(MetalSolidFillTest, MatchesFrozenBaseline) {
 
   // No vertex buffers: the stage builds the bounding fan from vertex_index.
   RenderPipelineDescriptor pipelineDescriptor{
-      "solidFill", pipelineLayout,
-      VertexState{shaderModule, "vs_main", {}},
+      "solidFill", pipelineLayout, VertexState{shaderModule, "vs_main", {}},
       FragmentState{shaderModule,
                     "fs_main",
                     {ColorTargetState{

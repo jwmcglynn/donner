@@ -1866,8 +1866,8 @@ uint32_t Emitter::emitBinary(const IrExpr::Node& node) {
   const IrType& lhsType = node.children[0].type();
   const IrType& rhsType = node.children[1].type();
 
-  if (node.binaryOp == BinaryOp::Mul && (lhsType.kind() == IrType::Kind::Matrix2x2f ||
-                                         lhsType.kind() == IrType::Kind::Matrix4x4f)) {
+  if (node.binaryOp == BinaryOp::Mul &&
+      (lhsType.kind() == IrType::Kind::Matrix2x2f || lhsType.kind() == IrType::Kind::Matrix4x4f)) {
     return emitMatrixProduct(node);
   }
   if (IsVectorScalarBroadcast(node.binaryOp, lhsType, rhsType)) {

@@ -295,9 +295,8 @@ ShaderResult<IrExpr> Sub(const IrExpr& lhs, const IrExpr& rhs, const RcString& l
 }
 
 ShaderResult<IrExpr> Mod(const IrExpr& lhs, const IrExpr& rhs, const RcString& label) {
-  const bool integerScalar =
-      lhs.type().isScalar() && (lhs.type().scalarKind() == ScalarKind::I32 ||
-                                lhs.type().scalarKind() == ScalarKind::U32);
+  const bool integerScalar = lhs.type().isScalar() && (lhs.type().scalarKind() == ScalarKind::I32 ||
+                                                       lhs.type().scalarKind() == ScalarKind::U32);
   if (!(lhs.type() == rhs.type()) || !integerScalar) {
     return ShaderError{std::format("% operands must be matching integer scalars, got {} and {}",
                                    TypeName(lhs), TypeName(rhs)),
@@ -320,8 +319,8 @@ ShaderResult<IrExpr> Mul(const IrExpr& lhs, const IrExpr& rhs, const RcString& l
       node.children = {lhs, rhs};
       return MakeNode(std::move(node));
     }
-    return ShaderError{
-        std::format("mat2x2<f32> can multiply vec2<f32>, got {}", rt.toString()), label};
+    return ShaderError{std::format("mat2x2<f32> can multiply vec2<f32>, got {}", rt.toString()),
+                       label};
   }
 
   // mat4x4f * vec4f and mat4x4f * mat4x4f (the vertex stage composes matrices).
@@ -518,8 +517,7 @@ ShaderResult<IrExpr> Index(const IrExpr& base, const IrExpr& index, const RcStri
     return MakeNode(std::move(node));
   }
   return ShaderError{
-      std::format("type {} is not indexable (arrays, matrices, and vectors are)",
-                  TypeName(base)),
+      std::format("type {} is not indexable (arrays, matrices, and vectors are)", TypeName(base)),
       label};
 }
 
