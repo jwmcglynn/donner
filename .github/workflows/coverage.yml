@@ -614,6 +614,34 @@ jobs:
                 affected="$(
                   python3 -c 'import pathlib, sys; labels = [line.strip() for line in pathlib.Path(sys.argv[1]).read_text(encoding="utf-8").splitlines() if line.strip()]; print(" ".join(labels))' "$affected_tests_file"
                 )"
+
+                # Surviving-set instrumentability recheck. The first
+                # instrumentability decision ran on the FULL affected set,
+                # where a manual- or perf-tagged cc_test can make the subset
+                # look instrumentable; the test-presence gate then subtracts
+                # exactly those tags. A surviving set of only non-C++ tests
+                # (for example one py_test) passes the presence gate, runs
+                # coverage, produces a legitimately empty report, and dies on
+                # the empty-report guard. Re-ask the classifier about the
+                # tests that actually survived. Fail closed: filtering or
+                # classifier failure keeps the coverage run.
+                surviving_kind_file="$work_dir/surviving-label-kind.txt"
+                if python3 -c "import pathlib, sys; kind_lines = pathlib.Path(sys.argv[1]).read_text(encoding='utf-8').splitlines(); survivors = {line.strip() for line in pathlib.Path(sys.argv[2]).read_text(encoding='utf-8').splitlines() if line.strip()}; out = [line for line in kind_lines if line.strip() and line.split()[-1] in survivors]; pathlib.Path(sys.argv[3]).write_text('\\n'.join(out) + ('\\n' if out else ''), encoding='utf-8'); sys.exit(0 if len(out) == len(survivors) else 1)" \
+                    "$label_kind_file" "$affected_tests_file" "$surviving_kind_file"; then
+                  cp "$surviving_kind_file" "$diagnostics_dir/surviving-label-kind.txt" || true
+                  if surviving_decision="$(python3 tools/coverage_instrumentable_targets.py \
+                      --label-kind-file "$surviving_kind_file" 2>> "$diagnostics_dir/instrumentability.log")"; then
+                    if [[ "$surviving_decision" == "instrumentable_present=false" ]]; then
+                      echo "Surviving test subset has no instrumentable C/C++ targets; skipping PR coverage."
+                      emit_targets true no_instrumentable_targets ""
+                      exit 0
+                    fi
+                  else
+                    echo "Surviving-set instrumentability recheck errored; running coverage (guard intact)."
+                  fi
+                else
+                  echo "Surviving-set kind filtering incomplete; running coverage (guard intact)."
+                fi
               else
                 echo "Test-presence query failed; running coverage on affected subset (guard intact)."
                 cat "$diagnostics_dir/test-query.log" || true
