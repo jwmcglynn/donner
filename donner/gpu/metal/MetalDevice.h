@@ -19,7 +19,7 @@ namespace donner::gpu::metal {
  * object, compile error, encoder failure) fails closed with a \ref donner::gpu::GpuError; the
  * backend never crashes on such failures.
  *
- * Scope: shared-storage buffers and textures, MSL shader modules, render pipelines with a single
+ * Scope: host-visible buffers and textures, MSL shader modules, render pipelines with a single
  * vertex buffer layout at slot 0 and bind group 0 only, render passes with color attachments,
  * compute pipelines and compute passes, and texture-to-buffer readback copies. Bindings follow
  * the deterministic argument-table mapping in
@@ -27,9 +27,15 @@ namespace donner::gpu::metal {
  * texture and sampler bindings map directly, and stage-in vertex data occupies vertex buffer
  * index 30.
  *
- * Resources use `MTLStorageModeShared`: this backend targets Apple Silicon's unified memory, so
- * shared storage keeps queue writes (`memcpy` / `replaceRegion`) and buffer readback simple with
- * no staging copies.
+ * Memory model: the storage mode of host-visible resources follows what the device reports
+ * rather than an assumption about it. Where the CPU and GPU address one copy of a resource
+ * (`hasUnifiedMemory`), resources are `MTLStorageModeShared` and queue writes (`memcpy` /
+ * `replaceRegion`) and buffer readback need no staging and no publication step. Where they do
+ * not, resources are `MTLStorageModeManaged` and each side's changes must be published to the
+ * other explicitly: a host buffer write publishes its range, and every submission ends by
+ * publishing the device's changes back before it completes, since afterwards there is no encoder
+ * left to do it with. Neither omission is an API error, so a missing publication is not reported
+ * by validation - it shows up only as the host reading whatever its copy last held.
  *
  * Threading: single-threaded use, matching \ref donner::gpu::Device's thread affinity. The one
  * exception is command-buffer completion handlers, which Metal invokes on an internal queue;
@@ -62,12 +68,16 @@ public:
   /// Whether this device's resources are built for unified memory. Test accessor.
   [[nodiscard]] bool usesUnifiedMemoryForTest() const;
 
-  /// How many host writes have published their range to the device copy. Test accessor.
+  /// How many buffer writes have published their range to the device copy. Test accessor.
   ///
-  /// On unified memory nothing is published and this stays zero; where memory is not unified,
-  /// every host write must publish or the device reads a stale copy. The count is the only way
-  /// to see that from outside, because hardware that addresses one copy produces correct results
-  /// whether or not the publication happened.
+  /// Counts the buffer path only, where the write is a `memcpy` through the host pointer and the
+  /// range has to be published after it. Texture writes go through `replaceRegion`, which
+  /// publishes what it wrote on its own, so they are deliberately absent from this count rather
+  /// than missing from it.
+  ///
+  /// On unified memory nothing is published and this stays zero. The count exists because
+  /// hardware that addresses one copy produces correct results whether or not the publication
+  /// happened, so the results cannot show whether it did.
   [[nodiscard]] uint64_t hostWritePublishCountForTest() const;
 
   /// How many submissions have published the device's changes back to the host copy. Test

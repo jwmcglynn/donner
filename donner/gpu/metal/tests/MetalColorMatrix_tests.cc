@@ -239,6 +239,10 @@ TEST_F(MetalColorMatrixTest, UnifiedMemoryPublishesNothingBecauseThereIsOneCopy)
   EXPECT_EQ(device_->deviceWritePublishCountForTest(), 0u);
 }
 
+// This slice is the only one that runs under both memory models. The solid-fill and
+// sub-rectangle-copy slices run under the detected one, which is unified on every machine
+// available to run them, and they reach the host through the same publication the counters below
+// pin - so the mechanism is covered once here rather than repeated per slice.
 TEST_F(MetalColorMatrixTest, WithoutUnifiedMemoryEveryChangeIsPublishedInBothDirections) {
   // The behaviour this fix exists for cannot be observed in the pixels on hardware that
   // addresses one copy of a resource: the results come out right whether or not anything was
