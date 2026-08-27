@@ -45,6 +45,11 @@ std::string_view BinaryOperatorText(BinaryOp op) {
 /// WGSL reserved and predeclared words that IR identifiers must not collide with. Small,
 /// deliberately conservative subset covering keywords, types, address spaces, and the builtin
 /// functions this IR can call.
+///
+/// Every \ref BuiltinFn belongs here: WGSL spells all of them as free function calls, so a
+/// module that named a local after one and also called it would emit shadowing WGSL. That is a
+/// rule rather than a convention - `EveryBuiltinNameIsReserved` walks the enum and fails if a
+/// builtin is added without its name.
 constexpr std::string_view kReservedWords[] = {
     "alias",
     "array",
@@ -97,12 +102,16 @@ constexpr std::string_view kReservedWords[] = {
     "while",
     "write",
     "abs",
+    "all",
+    "any",
     "clamp",
+    "dot",
     "fract",
     "fwidth",
     "length",
     "max",
     "min",
+    "normalize",
     "round",
     "saturate",
     "select",

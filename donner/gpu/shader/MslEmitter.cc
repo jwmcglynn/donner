@@ -45,20 +45,21 @@ std::string_view BinaryOperatorText(BinaryOp op) {
 /// subset covering the C++14 keyword table plus the metal namespace types this emitter spells
 /// unqualified.
 constexpr std::string_view kMslReservedWords[] = {
-    "alignas", "alignof",  "auto",        "bool",      "break",    "case",      "catch",
-    "char",    "class",    "const",       "constexpr", "continue", "default",   "delete",
-    "device",  "do",       "double",      "else",      "enum",     "explicit",  "extern",
-    "false",   "float",    "for",         "fragment",  "friend",   "goto",      "half",
-    "if",      "inline",   "int",         "kernel",    "long",     "mutable",   "namespace",
-    "new",     "operator", "private",     "protected", "public",   "register",  "return",
-    "short",   "signed",   "sizeof",      "static",    "struct",   "switch",    "template",
-    "this",    "thread",   "threadgroup", "throw",     "true",     "try",       "typedef",
-    "typeid",  "typename", "uint",        "union",     "unsigned", "using",     "vertex",
-    "virtual", "void",     "volatile",    "while",     "constant", "float2",    "float3",
-    "float4",  "float4x4", "int2",        "int3",      "int4",     "uint2",     "uint3",
-    "uint4",   "bool2",    "bool3",       "bool4",     "sampler",  "texture2d", "array",
-    "metal",   "select",   "saturate",    "fract",     "fwidth",   "clamp",     "abs",
-    "min",     "max",      "sqrt",        "length",    "round",
+    "alignas", "alignof",   "auto",        "bool",      "break",    "case",      "catch",
+    "char",    "class",     "const",       "constexpr", "continue", "default",   "delete",
+    "device",  "do",        "double",      "else",      "enum",     "explicit",  "extern",
+    "false",   "float",     "for",         "fragment",  "friend",   "goto",      "half",
+    "if",      "inline",    "int",         "kernel",    "long",     "mutable",   "namespace",
+    "new",     "operator",  "private",     "protected", "public",   "register",  "return",
+    "short",   "signed",    "sizeof",      "static",    "struct",   "switch",    "template",
+    "this",    "thread",    "threadgroup", "throw",     "true",     "try",       "typedef",
+    "typeid",  "typename",  "uint",        "union",     "unsigned", "using",     "vertex",
+    "virtual", "void",      "volatile",    "while",     "constant", "float2",    "float3",
+    "float4",  "float4x4",  "int2",        "int3",      "int4",     "uint2",     "uint3",
+    "uint4",   "bool2",     "bool3",       "bool4",     "sampler",  "texture2d", "array",
+    "metal",   "select",    "saturate",    "fract",     "fwidth",   "clamp",     "abs",
+    "min",     "max",       "sqrt",        "length",    "round",    "any",       "all",
+    "dot",     "normalize",
 };
 
 /// Checks an identifier for C++/MSL lexical validity and reserved-word collisions; fails

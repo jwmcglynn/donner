@@ -9,6 +9,7 @@
 
 #include <limits>
 #include <optional>
+#include <sstream>
 #include <string>
 #include <utility>
 #include <vector>
@@ -354,6 +355,54 @@ TEST(WgslEmitterTests, RejectsDistinctStructsSharingAName) {
   ASSERT_THAT(module, HasShaderResult());
   EXPECT_THAT(EmitWgsl(module.result()),
               IsShaderError(HasSubstr("two distinct struct types share the name S")));
+}
+
+TEST(WgslEmitterTests, RejectsALocalNamedAfterACalledBuiltin) {
+  // WGSL has no separate namespace for builtin functions, so a local named after one shadows it
+  // for the rest of the scope. A module that both names something `any` and calls `any()` would
+  // otherwise emit WGSL where the call resolves to the local.
+  ModuleBuilder builder;
+  {
+    ShaderResult<FunctionBuilder> fnResult =
+        builder.createFunction("shadow", {IrParam{"v", IrType::Vec2u()}}, IrType::Bool());
+    ASSERT_THAT(fnResult, HasShaderResult());
+    FunctionBuilder fn = std::move(fnResult).result();
+    const IrExpr v = GetShaderResultOrFail(fn.ref("v"), LiteralF32(0));
+    const IrExpr reduced = GetShaderResultOrFail(
+        CallBuiltin(BuiltinFn::Any, {GetShaderResultOrFail(Ge(v, v), LiteralF32(0))}),
+        LiteralF32(0));
+    EXPECT_THAT(fn.addLet("any", reduced), HasShaderResult());
+    EXPECT_THAT(fn.returnValue(GetShaderResultOrFail(fn.ref("any"), LiteralF32(0))), IsShaderOk());
+    EXPECT_THAT(fn.finish(), IsShaderOk());
+  }
+
+  ShaderResult<IrModule> module = builder.build();
+  ASSERT_THAT(module, HasShaderResult());
+  EXPECT_THAT(EmitWgsl(module.result()),
+              IsShaderError(HasSubstr("collides with a WGSL reserved word")));
+}
+
+TEST(WgslEmitterTests, EveryCallableBuiltinNameIsReserved) {
+  // WGSL spells every IR builtin as a free function call, so each of their names has to be
+  // unavailable as an identifier. Walking the enum keeps that a rule rather than a list someone
+  // remembers to extend: the ostream spelling is the callable name, so a builtin added without
+  // its reserved word fails here instead of in a shader that silently shadows it.
+  for (int raw = 0; raw < 256; ++raw) {
+    std::ostringstream name;
+    name << static_cast<BuiltinFn>(raw);
+    if (name.str() == "unknown") {
+      EXPECT_GT(raw, 0) << "the builtin enum walk found no builtins at all";
+      break;
+    }
+
+    ModuleBuilder builder;
+    ASSERT_THAT(builder.addConstant(RcString(name.str()), LiteralU32(1)), IsShaderOk());
+    ShaderResult<IrModule> module = builder.build();
+    ASSERT_THAT(module, HasShaderResult());
+    EXPECT_THAT(EmitWgsl(module.result()),
+                IsShaderError(HasSubstr("collides with a WGSL reserved word")))
+        << "builtin \"" << name.str() << "\" is callable but its name is not reserved";
+  }
 }
 
 TEST(WgslEmitterTests, RejectsExtendedReservedWords) {
