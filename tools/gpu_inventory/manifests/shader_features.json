@@ -156,6 +156,7 @@
         }
       ],
       "features": [
+        "any",
         "if",
         "let",
         "min",
@@ -384,6 +385,7 @@
       ],
       "features": [
         "abs",
+        "any",
         "clamp",
         "if",
         "let",
@@ -438,6 +440,7 @@
         }
       ],
       "features": [
+        "any",
         "clamp",
         "if",
         "let",
@@ -487,6 +490,7 @@
         }
       ],
       "features": [
+        "any",
         "clamp",
         "if",
         "let",
@@ -537,6 +541,7 @@
         }
       ],
       "features": [
+        "any",
         "array",
         "clamp",
         "if",
@@ -594,6 +599,7 @@
         }
       ],
       "features": [
+        "any",
         "clamp",
         "if",
         "let",
@@ -644,6 +650,7 @@
         }
       ],
       "features": [
+        "any",
         "array",
         "clamp",
         "for",
@@ -695,6 +702,7 @@
         }
       ],
       "features": [
+        "any",
         "clamp",
         "cos",
         "dot",
@@ -757,6 +765,7 @@
         }
       ],
       "features": [
+        "any",
         "clamp",
         "floor",
         "if",
@@ -817,6 +826,8 @@
         }
       ],
       "features": [
+        "all",
+        "any",
         "clamp",
         "if",
         "let",
@@ -861,6 +872,7 @@
         }
       ],
       "features": [
+        "any",
         "if",
         "let",
         "return",
@@ -909,6 +921,7 @@
       ],
       "features": [
         "abs",
+        "any",
         "array",
         "clamp",
         "floor",
@@ -962,6 +975,7 @@
         }
       ],
       "features": [
+        "any",
         "clamp",
         "if",
         "let",
@@ -1009,6 +1023,7 @@
         }
       ],
       "features": [
+        "any",
         "for",
         "if",
         "let",
@@ -1061,6 +1076,7 @@
       ],
       "features": [
         "abs",
+        "any",
         "clamp",
         "floor",
         "if",
@@ -1112,6 +1128,7 @@
         }
       ],
       "features": [
+        "any",
         "clamp",
         "cos",
         "dot",
@@ -1168,6 +1185,7 @@
         }
       ],
       "features": [
+        "any",
         "if",
         "let",
         "return",
@@ -1216,6 +1234,7 @@
         }
       ],
       "features": [
+        "any",
         "clamp",
         "if",
         "let",
@@ -1267,6 +1286,7 @@
       ],
       "features": [
         "abs",
+        "any",
         "array",
         "clamp",
         "const",
@@ -1319,6 +1339,7 @@
         }
       ],
       "features": [
+        "any",
         "ceil",
         "clamp",
         "exp",
@@ -1866,6 +1887,7 @@
         }
       ],
       "features": [
+        "any",
         "if",
         "let",
         "min",
