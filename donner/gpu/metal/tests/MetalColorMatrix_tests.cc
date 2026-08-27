@@ -229,6 +229,31 @@ TEST_F(MetalColorMatrixTest, DispatchMatchesTheHostComputedResult) {
   runColorMatrixSlice(MetalDevice::MemoryModel::Detected);
 }
 
+TEST_F(MetalColorMatrixTest, UnifiedMemoryPublishesNothingBecauseThereIsOneCopy) {
+  runColorMatrixSlice(MetalDevice::MemoryModel::Detected);
+  if (!device_->usesUnifiedMemoryForTest()) {
+    GTEST_SKIP() << "this machine reports non-unified memory; the forced case below covers it";
+  }
+  EXPECT_EQ(device_->hostWritePublishCountForTest(), 0u)
+      << "both processors address one copy, so there is nothing to publish";
+  EXPECT_EQ(device_->deviceWritePublishCountForTest(), 0u);
+}
+
+TEST_F(MetalColorMatrixTest, WithoutUnifiedMemoryEveryChangeIsPublishedInBothDirections) {
+  // The behaviour this fix exists for cannot be observed in the pixels on hardware that
+  // addresses one copy of a resource: the results come out right whether or not anything was
+  // published, which is exactly why a virtualized device caught what every local run missed. So
+  // the assertion is on the publication itself, which is the mechanism the virtualized device
+  // needs and the part that was absent.
+  runColorMatrixSlice(MetalDevice::MemoryModel::ForceNonUnified);
+
+  EXPECT_GT(device_->hostWritePublishCountForTest(), 0u)
+      << "a host write the device never sees published leaves it reading a stale copy";
+  EXPECT_GT(device_->deviceWritePublishCountForTest(), 0u)
+      << "output the host reads must be published back before the submission completes, or the "
+         "read returns whatever the host copy last held";
+}
+
 TEST_F(MetalColorMatrixTest, DispatchMatchesTheHostComputedResultWithoutUnifiedMemory) {
   // The same slice built for a device that does not address one copy of a resource from both
   // processors. On such a device the host's copy of the readback buffer is only whatever was

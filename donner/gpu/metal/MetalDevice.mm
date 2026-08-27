@@ -363,6 +363,8 @@ struct MetalDevice::Impl {
 
   /// Whether resources are built for unified memory; decides every storage mode below.
   bool unifiedMemory = true;
+  uint64_t hostWritePublishCount = 0;    //!< Host ranges published to the device copy.
+  uint64_t deviceWritePublishCount = 0;  //!< Submissions that published back to the host copy.
 
   /// Storage mode for a resource the host reads or writes.
   ///
@@ -401,6 +403,14 @@ std::unique_ptr<MetalDevice> MetalDevice::Create(MemoryModel memoryModel) {
 
 bool MetalDevice::usesUnifiedMemoryForTest() const {
   return impl_->unifiedMemory;
+}
+
+uint64_t MetalDevice::hostWritePublishCountForTest() const {
+  return impl_->hostWritePublishCount;
+}
+
+uint64_t MetalDevice::deviceWritePublishCountForTest() const {
+  return impl_->deviceWritePublishCount;
 }
 
 MetalDevice::MetalDevice() : impl_(std::make_unique<Impl>()) {}
@@ -767,6 +777,7 @@ Status MetalDevice::onWriteBuffer(uint32_t slotIndex, uint64_t offsetBytes,
       // The write landed in the host's copy; the GPU reads its own until the range is published.
       [buffer didModifyRange:NSMakeRange(static_cast<NSUInteger>(offsetBytes),
                                          static_cast<NSUInteger>(data.size()))];
+      ++impl_->hostWritePublishCount;
     }
   }
   return OkStatus();
@@ -1225,6 +1236,7 @@ Status MetalDevice::Impl::encodeHostCoherencySync(EncodingState& state) {
     }
   }
   [blitEncoder endEncoding];
+  ++deviceWritePublishCount;
   return OkStatus();
 }
 

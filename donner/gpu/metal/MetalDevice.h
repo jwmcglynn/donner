@@ -62,6 +62,18 @@ public:
   /// Whether this device's resources are built for unified memory. Test accessor.
   [[nodiscard]] bool usesUnifiedMemoryForTest() const;
 
+  /// How many host writes have published their range to the device copy. Test accessor.
+  ///
+  /// On unified memory nothing is published and this stays zero; where memory is not unified,
+  /// every host write must publish or the device reads a stale copy. The count is the only way
+  /// to see that from outside, because hardware that addresses one copy produces correct results
+  /// whether or not the publication happened.
+  [[nodiscard]] uint64_t hostWritePublishCountForTest() const;
+
+  /// How many submissions have published the device's changes back to the host copy. Test
+  /// accessor, for the same reason as above but in the other direction.
+  [[nodiscard]] uint64_t deviceWritePublishCountForTest() const;
+
   /// Destructor; releases all Metal objects still alive.
   ~MetalDevice() override;
 
