@@ -346,6 +346,65 @@ TEST_F(RendererGeodeTest, PreCancelledInterruptibleSnapshotSkipsGpuReadback) {
   EXPECT_EQ(stats.pollIterations, 0);
 }
 
+/// A device lost AFTER the map is requested is a different route from one lost before it, and
+/// moving the wait onto the runtime created it: a wait slice checks the lost flag itself and
+/// reports the loss within about one slice, where the readback previously discovered it only
+/// when the ten-second deadline expired and declared a timeout.
+///
+/// Worth pinning in both directions. The readback must give up promptly, and it must NOT record
+/// a timeout attribution while doing so - that attribution says "a deadline discovered this",
+/// and here the driver did. The statistics must still be recorded, because they are taken
+/// before the mapping handle is consumed; a wrapper that unmapped first would have nothing left
+/// to read them from.
+///
+/// A fresh device, not the suite's shared one, so the injected loss cannot poison other cases.
+TEST_F(RendererGeodeTest, DeviceLostWhileTheMapIsPendingIsReportedWithinASlice) {
+  std::shared_ptr<geode::GeodeDevice> device(geode::GeodeDevice::CreateHeadless());
+  ASSERT_NE(device, nullptr);
+
+  RendererGeode renderer(device);
+  beginFrame(renderer);
+  renderer.endFrame();
+  (void)renderer.consumeReadbackStats();
+
+  // The cancellation predicate is polled once before the readback is set up at all, and then
+  // once per wait slice, before the slice itself. The second call is therefore the one place a
+  // test can stand between the map request and the first slice: the readback's own fast-fail on
+  // an already-lost device is behind us, no poll has run since the map was requested, so the
+  // slice cannot find the map already complete and must reach its lost-device check.
+  //
+  // If that call sequence ever changes, this lands on the fast-fail route instead, where no
+  // statistics are recorded - which the assertions below fail on rather than pass silently.
+  int predicateCalls = 0;
+  const auto start = std::chrono::steady_clock::now();
+  const RendererBitmap snapshot = renderer.takeSnapshotInterruptibly([&] {
+    if (++predicateCalls == 2) {
+      device->markDeviceLost("test-injected loss while the map was pending");
+    }
+    return false;  // Never cancel: the loss, not the caller, must end this wait.
+  });
+  const auto elapsed = std::chrono::steady_clock::now() - start;
+
+  EXPECT_TRUE(snapshot.empty());
+  EXPECT_GE(predicateCalls, 2) << "the wait must have reached at least one slice";
+  // Well under the ten-second readback deadline: the slice reports the loss rather than the
+  // deadline discovering it.
+  EXPECT_LT(elapsed, std::chrono::seconds(2));
+
+  const RendererReadbackStats stats = renderer.consumeReadbackStats();
+  EXPECT_EQ(stats.count, 1) << "the readback statistics are recorded before the mapping handle "
+                               "is consumed, so an abandoned map still reports";
+  EXPECT_GE(stats.pollIterations, 1);
+  EXPECT_TRUE(stats.deviceLost);
+  EXPECT_EQ(stats.timedOutWaitSite, GpuWaitTimeoutSite::None)
+      << "a driver-reported loss must not be attributed to a wait deadline";
+
+  // The abandoned readback leaves its buffer for the lost device to take with it rather than
+  // destroying it, so running the whole path again must neither crash nor double-free. On the
+  // sanitizer lanes this is where a double destroy would surface.
+  EXPECT_TRUE(renderer.takeSnapshot().empty());
+}
+
 TEST_F(RendererGeodeTest, InterruptibleSnapshotCancelsPromptlyAfterGpuSubmit) {
   RendererGeode renderer = createRenderer();
   beginFrame(renderer);

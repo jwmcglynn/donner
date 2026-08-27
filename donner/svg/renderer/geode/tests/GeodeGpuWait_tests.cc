@@ -112,9 +112,6 @@ TEST(BoundedGpuWait, ZeroTimeoutPollsOnceThenTimesOut) {
   EXPECT_TRUE(clock.sleeps.empty());
 }
 
-/// A device-lost record starts with no timeout attribution, so "lost with no
-/// site" is a meaningful state: it says the driver reported the loss rather
-/// than a deadline discovering it.
 TEST(BoundedGpuWait, ASubMillisecondBudgetIsNotRoundedUp) {
   // The snapshot readback waits one poll interval at a time, so its budget is smaller than a
   // millisecond. A budget expressed in whole milliseconds would round a 100 us slice up to
@@ -137,6 +134,9 @@ TEST(BoundedGpuWait, ASubMillisecondBudgetIsNotRoundedUp) {
   EXPECT_EQ(clock.current.time_since_epoch(), std::chrono::microseconds(100));
 }
 
+/// A device-lost record starts with no timeout attribution, so "lost with no
+/// site" is a meaningful state: it says the driver reported the loss rather
+/// than a deadline discovering it.
 TEST(GeodeDeviceLostState, StartsWithNoTimeoutAttribution) {
   const GeodeDeviceLostState state;
 
