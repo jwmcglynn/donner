@@ -128,6 +128,40 @@ public:
    */
   Result<TrackedTextureLayout> trackedTextureLayoutForTest(const Texture& texture) const;
 
+  /// One image barrier the backend recorded, reported as plain numbers so this header stays free
+  /// of Vulkan types. Test accessor: which barriers are emitted is the whole contract of the
+  /// resource-state model, and it is not observable in the pixels a slice reads back.
+  struct RecordedImageBarrierForTest {
+    uint32_t textureSlot = 0;  //!< Slot of the texture the barrier applies to.
+    uint32_t srcStage = 0;     //!< Source pipeline stage mask.
+    uint32_t dstStage = 0;     //!< Destination pipeline stage mask.
+    uint32_t srcAccess = 0;    //!< Access made available.
+    uint32_t dstAccess = 0;    //!< Access made visible.
+    int32_t oldLayout = 0;     //!< Layout the image was in.
+    int32_t newLayout = 0;     //!< Layout the image moved to.
+  };
+
+  /// Every image barrier recorded since the device was created, oldest first. Test accessor.
+  [[nodiscard]] std::vector<RecordedImageBarrierForTest> recordedImageBarriersForTest() const;
+
+  /// The two halves of a render pass external dependency, as plain numbers. Test accessor.
+  struct RecordedSubpassDependencyForTest {
+    uint32_t srcStage = 0;   //!< Source pipeline stage mask.
+    uint32_t dstStage = 0;   //!< Destination pipeline stage mask.
+    uint32_t srcAccess = 0;  //!< Access made available.
+    uint32_t dstAccess = 0;  //!< Access made visible.
+  };
+
+  /// The entry-side external dependency of the most recently created render pass. Fails closed
+  /// when no render pass has been created. Test accessor.
+  [[nodiscard]] Result<RecordedSubpassDependencyForTest> lastRenderPassEntryDependencyForTest()
+      const;
+
+  /// Makes the next internal texture upload report failure after it has recorded its
+  /// transitions, so a test can prove a failed upload leaves nothing staged behind. Test seam;
+  /// the upload's Vulkan work is still recorded and submitted, only its result is replaced.
+  void failNextTextureUploadForTest();
+
   /// Message of the most recent asynchronous Vulkan failure observed while polling or waiting
   /// on fences (e.g. VK_ERROR_DEVICE_LOST), or an empty string if none occurred.
   /// Test/diagnostic accessor.

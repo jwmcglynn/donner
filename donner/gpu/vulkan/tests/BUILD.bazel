@@ -28,6 +28,24 @@ donner_cc_test(
     ],
 )
 
+# Device-level regressions for the resource-state wiring: what the backend emits and what it
+# leaves in the tracker when work fails. Needs a real device, so Linux only.
+donner_cc_test(
+    name = "vulkan_resource_state_device_tests",
+    srcs = ["VulkanResourceStateDevice_tests.cc"],
+    env = {
+        "DONNER_REQUIRE_VULKAN": "1",
+        "XDG_RUNTIME_DIR": "/tmp",
+    },
+    target_compatible_with = ["@platforms//os:linux"],
+    deps = [
+        "//donner/gpu",
+        "//donner/gpu/vulkan:vulkan_device",
+        "//donner/gpu/vulkan:vulkan_resource_state",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
 donner_cc_test(
     name = "vulkan_solid_fill_tests_impl",
     srcs = ["VulkanSolidFill_tests.cc"],

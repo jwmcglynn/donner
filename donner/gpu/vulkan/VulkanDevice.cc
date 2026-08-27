@@ -1162,6 +1162,13 @@ struct VulkanDevice::Impl {
   /// only once its submission reached the queue.
   TextureSyncStateTable syncStates;
 
+  /// Every image barrier recorded, and the most recent render pass's entry dependency. Test
+  /// observation only; nothing in the backend reads these back.
+  std::vector<RecordedImageBarrierForTest> recordedBarriers;
+  std::optional<RecordedSubpassDependencyForTest> lastEntryDependency;
+  /// Set by the test seam; makes the next internal upload report failure after staging.
+  bool failNextUpload = false;
+
   /// Destroys the transient objects of a staged upload, in reverse creation order.
   /// @param fence Upload fence, or null.
   /// @param commandBuffer Upload command buffer, or null.
@@ -1441,6 +1448,23 @@ Result<VulkanDevice::TrackedTextureLayout> VulkanDevice::trackedTextureLayoutFor
     case VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL: return TrackedTextureLayout::ColorAttachment;
     default: return TrackedTextureLayout::Other;
   }
+}
+
+std::vector<VulkanDevice::RecordedImageBarrierForTest> VulkanDevice::recordedImageBarriersForTest()
+    const {
+  return impl_->recordedBarriers;
+}
+
+Result<VulkanDevice::RecordedSubpassDependencyForTest>
+VulkanDevice::lastRenderPassEntryDependencyForTest() const {
+  if (!impl_->lastEntryDependency.has_value()) {
+    return GpuError{GpuErrorType::InvalidState, "no render pass has been created"};
+  }
+  return *impl_->lastEntryDependency;
+}
+
+void VulkanDevice::failNextTextureUploadForTest() {
+  impl_->failNextUpload = true;
 }
 
 std::string VulkanDevice::lastErrorForTest() const {
@@ -2274,6 +2298,14 @@ Status VulkanDevice::onWriteTexture(uint32_t slotIndex, std::span<const uint8_t>
     return VkError("vkEndCommandBuffer", result);
   }
 
+  if (impl.failNextUpload) {
+    // Test seam: fail exactly where a real end-of-recording or submit failure would, which is
+    // after the transitions have been staged and before anything commits them.
+    impl.failNextUpload = false;
+    cleanup();
+    return GpuError{GpuErrorType::InvalidState, "writeTexture: injected upload failure"};
+  }
+
   bool objectsStillInUse = false;
   const Status submitStatus =
       impl.submitAndWaitTextureUpload(commandBuffer, fence, objectsStillInUse);
@@ -2300,6 +2332,10 @@ void VulkanDevice::Impl::transitionTexture(VkCommandBuffer commandBuffer, uint32
     return;  // Same layout and nothing to make available: no hazard to order.
   }
   RecordImageBarrier(*api, commandBuffer, record.image, params);
+  recordedBarriers.push_back(RecordedImageBarrierForTest{
+      textureSlot, static_cast<uint32_t>(params.srcStage), static_cast<uint32_t>(params.dstStage),
+      static_cast<uint32_t>(params.srcAccess), static_cast<uint32_t>(params.dstAccess),
+      static_cast<int32_t>(params.oldLayout), static_cast<int32_t>(params.newLayout)});
   syncStates.stage(textureSlot, StateAfterUsage(usage));
 }
 
@@ -2419,6 +2455,11 @@ Status VulkanDevice::Impl::beginEncodedRenderPass(EncodingState& state,
   // from the resource-state model, because a precise image barrier behind a pass edge that still
   // said ALL_COMMANDS would order nothing narrower than before.
   const SubpassDependencyParams entryDependency = AttachmentEntryDependency(entryStates);
+  lastEntryDependency =
+      RecordedSubpassDependencyForTest{static_cast<uint32_t>(entryDependency.srcStage),
+                                       static_cast<uint32_t>(entryDependency.dstStage),
+                                       static_cast<uint32_t>(entryDependency.srcAccess),
+                                       static_cast<uint32_t>(entryDependency.dstAccess)};
   const SubpassDependencyParams exitDependency = AttachmentExitDependency(attachmentUsage);
   VkSubpassDependency dependencies[2] = {};
   dependencies[0].srcSubpass = VK_SUBPASS_EXTERNAL;
