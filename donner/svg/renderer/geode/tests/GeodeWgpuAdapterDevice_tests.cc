@@ -800,6 +800,54 @@ TEST_F(GeodeWgpuAdapterDeviceTests, AMappingReleasedBeforeItsCallbackStillUnmaps
   EXPECT_THAT(adapter_->unmapBuffer(std::move(second)), gpu::IsOk());
 }
 
+/// The readback path reports whether the backend waited on the map's completion event or polled
+/// for it, and that answer belongs to the adapter that did the waiting. On a platform with no
+/// event wait the answer must be a plain false rather than an assumption baked into the caller,
+/// and a handle that no longer names a live mapping must not be able to read the flag out of
+/// whatever occupies that slot now.
+TEST_F(GeodeWgpuAdapterDeviceTests, TimedWaitReportingIsFalseForAPolledWaitAndForADeadHandle) {
+  const gpu::Buffer buffer = gpu::GetResultOrFail(adapter_->createBuffer(gpu::BufferDescriptor{
+      "readback", 256, gpu::BufferUsage::CopyDst | gpu::BufferUsage::MapRead}));
+
+  gpu::BufferMapping mapping =
+      gpu::GetResultOrFail(adapter_->mapBufferAsync(buffer, gpu::MapMode::Read, 0, 256));
+  EXPECT_FALSE(adapter_->mappingUsedTimedWaitAny(mapping))
+      << "no slice has run yet, so nothing can have waited on the completion event";
+
+  EXPECT_EQ(
+      gpu::GetResultOrFail(adapter_->waitForMapping(mapping, gpu::MapWaitParams{0.01, 2.0}, {})),
+      gpu::MapWaitOutcome::Ready);
+  // This build has no completion-event wait, so the slice above polled.
+  EXPECT_FALSE(adapter_->mappingUsedTimedWaitAny(mapping));
+
+  EXPECT_THAT(adapter_->unmapBuffer(std::move(mapping)), gpu::IsOk());
+  EXPECT_FALSE(adapter_->mappingUsedTimedWaitAny(gpu::BufferMapping()));
+}
+
+/// A readback buffer whose map was abandoned, and a pooled readback set evicted to stay inside
+/// its ceiling, both have to give their memory back at that moment. Releasing the handle alone
+/// only drops the adapter's reference, so the entry point that destroys the backend object is
+/// what the pool and the cancel path depend on - and it must refuse a handle that does not name
+/// a live buffer of this adapter rather than destroying the slot's new occupant.
+TEST_F(GeodeWgpuAdapterDeviceTests, DestroyingABufferBackingConsumesTheHandleAndRefusesStaleOnes) {
+  gpu::Buffer buffer = gpu::GetResultOrFail(adapter_->createBuffer(gpu::BufferDescriptor{
+      "readback", 256, gpu::BufferUsage::CopyDst | gpu::BufferUsage::MapRead}));
+
+  EXPECT_THAT(adapter_->destroyBufferBacking(std::move(buffer)), gpu::IsOk());
+  EXPECT_FALSE(buffer.isValid()) << "the handle must be consumed either way";
+
+  EXPECT_THAT(adapter_->destroyBufferBacking(gpu::Buffer()),
+              gpu::IsGpuError(gpu::GpuErrorType::InvalidHandle));
+
+  // A destroyed buffer's slot can be reused; a second destroy through the old handle must not
+  // reach whatever now occupies it.
+  const gpu::Buffer replacement = gpu::GetResultOrFail(adapter_->createBuffer(gpu::BufferDescriptor{
+      "replacement", 256, gpu::BufferUsage::CopyDst | gpu::BufferUsage::MapRead}));
+  EXPECT_TRUE(replacement.isValid());
+  EXPECT_FALSE(adapter_->wgpuBufferOf(gpu::Buffer())) << "a null handle names no backend buffer";
+  EXPECT_TRUE(adapter_->wgpuBufferOf(replacement));
+}
+
 /// The adapter presents to a Metal layer; the other platform surfaces are still created by the
 /// embedder, so asking it for one reports the capability as unsupported rather than appearing to
 /// work and then failing at the first frame.

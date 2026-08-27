@@ -1135,6 +1135,7 @@
         "writeTexture"
       ],
       "wgpuCFunctions": [
+        "wgpuBufferOf",
         "wgpuLabel",
         "wgpuTextureOf",
         "wgpuTextureViewOf"

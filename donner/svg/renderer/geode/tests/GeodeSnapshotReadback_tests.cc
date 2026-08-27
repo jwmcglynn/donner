@@ -124,6 +124,36 @@ TEST_F(GeodeSnapshotReadbackTest, GpuAndCpuPathsAreByteIdentical) {
       << "GPU unpremultiply output differs from the CPU reference path";
 }
 
+/// A readback that actually waits must account for the slices it ran: one recorded readback, at
+/// least one slice, and a slice count that keeps growing across readbacks rather than resetting
+/// or being reported once. The zero-slice cases are pinned elsewhere (a pre-cancelled snapshot
+/// and a cancel observed before the first slice), so this is the other half of that contract -
+/// without it a wrapper that recorded a constant zero would pass every existing assertion.
+TEST_F(GeodeSnapshotReadbackTest, ACompletedReadbackAccountsForTheSlicesItRan) {
+  auto device = sharedDevice();
+  ASSERT_NE(device, nullptr);
+  ASSERT_TRUE(device->snapshotReadbackPipeline().valid());
+
+  wgpu::Texture texture = createTestTexture(device->device(), wgpu::TextureUsage::TextureBinding);
+  const Vector2i dimensions(static_cast<int>(kWidth), static_cast<int>(kHeight));
+  RendererGeodeTextureSnapshot snapshot(device, std::move(texture), dimensions,
+                                        wgpu::TextureFormat::RGBA8Unorm);
+  RendererGeode renderer(device);
+
+  (void)renderer.consumeReadbackStats();  // Drop anything an earlier case in this suite left.
+
+  ASSERT_FALSE(snapshot.takeSnapshot().empty());
+  const RendererReadbackStats first = renderer.consumeReadbackStats();
+  EXPECT_EQ(first.count, 1);
+  EXPECT_GE(first.pollIterations, 1)
+      << "a readback that waited for the GPU must report the slices it ran";
+
+  ASSERT_FALSE(snapshot.takeSnapshot().empty());
+  const RendererReadbackStats second = renderer.consumeReadbackStats();
+  EXPECT_EQ(second.count, 1) << "each readback is recorded exactly once";
+  EXPECT_GE(second.pollIterations, 1);
+}
+
 /// A snapshot against a lost device must return an empty bitmap promptly
 /// instead of spending the full readback deadline waiting for a map that a
 /// hung driver will never deliver. A fresh (non-shared) device is used so the
