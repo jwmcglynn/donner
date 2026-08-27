@@ -30,10 +30,12 @@ donner_cc_library(
 donner_cc_library(
     name = "vulkan_device",
     srcs = [
+        "VulkanBufferAllocator.cc",
         "VulkanDevice.cc",
         "VulkanLoader.cc",
     ],
     hdrs = [
+        "VulkanBufferAllocator.h",
         "VulkanDevice.h",
         "VulkanLoader.h",
     ],

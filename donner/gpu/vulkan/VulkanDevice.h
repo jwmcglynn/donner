@@ -33,17 +33,25 @@ namespace donner::gpu::vulkan {
  *
  * Memory model (documented simplification for this slice): every buffer lives in
  * HOST_VISIBLE | HOST_COHERENT memory and stays persistently mapped, so queue writes are a
- * `memcpy` and readback needs no staging. Such a memory type is guaranteed by the Vulkan
+ * `memcpy` and readback needs no staging. Which allocation a buffer is bound into is the
+ * allocator's decision, behind the seam in VulkanBufferAllocator.h: one dedicated allocation per
+ * buffer today, with a suballocating implementation replaceable there rather than at every call
+ * site, once measurement says the driver's allocation-count cap is the constraint worth spending
+ * complexity on. Such a memory type is guaranteed by the Vulkan
  * specification ("Device Memory": at least one memory type has both HOST_VISIBLE and
  * HOST_COHERENT), and both the CI software rasterizer and desktop GPUs expose it. Textures are
  * DEVICE_LOCAL (when available) with staged uploads through a transient host-visible buffer and
  * explicit image layout transitions.
  *
- * Synchronization is intentionally conservative and validation-clean: full ALL_COMMANDS /
- * memory-availability barriers around image layout transitions, explicit external subpass
- * dependencies on every render pass, and a HOST-domain buffer barrier after readback copies.
- * Barrier elision is deliberately not attempted; it would need counter and timing evidence
- * naming the bottleneck it removes.
+ * Synchronization is tracked per resource rather than assumed: every image barrier and both of
+ * every render pass's external dependencies are derived from the state model in
+ * VulkanResourceState.h, which records the stage and access that last touched each texture and
+ * names both ends of the transition to whatever uses it next. A pattern the model does not
+ * describe falls back to the maximal ALL_COMMANDS barrier, so an unrecognised usage costs
+ * precision and never correctness. Readback copies still end in a HOST-domain buffer barrier.
+ *
+ * Barrier elision - dropping a barrier the model says is needed - is still not attempted; that
+ * would need counter and timing evidence naming the bottleneck it removes.
  *
  * Threading: single-threaded use, matching \ref donner::gpu::Device's thread affinity.
  * Completion is tracked by polling per-submission fences from the owning thread; there are no

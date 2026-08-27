@@ -27,6 +27,7 @@
 
 #include "donner/base/Utils.h"
 #include "donner/gpu/GpuLimits.h"
+#include "donner/gpu/vulkan/VulkanBufferAllocator.h"
 #include "donner/gpu/vulkan/VulkanLoader.h"
 #include "donner/gpu/vulkan/VulkanResourceState.h"
 
@@ -711,18 +712,21 @@ struct VulkanDevice::Impl {
   VkInstance instance = VK_NULL_HANDLE;                    //!< Owning instance; set by Create.
   VkPhysicalDevice physicalDevice = VK_NULL_HANDLE;        //!< Selected physical device.
   VkPhysicalDeviceMemoryProperties memoryProperties = {};  //!< Memory heaps/types of the device.
-  VkDevice device = VK_NULL_HANDLE;                        //!< Logical device.
-  VkQueue queue = VK_NULL_HANDLE;                          //!< The single graphics queue.
-  uint32_t queueFamilyIndex = 0;                           //!< Family index of \ref queue.
-  VkCommandPool commandPool = VK_NULL_HANDLE;              //!< Pool for all command buffers.
+  /// Where buffer memory comes from. One dedicated allocation per buffer today; the seam exists
+  /// so a suballocating implementation can replace that without touching any call site.
+  std::unique_ptr<BufferSuballocator> bufferAllocator;
+  VkDevice device = VK_NULL_HANDLE;            //!< Logical device.
+  VkQueue queue = VK_NULL_HANDLE;              //!< The single graphics queue.
+  uint32_t queueFamilyIndex = 0;               //!< Family index of \ref queue.
+  VkCommandPool commandPool = VK_NULL_HANDLE;  //!< Pool for all command buffers.
 
-  /// A buffer plus its dedicated allocation, persistently mapped (host-visible + coherent; see
-  /// the class comment for why every buffer is host-visible in this slice).
+  /// A buffer plus the memory it was bound into, persistently mapped (host-visible + coherent;
+  /// see the class comment for why every buffer is host-visible in this slice). Where that
+  /// memory comes from is the allocator's decision, not this record's.
   struct BufferRecord {
-    VkBuffer buffer = VK_NULL_HANDLE;        //!< Buffer handle.
-    VkDeviceMemory memory = VK_NULL_HANDLE;  //!< Dedicated allocation.
-    void* mapped = nullptr;                  //!< Persistent host mapping.
-    VkDeviceSize byteSize = 0;               //!< Creation size in bytes.
+    VkBuffer buffer = VK_NULL_HANDLE;  //!< Buffer handle.
+    BufferAllocation allocation;       //!< Memory this buffer was bound into.
+    VkDeviceSize byteSize = 0;         //!< Creation size in bytes.
   };
 
   /// An image plus its dedicated allocation. Its synchronization state lives in \ref syncStates
@@ -899,8 +903,8 @@ struct VulkanDevice::Impl {
     return commandBuffer;
   }
 
-  /// Creates a buffer with a dedicated persistently-mapped host-visible allocation. Used for
-  /// both RHI buffers and internal upload staging.
+  /// Creates a buffer and binds it to memory from the allocator. Used for both RHI buffers and
+  /// internal upload staging, so both benefit from whatever the allocator does.
   Result<BufferRecord> createHostVisibleBuffer(VkDeviceSize byteSize, VkBufferUsageFlags usage,
                                                std::string_view label) {
     BufferRecord record;
@@ -918,40 +922,13 @@ struct VulkanDevice::Impl {
           std::format("vkCreateBuffer for '{}' failed with {}", label, VkResultToString(result))};
     }
 
-    VkMemoryRequirements requirements = {};
-    api->vkGetBufferMemoryRequirements(device, record.buffer, &requirements);
-    const std::optional<uint32_t> memoryType =
-        FindMemoryType(memoryProperties, requirements.memoryTypeBits,
-                       VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-    if (!memoryType) {
+    Result<BufferAllocation> allocation =
+        bufferAllocator->allocate(*api, device, record.buffer, label);
+    if (allocation.hasError()) {
       destroyBufferRecord(record);
-      return GpuError{GpuErrorType::InvalidState,
-                      std::format("no host-visible coherent memory type for buffer '{}'", label)};
+      return std::move(allocation).error();
     }
-
-    VkMemoryAllocateInfo allocateInfo = {};
-    allocateInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-    allocateInfo.allocationSize = requirements.size;
-    allocateInfo.memoryTypeIndex = *memoryType;
-    if (const VkResult result =
-            api->vkAllocateMemory(device, &allocateInfo, nullptr, &record.memory);
-        result != VK_SUCCESS) {
-      destroyBufferRecord(record);
-      return GpuError{GpuErrorType::InvalidState,
-                      std::format("vkAllocateMemory of {} bytes for buffer '{}' failed with {}",
-                                  requirements.size, label, VkResultToString(result))};
-    }
-    if (const VkResult result = api->vkBindBufferMemory(device, record.buffer, record.memory, 0);
-        result != VK_SUCCESS) {
-      destroyBufferRecord(record);
-      return VkError("vkBindBufferMemory", result);
-    }
-    if (const VkResult result =
-            api->vkMapMemory(device, record.memory, 0, VK_WHOLE_SIZE, 0, &record.mapped);
-        result != VK_SUCCESS) {
-      destroyBufferRecord(record);
-      return VkError("vkMapMemory", result);
-    }
+    record.allocation = std::move(allocation).result();
     return record;
   }
 
@@ -961,11 +938,9 @@ struct VulkanDevice::Impl {
       api->vkDestroyBuffer(device, record.buffer, nullptr);
       record.buffer = VK_NULL_HANDLE;
     }
-    if (record.memory != VK_NULL_HANDLE) {
-      api->vkFreeMemory(device, record.memory, nullptr);
-      record.memory = VK_NULL_HANDLE;
+    if (bufferAllocator != nullptr) {
+      bufferAllocator->release(*api, device, record.allocation);
     }
-    record.mapped = nullptr;
   }
 
   /// Destroys a texture record's Vulkan objects.
@@ -1383,6 +1358,7 @@ std::unique_ptr<VulkanDevice> VulkanDevice::Create() {
   impl.commandPool = commandPool;
   api.vkGetDeviceQueue(device, selectedQueueFamily, 0, &impl.queue);
   api.vkGetPhysicalDeviceMemoryProperties(selectedDevice, &impl.memoryProperties);
+  impl.bufferAllocator = std::make_unique<DedicatedBufferAllocator>(impl.memoryProperties);
 
   if (setup.debugMessengerAvailable) {
     const DebugMessengerHandles messenger =
@@ -1459,13 +1435,13 @@ Result<std::vector<uint8_t>> VulkanDevice::readBackBuffer(const Buffer& buffer) 
     return std::move(status).error();
   }
   const Impl::BufferRecord* record = FindRecord(impl_->buffers, buffer.slotIndex());
-  if (record == nullptr || record->mapped == nullptr) {
+  if (record == nullptr || record->allocation.mapped == nullptr) {
     return GpuError{GpuErrorType::InvalidHandle,
                     std::format("buffer handle (slot {}) does not name a live Vulkan buffer",
                                 buffer.slotIndex())};
   }
 
-  const uint8_t* contents = static_cast<const uint8_t*>(record->mapped);
+  const uint8_t* contents = static_cast<const uint8_t*>(record->allocation.mapped);
   return std::vector<uint8_t>(contents, contents + record->byteSize);
 }
 
@@ -2165,12 +2141,13 @@ void VulkanDevice::onDestroyResource(std::string_view resourceName, uint32_t slo
 Status VulkanDevice::onWriteBuffer(uint32_t slotIndex, uint64_t offsetBytes,
                                    std::span<const uint8_t> data) {
   const Impl::BufferRecord* record = FindRecord(impl_->buffers, slotIndex);
-  if (record == nullptr || record->mapped == nullptr) {
+  if (record == nullptr || record->allocation.mapped == nullptr) {
     return GpuError{GpuErrorType::InvalidState,
                     std::format("buffer slot {} has no Vulkan buffer", slotIndex)};
   }
   if (!data.empty()) {
-    std::memcpy(static_cast<uint8_t*>(record->mapped) + offsetBytes, data.data(), data.size());
+    std::memcpy(static_cast<uint8_t*>(record->allocation.mapped) + offsetBytes, data.data(),
+                data.size());
   }
   return OkStatus();
 }
@@ -2275,7 +2252,7 @@ Status VulkanDevice::onWriteTexture(uint32_t slotIndex, std::span<const uint8_t>
     return std::move(stagingResult).error();
   }
   Impl::BufferRecord staging = std::move(stagingResult).result();
-  std::memcpy(staging.mapped, data.data(), data.size());
+  std::memcpy(staging.allocation.mapped, data.data(), data.size());
 
   // Fail-closed cleanup for every early return below.
   VkCommandBuffer commandBuffer = VK_NULL_HANDLE;
