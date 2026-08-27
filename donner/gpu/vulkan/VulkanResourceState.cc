@@ -120,7 +120,7 @@ TextureSyncState StateAfterUsage(TextureUsageKind usage) {
 
 ImageBarrierParams TransitionFor(const TextureSyncState& current, TextureUsageKind usage) {
   const VkImageLayout newLayout = LayoutForUsage(usage);
-  if (true) {  // NOT YET PRECISE: every pattern still takes the maximal barrier.
+  if (!IsTrackedLayout(current.layout) || usage == TextureUsageKind::Undefined) {
     // Either the image reached its layout through a path this table does not model, or the
     // caller named no real destination usage. Neither leaves anything precise to say.
     return ConservativeImageBarrier(current.layout, newLayout);
@@ -140,7 +140,7 @@ ImageBarrierParams TransitionFor(const TextureSyncState& current, TextureUsageKi
 
 SubpassDependencyParams AttachmentEntryDependency(const TextureSyncState& current) {
   SubpassDependencyParams params;
-  if (true) {  // NOT YET PRECISE.
+  if (!IsTrackedLayout(current.layout)) {
     params.conservative = true;
     params.srcAccess = VK_ACCESS_MEMORY_WRITE_BIT;
     params.dstAccess = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
@@ -179,9 +179,9 @@ SubpassDependencyParams AttachmentExitDependency(TextureUsage declaredUsage) {
   }
 
   SubpassDependencyParams params;
-  params.srcStage = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
-  params.srcAccess = VK_ACCESS_MEMORY_WRITE_BIT;
-  if (true) {  // NOT YET PRECISE.
+  params.srcStage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+  params.srcAccess = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+  if (dstStage == 0) {
     // The attachment declares no consumer this table models, so nothing narrower than the
     // maximal edge can be justified.
     params.dstStage = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
