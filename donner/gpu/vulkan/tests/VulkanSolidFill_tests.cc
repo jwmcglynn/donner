@@ -56,74 +56,19 @@ using geode::EncodedPath;
 using gpu::tests::BaselinePathSpec;
 using gpu::tests::BaselinePixelFromScene;
 using gpu::tests::BaselineScenePaths;
-using gpu::tests::BuildLegacyQuad;
+using gpu::tests::BuildIdentity4x4;
+using gpu::tests::BuildSolidFillMvp;
 using gpu::tests::ExpandLegacyAxis;
 using gpu::tests::kBaselineSize;
 using gpu::tests::LegacyAxis;
 using gpu::tests::LegacyBand;
-using gpu::tests::LegacyVertex;
+using gpu::tests::SolidFillUniforms;
+using gpu::tests::WriteBoundingPolygon;
 
 constexpr uint32_t kBytesPerRow = kBaselineSize * 4;  // 1024; already 256-byte aligned.
 
 /// C++ mirror of the shader's 288-byte Uniforms struct (layout anchored by the shader IR layout
 /// tests; field order matches slug_fill/the solid-fill IR program).
-struct alignas(16) Uniforms {
-  float mvp[16];                //!< Column-major clip-from-scene matrix.
-  float patternFromPath[16];    //!< Pattern transform (identity for solid fills).
-  float viewport[2];            //!< Viewport size in pixels.
-  float tileSize[2];            //!< Pattern tile size (unused for solid fills).
-  float color[4];               //!< Premultiplied fill color.
-  uint32_t fillRule;            //!< 0 = non-zero, 1 = even-odd.
-  uint32_t paintMode;           //!< 0 = solid color.
-  float patternOpacity;         //!< 1.0 for solid fills.
-  uint32_t hasClipPolygon;      //!< 0 = no clip polygon.
-  uint32_t hasClipMask;         //!< 0 = no clip mask.
-  uint32_t pad0;                //!< Padding to the grid block.
-  uint32_t pad1;                //!< Padding.
-  uint32_t pad2;                //!< Padding.
-  float gridYBase;              //!< Horizontal band grid base.
-  float gridHStride;            //!< Horizontal band stride.
-  uint32_t gridHBandCount;      //!< Horizontal band count.
-  float gridXBase;              //!< Vertical band grid base.
-  float gridVStride;            //!< Vertical band stride.
-  uint32_t gridVBandCount;      //!< Vertical band count.
-  uint32_t gridPad0;            //!< Padding.
-  uint32_t gridPad1;            //!< Padding.
-  float clipPolygonPlanes[16];  //!< Four vec4 half-planes (unused: hasClipPolygon == 0).
-};
-static_assert(sizeof(Uniforms) == 288, "Uniforms must match the shader layout");
-
-/// Builds the same clip-space MVP the production encoder computes: scene -> pixel via
-/// \p pixelFromScene, then pixel -> clip with x_clip = 2x/W - 1 and y_clip = -2y/H + 1 (the Y
-/// flip for a top-left pixel origin). Column-major mat4. The VulkanDevice backend restores this
-/// WebGPU clip-space convention via a negative-height viewport, so the identical values are
-/// correct here.
-void BuildMvp(const Transform2d& pixelFromScene, float* out16) {
-  const double sx = 2.0 / static_cast<double>(kBaselineSize);
-  const double sy = -2.0 / static_cast<double>(kBaselineSize);
-  const double a = pixelFromScene.data[0];
-  const double b = pixelFromScene.data[1];
-  const double c = pixelFromScene.data[2];
-  const double d = pixelFromScene.data[3];
-  const double e = pixelFromScene.data[4];
-  const double f = pixelFromScene.data[5];
-
-  std::memset(out16, 0, 16 * sizeof(float));
-  out16[0] = static_cast<float>(sx * a);
-  out16[1] = static_cast<float>(sy * b);
-  out16[4] = static_cast<float>(sx * c);
-  out16[5] = static_cast<float>(sy * d);
-  out16[10] = 1.0f;
-  out16[12] = static_cast<float>(sx * e - 1.0);
-  out16[13] = static_cast<float>(sy * f + 1.0);
-  out16[15] = 1.0f;
-}
-
-/// Writes an identity 4x4 into \p out16 (column-major).
-void BuildIdentity(float* out16) {
-  std::memset(out16, 0, 16 * sizeof(float));
-  out16[0] = out16[5] = out16[10] = out16[15] = 1.0f;
-}
 
 /// Renders the shared baseline scene through the production wgpu path as a black box (the exact
 /// BaselineCaptureTool.cc flow: GeodeDevice::CreateHeadless + GeoEncoder + mapped readback) and
@@ -241,7 +186,6 @@ struct SizedBuffer {
 
 /// One path's GPU resources.
 struct PathDraw {
-  Buffer vertexBuffer;       //!< Quad vertices (6 x 20 bytes).
   Buffer uniformBuffer;      //!< 288-byte Uniforms.
   SizedBuffer bands;         //!< Horizontal bands (or 4-byte dummy).
   SizedBuffer curves;        //!< Horizontal curves (or dummy).
@@ -444,16 +388,10 @@ TEST_F(VulkanSolidFillTest, MatchesProductionWgpuRender) {
       device_->createPipelineLayout(PipelineLayoutDescriptor{"solidFillPL", {bindGroupLayout}}),
       "createPipelineLayout");
 
-  // Vertex layout: pos (vec2f) + normal (vec2f) + bandIndex (u32) = 20 bytes.
+  // No vertex buffers: the stage builds the bounding fan from vertex_index.
   RenderPipelineDescriptor pipelineDescriptor{
       "solidFill", pipelineLayout,
-      VertexState{shaderModule,
-                  "vs_main",
-                  {VertexBufferLayout{20,
-                                      VertexStepMode::Vertex,
-                                      {VertexAttribute{VertexFormat::Float32x2, 0, 0},
-                                       VertexAttribute{VertexFormat::Float32x2, 8, 1},
-                                       VertexAttribute{VertexFormat::Uint32, 16, 2}}}}},
+      VertexState{shaderModule, "vs_main", {}},
       FragmentState{shaderModule,
                     "fs_main",
                     {ColorTargetState{
@@ -510,24 +448,14 @@ TEST_F(VulkanSolidFillTest, MatchesProductionWgpuRender) {
   for (const BaselinePathSpec& spec : BaselineScenePaths()) {
     const EncodedPath encoded = geode::GeodePathEncoder::encode(spec.path, spec.rule);
     ASSERT_GE(encoded.boundingVertexCount, 3u);
-    const std::array<LegacyVertex, 6> legacyQuad = BuildLegacyQuad(encoded.pathBounds);
-
     LegacyAxis horizontal;
     LegacyAxis vertical;
     ASSERT_TRUE(ExpandLegacyAxis(encoded.bands, encoded.curveIndices, encoded.curves, horizontal));
     ASSERT_TRUE(ExpandLegacyAxis(encoded.vBands, encoded.vCurveIndices, encoded.vCurves, vertical));
 
     PathDraw draw;
-    draw.vertexCount = static_cast<uint32_t>(legacyQuad.size());
-    draw.vertexBuffer = unwrap(
-        device_->createBuffer(BufferDescriptor{"vertices", legacyQuad.size() * sizeof(LegacyVertex),
-                                               BufferUsage::Vertex | BufferUsage::CopyDst}),
-        "createBuffer vertices");
-    const Status vertexWrite = device_->writeBuffer(
-        draw.vertexBuffer, 0,
-        std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(legacyQuad.data()),
-                                 legacyQuad.size() * sizeof(LegacyVertex)));
-    ASSERT_FALSE(vertexWrite.hasError()) << vertexWrite.error();
+    // The vertex shader expands the bounding fan from vertex_index; there is no vertex buffer.
+    draw.vertexCount = encoded.boundingDrawVertexCount();
 
     draw.bands = storageBuffer("bands", horizontal.bands.data(),
                                horizontal.bands.size() * sizeof(LegacyBand), sizeof(LegacyBand));
@@ -543,9 +471,9 @@ TEST_F(VulkanSolidFillTest, MatchesProductionWgpuRender) {
                                encoded.vBandGrid.size() * sizeof(uint32_t));
 
     // Uniforms: exactly the production populateFillUniform values for a solid fill.
-    Uniforms uniforms = {};
-    BuildMvp(pixelFromScene, uniforms.mvp);
-    BuildIdentity(uniforms.patternFromPath);
+    SolidFillUniforms uniforms = {};
+    BuildSolidFillMvp(pixelFromScene, uniforms.mvp);
+    BuildIdentity4x4(uniforms.patternFromPath);
     uniforms.viewport[0] = static_cast<float>(kBaselineSize);
     uniforms.viewport[1] = static_cast<float>(kBaselineSize);
     uniforms.tileSize[0] = 1.0f;
@@ -564,9 +492,10 @@ TEST_F(VulkanSolidFillTest, MatchesProductionWgpuRender) {
     uniforms.gridXBase = encoded.xBase;
     uniforms.gridVStride = encoded.vStride;
     uniforms.gridVBandCount = encoded.vBandCount;
+    WriteBoundingPolygon(encoded, uniforms);
 
     draw.uniformBuffer =
-        unwrap(device_->createBuffer(BufferDescriptor{"uniforms", sizeof(Uniforms),
+        unwrap(device_->createBuffer(BufferDescriptor{"uniforms", sizeof(SolidFillUniforms),
                                                       BufferUsage::Uniform | BufferUsage::CopyDst}),
                "createBuffer uniforms");
     const Status uniformWrite = device_->writeBuffer(
@@ -578,7 +507,7 @@ TEST_F(VulkanSolidFillTest, MatchesProductionWgpuRender) {
     // element 0, and Vulkan enforces the bound range (Metal ignores it, but both slices bind
     // the same honest sizes).
     std::vector<BindGroupEntry> entries;
-    entries.push_back({0, BufferBinding{draw.uniformBuffer, 0, sizeof(Uniforms)}});
+    entries.push_back({0, BufferBinding{draw.uniformBuffer, 0, sizeof(SolidFillUniforms)}});
     entries.push_back({1, BufferBinding{draw.bands.buffer, 0, draw.bands.byteSize}});
     entries.push_back({2, BufferBinding{draw.curves.buffer, 0, draw.curves.byteSize}});
     entries.push_back({3, TextureViewBinding{dummyView}});
@@ -611,8 +540,6 @@ TEST_F(VulkanSolidFillTest, MatchesProductionWgpuRender) {
     ASSERT_FALSE(pipelineStatus.hasError()) << pipelineStatus.error();
     const Status bindGroupStatus = pass->setBindGroup(0, draw.bindGroup);
     ASSERT_FALSE(bindGroupStatus.hasError()) << bindGroupStatus.error();
-    const Status vertexBufferStatus = pass->setVertexBuffer(0, draw.vertexBuffer);
-    ASSERT_FALSE(vertexBufferStatus.hasError()) << vertexBufferStatus.error();
     const Status drawStatus = pass->draw(draw.vertexCount);
     ASSERT_FALSE(drawStatus.hasError()) << drawStatus.error();
   }

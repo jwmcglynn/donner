@@ -13,6 +13,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <span>
 #include <vector>
 
@@ -148,30 +149,6 @@ struct LegacyAxis {
   std::vector<EncodedPath::Curve> curves;
 };
 
-/// Vertex layout consumed by BuildSolidFillModule's current vertex-buffer interface.
-struct LegacyVertex {
-  float posX;
-  float posY;
-  float normalX;
-  float normalY;
-  uint32_t bandIndex = 0;
-};
-static_assert(sizeof(LegacyVertex) == 20, "LegacyVertex must match the shader IR layout");
-
-/// Expresses the encoded path's conservative AABB through the generic shader IR's legacy quad.
-inline std::array<LegacyVertex, 6> BuildLegacyQuad(const Box2d& bounds) {
-  const auto xMin = static_cast<float>(bounds.topLeft.x);
-  const auto yMin = static_cast<float>(bounds.topLeft.y);
-  const auto xMax = static_cast<float>(bounds.bottomRight.x);
-  const auto yMax = static_cast<float>(bounds.bottomRight.y);
-  return {{{xMin, yMin, -1.0f, -1.0f},
-           {xMax, yMin, 1.0f, -1.0f},
-           {xMax, yMax, 1.0f, 1.0f},
-           {xMin, yMin, -1.0f, -1.0f},
-           {xMax, yMax, 1.0f, 1.0f},
-           {xMin, yMax, -1.0f, 1.0f}}};
-}
-
 /// Expands compact per-band curve references into the contiguous layout consumed by the current
 /// generic solid-fill shader IR. Returns false for a malformed reference range or index.
 inline bool ExpandLegacyAxis(std::span<const EncodedPath::Band> bands,
@@ -195,6 +172,82 @@ inline bool ExpandLegacyAxis(std::span<const EncodedPath::Band> bands,
     result.bands.push_back(legacyBand);
   }
   return true;
+}
+
+/// Uniform block the generic solid-fill shader IR declares. Both vertical slices fill this one
+/// definition, so a change to the IR's block cannot reach one slice and miss the other - which
+/// is how the Metal slice came to rasterize geometry the production renderer had retired.
+struct alignas(16) SolidFillUniforms {
+  float mvp[16];                 //!< Column-major clip-from-scene matrix.
+  float patternFromPath[16];     //!< Pattern transform (identity for solid fills).
+  float viewport[2];             //!< Viewport size in pixels.
+  float tileSize[2];             //!< Pattern tile size (unused for solid fills).
+  float color[4];                //!< Premultiplied fill color.
+  uint32_t fillRule;             //!< 0 = non-zero, 1 = even-odd.
+  uint32_t paintMode;            //!< 0 = solid color.
+  float patternOpacity;          //!< 1.0 for solid fills.
+  uint32_t hasClipPolygon;       //!< 0 = no clip polygon.
+  uint32_t hasClipMask;          //!< 0 = no clip mask.
+  uint32_t pad0;                 //!< Padding to the grid block.
+  uint32_t pad1;                 //!< Padding.
+  uint32_t pad2;                 //!< Padding.
+  float gridYBase;               //!< Horizontal band grid base.
+  float gridHStride;             //!< Horizontal band stride.
+  uint32_t gridHBandCount;       //!< Horizontal band count.
+  float gridXBase;               //!< Vertical band grid base.
+  float gridVStride;             //!< Vertical band stride.
+  uint32_t gridVBandCount;       //!< Vertical band count.
+  uint32_t boundingVertexCount;  //!< Vertices in the convex bounding polygon (3 to 8).
+  uint32_t gridPad1;             //!< Padding.
+  float clipPolygonPlanes[16];   //!< Four vec4 half-planes (unused: hasClipPolygon == 0).
+  float boundingVertices[16];    //!< Two path-space vec2 vertices per vec4, up to eight.
+};
+static_assert(sizeof(SolidFillUniforms) == 352, "SolidFillUniforms must match the shader layout");
+
+/// Builds the same clip-space MVP the production encoder computes: scene -> pixel via
+/// \p pixelFromScene, then pixel -> clip with x_clip = 2x/W - 1 and y_clip = -2y/H + 1 (the Y
+/// flip for a top-left pixel origin). Column-major mat4.
+///
+/// @param pixelFromScene Scene-to-pixel transform.
+/// @param out16 Receives sixteen column-major floats.
+inline void BuildSolidFillMvp(const Transform2d& pixelFromScene, float* out16) {
+  const double sx = 2.0 / static_cast<double>(kBaselineSize);
+  const double sy = -2.0 / static_cast<double>(kBaselineSize);
+  const double a = pixelFromScene.data[0];
+  const double b = pixelFromScene.data[1];
+  const double c = pixelFromScene.data[2];
+  const double d = pixelFromScene.data[3];
+  const double e = pixelFromScene.data[4];
+  const double f = pixelFromScene.data[5];
+
+  std::memset(out16, 0, 16 * sizeof(float));
+  out16[0] = static_cast<float>(sx * a);
+  out16[1] = static_cast<float>(sy * b);
+  out16[4] = static_cast<float>(sx * c);
+  out16[5] = static_cast<float>(sy * d);
+  out16[10] = 1.0f;
+  out16[12] = static_cast<float>(sx * e - 1.0);
+  out16[13] = static_cast<float>(sy * f + 1.0);
+  out16[15] = 1.0f;
+}
+
+/// Writes an identity 4x4 into \p out16 (column-major). @param out16 Receives sixteen floats.
+inline void BuildIdentity4x4(float* out16) {
+  std::memset(out16, 0, 16 * sizeof(float));
+  out16[0] = out16[5] = out16[10] = out16[15] = 1.0f;
+}
+
+/// Mirrors the production encoder's bounding-polygon uniform packing: the vertex count plus two
+/// path-space vec2 vertices per vec4.
+///
+/// @param encoded Encoded path carrying the polygon.
+/// @param uniforms Uniform block to fill.
+inline void WriteBoundingPolygon(const EncodedPath& encoded, SolidFillUniforms& uniforms) {
+  uniforms.boundingVertexCount = encoded.boundingVertexCount;
+  for (uint32_t i = 0; i < encoded.boundingVertexCount; ++i) {
+    uniforms.boundingVertices[i * 2u] = encoded.boundingVertices[i].x;
+    uniforms.boundingVertices[i * 2u + 1u] = encoded.boundingVertices[i].y;
+  }
 }
 
 }  // namespace donner::gpu::tests
