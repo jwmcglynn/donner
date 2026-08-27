@@ -824,6 +824,39 @@ TEST_F(GeodeWgpuAdapterDeviceTests, TimedWaitReportingIsFalseForAPolledWaitAndFo
   EXPECT_FALSE(adapter_->mappingUsedTimedWaitAny(gpu::BufferMapping()));
 }
 
+/// The browser waits out a map slice on the map's completion event, and that wait returns for
+/// two reasons: the map finished, or the slice expired with the map still pending. The second
+/// case must report "not finished" so the caller waits again - reporting it as a failed map ends
+/// the readback on its first slice, the snapshot comes back empty, and the editor render that
+/// asked for it has nothing to present.
+///
+/// That arm is compiled out everywhere these suites run, which is how it reached the browser
+/// lane unchecked, so the seam below stands in for it.
+TEST_F(GeodeWgpuAdapterDeviceTests, AnEventWaitThatLearnedNothingReportsPendingNotFailed) {
+  const gpu::Buffer buffer = gpu::GetResultOrFail(adapter_->createBuffer(gpu::BufferDescriptor{
+      "readback", 256, gpu::BufferUsage::CopyDst | gpu::BufferUsage::MapRead}));
+
+  gpu::BufferMapping mapping =
+      gpu::GetResultOrFail(adapter_->mapBufferAsync(buffer, gpu::MapMode::Read, 0, 256));
+
+  // Nothing has polled since the map was requested, so the map cannot already be complete.
+  adapter_->setSimulateEventWaitForTest(true);
+  const gpu::Result<gpu::MapWaitOutcome> expired =
+      adapter_->waitForMapping(mapping, gpu::MapWaitParams{0.0001, 0.0001}, {});
+  adapter_->setSimulateEventWaitForTest(false);
+
+  ASSERT_THAT(expired, gpu::HasResult());
+  EXPECT_EQ(expired.result(), gpu::MapWaitOutcome::TimedOut)
+      << "a slice that waited and learned nothing must leave the map waitable, not report it "
+         "failed";
+
+  // The mapping is still usable: a real wait now completes it.
+  EXPECT_EQ(
+      gpu::GetResultOrFail(adapter_->waitForMapping(mapping, gpu::MapWaitParams{0.01, 2.0}, {})),
+      gpu::MapWaitOutcome::Ready);
+  EXPECT_THAT(adapter_->unmapBuffer(std::move(mapping)), gpu::IsOk());
+}
+
 /// A readback buffer whose map was abandoned, and a pooled readback set evicted to stay inside
 /// its ceiling, both have to give their memory back at that moment. Releasing the handle alone
 /// only drops the adapter's reference, so the entry point that destroys the backend object is

@@ -128,6 +128,17 @@ public:
    */
   bool mappingUsedTimedWaitAny(const gpu::BufferMapping& mapping) const;
 
+  /**
+   * Test seam: makes a wait slice behave as the browser's timed wait does when it expires
+   * without the map completing - it reports that it handled the slice, having learned nothing.
+   *
+   * That arm is compiled out on every platform the test suites run on, so its contract is
+   * otherwise checked only by the browser lane, which is exactly where it went unchecked.
+   *
+   * @param simulate Whether slices should take the simulated event-wait path.
+   */
+  void setSimulateEventWaitForTest(bool simulate) { simulateEventWaitForTest_ = simulate; }
+
   gpu::Result<gpu::Texture> importExternalTexture(wgpu::Texture texture, const gpu::Extent2d& size,
                                                   gpu::TextureFormat format,
                                                   gpu::TextureUsage usage);
@@ -420,9 +431,10 @@ private:
     bool usedTimedWaitAny = false;
   };
 
-  /// Ready or Failed, from a completion that has already run.
-  /// @param completion Finished completion state.
-  static gpu::MapSliceState sliceStateOf(const MappingSlot::Completion& completion);
+  /// The mapping's state right now: Ready or Failed once the map has completed, DeviceLost on a
+  /// lost device, and Pending until then.
+  /// @param completion Completion state to read.
+  gpu::MapSliceState sliceStateOf(const MappingSlot::Completion& completion) const;
 
   /// Waits out one slice on the map's completion event where the platform supports it.
   /// @param mappingSlotIndex Slot of the mapping to wait on.
@@ -430,6 +442,11 @@ private:
   /// @return True if the slice was waited on the event (so the caller re-reads the completion
   ///   rather than polling), false if this platform or this thread cannot event-wait it.
   bool waitOnMapFutureSlice(uint32_t mappingSlotIndex, std::chrono::microseconds slice);
+
+  /// Makes \ref waitOnMapFutureSlice report that an event wait handled the slice without one
+  /// having happened, so the browser arm's contract can be checked where that arm is compiled
+  /// out. See \ref simulateEventWaitForTest.
+  bool simulateEventWaitForTest_ = false;
 
   /// One presentation surface and the texture it has handed out this frame.
   struct SurfaceSlot {

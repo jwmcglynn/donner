@@ -637,13 +637,31 @@ gpu::Status GeodeWgpuAdapterDevice::onMapBufferAsync(uint32_t mappingSlotIndex,
   return OkStatus();
 }
 
-gpu::MapSliceState GeodeWgpuAdapterDevice::sliceStateOf(const MappingSlot::Completion& completion) {
-  return completion.ok.load(std::memory_order_relaxed) ? gpu::MapSliceState::Ready
-                                                       : gpu::MapSliceState::Failed;
+gpu::MapSliceState GeodeWgpuAdapterDevice::sliceStateOf(
+    const MappingSlot::Completion& completion) const {
+  // Total over the completion state on purpose. A wait that returns without the map having
+  // completed - a timed wait that expired, a poll that found nothing - has learned nothing about
+  // whether the map will succeed, and reading only the success flag there reports a map that is
+  // merely not finished yet as a failed one. Every caller reads the state through here so that
+  // mistake cannot be made at one site and not another.
+  if (completion.done.load(std::memory_order_acquire)) {
+    return completion.ok.load(std::memory_order_relaxed) ? gpu::MapSliceState::Ready
+                                                         : gpu::MapSliceState::Failed;
+  }
+  return geodeDevice_.isDeviceLost() ? gpu::MapSliceState::DeviceLost : gpu::MapSliceState::Pending;
 }
 
 bool GeodeWgpuAdapterDevice::waitOnMapFutureSlice(uint32_t mappingSlotIndex,
                                                   std::chrono::microseconds slice) {
+  if (simulateEventWaitForTest_) {
+    // Stands in for a browser timed wait that expired without the map completing. The real arm
+    // is compiled out everywhere the test suites run, so without this seam its contract - that a
+    // slice which waited and learned nothing reports "not finished", never "failed" - would be
+    // checked only by the browser lane.
+    (void)mappingSlotIndex;
+    (void)slice;
+    return true;
+  }
 #ifdef __EMSCRIPTEN__
   // The browser instance is created asking for TimedWaitAny (see GeodeDevice::CreateHeadless)
   // exactly so this wait exists: on a worker thread the map completion is a browser-side event,
@@ -664,8 +682,15 @@ bool GeodeWgpuAdapterDevice::waitOnMapFutureSlice(uint32_t mappingSlotIndex,
 
   wgpu::FutureWaitInfo waitInfo{};
   waitInfo.future = slot.mapFuture;
+  // The browser's timed wait keeps its own cadence rather than the caller's slice. Every wait
+  // here is an asyncify suspend and rewind of the whole call stack, so slicing at the native
+  // poll cadence would spend fifty of those per millisecond to learn the same thing; five
+  // milliseconds is what this path was tuned to, and a cancellation is still observed within it
+  // because the caller re-checks between slices.
+  constexpr std::chrono::microseconds kBrowserTimedWaitSlice{5000};
+  (void)slice;
   const auto sliceNs = static_cast<std::uint64_t>(
-      std::chrono::duration_cast<std::chrono::nanoseconds>(slice).count());
+      std::chrono::duration_cast<std::chrono::nanoseconds>(kBrowserTimedWaitSlice).count());
   const wgpu::WaitStatus waitStatus = geodeDevice_.instance().waitAny(1, &waitInfo, sliceNs);
   if (waitStatus != wgpu::WaitStatus::Success && waitStatus != wgpu::WaitStatus::TimedOut) {
     instanceWaitUsable.store(false, std::memory_order_relaxed);
@@ -687,11 +712,8 @@ gpu::MapSliceState GeodeWgpuAdapterDevice::onWaitMappingSlice(uint32_t mappingSl
     return gpu::MapSliceState::Failed;
   }
   MappingSlot::Completion& completion = *slotMappings_[mappingSlotIndex].completion;
-  if (completion.done.load(std::memory_order_acquire)) {
+  if (completion.done.load(std::memory_order_acquire) || geodeDevice_.isDeviceLost()) {
     return sliceStateOf(completion);
-  }
-  if (geodeDevice_.isDeviceLost()) {
-    return gpu::MapSliceState::DeviceLost;
   }
 
   // Wait out the slice the caller allowed rather than returning the moment one poll finds
@@ -714,10 +736,7 @@ gpu::MapSliceState GeodeWgpuAdapterDevice::onWaitMappingSlice(uint32_t mappingSl
       },
       std::max(slice, std::chrono::microseconds(1)));
 
-  if (completion.done.load(std::memory_order_acquire)) {
-    return sliceStateOf(completion);
-  }
-  return geodeDevice_.isDeviceLost() ? gpu::MapSliceState::DeviceLost : gpu::MapSliceState::Pending;
+  return sliceStateOf(completion);
 }
 
 bool GeodeWgpuAdapterDevice::mappingUsedTimedWaitAny(const gpu::BufferMapping& mapping) const {
