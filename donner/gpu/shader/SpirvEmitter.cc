@@ -171,6 +171,7 @@ constexpr uint32_t kDecorationOffset = 35;
 constexpr uint32_t kBuiltInPosition = 0;
 constexpr uint32_t kBuiltInFragCoord = 15;
 constexpr uint32_t kBuiltInGlobalInvocationId = 28;
+constexpr uint32_t kBuiltInVertexIndex = 42;
 constexpr uint32_t kBuiltInInstanceIndex = 43;
 
 // Execution models, modes, and module-level enums.
@@ -317,6 +318,7 @@ bool IsVectorScalarBroadcast(BinaryOp op, const IrType& lhsType, const IrType& r
 /// @param builtin IR builtin input.
 uint32_t BuiltInValue(BuiltinInput builtin) {
   switch (builtin) {
+    case BuiltinInput::VertexIndex: return kBuiltInVertexIndex;
     case BuiltinInput::InstanceIndex: return kBuiltInInstanceIndex;
     case BuiltinInput::Position: return kBuiltInFragCoord;
     case BuiltinInput::GlobalInvocationId: return kBuiltInGlobalInvocationId;

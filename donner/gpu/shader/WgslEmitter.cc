@@ -175,6 +175,7 @@ std::string TypeToWgsl(const IrType& type) {
 /// WGSL `@builtin(...)` annotation, with a trailing space, for a stage input.
 std::string_view BuiltinInputAnnotation(BuiltinInput builtin) {
   switch (builtin) {
+    case BuiltinInput::VertexIndex: return "@builtin(vertex_index) ";
     case BuiltinInput::InstanceIndex: return "@builtin(instance_index) ";
     case BuiltinInput::Position: return "@builtin(position) ";
     case BuiltinInput::GlobalInvocationId: return "@builtin(global_invocation_id) ";

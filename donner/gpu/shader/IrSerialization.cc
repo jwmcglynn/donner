@@ -168,6 +168,7 @@ std::string_view StageSuffix(StageKind stage) {
 /// Serialized ` @builtin(<name>)` suffix of a stage input.
 std::string_view BuiltinInputSuffix(BuiltinInput builtin) {
   switch (builtin) {
+    case BuiltinInput::VertexIndex: return " @builtin(vertex_index)";
     case BuiltinInput::InstanceIndex: return " @builtin(instance_index)";
     case BuiltinInput::Position: return " @builtin(position)";
     case BuiltinInput::GlobalInvocationId: return " @builtin(global_invocation_id)";

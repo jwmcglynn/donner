@@ -943,9 +943,12 @@ ShaderResult<FunctionBuilder> ModuleBuilder::createVertexEntryPoint(
   }
   for (const IrParam& param : params) {
     if (param.builtin) {
-      if (*param.builtin != BuiltinInput::InstanceIndex || !(param.type == IrType::U32())) {
+      const bool vertexBuiltin = *param.builtin == BuiltinInput::VertexIndex ||
+                                 *param.builtin == BuiltinInput::InstanceIndex;
+      if (!vertexBuiltin || !(param.type == IrType::U32())) {
         return ShaderError{
-            std::format("vertex builtin input {} must be instance_index: u32", param.name.str()),
+            std::format("vertex builtin input {} must be vertex_index or instance_index: u32",
+                        param.name.str()),
             name};
       }
     } else if (!param.location) {
