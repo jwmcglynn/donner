@@ -2,8 +2,10 @@
 /// @file
 /// \c donner::gpu::Device - the abstract GPU device with shared fail-closed validation.
 
+#include <chrono>
 #include <cstdint>
 #include <format>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <span>
@@ -171,6 +173,17 @@ private:
 Result<uint64_t> ValidateTexelCopyInternal(const TexelCopyBufferLayout& layout,
                                            const Extent2d& copySize, TextureFormat format,
                                            std::string_view context);
+
+/// A texture acquired from a surface for one frame, with the state the surface reported while
+/// handing it over.
+///
+/// A non-success status can still come with a usable texture: a surface that has drifted out of
+/// date usually still presents, so the caller chooses between drawing this frame and
+/// reconfiguring first.
+struct SurfaceTexture {
+  Texture texture;                                //!< The frame's texture; null when none came.
+  SurfaceStatus status = SurfaceStatus::Success;  //!< What the surface reported.
+};
 
 /**
  * Abstract GPU device: resource creation, queue writes, and submission with shared fail-closed
@@ -340,6 +353,129 @@ public:
   Result<std::unique_ptr<CommandEncoder>> createCommandEncoder();
 
   /**
+   * Creates a surface presenting to a platform object.
+   *
+   * The surface is not usable until \ref configureSurface succeeds: a surface knows what it
+   * presents to, and a configuration knows how.
+   *
+   * @param descriptor Label and platform object to present to.
+   */
+  Result<Surface> createSurface(const SurfaceDescriptor& descriptor);
+
+  /// What \p surface supports, for choosing a configuration. @param surface Live surface.
+  Result<SurfaceCapabilities> surfaceCapabilities(const Surface& surface) const;
+
+  /**
+   * Configures how \p surface presents, replacing any previous configuration.
+   *
+   * This is how a surface follows its window: a resize reconfigures with the new extent rather
+   * than creating a new surface, and it is the recovery from \ref SurfaceStatus::Outdated.
+   * Reconfiguring abandons any texture currently acquired from the surface.
+   *
+   * @param surface Live surface.
+   * @param configuration Format, usage, extent, pacing and alpha compositing.
+   */
+  Status configureSurface(const Surface& surface, const SurfaceConfiguration& configuration);
+
+  /**
+   * Acquires the texture for the next frame of \p surface.
+   *
+   * The texture is valid until the matching \ref presentSurface, \ref abandonCurrentTexture, or
+   * a reconfiguration - each of those invalidates it, so drawing into a presented texture is a
+   * reported validation failure rather than a write to a texture the platform now owns.
+   *
+   * A non-success status can still come with a usable texture: a surface that has drifted out of
+   * date usually still presents, so the caller decides between drawing this frame and
+   * reconfiguring first.
+   *
+   * @param surface Live, configured surface.
+   */
+  Result<SurfaceTexture> acquireCurrentTexture(const Surface& surface);
+
+  /**
+   * Presents the texture acquired from \p surface and invalidates it.
+   *
+   * Not every platform lets a caller present: where the host drives its own frame loop, the
+   * frame appears when the host shows it, and asking to present is rejected rather than
+   * performed. Such a surface still acquires and still invalidates its texture at the end of the
+   * frame through \ref abandonCurrentTexture.
+   *
+   * @param surface Live surface with an acquired texture.
+   */
+  Result<SurfaceStatus> presentSurface(const Surface& surface);
+
+  /**
+   * Releases the acquired texture of \p surface without presenting it, for a frame the caller
+   * decided not to show.
+   *
+   * @param surface Live surface with an acquired texture.
+   */
+  Status abandonCurrentTexture(const Surface& surface);
+
+  /// Destroys a surface (see the destroy contract above). @param surface Handle to destroy.
+  Status destroySurface(Surface&& surface);
+
+  /**
+   * Begins mapping a range of \p buffer for host access, and returns the handle that names the
+   * mapping.
+   *
+   * The mapping is not readable yet: \ref waitForMapping decides when it is. The returned handle
+   * is what keeps the mapped range reachable - \ref unmapBuffer consumes it and every copy of it
+   * goes stale at that moment, so a read through a handle whose mapping has been released is a
+   * reported validation failure rather than a read of memory that is no longer there.
+   *
+   * @param buffer Buffer to map; needs \ref BufferUsage::MapRead.
+   * @param mode How the host will access the range.
+   * @param offsetBytes Byte offset of the mapped range.
+   * @param byteCount Length of the mapped range; must be nonzero and fit the buffer.
+   */
+  Result<BufferMapping> mapBufferAsync(const Buffer& buffer, MapMode mode, uint64_t offsetBytes,
+                                       uint64_t byteCount);
+
+  /**
+   * Waits for a pending mapping in slices, until it completes, the caller stops it, the budget
+   * runs out, or the device is lost.
+   *
+   * \p shouldCancel is consulted before each slice, so a caller that changes its mind stops
+   * within one slice rather than at the end of the budget. Device loss ends the wait
+   * immediately: the mapping can never complete afterwards, and reporting it as a timeout would
+   * describe a permanent failure as a slow one.
+   *
+   * @param mapping Live mapping of this device.
+   * @param params Slice length and total budget; both must be greater than zero.
+   * @param shouldCancel Consulted before each slice; may be empty for an uncancellable wait.
+   */
+  /// Test seam for \ref waitForMapping. Production callers pass none; a test injects a clock and
+  /// a rest so a budget is verified deterministically and without spending it.
+  struct MapWaitTestHooks {
+    /// Clock the budget is measured against. Defaults to `std::chrono::steady_clock::now`.
+    std::function<std::chrono::steady_clock::time_point()> now;
+    /// Rests for the given duration. Defaults to `std::this_thread::sleep_for`.
+    std::function<void(std::chrono::microseconds)> rest;
+  };
+
+  Result<MapWaitOutcome> waitForMapping(const BufferMapping& mapping, const MapWaitParams& params,
+                                        const std::function<bool()>& shouldCancel,
+                                        const MapWaitTestHooks& testHooks = {});
+
+  /**
+   * Returns the mapped bytes of a completed mapping.
+   *
+   * Fails closed when the mapping is stale, belongs to another device, or has not completed: the
+   * span is only valid while the handle names a live, ready mapping.
+   *
+   * @param mapping Live, completed mapping of this device.
+   */
+  Result<std::span<const uint8_t>> mappedBytes(const BufferMapping& mapping) const;
+
+  /**
+   * Releases a mapping, invalidating the handle and every copy of it.
+   *
+   * @param mapping Mapping to release; consumed either way (see the destroy contract above).
+   */
+  Status unmapBuffer(BufferMapping&& mapping);
+
+  /**
    * Writes \p data into \p buffer at \p offsetBytes. Fails closed if the range does not fit
    * (checked arithmetic) or the buffer lacks \ref BufferUsage::CopyDst.
    *
@@ -480,6 +616,67 @@ protected:
    */
   Status validateTextureViewHandleForBackend(const TextureView& textureView) const;
 
+  /**
+   * Backend hook: begin mapping a buffer range. Defaults to reporting the capability as
+   * unsupported, so a backend without host mapping needs no implementation and callers get a
+   * clean unsupported result rather than a missing symbol.
+   *
+   * @param mappingSlotIndex Slot the mapping occupies.
+   * @param bufferSlotIndex Slot of the buffer being mapped.
+   * @param mode How the host will access the range.
+   * @param offsetBytes Byte offset of the mapped range.
+   * @param byteCount Length of the mapped range.
+   */
+  virtual Status onMapBufferAsync(uint32_t mappingSlotIndex, uint32_t bufferSlotIndex, MapMode mode,
+                                  uint64_t offsetBytes, uint64_t byteCount);
+
+  /**
+   * Backend hook: wait up to \p sliceSeconds for a pending mapping and report what it found.
+   * The runtime owns the deadline and the caller's cancellation; this reports only the mapping.
+   *
+   * @param mappingSlotIndex Slot of the pending mapping.
+   * @param sliceSeconds Longest this call may block.
+   */
+  virtual MapSliceState onWaitMappingSlice(uint32_t mappingSlotIndex, double sliceSeconds);
+
+  /// Backend hook: bytes of a completed mapping. @param mappingSlotIndex Slot of the mapping.
+  virtual Result<std::span<const uint8_t>> onMappedBytes(uint32_t mappingSlotIndex) const;
+
+  /// Backend hook: release a mapping. @param mappingSlotIndex Slot of the mapping.
+  virtual void onUnmapBuffer(uint32_t mappingSlotIndex);
+
+  /**
+   * Backend hook: create a surface for a platform object. Defaults to reporting presentation as
+   * unsupported, so a backend that cannot present needs no implementation.
+   *
+   * @param slotIndex Slot the surface occupies.
+   * @param descriptor Label and platform object.
+   */
+  virtual Status onCreateSurface(uint32_t slotIndex, const SurfaceDescriptor& descriptor);
+
+  /// Backend hook: what a surface supports. @param slotIndex Slot of the surface.
+  virtual Result<SurfaceCapabilities> onSurfaceCapabilities(uint32_t slotIndex) const;
+
+  /// Backend hook: apply a configuration. @param slotIndex Slot of the surface.
+  /// @param configuration Configuration to apply.
+  virtual Status onConfigureSurface(uint32_t slotIndex, const SurfaceConfiguration& configuration);
+
+  /**
+   * Backend hook: acquire the next frame's texture and report the surface's state.
+   *
+   * @param slotIndex Slot of the surface.
+   * @param textureSlotIndex Slot the runtime allocated for the acquired texture.
+   */
+  virtual Result<SurfaceStatus> onAcquireCurrentTexture(uint32_t slotIndex,
+                                                        uint32_t textureSlotIndex);
+
+  /// Backend hook: present the acquired texture. @param slotIndex Slot of the surface.
+  virtual Result<SurfaceStatus> onPresentSurface(uint32_t slotIndex);
+
+  /// Backend hook: drop the acquired texture without presenting.
+  /// @param slotIndex Slot of the surface.
+  virtual void onAbandonCurrentTexture(uint32_t slotIndex);
+
   /// Backend hook: a validated command buffer was submitted.
   /// @param submissionSerial Serial assigned to this submission.
   /// @param commandBufferSlotIndex Slot the command buffer occupied before being consumed.
@@ -493,6 +690,22 @@ private:
   /// Validated per-buffer state.
   struct BufferRecord {
     BufferDescriptor descriptor;  //!< Creation descriptor.
+  };
+  /// Validated per-surface state.
+  struct SurfaceRecord {
+    SurfaceDescriptor descriptor;                    //!< Creation descriptor.
+    std::optional<SurfaceConfiguration> configured;  //!< Current configuration, if any.
+    /// Texture currently acquired from this surface, invalidated on present, abandon and
+    /// reconfiguration. Named by reference because the caller holds the owning handle; releasing
+    /// the slot is what makes that handle stale.
+    TextureRef acquired;
+  };
+  /// Validated per-mapping state.
+  struct MappingRecord {
+    uint32_t bufferSlotIndex = 0;  //!< Slot of the mapped buffer.
+    MapMode mode = MapMode::Read;  //!< How the host accesses the range.
+    uint64_t offsetBytes = 0;      //!< Byte offset of the mapped range.
+    uint64_t byteCount = 0;        //!< Length of the mapped range.
   };
   /// Validated per-texture state.
   struct TextureRecord {
@@ -597,6 +810,28 @@ private:
   template <typename Record, typename Tag>
   Status destroyResource(details::SlotTable<Record>& table, Handle<Tag>&& handle,
                          ResourceKind kind);
+
+  /// Releases the texture \p surface has acquired, if any, so the caller's handle goes stale.
+  /// @param surface Already-validated surface handle.
+  void releaseAcquiredSurfaceTexture(const Surface& surface);
+
+  /// Same, addressed by slot identity, for the path a dropped handle takes.
+  /// @param slotIndex Slot of the surface. @param generation Generation the handle carried.
+  void releaseAcquiredSurfaceTextureBySlot(uint32_t slotIndex, uint32_t generation);
+
+  /// Whether \p record still holds a frame the caller could resolve.
+  ///
+  /// The reference a surface keeps to its frame is not evidence on its own: the caller owns the
+  /// handle and may destroy the texture through it, which leaves the reference naming a slot
+  /// that no longer holds it. Only a reference whose texture is still live can name a frame the
+  /// caller has yet to present or abandon; a dead one means the caller already disposed of it.
+  ///
+  /// @param record Already-resolved surface record.
+  bool hasOutstandingFrame(const SurfaceRecord& record) const;
+
+  /// Mutable access to an already-validated surface's record, or null if it is not live.
+  /// @param surface Already-validated surface handle.
+  SurfaceRecord* mutableSurfaceRecord(const Surface& surface);
 
   /// Releases the backend object of a retired slot and recycles the slot for reuse.
   /// @param kind Resource kind. @param slotIndex Retired slot index.
@@ -786,6 +1021,8 @@ private:
   std::vector<PendingDestroy> pendingDestroys_;
 
   details::SlotTable<BufferRecord> buffers_;
+  details::SlotTable<MappingRecord> bufferMappings_;
+  details::SlotTable<SurfaceRecord> surfaces_;
   details::SlotTable<TextureRecord> textures_;
   details::SlotTable<TextureViewRecord> textureViews_;
   details::SlotTable<SamplerRecord> samplers_;

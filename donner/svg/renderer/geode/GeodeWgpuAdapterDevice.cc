@@ -11,6 +11,7 @@
 #include "donner/base/Utils.h"
 #include "donner/svg/renderer/geode/GeodeCallbackState.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
+#include "donner/svg/renderer/geode/GeodeGpuWait.h"
 
 namespace donner::geode {
 
@@ -293,6 +294,18 @@ bool GeodeWgpuAdapterDevice::waitForSerial(uint64_t serial, double timeoutSecond
   return completedSerial() >= serial;
 }
 
+gpu::Status GeodeWgpuAdapterDevice::destroyTextureBacking(gpu::Texture&& texture) {
+  // Validate before touching the slot so a stale or foreign handle cannot destroy whatever
+  // occupies that slot now.
+  if (gpu::Status status = validateTextureHandleForBackend(texture); status.hasError()) {
+    return status;
+  }
+  if (texture.slotIndex() < slotTextures_.size()) {
+    slotTextures_[texture.slotIndex()].ownedTexture.destroyBackingAndReset();
+  }
+  return destroyTexture(std::move(texture));
+}
+
 gpu::Result<gpu::Texture> GeodeWgpuAdapterDevice::importExternalTexture(wgpu::Texture texture,
                                                                         const gpu::Extent2d& size,
                                                                         gpu::TextureFormat format,
@@ -361,6 +374,315 @@ gpu::TextureUsage GpuTextureUsageFromWgpu(wgpu::TextureUsage usage) {
     result = result | gpu::TextureUsage::StorageBinding;
   }
   return result;
+}
+
+namespace {
+
+/// Maps what the backend reported about a surface onto the runtime's status.
+///
+/// A suboptimal surface is reported as out of date on purpose: both mean the configuration no
+/// longer matches the window, and both recover the same way.
+///
+/// @param status Backend status.
+gpu::SurfaceStatus GpuSurfaceStatusFromWgpu(wgpu::SurfaceGetCurrentTextureStatus status) {
+  switch (status) {
+    case wgpu::SurfaceGetCurrentTextureStatus::SuccessOptimal: return gpu::SurfaceStatus::Success;
+    case wgpu::SurfaceGetCurrentTextureStatus::SuccessSuboptimal:
+    case wgpu::SurfaceGetCurrentTextureStatus::Outdated: return gpu::SurfaceStatus::Outdated;
+    case wgpu::SurfaceGetCurrentTextureStatus::Timeout: return gpu::SurfaceStatus::Timeout;
+    case wgpu::SurfaceGetCurrentTextureStatus::DeviceLost: return gpu::SurfaceStatus::DeviceLost;
+    default: break;
+  }
+  // Everything else means the surface itself can no longer serve frames, which recovers only by
+  // building a new one.
+  return gpu::SurfaceStatus::Lost;
+}
+
+/// Maps the runtime's frame pacing onto the backend's. @param mode Runtime pacing.
+wgpu::PresentMode WgpuPresentModeFrom(gpu::PresentMode mode) {
+  switch (mode) {
+    case gpu::PresentMode::Immediate: return wgpu::PresentMode::Immediate;
+    case gpu::PresentMode::Mailbox: return wgpu::PresentMode::Mailbox;
+    case gpu::PresentMode::Fifo: break;
+  }
+  return wgpu::PresentMode::Fifo;
+}
+
+/// Maps the backend's frame pacing onto the runtime's. @param mode Backend pacing.
+gpu::PresentMode GpuPresentModeFrom(wgpu::PresentMode mode) {
+  switch (static_cast<WGPUPresentMode>(mode)) {
+    case WGPUPresentMode_Immediate: return gpu::PresentMode::Immediate;
+    case WGPUPresentMode_Mailbox: return gpu::PresentMode::Mailbox;
+    default: break;
+  }
+  return gpu::PresentMode::Fifo;
+}
+
+/// Maps the runtime's alpha compositing onto the backend's. @param mode Runtime mode.
+wgpu::CompositeAlphaMode WgpuAlphaModeFrom(gpu::SurfaceAlphaMode mode) {
+  switch (mode) {
+    case gpu::SurfaceAlphaMode::Premultiplied: return wgpu::CompositeAlphaMode::Premultiplied;
+    case gpu::SurfaceAlphaMode::Inherit: return wgpu::CompositeAlphaMode::Inherit;
+    case gpu::SurfaceAlphaMode::Opaque: break;
+  }
+  return wgpu::CompositeAlphaMode::Opaque;
+}
+
+/// Maps the backend's alpha compositing onto the runtime's. @param mode Backend mode.
+gpu::SurfaceAlphaMode GpuAlphaModeFrom(wgpu::CompositeAlphaMode mode) {
+  switch (static_cast<WGPUCompositeAlphaMode>(mode)) {
+    case WGPUCompositeAlphaMode_Premultiplied: return gpu::SurfaceAlphaMode::Premultiplied;
+    case WGPUCompositeAlphaMode_Inherit: return gpu::SurfaceAlphaMode::Inherit;
+    default: break;
+  }
+  return gpu::SurfaceAlphaMode::Opaque;
+}
+
+}  // namespace
+
+gpu::Status GeodeWgpuAdapterDevice::onCreateSurface(uint32_t slotIndex,
+                                                    const gpu::SurfaceDescriptor& descriptor) {
+  if (descriptor.native.kind != gpu::NativeSurfaceKind::MetalLayer) {
+    return GpuError{GpuErrorType::Unsupported,
+                    "this adapter presents to a Metal layer only; the other platform surfaces "
+                    "are still created by the embedder"};
+  }
+
+  wgpu::SurfaceSourceMetalLayer source(wgpu::Default);
+  source.layer = descriptor.native.display;
+
+  wgpu::SurfaceDescriptor surfaceDescriptor(wgpu::Default);
+  surfaceDescriptor.label = wgpuLabel(std::string_view(descriptor.label));
+  surfaceDescriptor.nextInChain = &source.chain;
+
+  wgpu::Surface surface = geodeDevice_.instance().createSurface(surfaceDescriptor);
+  if (!surface) {
+    return GpuError{GpuErrorType::Unsupported, "the backend could not create a surface"};
+  }
+
+  SetSlot(slotSurfaces_, slotIndex,
+          SurfaceSlot{ScopedWgpuHandle<wgpu::Surface>(surface), wgpu::Texture(), 0, false});
+  return OkStatus();
+}
+
+gpu::Result<gpu::SurfaceCapabilities> GeodeWgpuAdapterDevice::onSurfaceCapabilities(
+    uint32_t slotIndex) const {
+  if (slotIndex >= slotSurfaces_.size() || !slotSurfaces_[slotIndex].surface) {
+    return GpuError{GpuErrorType::InvalidState, "the surface is no longer live"};
+  }
+
+  wgpu::SurfaceCapabilities backendCapabilities = {};
+  slotSurfaces_[slotIndex].surface.get().getCapabilities(geodeDevice_.adapter(),
+                                                         &backendCapabilities);
+
+  gpu::SurfaceCapabilities capabilities;
+  for (size_t i = 0; i < backendCapabilities.formatCount; ++i) {
+    // Formats outside the runtime's set are dropped rather than mapped to a stand-in: a caller
+    // choosing among them must only ever see ones this runtime can actually render.
+    const auto format = static_cast<WGPUTextureFormat>(backendCapabilities.formats[i]);
+    if (format == WGPUTextureFormat_RGBA8Unorm || format == WGPUTextureFormat_BGRA8Unorm ||
+        format == WGPUTextureFormat_R8Unorm) {
+      capabilities.formats.push_back(GpuTextureFormatFromWgpu(backendCapabilities.formats[i]));
+    }
+  }
+  capabilities.usages = GpuTextureUsageFromWgpu(wgpu::TextureUsage{backendCapabilities.usages});
+  for (size_t i = 0; i < backendCapabilities.presentModeCount; ++i) {
+    capabilities.presentModes.push_back(GpuPresentModeFrom(backendCapabilities.presentModes[i]));
+  }
+  for (size_t i = 0; i < backendCapabilities.alphaModeCount; ++i) {
+    capabilities.alphaModes.push_back(GpuAlphaModeFrom(backendCapabilities.alphaModes[i]));
+  }
+  return capabilities;
+}
+
+gpu::Status GeodeWgpuAdapterDevice::onConfigureSurface(
+    uint32_t slotIndex, const gpu::SurfaceConfiguration& configuration) {
+  if (slotIndex >= slotSurfaces_.size() || !slotSurfaces_[slotIndex].surface) {
+    return GpuError{GpuErrorType::InvalidState, "the surface is no longer live"};
+  }
+
+  wgpu::SurfaceConfiguration backendConfiguration(wgpu::Default);
+  backendConfiguration.device = geodeDevice_.device();
+  backendConfiguration.format = ToWgpuTextureFormat(configuration.format);
+  backendConfiguration.usage = ToWgpuTextureUsage(configuration.usage);
+  backendConfiguration.width = configuration.size.width;
+  backendConfiguration.height = configuration.size.height;
+  backendConfiguration.presentMode = WgpuPresentModeFrom(configuration.presentMode);
+  backendConfiguration.alphaMode = WgpuAlphaModeFrom(configuration.alphaMode);
+  slotSurfaces_[slotIndex].surface.get().configure(backendConfiguration);
+  return OkStatus();
+}
+
+gpu::Result<gpu::SurfaceStatus> GeodeWgpuAdapterDevice::onAcquireCurrentTexture(
+    uint32_t slotIndex, uint32_t textureSlotIndex) {
+  if (slotIndex >= slotSurfaces_.size() || !slotSurfaces_[slotIndex].surface) {
+    return GpuError{GpuErrorType::InvalidState, "the surface is no longer live"};
+  }
+
+  wgpu::SurfaceTexture surfaceTexture = {};
+  slotSurfaces_[slotIndex].surface.get().getCurrentTexture(&surfaceTexture);
+  const gpu::SurfaceStatus status = GpuSurfaceStatusFromWgpu(surfaceTexture.status);
+  if (status == gpu::SurfaceStatus::Lost || status == gpu::SurfaceStatus::DeviceLost ||
+      status == gpu::SurfaceStatus::Timeout || !surfaceTexture.texture) {
+    return status;
+  }
+
+  SurfaceSlot& slot = slotSurfaces_[slotIndex];
+  slot.acquired = wgpu::Texture(surfaceTexture.texture);
+  slot.acquiredTextureSlot = textureSlotIndex;
+  slot.hasAcquired = true;
+  // Borrowed: the surface owns the frame's texture, so the runtime's slot names it without
+  // taking a reference that would outlive the frame.
+  SetSlot(slotTextures_, textureSlotIndex,
+          TextureSlot{ScopedWgpuHandle<wgpu::Texture>(), slot.acquired});
+  return status;
+}
+
+gpu::Result<gpu::SurfaceStatus> GeodeWgpuAdapterDevice::onPresentSurface(uint32_t slotIndex) {
+  if (slotIndex >= slotSurfaces_.size() || !slotSurfaces_[slotIndex].surface) {
+    return GpuError{GpuErrorType::InvalidState, "the surface is no longer live"};
+  }
+
+  SurfaceSlot& slot = slotSurfaces_[slotIndex];
+  slot.surface.get().present();
+  SetSlot(slotTextures_, slot.acquiredTextureSlot, TextureSlot{});
+  slot.acquired = wgpu::Texture();
+  slot.hasAcquired = false;
+  return geodeDevice_.isDeviceLost() ? gpu::SurfaceStatus::DeviceLost : gpu::SurfaceStatus::Success;
+}
+
+void GeodeWgpuAdapterDevice::onAbandonCurrentTexture(uint32_t slotIndex) {
+  if (slotIndex >= slotSurfaces_.size() || !slotSurfaces_[slotIndex].hasAcquired) {
+    return;
+  }
+  SurfaceSlot& slot = slotSurfaces_[slotIndex];
+  // Clear the runtime slot only while it still names this frame. A caller that disposed of the
+  // frame's handle frees that slot, and a texture created before the next acquire can be given
+  // the same index; wiping it then would take out a texture this frame never owned.
+  if (slot.acquiredTextureSlot < slotTextures_.size() &&
+      slotTextures_[slot.acquiredTextureSlot].texture == slot.acquired) {
+    SetSlot(slotTextures_, slot.acquiredTextureSlot, TextureSlot{});
+  }
+  slot.acquired = wgpu::Texture();
+  slot.hasAcquired = false;
+}
+
+gpu::Status GeodeWgpuAdapterDevice::onMapBufferAsync(uint32_t mappingSlotIndex,
+                                                     uint32_t bufferSlotIndex, gpu::MapMode mode,
+                                                     uint64_t offsetBytes, uint64_t byteCount) {
+  if (mode != gpu::MapMode::Read) {
+    return GpuError{GpuErrorType::Unsupported, "this adapter maps buffers for reading only"};
+  }
+  wgpu::Buffer buffer = GetHandle(slotBuffers_, bufferSlotIndex);
+  if (!buffer) {
+    return GpuError{GpuErrorType::InvalidState,
+                    std::format("buffer slot {} has no wgpu buffer", bufferSlotIndex)};
+  }
+  if (geodeDevice_.isDeviceLost()) {
+    // A lost device never delivers the completion, so refuse the map rather than hand back a
+    // handle whose wait can only ever run out its budget.
+    return GpuError{GpuErrorType::InvalidState, "the device is lost, so buffers cannot be mapped"};
+  }
+
+  MappingSlot slot;
+  slot.completion = new MappingSlot::Completion();
+  // The completion keeps a reference of its own, so a map abandoned in flight still has a buffer
+  // to unmap once it finishes.
+  slot.completion->buffer = buffer;
+  slot.completion->buffer.addRef();
+  slot.buffer = buffer;
+  slot.offsetBytes = offsetBytes;
+  slot.byteCount = byteCount;
+
+  wgpu::BufferMapCallbackInfo callbackInfo{wgpu::Default};
+  callbackInfo.callback = [](WGPUMapAsyncStatus status, WGPUStringView /*message*/, void* userdata1,
+                             void* /*userdata2*/) {
+    auto* completion = static_cast<MappingSlot::Completion*>(userdata1);
+    completion->ok.store(status == WGPUMapAsyncStatus_Success, std::memory_order_relaxed);
+    completion->done.store(true, std::memory_order_release);
+    // The mapping may already be gone, in which case nothing else can give the buffer back.
+    completion->unmapIfAbandoned();
+    completion->release();
+  };
+  callbackInfo.userdata1 = slot.completion;
+  callbackInfo.userdata2 = nullptr;
+  // Spontaneous delivery is what lets a wait slice observe the completion from inside the
+  // backend call it makes, rather than only at an explicit processing point.
+  callbackInfo.mode = wgpu::CallbackMode::AllowSpontaneous;
+  (void)buffer.mapAsync(wgpu::MapMode::Read, offsetBytes, byteCount, callbackInfo);
+
+  SetSlot(slotMappings_, mappingSlotIndex, std::move(slot));
+  return OkStatus();
+}
+
+gpu::MapSliceState GeodeWgpuAdapterDevice::onWaitMappingSlice(uint32_t mappingSlotIndex,
+                                                              double sliceSeconds) {
+  if (mappingSlotIndex >= slotMappings_.size() ||
+      slotMappings_[mappingSlotIndex].completion == nullptr) {
+    return gpu::MapSliceState::Failed;
+  }
+  MappingSlot::Completion& completion = *slotMappings_[mappingSlotIndex].completion;
+  if (completion.done.load(std::memory_order_acquire)) {
+    return completion.ok.load(std::memory_order_relaxed) ? gpu::MapSliceState::Ready
+                                                         : gpu::MapSliceState::Failed;
+  }
+  if (geodeDevice_.isDeviceLost()) {
+    return gpu::MapSliceState::DeviceLost;
+  }
+
+  // Wait out the slice the caller allowed rather than returning the moment one poll finds
+  // nothing: the waiter's budget is wall time, so a slice that returns immediately turns a map
+  // that is merely not ready yet into a burst of fast calls against that budget.
+  const auto slice = std::chrono::duration_cast<std::chrono::milliseconds>(
+      std::chrono::duration<double>(sliceSeconds));
+  (void)BoundedGpuWait(
+      [&] {
+        (void)geodeDevice_.pollSuspending(false);
+        return completion.done.load(std::memory_order_acquire) || geodeDevice_.isDeviceLost();
+      },
+      std::max(slice, std::chrono::milliseconds(1)));
+
+  if (completion.done.load(std::memory_order_acquire)) {
+    return completion.ok.load(std::memory_order_relaxed) ? gpu::MapSliceState::Ready
+                                                         : gpu::MapSliceState::Failed;
+  }
+  return geodeDevice_.isDeviceLost() ? gpu::MapSliceState::DeviceLost : gpu::MapSliceState::Pending;
+}
+
+gpu::Result<std::span<const uint8_t>> GeodeWgpuAdapterDevice::onMappedBytes(
+    uint32_t mappingSlotIndex) const {
+  if (mappingSlotIndex >= slotMappings_.size() ||
+      slotMappings_[mappingSlotIndex].completion == nullptr) {
+    return GpuError{GpuErrorType::InvalidState, "the mapping is no longer live"};
+  }
+  const MappingSlot& slot = slotMappings_[mappingSlotIndex];
+  if (!slot.completion->done.load(std::memory_order_acquire) ||
+      !slot.completion->ok.load(std::memory_order_relaxed)) {
+    return GpuError{GpuErrorType::InvalidState, "the mapping has not completed"};
+  }
+  const void* mapped = slot.buffer.getConstMappedRange(slot.offsetBytes, slot.byteCount);
+  if (mapped == nullptr) {
+    return GpuError{GpuErrorType::InvalidState, "the backend returned no mapped range"};
+  }
+  return std::span<const uint8_t>(static_cast<const uint8_t*>(mapped),
+                                  static_cast<size_t>(slot.byteCount));
+}
+
+void GeodeWgpuAdapterDevice::onUnmapBuffer(uint32_t mappingSlotIndex) {
+  if (mappingSlotIndex >= slotMappings_.size() ||
+      slotMappings_[mappingSlotIndex].completion == nullptr) {
+    return;
+  }
+  MappingSlot& slot = slotMappings_[mappingSlotIndex];
+  // From here the completion is the only thing that can give the buffer back, whether the map
+  // has already finished or is still in flight.
+  slot.completion->abandoned.store(true, std::memory_order_release);
+  slot.completion->unmapIfAbandoned();
+  // The pending callback holds the other reference and releases it when it runs, so a map that
+  // is still in flight when the mapping is dropped cannot leave the state behind either way.
+  slot.completion->release();
+  slot.completion = nullptr;
+  slot.buffer = wgpu::Buffer();
 }
 
 gpu::Status GeodeWgpuAdapterDevice::onCreateBuffer(uint32_t slotIndex,

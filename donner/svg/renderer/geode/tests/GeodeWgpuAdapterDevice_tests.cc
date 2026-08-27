@@ -656,5 +656,46 @@ TEST_F(GeodeWgpuAdapterDeviceTests, MisalignedBindOffsetFailsClosedBeforeWgpu) {
                                            "binding offset alignment")));
 }
 
+TEST_F(GeodeWgpuAdapterDeviceTests, AMappingReleasedBeforeItsCallbackStillUnmapsTheBuffer) {
+  const gpu::Buffer buffer = gpu::GetResultOrFail(adapter_->createBuffer(gpu::BufferDescriptor{
+      "readback", 256, gpu::BufferUsage::CopyDst | gpu::BufferUsage::MapRead}));
+
+  // Release the mapping before its completion can have been delivered: nothing has polled yet, so
+  // the map is still in flight when the only handle to it goes away.
+  {
+    gpu::BufferMapping mapping =
+        gpu::GetResultOrFail(adapter_->mapBufferAsync(buffer, gpu::MapMode::Read, 0, 256));
+    EXPECT_THAT(adapter_->unmapBuffer(std::move(mapping)), gpu::IsOk());
+  }
+
+  // Let the abandoned map run to completion.
+  for (int poll = 0; poll < 2000; ++poll) {
+    (void)geodeDevice_->pollSuspending(false);
+  }
+
+  // A buffer left mapped with nothing able to unmap it cannot be mapped again, so mapping it a
+  // second time is what tells us whether the abandoned one gave the buffer back.
+  gpu::BufferMapping second =
+      gpu::GetResultOrFail(adapter_->mapBufferAsync(buffer, gpu::MapMode::Read, 0, 256));
+  EXPECT_EQ(
+      gpu::GetResultOrFail(adapter_->waitForMapping(second, gpu::MapWaitParams{0.01, 2.0}, {})),
+      gpu::MapWaitOutcome::Ready)
+      << "the mapping released while in flight left the buffer mapped with no owner";
+  EXPECT_THAT(adapter_->unmapBuffer(std::move(second)), gpu::IsOk());
+}
+
+/// The adapter presents to a Metal layer; the other platform surfaces are still created by the
+/// embedder, so asking it for one reports the capability as unsupported rather than appearing to
+/// work and then failing at the first frame.
+TEST_F(GeodeWgpuAdapterDeviceTests, RejectsSurfaceKindsItDoesNotPresentTo) {
+  gpu::SurfaceDescriptor descriptor;
+  descriptor.label = "window";
+  descriptor.native.kind = gpu::NativeSurfaceKind::XlibWindow;
+  descriptor.native.display = this;
+  descriptor.native.window = 1;
+
+  EXPECT_THAT(adapter_->createSurface(descriptor), gpu::IsGpuError(gpu::GpuErrorType::Unsupported));
+}
+
 }  // namespace
 }  // namespace donner::geode

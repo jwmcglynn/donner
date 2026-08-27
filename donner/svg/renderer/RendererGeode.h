@@ -16,6 +16,7 @@
 
 #include "donner/base/Box.h"
 #include "donner/base/Transform.h"
+#include "donner/gpu/Handles.h"
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/renderer/RendererInterface.h"
 #include "donner/svg/renderer/geode/GeodeCounters.h"
@@ -63,6 +64,20 @@ public:
   RendererGeodeTextureSnapshot(std::shared_ptr<geode::GeodeDevice> device, wgpu::Texture texture,
                                Vector2i dimensions, wgpu::TextureFormat format,
                                AlphaType alphaType = AlphaType::Premultiplied);
+  /**
+   * Takes over a target the runtime allocated, so the snapshot keeps it alive after the renderer
+   * has let go of it.
+   *
+   * @param device Device the texture belongs to.
+   * @param texture Runtime texture handle to take ownership of.
+   * @param dimensions Texture dimensions in pixels.
+   * @param format Texel format.
+   * @param alphaType Alpha interpretation of the stored pixels.
+   */
+  static RendererGeodeTextureSnapshot AdoptRuntimeTexture(
+      std::shared_ptr<geode::GeodeDevice> device, gpu::Texture texture, Vector2i dimensions,
+      wgpu::TextureFormat format, AlphaType alphaType);
+
   ~RendererGeodeTextureSnapshot() override;
 
   RendererGeodeTextureSnapshot(const RendererGeodeTextureSnapshot&) = delete;
@@ -109,6 +124,9 @@ private:
   void destroyOwnedBacking() noexcept;
 
   std::shared_ptr<geode::GeodeDevice> device_;
+  /// Runtime handle when this snapshot took over a target the runtime allocated. Its slot is
+  /// released when the snapshot dies, which is what frees the texture in that case.
+  gpu::Texture ownedGpuTexture_;
   geode::ScopedWgpuHandle<wgpu::Texture> ownedTexture_;
   wgpu::Texture texture_;
   mutable geode::ScopedWgpuHandle<wgpu::TextureView> textureView_;

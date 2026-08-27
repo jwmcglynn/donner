@@ -25,12 +25,15 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <ostream>
 #include <string>
 #include <string_view>
 #include <vector>
 
 #ifdef DONNER_EDITOR_WGPU
 #include <webgpu/webgpu.hpp>
+
+#include "donner/gpu/Descriptors.h"
 #endif
 
 #include "donner/base/Vector2.h"
@@ -84,6 +87,199 @@ enum class WgpuSurfaceFailureKind {
   Setup,
   Fatal,
 };
+
+#ifdef DONNER_EDITOR_WGPU
+/// What the frame loop does about a status its presentation surface reported.
+enum class SurfaceFrameAction {
+  Draw,                 //!< The acquired frame is usable; draw into it.
+  Skip,                 //!< No frame this time; the next one tries again.
+  ReconfigureAndRetry,  //!< Follow the window with a new configuration and acquire again.
+  Release,              //!< The surface can serve no further frames and is given up.
+};
+
+/// Ostream output operator. @param os Output stream. @param value Action to output.
+inline std::ostream& operator<<(std::ostream& os, SurfaceFrameAction value) {
+  switch (value) {
+    case SurfaceFrameAction::Draw: return os << "Draw";
+    case SurfaceFrameAction::Skip: return os << "Skip";
+    case SurfaceFrameAction::ReconfigureAndRetry: return os << "ReconfigureAndRetry";
+    case SurfaceFrameAction::Release: return os << "Release";
+  }
+  return os << "Unknown";
+}
+
+/// Routes a status the presentation surface reported to what the frame loop does about it.
+///
+/// The failures are kept apart because their recoveries differ. A configuration that no longer
+/// matches its window is followed with a new one, which is the operation a resize already
+/// performs; a platform object that is gone and a lost device recover by neither, so the surface
+/// is given up rather than acquired from again; and nothing becoming available in time is simply
+/// a frame not drawn.
+///
+/// @param status Status the surface reported while handing over, or refusing, a frame.
+[[nodiscard]] constexpr SurfaceFrameAction SurfaceFrameActionFor(
+    gpu::SurfaceStatus status) noexcept {
+  switch (status) {
+    case gpu::SurfaceStatus::Success: return SurfaceFrameAction::Draw;
+    case gpu::SurfaceStatus::Outdated: return SurfaceFrameAction::ReconfigureAndRetry;
+    case gpu::SurfaceStatus::Lost:
+    case gpu::SurfaceStatus::DeviceLost: return SurfaceFrameAction::Release;
+    case gpu::SurfaceStatus::Timeout: break;
+  }
+  return SurfaceFrameAction::Skip;
+}
+
+/// One frame's texture and what the surface reported while handing it over.
+///
+/// A non-success status can still carry a usable texture: a surface whose configuration has
+/// drifted out of date usually still presents, so drawing this frame or following the window
+/// first is the caller's decision.
+struct AcquiredFrame {
+  wgpu::Texture texture;  //!< This frame's texture; null when no frame came back.
+  gpu::SurfaceStatus status = gpu::SurfaceStatus::Success;  //!< What the surface reported.
+};
+
+/**
+ * Where each frame's texture is acquired from, and what the finished frame is handed back to.
+ *
+ * The frame loop drives presentation entirely through this interface, so the difference between
+ * the platforms lives in the single place that picks an implementation instead of spreading
+ * through the loop.
+ *
+ * Setup is staged because the pieces it needs appear at different points of window bringup: the
+ * platform object exists before there is an adapter, adapter selection may need to be constrained
+ * to the surface, the renderer compiles its pipelines for the texture format before there is a
+ * device, and a surface built on the GPU runtime cannot exist until the device does.
+ */
+class PresentationSurface {
+public:
+  virtual ~PresentationSurface() = default;
+
+  /**
+   * Takes hold of the platform object behind \p window.
+   *
+   * @param instance WebGPU instance the surface belongs to.
+   * @param window Window whose platform object frames are presented to.
+   * @return False when the platform object could not be obtained.
+   */
+  [[nodiscard]] virtual bool attachToWindow(const wgpu::Instance& instance, GLFWwindow* window) = 0;
+
+  /// The surface adapter selection is constrained to, or a null handle when this surface places
+  /// no constraint on which adapter is chosen.
+  [[nodiscard]] virtual wgpu::Surface adapterSelectionSurface() const = 0;
+
+  /**
+   * Settles the format, usage and alpha compositing that acquired textures carry. Runs before the
+   * device exists, because the renderer compiles its pipelines for \ref format.
+   *
+   * @param adapter Adapter the device will be created on.
+   * @param enableReadback Whether finished frames are copied back to the host.
+   * @return False when the surface cannot serve the editor's frames.
+   */
+  [[nodiscard]] virtual bool chooseConfiguration(const wgpu::Adapter& adapter,
+                                                 bool enableReadback) = 0;
+
+  /**
+   * Finishes setup against the device whose queue draws the frames.
+   *
+   * @param device Device wrapper the editor renders its frames with.
+   * @return False when the surface could not be completed against it.
+   */
+  [[nodiscard]] virtual bool attachToDevice(geode::GeodeDevice& device) = 0;
+
+  /**
+   * Points the surface at a framebuffer of \p width by \p height texels, replacing any previous
+   * configuration and invalidating any acquired frame.
+   *
+   * This is how a surface follows its window, so a resize is a new configuration rather than a
+   * new surface, and it is equally the recovery from a configuration that has drifted out of
+   * date.
+   *
+   * @param width Framebuffer width in texels.
+   * @param height Framebuffer height in texels.
+   * @return False when the surface refused the configuration.
+   */
+  [[nodiscard]] virtual bool configure(int width, int height) = 0;
+
+  /// Acquires this frame's texture.
+  [[nodiscard]] virtual AcquiredFrame acquire() = 0;
+
+  /// Hands the acquired frame to the platform. Does nothing when no frame is held, so the frame
+  /// loop can present unconditionally on its way out.
+  virtual void present() = 0;
+
+  /// Releases the acquired frame without showing it, for a frame the caller decided not to draw.
+  virtual void abandon() = 0;
+
+  /// Gives up the configuration and any resources held for it. The surface serves no further
+  /// frames.
+  virtual void shutdown() = 0;
+
+  /// Format acquired textures carry.
+  [[nodiscard]] virtual wgpu::TextureFormat format() const = 0;
+
+  /// Usage flags acquired textures carry.
+  [[nodiscard]] virtual wgpu::TextureUsage usage() const = 0;
+
+  /// Whether the surface composites its alpha channel premultiplied rather than ignoring it.
+  [[nodiscard]] virtual bool premultipliedAlpha() const = 0;
+};
+
+/// What acquiring one frame produced, and what the window must do about it.
+struct PresentationFrameOutcome {
+  wgpu::Texture texture;  //!< Frame to draw into; null when there is no frame this time.
+  gpu::SurfaceStatus status = gpu::SurfaceStatus::Success;  //!< What the surface last reported.
+  double acquireMs = 0.0;  //!< Wall time the acquire (including any retry) took.
+  bool released = false;   //!< The surface was given up; the window holds none any more.
+  /// Report a device loss through the window's existing renderer-failure path.
+  bool markDeviceLost = false;
+};
+
+/**
+ * Acquires the frame to draw, recovering from whatever the surface reports on the way.
+ *
+ * Each status recovers the way \ref SurfaceFrameActionFor says it does, and the recoveries that
+ * can succeed are attempted here rather than costing the frame. A configuration that has drifted
+ * out of date is followed to the current extent and the frame acquired again; a surface whose
+ * platform object is gone is rebuilt from the window that still holds a handle to make a new one
+ * from, and the frame acquired from the replacement. Each is attempted once, so a status that
+ * repeats settles instead of looping.
+ *
+ * A lost device is not rebuilt: nothing here recovers it, so it gives the surface up and asks
+ * the caller to report the loss.
+ *
+ * @param surface Surface to acquire from. Replaced when a lost one is rebuilt, and cleared when
+ *   the surface is given up.
+ * @param sizePx Framebuffer extent in pixels.
+ * @param configuredPx Extent the surface is configured for; updated as the surface follows the
+ *   window, and zeroed when a configuration is refused so the next frame tries again.
+ * @param rebuild Builds a replacement surface for \p sizePx from the window the lost one came
+ *   from, fully configured and ready to acquire from, or null when none could be built.
+ */
+[[nodiscard]] PresentationFrameOutcome AcquirePresentationFrame(
+    std::unique_ptr<PresentationSurface>& surface, Vector2i sizePx, Vector2i& configuredPx,
+    const std::function<std::unique_ptr<PresentationSurface>()>& rebuild);
+
+/// Buckets a status the presentation surface reported into the retry classes the event-driven
+/// Wasm loop distinguishes.
+///
+/// A surface that is out of date and one whose platform object is gone share a bucket because
+/// the browser recovers from both the same way: reconfigure and ask for another frame. Anything
+/// else is terminal for the frame and must not rearm the loop.
+///
+/// @param status Status the surface reported.
+[[nodiscard]] constexpr WgpuSurfaceFailureKind WgpuSurfaceFailureKindFor(
+    gpu::SurfaceStatus status) noexcept {
+  switch (status) {
+    case gpu::SurfaceStatus::Timeout: return WgpuSurfaceFailureKind::Timeout;
+    case gpu::SurfaceStatus::Outdated:
+    case gpu::SurfaceStatus::Lost: return WgpuSurfaceFailureKind::OutdatedOrLost;
+    case gpu::SurfaceStatus::Success:
+    case gpu::SurfaceStatus::DeviceLost: break;
+  }
+  return WgpuSurfaceFailureKind::Fatal;
+}
+#endif
 
 struct WgpuSurfaceRetryDecision {
   bool requestFrame = false;
@@ -457,6 +653,31 @@ private:
 
   void beginFrameImpl(const EditorWindowInputOverride* inputOverride);
   void endFrameImpl(svg::RendererBitmap* readback);
+
+#ifdef DONNER_EDITOR_WGPU
+  /**
+   * Acquires this frame's texture from the presentation surface, routing what the surface
+   * reported: a configuration that has drifted out of date is followed and the frame retried
+   * once, and a surface that can serve no further frames is given up.
+   *
+   * @param framebufferWidth Framebuffer width in pixels.
+   * @param framebufferHeight Framebuffer height in pixels.
+   * @param timing Frame timing to record the acquire cost into.
+   * @param[out] status What the surface reported for the frame that is returned, or for the
+   *   frame that never came.
+   * @return This frame's texture, or a null texture when there is no frame to draw.
+   */
+  [[nodiscard]] wgpu::Texture acquirePresentationFrame(int framebufferWidth, int framebufferHeight,
+                                                       EditorWindowFrameTiming& timing,
+                                                       gpu::SurfaceStatus& status);
+
+  /// Builds a replacement presentation surface from this window, configured for the given
+  /// framebuffer and ready to acquire from, or null when one could not be built.
+  /// @param framebufferWidth Framebuffer width in pixels.
+  /// @param framebufferHeight Framebuffer height in pixels.
+  [[nodiscard]] std::unique_ptr<internal::PresentationSurface> rebuildPresentationSurface(
+      int framebufferWidth, int framebufferHeight);
+#endif
 
   EditorWindowOptions options_;
   GLFWwindow* window_ = nullptr;

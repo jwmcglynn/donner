@@ -142,15 +142,6 @@
         "SurfaceSourceXlibWindow"
       ]
     },
-    "donner/editor/gui/EditorWgpuSurface_macos.mm": {
-      "wgpuCppTokens": [
-        "Default",
-        "Instance",
-        "Surface",
-        "SurfaceDescriptor",
-        "SurfaceSourceMetalLayer"
-      ]
-    },
     "donner/editor/gui/EditorWindow.cc": {
       "imguiWgpuTokens": [
         "ImGui_ImplWGPU_Init",
@@ -190,7 +181,7 @@
         "wgpuLabel",
         "wgpuReadbackStats",
         "wgpuState_",
-        "wgpuSurfacePresent",
+        "wgpuTextureOf",
         "wgpuUnderlayRenderCallback_"
       ],
       "wgpuCTypes": [
@@ -206,6 +197,7 @@
         "WGPUMapAsyncStatus_Success",
         "WGPUStringView",
         "WGPUSurfaceDescriptor",
+        "WGPUSurfaceGetCurrentTextureStatus",
         "WGPUSurfaceGetCurrentTextureStatus_Lost",
         "WGPUSurfaceGetCurrentTextureStatus_Outdated",
         "WGPUSurfaceGetCurrentTextureStatus_SuccessOptimal",
@@ -267,7 +259,12 @@
         "wgpuUnderlayRenderCallback_"
       ],
       "wgpuCppTokens": [
-        "Texture"
+        "Adapter",
+        "Instance",
+        "Surface",
+        "Texture",
+        "TextureFormat",
+        "TextureUsage"
       ]
     },
     "donner/editor/tests/EditorRnrGlReplay.cc": {
@@ -296,7 +293,16 @@
       ],
       "usesEditorWgpuDefine": true,
       "wgpuCTypes": [
+        "WGPUTexture",
         "WGPUTextureView"
+      ],
+      "wgpuCppTokens": [
+        "Adapter",
+        "Instance",
+        "Surface",
+        "Texture",
+        "TextureFormat",
+        "TextureUsage"
       ]
     },
     "donner/editor/tests/FrameMissTelemetry_tests.cc": {

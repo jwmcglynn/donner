@@ -1,10 +1,13 @@
 #include "donner/gpu/Device.h"
 
+#include <array>
 #include <atomic>
+#include <chrono>
 #include <cmath>
 #include <format>
 #include <memory>
 #include <sstream>
+#include <thread>
 #include <utility>
 
 #include "donner/gpu/CheckedArithmetic.h"
@@ -493,6 +496,31 @@ DONNER_GPU_DEFINE_RAII_RELEASE(RenderPipelineTag, renderPipelines_, RenderPipeli
 DONNER_GPU_DEFINE_RAII_RELEASE(ComputePipelineTag, computePipelines_, ComputePipeline)
 
 #undef DONNER_GPU_DEFINE_RAII_RELEASE
+
+/// A dropped surface releases whatever texture it had acquired and then its own slot. There is
+/// no backend object to defer against a submission: a surface's platform object outlives the
+/// runtime's handle to it.
+template <>
+void ReleaseHandleFromRaii<SurfaceTag>(Device& device, uint32_t slotIndex, uint32_t generation) {
+  if (device.surfaces_.find(slotIndex, generation) == nullptr) {
+    return;  // Already destroyed (consumed); nothing to release.
+  }
+  device.releaseAcquiredSurfaceTextureBySlot(slotIndex, generation);
+  device.surfaces_.release(slotIndex);
+}
+
+/// A dropped mapping tells the backend to unmap and releases its slot immediately. There is no
+/// submission lifetime to defer against: a mapping is host-side access to a buffer, not a
+/// resource a recorded command can still name.
+template <>
+void ReleaseHandleFromRaii<BufferMappingTag>(Device& device, uint32_t slotIndex,
+                                             uint32_t generation) {
+  if (device.bufferMappings_.find(slotIndex, generation) == nullptr) {
+    return;  // Already released (consumed); nothing to unmap.
+  }
+  device.onUnmapBuffer(slotIndex);
+  device.bufferMappings_.release(slotIndex);
+}
 
 /// Command buffers have no backend object until submission, so a dropped unsubmitted command
 /// buffer releases its recorded commands immediately with no backend notification.
@@ -1074,6 +1102,434 @@ Status Device::destroyRenderPipeline(RenderPipeline&& renderPipeline) {
 Status Device::destroyComputePipeline(ComputePipeline&& computePipeline) {
   return destroyResource(computePipelines_, std::move(computePipeline),
                          ResourceKind::ComputePipeline);
+}
+
+namespace {
+
+/// Rejects wait bounds that could never terminate or could never wait.
+/// @param params Bounds to check.
+Status ValidateMapWaitParams(const MapWaitParams& params) {
+  if (!(params.sliceSeconds > 0.0)) {
+    return Err(GpuErrorType::InvalidDescriptor,
+               std::format("waitForMapping: sliceSeconds {} must be greater than zero",
+                           params.sliceSeconds));
+  }
+  if (!(params.timeoutSeconds > 0.0)) {
+    return Err(GpuErrorType::InvalidDescriptor,
+               std::format("waitForMapping: timeoutSeconds {} must be greater than zero",
+                           params.timeoutSeconds));
+  }
+  return OkStatus();
+}
+
+/// Maps what one backend slice reported onto the outcome a waiter sees, or nullopt to keep
+/// waiting.
+/// @param state What the backend reported.
+std::optional<MapWaitOutcome> OutcomeForSlice(MapSliceState state) {
+  switch (state) {
+    case MapSliceState::Ready: return MapWaitOutcome::Ready;
+    case MapSliceState::DeviceLost: return MapWaitOutcome::DeviceLost;
+    case MapSliceState::Failed: return MapWaitOutcome::Failed;
+    case MapSliceState::Pending: break;
+  }
+  return std::nullopt;
+}
+
+}  // namespace
+
+Status Device::onMapBufferAsync(uint32_t /*mappingSlotIndex*/, uint32_t /*bufferSlotIndex*/,
+                                MapMode /*mode*/, uint64_t /*offsetBytes*/,
+                                uint64_t /*byteCount*/) {
+  return Err(GpuErrorType::Unsupported, "this backend does not support host buffer mapping");
+}
+
+MapSliceState Device::onWaitMappingSlice(uint32_t /*mappingSlotIndex*/, double /*sliceSeconds*/) {
+  return MapSliceState::Failed;
+}
+
+Result<std::span<const uint8_t>> Device::onMappedBytes(uint32_t /*mappingSlotIndex*/) const {
+  return GpuError{GpuErrorType::Unsupported, "this backend does not support host buffer mapping"};
+}
+
+void Device::onUnmapBuffer(uint32_t /*mappingSlotIndex*/) {}
+
+Result<BufferMapping> Device::mapBufferAsync(const Buffer& buffer, MapMode mode,
+                                             uint64_t offsetBytes, uint64_t byteCount) {
+  auto record = resolve(buffers_, buffer, BufferTag::kName);
+  if (record.hasError()) {
+    return std::move(record).error();
+  }
+  if (!HasAllFlags(record.result()->descriptor.usage, BufferUsage::MapRead)) {
+    return GpuError{GpuErrorType::UsageMismatch,
+                    std::format("mapBufferAsync: buffer \"{}\" lacks the MapRead usage",
+                                record.result()->descriptor.label.str())};
+  }
+  if (byteCount == 0) {
+    return GpuError{GpuErrorType::InvalidDescriptor, "mapBufferAsync: byteCount must be nonzero"};
+  }
+  const std::optional<uint64_t> endByte = CheckedAdd(offsetBytes, byteCount);
+  if (!endByte || *endByte > record.result()->descriptor.byteSize) {
+    return GpuError{
+        GpuErrorType::OutOfBounds,
+        std::format("mapBufferAsync: range offsetBytes={} byteCount={} does not fit in buffer "
+                    "\"{}\" of {} bytes",
+                    offsetBytes, byteCount, record.result()->descriptor.label.str(),
+                    record.result()->descriptor.byteSize)};
+  }
+
+  BufferMapping handle = allocateHandle<BufferMappingTag>(
+      bufferMappings_, MappingRecord{buffer.slotIndex(), mode, offsetBytes, byteCount});
+  if (Status status =
+          onMapBufferAsync(handle.slotIndex(), buffer.slotIndex(), mode, offsetBytes, byteCount);
+      status.hasError()) {
+    bufferMappings_.release(handle.slotIndex());
+    return std::move(status).error();
+  }
+  return handle;
+}
+
+Result<MapWaitOutcome> Device::waitForMapping(const BufferMapping& mapping,
+                                              const MapWaitParams& params,
+                                              const std::function<bool()>& shouldCancel,
+                                              const MapWaitTestHooks& testHooks) {
+  if (Status status = ValidateMapWaitParams(params); status.hasError()) {
+    return std::move(status).error();
+  }
+  auto record = resolve(bufferMappings_, mapping, BufferMappingTag::kName);
+  if (record.hasError()) {
+    return std::move(record).error();
+  }
+
+  // The budget is wall time that actually passed, not slices counted off. A backend whose slice
+  // returns as soon as it has polled did not wait the slice it was offered, so counting it as a
+  // full one declares the budget spent in a burst of fast calls microseconds after the wait
+  // began. Whatever a slice leaves unused is rested here instead, which keeps the budget honest
+  // and keeps a fast slice from turning the wait into a spin.
+  const std::function<std::chrono::steady_clock::time_point()> now =
+      testHooks.now ? testHooks.now : std::function<std::chrono::steady_clock::time_point()>([] {
+        return std::chrono::steady_clock::now();
+      });
+  const std::function<void(std::chrono::microseconds)> rest =
+      testHooks.rest
+          ? testHooks.rest
+          : std::function<void(std::chrono::microseconds)>(
+                [](std::chrono::microseconds duration) { std::this_thread::sleep_for(duration); });
+
+  const std::chrono::steady_clock::time_point start = now();
+  while (true) {
+    if (shouldCancel && shouldCancel()) {
+      return MapWaitOutcome::Cancelled;
+    }
+    const std::chrono::steady_clock::time_point sliceStart = now();
+    const std::optional<MapWaitOutcome> outcome =
+        OutcomeForSlice(onWaitMappingSlice(mapping.slotIndex(), params.sliceSeconds));
+    if (outcome.has_value()) {
+      return *outcome;
+    }
+
+    const double sliceUsedSeconds = std::chrono::duration<double>(now() - sliceStart).count();
+    if (sliceUsedSeconds < params.sliceSeconds) {
+      rest(std::chrono::duration_cast<std::chrono::microseconds>(
+          std::chrono::duration<double>(params.sliceSeconds - sliceUsedSeconds)));
+    }
+    if (std::chrono::duration<double>(now() - start).count() >= params.timeoutSeconds) {
+      return MapWaitOutcome::TimedOut;
+    }
+  }
+}
+
+Result<std::span<const uint8_t>> Device::mappedBytes(const BufferMapping& mapping) const {
+  auto record = resolve(bufferMappings_, mapping, BufferMappingTag::kName);
+  if (record.hasError()) {
+    return std::move(record).error();
+  }
+  return onMappedBytes(mapping.slotIndex());
+}
+
+Status Device::unmapBuffer(BufferMapping&& mapping) {
+  const BufferMapping consumed = std::move(mapping);
+  auto record = resolve(bufferMappings_, consumed, BufferMappingTag::kName);
+  if (record.hasError()) {
+    return std::move(record).error();
+  }
+  // Letting the consumed handle go out of scope here releases the mapping through exactly the
+  // path a dropped handle takes, so explicit release and RAII cannot disagree.
+  return OkStatus();
+}
+
+namespace {
+
+/// Which payload slots of a \ref NativeSurfaceHandle one kind uses.
+struct NativeSurfacePayload {
+  bool usesDisplay = false;   //!< The kind names a platform object pointer.
+  bool usesWindow = false;    //!< The kind names a window or surface by integer handle.
+  bool usesSelector = false;  //!< The kind names its target by string.
+};
+
+/// Returns the payload slots \p kind uses. @param kind Surface kind.
+NativeSurfacePayload PayloadForKind(NativeSurfaceKind kind) {
+  switch (kind) {
+    case NativeSurfaceKind::MetalLayer: return NativeSurfacePayload{true, false, false};
+    case NativeSurfaceKind::XlibWindow:
+    case NativeSurfaceKind::WaylandSurface:
+    case NativeSurfaceKind::Win32Window: return NativeSurfacePayload{true, true, false};
+    case NativeSurfaceKind::CanvasSelector: return NativeSurfacePayload{false, false, true};
+  }
+  return NativeSurfacePayload{};
+}
+
+/// Reports one payload slot that disagrees with its kind, or nullopt when the slot is consistent.
+///
+/// A slot the kind needs but that is empty, and a slot the kind does not use but that is filled,
+/// are both disagreements between the caller and the handle about what it names.
+///
+/// @param used Whether the kind uses this slot.
+/// @param populated Whether the caller filled it.
+/// @param slotName Slot name, for the message.
+std::optional<std::string> NativeSurfaceSlotProblem(bool used, bool populated,
+                                                    std::string_view slotName) {
+  if (used && !populated) {
+    return std::format("this surface kind needs {}", slotName);
+  }
+  if (!used && populated) {
+    return std::format("this surface kind does not use {}", slotName);
+  }
+  return std::nullopt;
+}
+
+/// Rejects a native handle whose populated payload slots do not match its kind.
+/// @param native Handle to check.
+Status ValidateNativeSurfaceHandle(const NativeSurfaceHandle& native) {
+  if (Status status = CheckEnum(native.kind, "NativeSurfaceHandle.kind"); status.hasError()) {
+    return status;
+  }
+  const NativeSurfacePayload payload = PayloadForKind(native.kind);
+  const std::array<std::optional<std::string>, 3> problems = {
+      NativeSurfaceSlotProblem(payload.usesDisplay, native.display != nullptr, "a platform object"),
+      NativeSurfaceSlotProblem(payload.usesWindow, native.window != 0, "a window handle"),
+      NativeSurfaceSlotProblem(payload.usesSelector, !native.selector.empty(), "a selector")};
+  for (const std::optional<std::string>& problem : problems) {
+    if (problem.has_value()) {
+      return Err(GpuErrorType::InvalidDescriptor, std::format("createSurface: {}", *problem));
+    }
+  }
+  return OkStatus();
+}
+
+/// Rejects a configuration a surface could not present under.
+/// @param configuration Configuration to check.
+Status ValidateSurfaceConfiguration(const SurfaceConfiguration& configuration) {
+  if (Status status = CheckEnum(configuration.format, "SurfaceConfiguration.format");
+      status.hasError()) {
+    return status;
+  }
+  if (Status status = CheckBitmask(configuration.usage, "SurfaceConfiguration.usage");
+      status.hasError()) {
+    return status;
+  }
+  if (configuration.usage == TextureUsage::None) {
+    return Err(GpuErrorType::InvalidDescriptor, "SurfaceConfiguration.usage is empty");
+  }
+  // Pacing and alpha compositing are checked here rather than left to the backend: the mappings
+  // onto backend values fall back to Fifo and Opaque for anything they do not recognise, so an
+  // unknown value would otherwise be presented under a configuration nobody asked for.
+  if (Status status = CheckEnum(configuration.presentMode, "SurfaceConfiguration.presentMode");
+      status.hasError()) {
+    return status;
+  }
+  if (Status status = CheckEnum(configuration.alphaMode, "SurfaceConfiguration.alphaMode");
+      status.hasError()) {
+    return status;
+  }
+  if (configuration.size.width == 0 || configuration.size.height == 0) {
+    return Err(GpuErrorType::InvalidDescriptor,
+               std::format("SurfaceConfiguration.size {}x{} has a zero dimension",
+                           configuration.size.width, configuration.size.height));
+  }
+  return OkStatus();
+}
+
+}  // namespace
+
+Status Device::onCreateSurface(uint32_t /*slotIndex*/, const SurfaceDescriptor& /*descriptor*/) {
+  return Err(GpuErrorType::Unsupported, "this backend does not support presentation");
+}
+
+Result<SurfaceCapabilities> Device::onSurfaceCapabilities(uint32_t /*slotIndex*/) const {
+  return GpuError{GpuErrorType::Unsupported, "this backend does not support presentation"};
+}
+
+Status Device::onConfigureSurface(uint32_t /*slotIndex*/,
+                                  const SurfaceConfiguration& /*configuration*/) {
+  return Err(GpuErrorType::Unsupported, "this backend does not support presentation");
+}
+
+Result<SurfaceStatus> Device::onAcquireCurrentTexture(uint32_t /*slotIndex*/,
+                                                      uint32_t /*textureSlotIndex*/) {
+  return GpuError{GpuErrorType::Unsupported, "this backend does not support presentation"};
+}
+
+Result<SurfaceStatus> Device::onPresentSurface(uint32_t /*slotIndex*/) {
+  return GpuError{GpuErrorType::Unsupported, "this backend does not support presentation"};
+}
+
+void Device::onAbandonCurrentTexture(uint32_t /*slotIndex*/) {}
+
+Result<Surface> Device::createSurface(const SurfaceDescriptor& descriptor) {
+  if (Status status = ValidateNativeSurfaceHandle(descriptor.native); status.hasError()) {
+    return std::move(status).error();
+  }
+
+  Surface handle =
+      allocateHandle<SurfaceTag>(surfaces_, SurfaceRecord{descriptor, std::nullopt, Texture()});
+  if (Status status = onCreateSurface(handle.slotIndex(), descriptor); status.hasError()) {
+    surfaces_.release(handle.slotIndex());
+    return std::move(status).error();
+  }
+  return handle;
+}
+
+Result<SurfaceCapabilities> Device::surfaceCapabilities(const Surface& surface) const {
+  auto record = resolve(surfaces_, surface, SurfaceTag::kName);
+  if (record.hasError()) {
+    return std::move(record).error();
+  }
+  return onSurfaceCapabilities(surface.slotIndex());
+}
+
+Status Device::configureSurface(const Surface& surface, const SurfaceConfiguration& configuration) {
+  if (Status status = ValidateSurfaceConfiguration(configuration); status.hasError()) {
+    return status;
+  }
+  auto record = resolve(surfaces_, surface, SurfaceTag::kName);
+  if (record.hasError()) {
+    return std::move(record).error();
+  }
+  // A texture acquired under the previous configuration describes a surface that no longer
+  // exists in that shape, so reconfiguring invalidates it rather than leaving it usable. The
+  // platform is holding that frame as well, and holds exactly one, so it is handed back rather
+  // than merely forgotten - otherwise the next acquire is refused by the backend.
+  if (hasOutstandingFrame(*record.result())) {
+    onAbandonCurrentTexture(surface.slotIndex());
+  }
+  releaseAcquiredSurfaceTexture(surface);
+  if (Status status = onConfigureSurface(surface.slotIndex(), configuration); status.hasError()) {
+    return status;
+  }
+  if (SurfaceRecord* mutableRecord = mutableSurfaceRecord(surface); mutableRecord != nullptr) {
+    mutableRecord->configured = configuration;
+  }
+  return OkStatus();
+}
+
+Result<SurfaceTexture> Device::acquireCurrentTexture(const Surface& surface) {
+  auto record = resolve(surfaces_, surface, SurfaceTag::kName);
+  if (record.hasError()) {
+    return std::move(record).error();
+  }
+  if (!record.result()->configured.has_value()) {
+    return GpuError{GpuErrorType::InvalidState,
+                    "acquireCurrentTexture: the surface has not been configured"};
+  }
+  if (record.result()->acquired.isValid() && !hasOutstandingFrame(*record.result())) {
+    // The caller disposed of the frame's texture through its handle, so the runtime has nothing
+    // left to resolve it with - but the platform is still holding the frame itself, and holds
+    // exactly one. Hand it back before asking for the next, or the backend refuses.
+    onAbandonCurrentTexture(surface.slotIndex());
+    releaseAcquiredSurfaceTexture(surface);
+  }
+  if (record.result()->acquired.isValid()) {
+    return GpuError{GpuErrorType::InvalidState,
+                    "acquireCurrentTexture: the previous texture has not been presented or "
+                    "abandoned"};
+  }
+
+  const SurfaceConfiguration& configuration = *record.result()->configured;
+  Texture texture = allocateHandle<TextureTag>(
+      textures_,
+      TextureRecord{TextureDescriptor{record.result()->descriptor.label, configuration.size,
+                                      configuration.format, configuration.usage, 1}});
+  Result<SurfaceStatus> status = onAcquireCurrentTexture(surface.slotIndex(), texture.slotIndex());
+  if (status.hasError()) {
+    textures_.release(texture.slotIndex());
+    return std::move(status).error();
+  }
+  if (status.result() == SurfaceStatus::Lost || status.result() == SurfaceStatus::DeviceLost ||
+      status.result() == SurfaceStatus::Timeout) {
+    // No frame came back, so there is nothing to keep alive and nothing for the caller to draw
+    // into; the status alone says what to do next.
+    textures_.release(texture.slotIndex());
+    return SurfaceTexture{Texture(), status.result()};
+  }
+
+  SurfaceTexture acquired{std::move(texture), status.result()};
+  if (SurfaceRecord* mutableRecord = mutableSurfaceRecord(surface); mutableRecord != nullptr) {
+    mutableRecord->acquired = TextureRef(acquired.texture);
+  }
+  return acquired;
+}
+
+Result<SurfaceStatus> Device::presentSurface(const Surface& surface) {
+  auto record = resolve(surfaces_, surface, SurfaceTag::kName);
+  if (record.hasError()) {
+    return std::move(record).error();
+  }
+  if (!record.result()->acquired.isValid()) {
+    return GpuError{GpuErrorType::InvalidState, "presentSurface: no texture has been acquired"};
+  }
+
+  Result<SurfaceStatus> status = onPresentSurface(surface.slotIndex());
+  // The platform owns the texture once it has been handed over, whether or not presenting
+  // reported success, so it stops being usable either way.
+  releaseAcquiredSurfaceTexture(surface);
+  return status;
+}
+
+Status Device::abandonCurrentTexture(const Surface& surface) {
+  auto record = resolve(surfaces_, surface, SurfaceTag::kName);
+  if (record.hasError()) {
+    return std::move(record).error();
+  }
+  if (!record.result()->acquired.isValid()) {
+    return Err(GpuErrorType::InvalidState, "abandonCurrentTexture: no texture has been acquired");
+  }
+  onAbandonCurrentTexture(surface.slotIndex());
+  releaseAcquiredSurfaceTexture(surface);
+  return OkStatus();
+}
+
+Status Device::destroySurface(Surface&& surface) {
+  const Surface consumed = std::move(surface);
+  auto record = resolve(surfaces_, consumed, SurfaceTag::kName);
+  if (record.hasError()) {
+    return std::move(record).error();
+  }
+  releaseAcquiredSurfaceTexture(consumed);
+  return OkStatus();
+}
+
+void Device::releaseAcquiredSurfaceTexture(const Surface& surface) {
+  releaseAcquiredSurfaceTextureBySlot(surface.slotIndex(), surface.generation());
+}
+
+bool Device::hasOutstandingFrame(const SurfaceRecord& record) const {
+  return record.acquired.isValid() &&
+         textures_.find(record.acquired.slotIndex(), record.acquired.generation()) != nullptr;
+}
+
+void Device::releaseAcquiredSurfaceTextureBySlot(uint32_t slotIndex, uint32_t generation) {
+  SurfaceRecord* record = surfaces_.findMutable(slotIndex, generation);
+  if (record == nullptr || !record->acquired.isValid()) {
+    return;
+  }
+  if (textures_.find(record->acquired.slotIndex(), record->acquired.generation()) != nullptr) {
+    textures_.release(record->acquired.slotIndex());
+  }
+  record->acquired = TextureRef();
+}
+
+Device::SurfaceRecord* Device::mutableSurfaceRecord(const Surface& surface) {
+  return surfaces_.findMutable(surface.slotIndex(), surface.generation());
 }
 
 Result<std::unique_ptr<CommandEncoder>> Device::createCommandEncoder() {

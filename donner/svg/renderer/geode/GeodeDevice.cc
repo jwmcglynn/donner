@@ -1181,10 +1181,17 @@ void GeodeDevice::deferDestroy(gpu::BindGroup bindGroup) {
   }
 }
 
+void GeodeDevice::deferDestroy(gpu::Texture texture) {
+  if (texture.isValid()) {
+    pendingGpuTextures_.push_back(std::move(texture));
+  }
+}
+
 void GeodeDevice::drainDeferredDestroys() {
   pendingBuffers_.clear();
   pendingTextures_.clear();
   pendingBindGroups_.clear();
+  pendingGpuTextures_.clear();
 }
 
 }  // namespace donner::geode

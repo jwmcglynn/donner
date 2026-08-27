@@ -4,6 +4,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <chrono>
 #include <cstdint>
 #include <vector>
 
@@ -629,6 +630,527 @@ TEST_F(WriteTextureTests, RejectsMissingCopyDstUsage) {
   EXPECT_THAT(device_.writeTexture(sampledOnly, MakeBytes(kPaddedByteCount),
                                    TexelCopyBufferLayout{0, 256, 4}, Extent2d{4, 4}),
               IsGpuErrorWithMessage(GpuErrorType::UsageMismatch, HasSubstr("CopyDst")));
+}
+
+// ----------------------------------------------------------------------------
+// Host buffer mapping.
+
+/// A device whose mapping and presentation hooks follow a script, so a test can state exactly
+/// what the backend reports and assert what the runtime does with it.
+class ScriptedDevice : public Device {
+public:
+  /// Submissions complete instantly here; nothing in these tests waits on one.
+  uint64_t completedSerial() const override { return lastSubmittedSerial(); }
+
+  /// What every slice reports until \ref sliceStates runs out.
+  MapSliceState trailingState = MapSliceState::Pending;
+  /// States reported by the first slices, in order.
+  std::vector<MapSliceState> sliceStates;
+  /// Number of slices the runtime asked for.
+  int sliceCalls = 0;
+  /// Bytes handed back once a mapping is ready.
+  std::vector<uint8_t> bytes{1, 2, 3, 4};
+  /// Number of times the runtime released a mapping.
+  int unmapCalls = 0;
+  /// What acquiring reports.
+  /// Whether the backend is still holding the frame it handed out, as a real one does.
+  bool backendHasFrame = false;
+  SurfaceStatus acquireStatus = SurfaceStatus::Success;
+  /// What presenting reports.
+  SurfaceStatus presentStatus = SurfaceStatus::Success;
+  /// Number of times the runtime abandoned an acquired texture.
+  int abandonCalls = 0;
+
+protected:
+  // The operations this fake does not model are accepted and ignored: the tests below are about
+  // mapping, and a backend that recorded them would only add noise.
+  Status onCreateBuffer(uint32_t, const BufferDescriptor&) override { return OkStatus(); }
+  Status onCreateTexture(uint32_t, const TextureDescriptor&) override { return OkStatus(); }
+  Status onCreateTextureView(uint32_t, uint32_t, const TextureViewDescriptor&) override {
+    return OkStatus();
+  }
+  Status onCreateSampler(uint32_t, const SamplerDescriptor&) override { return OkStatus(); }
+  Status onCreateBindGroupLayout(uint32_t, const BindGroupLayoutDescriptor&) override {
+    return OkStatus();
+  }
+  Status onCreateBindGroup(uint32_t, const BindGroupDescriptor&) override { return OkStatus(); }
+  Status onCreatePipelineLayout(uint32_t, const PipelineLayoutDescriptor&) override {
+    return OkStatus();
+  }
+  Status onCreateShaderModule(uint32_t, const ShaderModuleDescriptor&) override {
+    return OkStatus();
+  }
+  Status onCreateRenderPipeline(uint32_t, const RenderPipelineDescriptor&) override {
+    return OkStatus();
+  }
+  Status onCreateComputePipeline(uint32_t, const ComputePipelineDescriptor&) override {
+    return OkStatus();
+  }
+  void onDestroyResource(std::string_view, uint32_t) override {}
+  Status onWriteBuffer(uint32_t, uint64_t, std::span<const uint8_t>) override { return OkStatus(); }
+  Status onWriteTexture(uint32_t, std::span<const uint8_t>, const TexelCopyBufferLayout&,
+                        const Extent2d&) override {
+    return OkStatus();
+  }
+  Status onSubmit(uint64_t, uint32_t, std::span<const Command>) override { return OkStatus(); }
+
+  Status onCreateSurface(uint32_t, const SurfaceDescriptor&) override { return OkStatus(); }
+
+  Result<SurfaceCapabilities> onSurfaceCapabilities(uint32_t) const override {
+    return SurfaceCapabilities{{TextureFormat::BGRA8Unorm},
+                               TextureUsage::RenderAttachment,
+                               {PresentMode::Fifo},
+                               {SurfaceAlphaMode::Opaque}};
+  }
+
+  Status onConfigureSurface(uint32_t, const SurfaceConfiguration&) override { return OkStatus(); }
+
+  Result<SurfaceStatus> onAcquireCurrentTexture(uint32_t, uint32_t) override {
+    // The platform holds its own frame, and it holds exactly one: a backend tracks the frame it
+    // handed out and refuses another until that one is presented or handed back. The wgpu
+    // backend does this with its own per-surface flag, so a runtime that only cleaned up its own
+    // bookkeeping would be refused right here.
+    if (backendHasFrame) {
+      return GpuError{GpuErrorType::InvalidState,
+                      "the backend is still holding the frame it handed out"};
+    }
+    if (acquireStatus == SurfaceStatus::Success || acquireStatus == SurfaceStatus::Outdated) {
+      backendHasFrame = true;
+    }
+    return acquireStatus;
+  }
+
+  Result<SurfaceStatus> onPresentSurface(uint32_t) override {
+    backendHasFrame = false;
+    return presentStatus;
+  }
+
+  void onAbandonCurrentTexture(uint32_t) override {
+    ++abandonCalls;
+    backendHasFrame = false;
+  }
+
+  Status onMapBufferAsync(uint32_t /*mappingSlotIndex*/, uint32_t /*bufferSlotIndex*/,
+                          MapMode /*mode*/, uint64_t /*offsetBytes*/,
+                          uint64_t /*byteCount*/) override {
+    return OkStatus();
+  }
+
+  MapSliceState onWaitMappingSlice(uint32_t /*mappingSlotIndex*/,
+                                   double /*sliceSeconds*/) override {
+    const size_t index = static_cast<size_t>(sliceCalls);
+    ++sliceCalls;
+    return index < sliceStates.size() ? sliceStates[index] : trailingState;
+  }
+
+  Result<std::span<const uint8_t>> onMappedBytes(uint32_t /*mappingSlotIndex*/) const override {
+    return std::span<const uint8_t>(bytes);
+  }
+
+  void onUnmapBuffer(uint32_t /*mappingSlotIndex*/) override { ++unmapCalls; }
+};
+
+class BufferMappingTests : public testing::Test {
+protected:
+  Buffer readableBuffer(uint64_t byteSize = 64) {
+    return GetResultOrFail(device_.createBuffer(
+        BufferDescriptor{"readback", byteSize, BufferUsage::CopyDst | BufferUsage::MapRead}));
+  }
+
+  /// A wait with slices short enough that the budget allows exactly four of them.
+  static MapWaitParams fourSlices() { return MapWaitParams{0.25, 1.0}; }
+
+  ScriptedDevice device_;
+};
+
+TEST_F(BufferMappingTests, RejectsBufferWithoutMapReadUsage) {
+  const Buffer plain =
+      GetResultOrFail(device_.createBuffer(BufferDescriptor{"plain", 64, BufferUsage::CopyDst}));
+  EXPECT_THAT(device_.mapBufferAsync(plain, MapMode::Read, 0, 64),
+              IsGpuErrorWithMessage(GpuErrorType::UsageMismatch, HasSubstr("lacks the MapRead")));
+}
+
+TEST_F(BufferMappingTests, RejectsRangeBeyondTheBuffer) {
+  const Buffer buffer = readableBuffer();
+  EXPECT_THAT(device_.mapBufferAsync(buffer, MapMode::Read, 32, 64),
+              IsGpuError(GpuErrorType::OutOfBounds));
+}
+
+TEST_F(BufferMappingTests, RejectsEmptyRange) {
+  const Buffer buffer = readableBuffer();
+  EXPECT_THAT(device_.mapBufferAsync(buffer, MapMode::Read, 0, 0),
+              IsGpuError(GpuErrorType::InvalidDescriptor));
+}
+
+TEST_F(BufferMappingTests, RejectsWaitBoundsThatCouldNeverTerminate) {
+  const Buffer buffer = readableBuffer();
+  BufferMapping mapping = GetResultOrFail(device_.mapBufferAsync(buffer, MapMode::Read, 0, 64));
+  EXPECT_THAT(device_.waitForMapping(mapping, MapWaitParams{0.0, 1.0}, {}),
+              IsGpuError(GpuErrorType::InvalidDescriptor));
+  EXPECT_THAT(device_.waitForMapping(mapping, MapWaitParams{0.25, 0.0}, {}),
+              IsGpuError(GpuErrorType::InvalidDescriptor));
+}
+
+TEST_F(BufferMappingTests, ReadyMappingHandsBackItsBytes) {
+  const Buffer buffer = readableBuffer();
+  device_.sliceStates = {MapSliceState::Pending, MapSliceState::Ready};
+  BufferMapping mapping = GetResultOrFail(device_.mapBufferAsync(buffer, MapMode::Read, 0, 64));
+
+  EXPECT_EQ(GetResultOrFail(device_.waitForMapping(mapping, fourSlices(), {})),
+            MapWaitOutcome::Ready);
+  EXPECT_THAT(GetResultOrFail(device_.mappedBytes(mapping)), testing::ElementsAre(1, 2, 3, 4));
+}
+
+/// A fake clock advanced only by resting, so a budget is spent deterministically and instantly.
+struct FakeWaitClock {
+  std::chrono::steady_clock::time_point at;  //!< Current time.
+  std::chrono::microseconds rested{0};       //!< Total time spent resting.
+
+  /// Hooks driving \ref donner::gpu::Device::waitForMapping off this clock.
+  Device::MapWaitTestHooks hooks() {
+    Device::MapWaitTestHooks result;
+    result.now = [this] { return at; };
+    result.rest = [this](std::chrono::microseconds duration) {
+      at += duration;
+      rested += duration;
+    };
+    return result;
+  }
+};
+
+TEST_F(BufferMappingTests, ABudgetIsNotSpentUntilItsTimeHasActuallyPassed) {
+  const Buffer buffer = readableBuffer();
+  // Every slice reports Pending and returns without waiting, which is what a backend slice built
+  // on a non-blocking poll does.
+  BufferMapping mapping = GetResultOrFail(device_.mapBufferAsync(buffer, MapMode::Read, 0, 64));
+
+  FakeWaitClock clock;
+  const Device::MapWaitTestHooks hooks = clock.hooks();
+  EXPECT_EQ(GetResultOrFail(device_.waitForMapping(mapping, fourSlices(), {}, hooks)),
+            MapWaitOutcome::TimedOut);
+  EXPECT_GE(std::chrono::duration<double>(clock.rested).count(), 1.0)
+      << "A one second budget cannot run out before one second of waiting has happened";
+}
+
+TEST_F(BufferMappingTests, AReadyMappingIsNotHeldForTheRestOfTheBudget) {
+  const Buffer buffer = readableBuffer();
+  device_.sliceStates = {MapSliceState::Pending, MapSliceState::Ready};
+  BufferMapping mapping = GetResultOrFail(device_.mapBufferAsync(buffer, MapMode::Read, 0, 64));
+
+  FakeWaitClock clock;
+  const Device::MapWaitTestHooks hooks = clock.hooks();
+  EXPECT_EQ(GetResultOrFail(device_.waitForMapping(mapping, fourSlices(), {}, hooks)),
+            MapWaitOutcome::Ready);
+  EXPECT_LT(std::chrono::duration<double>(clock.rested).count(), 1.0)
+      << "Waiting stops when the mapping is ready, not when the budget runs out";
+}
+
+TEST_F(BufferMappingTests, CancellationIsCheckedBeforeAnySliceRuns) {
+  const Buffer buffer = readableBuffer();
+  BufferMapping mapping = GetResultOrFail(device_.mapBufferAsync(buffer, MapMode::Read, 0, 64));
+
+  EXPECT_EQ(GetResultOrFail(device_.waitForMapping(mapping, fourSlices(), [] { return true; })),
+            MapWaitOutcome::Cancelled);
+  EXPECT_EQ(device_.sliceCalls, 0)
+      << "A caller that has already cancelled must not be made to wait a slice first";
+}
+
+TEST_F(BufferMappingTests, CancellationStopsWithinOneSlice) {
+  const Buffer buffer = readableBuffer();
+  BufferMapping mapping = GetResultOrFail(device_.mapBufferAsync(buffer, MapMode::Read, 0, 64));
+
+  int checks = 0;
+  const auto cancelOnSecondCheck = [&checks] { return ++checks > 1; };
+  EXPECT_EQ(GetResultOrFail(device_.waitForMapping(mapping, fourSlices(), cancelOnSecondCheck)),
+            MapWaitOutcome::Cancelled);
+  EXPECT_EQ(device_.sliceCalls, 1) << "Cancellation must end the wait after the slice in flight";
+}
+
+TEST_F(BufferMappingTests, BudgetExhaustionReportsTimedOut) {
+  const Buffer buffer = readableBuffer();
+  BufferMapping mapping = GetResultOrFail(device_.mapBufferAsync(buffer, MapMode::Read, 0, 64));
+
+  FakeWaitClock clock;
+  const Device::MapWaitTestHooks hooks = clock.hooks();
+  EXPECT_EQ(GetResultOrFail(device_.waitForMapping(mapping, fourSlices(), {}, hooks)),
+            MapWaitOutcome::TimedOut);
+  EXPECT_EQ(device_.sliceCalls, 4) << "The budget must be spent in slices of the stated length";
+}
+
+TEST_F(BufferMappingTests, DeviceLossEndsTheWaitImmediately) {
+  const Buffer buffer = readableBuffer();
+  device_.sliceStates = {MapSliceState::DeviceLost};
+  BufferMapping mapping = GetResultOrFail(device_.mapBufferAsync(buffer, MapMode::Read, 0, 64));
+
+  EXPECT_EQ(GetResultOrFail(device_.waitForMapping(mapping, fourSlices(), {})),
+            MapWaitOutcome::DeviceLost);
+  EXPECT_EQ(device_.sliceCalls, 1)
+      << "A lost device can never deliver the map, so the budget must not be spent on it";
+}
+
+TEST_F(BufferMappingTests, BackendFailureIsItsOwnOutcome) {
+  const Buffer buffer = readableBuffer();
+  device_.sliceStates = {MapSliceState::Failed};
+  BufferMapping mapping = GetResultOrFail(device_.mapBufferAsync(buffer, MapMode::Read, 0, 64));
+
+  EXPECT_EQ(GetResultOrFail(device_.waitForMapping(mapping, fourSlices(), {})),
+            MapWaitOutcome::Failed);
+}
+
+TEST_F(BufferMappingTests, ReleasingAMappingInvalidatesItsHandle) {
+  const Buffer buffer = readableBuffer();
+  device_.trailingState = MapSliceState::Ready;
+  BufferMapping mapping = GetResultOrFail(device_.mapBufferAsync(buffer, MapMode::Read, 0, 64));
+  ASSERT_EQ(GetResultOrFail(device_.waitForMapping(mapping, fourSlices(), {})),
+            MapWaitOutcome::Ready);
+
+  EXPECT_THAT(device_.unmapBuffer(std::move(mapping)), IsOk());
+  EXPECT_EQ(device_.unmapCalls, 1);
+  EXPECT_THAT(device_.mappedBytes(mapping), IsGpuError(GpuErrorType::InvalidHandle))
+      << "Reading through a released mapping must be reported, not attempted";
+  EXPECT_THAT(device_.waitForMapping(mapping, fourSlices(), {}),
+              IsGpuError(GpuErrorType::InvalidHandle));
+}
+
+TEST_F(BufferMappingTests, DroppingAMappingReleasesItExactlyOnce) {
+  const Buffer buffer = readableBuffer();
+  {
+    BufferMapping mapping = GetResultOrFail(device_.mapBufferAsync(buffer, MapMode::Read, 0, 64));
+    EXPECT_EQ(device_.unmapCalls, 0);
+  }
+  EXPECT_EQ(device_.unmapCalls, 1) << "A dropped mapping must release through the same path";
+}
+
+TEST_F(BufferMappingTests, ABackendWithoutMappingReportsItUnsupported) {
+  RecordingDevice plainDevice;
+  const Buffer buffer = GetResultOrFail(plainDevice.createBuffer(
+      BufferDescriptor{"readback", 64, BufferUsage::CopyDst | BufferUsage::MapRead}));
+  EXPECT_THAT(plainDevice.mapBufferAsync(buffer, MapMode::Read, 0, 64),
+              IsGpuError(GpuErrorType::Unsupported));
+}
+
+// ----------------------------------------------------------------------------
+// Surface presentation.
+
+class SurfaceTests : public testing::Test {
+protected:
+  Surface metalSurface() {
+    SurfaceDescriptor descriptor;
+    descriptor.label = "window";
+    descriptor.native.kind = NativeSurfaceKind::MetalLayer;
+    descriptor.native.display = &layer_;
+    return GetResultOrFail(device_.createSurface(descriptor));
+  }
+
+  static SurfaceConfiguration configuration(uint32_t width = 640, uint32_t height = 480) {
+    return SurfaceConfiguration{TextureFormat::BGRA8Unorm, TextureUsage::RenderAttachment,
+                                Extent2d{width, height}, PresentMode::Fifo,
+                                SurfaceAlphaMode::Opaque};
+  }
+
+  int layer_ = 0;
+  ScriptedDevice device_;
+};
+
+TEST_F(SurfaceTests, RejectsANativeHandleMissingItsPayload) {
+  SurfaceDescriptor withoutLayer;
+  withoutLayer.native.kind = NativeSurfaceKind::MetalLayer;
+  EXPECT_THAT(device_.createSurface(withoutLayer), IsGpuError(GpuErrorType::InvalidDescriptor));
+
+  SurfaceDescriptor withoutSelector;
+  withoutSelector.native.kind = NativeSurfaceKind::CanvasSelector;
+  EXPECT_THAT(device_.createSurface(withoutSelector),
+              IsGpuErrorWithMessage(GpuErrorType::InvalidDescriptor, HasSubstr("selector")));
+}
+
+TEST_F(SurfaceTests, RejectsAPayloadSlotItsKindDoesNotUse) {
+  SurfaceDescriptor canvasWithWindow;
+  canvasWithWindow.native.kind = NativeSurfaceKind::CanvasSelector;
+  canvasWithWindow.native.selector = "#canvas";
+  canvasWithWindow.native.window = 7;
+  EXPECT_THAT(device_.createSurface(canvasWithWindow),
+              IsGpuErrorWithMessage(GpuErrorType::InvalidDescriptor,
+                                    HasSubstr("does not use a window handle")));
+
+  SurfaceDescriptor layerWithSelector;
+  layerWithSelector.native.kind = NativeSurfaceKind::MetalLayer;
+  layerWithSelector.native.display = &layer_;
+  layerWithSelector.native.selector = "#canvas";
+  EXPECT_THAT(
+      device_.createSurface(layerWithSelector),
+      IsGpuErrorWithMessage(GpuErrorType::InvalidDescriptor, HasSubstr("does not use a selector")));
+
+  SurfaceDescriptor windowKindWithoutWindow;
+  windowKindWithoutWindow.native.kind = NativeSurfaceKind::XlibWindow;
+  windowKindWithoutWindow.native.display = &layer_;
+  EXPECT_THAT(
+      device_.createSurface(windowKindWithoutWindow),
+      IsGpuErrorWithMessage(GpuErrorType::InvalidDescriptor, HasSubstr("needs a window handle")));
+}
+
+TEST_F(SurfaceTests, AcceptsACanvasNamedBySelector) {
+  SurfaceDescriptor descriptor;
+  descriptor.native.kind = NativeSurfaceKind::CanvasSelector;
+  descriptor.native.selector = "#canvas";
+  EXPECT_THAT(device_.createSurface(descriptor), IsOk());
+}
+
+TEST_F(SurfaceTests, RejectsAConfigurationWithNoExtent) {
+  const Surface surface = metalSurface();
+  EXPECT_THAT(device_.configureSurface(surface, configuration(0, 480)),
+              IsGpuError(GpuErrorType::InvalidDescriptor));
+}
+
+TEST_F(SurfaceTests, RejectsAConfigurationNamingUnknownPacingOrAlphaCompositing) {
+  const Surface surface = metalSurface();
+
+  SurfaceConfiguration unknownPacing = configuration();
+  unknownPacing.presentMode = static_cast<PresentMode>(0x7F);
+  EXPECT_THAT(device_.configureSurface(surface, unknownPacing),
+              IsGpuErrorWithMessage(GpuErrorType::InvalidDescriptor, HasSubstr("presentMode")))
+      << "An unrecognised pacing would otherwise be presented as Fifo without anyone asking";
+
+  SurfaceConfiguration unknownAlpha = configuration();
+  unknownAlpha.alphaMode = static_cast<SurfaceAlphaMode>(0x7F);
+  EXPECT_THAT(device_.configureSurface(surface, unknownAlpha),
+              IsGpuErrorWithMessage(GpuErrorType::InvalidDescriptor, HasSubstr("alphaMode")))
+      << "An unrecognised alpha mode would otherwise be presented as Opaque without anyone asking";
+}
+
+TEST_F(SurfaceTests, AcceptsEveryPacingAndAlphaCompositingItDefines) {
+  const Surface surface = metalSurface();
+  for (const PresentMode mode : {PresentMode::Fifo, PresentMode::Immediate, PresentMode::Mailbox}) {
+    SurfaceConfiguration accepted = configuration();
+    accepted.presentMode = mode;
+    EXPECT_THAT(device_.configureSurface(surface, accepted), IsOk()) << "pacing " << mode;
+  }
+  for (const SurfaceAlphaMode mode :
+       {SurfaceAlphaMode::Opaque, SurfaceAlphaMode::Premultiplied, SurfaceAlphaMode::Inherit}) {
+    SurfaceConfiguration accepted = configuration();
+    accepted.alphaMode = mode;
+    EXPECT_THAT(device_.configureSurface(surface, accepted), IsOk()) << "alpha mode " << mode;
+  }
+}
+
+TEST_F(SurfaceTests, AcquiringBeforeConfiguringIsReported) {
+  const Surface surface = metalSurface();
+  EXPECT_THAT(device_.acquireCurrentTexture(surface),
+              IsGpuErrorWithMessage(GpuErrorType::InvalidState, HasSubstr("not been configured")));
+}
+
+TEST_F(SurfaceTests, AcquiringTwiceWithoutResolvingTheFirstIsReported) {
+  const Surface surface = metalSurface();
+  ASSERT_THAT(device_.configureSurface(surface, configuration()), IsOk());
+  SurfaceTexture first = GetResultOrFail(device_.acquireCurrentTexture(surface));
+  ASSERT_TRUE(first.texture.isValid());
+
+  EXPECT_THAT(device_.acquireCurrentTexture(surface), IsGpuError(GpuErrorType::InvalidState));
+}
+
+TEST_F(SurfaceTests, DisposingTheAcquiredTextureLeavesNoFrameOutstanding) {
+  const Surface surface = metalSurface();
+  ASSERT_THAT(device_.configureSurface(surface, configuration()), IsOk());
+  {
+    SurfaceTexture frame = GetResultOrFail(device_.acquireCurrentTexture(surface));
+    ASSERT_TRUE(frame.texture.isValid());
+    // Dropping the handle destroys the texture through the device, which is how every other
+    // resource of this runtime is disposed of.
+  }
+
+  EXPECT_THAT(device_.acquireCurrentTexture(surface), IsOk())
+      << "A surface whose acquired texture is already gone has no frame left to resolve";
+  EXPECT_EQ(device_.abandonCalls, 1)
+      << "The platform's frame outlives the handle, so it has to be handed back before the next "
+         "one is asked for";
+}
+
+TEST_F(SurfaceTests, PresentingInvalidatesTheAcquiredTexture) {
+  const Surface surface = metalSurface();
+  ASSERT_THAT(device_.configureSurface(surface, configuration()), IsOk());
+  SurfaceTexture frame = GetResultOrFail(device_.acquireCurrentTexture(surface));
+
+  EXPECT_EQ(GetResultOrFail(device_.presentSurface(surface)), SurfaceStatus::Success);
+  EXPECT_THAT(device_.createTextureView(frame.texture, TextureViewDescriptor{"view"}),
+              IsGpuError(GpuErrorType::InvalidHandle))
+      << "The platform owns the texture once it has been presented";
+}
+
+TEST_F(SurfaceTests, AbandoningInvalidatesTheAcquiredTexture) {
+  const Surface surface = metalSurface();
+  ASSERT_THAT(device_.configureSurface(surface, configuration()), IsOk());
+  SurfaceTexture frame = GetResultOrFail(device_.acquireCurrentTexture(surface));
+
+  EXPECT_THAT(device_.abandonCurrentTexture(surface), IsOk());
+  EXPECT_EQ(device_.abandonCalls, 1);
+  EXPECT_THAT(device_.createTextureView(frame.texture, TextureViewDescriptor{"view"}),
+              IsGpuError(GpuErrorType::InvalidHandle));
+}
+
+TEST_F(SurfaceTests, ReconfiguringInvalidatesTheAcquiredTexture) {
+  const Surface surface = metalSurface();
+  ASSERT_THAT(device_.configureSurface(surface, configuration()), IsOk());
+  SurfaceTexture frame = GetResultOrFail(device_.acquireCurrentTexture(surface));
+
+  // A resize is a reconfiguration of the same surface, not a new one.
+  EXPECT_THAT(device_.configureSurface(surface, configuration(800, 600)), IsOk());
+  EXPECT_THAT(device_.createTextureView(frame.texture, TextureViewDescriptor{"view"}),
+              IsGpuError(GpuErrorType::InvalidHandle));
+  EXPECT_THAT(device_.acquireCurrentTexture(surface), IsOk())
+      << "A reconfigured surface hands out frames again without being recreated";
+}
+
+TEST_F(SurfaceTests, PresentingWithoutAcquiringIsReported) {
+  const Surface surface = metalSurface();
+  ASSERT_THAT(device_.configureSurface(surface, configuration()), IsOk());
+  EXPECT_THAT(device_.presentSurface(surface), IsGpuError(GpuErrorType::InvalidState));
+}
+
+TEST_F(SurfaceTests, AnOutdatedSurfaceStillHandsBackAUsableFrame) {
+  const Surface surface = metalSurface();
+  ASSERT_THAT(device_.configureSurface(surface, configuration()), IsOk());
+  device_.acquireStatus = SurfaceStatus::Outdated;
+
+  SurfaceTexture frame = GetResultOrFail(device_.acquireCurrentTexture(surface));
+  EXPECT_EQ(frame.status, SurfaceStatus::Outdated);
+  EXPECT_TRUE(frame.texture.isValid())
+      << "A surface that has drifted out of date usually still presents, so the caller chooses";
+}
+
+TEST_F(SurfaceTests, ALostSurfaceHandsBackNoFrame) {
+  const Surface surface = metalSurface();
+  ASSERT_THAT(device_.configureSurface(surface, configuration()), IsOk());
+
+  for (const SurfaceStatus status :
+       {SurfaceStatus::Lost, SurfaceStatus::DeviceLost, SurfaceStatus::Timeout}) {
+    device_.acquireStatus = status;
+    SurfaceTexture frame = GetResultOrFail(device_.acquireCurrentTexture(surface));
+    EXPECT_EQ(frame.status, status);
+    EXPECT_FALSE(frame.texture.isValid());
+  }
+}
+
+TEST_F(SurfaceTests, PresentReportsWhatTheSurfaceSaid) {
+  const Surface surface = metalSurface();
+  ASSERT_THAT(device_.configureSurface(surface, configuration()), IsOk());
+  device_.presentStatus = SurfaceStatus::Lost;
+  (void)GetResultOrFail(device_.acquireCurrentTexture(surface));
+
+  EXPECT_EQ(GetResultOrFail(device_.presentSurface(surface)), SurfaceStatus::Lost);
+}
+
+TEST_F(SurfaceTests, CapabilitiesComeFromTheSurface) {
+  const Surface surface = metalSurface();
+  const SurfaceCapabilities caps = GetResultOrFail(device_.surfaceCapabilities(surface));
+  EXPECT_THAT(caps.formats, testing::ElementsAre(TextureFormat::BGRA8Unorm));
+  EXPECT_THAT(caps.presentModes, testing::ElementsAre(PresentMode::Fifo));
+}
+
+TEST_F(SurfaceTests, ABackendWithoutPresentationReportsItUnsupported) {
+  RecordingDevice plainDevice;
+  SurfaceDescriptor descriptor;
+  descriptor.native.kind = NativeSurfaceKind::MetalLayer;
+  descriptor.native.display = &layer_;
+  EXPECT_THAT(plainDevice.createSurface(descriptor), IsGpuError(GpuErrorType::Unsupported));
 }
 
 }  // namespace

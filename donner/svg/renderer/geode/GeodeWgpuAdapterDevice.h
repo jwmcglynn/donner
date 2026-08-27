@@ -9,6 +9,7 @@
 #include <atomic>
 #include <cstdint>
 #include <memory>
+#include <span>
 #include <string_view>
 #include <vector>
 #include <webgpu/webgpu.hpp>
@@ -87,6 +88,18 @@ public:
    * @param format Texel format matching the wgpu texture.
    * @param usage Usage flags matching the wgpu texture's capabilities.
    */
+  /**
+   * Destroys the backend object behind \p texture explicitly, then releases its slot.
+   *
+   * Releasing a texture handle on its own only drops this adapter's reference, which leaves the
+   * backend object resident until the host runtime collects it; a succession of resized render
+   * targets is exactly where that shows up as retained memory. Externally imported textures are
+   * left alone: their owner is the embedder, not this adapter.
+   *
+   * @param texture Live texture handle of this adapter; consumed either way.
+   */
+  gpu::Status destroyTextureBacking(gpu::Texture&& texture);
+
   gpu::Result<gpu::Texture> importExternalTexture(wgpu::Texture texture, const gpu::Extent2d& size,
                                                   gpu::TextureFormat format,
                                                   gpu::TextureUsage usage);
@@ -152,6 +165,23 @@ public:
   wgpu::TextureView wgpuTextureViewOf(const gpu::TextureView& textureView) const;
 
 protected:
+  gpu::Status onCreateSurface(uint32_t slotIndex,
+                              const gpu::SurfaceDescriptor& descriptor) override;
+  gpu::Result<gpu::SurfaceCapabilities> onSurfaceCapabilities(uint32_t slotIndex) const override;
+  gpu::Status onConfigureSurface(uint32_t slotIndex,
+                                 const gpu::SurfaceConfiguration& configuration) override;
+  gpu::Result<gpu::SurfaceStatus> onAcquireCurrentTexture(uint32_t slotIndex,
+                                                          uint32_t textureSlotIndex) override;
+  gpu::Result<gpu::SurfaceStatus> onPresentSurface(uint32_t slotIndex) override;
+  void onAbandonCurrentTexture(uint32_t slotIndex) override;
+
+  gpu::Status onMapBufferAsync(uint32_t mappingSlotIndex, uint32_t bufferSlotIndex,
+                               gpu::MapMode mode, uint64_t offsetBytes,
+                               uint64_t byteCount) override;
+  gpu::MapSliceState onWaitMappingSlice(uint32_t mappingSlotIndex, double sliceSeconds) override;
+  gpu::Result<std::span<const uint8_t>> onMappedBytes(uint32_t mappingSlotIndex) const override;
+  void onUnmapBuffer(uint32_t mappingSlotIndex) override;
+
   gpu::Status onCreateBuffer(uint32_t slotIndex, const gpu::BufferDescriptor& descriptor) override;
   gpu::Status onCreateTexture(uint32_t slotIndex,
                               const gpu::TextureDescriptor& descriptor) override;
@@ -292,6 +322,72 @@ private:
   /// Highest serial replayed into \ref hostCommandEncoder_ since the last
   /// \ref notifyHostSubmitted; 0 when nothing is awaiting the host's submit.
   uint64_t hostPendingSerial_ = 0;
+
+  /// State of one pending or completed host mapping.
+  ///
+  /// The completion flag is shared with the backend's callback, which may fire from inside any
+  /// call into the backend, so it is atomic and outlives this record through a reference count
+  /// the callback also holds.
+  struct MappingSlot {
+    struct Completion {
+      std::atomic<int> references{2};  //!< This record and the pending callback.
+      std::atomic<bool> done{false};   //!< Set once the callback has run.
+      std::atomic<bool> ok{false};     //!< Whether the map succeeded.
+      /// Set once the mapping handle is gone, which makes whichever side observes the finished
+      /// map responsible for giving the buffer back.
+      std::atomic<bool> abandoned{false};
+      /// Claimed once by whichever side unmaps, so the two never both unmap and never both
+      /// leave it to the other.
+      std::atomic<bool> unmapClaimed{false};
+      /// The buffer being mapped, holding a reference of its own: a map abandoned in flight
+      /// completes after the mapping's slot is gone and must still have a buffer to unmap.
+      wgpu::Buffer buffer;
+
+      /// Gives the buffer back once the mapping is gone and the map has succeeded.
+      ///
+      /// Both the release and the completion call this, because either can be the one that sees
+      /// both conditions hold. A buffer left mapped with nothing able to unmap it stays mapped
+      /// for the rest of its life, and every later GPU use of it is invalid.
+      void unmapIfAbandoned() {
+        if (!abandoned.load(std::memory_order_acquire) || !done.load(std::memory_order_acquire) ||
+            !ok.load(std::memory_order_relaxed)) {
+          return;
+        }
+        if (!unmapClaimed.exchange(true, std::memory_order_acq_rel) && buffer) {
+          buffer.unmap();
+        }
+      }
+
+      /// Drops one reference, deleting the state with the last one.
+      void release() {
+        if (references.fetch_sub(1, std::memory_order_acq_rel) == 1) {
+          if (buffer) {
+            buffer.release();
+          }
+          delete this;
+        }
+      }
+    };
+
+    Completion* completion = nullptr;  //!< Shared completion state, or null for a dead slot.
+    wgpu::Buffer buffer;               //!< Buffer being mapped; borrowed from its slot.
+    uint64_t offsetBytes = 0;          //!< Byte offset of the mapped range.
+    uint64_t byteCount = 0;            //!< Length of the mapped range.
+  };
+
+  /// One presentation surface and the texture it has handed out this frame.
+  struct SurfaceSlot {
+    ScopedWgpuHandle<wgpu::Surface> surface;  //!< Owned surface, or null for a dead slot.
+    /// Texture the surface handed out for the current frame; borrowed, since the surface owns it.
+    wgpu::Texture acquired;
+    /// Slot the runtime gave that texture, so abandoning can clear the same one.
+    uint32_t acquiredTextureSlot = 0;
+    bool hasAcquired = false;  //!< Whether \ref acquired names this frame's texture.
+  };
+
+  std::vector<SurfaceSlot> slotSurfaces_;
+
+  std::vector<MappingSlot> slotMappings_;
 
   std::vector<ScopedWgpuHandle<wgpu::Buffer>> slotBuffers_;
   std::vector<TextureSlot> slotTextures_;

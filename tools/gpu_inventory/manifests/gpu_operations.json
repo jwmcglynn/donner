@@ -107,15 +107,6 @@
         "SurfaceSourceXlibWindow"
       ]
     },
-    "donner/editor/gui/EditorWgpuSurface_macos.mm": {
-      "wgpuCppTokens": [
-        "Default",
-        "Instance",
-        "Surface",
-        "SurfaceDescriptor",
-        "SurfaceSourceMetalLayer"
-      ]
-    },
     "donner/editor/gui/EditorWindow.cc": {
       "operations": [
         "beginRenderPass",
@@ -147,7 +138,7 @@
         "wgpuLabel",
         "wgpuReadbackStats",
         "wgpuState_",
-        "wgpuSurfacePresent",
+        "wgpuTextureOf",
         "wgpuUnderlayRenderCallback_"
       ],
       "wgpuCTypes": [
@@ -163,6 +154,7 @@
         "WGPUMapAsyncStatus_Success",
         "WGPUStringView",
         "WGPUSurfaceDescriptor",
+        "WGPUSurfaceGetCurrentTextureStatus",
         "WGPUSurfaceGetCurrentTextureStatus_Lost",
         "WGPUSurfaceGetCurrentTextureStatus_Outdated",
         "WGPUSurfaceGetCurrentTextureStatus_SuccessOptimal",
@@ -223,7 +215,12 @@
         "wgpuUnderlayRenderCallback_"
       ],
       "wgpuCppTokens": [
-        "Texture"
+        "Adapter",
+        "Instance",
+        "Surface",
+        "Texture",
+        "TextureFormat",
+        "TextureUsage"
       ]
     },
     "donner/editor/tests/EditorRnrGlReplay.cc": {
@@ -243,7 +240,16 @@
         "draw"
       ],
       "wgpuCTypes": [
+        "WGPUTexture",
         "WGPUTextureView"
+      ],
+      "wgpuCppTokens": [
+        "Adapter",
+        "Instance",
+        "Surface",
+        "Texture",
+        "TextureFormat",
+        "TextureUsage"
       ]
     },
     "donner/editor/tests/FrameMissTelemetry_tests.cc": {
@@ -422,13 +428,15 @@
       ],
       "wgpuCFunctions": [
         "wgpuDevicePoll",
-        "wgpuLabel"
+        "wgpuLabel",
+        "wgpuTextureOf"
       ],
       "wgpuCTypes": [
         "WGPUCommandEncoder",
         "WGPUMapAsyncStatus",
         "WGPUMapAsyncStatus_Success",
         "WGPUStringView",
+        "WGPUTexture",
         "WGPUTextureFormat",
         "WGPUTextureFormat_BGRA8Unorm",
         "WGPUTextureUsage"
@@ -772,6 +780,7 @@
       "operations": [
         "beginComputePass",
         "beginRenderPass",
+        "configure",
         "copyTextureToBuffer",
         "copyTextureToTexture",
         "createBindGroup",
@@ -788,7 +797,12 @@
         "dispatchWorkgroups",
         "draw",
         "finish",
+        "getCapabilities",
+        "getConstMappedRange",
+        "getCurrentTexture",
+        "mapAsync",
         "poll",
+        "present",
         "setBindGroup",
         "setPipeline",
         "setScissorRect",
@@ -807,7 +821,16 @@
         "WGPUBindGroupLayout",
         "WGPUBufferUsage",
         "WGPUColorWriteMask",
+        "WGPUCompositeAlphaMode",
+        "WGPUCompositeAlphaMode_Inherit",
+        "WGPUCompositeAlphaMode_Premultiplied",
+        "WGPUMapAsyncStatus",
+        "WGPUMapAsyncStatus_Success",
+        "WGPUPresentMode",
+        "WGPUPresentMode_Immediate",
+        "WGPUPresentMode_Mailbox",
         "WGPUShaderStage",
+        "WGPUStringView",
         "WGPUTextureFormat",
         "WGPUTextureFormat_BGRA8Unorm",
         "WGPUTextureFormat_R8Unorm",
@@ -833,11 +856,14 @@
         "Buffer",
         "BufferBindingType",
         "BufferDescriptor",
+        "BufferMapCallbackInfo",
         "BufferUsage",
+        "CallbackMode",
         "ColorTargetState",
         "ColorWriteMask",
         "CommandBuffer",
         "CommandEncoder",
+        "CompositeAlphaMode",
         "ComputePassDescriptor",
         "ComputePipeline",
         "ComputePipelineDescriptor",
@@ -847,8 +873,10 @@
         "FilterMode",
         "FragmentState",
         "LoadOp",
+        "MapMode",
         "PipelineLayout",
         "PipelineLayoutDescriptor",
+        "PresentMode",
         "PrimitiveTopology",
         "RenderPassColorAttachment",
         "RenderPassDescriptor",
@@ -863,6 +891,13 @@
         "ShaderStage",
         "StorageTextureAccess",
         "StoreOp",
+        "Surface",
+        "SurfaceCapabilities",
+        "SurfaceConfiguration",
+        "SurfaceDescriptor",
+        "SurfaceGetCurrentTextureStatus",
+        "SurfaceSourceMetalLayer",
+        "SurfaceTexture",
         "TexelCopyBufferInfo",
         "TexelCopyBufferLayout",
         "TexelCopyTextureInfo",
@@ -881,6 +916,10 @@
       ]
     },
     "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h": {
+      "operations": [
+        "release",
+        "unmap"
+      ],
       "wgpuCFunctions": [
         "wgpuTextureOf",
         "wgpuTextureViewOf"
@@ -898,6 +937,7 @@
         "RenderPipeline",
         "Sampler",
         "ShaderModule",
+        "Surface",
         "Texture",
         "TextureFormat",
         "TextureUsage",

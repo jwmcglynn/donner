@@ -1,5 +1,5 @@
 /// @file
-/// macOS (Cocoa/Metal) implementation of `CreateWgpuSurfaceFromGlfwWindow`.
+/// macOS (Cocoa/Metal) implementation of `AttachMetalLayerToGlfwWindow`.
 
 #include "donner/editor/gui/EditorWgpuSurface.h"
 
@@ -14,28 +14,23 @@ extern "C" {
 
 namespace donner::editor::gui {
 
-wgpu::Surface CreateWgpuSurfaceFromGlfwWindow(const wgpu::Instance& instance, GLFWwindow* window) {
+void* AttachMetalLayerToGlfwWindow(GLFWwindow* window) {
   if (window == nullptr) {
-    return {};
+    return nullptr;
   }
 
   NSWindow* nswindow = glfwGetCocoaWindow(window);
   if (nswindow == nil) {
-    return {};
+    return nullptr;
   }
 
   NSView* view = [nswindow contentView];
   CAMetalLayer* metalLayer = [CAMetalLayer layer];
   [view setWantsLayer:YES];
+  // The view retains the layer, so the returned pointer stays valid for as long as the window's
+  // content view does.
   [view setLayer:metalLayer];
-
-  wgpu::SurfaceSourceMetalLayer source(wgpu::Default);
-  source.layer = (__bridge void*)metalLayer;
-
-  wgpu::SurfaceDescriptor desc(wgpu::Default);
-  desc.nextInChain = &source.chain;
-
-  return instance.createSurface(desc);
+  return (__bridge void*)metalLayer;
 }
 
 }  // namespace donner::editor::gui

@@ -53,6 +53,7 @@ extern "C" {
 #include "donner/svg/renderer/geode/GeodeCallbackState.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
 #include "donner/svg/renderer/geode/GeodeGpuWait.h"
+#include "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h"
 #include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
 #endif
 
@@ -154,81 +155,13 @@ wgpu::Instance CreateEditorWgpuInstance() {
 #endif
 }
 
-class SurfacePresentGuard {
-public:
-  explicit SurfacePresentGuard(wgpu::Surface& surface) : surface_(surface) {}
-  ~SurfacePresentGuard() { present(); }
-
-  SurfacePresentGuard(const SurfacePresentGuard&) = delete;
-  SurfacePresentGuard& operator=(const SurfacePresentGuard&) = delete;
-
-  void present() {
-    if (!active_ || !surface_) {
-      return;
-    }
-
-#ifdef __EMSCRIPTEN__
-    // Emscripten presents WebGPU canvas surfaces from the browser's rAF loop;
-    // calling wgpuSurfacePresent aborts in the JS glue.
-#else
-    surface_.present();
-#endif
-    active_ = false;
-  }
-
-private:
-  wgpu::Surface& surface_;
-  bool active_ = true;
-};
-
-wgpu::Surface CreateEditorWgpuSurface(const wgpu::Instance& instance, GLFWwindow* window) {
-#ifdef __EMSCRIPTEN__
-  (void)window;
-  WGPUEmscriptenSurfaceSourceCanvasHTMLSelector canvasSource =
-      WGPU_EMSCRIPTEN_SURFACE_SOURCE_CANVAS_HTML_SELECTOR_INIT;
-  canvasSource.selector.data = "#canvas";
-  canvasSource.selector.length = WGPU_STRLEN;
-
-  WGPUSurfaceDescriptor descriptor = WGPU_SURFACE_DESCRIPTOR_INIT;
-  descriptor.nextInChain = &canvasSource.chain;
-  return wgpu::Surface(wgpuInstanceCreateSurface(instance, &descriptor));
-#else
-  return CreateWgpuSurfaceFromGlfwWindow(instance, window);
-#endif
-}
-
-wgpu::TextureFormat ChooseSurfaceFormat(const wgpu::SurfaceCapabilities& caps) {
-  for (size_t i = 0; i < caps.formatCount; ++i) {
-    const auto format = caps.formats[i];
-    if (format == WGPUTextureFormat_BGRA8Unorm || format == WGPUTextureFormat_RGBA8Unorm) {
-      return wgpu::TextureFormat{format};
-    }
-  }
-  return wgpu::TextureFormat::BGRA8Unorm;
-}
-
 /// WebGPU requires texture-to-buffer rows to be 256-byte aligned.
 constexpr uint32_t AlignTextureCopyBytesPerRow(uint32_t unpaddedBytesPerRow) {
   constexpr uint32_t kAlignment = 256u;
   return (unpaddedBytesPerRow + kAlignment - 1u) & ~(kAlignment - 1u);
 }
 
-wgpu::TextureUsage SurfaceUsageForCapabilities(const wgpu::SurfaceCapabilities& caps,
-                                               bool enableReadback) {
-  WGPUTextureUsage usage = WGPUTextureUsage_RenderAttachment;
-#ifdef __EMSCRIPTEN__
-  if (enableReadback) {
-    usage |= WGPUTextureUsage_CopySrc;
-  }
-#else
-  if (enableReadback && (caps.usages & WGPUTextureUsage_CopySrc) != 0) {
-    usage |= WGPUTextureUsage_CopySrc;
-  }
-#endif
-  return wgpu::TextureUsage{usage};
-}
-
-wgpu::TextureUsage OffscreenTextureUsage(bool enableReadback) {
+wgpu::TextureUsage RenderTargetUsage(bool enableReadback) {
   WGPUTextureUsage usage = WGPUTextureUsage_RenderAttachment;
   if (enableReadback) {
     usage |= WGPUTextureUsage_CopySrc;
@@ -941,16 +874,495 @@ UiScaleConfig ComputeUiScaleConfig(int logicalWindowWidth, int framebufferWidth,
 }
 
 #ifdef DONNER_EDITOR_WGPU
+namespace internal {
+
+// Exactly one implementation is built per platform: macOS presents through the GPU runtime, and
+// every other platform through the wgpu surface below, along with the helpers only it uses.
+#ifndef __APPLE__
+wgpu::Surface CreateEditorWgpuSurface(const wgpu::Instance& instance, GLFWwindow* window) {
+#ifdef __EMSCRIPTEN__
+  (void)window;
+  WGPUEmscriptenSurfaceSourceCanvasHTMLSelector canvasSource =
+      WGPU_EMSCRIPTEN_SURFACE_SOURCE_CANVAS_HTML_SELECTOR_INIT;
+  canvasSource.selector.data = "#canvas";
+  canvasSource.selector.length = WGPU_STRLEN;
+
+  WGPUSurfaceDescriptor descriptor = WGPU_SURFACE_DESCRIPTOR_INIT;
+  descriptor.nextInChain = &canvasSource.chain;
+  return wgpu::Surface(wgpuInstanceCreateSurface(instance, &descriptor));
+#else
+  return CreateWgpuSurfaceFromGlfwWindow(instance, window);
+#endif
+}
+
+wgpu::TextureFormat ChooseSurfaceFormat(const wgpu::SurfaceCapabilities& caps) {
+  for (size_t i = 0; i < caps.formatCount; ++i) {
+    const auto format = caps.formats[i];
+    if (format == WGPUTextureFormat_BGRA8Unorm || format == WGPUTextureFormat_RGBA8Unorm) {
+      return wgpu::TextureFormat{format};
+    }
+  }
+  return wgpu::TextureFormat::BGRA8Unorm;
+}
+
+/// Picks how the surface composites its alpha channel with what is behind it.
+/// @param caps What the surface reported it supports.
+wgpu::CompositeAlphaMode ChooseSurfaceAlphaMode(const wgpu::SurfaceCapabilities& caps) {
+#ifdef __EMSCRIPTEN__
+  // The page composites the editor's canvas over its own background, so premultiplied alpha is
+  // what lets uncovered pixels stay transparent. Without it the same clear presents as opaque.
+  for (size_t i = 0; i < caps.alphaModeCount; ++i) {
+    if (caps.alphaModes[i] == wgpu::CompositeAlphaMode::Premultiplied) {
+      return wgpu::CompositeAlphaMode::Premultiplied;
+    }
+  }
+  return wgpu::CompositeAlphaMode::Auto;
+#else
+  if (caps.alphaModeCount > 0) {
+    return wgpu::CompositeAlphaMode{caps.alphaModes[0]};
+  }
+  return wgpu::CompositeAlphaMode::Auto;
+#endif
+}
+
+/// Maps what the backend reported while handing over a frame onto the status the frame loop
+/// routes on.
+///
+/// A suboptimal frame is reported as a success because it presents correctly: reconfiguring for
+/// it would cost a frame to fix a difference that never reaches the display.
+///
+/// @param status Backend status.
+gpu::SurfaceStatus SurfaceStatusFromWgpu(WGPUSurfaceGetCurrentTextureStatus status) {
+  switch (status) {
+    case WGPUSurfaceGetCurrentTextureStatus_SuccessOptimal:
+    case WGPUSurfaceGetCurrentTextureStatus_SuccessSuboptimal: return gpu::SurfaceStatus::Success;
+    case WGPUSurfaceGetCurrentTextureStatus_Timeout: return gpu::SurfaceStatus::Timeout;
+    case WGPUSurfaceGetCurrentTextureStatus_Outdated: return gpu::SurfaceStatus::Outdated;
+    case WGPUSurfaceGetCurrentTextureStatus_Lost: return gpu::SurfaceStatus::Lost;
+    default: break;
+  }
+  // Everything else means neither the surface nor its configuration can be recovered from here.
+  return gpu::SurfaceStatus::DeviceLost;
+}
+
+wgpu::TextureUsage SurfaceUsageForCapabilities(const wgpu::SurfaceCapabilities& caps,
+                                               bool enableReadback) {
+  WGPUTextureUsage usage = WGPUTextureUsage_RenderAttachment;
+#ifdef __EMSCRIPTEN__
+  if (enableReadback) {
+    usage |= WGPUTextureUsage_CopySrc;
+  }
+#else
+  if (enableReadback && (caps.usages & WGPUTextureUsage_CopySrc) != 0) {
+    usage |= WGPUTextureUsage_CopySrc;
+  }
+#endif
+  return wgpu::TextureUsage{usage};
+}
+
+/// Presents through a wgpu surface built from the window's native handle.
+class WgpuBackendPresentationSurface final : public PresentationSurface {
+public:
+  bool attachToWindow(const wgpu::Instance& instance, GLFWwindow* window) override {
+    surface_ = CreateEditorWgpuSurface(instance, window);
+    return static_cast<bool>(surface_);
+  }
+
+  wgpu::Surface adapterSelectionSurface() const override { return surface_; }
+
+  bool chooseConfiguration(const wgpu::Adapter& adapter, bool enableReadback) override {
+    wgpu::SurfaceCapabilities caps;
+    surface_.getCapabilities(adapter, &caps);
+    format_ = ChooseSurfaceFormat(caps);
+    usage_ = SurfaceUsageForCapabilities(caps, enableReadback);
+    alphaMode_ = ChooseSurfaceAlphaMode(caps);
+    caps.freeMembers();
+    return true;
+  }
+
+  bool attachToDevice(geode::GeodeDevice& device) override {
+    device_ = device.device();
+    return static_cast<bool>(device_);
+  }
+
+  bool configure(int width, int height) override {
+    wgpu::SurfaceConfiguration surfaceConfig(wgpu::Default);
+    surfaceConfig.device = device_;
+    surfaceConfig.format = format_;
+    surfaceConfig.usage = usage_;
+    surfaceConfig.width = static_cast<uint32_t>(width);
+    surfaceConfig.height = static_cast<uint32_t>(height);
+    surfaceConfig.presentMode = wgpu::PresentMode::Fifo;
+    surfaceConfig.alphaMode = alphaMode_;
+    surface_.configure(surfaceConfig);
+    return true;
+  }
+
+  AcquiredFrame acquire() override {
+    wgpu::SurfaceTexture surfaceTexture;
+    surface_.getCurrentTexture(&surfaceTexture);
+    const gpu::SurfaceStatus status = SurfaceStatusFromWgpu(
+        static_cast<WGPUSurfaceGetCurrentTextureStatus>(surfaceTexture.status));
+    acquired_.reset(wgpu::Texture(surfaceTexture.texture));
+    return AcquiredFrame{acquired_.get(), status};
+  }
+
+  void present() override {
+    if (!acquired_) {
+      return;
+    }
+#ifndef __EMSCRIPTEN__
+    // A browser presents its canvas surface from its own frame loop; asking wgpu to present one
+    // aborts inside the JavaScript glue.
+    surface_.present();
+#endif
+    acquired_.reset();
+  }
+
+  void abandon() override { acquired_.reset(); }
+
+  void shutdown() override {
+    acquired_.reset();
+    if (surface_) {
+      surface_.unconfigure();
+    }
+  }
+
+  wgpu::TextureFormat format() const override { return format_; }
+
+  wgpu::TextureUsage usage() const override { return usage_; }
+
+  bool premultipliedAlpha() const override {
+    return alphaMode_ == wgpu::CompositeAlphaMode::Premultiplied;
+  }
+
+private:
+  wgpu::Surface surface_;
+  wgpu::Device device_;
+  donner::geode::ScopedWgpuHandle<wgpu::Texture> acquired_;
+  wgpu::TextureFormat format_ = wgpu::TextureFormat::Undefined;
+  wgpu::TextureUsage usage_ = wgpu::TextureUsage::RenderAttachment;
+  wgpu::CompositeAlphaMode alphaMode_ = wgpu::CompositeAlphaMode::Auto;
+};
+#endif  // !__APPLE__
+
+#ifdef __APPLE__
+/// Picks how a surface built on the GPU runtime composites its alpha channel.
+///
+/// The editor's desktop window is opaque, so alpha is ignored wherever the surface offers that;
+/// a surface offering something else takes the first mode it does offer.
+///
+/// @param modes Alpha compositing the surface reported it supports.
+gpu::SurfaceAlphaMode ChooseRuntimeAlphaMode(const std::vector<gpu::SurfaceAlphaMode>& modes) {
+  if (modes.empty() ||
+      std::find(modes.begin(), modes.end(), gpu::SurfaceAlphaMode::Opaque) != modes.end()) {
+    return gpu::SurfaceAlphaMode::Opaque;
+  }
+  return modes.front();
+}
+
+/// Presents through the GPU runtime's surface, which reaches the Core Animation Metal layer the
+/// window's content view carries.
+class RuntimePresentationSurface final : public PresentationSurface {
+public:
+  bool attachToWindow(const wgpu::Instance& /*instance*/, GLFWwindow* window) override {
+    metalLayer_ = AttachMetalLayerToGlfwWindow(window);
+    return metalLayer_ != nullptr;
+  }
+
+  /// A Metal layer presents from any Metal adapter the system reports, so adapter selection is
+  /// left unconstrained - which it must be, since a runtime surface cannot exist until adapter
+  /// selection has already produced a device.
+  wgpu::Surface adapterSelectionSurface() const override { return {}; }
+
+  bool chooseConfiguration(const wgpu::Adapter& /*adapter*/, bool enableReadback) override {
+    // A Metal layer presents BGRA8Unorm. The renderer compiles its pipelines for the format
+    // before there is a device to ask for capabilities, so the format is declared here and
+    // checked against what the surface reports as soon as there is one.
+    readback_ = enableReadback;
+    return true;
+  }
+
+  bool attachToDevice(geode::GeodeDevice& device) override {
+    device_ = &device.adapterDevice();
+
+    gpu::SurfaceDescriptor descriptor;
+    descriptor.label = "EditorWindowSurface";
+    descriptor.native.kind = gpu::NativeSurfaceKind::MetalLayer;
+    descriptor.native.display = metalLayer_;
+    gpu::Result<gpu::Surface> created = device_->createSurface(descriptor);
+    if (created.hasError()) {
+      std::fprintf(stderr, "EditorWindow: could not create a surface: %s\n",
+                   created.error().toString().c_str());
+      return false;
+    }
+    surface_ = std::move(created).result();
+
+    gpu::Result<gpu::SurfaceCapabilities> capabilities = device_->surfaceCapabilities(surface_);
+    if (capabilities.hasError()) {
+      std::fprintf(stderr, "EditorWindow: could not read surface capabilities: %s\n",
+                   capabilities.error().toString().c_str());
+      return false;
+    }
+    return applyCapabilities(capabilities.result());
+  }
+
+  bool configure(int width, int height) override {
+    gpu::SurfaceConfiguration configuration;
+    configuration.format = kFormat;
+    configuration.usage = configuredUsage();
+    configuration.size = gpu::Extent2d{static_cast<uint32_t>(width), static_cast<uint32_t>(height)};
+    configuration.presentMode = gpu::PresentMode::Fifo;
+    configuration.alphaMode = alphaMode_;
+    if (gpu::Status status = device_->configureSurface(surface_, configuration);
+        status.hasError()) {
+      std::fprintf(stderr, "EditorWindow: could not configure the surface: %s\n",
+                   status.error().toString().c_str());
+      return false;
+    }
+    return true;
+  }
+
+  AcquiredFrame acquire() override {
+    gpu::Result<gpu::SurfaceTexture> acquired = device_->acquireCurrentTexture(surface_);
+    if (acquired.hasError()) {
+      // The runtime refused the acquire rather than reporting on the surface, so there is no
+      // surface state to recover from and the frame is given up the way a lost device is.
+      std::fprintf(stderr, "EditorWindow: could not acquire a frame: %s\n",
+                   acquired.error().toString().c_str());
+      return AcquiredFrame{wgpu::Texture(), gpu::SurfaceStatus::DeviceLost};
+    }
+
+    const gpu::SurfaceStatus status = acquired.result().status;
+    acquiredTexture_ = std::move(acquired).result().texture;
+    if (!acquiredTexture_.isValid()) {
+      return AcquiredFrame{wgpu::Texture(), status};
+    }
+    return AcquiredFrame{device_->wgpuTextureOf(acquiredTexture_), status};
+  }
+
+  void present() override {
+    if (!acquiredTexture_.isValid()) {
+      return;
+    }
+    if (gpu::Result<gpu::SurfaceStatus> presented = device_->presentSurface(surface_);
+        presented.hasError()) {
+      std::fprintf(stderr, "EditorWindow: could not present the frame: %s\n",
+                   presented.error().toString().c_str());
+    }
+    // The runtime invalidates the frame's texture as part of the handoff whether or not the
+    // platform showed it, so the handle it left behind is dropped either way.
+    acquiredTexture_ = gpu::Texture();
+  }
+
+  void abandon() override {
+    if (!acquiredTexture_.isValid()) {
+      return;
+    }
+    (void)device_->abandonCurrentTexture(surface_);
+    acquiredTexture_ = gpu::Texture();
+  }
+
+  void shutdown() override {
+    abandon();
+    if (surface_.isValid()) {
+      (void)device_->destroySurface(std::move(surface_));
+    }
+  }
+
+  wgpu::TextureFormat format() const override { return wgpu::TextureFormat::BGRA8Unorm; }
+
+  wgpu::TextureUsage usage() const override { return RenderTargetUsage(readback_); }
+
+  bool premultipliedAlpha() const override {
+    return alphaMode_ == gpu::SurfaceAlphaMode::Premultiplied;
+  }
+
+private:
+  /// The format a Core Animation Metal layer presents, and the one the renderer's pipelines are
+  /// compiled for.
+  static constexpr gpu::TextureFormat kFormat = gpu::TextureFormat::BGRA8Unorm;
+
+  /// Narrows what the surface was asked for to what it reported it can do, or reports that it
+  /// cannot serve the editor's frames at all. @param capabilities What the surface reported.
+  bool applyCapabilities(const gpu::SurfaceCapabilities& capabilities) {
+    if (std::find(capabilities.formats.begin(), capabilities.formats.end(), kFormat) ==
+        capabilities.formats.end()) {
+      std::fprintf(stderr, "EditorWindow: the window surface does not present BGRA8Unorm\n");
+      return false;
+    }
+    if (readback_ &&
+        (capabilities.usages & gpu::TextureUsage::CopySrc) == gpu::TextureUsage::None) {
+      // A frame that cannot be copied out of is still a frame worth showing, so the readback is
+      // dropped rather than the whole surface refused.
+      readback_ = false;
+    }
+    alphaMode_ = ChooseRuntimeAlphaMode(capabilities.alphaModes);
+    return true;
+  }
+
+  /// Usage acquired textures are configured to carry.
+  gpu::TextureUsage configuredUsage() const {
+    return readback_ ? (gpu::TextureUsage::RenderAttachment | gpu::TextureUsage::CopySrc)
+                     : gpu::TextureUsage::RenderAttachment;
+  }
+
+  void* metalLayer_ = nullptr;
+  geode::GeodeWgpuAdapterDevice* device_ = nullptr;
+  gpu::Surface surface_;
+  gpu::Texture acquiredTexture_;
+  gpu::SurfaceAlphaMode alphaMode_ = gpu::SurfaceAlphaMode::Opaque;
+  bool readback_ = false;
+};
+#endif  // __APPLE__
+
+/// Builds the presentation surface this platform presents through.
+std::unique_ptr<PresentationSurface> CreateEditorPresentationSurface() {
+#ifdef __APPLE__
+  return std::make_unique<RuntimePresentationSurface>();
+#else
+  return std::make_unique<WgpuBackendPresentationSurface>();
+#endif
+}
+
+/// Follows the window with a new configuration and acquires again, which is the operation a
+/// resize already performs, so a configuration that has drifted out of date costs a
+/// reconfiguration rather than a dropped frame.
+///
+/// @param surface Surface to reconfigure.
+/// @param sizePx Framebuffer extent in pixels.
+/// @param configuredPx Extent the surface is configured for; cleared first so a refused
+///   configuration is tried again on the next frame, and set once one is accepted.
+AcquiredFrame FollowWindowAndReacquire(PresentationSurface& surface, Vector2i sizePx,
+                                       Vector2i& configuredPx) {
+  surface.abandon();
+  configuredPx = Vector2i::Zero();
+  if (!surface.configure(sizePx.x, sizePx.y)) {
+    std::fprintf(stderr, "EditorWindow: could not follow the window to %dx%d; dropping the frame\n",
+                 sizePx.x, sizePx.y);
+    return AcquiredFrame{wgpu::Texture(), gpu::SurfaceStatus::Outdated};
+  }
+  configuredPx = sizePx;
+  return surface.acquire();
+}
+
+/// Replaces a surface whose platform object is gone with one built from the window, and acquires
+/// from the replacement. Reports the loss unchanged when no replacement could be built, leaving
+/// \p surface cleared so the caller gives it up.
+///
+/// @param surface Surface to replace; cleared, then set to the replacement when there is one.
+/// @param sizePx Framebuffer extent in pixels.
+/// @param configuredPx Extent the surface is configured for.
+/// @param rebuild Builds the replacement, already configured for \p sizePx.
+AcquiredFrame RebuildAndReacquire(
+    std::unique_ptr<PresentationSurface>& surface, Vector2i sizePx, Vector2i& configuredPx,
+    const std::function<std::unique_ptr<PresentationSurface>()>& rebuild) {
+  surface->abandon();
+  std::unique_ptr<PresentationSurface> replacement = rebuild ? rebuild() : nullptr;
+  surface->shutdown();
+  surface = std::move(replacement);
+  if (surface == nullptr) {
+    std::fprintf(stderr,
+                 "EditorWindow: the presentation surface was lost and could not be rebuilt from "
+                 "the window; the window will stop presenting\n");
+    configuredPx = Vector2i::Zero();
+    return AcquiredFrame{wgpu::Texture(), gpu::SurfaceStatus::Lost};
+  }
+  configuredPx = sizePx;
+  return surface->acquire();
+}
+
+PresentationFrameOutcome AcquirePresentationFrame(
+    std::unique_ptr<PresentationSurface>& surface, Vector2i sizePx, Vector2i& configuredPx,
+    const std::function<std::unique_ptr<PresentationSurface>()>& rebuild) {
+  PresentationFrameOutcome outcome;
+
+  const auto acquireStart = std::chrono::steady_clock::now();
+  AcquiredFrame frame = surface->acquire();
+  outcome.acquireMs = ElapsedMs(acquireStart);
+  if (outcome.acquireMs > 250.0) {
+    std::fprintf(stderr, "[Editor/WGPU] surface acquire took %.1fms (status=%d, size=%dx%d)\n",
+                 outcome.acquireMs, static_cast<int>(frame.status), sizePx.x, sizePx.y);
+  }
+
+  switch (SurfaceFrameActionFor(frame.status)) {
+    case SurfaceFrameAction::ReconfigureAndRetry:
+      frame = FollowWindowAndReacquire(*surface, sizePx, configuredPx);
+      break;
+    case SurfaceFrameAction::Release:
+      // Only one of the two statuses that give a surface up can be recovered from here: a
+      // platform object that is gone is replaced by a fresh one built from the window, while
+      // nothing here brings a lost device back.
+      if (frame.status == gpu::SurfaceStatus::Lost) {
+        frame = RebuildAndReacquire(surface, sizePx, configuredPx, rebuild);
+      }
+      break;
+    case SurfaceFrameAction::Draw:
+    case SurfaceFrameAction::Skip: break;
+  }
+
+  outcome.status = frame.status;
+  const SurfaceFrameAction action = SurfaceFrameActionFor(outcome.status);
+  if (action == SurfaceFrameAction::Draw && frame.texture) {
+    outcome.texture = frame.texture;
+    return outcome;
+  }
+
+  if (surface == nullptr) {
+    // The rebuild already gave the surface up; there is nothing left to abandon or release.
+    outcome.released = true;
+    return outcome;
+  }
+  surface->abandon();
+  if (action == SurfaceFrameAction::Release) {
+    std::fprintf(stderr, "EditorWindow: the presentation surface can serve no further frames\n");
+    outcome.markDeviceLost = outcome.status == gpu::SurfaceStatus::DeviceLost;
+    surface->shutdown();
+    surface.reset();
+    configuredPx = Vector2i::Zero();
+    outcome.released = true;
+  }
+  return outcome;
+}
+
+/// Presents whatever frame is still in flight when the frame loop leaves, however it leaves.
+class SurfacePresentGuard {
+public:
+  /// @param surface Surface holding this frame, or null when there is nothing to present.
+  explicit SurfacePresentGuard(PresentationSurface* surface) : surface_(surface) {}
+  ~SurfacePresentGuard() { present(); }
+
+  SurfacePresentGuard(const SurfacePresentGuard&) = delete;
+  SurfacePresentGuard& operator=(const SurfacePresentGuard&) = delete;
+
+  /// Presents the frame in flight, once.
+  void present() {
+    if (surface_ == nullptr) {
+      return;
+    }
+    surface_->present();
+    surface_ = nullptr;
+  }
+
+private:
+  PresentationSurface* surface_ = nullptr;
+};
+
+}  // namespace internal
+#endif  // DONNER_EDITOR_WGPU
+
+#ifdef DONNER_EDITOR_WGPU
 struct EditorWindow::WgpuState {
   wgpu::Instance instance;
   wgpu::Adapter adapter;
   wgpu::Device device;
   wgpu::Queue queue;
-  wgpu::Surface surface;
+  /// Where frames are presented, or null when this window renders into \ref offscreenTexture
+  /// instead of a presentable surface.
+  std::unique_ptr<internal::PresentationSurface> presentation;
   donner::geode::ScopedWgpuHandle<wgpu::Texture> offscreenTexture;
   wgpu::TextureFormat surfaceFormat = wgpu::TextureFormat::Undefined;
   wgpu::TextureUsage surfaceUsage = wgpu::TextureUsage::RenderAttachment;
-  wgpu::CompositeAlphaMode alphaMode = wgpu::CompositeAlphaMode::Auto;
   std::shared_ptr<geode::GeodeDevice> geodeDevice;
   std::shared_ptr<geode::GeodeDevice> framebufferGeodeDevice;
   /// Shared device-lost flag observed by both Geode wrappers above. On
@@ -970,6 +1382,9 @@ struct EditorWindow::WgpuState {
 #endif
   int configuredWidth = 0;
   int configuredHeight = 0;
+  /// Whether finished frames are copied back to the host, remembered so a rebuilt surface asks
+  /// for the same thing the first one did.
+  bool surfaceReadbackEnabled = false;
 };
 #else
 struct EditorWindow::WgpuState {};
@@ -1131,8 +1546,8 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
   // presented swapchain (with CopySrc usage), not an offscreen mirror.
   const bool useOffscreenWgpuTarget = useNullPlatform || options_.forceOffscreenRenderTarget;
   if (!useOffscreenWgpuTarget) {
-    wgpuState_->surface = CreateEditorWgpuSurface(wgpuState_->instance, window_);
-    if (!wgpuState_->surface) {
+    wgpuState_->presentation = internal::CreateEditorPresentationSurface();
+    if (!wgpuState_->presentation->attachToWindow(wgpuState_->instance, window_)) {
       std::fprintf(stderr, "EditorWindow: failed to create WebGPU surface\n");
       glfwDestroyWindow(window_);
       window_ = nullptr;
@@ -1142,8 +1557,8 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
   }
   wgpu::RequestAdapterOptions adapterOptions = {};
   adapterOptions.forceFallbackAdapter = geode::wgpuForceFallbackAdapterRequested();
-  if (wgpuState_->surface) {
-    adapterOptions.compatibleSurface = wgpuState_->surface;
+  if (wgpuState_->presentation != nullptr) {
+    adapterOptions.compatibleSurface = wgpuState_->presentation->adapterSelectionSurface();
   }
   wgpuState_->adapter = wgpuState_->instance.requestAdapter(adapterOptions);
   if (!wgpuState_->adapter) {
@@ -1182,41 +1597,34 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
 #if defined(__EMSCRIPTEN__) && defined(DONNER_EDITOR_WGPU)
   enableSurfaceReadback = enableSurfaceReadback || WgpuReadbackStatsEnabled();
 #endif
-  if (wgpuState_->surface) {
-    wgpu::SurfaceCapabilities caps;
-    wgpuState_->surface.getCapabilities(wgpuState_->adapter, &caps);
-    wgpuState_->surfaceFormat = ChooseSurfaceFormat(caps);
-    wgpuState_->surfaceUsage = SurfaceUsageForCapabilities(caps, enableSurfaceReadback);
-#ifdef __EMSCRIPTEN__
-    wgpuState_->alphaMode = wgpu::CompositeAlphaMode::Auto;
-    for (size_t i = 0; i < caps.alphaModeCount; ++i) {
-      if (caps.alphaModes[i] == wgpu::CompositeAlphaMode::Premultiplied) {
-        wgpuState_->alphaMode = caps.alphaModes[i];
-        break;
-      }
+  wgpuState_->surfaceReadbackEnabled = enableSurfaceReadback;
+  if (wgpuState_->presentation != nullptr) {
+    if (!wgpuState_->presentation->chooseConfiguration(wgpuState_->adapter,
+                                                       enableSurfaceReadback)) {
+      std::fprintf(stderr, "EditorWindow: the window surface cannot present editor frames\n");
+      glfwDestroyWindow(window_);
+      window_ = nullptr;
+      TerminateGlfw();
+      return;
     }
+    wgpuState_->surfaceFormat = wgpuState_->presentation->format();
+    wgpuState_->surfaceUsage = wgpuState_->presentation->usage();
+#ifdef __EMSCRIPTEN__
     // The constructor optimistically set an alpha-0 clear so the worker's
     // document canvas can composite under the UI surface. That is only correct
     // once the surface is known to honor the alpha channel; without
     // premultiplied compositing the same clear presents as opaque black.
     {
-      const std::array<float, 4> clearColor = internal::WasmSurfaceClearColor(
-          {options_.clearColor[0], options_.clearColor[1], options_.clearColor[2],
-           options_.clearColor[3]},
-          wgpuState_->alphaMode == wgpu::CompositeAlphaMode::Premultiplied);
+      const std::array<float, 4> clearColor =
+          internal::WasmSurfaceClearColor({options_.clearColor[0], options_.clearColor[1],
+                                           options_.clearColor[2], options_.clearColor[3]},
+                                          wgpuState_->presentation->premultipliedAlpha());
       std::copy(clearColor.begin(), clearColor.end(), std::begin(options_.clearColor));
     }
-#else
-    if (caps.alphaModeCount > 0) {
-      wgpuState_->alphaMode = wgpu::CompositeAlphaMode{caps.alphaModes[0]};
-    } else {
-      wgpuState_->alphaMode = wgpu::CompositeAlphaMode::Auto;
-    }
 #endif
-    caps.freeMembers();
   } else {
     wgpuState_->surfaceFormat = wgpu::TextureFormat::BGRA8Unorm;
-    wgpuState_->surfaceUsage = OffscreenTextureUsage(enableSurfaceReadback);
+    wgpuState_->surfaceUsage = RenderTargetUsage(enableSurfaceReadback);
   }
 
   int surfaceWidth = 0;
@@ -1229,30 +1637,6 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
 #endif
   surfaceWidth = std::max(1, surfaceWidth);
   surfaceHeight = std::max(1, surfaceHeight);
-  if (wgpuState_->surface) {
-    wgpu::SurfaceConfiguration surfaceConfig(wgpu::Default);
-    surfaceConfig.device = wgpuState_->device;
-    surfaceConfig.format = wgpuState_->surfaceFormat;
-    surfaceConfig.usage = wgpuState_->surfaceUsage;
-    surfaceConfig.width = surfaceWidth;
-    surfaceConfig.height = surfaceHeight;
-    surfaceConfig.presentMode = wgpu::PresentMode::Fifo;
-    surfaceConfig.alphaMode = wgpuState_->alphaMode;
-    wgpuState_->surface.configure(surfaceConfig);
-  } else {
-    wgpuState_->offscreenTexture.reset(
-        CreateOffscreenTargetTexture(wgpuState_->device, surfaceWidth, surfaceHeight,
-                                     wgpuState_->surfaceFormat, wgpuState_->surfaceUsage));
-    if (!wgpuState_->offscreenTexture) {
-      std::fprintf(stderr, "EditorWindow: failed to create offscreen WebGPU target\n");
-      glfwDestroyWindow(window_);
-      window_ = nullptr;
-      TerminateGlfw();
-      return;
-    }
-  }
-  wgpuState_->configuredWidth = surfaceWidth;
-  wgpuState_->configuredHeight = surfaceHeight;
 
   geode::GeodeEmbedConfig embedConfig;
   embedConfig.instance = wgpuState_->instance;
@@ -1269,9 +1653,6 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
   wgpuState_->geodeDevice = geode::GeodeDevice::CreateFromExternal(embedConfig);
   if (wgpuState_->geodeDevice == nullptr) {
     std::fprintf(stderr, "EditorWindow: GeodeDevice::CreateFromExternal failed\n");
-    if (wgpuState_->surface) {
-      wgpuState_->surface.unconfigure();
-    }
     glfwDestroyWindow(window_);
     window_ = nullptr;
     TerminateGlfw();
@@ -1294,15 +1675,36 @@ EditorWindow::EditorWindow(EditorWindowOptions options) : options_(std::move(opt
       geode::GeodeDevice::CreateFromExternal(framebufferEmbedConfig);
   if (wgpuState_->framebufferGeodeDevice == nullptr) {
     std::fprintf(stderr, "EditorWindow: framebuffer GeodeDevice::CreateFromExternal failed\n");
-    if (wgpuState_->surface) {
-      wgpuState_->surface.unconfigure();
-    }
     glfwDestroyWindow(window_);
     window_ = nullptr;
     TerminateGlfw();
     return;
   }
 #endif
+
+  if (wgpuState_->presentation != nullptr) {
+    if (!wgpuState_->presentation->attachToDevice(*wgpuState_->framebufferGeodeDevice) ||
+        !wgpuState_->presentation->configure(surfaceWidth, surfaceHeight)) {
+      std::fprintf(stderr, "EditorWindow: failed to configure the presentation surface\n");
+      glfwDestroyWindow(window_);
+      window_ = nullptr;
+      TerminateGlfw();
+      return;
+    }
+  } else {
+    wgpuState_->offscreenTexture.reset(
+        CreateOffscreenTargetTexture(wgpuState_->device, surfaceWidth, surfaceHeight,
+                                     wgpuState_->surfaceFormat, wgpuState_->surfaceUsage));
+    if (!wgpuState_->offscreenTexture) {
+      std::fprintf(stderr, "EditorWindow: failed to create offscreen WebGPU target\n");
+      glfwDestroyWindow(window_);
+      window_ = nullptr;
+      TerminateGlfw();
+      return;
+    }
+  }
+  wgpuState_->configuredWidth = surfaceWidth;
+  wgpuState_->configuredHeight = surfaceHeight;
 #else
 #ifndef __EMSCRIPTEN__
   glfwMakeContextCurrent(window_);
@@ -1441,11 +1843,14 @@ EditorWindow::~EditorWindow() {
 #endif
 #ifdef DONNER_EDITOR_WGPU
   if (wgpuState_ != nullptr) {
+    // The surface is completed against a device and may name runtime resources belonging to it,
+    // so it is torn down first.
+    if (wgpuState_->presentation != nullptr) {
+      wgpuState_->presentation->shutdown();
+      wgpuState_->presentation.reset();
+    }
     wgpuState_->framebufferGeodeDevice.reset();
     wgpuState_->geodeDevice.reset();
-    if (wgpuState_->surface) {
-      wgpuState_->surface.unconfigure();
-    }
   }
 #endif
   if (window_ != nullptr) {
@@ -1535,7 +1940,7 @@ std::shared_ptr<geode::GeodeDevice> EditorWindow::geodeDevice() const {
 
 #ifdef DONNER_EDITOR_WGPU
 bool EditorWindow::usingOffscreenRenderTarget() const {
-  return wgpuState_ != nullptr && !wgpuState_->surface &&
+  return wgpuState_ != nullptr && wgpuState_->presentation == nullptr &&
          static_cast<bool>(wgpuState_->offscreenTexture);
 }
 
@@ -1656,6 +2061,55 @@ svg::RendererBitmap EditorWindow::endFrameAndReadPixels() {
   return readback;
 }
 
+#ifdef DONNER_EDITOR_WGPU
+wgpu::Texture EditorWindow::acquirePresentationFrame(int framebufferWidth, int framebufferHeight,
+                                                     EditorWindowFrameTiming& timing,
+                                                     gpu::SurfaceStatus& status) {
+  Vector2i configuredPx(wgpuState_->configuredWidth, wgpuState_->configuredHeight);
+  const internal::PresentationFrameOutcome outcome = internal::AcquirePresentationFrame(
+      wgpuState_->presentation, Vector2i(framebufferWidth, framebufferHeight), configuredPx,
+      [this, framebufferWidth, framebufferHeight] {
+        return rebuildPresentationSurface(framebufferWidth, framebufferHeight);
+      });
+
+  wgpuState_->configuredWidth = configuredPx.x;
+  wgpuState_->configuredHeight = configuredPx.y;
+  timing.surfaceAcquireMs = outcome.acquireMs;
+  status = outcome.status;
+  if (outcome.markDeviceLost && wgpuState_->framebufferGeodeDevice != nullptr) {
+    // Renderers already watch this flag for a driver-reported loss, so a loss the surface reports
+    // reaches them through the same condition instead of needing a path of its own.
+    wgpuState_->framebufferGeodeDevice->markDeviceLost(
+        "the presentation surface reported the device as lost");
+  }
+  return outcome.texture;
+}
+
+std::unique_ptr<internal::PresentationSurface> EditorWindow::rebuildPresentationSurface(
+    int framebufferWidth, int framebufferHeight) {
+  // The same staged bringup the constructor runs, against the window that is still here: a
+  // surface whose platform object is gone recovers by a fresh handle, and this is where the
+  // window hands one over.
+  std::unique_ptr<internal::PresentationSurface> replacement =
+      internal::CreateEditorPresentationSurface();
+  if (!replacement->attachToWindow(wgpuState_->instance, window_) ||
+      !replacement->chooseConfiguration(wgpuState_->adapter, wgpuState_->surfaceReadbackEnabled)) {
+    return nullptr;
+  }
+  if (replacement->format() != wgpuState_->surfaceFormat) {
+    // The renderer's pipelines and the UI backend were compiled for the format the first surface
+    // reported, so a replacement presenting a different one is not one either can draw into.
+    std::fprintf(stderr, "EditorWindow: the rebuilt surface presents a different format\n");
+    return nullptr;
+  }
+  if (!replacement->attachToDevice(*wgpuState_->framebufferGeodeDevice) ||
+      !replacement->configure(framebufferWidth, framebufferHeight)) {
+    return nullptr;
+  }
+  return replacement;
+}
+#endif
+
 void EditorWindow::endFrameImpl(svg::RendererBitmap* readback) {
   ZoneScopedN("EditorWindow::endFrame");
   EditorWindowFrameTiming timing;
@@ -1724,7 +2178,7 @@ void EditorWindow::endFrameImpl(svg::RendererBitmap* readback) {
     *targetReadback = svg::RendererBitmap{};
   }
   if (wgpuState_ == nullptr || !wgpuState_->device || displayW <= 0 || displayH <= 0 ||
-      (!wgpuState_->surface && !wgpuState_->offscreenTexture)) {
+      (wgpuState_->presentation == nullptr && !wgpuState_->offscreenTexture)) {
 #if defined(__EMSCRIPTEN__) && defined(DONNER_EDITOR_WGPU)
     // There is no persistent WGPU state in which to count retries. Complete this diagnostic
     // request as a terminal setup failure rather than rearming an impossible capture forever.
@@ -1783,16 +2237,10 @@ void EditorWindow::endFrameImpl(svg::RendererBitmap* readback) {
   };
 #endif
   if (displayW != wgpuState_->configuredWidth || displayH != wgpuState_->configuredHeight) {
-    if (wgpuState_->surface) {
-      wgpu::SurfaceConfiguration surfaceConfig(wgpu::Default);
-      surfaceConfig.device = wgpuState_->device;
-      surfaceConfig.format = wgpuState_->surfaceFormat;
-      surfaceConfig.usage = wgpuState_->surfaceUsage;
-      surfaceConfig.width = displayW;
-      surfaceConfig.height = displayH;
-      surfaceConfig.presentMode = wgpu::PresentMode::Fifo;
-      surfaceConfig.alphaMode = wgpuState_->alphaMode;
-      wgpuState_->surface.configure(surfaceConfig);
+    if (wgpuState_->presentation != nullptr) {
+      if (!wgpuState_->presentation->configure(displayW, displayH)) {
+        return;
+      }
     } else {
       wgpuState_->offscreenTexture.reset(
           CreateOffscreenTargetTexture(wgpuState_->device, displayW, displayH,
@@ -1805,44 +2253,23 @@ void EditorWindow::endFrameImpl(svg::RendererBitmap* readback) {
     wgpuState_->configuredHeight = displayH;
   }
 
-  donner::geode::ScopedWgpuHandle<wgpu::Texture> acquiredSurfaceTexture;
   wgpu::Texture target;
-  if (wgpuState_->surface) {
-    wgpu::SurfaceTexture surfaceTexture;
-    const auto acquireStart = std::chrono::steady_clock::now();
-    wgpuState_->surface.getCurrentTexture(&surfaceTexture);
-    const auto acquireMs = ElapsedMs(acquireStart);
-    timing.surfaceAcquireMs = acquireMs;
-    if (acquireMs > 250.0) {
-      std::fprintf(stderr,
-                   "[Editor/WGPU] surface.getCurrentTexture took %.1fms (status=%d, size=%dx%d)\n",
-                   acquireMs, static_cast<int>(surfaceTexture.status), displayW, displayH);
-    }
-    if (surfaceTexture.status != WGPUSurfaceGetCurrentTextureStatus_SuccessOptimal &&
-        surfaceTexture.status != WGPUSurfaceGetCurrentTextureStatus_SuccessSuboptimal) {
-      donner::geode::ScopedWgpuHandle<wgpu::Texture> failedTexture(
-          wgpu::Texture(surfaceTexture.texture));
+  if (wgpuState_->presentation != nullptr) {
+    gpu::SurfaceStatus acquireStatus = gpu::SurfaceStatus::Success;
+    target = acquirePresentationFrame(displayW, displayH, timing, acquireStatus);
+    if (!target) {
 #if defined(__EMSCRIPTEN__) && defined(DONNER_EDITOR_WGPU)
-      if (surfaceTexture.status == WGPUSurfaceGetCurrentTextureStatus_Timeout) {
-        surfaceFailureKind = internal::WgpuSurfaceFailureKind::Timeout;
-      } else if (surfaceTexture.status == WGPUSurfaceGetCurrentTextureStatus_Outdated ||
-                 surfaceTexture.status == WGPUSurfaceGetCurrentTextureStatus_Lost) {
-        surfaceFailureKind = internal::WgpuSurfaceFailureKind::OutdatedOrLost;
-      } else {
-        surfaceFailureKind = internal::WgpuSurfaceFailureKind::Fatal;
-      }
+      surfaceFailureKind = internal::WgpuSurfaceFailureKindFor(acquireStatus);
 #endif
       return;
     }
-    acquiredSurfaceTexture.reset(wgpu::Texture(surfaceTexture.texture));
-    target = acquiredSurfaceTexture.get();
   } else {
     target = wgpuState_->offscreenTexture.get();
   }
   if (!target) {
     return;
   }
-  SurfacePresentGuard presentGuard(wgpuState_->surface);
+  internal::SurfacePresentGuard presentGuard(wgpuState_->presentation.get());
   const bool shouldReadback =
       SurfaceUsageSupportsReadback(wgpuState_->surfaceUsage) && (targetReadback != nullptr
 #if defined(__EMSCRIPTEN__) && defined(DONNER_EDITOR_WGPU)
