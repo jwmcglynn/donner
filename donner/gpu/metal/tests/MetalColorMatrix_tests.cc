@@ -65,10 +65,21 @@ protected:
     return std::move(result).result();
   }
 
+  /// Rebuilds the device for \p memoryModel and runs the whole slice against it.
+  /// @param memoryModel Memory model the device builds its resources for.
+  void runColorMatrixSlice(MetalDevice::MemoryModel memoryModel);
+
   std::unique_ptr<MetalDevice> device_;
 };
 
-TEST_F(MetalColorMatrixTest, DispatchMatchesTheHostComputedResult) {
+void MetalColorMatrixTest::runColorMatrixSlice(MetalDevice::MemoryModel memoryModel) {
+  device_ = MetalDevice::Create(memoryModel);
+  ASSERT_NE(device_, nullptr);
+  if (memoryModel == MetalDevice::MemoryModel::ForceNonUnified) {
+    ASSERT_FALSE(device_->usesUnifiedMemoryForTest())
+        << "the forced model must actually take the non-unified path";
+  }
+
   shader::ShaderResult<shader::IrModule> irModule = shader::programs::BuildColorMatrixModule();
   ASSERT_FALSE(irModule.hasError()) << irModule.error();
   shader::ShaderResult<std::string> msl = shader::EmitMsl(irModule.result());
@@ -212,6 +223,19 @@ TEST_F(MetalColorMatrixTest, DispatchMatchesTheHostComputedResult) {
           << "texel (" << x << ", " << y << ")";
     }
   }
+}
+
+TEST_F(MetalColorMatrixTest, DispatchMatchesTheHostComputedResult) {
+  runColorMatrixSlice(MetalDevice::MemoryModel::Detected);
+}
+
+TEST_F(MetalColorMatrixTest, DispatchMatchesTheHostComputedResultWithoutUnifiedMemory) {
+  // The same slice built for a device that does not address one copy of a resource from both
+  // processors. On such a device the host's copy of the readback buffer is only whatever was
+  // published to it, so a dispatch whose output is never published reads back as zeros - which
+  // is what a virtualized Metal device shows and what unified-memory hardware hides. Forcing the
+  // model here is what puts that path under test on hardware that would never take it.
+  runColorMatrixSlice(MetalDevice::MemoryModel::ForceNonUnified);
 }
 
 }  // namespace

@@ -41,11 +41,26 @@ namespace donner::gpu::metal {
  */
 class MetalDevice final : public Device {
 public:
+  /// Which memory model the backend builds its resources for.
+  enum class MemoryModel : uint8_t {
+    /// Take the model the Metal device reports. Production always uses this.
+    Detected,
+    /// Build for a device without unified memory whatever it reports, so the host-coherency
+    /// steps that model needs are exercised on hardware that would otherwise never take them.
+    ForceNonUnified,
+  };
+
   /**
    * Creates a device on the system default Metal device. Returns nullptr if no Metal device is
    * available (for example on a CI host without a GPU).
+   *
+   * @param memoryModel Which memory model to build resources for; production leaves this
+   *   detected, and a test forces the non-unified path to cover it on unified hardware.
    */
-  static std::unique_ptr<MetalDevice> Create();
+  static std::unique_ptr<MetalDevice> Create(MemoryModel memoryModel = MemoryModel::Detected);
+
+  /// Whether this device's resources are built for unified memory. Test accessor.
+  [[nodiscard]] bool usesUnifiedMemoryForTest() const;
 
   /// Destructor; releases all Metal objects still alive.
   ~MetalDevice() override;

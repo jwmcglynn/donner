@@ -360,9 +360,28 @@ struct MetalDevice::Impl {
   /// @param state Encoding state.
   /// @param submissionSerial Serial assigned to this submission.
   void attachCompletionHandler(EncodingState& state, uint64_t submissionSerial);
+
+  /// Whether resources are built for unified memory; decides every storage mode below.
+  bool unifiedMemory = true;
+
+  /// Storage mode for a resource the host reads or writes.
+  ///
+  /// Shared is right only where the two processors address one copy. Where they do not, Managed
+  /// keeps a copy on each side, and each side's changes have to be published to the other
+  /// explicitly - which is what the didModifyRange and synchronizeResource steps below do.
+  MTLStorageMode hostVisibleStorageMode() const {
+    return unifiedMemory ? MTLStorageModeShared : MTLStorageModeManaged;
+  }
+
+  /// Whether host-visible resources need explicit publication in both directions.
+  bool needsExplicitHostCoherency() const { return !unifiedMemory; }
+
+  /// Encodes the blit that publishes every live host-visible resource's GPU-side changes to the
+  /// host copy. Called only where the memory model needs it. @param state Encoding state.
+  Status encodeHostCoherencySync(EncodingState& state);
 };
 
-std::unique_ptr<MetalDevice> MetalDevice::Create() {
+std::unique_ptr<MetalDevice> MetalDevice::Create(MemoryModel memoryModel) {
   id<MTLDevice> device = MTLCreateSystemDefaultDevice();
   if (device == nil) {
     return nullptr;
@@ -370,7 +389,18 @@ std::unique_ptr<MetalDevice> MetalDevice::Create() {
 
   std::unique_ptr<MetalDevice> result(new MetalDevice());
   result->impl_->device = device;
+  // Ask the device rather than assuming. On a unified-memory device the CPU and GPU address one
+  // copy of a shared resource and nothing has to be moved between them; on a device without it,
+  // a shared resource is not the same bytes on both sides, and reading GPU output through the
+  // CPU pointer without synchronizing returns whatever the host copy last held - which is zeros
+  // for a buffer nothing ever wrote from the host.
+  result->impl_->unifiedMemory =
+      memoryModel == MemoryModel::Detected ? (device.hasUnifiedMemory != NO) : false;
   return result;
+}
+
+bool MetalDevice::usesUnifiedMemoryForTest() const {
+  return impl_->unifiedMemory;
 }
 
 MetalDevice::MetalDevice() : impl_(std::make_unique<Impl>()) {}
@@ -433,8 +463,10 @@ std::string MetalDevice::lastErrorForTest() const {
 }
 
 Status MetalDevice::onCreateBuffer(uint32_t slotIndex, const BufferDescriptor& descriptor) {
+  const MTLResourceOptions bufferOptions =
+      impl_->unifiedMemory ? MTLResourceStorageModeShared : MTLResourceStorageModeManaged;
   id<MTLBuffer> buffer = [impl_->device newBufferWithLength:descriptor.byteSize
-                                                    options:MTLResourceStorageModeShared];
+                                                    options:bufferOptions];
   if (buffer == nil) {
     return GpuError{GpuErrorType::InvalidState,
                     std::format("Metal buffer allocation of {} bytes failed for '{}'",
@@ -463,9 +495,10 @@ Status MetalDevice::onCreateTexture(uint32_t slotIndex, const TextureDescriptor&
     usage |= MTLTextureUsageShaderWrite;
   }
   textureDescriptor.usage = usage;
-  // Shared storage: this backend targets Apple Silicon's unified memory, so render targets stay
-  // directly host-visible and blit readback needs no staging or synchronize step.
-  textureDescriptor.storageMode = MTLStorageModeShared;
+  // Host-visible either way: render targets and storage textures are read back through blits
+  // into host-visible buffers, and on a device without unified memory that means a managed
+  // texture whose GPU-side changes are published before the host reads them.
+  textureDescriptor.storageMode = impl_->hostVisibleStorageMode();
 
   id<MTLTexture> texture = [impl_->device newTextureWithDescriptor:textureDescriptor];
   if (texture == nil) {
@@ -730,6 +763,11 @@ Status MetalDevice::onWriteBuffer(uint32_t slotIndex, uint64_t offsetBytes,
 
   if (!data.empty()) {
     std::memcpy(static_cast<uint8_t*>(buffer.contents) + offsetBytes, data.data(), data.size());
+    if (impl_->needsExplicitHostCoherency()) {
+      // The write landed in the host's copy; the GPU reads its own until the range is published.
+      [buffer didModifyRange:NSMakeRange(static_cast<NSUInteger>(offsetBytes),
+                                         static_cast<NSUInteger>(data.size()))];
+    }
   }
   return OkStatus();
 }
@@ -1170,6 +1208,26 @@ void MetalDevice::Impl::attachCompletionHandler(EncodingState& state, uint64_t s
   }];
 }
 
+Status MetalDevice::Impl::encodeHostCoherencySync(EncodingState& state) {
+  id<MTLBlitCommandEncoder> blitEncoder = [state.commandBuffer blitCommandEncoder];
+  if (blitEncoder == nil) {
+    return GpuError{GpuErrorType::InvalidState,
+                    "Metal blit command encoder creation failed for the host-coherency sync"};
+  }
+  for (id<MTLBuffer> buffer : buffers) {
+    if (buffer != nil) {
+      [blitEncoder synchronizeResource:buffer];
+    }
+  }
+  for (id<MTLTexture> texture : textures) {
+    if (texture != nil) {
+      [blitEncoder synchronizeResource:texture];
+    }
+  }
+  [blitEncoder endEncoding];
+  return OkStatus();
+}
+
 Status MetalDevice::onSubmit(uint64_t submissionSerial, uint32_t commandBufferSlotIndex,
                              std::span<const Command> commands) {
   (void)commandBufferSlotIndex;
@@ -1212,6 +1270,18 @@ Status MetalDevice::onSubmit(uint64_t submissionSerial, uint32_t commandBufferSl
     // The encoder state machine guarantees passes are ended before finish; fail closed anyway.
     return failEncoding(
         GpuError{GpuErrorType::InvalidState, "submitted command stream left a pass open"});
+  }
+
+  // Publish every host-visible resource's GPU-side changes before the buffer completes, so a
+  // host read after the completion sees them. Only a device without unified memory needs this,
+  // and there it has to happen inside the submission: once the command buffer has completed
+  // there is no encoder left to do it with. It covers every live resource rather than tracking
+  // which this stream touched - the cost falls only on the path that already needs the copy, and
+  // a missed resource here is silently wrong data rather than a reported failure.
+  if (impl_->needsExplicitHostCoherency()) {
+    if (Status status = impl_->encodeHostCoherencySync(state); status.hasError()) {
+      return failEncoding(std::move(status));
+    }
   }
 
   impl_->attachCompletionHandler(state, submissionSerial);
