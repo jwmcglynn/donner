@@ -70,6 +70,7 @@ donner_cc_library(
     }),
     visibility = donner_internal_visibility(),
     deps = [
+        ":frozen_baseline_policy",
         ":baseline_corpus",
         "//donner/gpu",
         "//donner/svg/renderer:renderer_image_io",

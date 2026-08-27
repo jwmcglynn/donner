@@ -46,6 +46,21 @@ bool AnyEnvironmentVariableIsSet(std::span<const std::string_view> names);
 bool RunningUnderContinuousIntegration();
 
 /**
+ * Directory name the baselines for one adapter are filed under, for example `apple_m1_pro_metal`.
+ * Lowercase, with every run of non-alphanumeric characters collapsed to one underscore, so one
+ * adapter always resolves to one directory on every platform.
+ *
+ * This lives here rather than beside the capture library because both sides need it and only one
+ * of them can link the capture library: the wgpu-backed capture writes these directories, and the
+ * per-backend vertical slices, which deliberately carry no wgpu dependency, read them.
+ *
+ * @param adapterName Vendor and device string the driver reports.
+ * @param adapterBackend Backend name, for example `Metal` or `Vulkan`.
+ * @return The directory name, or `unknown_adapter` when the inputs carry no alphanumerics.
+ */
+std::string AdapterSlug(std::string_view adapterName, std::string_view adapterBackend);
+
+/**
  * The disposition for a run that cannot create a GPU device at all.
  *
  * A missing device is not the same situation as a missing baseline, but it has the same

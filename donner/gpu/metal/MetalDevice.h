@@ -83,6 +83,11 @@ public:
   /// completion handler, or an empty string if none occurred. Test/diagnostic accessor.
   std::string lastErrorForTest() const;
 
+  /// Name the Metal driver reports for the underlying device, for example `Apple M1 Pro`. Two
+  /// GPUs running the same shaders can round a covered edge texel differently, so anything
+  /// comparing this backend's pixels against a committed record has to know which one it is on.
+  std::string adapterName() const;
+
 protected:
   Status onCreateBuffer(uint32_t slotIndex, const BufferDescriptor& descriptor) override;
   Status onCreateTexture(uint32_t slotIndex, const TextureDescriptor& descriptor) override;

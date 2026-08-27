@@ -35,6 +35,19 @@ Both run under plain `bazel test //...`:
 - `//donner/gpu/baseline:baseline_pixels_tests` re-renders each scene through the same production
   path the capture used and requires pixel identity against the committed PNG.
 
+`//donner/gpu/metal/tests:metal_solid_fill_tests` is a third reader. It renders
+`solid_fill_baseline` through `donner::gpu` and the MSL emitted from the shader IR, with no wgpu
+dependency at all, and requires pixel identity against the baseline for its own adapter. That is
+the whole point of the slice: the two implementations are compared, not one implementation against
+itself.
+
+It reads these directories rather than keeping its own copy of the same bytes, and the reason is
+worth recording. It used to keep one, captured on a single adapter, and when the production vertex
+stage moved from a whole-path quad to a convex bounding fan, the shader-IR re-expression the slice
+compiles kept the retired stage and the slice synthesized the retired quad locally to feed it. It
+stayed green for months against a golden nothing produced any more. A private copy of a record that
+already exists here is how that happens.
+
 ## Environment scoping
 
 Frozen pixels are only comparable against the adapter that produced them. Two GPUs running the

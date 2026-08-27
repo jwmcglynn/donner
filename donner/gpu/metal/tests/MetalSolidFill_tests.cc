@@ -15,6 +15,7 @@
 #include <gtest/gtest.h>
 
 #include <array>
+#include <cstdint>
 #include <cstring>
 #include <memory>
 #include <optional>
@@ -23,6 +24,7 @@
 #include <vector>
 
 #include "donner/base/Transform.h"
+#include "donner/base/tests/Runfiles.h"
 #include "donner/editor/tests/BitmapGoldenCompare.h"
 #include "donner/gpu/CommandEncoder.h"
 #include "donner/gpu/baseline/FrozenBaselinePolicy.h"
@@ -64,9 +66,12 @@ struct SizedBuffer {
   uint64_t sizeBytes = 0;  //!< Byte size the buffer was created with.
 };
 
+/// Where the frozen per-adapter baselines live in the runfiles tree.
+constexpr const char* kBaselinesRunfileDir = "donner/gpu/baseline/baselines";
+
 /// One path's GPU resources.
 struct PathDraw {
-  Buffer uniformBuffer;      //!< 288-byte Uniforms.
+  Buffer uniformBuffer;      //!< The solid-fill uniform block.
   SizedBuffer bands;         //!< Horizontal bands (or one zero band).
   SizedBuffer curves;        //!< Horizontal curves (or 4-byte dummy).
   SizedBuffer vBands;        //!< Vertical bands (or one zero band).
@@ -88,6 +93,26 @@ protected:
           baseline::DispositionForMissingAdapter(baseline::RunningUnderContinuousIntegration());
       const std::string message =
           baseline::NoAdapterMessage("the Metal solid-fill slice", disposition);
+      if (disposition == baseline::MissingComparisonDisposition::FailClosed) {
+        FAIL() << message;
+      }
+      GTEST_SKIP() << message;
+    }
+
+    // Two GPUs running the same shaders round a covered edge texel differently, so the frozen
+    // pixels are filed one directory per adapter and this slice resolves its own. Sharing the
+    // corpus rather than keeping a second copy of the same bytes is deliberate: a private golden
+    // is what let this slice drift away from the renderer it exists to validate.
+    slug_ = baseline::AdapterSlug(device_->adapterName(), "Metal");
+    goldenPath_ = std::string(kBaselinesRunfileDir) + "/" + slug_ + "/solid_fill_baseline.png";
+    if (Runfiles::instance().Rlocation(goldenPath_).empty()) {
+      const baseline::MissingComparisonDisposition disposition =
+          baseline::DispositionForUnbaselinedAdapter(baseline::RunningUnderContinuousIntegration());
+      const std::string message = baseline::UnbaselinedAdapterMessage(
+          device_->adapterName(), "Metal", slug_, /*capturedPath=*/"",
+          "this slice renders through donner::gpu, not the production path the baselines come "
+          "from; capture one with //donner/gpu/baseline:capture_baselines",
+          disposition);
       if (disposition == baseline::MissingComparisonDisposition::FailClosed) {
         FAIL() << message;
       }
@@ -124,6 +149,8 @@ protected:
   }
 
   std::unique_ptr<MetalDevice> device_;
+  std::string slug_;        //!< Adapter directory this run's baseline lives in.
+  std::string goldenPath_;  //!< Runfiles path of that baseline.
 };
 
 TEST_F(MetalSolidFillTest, ReadBackBufferRejectsStaleHandleAfterSlotReuse) {
@@ -372,9 +399,8 @@ TEST_F(MetalSolidFillTest, MatchesFrozenBaseline) {
 
   // Strict identity: the Metal slice must reproduce the frozen baseline byte-for-byte (zero
   // mismatched pixels, anti-aliased pixels included).
-  editor::tests::CompareBitmapToGolden(
-      bitmap, "donner/gpu/metal/tests/testdata/solid_fill_baseline.png", "metal_solid_fill",
-      editor::tests::PixelmatchIdentityParams());
+  editor::tests::CompareBitmapToGolden(bitmap, goldenPath_, "metal_solid_fill",
+                                       editor::tests::PixelmatchIdentityParams());
 }
 
 }  // namespace
