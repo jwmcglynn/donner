@@ -155,9 +155,13 @@ struct CommandSerializer {
        << " rowsPerImage=" << command.layout.rowsPerImage << " copySize=" << command.copySize;
   }
   void operator()(const CopyTextureToTextureCommand& command) {
+    // The origins are serialized unconditionally, including the (0, 0) default: a stream is read
+    // to tell two recordings apart, and a field that disappears when it holds its default makes
+    // a whole-rect copy and a copy that was deliberately reset to the origin look identical.
     os << "copyTextureToTexture src=" << RefId(TextureTag::kName, command.textureSrcId.slotIndex)
+       << " srcOrigin=" << command.sourceOrigin
        << " dst=" << RefId(TextureTag::kName, command.textureDstId.slotIndex)
-       << " copySize=" << command.copySize;
+       << " dstOrigin=" << command.destinationOrigin << " copySize=" << command.copySize;
   }
 };
 

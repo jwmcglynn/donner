@@ -1147,7 +1147,8 @@
         "mapAsync",
         "poll",
         "submit",
-        "unmap"
+        "unmap",
+        "writeTexture"
       ],
       "wgpuCFunctions": [
         "wgpuLabel",

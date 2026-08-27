@@ -336,6 +336,7 @@ donner_cc_test(
         "//donner/base:gtest_timeout_main",
         "//donner/gpu",
         "//donner/gpu:gpu_test_utils",
+        "//donner/gpu:sub_rectangle_copy_scene",
     ],
 )
 

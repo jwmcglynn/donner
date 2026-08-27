@@ -89,4 +89,23 @@ donner_cc_test(
     ],
 )
 
+# The Metal texture-to-texture copy slice: a sub-rectangle copy between two
+# origins, executed and compared against the shared expected image. Metal API
+# validation is enabled so validation issues abort loudly.
+donner_cc_test(
+    name = "metal_sub_rectangle_copy_tests",
+    srcs = ["MetalSubRectangleCopy_tests.cc"],
+    env = {
+        "MTL_DEBUG_LAYER": "1",
+        "MTL_SHADER_VALIDATION": "1",
+    },
+    target_compatible_with = ["@platforms//os:macos"],
+    deps = [
+        "//donner/gpu",
+        "//donner/gpu:sub_rectangle_copy_scene",
+        "//donner/gpu/metal:metal_device",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
 donner_package()

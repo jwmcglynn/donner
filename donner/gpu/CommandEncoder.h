@@ -226,18 +226,25 @@ public:
                              const Extent2d& copySize);
 
   /**
-   * Records a texture-to-texture copy starting at texel (0, 0) of both textures (the RHI's
-   * whole-rect copy convention). Not allowed inside a render pass. Both textures must be live
-   * handles of this device and share one \ref TextureFormat, \p source needs
-   * \ref TextureUsage::CopySrc, \p destination needs \ref TextureUsage::CopyDst, and
-   * \p copySize must be nonzero and fit inside both texture extents.
+   * Records a texture-to-texture copy of a \p copySize rectangle, read from \p sourceOrigin and
+   * written at \p destinationOrigin. Both origins default to texel (0, 0), which is the
+   * whole-rect copy convention this operation had before sub-rectangle copies existed, so an
+   * existing call keeps its meaning.
+   *
+   * Not allowed inside a pass. Both textures must be live handles of this device and share one
+   * \ref TextureFormat, \p source needs \ref TextureUsage::CopySrc, \p destination needs
+   * \ref TextureUsage::CopyDst, \p copySize must be nonzero, and each origin plus \p copySize
+   * must fit inside its texture's extent.
    *
    * @param source Source texture; needs \ref TextureUsage::CopySrc.
    * @param destination Destination texture; needs \ref TextureUsage::CopyDst.
    * @param copySize Copy extent in texels.
+   * @param sourceOrigin Top-left texel of the source rectangle.
+   * @param destinationOrigin Top-left texel of the destination rectangle.
    */
   Status copyTextureToTexture(const Texture& source, const Texture& destination,
-                              const Extent2d& copySize);
+                              const Extent2d& copySize, const Origin2d& sourceOrigin = {},
+                              const Origin2d& destinationOrigin = {});
 
   /**
    * Finishes recording and registers the command buffer with the device. Fails with the first
@@ -304,12 +311,26 @@ private:
                                  const TextureDescriptor& sourceDescriptor,
                                  const TextureDescriptor& destinationDescriptor);
 
-  /// Validates that a texture-to-texture copy's extent is non-degenerate and fits both operands.
+  /// Validates that a texture-to-texture copy's extent is non-degenerate and that each operand's
+  /// origin-plus-extent rectangle fits inside that operand.
   /// @param copySize Copy extent in texels.
+  /// @param sourceOrigin Top-left texel of the source rectangle.
+  /// @param destinationOrigin Top-left texel of the destination rectangle.
   /// @param sourceDescriptor Descriptor the source was created with.
   /// @param destinationDescriptor Descriptor the destination was created with.
-  Status validateCopyExtent(const Extent2d& copySize, const TextureDescriptor& sourceDescriptor,
+  Status validateCopyExtent(const Extent2d& copySize, const Origin2d& sourceOrigin,
+                            const Origin2d& destinationOrigin,
+                            const TextureDescriptor& sourceDescriptor,
                             const TextureDescriptor& destinationDescriptor);
+
+  /// Validates that one operand's origin-plus-extent rectangle fits inside its texture, reported
+  /// against \p role so a diagnostic names which side of the copy was out of bounds.
+  /// @param role Operand name for the diagnostic, "source" or "destination".
+  /// @param origin Top-left texel of that operand's rectangle.
+  /// @param copySize Copy extent in texels.
+  /// @param descriptor Descriptor that operand was created with.
+  Status validateCopyRectFits(std::string_view role, const Origin2d& origin,
+                              const Extent2d& copySize, const TextureDescriptor& descriptor);
 
   // RenderPassEncoder forwards to these.
   Status passSetPipeline(const RenderPipeline& pipeline);

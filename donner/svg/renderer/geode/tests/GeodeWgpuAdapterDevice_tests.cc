@@ -17,6 +17,7 @@
 
 #include "donner/gpu/CommandEncoder.h"
 #include "donner/gpu/tests/GpuTestUtils.h"
+#include "donner/gpu/tests/SubRectangleCopyScene.h"
 #include "donner/svg/renderer/geode/GeodeCallbackState.h"
 #include "donner/svg/renderer/geode/GeodeCounters.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
@@ -76,11 +77,15 @@ std::vector<uint8_t> MakeBytes(size_t count) {
 constexpr uint32_t kSceneSize = 4;
 constexpr uint32_t kReadbackBytesPerRow = 256;  // 4x4 RGBA rows padded to the copy alignment.
 
-/// Reads a 4x4 RGBA8 texture back to the host through raw wgpu (the adapter has no readback API
-/// of its own yet), mirroring the map-and-poll pattern the existing Geode tests use. Returns the
-/// padded rows (kReadbackBytesPerRow per row), or empty on failure.
-std::vector<uint8_t> ReadbackTexturePixels(GeodeDevice& device, wgpu::Texture texture) {
-  const uint64_t byteSize = uint64_t{kReadbackBytesPerRow} * kSceneSize;
+/// Reads a square RGBA8 texture back to the host through raw wgpu (the adapter has no readback
+/// API of its own yet), mirroring the map-and-poll pattern the existing Geode tests use. Returns
+/// the padded rows (kReadbackBytesPerRow per row), or empty on failure.
+/// @param device Device owning \p texture.
+/// @param texture Texture to read; needs CopySrc.
+/// @param sceneSize Width and height of \p texture in texels; rows must fit the padded pitch.
+std::vector<uint8_t> ReadbackTexturePixels(GeodeDevice& device, wgpu::Texture texture,
+                                           uint32_t sceneSize = kSceneSize) {
+  const uint64_t byteSize = uint64_t{kReadbackBytesPerRow} * sceneSize;
   wgpu::BufferDescriptor bufferDescriptor = {};
   bufferDescriptor.label = wgpuLabel("readbackStaging");
   bufferDescriptor.size = byteSize;
@@ -96,8 +101,8 @@ std::vector<uint8_t> ReadbackTexturePixels(GeodeDevice& device, wgpu::Texture te
   wgpu::TexelCopyBufferInfo destination = {};
   destination.buffer = readback.get();
   destination.layout.bytesPerRow = kReadbackBytesPerRow;
-  destination.layout.rowsPerImage = kSceneSize;
-  const wgpu::Extent3D copySize = {kSceneSize, kSceneSize, 1};
+  destination.layout.rowsPerImage = sceneSize;
+  const wgpu::Extent3D copySize = {sceneSize, sceneSize, 1};
   encoder.get().copyTextureToBuffer(source, destination, copySize);
   ScopedWgpuHandle<wgpu::CommandBuffer> commandBuffer(encoder.get().finish());
   device.queue().submit(1, &commandBuffer.get());
@@ -431,6 +436,117 @@ TEST_F(GeodeWgpuAdapterDeviceTests, HostEncoderReplayInterleavesInOneBufferAndDe
   EXPECT_THAT(PixelAt(copiedPixels, 3, 3), ElementsAre(0, 0, 128, 255));
 
   geodeDevice_->setCounters(nullptr);
+}
+
+/// The sub-rectangle copy scene on this adapter: a source holding the shared coordinate-encoding
+/// pattern and a destination pre-filled with the shared sentinel, both uploaded through the
+/// runtime so the copy under test is the only thing that moves texels between them.
+struct SubRectCopyScene {
+  gpu::Texture source;       //!< Source holding the coordinate-encoding pattern.
+  gpu::Texture destination;  //!< Destination pre-filled with the sentinel.
+};
+
+/// Creates and fills the sub-rectangle copy scene on \p device.
+/// @param device Device to create the textures on.
+SubRectCopyScene MakeSubRectCopyScene(gpu::Device& device) {
+  const gpu::Extent2d extent{gpu::tests::kSubRectCopyExtent, gpu::tests::kSubRectCopyExtent};
+  const gpu::TexelCopyBufferLayout layout{0, gpu::tests::kSubRectCopyBytesPerRow,
+                                          gpu::tests::kSubRectCopyExtent};
+  SubRectCopyScene scene{gpu::GetResultOrFail(device.createTexture(gpu::TextureDescriptor{
+                             "subRectSource", extent, gpu::TextureFormat::RGBA8Unorm,
+                             gpu::TextureUsage::CopySrc | gpu::TextureUsage::CopyDst})),
+                         gpu::GetResultOrFail(device.createTexture(gpu::TextureDescriptor{
+                             "subRectDestination", extent, gpu::TextureFormat::RGBA8Unorm,
+                             gpu::TextureUsage::CopyDst | gpu::TextureUsage::CopySrc}))};
+  EXPECT_THAT(
+      device.writeTexture(scene.source, gpu::tests::SubRectCopySourceUpload(), layout, extent),
+      gpu::IsOk());
+  EXPECT_THAT(device.writeTexture(scene.destination, gpu::tests::SubRectCopyDestinationUpload(),
+                                  layout, extent),
+              gpu::IsOk());
+  return scene;
+}
+
+/// Checks \p pixels against the shared expected image for the sub-rectangle copy.
+/// @param pixels Padded readback rows of the destination texture.
+void ExpectSubRectCopyResult(const std::vector<uint8_t>& pixels) {
+  for (uint32_t y = 0; y < gpu::tests::kSubRectCopyExtent; ++y) {
+    for (uint32_t x = 0; x < gpu::tests::kSubRectCopyExtent; ++x) {
+      const std::array<uint8_t, 4> expected = gpu::tests::SubRectCopyExpectedTexel(x, y);
+      EXPECT_THAT(PixelAt(pixels, x, y),
+                  ElementsAre(expected[0], expected[1], expected[2], expected[3]))
+          << "texel (" << x << ", " << y << ")";
+    }
+  }
+}
+
+/// Records the sub-rectangle copy on \p encoder, reading from the scene's source origin and
+/// writing at its destination origin.
+/// @param encoder Encoder to record into.
+/// @param scene Scene whose textures the copy runs over.
+void RecordSubRectCopy(gpu::CommandEncoder& encoder, const SubRectCopyScene& scene) {
+  EXPECT_THAT(encoder.copyTextureToTexture(
+                  scene.source, scene.destination,
+                  gpu::Extent2d{gpu::tests::kSubRectCopyWidth, gpu::tests::kSubRectCopyHeight},
+                  gpu::Origin2d{gpu::tests::kSubRectCopySourceX, gpu::tests::kSubRectCopySourceY},
+                  gpu::Origin2d{gpu::tests::kSubRectCopyDestinationX,
+                                gpu::tests::kSubRectCopyDestinationY}),
+              gpu::IsOk());
+}
+
+/// A recorded sub-rectangle copy must reach wgpu with both origins intact. Whole-rect copies
+/// could not tell an ignored origin from an honored one; this scene can, because the source
+/// rectangle and the destination rectangle sit at different corners of textures whose texels
+/// encode their own coordinates.
+TEST_F(GeodeWgpuAdapterDeviceTests, SubRectangleCopyHonorsBothOriginsWhenTheAdapterSubmits) {
+  const SubRectCopyScene scene = MakeSubRectCopyScene(*adapter_);
+
+  std::unique_ptr<gpu::CommandEncoder> encoder =
+      gpu::GetResultOrFail(adapter_->createCommandEncoder());
+  RecordSubRectCopy(*encoder, scene);
+  const uint64_t serial =
+      gpu::GetResultOrFail(adapter_->submit(gpu::GetResultOrFail(encoder->finish())));
+  ASSERT_TRUE(adapter_->waitForSerial(serial, /*timeoutSeconds=*/30.0))
+      << "submission " << serial << " did not complete";
+
+  const std::vector<uint8_t> pixels = ReadbackTexturePixels(
+      *geodeDevice_, adapter_->wgpuTextureOf(scene.destination), gpu::tests::kSubRectCopyExtent);
+  ASSERT_THAT(pixels, Not(testing::IsEmpty())) << "destination readback failed";
+  ExpectSubRectCopyResult(pixels);
+}
+
+/// The same copy replayed into a host-owned encoder. The replay path builds its own wgpu copy
+/// descriptors, so it can drop an origin independently of the owned-submit path.
+TEST_F(GeodeWgpuAdapterDeviceTests, SubRectangleCopyHonorsBothOriginsWhenReplayedIntoAHostEncoder) {
+  const SubRectCopyScene scene = MakeSubRectCopyScene(*adapter_);
+
+  wgpu::CommandEncoderDescriptor hostDescriptor = {};
+  ScopedWgpuHandle<wgpu::CommandEncoder> hostEncoder(
+      geodeDevice_->device().createCommandEncoder(hostDescriptor));
+  ASSERT_TRUE(static_cast<bool>(hostEncoder.get()));
+  adapter_->setHostCommandEncoder(hostEncoder.get());
+
+  std::unique_ptr<gpu::CommandEncoder> encoder =
+      gpu::GetResultOrFail(adapter_->createCommandEncoder());
+  RecordSubRectCopy(*encoder, scene);
+  const uint64_t serial =
+      gpu::GetResultOrFail(adapter_->submit(gpu::GetResultOrFail(encoder->finish())));
+
+  {
+    ScopedWgpuHandle<wgpu::CommandBuffer> hostCommands(hostEncoder.get().finish());
+    ASSERT_TRUE(static_cast<bool>(hostCommands.get()));
+    geodeDevice_->queue().submit(1, &hostCommands.get());
+  }
+  adapter_->notifyHostSubmitted();
+  adapter_->clearHostCommandEncoder();
+
+  ASSERT_TRUE(adapter_->waitForSerial(serial, /*timeoutSeconds=*/30.0))
+      << "submission " << serial << " did not complete after the host submit";
+
+  const std::vector<uint8_t> pixels = ReadbackTexturePixels(
+      *geodeDevice_, adapter_->wgpuTextureOf(scene.destination), gpu::tests::kSubRectCopyExtent);
+  ASSERT_THAT(pixels, Not(testing::IsEmpty())) << "destination readback failed";
+  ExpectSubRectCopyResult(pixels);
 }
 
 /// Clearing the host encoder returns the adapter to owning and submitting its own encoders, so

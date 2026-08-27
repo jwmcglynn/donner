@@ -1339,8 +1339,10 @@ gpu::Status GeodeWgpuAdapterDevice::encodeCopyTextureToTexture(
   }
   wgpu::TexelCopyTextureInfo source = {};
   source.texture = sourceTexture;
+  source.origin = {textureCopy.sourceOrigin.x, textureCopy.sourceOrigin.y, 0u};
   wgpu::TexelCopyTextureInfo destination = {};
   destination.texture = destinationTexture;
+  destination.origin = {textureCopy.destinationOrigin.x, textureCopy.destinationOrigin.y, 0u};
   const wgpu::Extent3D extent = {textureCopy.copySize.width, textureCopy.copySize.height, 1u};
   state.encoder.copyTextureToTexture(source, destination, extent);
   return OkStatus();

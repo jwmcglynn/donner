@@ -274,6 +274,7 @@ Status VulkanLoader::loadDevice(VkDevice device) {
                 resolve("vkCmdCopyBufferToImage"));
   missing.store(api_.vkCmdCopyImageToBuffer, "vkCmdCopyImageToBuffer",
                 resolve("vkCmdCopyImageToBuffer"));
+  missing.store(api_.vkCmdCopyImage, "vkCmdCopyImage", resolve("vkCmdCopyImage"));
   if (!missing.complete()) {
     return GpuError{GpuErrorType::Unsupported,
                     std::format("the Vulkan device does not provide {}", missing.name())};

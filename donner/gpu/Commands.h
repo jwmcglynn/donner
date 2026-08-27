@@ -98,11 +98,14 @@ struct CopyTextureToBufferCommand {
   Extent2d copySize;             //!< Copy extent in texels.
 };
 
-/// Recorded `copyTextureToTexture` (whole-rect texture copy from texel (0, 0)).
+/// Recorded `copyTextureToTexture` (sub-rectangle texture copy; both origins default to texel
+/// (0, 0), which is the whole-rect copy every recorded stream used before origins existed).
 struct CopyTextureToTextureCommand {
   ResourceIdentity textureSrcId;  //!< Source texture identity.
   ResourceIdentity textureDstId;  //!< Destination texture identity.
   Extent2d copySize;              //!< Copy extent in texels.
+  Origin2d sourceOrigin;          //!< Top-left source texel the copy reads from.
+  Origin2d destinationOrigin;     //!< Top-left destination texel the copy writes to.
 };
 
 /// One recorded command.
