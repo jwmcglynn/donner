@@ -62,7 +62,12 @@ using Clock = std::chrono::high_resolution_clock;
 class CompositorPerfTest : public ::testing::Test {
 protected:
   SVGDocument makeDocument(std::string_view svg, Vector2i size = Vector2i(1000, 1000)) {
-    return instantiateSubtree(svg, parser::SVGParser::Options(), size);
+    parser::SVGParser::Options options;
+    // The generated perf scenes are first-party grids of up to 10,000 rects, above the
+    // default tree-node cap, which is sized for untrusted documents. State this harness's
+    // own budget explicitly so scene size is bounded by the test constants, not the default.
+    options.maximumTreeNodes = 16 * 1024;
+    return instantiateSubtree(svg, options, size);
   }
 
   /// Configure the mock renderer to support offscreen instances and non-empty snapshots,
