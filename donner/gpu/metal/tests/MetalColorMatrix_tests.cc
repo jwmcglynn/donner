@@ -1,5 +1,5 @@
 /// @file
-/// The Metal compute vertical slice: runs the color-matrix kernel emitted from the shader IR
+/// Runs the color-matrix kernel emitted from the shader IR on a real Metal device
 /// through donner::gpu::metal::MetalDevice and compares the destination texels byte-for-byte
 /// against the same result computed on the host.
 
@@ -65,7 +65,7 @@ protected:
     return std::move(result).result();
   }
 
-  /// Rebuilds the device for \p memoryModel and runs the whole slice against it.
+  /// Rebuilds the device for \p memoryModel and runs the whole color-matrix comparison against it.
   /// @param memoryModel Memory model the device builds its resources for.
   void runColorMatrixSlice(MetalDevice::MemoryModel memoryModel);
 
@@ -239,10 +239,10 @@ TEST_F(MetalColorMatrixTest, UnifiedMemoryPublishesNothingBecauseThereIsOneCopy)
   EXPECT_EQ(device_->deviceWritePublishCountForTest(), 0u);
 }
 
-// This slice is the only one that runs under both memory models. The solid-fill and
-// sub-rectangle-copy slices run under the detected one, which is unified on every machine
+// This test is the only one that runs under both memory models. The solid-fill and
+// sub-rectangle-copy tests run under the detected one, which is unified on every machine
 // available to run them, and they reach the host through the same publication the counters below
-// pin - so the mechanism is covered once here rather than repeated per slice.
+// pin - so the mechanism is covered once here rather than repeated per test.
 TEST_F(MetalColorMatrixTest, WithoutUnifiedMemoryEveryChangeIsPublishedInBothDirections) {
   // The behaviour this fix exists for cannot be observed in the pixels on hardware that
   // addresses one copy of a resource: the results come out right whether or not anything was
@@ -259,7 +259,7 @@ TEST_F(MetalColorMatrixTest, WithoutUnifiedMemoryEveryChangeIsPublishedInBothDir
 }
 
 TEST_F(MetalColorMatrixTest, DispatchMatchesTheHostComputedResultWithoutUnifiedMemory) {
-  // The same slice built for a device that does not address one copy of a resource from both
+  // The same comparison built for a device that does not address one copy of a resource from both
   // processors. On such a device the host's copy of the readback buffer is only whatever was
   // published to it, so a dispatch whose output is never published reads back as zeros - which
   // is what a virtualized Metal device shows and what unified-memory hardware hides. Forcing the
