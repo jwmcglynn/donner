@@ -160,13 +160,15 @@ bool DeclareDeviceLostAfterWaitTimeout(GeodeDeviceLostState& state, GpuWaitSite 
  * an already-complete wait adds no measurable overhead.
  *
  * @param pollOnce Non-blocking poll; returns true when the wait is over.
- * @param timeout Total time budget for the wait.
+ * @param timeout Total time budget for the wait. Taken in microseconds because the readback
+ *   wait slices below a millisecond, and a budget rounded up to a whole millisecond would
+ *   coarsen the poll cadence the readback path is tuned to.
  * @param pollInterval Sleep between polls while the condition is pending.
  * @param testHooks Optional clock/sleep overrides for deterministic tests.
  * @return `Complete` if @p pollOnce returned true, `TimedOut` otherwise.
  */
 GpuWaitResult BoundedGpuWait(const std::function<bool()>& pollOnce,
-                             std::chrono::milliseconds timeout,
+                             std::chrono::microseconds timeout,
                              std::chrono::microseconds pollInterval = kGpuWaitPollInterval,
                              const GpuWaitTestHooks& testHooks = {});
 

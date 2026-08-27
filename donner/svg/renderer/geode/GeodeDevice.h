@@ -13,6 +13,7 @@
 #include <webgpu/webgpu.hpp>
 
 #include "donner/base/Utils.h"
+#include "donner/gpu/Device.h"
 #include "donner/svg/renderer/geode/GeodeCounters.h"
 #include "donner/svg/renderer/geode/GeodeGpuContext.h"
 #include "donner/svg/renderer/geode/GeodeGpuWait.h"
@@ -58,14 +59,14 @@ struct SnapshotReadbackResources {
   /// View of `staging`, kept with the pooled entry so it is created once.
   ScopedWgpuHandle<wgpu::TextureView> stagingView;
   /// Map-readable buffer the staging texture is copied into.
-  ScopedWgpuHandle<wgpu::Buffer> readback;
+  gpu::Buffer readback;
   /// Pool key: staging texture width in pixels.
   uint32_t width = 0;
   /// Pool key: staging texture height in pixels.
   uint32_t height = 0;
 
   /// True when any required handle is missing; an empty set cannot be used.
-  [[nodiscard]] bool empty() const { return !staging || !stagingView || !readback; }
+  [[nodiscard]] bool empty() const { return !staging || !stagingView || !readback.isValid(); }
 };
 
 /**

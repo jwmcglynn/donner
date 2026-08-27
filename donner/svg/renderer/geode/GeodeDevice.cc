@@ -227,6 +227,26 @@ void DestroyResourceBacking(ScopedWgpuHandle<Handle>& handle) {
   }
 }
 
+/// Destroys a pooled readback buffer's backend object, not just this pool's name for it.
+///
+/// Pooled entries are idle by construction - a set is released only after its readback unmapped
+/// - so the backing can go eagerly. Releasing the handle alone would leave the buffer resident
+/// until the host runtime collects it, which is exactly the retained memory the pool ceiling
+/// exists to bound.
+/// @param adapter Adapter the buffer was created on, or null during teardown.
+/// @param buffer Buffer to destroy; left invalid.
+void DestroyPooledReadbackBuffer(GeodeWgpuAdapterDevice* adapter, gpu::Buffer& buffer) {
+  if (!buffer.isValid()) {
+    return;
+  }
+  if (adapter == nullptr) {
+    buffer = gpu::Buffer();
+    return;
+  }
+  const gpu::Status destroyed = adapter->destroyBufferBacking(std::move(buffer));
+  (void)destroyed;  // A pooled buffer is always live; a stale handle is already gone.
+}
+
 }  // namespace
 
 /// PIMPL struct: holds the wgpu::Instance so its lifetime is tied to
@@ -238,7 +258,7 @@ struct GeodeDevice::Impl {
     for (auto& [unusedKey, entry] : snapshotReadbackPool) {
       (void)unusedKey;
       DestroyResourceBacking(entry.resources.staging);
-      DestroyResourceBacking(entry.resources.readback);
+      DestroyPooledReadbackBuffer(adapterDevice.get(), entry.resources.readback);
     }
   }
 
@@ -812,13 +832,13 @@ SnapshotReadbackResources GeodeDevice::acquireSnapshotReadbackResources(uint32_t
   }
 
   const uint32_t bytesPerRow = AlignReadbackBytesPerRow(width * 4u);
-  wgpu::BufferDescriptor bd = {};
-  bd.label = wgpuLabel("RendererGeodeReadback");
-  bd.size = static_cast<uint64_t>(bytesPerRow) * static_cast<uint64_t>(height);
-  bd.usage = wgpu::BufferUsage::CopyDst | wgpu::BufferUsage::MapRead;
-  resources.readback.reset(device_.createBuffer(bd));
-  if (resources.readback) {
-    countBuffer();
+  // Created through the runtime, which counts the allocation itself, so there is no explicit
+  // tick here; a second one would double-count every readback set against the buffer ceilings.
+  gpu::Result<gpu::Buffer> readback = adapterDevice().createBuffer(gpu::BufferDescriptor{
+      "RendererGeodeReadback", static_cast<uint64_t>(bytesPerRow) * static_cast<uint64_t>(height),
+      gpu::BufferUsage::CopyDst | gpu::BufferUsage::MapRead});
+  if (readback.hasResult()) {
+    resources.readback = std::move(readback).result();
   }
 
   if (resources.empty()) {
@@ -851,7 +871,7 @@ void GeodeDevice::releaseSnapshotReadbackResources(SnapshotReadbackResources res
     // the readback unmaps), so their backings can be destroyed eagerly
     // instead of deferred to a frame boundary.
     DestroyResourceBacking(lruIt->second.resources.staging);
-    DestroyResourceBacking(lruIt->second.resources.readback);
+    DestroyPooledReadbackBuffer(impl_->adapterDevice.get(), lruIt->second.resources.readback);
     impl_->snapshotReadbackPool.erase(lruIt);
   }
 }

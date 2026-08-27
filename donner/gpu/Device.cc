@@ -1849,6 +1849,14 @@ Status Device::validateBufferHandleForBackend(const Buffer& buffer) const {
   return OkStatus();
 }
 
+Status Device::validateBufferMappingHandleForBackend(const BufferMapping& mapping) const {
+  auto record = resolve(bufferMappings_, mapping, BufferMappingTag::kName);
+  if (record.hasError()) {
+    return std::move(record).error();
+  }
+  return OkStatus();
+}
+
 Status Device::validateTextureHandleForBackend(const Texture& texture) const {
   auto record = resolve(textures_, texture, TextureTag::kName);
   if (record.hasError()) {

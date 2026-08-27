@@ -617,6 +617,15 @@ protected:
   Status validateTextureViewHandleForBackend(const TextureView& textureView) const;
 
   /**
+   * Validates a buffer-mapping handle for backend-provided auxiliary entry points, running the
+   * same null/device-identity/generation checks the template-method public API performs, so a
+   * stale handle cannot read state belonging to the slot's new occupant.
+   *
+   * @param mapping Handle to validate.
+   */
+  Status validateBufferMappingHandleForBackend(const BufferMapping& mapping) const;
+
+  /**
    * Backend hook: begin mapping a buffer range. Defaults to reporting the capability as
    * unsupported, so a backend without host mapping needs no implementation and callers get a
    * clean unsupported result rather than a missing symbol.

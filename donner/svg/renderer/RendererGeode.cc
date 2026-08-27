@@ -7062,58 +7062,65 @@ enum class ReadbackMapStatus {
   Failed,
 };
 
+/// One slice of the readback map wait.
+///
+/// The runtime's wait takes a slice and a budget; this path drives its own budget so the poll
+/// count, the cancellation cadence, and the timeout attribution stay exactly what they were
+/// before the wait moved onto the runtime, so each call is given a budget of one slice and the
+/// loop below owns the deadline.
+constexpr double kReadbackWaitSliceSeconds =
+    std::chrono::duration<double>(geode::kGpuWaitPollInterval).count();
+
+/// Result of \ref MapAndWaitReadback: the outcome, plus the live mapping on success.
+struct ReadbackMapResult {
+  ReadbackMapStatus status = ReadbackMapStatus::Failed;  //!< How the wait ended.
+  gpu::BufferMapping mapping;                            //!< Live mapping; valid only on success.
+};
+
 /// Map `buffer` for read and wait for the GPU to deliver it. On cancellation,
 /// timeout, or map failure the buffer is unmapped and destroyed and a
 /// non-success status is returned. Readback poll statistics are recorded on
 /// the device regardless of the outcome.
-ReadbackMapStatus MapAndWaitReadback(const std::shared_ptr<geode::GeodeDevice>& device,
-                                     const wgpu::Buffer& buffer, uint64_t mapSize,
+///
+/// The wait is a loop of single-slice runtime waits rather than one runtime wait with the full
+/// budget, because four things this path reports are properties of the loop and not of the
+/// runtime's wait: the number of slices actually run, whether the backend waited on the map's
+/// completion event or polled for it, the wait-site attribution a timeout declares on the
+/// device, and destroying the buffer whose map was abandoned.
+///
+/// @param device Device the buffer belongs to.
+/// @param buffer Buffer to map; destroyed and left invalid on cancellation or timeout.
+/// @param mapSize Bytes to map, from offset zero.
+/// @param shouldCancel Optional cancellation predicate, polled once per slice.
+ReadbackMapResult MapAndWaitReadback(const std::shared_ptr<geode::GeodeDevice>& device,
+                                     gpu::Buffer& buffer, uint64_t mapSize,
                                      const std::function<bool()>& shouldCancel) {
   if (device->isDeviceLost()) {
     // A lost device will never deliver the map. Fail fast so a caller does
     // not spend another full readback deadline against a hung driver; the
     // caller drops the buffer without pooling it.
-    return ReadbackMapStatus::DeviceLost;
+    return ReadbackMapResult{ReadbackMapStatus::DeviceLost, {}};
   }
-  // `BufferMapCallbackInfo` takes raw userdata rather than a std::function, and a
-  // cancellation may return before WebGPU delivers that callback. Keep its payload alive
-  // independently of this stack frame: one reference belongs to this caller, the other to the
-  // callback. The state intentionally owns no WebGPU handles, so its final release is safe even
-  // when AllowSpontaneous invokes it from inside a WebGPU call.
-  struct MapState {
-    std::atomic<int> references{2};
-    std::atomic<bool> done{false};
-    std::atomic<bool> ok{false};
 
-    void release() {
-      if (references.fetch_sub(1, std::memory_order_acq_rel) == 1) {
-        delete this;
-      }
-    }
-  };
-  MapState* mapState = new MapState();
-  wgpu::BufferMapCallbackInfo mapCb{wgpu::Default};
-  mapCb.callback = [](WGPUMapAsyncStatus status, WGPUStringView /*message*/, void* userdata1,
-                      void* /*userdata2*/) {
-    auto* s = static_cast<MapState*>(userdata1);
-    s->ok.store(status == WGPUMapAsyncStatus_Success, std::memory_order_relaxed);
-    s->done.store(true, std::memory_order_release);
-    s->release();
-  };
-  mapCb.userdata1 = mapState;
-  mapCb.userdata2 = nullptr;
-  mapCb.mode = wgpu::CallbackMode::AllowSpontaneous;
-  // Emscripten-only: the browser timed-wait path below consumes `mapFuture`;
-  // native builds finish without touching it.
-  [[maybe_unused]] const wgpu::Future mapFuture =
-      buffer.mapAsync(wgpu::MapMode::Read, 0, mapSize, mapCb);
+  geode::GeodeWgpuAdapterDevice& runtime = device->adapterDevice();
+  gpu::Result<gpu::BufferMapping> mapping =
+      runtime.mapBufferAsync(buffer, gpu::MapMode::Read, 0, mapSize);
+  if (mapping.hasError()) {
+    // The request never started, so no slice ran and there are no poll statistics to record. A
+    // device lost between the check above and here is reported as such rather than as a plain
+    // failure, because the caller retries a failure and must not retry a lost device.
+    return ReadbackMapResult{
+        device->isDeviceLost() ? ReadbackMapStatus::DeviceLost : ReadbackMapStatus::Failed, {}};
+  }
+  gpu::BufferMapping liveMapping = std::move(mapping).result();
+
   int pollIter = 0;
   bool cancelled = false;
   bool timedOut = false;
-  bool usedTimedWaitAny = false;
+  gpu::MapWaitOutcome outcome = gpu::MapWaitOutcome::TimedOut;
   const auto readbackWaitStart = std::chrono::steady_clock::now();
   const auto readbackDeadline = readbackWaitStart + geode::kReadbackMapTimeout;
-  while (!mapState->done.load(std::memory_order_acquire)) {
+  while (true) {
     if (shouldCancel && shouldCancel()) {
       cancelled = true;
       break;
@@ -7122,72 +7129,55 @@ ReadbackMapStatus MapAndWaitReadback(const std::shared_ptr<geode::GeodeDevice>& 
       timedOut = true;
       break;
     }
+    // Counted after the two checks above, so a wait that was cancelled or already past its
+    // deadline reports zero slices - the signal a caller uses to tell "gave up immediately"
+    // from "waited and then gave up".
     ++pollIter;
-#ifdef __EMSCRIPTEN__
-    // The browser instance is created with TimedWaitAny (see
-    // CreateEditorWgpuInstance) exactly so this wait exists: on a pthread the
-    // map completion is a browser-side event, and poll-plus-yield loops only
-    // observe it at whatever cadence the yields happen to align with the
-    // browser's delivery (measured: a first-sample snapshot readback burned
-    // 265 five-millisecond yields, 1.85 seconds, before the completion was
-    // seen). A 5 ms timed wait returns the moment the map resolves while a
-    // cancellation or a superseding request is still observed within the
-    // slice.
-    static std::atomic<bool> instanceWaitUsable{true};
-    if (device->instance() && instanceWaitUsable.load(std::memory_order_relaxed)) {
-      wgpu::FutureWaitInfo waitInfo{};
-      waitInfo.future = mapFuture;
-      constexpr std::uint64_t kSliceNs = 5'000'000;
-      const wgpu::WaitStatus waitStatus = device->instance().waitAny(1, &waitInfo, kSliceNs);
-      if (waitStatus == wgpu::WaitStatus::Success || waitStatus == wgpu::WaitStatus::TimedOut) {
-        usedTimedWaitAny = true;
-        // Success delivers the callback before returning; TimedOut re-checks
-        // cancellation. Either way the loop condition observes `done`.
-        continue;
-      }
-      // Any other status means this thread cannot time-wait this future
-      // (instance thread affinity, unsupported timeout). Remember that and
-      // fall back to the yield-poll below for the rest of the process.
-      instanceWaitUsable.store(false, std::memory_order_relaxed);
+
+    const gpu::Result<gpu::MapWaitOutcome> slice = runtime.waitForMapping(
+        liveMapping, gpu::MapWaitParams{kReadbackWaitSliceSeconds, kReadbackWaitSliceSeconds},
+        /*shouldCancel=*/{});
+    if (slice.hasError()) {
+      outcome = gpu::MapWaitOutcome::Failed;
+      break;
     }
-#endif
-    // Never ask wgpu-native to block until the GPU map completes: a low-priority thumbnail must
-    // observe a superseding main-document request promptly. Native polling is
-    // non-blocking and gets a short sleep to avoid spinning. The
-    // kGpuWaitPollInterval (100 us) sleep bounds the snapshot latency floor
-    // without the 1 ms quanta that used to dominate small-fixture readbacks;
-    // the poll itself processes the map completion callback as soon as the
-    // GPU delivers it.
-    device->pollSuspending(false);
-#ifndef __EMSCRIPTEN__
-    std::this_thread::sleep_for(geode::kGpuWaitPollInterval);
-#endif
+    outcome = slice.result();
+    // A slice budget equal to one slice reports TimedOut for "not ready yet"; every other
+    // outcome is terminal.
+    if (outcome != gpu::MapWaitOutcome::TimedOut) {
+      break;
+    }
   }
-  device->recordReadback(usedTimedWaitAny, pollIter);
+
+  device->recordReadback(runtime.mappingUsedTimedWaitAny(liveMapping), pollIter);
+
   if (cancelled || timedOut) {
     if (timedOut) {
-      // A full readback deadline with no map delivery is the observable
-      // signature of a hung device. Declare the loss so later waits on this
-      // device fail fast and teardown skips GPU waits entirely, and record the
-      // site and the measured wait so a consumer reading only the stats can
-      // tell this hang from a queue-drain hang.
       device->markDeviceLostAfterWaitTimeout(
           geode::GpuWaitSite::ReadbackMap,
           std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() -
                                                                 readbackWaitStart),
           "snapshot readback map did not complete within the readback deadline");
     }
-    // Cancelling a pending map schedules its callback with an aborted status. The callback's
-    // reference keeps `mapState` valid even when delivery happens after this method returns.
-    buffer.unmap();
-    buffer.destroy();
-    mapState->release();
-    return cancelled ? ReadbackMapStatus::Cancelled : ReadbackMapStatus::TimedOut;
+    // Abandoning a pending map leaves the buffer unusable for anything else, so it is destroyed
+    // here rather than returned to a pool that would hand it out again.
+    (void)runtime.unmapBuffer(std::move(liveMapping));
+    (void)runtime.destroyBufferBacking(std::move(buffer));
+    return ReadbackMapResult{cancelled ? ReadbackMapStatus::Cancelled : ReadbackMapStatus::TimedOut,
+                             {}};
   }
 
-  const bool mapOk = mapState->ok.load(std::memory_order_acquire);
-  mapState->release();
-  return mapOk ? ReadbackMapStatus::Success : ReadbackMapStatus::Failed;
+  if (outcome == gpu::MapWaitOutcome::Ready) {
+    return ReadbackMapResult{ReadbackMapStatus::Success, std::move(liveMapping)};
+  }
+
+  // Device loss and map failure leave the buffer alone: the caller drops the whole set rather
+  // than pooling it, and a lost device's buffers are going away with it.
+  (void)runtime.unmapBuffer(std::move(liveMapping));
+  return ReadbackMapResult{outcome == gpu::MapWaitOutcome::DeviceLost
+                               ? ReadbackMapStatus::DeviceLost
+                               : ReadbackMapStatus::Failed,
+                           {}};
 }
 
 /// GPU-side snapshot readback for premultiplied RGBA8Unorm render targets: a
@@ -7254,7 +7244,7 @@ RendererBitmap ReadGeodeTextureSnapshotGpu(const std::shared_ptr<geode::GeodeDev
   src.mipLevel = 0;
   src.origin = {0, 0, 0};
   wgpu::TexelCopyBufferInfo dst = {};
-  dst.buffer = resources.readback.get();
+  dst.buffer = device->adapterDevice().wgpuBufferOf(resources.readback);
   dst.layout.bytesPerRow = bytesPerRow;
   dst.layout.rowsPerImage = height;
   wgpu::Extent3D copySize = {width, height, 1};
@@ -7265,8 +7255,9 @@ RendererBitmap ReadGeodeTextureSnapshotGpu(const std::shared_ptr<geode::GeodeDev
   device->queue().submit(1, &cmd.get());
   device->countSubmit();
 
-  const ReadbackMapStatus mapStatus =
-      MapAndWaitReadback(device, resources.readback.get(), mapSize, shouldCancel);
+  ReadbackMapResult mapResult =
+      MapAndWaitReadback(device, resources.readback, mapSize, shouldCancel);
+  const ReadbackMapStatus mapStatus = mapResult.status;
   if (mapStatus != ReadbackMapStatus::Success) {
     // Cancelled, timed out, lost, or failed: on cancellation and timeout the
     // helper already unmapped and destroyed the readback buffer, and on a
@@ -7278,15 +7269,16 @@ RendererBitmap ReadGeodeTextureSnapshotGpu(const std::shared_ptr<geode::GeodeDev
     return bitmap;
   }
 
-  const uint8_t* mapped =
-      static_cast<const uint8_t*>(resources.readback.get().getConstMappedRange(0, mapSize));
-  if (mapped == nullptr) {
-    // A mapped-range/buffer-size mismatch returns null instead of raising a
-    // validation error. Unmap and drop the entry (do not pool a buffer whose
-    // sizing math disagreed with ours) and let the CPU path take over.
-    resources.readback.get().unmap();
+  const gpu::Result<std::span<const uint8_t>> mappedBytes =
+      device->adapterDevice().mappedBytes(mapResult.mapping);
+  if (mappedBytes.hasError()) {
+    // A mapped-range/buffer-size mismatch is reported here rather than raising a validation
+    // error. Unmap and drop the entry (do not pool a buffer whose sizing math disagreed with
+    // ours) and let the CPU path take over.
+    (void)device->adapterDevice().unmapBuffer(std::move(mapResult.mapping));
     return bitmap;
   }
+  const uint8_t* mapped = mappedBytes.result().data();
 
   // The staging texture already holds straight-alpha RGBA, so the CPU only
   // strips row padding.
@@ -7296,13 +7288,13 @@ RendererBitmap ReadGeodeTextureSnapshotGpu(const std::shared_ptr<geode::GeodeDev
   bitmap.pixels.resize(bitmap.rowBytes * height);
   for (uint32_t y = 0; y < height; ++y) {
     if (shouldCancel && shouldCancel()) {
-      resources.readback.get().unmap();
+      (void)device->adapterDevice().unmapBuffer(std::move(mapResult.mapping));
       return {};
     }
     std::memcpy(bitmap.pixels.data() + static_cast<size_t>(y) * bitmap.rowBytes,
                 mapped + static_cast<size_t>(y) * bytesPerRow, bitmap.rowBytes);
   }
-  resources.readback.get().unmap();
+  (void)device->adapterDevice().unmapBuffer(std::move(mapResult.mapping));
   device->releaseSnapshotReadbackResources(std::move(resources));
   return bitmap;
 }
@@ -7359,13 +7351,17 @@ static RendererBitmap ReadGeodeTextureSnapshot(const std::shared_ptr<geode::Geod
 
   const uint32_t bytesPerRow = alignBytesPerRow(width * 4u);
 
-  // Allocate readback buffer.
-  wgpu::BufferDescriptor bd = {};
-  bd.label = wgpuLabel("RendererGeodeReadback");
-  bd.size = static_cast<uint64_t>(bytesPerRow) * static_cast<uint64_t>(height);
-  bd.usage = wgpu::BufferUsage::CopyDst | wgpu::BufferUsage::MapRead;
-  geode::ScopedWgpuHandle<wgpu::Buffer> readback(device->device().createBuffer(bd));
-  device->countBuffer();
+  // Allocate readback buffer. Created through the runtime, which counts the allocation itself,
+  // so there is no explicit tick here.
+  const uint64_t readbackSize = static_cast<uint64_t>(bytesPerRow) * static_cast<uint64_t>(height);
+  gpu::Result<gpu::Buffer> createdReadback = device->adapterDevice().createBuffer(
+      gpu::BufferDescriptor{"RendererGeodeReadback", readbackSize,
+                            gpu::BufferUsage::CopyDst | gpu::BufferUsage::MapRead});
+  if (createdReadback.hasError()) {
+    return bitmap;
+  }
+  gpu::Buffer readback = std::move(createdReadback).result();
+  const wgpu::Buffer readbackBackend = device->adapterDevice().wgpuBufferOf(readback);
 
   // Copy texture → readback buffer.
   geode::ScopedWgpuHandle<wgpu::CommandEncoder> enc(device->device().createCommandEncoder());
@@ -7374,7 +7370,7 @@ static RendererBitmap ReadGeodeTextureSnapshot(const std::shared_ptr<geode::Geod
   src.mipLevel = 0;
   src.origin = {0, 0, 0};
   wgpu::TexelCopyBufferInfo dst = {};
-  dst.buffer = readback.get();
+  dst.buffer = readbackBackend;
   dst.layout.bytesPerRow = bytesPerRow;
   dst.layout.rowsPerImage = height;
   wgpu::Extent3D copySize = {width, height, 1};
@@ -7384,19 +7380,20 @@ static RendererBitmap ReadGeodeTextureSnapshot(const std::shared_ptr<geode::Geod
   device->queue().submit(1, &cmd.get());
   device->countSubmit();
 
-  if (MapAndWaitReadback(device, readback.get(), bd.size, shouldCancel) !=
-      ReadbackMapStatus::Success) {
+  ReadbackMapResult mapResult = MapAndWaitReadback(device, readback, readbackSize, shouldCancel);
+  if (mapResult.status != ReadbackMapStatus::Success) {
     return bitmap;
   }
 
-  const uint8_t* mapped =
-      static_cast<const uint8_t*>(readback.get().getConstMappedRange(0, bd.size));
-  if (mapped == nullptr) {
-    // Size mismatch between the map request and the buffer returns null
-    // rather than raising a validation error; never memcpy from it.
-    readback.get().unmap();
+  const gpu::Result<std::span<const uint8_t>> mappedBytes =
+      device->adapterDevice().mappedBytes(mapResult.mapping);
+  if (mappedBytes.hasError()) {
+    // A size mismatch between the map request and the buffer is reported here rather than
+    // raising a validation error; never memcpy from it.
+    (void)device->adapterDevice().unmapBuffer(std::move(mapResult.mapping));
     return bitmap;
   }
+  const uint8_t* mapped = mappedBytes.result().data();
 
   // Strip row padding and unpremultiply alpha so the consumer gets a tightly
   // packed *straight-alpha* RGBA buffer. `GeoEncoder::fillPath` premultiplies
@@ -7412,7 +7409,7 @@ static RendererBitmap ReadGeodeTextureSnapshot(const std::shared_ptr<geode::Geod
   const bool sourceIsBgra = IsBgraTextureFormat(format);
   for (uint32_t y = 0; y < height; ++y) {
     if (shouldCancel && shouldCancel()) {
-      readback.get().unmap();
+      (void)device->adapterDevice().unmapBuffer(std::move(mapResult.mapping));
       return {};
     }
     const uint8_t* srcRow = mapped + static_cast<size_t>(y) * bytesPerRow;
@@ -7452,7 +7449,7 @@ static RendererBitmap ReadGeodeTextureSnapshot(const std::shared_ptr<geode::Geod
       dstRow[x * 4 + 3] = srcA;
     }
   }
-  readback.get().unmap();
+  (void)device->adapterDevice().unmapBuffer(std::move(mapResult.mapping));
   return bitmap;
 }
 

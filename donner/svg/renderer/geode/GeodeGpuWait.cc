@@ -25,7 +25,7 @@ bool DeclareDeviceLostAfterWaitTimeout(GeodeDeviceLostState& state, GpuWaitSite 
 }
 
 GpuWaitResult BoundedGpuWait(const std::function<bool()>& pollOnce,
-                             std::chrono::milliseconds timeout,
+                             std::chrono::microseconds timeout,
                              std::chrono::microseconds pollInterval,
                              const GpuWaitTestHooks& testHooks) {
   const auto now = [&testHooks]() {
