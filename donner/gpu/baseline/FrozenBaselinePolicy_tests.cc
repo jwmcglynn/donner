@@ -126,6 +126,24 @@ TEST(FrozenBaselinePolicyTests, TheFailingNoDeviceMessageExplainsWhySkippingWasN
   EXPECT_THAT(message, HasSubstr("disabled the gate"));
 }
 
+TEST(FrozenBaselinePolicyTests, TheSlugIsOneDirectoryNamePerAdapter) {
+  // The name the frozen pixels are filed under. Both the wgpu capture that writes those
+  // directories and the per-backend slices that read them derive it from here, so a disagreement
+  // would send one of them looking in a directory the other never writes.
+  EXPECT_EQ(AdapterSlug("Apple M1 Pro", "Metal"), "apple_m1_pro_metal");
+
+  // Every run of non-alphanumerics collapses to a single underscore, and no separator is left
+  // dangling at either end, so one adapter resolves to one directory on every platform.
+  EXPECT_EQ(AdapterSlug("llvmpipe (LLVM 21.1.7, 128 bits)", "Vulkan"),
+            "llvmpipe_llvm_21_1_7_128_bits_vulkan");
+  EXPECT_EQ(AdapterSlug("  spaced  out  ", "Metal"), "spaced_out_metal");
+
+  // A driver reporting nothing usable still resolves to a name, so the caller reports a missing
+  // directory rather than building a path with an empty component in it.
+  EXPECT_EQ(AdapterSlug("", ""), "unknown_adapter");
+  EXPECT_EQ(AdapterSlug("///", "---"), "unknown_adapter");
+}
+
 TEST(FrozenBaselinePolicyTests, TheMessageNamesTheDirectoryToCommit) {
   const std::string message = UnbaselinedAdapterMessage("Example GPU", "Metal", "example_gpu_metal",
                                                         "/outputs/example_gpu_metal", "",

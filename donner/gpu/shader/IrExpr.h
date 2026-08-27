@@ -307,12 +307,6 @@ ShaderResult<IrExpr> ConstructVector(const IrType& target, std::vector<IrExpr> a
                                      const RcString& label = "construct");
 
 /**
- * Matrix constructor: `mat4x4f(c0, c1, c2, c3)` from four vec4f columns.
- *
- * @param columns The four column vectors.
- * @param label Diagnostic label.
- */
-/**
  * `mat2x2<f32>` constructor from two vec2<f32> columns.
  *
  * @param columns Exactly two vec2<f32> columns, in column-major order.
@@ -321,6 +315,12 @@ ShaderResult<IrExpr> ConstructVector(const IrType& target, std::vector<IrExpr> a
 ShaderResult<IrExpr> ConstructMat2x2f(std::vector<IrExpr> columns,
                                       const RcString& label = RcString());
 
+/**
+ * Matrix constructor: `mat4x4f(c0, c1, c2, c3)` from four vec4f columns.
+ *
+ * @param columns The four column vectors.
+ * @param label Diagnostic label.
+ */
 ShaderResult<IrExpr> ConstructMat4x4f(std::vector<IrExpr> columns,
                                       const RcString& label = "mat4x4f");
 

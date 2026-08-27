@@ -124,7 +124,6 @@ public:
   /// `vec2<u32>` convenience factory.
   static IrType Vec2u() { return Vec2(ScalarKind::U32); }
 
-  /// `mat4x4<f32>` type.
   /// `mat2x2<f32>` type.
   static IrType Mat2x2f();
 

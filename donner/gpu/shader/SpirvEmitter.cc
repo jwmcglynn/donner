@@ -64,7 +64,6 @@ constexpr uint32_t kOpMemberDecorate = 72;
 constexpr uint32_t kOpVectorExtractDynamic = 77;
 constexpr uint32_t kOpVectorShuffle = 79;
 constexpr uint32_t kOpCompositeConstruct = 80;
-constexpr uint32_t kOpDot = 148;
 constexpr uint32_t kOpCompositeExtract = 81;
 constexpr uint32_t kOpSampledImage = 86;
 constexpr uint32_t kOpImageSampleImplicitLod = 87;
@@ -94,6 +93,7 @@ constexpr uint32_t kOpFRem = 140;
 constexpr uint32_t kOpVectorTimesScalar = 142;
 constexpr uint32_t kOpMatrixTimesVector = 145;
 constexpr uint32_t kOpMatrixTimesMatrix = 146;
+constexpr uint32_t kOpDot = 148;
 constexpr uint32_t kOpLogicalEqual = 164;
 constexpr uint32_t kOpLogicalNotEqual = 165;
 constexpr uint32_t kOpLogicalOr = 166;
@@ -227,15 +227,18 @@ uint32_t SwizzleComponentIndex(char component) {
   }
 }
 
-/// True if \p type is or contains a matrix (the struct member holding it needs ColMajor and
-/// MatrixStride decorations in laid-out buffer types).
-bool ContainsMatrix(const IrType& type) {
+/// Column stride, in bytes, of the matrix \p type is or contains, or nullopt when it holds none.
+///
+/// A struct member holding a matrix needs ColMajor and MatrixStride decorations in a laid-out
+/// buffer type, and the stride is the column's alignment: 8 for mat2x2f's vec2f columns, 16 for
+/// mat4x4f's vec4f columns. One value for both would decorate one of them wrongly.
+std::optional<uint32_t> MatrixColumnStride(const IrType& type) {
   switch (type.kind()) {
-    case IrType::Kind::Matrix2x2f:
-    case IrType::Kind::Matrix4x4f: return true;
+    case IrType::Kind::Matrix2x2f: return 8;
+    case IrType::Kind::Matrix4x4f: return 16;
     case IrType::Kind::SizedArray:
-    case IrType::Kind::RuntimeArray: return ContainsMatrix(type.elementType());
-    default: return false;
+    case IrType::Kind::RuntimeArray: return MatrixColumnStride(type.elementType());
+    default: return std::nullopt;
   }
 }
 
@@ -427,6 +430,11 @@ private:
   uint32_t laidStructTypeId(const IrType& type, AddressSpace space);
   /// Block-decorated buffer root struct (distinct from the non-Block laid-out type).
   uint32_t blockStructId(const IrType& structType, AddressSpace space);
+
+  /// Emits the Offset decoration for every member of \p structId, plus ColMajor and the member's
+  /// own MatrixStride wherever the member is or contains a matrix.
+  void decorateStructMembers(uint32_t structId, std::span<const IrType::Member> members,
+                             const StructLayout& layout);
   /// Synthesized Block struct wrapping a runtime-array storage buffer root at member 0.
   uint32_t runtimeArrayBlockId(uint32_t runtimeArrayTypeId);
 
@@ -891,17 +899,23 @@ uint32_t Emitter::laidStructTypeId(const IrType& type, AddressSpace space) {
   std::vector<uint32_t> operands = {id};
   operands.insert(operands.end(), memberIds.begin(), memberIds.end());
   InstrV(globals_, kOpTypeStruct, operands);
+  decorateStructMembers(id, members, layout.result());
+  typeIds_[key] = id;
+  return id;
+}
+
+void Emitter::decorateStructMembers(uint32_t structId, std::span<const IrType::Member> members,
+                                    const StructLayout& layout) {
   for (size_t i = 0; i < members.size(); ++i) {
     const uint32_t memberIndex = static_cast<uint32_t>(i);
     Instr(decorations_, kOpMemberDecorate,
-          {id, memberIndex, kDecorationOffset, layout.result().members[i].offsetBytes});
-    if (ContainsMatrix(members[i].type)) {
-      Instr(decorations_, kOpMemberDecorate, {id, memberIndex, kDecorationColMajor});
-      Instr(decorations_, kOpMemberDecorate, {id, memberIndex, kDecorationMatrixStride, 16});
+          {structId, memberIndex, kDecorationOffset, layout.members[i].offsetBytes});
+    if (const std::optional<uint32_t> stride = MatrixColumnStride(members[i].type)) {
+      Instr(decorations_, kOpMemberDecorate, {structId, memberIndex, kDecorationColMajor});
+      Instr(decorations_, kOpMemberDecorate,
+            {structId, memberIndex, kDecorationMatrixStride, *stride});
     }
   }
-  typeIds_[key] = id;
-  return id;
 }
 
 uint32_t Emitter::blockStructId(const IrType& structType, AddressSpace space) {
@@ -923,15 +937,7 @@ uint32_t Emitter::blockStructId(const IrType& structType, AddressSpace space) {
   operands.insert(operands.end(), memberIds.begin(), memberIds.end());
   InstrV(globals_, kOpTypeStruct, operands);
   Instr(decorations_, kOpDecorate, {id, kDecorationBlock});
-  for (size_t i = 0; i < members.size(); ++i) {
-    const uint32_t memberIndex = static_cast<uint32_t>(i);
-    Instr(decorations_, kOpMemberDecorate,
-          {id, memberIndex, kDecorationOffset, layout.result().members[i].offsetBytes});
-    if (ContainsMatrix(members[i].type)) {
-      Instr(decorations_, kOpMemberDecorate, {id, memberIndex, kDecorationColMajor});
-      Instr(decorations_, kOpMemberDecorate, {id, memberIndex, kDecorationMatrixStride, 16});
-    }
-  }
+  decorateStructMembers(id, members, layout.result());
   typeIds_[key] = id;
   return id;
 }

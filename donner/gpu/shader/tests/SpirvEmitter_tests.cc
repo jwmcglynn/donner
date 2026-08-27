@@ -27,6 +27,7 @@ using testing::ElementsAre;
 using testing::HasSubstr;
 using testing::IsSupersetOf;
 using testing::SizeIs;
+using testing::UnorderedElementsAre;
 
 namespace donner::gpu::shader {
 namespace {
@@ -749,6 +750,44 @@ TEST(SpirvEmitterTests, UniformBlockCarriesOffsetsMatrixAndArrayStrideDecoration
   ASSERT_THAT(planesTypeId, testing::Not(testing::Eq(0u)));
   EXPECT_THAT(FindDecoration(instructions, planesTypeId, kDecorationArrayStride),
               testing::Optional(ElementsAre(16u)));
+}
+
+/// A storage block holding both matrix types. mat2x2f is function-local in the shipped programs,
+/// so nothing else reaches the buffer-layout path for it.
+IrModule BuildMatrixBlockModule() {
+  ModuleBuilder builder;
+  const IrType axesStruct =
+      T(IrType::Struct("Axes", {{"axes", IrType::Mat2x2f()}, {"mvp", IrType::Mat4x4f()}}));
+  OK(builder.addReadOnlyStorageBuffer(0, 0, "shapes", T(IrType::RuntimeArray(axesStruct))));
+  {
+    auto fn = Fn(builder.createVertexEntryPoint(
+        "vs_test",
+        {IrParam{"vertex_index", IrType::U32(), std::nullopt, BuiltinInput::VertexIndex}},
+        {IrOutputMember{"clip_pos", IrType::Vec4f(), std::nullopt, BuiltinOutput::Position}}));
+    const IrExpr shape = V(Index(V(fn.ref("shapes")), V(fn.ref("vertex_index"))));
+    const IrExpr axes = V(Member(shape, "axes"));
+    const IrExpr mapped = V(Mul(axes, V(Index(axes, LiteralU32(0u)))));
+    OK(fn.returnOutputs({V(
+        Mul(V(Member(shape, "mvp")),
+            V(ConstructVector(IrType::Vec4f(), {mapped, LiteralF32(0.0f), LiteralF32(1.0f)}))))}));
+    OK(fn.finish());
+  }
+  return BuildOrFail(builder);
+}
+
+TEST(SpirvEmitterTests, EachMatrixMemberCarriesItsOwnMatrixStride) {
+  const std::vector<SpvInstruction> instructions = Scan(EmitOrFail(BuildMatrixBlockModule()));
+
+  std::vector<uint32_t> strides;
+  for (const SpvInstruction& instruction : WithOpcode(instructions, kOpMemberDecorate)) {
+    if (instruction.operands.size() >= 4 && instruction.operands[2] == kDecorationMatrixStride) {
+      strides.push_back(instruction.operands[3]);
+    }
+  }
+
+  // The stride is the matrix's column alignment: 8 for mat2x2f's vec2f columns, 16 for mat4x4f's
+  // vec4f ones. A single hardcoded value would decorate both the same and misdescribe one.
+  EXPECT_THAT(strides, UnorderedElementsAre(8u, 16u));
 }
 
 TEST(SpirvEmitterTests, StorageBufferGetsNonWritableAndSynthesizedBlockWrapper) {

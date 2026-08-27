@@ -70,9 +70,10 @@ constexpr uint32_t kBytesPerRow = kBaselineSize * 4;  // 1024; already 256-byte 
 /// C++ mirror of the shader's 288-byte Uniforms struct (layout anchored by the shader IR layout
 /// tests; field order matches slug_fill/the solid-fill IR program).
 
-/// Renders the shared baseline scene through the production wgpu path as a black box (the exact
-/// BaselineCaptureTool.cc flow: GeodeDevice::CreateHeadless + GeoEncoder + mapped readback) and
-/// returns the RGBA8 pixels, or empty on failure.
+/// Renders the shared baseline scene through the production wgpu path as a black box (the same
+/// flow //donner/gpu/baseline:capture_baselines uses to write the frozen corpus:
+/// GeodeDevice::CreateHeadless + GeoEncoder + mapped readback) and returns the RGBA8 pixels, or
+/// empty on failure.
 std::optional<std::vector<uint8_t>> RenderWgpuBaseline() {
   auto device = geode::GeodeDevice::CreateHeadless();
   if (!device) {
