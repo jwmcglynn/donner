@@ -157,10 +157,22 @@ public:
   [[nodiscard]] Result<RecordedSubpassDependencyForTest> lastRenderPassEntryDependencyForTest()
       const;
 
-  /// Makes the next internal texture upload report failure after it has recorded its
-  /// transitions, so a test can prove a failed upload leaves nothing staged behind. Test seam;
-  /// the upload's Vulkan work is still recorded and submitted, only its result is replaced.
-  void failNextTextureUploadForTest();
+  /// Where an injected upload failure happens, which is what decides whether the transitions it
+  /// recorded describe anything the GPU will run.
+  enum class UploadFailureModeForTest : uint8_t {
+    /// The upload fails before anything reaches the queue, so its recorded work never runs.
+    BeforeSubmit,
+    /// The submission reaches the queue and the wait for it reports a timeout, so its recorded
+    /// work is still pending and will run.
+    AfterSubmit,
+  };
+
+  /// Makes the next internal texture upload report failure at \p mode, so a test can prove what
+  /// the tracker is left holding in each case. Test seam; the upload's Vulkan work is recorded
+  /// either way, only its reported result is replaced.
+  ///
+  /// @param mode Where the injected failure happens.
+  void failNextTextureUploadForTest(UploadFailureModeForTest mode);
 
   /// Message of the most recent asynchronous Vulkan failure observed while polling or waiting
   /// on fences (e.g. VK_ERROR_DEVICE_LOST), or an empty string if none occurred.

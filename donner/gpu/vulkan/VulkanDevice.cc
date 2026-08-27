@@ -1166,8 +1166,8 @@ struct VulkanDevice::Impl {
   /// observation only; nothing in the backend reads these back.
   std::vector<RecordedImageBarrierForTest> recordedBarriers;
   std::optional<RecordedSubpassDependencyForTest> lastEntryDependency;
-  /// Set by the test seam; makes the next internal upload report failure after staging.
-  bool failNextUpload = false;
+  /// Set by the test seam; makes the next internal upload report failure at the named point.
+  std::optional<UploadFailureModeForTest> uploadFailureMode;
 
   /// Destroys the transient objects of a staged upload, in reverse creation order.
   /// @param fence Upload fence, or null.
@@ -1194,7 +1194,7 @@ struct VulkanDevice::Impl {
   /// @param fence Set to the created fence.
   /// @param objectsStillInUse Set when the submission is still pending after the timeout.
   Status submitAndWaitTextureUpload(VkCommandBuffer commandBuffer, VkFence& fence,
-                                    bool& objectsStillInUse);
+                                    bool& objectsStillInUse, bool& reachedQueue);
 
   /// Destroys the Vulkan buffer backing \p slotIndex, if any.
   /// @param slotIndex Buffer slot.
@@ -1463,8 +1463,8 @@ VulkanDevice::lastRenderPassEntryDependencyForTest() const {
   return *impl_->lastEntryDependency;
 }
 
-void VulkanDevice::failNextTextureUploadForTest() {
-  impl_->failNextUpload = true;
+void VulkanDevice::failNextTextureUploadForTest(UploadFailureModeForTest mode) {
+  impl_->uploadFailureMode = mode;
 }
 
 std::string VulkanDevice::lastErrorForTest() const {
@@ -2189,7 +2189,7 @@ void VulkanDevice::Impl::recordTextureUploadCopy(VkCommandBuffer commandBuffer,
 }
 
 Status VulkanDevice::Impl::submitAndWaitTextureUpload(VkCommandBuffer commandBuffer, VkFence& fence,
-                                                      bool& objectsStillInUse) {
+                                                      bool& objectsStillInUse, bool& reachedQueue) {
   VkFenceCreateInfo fenceInfo = {};
   fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
   if (const VkResult result = api->vkCreateFence(device, &fenceInfo, nullptr, &fence);
@@ -2205,6 +2205,17 @@ Status VulkanDevice::Impl::submitAndWaitTextureUpload(VkCommandBuffer commandBuf
       result != VK_SUCCESS) {
     return VkError("vkQueueSubmit (writeTexture)", result);
   }
+  // Past this point the work is the queue's, and it will run whatever this call reports.
+  reachedQueue = true;
+
+  if (uploadFailureMode == UploadFailureModeForTest::AfterSubmit) {
+    // Test seam: stand in for a wait that times out on a submission the queue has accepted.
+    uploadFailureMode.reset();
+    objectsStillInUse = true;
+    return GpuError{GpuErrorType::InvalidState,
+                    "writeTexture: injected post-submit upload timeout"};
+  }
+
   if (const VkResult result =
           api->vkWaitForFences(device, 1, &fence, VK_TRUE, kUploadFenceTimeoutNs);
       result != VK_SUCCESS) {
@@ -2275,16 +2286,27 @@ Status VulkanDevice::onWriteTexture(uint32_t slotIndex, std::span<const uint8_t>
     return VkError("vkBeginCommandBuffer", result);
   }
 
-  // Every failure below has to leave the tracker exactly as it was. A transition staged here and
-  // not discarded would be promoted by the next unrelated successful submission's commit, and
-  // every later barrier for this texture would then be computed from a state the GPU never
-  // reached. The guard covers every exit, including ones added later.
+  // What the tracker should be left holding depends on where this stops, so the guard decides by
+  // where it got to rather than by whether it succeeded.
+  //
+  // Before the submission reaches the queue, the recorded transitions describe work that will
+  // never run: discarding them is what stops the next unrelated successful submission's commit
+  // from promoting a state the GPU never reached.
+  //
+  // Once the queue has accepted the submission, the opposite is true. The upload runs whether or
+  // not this call could wait for it, and the single in-order queue puts it ahead of every later
+  // submission, so the layout it leaves behind is exactly what those submissions' barriers will
+  // meet. Discarding then would make the tracker describe a state the image is not in - the
+  // mirror of the phantom the discard exists to prevent. A queue that never drains at all is a
+  // lost device, which resets tracking on its own.
   struct StagedUploadGuard {
-    Impl* impl = nullptr;    //!< Device whose staged state this guards.
-    bool committed = false;  //!< Set once the upload actually executed.
+    Impl* impl = nullptr;       //!< Device whose staged state this guards.
+    bool reachedQueue = false;  //!< Whether the queue accepted the submission.
 
     ~StagedUploadGuard() {
-      if (!committed) {
+      if (reachedQueue) {
+        impl->syncStates.commitStaged();
+      } else {
         impl->syncStates.discardStaged();
       }
     }
@@ -2298,17 +2320,17 @@ Status VulkanDevice::onWriteTexture(uint32_t slotIndex, std::span<const uint8_t>
     return VkError("vkEndCommandBuffer", result);
   }
 
-  if (impl.failNextUpload) {
+  if (impl.uploadFailureMode == UploadFailureModeForTest::BeforeSubmit) {
     // Test seam: fail exactly where a real end-of-recording or submit failure would, which is
-    // after the transitions have been staged and before anything commits them.
-    impl.failNextUpload = false;
+    // after the transitions have been staged and before anything reaches the queue.
+    impl.uploadFailureMode.reset();
     cleanup();
-    return GpuError{GpuErrorType::InvalidState, "writeTexture: injected upload failure"};
+    return GpuError{GpuErrorType::InvalidState, "writeTexture: injected pre-submit failure"};
   }
 
   bool objectsStillInUse = false;
-  const Status submitStatus =
-      impl.submitAndWaitTextureUpload(commandBuffer, fence, objectsStillInUse);
+  const Status submitStatus = impl.submitAndWaitTextureUpload(
+      commandBuffer, fence, objectsStillInUse, stagedUploadGuard.reachedQueue);
   if (submitStatus.hasError()) {
     if (!objectsStillInUse) {
       cleanup();
@@ -2316,9 +2338,8 @@ Status VulkanDevice::onWriteTexture(uint32_t slotIndex, std::span<const uint8_t>
     return submitStatus;
   }
 
-  // The upload executed, so the transitions it recorded are now the texture's real state.
-  impl.syncStates.commitStaged();
-  stagedUploadGuard.committed = true;
+  // The guard commits on the way out: the queue took this submission, so its transitions are
+  // the texture's real state.
   cleanup();
   return OkStatus();
 }

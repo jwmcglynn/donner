@@ -92,7 +92,7 @@ TEST_F(VulkanResourceStateDeviceTest, AFailedUploadLeavesNoStateForALaterSubmitT
   ASSERT_EQ(unwrap(device_->trackedTextureLayoutForTest(written), "layout before"),
             VulkanDevice::TrackedTextureLayout::Undefined);
 
-  device_->failNextTextureUploadForTest();
+  device_->failNextTextureUploadForTest(VulkanDevice::UploadFailureModeForTest::BeforeSubmit);
   EXPECT_TRUE(
       device_->writeTexture(written, uploadBytes(), uploadLayout(), Extent2d{kExtent, kExtent})
           .hasError())
@@ -107,6 +107,46 @@ TEST_F(VulkanResourceStateDeviceTest, AFailedUploadLeavesNoStateForALaterSubmitT
   EXPECT_EQ(unwrap(device_->trackedTextureLayoutForTest(written), "layout after"),
             VulkanDevice::TrackedTextureLayout::Undefined)
       << "the failed upload never ran, so nothing it staged may become the texture's real state";
+}
+
+TEST_F(VulkanResourceStateDeviceTest, AnUploadTheQueueTookKeepsItsStateWhenTheWaitTimesOut) {
+  // The mirror of the test above: here the submission reaches the queue and only the wait for it
+  // fails, so the upload still runs and the image really does end up in its post-upload layout.
+  // Discarding then would leave the tracker describing a state the image is not in.
+  Texture written = makeTexture("written", TextureUsage::CopyDst | TextureUsage::CopySrc);
+  Texture destination = makeTexture("destination", TextureUsage::CopyDst | TextureUsage::CopySrc);
+
+  device_->failNextTextureUploadForTest(VulkanDevice::UploadFailureModeForTest::AfterSubmit);
+  EXPECT_TRUE(
+      device_->writeTexture(written, uploadBytes(), uploadLayout(), Extent2d{kExtent, kExtent})
+          .hasError())
+      << "the seam must report the wait over an accepted submission as having timed out";
+
+  const size_t before = barriersFor(written.slotIndex()).size();
+
+  // A later submission reading that image. The queue is in order, so this meets the layout the
+  // upload left behind, and its barrier has to be derived from that.
+  std::unique_ptr<CommandEncoder> encoder =
+      unwrap(device_->createCommandEncoder(), "createCommandEncoder");
+  ASSERT_FALSE(encoder
+                   ->copyTextureToTexture(written, destination, Extent2d{kExtent, kExtent},
+                                          Origin2d{0, 0}, Origin2d{0, 0})
+                   .hasError());
+  Result<CommandBuffer> commands = encoder->finish();
+  ASSERT_FALSE(commands.hasError()) << commands.error();
+  Result<uint64_t> serial = device_->submit(std::move(commands).result());
+  ASSERT_FALSE(serial.hasError()) << serial.error();
+  ASSERT_TRUE(device_->waitForSerial(serial.result(), /*timeoutSeconds=*/30.0));
+
+  const std::vector<VulkanDevice::RecordedImageBarrierForTest> barriers =
+      barriersFor(written.slotIndex());
+  ASSERT_GT(barriers.size(), before);
+  const VulkanDevice::RecordedImageBarrierForTest& next = barriers.back();
+  EXPECT_EQ(next.oldLayout, int32_t{VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL})
+      << "the queued upload left the image in its post-upload layout, not an undefined one";
+  EXPECT_TRUE((next.srcAccess & VK_ACCESS_TRANSFER_WRITE_BIT) != 0)
+      << "the upload's write still has to be made available to the copy that reads it";
+  EXPECT_EQ(next.srcStage, uint32_t{VK_PIPELINE_STAGE_TRANSFER_BIT});
 }
 
 TEST_F(VulkanResourceStateDeviceTest, ThePassEntryEdgeCoversAnAttachmentThatIsNotTheLast) {
