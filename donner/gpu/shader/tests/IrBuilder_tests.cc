@@ -114,6 +114,8 @@ TEST(IrExprTests, MulSupportsMatrixAndScalarVectorForms) {
   const IrExpr remainder = GetShaderResultOrFail(Mod(U32Val(), LiteralU32(3u)), LiteralF32(0));
   EXPECT_EQ(remainder.type(), IrType::U32());
   EXPECT_THAT(Mod(F32Val(), F32Val()), IsShaderError(HasSubstr("matching integer scalars")));
+  // A new operator has to reach the serializer too, or it stringifies as nothing at all.
+  EXPECT_THAT(remainder.toString(), HasSubstr("mod("));
 
   // dot collapses to a scalar; normalize keeps the vector's type.
   const IrExpr dotted =

@@ -198,6 +198,7 @@ std::string IrExpr::toString() const {
         case BinaryOp::Sub: result = "sub"; break;
         case BinaryOp::Mul: result = "mul"; break;
         case BinaryOp::Div: result = "div"; break;
+        case BinaryOp::Mod: result = "mod"; break;
         case BinaryOp::Lt: result = "lt"; break;
         case BinaryOp::Le: result = "le"; break;
         case BinaryOp::Gt: result = "gt"; break;
