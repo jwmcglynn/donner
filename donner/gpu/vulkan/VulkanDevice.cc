@@ -28,6 +28,7 @@
 #include "donner/base/Utils.h"
 #include "donner/gpu/GpuLimits.h"
 #include "donner/gpu/vulkan/VulkanLoader.h"
+#include "donner/gpu/vulkan/VulkanResourceState.h"
 
 namespace donner::gpu::vulkan {
 
@@ -347,30 +348,27 @@ VKAPI_ATTR VkBool32 VKAPI_CALL ValidationMessengerCallback(
   return VK_FALSE;
 }
 
-/// Records a conservative full image layout transition: ALL_COMMANDS to ALL_COMMANDS with
-/// memory-availability source access and read+write destination access. Intentionally maximal
-/// (the first implementation is conservative and validation-clean); VK_ACCESS_MEMORY_* flags are
-/// valid with any pipeline stage.
+/// Records the image barrier \p params describes. The parameters come from the resource-state
+/// model, which is where the decision of what to wait on and what to make visible lives; this
+/// only turns that decision into the Vulkan call.
 /// @param api Resolved device entry points.
 /// @param commandBuffer Command buffer to record into.
 /// @param image Image whose layout changes.
-/// @param oldLayout Layout the image is currently in.
-/// @param newLayout Layout the image transitions to.
+/// @param params Derived barrier parameters.
 void RecordImageBarrier(const VulkanApi& api, VkCommandBuffer commandBuffer, VkImage image,
-                        VkImageLayout oldLayout, VkImageLayout newLayout) {
+                        const ImageBarrierParams& params) {
   VkImageMemoryBarrier barrier = {};
   barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-  barrier.srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT;
-  barrier.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
-  barrier.oldLayout = oldLayout;
-  barrier.newLayout = newLayout;
+  barrier.srcAccessMask = params.srcAccess;
+  barrier.dstAccessMask = params.dstAccess;
+  barrier.oldLayout = params.oldLayout;
+  barrier.newLayout = params.newLayout;
   barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
   barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
   barrier.image = image;
   barrier.subresourceRange = FullColorRange();
-  api.vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
-                           VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 0, nullptr, 0, nullptr, 1,
-                           &barrier);
+  api.vkCmdPipelineBarrier(commandBuffer, params.srcStage, params.dstStage, 0, 0, nullptr, 0,
+                           nullptr, 1, &barrier);
 }
 
 /// Returns the Khronos validation layer if the loader enumerates it, otherwise an empty list.
@@ -727,16 +725,16 @@ struct VulkanDevice::Impl {
     VkDeviceSize byteSize = 0;               //!< Creation size in bytes.
   };
 
-  /// An image plus its dedicated allocation and the CPU-tracked current layout. Layout tracking
-  /// at encode time is valid because submissions execute in order on the single queue with
-  /// conservative barriers.
+  /// An image plus its dedicated allocation. Its synchronization state lives in \ref syncStates
+  /// rather than here, because that state is staged during an encode and committed only once the
+  /// submission reached the queue. Tracking at encode time is valid because submissions execute
+  /// in order on the single queue.
   struct TextureRecord {
-    VkImage image = VK_NULL_HANDLE;                           //!< Image handle.
-    VkDeviceMemory memory = VK_NULL_HANDLE;                   //!< Dedicated allocation.
-    TextureFormat format = TextureFormat::RGBA8Unorm;         //!< RHI format (for copy texel math).
-    Extent2d size;                                            //!< Extent in texels.
-    TextureUsage usage = TextureUsage::None;                  //!< RHI usage flags.
-    VkImageLayout currentLayout = VK_IMAGE_LAYOUT_UNDEFINED;  //!< Tracked layout.
+    VkImage image = VK_NULL_HANDLE;                    //!< Image handle.
+    VkDeviceMemory memory = VK_NULL_HANDLE;            //!< Dedicated allocation.
+    TextureFormat format = TextureFormat::RGBA8Unorm;  //!< RHI format (for copy texel math).
+    Extent2d size;                                     //!< Extent in texels.
+    TextureUsage usage = TextureUsage::None;           //!< RHI usage flags.
   };
 
   /// A view of a texture slot; the VkImageView is created once at view creation.
@@ -1089,20 +1087,21 @@ struct VulkanDevice::Impl {
     /// Compute pipeline bound in the active compute pass.
     const ComputePipelineRecord* currentComputePipeline = nullptr;
     std::vector<VkDescriptorSet> boundSets;  //!< Descriptor sets bound by index.
-    /// Layout transitions recorded into this command buffer, committed to the per-texture
-    /// tracked state only after vkQueueSubmit succeeds: a failed encode or submit must not leave
-    /// tracked layouts claiming transitions the GPU never executed (the synchronous
-    /// onWriteTexture upload follows the same commit-after-success pattern).
-    std::map<uint32_t, VkImageLayout> stagedLayouts;
   };
 
-  /// Returns the layout \p textureSlot will be in at this point of the encoding: the staged
-  /// layout when one was recorded, otherwise the tracked layout.
-  /// @param state Encoding state.
-  /// @param textureSlot Texture slot to query.
+  /// Records the barrier that puts \p textureSlot into \p usage, if one is needed, and stages
+  /// the state it leaves behind.
+  ///
+  /// A barrier is recorded when the layout changes, and also when the image was last written
+  /// even though its layout does not change: two compute passes writing the same storage texture
+  /// stay in one layout throughout and still need the second to wait for the first.
+  ///
+  /// @param commandBuffer Command buffer to record into.
+  /// @param textureSlot Texture slot being transitioned.
   /// @param record Texture record backing the slot.
-  VkImageLayout encodedLayoutOf(const EncodingState& state, uint32_t textureSlot,
-                                const TextureRecord& record) const;
+  /// @param usage Usage the texture is about to be put to.
+  void transitionTexture(VkCommandBuffer commandBuffer, uint32_t textureSlot,
+                         const TextureRecord& record, TextureUsageKind usage);
 
   /// Destroys the render passes, framebuffers, and command buffer created for an encoding that
   /// will not be submitted.
@@ -1208,10 +1207,9 @@ struct VulkanDevice::Impl {
   Status encodeCommand(EncodingState& state, std::span<const Command> commands,
                        size_t commandIndex);
 
-  /// Commits the staged layout transitions to the tracked per-texture state, once the GPU is
-  /// guaranteed to execute them.
-  /// @param state Encoding state.
-  void commitStagedLayouts(EncodingState& state);
+  /// The synchronization state of every live texture, staged during an encode and committed
+  /// only once its submission reached the queue.
+  TextureSyncStateTable syncStates;
 
   /// Destroys the transient objects of a staged upload, in reverse creation order.
   /// @param fence Upload fence, or null.
@@ -1219,17 +1217,17 @@ struct VulkanDevice::Impl {
   /// @param staging Staging buffer record.
   void destroyUploadObjects(VkFence fence, VkCommandBuffer commandBuffer, BufferRecord& staging);
 
-  /// Records the staged buffer-to-image copy plus the layout transitions around it, and returns
-  /// the layout the image is left in.
+  /// Records the staged buffer-to-image copy plus the transitions around it, staging the state
+  /// they leave the image in.
   /// @param commandBuffer Command buffer to record into.
+  /// @param textureSlot Slot of the destination texture.
   /// @param texture Destination texture record.
   /// @param stagingBuffer Buffer holding the upload bytes.
   /// @param dataLayout Row layout of the upload bytes.
   /// @param writeSize Destination extent in texels.
-  VkImageLayout recordTextureUploadCopy(VkCommandBuffer commandBuffer, const TextureRecord& texture,
-                                        VkBuffer stagingBuffer,
-                                        const TexelCopyBufferLayout& dataLayout,
-                                        const Extent2d& writeSize);
+  void recordTextureUploadCopy(VkCommandBuffer commandBuffer, uint32_t textureSlot,
+                               const TextureRecord& texture, VkBuffer stagingBuffer,
+                               const TexelCopyBufferLayout& dataLayout, const Extent2d& writeSize);
 
   /// Creates \p fence, submits \p commandBuffer on it, and waits for completion. On timeout the
   /// submission is still pending, so \p objectsStillInUse is set and the caller must not destroy
@@ -1482,7 +1480,7 @@ Result<VulkanDevice::TrackedTextureLayout> VulkanDevice::trackedTextureLayoutFor
                     std::format("texture handle (slot {}) does not name a live Vulkan image",
                                 texture.slotIndex())};
   }
-  switch (record->currentLayout) {
+  switch (impl_->syncStates.stateOf(texture.slotIndex()).layout) {
     case VK_IMAGE_LAYOUT_UNDEFINED: return TrackedTextureLayout::Undefined;
     case VK_IMAGE_LAYOUT_GENERAL: return TrackedTextureLayout::General;
     case VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL: return TrackedTextureLayout::ShaderReadOnly;
@@ -2022,6 +2020,10 @@ void VulkanDevice::Impl::destroyTextureSlot(uint32_t slotIndex) {
   if (TextureRecord* record = FindRecord(textures, slotIndex)) {
     destroyTextureRecord(*record);
     textures[slotIndex].reset();
+    // The slot is recyclable now, and a new image in it has touched nothing; leaving this
+    // texture's state behind would have the next one's first barrier wait on work that ran
+    // against an image that no longer exists.
+    syncStates.forget(slotIndex);
   }
 }
 
@@ -2184,13 +2186,12 @@ void VulkanDevice::Impl::destroyUploadObjects(VkFence fence, VkCommandBuffer com
   destroyBufferRecord(staging);
 }
 
-VkImageLayout VulkanDevice::Impl::recordTextureUploadCopy(VkCommandBuffer commandBuffer,
-                                                          const TextureRecord& texture,
-                                                          VkBuffer stagingBuffer,
-                                                          const TexelCopyBufferLayout& dataLayout,
-                                                          const Extent2d& writeSize) {
-  RecordImageBarrier(*api, commandBuffer, texture.image, texture.currentLayout,
-                     VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+void VulkanDevice::Impl::recordTextureUploadCopy(VkCommandBuffer commandBuffer,
+                                                 uint32_t textureSlot, const TextureRecord& texture,
+                                                 VkBuffer stagingBuffer,
+                                                 const TexelCopyBufferLayout& dataLayout,
+                                                 const Extent2d& writeSize) {
+  transitionTexture(commandBuffer, textureSlot, texture, TextureUsageKind::TransferWrite);
 
   const uint32_t texelSize = TextureFormatBytesPerTexel(texture.format);
   VkBufferImageCopy copyRegion = {};
@@ -2205,14 +2206,9 @@ VkImageLayout VulkanDevice::Impl::recordTextureUploadCopy(VkCommandBuffer comman
 
   // Sampled textures move straight to their descriptor layout; others stay transfer-dst until a
   // later encode transitions them.
-  const VkImageLayout postUploadLayout = HasAllFlags(texture.usage, TextureUsage::Sampled)
-                                             ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
-                                             : VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-  if (postUploadLayout != VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL) {
-    RecordImageBarrier(*api, commandBuffer, texture.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                       postUploadLayout);
+  if (HasAllFlags(texture.usage, TextureUsage::Sampled)) {
+    transitionTexture(commandBuffer, textureSlot, texture, TextureUsageKind::SampledRead);
   }
-  return postUploadLayout;
 }
 
 Status VulkanDevice::Impl::submitAndWaitTextureUpload(VkCommandBuffer commandBuffer, VkFence& fence,
@@ -2302,8 +2298,8 @@ Status VulkanDevice::onWriteTexture(uint32_t slotIndex, std::span<const uint8_t>
     return VkError("vkBeginCommandBuffer", result);
   }
 
-  const VkImageLayout postUploadLayout =
-      impl.recordTextureUploadCopy(commandBuffer, *texture, staging.buffer, dataLayout, writeSize);
+  impl.recordTextureUploadCopy(commandBuffer, slotIndex, *texture, staging.buffer, dataLayout,
+                               writeSize);
 
   if (const VkResult result = impl_->api->vkEndCommandBuffer(commandBuffer); result != VK_SUCCESS) {
     cleanup();
@@ -2320,15 +2316,22 @@ Status VulkanDevice::onWriteTexture(uint32_t slotIndex, std::span<const uint8_t>
     return submitStatus;
   }
 
-  texture->currentLayout = postUploadLayout;
+  // The upload executed, so the transitions it recorded are now the texture's real state.
+  impl.syncStates.commitStaged();
   cleanup();
   return OkStatus();
 }
 
-VkImageLayout VulkanDevice::Impl::encodedLayoutOf(const EncodingState& state, uint32_t textureSlot,
-                                                  const TextureRecord& record) const {
-  const auto it = state.stagedLayouts.find(textureSlot);
-  return it != state.stagedLayouts.end() ? it->second : record.currentLayout;
+void VulkanDevice::Impl::transitionTexture(VkCommandBuffer commandBuffer, uint32_t textureSlot,
+                                           const TextureRecord& record, TextureUsageKind usage) {
+  const TextureSyncState current = syncStates.stateOf(textureSlot);
+  const ImageBarrierParams params = TransitionFor(current, usage);
+  const bool wasWritten = current.access != 0 && params.srcAccess != 0;
+  if (params.oldLayout == params.newLayout && !wasWritten) {
+    return;  // Same layout and nothing to make available: no hazard to order.
+  }
+  RecordImageBarrier(*api, commandBuffer, record.image, params);
+  syncStates.stage(textureSlot, StateAfterUsage(usage));
 }
 
 void VulkanDevice::Impl::destroyTransientEncodingObjects(EncodingState& state) {
@@ -2347,16 +2350,12 @@ void VulkanDevice::Impl::transitionPassBoundTextures(EncodingState& state,
                                                      size_t beginIndex) {
   // An UNDEFINED oldLayout for a never-written texture is valid; its contents are undefined
   // either way.
-  const auto transitionTo = [&](uint32_t textureSlot, VkImageLayout target) {
+  const auto transitionTo = [&](uint32_t textureSlot, TextureUsageKind usage) {
     const TextureRecord* texture = FindRecord(textures, textureSlot);
     if (texture == nullptr) {
       return;  // Submit-time re-validation makes this unreachable.
     }
-    const VkImageLayout current = encodedLayoutOf(state, textureSlot, *texture);
-    if (current != target) {
-      RecordImageBarrier(*api, state.commandBuffer, texture->image, current, target);
-      state.stagedLayouts[textureSlot] = target;
-    }
+    transitionTexture(state.commandBuffer, textureSlot, *texture, usage);
   };
 
   for (size_t scanIndex = beginIndex + 1; scanIndex < commands.size(); ++scanIndex) {
@@ -2374,10 +2373,10 @@ void VulkanDevice::Impl::transitionPassBoundTextures(EncodingState& state,
       continue;  // The SetBindGroupCommand handler below fails closed on this.
     }
     for (const uint32_t sampledSlot : scannedGroup->sampledTextureSlots) {
-      transitionTo(sampledSlot, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+      transitionTo(sampledSlot, TextureUsageKind::SampledRead);
     }
     for (const uint32_t storageSlot : scannedGroup->storageTextureSlots) {
-      transitionTo(storageSlot, VK_IMAGE_LAYOUT_GENERAL);
+      transitionTo(storageSlot, TextureUsageKind::StorageWrite);
     }
   }
 }
@@ -2391,6 +2390,11 @@ Status VulkanDevice::Impl::beginEncodedRenderPass(EncodingState& state,
   std::vector<VkAttachmentReference> colorRefs;
   std::vector<VkImageView> attachmentViews;
   std::vector<VkClearValue> clearValues;
+  // The pass's external dependencies are derived from the same model the barriers are: what last
+  // touched the attachments on the way in, and what their declared usage says can consume them on
+  // the way out. With several attachments the widest of each wins, so the edges cover them all.
+  TextureSyncState entryState;
+  TextureUsage attachmentUsage = TextureUsage::None;
 
   for (size_t i = 0; i < attachmentDescriptors.size(); ++i) {
     const RenderPassColorAttachment& attachment = attachmentDescriptors[i];
@@ -2402,12 +2406,12 @@ Status VulkanDevice::Impl::beginEncodedRenderPass(EncodingState& state,
           std::format("render pass attachment {} does not resolve to a Vulkan image", i)};
     }
 
-    // Conservative explicit transition to the attachment layout; the pass then begins and
-    // ends in COLOR_ATTACHMENT_OPTIMAL.
-    RecordImageBarrier(*api, state.commandBuffer, texture->image,
-                       encodedLayoutOf(state, view->textureSlot, *texture),
-                       VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
-    state.stagedLayouts[view->textureSlot] = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    // Explicit transition to the attachment layout; the pass then begins and ends in
+    // COLOR_ATTACHMENT_OPTIMAL, so the pass itself performs no layout transition.
+    entryState = syncStates.stateOf(view->textureSlot);
+    attachmentUsage = attachmentUsage | texture->usage;
+    transitionTexture(state.commandBuffer, view->textureSlot, *texture,
+                      TextureUsageKind::ColorAttachment);
 
     VkAttachmentDescription attachmentDescription = {};
     attachmentDescription.format = ToVkFormat(texture->format);
@@ -2440,22 +2444,24 @@ Status VulkanDevice::Impl::beginEncodedRenderPass(EncodingState& state,
   subpass.colorAttachmentCount = static_cast<uint32_t>(colorRefs.size());
   subpass.pColorAttachments = colorRefs.data();
 
-  // Conservative explicit external dependencies (the implicit defaults do not cover memory
-  // access): everything-before -> color output, and color output -> everything-after.
+  // Explicit external dependencies; the implicit defaults do not cover memory access. Both come
+  // from the resource-state model, because a precise image barrier behind a pass edge that still
+  // said ALL_COMMANDS would order nothing narrower than before.
+  const SubpassDependencyParams entryDependency = AttachmentEntryDependency(entryState);
+  const SubpassDependencyParams exitDependency = AttachmentExitDependency(attachmentUsage);
   VkSubpassDependency dependencies[2] = {};
   dependencies[0].srcSubpass = VK_SUBPASS_EXTERNAL;
   dependencies[0].dstSubpass = 0;
-  dependencies[0].srcStageMask = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
-  dependencies[0].srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT;
-  dependencies[0].dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-  dependencies[0].dstAccessMask =
-      VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+  dependencies[0].srcStageMask = entryDependency.srcStage;
+  dependencies[0].srcAccessMask = entryDependency.srcAccess;
+  dependencies[0].dstStageMask = entryDependency.dstStage;
+  dependencies[0].dstAccessMask = entryDependency.dstAccess;
   dependencies[1].srcSubpass = 0;
   dependencies[1].dstSubpass = VK_SUBPASS_EXTERNAL;
-  dependencies[1].srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-  dependencies[1].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-  dependencies[1].dstStageMask = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
-  dependencies[1].dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
+  dependencies[1].srcStageMask = exitDependency.srcStage;
+  dependencies[1].srcAccessMask = exitDependency.srcAccess;
+  dependencies[1].dstStageMask = exitDependency.dstStage;
+  dependencies[1].dstAccessMask = exitDependency.dstAccess;
 
   VkRenderPassCreateInfo renderPassInfo = {};
   renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
@@ -2648,10 +2654,8 @@ Status VulkanDevice::Impl::encodeCopyTextureToBuffer(EncodingState& state,
                     copy.layout.offsetBytes)};
   }
 
-  RecordImageBarrier(*api, state.commandBuffer, texture->image,
-                     encodedLayoutOf(state, copy.textureId.slotIndex, *texture),
-                     VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
-  state.stagedLayouts[copy.textureId.slotIndex] = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+  transitionTexture(state.commandBuffer, copy.textureId.slotIndex, *texture,
+                    TextureUsageKind::TransferRead);
 
   const uint32_t texelSize = TextureFormatBytesPerTexel(texture->format);
   VkBufferImageCopy copyRegion = {};
@@ -2756,19 +2760,25 @@ Status VulkanDevice::Impl::encodeEndComputePass(EncodingState& state) {
   if (!state.inComputePass) {
     return GpuError{GpuErrorType::InvalidState, "endComputePass without an active compute pass"};
   }
-  // Storage writes are not automatically visible to later reads. One conservative barrier at the
-  // pass boundary covers every consumer: a later pass, a copy, and a host read of a mapped
-  // buffer after the fence. HOST is named explicitly in both masks because ALL_COMMANDS does not
-  // include the host stage, and every buffer this backend allocates is host-visible, so a
-  // storage buffer a kernel wrote can be read straight from its mapping with no copy in between.
+  // Storage writes are not automatically visible to later reads. The only writable binding the
+  // runtime declares is a write-only storage texture, so a compute pass can write images and
+  // nothing else, and the edge out of it names exactly that: shader writes made available to the
+  // shader and transfer reads that can consume them. The per-image layout transition a later
+  // consumer needs is recorded separately, when that consumer is encoded.
+  //
+  // If a writable storage BUFFER binding kind ever enters the runtime, this edge must gain the
+  // host-visibility half - HOST_READ at the host stage - because every buffer this backend
+  // allocates is host-mapped and persistently mapped, so a kernel write to one would otherwise
+  // never become visible to the mapping the host reads through.
   VkMemoryBarrier barrier = {};
   barrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
   barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-  barrier.dstAccessMask =
-      VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT | VK_ACCESS_HOST_READ_BIT;
+  barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_TRANSFER_READ_BIT;
   api->vkCmdPipelineBarrier(state.commandBuffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                            VK_PIPELINE_STAGE_ALL_COMMANDS_BIT | VK_PIPELINE_STAGE_HOST_BIT, 0, 1,
-                            &barrier, 0, nullptr, 0, nullptr);
+                            VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
+                                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT |
+                                VK_PIPELINE_STAGE_TRANSFER_BIT,
+                            0, 1, &barrier, 0, nullptr, 0, nullptr);
 
   state.inComputePass = false;
   state.currentComputePipeline = nullptr;
@@ -2810,14 +2820,10 @@ Status VulkanDevice::Impl::encodeCopyTextureToTexture(EncodingState& state,
   // Both operands move to their transfer layouts first. The staged layout is recorded for each so
   // a later pass's transition prescan starts from what this copy actually left behind, rather
   // than from the layout the texture was created in.
-  RecordImageBarrier(*api, state.commandBuffer, source->image,
-                     encodedLayoutOf(state, copy.textureSrcId.slotIndex, *source),
-                     VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
-  state.stagedLayouts[copy.textureSrcId.slotIndex] = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-  RecordImageBarrier(*api, state.commandBuffer, destination->image,
-                     encodedLayoutOf(state, copy.textureDstId.slotIndex, *destination),
-                     VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
-  state.stagedLayouts[copy.textureDstId.slotIndex] = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+  transitionTexture(state.commandBuffer, copy.textureSrcId.slotIndex, *source,
+                    TextureUsageKind::TransferRead);
+  transitionTexture(state.commandBuffer, copy.textureDstId.slotIndex, *destination,
+                    TextureUsageKind::TransferWrite);
 
   VkImageCopy copyRegion = {};
   copyRegion.srcSubresource = VkImageSubresourceLayers{VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
@@ -2856,14 +2862,6 @@ Status VulkanDevice::Impl::encodeCommand(EncodingState& state, std::span<const C
   return OkStatus();
 }
 
-void VulkanDevice::Impl::commitStagedLayouts(EncodingState& state) {
-  for (const auto& [textureSlot, layout] : state.stagedLayouts) {
-    if (TextureRecord* texture = FindRecord(textures, textureSlot)) {
-      texture->currentLayout = layout;
-    }
-  }
-}
-
 Status VulkanDevice::onSubmit(uint64_t submissionSerial, uint32_t commandBufferSlotIndex,
                               std::span<const Command> commands) {
   (void)commandBufferSlotIndex;
@@ -2880,6 +2878,9 @@ Status VulkanDevice::onSubmit(uint64_t submissionSerial, uint32_t commandBufferS
   state.commandBuffer = commandBufferResult.result();
   state.boundSets.assign(kMaxBindGroups, VK_NULL_HANDLE);
   const auto failEncoding = [&](Status error) -> Status {
+    // Nothing recorded into this command buffer will execute, so the transitions staged while
+    // encoding it must not survive into the tracked state.
+    impl.syncStates.discardStaged();
     impl.destroyTransientEncodingObjects(state);
     return error;
   };
@@ -2928,9 +2929,8 @@ Status VulkanDevice::onSubmit(uint64_t submissionSerial, uint32_t commandBufferS
     return failEncoding(VkError("vkQueueSubmit", result));
   }
 
-  // The GPU will execute the recorded transitions: commit the staged layouts to the tracked
-  // per-texture state.
-  impl.commitStagedLayouts(state);
+  // The GPU will execute the recorded transitions: commit them to the tracked per-texture state.
+  impl.syncStates.commitStaged();
 
   Impl::InFlightSubmission submission;
   submission.serial = submissionSerial;
