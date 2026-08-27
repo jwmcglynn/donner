@@ -543,20 +543,22 @@ jobs:
               fi
               # Host-compatibility recheck. "Instrumentable" means HOST-
               # instrumentable: a wasm bridge shim is a plain cc_binary by
-              # kind but is target_compatible_with @platforms//:incompatible
-              # on the host, so --skip_incompatible_explicit_targets (set in
-              # --config=ci) silently drops it from the coverage build and
-              # the run is guaranteed to produce an empty report (the #810
-              # false RUN). Only when EVERY remaining instrumentable target
-              # is a cc_binary do we spend a cquery to test host
-              # compatibility; sets containing cc_library/cc_test/wrapper
-              # kinds are host code and run coverage with zero extra cost.
+              # kind, and a platform-gated backend test is a plain cc_test by
+              # kind, but either can be target_compatible_with a platform this
+              # lane does not run, so --skip_incompatible_explicit_targets
+              # (set in --config=ci) silently drops it from the coverage build
+              # and the run produces an empty report (the #810 false RUN, and
+              # its cc_test sibling: a macOS-only backend test selected on the
+              # Linux coverage lane). The recheck therefore runs whenever any
+              # instrumentable target exists - the earlier cc_binary-only
+              # scoping assumed cc_test kinds are always host code, which
+              # platform-gated backend tests falsified. Cost is one cquery.
               # Fail closed: cquery failure, or any label the cquery does
               # not report as incompatible, keeps the coverage run.
-              if [[ -s "$instrumentable_file" ]] && ! grep -qv '^cc_binary rule ' "$instrumentable_file"; then
-                echo "All instrumentable targets are cc_binary; rechecking host compatibility."
+              if [[ -s "$instrumentable_file" ]]; then
+                echo "Rechecking host compatibility of the instrumentable set."
                 compat_file="$work_dir/host-compat.txt"
-                sed 's/^cc_binary rule //' "$instrumentable_file" | tr '\n' ' ' > "$work_dir/compat-labels.txt"
+                sed 's/^[a-z_0-9]* rule //' "$instrumentable_file" | tr '\n' ' ' > "$work_dir/compat-labels.txt"
                 if ( cd "$head_dir" && bazelisk cquery "set($(cat "$work_dir/compat-labels.txt"))" \
                     --output=starlark \
                     --starlark:expr='"{} {}".format(target.label, "HOST_INCOMPATIBLE" if "IncompatiblePlatformProvider" in providers(target) else "HOST_COMPATIBLE")' \

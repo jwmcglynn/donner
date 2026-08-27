@@ -1,5 +1,5 @@
 /// @file
-/// The Metal compute vertical slice: runs the color-matrix kernel emitted from the shader IR
+/// Runs the color-matrix kernel emitted from the shader IR on a real Metal device
 /// through donner::gpu::metal::MetalDevice and compares the destination texels byte-for-byte
 /// against the same result computed on the host.
 
@@ -65,10 +65,21 @@ protected:
     return std::move(result).result();
   }
 
+  /// Rebuilds the device for \p memoryModel and runs the whole color-matrix comparison against it.
+  /// @param memoryModel Memory model the device builds its resources for.
+  void runColorMatrixSlice(MetalDevice::MemoryModel memoryModel);
+
   std::unique_ptr<MetalDevice> device_;
 };
 
-TEST_F(MetalColorMatrixTest, DispatchMatchesTheHostComputedResult) {
+void MetalColorMatrixTest::runColorMatrixSlice(MetalDevice::MemoryModel memoryModel) {
+  device_ = MetalDevice::Create(memoryModel);
+  ASSERT_NE(device_, nullptr);
+  if (memoryModel == MetalDevice::MemoryModel::ForceNonUnified) {
+    ASSERT_FALSE(device_->usesUnifiedMemoryForTest())
+        << "the forced model must actually take the non-unified path";
+  }
+
   shader::ShaderResult<shader::IrModule> irModule = shader::programs::BuildColorMatrixModule();
   ASSERT_FALSE(irModule.hasError()) << irModule.error();
   shader::ShaderResult<std::string> msl = shader::EmitMsl(irModule.result());
@@ -212,6 +223,48 @@ TEST_F(MetalColorMatrixTest, DispatchMatchesTheHostComputedResult) {
           << "texel (" << x << ", " << y << ")";
     }
   }
+}
+
+TEST_F(MetalColorMatrixTest, DispatchMatchesTheHostComputedResult) {
+  runColorMatrixSlice(MetalDevice::MemoryModel::Detected);
+}
+
+TEST_F(MetalColorMatrixTest, UnifiedMemoryPublishesNothingBecauseThereIsOneCopy) {
+  runColorMatrixSlice(MetalDevice::MemoryModel::Detected);
+  if (!device_->usesUnifiedMemoryForTest()) {
+    GTEST_SKIP() << "this machine reports non-unified memory; the forced case below covers it";
+  }
+  EXPECT_EQ(device_->hostWritePublishCountForTest(), 0u)
+      << "both processors address one copy, so there is nothing to publish";
+  EXPECT_EQ(device_->deviceWritePublishCountForTest(), 0u);
+}
+
+// This test is the only one that runs under both memory models. The solid-fill and
+// sub-rectangle-copy tests run under the detected one, which is unified on every machine
+// available to run them, and they reach the host through the same publication the counters below
+// pin - so the mechanism is covered once here rather than repeated per test.
+TEST_F(MetalColorMatrixTest, WithoutUnifiedMemoryEveryChangeIsPublishedInBothDirections) {
+  // The behaviour this fix exists for cannot be observed in the pixels on hardware that
+  // addresses one copy of a resource: the results come out right whether or not anything was
+  // published, which is exactly why a virtualized device caught what every local run missed. So
+  // the assertion is on the publication itself, which is the mechanism the virtualized device
+  // needs and the part that was absent.
+  runColorMatrixSlice(MetalDevice::MemoryModel::ForceNonUnified);
+
+  EXPECT_GT(device_->hostWritePublishCountForTest(), 0u)
+      << "a host write the device never sees published leaves it reading a stale copy";
+  EXPECT_GT(device_->deviceWritePublishCountForTest(), 0u)
+      << "output the host reads must be published back before the submission completes, or the "
+         "read returns whatever the host copy last held";
+}
+
+TEST_F(MetalColorMatrixTest, DispatchMatchesTheHostComputedResultWithoutUnifiedMemory) {
+  // The same comparison built for a device that does not address one copy of a resource from both
+  // processors. On such a device the host's copy of the readback buffer is only whatever was
+  // published to it, so a dispatch whose output is never published reads back as zeros - which
+  // is what a virtualized Metal device shows and what unified-memory hardware hides. Forcing the
+  // model here is what puts that path under test on hardware that would never take it.
+  runColorMatrixSlice(MetalDevice::MemoryModel::ForceNonUnified);
 }
 
 }  // namespace
