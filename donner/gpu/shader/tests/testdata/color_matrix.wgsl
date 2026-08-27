@@ -5,6 +5,7 @@ struct ColorMatrixParams {
   row1: vec4<f32>,
   row2: vec4<f32>,
   row3: vec4<f32>,
+  row4: vec4<f32>,
 }
 
 @group(0) @binding(0) var inputTexture: texture_2d<f32>;
@@ -23,6 +24,7 @@ fn cs_main(@builtin(global_invocation_id) gid: vec3<u32>) {
   let biasIndex = select(0u, 1u, (gid.x > gid.y));
   let biasValue = bias[biasIndex];
   let weighted = ((((params.row0 * source.x) + (params.row1 * source.y)) + (params.row2 * source.z)) + (params.row3 * source.w));
-  let result = saturate((weighted + biasValue));
+  let shifted = (weighted + params.row4);
+  let result = saturate((shifted + biasValue));
   textureStore(outputTexture, coords, result);
 }
