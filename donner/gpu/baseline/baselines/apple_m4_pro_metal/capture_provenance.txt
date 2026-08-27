@@ -1,0 +1,13 @@
+# Written by //donner/gpu/baseline:capture_baselines. Do not edit by hand.
+# Frozen pixels are only comparable against the adapter recorded here.
+schemaVersion: 1
+sourceRevision: 96bebe5c843d2a6e6c4d1ce6c9e3289dd95f71b2
+sourceTreeClean: clean
+rendererPath: wgpu-native Geode production path (GeodeDevice+GeoEncoder)
+rendererBackend: geode
+adapterName: Apple M4 Pro
+adapterBackend: Metal
+adapterType: IntegratedGPU
+targetFormat: RGBA8Unorm premultiplied, transparent background
+targetSize: 256x256
+capturedScenes: solid_fill_baseline,fill_rule_pair,alpha_stack,cubic_extrema,band_grid_stress,degenerate_paths

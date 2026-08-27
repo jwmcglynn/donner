@@ -1,0 +1,166 @@
+load("//build_defs:rules.bzl", "donner_cc_binary", "donner_cc_library", "donner_cc_test", "donner_multi_transitioned_binary", "donner_multi_transitioned_test")
+load("//build_defs:visibility.bzl", "donner_internal_visibility")
+load("//build_defs:package.bzl", "donner_package")
+load("@rules_python//python:defs.bzl", "py_test")
+
+# The frozen pre-cutover baseline: Donner-owned scenes captured from the current production
+# renderer, plus the check-mode targets that re-derive them and diff against what is committed.
+#
+# The split is deliberate. Structural counters come from the CPU path encoder, so they are
+# backend-independent and their freshness gate runs on any machine under plain `bazel test //...`.
+# Pixels come from a real GPU submit, so they are frozen per capture environment and their check
+# runs only where the recorded adapter is live.
+
+filegroup(
+    name = "baselines",
+    srcs = glob(
+        [
+            "baselines/*.json",
+            "baselines/*/*.png",
+            "baselines/*/*.txt",
+        ],
+        allow_empty = True,
+    ),
+    visibility = donner_internal_visibility(),
+)
+
+# The unbaselined-adapter rule, kept apart from the GPU-bound check so it runs on every lane.
+donner_cc_library(
+    name = "frozen_baseline_policy",
+    testonly = 1,
+    srcs = ["FrozenBaselinePolicy.cc"],
+    hdrs = ["FrozenBaselinePolicy.h"],
+    visibility = donner_internal_visibility(),
+)
+
+donner_cc_test(
+    name = "frozen_baseline_policy_tests",
+    srcs = ["FrozenBaselinePolicy_tests.cc"],
+    deps = [
+        ":frozen_baseline_policy",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_library(
+    name = "baseline_corpus",
+    testonly = 1,
+    srcs = ["BaselineCorpus.cc"],
+    hdrs = ["BaselineCorpus.h"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        "//donner/base",
+        "//donner/css",
+        "//donner/gpu:baseline_scene",
+        "//donner/svg/renderer/geode:geode_path_encoder",
+    ],
+)
+
+# The pre-cutover oracle: the current wgpu-backed production renderer, exercised as a black box.
+# Geode-gated because it links the wgpu backend; the transitioned wrappers below make both
+# consumers reachable without passing --config=geode.
+donner_cc_library(
+    name = "wgpu_baseline_capture",
+    testonly = 1,
+    srcs = ["WgpuBaselineCapture.cc"],
+    hdrs = ["WgpuBaselineCapture.h"],
+    target_compatible_with = select({
+        "//donner/svg/renderer/geode:geode_enabled": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":baseline_corpus",
+        "//donner/gpu",
+        "//donner/svg/renderer:renderer_image_io",
+        "//donner/svg/renderer/geode:geo_encoder",
+        "//donner/svg/renderer/geode:geode_device",
+        "//donner/svg/renderer/geode:geode_gpu_wait",
+        "//donner/svg/renderer/geode:geode_wgpu_util",
+        "//third_party/webgpu-cpp:webgpu_cpp",
+    ],
+)
+
+donner_cc_binary(
+    name = "capture_baselines_impl",
+    testonly = 1,
+    srcs = ["CaptureBaselines.cc"],
+    target_compatible_with = select({
+        "//donner/svg/renderer/geode:geode_enabled": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    visibility = ["//visibility:private"],
+    deps = [":wgpu_baseline_capture"],
+)
+
+# Transition wrapper so the capture command needs no --config=geode.
+donner_multi_transitioned_binary(
+    name = "capture_baselines",
+    testonly = 1,
+    dep = ":capture_baselines_impl",
+    renderer_backend = "geode",
+    visibility = donner_internal_visibility(),
+)
+
+donner_cc_test(
+    name = "baseline_pixels_tests_impl",
+    srcs = ["BaselinePixels_tests.cc"],
+    data = [":baselines"],
+    # Bazel scrubs the test environment, so the automated-lane markers have to be named here or
+    # the fail-closed rule can never see one and the gate quietly keeps skipping.
+    env_inherit = [
+        "DONNER_BASELINE_REQUIRE_FROZEN_ADAPTER",
+        "GITHUB_ACTIONS",
+    ],
+    target_compatible_with = select({
+        "//donner/svg/renderer/geode:geode_enabled": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    }),
+    deps = [
+        ":frozen_baseline_policy",
+        ":wgpu_baseline_capture",
+        "//donner/base:base_test_utils",
+        "//donner/editor/tests:bitmap_golden_compare",
+        "//donner/svg/renderer:renderer_interface",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+# Transition wrapper: reachable from plain `bazel test //...` without --config=geode.
+donner_multi_transitioned_test(
+    name = "baseline_pixels_tests",
+    # Sized for software WebGPU, not for the sub-second run a hardware adapter gives: creating the
+    # device compiles every shared pipeline, which dominates the wall clock on llvmpipe.
+    size = "medium",
+    testonly = 1,
+    dep = ":baseline_pixels_tests_impl",
+    opens_gpu_device = True,
+    renderer_backend = "geode",
+)
+
+donner_cc_binary(
+    name = "dump_baseline_counters",
+    testonly = 1,
+    srcs = ["DumpBaselineCounters.cc"],
+    visibility = donner_internal_visibility(),
+    deps = [":baseline_corpus"],
+)
+
+py_test(
+    name = "baseline_counters_tests",
+    size = "small",
+    srcs = ["baseline_counters_tests.py"],
+    args = [
+        "--dump-binary",
+        "$(rootpath :dump_baseline_counters)",
+        "--committed",
+        "$(rootpath baselines/structural_counters.json)",
+    ],
+    data = [
+        "baselines/structural_counters.json",
+        ":baselines",
+        ":dump_baseline_counters",
+    ],
+)
+
+donner_package()

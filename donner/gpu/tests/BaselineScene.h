@@ -11,7 +11,7 @@
 /// appears here.
 
 #include <array>
-#include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <span>
 #include <vector>
@@ -43,22 +43,33 @@ inline Transform2d BaselinePixelFromScene() {
 
 /// (a) A circle approximated with eight quadratic segments; red at 50 percent opacity,
 /// non-zero fill.
+///
+/// The control and end points were transcribed once from the parametric form (center (70, 78),
+/// radius 46, controls at radius / cos(pi/8) so each quadratic's midpoint touches the circle) and
+/// are literals here on purpose. Evaluating them with `std::cos`/`std::sin` at runtime would make
+/// the scene's geometry depend on the host math library, whose last bit is not specified, and the
+/// frozen counters derived from this path are compared for exact equality across platforms.
 inline BaselinePathSpec BaselineCircle() {
-  const Vector2d center(70.0, 78.0);
-  const double radius = 46.0;
-  // Control points sit at radius / cos(pi/8) so each quadratic's midpoint touches the circle.
-  const double controlRadius = radius / std::cos(3.14159265358979323846 / 8.0);
+  /// Control point followed by end point for one of the eight quadratic segments.
+  struct QuadSegment {
+    Vector2d control;
+    Vector2d end;
+  };
+  static constexpr std::array<QuadSegment, 8> kSegments = {{
+      {{116.0, 97.05382386916237}, {102.5269119345812, 110.5269119345812}},
+      {{89.05382386916237, 124.0}, {70.0, 124.0}},
+      {{50.94617613083763, 124.0}, {37.473088065418814, 110.5269119345812}},
+      {{24.0, 97.05382386916239}, {24.0, 78.0}},
+      {{23.999999999999993, 58.94617613083763}, {37.47308806541881, 45.473088065418814}},
+      {{50.9461761308376, 32.000000000000014}, {69.99999999999999, 32.0}},
+      {{89.05382386916239, 32.00000000000001}, {102.52691193458118, 45.47308806541881}},
+      {{115.99999999999999, 58.9461761308376}, {116.0, 77.99999999999999}},
+  }};
 
   PathBuilder builder;
-  const auto pointAt = [&](double angleRadians, double r) {
-    return center + Vector2d(r * std::cos(angleRadians), r * std::sin(angleRadians));
-  };
-  builder.moveTo(pointAt(0.0, radius));
-  for (int segment = 0; segment < 8; ++segment) {
-    const double startAngle = segment * (3.14159265358979323846 / 4.0);
-    const double endAngle = (segment + 1) * (3.14159265358979323846 / 4.0);
-    const double midAngle = (startAngle + endAngle) * 0.5;
-    builder.quadTo(pointAt(midAngle, controlRadius), pointAt(endAngle, radius));
+  builder.moveTo(Vector2d(116.0, 78.0));
+  for (const QuadSegment& segment : kSegments) {
+    builder.quadTo(segment.control, segment.end);
   }
   builder.closePath();
   return BaselinePathSpec{builder.build(), css::RGBA(255, 0, 0, 128), FillRule::NonZero};
@@ -66,20 +77,23 @@ inline BaselinePathSpec BaselineCircle() {
 
 /// (b) A self-intersecting five-point star; semi-transparent blue, even-odd fill (exercises the
 /// even-odd triangle-wave fold on the doubled-coverage core).
+///
+/// The vertices were transcribed once from the parametric form (center (170, 90), radius 62,
+/// angles stepping by 144 degrees from straight up, so every second vertex of a pentagon is
+/// connected) and are literals here for the same reason the circle's are.
 inline BaselinePathSpec BaselineStar() {
-  const Vector2d center(170.0, 90.0);
-  const double radius = 62.0;
+  static constexpr std::array<Vector2d, 5> kVertices = {{
+      {170.0, 28.0},
+      {206.44268564213334, 140.15905365124675},
+      {111.03449598970047, 70.84094634875326},
+      {228.96550401029953, 70.84094634875325},
+      {133.5573143578667, 140.15905365124675},
+  }};
 
   PathBuilder builder;
-  for (int i = 0; i < 5; ++i) {
-    // Connect every second vertex of a pentagon: angles step by 144 degrees.
-    const double angle = -3.14159265358979323846 / 2.0 + i * (4.0 * 3.14159265358979323846 / 5.0);
-    const Vector2d point = center + Vector2d(radius * std::cos(angle), radius * std::sin(angle));
-    if (i == 0) {
-      builder.moveTo(point);
-    } else {
-      builder.lineTo(point);
-    }
+  builder.moveTo(kVertices[0]);
+  for (size_t i = 1; i < kVertices.size(); ++i) {
+    builder.lineTo(kVertices[i]);
   }
   builder.closePath();
   return BaselinePathSpec{builder.build(), css::RGBA(40, 80, 255, 150), FillRule::EvenOdd};

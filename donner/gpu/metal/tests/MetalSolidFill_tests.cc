@@ -25,6 +25,7 @@
 #include "donner/base/Transform.h"
 #include "donner/editor/tests/BitmapGoldenCompare.h"
 #include "donner/gpu/CommandEncoder.h"
+#include "donner/gpu/baseline/FrozenBaselinePolicy.h"
 #include "donner/gpu/metal/MetalDevice.h"
 #include "donner/gpu/shader/MslEmitter.h"
 #include "donner/gpu/shader/programs/SolidFill.h"
@@ -135,7 +136,16 @@ protected:
   void SetUp() override {
     device_ = MetalDevice::Create();
     if (!device_) {
-      GTEST_SKIP() << "No Metal device available";
+      // Same rule the frozen pixel gate uses: a lane that selected this target and then created
+      // no device has disabled the comparison, and reporting that as a pass hides it.
+      const baseline::MissingComparisonDisposition disposition =
+          baseline::DispositionForMissingAdapter(baseline::RunningUnderContinuousIntegration());
+      const std::string message =
+          baseline::NoAdapterMessage("the Metal solid-fill slice", disposition);
+      if (disposition == baseline::MissingComparisonDisposition::FailClosed) {
+        FAIL() << message;
+      }
+      GTEST_SKIP() << message;
     }
   }
 
