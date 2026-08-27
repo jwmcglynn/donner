@@ -116,7 +116,6 @@ enum class NativeSurfaceKind : uint8_t {
   MetalLayer,      //!< Core Animation Metal layer.
   XlibWindow,      //!< X11 display plus window id.
   WaylandSurface,  //!< Wayland display plus surface.
-  Win32Window,     //!< Win32 module instance plus window handle.
   /// CSS selector naming a browser canvas element.
   ///
   /// A browser drives presentation from its own frame loop, so a surface of this kind presents
@@ -135,11 +134,11 @@ struct NativeSurfaceHandle {
   // Exactly the slots \ref kind uses must be populated: a filled slot the kind does not use means
   // the caller and the handle disagree about what this names, which is rejected rather than
   // silently ignored.
-  /// MetalLayer: the layer. XlibWindow: the display. WaylandSurface: the display. Win32Window:
-  /// the module instance. Null for CanvasSelector.
+  /// MetalLayer: the layer. XlibWindow: the display. WaylandSurface: the display. Null for
+  /// CanvasSelector.
   void* display = nullptr;
-  /// XlibWindow: the window id. WaylandSurface: the surface. Win32Window: the window handle.
-  /// Zero for MetalLayer and CanvasSelector.
+  /// XlibWindow: the window id. WaylandSurface: the surface. Zero for MetalLayer and
+  /// CanvasSelector.
   uint64_t window = 0;
   /// CanvasSelector: the selector naming the canvas. Empty for every other kind.
   RcString selector;
