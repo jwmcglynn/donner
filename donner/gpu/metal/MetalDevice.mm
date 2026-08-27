@@ -378,8 +378,9 @@ struct MetalDevice::Impl {
   /// Whether host-visible resources need explicit publication in both directions.
   bool needsExplicitHostCoherency() const { return !unifiedMemory; }
 
-  /// Encodes the blit that publishes every live host-visible resource's GPU-side changes to the
-  /// host copy. Called only where the memory model needs it. @param state Encoding state.
+  /// Publishes every live host-visible resource's device-side changes back to the host copy, for
+  /// a memory model that keeps the two apart. A no-op where the two are one copy.
+  /// @param state Encoding state.
   Status encodeHostCoherencySync(EncodingState& state);
 };
 
@@ -1220,6 +1221,10 @@ void MetalDevice::Impl::attachCompletionHandler(EncodingState& state, uint64_t s
 }
 
 Status MetalDevice::Impl::encodeHostCoherencySync(EncodingState& state) {
+  if (!needsExplicitHostCoherency()) {
+    return OkStatus();  // One copy addressed from both sides; nothing to publish.
+  }
+
   id<MTLBlitCommandEncoder> blitEncoder = [state.commandBuffer blitCommandEncoder];
   if (blitEncoder == nil) {
     return GpuError{GpuErrorType::InvalidState,
@@ -1290,10 +1295,8 @@ Status MetalDevice::onSubmit(uint64_t submissionSerial, uint32_t commandBufferSl
   // there is no encoder left to do it with. It covers every live resource rather than tracking
   // which this stream touched - the cost falls only on the path that already needs the copy, and
   // a missed resource here is silently wrong data rather than a reported failure.
-  if (impl_->needsExplicitHostCoherency()) {
-    if (Status status = impl_->encodeHostCoherencySync(state); status.hasError()) {
-      return failEncoding(std::move(status));
-    }
+  if (Status status = impl_->encodeHostCoherencySync(state); status.hasError()) {
+    return failEncoding(std::move(status));
   }
 
   impl_->attachCompletionHandler(state, submissionSerial);
