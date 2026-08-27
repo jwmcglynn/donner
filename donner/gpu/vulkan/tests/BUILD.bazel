@@ -16,6 +16,18 @@ load("//build_defs:package.bzl", "donner_package")
 # renderer suites - reachable from plain `bazel test //...` without
 # --config=geode. On macOS the impl target is incompatible and the wrapper is
 # skipped.
+# The resource-state model is pure state machinery over Vulkan enums: it opens no device and
+# calls no entry point, so unlike every other test here it runs on every platform rather than
+# only where a Vulkan loader exists.
+donner_cc_test(
+    name = "vulkan_resource_state_tests",
+    srcs = ["VulkanResourceState_tests.cc"],
+    deps = [
+        "//donner/gpu/vulkan:vulkan_resource_state",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
 donner_cc_test(
     name = "vulkan_solid_fill_tests_impl",
     srcs = ["VulkanSolidFill_tests.cc"],
