@@ -85,8 +85,9 @@ ShaderResult<IrModule> BuildColorMatrixModule() {
 
   const IrType vec4f = IrType::Vec4f();
   const IrType paramsType = e(IrType::Struct(
-      "ColorMatrixParams", {IrType::Member{"row0", vec4f}, IrType::Member{"row1", vec4f},
-                            IrType::Member{"row2", vec4f}, IrType::Member{"row3", vec4f}}));
+      "ColorMatrixParams",
+      {IrType::Member{"row0", vec4f}, IrType::Member{"row1", vec4f}, IrType::Member{"row2", vec4f},
+       IrType::Member{"row3", vec4f}, IrType::Member{"row4", vec4f}}));
   const IrType biasArrayType = e(IrType::RuntimeArray(vec4f));
   e.ok(AddBindings(builder, paramsType, biasArrayType));
 
@@ -130,8 +131,12 @@ ShaderResult<IrModule> BuildColorMatrixModule() {
                                     e(Mul(e(Member(params, "row1")), e(Swizzle(source, "y")))))),
                               e(Mul(e(Member(params, "row2")), e(Swizzle(source, "z")))))),
                         e(Mul(e(Member(params, "row3")), e(Swizzle(source, "w"))))))));
+  // The fifth column is a constant added after the weighted sum, not a multiplier: an SVG color
+  // matrix is four rows of five, where the last column shifts each output channel regardless of
+  // the input. A caller with nothing to shift passes zeros, which leaves the result unchanged.
+  const IrExpr shifted = e(fn.addLet("shifted", e(Add(weighted, e(Member(params, "row4"))))));
   const IrExpr result =
-      e(fn.addLet("result", e(CallBuiltin(BuiltinFn::Saturate, {e(Add(weighted, biasValue))}))));
+      e(fn.addLet("result", e(CallBuiltin(BuiltinFn::Saturate, {e(Add(shifted, biasValue))}))));
 
   e.ok(fn.textureStore(outputTexture, coords, result));
   e.ok(fn.finish());
