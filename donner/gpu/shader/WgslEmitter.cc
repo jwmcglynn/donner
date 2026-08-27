@@ -321,26 +321,7 @@ std::string Emitter::exprToWgsl(const IrExpr& expr) {
       return result;
     }
     case IrExpr::Kind::CallBuiltin: {
-      std::string name;
-      switch (node.builtin) {
-        case BuiltinFn::Abs: name = "abs"; break;
-        case BuiltinFn::Min: name = "min"; break;
-        case BuiltinFn::Max: name = "max"; break;
-        case BuiltinFn::Clamp: name = "clamp"; break;
-        case BuiltinFn::Saturate: name = "saturate"; break;
-        case BuiltinFn::Fract: name = "fract"; break;
-        case BuiltinFn::Sqrt: name = "sqrt"; break;
-        case BuiltinFn::Length: name = "length"; break;
-        case BuiltinFn::Dot: name = "dot"; break;
-        case BuiltinFn::Normalize: name = "normalize"; break;
-        case BuiltinFn::Fwidth: name = "fwidth"; break;
-        case BuiltinFn::Round: name = "round"; break;
-        case BuiltinFn::Select: name = "select"; break;
-        case BuiltinFn::TextureSample: name = "textureSample"; break;
-        case BuiltinFn::TextureLoad: name = "textureLoad"; break;
-        case BuiltinFn::TextureDimensions: name = "textureDimensions"; break;
-      }
-      std::string result = name + "(";
+      std::string result = std::string(BuiltinFnName(node.builtin)) + "(";
       for (size_t i = 0; i < node.children.size(); ++i) {
         if (i > 0) {
           result += ", ";

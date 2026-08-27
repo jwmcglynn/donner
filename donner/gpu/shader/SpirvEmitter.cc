@@ -1974,18 +1974,31 @@ uint32_t Emitter::emitSaturateBuiltin(const IrExpr::Node& node, uint32_t typeId)
   return emitExtInst(typeId, kGlslFClamp, {argId, zeroId, oneId});
 }
 
+/// GLSL.std.450 instruction lowering a builtin that takes one argument and returns it unchanged
+/// in shape, or nullopt for a builtin that needs its own emitter.
+std::optional<uint32_t> SingleArgumentGlslInstruction(BuiltinFn fn) {
+  switch (fn) {
+    case BuiltinFn::Fract: return kGlslFract;
+    case BuiltinFn::Sqrt: return kGlslSqrt;
+    case BuiltinFn::Length: return kGlslLength;
+    case BuiltinFn::Normalize: return kGlslNormalize;
+    // WGSL round() mandates round-half-to-even; GLSL.std.450 Round leaves halfway cases
+    // undefined, so RoundEven is the correct lowering.
+    case BuiltinFn::Round: return kGlslRoundEven;
+    default: return std::nullopt;
+  }
+}
+
 uint32_t Emitter::emitMathBuiltin(const IrExpr::Node& node, uint32_t typeId) {
+  if (const std::optional<uint32_t> instruction = SingleArgumentGlslInstruction(node.builtin)) {
+    return emitExtInst(typeId, *instruction, {emitValue(node.children[0])});
+  }
   switch (node.builtin) {
     case BuiltinFn::Abs: return emitAbsBuiltin(node, typeId);
     case BuiltinFn::Min:
     case BuiltinFn::Max: return emitMinMaxBuiltin(node, typeId);
     case BuiltinFn::Clamp: return emitClampBuiltin(node, typeId);
     case BuiltinFn::Saturate: return emitSaturateBuiltin(node, typeId);
-    case BuiltinFn::Fract: return emitExtInst(typeId, kGlslFract, {emitValue(node.children[0])});
-    case BuiltinFn::Sqrt: return emitExtInst(typeId, kGlslSqrt, {emitValue(node.children[0])});
-    case BuiltinFn::Length: return emitExtInst(typeId, kGlslLength, {emitValue(node.children[0])});
-    case BuiltinFn::Normalize:
-      return emitExtInst(typeId, kGlslNormalize, {emitValue(node.children[0])});
     case BuiltinFn::Dot: {
       const uint32_t lhsId = emitValue(node.children[0]);
       const uint32_t rhsId = emitValue(node.children[1]);
@@ -1993,10 +2006,6 @@ uint32_t Emitter::emitMathBuiltin(const IrExpr::Node& node, uint32_t typeId) {
       Instr(functions_, kOpDot, {typeId, valueId, lhsId, rhsId});
       return valueId;
     }
-    case BuiltinFn::Round:
-      // WGSL round() mandates round-half-to-even; GLSL.std.450 Round leaves halfway cases
-      // undefined, so RoundEven is the correct lowering.
-      return emitExtInst(typeId, kGlslRoundEven, {emitValue(node.children[0])});
     default: return 0;
   }
 }

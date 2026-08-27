@@ -63,6 +63,14 @@ enum class BuiltinFn : uint8_t {
   TextureDimensions,  //!< `textureDimensions(texture)`
 };
 
+/**
+ * The builtin's spelling. WGSL, MSL, and the IR's own serialization all use it, because every
+ * builtin in scope is named identically in both target languages.
+ *
+ * @param fn Builtin to name.
+ */
+std::string_view BuiltinFnName(BuiltinFn fn);
+
 /// Ostream output operator, e.g. `clamp`. @param os Output stream. @param value Value to output.
 std::ostream& operator<<(std::ostream& os, BuiltinFn value);
 

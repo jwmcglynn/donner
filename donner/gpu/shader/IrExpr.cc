@@ -107,26 +107,30 @@ std::ostream& operator<<(std::ostream& os, BinaryOp value) {
   return os << "unknown";
 }
 
-std::ostream& operator<<(std::ostream& os, BuiltinFn value) {
-  switch (value) {
-    case BuiltinFn::Abs: return os << "abs";
-    case BuiltinFn::Min: return os << "min";
-    case BuiltinFn::Max: return os << "max";
-    case BuiltinFn::Clamp: return os << "clamp";
-    case BuiltinFn::Saturate: return os << "saturate";
-    case BuiltinFn::Fract: return os << "fract";
-    case BuiltinFn::Sqrt: return os << "sqrt";
-    case BuiltinFn::Length: return os << "length";
-    case BuiltinFn::Dot: return os << "dot";
-    case BuiltinFn::Normalize: return os << "normalize";
-    case BuiltinFn::Fwidth: return os << "fwidth";
-    case BuiltinFn::Round: return os << "round";
-    case BuiltinFn::Select: return os << "select";
-    case BuiltinFn::TextureSample: return os << "textureSample";
-    case BuiltinFn::TextureLoad: return os << "textureLoad";
-    case BuiltinFn::TextureDimensions: return os << "textureDimensions";
+std::string_view BuiltinFnName(BuiltinFn fn) {
+  switch (fn) {
+    case BuiltinFn::Abs: return "abs";
+    case BuiltinFn::Min: return "min";
+    case BuiltinFn::Max: return "max";
+    case BuiltinFn::Clamp: return "clamp";
+    case BuiltinFn::Saturate: return "saturate";
+    case BuiltinFn::Fract: return "fract";
+    case BuiltinFn::Sqrt: return "sqrt";
+    case BuiltinFn::Length: return "length";
+    case BuiltinFn::Dot: return "dot";
+    case BuiltinFn::Normalize: return "normalize";
+    case BuiltinFn::Fwidth: return "fwidth";
+    case BuiltinFn::Round: return "round";
+    case BuiltinFn::Select: return "select";
+    case BuiltinFn::TextureSample: return "textureSample";
+    case BuiltinFn::TextureLoad: return "textureLoad";
+    case BuiltinFn::TextureDimensions: return "textureDimensions";
   }
-  return os << "unknown";
+  return "unknown";
+}
+
+std::ostream& operator<<(std::ostream& os, BuiltinFn value) {
+  return os << BuiltinFnName(value);
 }
 
 std::ostream& operator<<(std::ostream& os, RefKind value) {
@@ -224,25 +228,7 @@ std::string IrExpr::toString() const {
       } else if (node.kind == Kind::CallUser) {
         head = std::format("call({}", node.name.str());
       } else {
-        head = "builtin_";
-        switch (node.builtin) {
-          case BuiltinFn::Abs: head += "abs"; break;
-          case BuiltinFn::Min: head += "min"; break;
-          case BuiltinFn::Max: head += "max"; break;
-          case BuiltinFn::Clamp: head += "clamp"; break;
-          case BuiltinFn::Saturate: head += "saturate"; break;
-          case BuiltinFn::Fract: head += "fract"; break;
-          case BuiltinFn::Sqrt: head += "sqrt"; break;
-          case BuiltinFn::Length: head += "length"; break;
-          case BuiltinFn::Dot: head += "dot"; break;
-          case BuiltinFn::Normalize: head += "normalize"; break;
-          case BuiltinFn::Fwidth: head += "fwidth"; break;
-          case BuiltinFn::Round: head += "round"; break;
-          case BuiltinFn::Select: head += "select"; break;
-          case BuiltinFn::TextureSample: head += "textureSample"; break;
-          case BuiltinFn::TextureLoad: head += "textureLoad"; break;
-          case BuiltinFn::TextureDimensions: head += "textureDimensions"; break;
-        }
+        head = std::format("builtin_{}", BuiltinFnName(node.builtin));
       }
 
       std::string result = node.kind == Kind::CallUser ? head : head + "(";
