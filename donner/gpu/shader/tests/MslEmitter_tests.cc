@@ -43,8 +43,11 @@ TEST(MslEmitterTests, OutputHasNoTrailingWhitespaceOrCr) {
 TEST(MslEmitterTests, ContainsSolidFillSurface) {
   const std::string msl = EmitSolidFillMsl();
 
-  EXPECT_THAT(msl, HasSubstr("vertex vs_main_Output vs_main(vs_main_Input in [[stage_in]], "
+  // The vertex stage builds its geometry from vertex_index, so it takes both builtins as
+  // direct parameters and declares no (empty, and therefore invalid) [[stage_in]] struct.
+  EXPECT_THAT(msl, HasSubstr("vertex vs_main_Output vs_main(uint vertex_index [[vertex_id]], "
                              "uint instance_index [[instance_id]]"));
+  EXPECT_THAT(msl, testing::Not(HasSubstr("struct vs_main_Input")));
   EXPECT_THAT(msl, HasSubstr("fragment fs_main_Output fs_main(fs_main_Input in [[stage_in]]"));
   // The argument-table map from MslBindingMap.h: uniforms at buffer(1), vBandGrid at
   // buffer(12), textures/samplers at their binding indices.
