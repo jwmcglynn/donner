@@ -101,7 +101,12 @@ std::string LoadTigerSvg() {
 /// after its first frame.
 SVGDocument PreparedDocument(const std::string& svg) {
   ParseWarningSink sink = ParseWarningSink::Disabled();
-  auto result = SVGParser::ParseSVG(svg, sink);
+  // The benchmark scenes are first-party documents of up to 10,000 generated shapes, above
+  // the default tree-node cap, which is sized for untrusted input. State this harness's own
+  // budget explicitly so scene size is bounded by the benchmark arguments, not the default.
+  SVGParser::Options options;
+  options.maximumTreeNodes = 16 * 1024;
+  auto result = SVGParser::ParseSVG(svg, sink, options);
   SVGDocument document = std::move(result).result();
   document.setCanvasSize(kCanvasSize.x, kCanvasSize.y);
   RendererUtils::prepareDocumentForRendering(document, /*verbose=*/false, sink);
