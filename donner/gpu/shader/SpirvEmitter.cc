@@ -64,6 +64,7 @@ constexpr uint32_t kOpMemberDecorate = 72;
 constexpr uint32_t kOpVectorExtractDynamic = 77;
 constexpr uint32_t kOpVectorShuffle = 79;
 constexpr uint32_t kOpCompositeConstruct = 80;
+constexpr uint32_t kOpDot = 148;
 constexpr uint32_t kOpCompositeExtract = 81;
 constexpr uint32_t kOpSampledImage = 86;
 constexpr uint32_t kOpImageSampleImplicitLod = 87;
@@ -87,6 +88,9 @@ constexpr uint32_t kOpFMul = 133;
 constexpr uint32_t kOpUDiv = 134;
 constexpr uint32_t kOpSDiv = 135;
 constexpr uint32_t kOpFDiv = 136;
+constexpr uint32_t kOpUMod = 137;
+constexpr uint32_t kOpSRem = 138;
+constexpr uint32_t kOpFRem = 140;
 constexpr uint32_t kOpVectorTimesScalar = 142;
 constexpr uint32_t kOpMatrixTimesVector = 145;
 constexpr uint32_t kOpMatrixTimesMatrix = 146;
@@ -139,6 +143,7 @@ constexpr uint32_t kGlslFClamp = 43;
 constexpr uint32_t kGlslUClamp = 44;
 constexpr uint32_t kGlslSClamp = 45;
 constexpr uint32_t kGlslLength = 66;
+constexpr uint32_t kGlslNormalize = 69;
 
 // Storage classes.
 constexpr uint32_t kStorageClassUniformConstant = 0;
@@ -225,6 +230,7 @@ uint32_t SwizzleComponentIndex(char component) {
 /// MatrixStride decorations in laid-out buffer types).
 bool ContainsMatrix(const IrType& type) {
   switch (type.kind()) {
+    case IrType::Kind::Matrix2x2f:
     case IrType::Kind::Matrix4x4f: return true;
     case IrType::Kind::SizedArray:
     case IrType::Kind::RuntimeArray: return ContainsMatrix(type.elementType());
@@ -272,6 +278,7 @@ uint32_t BinaryOpcode(BinaryOp op, ScalarKind operandKind) {
     case BinaryOp::Sub: return isFloat ? kOpFSub : kOpISub;
     case BinaryOp::Mul: return isFloat ? kOpFMul : kOpIMul;
     case BinaryOp::Div: return SelectByScalarKind(operandKind, kOpFDiv, kOpSDiv, kOpUDiv);
+    case BinaryOp::Mod: return SelectByScalarKind(operandKind, kOpFRem, kOpSRem, kOpUMod);
     case BinaryOp::Lt:
       return SelectByScalarKind(operandKind, kOpFOrdLessThan, kOpSLessThan, kOpULessThan);
     case BinaryOp::Le:
@@ -387,6 +394,8 @@ private:
   uint32_t typeScalar(ScalarKind kind);
   uint32_t typeVector(ScalarKind kind, uint32_t size);
   uint32_t typeBoolVector(uint32_t size);
+  uint32_t typeMatrix2x2f();
+
   uint32_t typeMatrix4x4f();
   uint32_t typeImage2dF32();
   /// Storage-image type for a write-only 2D storage texture, keyed by its SPIR-V image format.
@@ -670,6 +679,16 @@ uint32_t Emitter::typeBoolVector(uint32_t size) {
   return typeVector(ScalarKind::Bool, size);
 }
 
+uint32_t Emitter::typeMatrix2x2f() {
+  const uint32_t columnId = typeVector(ScalarKind::F32, 2);
+  const std::string key = "mat2x2f";
+  if (const uint32_t id = cached(key)) return id;
+  const uint32_t id = newId();
+  Instr(globals_, kOpTypeMatrix, {id, columnId, 2});
+  typeIds_[key] = id;
+  return id;
+}
+
 uint32_t Emitter::typeMatrix4x4f() {
   const uint32_t columnId = typeVector(ScalarKind::F32, 4);
   const std::string key = "mat4x4f";
@@ -753,6 +772,7 @@ uint32_t Emitter::plainTypeId(const IrType& type) {
   switch (type.kind()) {
     case IrType::Kind::Scalar: return typeScalar(type.scalarKind());
     case IrType::Kind::Vector: return typeVector(type.scalarKind(), type.vectorSize());
+    case IrType::Kind::Matrix2x2f: return typeMatrix2x2f();
     case IrType::Kind::Matrix4x4f: return typeMatrix4x4f();
     case IrType::Kind::Texture2dF32: return typeImage2dF32();
     case IrType::Kind::WriteOnlyStorageTexture2d:
@@ -800,6 +820,7 @@ uint32_t Emitter::laidTypeId(const IrType& type, AddressSpace space) {
   switch (type.kind()) {
     case IrType::Kind::Scalar:
     case IrType::Kind::Vector:
+    case IrType::Kind::Matrix2x2f:
     case IrType::Kind::Matrix4x4f:
       // Layout decorations for these live on the enclosing struct member; the types are shared
       // with plain use.
@@ -1806,9 +1827,11 @@ uint32_t Emitter::emitMatrixProduct(const IrExpr::Node& node) {
   const uint32_t rhsId = emitValue(node.children[1]);
   const uint32_t typeId = plainTypeId(node.type);
   const uint32_t valueId = newId();
-  const uint32_t opcode = node.children[1].type().kind() == IrType::Kind::Matrix4x4f
-                              ? kOpMatrixTimesMatrix
-                              : kOpMatrixTimesVector;
+  const IrType::Kind rhsKind = node.children[1].type().kind();
+  const uint32_t opcode =
+      (rhsKind == IrType::Kind::Matrix2x2f || rhsKind == IrType::Kind::Matrix4x4f)
+          ? kOpMatrixTimesMatrix
+          : kOpMatrixTimesVector;
   Instr(functions_, opcode, {typeId, valueId, lhsId, rhsId});
   return valueId;
 }
@@ -1841,7 +1864,8 @@ uint32_t Emitter::emitBinary(const IrExpr::Node& node) {
   const IrType& lhsType = node.children[0].type();
   const IrType& rhsType = node.children[1].type();
 
-  if (node.binaryOp == BinaryOp::Mul && lhsType.kind() == IrType::Kind::Matrix4x4f) {
+  if (node.binaryOp == BinaryOp::Mul && (lhsType.kind() == IrType::Kind::Matrix2x2f ||
+                                         lhsType.kind() == IrType::Kind::Matrix4x4f)) {
     return emitMatrixProduct(node);
   }
   if (IsVectorScalarBroadcast(node.binaryOp, lhsType, rhsType)) {
@@ -1958,6 +1982,15 @@ uint32_t Emitter::emitMathBuiltin(const IrExpr::Node& node, uint32_t typeId) {
     case BuiltinFn::Fract: return emitExtInst(typeId, kGlslFract, {emitValue(node.children[0])});
     case BuiltinFn::Sqrt: return emitExtInst(typeId, kGlslSqrt, {emitValue(node.children[0])});
     case BuiltinFn::Length: return emitExtInst(typeId, kGlslLength, {emitValue(node.children[0])});
+    case BuiltinFn::Normalize:
+      return emitExtInst(typeId, kGlslNormalize, {emitValue(node.children[0])});
+    case BuiltinFn::Dot: {
+      const uint32_t lhsId = emitValue(node.children[0]);
+      const uint32_t rhsId = emitValue(node.children[1]);
+      const uint32_t valueId = newId();
+      Instr(functions_, kOpDot, {typeId, valueId, lhsId, rhsId});
+      return valueId;
+    }
     case BuiltinFn::Round:
       // WGSL round() mandates round-half-to-even; GLSL.std.450 Round leaves halfway cases
       // undefined, so RoundEven is the correct lowering.

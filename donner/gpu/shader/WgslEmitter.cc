@@ -158,6 +158,7 @@ std::string TypeToWgsl(const IrType& type) {
       }
       return std::format("vec{}<{}>", type.vectorSize(), element);
     }
+    case IrType::Kind::Matrix2x2f: return "mat2x2<f32>";
     case IrType::Kind::Matrix4x4f: return "mat4x4<f32>";
     case IrType::Kind::SizedArray:
       return std::format("array<{}, {}>", TypeToWgsl(type.elementType()), type.arrayCount());
@@ -286,6 +287,7 @@ std::string Emitter::exprToWgsl(const IrExpr& expr) {
         case BinaryOp::Sub: op = "-"; break;
         case BinaryOp::Mul: op = "*"; break;
         case BinaryOp::Div: op = "/"; break;
+        case BinaryOp::Mod: op = "%"; break;
         case BinaryOp::Lt: op = "<"; break;
         case BinaryOp::Le: op = "<="; break;
         case BinaryOp::Gt: op = ">"; break;
@@ -328,6 +330,8 @@ std::string Emitter::exprToWgsl(const IrExpr& expr) {
         case BuiltinFn::Fract: name = "fract"; break;
         case BuiltinFn::Sqrt: name = "sqrt"; break;
         case BuiltinFn::Length: name = "length"; break;
+        case BuiltinFn::Dot: name = "dot"; break;
+        case BuiltinFn::Normalize: name = "normalize"; break;
         case BuiltinFn::Fwidth: name = "fwidth"; break;
         case BuiltinFn::Round: name = "round"; break;
         case BuiltinFn::Select: name = "select"; break;

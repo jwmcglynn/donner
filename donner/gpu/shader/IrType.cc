@@ -94,6 +94,10 @@ IrType IrType::Vec4(ScalarKind element) {
   return MakeVectorType(element, 4);
 }
 
+IrType IrType::Mat2x2f() {
+  return MakeSimpleType(Kind::Matrix2x2f);
+}
+
 IrType IrType::Mat4x4f() {
   return MakeSimpleType(Kind::Matrix4x4f);
 }
@@ -222,6 +226,7 @@ bool IrType::isPlainData() const {
   switch (kind()) {
     case Kind::Scalar:
     case Kind::Vector:
+    case Kind::Matrix2x2f:
     case Kind::Matrix4x4f:
     case Kind::SizedArray:
     case Kind::Struct: return true;
@@ -244,6 +249,7 @@ bool IrType::operator==(const IrType& other) const {
     case Kind::Scalar: return node_->scalar == other.node_->scalar;
     case Kind::Vector:
       return node_->scalar == other.node_->scalar && node_->vectorSize == other.node_->vectorSize;
+    case Kind::Matrix2x2f:
     case Kind::Matrix4x4f:
     case Kind::Texture2dF32:
     case Kind::Sampler: return true;
@@ -274,6 +280,7 @@ std::string IrType::toString() const {
     case Kind::Scalar: return std::string(ScalarName(node_->scalar));
     case Kind::Vector:
       return std::format("vec{}<{}>", node_->vectorSize, ScalarName(node_->scalar));
+    case Kind::Matrix2x2f: return "mat2x2<f32>";
     case Kind::Matrix4x4f: return "mat4x4<f32>";
     case Kind::SizedArray:
       return std::format("array<{}, {}>", node_->element.front().toString(), node_->arrayCount);

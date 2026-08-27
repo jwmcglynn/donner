@@ -95,6 +95,7 @@ std::string TypeToMsl(const IrType& type) {
       }
       return std::format("{}{}", element, type.vectorSize());
     }
+    case IrType::Kind::Matrix2x2f: return "float2x2";
     case IrType::Kind::Matrix4x4f: return "float4x4";
     case IrType::Kind::SizedArray:
       // Only valid as a struct member; spelled as a C array at the member site.
@@ -145,6 +146,7 @@ std::optional<MslLayout> ComputeMslLayout(const IrType& type) {
         default: return std::nullopt;
       }
     }
+    case IrType::Kind::Matrix2x2f: return MslLayout{8, 16};
     case IrType::Kind::Matrix4x4f: return MslLayout{16, 64};
     case IrType::Kind::SizedArray: {
       const std::optional<MslLayout> element = ComputeMslLayout(type.elementType());
@@ -343,6 +345,7 @@ std::string Emitter::exprToMsl(const IrExpr& expr) {
         case BinaryOp::Sub: op = "-"; break;
         case BinaryOp::Mul: op = "*"; break;
         case BinaryOp::Div: op = "/"; break;
+        case BinaryOp::Mod: op = "%"; break;
         case BinaryOp::Lt: op = "<"; break;
         case BinaryOp::Le: op = "<="; break;
         case BinaryOp::Gt: op = ">"; break;
@@ -402,6 +405,8 @@ std::string Emitter::exprToMsl(const IrExpr& expr) {
         case BuiltinFn::Fract: name = "fract"; break;
         case BuiltinFn::Sqrt: name = "sqrt"; break;
         case BuiltinFn::Length: name = "length"; break;
+        case BuiltinFn::Dot: name = "dot"; break;
+        case BuiltinFn::Normalize: name = "normalize"; break;
         case BuiltinFn::Fwidth: name = "fwidth"; break;
         case BuiltinFn::Round: name = "round"; break;
         default: name = "abs"; break;
