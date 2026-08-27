@@ -677,7 +677,8 @@
         "writeTexture"
       ],
       "wgpuCFunctions": [
-        "wgpuLabel"
+        "wgpuLabel",
+        "wgpuTextureOf"
       ],
       "wgpuCTypes": [
         "WGPUBindGroupLayout"
@@ -715,11 +716,8 @@
         "TexelCopyBufferLayout",
         "TexelCopyTextureInfo",
         "Texture",
-        "TextureDescriptor",
-        "TextureDimension",
         "TextureFormat",
         "TextureSampleType",
-        "TextureUsage",
         "TextureView",
         "TextureViewDimension"
       ]
@@ -730,8 +728,7 @@
         "CommandEncoder",
         "ComputePipeline",
         "Device",
-        "Texture",
-        "TextureDescriptor"
+        "Texture"
       ]
     },
     "donner/svg/renderer/geode/GeodePipeline.cc": {

@@ -19,6 +19,7 @@
 
 #include "donner/base/Box.h"
 #include "donner/base/Transform.h"
+#include "donner/gpu/Device.h"
 #include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
 
 namespace donner::svg::components {
@@ -65,9 +66,17 @@ class FilterTextureAllocator {
 public:
   virtual ~FilterTextureAllocator() = default;
 
-  virtual wgpu::Texture acquireFilterTexture(const wgpu::TextureDescriptor& desc) = 0;
-  virtual void releaseFilterTextureAtFrameEnd(wgpu::Texture texture,
-                                              const wgpu::TextureDescriptor& desc) = 0;
+  /// Takes a filter intermediate matching \p desc from the renderer's pool, or an invalid
+  /// texture when the renderer's budget refuses it.
+  /// @param desc Descriptor the intermediate is allocated with.
+  virtual gpu::Texture acquireFilterTexture(const gpu::TextureDescriptor& desc) = 0;
+
+  /// Hands \p texture back for reuse once the frame it was recorded into has submitted.
+  /// @param texture Texture to return; consumed.
+  /// @param desc Descriptor \p texture was acquired with; must match, or the next acquire for
+  ///   that descriptor misses its bucket.
+  virtual void releaseFilterTextureAtFrameEnd(gpu::Texture texture,
+                                              const gpu::TextureDescriptor& desc) = 0;
 };
 
 /**
