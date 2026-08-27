@@ -69,14 +69,38 @@ std::ostream& operator<<(std::ostream& os, const SubpassDependencyParams& value)
             << std::dec << ", conservative=" << (value.conservative ? "true" : "false") << "}";
 }
 
+namespace {
+
+/// The one maximal scope every conservative fallback uses: wait for everything, make every write
+/// available, make every access visible. VK_ACCESS_MEMORY_* is valid with any stage, so this is
+/// always legal and always orders at least as much as a precise scope would.
+namespace maximal {
+constexpr VkPipelineStageFlags kStage = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
+constexpr VkAccessFlags kSrcAccess = VK_ACCESS_MEMORY_WRITE_BIT;
+constexpr VkAccessFlags kDstAccess = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
+}  // namespace maximal
+
+/// The maximal subpass dependency, for a pass whose scope cannot be narrowed.
+SubpassDependencyParams ConservativeSubpassDependency() {
+  SubpassDependencyParams params;
+  params.srcStage = maximal::kStage;
+  params.dstStage = maximal::kStage;
+  params.srcAccess = maximal::kSrcAccess;
+  params.dstAccess = maximal::kDstAccess;
+  params.conservative = true;
+  return params;
+}
+
+}  // namespace
+
 ImageBarrierParams ConservativeImageBarrier(VkImageLayout oldLayout, VkImageLayout newLayout) {
   ImageBarrierParams params;
   params.oldLayout = oldLayout;
   params.newLayout = newLayout;
-  params.srcStage = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
-  params.dstStage = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
-  params.srcAccess = VK_ACCESS_MEMORY_WRITE_BIT;
-  params.dstAccess = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
+  params.srcStage = maximal::kStage;
+  params.dstStage = maximal::kStage;
+  params.srcAccess = maximal::kSrcAccess;
+  params.dstAccess = maximal::kDstAccess;
   params.conservative = true;
   return params;
 }
@@ -138,16 +162,26 @@ ImageBarrierParams TransitionFor(const TextureSyncState& current, TextureUsageKi
   return params;
 }
 
-SubpassDependencyParams AttachmentEntryDependency(const TextureSyncState& current) {
-  SubpassDependencyParams params;
-  if (!IsTrackedLayout(current.layout)) {
-    params.conservative = true;
-    params.srcAccess = VK_ACCESS_MEMORY_WRITE_BIT;
-    params.dstAccess = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
-    return params;
+SubpassDependencyParams AttachmentEntryDependency(
+    std::span<const TextureSyncState> attachmentStates) {
+  if (attachmentStates.empty()) {
+    return ConservativeSubpassDependency();
   }
-  params.srcStage = current.stage;
-  params.srcAccess = current.access & kWriteAccessMask;
+
+  SubpassDependencyParams params;
+  params.srcStage = 0;
+  params.srcAccess = 0;
+  for (const TextureSyncState& state : attachmentStates) {
+    if (!IsTrackedLayout(state.layout)) {
+      return ConservativeSubpassDependency();
+    }
+    // One edge serves every attachment, so it must wait for the widest thing any of them was
+    // last touched by. Narrowing to a single attachment would drop another's prior write: a pass
+    // that loads one attachment a dispatch wrote and clears another still has to wait for that
+    // write to be both available and visible to the load.
+    params.srcStage |= state.stage;
+    params.srcAccess |= state.access & kWriteAccessMask;
+  }
   params.dstStage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
   params.dstAccess = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
   params.conservative = false;
@@ -178,17 +212,14 @@ SubpassDependencyParams AttachmentExitDependency(TextureUsage declaredUsage) {
     dstAccess |= VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
   }
 
-  SubpassDependencyParams params;
-  params.srcStage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-  params.srcAccess = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
   if (dstStage == 0) {
     // The attachment declares no consumer this table models, so nothing narrower than the
     // maximal edge can be justified.
-    params.dstStage = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
-    params.dstAccess = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
-    params.conservative = true;
-    return params;
+    return ConservativeSubpassDependency();
   }
+  SubpassDependencyParams params;
+  params.srcStage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+  params.srcAccess = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
   params.dstStage = dstStage;
   params.dstAccess = dstAccess;
   params.conservative = false;

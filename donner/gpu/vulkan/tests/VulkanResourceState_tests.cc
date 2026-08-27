@@ -12,6 +12,8 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <array>
+
 namespace donner::gpu::vulkan {
 namespace {
 
@@ -124,13 +126,64 @@ TEST(VulkanResourceStateTests, EveryTrackedUsageRoundTripsThroughItsLayout) {
 }
 
 TEST(VulkanResourceStateTests, ThePassEntryEdgeNamesWhatLastTouchedTheAttachment) {
-  const SubpassDependencyParams entry =
-      AttachmentEntryDependency(StateAfterUsage(TextureUsageKind::TransferWrite));
+  const std::array<TextureSyncState, 1> attachments = {
+      StateAfterUsage(TextureUsageKind::TransferWrite)};
+  const SubpassDependencyParams entry = AttachmentEntryDependency(attachments);
 
   EXPECT_EQ(entry.srcStage, VK_PIPELINE_STAGE_TRANSFER_BIT);
   EXPECT_EQ(entry.srcAccess, VK_ACCESS_TRANSFER_WRITE_BIT);
   EXPECT_EQ(entry.dstStage, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
   EXPECT_FALSE(entry.conservative);
+}
+
+TEST(VulkanResourceStateTests, ThePassEntryEdgeCoversEveryAttachmentNotJustOne) {
+  // The shape the backend actually produces: one attachment a compute dispatch wrote and is
+  // about to be loaded, and one fresh attachment that will simply be cleared. A single edge
+  // serves both, so it has to wait for the dispatch even though the other attachment has never
+  // been touched.
+  const std::array<TextureSyncState, 2> attachments = {
+      StateAfterUsage(TextureUsageKind::StorageWrite), TextureSyncState{}};
+  const SubpassDependencyParams entry = AttachmentEntryDependency(attachments);
+
+  EXPECT_TRUE((entry.srcStage & VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT) != 0)
+      << "the load of the written attachment must be ordered after the dispatch that wrote it";
+  EXPECT_TRUE((entry.srcAccess & VK_ACCESS_SHADER_WRITE_BIT) != 0)
+      << "the dispatch's write must be made available to that load";
+  EXPECT_EQ(entry.dstStage, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
+  EXPECT_FALSE(entry.conservative);
+
+  // Order must not matter: the union is the same whichever attachment comes first.
+  const std::array<TextureSyncState, 2> reversed = {
+      TextureSyncState{}, StateAfterUsage(TextureUsageKind::StorageWrite)};
+  EXPECT_EQ(AttachmentEntryDependency(reversed), entry);
+}
+
+TEST(VulkanResourceStateTests, ThePassEntryEdgeIsMaximalWhenAnyAttachmentIsUnmodelled) {
+  TextureSyncState fromElsewhere;
+  fromElsewhere.layout = VK_IMAGE_LAYOUT_PREINITIALIZED;
+  const std::array<TextureSyncState, 2> attachments = {
+      StateAfterUsage(TextureUsageKind::ColorAttachment), fromElsewhere};
+
+  EXPECT_TRUE(AttachmentEntryDependency(attachments).conservative)
+      << "one attachment the model cannot describe makes the whole edge unnarrowable";
+
+  const std::array<TextureSyncState, 0> none = {};
+  EXPECT_TRUE(AttachmentEntryDependency(none).conservative);
+}
+
+TEST(VulkanResourceStateTests, WritingAStorageTextureTwiceStillNeedsABarrier) {
+  // Both dispatches leave the image in GENERAL, so a layout-only comparison would see no change
+  // and order nothing between them.
+  const TextureSyncState afterFirst = StateAfterUsage(TextureUsageKind::StorageWrite);
+  const ImageBarrierParams barrier = TransitionFor(afterFirst, TextureUsageKind::StorageWrite);
+
+  EXPECT_EQ(barrier.oldLayout, barrier.newLayout) << "the layout does not change";
+  EXPECT_EQ(barrier.srcStage, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+  EXPECT_EQ(barrier.srcAccess, VK_ACCESS_SHADER_WRITE_BIT)
+      << "the first dispatch's write still has to be made available to the second";
+  EXPECT_EQ(barrier.dstStage, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
+  EXPECT_EQ(barrier.dstAccess, VK_ACCESS_SHADER_WRITE_BIT);
+  EXPECT_FALSE(barrier.conservative);
 }
 
 TEST(VulkanResourceStateTests, ThePassExitEdgeComesFromTheAttachmentsDeclaredConsumers) {

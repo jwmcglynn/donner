@@ -23,6 +23,7 @@
 #include <cstdint>
 #include <map>
 #include <ostream>
+#include <span>
 
 #include "donner/gpu/Descriptors.h"
 
@@ -129,10 +130,18 @@ std::ostream& operator<<(std::ostream& os, const SubpassDependencyParams& value)
 [[nodiscard]] ImageBarrierParams TransitionFor(const TextureSyncState& current,
                                                TextureUsageKind usage);
 
-/// The external dependency into a render pass, ordering whatever touched the attachment before
+/// The external dependency into a render pass, ordering whatever touched the attachments before
 /// it against the pass's color output.
-/// @param current State the attachment texture is tracked in.
-[[nodiscard]] SubpassDependencyParams AttachmentEntryDependency(const TextureSyncState& current);
+///
+/// One edge covers every attachment, so the source scope is the union across all of them: a pass
+/// that loads one attachment a compute dispatch wrote and clears another must still wait for
+/// that write, and taking any single attachment's prior state would lose it. A pass with no
+/// attachments, or one whose attachment reached its layout through a path the model does not
+/// describe, falls back to the maximal edge.
+///
+/// @param attachmentStates State each attachment texture is tracked in, in any order.
+[[nodiscard]] SubpassDependencyParams AttachmentEntryDependency(
+    std::span<const TextureSyncState> attachmentStates);
 
 /// The external dependency out of a render pass, ordering the pass's color output against
 /// whatever the attachment's declared usage says can consume it next.

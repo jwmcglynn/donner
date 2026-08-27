@@ -178,4 +178,9 @@ private:
   VulkanApi api_;
 };
 
+/// Returns the name of a VkResult for diagnostics (the common codes; others print
+/// numerically). Shared so every failure message in this backend names the result the same way.
+/// @param result Result to format.
+std::string VkResultToString(VkResult result);
+
 }  // namespace donner::gpu::vulkan

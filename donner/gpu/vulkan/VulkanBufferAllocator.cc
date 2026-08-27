@@ -60,7 +60,7 @@ Result<BufferAllocation> DedicatedBufferAllocator::allocate(const VulkanApi& api
       result != VK_SUCCESS) {
     return GpuError{GpuErrorType::InvalidState,
                     std::format("vkAllocateMemory of {} bytes for buffer '{}' failed with {}",
-                                requirements.size, label, static_cast<int>(result))};
+                                requirements.size, label, VkResultToString(result))};
   }
   if (const VkResult result =
           api.vkBindBufferMemory(device, buffer, allocation.memory, allocation.offsetBytes);
@@ -68,7 +68,7 @@ Result<BufferAllocation> DedicatedBufferAllocator::allocate(const VulkanApi& api
     release(api, device, allocation);
     return GpuError{GpuErrorType::InvalidState,
                     std::format("vkBindBufferMemory for buffer '{}' failed with {}", label,
-                                static_cast<int>(result))};
+                                VkResultToString(result))};
   }
   if (const VkResult result =
           api.vkMapMemory(device, allocation.memory, 0, VK_WHOLE_SIZE, 0, &allocation.mapped);
@@ -76,7 +76,7 @@ Result<BufferAllocation> DedicatedBufferAllocator::allocate(const VulkanApi& api
     release(api, device, allocation);
     return GpuError{
         GpuErrorType::InvalidState,
-        std::format("vkMapMemory for buffer '{}' failed with {}", label, static_cast<int>(result))};
+        std::format("vkMapMemory for buffer '{}' failed with {}", label, VkResultToString(result))};
   }
   return allocation;
 }

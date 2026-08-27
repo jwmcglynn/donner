@@ -46,30 +46,6 @@ constexpr uint64_t kUploadFenceTimeoutNs = 60ull * 1000ull * 1000ull * 1000ull;
 /// driver installs usually do not have it, and it is skipped silently then).
 constexpr const char* kValidationLayerName = "VK_LAYER_KHRONOS_validation";
 
-/// Returns the name of a VkResult for diagnostics (the common codes; others print numerically).
-std::string VkResultToString(VkResult result) {
-  switch (result) {
-    case VK_SUCCESS: return "VK_SUCCESS";
-    case VK_NOT_READY: return "VK_NOT_READY";
-    case VK_TIMEOUT: return "VK_TIMEOUT";
-    case VK_ERROR_OUT_OF_HOST_MEMORY: return "VK_ERROR_OUT_OF_HOST_MEMORY";
-    case VK_ERROR_OUT_OF_DEVICE_MEMORY: return "VK_ERROR_OUT_OF_DEVICE_MEMORY";
-    case VK_ERROR_INITIALIZATION_FAILED: return "VK_ERROR_INITIALIZATION_FAILED";
-    case VK_ERROR_DEVICE_LOST: return "VK_ERROR_DEVICE_LOST";
-    case VK_ERROR_MEMORY_MAP_FAILED: return "VK_ERROR_MEMORY_MAP_FAILED";
-    case VK_ERROR_LAYER_NOT_PRESENT: return "VK_ERROR_LAYER_NOT_PRESENT";
-    case VK_ERROR_EXTENSION_NOT_PRESENT: return "VK_ERROR_EXTENSION_NOT_PRESENT";
-    case VK_ERROR_FEATURE_NOT_PRESENT: return "VK_ERROR_FEATURE_NOT_PRESENT";
-    case VK_ERROR_INCOMPATIBLE_DRIVER: return "VK_ERROR_INCOMPATIBLE_DRIVER";
-    case VK_ERROR_TOO_MANY_OBJECTS: return "VK_ERROR_TOO_MANY_OBJECTS";
-    case VK_ERROR_FORMAT_NOT_SUPPORTED: return "VK_ERROR_FORMAT_NOT_SUPPORTED";
-    case VK_ERROR_FRAGMENTED_POOL: return "VK_ERROR_FRAGMENTED_POOL";
-    case VK_ERROR_OUT_OF_POOL_MEMORY: return "VK_ERROR_OUT_OF_POOL_MEMORY";
-    case VK_ERROR_INVALID_EXTERNAL_HANDLE: return "VK_ERROR_INVALID_EXTERNAL_HANDLE";
-    default: return std::format("VkResult({})", static_cast<int32_t>(result));
-  }
-}
-
 /// Builds a fail-closed \ref GpuError for a failed Vulkan call.
 GpuError VkError(std::string_view what, VkResult result) {
   return GpuError{GpuErrorType::InvalidState,
@@ -2275,6 +2251,21 @@ Status VulkanDevice::onWriteTexture(uint32_t slotIndex, std::span<const uint8_t>
     return VkError("vkBeginCommandBuffer", result);
   }
 
+  // Every failure below has to leave the tracker exactly as it was. A transition staged here and
+  // not discarded would be promoted by the next unrelated successful submission's commit, and
+  // every later barrier for this texture would then be computed from a state the GPU never
+  // reached. The guard covers every exit, including ones added later.
+  struct StagedUploadGuard {
+    Impl* impl = nullptr;    //!< Device whose staged state this guards.
+    bool committed = false;  //!< Set once the upload actually executed.
+
+    ~StagedUploadGuard() {
+      if (!committed) {
+        impl->syncStates.discardStaged();
+      }
+    }
+  } stagedUploadGuard{&impl, false};
+
   impl.recordTextureUploadCopy(commandBuffer, slotIndex, *texture, staging.buffer, dataLayout,
                                writeSize);
 
@@ -2295,6 +2286,7 @@ Status VulkanDevice::onWriteTexture(uint32_t slotIndex, std::span<const uint8_t>
 
   // The upload executed, so the transitions it recorded are now the texture's real state.
   impl.syncStates.commitStaged();
+  stagedUploadGuard.committed = true;
   cleanup();
   return OkStatus();
 }
@@ -2369,8 +2361,10 @@ Status VulkanDevice::Impl::beginEncodedRenderPass(EncodingState& state,
   std::vector<VkClearValue> clearValues;
   // The pass's external dependencies are derived from the same model the barriers are: what last
   // touched the attachments on the way in, and what their declared usage says can consume them on
-  // the way out. With several attachments the widest of each wins, so the edges cover them all.
-  TextureSyncState entryState;
+  // the way out. One edge serves every attachment, so every attachment's prior state feeds it -
+  // keeping only the last one's would let a pass that loads an attachment a dispatch wrote be
+  // ordered as though nothing had ever written it.
+  std::vector<TextureSyncState> entryStates;
   TextureUsage attachmentUsage = TextureUsage::None;
 
   for (size_t i = 0; i < attachmentDescriptors.size(); ++i) {
@@ -2385,7 +2379,7 @@ Status VulkanDevice::Impl::beginEncodedRenderPass(EncodingState& state,
 
     // Explicit transition to the attachment layout; the pass then begins and ends in
     // COLOR_ATTACHMENT_OPTIMAL, so the pass itself performs no layout transition.
-    entryState = syncStates.stateOf(view->textureSlot);
+    entryStates.push_back(syncStates.stateOf(view->textureSlot));
     attachmentUsage = attachmentUsage | texture->usage;
     transitionTexture(state.commandBuffer, view->textureSlot, *texture,
                       TextureUsageKind::ColorAttachment);
@@ -2424,7 +2418,7 @@ Status VulkanDevice::Impl::beginEncodedRenderPass(EncodingState& state,
   // Explicit external dependencies; the implicit defaults do not cover memory access. Both come
   // from the resource-state model, because a precise image barrier behind a pass edge that still
   // said ALL_COMMANDS would order nothing narrower than before.
-  const SubpassDependencyParams entryDependency = AttachmentEntryDependency(entryState);
+  const SubpassDependencyParams entryDependency = AttachmentEntryDependency(entryStates);
   const SubpassDependencyParams exitDependency = AttachmentExitDependency(attachmentUsage);
   VkSubpassDependency dependencies[2] = {};
   dependencies[0].srcSubpass = VK_SUBPASS_EXTERNAL;
