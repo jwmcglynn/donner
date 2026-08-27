@@ -15,6 +15,7 @@
 #include "donner/base/tests/Runfiles.h"
 #include "donner/gpu/shader/programs/SolidFill.h"
 #include "donner/gpu/shader/tests/ShaderTestUtils.h"
+#include "donner/gpu/shader/tests/StageIoTestModules.h"
 
 using testing::HasSubstr;
 
@@ -38,6 +39,22 @@ TEST(MslEmitterTests, OutputHasNoTrailingWhitespaceOrCr) {
   const std::string msl = EmitSolidFillMsl();
   EXPECT_THAT(msl, testing::Not(HasSubstr("\r")));
   EXPECT_THAT(msl, testing::Not(HasSubstr(" \n")));
+}
+
+TEST(MslEmitterTests, APositionOnlyFragmentEntryStillCarriesItsInput) {
+  ShaderResult<IrModule> module = BuildPositionOnlyFragmentModule();
+  ASSERT_THAT(module, HasShaderResult());
+  ShaderResult<std::string> msl = EmitMsl(module.result());
+  ASSERT_THAT(msl, HasShaderResult());
+
+  // The stage-in struct is omitted only when nothing would go in it. Position has no
+  // direct-parameter spelling here, so this entry keeps its struct; dropping it would leave the
+  // body referencing an input that no parameter carries.
+  EXPECT_THAT(msl.result(), HasSubstr("struct fs_position_only_Input {"));
+  EXPECT_THAT(msl.result(), HasSubstr("float4 frag_pos [[position]];"));
+  EXPECT_THAT(msl.result(), HasSubstr("fragment fs_position_only_Output fs_position_only("
+                                      "fs_position_only_Input in [[stage_in]]"));
+  EXPECT_THAT(msl.result(), HasSubstr("const float4 frag_pos = in.frag_pos;"));
 }
 
 TEST(MslEmitterTests, ContainsSolidFillSurface) {

@@ -109,21 +109,44 @@ std::string TypeToMsl(const IrType& type) {
   return "float";
 }
 
-/// True for the stages whose IR parameters arrive through a generated `[[stage_in]]` struct.
-/// Compute entry points take their builtins as direct kernel parameters instead, and so does a
-/// vertex stage with no location inputs: Metal rejects an empty `[[stage_in]]` struct, and a
-/// stage that builds its geometry from `vertex_index` alone has nothing to put in one.
 /// True for the stages that declare generated stage IO structs at all.
 bool HasStageIoStructs(StageKind stage) {
   return stage == StageKind::Vertex || stage == StageKind::Fragment;
 }
 
+/**
+ * The entry point parameter \p builtin is taken as, or nullopt when it arrives through the
+ * generated `[[stage_in]]` struct instead.
+ *
+ * This is the single place that decides which builtins are direct parameters. The struct
+ * predicate and the prologue both read it, because a builtin the predicate treats as direct while
+ * the parameter list does not emit is one the body references and nothing declares.
+ *
+ * @param builtin Builtin input to spell.
+ * @param name Parameter name to spell it with.
+ */
+std::optional<std::string> DirectEntryPointParameter(BuiltinInput builtin, const RcString& name) {
+  switch (builtin) {
+    case BuiltinInput::VertexIndex: return std::format("uint {} [[vertex_id]]", name.str());
+    case BuiltinInput::InstanceIndex: return std::format("uint {} [[instance_id]]", name.str());
+    case BuiltinInput::GlobalInvocationId:
+      return std::format("uint3 {} [[thread_position_in_grid]]", name.str());
+    // A fragment's position is a [[position]] member of the stage-in struct here.
+    case BuiltinInput::Position: return std::nullopt;
+  }
+  return std::nullopt;
+}
+
+/// True when \p function needs a generated `[[stage_in]]` struct, which is exactly when some
+/// input arrives through one. Metal rejects an empty struct, so a stage whose every input is a
+/// direct builtin parameter declares none; anything else, a location or a builtin with no direct
+/// spelling, keeps it.
 bool HasStageInStruct(const IrFunction& function) {
-  if (function.stage != StageKind::Vertex && function.stage != StageKind::Fragment) {
+  if (!HasStageIoStructs(function.stage)) {
     return false;
   }
   for (const IrParam& param : function.params) {
-    if (param.location) {
+    if (!param.builtin || !DirectEntryPointParameter(*param.builtin, param.name).has_value()) {
       return true;
     }
   }
@@ -824,12 +847,11 @@ std::vector<std::string> Emitter::entryPointParameters(const IrFunction& functio
     parameters.push_back(std::format("{} in [[stage_in]]", InputStructName(function)));
   }
   for (const IrParam& param : function.params) {
-    if (param.builtin && *param.builtin == BuiltinInput::VertexIndex) {
-      parameters.push_back(std::format("uint {} [[vertex_id]]", param.name.str()));
-    } else if (param.builtin && *param.builtin == BuiltinInput::InstanceIndex) {
-      parameters.push_back(std::format("uint {} [[instance_id]]", param.name.str()));
-    } else if (param.builtin && *param.builtin == BuiltinInput::GlobalInvocationId) {
-      parameters.push_back(std::format("uint3 {} [[thread_position_in_grid]]", param.name.str()));
+    if (!param.builtin) {
+      continue;
+    }
+    if (std::optional<std::string> direct = DirectEntryPointParameter(*param.builtin, param.name)) {
+      parameters.push_back(*std::move(direct));
     }
   }
   // Every module binding is declared on every entry point; a declared-but-unbound argument slot
@@ -873,8 +895,7 @@ void Emitter::emitEntryPointPrologue(const IrFunction& function) {
     // Alias stage-in fields to their IR names so references emit unchanged.
     for (const IrParam& param : function.params) {
       check(checkNoImplicitShadow(param.name, "entry point input", /*insideEntryPoint=*/true));
-      if (param.builtin && (*param.builtin == BuiltinInput::VertexIndex ||
-                            *param.builtin == BuiltinInput::InstanceIndex)) {
+      if (param.builtin && DirectEntryPointParameter(*param.builtin, param.name)) {
         continue;  // Already a direct parameter.
       }
       line(std::format("const {} {} = in.{};", TypeToMsl(param.type), param.name.str(),

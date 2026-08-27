@@ -21,6 +21,7 @@
 #include "donner/gpu/shader/programs/ColorMatrix.h"
 #include "donner/gpu/shader/programs/SolidFill.h"
 #include "donner/gpu/shader/tests/ShaderTestUtils.h"
+#include "donner/gpu/shader/tests/StageIoTestModules.h"
 
 using testing::Contains;
 using testing::ElementsAre;
@@ -788,6 +789,23 @@ TEST(SpirvEmitterTests, EachMatrixMemberCarriesItsOwnMatrixStride) {
   // The stride is the matrix's column alignment: 8 for mat2x2f's vec2f columns, 16 for mat4x4f's
   // vec4f ones. A single hardcoded value would decorate both the same and misdescribe one.
   EXPECT_THAT(strides, UnorderedElementsAre(8u, 16u));
+}
+
+TEST(SpirvEmitterTests, APositionOnlyFragmentEntryDeclaresItsFragCoordInput) {
+  ShaderResult<IrModule> module = BuildPositionOnlyFragmentModule();
+  ASSERT_THAT(module, HasShaderResult());
+  const std::vector<SpvInstruction> instructions = Scan(EmitOrFail(std::move(module).result()));
+
+  // SPIR-V gives every builtin input its own decorated Input variable, so a location-less one is
+  // declared the same way any other is. A fragment position is FragCoord, not Position, which is
+  // the vertex stage's output. Nothing to fix here; this pins it.
+  std::vector<uint32_t> builtins;
+  for (const SpvInstruction& instruction : WithOpcode(instructions, kOpDecorate)) {
+    if (instruction.operands.size() >= 3 && instruction.operands[1] == kDecorationBuiltIn) {
+      builtins.push_back(instruction.operands[2]);
+    }
+  }
+  EXPECT_THAT(builtins, Contains(kBuiltInFragCoord));
 }
 
 TEST(SpirvEmitterTests, StorageBufferGetsNonWritableAndSynthesizedBlockWrapper) {

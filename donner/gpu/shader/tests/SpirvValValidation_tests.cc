@@ -22,6 +22,7 @@
 #include "donner/gpu/shader/programs/ColorMatrix.h"
 #include "donner/gpu/shader/programs/SolidFill.h"
 #include "donner/gpu/shader/tests/ShaderTestUtils.h"
+#include "donner/gpu/shader/tests/StageIoTestModules.h"
 
 using testing::HasSubstr;
 using testing::Not;
@@ -203,6 +204,17 @@ TEST(SpirvValValidation, AStorageBlockHoldingBothMatrixTypesPassesVulkan11Valida
     GTEST_SKIP() << "spirv-val (SPIRV-Tools) is not installed";
   }
   ExpectValidatesForVulkan11(spirvVal, BuildMatrixBlockModule(), "matrix_block.spv");
+}
+
+TEST(SpirvValValidation, APositionOnlyFragmentEntryPassesVulkan11Validation) {
+  // Position is location-less in every emitter, so each decides on its own how such an input
+  // reaches the stage. SPIR-V declares it as its own Input variable, decorated FragCoord rather
+  // than the vertex stage's Position; the validator is what says so out of process.
+  const std::string spirvVal = FindSpirvVal();
+  if (spirvVal.empty()) {
+    GTEST_SKIP() << "spirv-val (SPIRV-Tools) is not installed";
+  }
+  ExpectValidatesForVulkan11(spirvVal, BuildPositionOnlyFragmentModule(), "position_only.spv");
 }
 
 TEST(SpirvValValidation, NegativeControlDetectsAMalformedModule) {

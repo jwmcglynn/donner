@@ -34,6 +34,7 @@
 #include "donner/gpu/metal/MetalDevice.h"
 #include "donner/gpu/shader/MslEmitter.h"
 #include "donner/gpu/shader/programs/SolidFill.h"
+#include "donner/gpu/shader/tests/StageIoTestModules.h"
 #include "donner/gpu/tests/BaselineScene.h"
 #include "donner/svg/renderer/geode/GeodePathEncoder.h"
 
@@ -199,6 +200,27 @@ TEST_F(MetalSolidFillTest, ReadBackBufferRejectsStaleHandleAfterSlotReuse) {
   Result<std::vector<uint8_t>> stale = device_->readBackBuffer(staleHandle);
   ASSERT_TRUE(stale.hasError()) << "stale readback unexpectedly succeeded";
   EXPECT_EQ(stale.error().type, GpuErrorType::InvalidHandle) << stale.error();
+}
+
+TEST_F(MetalSolidFillTest, EmittedMslForAPositionOnlyFragmentEntryCompilesOnTheDevice) {
+  // The offline Metal compiler ships as a downloadable Xcode component, so the out-of-process MSL
+  // validation skips wherever it is absent. The runtime compiler behind createShaderModule is
+  // there on any machine with a device, which makes it the one that holds the emitter's stage IO
+  // shapes everywhere this slice runs.
+  //
+  // This entry declares no location at all: its only input is the position builtin. Each emitter
+  // decides for itself how such an input reaches the stage, so it is the shape one of them can
+  // get wrong while every shipped program keeps working.
+  shader::ShaderResult<shader::IrModule> module = shader::BuildPositionOnlyFragmentModule();
+  ASSERT_FALSE(module.hasError()) << module.error();
+  shader::ShaderResult<std::string> msl = shader::EmitMsl(module.result());
+  ASSERT_FALSE(msl.hasError()) << msl.error();
+
+  Result<ShaderModule> compiled = device_->createShaderModule(ShaderModuleDescriptor{
+      "positionOnlyFragment", RcString(msl.result()), ShaderSourceKind::Msl});
+  EXPECT_FALSE(compiled.hasError())
+      << "the device rejected the emitted MSL: " << compiled.error() << "\n"
+      << msl.result();
 }
 
 TEST_F(MetalSolidFillTest, MatchesFrozenBaseline) {

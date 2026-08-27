@@ -33,6 +33,7 @@ donner_cc_test(
         "//donner/gpu/shader",
         "//donner/gpu/shader:module_interface",
         "//donner/gpu/shader:programs",
+        "//donner/gpu/shader:stage_io_test_modules",
         "//donner/svg/renderer/geode:geode_path_encoder",
         "@com_google_gtest//:gtest_main",
     ],

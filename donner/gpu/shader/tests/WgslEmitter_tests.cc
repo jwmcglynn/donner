@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "donner/gpu/shader/tests/ShaderTestUtils.h"
+#include "donner/gpu/shader/tests/StageIoTestModules.h"
 
 using testing::HasSubstr;
 
@@ -195,6 +196,18 @@ TEST(WgslEmitterTests, EmitsDeterministically) {
   const std::string second =
       GetShaderResultOrFail(EmitWgsl(BuildEmitterCoverageModule()), std::string());
   EXPECT_THAT(first, testing::Eq(second));
+}
+
+TEST(WgslEmitterTests, APositionOnlyFragmentEntryCarriesTheBuiltinInline) {
+  ShaderResult<IrModule> module = BuildPositionOnlyFragmentModule();
+  ASSERT_THAT(module, HasShaderResult());
+  const ShaderResult<std::string> wgsl = EmitWgsl(module.result());
+  ASSERT_THAT(wgsl, HasShaderResult());
+
+  // WGSL takes every entry point input as a signature parameter, builtin or not, so a
+  // location-less input has nothing to fall through. Nothing to fix here; this pins it.
+  EXPECT_THAT(wgsl.result(),
+              HasSubstr("fn fs_position_only(@builtin(position) frag_pos: vec4<f32>)"));
 }
 
 TEST(WgslEmitterTests, OutputHasNoTrailingWhitespaceOrCr) {

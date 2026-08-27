@@ -58,6 +58,17 @@ donner_cc_library(
 # Complete shader programs expressed in the IR: the solid-fill render family
 # (whose frozen pixel baseline is rendered by the Donner-owned slug_fill.wgsl
 # it re-expresses) and the color-matrix compute program.
+# Stage IO shapes the emitters must handle but no shipped program has. A library rather than a
+# plain header in each test's srcs, because the Metal slice in another package is held to the same
+# shapes through its device's runtime compiler.
+donner_cc_library(
+    name = "stage_io_test_modules",
+    testonly = 1,
+    hdrs = ["tests/StageIoTestModules.h"],
+    visibility = donner_internal_visibility(),
+    deps = [":shader"],
+)
+
 donner_cc_library(
     name = "programs",
     srcs = [
@@ -97,6 +108,8 @@ donner_cc_test(
         "tests/testdata/solid_fill.wgsl",
     ],
     deps = [
+        ":stage_io_test_modules",
+
         ":programs",
         ":shader",
         "//donner/base:base_test_utils",
@@ -117,6 +130,8 @@ donner_cc_test(
     ],
     target_compatible_with = ["@platforms//os:macos"],
     deps = [
+        ":stage_io_test_modules",
+
         ":programs",
         ":shader",
         "@com_google_gtest//:gtest_main",
@@ -134,6 +149,8 @@ donner_cc_test(
         "tests/SpirvValValidation_tests.cc",
     ],
     deps = [
+        ":stage_io_test_modules",
+
         ":programs",
         ":shader",
         "@com_google_gtest//:gtest_main",
