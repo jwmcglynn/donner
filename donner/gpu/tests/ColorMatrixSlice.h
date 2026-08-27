@@ -36,14 +36,17 @@ inline constexpr uint32_t kColorMatrixInputBlue = 64;
 /// Alpha value of every input texel, in texel units.
 inline constexpr uint32_t kColorMatrixInputAlpha = 248;
 
-/// The 64-byte uniform block: four `vec4<f32>` matrix rows, column-major over source channels.
+/// The 80-byte uniform block: four `vec4<f32>` columns of per-source-channel multipliers, then
+/// the constant column added after them. An SVG color matrix is four rows of five, and the last
+/// column shifts each output channel regardless of the input.
 struct alignas(16) ColorMatrixParams {
   float row0[4];  //!< Contribution of the source red channel.
   float row1[4];  //!< Contribution of the source green channel.
   float row2[4];  //!< Contribution of the source blue channel.
   float row3[4];  //!< Contribution of the source alpha channel.
+  float row4[4];  //!< Constant offset added after the weighted sum.
 };
-static_assert(sizeof(ColorMatrixParams) == 64, "ColorMatrixParams must match the shader layout");
+static_assert(sizeof(ColorMatrixParams) == 80, "ColorMatrixParams must match the shader layout");
 
 /// The matrix the slices upload: red and green are halved and gain a quarter of blue, blue and
 /// alpha are halved.
@@ -51,7 +54,10 @@ inline ColorMatrixParams ColorMatrixUniforms() {
   return ColorMatrixParams{{0.5f, 0.0f, 0.0f, 0.0f},
                            {0.0f, 0.5f, 0.0f, 0.0f},
                            {0.25f, 0.25f, 0.5f, 0.0f},
-                           {0.0f, 0.0f, 0.0f, 0.5f}};
+                           {0.0f, 0.0f, 0.0f, 0.5f},
+                           // Zero offset: this matrix shifts nothing, so the expected pixels are
+                           // the same ones the four-column form produced.
+                           {0.0f, 0.0f, 0.0f, 0.0f}};
 }
 
 /// The two bias vectors the kernel selects between: none, then a red-only offset.
