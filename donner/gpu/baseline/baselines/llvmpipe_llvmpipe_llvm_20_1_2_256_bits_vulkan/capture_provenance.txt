@@ -1,0 +1,13 @@
+# Written by //donner/gpu/baseline:capture_baselines. Do not edit by hand.
+# Frozen pixels are only comparable against the adapter recorded here.
+schemaVersion: 1
+sourceRevision: 2244cdf1263d50f8939faa16576b4161c828178b
+sourceTreeClean: clean
+rendererPath: wgpu-native Geode production path (GeodeDevice+GeoEncoder)
+rendererBackend: geode
+adapterName: llvmpipe llvmpipe (LLVM 20.1.2, 256 bits)
+adapterBackend: Vulkan
+adapterType: CPU
+targetFormat: RGBA8Unorm premultiplied, transparent background
+targetSize: 256x256
+capturedScenes: solid_fill_baseline,fill_rule_pair,alpha_stack,cubic_extrema,band_grid_stress,degenerate_paths
