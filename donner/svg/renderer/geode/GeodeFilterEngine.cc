@@ -15,6 +15,7 @@
 #include "donner/svg/renderer/PixelFormatUtils.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
 #include "donner/svg/renderer/geode/GeodeShaders.h"
+#include "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h"
 #include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
 
 namespace donner::geode {
@@ -32,20 +33,28 @@ struct FilterResourceArena {
       device_.deferDestroy(buffer.take());
     }
     for (auto& owned : textures_) {
-      textureAllocator_.releaseFilterTextureAtFrameEnd(owned.texture.take(), owned.desc);
+      textureAllocator_.releaseFilterTextureAtFrameEnd(std::move(owned.texture), owned.desc);
     }
   }
 
   FilterResourceArena(const FilterResourceArena&) = delete;
   FilterResourceArena& operator=(const FilterResourceArena&) = delete;
 
-  wgpu::Texture createTexture(const wgpu::TextureDescriptor& desc) {
-    ScopedWgpuHandle<wgpu::Texture> texture(textureAllocator_.acquireFilterTexture(desc));
-    if (!texture) {
+  /// Takes a filter intermediate from the renderer's pool, owned by this arena until the frame
+  /// ends.
+  ///
+  /// The arena's currency with the renderer is the runtime handle, which is what the pool
+  /// allocates and what the frame-end release takes back. The backend texture is returned to the
+  /// engine's own recording code, which still speaks wgpu directly; it borrows, and this arena
+  /// owns.
+  /// @param desc Descriptor the intermediate is allocated with.
+  wgpu::Texture createTexture(const gpu::TextureDescriptor& desc) {
+    gpu::Texture texture = textureAllocator_.acquireFilterTexture(desc);
+    if (!texture.isValid()) {
       return {};
     }
 
-    wgpu::Texture result = texture.get();
+    wgpu::Texture result = device_.adapterDevice().wgpuTextureOf(texture);
     textures_.push_back({std::move(texture), desc});
     return result;
   }
@@ -129,8 +138,8 @@ struct FilterResourceArena {
 
 private:
   struct OwnedTexture {
-    ScopedWgpuHandle<wgpu::Texture> texture;
-    wgpu::TextureDescriptor desc;
+    gpu::Texture texture;
+    gpu::TextureDescriptor desc;
   };
 
   GeodeDevice& device_;
@@ -668,16 +677,9 @@ uint32_t toShaderEdgeMode(svg::components::filter_primitive::GaussianBlur::EdgeM
 /// subsequent compute / render input (texture binding).
 wgpu::Texture createIntermediateTexture(FilterResourceArena& arena, const wgpu::Device&,
                                         uint32_t width, uint32_t height, const char* label) {
-  wgpu::TextureDescriptor td{};
-  td.label = wgpuLabel(label);
-  td.size = {width, height, 1};
-  td.format = kFormat;
-  td.usage = wgpu::TextureUsage::StorageBinding | wgpu::TextureUsage::TextureBinding |
-             wgpu::TextureUsage::CopySrc;
-  td.mipLevelCount = 1;
-  td.sampleCount = 1;
-  td.dimension = wgpu::TextureDimension::_2D;
-  return arena.createTexture(td);
+  return arena.createTexture(gpu::TextureDescriptor{
+      RcString(label), gpu::Extent2d{width, height}, gpu::TextureFormat::RGBA8Unorm,
+      gpu::TextureUsage::StorageBinding | gpu::TextureUsage::Sampled | gpu::TextureUsage::CopySrc});
 }
 
 /// Create and explicitly clear an intermediate texture to transparent black.
@@ -687,16 +689,10 @@ wgpu::Texture createIntermediateTexture(FilterResourceArena& arena, const wgpu::
 /// returning the texture.
 wgpu::Texture createTransparentIntermediateTexture(FilterResourceArena& arena, uint32_t width,
                                                    uint32_t height, const char* label) {
-  wgpu::TextureDescriptor td{};
-  td.label = wgpuLabel(label);
-  td.size = {width, height, 1};
-  td.format = wgpu::TextureFormat::RGBA8Unorm;
-  td.usage = wgpu::TextureUsage::TextureBinding | wgpu::TextureUsage::StorageBinding |
-             wgpu::TextureUsage::CopySrc | wgpu::TextureUsage::RenderAttachment;
-  td.mipLevelCount = 1;
-  td.sampleCount = 1;
-  td.dimension = wgpu::TextureDimension::_2D;
-  wgpu::Texture texture = arena.createTexture(td);
+  wgpu::Texture texture = arena.createTexture(gpu::TextureDescriptor{
+      RcString(label), gpu::Extent2d{width, height}, gpu::TextureFormat::RGBA8Unorm,
+      gpu::TextureUsage::Sampled | gpu::TextureUsage::StorageBinding | gpu::TextureUsage::CopySrc |
+          gpu::TextureUsage::RenderAttachment});
   if (!texture) {
     return {};
   }
@@ -3686,15 +3682,9 @@ wgpu::Texture GeodeFilterEngine::applyImage(
   wgpu::Texture output = createIntermediateTexture(arena, dev, width, height, "FilterImageOutput");
 
   const auto renderTransparentOutput = [&]() {
-    wgpu::TextureDescriptor imgDesc{};
-    imgDesc.label = wgpuLabel("FilterImageEmptySource");
-    imgDesc.size = {1, 1, 1};
-    imgDesc.format = kFormat;
-    imgDesc.usage = wgpu::TextureUsage::TextureBinding | wgpu::TextureUsage::CopyDst;
-    imgDesc.mipLevelCount = 1;
-    imgDesc.sampleCount = 1;
-    imgDesc.dimension = wgpu::TextureDimension::_2D;
-    wgpu::Texture emptyTex = arena.createTexture(imgDesc);
+    wgpu::Texture emptyTex = arena.createTexture(gpu::TextureDescriptor{
+        "FilterImageEmptySource", gpu::Extent2d{1, 1}, gpu::TextureFormat::RGBA8Unorm,
+        gpu::TextureUsage::Sampled | gpu::TextureUsage::CopyDst});
     const uint8_t zero[4] = {0, 0, 0, 0};
     wgpu::TexelCopyTextureInfo dstInfo{};
     dstInfo.texture = emptyTex;
@@ -3727,15 +3717,9 @@ wgpu::Texture GeodeFilterEngine::applyImage(
   const uint32_t imgH = static_cast<uint32_t>(primitive.imageHeight);
   const std::vector<uint8_t> premul = svg::PremultiplyRgba(imageData);
 
-  wgpu::TextureDescriptor imgDesc{};
-  imgDesc.label = wgpuLabel("FilterImageSource");
-  imgDesc.size = {imgW, imgH, 1};
-  imgDesc.format = kFormat;
-  imgDesc.usage = wgpu::TextureUsage::TextureBinding | wgpu::TextureUsage::CopyDst;
-  imgDesc.mipLevelCount = 1;
-  imgDesc.sampleCount = 1;
-  imgDesc.dimension = wgpu::TextureDimension::_2D;
-  wgpu::Texture imgTex = arena.createTexture(imgDesc);
+  wgpu::Texture imgTex = arena.createTexture(gpu::TextureDescriptor{
+      "FilterImageSource", gpu::Extent2d{imgW, imgH}, gpu::TextureFormat::RGBA8Unorm,
+      gpu::TextureUsage::Sampled | gpu::TextureUsage::CopyDst});
   if (!imgTex) {
     return renderTransparentOutput();
   }

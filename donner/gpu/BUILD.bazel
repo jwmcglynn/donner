@@ -61,6 +61,16 @@ donner_cc_library(
     visibility = donner_internal_visibility(),
 )
 
+# The sub-rectangle texture-copy scene shared by the backend copy slices: the
+# same source pattern, destination fill, copy rectangle, origins, and expected
+# image.
+donner_cc_library(
+    name = "sub_rectangle_copy_scene",
+    testonly = 1,
+    hdrs = ["tests/SubRectangleCopyScene.h"],
+    visibility = donner_internal_visibility(),
+)
+
 # gmock matchers and unwrap helpers shared by the model tests here and by backend/adapter
 # conformance tests in other packages (e.g. the Geode wgpu adapter).
 donner_cc_library(

@@ -1163,6 +1163,7 @@ struct VulkanDevice::Impl {
   /// @param state Encoding state.
   /// @param copy Recorded command.
   Status encodeCopyTextureToBuffer(EncodingState& state, const CopyTextureToBufferCommand& copy);
+  Status encodeCopyTextureToTexture(EncodingState& state, const CopyTextureToTextureCommand& copy);
 
   /// Encodes a render-pass command, or returns empty when the command is not one.
   /// @param state Encoding state.
@@ -2794,13 +2795,49 @@ std::optional<Status> VulkanDevice::Impl::encodeComputeCommand(EncodingState& st
   return std::nullopt;
 }
 
+Status VulkanDevice::Impl::encodeCopyTextureToTexture(EncodingState& state,
+                                                      const CopyTextureToTextureCommand& copy) {
+  if (state.inRenderPass) {
+    return GpuError{GpuErrorType::InvalidState, "copyTextureToTexture inside a render pass"};
+  }
+  TextureRecord* source = FindRecord(textures, copy.textureSrcId.slotIndex);
+  TextureRecord* destination = FindRecord(textures, copy.textureDstId.slotIndex);
+  if (source == nullptr || destination == nullptr) {
+    return GpuError{GpuErrorType::InvalidState,
+                    "copyTextureToTexture: source or destination texture is missing"};
+  }
+
+  // Both operands move to their transfer layouts first. The staged layout is recorded for each so
+  // a later pass's transition prescan starts from what this copy actually left behind, rather
+  // than from the layout the texture was created in.
+  RecordImageBarrier(*api, state.commandBuffer, source->image,
+                     encodedLayoutOf(state, copy.textureSrcId.slotIndex, *source),
+                     VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+  state.stagedLayouts[copy.textureSrcId.slotIndex] = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+  RecordImageBarrier(*api, state.commandBuffer, destination->image,
+                     encodedLayoutOf(state, copy.textureDstId.slotIndex, *destination),
+                     VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+  state.stagedLayouts[copy.textureDstId.slotIndex] = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+
+  VkImageCopy copyRegion = {};
+  copyRegion.srcSubresource = VkImageSubresourceLayers{VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+  copyRegion.srcOffset = VkOffset3D{static_cast<int32_t>(copy.sourceOrigin.x),
+                                    static_cast<int32_t>(copy.sourceOrigin.y), 0};
+  copyRegion.dstSubresource = VkImageSubresourceLayers{VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+  copyRegion.dstOffset = VkOffset3D{static_cast<int32_t>(copy.destinationOrigin.x),
+                                    static_cast<int32_t>(copy.destinationOrigin.y), 0};
+  copyRegion.extent = VkExtent3D{copy.copySize.width, copy.copySize.height, 1};
+  api->vkCmdCopyImage(state.commandBuffer, source->image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                      destination->image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copyRegion);
+  return OkStatus();
+}
+
 std::optional<Status> VulkanDevice::Impl::encodeCopyCommand(EncodingState& state,
                                                             const Command& command) {
   if (const auto* copy = std::get_if<CopyTextureToBufferCommand>(&command)) {
     return encodeCopyTextureToBuffer(state, *copy);
-  } else if (std::get_if<CopyTextureToTextureCommand>(&command) != nullptr) {
-    return Status(GpuError{GpuErrorType::Unsupported,
-                           "the Vulkan backend does not implement copyTextureToTexture yet"});
+  } else if (const auto* textureCopy = std::get_if<CopyTextureToTextureCommand>(&command)) {
+    return encodeCopyTextureToTexture(state, *textureCopy);
   }
   return std::nullopt;
 }

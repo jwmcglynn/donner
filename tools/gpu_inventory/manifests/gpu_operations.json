@@ -427,7 +427,6 @@
       "operations": [
         "beginComputePass",
         "copyTextureToBuffer",
-        "copyTextureToTexture",
         "createBindGroup",
         "createBuffer",
         "createCommandEncoder",
@@ -678,7 +677,8 @@
         "writeTexture"
       ],
       "wgpuCFunctions": [
-        "wgpuLabel"
+        "wgpuLabel",
+        "wgpuTextureOf"
       ],
       "wgpuCTypes": [
         "WGPUBindGroupLayout"
@@ -716,11 +716,8 @@
         "TexelCopyBufferLayout",
         "TexelCopyTextureInfo",
         "Texture",
-        "TextureDescriptor",
-        "TextureDimension",
         "TextureFormat",
         "TextureSampleType",
-        "TextureUsage",
         "TextureView",
         "TextureViewDimension"
       ]
@@ -731,8 +728,7 @@
         "CommandEncoder",
         "ComputePipeline",
         "Device",
-        "Texture",
-        "TextureDescriptor"
+        "Texture"
       ]
     },
     "donner/svg/renderer/geode/GeodePipeline.cc": {
@@ -1147,7 +1143,8 @@
         "mapAsync",
         "poll",
         "submit",
-        "unmap"
+        "unmap",
+        "writeTexture"
       ],
       "wgpuCFunctions": [
         "wgpuLabel",

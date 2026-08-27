@@ -433,6 +433,22 @@ struct Extent2d {
   }
 };
 
+/// A 2D texel coordinate, used as the corner a copy region starts at. The default (0, 0) is the
+/// whole-rect-from-the-origin convention every copy used before sub-rectangle copies existed.
+struct Origin2d {
+  uint32_t x = 0;  //!< Column of the first copied texel.
+  uint32_t y = 0;  //!< Row of the first copied texel.
+
+  /// Equality operator. @param other Origin to compare against.
+  bool operator==(const Origin2d& other) const = default;
+
+  /// Ostream output operator, e.g. `(4, 8)`. @param os Output stream. @param value Origin to
+  /// output.
+  friend std::ostream& operator<<(std::ostream& os, const Origin2d& value) {
+    return os << "(" << value.x << ", " << value.y << ")";
+  }
+};
+
 /// Descriptor for `Device::createBuffer`.
 struct BufferDescriptor {
   RcString label;                         //!< Debug label; also appears in recordings.

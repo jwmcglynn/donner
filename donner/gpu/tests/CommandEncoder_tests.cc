@@ -7,6 +7,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <limits>
 #include <memory>
 #include <utility>
 
@@ -490,13 +491,61 @@ TEST_F(CopyTextureToTextureTests, RejectsZeroCopySize) {
 TEST_F(CopyTextureToTextureTests, RejectsCopyBeyondSourceExtent) {
   const Texture destination = createDestination(Extent2d{8, 8});
   EXPECT_THAT(encoder_->copyTextureToTexture(target_, destination, Extent2d{8, 8}),
-              IsGpuErrorWithMessage(GpuErrorType::OutOfBounds, HasSubstr("exceeds source")));
+              IsGpuErrorWithMessage(GpuErrorType::OutOfBounds,
+                                    HasSubstr("source rectangle 8x8 at (0, 0) does not fit")));
 }
 
 TEST_F(CopyTextureToTextureTests, RejectsCopyBeyondDestinationExtent) {
   const Texture destination = createDestination(Extent2d{2, 2});
   EXPECT_THAT(encoder_->copyTextureToTexture(target_, destination, Extent2d{4, 4}),
-              IsGpuErrorWithMessage(GpuErrorType::OutOfBounds, HasSubstr("exceeds destination")));
+              IsGpuErrorWithMessage(GpuErrorType::OutOfBounds,
+                                    HasSubstr("destination rectangle 4x4 at (0, 0) does not fit")));
+}
+
+TEST_F(CopyTextureToTextureTests, SubRectangleCopyIsAcceptedAndSubmits) {
+  const Texture destination = createDestination(Extent2d{8, 8});
+  EXPECT_THAT(encoder_->copyTextureToTexture(target_, destination, Extent2d{2, 2}, Origin2d{2, 1},
+                                             Origin2d{5, 6}),
+              IsOk());
+
+  auto finished = encoder_->finish();
+  ASSERT_THAT(finished, HasResult());
+  EXPECT_THAT(device_.submit(std::move(finished).result()), HasResult());
+}
+
+TEST_F(CopyTextureToTextureTests, ACopyFlushWithTheSourceEdgeIsAccepted) {
+  // The far edge check is inclusive: a rectangle ending exactly on the texture edge is in bounds,
+  // and rejecting it would make the last row and column of every texture uncopyable.
+  const Texture destination = createDestination(Extent2d{8, 8});
+  EXPECT_THAT(encoder_->copyTextureToTexture(target_, destination, Extent2d{2, 2}, Origin2d{2, 2},
+                                             Origin2d{6, 6}),
+              IsOk());
+}
+
+TEST_F(CopyTextureToTextureTests, RejectsSourceOriginThatPushesTheRectPastTheEdge) {
+  const Texture destination = createDestination(Extent2d{8, 8});
+  EXPECT_THAT(encoder_->copyTextureToTexture(target_, destination, Extent2d{4, 4}, Origin2d{1, 0}),
+              IsGpuErrorWithMessage(GpuErrorType::OutOfBounds,
+                                    HasSubstr("source rectangle 4x4 at (1, 0) does not fit "
+                                              "source \"target\" size 4x4")));
+}
+
+TEST_F(CopyTextureToTextureTests, RejectsDestinationOriginThatPushesTheRectPastTheEdge) {
+  const Texture destination = createDestination(Extent2d{4, 4});
+  EXPECT_THAT(encoder_->copyTextureToTexture(target_, destination, Extent2d{4, 4}, Origin2d{},
+                                             Origin2d{0, 1}),
+              IsGpuErrorWithMessage(GpuErrorType::OutOfBounds,
+                                    HasSubstr("destination rectangle 4x4 at (0, 1) does not fit "
+                                              "destination \"copyDst\" size 4x4")));
+}
+
+TEST_F(CopyTextureToTextureTests, RejectsAnOriginThatWouldOverflowThirtyTwoBitArithmetic) {
+  // origin + extent is computed in 64 bits: in 32-bit arithmetic this pair wraps to a small
+  // in-bounds far edge, and the copy would be accepted and then read out of the texture.
+  const Texture destination = createDestination(Extent2d{8, 8});
+  EXPECT_THAT(encoder_->copyTextureToTexture(target_, destination, Extent2d{4, 4},
+                                             Origin2d{std::numeric_limits<uint32_t>::max() - 1, 0}),
+              IsGpuErrorWithMessage(GpuErrorType::OutOfBounds, HasSubstr("does not fit source")));
 }
 
 TEST_F(CopyTextureToTextureTests, RejectsNullSourceHandle) {

@@ -319,6 +319,7 @@ struct MetalDevice::Impl {
   /// @param state Encoding state.
   /// @param copy Recorded command.
   Status encodeCopyTextureToBuffer(EncodingState& state, const CopyTextureToBufferCommand& copy);
+  Status encodeCopyTextureToTexture(EncodingState& state, const CopyTextureToTextureCommand& copy);
 
   /// Encodes a render-pass command, or returns empty when \p command is not one.
   /// @param state Encoding state. @param command Recorded command.
@@ -1013,6 +1014,38 @@ Status MetalDevice::Impl::encodeCopyTextureToBuffer(EncodingState& state,
   return OkStatus();
 }
 
+Status MetalDevice::Impl::encodeCopyTextureToTexture(EncodingState& state,
+                                                     const CopyTextureToTextureCommand& copy) {
+  if (state.renderEncoder != nil) {
+    return GpuError{GpuErrorType::InvalidState, "copyTextureToTexture inside a render pass"};
+  }
+  if (state.computeEncoder != nil) {
+    return GpuError{GpuErrorType::InvalidState, "copyTextureToTexture inside a compute pass"};
+  }
+  id<MTLTexture> source = GetSlot(textures, copy.textureSrcId.slotIndex);
+  id<MTLTexture> destination = GetSlot(textures, copy.textureDstId.slotIndex);
+  if (source == nil || destination == nil) {
+    return GpuError{GpuErrorType::InvalidState,
+                    "copyTextureToTexture: source or destination texture is missing"};
+  }
+  id<MTLBlitCommandEncoder> blitEncoder = [state.commandBuffer blitCommandEncoder];
+  if (blitEncoder == nil) {
+    return GpuError{GpuErrorType::InvalidState, "Metal blit command encoder creation failed"};
+  }
+  [blitEncoder
+        copyFromTexture:source
+            sourceSlice:0
+            sourceLevel:0
+           sourceOrigin:MTLOriginMake(copy.sourceOrigin.x, copy.sourceOrigin.y, 0)
+             sourceSize:MTLSizeMake(copy.copySize.width, copy.copySize.height, 1)
+              toTexture:destination
+       destinationSlice:0
+       destinationLevel:0
+      destinationOrigin:MTLOriginMake(copy.destinationOrigin.x, copy.destinationOrigin.y, 0)];
+  [blitEncoder endEncoding];
+  return OkStatus();
+}
+
 std::optional<Status> MetalDevice::Impl::encodeRenderCommand(EncodingState& state,
                                                              const Command& command) {
   if (const auto* beginPass = std::get_if<BeginRenderPassCommand>(&command)) {
@@ -1098,9 +1131,8 @@ std::optional<Status> MetalDevice::Impl::encodeCopyCommand(EncodingState& state,
                                                            const Command& command) {
   if (const auto* copy = std::get_if<CopyTextureToBufferCommand>(&command)) {
     return encodeCopyTextureToBuffer(state, *copy);
-  } else if (std::get_if<CopyTextureToTextureCommand>(&command) != nullptr) {
-    return Status(GpuError{GpuErrorType::Unsupported,
-                           "the Metal backend does not implement copyTextureToTexture yet"});
+  } else if (const auto* textureCopy = std::get_if<CopyTextureToTextureCommand>(&command)) {
+    return encodeCopyTextureToTexture(state, *textureCopy);
   }
   return std::nullopt;
 }

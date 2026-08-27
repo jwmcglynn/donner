@@ -509,8 +509,11 @@ Status CommandEncoder::copyTextureToBuffer(const TexelCopyTextureInfo& source,
 Status CommandEncoder::validateCopyTexturePair(const Texture& source, const Texture& destination,
                                                const TextureDescriptor& sourceDescriptor,
                                                const TextureDescriptor& destinationDescriptor) {
-  // WebGPU forbids self-copy: source and destination must be different textures
-  // ("GPUCommandEncoder.copyTextureToTexture" validation; overlapping copies are undefined).
+  // Source and destination must be different textures. WebGPU allows one texture to be both
+  // operands when the two rectangles do not overlap, but deciding that needs an overlap test on
+  // the origins, and a copy whose rectangles do overlap is undefined rather than diagnosable.
+  // Rejecting every same-texture copy keeps the operation decidable from the handles alone; a
+  // caller that wants to move a region within one texture copies through a scratch texture.
   if (source.slotIndex() == destination.slotIndex() &&
       source.generation() == destination.generation()) {
     return fail(Err(GpuErrorType::InvalidDescriptor,
@@ -540,7 +543,26 @@ Status CommandEncoder::validateCopyTexturePair(const Texture& source, const Text
   return OkStatus();
 }
 
-Status CommandEncoder::validateCopyExtent(const Extent2d& copySize,
+Status CommandEncoder::validateCopyRectFits(std::string_view role, const Origin2d& origin,
+                                            const Extent2d& copySize,
+                                            const TextureDescriptor& descriptor) {
+  // The origin is caller-supplied, so the far edge is computed in 64 bits: a near-UINT32_MAX
+  // origin plus a large extent wraps in 32-bit arithmetic and would compare as in-bounds.
+  const std::optional<uint64_t> right = CheckedAdd(uint64_t{origin.x}, uint64_t{copySize.width});
+  const std::optional<uint64_t> bottom = CheckedAdd(uint64_t{origin.y}, uint64_t{copySize.height});
+  if (!right || !bottom || *right > descriptor.size.width || *bottom > descriptor.size.height) {
+    return fail(
+        Err(GpuErrorType::OutOfBounds,
+            std::format("copyTextureToTexture: {} rectangle {}x{} at ({}, {}) does not fit "
+                        "{} \"{}\" size {}x{}",
+                        role, copySize.width, copySize.height, origin.x, origin.y, role,
+                        descriptor.label.str(), descriptor.size.width, descriptor.size.height)));
+  }
+  return OkStatus();
+}
+
+Status CommandEncoder::validateCopyExtent(const Extent2d& copySize, const Origin2d& sourceOrigin,
+                                          const Origin2d& destinationOrigin,
                                           const TextureDescriptor& sourceDescriptor,
                                           const TextureDescriptor& destinationDescriptor) {
   if (copySize.width == 0 || copySize.height == 0) {
@@ -548,29 +570,17 @@ Status CommandEncoder::validateCopyExtent(const Extent2d& copySize,
                     std::format("copyTextureToTexture: copy size {}x{} has a zero dimension",
                                 copySize.width, copySize.height)));
   }
-  // Copies are whole-rect from texel (0, 0), so fitting reduces to per-axis extent comparisons
-  // (no origin addition to overflow-check).
-  if (copySize.width > sourceDescriptor.size.width ||
-      copySize.height > sourceDescriptor.size.height) {
-    return fail(
-        Err(GpuErrorType::OutOfBounds,
-            std::format("copyTextureToTexture: copy size {}x{} exceeds source \"{}\" size {}x{}",
-                        copySize.width, copySize.height, sourceDescriptor.label.str(),
-                        sourceDescriptor.size.width, sourceDescriptor.size.height)));
+  const Status sourceStatus =
+      validateCopyRectFits("source", sourceOrigin, copySize, sourceDescriptor);
+  if (sourceStatus.hasError()) {
+    return sourceStatus;
   }
-  if (copySize.width > destinationDescriptor.size.width ||
-      copySize.height > destinationDescriptor.size.height) {
-    return fail(Err(
-        GpuErrorType::OutOfBounds,
-        std::format("copyTextureToTexture: copy size {}x{} exceeds destination \"{}\" size {}x{}",
-                    copySize.width, copySize.height, destinationDescriptor.label.str(),
-                    destinationDescriptor.size.width, destinationDescriptor.size.height)));
-  }
-  return OkStatus();
+  return validateCopyRectFits("destination", destinationOrigin, copySize, destinationDescriptor);
 }
 
 Status CommandEncoder::copyTextureToTexture(const Texture& source, const Texture& destination,
-                                            const Extent2d& copySize) {
+                                            const Extent2d& copySize, const Origin2d& sourceOrigin,
+                                            const Origin2d& destinationOrigin) {
   if (std::optional<GpuError> error = checkRecordable(PassKind::None)) {
     return fail(std::move(*error));
   }
@@ -592,14 +602,16 @@ Status CommandEncoder::copyTextureToTexture(const Texture& source, const Texture
   if (pairStatus.hasError()) {
     return pairStatus;
   }
-  const Status extentStatus = validateCopyExtent(copySize, sourceDescriptor, destinationDescriptor);
+  const Status extentStatus = validateCopyExtent(copySize, sourceOrigin, destinationOrigin,
+                                                 sourceDescriptor, destinationDescriptor);
   if (extentStatus.hasError()) {
     return extentStatus;
   }
 
   commands_.push_back(CopyTextureToTextureCommand{
       ResourceIdentity{source.slotIndex(), source.generation()},
-      ResourceIdentity{destination.slotIndex(), destination.generation()}, copySize});
+      ResourceIdentity{destination.slotIndex(), destination.generation()}, copySize, sourceOrigin,
+      destinationOrigin});
   return OkStatus();
 }
 

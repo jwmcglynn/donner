@@ -274,9 +274,33 @@ TEST(RecordingDeviceTests, CopyTextureToTextureSerializesSourceDestinationAndSiz
   ASSERT_THAT(commandBuffer, HasResult());
   ASSERT_THAT(device.submit(std::move(commandBuffer).result()), HasResult());
 
-  // Line format: labeled src and dst identities, then the copy extent.
+  // Line format: labeled src and dst identities each followed by their origin, then the copy
+  // extent. The default origins are spelled out rather than omitted.
   EXPECT_THAT(device.serialize(),
-              HasSubstr("  copyTextureToTexture src=texture#0 dst=texture#1 copySize=4x4\n"));
+              HasSubstr("  copyTextureToTexture src=texture#0 srcOrigin=(0, 0) dst=texture#1 "
+                        "dstOrigin=(0, 0) copySize=4x4\n"));
+}
+
+TEST(RecordingDeviceTests, CopyTextureToTextureSerializesSubRectangleOrigins) {
+  RecordingDevice device;
+  const Texture source = GetResultOrFail(device.createTexture(TextureDescriptor{
+      "source", Extent2d{8, 8}, TextureFormat::RGBA8Unorm, TextureUsage::CopySrc}));
+  const Texture destination = GetResultOrFail(device.createTexture(TextureDescriptor{
+      "destination", Extent2d{8, 8}, TextureFormat::RGBA8Unorm, TextureUsage::CopyDst}));
+
+  std::unique_ptr<CommandEncoder> encoder = GetResultOrFail(device.createCommandEncoder());
+  ASSERT_THAT(encoder->copyTextureToTexture(source, destination, Extent2d{3, 2}, Origin2d{5, 1},
+                                            Origin2d{0, 6}),
+              IsOk());
+  auto commandBuffer = encoder->finish();
+  ASSERT_THAT(commandBuffer, HasResult());
+  ASSERT_THAT(device.submit(std::move(commandBuffer).result()), HasResult());
+
+  // Two copies that differ only in where they read and write must serialize differently, or a
+  // recorded stream cannot be used to tell them apart.
+  EXPECT_THAT(device.serialize(),
+              HasSubstr("  copyTextureToTexture src=texture#0 srcOrigin=(5, 1) dst=texture#1 "
+                        "dstOrigin=(0, 6) copySize=3x2\n"));
 }
 
 TEST(RecordingDeviceTests, SpirvShaderModuleSerializesWordCountAndHash) {

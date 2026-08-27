@@ -113,4 +113,30 @@ donner_cc_test(
     ],
 )
 
+# The Vulkan texture-to-texture copy slice: a sub-rectangle copy between two
+# origins, executed and compared against the shared expected image. Like the
+# compute slice this is a plain Linux-gated test with no geode transition and no
+# pinned driver: the expected bytes are an exact copy of bytes the test itself
+# uploaded, so there is no cross-driver quantization freedom to control for, and
+# running on whatever driver the host exposes covers the real hardware path.
+#
+# Deliberately carries no executor-routing properties, for the reason spelled out
+# on the solid-fill wrapper above: a property naming a worker class the execution
+# pool does not offer queues the action forever instead of failing.
+donner_cc_test(
+    name = "vulkan_sub_rectangle_copy_tests",
+    srcs = ["VulkanSubRectangleCopy_tests.cc"],
+    env = {
+        "DONNER_REQUIRE_VULKAN": "1",
+        "XDG_RUNTIME_DIR": "/tmp",
+    },
+    target_compatible_with = ["@platforms//os:linux"],
+    deps = [
+        "//donner/gpu",
+        "//donner/gpu:sub_rectangle_copy_scene",
+        "//donner/gpu/vulkan:vulkan_device",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
 donner_package()
