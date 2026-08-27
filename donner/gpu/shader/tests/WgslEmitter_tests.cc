@@ -13,6 +13,7 @@
 #include <utility>
 #include <vector>
 
+#include "donner/gpu/shader/tests/ReductionCoverageModule.h"
 #include "donner/gpu/shader/tests/ShaderTestUtils.h"
 #include "donner/gpu/shader/tests/StageIoTestModules.h"
 
@@ -215,6 +216,17 @@ TEST(WgslEmitterTests, OutputHasNoTrailingWhitespaceOrCr) {
       GetShaderResultOrFail(EmitWgsl(BuildEmitterCoverageModule()), std::string());
   EXPECT_THAT(wgsl, testing::Not(HasSubstr("\r")));
   EXPECT_THAT(wgsl, testing::Not(HasSubstr(" \n")));
+}
+
+TEST(WgslEmitterTests, BothBoolVectorReductionsEmitTheirWgslSpellings) {
+  ShaderResult<IrModule> module = BuildVectorReductionModule();
+  ASSERT_THAT(module, HasShaderResult());
+  const std::string wgsl = GetShaderResultOrFail(EmitWgsl(module.result()), std::string());
+
+  // Both reductions, over the comparison each is meant to reduce: an emitter that swapped the
+  // two names, or reduced the other comparison, still produces valid WGSL.
+  EXPECT_THAT(wgsl, HasSubstr("let inside = all((gid.xy < extent));"));
+  EXPECT_THAT(wgsl, HasSubstr("let overflow = any((gid.xy >= extent));"));
 }
 
 TEST(WgslEmitterTests, GoldenEmissionOfCoverageModule) {

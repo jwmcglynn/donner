@@ -96,6 +96,7 @@ donner_cc_test(
         "tests/IrLayout_tests.cc",
         "tests/IrSerialization_tests.cc",
         "tests/MslEmitter_tests.cc",
+        "tests/ReductionCoverageModule.h",
         "tests/ShaderGoldenUtils.h",
         "tests/ShaderTestUtils.h",
         "tests/SnapshotUnpremultiplyProgram_tests.cc",
@@ -115,10 +116,9 @@ donner_cc_test(
         "tests/testdata/solid_fill.wgsl",
     ],
     deps = [
-        ":stage_io_test_modules",
-
         ":programs",
         ":shader",
+        ":stage_io_test_modules",
         "//donner/base:base_test_utils",
         "@com_google_gtest//:gtest_main",
         "@rules_cc//cc/runfiles",
@@ -133,14 +133,14 @@ donner_cc_test(
     name = "msl_xcrun_validation_tests",
     srcs = [
         "tests/MslXcrunValidation_tests.cc",
+        "tests/ReductionCoverageModule.h",
         "tests/ShaderTestUtils.h",
     ],
     target_compatible_with = ["@platforms//os:macos"],
     deps = [
-        ":stage_io_test_modules",
-
         ":programs",
         ":shader",
+        ":stage_io_test_modules",
         "@com_google_gtest//:gtest_main",
     ],
 )
@@ -152,14 +152,14 @@ donner_cc_test(
 donner_cc_test(
     name = "spirv_val_validation_tests",
     srcs = [
+        "tests/ReductionCoverageModule.h",
         "tests/ShaderTestUtils.h",
         "tests/SpirvValValidation_tests.cc",
     ],
     deps = [
-        ":stage_io_test_modules",
-
         ":programs",
         ":shader",
+        ":stage_io_test_modules",
         "@com_google_gtest//:gtest_main",
     ],
 )

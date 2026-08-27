@@ -14,6 +14,7 @@
 
 #include "donner/base/tests/Runfiles.h"
 #include "donner/gpu/shader/programs/SolidFill.h"
+#include "donner/gpu/shader/tests/ReductionCoverageModule.h"
 #include "donner/gpu/shader/tests/ShaderTestUtils.h"
 #include "donner/gpu/shader/tests/StageIoTestModules.h"
 
@@ -29,6 +30,17 @@ std::string EmitSolidFillMsl() {
     return "";
   }
   return GetShaderResultOrFail(EmitMsl(module.result()), std::string());
+}
+
+TEST(MslEmitterTests, BothBoolVectorReductionsEmitTheirMslSpellings) {
+  ShaderResult<IrModule> module = BuildVectorReductionModule();
+  ASSERT_THAT(module, HasShaderResult());
+  const std::string msl = GetShaderResultOrFail(EmitMsl(module.result()), std::string());
+
+  // Metal spells the reductions the same way WGSL does, so a wrong mapping shows up as the other
+  // reduction's name rather than as a compile error the validator would catch for us.
+  EXPECT_THAT(msl, testing::HasSubstr("const bool inside = all((gid.xy < extent));"));
+  EXPECT_THAT(msl, testing::HasSubstr("const bool overflow = any((gid.xy >= extent));"));
 }
 
 TEST(MslEmitterTests, EmitsDeterministically) {

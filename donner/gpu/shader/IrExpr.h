@@ -248,10 +248,14 @@ ShaderResult<IrExpr> Mod(const IrExpr& lhs, const IrExpr& rhs, const RcString& l
 
 ShaderResult<IrExpr> Div(const IrExpr& lhs, const IrExpr& rhs, const RcString& label = "div");
 
-/// Comparisons take matching numeric scalars or matching numeric vectors. A scalar comparison
-/// yields `bool`; a vector comparison yields a bool vector of the same size, compared
-/// componentwise, which is how WGSL, MSL, and SPIR-V all define it. \ref Any and \ref All reduce
-/// such a vector back to a single bool.
+/// Every comparison below takes two operands of the same type, and both may be scalars or
+/// vectors: a scalar comparison yields `bool`, a vector comparison compares componentwise and
+/// yields a bool vector of the same size, which is how WGSL, MSL, and SPIR-V all define it.
+/// \ref Any and \ref All reduce such a vector back to a single bool.
+///
+/// The ordered comparisons (\ref Lt, \ref Le, \ref Gt, \ref Ge) additionally require numeric
+/// operands, since bool has no ordering. \ref Eq and \ref Ne do not: comparing two bools, or
+/// two bool vectors, is meaningful and allowed.
 
 /// `lhs < rhs` componentwise; yields bool or a bool vector.
 /// @param lhs Left operand. @param rhs Right operand. @param label Diagnostic label.

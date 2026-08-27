@@ -13,8 +13,14 @@ namespace donner::gpu::shader {
 
 namespace {
 
-/// The infix operator text for \p op. WGSL, MSL, and (for the operators the IR carries) C-family
-/// syntax agree on every spelling here, so both text emitters share one table.
+/// The infix operator text for \p op in WGSL.
+///
+/// MslEmitter.cc carries its own copy that happens to hold the same spellings, because every
+/// operator the IR has is written the same way in both languages. They are kept separate rather
+/// than shared: the agreement is a coincidence of the current operator set, not a property the
+/// two languages guarantee, and a future operator that diverges should be a one-line change in
+/// one emitter rather than a conditional in a shared table.
+///
 /// @param op Binary operator.
 std::string_view BinaryOperatorText(BinaryOp op) {
   switch (op) {
