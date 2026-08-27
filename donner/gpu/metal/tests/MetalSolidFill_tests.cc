@@ -17,9 +17,12 @@
 #include <array>
 #include <cstdint>
 #include <cstring>
+#include <filesystem>
 #include <memory>
 #include <optional>
 #include <span>
+#include <string_view>
+#include <system_error>
 #include <utility>
 #include <vector>
 
@@ -98,26 +101,36 @@ protected:
       }
       GTEST_SKIP() << message;
     }
+  }
 
-    // Two GPUs running the same shaders round a covered edge texel differently, so the frozen
-    // pixels are filed one directory per adapter and this slice resolves its own. Sharing the
-    // corpus rather than keeping a second copy of the same bytes is deliberate: a private golden
-    // is what let this slice drift away from the renderer it exists to validate.
-    slug_ = baseline::AdapterSlug(device_->adapterName(), "Metal");
-    goldenPath_ = std::string(kBaselinesRunfileDir) + "/" + slug_ + "/solid_fill_baseline.png";
-    if (Runfiles::instance().Rlocation(goldenPath_).empty()) {
-      const baseline::MissingComparisonDisposition disposition =
-          baseline::DispositionForUnbaselinedAdapter(baseline::RunningUnderContinuousIntegration());
-      const std::string message = baseline::UnbaselinedAdapterMessage(
-          device_->adapterName(), "Metal", slug_, /*capturedPath=*/"",
-          "this slice renders through donner::gpu, not the production path the baselines come "
-          "from; capture one with //donner/gpu/baseline:capture_baselines",
-          disposition);
-      if (disposition == baseline::MissingComparisonDisposition::FailClosed) {
-        FAIL() << message;
-      }
-      GTEST_SKIP() << message;
-    }
+  /**
+   * Runfiles path of the frozen baseline filed for \p adapterName, or empty when no directory
+   * matches.
+   *
+   * Two GPUs running the same shaders round a covered edge texel differently, so the frozen
+   * pixels are filed one directory per adapter and this slice resolves its own. Sharing the
+   * corpus rather than keeping a second copy of the same bytes is deliberate: a private golden is
+   * what let this slice drift away from the renderer it exists to validate.
+   *
+   * The lookup deliberately does NOT live in SetUp. The baseline is an input to the pixel
+   * comparison and to nothing else in this fixture; gating every case on it would let a corpus
+   * that has not caught up with new hardware take unrelated regressions down with it, red on an
+   * automated lane and silent locally.
+   *
+   * @param adapterName Adapter to resolve a baseline for.
+   * @return The runfiles path, or an empty string when this adapter has no committed baseline.
+   */
+  static std::string baselinePathFor(std::string_view adapterName) {
+    const std::string path = std::string(kBaselinesRunfileDir) + "/" +
+                             baseline::AdapterSlug(adapterName, "Metal") +
+                             "/solid_fill_baseline.png";
+    // Rlocation composes a path without looking for the file, so the existence test has to be
+    // explicit. Returning a path for an adapter with no committed directory would walk straight
+    // past the unbaselined rule and fail later as a golden that would not open, which reports a
+    // missing baseline as a pixel mismatch.
+    std::error_code error;
+    return std::filesystem::exists(Runfiles::instance().Rlocation(path), error) ? path
+                                                                                : std::string();
   }
 
   /// Unwraps an RHI result, failing the test on error.
@@ -149,11 +162,19 @@ protected:
   }
 
   std::unique_ptr<MetalDevice> device_;
-  std::string slug_;        //!< Adapter directory this run's baseline lives in.
-  std::string goldenPath_;  //!< Runfiles path of that baseline.
 };
 
 TEST_F(MetalSolidFillTest, ReadBackBufferRejectsStaleHandleAfterSlotReuse) {
+  // This case must run on any adapter, including one the corpus has no baseline for: it compares
+  // no pixels, and gating it on the corpus would let hardware the baselines have not caught up
+  // with hide a real buffer regression - red on an automated lane, silent everywhere else.
+  //
+  // Two things hold that. Structurally, SetUp resolves no baseline and this fixture stores none,
+  // so nothing but the pixel case can be gated on one. And the unbaselined branch is reachable
+  // rather than dead: an adapter name no directory can match comes back empty here, which is only
+  // true because the resolver tests for the file rather than trusting a composed runfiles path.
+  EXPECT_TRUE(baselinePathFor("no adapter is named this").empty());
+
   // The readback helper must validate the handle's generation: after destroy + recreate the
   // freed slot is reused, and a stale handle must fail closed instead of reading the wrong
   // buffer.
@@ -181,6 +202,23 @@ TEST_F(MetalSolidFillTest, ReadBackBufferRejectsStaleHandleAfterSlotReuse) {
 }
 
 TEST_F(MetalSolidFillTest, MatchesFrozenBaseline) {
+  // ----- The frozen baseline for this run's adapter -----
+  const std::string goldenPath = baselinePathFor(device_->adapterName());
+  if (goldenPath.empty()) {
+    const baseline::MissingComparisonDisposition disposition =
+        baseline::DispositionForUnbaselinedAdapter(baseline::RunningUnderContinuousIntegration());
+    const std::string message = baseline::UnbaselinedAdapterMessage(
+        device_->adapterName(), "Metal", baseline::AdapterSlug(device_->adapterName(), "Metal"),
+        /*capturedPath=*/"",
+        "this slice renders through donner::gpu, not the production path the baselines come "
+        "from; capture one with //donner/gpu/baseline:capture_baselines",
+        disposition);
+    if (disposition == baseline::MissingComparisonDisposition::FailClosed) {
+      FAIL() << message;
+    }
+    GTEST_SKIP() << message;
+  }
+
   // ----- Shader module and pipeline from the emitted MSL -----
   shader::ShaderResult<shader::IrModule> irModule = shader::programs::BuildSolidFillModule();
   ASSERT_FALSE(irModule.hasError()) << irModule.error();
@@ -399,7 +437,7 @@ TEST_F(MetalSolidFillTest, MatchesFrozenBaseline) {
 
   // Strict identity: the Metal slice must reproduce the frozen baseline byte-for-byte (zero
   // mismatched pixels, anti-aliased pixels included).
-  editor::tests::CompareBitmapToGolden(bitmap, goldenPath_, "metal_solid_fill",
+  editor::tests::CompareBitmapToGolden(bitmap, goldenPath, "metal_solid_fill",
                                        editor::tests::PixelmatchIdentityParams());
 }
 
