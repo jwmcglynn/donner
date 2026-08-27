@@ -33,17 +33,25 @@ namespace donner::gpu::vulkan {
  *
  * Memory model (documented simplification for this slice): every buffer lives in
  * HOST_VISIBLE | HOST_COHERENT memory and stays persistently mapped, so queue writes are a
- * `memcpy` and readback needs no staging. Such a memory type is guaranteed by the Vulkan
+ * `memcpy` and readback needs no staging. Which allocation a buffer is bound into is the
+ * allocator's decision, behind the seam in VulkanBufferAllocator.h: one dedicated allocation per
+ * buffer today, with a suballocating implementation replaceable there rather than at every call
+ * site, once measurement says the driver's allocation-count cap is the constraint worth spending
+ * complexity on. Such a memory type is guaranteed by the Vulkan
  * specification ("Device Memory": at least one memory type has both HOST_VISIBLE and
  * HOST_COHERENT), and both the CI software rasterizer and desktop GPUs expose it. Textures are
  * DEVICE_LOCAL (when available) with staged uploads through a transient host-visible buffer and
  * explicit image layout transitions.
  *
- * Synchronization is intentionally conservative and validation-clean: full ALL_COMMANDS /
- * memory-availability barriers around image layout transitions, explicit external subpass
- * dependencies on every render pass, and a HOST-domain buffer barrier after readback copies.
- * Barrier elision is deliberately not attempted; it would need counter and timing evidence
- * naming the bottleneck it removes.
+ * Synchronization is tracked per resource rather than assumed: every image barrier and both of
+ * every render pass's external dependencies are derived from the state model in
+ * VulkanResourceState.h, which records the stage and access that last touched each texture and
+ * names both ends of the transition to whatever uses it next. A pattern the model does not
+ * describe falls back to the maximal ALL_COMMANDS barrier, so an unrecognised usage costs
+ * precision and never correctness. Readback copies still end in a HOST-domain buffer barrier.
+ *
+ * Barrier elision - dropping a barrier the model says is needed - is still not attempted; that
+ * would need counter and timing evidence naming the bottleneck it removes.
  *
  * Threading: single-threaded use, matching \ref donner::gpu::Device's thread affinity.
  * Completion is tracked by polling per-submission fences from the owning thread; there are no
@@ -119,6 +127,52 @@ public:
    * @param texture Texture to query.
    */
   Result<TrackedTextureLayout> trackedTextureLayoutForTest(const Texture& texture) const;
+
+  /// One image barrier the backend recorded, reported as plain numbers so this header stays free
+  /// of Vulkan types. Test accessor: which barriers are emitted is the whole contract of the
+  /// resource-state model, and it is not observable in the pixels a slice reads back.
+  struct RecordedImageBarrierForTest {
+    uint32_t textureSlot = 0;  //!< Slot of the texture the barrier applies to.
+    uint32_t srcStage = 0;     //!< Source pipeline stage mask.
+    uint32_t dstStage = 0;     //!< Destination pipeline stage mask.
+    uint32_t srcAccess = 0;    //!< Access made available.
+    uint32_t dstAccess = 0;    //!< Access made visible.
+    int32_t oldLayout = 0;     //!< Layout the image was in.
+    int32_t newLayout = 0;     //!< Layout the image moved to.
+  };
+
+  /// Every image barrier recorded since the device was created, oldest first. Test accessor.
+  [[nodiscard]] std::vector<RecordedImageBarrierForTest> recordedImageBarriersForTest() const;
+
+  /// The two halves of a render pass external dependency, as plain numbers. Test accessor.
+  struct RecordedSubpassDependencyForTest {
+    uint32_t srcStage = 0;   //!< Source pipeline stage mask.
+    uint32_t dstStage = 0;   //!< Destination pipeline stage mask.
+    uint32_t srcAccess = 0;  //!< Access made available.
+    uint32_t dstAccess = 0;  //!< Access made visible.
+  };
+
+  /// The entry-side external dependency of the most recently created render pass. Fails closed
+  /// when no render pass has been created. Test accessor.
+  [[nodiscard]] Result<RecordedSubpassDependencyForTest> lastRenderPassEntryDependencyForTest()
+      const;
+
+  /// Where an injected upload failure happens, which is what decides whether the transitions it
+  /// recorded describe anything the GPU will run.
+  enum class UploadFailureModeForTest : uint8_t {
+    /// The upload fails before anything reaches the queue, so its recorded work never runs.
+    BeforeSubmit,
+    /// The submission reaches the queue and the wait for it reports a timeout, so its recorded
+    /// work is still pending and will run.
+    AfterSubmit,
+  };
+
+  /// Makes the next internal texture upload report failure at \p mode, so a test can prove what
+  /// the tracker is left holding in each case. Test seam; the upload's Vulkan work is recorded
+  /// either way, only its reported result is replaced.
+  ///
+  /// @param mode Where the injected failure happens.
+  void failNextTextureUploadForTest(UploadFailureModeForTest mode);
 
   /// Message of the most recent asynchronous Vulkan failure observed while polling or waiting
   /// on fences (e.g. VK_ERROR_DEVICE_LOST), or an empty string if none occurred.
