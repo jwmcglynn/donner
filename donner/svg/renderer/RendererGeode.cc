@@ -1961,6 +1961,18 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   /// intersection with a previous polygon) - nested rotated clips are
   /// rare enough that we accept the over-coverage fallback.
   struct ClipStackEntry {
+    ClipStackEntry() = default;
+    ~ClipStackEntry() = default;
+
+    // Move-only, explicitly. The mask textures this entry owns are move-only runtime handles, so
+    // a copy could never have worked; saying so here matters because a standard library that
+    // instantiates a container's copy constructor eagerly (libstdc++ does, libc++ does not)
+    // fails to compile on the implicit copy rather than on a copy anyone wrote.
+    ClipStackEntry(const ClipStackEntry&) = delete;
+    ClipStackEntry& operator=(const ClipStackEntry&) = delete;
+    ClipStackEntry(ClipStackEntry&&) = default;
+    ClipStackEntry& operator=(ClipStackEntry&&) = default;
+
     Box2d pixelRect;
     bool valid = false;
     bool hasPolygon = false;
