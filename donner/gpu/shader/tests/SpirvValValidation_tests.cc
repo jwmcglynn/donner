@@ -20,8 +20,11 @@
 #include "donner/gpu/shader/IrModule.h"
 #include "donner/gpu/shader/SpirvEmitter.h"
 #include "donner/gpu/shader/programs/ColorMatrix.h"
+#include "donner/gpu/shader/programs/FilterColorMatrix.h"
+#include "donner/gpu/shader/programs/Flood.h"
 #include "donner/gpu/shader/programs/SnapshotUnpremultiply.h"
 #include "donner/gpu/shader/programs/SolidFill.h"
+#include "donner/gpu/shader/programs/SubregionClip.h"
 #include "donner/gpu/shader/tests/ReductionCoverageModule.h"
 #include "donner/gpu/shader/tests/ShaderTestUtils.h"
 #include "donner/gpu/shader/tests/StageIoTestModules.h"
@@ -195,6 +198,31 @@ TEST(SpirvValValidation, EmittedColorMatrixComputePassesVulkan11Validation) {
     GTEST_SKIP() << "spirv-val (SPIRV-Tools) is not installed";
   }
   ExpectValidatesForVulkan11(spirvVal, programs::BuildColorMatrixModule(), "color_matrix.spv");
+}
+
+TEST(SpirvValValidation, EmittedFloodComputePassesVulkan11Validation) {
+  const std::string spirvVal = FindSpirvVal();
+  if (spirvVal.empty()) {
+    GTEST_SKIP() << "spirv-val (SPIRV-Tools) is not installed";
+  }
+  ExpectValidatesForVulkan11(spirvVal, programs::BuildFloodModule(), "flood.spv");
+}
+
+TEST(SpirvValValidation, EmittedSubregionClipComputePassesVulkan11Validation) {
+  const std::string spirvVal = FindSpirvVal();
+  if (spirvVal.empty()) {
+    GTEST_SKIP() << "spirv-val (SPIRV-Tools) is not installed";
+  }
+  ExpectValidatesForVulkan11(spirvVal, programs::BuildSubregionClipModule(), "subregion_clip.spv");
+}
+
+TEST(SpirvValValidation, EmittedFilterColorMatrixPassesVulkan11Validation) {
+  const std::string spirvVal = FindSpirvVal();
+  if (spirvVal.empty()) {
+    GTEST_SKIP() << "spirv-val (SPIRV-Tools) is not installed";
+  }
+  ExpectValidatesForVulkan11(spirvVal, programs::BuildFilterColorMatrixModule(),
+                             "filter_color_matrix.spv");
 }
 
 TEST(SpirvValValidation, AStorageBlockHoldingBothMatrixTypesPassesVulkan11Validation) {

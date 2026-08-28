@@ -5,49 +5,11 @@
 #include <vector>
 
 #include "donner/gpu/shader/IrExpr.h"
+#include "donner/gpu/shader/programs/ErrorLatch.h"
 
 namespace donner::gpu::shader::programs {
 
 namespace {
-
-/**
- * Latches the first builder error so the program can be transliterated linearly. On error every
- * subsequent expression receives a dummy `0.0f`; the resulting cascade errors are ignored because
- * only the first is reported. The inputs are static, so any latched error is a Donner bug
- * surfaced by the golden test, never a runtime condition.
- */
-struct Latch {
-  std::optional<ShaderError> error;  //!< First error, if any.
-
-  /// Unwraps an expression result. @param result Result to unwrap.
-  IrExpr operator()(ShaderResult<IrExpr>&& result) {
-    if (result.hasError()) {
-      if (!error) {
-        error = std::move(result).error();
-      }
-      return LiteralF32(0.0f);
-    }
-    return std::move(result).result();
-  }
-
-  /// Unwraps a type result. @param result Result to unwrap.
-  IrType operator()(ShaderResult<IrType>&& result) {
-    if (result.hasError()) {
-      if (!error) {
-        error = std::move(result).error();
-      }
-      return IrType::F32();
-    }
-    return std::move(result).result();
-  }
-
-  /// Latches a status. @param status Status to check.
-  void ok(ShaderStatus&& status) {
-    if (status.hasError() && !error) {
-      error = std::move(status).error();
-    }
-  }
-};
 
 /// Binding index of \p binding as the module builder takes it.
 uint32_t BindingIndex(ColorMatrixBinding binding) {
@@ -80,13 +42,14 @@ ShaderStatus AddBindings(ModuleBuilder& builder, const IrType& paramsType,
 }  // namespace
 
 ShaderResult<IrModule> BuildColorMatrixModule() {
-  Latch e;
+  ErrorLatch e;
   ModuleBuilder builder;
 
   const IrType vec4f = IrType::Vec4f();
   const IrType paramsType = e(IrType::Struct(
-      "ColorMatrixParams", {IrType::Member{"row0", vec4f}, IrType::Member{"row1", vec4f},
-                            IrType::Member{"row2", vec4f}, IrType::Member{"row3", vec4f}}));
+      "ColorMatrixParams",
+      {IrType::Member{"row0", vec4f}, IrType::Member{"row1", vec4f}, IrType::Member{"row2", vec4f},
+       IrType::Member{"row3", vec4f}, IrType::Member{"row4", vec4f}}));
   const IrType biasArrayType = e(IrType::RuntimeArray(vec4f));
   e.ok(AddBindings(builder, paramsType, biasArrayType));
 
@@ -130,8 +93,12 @@ ShaderResult<IrModule> BuildColorMatrixModule() {
                                     e(Mul(e(Member(params, "row1")), e(Swizzle(source, "y")))))),
                               e(Mul(e(Member(params, "row2")), e(Swizzle(source, "z")))))),
                         e(Mul(e(Member(params, "row3")), e(Swizzle(source, "w"))))))));
+  // The fifth column is a constant added after the weighted sum, not a multiplier: an SVG color
+  // matrix is four rows of five, where the last column shifts each output channel regardless of
+  // the input. A caller with nothing to shift passes zeros, which leaves the result unchanged.
+  const IrExpr shifted = e(fn.addLet("shifted", e(Add(weighted, e(Member(params, "row4"))))));
   const IrExpr result =
-      e(fn.addLet("result", e(CallBuiltin(BuiltinFn::Saturate, {e(Add(weighted, biasValue))}))));
+      e(fn.addLet("result", e(CallBuiltin(BuiltinFn::Saturate, {e(Add(shifted, biasValue))}))));
 
   e.ok(fn.textureStore(outputTexture, coords, result));
   e.ok(fn.finish());

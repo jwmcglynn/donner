@@ -11,7 +11,9 @@ namespace donner::gpu::shader::programs {
 enum class ColorMatrixBinding : uint32_t {
   InputTexture = 0,   //!< Sampled `texture_2d<f32>` source.
   OutputTexture = 1,  //!< `texture_storage_2d<rgba8unorm, write>` destination.
-  Params = 2,         //!< Uniform buffer holding the four matrix rows.
+  Params = 2,         //!< Uniform buffer holding five vec4f: the four
+                      //!< per-input-channel multiplier columns and the constant
+                      //!< offset column added after them.
   Bias = 3,           //!< Read-only storage buffer of per-checker bias vectors.
 };
 
