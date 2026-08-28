@@ -18,6 +18,7 @@
 
 #include "donner/gpu/shader/MslEmitter.h"
 #include "donner/gpu/shader/programs/ColorMatrix.h"
+#include "donner/gpu/shader/programs/Flood.h"
 #include "donner/gpu/shader/programs/SnapshotUnpremultiply.h"
 #include "donner/gpu/shader/programs/SolidFill.h"
 #include "donner/gpu/shader/tests/ReductionCoverageModule.h"
@@ -192,6 +193,14 @@ TEST(MslXcrunValidation, EmittedBoolVectorReductionsCompileWithMetalCompiler) {
   // `all` reaches no shipping program, so without this the compiler would never see it and a
   // wrong spelling would only ever be checked against the emitter's own idea of it.
   ExpectCompilesWithMetalCompiler(BuildVectorReductionModule(), "vector_reductions");
+}
+
+TEST(MslXcrunValidation, EmittedFloodComputeCompilesWithMetalCompiler) {
+  const std::string skipReason = FindMetalCompilerSkipReason();
+  if (!skipReason.empty()) {
+    GTEST_SKIP() << skipReason;
+  }
+  ExpectCompilesWithMetalCompiler(programs::BuildFloodModule(), "flood");
 }
 
 TEST(MslXcrunValidation, NegativeControlDetectsInvalidMsl) {
