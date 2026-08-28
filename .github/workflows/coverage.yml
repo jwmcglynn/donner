@@ -727,8 +727,8 @@ jobs:
               emit_targets true no_instrumentable_targets ""
               exit 0
             fi
+            echo "Final coverage target list includes host-instrumentable targets; running coverage."
           fi
-          echo "Final coverage target list includes host-instrumentable targets; running coverage."
 
           emit_targets false bazel_diff "$affected"
 
