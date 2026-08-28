@@ -173,6 +173,17 @@ py_test(
 )
 
 py_test(
+    name = "coverage_selection_decision_tests",
+    size = "small",
+    srcs = ["coverage_selection_decision_tests.py"],
+    data = [
+        "coverage_instrumentable_targets.py",
+        "//:.github/workflows/coverage.yml",
+    ],
+    deps = ["@rules_python//python/runfiles"],
+)
+
+py_test(
     name = "coverage_lane_routing_tests",
     size = "small",
     srcs = ["coverage_lane_routing_tests.py"],
