@@ -16,6 +16,7 @@
 
 #include "donner/gpu/shader/WgslEmitter.h"
 #include "donner/gpu/shader/programs/ColorMatrix.h"
+#include "donner/gpu/shader/programs/FilterColorMatrix.h"
 #include "donner/gpu/shader/programs/Flood.h"
 #include "donner/gpu/shader/programs/SolidFill.h"
 #include "donner/gpu/shader/programs/SubregionClip.h"
@@ -491,6 +492,28 @@ TEST(WgslEmitterGeodeValidation, NegativeControlDetectsSubregionClipSampleTypeMi
   EXPECT_THAT(errors, HasSubstr(kErrorMarker))
       << "A sampled-texture type mismatch did not surface at compute pipeline creation; "
          "pipeline-time acceptance evidence would be meaningless";
+}
+
+TEST(WgslEmitterGeodeValidation, EmittedFilterColorMatrixPassesRendererValidation) {
+  auto geodeDevice = donner::geode::GeodeDevice::CreateHeadless();
+  if (!geodeDevice) {
+    GTEST_SKIP() << "No WebGPU-capable device available";
+  }
+
+  ShaderResult<IrModule> module = programs::BuildFilterColorMatrixModule();
+  ASSERT_THAT(module, HasShaderResult());
+  ShaderResult<std::string> wgsl = EmitWgsl(module.result());
+  ASSERT_FALSE(wgsl.hasError()) << "EmitWgsl failed: " << wgsl.error();
+
+  testing::internal::CaptureStderr();
+  wgpu::ShaderModule shaderModule = CreateModuleFromWgsl(geodeDevice->device(), wgsl.result());
+  ASSERT_TRUE(static_cast<bool>(shaderModule)) << "Shader module creation returned null";
+  // Same three-binding shape as the subregion clip, so it is validated against the same layout.
+  CreateSubregionClipComputePipeline(geodeDevice->device(), shaderModule);
+  const std::string errors = testing::internal::GetCapturedStderr();
+
+  EXPECT_THAT(errors, Not(HasSubstr(kErrorMarker)))
+      << "Renderer validation reported errors for the emitted compute WGSL";
 }
 
 TEST(WgslEmitterGeodeValidation, NegativeControlDetectsInvalidWgsl) {

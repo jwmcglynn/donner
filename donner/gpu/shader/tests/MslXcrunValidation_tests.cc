@@ -18,6 +18,7 @@
 
 #include "donner/gpu/shader/MslEmitter.h"
 #include "donner/gpu/shader/programs/ColorMatrix.h"
+#include "donner/gpu/shader/programs/FilterColorMatrix.h"
 #include "donner/gpu/shader/programs/Flood.h"
 #include "donner/gpu/shader/programs/SolidFill.h"
 #include "donner/gpu/shader/programs/SubregionClip.h"
@@ -187,6 +188,14 @@ TEST(MslXcrunValidation, EmittedSubregionClipComputeCompilesWithMetalCompiler) {
     GTEST_SKIP() << skipReason;
   }
   ExpectCompilesWithMetalCompiler(programs::BuildSubregionClipModule(), "subregion_clip");
+}
+
+TEST(MslXcrunValidation, EmittedFilterColorMatrixCompilesWithMetalCompiler) {
+  const std::string skipReason = FindMetalCompilerSkipReason();
+  if (!skipReason.empty()) {
+    GTEST_SKIP() << skipReason;
+  }
+  ExpectCompilesWithMetalCompiler(programs::BuildFilterColorMatrixModule(), "filter_color_matrix");
 }
 
 TEST(MslXcrunValidation, NegativeControlDetectsInvalidMsl) {

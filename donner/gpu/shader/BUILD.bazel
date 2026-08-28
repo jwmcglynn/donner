@@ -73,6 +73,7 @@ donner_cc_library(
     name = "programs",
     srcs = [
         "programs/ColorMatrix.cc",
+        "programs/FilterColorMatrix.cc",
         "programs/Flood.cc",
         "programs/SolidFill.cc",
         "programs/SubregionClip.cc",
@@ -80,6 +81,7 @@ donner_cc_library(
     hdrs = [
         "programs/ColorMatrix.h",
         "programs/ErrorLatch.h",
+        "programs/FilterColorMatrix.h",
         "programs/Flood.h",
         "programs/SolidFill.h",
         "programs/SubregionClip.h",
@@ -95,6 +97,7 @@ donner_cc_test(
     name = "shader_tests",
     srcs = [
         "tests/ColorMatrixProgram_tests.cc",
+        "tests/FilterColorMatrixProgram_tests.cc",
         "tests/FloodProgram_tests.cc",
         "tests/IrBuilder_tests.cc",
         "tests/IrLayout_tests.cc",
@@ -111,6 +114,9 @@ donner_cc_test(
         "tests/testdata/color_matrix.msl",
         "tests/testdata/color_matrix.spv",
         "tests/testdata/color_matrix.wgsl",
+        "tests/testdata/filter_color_matrix.msl",
+        "tests/testdata/filter_color_matrix.spv",
+        "tests/testdata/filter_color_matrix.wgsl",
         "tests/testdata/flood.msl",
         "tests/testdata/flood.spv",
         "tests/testdata/flood.wgsl",
