@@ -1658,6 +1658,62 @@ async function openDonnerSplash(page: Page): Promise<{
   return { editorBounds };
 }
 
+// The Splash coverage probe's rectangle inside the editor canvas.
+const kSplashProbeOffset = { x: 438, y: 128, width: 360, height: 300 };
+
+function splashProbeRegion(
+  editorBounds: { x: number; y: number; width: number; height: number },
+): CssRegion {
+  return {
+    x: editorBounds.x + kSplashProbeOffset.x,
+    y: editorBounds.y + kSplashProbeOffset.y,
+    width: kSplashProbeOffset.width,
+    height: kSplashProbeOffset.height,
+  };
+}
+
+test("the Splash coverage probe counts editor background, not document pixels", async ({ page }) => {
+  // Pin what the zoom storm's probe is allowed to count.
+  //
+  // The zoom storm below decides its whole outcome on this probe reaching
+  // zero, so the probe has to be counting the editor's background and nothing
+  // else. The editor publishes where it put the document, which makes that
+  // checkable against geometry rather than against a colour someone measured
+  // once: at the natural fit the probe rectangle overhangs the artboard's top
+  // edge, and the pixels above that edge - and only those - are background.
+  //
+  // This assertion fails at this commit. The probe counts (12-14, 14-16,
+  // 28-30), centred on (13,15,29), which is `#0d0f1d` - the Donner Splash
+  // artboard's own fill, straight out of `donner_splash.svg` and the same tone
+  // `censusSplashTones` documents as the document's dark background. So the
+  // probe reports document pixels as uncovered editor, and the two states it
+  // can never tell apart are "the document covers the region" and "there is no
+  // document in this capture at all", both of which count zero.
+  const failures = await openEditor(page);
+  const { editorBounds } = await openDonnerSplash(page);
+  const probeRegion = splashProbeRegion(editorBounds);
+  const viewport = await readViewportStats(page);
+  const overhangRows = viewport.documentY - probeRegion.y;
+  expect(
+    overhangRows,
+    `the probe no longer overhangs the artboard: ${JSON.stringify(viewport)}`,
+  ).toBeGreaterThan(0);
+  const stats = await readEditorBackgroundCoverage(page, probeRegion);
+  // The capture may be taken at a device pixel ratio above 1; scale the
+  // expected area into the capture's own pixels rather than assuming one.
+  const captureScale = stats.samples / (probeRegion.width * probeRegion.height);
+  const expectedBackground = overhangRows * probeRegion.width * captureScale;
+  expect(
+    stats.editorBackgroundPixels,
+    `the probe is not measuring the artboard overhang: expected about ${expectedBackground}`,
+  ).toBeGreaterThan(expectedBackground * 0.9);
+  expect(
+    stats.editorBackgroundPixels,
+    `the probe counts more than the artboard overhang: expected about ${expectedBackground}`,
+  ).toBeLessThan(expectedBackground * 1.1);
+  expect(failures).toEqual([]);
+});
+
 test("a zoom storm never uncovers the editor background under the Donner Splash", async ({ page }) => {
   const failures = await openEditor(page);
   const { editorBounds } = await openDonnerSplash(page);
@@ -1675,12 +1731,7 @@ test("a zoom storm never uncovers the editor background under the Donner Splash"
   // zoom level, where the letter counters fill with dark cloud gradient that
   // sweeps the backdrop's color neighborhood. At the natural fit the artboard's
   // top edge crosses the region, so it starts with genuine uncovered backdrop.
-  const probeRegion = {
-    x: editorBounds.x + 438,
-    y: editorBounds.y + 128,
-    width: 360,
-    height: 300,
-  };
+  const probeRegion = splashProbeRegion(editorBounds);
   const probeCenter = {
     x: probeRegion.x + probeRegion.width * 0.5,
     y: probeRegion.y + probeRegion.height * 0.5,
