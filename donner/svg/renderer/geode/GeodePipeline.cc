@@ -11,7 +11,6 @@
 #include "donner/svg/renderer/geode/GeodeShaders.h"
 #include "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h"
 #include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
-#include "donner/svg/renderer/geode/generated/SnapshotUnpremultiplyConstants.h"
 #include "embed_resources/SnapshotUnpremultiplyWgsl.h"
 
 namespace donner::geode {
@@ -236,7 +235,6 @@ GeodeSnapshotReadbackPipeline::GeodeSnapshotReadbackPipeline(gpu::Device& device
   // the genrule in this package). Constructing them here instead would link the IR and the WGSL
   // emitter into every binary holding this pipeline, which the editor's WebAssembly package
   // cannot afford for a string that is identical on every run.
-  namespace generated = gpu::shader::generated::SnapshotUnpremultiply;
   const std::string_view wgsl(
       reinterpret_cast<const char*>(donner::embedded::kSnapshotUnpremultiplyWgsl.data()),
       donner::embedded::kSnapshotUnpremultiplyWgsl.size());
@@ -248,9 +246,9 @@ GeodeSnapshotReadbackPipeline::GeodeSnapshotReadbackPipeline(gpu::Device& device
           gpu::ShaderSourceKind::Wgsl,
           {},
           {gpu::ComputeEntryPointInfo{
-              RcString(generated::kEntryPoint),
-              gpu::WorkgroupSize{generated::kWorkgroupSizeX, generated::kWorkgroupSizeY,
-                                 generated::kWorkgroupSizeZ}}}});
+              RcString(gpu::shader::programs::kSnapshotUnpremultiplyEntryPoint),
+              gpu::WorkgroupSize{gpu::shader::programs::kSnapshotUnpremultiplyWorkgroupSize,
+                                 gpu::shader::programs::kSnapshotUnpremultiplyWorkgroupSize, 1}}}});
   if (shaderModule.hasError()) {
     return;
   }
@@ -283,9 +281,10 @@ GeodeSnapshotReadbackPipeline::GeodeSnapshotReadbackPipeline(gpu::Device& device
   gpu::Result<gpu::ComputePipeline> pipeline =
       device.createComputePipeline(gpu::ComputePipelineDescriptor{
           "GeodeSnapshotReadback", pipelineLayout_,
-          gpu::ComputeState{shaderModule_, RcString(generated::kEntryPoint)},
-          gpu::WorkgroupSize{generated::kWorkgroupSizeX, generated::kWorkgroupSizeY,
-                             generated::kWorkgroupSizeZ}});
+          gpu::ComputeState{shaderModule_,
+                            RcString(gpu::shader::programs::kSnapshotUnpremultiplyEntryPoint)},
+          gpu::WorkgroupSize{gpu::shader::programs::kSnapshotUnpremultiplyWorkgroupSize,
+                             gpu::shader::programs::kSnapshotUnpremultiplyWorkgroupSize, 1}});
   if (pipeline.hasError()) {
     return;
   }

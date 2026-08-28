@@ -205,4 +205,12 @@ donner_multi_transitioned_test(
     renderer_backend = "geode",
 )
 
+# The committed goldens, exposed so a consumer of a generated artifact can assert the two are the
+# same bytes rather than asserting it in prose.
+filegroup(
+    name = "program_goldens",
+    srcs = ["tests/testdata/snapshot_unpremultiply.wgsl"],
+    visibility = ["//donner/svg/renderer:__subpackages__"],
+)
+
 donner_package()

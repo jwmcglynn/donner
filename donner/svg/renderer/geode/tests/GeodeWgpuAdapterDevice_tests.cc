@@ -865,6 +865,9 @@ TEST_F(GeodeWgpuAdapterDeviceTests, AnEventWaitThatLearnedNothingReportsPendingN
 TEST_F(GeodeWgpuAdapterDeviceTests, DestroyingABufferBackingConsumesTheHandleAndRefusesStaleOnes) {
   gpu::Buffer buffer = gpu::GetResultOrFail(adapter_->createBuffer(gpu::BufferDescriptor{
       "readback", 256, gpu::BufferUsage::CopyDst | gpu::BufferUsage::MapRead}));
+  const uint32_t destroyedSlot = buffer.slotIndex();
+  const uint32_t destroyedGeneration = buffer.generation();
+  const uint64_t destroyedDeviceId = buffer.deviceId();
 
   EXPECT_THAT(adapter_->destroyBufferBacking(std::move(buffer)), gpu::IsOk());
   EXPECT_FALSE(buffer.isValid()) << "the handle must be consumed either way";
@@ -872,14 +875,24 @@ TEST_F(GeodeWgpuAdapterDeviceTests, DestroyingABufferBackingConsumesTheHandleAnd
   EXPECT_THAT(adapter_->destroyBufferBacking(gpu::Buffer()),
               gpu::IsGpuError(gpu::GpuErrorType::InvalidHandle));
 
-  // A destroyed buffer's slot can be reused; a second destroy through the old handle must not
-  // reach whatever now occupies it.
-  const gpu::Buffer replacement = gpu::GetResultOrFail(adapter_->createBuffer(gpu::BufferDescriptor{
+  // A destroyed buffer's slot gets reused, so the interesting probe is a handle that still names
+  // that slot with the OLD generation - not the consumed handle, which is null and would only
+  // retest the null check above. Rebuilt from the identity captured before the destroy, and
+  // inert (no device-alive token) so it never self-releases.
+  gpu::Buffer replacement = gpu::GetResultOrFail(adapter_->createBuffer(gpu::BufferDescriptor{
       "replacement", 256, gpu::BufferUsage::CopyDst | gpu::BufferUsage::MapRead}));
-  EXPECT_TRUE(replacement.isValid());
-  EXPECT_THAT(adapter_->destroyBufferBacking(std::move(buffer)),
+  ASSERT_TRUE(replacement.isValid());
+  ASSERT_EQ(replacement.slotIndex(), destroyedSlot)
+      << "the probe is only meaningful if the replacement took the destroyed buffer's slot";
+
+  gpu::Buffer stale =
+      gpu::Buffer::CreateForBackend(destroyedSlot, destroyedGeneration, destroyedDeviceId);
+  EXPECT_THAT(adapter_->destroyBufferBacking(std::move(stale)),
               gpu::IsGpuError(gpu::GpuErrorType::InvalidHandle))
-      << "the consumed handle must not reach the slot's new occupant";
+      << "a stale generation must not destroy the slot's new occupant";
+  // Still live: destroying it now succeeds, which it could not if the stale handle had taken it.
+  EXPECT_THAT(adapter_->destroyBufferBacking(std::move(replacement)), gpu::IsOk())
+      << "the replacement must have survived the stale destroy";
 }
 
 /// A standalone submit skips the host encoder, so it takes a HIGHER serial than the work

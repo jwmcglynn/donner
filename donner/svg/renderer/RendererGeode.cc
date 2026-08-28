@@ -24,7 +24,7 @@
 #include "donner/base/RelativeLengthMetrics.h"
 #include "donner/base/Transform.h"
 #include "donner/base/Vector2.h"
-#include "donner/gpu/shader/programs/SnapshotUnpremultiply.h"
+#include "donner/gpu/shader/programs/SnapshotUnpremultiplyBindings.h"
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/components/DocumentResourceFamilyBudget.h"
 #include "donner/svg/components/RenderingInstanceComponent.h"
@@ -7257,11 +7257,15 @@ RendererBitmap ReadGeodeTextureSnapshotGpu(const std::shared_ptr<geode::GeodeDev
     return bitmap;
   }
   gpu::ComputePassEncoder* pass = passResult.result();
-  constexpr uint32_t kWorkgroup = gpu::shader::programs::kSnapshotUnpremultiplyWorkgroupSize;
+  // The dispatch is sized from the same generated constants the pipeline declares, so the grid
+  // cannot disagree with the size compiled into the shader. A stale larger copy here would
+  // under-dispatch and leave the tail of the destination unwritten.
+  constexpr uint32_t kWorkgroupX = gpu::shader::programs::kSnapshotUnpremultiplyWorkgroupSize;
+  constexpr uint32_t kWorkgroupY = gpu::shader::programs::kSnapshotUnpremultiplyWorkgroupSize;
   if (pass->setPipeline(readbackPipeline.pipeline()).hasError() ||
       pass->setBindGroup(0, bindGroup.result()).hasError() ||
-      pass->dispatchWorkgroups((width + kWorkgroup - 1) / kWorkgroup,
-                               (height + kWorkgroup - 1) / kWorkgroup, 1)
+      pass->dispatchWorkgroups((width + kWorkgroupX - 1) / kWorkgroupX,
+                               (height + kWorkgroupY - 1) / kWorkgroupY, 1)
           .hasError() ||
       pass->end().hasError()) {
     return bitmap;

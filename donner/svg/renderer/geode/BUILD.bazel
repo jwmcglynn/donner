@@ -318,7 +318,6 @@ donner_cc_library(
         ":geode_gpu_wait",
         ":geode_shaders",
         ":geode_wgpu_util",
-        ":snapshot_unpremultiply_constants",
         ":snapshot_unpremultiply_wgsl",
         "//donner/base",
         "//donner/base:asyncify_suspend_probe",
@@ -393,22 +392,10 @@ donner_multi_transitioned_test(
 # the diff cannot disagree without a test failing.
 genrule(
     name = "snapshot_unpremultiply_generated",
-    outs = [
-        "generated/SnapshotUnpremultiplyConstants.h",
-        "generated/snapshot_unpremultiply.wgsl",
-    ],
+    outs = ["generated/snapshot_unpremultiply.wgsl"],
     cmd = "$(location //donner/gpu/shader/tools:emit_program_wgsl) snapshot_unpremultiply " +
-          "$(location generated/snapshot_unpremultiply.wgsl) " +
-          "$(location generated/SnapshotUnpremultiplyConstants.h)",
+          "$(location generated/snapshot_unpremultiply.wgsl)",
     tools = ["//donner/gpu/shader/tools:emit_program_wgsl"],
-)
-
-# The entry point name and workgroup size, generated alongside the WGSL so a host can create the
-# pipeline without linking the IR to ask the module for them.
-donner_cc_library(
-    name = "snapshot_unpremultiply_constants",
-    hdrs = ["generated/SnapshotUnpremultiplyConstants.h"],
-    visibility = ["//donner/svg/renderer:__subpackages__"],
 )
 
 embed_resources(
@@ -1013,6 +1000,20 @@ donner_multi_transitioned_test(
     dep = ":geode_shared_device_frame_tests_impl",
     opens_gpu_device = True,
     renderer_backend = "geode",
+)
+
+# The embedded artifact and the committed golden must be the same bytes; see the test's own note
+# for why "by construction" is not enough.
+donner_cc_test(
+    name = "generated_shader_artifacts_tests",
+    srcs = ["tests/GeneratedShaderArtifacts_tests.cc"],
+    data = ["//donner/gpu/shader:program_goldens"],
+    deps = [
+        ":snapshot_unpremultiply_wgsl",
+        "//donner/base",
+        "//donner/base:base_test_utils",
+        "@com_google_gtest//:gtest_main",
+    ],
 )
 
 donner_package()

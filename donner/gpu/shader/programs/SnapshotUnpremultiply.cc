@@ -82,7 +82,7 @@ ShaderResult<IrModule> BuildSnapshotUnpremultiplyModule() {
       StorageTextureFormat::Rgba8Unorm));
 
   auto entryResult = builder.createComputeEntryPoint(
-      "cs_main",
+      RcString(kSnapshotUnpremultiplyEntryPoint),
       {IrParam{"gid", IrType::Vec3(ScalarKind::U32), std::nullopt,
                BuiltinInput::GlobalInvocationId}},
       WorkgroupSize{kSnapshotUnpremultiplyWorkgroupSize, kSnapshotUnpremultiplyWorkgroupSize, 1});

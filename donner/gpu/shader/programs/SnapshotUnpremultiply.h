@@ -7,10 +7,6 @@
 
 namespace donner::gpu::shader::programs {
 
-/// Workgroup size the entry point declares. Hosts divide the destination extent by this to
-/// compute dispatch counts.
-inline constexpr uint32_t kSnapshotUnpremultiplyWorkgroupSize = 8;
-
 /**
  * Builds the snapshot-unpremultiply compute program: one
  * `@compute @workgroup_size(8, 8, 1)` entry point named `cs_main` that reads one texel of the
