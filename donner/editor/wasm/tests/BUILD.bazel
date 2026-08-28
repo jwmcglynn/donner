@@ -5,51 +5,6 @@ package(default_visibility = ["//visibility:public"])
 
 npm_link_all_packages(name = "node_modules")
 
-# Shared wiring for every Bazel-owned browser lane in this package. Each lane
-# differs only in which spec it runs and which test it selects; everything that
-# makes a browser reachable from Bazel - the served Wasm package, the pinned
-# Chromium, the Playwright config that owns the port and the web server - is
-# identical, so it is written once here.
-_BROWSER_LANE_DATA = [
-    "canvas-color-stats.ts",
-    "gesture-streams.ts",
-    "package.json",
-    "playwright.bazel.config.js",
-    "playwright.config.js",
-    "remote-webserver.mjs",
-    ":node_modules/@playwright/test",
-    "//donner/editor/wasm:_wasm_web_package_for_serve",
-    "@playwright//:chromium",
-]
-
-_BROWSER_LANE_ENV = {
-    "CI": "1",
-    "DONNER_WASM_PACKAGE_DIR": "$(rootpath //donner/editor/wasm:_wasm_web_package_for_serve)",
-    "DONNER_WASM_REQUIRE_WEBGPU": "1",
-    "DONNER_WASM_TEST_SERVER": "$(rootpath :remote-webserver.mjs)",
-    # The repo-wide remote Emscripten workaround disables Node's WebAssembly
-    # runtime, but Playwright's HTTP client uses its bundled llhttp Wasm.
-    "NODE_OPTIONS": "",
-    "PLAYWRIGHT_BROWSERS_PATH": "$(rootpath @playwright//:chromium)/../",
-}
-
-# macOS-only: these lanes assert on presented WebGPU canvas pixels, and
-# headless Chromium on Linux cannot present a WebGPU OffscreenCanvas swapchain
-# with the SwiftShader WebGPU adapter. The GPU service finds no
-# SharedImageBackingFactory for the swapchain allocation (usage
-# WebgpuSwapChainTexture|DisplayRead|...), fails the first present, and destroys
-# the device, after which every WebGPU call rejects with "A valid external
-# Instance reference no longer exists". A browser-only probe (worker +
-# transferred OffscreenCanvas + clear + present) fails the same way with no
-# Donner code involved, on both Chromium 147 and 151 and with ANGLE/SwiftShader
-# GL, Vulkan, and Graphite flag configurations, so this is an environment
-# capability boundary, not a flag or timing gap. macOS headless Chromium
-# presents through the real GPU and passes.
-_BROWSER_LANE_COMPATIBLE_WITH = [
-    "@platforms//cpu:aarch64",
-    "@platforms//os:macos",
-]
-
 playwright_bin.playwright_test(
     name = "chromium_remote_smoke",
     size = "large",
@@ -60,9 +15,44 @@ playwright_bin.playwright_test(
         "--grep=production Geode wasm presents visible editor pixels",
     ],
     copy_data_to_bin = False,
-    data = _BROWSER_LANE_DATA + ["smoke.spec.ts"],
-    env = _BROWSER_LANE_ENV,
-    target_compatible_with = _BROWSER_LANE_COMPATIBLE_WITH,
+    data = [
+        "canvas-color-stats.ts",
+        "gesture-streams.ts",
+        "package.json",
+        "playwright.bazel.config.js",
+        "playwright.config.js",
+        "remote-webserver.mjs",
+        "smoke.spec.ts",
+        ":node_modules/@playwright/test",
+        "//donner/editor/wasm:_wasm_web_package_for_serve",
+        "@playwright//:chromium",
+    ],
+    env = {
+        "CI": "1",
+        "DONNER_WASM_PACKAGE_DIR": "$(rootpath //donner/editor/wasm:_wasm_web_package_for_serve)",
+        "DONNER_WASM_REQUIRE_WEBGPU": "1",
+        "DONNER_WASM_TEST_SERVER": "$(rootpath :remote-webserver.mjs)",
+        # The repo-wide remote Emscripten workaround disables Node's WebAssembly
+        # runtime, but Playwright's HTTP client uses its bundled llhttp Wasm.
+        "NODE_OPTIONS": "",
+        "PLAYWRIGHT_BROWSERS_PATH": "$(rootpath @playwright//:chromium)/../",
+    },
+    # macOS-only: the selected smoke test asserts on presented WebGPU canvas
+    # pixels, and headless Chromium on Linux cannot present a WebGPU
+    # OffscreenCanvas swapchain with the SwiftShader WebGPU adapter. The GPU
+    # service finds no SharedImageBackingFactory for the swapchain allocation
+    # (usage WebgpuSwapChainTexture|DisplayRead|...), fails the first present,
+    # and destroys the device, after which every WebGPU call rejects with "A
+    # valid external Instance reference no longer exists". A browser-only
+    # probe (worker + transferred OffscreenCanvas + clear + present) fails the
+    # same way with no Donner code involved, on both Chromium 147 and 151 and
+    # with ANGLE/SwiftShader GL, Vulkan, and Graphite flag configurations, so
+    # this is an environment capability boundary, not a flag or timing gap.
+    # macOS headless Chromium presents through the real GPU and passes.
+    target_compatible_with = [
+        "@platforms//cpu:aarch64",
+        "@platforms//os:macos",
+    ],
 )
 
 # The browser presentation regressions, reachable from Bazel.
@@ -70,9 +60,9 @@ playwright_bin.playwright_test(
 # This lane exists because the invariants it pins - among them the zoom storm
 # that must never uncover the editor background under the presented document -
 # were only ever reachable through the repository's own browser lane, so a
-# failure there could be answered with a rerun instead of a diagnosis. They
-# sample presented pixels over the Donner Splash, so they need a real presented
-# WebGPU canvas exactly as the smoke lane does.
+# failure there could be answered with a rerun instead of a diagnosis. Like the
+# smoke lane it asserts on presented WebGPU canvas pixels, so it carries the
+# same platform boundary for the same reason documented above.
 playwright_bin.playwright_test(
     name = "browser_presentation_regression_test",
     size = "large",
@@ -82,7 +72,30 @@ playwright_bin.playwright_test(
         "--config=$(rootpath :playwright.bazel.config.js)",
     ],
     copy_data_to_bin = False,
-    data = _BROWSER_LANE_DATA + ["browser-presentation-regression.spec.ts"],
-    env = _BROWSER_LANE_ENV,
-    target_compatible_with = _BROWSER_LANE_COMPATIBLE_WITH,
+    data = [
+        "browser-presentation-regression.spec.ts",
+        "canvas-color-stats.ts",
+        "gesture-streams.ts",
+        "package.json",
+        "playwright.bazel.config.js",
+        "playwright.config.js",
+        "remote-webserver.mjs",
+        ":node_modules/@playwright/test",
+        "//donner/editor/wasm:_wasm_web_package_for_serve",
+        "@playwright//:chromium",
+    ],
+    env = {
+        "CI": "1",
+        "DONNER_WASM_PACKAGE_DIR": "$(rootpath //donner/editor/wasm:_wasm_web_package_for_serve)",
+        "DONNER_WASM_REQUIRE_WEBGPU": "1",
+        "DONNER_WASM_TEST_SERVER": "$(rootpath :remote-webserver.mjs)",
+        # The repo-wide remote Emscripten workaround disables Node's WebAssembly
+        # runtime, but Playwright's HTTP client uses its bundled llhttp Wasm.
+        "NODE_OPTIONS": "",
+        "PLAYWRIGHT_BROWSERS_PATH": "$(rootpath @playwright//:chromium)/../",
+    },
+    target_compatible_with = [
+        "@platforms//cpu:aarch64",
+        "@platforms//os:macos",
+    ],
 )
