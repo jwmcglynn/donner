@@ -18,7 +18,6 @@
 #include "embed_resources/FilterMorphologyWgsl.h"
 #include "embed_resources/FilterOffsetWgsl.h"
 #include "embed_resources/FilterSpecularLightingWgsl.h"
-#include "embed_resources/FilterSubregionClipWgsl.h"
 #include "embed_resources/FilterTileWgsl.h"
 #include "embed_resources/FilterTurbulenceWgsl.h"
 #include "embed_resources/GaussianBlurWgsl.h"
@@ -181,12 +180,6 @@ wgpu::ShaderModule createFilterImageShader(const wgpu::Device& device) {
 wgpu::ShaderModule createFilterTileShader(const wgpu::Device& device) {
   return createShaderFromWgsl(device, "FilterTile", donner::embedded::kFilterTileWgsl.data(),
                               donner::embedded::kFilterTileWgsl.size());
-}
-
-wgpu::ShaderModule createFilterSubregionClipShader(const wgpu::Device& device) {
-  return createShaderFromWgsl(device, "FilterSubregionClip",
-                              donner::embedded::kFilterSubregionClipWgsl.data(),
-                              donner::embedded::kFilterSubregionClipWgsl.size());
 }
 
 wgpu::ShaderModule createFilterColorSpaceConvertShader(const wgpu::Device& device) {
