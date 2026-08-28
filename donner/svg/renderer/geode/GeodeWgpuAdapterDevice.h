@@ -387,9 +387,20 @@ private:
   /// Whether the next submit replays into the host encoder rather than reaching the queue: a
   /// host encoder is installed and this submit is not a standalone one.
   bool replaysIntoHostEncoder() const;
+
+  /// Records \p submissionSerial as replayed into the host encoder but not yet queued.
+  /// @param submissionSerial Serial of the stream just replayed.
+  void recordPendingHostSerial(uint64_t submissionSerial);
   /// Highest serial replayed into \ref hostCommandEncoder_ since the last
   /// \ref notifyHostSubmitted; 0 when nothing is awaiting the host's submit.
   uint64_t hostPendingSerial_ = 0;
+  /// Oldest serial replayed into \ref hostCommandEncoder_ since the last \ref
+  /// notifyHostSubmitted, or 0 when nothing is awaiting that submit. A completion may not report
+  /// past this, because everything from here up has been recorded but not queued.
+  uint64_t hostFirstPendingSerial_ = 0;
+  /// Highest serial a standalone submit queued while a host frame was pending, or 0. Those
+  /// completions report capped, so the frame's flush is what finally covers them.
+  uint64_t standaloneWhilePendingSerial_ = 0;
 
   /// State of one pending or completed host mapping.
   ///
