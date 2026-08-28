@@ -3,15 +3,9 @@
 /// The snapshot-unpremultiply compute program, expressed in the \c donner::gpu::shader IR.
 
 #include "donner/gpu/shader/IrModule.h"
+#include "donner/gpu/shader/programs/SnapshotUnpremultiplyBindings.h"
 
 namespace donner::gpu::shader::programs {
-
-/// Bind group indices of the snapshot-unpremultiply program, shared by the IR builder and every
-/// host that creates its bind group layout.
-enum class SnapshotUnpremultiplyBinding : uint32_t {
-  InputTexture = 0,   //!< Sampled `texture_2d<f32>` premultiplied render target.
-  OutputTexture = 1,  //!< `texture_storage_2d<rgba8unorm, write>` straight-alpha destination.
-};
 
 /// Workgroup size the entry point declares. Hosts divide the destination extent by this to
 /// compute dispatch counts.

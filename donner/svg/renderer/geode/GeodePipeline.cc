@@ -2,16 +2,17 @@
 
 #include <cstdio>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
 #include "donner/base/Utils.h"
-#include "donner/gpu/shader/ModuleInterface.h"
-#include "donner/gpu/shader/WgslEmitter.h"
-#include "donner/gpu/shader/programs/SnapshotUnpremultiply.h"
+#include "donner/gpu/shader/programs/SnapshotUnpremultiplyBindings.h"
 #include "donner/svg/renderer/geode/GeodeShaders.h"
 #include "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h"
 #include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
+#include "donner/svg/renderer/geode/generated/SnapshotUnpremultiplyConstants.h"
+#include "embed_resources/SnapshotUnpremultiplyWgsl.h"
 
 namespace donner::geode {
 
@@ -231,25 +232,25 @@ GeodeMaskPipeline::GeodeMaskPipeline(GeodeWgpuAdapterDevice& adapterDevice) {
 // ============================================================================
 
 GeodeSnapshotReadbackPipeline::GeodeSnapshotReadbackPipeline(gpu::Device& device) {
-  gpu::shader::ShaderResult<gpu::shader::IrModule> module =
-      gpu::shader::programs::BuildSnapshotUnpremultiplyModule();
-  if (module.hasError()) {
-    return;
-  }
-  gpu::shader::ShaderResult<std::string> wgsl = gpu::shader::EmitWgsl(module.result());
-  if (wgsl.hasError()) {
-    return;
-  }
+  // The WGSL and the entry-point facts below are build-time output of the shader IR program (see
+  // the genrule in this package). Constructing them here instead would link the IR and the WGSL
+  // emitter into every binary holding this pipeline, which the editor's WebAssembly package
+  // cannot afford for a string that is identical on every run.
+  namespace generated = gpu::shader::generated::SnapshotUnpremultiply;
+  const std::string_view wgsl(
+      reinterpret_cast<const char*>(donner::embedded::kSnapshotUnpremultiplyWgsl.data()),
+      donner::embedded::kSnapshotUnpremultiplyWgsl.size());
 
-  // The workgroup size travels with the module rather than being restated here: the runtime
-  // checks the pipeline's declared size against the entry point's, and a second literal is
-  // exactly the disagreement that check exists to catch.
-  gpu::Result<gpu::ShaderModule> shaderModule = device.createShaderModule(
-      gpu::ShaderModuleDescriptor{"GeodeSnapshotReadbackShader",
-                                  RcString(wgsl.result()),
-                                  gpu::ShaderSourceKind::Wgsl,
-                                  {},
-                                  gpu::shader::ComputeEntryPointsOf(module.result())});
+  gpu::Result<gpu::ShaderModule> shaderModule =
+      device.createShaderModule(gpu::ShaderModuleDescriptor{
+          "GeodeSnapshotReadbackShader",
+          RcString(wgsl),
+          gpu::ShaderSourceKind::Wgsl,
+          {},
+          {gpu::ComputeEntryPointInfo{
+              RcString(generated::kEntryPoint),
+              gpu::WorkgroupSize{generated::kWorkgroupSizeX, generated::kWorkgroupSizeY,
+                                 generated::kWorkgroupSizeZ}}}});
   if (shaderModule.hasError()) {
     return;
   }
@@ -279,11 +280,12 @@ GeodeSnapshotReadbackPipeline::GeodeSnapshotReadbackPipeline(gpu::Device& device
   }
   pipelineLayout_ = std::move(pipelineLayout).result();
 
-  constexpr uint32_t kWorkgroup = gpu::shader::programs::kSnapshotUnpremultiplyWorkgroupSize;
   gpu::Result<gpu::ComputePipeline> pipeline =
       device.createComputePipeline(gpu::ComputePipelineDescriptor{
-          "GeodeSnapshotReadback", pipelineLayout_, gpu::ComputeState{shaderModule_, "cs_main"},
-          gpu::WorkgroupSize{kWorkgroup, kWorkgroup, 1}});
+          "GeodeSnapshotReadback", pipelineLayout_,
+          gpu::ComputeState{shaderModule_, RcString(generated::kEntryPoint)},
+          gpu::WorkgroupSize{generated::kWorkgroupSizeX, generated::kWorkgroupSizeY,
+                             generated::kWorkgroupSizeZ}});
   if (pipeline.hasError()) {
     return;
   }
