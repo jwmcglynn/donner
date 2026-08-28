@@ -115,8 +115,9 @@ struct FilterResourceCache {
       if (!buffer.hasResult()) {
         return {};
       }
+      // No count here, for the same reason the bind groups are not counted: the runtime counts
+      // what it creates.
       runtimeScratch.push_back(std::move(buffer).result());
-      device.countBuffer();
       runtimeScratchSize = newSize;
       runtimeCursor = 0;
     }
@@ -278,8 +279,9 @@ struct FilterResourceArena {
     if (!bindGroup.hasResult()) {
       return nullptr;
     }
+    // No count here: the runtime counts the bind group it creates, and counting again would
+    // report every migrated pass as building two.
     bindGroups_.push_back(std::move(bindGroup).result());
-    device_.countBindGroup();
     return &bindGroups_.back();
   }
 
