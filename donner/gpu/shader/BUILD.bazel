@@ -77,6 +77,7 @@ donner_cc_library(
     ],
     hdrs = [
         "programs/ColorMatrix.h",
+        "programs/ErrorLatch.h",
         "programs/SolidFill.h",
     ],
     visibility = donner_internal_visibility(),
@@ -108,10 +109,9 @@ donner_cc_test(
         "tests/testdata/solid_fill.wgsl",
     ],
     deps = [
-        ":stage_io_test_modules",
-
         ":programs",
         ":shader",
+        ":stage_io_test_modules",
         "//donner/base:base_test_utils",
         "@com_google_gtest//:gtest_main",
         "@rules_cc//cc/runfiles",
@@ -130,10 +130,9 @@ donner_cc_test(
     ],
     target_compatible_with = ["@platforms//os:macos"],
     deps = [
-        ":stage_io_test_modules",
-
         ":programs",
         ":shader",
+        ":stage_io_test_modules",
         "@com_google_gtest//:gtest_main",
     ],
 )
@@ -149,10 +148,9 @@ donner_cc_test(
         "tests/SpirvValValidation_tests.cc",
     ],
     deps = [
-        ":stage_io_test_modules",
-
         ":programs",
         ":shader",
+        ":stage_io_test_modules",
         "@com_google_gtest//:gtest_main",
     ],
 )

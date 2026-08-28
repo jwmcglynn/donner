@@ -5,49 +5,11 @@
 #include <vector>
 
 #include "donner/gpu/shader/IrExpr.h"
+#include "donner/gpu/shader/programs/ErrorLatch.h"
 
 namespace donner::gpu::shader::programs {
 
 namespace {
-
-/**
- * Latches the first builder error so the program can be transliterated linearly. On error every
- * subsequent expression receives a dummy `0.0f`; the resulting cascade errors are ignored
- * because only the first is reported. The inputs are static, so any latched error is a Donner
- * bug surfaced by the golden test, never a runtime condition.
- */
-struct Latch {
-  std::optional<ShaderError> error;  //!< First error, if any.
-
-  /// Unwraps an expression result. @param result Result to unwrap.
-  IrExpr operator()(ShaderResult<IrExpr>&& result) {
-    if (result.hasError()) {
-      if (!error) {
-        error = std::move(result).error();
-      }
-      return LiteralF32(0.0f);
-    }
-    return std::move(result).result();
-  }
-
-  /// Unwraps a type result. @param result Result to unwrap.
-  IrType operator()(ShaderResult<IrType>&& result) {
-    if (result.hasError()) {
-      if (!error) {
-        error = std::move(result).error();
-      }
-      return IrType::F32();
-    }
-    return std::move(result).result();
-  }
-
-  /// Latches a status. @param status Status to check.
-  void ok(ShaderStatus&& status) {
-    if (status.hasError() && !error) {
-      error = std::move(status).error();
-    }
-  }
-};
 
 /// Shorthand scalar literals.
 IrExpr F(float value) {
@@ -75,7 +37,7 @@ struct RayConfig {
 
 /// Builds one of the two curve loaders (load_h_curve / load_v_curve), which unpack six floats
 /// from the given curve data binding into a Quadratic.
-void BuildCurveLoader(Latch& e, ModuleBuilder& builder, const IrType& quadraticType,
+void BuildCurveLoader(ErrorLatch& e, ModuleBuilder& builder, const IrType& quadraticType,
                       const char* name, const char* curveDataBinding) {
   auto result = builder.createFunction(name, {IrParam{"index", IrType::U32()}}, quadraticType);
   if (result.hasError()) {
@@ -102,7 +64,7 @@ void BuildCurveLoader(Latch& e, ModuleBuilder& builder, const IrType& quadraticT
 
 /// Builds accumulateHoriz or accumulateVert: casts one axis-aligned ray through the pixel's
 /// band and accumulates signed analytic coverage per crossing (design 0041, Slug CalcCoverage).
-void BuildAccumulate(Latch& e, ModuleBuilder& builder, const IrType& rayCoverageType,
+void BuildAccumulate(ErrorLatch& e, ModuleBuilder& builder, const IrType& rayCoverageType,
                      const RayConfig& config) {
   auto result =
       builder.createFunction(config.functionName,
@@ -214,7 +176,7 @@ void BuildAccumulate(Latch& e, ModuleBuilder& builder, const IrType& rayCoverage
 }  // namespace
 
 ShaderResult<IrModule> BuildSolidFillModule() {
-  Latch e;
+  ErrorLatch e;
   const IrType f32 = IrType::F32();
   const IrType u32 = IrType::U32();
   const IrType vec2f = IrType::Vec2f();
