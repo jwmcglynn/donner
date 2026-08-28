@@ -14,6 +14,7 @@
 
 #include "donner/base/tests/Runfiles.h"
 #include "donner/gpu/shader/programs/SolidFill.h"
+#include "donner/gpu/shader/tests/ReductionCoverageModule.h"
 #include "donner/gpu/shader/tests/ShaderTestUtils.h"
 #include "donner/gpu/shader/tests/StageIoTestModules.h"
 
@@ -29,6 +30,17 @@ std::string EmitSolidFillMsl() {
     return "";
   }
   return GetShaderResultOrFail(EmitMsl(module.result()), std::string());
+}
+
+TEST(MslEmitterTests, BothBoolVectorReductionsEmitTheirMslSpellings) {
+  ShaderResult<IrModule> module = BuildVectorReductionModule();
+  ASSERT_THAT(module, HasShaderResult());
+  const std::string msl = GetShaderResultOrFail(EmitMsl(module.result()), std::string());
+
+  // Metal spells the reductions the same way WGSL does, so a wrong mapping shows up as the other
+  // reduction's name rather than as a compile error the validator would catch for us.
+  EXPECT_THAT(msl, testing::HasSubstr("const bool inside = all((gid.xy < extent));"));
+  EXPECT_THAT(msl, testing::HasSubstr("const bool overflow = any((gid.xy >= extent));"));
 }
 
 TEST(MslEmitterTests, EmitsDeterministically) {
@@ -248,6 +260,30 @@ TEST(MslEmitterTests, RejectsEntryLocalsShadowingStageInName) {
   ShaderResult<IrModule> module = builder.build();
   ASSERT_THAT(module, HasShaderResult());
   EXPECT_THAT(EmitMsl(module.result()), IsShaderError(HasSubstr("shadows an implicit MSL")));
+}
+
+TEST(MslEmitterTests, RejectsALocalNamedAfterACalledBuiltin) {
+  // The reductions are emitted as free function calls in MSL too, so a local named after one
+  // shadows it exactly as it would in WGSL.
+  ModuleBuilder builder;
+  {
+    ShaderResult<FunctionBuilder> fnResult =
+        builder.createFunction("shadow", {IrParam{"v", IrType::Vec2u()}}, IrType::Bool());
+    ASSERT_THAT(fnResult, HasShaderResult());
+    FunctionBuilder fn = std::move(fnResult).result();
+    const IrExpr v = GetShaderResultOrFail(fn.ref("v"), LiteralF32(0));
+    const IrExpr reduced = GetShaderResultOrFail(
+        CallBuiltin(BuiltinFn::Any, {GetShaderResultOrFail(Ge(v, v), LiteralF32(0))}),
+        LiteralF32(0));
+    EXPECT_THAT(fn.addLet("any", reduced), HasShaderResult());
+    EXPECT_THAT(fn.returnValue(GetShaderResultOrFail(fn.ref("any"), LiteralF32(0))), IsShaderOk());
+    EXPECT_THAT(fn.finish(), IsShaderOk());
+  }
+
+  ShaderResult<IrModule> module = builder.build();
+  ASSERT_THAT(module, HasShaderResult());
+  EXPECT_THAT(EmitMsl(module.result()),
+              IsShaderError(HasSubstr("collides with an MSL reserved word")));
 }
 
 TEST(MslEmitterTests, RejectsMslReservedWords) {

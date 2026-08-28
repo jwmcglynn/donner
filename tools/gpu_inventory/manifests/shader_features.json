@@ -126,6 +126,49 @@
         "ColorMatrixParams"
       ]
     },
+    "donner/gpu/shader/tests/testdata/snapshot_unpremultiply.wgsl": {
+      "bindings": [
+        {
+          "binding": 0,
+          "group": 0,
+          "name": "inputTexture",
+          "type": "texture_2d<f32>"
+        },
+        {
+          "binding": 1,
+          "group": 0,
+          "name": "outputTexture",
+          "type": "texture_storage_2d<rgba8unorm, write>"
+        }
+      ],
+      "builtins": [
+        "global_invocation_id"
+      ],
+      "entryPoints": [
+        {
+          "name": "cs_main",
+          "stage": "compute",
+          "workgroupSize": [
+            "8",
+            "8",
+            "1"
+          ]
+        }
+      ],
+      "features": [
+        "any",
+        "if",
+        "let",
+        "min",
+        "return",
+        "round",
+        "textureDimensions",
+        "textureLoad",
+        "textureStore",
+        "var"
+      ],
+      "structs": []
+    },
     "donner/gpu/shader/tests/testdata/solid_fill.wgsl": {
       "bindings": [
         {
@@ -342,6 +385,7 @@
       ],
       "features": [
         "abs",
+        "any",
         "clamp",
         "if",
         "let",
@@ -396,6 +440,7 @@
         }
       ],
       "features": [
+        "any",
         "clamp",
         "if",
         "let",
@@ -445,6 +490,7 @@
         }
       ],
       "features": [
+        "any",
         "clamp",
         "if",
         "let",
@@ -495,6 +541,7 @@
         }
       ],
       "features": [
+        "any",
         "array",
         "clamp",
         "if",
@@ -552,6 +599,7 @@
         }
       ],
       "features": [
+        "any",
         "clamp",
         "if",
         "let",
@@ -602,6 +650,7 @@
         }
       ],
       "features": [
+        "any",
         "array",
         "clamp",
         "for",
@@ -653,6 +702,7 @@
         }
       ],
       "features": [
+        "any",
         "clamp",
         "cos",
         "dot",
@@ -715,6 +765,7 @@
         }
       ],
       "features": [
+        "any",
         "clamp",
         "floor",
         "if",
@@ -775,6 +826,8 @@
         }
       ],
       "features": [
+        "all",
+        "any",
         "clamp",
         "if",
         "let",
@@ -819,6 +872,7 @@
         }
       ],
       "features": [
+        "any",
         "if",
         "let",
         "return",
@@ -867,6 +921,7 @@
       ],
       "features": [
         "abs",
+        "any",
         "array",
         "clamp",
         "floor",
@@ -920,6 +975,7 @@
         }
       ],
       "features": [
+        "any",
         "clamp",
         "if",
         "let",
@@ -967,6 +1023,7 @@
         }
       ],
       "features": [
+        "any",
         "for",
         "if",
         "let",
@@ -1019,6 +1076,7 @@
       ],
       "features": [
         "abs",
+        "any",
         "clamp",
         "floor",
         "if",
@@ -1070,6 +1128,7 @@
         }
       ],
       "features": [
+        "any",
         "clamp",
         "cos",
         "dot",
@@ -1126,6 +1185,7 @@
         }
       ],
       "features": [
+        "any",
         "if",
         "let",
         "return",
@@ -1174,6 +1234,7 @@
         }
       ],
       "features": [
+        "any",
         "clamp",
         "if",
         "let",
@@ -1225,6 +1286,7 @@
       ],
       "features": [
         "abs",
+        "any",
         "array",
         "clamp",
         "const",
@@ -1277,6 +1339,7 @@
         }
       ],
       "features": [
+        "any",
         "ceil",
         "clamp",
         "exp",
@@ -1824,6 +1887,7 @@
         }
       ],
       "features": [
+        "any",
         "if",
         "let",
         "min",

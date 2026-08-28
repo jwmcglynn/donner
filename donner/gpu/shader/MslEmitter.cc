@@ -5,6 +5,7 @@
 #include <functional>
 #include <optional>
 #include <string_view>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -15,24 +16,50 @@ namespace donner::gpu::shader {
 
 namespace {
 
+/// The infix operator text for \p op in MSL.
+///
+/// WgslEmitter.cc carries its own copy that happens to hold the same spellings; see the note
+/// there for why the two are kept separate rather than shared.
+///
+/// @param op Binary operator.
+std::string_view BinaryOperatorText(BinaryOp op) {
+  // A table rather than a switch: these are spellings, so the shape is data, and a linear scan
+  // over fourteen rows costs nothing next to the string building around it. Keyed by enumerator
+  // rather than indexed by its value, so a row cannot silently attach to the wrong operator if
+  // the enum is ever reordered.
+  static constexpr std::pair<BinaryOp, std::string_view> kTable[] = {
+      {BinaryOp::Add, "+"}, {BinaryOp::Sub, "-"},  {BinaryOp::Mul, "*"}, {BinaryOp::Div, "/"},
+      {BinaryOp::Mod, "%"}, {BinaryOp::Lt, "<"},   {BinaryOp::Le, "<="}, {BinaryOp::Gt, ">"},
+      {BinaryOp::Ge, ">="}, {BinaryOp::Eq, "=="},  {BinaryOp::Ne, "!="}, {BinaryOp::And, "&&"},
+      {BinaryOp::Or, "||"}, {BinaryOp::Shr, ">>"},
+  };
+  for (const auto& [candidate, text] : kTable) {
+    if (candidate == op) {
+      return text;
+    }
+  }
+  return "unknown";
+}
+
 /// C++/MSL keywords and type names that IR identifiers must not collide with. Conservative
 /// subset covering the C++14 keyword table plus the metal namespace types this emitter spells
 /// unqualified.
 constexpr std::string_view kMslReservedWords[] = {
-    "alignas", "alignof",  "auto",        "bool",      "break",    "case",      "catch",
-    "char",    "class",    "const",       "constexpr", "continue", "default",   "delete",
-    "device",  "do",       "double",      "else",      "enum",     "explicit",  "extern",
-    "false",   "float",    "for",         "fragment",  "friend",   "goto",      "half",
-    "if",      "inline",   "int",         "kernel",    "long",     "mutable",   "namespace",
-    "new",     "operator", "private",     "protected", "public",   "register",  "return",
-    "short",   "signed",   "sizeof",      "static",    "struct",   "switch",    "template",
-    "this",    "thread",   "threadgroup", "throw",     "true",     "try",       "typedef",
-    "typeid",  "typename", "uint",        "union",     "unsigned", "using",     "vertex",
-    "virtual", "void",     "volatile",    "while",     "constant", "float2",    "float3",
-    "float4",  "float4x4", "int2",        "int3",      "int4",     "uint2",     "uint3",
-    "uint4",   "bool2",    "bool3",       "bool4",     "sampler",  "texture2d", "array",
-    "metal",   "select",   "saturate",    "fract",     "fwidth",   "clamp",     "abs",
-    "min",     "max",      "sqrt",        "length",    "round",
+    "alignas", "alignof",   "auto",        "bool",      "break",    "case",      "catch",
+    "char",    "class",     "const",       "constexpr", "continue", "default",   "delete",
+    "device",  "do",        "double",      "else",      "enum",     "explicit",  "extern",
+    "false",   "float",     "for",         "fragment",  "friend",   "goto",      "half",
+    "if",      "inline",    "int",         "kernel",    "long",     "mutable",   "namespace",
+    "new",     "operator",  "private",     "protected", "public",   "register",  "return",
+    "short",   "signed",    "sizeof",      "static",    "struct",   "switch",    "template",
+    "this",    "thread",    "threadgroup", "throw",     "true",     "try",       "typedef",
+    "typeid",  "typename",  "uint",        "union",     "unsigned", "using",     "vertex",
+    "virtual", "void",      "volatile",    "while",     "constant", "float2",    "float3",
+    "float4",  "float4x4",  "int2",        "int3",      "int4",     "uint2",     "uint3",
+    "uint4",   "bool2",     "bool3",       "bool4",     "sampler",  "texture2d", "array",
+    "metal",   "select",    "saturate",    "fract",     "fwidth",   "clamp",     "abs",
+    "min",     "max",       "sqrt",        "length",    "round",    "any",       "all",
+    "dot",     "normalize",
 };
 
 /// Checks an identifier for C++/MSL lexical validity and reserved-word collisions; fails
@@ -376,26 +403,9 @@ std::string Emitter::exprToMsl(const IrExpr& expr) {
     case IrExpr::Kind::Unary:
       return std::format("({}{})", node.unaryOp == IrExpr::UnaryOp::Neg ? "-" : "!",
                          exprToMsl(node.children[0]));
-    case IrExpr::Kind::Binary: {
-      std::string_view op;
-      switch (node.binaryOp) {
-        case BinaryOp::Add: op = "+"; break;
-        case BinaryOp::Sub: op = "-"; break;
-        case BinaryOp::Mul: op = "*"; break;
-        case BinaryOp::Div: op = "/"; break;
-        case BinaryOp::Mod: op = "%"; break;
-        case BinaryOp::Lt: op = "<"; break;
-        case BinaryOp::Le: op = "<="; break;
-        case BinaryOp::Gt: op = ">"; break;
-        case BinaryOp::Ge: op = ">="; break;
-        case BinaryOp::Eq: op = "=="; break;
-        case BinaryOp::Ne: op = "!="; break;
-        case BinaryOp::And: op = "&&"; break;
-        case BinaryOp::Or: op = "||"; break;
-      }
-      return std::format("({} {} {})", exprToMsl(node.children[0]), op,
-                         exprToMsl(node.children[1]));
-    }
+    case IrExpr::Kind::Binary:
+      return std::format("({} {} {})", exprToMsl(node.children[0]),
+                         BinaryOperatorText(node.binaryOp), exprToMsl(node.children[1]));
     case IrExpr::Kind::Member:
       return std::format("{}.{}", exprToMsl(node.children[0]), node.name.str());
     case IrExpr::Kind::Swizzle:
@@ -433,7 +443,8 @@ std::string Emitter::exprToMsl(const IrExpr& expr) {
         default: break;
       }
 
-      // Every remaining builtin is spelled the same in MSL as in WGSL.
+      // Every remaining builtin is spelled the same in MSL as in WGSL, the two bool-vector
+      // reductions included.
       std::string result = std::string(BuiltinFnName(node.builtin)) + "(";
       for (size_t i = 0; i < node.children.size(); ++i) {
         if (i > 0) {

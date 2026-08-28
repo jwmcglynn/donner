@@ -94,6 +94,8 @@ constexpr uint32_t kOpVectorTimesScalar = 142;
 constexpr uint32_t kOpMatrixTimesVector = 145;
 constexpr uint32_t kOpMatrixTimesMatrix = 146;
 constexpr uint32_t kOpDot = 148;
+constexpr uint32_t kOpAny = 154;
+constexpr uint32_t kOpAll = 155;
 constexpr uint32_t kOpLogicalEqual = 164;
 constexpr uint32_t kOpLogicalNotEqual = 165;
 constexpr uint32_t kOpLogicalOr = 166;
@@ -116,6 +118,7 @@ constexpr uint32_t kOpFOrdLessThan = 184;
 constexpr uint32_t kOpFOrdGreaterThan = 186;
 constexpr uint32_t kOpFOrdLessThanEqual = 188;
 constexpr uint32_t kOpFOrdGreaterThanEqual = 190;
+constexpr uint32_t kOpShiftRightLogical = 194;
 constexpr uint32_t kOpFwidth = 209;
 constexpr uint32_t kOpLoopMerge = 246;
 constexpr uint32_t kOpSelectionMerge = 247;
@@ -301,6 +304,8 @@ uint32_t BinaryOpcode(BinaryOp op, ScalarKind operandKind) {
     // semantics.
     case BinaryOp::And: return kOpLogicalAnd;
     case BinaryOp::Or: return kOpLogicalOr;
+    // Logical, not arithmetic: the IR only shifts u32, so the vacated bits are zeros.
+    case BinaryOp::Shr: return kOpShiftRightLogical;
   }
   return 0;
 }
@@ -607,6 +612,7 @@ private:
   /// @param node CallBuiltin expression node.
   /// @param typeId Result type id.
   uint32_t emitSelectBuiltin(const IrExpr::Node& node, uint32_t typeId);
+  uint32_t emitVectorReductionBuiltin(const IrExpr::Node& node, uint32_t typeId);
   /// Emits the texture builtins: sample, load, and dimension query.
   /// @param node CallBuiltin expression node.
   /// @param typeId Result type id.
@@ -2094,6 +2100,15 @@ uint32_t Emitter::emitTextureBuiltin(const IrExpr::Node& node, uint32_t typeId) 
   }
 }
 
+// OpAny / OpAll are core instructions rather than GLSL extended-instruction-set calls, so they
+// do not go through the math-builtin path that imports from GLSL.std.450.
+uint32_t Emitter::emitVectorReductionBuiltin(const IrExpr::Node& node, uint32_t typeId) {
+  const uint32_t operandId = emitValue(node.children[0]);
+  const uint32_t valueId = newId();
+  Instr(functions_, node.builtin == BuiltinFn::Any ? kOpAny : kOpAll, {typeId, valueId, operandId});
+  return valueId;
+}
+
 uint32_t Emitter::emitBuiltinCall(const IrExpr::Node& node) {
   const uint32_t typeId = plainTypeId(node.type);
 
@@ -2103,6 +2118,8 @@ uint32_t Emitter::emitBuiltinCall(const IrExpr::Node& node) {
     case BuiltinFn::TextureDimensions: return emitTextureBuiltin(node, typeId);
     case BuiltinFn::Fwidth: return emitFwidthBuiltin(node, typeId);
     case BuiltinFn::Select: return emitSelectBuiltin(node, typeId);
+    case BuiltinFn::Any:
+    case BuiltinFn::All: return emitVectorReductionBuiltin(node, typeId);
     default: return emitMathBuiltin(node, typeId);
   }
 }

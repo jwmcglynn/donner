@@ -20,7 +20,9 @@
 #include "donner/gpu/shader/IrModule.h"
 #include "donner/gpu/shader/SpirvEmitter.h"
 #include "donner/gpu/shader/programs/ColorMatrix.h"
+#include "donner/gpu/shader/programs/SnapshotUnpremultiply.h"
 #include "donner/gpu/shader/programs/SolidFill.h"
+#include "donner/gpu/shader/tests/ReductionCoverageModule.h"
 #include "donner/gpu/shader/tests/ShaderTestUtils.h"
 #include "donner/gpu/shader/tests/StageIoTestModules.h"
 
@@ -215,6 +217,27 @@ TEST(SpirvValValidation, APositionOnlyFragmentEntryPassesVulkan11Validation) {
     GTEST_SKIP() << "spirv-val (SPIRV-Tools) is not installed";
   }
   ExpectValidatesForVulkan11(spirvVal, BuildPositionOnlyFragmentModule(), "position_only.spv");
+}
+
+TEST(SpirvValValidation, EmittedSnapshotUnpremultiplyComputePassesVulkan11Validation) {
+  // The first module to emit OpUGreaterThanEqual over a vector, OpAny, and OpShiftRightLogical,
+  // so this is where the validator confirms those encodings and their result types.
+  const std::string spirvVal = FindSpirvVal();
+  if (spirvVal.empty()) {
+    GTEST_SKIP() << "spirv-val (SPIRV-Tools) is not installed";
+  }
+  ExpectValidatesForVulkan11(spirvVal, programs::BuildSnapshotUnpremultiplyModule(),
+                             "snapshot_unpremultiply.spv");
+}
+
+TEST(SpirvValValidation, EmittedBoolVectorReductionsPassVulkan11Validation) {
+  // OpAll reaches no shipping program, so this is the only place the validator confirms its
+  // encoding and that its result type is a scalar bool rather than the vector it reduced.
+  const std::string spirvVal = FindSpirvVal();
+  if (spirvVal.empty()) {
+    GTEST_SKIP() << "spirv-val (SPIRV-Tools) is not installed";
+  }
+  ExpectValidatesForVulkan11(spirvVal, BuildVectorReductionModule(), "vector_reductions.spv");
 }
 
 TEST(SpirvValValidation, NegativeControlDetectsAMalformedModule) {

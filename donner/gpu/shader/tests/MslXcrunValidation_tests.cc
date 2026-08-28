@@ -18,7 +18,9 @@
 
 #include "donner/gpu/shader/MslEmitter.h"
 #include "donner/gpu/shader/programs/ColorMatrix.h"
+#include "donner/gpu/shader/programs/SnapshotUnpremultiply.h"
 #include "donner/gpu/shader/programs/SolidFill.h"
+#include "donner/gpu/shader/tests/ReductionCoverageModule.h"
 #include "donner/gpu/shader/tests/ShaderTestUtils.h"
 #include "donner/gpu/shader/tests/StageIoTestModules.h"
 
@@ -169,6 +171,27 @@ TEST(MslXcrunValidation, EmittedColorMatrixComputeCompilesWithMetalCompiler) {
     GTEST_SKIP() << skipReason;
   }
   ExpectCompilesWithMetalCompiler(programs::BuildColorMatrixModule(), "color_matrix");
+}
+
+TEST(MslXcrunValidation, EmittedSnapshotUnpremultiplyComputeCompilesWithMetalCompiler) {
+  const std::string skipReason = FindMetalCompilerSkipReason();
+  if (!skipReason.empty()) {
+    GTEST_SKIP() << skipReason;
+  }
+  // This program is the first to emit a componentwise comparison, a bool-vector reduction, and a
+  // shift, so it is also the first to have the compiler confirm those spellings are real MSL.
+  ExpectCompilesWithMetalCompiler(programs::BuildSnapshotUnpremultiplyModule(),
+                                  "snapshot_unpremultiply");
+}
+
+TEST(MslXcrunValidation, EmittedBoolVectorReductionsCompileWithMetalCompiler) {
+  const std::string skipReason = FindMetalCompilerSkipReason();
+  if (!skipReason.empty()) {
+    GTEST_SKIP() << skipReason;
+  }
+  // `all` reaches no shipping program, so without this the compiler would never see it and a
+  // wrong spelling would only ever be checked against the emitter's own idea of it.
+  ExpectCompilesWithMetalCompiler(BuildVectorReductionModule(), "vector_reductions");
 }
 
 TEST(MslXcrunValidation, NegativeControlDetectsInvalidMsl) {

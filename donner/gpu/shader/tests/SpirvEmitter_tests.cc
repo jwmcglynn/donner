@@ -20,6 +20,7 @@
 #include "donner/base/tests/Runfiles.h"
 #include "donner/gpu/shader/programs/ColorMatrix.h"
 #include "donner/gpu/shader/programs/SolidFill.h"
+#include "donner/gpu/shader/tests/ReductionCoverageModule.h"
 #include "donner/gpu/shader/tests/ShaderTestUtils.h"
 #include "donner/gpu/shader/tests/StageIoTestModules.h"
 
@@ -41,6 +42,7 @@ constexpr uint32_t kOpExtInst = 12;
 constexpr uint32_t kOpEntryPoint = 15;
 constexpr uint32_t kOpExecutionMode = 16;
 constexpr uint32_t kOpCapability = 17;
+constexpr uint32_t kOpTypeBool = 20;
 constexpr uint32_t kOpTypeInt = 21;
 constexpr uint32_t kOpTypeFloat = 22;
 constexpr uint32_t kOpTypeVector = 23;
@@ -61,6 +63,8 @@ constexpr uint32_t kOpImageWrite = 99;
 constexpr uint32_t kOpImageQuerySizeLod = 103;
 constexpr uint32_t kOpImageQuerySize = 104;
 constexpr uint32_t kOpTypeImage = 25;
+constexpr uint32_t kOpAny = 154;
+constexpr uint32_t kOpAll = 155;
 constexpr uint32_t kOpSelect = 169;
 constexpr uint32_t kOpFwidth = 209;
 constexpr uint32_t kOpLoopMerge = 246;
@@ -595,6 +599,35 @@ TEST(SpirvEmitterTests, TextureSampleUsesSampledImageAndImplicitLod) {
   ASSERT_THAT(samples, SizeIs(1u));
   EXPECT_THAT(samples[0].operands[2], testing::Eq(sampledImages[0].operands[1]))
       << "the implicit-lod sample must consume the OpSampledImage result";
+}
+
+TEST(SpirvEmitterTests, BoolVectorReductionsLowerToOpAllAndOpAny) {
+  ShaderResult<IrModule> module = BuildVectorReductionModule();
+  ASSERT_THAT(module, HasShaderResult());
+  const std::vector<SpvInstruction> instructions = Scan(EmitOrFail(module.result()));
+
+  // OpAny and OpAll are core instructions, not GLSL.std.450 calls, so an emitter that routed
+  // them through the math-builtin path would emit an OpExtInst with a bogus instruction number
+  // instead of these.
+  const std::vector<SpvInstruction> alls = WithOpcode(instructions, kOpAll);
+  const std::vector<SpvInstruction> anys = WithOpcode(instructions, kOpAny);
+  ASSERT_THAT(alls, SizeIs(1u));
+  ASSERT_THAT(anys, SizeIs(1u));
+
+  // Operands: result type, result, vector. Each reduction takes exactly one operand, and its
+  // result is a scalar bool rather than the bool vector it reduced.
+  ASSERT_THAT(alls[0].operands, SizeIs(3u));
+  ASSERT_THAT(anys[0].operands, SizeIs(3u));
+
+  const std::vector<SpvInstruction> boolTypes = WithOpcode(instructions, kOpTypeBool);
+  ASSERT_THAT(boolTypes, SizeIs(1u));
+  const uint32_t boolTypeId = boolTypes[0].operands[0];
+  EXPECT_THAT(alls[0].operands[0], testing::Eq(boolTypeId));
+  EXPECT_THAT(anys[0].operands[0], testing::Eq(boolTypeId));
+
+  // Each reduces a distinct comparison, so an emitter that fed both the same operand - or fed
+  // one the other's - is caught here rather than by a shader that silently never stores.
+  EXPECT_THAT(alls[0].operands[2], testing::Not(testing::Eq(anys[0].operands[2])));
 }
 
 TEST(SpirvEmitterTests, FwidthLowersToOpFwidth) {

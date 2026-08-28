@@ -73,10 +73,12 @@ donner_cc_library(
     name = "programs",
     srcs = [
         "programs/ColorMatrix.cc",
+        "programs/SnapshotUnpremultiply.cc",
         "programs/SolidFill.cc",
     ],
     hdrs = [
         "programs/ColorMatrix.h",
+        "programs/SnapshotUnpremultiply.h",
         "programs/SolidFill.h",
     ],
     visibility = donner_internal_visibility(),
@@ -94,7 +96,10 @@ donner_cc_test(
         "tests/IrLayout_tests.cc",
         "tests/IrSerialization_tests.cc",
         "tests/MslEmitter_tests.cc",
+        "tests/ReductionCoverageModule.h",
+        "tests/ShaderGoldenUtils.h",
         "tests/ShaderTestUtils.h",
+        "tests/SnapshotUnpremultiplyProgram_tests.cc",
         "tests/SolidFillProgram_tests.cc",
         "tests/SpirvEmitter_tests.cc",
         "tests/WgslEmitter_tests.cc",
@@ -103,15 +108,17 @@ donner_cc_test(
         "tests/testdata/color_matrix.msl",
         "tests/testdata/color_matrix.spv",
         "tests/testdata/color_matrix.wgsl",
+        "tests/testdata/snapshot_unpremultiply.msl",
+        "tests/testdata/snapshot_unpremultiply.spv",
+        "tests/testdata/snapshot_unpremultiply.wgsl",
         "tests/testdata/solid_fill.msl",
         "tests/testdata/solid_fill.spv",
         "tests/testdata/solid_fill.wgsl",
     ],
     deps = [
-        ":stage_io_test_modules",
-
         ":programs",
         ":shader",
+        ":stage_io_test_modules",
         "//donner/base:base_test_utils",
         "@com_google_gtest//:gtest_main",
         "@rules_cc//cc/runfiles",
@@ -126,14 +133,14 @@ donner_cc_test(
     name = "msl_xcrun_validation_tests",
     srcs = [
         "tests/MslXcrunValidation_tests.cc",
+        "tests/ReductionCoverageModule.h",
         "tests/ShaderTestUtils.h",
     ],
     target_compatible_with = ["@platforms//os:macos"],
     deps = [
-        ":stage_io_test_modules",
-
         ":programs",
         ":shader",
+        ":stage_io_test_modules",
         "@com_google_gtest//:gtest_main",
     ],
 )
@@ -145,14 +152,14 @@ donner_cc_test(
 donner_cc_test(
     name = "spirv_val_validation_tests",
     srcs = [
+        "tests/ReductionCoverageModule.h",
         "tests/ShaderTestUtils.h",
         "tests/SpirvValValidation_tests.cc",
     ],
     deps = [
-        ":stage_io_test_modules",
-
         ":programs",
         ":shader",
+        ":stage_io_test_modules",
         "@com_google_gtest//:gtest_main",
     ],
 )

@@ -36,20 +36,48 @@ ShaderResult<IrExpr> MakeArithmetic(BinaryOp op, const IrExpr& lhs, const IrExpr
   return MakeNode(std::move(node));
 }
 
-/// Shared checker for ordered comparisons (numeric scalars) and equality (any scalars).
+/// Shared checker for ordered comparisons (numeric operands) and equality (any plain operands).
+///
+/// A vector comparison is componentwise and produces a bool vector of the same size, matching
+/// WGSL, MSL, and SPIR-V. \ref Any / \ref All reduce that back to a scalar bool, which is the
+/// only way a bool vector can reach a condition position.
 ShaderResult<IrExpr> MakeComparison(BinaryOp op, bool requireNumeric, const IrExpr& lhs,
                                     const IrExpr& rhs, const RcString& label) {
-  const bool typeOk = requireNumeric ? lhs.type().isNumericScalar() : lhs.type().isScalar();
-  if (!(lhs.type() == rhs.type()) || !typeOk) {
-    return ShaderError{std::format("comparison operands must be matching {} scalar types, got "
-                                   "{} and {}",
-                                   requireNumeric ? "numeric" : "", TypeName(lhs), TypeName(rhs)),
-                       label};
+  const IrType& operandType = lhs.type();
+  const bool typeOk =
+      requireNumeric ? operandType.isNumeric() : (operandType.isScalar() || operandType.isVector());
+  if (!(operandType == rhs.type()) || !typeOk) {
+    return ShaderError{
+        std::format("comparison operands must be matching {}scalar or vector types, got {} and {}",
+                    requireNumeric ? "numeric " : "", TypeName(lhs), TypeName(rhs)),
+        label};
   }
 
   IrExpr::Node node;
   node.kind = IrExpr::Kind::Binary;
-  node.type = IrType::Bool();
+  node.type = operandType.isVector() ? IrType::Vector(ScalarKind::Bool, operandType.vectorSize())
+                                     : IrType::Bool();
+  node.binaryOp = op;
+  node.children = {lhs, rhs};
+  return MakeNode(std::move(node));
+}
+
+/// Shared checker for the logical shift right.
+ShaderResult<IrExpr> MakeShift(BinaryOp op, const IrExpr& lhs, const IrExpr& rhs,
+                               const RcString& label) {
+  const IrType& operandType = lhs.type();
+  const bool unsignedOperand = (operandType.isScalar() || operandType.isVector()) &&
+                               operandType.scalarKind() == ScalarKind::U32;
+  if (!unsignedOperand || !(operandType == rhs.type())) {
+    return ShaderError{
+        std::format("shift operands must be matching u32 scalar or vector types, got {} and {}",
+                    TypeName(lhs), TypeName(rhs)),
+        label};
+  }
+
+  IrExpr::Node node;
+  node.kind = IrExpr::Kind::Binary;
+  node.type = operandType;
   node.binaryOp = op;
   node.children = {lhs, rhs};
   return MakeNode(std::move(node));
@@ -72,6 +100,31 @@ ShaderResult<IrExpr> MakeLogical(BinaryOp op, const IrExpr& lhs, const IrExpr& r
   return MakeNode(std::move(node));
 }
 
+/// The serialized spelling of \p op, shared by its ostream operator and by IR serialization so
+/// the two can never drift apart - a serialized stream naming an operator one way while a
+/// diagnostic names it another is exactly the kind of mismatch a reader trusts not to exist.
+/// Mirrors \ref BuiltinFnName, which does the same for the builtins.
+/// @param op Binary operator.
+std::string_view BinaryOpName(BinaryOp op) {
+  // A table rather than a switch: these are spellings, so the shape is data, and a linear scan
+  // over fourteen rows costs nothing next to the string building around it. Keyed by enumerator
+  // rather than indexed by its value, so a row cannot silently attach to the wrong operator if
+  // the enum is ever reordered.
+  static constexpr std::pair<BinaryOp, std::string_view> kTable[] = {
+      {BinaryOp::Add, "add"}, {BinaryOp::Sub, "sub"}, {BinaryOp::Mul, "mul"},
+      {BinaryOp::Div, "div"}, {BinaryOp::Mod, "mod"}, {BinaryOp::Lt, "lt"},
+      {BinaryOp::Le, "le"},   {BinaryOp::Gt, "gt"},   {BinaryOp::Ge, "ge"},
+      {BinaryOp::Eq, "eq"},   {BinaryOp::Ne, "ne"},   {BinaryOp::And, "and"},
+      {BinaryOp::Or, "or"},   {BinaryOp::Shr, "shr"},
+  };
+  for (const auto& [candidate, text] : kTable) {
+    if (candidate == op) {
+      return text;
+    }
+  }
+  return "unknown";
+}
+
 /// Formats a literal payload deterministically.
 std::string LiteralToString(const IrExpr::Node& node) {
   if (std::holds_alternative<bool>(node.literal)) {
@@ -89,22 +142,7 @@ std::string LiteralToString(const IrExpr::Node& node) {
 }  // namespace
 
 std::ostream& operator<<(std::ostream& os, BinaryOp value) {
-  switch (value) {
-    case BinaryOp::Add: return os << "add";
-    case BinaryOp::Sub: return os << "sub";
-    case BinaryOp::Mul: return os << "mul";
-    case BinaryOp::Div: return os << "div";
-    case BinaryOp::Mod: return os << "mod";
-    case BinaryOp::Lt: return os << "lt";
-    case BinaryOp::Le: return os << "le";
-    case BinaryOp::Gt: return os << "gt";
-    case BinaryOp::Ge: return os << "ge";
-    case BinaryOp::Eq: return os << "eq";
-    case BinaryOp::Ne: return os << "ne";
-    case BinaryOp::And: return os << "and";
-    case BinaryOp::Or: return os << "or";
-  }
-  return os << "unknown";
+  return os << BinaryOpName(value);
 }
 
 std::string_view BuiltinFnName(BuiltinFn fn) {
@@ -122,6 +160,8 @@ std::string_view BuiltinFnName(BuiltinFn fn) {
     case BuiltinFn::Fwidth: return "fwidth";
     case BuiltinFn::Round: return "round";
     case BuiltinFn::Select: return "select";
+    case BuiltinFn::Any: return "any";
+    case BuiltinFn::All: return "all";
     case BuiltinFn::TextureSample: return "textureSample";
     case BuiltinFn::TextureLoad: return "textureLoad";
     case BuiltinFn::TextureDimensions: return "textureDimensions";
@@ -191,26 +231,9 @@ std::string IrExpr::toString() const {
     case Kind::Unary:
       return std::format("{}({})", node.unaryOp == UnaryOp::Neg ? "neg" : "not",
                          node.children[0].toString());
-    case Kind::Binary: {
-      std::string result;
-      switch (node.binaryOp) {
-        case BinaryOp::Add: result = "add"; break;
-        case BinaryOp::Sub: result = "sub"; break;
-        case BinaryOp::Mul: result = "mul"; break;
-        case BinaryOp::Div: result = "div"; break;
-        case BinaryOp::Mod: result = "mod"; break;
-        case BinaryOp::Lt: result = "lt"; break;
-        case BinaryOp::Le: result = "le"; break;
-        case BinaryOp::Gt: result = "gt"; break;
-        case BinaryOp::Ge: result = "ge"; break;
-        case BinaryOp::Eq: result = "eq"; break;
-        case BinaryOp::Ne: result = "ne"; break;
-        case BinaryOp::And: result = "and"; break;
-        case BinaryOp::Or: result = "or"; break;
-      }
-      return std::format("{}({}, {})", result, node.children[0].toString(),
+    case Kind::Binary:
+      return std::format("{}({}, {})", BinaryOpName(node.binaryOp), node.children[0].toString(),
                          node.children[1].toString());
-    }
     case Kind::Member:
       return std::format("member({}, {})", node.children[0].toString(), node.name.str());
     case Kind::Swizzle:
@@ -394,6 +417,9 @@ ShaderResult<IrExpr> Eq(const IrExpr& lhs, const IrExpr& rhs, const RcString& la
 }
 ShaderResult<IrExpr> Ne(const IrExpr& lhs, const IrExpr& rhs, const RcString& label) {
   return MakeComparison(BinaryOp::Ne, /*requireNumeric=*/false, lhs, rhs, label);
+}
+ShaderResult<IrExpr> Shr(const IrExpr& lhs, const IrExpr& rhs, const RcString& label) {
+  return MakeShift(BinaryOp::Shr, lhs, rhs, label);
 }
 
 ShaderResult<IrExpr> And(const IrExpr& lhs, const IrExpr& rhs, const RcString& label) {
@@ -711,6 +737,17 @@ ShaderResult<IrType> CheckBuiltin(BuiltinFn fn, std::span<const IrExpr> args,
       }
       return IrType::F32();
 
+    case BuiltinFn::Any:
+    case BuiltinFn::All:
+      if (args.size() != 1) return argCountError(1);
+      // Only a bool vector: reducing a scalar bool is a no-op that hides a mistake, and reducing
+      // a numeric vector would need an implicit truthiness rule none of the three backends has.
+      if (!args[0].type().isVector() || args[0].type().scalarKind() != ScalarKind::Bool) {
+        return ShaderError{std::format("any/all require a bool vector, got {}", TypeName(args[0])),
+                           label};
+      }
+      return IrType::Bool();
+
     case BuiltinFn::Select:
       if (args.size() != 3) return argCountError(3);
       if (!(args[0].type() == args[1].type())) {
@@ -794,6 +831,8 @@ ShaderResult<IrExpr> CallBuiltinNamed(std::string_view name, std::vector<IrExpr>
       {"fwidth", BuiltinFn::Fwidth},
       {"round", BuiltinFn::Round},
       {"select", BuiltinFn::Select},
+      {"any", BuiltinFn::Any},
+      {"all", BuiltinFn::All},
       {"textureSample", BuiltinFn::TextureSample},
       {"textureLoad", BuiltinFn::TextureLoad},
       {"textureDimensions", BuiltinFn::TextureDimensions},

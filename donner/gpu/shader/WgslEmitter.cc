@@ -4,6 +4,7 @@
 #include <format>
 #include <functional>
 #include <string_view>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -13,9 +14,42 @@ namespace donner::gpu::shader {
 
 namespace {
 
+/// The infix operator text for \p op in WGSL.
+///
+/// MslEmitter.cc carries its own copy that happens to hold the same spellings, because every
+/// operator the IR has is written the same way in both languages. They are kept separate rather
+/// than shared: the agreement is a coincidence of the current operator set, not a property the
+/// two languages guarantee, and a future operator that diverges should be a one-line change in
+/// one emitter rather than a conditional in a shared table.
+///
+/// @param op Binary operator.
+std::string_view BinaryOperatorText(BinaryOp op) {
+  // A table rather than a switch: these are spellings, so the shape is data, and a linear scan
+  // over fourteen rows costs nothing next to the string building around it. Keyed by enumerator
+  // rather than indexed by its value, so a row cannot silently attach to the wrong operator if
+  // the enum is ever reordered.
+  static constexpr std::pair<BinaryOp, std::string_view> kTable[] = {
+      {BinaryOp::Add, "+"}, {BinaryOp::Sub, "-"},  {BinaryOp::Mul, "*"}, {BinaryOp::Div, "/"},
+      {BinaryOp::Mod, "%"}, {BinaryOp::Lt, "<"},   {BinaryOp::Le, "<="}, {BinaryOp::Gt, ">"},
+      {BinaryOp::Ge, ">="}, {BinaryOp::Eq, "=="},  {BinaryOp::Ne, "!="}, {BinaryOp::And, "&&"},
+      {BinaryOp::Or, "||"}, {BinaryOp::Shr, ">>"},
+  };
+  for (const auto& [candidate, text] : kTable) {
+    if (candidate == op) {
+      return text;
+    }
+  }
+  return "unknown";
+}
+
 /// WGSL reserved and predeclared words that IR identifiers must not collide with. Small,
 /// deliberately conservative subset covering keywords, types, address spaces, and the builtin
 /// functions this IR can call.
+///
+/// Every \ref BuiltinFn belongs here: WGSL spells all of them as free function calls, so a
+/// module that named a local after one and also called it would emit shadowing WGSL. That is a
+/// rule rather than a convention - `EveryBuiltinNameIsReserved` walks the enum and fails if a
+/// builtin is added without its name.
 constexpr std::string_view kReservedWords[] = {
     "alias",
     "array",
@@ -68,12 +102,16 @@ constexpr std::string_view kReservedWords[] = {
     "while",
     "write",
     "abs",
+    "all",
+    "any",
     "clamp",
+    "dot",
     "fract",
     "fwidth",
     "length",
     "max",
     "min",
+    "normalize",
     "round",
     "saturate",
     "select",
@@ -281,26 +319,9 @@ std::string Emitter::exprToWgsl(const IrExpr& expr) {
     case IrExpr::Kind::Unary:
       return std::format("({}{})", node.unaryOp == IrExpr::UnaryOp::Neg ? "-" : "!",
                          exprToWgsl(node.children[0]));
-    case IrExpr::Kind::Binary: {
-      std::string_view op;
-      switch (node.binaryOp) {
-        case BinaryOp::Add: op = "+"; break;
-        case BinaryOp::Sub: op = "-"; break;
-        case BinaryOp::Mul: op = "*"; break;
-        case BinaryOp::Div: op = "/"; break;
-        case BinaryOp::Mod: op = "%"; break;
-        case BinaryOp::Lt: op = "<"; break;
-        case BinaryOp::Le: op = "<="; break;
-        case BinaryOp::Gt: op = ">"; break;
-        case BinaryOp::Ge: op = ">="; break;
-        case BinaryOp::Eq: op = "=="; break;
-        case BinaryOp::Ne: op = "!="; break;
-        case BinaryOp::And: op = "&&"; break;
-        case BinaryOp::Or: op = "||"; break;
-      }
-      return std::format("({} {} {})", exprToWgsl(node.children[0]), op,
-                         exprToWgsl(node.children[1]));
-    }
+    case IrExpr::Kind::Binary:
+      return std::format("({} {} {})", exprToWgsl(node.children[0]),
+                         BinaryOperatorText(node.binaryOp), exprToWgsl(node.children[1]));
     case IrExpr::Kind::Member:
       return std::format("{}.{}", exprToWgsl(node.children[0]), node.name.str());
     case IrExpr::Kind::Swizzle:

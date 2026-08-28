@@ -38,6 +38,7 @@ enum class BinaryOp : uint8_t {
   Ne,   //!< `!=`
   And,  //!< `&&`
   Or,   //!< `||`
+  Shr,  //!< `>>` (logical shift right; unsigned integers only)
 };
 
 /// Ostream output operator, e.g. `add`. @param os Output stream. @param value Value to output.
@@ -58,6 +59,8 @@ enum class BuiltinFn : uint8_t {
   Fwidth,             //!< `fwidth(x)` (fragment stage)
   Round,              //!< `round(x)`
   Select,             //!< `select(falseVal, trueVal, cond)`
+  Any,                //!< `any(v)` - true if any component of a bool vector is true.
+  All,                //!< `all(v)` - true if every component of a bool vector is true.
   TextureSample,      //!< `textureSample(texture, sampler, coords)`
   TextureLoad,        //!< `textureLoad(texture, coords, level)`
   TextureDimensions,  //!< `textureDimensions(texture)`
@@ -245,24 +248,44 @@ ShaderResult<IrExpr> Mod(const IrExpr& lhs, const IrExpr& rhs, const RcString& l
 
 ShaderResult<IrExpr> Div(const IrExpr& lhs, const IrExpr& rhs, const RcString& label = "div");
 
-/// `lhs < rhs` for matching numeric scalar types; yields bool.
+/// Every comparison below takes two operands of the same type, and both may be scalars or
+/// vectors: a scalar comparison yields `bool`, a vector comparison compares componentwise and
+/// yields a bool vector of the same size, which is how WGSL, MSL, and SPIR-V all define it.
+/// \ref Any and \ref All reduce such a vector back to a single bool.
+///
+/// The ordered comparisons (\ref Lt, \ref Le, \ref Gt, \ref Ge) additionally require numeric
+/// operands, since bool has no ordering. \ref Eq and \ref Ne do not: comparing two bools, or
+/// two bool vectors, is meaningful and allowed.
+
+/// `lhs < rhs` componentwise; yields bool or a bool vector.
 /// @param lhs Left operand. @param rhs Right operand. @param label Diagnostic label.
 ShaderResult<IrExpr> Lt(const IrExpr& lhs, const IrExpr& rhs, const RcString& label = "lt");
-/// `lhs <= rhs` for matching numeric scalar types; yields bool.
+/// `lhs <= rhs` componentwise; yields bool or a bool vector.
 /// @param lhs Left operand. @param rhs Right operand. @param label Diagnostic label.
 ShaderResult<IrExpr> Le(const IrExpr& lhs, const IrExpr& rhs, const RcString& label = "le");
-/// `lhs > rhs` for matching numeric scalar types; yields bool.
+/// `lhs > rhs` componentwise; yields bool or a bool vector.
 /// @param lhs Left operand. @param rhs Right operand. @param label Diagnostic label.
 ShaderResult<IrExpr> Gt(const IrExpr& lhs, const IrExpr& rhs, const RcString& label = "gt");
-/// `lhs >= rhs` for matching numeric scalar types; yields bool.
+/// `lhs >= rhs` componentwise; yields bool or a bool vector.
 /// @param lhs Left operand. @param rhs Right operand. @param label Diagnostic label.
 ShaderResult<IrExpr> Ge(const IrExpr& lhs, const IrExpr& rhs, const RcString& label = "ge");
-/// `lhs == rhs` for matching scalar types; yields bool.
+/// `lhs == rhs` componentwise for matching scalars or vectors; yields bool or a bool vector.
 /// @param lhs Left operand. @param rhs Right operand. @param label Diagnostic label.
 ShaderResult<IrExpr> Eq(const IrExpr& lhs, const IrExpr& rhs, const RcString& label = "eq");
-/// `lhs != rhs` for matching scalar types; yields bool.
+/// `lhs != rhs` componentwise for matching scalars or vectors; yields bool or a bool vector.
 /// @param lhs Left operand. @param rhs Right operand. @param label Diagnostic label.
 ShaderResult<IrExpr> Ne(const IrExpr& lhs, const IrExpr& rhs, const RcString& label = "ne");
+
+/// `lhs >> rhs`, a logical shift right on matching-size u32 scalars or vectors.
+///
+/// Unsigned only: an arithmetic shift of a signed value is a different instruction on every
+/// backend, and nothing in the shader set shifts a signed value. There is no left-shift sibling
+/// for the same reason - no shader uses one, and an operator with no caller has no golden that
+/// would catch it being emitted wrong.
+///
+/// @param lhs Value to shift. @param rhs Shift amount, u32 of the same shape as \p lhs.
+/// @param label Diagnostic label.
+ShaderResult<IrExpr> Shr(const IrExpr& lhs, const IrExpr& rhs, const RcString& label = "shr");
 
 /// `lhs && rhs` for bools.
 /// @param lhs Left operand. @param rhs Right operand. @param label Diagnostic label.

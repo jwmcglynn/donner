@@ -163,6 +163,8 @@ INLINE_WGSL_RE = re.compile(
 # (design 0053 phase 2) may only claim support for features present here.
 WGSL_FEATURE_TOKENS = (
     "abs",
+    "all",
+    "any",
     "array",
     "atomic",
     "break",
