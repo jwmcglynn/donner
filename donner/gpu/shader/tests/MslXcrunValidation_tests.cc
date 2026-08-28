@@ -18,6 +18,7 @@
 
 #include "donner/gpu/shader/MslEmitter.h"
 #include "donner/gpu/shader/programs/ColorMatrix.h"
+#include "donner/gpu/shader/programs/Flood.h"
 #include "donner/gpu/shader/programs/SolidFill.h"
 #include "donner/gpu/shader/tests/ShaderTestUtils.h"
 #include "donner/gpu/shader/tests/StageIoTestModules.h"
@@ -169,6 +170,14 @@ TEST(MslXcrunValidation, EmittedColorMatrixComputeCompilesWithMetalCompiler) {
     GTEST_SKIP() << skipReason;
   }
   ExpectCompilesWithMetalCompiler(programs::BuildColorMatrixModule(), "color_matrix");
+}
+
+TEST(MslXcrunValidation, EmittedFloodComputeCompilesWithMetalCompiler) {
+  const std::string skipReason = FindMetalCompilerSkipReason();
+  if (!skipReason.empty()) {
+    GTEST_SKIP() << skipReason;
+  }
+  ExpectCompilesWithMetalCompiler(programs::BuildFloodModule(), "flood");
 }
 
 TEST(MslXcrunValidation, NegativeControlDetectsInvalidMsl) {
