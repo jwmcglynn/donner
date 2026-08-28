@@ -26,6 +26,16 @@ is indistinguishable from a host cc_binary) can be excluded by passing the
 host-configuration cquery incompatibility result via --host-incompatible-file.
 Labels absent from that file keep their kind-based classification, so a missing
 or partial incompatibility list still fails closed toward running coverage.
+
+Decide on the FINAL list, not on an intermediate one. The coverage lane narrows
+its affected set (tests only, tag-filtered, variant-trimmed) before it runs, and
+a decision taken on any wider set answers a question nobody asked: a non-test
+helper or a tag-filtered sibling in the wider set can carry the whole subset
+past the gate even though it never reaches the coverage command. Pass the final
+list via --restrict-to-file and both criteria - rule kind AND host
+compatibility - are applied to exactly the targets that will run. A final label
+with no kind line is an incomplete answer, not a skippable one, so it fails
+closed: the tool reports instrumentable_present=true and exits nonzero.
 """
 
 import argparse
@@ -114,10 +124,6 @@ class Classification:
 
     instrumentable: list[str] = field(default_factory=list)
     non_instrumentable: list[str] = field(default_factory=list)
-    # Original label_kind lines for the instrumentable bucket, so callers can
-    # inspect the kinds (e.g. the coverage lane's cc_binary-only
-    # host-compatibility recheck) without re-deriving them.
-    instrumentable_lines: list[str] = field(default_factory=list)
 
     @property
     def total(self) -> int:
@@ -166,6 +172,45 @@ def normalize_label(label: str) -> str:
     return label
 
 
+def restrict_lines(
+    lines: list[str], labels: list[str]
+) -> tuple[list[str], list[str]]:
+    """Select the label_kind lines for exactly `labels`, in `labels` order.
+
+    Args:
+        lines: Raw lines from `bazel query --output label_kind` for a set that
+            is a superset of `labels` (the coverage lane's alias-resolved
+            affected set).
+        labels: The final coverage target list, one label per entry.
+
+    Returns:
+        (selected lines, labels that had no kind line). A non-empty second
+        element means the caller cannot decide on this set: `tests()` expansion
+        can name a test_suite member that was never in the queried set, and an
+        unclassified target must keep the coverage run rather than skip it.
+    """
+    by_label: dict[str, str] = {}
+    for raw_line in lines:
+        line = raw_line.strip()
+        if not line:
+            continue
+        _, label = _split_kind_and_label(line)
+        by_label.setdefault(normalize_label(label), line)
+
+    selected: list[str] = []
+    missing: list[str] = []
+    for raw_label in labels:
+        label = normalize_label(raw_label.strip())
+        if not label:
+            continue
+        line = by_label.get(label)
+        if line is None:
+            missing.append(label)
+        else:
+            selected.append(line)
+    return selected, missing
+
+
 def classify(
     lines: list[str], host_incompatible: frozenset[str] = frozenset()
 ) -> Classification:
@@ -191,7 +236,6 @@ def classify(
         if not kind_phrase:
             # No kind phrase (malformed): fail closed and treat as instrumentable.
             result.instrumentable.append(label)
-            result.instrumentable_lines.append(line)
             continue
         if normalize_label(label) in host_incompatible:
             # Host-incompatible targets (e.g. a wasm bridge cc_binary marked
@@ -213,11 +257,9 @@ def classify(
                 # Every cc_* kind, the donner C++ wrapper rules, and any
                 # unrecognized rule kind land here: run coverage (fail closed).
                 result.instrumentable.append(label)
-                result.instrumentable_lines.append(line)
             continue
         # Unrecognized phrase shape: fail closed.
         result.instrumentable.append(label)
-        result.instrumentable_lines.append(line)
     return result
 
 
@@ -247,6 +289,17 @@ def main() -> int:
         help="File containing `bazel query --output label_kind` output.",
     )
     parser.add_argument(
+        "--restrict-to-file",
+        type=Path,
+        default=None,
+        help=(
+            "Optional file of labels (one per line) naming the FINAL coverage "
+            "target list. Classification is restricted to exactly those "
+            "targets; a label with no kind line fails closed (reports "
+            "instrumentable_present=true and exits nonzero)."
+        ),
+    )
+    parser.add_argument(
         "--host-incompatible-file",
         type=Path,
         default=None,
@@ -254,15 +307,6 @@ def main() -> int:
             "Optional file of labels (one per line) that a host-configuration "
             "cquery reported as incompatible (IncompatiblePlatformProvider). "
             "These classify as non-instrumentable regardless of kind."
-        ),
-    )
-    parser.add_argument(
-        "--instrumentable-out",
-        type=Path,
-        default=None,
-        help=(
-            "Optional path to write the label_kind lines of targets classified "
-            "as instrumentable, for the caller's host-compatibility recheck."
         ),
     )
     args = parser.parse_args()
@@ -295,20 +339,33 @@ def main() -> int:
                 file=sys.stderr,
             )
 
-    classification = classify(text.splitlines(), host_incompatible)
-    _print_summary(classification)
-
-    if args.instrumentable_out is not None:
+    lines = text.splitlines()
+    if args.restrict_to_file is not None:
         try:
-            args.instrumentable_out.write_text(
-                "".join(f"{line}\n" for line in classification.instrumentable_lines),
-                encoding="utf-8",
-            )
+            final_labels = args.restrict_to_file.read_text(
+                encoding="utf-8", errors="replace"
+            ).splitlines()
         except OSError as error:
+            print("instrumentable_present=true")
             print(
-                f"WARNING: could not write {args.instrumentable_out}: {error}",
+                f"ERROR: could not read {args.restrict_to_file}: {error}",
                 file=sys.stderr,
             )
+            return 1
+        lines, missing = restrict_lines(lines, final_labels)
+        if missing:
+            # Fail closed: an unclassified member of the final list means the
+            # answer is unknown, and unknown must never skip the guard.
+            print("instrumentable_present=true")
+            print(
+                "ERROR: no kind line for %d of the final target(s): %s"
+                % (len(missing), ", ".join(missing[:5])),
+                file=sys.stderr,
+            )
+            return 1
+
+    classification = classify(lines, host_incompatible)
+    _print_summary(classification)
 
     value = "true" if classification.instrumentable_present else "false"
     print(f"instrumentable_present={value}")
