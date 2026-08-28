@@ -1,13 +1,17 @@
 #include "donner/svg/renderer/geode/GeodePipeline.h"
 
 #include <cstdio>
+#include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
 #include "donner/base/Utils.h"
+#include "donner/gpu/shader/programs/SnapshotUnpremultiplyBindings.h"
 #include "donner/svg/renderer/geode/GeodeShaders.h"
 #include "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h"
 #include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
+#include "embed_resources/SnapshotUnpremultiplyWgsl.h"
 
 namespace donner::geode {
 
@@ -226,44 +230,65 @@ GeodeMaskPipeline::GeodeMaskPipeline(GeodeWgpuAdapterDevice& adapterDevice) {
 // GeodeSnapshotReadbackPipeline
 // ============================================================================
 
-GeodeSnapshotReadbackPipeline::GeodeSnapshotReadbackPipeline(const wgpu::Device& device) {
-  // Two bindings: the premultiplied render target (sampled via textureLoad)
-  // and the straight-alpha RGBA8 staging storage texture.
-  wgpu::BindGroupLayoutEntry entries[2] = {};
+GeodeSnapshotReadbackPipeline::GeodeSnapshotReadbackPipeline(gpu::Device& device) {
+  // The WGSL and the entry-point facts below are build-time output of the shader IR program (see
+  // the genrule in this package). Constructing them here instead would link the IR and the WGSL
+  // emitter into every binary holding this pipeline, which the editor's WebAssembly package
+  // cannot afford for a string that is identical on every run.
+  const std::string_view wgsl(
+      reinterpret_cast<const char*>(donner::embedded::kSnapshotUnpremultiplyWgsl.data()),
+      donner::embedded::kSnapshotUnpremultiplyWgsl.size());
 
-  entries[0].binding = 0;
-  entries[0].visibility = wgpu::ShaderStage::Compute;
-  entries[0].texture.sampleType = wgpu::TextureSampleType::Float;
-  entries[0].texture.viewDimension = wgpu::TextureViewDimension::_2D;
-  entries[0].texture.multisampled = false;
+  gpu::Result<gpu::ShaderModule> shaderModule =
+      device.createShaderModule(gpu::ShaderModuleDescriptor{
+          "GeodeSnapshotReadbackShader",
+          RcString(wgsl),
+          gpu::ShaderSourceKind::Wgsl,
+          {},
+          {gpu::ComputeEntryPointInfo{
+              RcString(gpu::shader::programs::kSnapshotUnpremultiplyEntryPoint),
+              gpu::WorkgroupSize{gpu::shader::programs::kSnapshotUnpremultiplyWorkgroupSize,
+                                 gpu::shader::programs::kSnapshotUnpremultiplyWorkgroupSize, 1}}}});
+  if (shaderModule.hasError()) {
+    return;
+  }
+  shaderModule_ = std::move(shaderModule).result();
 
-  entries[1].binding = 1;
-  entries[1].visibility = wgpu::ShaderStage::Compute;
-  entries[1].storageTexture.access = wgpu::StorageTextureAccess::WriteOnly;
-  entries[1].storageTexture.format = wgpu::TextureFormat::RGBA8Unorm;
-  entries[1].storageTexture.viewDimension = wgpu::TextureViewDimension::_2D;
+  // Two bindings: the premultiplied render target read with textureLoad, and the straight-alpha
+  // RGBA8 staging storage texture.
+  using Binding = gpu::shader::programs::SnapshotUnpremultiplyBinding;
+  gpu::Result<gpu::BindGroupLayout> bindGroupLayout =
+      device.createBindGroupLayout(gpu::BindGroupLayoutDescriptor{
+          "GeodeSnapshotReadbackBGL",
+          {gpu::BindGroupLayoutEntry{static_cast<uint32_t>(Binding::InputTexture),
+                                     gpu::ShaderStage::Compute,
+                                     gpu::BindingType::SampledTexture2dFloat},
+           gpu::BindGroupLayoutEntry{
+               static_cast<uint32_t>(Binding::OutputTexture), gpu::ShaderStage::Compute,
+               gpu::BindingType::WriteOnlyStorageTexture2d, gpu::TextureFormat::RGBA8Unorm}}});
+  if (bindGroupLayout.hasError()) {
+    return;
+  }
+  bindGroupLayout_ = std::move(bindGroupLayout).result();
 
-  wgpu::BindGroupLayoutDescriptor bglDesc = {};
-  bglDesc.label = wgpuLabel("GeodeSnapshotReadbackBGL");
-  bglDesc.entryCount = 2;
-  bglDesc.entries = entries;
-  bindGroupLayout_.reset(device.createBindGroupLayout(bglDesc));
+  gpu::Result<gpu::PipelineLayout> pipelineLayout = device.createPipelineLayout(
+      gpu::PipelineLayoutDescriptor{"GeodeSnapshotReadbackPL", {bindGroupLayout_}});
+  if (pipelineLayout.hasError()) {
+    return;
+  }
+  pipelineLayout_ = std::move(pipelineLayout).result();
 
-  wgpu::PipelineLayoutDescriptor plDesc = {};
-  plDesc.label = wgpuLabel("GeodeSnapshotReadbackPL");
-  plDesc.bindGroupLayoutCount = 1;
-  WGPUBindGroupLayout layouts[1] = {bindGroupLayout_.get()};
-  plDesc.bindGroupLayouts = layouts;
-  ScopedWgpuHandle<wgpu::PipelineLayout> pipelineLayout(device.createPipelineLayout(plDesc));
-
-  ScopedWgpuHandle<wgpu::ShaderModule> shader(createSnapshotUnpremultiplyShader(device));
-
-  wgpu::ComputePipelineDescriptor cpDesc = {};
-  cpDesc.label = wgpuLabel("GeodeSnapshotReadback");
-  cpDesc.layout = pipelineLayout.get();
-  cpDesc.compute.module = shader.get();
-  cpDesc.compute.entryPoint = wgpuLabel("main");
-  pipeline_.reset(device.createComputePipeline(cpDesc));
+  gpu::Result<gpu::ComputePipeline> pipeline =
+      device.createComputePipeline(gpu::ComputePipelineDescriptor{
+          "GeodeSnapshotReadback", pipelineLayout_,
+          gpu::ComputeState{shaderModule_,
+                            RcString(gpu::shader::programs::kSnapshotUnpremultiplyEntryPoint)},
+          gpu::WorkgroupSize{gpu::shader::programs::kSnapshotUnpremultiplyWorkgroupSize,
+                             gpu::shader::programs::kSnapshotUnpremultiplyWorkgroupSize, 1}});
+  if (pipeline.hasError()) {
+    return;
+  }
+  pipeline_ = std::move(pipeline).result();
 }
 
 }  // namespace donner::geode

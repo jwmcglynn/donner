@@ -208,8 +208,10 @@ build:wasm-geode --cxxopt=-fconstexpr-steps=10000000
 #   bazel build --config=editor-wasm-geode //donner/editor/wasm:wasm
 common:editor-wasm-geode --config=editor-wasm
 
-# C++20
-build:c++20 --cxxopt=-std=c++20
+# C++20. The host option matters as soon as anything is built for the exec platform - a build-time
+# code generator, say - because that compile does not pick up --cxxopt, and this is one codebase
+# at one standard whichever platform a given binary is built for.
+build:c++20 --cxxopt=-std=c++20 --host_cxxopt=-std=c++20
 
 # Host toolchain using libstdc++ instead of libc++, for libclang support
 build:host_libstdc++ --host_cxxopt=-std=c++20 --host_cxxopt=-stdlib=libstdc++ --host_linkopt=-lstdc++

@@ -318,9 +318,11 @@ donner_cc_library(
         ":geode_gpu_wait",
         ":geode_shaders",
         ":geode_wgpu_util",
+        ":snapshot_unpremultiply_wgsl",
         "//donner/base",
         "//donner/base:asyncify_suspend_probe",
         "//donner/gpu",
+        "//donner/gpu/shader:program_bindings",
         "//donner/svg/components/filter:components",
         "//donner/svg/renderer:pixel_format_utils",
         "//third_party/webgpu-cpp:webgpu_cpp",
@@ -378,6 +380,33 @@ donner_multi_transitioned_test(
 
 # Embed the WGSL shader source as a C++ resource. The generated header
 # exposes `donner::embedded::kSlugFillWgsl` as a `std::span<const unsigned char>`.
+# Build-time emission of the snapshot-unpremultiply program.
+#
+# The shader IR module is the source of truth; its WGSL is produced here rather than at runtime
+# so the editor's WebAssembly package links neither the IR nor the emitters for a string that is
+# identical on every build. The tool is program-name driven, so a filter family migrating onto
+# the IR adds a row to its table and a genrule like this one.
+#
+# The emitted bytes are the same bytes the program's committed golden pins - the golden test
+# compares that same EmitWgsl output - so the artifact embedded here and the artifact reviewed in
+# the diff cannot disagree without a test failing.
+genrule(
+    name = "snapshot_unpremultiply_generated",
+    outs = ["generated/snapshot_unpremultiply.wgsl"],
+    cmd = "$(location //donner/gpu/shader/tools:emit_program_wgsl) snapshot_unpremultiply " +
+          "$(location generated/snapshot_unpremultiply.wgsl)",
+    tools = ["//donner/gpu/shader/tools:emit_program_wgsl"],
+)
+
+embed_resources(
+    name = "snapshot_unpremultiply_wgsl",
+    header_output = "embed_resources/SnapshotUnpremultiplyWgsl.h",
+    resources = {
+        "kSnapshotUnpremultiplyWgsl": "generated/snapshot_unpremultiply.wgsl",
+    },
+    visibility = ["//donner/svg/renderer:__subpackages__"],
+)
+
 embed_resources(
     name = "slug_fill_wgsl",
     header_output = "embed_resources/SlugFillWgsl.h",
@@ -613,14 +642,6 @@ embed_resources(
 
 # Snapshot readback: GPU-side unpremultiply of a render target into a
 # straight-alpha RGBA8 staging texture, then copied into the readback buffer.
-embed_resources(
-    name = "snapshot_unpremultiply_wgsl",
-    header_output = "embed_resources/SnapshotUnpremultiplyWgsl.h",
-    resources = {
-        "kSnapshotUnpremultiplyWgsl": "shaders/snapshot_unpremultiply.wgsl",
-    },
-    visibility = ["//donner/svg/renderer:__subpackages__"],
-)
 
 donner_cc_library(
     name = "geode_shaders",
@@ -653,7 +674,6 @@ donner_cc_library(
         ":slug_fill_wgsl",
         ":slug_gradient_wgsl",
         ":slug_mask_wgsl",
-        ":snapshot_unpremultiply_wgsl",
         "//donner/base",
         "//donner/gpu",
         "//third_party/webgpu-cpp:webgpu_cpp",
@@ -980,6 +1000,20 @@ donner_multi_transitioned_test(
     dep = ":geode_shared_device_frame_tests_impl",
     opens_gpu_device = True,
     renderer_backend = "geode",
+)
+
+# The embedded artifact and the committed golden must be the same bytes; see the test's own note
+# for why "by construction" is not enough.
+donner_cc_test(
+    name = "generated_shader_artifacts_tests",
+    srcs = ["tests/GeneratedShaderArtifacts_tests.cc"],
+    data = ["//donner/gpu/shader:program_goldens"],
+    deps = [
+        ":snapshot_unpremultiply_wgsl",
+        "//donner/base",
+        "//donner/base:base_test_utils",
+        "@com_google_gtest//:gtest_main",
+    ],
 )
 
 donner_package()

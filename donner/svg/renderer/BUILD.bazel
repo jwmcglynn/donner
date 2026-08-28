@@ -194,6 +194,7 @@ donner_perf_sensitive_cc_library(
         ":renderer_utils",
         ":rendering_context",
         "//donner/base",
+        "//donner/gpu/shader:program_bindings",
         "//donner/svg",
         "//donner/svg/components:attached_id_lookup",
         "//donner/svg/components/filter:computed_filter_resource_budget",

@@ -1,0 +1,25 @@
+load("//build_defs:rules.bzl", "donner_cc_binary")
+load("//build_defs:package.bzl", "donner_package")
+
+# Build-time WGSL emission for shader IR programs.
+#
+# A program's WGSL is identical on every run, so constructing it at runtime buys nothing and
+# costs whatever binary does it the whole IR and WGSL emitter. That is affordable in a native
+# tool and not in the editor's WebAssembly package, which every filter family's engine adoption
+# will link. This tool moves the emission to build time; the IR module stays the single source
+# of truth.
+#
+# Program-name driven on purpose, so a migrating filter family adds a row to the tool's table
+# and a genrule rather than another copy of this mechanism.
+donner_cc_binary(
+    name = "emit_program_wgsl",
+    srcs = ["EmitProgramWgsl.cc"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//donner/gpu/shader",
+        "//donner/gpu/shader:module_interface",
+        "//donner/gpu/shader:programs",
+    ],
+)
+
+donner_package()

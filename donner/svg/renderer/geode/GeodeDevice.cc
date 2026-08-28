@@ -235,6 +235,26 @@ void DestroyResourceBacking(ScopedWgpuHandle<Handle>& handle) {
 /// exists to bound.
 /// @param adapter Adapter the buffer was created on, or null during teardown.
 /// @param buffer Buffer to destroy; left invalid.
+/// Destroys a pooled staging texture's backend object and drops the view naming it.
+/// @param adapter Adapter the texture was created on, or null during teardown.
+/// @param view View of \p texture; left invalid.
+/// @param texture Texture to destroy; left invalid.
+void DestroyPooledReadbackTexture(GeodeWgpuAdapterDevice* adapter, gpu::TextureView& view,
+                                  gpu::Texture& texture) {
+  // The view goes first: it names the texture, and a view outliving what it views is exactly
+  // what the runtime's destroy contract fails closed on.
+  view = gpu::TextureView();
+  if (!texture.isValid()) {
+    return;
+  }
+  if (adapter == nullptr) {
+    texture = gpu::Texture();
+    return;
+  }
+  const gpu::Status destroyed = adapter->destroyTextureBacking(std::move(texture));
+  (void)destroyed;  // A pooled texture is always live; a stale handle is already gone.
+}
+
 void DestroyPooledReadbackBuffer(GeodeWgpuAdapterDevice* adapter, gpu::Buffer& buffer) {
   if (!buffer.isValid()) {
     return;
@@ -257,7 +277,8 @@ struct GeodeDevice::Impl {
   ~Impl() {
     for (auto& [unusedKey, entry] : snapshotReadbackPool) {
       (void)unusedKey;
-      DestroyResourceBacking(entry.resources.staging);
+      DestroyPooledReadbackTexture(adapterDevice.get(), entry.resources.stagingView,
+                                   entry.resources.staging);
       DestroyPooledReadbackBuffer(adapterDevice.get(), entry.resources.readback);
     }
   }
@@ -792,7 +813,8 @@ GeodeSnapshotReadbackPipeline& GeodeDevice::snapshotReadbackPipeline() const {
   // never call takeSnapshot() avoid the compile cost. call_once, not a plain
   // null-check: see Impl::snapshotReadbackPipelineOnce.
   std::call_once(impl_->snapshotReadbackPipelineOnce, [this] {
-    impl_->snapshotReadbackPipeline = std::make_unique<GeodeSnapshotReadbackPipeline>(device_);
+    impl_->snapshotReadbackPipeline =
+        std::make_unique<GeodeSnapshotReadbackPipeline>(adapterDevice());
   });
   return *impl_->snapshotReadbackPipeline;
 }
@@ -817,18 +839,19 @@ SnapshotReadbackResources GeodeDevice::acquireSnapshotReadbackResources(uint32_t
   resources.width = width;
   resources.height = height;
 
-  wgpu::TextureDescriptor td = {};
-  td.label = wgpuLabel("RendererGeodeReadbackStaging");
-  td.size = {width, height, 1};
-  td.format = wgpu::TextureFormat::RGBA8Unorm;
-  td.usage = wgpu::TextureUsage::StorageBinding | wgpu::TextureUsage::CopySrc;
-  td.mipLevelCount = 1;
-  td.sampleCount = 1;
-  td.dimension = wgpu::TextureDimension::_2D;
-  resources.staging.reset(device_.createTexture(td));
-  if (resources.staging) {
-    resources.stagingView.reset(resources.staging.get().createView());
-    countTexture();
+  // Created through the runtime, which counts the allocation itself, so neither this nor the
+  // buffer below ticks a counter explicitly; a second tick would double-count every readback set
+  // against the ceilings the steady-state gates ratchet on.
+  gpu::Result<gpu::Texture> staging = adapterDevice().createTexture(gpu::TextureDescriptor{
+      "RendererGeodeReadbackStaging", gpu::Extent2d{width, height}, gpu::TextureFormat::RGBA8Unorm,
+      gpu::TextureUsage::StorageBinding | gpu::TextureUsage::CopySrc});
+  if (staging.hasResult()) {
+    resources.staging = std::move(staging).result();
+    gpu::Result<gpu::TextureView> stagingView = adapterDevice().createTextureView(
+        resources.staging, gpu::TextureViewDescriptor{"RendererGeodeReadbackStagingView"});
+    if (stagingView.hasResult()) {
+      resources.stagingView = std::move(stagingView).result();
+    }
   }
 
   const uint32_t bytesPerRow = AlignReadbackBytesPerRow(width * 4u);
@@ -870,7 +893,8 @@ void GeodeDevice::releaseSnapshotReadbackResources(SnapshotReadbackResources res
     // Pooled entries are idle by construction (release happens only after
     // the readback unmaps), so their backings can be destroyed eagerly
     // instead of deferred to a frame boundary.
-    DestroyResourceBacking(lruIt->second.resources.staging);
+    DestroyPooledReadbackTexture(impl_->adapterDevice.get(), lruIt->second.resources.stagingView,
+                                 lruIt->second.resources.staging);
     DestroyPooledReadbackBuffer(impl_->adapterDevice.get(), lruIt->second.resources.readback);
     impl_->snapshotReadbackPool.erase(lruIt);
   }

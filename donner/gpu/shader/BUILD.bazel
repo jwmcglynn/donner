@@ -69,6 +69,14 @@ donner_cc_library(
     deps = [":shader"],
 )
 
+# The bind group indices alone, with no dependency on the IR: a host creating a pipeline from
+# build-time emitted WGSL needs them and must not link the emitters to get them.
+donner_cc_library(
+    name = "program_bindings",
+    hdrs = ["programs/SnapshotUnpremultiplyBindings.h"],
+    visibility = ["//visibility:public"],
+)
+
 donner_cc_library(
     name = "programs",
     srcs = [
@@ -90,6 +98,7 @@ donner_cc_library(
     ],
     visibility = donner_internal_visibility(),
     deps = [
+        ":program_bindings",
         ":shader",
         "//donner/base",
     ],
@@ -216,6 +225,14 @@ donner_multi_transitioned_test(
     dep = ":wgsl_emitter_geode_validation_tests_impl",
     opens_gpu_device = True,
     renderer_backend = "geode",
+)
+
+# The committed goldens, exposed so a consumer of a generated artifact can assert the two are the
+# same bytes rather than asserting it in prose.
+filegroup(
+    name = "program_goldens",
+    srcs = ["tests/testdata/snapshot_unpremultiply.wgsl"],
+    visibility = ["//donner/svg/renderer:__subpackages__"],
 )
 
 donner_package()

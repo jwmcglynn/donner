@@ -333,16 +333,6 @@ gpu::Result<gpu::Texture> GeodeWgpuAdapterDevice::importExternalTexture(wgpu::Te
   return result;
 }
 
-wgpu::Buffer GeodeWgpuAdapterDevice::wgpuBufferOf(const gpu::Buffer& buffer) const {
-  // Full base-class validation (null, device identity, AND generation), so a stale or forged
-  // handle cannot bridge the slot's new occupant to raw wgpu.
-  if (validateBufferHandleForBackend(buffer).hasError() ||
-      buffer.slotIndex() >= slotBuffers_.size()) {
-    return wgpu::Buffer();
-  }
-  return slotBuffers_[buffer.slotIndex()].get();
-}
-
 wgpu::Texture GeodeWgpuAdapterDevice::wgpuTextureOf(const gpu::Texture& texture) const {
   // Full base-class validation (null, device identity, AND generation), so a stale or forged
   // handle cannot bridge the slot's new occupant to raw wgpu.
@@ -1513,12 +1503,42 @@ void GeodeWgpuAdapterDevice::notifyHostSubmitted() {
   if (hostPendingSerial_ == 0) {
     return;
   }
-  const uint64_t serial = hostPendingSerial_;
+  // Anything a standalone submit queued while this frame was pending is older than the frame's
+  // own submit on the same queue, so it has certainly finished by the time this one does. Its
+  // completion was capped below the frame's unqueued serials and reported less than its own
+  // serial - possibly nothing at all - so the flush is what finally covers it.
+  const uint64_t serial = std::max(hostPendingSerial_, standaloneWhilePendingSerial_);
   hostPendingSerial_ = 0;
+  hostFirstPendingSerial_ = 0;
+  standaloneWhilePendingSerial_ = 0;
   advanceCompletedSerialWhenQueueDrains(serial);
 }
 
 void GeodeWgpuAdapterDevice::advanceCompletedSerialWhenQueueDrains(uint64_t serial) {
+  // A serial may be reported complete only once it has actually reached the queue, and while a
+  // host encoder is installed the serials replayed into it are recorded but not submitted. A
+  // standalone submit skips that encoder, so it takes a HIGHER serial than those and completes
+  // first; reporting its own serial would declare the unqueued ones complete along with it.
+  //
+  // That is not a cosmetic lie. `completedSerial` is what the deferred-destroy sweep and every
+  // wait read, so the open frame's still-recording resources would be retired underneath it and
+  // their slots handed to something else, invalidating handles the frame is still using, and
+  // waits on those serials - including the destructor's - would return early.
+  //
+  // So the advance is capped below the oldest serial still waiting on the host's submit. The cap
+  // is computed here rather than in the callback because the callback may land after the frame
+  // has flushed, and a merely conservative cap costs nothing: the flush advances the serial past
+  // all of this on its own, and the standalone submit's own resources then retire at that
+  // frame boundary like any others. The readback that motivates the standalone path waits on its
+  // buffer's map signal rather than on a serial, so capping does not delay it.
+  const uint64_t cappedSerial =
+      hostFirstPendingSerial_ == 0 ? serial : std::min(serial, hostFirstPendingSerial_ - 1);
+  if (cappedSerial == 0) {
+    // Everything queued so far is older than nothing: there is no serial this completion may
+    // report, so it reports none rather than an unqueued one.
+    return;
+  }
+
   // Callback-mode handling (wgpu-native vs emdawnwebgpu) is centralized in
   // notifyWhenSubmittedWorkDone; waitForSerial's poll loop drives delivery.
   struct WorkDoneState {
@@ -1535,8 +1555,37 @@ void GeodeWgpuAdapterDevice::advanceCompletedSerialWhenQueueDrains(uint64_t seri
   };
   auto workDoneState = std::make_shared<WorkDoneState>();
   workDoneState->completion = completionState_;
-  workDoneState->serial = serial;
+  workDoneState->serial = cappedSerial;
   notifyWhenSubmittedWorkDone(geodeDevice_.queue(), workDoneState);
+}
+
+void GeodeWgpuAdapterDevice::recordPendingHostSerial(uint64_t submissionSerial) {
+  // The oldest of these is the cap every completion respects, so it is remembered separately
+  // from the newest, which is what the eventual flush reports.
+  if (hostFirstPendingSerial_ == 0) {
+    hostFirstPendingSerial_ = submissionSerial;
+  }
+  hostPendingSerial_ = std::max(hostPendingSerial_, submissionSerial);
+}
+
+bool GeodeWgpuAdapterDevice::replaysIntoHostEncoder() const {
+  return static_cast<bool>(hostCommandEncoder_) && !bypassHostEncoderForSubmit_;
+}
+
+gpu::Result<uint64_t> GeodeWgpuAdapterDevice::submitStandalone(gpu::CommandBuffer&& commands) {
+  // Scoped rather than a separate encode path: the standalone submit differs from an ordinary
+  // one only in ignoring the host encoder, so it runs the same encoding and the same completion
+  // bookkeeping.
+  const bool previous = std::exchange(bypassHostEncoderForSubmit_, true);
+  gpu::Result<uint64_t> serial = submit(std::move(commands));
+  bypassHostEncoderForSubmit_ = previous;
+
+  // Remember it so the host's eventual flush reports it. Its own completion cannot: it is capped
+  // below the frame's unqueued serials, which are lower than this one.
+  if (serial.hasResult() && hostPendingSerial_ != 0) {
+    standaloneWhilePendingSerial_ = std::max(standaloneWhilePendingSerial_, serial.result());
+  }
+  return serial;
 }
 
 gpu::Status GeodeWgpuAdapterDevice::onSubmit(uint64_t submissionSerial,
@@ -1546,7 +1595,7 @@ gpu::Status GeodeWgpuAdapterDevice::onSubmit(uint64_t submissionSerial,
 
   // Replay into the host's encoder when one is installed, so a caller that also records spans
   // this runtime cannot express keeps one command buffer covering the whole frame in order.
-  const bool replayingIntoHost = static_cast<bool>(hostCommandEncoder_);
+  const bool replayingIntoHost = replaysIntoHostEncoder();
 
   EncodingState state;
   if (replayingIntoHost) {
@@ -1590,7 +1639,7 @@ gpu::Status GeodeWgpuAdapterDevice::onSubmit(uint64_t submissionSerial,
     // The host owns finish + submit for its encoder. Hold the serial back until it reports that
     // submit: reporting completion before the work is even submitted would be a lie the deferred
     // destruction and wait paths both act on.
-    hostPendingSerial_ = std::max(hostPendingSerial_, submissionSerial);
+    recordPendingHostSerial(submissionSerial);
     return OkStatus();
   }
 

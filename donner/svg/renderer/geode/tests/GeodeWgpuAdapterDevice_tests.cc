@@ -865,6 +865,9 @@ TEST_F(GeodeWgpuAdapterDeviceTests, AnEventWaitThatLearnedNothingReportsPendingN
 TEST_F(GeodeWgpuAdapterDeviceTests, DestroyingABufferBackingConsumesTheHandleAndRefusesStaleOnes) {
   gpu::Buffer buffer = gpu::GetResultOrFail(adapter_->createBuffer(gpu::BufferDescriptor{
       "readback", 256, gpu::BufferUsage::CopyDst | gpu::BufferUsage::MapRead}));
+  const uint32_t destroyedSlot = buffer.slotIndex();
+  const uint32_t destroyedGeneration = buffer.generation();
+  const uint64_t destroyedDeviceId = buffer.deviceId();
 
   EXPECT_THAT(adapter_->destroyBufferBacking(std::move(buffer)), gpu::IsOk());
   EXPECT_FALSE(buffer.isValid()) << "the handle must be consumed either way";
@@ -872,13 +875,105 @@ TEST_F(GeodeWgpuAdapterDeviceTests, DestroyingABufferBackingConsumesTheHandleAnd
   EXPECT_THAT(adapter_->destroyBufferBacking(gpu::Buffer()),
               gpu::IsGpuError(gpu::GpuErrorType::InvalidHandle));
 
-  // A destroyed buffer's slot can be reused; a second destroy through the old handle must not
-  // reach whatever now occupies it.
-  const gpu::Buffer replacement = gpu::GetResultOrFail(adapter_->createBuffer(gpu::BufferDescriptor{
+  // A destroyed buffer's slot gets reused, so the interesting probe is a handle that still names
+  // that slot with the OLD generation - not the consumed handle, which is null and would only
+  // retest the null check above. Rebuilt from the identity captured before the destroy, and
+  // inert (no device-alive token) so it never self-releases.
+  gpu::Buffer replacement = gpu::GetResultOrFail(adapter_->createBuffer(gpu::BufferDescriptor{
       "replacement", 256, gpu::BufferUsage::CopyDst | gpu::BufferUsage::MapRead}));
-  EXPECT_TRUE(replacement.isValid());
-  EXPECT_FALSE(adapter_->wgpuBufferOf(gpu::Buffer())) << "a null handle names no backend buffer";
-  EXPECT_TRUE(adapter_->wgpuBufferOf(replacement));
+  ASSERT_TRUE(replacement.isValid());
+  ASSERT_EQ(replacement.slotIndex(), destroyedSlot)
+      << "the probe is only meaningful if the replacement took the destroyed buffer's slot";
+
+  gpu::Buffer stale =
+      gpu::Buffer::CreateForBackend(destroyedSlot, destroyedGeneration, destroyedDeviceId);
+  EXPECT_THAT(adapter_->destroyBufferBacking(std::move(stale)),
+              gpu::IsGpuError(gpu::GpuErrorType::InvalidHandle))
+      << "a stale generation must not destroy the slot's new occupant";
+  // Still live: destroying it now succeeds, which it could not if the stale handle had taken it.
+  EXPECT_THAT(adapter_->destroyBufferBacking(std::move(replacement)), gpu::IsOk())
+      << "the replacement must have survived the stale destroy";
+}
+
+/// A standalone submit skips the host encoder, so it takes a HIGHER serial than the work
+/// recorded into that encoder and reaches the queue first. Its completion must not report those
+/// unqueued serials as done.
+///
+/// The consequence if it does is not cosmetic. `completedSerial` is what the deferred-destroy
+/// sweep and every wait read, so the open frame's still-recording resources would be retired
+/// underneath it and their slots reused, and a wait on one of those serials - including the one
+/// the destructor performs - would return immediately on work that has not run.
+TEST_F(GeodeWgpuAdapterDeviceTests, AStandaloneSubmitDoesNotCompleteTheOpenFramesUnqueuedSerials) {
+  wgpu::CommandEncoderDescriptor hostDescriptor = {};
+  ScopedWgpuHandle<wgpu::CommandEncoder> hostEncoder(
+      geodeDevice_->device().createCommandEncoder(hostDescriptor));
+  ASSERT_TRUE(static_cast<bool>(hostEncoder.get()));
+  adapter_->setHostCommandEncoder(hostEncoder.get());
+
+  // The frame records real work, so these serials exist but sit in the host's encoder unqueued.
+  const gpu::Texture frameTarget = gpu::GetResultOrFail(adapter_->createTexture(
+      gpu::TextureDescriptor{"frameTarget", gpu::Extent2d{4, 4}, gpu::TextureFormat::RGBA8Unorm,
+                             gpu::TextureUsage::RenderAttachment | gpu::TextureUsage::CopySrc}));
+  const gpu::TextureView frameTargetView = gpu::GetResultOrFail(
+      adapter_->createTextureView(frameTarget, gpu::TextureViewDescriptor{"frameTargetView"}));
+
+  uint64_t framePendingSerial = 0;
+  for (int pass = 0; pass < 2; ++pass) {
+    std::unique_ptr<gpu::CommandEncoder> encoder =
+        gpu::GetResultOrFail(adapter_->createCommandEncoder());
+    gpu::RenderPassEncoder* renderPass =
+        gpu::GetResultOrFail(encoder->beginRenderPass(gpu::RenderPassDescriptor{
+            "framePass",
+            {gpu::RenderPassColorAttachment{
+                frameTargetView, gpu::LoadOp::Clear, gpu::StoreOp::Store, {0, 0, 0.5, 1}}}}));
+    ASSERT_NE(renderPass, nullptr);
+    EXPECT_THAT(renderPass->end(), gpu::IsOk());
+    framePendingSerial =
+        gpu::GetResultOrFail(adapter_->submit(gpu::GetResultOrFail(encoder->finish())));
+  }
+  ASSERT_GT(framePendingSerial, 0u);
+  EXPECT_LT(adapter_->completedSerial(), framePendingSerial)
+      << "recorded-but-unqueued work cannot already be complete";
+
+  // A standalone submit that runs to completion while those serials are still unqueued.
+  const gpu::Buffer readback = gpu::GetResultOrFail(adapter_->createBuffer(gpu::BufferDescriptor{
+      "standaloneReadback", 1024, gpu::BufferUsage::CopyDst | gpu::BufferUsage::MapRead}));
+  std::unique_ptr<gpu::CommandEncoder> standalone =
+      gpu::GetResultOrFail(adapter_->createCommandEncoder());
+  EXPECT_THAT(
+      standalone->copyTextureToBuffer(gpu::TexelCopyTextureInfo{frameTarget}, readback,
+                                      gpu::TexelCopyBufferLayout{0, 256, 4}, gpu::Extent2d{4, 4}),
+      gpu::IsOk());
+  const uint64_t standaloneSerial =
+      gpu::GetResultOrFail(adapter_->submitStandalone(gpu::GetResultOrFail(standalone->finish())));
+  EXPECT_GT(standaloneSerial, framePendingSerial)
+      << "the standalone submit takes a later serial than the frame's recorded work";
+
+  // Drive the queue so the standalone submission's completion callback is delivered.
+  for (int poll = 0; poll < 2000; ++poll) {
+    (void)geodeDevice_->pollSuspending(false);
+  }
+
+  EXPECT_LT(adapter_->completedSerial(), framePendingSerial)
+      << "a standalone completion must not report serials that never reached the queue";
+  EXPECT_FALSE(adapter_->waitForSerial(framePendingSerial, /*timeoutSeconds=*/0.05))
+      << "a wait on an unqueued serial must not be satisfied by the standalone submission";
+  // The frame's resources are still live: their slots cannot have been recycled underneath it.
+  EXPECT_TRUE(adapter_->wgpuTextureOf(frameTarget));
+
+  // Flushing the frame retires everything in the ordinary way.
+  {
+    ScopedWgpuHandle<wgpu::CommandBuffer> hostCommands(hostEncoder.get().finish());
+    ASSERT_TRUE(static_cast<bool>(hostCommands.get()));
+    geodeDevice_->queue().submit(1, &hostCommands.get());
+  }
+  adapter_->notifyHostSubmitted();
+  adapter_->clearHostCommandEncoder();
+
+  ASSERT_TRUE(adapter_->waitForSerial(standaloneSerial, /*timeoutSeconds=*/30.0))
+      << "after the frame's submit everything must complete; completedSerial="
+      << adapter_->completedSerial();
+  EXPECT_THAT(adapter_->completedSerial(), Ge(standaloneSerial));
 }
 
 /// The adapter presents to a Metal layer; the other platform surfaces are still created by the
