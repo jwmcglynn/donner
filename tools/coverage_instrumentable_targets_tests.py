@@ -112,19 +112,6 @@ class ClassifyTest(unittest.TestCase):
         self.assertTrue(result.instrumentable_present)
         self.assertEqual(result.instrumentable, ["//donner/svg/tool:donner-svg"])
 
-    def test_instrumentable_lines_expose_kinds(self):
-        # The coverage lane's recheck gate needs the KINDS of the instrumentable
-        # residue (it only cqueries cc_binary-only sets).
-        lines = [
-            "filegroup rule //:docs_files",
-            "cc_binary rule //donner/svg/renderer/wasm:donner_wasm_bin",
-        ]
-        result = mod.classify(lines)
-        self.assertEqual(
-            result.instrumentable_lines,
-            ["cc_binary rule //donner/svg/renderer/wasm:donner_wasm_bin"],
-        )
-
     def test_unknown_rule_kind_fails_closed(self):
         # An unrecognized rule kind must run coverage (uncertainty never skips).
         lines = [
@@ -188,6 +175,81 @@ class ClassifyTest(unittest.TestCase):
     def test_malformed_single_token_fails_closed(self):
         result = mod.classify(["//weird:label_with_no_kind"])
         self.assertTrue(result.instrumentable_present)
+
+
+class RestrictLinesTest(unittest.TestCase):
+    """The coverage lane decides on its FINAL list, not on the affected set.
+
+    Narrowing (tests only, tag-filtered, variant-trimmed) happens before the
+    decision, and judging a wider set is how three production failures got
+    past the gate: a tag-filtered cc_test and a non-test helper each voted in
+    a decision about targets they were not part of.
+    """
+
+    def test_selects_only_the_final_labels(self):
+        lines = [
+            "js_test rule //donner/editor/wasm/tests:browser_presentation_regression_test",
+            "directory_path rule //donner/editor/wasm/tests:"
+            "browser_presentation_regression_test__entry_point",
+            "js_test rule //donner/editor/wasm/tests:chromium_remote_smoke",
+        ]
+        selected, missing = mod.restrict_lines(
+            lines,
+            [
+                "//donner/editor/wasm/tests:browser_presentation_regression_test",
+                "//donner/editor/wasm/tests:chromium_remote_smoke",
+            ],
+        )
+        self.assertEqual([], missing)
+        self.assertEqual(
+            [
+                "js_test rule //donner/editor/wasm/tests:browser_presentation_regression_test",
+                "js_test rule //donner/editor/wasm/tests:chromium_remote_smoke",
+            ],
+            selected,
+        )
+
+    def test_the_narrowed_set_no_longer_inherits_a_helpers_verdict(self):
+        # The incident: the host-compatible `directory_path` __entry_point is
+        # not a test, so it is not in the final list. Restricted to the two
+        # host-incompatible js_tests, the set classifies as a skip; unrestricted
+        # (with the helper still voting) it does not.
+        lines = [
+            "js_test rule //donner/editor/wasm/tests:browser_presentation_regression_test",
+            "directory_path rule //donner/editor/wasm/tests:"
+            "browser_presentation_regression_test__entry_point",
+            "js_test rule //donner/editor/wasm/tests:chromium_remote_smoke",
+        ]
+        incompatible = frozenset(
+            [
+                "//donner/editor/wasm/tests:browser_presentation_regression_test",
+                "//donner/editor/wasm/tests:chromium_remote_smoke",
+            ]
+        )
+        self.assertTrue(mod.classify(lines, incompatible).instrumentable_present)
+
+        selected, _ = mod.restrict_lines(lines, sorted(incompatible))
+        self.assertFalse(mod.classify(selected, incompatible).instrumentable_present)
+
+    def test_missing_label_is_reported_not_dropped(self):
+        # `tests()` expansion can name a test_suite member that was never in
+        # the queried set. An unclassified target must keep the coverage run,
+        # so the caller has to hear about it rather than silently see a
+        # smaller, skippable set.
+        selected, missing = mod.restrict_lines(
+            ["py_test rule //tools:filter_coverage_tests"],
+            ["//tools:filter_coverage_tests", "//donner/svg:suite_member_tests"],
+        )
+        self.assertEqual(["py_test rule //tools:filter_coverage_tests"], selected)
+        self.assertEqual(["//donner/svg:suite_member_tests"], missing)
+
+    def test_canonical_and_apparent_labels_match(self):
+        selected, missing = mod.restrict_lines(
+            ["cc_test rule @@//donner/base:string_utils_tests"],
+            ["//donner/base:string_utils_tests"],
+        )
+        self.assertEqual([], missing)
+        self.assertEqual(1, len(selected))
 
 
 if __name__ == "__main__":

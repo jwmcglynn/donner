@@ -393,7 +393,7 @@ jobs:
             esac
 
             case "$path" in
-              .bazelrc|.github/workflows/*|.github/actions/*|docs/*|*.md|tools/binary_size.sh|tools/build_docs.sh|tools/coverage.sh|tools/filter_coverage.py|tools/filter_coverage_tests.py|tools/lcov_metrics.py|tools/lcov_metrics_tests.py|tools/generate_build_report.py|tools/generate_build_report_tests.py|tools/coverage_instrumentable_targets.py|tools/coverage_instrumentable_targets_tests.py|tools/coverage_variant_trim.py|tools/coverage_variant_trim_tests.py)
+              .bazelrc|.github/workflows/*|.github/actions/*|docs/*|*.md|tools/binary_size.sh|tools/build_docs.sh|tools/coverage.sh|tools/filter_coverage.py|tools/filter_coverage_tests.py|tools/lcov_metrics.py|tools/lcov_metrics_tests.py|tools/generate_build_report.py|tools/generate_build_report_tests.py|tools/coverage_instrumentable_targets.py|tools/coverage_instrumentable_targets_tests.py|tools/coverage_variant_trim.py|tools/coverage_variant_trim_tests.py|tools/coverage_selection_decision_tests.py)
                 ;;
               *)
                 smoke_only=false

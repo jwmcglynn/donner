@@ -93,6 +93,70 @@ class CiRuntimeWorkflowTest(unittest.TestCase):
                 job = self._job_body(job_name)
                 self.assertEqual(1, job.count("--test_tag_filters=-manual,-perf"))
 
+    def _coverage_jobs(self):
+        """Every (name, body) pair for a top-level key in coverage.yml."""
+        parts = re.split(
+            r"^  ([A-Za-z0-9_-]+):\s*$", self.coverage, flags=re.MULTILINE
+        )
+        return list(zip(parts[1::2], parts[2::2]))
+
+    def test_coverage_records_a_legitimate_skip_instead_of_announcing_a_report(self):
+        """The all-skipped path must not name a file it did not write.
+
+        `bazel coverage` legitimately produces no report when every selected
+        target is incompatible with the lane's platform: nothing was measured,
+        and the lane is satisfied. That path used to exit the script's inner
+        subshell with 0, after which the tail of the script unconditionally
+        announced "Filtered coverage report saved to .../filtered_report.dat".
+        The upload step believed it, looked for that exact path with
+        if-no-files-found: error, and failed the job on a file the script had
+        just decided not to write.
+        """
+        self.assertIn(
+            'echo "all_skipped" > "$COVERAGE_HTML_DIR/coverage_skipped"',
+            self.coverage_script,
+        )
+        report_line = 'echo "Filtered coverage report saved to'
+        self.assertEqual(1, self.coverage_script.count(report_line))
+        guard = 'if [ -f "$COVERAGE_OUTPUT_DIR/coverage_skipped" ]; then'
+        self.assertIn(guard, self.coverage_script)
+        self.assertLess(
+            self.coverage_script.index(guard),
+            self.coverage_script.index(report_line),
+            "the report announcement is not guarded by the skip marker",
+        )
+
+    def test_every_coverage_report_consumer_honours_a_legitimate_skip(self):
+        """Discovered, not listed: anything reading the report must be gated.
+
+        The report outcome is published as a step output and, for the
+        cross-job handoff, as a job output. Every consumer of
+        filtered_report.dat gates on one of them, so a legitimate skip cannot
+        fail a lane by looking for a file that was correctly never written.
+        """
+        consumers = []
+        for job_name, job_body in self._coverage_jobs():
+            job_gated = re.search(
+                r"^    if: .*report_written", job_body, re.MULTILINE
+            ) is not None
+            for step_name, step_body in self._steps(job_body):
+                if "filtered_report.dat" not in step_body:
+                    continue
+                consumers.append("%s / %s" % (job_name, step_name))
+                self.assertTrue(
+                    job_gated
+                    or "outputs.report_written == 'true'" in step_body,
+                    "step %r in job %r consumes the coverage report without "
+                    "honouring the report-written outcome" % (step_name, job_name),
+                )
+        self.assertGreaterEqual(
+            len(consumers),
+            3,
+            "consumer discovery matched %r, which is fewer than exist; the "
+            "match is stale and this test is no longer checking anything"
+            % (consumers,),
+        )
+
     def test_coverage_excludes_all_opt_in_test_tags(self):
         """Coverage must not run manual/perf tests through its own override."""
         match = re.search(
