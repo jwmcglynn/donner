@@ -321,6 +321,9 @@ donner_cc_library(
         "//donner/base",
         "//donner/base:asyncify_suspend_probe",
         "//donner/gpu",
+        "//donner/gpu/shader",
+        "//donner/gpu/shader:module_interface",
+        "//donner/gpu/shader:programs",
         "//donner/svg/components/filter:components",
         "//donner/svg/renderer:pixel_format_utils",
         "//third_party/webgpu-cpp:webgpu_cpp",
@@ -448,16 +451,6 @@ embed_resources(
     header_output = "embed_resources/FilterColorMatrixWgsl.h",
     resources = {
         "kFilterColorMatrixWgsl": "shaders/filter_color_matrix.wgsl",
-    },
-    visibility = ["//donner/svg/renderer:__subpackages__"],
-)
-
-# Phase 7: feFlood compute shader (constant color fill).
-embed_resources(
-    name = "filter_flood_wgsl",
-    header_output = "embed_resources/FilterFloodWgsl.h",
-    resources = {
-        "kFilterFloodWgsl": "shaders/filter_flood.wgsl",
     },
     visibility = ["//donner/svg/renderer:__subpackages__"],
 )
@@ -638,7 +631,6 @@ donner_cc_library(
         ":filter_diffuse_lighting_wgsl",
         ":filter_displacement_map_wgsl",
         ":filter_drop_shadow_wgsl",
-        ":filter_flood_wgsl",
         ":filter_image_wgsl",
         ":filter_merge_wgsl",
         ":filter_morphology_wgsl",

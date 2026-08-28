@@ -446,7 +446,6 @@
         "wgpuTextureOf"
       ],
       "wgpuCTypes": [
-        "WGPUCommandEncoder",
         "WGPUTexture",
         "WGPUTextureFormat",
         "WGPUTextureFormat_BGRA8Unorm",
@@ -649,6 +648,7 @@
         "createCommandEncoder",
         "createComputePipeline",
         "createPipelineLayout",
+        "createShaderModule",
         "createTexture",
         "createView",
         "dispatchWorkgroups",
@@ -660,6 +660,7 @@
         "writeTexture"
       ],
       "wgpuCFunctions": [
+        "wgpuBuffers_",
         "wgpuLabel",
         "wgpuTextureOf"
       ],

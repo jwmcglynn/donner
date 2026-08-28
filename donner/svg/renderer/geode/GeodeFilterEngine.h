@@ -231,6 +231,10 @@ private:
   /// @return A texture whose RGB are zero and alpha matches the input alpha.
   wgpu::Texture applySourceAlpha(FilterResourceArena& arena, const wgpu::Texture& input);
 
+  /// Builds the feFlood compute pipeline from the shader IR program, leaving the handles null if
+  /// any step fails so \ref applyFlood declines rather than dispatching a half-built pipeline.
+  void createFloodPipeline();
+
   /// Fill the output with a constant flood color via compute shader.
   /// @param width Output texture width.
   /// @param height Output texture height.
@@ -432,9 +436,11 @@ private:
   ScopedWgpuHandle<wgpu::ComputePipeline> colorMatrixPipeline_;
   ScopedWgpuHandle<wgpu::BindGroupLayout> colorMatrixBindGroupLayout_;
 
-  // feFlood pipeline.
-  ScopedWgpuHandle<wgpu::ComputePipeline> floodPipeline_;
-  ScopedWgpuHandle<wgpu::BindGroupLayout> floodBindGroupLayout_;
+  // feFlood pipeline, recorded through the GPU runtime.
+  gpu::ShaderModule floodShaderModule_;
+  gpu::BindGroupLayout floodBindGroupLayout_;
+  gpu::PipelineLayout floodPipelineLayout_;
+  gpu::ComputePipeline floodPipeline_;
 
   // feMerge alpha-over blit pipeline.
   ScopedWgpuHandle<wgpu::ComputePipeline> mergePipeline_;
