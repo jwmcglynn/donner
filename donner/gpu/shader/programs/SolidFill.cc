@@ -63,7 +63,13 @@ void BuildCurveLoader(ErrorLatch& e, ModuleBuilder& builder, const IrType& quadr
 }
 
 /// Builds accumulateHoriz or accumulateVert: casts one axis-aligned ray through the pixel's
-/// band and accumulates signed analytic coverage per crossing (design 0041, Slug CalcCoverage).
+/// band and accumulates signed analytic coverage per crossing.
+///
+/// Each crossing is found by solving the curve's quadratic along the ray's axis and evaluating
+/// the curve at that root, so coverage is computed from the curve equation rather than sampled
+/// from it, which is what keeps an edge exact at any magnification. The crossing's signed
+/// distance from the pixel center gives its coverage contribution and the curve's derivative
+/// there gives the direction it is crossed in, so the winding sign falls out of the same solve.
 void BuildAccumulate(ErrorLatch& e, ModuleBuilder& builder, const IrType& rayCoverageType,
                      const RayConfig& config) {
   auto result =

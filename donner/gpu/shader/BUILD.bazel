@@ -144,10 +144,11 @@ donner_cc_test(
     ],
 )
 
-# Out-of-process MSL validation: compiles the emitted solid-fill MSL with the
-# platform Metal compiler (an out-of-process verification tool per design
-# 0053, not a build dependency). macOS-only; skips cleanly when xcrun or the
-# Metal toolchain is unavailable.
+# Out-of-process MSL validation: compiles every emitted MSL program with the
+# platform Metal compiler. The compiler is invoked at test time rather than
+# depended on, so the emitter is held to a real Metal front end without putting
+# one in the build graph. macOS-only; skips cleanly when xcrun or the Metal
+# toolchain is unavailable.
 donner_cc_test(
     name = "msl_xcrun_validation_tests",
     srcs = [
@@ -164,10 +165,11 @@ donner_cc_test(
     ],
 )
 
-# Out-of-process SPIR-V validation: the emitted solid-fill SPIR-V must pass
-# `spirv-val --target-env vulkan1.1` (an out-of-process verification tool per
-# design 0053, not a build dependency). Skips cleanly when spirv-val is not
-# installed.
+# Out-of-process SPIR-V validation: every emitted module must pass
+# `spirv-val --target-env vulkan1.1`. The validator is invoked at test time
+# rather than depended on, so the emitter is held to the specification's own
+# rules without putting a validator in the build graph. Skips cleanly when
+# spirv-val is not installed.
 donner_cc_test(
     name = "spirv_val_validation_tests",
     srcs = [
@@ -183,9 +185,10 @@ donner_cc_test(
     ],
 )
 
-# Black-box validation fixture: compiles the emitted solid-fill WGSL through
-# the current wgpu-based renderer (design 0053 transition baseline). Runs in
-# the geode variant lane; incompatible otherwise.
+# Black-box validation fixture: creates a real pipeline from each emitted WGSL
+# program through the renderer's own WebGPU device, so acceptance comes from the
+# shader front end that ships rather than from a parser in this repository. Runs
+# in the geode variant lane; incompatible otherwise.
 donner_cc_test(
     name = "wgsl_emitter_geode_validation_tests_impl",
     srcs = [
