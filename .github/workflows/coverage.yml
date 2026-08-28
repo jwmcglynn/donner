@@ -808,7 +808,8 @@ jobs:
             libgl1-mesa-dev libosmesa6-dev
           sudo apt-get clean
 
-      - name: Generate coverage
+      - id: coverage
+        name: Generate coverage
         shell: bash
         run: |
           set -euo pipefail
@@ -824,6 +825,19 @@ jobs:
           df -h / "$GITHUB_WORKSPACE" "$RUNNER_TEMP"
           echo "::endgroup::"
 
+          # Publish the report outcome so every consumer of the coverage
+          # artifact honours a legitimate skip. tools/coverage.sh writes this
+          # marker when the build event stream proves every selected target was
+          # dropped as incompatible with this lane's platform: there is no
+          # report, the lane is satisfied, and the upload steps below must not
+          # fail looking for a file that was correctly never written.
+          if [[ -f coverage-report/coverage_skipped ]]; then
+            echo "report_written=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Coverage produced no report: every selected target was skipped as incompatible with this lane's platform. The coverage uploads are skipped."
+          else
+            echo "report_written=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Upload coverage diagnostics
         if: always()
         uses: actions/upload-artifact@v7
@@ -834,6 +848,7 @@ jobs:
           if-no-files-found: ignore
 
       - name: Upload coverage to Codecov
+        if: steps.coverage.outputs.report_written == 'true'
         uses: codecov/codecov-action@v7
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
@@ -888,6 +903,8 @@ jobs:
     # still fails in about a minute regardless of this backstop; the CPU-capped
     # 2-3 h local re-run cannot recur because local fallback is disabled.
     timeout-minutes: 210
+    outputs:
+      report_written: ${{ steps.coverage.outputs.report_written }}
     # Admission control on the shared remote-execution backend. Both
     # self-hosted lanes execute on a backend that an interactive development
     # host also uses with priority, so unbounded concurrent instrumented builds
@@ -980,7 +997,8 @@ jobs:
           # NOTE: no `bazelisk shutdown` — Generate coverage reuses this
           # server's loading/analysis instead of paying a fresh JVM start.
 
-      - name: Generate coverage
+      - id: coverage
+        name: Generate coverage
         shell: bash
         run: |
           set -euo pipefail
@@ -990,7 +1008,23 @@ jobs:
           echo "Coverage target selection: fallback=${{ needs.determine-targets.outputs.fallback }} reason=${{ needs.determine-targets.outputs.fallback_reason }} count=${{ needs.determine-targets.outputs.target_count }}"
           tools/coverage.sh --quiet --no-html "${TARGETS[@]}"
 
+          # Publish the report outcome so every consumer of the coverage
+          # artifact honours a legitimate skip. tools/coverage.sh writes this
+          # marker when the build event stream proves every selected target was
+          # dropped as incompatible with this lane's platform: there is no
+          # report, the lane is satisfied, and the upload steps below must not
+          # fail looking for a file that was correctly never written.
+          if [[ -f coverage-report/coverage_skipped ]]; then
+            echo "report_written=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Coverage produced no report: every selected target was skipped as incompatible with this lane's platform. The coverage uploads are skipped."
+          else
+            echo "report_written=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      # if-no-files-found stays `error`: gated on report_written, a missing
+      # report here is a real defect, not a legitimate skip.
       - name: Upload coverage artifact
+        if: steps.coverage.outputs.report_written == 'true'
         uses: actions/upload-artifact@v7
         with:
           name: self-hosted-coverage-report
@@ -1014,8 +1048,10 @@ jobs:
     runs-on: ubuntu-24.04
     # Mirrors coverage-self-hosted's gate so the upload skips whenever the
     # self-hosted coverage job skips or fails (full-fallback PRs produce no
-    # artifact).
-    if: ${{ needs.coverage-self-hosted.result == 'success' }}
+    # artifact), and also when that job ran but legitimately produced no report
+    # (every selected target incompatible with its platform). Without the
+    # second condition this job downloads an artifact that was never uploaded.
+    if: ${{ needs.coverage-self-hosted.result == 'success' && needs.coverage-self-hosted.outputs.report_written == 'true' }}
 
     steps:
       - uses: actions/checkout@v7

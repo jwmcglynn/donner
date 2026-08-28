@@ -409,6 +409,16 @@ fi
     if [ "$BEP_STATUS" = "all_skipped" ]; then
       echo "No coverage report: every selected target was skipped as incompatible with this platform."
       echo "Nothing to measure here; treating the lane as satisfied."
+      # Record the outcome instead of pretending a report exists. This path
+      # used to exit the subshell with 0, after which the tail of this script
+      # unconditionally announced "Filtered coverage report saved to
+      # <dir>/filtered_report.dat" -- a file it had just decided not to write.
+      # CI believed the announcement and its upload step, which names that
+      # exact path with if-no-files-found: error, failed on the missing file.
+      # The marker is the honest half of that contract: the script says a
+      # report was not written, and every consumer that needs one reads this
+      # and stands down.
+      echo "all_skipped" > "$COVERAGE_HTML_DIR/coverage_skipped"
       exit 0
     fi
     echo "ERROR: Coverage report was not generated"
@@ -446,7 +456,11 @@ fi
   phase_mark end
 )
 
-if [ "$NO_HTML" = true ]; then
+if [ -f "$COVERAGE_OUTPUT_DIR/coverage_skipped" ]; then
+  # The graceful all-skipped path above. Say what actually happened; do not
+  # name a report file that was deliberately not written.
+  echo "No coverage report written to $COVERAGE_OUTPUT_DIR: every selected target was skipped as incompatible with this platform."
+elif [ "$NO_HTML" = true ]; then
   echo "Filtered coverage report saved to $COVERAGE_OUTPUT_DIR/filtered_report.dat"
 else
   echo "Coverage report saved to $COVERAGE_OUTPUT_DIR/index.html"
