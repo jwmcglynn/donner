@@ -5,15 +5,12 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
-#include <cstdlib>
 #include <format>
-#include <fstream>
-#include <sstream>
 #include <string>
 
-#include "donner/base/tests/Runfiles.h"
 #include "donner/gpu/shader/WgslEmitter.h"
 #include "donner/gpu/shader/programs/SolidFill.h"
+#include "donner/gpu/shader/tests/ShaderGoldenUtils.h"
 #include "donner/gpu/shader/tests/ShaderTestUtils.h"
 
 using testing::HasSubstr;
@@ -28,16 +25,6 @@ std::string EmitSolidFill() {
     return "";
   }
   return GetShaderResultOrFail(EmitWgsl(module.result()), std::string());
-}
-
-std::string ReadGoldenFile() {
-  const std::string path =
-      donner::Runfiles::instance().Rlocation("donner/gpu/shader/tests/testdata/solid_fill.wgsl");
-  std::ifstream stream(path, std::ios::binary);
-  EXPECT_TRUE(stream.good()) << "Failed to open golden file: " << path;
-  std::ostringstream contents;
-  contents << stream.rdbuf();
-  return contents.str();
 }
 
 TEST(SolidFillProgramTests, ModuleBuildsCleanly) {
@@ -61,21 +48,13 @@ TEST(SolidFillProgramTests, ContainsSlugFillSurface) {
   EXPECT_THAT(wgsl, HasSubstr("discard;"));
 }
 
-TEST(SolidFillProgramTests, MatchesCommittedGoldenByteExactly) {
-  // The golden is regenerated deliberately: run with
-  // UPDATE_WGSL_GOLDEN=/path/to/repo to rewrite it, then review the diff.
+TEST(SolidFillProgramTests, WgslMatchesCommittedGoldenByteExactly) {
+  // Regenerate deliberately: UPDATE_WGSL_GOLDEN=/path/to/repo rewrites the golden.
   const std::string wgsl = EmitSolidFill();
-
-  if (const char* updateRoot = std::getenv("UPDATE_WGSL_GOLDEN")) {
-    const std::string outPath =
-        std::string(updateRoot) + "/donner/gpu/shader/tests/testdata/solid_fill.wgsl";
-    std::ofstream out(outPath, std::ios::binary | std::ios::trunc);
-    ASSERT_TRUE(out.good()) << "Failed to open " << outPath << " for writing";
-    out << wgsl;
-    GTEST_SKIP() << "Golden updated at " << outPath;
+  if (MaybeUpdateShaderGolden("UPDATE_WGSL_GOLDEN", "solid_fill.wgsl", wgsl)) {
+    GTEST_SKIP() << "Golden updated";
   }
-
-  EXPECT_THAT(wgsl, testing::Eq(ReadGoldenFile()));
+  EXPECT_THAT(wgsl, testing::Eq(ReadShaderGolden("solid_fill.wgsl")));
 }
 
 }  // namespace
