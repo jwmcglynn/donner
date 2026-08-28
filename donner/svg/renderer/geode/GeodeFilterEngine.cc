@@ -107,11 +107,19 @@ struct FilterResourceArena {
     if (!*encoderSlot_) {
       return;
     }
+    const bool replayingIntoThisEncoder = device_.adapterDevice().hasHostCommandEncoder();
     {
       ScopedWgpuHandle<wgpu::CommandBuffer> cmd(encoderSlot_->get().finish());
       if (cmd) {
         device_.queue().submit(1, &cmd.get());
         device_.countSubmit();
+        if (replayingIntoThisEncoder) {
+          // The runtime holds completion of anything it replayed into this encoder until the
+          // submit of the buffer finished from it is reported, and this is that submit. Reporting
+          // it anywhere later would either retire the replayed work before it reached the queue or
+          // strand it as never complete.
+          device_.adapterDevice().notifyHostSubmitted();
+        }
       }
     }
     // A chunk boundary is a cross-submit edge inside one filter graph: pass
@@ -134,6 +142,9 @@ struct FilterResourceArena {
     wgpu::CommandEncoderDescriptor desc = {};
     desc.label = wgpuLabel("GeodeFilterChunkCE");
     encoderSlot_->reset(device_.device().createCommandEncoder(desc));
+    if (replayingIntoThisEncoder) {
+      device_.adapterDevice().setHostCommandEncoder(encoderSlot_->get());
+    }
   }
 
 private:
