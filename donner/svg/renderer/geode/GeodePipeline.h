@@ -212,7 +212,9 @@ public:
   /**
    * Create the snapshot-unpremultiply compute pipeline for the given device.
    */
-  explicit GeodeSnapshotReadbackPipeline(const wgpu::Device& device);
+  /// Create the snapshot-unpremultiply compute pipeline on \p device from the shader IR program.
+  /// @param device Runtime device the pipeline and its layouts are created on.
+  explicit GeodeSnapshotReadbackPipeline(gpu::Device& device);
 
   ~GeodeSnapshotReadbackPipeline() = default;
   GeodeSnapshotReadbackPipeline(const GeodeSnapshotReadbackPipeline&) = delete;
@@ -220,17 +222,19 @@ public:
   GeodeSnapshotReadbackPipeline(GeodeSnapshotReadbackPipeline&&) noexcept = default;
   GeodeSnapshotReadbackPipeline& operator=(GeodeSnapshotReadbackPipeline&&) noexcept = default;
 
-  /// True when the bind group layout and compute pipeline compiled.
-  bool valid() const { return static_cast<bool>(pipeline_) && static_cast<bool>(bindGroupLayout_); }
+  /// True when the bind group layout and compute pipeline were created.
+  bool valid() const { return pipeline_.isValid() && bindGroupLayout_.isValid(); }
 
-  /// The compiled compute pipeline.
-  const wgpu::ComputePipeline& pipeline() const { return pipeline_.get(); }
+  /// The compute pipeline.
+  const gpu::ComputePipeline& pipeline() const { return pipeline_; }
   /// The bind group layout used by the pipeline.
-  const wgpu::BindGroupLayout& bindGroupLayout() const { return bindGroupLayout_.get(); }
+  const gpu::BindGroupLayout& bindGroupLayout() const { return bindGroupLayout_; }
 
 private:
-  ScopedWgpuHandle<wgpu::BindGroupLayout> bindGroupLayout_;
-  ScopedWgpuHandle<wgpu::ComputePipeline> pipeline_;
+  gpu::ShaderModule shaderModule_;
+  gpu::BindGroupLayout bindGroupLayout_;
+  gpu::PipelineLayout pipelineLayout_;
+  gpu::ComputePipeline pipeline_;
 };
 
 }  // namespace donner::geode

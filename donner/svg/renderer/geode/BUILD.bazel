@@ -321,6 +321,9 @@ donner_cc_library(
         "//donner/base",
         "//donner/base:asyncify_suspend_probe",
         "//donner/gpu",
+        "//donner/gpu/shader",
+        "//donner/gpu/shader:module_interface",
+        "//donner/gpu/shader:programs",
         "//donner/svg/components/filter:components",
         "//donner/svg/renderer:pixel_format_utils",
         "//third_party/webgpu-cpp:webgpu_cpp",
@@ -613,14 +616,6 @@ embed_resources(
 
 # Snapshot readback: GPU-side unpremultiply of a render target into a
 # straight-alpha RGBA8 staging texture, then copied into the readback buffer.
-embed_resources(
-    name = "snapshot_unpremultiply_wgsl",
-    header_output = "embed_resources/SnapshotUnpremultiplyWgsl.h",
-    resources = {
-        "kSnapshotUnpremultiplyWgsl": "shaders/snapshot_unpremultiply.wgsl",
-    },
-    visibility = ["//donner/svg/renderer:__subpackages__"],
-)
 
 donner_cc_library(
     name = "geode_shaders",
@@ -653,7 +648,6 @@ donner_cc_library(
         ":slug_fill_wgsl",
         ":slug_gradient_wgsl",
         ":slug_mask_wgsl",
-        ":snapshot_unpremultiply_wgsl",
         "//donner/base",
         "//donner/gpu",
         "//third_party/webgpu-cpp:webgpu_cpp",

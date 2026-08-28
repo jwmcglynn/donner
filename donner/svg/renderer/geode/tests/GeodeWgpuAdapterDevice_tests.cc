@@ -877,8 +877,9 @@ TEST_F(GeodeWgpuAdapterDeviceTests, DestroyingABufferBackingConsumesTheHandleAnd
   const gpu::Buffer replacement = gpu::GetResultOrFail(adapter_->createBuffer(gpu::BufferDescriptor{
       "replacement", 256, gpu::BufferUsage::CopyDst | gpu::BufferUsage::MapRead}));
   EXPECT_TRUE(replacement.isValid());
-  EXPECT_FALSE(adapter_->wgpuBufferOf(gpu::Buffer())) << "a null handle names no backend buffer";
-  EXPECT_TRUE(adapter_->wgpuBufferOf(replacement));
+  EXPECT_THAT(adapter_->destroyBufferBacking(std::move(buffer)),
+              gpu::IsGpuError(gpu::GpuErrorType::InvalidHandle))
+      << "the consumed handle must not reach the slot's new occupant";
 }
 
 /// The adapter presents to a Metal layer; the other platform surfaces are still created by the

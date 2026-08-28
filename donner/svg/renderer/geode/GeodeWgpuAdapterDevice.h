@@ -187,6 +187,28 @@ public:
   void notifyHostSubmitted();
 
   /**
+   * Submits \p commands straight to the queue, even while a host command encoder is installed.
+   *
+   * \ref submit replays into that encoder so a frame stays one command buffer in recording
+   * order, and a caller whose work must stand on its own is otherwise told to decline. The
+   * snapshot readback cannot decline: it is asked for while another renderer's frame may be open,
+   * and it has its own completion to wait on. Splicing it into that frame's buffer would leave it
+   * unsubmitted until the frame ends, and the readback would wait out its whole deadline for a
+   * map of work that had not reached the queue.
+   *
+   * Bypassing the frame is correct here by construction rather than by timing: the readback
+   * reads textures whose contents were submitted before it was asked for, and writes only its own
+   * staging texture and readback buffer, so it shares no resource with the spans the open frame
+   * is still recording. A caller that cannot say the same must use \ref submit.
+   *
+   * Bridge machinery, removed with the host-encoder bridge itself.
+   *
+   * @param commands Finished command buffer; consumed.
+   * @return Submission serial, or an error if encoding or submission failed.
+   */
+  gpu::Result<uint64_t> submitStandalone(gpu::CommandBuffer&& commands);
+
+  /**
    * TEMPORARY escape hatch (deleted with the readback and presentation migration): returns the
    * wgpu texture behind \p texture, or a null handle if the handle does not name a live texture of
    * this adapter. Borrowed; the adapter (or the external owner) retains ownership.
@@ -194,15 +216,6 @@ public:
    * @param texture Live texture handle of this adapter.
    */
   wgpu::Texture wgpuTextureOf(const gpu::Texture& texture) const;
-
-  /**
-   * TEMPORARY escape hatch (deleted with the readback and presentation migration): returns the
-   * wgpu buffer behind \p buffer, or a null handle if the handle does not name a live buffer of
-   * this adapter. Borrowed; this adapter retains ownership.
-   *
-   * @param buffer Live buffer handle of this adapter.
-   */
-  wgpu::Buffer wgpuBufferOf(const gpu::Buffer& buffer) const;
 
   /**
    * TEMPORARY escape hatch (deleted with the readback and presentation migration): returns the
@@ -367,6 +380,13 @@ private:
 
   /// Host-owned command encoder to replay into, or null when this adapter owns its encoders.
   wgpu::CommandEncoder hostCommandEncoder_;
+  /// Set for the duration of one \ref submitStandalone so the submit below takes the
+  /// adapter-owned encoder path even while a host encoder is installed.
+  bool bypassHostEncoderForSubmit_ = false;
+
+  /// Whether the next submit replays into the host encoder rather than reaching the queue: a
+  /// host encoder is installed and this submit is not a standalone one.
+  bool replaysIntoHostEncoder() const;
   /// Highest serial replayed into \ref hostCommandEncoder_ since the last
   /// \ref notifyHostSubmitted; 0 when nothing is awaiting the host's submit.
   uint64_t hostPendingSerial_ = 0;

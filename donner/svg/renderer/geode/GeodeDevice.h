@@ -55,9 +55,9 @@ class GeodeSnapshotReadbackPipeline;
  */
 struct SnapshotReadbackResources {
   /// Staging texture the compute pass writes the unpremultiplied result into.
-  ScopedWgpuHandle<wgpu::Texture> staging;
+  gpu::Texture staging;
   /// View of `staging`, kept with the pooled entry so it is created once.
-  ScopedWgpuHandle<wgpu::TextureView> stagingView;
+  gpu::TextureView stagingView;
   /// Map-readable buffer the staging texture is copied into.
   gpu::Buffer readback;
   /// Pool key: staging texture width in pixels.
@@ -66,7 +66,9 @@ struct SnapshotReadbackResources {
   uint32_t height = 0;
 
   /// True when any required handle is missing; an empty set cannot be used.
-  [[nodiscard]] bool empty() const { return !staging || !stagingView || !readback.isValid(); }
+  [[nodiscard]] bool empty() const {
+    return !staging.isValid() || !stagingView.isValid() || !readback.isValid();
+  }
 };
 
 /**

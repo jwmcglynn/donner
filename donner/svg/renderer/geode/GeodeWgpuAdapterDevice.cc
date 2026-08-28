@@ -333,16 +333,6 @@ gpu::Result<gpu::Texture> GeodeWgpuAdapterDevice::importExternalTexture(wgpu::Te
   return result;
 }
 
-wgpu::Buffer GeodeWgpuAdapterDevice::wgpuBufferOf(const gpu::Buffer& buffer) const {
-  // Full base-class validation (null, device identity, AND generation), so a stale or forged
-  // handle cannot bridge the slot's new occupant to raw wgpu.
-  if (validateBufferHandleForBackend(buffer).hasError() ||
-      buffer.slotIndex() >= slotBuffers_.size()) {
-    return wgpu::Buffer();
-  }
-  return slotBuffers_[buffer.slotIndex()].get();
-}
-
 wgpu::Texture GeodeWgpuAdapterDevice::wgpuTextureOf(const gpu::Texture& texture) const {
   // Full base-class validation (null, device identity, AND generation), so a stale or forged
   // handle cannot bridge the slot's new occupant to raw wgpu.
@@ -1539,6 +1529,20 @@ void GeodeWgpuAdapterDevice::advanceCompletedSerialWhenQueueDrains(uint64_t seri
   notifyWhenSubmittedWorkDone(geodeDevice_.queue(), workDoneState);
 }
 
+bool GeodeWgpuAdapterDevice::replaysIntoHostEncoder() const {
+  return static_cast<bool>(hostCommandEncoder_) && !bypassHostEncoderForSubmit_;
+}
+
+gpu::Result<uint64_t> GeodeWgpuAdapterDevice::submitStandalone(gpu::CommandBuffer&& commands) {
+  // Scoped rather than a separate encode path: the standalone submit differs from an ordinary
+  // one only in ignoring the host encoder, so it runs the same encoding and the same completion
+  // bookkeeping.
+  const bool previous = std::exchange(bypassHostEncoderForSubmit_, true);
+  gpu::Result<uint64_t> serial = submit(std::move(commands));
+  bypassHostEncoderForSubmit_ = previous;
+  return serial;
+}
+
 gpu::Status GeodeWgpuAdapterDevice::onSubmit(uint64_t submissionSerial,
                                              uint32_t commandBufferSlotIndex,
                                              std::span<const gpu::Command> commands) {
@@ -1546,7 +1550,7 @@ gpu::Status GeodeWgpuAdapterDevice::onSubmit(uint64_t submissionSerial,
 
   // Replay into the host's encoder when one is installed, so a caller that also records spans
   // this runtime cannot express keeps one command buffer covering the whole frame in order.
-  const bool replayingIntoHost = static_cast<bool>(hostCommandEncoder_);
+  const bool replayingIntoHost = replaysIntoHostEncoder();
 
   EncodingState state;
   if (replayingIntoHost) {

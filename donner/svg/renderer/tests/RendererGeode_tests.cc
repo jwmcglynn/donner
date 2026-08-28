@@ -509,6 +509,39 @@ TEST_F(RendererGeodeTest, CheckerboardLeavesOpaqueContentUntouched) {
       << "Transparent pixels beside the document content must become checkerboard";
 }
 
+/// A snapshot is routinely asked for while another renderer's frame is open - a thumbnail or an
+/// async render of an earlier frame, taken while the main document is mid-frame - and it has its
+/// own map to wait on. Its work therefore has to reach the queue rather than being appended to
+/// that frame's command buffer, which would leave it unsubmitted until the frame ends and the
+/// readback waiting out its deadline for a map of work that never ran.
+///
+/// The content assertion is what makes this discriminating. A spliced readback still maps its
+/// buffer successfully and returns a full bitmap - of zeros, because the copy never executed -
+/// so a snapshot checked only for "not empty", or for transparent pixels, passes either way.
+TEST_F(RendererGeodeTest, SnapshotReachesTheQueueWhileAnotherFrameOwnsTheCommandStream) {
+  RendererGeode renderer = createRenderer();
+  beginFrame(renderer);
+  renderer.setPaint(solidFill(css::RGBA(255, 0, 0, 255)));
+  renderer.drawRect(Box2d({0, 0}, {kViewportSize, kViewportSize}), StrokeParams{});
+  renderer.endFrame();
+
+  const std::shared_ptr<const RendererTextureSnapshot> frame = takeFinishedFrame(renderer);
+  ASSERT_NE(frame, nullptr);
+
+  // From here until its endFrame, this second renderer owns the device's command stream.
+  RendererGeode other = createRenderer();
+  beginFrame(other);
+
+  const RendererBitmap duringOtherFrame = frame->takeSnapshot();
+  ASSERT_FALSE(duringOtherFrame.empty());
+  EXPECT_THAT(pixelAt(duringOtherFrame, kViewportSize / 2, kViewportSize / 2),
+              RgbaEq(255, 0, 0, 255))
+      << "The snapshot must carry the content submitted before it was asked for, which it can "
+         "only do if its own work reached the queue instead of the open frame's command buffer";
+
+  other.endFrame();
+}
+
 TEST_F(RendererGeodeTest, CheckerboardBlendsUnderPartialAlpha) {
   RendererGeode renderer = createRenderer();
   beginFrame(renderer);

@@ -24,6 +24,7 @@
 #include "donner/base/RelativeLengthMetrics.h"
 #include "donner/base/Transform.h"
 #include "donner/base/Vector2.h"
+#include "donner/gpu/shader/programs/SnapshotUnpremultiply.h"
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/components/DocumentResourceFamilyBudget.h"
 #include "donner/svg/components/RenderingInstanceComponent.h"
@@ -7213,47 +7214,81 @@ RendererBitmap ReadGeodeTextureSnapshotGpu(const std::shared_ptr<geode::GeodeDev
   const uint32_t bytesPerRow = alignBytesPerRow(width * 4u);
   const uint64_t mapSize = static_cast<uint64_t>(bytesPerRow) * static_cast<uint64_t>(height);
 
-  geode::ScopedWgpuHandle<wgpu::TextureView> inputView(texture.createView());
-  wgpu::BindGroupEntry bgEntries[2] = {};
-  bgEntries[0].binding = 0;
-  bgEntries[0].textureView = inputView.get();
-  bgEntries[1].binding = 1;
-  bgEntries[1].textureView = resources.stagingView.get();
-  wgpu::BindGroupDescriptor bgDesc = {};
-  bgDesc.label = wgpuLabel("RendererGeodeReadbackBG");
-  bgDesc.layout = readbackPipeline.bindGroupLayout();
-  bgDesc.entryCount = 2;
-  bgDesc.entries = bgEntries;
-  geode::ScopedWgpuHandle<wgpu::BindGroup> bindGroup(device->device().createBindGroup(bgDesc));
-  device->countBindGroup();
+  geode::GeodeWgpuAdapterDevice& runtime = device->adapterDevice();
 
-  // Record the unpremultiply compute pass and the staging-texture copy into
-  // one command buffer, then submit it on the device queue.
-  geode::ScopedWgpuHandle<wgpu::CommandEncoder> enc(device->device().createCommandEncoder());
-  wgpu::ComputePassDescriptor passDesc = {};
-  passDesc.label = wgpuLabel("RendererGeodeReadbackPass");
-  geode::ScopedWgpuHandle<wgpu::ComputePassEncoder> pass(enc.get().beginComputePass(passDesc));
-  pass.get().setPipeline(readbackPipeline.pipeline());
-  pass.get().setBindGroup(0, bindGroup.get(), 0, nullptr);
-  pass.get().dispatchWorkgroups((width + 7) / 8, (height + 7) / 8, 1);
-  pass.get().end();
-  pass.reset();
+  // The source is the caller's own render target, which the runtime has not named; it is
+  // borrowed for this one submission and the caller keeps ownership.
+  gpu::Result<gpu::Texture> importedInput =
+      runtime.importExternalTexture(texture, gpu::Extent2d{width, height},
+                                    gpu::TextureFormat::RGBA8Unorm, gpu::TextureUsage::Sampled);
+  if (importedInput.hasError()) {
+    return bitmap;
+  }
+  const gpu::Texture inputTexture = std::move(importedInput).result();
+  gpu::Result<gpu::TextureView> importedView = runtime.createTextureView(
+      inputTexture, gpu::TextureViewDescriptor{"RendererGeodeReadbackInputView"});
+  if (importedView.hasError()) {
+    return bitmap;
+  }
+  const gpu::TextureView inputView = std::move(importedView).result();
 
-  wgpu::TexelCopyTextureInfo src = {};
-  src.texture = resources.staging.get();
-  src.mipLevel = 0;
-  src.origin = {0, 0, 0};
-  wgpu::TexelCopyBufferInfo dst = {};
-  dst.buffer = device->adapterDevice().wgpuBufferOf(resources.readback);
-  dst.layout.bytesPerRow = bytesPerRow;
-  dst.layout.rowsPerImage = height;
-  wgpu::Extent3D copySize = {width, height, 1};
-  enc.get().copyTextureToBuffer(src, dst, copySize);
+  using ReadbackBinding = gpu::shader::programs::SnapshotUnpremultiplyBinding;
+  gpu::Result<gpu::BindGroup> bindGroup = runtime.createBindGroup(gpu::BindGroupDescriptor{
+      "RendererGeodeReadbackBG",
+      readbackPipeline.bindGroupLayout(),
+      {gpu::BindGroupEntry{static_cast<uint32_t>(ReadbackBinding::InputTexture),
+                           gpu::TextureViewBinding{inputView}},
+       gpu::BindGroupEntry{static_cast<uint32_t>(ReadbackBinding::OutputTexture),
+                           gpu::TextureViewBinding{resources.stagingView}}}});
+  if (bindGroup.hasError()) {
+    return bitmap;
+  }
 
-  geode::ScopedWgpuHandle<wgpu::CommandBuffer> cmd(enc.get().finish());
-  enc.reset();
-  device->queue().submit(1, &cmd.get());
-  device->countSubmit();
+  // Record the unpremultiply compute pass and the staging-texture copy into one command buffer.
+  gpu::Result<std::unique_ptr<gpu::CommandEncoder>> encoderResult = runtime.createCommandEncoder();
+  if (encoderResult.hasError()) {
+    return bitmap;
+  }
+  const std::unique_ptr<gpu::CommandEncoder> encoder = std::move(encoderResult).result();
+
+  gpu::Result<gpu::ComputePassEncoder*> passResult =
+      encoder->beginComputePass(gpu::ComputePassDescriptor{"RendererGeodeReadbackPass"});
+  if (passResult.hasError()) {
+    return bitmap;
+  }
+  gpu::ComputePassEncoder* pass = passResult.result();
+  constexpr uint32_t kWorkgroup = gpu::shader::programs::kSnapshotUnpremultiplyWorkgroupSize;
+  if (pass->setPipeline(readbackPipeline.pipeline()).hasError() ||
+      pass->setBindGroup(0, bindGroup.result()).hasError() ||
+      pass->dispatchWorkgroups((width + kWorkgroup - 1) / kWorkgroup,
+                               (height + kWorkgroup - 1) / kWorkgroup, 1)
+          .hasError() ||
+      pass->end().hasError()) {
+    return bitmap;
+  }
+
+  if (encoder
+          ->copyTextureToBuffer(gpu::TexelCopyTextureInfo{resources.staging}, resources.readback,
+                                gpu::TexelCopyBufferLayout{0, bytesPerRow, height},
+                                gpu::Extent2d{width, height})
+          .hasError()) {
+    return bitmap;
+  }
+
+  gpu::Result<gpu::CommandBuffer> commands = encoder->finish();
+  if (commands.hasError()) {
+    return bitmap;
+  }
+  // Standalone, not the frame's encoder: this readback has its own map to wait on, and a
+  // snapshot is routinely asked for while another renderer's frame is open. Its sources were
+  // submitted before it was asked for and its only writes are its own staging texture and
+  // readback buffer, so it shares nothing with the spans that frame is still recording.
+  //
+  // The runtime counts its own submit, so there is no explicit tick here; a second one would
+  // double-count every snapshot against the per-frame submission ceilings.
+  if (runtime.submitStandalone(std::move(commands).result()).hasError()) {
+    return bitmap;
+  }
 
   ReadbackMapResult mapResult =
       MapAndWaitReadback(device, resources.readback, mapSize, shouldCancel);
@@ -7361,24 +7396,38 @@ static RendererBitmap ReadGeodeTextureSnapshot(const std::shared_ptr<geode::Geod
     return bitmap;
   }
   gpu::Buffer readback = std::move(createdReadback).result();
-  const wgpu::Buffer readbackBackend = device->adapterDevice().wgpuBufferOf(readback);
 
-  // Copy texture → readback buffer.
-  geode::ScopedWgpuHandle<wgpu::CommandEncoder> enc(device->device().createCommandEncoder());
-  wgpu::TexelCopyTextureInfo src = {};
-  src.texture = texture;
-  src.mipLevel = 0;
-  src.origin = {0, 0, 0};
-  wgpu::TexelCopyBufferInfo dst = {};
-  dst.buffer = readbackBackend;
-  dst.layout.bytesPerRow = bytesPerRow;
-  dst.layout.rowsPerImage = height;
-  wgpu::Extent3D copySize = {width, height, 1};
-  enc.get().copyTextureToBuffer(src, dst, copySize);
+  // Copy texture -> readback buffer. The source is the caller's own render target, borrowed for
+  // this one submission; the caller keeps ownership.
+  geode::GeodeWgpuAdapterDevice& runtime = device->adapterDevice();
+  gpu::Result<gpu::Texture> importedSource = runtime.importExternalTexture(
+      texture, gpu::Extent2d{width, height}, geode::GpuTextureFormatFromWgpu(format),
+      gpu::TextureUsage::CopySrc);
+  if (importedSource.hasError()) {
+    return bitmap;
+  }
+  const gpu::Texture sourceTexture = std::move(importedSource).result();
 
-  geode::ScopedWgpuHandle<wgpu::CommandBuffer> cmd(enc.get().finish());
-  device->queue().submit(1, &cmd.get());
-  device->countSubmit();
+  gpu::Result<std::unique_ptr<gpu::CommandEncoder>> encoderResult = runtime.createCommandEncoder();
+  if (encoderResult.hasError()) {
+    return bitmap;
+  }
+  const std::unique_ptr<gpu::CommandEncoder> encoder = std::move(encoderResult).result();
+  if (encoder
+          ->copyTextureToBuffer(gpu::TexelCopyTextureInfo{sourceTexture}, readback,
+                                gpu::TexelCopyBufferLayout{0, bytesPerRow, height},
+                                gpu::Extent2d{width, height})
+          .hasError()) {
+    return bitmap;
+  }
+  gpu::Result<gpu::CommandBuffer> commands = encoder->finish();
+  if (commands.hasError()) {
+    return bitmap;
+  }
+  // Standalone for the same reason as the GPU path above, and the runtime counts its own submit.
+  if (runtime.submitStandalone(std::move(commands).result()).hasError()) {
+    return bitmap;
+  }
 
   ReadbackMapResult mapResult = MapAndWaitReadback(device, readback, readbackSize, shouldCancel);
   if (mapResult.status != ReadbackMapStatus::Success) {
