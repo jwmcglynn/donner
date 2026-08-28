@@ -95,6 +95,7 @@ donner_cc_test(
         "tests/IrLayout_tests.cc",
         "tests/IrSerialization_tests.cc",
         "tests/MslEmitter_tests.cc",
+        "tests/ShaderGoldenUtils.h",
         "tests/ShaderTestUtils.h",
         "tests/SolidFillProgram_tests.cc",
         "tests/SpirvEmitter_tests.cc",
