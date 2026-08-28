@@ -5,38 +5,11 @@
 #include <vector>
 
 #include "donner/gpu/shader/IrExpr.h"
+#include "donner/gpu/shader/programs/ErrorLatch.h"
 
 namespace donner::gpu::shader::programs {
 
 namespace {
-
-/**
- * Latches the first builder error so the program can be transliterated linearly. On error every
- * subsequent expression receives a dummy `0.0f`; the resulting cascade errors are ignored because
- * only the first is reported. The inputs are static, so any latched error is a Donner bug
- * surfaced by the golden test, never a runtime condition.
- */
-struct Latch {
-  std::optional<ShaderError> error;  //!< First error, if any.
-
-  /// Unwraps an expression result. @param result Result to unwrap.
-  IrExpr operator()(ShaderResult<IrExpr>&& result) {
-    if (result.hasError()) {
-      if (!error) {
-        error = std::move(result).error();
-      }
-      return LiteralF32(0.0f);
-    }
-    return std::move(result).result();
-  }
-
-  /// Latches a status. @param status Status to check.
-  void ok(ShaderStatus&& status) {
-    if (status.hasError() && !error) {
-      error = std::move(status).error();
-    }
-  }
-};
 
 /// Binding index of \p binding as the module builder takes it.
 uint32_t BindingIndex(SnapshotUnpremultiplyBinding binding) {
@@ -46,7 +19,7 @@ uint32_t BindingIndex(SnapshotUnpremultiplyBinding binding) {
 /// The stored 8-bit channel behind a normalized unorm texel component.
 /// @param e Error latch. @param texel Loaded `vec4<f32>` texel.
 /// @param component Swizzle naming the component, e.g. "x".
-IrExpr Channel8(Latch& e, const IrExpr& texel, const char* component) {
+IrExpr Channel8(ErrorLatch& e, const IrExpr& texel, const char* component) {
   return e(Convert(IrType::U32(),
                    e(CallBuiltin(BuiltinFn::Round,
                                  {e(Mul(e(Swizzle(texel, component)), LiteralF32(255.0f)))}))));
@@ -56,7 +29,7 @@ IrExpr Channel8(Latch& e, const IrExpr& texel, const char* component) {
 /// `min(255, (premul * 255 + alpha / 2) / alpha)`, evaluated only where alpha is nonzero.
 /// @param e Error latch. @param premul8 Premultiplied 8-bit channel.
 /// @param alpha8 8-bit alpha. @param halfAlpha `alpha8 / 2`, the round-half-up addend.
-IrExpr StraightChannel(Latch& e, const IrExpr& premul8, const IrExpr& alpha8,
+IrExpr StraightChannel(ErrorLatch& e, const IrExpr& premul8, const IrExpr& alpha8,
                        const IrExpr& halfAlpha) {
   return e(CallBuiltin(
       BuiltinFn::Min,
@@ -65,14 +38,14 @@ IrExpr StraightChannel(Latch& e, const IrExpr& premul8, const IrExpr& alpha8,
 
 /// The normalized float a stored 8-bit channel becomes on unorm storage.
 /// @param e Error latch. @param channel8 8-bit channel.
-IrExpr Normalized(Latch& e, const IrExpr& channel8) {
+IrExpr Normalized(ErrorLatch& e, const IrExpr& channel8) {
   return e(Div(e(Convert(IrType::F32(), channel8)), LiteralF32(255.0f)));
 }
 
 }  // namespace
 
 ShaderResult<IrModule> BuildSnapshotUnpremultiplyModule() {
-  Latch e;
+  ErrorLatch e;
   ModuleBuilder builder;
 
   e.ok(builder.addTexture2d(0, BindingIndex(SnapshotUnpremultiplyBinding::InputTexture),

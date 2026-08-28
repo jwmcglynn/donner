@@ -78,6 +78,7 @@ donner_cc_library(
     ],
     hdrs = [
         "programs/ColorMatrix.h",
+        "programs/ErrorLatch.h",
         "programs/SnapshotUnpremultiply.h",
         "programs/SolidFill.h",
     ],

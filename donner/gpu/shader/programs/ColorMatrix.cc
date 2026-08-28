@@ -5,49 +5,11 @@
 #include <vector>
 
 #include "donner/gpu/shader/IrExpr.h"
+#include "donner/gpu/shader/programs/ErrorLatch.h"
 
 namespace donner::gpu::shader::programs {
 
 namespace {
-
-/**
- * Latches the first builder error so the program can be transliterated linearly. On error every
- * subsequent expression receives a dummy `0.0f`; the resulting cascade errors are ignored because
- * only the first is reported. The inputs are static, so any latched error is a Donner bug
- * surfaced by the golden test, never a runtime condition.
- */
-struct Latch {
-  std::optional<ShaderError> error;  //!< First error, if any.
-
-  /// Unwraps an expression result. @param result Result to unwrap.
-  IrExpr operator()(ShaderResult<IrExpr>&& result) {
-    if (result.hasError()) {
-      if (!error) {
-        error = std::move(result).error();
-      }
-      return LiteralF32(0.0f);
-    }
-    return std::move(result).result();
-  }
-
-  /// Unwraps a type result. @param result Result to unwrap.
-  IrType operator()(ShaderResult<IrType>&& result) {
-    if (result.hasError()) {
-      if (!error) {
-        error = std::move(result).error();
-      }
-      return IrType::F32();
-    }
-    return std::move(result).result();
-  }
-
-  /// Latches a status. @param status Status to check.
-  void ok(ShaderStatus&& status) {
-    if (status.hasError() && !error) {
-      error = std::move(status).error();
-    }
-  }
-};
 
 /// Binding index of \p binding as the module builder takes it.
 uint32_t BindingIndex(ColorMatrixBinding binding) {
@@ -80,7 +42,7 @@ ShaderStatus AddBindings(ModuleBuilder& builder, const IrType& paramsType,
 }  // namespace
 
 ShaderResult<IrModule> BuildColorMatrixModule() {
-  Latch e;
+  ErrorLatch e;
   ModuleBuilder builder;
 
   const IrType vec4f = IrType::Vec4f();
