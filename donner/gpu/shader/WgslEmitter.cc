@@ -4,6 +4,7 @@
 #include <format>
 #include <functional>
 #include <string_view>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -23,23 +24,22 @@ namespace {
 ///
 /// @param op Binary operator.
 std::string_view BinaryOperatorText(BinaryOp op) {
-  switch (op) {
-    case BinaryOp::Add: return "+";
-    case BinaryOp::Sub: return "-";
-    case BinaryOp::Mul: return "*";
-    case BinaryOp::Div: return "/";
-    case BinaryOp::Mod: return "%";
-    case BinaryOp::Lt: return "<";
-    case BinaryOp::Le: return "<=";
-    case BinaryOp::Gt: return ">";
-    case BinaryOp::Ge: return ">=";
-    case BinaryOp::Eq: return "==";
-    case BinaryOp::Ne: return "!=";
-    case BinaryOp::And: return "&&";
-    case BinaryOp::Or: return "||";
-    case BinaryOp::Shr: return ">>";
+  // A table rather than a switch: these are spellings, so the shape is data, and a linear scan
+  // over fourteen rows costs nothing next to the string building around it. Keyed by enumerator
+  // rather than indexed by its value, so a row cannot silently attach to the wrong operator if
+  // the enum is ever reordered.
+  static constexpr std::pair<BinaryOp, std::string_view> kTable[] = {
+      {BinaryOp::Add, "+"}, {BinaryOp::Sub, "-"},  {BinaryOp::Mul, "*"}, {BinaryOp::Div, "/"},
+      {BinaryOp::Mod, "%"}, {BinaryOp::Lt, "<"},   {BinaryOp::Le, "<="}, {BinaryOp::Gt, ">"},
+      {BinaryOp::Ge, ">="}, {BinaryOp::Eq, "=="},  {BinaryOp::Ne, "!="}, {BinaryOp::And, "&&"},
+      {BinaryOp::Or, "||"}, {BinaryOp::Shr, ">>"},
+  };
+  for (const auto& [candidate, text] : kTable) {
+    if (candidate == op) {
+      return text;
+    }
   }
-  return "";
+  return "unknown";
 }
 
 /// WGSL reserved and predeclared words that IR identifiers must not collide with. Small,

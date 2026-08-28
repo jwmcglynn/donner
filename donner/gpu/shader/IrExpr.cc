@@ -106,21 +106,21 @@ ShaderResult<IrExpr> MakeLogical(BinaryOp op, const IrExpr& lhs, const IrExpr& r
 /// Mirrors \ref BuiltinFnName, which does the same for the builtins.
 /// @param op Binary operator.
 std::string_view BinaryOpName(BinaryOp op) {
-  switch (op) {
-    case BinaryOp::Add: return "add";
-    case BinaryOp::Sub: return "sub";
-    case BinaryOp::Mul: return "mul";
-    case BinaryOp::Div: return "div";
-    case BinaryOp::Mod: return "mod";
-    case BinaryOp::Lt: return "lt";
-    case BinaryOp::Le: return "le";
-    case BinaryOp::Gt: return "gt";
-    case BinaryOp::Ge: return "ge";
-    case BinaryOp::Eq: return "eq";
-    case BinaryOp::Ne: return "ne";
-    case BinaryOp::And: return "and";
-    case BinaryOp::Or: return "or";
-    case BinaryOp::Shr: return "shr";
+  // A table rather than a switch: these are spellings, so the shape is data, and a linear scan
+  // over fourteen rows costs nothing next to the string building around it. Keyed by enumerator
+  // rather than indexed by its value, so a row cannot silently attach to the wrong operator if
+  // the enum is ever reordered.
+  static constexpr std::pair<BinaryOp, std::string_view> kTable[] = {
+      {BinaryOp::Add, "add"}, {BinaryOp::Sub, "sub"}, {BinaryOp::Mul, "mul"},
+      {BinaryOp::Div, "div"}, {BinaryOp::Mod, "mod"}, {BinaryOp::Lt, "lt"},
+      {BinaryOp::Le, "le"},   {BinaryOp::Gt, "gt"},   {BinaryOp::Ge, "ge"},
+      {BinaryOp::Eq, "eq"},   {BinaryOp::Ne, "ne"},   {BinaryOp::And, "and"},
+      {BinaryOp::Or, "or"},   {BinaryOp::Shr, "shr"},
+  };
+  for (const auto& [candidate, text] : kTable) {
+    if (candidate == op) {
+      return text;
+    }
   }
   return "unknown";
 }
