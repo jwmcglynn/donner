@@ -76,6 +76,7 @@ donner_cc_library(
         "programs/Flood.cc",
         "programs/SnapshotUnpremultiply.cc",
         "programs/SolidFill.cc",
+        "programs/SubregionClip.cc",
     ],
     hdrs = [
         "programs/ColorMatrix.h",
@@ -83,6 +84,7 @@ donner_cc_library(
         "programs/Flood.h",
         "programs/SnapshotUnpremultiply.h",
         "programs/SolidFill.h",
+        "programs/SubregionClip.h",
     ],
     visibility = donner_internal_visibility(),
     deps = [
@@ -106,6 +108,7 @@ donner_cc_test(
         "tests/SnapshotUnpremultiplyProgram_tests.cc",
         "tests/SolidFillProgram_tests.cc",
         "tests/SpirvEmitter_tests.cc",
+        "tests/SubregionClipProgram_tests.cc",
         "tests/WgslEmitter_tests.cc",
     ],
     data = [
@@ -121,6 +124,9 @@ donner_cc_test(
         "tests/testdata/solid_fill.msl",
         "tests/testdata/solid_fill.spv",
         "tests/testdata/solid_fill.wgsl",
+        "tests/testdata/subregion_clip.msl",
+        "tests/testdata/subregion_clip.spv",
+        "tests/testdata/subregion_clip.wgsl",
     ],
     deps = [
         ":programs",

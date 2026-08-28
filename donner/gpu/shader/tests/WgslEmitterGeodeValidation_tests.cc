@@ -18,6 +18,7 @@
 #include "donner/gpu/shader/programs/ColorMatrix.h"
 #include "donner/gpu/shader/programs/Flood.h"
 #include "donner/gpu/shader/programs/SolidFill.h"
+#include "donner/gpu/shader/programs/SubregionClip.h"
 #include "donner/gpu/shader/tests/ShaderTestUtils.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
 #include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
@@ -350,6 +351,57 @@ void CreateFloodComputePipeline(
   }
 }
 
+/// Builds the subregion-clip compute pipeline from \p module, mirroring the bind group layout the
+/// program declares: sampled input texture, write-only rgba8unorm storage output, and uniform
+/// params, all compute-visible.
+/// @param device WebGPU device to create through.
+/// @param module Shader module holding the `cs_main` entry point.
+/// @param inputSampleType Sample type declared for binding 0; the negative control passes
+///   Uint to provoke a mismatch with the shader's texture_2d<f32> declaration.
+void CreateSubregionClipComputePipeline(
+    const wgpu::Device& device, const wgpu::ShaderModule& module,
+    wgpu::TextureSampleType inputSampleType = wgpu::TextureSampleType::Float) {
+  wgpu::BindGroupLayoutEntry entries[3] = {};
+
+  entries[0].binding = 0;
+  entries[0].visibility = wgpu::ShaderStage::Compute;
+  entries[0].texture.sampleType = inputSampleType;
+  entries[0].texture.viewDimension = wgpu::TextureViewDimension::_2D;
+
+  entries[1].binding = 1;
+  entries[1].visibility = wgpu::ShaderStage::Compute;
+  entries[1].storageTexture.access = wgpu::StorageTextureAccess::WriteOnly;
+  entries[1].storageTexture.format = wgpu::TextureFormat::RGBA8Unorm;
+  entries[1].storageTexture.viewDimension = wgpu::TextureViewDimension::_2D;
+
+  entries[2].binding = 2;
+  entries[2].visibility = wgpu::ShaderStage::Compute;
+  entries[2].buffer.type = wgpu::BufferBindingType::Uniform;
+
+  wgpu::BindGroupLayoutDescriptor bglDesc = {};
+  bglDesc.entryCount = 3;
+  bglDesc.entries = entries;
+  wgpu::BindGroupLayout bindGroupLayout = device.createBindGroupLayout(bglDesc);
+
+  wgpu::PipelineLayoutDescriptor plDesc = {};
+  plDesc.bindGroupLayoutCount = 1;
+  WGPUBindGroupLayout layouts[1] = {bindGroupLayout};
+  plDesc.bindGroupLayouts = layouts;
+  wgpu::PipelineLayout pipelineLayout = device.createPipelineLayout(plDesc);
+
+  wgpu::ComputePipelineDescriptor cpDesc = {};
+  cpDesc.layout = pipelineLayout;
+  cpDesc.compute.module = module;
+  cpDesc.compute.entryPoint = donner::geode::wgpuLabel("cs_main");
+
+  wgpu::ComputePipeline pipeline = device.createComputePipeline(cpDesc);
+  if (inputSampleType == wgpu::TextureSampleType::Float) {
+    // Only the correct layout asserts on the handle; the sabotaged negative-control layout
+    // observes failure through the uncaptured-error marker instead.
+    EXPECT_TRUE(static_cast<bool>(pipeline)) << "Compute pipeline creation returned null";
+  }
+}
+
 TEST(WgslEmitterGeodeValidation, EmittedFloodComputePassesRendererValidation) {
   auto geodeDevice = donner::geode::GeodeDevice::CreateHeadless();
   if (!geodeDevice) {
@@ -393,6 +445,51 @@ TEST(WgslEmitterGeodeValidation, NegativeControlDetectsFloodStorageAccessMismatc
 
   EXPECT_THAT(errors, HasSubstr(kErrorMarker))
       << "A storage-texture access mismatch did not surface at compute pipeline creation; "
+         "pipeline-time acceptance evidence would be meaningless";
+}
+
+TEST(WgslEmitterGeodeValidation, EmittedSubregionClipComputePassesRendererValidation) {
+  auto geodeDevice = donner::geode::GeodeDevice::CreateHeadless();
+  if (!geodeDevice) {
+    GTEST_SKIP() << "No WebGPU-capable device available";
+  }
+
+  ShaderResult<IrModule> module = programs::BuildSubregionClipModule();
+  ASSERT_THAT(module, HasShaderResult());
+  ShaderResult<std::string> wgsl = EmitWgsl(module.result());
+  ASSERT_FALSE(wgsl.hasError()) << "EmitWgsl failed: " << wgsl.error();
+
+  testing::internal::CaptureStderr();
+  wgpu::ShaderModule shaderModule = CreateModuleFromWgsl(geodeDevice->device(), wgsl.result());
+  ASSERT_TRUE(static_cast<bool>(shaderModule)) << "Shader module creation returned null";
+  CreateSubregionClipComputePipeline(geodeDevice->device(), shaderModule);
+  const std::string errors = testing::internal::GetCapturedStderr();
+
+  EXPECT_THAT(errors, Not(HasSubstr(kErrorMarker)))
+      << "Renderer validation reported errors for the emitted compute WGSL";
+}
+
+TEST(WgslEmitterGeodeValidation, NegativeControlDetectsSubregionClipSampleTypeMismatch) {
+  // The detection evidence for this layout is its sampled entry: declaring the source as an
+  // integer texture contradicts the shader's texture_2d<f32> and must trip the marker.
+  auto geodeDevice = donner::geode::GeodeDevice::CreateHeadless();
+  if (!geodeDevice) {
+    GTEST_SKIP() << "No WebGPU-capable device available";
+  }
+
+  ShaderResult<IrModule> module = programs::BuildSubregionClipModule();
+  ASSERT_THAT(module, HasShaderResult());
+  ShaderResult<std::string> wgsl = EmitWgsl(module.result());
+  ASSERT_FALSE(wgsl.hasError()) << "EmitWgsl failed: " << wgsl.error();
+
+  testing::internal::CaptureStderr();
+  wgpu::ShaderModule shaderModule = CreateModuleFromWgsl(geodeDevice->device(), wgsl.result());
+  CreateSubregionClipComputePipeline(geodeDevice->device(), shaderModule,
+                                     /*inputSampleType=*/wgpu::TextureSampleType::Uint);
+  const std::string errors = testing::internal::GetCapturedStderr();
+
+  EXPECT_THAT(errors, HasSubstr(kErrorMarker))
+      << "A sampled-texture type mismatch did not surface at compute pipeline creation; "
          "pipeline-time acceptance evidence would be meaningless";
 }
 
