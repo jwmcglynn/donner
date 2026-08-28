@@ -16,6 +16,7 @@
 #include "donner/gpu/CommandEncoder.h"
 #include "donner/gpu/shader/ModuleInterface.h"
 #include "donner/gpu/shader/WgslEmitter.h"
+#include "donner/gpu/shader/programs/FilterColorMatrix.h"
 #include "donner/gpu/shader/programs/Flood.h"
 #include "donner/gpu/shader/programs/SubregionClip.h"
 #include "donner/svg/components/filter/FilterGraph.h"
@@ -541,10 +542,10 @@ struct OffsetParams {
   uint32_t pad;
 };
 
-/// Uniform buffer layout matching the WGSL `ColorMatrixParams` struct.
+/// Uniform buffer layout matching the shader program's `FilterColorMatrixParams` struct.
 /// 4x5 matrix stored as 5 column vectors (each vec4f = one column across
 /// R'/G'/B'/A' rows).
-struct ColorMatrixParams {
+struct FilterColorMatrixParams {
   float col0[4];  // multipliers for R input
   float col1[4];  // multipliers for G input
   float col2[4];  // multipliers for B input
@@ -1370,11 +1371,11 @@ bool graphUsesStandardInput(const svg::components::FilterGraph& filterGraph,
   return false;
 }
 
-/// Returns true if the ColorMatrixParams represents an identity transform
+/// Returns true if the matrix represents an identity transform
 /// (diagonal ones, zero offsets). Used to short-circuit the shader dispatch
 /// and avoid the unpremultiply/premultiply round-trip precision loss that
 /// tiny-skia also avoids (FilterGraph.cpp:462).
-bool isIdentityColorMatrix(const ColorMatrixParams& params) {
+bool isIdentityColorMatrix(const FilterColorMatrixParams& params) {
   // clang-format off
   return params.col0[0] == 1.0f && params.col0[1] == 0.0f && params.col0[2] == 0.0f && params.col0[3] == 0.0f
       && params.col1[0] == 0.0f && params.col1[1] == 1.0f && params.col1[2] == 0.0f && params.col1[3] == 0.0f
@@ -1387,9 +1388,9 @@ bool isIdentityColorMatrix(const ColorMatrixParams& params) {
 /// Build the 4x5 color matrix from feColorMatrix parameters.
 /// All type variants are pre-computed here so the shader only needs a
 /// single generic matrix multiply.
-ColorMatrixParams buildColorMatrix(
+FilterColorMatrixParams buildColorMatrix(
     const svg::components::filter_primitive::ColorMatrix& primitive) {
-  ColorMatrixParams params{};
+  FilterColorMatrixParams params{};
 
   auto setIdentity = [&]() {
     // Identity: R'=R, G'=G, B'=B, A'=A, offsets=0.
@@ -1550,10 +1551,14 @@ GeodeFilterEngine::GeodeFilterEngine(GeodeDevice& device, bool verbose)
 
   // --- feColorMatrix pipeline ---
   {
-    auto [bgl, pipeline] = createInputOutputUniformPipeline(
-        dev, "FilterColorMatrix", createFilterColorMatrixShader(dev), sizeof(ColorMatrixParams));
-    colorMatrixBindGroupLayout_ = std::move(bgl);
-    colorMatrixPipeline_ = std::move(pipeline);
+    using gpu::shader::programs::FilterColorMatrixBinding;
+    colorMatrixProgram_ = CreateRuntimeComputeProgram(
+        device_.adapterDevice(), "FilterColorMatrix",
+        gpu::shader::programs::BuildFilterColorMatrixModule(),
+        {SampledInputEntry(static_cast<uint32_t>(FilterColorMatrixBinding::InputTexture)),
+         StorageOutputEntry(static_cast<uint32_t>(FilterColorMatrixBinding::OutputTexture)),
+         UniformParamsEntry(static_cast<uint32_t>(FilterColorMatrixBinding::Params))},
+        gpu::shader::programs::kFilterColorMatrixWorkgroupSize);
   }
 
   // --- feFlood pipeline (output + uniform, no input), through the GPU runtime ---
@@ -2387,7 +2392,7 @@ wgpu::Texture RunFilterGraphExecution(FilterGraphExecution& execution) {
       // `color-interpolation-filters` property). Match tiny-skia by
       // wrapping the matrix operation with sRGB↔linear conversion, and
       // short-circuiting identity matrices to avoid lossy round-trips.
-      ColorMatrixParams matrixParams = buildColorMatrix(*cm);
+      FilterColorMatrixParams matrixParams = buildColorMatrix(*cm);
       if (isIdentityColorMatrix(matrixParams)) {
         outputTex = inputTex;
       } else {
@@ -2949,7 +2954,7 @@ wgpu::Texture GeodeFilterEngine::applyOffset(
 wgpu::Texture GeodeFilterEngine::applyColorMatrix(
     FilterResourceArena& arena, const wgpu::Texture& input,
     const svg::components::filter_primitive::ColorMatrix& primitive) {
-  ColorMatrixParams params = buildColorMatrix(primitive);
+  FilterColorMatrixParams params = buildColorMatrix(primitive);
 
   // Match tiny-skia's identity shortcut: skip the shader to avoid the
   // unpremultiply→multiply→premultiply round-trip that introduces precision
@@ -2958,41 +2963,45 @@ wgpu::Texture GeodeFilterEngine::applyColorMatrix(
     return input;
   }
 
-  const wgpu::Device& dev = device_.device();
-  const uint32_t width = input.getWidth();
-  const uint32_t height = input.getHeight();
+  const gpu::Texture* output = arena.createRuntimeTexture(gpu::TextureDescriptor{
+      "FilterColorMatrixOutput", gpu::Extent2d{input.getWidth(), input.getHeight()},
+      gpu::TextureFormat::RGBA8Unorm,
+      gpu::TextureUsage::StorageBinding | gpu::TextureUsage::Sampled | gpu::TextureUsage::CopySrc});
+  if (output == nullptr) {
+    return {};
+  }
 
-  wgpu::Texture output =
-      createIntermediateTexture(arena, dev, width, height, "FilterColorMatrixOutput");
+  if (!dispatchRuntimeInputOutputUniform(arena, colorMatrixProgram_, input, *output,
+                                         UniformBytes(params), "FilterColorMatrixPass",
+                                         gpu::shader::programs::kFilterColorMatrixWorkgroupSize)) {
+    return {};
+  }
 
-  auto uniformBuffer = writeUniformSlot(*resourceCache_, device_, &params, sizeof(params));
-
-  dispatchInputOutputUniform(arena, device_, colorMatrixBindGroupLayout_.get(),
-                             colorMatrixPipeline_.get(), input, output, uniformBuffer.buffer,
-                             uniformBuffer.offset, sizeof(ColorMatrixParams),
-                             "FilterColorMatrixPass");
-  return output;
+  return device_.adapterDevice().wgpuTextureOf(*output);
 }
 
 wgpu::Texture GeodeFilterEngine::applySourceAlpha(FilterResourceArena& arena,
                                                   const wgpu::Texture& input) {
-  const wgpu::Device& dev = device_.device();
-  const uint32_t width = input.getWidth();
-  const uint32_t height = input.getHeight();
+  const gpu::Texture* output = arena.createRuntimeTexture(gpu::TextureDescriptor{
+      "FilterSourceAlphaOutput", gpu::Extent2d{input.getWidth(), input.getHeight()},
+      gpu::TextureFormat::RGBA8Unorm,
+      gpu::TextureUsage::StorageBinding | gpu::TextureUsage::Sampled | gpu::TextureUsage::CopySrc});
+  if (output == nullptr) {
+    return {};
+  }
 
-  wgpu::Texture output =
-      createIntermediateTexture(arena, dev, width, height, "FilterSourceAlphaOutput");
-
-  ColorMatrixParams params{};
+  // SourceAlpha is the color matrix that keeps alpha and zeroes the colors, so it runs through the
+  // same program rather than a second pipeline that would have to agree with it.
+  FilterColorMatrixParams params{};
   params.col3[3] = 1.0f;
 
-  auto uniformBuffer = writeUniformSlot(*resourceCache_, device_, &params, sizeof(params));
+  if (!dispatchRuntimeInputOutputUniform(arena, colorMatrixProgram_, input, *output,
+                                         UniformBytes(params), "FilterSourceAlphaPass",
+                                         gpu::shader::programs::kFilterColorMatrixWorkgroupSize)) {
+    return {};
+  }
 
-  dispatchInputOutputUniform(arena, device_, colorMatrixBindGroupLayout_.get(),
-                             colorMatrixPipeline_.get(), input, output, uniformBuffer.buffer,
-                             uniformBuffer.offset, sizeof(ColorMatrixParams),
-                             "FilterSourceAlphaPass");
-  return output;
+  return device_.adapterDevice().wgpuTextureOf(*output);
 }
 
 wgpu::Texture GeodeFilterEngine::applyFlood(

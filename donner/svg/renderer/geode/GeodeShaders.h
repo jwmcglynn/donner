@@ -119,25 +119,6 @@ wgpu::ShaderModule createGaussianBlurShader(const wgpu::Device& device);
 wgpu::ShaderModule createFilterOffsetShader(const wgpu::Device& device);
 
 /**
- * Compile the feColorMatrix compute shader for the given device.
- *
- * The WGSL source is embedded at build time from
- * `shaders/filter_color_matrix.wgsl` via the `embed_resources()` Bazel rule.
- * The shader applies a 4x5 color matrix to each pixel's RGBA channels.
- * All type variants (matrix, saturate, hueRotate, luminanceToAlpha) are
- * pre-computed to a 4x5 matrix on the CPU side.
- *
- * Bind group layout:
- * - `@group(0) @binding(0) var input_tex: texture_2d<f32>;`
- * - `@group(0) @binding(1) var output_tex: texture_storage_2d<rgba8unorm, write>;`
- * - `@group(0) @binding(2) var<uniform> params: ColorMatrixParams;`
- *
- * @return A valid shader module on success, or an empty module if compilation
- *   failed (errors go to the device's uncaptured error callback).
- */
-wgpu::ShaderModule createFilterColorMatrixShader(const wgpu::Device& device);
-
-/**
  * Compile the feMerge alpha-over blit compute shader for the given device.
  *
  * The WGSL source is embedded at build time from
