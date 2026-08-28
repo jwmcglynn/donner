@@ -126,6 +126,56 @@
         "ColorMatrixParams"
       ]
     },
+    "donner/gpu/shader/tests/testdata/filter_color_matrix.wgsl": {
+      "bindings": [
+        {
+          "binding": 0,
+          "group": 0,
+          "name": "inputTexture",
+          "type": "texture_2d<f32>"
+        },
+        {
+          "binding": 1,
+          "group": 0,
+          "name": "outputTexture",
+          "type": "texture_storage_2d<rgba8unorm, write>"
+        },
+        {
+          "addressSpace": "uniform",
+          "binding": 2,
+          "group": 0,
+          "name": "params",
+          "type": "FilterColorMatrixParams"
+        }
+      ],
+      "builtins": [
+        "global_invocation_id"
+      ],
+      "entryPoints": [
+        {
+          "name": "cs_main",
+          "stage": "compute",
+          "workgroupSize": [
+            "8",
+            "8",
+            "1"
+          ]
+        }
+      ],
+      "features": [
+        "if",
+        "let",
+        "return",
+        "saturate",
+        "textureDimensions",
+        "textureLoad",
+        "textureStore",
+        "var"
+      ],
+      "structs": [
+        "FilterColorMatrixParams"
+      ]
+    },
     "donner/gpu/shader/tests/testdata/flood.wgsl": {
       "bindings": [
         {

@@ -16,6 +16,7 @@
 
 #include "donner/gpu/shader/WgslEmitter.h"
 #include "donner/gpu/shader/programs/ColorMatrix.h"
+#include "donner/gpu/shader/programs/FilterColorMatrix.h"
 #include "donner/gpu/shader/programs/Flood.h"
 #include "donner/gpu/shader/programs/SolidFill.h"
 #include "donner/gpu/shader/programs/SubregionClip.h"
@@ -490,6 +491,103 @@ TEST(WgslEmitterGeodeValidation, NegativeControlDetectsSubregionClipSampleTypeMi
 
   EXPECT_THAT(errors, HasSubstr(kErrorMarker))
       << "A sampled-texture type mismatch did not surface at compute pipeline creation; "
+         "pipeline-time acceptance evidence would be meaningless";
+}
+
+/// Builds the color-matrix filter compute pipeline from \p module against a layout written for
+/// that program rather than borrowed from another with the same binding shape, so a pipeline
+/// miswired around this program's own uniform block, workgroup size, or entry point is caught.
+/// @param device WebGPU device to create through.
+/// @param module Shader module holding the `cs_main` entry point.
+/// @param outputAccess Storage-texture access declared for binding 1; the negative control passes
+///   ReadOnly to provoke an access mismatch with the shader's write-only declaration.
+void CreateFilterColorMatrixComputePipeline(
+    const wgpu::Device& device, const wgpu::ShaderModule& module,
+    wgpu::StorageTextureAccess outputAccess = wgpu::StorageTextureAccess::WriteOnly) {
+  wgpu::BindGroupLayoutEntry entries[3] = {};
+
+  entries[0].binding = 0;
+  entries[0].visibility = wgpu::ShaderStage::Compute;
+  entries[0].texture.sampleType = wgpu::TextureSampleType::Float;
+  entries[0].texture.viewDimension = wgpu::TextureViewDimension::_2D;
+
+  entries[1].binding = 1;
+  entries[1].visibility = wgpu::ShaderStage::Compute;
+  entries[1].storageTexture.access = outputAccess;
+  entries[1].storageTexture.format = wgpu::TextureFormat::RGBA8Unorm;
+  entries[1].storageTexture.viewDimension = wgpu::TextureViewDimension::_2D;
+
+  entries[2].binding = 2;
+  entries[2].visibility = wgpu::ShaderStage::Compute;
+  entries[2].buffer.type = wgpu::BufferBindingType::Uniform;
+
+  wgpu::BindGroupLayoutDescriptor bglDesc = {};
+  bglDesc.entryCount = 3;
+  bglDesc.entries = entries;
+  wgpu::BindGroupLayout bindGroupLayout = device.createBindGroupLayout(bglDesc);
+
+  wgpu::PipelineLayoutDescriptor plDesc = {};
+  plDesc.bindGroupLayoutCount = 1;
+  WGPUBindGroupLayout layouts[1] = {bindGroupLayout};
+  plDesc.bindGroupLayouts = layouts;
+  wgpu::PipelineLayout pipelineLayout = device.createPipelineLayout(plDesc);
+
+  wgpu::ComputePipelineDescriptor cpDesc = {};
+  cpDesc.layout = pipelineLayout;
+  cpDesc.compute.module = module;
+  cpDesc.compute.entryPoint = donner::geode::wgpuLabel("cs_main");
+
+  wgpu::ComputePipeline pipeline = device.createComputePipeline(cpDesc);
+  if (outputAccess == wgpu::StorageTextureAccess::WriteOnly) {
+    // Only the correct layout asserts on the handle; the sabotaged negative-control layout
+    // observes failure through the uncaptured-error marker instead.
+    EXPECT_TRUE(static_cast<bool>(pipeline)) << "Compute pipeline creation returned null";
+  }
+}
+
+TEST(WgslEmitterGeodeValidation, EmittedFilterColorMatrixPassesRendererValidation) {
+  auto geodeDevice = donner::geode::GeodeDevice::CreateHeadless();
+  if (!geodeDevice) {
+    GTEST_SKIP() << "No WebGPU-capable device available";
+  }
+
+  ShaderResult<IrModule> module = programs::BuildFilterColorMatrixModule();
+  ASSERT_THAT(module, HasShaderResult());
+  ShaderResult<std::string> wgsl = EmitWgsl(module.result());
+  ASSERT_FALSE(wgsl.hasError()) << "EmitWgsl failed: " << wgsl.error();
+
+  testing::internal::CaptureStderr();
+  wgpu::ShaderModule shaderModule = CreateModuleFromWgsl(geodeDevice->device(), wgsl.result());
+  ASSERT_TRUE(static_cast<bool>(shaderModule)) << "Shader module creation returned null";
+  CreateFilterColorMatrixComputePipeline(geodeDevice->device(), shaderModule);
+  const std::string errors = testing::internal::GetCapturedStderr();
+
+  EXPECT_THAT(errors, Not(HasSubstr(kErrorMarker)))
+      << "Renderer validation reported errors for the emitted compute WGSL";
+}
+
+TEST(WgslEmitterGeodeValidation, NegativeControlDetectsFilterColorMatrixStorageAccessMismatch) {
+  // The acceptance above is only evidence if this layout can report a fault at all: a read-only
+  // declaration of the destination contradicts the shader's write-only one and must trip the
+  // marker.
+  auto geodeDevice = donner::geode::GeodeDevice::CreateHeadless();
+  if (!geodeDevice) {
+    GTEST_SKIP() << "No WebGPU-capable device available";
+  }
+
+  ShaderResult<IrModule> module = programs::BuildFilterColorMatrixModule();
+  ASSERT_THAT(module, HasShaderResult());
+  ShaderResult<std::string> wgsl = EmitWgsl(module.result());
+  ASSERT_FALSE(wgsl.hasError()) << "EmitWgsl failed: " << wgsl.error();
+
+  testing::internal::CaptureStderr();
+  wgpu::ShaderModule shaderModule = CreateModuleFromWgsl(geodeDevice->device(), wgsl.result());
+  CreateFilterColorMatrixComputePipeline(geodeDevice->device(), shaderModule,
+                                         /*outputAccess=*/wgpu::StorageTextureAccess::ReadOnly);
+  const std::string errors = testing::internal::GetCapturedStderr();
+
+  EXPECT_THAT(errors, HasSubstr(kErrorMarker))
+      << "A storage-texture access mismatch did not surface at compute pipeline creation; "
          "pipeline-time acceptance evidence would be meaningless";
 }
 
