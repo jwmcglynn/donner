@@ -153,7 +153,7 @@ bazel_dep(name = "brotli", version = "1.2.0.bcr.1")
 # re2 is not used directly, but is selected by googletest and transitive test dependencies.
 bazel_dep(name = "re2", version = "2025-11-05.bcr.1", dev_dependency = True)
 bazel_dep(name = "googletest", version = "1.17.0.bcr.2", dev_dependency = True, repo_name = "com_google_gtest")
-bazel_dep(name = "nlohmann_json", version = "3.12.0.bcr.1", dev_dependency = True)
+bazel_dep(name = "nlohmann_json", version = "3.12.0.bcr.2", dev_dependency = True)
 bazel_dep(name = "google_benchmark", version = "1.9.5", dev_dependency = True)
 bazel_dep(name = "rules_shell", version = "0.8.0", dev_dependency = True)
 bazel_dep(name = "pixelmatch-cpp17", version = "1.0.3", dev_dependency = True)
