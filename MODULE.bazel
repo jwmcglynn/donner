@@ -145,7 +145,7 @@ single_version_override(
 )
 
 # brotli is required by @woff2 (see non_bcr_deps.bzl); text-full only.
-bazel_dep(name = "brotli", version = "1.2.0.bcr.1")
+bazel_dep(name = "brotli", version = "1.2.0.bcr.3")
 
 ##
 ## Test dependencies
