@@ -14,6 +14,7 @@
 #include <variant>
 #include <vector>
 
+#include "donner/base/Utils.h"
 #include "donner/gpu/CommandEncoder.h"
 #include "donner/gpu/shader/programs/FloodBindings.h"
 #include "donner/svg/components/filter/FilterGraph.h"
@@ -143,6 +144,12 @@ struct FilterResourceArena {
     // the encoder.
     (void)commandEncoder();
 
+    // The submit below replays into whatever host encoder is installed, and this pass belongs in
+    // the arena's own. A foreign one would put it in a command buffer nothing here submits.
+    UTILS_RELEASE_ASSERT_MSG(!device_.adapterDevice().hasHostCommandEncoder() ||
+                                 device_.adapterDevice().hostCommandEncoderIs(encoderSlot_->get()),
+                             "filter pass replayed into a command encoder the arena does not own");
+
     gpu::Result<std::unique_ptr<gpu::CommandEncoder>> encoder =
         device_.adapterDevice().createCommandEncoder();
     if (!encoder.hasResult()) {
@@ -221,11 +228,29 @@ struct FilterResourceArena {
     if (!*encoderSlot_) {
       return;
     }
+    // Identity, not "some host encoder is installed": the report and the re-point below describe
+    // this encoder, and claiming them for one the runtime is not replaying into would retire work
+    // that has not reached the queue.
+    const bool replayingIntoThisEncoder =
+        device_.adapterDevice().hostCommandEncoderIs(encoderSlot_->get());
     {
       ScopedWgpuHandle<wgpu::CommandBuffer> cmd(encoderSlot_->get().finish());
       if (cmd) {
         device_.queue().submit(1, &cmd.get());
         device_.countSubmit();
+        if (replayingIntoThisEncoder) {
+          // The runtime holds completion of anything it replayed into this encoder until the
+          // submit of the buffer finished from it is reported, and this is that submit. Reporting
+          // it anywhere later would either retire the replayed work before it reached the queue or
+          // strand it as never complete.
+          device_.adapterDevice().notifyHostSubmitted();
+        }
+      } else {
+        // Nothing recorded into this encoder can reach the queue now, so the frame's output is
+        // undefined and the pending serials must not be reported as submitted. Declaring the loss
+        // is what makes that observable and what stops later waits, rather than continuing as if
+        // the chunk had been submitted.
+        device_.markDeviceLost("filter chunk command encoder could not be finished");
       }
     }
     // A chunk boundary is a cross-submit edge inside one filter graph: pass
@@ -248,6 +273,9 @@ struct FilterResourceArena {
     wgpu::CommandEncoderDescriptor desc = {};
     desc.label = wgpuLabel("GeodeFilterChunkCE");
     encoderSlot_->reset(device_.device().createCommandEncoder(desc));
+    if (replayingIntoThisEncoder) {
+      device_.adapterDevice().setHostCommandEncoder(encoderSlot_->get());
+    }
   }
 
 private:

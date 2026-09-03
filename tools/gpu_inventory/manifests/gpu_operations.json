@@ -440,7 +440,6 @@
         "wgpuTextureOf"
       ],
       "wgpuCTypes": [
-        "WGPUCommandEncoder",
         "WGPUTexture",
         "WGPUTextureFormat",
         "WGPUTextureFormat_BGRA8Unorm",
@@ -763,6 +762,7 @@
         "WGPUBindGroupLayout",
         "WGPUBufferUsage",
         "WGPUColorWriteMask",
+        "WGPUCommandEncoder",
         "WGPUCompositeAlphaMode",
         "WGPUCompositeAlphaMode_Inherit",
         "WGPUCompositeAlphaMode_Premultiplied",

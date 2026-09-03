@@ -1491,6 +1491,11 @@ void GeodeWgpuAdapterDevice::setHostCommandEncoder(wgpu::CommandEncoder encoder)
   hostCommandEncoder_ = std::move(encoder);
 }
 
+bool GeodeWgpuAdapterDevice::hostCommandEncoderIs(const wgpu::CommandEncoder& encoder) const {
+  return static_cast<WGPUCommandEncoder>(hostCommandEncoder_) ==
+         static_cast<WGPUCommandEncoder>(encoder);
+}
+
 void GeodeWgpuAdapterDevice::clearHostCommandEncoder() {
   hostCommandEncoder_ = wgpu::CommandEncoder();
 }
