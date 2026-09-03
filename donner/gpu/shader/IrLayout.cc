@@ -89,6 +89,7 @@ ShaderResult<TypeLayout> ComputeTypeLayout(const IrType& type, AddressSpace addr
 
     case IrType::Kind::Texture2dF32:
     case IrType::Kind::Sampler:
+    case IrType::Kind::WriteOnlyStorageTexture2d:
       return ShaderError{
           std::format("{} is a resource type and has no host-shareable layout", type.toString()),
           "layout"};
