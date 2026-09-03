@@ -3,12 +3,13 @@
 /// A compute module exercising `sign`, `floor`, and `pow` in both their scalar and vector forms,
 /// shared by the emitter goldens and by the platform validators.
 ///
-/// The three opcodes reach no shipping program yet, so without this module their spellings and
-/// their SPIR-V lowerings would be checked only against the emitters' own idea of them. It also
-/// carries the composition the filter primitives need, `sign(x) * floor(abs(x) + 0.5)`: that
-/// recipe is round-half-away-from-zero, which is what the CPU filter path does and what WGSL
-/// `round` does not. The recipe itself lives in the programs library, so this module and the
-/// shipping program that offsets pixels declare one function rather than two.
+/// The offset and color space conversion programs reach the scalar form of all three opcodes; the
+/// vector forms reach none, so without this module their spellings and their SPIR-V lowerings
+/// would be checked only against the emitters' own idea of them. It also carries the composition
+/// the filter primitives need, `sign(x) * floor(abs(x) + 0.5)`: that recipe is
+/// round-half-away-from-zero, which is what the CPU filter path does and what WGSL `round` does
+/// not. The recipe itself lives in the programs library, so this module and the shipping program
+/// that offsets pixels declare one function rather than two.
 ///
 /// Each invocation reads one f32 from the input buffer and writes one texel encoding four
 /// results, so the same module doubles as an executable check of those results against the host.

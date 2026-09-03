@@ -295,7 +295,8 @@ TEST(SpirvValValidation, EmittedBoolVectorReductionsPassVulkan11Validation) {
 
 TEST(SpirvValValidation, EmittedMathPrimitivesPassVulkan11Validation) {
   // The validator is what confirms FSign, Floor, and Pow were given operand counts and result
-  // types the extended instruction set actually declares for them.
+  // types the extended instruction set actually declares for them, over the vector forms no
+  // shipping program reaches.
   const std::string spirvVal = FindSpirvVal();
   if (spirvVal.empty()) {
     GTEST_SKIP() << "spirv-val (SPIRV-Tools) is not installed";
