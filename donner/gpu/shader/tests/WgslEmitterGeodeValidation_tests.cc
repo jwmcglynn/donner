@@ -17,12 +17,15 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <iterator>
 #include <memory>
+#include <span>
 #include <string>
 #include <vector>
 
 #include "donner/gpu/shader/WgslEmitter.h"
 #include "donner/gpu/shader/programs/ColorMatrix.h"
+#include "donner/gpu/shader/programs/ColorSpaceConvert.h"
 #include "donner/gpu/shader/programs/FilterColorMatrix.h"
 #include "donner/gpu/shader/programs/Flood.h"
 #include "donner/gpu/shader/programs/Offset.h"
@@ -800,13 +803,22 @@ std::vector<uint8_t> OffsetExpectedTexels(float dx, float dy) {
   return expected;
 }
 
-/// Runs the offset program over \ref OffsetSourceTexels on the renderer's own device and returns
-/// the destination texels, tightly packed. Returns an empty vector on any GPU-side failure.
+/// Runs a compute program whose bind group is a sampled source, a write-only rgba8unorm
+/// destination, and a uniform block, over \p sourceTexels on the renderer's own device. Returns
+/// the destination texels tightly packed, or an empty vector on any GPU-side failure.
+///
 /// @param device WebGPU device to run on. @param queue Queue to submit on.
 /// @param wgsl Emitted WGSL for the program.
-/// @param dx Shift along x, in pixels. @param dy Shift along y, in pixels.
-std::vector<uint8_t> RunOffsetProgram(const wgpu::Device& device, const wgpu::Queue& queue,
-                                      const std::string& wgsl, float dx, float dy) {
+/// @param sourceTexels Source image, tightly packed rgba8unorm.
+/// @param width Image width in texels. @param height Image height in texels.
+/// @param uniforms Parameter block the program declares at binding 2.
+/// @param workgroupSize Size the entry point declares, along x and y.
+std::vector<uint8_t> RunInputOutputUniformProgram(const wgpu::Device& device,
+                                                  const wgpu::Queue& queue, const std::string& wgsl,
+                                                  const std::vector<uint8_t>& sourceTexels,
+                                                  uint32_t width, uint32_t height,
+                                                  std::span<const uint8_t> uniforms,
+                                                  uint32_t workgroupSize) {
   wgpu::BindGroupLayoutEntry layoutEntries[3] = {};
   layoutEntries[0].binding = 0;
   layoutEntries[0].visibility = wgpu::ShaderStage::Compute;
@@ -842,7 +854,7 @@ std::vector<uint8_t> RunOffsetProgram(const wgpu::Device& device, const wgpu::Qu
   }
 
   wgpu::TextureDescriptor sourceDesc = {};
-  sourceDesc.size = {kOffsetExtent, kOffsetExtent, 1};
+  sourceDesc.size = {width, height, 1};
   sourceDesc.format = wgpu::TextureFormat::RGBA8Unorm;
   sourceDesc.usage = wgpu::TextureUsage::TextureBinding | wgpu::TextureUsage::CopyDst;
   sourceDesc.mipLevelCount = 1;
@@ -850,15 +862,14 @@ std::vector<uint8_t> RunOffsetProgram(const wgpu::Device& device, const wgpu::Qu
   sourceDesc.dimension = wgpu::TextureDimension::_2D;
   wgpu::Texture source = device.createTexture(sourceDesc);
 
-  const std::vector<uint8_t> sourceTexels = OffsetSourceTexels();
   wgpu::TexelCopyTextureInfo sourceCopy = {};
   sourceCopy.texture = source;
   sourceCopy.mipLevel = 0;
   sourceCopy.origin = {0, 0, 0};
   wgpu::TexelCopyBufferLayout sourceLayout = {};
-  sourceLayout.bytesPerRow = kOffsetExtent * 4u;
-  sourceLayout.rowsPerImage = kOffsetExtent;
-  wgpu::Extent3D sourceExtent = {kOffsetExtent, kOffsetExtent, 1};
+  sourceLayout.bytesPerRow = width * 4u;
+  sourceLayout.rowsPerImage = height;
+  wgpu::Extent3D sourceExtent = {width, height, 1};
   queue.writeTexture(sourceCopy, sourceTexels.data(), sourceTexels.size(), sourceLayout,
                      sourceExtent);
 
@@ -866,12 +877,11 @@ std::vector<uint8_t> RunOffsetProgram(const wgpu::Device& device, const wgpu::Qu
   destinationDesc.usage = wgpu::TextureUsage::StorageBinding | wgpu::TextureUsage::CopySrc;
   wgpu::Texture destination = device.createTexture(destinationDesc);
 
-  const float params[4] = {dx, dy, 0.0f, 0.0f};
   wgpu::BufferDescriptor paramsDesc = {};
-  paramsDesc.size = sizeof(params);
+  paramsDesc.size = uniforms.size();
   paramsDesc.usage = wgpu::BufferUsage::Uniform | wgpu::BufferUsage::CopyDst;
   wgpu::Buffer paramsBuffer = device.createBuffer(paramsDesc);
-  queue.writeBuffer(paramsBuffer, 0, params, sizeof(params));
+  queue.writeBuffer(paramsBuffer, 0, uniforms.data(), uniforms.size());
 
   wgpu::TextureView sourceView = source.createView();
   wgpu::TextureView destinationView = destination.createView();
@@ -884,7 +894,7 @@ std::vector<uint8_t> RunOffsetProgram(const wgpu::Device& device, const wgpu::Qu
   bgEntries[2].binding = 2;
   bgEntries[2].buffer = paramsBuffer;
   bgEntries[2].offset = 0;
-  bgEntries[2].size = sizeof(params);
+  bgEntries[2].size = uniforms.size();
 
   wgpu::BindGroupDescriptor bgDesc = {};
   bgDesc.layout = bindGroupLayout;
@@ -892,7 +902,7 @@ std::vector<uint8_t> RunOffsetProgram(const wgpu::Device& device, const wgpu::Qu
   bgDesc.entries = bgEntries;
   wgpu::BindGroup bindGroup = device.createBindGroup(bgDesc);
 
-  const uint64_t readbackSize = uint64_t{kReadbackBytesPerRow} * kOffsetExtent;
+  const uint64_t readbackSize = uint64_t{kReadbackBytesPerRow} * height;
   wgpu::BufferDescriptor readbackDesc = {};
   readbackDesc.size = readbackSize;
   readbackDesc.usage = wgpu::BufferUsage::CopyDst | wgpu::BufferUsage::MapRead;
@@ -904,8 +914,8 @@ std::vector<uint8_t> RunOffsetProgram(const wgpu::Device& device, const wgpu::Qu
     wgpu::ComputePassEncoder pass = encoder.beginComputePass(passDesc);
     pass.setPipeline(pipeline);
     pass.setBindGroup(0, bindGroup, 0, nullptr);
-    pass.dispatchWorkgroups(kOffsetExtent / programs::kOffsetWorkgroupSize,
-                            kOffsetExtent / programs::kOffsetWorkgroupSize, 1);
+    pass.dispatchWorkgroups((width + workgroupSize - 1) / workgroupSize,
+                            (height + workgroupSize - 1) / workgroupSize, 1);
     pass.end();
   }
 
@@ -917,9 +927,9 @@ std::vector<uint8_t> RunOffsetProgram(const wgpu::Device& device, const wgpu::Qu
   wgpu::TexelCopyBufferInfo dst = {};
   dst.buffer = readback;
   dst.layout.bytesPerRow = kReadbackBytesPerRow;
-  dst.layout.rowsPerImage = kOffsetExtent;
+  dst.layout.rowsPerImage = height;
 
-  wgpu::Extent3D copySize = {kOffsetExtent, kOffsetExtent, 1};
+  wgpu::Extent3D copySize = {width, height, 1};
   encoder.copyTextureToBuffer(src, dst, copySize);
 
   wgpu::CommandBuffer commands = encoder.finish();
@@ -930,14 +940,27 @@ std::vector<uint8_t> RunOffsetProgram(const wgpu::Device& device, const wgpu::Qu
     return {};
   }
 
-  std::vector<uint8_t> texels(size_t{kOffsetExtent} * kOffsetExtent * 4u);
-  for (uint32_t y = 0; y < kOffsetExtent; ++y) {
+  std::vector<uint8_t> texels(size_t{width} * height * 4u);
+  for (uint32_t y = 0; y < height; ++y) {
     const size_t rowStart = size_t{y} * kReadbackBytesPerRow;
     std::copy(padded.begin() + static_cast<ptrdiff_t>(rowStart),
-              padded.begin() + static_cast<ptrdiff_t>(rowStart + kOffsetExtent * 4u),
-              texels.begin() + static_cast<ptrdiff_t>(size_t{y} * kOffsetExtent * 4u));
+              padded.begin() + static_cast<ptrdiff_t>(rowStart + size_t{width} * 4u),
+              texels.begin() + static_cast<ptrdiff_t>(size_t{y} * width * 4u));
   }
   return texels;
+}
+
+/// Runs the offset program with a shift of (\p dx, \p dy) over \ref OffsetSourceTexels.
+/// @param device WebGPU device to run on. @param queue Queue to submit on.
+/// @param wgsl Emitted WGSL for the program.
+/// @param dx Shift along x, in pixels. @param dy Shift along y, in pixels.
+std::vector<uint8_t> RunOffsetProgram(const wgpu::Device& device, const wgpu::Queue& queue,
+                                      const std::string& wgsl, float dx, float dy) {
+  const float params[4] = {dx, dy, 0.0f, 0.0f};
+  return RunInputOutputUniformProgram(
+      device, queue, wgsl, OffsetSourceTexels(), kOffsetExtent, kOffsetExtent,
+      std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(params), sizeof(params)),
+      programs::kOffsetWorkgroupSize);
 }
 
 TEST(WgslEmitterGeodeValidation, OffsetRunsOnTheDeviceAndMatchesTheCpuPath) {
@@ -971,6 +994,217 @@ TEST(WgslEmitterGeodeValidation, OffsetRunsOnTheDeviceAndMatchesTheCpuPath) {
         << "the device diverges from the CPU path for shift (" << shift.dx << ", " << shift.dy
         << ")";
   }
+}
+
+/// Builds the color space conversion compute pipeline from \p module, mirroring the bind group
+/// layout the program declares: sampled input texture, write-only rgba8unorm storage output, and
+/// uniform params, all compute-visible.
+/// @param device WebGPU device to create through.
+/// @param module Shader module holding the `cs_main` entry point.
+/// @param outputFormat Storage-texture format declared for binding 1; the negative control passes
+///   RGBA16Float to provoke a mismatch with the shader's rgba8unorm declaration.
+void CreateColorSpaceConvertComputePipeline(
+    const wgpu::Device& device, const wgpu::ShaderModule& module,
+    wgpu::TextureFormat outputFormat = wgpu::TextureFormat::RGBA8Unorm) {
+  wgpu::BindGroupLayoutEntry entries[3] = {};
+
+  entries[0].binding = 0;
+  entries[0].visibility = wgpu::ShaderStage::Compute;
+  entries[0].texture.sampleType = wgpu::TextureSampleType::Float;
+  entries[0].texture.viewDimension = wgpu::TextureViewDimension::_2D;
+
+  entries[1].binding = 1;
+  entries[1].visibility = wgpu::ShaderStage::Compute;
+  entries[1].storageTexture.access = wgpu::StorageTextureAccess::WriteOnly;
+  entries[1].storageTexture.format = outputFormat;
+  entries[1].storageTexture.viewDimension = wgpu::TextureViewDimension::_2D;
+
+  entries[2].binding = 2;
+  entries[2].visibility = wgpu::ShaderStage::Compute;
+  entries[2].buffer.type = wgpu::BufferBindingType::Uniform;
+
+  wgpu::BindGroupLayoutDescriptor bglDesc = {};
+  bglDesc.entryCount = 3;
+  bglDesc.entries = entries;
+  wgpu::BindGroupLayout bindGroupLayout = device.createBindGroupLayout(bglDesc);
+
+  wgpu::PipelineLayoutDescriptor plDesc = {};
+  plDesc.bindGroupLayoutCount = 1;
+  WGPUBindGroupLayout layouts[1] = {bindGroupLayout};
+  plDesc.bindGroupLayouts = layouts;
+  wgpu::PipelineLayout pipelineLayout = device.createPipelineLayout(plDesc);
+
+  wgpu::ComputePipelineDescriptor cpDesc = {};
+  cpDesc.layout = pipelineLayout;
+  cpDesc.compute.module = module;
+  cpDesc.compute.entryPoint = donner::geode::wgpuLabel("cs_main");
+
+  wgpu::ComputePipeline pipeline = device.createComputePipeline(cpDesc);
+  if (outputFormat == wgpu::TextureFormat::RGBA8Unorm) {
+    // Only the correct layout asserts on the handle; the sabotaged negative-control layout
+    // observes failure through the uncaptured-error marker instead.
+    EXPECT_TRUE(static_cast<bool>(pipeline)) << "Compute pipeline creation returned null";
+  }
+}
+
+TEST(WgslEmitterGeodeValidation, EmittedColorSpaceConvertPassesRendererValidation) {
+  auto geodeDevice = donner::geode::GeodeDevice::CreateHeadless();
+  if (!geodeDevice) {
+    GTEST_SKIP() << "No WebGPU-capable device available";
+  }
+
+  ShaderResult<IrModule> module = programs::BuildColorSpaceConvertModule();
+  ASSERT_THAT(module, HasShaderResult());
+  ShaderResult<std::string> wgsl = EmitWgsl(module.result());
+  ASSERT_FALSE(wgsl.hasError()) << "EmitWgsl failed: " << wgsl.error();
+
+  testing::internal::CaptureStderr();
+  wgpu::ShaderModule shaderModule = CreateModuleFromWgsl(geodeDevice->device(), wgsl.result());
+  ASSERT_TRUE(static_cast<bool>(shaderModule)) << "Shader module creation returned null";
+  CreateColorSpaceConvertComputePipeline(geodeDevice->device(), shaderModule);
+  const std::string errors = testing::internal::GetCapturedStderr();
+
+  EXPECT_THAT(errors, Not(HasSubstr(kErrorMarker)))
+      << "Renderer validation reported errors for the emitted compute WGSL";
+}
+
+TEST(WgslEmitterGeodeValidation, NegativeControlDetectsColorSpaceConvertStorageFormatMismatch) {
+  // The detection evidence for this layout is the storage texture's format, an axis no other
+  // program's control covers: a half-float destination contradicts the shader's rgba8unorm one
+  // while leaving its access and dimension right, and must still trip the marker.
+  auto geodeDevice = donner::geode::GeodeDevice::CreateHeadless();
+  if (!geodeDevice) {
+    GTEST_SKIP() << "No WebGPU-capable device available";
+  }
+
+  ShaderResult<IrModule> module = programs::BuildColorSpaceConvertModule();
+  ASSERT_THAT(module, HasShaderResult());
+  ShaderResult<std::string> wgsl = EmitWgsl(module.result());
+  ASSERT_FALSE(wgsl.hasError()) << "EmitWgsl failed: " << wgsl.error();
+
+  testing::internal::CaptureStderr();
+  wgpu::ShaderModule shaderModule = CreateModuleFromWgsl(geodeDevice->device(), wgsl.result());
+  CreateColorSpaceConvertComputePipeline(geodeDevice->device(), shaderModule,
+                                         /*outputFormat=*/wgpu::TextureFormat::RGBA16Float);
+  const std::string errors = testing::internal::GetCapturedStderr();
+
+  EXPECT_THAT(errors, HasSubstr(kErrorMarker))
+      << "A storage-texture format mismatch did not surface at compute pipeline creation; "
+         "pipeline-time acceptance evidence would be meaningless";
+}
+
+/// The channel values the transfer is checked over: both bytes that straddle the sRGB-encoded
+/// breakpoint, both that straddle the linear one, the ends of the range, and enough of the middle
+/// that a breakpoint moved by a decimal place changes an answer rather than a last digit.
+constexpr uint8_t kTransferChannelValues[] = {0,  1,  2,  3,   10,  11,  12,  20,
+                                              32, 64, 96, 128, 160, 200, 250, 255};
+
+/// Width of the image the transfer is run over: one texel per checked channel value.
+constexpr uint32_t kTransferExtent = static_cast<uint32_t>(std::size(kTransferChannelValues));
+
+/// The sRGB transfer's forward direction on the host, spelled as the CPU filter path spells it.
+/// @param c Channel value in [0, 1], sRGB-encoded.
+float SrgbChannelToLinearOnHost(float c) {
+  if (c <= 0.04045f) {
+    return c / 12.92f;
+  }
+  return std::pow((c + 0.055f) / 1.055f, 2.4f);
+}
+
+/// The sRGB transfer's inverse on the host, spelled as the CPU filter path spells it.
+/// @param c Channel value in [0, 1], linear light.
+float LinearChannelToSrgbOnHost(float c) {
+  if (c <= 0.0031308f) {
+    return c * 12.92f;
+  }
+  return 1.055f * std::pow(c, 1.0f / 2.4f) - 0.055f;
+}
+
+/// The source image the transfer is run over: one opaque texel per checked channel value, with
+/// all three color channels set to it, plus nothing else so the comparison is per-value.
+std::vector<uint8_t> TransferSourceTexels() {
+  std::vector<uint8_t> texels(size_t{kTransferExtent} * 4u);
+  for (uint32_t i = 0; i < kTransferExtent; ++i) {
+    texels[i * 4u + 0u] = kTransferChannelValues[i];
+    texels[i * 4u + 1u] = kTransferChannelValues[i];
+    texels[i * 4u + 2u] = kTransferChannelValues[i];
+    texels[i * 4u + 3u] = 255u;
+  }
+  return texels;
+}
+
+TEST(WgslEmitterGeodeValidation, ColorSpaceConvertRunsOnTheDeviceAndMatchesTheCpuPath) {
+  // Both directions of the transfer, over a table that straddles both breakpoints: the
+  // sRGB-encoded one falls between the bytes 10 and 11, the linear one between 0 and 1. A
+  // breakpoint written a decimal place off would send the middle of the range through the wrong
+  // segment, which is a whole different answer rather than a last-digit one.
+  auto geodeDevice = donner::geode::GeodeDevice::CreateHeadless();
+  if (!geodeDevice) {
+    GTEST_SKIP() << "No WebGPU-capable device available";
+  }
+
+  ShaderResult<IrModule> module = programs::BuildColorSpaceConvertModule();
+  ASSERT_THAT(module, HasShaderResult());
+  ShaderResult<std::string> wgsl = EmitWgsl(module.result());
+  ASSERT_FALSE(wgsl.hasError()) << "EmitWgsl failed: " << wgsl.error();
+
+  struct Direction {
+    uint32_t value;
+    float (*onHost)(float);
+    const char* name;
+  };
+  const Direction directions[] = {
+      {programs::kColorSpaceConvertSrgbToLinear, &SrgbChannelToLinearOnHost, "sRGB to linear"},
+      {programs::kColorSpaceConvertLinearToSrgb, &LinearChannelToSrgbOnHost, "linear to sRGB"}};
+
+  for (const Direction& direction : directions) {
+    const uint32_t params[4] = {direction.value, 0u, 0u, 0u};
+    const std::vector<uint8_t> texels = RunInputOutputUniformProgram(
+        geodeDevice->device(), geodeDevice->queue(), wgsl.result(), TransferSourceTexels(),
+        kTransferExtent, 1,
+        std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(params), sizeof(params)),
+        programs::kColorSpaceConvertWorkgroupSize);
+    ASSERT_THAT(texels, testing::SizeIs(size_t{kTransferExtent} * 4u))
+        << "dispatch failed for " << direction.name;
+
+    for (uint32_t i = 0; i < kTransferExtent; ++i) {
+      const float input = static_cast<float>(kTransferChannelValues[i]) / 255.0f;
+      const float expected = std::clamp(direction.onHost(input), 0.0f, 1.0f) * 255.0f;
+      for (uint32_t channel = 0; channel < 3u; ++channel) {
+        // The transfer's curve is a transcendental and the destination is eight bits, so the
+        // comparison is held to the quantization step rather than to an exact byte.
+        EXPECT_NEAR(static_cast<double>(texels[i * 4u + channel]), static_cast<double>(expected),
+                    1.0)
+            << direction.name << " of channel byte " << static_cast<int>(kTransferChannelValues[i]);
+      }
+      EXPECT_THAT(texels[i * 4u + 3u], testing::Eq(255u))
+          << "alpha is not a color channel and must cross " << direction.name << " unchanged";
+    }
+  }
+}
+
+TEST(WgslEmitterGeodeValidation, ColorSpaceConvertLeavesATransparentTexelTransparent) {
+  // A fully transparent texel has no straight-alpha color to recover. The program divides by
+  // alpha only where there is one, so this is the arm that a missing guard would turn into a
+  // division by zero.
+  auto geodeDevice = donner::geode::GeodeDevice::CreateHeadless();
+  if (!geodeDevice) {
+    GTEST_SKIP() << "No WebGPU-capable device available";
+  }
+
+  ShaderResult<IrModule> module = programs::BuildColorSpaceConvertModule();
+  ASSERT_THAT(module, HasShaderResult());
+  ShaderResult<std::string> wgsl = EmitWgsl(module.result());
+  ASSERT_FALSE(wgsl.hasError()) << "EmitWgsl failed: " << wgsl.error();
+
+  std::vector<uint8_t> source(size_t{kTransferExtent} * 4u, 0u);
+  const uint32_t params[4] = {programs::kColorSpaceConvertSrgbToLinear, 0u, 0u, 0u};
+  const std::vector<uint8_t> texels = RunInputOutputUniformProgram(
+      geodeDevice->device(), geodeDevice->queue(), wgsl.result(), source, kTransferExtent, 1,
+      std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(params), sizeof(params)),
+      programs::kColorSpaceConvertWorkgroupSize);
+  ASSERT_THAT(texels, testing::SizeIs(size_t{kTransferExtent} * 4u));
+  EXPECT_THAT(texels, testing::Each(testing::Eq(0u)));
 }
 
 /// Encodes \p value the way the math-primitive module encodes a signed result into a texel: the

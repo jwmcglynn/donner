@@ -74,6 +74,7 @@ donner_cc_library(
 donner_cc_library(
     name = "program_bindings",
     hdrs = [
+        "programs/ColorSpaceConvertBindings.h",
         "programs/FilterColorMatrixBindings.h",
         "programs/FloodBindings.h",
         "programs/OffsetBindings.h",
@@ -87,6 +88,7 @@ donner_cc_library(
     name = "programs",
     srcs = [
         "programs/ColorMatrix.cc",
+        "programs/ColorSpaceConvert.cc",
         "programs/FilterColorMatrix.cc",
         "programs/Flood.cc",
         "programs/Offset.cc",
@@ -97,6 +99,7 @@ donner_cc_library(
     ],
     hdrs = [
         "programs/ColorMatrix.h",
+        "programs/ColorSpaceConvert.h",
         "programs/ErrorLatch.h",
         "programs/FilterColorMatrix.h",
         "programs/Flood.h",
@@ -118,6 +121,7 @@ donner_cc_test(
     name = "shader_tests",
     srcs = [
         "tests/ColorMatrixProgram_tests.cc",
+        "tests/ColorSpaceConvertProgram_tests.cc",
         "tests/FilterColorMatrixProgram_tests.cc",
         "tests/FloodProgram_tests.cc",
         "tests/IrBuilder_tests.cc",
@@ -140,6 +144,9 @@ donner_cc_test(
         "tests/testdata/color_matrix.msl",
         "tests/testdata/color_matrix.spv",
         "tests/testdata/color_matrix.wgsl",
+        "tests/testdata/color_space_convert.msl",
+        "tests/testdata/color_space_convert.spv",
+        "tests/testdata/color_space_convert.wgsl",
         "tests/testdata/filter_color_matrix.msl",
         "tests/testdata/filter_color_matrix.spv",
         "tests/testdata/filter_color_matrix.wgsl",
@@ -255,6 +262,7 @@ donner_multi_transitioned_test(
 filegroup(
     name = "program_goldens",
     srcs = [
+        "tests/testdata/color_space_convert.wgsl",
         "tests/testdata/filter_color_matrix.wgsl",
         "tests/testdata/flood.wgsl",
         "tests/testdata/offset.wgsl",

@@ -18,6 +18,7 @@
 
 #include "donner/gpu/shader/MslEmitter.h"
 #include "donner/gpu/shader/programs/ColorMatrix.h"
+#include "donner/gpu/shader/programs/ColorSpaceConvert.h"
 #include "donner/gpu/shader/programs/FilterColorMatrix.h"
 #include "donner/gpu/shader/programs/Flood.h"
 #include "donner/gpu/shader/programs/Offset.h"
@@ -204,9 +205,9 @@ TEST(MslXcrunValidation, EmittedMathPrimitivesCompileWithMetalCompiler) {
   if (!skipReason.empty()) {
     GTEST_SKIP() << skipReason;
   }
-  // pow reaches no shipping program yet, and the vector forms of sign and floor reach none
-  // either, so this is the only place a real Metal front end sees them; a name MSL does not have
-  // would otherwise pass every in-repo check.
+  // The vector forms of sign, floor, and pow reach no shipping program, so this is the only
+  // place a real Metal front end sees them; a name MSL does not have would otherwise pass every
+  // in-repo check.
   ExpectCompilesWithMetalCompiler(BuildMathPrimitiveModule(), "math_primitives");
 }
 
@@ -242,6 +243,16 @@ TEST(MslXcrunValidation, EmittedOffsetComputeCompilesWithMetalCompiler) {
   // The first compute program to call a function of its own, so this is where the compiler
   // confirms the declaration order the emitter writes is one Metal accepts for a kernel.
   ExpectCompilesWithMetalCompiler(programs::BuildOffsetModule(), "offset");
+}
+
+TEST(MslXcrunValidation, EmittedColorSpaceConvertCompilesWithMetalCompiler) {
+  const std::string skipReason = FindMetalCompilerSkipReason();
+  if (!skipReason.empty()) {
+    GTEST_SKIP() << skipReason;
+  }
+  // The first shipping program to reach pow, and the first whose own functions carry an early
+  // return out of a branch, both of which the compiler is what confirms.
+  ExpectCompilesWithMetalCompiler(programs::BuildColorSpaceConvertModule(), "color_space_convert");
 }
 
 TEST(MslXcrunValidation, NegativeControlDetectsInvalidMsl) {

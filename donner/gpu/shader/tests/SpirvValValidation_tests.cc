@@ -20,6 +20,7 @@
 #include "donner/gpu/shader/IrModule.h"
 #include "donner/gpu/shader/SpirvEmitter.h"
 #include "donner/gpu/shader/programs/ColorMatrix.h"
+#include "donner/gpu/shader/programs/ColorSpaceConvert.h"
 #include "donner/gpu/shader/programs/FilterColorMatrix.h"
 #include "donner/gpu/shader/programs/Flood.h"
 #include "donner/gpu/shader/programs/Offset.h"
@@ -235,6 +236,18 @@ TEST(SpirvValValidation, EmittedOffsetComputePassesVulkan11Validation) {
     GTEST_SKIP() << "spirv-val (SPIRV-Tools) is not installed";
   }
   ExpectValidatesForVulkan11(spirvVal, programs::BuildOffsetModule(), "offset.spv");
+}
+
+TEST(SpirvValValidation, EmittedColorSpaceConvertPassesVulkan11Validation) {
+  // The first shipping program to reach the Pow extended instruction, and one whose functions
+  // return out of a structured branch, so the validator is what confirms the merge blocks the
+  // emitter writes around those returns are well formed.
+  const std::string spirvVal = FindSpirvVal();
+  if (spirvVal.empty()) {
+    GTEST_SKIP() << "spirv-val (SPIRV-Tools) is not installed";
+  }
+  ExpectValidatesForVulkan11(spirvVal, programs::BuildColorSpaceConvertModule(),
+                             "color_space_convert.spv");
 }
 
 TEST(SpirvValValidation, AStorageBlockHoldingBothMatrixTypesPassesVulkan11Validation) {
