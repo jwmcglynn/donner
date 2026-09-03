@@ -15,7 +15,6 @@
 #include "embed_resources/FilterImageWgsl.h"
 #include "embed_resources/FilterMergeWgsl.h"
 #include "embed_resources/FilterMorphologyWgsl.h"
-#include "embed_resources/FilterOffsetWgsl.h"
 #include "embed_resources/FilterSpecularLightingWgsl.h"
 #include "embed_resources/FilterTileWgsl.h"
 #include "embed_resources/FilterTurbulenceWgsl.h"
@@ -93,11 +92,6 @@ gpu::Result<gpu::ShaderModule> createImageBlitShader(gpu::Device& device) {
 wgpu::ShaderModule createGaussianBlurShader(const wgpu::Device& device) {
   return createShaderFromWgsl(device, "GaussianBlur", donner::embedded::kGaussianBlurWgsl.data(),
                               donner::embedded::kGaussianBlurWgsl.size());
-}
-
-wgpu::ShaderModule createFilterOffsetShader(const wgpu::Device& device) {
-  return createShaderFromWgsl(device, "FilterOffset", donner::embedded::kFilterOffsetWgsl.data(),
-                              donner::embedded::kFilterOffsetWgsl.size());
 }
 
 wgpu::ShaderModule createFilterMergeShader(const wgpu::Device& device) {

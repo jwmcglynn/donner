@@ -101,24 +101,6 @@ gpu::Result<gpu::ShaderModule> createImageBlitShader(gpu::Device& device);
 wgpu::ShaderModule createGaussianBlurShader(const wgpu::Device& device);
 
 /**
- * Compile the feOffset compute shader for the given device.
- *
- * The WGSL source is embedded at build time from
- * `shaders/filter_offset.wgsl` via the `embed_resources()` Bazel rule.
- * The shader shifts input pixels by a uniform (dx, dy) offset with
- * configurable edge-mode handling.
- *
- * Bind group layout:
- * - `@group(0) @binding(0) var input_tex: texture_2d<f32>;`
- * - `@group(0) @binding(1) var output_tex: texture_storage_2d<rgba8unorm, write>;`
- * - `@group(0) @binding(2) var<uniform> params: OffsetParams;`
- *
- * @return A valid shader module on success, or an empty module if compilation
- *   failed (errors go to the device's uncaptured error callback).
- */
-wgpu::ShaderModule createFilterOffsetShader(const wgpu::Device& device);
-
-/**
  * Compile the feMerge alpha-over blit compute shader for the given device.
  *
  * The WGSL source is embedded at build time from

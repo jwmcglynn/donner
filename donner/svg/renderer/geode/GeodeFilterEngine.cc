@@ -18,6 +18,7 @@
 #include "donner/gpu/CommandEncoder.h"
 #include "donner/gpu/shader/programs/FilterColorMatrixBindings.h"
 #include "donner/gpu/shader/programs/FloodBindings.h"
+#include "donner/gpu/shader/programs/OffsetBindings.h"
 #include "donner/gpu/shader/programs/SubregionClipBindings.h"
 #include "donner/svg/components/filter/FilterGraph.h"
 #include "donner/svg/renderer/PixelFormatUtils.h"
@@ -28,6 +29,7 @@
 #include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
 #include "embed_resources/FilterColorMatrixWgsl.h"
 #include "embed_resources/FloodWgsl.h"
+#include "embed_resources/OffsetWgsl.h"
 #include "embed_resources/SubregionClipWgsl.h"
 
 namespace donner::geode {
@@ -562,11 +564,13 @@ struct BlurParams {
 };
 
 /// Uniform buffer layout matching the WGSL `OffsetParams` struct.
+/// Uniform buffer layout mirroring the shader program's `OffsetParams` struct: the shift in
+/// pixels, rounded on the device so the rule that rounds it is the one the shader states.
 struct OffsetParams {
-  float dx;
-  float dy;
-  uint32_t edgeMode;
-  uint32_t pad;
+  float dx;       //!< Shift along x, in pixels.
+  float dy;       //!< Shift along y, in pixels.
+  uint32_t pad0;  //!< Trailing word the program declares; the two sizes must agree.
+  uint32_t pad1;  //!< Trailing word the program declares; the two sizes must agree.
 };
 
 /// Uniform buffer layout mirroring the shader program's `FilterColorMatrixParams` struct.
@@ -1565,12 +1569,16 @@ GeodeFilterEngine::GeodeFilterEngine(GeodeDevice& device, bool verbose)
     gaussianBlurPipeline_ = std::move(pipeline);
   }
 
-  // --- feOffset pipeline ---
+  // --- feOffset pipeline, through the GPU runtime ---
   {
-    auto [bgl, pipeline] = createInputOutputUniformPipeline(
-        dev, "FilterOffset", createFilterOffsetShader(dev), sizeof(OffsetParams));
-    offsetBindGroupLayout_ = std::move(bgl);
-    offsetPipeline_ = std::move(pipeline);
+    using gpu::shader::programs::OffsetBinding;
+    offsetProgram_ = CreateRuntimeComputeProgram(
+        device_.adapterDevice(), "FilterOffset", EmbeddedWgsl(donner::embedded::kOffsetWgsl),
+        gpu::shader::programs::kOffsetEntryPoint,
+        {SampledInputEntry(static_cast<uint32_t>(OffsetBinding::InputTexture)),
+         StorageOutputEntry(static_cast<uint32_t>(OffsetBinding::OutputTexture)),
+         UniformParamsEntry(static_cast<uint32_t>(OffsetBinding::Params))},
+        gpu::shader::programs::kOffsetWorkgroupSize);
   }
 
   // --- feColorMatrix pipeline, through the GPU runtime ---
@@ -2958,29 +2966,32 @@ wgpu::Texture GeodeFilterEngine::runBoxBlurPass(FilterResourceArena& arena,
 wgpu::Texture GeodeFilterEngine::applyOffset(
     FilterResourceArena& arena, const wgpu::Texture& input,
     const svg::components::filter_primitive::Offset& primitive) {
-  const wgpu::Device& dev = device_.device();
-  const uint32_t width = input.getWidth();
-  const uint32_t height = input.getHeight();
-
   // Zero offset → passthrough.
   if (primitive.dx == 0.0 && primitive.dy == 0.0) {
     return input;
   }
 
-  wgpu::Texture output = createIntermediateTexture(arena, dev, width, height, "FilterOffsetOutput");
+  const gpu::Texture* output = arena.createRuntimeTexture(gpu::TextureDescriptor{
+      "FilterOffsetOutput", gpu::Extent2d{input.getWidth(), input.getHeight()},
+      gpu::TextureFormat::RGBA8Unorm,
+      gpu::TextureUsage::StorageBinding | gpu::TextureUsage::Sampled | gpu::TextureUsage::CopySrc});
+  if (output == nullptr) {
+    return {};
+  }
 
   OffsetParams params{};
   params.dx = static_cast<float>(primitive.dx);
   params.dy = static_cast<float>(primitive.dy);
-  params.edgeMode = 0;  // None (transparent OOB).
-  params.pad = 0;
+  params.pad0 = 0;
+  params.pad1 = 0;
 
-  auto uniformBuffer = writeUniformSlot(*resourceCache_, device_, &params, sizeof(params));
+  if (!dispatchRuntimeInputOutputUniform(arena, offsetProgram_, input, *output,
+                                         UniformBytes(params), "FilterOffsetPass",
+                                         gpu::shader::programs::kOffsetWorkgroupSize)) {
+    return {};
+  }
 
-  dispatchInputOutputUniform(arena, device_, offsetBindGroupLayout_.get(), offsetPipeline_.get(),
-                             input, output, uniformBuffer.buffer, uniformBuffer.offset,
-                             sizeof(OffsetParams), "FilterOffsetPass");
-  return output;
+  return device_.adapterDevice().wgpuTextureOf(*output);
 }
 
 wgpu::Texture GeodeFilterEngine::applyColorMatrix(

@@ -2580,6 +2580,75 @@ TEST_F(RendererGeodeTest, FilterOffsetShiftsPixels) {
   EXPECT_THAT(original, IsTransparent()) << "Original top-left should be transparent after offset";
 }
 
+/// feOffset with a shift that differs along the two axes, so a pass that transposes them is
+/// visible. The symmetric case above cannot see that: swapping its two equal components is the
+/// identity.
+TEST_F(RendererGeodeTest, FilterOffsetKeepsTheAxesApart) {
+  RendererGeode renderer = createRenderer();
+  beginFrame(renderer);
+
+  components::FilterGraph graph;
+  components::FilterNode offsetNode;
+  components::filter_primitive::Offset offset;
+  offset.dx = 6.0;
+  offset.dy = -3.0;
+  offsetNode.primitive = offset;
+  offsetNode.inputs.push_back(components::FilterStandardInput::SourceGraphic);
+  graph.nodes.push_back(offsetNode);
+
+  renderer.pushFilterLayer(graph, Box2d({0, 0}, {kViewportSize, kViewportSize}));
+
+  renderer.setPaint(solidFill(css::RGBA(255, 0, 0, 255)));
+  renderer.setTransform(Transform2d());
+  renderer.drawRect(Box2d({16, 16}, {48, 48}), StrokeParams{});
+
+  renderer.popFilterLayer();
+  renderer.endFrame();
+
+  RendererBitmap snap = renderer.takeSnapshot();
+  ASSERT_FALSE(snap.empty());
+
+  // The rect moves to [22, 13] - [54, 45]. Transposing the shift would move it to
+  // [13, 22] - [45, 54] instead, which contains neither of these two texels nor misses them.
+  EXPECT_THAT(pixelAt(snap, 52, 20), RgbaEq(255, 0, 0, 255))
+      << "A texel inside the rect shifted right and up must be red";
+  EXPECT_THAT(pixelAt(snap, 20, 50), IsTransparent())
+      << "A texel the transposed shift would have covered must be clear";
+}
+
+/// feOffset with a shift on an exact half, where the two rounding rules land a pixel apart.
+TEST_F(RendererGeodeTest, FilterOffsetRoundsAHalfAwayFromZero) {
+  RendererGeode renderer = createRenderer();
+  beginFrame(renderer);
+
+  components::FilterGraph graph;
+  components::FilterNode offsetNode;
+  components::filter_primitive::Offset offset;
+  offset.dx = 2.5;
+  offset.dy = 0.0;
+  offsetNode.primitive = offset;
+  offsetNode.inputs.push_back(components::FilterStandardInput::SourceGraphic);
+  graph.nodes.push_back(offsetNode);
+
+  renderer.pushFilterLayer(graph, Box2d({0, 0}, {kViewportSize, kViewportSize}));
+
+  renderer.setPaint(solidFill(css::RGBA(255, 0, 0, 255)));
+  renderer.setTransform(Transform2d());
+  renderer.drawRect(Box2d({16, 16}, {48, 48}), StrokeParams{});
+
+  renderer.popFilterLayer();
+  renderer.endFrame();
+
+  RendererBitmap snap = renderer.takeSnapshot();
+  ASSERT_FALSE(snap.empty());
+
+  // Rounding half away from zero shifts by three and puts the right edge at 51, so the texel at
+  // 50 is wholly inside. Round-half-to-even shifts by two, puts the edge at 50, and leaves that
+  // same texel wholly outside; no partial coverage separates the two answers.
+  EXPECT_THAT(pixelAt(snap, 50, 32), RgbaEq(255, 0, 0, 255))
+      << "A half-pixel shift must round away from zero, matching the CPU filter path";
+}
+
 /// feColorMatrix type=luminanceToAlpha: red → alpha based on Y-channel luminance.
 TEST_F(RendererGeodeTest, FilterColorMatrixLuminanceToAlpha) {
   RendererGeode renderer = createRenderer();

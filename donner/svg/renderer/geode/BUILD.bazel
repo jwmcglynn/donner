@@ -320,6 +320,7 @@ donner_cc_library(
         ":geode_gpu_wait",
         ":geode_shaders",
         ":geode_wgpu_util",
+        ":offset_wgsl",
         ":snapshot_unpremultiply_wgsl",
         ":subregion_clip_wgsl",
         "//donner/base",
@@ -446,6 +447,23 @@ embed_resources(
 )
 
 genrule(
+    name = "offset_generated",
+    outs = ["generated/offset.wgsl"],
+    cmd = "$(location //donner/gpu/shader/tools:emit_program_wgsl) offset " +
+          "$(location generated/offset.wgsl)",
+    tools = ["//donner/gpu/shader/tools:emit_program_wgsl"],
+)
+
+embed_resources(
+    name = "offset_wgsl",
+    header_output = "embed_resources/OffsetWgsl.h",
+    resources = {
+        "kOffsetWgsl": "generated/offset.wgsl",
+    },
+    visibility = ["//donner/svg/renderer:__subpackages__"],
+)
+
+genrule(
     name = "filter_color_matrix_generated",
     outs = ["generated/filter_color_matrix.wgsl"],
     cmd = "$(location //donner/gpu/shader/tools:emit_program_wgsl) filter_color_matrix " +
@@ -512,16 +530,6 @@ embed_resources(
     header_output = "embed_resources/GaussianBlurWgsl.h",
     resources = {
         "kGaussianBlurWgsl": "shaders/gaussian_blur.wgsl",
-    },
-    visibility = ["//donner/svg/renderer:__subpackages__"],
-)
-
-# Phase 7: feOffset compute shader (pixel shift).
-embed_resources(
-    name = "filter_offset_wgsl",
-    header_output = "embed_resources/FilterOffsetWgsl.h",
-    resources = {
-        "kFilterOffsetWgsl": "shaders/filter_offset.wgsl",
     },
     visibility = ["//donner/svg/renderer:__subpackages__"],
 )
@@ -686,7 +694,6 @@ donner_cc_library(
         ":filter_image_wgsl",
         ":filter_merge_wgsl",
         ":filter_morphology_wgsl",
-        ":filter_offset_wgsl",
         ":filter_specular_lighting_wgsl",
         ":filter_tile_wgsl",
         ":filter_turbulence_wgsl",
@@ -1033,6 +1040,7 @@ donner_cc_test(
     deps = [
         ":filter_color_matrix_wgsl",
         ":flood_wgsl",
+        ":offset_wgsl",
         ":snapshot_unpremultiply_wgsl",
         ":subregion_clip_wgsl",
         "//donner/base",

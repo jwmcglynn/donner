@@ -438,9 +438,8 @@ private:
   ScopedWgpuHandle<wgpu::ComputePipeline> gaussianBlurPipeline_;
   ScopedWgpuHandle<wgpu::BindGroupLayout> blurBindGroupLayout_;
 
-  // feOffset pipeline.
-  ScopedWgpuHandle<wgpu::ComputePipeline> offsetPipeline_;
-  ScopedWgpuHandle<wgpu::BindGroupLayout> offsetBindGroupLayout_;
+  // feOffset pipeline, recorded through the GPU runtime.
+  RuntimeComputeProgram offsetProgram_;
 
   // feColorMatrix pipeline, recorded through the GPU runtime.
   RuntimeComputeProgram colorMatrixProgram_;

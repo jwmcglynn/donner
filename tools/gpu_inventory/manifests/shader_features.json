@@ -1184,59 +1184,6 @@
         "MorphologyParams"
       ]
     },
-    "donner/svg/renderer/geode/shaders/filter_offset.wgsl": {
-      "bindings": [
-        {
-          "binding": 0,
-          "group": 0,
-          "name": "input_tex",
-          "type": "texture_2d<f32>"
-        },
-        {
-          "binding": 1,
-          "group": 0,
-          "name": "output_tex",
-          "type": "texture_storage_2d<rgba8unorm, write>"
-        },
-        {
-          "addressSpace": "uniform",
-          "binding": 2,
-          "group": 0,
-          "name": "params",
-          "type": "OffsetParams"
-        }
-      ],
-      "builtins": [
-        "global_invocation_id"
-      ],
-      "entryPoints": [
-        {
-          "name": "main",
-          "stage": "compute",
-          "workgroupSize": [
-            "8",
-            "8"
-          ]
-        }
-      ],
-      "features": [
-        "abs",
-        "any",
-        "clamp",
-        "floor",
-        "if",
-        "let",
-        "return",
-        "sign",
-        "textureDimensions",
-        "textureLoad",
-        "textureStore",
-        "var"
-      ],
-      "structs": [
-        "OffsetParams"
-      ]
-    },
     "donner/svg/renderer/geode/shaders/filter_specular_lighting.wgsl": {
       "bindings": [
         {
