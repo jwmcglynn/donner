@@ -94,21 +94,36 @@ class RustDependenciesManifestTest(unittest.TestCase):
     def setUp(self):
         self.manifest = load_manifest("rust_dependencies.json")
 
-    def test_allowlist_prefixes_match_verifier_allowlist(self):
+    def test_scope_prefixes_match_the_verifier_allowlist(self):
         r = runfiles.Create()
         allowlist_path = r.Rlocation("donner/tools/gpu_inventory/rust_allowlist.json")
         with open(allowlist_path, encoding="utf-8") as handle:
-            allowlist = json.load(handle)["inertReferencePrefixes"]
-        self.assertEqual(self.manifest["allowlistPrefixes"], sorted(allowlist))
+            allowlist = json.load(handle)
+        self.assertEqual(
+            self.manifest["allowlistPrefixes"], sorted(allowlist["inertReferencePrefixes"])
+        )
+        self.assertEqual(
+            self.manifest["testOnlyRustPrefixes"], sorted(allowlist["testOnlyRustPrefixes"])
+        )
+        self.assertEqual(
+            self.manifest["testOnlyConsumerPrefixes"],
+            sorted(allowlist["testOnlyConsumerPrefixes"]),
+        )
 
-    def test_active_rust_sources_do_not_grow(self):
-        # Ratchet: the only active (non-allowlisted) Rust material is the
-        # tiny-skia FFI fixture, which design 0053 phase 6 removes. Any new
-        # entry here is a regression against the no-Rust invariant.
-        for path in self.manifest["activeRustSources"]:
+    def test_no_rust_source_is_active(self):
+        # The invariant, stated over the manifest: every tracked Rust source is
+        # either inert upstream reference material or part of the test-only
+        # cross-validation oracle. An entry in activeRustSources is Rust that
+        # some shipped or non-test closure could reach.
+        self.assertEqual(self.manifest["activeRustSources"], [])
+
+    def test_test_only_rust_stays_inside_the_oracle(self):
+        # Ratchet on the oracle's own boundary: the test-only grant covers one
+        # fixture directory, not "Rust that happens to be under tests/".
+        for path in self.manifest["testOnlyRustSources"]:
             self.assertTrue(
-                path.startswith("third_party/tiny-skia-cpp/tests/rust_ffi/"),
-                f"unexpected active Rust source: {path}",
+                any(path.startswith(prefix) for prefix in self.manifest["testOnlyRustPrefixes"]),
+                f"test-only Rust source outside the granted prefixes: {path}",
             )
 
 

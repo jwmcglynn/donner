@@ -10,8 +10,9 @@ tools/gpu_inventory/manifests/:
   R"wgsl(...)" literals) with entry points, bindings, and language features.
 - editor_integration.json: editor files that touch the GPU surface (wgpu types,
   the ImGui WebGPU backend, editor GPU feature defines).
-- rust_dependencies.json: all tracked Rust sources and Cargo metadata, Rust build
-  rule references, and Rust-built prebuilt archive declarations.
+- rust_dependencies.json: all tracked Rust sources and Cargo metadata partitioned
+  by scope (inert reference snapshot, test-only cross-validation oracle, active),
+  Rust build rule references, and Rust-built prebuilt archive declarations.
 
 The scan is intentionally lexical: it over-approximates so that any new GPU
 operation, shader feature, or Rust dependency edge changes at least one manifest.
@@ -45,6 +46,16 @@ import subprocess
 import sys
 from collections.abc import Iterable
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from rust_scopes import (  # noqa: E402  (sibling module, path set just above)
+    BUILD_GRAPH_FILE_RE,
+    RUST_BUILD_TOKENS,
+    RustScopes,
+    is_rust_source_path,
+    load_rust_scopes,
+)
 
 MANIFEST_DIR = Path(__file__).resolve().parent / "manifests"
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -219,23 +230,6 @@ WGSL_FEATURE_TOKENS = (
     "workgroupBarrier",
 )
 
-# Files that participate in the build graph, for Rust build-edge scanning.
-# `BUILD.<name>` covers overlay build files applied to external archives (e.g.
-# third_party/BUILD.wgpu_native_platform) and `WORKSPACE.<name>` covers
-# WORKSPACE.bazel/WORKSPACE.bzlmod. Kept in sync with
-# check_no_rust_dependencies.py.
-BUILD_GRAPH_FILE_RE = re.compile(
-    r"(^|/)(MODULE\.bazel(\.lock)?|BUILD(\.[^/]+)?|WORKSPACE(\.[^/]+)?|[^/]+\.bzl|\.bazelrc)$"
-)
-RUST_BUILD_TOKENS = (
-    "cargo_bazel",
-    "crate_universe",
-    "rules_rust",
-    "rust_binary",
-    "rust_library",
-    "rust_static_library",
-    "rust_toolchains",
-)
 WGPU_ARCHIVE_TOKENS = ("gfx-rs/wgpu-native", "wgpu_native_")
 WGPU_NATIVE_VERSION_RE = re.compile(r"_WGPU_NATIVE_VERSION\s*=\s*\"([^\"]+)\"")
 
@@ -387,22 +381,24 @@ def build_editor_integration_manifest(files: dict[str, str]) -> dict[str, object
     return {"_comment": GENERATOR_NOTE, "files": per_file}
 
 
-def is_rust_source_path(path: str) -> bool:
-    """True for Rust source and Cargo metadata paths."""
-    return path.endswith(".rs") or path.endswith(("Cargo.toml", "Cargo.lock"))
+def build_rust_dependencies_manifest(files: dict[str, str], scopes: RustScopes) -> dict[str, object]:
+    """Builds the Rust dependency manifest: sources, build edges, prebuilt archives.
 
-
-def build_rust_dependencies_manifest(
-    files: dict[str, str], allowlist_prefixes: list[str]
-) -> dict[str, object]:
-    """Builds the Rust dependency manifest: sources, build edges, prebuilt archives."""
+    Rust sources are partitioned by the three scopes design 0053 distinguishes.
+    `activeRustSources` is the one that must stay empty: a Rust source there is
+    neither inert reference material nor part of the test-only oracle, so it is
+    reachable from a shipped or non-test closure.
+    """
     allowlisted = []
+    test_only = []
     active = []
     for path in sorted(files):
         if not is_rust_source_path(path):
             continue
-        if any(path.startswith(prefix) for prefix in allowlist_prefixes):
+        if scopes.is_inert(path):
             allowlisted.append(path)
+        elif scopes.is_test_only(path):
+            test_only.append(path)
         else:
             active.append(path)
 
@@ -425,29 +421,26 @@ def build_rust_dependencies_manifest(
 
     return {
         "_comment": GENERATOR_NOTE,
-        "allowlistPrefixes": sorted(allowlist_prefixes),
+        "allowlistPrefixes": sorted(scopes.inert_reference_prefixes),
+        "testOnlyRustPrefixes": sorted(scopes.test_only_rust_prefixes),
+        "testOnlyConsumerPrefixes": sorted(scopes.test_only_consumer_prefixes),
         "allowlistedRustSources": allowlisted,
+        "testOnlyRustSources": test_only,
         "activeRustSources": active,
         "rustBuildEdges": build_edges,
         "rustBuiltArchiveSites": wgpu_archive_sites,
     }
 
 
-def load_allowlist_prefixes(allowlist_path: Path) -> list[str]:
-    """Loads the inert-reference allowlist path prefixes."""
-    data = json.loads(allowlist_path.read_text(encoding="utf-8"))
-    return list(data["inertReferencePrefixes"])
-
-
 def build_all_manifests(
-    files: dict[str, str], allowlist_prefixes: list[str]
+    files: dict[str, str], scopes: RustScopes
 ) -> dict[str, dict[str, object]]:
     """Builds all four manifests from a path -> content mapping."""
     return {
         "gpu_operations.json": build_gpu_operations_manifest(files),
         "shader_features.json": build_shader_features_manifest(files),
         "editor_integration.json": build_editor_integration_manifest(files),
-        "rust_dependencies.json": build_rust_dependencies_manifest(files, allowlist_prefixes),
+        "rust_dependencies.json": build_rust_dependencies_manifest(files, scopes),
     }
 
 
@@ -510,7 +503,7 @@ def main() -> int:
     manifest_dir = args.root / "tools/gpu_inventory/manifests"
 
     files = collect_repo_files(args.root)
-    manifests = build_all_manifests(files, load_allowlist_prefixes(allowlist_path))
+    manifests = build_all_manifests(files, load_rust_scopes(allowlist_path))
 
     stale = []
     for name, manifest in manifests.items():

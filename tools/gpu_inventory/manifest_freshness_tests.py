@@ -135,7 +135,7 @@ class ManifestFreshnessTest(unittest.TestCase):
         cls.files = gen.collect_files(cls.root, cls.paths)
         cls.generated = gen.build_all_manifests(
             cls.files,
-            gen.load_allowlist_prefixes(cls.root / ALLOWLIST_RELPATH),
+            gen.load_rust_scopes(cls.root / ALLOWLIST_RELPATH),
         )
 
     def _checked_in(self, name):
