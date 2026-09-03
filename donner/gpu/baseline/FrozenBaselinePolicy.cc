@@ -21,6 +21,10 @@ bool RunningUnderContinuousIntegration() {
   return ::donner::tests::RunningUnderContinuousIntegration();
 }
 
+std::string_view FirstContinuousIntegrationMarkerSet() {
+  return ::donner::tests::FirstContinuousIntegrationMarkerSet();
+}
+
 MissingComparisonDisposition DispositionForUnbaselinedAdapter(bool underContinuousIntegration) {
   return underContinuousIntegration ? MissingComparisonDisposition::FailClosed
                                     : MissingComparisonDisposition::Skip;
