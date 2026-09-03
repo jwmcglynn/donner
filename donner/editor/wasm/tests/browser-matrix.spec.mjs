@@ -88,15 +88,35 @@ test("Bazel owns a hermetic no-window Chromium browser lane", () => {
   const buildFile = readFileSync(buildFilePath, "utf8");
   assert.match(buildFile, /playwright_bin\.playwright_test\(/);
   assert.match(buildFile, /name = "chromium_remote_smoke"/);
-  const smokeTest = readFileSync(path.join(testDirectory, "smoke.spec.ts"), "utf8");
-  const localSmokeImports = [...smokeTest.matchAll(/from "\.\/([^"]+)"/g)].map(
-    ([, importedModule]) => `${importedModule}.ts`,
+  assert.match(buildFile, /name = "browser_presentation_regression_test"/);
+  // Every Bazel-owned browser lane, checked one at a time rather than against
+  // the file as a whole: a contract satisfied by some other lane in the same
+  // file is not a contract. Each lane names a spec, and the spec's own local
+  // imports have to be in that lane's `data` or the test runs against a
+  // runfiles tree that is missing them.
+  const lanes = [...buildFile.matchAll(/playwright_bin\.playwright_test\(([\s\S]*?)\n\)\n/g)]
+    .map(([, body]) => body);
+  assert.equal(
+    lanes.length,
+    2,
+    "every playwright_test lane must be checkable; update this contract when one is added",
   );
-  for (const importedFile of localSmokeImports) {
+  for (const lane of lanes) {
+    const laneName = /name = "([^"]+)"/.exec(lane)?.[1];
+    assert.ok(laneName, "every browser lane must be named");
+    const specFile = /\$\(rootpath :([^)]+\.spec\.ts)\)/.exec(lane)?.[1];
+    assert.ok(specFile, `${laneName} must run a named spec`);
     assert.ok(
-      buildFile.includes(`"${importedFile}"`),
-      `the Bazel browser lane is missing smoke.spec.ts dependency ${importedFile}`,
+      lane.includes(`"${specFile}"`),
+      `${laneName} must list ${specFile} in its data`,
     );
+    const spec = readFileSync(path.join(testDirectory, specFile), "utf8");
+    for (const [, importedModule] of spec.matchAll(/from "\.\/([^"]+)"/g)) {
+      assert.ok(
+        lane.includes(`"${importedModule}.ts"`),
+        `${laneName} is missing ${specFile} dependency ${importedModule}.ts`,
+      );
+    }
   }
   assert.match(buildFile, /"@playwright\/\/:chromium"/);
   assert.match(
@@ -114,11 +134,13 @@ test("Bazel owns a hermetic no-window Chromium browser lane", () => {
     buildFile,
     /"PLAYWRIGHT_BROWSERS_PATH": "\$\(rootpath @playwright\/\/:chromium\)\/\.\.\/"/,
   );
-  assert.match(
-    buildFile,
-    /target_compatible_with = \[[\s\S]*?"@platforms\/\/cpu:aarch64"[\s\S]*?"@platforms\/\/os:macos"[\s\S]*?\]/,
-    "the headless browser test must allow only macOS ARM64 execution",
-  );
+  for (const lane of lanes) {
+    assert.match(
+      lane,
+      /target_compatible_with = \[[\s\S]*?"@platforms\/\/cpu:aarch64"[\s\S]*?"@platforms\/\/os:macos"[\s\S]*?\]/,
+      "every headless browser lane must allow only macOS ARM64 execution",
+    );
+  }
   // Linux is excluded deliberately, not by omission: headless Chromium there
   // cannot present a WebGPU OffscreenCanvas swapchain on the SwiftShader
   // adapter, so the presented-pixel assertions can never pass. Restoring the

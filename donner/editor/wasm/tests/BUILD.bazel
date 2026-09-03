@@ -54,3 +54,48 @@ playwright_bin.playwright_test(
         "@platforms//os:macos",
     ],
 )
+
+# The browser presentation regressions, reachable from Bazel.
+#
+# This lane exists because the invariants it pins - among them the zoom storm
+# that must never uncover the editor background under the presented document -
+# were only ever reachable through the repository's own browser lane, so a
+# failure there could be answered with a rerun instead of a diagnosis. Like the
+# smoke lane it asserts on presented WebGPU canvas pixels, so it carries the
+# same platform boundary for the same reason documented above.
+playwright_bin.playwright_test(
+    name = "browser_presentation_regression_test",
+    size = "large",
+    args = [
+        "test",
+        "$(rootpath :browser-presentation-regression.spec.ts)",
+        "--config=$(rootpath :playwright.bazel.config.js)",
+    ],
+    copy_data_to_bin = False,
+    data = [
+        "browser-presentation-regression.spec.ts",
+        "canvas-color-stats.ts",
+        "gesture-streams.ts",
+        "package.json",
+        "playwright.bazel.config.js",
+        "playwright.config.js",
+        "remote-webserver.mjs",
+        ":node_modules/@playwright/test",
+        "//donner/editor/wasm:_wasm_web_package_for_serve",
+        "@playwright//:chromium",
+    ],
+    env = {
+        "CI": "1",
+        "DONNER_WASM_PACKAGE_DIR": "$(rootpath //donner/editor/wasm:_wasm_web_package_for_serve)",
+        "DONNER_WASM_REQUIRE_WEBGPU": "1",
+        "DONNER_WASM_TEST_SERVER": "$(rootpath :remote-webserver.mjs)",
+        # The repo-wide remote Emscripten workaround disables Node's WebAssembly
+        # runtime, but Playwright's HTTP client uses its bundled llhttp Wasm.
+        "NODE_OPTIONS": "",
+        "PLAYWRIGHT_BROWSERS_PATH": "$(rootpath @playwright//:chromium)/../",
+    },
+    target_compatible_with = [
+        "@platforms//cpu:aarch64",
+        "@platforms//os:macos",
+    ],
+)

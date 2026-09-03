@@ -2,6 +2,7 @@ import { expect, type Page, test } from "@playwright/test";
 import {
   captureSplashPresentationFrame,
   type CssRegion,
+  type EditorBackgroundCoverageStats,
   isSplashCaptureUsable,
   type PixelBounds,
   readCssPngPixelDifferenceStats,
@@ -422,6 +423,15 @@ interface WorkerHealth {
   sampleThumbnailPublicationGeneration: number;
   frameLoop: FrameLoopStats | null;
   interaction: Window["__donnerInteractionStats"] | null;
+  // The presentation half of the handoff, read in the same round trip as the
+  // worker half so a gate cannot pair a counter from one frame with a
+  // presentation stamp from another. A result is published without
+  // `presentedAtMs` and the frame that consumes it stamps the field once, so
+  // "the worker finished" and "the pixels are on the canvas" are two different
+  // questions and a probe needs the second.
+  renderedFrames: number;
+  presentedAtMs: number | undefined;
+  activeSampleId: string | undefined;
 }
 
 // `unpublished` and -1 distinguish "the worker never published stats at all"
@@ -440,6 +450,9 @@ async function readWorkerHealth(page: Page): Promise<WorkerHealth> {
       ?? -1,
     frameLoop: window.__donnerFrameLoopStats ?? null,
     interaction: window.__donnerInteractionStats ?? null,
+    renderedFrames: window.__donnerMainLoopRenderedFrames || 0,
+    presentedAtMs: window.__donnerWorkerStats?.presentedAtMs,
+    activeSampleId: window.__donnerActiveSampleStats?.sampleId,
   }));
 }
 
@@ -462,14 +475,14 @@ async function readWorkerHealth(page: Page): Promise<WorkerHealth> {
  */
 async function expectWorkerResultsToReach(
   page: Page,
-  reached: (completedResults: number) => boolean,
+  reached: (completedResults: number, health: WorkerHealth) => boolean,
   options: { message: string; timeout: number },
 ): Promise<void> {
   await expect
     .poll(
       async () => {
         const health = await readWorkerHealth(page);
-        return { ...health, reached: reached(health.completedResults) };
+        return { ...health, reached: reached(health.completedResults, health) };
       },
       {
         message: options.message,
@@ -1619,6 +1632,62 @@ async function pinchZoom(
   }, { ...at, deltaY, count });
 }
 
+// One presented picture, named by the worker result it drew.
+//
+// A result is published with no `presentedAtMs` and the frame that consumes it
+// stamps the field exactly once, so the pair says both "which raster" and
+// "has a frame drawn it". Both halves come out of one round trip, so a gate
+// cannot pair a counter from one frame with a stamp from another.
+interface PresentedGeneration {
+  completedResults: number;
+  presentedAtMs: number | undefined;
+}
+
+async function readPresentedGeneration(page: Page): Promise<PresentedGeneration> {
+  return page.evaluate(() => ({
+    completedResults: window.__donnerWorkerStats?.completedResults || 0,
+    presentedAtMs: window.__donnerWorkerStats?.presentedAtMs,
+  }));
+}
+
+/**
+ * Send one pinch notch and return once a strictly later worker result has been
+ * consumed by a presented frame.
+ *
+ * A constant delay after a notch is not an observable of that notch. The worker
+ * can take longer than any constant, and until the frame that draws its result
+ * runs, the pane still shows the pre-gesture picture - which a coverage probe
+ * scores as covered, because it was. The loop then decides on a frame the
+ * gesture never touched, and the next notch supersedes the one that would have
+ * shown the defect: with the notch's presentation held past a 200 ms wait, the
+ * probe scored zero on all six storm notches while the frame each notch
+ * actually presented carried 36375 uncovered backdrop pixels.
+ *
+ * That pair is the whole guarantee, and it is not "the notch's pixels are up":
+ * `pollRenderResult` advances the counter before its non-presenting early
+ * returns, so the callers converge through `settleUntilCovered` rather than
+ * trust one capture. The wait is bounded and reports the worker's own health.
+ */
+async function pinchZoomAndAwaitPresentation(
+  page: Page,
+  at: { x: number; y: number },
+  deltaY: number,
+  context: string,
+): Promise<void> {
+  const before = await readPresentedGeneration(page);
+  await pinchZoom(page, at, deltaY);
+  await expectWorkerResultsToReach(
+    page,
+    (completedResults, health) =>
+      completedResults > before.completedResults && health.presentedAtMs !== undefined,
+    {
+      message: `${context}: the zoom notch never presented a newer document raster`,
+      timeout: scaledMs(5_000),
+    },
+  );
+  await waitForBrowserComposite(page);
+}
+
 // Locate the Donner Splash "D" by its own yellow pixels, in CSS coordinates
 // relative to `region`. Since the single-canvas architecture the document has no element to
 // measure, so every document-space probe is anchored on rendered content.
@@ -1644,21 +1713,281 @@ async function openDonnerSplash(page: Page): Promise<{
   if (editorBounds === null) {
     throw new Error("editor canvas is missing");
   }
-  const beforeSampleResults = await page.evaluate(
-    () => window.__donnerWorkerStats?.completedResults || 0,
-  );
+  const before = await page.evaluate(() => ({
+    completedResults: window.__donnerWorkerStats?.completedResults || 0,
+    renderedFrames: window.__donnerMainLoopRenderedFrames || 0,
+  }));
   await page.mouse.click(editorBounds.x + editorBounds.width * 0.24, editorBounds.y + 282);
   await expect(editorCanvas).toHaveAttribute("data-active-sample-id", "donner-splash");
+  // Wait for the Splash's raster to reach the canvas, not for the worker to
+  // publish it.
+  //
+  // Those are two events and every pixel probe downstream is about the second
+  // one. The editor already says which: a worker result is published with no
+  // `presentedAtMs`, and the frame that consumes it stamps that field exactly
+  // once when it finishes (`main.cc`). Gating on `completedResults` alone
+  // returns inside the window between them - the run that sent this gate back
+  // for repair published at 2087 ms and presented at 2139 ms, where the two
+  // animation frames this used to wait for are ~33 ms - and because the editor
+  // is a single canvas the pane still carries whatever was last presented for
+  // the whole of it, which is not the sample under test. `smoke.spec.ts`
+  // already gates on this handoff and calls it `pixelsPresented`.
   await expectWorkerResultsToReach(
     page,
-    (completedResults) => completedResults > beforeSampleResults,
-    { message: "Donner Splash must produce a document render", timeout: scaledMs(5_000) },
+    (completedResults, health) =>
+      health.activeSampleId === "donner-splash"
+      && completedResults > before.completedResults
+      && health.renderedFrames > before.renderedFrames
+      && health.presentedAtMs !== undefined,
+    {
+      message: "Donner Splash must present a document frame in the editor canvas",
+      timeout: scaledMs(5_000),
+    },
   );
   await waitForBrowserComposite(page);
   return { editorBounds };
 }
 
+// Whether the presented document covers the whole probe region.
+//
+// The claim is that the pane backdrop is never exposed inside the region, so
+// the acceptance value is none of it. A fraction of the region was tolerated
+// instead, and 0.2% of the 360x300 probe is 216 pixels: a fully uncovered row
+// across the region's width would have scored as covered.
+//
+// That fraction was absorbing the backdrop tone window's own +-2 slack rather
+// than anything about the presented picture. Counted exactly, the only pixels
+// the slack added are the artboard's antialiased top edge (32 of 27752 at the
+// natural fit, and an edge only exists where the document does not cover the
+// region) and one (44,47,57) art pixel of 108,000 at the depth the zoom-in loop
+// stops at. `canvas-color-stats` now counts the calibrated tone exactly, which
+// leaves a covered region at zero and nothing for a floor to absorb.
+function isProbeRegionCovered(stats: EditorBackgroundCoverageStats): boolean {
+  return stats.editorBackgroundPixels === 0;
+}
+
+// How much of the probe region the render pane's own tones must account for
+// before a capture may be scored.
+//
+// A low background count is the zoom test's success condition, so a low
+// background count has to mean one thing. A capture of something that is not
+// the render pane also scores low, and the editor is a single canvas that keeps
+// showing the last presented frame, so "not the render pane" is a state the
+// suite really reaches: the welcome sample picker measures 0 backdrop and 1041
+// document pixels of 108,000, together under 1% of the region. A presented
+// Splash accounts for 55% of it at the natural fit, 29% at the depth the
+// zoom-in loop stops at, and 66% at the headroom depth the storm works around,
+// all of it backdrop, artboard, checkerboard or letter. The floor sits an order
+// of magnitude above the unusable case and a factor of three below the
+// tightest usable one.
+//
+// This is deliberately stricter than `isSplashCaptureUsable`, which asks only
+// that a capture carry some editor tone. That rules out a flat or empty
+// capture, which is the class the drag suite hit; it does not rule out a
+// perfectly good picture of a different part of the editor, which is the class
+// this probe hit.
+const kPaneObservationFraction = 0.1;
+
+// How long to wait between two reads of the same probe.
+//
+// Both bounded waits below poll the same observable through the same
+// screenshot, so they wait the same amount between attempts: one interval is
+// short enough that a settle costs little on a fast runner, and the deadlines
+// that contain them are what scale.
+const kProbeRetakeIntervalMs = 50;
+
+/**
+ * Read the probe region, and refuse to score a capture that is not an
+ * observation of the render pane.
+ *
+ * The background count and the presence check come out of the same capture, so
+ * they cannot describe different frames, and they read disjoint tone windows,
+ * so neither can fake the other.
+ *
+ * Retakes are bounded, and a capture that never shows the pane fails with the
+ * picture itself attached alongside its histogram and the editor's published
+ * state, so the next reader sees what was actually on screen instead of a bare
+ * number.
+ */
+async function readProbeCoverage(
+  page: Page,
+  region: CssRegion,
+  context: string,
+): Promise<EditorBackgroundCoverageStats> {
+  // The transient this absorbs is one publish-to-present handoff, measured at
+  // ~52 ms on the run that produced the failure, so the retake window is a
+  // deadline rather than a fixed number of animation frames: four composites
+  // are ~130 ms on a fast runner and can be less than one handoff on a loaded
+  // one, and running out of retries throws, which would abort a caller that
+  // was prepared to wait.
+  const deadline = Date.now() + scaledMs(1_000);
+  let last: EditorBackgroundCoverageStats | null = null;
+  for (;;) {
+    last = await readEditorBackgroundCoverage(page, region);
+    if (
+      last.editorBackgroundPixels + last.documentPixels
+        >= last.samples * kPaneObservationFraction
+    ) {
+      return last;
+    }
+    if (Date.now() >= deadline) {
+      break;
+    }
+    await page.waitForTimeout(kProbeRetakeIntervalMs);
+  }
+  await test.info().attach(`no-render-pane-${context}`, {
+    body: last.png,
+    contentType: "image/png",
+  });
+  const published = await page.evaluate(() => ({
+    frameLoop: window.__donnerFrameLoopStats,
+    renderedFrames: window.__donnerMainLoopRenderedFrames || 0,
+    viewport: window.__donnerViewportStats,
+    worker: window.__donnerWorkerStats,
+  }));
+  throw new Error(
+    `${context}: no capture of the presented render pane before the deadline. `
+      + `region=${JSON.stringify(region)} census=${JSON.stringify(last.census)} `
+      + `published=${JSON.stringify(published)}`,
+  );
+}
+
+/**
+ * Poll the probe until the document covers it, bounded.
+ *
+ * Presentation lags the live viewport by up to one worker latency, so a single
+ * read taken a fixed interval after a zoom notch scores whichever side of that
+ * latency the runner happened to land on. Every assertion in the zoom storm
+ * instead waits for convergence and then reports what it converged to; the
+ * callers differ only in what they do with a deadline that expired.
+ */
+async function settleUntilCovered(
+  page: Page,
+  region: CssRegion,
+  context: string,
+): Promise<EditorBackgroundCoverageStats> {
+  const deadline = Date.now() + scaledMs(1_000);
+  let stats = await readProbeCoverage(page, region, context);
+  while (!isProbeRegionCovered(stats) && Date.now() < deadline) {
+    await page.waitForTimeout(kProbeRetakeIntervalMs);
+    stats = await readProbeCoverage(page, region, context);
+  }
+  return stats;
+}
+
+// The Splash coverage probe's rectangle inside the editor canvas. Shared by the
+// zoom storm and by the guard test below, which has to sample the same region
+// the storm scores for its claim to be about the storm.
+const kSplashProbeOffset = { x: 438, y: 128, width: 360, height: 300 };
+
+function splashProbeRegion(
+  editorBounds: { x: number; y: number; width: number; height: number },
+): CssRegion {
+  return {
+    x: editorBounds.x + kSplashProbeOffset.x,
+    y: editorBounds.y + kSplashProbeOffset.y,
+    width: kSplashProbeOffset.width,
+    height: kSplashProbeOffset.height,
+  };
+}
+
+test("the Splash coverage probe refuses a capture that is not the render pane", async ({ page }) => {
+  // Pin the ambiguity that produced the zoom storm's `coverage=[]` failure.
+  //
+  // The editor is a single canvas, so until a frame draws a sample's raster the
+  // pane shows whatever was presented before it. The welcome sample picker is
+  // one such picture and the only one a test can hold still, so sampling the
+  // storm's own rectangle before any sample is opened reproduces the shape of
+  // the ambiguity with no timing involved.
+  const failures = await openEditor(page);
+  const editorBounds = await page.locator("canvas#canvas").boundingBox();
+  expect(editorBounds).not.toBeNull();
+  if (editorBounds === null) {
+    throw new Error("editor canvas is missing");
+  }
+  const probeRegion = splashProbeRegion(editorBounds);
+
+  const picker = await readEditorBackgroundCoverage(page, probeRegion);
+  // A bare background count cannot tell this frame from one the document fully
+  // covers: both are far under the floor the storm treats as covered. That is
+  // the whole defect - the storm's exit condition and "there is no document
+  // here" were the same number, so the loop was skipped and the assertion one
+  // screenshot later reported the settled coverage it had just declined to
+  // zoom away.
+  expect(
+    isProbeRegionCovered(picker),
+    `the welcome picker no longer scores as covered: ${JSON.stringify(picker.census)}`,
+  ).toBe(true);
+  // So the probe must refuse to score it rather than hand back the number.
+  await expect(readProbeCoverage(page, probeRegion, "welcome picker")).rejects.toThrow(
+    /no capture of the presented render pane/,
+  );
+  expect(failures).toEqual([]);
+});
+
+test("the Splash coverage probe counts editor background, not document pixels", async ({ page }) => {
+  // Pin what the zoom storm's probe is allowed to count.
+  //
+  // The editor publishes where it put the document, so the probe's answer is
+  // checkable against geometry rather than against a colour someone measured
+  // once. At the natural fit the probe rectangle overhangs the artboard's top
+  // edge, and the pixels above that edge - and only those - are editor
+  // background. This is the assertion the pre-fix probe failed: it counted
+  // (13,15,29), which is `#0d0f1d`, the Splash artboard's own fill, so it
+  // reported 12242 where the overhang is 360 x 77.5 = 27900. Counting a tone
+  // the document itself draws is what made "the document covers the region"
+  // and "there is no document here" the same number.
+  const failures = await openEditor(page);
+  const { editorBounds } = await openDonnerSplash(page);
+  const probeRegion = splashProbeRegion(editorBounds);
+  const viewport = await readViewportStats(page);
+  // The area identity below holds only while the top edge is the region's ONLY
+  // uncovered side, so state that as a precondition rather than let a moved
+  // layout surface as an unexplained count mismatch.
+  const overhangRows = viewport.documentY - probeRegion.y;
+  const layout = `viewport=${JSON.stringify(viewport)} probe=${JSON.stringify(probeRegion)}`;
+  expect(overhangRows, `the probe no longer overhangs the artboard's top edge; ${layout}`)
+    .toBeGreaterThan(0);
+  expect(viewport.documentX, `the artboard no longer covers the probe's left edge; ${layout}`)
+    .toBeLessThanOrEqual(probeRegion.x);
+  expect(
+    viewport.documentX + viewport.documentWidth,
+    `the artboard no longer covers the probe's right edge; ${layout}`,
+  ).toBeGreaterThanOrEqual(probeRegion.x + probeRegion.width);
+  expect(
+    viewport.documentY + viewport.documentHeight,
+    `the artboard no longer covers the probe's bottom edge; ${layout}`,
+  ).toBeGreaterThanOrEqual(probeRegion.y + probeRegion.height);
+  const stats = await readProbeCoverage(page, probeRegion, "natural fit");
+  // The capture may be taken at a device pixel ratio above 1; scale the
+  // expected area into the capture's own pixels rather than assuming one.
+  const captureScale = stats.samples / (probeRegion.width * probeRegion.height);
+  const expectedBackground = overhangRows * probeRegion.width * captureScale;
+  // A tenth of the overhang is far more slack than edge antialiasing needs
+  // (measured 27720 against 27900, 0.6%) and far tighter than any tone the
+  // document draws could survive.
+  expect(
+    stats.editorBackgroundPixels,
+    `the probe is not measuring the artboard overhang: expected about `
+      + `${expectedBackground}, census=${JSON.stringify(stats.census)}`,
+  ).toBeGreaterThan(expectedBackground * 0.9);
+  expect(
+    stats.editorBackgroundPixels,
+    `the probe counts more than the artboard overhang: expected about `
+      + `${expectedBackground}, census=${JSON.stringify(stats.census)}`,
+  ).toBeLessThan(expectedBackground * 1.1);
+  expect(failures).toEqual([]);
+});
+
 test("a zoom storm never uncovers the editor background under the Donner Splash", async ({ page }) => {
+  // The per-test budget is the one deadline in this suite that does not scale
+  // with the runner. Every bound inside the storm does: eight bounded settles
+  // of `scaledMs(1_000)`, each of which may spend another such deadline
+  // retaking an unusable capture, exceed the config's flat 30 s on a shared
+  // runner well before they are exhausted, so the slow run this test exists to
+  // describe would be killed before it could print its census. Scale the budget
+  // the same way the bounds inside it are scaled; a settled run takes 8.7 s.
+  test.setTimeout(scaledMs(30_000));
   const failures = await openEditor(page);
   const { editorBounds } = await openDonnerSplash(page);
 
@@ -1671,39 +2000,42 @@ test("a zoom storm never uncovers the editor background under the Donner Splash"
   // The region is centered on a solid stroke of the Splash letter (618, 278)
   // rather than the pane center: the zoom below anchors at the region center,
   // so the pixels that fill the region at depth are the anchor's own
-  // neighborhood. A bright stroke stays unambiguously non-background at every
-  // zoom level, where the letter counters fill with dark cloud gradient that
-  // sweeps the backdrop's color neighborhood. At the natural fit the artboard's
-  // top edge crosses the region, so it starts with genuine uncovered backdrop.
-  const probeRegion = {
-    x: editorBounds.x + 438,
-    y: editorBounds.y + 128,
-    width: 360,
-    height: 300,
-  };
+  // neighborhood, and a bright stroke keeps the region unambiguously filled at
+  // every zoom level. At the natural fit the artboard's top edge crosses the
+  // region, so it starts with genuine uncovered backdrop: the editor publishes
+  // `documentY` 77.5 CSS pixels below the region's top, and that 360 x 77.5
+  // strip scores 27720 pane-backdrop pixels.
+  const probeRegion = splashProbeRegion(editorBounds);
   const probeCenter = {
     x: probeRegion.x + probeRegion.width * 0.5,
     y: probeRegion.y + probeRegion.height * 0.5,
   };
-  const backgroundPixels = async () =>
-    (await readEditorBackgroundCoverage(page, probeRegion)).editorBackgroundPixels;
+  const probe = async (context: string) => readProbeCoverage(page, probeRegion, context);
 
   // The render pane classifies wheel input only while it is the hovered window.
   await page.mouse.move(probeCenter.x, probeCenter.y);
   const zoomInCoverage: number[] = [];
-  for (let notch = 0; notch < 10 && (await backgroundPixels()) > 0; ++notch) {
-    await pinchZoom(page, probeCenter, -250);
-    await page.waitForTimeout(200);
-    zoomInCoverage.push(await backgroundPixels());
+  for (let notch = 0; notch < 10; ++notch) {
+    if (isProbeRegionCovered(await probe(`zoom-in notch ${notch}`))) {
+      break;
+    }
+    await pinchZoomAndAwaitPresentation(page, probeCenter, -250, `zoom-in notch ${notch}`);
+    // This read does not settle: the loop is zooming in precisely because the
+    // region is not covered yet, so a read that catches a later notch's
+    // presentation costs one extra notch and nothing else, and the value it
+    // pushes is diagnostic. The assertions below, which do decide the test, all
+    // settle on a deadline that scales with the runner.
+    zoomInCoverage.push((await probe(`zoom-in notch ${notch}`)).editorBackgroundPixels);
   }
+  const zoomedIn = await settleUntilCovered(page, probeRegion, "zoom-in settle");
   expect(
-    await backgroundPixels(),
-    `zooming in never filled the probe region with document pixels;`
-      + ` coverage=${JSON.stringify(zoomInCoverage)}`,
+    zoomedIn.editorBackgroundPixels,
+    `zooming in never covered the probe region with document pixels;`
+      + ` coverage=${JSON.stringify(zoomInCoverage)} census=${JSON.stringify(zoomedIn.census)}`,
   ).toBe(0);
   expect(
     zoomInCoverage.length,
-    `the document already filled the probe region without zooming: ${
+    `the document already covered the probe region without zooming: ${
       JSON.stringify(zoomInCoverage)
     }`,
   ).toBeGreaterThan(0);
@@ -1718,39 +2050,46 @@ test("a zoom storm never uncovers the editor background under the Donner Splash"
   // something to rely on: zoom in explicitly past the boundary.
   const kZoomHeadroomNotches = 2;
   for (let notch = 0; notch < kZoomHeadroomNotches; ++notch) {
-    await pinchZoom(page, probeCenter, -250);
-    await page.waitForTimeout(200);
+    await pinchZoomAndAwaitPresentation(page, probeCenter, -250, `zoom headroom notch ${notch}`);
   }
+  const headroom = await settleUntilCovered(page, probeRegion, "zoom headroom");
   expect(
-    await backgroundPixels(),
-    "the zoom headroom notches left editor background inside the probe region",
+    headroom.editorBackgroundPixels,
+    `the zoom headroom notches left editor background inside the probe region;`
+      + ` census=${JSON.stringify(headroom.census)}`,
   ).toBe(0);
 
   // Zoom out and back in. Each notch changes the live viewport by ~27% while
   // the worker is still finishing the previous raster, which is the window in
   // which a lagging document used to uncover the editor background.
   const scaleSamples: number[] = [];
-  const uncovered: Array<{ burst: number; phase: string; backgroundPixels: number }> = [];
+  const stormCoverage: number[] = [];
+  const uncovered: Array<
+    { burst: number; phase: string; backgroundPixels: number; census: SplashToneCensus }
+  > = [];
   for (let burst = 0; burst < 3; ++burst) {
     for (const phase of ["out", "in"] as const) {
-      await pinchZoom(page, probeCenter, phase === "out" ? 250 : -250);
-      await page.waitForTimeout(200);
+      await pinchZoomAndAwaitPresentation(
+        page,
+        probeCenter,
+        phase === "out" ? 250 : -250,
+        `storm ${burst} ${phase}`,
+      );
       // A zoom-out can expose regions whose tiles have not re-rastered yet;
       // that transient is bounded by one worker latency and is inherent to
       // demand-rendered tiles. The defect this storm hunts is uncovering that
       // PERSISTS - a stale placement that never converges - so each notch
-      // asserts convergence back to zero within a bounded settle instead of
-      // failing on a single instant read.
-      let persisted = await backgroundPixels();
-      if (persisted > 0) {
-        const settleDeadline = Date.now() + scaledMs(1_000);
-        while (persisted > 0 && Date.now() < settleDeadline) {
-          await page.waitForTimeout(50);
-          persisted = await backgroundPixels();
-        }
-      }
-      if (persisted > 0) {
-        uncovered.push({ burst, phase, backgroundPixels: persisted });
+      // asserts convergence within a bounded settle instead of failing on a
+      // single instant read.
+      const settled = await settleUntilCovered(page, probeRegion, `storm ${burst} ${phase}`);
+      stormCoverage.push(settled.editorBackgroundPixels);
+      if (!isProbeRegionCovered(settled)) {
+        uncovered.push({
+          burst,
+          phase,
+          backgroundPixels: settled.editorBackgroundPixels,
+          census: settled.census,
+        });
       }
       // At storm depth the letter overflows any pane-bounded region on some
       // viewports, so its measured width and edge positions can saturate at the
@@ -1776,7 +2115,8 @@ test("a zoom storm never uncovers the editor background under the Donner Splash"
       + ` probe=${JSON.stringify(probeRegion)} first=${JSON.stringify(uncovered.slice(0, 6))}`,
   ).toEqual([]);
   console.log(
-    `zoom-storm zoomIn=${JSON.stringify(zoomInCoverage)} scales=${JSON.stringify(scaleSamples)}`,
+    `zoom-storm zoomIn=${JSON.stringify(zoomInCoverage)} storm=${JSON.stringify(stormCoverage)}`
+      + ` scales=${JSON.stringify(scaleSamples)}`,
   );
   expect(failures).toEqual([]);
 });

@@ -82,6 +82,14 @@ export interface SplashToneCensus extends SplashSurfaceCoverageStats {
 /**
  * The composited render-pane backdrop, measured as exactly (44,47,56) on both
  * engines (the same calibration `countSplashSurfaceCoverage` documents).
+ *
+ * Matched exactly, with no tolerance. A +-2 window around this tone matched
+ * 27752 pixels of the artboard overhang at the Splash's natural fit, of which
+ * 27720 carried this exact value and the other 32 were the artboard's
+ * antialiased top edge blending into it; inside a region the document fully
+ * covers it matched one (44,47,57) pixel of 108,000, which the Splash art
+ * draws. Neither class is exposed backdrop, and tolerating them is what forced
+ * the coverage probe to accept a fraction of its region rather than none of it.
  */
 const kPaneBackdropColor = { red: 44, green: 47, blue: 56 };
 
@@ -97,9 +105,8 @@ function censusSplashTones(image: PngImage, dominantColorCount = 4): SplashToneC
     histogram.set(key, (histogram.get(key) ?? 0) + 1);
     const alpha = image.channels === 4 ? image.data[offset + 3] : 255;
     if (
-      alpha >= 200 && Math.abs(red - kPaneBackdropColor.red) <= 2
-      && Math.abs(green - kPaneBackdropColor.green) <= 2
-      && Math.abs(blue - kPaneBackdropColor.blue) <= 2
+      alpha >= 200 && red === kPaneBackdropColor.red && green === kPaneBackdropColor.green
+      && blue === kPaneBackdropColor.blue
     ) {
       ++paneBackdropPixels;
     }
@@ -794,44 +801,76 @@ export async function readEditorResizePixelBounds(
 }
 
 export interface EditorBackgroundCoverageStats {
+  /**
+   * Composited render-pane backdrop inside the region: the editor's own tone,
+   * which shows wherever the presented document does not cover the pane.
+   */
   editorBackgroundPixels: number;
+  /**
+   * The presented document's own tones inside the region.
+   *
+   * Disjoint from `editorBackgroundPixels` by construction (see below), which
+   * is what makes a zero background count decidable: a capture that is not
+   * showing the presented document accounts for almost none of the region here
+   * (measured under 1% of it, against 29% to 55% for a presented Splash), so a
+   * caller can tell "the document covers this region" apart from "there is no
+   * document in this capture" instead of reading zero for both.
+   */
+  documentPixels: number;
   samples: number;
+  /** The capture's full tone census, so a failure prints what was on screen. */
+  census: SplashToneCensus;
+  /** The capture itself, so a failure can attach the picture it scored. */
+  png: Buffer;
 }
 
 /**
- * Count pixels showing the bare editor background inside a page region.
+ * Measure how much of a page region shows the bare editor background, and
+ * whether the capture contains the presented document at all.
  *
- * An uncovered render pane shows the composited pane backdrop, which ANGLE
- * screenshots encode as exactly (13,15,29) (measured; the histogram of an
- * uncovered region is a single flat color). The Donner Splash artboard lands
- * at (16,19,30): only one blue level away, so blue cannot discriminate and
- * the red/green channels carry the match. The window is one level per channel
- * around the measured backdrop: wide enough for compositor rounding, and
- * tight enough that neither the artboard nor the dark Splash cloud gradients
- * (which swept the old nine-level window at deep zoom) count as uncovered
- * background.
+ * `editorBackgroundPixels` counts `kPaneBackdropColor`, the composited
+ * render-pane backdrop this file already calibrates at exactly (44,47,56) on
+ * both engines. That is the tone the pane shows where the document does not
+ * reach it: a capture of the Donner Splash at its natural fit, taken with the
+ * editor's published `documentY` 77.5 CSS pixels below the top of a 360x300
+ * probe, scores 27720 of them against the 27900 that 360 x 77.5 strip holds -
+ * that is, exactly the strip that overhangs the artboard and nothing else.
+ *
+ * This probe used to count (12-14, 14-16, 28-30) instead and call it the
+ * backdrop. That window is centred on (13,15,29), which is `#0d0f1d`: the
+ * Donner Splash artboard's own fill, straight out of `donner_splash.svg`, and
+ * the same tone `censusSplashTones` documents as the document's dark
+ * background. So the probe counted document pixels and reported them as
+ * uncovered editor. Two consequences, both observed. A zoom that covered the
+ * region was indistinguishable from a capture with no document in it, because
+ * both count zero - which is how a CI run scored zero at the natural fit,
+ * skipped the whole zoom-in loop and then reported the settled 12242 one
+ * screenshot later. And an uncovering the probe was built to catch could never
+ * raise the count, because uncovering replaces document tones with a backdrop
+ * tone the window did not match.
+ *
+ * `documentPixels` is the complementary presence check, taken from the same
+ * capture so the two cannot describe different frames. It counts the artboard's
+ * dark tones, the transparency checkerboard and the Splash letter's own yellow,
+ * because which of them a region shows depends on the zoom: at the natural fit
+ * the probe region is mostly artboard, and at the depth the zoom storm reaches
+ * it is 70,943 of 108,000 pixels of letter and no artboard tone at all. All
+ * three are disjoint from the backdrop window, so neither observation can fake
+ * the other.
  */
 export async function readEditorBackgroundCoverage(
   page: Page,
   region: CssRegion,
 ): Promise<EditorBackgroundCoverageStats> {
-  const image = decodePng(await page.screenshot({ clip: region }));
-  let editorBackgroundPixels = 0;
-  for (let offset = 0; offset < image.data.length; offset += image.channels) {
-    const red = image.data[offset];
-    const green = image.data[offset + 1];
-    const blue = image.data[offset + 2];
-    const alpha = image.channels === 4 ? image.data[offset + 3] : 255;
-    if (alpha < 200) {
-      continue;
-    }
-    if (
-      red >= 12 && red <= 14
-      && green >= 14 && green <= 16
-      && blue >= 28 && blue <= 30
-    ) {
-      ++editorBackgroundPixels;
-    }
-  }
-  return { editorBackgroundPixels, samples: image.width * image.height };
+  const png = await page.screenshot({ clip: region });
+  const image = decodePng(png);
+  const census = censusSplashTones(image);
+  const letterPixels = findPixelBounds(image, "splash-yellow")?.pixels ?? 0;
+  return {
+    editorBackgroundPixels: census.paneBackdropPixels,
+    documentPixels: census.darkBackgroundPixels + census.checkerboardPixels + letterPixels,
+    samples: census.samples,
+    census,
+    png,
+  };
 }
