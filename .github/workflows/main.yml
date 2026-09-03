@@ -503,6 +503,10 @@ jobs:
         with:
           persist-credentials: false
 
+      # spirv-tools is a test-time dependency, not a build one: the emitted SPIR-V
+      # is validated out of process by spirv-val. The suite fails rather than
+      # skips on an automated lane, so dropping this package turns the lane red
+      # instead of silently retiring the validation.
       - name: Install system dependencies
         uses: ./.github/actions/apt-install
         with:
@@ -654,6 +658,8 @@ jobs:
   # no host GPU device passthrough; Mesa llvmpipe/lavapipe provide the same
   # software rendering path used by GitHub-hosted Linux so this lane runs the
   # same test surface instead of excluding graphics targets.
+  # The executor provides spirv-val rather than this workflow installing it; the
+  # fail-closed SPIR-V suite is the check that it still does.
   linux-self-hosted:
     runs-on: [self-hosted, linux, arm64]
     needs: [gatekeeper, determine-targets, linux-self-hosted-turnstile]
@@ -1023,14 +1029,16 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install clang-tidy
+      # SPIRV-Tools is a test-time dependency: `spirv_val_validation_tests` runs
+      # spirv-val out of process and fails rather than skips without it.
+      - name: Install clang-tidy and SPIRV-Tools
         uses: nick-fields/retry@v4
         with:
           timeout_minutes: 10
           max_attempts: 3
           retry_wait_seconds: 15
           command: |
-            brew install --quiet llvm@19
+            brew install --quiet llvm@19 spirv-tools
             echo "/opt/homebrew/opt/llvm@19/bin" >> "$GITHUB_PATH"
 
       - name: Setup Bazel
@@ -1067,8 +1075,15 @@ jobs:
             echo "::error::Empty target selection reached the test step."
             exit 1
           fi
+          # The GitHub-hosted macOS image ships Xcode without the offline Metal
+          # compiler, which is a separate ~700 MB downloadable component. The MSL
+          # validation suite fails rather than skips when it cannot find that
+          # compiler, so this lane drops it by tag and says so in the run summary
+          # instead of collecting silent skips. The macOS runner that has the
+          # toolchain runs it.
+          echo "::notice::Excluding requires_metal_toolchain targets: the hosted macOS image has no offline Metal compiler."
           tools/ci_bazel_test.sh bazelisk test --config=ci --test_output=errors \
-            --test_tag_filters=-manual,-perf \
+            --test_tag_filters=-manual,-perf,-requires_metal_toolchain \
             $BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS $TARGETS
         # Deterministic fuzzer corpus replay remains in this Bazel suite. Sanitizer-backed mutation
         # runs nightly or on demand in `.github/workflows/fuzz.yml`.
@@ -1091,6 +1106,10 @@ jobs:
   # Replaces `macos` for trusted operator PRs and main pushes. Renovate and
   # non-operator runs stay hosted. The host pre-provisions Bazelisk, Homebrew
   # llvm@19, and Xcode Command Line Tools.
+  # The host also provides spirv-val and the offline Metal compiler rather than
+  # this workflow installing them, which is why this lane keeps the
+  # `requires_metal_toolchain` target the hosted macOS lane drops; the
+  # fail-closed suites are the check that it still does.
   macos-self-hosted:
     runs-on: [self-hosted, macOS, ARM64]
     needs: [gatekeeper, determine-targets]

@@ -798,12 +798,14 @@ jobs:
           external-cache: true
           cache-save: ${{ github.ref == 'refs/heads/main' }}
 
+      # spirv-tools is test-time only: the out-of-process SPIR-V validation
+      # suite fails rather than skips when spirv-val is absent.
       - name: Install system dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             libncurses-dev pkg-config libfontconfig1-dev libfreetype6-dev \
-            mesa-vulkan-drivers libvulkan1 libvulkan-dev \
+            mesa-vulkan-drivers libvulkan1 libvulkan-dev spirv-tools \
             libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev \
             libgl1-mesa-dev libosmesa6-dev
           sudo apt-get clean
@@ -888,6 +890,8 @@ jobs:
           token: ${{ github.token }}
           timeout-minutes: "150"
 
+  # As in main.yml's self-hosted Linux lane, the executor provides spirv-val
+  # rather than this workflow installing it.
   coverage-self-hosted:
     runs-on: [self-hosted, linux, arm64]
     needs: [determine-targets, coverage-self-hosted-turnstile]
