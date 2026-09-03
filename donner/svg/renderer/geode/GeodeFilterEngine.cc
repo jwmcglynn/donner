@@ -565,7 +565,6 @@ struct BlurParams {
   uint32_t pad1;
 };
 
-/// Uniform buffer layout matching the WGSL `OffsetParams` struct.
 /// Uniform buffer layout mirroring the shader program's `OffsetParams` struct: the shift in
 /// pixels, rounded on the device so the rule that rounds it is the one the shader states.
 struct OffsetParams {
@@ -869,7 +868,6 @@ struct SubregionClipParams {
   uint32_t pad1;  //!< Trailing word the program declares; the two sizes must agree.
 };
 
-/// Uniform buffer layout for the sRGB↔linearRGB color space conversion shader.
 /// Uniform buffer layout mirroring the shader program's `ColorSpaceConvertParams` struct.
 struct ColorSpaceConvertParams {
   uint32_t direction;  //!< Which way the transfer runs; the program's bindings header names both.
