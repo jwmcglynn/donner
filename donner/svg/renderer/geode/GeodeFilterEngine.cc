@@ -104,11 +104,12 @@ struct FilterResourceArena {
     if (!buffer.hasResult()) {
       return nullptr;
     }
+    // No count here, for the same reason the bind group below is not counted: the runtime counts
+    // what it creates.
     buffers_.push_back(std::move(buffer).result());
     if (device_.adapterDevice().writeBuffer(buffers_.back(), 0, data).hasError()) {
       return nullptr;
     }
-    device_.countBuffer();
     return &buffers_.back();
   }
 
@@ -124,8 +125,9 @@ struct FilterResourceArena {
     if (!bindGroup.hasResult()) {
       return nullptr;
     }
+    // No count here: the runtime counts the bind group it creates, and counting again would
+    // report every migrated pass as building two.
     bindGroups_.push_back(std::move(bindGroup).result());
-    device_.countBindGroup();
     return &bindGroups_.back();
   }
 
