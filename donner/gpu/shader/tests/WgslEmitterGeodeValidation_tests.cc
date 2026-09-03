@@ -12,7 +12,12 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <atomic>
+#include <cmath>
+#include <cstdint>
+#include <memory>
 #include <string>
+#include <vector>
 
 #include "donner/gpu/shader/WgslEmitter.h"
 #include "donner/gpu/shader/programs/ColorMatrix.h"
@@ -20,8 +25,11 @@
 #include "donner/gpu/shader/programs/Flood.h"
 #include "donner/gpu/shader/programs/SolidFill.h"
 #include "donner/gpu/shader/programs/SubregionClip.h"
+#include "donner/gpu/shader/tests/MathPrimitiveCoverageModule.h"
 #include "donner/gpu/shader/tests/ShaderTestUtils.h"
+#include "donner/svg/renderer/geode/GeodeCallbackState.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
+#include "donner/svg/renderer/geode/GeodeGpuWait.h"
 #include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
 
 using testing::HasSubstr;
@@ -589,6 +597,210 @@ TEST(WgslEmitterGeodeValidation, NegativeControlDetectsFilterColorMatrixStorageA
   EXPECT_THAT(errors, HasSubstr(kErrorMarker))
       << "A storage-texture access mismatch did not surface at compute pipeline creation; "
          "pipeline-time acceptance evidence would be meaningless";
+}
+
+/// Encodes \p value the way the math-primitive module encodes a signed result into a texel: the
+/// bias keeps the whole range positive, and 255ths are exactly representable in rgba8unorm.
+/// @param value Signed result to encode.
+uint8_t EncodeSignedResult(float value) {
+  return static_cast<uint8_t>(std::lround(value + kMathPrimitiveSignedBias));
+}
+
+/// Byte the module writes to the sign channel for \p value.
+/// @param value Input value the sign was taken of.
+uint8_t EncodeSignResult(float value) {
+  const float sign = (value > 0.0f) ? 1.0f : ((value < 0.0f) ? -1.0f : 0.0f);
+  return static_cast<uint8_t>(
+      std::lround((sign * kMathPrimitiveSignScale) + kMathPrimitiveSignScale));
+}
+
+/// The module's pow channel evaluated on the host.
+/// @param value Input value.
+float PowChannelOnHost(float value) {
+  const float straight = std::clamp(value, 0.0f, 1.0f);
+  const float linearized = std::pow((straight + 0.055f) / 1.055f, 2.4f);
+  return 0.25f * (linearized + std::pow(straight, 2.4f) + std::pow(1.0f - straight, 2.4f));
+}
+
+/// Runs the math-primitive compute module over \p values on the renderer's own device and
+/// returns the destination texels, four bytes per input. Returns an empty vector on any GPU-side
+/// failure, which the caller reports.
+/// @param device WebGPU device to run on.
+/// @param queue Queue to submit on.
+/// @param wgsl Emitted WGSL for the module.
+/// @param values Input values, one per invocation.
+std::vector<uint8_t> RunMathPrimitiveModule(const wgpu::Device& device, const wgpu::Queue& queue,
+                                            const std::string& wgsl,
+                                            const std::vector<float>& values) {
+  const uint32_t laneCount = static_cast<uint32_t>(values.size());
+
+  wgpu::BindGroupLayoutEntry layoutEntries[2] = {};
+  layoutEntries[0].binding = 0;
+  layoutEntries[0].visibility = wgpu::ShaderStage::Compute;
+  layoutEntries[0].storageTexture.access = wgpu::StorageTextureAccess::WriteOnly;
+  layoutEntries[0].storageTexture.format = wgpu::TextureFormat::RGBA8Unorm;
+  layoutEntries[0].storageTexture.viewDimension = wgpu::TextureViewDimension::_2D;
+  layoutEntries[1].binding = 1;
+  layoutEntries[1].visibility = wgpu::ShaderStage::Compute;
+  layoutEntries[1].buffer.type = wgpu::BufferBindingType::ReadOnlyStorage;
+
+  wgpu::BindGroupLayoutDescriptor bglDesc = {};
+  bglDesc.entryCount = 2;
+  bglDesc.entries = layoutEntries;
+  wgpu::BindGroupLayout bindGroupLayout = device.createBindGroupLayout(bglDesc);
+
+  wgpu::PipelineLayoutDescriptor plDesc = {};
+  plDesc.bindGroupLayoutCount = 1;
+  WGPUBindGroupLayout layouts[1] = {bindGroupLayout};
+  plDesc.bindGroupLayouts = layouts;
+  wgpu::PipelineLayout pipelineLayout = device.createPipelineLayout(plDesc);
+
+  wgpu::ComputePipelineDescriptor cpDesc = {};
+  cpDesc.layout = pipelineLayout;
+  cpDesc.compute.module = CreateModuleFromWgsl(device, wgsl);
+  cpDesc.compute.entryPoint = donner::geode::wgpuLabel("cs_main");
+  wgpu::ComputePipeline pipeline = device.createComputePipeline(cpDesc);
+  if (!pipeline) {
+    return {};
+  }
+
+  wgpu::BufferDescriptor inputDesc = {};
+  inputDesc.size = values.size() * sizeof(float);
+  inputDesc.usage = wgpu::BufferUsage::Storage | wgpu::BufferUsage::CopyDst;
+  wgpu::Buffer inputBuffer = device.createBuffer(inputDesc);
+  queue.writeBuffer(inputBuffer, 0, values.data(), inputDesc.size);
+
+  wgpu::TextureDescriptor texDesc = {};
+  texDesc.size = {laneCount, 1, 1};
+  texDesc.format = wgpu::TextureFormat::RGBA8Unorm;
+  texDesc.usage = wgpu::TextureUsage::StorageBinding | wgpu::TextureUsage::CopySrc;
+  texDesc.mipLevelCount = 1;
+  texDesc.sampleCount = 1;
+  texDesc.dimension = wgpu::TextureDimension::_2D;
+  wgpu::Texture output = device.createTexture(texDesc);
+  wgpu::TextureView outputView = output.createView();
+
+  wgpu::BindGroupEntry bgEntries[2] = {};
+  bgEntries[0].binding = 0;
+  bgEntries[0].textureView = outputView;
+  bgEntries[1].binding = 1;
+  bgEntries[1].buffer = inputBuffer;
+  bgEntries[1].offset = 0;
+  bgEntries[1].size = inputDesc.size;
+
+  wgpu::BindGroupDescriptor bgDesc = {};
+  bgDesc.layout = bindGroupLayout;
+  bgDesc.entryCount = 2;
+  bgDesc.entries = bgEntries;
+  wgpu::BindGroup bindGroup = device.createBindGroup(bgDesc);
+
+  // The readback row pitch is the WebGPU-mandated 256-byte multiple, so the destination width is
+  // read out of the padded row rather than assumed to fill it.
+  constexpr uint32_t kBytesPerRow = 256;
+  wgpu::BufferDescriptor readbackDesc = {};
+  readbackDesc.size = kBytesPerRow;
+  readbackDesc.usage = wgpu::BufferUsage::CopyDst | wgpu::BufferUsage::MapRead;
+  wgpu::Buffer readback = device.createBuffer(readbackDesc);
+
+  wgpu::CommandEncoder encoder = device.createCommandEncoder();
+  {
+    wgpu::ComputePassDescriptor passDesc = {};
+    wgpu::ComputePassEncoder pass = encoder.beginComputePass(passDesc);
+    pass.setPipeline(pipeline);
+    pass.setBindGroup(0, bindGroup, 0, nullptr);
+    pass.dispatchWorkgroups(laneCount / kMathPrimitiveWorkgroupSize, 1, 1);
+    pass.end();
+  }
+
+  wgpu::TexelCopyTextureInfo src = {};
+  src.texture = output;
+  src.mipLevel = 0;
+  src.origin = {0, 0, 0};
+
+  wgpu::TexelCopyBufferInfo dst = {};
+  dst.buffer = readback;
+  dst.layout.bytesPerRow = kBytesPerRow;
+  dst.layout.rowsPerImage = 1;
+
+  wgpu::Extent3D copySize = {laneCount, 1, 1};
+  encoder.copyTextureToBuffer(src, dst, copySize);
+
+  wgpu::CommandBuffer commands = encoder.finish();
+  queue.submit(1, &commands);
+
+  struct MapState {
+    std::atomic<bool> done = false;
+    std::atomic<bool> ok = false;
+  };
+  auto mapState = std::make_shared<MapState>();
+  wgpu::BufferMapCallbackInfo mapCb{wgpu::Default};
+  mapCb.callback = [](WGPUMapAsyncStatus status, WGPUStringView /*message*/, void* userdata1,
+                      void* /*userdata2*/) {
+    const std::shared_ptr<MapState> state =
+        donner::geode::takeWgpuCallbackState<MapState>(userdata1);
+    state->ok.store(status == WGPUMapAsyncStatus_Success, std::memory_order_relaxed);
+    state->done.store(true, std::memory_order_release);
+  };
+  mapCb.userdata1 = donner::geode::retainWgpuCallbackState(mapState);
+  mapCb.userdata2 = nullptr;
+  readback.mapAsync(wgpu::MapMode::Read, 0, kBytesPerRow, mapCb);
+
+  const donner::geode::GpuWaitResult waitResult = donner::geode::BoundedGpuWait(
+      [&] {
+        device.poll(false, nullptr);
+        return mapState->done.load(std::memory_order_acquire);
+      },
+      donner::geode::kDefaultGpuWaitTimeout);
+  if (waitResult != donner::geode::GpuWaitResult::Complete ||
+      !mapState->ok.load(std::memory_order_relaxed)) {
+    return {};
+  }
+
+  const uint8_t* mapped =
+      static_cast<const uint8_t*>(readback.getConstMappedRange(0, kBytesPerRow));
+  if (mapped == nullptr) {
+    return {};
+  }
+  std::vector<uint8_t> texels(mapped, mapped + size_t{laneCount} * 4u);
+  readback.unmap();
+  return texels;
+}
+
+TEST(WgslEmitterGeodeValidation, RoundHalfAwayFromZeroRunsOnTheDeviceAndMatchesTheCpuPath) {
+  // The composition sign(x) * floor(abs(x) + 0.5) is round-half-away-from-zero, which is what
+  // std::round does on the CPU filter path and what WGSL's own round() does not: round() is
+  // round-half-to-even, so it disagrees on every exact half. Running the emitted module on the
+  // renderer's device and comparing every texel to std::round is what makes that a fact about
+  // the shader rather than about a formula written twice, and it covers the vector forms of
+  // sign and floor and both forms of pow at the same time.
+  auto geodeDevice = donner::geode::GeodeDevice::CreateHeadless();
+  if (!geodeDevice) {
+    GTEST_SKIP() << "No WebGPU-capable device available";
+  }
+
+  ShaderResult<IrModule> module = BuildMathPrimitiveModule();
+  ASSERT_THAT(module, HasShaderResult());
+  ShaderResult<std::string> wgsl = EmitWgsl(module.result());
+  ASSERT_FALSE(wgsl.hasError()) << "EmitWgsl failed: " << wgsl.error();
+
+  const std::vector<float> values = MathPrimitiveInputValues();
+  const std::vector<uint8_t> texels =
+      RunMathPrimitiveModule(geodeDevice->device(), geodeDevice->queue(), wgsl.result(), values);
+  ASSERT_THAT(texels, testing::SizeIs(values.size() * 4u));
+
+  for (size_t i = 0; i < values.size(); ++i) {
+    const float value = values[i];
+    EXPECT_THAT(texels[i * 4u + 0u], testing::Eq(EncodeSignedResult(std::round(value))))
+        << "rounding of " << value << " on the device diverges from std::round";
+    EXPECT_THAT(texels[i * 4u + 1u], testing::Eq(EncodeSignResult(value))) << "sign of " << value;
+    EXPECT_THAT(texels[i * 4u + 2u], testing::Eq(EncodeSignedResult(std::floor(value * 0.25f))))
+        << "floor of " << value << " * 0.25";
+    // pow is a transcendental with a per-implementation error bound, so its channel is held to
+    // the quantization step rather than to an exact byte.
+    EXPECT_NEAR(static_cast<double>(texels[i * 4u + 3u]),
+                static_cast<double>(PowChannelOnHost(value)) * 255.0, 2.0)
+        << "pow channel for " << value;
+  }
 }
 
 TEST(WgslEmitterGeodeValidation, NegativeControlDetectsInvalidWgsl) {
