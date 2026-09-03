@@ -82,6 +82,14 @@ export interface SplashToneCensus extends SplashSurfaceCoverageStats {
 /**
  * The composited render-pane backdrop, measured as exactly (44,47,56) on both
  * engines (the same calibration `countSplashSurfaceCoverage` documents).
+ *
+ * Matched exactly, with no tolerance. A +-2 window around this tone matched
+ * 27752 pixels of the artboard overhang at the Splash's natural fit, of which
+ * 27720 carried this exact value and the other 32 were the artboard's
+ * antialiased top edge blending into it; inside a region the document fully
+ * covers it matched one (44,47,57) pixel of 108,000, which the Splash art
+ * draws. Neither class is exposed backdrop, and tolerating them is what forced
+ * the coverage probe to accept a fraction of its region rather than none of it.
  */
 const kPaneBackdropColor = { red: 44, green: 47, blue: 56 };
 
@@ -97,9 +105,8 @@ function censusSplashTones(image: PngImage, dominantColorCount = 4): SplashToneC
     histogram.set(key, (histogram.get(key) ?? 0) + 1);
     const alpha = image.channels === 4 ? image.data[offset + 3] : 255;
     if (
-      alpha >= 200 && Math.abs(red - kPaneBackdropColor.red) <= 2
-      && Math.abs(green - kPaneBackdropColor.green) <= 2
-      && Math.abs(blue - kPaneBackdropColor.blue) <= 2
+      alpha >= 200 && red === kPaneBackdropColor.red && green === kPaneBackdropColor.green
+      && blue === kPaneBackdropColor.blue
     ) {
       ++paneBackdropPixels;
     }
@@ -826,7 +833,7 @@ export interface EditorBackgroundCoverageStats {
  * both engines. That is the tone the pane shows where the document does not
  * reach it: a capture of the Donner Splash at its natural fit, taken with the
  * editor's published `documentY` 77.5 CSS pixels below the top of a 360x300
- * probe, scores 27752 of them against the 27900 that 360 x 77.5 strip holds -
+ * probe, scores 27720 of them against the 27900 that 360 x 77.5 strip holds -
  * that is, exactly the strip that overhangs the artboard and nothing else.
  *
  * This probe used to count (12-14, 14-16, 28-30) instead and call it the

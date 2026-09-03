@@ -1746,27 +1746,22 @@ async function openDonnerSplash(page: Page): Promise<{
   return { editorBounds };
 }
 
-// How much of the probe region may still show the pane backdrop and still count
-// as covered by the document.
+// Whether the presented document covers the whole probe region.
 //
-// Not exactly zero: the backdrop window carries a +-2 tolerance for compositor
-// rounding, and the Splash art is a ~12,000-colour storm scene, so at depth a
-// few of its own pixels land inside that window. One of 108,000 was measured at
-// the depth the zoom-in loop stops at. The floor is 216 pixels of that region,
-// which still catches a single uncovered row across its 360-pixel width and
-// sits ~130x below the 27,752-pixel uncovering the probe reads at the natural
-// fit, so it separates art noise from any uncovering worth a failure. That
-// noise figure is a single measured sample, so if this floor ever trips, count
-// the backdrop window against the art at that depth again before widening it:
-// the honest fix may be a re-measurement rather than a larger number.
-const kCoveredBackdropFraction = 0.002;
-
-function coveredBackdropFloor(stats: EditorBackgroundCoverageStats): number {
-  return Math.round(stats.samples * kCoveredBackdropFraction);
-}
-
+// The claim is that the pane backdrop is never exposed inside the region, so
+// the acceptance value is none of it. A fraction of the region was tolerated
+// instead, and 0.2% of the 360x300 probe is 216 pixels: a fully uncovered row
+// across the region's width would have scored as covered.
+//
+// That fraction was absorbing the backdrop tone window's own +-2 slack rather
+// than anything about the presented picture. Counted exactly, the only pixels
+// the slack added are the artboard's antialiased top edge (32 of 27752 at the
+// natural fit, and an edge only exists where the document does not cover the
+// region) and one (44,47,57) art pixel of 108,000 at the depth the zoom-in loop
+// stops at. `canvas-color-stats` now counts the calibrated tone exactly, which
+// leaves a covered region at zero and nothing for a floor to absorb.
 function isProbeRegionCovered(stats: EditorBackgroundCoverageStats): boolean {
-  return stats.editorBackgroundPixels <= coveredBackdropFloor(stats);
+  return stats.editorBackgroundPixels === 0;
 }
 
 // How much of the probe region the render pane's own tones must account for
@@ -1776,7 +1771,7 @@ function isProbeRegionCovered(stats: EditorBackgroundCoverageStats): boolean {
 // background count has to mean one thing. A capture of something that is not
 // the render pane also scores low, and the editor is a single canvas that keeps
 // showing the last presented frame, so "not the render pane" is a state the
-// suite really reaches: the welcome sample picker measures 8 backdrop and 1041
+// suite really reaches: the welcome sample picker measures 0 backdrop and 1041
 // document pixels of 108,000, together under 1% of the region. A presented
 // Splash accounts for 55% of it at the natural fit, 29% at the depth the
 // zoom-in loop stops at, and 66% at the headroom depth the storm works around,
@@ -1967,7 +1962,7 @@ test("the Splash coverage probe counts editor background, not document pixels", 
   const captureScale = stats.samples / (probeRegion.width * probeRegion.height);
   const expectedBackground = overhangRows * probeRegion.width * captureScale;
   // A tenth of the overhang is far more slack than edge antialiasing needs
-  // (measured 27752 against 27900, 0.5%) and far tighter than any tone the
+  // (measured 27720 against 27900, 0.6%) and far tighter than any tone the
   // document draws could survive.
   expect(
     stats.editorBackgroundPixels,
@@ -2007,7 +2002,7 @@ test("a zoom storm never uncovers the editor background under the Donner Splash"
   // every zoom level. At the natural fit the artboard's top edge crosses the
   // region, so it starts with genuine uncovered backdrop: the editor publishes
   // `documentY` 77.5 CSS pixels below the region's top, and that 360 x 77.5
-  // strip scores 27752 pane-backdrop pixels.
+  // strip scores 27720 pane-backdrop pixels.
   const probeRegion = splashProbeRegion(editorBounds);
   const probeCenter = {
     x: probeRegion.x + probeRegion.width * 0.5,
@@ -2035,7 +2030,7 @@ test("a zoom storm never uncovers the editor background under the Donner Splash"
     zoomedIn.editorBackgroundPixels,
     `zooming in never covered the probe region with document pixels;`
       + ` coverage=${JSON.stringify(zoomInCoverage)} census=${JSON.stringify(zoomedIn.census)}`,
-  ).toBeLessThanOrEqual(coveredBackdropFloor(zoomedIn));
+  ).toBe(0);
   expect(
     zoomInCoverage.length,
     `the document already covered the probe region without zooming: ${
@@ -2060,7 +2055,7 @@ test("a zoom storm never uncovers the editor background under the Donner Splash"
     headroom.editorBackgroundPixels,
     `the zoom headroom notches left editor background inside the probe region;`
       + ` census=${JSON.stringify(headroom.census)}`,
-  ).toBeLessThanOrEqual(coveredBackdropFloor(headroom));
+  ).toBe(0);
 
   // Zoom out and back in. Each notch changes the live viewport by ~27% while
   // the worker is still finishing the previous raster, which is the window in
