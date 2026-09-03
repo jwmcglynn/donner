@@ -265,6 +265,181 @@ class ReferenceIntoAllowlistTest(unittest.TestCase):
         self.assertEqual(categories(verifier.check(files, SCOPES)), [])
 
 
+class ContainmentEvasionTest(unittest.TestCase):
+    """Escapes an independent review drove through the first containment check.
+
+    Every one of these exited 0 against a verifier that only looked at
+    visibility inside the fixture package and at fixture tokens outside the
+    vendored test tree.
+    """
+
+    def test_alias_reexporting_the_oracle_is_flagged(self):
+        files = {
+            "third_party/tiny-skia-cpp/tests/BUILD.bazel": (
+                'package(default_visibility = ["//tests:__subpackages__"])\n'
+                "\n"
+                "alias(\n"
+                '    name = "oracle",\n'
+                '    actual = "//tests/rust_ffi:tiny_skia_ffi",\n'
+                ")\n"
+            )
+        }
+        findings = verifier.check(files, SCOPES)
+        self.assertEqual(categories(findings), ["rust-fixture-containment"])
+        self.assertIn("alias", findings[0].detail)
+
+    def test_bzl_under_the_test_tree_handing_out_the_oracle_is_flagged(self):
+        files = {
+            "third_party/tiny-skia-cpp/tests/oracle.bzl": (
+                'ORACLE = "//tests/rust_ffi:tiny_skia_ffi"\n'
+            )
+        }
+        findings = verifier.check(files, SCOPES)
+        self.assertEqual(categories(findings), ["rust-fixture-containment"])
+
+    def test_public_default_visibility_in_a_consumer_package_is_flagged(self):
+        """The consumer prefix is not a licence to re-export."""
+        files = {
+            "third_party/tiny-skia-cpp/tests/test_utils/BUILD.bazel": (
+                'package(default_visibility = ["//visibility:public"])\n'
+                'cc_library(name = "rust_reference", deps = ["//tests/rust_ffi:tiny_skia_ffi"])\n'
+            )
+        }
+        findings = verifier.check(files, SCOPES)
+        self.assertEqual(categories(findings), ["rust-fixture-containment"])
+        self.assertIn("//visibility:public", findings[0].detail)
+
+    def test_cross_repository_visibility_entry_is_flagged(self):
+        """`@donner//...:__pkg__` leaves the vendored workspace entirely."""
+        files = {
+            FIXTURE_BUILD: (
+                "cc_library(\n"
+                '    name = "tiny_skia_ffi",\n'
+                '    visibility = ["@donner//donner/base/tests:__pkg__"],\n'
+                ")\n"
+            )
+        }
+        findings = verifier.check(files, SCOPES)
+        self.assertEqual(categories(findings), ["rust-fixture-containment"])
+
+    def test_a_tests_segment_deeper_in_the_path_is_not_the_test_tree(self):
+        """`//src/tiny_skia/tests` is a source package, not `//tests`."""
+        files = {
+            FIXTURE_BUILD: (
+                "cc_library(\n"
+                '    name = "tiny_skia_ffi",\n'
+                '    visibility = ["//src/tiny_skia/tests:__pkg__"],\n'
+                ")\n"
+            )
+        }
+        findings = verifier.check(files, SCOPES)
+        self.assertEqual(categories(findings), ["rust-fixture-containment"])
+
+    def test_visibility_from_a_constant_is_flagged(self):
+        """A non-literal visibility is unreadable here, so it fails closed."""
+        files = {
+            FIXTURE_BUILD: (
+                '_VIS = ["//visibility:public"]\n'
+                "\n"
+                "cc_library(\n"
+                '    name = "tiny_skia_ffi",\n'
+                "    visibility = _VIS,\n"
+                ")\n"
+            )
+        }
+        findings = verifier.check(files, SCOPES)
+        self.assertEqual(categories(findings), ["rust-fixture-containment"])
+        self.assertIn("not a literal list", findings[0].detail)
+
+    def test_test_tree_subpackage_visibility_is_still_allowed(self):
+        files = {
+            FIXTURE_BUILD: (
+                "cc_library(\n"
+                '    name = "tiny_skia_ffi",\n'
+                '    visibility = ["//tests:__subpackages__"],\n'
+                ")\n"
+            ),
+            "third_party/tiny-skia-cpp/tests/test_utils/BUILD.bazel": (
+                'package(default_visibility = ["//tests/integration:__pkg__"])\n'
+                'cc_library(name = "rust_reference", deps = ["//tests/rust_ffi:tiny_skia_ffi"])\n'
+            ),
+        }
+        self.assertEqual(verifier.check(files, SCOPES), [])
+
+
+class CmakeRustTokenTest(unittest.TestCase):
+    """CMake reaches Rust with its own vocabulary, not Bazel's."""
+
+    def test_corrosion_import_crate_is_flagged(self):
+        files = {"examples/CMakeLists.txt": "corrosion_import_crate(MANIFEST_PATH Cargo.toml)\n"}
+        findings = verifier.check(files, SCOPES)
+        self.assertEqual(categories(findings), ["rust-build-edge"])
+        self.assertIn("corrosion", findings[0].detail)
+
+    def test_cargo_build_custom_command_is_flagged(self):
+        files = {"examples/CMakeLists.txt": "add_custom_command(COMMAND cargo build --release)\n"}
+        findings = verifier.check(files, SCOPES)
+        self.assertEqual(categories(findings), ["rust-build-edge"])
+
+    def test_find_package_rust_is_flagged(self):
+        files = {"cmake/FindRust.cmake": "find_program(RUSTC_EXECUTABLE rustc)\n"}
+        findings = verifier.check(files, SCOPES)
+        self.assertEqual(categories(findings), ["rust-build-edge"])
+
+    def test_cmake_tokens_do_not_fire_on_bazel_files(self):
+        """`cargo` and `rustc` are matched in CMake inputs, not everywhere."""
+        files = {"donner/BUILD.bazel": '# the cargo cult of rustc corrosion\n'}
+        self.assertEqual(verifier.check(files, SCOPES), [])
+
+    def test_plain_cmake_is_not_flagged(self):
+        files = {"examples/CMakeLists.txt": "add_executable(demo main.cc)\n"}
+        self.assertEqual(verifier.check(files, SCOPES), [])
+
+
+class AttributeScanRobustnessTest(unittest.TestCase):
+    def test_an_unbalanced_paren_in_a_comment_does_not_shift_attribution(self):
+        """The exact evasion: a stray `(` plus a top-level `data` variable.
+
+        Bracket counting over raw lines let the comment's paren hold the depth
+        open, so a later `srcs = glob([...])` inside a rule was attributed to
+        the `data` variable and read as staged test data.
+        """
+        files = {
+            "third_party/tiny-skia-cpp/BUILD.bazel": (
+                "# a helpful note with an unclosed paren (see the docs\n"
+                'data = ["nothing"]\n'
+                "\n"
+                "cc_library(\n"
+                '    name = "port",\n'
+                '    srcs = glob(["third_party/tiny-skia/src/**"]),\n'
+                ")\n"
+            )
+        }
+        findings = verifier.check(files, SCOPES)
+        self.assertEqual(categories(findings), ["reference-into-allowlist"])
+
+    def test_a_bracket_inside_a_string_does_not_shift_attribution(self):
+        files = {
+            "third_party/tiny-skia-cpp/BUILD.bazel": (
+                'data = ["a ( b [ c"]\n'
+                "\n"
+                "cc_library(\n"
+                '    name = "port",\n'
+                '    deps = ["//third_party/tiny-skia:src"],\n'
+                ")\n"
+            )
+        }
+        findings = verifier.check(files, SCOPES)
+        self.assertEqual(categories(findings), ["reference-into-allowlist"])
+
+
+class BazelrcImportTest(unittest.TestCase):
+    def test_an_imported_bazelrc_is_scanned(self):
+        files = {"ci.bazelrc": "build --@rules_rust//:extra_rustc_flags=-Copt-level=3\n"}
+        findings = verifier.check(files, SCOPES)
+        self.assertEqual(categories(findings), ["rust-build-edge"])
+
+
 class BlockingSelectionTest(unittest.TestCase):
     def test_absent_flag_blocks_nothing(self):
         self.assertEqual(verifier.parse_blocking(None), ())
@@ -289,6 +464,10 @@ class BlockingSelectionTest(unittest.TestCase):
             sorted(set(verifier.CATEGORIES) - set(verifier.DEFAULT_BLOCKING)),
             ["rust-built-archive"],
         )
+
+    def test_the_default_keyword_selects_that_set(self):
+        """The CI set lives in the tool, so the workflow spells one word."""
+        self.assertEqual(verifier.parse_blocking("default"), verifier.DEFAULT_BLOCKING)
 
 
 class FormatReportTest(unittest.TestCase):

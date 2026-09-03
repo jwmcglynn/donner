@@ -19,15 +19,16 @@ from pathlib import Path
 # third_party/BUILD.wgpu_native_platform) and `WORKSPACE.<name>` covers
 # WORKSPACE.bazel/WORKSPACE.bzlmod.
 BUILD_GRAPH_FILE_RE = re.compile(
-    r"(^|/)(MODULE\.bazel(\.lock)?|BUILD(\.[^/]+)?|WORKSPACE(\.[^/]+)?|[^/]+\.bzl|\.bazelrc)$"
+    r"(^|/)(MODULE\.bazel(\.lock)?|BUILD(\.[^/]+)?|WORKSPACE(\.[^/]+)?"
+    r"|[^/]+\.bzl|[^/]*\.bazelrc)$"
 )
 
-# CMake inputs. Donner's root CMakeLists.txt is generated rather than tracked,
-# so this matches the tracked hand-written and vendored ones plus a generated
-# file when a local configure has produced it.
+# CMake inputs. The scan reads git-tracked files only, so this matches the
+# tracked hand-written and vendored CMake files; Donner's root CMakeLists.txt is
+# generated and not tracked, and is therefore out of scope.
 CMAKE_FILE_RE = re.compile(r"(^|/)(CMakeLists\.txt|[^/]+\.cmake(\.in)?)$")
 
-# Tokens that name a Rust rule set, toolchain, or crate resolver.
+# Tokens that name a Rust rule set, toolchain, or crate resolver in Bazel.
 RUST_BUILD_TOKENS = (
     "cargo_bazel",
     "crate_universe",
@@ -38,6 +39,17 @@ RUST_BUILD_TOKENS = (
     "rust_toolchains",
 )
 
+# CMake reaches Rust through an entirely different vocabulary, so the Bazel
+# token list finds nothing there. Matched case-insensitively and only in CMake
+# inputs, because `cargo` and `rustc` are ordinary words elsewhere.
+CMAKE_RUST_TOKENS = (
+    "cargo",
+    "corrosion",
+    "find_package(rust",
+    "findrust",
+    "rustc",
+)
+
 
 def is_rust_source_path(path: str) -> bool:
     """True for Rust source and Cargo metadata paths."""
@@ -46,7 +58,12 @@ def is_rust_source_path(path: str) -> bool:
 
 def is_build_graph_path(path: str) -> bool:
     """True for Bazel build-graph files and CMake inputs."""
-    return bool(BUILD_GRAPH_FILE_RE.search(path) or CMAKE_FILE_RE.search(path))
+    return bool(BUILD_GRAPH_FILE_RE.search(path) or is_cmake_path(path))
+
+
+def is_cmake_path(path: str) -> bool:
+    """True for CMake inputs, which get their own Rust token vocabulary."""
+    return bool(CMAKE_FILE_RE.search(path))
 
 
 @dataclass(frozen=True)

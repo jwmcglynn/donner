@@ -1,6 +1,11 @@
 """Top-level test package."""
 
-package(default_visibility = ["//visibility:public"])
+# The oracle lives under this tree, so nothing here is public: a public
+# default here is enough for an alias to hand the Rust FFI library to any
+# repository, which is what //tools/gpu_inventory:check_no_rust_dependencies
+# enforces against. Command-line targets ignore visibility, so
+# `bazel test //tests:tiny_skia_dual_mode_suite` is unaffected.
+package(default_visibility = ["//tests:__subpackages__"])
 
 test_suite(
     name = "tiny_skia_dual_mode_suite",

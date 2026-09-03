@@ -30,9 +30,18 @@ Categories:
   (the wgpu-native release tarballs). These are the Rust that actually ships;
   they leave with the Metal and Linux cutovers.
 
-`--blocking` takes the categories that must fail the run. The Lint workflow
-blocks on everything except rust-built-archive, which is still true of the tree
-and stays report-only until those cutovers land.
+`--blocking` takes the categories that must fail the run. `--blocking default`
+is the set CI enforces: everything except rust-built-archive, which is still
+true of the tree and stays report-only until those cutovers land.
+
+This is a static check over build-file text, and it is not the only defense.
+From the Donner root, `bazel query 'deps(@tiny-skia-cpp//tests/rust_ffi:tiny_skia_ffi)'`
+fails to load, because `@rules_rust` is not visible from a repository Donner
+pulls in with a repo rule rather than as a module. A Donner target that reaches
+the oracle therefore fails at load time rather than silently linking Rust, and
+the edit that would make it load, adding rules_rust to the root module graph, is
+itself a rust-build-edge finding here. This verifier catches the attempt early
+and names it; Bazel catches it regardless.
 
 The scan covers git-tracked files only. A generated `MODULE.bazel.lock` is
 deliberately out of scope: it records the whole transitive Bzlmod graph, and
@@ -42,9 +51,10 @@ rule. Reporting that would be reporting the graph instead of the closure, and it
 is also invisible to a fresh CI checkout, which has no lockfile at all.
 
 Usage:
-  python3 tools/gpu_inventory/check_no_rust_dependencies.py                    # report
-  python3 tools/gpu_inventory/check_no_rust_dependencies.py --blocking         # all
-  python3 tools/gpu_inventory/check_no_rust_dependencies.py --blocking a,b     # some
+  python3 tools/gpu_inventory/check_no_rust_dependencies.py                     # report
+  python3 tools/gpu_inventory/check_no_rust_dependencies.py --blocking default  # as CI
+  python3 tools/gpu_inventory/check_no_rust_dependencies.py --blocking          # all
+  python3 tools/gpu_inventory/check_no_rust_dependencies.py --blocking a,b      # some
 """
 
 from __future__ import annotations
@@ -59,9 +69,11 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from rust_scopes import (  # noqa: E402  (sibling module, path set just above)
+    CMAKE_RUST_TOKENS,
     RUST_BUILD_TOKENS,
     RustScopes,
     is_build_graph_path,
+    is_cmake_path,
     is_rust_source_path,
     load_rust_scopes,
 )
@@ -121,8 +133,9 @@ COMPILE_ATTRIBUTES = frozenset(
 DATA_ATTRIBUTES = frozenset({"data", "testdata", "resources", "args", "tags"})
 
 ATTRIBUTE_ASSIGN_RE = re.compile(r"^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=")
-VISIBILITY_RE = re.compile(r"(?:default_)?visibility\s*=\s*\[([^\]]*)\]", re.DOTALL)
+VISIBILITY_ASSIGN_RE = re.compile(r"(?:default_)?visibility\s*=\s*")
 VISIBILITY_ENTRY_RE = re.compile(r"\"([^\"]+)\"")
+ALIAS_RE = re.compile(r"\balias\s*\(")
 
 
 @dataclass(frozen=True)
@@ -132,6 +145,47 @@ class Finding:
     category: str
     path: str
     detail: str
+
+
+def code_lines(text: str) -> list[str]:
+    """Returns each line with string contents and `#` comments removed.
+
+    Bracket depth has to be counted over code, not over prose. A single
+    unbalanced `(` in a comment held the depth open for the rest of the file,
+    which shifted every later attribute onto whatever variable happened to be
+    open, and a `[` inside a string did the same. Both are one-character edits
+    that turned a compiled reference into a staged-data one.
+    """
+    out: list[str] = []
+    quote: str | None = None
+    for line in text.splitlines():
+        kept: list[str] = []
+        index = 0
+        while index < len(line):
+            if quote is None:
+                if line[index] == "#":
+                    break
+                opener = next(
+                    (q for q in ('"""', "'''", '"', "'") if line.startswith(q, index)), None
+                )
+                if opener is not None:
+                    quote = opener
+                    index += len(opener)
+                else:
+                    kept.append(line[index])
+                    index += 1
+            elif line[index] == "\\":
+                index += 2
+            elif line.startswith(quote, index):
+                index += len(quote)
+                quote = None
+            else:
+                index += 1
+        out.append("".join(kept))
+        if quote in ('"', "'"):
+            # A single-quoted string cannot span lines; a triple-quoted one can.
+            quote = None
+    return out
 
 
 def attribute_of_each_line(text: str) -> list[str | None]:
@@ -145,7 +199,7 @@ def attribute_of_each_line(text: str) -> list[str | None]:
     attributes: list[str | None] = []
     current: str | None = None
     depth = 0
-    for line in text.splitlines():
+    for line in code_lines(text):
         match = ATTRIBUTE_ASSIGN_RE.match(line)
         if match and depth <= 1:
             current = match.group(1)
@@ -204,26 +258,81 @@ def is_compiled_reference(path: str, text: str, tokens: tuple[str, ...]) -> bool
     return any(attribute not in DATA_ATTRIBUTES for attribute in attributes)
 
 
+def is_test_tree_visibility(entry: str) -> bool:
+    """True only for a package inside the vendored workspace's own `//tests`.
+
+    `@donner//donner/base/tests:__pkg__` leaves the workspace entirely and
+    `//src/tiny_skia/tests:__pkg__` is a source package that merely has a
+    `tests` segment. An earlier "tests appears somewhere in the path" rule let
+    both through.
+    """
+    if entry.startswith("@"):
+        return False
+    package = entry.split(":", 1)[0].lstrip("/")
+    return package == "tests" or package.startswith("tests/")
+
+
 def visibility_findings(path: str, text: str) -> list[Finding]:
-    """Flags fixture visibility that reaches beyond the vendored test tree."""
+    """Flags visibility in the oracle's packages that leaves the test tree."""
     findings = []
-    for match in VISIBILITY_RE.finditer(text):
-        for entry in VISIBILITY_ENTRY_RE.findall(match.group(1)):
-            if entry == "//visibility:private":
-                continue
-            package = entry.split(":", 1)[0].lstrip("/")
-            if entry == "//visibility:public" or "tests" not in package.split("/"):
-                findings.append(
-                    Finding(
-                        category="rust-fixture-containment",
-                        path=path,
-                        detail=(
-                            f"cross-validation oracle exposed to {entry}; its visibility must "
-                            "stay inside the vendored workspace's test tree."
-                        ),
-                    )
+    for match in VISIBILITY_ASSIGN_RE.finditer(text):
+        rest = text[match.end() :].lstrip()
+        if not rest.startswith("["):
+            findings.append(
+                Finding(
+                    category="rust-fixture-containment",
+                    path=path,
+                    detail=(
+                        "visibility is not a literal list, so its scope cannot be read here; "
+                        "spell the packages out."
+                    ),
                 )
+            )
+            continue
+        closing = rest.find("]")
+        listed = rest[: closing] if closing != -1 else rest
+        for entry in VISIBILITY_ENTRY_RE.findall(listed):
+            if entry == "//visibility:private" or is_test_tree_visibility(entry):
+                continue
+            findings.append(
+                Finding(
+                    category="rust-fixture-containment",
+                    path=path,
+                    detail=(
+                        f"cross-validation oracle's package exposed to {entry}; visibility must "
+                        "stay inside the vendored workspace's own //tests tree."
+                    ),
+                )
+            )
     return findings
+
+
+def reexport_findings(path: str, text: str) -> list[Finding]:
+    """Flags indirection that hands the oracle out under a different name.
+
+    An `alias` and a `.bzl` constant both re-export a label without repeating
+    it in the consuming file, which is how a Donner target reaches the oracle
+    while every Donner BUILD file still reads clean.
+    """
+    fixture_tokens = sorted(token for token in RUST_FIXTURE_TOKENS if token in text)
+    if not fixture_tokens:
+        return []
+    if path.endswith(".bzl"):
+        reason = "a .bzl file hands out"
+    elif ALIAS_RE.search(text):
+        reason = "an alias re-exports"
+    else:
+        return []
+    return [
+        Finding(
+            category="rust-fixture-containment",
+            path=path,
+            detail=(
+                f"{reason} the cross-validation oracle ({', '.join(fixture_tokens)}); it must be "
+                "named directly by the test targets that use it."
+            ),
+        )
+    ]
 
 
 def check(files: dict[str, str], scopes: RustScopes) -> list[Finding]:
@@ -254,22 +363,29 @@ def check(files: dict[str, str], scopes: RustScopes) -> list[Finding]:
             continue
         text = files[path]
 
-        rust_tokens = sorted(t for t in RUST_BUILD_TOKENS if t in text)
+        tokens = CMAKE_RUST_TOKENS if is_cmake_path(path) else RUST_BUILD_TOKENS
+        haystack = text.lower() if is_cmake_path(path) else text
+        rust_tokens = sorted(token for token in tokens if token in haystack)
         if rust_tokens and not scopes.is_test_only(path):
             findings.append(
                 Finding(
                     category="rust-build-edge",
                     path=path,
                     detail=(
-                        "References Rust build rules outside the test-only oracle: "
+                        "References a Rust toolchain outside the test-only oracle: "
                         + ", ".join(rust_tokens)
                     ),
                 )
             )
 
-        if scopes.is_test_only(path):
+        # The oracle's own package and every package allowed to consume it are
+        # both places a wider visibility or a re-export would leak it, so both
+        # get the containment checks. Everywhere else, naming it at all is the
+        # finding.
+        if scopes.is_test_only(path) or scopes.is_test_only_consumer(path):
             findings.extend(visibility_findings(path, text))
-        elif not scopes.is_test_only_consumer(path):
+            findings.extend(reexport_findings(path, text))
+        else:
             fixture_tokens = sorted(t for t in RUST_FIXTURE_TOKENS if t in text)
             if fixture_tokens:
                 findings.append(
@@ -354,11 +470,13 @@ def format_report(findings: list[Finding], blocking: tuple[str, ...]) -> str:
 
 
 def parse_blocking(value: str | None) -> tuple[str, ...]:
-    """Parses --blocking: absent means none, bare means all, else a category list."""
+    """Parses --blocking: absent none, bare all, `default` the CI set, else a list."""
     if value is None:
         return ()
     if value == "all":
         return CATEGORIES
+    if value == "default":
+        return DEFAULT_BLOCKING
     requested = tuple(part.strip() for part in value.split(",") if part.strip())
     unknown = sorted(set(requested) - set(CATEGORIES))
     if unknown:
@@ -380,7 +498,8 @@ def main() -> int:
         default=None,
         metavar="CATEGORIES",
         help=(
-            "Comma-separated categories that fail the run, or bare for all. "
+            "Comma-separated categories that fail the run, bare for all, or "
+            "`default` for the set CI enforces (" + ", ".join(DEFAULT_BLOCKING) + "). "
             "Known categories: " + ", ".join(CATEGORIES)
         ),
     )
