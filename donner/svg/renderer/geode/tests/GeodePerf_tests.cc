@@ -358,6 +358,47 @@ TEST_F(GeodePerfTest, MorphologyHugeRadiusIsBoundedBeforeEncoding) {
   EXPECT_LE(c.submits, 3u);
 }
 
+/// Inline fixtures: the same document with one and with three `feFlood` primitives, so the
+/// per-flood cost can be read off as a difference and the rest of the scene cancels.
+constexpr std::string_view kOneFloodSvg = R"SVG(
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <filter id="f"><feFlood flood-color="red"/></filter>
+  <rect x="10" y="10" width="80" height="80" fill="green" filter="url(#f)"/>
+</svg>
+)SVG";
+
+constexpr std::string_view kThreeFloodSvg = R"SVG(
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <filter id="f">
+    <feFlood flood-color="red"/><feFlood flood-color="blue"/><feFlood flood-color="lime"/>
+  </filter>
+  <rect x="10" y="10" width="80" height="80" fill="green" filter="url(#f)"/>
+</svg>
+)SVG";
+
+/// A filter pass recorded through the GPU runtime must report its bind group once.
+///
+/// The runtime counts the bind group it creates, so the arena counting the same one again reports
+/// every migrated pass as building two and walks the steady-state ceilings up by the number of
+/// migrated passes in the scene.
+TEST_F(GeodePerfTest, MigratedFilterPassesCountTheirBindGroupsOnce) {
+  auto device = sharedDevice();
+  ASSERT_TRUE(device) << "GeodeDevice::CreateHeadless failed";
+
+  // One for the flood pass itself and one for the subregion clip that follows it.
+  constexpr uint64_t kBindGroupsPerFloodNode = 2;
+  constexpr uint64_t kAddedFloodNodes = 2;
+
+  const geode::GeodeCounters one = renderAndGetCounters(kOneFloodSvg, device);
+  const geode::GeodeCounters three = renderAndGetCounters(kThreeFloodSvg, device);
+  printCounters("OneFlood", one);
+  printCounters("ThreeFlood", three);
+
+  EXPECT_EQ(three.bindgroupCreates - one.bindgroupCreates,
+            kAddedFloodNodes * kBindGroupsPerFloodNode)
+      << "two more feFlood nodes must report two more bind groups each, not three";
+}
+
 TEST_F(GeodePerfTest, MultipleBoundedMorphologyNodesStillChunkCommandBuffers) {
   auto device = sharedDevice();
   ASSERT_TRUE(device);
