@@ -5,10 +5,10 @@
 ///
 /// The three opcodes reach no shipping program yet, so without this module their spellings and
 /// their SPIR-V lowerings would be checked only against the emitters' own idea of them. It also
-/// carries the composition the filter primitives need, `sign(x) * floor(abs(x) + 0.5)`, as a
-/// named function: that recipe is round-half-away-from-zero, which is what the CPU filter path
-/// does and what WGSL `round` does not, and it is pinned here so a later program expressing the
-/// offset filter reuses it rather than re-deriving it.
+/// carries the composition the filter primitives need, `sign(x) * floor(abs(x) + 0.5)`: that
+/// recipe is round-half-away-from-zero, which is what the CPU filter path does and what WGSL
+/// `round` does not. The recipe itself lives in the programs library, so this module and the
+/// shipping program that offsets pixels declare one function rather than two.
 ///
 /// Each invocation reads one f32 from the input buffer and writes one texel encoding four
 /// results, so the same module doubles as an executable check of those results against the host.
@@ -21,6 +21,7 @@
 #include "donner/gpu/shader/IrExpr.h"
 #include "donner/gpu/shader/IrModule.h"
 #include "donner/gpu/shader/programs/ErrorLatch.h"
+#include "donner/gpu/shader/programs/RoundHalfAwayFromZero.h"
 
 namespace donner::gpu::shader {
 
@@ -66,20 +67,7 @@ inline ShaderResult<IrModule> BuildMathPrimitiveModule() {
   const IrType valuesType = e(IrType::RuntimeArray(IrType::F32()));
   e.ok(builder.addReadOnlyStorageBuffer(0, 1, "values", valuesType));
 
-  {
-    ShaderResult<FunctionBuilder> rounder = builder.createFunction(
-        "round_half_away_from_zero", {IrParam{"x", IrType::F32()}}, IrType::F32());
-    if (rounder.hasError()) {
-      return std::move(rounder).error();
-    }
-    FunctionBuilder fn = std::move(rounder).result();
-    const IrExpr x = e(fn.ref("x"));
-    const IrExpr magnitude = e(CallBuiltin(BuiltinFn::Abs, {x}));
-    const IrExpr shifted = e(Add(magnitude, LiteralF32(0.5f)));
-    const IrExpr truncated = e(CallBuiltin(BuiltinFn::Floor, {shifted}));
-    e.ok(fn.returnValue(e(Mul(e(CallBuiltin(BuiltinFn::Sign, {x})), truncated))));
-    e.ok(fn.finish());
-  }
+  e.ok(programs::AddRoundHalfAwayFromZero(builder));
 
   ShaderResult<FunctionBuilder> entry =
       builder.createComputeEntryPoint("cs_main",
@@ -96,8 +84,8 @@ inline ShaderResult<IrModule> BuildMathPrimitiveModule() {
   const IrExpr lane = e(Swizzle(gid, "x"));
   const IrExpr x = e(fn.addLet("x", e(Index(e(fn.ref("values")), lane))));
 
-  const IrExpr rounded =
-      e(fn.addLet("rounded", e(fn.callFunction("round_half_away_from_zero", {x}))));
+  const IrExpr rounded = e(fn.addLet(
+      "rounded", e(fn.callFunction(RcString(programs::kRoundHalfAwayFromZeroName), {x}))));
 
   // A quarter of the input, and its negation, so the vector forms of sign and floor run on two
   // components that disagree in sign rather than on a splat that would hide a swapped component.
