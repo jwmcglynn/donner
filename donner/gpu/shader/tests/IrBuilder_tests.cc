@@ -305,9 +305,10 @@ TEST(IrExprTests, SignAndFloorTakeFloatScalarsAndVectors) {
   ASSERT_THAT(vectorFloor, HasShaderResult());
   EXPECT_TRUE(vectorFloor.result().type() == IrType::Vec2f());
 
-  // Integers are rejected rather than lowered: WGSL and SPIR-V spell an integer sign as a
-  // different instruction from the float one, and MSL has no integer sign at all, so an integer
-  // operand would mean three backends doing three things.
+  // Integers are rejected rather than lowered: SPIR-V spells an integer sign as a different
+  // instruction from the float one (SSign against FSign) and MSL has no integer sign at all, so
+  // an integer operand would mean the three backends doing three different things. WGSL is the
+  // one that would have been happy: its sign is a single overloaded builtin.
   EXPECT_THAT(CallBuiltin(BuiltinFn::Sign, {LiteralI32(-1)}),
               IsShaderError(HasSubstr("f32 scalar or vector")));
   EXPECT_THAT(CallBuiltin(BuiltinFn::Floor, {LiteralU32(1)}),
