@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generates the machine-readable GPU runtime inventory manifests for design doc 0053.
+"""Generates the machine-readable GPU runtime inventory manifests.
 
 Scans the git-tracked source tree and produces four JSON manifests under
 tools/gpu_inventory/manifests/:
@@ -74,7 +74,7 @@ WGPU_C_TYPE_RE = re.compile(r"\bWGPU[A-Z][A-Za-z0-9_]*\b")
 IMGUI_WGPU_RE = re.compile(r"\bImGui_ImplWGPU_[A-Za-z0-9_]*\b")
 EDITOR_WGPU_DEFINE_RE = re.compile(r"\bDONNER_EDITOR_WGPU\b")
 
-# GPU operation methods, per the design 0053 current-state inventory. Matched as
+# GPU operation methods, from the checked-in current-state inventory. Matched as
 # `.method(` inside files that already reference the WebGPU wrapper, so generic
 # names like `draw` do not pick up unrelated call sites.
 #
@@ -171,7 +171,7 @@ INLINE_WGSL_RE = re.compile(
 )
 
 # WGSL language features tracked as simple word-boundary tokens. The shader IR
-# (design 0053 phase 2) may only claim support for features present here.
+# may only claim support for features present here.
 WGSL_FEATURE_TOKENS = (
     "abs",
     "all",
@@ -338,7 +338,7 @@ def build_gpu_operations_manifest(files: dict[str, str]) -> dict[str, object]:
             per_file[path] = tokens
 
     # Patched third-party WebGPU integration code (e.g. the ImGui WebGPU backend
-    # patches) is part of the design 0053 inventory even though it lives outside
+    # patches) is part of the inventory even though it lives outside
     # first-party sources.
     patches = sorted(
         path
@@ -384,7 +384,7 @@ def build_editor_integration_manifest(files: dict[str, str]) -> dict[str, object
 def build_rust_dependencies_manifest(files: dict[str, str], scopes: RustScopes) -> dict[str, object]:
     """Builds the Rust dependency manifest: sources, build edges, prebuilt archives.
 
-    Rust sources are partitioned by the three scopes design 0053 distinguishes.
+    Rust sources are partitioned by the three scopes the no-Rust rule grants.
     `activeRustSources` is the one that must stay empty: a Rust source there is
     neither inert reference material nor part of the test-only oracle, so it is
     reachable from a shipped or non-test closure.

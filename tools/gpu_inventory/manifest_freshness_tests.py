@@ -193,7 +193,7 @@ class ManifestFreshnessTest(unittest.TestCase):
                 [],
                 new_paths,
                 f"a new Rust dependency edge appeared in {section}: "
-                f"{new_paths}. Design 0053 keeps Donner free of a Rust "
+                f"{new_paths}. Donner stays free of a Rust "
                 f"toolchain dependency; if this edge is intended, regenerate "
                 f"with:\n  {REGEN_COMMAND}",
             )
