@@ -294,6 +294,46 @@ TEST(IrExprTests, AnyAndAllReduceOnlyBoolVectors) {
   EXPECT_THAT(CallBuiltin(BuiltinFn::Any, {Vec2uVal()}), IsShaderError(HasSubstr("bool vector")));
 }
 
+TEST(IrExprTests, SignAndFloorTakeFloatScalarsAndVectors) {
+  EXPECT_THAT(CallBuiltin(BuiltinFn::Sign, {F32Val()}), HasShaderResult());
+  EXPECT_THAT(CallBuiltin(BuiltinFn::Floor, {F32Val()}), HasShaderResult());
+
+  const ShaderResult<IrExpr> vectorSign = CallBuiltin(BuiltinFn::Sign, {Vec2fVal()});
+  ASSERT_THAT(vectorSign, HasShaderResult());
+  EXPECT_TRUE(vectorSign.result().type() == IrType::Vec2f());
+  const ShaderResult<IrExpr> vectorFloor = CallBuiltin(BuiltinFn::Floor, {Vec2fVal()});
+  ASSERT_THAT(vectorFloor, HasShaderResult());
+  EXPECT_TRUE(vectorFloor.result().type() == IrType::Vec2f());
+
+  // Integers are rejected rather than lowered: WGSL and SPIR-V spell an integer sign as a
+  // different instruction from the float one, and MSL has no integer sign at all, so an integer
+  // operand would mean three backends doing three things.
+  EXPECT_THAT(CallBuiltin(BuiltinFn::Sign, {LiteralI32(-1)}),
+              IsShaderError(HasSubstr("f32 scalar or vector")));
+  EXPECT_THAT(CallBuiltin(BuiltinFn::Floor, {LiteralU32(1)}),
+              IsShaderError(HasSubstr("f32 scalar or vector")));
+  EXPECT_THAT(CallBuiltin(BuiltinFn::Sign, {F32Val(), F32Val()}),
+              IsShaderError(HasSubstr("expects 1 arguments")));
+  EXPECT_THAT(CallBuiltin(BuiltinFn::Floor, {}), IsShaderError(HasSubstr("expects 1 arguments")));
+}
+
+TEST(IrExprTests, PowRequiresTwoMatchingFloatOperands) {
+  EXPECT_THAT(CallBuiltin(BuiltinFn::Pow, {F32Val(), F32Val()}), HasShaderResult());
+
+  const ShaderResult<IrExpr> vectorPow = CallBuiltin(BuiltinFn::Pow, {Vec2fVal(), Vec2fVal()});
+  ASSERT_THAT(vectorPow, HasShaderResult());
+  EXPECT_TRUE(vectorPow.result().type() == IrType::Vec2f());
+
+  // A vector base with a scalar exponent is spelled differently per backend and is not admitted;
+  // the caller splats instead, where the splat is visible in the emitted source.
+  EXPECT_THAT(CallBuiltin(BuiltinFn::Pow, {Vec2fVal(), F32Val()}),
+              IsShaderError(HasSubstr("two matching f32 scalars or vectors")));
+  EXPECT_THAT(CallBuiltin(BuiltinFn::Pow, {LiteralI32(2), LiteralI32(3)}),
+              IsShaderError(HasSubstr("two matching f32 scalars or vectors")));
+  EXPECT_THAT(CallBuiltin(BuiltinFn::Pow, {F32Val()}),
+              IsShaderError(HasSubstr("expects 2 arguments")));
+}
+
 TEST(IrExprTests, BuiltinCallsTypeCheck) {
   EXPECT_THAT(CallBuiltin(BuiltinFn::Clamp, {F32Val(), F32Val(), F32Val()}), HasShaderResult());
   EXPECT_THAT(CallBuiltin(BuiltinFn::Clamp, {F32Val(), F32Val()}),
@@ -326,6 +366,9 @@ TEST(IrExprTests, UnknownBuiltinNameIsRejected) {
   EXPECT_THAT(CallBuiltinNamed("clamp", {F32Val(), F32Val(), F32Val()}), HasShaderResult());
   EXPECT_THAT(CallBuiltinNamed("dot", {Vec2fVal(), Vec2fVal()}), HasShaderResult());
   EXPECT_THAT(CallBuiltinNamed("normalize", {Vec2fVal()}), HasShaderResult());
+  EXPECT_THAT(CallBuiltinNamed("sign", {F32Val()}), HasShaderResult());
+  EXPECT_THAT(CallBuiltinNamed("floor", {F32Val()}), HasShaderResult());
+  EXPECT_THAT(CallBuiltinNamed("pow", {F32Val(), F32Val()}), HasShaderResult());
   EXPECT_THAT(CallBuiltinNamed("reflect", {Vec2fVal(), Vec2fVal()}),
               IsShaderError(HasSubstr("unknown builtin function \"reflect\"")));
 }

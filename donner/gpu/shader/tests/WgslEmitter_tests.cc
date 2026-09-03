@@ -14,6 +14,7 @@
 #include <utility>
 #include <vector>
 
+#include "donner/gpu/shader/tests/MathPrimitiveCoverageModule.h"
 #include "donner/gpu/shader/tests/ReductionCoverageModule.h"
 #include "donner/gpu/shader/tests/ShaderTestUtils.h"
 #include "donner/gpu/shader/tests/StageIoTestModules.h"
@@ -402,6 +403,21 @@ TEST(WgslEmitterTests, EveryCallableBuiltinNameIsReserved) {
     EXPECT_THAT(EmitWgsl(module.result()),
                 IsShaderError(HasSubstr("collides with a WGSL reserved word")))
         << "builtin \"" << name.str() << "\" is callable but its name is not reserved";
+  }
+}
+
+TEST(WgslEmitterTests, RejectsALocalNamedAfterSignFloorOrPow) {
+  // The enum walk above covers every builtin generically. This is the same rule stated for the
+  // three names a module expressing a filter primitive is most likely to reach for, so a table
+  // edit that dropped one of them names the casualty.
+  for (const char* name : {"sign", "floor", "pow"}) {
+    ModuleBuilder builder;
+    ASSERT_THAT(builder.addConstant(RcString(name), LiteralU32(1)), IsShaderOk());
+    ShaderResult<IrModule> module = builder.build();
+    ASSERT_THAT(module, HasShaderResult());
+    EXPECT_THAT(EmitWgsl(module.result()),
+                IsShaderError(HasSubstr("collides with a WGSL reserved word")))
+        << name;
   }
 }
 

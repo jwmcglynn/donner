@@ -59,7 +59,7 @@ constexpr std::string_view kMslReservedWords[] = {
     "uint4",   "bool2",     "bool3",       "bool4",     "sampler",  "texture2d", "array",
     "metal",   "select",    "saturate",    "fract",     "fwidth",   "clamp",     "abs",
     "min",     "max",       "sqrt",        "length",    "round",    "any",       "all",
-    "dot",     "normalize",
+    "dot",     "normalize", "sign",        "floor",     "pow",
 };
 
 /// Checks an identifier for C++/MSL lexical validity and reserved-word collisions; fails
