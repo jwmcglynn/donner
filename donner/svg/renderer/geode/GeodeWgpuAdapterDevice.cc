@@ -1521,10 +1521,9 @@ void GeodeWgpuAdapterDevice::notifyHostSubmitted() {
 
 void GeodeWgpuAdapterDevice::advanceCompletedSerialWhenQueueDrains(uint64_t serial) {
   // Completion must stay below the first serial still waiting on the host's submit: those are
-  // recorded but not queued, and `completedSerial` is what the deferred-destroy sweep and every
-  // wait read, so reporting past them retires resources the open frame is still using. The cap is
-  // taken here rather than in the callback because the callback may land after the frame has
-  // flushed, and an over-conservative cap costs nothing: that flush advances the serial anyway.
+  // recorded but not queued, and `completedSerial` is read by the deferred-destroy sweep and
+  // every wait, so reporting past them retires resources the open frame still uses. Capping at
+  // report time is free: the callback it would otherwise run in may land after the frame's flush.
   const uint64_t cappedSerial =
       hostFirstPendingSerial_ == 0 ? serial : std::min(serial, hostFirstPendingSerial_ - 1);
   if (cappedSerial == 0) {

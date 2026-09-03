@@ -51,7 +51,7 @@ struct FilterResourceCache {
   /// Bump cursor inside the scratch; reset each frame.
   uint64_t uniformCursor = 0;
 
-  /// One 256-aligned uniform slot inside the scratch.
+  /// One uniform slot inside the scratch, aligned to \ref kUniformOffsetAlignment.
   struct UniformSlot {
     wgpu::Buffer buffer;
     uint64_t offset;
@@ -87,7 +87,7 @@ struct FilterResourceCache {
     return slot;
   }
 
-  /// One 256-aligned uniform slot inside the runtime-side scratch.
+  /// One uniform slot inside the runtime-side scratch, aligned to \ref kUniformOffsetAlignment.
   struct RuntimeUniformSlot {
     const gpu::Buffer* buffer = nullptr;  //!< Scratch buffer the slot lives in; null on failure.
     uint64_t offset = 0;                  //!< Byte offset of the slot.
@@ -306,11 +306,12 @@ struct FilterResourceArena {
     // the encoder.
     (void)commandEncoder();
 
-    // The submit below replays into whatever host encoder is installed, and this pass belongs in
-    // the arena's own. A foreign one would put it in a command buffer nothing here submits.
-    UTILS_RELEASE_ASSERT_MSG(!device_.adapterDevice().hasHostCommandEncoder() ||
-                                 device_.adapterDevice().hostCommandEncoderIs(encoderSlot_->get()),
-                             "filter pass replayed into a command encoder the arena does not own");
+    // The submit below replays into the installed host encoder, and this pass belongs in the
+    // arena's own. A foreign one would put it in a command buffer nothing here submits, and no
+    // host encoder at all would send it to the queue ahead of the passes recorded here before it.
+    UTILS_RELEASE_ASSERT_MSG(
+        *encoderSlot_ && device_.adapterDevice().hostCommandEncoderIs(encoderSlot_->get()),
+        "filter pass replayed into a command encoder the arena does not own");
 
     gpu::Result<std::unique_ptr<gpu::CommandEncoder>> encoder =
         device_.adapterDevice().createCommandEncoder();
