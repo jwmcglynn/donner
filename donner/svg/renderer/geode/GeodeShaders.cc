@@ -5,7 +5,6 @@
 #include "donner/base/RcString.h"
 #include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
 #include "embed_resources/FilterBlendWgsl.h"
-#include "embed_resources/FilterColorMatrixWgsl.h"
 #include "embed_resources/FilterColorSpaceConvertWgsl.h"
 #include "embed_resources/FilterComponentTransferWgsl.h"
 #include "embed_resources/FilterCompositeWgsl.h"
@@ -99,12 +98,6 @@ wgpu::ShaderModule createGaussianBlurShader(const wgpu::Device& device) {
 wgpu::ShaderModule createFilterOffsetShader(const wgpu::Device& device) {
   return createShaderFromWgsl(device, "FilterOffset", donner::embedded::kFilterOffsetWgsl.data(),
                               donner::embedded::kFilterOffsetWgsl.size());
-}
-
-wgpu::ShaderModule createFilterColorMatrixShader(const wgpu::Device& device) {
-  return createShaderFromWgsl(device, "FilterColorMatrix",
-                              donner::embedded::kFilterColorMatrixWgsl.data(),
-                              donner::embedded::kFilterColorMatrixWgsl.size());
 }
 
 wgpu::ShaderModule createFilterMergeShader(const wgpu::Device& device) {

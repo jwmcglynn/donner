@@ -74,6 +74,7 @@ donner_cc_library(
 donner_cc_library(
     name = "program_bindings",
     hdrs = [
+        "programs/FilterColorMatrixBindings.h",
         "programs/FloodBindings.h",
         "programs/SnapshotUnpremultiplyBindings.h",
         "programs/SubregionClipBindings.h",
@@ -236,6 +237,7 @@ donner_multi_transitioned_test(
 filegroup(
     name = "program_goldens",
     srcs = [
+        "tests/testdata/filter_color_matrix.wgsl",
         "tests/testdata/flood.wgsl",
         "tests/testdata/snapshot_unpremultiply.wgsl",
         "tests/testdata/subregion_clip.wgsl",

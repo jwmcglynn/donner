@@ -3,20 +3,9 @@
 /// The SVG color-matrix filter primitive, expressed in the \c donner::gpu::shader IR.
 
 #include "donner/gpu/shader/IrModule.h"
+#include "donner/gpu/shader/programs/FilterColorMatrixBindings.h"
 
 namespace donner::gpu::shader::programs {
-
-/// Bind group indices of the color-matrix filter program, shared by the IR builder and every host
-/// that creates its bind group layout.
-enum class FilterColorMatrixBinding : uint32_t {
-  InputTexture = 0,   //!< Sampled `texture_2d<f32>` source.
-  OutputTexture = 1,  //!< `texture_storage_2d<rgba8unorm, write>` destination.
-  Params = 2,         //!< Uniform buffer holding the five matrix columns.
-};
-
-/// Workgroup size the color-matrix filter entry point declares. Hosts divide the destination
-/// extent by this to compute dispatch counts.
-inline constexpr uint32_t kFilterColorMatrixWorkgroupSize = 8;
 
 /**
  * Builds the SVG color-matrix filter program: one `@compute @workgroup_size(8, 8, 1)` entry point

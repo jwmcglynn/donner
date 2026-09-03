@@ -442,9 +442,8 @@ private:
   ScopedWgpuHandle<wgpu::ComputePipeline> offsetPipeline_;
   ScopedWgpuHandle<wgpu::BindGroupLayout> offsetBindGroupLayout_;
 
-  // feColorMatrix pipeline.
-  ScopedWgpuHandle<wgpu::ComputePipeline> colorMatrixPipeline_;
-  ScopedWgpuHandle<wgpu::BindGroupLayout> colorMatrixBindGroupLayout_;
+  // feColorMatrix pipeline, recorded through the GPU runtime.
+  RuntimeComputeProgram colorMatrixProgram_;
 
   // feFlood pipeline, recorded through the GPU runtime.
   RuntimeComputeProgram floodProgram_;
