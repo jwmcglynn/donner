@@ -20,15 +20,15 @@ transition, the current renderer may be exercised as a black-box baseline, but i
 sunset and cannot remain in Donner's final dependency graph.
 
 The completion boundary is a closure property, not a file census. Shipped artifacts, every
-non-test dependency closure, CI toolchains, and generated build state contain no Rust compiler
-invocation, Cargo execution, Rust-built library, or transitive Rust requirement. Inert upstream Rust
-source and Cargo metadata may remain only in an explicitly allowlisted resvg/tiny-skia third-party
-reference snapshot, which cannot be compiled, linked, executed, or treated as a Donner
-implementation dependency. The tiny-skia Rust FFI cross-validation fixture and its `rules_rust`
-graph are retained as a test-only oracle: they live inside the vendored tiny-skia workspace, which
-Donner's root module never evaluates, and only that workspace's own test targets reach them. The
-boundary is what the build does, not what a resolved module graph mentions. An upstream module may
-declare `rules_rust` where Donner cannot remove the edge; the invariant holds as long as nothing
+non-test dependency closure, and CI toolchains contain no Rust compiler invocation, Cargo
+execution, Rust-built library, or transitive Rust requirement. Inert upstream Rust source and Cargo
+metadata may remain only in an explicitly allowlisted resvg/tiny-skia third-party reference
+snapshot, which cannot be compiled, linked, executed, or treated as a Donner implementation
+dependency. The tiny-skia Rust FFI cross-validation fixture and its `rules_rust` graph are retained
+as a test-only oracle: they live inside the vendored tiny-skia workspace, which Donner's root module
+never evaluates, and only that workspace's own test targets reach them. The boundary is what the
+build does, not what a resolved module graph or generated lockfile mentions: an upstream module may
+declare `rules_rust` where Donner cannot remove the edge, and the invariant holds as long as nothing
 fetches or invokes a Rust toolchain. The inert reference allowlist stays limited to the resvg test
 corpus and the tiny-skia upstream snapshot.
 
