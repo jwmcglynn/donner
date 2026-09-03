@@ -17,6 +17,7 @@
 #include <string>
 
 #include "donner/base/tests/Runfiles.h"
+#include "embed_resources/ColorSpaceConvertWgsl.h"
 #include "embed_resources/FilterColorMatrixWgsl.h"
 #include "embed_resources/FloodWgsl.h"
 #include "embed_resources/OffsetWgsl.h"
@@ -57,6 +58,17 @@ TEST(GeneratedShaderArtifacts, EmbeddedFilterColorMatrixMatchesTheCommittedGolde
 TEST(GeneratedShaderArtifacts, EmbeddedFloodMatchesTheCommittedGolden) {
   const std::string embedded = EmbeddedBytes(donner::embedded::kFloodWgsl);
   const std::string golden = ReadRunfile("donner/gpu/shader/tests/testdata/flood.wgsl");
+
+  ASSERT_FALSE(golden.empty()) << "the committed golden must be readable";
+  EXPECT_EQ(embedded, golden)
+      << "the embedded shader and its committed golden have diverged; regenerate the golden if "
+         "the emitter changed deliberately";
+}
+
+TEST(GeneratedShaderArtifacts, EmbeddedColorSpaceConvertMatchesTheCommittedGolden) {
+  const std::string embedded = EmbeddedBytes(donner::embedded::kColorSpaceConvertWgsl);
+  const std::string golden =
+      ReadRunfile("donner/gpu/shader/tests/testdata/color_space_convert.wgsl");
 
   ASSERT_FALSE(golden.empty()) << "the committed golden must be readable";
   EXPECT_EQ(embedded, golden)

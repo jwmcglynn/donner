@@ -16,6 +16,7 @@
 
 #include "donner/base/Utils.h"
 #include "donner/gpu/CommandEncoder.h"
+#include "donner/gpu/shader/programs/ColorSpaceConvertBindings.h"
 #include "donner/gpu/shader/programs/FilterColorMatrixBindings.h"
 #include "donner/gpu/shader/programs/FloodBindings.h"
 #include "donner/gpu/shader/programs/OffsetBindings.h"
@@ -27,6 +28,7 @@
 #include "donner/svg/renderer/geode/GeodeShaders.h"
 #include "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h"
 #include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
+#include "embed_resources/ColorSpaceConvertWgsl.h"
 #include "embed_resources/FilterColorMatrixWgsl.h"
 #include "embed_resources/FloodWgsl.h"
 #include "embed_resources/OffsetWgsl.h"
@@ -868,11 +870,12 @@ struct SubregionClipParams {
 };
 
 /// Uniform buffer layout for the sRGB↔linearRGB color space conversion shader.
+/// Uniform buffer layout mirroring the shader program's `ColorSpaceConvertParams` struct.
 struct ColorSpaceConvertParams {
-  uint32_t direction;  // 0 = sRGB→linear, 1 = linear→sRGB.
-  uint32_t pad0;
-  uint32_t pad1;
-  uint32_t pad2;
+  uint32_t direction;  //!< Which way the transfer runs; the program's bindings header names both.
+  uint32_t pad0;       //!< Trailing word the program declares; the two sizes must agree.
+  uint32_t pad1;       //!< Trailing word the program declares; the two sizes must agree.
+  uint32_t pad2;       //!< Trailing word the program declares; the two sizes must agree.
 };
 
 /// GPU storage buffer layout matching the WGSL specular `LightingParams` struct.
@@ -1939,13 +1942,17 @@ GeodeFilterEngine::GeodeFilterEngine(GeodeDevice& device, bool verbose)
         gpu::shader::programs::kSubregionClipWorkgroupSize);
   }
 
-  // --- sRGB↔linearRGB color space conversion pipeline ---
+  // --- sRGB to linear color space conversion pipeline, through the GPU runtime ---
   {
-    auto [bgl, pipeline] = createInputOutputUniformPipeline(
-        dev, "FilterColorSpaceConvert", createFilterColorSpaceConvertShader(dev),
-        sizeof(ColorSpaceConvertParams));
-    colorSpaceConvertBindGroupLayout_ = std::move(bgl);
-    colorSpaceConvertPipeline_ = std::move(pipeline);
+    using gpu::shader::programs::ColorSpaceConvertBinding;
+    colorSpaceConvertProgram_ = CreateRuntimeComputeProgram(
+        device_.adapterDevice(), "FilterColorSpaceConvert",
+        EmbeddedWgsl(donner::embedded::kColorSpaceConvertWgsl),
+        gpu::shader::programs::kColorSpaceConvertEntryPoint,
+        {SampledInputEntry(static_cast<uint32_t>(ColorSpaceConvertBinding::InputTexture)),
+         StorageOutputEntry(static_cast<uint32_t>(ColorSpaceConvertBinding::OutputTexture)),
+         UniformParamsEntry(static_cast<uint32_t>(ColorSpaceConvertBinding::Params))},
+        gpu::shader::programs::kColorSpaceConvertWorkgroupSize);
   }
 }
 
@@ -4326,23 +4333,28 @@ wgpu::Texture GeodeFilterEngine::applySubregionClip(FilterResourceArena& arena,
 wgpu::Texture GeodeFilterEngine::applyColorSpaceConversion(FilterResourceArena& arena,
                                                            const wgpu::Texture& input,
                                                            bool srgbToLinear) {
-  const wgpu::Device& dev = device_.device();
-  const uint32_t width = input.getWidth();
-  const uint32_t height = input.getHeight();
-
-  wgpu::Texture output =
-      createIntermediateTexture(arena, dev, width, height, "FilterColorSpaceConvertOutput");
+  const gpu::Texture* output = arena.createRuntimeTexture(gpu::TextureDescriptor{
+      "FilterColorSpaceConvertOutput", gpu::Extent2d{input.getWidth(), input.getHeight()},
+      gpu::TextureFormat::RGBA8Unorm,
+      gpu::TextureUsage::StorageBinding | gpu::TextureUsage::Sampled | gpu::TextureUsage::CopySrc});
+  if (output == nullptr) {
+    return {};
+  }
 
   ColorSpaceConvertParams params{};
-  params.direction = srgbToLinear ? 0u : 1u;
+  params.direction = srgbToLinear ? gpu::shader::programs::kColorSpaceConvertSrgbToLinear
+                                  : gpu::shader::programs::kColorSpaceConvertLinearToSrgb;
+  params.pad0 = 0;
+  params.pad1 = 0;
+  params.pad2 = 0;
 
-  auto uniformBuffer = writeUniformSlot(*resourceCache_, device_, &params, sizeof(params));
+  if (!dispatchRuntimeInputOutputUniform(arena, colorSpaceConvertProgram_, input, *output,
+                                         UniformBytes(params), "FilterColorSpaceConvertPass",
+                                         gpu::shader::programs::kColorSpaceConvertWorkgroupSize)) {
+    return {};
+  }
 
-  dispatchInputOutputUniform(arena, device_, colorSpaceConvertBindGroupLayout_.get(),
-                             colorSpaceConvertPipeline_.get(), input, output, uniformBuffer.buffer,
-                             uniformBuffer.offset, sizeof(ColorSpaceConvertParams),
-                             "FilterColorSpaceConvertPass");
-  return output;
+  return device_.adapterDevice().wgpuTextureOf(*output);
 }
 
 }  // namespace donner::geode

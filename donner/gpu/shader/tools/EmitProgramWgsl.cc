@@ -25,6 +25,7 @@
 
 #include "donner/gpu/shader/ModuleInterface.h"
 #include "donner/gpu/shader/WgslEmitter.h"
+#include "donner/gpu/shader/programs/ColorSpaceConvert.h"
 #include "donner/gpu/shader/programs/FilterColorMatrix.h"
 #include "donner/gpu/shader/programs/Flood.h"
 #include "donner/gpu/shader/programs/Offset.h"
@@ -42,6 +43,7 @@ struct ProgramEntry {
 
 /// Programs this tool knows how to emit. A new IR program adds one row.
 constexpr ProgramEntry kPrograms[] = {
+    {"color_space_convert", &programs::BuildColorSpaceConvertModule},
     {"filter_color_matrix", &programs::BuildFilterColorMatrixModule},
     {"flood", &programs::BuildFloodModule},
     {"offset", &programs::BuildOffsetModule},

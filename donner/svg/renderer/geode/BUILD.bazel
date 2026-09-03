@@ -314,6 +314,7 @@ donner_cc_library(
         "//examples:__pkg__",
     ],
     deps = [
+        ":color_space_convert_wgsl",
         ":filter_color_matrix_wgsl",
         ":flood_wgsl",
         ":geode_counters",
@@ -459,6 +460,23 @@ embed_resources(
     header_output = "embed_resources/OffsetWgsl.h",
     resources = {
         "kOffsetWgsl": "generated/offset.wgsl",
+    },
+    visibility = ["//donner/svg/renderer:__subpackages__"],
+)
+
+genrule(
+    name = "color_space_convert_generated",
+    outs = ["generated/color_space_convert.wgsl"],
+    cmd = "$(location //donner/gpu/shader/tools:emit_program_wgsl) color_space_convert " +
+          "$(location generated/color_space_convert.wgsl)",
+    tools = ["//donner/gpu/shader/tools:emit_program_wgsl"],
+)
+
+embed_resources(
+    name = "color_space_convert_wgsl",
+    header_output = "embed_resources/ColorSpaceConvertWgsl.h",
+    resources = {
+        "kColorSpaceConvertWgsl": "generated/color_space_convert.wgsl",
     },
     visibility = ["//donner/svg/renderer:__subpackages__"],
 )
@@ -664,15 +682,6 @@ embed_resources(
     visibility = ["//donner/svg/renderer:__subpackages__"],
 )
 
-embed_resources(
-    name = "filter_color_space_convert_wgsl",
-    header_output = "embed_resources/FilterColorSpaceConvertWgsl.h",
-    resources = {
-        "kFilterColorSpaceConvertWgsl": "shaders/filter_color_space_convert.wgsl",
-    },
-    visibility = ["//donner/svg/renderer:__subpackages__"],
-)
-
 # Snapshot readback: GPU-side unpremultiply of a render target into a
 # straight-alpha RGBA8 staging texture, then copied into the readback buffer.
 
@@ -684,7 +693,6 @@ donner_cc_library(
     visibility = ["//donner/svg/renderer:__subpackages__"],
     deps = [
         ":filter_blend_wgsl",
-        ":filter_color_space_convert_wgsl",
         ":filter_component_transfer_wgsl",
         ":filter_composite_wgsl",
         ":filter_convolve_matrix_wgsl",
@@ -1038,6 +1046,7 @@ donner_cc_test(
     srcs = ["tests/GeneratedShaderArtifacts_tests.cc"],
     data = ["//donner/gpu/shader:program_goldens"],
     deps = [
+        ":color_space_convert_wgsl",
         ":filter_color_matrix_wgsl",
         ":flood_wgsl",
         ":offset_wgsl",

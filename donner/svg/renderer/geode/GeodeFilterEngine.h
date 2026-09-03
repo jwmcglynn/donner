@@ -502,9 +502,8 @@ private:
   // Per-primitive subregion clipping pipeline, recorded through the GPU runtime.
   RuntimeComputeProgram subregionClipProgram_;
 
-  // sRGB↔linearRGB color space conversion pipeline (input + output + uniform).
-  ScopedWgpuHandle<wgpu::ComputePipeline> colorSpaceConvertPipeline_;
-  ScopedWgpuHandle<wgpu::BindGroupLayout> colorSpaceConvertBindGroupLayout_;
+  // sRGB to linear color space conversion pipeline, recorded through the GPU runtime.
+  RuntimeComputeProgram colorSpaceConvertProgram_;
 
   bool verbose_ = false;
   bool warnedUnsupported_ = false;
