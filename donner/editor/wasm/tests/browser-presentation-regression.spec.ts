@@ -1632,6 +1632,60 @@ async function pinchZoom(
   }, { ...at, deltaY, count });
 }
 
+// One presented picture, named by the worker result it drew.
+//
+// A result is published with no `presentedAtMs` and the frame that consumes it
+// stamps the field exactly once, so the pair says both "which raster" and
+// "has a frame drawn it". Both halves come out of one round trip, so a gate
+// cannot pair a counter from one frame with a stamp from another.
+interface PresentedGeneration {
+  completedResults: number;
+  presentedAtMs: number | undefined;
+}
+
+async function readPresentedGeneration(page: Page): Promise<PresentedGeneration> {
+  return page.evaluate(() => ({
+    completedResults: window.__donnerWorkerStats?.completedResults || 0,
+    presentedAtMs: window.__donnerWorkerStats?.presentedAtMs,
+  }));
+}
+
+/**
+ * Send one pinch notch and return once the raster it caused is on the canvas.
+ *
+ * A constant delay after a notch is not an observable of that notch. The worker
+ * can take longer than any constant, and until the frame that draws its result
+ * runs, the pane still shows the pre-gesture picture - which a coverage probe
+ * scores as covered, because it was. The loop then decides on a frame the
+ * gesture never touched, and the next notch supersedes the one that would have
+ * shown the defect: with the notch's presentation held past a 200 ms wait, the
+ * probe scored zero on all six storm notches while the frame each notch
+ * actually presented carried 36375 uncovered backdrop pixels.
+ *
+ * Waiting for a strictly later presented result closes that window, and it is
+ * bounded: a notch whose raster never reaches the canvas fails here with the
+ * worker's own health attached rather than being scored as covered.
+ */
+async function pinchZoomAndAwaitPresentation(
+  page: Page,
+  at: { x: number; y: number },
+  deltaY: number,
+  context: string,
+): Promise<void> {
+  const before = await readPresentedGeneration(page);
+  await pinchZoom(page, at, deltaY);
+  await expectWorkerResultsToReach(
+    page,
+    (completedResults, health) =>
+      completedResults > before.completedResults && health.presentedAtMs !== undefined,
+    {
+      message: `${context}: the zoom notch never presented a newer document raster`,
+      timeout: scaledMs(5_000),
+    },
+  );
+  await waitForBrowserComposite(page);
+}
+
 // Locate the Donner Splash "D" by its own yellow pixels, in CSS coordinates
 // relative to `region`. Since the single-canvas architecture the document has no element to
 // measure, so every document-space probe is anchored on rendered content.
@@ -1968,13 +2022,12 @@ test("a zoom storm never uncovers the editor background under the Donner Splash"
     if (isProbeRegionCovered(await probe(`zoom-in notch ${notch}`))) {
       break;
     }
-    await pinchZoom(page, probeCenter, -250);
+    await pinchZoomAndAwaitPresentation(page, probeCenter, -250, `zoom-in notch ${notch}`);
     // This read does not settle: the loop is zooming in precisely because the
-    // region is not covered yet, so a read that catches presentation mid-notch
-    // costs one extra notch and nothing else, and the value it pushes is
-    // diagnostic. The assertions below, which do decide the test, all settle on
-    // a deadline that scales with the runner.
-    await page.waitForTimeout(200);
+    // region is not covered yet, so a read that catches a later notch's
+    // presentation costs one extra notch and nothing else, and the value it
+    // pushes is diagnostic. The assertions below, which do decide the test, all
+    // settle on a deadline that scales with the runner.
     zoomInCoverage.push((await probe(`zoom-in notch ${notch}`)).editorBackgroundPixels);
   }
   const zoomedIn = await settleUntilCovered(page, probeRegion, "zoom-in settle");
@@ -2000,8 +2053,7 @@ test("a zoom storm never uncovers the editor background under the Donner Splash"
   // something to rely on: zoom in explicitly past the boundary.
   const kZoomHeadroomNotches = 2;
   for (let notch = 0; notch < kZoomHeadroomNotches; ++notch) {
-    await pinchZoom(page, probeCenter, -250);
-    await page.waitForTimeout(200);
+    await pinchZoomAndAwaitPresentation(page, probeCenter, -250, `zoom headroom notch ${notch}`);
   }
   const headroom = await settleUntilCovered(page, probeRegion, "zoom headroom");
   expect(
@@ -2020,8 +2072,12 @@ test("a zoom storm never uncovers the editor background under the Donner Splash"
   > = [];
   for (let burst = 0; burst < 3; ++burst) {
     for (const phase of ["out", "in"] as const) {
-      await pinchZoom(page, probeCenter, phase === "out" ? 250 : -250);
-      await page.waitForTimeout(200);
+      await pinchZoomAndAwaitPresentation(
+        page,
+        probeCenter,
+        phase === "out" ? 250 : -250,
+        `storm ${burst} ${phase}`,
+      );
       // A zoom-out can expose regions whose tiles have not re-rastered yet;
       // that transient is bounded by one worker latency and is inherent to
       // demand-rendered tiles. The defect this storm hunts is uncovering that
