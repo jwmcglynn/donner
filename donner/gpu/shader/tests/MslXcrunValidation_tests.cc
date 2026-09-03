@@ -22,6 +22,7 @@
 #include "donner/gpu/shader/programs/ColorMatrix.h"
 #include "donner/gpu/shader/programs/FilterColorMatrix.h"
 #include "donner/gpu/shader/programs/Flood.h"
+#include "donner/gpu/shader/programs/Offset.h"
 #include "donner/gpu/shader/programs/SnapshotUnpremultiply.h"
 #include "donner/gpu/shader/programs/SolidFill.h"
 #include "donner/gpu/shader/programs/SubregionClip.h"
@@ -192,8 +193,7 @@ TEST(MslXcrunValidation, EmittedBoolVectorReductionsCompileWithMetalCompiler) {
 
 TEST(MslXcrunValidation, EmittedMathPrimitivesCompileWithMetalCompiler) {
   DONNER_REQUIRE_EXTERNAL_TOOL(kMetalCompilerToolName, FindMetalCompilerUnavailableReason());
-  // sign, floor, and pow reach no shipping program yet, so this is the only place a real Metal
-  // front end sees them; a name MSL does not have would otherwise pass every in-repo check.
+  // This fixture also exercises vector sign and floor, which scalar offset does not reach.
   ExpectCompilesWithMetalCompiler(BuildMathPrimitiveModule(), "math_primitives");
 }
 
@@ -210,6 +210,13 @@ TEST(MslXcrunValidation, EmittedSubregionClipComputeCompilesWithMetalCompiler) {
 TEST(MslXcrunValidation, EmittedFilterColorMatrixCompilesWithMetalCompiler) {
   DONNER_REQUIRE_EXTERNAL_TOOL(kMetalCompilerToolName, FindMetalCompilerUnavailableReason());
   ExpectCompilesWithMetalCompiler(programs::BuildFilterColorMatrixModule(), "filter_color_matrix");
+}
+
+TEST(MslXcrunValidation, EmittedOffsetComputeCompilesWithMetalCompiler) {
+  DONNER_REQUIRE_EXTERNAL_TOOL(kMetalCompilerToolName, FindMetalCompilerUnavailableReason());
+  // The first compute program to call a function of its own, so this is where the compiler
+  // confirms the declaration order the emitter writes is one Metal accepts for a kernel.
+  ExpectCompilesWithMetalCompiler(programs::BuildOffsetModule(), "offset");
 }
 
 TEST(MslXcrunValidation, NegativeControlDetectsInvalidMsl) {
