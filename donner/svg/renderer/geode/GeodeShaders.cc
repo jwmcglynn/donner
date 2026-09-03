@@ -13,7 +13,6 @@
 #include "embed_resources/FilterDiffuseLightingWgsl.h"
 #include "embed_resources/FilterDisplacementMapWgsl.h"
 #include "embed_resources/FilterDropShadowWgsl.h"
-#include "embed_resources/FilterFloodWgsl.h"
 #include "embed_resources/FilterImageWgsl.h"
 #include "embed_resources/FilterMergeWgsl.h"
 #include "embed_resources/FilterMorphologyWgsl.h"
@@ -107,11 +106,6 @@ wgpu::ShaderModule createFilterColorMatrixShader(const wgpu::Device& device) {
   return createShaderFromWgsl(device, "FilterColorMatrix",
                               donner::embedded::kFilterColorMatrixWgsl.data(),
                               donner::embedded::kFilterColorMatrixWgsl.size());
-}
-
-wgpu::ShaderModule createFilterFloodShader(const wgpu::Device& device) {
-  return createShaderFromWgsl(device, "FilterFlood", donner::embedded::kFilterFloodWgsl.data(),
-                              donner::embedded::kFilterFloodWgsl.size());
 }
 
 wgpu::ShaderModule createFilterMergeShader(const wgpu::Device& device) {

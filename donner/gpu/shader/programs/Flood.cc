@@ -37,7 +37,7 @@ ShaderResult<IrModule> BuildFloodModule() {
   e.ok(AddBindings(builder, paramsType));
 
   auto entryResult =
-      builder.createComputeEntryPoint("cs_main",
+      builder.createComputeEntryPoint(RcString(kFloodEntryPoint),
                                       {IrParam{"gid", IrType::Vec3(ScalarKind::U32), std::nullopt,
                                                BuiltinInput::GlobalInvocationId}},
                                       WorkgroupSize{kFloodWorkgroupSize, kFloodWorkgroupSize, 1});

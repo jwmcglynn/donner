@@ -983,48 +983,6 @@
         "DropShadowParams"
       ]
     },
-    "donner/svg/renderer/geode/shaders/filter_flood.wgsl": {
-      "bindings": [
-        {
-          "binding": 0,
-          "group": 0,
-          "name": "output_tex",
-          "type": "texture_storage_2d<rgba8unorm, write>"
-        },
-        {
-          "addressSpace": "uniform",
-          "binding": 1,
-          "group": 0,
-          "name": "params",
-          "type": "FloodParams"
-        }
-      ],
-      "builtins": [
-        "global_invocation_id"
-      ],
-      "entryPoints": [
-        {
-          "name": "main",
-          "stage": "compute",
-          "workgroupSize": [
-            "8",
-            "8"
-          ]
-        }
-      ],
-      "features": [
-        "any",
-        "if",
-        "let",
-        "return",
-        "textureDimensions",
-        "textureStore",
-        "var"
-      ],
-      "structs": [
-        "FloodParams"
-      ]
-    },
     "donner/svg/renderer/geode/shaders/filter_image.wgsl": {
       "bindings": [
         {

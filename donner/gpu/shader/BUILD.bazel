@@ -73,7 +73,10 @@ donner_cc_library(
 # build-time emitted WGSL needs them and must not link the emitters to get them.
 donner_cc_library(
     name = "program_bindings",
-    hdrs = ["programs/SnapshotUnpremultiplyBindings.h"],
+    hdrs = [
+        "programs/FloodBindings.h",
+        "programs/SnapshotUnpremultiplyBindings.h",
+    ],
     visibility = ["//visibility:public"],
 )
 
@@ -231,7 +234,10 @@ donner_multi_transitioned_test(
 # same bytes rather than asserting it in prose.
 filegroup(
     name = "program_goldens",
-    srcs = ["tests/testdata/snapshot_unpremultiply.wgsl"],
+    srcs = [
+        "tests/testdata/flood.wgsl",
+        "tests/testdata/snapshot_unpremultiply.wgsl",
+    ],
     visibility = ["//donner/svg/renderer:__subpackages__"],
 )
 

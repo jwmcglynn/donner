@@ -138,23 +138,6 @@ wgpu::ShaderModule createFilterOffsetShader(const wgpu::Device& device);
 wgpu::ShaderModule createFilterColorMatrixShader(const wgpu::Device& device);
 
 /**
- * Compile the feFlood compute shader for the given device.
- *
- * The WGSL source is embedded at build time from
- * `shaders/filter_flood.wgsl` via the `embed_resources()` Bazel rule.
- * The shader fills every pixel with a constant color uniform.
- * No input texture is required.
- *
- * Bind group layout:
- * - `@group(0) @binding(0) var output_tex: texture_storage_2d<rgba8unorm, write>;`
- * - `@group(0) @binding(1) var<uniform> params: FloodParams;`
- *
- * @return A valid shader module on success, or an empty module if compilation
- *   failed (errors go to the device's uncaptured error callback).
- */
-wgpu::ShaderModule createFilterFloodShader(const wgpu::Device& device);
-
-/**
  * Compile the feMerge alpha-over blit compute shader for the given device.
  *
  * The WGSL source is embedded at build time from

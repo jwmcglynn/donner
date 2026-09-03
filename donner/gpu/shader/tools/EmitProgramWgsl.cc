@@ -25,6 +25,7 @@
 
 #include "donner/gpu/shader/ModuleInterface.h"
 #include "donner/gpu/shader/WgslEmitter.h"
+#include "donner/gpu/shader/programs/Flood.h"
 #include "donner/gpu/shader/programs/SnapshotUnpremultiply.h"
 
 namespace donner::gpu::shader {
@@ -38,6 +39,7 @@ struct ProgramEntry {
 
 /// Programs this tool knows how to emit. A new IR program adds one row.
 constexpr ProgramEntry kPrograms[] = {
+    {"flood", &programs::BuildFloodModule},
     {"snapshot_unpremultiply", &programs::BuildSnapshotUnpremultiplyModule},
 };
 

@@ -12,10 +12,12 @@
 #include <gtest/gtest.h>
 
 #include <fstream>
+#include <span>
 #include <sstream>
 #include <string>
 
 #include "donner/base/tests/Runfiles.h"
+#include "embed_resources/FloodWgsl.h"
 #include "embed_resources/SnapshotUnpremultiplyWgsl.h"
 
 namespace donner::geode {
@@ -32,10 +34,24 @@ std::string ReadRunfile(const std::string& path) {
   return contents.str();
 }
 
+/// The bytes an embedded artifact carries, as a string.
+/// @param resource Embedded resource span produced by the package's genrule.
+std::string EmbeddedBytes(std::span<const unsigned char> resource) {
+  return std::string(reinterpret_cast<const char*>(resource.data()), resource.size());
+}
+
+TEST(GeneratedShaderArtifacts, EmbeddedFloodMatchesTheCommittedGolden) {
+  const std::string embedded = EmbeddedBytes(donner::embedded::kFloodWgsl);
+  const std::string golden = ReadRunfile("donner/gpu/shader/tests/testdata/flood.wgsl");
+
+  ASSERT_FALSE(golden.empty()) << "the committed golden must be readable";
+  EXPECT_EQ(embedded, golden)
+      << "the embedded shader and its committed golden have diverged; regenerate the golden if "
+         "the emitter changed deliberately";
+}
+
 TEST(GeneratedShaderArtifacts, EmbeddedSnapshotUnpremultiplyMatchesTheCommittedGolden) {
-  const std::string embedded(
-      reinterpret_cast<const char*>(donner::embedded::kSnapshotUnpremultiplyWgsl.data()),
-      donner::embedded::kSnapshotUnpremultiplyWgsl.size());
+  const std::string embedded = EmbeddedBytes(donner::embedded::kSnapshotUnpremultiplyWgsl);
   const std::string golden =
       ReadRunfile("donner/gpu/shader/tests/testdata/snapshot_unpremultiply.wgsl");
 

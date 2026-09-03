@@ -628,6 +628,7 @@
         "createCommandEncoder",
         "createComputePipeline",
         "createPipelineLayout",
+        "createShaderModule",
         "createTexture",
         "createView",
         "dispatchWorkgroups",

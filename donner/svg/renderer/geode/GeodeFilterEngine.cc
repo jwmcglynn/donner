@@ -2,21 +2,27 @@
 
 #include <algorithm>
 #include <cmath>
+#include <deque>
 #include <iostream>
 #include <limits>
 #include <mutex>
 #include <numbers>
+#include <span>
+#include <string_view>
 #include <unordered_map>
 #include <utility>
 #include <variant>
 #include <vector>
 
+#include "donner/gpu/CommandEncoder.h"
+#include "donner/gpu/shader/programs/FloodBindings.h"
 #include "donner/svg/components/filter/FilterGraph.h"
 #include "donner/svg/renderer/PixelFormatUtils.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
 #include "donner/svg/renderer/geode/GeodeShaders.h"
 #include "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h"
 #include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
+#include "embed_resources/FloodWgsl.h"
 
 namespace donner::geode {
 
@@ -29,7 +35,7 @@ struct FilterResourceArena {
         encoderSlot_(&commandEncoder),
         passesInCommandBuffer_(passesInCommandBuffer) {}
   ~FilterResourceArena() {
-    for (ScopedWgpuHandle<wgpu::Buffer>& buffer : buffers_) {
+    for (ScopedWgpuHandle<wgpu::Buffer>& buffer : backendBuffers_) {
       device_.deferDestroy(buffer.take());
     }
     for (auto& owned : textures_) {
@@ -41,6 +47,22 @@ struct FilterResourceArena {
   FilterResourceArena& operator=(const FilterResourceArena&) = delete;
 
   /// Takes a filter intermediate from the renderer's pool, owned by this arena until the frame
+  /// ends. Null when the pool refuses the allocation.
+  ///
+  /// The returned reference names storage this arena keeps for its whole lifetime, so a caller
+  /// may hold it across further allocations.
+  /// @param desc Descriptor the intermediate is allocated with.
+  const gpu::Texture* createRuntimeTexture(const gpu::TextureDescriptor& desc) {
+    gpu::Texture texture = textureAllocator_.acquireFilterTexture(desc);
+    if (!texture.isValid()) {
+      return nullptr;
+    }
+
+    textures_.push_back({std::move(texture), desc});
+    return &textures_.back().texture;
+  }
+
+  /// Takes a filter intermediate from the renderer's pool, owned by this arena until the frame
   /// ends.
   ///
   /// The arena's currency with the renderer is the runtime handle, which is what the pool
@@ -49,14 +71,106 @@ struct FilterResourceArena {
   /// owns.
   /// @param desc Descriptor the intermediate is allocated with.
   wgpu::Texture createTexture(const gpu::TextureDescriptor& desc) {
-    gpu::Texture texture = textureAllocator_.acquireFilterTexture(desc);
-    if (!texture.isValid()) {
+    const gpu::Texture* texture = createRuntimeTexture(desc);
+    if (texture == nullptr) {
       return {};
     }
+    return device_.adapterDevice().wgpuTextureOf(*texture);
+  }
 
-    wgpu::Texture result = device_.adapterDevice().wgpuTextureOf(texture);
-    textures_.push_back({std::move(texture), desc});
-    return result;
+  /// A whole-texture view of \p texture, owned by this arena until the frame ends. Null when the
+  /// runtime refuses it.
+  /// @param texture Live runtime texture. @param label Debug label for the view.
+  const gpu::TextureView* createRuntimeTextureView(const gpu::Texture& texture, RcString label) {
+    gpu::Result<gpu::TextureView> view = device_.adapterDevice().createTextureView(
+        texture, gpu::TextureViewDescriptor{std::move(label)});
+    if (!view.hasResult()) {
+      return nullptr;
+    }
+    textureViews_.push_back(std::move(view).result());
+    return &textureViews_.back();
+  }
+
+  /// A uniform buffer holding \p data, owned by this arena until the frame ends. Null when the
+  /// runtime refuses the buffer or the write.
+  ///
+  /// The engine's shared uniform scratch is a wgpu buffer, which the runtime cannot bind, so a
+  /// pass recorded through the runtime brings its own.
+  /// @param data Bytes to upload. @param label Debug label for the buffer.
+  const gpu::Buffer* createRuntimeUniformBuffer(std::span<const uint8_t> data, RcString label) {
+    gpu::Result<gpu::Buffer> buffer = device_.adapterDevice().createBuffer(gpu::BufferDescriptor{
+        std::move(label), data.size(), gpu::BufferUsage::Uniform | gpu::BufferUsage::CopyDst});
+    if (!buffer.hasResult()) {
+      return nullptr;
+    }
+    buffers_.push_back(std::move(buffer).result());
+    if (device_.adapterDevice().writeBuffer(buffers_.back(), 0, data).hasError()) {
+      return nullptr;
+    }
+    device_.countBuffer();
+    return &buffers_.back();
+  }
+
+  /// A bind group over \p entries, owned by this arena until the frame ends. Null when the
+  /// runtime refuses it.
+  /// @param layout Layout the entries must match. @param entries Bound resources.
+  /// @param label Debug label for the bind group.
+  const gpu::BindGroup* createRuntimeBindGroup(const gpu::BindGroupLayout& layout,
+                                               std::vector<gpu::BindGroupEntry> entries,
+                                               RcString label) {
+    gpu::Result<gpu::BindGroup> bindGroup = device_.adapterDevice().createBindGroup(
+        gpu::BindGroupDescriptor{std::move(label), layout, std::move(entries)});
+    if (!bindGroup.hasResult()) {
+      return nullptr;
+    }
+    bindGroups_.push_back(std::move(bindGroup).result());
+    device_.countBindGroup();
+    return &bindGroups_.back();
+  }
+
+  /// Records one compute dispatch through the runtime and replays it into the encoder the next
+  /// pass belongs in, keeping it in order with the passes recorded there directly.
+  ///
+  /// @param label Debug label for the pass.
+  /// @param pipeline Compute pipeline to dispatch.
+  /// @param bindGroup Bind group for group 0.
+  /// @param workgroupsX Workgroup count along x. @param workgroupsY Workgroup count along y.
+  [[nodiscard]] bool dispatchComputePass(RcString label, const gpu::ComputePipeline& pipeline,
+                                         const gpu::BindGroup& bindGroup, uint32_t workgroupsX,
+                                         uint32_t workgroupsY) {
+    // Counting the pass here, before anything is recorded, is what keeps a runtime pass under the
+    // same command-buffer bound as the wgpu ones and re-points the runtime when that bound splits
+    // the encoder.
+    (void)commandEncoder();
+
+    gpu::Result<std::unique_ptr<gpu::CommandEncoder>> encoder =
+        device_.adapterDevice().createCommandEncoder();
+    if (!encoder.hasResult()) {
+      return false;
+    }
+    gpu::CommandEncoder& commands = *encoder.result();
+
+    gpu::Result<gpu::ComputePassEncoder*> pass =
+        commands.beginComputePass(gpu::ComputePassDescriptor{std::move(label)});
+    if (!pass.hasResult()) {
+      return false;
+    }
+    gpu::ComputePassEncoder& computePass = *pass.result();
+    if (computePass.setPipeline(pipeline).hasError() ||
+        computePass.setBindGroup(0, bindGroup).hasError() ||
+        computePass.dispatchWorkgroups(workgroupsX, workgroupsY, 1).hasError() ||
+        computePass.end().hasError()) {
+      return false;
+    }
+
+    gpu::Result<gpu::CommandBuffer> commandBuffer = commands.finish();
+    if (!commandBuffer.hasResult()) {
+      return false;
+    }
+    // Submitting here is what replays the pass: with a host encoder installed the runtime records
+    // into it rather than reaching the queue, so the pass lands at this point in the frame's
+    // command buffer instead of ahead of everything recorded before it.
+    return !device_.adapterDevice().submit(std::move(commandBuffer).result()).hasError();
   }
 
   wgpu::Buffer createBuffer(const wgpu::Device& device, const wgpu::BufferDescriptor& desc) {
@@ -67,7 +181,7 @@ struct FilterResourceArena {
 
     device_.countBuffer();
     wgpu::Buffer result = buffer.get();
-    buffers_.push_back(std::move(buffer));
+    backendBuffers_.push_back(std::move(buffer));
     return result;
   }
 
@@ -147,8 +261,13 @@ private:
   ScopedWgpuHandle<wgpu::CommandEncoder>* encoderSlot_;
   /// Engine-owned frame-scoped pass count (see kMaxPassesPerCommandBuffer).
   size_t& passesInCommandBuffer_;
-  std::vector<OwnedTexture> textures_;
-  std::vector<ScopedWgpuHandle<wgpu::Buffer>> buffers_;
+  /// Deques rather than vectors: the accessors above hand out references into these, and a
+  /// vector would move them on growth.
+  std::deque<OwnedTexture> textures_;
+  std::deque<gpu::TextureView> textureViews_;
+  std::deque<gpu::Buffer> buffers_;
+  std::deque<gpu::BindGroup> bindGroups_;
+  std::vector<ScopedWgpuHandle<wgpu::Buffer>> backendBuffers_;
 };
 
 /// Persistent per-frame uniform scratch.
@@ -1193,41 +1312,8 @@ GeodeFilterEngine::GeodeFilterEngine(GeodeDevice& device, bool verbose)
     colorMatrixPipeline_ = std::move(pipeline);
   }
 
-  // --- feFlood pipeline (output + uniform, no input) ---
-  {
-    wgpu::BindGroupLayoutEntry entries[2]{};
-    entries[0].binding = 0;
-    entries[0].visibility = wgpu::ShaderStage::Compute;
-    entries[0].storageTexture.access = wgpu::StorageTextureAccess::WriteOnly;
-    entries[0].storageTexture.format = kFormat;
-    entries[0].storageTexture.viewDimension = wgpu::TextureViewDimension::_2D;
-
-    entries[1].binding = 1;
-    entries[1].visibility = wgpu::ShaderStage::Compute;
-    entries[1].buffer.type = wgpu::BufferBindingType::Uniform;
-    entries[1].buffer.minBindingSize = sizeof(FloodParams);
-
-    wgpu::BindGroupLayoutDescriptor bglDesc{};
-    bglDesc.label = wgpuLabel("FilterFloodBGL");
-    bglDesc.entryCount = 2;
-    bglDesc.entries = entries;
-    floodBindGroupLayout_.reset(dev.createBindGroupLayout(bglDesc));
-
-    wgpu::PipelineLayoutDescriptor plDesc{};
-    plDesc.label = wgpuLabel("FilterFloodPipelineLayout");
-    plDesc.bindGroupLayoutCount = 1;
-    WGPUBindGroupLayout layouts[1] = {floodBindGroupLayout_.get()};
-    plDesc.bindGroupLayouts = layouts;
-    ScopedWgpuHandle<wgpu::PipelineLayout> pipelineLayout(dev.createPipelineLayout(plDesc));
-    ScopedWgpuHandle<wgpu::ShaderModule> shader(createFilterFloodShader(dev));
-
-    wgpu::ComputePipelineDescriptor cpDesc{};
-    cpDesc.label = wgpuLabel("FilterFloodPipeline");
-    cpDesc.layout = pipelineLayout.get();
-    cpDesc.compute.module = shader.get();
-    cpDesc.compute.entryPoint = wgpuLabel("main");
-    floodPipeline_.reset(dev.createComputePipeline(cpDesc));
-  }
+  // --- feFlood pipeline (output + uniform, no input), through the GPU runtime ---
+  createFloodPipeline();
 
   // --- feMerge alpha-over pipeline (src, dst → output) ---
   {
@@ -2651,12 +2737,76 @@ wgpu::Texture GeodeFilterEngine::applySourceAlpha(FilterResourceArena& arena,
   return output;
 }
 
+void GeodeFilterEngine::createFloodPipeline() {
+  gpu::Device& runtime = device_.adapterDevice();
+
+  // The WGSL below is build-time output of the shader IR program (see the genrule in this
+  // package). Emitting it here instead would link the IR and the WGSL emitter into every binary
+  // holding this engine, which the editor's WebAssembly package cannot afford for a string that
+  // is identical on every run.
+  const std::string_view wgsl(reinterpret_cast<const char*>(donner::embedded::kFloodWgsl.data()),
+                              donner::embedded::kFloodWgsl.size());
+
+  using Binding = gpu::shader::programs::FloodBinding;
+  constexpr uint32_t kWorkgroup = gpu::shader::programs::kFloodWorkgroupSize;
+  const RcString entryPoint{gpu::shader::programs::kFloodEntryPoint};
+
+  gpu::Result<gpu::ShaderModule> shaderModule =
+      runtime.createShaderModule(gpu::ShaderModuleDescriptor{
+          "FilterFlood",
+          RcString(wgsl),
+          gpu::ShaderSourceKind::Wgsl,
+          {},
+          {gpu::ComputeEntryPointInfo{entryPoint, gpu::WorkgroupSize{kWorkgroup, kWorkgroup, 1}}}});
+  if (!shaderModule.hasResult()) {
+    return;
+  }
+
+  gpu::Result<gpu::BindGroupLayout> bindGroupLayout =
+      runtime.createBindGroupLayout(gpu::BindGroupLayoutDescriptor{
+          "FilterFloodBGL",
+          {gpu::BindGroupLayoutEntry{
+               static_cast<uint32_t>(Binding::OutputTexture), gpu::ShaderStage::Compute,
+               gpu::BindingType::WriteOnlyStorageTexture2d, gpu::TextureFormat::RGBA8Unorm},
+           gpu::BindGroupLayoutEntry{static_cast<uint32_t>(Binding::Params),
+                                     gpu::ShaderStage::Compute, gpu::BindingType::UniformBuffer}}});
+  if (!bindGroupLayout.hasResult()) {
+    return;
+  }
+
+  gpu::Result<gpu::PipelineLayout> pipelineLayout = runtime.createPipelineLayout(
+      gpu::PipelineLayoutDescriptor{"FilterFloodPL", {bindGroupLayout.result()}});
+  if (!pipelineLayout.hasResult()) {
+    return;
+  }
+
+  gpu::Result<gpu::ComputePipeline> pipeline = runtime.createComputePipeline(
+      gpu::ComputePipelineDescriptor{"FilterFloodPipeline", pipelineLayout.result(),
+                                     gpu::ComputeState{shaderModule.result(), entryPoint},
+                                     gpu::WorkgroupSize{kWorkgroup, kWorkgroup, 1}});
+  if (!pipeline.hasResult()) {
+    return;
+  }
+
+  floodShaderModule_ = std::move(shaderModule).result();
+  floodBindGroupLayout_ = std::move(bindGroupLayout).result();
+  floodPipelineLayout_ = std::move(pipelineLayout).result();
+  floodPipeline_ = std::move(pipeline).result();
+}
+
 wgpu::Texture GeodeFilterEngine::applyFlood(
     FilterResourceArena& arena, uint32_t width, uint32_t height,
     const svg::components::filter_primitive::Flood& primitive) {
-  const wgpu::Device& dev = device_.device();
+  if (!floodPipeline_.isValid()) {
+    return {};
+  }
 
-  wgpu::Texture output = createIntermediateTexture(arena, dev, width, height, "FilterFloodOutput");
+  const gpu::Texture* output = arena.createRuntimeTexture(gpu::TextureDescriptor{
+      "FilterFloodOutput", gpu::Extent2d{width, height}, gpu::TextureFormat::RGBA8Unorm,
+      gpu::TextureUsage::StorageBinding | gpu::TextureUsage::Sampled | gpu::TextureUsage::CopySrc});
+  if (output == nullptr) {
+    return {};
+  }
 
   // Resolve the flood color: CSS color → RGBA, then premultiply.  The filter
   // pipeline operates in premultiplied alpha (consistent with TinySkia and the
@@ -2671,42 +2821,36 @@ wgpu::Texture GeodeFilterEngine::applyFlood(
   params.color[2] = (static_cast<float>(rgba.b) / 255.0f) * alpha;
   params.color[3] = alpha;
 
-  auto uniformBuffer = writeUniformSlot(*resourceCache_, device_, &params, sizeof(params));
+  const gpu::TextureView* outputView =
+      arena.createRuntimeTextureView(*output, "FilterFloodOutputView");
+  const gpu::Buffer* uniformBuffer = arena.createRuntimeUniformBuffer(
+      std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(&params), sizeof(params)),
+      "FilterFloodParams");
+  if (outputView == nullptr || uniformBuffer == nullptr) {
+    return {};
+  }
 
   // Flood has no input texture - only output + uniform.
-  ScopedWgpuHandle<wgpu::TextureView> outputView(output.createView());
+  const gpu::BindGroup* bindGroup = arena.createRuntimeBindGroup(
+      floodBindGroupLayout_,
+      {gpu::BindGroupEntry{
+           static_cast<uint32_t>(gpu::shader::programs::FloodBinding::OutputTexture),
+           gpu::TextureViewBinding{*outputView}},
+       gpu::BindGroupEntry{static_cast<uint32_t>(gpu::shader::programs::FloodBinding::Params),
+                           gpu::BufferBinding{*uniformBuffer, 0, sizeof(FloodParams)}}},
+      "FilterFloodBindGroup");
+  if (bindGroup == nullptr) {
+    return {};
+  }
 
-  wgpu::BindGroupEntry bgEntries[2]{};
-  bgEntries[0].binding = 0;
-  bgEntries[0].textureView = outputView.get();
-  bgEntries[1].binding = 1;
-  bgEntries[1].buffer = uniformBuffer.buffer;
-  bgEntries[1].offset = uniformBuffer.offset;
-  bgEntries[1].size = sizeof(FloodParams);
+  constexpr uint32_t kWorkgroup = gpu::shader::programs::kFloodWorkgroupSize;
+  if (!arena.dispatchComputePass("FilterFloodPass", floodPipeline_, *bindGroup,
+                                 (width + kWorkgroup - 1) / kWorkgroup,
+                                 (height + kWorkgroup - 1) / kWorkgroup)) {
+    return {};
+  }
 
-  wgpu::BindGroupDescriptor bgDesc{};
-  bgDesc.label = wgpuLabel("FilterFloodBindGroup");
-  bgDesc.layout = floodBindGroupLayout_.get();
-  bgDesc.entryCount = 2;
-  bgDesc.entries = bgEntries;
-  ScopedWgpuHandle<wgpu::BindGroup> bindGroup(dev.createBindGroup(bgDesc));
-  device_.countBindGroup();
-
-  wgpu::CommandEncoder& encoder = arena.commandEncoder();
-
-  wgpu::ComputePassDescriptor passDesc{};
-  passDesc.label = wgpuLabel("FilterFloodPass");
-  ScopedWgpuHandle<wgpu::ComputePassEncoder> pass(encoder.beginComputePass(passDesc));
-  pass.get().setPipeline(floodPipeline_.get());
-  pass.get().setBindGroup(0, bindGroup.get(), 0, nullptr);
-
-  const uint32_t workgroupsX = (width + 7) / 8;
-  const uint32_t workgroupsY = (height + 7) / 8;
-  pass.get().dispatchWorkgroups(workgroupsX, workgroupsY, 1);
-  pass.get().end();
-  pass.reset();
-
-  return output;
+  return device_.adapterDevice().wgpuTextureOf(*output);
 }
 
 wgpu::Texture GeodeFilterEngine::applyMerge(
