@@ -53,12 +53,10 @@ public:
   static gpu::Texture uploadRgba8Texture(const GeodeGpuContext& context, const uint8_t* rgbaPixels,
                                          uint32_t width, uint32_t height);
 
-  /// Uniform-buffer binding offset alignment shared by the blit path and
-  /// any UniformScratch implementation. 256 is the WebGPU default
-  /// minUniformBufferOffsetAlignment; implementations that ever query a
-  /// device limit instead must keep this constant in sync or blits fail
-  /// binding validation on devices with a larger limit.
-  static constexpr uint64_t kUniformOffsetAlignment = 256u;
+  /// Uniform-buffer binding offset alignment shared by the blit path and any UniformScratch
+  /// implementation. Names \ref donner::geode::kUniformOffsetAlignment, which is the one
+  /// definition; this member is the spelling the blit path and its tests already use.
+  static constexpr uint64_t kUniformOffsetAlignment = geode::kUniformOffsetAlignment;
 
   /// Borrowed uniform-buffer range for one blit uniform upload. The
   /// `buffer` field is a raw non-owning handle: the provider keeps it

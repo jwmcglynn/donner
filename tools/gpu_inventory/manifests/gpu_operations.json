@@ -643,7 +643,8 @@
         "wgpuTextureOf"
       ],
       "wgpuCTypes": [
-        "WGPUBindGroupLayout"
+        "WGPUBindGroupLayout",
+        "WGPUTexture"
       ],
       "wgpuCppTokens": [
         "BindGroup",
