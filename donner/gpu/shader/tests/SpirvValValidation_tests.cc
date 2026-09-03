@@ -1,7 +1,8 @@
 /// @file
 /// Out-of-process SPIR-V validation: every emitted module must pass
 /// `spirv-val --target-env vulkan1.1`. Platform validators run as external verification tools
-/// rather than build dependencies, so the test skips cleanly when spirv-val is not installed.
+/// rather than build dependencies, so a developer machine without spirv-val skips these cases and
+/// an automated lane without it fails them.
 ///
 /// A negative control proves the detection mechanism: a deliberately malformed module must be
 /// rejected, so an acceptance result here means the validator actually inspected the words rather
@@ -15,6 +16,7 @@
 #include <cstdlib>
 #include <fstream>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "donner/gpu/shader/IrModule.h"
@@ -25,6 +27,7 @@
 #include "donner/gpu/shader/programs/SnapshotUnpremultiply.h"
 #include "donner/gpu/shader/programs/SolidFill.h"
 #include "donner/gpu/shader/programs/SubregionClip.h"
+#include "donner/gpu/shader/tests/ExternalToolGate.h"
 #include "donner/gpu/shader/tests/ReductionCoverageModule.h"
 #include "donner/gpu/shader/tests/ShaderTestUtils.h"
 #include "donner/gpu/shader/tests/StageIoTestModules.h"
@@ -62,6 +65,15 @@ std::string FindSpirvVal() {
     }
   }
   return "";
+}
+
+/// How the gate names this validator, spelled the way a person would install it.
+constexpr std::string_view kSpirvValToolName = "spirv-val (SPIRV-Tools)";
+
+/// What the probe found, empty when the validator is usable.
+/// @param spirvVal Result of \ref FindSpirvVal.
+std::string SpirvValUnavailableReason(const std::string& spirvVal) {
+  return spirvVal.empty() ? "not on PATH, in /opt/homebrew/bin, or in /usr/local/bin" : "";
 }
 
 /// Writes \p words under TEST_TMPDIR as \p fileName and returns spirv-val's combined output,
@@ -186,41 +198,31 @@ ShaderResult<IrModule> BuildMatrixBlockModule() {
 
 TEST(SpirvValValidation, EmittedSolidFillPassesVulkan11Validation) {
   const std::string spirvVal = FindSpirvVal();
-  if (spirvVal.empty()) {
-    GTEST_SKIP() << "spirv-val (SPIRV-Tools) is not installed";
-  }
+  DONNER_REQUIRE_EXTERNAL_TOOL(kSpirvValToolName, SpirvValUnavailableReason(spirvVal));
   ExpectValidatesForVulkan11(spirvVal, programs::BuildSolidFillModule(), "solid_fill.spv");
 }
 
 TEST(SpirvValValidation, EmittedColorMatrixComputePassesVulkan11Validation) {
   const std::string spirvVal = FindSpirvVal();
-  if (spirvVal.empty()) {
-    GTEST_SKIP() << "spirv-val (SPIRV-Tools) is not installed";
-  }
+  DONNER_REQUIRE_EXTERNAL_TOOL(kSpirvValToolName, SpirvValUnavailableReason(spirvVal));
   ExpectValidatesForVulkan11(spirvVal, programs::BuildColorMatrixModule(), "color_matrix.spv");
 }
 
 TEST(SpirvValValidation, EmittedFloodComputePassesVulkan11Validation) {
   const std::string spirvVal = FindSpirvVal();
-  if (spirvVal.empty()) {
-    GTEST_SKIP() << "spirv-val (SPIRV-Tools) is not installed";
-  }
+  DONNER_REQUIRE_EXTERNAL_TOOL(kSpirvValToolName, SpirvValUnavailableReason(spirvVal));
   ExpectValidatesForVulkan11(spirvVal, programs::BuildFloodModule(), "flood.spv");
 }
 
 TEST(SpirvValValidation, EmittedSubregionClipComputePassesVulkan11Validation) {
   const std::string spirvVal = FindSpirvVal();
-  if (spirvVal.empty()) {
-    GTEST_SKIP() << "spirv-val (SPIRV-Tools) is not installed";
-  }
+  DONNER_REQUIRE_EXTERNAL_TOOL(kSpirvValToolName, SpirvValUnavailableReason(spirvVal));
   ExpectValidatesForVulkan11(spirvVal, programs::BuildSubregionClipModule(), "subregion_clip.spv");
 }
 
 TEST(SpirvValValidation, EmittedFilterColorMatrixPassesVulkan11Validation) {
   const std::string spirvVal = FindSpirvVal();
-  if (spirvVal.empty()) {
-    GTEST_SKIP() << "spirv-val (SPIRV-Tools) is not installed";
-  }
+  DONNER_REQUIRE_EXTERNAL_TOOL(kSpirvValToolName, SpirvValUnavailableReason(spirvVal));
   ExpectValidatesForVulkan11(spirvVal, programs::BuildFilterColorMatrixModule(),
                              "filter_color_matrix.spv");
 }
@@ -230,9 +232,7 @@ TEST(SpirvValValidation, AStorageBlockHoldingBothMatrixTypesPassesVulkan11Valida
   // own layout: one hardcoded stride would decorate mat2x2f's 8-byte columns as 16 and be
   // rejected here.
   const std::string spirvVal = FindSpirvVal();
-  if (spirvVal.empty()) {
-    GTEST_SKIP() << "spirv-val (SPIRV-Tools) is not installed";
-  }
+  DONNER_REQUIRE_EXTERNAL_TOOL(kSpirvValToolName, SpirvValUnavailableReason(spirvVal));
   ExpectValidatesForVulkan11(spirvVal, BuildMatrixBlockModule(), "matrix_block.spv");
 }
 
@@ -241,9 +241,7 @@ TEST(SpirvValValidation, APositionOnlyFragmentEntryPassesVulkan11Validation) {
   // reaches the stage. SPIR-V declares it as its own Input variable, decorated FragCoord rather
   // than the vertex stage's Position; the validator is what says so out of process.
   const std::string spirvVal = FindSpirvVal();
-  if (spirvVal.empty()) {
-    GTEST_SKIP() << "spirv-val (SPIRV-Tools) is not installed";
-  }
+  DONNER_REQUIRE_EXTERNAL_TOOL(kSpirvValToolName, SpirvValUnavailableReason(spirvVal));
   ExpectValidatesForVulkan11(spirvVal, BuildPositionOnlyFragmentModule(), "position_only.spv");
 }
 
@@ -251,9 +249,7 @@ TEST(SpirvValValidation, EmittedSnapshotUnpremultiplyComputePassesVulkan11Valida
   // The first module to emit OpUGreaterThanEqual over a vector, OpAny, and OpShiftRightLogical,
   // so this is where the validator confirms those encodings and their result types.
   const std::string spirvVal = FindSpirvVal();
-  if (spirvVal.empty()) {
-    GTEST_SKIP() << "spirv-val (SPIRV-Tools) is not installed";
-  }
+  DONNER_REQUIRE_EXTERNAL_TOOL(kSpirvValToolName, SpirvValUnavailableReason(spirvVal));
   ExpectValidatesForVulkan11(spirvVal, programs::BuildSnapshotUnpremultiplyModule(),
                              "snapshot_unpremultiply.spv");
 }
@@ -262,9 +258,7 @@ TEST(SpirvValValidation, EmittedBoolVectorReductionsPassVulkan11Validation) {
   // OpAll reaches no shipping program, so this is the only place the validator confirms its
   // encoding and that its result type is a scalar bool rather than the vector it reduced.
   const std::string spirvVal = FindSpirvVal();
-  if (spirvVal.empty()) {
-    GTEST_SKIP() << "spirv-val (SPIRV-Tools) is not installed";
-  }
+  DONNER_REQUIRE_EXTERNAL_TOOL(kSpirvValToolName, SpirvValUnavailableReason(spirvVal));
   ExpectValidatesForVulkan11(spirvVal, BuildVectorReductionModule(), "vector_reductions.spv");
 }
 
@@ -274,9 +268,7 @@ TEST(SpirvValValidation, NegativeControlDetectsAMalformedModule) {
   // this, a harness that silently reported success would make the acceptance results above
   // meaningless.
   const std::string spirvVal = FindSpirvVal();
-  if (spirvVal.empty()) {
-    GTEST_SKIP() << "spirv-val (SPIRV-Tools) is not installed";
-  }
+  DONNER_REQUIRE_EXTERNAL_TOOL(kSpirvValToolName, SpirvValUnavailableReason(spirvVal));
 
   ShaderResult<IrModule> module = programs::BuildSolidFillModule();
   ASSERT_THAT(module, HasShaderResult());

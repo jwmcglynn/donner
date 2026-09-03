@@ -1,7 +1,8 @@
 /// @file
 /// Out-of-process MSL validation: every emitted MSL module must compile cleanly with the platform
 /// Metal compiler (`xcrun -sdk macosx metal`). Platform compilers run as external verification
-/// tools rather than build dependencies.
+/// tools rather than build dependencies, so a developer machine without the offline compiler skips
+/// these cases and an automated lane without it fails them.
 ///
 /// A negative control proves the detection mechanism: deliberately invalid MSL must be rejected,
 /// so an acceptance result here means the compiler actually inspected the source rather than the
@@ -15,6 +16,7 @@
 #include <cstdlib>
 #include <fstream>
 #include <string>
+#include <string_view>
 
 #include "donner/gpu/shader/MslEmitter.h"
 #include "donner/gpu/shader/programs/ColorMatrix.h"
@@ -23,6 +25,7 @@
 #include "donner/gpu/shader/programs/SnapshotUnpremultiply.h"
 #include "donner/gpu/shader/programs/SolidFill.h"
 #include "donner/gpu/shader/programs/SubregionClip.h"
+#include "donner/gpu/shader/tests/ExternalToolGate.h"
 #include "donner/gpu/shader/tests/ReductionCoverageModule.h"
 #include "donner/gpu/shader/tests/ShaderTestUtils.h"
 #include "donner/gpu/shader/tests/StageIoTestModules.h"
@@ -48,10 +51,14 @@ int RunCommand(const std::string& command, std::string* output) {
   return pclose(pipe);
 }
 
-/// Probes for a usable offline Metal compiler, returning a skip reason when one is unavailable.
+/// How the gate names this compiler, spelled the way a person would install it.
+constexpr std::string_view kMetalCompilerToolName =
+    "the offline Metal compiler (xcodebuild -downloadComponent MetalToolchain)";
+
+/// Probes for a usable offline Metal compiler, returning what it found when there is none.
 /// Recent Xcode versions ship it as a downloadable component, so `xcrun --find metal` can succeed
 /// while the tool itself is absent; the probe compiles a trivial kernel to detect that case.
-std::string FindMetalCompilerSkipReason() {
+std::string FindMetalCompilerUnavailableReason() {
   // Note: recent Xcode versions ship the offline Metal compiler as a downloadable component
   // (xcodebuild -downloadComponent MetalToolchain); `xcrun --find metal` can succeed while the
   // tool itself is absent, so probe-compile a trivial kernel to detect that case.
@@ -153,34 +160,22 @@ TEST(MslXcrunValidation, APositionOnlyFragmentEntryCompilesWithMetalCompiler) {
   // but position has no direct-parameter spelling in this emitter, so omitting the struct would
   // leave the body referencing an input that no parameter carries. The compiler is the check that
   // catches that; a string-shape assertion would not.
-  const std::string skipReason = FindMetalCompilerSkipReason();
-  if (!skipReason.empty()) {
-    GTEST_SKIP() << skipReason;
-  }
+  DONNER_REQUIRE_EXTERNAL_TOOL(kMetalCompilerToolName, FindMetalCompilerUnavailableReason());
   ExpectCompilesWithMetalCompiler(BuildPositionOnlyFragmentModule(), "position_only_fragment");
 }
 
 TEST(MslXcrunValidation, EmittedSolidFillCompilesWithMetalCompiler) {
-  const std::string skipReason = FindMetalCompilerSkipReason();
-  if (!skipReason.empty()) {
-    GTEST_SKIP() << skipReason;
-  }
+  DONNER_REQUIRE_EXTERNAL_TOOL(kMetalCompilerToolName, FindMetalCompilerUnavailableReason());
   ExpectCompilesWithMetalCompiler(programs::BuildSolidFillModule(), "solid_fill");
 }
 
 TEST(MslXcrunValidation, EmittedColorMatrixComputeCompilesWithMetalCompiler) {
-  const std::string skipReason = FindMetalCompilerSkipReason();
-  if (!skipReason.empty()) {
-    GTEST_SKIP() << skipReason;
-  }
+  DONNER_REQUIRE_EXTERNAL_TOOL(kMetalCompilerToolName, FindMetalCompilerUnavailableReason());
   ExpectCompilesWithMetalCompiler(programs::BuildColorMatrixModule(), "color_matrix");
 }
 
 TEST(MslXcrunValidation, EmittedSnapshotUnpremultiplyComputeCompilesWithMetalCompiler) {
-  const std::string skipReason = FindMetalCompilerSkipReason();
-  if (!skipReason.empty()) {
-    GTEST_SKIP() << skipReason;
-  }
+  DONNER_REQUIRE_EXTERNAL_TOOL(kMetalCompilerToolName, FindMetalCompilerUnavailableReason());
   // This program is the first to emit a componentwise comparison, a bool-vector reduction, and a
   // shift, so it is also the first to have the compiler confirm those spellings are real MSL.
   ExpectCompilesWithMetalCompiler(programs::BuildSnapshotUnpremultiplyModule(),
@@ -188,36 +183,24 @@ TEST(MslXcrunValidation, EmittedSnapshotUnpremultiplyComputeCompilesWithMetalCom
 }
 
 TEST(MslXcrunValidation, EmittedBoolVectorReductionsCompileWithMetalCompiler) {
-  const std::string skipReason = FindMetalCompilerSkipReason();
-  if (!skipReason.empty()) {
-    GTEST_SKIP() << skipReason;
-  }
+  DONNER_REQUIRE_EXTERNAL_TOOL(kMetalCompilerToolName, FindMetalCompilerUnavailableReason());
   // `all` reaches no shipping program, so without this the compiler would never see it and a
   // wrong spelling would only ever be checked against the emitter's own idea of it.
   ExpectCompilesWithMetalCompiler(BuildVectorReductionModule(), "vector_reductions");
 }
 
 TEST(MslXcrunValidation, EmittedFloodComputeCompilesWithMetalCompiler) {
-  const std::string skipReason = FindMetalCompilerSkipReason();
-  if (!skipReason.empty()) {
-    GTEST_SKIP() << skipReason;
-  }
+  DONNER_REQUIRE_EXTERNAL_TOOL(kMetalCompilerToolName, FindMetalCompilerUnavailableReason());
   ExpectCompilesWithMetalCompiler(programs::BuildFloodModule(), "flood");
 }
 
 TEST(MslXcrunValidation, EmittedSubregionClipComputeCompilesWithMetalCompiler) {
-  const std::string skipReason = FindMetalCompilerSkipReason();
-  if (!skipReason.empty()) {
-    GTEST_SKIP() << skipReason;
-  }
+  DONNER_REQUIRE_EXTERNAL_TOOL(kMetalCompilerToolName, FindMetalCompilerUnavailableReason());
   ExpectCompilesWithMetalCompiler(programs::BuildSubregionClipModule(), "subregion_clip");
 }
 
 TEST(MslXcrunValidation, EmittedFilterColorMatrixCompilesWithMetalCompiler) {
-  const std::string skipReason = FindMetalCompilerSkipReason();
-  if (!skipReason.empty()) {
-    GTEST_SKIP() << skipReason;
-  }
+  DONNER_REQUIRE_EXTERNAL_TOOL(kMetalCompilerToolName, FindMetalCompilerUnavailableReason());
   ExpectCompilesWithMetalCompiler(programs::BuildFilterColorMatrixModule(), "filter_color_matrix");
 }
 
@@ -225,10 +208,7 @@ TEST(MslXcrunValidation, NegativeControlDetectsInvalidMsl) {
   // Proves the detection mechanism: MSL the compiler must reject has to come back as a nonzero
   // status with a diagnostic. Without this, a harness that silently reported success would make
   // the positive results above meaningless.
-  const std::string skipReason = FindMetalCompilerSkipReason();
-  if (!skipReason.empty()) {
-    GTEST_SKIP() << skipReason;
-  }
+  DONNER_REQUIRE_EXTERNAL_TOOL(kMetalCompilerToolName, FindMetalCompilerUnavailableReason());
 
   int status = 0;
   const std::string output = CompileMslForStatus(

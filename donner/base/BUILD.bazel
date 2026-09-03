@@ -126,6 +126,7 @@ donner_cc_library(
         "tests/BaseTestUtils.h",
         "tests/ParseResultTestUtils.h",
         "tests/Runfiles.h",
+        "tests/ScopedEnvironmentVariable.h",
         "tests/TestTempDir.h",
     ],
     # //tools tests (MCP servers, build tooling) share the same test-hygiene

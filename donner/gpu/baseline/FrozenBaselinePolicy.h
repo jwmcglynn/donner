@@ -46,6 +46,15 @@ bool AnyEnvironmentVariableIsSet(std::span<const std::string_view> names);
 bool RunningUnderContinuousIntegration();
 
 /**
+ * The name of the marker that identified this process as running on an automated lane, for a
+ * message that has to say which one did.
+ *
+ * @return A view of the marker's name, aliasing static storage that outlives every caller, or an
+ *   empty view when no marker is set.
+ */
+std::string_view FirstContinuousIntegrationMarkerSet();
+
+/**
  * Directory name the baselines for one adapter are filed under, for example `apple_m1_pro_metal`.
  * Lowercase, with every run of non-alphanumeric characters collapsed to one underscore, so one
  * adapter always resolves to one directory on every platform.

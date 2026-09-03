@@ -37,7 +37,17 @@ bool AnyEnvironmentVariableIsSet(std::span<const std::string_view> names) {
 }
 
 bool RunningUnderContinuousIntegration() {
-  return AnyEnvironmentVariableIsSet(ContinuousIntegrationMarkers());
+  return !FirstContinuousIntegrationMarkerSet().empty();
+}
+
+std::string_view FirstContinuousIntegrationMarkerSet() {
+  for (const std::string_view name : kContinuousIntegrationMarkers) {
+    const char* value = std::getenv(std::string(name).c_str());
+    if (value != nullptr && value[0] != '\0') {
+      return name;
+    }
+  }
+  return {};
 }
 
 MissingComparisonDisposition DispositionForUnbaselinedAdapter(bool underContinuousIntegration) {
