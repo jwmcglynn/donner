@@ -26,8 +26,11 @@ source and Cargo metadata may remain only in an explicitly allowlisted resvg/tin
 reference snapshot, which cannot be compiled, linked, executed, or treated as a Donner
 implementation dependency. The tiny-skia Rust FFI cross-validation fixture and its `rules_rust`
 graph are retained as a test-only oracle: they live inside the vendored tiny-skia workspace, which
-sits outside Donner's module graph, and only that workspace's own test targets reach them. The inert
-reference allowlist stays limited to the resvg test corpus and the tiny-skia upstream snapshot.
+Donner's root module never evaluates, and only that workspace's own test targets reach them. The
+boundary is what the build does, not what a resolved module graph mentions. An upstream module may
+declare `rules_rust` where Donner cannot remove the edge; the invariant holds as long as nothing
+fetches or invokes a Rust toolchain. The inert reference allowlist stays limited to the resvg test
+corpus and the tiny-skia upstream snapshot.
 
 The result is not a general WebGPU implementation. It is the smallest coherent GPU runtime that
 supports Geode, editor presentation, deterministic replay, and Donner's embedding requirements at
@@ -155,13 +158,17 @@ this document. The inventory must cover at least:
   are the cross-validation fixture under `third_party/tiny-skia-cpp/tests/rust_ffi/`, whose one Rust
   source is compiled by `rust_static_library` and wrapped in a `cc_library` visible only to the
   vendored workspace's own `//tests` subpackages. `rules_rust`, `crate_universe`, and the Rust
-  toolchain registration appear only in `third_party/tiny-skia-cpp/MODULE.bazel`. Donner's root
-  `MODULE.bazel` pulls that subtree in through a `local_repository` repo rule rather than as a Bazel
-  module, and `.bazelignore` hides the subtree, so the subtree module is never evaluated, no Rust
-  toolchain enters Donner's module graph, there is no tracked root `MODULE.bazel.lock`, and a clean
-  checkout builds and tests Donner without `rustc` or `cargo`. The Rust that actually reaches
-  shipped artifacts is the prebuilt `wgpu-native` library, and it leaves at the Metal and Linux
-  cutovers;
+  toolchain registration appear in exactly one tracked build file,
+  `third_party/tiny-skia-cpp/MODULE.bazel`. Donner's root `MODULE.bazel` pulls that subtree in
+  through a `local_repository` repo rule rather than as a Bazel module, and `.bazelignore` hides the
+  subtree, so that module is never evaluated and there is no tracked root `MODULE.bazel.lock`.
+  Donner's own module graph reaches `rules_rust` anyway, independently, as a transitive `bazel_dep`
+  of `protobuf`, and the generated lockfile therefore declares Rust toolchain repositories. Nothing
+  fetches them, because no Donner target uses a Rust rule: a checkout with no `rustc` or `cargo` on
+  `PATH` builds and tests Donner cleanly. That gap is why the rule has to be stated over the
+  closure, and why deleting the oracle would not have made the module graph Rust-free. The Rust
+  that actually reaches shipped artifacts is the prebuilt `wgpu-native` library, and it leaves at
+  the Metal and Linux cutovers;
 - prebuilt `wgpu-native` archives and platform overlay rules in the non-BCR dependency extension;
 - generated and patched ImGui/WebGPU integration code.
 
@@ -345,10 +352,12 @@ The dependency purge is complete only when all of these are true:
   outside the vendored tiny-skia workspace's own test tree names the fixture package or the
   `rust_reference` and `cross_validator` libraries built on it. No Donner target and no non-test
   target can therefore reach a Rust artifact;
-- `rules_rust`, `crate_universe`, and Rust toolchain registration appear only in the vendored
-  tiny-skia workspace's own `MODULE.bazel`. Donner's root `MODULE.bazel`, `.bazelrc`, `.bzl` files,
-  BUILD files outside that fixture, CMake inputs, and generated build metadata contain none of them,
-  and Donner's module graph resolves with no Rust toolchain;
+- no tracked build file outside the vendored tiny-skia workspace's own `MODULE.bazel` names
+  `rules_rust`, `crate_universe`, or a Rust toolchain: not Donner's root `MODULE.bazel`, not
+  `.bazelrc`, not a `.bzl` file, not a BUILD file, not a CMake input. The resolved module graph is
+  not held to that, because `protobuf` declares `rules_rust` and Donner cannot drop the edge; what
+  must hold is that no Rust toolchain is fetched or invoked, which follows from no Donner target
+  using a Rust rule;
 - no build rule downloads a Rust-built `wgpu-native` or equivalent archive;
 - `third_party/webgpu-cpp`, emdawnwebgpu stubs/glue, native archive overlays, and obsolete ImGui
   WebGPU patches are removed once their last consumer is gone;
@@ -360,9 +369,9 @@ The dependency purge is complete only when all of these are true:
   containment (visibility scope plus consumers confined to the vendored workspace's test tree),
   compiled or linked references into the inert snapshot, and Rust-built archive downloads. The Lint
   workflow runs it blocking for the first four; the archive category stays report-only until the
-  Metal and Linux cutovers delete the archives. The verifier also scans `MODULE.bazel.lock` files
-  when a local build has produced them, which a fresh Lint checkout never has, so that scan is a
-  developer convenience and not a CI gate.
+  Metal and Linux cutovers delete the archives. It reads git-tracked files only, so a generated
+  `MODULE.bazel.lock` is out of scope: that file records the whole transitive Bzlmod graph, which is
+  the graph rather than the closure, and a fresh CI checkout has no lockfile to read anyway.
 
 Human-readable historical documentation may accurately say that a removed implementation was
 written in Rust. Approved upstream reference source may remain in its inert third-party boundary.
