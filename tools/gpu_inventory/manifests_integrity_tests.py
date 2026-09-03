@@ -136,5 +136,6 @@ class RustDependenciesManifestTest(unittest.TestCase):
                 f"test-only Rust source outside the oracle fixture: {path}",
             )
 
+
 if __name__ == "__main__":
     unittest.main()

@@ -91,6 +91,11 @@ names three scopes and the verifier enforces the boundary of each:
   targets. This is what keeps it out of every non-test closure, and it is
   checked alongside the oracle's own visibility.
 
+The visibility check reads the raw file and fails closed on anything it cannot
+parse as a literal list, a comment included: a comment containing
+`visibility = ...` in one of these BUILD files is reported as a non-literal
+visibility. Reword the comment rather than loosening the check.
+
 The Lint workflow runs `--blocking default`, which is every category except
 `rust-built-archive`: the prebuilt `wgpu-native` tarballs are the Rust that
 actually ships today, and they leave with the Metal and Linux cutovers.

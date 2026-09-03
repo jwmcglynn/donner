@@ -351,6 +351,52 @@ class ContainmentEvasionTest(unittest.TestCase):
         self.assertEqual(categories(findings), ["rust-fixture-containment"])
         self.assertIn("not a literal list", findings[0].detail)
 
+    def test_visibility_concatenating_a_public_list_is_flagged(self):
+        """Reading to the first `]` stopped at the safe half of the expression."""
+        files = {
+            FIXTURE_BUILD: (
+                "cc_library(\n"
+                '    name = "tiny_skia_ffi",\n'
+                '    visibility = ["//tests:__subpackages__"] + ["//visibility:public"],\n'
+                ")\n"
+            )
+        }
+        findings = verifier.check(files, SCOPES)
+        self.assertEqual(categories(findings), ["rust-fixture-containment"])
+        self.assertIn("not a literal list", findings[0].detail)
+
+    def test_visibility_concatenating_a_source_package_is_flagged(self):
+        files = {
+            FIXTURE_BUILD: (
+                "cc_library(\n"
+                '    name = "tiny_skia_ffi",\n'
+                '    visibility = ["//tests:__subpackages__"] + ["//src:__subpackages__"],\n'
+                ")\n"
+            )
+        }
+        findings = verifier.check(files, SCOPES)
+        self.assertEqual(categories(findings), ["rust-fixture-containment"])
+        self.assertIn("not a literal list", findings[0].detail)
+
+    def test_a_plain_list_followed_by_a_comment_is_still_literal(self):
+        files = {
+            FIXTURE_BUILD: (
+                "cc_library(\n"
+                '    name = "tiny_skia_ffi",\n'
+                '    visibility = ["//tests:__subpackages__"],  # the vendored test tree\n'
+                ")\n"
+            )
+        }
+        self.assertEqual(verifier.check(files, SCOPES), [])
+
+    def test_a_package_default_closing_the_call_is_still_literal(self):
+        files = {
+            "third_party/tiny-skia-cpp/tests/test_utils/BUILD.bazel": (
+                'package(default_visibility = ["//tests:__subpackages__"])\n'
+            )
+        }
+        self.assertEqual(verifier.check(files, SCOPES), [])
+
     def test_test_tree_subpackage_visibility_is_still_allowed(self):
         files = {
             FIXTURE_BUILD: (

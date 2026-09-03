@@ -272,12 +272,26 @@ def is_test_tree_visibility(entry: str) -> bool:
     return package == "tests" or package.startswith("tests/")
 
 
+# What may legitimately follow a visibility list: the attribute separator, the
+# end of the enclosing call, a trailing comment, or the end of the line.
+# Anything else means the list is one operand of a larger expression, and the
+# expression is not readable here.
+VISIBILITY_LIST_TERMINATORS = (",", ")", "#", "\n")
+
+
 def visibility_findings(path: str, text: str) -> list[Finding]:
     """Flags visibility in the oracle's packages that leaves the test tree."""
     findings = []
     for match in VISIBILITY_ASSIGN_RE.finditer(text):
         rest = text[match.end() :].lstrip()
-        if not rest.startswith("["):
+        closing = rest.find("]") if rest.startswith("[") else -1
+        if closing != -1:
+            after = rest[closing + 1 :].lstrip(" \t")
+            if after and not after.startswith(VISIBILITY_LIST_TERMINATORS):
+                # `["//tests:__subpackages__"] + ["//visibility:public"]` reads
+                # as contained if the scan stops at the first `]`.
+                closing = -1
+        if closing == -1:
             findings.append(
                 Finding(
                     category="rust-fixture-containment",
@@ -289,9 +303,7 @@ def visibility_findings(path: str, text: str) -> list[Finding]:
                 )
             )
             continue
-        closing = rest.find("]")
-        listed = rest[: closing] if closing != -1 else rest
-        for entry in VISIBILITY_ENTRY_RE.findall(listed):
+        for entry in VISIBILITY_ENTRY_RE.findall(rest[:closing]):
             if entry == "//visibility:private" or is_test_tree_visibility(entry):
                 continue
             findings.append(
