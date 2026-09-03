@@ -9,8 +9,12 @@
 namespace donner::geode {
 
 // The four pipeline-family creators below build shader modules through the donner::gpu runtime;
-// the filter creators further down still compile through wgpu directly, because the runtime
-// does not model the compute passes they feed.
+// the filter creators further down still compile through wgpu directly. That is where each
+// primitive has been taken to, not a limit of the runtime: the flood, subregion clip, color
+// matrix, offset, and color space conversion passes are all recorded through it, and their
+// sources are build-time output of shader IR programs rather than files compiled here. A
+// primitive that moves takes its creator out of this header, and the helper below goes with the
+// last one to leave.
 
 /**
  * Compile the Slug fill shader for the given device.
