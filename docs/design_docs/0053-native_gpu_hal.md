@@ -369,14 +369,19 @@ The dependency purge is complete only when all of these are true:
   Rust standard library, Cargo package, or Rust-built linked object;
 - the checked-in verifier `tools/gpu_inventory/check_no_rust_dependencies.py` enforces those path
   and reference rules over the git-tracked tree in five categories: Rust source outside the inert
-  allowlist and the test-only prefix, Rust build tokens outside the test-only prefix in Bazel and
-  CMake vocabulary alike, fixture containment (visibility scope, re-export, and consumers confined
-  to the vendored workspace's test tree), compiled or linked references into the inert snapshot, and
-  Rust-built archive downloads. The Lint
-  workflow runs it blocking for the first four; the archive category stays report-only until the
-  Metal and Linux cutovers delete the archives. It reads git-tracked files only, so a generated
-  `MODULE.bazel.lock` is out of scope: that file records the whole transitive Bzlmod graph, which is
-  the graph rather than the closure, and a fresh CI checkout has no lockfile to read anyway.
+  allowlist and the test-only prefix, Rust toolchain references outside the test-only prefix (Rust
+  rule-set names and bare `cargo`, `rustc`, and `rustup` commands in Bazel files, and the CMake
+  vocabulary in CMake files and the tracked sources under `tools/cmake/` that emit them), fixture
+  containment (visibility scope, re-export, and consumers confined to the vendored workspace's test
+  tree), compiled or linked references into the inert snapshot, and Rust-built archive downloads.
+  The Lint workflow runs it blocking for the first four; the archive category stays report-only
+  until the Metal and Linux cutovers delete the archives;
+- generated build state is covered where it exists rather than claimed to be covered everywhere.
+  Donner's production `CMakeLists.txt` files are emitted and git-ignored, so
+  `gen_cmakelists.py --check` scans its own output against the same CMake token list in the
+  cmake-validate job; that is the only gate that reads those files. A generated `MODULE.bazel.lock`
+  is out of scope, because it records the whole transitive Bzlmod graph, which is the graph rather
+  than the closure, and a fresh CI checkout has no lockfile to read anyway.
 
 Human-readable historical documentation may accurately say that a removed implementation was
 written in Rust. Approved upstream reference source may remain in its inert third-party boundary.

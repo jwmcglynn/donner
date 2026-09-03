@@ -44,6 +44,13 @@ from typing import (
     Tuple,
 )
 
+# The emitted CMakeLists.txt files are git-ignored, so the repository-wide
+# no-Rust scan never sees them. This generator is where they do exist, and
+# `--check` is the gate that reads them, using the same token list.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "gpu_inventory"))
+
+from rust_scopes import CMAKE_RUST_TOKENS  # noqa: E402  (path set just above)
+
 #
 # Bazel helpers
 #
@@ -1718,6 +1725,30 @@ def _extract_cmake_targets_and_refs(
     return defined, linked, sources
 
 
+def _rust_toolchain_errors(gen_root: Path, generated_files: Set[Path]) -> List[str]:
+    """Errors for emitted CMake that would reach a Rust toolchain.
+
+    Donner's build contains no Rust compiler invocation, no Rust package-manager
+    execution, and no Rust-built library. The repository-wide scan covers tracked
+    files; these files are generated and git-ignored, so this is the only place
+    they can be read. The token list is shared with that scan rather than
+    restated here, which also keeps this file clear of the words it looks for:
+    the same scan reads this source, and it does not exempt comments, because a
+    string that reaches the emitted output is indistinguishable from prose to a
+    lexical check.
+    """
+    errors: List[str] = []
+    for rel in sorted(generated_files):
+        try:
+            text = (gen_root / rel).read_text(encoding="utf-8").lower()
+        except (OSError, UnicodeDecodeError):
+            continue
+        found = sorted(token for token in CMAKE_RUST_TOKENS if token in text)
+        if found:
+            errors.append(f"{rel}: emitted CMake invokes a Rust toolchain: {', '.join(found)}")
+    return errors
+
+
 def _validate_generated_output(gen_root: Path, workspace: Path, generated_files: Set[Path]) -> List[str]:
     """Statically validate the generated CMakeLists.txt files.
 
@@ -1727,10 +1758,11 @@ def _validate_generated_output(gen_root: Path, workspace: Path, generated_files:
     Checks:
     - Every source file referenced in add_library/add_executable/target_sources exists.
     - Every target referenced in target_link_libraries is either defined or known external.
+    - No emitted file invokes a Rust toolchain.
 
     Returns a list of human-readable error messages. Empty = valid.
     """
-    errors: List[str] = []
+    errors: List[str] = _rust_toolchain_errors(gen_root, generated_files)
     defined, linked, sources = _extract_cmake_targets_and_refs(gen_root, allowed_files=generated_files)
 
     # Combine defined targets with known external targets for linkage validation.

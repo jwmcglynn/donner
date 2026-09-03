@@ -1,6 +1,6 @@
-load("@rules_python//python:defs.bzl", "py_binary", "py_test")
+load("@rules_python//python:defs.bzl", "py_binary", "py_library", "py_test")
 
-# GPU runtime inventory manifests and no-Rust-dependency verifier (design 0053).
+# GPU runtime inventory manifests and the no-Rust-dependency verifier.
 #
 # Manifest freshness is `manifest_freshness_tests` below: an ordinary bazel test
 # whose scan inputs are declared as runfiles via the per-package
@@ -20,22 +20,28 @@ filegroup(
     srcs = glob(["manifests/*.json"]),
 )
 
-py_binary(
-    name = "generate_gpu_manifests",
-    srcs = [
-        "generate_gpu_manifests.py",
-        "rust_scopes.py",
-    ],
+# The path scopes and Rust token vocabulary. `imports` puts it on the import
+# path of every dependent, including //tools/cmake, whose generator validates
+# its own emitted CMake against the same token list.
+py_library(
+    name = "rust_scopes",
+    srcs = ["rust_scopes.py"],
+    imports = ["."],
     visibility = ["//visibility:public"],
 )
 
 py_binary(
-    name = "check_no_rust_dependencies",
-    srcs = [
-        "check_no_rust_dependencies.py",
-        "rust_scopes.py",
-    ],
+    name = "generate_gpu_manifests",
+    srcs = ["generate_gpu_manifests.py"],
     visibility = ["//visibility:public"],
+    deps = [":rust_scopes"],
+)
+
+py_binary(
+    name = "check_no_rust_dependencies",
+    srcs = ["check_no_rust_dependencies.py"],
+    visibility = ["//visibility:public"],
+    deps = [":rust_scopes"],
 )
 
 py_test(
@@ -44,8 +50,8 @@ py_test(
     srcs = [
         "generate_gpu_manifests.py",
         "generate_gpu_manifests_tests.py",
-        "rust_scopes.py",
     ],
+    deps = [":rust_scopes"],
 )
 
 py_test(
@@ -54,8 +60,8 @@ py_test(
     srcs = [
         "check_no_rust_dependencies.py",
         "check_no_rust_dependencies_tests.py",
-        "rust_scopes.py",
     ],
+    deps = [":rust_scopes"],
 )
 
 py_test(
@@ -84,8 +90,8 @@ py_test(
     srcs = [
         "generate_gpu_manifests.py",
         "manifest_freshness_tests.py",
-        "rust_scopes.py",
     ],
+    deps = [":rust_scopes"],
     data = [
         "rust_allowlist.json",
         ":manifests",
