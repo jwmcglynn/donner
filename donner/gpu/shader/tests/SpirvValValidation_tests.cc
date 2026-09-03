@@ -22,6 +22,7 @@
 #include "donner/gpu/shader/programs/ColorMatrix.h"
 #include "donner/gpu/shader/programs/FilterColorMatrix.h"
 #include "donner/gpu/shader/programs/Flood.h"
+#include "donner/gpu/shader/programs/Offset.h"
 #include "donner/gpu/shader/programs/SnapshotUnpremultiply.h"
 #include "donner/gpu/shader/programs/SolidFill.h"
 #include "donner/gpu/shader/programs/SubregionClip.h"
@@ -224,6 +225,16 @@ TEST(SpirvValValidation, EmittedFilterColorMatrixPassesVulkan11Validation) {
   }
   ExpectValidatesForVulkan11(spirvVal, programs::BuildFilterColorMatrixModule(),
                              "filter_color_matrix.spv");
+}
+
+TEST(SpirvValValidation, EmittedOffsetComputePassesVulkan11Validation) {
+  // The first compute program to emit an OpFunctionCall, and the first shipping program to reach
+  // FSign and Floor, so this is where the validator confirms those encodings inside a real one.
+  const std::string spirvVal = FindSpirvVal();
+  if (spirvVal.empty()) {
+    GTEST_SKIP() << "spirv-val (SPIRV-Tools) is not installed";
+  }
+  ExpectValidatesForVulkan11(spirvVal, programs::BuildOffsetModule(), "offset.spv");
 }
 
 TEST(SpirvValValidation, AStorageBlockHoldingBothMatrixTypesPassesVulkan11Validation) {

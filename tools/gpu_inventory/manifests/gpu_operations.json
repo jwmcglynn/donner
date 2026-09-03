@@ -356,7 +356,8 @@
         "setPipeline",
         "submit",
         "unmap",
-        "writeBuffer"
+        "writeBuffer",
+        "writeTexture"
       ],
       "wgpuCFunctions": [
         "wgpuLabel"
@@ -409,6 +410,7 @@
         "ShaderStage",
         "StorageTextureAccess",
         "TexelCopyBufferInfo",
+        "TexelCopyBufferLayout",
         "TexelCopyTextureInfo",
         "Texture",
         "TextureDescriptor",
