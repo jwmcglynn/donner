@@ -117,15 +117,24 @@ class RustDependenciesManifestTest(unittest.TestCase):
         # some shipped or non-test closure could reach.
         self.assertEqual(self.manifest["activeRustSources"], [])
 
-    def test_test_only_rust_stays_inside_the_oracle(self):
-        # Ratchet on the oracle's own boundary: the test-only grant covers one
-        # fixture directory, not "Rust that happens to be under tests/".
+    def test_test_only_rust_prefix_is_pinned(self):
+        # Literal ratchet. Comparing the manifest's sources against the
+        # manifest's own prefixes cannot fail: one generator writes both from
+        # one allowlist, so widening the allowlist widens both sides together.
+        # The grant is one fixture directory, and widening it is the change
+        # this test exists to catch.
+        self.assertEqual(
+            self.manifest["testOnlyRustPrefixes"],
+            ["third_party/tiny-skia-cpp/MODULE.bazel", "third_party/tiny-skia-cpp/tests/rust_ffi/"],
+        )
+        self.assertEqual(
+            self.manifest["testOnlyConsumerPrefixes"], ["third_party/tiny-skia-cpp/tests/"]
+        )
         for path in self.manifest["testOnlyRustSources"]:
             self.assertTrue(
-                any(path.startswith(prefix) for prefix in self.manifest["testOnlyRustPrefixes"]),
-                f"test-only Rust source outside the granted prefixes: {path}",
+                path.startswith("third_party/tiny-skia-cpp/tests/rust_ffi/"),
+                f"test-only Rust source outside the oracle fixture: {path}",
             )
-
 
 if __name__ == "__main__":
     unittest.main()
