@@ -1651,7 +1651,8 @@ async function readPresentedGeneration(page: Page): Promise<PresentedGeneration>
 }
 
 /**
- * Send one pinch notch and return once the raster it caused is on the canvas.
+ * Send one pinch notch and return once a strictly later worker result has been
+ * consumed by a presented frame.
  *
  * A constant delay after a notch is not an observable of that notch. The worker
  * can take longer than any constant, and until the frame that draws its result
@@ -1662,9 +1663,10 @@ async function readPresentedGeneration(page: Page): Promise<PresentedGeneration>
  * probe scored zero on all six storm notches while the frame each notch
  * actually presented carried 36375 uncovered backdrop pixels.
  *
- * Waiting for a strictly later presented result closes that window, and it is
- * bounded: a notch whose raster never reaches the canvas fails here with the
- * worker's own health attached rather than being scored as covered.
+ * That pair is the whole guarantee, and it is not "the notch's pixels are up":
+ * `pollRenderResult` advances the counter before its non-presenting early
+ * returns, so the callers converge through `settleUntilCovered` rather than
+ * trust one capture. The wait is bounded and reports the worker's own health.
  */
 async function pinchZoomAndAwaitPresentation(
   page: Page,
