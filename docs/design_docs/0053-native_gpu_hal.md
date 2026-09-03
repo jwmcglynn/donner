@@ -161,9 +161,9 @@ this document. The inventory must cover at least:
   toolchain registration appear in exactly one tracked build file,
   `third_party/tiny-skia-cpp/MODULE.bazel`. Donner's root `MODULE.bazel` pulls that subtree in
   through a `local_repository` repo rule rather than as a Bazel module, and `.bazelignore` hides the
-  subtree, so that module is never evaluated and there is no tracked root `MODULE.bazel.lock`.
-  Donner's own module graph reaches `rules_rust` anyway, independently, as a transitive `bazel_dep`
-  of `protobuf`, and the generated lockfile therefore declares Rust toolchain repositories. Nothing
+  subtree, so that module is never evaluated. Separately, the repository tracks no root
+  `MODULE.bazel.lock`. Donner's own module graph reaches `rules_rust` anyway, independently, as a
+  transitive `bazel_dep` of `protobuf`, and the generated lockfile declares Rust toolchains. Nothing
   fetches them, because no Donner target uses a Rust rule: a checkout with no `rustc` or `cargo` on
   `PATH` builds and tests Donner cleanly. That gap is why the rule has to be stated over the
   closure, and why deleting the oracle would not have made the module graph Rust-free. The Rust
@@ -576,8 +576,9 @@ Each platform becomes native only when all applicable gates pass:
   Phase 0. The prior 0.3-0.5 MB estimate is not accepted without measurement;
 - browser bridge passes headed Chromium, WebKit, and physical iOS presentation checks;
 - the no-Rust-dependency verifier passes with every category blocking, and the release candidate's
-  module graph, source archive, link maps, SBOM, and artifacts carry no Rust compiler, Cargo
-  package, or Rust-built object in any shipped or non-test closure;
+  source archive, link maps, SBOM, and artifacts carry no Rust compiler, Cargo package, or
+  Rust-built object. The module graph's `rules_rust` edge is acceptable exactly because the
+  rustc-absent build test proves nothing fetches or invokes it;
 - independent security and provenance review has no unresolved critical or high findings.
 
 ## Testing Strategy
