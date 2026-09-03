@@ -7,6 +7,8 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <algorithm>
+#include <array>
 #include <cstdlib>
 #include <fstream>
 #include <sstream>
@@ -284,6 +286,40 @@ TEST(MslEmitterTests, RejectsALocalNamedAfterACalledBuiltin) {
   ASSERT_THAT(module, HasShaderResult());
   EXPECT_THAT(EmitMsl(module.result()),
               IsShaderError(HasSubstr("collides with an MSL reserved word")));
+}
+
+TEST(MslEmitterTests, EveryFreeFunctionBuiltinNameIsReserved) {
+  // The WGSL emitter has the same guard, and MSL needs its own because the two reserved-word
+  // tables are separate. Four builtins are excluded because MSL does not spell them as a free
+  // function call: `select` becomes a ternary and the three texture builtins become methods on
+  // the texture object, so their WGSL names are never emitted here. Anything else the enum
+  // grows is emitted by name and must therefore be unavailable as an identifier; a builtin
+  // added without its reserved word fails here rather than in a shader that shadows it.
+  const std::array<BuiltinFn, 4> notSpelledAsACall = {BuiltinFn::Select, BuiltinFn::TextureSample,
+                                                      BuiltinFn::TextureLoad,
+                                                      BuiltinFn::TextureDimensions};
+
+  for (int raw = 0; raw < 256; ++raw) {
+    const BuiltinFn builtin = static_cast<BuiltinFn>(raw);
+    std::ostringstream name;
+    name << builtin;
+    if (name.str() == "unknown") {
+      EXPECT_GT(raw, 0) << "the builtin enum walk found no builtins at all";
+      break;
+    }
+    if (std::find(notSpelledAsACall.begin(), notSpelledAsACall.end(), builtin) !=
+        notSpelledAsACall.end()) {
+      continue;
+    }
+
+    ModuleBuilder builder;
+    ASSERT_THAT(builder.addConstant(RcString(name.str()), LiteralU32(1)), IsShaderOk());
+    ShaderResult<IrModule> module = builder.build();
+    ASSERT_THAT(module, HasShaderResult());
+    EXPECT_THAT(EmitMsl(module.result()),
+                IsShaderError(HasSubstr("collides with an MSL reserved word")))
+        << "builtin \"" << name.str() << "\" is spelled as a call but its name is not reserved";
+  }
 }
 
 TEST(MslEmitterTests, RejectsMslReservedWords) {
