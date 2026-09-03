@@ -486,6 +486,157 @@ class BazelrcImportTest(unittest.TestCase):
         self.assertEqual(categories(findings), ["rust-build-edge"])
 
 
+class DirectToolInvocationTest(unittest.TestCase):
+    """Bazel can run the toolchain without ever naming a Rust rule."""
+
+    def test_genrule_running_cargo_is_flagged(self):
+        files = {
+            "donner/tools/BUILD.bazel": (
+                "genrule(\n"
+                '    name = "gen",\n'
+                '    cmd = "cargo build --release && cp target/release/x $@",\n'
+                ")\n"
+            )
+        }
+        findings = verifier.check(files, SCOPES)
+        self.assertEqual(categories(findings), ["rust-build-edge"])
+        self.assertIn("cargo", findings[0].detail)
+
+    def test_bzl_action_running_rustc_is_flagged(self):
+        files = {
+            "build_defs/rust_shim.bzl": (
+                "def _impl(ctx):\n"
+                "    ctx.actions.run_shell(\n"
+                '        command = "rustc --edition 2021 $1",\n'
+                "    )\n"
+            )
+        }
+        findings = verifier.check(files, SCOPES)
+        self.assertEqual(categories(findings), ["rust-build-edge"])
+        self.assertIn("rustc", findings[0].detail)
+
+    def test_rustup_download_is_flagged(self):
+        files = {"third_party/deps.bzl": 'cmd = "rustup toolchain install stable"\n'}
+        findings = verifier.check(files, SCOPES)
+        self.assertEqual(categories(findings), ["rust-build-edge"])
+
+    def test_rule_set_names_are_not_split_into_bare_commands(self):
+        """`cargo_bazel` is one identifier, not the `cargo` command."""
+        files = {"MODULE.bazel": 'use_extension("@rules_rust//crate_universe:cargo_bazel.bzl")\n'}
+        findings = verifier.check(files, SCOPES)
+        self.assertEqual(categories(findings), ["rust-build-edge"])
+        self.assertEqual(
+            findings[0].detail,
+            "References a Rust toolchain outside the test-only oracle: "
+            "cargo_bazel, crate_universe, rules_rust",
+        )
+
+    def test_a_cargo_lockfile_label_is_not_a_command(self):
+        files = {"donner/BUILD.bazel": 'exports_files(["Cargo.lock", "Cargo.toml"])\n'}
+        self.assertEqual(
+            [f for f in verifier.check(files, SCOPES) if f.category == "rust-build-edge"], []
+        )
+
+    def test_prose_in_a_comment_is_not_a_command(self):
+        files = {"donner/BUILD.bazel": "# we do not run cargo or rustc here, ever\n"}
+        self.assertEqual(verifier.check(files, SCOPES), [])
+
+
+class CmakeGeneratorSourceTest(unittest.TestCase):
+    """Emitted CMakeLists.txt files are git-ignored, so read what emits them."""
+
+    def test_generator_source_is_read_with_the_cmake_vocabulary(self):
+        files = {"tools/cmake/gen_cmakelists.py": 'lines.append("corrosion_import_crate(...)")\n'}
+        findings = verifier.check(files, SCOPES)
+        self.assertEqual(categories(findings), ["rust-build-edge"])
+        self.assertIn("corrosion", findings[0].detail)
+
+    def test_generator_test_source_is_not_scanned(self):
+        """Its fixtures hold these strings on purpose, and it emits nothing."""
+        files = {"tools/cmake/gen_cmakelists_test.py": 'EXPECTED = "cargo build"\n'}
+        self.assertEqual(verifier.check(files, SCOPES), [])
+
+    def test_an_unrelated_tool_source_is_not_scanned(self):
+        files = {"tools/other/thing.py": 'note = "corrosion and cargo"\n'}
+        self.assertEqual(verifier.check(files, SCOPES), [])
+
+
+class VisibilityDecodingTest(unittest.TestCase):
+    def test_single_quoted_public_visibility_is_flagged(self):
+        files = {
+            FIXTURE_BUILD: (
+                "cc_library(\n"
+                '    name = "tiny_skia_ffi",\n'
+                "    visibility = ['//visibility:public'],\n"
+                ")\n"
+            )
+        }
+        findings = verifier.check(files, SCOPES)
+        self.assertEqual(categories(findings), ["rust-fixture-containment"])
+        self.assertIn("//visibility:public", findings[0].detail)
+
+    def test_single_quoted_test_tree_visibility_is_allowed(self):
+        files = {
+            FIXTURE_BUILD: (
+                "cc_library(\n"
+                '    name = "tiny_skia_ffi",\n'
+                "    visibility = ['//tests:__subpackages__'],\n"
+                ")\n"
+            )
+        }
+        self.assertEqual(verifier.check(files, SCOPES), [])
+
+    def test_an_undecodable_element_fails_closed(self):
+        files = {
+            FIXTURE_BUILD: (
+                "cc_library(\n"
+                '    name = "tiny_skia_ffi",\n'
+                '    visibility = ["//tests:__subpackages__", EXTRA_PACKAGES],\n'
+                ")\n"
+            )
+        }
+        findings = verifier.check(files, SCOPES)
+        self.assertEqual(categories(findings), ["rust-fixture-containment"])
+        self.assertIn("not a literal list", findings[0].detail)
+
+    def test_package_group_label_is_flagged(self):
+        """A package_group's membership is declared somewhere else."""
+        files = {
+            FIXTURE_BUILD: (
+                "cc_library(\n"
+                '    name = "tiny_skia_ffi",\n'
+                '    visibility = ["//tests/policy:everyone"],\n'
+                ")\n"
+            )
+        }
+        findings = verifier.check(files, SCOPES)
+        self.assertEqual(categories(findings), ["rust-fixture-containment"])
+        self.assertIn("//tests/policy:everyone", findings[0].detail)
+
+    def test_a_bare_package_without_a_target_is_flagged(self):
+        files = {
+            FIXTURE_BUILD: (
+                "cc_library(\n"
+                '    name = "tiny_skia_ffi",\n'
+                '    visibility = ["//tests/integration"],\n'
+                ")\n"
+            )
+        }
+        findings = verifier.check(files, SCOPES)
+        self.assertEqual(categories(findings), ["rust-fixture-containment"])
+
+    def test_pkg_and_subpackages_targets_are_allowed(self):
+        files = {
+            FIXTURE_BUILD: (
+                "cc_library(\n"
+                '    name = "tiny_skia_ffi",\n'
+                '    visibility = ["//tests:__pkg__", "//tests/integration:__subpackages__"],\n'
+                ")\n"
+            )
+        }
+        self.assertEqual(verifier.check(files, SCOPES), [])
+
+
 class BlockingSelectionTest(unittest.TestCase):
     def test_absent_flag_blocks_nothing(self):
         self.assertEqual(verifier.parse_blocking(None), ())

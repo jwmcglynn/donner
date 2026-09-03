@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verifier for the design doc 0053 no-Rust-dependency invariant.
+"""Verifier for Donner's no-Rust-dependency invariant.
 
 The invariant is a closure property, not a file census: Donner's shipped
 artifacts and every non-test dependency closure must contain no Rust compiler
@@ -70,6 +70,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from rust_scopes import (  # noqa: E402  (sibling module, path set just above)
     CMAKE_RUST_TOKENS,
+    DIRECT_RUST_TOOL_RE,
     RUST_BUILD_TOKENS,
     RustScopes,
     is_build_graph_path,
@@ -91,7 +92,7 @@ CATEGORIES = (
 
 # Categories that hold on the tree today and therefore block in CI. The
 # wgpu-native archives are still real, so their category is reported and not
-# enforced until phases 3 and 4 delete them.
+# enforced until those archives are removed from the build.
 DEFAULT_BLOCKING = tuple(c for c in CATEGORIES if c != "rust-built-archive")
 
 # Rust-built prebuilt archive signatures. wgpu-native releases are compiled from
@@ -134,7 +135,7 @@ DATA_ATTRIBUTES = frozenset({"data", "testdata", "resources", "args", "tags"})
 
 ATTRIBUTE_ASSIGN_RE = re.compile(r"^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=")
 VISIBILITY_ASSIGN_RE = re.compile(r"(?:default_)?visibility\s*=\s*")
-VISIBILITY_ENTRY_RE = re.compile(r"\"([^\"]+)\"")
+VISIBILITY_ENTRY_RE = re.compile(r"\"([^\"]*)\"|'([^']*)'")
 ALIAS_RE = re.compile(r"\balias\s*\(")
 
 
@@ -147,14 +148,14 @@ class Finding:
     detail: str
 
 
-def code_lines(text: str) -> list[str]:
-    """Returns each line with string contents and `#` comments removed.
+def _scan_lines(text: str, keep_strings: bool) -> list[str]:
+    """Splits `text` into lines with comments, and optionally strings, removed.
 
-    Bracket depth has to be counted over code, not over prose. A single
-    unbalanced `(` in a comment held the depth open for the rest of the file,
-    which shifted every later attribute onto whatever variable happened to be
-    open, and a `[` inside a string did the same. Both are one-character edits
-    that turned a compiled reference into a staged-data one.
+    One quote-state machine serves both readers. Bracket depth has to be counted
+    over code alone, because a single unbalanced `(` in a comment held the depth
+    open for the rest of a file and shifted every later attribute. Token scans
+    want the opposite half: a `genrule(cmd = "cargo build")` is a real Rust
+    invocation, while the word `cargo` in a comment is prose.
     """
     out: list[str] = []
     quote: str | None = None
@@ -180,12 +181,24 @@ def code_lines(text: str) -> list[str]:
                 index += len(quote)
                 quote = None
             else:
+                if keep_strings:
+                    kept.append(line[index])
                 index += 1
         out.append("".join(kept))
         if quote in ('"', "'"):
             # A single-quoted string cannot span lines; a triple-quoted one can.
             quote = None
     return out
+
+
+def code_lines(text: str) -> list[str]:
+    """Each line with string contents and `#` comments removed."""
+    return _scan_lines(text, keep_strings=False)
+
+
+def text_without_comments(text: str) -> str:
+    """The file with `#` comments removed and string contents intact."""
+    return "\n".join(_scan_lines(text, keep_strings=True))
 
 
 def attribute_of_each_line(text: str) -> list[str | None]:
@@ -278,9 +291,60 @@ def is_test_tree_visibility(entry: str) -> bool:
 # expression is not readable here.
 VISIBILITY_LIST_TERMINATORS = (",", ")", "#", "\n")
 
+# The only visibility targets that name a fixed set of packages. A package_group
+# label such as `//tests/policy:everyone` also lives under the test tree but its
+# contents are declared elsewhere and can include `//...`.
+VISIBILITY_TARGETS = ("__pkg__", "__subpackages__")
+
+
+def is_test_tree_visibility(entry: str) -> bool:
+    """True only for a fixed package under the vendored workspace's `//tests`.
+
+    `@donner//donner/base/tests:__pkg__` leaves the workspace entirely,
+    `//src/tiny_skia/tests:__pkg__` is a source package that merely has a
+    `tests` segment, and `//tests/policy:everyone` is a package_group whose
+    membership this file does not state. None of the three is containment.
+    """
+    if entry.startswith("@") or ":" not in entry:
+        return False
+    package, _, target = entry.partition(":")
+    package = package.lstrip("/")
+    if target not in VISIBILITY_TARGETS:
+        return False
+    return package == "tests" or package.startswith("tests/")
+
+
+def visibility_entries(listed: str) -> list[str] | None:
+    """Decodes a visibility list body, or None if any element is not a literal.
+
+    Both quote forms appear in the wild, and an element that is neither is a
+    name or a call whose value is not readable here.
+    """
+    entries = []
+    for element in listed.split(","):
+        element = element.strip()
+        if not element:
+            continue
+        match = VISIBILITY_ENTRY_RE.fullmatch(element)
+        if match is None:
+            return None
+        entries.append(match.group(1) or match.group(2))
+    return entries
+
 
 def visibility_findings(path: str, text: str) -> list[Finding]:
     """Flags visibility in the oracle's packages that leaves the test tree."""
+
+    def unreadable() -> Finding:
+        return Finding(
+            category="rust-fixture-containment",
+            path=path,
+            detail=(
+                "visibility is not a literal list, so its scope cannot be read here; "
+                "spell the packages out."
+            ),
+        )
+
     findings = []
     for match in VISIBILITY_ASSIGN_RE.finditer(text):
         rest = text[match.end() :].lstrip()
@@ -291,19 +355,11 @@ def visibility_findings(path: str, text: str) -> list[Finding]:
                 # `["//tests:__subpackages__"] + ["//visibility:public"]` reads
                 # as contained if the scan stops at the first `]`.
                 closing = -1
-        if closing == -1:
-            findings.append(
-                Finding(
-                    category="rust-fixture-containment",
-                    path=path,
-                    detail=(
-                        "visibility is not a literal list, so its scope cannot be read here; "
-                        "spell the packages out."
-                    ),
-                )
-            )
+        entries = visibility_entries(rest[1:closing]) if closing != -1 else None
+        if entries is None:
+            findings.append(unreadable())
             continue
-        for entry in VISIBILITY_ENTRY_RE.findall(rest[:closing]):
+        for entry in entries:
             if entry == "//visibility:private" or is_test_tree_visibility(entry):
                 continue
             findings.append(
@@ -353,15 +409,21 @@ def tokens_in(text: str, tokens: tuple[str, ...]) -> list[str]:
 
 
 def matched_rust_build_tokens(path: str, text: str) -> list[str]:
-    """Rust toolchain tokens in `text`, read in that build file's vocabulary.
+    """Rust toolchain references in `text`, read in that file's vocabulary.
 
     Bazel says `rules_rust`; CMake says `corrosion_import_crate` or
     `cargo build`, case however the author felt. One list finds nothing in the
     other's files.
+
+    A Bazel file can also reach Rust without naming a Rust rule, by running the
+    toolchain directly from a `genrule` command or a `.bzl` action, so bare
+    command names count there too. Those are matched outside comments, where a
+    command can actually run.
     """
     if is_cmake_path(path):
         return tokens_in(text.lower(), CMAKE_RUST_TOKENS)
-    return tokens_in(text, RUST_BUILD_TOKENS)
+    direct = set(DIRECT_RUST_TOOL_RE.findall(text_without_comments(text)))
+    return sorted(set(tokens_in(text, RUST_BUILD_TOKENS)) | direct)
 
 
 def rust_source_scope_findings(path: str, scopes: RustScopes) -> list[Finding]:
