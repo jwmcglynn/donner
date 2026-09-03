@@ -1520,27 +1520,12 @@ void GeodeWgpuAdapterDevice::notifyHostSubmitted() {
 }
 
 void GeodeWgpuAdapterDevice::advanceCompletedSerialWhenQueueDrains(uint64_t serial) {
-  // A serial may be reported complete only once it has actually reached the queue, and while a
-  // host encoder is installed the serials replayed into it are recorded but not submitted. A
-  // standalone submit skips that encoder, so it takes a HIGHER serial than those and completes
-  // first; reporting its own serial would declare the unqueued ones complete along with it.
-  //
-  // That is not a cosmetic lie. `completedSerial` is what the deferred-destroy sweep and every
-  // wait read, so the open frame's still-recording resources would be retired underneath it and
-  // their slots handed to something else, invalidating handles the frame is still using, and
-  // waits on those serials - including the destructor's - would return early.
-  //
-  // So the advance is capped below the oldest serial still waiting on the host's submit. The cap
-  // is computed here rather than in the callback because the callback may land after the frame
-  // has flushed, and a merely conservative cap costs nothing: the flush advances the serial past
-  // all of this on its own, and the standalone submit's own resources then retire at that
-  // frame boundary like any others. The readback that motivates the standalone path waits on its
-  // buffer's map signal rather than on a serial, so capping does not delay it.
+  // Completion must stay below the first serial still waiting on the host's submit: those are
+  // recorded but not queued, and `completedSerial` is what the deferred-destroy sweep and every
+  // wait read, so reporting past them retires resources the open frame is still using.
   const uint64_t cappedSerial =
       hostFirstPendingSerial_ == 0 ? serial : std::min(serial, hostFirstPendingSerial_ - 1);
   if (cappedSerial == 0) {
-    // Everything queued so far is older than nothing: there is no serial this completion may
-    // report, so it reports none rather than an unqueued one.
     return;
   }
 
