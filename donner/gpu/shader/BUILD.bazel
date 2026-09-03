@@ -171,6 +171,7 @@ donner_cc_test(
 donner_cc_test(
     name = "msl_xcrun_validation_tests",
     srcs = [
+        "tests/MathPrimitiveCoverageModule.h",
         "tests/MslXcrunValidation_tests.cc",
         "tests/ReductionCoverageModule.h",
         "tests/ShaderTestUtils.h",
@@ -192,6 +193,7 @@ donner_cc_test(
 donner_cc_test(
     name = "spirv_val_validation_tests",
     srcs = [
+        "tests/MathPrimitiveCoverageModule.h",
         "tests/ReductionCoverageModule.h",
         "tests/ShaderTestUtils.h",
         "tests/SpirvValValidation_tests.cc",
@@ -211,6 +213,7 @@ donner_cc_test(
 donner_cc_test(
     name = "wgsl_emitter_geode_validation_tests_impl",
     srcs = [
+        "tests/MathPrimitiveCoverageModule.h",
         "tests/ShaderTestUtils.h",
         "tests/WgslEmitterGeodeValidation_tests.cc",
     ],
@@ -223,6 +226,7 @@ donner_cc_test(
         ":shader",
         "//donner/base:gtest_timeout_main",
         "//donner/svg/renderer/geode:geode_device",
+        "//donner/svg/renderer/geode:geode_gpu_wait",
         "//donner/svg/renderer/geode:geode_wgpu_util",
         "//third_party/webgpu-cpp:webgpu_cpp",
     ],
