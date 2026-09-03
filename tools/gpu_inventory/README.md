@@ -33,9 +33,10 @@ python3 tools/gpu_inventory/generate_gpu_manifests.py
   points, bindings, builtins, language features.
 - `editor_integration.json` - editor files touching the GPU surface, including
   the ImGui WebGPU backend.
-- `rust_dependencies.json` - Rust sources and Cargo metadata (allowlisted inert
-  reference vs active), Rust build-rule references, and Rust-built prebuilt
-  archive declarations.
+- `rust_dependencies.json` - Rust sources and Cargo metadata partitioned by
+  scope (inert reference snapshot, test-only cross-validation oracle, active),
+  Rust build-rule references, and Rust-built prebuilt archive declarations.
+  `activeRustSources` is the section that must stay empty.
 
 New GPU operations or shader features cannot land without updating the
 manifests: `manifest_freshness_tests` fails when a rescan differs from the
@@ -67,11 +68,32 @@ calling a new WebGPU method.
 ## No-Rust-dependency verifier
 
 ```sh
-python3 tools/gpu_inventory/check_no_rust_dependencies.py             # report-only
-python3 tools/gpu_inventory/check_no_rust_dependencies.py --blocking  # phase 6 gate
+python3 tools/gpu_inventory/check_no_rust_dependencies.py                  # report
+python3 tools/gpu_inventory/check_no_rust_dependencies.py --blocking       # all
+python3 tools/gpu_inventory/check_no_rust_dependencies.py --blocking a,b   # some
 ```
 
-Scans tracked files plus generated build state (`MODULE.bazel.lock`) for Rust
-dependency edges outside the inert reference allowlist
-(`rust_allowlist.json`). Report-only during the design 0053 transition; phase 6
-switches the Lint workflow step to `--blocking`.
+Design 0053's rule is a closure property: no Rust compiler invocation, Cargo
+execution, or Rust-built library in a shipped artifact or a non-test dependency
+closure. Rust in the tree is not itself the violation, so `rust_allowlist.json`
+names three scopes and the verifier enforces the boundary of each:
+
+- `inertReferencePrefixes` - upstream reference source no build rule may compile
+  or link. Staging its golden images through `data` is fine; naming it from
+  `srcs`/`deps`/`hdrs` is a finding.
+- `testOnlyRustPrefixes` - the tiny-skia cross-validation oracle and the
+  vendored workspace `MODULE.bazel` that declares its Rust toolchain. That
+  workspace is a `local_repository` repo rule and is hidden by `.bazelignore`,
+  so Donner's module graph never evaluates it and a clean checkout builds and
+  tests without `rustc`. Rust source and `rules_rust` are allowed here only.
+- `testOnlyConsumerPrefixes` - the only build files that may name the oracle's
+  targets. This is what keeps it out of every non-test closure, and it is
+  checked alongside the oracle's own visibility.
+
+The Lint workflow blocks on every category except `rust-built-archive`: the
+prebuilt `wgpu-native` tarballs are the Rust that actually ships today, and they
+leave with the Metal and Linux cutovers.
+
+The verifier also reads `MODULE.bazel.lock` and a generated `CMakeLists.txt`
+when a local build has produced them. A fresh CI checkout has neither, so treat
+that as a developer convenience rather than an enforced gate.

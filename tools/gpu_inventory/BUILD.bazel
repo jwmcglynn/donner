@@ -9,10 +9,9 @@ load("@rules_python//python:defs.bzl", "py_binary", "py_test")
 # does not need the source tree, it needs its inputs declared, which also gets
 # it caching and correct change detection.
 #
-# `check_no_rust_dependencies.py` still runs as a Lint step: it is report-only
-# by design (0053 phase 6 makes it blocking) and it inspects the vendored
-# `third_party/tiny-skia-cpp` subtree, which .bazelignore hides from Bazel.
-#
+# `check_no_rust_dependencies.py` runs as a Lint step rather than a bazel test:
+# it inspects the vendored `third_party/tiny-skia-cpp` subtree, which
+# .bazelignore hides from Bazel entirely, so its inputs cannot be declared.
 # `rust_scopes.py` is the path-scope and token vocabulary the verifier and the
 # manifest generator must agree on, so it rides in both.
 
