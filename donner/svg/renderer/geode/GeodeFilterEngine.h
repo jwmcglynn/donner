@@ -56,6 +56,20 @@ struct FilterResourceArena;
 struct FilterResourceCache;
 
 /**
+ * A compute pipeline built from a shader IR program's build-time emitted source, with the objects
+ * it is layered on.
+ *
+ * Every handle is null when any step of the build failed, which is what a dispatch checks before
+ * recording: a pipeline that was never created must not be dispatched with.
+ */
+struct RuntimeComputeProgram {
+  gpu::ShaderModule shaderModule;        //!< Module holding the compute entry point.
+  gpu::BindGroupLayout bindGroupLayout;  //!< Layout of group 0.
+  gpu::PipelineLayout pipelineLayout;    //!< Pipeline layout over that one group.
+  gpu::ComputePipeline pipeline;         //!< The pipeline itself.
+};
+
+/**
  * Renderer-owned allocation boundary for filter textures.
  *
  * Filter work is recorded into the renderer's frame command encoder, so textures must remain
@@ -230,10 +244,6 @@ private:
   /// @param input The source-graphic texture.
   /// @return A texture whose RGB are zero and alpha matches the input alpha.
   wgpu::Texture applySourceAlpha(FilterResourceArena& arena, const wgpu::Texture& input);
-
-  /// Builds the feFlood compute pipeline from the shader IR program, leaving the handles null if
-  /// any step fails so \ref applyFlood declines rather than dispatching a half-built pipeline.
-  void createFloodPipeline();
 
   /// Fill the output with a constant flood color via compute shader.
   /// @param width Output texture width.
@@ -437,10 +447,7 @@ private:
   ScopedWgpuHandle<wgpu::BindGroupLayout> colorMatrixBindGroupLayout_;
 
   // feFlood pipeline, recorded through the GPU runtime.
-  gpu::ShaderModule floodShaderModule_;
-  gpu::BindGroupLayout floodBindGroupLayout_;
-  gpu::PipelineLayout floodPipelineLayout_;
-  gpu::ComputePipeline floodPipeline_;
+  RuntimeComputeProgram floodProgram_;
 
   // feMerge alpha-over blit pipeline.
   ScopedWgpuHandle<wgpu::ComputePipeline> mergePipeline_;
@@ -494,9 +501,8 @@ private:
   ScopedWgpuHandle<wgpu::ComputePipeline> tilePipeline_;
   ScopedWgpuHandle<wgpu::BindGroupLayout> tileBindGroupLayout_;
 
-  // Per-primitive subregion clipping pipeline (input + output + uniform).
-  ScopedWgpuHandle<wgpu::ComputePipeline> subregionClipPipeline_;
-  ScopedWgpuHandle<wgpu::BindGroupLayout> subregionClipBindGroupLayout_;
+  // Per-primitive subregion clipping pipeline, recorded through the GPU runtime.
+  RuntimeComputeProgram subregionClipProgram_;
 
   // sRGB↔linearRGB color space conversion pipeline (input + output + uniform).
   ScopedWgpuHandle<wgpu::ComputePipeline> colorSpaceConvertPipeline_;

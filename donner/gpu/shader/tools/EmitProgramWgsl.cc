@@ -27,6 +27,7 @@
 #include "donner/gpu/shader/WgslEmitter.h"
 #include "donner/gpu/shader/programs/Flood.h"
 #include "donner/gpu/shader/programs/SnapshotUnpremultiply.h"
+#include "donner/gpu/shader/programs/SubregionClip.h"
 
 namespace donner::gpu::shader {
 namespace {
@@ -41,6 +42,7 @@ struct ProgramEntry {
 constexpr ProgramEntry kPrograms[] = {
     {"flood", &programs::BuildFloodModule},
     {"snapshot_unpremultiply", &programs::BuildSnapshotUnpremultiplyModule},
+    {"subregion_clip", &programs::BuildSubregionClipModule},
 };
 
 /// Writes \p contents to \p path, returning false with a diagnostic on failure.

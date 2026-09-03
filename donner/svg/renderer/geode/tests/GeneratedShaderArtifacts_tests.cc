@@ -19,6 +19,7 @@
 #include "donner/base/tests/Runfiles.h"
 #include "embed_resources/FloodWgsl.h"
 #include "embed_resources/SnapshotUnpremultiplyWgsl.h"
+#include "embed_resources/SubregionClipWgsl.h"
 
 namespace donner::geode {
 namespace {
@@ -58,6 +59,16 @@ TEST(GeneratedShaderArtifacts, EmbeddedSnapshotUnpremultiplyMatchesTheCommittedG
   ASSERT_FALSE(golden.empty()) << "the committed golden must be readable";
   // The bytes the binary embeds, not a re-emission of them: this compares the actual shipped
   // artifact against the reviewed one.
+  EXPECT_EQ(embedded, golden)
+      << "the embedded shader and its committed golden have diverged; regenerate the golden if "
+         "the emitter changed deliberately";
+}
+
+TEST(GeneratedShaderArtifacts, EmbeddedSubregionClipMatchesTheCommittedGolden) {
+  const std::string embedded = EmbeddedBytes(donner::embedded::kSubregionClipWgsl);
+  const std::string golden = ReadRunfile("donner/gpu/shader/tests/testdata/subregion_clip.wgsl");
+
+  ASSERT_FALSE(golden.empty()) << "the committed golden must be readable";
   EXPECT_EQ(embedded, golden)
       << "the embedded shader and its committed golden have diverged; regenerate the golden if "
          "the emitter changed deliberately";

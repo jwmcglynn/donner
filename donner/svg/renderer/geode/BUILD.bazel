@@ -320,6 +320,7 @@ donner_cc_library(
         ":geode_shaders",
         ":geode_wgpu_util",
         ":snapshot_unpremultiply_wgsl",
+        ":subregion_clip_wgsl",
         "//donner/base",
         "//donner/base:asyncify_suspend_probe",
         "//donner/gpu",
@@ -422,6 +423,23 @@ embed_resources(
     header_output = "embed_resources/FloodWgsl.h",
     resources = {
         "kFloodWgsl": "generated/flood.wgsl",
+    },
+    visibility = ["//donner/svg/renderer:__subpackages__"],
+)
+
+genrule(
+    name = "subregion_clip_generated",
+    outs = ["generated/subregion_clip.wgsl"],
+    cmd = "$(location //donner/gpu/shader/tools:emit_program_wgsl) subregion_clip " +
+          "$(location generated/subregion_clip.wgsl)",
+    tools = ["//donner/gpu/shader/tools:emit_program_wgsl"],
+)
+
+embed_resources(
+    name = "subregion_clip_wgsl",
+    header_output = "embed_resources/SubregionClipWgsl.h",
+    resources = {
+        "kSubregionClipWgsl": "generated/subregion_clip.wgsl",
     },
     visibility = ["//donner/svg/renderer:__subpackages__"],
 )
@@ -630,16 +648,6 @@ embed_resources(
     visibility = ["//donner/svg/renderer:__subpackages__"],
 )
 
-# Per-primitive subregion clipping compute shader.
-embed_resources(
-    name = "filter_subregion_clip_wgsl",
-    header_output = "embed_resources/FilterSubregionClipWgsl.h",
-    resources = {
-        "kFilterSubregionClipWgsl": "shaders/filter_subregion_clip.wgsl",
-    },
-    visibility = ["//donner/svg/renderer:__subpackages__"],
-)
-
 embed_resources(
     name = "filter_color_space_convert_wgsl",
     header_output = "embed_resources/FilterColorSpaceConvertWgsl.h",
@@ -673,7 +681,6 @@ donner_cc_library(
         ":filter_morphology_wgsl",
         ":filter_offset_wgsl",
         ":filter_specular_lighting_wgsl",
-        ":filter_subregion_clip_wgsl",
         ":filter_tile_wgsl",
         ":filter_turbulence_wgsl",
         ":gaussian_blur_wgsl",
@@ -1019,6 +1026,7 @@ donner_cc_test(
     deps = [
         ":flood_wgsl",
         ":snapshot_unpremultiply_wgsl",
+        ":subregion_clip_wgsl",
         "//donner/base",
         "//donner/base:base_test_utils",
         "@com_google_gtest//:gtest_main",

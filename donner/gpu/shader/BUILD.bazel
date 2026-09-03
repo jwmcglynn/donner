@@ -76,6 +76,7 @@ donner_cc_library(
     hdrs = [
         "programs/FloodBindings.h",
         "programs/SnapshotUnpremultiplyBindings.h",
+        "programs/SubregionClipBindings.h",
     ],
     visibility = ["//visibility:public"],
 )
@@ -237,6 +238,7 @@ filegroup(
     srcs = [
         "tests/testdata/flood.wgsl",
         "tests/testdata/snapshot_unpremultiply.wgsl",
+        "tests/testdata/subregion_clip.wgsl",
     ],
     visibility = ["//donner/svg/renderer:__subpackages__"],
 )
