@@ -348,10 +348,14 @@ The dependency purge is complete only when all of these are true:
   allowlist (`third_party/resvg-test-suite/**` and the tiny-skia upstream snapshot under
   `third_party/tiny-skia-cpp/third_party/tiny-skia/**`) or under the test-only fixture prefix
   `third_party/tiny-skia-cpp/tests/rust_ffi/`;
-- the fixture's targets keep test-scoped visibility, never `//visibility:public`, and no build file
-  outside the vendored tiny-skia workspace's own test tree names the fixture package or the
-  `rust_reference` and `cross_validator` libraries built on it. No Donner target and no non-test
-  target can therefore reach a Rust artifact;
+- the fixture's targets and every package allowed to consume them keep visibility inside the
+  vendored tiny-skia workspace's own `//tests` tree, never `//visibility:public` and never a
+  cross-repository package; no `alias` or `.bzl` constant re-exports them under another name; and no
+  build file outside that test tree names the fixture package or the `rust_reference` and
+  `cross_validator` libraries built on it. No Donner target and no non-test target can therefore
+  reach a Rust artifact. Bazel enforces the same boundary independently: `@rules_rust` is not
+  visible from a repository Donner pulls in with a repo rule, so a Donner target that reaches the
+  fixture fails at load time;
 - no tracked build file outside the vendored tiny-skia workspace's own `MODULE.bazel` names
   `rules_rust`, `crate_universe`, or a Rust toolchain: not Donner's root `MODULE.bazel`, not
   `.bazelrc`, not a `.bzl` file, not a BUILD file, not a CMake input. The resolved module graph is
@@ -365,9 +369,10 @@ The dependency purge is complete only when all of these are true:
   Rust standard library, Cargo package, or Rust-built linked object;
 - the checked-in verifier `tools/gpu_inventory/check_no_rust_dependencies.py` enforces those path
   and reference rules over the git-tracked tree in five categories: Rust source outside the inert
-  allowlist and the test-only prefix, Rust build tokens outside the test-only prefix, fixture
-  containment (visibility scope plus consumers confined to the vendored workspace's test tree),
-  compiled or linked references into the inert snapshot, and Rust-built archive downloads. The Lint
+  allowlist and the test-only prefix, Rust build tokens outside the test-only prefix in Bazel and
+  CMake vocabulary alike, fixture containment (visibility scope, re-export, and consumers confined
+  to the vendored workspace's test tree), compiled or linked references into the inert snapshot, and
+  Rust-built archive downloads. The Lint
   workflow runs it blocking for the first four; the archive category stays report-only until the
   Metal and Linux cutovers delete the archives. It reads git-tracked files only, so a generated
   `MODULE.bazel.lock` is out of scope: that file records the whole transitive Bzlmod graph, which is

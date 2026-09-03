@@ -96,9 +96,7 @@ jobs:
         run: python3 tools/check_design_doc_provenance.py
 
       - name: No-Rust-dependency verifier (blocking except wgpu-native archives)
-        run: |
-          python3 tools/gpu_inventory/check_no_rust_dependencies.py \
-            --blocking rust-source-outside-allowlist,rust-build-edge,rust-fixture-containment,reference-into-allowlist
+        run: python3 tools/gpu_inventory/check_no_rust_dependencies.py --blocking default
 
   cmake-validate:
     runs-on: ubuntu-24.04

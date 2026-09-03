@@ -68,9 +68,10 @@ calling a new WebGPU method.
 ## No-Rust-dependency verifier
 
 ```sh
-python3 tools/gpu_inventory/check_no_rust_dependencies.py                  # report
-python3 tools/gpu_inventory/check_no_rust_dependencies.py --blocking       # all
-python3 tools/gpu_inventory/check_no_rust_dependencies.py --blocking a,b   # some
+python3 tools/gpu_inventory/check_no_rust_dependencies.py                     # report
+python3 tools/gpu_inventory/check_no_rust_dependencies.py --blocking default  # as CI
+python3 tools/gpu_inventory/check_no_rust_dependencies.py --blocking          # all
+python3 tools/gpu_inventory/check_no_rust_dependencies.py --blocking a,b      # some
 ```
 
 Design 0053's rule is a closure property: no Rust compiler invocation, Cargo
@@ -90,10 +91,22 @@ names three scopes and the verifier enforces the boundary of each:
   targets. This is what keeps it out of every non-test closure, and it is
   checked alongside the oracle's own visibility.
 
-The Lint workflow blocks on every category except `rust-built-archive`: the
-prebuilt `wgpu-native` tarballs are the Rust that actually ships today, and they
-leave with the Metal and Linux cutovers.
+The Lint workflow runs `--blocking default`, which is every category except
+`rust-built-archive`: the prebuilt `wgpu-native` tarballs are the Rust that
+actually ships today, and they leave with the Metal and Linux cutovers.
 
-The verifier also reads `MODULE.bazel.lock` and a generated `CMakeLists.txt`
-when a local build has produced them. A fresh CI checkout has neither, so treat
-that as a developer convenience rather than an enforced gate.
+CMake inputs are scanned with their own token list (`cargo`, `corrosion`,
+`rustc`, `find_package(Rust`), because the Bazel token list finds nothing in a
+`corrosion_import_crate` call or a `cargo build` custom command.
+
+The scan reads git-tracked files only. A generated `MODULE.bazel.lock` and a
+generated root `CMakeLists.txt` are both out of scope: the lockfile records the
+whole transitive Bzlmod graph, including the `rules_rust` that protobuf declares
+and nothing fetches, which is the graph rather than the closure.
+
+Bazel is the second defense and does not depend on this tool. From the Donner
+root, `bazel query 'deps(@tiny-skia-cpp//tests/rust_ffi:tiny_skia_ffi)'` fails
+to load, because `@rules_rust` is not visible from a repository pulled in with a
+repo rule instead of as a module. A Donner target that reaches the oracle fails
+at load time rather than silently linking Rust, and adding `rules_rust` to the
+root module graph to make it load is itself a `rust-build-edge` finding.
