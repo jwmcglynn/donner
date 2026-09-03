@@ -3,7 +3,11 @@
 load("@rules_shell//shell:sh_test.bzl", "sh_test")
 load("//:bazel/defs.bzl", "tiny_skia_cc_binary")
 
-package(default_visibility = ["//visibility:public"])
+# These binaries link the Rust FFI library, so a public default handed the
+# Rust static library to any repository that depended on them. Their only
+# consumers are the sh_tests below and `bazel run` from the command line,
+# which visibility does not restrict.
+package(default_visibility = ["//tests:__subpackages__"])
 
 _COMMON_DEPS = [
     "//tests/rust_ffi:tiny_skia_ffi",

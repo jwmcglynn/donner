@@ -543,5 +543,41 @@ class CmakeBuildValidationTest(unittest.TestCase):
             self.assertIn("missing_header_for_build_validation.h", error)
 
 
+class RustToolchainInEmittedCMakeTest(unittest.TestCase):
+    """Emitted CMakeLists.txt files are git-ignored, so --check reads them."""
+
+    def _validate(self, contents):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "CMakeLists.txt").write_text(contents, encoding="utf-8")
+            return g._rust_toolchain_errors(root, {Path("CMakeLists.txt")})
+
+    def test_a_cargo_command_is_an_error(self):
+        errors = self._validate(
+            'add_custom_command(OUTPUT x COMMAND cargo build --release)\n'
+        )
+        self.assertEqual(len(errors), 1, errors)
+        self.assertIn("invokes a Rust toolchain", errors[0])
+        self.assertIn("cargo", errors[0])
+
+    def test_corrosion_import_is_an_error_whatever_the_case(self):
+        errors = self._validate("Corrosion_Import_Crate(MANIFEST_PATH Cargo.toml)\n")
+        self.assertEqual(len(errors), 1, errors)
+        self.assertIn("corrosion", errors[0])
+
+    def test_ordinary_cmake_is_not_an_error(self):
+        self.assertEqual(self._validate("add_library(donner_base STATIC a.cc)\n"), [])
+
+    def test_the_error_reaches_validate_generated_output(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "CMakeLists.txt").write_text("COMMAND rustc x.rs\n", encoding="utf-8")
+            errors = g._validate_generated_output(root, root, {Path("CMakeLists.txt")})
+        self.assertTrue(
+            any("invokes a Rust toolchain" in e for e in errors),
+            errors,
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

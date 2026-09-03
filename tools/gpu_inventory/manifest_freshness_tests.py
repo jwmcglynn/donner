@@ -135,7 +135,7 @@ class ManifestFreshnessTest(unittest.TestCase):
         cls.files = gen.collect_files(cls.root, cls.paths)
         cls.generated = gen.build_all_manifests(
             cls.files,
-            gen.load_allowlist_prefixes(cls.root / ALLOWLIST_RELPATH),
+            gen.load_rust_scopes(cls.root / ALLOWLIST_RELPATH),
         )
 
     def _checked_in(self, name):
@@ -193,7 +193,7 @@ class ManifestFreshnessTest(unittest.TestCase):
                 [],
                 new_paths,
                 f"a new Rust dependency edge appeared in {section}: "
-                f"{new_paths}. Design 0053 keeps Donner free of a Rust "
+                f"{new_paths}. Donner stays free of a Rust "
                 f"toolchain dependency; if this edge is intended, regenerate "
                 f"with:\n  {REGEN_COMMAND}",
             )

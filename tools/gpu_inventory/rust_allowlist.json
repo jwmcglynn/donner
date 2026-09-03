@@ -1,7 +1,14 @@
 {
-  "_comment": "Inert third-party reference allowlist for the no-Rust-dependency verifier (design doc 0053). Rust source and Cargo metadata under these prefixes is reviewed upstream reference material that must never be compiled, linked, or executed. Build rules must not reference the tiny-skia code snapshot; the resvg-test-suite SVG/PNG corpus remains legitimate test data.",
+  "_comment": "Path scopes for the no-Rust-dependency verifier. inertReferencePrefixes is reviewed upstream reference material that must never be compiled, linked, or executed; a build rule may not name it from srcs/deps/hdrs, while the resvg-test-suite SVG/PNG corpus stays legitimate test data. testOnlyRustPrefixes is where Rust source and Rust build rules are allowed: the tiny-skia cross-validation oracle and the vendored workspace MODULE.bazel that declares its toolchain, both outside Donner's module graph. testOnlyConsumerPrefixes is the only scope whose build files may name the oracle's targets, which is what keeps it out of every non-test dependency closure.",
   "inertReferencePrefixes": [
     "third_party/resvg-test-suite/",
     "third_party/tiny-skia-cpp/third_party/tiny-skia/"
+  ],
+  "testOnlyRustPrefixes": [
+    "third_party/tiny-skia-cpp/MODULE.bazel",
+    "third_party/tiny-skia-cpp/tests/rust_ffi/"
+  ],
+  "testOnlyConsumerPrefixes": [
+    "third_party/tiny-skia-cpp/tests/"
   ]
 }

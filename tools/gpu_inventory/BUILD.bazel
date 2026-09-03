@@ -1,6 +1,6 @@
-load("@rules_python//python:defs.bzl", "py_binary", "py_test")
+load("@rules_python//python:defs.bzl", "py_binary", "py_library", "py_test")
 
-# GPU runtime inventory manifests and no-Rust-dependency verifier (design 0053).
+# GPU runtime inventory manifests and the no-Rust-dependency verifier.
 #
 # Manifest freshness is `manifest_freshness_tests` below: an ordinary bazel test
 # whose scan inputs are declared as runfiles via the per-package
@@ -9,25 +9,39 @@ load("@rules_python//python:defs.bzl", "py_binary", "py_test")
 # does not need the source tree, it needs its inputs declared, which also gets
 # it caching and correct change detection.
 #
-# `check_no_rust_dependencies.py` still runs as a Lint step: it is report-only
-# by design (0053 phase 6 makes it blocking) and it inspects the vendored
-# `third_party/tiny-skia-cpp` subtree, which .bazelignore hides from Bazel.
+# `check_no_rust_dependencies.py` runs as a Lint step rather than a bazel test:
+# it inspects the vendored `third_party/tiny-skia-cpp` subtree, which
+# .bazelignore hides from Bazel entirely, so its inputs cannot be declared.
+# `rust_scopes.py` is the path-scope and token vocabulary the verifier and the
+# manifest generator must agree on, so it rides in both.
 
 filegroup(
     name = "manifests",
     srcs = glob(["manifests/*.json"]),
 )
 
+# The path scopes and Rust token vocabulary. `imports` puts it on the import
+# path of every dependent, including //tools/cmake, whose generator validates
+# its own emitted CMake against the same token list.
+py_library(
+    name = "rust_scopes",
+    srcs = ["rust_scopes.py"],
+    imports = ["."],
+    visibility = ["//visibility:public"],
+)
+
 py_binary(
     name = "generate_gpu_manifests",
     srcs = ["generate_gpu_manifests.py"],
     visibility = ["//visibility:public"],
+    deps = [":rust_scopes"],
 )
 
 py_binary(
     name = "check_no_rust_dependencies",
     srcs = ["check_no_rust_dependencies.py"],
     visibility = ["//visibility:public"],
+    deps = [":rust_scopes"],
 )
 
 py_test(
@@ -37,6 +51,7 @@ py_test(
         "generate_gpu_manifests.py",
         "generate_gpu_manifests_tests.py",
     ],
+    deps = [":rust_scopes"],
 )
 
 py_test(
@@ -46,6 +61,7 @@ py_test(
         "check_no_rust_dependencies.py",
         "check_no_rust_dependencies_tests.py",
     ],
+    deps = [":rust_scopes"],
 )
 
 py_test(
@@ -75,6 +91,7 @@ py_test(
         "generate_gpu_manifests.py",
         "manifest_freshness_tests.py",
     ],
+    deps = [":rust_scopes"],
     data = [
         "rust_allowlist.json",
         ":manifests",

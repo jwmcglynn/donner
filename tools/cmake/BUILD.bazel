@@ -3,6 +3,7 @@ load("@rules_python//python:defs.bzl", "py_library", "py_test")
 py_library(
     name = "gen_cmakelists_lib",
     srcs = ["gen_cmakelists.py"],
+    deps = ["//tools/gpu_inventory:rust_scopes"],
     data = [
         "external_deps.json",
         "//:MODULE.bazel",

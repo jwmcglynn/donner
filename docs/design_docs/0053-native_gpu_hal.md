@@ -3,7 +3,8 @@
 **Status:** Design\
 **Created:** 2026-07-05\
 **Updated:** 2026-08-27\
-**Author:** GPT-5.6 Sol
+**Author:** Claude Fable 5.1\
+**Drafted by:** GPT-5.6 Sol
 
 ## Summary
 
@@ -18,12 +19,18 @@ become source, build, runtime, or test dependencies of the completed implementat
 transition, the current renderer may be exercised as a black-box baseline, but it has a mandatory
 sunset and cannot remain in Donner's final dependency graph.
 
-The completion boundary is repository-wide. Bazel and CMake graphs, CI toolchains, generated build
-state, and shipped artifacts must contain no Rust compiler, Cargo invocation, Rust-built library, or
-transitive Rust requirement. Inert upstream Rust source and Cargo metadata may remain only in an
-explicitly allowlisted resvg/tiny-skia third-party reference snapshot. That material cannot be
-compiled, linked, executed, or treated as a Donner implementation dependency. The active Rust FFI
-cross-validation fixture and `rules_rust` toolchain graph are removed.
+The completion boundary is a closure property, not a file census. Shipped artifacts, every
+non-test dependency closure, and CI toolchains contain no Rust compiler invocation, Cargo
+execution, Rust-built library, or transitive Rust requirement. Inert upstream Rust source and Cargo
+metadata may remain only in an explicitly allowlisted resvg/tiny-skia third-party reference
+snapshot, which cannot be compiled, linked, executed, or treated as a Donner implementation
+dependency. The tiny-skia Rust FFI cross-validation fixture and its `rules_rust` graph are retained
+as a test-only oracle: they live inside the vendored tiny-skia workspace, which Donner's root module
+never evaluates, and only that workspace's own test targets reach them. The boundary is what the
+build does, not what a resolved module graph or generated lockfile mentions: an upstream module may
+declare `rules_rust` where Donner cannot remove the edge, and the invariant holds as long as nothing
+fetches or invokes a Rust toolchain. The inert reference allowlist stays limited to the resvg test
+corpus and the tiny-skia upstream snapshot.
 
 The result is not a general WebGPU implementation. It is the smallest coherent GPU runtime that
 supports Geode, editor presentation, deterministic replay, and Donner's embedding requirements at
@@ -40,8 +47,9 @@ Donner's safety and code-quality bar.
   a hidden dependency.
 - Keep the current implementation only as a bounded transition baseline. Remove it, its headers,
   its prebuilts, its patches, and its build rules before completion.
-- Add a repository-wide no-Rust-dependency verifier with a narrow inert-reference allowlist and make
-  it a release gate.
+- Add a repository-wide no-Rust-dependency verifier that enforces the closure property: no Rust in
+  shipped artifacts or in any non-test dependency closure, a narrow inert-reference allowlist, and
+  test-only containment for the tiny-skia cross-validation oracle. Make it a release gate.
 
 ## Why This Shape
 
@@ -65,15 +73,15 @@ sunsetted, output-only transition baseline.
 
 - Ship native Geode through Donner-owned Metal and Vulkan implementations.
 - Preserve browser rendering through a Donner-owned bridge to `navigator.gpu`, without a native
-  Rust implementation or Dawn-generated C wrapper in Donner's dependency graph.
+  Rust implementation or Dawn-generated C wrapper anywhere in Donner's non-test dependency closure.
 - Preserve Geode image quality, filter behavior, compositor behavior, editor responsiveness,
   deterministic replay, and existing performance counters.
 - Make resource ownership, thread affinity, device loss, synchronization, and memory budgets
   explicit and testable.
 - Improve embedding by accepting carefully scoped native platform objects instead of requiring a
   WebGPU device.
-- Remove every Rust toolchain edge, Rust-built binary, Cargo execution path, and active Rust test or
-  implementation dependency from the release tree.
+- Remove every Rust toolchain edge, Rust-built binary, and Cargo execution path from Donner's
+  shipped artifacts and from every non-test dependency closure.
 - Ensure the new implementation is original Donner code whose implementation license does not
   derive from `wgpu`, Naga, Dawn, or Tint.
 
@@ -84,9 +92,10 @@ sunsetted, output-only transition baseline.
 - Supporting arbitrary user-provided shaders or runtime shader parsing.
 - Adding GPU features that Geode and the editor do not use.
 - Rewriting Slug coverage, filter math, the compositor, or SVG traversal as part of the HAL swap.
-- Rewriting the C++ tiny-skia renderer or deleting inert upstream resvg/tiny-skia reference source.
-  This design removes the Rust FFI oracle and Rust build graph; the existing C++ implementation and
-  allowlisted upstream reference snapshot remain separate from the GPU runtime.
+- Rewriting the C++ tiny-skia renderer, deleting inert upstream resvg/tiny-skia reference source, or
+  deleting the tiny-skia Rust FFI oracle. That oracle is a test-only cross-validation fixture inside
+  the vendored tiny-skia workspace, which Donner's build never enters, so the closure property holds
+  with it in place.
 - Rewriting Git history. The requirement applies to the checked-out release tree, generated source
   archives, build dependency closure, and shipped artifacts.
 - Supporting Windows. Windows is out of scope for the project, so the Vulkan backend targets Linux
@@ -144,11 +153,22 @@ this document. The inventory must cover at least:
 - editor surface creation, texture handoff, ImGui rendering, worker ownership, and WebAssembly
   object-table constraints;
 - Bazel, CMake, WebAssembly, packaging, and CI dependency edges;
-- Rust material. At the time of this revision, the inert tiny-skia upstream reference snapshot
-  contains 93 tracked `.rs` files plus six Cargo manifests/locks present in the checkout but
-  excluded from Git tracking. Those files are allowed as third-party reference material, but the
-  surrounding module also introduces an active Rust FFI test, `rules_rust`, and Rust toolchains into
-  `MODULE.bazel.lock`; those active edges are prohibited;
+- Rust material. 92 of the 93 tracked `.rs` files sit in the inert tiny-skia upstream snapshot
+  alongside four tracked Cargo manifests. The remaining `.rs` file and two more tracked Cargo files
+  are the cross-validation fixture under `third_party/tiny-skia-cpp/tests/rust_ffi/`, whose one Rust
+  source is compiled by `rust_static_library` and wrapped in a `cc_library` visible only to the
+  vendored workspace's own `//tests` subpackages. `rules_rust`, `crate_universe`, and the Rust
+  toolchain registration appear in exactly one tracked build file,
+  `third_party/tiny-skia-cpp/MODULE.bazel`. Donner's root `MODULE.bazel` pulls that subtree in
+  through a `local_repository` repo rule rather than as a Bazel module, and `.bazelignore` hides the
+  subtree, so that module is never evaluated. Separately, the repository tracks no root
+  `MODULE.bazel.lock`. Donner's own module graph reaches `rules_rust` anyway, independently, as a
+  transitive `bazel_dep` of `protobuf`, and the generated lockfile declares Rust toolchains. Nothing
+  fetches them, because no Donner target uses a Rust rule: a checkout with no `rustc` or `cargo` on
+  `PATH` builds and tests Donner cleanly. That gap is why the rule has to be stated over the
+  closure, and why deleting the oracle would not have made the module graph Rust-free. The Rust
+  that actually reaches shipped artifacts is the prebuilt `wgpu-native` library, and it leaves at
+  the Metal and Linux cutovers;
 - prebuilt `wgpu-native` archives and platform overlay rules in the non-BCR dependency extension;
 - generated and patched ImGui/WebGPU integration code.
 
@@ -325,24 +345,43 @@ not a separate UI path.
 The dependency purge is complete only when all of these are true:
 
 - Rust source and Cargo metadata exist only under the reviewed, inert third-party reference
-  allowlist. The initial allowlist covers `third_party/resvg-test-suite/**` and the tiny-skia
-  upstream snapshot under `third_party/tiny-skia-cpp/third_party/tiny-skia/**`;
-- no Rust FFI fixture, Rust-backed test target, Cargo workspace root, or Rust source exists outside
-  that allowlist;
-- `MODULE.bazel`, `MODULE.bazel.lock`, CMake, and all generated build metadata contain no
-  `rules_rust`, `crate_universe`, Rust toolchain, or Rust crate graph;
+  allowlist (`third_party/resvg-test-suite/**` and the tiny-skia upstream snapshot under
+  `third_party/tiny-skia-cpp/third_party/tiny-skia/**`) or under the test-only fixture prefix
+  `third_party/tiny-skia-cpp/tests/rust_ffi/`;
+- the fixture's targets and every package allowed to consume them keep visibility inside the
+  vendored tiny-skia workspace's own `//tests` tree, never `//visibility:public` and never a
+  cross-repository package; no `alias` or `.bzl` constant re-exports them under another name; and no
+  build file outside that test tree names the fixture package or the `rust_reference` and
+  `cross_validator` libraries built on it. No Donner target and no non-test target can therefore
+  reach a Rust artifact. Bazel enforces the same boundary independently: `@rules_rust` is not
+  visible from a repository Donner pulls in with a repo rule, so a Donner target that reaches the
+  fixture fails at load time;
+- no tracked build file outside the vendored tiny-skia workspace's own `MODULE.bazel` names
+  `rules_rust`, `crate_universe`, or a Rust toolchain: not Donner's root `MODULE.bazel`, not
+  `.bazelrc`, not a `.bzl` file, not a BUILD file, not a CMake input. The resolved module graph is
+  not held to that, because `protobuf` declares `rules_rust` and Donner cannot drop the edge; what
+  must hold is that no Rust toolchain is fetched or invoked, which follows from no Donner target
+  using a Rust rule;
 - no build rule downloads a Rust-built `wgpu-native` or equivalent archive;
-- `third_party/tiny-skia-cpp/tests/rust_ffi` is removed, with its useful comparison coverage
-  replaced by committed C++ fixtures, property tests, and goldens. The inert upstream reference
-  snapshot remains quarantined from all build targets;
 - `third_party/webgpu-cpp`, emdawnwebgpu stubs/glue, native archive overlays, and obsolete ImGui
   WebGPU patches are removed once their last consumer is gone;
 - Bazel, CMake, WebAssembly, source-package, and release-artifact provenance list no Rust compiler,
   Rust standard library, Cargo package, or Rust-built linked object;
-- a checked-in verifier scans the tracked tree, allowlist boundaries, Bzlmod graph, generated source
-  archive, link maps, release SBOM, and relevant vendored directories in the working tree. Any new
-  Rust path, any Rust execution edge, or any build reference into the inert allowlist fails. It runs
-  in presubmit and the release checklist.
+- the checked-in verifier `tools/gpu_inventory/check_no_rust_dependencies.py` enforces those path
+  and reference rules over the git-tracked tree in five categories: Rust source outside the inert
+  allowlist and the test-only prefix, Rust toolchain references outside the test-only prefix (Rust
+  rule-set names and bare `cargo`, `rustc`, and `rustup` commands in Bazel files, and the CMake
+  vocabulary in CMake files and the tracked sources under `tools/cmake/` that emit them), fixture
+  containment (visibility scope, re-export, and consumers confined to the vendored workspace's test
+  tree), compiled or linked references into the inert snapshot, and Rust-built archive downloads.
+  The Lint workflow runs it blocking for the first four; the archive category stays report-only
+  until the Metal and Linux cutovers delete the archives;
+- generated build state is covered where it exists rather than claimed to be covered everywhere.
+  Donner's production `CMakeLists.txt` files are emitted and git-ignored, so
+  `gen_cmakelists.py --check` scans its own output against the same CMake token list in the
+  cmake-validate job; that is the only gate that reads those files. A generated `MODULE.bazel.lock`
+  is out of scope, because it records the whole transitive Bzlmod graph, which is the graph rather
+  than the closure, and a fresh CI checkout has no lockfile to read anyway.
 
 Human-readable historical documentation may accurately say that a removed implementation was
 written in Rust. Approved upstream reference source may remain in its inert third-party boundary.
@@ -392,9 +431,9 @@ directory drops.
       The template is written and committed as
       [`gpu_provenance_template.md`](gpu_provenance_template.md); the input rules are the
       clean-room section above. Both are waiting on approval, not on drafting.
-- [x] Add the no-Rust-dependency verifier and inert-reference allowlist in report-only mode
+- [x] Add the no-Rust-dependency verifier and inert-reference allowlist
       (`tools/gpu_inventory/check_no_rust_dependencies.py`, run by the Lint workflow; phase 6
-      switches it to `--blocking`).
+      below fixes which categories block).
 - [x] Define platform and driver release matrices plus binary-size budgets
       ([0064: GPU release matrix](0064-gpu_release_matrix.md)). The matrix is derived from the
       lanes and targets in the tree and labels every combination as executed, compiled but not
@@ -481,12 +520,12 @@ three backends and validated by the Metal compiler, `spirv-val`, and WebGPU pipe
 
 ### Phase 6: Rust-independent build cutover
 
-- [ ] Remove tiny-skia's Rust FFI comparison target while retaining the approved inert upstream
-      reference snapshot.
-- [ ] Replace lost coverage with C++ fixtures, independent property tests, and durable pixel
-      baselines before deleting the oracle.
-- [ ] Remove `rules_rust`, Rust toolchain extensions, crate metadata, and all stale lockfile entries.
-- [ ] Switch the no-Rust-dependency verifier from report-only to blocking.
+- [x] Enforce the closure property in the no-Rust-dependency verifier
+      (`tools/gpu_inventory/check_no_rust_dependencies.py`, wired into the Lint workflow). Rust
+      source scope, Rust build-token scope, test-only fixture containment, and compiled references
+      into the inert snapshot all block today.
+- [ ] Switch the Rust-built-archive category to blocking once phases 3 and 4 delete the
+      `wgpu-native` archives.
 - [ ] Verify clean Bazel and CMake builds from the release source archive on hosts without Rust or
       Cargo installed.
 
@@ -520,8 +559,8 @@ The expected sequence is 16 to 24 normal-sized pull requests:
 15. Linux cutover and dependency deletion.
 16. Browser bridge and generated WGSL path.
 17. Donner ImGui renderer and WebGPU integration deletion.
-18. Tiny-skia Rust FFI removal, inert-reference quarantine, and replacement tests.
-19. Bzlmod/CMake/CI/source-package Rust dependency purge.
+18. No-Rust-dependency verifier rework: closure-property categories and blocking Lint enforcement.
+19. Rust-built `wgpu-native` archive purge across Bzlmod, CMake, CI, and the source package.
 20. Security and provenance fixes from independent review.
 21. Documentation, release qualification, and final size/performance report.
 
@@ -546,8 +585,10 @@ Each platform becomes native only when all applicable gates pass:
 - native GPU runtime and shader artifacts fit the measured binary-size budget established in
   Phase 0. The prior 0.3-0.5 MB estimate is not accepted without measurement;
 - browser bridge passes headed Chromium, WebKit, and physical iOS presentation checks;
-- the blocking no-Rust-dependency verifier passes on the source tree and allowlist, module graph,
-  source archive, link maps, SBOM, and release artifacts;
+- the no-Rust-dependency verifier passes with every category blocking, and the release candidate's
+  source archive, link maps, SBOM, and artifacts carry no Rust compiler, Cargo package, or
+  Rust-built object. The module graph's `rules_rust` edge is acceptable exactly because the
+  rustc-absent build test proves nothing fetches or invokes it;
 - independent security and provenance review has no unresolved critical or high findings.
 
 ## Testing Strategy
@@ -566,8 +607,10 @@ Each platform becomes native only when all applicable gates pass:
 - Fault injection covers allocation failure, device loss, surface loss, submission failure,
   callback reordering, worker shutdown, and stale external textures.
 - Physical-device tests cover Apple Silicon generations and the agreed Intel/AMD/NVIDIA matrix.
-- Dependency tests prove builds and tests do not discover or invoke Rust even when `rustc` and
-  `cargo` are absent from `PATH`.
+- Dependency tests prove Donner's builds and tests neither discover nor invoke Rust when `rustc` and
+  `cargo` are absent from `PATH`. The vendored tiny-skia workspace's own cross-validation test is the
+  single target that legitimately needs a Rust toolchain, and it is not part of Donner's build or
+  test invocation, so its requirement never reaches a Donner lane.
 
 ## Security and Reliability
 

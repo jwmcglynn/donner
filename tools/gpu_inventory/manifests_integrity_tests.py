@@ -3,7 +3,7 @@
 Freshness is enforced by manifest_freshness_tests.py, which rescans the declared
 inputs and compares. These tests are the complement: they assert that the
 checked-in manifests are well-formed and still describe the invariants later
-design 0053 packets rely on, which a freshness check alone cannot say (a
+later work relies on, which a freshness check alone cannot say (a
 manifest can be perfectly fresh and still describe a tree that lost a shader
 stage or gained an active Rust source).
 """
@@ -94,21 +94,46 @@ class RustDependenciesManifestTest(unittest.TestCase):
     def setUp(self):
         self.manifest = load_manifest("rust_dependencies.json")
 
-    def test_allowlist_prefixes_match_verifier_allowlist(self):
+    def test_scope_prefixes_match_the_verifier_allowlist(self):
         r = runfiles.Create()
         allowlist_path = r.Rlocation("donner/tools/gpu_inventory/rust_allowlist.json")
         with open(allowlist_path, encoding="utf-8") as handle:
-            allowlist = json.load(handle)["inertReferencePrefixes"]
-        self.assertEqual(self.manifest["allowlistPrefixes"], sorted(allowlist))
+            allowlist = json.load(handle)
+        self.assertEqual(
+            self.manifest["allowlistPrefixes"], sorted(allowlist["inertReferencePrefixes"])
+        )
+        self.assertEqual(
+            self.manifest["testOnlyRustPrefixes"], sorted(allowlist["testOnlyRustPrefixes"])
+        )
+        self.assertEqual(
+            self.manifest["testOnlyConsumerPrefixes"],
+            sorted(allowlist["testOnlyConsumerPrefixes"]),
+        )
 
-    def test_active_rust_sources_do_not_grow(self):
-        # Ratchet: the only active (non-allowlisted) Rust material is the
-        # tiny-skia FFI fixture, which design 0053 phase 6 removes. Any new
-        # entry here is a regression against the no-Rust invariant.
-        for path in self.manifest["activeRustSources"]:
+    def test_no_rust_source_is_active(self):
+        # The invariant, stated over the manifest: every tracked Rust source is
+        # either inert upstream reference material or part of the test-only
+        # cross-validation oracle. An entry in activeRustSources is Rust that
+        # some shipped or non-test closure could reach.
+        self.assertEqual(self.manifest["activeRustSources"], [])
+
+    def test_test_only_rust_prefix_is_pinned(self):
+        # Literal ratchet. Comparing the manifest's sources against the
+        # manifest's own prefixes cannot fail: one generator writes both from
+        # one allowlist, so widening the allowlist widens both sides together.
+        # The grant is one fixture directory, and widening it is the change
+        # this test exists to catch.
+        self.assertEqual(
+            self.manifest["testOnlyRustPrefixes"],
+            ["third_party/tiny-skia-cpp/MODULE.bazel", "third_party/tiny-skia-cpp/tests/rust_ffi/"],
+        )
+        self.assertEqual(
+            self.manifest["testOnlyConsumerPrefixes"], ["third_party/tiny-skia-cpp/tests/"]
+        )
+        for path in self.manifest["testOnlyRustSources"]:
             self.assertTrue(
                 path.startswith("third_party/tiny-skia-cpp/tests/rust_ffi/"),
-                f"unexpected active Rust source: {path}",
+                f"test-only Rust source outside the oracle fixture: {path}",
             )
 
 

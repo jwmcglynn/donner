@@ -135,11 +135,16 @@ class BuildManifestsTest(unittest.TestCase):
         "third_party/patches/imgui_wgpu_texture_cache.patch": "+WGPUTextureView view;\n",
         "third_party/patches/glfw_bazel_build_files.patch": "+cc_library(\n",
         "third_party/vendored/lib.rs": "fn main() {}\n",
+        "third_party/oracle/tests/rust_ffi/src/lib.rs": "fn f() {}\n",
         "third_party/active/Cargo.toml": "[package]\n",
         "MODULE.bazel": 'bazel_dep(name = "rules_rust", version = "0.1")\n',
         "third_party/deps.bzl": "url = 'gfx-rs/wgpu-native'\n_WGPU_NATIVE_VERSION = \"v1.2.3\"\n",
     }
-    ALLOWLIST = ["third_party/vendored/"]
+    SCOPES = gen.RustScopes(
+        inert_reference_prefixes=("third_party/vendored/",),
+        test_only_rust_prefixes=("third_party/oracle/tests/rust_ffi/",),
+        test_only_consumer_prefixes=("third_party/oracle/tests/",),
+    )
 
     def test_gpu_operations_cover_first_party_sources(self):
         manifest = gen.build_gpu_operations_manifest(self.FILES)
@@ -156,7 +161,7 @@ class BuildManifestsTest(unittest.TestCase):
         regeneration. The inventory is a set of facts about what the code does,
         not a fingerprint of its bytes.
         """
-        manifests = gen.build_all_manifests(self.FILES, self.ALLOWLIST)
+        manifests = gen.build_all_manifests(self.FILES, self.SCOPES)
         for name, manifest in manifests.items():
             rendered = gen.render_manifest(manifest)
             for banned in ("sha256", "lineCount", "contentHash"):
@@ -164,12 +169,12 @@ class BuildManifestsTest(unittest.TestCase):
 
     def test_a_no_op_edit_does_not_change_any_manifest(self):
         """The defect this design removes, stated as a test."""
-        before = gen.build_all_manifests(self.FILES, self.ALLOWLIST)
+        before = gen.build_all_manifests(self.FILES, self.SCOPES)
         edited = dict(self.FILES)
         edited["donner/gpu_user.cc"] = (
             self.FILES["donner/gpu_user.cc"] + "\n// A comment. No new GPU fact.\n"
         )
-        after = gen.build_all_manifests(edited, self.ALLOWLIST)
+        after = gen.build_all_manifests(edited, self.SCOPES)
         self.assertEqual(before, after)
 
     def test_vendored_sources_are_excluded(self):
@@ -201,10 +206,22 @@ class BuildManifestsTest(unittest.TestCase):
         self.assertEqual(entry["imguiWgpuTokens"], ["ImGui_ImplWGPU_NewFrame"])
         self.assertTrue(entry["usesEditorWgpuDefine"])
 
-    def test_rust_manifest_partitions_allowlisted_and_active(self):
-        manifest = gen.build_rust_dependencies_manifest(self.FILES, self.ALLOWLIST)
+    def test_rust_manifest_partitions_sources_by_scope(self):
+        """Three scopes, not two: inert reference, test-only oracle, active.
+
+        The oracle source is not "active". Folding it in with genuinely active
+        Rust is what made the manifest read as a standing violation of an
+        invariant it does not break, since nothing outside the oracle's own test
+        tree can reach it.
+        """
+        manifest = gen.build_rust_dependencies_manifest(self.FILES, self.SCOPES)
         self.assertEqual(manifest["allowlistedRustSources"], ["third_party/vendored/lib.rs"])
+        self.assertEqual(
+            manifest["testOnlyRustSources"], ["third_party/oracle/tests/rust_ffi/src/lib.rs"]
+        )
         self.assertEqual(manifest["activeRustSources"], ["third_party/active/Cargo.toml"])
+        self.assertEqual(manifest["testOnlyRustPrefixes"], ["third_party/oracle/tests/rust_ffi/"])
+        self.assertEqual(manifest["testOnlyConsumerPrefixes"], ["third_party/oracle/tests/"])
         self.assertEqual(manifest["rustBuildEdges"], {"MODULE.bazel": ["rules_rust"]})
         self.assertEqual(
             manifest["rustBuiltArchiveSites"],
@@ -217,8 +234,8 @@ class BuildManifestsTest(unittest.TestCase):
         )
 
     def test_build_all_manifests_is_deterministic(self):
-        first = gen.build_all_manifests(self.FILES, self.ALLOWLIST)
-        second = gen.build_all_manifests(dict(reversed(list(self.FILES.items()))), self.ALLOWLIST)
+        first = gen.build_all_manifests(self.FILES, self.SCOPES)
+        second = gen.build_all_manifests(dict(reversed(list(self.FILES.items()))), self.SCOPES)
         self.assertEqual(
             {n: gen.render_manifest(m) for n, m in first.items()},
             {n: gen.render_manifest(m) for n, m in second.items()},
