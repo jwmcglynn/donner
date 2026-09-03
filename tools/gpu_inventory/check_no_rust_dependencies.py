@@ -347,98 +347,147 @@ def reexport_findings(path: str, text: str) -> list[Finding]:
     ]
 
 
+def tokens_in(text: str, tokens: tuple[str, ...]) -> list[str]:
+    """The members of `tokens` present in `text`, sorted for stable messages."""
+    return sorted(token for token in tokens if token in text)
+
+
+def matched_rust_build_tokens(path: str, text: str) -> list[str]:
+    """Rust toolchain tokens in `text`, read in that build file's vocabulary.
+
+    Bazel says `rules_rust`; CMake says `corrosion_import_crate` or
+    `cargo build`, case however the author felt. One list finds nothing in the
+    other's files.
+    """
+    if is_cmake_path(path):
+        return tokens_in(text.lower(), CMAKE_RUST_TOKENS)
+    return tokens_in(text, RUST_BUILD_TOKENS)
+
+
+def rust_source_scope_findings(path: str, scopes: RustScopes) -> list[Finding]:
+    """Flags Rust source that is neither inert reference nor the test oracle."""
+    if not is_rust_source_path(path) or scopes.is_inert(path) or scopes.is_test_only(path):
+        return []
+    return [
+        Finding(
+            category="rust-source-outside-allowlist",
+            path=path,
+            detail=(
+                "Rust source or Cargo metadata outside the inert reference allowlist and "
+                "the test-only cross-validation oracle."
+            ),
+        )
+    ]
+
+
+def rust_build_edge_findings(path: str, text: str, scopes: RustScopes) -> list[Finding]:
+    """Flags a Rust toolchain reference outside the test-only oracle."""
+    rust_tokens = matched_rust_build_tokens(path, text)
+    if not rust_tokens or scopes.is_test_only(path):
+        return []
+    return [
+        Finding(
+            category="rust-build-edge",
+            path=path,
+            detail=(
+                "References a Rust toolchain outside the test-only oracle: "
+                + ", ".join(rust_tokens)
+            ),
+        )
+    ]
+
+
+def fixture_containment_findings(path: str, text: str, scopes: RustScopes) -> list[Finding]:
+    """Flags the oracle escaping the vendored workspace's own test tree.
+
+    Inside that tree, containment is about how the oracle is exposed: how wide
+    its visibility reaches and whether anything re-exports it. Outside it,
+    naming the oracle at all is the finding.
+    """
+    if scopes.is_test_only(path) or scopes.is_test_only_consumer(path):
+        return visibility_findings(path, text) + reexport_findings(path, text)
+    fixture_tokens = tokens_in(text, RUST_FIXTURE_TOKENS)
+    if not fixture_tokens:
+        return []
+    return [
+        Finding(
+            category="rust-fixture-containment",
+            path=path,
+            detail=(
+                "Build file outside the vendored workspace's test tree names the "
+                "cross-validation oracle: " + ", ".join(fixture_tokens)
+            ),
+        )
+    ]
+
+
+def rust_built_archive_findings(path: str, text: str, scopes: RustScopes) -> list[Finding]:
+    """Flags a download of a Rust-built prebuilt archive.
+
+    Takes `scopes` for the rule-table signature and ignores it: there is no
+    scope in which shipping a Rust-built binary is allowed.
+    """
+    del scopes
+    archive_tokens = tokens_in(text, RUST_BUILT_ARCHIVE_TOKENS)
+    if not archive_tokens:
+        return []
+    return [
+        Finding(
+            category="rust-built-archive",
+            path=path,
+            detail="Declares Rust-built prebuilt archives: " + ", ".join(archive_tokens),
+        )
+    ]
+
+
+def inert_reference_findings(path: str, text: str, scopes: RustScopes) -> list[Finding]:
+    """Flags a build file that compiles or links the inert Rust snapshot.
+
+    A build file may legitimately live next to the snapshot without building
+    it, and may stage its golden images as test data. Only a reference that
+    compiles or links is a finding.
+    """
+    if scopes.is_inert(path):
+        return []
+    reference_tokens = tuple(t for t in ALLOWLIST_REFERENCE_TOKENS if t in text)
+    if not reference_tokens or not is_compiled_reference(path, text, reference_tokens):
+        return []
+    return [
+        Finding(
+            category="reference-into-allowlist",
+            path=path,
+            detail=(
+                "Build-graph file compiles or links the inert Rust reference snapshot: "
+                + ", ".join(sorted(reference_tokens))
+            ),
+        )
+    ]
+
+
+# Every rule a build-graph file is held to, applied in this order. Adding a
+# category means adding a function here and a name to CATEGORIES, not another
+# branch in check().
+BUILD_GRAPH_RULES = (
+    rust_build_edge_findings,
+    fixture_containment_findings,
+    rust_built_archive_findings,
+    inert_reference_findings,
+)
+
+
 def check(files: dict[str, str], scopes: RustScopes) -> list[Finding]:
     """Returns all no-Rust-dependency findings for a path -> content mapping.
 
     Pure function so unit tests can exercise it with synthetic trees.
     """
     findings: list[Finding] = []
-
     for path in sorted(files):
-        if not is_rust_source_path(path):
-            continue
-        if scopes.is_inert(path) or scopes.is_test_only(path):
-            continue
-        findings.append(
-            Finding(
-                category="rust-source-outside-allowlist",
-                path=path,
-                detail=(
-                    "Rust source or Cargo metadata outside the inert reference allowlist and "
-                    "the test-only cross-validation oracle."
-                ),
-            )
-        )
-
+        findings.extend(rust_source_scope_findings(path, scopes))
     for path in sorted(files):
         if not is_build_graph_path(path):
             continue
-        text = files[path]
-
-        tokens = CMAKE_RUST_TOKENS if is_cmake_path(path) else RUST_BUILD_TOKENS
-        haystack = text.lower() if is_cmake_path(path) else text
-        rust_tokens = sorted(token for token in tokens if token in haystack)
-        if rust_tokens and not scopes.is_test_only(path):
-            findings.append(
-                Finding(
-                    category="rust-build-edge",
-                    path=path,
-                    detail=(
-                        "References a Rust toolchain outside the test-only oracle: "
-                        + ", ".join(rust_tokens)
-                    ),
-                )
-            )
-
-        # The oracle's own package and every package allowed to consume it are
-        # both places a wider visibility or a re-export would leak it, so both
-        # get the containment checks. Everywhere else, naming it at all is the
-        # finding.
-        if scopes.is_test_only(path) or scopes.is_test_only_consumer(path):
-            findings.extend(visibility_findings(path, text))
-            findings.extend(reexport_findings(path, text))
-        else:
-            fixture_tokens = sorted(t for t in RUST_FIXTURE_TOKENS if t in text)
-            if fixture_tokens:
-                findings.append(
-                    Finding(
-                        category="rust-fixture-containment",
-                        path=path,
-                        detail=(
-                            "Build file outside the vendored workspace's test tree names the "
-                            "cross-validation oracle: " + ", ".join(fixture_tokens)
-                        ),
-                    )
-                )
-
-        archive_tokens = sorted(t for t in RUST_BUILT_ARCHIVE_TOKENS if t in text)
-        if archive_tokens:
-            findings.append(
-                Finding(
-                    category="rust-built-archive",
-                    path=path,
-                    detail="Declares Rust-built prebuilt archives: " + ", ".join(archive_tokens),
-                )
-            )
-
-        if scopes.is_inert(path):
-            continue
-        reference_tokens = tuple(t for t in ALLOWLIST_REFERENCE_TOKENS if t in text)
-        # A build file may legitimately live next to the snapshot without
-        # building it, and may stage its golden images as test data. Only a
-        # reference that compiles or links the snapshot is a finding.
-        if reference_tokens and is_compiled_reference(path, text, reference_tokens):
-            findings.append(
-                Finding(
-                    category="reference-into-allowlist",
-                    path=path,
-                    detail=(
-                        "Build-graph file compiles or links the inert Rust reference snapshot: "
-                        + ", ".join(sorted(reference_tokens))
-                    ),
-                )
-            )
-
+        for rule in BUILD_GRAPH_RULES:
+            findings.extend(rule(path, files[path], scopes))
     return findings
 
 
