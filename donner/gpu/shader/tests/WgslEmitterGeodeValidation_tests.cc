@@ -749,9 +749,12 @@ TEST(WgslEmitterGeodeValidation, NegativeControlDetectsOffsetParamsBufferTypeMis
          "creation; pipeline-time acceptance evidence would be meaningless";
 }
 
-/// Edge length of the square the offset program is run over. Eight is one whole workgroup, so
-/// every lane writes and the dispatch needs no partial-workgroup reasoning.
-constexpr uint32_t kOffsetExtent = 8;
+/// Edge length of the square the offset program is run over. Deliberately not a multiple of the
+/// workgroup size: a dispatch rounded up to whole workgroups then launches lanes past both edges,
+/// so the program's extent guard is taken rather than merely present, and a dispatch count
+/// rounded down instead of up leaves a strip of the destination unwritten rather than landing
+/// exactly on it.
+constexpr uint32_t kOffsetExtent = 13;
 
 /// The source texels the offset program is run over: each channel encodes its own coordinate, so
 /// a texel that arrives at the wrong destination names the place it came from.
