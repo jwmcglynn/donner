@@ -124,6 +124,7 @@ donner_cc_library(
     testonly = 1,
     hdrs = [
         "tests/BaseTestUtils.h",
+        "tests/EnvironmentCapabilityGate.h",
         "tests/ParseResultTestUtils.h",
         "tests/Runfiles.h",
         "tests/TestTempDir.h",
@@ -184,6 +185,7 @@ donner_cc_test(
         "tests/ChunkedString_tests.cc",
         "tests/CompileTimeMap_tests.cc",
         "tests/DiagnosticRenderer_tests.cc",
+        "tests/EnvironmentCapabilityGate_tests.cc",
         "tests/FileUtils_tests.cc",
         "tests/Length_tests.cc",
         "tests/MathUtils_tests.cc",
