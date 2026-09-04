@@ -7,6 +7,7 @@
 #include <fstream>
 #include <string>
 
+#include "donner/base/tests/EnvironmentCapabilityGate.h"
 #include "donner/base/tests/TestTempDir.h"
 
 namespace donner::svg {
@@ -51,9 +52,8 @@ TEST(ImageComparisonTestFixtureTests, ResolvesSymlinkedRunfilesRootToCanonicalDo
 
   std::error_code error;
   std::filesystem::create_directory_symlink(canonicalRoot, runfilesRoot, error);
-  if (error) {
-    GTEST_SKIP() << "Could not create test symlink: " << error.message();
-  }
+  DONNER_REQUIRE_ENVIRONMENT_CAPABILITY(error ? error.message() : std::string(),
+                                        "the ability to create filesystem symlinks");
 
   EXPECT_EQ(ResolveRunfilesResourceRootForTesting(runfilesRoot, runfilesRoot / "document.svg"),
             canonicalRoot);

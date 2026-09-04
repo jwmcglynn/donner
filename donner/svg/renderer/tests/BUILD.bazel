@@ -164,6 +164,13 @@ donner_cc_test(
     srcs = [
         "ImageComparisonTestFixture_tests.cc",
     ],
+    # Bazel scrubs the test environment, so the automated-lane markers have to be named here or
+    # the symlink-resolution fail-closed rule can never see one and the case keeps skipping into
+    # a green report.
+    env_inherit = [
+        "DONNER_BASELINE_REQUIRE_FROZEN_ADAPTER",
+        "GITHUB_ACTIONS",
+    ],
     deps = [
         ":image_comparison_test_fixture",
         "//donner/base:base_test_utils",

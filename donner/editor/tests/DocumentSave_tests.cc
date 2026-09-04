@@ -12,6 +12,7 @@
 #include <string>
 #include <string_view>
 
+#include "donner/base/tests/EnvironmentCapabilityGate.h"
 #include "donner/base/tests/TestTempDir.h"
 #include "donner/editor/DocumentSyncController.h"
 #include "donner/editor/EditorApp.h"
@@ -184,9 +185,8 @@ TEST(DocumentSaveTest, RejectsSymlinkDestinationWithoutTouchingTarget) {
 
   std::error_code ec;
   std::filesystem::create_symlink(target, symlink, ec);
-  if (ec) {
-    GTEST_SKIP() << "Could not create symlink in test output dir: " << ec.message();
-  }
+  DONNER_REQUIRE_ENVIRONMENT_CAPABILITY(ec ? ec.message() : std::string(),
+                                        "the ability to create filesystem symlinks");
 
   const DocumentSaveResult result = SaveSourceToPath(symlink, "<svg id=\"replaced\"/>");
   EXPECT_EQ(result.status, DocumentSaveStatus::OpenFailed);
