@@ -56,18 +56,18 @@ is called out in the notes; a label here describes what a lane asserts, not what
 
 ## Metal
 
-| Platform                          | Driver / adapter                           | Coverage                         | Where                                                                                                        |
-| --------------------------------- | ------------------------------------------ | -------------------------------- | ------------------------------------------------------------------------------------------------------------ |
-| macOS arm64, deployment 13.3+     | Apple Silicon integrated                   | **PR-gated**                     | `metal_solid_fill_tests`, which fails rather than skips without a device                                     |
-| macOS arm64                       | Apple Silicon, Geode variant wrappers      | **PR-gated, device-conditional** | The `*_geode` wrappers on the macOS lane                                                                     |
-| macOS arm64                       | Apple Silicon, ImGui/editor presentation   | **PR-gated, device-conditional** | The macOS `--config=geode` editor lane's five explicit targets                                               |
-| macOS arm64                       | Frozen pixel identity, baselined adapter   | **PR-gated**                     | `baseline_pixels_tests`, on an adapter with a committed baseline                                             |
-| macOS arm64                       | Frozen pixel identity, unbaselined adapter | **None (fails closed)**          | `baseline_pixels_tests` fails on an automated lane rather than skipping                                      |
-| macOS arm64                       | Two or more Apple GPU generations          | **None**                         | One macOS lane runs per pull request; nothing compares generations                                           |
-| macOS x86_64                      | Intel integrated / AMD discrete            | **None**                         | Every macOS runner label in the tree is arm64                                                                |
-| macOS arm64, Metal API validation | Apple Silicon                              | **PR-gated**                     | `MTL_DEBUG_LAYER` and `MTL_SHADER_VALIDATION` on the Metal slice target                                      |
-| macOS, offline MSL compilation    | Platform Metal toolchain                   | **PR-gated (self-hosted macOS)** | `msl_xcrun_validation_tests`; the hosted image has no offline compiler, so that lane drops the target by tag |
-| iOS / iPadOS                      | Apple Silicon                              | **None**                         | No target, no lane, no runner                                                                                |
+| Platform                          | Driver / adapter                           | Coverage                             | Where                                                                                                 |
+| --------------------------------- | ------------------------------------------ | ------------------------------------ | ----------------------------------------------------------------------------------------------------- |
+| macOS arm64, deployment 13.3+     | Apple Silicon integrated                   | **PR-gated**                         | `metal_solid_fill_tests`, which fails rather than skips without a device                              |
+| macOS arm64                       | Apple Silicon, Geode variant wrappers      | **PR-gated, device-conditional**     | The `*_geode` wrappers on the macOS lane                                                              |
+| macOS arm64                       | Apple Silicon, ImGui/editor presentation   | **PR-gated, device-conditional**     | The macOS `--config=geode` editor lane's five explicit targets                                        |
+| macOS arm64                       | Frozen pixel identity, baselined adapter   | **PR-gated**                         | `baseline_pixels_tests`, on an adapter with a committed baseline                                      |
+| macOS arm64                       | Frozen pixel identity, unbaselined adapter | **None (fails closed)**              | `baseline_pixels_tests` fails on an automated lane rather than skipping                               |
+| macOS arm64                       | Two or more Apple GPU generations          | **None**                             | One macOS lane runs per pull request; nothing compares generations                                    |
+| macOS x86_64                      | Intel integrated / AMD discrete            | **None**                             | Every macOS runner label in the tree is arm64                                                         |
+| macOS arm64, Metal API validation | Apple Silicon                              | **PR-gated**                         | `MTL_DEBUG_LAYER` and `MTL_SHADER_VALIDATION` on the Metal slice target                               |
+| macOS, offline MSL compilation    | Platform Metal toolchain                   | **PR-gated (operator PRs and main)** | `msl_xcrun_validation_tests`; hosted PRs exclude it by tag because that image has no offline compiler |
+| iOS / iPadOS                      | Apple Silicon                              | **None**                             | No target, no lane, no runner                                                                         |
 
 Notes:
 
@@ -82,8 +82,8 @@ Notes:
   tag, which is visible in the run summary, rather than by collecting skips that read as a pass.
 - "Device-conditional" still describes the Geode variant wrappers and the editor lane's targets.
   They skip when they cannot reach a device, and on a runner without one they are green and
-  assert nothing. The two rows above are the model for closing that, not an argument that these
-  rows are already covered.
+  assert nothing. The fail-closed rows named in the two notes above are the model for closing
+  that, not an argument that these rows are already covered.
 - The frozen pixel gate has a second fail-closed door. On an automated lane an adapter with no
   committed baseline is a failure, not a skip; on a developer machine the same situation captures
   a baseline into the run's undeclared outputs and skips, so new hardware is onboarded by

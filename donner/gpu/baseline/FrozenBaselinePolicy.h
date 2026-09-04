@@ -27,8 +27,11 @@ std::ostream& operator<<(std::ostream& os, MissingComparisonDisposition disposit
 bool RunningUnderContinuousIntegration();
 
 /**
- * The name of the marker that identified this process as running on an automated lane, for a
- * message that has to say which one did.
+ * The name of the environment marker that identified this process as running on an automated lane,
+ * for a message that has to say which one did.
+ *
+ * `GITHUB_ACTIONS` is set by the hosted runner itself. The Donner-specific name lets any other
+ * automated lane opt in without this list having to learn every runner's convention.
  *
  * @return A view of the marker's name, aliasing static storage that outlives every caller, or an
  *   empty view when no marker is set.
