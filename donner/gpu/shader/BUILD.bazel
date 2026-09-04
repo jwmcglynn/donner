@@ -211,12 +211,10 @@ donner_cc_test(
 )
 
 # Out-of-process SPIR-V validation: every emitted module must pass
-# `spirv-val --target-env vulkan1.1`. The validator is invoked at test time
-# rather than depended on, so the emitter is held to the specification's own
-# rules without putting a validator in the build graph. A developer machine
-# without spirv-val skips; an automated lane without it fails, so a lane that
-# lost SPIRV-Tools cannot report the same green as one that validated every
-# module.
+# `spirv-val --target-env vulkan1.1`, so the emitter is held to the
+# specification's own rules by the reference validator rather than by a parser
+# in this repository. Bazel builds that validator from source and hands it over
+# in runfiles, so every lane runs the same one and none can be missing it.
 donner_cc_test(
     name = "spirv_val_validation_tests",
     srcs = [
@@ -224,17 +222,12 @@ donner_cc_test(
         "tests/ShaderTestUtils.h",
         "tests/SpirvValValidation_tests.cc",
     ],
-    # Bazel scrubs the test environment, so the automated-lane markers have to be named here or
-    # the fail-closed rule can never see one and the gate quietly keeps skipping.
-    env_inherit = [
-        "DONNER_BASELINE_REQUIRE_FROZEN_ADAPTER",
-        "GITHUB_ACTIONS",
-    ],
+    data = ["@spirv_tools//:spirv-val"],
     deps = [
-        ":external_tool_gate",
         ":programs",
         ":shader",
         ":stage_io_test_modules",
+        "//donner/base:base_test_utils",
         "@com_google_gtest//:gtest_main",
     ],
 )

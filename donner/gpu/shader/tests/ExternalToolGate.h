@@ -2,9 +2,10 @@
 /// @file
 /// What a suite that drives an external verification tool does when that tool is not installed.
 ///
-/// Skipping is right for a developer who has not installed a platform validator or compiler. On an
-/// automated lane it is not: gtest exits successfully when every case skipped, so a lane that never
-/// had the tool reports the same green as a lane that validated every module.
+/// This is for the tools a build cannot supply: the offline Metal compiler ships as a downloadable
+/// Xcode component, so a machine without it is a real state. Skipping is right for a developer in
+/// that state. On an automated lane it is not: gtest exits successfully when every case skipped, so
+/// a lane that never had the tool reports the same green as a lane that compiled every module.
 
 #include <gtest/gtest.h>
 
