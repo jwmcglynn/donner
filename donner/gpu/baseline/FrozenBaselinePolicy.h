@@ -9,7 +9,6 @@
 /// exercised without a device on every platform.
 
 #include <ostream>
-#include <span>
 #include <string>
 #include <string_view>
 
@@ -24,30 +23,15 @@ enum class MissingComparisonDisposition {
 /// Streams the disposition name. @param os Stream. @param disposition Value. @return `os`.
 std::ostream& operator<<(std::ostream& os, MissingComparisonDisposition disposition);
 
-/**
- * Environment variables whose presence marks an automated lane.
- *
- * `GITHUB_ACTIONS` is set by the hosted runner itself. The Donner-specific name lets any other
- * automated lane opt in without this list having to learn every runner's convention.
- *
- * @return The marker names, in a stable order.
- */
-std::span<const std::string_view> ContinuousIntegrationMarkers();
-
-/**
- * Whether any of `names` is set to a non-empty value in the process environment.
- *
- * @param names Environment variable names to check.
- * @return True when at least one is present and non-empty.
- */
-bool AnyEnvironmentVariableIsSet(std::span<const std::string_view> names);
-
 /// Whether this process is running on an automated lane. @return True on such a lane.
 bool RunningUnderContinuousIntegration();
 
 /**
- * The name of the marker that identified this process as running on an automated lane, for a
- * message that has to say which one did.
+ * The name of the environment marker that identified this process as running on an automated lane,
+ * for a message that has to say which one did.
+ *
+ * `GITHUB_ACTIONS` is set by the hosted runner itself. The Donner-specific name lets any other
+ * automated lane opt in without this list having to learn every runner's convention.
  *
  * @return A view of the marker's name, aliasing static storage that outlives every caller, or an
  *   empty view when no marker is set.
