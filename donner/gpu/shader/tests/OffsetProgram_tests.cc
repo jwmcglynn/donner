@@ -75,6 +75,19 @@ TEST(OffsetProgramTests, WgslDeclaresTheComputeSurface) {
   EXPECT_THAT(wgsl, testing::Not(HasSubstr("cs_main_Output")));
 }
 
+TEST(OffsetProgramTests, WgslGuardsTheDestinationExtent) {
+  const std::string wgsl = EmitOffsetWgsl();
+
+  // A dispatch is rounded up to whole workgroups, so lanes run past both edges of a destination
+  // whose extent is not a multiple of the workgroup size. WGSL discards an out-of-bounds
+  // textureStore, so no device comparison can see this guard go missing; it is named here
+  // instead, where its removal is a failure rather than a golden diff nobody reads.
+  EXPECT_THAT(wgsl, HasSubstr("  let extent = textureDimensions(outputTexture);\n"
+                              "  if (((gid.x >= extent.x) || (gid.y >= extent.y))) {\n"
+                              "    return;\n"
+                              "  }"));
+}
+
 TEST(OffsetProgramTests, WgslRoundsHalvesAwayFromZeroRatherThanToEven) {
   const std::string wgsl = EmitOffsetWgsl();
 
