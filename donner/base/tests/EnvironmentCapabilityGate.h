@@ -12,18 +12,17 @@
 /// reports the same green as a lane that exercised the protection, so on an automated lane this
 /// fails closed instead, naming the capability and the marker that identified the lane.
 ///
-/// Checks the same automated-lane markers as donner/gpu/baseline/FrozenBaselinePolicy.h. This
-/// header lives in donner/base, which donner/gpu depends on and not the reverse, so the check
-/// here is a local copy rather than a call into that policy; keep the marker names identical if
-/// either list changes.
+/// Checks the same automated-lane markers as donner/gpu/baseline/FrozenBaselinePolicy.h, by
+/// calling the single definition in donner/base/tests/ContinuousIntegrationMarkers.h rather than
+/// keeping a copy: that policy delegates to the same functions.
 
 #include <gtest/gtest.h>
 
-#include <array>
-#include <cstdlib>
 #include <ostream>
 #include <string>
 #include <string_view>
+
+#include "donner/base/tests/ContinuousIntegrationMarkers.h"
 
 namespace donner::tests {
 
@@ -41,35 +40,6 @@ inline std::ostream& operator<<(std::ostream& os,
     case MissingEnvironmentCapabilityDisposition::FailClosed: return os << "FailClosed";
   }
   return os << "MissingEnvironmentCapabilityDisposition(unknown)";
-}
-
-/**
- * The name of the environment marker that identified this process as running on an automated
- * lane, for a message that has to say which one did.
- *
- * `GITHUB_ACTIONS` is set by the hosted runner itself. The Donner-specific name lets any other
- * automated lane opt in without this list having to learn every runner's convention.
- *
- * @return The marker's name, aliasing static storage that outlives every caller, or an empty view
- *   when no marker is set.
- */
-inline std::string_view FirstContinuousIntegrationMarkerSet() {
-  static constexpr std::array<std::string_view, 2> kContinuousIntegrationMarkers = {
-      "GITHUB_ACTIONS",
-      "DONNER_BASELINE_REQUIRE_FROZEN_ADAPTER",
-  };
-  for (const std::string_view name : kContinuousIntegrationMarkers) {
-    const char* value = std::getenv(std::string(name).c_str());
-    if (value != nullptr && value[0] != '\0') {
-      return name;
-    }
-  }
-  return {};
-}
-
-/// Whether this process is running on an automated lane. @return True on such a lane.
-inline bool RunningUnderContinuousIntegration() {
-  return !FirstContinuousIntegrationMarkerSet().empty();
 }
 
 /**

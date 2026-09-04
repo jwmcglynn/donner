@@ -1,18 +1,11 @@
 #include "donner/gpu/baseline/FrozenBaselinePolicy.h"
 
-#include <array>
 #include <cctype>
 #include <cstdlib>
 
+#include "donner/base/tests/ContinuousIntegrationMarkers.h"
+
 namespace donner::gpu::baseline {
-namespace {
-
-constexpr std::array<std::string_view, 2> kContinuousIntegrationMarkers = {
-    "GITHUB_ACTIONS",
-    "DONNER_BASELINE_REQUIRE_FROZEN_ADAPTER",
-};
-
-}  // namespace
 
 std::ostream& operator<<(std::ostream& os, MissingComparisonDisposition disposition) {
   switch (disposition) {
@@ -22,8 +15,10 @@ std::ostream& operator<<(std::ostream& os, MissingComparisonDisposition disposit
   return os << "MissingComparisonDisposition(unknown)";
 }
 
+// Delegates to the single definition in donner/base/tests/ContinuousIntegrationMarkers.h rather
+// than keeping its own copy of the marker list.
 std::span<const std::string_view> ContinuousIntegrationMarkers() {
-  return kContinuousIntegrationMarkers;
+  return ::donner::tests::kContinuousIntegrationMarkers;
 }
 
 bool AnyEnvironmentVariableIsSet(std::span<const std::string_view> names) {
@@ -36,8 +31,11 @@ bool AnyEnvironmentVariableIsSet(std::span<const std::string_view> names) {
   return false;
 }
 
+// Delegates to the single definition in donner/base/tests/ContinuousIntegrationMarkers.h so a
+// marker dropped from the shared list is caught by that header's own tests as well as this
+// policy's.
 bool RunningUnderContinuousIntegration() {
-  return AnyEnvironmentVariableIsSet(ContinuousIntegrationMarkers());
+  return ::donner::tests::RunningUnderContinuousIntegration();
 }
 
 MissingComparisonDisposition DispositionForUnbaselinedAdapter(bool underContinuousIntegration) {

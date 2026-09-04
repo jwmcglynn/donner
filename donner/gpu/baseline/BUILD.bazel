@@ -31,6 +31,10 @@ donner_cc_library(
     srcs = ["FrozenBaselinePolicy.cc"],
     hdrs = ["FrozenBaselinePolicy.h"],
     visibility = donner_internal_visibility(),
+    deps = [
+        # Delegates its automated-lane marker check to the single definition there.
+        "//donner/base:base_test_utils",
+    ],
 )
 
 donner_cc_test(
