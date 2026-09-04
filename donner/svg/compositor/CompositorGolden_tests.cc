@@ -5,7 +5,6 @@
 #include <array>
 #include <chrono>
 #include <cstdint>
-#include <fstream>
 #include <iostream>
 #include <sstream>
 #include <unordered_map>
@@ -14,6 +13,7 @@
 #include "donner/base/ParseWarningSink.h"
 #include "donner/base/Transform.h"
 #include "donner/base/Vector2.h"
+#include "donner/base/tests/RunfileGate.h"
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/SVGGraphicsElement.h"
 #include "donner/svg/components/RenderingInstanceComponent.h"
@@ -1017,14 +1017,10 @@ TEST_F(CompositorGoldenTest, FilteredLayerBoundsStopAtLayerSubtree) {
 }
 
 TEST_F(CompositorGoldenTest, RealSplashLightningBlurLayerUsesFilterBounds) {
-  const char* kSplashPath = "donner_splash.svg";
-  std::ifstream splashStream(kSplashPath);
-  if (!splashStream.is_open()) {
-    GTEST_SKIP() << "donner_splash.svg not found in runfiles";
-  }
-  std::ostringstream splashBuf;
-  splashBuf << splashStream.rdbuf();
-  const std::string splashSource = splashBuf.str();
+  const donner::tests::RequiredRunfile splashFile =
+      donner::tests::ReadRequiredRunfile("donner_splash.svg");
+  DONNER_REQUIRE_RUNFILE(splashFile);
+  const std::string& splashSource = splashFile.contents;
   ASSERT_FALSE(splashSource.empty());
 
   SVGDocument document = parseDocument(splashSource);
@@ -2398,14 +2394,10 @@ TEST_F(CompositorGoldenTest, TightBoundedSegmentsSurviveExplicitDragTargetPromot
 // outside `worldBounds()` (blur radius spilling past geometry, clip-
 // path-expanded bounds, etc.) reproduce here.
 TEST_F(CompositorGoldenTest, TightBoundedSegmentsPixelIdentityOnRealSplashWithDrag) {
-  const char* kSplashPath = "donner_splash.svg";
-  std::ifstream splashStream(kSplashPath);
-  if (!splashStream.is_open()) {
-    GTEST_SKIP() << "donner_splash.svg not found in runfiles";
-  }
-  std::ostringstream splashBuf;
-  splashBuf << splashStream.rdbuf();
-  const std::string splashSource = splashBuf.str();
+  const donner::tests::RequiredRunfile splashFile =
+      donner::tests::ReadRequiredRunfile("donner_splash.svg");
+  DONNER_REQUIRE_RUNFILE(splashFile);
+  const std::string& splashSource = splashFile.contents;
   ASSERT_FALSE(splashSource.empty());
 
   SVGDocument document = parseDocument(splashSource);
@@ -2472,13 +2464,10 @@ TEST_F(CompositorGoldenTest, TightBoundedSegmentsPixelIdentityOnRealSplashWithDr
 // retained-texture sequence: render the real Splash, prewarm one letter as an ActiveDrag layer at
 // identity, then move it and compare the flattened compositor target with a full DOM render.
 TEST_F(CompositorGoldenTest, RealSplashRetainedLetterMovesInFlattenedDragFrame) {
-  std::ifstream splashStream("donner_splash.svg");
-  if (!splashStream.is_open()) {
-    GTEST_SKIP() << "donner_splash.svg not found in runfiles";
-  }
-  std::ostringstream splashBuf;
-  splashBuf << splashStream.rdbuf();
-  SVGDocument document = parseDocument(splashBuf.str());
+  const donner::tests::RequiredRunfile splashFile =
+      donner::tests::ReadRequiredRunfile("donner_splash.svg");
+  DONNER_REQUIRE_RUNFILE(splashFile);
+  SVGDocument document = parseDocument(splashFile.contents);
 
   auto letter = document.querySelector("#Donner path");
   ASSERT_TRUE(letter.has_value());
@@ -2533,14 +2522,10 @@ TEST_F(CompositorGoldenTest, RealSplashRetainedLetterMovesInFlattenedDragFrame) 
 // that reshape the visible area, the diff will show up here but not
 // in the synthetic scenes.
 TEST_F(CompositorGoldenTest, TightBoundedSegmentsPixelIdentityOnRealSplash) {
-  const char* kSplashPath = "donner_splash.svg";
-  std::ifstream splashStream(kSplashPath);
-  if (!splashStream.is_open()) {
-    GTEST_SKIP() << "donner_splash.svg not found in runfiles";
-  }
-  std::ostringstream splashBuf;
-  splashBuf << splashStream.rdbuf();
-  const std::string splashSource = splashBuf.str();
+  const donner::tests::RequiredRunfile splashFile =
+      donner::tests::ReadRequiredRunfile("donner_splash.svg");
+  DONNER_REQUIRE_RUNFILE(splashFile);
+  const std::string& splashSource = splashFile.contents;
   ASSERT_FALSE(splashSource.empty());
 
   SVGDocument document = parseDocument(splashSource);
@@ -2967,14 +2952,10 @@ TEST_F(CompositorGoldenTest, TightBoundsRotatedEllipseWithRotatingGradient) {
 // of two different entities. Assert the compositor render matches a
 // reference full-render, within premul noise.
 TEST_F(CompositorGoldenTest, SplashLetterThenCloudOrbSelection) {
-  const char* kSplashPath = "donner_splash.svg";
-  std::ifstream splashStream(kSplashPath);
-  if (!splashStream.is_open()) {
-    GTEST_SKIP() << "donner_splash.svg not found in runfiles";
-  }
-  std::ostringstream splashBuf;
-  splashBuf << splashStream.rdbuf();
-  const std::string splashSource = splashBuf.str();
+  const donner::tests::RequiredRunfile splashFile =
+      donner::tests::ReadRequiredRunfile("donner_splash.svg");
+  DONNER_REQUIRE_RUNFILE(splashFile);
+  const std::string& splashSource = splashFile.contents;
 
   RenderViewport vp;
   vp.size = Vector2d(892, 512);
@@ -3125,14 +3106,10 @@ TEST_F(CompositorGoldenTest, SplashLetterThenCloudOrbSelection) {
 // reported artifact was crescent-shaped color drift at the top of the
 // cls-8 radial-gradient cloud orb.
 TEST_F(CompositorGoldenTest, SplashCloudsDragMatchesReference) {
-  const char* kSplashPath = "donner_splash.svg";
-  std::ifstream splashStream(kSplashPath);
-  if (!splashStream.is_open()) {
-    GTEST_SKIP() << "donner_splash.svg not found in runfiles";
-  }
-  std::ostringstream splashBuf;
-  splashBuf << splashStream.rdbuf();
-  const std::string splashSource = splashBuf.str();
+  const donner::tests::RequiredRunfile splashFile =
+      donner::tests::ReadRequiredRunfile("donner_splash.svg");
+  DONNER_REQUIRE_RUNFILE(splashFile);
+  const std::string& splashSource = splashFile.contents;
 
   RenderViewport vp;
   vp.size = Vector2d(892, 512);
@@ -3199,15 +3176,11 @@ TEST_F(CompositorGoldenTest, SplashCloudsDragMatchesReference) {
 }
 
 TEST_F(CompositorGoldenTest, SplashDonnerLetterDragKeepsCheapGradientSpansImmediate) {
-  const char* kSplashPath = "donner_splash.svg";
-  std::ifstream splashStream(kSplashPath);
-  if (!splashStream.is_open()) {
-    GTEST_SKIP() << "donner_splash.svg not found in runfiles";
-  }
-  std::ostringstream splashBuf;
-  splashBuf << splashStream.rdbuf();
+  const donner::tests::RequiredRunfile splashFile =
+      donner::tests::ReadRequiredRunfile("donner_splash.svg");
+  DONNER_REQUIRE_RUNFILE(splashFile);
 
-  SVGDocument document = parseDocument(splashBuf.str());
+  SVGDocument document = parseDocument(splashFile.contents);
   document.setCanvasSize(892, 512);
   auto target = document.querySelector("#Donner_D");
   ASSERT_TRUE(target.has_value());
@@ -4101,18 +4074,10 @@ TEST_F(CompositorGoldenTest, SplashPrewarmMakesFirstDragFree) {
 // The test file is in the `data` array of the `compositor_golden_tests`
 // target; bazel materializes it under the test's runfiles directory.
 TEST_F(CompositorGoldenTest, RealSplashDragLatencyOnTinySkia) {
-  // Load the splash file from the Bazel runfiles. If the path can't be
-  // opened the test skips - a dev running the test outside bazel (e.g.
-  // via an IDE runner that bypasses runfiles plumbing) shouldn't see a
-  // spurious failure.
-  const char* kSplashPath = "donner_splash.svg";
-  std::ifstream splashStream(kSplashPath);
-  if (!splashStream.is_open()) {
-    GTEST_SKIP() << "donner_splash.svg not found in runfiles - skipping splash perf test";
-  }
-  std::ostringstream splashBuf;
-  splashBuf << splashStream.rdbuf();
-  const std::string splashSource = splashBuf.str();
+  const donner::tests::RequiredRunfile splashFile =
+      donner::tests::ReadRequiredRunfile("donner_splash.svg");
+  DONNER_REQUIRE_RUNFILE(splashFile);
+  const std::string& splashSource = splashFile.contents;
   ASSERT_FALSE(splashSource.empty()) << "donner_splash.svg is empty";
 
   SVGDocument document = parseDocument(splashSource);
@@ -4197,14 +4162,10 @@ TEST_F(CompositorGoldenTest, RealSplashDragLatencyOnTinySkia) {
 }
 
 TEST_F(CompositorGoldenTest, RealSplashBlueCenterBurstEllipseDragLatency) {
-  const char* kSplashPath = "donner_splash.svg";
-  std::ifstream splashStream(kSplashPath);
-  if (!splashStream.is_open()) {
-    GTEST_SKIP() << "donner_splash.svg not found in runfiles - skipping splash perf test";
-  }
-  std::ostringstream splashBuf;
-  splashBuf << splashStream.rdbuf();
-  const std::string splashSource = splashBuf.str();
+  const donner::tests::RequiredRunfile splashFile =
+      donner::tests::ReadRequiredRunfile("donner_splash.svg");
+  DONNER_REQUIRE_RUNFILE(splashFile);
+  const std::string& splashSource = splashFile.contents;
   ASSERT_FALSE(splashSource.empty()) << "donner_splash.svg is empty";
 
   SVGDocument document = parseDocument(splashSource);
