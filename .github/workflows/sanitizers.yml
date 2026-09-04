@@ -67,15 +67,13 @@ jobs:
         with:
           persist-credentials: false
 
-      # spirv-tools is test-time only: the out-of-process SPIR-V validation
-      # suite fails rather than skips when spirv-val is absent.
       - name: Install system dependencies
         uses: ./.github/actions/apt-install
         with:
           packages: >-
             pkg-config libfontconfig1-dev libfreetype6-dev mesa-vulkan-drivers libvulkan1
-            libvulkan-dev spirv-tools libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev
-            libxi-dev libgl1-mesa-dev libosmesa6 clang-tidy-19
+            libvulkan-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev
+            libgl1-mesa-dev libosmesa6 clang-tidy-19
 
       - name: Setup Bazel
         uses: bazel-contrib/setup-bazel@0.19.0
@@ -135,15 +133,13 @@ jobs:
         with:
           persist-credentials: false
 
-      # spirv-tools is test-time only: the out-of-process SPIR-V validation
-      # suite fails rather than skips when spirv-val is absent.
       - name: Install system dependencies
         uses: ./.github/actions/apt-install
         with:
           packages: >-
             pkg-config libfontconfig1-dev libfreetype6-dev mesa-vulkan-drivers libvulkan1
-            libvulkan-dev spirv-tools libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev
-            libxi-dev libgl1-mesa-dev libosmesa6 clang-tidy-19
+            libvulkan-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev
+            libgl1-mesa-dev libosmesa6 clang-tidy-19
 
       - name: Setup Bazel
         uses: bazel-contrib/setup-bazel@0.19.0

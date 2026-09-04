@@ -76,10 +76,13 @@ Notes:
   stops providing an adapter turns those lanes red instead of green. This matters because Bazel
   reports a target whose every case skipped as passing, so the old unconditional skip was
   indistinguishable from a real pass in the summary.
-- The two out-of-process shader validation suites apply that same rule to a missing external tool.
-  A developer without `spirv-val` or the offline Metal compiler still gets a skip; an automated
-  lane gets a failure naming the tool. A lane that knowingly lacks a tool excludes the target by
-  tag, which is visible in the run summary, rather than by collecting skips that read as a pass.
+- The two out-of-process shader validation suites reach the same end by different routes. SPIR-V
+  validation is hermetic: Bazel builds `spirv-val` from source and puts it in the test's runfiles,
+  so "the lane does not have it" is not a state that exists, and a missing runfile is a build
+  failure rather than a skip. The offline Metal compiler cannot be built here, so the MSL suite
+  keeps the older rule: a developer without it gets a skip, an automated lane gets a failure naming
+  the tool, and a lane that knowingly lacks it excludes the target by tag, which is visible in the
+  run summary, rather than by collecting skips that read as a pass.
 - "Device-conditional" still describes the Geode variant wrappers and the editor lane's targets.
   They skip when they cannot reach a device, and on a runner without one they are green and
   assert nothing. The fail-closed rows named in the two notes above are the model for closing
@@ -105,19 +108,19 @@ Notes:
 
 ## Vulkan
 
-| Platform                         | Driver / adapter                        | Coverage         | Where                                                                                                                     |
-| -------------------------------- | --------------------------------------- | ---------------- | ------------------------------------------------------------------------------------------------------------------------- |
-| Linux x86_64                     | Mesa lavapipe (software)                | **PR-gated**     | `vulkan_solid_fill_tests`, ICD pinned to `lvp_icd.json`                                                                   |
-| Linux arm64                      | Mesa lavapipe (software)                | **PR-gated**     | The self-hosted Linux routing, when it is the selected lane                                                               |
-| Linux x86_64/arm64               | Frozen pixel identity, software adapter | **PR-gated**     | `baseline_pixels_tests`, against the committed lavapipe baseline                                                          |
-| Linux / macOS, SPIR-V validation | `spirv-val`                             | **PR-gated**     | `spirv_val_validation_tests` has no platform constraint and runs on both, and fails rather than skips without `spirv-val` |
-| Linux                            | Vulkan validation layers                | **None**         | No lane enables them; the design requires zero validation errors                                                          |
-| Linux x86_64/arm64               | Intel physical                          | **None**         | No lane has a GPU device; the shared executor advertises none                                                             |
-| Linux x86_64                     | AMD physical                            | **None**         | As above                                                                                                                  |
-| Linux x86_64                     | NVIDIA physical                         | **None**         | As above                                                                                                                  |
-| Linux, Geode + ASan              | Mesa lavapipe                           | **Conditional**  | Fires only when the Geode renderer paths change                                                                           |
-| Linux, Geode fuzzing             | Mesa lavapipe                           | **Scheduled**    | Nightly                                                                                                                   |
-| Windows                          | Any Vulkan driver                       | **Out of scope** | Windows is not a target platform; nothing is planned for it                                                               |
+| Platform                      | Driver / adapter                        | Coverage         | Where                                                                                                                            |
+| ----------------------------- | --------------------------------------- | ---------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| Linux x86_64                  | Mesa lavapipe (software)                | **PR-gated**     | `vulkan_solid_fill_tests`, ICD pinned to `lvp_icd.json`                                                                          |
+| Linux arm64                   | Mesa lavapipe (software)                | **PR-gated**     | The self-hosted Linux routing, when it is the selected lane                                                                      |
+| Linux x86_64/arm64            | Frozen pixel identity, software adapter | **PR-gated**     | `baseline_pixels_tests`, against the committed lavapipe baseline                                                                 |
+| Every lane, SPIR-V validation | `spirv-val`                             | **PR-gated**     | `spirv_val_validation_tests`; Bazel builds the validator from source and hands it over in runfiles, so no lane can be missing it |
+| Linux                         | Vulkan validation layers                | **None**         | No lane enables them; the design requires zero validation errors                                                                 |
+| Linux x86_64/arm64            | Intel physical                          | **None**         | No lane has a GPU device; the shared executor advertises none                                                                    |
+| Linux x86_64                  | AMD physical                            | **None**         | As above                                                                                                                         |
+| Linux x86_64                  | NVIDIA physical                         | **None**         | As above                                                                                                                         |
+| Linux, Geode + ASan           | Mesa lavapipe                           | **Conditional**  | Fires only when the Geode renderer paths change                                                                                  |
+| Linux, Geode fuzzing          | Mesa lavapipe                           | **Scheduled**    | Nightly                                                                                                                          |
+| Windows                       | Any Vulkan driver                       | **Out of scope** | Windows is not a target platform; nothing is planned for it                                                                      |
 
 Notes:
 

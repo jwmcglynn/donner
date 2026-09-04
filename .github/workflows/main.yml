@@ -503,17 +503,13 @@ jobs:
         with:
           persist-credentials: false
 
-      # spirv-tools is a test-time dependency, not a build one: the emitted SPIR-V
-      # is validated out of process by spirv-val. The suite fails rather than
-      # skips on an automated lane, so dropping this package turns the lane red
-      # instead of silently retiring the validation.
       - name: Install system dependencies
         uses: ./.github/actions/apt-install
         with:
           packages: >-
             pkg-config libfontconfig1-dev libfreetype6-dev mesa-vulkan-drivers libvulkan1
-            libvulkan-dev spirv-tools libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev
-            libxi-dev libgl1-mesa-dev libosmesa6 clang-tidy-19
+            libvulkan-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev
+            libgl1-mesa-dev libosmesa6 clang-tidy-19
 
       - name: Setup Bazel
         uses: bazel-contrib/setup-bazel@0.19.0
@@ -658,8 +654,6 @@ jobs:
   # no host GPU device passthrough; Mesa llvmpipe/lavapipe provide the same
   # software rendering path used by GitHub-hosted Linux so this lane runs the
   # same test surface instead of excluding graphics targets.
-  # The executor provides spirv-val rather than this workflow installing it; the
-  # fail-closed SPIR-V suite is the check that it still does.
   linux-self-hosted:
     runs-on: [self-hosted, linux, arm64]
     needs: [gatekeeper, determine-targets, linux-self-hosted-turnstile]
@@ -1029,16 +1023,14 @@ jobs:
         with:
           persist-credentials: false
 
-      # SPIRV-Tools is a test-time dependency: `spirv_val_validation_tests` runs
-      # spirv-val out of process and fails rather than skips without it.
-      - name: Install clang-tidy and SPIRV-Tools
+      - name: Install clang-tidy
         uses: nick-fields/retry@v4
         with:
           timeout_minutes: 10
           max_attempts: 3
           retry_wait_seconds: 15
           command: |
-            brew install --quiet llvm@19 spirv-tools
+            brew install --quiet llvm@19
             echo "/opt/homebrew/opt/llvm@19/bin" >> "$GITHUB_PATH"
 
       - name: Setup Bazel
@@ -1106,10 +1098,9 @@ jobs:
   # Replaces `macos` for trusted operator PRs and main pushes. Renovate and
   # non-operator runs stay hosted. The host pre-provisions Bazelisk, Homebrew
   # llvm@19, and Xcode Command Line Tools.
-  # The host also provides spirv-val and the offline Metal compiler rather than
-  # this workflow installing them, which is why this lane keeps the
-  # `requires_metal_toolchain` target the hosted macOS lane drops; the
-  # fail-closed suites are the check that it still does.
+  # The host also provides the offline Metal compiler, which is why this lane
+  # keeps the `requires_metal_toolchain` target the hosted macOS lane drops; the
+  # fail-closed MSL suite is the check that it still does.
   macos-self-hosted:
     runs-on: [self-hosted, macOS, ARM64]
     needs: [gatekeeper, determine-targets]
