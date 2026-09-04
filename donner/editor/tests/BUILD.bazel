@@ -483,8 +483,8 @@ donner_perf_cc_test(
     ],
     wallclock_srcs = ["FilterDragReproWallclock_tests.cc"],
     deps = [
-        "//donner/base:base_test_utils",
         "//donner/base",
+        "//donner/base:base_test_utils",
         "//donner/editor:async_renderer",
         "//donner/editor:async_svg_document",
         "//donner/editor:editor_app",

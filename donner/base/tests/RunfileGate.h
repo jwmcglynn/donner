@@ -150,8 +150,8 @@ inline RequiredRunfile ReadRequiredRunfile(std::string_view runfilePath) {
  *
  * @param runfile A donner::tests::RequiredRunfile.
  */
-#define DONNER_REQUIRE_RUNFILE(runfile)                                       \
-  do {                                                                        \
+#define DONNER_REQUIRE_RUNFILE(runfile)                                        \
+  do {                                                                         \
     const ::donner::tests::RequiredRunfile& donnerRequiredRunfile = (runfile); \
     if (!donnerRequiredRunfile.ok()) {                                         \
       FAIL() << donnerRequiredRunfile.error;                                   \

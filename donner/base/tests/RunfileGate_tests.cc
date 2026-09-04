@@ -51,8 +51,8 @@ TEST(RunfileGate, LabelsTheTargetBazelIsRunning) {
 }
 
 TEST(RunfileGate, MessageNamesThePathTheTargetAndEveryResolutionAttempted) {
-  const std::string message = MissingRunfileMessage("some/data/file.svg", "//some:target",
-                                                    "/runfiles/some/data/file.svg", "/cwd/file.svg");
+  const std::string message = MissingRunfileMessage(
+      "some/data/file.svg", "//some:target", "/runfiles/some/data/file.svg", "/cwd/file.svg");
 
   EXPECT_THAT(message, HasSubstr("some/data/file.svg"));
   EXPECT_THAT(message, HasSubstr("`data` attribute of //some:target"));

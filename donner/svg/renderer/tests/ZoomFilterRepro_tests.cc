@@ -44,11 +44,11 @@
 /// SplashAtEditorClampBoundaryRenders above.
 
 #include <array>
-#include <span>
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
+#include <span>
 #include <string>
 
 #include "donner/base/ParseWarningSink.h"
