@@ -13,6 +13,7 @@ namespace {
 TEST(AsyncRendererPerfCorrectnessTest, FilterGroupSubtreeDragHitsTranslationFastPathCounters) {
   FilterGroupSubtreeDragPerfResult result;
   RunFilterGroupSubtreeDragPerfScenario(&result);
+  ASSERT_FALSE(HasFatalFailure());
 
   EXPECT_GE(result.fastPathFrames, static_cast<uint64_t>(result.dragFrames))
       << "filter-group subtree drag is not hitting the translation-only fast "

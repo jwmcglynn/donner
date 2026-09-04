@@ -13,6 +13,11 @@ struct FilterGroupSubtreeDragPerfResult {
   uint64_t slowPathFramesWithDirty = 0;
 };
 
+/// Replay the filter-group subtree drag and populate `result`.
+///
+/// Uses `ASSERT_*` internally, including on the splash the target declares in `data` when it
+/// is not in the runfiles tree. Callers must therefore check `HasFatalFailure()` before
+/// reading `result`.
 void RunFilterGroupSubtreeDragPerfScenario(FilterGroupSubtreeDragPerfResult* result);
 
 }  // namespace donner::editor

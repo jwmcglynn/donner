@@ -44,16 +44,15 @@
 /// SplashAtEditorClampBoundaryRenders above.
 
 #include <array>
-#include <span>
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
-#include <fstream>
-#include <sstream>
+#include <span>
 #include <string>
 
 #include "donner/base/ParseWarningSink.h"
+#include "donner/base/tests/RunfileGate.h"
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/parser/SVGParser.h"
 #include "donner/svg/renderer/Renderer.h"
@@ -62,16 +61,6 @@
 
 namespace donner::svg {
 namespace {
-
-std::string LoadSplash() {
-  std::ifstream stream("donner_splash.svg");
-  if (!stream.is_open()) {
-    return {};
-  }
-  std::ostringstream buf;
-  buf << stream.rdbuf();
-  return buf.str();
-}
 
 constexpr std::string_view kTinySvg =
     R"(<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
@@ -172,10 +161,10 @@ TEST(ZoomFilterRepro, SplashAtEditorClampBoundaryRenders) {
   // `takeSnapshot` returned an empty bitmap, and the editor (which doesn't
   // propagate the failure) ended up showing a stale or empty rendered
   // image.
-  const std::string source = LoadSplash();
-  if (source.empty()) {
-    GTEST_SKIP() << "donner_splash.svg not in runfiles";
-  }
+  const donner::tests::RequiredRunfile splashFile =
+      donner::tests::ReadRequiredRunfile("donner_splash.svg");
+  DONNER_REQUIRE_RUNFILE(splashFile);
+  const std::string& source = splashFile.contents;
   const RendererBitmap snapshot = RenderAt(std::string_view{source}, 8192, 4708);
   const bool dimensionsOk = snapshot.dimensions.x == 8192 && snapshot.dimensions.y >= 4700 &&
                             snapshot.dimensions.y <= 4708;
@@ -201,10 +190,10 @@ TEST(ZoomFilterRepro, SplashHaloSurvivesHighZoom) {
   // disappears while every other element renders normally. This produces a
   // luma swing of ~37+ at the Lightning_glow_dark halo probe; with the
   // blur intact, the delta is ~9.
-  const std::string source = LoadSplash();
-  if (source.empty()) {
-    GTEST_SKIP() << "donner_splash.svg not in runfiles";
-  }
+  const donner::tests::RequiredRunfile splashFile =
+      donner::tests::ReadRequiredRunfile("donner_splash.svg");
+  DONNER_REQUIRE_RUNFILE(splashFile);
+  const std::string& source = splashFile.contents;
   const RendererBitmap lo = RenderAt(std::string_view{source}, 892, 512);
   ASSERT_FALSE(lo.empty());
   // 5x splash: ~182 MB float SourceGraphic buffer, 2.8x above the broken

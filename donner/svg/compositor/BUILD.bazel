@@ -219,6 +219,7 @@ donner_cc_test(
     deps = [
         ":compositor",
         ":dual_path_verifier",
+        "//donner/base:base_test_utils",
         "//donner/svg/renderer",
         "//donner/svg/renderer:renderer_interface",
         "@com_google_gtest//:gtest_main",
@@ -242,6 +243,7 @@ donner_cc_test(
     deps = [
         ":compositor",
         ":dual_path_verifier",
+        "//donner/base:base_test_utils",
         "//donner/svg/renderer",
         "//donner/svg/renderer:renderer_interface",
         "@com_google_gtest//:gtest_main",

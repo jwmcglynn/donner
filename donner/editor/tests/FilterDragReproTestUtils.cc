@@ -35,6 +35,7 @@
 #include "donner/base/EcsRegistry_fwd.h"
 #include "donner/base/Transform.h"
 #include "donner/base/Vector2.h"
+#include "donner/base/tests/RunfileGate.h"
 #include "donner/base/xml/XMLQualifiedName.h"
 #include "donner/editor/AsyncRenderer.h"
 #include "donner/editor/EditorApp.h"
@@ -113,7 +114,7 @@ Vector2d RenderPaneSizeForWindow(double windowW, double windowH) {
                   std::max(0.0, windowH - kMenuBarHeight));
 }
 
-std::string LoadFileOrSkip(const std::filesystem::path& path) {
+std::string LoadFileOrEmpty(const std::filesystem::path& path) {
   std::ifstream file(path, std::ios::binary);
   if (!file.is_open()) return {};
   std::ostringstream buf;
@@ -188,7 +189,7 @@ ReplayResults ReplayRepro(const std::filesystem::path& reproPath,
                           const std::filesystem::path& svgPath, FilterDragReproReplayMode mode) {
   ReplayResults results;
 
-  const std::string svgSource = LoadFileOrSkip(svgPath);
+  const std::string svgSource = LoadFileOrEmpty(svgPath);
   [&]() { ASSERT_FALSE(svgSource.empty()) << "svg source missing: " << svgPath; }();
   auto reproOpt = repro::ReadReproFile(reproPath);
   [&]() { ASSERT_TRUE(reproOpt.has_value()) << "repro file parse failed: " << reproPath; }();
@@ -417,15 +418,14 @@ void DumpFirstFiveFrames(const ReplayResults& r, uint64_t fromFrame, uint64_t to
 }  // namespace
 
 void RunFilterDragReproScenario(FilterDragReproResult* out, FilterDragReproReplayMode mode) {
-  const std::filesystem::path reproPath = "donner/editor/tests/filter_drag_repro.rnr";
-  const std::filesystem::path svgPath = "donner_splash.svg";
+  const donner::tests::RequiredRunfile reproFile =
+      donner::tests::ResolveRequiredRunfile("donner/editor/tests/filter_drag_repro.rnr");
+  DONNER_REQUIRE_RUNFILE(reproFile);
+  const donner::tests::RequiredRunfile svgFile =
+      donner::tests::ResolveRequiredRunfile("donner_splash.svg");
+  DONNER_REQUIRE_RUNFILE(svgFile);
 
-  if (!std::filesystem::exists(reproPath) || !std::filesystem::exists(svgPath)) {
-    out->skipped = true;
-    return;
-  }
-
-  ReplayResults r = ReplayRepro(reproPath, svgPath, mode);
+  ReplayResults r = ReplayRepro(reproFile.path, svgFile.path, mode);
   ASSERT_FALSE(r.frames.empty()) << "repro produced zero frames";
   ASSERT_EQ(r.mouseDownFrameIndices.size(), 2u)
       << "expected exactly two mouse-down events in the repro (first drag, second drag)";

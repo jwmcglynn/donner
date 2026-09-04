@@ -35,12 +35,8 @@ struct DragCounterStats {
 };
 
 /// Aggregated result of replaying `filter_drag_repro.rnr` through the
-/// real editor stack. `skipped == true` means required data files were
-/// missing in runfiles and the caller should `GTEST_SKIP()` - the other
-/// fields are meaningless in that case.
+/// real editor stack.
 struct FilterDragReproResult {
-  bool skipped = false;
-
   // Per-gesture drag stats, computed over the frames strictly between
   // the mouse-down and mouse-up of each gesture (so cold mouse-down /
   // mouse-up frames are excluded).
@@ -88,10 +84,9 @@ enum class FilterDragReproReplayMode {
 /// 5 frames, fast-path counters, selection ids) to `std::cerr` so both
 /// paired tests produce the same operator-facing log output.
 ///
-/// Uses `ASSERT_*` internally; if an assertion trips, `out->skipped`
-/// stays false and the caller's test is halted by the assertion flow.
-/// On genuine "files missing in runfiles", sets `out->skipped = true`
-/// and returns without asserting - the caller issues `GTEST_SKIP()`.
+/// Uses `ASSERT_*` internally, including on a recording or splash the
+/// target declared in `data` that is not in the runfiles tree. Callers
+/// must therefore check `HasFatalFailure()` before reading `out`.
 void RunFilterDragReproScenario(FilterDragReproResult* out,
                                 FilterDragReproReplayMode mode = FilterDragReproReplayMode::Full);
 

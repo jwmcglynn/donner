@@ -1,14 +1,13 @@
 #include "donner/editor/EditorApp.h"
 
-#include <fstream>
 #include <optional>
-#include <sstream>
 #include <string>
 #include <string_view>
 #include <vector>
 
 #include "donner/base/Path.h"
 #include "donner/base/RcString.h"
+#include "donner/base/tests/RunfileGate.h"
 #include "donner/base/xml/XMLQualifiedName.h"
 #include "donner/editor/ViewportGeometry.h"
 #include "donner/svg/SVGElement.h"
@@ -44,17 +43,6 @@ void ExpectBoxInside(const Box2d& inner, const Box2d& outer, double tolerance) {
       << inner << " not inside " << outer;
   EXPECT_LE(inner.bottomRight.y, outer.bottomRight.y + tolerance)
       << inner << " not inside " << outer;
-}
-
-std::optional<std::string> ReadDonnerSplash() {
-  std::ifstream splashStream("donner_splash.svg");
-  if (!splashStream.is_open()) {
-    return std::nullopt;
-  }
-
-  std::ostringstream buffer;
-  buffer << splashStream.rdbuf();
-  return buffer.str();
 }
 
 bool GeometryContainsDocumentPoint(const svg::SVGElement& element, const Vector2d& point) {
@@ -953,11 +941,12 @@ TEST(EditorAppTest, UnbundleCompoundPathReleasesNestedHoleContours) {
 }
 
 TEST(EditorAppTest, UnbundleCompoundPathSupportsDonnerDWithCounter) {
-  const std::optional<std::string> splash = ReadDonnerSplash();
-  ASSERT_TRUE(splash.has_value());
+  const donner::tests::RequiredRunfile splash =
+      donner::tests::ReadRequiredRunfile("donner_splash.svg");
+  DONNER_REQUIRE_RUNFILE(splash);
 
   EditorApp app;
-  ASSERT_TRUE(app.loadFromString(*splash));
+  ASSERT_TRUE(app.loadFromString(splash.contents));
 
   auto donnerD = app.document().document().querySelector("#Donner_D");
   ASSERT_TRUE(donnerD.has_value());
@@ -1389,13 +1378,12 @@ TEST(EditorAppTest, PathOperationConvertsDocumentResultThroughRootViewBox) {
 }
 
 TEST(EditorAppTest, HitTestFindsDonnerLetterAtSolidStem) {
-  const std::optional<std::string> splashSource = ReadDonnerSplash();
-  if (!splashSource.has_value()) {
-    GTEST_SKIP() << "donner_splash.svg not found in runfiles";
-  }
+  const donner::tests::RequiredRunfile splashSource =
+      donner::tests::ReadRequiredRunfile("donner_splash.svg");
+  DONNER_REQUIRE_RUNFILE(splashSource);
 
   EditorApp app;
-  ASSERT_TRUE(app.loadFromString(*splashSource));
+  ASSERT_TRUE(app.loadFromString(splashSource.contents));
 
   const std::optional<svg::SVGGraphicsElement> hit = app.hitTest(Vector2d(281.0, 395.0));
   ASSERT_TRUE(hit.has_value());
@@ -1403,14 +1391,13 @@ TEST(EditorAppTest, HitTestFindsDonnerLetterAtSolidStem) {
 }
 
 TEST(EditorAppTest, PathOperationsHandleOverlappingDonnerLetters) {
-  const std::optional<std::string> splashSource = ReadDonnerSplash();
-  if (!splashSource.has_value()) {
-    GTEST_SKIP() << "donner_splash.svg not found in runfiles";
-  }
+  const donner::tests::RequiredRunfile splashSource =
+      donner::tests::ReadRequiredRunfile("donner_splash.svg");
+  DONNER_REQUIRE_RUNFILE(splashSource);
 
   const auto applyOperation = [&](PathOperationKind operation) {
     EditorApp app;
-    EXPECT_TRUE(app.loadFromString(*splashSource));
+    EXPECT_TRUE(app.loadFromString(splashSource.contents));
 
     auto donnerD = app.document().document().querySelector("#Donner_D");
     auto donnerO = app.document().document().querySelector("#Donner_O");
@@ -2494,13 +2481,11 @@ TEST(EditorAppGroupTest, UngroupAvailabilityReportsEachRejectionReason) {
   auto attrs = app.document().document().querySelector("#attrs");
   ASSERT_TRUE(attrs.has_value());
   app.setSelection(*attrs);
-  EXPECT_EQ(app.ungroupSelectionAvailability().reason,
-            "Remove group attributes before ungrouping");
+  EXPECT_EQ(app.ungroupSelectionAvailability().reason, "Remove group attributes before ungrouping");
 
   // An empty attribute-free group has nothing to ungroup. It carries no id, so
   // it is selected via the document tree rather than a query.
-  ASSERT_TRUE(app.loadFromString(
-      R"svg(<svg xmlns="http://www.w3.org/2000/svg"><g></g></svg>)svg"));
+  ASSERT_TRUE(app.loadFromString(R"svg(<svg xmlns="http://www.w3.org/2000/svg"><g></g></svg>)svg"));
   const auto emptyGroup = app.document().document().svgElement().firstChild();
   ASSERT_TRUE(emptyGroup.has_value());
   ASSERT_EQ(emptyGroup->tryType(), svg::ElementType::G);

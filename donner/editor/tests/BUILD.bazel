@@ -305,6 +305,7 @@ donner_cc_test(
     srcs = ["SourceSelection_tests.cc"],
     data = ["//:donner_splash.svg"],
     deps = [
+        "//donner/base:base_test_utils",
         "//donner/base/xml",
         "//donner/editor:editor_app",
         "//donner/editor:source_selection",
@@ -483,6 +484,7 @@ donner_perf_cc_test(
     wallclock_srcs = ["FilterDragReproWallclock_tests.cc"],
     deps = [
         "//donner/base",
+        "//donner/base:base_test_utils",
         "//donner/editor:async_renderer",
         "//donner/editor:async_svg_document",
         "//donner/editor:editor_app",
@@ -507,6 +509,7 @@ donner_cc_test(
     # separate async_renderer_wallclock_tests target); shard for parallelism.
     shard_count = 4,
     deps = [
+        "//donner/base:base_test_utils",
         "//donner/editor:async_renderer",
         "//donner/editor:async_svg_document",
         "//donner/editor:command_queue",
@@ -553,6 +556,7 @@ donner_cc_test(
         "perf",
     ],
     deps = [
+        "//donner/base:base_test_utils",
         "//donner/editor:async_renderer",
         "//donner/editor:async_svg_document",
         "//donner/editor:command_queue",
@@ -716,6 +720,7 @@ donner_perf_cc_test(
     ],
     wallclock_srcs = ["AsyncRendererFilterGroupWallclock_tests.cc"],
     deps = [
+        "//donner/base:base_test_utils",
         "//donner/editor:async_renderer",
         "//donner/editor:async_svg_document",
         "//donner/svg/compositor",
@@ -729,6 +734,7 @@ donner_cc_test(
     srcs = ["EditorApp_tests.cc"],
     data = ["//:donner_splash.svg"],
     deps = [
+        "//donner/base:base_test_utils",
         "//donner/editor:editor_app",
         "//donner/editor:viewport_geometry",
         "//donner/svg",

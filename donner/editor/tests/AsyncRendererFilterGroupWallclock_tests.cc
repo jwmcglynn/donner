@@ -9,6 +9,7 @@ namespace {
 TEST(AsyncRendererPerfWallclockTest, FilterGroupSubtreeDragStaysUnderNightlyWallclockBudget) {
   FilterGroupSubtreeDragPerfResult result;
   RunFilterGroupSubtreeDragPerfScenario(&result);
+  ASSERT_FALSE(HasFatalFailure());
 
   EXPECT_LT(result.avgDragFrameMs, 100.0) << "average filter-group drag frame far above even the "
                                              "widened CI runner budget - something is doing a "
