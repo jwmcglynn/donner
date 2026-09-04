@@ -32,6 +32,7 @@
 #include "donner/gpu/CommandEncoder.h"
 #include "donner/gpu/baseline/FrozenBaselinePolicy.h"
 #include "donner/gpu/metal/MetalDevice.h"
+#include "donner/gpu/metal/tests/MetalDeviceGate.h"
 #include "donner/gpu/shader/MslEmitter.h"
 #include "donner/gpu/shader/programs/SolidFill.h"
 #include "donner/gpu/shader/tests/StageIoTestModules.h"
@@ -90,18 +91,9 @@ class MetalSolidFillTest : public testing::Test {
 protected:
   void SetUp() override {
     device_ = MetalDevice::Create();
-    if (!device_) {
-      // Same rule the frozen pixel gate uses: a lane that selected this target and then created
-      // no device has disabled the comparison, and reporting that as a pass hides it.
-      const baseline::MissingComparisonDisposition disposition =
-          baseline::DispositionForMissingAdapter(baseline::RunningUnderContinuousIntegration());
-      const std::string message =
-          baseline::NoAdapterMessage("the Metal solid-fill slice", disposition);
-      if (disposition == baseline::MissingComparisonDisposition::FailClosed) {
-        FAIL() << message;
-      }
-      GTEST_SKIP() << message;
-    }
+    // Same rule the frozen pixel gate uses: a lane that selected this target and then created no
+    // device has disabled the comparison, and reporting that as a pass hides it.
+    DONNER_REQUIRE_METAL_DEVICE(device_, "the Metal solid-fill slice");
   }
 
   /**

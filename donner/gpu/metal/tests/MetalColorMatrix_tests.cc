@@ -16,6 +16,7 @@
 
 #include "donner/gpu/CommandEncoder.h"
 #include "donner/gpu/metal/MetalDevice.h"
+#include "donner/gpu/metal/tests/MetalDeviceGate.h"
 #include "donner/gpu/shader/ModuleInterface.h"
 #include "donner/gpu/shader/MslEmitter.h"
 #include "donner/gpu/shader/programs/ColorMatrix.h"
@@ -51,9 +52,7 @@ class MetalColorMatrixTest : public testing::Test {
 protected:
   void SetUp() override {
     device_ = MetalDevice::Create();
-    if (!device_) {
-      GTEST_SKIP() << "No Metal device available";
-    }
+    DONNER_REQUIRE_METAL_DEVICE(device_, "the Metal color-matrix slice");
   }
 
   /// Unwraps an RHI result, failing the test on error.
