@@ -1,7 +1,6 @@
 #include "donner/gpu/baseline/FrozenBaselinePolicy.h"
 
 #include <cctype>
-#include <cstdlib>
 
 #include "donner/base/tests/ContinuousIntegrationMarkers.h"
 
@@ -13,22 +12,6 @@ std::ostream& operator<<(std::ostream& os, MissingComparisonDisposition disposit
     case MissingComparisonDisposition::FailClosed: return os << "FailClosed";
   }
   return os << "MissingComparisonDisposition(unknown)";
-}
-
-// Delegates to the single definition in donner/base/tests/ContinuousIntegrationMarkers.h rather
-// than keeping its own copy of the marker list.
-std::span<const std::string_view> ContinuousIntegrationMarkers() {
-  return ::donner::tests::kContinuousIntegrationMarkers;
-}
-
-bool AnyEnvironmentVariableIsSet(std::span<const std::string_view> names) {
-  for (const std::string_view name : names) {
-    const char* value = std::getenv(std::string(name).c_str());
-    if (value != nullptr && value[0] != '\0') {
-      return true;
-    }
-  }
-  return false;
 }
 
 // Delegates to the single definition in donner/base/tests/ContinuousIntegrationMarkers.h so a

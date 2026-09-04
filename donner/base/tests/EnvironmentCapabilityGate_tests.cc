@@ -12,8 +12,9 @@
 #include <gtest/gtest-spi.h>
 #include <gtest/gtest.h>
 
-#include <cstdlib>
 #include <string>
+
+#include "donner/base/tests/ScopedEnvironmentVariable.h"
 
 namespace donner::tests {
 namespace {
@@ -21,44 +22,6 @@ namespace {
 using testing::Eq;
 using testing::HasSubstr;
 using testing::Not;
-
-/// Sets an environment variable for one test and restores the previous state afterwards, so the
-/// cases can force the automated-lane path without depending on where they are run.
-///
-/// Copied from donner/gpu/baseline/FrozenBaselinePolicy_tests.cc rather than shared: PR 1095
-/// (shader-validators-fail-closed-on-ci) hoists this into
-/// donner/base/tests/ScopedEnvironmentVariable, but that branch has not landed on main yet. Once
-/// it does, this copy should move onto the shared helper instead of a third one existing.
-class ScopedEnvironmentVariable {
-public:
-  ScopedEnvironmentVariable(const char* name, const char* value) : name_(name) {
-    if (const char* previous = std::getenv(name); previous != nullptr) {
-      previous_ = previous;
-      hadPrevious_ = true;
-    }
-    if (value != nullptr) {
-      setenv(name, value, 1);
-    } else {
-      unsetenv(name);
-    }
-  }
-
-  ~ScopedEnvironmentVariable() {
-    if (hadPrevious_) {
-      setenv(name_.c_str(), previous_.c_str(), 1);
-    } else {
-      unsetenv(name_.c_str());
-    }
-  }
-
-  ScopedEnvironmentVariable(const ScopedEnvironmentVariable&) = delete;
-  ScopedEnvironmentVariable& operator=(const ScopedEnvironmentVariable&) = delete;
-
-private:
-  std::string name_;
-  std::string previous_;
-  bool hadPrevious_ = false;
-};
 
 /// Invokes the macro the way a test case does, then records that control continued past it.
 /// @param unavailableReason Reason string the macro gates on; non-empty exercises the
