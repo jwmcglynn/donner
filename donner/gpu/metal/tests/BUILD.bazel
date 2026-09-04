@@ -20,6 +20,18 @@ donner_cc_library(
     ],
 )
 
+# Drives DONNER_REQUIRE_METAL_DEVICE directly: no Metal device involved, so unlike the three
+# fixtures below this runs on every lane and exercises the missing-device branches deterministically
+# rather than only when a runner has actually lost its device.
+donner_cc_test(
+    name = "metal_device_gate_tests",
+    srcs = ["MetalDeviceGate_tests.cc"],
+    deps = [
+        ":metal_device_gate",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
 # The Metal solid-fill vertical slice: donner::gpu + emitted MSL only (no
 # wgpu-based dependencies, not geode-gated). Metal API validation is enabled
 # so validation issues abort loudly.
@@ -33,6 +45,8 @@ donner_cc_test(
     },
     # Bazel scrubs the test environment, so the automated-lane markers have to be named here or
     # the no-device rule can never see one and this slice keeps skipping into a green report.
+    # MetalDeviceGate_tests.cc checks the macro's own logic without a device; it cannot see this
+    # list, so removing an entry here is a silent regression only review catches.
     env_inherit = [
         "DONNER_BASELINE_REQUIRE_FROZEN_ADAPTER",
         "GITHUB_ACTIONS",
@@ -67,6 +81,8 @@ donner_cc_test(
     },
     # Bazel scrubs the test environment, so the automated-lane markers have to be named here or
     # the no-device rule can never see one and this slice keeps skipping into a green report.
+    # MetalDeviceGate_tests.cc checks the macro's own logic without a device; it cannot see this
+    # list, so removing an entry here is a silent regression only review catches.
     env_inherit = [
         "DONNER_BASELINE_REQUIRE_FROZEN_ADAPTER",
         "GITHUB_ACTIONS",
@@ -96,6 +112,8 @@ donner_cc_test(
     },
     # Bazel scrubs the test environment, so the automated-lane markers have to be named here or
     # the no-device rule can never see one and this slice keeps skipping into a green report.
+    # MetalDeviceGate_tests.cc checks the macro's own logic without a device; it cannot see this
+    # list, so removing an entry here is a silent regression only review catches.
     env_inherit = [
         "DONNER_BASELINE_REQUIRE_FROZEN_ADAPTER",
         "GITHUB_ACTIONS",
