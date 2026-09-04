@@ -95,8 +95,9 @@ TEST(EnvironmentCapabilityGateTests, ADeveloperMachineSkipsAndStopsTheCase) {
   // Intercepted rather than allowed to land, so this case reports its assertions instead of
   // reporting itself as skipped. This is the check that would catch a mutant collapsing the
   // automated-lane branch onto this one: it fails unless the intercepted result is exactly one
-  // kSkip part, so a mutant that skips under the marker too would flip AnAutomatedLaneFailsAndStopsTheCase
-  // instead, and a mutant that fails here too would flip this one.
+  // kSkip part, so a mutant that skips under the marker too would flip
+  // AnAutomatedLaneFailsAndStopsTheCase instead, and a mutant that fails here too would flip this
+  // one.
   testing::TestPartResultArray results;
   {
     const testing::ScopedFakeTestPartResultReporter reporter(
@@ -157,7 +158,8 @@ TEST(EnvironmentCapabilityGateTests, TheMessageNamesTheCapability) {
   EXPECT_THAT(message, Not(HasSubstr("Failing rather than skipping")));
 }
 
-TEST(EnvironmentCapabilityGateTests, TheFailingMessageExplainsWhySkippingWasNotAnOptionAndNamesTheMarker) {
+TEST(EnvironmentCapabilityGateTests,
+     TheFailingMessageExplainsWhySkippingWasNotAnOptionAndNamesTheMarker) {
   const std::string message = MissingEnvironmentCapabilityMessage(
       "the ability to create filesystem symlinks", "permission denied", "GITHUB_ACTIONS",
       MissingEnvironmentCapabilityDisposition::FailClosed);

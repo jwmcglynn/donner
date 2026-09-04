@@ -132,23 +132,23 @@ inline std::string MissingEnvironmentCapabilityMessage(
  * @param capabilityLabel What the capability is, for a reader who sees only the failure or skip
  *   line.
  */
-#define DONNER_REQUIRE_ENVIRONMENT_CAPABILITY(condition, capabilityLabel)                        \
-  do {                                                                                           \
-    const std::string donnerEnvironmentCapabilityReason = (condition);                           \
-    if (!donnerEnvironmentCapabilityReason.empty()) {                                            \
-      const ::donner::tests::MissingEnvironmentCapabilityDisposition                             \
-          donnerEnvironmentCapabilityDisposition =                                               \
-              ::donner::tests::DispositionForMissingEnvironmentCapability(                       \
-                  ::donner::tests::RunningUnderContinuousIntegration());                         \
-      const std::string donnerEnvironmentCapabilityMessage =                                     \
-          ::donner::tests::MissingEnvironmentCapabilityMessage(                                  \
-              (capabilityLabel), donnerEnvironmentCapabilityReason,                               \
-              ::donner::tests::FirstContinuousIntegrationMarkerSet(),                             \
-              donnerEnvironmentCapabilityDisposition);                                            \
-      if (donnerEnvironmentCapabilityDisposition ==                                              \
-          ::donner::tests::MissingEnvironmentCapabilityDisposition::FailClosed) {                \
-        FAIL() << donnerEnvironmentCapabilityMessage;                                            \
-      }                                                                                          \
-      GTEST_SKIP() << donnerEnvironmentCapabilityMessage;                                        \
-    }                                                                                             \
+#define DONNER_REQUIRE_ENVIRONMENT_CAPABILITY(condition, capabilityLabel)         \
+  do {                                                                            \
+    const std::string donnerEnvironmentCapabilityReason = (condition);            \
+    if (!donnerEnvironmentCapabilityReason.empty()) {                             \
+      const ::donner::tests::MissingEnvironmentCapabilityDisposition              \
+          donnerEnvironmentCapabilityDisposition =                                \
+              ::donner::tests::DispositionForMissingEnvironmentCapability(        \
+                  ::donner::tests::RunningUnderContinuousIntegration());          \
+      const std::string donnerEnvironmentCapabilityMessage =                      \
+          ::donner::tests::MissingEnvironmentCapabilityMessage(                   \
+              (capabilityLabel), donnerEnvironmentCapabilityReason,               \
+              ::donner::tests::FirstContinuousIntegrationMarkerSet(),             \
+              donnerEnvironmentCapabilityDisposition);                            \
+      if (donnerEnvironmentCapabilityDisposition ==                               \
+          ::donner::tests::MissingEnvironmentCapabilityDisposition::FailClosed) { \
+        FAIL() << donnerEnvironmentCapabilityMessage;                             \
+      }                                                                           \
+      GTEST_SKIP() << donnerEnvironmentCapabilityMessage;                         \
+    }                                                                             \
   } while (false)
