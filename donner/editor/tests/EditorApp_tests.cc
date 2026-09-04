@@ -2481,13 +2481,11 @@ TEST(EditorAppGroupTest, UngroupAvailabilityReportsEachRejectionReason) {
   auto attrs = app.document().document().querySelector("#attrs");
   ASSERT_TRUE(attrs.has_value());
   app.setSelection(*attrs);
-  EXPECT_EQ(app.ungroupSelectionAvailability().reason,
-            "Remove group attributes before ungrouping");
+  EXPECT_EQ(app.ungroupSelectionAvailability().reason, "Remove group attributes before ungrouping");
 
   // An empty attribute-free group has nothing to ungroup. It carries no id, so
   // it is selected via the document tree rather than a query.
-  ASSERT_TRUE(app.loadFromString(
-      R"svg(<svg xmlns="http://www.w3.org/2000/svg"><g></g></svg>)svg"));
+  ASSERT_TRUE(app.loadFromString(R"svg(<svg xmlns="http://www.w3.org/2000/svg"><g></g></svg>)svg"));
   const auto emptyGroup = app.document().document().svgElement().firstChild();
   ASSERT_TRUE(emptyGroup.has_value());
   ASSERT_EQ(emptyGroup->tryType(), svg::ElementType::G);
