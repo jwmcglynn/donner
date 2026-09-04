@@ -1214,14 +1214,16 @@ gpu::BindGroupLayoutEntry UniformParamsEntry(uint32_t binding) {
                                    gpu::BindingType::UniformBuffer};
 }
 
-/// The bytes of an embedded build-time artifact, as a string view. @param resource Embedded span.
-std::string_view EmbeddedWgsl(std::span<const unsigned char> resource) {
+/// The bytes of an embedded build-time artifact, as a string view.
+/// @param resource Embedded span; the returned view aliases it and must not outlive it.
+std::string_view EmbeddedWgsl(std::span<const unsigned char> resource UTILS_LIFETIME_BOUND) {
   return std::string_view(reinterpret_cast<const char*>(resource.data()), resource.size());
 }
 
-/// The bytes of \p value, for a uniform upload of a host struct. @param value Host-side block.
+/// The bytes of \p value, for a uniform upload of a host struct.
+/// @param value Host-side block; the returned span aliases it and must not outlive it.
 template <typename T>
-std::span<const uint8_t> UniformBytes(const T& value) {
+std::span<const uint8_t> UniformBytes(const T& value UTILS_LIFETIME_BOUND) {
   return std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(&value), sizeof(T));
 }
 
