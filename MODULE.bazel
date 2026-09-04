@@ -162,6 +162,18 @@ bazel_dep(name = "pixelmatch-cpp17", version = "1.0.3", dev_dependency = True)
 # hermetic. A host-installed validator made the check depend on which lane it
 # landed on, and a lane without it validated nothing.
 bazel_dep(name = "spirv_tools", version = "2026.1", dev_dependency = True)
+
+# `spirv-val` uses std::filesystem, which pulls libc++'s operations.cpp into the
+# link, and that object's unversioned `copy_file_range` does not resolve against
+# the hermetic toolchain's sysroot. The patch links the same shim
+# `donner_cc_binary` already injects into our own binaries for this reason.
+single_version_override(
+    module_name = "spirv_tools",
+    patch_strip = 1,
+    patches = ["//third_party/patches:spirv-tools-spirv-val-libc-compat.patch"],
+    version = "2026.1",
+)
+
 bazel_dep(name = "aspect_rules_js", version = "2.1.2", dev_dependency = True)
 bazel_dep(name = "rules_playwright", version = "0.5.3", dev_dependency = True)
 
