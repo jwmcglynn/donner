@@ -305,6 +305,7 @@ donner_cc_test(
     # self-hosted RE lane (CI baseline, 2026-07-01).
     shard_count = 4,
     deps = [
+        "//donner/base:base_test_utils",
         "//donner/svg",
         "//donner/svg/parser",
         "//donner/svg/renderer",

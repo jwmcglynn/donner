@@ -21,7 +21,6 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
-#include <fstream>
 #include <memory>
 #include <sstream>
 #include <string>
@@ -29,6 +28,7 @@
 
 #include "donner/base/ParseWarningSink.h"
 #include "donner/base/Vector2.h"
+#include "donner/base/tests/RunfileGate.h"
 #include "donner/svg/SVGDocument.h"
 #include "donner/svg/parser/SVGParser.h"
 #include "donner/svg/renderer/RendererGeode.h"
@@ -116,18 +116,6 @@ void printCounters(const char* label, const geode::GeodeCounters& c) {
                label, c.pathEncodes, c.bufferCreates, c.bindgroupCreates, c.textureCreates,
                c.submits, c.drawCalls, c.pipelineSwitches, c.sameSourceDrawPairs, c.bufferWrites,
                c.bufferWriteBytes, c.textureWriteBytes);
-}
-
-/// Read a file from disk. Returns the empty string on any I/O error -
-/// callers treat that as "fixture not available" and skip.
-std::string readFile(const std::string& path) {
-  std::ifstream f(path);
-  if (!f) {
-    return {};
-  }
-  std::ostringstream ss;
-  ss << f.rdbuf();
-  return ss.str();
 }
 
 /// Fully render `svgSource` through a RendererGeode backed by a shared
@@ -384,20 +372,16 @@ TEST_F(GeodePerfTest, GaussianBlur_UsesSingleFrameSubmission) {
 
 // ---------------------------------------------------------------------------
 // Fixture: lion.svg - the workhorse SVG used across Donner test suites.
-// Skipped gracefully if the file is not bundled (e.g. unit test run without
-// testdata deps).
 // ---------------------------------------------------------------------------
 
 TEST_F(GeodePerfTest, Lion_BaselineCeilings) {
   auto device = sharedDevice();
   ASSERT_TRUE(device) << "GeodeDevice::CreateHeadless failed";
 
-  const std::string svg = readFile("donner/svg/renderer/testdata/lion.svg");
-  if (svg.empty()) {
-    GTEST_SKIP() << "testdata/lion.svg not readable - ensure the test target "
-                 << "has testdata as a data dep.";
-    return;
-  }
+  const donner::tests::RequiredRunfile svgFile =
+      donner::tests::ReadRequiredRunfile("donner/svg/renderer/testdata/lion.svg");
+  DONNER_REQUIRE_RUNFILE(svgFile);
+  const std::string& svg = svgFile.contents;
 
   geode::GeodeCounters c = renderAndGetCounters(svg, device);
 
@@ -644,12 +628,10 @@ TEST_F(GeodePerfTest, Lion_NoDirtyPath_ZeroEncodes) {
   auto device = sharedDevice();
   ASSERT_TRUE(device) << "GeodeDevice::CreateHeadless failed";
 
-  const std::string svg = readFile("donner/svg/renderer/testdata/lion.svg");
-  if (svg.empty()) {
-    GTEST_SKIP() << "testdata/lion.svg not readable - ensure the test target "
-                 << "has testdata as a data dep.";
-    return;
-  }
+  const donner::tests::RequiredRunfile svgFile =
+      donner::tests::ReadRequiredRunfile("donner/svg/renderer/testdata/lion.svg");
+  DONNER_REQUIRE_RUNFILE(svgFile);
+  const std::string& svg = svgFile.contents;
 
   const geode::GeodeCounters c = countersForSecondRender(svg, device);
   printCounters("Lion_NoDirtyPath_ZeroEncodes (frame2)", c);
@@ -684,12 +666,10 @@ TEST_F(GeodePerfTest, GhostscriptTiger_NoDirtyPath_ZeroEncodes) {
   auto device = sharedDevice();
   ASSERT_TRUE(device) << "GeodeDevice::CreateHeadless failed";
 
-  const std::string svg = readFile("donner/svg/renderer/testdata/Ghostscript_Tiger.svg");
-  if (svg.empty()) {
-    GTEST_SKIP() << "testdata/Ghostscript_Tiger.svg not readable - ensure the "
-                 << "test target has testdata as a data dep.";
-    return;
-  }
+  const donner::tests::RequiredRunfile svgFile =
+      donner::tests::ReadRequiredRunfile("donner/svg/renderer/testdata/Ghostscript_Tiger.svg");
+  DONNER_REQUIRE_RUNFILE(svgFile);
+  const std::string& svg = svgFile.contents;
 
   const geode::GeodeCounters c = countersForSecondRender(svg, device);
   printCounters("GhostscriptTiger_NoDirtyPath_ZeroEncodes (frame2)", c);
@@ -817,11 +797,10 @@ TEST_F(GeodePerfTest, Lion_NoDirtyPath_ZeroTextures) {
   auto device = sharedDevice();
   ASSERT_TRUE(device) << "GeodeDevice::CreateHeadless failed";
 
-  const std::string svg = readFile("donner/svg/renderer/testdata/lion.svg");
-  if (svg.empty()) {
-    GTEST_SKIP() << "testdata/lion.svg not readable.";
-    return;
-  }
+  const donner::tests::RequiredRunfile svgFile =
+      donner::tests::ReadRequiredRunfile("donner/svg/renderer/testdata/lion.svg");
+  DONNER_REQUIRE_RUNFILE(svgFile);
+  const std::string& svg = svgFile.contents;
 
   const geode::GeodeCounters c = countersForSecondRender(svg, device);
   printCounters("Lion_NoDirtyPath_ZeroTextures (frame2)", c);
@@ -833,11 +812,10 @@ TEST_F(GeodePerfTest, GhostscriptTiger_NoDirtyPath_ZeroTextures) {
   auto device = sharedDevice();
   ASSERT_TRUE(device) << "GeodeDevice::CreateHeadless failed";
 
-  const std::string svg = readFile("donner/svg/renderer/testdata/Ghostscript_Tiger.svg");
-  if (svg.empty()) {
-    GTEST_SKIP() << "testdata/Ghostscript_Tiger.svg not readable.";
-    return;
-  }
+  const donner::tests::RequiredRunfile svgFile =
+      donner::tests::ReadRequiredRunfile("donner/svg/renderer/testdata/Ghostscript_Tiger.svg");
+  DONNER_REQUIRE_RUNFILE(svgFile);
+  const std::string& svg = svgFile.contents;
 
   const geode::GeodeCounters c = countersForSecondRender(svg, device);
   printCounters("GhostscriptTiger_NoDirtyPath_ZeroTextures (frame2)", c);
