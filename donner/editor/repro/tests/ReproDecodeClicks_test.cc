@@ -73,6 +73,11 @@ TEST(ReproDecodeClicks, MapClicksToDocumentElements) {
   const char* kReproPath = "/tmp/clouds_bug.donner-repro";
   const char* kSvgPath = "donner_splash.svg";
 
+  // The SVG is declared in `data`, so require it before the optional recording check can end the
+  // case. Gating it later would let a removed or misdeclared entry ride out as a green skip.
+  const donner::tests::RequiredRunfile svgFile = donner::tests::ReadRequiredRunfile(kSvgPath);
+  DONNER_REQUIRE_RUNFILE(svgFile);
+
   // The recording is a developer artifact under /tmp, not something the target carries in `data`,
   // so its absence stays a skip.
   auto file = ReadReproFile(kReproPath);
@@ -94,9 +99,7 @@ TEST(ReproDecodeClicks, MapClicksToDocumentElements) {
   std::fprintf(stderr, "[decode] render pane: origin=(%.1f, %.1f) size=(%.1f, %.1f)\n",
                layout.origin.x, layout.origin.y, layout.size.x, layout.size.y);
 
-  // Load the SVG the user was editing.
-  const donner::tests::RequiredRunfile svgFile = donner::tests::ReadRequiredRunfile(kSvgPath);
-  DONNER_REQUIRE_RUNFILE(svgFile);
+  // Parse the SVG the user was editing.
   const std::string& svgSource = svgFile.contents;
   ParseWarningSink sink;
   auto parseResult = svg::parser::SVGParser::ParseSVG(svgSource, sink);

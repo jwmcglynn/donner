@@ -2040,6 +2040,12 @@ TEST(EditorWindowTest, WgpuPresentsZoomedCompositedBlurredLayerWithoutDarkening)
 }
 
 TEST(EditorWindowTest, WgpuPresentsZoomedDonnerSplashFilteredLayerWithoutDarkening) {
+  // Required before the device check: a host without WebGPU still has the runfiles tree, so a
+  // removed or misdeclared entry must not ride out as a green skip on that host.
+  const donner::tests::RequiredRunfile splashFile =
+      donner::tests::ReadRequiredRunfile("donner_splash.svg");
+  DONNER_REQUIRE_RUNFILE(splashFile);
+
   EditorWindow window(EditorWindowOptions{
       .title = "Zoomed Donner Splash Premultiplied WGPU Presentation Test",
       .initialWidth = 760,
@@ -2052,9 +2058,6 @@ TEST(EditorWindowTest, WgpuPresentsZoomedDonnerSplashFilteredLayerWithoutDarkeni
     GTEST_SKIP() << "WebGPU editor window is unavailable on this host";
   }
 
-  const donner::tests::RequiredRunfile splashFile =
-      donner::tests::ReadRequiredRunfile("donner_splash.svg");
-  DONNER_REQUIRE_RUNFILE(splashFile);
   std::optional<svg::SVGDocument> document = ParseDonnerSplashDocument(splashFile.contents);
   ASSERT_TRUE(document.has_value());
 
