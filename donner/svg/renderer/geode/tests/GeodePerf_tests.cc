@@ -358,6 +358,95 @@ TEST_F(GeodePerfTest, MorphologyHugeRadiusIsBoundedBeforeEncoding) {
   EXPECT_LE(c.submits, 3u);
 }
 
+/// Inline fixtures: the same document with one and with three `feFlood` primitives, so the
+/// per-flood cost can be read off as a difference and the rest of the scene cancels.
+constexpr std::string_view kOneFloodSvg = R"SVG(
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <filter id="f"><feFlood flood-color="red"/></filter>
+  <rect x="10" y="10" width="80" height="80" fill="green" filter="url(#f)"/>
+</svg>
+)SVG";
+
+constexpr std::string_view kThreeFloodSvg = R"SVG(
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <filter id="f">
+    <feFlood flood-color="red"/><feFlood flood-color="blue"/><feFlood flood-color="lime"/>
+  </filter>
+  <rect x="10" y="10" width="80" height="80" fill="green" filter="url(#f)"/>
+</svg>
+)SVG";
+
+/// A filter pass recorded through the GPU runtime must report its bind group once.
+///
+/// The runtime counts the bind group it creates, so the arena counting the same one again reports
+/// every migrated pass as building two and walks the steady-state ceilings up by the number of
+/// migrated passes in the scene.
+TEST_F(GeodePerfTest, MigratedFilterPassesCountTheirBindGroupsOnce) {
+  auto device = sharedDevice();
+  ASSERT_TRUE(device) << "GeodeDevice::CreateHeadless failed";
+
+  // One for the flood pass itself and one for the subregion clip that follows it.
+  constexpr uint64_t kBindGroupsPerFloodNode = 2;
+  constexpr uint64_t kAddedFloodNodes = 2;
+
+  const geode::GeodeCounters one = renderAndGetCounters(kOneFloodSvg, device);
+  const geode::GeodeCounters three = renderAndGetCounters(kThreeFloodSvg, device);
+  printCounters("OneFlood", one);
+  printCounters("ThreeFlood", three);
+
+  EXPECT_EQ(three.bindgroupCreates - one.bindgroupCreates,
+            kAddedFloodNodes * kBindGroupsPerFloodNode)
+      << "two more feFlood nodes must report two more bind groups each, not three";
+}
+
+/// Inline fixtures: the same document with one and with eight `feColorMatrix` primitives. Every
+/// one of them is a pass recorded through the GPU runtime, so the difference between the two is
+/// what a migrated pass costs per frame.
+constexpr std::string_view kOneColorMatrixSvg = R"SVG(
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <filter id="f"><feColorMatrix type="saturate" values="0.3"/></filter>
+  <rect x="10" y="10" width="80" height="80" fill="orange" filter="url(#f)"/>
+</svg>
+)SVG";
+
+constexpr std::string_view kEightColorMatrixSvg = R"SVG(
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <filter id="f">
+    <feColorMatrix type="saturate" values="0.3"/><feColorMatrix type="saturate" values="0.4"/>
+    <feColorMatrix type="saturate" values="0.5"/><feColorMatrix type="saturate" values="0.6"/>
+    <feColorMatrix type="saturate" values="0.7"/><feColorMatrix type="saturate" values="0.8"/>
+    <feColorMatrix type="saturate" values="0.9"/><feColorMatrix type="saturate" values="0.2"/>
+  </filter>
+  <rect x="10" y="10" width="80" height="80" fill="orange" filter="url(#f)"/>
+</svg>
+)SVG";
+
+/// Buffer creations on a repeat render of \p svgSource, on a device of its own so the first frame
+/// absorbs everything the pools allocate once.
+/// @param svgSource Document to render twice.
+uint64_t steadyStateBufferCreates(std::string_view svgSource) {
+  std::shared_ptr<geode::GeodeDevice> device(geode::GeodeDevice::CreateHeadless());
+  if (!device) {
+    ADD_FAILURE() << "GeodeDevice::CreateHeadless failed";
+    return 0;
+  }
+  (void)renderAndGetCounters(svgSource, device);
+  return renderAndGetCounters(svgSource, device).bufferCreates;
+}
+
+/// A frame's cost in buffer allocations must not scale with the number of migrated filter passes.
+///
+/// The passes recorded through the GPU runtime cannot bind the backend uniform scratch the
+/// unmigrated ones bump-allocate from. Bringing a buffer per pass instead puts an allocation on
+/// every filter primitive of every frame, which is the cost the scratch exists to avoid.
+TEST_F(GeodePerfTest, MigratedFilterPassesShareOneUniformScratch) {
+  const uint64_t one = steadyStateBufferCreates(kOneColorMatrixSvg);
+  const uint64_t eight = steadyStateBufferCreates(kEightColorMatrixSvg);
+
+  EXPECT_EQ(eight, one) << "seven more feColorMatrix primitives must not cost a buffer each on a "
+                           "repeat render";
+}
+
 TEST_F(GeodePerfTest, MultipleBoundedMorphologyNodesStillChunkCommandBuffers) {
   auto device = sharedDevice();
   ASSERT_TRUE(device);

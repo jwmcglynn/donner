@@ -2,34 +2,163 @@
 
 #include <algorithm>
 #include <cmath>
+#include <deque>
 #include <iostream>
 #include <limits>
 #include <mutex>
 #include <numbers>
+#include <span>
+#include <string_view>
 #include <unordered_map>
 #include <utility>
 #include <variant>
 #include <vector>
 
+#include "donner/base/Utils.h"
+#include "donner/gpu/CommandEncoder.h"
+#include "donner/gpu/shader/programs/FilterColorMatrixBindings.h"
+#include "donner/gpu/shader/programs/FloodBindings.h"
+#include "donner/gpu/shader/programs/SubregionClipBindings.h"
 #include "donner/svg/components/filter/FilterGraph.h"
 #include "donner/svg/renderer/PixelFormatUtils.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
+#include "donner/svg/renderer/geode/GeodeGpuContext.h"
 #include "donner/svg/renderer/geode/GeodeShaders.h"
 #include "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h"
 #include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
+#include "embed_resources/FilterColorMatrixWgsl.h"
+#include "embed_resources/FloodWgsl.h"
+#include "embed_resources/SubregionClipWgsl.h"
 
 namespace donner::geode {
 
+/// Persistent per-frame uniform scratch.
+///
+/// Every filter primitive pass used to allocate its own uniform buffer each
+/// frame. The scratch buffer gives each pass a stable 256-aligned (buffer,
+/// offset) uniform slot, and the cursor resets at
+/// `GeodeFilterEngine::beginFrame()`. If the scratch must grow mid-frame,
+/// the old buffer is deferred for destruction (drained at the next frame
+/// boundary, after submission). Pass bind groups are still created per
+/// pass: the pooled textures that a pass binds rotate across frames, so
+/// texture-identity keys are not stable enough to cache.
+struct FilterResourceCache {
+  std::mutex mutex;
+
+  /// Growable uniform scratch buffer.
+  ScopedWgpuHandle<wgpu::Buffer> uniformScratch;
+  uint64_t uniformScratchSize = 0;
+  /// Bump cursor inside the scratch; reset each frame.
+  uint64_t uniformCursor = 0;
+
+  /// One uniform slot inside the scratch, aligned to \ref kUniformOffsetAlignment.
+  struct UniformSlot {
+    wgpu::Buffer buffer;
+    uint64_t offset;
+  };
+
+  UniformSlot acquireUniformSlot(GeodeDevice& device, size_t size) {
+    std::lock_guard<std::mutex> lock(mutex);
+    const uint64_t aligned = (static_cast<uint64_t>(size) + kUniformOffsetAlignment - 1u) &
+                             ~(kUniformOffsetAlignment - 1u);
+    if (!uniformScratch || uniformCursor + aligned > uniformScratchSize) {
+      uint64_t newSize = std::max<uint64_t>(uniformScratchSize * 2u, 64u * 1024u);
+      while (newSize < aligned) {
+        newSize *= 2u;
+      }
+      wgpu::BufferDescriptor desc = {};
+      desc.label = wgpuLabel("FilterUniformScratch");
+      desc.size = newSize;
+      desc.usage = wgpu::BufferUsage::Uniform | wgpu::BufferUsage::CopyDst;
+      if (uniformScratch) {
+        // The old buffer may still be referenced by this frame's command
+        // encoder, and every cached bind group references it. Defer its
+        // destruction (drained at the next beginFrame, after submission)
+        // and drop the cache.
+        device.deferDestroy(uniformScratch.take());
+      }
+      uniformScratch.reset(device.device().createBuffer(desc));
+      device.countBuffer();
+      uniformScratchSize = newSize;
+      uniformCursor = 0;
+    }
+    UniformSlot slot{uniformScratch.get(), uniformCursor};
+    uniformCursor += aligned;
+    return slot;
+  }
+
+  /// One uniform slot inside the runtime-side scratch, aligned to \ref kUniformOffsetAlignment.
+  struct RuntimeUniformSlot {
+    const gpu::Buffer* buffer = nullptr;  //!< Scratch buffer the slot lives in; null on failure.
+    uint64_t offset = 0;                  //!< Byte offset of the slot.
+  };
+
+  /**
+   * Bump-allocates a slot from the runtime-side uniform scratch, growing it when the frame's
+   * passes outrun the current buffer.
+   *
+   * Growth appends a buffer rather than replacing one, so a slot already handed out stays valid
+   * for the rest of the frame: a bind group naming a replaced buffer would go stale the moment
+   * the handle it names is released.
+   *
+   * @param device Device the scratch is allocated on.
+   * @param size Bytes the caller needs.
+   */
+  RuntimeUniformSlot acquireRuntimeUniformSlot(GeodeDevice& device, size_t size) {
+    std::lock_guard<std::mutex> lock(mutex);
+    const uint64_t aligned = (static_cast<uint64_t>(size) + kUniformOffsetAlignment - 1u) &
+                             ~(kUniformOffsetAlignment - 1u);
+    if (runtimeScratch.empty() || runtimeCursor + aligned > runtimeScratchSize) {
+      uint64_t newSize = std::max<uint64_t>(runtimeScratchSize * 2u, 64u * 1024u);
+      while (newSize < aligned) {
+        newSize *= 2u;
+      }
+      gpu::Result<gpu::Buffer> buffer = device.adapterDevice().createBuffer(
+          gpu::BufferDescriptor{"FilterRuntimeUniformScratch", newSize,
+                                gpu::BufferUsage::Uniform | gpu::BufferUsage::CopyDst});
+      if (!buffer.hasResult()) {
+        return {};
+      }
+      // No count here: the runtime counts the buffer it creates.
+      runtimeScratch.push_back(std::move(buffer).result());
+      runtimeScratchSize = newSize;
+      runtimeCursor = 0;
+    }
+    RuntimeUniformSlot slot{&runtimeScratch.back(), runtimeCursor};
+    runtimeCursor += aligned;
+    return slot;
+  }
+
+  void beginFrame() {
+    std::lock_guard<std::mutex> lock(mutex);
+    uniformCursor = 0;
+    runtimeCursor = 0;
+    // Only the newest scratch is kept: it is the largest, and the frame that outgrew the smaller
+    // ones has been submitted, so releasing them here cannot strand recorded work.
+    while (runtimeScratch.size() > 1) {
+      runtimeScratch.pop_front();
+    }
+  }
+
+  /// Runtime-side uniform scratch; the back element is the live one (see
+  /// \ref acquireRuntimeUniformSlot).
+  std::deque<gpu::Buffer> runtimeScratch;
+  uint64_t runtimeScratchSize = 0;
+  uint64_t runtimeCursor = 0;
+};
+
 struct FilterResourceArena {
   FilterResourceArena(GeodeDevice& device, FilterTextureAllocator& textureAllocator,
+                      FilterResourceCache& resourceCache,
                       ScopedWgpuHandle<wgpu::CommandEncoder>& commandEncoder,
                       size_t& passesInCommandBuffer)
       : device_(device),
         textureAllocator_(textureAllocator),
+        resourceCache_(resourceCache),
         encoderSlot_(&commandEncoder),
         passesInCommandBuffer_(passesInCommandBuffer) {}
   ~FilterResourceArena() {
-    for (ScopedWgpuHandle<wgpu::Buffer>& buffer : buffers_) {
+    for (ScopedWgpuHandle<wgpu::Buffer>& buffer : backendBuffers_) {
       device_.deferDestroy(buffer.take());
     }
     for (auto& owned : textures_) {
@@ -41,6 +170,25 @@ struct FilterResourceArena {
   FilterResourceArena& operator=(const FilterResourceArena&) = delete;
 
   /// Takes a filter intermediate from the renderer's pool, owned by this arena until the frame
+  /// ends. Null when the pool refuses the allocation.
+  ///
+  /// The returned reference names storage this arena keeps for its whole lifetime, so a caller
+  /// may hold it across further allocations.
+  /// @param desc Descriptor the intermediate is allocated with.
+  const gpu::Texture* createRuntimeTexture(const gpu::TextureDescriptor& desc) {
+    gpu::Texture texture = textureAllocator_.acquireFilterTexture(desc);
+    if (!texture.isValid()) {
+      return nullptr;
+    }
+
+    textures_.push_back({std::move(texture), desc});
+    const gpu::Texture* result = &textures_.back().texture;
+    runtimeNameByBackendTexture_.emplace_back(
+        static_cast<WGPUTexture>(device_.adapterDevice().wgpuTextureOf(*result)), result);
+    return result;
+  }
+
+  /// Takes a filter intermediate from the renderer's pool, owned by this arena until the frame
   /// ends.
   ///
   /// The arena's currency with the renderer is the runtime handle, which is what the pool
@@ -49,14 +197,150 @@ struct FilterResourceArena {
   /// owns.
   /// @param desc Descriptor the intermediate is allocated with.
   wgpu::Texture createTexture(const gpu::TextureDescriptor& desc) {
-    gpu::Texture texture = textureAllocator_.acquireFilterTexture(desc);
-    if (!texture.isValid()) {
+    const gpu::Texture* texture = createRuntimeTexture(desc);
+    if (texture == nullptr) {
       return {};
     }
+    return device_.adapterDevice().wgpuTextureOf(*texture);
+  }
 
-    wgpu::Texture result = device_.adapterDevice().wgpuTextureOf(texture);
-    textures_.push_back({std::move(texture), desc});
+  /// Names \p texture for the runtime so a pass can bind it, owned by this arena until the frame
+  /// ends. Null when the runtime refuses the handle.
+  ///
+  /// The engine threads intermediates between passes as backend textures, so a pass recorded
+  /// through the runtime has to name its source rather than allocate it. The runtime borrows: the
+  /// texture is still owned by whoever allocated it.
+  /// @param texture Backend texture to name.
+  const gpu::Texture* importRuntimeTexture(const wgpu::Texture& texture) {
+    // One runtime name per backend texture: a filter graph feeds the same intermediate to several
+    // passes, and an intermediate this arena allocated already has a name, so importing would give
+    // one texture two live slots.
+    const WGPUTexture key = static_cast<WGPUTexture>(texture);
+    for (const auto& [backend, named] : runtimeNameByBackendTexture_) {
+      if (backend == key) {
+        return named;
+      }
+    }
+
+    gpu::Result<gpu::Texture> imported = device_.adapterDevice().importExternalTexture(
+        texture, gpu::Extent2d{texture.getWidth(), texture.getHeight()},
+        GpuTextureFormatFromWgpu(texture.getFormat()), GpuTextureUsageFromWgpu(texture.getUsage()));
+    if (!imported.hasResult()) {
+      return nullptr;
+    }
+    importedTextures_.push_back(std::move(imported).result());
+    const gpu::Texture* result = &importedTextures_.back();
+    runtimeNameByBackendTexture_.emplace_back(key, result);
     return result;
+  }
+
+  /// A whole-texture view of \p texture, owned by this arena until the frame ends. Null when the
+  /// runtime refuses it.
+  /// @param texture Live runtime texture. @param label Debug label for the view.
+  const gpu::TextureView* createRuntimeTextureView(const gpu::Texture& texture, RcString label) {
+    // One view per named texture per frame, for the same reason the names themselves are reused.
+    for (const auto& [named, view] : viewByTexture_) {
+      if (named == &texture) {
+        return view;
+      }
+    }
+
+    gpu::Result<gpu::TextureView> view = device_.adapterDevice().createTextureView(
+        texture, gpu::TextureViewDescriptor{std::move(label)});
+    if (!view.hasResult()) {
+      return nullptr;
+    }
+    textureViews_.push_back(std::move(view).result());
+    const gpu::TextureView* result = &textureViews_.back();
+    viewByTexture_.emplace_back(&texture, result);
+    return result;
+  }
+
+  /// A uniform slot holding \p data, taken from the frame's runtime-side scratch. Null buffer when
+  /// the scratch cannot be grown or the upload fails.
+  ///
+  /// A pass cannot share the scratch the unmigrated passes bump-allocate from, because the runtime
+  /// cannot bind a backend buffer. It shares the runtime one instead: a buffer per pass would put
+  /// an allocation on every filter primitive of every frame.
+  /// @param data Bytes to upload.
+  FilterResourceCache::RuntimeUniformSlot writeRuntimeUniformSlot(std::span<const uint8_t> data) {
+    const FilterResourceCache::RuntimeUniformSlot slot =
+        resourceCache_.acquireRuntimeUniformSlot(device_, data.size());
+    if (slot.buffer == nullptr ||
+        device_.adapterDevice().writeBuffer(*slot.buffer, slot.offset, data).hasError()) {
+      return {};
+    }
+    return slot;
+  }
+
+  /// A bind group over \p entries, owned by this arena until the frame ends. Null when the
+  /// runtime refuses it.
+  /// @param layout Layout the entries must match. @param entries Bound resources.
+  /// @param label Debug label for the bind group.
+  const gpu::BindGroup* createRuntimeBindGroup(const gpu::BindGroupLayout& layout,
+                                               std::vector<gpu::BindGroupEntry> entries,
+                                               RcString label) {
+    gpu::Result<gpu::BindGroup> bindGroup = device_.adapterDevice().createBindGroup(
+        gpu::BindGroupDescriptor{std::move(label), layout, std::move(entries)});
+    if (!bindGroup.hasResult()) {
+      return nullptr;
+    }
+    // No count here: the runtime counts the bind group it creates, and counting again would
+    // report every migrated pass as building two.
+    bindGroups_.push_back(std::move(bindGroup).result());
+    return &bindGroups_.back();
+  }
+
+  /// Records one compute dispatch through the runtime and replays it into the encoder the next
+  /// pass belongs in, keeping it in order with the passes recorded there directly.
+  ///
+  /// @param label Debug label for the pass.
+  /// @param pipeline Compute pipeline to dispatch.
+  /// @param bindGroup Bind group for group 0.
+  /// @param workgroupsX Workgroup count along x. @param workgroupsY Workgroup count along y.
+  [[nodiscard]] bool dispatchComputePass(RcString label, const gpu::ComputePipeline& pipeline,
+                                         const gpu::BindGroup& bindGroup, uint32_t workgroupsX,
+                                         uint32_t workgroupsY) {
+    // Counting the pass here, before anything is recorded, is what keeps a runtime pass under the
+    // same command-buffer bound as the wgpu ones and re-points the runtime when that bound splits
+    // the encoder.
+    (void)commandEncoder();
+
+    // The submit below replays into the installed host encoder, and this pass belongs in the
+    // arena's own. A foreign one would put it in a command buffer nothing here submits, and no
+    // host encoder at all would send it to the queue ahead of the passes recorded here before it.
+    UTILS_RELEASE_ASSERT_MSG(
+        *encoderSlot_ && device_.adapterDevice().hostCommandEncoderIs(encoderSlot_->get()),
+        "filter pass replayed into a command encoder the arena does not own");
+
+    gpu::Result<std::unique_ptr<gpu::CommandEncoder>> encoder =
+        device_.adapterDevice().createCommandEncoder();
+    if (!encoder.hasResult()) {
+      return false;
+    }
+    gpu::CommandEncoder& commands = *encoder.result();
+
+    gpu::Result<gpu::ComputePassEncoder*> pass =
+        commands.beginComputePass(gpu::ComputePassDescriptor{std::move(label)});
+    if (!pass.hasResult()) {
+      return false;
+    }
+    gpu::ComputePassEncoder& computePass = *pass.result();
+    if (computePass.setPipeline(pipeline).hasError() ||
+        computePass.setBindGroup(0, bindGroup).hasError() ||
+        computePass.dispatchWorkgroups(workgroupsX, workgroupsY, 1).hasError() ||
+        computePass.end().hasError()) {
+      return false;
+    }
+
+    gpu::Result<gpu::CommandBuffer> commandBuffer = commands.finish();
+    if (!commandBuffer.hasResult()) {
+      return false;
+    }
+    // Submitting here is what replays the pass: with a host encoder installed the runtime records
+    // into it rather than reaching the queue, so the pass lands at this point in the frame's
+    // command buffer instead of ahead of everything recorded before it.
+    return !device_.adapterDevice().submit(std::move(commandBuffer).result()).hasError();
   }
 
   wgpu::Buffer createBuffer(const wgpu::Device& device, const wgpu::BufferDescriptor& desc) {
@@ -67,7 +351,7 @@ struct FilterResourceArena {
 
     device_.countBuffer();
     wgpu::Buffer result = buffer.get();
-    buffers_.push_back(std::move(buffer));
+    backendBuffers_.push_back(std::move(buffer));
     return result;
   }
 
@@ -107,11 +391,29 @@ struct FilterResourceArena {
     if (!*encoderSlot_) {
       return;
     }
+    // Identity, not "some host encoder is installed": the report and the re-point below describe
+    // this encoder, and claiming them for one the runtime is not replaying into would retire work
+    // that has not reached the queue.
+    const bool replayingIntoThisEncoder =
+        device_.adapterDevice().hostCommandEncoderIs(encoderSlot_->get());
     {
       ScopedWgpuHandle<wgpu::CommandBuffer> cmd(encoderSlot_->get().finish());
       if (cmd) {
         device_.queue().submit(1, &cmd.get());
         device_.countSubmit();
+        if (replayingIntoThisEncoder) {
+          // The runtime holds completion of anything it replayed into this encoder until the
+          // submit of the buffer finished from it is reported, and this is that submit. Reporting
+          // it anywhere later would either retire the replayed work before it reached the queue or
+          // strand it as never complete.
+          device_.adapterDevice().notifyHostSubmitted();
+        }
+      } else {
+        // Nothing recorded into this encoder can reach the queue now, so the frame's output is
+        // undefined and the pending serials must not be reported as submitted. Declaring the loss
+        // is what makes that observable and what stops later waits, rather than continuing as if
+        // the chunk had been submitted.
+        device_.markDeviceLost("filter chunk command encoder could not be finished");
       }
     }
     // A chunk boundary is a cross-submit edge inside one filter graph: pass
@@ -134,6 +436,9 @@ struct FilterResourceArena {
     wgpu::CommandEncoderDescriptor desc = {};
     desc.label = wgpuLabel("GeodeFilterChunkCE");
     encoderSlot_->reset(device_.device().createCommandEncoder(desc));
+    if (replayingIntoThisEncoder) {
+      device_.adapterDevice().setHostCommandEncoder(encoderSlot_->get());
+    }
   }
 
 private:
@@ -144,72 +449,21 @@ private:
 
   GeodeDevice& device_;
   FilterTextureAllocator& textureAllocator_;
+  FilterResourceCache& resourceCache_;
   ScopedWgpuHandle<wgpu::CommandEncoder>* encoderSlot_;
   /// Engine-owned frame-scoped pass count (see kMaxPassesPerCommandBuffer).
   size_t& passesInCommandBuffer_;
-  std::vector<OwnedTexture> textures_;
-  std::vector<ScopedWgpuHandle<wgpu::Buffer>> buffers_;
-};
-
-/// Persistent per-frame uniform scratch.
-///
-/// Every filter primitive pass used to allocate its own uniform buffer each
-/// frame. The scratch buffer gives each pass a stable 256-aligned (buffer,
-/// offset) uniform slot, and the cursor resets at
-/// `GeodeFilterEngine::beginFrame()`. If the scratch must grow mid-frame,
-/// the old buffer is deferred for destruction (drained at the next frame
-/// boundary, after submission). Pass bind groups are still created per
-/// pass: the pooled textures that a pass binds rotate across frames, so
-/// texture-identity keys are not stable enough to cache.
-struct FilterResourceCache {
-  std::mutex mutex;
-
-  /// Growable uniform scratch buffer.
-  ScopedWgpuHandle<wgpu::Buffer> uniformScratch;
-  uint64_t uniformScratchSize = 0;
-  /// Bump cursor inside the scratch; reset each frame.
-  uint64_t uniformCursor = 0;
-
-  /// One 256-aligned uniform slot inside the scratch.
-  struct UniformSlot {
-    wgpu::Buffer buffer;
-    uint64_t offset;
-  };
-
-  UniformSlot acquireUniformSlot(GeodeDevice& device, size_t size) {
-    std::lock_guard<std::mutex> lock(mutex);
-    constexpr uint64_t kAlignment = 256;
-    const uint64_t aligned = (static_cast<uint64_t>(size) + kAlignment - 1u) & ~(kAlignment - 1u);
-    if (!uniformScratch || uniformCursor + aligned > uniformScratchSize) {
-      uint64_t newSize = std::max<uint64_t>(uniformScratchSize * 2u, 64u * 1024u);
-      while (newSize < aligned) {
-        newSize *= 2u;
-      }
-      wgpu::BufferDescriptor desc = {};
-      desc.label = wgpuLabel("FilterUniformScratch");
-      desc.size = newSize;
-      desc.usage = wgpu::BufferUsage::Uniform | wgpu::BufferUsage::CopyDst;
-      if (uniformScratch) {
-        // The old buffer may still be referenced by this frame's command
-        // encoder, and every cached bind group references it. Defer its
-        // destruction (drained at the next beginFrame, after submission)
-        // and drop the cache.
-        device.deferDestroy(uniformScratch.take());
-      }
-      uniformScratch.reset(device.device().createBuffer(desc));
-      device.countBuffer();
-      uniformScratchSize = newSize;
-      uniformCursor = 0;
-    }
-    UniformSlot slot{uniformScratch.get(), uniformCursor};
-    uniformCursor += aligned;
-    return slot;
-  }
-
-  void beginFrame() {
-    std::lock_guard<std::mutex> lock(mutex);
-    uniformCursor = 0;
-  }
+  /// Deques rather than vectors: the accessors above hand out references into these, and a
+  /// vector would move them on growth.
+  std::deque<OwnedTexture> textures_;
+  std::deque<gpu::Texture> importedTextures_;
+  std::deque<gpu::TextureView> textureViews_;
+  std::deque<gpu::BindGroup> bindGroups_;
+  /// Flat rather than hashed: a filter graph names a handful of textures, so a linear scan is
+  /// both smaller and faster than a hash table over that many entries.
+  std::vector<std::pair<WGPUTexture, const gpu::Texture*>> runtimeNameByBackendTexture_;
+  std::vector<std::pair<const gpu::Texture*, const gpu::TextureView*>> viewByTexture_;
+  std::vector<ScopedWgpuHandle<wgpu::Buffer>> backendBuffers_;
 };
 
 namespace {
@@ -315,10 +569,10 @@ struct OffsetParams {
   uint32_t pad;
 };
 
-/// Uniform buffer layout matching the WGSL `ColorMatrixParams` struct.
+/// Uniform buffer layout mirroring the shader program's `FilterColorMatrixParams` struct.
 /// 4x5 matrix stored as 5 column vectors (each vec4f = one column across
 /// R'/G'/B'/A' rows).
-struct ColorMatrixParams {
+struct FilterColorMatrixParams {
   float col0[4];  // multipliers for R input
   float col1[4];  // multipliers for G input
   float col2[4];  // multipliers for B input
@@ -592,20 +846,21 @@ struct TileParams {
   int32_t srcH;
 };
 
-/// Uniform buffer layout matching the WGSL `SubregionClipParams` struct.
+/// Uniform buffer layout mirroring the shader program's `SubregionClipParams` struct: the inverse
+/// transform that maps a pixel center back to user space, then the user-space rectangle to keep.
 struct SubregionClipParams {
-  float invA;
-  float invB;
-  float invC;
-  float invD;
-  float invE;
-  float invF;
-  float usrX0;
-  float usrY0;
-  float usrX1;
-  float usrY1;
-  uint32_t pad0;
-  uint32_t pad1;
+  float invA;     //!< Pixel-x coefficient of the user-space x.
+  float invB;     //!< Pixel-x coefficient of the user-space y.
+  float invC;     //!< Pixel-y coefficient of the user-space x.
+  float invD;     //!< Pixel-y coefficient of the user-space y.
+  float invE;     //!< Constant term of the user-space x.
+  float invF;     //!< Constant term of the user-space y.
+  float userX0;   //!< Low x edge, inclusive.
+  float userY0;   //!< Low y edge, inclusive.
+  float userX1;   //!< High x edge, exclusive.
+  float userY1;   //!< High y edge, exclusive.
+  uint32_t pad0;  //!< Trailing word the program declares; the two sizes must agree.
+  uint32_t pad1;  //!< Trailing word the program declares; the two sizes must agree.
 };
 
 /// Uniform buffer layout for the sRGB↔linearRGB color space conversion shader.
@@ -886,6 +1141,141 @@ void dispatchTwoInputUniform(FilterResourceArena& arena, GeodeDevice& device,
   pass.reset();
 }
 
+/// Builds a compute pipeline from build-time emitted \p wgsl and \p layoutEntries. Returns a
+/// program whose handles are all null when any step fails, so a caller checks the pipeline once
+/// instead of each step.
+///
+/// @param runtime Device to create through.
+/// @param name Debug label stem for the objects created.
+/// @param wgsl Emitted source of the program.
+/// @param entryPoint Name of the compute entry point the source declares.
+/// @param layoutEntries Bind group 0 entries, matching what the program declares.
+/// @param workgroupSize Size the entry point declares, along x and y.
+RuntimeComputeProgram CreateRuntimeComputeProgram(
+    gpu::Device& runtime, std::string_view name, std::string_view wgsl, std::string_view entryPoint,
+    std::vector<gpu::BindGroupLayoutEntry> layoutEntries, uint32_t workgroupSize) {
+  const RcString entryPointName{entryPoint};
+  const gpu::WorkgroupSize workgroup{workgroupSize, workgroupSize, 1};
+
+  gpu::Result<gpu::ShaderModule> shaderModule = runtime.createShaderModule(
+      gpu::ShaderModuleDescriptor{RcString(name),
+                                  RcString(wgsl),
+                                  gpu::ShaderSourceKind::Wgsl,
+                                  {},
+                                  {gpu::ComputeEntryPointInfo{entryPointName, workgroup}}});
+  if (!shaderModule.hasResult()) {
+    return {};
+  }
+  gpu::Result<gpu::BindGroupLayout> bindGroupLayout = runtime.createBindGroupLayout(
+      gpu::BindGroupLayoutDescriptor{RcString(name), std::move(layoutEntries)});
+  if (!bindGroupLayout.hasResult()) {
+    return {};
+  }
+  gpu::Result<gpu::PipelineLayout> pipelineLayout = runtime.createPipelineLayout(
+      gpu::PipelineLayoutDescriptor{RcString(name), {bindGroupLayout.result()}});
+  if (!pipelineLayout.hasResult()) {
+    return {};
+  }
+  gpu::Result<gpu::ComputePipeline> pipeline =
+      runtime.createComputePipeline(gpu::ComputePipelineDescriptor{
+          RcString(name), pipelineLayout.result(),
+          gpu::ComputeState{shaderModule.result(), entryPointName}, workgroup});
+  if (!pipeline.hasResult()) {
+    return {};
+  }
+
+  RuntimeComputeProgram program;
+  program.shaderModule = std::move(shaderModule).result();
+  program.bindGroupLayout = std::move(bindGroupLayout).result();
+  program.pipelineLayout = std::move(pipelineLayout).result();
+  program.pipeline = std::move(pipeline).result();
+  return program;
+}
+
+/// The write-only rgba8unorm storage-texture entry every filter program declares for its
+/// destination. @param binding Binding index.
+gpu::BindGroupLayoutEntry StorageOutputEntry(uint32_t binding) {
+  return gpu::BindGroupLayoutEntry{binding, gpu::ShaderStage::Compute,
+                                   gpu::BindingType::WriteOnlyStorageTexture2d,
+                                   gpu::TextureFormat::RGBA8Unorm};
+}
+
+/// The sampled float texture entry a filter program declares for its source.
+/// @param binding Binding index.
+gpu::BindGroupLayoutEntry SampledInputEntry(uint32_t binding) {
+  return gpu::BindGroupLayoutEntry{binding, gpu::ShaderStage::Compute,
+                                   gpu::BindingType::SampledTexture2dFloat};
+}
+
+/// The uniform buffer entry a filter program declares for its parameters.
+/// @param binding Binding index.
+gpu::BindGroupLayoutEntry UniformParamsEntry(uint32_t binding) {
+  return gpu::BindGroupLayoutEntry{binding, gpu::ShaderStage::Compute,
+                                   gpu::BindingType::UniformBuffer};
+}
+
+/// The bytes of an embedded build-time artifact, as a string view.
+/// @param resource Embedded span; the returned view aliases it and must not outlive it.
+std::string_view EmbeddedWgsl(std::span<const unsigned char> resource UTILS_LIFETIME_BOUND) {
+  return std::string_view(reinterpret_cast<const char*>(resource.data()), resource.size());
+}
+
+/// The bytes of \p value, for a uniform upload of a host struct.
+/// @param value Host-side block; the returned span aliases it and must not outlive it.
+template <typename T>
+std::span<const uint8_t> UniformBytes(const T& value UTILS_LIFETIME_BOUND) {
+  return std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(&value), sizeof(T));
+}
+
+/// Records one source-to-destination compute dispatch with a uniform block, through the runtime.
+/// Returns false without recording anything when the pipeline was never built or any resource the
+/// pass needs is refused.
+///
+/// @param arena Frame arena owning the resources and the encoder.
+/// @param program Pipeline and layout to dispatch, built from the matching program.
+/// @param input Source texture, borrowed. @param output Destination texture, borrowed.
+/// @param uniforms Parameter block to upload. @param label Debug label stem for the pass.
+/// @param workgroupSize Size the entry point declares, along x and y.
+[[nodiscard]] bool dispatchRuntimeInputOutputUniform(FilterResourceArena& arena,
+                                                     const RuntimeComputeProgram& program,
+                                                     const wgpu::Texture& input,
+                                                     const gpu::Texture& output,
+                                                     std::span<const uint8_t> uniforms,
+                                                     const char* label, uint32_t workgroupSize) {
+  if (!program.pipeline.isValid()) {
+    return false;
+  }
+
+  const gpu::Texture* source = arena.importRuntimeTexture(input);
+  if (source == nullptr) {
+    return false;
+  }
+  const gpu::TextureView* sourceView = arena.createRuntimeTextureView(*source, RcString(label));
+  const gpu::TextureView* destinationView = arena.createRuntimeTextureView(output, RcString(label));
+  const FilterResourceCache::RuntimeUniformSlot uniformSlot =
+      arena.writeRuntimeUniformSlot(uniforms);
+  if (sourceView == nullptr || destinationView == nullptr || uniformSlot.buffer == nullptr) {
+    return false;
+  }
+
+  const gpu::BindGroup* bindGroup = arena.createRuntimeBindGroup(
+      program.bindGroupLayout,
+      {gpu::BindGroupEntry{0, gpu::TextureViewBinding{*sourceView}},
+       gpu::BindGroupEntry{1, gpu::TextureViewBinding{*destinationView}},
+       gpu::BindGroupEntry{
+           2, gpu::BufferBinding{*uniformSlot.buffer, uniformSlot.offset, uniforms.size()}}},
+      RcString(label));
+  if (bindGroup == nullptr) {
+    return false;
+  }
+
+  const uint32_t width = input.getWidth();
+  const uint32_t height = input.getHeight();
+  return arena.dispatchComputePass(RcString(label), program.pipeline, *bindGroup,
+                                   (width + workgroupSize - 1) / workgroupSize,
+                                   (height + workgroupSize - 1) / workgroupSize);
+}
+
 /// Dispatch a compute shader with a standard (input, output, uniform) bind group.
 void dispatchInputOutputUniform(FilterResourceArena& arena, GeodeDevice& device,
                                 const wgpu::BindGroupLayout& bgl,
@@ -1007,11 +1397,11 @@ bool graphUsesStandardInput(const svg::components::FilterGraph& filterGraph,
   return false;
 }
 
-/// Returns true if the ColorMatrixParams represents an identity transform
+/// Returns true if the matrix represents an identity transform
 /// (diagonal ones, zero offsets). Used to short-circuit the shader dispatch
 /// and avoid the unpremultiply/premultiply round-trip precision loss that
 /// tiny-skia also avoids (FilterGraph.cpp:462).
-bool isIdentityColorMatrix(const ColorMatrixParams& params) {
+bool isIdentityColorMatrix(const FilterColorMatrixParams& params) {
   // clang-format off
   return params.col0[0] == 1.0f && params.col0[1] == 0.0f && params.col0[2] == 0.0f && params.col0[3] == 0.0f
       && params.col1[0] == 0.0f && params.col1[1] == 1.0f && params.col1[2] == 0.0f && params.col1[3] == 0.0f
@@ -1024,9 +1414,9 @@ bool isIdentityColorMatrix(const ColorMatrixParams& params) {
 /// Build the 4x5 color matrix from feColorMatrix parameters.
 /// All type variants are pre-computed here so the shader only needs a
 /// single generic matrix multiply.
-ColorMatrixParams buildColorMatrix(
+FilterColorMatrixParams buildColorMatrix(
     const svg::components::filter_primitive::ColorMatrix& primitive) {
-  ColorMatrixParams params{};
+  FilterColorMatrixParams params{};
 
   auto setIdentity = [&]() {
     // Identity: R'=R, G'=G, B'=B, A'=A, offsets=0.
@@ -1185,48 +1575,33 @@ GeodeFilterEngine::GeodeFilterEngine(GeodeDevice& device, bool verbose)
     offsetPipeline_ = std::move(pipeline);
   }
 
-  // --- feColorMatrix pipeline ---
+  // --- feColorMatrix pipeline, through the GPU runtime ---
   {
-    auto [bgl, pipeline] = createInputOutputUniformPipeline(
-        dev, "FilterColorMatrix", createFilterColorMatrixShader(dev), sizeof(ColorMatrixParams));
-    colorMatrixBindGroupLayout_ = std::move(bgl);
-    colorMatrixPipeline_ = std::move(pipeline);
+    using gpu::shader::programs::FilterColorMatrixBinding;
+    colorMatrixProgram_ = CreateRuntimeComputeProgram(
+        device_.adapterDevice(), "FilterColorMatrix",
+        EmbeddedWgsl(donner::embedded::kFilterColorMatrixWgsl),
+        gpu::shader::programs::kFilterColorMatrixEntryPoint,
+        {SampledInputEntry(static_cast<uint32_t>(FilterColorMatrixBinding::InputTexture)),
+         StorageOutputEntry(static_cast<uint32_t>(FilterColorMatrixBinding::OutputTexture)),
+         UniformParamsEntry(static_cast<uint32_t>(FilterColorMatrixBinding::Params))},
+        gpu::shader::programs::kFilterColorMatrixWorkgroupSize);
   }
 
-  // --- feFlood pipeline (output + uniform, no input) ---
+  // --- feFlood pipeline (output + uniform, no input), through the GPU runtime ---
+  //
+  // The WGSL below is build-time output of the shader IR program (see the genrules in this
+  // package). Emitting it here instead would link the IR and the WGSL emitter into every binary
+  // holding this engine, which the editor's WebAssembly package cannot afford for strings that
+  // are identical on every run.
   {
-    wgpu::BindGroupLayoutEntry entries[2]{};
-    entries[0].binding = 0;
-    entries[0].visibility = wgpu::ShaderStage::Compute;
-    entries[0].storageTexture.access = wgpu::StorageTextureAccess::WriteOnly;
-    entries[0].storageTexture.format = kFormat;
-    entries[0].storageTexture.viewDimension = wgpu::TextureViewDimension::_2D;
-
-    entries[1].binding = 1;
-    entries[1].visibility = wgpu::ShaderStage::Compute;
-    entries[1].buffer.type = wgpu::BufferBindingType::Uniform;
-    entries[1].buffer.minBindingSize = sizeof(FloodParams);
-
-    wgpu::BindGroupLayoutDescriptor bglDesc{};
-    bglDesc.label = wgpuLabel("FilterFloodBGL");
-    bglDesc.entryCount = 2;
-    bglDesc.entries = entries;
-    floodBindGroupLayout_.reset(dev.createBindGroupLayout(bglDesc));
-
-    wgpu::PipelineLayoutDescriptor plDesc{};
-    plDesc.label = wgpuLabel("FilterFloodPipelineLayout");
-    plDesc.bindGroupLayoutCount = 1;
-    WGPUBindGroupLayout layouts[1] = {floodBindGroupLayout_.get()};
-    plDesc.bindGroupLayouts = layouts;
-    ScopedWgpuHandle<wgpu::PipelineLayout> pipelineLayout(dev.createPipelineLayout(plDesc));
-    ScopedWgpuHandle<wgpu::ShaderModule> shader(createFilterFloodShader(dev));
-
-    wgpu::ComputePipelineDescriptor cpDesc{};
-    cpDesc.label = wgpuLabel("FilterFloodPipeline");
-    cpDesc.layout = pipelineLayout.get();
-    cpDesc.compute.module = shader.get();
-    cpDesc.compute.entryPoint = wgpuLabel("main");
-    floodPipeline_.reset(dev.createComputePipeline(cpDesc));
+    using gpu::shader::programs::FloodBinding;
+    floodProgram_ = CreateRuntimeComputeProgram(
+        device_.adapterDevice(), "FilterFlood", EmbeddedWgsl(donner::embedded::kFloodWgsl),
+        gpu::shader::programs::kFloodEntryPoint,
+        {StorageOutputEntry(static_cast<uint32_t>(FloodBinding::OutputTexture)),
+         UniformParamsEntry(static_cast<uint32_t>(FloodBinding::Params))},
+        gpu::shader::programs::kFloodWorkgroupSize);
   }
 
   // --- feMerge alpha-over pipeline (src, dst → output) ---
@@ -1545,13 +1920,17 @@ GeodeFilterEngine::GeodeFilterEngine(GeodeDevice& device, bool verbose)
     tilePipeline_ = std::move(pipeline);
   }
 
-  // --- Per-primitive subregion clipping pipeline (input + output + uniform) ---
+  // --- Per-primitive subregion clipping pipeline, through the GPU runtime ---
   {
-    auto [bgl, pipeline] = createInputOutputUniformPipeline(dev, "FilterSubregionClip",
-                                                            createFilterSubregionClipShader(dev),
-                                                            sizeof(SubregionClipParams));
-    subregionClipBindGroupLayout_ = std::move(bgl);
-    subregionClipPipeline_ = std::move(pipeline);
+    using gpu::shader::programs::SubregionClipBinding;
+    subregionClipProgram_ = CreateRuntimeComputeProgram(
+        device_.adapterDevice(), "FilterSubregionClip",
+        EmbeddedWgsl(donner::embedded::kSubregionClipWgsl),
+        gpu::shader::programs::kSubregionClipEntryPoint,
+        {SampledInputEntry(static_cast<uint32_t>(SubregionClipBinding::InputTexture)),
+         StorageOutputEntry(static_cast<uint32_t>(SubregionClipBinding::OutputTexture)),
+         UniformParamsEntry(static_cast<uint32_t>(SubregionClipBinding::Params))},
+        gpu::shader::programs::kSubregionClipWorkgroupSize);
   }
 
   // --- sRGB↔linearRGB color space conversion pipeline ---
@@ -1810,6 +2189,7 @@ struct FilterGraphExecution {
         commandEncoder(commandEncoder),
         executionBudget(executionBudget),
         device_(engine.device_),
+        resourceCache_(*engine.resourceCache_),
         framePassesInCommandBuffer_(engine.framePassesInCommandBuffer_),
         verbose_(engine.verbose_),
         warnedUnsupported_(engine.warnedUnsupported_) {}
@@ -1852,6 +2232,7 @@ struct FilterGraphExecution {
   ScopedWgpuHandle<wgpu::CommandEncoder>& commandEncoder;
   svg::components::FilterExecutionBudget* executionBudget;
   GeodeDevice& device_;
+  FilterResourceCache& resourceCache_;
   size_t& framePassesInCommandBuffer_;
   bool& verbose_;
   bool& warnedUnsupported_;
@@ -1884,6 +2265,7 @@ wgpu::Texture RunFilterGraphExecution(FilterGraphExecution& execution) {
   auto& commandEncoder = execution.commandEncoder;
   auto* executionBudget = execution.executionBudget;
   auto& device_ = execution.device_;
+  auto& resourceCache_ = execution.resourceCache_;
   auto& framePassesInCommandBuffer_ = execution.framePassesInCommandBuffer_;
   auto& verbose_ = execution.verbose_;
   auto& warnedUnsupported_ = execution.warnedUnsupported_;
@@ -1925,7 +2307,8 @@ wgpu::Texture RunFilterGraphExecution(FilterGraphExecution& execution) {
     return sourceGraphic;
   }
 
-  FilterResourceArena arena(device_, textureAllocator, commandEncoder, framePassesInCommandBuffer_);
+  FilterResourceArena arena(device_, textureAllocator, resourceCache_, commandEncoder,
+                            framePassesInCommandBuffer_);
   std::unordered_map<std::string, wgpu::Texture> namedBuffers;
   wgpu::Texture currentBuffer = sourceGraphic;
   std::optional<wgpu::Texture> sourceAlpha;
@@ -2043,7 +2426,7 @@ wgpu::Texture RunFilterGraphExecution(FilterGraphExecution& execution) {
       // `color-interpolation-filters` property). Match tiny-skia by
       // wrapping the matrix operation with sRGB↔linear conversion, and
       // short-circuiting identity matrices to avoid lossy round-trips.
-      ColorMatrixParams matrixParams = buildColorMatrix(*cm);
+      FilterColorMatrixParams matrixParams = buildColorMatrix(*cm);
       if (isIdentityColorMatrix(matrixParams)) {
         outputTex = inputTex;
       } else {
@@ -2605,7 +2988,7 @@ wgpu::Texture GeodeFilterEngine::applyOffset(
 wgpu::Texture GeodeFilterEngine::applyColorMatrix(
     FilterResourceArena& arena, const wgpu::Texture& input,
     const svg::components::filter_primitive::ColorMatrix& primitive) {
-  ColorMatrixParams params = buildColorMatrix(primitive);
+  FilterColorMatrixParams params = buildColorMatrix(primitive);
 
   // Match tiny-skia's identity shortcut: skip the shader to avoid the
   // unpremultiply→multiply→premultiply round-trip that introduces precision
@@ -2614,49 +2997,60 @@ wgpu::Texture GeodeFilterEngine::applyColorMatrix(
     return input;
   }
 
-  const wgpu::Device& dev = device_.device();
-  const uint32_t width = input.getWidth();
-  const uint32_t height = input.getHeight();
+  const gpu::Texture* output = arena.createRuntimeTexture(gpu::TextureDescriptor{
+      "FilterColorMatrixOutput", gpu::Extent2d{input.getWidth(), input.getHeight()},
+      gpu::TextureFormat::RGBA8Unorm,
+      gpu::TextureUsage::StorageBinding | gpu::TextureUsage::Sampled | gpu::TextureUsage::CopySrc});
+  if (output == nullptr) {
+    return {};
+  }
 
-  wgpu::Texture output =
-      createIntermediateTexture(arena, dev, width, height, "FilterColorMatrixOutput");
+  if (!dispatchRuntimeInputOutputUniform(arena, colorMatrixProgram_, input, *output,
+                                         UniformBytes(params), "FilterColorMatrixPass",
+                                         gpu::shader::programs::kFilterColorMatrixWorkgroupSize)) {
+    return {};
+  }
 
-  auto uniformBuffer = writeUniformSlot(*resourceCache_, device_, &params, sizeof(params));
-
-  dispatchInputOutputUniform(arena, device_, colorMatrixBindGroupLayout_.get(),
-                             colorMatrixPipeline_.get(), input, output, uniformBuffer.buffer,
-                             uniformBuffer.offset, sizeof(ColorMatrixParams),
-                             "FilterColorMatrixPass");
-  return output;
+  return device_.adapterDevice().wgpuTextureOf(*output);
 }
 
 wgpu::Texture GeodeFilterEngine::applySourceAlpha(FilterResourceArena& arena,
                                                   const wgpu::Texture& input) {
-  const wgpu::Device& dev = device_.device();
-  const uint32_t width = input.getWidth();
-  const uint32_t height = input.getHeight();
+  const gpu::Texture* output = arena.createRuntimeTexture(gpu::TextureDescriptor{
+      "FilterSourceAlphaOutput", gpu::Extent2d{input.getWidth(), input.getHeight()},
+      gpu::TextureFormat::RGBA8Unorm,
+      gpu::TextureUsage::StorageBinding | gpu::TextureUsage::Sampled | gpu::TextureUsage::CopySrc});
+  if (output == nullptr) {
+    return {};
+  }
 
-  wgpu::Texture output =
-      createIntermediateTexture(arena, dev, width, height, "FilterSourceAlphaOutput");
-
-  ColorMatrixParams params{};
+  // SourceAlpha is the color matrix that keeps alpha and zeroes the colors, so it runs through the
+  // same program rather than a second pipeline that would have to agree with it.
+  FilterColorMatrixParams params{};
   params.col3[3] = 1.0f;
 
-  auto uniformBuffer = writeUniformSlot(*resourceCache_, device_, &params, sizeof(params));
+  if (!dispatchRuntimeInputOutputUniform(arena, colorMatrixProgram_, input, *output,
+                                         UniformBytes(params), "FilterSourceAlphaPass",
+                                         gpu::shader::programs::kFilterColorMatrixWorkgroupSize)) {
+    return {};
+  }
 
-  dispatchInputOutputUniform(arena, device_, colorMatrixBindGroupLayout_.get(),
-                             colorMatrixPipeline_.get(), input, output, uniformBuffer.buffer,
-                             uniformBuffer.offset, sizeof(ColorMatrixParams),
-                             "FilterSourceAlphaPass");
-  return output;
+  return device_.adapterDevice().wgpuTextureOf(*output);
 }
 
 wgpu::Texture GeodeFilterEngine::applyFlood(
     FilterResourceArena& arena, uint32_t width, uint32_t height,
     const svg::components::filter_primitive::Flood& primitive) {
-  const wgpu::Device& dev = device_.device();
+  if (!floodProgram_.pipeline.isValid()) {
+    return {};
+  }
 
-  wgpu::Texture output = createIntermediateTexture(arena, dev, width, height, "FilterFloodOutput");
+  const gpu::Texture* output = arena.createRuntimeTexture(gpu::TextureDescriptor{
+      "FilterFloodOutput", gpu::Extent2d{width, height}, gpu::TextureFormat::RGBA8Unorm,
+      gpu::TextureUsage::StorageBinding | gpu::TextureUsage::Sampled | gpu::TextureUsage::CopySrc});
+  if (output == nullptr) {
+    return {};
+  }
 
   // Resolve the flood color: CSS color → RGBA, then premultiply.  The filter
   // pipeline operates in premultiplied alpha (consistent with TinySkia and the
@@ -2671,42 +3065,36 @@ wgpu::Texture GeodeFilterEngine::applyFlood(
   params.color[2] = (static_cast<float>(rgba.b) / 255.0f) * alpha;
   params.color[3] = alpha;
 
-  auto uniformBuffer = writeUniformSlot(*resourceCache_, device_, &params, sizeof(params));
+  const gpu::TextureView* outputView =
+      arena.createRuntimeTextureView(*output, "FilterFloodOutputView");
+  const FilterResourceCache::RuntimeUniformSlot uniforms =
+      arena.writeRuntimeUniformSlot(UniformBytes(params));
+  if (outputView == nullptr || uniforms.buffer == nullptr) {
+    return {};
+  }
 
   // Flood has no input texture - only output + uniform.
-  ScopedWgpuHandle<wgpu::TextureView> outputView(output.createView());
+  const gpu::BindGroup* bindGroup = arena.createRuntimeBindGroup(
+      floodProgram_.bindGroupLayout,
+      {gpu::BindGroupEntry{
+           static_cast<uint32_t>(gpu::shader::programs::FloodBinding::OutputTexture),
+           gpu::TextureViewBinding{*outputView}},
+       gpu::BindGroupEntry{
+           static_cast<uint32_t>(gpu::shader::programs::FloodBinding::Params),
+           gpu::BufferBinding{*uniforms.buffer, uniforms.offset, sizeof(FloodParams)}}},
+      "FilterFloodBindGroup");
+  if (bindGroup == nullptr) {
+    return {};
+  }
 
-  wgpu::BindGroupEntry bgEntries[2]{};
-  bgEntries[0].binding = 0;
-  bgEntries[0].textureView = outputView.get();
-  bgEntries[1].binding = 1;
-  bgEntries[1].buffer = uniformBuffer.buffer;
-  bgEntries[1].offset = uniformBuffer.offset;
-  bgEntries[1].size = sizeof(FloodParams);
+  constexpr uint32_t kWorkgroup = gpu::shader::programs::kFloodWorkgroupSize;
+  if (!arena.dispatchComputePass("FilterFloodPass", floodProgram_.pipeline, *bindGroup,
+                                 (width + kWorkgroup - 1) / kWorkgroup,
+                                 (height + kWorkgroup - 1) / kWorkgroup)) {
+    return {};
+  }
 
-  wgpu::BindGroupDescriptor bgDesc{};
-  bgDesc.label = wgpuLabel("FilterFloodBindGroup");
-  bgDesc.layout = floodBindGroupLayout_.get();
-  bgDesc.entryCount = 2;
-  bgDesc.entries = bgEntries;
-  ScopedWgpuHandle<wgpu::BindGroup> bindGroup(dev.createBindGroup(bgDesc));
-  device_.countBindGroup();
-
-  wgpu::CommandEncoder& encoder = arena.commandEncoder();
-
-  wgpu::ComputePassDescriptor passDesc{};
-  passDesc.label = wgpuLabel("FilterFloodPass");
-  ScopedWgpuHandle<wgpu::ComputePassEncoder> pass(encoder.beginComputePass(passDesc));
-  pass.get().setPipeline(floodPipeline_.get());
-  pass.get().setBindGroup(0, bindGroup.get(), 0, nullptr);
-
-  const uint32_t workgroupsX = (width + 7) / 8;
-  const uint32_t workgroupsY = (height + 7) / 8;
-  pass.get().dispatchWorkgroups(workgroupsX, workgroupsY, 1);
-  pass.get().end();
-  pass.reset();
-
-  return output;
+  return device_.adapterDevice().wgpuTextureOf(*output);
 }
 
 wgpu::Texture GeodeFilterEngine::applyMerge(
@@ -3895,12 +4283,13 @@ wgpu::Texture GeodeFilterEngine::applySubregionClip(FilterResourceArena& arena,
                                                     const Transform2d& filterFromDevice,
                                                     double usrX0, double usrY0, double usrX1,
                                                     double usrY1) {
-  const wgpu::Device& dev = device_.device();
-  const uint32_t width = input.getWidth();
-  const uint32_t height = input.getHeight();
-
-  wgpu::Texture output =
-      createIntermediateTexture(arena, dev, width, height, "FilterSubregionClipOutput");
+  const gpu::Texture* output = arena.createRuntimeTexture(gpu::TextureDescriptor{
+      "FilterSubregionClipOutput", gpu::Extent2d{input.getWidth(), input.getHeight()},
+      gpu::TextureFormat::RGBA8Unorm,
+      gpu::TextureUsage::StorageBinding | gpu::TextureUsage::Sampled | gpu::TextureUsage::CopySrc});
+  if (output == nullptr) {
+    return {};
+  }
 
   SubregionClipParams params{};
   params.invA = static_cast<float>(filterFromDevice.data[0]);
@@ -3909,20 +4298,20 @@ wgpu::Texture GeodeFilterEngine::applySubregionClip(FilterResourceArena& arena,
   params.invD = static_cast<float>(filterFromDevice.data[3]);
   params.invE = static_cast<float>(filterFromDevice.data[4]);
   params.invF = static_cast<float>(filterFromDevice.data[5]);
-  params.usrX0 = static_cast<float>(usrX0);
-  params.usrY0 = static_cast<float>(usrY0);
-  params.usrX1 = static_cast<float>(usrX1);
-  params.usrY1 = static_cast<float>(usrY1);
+  params.userX0 = static_cast<float>(usrX0);
+  params.userY0 = static_cast<float>(usrY0);
+  params.userX1 = static_cast<float>(usrX1);
+  params.userY1 = static_cast<float>(usrY1);
   params.pad0 = 0;
   params.pad1 = 0;
 
-  auto uniformBuffer = writeUniformSlot(*resourceCache_, device_, &params, sizeof(params));
+  if (!dispatchRuntimeInputOutputUniform(arena, subregionClipProgram_, input, *output,
+                                         UniformBytes(params), "FilterSubregionClipPass",
+                                         gpu::shader::programs::kSubregionClipWorkgroupSize)) {
+    return {};
+  }
 
-  dispatchInputOutputUniform(arena, device_, subregionClipBindGroupLayout_.get(),
-                             subregionClipPipeline_.get(), input, output, uniformBuffer.buffer,
-                             uniformBuffer.offset, sizeof(SubregionClipParams),
-                             "FilterSubregionClipPass");
-  return output;
+  return device_.adapterDevice().wgpuTextureOf(*output);
 }
 
 wgpu::Texture GeodeFilterEngine::applyColorSpaceConversion(FilterResourceArena& arena,

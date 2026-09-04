@@ -314,11 +314,14 @@ donner_cc_library(
         "//examples:__pkg__",
     ],
     deps = [
+        ":filter_color_matrix_wgsl",
+        ":flood_wgsl",
         ":geode_counters",
         ":geode_gpu_wait",
         ":geode_shaders",
         ":geode_wgpu_util",
         ":snapshot_unpremultiply_wgsl",
+        ":subregion_clip_wgsl",
         "//donner/base",
         "//donner/base:asyncify_suspend_probe",
         "//donner/gpu",
@@ -407,6 +410,58 @@ embed_resources(
     visibility = ["//donner/svg/renderer:__subpackages__"],
 )
 
+# Build-time emission of the flood program, on the same terms as the one above.
+genrule(
+    name = "flood_generated",
+    outs = ["generated/flood.wgsl"],
+    cmd = "$(location //donner/gpu/shader/tools:emit_program_wgsl) flood " +
+          "$(location generated/flood.wgsl)",
+    tools = ["//donner/gpu/shader/tools:emit_program_wgsl"],
+)
+
+embed_resources(
+    name = "flood_wgsl",
+    header_output = "embed_resources/FloodWgsl.h",
+    resources = {
+        "kFloodWgsl": "generated/flood.wgsl",
+    },
+    visibility = ["//donner/svg/renderer:__subpackages__"],
+)
+
+genrule(
+    name = "subregion_clip_generated",
+    outs = ["generated/subregion_clip.wgsl"],
+    cmd = "$(location //donner/gpu/shader/tools:emit_program_wgsl) subregion_clip " +
+          "$(location generated/subregion_clip.wgsl)",
+    tools = ["//donner/gpu/shader/tools:emit_program_wgsl"],
+)
+
+embed_resources(
+    name = "subregion_clip_wgsl",
+    header_output = "embed_resources/SubregionClipWgsl.h",
+    resources = {
+        "kSubregionClipWgsl": "generated/subregion_clip.wgsl",
+    },
+    visibility = ["//donner/svg/renderer:__subpackages__"],
+)
+
+genrule(
+    name = "filter_color_matrix_generated",
+    outs = ["generated/filter_color_matrix.wgsl"],
+    cmd = "$(location //donner/gpu/shader/tools:emit_program_wgsl) filter_color_matrix " +
+          "$(location generated/filter_color_matrix.wgsl)",
+    tools = ["//donner/gpu/shader/tools:emit_program_wgsl"],
+)
+
+embed_resources(
+    name = "filter_color_matrix_wgsl",
+    header_output = "embed_resources/FilterColorMatrixWgsl.h",
+    resources = {
+        "kFilterColorMatrixWgsl": "generated/filter_color_matrix.wgsl",
+    },
+    visibility = ["//donner/svg/renderer:__subpackages__"],
+)
+
 embed_resources(
     name = "slug_fill_wgsl",
     header_output = "embed_resources/SlugFillWgsl.h",
@@ -467,26 +522,6 @@ embed_resources(
     header_output = "embed_resources/FilterOffsetWgsl.h",
     resources = {
         "kFilterOffsetWgsl": "shaders/filter_offset.wgsl",
-    },
-    visibility = ["//donner/svg/renderer:__subpackages__"],
-)
-
-# Phase 7: feColorMatrix compute shader (4x5 matrix transform).
-embed_resources(
-    name = "filter_color_matrix_wgsl",
-    header_output = "embed_resources/FilterColorMatrixWgsl.h",
-    resources = {
-        "kFilterColorMatrixWgsl": "shaders/filter_color_matrix.wgsl",
-    },
-    visibility = ["//donner/svg/renderer:__subpackages__"],
-)
-
-# Phase 7: feFlood compute shader (constant color fill).
-embed_resources(
-    name = "filter_flood_wgsl",
-    header_output = "embed_resources/FilterFloodWgsl.h",
-    resources = {
-        "kFilterFloodWgsl": "shaders/filter_flood.wgsl",
     },
     visibility = ["//donner/svg/renderer:__subpackages__"],
 )
@@ -621,16 +656,6 @@ embed_resources(
     visibility = ["//donner/svg/renderer:__subpackages__"],
 )
 
-# Per-primitive subregion clipping compute shader.
-embed_resources(
-    name = "filter_subregion_clip_wgsl",
-    header_output = "embed_resources/FilterSubregionClipWgsl.h",
-    resources = {
-        "kFilterSubregionClipWgsl": "shaders/filter_subregion_clip.wgsl",
-    },
-    visibility = ["//donner/svg/renderer:__subpackages__"],
-)
-
 embed_resources(
     name = "filter_color_space_convert_wgsl",
     header_output = "embed_resources/FilterColorSpaceConvertWgsl.h",
@@ -651,7 +676,6 @@ donner_cc_library(
     visibility = ["//donner/svg/renderer:__subpackages__"],
     deps = [
         ":filter_blend_wgsl",
-        ":filter_color_matrix_wgsl",
         ":filter_color_space_convert_wgsl",
         ":filter_component_transfer_wgsl",
         ":filter_composite_wgsl",
@@ -659,13 +683,11 @@ donner_cc_library(
         ":filter_diffuse_lighting_wgsl",
         ":filter_displacement_map_wgsl",
         ":filter_drop_shadow_wgsl",
-        ":filter_flood_wgsl",
         ":filter_image_wgsl",
         ":filter_merge_wgsl",
         ":filter_morphology_wgsl",
         ":filter_offset_wgsl",
         ":filter_specular_lighting_wgsl",
-        ":filter_subregion_clip_wgsl",
         ":filter_tile_wgsl",
         ":filter_turbulence_wgsl",
         ":gaussian_blur_wgsl",
@@ -1009,7 +1031,10 @@ donner_cc_test(
     srcs = ["tests/GeneratedShaderArtifacts_tests.cc"],
     data = ["//donner/gpu/shader:program_goldens"],
     deps = [
+        ":filter_color_matrix_wgsl",
+        ":flood_wgsl",
         ":snapshot_unpremultiply_wgsl",
+        ":subregion_clip_wgsl",
         "//donner/base",
         "//donner/base:base_test_utils",
         "@com_google_gtest//:gtest_main",

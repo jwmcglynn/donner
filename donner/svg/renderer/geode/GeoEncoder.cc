@@ -42,9 +42,6 @@ constexpr uint64_t alignUp(uint64_t value, uint64_t alignment) {
 // to 16 or 32 on modern adapters, but 256 is safe everywhere and the
 // wasted-tail memory is negligible at typical path sizes.
 constexpr uint64_t kStorageOffsetAlignment = 256u;
-// Uniform buffer bind-group offset: same 256-byte default across
-// wgpu-native backends (`minUniformBufferOffsetAlignment`).
-constexpr uint64_t kUniformOffsetAlignment = 256u;
 // The resident slab allocates slot ranges aligned only to
 // kStorageOffsetAlignment, while the region layout inside a slot uses the
 // per-region constant; absolute offsets stay valid for uniform bindings

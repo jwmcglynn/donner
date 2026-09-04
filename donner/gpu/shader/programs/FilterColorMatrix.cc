@@ -52,7 +52,7 @@ ShaderResult<IrModule> BuildFilterColorMatrixModule() {
   e.ok(AddBindings(builder, paramsType));
 
   auto entryResult = builder.createComputeEntryPoint(
-      "cs_main",
+      RcString(kFilterColorMatrixEntryPoint),
       {IrParam{"gid", IrType::Vec3(ScalarKind::U32), std::nullopt,
                BuiltinInput::GlobalInvocationId}},
       WorkgroupSize{kFilterColorMatrixWorkgroupSize, kFilterColorMatrixWorkgroupSize, 1});

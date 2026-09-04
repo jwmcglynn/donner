@@ -1554,22 +1554,6 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     return openFrameGpuEncoder();
   }
 
-  /// Re-point the runtime at the frame command encoder after code that may have replaced it.
-  ///
-  /// The filter engine finishes and submits the encoder in this slot mid-frame to bound
-  /// command-buffer size for large filter graphs. Anything the runtime replayed into the old
-  /// encoder is on the queue once that happens, and the runtime has to be told, because it holds
-  /// completion back until the encoder it replayed into reports its submit.
-  ///
-  /// @param before The encoder the slot held before the call that may have replaced it.
-  void rebindHostCommandEncoder(WGPUCommandEncoder before) {
-    if (static_cast<WGPUCommandEncoder>(frameCommandEncoder.get()) == before) {
-      return;
-    }
-    device->adapterDevice().notifyHostSubmitted();
-    device->adapterDevice().setHostCommandEncoder(frameCommandEncoder.get());
-  }
-
   /// Close the runtime encoder after the frame command encoder it recorded into has been
   /// submitted, so the runtime can retire the work it recorded.
   void closeFrameGpuEncoderAfterSubmit() {
@@ -2180,12 +2164,9 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     if (!flushFrameGpuEncoder()) {
       return false;
     }
-    const WGPUCommandEncoder encoderBeforeFilter =
-        static_cast<WGPUCommandEncoder>(frameCommandEncoder.get());
     wgpu::Texture localFiltered =
         filterEngine->execute(frame.filterGraph, localBackendTexture, localFilterRegion,
                               localDeviceFromFilter, *this, frameCommandEncoder);
-    rebindHostCommandEncoder(encoderBeforeFilter);
 
     const Transform2d deviceFromLocal =
         Transform2d::Scale(1.0 / geometry->scaleX, 1.0 / geometry->scaleY) *
@@ -5568,12 +5549,9 @@ void RendererGeode::popFilterLayer() {
                  components::kMaximumFilterSurfacePixels) {
     UTILS_RELEASE_ASSERT_MSG(impl_->flushFrameGpuEncoder(),
                              "Failed to replay recorded draws before the filter passes");
-    const WGPUCommandEncoder encoderBeforeFilter =
-        static_cast<WGPUCommandEncoder>(impl_->frameCommandEncoder.get());
     filteredTexture =
         impl_->filterEngine->execute(frame.filterGraph, layerBackendTexture, frame.filterRegion,
                                      bufferDeviceFromFilter, *impl_, impl_->frameCommandEncoder);
-    impl_->rebindHostCommandEncoder(encoderBeforeFilter);
   }
 
   // Restore outer target and create a fresh encoder that preserves its
