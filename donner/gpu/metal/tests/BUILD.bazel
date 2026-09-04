@@ -1,9 +1,24 @@
-load("//build_defs:rules.bzl", "donner_cc_test")
+load("//build_defs:rules.bzl", "donner_cc_library", "donner_cc_test")
 load("//build_defs:package.bzl", "donner_package")
+load("//build_defs:visibility.bzl", "donner_internal_visibility")
 
 # Tests for the Metal vertical slices: the solid-fill pixel comparison against
 # the frozen per-adapter baseline the production renderer wrote, and the
 # color-matrix compute test.
+
+# The missing-device fixture preamble every Metal vertical slice below needs: fail closed on an
+# automated lane, skip on a developer machine. A library rather than a third hand copy once the
+# sub-rectangle-copy slice needed the same rule as solid-fill and color-matrix.
+donner_cc_library(
+    name = "metal_device_gate",
+    testonly = 1,
+    hdrs = ["MetalDeviceGate.h"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        "//donner/gpu/baseline:frozen_baseline_policy",
+        "@com_google_gtest//:gtest",
+    ],
+)
 
 # The Metal solid-fill vertical slice: donner::gpu + emitted MSL only (no
 # wgpu-based dependencies, not geode-gated). Metal API validation is enabled
@@ -24,6 +39,7 @@ donner_cc_test(
     ],
     target_compatible_with = ["@platforms//os:macos"],
     deps = [
+        ":metal_device_gate",
         "//donner/base:base_test_utils",
         "//donner/editor/tests:bitmap_golden_compare",
         "//donner/gpu",
@@ -49,8 +65,15 @@ donner_cc_test(
         "MTL_DEBUG_LAYER": "1",
         "MTL_SHADER_VALIDATION": "1",
     },
+    # Bazel scrubs the test environment, so the automated-lane markers have to be named here or
+    # the no-device rule can never see one and this slice keeps skipping into a green report.
+    env_inherit = [
+        "DONNER_BASELINE_REQUIRE_FROZEN_ADAPTER",
+        "GITHUB_ACTIONS",
+    ],
     target_compatible_with = ["@platforms//os:macos"],
     deps = [
+        ":metal_device_gate",
         "//donner/gpu",
         "//donner/gpu:color_matrix_slice",
         "//donner/gpu/metal:metal_device",
@@ -71,8 +94,15 @@ donner_cc_test(
         "MTL_DEBUG_LAYER": "1",
         "MTL_SHADER_VALIDATION": "1",
     },
+    # Bazel scrubs the test environment, so the automated-lane markers have to be named here or
+    # the no-device rule can never see one and this slice keeps skipping into a green report.
+    env_inherit = [
+        "DONNER_BASELINE_REQUIRE_FROZEN_ADAPTER",
+        "GITHUB_ACTIONS",
+    ],
     target_compatible_with = ["@platforms//os:macos"],
     deps = [
+        ":metal_device_gate",
         "//donner/gpu",
         "//donner/gpu:sub_rectangle_copy_scene",
         "//donner/gpu/metal:metal_device",
