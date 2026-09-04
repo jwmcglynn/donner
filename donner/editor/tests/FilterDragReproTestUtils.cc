@@ -114,7 +114,7 @@ Vector2d RenderPaneSizeForWindow(double windowW, double windowH) {
                   std::max(0.0, windowH - kMenuBarHeight));
 }
 
-std::string LoadFileOrSkip(const std::filesystem::path& path) {
+std::string LoadFileOrEmpty(const std::filesystem::path& path) {
   std::ifstream file(path, std::ios::binary);
   if (!file.is_open()) return {};
   std::ostringstream buf;
@@ -189,7 +189,7 @@ ReplayResults ReplayRepro(const std::filesystem::path& reproPath,
                           const std::filesystem::path& svgPath, FilterDragReproReplayMode mode) {
   ReplayResults results;
 
-  const std::string svgSource = LoadFileOrSkip(svgPath);
+  const std::string svgSource = LoadFileOrEmpty(svgPath);
   [&]() { ASSERT_FALSE(svgSource.empty()) << "svg source missing: " << svgPath; }();
   auto reproOpt = repro::ReadReproFile(reproPath);
   [&]() { ASSERT_TRUE(reproOpt.has_value()) << "repro file parse failed: " << reproPath; }();
