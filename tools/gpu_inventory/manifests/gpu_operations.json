@@ -382,6 +382,7 @@
         "BufferDescriptor",
         "BufferMapCallbackInfo",
         "BufferUsage",
+        "CallbackMode",
         "ColorTargetState",
         "ColorWriteMask",
         "CommandBuffer",

@@ -743,6 +743,9 @@ std::vector<uint8_t> RunMathPrimitiveModule(const wgpu::Device& device, const wg
   };
   mapCb.userdata1 = donner::geode::retainWgpuCallbackState(mapState);
   mapCb.userdata2 = nullptr;
+  // Stated rather than defaulted: wgpu::Default leaves the mode 0, which is not one of the
+  // enumerators, and the snapshot readback path names this one for the same poll-driven wait.
+  mapCb.mode = wgpu::CallbackMode::AllowSpontaneous;
   readback.mapAsync(wgpu::MapMode::Read, 0, kBytesPerRow, mapCb);
 
   const donner::geode::GpuWaitResult waitResult = donner::geode::BoundedGpuWait(
