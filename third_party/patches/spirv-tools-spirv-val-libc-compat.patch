@@ -1,0 +1,29 @@
+Subject: [PATCH] Link the glibc compatibility shim into spirv-val
+
+`tools/val/val.cpp` uses `std::filesystem`, which pulls libc++'s
+`operations.cpp.o` into the link, and that object references an unversioned
+`copy_file_range`. The hermetic toolchain's sysroot exports the symbol only as
+`copy_file_range@GLIBC_2.27`, a non-default version, so the reference does not
+resolve and the link fails. `//third_party/libc_compat` is the shim
+`donner_cc_binary` already injects into this repository's own binaries for
+exactly that reason, under the same condition; `@@//` reaches it because donner
+is the root module.
+
+diff --git a/BUILD.bazel b/BUILD.bazel
+--- a/BUILD.bazel
++++ b/BUILD.bazel
+@@ -316,10 +316,13 @@
+     ],
+     copts = COMMON_COPTS,
+     visibility = ["//visibility:public"],
+     deps = [
+         ":spirv_tools_internal",
+         ":tools_io",
+         ":tools_util",
+-    ],
++    ] + select({
++        "@@//build_defs:llvm_latest_linux": ["@@//third_party/libc_compat:libc_compat"],
++        "//conditions:default": [],
++    }),
+ )
+ 
