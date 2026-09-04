@@ -125,6 +125,7 @@ donner_cc_library(
     hdrs = [
         "tests/BaseTestUtils.h",
         "tests/ParseResultTestUtils.h",
+        "tests/RunfileGate.h",
         "tests/Runfiles.h",
         "tests/TestTempDir.h",
     ],
@@ -132,6 +133,7 @@ donner_cc_library(
     # helpers (TestTempDir) as //donner tests.
     visibility = donner_internal_visibility() + ["//tools:__subpackages__"],
     deps = [
+        ":base",
         "@com_google_gtest//:gtest",
         "@rules_cc//cc/runfiles",
     ],
@@ -196,6 +198,7 @@ donner_cc_test(
         "tests/Path_tests.cc",
         "tests/RcStringOrRef_tests.cc",
         "tests/RcString_tests.cc",
+        "tests/RunfileGate_tests.cc",
         "tests/Runfiles_tests.cc",
         "tests/SmallVector_tests.cc",
         "tests/StringUtils_tests.cc",
