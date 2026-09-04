@@ -22,22 +22,18 @@ std::ostream& operator<<(std::ostream& os, MissingComparisonDisposition disposit
   return os << "MissingComparisonDisposition(unknown)";
 }
 
-std::span<const std::string_view> ContinuousIntegrationMarkers() {
-  return kContinuousIntegrationMarkers;
+bool RunningUnderContinuousIntegration() {
+  return !FirstContinuousIntegrationMarkerSet().empty();
 }
 
-bool AnyEnvironmentVariableIsSet(std::span<const std::string_view> names) {
-  for (const std::string_view name : names) {
+std::string_view FirstContinuousIntegrationMarkerSet() {
+  for (const std::string_view name : kContinuousIntegrationMarkers) {
     const char* value = std::getenv(std::string(name).c_str());
     if (value != nullptr && value[0] != '\0') {
-      return true;
+      return name;
     }
   }
-  return false;
-}
-
-bool RunningUnderContinuousIntegration() {
-  return AnyEnvironmentVariableIsSet(ContinuousIntegrationMarkers());
+  return {};
 }
 
 MissingComparisonDisposition DispositionForUnbaselinedAdapter(bool underContinuousIntegration) {

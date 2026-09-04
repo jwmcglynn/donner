@@ -153,11 +153,39 @@ donner_cc_test(
     ],
 )
 
+# The rule these two suites apply when the tool they drive is missing: skip on a developer machine,
+# fail on an automated lane. Split out so it is exercised on every platform, including the ones
+# that have the tool and so never reach it.
+donner_cc_library(
+    name = "external_tool_gate",
+    testonly = 1,
+    srcs = ["tests/ExternalToolGate.cc"],
+    hdrs = ["tests/ExternalToolGate.h"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        "//donner/gpu/baseline:frozen_baseline_policy",
+        "@com_google_gtest//:gtest",
+    ],
+)
+
+donner_cc_test(
+    name = "external_tool_gate_tests",
+    srcs = ["tests/ExternalToolGate_tests.cc"],
+    deps = [
+        ":external_tool_gate",
+        "//donner/base:base_test_utils",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
 # Out-of-process MSL validation: compiles every emitted MSL program with the
 # platform Metal compiler. The compiler is invoked at test time rather than
 # depended on, so the emitter is held to a real Metal front end without putting
-# one in the build graph. macOS-only; skips cleanly when xcrun or the Metal
-# toolchain is unavailable.
+# one in the build graph. macOS-only. A developer machine without the offline
+# compiler skips; an automated lane without it fails, so a lane that never had
+# the toolchain cannot report the same green as one that compiled every module.
+# `requires_metal_toolchain` is how a lane that knowingly lacks it opts out in
+# the open, rather than by collecting silent skips.
 donner_cc_test(
     name = "msl_xcrun_validation_tests",
     srcs = [
@@ -165,8 +193,16 @@ donner_cc_test(
         "tests/ReductionCoverageModule.h",
         "tests/ShaderTestUtils.h",
     ],
+    # Bazel scrubs the test environment, so the automated-lane markers have to be named here or
+    # the fail-closed rule can never see one and the gate quietly keeps skipping.
+    env_inherit = [
+        "DONNER_BASELINE_REQUIRE_FROZEN_ADAPTER",
+        "GITHUB_ACTIONS",
+    ],
+    tags = ["requires_metal_toolchain"],
     target_compatible_with = ["@platforms//os:macos"],
     deps = [
+        ":external_tool_gate",
         ":programs",
         ":shader",
         ":stage_io_test_modules",
@@ -175,10 +211,10 @@ donner_cc_test(
 )
 
 # Out-of-process SPIR-V validation: every emitted module must pass
-# `spirv-val --target-env vulkan1.1`. The validator is invoked at test time
-# rather than depended on, so the emitter is held to the specification's own
-# rules without putting a validator in the build graph. Skips cleanly when
-# spirv-val is not installed.
+# `spirv-val --target-env vulkan1.1`, so the emitter is held to the
+# specification's own rules by the reference validator rather than by a parser
+# in this repository. Bazel builds that validator from source and hands it over
+# in runfiles, so every lane runs the same one and none can be missing it.
 donner_cc_test(
     name = "spirv_val_validation_tests",
     srcs = [
@@ -186,10 +222,12 @@ donner_cc_test(
         "tests/ShaderTestUtils.h",
         "tests/SpirvValValidation_tests.cc",
     ],
+    data = ["@spirv_tools//:spirv-val"],
     deps = [
         ":programs",
         ":shader",
         ":stage_io_test_modules",
+        "//donner/base:base_test_utils",
         "@com_google_gtest//:gtest_main",
     ],
 )

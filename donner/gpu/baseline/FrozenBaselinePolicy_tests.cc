@@ -8,47 +8,15 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
-#include <cstdlib>
 #include <string>
+
+#include "donner/base/tests/ScopedEnvironmentVariable.h"
 
 namespace donner::gpu::baseline {
 namespace {
 
 using testing::HasSubstr;
 using testing::Not;
-
-/// Sets an environment variable for one test and restores the previous state afterwards, so the
-/// cases can force the automated-lane path without depending on where they are run.
-class ScopedEnvironmentVariable {
-public:
-  ScopedEnvironmentVariable(const char* name, const char* value) : name_(name) {
-    if (const char* previous = std::getenv(name); previous != nullptr) {
-      previous_ = previous;
-      hadPrevious_ = true;
-    }
-    if (value != nullptr) {
-      setenv(name, value, 1);
-    } else {
-      unsetenv(name);
-    }
-  }
-
-  ~ScopedEnvironmentVariable() {
-    if (hadPrevious_) {
-      setenv(name_.c_str(), previous_.c_str(), 1);
-    } else {
-      unsetenv(name_.c_str());
-    }
-  }
-
-  ScopedEnvironmentVariable(const ScopedEnvironmentVariable&) = delete;
-  ScopedEnvironmentVariable& operator=(const ScopedEnvironmentVariable&) = delete;
-
-private:
-  std::string name_;
-  std::string previous_;
-  bool hadPrevious_ = false;
-};
 
 TEST(FrozenBaselinePolicyTests, AnAutomatedLaneFailsInsteadOfSkipping) {
   EXPECT_THAT(DispositionForUnbaselinedAdapter(/*underContinuousIntegration=*/true),
@@ -74,6 +42,21 @@ TEST(FrozenBaselinePolicyTests, TheExplicitOverrideSelectsTheFailClosedDispositi
   const ScopedEnvironmentVariable donnerOverride("DONNER_BASELINE_REQUIRE_FROZEN_ADAPTER", "1");
 
   EXPECT_TRUE(RunningUnderContinuousIntegration());
+}
+
+TEST(FrozenBaselinePolicyTests, TheMarkerLookupNamesTheMarkerThatIsSet) {
+  const ScopedEnvironmentVariable githubActions("GITHUB_ACTIONS", nullptr);
+  const ScopedEnvironmentVariable donnerOverride("DONNER_BASELINE_REQUIRE_FROZEN_ADAPTER", "1");
+
+  EXPECT_THAT(FirstContinuousIntegrationMarkerSet(),
+              testing::Eq("DONNER_BASELINE_REQUIRE_FROZEN_ADAPTER"));
+}
+
+TEST(FrozenBaselinePolicyTests, TheMarkerLookupIsEmptyOffAnAutomatedLane) {
+  const ScopedEnvironmentVariable githubActions("GITHUB_ACTIONS", nullptr);
+  const ScopedEnvironmentVariable donnerOverride("DONNER_BASELINE_REQUIRE_FROZEN_ADAPTER", nullptr);
+
+  EXPECT_THAT(FirstContinuousIntegrationMarkerSet(), testing::IsEmpty());
 }
 
 TEST(FrozenBaselinePolicyTests, NoMarkerMeansNoAutomatedLane) {

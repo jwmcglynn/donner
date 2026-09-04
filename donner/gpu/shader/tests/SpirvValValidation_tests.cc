@@ -1,7 +1,7 @@
 /// @file
 /// Out-of-process SPIR-V validation: every emitted module must pass
-/// `spirv-val --target-env vulkan1.1`. Platform validators run as external verification tools
-/// rather than build dependencies, so the test skips cleanly when spirv-val is not installed.
+/// `spirv-val --target-env vulkan1.1`. The validator is built from source by Bazel and reached
+/// through runfiles, so every machine runs the same one and a machine without it cannot exist.
 ///
 /// A negative control proves the detection mechanism: a deliberately malformed module must be
 /// rejected, so an acceptance result here means the validator actually inspected the words rather
@@ -17,6 +17,7 @@
 #include <string>
 #include <vector>
 
+#include "donner/base/tests/Runfiles.h"
 #include "donner/gpu/shader/IrModule.h"
 #include "donner/gpu/shader/SpirvEmitter.h"
 #include "donner/gpu/shader/programs/ColorMatrix.h"
@@ -50,18 +51,10 @@ int RunCommand(const std::string& command, std::string* output) {
   return pclose(pipe);
 }
 
-/// Locates spirv-val: PATH first, then the common Homebrew and /usr/local install locations.
-/// Returns an empty string when unavailable.
-std::string FindSpirvVal() {
-  const std::array<const char*, 3> candidates = {"spirv-val", "/opt/homebrew/bin/spirv-val",
-                                                 "/usr/local/bin/spirv-val"};
-  for (const char* candidate : candidates) {
-    std::string output;
-    if (RunCommand(std::string(candidate) + " --version", &output) == 0) {
-      return candidate;
-    }
-  }
-  return "";
+/// The Bazel-built validator, from this test's runfiles. Never a host install: which validator ran
+/// would otherwise vary by machine, and a machine without one validated nothing.
+std::string SpirvVal() {
+  return Runfiles::instance().RlocationExternal("spirv_tools", "spirv-val");
 }
 
 /// Writes \p words under TEST_TMPDIR as \p fileName and returns spirv-val's combined output,
@@ -185,42 +178,27 @@ ShaderResult<IrModule> BuildMatrixBlockModule() {
 }
 
 TEST(SpirvValValidation, EmittedSolidFillPassesVulkan11Validation) {
-  const std::string spirvVal = FindSpirvVal();
-  if (spirvVal.empty()) {
-    GTEST_SKIP() << "spirv-val (SPIRV-Tools) is not installed";
-  }
+  const std::string spirvVal = SpirvVal();
   ExpectValidatesForVulkan11(spirvVal, programs::BuildSolidFillModule(), "solid_fill.spv");
 }
 
 TEST(SpirvValValidation, EmittedColorMatrixComputePassesVulkan11Validation) {
-  const std::string spirvVal = FindSpirvVal();
-  if (spirvVal.empty()) {
-    GTEST_SKIP() << "spirv-val (SPIRV-Tools) is not installed";
-  }
+  const std::string spirvVal = SpirvVal();
   ExpectValidatesForVulkan11(spirvVal, programs::BuildColorMatrixModule(), "color_matrix.spv");
 }
 
 TEST(SpirvValValidation, EmittedFloodComputePassesVulkan11Validation) {
-  const std::string spirvVal = FindSpirvVal();
-  if (spirvVal.empty()) {
-    GTEST_SKIP() << "spirv-val (SPIRV-Tools) is not installed";
-  }
+  const std::string spirvVal = SpirvVal();
   ExpectValidatesForVulkan11(spirvVal, programs::BuildFloodModule(), "flood.spv");
 }
 
 TEST(SpirvValValidation, EmittedSubregionClipComputePassesVulkan11Validation) {
-  const std::string spirvVal = FindSpirvVal();
-  if (spirvVal.empty()) {
-    GTEST_SKIP() << "spirv-val (SPIRV-Tools) is not installed";
-  }
+  const std::string spirvVal = SpirvVal();
   ExpectValidatesForVulkan11(spirvVal, programs::BuildSubregionClipModule(), "subregion_clip.spv");
 }
 
 TEST(SpirvValValidation, EmittedFilterColorMatrixPassesVulkan11Validation) {
-  const std::string spirvVal = FindSpirvVal();
-  if (spirvVal.empty()) {
-    GTEST_SKIP() << "spirv-val (SPIRV-Tools) is not installed";
-  }
+  const std::string spirvVal = SpirvVal();
   ExpectValidatesForVulkan11(spirvVal, programs::BuildFilterColorMatrixModule(),
                              "filter_color_matrix.spv");
 }
@@ -229,10 +207,7 @@ TEST(SpirvValValidation, AStorageBlockHoldingBothMatrixTypesPassesVulkan11Valida
   // The MatrixStride decoration is per member, and a validator checks it against the member's
   // own layout: one hardcoded stride would decorate mat2x2f's 8-byte columns as 16 and be
   // rejected here.
-  const std::string spirvVal = FindSpirvVal();
-  if (spirvVal.empty()) {
-    GTEST_SKIP() << "spirv-val (SPIRV-Tools) is not installed";
-  }
+  const std::string spirvVal = SpirvVal();
   ExpectValidatesForVulkan11(spirvVal, BuildMatrixBlockModule(), "matrix_block.spv");
 }
 
@@ -240,20 +215,14 @@ TEST(SpirvValValidation, APositionOnlyFragmentEntryPassesVulkan11Validation) {
   // Position is location-less in every emitter, so each decides on its own how such an input
   // reaches the stage. SPIR-V declares it as its own Input variable, decorated FragCoord rather
   // than the vertex stage's Position; the validator is what says so out of process.
-  const std::string spirvVal = FindSpirvVal();
-  if (spirvVal.empty()) {
-    GTEST_SKIP() << "spirv-val (SPIRV-Tools) is not installed";
-  }
+  const std::string spirvVal = SpirvVal();
   ExpectValidatesForVulkan11(spirvVal, BuildPositionOnlyFragmentModule(), "position_only.spv");
 }
 
 TEST(SpirvValValidation, EmittedSnapshotUnpremultiplyComputePassesVulkan11Validation) {
   // The first module to emit OpUGreaterThanEqual over a vector, OpAny, and OpShiftRightLogical,
   // so this is where the validator confirms those encodings and their result types.
-  const std::string spirvVal = FindSpirvVal();
-  if (spirvVal.empty()) {
-    GTEST_SKIP() << "spirv-val (SPIRV-Tools) is not installed";
-  }
+  const std::string spirvVal = SpirvVal();
   ExpectValidatesForVulkan11(spirvVal, programs::BuildSnapshotUnpremultiplyModule(),
                              "snapshot_unpremultiply.spv");
 }
@@ -261,10 +230,7 @@ TEST(SpirvValValidation, EmittedSnapshotUnpremultiplyComputePassesVulkan11Valida
 TEST(SpirvValValidation, EmittedBoolVectorReductionsPassVulkan11Validation) {
   // OpAll reaches no shipping program, so this is the only place the validator confirms its
   // encoding and that its result type is a scalar bool rather than the vector it reduced.
-  const std::string spirvVal = FindSpirvVal();
-  if (spirvVal.empty()) {
-    GTEST_SKIP() << "spirv-val (SPIRV-Tools) is not installed";
-  }
+  const std::string spirvVal = SpirvVal();
   ExpectValidatesForVulkan11(spirvVal, BuildVectorReductionModule(), "vector_reductions.spv");
 }
 
@@ -273,10 +239,7 @@ TEST(SpirvValValidation, NegativeControlDetectsAMalformedModule) {
   // a single word, which is not a decodable instruction stream; spirv-val must reject it. Without
   // this, a harness that silently reported success would make the acceptance results above
   // meaningless.
-  const std::string spirvVal = FindSpirvVal();
-  if (spirvVal.empty()) {
-    GTEST_SKIP() << "spirv-val (SPIRV-Tools) is not installed";
-  }
+  const std::string spirvVal = SpirvVal();
 
   ShaderResult<IrModule> module = programs::BuildSolidFillModule();
   ASSERT_THAT(module, HasShaderResult());
