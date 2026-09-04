@@ -6,7 +6,6 @@
 #include <array>
 #include <atomic>
 #include <chrono>
-#include <fstream>
 #include <future>
 #include <iostream>
 #include <memory>
@@ -18,6 +17,7 @@
 #include <vector>
 
 #include "donner/base/Transform.h"
+#include "donner/base/tests/RunfileGate.h"
 #include "donner/editor/AsyncSVGDocument.h"
 #include "donner/editor/AttributeWriteback.h"
 #include "donner/editor/EditorApp.h"
@@ -637,14 +637,11 @@ TEST(AsyncRendererTest, FilterOnlyRestrictsMandatoryHintsButKeepsSelectionLayer)
 }
 
 TEST(AsyncRendererE2ETest, FilterOnlyPublishesSplashBlurGroupsAsSeparateLayers) {
-  std::ifstream splashStream("donner_splash.svg");
-  if (!splashStream.is_open()) {
-    GTEST_SKIP() << "donner_splash.svg not found in runfiles";
-  }
-  std::ostringstream splashBuffer;
-  splashBuffer << splashStream.rdbuf();
+  const donner::tests::RequiredRunfile splashFile =
+      donner::tests::ReadRequiredRunfile("donner_splash.svg");
+  DONNER_REQUIRE_RUNFILE(splashFile);
 
-  svg::SVGDocument document = svg::instantiateSubtree(splashBuffer.str());
+  svg::SVGDocument document = svg::instantiateSubtree(splashFile.contents);
   document.setCanvasSize(892, 512);
   const std::array<std::string_view, 3> filterSelectors = {
       "#Lightning_glow_dark",
@@ -1205,15 +1202,12 @@ TEST(AsyncRendererTest, PendingParentDemotionDoesNotClaimMovableChildCoverage) {
 }
 
 TEST(AsyncRendererE2ETest, UnbundledDonnerDDragMarksEveryComponentAsDragTarget) {
-  std::ifstream splashStream("donner_splash.svg");
-  if (!splashStream.is_open()) {
-    GTEST_SKIP() << "donner_splash.svg not found in runfiles";
-  }
-  std::ostringstream splashBuf;
-  splashBuf << splashStream.rdbuf();
+  const donner::tests::RequiredRunfile splashFile =
+      donner::tests::ReadRequiredRunfile("donner_splash.svg");
+  DONNER_REQUIRE_RUNFILE(splashFile);
 
   EditorApp app;
-  ASSERT_TRUE(app.loadFromString(splashBuf.str()));
+  ASSERT_TRUE(app.loadFromString(splashFile.contents));
   auto donnerD = app.document().document().querySelector("#Donner_D");
   ASSERT_TRUE(donnerD.has_value());
   ASSERT_TRUE(app.unbundleCompoundPath(*donnerD));
@@ -1422,15 +1416,12 @@ TEST(AsyncRendererTest, SimpleIdleSelectionPublishesThreeImmediateLayers) {
 }
 
 TEST(AsyncRendererE2ETest, SplashDonnerSelectionExposesEligibleStaticSpansForLayerPanel) {
-  std::ifstream splashStream("donner_splash.svg");
-  if (!splashStream.is_open()) {
-    GTEST_SKIP() << "donner_splash.svg not found in runfiles";
-  }
-  std::ostringstream splashBuf;
-  splashBuf << splashStream.rdbuf();
+  const donner::tests::RequiredRunfile splashFile =
+      donner::tests::ReadRequiredRunfile("donner_splash.svg");
+  DONNER_REQUIRE_RUNFILE(splashFile);
 
   EditorApp app;
-  ASSERT_TRUE(app.loadFromString(splashBuf.str()));
+  ASSERT_TRUE(app.loadFromString(splashFile.contents));
   const EditorRasterViewport rasterViewport = SplashDonnerHighZoomRasterViewport();
   app.document().document().setCanvasSize(rasterViewport.semanticCanvasSizePx.x,
                                           rasterViewport.semanticCanvasSizePx.y);
@@ -1486,15 +1477,12 @@ TEST(AsyncRendererE2ETest, SplashDonnerSelectionExposesEligibleStaticSpansForLay
 }
 
 TEST(AsyncRendererE2ETest, SplashDonnerNDragPublishesImmediateLayerForLayerPanel) {
-  std::ifstream splashStream("donner_splash.svg");
-  if (!splashStream.is_open()) {
-    GTEST_SKIP() << "donner_splash.svg not found in runfiles";
-  }
-  std::ostringstream splashBuf;
-  splashBuf << splashStream.rdbuf();
+  const donner::tests::RequiredRunfile splashFile =
+      donner::tests::ReadRequiredRunfile("donner_splash.svg");
+  DONNER_REQUIRE_RUNFILE(splashFile);
 
   EditorApp app;
-  ASSERT_TRUE(app.loadFromString(splashBuf.str()));
+  ASSERT_TRUE(app.loadFromString(splashFile.contents));
   const EditorRasterViewport rasterViewport =
       SplashDonnerHighZoomRasterViewport(Vector2d(435.0, 350.0));
   app.document().document().setCanvasSize(rasterViewport.semanticCanvasSizePx.x,
@@ -3307,13 +3295,10 @@ TEST(AsyncRendererTest, SelectedPathStyleChangePublishesFreshPromotedLayerPixels
 }
 
 TEST(AsyncRendererE2ETest, DragOThenSelectEDoesNotAdvanceExistingLayerGenerations) {
-  std::ifstream splashStream("donner_splash.svg");
-  if (!splashStream.is_open()) {
-    GTEST_SKIP() << "donner_splash.svg not found in runfiles";
-  }
-  std::ostringstream splashBuf;
-  splashBuf << splashStream.rdbuf();
-  const std::string splashSource = splashBuf.str();
+  const donner::tests::RequiredRunfile splashFile =
+      donner::tests::ReadRequiredRunfile("donner_splash.svg");
+  DONNER_REQUIRE_RUNFILE(splashFile);
+  const std::string& splashSource = splashFile.contents;
 
   EditorApp app;
   ASSERT_TRUE(app.loadFromString(splashSource));
@@ -3484,15 +3469,12 @@ TEST(AsyncRendererE2ETest, DragOThenSelectEDoesNotAdvanceExistingLayerGeneration
 }
 
 TEST(AsyncRendererE2ETest, BackgroundStickerDragPresentsLiveDeltaFromStaleCache) {
-  std::ifstream splashStream("donner_splash.svg");
-  if (!splashStream.is_open()) {
-    GTEST_SKIP() << "donner_splash.svg not found in runfiles";
-  }
-  std::ostringstream splashBuf;
-  splashBuf << splashStream.rdbuf();
+  const donner::tests::RequiredRunfile splashFile =
+      donner::tests::ReadRequiredRunfile("donner_splash.svg");
+  DONNER_REQUIRE_RUNFILE(splashFile);
 
   EditorApp app;
-  ASSERT_TRUE(app.loadFromString(splashBuf.str()));
+  ASSERT_TRUE(app.loadFromString(splashFile.contents));
   app.document().document().setCanvasSize(1784, 1024);
 
   std::optional<svg::SVGElement> backgroundPath =
@@ -4257,13 +4239,10 @@ TEST(AsyncRendererE2ETest, ClickThenDragOnSplashShapeMeetsLatencyBudget) {
   // groups with real geometry - not a simplified stub). This is the
   // document the user is interacting with in the editor; test numbers
   // must match editor reality.
-  std::ifstream splashStream("donner_splash.svg");
-  if (!splashStream.is_open()) {
-    GTEST_SKIP() << "donner_splash.svg not found in runfiles";
-  }
-  std::ostringstream splashBuf;
-  splashBuf << splashStream.rdbuf();
-  const std::string splashSource = splashBuf.str();
+  const donner::tests::RequiredRunfile splashFile =
+      donner::tests::ReadRequiredRunfile("donner_splash.svg");
+  DONNER_REQUIRE_RUNFILE(splashFile);
+  const std::string& splashSource = splashFile.contents;
   ASSERT_FALSE(splashSource.empty());
 
   AsyncSVGDocument asyncDoc;
@@ -4388,13 +4367,10 @@ TEST(AsyncRendererE2ETest, EndToEndDragHarnessOnRealSplash) {
                     "target //donner/editor/tests:async_renderer_wallclock_tests.";
   }
 
-  std::ifstream splashStream("donner_splash.svg");
-  if (!splashStream.is_open()) {
-    GTEST_SKIP() << "donner_splash.svg not found in runfiles";
-  }
-  std::ostringstream splashBuf;
-  splashBuf << splashStream.rdbuf();
-  const std::string splashSource = splashBuf.str();
+  const donner::tests::RequiredRunfile splashFile =
+      donner::tests::ReadRequiredRunfile("donner_splash.svg");
+  DONNER_REQUIRE_RUNFILE(splashFile);
+  const std::string& splashSource = splashFile.contents;
   ASSERT_FALSE(splashSource.empty());
 
   AsyncSVGDocument asyncDoc;
@@ -4443,13 +4419,10 @@ TEST(AsyncRendererE2ETest, FaithfulFrameDragOnRealSplashBreaksDownPerFrameCost) 
                     "target //donner/editor/tests:async_renderer_wallclock_tests.";
   }
 
-  std::ifstream splashStream("donner_splash.svg");
-  if (!splashStream.is_open()) {
-    GTEST_SKIP() << "donner_splash.svg not found in runfiles";
-  }
-  std::ostringstream splashBuf;
-  splashBuf << splashStream.rdbuf();
-  const std::string splashSource = splashBuf.str();
+  const donner::tests::RequiredRunfile splashFile =
+      donner::tests::ReadRequiredRunfile("donner_splash.svg");
+  DONNER_REQUIRE_RUNFILE(splashFile);
+  const std::string& splashSource = splashFile.contents;
   ASSERT_FALSE(splashSource.empty());
 
   AsyncSVGDocument asyncDoc;
@@ -4522,13 +4495,10 @@ TEST(AsyncRendererE2ETest, FaithfulFrameDragOnRealSplashBlueCenterBurstBreaksDow
                     "target //donner/editor/tests:async_renderer_wallclock_tests.";
   }
 
-  std::ifstream splashStream("donner_splash.svg");
-  if (!splashStream.is_open()) {
-    GTEST_SKIP() << "donner_splash.svg not found in runfiles";
-  }
-  std::ostringstream splashBuf;
-  splashBuf << splashStream.rdbuf();
-  const std::string splashSource = splashBuf.str();
+  const donner::tests::RequiredRunfile splashFile =
+      donner::tests::ReadRequiredRunfile("donner_splash.svg");
+  DONNER_REQUIRE_RUNFILE(splashFile);
+  const std::string& splashSource = splashFile.contents;
   ASSERT_FALSE(splashSource.empty());
 
   AsyncSVGDocument asyncDoc;
@@ -4587,13 +4557,10 @@ TEST(AsyncRendererE2ETest, RawSelectedZoomRenderOnRealSplashBreaksDownPerFrameCo
                     "target //donner/editor/tests:async_renderer_wallclock_tests.";
   }
 
-  std::ifstream splashStream("donner_splash.svg");
-  if (!splashStream.is_open()) {
-    GTEST_SKIP() << "donner_splash.svg not found in runfiles";
-  }
-  std::ostringstream splashBuf;
-  splashBuf << splashStream.rdbuf();
-  const std::string splashSource = splashBuf.str();
+  const donner::tests::RequiredRunfile splashFile =
+      donner::tests::ReadRequiredRunfile("donner_splash.svg");
+  DONNER_REQUIRE_RUNFILE(splashFile);
+  const std::string& splashSource = splashFile.contents;
   ASSERT_FALSE(splashSource.empty());
 
   AsyncSVGDocument asyncDoc;
@@ -4732,13 +4699,10 @@ TEST(AsyncRendererE2ETest, MultiShapeClickDragHiDpiRepro) {
                     "target //donner/editor/tests:async_renderer_wallclock_tests.";
   }
 
-  std::ifstream splashStream("donner_splash.svg");
-  if (!splashStream.is_open()) {
-    GTEST_SKIP() << "donner_splash.svg not found in runfiles";
-  }
-  std::ostringstream splashBuf;
-  splashBuf << splashStream.rdbuf();
-  const std::string splashSource = splashBuf.str();
+  const donner::tests::RequiredRunfile splashFile =
+      donner::tests::ReadRequiredRunfile("donner_splash.svg");
+  DONNER_REQUIRE_RUNFILE(splashFile);
+  const std::string& splashSource = splashFile.contents;
   ASSERT_FALSE(splashSource.empty());
 
   AsyncSVGDocument asyncDoc;
@@ -4907,13 +4871,10 @@ TEST(AsyncRendererE2ETest, MultiShapeClickDragHiDpiRepro) {
 // contain real pixels, while a split preview may omit that redundant full-frame
 // copy only when its current tiles resolve to retained non-transparent pixels.
 TEST(AsyncRendererE2ETest, PresentationStaysNonTransparentAcrossDragTargetSwap) {
-  std::ifstream splashStream("donner_splash.svg");
-  if (!splashStream.is_open()) {
-    GTEST_SKIP() << "donner_splash.svg not found in runfiles";
-  }
-  std::ostringstream splashBuf;
-  splashBuf << splashStream.rdbuf();
-  const std::string splashSource = splashBuf.str();
+  const donner::tests::RequiredRunfile splashFile =
+      donner::tests::ReadRequiredRunfile("donner_splash.svg");
+  DONNER_REQUIRE_RUNFILE(splashFile);
+  const std::string& splashSource = splashFile.contents;
   ASSERT_FALSE(splashSource.empty());
 
   AsyncSVGDocument asyncDoc;

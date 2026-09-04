@@ -24,6 +24,7 @@
 #include "backends/imgui_impl_wgpu.h"
 #include "donner/base/Box.h"
 #include "donner/base/ParseWarningSink.h"
+#include "donner/base/tests/RunfileGate.h"
 #include "donner/base/tests/Runfiles.h"
 #include "donner/css/Color.h"
 #include "donner/editor/AsyncRenderer.h"
@@ -177,16 +178,9 @@ std::shared_ptr<const svg::RendererTextureSnapshot> RenderPremultipliedRedTextur
   return source.takeTextureSnapshot();
 }
 
-std::optional<svg::SVGDocument> LoadDonnerSplashDocument() {
-  std::ifstream splashStream(donner::Runfiles::instance().Rlocation("donner_splash.svg"));
-  if (!splashStream.is_open()) {
-    return std::nullopt;
-  }
-
-  std::ostringstream splashBuf;
-  splashBuf << splashStream.rdbuf();
+std::optional<svg::SVGDocument> ParseDonnerSplashDocument(std::string_view source) {
   ParseWarningSink warningSink = ParseWarningSink::Disabled();
-  auto parsed = svg::parser::SVGParser::ParseSVG(splashBuf.str(), warningSink);
+  auto parsed = svg::parser::SVGParser::ParseSVG(source, warningSink);
   EXPECT_FALSE(parsed.hasError()) << parsed.error();
   if (parsed.hasError()) {
     return std::nullopt;
@@ -2058,10 +2052,11 @@ TEST(EditorWindowTest, WgpuPresentsZoomedDonnerSplashFilteredLayerWithoutDarkeni
     GTEST_SKIP() << "WebGPU editor window is unavailable on this host";
   }
 
-  std::optional<svg::SVGDocument> document = LoadDonnerSplashDocument();
-  if (!document.has_value()) {
-    GTEST_SKIP() << "donner_splash.svg not found in runfiles";
-  }
+  const donner::tests::RequiredRunfile splashFile =
+      donner::tests::ReadRequiredRunfile("donner_splash.svg");
+  DONNER_REQUIRE_RUNFILE(splashFile);
+  std::optional<svg::SVGDocument> document = ParseDonnerSplashDocument(splashFile.contents);
+  ASSERT_TRUE(document.has_value());
 
   std::optional<svg::SVGElement> target = document->querySelector("#Big_lightning_glow");
   ASSERT_TRUE(target.has_value());
