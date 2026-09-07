@@ -124,8 +124,11 @@ donner_cc_library(
     testonly = 1,
     hdrs = [
         "tests/BaseTestUtils.h",
+        "tests/ContinuousIntegrationMarkers.h",
+        "tests/EnvironmentCapabilityGate.h",
         "tests/ParseResultTestUtils.h",
         "tests/Runfiles.h",
+        "tests/ScopedEnvironmentVariable.h",
         "tests/TestTempDir.h",
     ],
     # //tools tests (MCP servers, build tooling) share the same test-hygiene
@@ -183,7 +186,9 @@ donner_cc_test(
         "tests/Box_tests.cc",
         "tests/ChunkedString_tests.cc",
         "tests/CompileTimeMap_tests.cc",
+        "tests/ContinuousIntegrationMarkers_tests.cc",
         "tests/DiagnosticRenderer_tests.cc",
+        "tests/EnvironmentCapabilityGate_tests.cc",
         "tests/FileUtils_tests.cc",
         "tests/Length_tests.cc",
         "tests/MathUtils_tests.cc",

@@ -248,6 +248,13 @@ donner_cc_test(
 donner_cc_test(
     name = "document_save_tests",
     srcs = ["DocumentSave_tests.cc"],
+    # Bazel scrubs the test environment, so the automated-lane markers have to be named here or
+    # the symlink-destination fail-closed rule can never see one and the case keeps skipping into
+    # a green report.
+    env_inherit = [
+        "DONNER_BASELINE_REQUIRE_FROZEN_ADAPTER",
+        "GITHUB_ACTIONS",
+    ],
     deps = [
         ":bitmap_golden_compare",
         "//donner/base",

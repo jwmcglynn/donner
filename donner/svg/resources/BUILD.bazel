@@ -283,6 +283,13 @@ donner_cc_test(
         "tests/NullResourceLoader_tests.cc",
         "tests/SandboxedFileResourceLoader_tests.cc",
     ],
+    # Bazel scrubs the test environment, so the automated-lane markers have to be named here or
+    # the symlink-escape fail-closed rule can never see one and the case keeps skipping into a
+    # green report.
+    env_inherit = [
+        "DONNER_BASELINE_REQUIRE_FROZEN_ADAPTER",
+        "GITHUB_ACTIONS",
+    ],
     # Variant lanes (doc 0031 M2.3): tiny / text_full / geode
     # wrappers run automatically under `bazel test //...`.
     variants = [
@@ -293,6 +300,7 @@ donner_cc_test(
     deps = [
         ":resource_loader_interface",
         ":sandboxed_file_resource_loader",
+        "//donner/base:base_test_utils",
         "@com_google_gtest//:gtest_main",
     ],
 )
