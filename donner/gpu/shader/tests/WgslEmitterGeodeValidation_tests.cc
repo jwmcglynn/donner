@@ -80,6 +80,7 @@ std::vector<uint8_t> MapAndReadBack(const wgpu::Device& device, const wgpu::Buff
   };
   mapCb.userdata1 = donner::geode::retainWgpuCallbackState(mapState);
   mapCb.userdata2 = nullptr;
+  mapCb.mode = wgpu::CallbackMode::AllowSpontaneous;
   buffer.mapAsync(wgpu::MapMode::Read, 0, size, mapCb);
 
   const donner::geode::GpuWaitResult waitResult = donner::geode::BoundedGpuWait(
