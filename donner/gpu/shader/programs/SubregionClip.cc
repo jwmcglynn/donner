@@ -53,7 +53,7 @@ ShaderResult<IrModule> BuildSubregionClipModule() {
   e.ok(AddBindings(builder, paramsType));
 
   auto entryResult = builder.createComputeEntryPoint(
-      "cs_main",
+      RcString(kSubregionClipEntryPoint),
       {IrParam{"gid", IrType::Vec3(ScalarKind::U32), std::nullopt,
                BuiltinInput::GlobalInvocationId}},
       WorkgroupSize{kSubregionClipWorkgroupSize, kSubregionClipWorkgroupSize, 1});

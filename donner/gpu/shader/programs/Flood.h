@@ -3,19 +3,9 @@
 /// The flood compute program, expressed in the \c donner::gpu::shader IR.
 
 #include "donner/gpu/shader/IrModule.h"
+#include "donner/gpu/shader/programs/FloodBindings.h"
 
 namespace donner::gpu::shader::programs {
-
-/// Bind group indices of the flood compute program, shared by the IR builder and every host that
-/// creates its bind group layout.
-enum class FloodBinding : uint32_t {
-  OutputTexture = 0,  //!< `texture_storage_2d<rgba8unorm, write>` destination.
-  Params = 1,         //!< Uniform buffer holding the single color the destination is filled with.
-};
-
-/// Workgroup size the flood entry point declares. Hosts divide the destination extent by this to
-/// compute dispatch counts.
-inline constexpr uint32_t kFloodWorkgroupSize = 8;
 
 /**
  * Builds the flood compute program: one `@compute @workgroup_size(8, 8, 1)` entry point named

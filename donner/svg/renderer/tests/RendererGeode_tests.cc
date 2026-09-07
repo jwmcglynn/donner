@@ -2827,6 +2827,59 @@ TEST_F(RendererGeodeTest, FilterFloodFillsSubregion) {
       << "feFlood should preserve straight-alpha red at 50% opacity";
 }
 
+/// A filter pass recorded through the GPU runtime, on the far side of a command buffer split.
+///
+/// A large filter graph is split across several command buffers to bound how much one buffer
+/// carries. Each split finishes and submits the encoder the runtime is replaying into and starts a
+/// fresh one, and the runtime holds completion of everything it replayed until that submit is
+/// reported to it. Until it is, and until the runtime is pointed at the replacement, a replayed
+/// pass records into a command encoder that has already been consumed and its work never reaches
+/// the queue.
+///
+/// Each morphology node at this radius decomposes into the per-axis pass cap, so the six of them
+/// outrun the sixty-four passes one command buffer carries and the flood after them is recorded
+/// past a split.
+TEST_F(RendererGeodeTest, FloodAfterACommandBufferSplitStillReachesTheQueue) {
+  constexpr size_t kMorphologyNodes = 6;
+
+  RendererGeode renderer = createRenderer();
+  beginFrame(renderer);
+
+  components::FilterGraph graph;
+  for (size_t i = 0; i < kMorphologyNodes; ++i) {
+    components::FilterNode morphologyNode;
+    components::filter_primitive::Morphology morphology;
+    morphology.op = components::filter_primitive::Morphology::Operator::Dilate;
+    morphology.radiusX = components::kMaximumFilterMorphologyRadius;
+    morphology.radiusY = components::kMaximumFilterMorphologyRadius;
+    morphologyNode.primitive = morphology;
+    graph.nodes.push_back(morphologyNode);
+  }
+
+  components::FilterNode floodNode;
+  components::filter_primitive::Flood flood;
+  // feFlood ignores its input, so this node alone decides the result.
+  flood.floodColor = css::Color(css::RGBA(0, 0, 255, 255));
+  flood.floodOpacity = 1.0;
+  floodNode.primitive = flood;
+  graph.nodes.push_back(floodNode);
+
+  renderer.pushFilterLayer(graph, Box2d({0, 0}, {kViewportSize, kViewportSize}));
+
+  renderer.setPaint(solidFill(css::RGBA(0, 255, 0, 255)));
+  renderer.setTransform(Transform2d());
+  renderer.drawRect(Box2d({0, 0}, {kViewportSize, kViewportSize}), StrokeParams{});
+
+  renderer.popFilterLayer();
+  renderer.endFrame();
+
+  RendererBitmap snap = renderer.takeSnapshot();
+  ASSERT_FALSE(snap.empty());
+
+  EXPECT_THAT(pixelAt(snap, 32, 32), RgbaEq(0, 0, 255, 255))
+      << "the flood recorded after the command buffer split must still reach the queue";
+}
+
 TEST_F(RendererGeodeTest, FilterImagePixelatedSmoothsFromNearestIntegerScale) {
   RendererGeode renderer = createRenderer();
   beginFrame(renderer);

@@ -3,21 +3,9 @@
 /// The subregion-clip compute program, expressed in the \c donner::gpu::shader IR.
 
 #include "donner/gpu/shader/IrModule.h"
+#include "donner/gpu/shader/programs/SubregionClipBindings.h"
 
 namespace donner::gpu::shader::programs {
-
-/// Bind group indices of the subregion-clip compute program, shared by the IR builder and every
-/// host that creates its bind group layout.
-enum class SubregionClipBinding : uint32_t {
-  InputTexture = 0,   //!< Sampled `texture_2d<f32>` source.
-  OutputTexture = 1,  //!< `texture_storage_2d<rgba8unorm, write>` destination.
-  Params = 2,         //!< Uniform buffer holding the inverse transform and the user-space
-                      //!< rectangle to keep.
-};
-
-/// Workgroup size the subregion-clip entry point declares. Hosts divide the destination extent by
-/// this to compute dispatch counts.
-inline constexpr uint32_t kSubregionClipWorkgroupSize = 8;
 
 /**
  * Builds the subregion-clip compute program: one `@compute @workgroup_size(8, 8, 1)` entry point

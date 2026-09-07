@@ -179,6 +179,17 @@ public:
   bool hasHostCommandEncoder() const;
 
   /**
+   * True when \p encoder is the installed host command encoder.
+   *
+   * "Some host encoder is installed" is not the question a caller replacing its own encoder is
+   * asking: reporting a submit for an encoder this adapter never replayed into would retire work
+   * that has not reached the queue.
+   *
+   * @param encoder Encoder to compare identity against.
+   */
+  bool hostCommandEncoderIs(const wgpu::CommandEncoder& encoder) const;
+
+  /**
    * Reports that the host submitted a command buffer carrying every stream replayed since the
    * previous report, so their completion can now be observed. Advances \ref completedSerial to
    * the highest replayed serial once the queue drains, exactly as an adapter-owned submit does.

@@ -5,7 +5,6 @@
 #include "donner/base/RcString.h"
 #include "donner/svg/renderer/geode/GeodeWgpuUtil.h"
 #include "embed_resources/FilterBlendWgsl.h"
-#include "embed_resources/FilterColorMatrixWgsl.h"
 #include "embed_resources/FilterColorSpaceConvertWgsl.h"
 #include "embed_resources/FilterComponentTransferWgsl.h"
 #include "embed_resources/FilterCompositeWgsl.h"
@@ -13,13 +12,11 @@
 #include "embed_resources/FilterDiffuseLightingWgsl.h"
 #include "embed_resources/FilterDisplacementMapWgsl.h"
 #include "embed_resources/FilterDropShadowWgsl.h"
-#include "embed_resources/FilterFloodWgsl.h"
 #include "embed_resources/FilterImageWgsl.h"
 #include "embed_resources/FilterMergeWgsl.h"
 #include "embed_resources/FilterMorphologyWgsl.h"
 #include "embed_resources/FilterOffsetWgsl.h"
 #include "embed_resources/FilterSpecularLightingWgsl.h"
-#include "embed_resources/FilterSubregionClipWgsl.h"
 #include "embed_resources/FilterTileWgsl.h"
 #include "embed_resources/FilterTurbulenceWgsl.h"
 #include "embed_resources/GaussianBlurWgsl.h"
@@ -103,17 +100,6 @@ wgpu::ShaderModule createFilterOffsetShader(const wgpu::Device& device) {
                               donner::embedded::kFilterOffsetWgsl.size());
 }
 
-wgpu::ShaderModule createFilterColorMatrixShader(const wgpu::Device& device) {
-  return createShaderFromWgsl(device, "FilterColorMatrix",
-                              donner::embedded::kFilterColorMatrixWgsl.data(),
-                              donner::embedded::kFilterColorMatrixWgsl.size());
-}
-
-wgpu::ShaderModule createFilterFloodShader(const wgpu::Device& device) {
-  return createShaderFromWgsl(device, "FilterFlood", donner::embedded::kFilterFloodWgsl.data(),
-                              donner::embedded::kFilterFloodWgsl.size());
-}
-
 wgpu::ShaderModule createFilterMergeShader(const wgpu::Device& device) {
   return createShaderFromWgsl(device, "FilterMerge", donner::embedded::kFilterMergeWgsl.data(),
                               donner::embedded::kFilterMergeWgsl.size());
@@ -186,12 +172,6 @@ wgpu::ShaderModule createFilterImageShader(const wgpu::Device& device) {
 wgpu::ShaderModule createFilterTileShader(const wgpu::Device& device) {
   return createShaderFromWgsl(device, "FilterTile", donner::embedded::kFilterTileWgsl.data(),
                               donner::embedded::kFilterTileWgsl.size());
-}
-
-wgpu::ShaderModule createFilterSubregionClipShader(const wgpu::Device& device) {
-  return createShaderFromWgsl(device, "FilterSubregionClip",
-                              donner::embedded::kFilterSubregionClipWgsl.data(),
-                              donner::embedded::kFilterSubregionClipWgsl.size());
 }
 
 wgpu::ShaderModule createFilterColorSpaceConvertShader(const wgpu::Device& device) {
