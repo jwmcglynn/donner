@@ -12,7 +12,7 @@ is the root module.
 diff --git a/BUILD.bazel b/BUILD.bazel
 --- a/BUILD.bazel
 +++ b/BUILD.bazel
-@@ -316,10 +316,13 @@
+@@ -316,9 +316,12 @@
      ],
      copts = COMMON_COPTS,
      visibility = ["//visibility:public"],
@@ -26,4 +26,3 @@ diff --git a/BUILD.bazel b/BUILD.bazel
 +        "//conditions:default": [],
 +    }),
  )
- 
