@@ -8,14 +8,13 @@
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
-#include <fstream>
 #include <initializer_list>
 #include <optional>
-#include <sstream>
 #include <string>
 #include <string_view>
 #include <vector>
 
+#include "donner/base/tests/RunfileGate.h"
 #include "donner/base/tests/TestTempDir.h"
 #include "donner/editor/repro/ReplayResourceBudget.h"
 #include "donner/editor/repro/ReproFile.h"
@@ -459,15 +458,12 @@ TEST(EditorControlSessionTest, ClickLayerVisibilityButtonCapturesImmediateAndSet
 }
 
 TEST(EditorControlSessionTest, HidingSplashBackgroundDropsGhostPixelsFromSettledFrame) {
-  std::ifstream splash("donner_splash.svg", std::ios::binary);
-  if (!splash.is_open()) {
-    GTEST_SKIP() << "donner_splash.svg not found in runfiles";
-  }
-  std::ostringstream buffer;
-  buffer << splash.rdbuf();
+  const donner::tests::RequiredRunfile splashFile =
+      donner::tests::ReadRequiredRunfile("donner_splash.svg");
+  DONNER_REQUIRE_RUNFILE(splashFile);
 
   EditorControlSession session;
-  ToolCallResult load = session.handleToolCall("load_svg", json{{"svg_source", buffer.str()},
+  ToolCallResult load = session.handleToolCall("load_svg", json{{"svg_source", splashFile.contents},
                                                                 {"canvas_width", 892},
                                                                 {"canvas_height", 512},
                                                                 {"render_after_load", true}});
@@ -511,15 +507,12 @@ TEST(EditorControlSessionTest, HidingSplashBackgroundDropsGhostPixelsFromSettled
 }
 
 TEST(EditorControlSessionTest, DraggingSplashBackgroundDropsGhostPixelsFromPresentedFrame) {
-  std::ifstream splash("donner_splash.svg", std::ios::binary);
-  if (!splash.is_open()) {
-    GTEST_SKIP() << "donner_splash.svg not found in runfiles";
-  }
-  std::ostringstream buffer;
-  buffer << splash.rdbuf();
+  const donner::tests::RequiredRunfile splashFile =
+      donner::tests::ReadRequiredRunfile("donner_splash.svg");
+  DONNER_REQUIRE_RUNFILE(splashFile);
 
   EditorControlSession session;
-  ToolCallResult load = session.handleToolCall("load_svg", json{{"svg_source", buffer.str()},
+  ToolCallResult load = session.handleToolCall("load_svg", json{{"svg_source", splashFile.contents},
                                                                 {"canvas_width", 892},
                                                                 {"canvas_height", 512},
                                                                 {"render_after_load", true}});
@@ -804,16 +797,13 @@ TEST(EditorControlSessionTest, TransformSelectorResizesThroughHandleAndExposesAf
 }
 
 TEST(EditorControlSessionTest, LargeScaleDragKeepsPresentedTileTransformAlignedWithHandle) {
-  std::ifstream splash("donner_splash.svg", std::ios::binary);
-  if (!splash.is_open()) {
-    GTEST_SKIP() << "donner_splash.svg not found in runfiles";
-  }
-  std::ostringstream buffer;
-  buffer << splash.rdbuf();
+  const donner::tests::RequiredRunfile splashFile =
+      donner::tests::ReadRequiredRunfile("donner_splash.svg");
+  DONNER_REQUIRE_RUNFILE(splashFile);
 
   EditorControlSession session;
   ASSERT_TRUE(session
-                  .handleToolCall("load_svg", json{{"svg_source", buffer.str()},
+                  .handleToolCall("load_svg", json{{"svg_source", splashFile.contents},
                                                    {"canvas_width", 892},
                                                    {"canvas_height", 512},
                                                    {"render_after_load", true}})
@@ -1019,16 +1009,13 @@ TEST(EditorControlSessionTest, HeadlessTileCompositionPreservesAffinePlacementAn
 }
 
 TEST(EditorControlSessionTest, SplashOThenRDragKeepsStableSplitLayerPaintOrder) {
-  std::ifstream splash("donner_splash.svg", std::ios::binary);
-  if (!splash.is_open()) {
-    GTEST_SKIP() << "donner_splash.svg not found in runfiles";
-  }
-  std::ostringstream buffer;
-  buffer << splash.rdbuf();
+  const donner::tests::RequiredRunfile splashFile =
+      donner::tests::ReadRequiredRunfile("donner_splash.svg");
+  DONNER_REQUIRE_RUNFILE(splashFile);
 
   EditorControlSession session;
   ASSERT_TRUE(session
-                  .handleToolCall("load_svg", json{{"svg_source", buffer.str()},
+                  .handleToolCall("load_svg", json{{"svg_source", splashFile.contents},
                                                    {"canvas_width", 892},
                                                    {"canvas_height", 512},
                                                    {"render_after_load", true}})
