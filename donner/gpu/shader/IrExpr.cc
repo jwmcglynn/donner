@@ -159,6 +159,9 @@ std::string_view BuiltinFnName(BuiltinFn fn) {
     case BuiltinFn::Normalize: return "normalize";
     case BuiltinFn::Fwidth: return "fwidth";
     case BuiltinFn::Round: return "round";
+    case BuiltinFn::Sign: return "sign";
+    case BuiltinFn::Floor: return "floor";
+    case BuiltinFn::Pow: return "pow";
     case BuiltinFn::Select: return "select";
     case BuiltinFn::Any: return "any";
     case BuiltinFn::All: return "all";
@@ -704,10 +707,22 @@ ShaderResult<IrType> CheckBuiltin(BuiltinFn fn, std::span<const IrExpr> args,
     case BuiltinFn::Sqrt:
     case BuiltinFn::Fwidth:
     case BuiltinFn::Round:
+    case BuiltinFn::Sign:
+    case BuiltinFn::Floor:
       if (args.size() != 1) return argCountError(1);
       if (!args[0].type().isFloatScalarOrVector()) {
         return ShaderError{
             std::format("builtin requires f32 scalar or vector, got {}", TypeName(args[0])), label};
+      }
+      return args[0].type();
+
+    case BuiltinFn::Pow:
+      if (args.size() != 2) return argCountError(2);
+      if (!(args[0].type() == args[1].type()) || !args[0].type().isFloatScalarOrVector()) {
+        return ShaderError{
+            std::format("pow requires two matching f32 scalars or vectors, got {} and {}",
+                        TypeName(args[0]), TypeName(args[1])),
+            label};
       }
       return args[0].type();
 
@@ -830,6 +845,9 @@ ShaderResult<IrExpr> CallBuiltinNamed(std::string_view name, std::vector<IrExpr>
       {"normalize", BuiltinFn::Normalize},
       {"fwidth", BuiltinFn::Fwidth},
       {"round", BuiltinFn::Round},
+      {"sign", BuiltinFn::Sign},
+      {"floor", BuiltinFn::Floor},
+      {"pow", BuiltinFn::Pow},
       {"select", BuiltinFn::Select},
       {"any", BuiltinFn::Any},
       {"all", BuiltinFn::All},

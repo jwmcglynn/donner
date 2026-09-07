@@ -134,7 +134,10 @@ constexpr uint32_t kOpUnreachable = 255;
 constexpr uint32_t kGlslRoundEven = 2;
 constexpr uint32_t kGlslFAbs = 4;
 constexpr uint32_t kGlslSAbs = 5;
+constexpr uint32_t kGlslFSign = 6;
+constexpr uint32_t kGlslFloor = 8;
 constexpr uint32_t kGlslFract = 10;
+constexpr uint32_t kGlslPow = 26;
 constexpr uint32_t kGlslSqrt = 31;
 constexpr uint32_t kGlslFMin = 37;
 constexpr uint32_t kGlslUMin = 38;
@@ -1991,6 +1994,10 @@ uint32_t Emitter::emitSaturateBuiltin(const IrExpr::Node& node, uint32_t typeId)
 std::optional<uint32_t> SingleArgumentGlslInstruction(BuiltinFn fn) {
   switch (fn) {
     case BuiltinFn::Fract: return kGlslFract;
+    // FSign, not SSign: the IR admits only f32 operands here, and the two are different
+    // instructions rather than one polymorphic one.
+    case BuiltinFn::Sign: return kGlslFSign;
+    case BuiltinFn::Floor: return kGlslFloor;
     case BuiltinFn::Sqrt: return kGlslSqrt;
     case BuiltinFn::Length: return kGlslLength;
     case BuiltinFn::Normalize: return kGlslNormalize;
@@ -2011,6 +2018,11 @@ uint32_t Emitter::emitMathBuiltin(const IrExpr::Node& node, uint32_t typeId) {
     case BuiltinFn::Max: return emitMinMaxBuiltin(node, typeId);
     case BuiltinFn::Clamp: return emitClampBuiltin(node, typeId);
     case BuiltinFn::Saturate: return emitSaturateBuiltin(node, typeId);
+    case BuiltinFn::Pow: {
+      const uint32_t baseId = emitValue(node.children[0]);
+      const uint32_t exponentId = emitValue(node.children[1]);
+      return emitExtInst(typeId, kGlslPow, {baseId, exponentId});
+    }
     case BuiltinFn::Dot: {
       const uint32_t lhsId = emitValue(node.children[0]);
       const uint32_t rhsId = emitValue(node.children[1]);

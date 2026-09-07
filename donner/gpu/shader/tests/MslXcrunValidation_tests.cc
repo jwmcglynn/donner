@@ -23,6 +23,7 @@
 #include "donner/gpu/shader/programs/SnapshotUnpremultiply.h"
 #include "donner/gpu/shader/programs/SolidFill.h"
 #include "donner/gpu/shader/programs/SubregionClip.h"
+#include "donner/gpu/shader/tests/MathPrimitiveCoverageModule.h"
 #include "donner/gpu/shader/tests/ReductionCoverageModule.h"
 #include "donner/gpu/shader/tests/ShaderTestUtils.h"
 #include "donner/gpu/shader/tests/StageIoTestModules.h"
@@ -195,6 +196,16 @@ TEST(MslXcrunValidation, EmittedBoolVectorReductionsCompileWithMetalCompiler) {
   // `all` reaches no shipping program, so without this the compiler would never see it and a
   // wrong spelling would only ever be checked against the emitter's own idea of it.
   ExpectCompilesWithMetalCompiler(BuildVectorReductionModule(), "vector_reductions");
+}
+
+TEST(MslXcrunValidation, EmittedMathPrimitivesCompileWithMetalCompiler) {
+  const std::string skipReason = FindMetalCompilerSkipReason();
+  if (!skipReason.empty()) {
+    GTEST_SKIP() << skipReason;
+  }
+  // sign, floor, and pow reach no shipping program yet, so this is the only place a real Metal
+  // front end sees them; a name MSL does not have would otherwise pass every in-repo check.
+  ExpectCompilesWithMetalCompiler(BuildMathPrimitiveModule(), "math_primitives");
 }
 
 TEST(MslXcrunValidation, EmittedFloodComputeCompilesWithMetalCompiler) {

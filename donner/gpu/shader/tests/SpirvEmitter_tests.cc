@@ -8,6 +8,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cstdlib>
 #include <fstream>
 #include <limits>
@@ -20,6 +21,7 @@
 #include "donner/base/tests/Runfiles.h"
 #include "donner/gpu/shader/programs/ColorMatrix.h"
 #include "donner/gpu/shader/programs/SolidFill.h"
+#include "donner/gpu/shader/tests/MathPrimitiveCoverageModule.h"
 #include "donner/gpu/shader/tests/ReductionCoverageModule.h"
 #include "donner/gpu/shader/tests/ShaderTestUtils.h"
 #include "donner/gpu/shader/tests/StageIoTestModules.h"
@@ -74,6 +76,9 @@ constexpr uint32_t kOpBranch = 249;
 constexpr uint32_t kOpBranchConditional = 250;
 
 constexpr uint32_t kGlslRoundEven = 2;
+constexpr uint32_t kGlslFSign = 6;
+constexpr uint32_t kGlslFloor = 8;
+constexpr uint32_t kGlslPow = 26;
 constexpr uint32_t kGlslFClamp = 43;
 constexpr uint32_t kGlslUClamp = 44;
 constexpr uint32_t kGlslSClamp = 45;
@@ -628,6 +633,34 @@ TEST(SpirvEmitterTests, BoolVectorReductionsLowerToOpAllAndOpAny) {
   // Each reduces a distinct comparison, so an emitter that fed both the same operand - or fed
   // one the other's - is caught here rather than by a shader that silently never stores.
   EXPECT_THAT(alls[0].operands[2], testing::Not(testing::Eq(anys[0].operands[2])));
+}
+
+TEST(SpirvEmitterTests, SignFloorAndPowLowerToTheirGlslInstructions) {
+  ShaderResult<IrModule> module = BuildMathPrimitiveModule();
+  ASSERT_THAT(module, HasShaderResult());
+  const std::vector<SpvInstruction> instructions = Scan(EmitOrFail(module.result()));
+
+  // FSign rather than SSign, Floor rather than Trunc or RoundEven, Pow rather than a manually
+  // expanded exp2/log2 pair. The numbers are the ones the GLSL.std.450 specification assigns;
+  // an emitter that transposed two of them still produces a structurally valid module.
+  const std::vector<uint32_t> extInsts = ExtInstNumbers(instructions);
+  EXPECT_THAT(extInsts, testing::Contains(kGlslFSign));
+  EXPECT_THAT(extInsts, testing::Contains(kGlslFloor));
+  EXPECT_THAT(extInsts, testing::Contains(kGlslPow));
+
+  // Each opcode runs in both a scalar and a vector form, so two of each must appear; a lowering
+  // that handled only the scalar shape would emit one.
+  EXPECT_THAT(std::count(extInsts.begin(), extInsts.end(), kGlslFSign), testing::Eq(2));
+  EXPECT_THAT(std::count(extInsts.begin(), extInsts.end(), kGlslFloor), testing::Eq(2));
+  EXPECT_THAT(std::count(extInsts.begin(), extInsts.end(), kGlslPow), testing::Eq(2));
+
+  // Pow takes two operands after the instruction number, where the one-argument lowerings take
+  // one: result type, result id, set id, instruction, base, exponent.
+  for (const SpvInstruction& extInst : WithOpcode(instructions, kOpExtInst)) {
+    if (extInst.operands[3] == kGlslPow) {
+      EXPECT_THAT(extInst.operands, SizeIs(6u)) << "pow must lower to a two-operand OpExtInst";
+    }
+  }
 }
 
 TEST(SpirvEmitterTests, FwidthLowersToOpFwidth) {

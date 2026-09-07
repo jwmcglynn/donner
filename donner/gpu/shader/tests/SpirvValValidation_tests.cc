@@ -25,6 +25,7 @@
 #include "donner/gpu/shader/programs/SnapshotUnpremultiply.h"
 #include "donner/gpu/shader/programs/SolidFill.h"
 #include "donner/gpu/shader/programs/SubregionClip.h"
+#include "donner/gpu/shader/tests/MathPrimitiveCoverageModule.h"
 #include "donner/gpu/shader/tests/ReductionCoverageModule.h"
 #include "donner/gpu/shader/tests/ShaderTestUtils.h"
 #include "donner/gpu/shader/tests/StageIoTestModules.h"
@@ -266,6 +267,16 @@ TEST(SpirvValValidation, EmittedBoolVectorReductionsPassVulkan11Validation) {
     GTEST_SKIP() << "spirv-val (SPIRV-Tools) is not installed";
   }
   ExpectValidatesForVulkan11(spirvVal, BuildVectorReductionModule(), "vector_reductions.spv");
+}
+
+TEST(SpirvValValidation, EmittedMathPrimitivesPassVulkan11Validation) {
+  // The validator is what confirms FSign, Floor, and Pow were given operand counts and result
+  // types the extended instruction set actually declares for them.
+  const std::string spirvVal = FindSpirvVal();
+  if (spirvVal.empty()) {
+    GTEST_SKIP() << "spirv-val (SPIRV-Tools) is not installed";
+  }
+  ExpectValidatesForVulkan11(spirvVal, BuildMathPrimitiveModule(), "math_primitives.spv");
 }
 
 TEST(SpirvValValidation, NegativeControlDetectsAMalformedModule) {
