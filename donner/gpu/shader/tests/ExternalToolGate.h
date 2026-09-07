@@ -12,21 +12,10 @@
 #include <string>
 #include <string_view>
 
+#include "donner/base/tests/ContinuousIntegrationMarkers.h"
 #include "donner/gpu/baseline/FrozenBaselinePolicy.h"
 
 namespace donner::gpu::shader {
-
-/**
- * What a run should do when the external tool it drives is unavailable.
- *
- * Deliberately the same rule the frozen pixel gate applies to a missing device: both end with
- * nothing checked, and a lane that reports success for either has retired the gate.
- *
- * @param underContinuousIntegration Whether this process is on an automated lane.
- * @return Fail closed on an automated lane, skip otherwise.
- */
-baseline::MissingComparisonDisposition DispositionForMissingExternalTool(
-    bool underContinuousIntegration);
 
 /**
  * The message a run reports when the external tool it drives is unavailable.
@@ -55,21 +44,21 @@ std::string MissingExternalToolMessage(std::string_view toolName,
  * @param toolName Tool the suite drives, named the way a person would install it.
  * @param unavailableReason What the probe found, empty when the tool is usable.
  */
-#define DONNER_REQUIRE_EXTERNAL_TOOL(toolName, unavailableReason)                                 \
-  do {                                                                                            \
-    const std::string donnerToolReason = (unavailableReason);                                     \
-    if (!donnerToolReason.empty()) {                                                              \
-      const ::donner::gpu::baseline::MissingComparisonDisposition donnerToolDisposition =         \
-          ::donner::gpu::shader::DispositionForMissingExternalTool(                               \
-              ::donner::gpu::baseline::RunningUnderContinuousIntegration());                      \
-      const std::string donnerToolMessage = ::donner::gpu::shader::MissingExternalToolMessage(    \
-          (toolName), donnerToolReason,                                                           \
-          ::donner::gpu::baseline::FirstContinuousIntegrationMarkerSet(), donnerToolDisposition); \
-      if (donnerToolDisposition ==                                                                \
-          ::donner::gpu::baseline::MissingComparisonDisposition::FailClosed) {                    \
-        ADD_FAILURE() << donnerToolMessage;                                                       \
-        return;                                                                                   \
-      }                                                                                           \
-      GTEST_SKIP() << donnerToolMessage;                                                          \
-    }                                                                                             \
+#define DONNER_REQUIRE_EXTERNAL_TOOL(toolName, unavailableReason)                               \
+  do {                                                                                          \
+    const std::string donnerToolReason = (unavailableReason);                                   \
+    if (!donnerToolReason.empty()) {                                                            \
+      const ::donner::gpu::baseline::MissingComparisonDisposition donnerToolDisposition =       \
+          ::donner::gpu::baseline::DispositionForMissingAdapter(                                \
+              ::donner::tests::RunningUnderContinuousIntegration());                            \
+      const std::string donnerToolMessage = ::donner::gpu::shader::MissingExternalToolMessage(  \
+          (toolName), donnerToolReason, ::donner::tests::FirstContinuousIntegrationMarkerSet(), \
+          donnerToolDisposition);                                                               \
+      if (donnerToolDisposition ==                                                              \
+          ::donner::gpu::baseline::MissingComparisonDisposition::FailClosed) {                  \
+        ADD_FAILURE() << donnerToolMessage;                                                     \
+        return;                                                                                 \
+      }                                                                                         \
+      GTEST_SKIP() << donnerToolMessage;                                                        \
+    }                                                                                           \
   } while (false)

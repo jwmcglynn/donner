@@ -163,9 +163,7 @@ donner_cc_test(
     ],
 )
 
-# The rule these two suites apply when the tool they drive is missing: skip on a developer machine,
-# fail on an automated lane. Split out so it is exercised on every platform, including the ones
-# that have the tool and so never reach it.
+# Exercise the Metal compiler missing-tool policy on every platform.
 donner_cc_library(
     name = "external_tool_gate",
     testonly = 1,
@@ -173,6 +171,7 @@ donner_cc_library(
     hdrs = ["tests/ExternalToolGate.h"],
     visibility = donner_internal_visibility(),
     deps = [
+        "//donner/base:base_test_utils",
         "//donner/gpu/baseline:frozen_baseline_policy",
         "@com_google_gtest//:gtest",
     ],

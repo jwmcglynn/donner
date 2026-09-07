@@ -30,16 +30,6 @@ void RunGate(const std::string& unavailableReason, bool* reachedEnd) {
   *reachedEnd = true;
 }
 
-TEST(ExternalToolGateTests, AnAutomatedLaneFailsInsteadOfSkipping) {
-  EXPECT_THAT(DispositionForMissingExternalTool(/*underContinuousIntegration=*/true),
-              testing::Eq(baseline::MissingComparisonDisposition::FailClosed));
-}
-
-TEST(ExternalToolGateTests, ADeveloperMachineKeepsTheSkipConvenience) {
-  EXPECT_THAT(DispositionForMissingExternalTool(/*underContinuousIntegration=*/false),
-              testing::Eq(baseline::MissingComparisonDisposition::Skip));
-}
-
 TEST(ExternalToolGateTests, TheSkipMessageNamesTheToolAndWhatTheProbeFound) {
   const std::string message = MissingExternalToolMessage(
       kToolName, "missing Metal Toolchain", "", baseline::MissingComparisonDisposition::Skip);

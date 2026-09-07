@@ -2,11 +2,6 @@
 
 namespace donner::gpu::shader {
 
-baseline::MissingComparisonDisposition DispositionForMissingExternalTool(
-    bool underContinuousIntegration) {
-  return baseline::DispositionForMissingAdapter(underContinuousIntegration);
-}
-
 std::string MissingExternalToolMessage(std::string_view toolName,
                                        std::string_view unavailableReason,
                                        std::string_view laneMarker,

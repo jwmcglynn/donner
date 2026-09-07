@@ -14,12 +14,11 @@ std::ostream& operator<<(std::ostream& os, MissingComparisonDisposition disposit
   return os << "MissingComparisonDisposition(unknown)";
 }
 
+// Delegates to the single definition in donner/base/tests/ContinuousIntegrationMarkers.h so a
+// marker dropped from the shared list is caught by that header's own tests as well as this
+// policy's.
 bool RunningUnderContinuousIntegration() {
   return ::donner::tests::RunningUnderContinuousIntegration();
-}
-
-std::string_view FirstContinuousIntegrationMarkerSet() {
-  return ::donner::tests::FirstContinuousIntegrationMarkerSet();
 }
 
 MissingComparisonDisposition DispositionForUnbaselinedAdapter(bool underContinuousIntegration) {

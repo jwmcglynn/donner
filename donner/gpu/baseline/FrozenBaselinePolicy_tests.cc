@@ -44,21 +44,6 @@ TEST(FrozenBaselinePolicyTests, TheExplicitOverrideSelectsTheFailClosedDispositi
   EXPECT_TRUE(RunningUnderContinuousIntegration());
 }
 
-TEST(FrozenBaselinePolicyTests, TheMarkerLookupNamesTheMarkerThatIsSet) {
-  const ScopedEnvironmentVariable githubActions("GITHUB_ACTIONS", nullptr);
-  const ScopedEnvironmentVariable donnerOverride("DONNER_BASELINE_REQUIRE_FROZEN_ADAPTER", "1");
-
-  EXPECT_THAT(FirstContinuousIntegrationMarkerSet(),
-              testing::Eq("DONNER_BASELINE_REQUIRE_FROZEN_ADAPTER"));
-}
-
-TEST(FrozenBaselinePolicyTests, TheMarkerLookupIsEmptyOffAnAutomatedLane) {
-  const ScopedEnvironmentVariable githubActions("GITHUB_ACTIONS", nullptr);
-  const ScopedEnvironmentVariable donnerOverride("DONNER_BASELINE_REQUIRE_FROZEN_ADAPTER", nullptr);
-
-  EXPECT_THAT(FirstContinuousIntegrationMarkerSet(), testing::IsEmpty());
-}
-
 TEST(FrozenBaselinePolicyTests, NoMarkerMeansNoAutomatedLane) {
   const ScopedEnvironmentVariable githubActions("GITHUB_ACTIONS", nullptr);
   const ScopedEnvironmentVariable donnerOverride("DONNER_BASELINE_REQUIRE_FROZEN_ADAPTER", nullptr);
