@@ -28,6 +28,7 @@ donner_cc_test(
     srcs = ["MetalDeviceGate_tests.cc"],
     deps = [
         ":metal_device_gate",
+        "//donner/base:base_test_utils",
         "@com_google_gtest//:gtest_main",
     ],
 )
