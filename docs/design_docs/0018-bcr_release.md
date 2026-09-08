@@ -1,27 +1,26 @@
 # BCR Release Runbook
 
-**Status:** Active — blocked. The first BCR publish attempt, on the `v0.5.0`
-tag (2026-04-16), failed (see the
-[v0.5 retrospective](0011-v0_5_release.md#release-process-bugs-carry-to-v06)).
-Root-causing and re-running the publish flow is tracked as a release-blocking
-item in [0028-v1_0_release.md](0028-v1_0_release.md) Phase 1; no successful
-BCR publish has landed yet.
-**Last updated:** 2026-04-08.
+**Author:** Unknown; original provenance is not recorded.
+**Status:** Active release preparation. Downstream consumer validation is present; the first BCR
+publication awaits a maintainer-approved release.
 
 This doc is the single source of truth for cutting a new Donner release on the [Bazel Central Registry](https://registry.bazel.build/). It's tuned for quick execution, not exhaustive explanation — the "why" lives in the companion docs and PRs linked at the bottom.
 
-## TL;DR — the happy path
+## Release sequence
 
 1. Bump `module(name = "donner", version = "X.Y.Z")` in `MODULE.bazel`
 2. Run the pre-release checklist below, make sure it's green
-3. Merge the release PR, tag `vX.Y.Z`, push
+3. After maintainer approval, merge the release PR, create `vX.Y.Z`, and publish its GitHub Release
 4. `.github/workflows/release.yml` builds, verifies, and attests the CLI binaries once
 5. After the release artifacts are green, use the reviewed `.bcr/` templates to prepare the BCR PR manually
 6. Watch BCR presubmit CI on that PR, iterate on `.bcr/presubmit.yml` if anything fails, ping a BCR maintainer, wait for merge
 
 ## What's on BCR (and what isn't)
 
-Donner's BCR-published surface is a deliberate subset of the full library. The default build that BCR consumers get is **tiny-skia + text-base**:
+The initial BCR module is `donner`, with **tiny-skia + text-base** as its default. A separate
+`tiny-skia-cpp` module is outside this initial v0.8 scope. Consumers need a C++20 compiler and standard
+library, including `std::format`; the validation matrix uses Ubuntu 24.04 and macOS with Bazel 7 and 8.
+The intended published surface is:
 
 | Feature                                       | On BCR? | How BCR consumers get it                                                                                                                                                                  |
 | --------------------------------------------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -44,7 +43,7 @@ Do these in order. Each step is either a command to run or a one-line visual che
 ### Pre-flight
 
 - [ ] Working tree on `main`, clean, up to date
-- [ ] `docs/design_docs/0011-v0_5_release.md` (or equivalent release doc) marks all release-blocking phases complete
+- [ ] `docs/release_checklist.md` and the current release scope have no unresolved release blockers
 - [ ] `RELEASE_NOTES.md` drafted for the version being cut
 
 ### Version bump
@@ -61,27 +60,30 @@ Do these in order. Each step is either a command to run or a one-line visual che
 
 ### BCR-consumer simulation (most important)
 
-Simulate what a BCR downstream sees, where the `non_bcr_deps` dev extension is stripped and the former full-Skia repo / `@harfbuzz` / `@woff2` / `@wgpu_native_*` do not exist.
+Run from a separate module so Donner's development-only dependencies and root `.bazelrc` do not
+apply. The fixture supplies its own C++20 flags and compiles, links, and renders through the public API.
 
-- [ ] No `git_repository` / `new_git_repository` / non-dev `*_override` in top-level `MODULE.bazel` (grep for them):
+- [ ] Run the downstream smoke test for every BCR matrix entry:
       ```sh
-      grep -nE '^(git_repository|new_git_repository|git_override|archive_override)' MODULE.bazel
+      cd examples/bazel_consumer
+      bazel test //:render_svg
       ```
-      (Should return nothing. Dev-only entries live inside `use_extension(..., dev_dependency = True)` blocks or the extension .bzl file.)
-- [ ] No non-BCR repo labels reachable from the BCR target allowlist in default config:
+      The local source override permits testing before publication. Remove that override and add the
+      published version to `bazel_dep` when testing a registry entry.
+- [ ] Build the public base, CSS, SVG, and renderer target list in `.bcr/presubmit.yml` with its explicit
+      C++20 flags. Avoid package wildcards: they also select internal tests and fuzzers whose
+      dependencies are intentionally development-only.
+- [ ] Inspect the default renderer's configured dependency closure from the consumer module:
       ```sh
-      bazel cquery 'kind("source file", deps( \
-        //donner/base/... + //donner/css/... + //donner/svg:svg + \
-        //donner/svg/parser/... + //donner/svg/components/... + \
-        //donner/svg/core/... + //donner/svg/properties/... + \
-        //donner/svg/graph/... + //donner/svg/resources/... + \
-        //donner/svg/renderer:rendering_context + \
-        //donner/svg/renderer:renderer_tiny_skia))' \
-        | grep -E '^@(skia|harfbuzz|woff2|wgpu_native|resvg-test-suite|bazel_clang_tidy)'
+      bazel cquery 'deps(@donner//donner/svg/renderer:renderer)'
       ```
-      Must return **zero** matches. If there are matches, a target in that allowlist has a dep that needs `target_compatible_with` gating (or a new target was added and isn't on the `.bcr/presubmit.yml` allowlist).
-- [ ] `.bcr/presubmit.yml` `build_targets` cover every top-level library consumers might reasonably want. Add new libs here when you add them under `//donner`.
-- [ ] `.bcr/source.template.json` `strip_prefix` matches `donner-{VERSION}` (GitHub tarball convention).
+      It must include tiny-skia and exclude Geode, wgpu-native, HarfBuzz, WOFF2, and development fixtures.
+- [ ] Repeat the consumer check against the extracted source archive, including its vendored tiny-skia
+      sources. A checkout-only build does not qualify archive packaging.
+- [ ] `.bcr/source.template.json` integrity and strip prefix match the exact reviewed archive bytes.
+
+The [BCR test-module mechanism](https://github.com/bazelbuild/bazel-central-registry/blob/main/docs/README.md#test-module)
+runs `examples/bazel_consumer` via the `bcr_test_module` section of `.bcr/presubmit.yml`.
 
 ### Scaffolding sanity
 
@@ -91,25 +93,25 @@ Simulate what a BCR downstream sees, where the `non_bcr_deps` dev extension is s
 ### Ship
 
 - [ ] **Root-cause the previous BCR attempt before retrying** — pull up the last release's BCR PR on `bazelbuild/bazel-central-registry` (`modules/donner/<prev>/`), identify exactly why it failed, and confirm the fix is already in the checked-in `.bcr/` templates and `presubmit.yml` targets. Do not retry blind. Cross-check the common-failures table below.
-- [ ] Merge release PR → push tag `vX.Y.Z` → GitHub Release auto-created
+- [ ] After explicit approval, merge the release PR and create the intended tag and GitHub Release; the release workflow runs when the release is published
 - [ ] Watch Actions tab: `linux` + `macos` CLI binary jobs run, then the verified artifact publication job
 - [ ] Prepare the BCR entry from the reviewed release source and `.bcr/` templates only after artifact publication is green
-- [ ] Watch `bazelbuild/bazel-central-registry` → `modules/donner/X.Y.Z/` for the new PR
+- [ ] Present the final registry diff and destination for explicit maintainer approval before submitting it
 - [ ] Iterate on BCR presubmit failures via the common-failures table below
 - [ ] Ping a BCR maintainer in the PR comments when presubmit CI goes green
 - [ ] After BCR merge: `https://registry.bazel.build/modules/donner` shows the new version
 
-## Publish-to-BCR flow details
+## Registry submission
 
 BCR publication is intentionally separate from the credentialed release workflow. The release
 workflow produces and attests immutable CLI artifacts, but it does not rebuild source or invoke a
 third-party BCR publisher. After those artifacts are green, prepare the registry entry from the
 reviewed tag and the checked-in `.bcr/metadata.template.json`, `.bcr/source.template.json`, and
-`.bcr/presubmit.yml`. Verify the source archive digest, then open the BCR pull request from the
-maintainer fork. This keeps registry publication operator-initiated and prevents a moved tag or
+`.bcr/presubmit.yml`. Verify the source archive digest and obtain explicit approval of the final registry diff before
+opening the BCR pull request from the maintainer fork. This keeps registry publication operator-initiated and prevents a moved tag or
 workflow rerun from silently substituting source.
 
-### One-time Publish-to-BCR setup
+### Maintainer setup
 
 1. Fork `bazelbuild/bazel-central-registry` to
    `jwmcglynn/bazel-central-registry`.
@@ -128,16 +130,16 @@ Update this section with real-world lessons as they happen.
 
 | Symptom                                                        | Cause                                                                                      | Fix                                                                                         |
 | -------------------------------------------------------------- | ------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------- |
-| BCR PR presubmit: unmapped former full-Skia external dep       | A target referenced the former full-Skia repo but wasn't gated by `target_compatible_with` | Add the appropriate backend gating to the offending target                                  |
+| BCR presubmit: missing external repository | A public target or wildcard selects development-only dependencies | Use explicit public targets and keep optional features behind their configuration guards |
 | BCR PR presubmit: target not found                             | New top-level library added under `//donner` since last release                            | Add it to `.bcr/presubmit.yml` `build_targets`                                              |
 | BCR PR presubmit: integrity hash mismatch                      | GitHub regenerated the source tarball or the tag moved                                     | Re-upload the release tarball verbatim; never force-push tags                               |
-| `source.template.json` URL 404                                 | `strip_prefix` doesn't match GitHub's tarball layout                                       | Confirm pattern is `donner-{VERSION}` (GitHub uses repo name + version)                     |
+| `source.template.json` URL 404 | The source URL, tag, or release asset is missing | Verify the reviewed source URL and release asset; archive strip-prefix errors occur after download |
 
 ## Adding a new top-level library
 
 When you create a new top-level library under `//donner/...`, the BCR presubmit allowlist won't know about it automatically.
 
-1. Add `"@donner//donner/your/new/package/..."` (or the specific target) to `.bcr/presubmit.yml` `build_targets`.
+1. Add the specific public library target to `.bcr/presubmit.yml` `build_targets`. Do not use package wildcards that also select tests or fuzzers.
 2. Re-run the BCR-consumer simulation `cquery` above to confirm your new library doesn't transitively pull in any non-BCR dep.
 3. If it does (and that's intentional — e.g. it's text-full-specific), gate the offending target with `target_compatible_with` on the relevant config_setting, same as `text_backend_full` and `woff2_parser`.
 
@@ -148,11 +150,10 @@ Things that are deliberately out of scope for the first few BCR releases but may
 - **text-full on BCR** — vendor HarfBuzz + WOFF2 via `git subtree` (~1–2 days of `BUILD.harfbuzz` work), or ship a sibling `donner-text-full` module that layers on top of `donner` and brings its own HB/WOFF2. Blocked on: deciding whether to own an additional BCR module or vendor.
 - **Separate `tiny-skia-cpp` BCR module** — it already has its own `MODULE.bazel` in `third_party/tiny-skia-cpp`; could be published independently and then consumed as a BCR `bazel_dep` from Donner. Blocked on: deciding the dev vs publish trade-off.
 - **Geode / wgpu-native on BCR** — wgpu-native is distributed only as a prebuilt binary release (no upstream Bazel rules; no public source build on BCR), so the Geode backend stays `git_override`-only for the foreseeable future. Revisit post-v1.0 if someone puts up a `donner-geode` BCR module that pulls the `http_archive` in itself.
-- **Skia backend on BCR** — not realistic. Skia is a monorepo with a custom build. It will stay `git_override`-only for the foreseeable future.
 
 ## References
 
-- [Publish-to-BCR](https://github.com/bazel-contrib/publish-to-bcr) — the reusable workflow this runbook drives
+- [Publish-to-BCR](https://github.com/bazel-contrib/publish-to-bcr) — background on registry publication tooling
 - [bazelbuild/bazel-central-registry](https://github.com/bazelbuild/bazel-central-registry) — the BCR repository
 - [rules_foreign_cc/.bcr/](https://github.com/bazelbuild/rules_foreign_cc/tree/main/.bcr) — reference `.bcr/` layout for a C++ library
 - `docs/design_docs/0011-v0_5_release.md` — v0.5 release scope
