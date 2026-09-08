@@ -20,6 +20,13 @@ namespace {
 constexpr VkPipelineStageFlags kSampledReadStages =
     VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
 
+TEST(VulkanResourceStateTests, AttachmentTransitionCoversLoadsAndWrites) {
+  const ImageBarrierParams barrier = TransitionFor(StateAfterUsage(TextureUsageKind::TransferWrite),
+                                                   TextureUsageKind::ColorAttachment);
+  EXPECT_EQ(barrier.dstAccess, VkAccessFlags{VK_ACCESS_COLOR_ATTACHMENT_READ_BIT |
+                                             VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT});
+}
+
 TEST(VulkanResourceStateTests, AttachmentWriteThenSampledReadNamesBothEnds) {
   const TextureSyncState afterDraw = StateAfterUsage(TextureUsageKind::ColorAttachment);
   const ImageBarrierParams barrier = TransitionFor(afterDraw, TextureUsageKind::SampledRead);
