@@ -17,7 +17,6 @@ donner_cc_library(
         "Descriptors.cc",
         "Device.cc",
         "GpuError.cc",
-        "RecordingDevice.cc",
     ],
     hdrs = [
         "CheckedArithmetic.h",
@@ -29,10 +28,22 @@ donner_cc_library(
         "GpuLimits.h",
         "GpuResult.h",
         "Handles.h",
-        "RecordingDevice.h",
     ],
     visibility = donner_internal_visibility(),
     deps = [
+        "//donner/base",
+    ],
+)
+
+# Device-free command recording used by the runtime model tests.
+donner_cc_library(
+    name = "recording_device",
+    testonly = 1,
+    srcs = ["RecordingDevice.cc"],
+    hdrs = ["RecordingDevice.h"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":gpu",
         "//donner/base",
     ],
 )
@@ -98,6 +109,7 @@ donner_cc_test(
     ],
     deps = [
         ":gpu",
+        ":recording_device",
         ":gpu_test_utils",
         # For the static_assert tying the runtime's compute caps to the shader IR's copy.
         "//donner/gpu/shader",
