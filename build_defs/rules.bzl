@@ -4,7 +4,6 @@ Helper rules, such as for building fuzzers.
 
 load("@bazel_tools//tools/cpp:toolchain_utils.bzl", "find_cpp_toolchain")
 load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_library", "cc_test")
-load("@rules_python//python:defs.bzl", "py_test")
 
 def _banned_patterns_lint_test(name, srcs, hdrs, tags = [], **_kwargs):
     """Emits nothing. The banned-patterns check is now one repo-wide scan.
@@ -769,6 +768,41 @@ _fuzzer_routing_manifest = rule(
     outputs = {"out": "%{name}.txt"},
 )
 
+def _fuzzer_soak_test_impl(ctx):
+    executable = ctx.actions.declare_file(ctx.label.name)
+    files = [ctx.executable._runner, ctx.executable.binary] + ctx.files.corpus
+    arguments = []
+    for file in files:
+        arguments.append('"${TEST_SRCDIR}/${TEST_WORKSPACE}/"' + repr(file.short_path))
+    flags = [repr(flag) for flag in ctx.attr.fuzz_args]
+    command = arguments[:2] + flags + arguments[2:] + ['"$@"']
+    ctx.actions.write(
+        executable,
+        "#!/usr/bin/env bash\nset -euo pipefail\nexec " + " ".join(command) + "\n",
+        is_executable = True,
+    )
+    runfiles = ctx.runfiles(files = files + ctx.files.runtime_data)
+    for target in [ctx.attr._runner, ctx.attr.binary]:
+        info = target[DefaultInfo]
+        runfiles = runfiles.merge(info.default_runfiles).merge(info.data_runfiles)
+    return [DefaultInfo(executable = executable, runfiles = runfiles)]
+
+_fuzzer_soak_test = rule(
+    implementation = _fuzzer_soak_test_impl,
+    test = True,
+    attrs = {
+        "binary": attr.label(executable = True, cfg = "target", mandatory = True),
+        "corpus": attr.label(allow_files = True, mandatory = True),
+        "fuzz_args": attr.string_list(),
+        "runtime_data": attr.label_list(allow_files = True),
+        "_runner": attr.label(
+            default = Label("//build_defs:fuzzer_soak_runner"),
+            executable = True,
+            cfg = "target",
+        ),
+    },
+)
+
 def donner_cc_fuzzer(
         name,
         corpus,
@@ -852,17 +886,14 @@ def donner_cc_fuzzer(
         "//conditions:default": ["-max_total_time=2"],
     })
 
-    py_test(
+    _fuzzer_soak_test(
         name = name + "_soak",
-        srcs = ["//build_defs:fuzzer_soak.py"],
-        main = "//build_defs:fuzzer_soak.py",
-        args = ["$(location :%s_bin)" % name] + fuzz_time_args + [
-            "-timeout=%d" % per_input_timeout_seconds,
-            "$(locations %s)" % corpus_name,
-        ],
+        binary = ":" + name + "_bin",
+        corpus = corpus_name,
+        fuzz_args = fuzz_time_args + ["-timeout=%d" % per_input_timeout_seconds],
         target_compatible_with = fuzzer_compatible_with(),
         size = "small",
-        data = [":" + name + "_bin", corpus_name] + select({
+        runtime_data = select({
             "@platforms//os:macos": ["@llvm_toolchain//:linker-components-aarch64-darwin"],
             "//conditions:default": [],
         }),

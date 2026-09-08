@@ -1,5 +1,5 @@
 load("@bazel_skylib//rules:common_settings.bzl", "bool_flag", "string_flag")
-load("@rules_python//python:defs.bzl", "py_test")
+load("@rules_python//python:defs.bzl", "py_binary", "py_test")
 load("//build_defs:banned_deps.bzl", "banned_deps_test")
 load("//build_defs:package.bzl", "donner_package")
 load("//build_defs:rules.bzl", "donner_cc_fuzzer", "fuzzer_compatible_with")
@@ -178,4 +178,11 @@ py_test(
         "fuzzer_soak_tests.py",
     ],
     imports = ["."],
+)
+
+py_binary(
+    name = "fuzzer_soak_runner",
+    srcs = ["fuzzer_soak.py"],
+    main = "fuzzer_soak.py",
+    visibility = ["//visibility:public"],
 )
