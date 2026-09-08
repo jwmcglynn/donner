@@ -508,8 +508,8 @@ jobs:
         with:
           packages: >-
             pkg-config libfontconfig1-dev libfreetype6-dev mesa-vulkan-drivers libvulkan1
-            libvulkan-dev spirv-tools libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev
-            libxi-dev libgl1-mesa-dev libosmesa6 clang-tidy-19
+            libvulkan-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev
+            libgl1-mesa-dev libosmesa6 clang-tidy-19
 
       - name: Setup Bazel
         uses: bazel-contrib/setup-bazel@0.19.0
@@ -1067,8 +1067,15 @@ jobs:
             echo "::error::Empty target selection reached the test step."
             exit 1
           fi
+          # The GitHub-hosted macOS image ships Xcode without the offline Metal
+          # compiler, which is a separate ~700 MB downloadable component. The MSL
+          # validation suite fails rather than skips when it cannot find that
+          # compiler, so this lane drops it by tag and says so in the run summary
+          # instead of collecting silent skips. The macOS runner that has the
+          # toolchain runs it.
+          echo "::notice::Excluding requires_metal_toolchain targets: the hosted macOS image has no offline Metal compiler."
           tools/ci_bazel_test.sh bazelisk test --config=ci --test_output=errors \
-            --test_tag_filters=-manual,-perf \
+            --test_tag_filters=-manual,-perf,-requires_metal_toolchain \
             $BAZEL_MACOS_BUILD_FLAGS $BAZEL_MACOS_TEST_FLAGS $TARGETS
         # Deterministic fuzzer corpus replay remains in this Bazel suite. Sanitizer-backed mutation
         # runs nightly or on demand in `.github/workflows/fuzz.yml`.
@@ -1091,6 +1098,9 @@ jobs:
   # Replaces `macos` for trusted operator PRs and main pushes. Renovate and
   # non-operator runs stay hosted. The host pre-provisions Bazelisk, Homebrew
   # llvm@19, and Xcode Command Line Tools.
+  # The host also provides the offline Metal compiler, which is why this lane
+  # keeps the `requires_metal_toolchain` target the hosted macOS lane drops; the
+  # fail-closed MSL suite is the check that it still does.
   macos-self-hosted:
     runs-on: [self-hosted, macOS, ARM64]
     needs: [gatekeeper, determine-targets]
