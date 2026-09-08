@@ -1,4 +1,5 @@
 #include <cstdlib>
+#include <iostream>
 #include <string_view>
 #include <utility>
 
@@ -18,16 +19,23 @@ int main() {
   donner::ParseResult<donner::svg::SVGDocument> maybeDocument =
       donner::svg::parser::SVGParser::ParseSVG(kSvg, warnings);
   if (maybeDocument.hasError()) {
+    std::cerr << "SVG parse failed: " << maybeDocument.error() << '\n';
     return EXIT_FAILURE;
   }
 
   donner::svg::SVGDocument document = std::move(maybeDocument.result());
   if (!document.querySelector("#swatch").has_value()) {
+    std::cerr << "Selector lookup failed: expected #swatch in the parsed SVG\n";
     return EXIT_FAILURE;
   }
 
   donner::svg::Renderer renderer;
   renderer.draw(document);
 
-  return renderer.width() == 8 && renderer.height() == 8 ? EXIT_SUCCESS : EXIT_FAILURE;
+  if (renderer.width() != 8 || renderer.height() != 8) {
+    std::cerr << "Rendered dimensions: " << renderer.width() << "x" << renderer.height()
+              << "; expected 8x8\n";
+    return EXIT_FAILURE;
+  }
+  return EXIT_SUCCESS;
 }
