@@ -67,6 +67,10 @@ struct ReadOptions {
   uint32_t dispatchCount = 1;
   bool bindEachDispatch = false;
   bool secondPass = false;
+  /// Declare the runtime-array binding as a uniform buffer in the bind group layout, while the
+  /// shader IR still reads it as a runtime array. The RHI permits this: the buffer carries both
+  /// usages and the layout's binding type is a separate fact from the IR's.
+  bool declareRuntimeArrayAsUniform = false;
 };
 
 class MetalBufferBoundsTests : public testing::Test {
@@ -93,20 +97,40 @@ protected:
           {1, ShaderStage::Compute, BindingType::UniformBuffer},
           {2, ShaderStage::Compute, BindingType::WriteOnlyStorageTexture2d}}}));
     layout_ = GetResultOrFail(device_->createPipelineLayout({"readBuffer", {groupLayout_}}));
+    // The same generated MSL with its interface metadata omitted, which the backend documents as
+    // retaining the shared runtime's existing semantics. Without facts, nothing cross-checks the
+    // layout's binding types against the IR, so the layout may name the runtime array a uniform
+    // buffer while the generated code still indexes it through donner_msl_lengths.
+    noFactsModule_ =
+        GetResultOrFail(device_->createShaderModule({"readBufferNoFacts",
+                                                     RcString(msl.result()),
+                                                     ShaderSourceKind::Msl,
+                                                     {},
+                                                     shader::ComputeEntryPointsOf(ir.result()),
+                                                     std::nullopt}));
+    uniformDeclaredGroupLayout_ = GetResultOrFail(device_->createBindGroupLayout(
+        {"readBufferAsUniform",
+         {{0, ShaderStage::Compute, BindingType::UniformBuffer},
+          {1, ShaderStage::Compute, BindingType::UniformBuffer},
+          {2, ShaderStage::Compute, BindingType::WriteOnlyStorageTexture2d}}}));
+    uniformDeclaredLayout_ = GetResultOrFail(
+        device_->createPipelineLayout({"readBufferAsUniform", {uniformDeclaredGroupLayout_}}));
     pipeline_ = GetResultOrFail(
         device_->createComputePipeline({"readBuffer", layout_, {module_, "cs"}, {1, 1, 1}}));
     alternatePipeline_ = GetResultOrFail(
         device_->createComputePipeline({"alternate", layout_, {module_, "cs"}, {1, 1, 1}}));
+    uniformDeclaredPipeline_ = GetResultOrFail(device_->createComputePipeline(
+        {"readBufferAsUniform", uniformDeclaredLayout_, {noFactsModule_, "cs"}, {1, 1, 1}}));
   }
 
   void bindForRead(ComputePassEncoder* pass, const BindGroup& group, const BindGroup& fullGroup,
-                   BindingOrder order) {
+                   BindingOrder order, const ComputePipeline& pipeline) {
     if (order == BindingOrder::BeforePipeline) {
       ASSERT_THAT(pass->setBindGroup(0, group), IsOk());
-      ASSERT_THAT(pass->setPipeline(pipeline_), IsOk());
+      ASSERT_THAT(pass->setPipeline(pipeline), IsOk());
       return;
     }
-    ASSERT_THAT(pass->setPipeline(pipeline_), IsOk());
+    ASSERT_THAT(pass->setPipeline(pipeline), IsOk());
     if (order == BindingOrder::Replacement) {
       ASSERT_THAT(pass->setBindGroup(0, fullGroup), IsOk());
       ASSERT_THAT(pass->dispatchWorkgroups(1), IsOk());
@@ -122,8 +146,13 @@ protected:
     const std::array<float, 8> values{1, 0, 0, 1, 0, 1, 0, 1};
     std::vector<uint8_t> data(offset + sizeof(values));
     std::memcpy(data.data() + offset, values.data(), sizeof(values));
+    const ComputePipeline& selectedPipeline =
+        options.declareRuntimeArrayAsUniform ? uniformDeclaredPipeline_ : pipeline_;
+    const BindGroupLayout& selectedGroupLayout =
+        options.declareRuntimeArrayAsUniform ? uniformDeclaredGroupLayout_ : groupLayout_;
     const Buffer input = GetResultOrFail(device_->createBuffer(
-        {"values", data.size(), BufferUsage::Storage | BufferUsage::CopyDst}));
+        {"values", data.size(),
+         BufferUsage::Storage | BufferUsage::Uniform | BufferUsage::CopyDst}));
     ASSERT_THAT(device_->writeBuffer(input, 0, data), IsOk());
     const Buffer params = GetResultOrFail(device_->createBuffer(
         {"params", sizeof(index), BufferUsage::Uniform | BufferUsage::CopyDst}));
@@ -140,7 +169,7 @@ protected:
     const Buffer readback = GetResultOrFail(
         device_->createBuffer({"readback", 256, BufferUsage::CopyDst | BufferUsage::MapRead}));
     BindGroupDescriptor groupDescriptor{"readBuffer",
-                                        groupLayout_,
+                                        selectedGroupLayout,
                                         {{0, BufferBinding{input, offset, declaredBytes}},
                                          {1, BufferBinding{params, 0, sizeof(index)}},
                                          {2, TextureViewBinding{view}}}};
@@ -149,7 +178,7 @@ protected:
     const BindGroup fullGroup = GetResultOrFail(device_->createBindGroup(groupDescriptor));
     auto encoder = GetResultOrFail(device_->createCommandEncoder());
     ComputePassEncoder* pass = GetResultOrFail(encoder->beginComputePass({}));
-    bindForRead(pass, group, fullGroup, options.bindingOrder);
+    bindForRead(pass, group, fullGroup, options.bindingOrder, selectedPipeline);
     for (uint32_t dispatch = 0; dispatch < options.dispatchCount; ++dispatch) {
       if (options.bindEachDispatch && dispatch != 0) {
         ASSERT_THAT(pass->setBindGroup(0, group), IsOk());
@@ -159,7 +188,7 @@ protected:
     ASSERT_THAT(pass->end(), IsOk());
     if (options.secondPass) {
       pass = GetResultOrFail(encoder->beginComputePass({}));
-      ASSERT_THAT(pass->setPipeline(pipeline_), IsOk());
+      ASSERT_THAT(pass->setPipeline(selectedPipeline), IsOk());
       ASSERT_THAT(pass->setBindGroup(0, group), IsOk());
       ASSERT_THAT(pass->dispatchWorkgroups(1), IsOk());
       ASSERT_THAT(pass->end(), IsOk());
@@ -200,10 +229,14 @@ protected:
 
   std::unique_ptr<MetalDevice> device_;
   ShaderModule module_;
+  ShaderModule noFactsModule_;
   BindGroupLayout groupLayout_;
   PipelineLayout layout_;
   ComputePipeline pipeline_;
   ComputePipeline alternatePipeline_;
+  BindGroupLayout uniformDeclaredGroupLayout_;
+  PipelineLayout uniformDeclaredLayout_;
+  ComputePipeline uniformDeclaredPipeline_;
 };
 
 TEST_F(MetalBufferBoundsTests, RejectsBindingsBeyondTheNativeArgumentTables) {
@@ -257,6 +290,17 @@ TEST_F(MetalBufferBoundsTests, RejectsGroupsOutsideTheNativeMapping) {
   ASSERT_THAT(pass->end(), IsOk());
   EXPECT_THAT(device_->submit(GetResultOrFail(encoder->finish())),
               IsGpuError(GpuErrorType::Unsupported));
+}
+
+TEST_F(MetalBufferBoundsTests, LayoutBindingTypeDoesNotDecideWhetherLengthsAreBound) {
+  // The emitter puts donner_msl_lengths in every entry point of a module that holds any
+  // runtime-array binding, so the generated code dereferences it however the layout names the
+  // binding. With interface metadata supplied, pipeline creation rejects a layout that disagrees
+  // with the shader; with metadata omitted, which this backend still accepts, nothing does.
+  // Uploading the table only for layout entries typed ReadOnlyStorageBuffer left that pipeline
+  // reading a nil constant uint*, so the declared ranges below were never applied.
+  expectRead(0, 0, 16, {255, 0, 0, 255}, {.declareRuntimeArrayAsUniform = true});
+  expectRead(1, 0, 16, {0, 0, 0, 0}, {.declareRuntimeArrayAsUniform = true});
 }
 
 TEST_F(MetalBufferBoundsTests, ANewPassBindsTheSameGroupsLengthsAgain) {
