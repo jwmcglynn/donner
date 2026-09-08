@@ -11,7 +11,10 @@
 
 namespace donner::gpu::shader {
 
-/// Fixed table of declared buffer lengths, copied when a storage-buffer group is bound.
+/// Reserved Metal buffer index for the fixed table of declared buffer lengths. Populated from
+/// every buffer binding in a group, uniform bindings included, and uploaded to each stage of the
+/// active encoder whenever the bound group changes. Raw MSL this backend accepts must leave this
+/// index free.
 inline constexpr uint32_t kMslBufferLengthsIndex = 0;
 /// Number of buffer bindings before the dedicated vertex slot.
 inline constexpr uint32_t kMslBufferBindingCount = 29;
