@@ -106,6 +106,7 @@ jobs:
             -- \
             //donner/... \
             -//donner/editor/tests:gl_rnr_replay_tests \
+            -//donner/gpu:gpu_allocation_tests \
             -//donner/svg/renderer/geode/... \
             -//donner/svg/renderer/tests:renderer_geode_golden_tests \
             -//donner/svg/renderer/tests:renderer_geode_tests
@@ -171,7 +172,9 @@ jobs:
             --test_output=errors \
             --test_tag_filters=-fuzz_target \
             --build_tag_filters=-fuzz_target \
-            //donner/...
+            -- \
+            //donner/... \
+            -//donner/gpu:gpu_allocation_tests
 
       - name: Replay untrusted-input fuzzer corpora with UBSan
         run: |

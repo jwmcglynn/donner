@@ -288,16 +288,30 @@ private:
   ///   operation only requires a usable encoder.
   std::optional<GpuError> checkRecordable(PassKind requiredPass);
 
-  /// Verifies that every bind group index the bound pipeline layout declares holds a group
-  /// created against the same layout. Shared by draw and dispatch.
+  /// Revalidates the bound groups at use time, shared by draw and dispatch. Verifies that every
+  /// bind group index the bound pipeline layout declares holds a live group created against that
+  /// layout, re-resolves every entry of those groups so a destroyed or recycled resource fails
+  /// here rather than during backend encoding, and rejects one texture reached as both a sampled
+  /// and a storage-write binding across the groups the active pipeline uses.
+  ///
+  /// This runs per draw rather than only at setBindGroup because a resource can be destroyed
+  /// between binding and use without changing any group's identity, which is the case the
+  /// generation check exists to catch. It therefore cannot be cached across draws.
   /// @param operation Operation name for diagnostics, e.g. `"draw"`.
   Status validateBoundBindGroups(std::string_view operation);
 
-  /// Resolves one required group and its dependencies for this draw or dispatch.
-  /// The returned record remains live during validation under the device's thread affinity.
+  /// One bound group and the layout it was created against, both resolved and revalidated.
+  struct ResolvedBindGroup {
+    const Device::BindGroupRecord* group = nullptr;         //!< Live bind group record.
+    const Device::BindGroupLayoutRecord* layout = nullptr;  //!< Layout it was created against.
+  };
+
+  /// Revalidates one required group for this draw or dispatch: the group and its layout are still
+  /// live, the layout is the one the pipeline expects, and every entry still resolves. Returns
+  /// both records so the caller does not look the layout up a second time. They remain live for
+  /// the rest of the validation under the device's thread affinity.
   /// @param index Required group index. @param operation Operation name for diagnostics.
-  Result<const Device::BindGroupRecord*> validateBoundBindGroup(uint32_t index,
-                                                                std::string_view operation);
+  Result<ResolvedBindGroup> validateBoundBindGroup(uint32_t index, std::string_view operation);
 
   /// Resets the per-pass binding state a begin or end transitions through.
   void resetPassBindings();
@@ -305,7 +319,8 @@ private:
   /// Re-resolves the resource one bind group entry references, failing closed when it was
   /// destroyed after the group was created.
   /// @param entry Entry to re-resolve.
-  Status revalidateBindGroupEntry(const BindGroupEntry& entry);
+  /// @param operation Operation name for diagnostics, e.g. `"draw"` or `"setBindGroup"`.
+  Status revalidateBindGroupEntry(const BindGroupEntry& entry, std::string_view operation);
 
   /// Validates that a texture-to-texture copy's operands are distinct, share a format, and carry
   /// the CopySrc / CopyDst usages.
@@ -369,6 +384,11 @@ private:
   std::optional<BoundPipeline> currentPipeline_;
   std::array<std::optional<BoundVertexBuffer>, kMaxVertexBuffers> boundVertexBuffers_;
   std::array<std::optional<BoundBindGroup>, kMaxBindGroups> boundBindGroups_;
+
+  /// Reused across draws so the per-draw texture-role check does not allocate. Cleared at the
+  /// start of every validation; capacity is retained for the rest of the encoder's life.
+  SmallVector<Device::BoundTextureBinding, kMaxBindings> sampledTextureScratch_;
+  SmallVector<Device::BoundTextureBinding, kMaxBindings> storageTextureScratch_;
 };
 
 }  // namespace donner::gpu

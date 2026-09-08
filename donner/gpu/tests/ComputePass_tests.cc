@@ -15,6 +15,7 @@
 #include "donner/gpu/shader/IrModule.h"
 #include "donner/gpu/tests/GpuTestUtils.h"
 
+using testing::AllOf;
 using testing::HasSubstr;
 
 namespace donner::gpu {
@@ -437,9 +438,11 @@ TEST_F(ActiveTextureBindingsTests, RejectsSampledStorageAliasesInEitherGroupOrde
     ASSERT_THAT(pass->setPipeline(pipeline), IsOk());
     ASSERT_THAT(pass->setBindGroup(0, sampledFirst ? sampled_ : storage_), IsOk());
     ASSERT_THAT(pass->setBindGroup(1, sampledFirst ? storage_ : sampled_), IsOk());
-    EXPECT_THAT(
-        pass->dispatchWorkgroups(1),
-        IsGpuErrorWithMessage(GpuErrorType::UsageMismatch, HasSubstr("sampled and storage")));
+    EXPECT_THAT(pass->dispatchWorkgroups(1),
+                IsGpuErrorWithMessage(
+                    GpuErrorType::UsageMismatch,
+                    AllOf(HasSubstr("sampled binding (0)"), HasSubstr("storage-write binding (0)"),
+                          HasSubstr("texture slot"))));
     EXPECT_THAT(encoder_->finish(), IsGpuError(GpuErrorType::UsageMismatch));
   }
 }

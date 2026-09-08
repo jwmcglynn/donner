@@ -1,3 +1,5 @@
+#include "donner/gpu/CommandEncoder.h"
+
 #include <algorithm>
 #include <cmath>
 #include <format>
@@ -6,7 +8,6 @@
 #include <vector>
 
 #include "donner/gpu/CheckedArithmetic.h"
-#include "donner/gpu/CommandEncoder.h"
 
 namespace donner::gpu {
 
@@ -97,39 +98,38 @@ void CommandEncoder::resetPassBindings() {
 }
 
 Status CommandEncoder::validateBoundBindGroups(std::string_view operation) {
-  std::vector<Device::BoundTextureBinding> sampledTextures;
-  std::vector<Device::BoundTextureBinding> storageTextures;
+  // Called once per draw and per dispatch, on the path the Geode renderer runs through, so the
+  // collectors are encoder-owned and reused rather than allocated here. They are cleared, not
+  // shrunk, and they accumulate across every bound group, so a pass allocates at most once for
+  // the largest total those groups reach.
+  sampledTextureScratch_.clear();
+  storageTextureScratch_.clear();
   for (uint32_t index = 0; index < currentPipeline_->bindGroupLayoutIds.size(); ++index) {
     auto group = validateBoundBindGroup(index, operation);
     if (group.hasError()) {
       return fail(std::move(group).error());
     }
-    const ResourceIdentity layoutIdentity = boundBindGroups_[index]->layoutIdentity;
-    const auto* layout =
-        device_->bindGroupLayouts_.find(layoutIdentity.slotIndex, layoutIdentity.generation);
-    const auto sampled = device_->collectBoundTextures(
-        group.result()->descriptor, layout->descriptor.entries, BindingType::SampledTexture2dFloat);
-    const auto storage =
-        device_->collectBoundTextures(group.result()->descriptor, layout->descriptor.entries,
-                                      BindingType::WriteOnlyStorageTexture2d);
-    sampledTextures.insert(sampledTextures.end(), sampled.begin(), sampled.end());
-    storageTextures.insert(storageTextures.end(), storage.begin(), storage.end());
+    device_->collectBoundTextures(group.result().group->descriptor,
+                                  group.result().layout->descriptor.entries, sampledTextureScratch_,
+                                  storageTextureScratch_);
   }
-  for (const auto& sampled : sampledTextures) {
-    for (const auto& storage : storageTextures) {
+  for (const auto& sampled : sampledTextureScratch_) {
+    for (const auto& storage : storageTextureScratch_) {
       if (sampled.textureIdentity == storage.textureIdentity) {
-        return fail(Err(GpuErrorType::UsageMismatch,
-                        std::format("{}: active bind groups use one texture as both sampled and "
-                                    "storage (texture slot {}, generation {})",
-                                    operation, sampled.textureIdentity.slotIndex,
-                                    sampled.textureIdentity.generation)));
+        return fail(Err(
+            GpuErrorType::UsageMismatch,
+            std::format("{}: active bind groups use one texture as both a sampled "
+                        "binding ({}) and a storage-write binding ({}) (texture slot "
+                        "{}, generation {})",
+                        operation, sampled.binding, storage.binding,
+                        sampled.textureIdentity.slotIndex, sampled.textureIdentity.generation)));
       }
     }
   }
   return OkStatus();
 }
 
-Result<const Device::BindGroupRecord*> CommandEncoder::validateBoundBindGroup(
+Result<CommandEncoder::ResolvedBindGroup> CommandEncoder::validateBoundBindGroup(
     uint32_t index, std::string_view operation) {
   if (!boundBindGroups_[index]) {
     return Err(GpuErrorType::InvalidState,
@@ -154,11 +154,11 @@ Result<const Device::BindGroupRecord*> CommandEncoder::validateBoundBindGroup(
                            index));
   }
   for (const BindGroupEntry& entry : group->descriptor.entries) {
-    if (Status status = revalidateBindGroupEntry(entry); status.hasError()) {
+    if (Status status = revalidateBindGroupEntry(entry, operation); status.hasError()) {
       return std::move(status).error();
     }
   }
-  return group;
+  return ResolvedBindGroup{group, layout};
 }
 
 Result<RenderPassEncoder*> CommandEncoder::beginRenderPass(const RenderPassDescriptor& descriptor) {
@@ -336,7 +336,7 @@ Status CommandEncoder::passSetBindGroup(uint32_t index, const BindGroup& bindGro
                                 record.result()->layoutIdentity.slotIndex)));
   }
   for (const BindGroupEntry& entry : record.result()->descriptor.entries) {
-    const Status entryStatus = revalidateBindGroupEntry(entry);
+    const Status entryStatus = revalidateBindGroupEntry(entry, "setBindGroup");
     if (entryStatus.hasError()) {
       return entryStatus;
     }
@@ -349,7 +349,8 @@ Status CommandEncoder::passSetBindGroup(uint32_t index, const BindGroup& bindGro
   return OkStatus();
 }
 
-Status CommandEncoder::revalidateBindGroupEntry(const BindGroupEntry& entry) {
+Status CommandEncoder::revalidateBindGroupEntry(const BindGroupEntry& entry,
+                                                std::string_view operation) {
   if (const BufferBinding* bufferBinding = std::get_if<BufferBinding>(&entry.resource)) {
     auto bufferRecord =
         device_->resolve(device_->buffers_, bufferBinding->buffer, BufferTag::kName);
@@ -369,8 +370,9 @@ Status CommandEncoder::revalidateBindGroupEntry(const BindGroupEntry& entry) {
     }
     if (std::ranges::find(passAttachmentTextures_, viewRecord.result()->textureIdentity) !=
         passAttachmentTextures_.end()) {
-      return fail(Err(GpuErrorType::UsageMismatch,
-                      "setBindGroup: a texture binding aliases an active color attachment"));
+      return fail(
+          Err(GpuErrorType::UsageMismatch,
+              std::format("{}: a texture binding aliases an active color attachment", operation)));
     }
   } else if (const SamplerBinding* samplerBinding = std::get_if<SamplerBinding>(&entry.resource)) {
     auto samplerRecord =
