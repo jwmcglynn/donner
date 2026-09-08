@@ -8,6 +8,7 @@
 #import <Metal/Metal.h>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cstring>
@@ -207,6 +208,8 @@ struct MetalDevice::Impl {
     /// are immutable value descriptors, so the copy stays correct even if the layout object is
     /// destroyed and its slot recycled; encode never looks the layout up by slot.
     BindGroupLayoutDescriptor layout;
+    std::array<uint32_t, shader::kMslBufferBindingCount> bufferLengths{};
+    ShaderStage storageBufferStages = ShaderStage::None;
   };
 
   /// A compiled render pipeline plus the encoder state every draw through it uses (cull mode
@@ -335,6 +338,8 @@ struct MetalDevice::Impl {
     PrimitiveTopology currentTopology = PrimitiveTopology::TriangleList;
     /// Threadgroup shape of the bound compute pipeline, applied at dispatch.
     WorkgroupSize currentWorkgroupSize;
+    // Bind-group records stay stable throughout synchronous submission encoding.
+    const BindGroupRecord* lengthTableGroup = nullptr;
     std::vector<id<MTLBuffer>> hostReadBuffers;  //!< GPU-written buffers needing CPU visibility.
   };
 
@@ -347,6 +352,9 @@ struct MetalDevice::Impl {
   /// @param state Encoding state.
   /// @param setPipeline Recorded command.
   Status encodeSetPipeline(EncodingState& state, const SetPipelineCommand& setPipeline);
+
+  /// Copies the group's exact buffer ranges into the reserved argument slot of storage stages.
+  void encodeBufferLengths(EncodingState& state, const BindGroupRecord& group);
 
   /// Binds one buffer entry to the stages its layout entry declares.
   /// @param state Encoding state.
@@ -705,6 +713,18 @@ Status MetalDevice::onCreateSampler(uint32_t slotIndex, const SamplerDescriptor&
 
 Status MetalDevice::onCreateBindGroupLayout(uint32_t slotIndex,
                                             const BindGroupLayoutDescriptor& descriptor) {
+  for (const BindGroupLayoutEntry& entry : descriptor.entries) {
+    const bool invalidBuffer = (entry.type == BindingType::UniformBuffer ||
+                                entry.type == BindingType::ReadOnlyStorageBuffer) &&
+                               entry.binding >= shader::kMslBufferBindingCount;
+    const bool invalidSampler = entry.type == BindingType::FilteringSampler &&
+                                entry.binding >= shader::kMslSamplerBindingCount;
+    if (invalidBuffer || invalidSampler) {
+      return GpuError{GpuErrorType::Unsupported,
+                      std::format("Metal {} binding {} exceeds the native argument table",
+                                  invalidBuffer ? "buffer" : "sampler", entry.binding)};
+    }
+  }
   SetSlot(impl_->bindGroupLayouts, slotIndex, std::optional<BindGroupLayoutDescriptor>(descriptor));
   return OkStatus();
 }
@@ -719,8 +739,18 @@ Status MetalDevice::onCreateBindGroup(uint32_t slotIndex, const BindGroupDescrip
                     std::format("bind group layout slot {} has no Metal-side descriptor",
                                 descriptor.layout.slotIndex())};
   }
-  SetSlot(impl_->bindGroups, slotIndex,
-          std::optional<Impl::BindGroupRecord>(Impl::BindGroupRecord{descriptor, *layout}));
+  Impl::BindGroupRecord record{descriptor, *layout};
+  for (const BindGroupEntry& entry : descriptor.entries) {
+    if (const auto* buffer = std::get_if<BufferBinding>(&entry.resource)) {
+      record.bufferLengths[entry.binding] = static_cast<uint32_t>(buffer->sizeBytes);
+    }
+  }
+  for (const BindGroupLayoutEntry& entry : layout->entries) {
+    if (entry.type == BindingType::ReadOnlyStorageBuffer) {
+      record.storageBufferStages |= entry.visibility;
+    }
+  }
+  SetSlot(impl_->bindGroups, slotIndex, std::optional<Impl::BindGroupRecord>(std::move(record)));
   return OkStatus();
 }
 
@@ -1048,6 +1078,7 @@ Status MetalDevice::Impl::beginEncodedRenderPass(EncodingState& state,
                           attachment.clearColor[2], attachment.clearColor[3]);
   }
 
+  state.lengthTableGroup = nullptr;
   state.renderEncoder = [state.commandBuffer renderCommandEncoderWithDescriptor:passDescriptor];
   if (state.renderEncoder == nil) {
     return GpuError{GpuErrorType::InvalidState, "Metal render command encoder creation failed"};
@@ -1177,6 +1208,30 @@ Status MetalDevice::Impl::encodeBindGroupEntry(EncodingState& state,
   return OkStatus();
 }
 
+void MetalDevice::Impl::encodeBufferLengths(EncodingState& state, const BindGroupRecord& group) {
+  if (state.lengthTableGroup == &group) {
+    return;
+  }
+  state.lengthTableGroup = &group;
+  const uint32_t* lengths = group.bufferLengths.data();
+  constexpr size_t kLengthBytes = sizeof(group.bufferLengths);
+  if (state.renderEncoder != nil && HasAllFlags(group.storageBufferStages, ShaderStage::Vertex)) {
+    [state.renderEncoder setVertexBytes:lengths
+                                 length:kLengthBytes
+                                atIndex:shader::kMslBufferLengthsIndex];
+  }
+  if (state.renderEncoder != nil && HasAllFlags(group.storageBufferStages, ShaderStage::Fragment)) {
+    [state.renderEncoder setFragmentBytes:lengths
+                                   length:kLengthBytes
+                                  atIndex:shader::kMslBufferLengthsIndex];
+  }
+  if (state.computeEncoder != nil && HasAllFlags(group.storageBufferStages, ShaderStage::Compute)) {
+    [state.computeEncoder setBytes:lengths
+                            length:kLengthBytes
+                           atIndex:shader::kMslBufferLengthsIndex];
+  }
+}
+
 Status MetalDevice::Impl::encodeSetBindGroup(EncodingState& state,
                                              const SetBindGroupCommand& setBindGroup) {
   if (setBindGroup.index != 0) {
@@ -1196,6 +1251,7 @@ Status MetalDevice::Impl::encodeSetBindGroup(EncodingState& state,
       return bindStatus;
     }
   }
+  encodeBufferLengths(state, *bindGroup);
   return OkStatus();
 }
 
@@ -1344,6 +1400,7 @@ std::optional<Status> MetalDevice::Impl::encodeRenderCommand(EncodingState& stat
 }
 
 Status MetalDevice::Impl::beginEncodedComputePass(EncodingState& state) {
+  state.lengthTableGroup = nullptr;
   state.computeEncoder = [state.commandBuffer computeCommandEncoder];
   if (state.computeEncoder == nil) {
     return GpuError{GpuErrorType::InvalidState, "Metal compute command encoder creation failed"};

@@ -30,6 +30,12 @@ namespace donner::gpu::metal {
  * texture and sampler bindings map directly, and stage-in vertex data occupies vertex buffer
  * index 30.
  *
+ * Generated runtime-array reads use the exact declared binding sizes in a fixed length table
+ * at buffer index 0. Each immutable bind group caches the table and copies it to storage-buffer
+ * stages when the group changes; each new pass binds it again. Repeated draws and dispatches
+ * reuse that binding. Raw MSL remains trusted
+ * caller code, and omitted interface metadata retains the shared runtime's existing semantics.
+ *
  * Queue writes update idle resources directly. Writes to resources an earlier submission still
  * uses are copied into bounded host storage and uploaded at the beginning of the next ordinary
  * submission. Repeated writes of the same resource range are coalesced. A batch adds one staging
