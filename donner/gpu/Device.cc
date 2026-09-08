@@ -1840,6 +1840,14 @@ void Device::markSubmissionUses(std::span<const SubmissionUse> uses, uint64_t su
   }
 }
 
+uint64_t Device::bufferLastUseSerial(uint32_t slotIndex) const {
+  return buffers_.lastUseOf(slotIndex);
+}
+
+uint64_t Device::textureLastUseSerial(uint32_t slotIndex) const {
+  return textures_.lastUseOf(slotIndex);
+}
+
 Status Device::validateBufferHandleForBackend(const Buffer& buffer) const {
   auto record = resolve(buffers_, buffer, BufferTag::kName);
   if (record.hasError()) {

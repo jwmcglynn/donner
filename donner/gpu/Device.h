@@ -534,6 +534,14 @@ protected:
   /// Constructor for backends; assigns the process-unique device identity.
   Device();
 
+  /// Last accepted submission referencing a buffer slot already validated by the caller.
+  /// @param slotIndex A validated live buffer slot.
+  uint64_t bufferLastUseSerial(uint32_t slotIndex) const;
+
+  /// Last accepted submission referencing a texture slot already validated by the caller.
+  /// @param slotIndex A validated live texture slot.
+  uint64_t textureLastUseSerial(uint32_t slotIndex) const;
+
   /// Backend hook: a buffer passed validation and occupies \p slotIndex.
   /// @param slotIndex Slot index of the new resource. @param descriptor Validated descriptor.
   virtual Status onCreateBuffer(uint32_t slotIndex, const BufferDescriptor& descriptor) = 0;

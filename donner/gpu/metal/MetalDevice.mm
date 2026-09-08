@@ -7,6 +7,7 @@
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstring>
@@ -19,6 +20,7 @@
 #include <vector>
 
 #include "donner/base/Utils.h"
+#include "donner/gpu/GpuLimits.h"
 #include "donner/gpu/metal/MetalDevice.h"
 #include "donner/gpu/shader/MslBindingMap.h"
 
@@ -181,10 +183,11 @@ MTLPrimitiveType ToMtlPrimitiveType(PrimitiveTopology topology) {
 /// State shared with Metal command-buffer completion handlers, which run on a Metal-internal
 /// thread. Held by shared_ptr so a handler that outlives the device touches valid memory.
 struct CompletionState {
-  std::atomic<uint64_t> completedSerial{0};  //!< Highest completed submission serial.
-  std::atomic<bool> hadError{false};         //!< True once any command buffer reported an error.
-  std::mutex mutex;                          //!< Guards errorMessage.
-  std::string errorMessage;                  //!< Message of the first captured execution error.
+  std::atomic<uint64_t> completedSerial{0};       //!< Highest completed submission serial.
+  std::atomic<uint64_t> inFlightStagingBytes{0};  //!< Accepted uploads awaiting completion.
+  std::atomic<bool> hadError{false};  //!< True once any command buffer reported an error.
+  std::mutex mutex;                   //!< Guards errorMessage.
+  std::string errorMessage;           //!< Message of the first captured execution error.
 };
 
 }  // namespace
@@ -234,6 +237,78 @@ struct MetalDevice::Impl {
   std::shared_ptr<CompletionState> completionState =
       std::make_shared<CompletionState>();  //!< Shared with completion handlers.
 
+  /// A host write waiting for the queue, retaining its exact native destination.
+  struct PendingWrite {
+    uint32_t slotIndex = 0;
+    id<MTLBuffer> buffer = nil;
+    id<MTLTexture> texture = nil;
+    uint64_t offsetBytes = 0;
+    Extent2d size;
+    uint32_t bytesPerRow = 0;
+    std::vector<uint8_t> bytes;
+  };
+
+  std::vector<PendingWrite> pendingWrites;
+  std::vector<uint64_t> bufferUploadSerials;
+  std::vector<uint64_t> textureUploadSerials;
+  uint64_t uploadStagingByteBudget = kMaxBufferByteSize;
+  std::chrono::milliseconds unalignedWriteTimeout = std::chrono::seconds(5);
+  uint64_t pendingStagingBytes = 0;
+  uint64_t stagingAllocations = 0;
+  uint64_t submittedUploadBatches = 0;
+  uint64_t unalignedWriteWaits = 0;
+
+  static constexpr uint64_t StagingSize(uint64_t byteCount) {
+    return (byteCount + 255u) & ~uint64_t{255};
+  }
+
+  bool hasPendingWrite(id<MTLBuffer> buffer, id<MTLTexture> texture) const {
+    return std::ranges::any_of(pendingWrites, [&](const PendingWrite& write) {
+      return write.buffer == buffer && write.texture == texture;
+    });
+  }
+
+  /// Reuses an identical destination range while keeping the newest write last in queue order.
+  Result<PendingWrite*> queueWrite(PendingWrite write, size_t byteCount) {
+    const auto previous = std::ranges::find_if(pendingWrites, [&](const PendingWrite& pending) {
+      return pending.buffer == write.buffer && pending.texture == write.texture &&
+             pending.offsetBytes == write.offsetBytes && pending.size == write.size &&
+             pending.bytes.size() == byteCount;
+    });
+    const uint64_t replacedBytes =
+        previous == pendingWrites.end() ? 0 : StagingSize(previous->bytes.size());
+    const uint64_t queuedBytes = pendingStagingBytes - replacedBytes + StagingSize(byteCount);
+    const uint64_t inFlightBytes =
+        completionState->inFlightStagingBytes.load(std::memory_order_acquire);
+    if (queuedBytes > kMaxBufferByteSize || queuedBytes > uploadStagingByteBudget ||
+        inFlightBytes > uploadStagingByteBudget - queuedBytes ||
+        (previous == pendingWrites.end() && pendingWrites.size() >= 16'384)) {
+      return GpuError{
+          GpuErrorType::LimitExceeded,
+          std::format("Metal upload budget exceeded: {} queued bytes, {} in-flight "
+                      "bytes, {} byte budget, {} pending writes",
+                      queuedBytes, inFlightBytes, uploadStagingByteBudget, pendingWrites.size())};
+    }
+    if (previous != pendingWrites.end()) {
+      write.bytes = std::move(previous->bytes);
+      pendingWrites.erase(previous);
+    }
+    write.bytes.resize(byteCount);
+    pendingStagingBytes = pendingStagingBytes - replacedBytes + StagingSize(byteCount);
+    pendingWrites.push_back(std::move(write));
+    return &pendingWrites.back();
+  }
+
+  void discardPendingWrites(id<MTLBuffer> buffer, id<MTLTexture> texture) {
+    std::erase_if(pendingWrites, [&](const PendingWrite& write) {
+      if (write.buffer != buffer || write.texture != texture) {
+        return false;
+      }
+      pendingStagingBytes -= StagingSize(write.bytes.size());
+      return true;
+    });
+  }
+
   /// Mutable state threaded through the encoding of one command stream.
   struct EncodingState {
     id<MTLCommandBuffer> commandBuffer = nil;           //!< Command buffer being encoded.
@@ -244,6 +319,7 @@ struct MetalDevice::Impl {
     PrimitiveTopology currentTopology = PrimitiveTopology::TriangleList;
     /// Threadgroup shape of the bound compute pipeline, applied at dispatch.
     WorkgroupSize currentWorkgroupSize;
+    std::vector<id<MTLBuffer>> hostReadBuffers;  //!< GPU-written buffers needing CPU visibility.
   };
 
   /// Opens a render encoder for a recorded pass and configures its color attachments.
@@ -379,13 +455,36 @@ struct MetalDevice::Impl {
   /// Whether host-visible resources need explicit publication in both directions.
   bool needsExplicitHostCoherency() const { return !unifiedMemory; }
 
-  /// Publishes every live host-visible resource's device-side changes back to the host copy, for
-  /// a memory model that keeps the two apart. A no-op where the two are one copy.
+  /// Records a GPU-written buffer whose host copy must be current after completion.
+  void requireHostSync(EncodingState& state, id<MTLBuffer> buffer);
+
+  /// Publishes the GPU-written buffers needed by the host, once per distinct buffer.
   /// @param state Encoding state.
   Status encodeHostCoherencySync(EncodingState& state);
+
+  /// Encodes all queued writes ahead of this submission without submitting separate work.
+  Status encodePendingWrites(EncodingState& state);
+
+  /// Creates a command buffer and encodes its optional pause and queued uploads.
+  Status beginSubmission(EncodingState& state);
+
+  /// Copies host bytes into an idle buffer and publishes managed-memory changes.
+  void writeIdleBuffer(id<MTLBuffer> buffer, uint64_t offsetBytes, std::span<const uint8_t> bytes);
+
+  /// Applies queued writes after this buffer's GPU uses have completed.
+  void flushIdleBufferWrites(id<MTLBuffer> buffer);
+
+  /// Records upload-only resource uses and consumes a successfully submitted upload batch.
+  void didSubmitWrites(uint64_t submissionSerial);
 };
 
-std::unique_ptr<MetalDevice> MetalDevice::Create(MemoryModel memoryModel) {
+std::unique_ptr<MetalDevice> MetalDevice::Create(MemoryModel memoryModel,
+                                                 uint64_t uploadStagingByteBudget,
+                                                 std::chrono::milliseconds unalignedWriteTimeout) {
+  if (uploadStagingByteBudget == 0 || unalignedWriteTimeout < std::chrono::milliseconds::zero() ||
+      unalignedWriteTimeout > std::chrono::seconds(5)) {
+    return nullptr;
+  }
   id<MTLDevice> device = MTLCreateSystemDefaultDevice();
   if (device == nil) {
     return nullptr;
@@ -393,6 +492,8 @@ std::unique_ptr<MetalDevice> MetalDevice::Create(MemoryModel memoryModel) {
 
   std::unique_ptr<MetalDevice> result(new MetalDevice());
   result->impl_->device = device;
+  result->impl_->uploadStagingByteBudget = uploadStagingByteBudget;
+  result->impl_->unalignedWriteTimeout = unalignedWriteTimeout;
   // Ask the device rather than assuming. On a unified-memory device the CPU and GPU address one
   // copy of a shared resource and nothing has to be moved between them; on a device without it,
   // a shared resource is not the same bytes on both sides, and reading GPU output through the
@@ -416,6 +517,15 @@ uint64_t MetalDevice::deviceWritePublishCountForTest() const {
 }
 
 MetalDevice::MetalDevice() : impl_(std::make_unique<Impl>()) {}
+
+MetalDevice::WriteStats MetalDevice::writeStatsForTest() const {
+  return WriteStats{impl_->pendingWrites.size(),
+                    impl_->completionState->inFlightStagingBytes.load(std::memory_order_acquire),
+                    impl_->pendingStagingBytes,
+                    impl_->stagingAllocations,
+                    impl_->submittedUploadBatches,
+                    impl_->unalignedWriteWaits};
+}
 
 Status MetalDevice::pauseSubmissionsForTest() {
   if (impl_->submissionGate != nil) {
@@ -510,6 +620,7 @@ Status MetalDevice::onCreateBuffer(uint32_t slotIndex, const BufferDescriptor& d
   }
 
   SetSlot(impl_->buffers, slotIndex, buffer);
+  SetSlot(impl_->bufferUploadSerials, slotIndex, uint64_t{0});
   return OkStatus();
 }
 
@@ -545,6 +656,7 @@ Status MetalDevice::onCreateTexture(uint32_t slotIndex, const TextureDescriptor&
   }
 
   SetSlot(impl_->textures, slotIndex, texture);
+  SetSlot(impl_->textureUploadSerials, slotIndex, uint64_t{0});
   return OkStatus();
 }
 
@@ -767,8 +879,10 @@ void MetalDevice::onDestroyResource(std::string_view resourceName, uint32_t slot
   // Clearing a slot to nil / nullopt releases the ObjC object under ARC. Unknown resource names
   // are ignored; the base class owns their bookkeeping.
   if (resourceName == "buffer") {
+    impl_->discardPendingWrites(GetSlot(impl_->buffers, slotIndex), nil);
     SetSlot(impl_->buffers, slotIndex, id<MTLBuffer>(nil));
   } else if (resourceName == "texture") {
+    impl_->discardPendingWrites(nil, GetSlot(impl_->textures, slotIndex));
     SetSlot(impl_->textures, slotIndex, id<MTLTexture>(nil));
   } else if (resourceName == "textureView") {
     SetSlot(impl_->textureViewToTexture, slotIndex, std::optional<uint32_t>());
@@ -789,6 +903,24 @@ void MetalDevice::onDestroyResource(std::string_view resourceName, uint32_t slot
   }
 }
 
+void MetalDevice::Impl::writeIdleBuffer(id<MTLBuffer> buffer, uint64_t offsetBytes,
+                                        std::span<const uint8_t> bytes) {
+  std::memcpy(static_cast<uint8_t*>(buffer.contents) + offsetBytes, bytes.data(), bytes.size());
+  if (needsExplicitHostCoherency()) {
+    [buffer didModifyRange:NSMakeRange(offsetBytes, bytes.size())];
+    ++hostWritePublishCount;
+  }
+}
+
+void MetalDevice::Impl::flushIdleBufferWrites(id<MTLBuffer> buffer) {
+  for (const PendingWrite& pending : pendingWrites) {
+    if (pending.buffer == buffer) {
+      writeIdleBuffer(buffer, pending.offsetBytes, pending.bytes);
+    }
+  }
+  discardPendingWrites(buffer, nil);
+}
+
 Status MetalDevice::onWriteBuffer(uint32_t slotIndex, uint64_t offsetBytes,
                                   std::span<const uint8_t> data) {
   id<MTLBuffer> buffer = GetSlot(impl_->buffers, slotIndex);
@@ -797,15 +929,34 @@ Status MetalDevice::onWriteBuffer(uint32_t slotIndex, uint64_t offsetBytes,
                     std::format("buffer slot {} has no Metal buffer", slotIndex)};
   }
 
-  if (!data.empty()) {
-    std::memcpy(static_cast<uint8_t*>(buffer.contents) + offsetBytes, data.data(), data.size());
-    if (impl_->needsExplicitHostCoherency()) {
-      // The write landed in the host's copy; the GPU reads its own until the range is published.
-      [buffer didModifyRange:NSMakeRange(static_cast<NSUInteger>(offsetBytes),
-                                         static_cast<NSUInteger>(data.size()))];
-      ++impl_->hostWritePublishCount;
-    }
+  if (data.empty()) {
+    return OkStatus();
   }
+  const uint64_t lastUse =
+      std::max(bufferLastUseSerial(slotIndex), GetSlot(impl_->bufferUploadSerials, slotIndex));
+  if (lastUse > completedSerial() || impl_->hasPendingWrite(buffer, nil)) {
+    if (offsetBytes % 4 == 0 && data.size() % 4 == 0) {
+      auto queued = impl_->queueWrite(
+          Impl::PendingWrite{.slotIndex = slotIndex, .buffer = buffer, .offsetBytes = offsetBytes},
+          data.size());
+      if (queued.hasError()) {
+        return std::move(queued).error();
+      }
+      std::memcpy(queued.result()->bytes.data(), data.data(), data.size());
+      return OkStatus();
+    }
+    if (lastUse > completedSerial()) {
+      ++impl_->unalignedWriteWaits;
+      if (!waitForSerial(lastUse,
+                         std::chrono::duration<double>(impl_->unalignedWriteTimeout).count())) {
+        return GpuError{
+            GpuErrorType::InvalidState,
+            std::format("Metal unaligned buffer write could not complete submission {}", lastUse)};
+      }
+    }
+    impl_->flushIdleBufferWrites(buffer);
+  }
+  impl_->writeIdleBuffer(buffer, offsetBytes, data);
   return OkStatus();
 }
 
@@ -816,6 +967,27 @@ Status MetalDevice::onWriteTexture(uint32_t slotIndex, std::span<const uint8_t> 
   if (texture == nil) {
     return GpuError{GpuErrorType::InvalidState,
                     std::format("texture slot {} has no Metal texture", slotIndex)};
+  }
+
+  const uint64_t lastUse =
+      std::max(textureLastUseSerial(slotIndex), GetSlot(impl_->textureUploadSerials, slotIndex));
+  if (lastUse > completedSerial() || impl_->hasPendingWrite(nil, texture)) {
+    const uint32_t texelBytes = texture.pixelFormat == MTLPixelFormatR8Unorm ? 1 : 4;
+    const uint32_t rowBytes = writeSize.width * texelBytes;
+    const uint32_t rowPitch = static_cast<uint32_t>(Impl::StagingSize(rowBytes));
+    auto queued = impl_->queueWrite(
+        Impl::PendingWrite{
+            .slotIndex = slotIndex, .texture = texture, .size = writeSize, .bytesPerRow = rowPitch},
+        uint64_t{rowPitch} * writeSize.height);
+    if (queued.hasError()) {
+      return std::move(queued).error();
+    }
+    for (uint32_t row = 0; row < writeSize.height; ++row) {
+      std::memcpy(queued.result()->bytes.data() + uint64_t{row} * rowPitch,
+                  data.data() + dataLayout.offsetBytes + uint64_t{row} * dataLayout.bytesPerRow,
+                  rowBytes);
+    }
+    return OkStatus();
   }
 
   [texture replaceRegion:MTLRegionMake2D(0, 0, writeSize.width, writeSize.height)
@@ -1085,6 +1257,7 @@ Status MetalDevice::Impl::encodeCopyTextureToBuffer(EncodingState& state,
         destinationBytesPerRow:copy.layout.bytesPerRow
       destinationBytesPerImage:static_cast<uint64_t>(copy.layout.bytesPerRow) *
                                copy.layout.rowsPerImage];
+  requireHostSync(state, buffer);
   [blitEncoder endEncoding];
   return OkStatus();
 }
@@ -1227,6 +1400,8 @@ Status MetalDevice::Impl::encodeCommand(EncodingState& state, const Command& com
 
 void MetalDevice::Impl::attachCompletionHandler(EncodingState& state, uint64_t submissionSerial) {
   std::shared_ptr<CompletionState> sharedState = completionState;
+  const uint64_t uploadBytes = pendingStagingBytes;
+  sharedState->inFlightStagingBytes.fetch_add(uploadBytes, std::memory_order_relaxed);
   [state.commandBuffer addCompletedHandler:^(id<MTLCommandBuffer> completedBuffer) {
     if (completedBuffer.error != nil) {
       sharedState->hadError.store(true, std::memory_order_release);
@@ -1237,6 +1412,9 @@ void MetalDevice::Impl::attachCompletionHandler(EncodingState& state, uint64_t s
       }
     }
 
+    // Make the reservation available before a completion waiter observes this serial.
+    sharedState->inFlightStagingBytes.fetch_sub(uploadBytes, std::memory_order_release);
+
     // Monotonic max: handlers may complete out of order across command buffers.
     uint64_t previous = sharedState->completedSerial.load(std::memory_order_relaxed);
     while (previous < submissionSerial &&
@@ -1245,50 +1423,121 @@ void MetalDevice::Impl::attachCompletionHandler(EncodingState& state, uint64_t s
   }];
 }
 
-Status MetalDevice::Impl::encodeHostCoherencySync(EncodingState& state) {
-  if (!needsExplicitHostCoherency()) {
-    return OkStatus();  // One copy addressed from both sides; nothing to publish.
+void MetalDevice::Impl::requireHostSync(EncodingState& state, id<MTLBuffer> buffer) {
+  if (needsExplicitHostCoherency() &&
+      std::ranges::find(state.hostReadBuffers, buffer) == state.hostReadBuffers.end()) {
+    state.hostReadBuffers.push_back(buffer);
   }
+}
 
+Status MetalDevice::Impl::encodeHostCoherencySync(EncodingState& state) {
+  if (state.hostReadBuffers.empty()) {
+    return OkStatus();
+  }
   id<MTLBlitCommandEncoder> blitEncoder = [state.commandBuffer blitCommandEncoder];
   if (blitEncoder == nil) {
     return GpuError{GpuErrorType::InvalidState,
                     "Metal blit command encoder creation failed for the host-coherency sync"};
   }
-  for (id<MTLBuffer> buffer : buffers) {
-    if (buffer != nil) {
-      [blitEncoder synchronizeResource:buffer];
-    }
-  }
-  for (id<MTLTexture> texture : textures) {
-    if (texture != nil) {
-      [blitEncoder synchronizeResource:texture];
-    }
+  for (id<MTLBuffer> buffer : state.hostReadBuffers) {
+    [blitEncoder synchronizeResource:buffer];
   }
   [blitEncoder endEncoding];
   ++deviceWritePublishCount;
   return OkStatus();
 }
 
-Status MetalDevice::onSubmit(uint64_t submissionSerial, uint32_t commandBufferSlotIndex,
-                             std::span<const Command> commands) {
-  (void)commandBufferSlotIndex;
+Status MetalDevice::Impl::encodePendingWrites(EncodingState& state) {
+  if (pendingWrites.empty()) {
+    return OkStatus();
+  }
+  const MTLResourceOptions options =
+      unifiedMemory ? MTLResourceStorageModeShared : MTLResourceStorageModeManaged;
+  id<MTLBuffer> staging = [device newBufferWithLength:pendingStagingBytes options:options];
+  ++stagingAllocations;
+  if (staging == nil) {
+    return GpuError{GpuErrorType::InvalidState, "Metal queue-write staging allocation failed"};
+  }
+  uint64_t sourceOffset = 0;
+  for (const PendingWrite& write : pendingWrites) {
+    std::memcpy(static_cast<uint8_t*>(staging.contents) + sourceOffset, write.bytes.data(),
+                write.bytes.size());
+    sourceOffset += StagingSize(write.bytes.size());
+  }
+  if (needsExplicitHostCoherency()) {
+    [staging didModifyRange:NSMakeRange(0, pendingStagingBytes)];
+    ++hostWritePublishCount;
+  }
+  id<MTLBlitCommandEncoder> blit = [state.commandBuffer blitCommandEncoder];
+  if (blit == nil) {
+    return GpuError{GpuErrorType::InvalidState, "Metal queue-write blit encoder creation failed"};
+  }
+  sourceOffset = 0;
+  for (const PendingWrite& write : pendingWrites) {
+    if (write.buffer != nil) {
+      [blit copyFromBuffer:staging
+               sourceOffset:sourceOffset
+                   toBuffer:write.buffer
+          destinationOffset:write.offsetBytes
+                       size:write.bytes.size()];
+      requireHostSync(state, write.buffer);
+    } else {
+      [blit copyFromBuffer:staging
+                 sourceOffset:sourceOffset
+            sourceBytesPerRow:write.bytesPerRow
+          sourceBytesPerImage:0
+                   sourceSize:MTLSizeMake(write.size.width, write.size.height, 1)
+                    toTexture:write.texture
+             destinationSlice:0
+             destinationLevel:0
+            destinationOrigin:MTLOriginMake(0, 0, 0)];
+    }
+    sourceOffset += StagingSize(write.bytes.size());
+  }
+  [blit endEncoding];
+  return OkStatus();
+}
 
-  if (impl_->commandQueue == nil) {
-    impl_->commandQueue = [impl_->device newCommandQueue];
-    if (impl_->commandQueue == nil) {
+Status MetalDevice::Impl::beginSubmission(EncodingState& state) {
+  if (commandQueue == nil) {
+    commandQueue = [device newCommandQueue];
+    if (commandQueue == nil) {
       return GpuError{GpuErrorType::InvalidState, "Metal command queue creation failed"};
     }
   }
 
-  Impl::EncodingState state;
-  state.commandBuffer = [impl_->commandQueue commandBuffer];
+  state.commandBuffer = [commandQueue commandBuffer];
   if (state.commandBuffer == nil) {
     return GpuError{GpuErrorType::InvalidState, "Metal command buffer creation failed"};
   }
 
-  if (impl_->submissionGate != nil) {
-    [state.commandBuffer encodeWaitForEvent:impl_->submissionGate value:1];
+  if (submissionGate != nil) {
+    [state.commandBuffer encodeWaitForEvent:submissionGate value:1];
+  }
+
+  return encodePendingWrites(state);
+}
+
+void MetalDevice::Impl::didSubmitWrites(uint64_t submissionSerial) {
+  if (!pendingWrites.empty()) {
+    // Upload destinations need ordering even when the caller's command stream never names them.
+    for (const PendingWrite& write : pendingWrites) {
+      SetSlot(write.buffer != nil ? bufferUploadSerials : textureUploadSerials, write.slotIndex,
+              submissionSerial);
+    }
+    ++submittedUploadBatches;
+    pendingWrites.clear();
+    pendingStagingBytes = 0;
+  }
+}
+
+Status MetalDevice::onSubmit(uint64_t submissionSerial, uint32_t commandBufferSlotIndex,
+                             std::span<const Command> commands) {
+  (void)commandBufferSlotIndex;
+
+  Impl::EncodingState state;
+  if (Status status = impl_->beginSubmission(state); status.hasError()) {
+    return status;
   }
 
   // On any encoding failure, close an open encoder before returning so the un-committed command
@@ -1318,18 +1567,14 @@ Status MetalDevice::onSubmit(uint64_t submissionSerial, uint32_t commandBufferSl
         GpuError{GpuErrorType::InvalidState, "submitted command stream left a pass open"});
   }
 
-  // Publish every host-visible resource's GPU-side changes before the buffer completes, so a
-  // host read after the completion sees them. Only a device without unified memory needs this,
-  // and there it has to happen inside the submission: once the command buffer has completed
-  // there is no encoder left to do it with. It covers every live resource rather than tracking
-  // which this stream touched - the cost falls only on the path that already needs the copy, and
-  // a missed resource here is silently wrong data rather than a reported failure.
+  // Queued buffer uploads and readback copies are the only GPU buffer writers.
   if (Status status = impl_->encodeHostCoherencySync(state); status.hasError()) {
     return failEncoding(std::move(status));
   }
 
   impl_->attachCompletionHandler(state, submissionSerial);
   [state.commandBuffer commit];
+  impl_->didSubmitWrites(submissionSerial);
 
   return OkStatus();
 }

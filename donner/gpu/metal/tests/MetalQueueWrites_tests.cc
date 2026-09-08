@@ -4,7 +4,9 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <array>
+#include <chrono>
 #include <cstdint>
 #include <memory>
 #include <span>
@@ -23,6 +25,7 @@ namespace {
 struct Capture {
   Buffer readback;
   uint64_t serial = 0;
+  Extent2d size{1, 1};
 };
 
 class MetalQueueWritesTest : public testing::Test {
@@ -38,13 +41,14 @@ protected:
     }
   }
 
-  Capture captureTexture(const Texture& texture) {
+  Capture captureTexture(const Texture& texture, Extent2d size = {1, 1}) {
     Capture capture;
-    capture.readback = GetResultOrFail(device_->createBuffer(
-        BufferDescriptor{"capture", 256, BufferUsage::CopyDst | BufferUsage::MapRead}));
+    capture.size = size;
+    capture.readback = GetResultOrFail(device_->createBuffer(BufferDescriptor{
+        "capture", uint64_t{256} * size.height, BufferUsage::CopyDst | BufferUsage::MapRead}));
     auto encoder = GetResultOrFail(device_->createCommandEncoder());
     EXPECT_THAT(encoder->copyTextureToBuffer(TexelCopyTextureInfo{texture}, capture.readback,
-                                             TexelCopyBufferLayout{0, 256, 1}, Extent2d{1, 1}),
+                                             TexelCopyBufferLayout{0, 256, size.height}, size),
                 IsOk());
     capture.serial = GetResultOrFail(device_->submit(GetResultOrFail(encoder->finish())));
     return capture;
@@ -98,15 +102,32 @@ kernel void cs_main(constant float4& color [[buffer(1)]],
     return capture;
   }
 
-  void expectPixel(const Capture& capture, std::array<uint8_t, 4> expected, const char* label) {
+  void expectPixels(const Capture& capture, std::span<const uint8_t> expected, const char* label) {
     const auto bytes = GetResultOrFail(device_->readBackBuffer(capture.readback));
-    ASSERT_GE(bytes.size(), 4u);
-    const svg::RendererBitmap actual{
-        .dimensions = {1, 1}, .pixels = {bytes[0], bytes[1], bytes[2], bytes[3]}, .rowBytes = 4};
-    const svg::RendererBitmap reference{
-        .dimensions = {1, 1}, .pixels = {expected.begin(), expected.end()}, .rowBytes = 4};
+    ASSERT_GE(bytes.size(), uint64_t{256} * capture.size.height);
+    const Vector2i dimensions{static_cast<int>(capture.size.width),
+                              static_cast<int>(capture.size.height)};
+    const svg::RendererBitmap actual{.dimensions = dimensions, .pixels = bytes, .rowBytes = 256};
+    const size_t rowBytes = size_t{capture.size.width} * 4;
+    ASSERT_EQ(expected.size(), rowBytes * capture.size.height);
+    svg::RendererBitmap reference{
+        .dimensions = dimensions, .pixels = std::vector<uint8_t>(bytes.size()), .rowBytes = 256};
+    for (uint32_t row = 0; row < capture.size.height; ++row) {
+      std::copy_n(expected.begin() + row * rowBytes, rowBytes,
+                  reference.pixels.begin() + row * 256);
+    }
     editor::tests::CompareBitmapToBitmap(actual, reference, label,
                                          editor::tests::PixelmatchIdentityParams());
+  }
+
+  void expectPixel(const Capture& capture, std::array<uint8_t, 4> expected, const char* label) {
+    expectPixels(capture, expected, label);
+  }
+
+  Status writeColor(const Buffer& buffer, const std::array<float, 4>& color) {
+    return device_->writeBuffer(
+        buffer, 0,
+        std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(color.data()), sizeof(color)));
   }
 
   std::unique_ptr<MetalDevice> device_;
@@ -152,6 +173,203 @@ TEST_F(MetalQueueWritesTest, TextureUpdateDoesNotChangeAnEarlierSubmission) {
   ASSERT_TRUE(device_->waitForSerial(second.serial, 5.0)) << device_->lastErrorForTest();
   expectPixel(first, red, "texture_before_update");
   expectPixel(second, blue, "texture_after_update");
+}
+
+TEST_F(MetalQueueWritesTest, RepeatedWritesCoalesceAndOverlapsKeepQueueOrder) {
+  const Buffer uniform = GetResultOrFail(device_->createBuffer(
+      BufferDescriptor{"color", 16, BufferUsage::Uniform | BufferUsage::CopyDst}));
+  ASSERT_THAT(writeColor(uniform, {1, 0, 0, 1}), IsOk());
+  ASSERT_THAT(device_->pauseSubmissionsForTest(), IsOk());
+  const Capture first = captureUniform(uniform);
+  for (int i = 0; i < 32; ++i) {
+    ASSERT_THAT(writeColor(uniform, {0, 0, 1, 1}), IsOk());
+  }
+  EXPECT_EQ(device_->writeStatsForTest().pendingWrites, 1u);
+  const float redChannel = 1.0f;
+  ASSERT_THAT(
+      device_->writeBuffer(uniform, 0,
+                           std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(&redChannel),
+                                                    sizeof(redChannel))),
+      IsOk());
+  const Capture second = captureUniform(uniform);
+  device_->resumeSubmissionsForTest();
+  ASSERT_TRUE(device_->waitForSerial(second.serial, 5.0)) << device_->lastErrorForTest();
+  expectPixel(first, {255, 0, 0, 255}, "coalesced_before_update");
+  expectPixel(second, {255, 0, 255, 255}, "coalesced_after_update");
+  const MetalDevice::WriteStats stats = device_->writeStatsForTest();
+  EXPECT_EQ(stats.pendingWrites, 0u);
+  EXPECT_EQ(stats.pendingStagingBytes, 0u);
+  EXPECT_EQ(stats.stagingAllocations, 1u);
+  EXPECT_EQ(stats.submittedUploadBatches, 1u);
+  EXPECT_EQ(stats.unalignedWriteWaits, 0u);
+  EXPECT_EQ(device_->lastSubmittedSerial(), 2u);
+}
+
+TEST_F(MetalQueueWritesTest, PartialTextureUploadsPreserveOtherPixelsAndCallerPitch) {
+  const Texture texture = GetResultOrFail(
+      device_->createTexture(TextureDescriptor{"source", Extent2d{2, 2}, TextureFormat::RGBA8Unorm,
+                                               TextureUsage::CopySrc | TextureUsage::CopyDst}));
+  std::array<uint8_t, 512> initial{};
+  for (size_t offset : {0u, 4u, 256u, 260u}) {
+    initial[offset] = 255;
+    initial[offset + 3] = 255;
+  }
+  ASSERT_THAT(device_->writeTexture(texture, initial, TexelCopyBufferLayout{0, 256, 2}, {2, 2}),
+              IsOk());
+  ASSERT_THAT(device_->pauseSubmissionsForTest(), IsOk());
+  const Capture first = captureTexture(texture, {2, 2});
+  std::array<uint8_t, 1024> update{};
+  for (size_t offset : {4u, 516u}) {
+    update[offset + 2] = 255;
+    update[offset + 3] = 255;
+  }
+  ASSERT_THAT(device_->writeTexture(texture, update, TexelCopyBufferLayout{4, 512, 2}, {1, 2}),
+              IsOk());
+  const Capture second = captureTexture(texture, {2, 2});
+  device_->resumeSubmissionsForTest();
+  ASSERT_TRUE(device_->waitForSerial(second.serial, 5.0)) << device_->lastErrorForTest();
+  const std::array<uint8_t, 16> red = {255, 0, 0, 255, 255, 0, 0, 255,
+                                       255, 0, 0, 255, 255, 0, 0, 255};
+  const std::array<uint8_t, 16> columns = {0, 0, 255, 255, 255, 0, 0, 255,
+                                           0, 0, 255, 255, 255, 0, 0, 255};
+  expectPixels(first, red, "partial_texture_before_update");
+  expectPixels(second, columns, "partial_texture_after_update");
+}
+
+TEST_F(MetalQueueWritesTest, AnUploadOnlySubmissionStillProtectsItsDestination) {
+  const Buffer uniform = GetResultOrFail(device_->createBuffer(
+      BufferDescriptor{"color", 16, BufferUsage::Uniform | BufferUsage::CopyDst}));
+  ASSERT_THAT(writeColor(uniform, {1, 0, 0, 1}), IsOk());
+  ASSERT_THAT(device_->pauseSubmissionsForTest(), IsOk());
+  const Capture first = captureUniform(uniform);
+  ASSERT_THAT(writeColor(uniform, {0, 0, 1, 1}), IsOk());
+  device_->resumeSubmissionsForTest();
+  ASSERT_THAT(device_->pauseSubmissionsForTest(), IsOk());
+  auto empty = GetResultOrFail(device_->createCommandEncoder());
+  const uint64_t uploadSerial = GetResultOrFail(device_->submit(GetResultOrFail(empty->finish())));
+  ASSERT_TRUE(device_->waitForSerial(first.serial, 5.0)) << device_->lastErrorForTest();
+  ASSERT_THAT(device_->completedSerial(), testing::Lt(uploadSerial));
+  ASSERT_THAT(writeColor(uniform, {0, 1, 0, 1}), IsOk());
+  const Capture third = captureUniform(uniform);
+  device_->resumeSubmissionsForTest();
+  ASSERT_TRUE(device_->waitForSerial(third.serial, 5.0)) << device_->lastErrorForTest();
+  expectPixel(first, {255, 0, 0, 255}, "upload_only_before_update");
+  expectPixel(third, {0, 255, 0, 255}, "upload_only_after_update");
+  EXPECT_EQ(device_->writeStatsForTest().submittedUploadBatches, 2u);
+}
+
+TEST_F(MetalQueueWritesTest, RetiringADestinationDiscardsItsUnsubmittedWrite) {
+  Buffer uniform = GetResultOrFail(device_->createBuffer(
+      BufferDescriptor{"color", 16, BufferUsage::Uniform | BufferUsage::CopyDst}));
+  ASSERT_THAT(writeColor(uniform, {1, 0, 0, 1}), IsOk());
+  ASSERT_THAT(device_->pauseSubmissionsForTest(), IsOk());
+  const Capture first = captureUniform(uniform);
+  ASSERT_THAT(writeColor(uniform, {0, 0, 1, 1}), IsOk());
+  ASSERT_THAT(device_->destroyBuffer(std::move(uniform)), IsOk());
+  device_->resumeSubmissionsForTest();
+  ASSERT_TRUE(device_->waitForSerial(first.serial, 5.0)) << device_->lastErrorForTest();
+  device_->poll();
+  expectPixel(first, {255, 0, 0, 255}, "retired_destination");
+  EXPECT_EQ(device_->writeStatsForTest().pendingWrites, 0u);
+  EXPECT_EQ(device_->writeStatsForTest().pendingStagingBytes, 0u);
+  EXPECT_EQ(device_->writeStatsForTest().stagingAllocations, 0u);
+}
+
+TEST_F(MetalQueueWritesTest, ManagedMemoryPublishesTheBatchedUpload) {
+  device_ = MetalDevice::Create(MetalDevice::MemoryModel::ForceNonUnified);
+  ASSERT_NE(device_, nullptr);
+  const Buffer uniform = GetResultOrFail(device_->createBuffer(
+      BufferDescriptor{"color", 16, BufferUsage::Uniform | BufferUsage::CopyDst}));
+  ASSERT_THAT(writeColor(uniform, {1, 0, 0, 1}), IsOk());
+  ASSERT_THAT(device_->pauseSubmissionsForTest(), IsOk());
+  const Capture first = captureUniform(uniform);
+  ASSERT_THAT(writeColor(uniform, {0, 0, 1, 1}), IsOk());
+  const Capture second = captureUniform(uniform);
+  device_->resumeSubmissionsForTest();
+  ASSERT_TRUE(device_->waitForSerial(second.serial, 5.0)) << device_->lastErrorForTest();
+  expectPixel(first, {255, 0, 0, 255}, "managed_before_update");
+  expectPixel(second, {0, 0, 255, 255}, "managed_after_update");
+  EXPECT_EQ(device_->writeStatsForTest().stagingAllocations, 1u);
+  EXPECT_EQ(device_->hostWritePublishCountForTest(), 2u);
+}
+
+TEST_F(MetalQueueWritesTest, ManagedUploadOnlySubmissionPublishesItsHostBuffer) {
+  device_ = MetalDevice::Create(MetalDevice::MemoryModel::ForceNonUnified);
+  ASSERT_NE(device_, nullptr);
+  const Buffer uniform = GetResultOrFail(device_->createBuffer(
+      BufferDescriptor{"color", 16, BufferUsage::Uniform | BufferUsage::CopyDst}));
+  ASSERT_THAT(writeColor(uniform, {1, 0, 0, 1}), IsOk());
+  ASSERT_THAT(device_->pauseSubmissionsForTest(), IsOk());
+  const Capture first = captureUniform(uniform);
+  const std::array<float, 4> blue = {0, 0, 1, 1};
+  ASSERT_THAT(writeColor(uniform, blue), IsOk());
+  auto empty = GetResultOrFail(device_->createCommandEncoder());
+  const uint64_t serial = GetResultOrFail(device_->submit(GetResultOrFail(empty->finish())));
+  device_->resumeSubmissionsForTest();
+  ASSERT_TRUE(device_->waitForSerial(serial, 5.0)) << device_->lastErrorForTest();
+  expectPixel(first, {255, 0, 0, 255}, "managed_upload_only_before_update");
+  EXPECT_THAT(
+      GetResultOrFail(device_->readBackBuffer(uniform)),
+      testing::ElementsAreArray(reinterpret_cast<const uint8_t*>(blue.data()), sizeof(blue)));
+  EXPECT_EQ(device_->deviceWritePublishCountForTest(), 2u);
+}
+
+TEST_F(MetalQueueWritesTest, UploadBudgetRefusesAndRecoversAcrossInFlightSubmissions) {
+  device_ = MetalDevice::Create(MetalDevice::MemoryModel::Detected, 256);
+  ASSERT_NE(device_, nullptr);
+  const Buffer uniform = GetResultOrFail(device_->createBuffer(
+      BufferDescriptor{"color", 16, BufferUsage::Uniform | BufferUsage::CopyDst}));
+  ASSERT_THAT(writeColor(uniform, {1, 0, 0, 1}), IsOk());
+  ASSERT_THAT(device_->pauseSubmissionsForTest(), IsOk());
+  const Capture first = captureUniform(uniform);
+  ASSERT_THAT(writeColor(uniform, {0, 0, 1, 1}), IsOk());
+  const Capture second = captureUniform(uniform);
+  EXPECT_EQ(device_->writeStatsForTest().inFlightStagingBytes, 256u);
+  EXPECT_THAT(writeColor(uniform, {0, 1, 0, 1}), IsGpuError(GpuErrorType::LimitExceeded));
+  EXPECT_EQ(device_->writeStatsForTest().pendingWrites, 0u);
+  device_->resumeSubmissionsForTest();
+  ASSERT_TRUE(device_->waitForSerial(second.serial, 5.0)) << device_->lastErrorForTest();
+  EXPECT_EQ(device_->writeStatsForTest().inFlightStagingBytes, 0u);
+  expectPixel(first, {255, 0, 0, 255}, "budget_first_submission");
+  expectPixel(second, {0, 0, 255, 255}, "budget_refused_write");
+
+  ASSERT_THAT(device_->pauseSubmissionsForTest(), IsOk());
+  const Capture third = captureUniform(uniform);
+  ASSERT_THAT(writeColor(uniform, {0, 1, 0, 1}), IsOk());
+  const Capture fourth = captureUniform(uniform);
+  EXPECT_EQ(device_->writeStatsForTest().inFlightStagingBytes, 256u);
+  device_->resumeSubmissionsForTest();
+  ASSERT_TRUE(device_->waitForSerial(fourth.serial, 5.0)) << device_->lastErrorForTest();
+  expectPixel(third, {0, 0, 255, 255}, "budget_recovery_before_update");
+  expectPixel(fourth, {0, 255, 0, 255}, "budget_recovery_after_update");
+  EXPECT_EQ(device_->writeStatsForTest().inFlightStagingBytes, 0u);
+  EXPECT_EQ(device_->writeStatsForTest().stagingAllocations, 2u);
+}
+
+TEST_F(MetalQueueWritesTest, UnalignedWriteTimesOutWithoutOverwritingTheBusyBuffer) {
+  device_ = MetalDevice::Create(MetalDevice::MemoryModel::Detected, kMaxBufferByteSize,
+                                std::chrono::milliseconds(20));
+  ASSERT_NE(device_, nullptr);
+  const Buffer uniform = GetResultOrFail(device_->createBuffer(
+      BufferDescriptor{"color", 16, BufferUsage::Uniform | BufferUsage::CopyDst}));
+  ASSERT_THAT(writeColor(uniform, {1, 0, 0, 1}), IsOk());
+  ASSERT_THAT(device_->pauseSubmissionsForTest(), IsOk());
+  const Capture first = captureUniform(uniform);
+  const std::array<uint8_t, 1> zero = {0};
+  const auto start = std::chrono::steady_clock::now();
+  EXPECT_THAT(device_->writeBuffer(uniform, 3, zero), IsGpuError(GpuErrorType::InvalidState));
+  const auto elapsed = std::chrono::steady_clock::now() - start;
+  EXPECT_LT(elapsed, std::chrono::seconds(1));
+  RecordProperty("unaligned_wait_ms",
+                 std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count());
+  device_->resumeSubmissionsForTest();
+  ASSERT_TRUE(device_->waitForSerial(first.serial, 5.0)) << device_->lastErrorForTest();
+  expectPixel(first, {255, 0, 0, 255}, "unaligned_timeout_before_update");
+  ASSERT_THAT(device_->writeBuffer(uniform, 3, zero), IsOk());
+  const Capture second = captureUniform(uniform);
+  ASSERT_TRUE(device_->waitForSerial(second.serial, 5.0)) << device_->lastErrorForTest();
+  expectPixel(second, {0, 0, 0, 255}, "unaligned_after_completion");
+  EXPECT_EQ(device_->writeStatsForTest().unalignedWriteWaits, 1u);
 }
 
 }  // namespace
