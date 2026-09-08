@@ -768,13 +768,16 @@ _fuzzer_routing_manifest = rule(
     outputs = {"out": "%{name}.txt"},
 )
 
+def _fuzzer_shell_quote(value):
+    return "'" + value.replace("'", "'\"'\"'") + "'"
+
 def _fuzzer_soak_test_impl(ctx):
     executable = ctx.actions.declare_file(ctx.label.name)
     files = [ctx.executable._runner, ctx.executable.binary] + ctx.files.corpus
     arguments = []
     for file in files:
-        arguments.append('"${TEST_SRCDIR}/${TEST_WORKSPACE}/"' + repr(file.short_path))
-    flags = [repr(flag) for flag in ctx.attr.fuzz_args]
+        arguments.append('"${TEST_SRCDIR}/${TEST_WORKSPACE}/"' + _fuzzer_shell_quote(file.short_path))
+    flags = [_fuzzer_shell_quote(flag) for flag in ctx.attr.fuzz_args]
     command = arguments[:2] + flags + arguments[2:] + ['"$@"']
     ctx.actions.write(
         executable,
