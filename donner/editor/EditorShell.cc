@@ -2603,6 +2603,36 @@ void EditorShell::applyMenuActions(const MenuBarActions& menuActions) {
   }
 }
 
+void EditorShell::handleFileShortcuts(bool anyPopupOpen, bool cmd, bool shift) {
+  if (anyPopupOpen || !cmd) {
+    return;
+  }
+
+  if (!shift && ImGui::IsKeyPressed(ImGuiKey_N, /*repeat=*/false)) {
+    cancelSampleThumbnailGeneration();
+    cancelPendingSampleLoad();
+    requestNewDocument();
+  }
+
+  if (ShouldRequestOpenShortcut(options_.allowFileSystemActions, anyPopupOpen, cmd, shift,
+                                ImGui::IsKeyPressed(ImGuiKey_O, /*repeat=*/false))) {
+    dialogPresenter_.requestOpenFile(app_.currentFilePath());
+  }
+
+  if (!shift && ImGui::IsKeyPressed(ImGuiKey_Q, /*repeat=*/false)) {
+    glfwSetWindowShouldClose(window_.rawHandle(), GLFW_TRUE);
+  }
+
+  if (ShouldRequestSaveShortcut(options_.allowFileSystemActions, anyPopupOpen, cmd,
+                                ImGui::IsKeyPressed(ImGuiKey_S, /*repeat=*/false))) {
+    if (shift) {
+      requestSaveAs();
+    } else {
+      requestSave();
+    }
+  }
+}
+
 void EditorShell::handleGlobalShortcuts() {
   const bool anyPopupOpen = ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopup);
   const bool cmd = ImGui::GetIO().KeyCtrl || ImGui::GetIO().KeySuper;
@@ -2624,29 +2654,7 @@ void EditorShell::handleGlobalShortcuts() {
     return;
   }
 
-  if (!anyPopupOpen && cmd && !shift && ImGui::IsKeyPressed(ImGuiKey_N, /*repeat=*/false)) {
-    cancelSampleThumbnailGeneration();
-    cancelPendingSampleLoad();
-    requestNewDocument();
-  }
-
-  if (ShouldRequestOpenShortcut(options_.allowFileSystemActions, anyPopupOpen, cmd, shift,
-                                ImGui::IsKeyPressed(ImGuiKey_O, /*repeat=*/false))) {
-    dialogPresenter_.requestOpenFile(app_.currentFilePath());
-  }
-
-  if (!anyPopupOpen && cmd && !shift && ImGui::IsKeyPressed(ImGuiKey_Q, /*repeat=*/false)) {
-    glfwSetWindowShouldClose(window_.rawHandle(), GLFW_TRUE);
-  }
-
-  if (ShouldRequestSaveShortcut(options_.allowFileSystemActions, anyPopupOpen, cmd,
-                                ImGui::IsKeyPressed(ImGuiKey_S, /*repeat=*/false))) {
-    if (shift) {
-      requestSaveAs();
-    } else {
-      requestSave();
-    }
-  }
+  handleFileShortcuts(anyPopupOpen, cmd, shift);
 
   // Active inspector fields own editing shortcuts, including select-all, clipboard, and undo.
   if (ImGui::GetIO().WantTextInput && !sourcePaneFocused) {
