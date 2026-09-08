@@ -160,14 +160,14 @@ donner_package(gpu_inventory_globs = [
 ])
 
 donner_cc_fuzzer(
-    name = "soak_probe",
+    name = "soak_probe_fuzzer",
     srcs = ["SoakProbe.cc"],
     corpus = "soak_probe_corpus",
 )
 
 alias(
     name = "fuzzer_soak_integration_tests",
-    actual = ":soak_probe_soak",
+    actual = ":soak_probe_fuzzer_soak",
 )
 
 py_test(
