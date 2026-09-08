@@ -126,6 +126,31 @@ Status CommandEncoder::validateBoundBindGroups(std::string_view operation) {
       }
     }
   }
+  return validateBoundBufferRanges(operation);
+}
+
+Status CommandEncoder::validateBoundBufferRanges(std::string_view operation) {
+  for (const auto& requirement : currentPipeline_->bufferRequirements) {
+    const ResourceIdentity identity = boundBindGroups_[requirement.group]->identity;
+    const auto* group = device_->bindGroups_.find(identity.slotIndex, identity.generation);
+    if (group == nullptr) {
+      return fail(Err(GpuErrorType::InvalidHandle,
+                      "Buffer range validation references a destroyed bind group"));
+    }
+    const auto entry =
+        std::ranges::find(group->descriptor.entries, requirement.binding, &BindGroupEntry::binding);
+    const BufferBinding* buffer = entry != group->descriptor.entries.end()
+                                      ? std::get_if<BufferBinding>(&entry->resource)
+                                      : nullptr;
+    if (buffer == nullptr || buffer->sizeBytes < requirement.minSizeBytes) {
+      return fail(Err(
+          GpuErrorType::InvalidDescriptor,
+          std::format(
+              "{}: group {} binding {} requires at least {} buffer bytes; declared range has {}",
+              operation, requirement.group, requirement.binding, requirement.minSizeBytes,
+              buffer ? buffer->sizeBytes : 0)));
+    }
+  }
   return OkStatus();
 }
 
@@ -301,6 +326,8 @@ Status CommandEncoder::passSetPipeline(const RenderPipeline& pipeline) {
 
   currentPipeline_ = BoundPipeline{record.result()->descriptor.vertex.buffers,
                                    record.result()->bindGroupLayoutIds};
+  currentPipeline_->bufferRequirements.assign(record.result()->bufferRequirements.begin(),
+                                              record.result()->bufferRequirements.end());
   commands_.push_back(
       SetPipelineCommand{ResourceIdentity{pipeline.slotIndex(), pipeline.generation()}});
   return OkStatus();
@@ -707,6 +734,8 @@ Status CommandEncoder::computePassSetPipeline(const ComputePipeline& pipeline) {
   }
 
   currentPipeline_ = BoundPipeline{{}, record.result()->bindGroupLayoutIds};
+  currentPipeline_->bufferRequirements.assign(record.result()->bufferRequirements.begin(),
+                                              record.result()->bufferRequirements.end());
   commands_.push_back(
       SetComputePipelineCommand{ResourceIdentity{pipeline.slotIndex(), pipeline.generation()}});
   return OkStatus();

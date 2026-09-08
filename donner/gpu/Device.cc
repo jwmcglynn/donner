@@ -1,5 +1,3 @@
-#include "donner/gpu/Device.h"
-
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -12,6 +10,7 @@
 
 #include "donner/gpu/CheckedArithmetic.h"
 #include "donner/gpu/CommandEncoder.h"
+#include "donner/gpu/Device.h"
 #include "donner/gpu/GpuLimits.h"
 
 namespace donner::gpu {
@@ -234,6 +233,53 @@ Status ValidateVertexBufferLayouts(const std::vector<VertexBufferLayout>& buffer
           }
         }
       }
+    }
+  }
+  return OkStatus();
+}
+
+Status ValidateShaderBufferLocation(const ShaderBufferBindingInfo& info) {
+  if (info.entryPoint.empty() || info.group >= kMaxBindGroups || info.binding >= kMaxBindings) {
+    return Err(GpuErrorType::InvalidDescriptor,
+               "Shader buffer metadata has an invalid entry point or binding location");
+  }
+  switch (info.stage) {
+    case ShaderStage::Vertex:
+    case ShaderStage::Fragment:
+    case ShaderStage::Compute: return OkStatus();
+    default:
+      return Err(GpuErrorType::InvalidDescriptor,
+                 "Shader buffer metadata requires one shader stage");
+  }
+}
+
+Status ValidateShaderBufferRange(const ShaderBufferBindingInfo& info) {
+  if (info.type != BindingType::UniformBuffer && info.type != BindingType::ReadOnlyStorageBuffer) {
+    return Err(GpuErrorType::InvalidDescriptor,
+               "Shader buffer metadata has a non-buffer binding type");
+  }
+  if (info.minSizeBytes == 0 || info.minSizeBytes > kMaxBufferByteSize) {
+    return Err(GpuErrorType::InvalidDescriptor,
+               "Shader buffer metadata has an invalid minimum size");
+  }
+  if (info.runtimeArrayStrideBytes != 0 && (info.type != BindingType::ReadOnlyStorageBuffer ||
+                                            info.minSizeBytes != info.runtimeArrayStrideBytes)) {
+    return Err(GpuErrorType::InvalidDescriptor,
+               "Shader runtime-array metadata requires one storage element as its minimum");
+  }
+  return OkStatus();
+}
+
+Status ValidateShaderBufferMetadata(const ShaderModuleDescriptor& descriptor) {
+  if (!descriptor.bufferBindings) {
+    return OkStatus();
+  }
+  for (const ShaderBufferBindingInfo& info : *descriptor.bufferBindings) {
+    if (Status status = ValidateShaderBufferLocation(info); status.hasError()) {
+      return status;
+    }
+    if (Status status = ValidateShaderBufferRange(info); status.hasError()) {
+      return status;
     }
   }
   return OkStatus();
@@ -972,6 +1018,10 @@ Result<ShaderModule> Device::createShaderModule(const ShaderModuleDescriptor& de
     }
   }
 
+  if (Status status = ValidateShaderBufferMetadata(descriptor); status.hasError()) {
+    return std::move(status).error();
+  }
+
   ShaderModule handle =
       allocateHandle<ShaderModuleTag>(shaderModules_, ShaderModuleRecord{descriptor});
   if (Status status = onCreateShaderModule(handle.slotIndex(), descriptor); status.hasError()) {
@@ -979,6 +1029,56 @@ Result<ShaderModule> Device::createShaderModule(const ShaderModuleDescriptor& de
     return std::move(status).error();
   }
   return handle;
+}
+
+Status Device::validatePipelineBufferBinding(const PipelineLayoutRecord& layout,
+                                             const ShaderBufferBindingInfo& info) const {
+  if (info.group >= layout.bindGroupLayoutIds.size()) {
+    return Err(GpuErrorType::InvalidDescriptor,
+               "Shader buffer metadata requires a missing pipeline bind group");
+  }
+  const ResourceIdentity identity = layout.bindGroupLayoutIds[info.group];
+  const auto* group = bindGroupLayouts_.find(identity.slotIndex, identity.generation);
+  if (group == nullptr) {
+    return Err(GpuErrorType::InvalidHandle,
+               "Shader buffer metadata references a destroyed bind group layout");
+  }
+  const auto entry =
+      std::ranges::find(group->descriptor.entries, info.binding, &BindGroupLayoutEntry::binding);
+  if (entry == group->descriptor.entries.end() || entry->type != info.type ||
+      !HasAllFlags(entry->visibility, info.stage)) {
+    return Err(GpuErrorType::InvalidDescriptor,
+               std::format("Shader buffer group {} binding {} does not match the pipeline layout's "
+                           "type and stage visibility",
+                           info.group, info.binding));
+  }
+  return OkStatus();
+}
+
+Status Device::appendPipelineBufferRequirements(
+    const PipelineLayoutRecord& layout, const ShaderModuleDescriptor& module,
+    std::string_view entryPoint, ShaderStage stage,
+    std::vector<PipelineBufferRequirement>& requirements) const {
+  if (!module.bufferBindings) {
+    return OkStatus();
+  }
+  for (const ShaderBufferBindingInfo& info : *module.bufferBindings) {
+    if (info.entryPoint != entryPoint || info.stage != stage) {
+      continue;
+    }
+    if (Status status = validatePipelineBufferBinding(layout, info); status.hasError()) {
+      return status;
+    }
+    const auto previous = std::ranges::find_if(requirements, [&](const auto& requirement) {
+      return requirement.group == info.group && requirement.binding == info.binding;
+    });
+    if (previous == requirements.end()) {
+      requirements.push_back({info.group, info.binding, info.minSizeBytes});
+    } else {
+      previous->minSizeBytes = std::max(previous->minSizeBytes, info.minSizeBytes);
+    }
+  }
+  return OkStatus();
 }
 
 Result<RenderPipeline> Device::createRenderPipeline(const RenderPipelineDescriptor& descriptor) {
@@ -1056,6 +1156,18 @@ Result<RenderPipeline> Device::createRenderPipeline(const RenderPipelineDescript
   }
 
   RenderPipelineRecord record{descriptor, layoutRecord.result()->bindGroupLayoutIds};
+  if (Status status = appendPipelineBufferRequirements(
+          *layoutRecord.result(), vertexModule.result()->descriptor, descriptor.vertex.entryPoint,
+          ShaderStage::Vertex, record.bufferRequirements);
+      status.hasError()) {
+    return std::move(status).error();
+  }
+  if (Status status = appendPipelineBufferRequirements(
+          *layoutRecord.result(), fragmentModule.result()->descriptor,
+          descriptor.fragment.entryPoint, ShaderStage::Fragment, record.bufferRequirements);
+      status.hasError()) {
+    return std::move(status).error();
+  }
   RenderPipeline handle = allocateHandle<RenderPipelineTag>(renderPipelines_, std::move(record));
   if (Status status = onCreateRenderPipeline(handle.slotIndex(), descriptor); status.hasError()) {
     renderPipelines_.release(handle.slotIndex());
@@ -1087,6 +1199,12 @@ Result<ComputePipeline> Device::createComputePipeline(const ComputePipelineDescr
   }
 
   ComputePipelineRecord record{descriptor, layoutRecord.result()->bindGroupLayoutIds};
+  if (Status status = appendPipelineBufferRequirements(
+          *layoutRecord.result(), computeModule.result()->descriptor, descriptor.compute.entryPoint,
+          ShaderStage::Compute, record.bufferRequirements);
+      status.hasError()) {
+    return std::move(status).error();
+  }
   ComputePipeline handle = allocateHandle<ComputePipelineTag>(computePipelines_, std::move(record));
   if (Status status = onCreateComputePipeline(handle.slotIndex(), descriptor); status.hasError()) {
     computePipelines_.release(handle.slotIndex());

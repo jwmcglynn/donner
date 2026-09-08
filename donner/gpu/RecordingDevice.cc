@@ -59,6 +59,26 @@ std::string RefId(std::string_view resourceName, uint32_t slotIndex) {
   return std::format("{}#{}", resourceName, slotIndex);
 }
 
+/// Includes supplied shader facts while retaining the distinction between absent and empty.
+void AppendShaderBufferBindings(
+    std::ostringstream& os, const std::optional<std::vector<ShaderBufferBindingInfo>>& bindings) {
+  if (!bindings) {
+    return;
+  }
+  os << " bufferBindings=[";
+  for (size_t index = 0; index < bindings->size(); ++index) {
+    if (index > 0) {
+      os << " ";
+    }
+    const ShaderBufferBindingInfo& info = (*bindings)[index];
+    os << "{entryPoint=" << QuoteLabel(info.entryPoint) << " stage=" << info.stage
+       << " group=" << info.group << " binding=" << info.binding << " type=" << info.type
+       << " minSizeBytes=" << info.minSizeBytes
+       << " runtimeArrayStrideBytes=" << info.runtimeArrayStrideBytes << "}";
+  }
+  os << "]";
+}
+
 /// Serializes the vertex buffer layout list of a pipeline descriptor.
 void AppendVertexBufferLayouts(std::ostringstream& os,
                                const std::vector<VertexBufferLayout>& buffers) {
@@ -313,6 +333,7 @@ Status RecordingDevice::onCreateShaderModule(uint32_t slotIndex,
     }
     os << "]";
   }
+  AppendShaderBufferBindings(os, descriptor.bufferBindings);
   lines_.push_back(os.str());
   return OkStatus();
 }
