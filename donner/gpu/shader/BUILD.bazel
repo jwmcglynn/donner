@@ -2,8 +2,7 @@ load("//build_defs:rules.bzl", "donner_cc_library", "donner_cc_test", "donner_mu
 load("//build_defs:visibility.bzl", "donner_internal_visibility")
 load("//build_defs:package.bzl", "donner_package")
 
-# donner::gpu::shader - the typed shader IR core, its WGSL-rule layout engine,
-# and the WGSL/MSL/SPIR-V emitters.
+# The typed shader IR and each emitter have independent compilation dependencies.
 #
 # A typed immutable IR with a validating builder, host-shareable layout
 # computation per the WGSL specification's memory layout rules, deterministic
@@ -18,9 +17,6 @@ donner_cc_library(
         "IrModule.cc",
         "IrSerialization.cc",
         "IrType.cc",
-        "MslEmitter.cc",
-        "SpirvEmitter.cc",
-        "WgslEmitter.cc",
     ],
     hdrs = [
         "IrExpr.h",
@@ -28,15 +24,52 @@ donner_cc_library(
         "IrModule.h",
         "IrStatement.h",
         "IrType.h",
-        "MslBindingMap.h",
-        "MslEmitter.h",
         "ShaderError.h",
         "ShaderResult.h",
-        "SpirvEmitter.h",
-        "WgslEmitter.h",
     ],
     visibility = donner_internal_visibility(),
     deps = [
+        "//donner/base",
+    ],
+)
+
+# Backend binding constants do not require the shader IR or any emitter.
+donner_cc_library(
+    name = "msl_binding_map",
+    hdrs = ["MslBindingMap.h"],
+    visibility = donner_internal_visibility(),
+)
+
+donner_cc_library(
+    name = "msl_emitter",
+    srcs = ["MslEmitter.cc"],
+    hdrs = ["MslEmitter.h"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":msl_binding_map",
+        ":shader",
+        "//donner/base",
+    ],
+)
+
+donner_cc_library(
+    name = "spirv_emitter",
+    srcs = ["SpirvEmitter.cc"],
+    hdrs = ["SpirvEmitter.h"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":shader",
+        "//donner/base",
+    ],
+)
+
+donner_cc_library(
+    name = "wgsl_emitter",
+    srcs = ["WgslEmitter.cc"],
+    hdrs = ["WgslEmitter.h"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":shader",
         "//donner/base",
     ],
 )
@@ -154,9 +187,12 @@ donner_cc_test(
         "tests/testdata/subregion_clip.wgsl",
     ],
     deps = [
+        ":msl_emitter",
         ":programs",
         ":shader",
+        ":spirv_emitter",
         ":stage_io_test_modules",
+        ":wgsl_emitter",
         "//donner/base:base_test_utils",
         "@com_google_gtest//:gtest_main",
         "@rules_cc//cc/runfiles",
@@ -213,6 +249,7 @@ donner_cc_test(
     target_compatible_with = ["@platforms//os:macos"],
     deps = [
         ":external_tool_gate",
+        ":msl_emitter",
         ":programs",
         ":shader",
         ":stage_io_test_modules",
@@ -237,6 +274,7 @@ donner_cc_test(
     deps = [
         ":programs",
         ":shader",
+        ":spirv_emitter",
         ":stage_io_test_modules",
         "//donner/base:base_test_utils",
         "@com_google_gtest//:gtest_main",
@@ -261,6 +299,7 @@ donner_cc_test(
     deps = [
         ":programs",
         ":shader",
+        ":wgsl_emitter",
         "//donner/base:gtest_timeout_main",
         "//donner/svg/renderer/geode:geode_device",
         "//donner/svg/renderer/geode:geode_gpu_wait",

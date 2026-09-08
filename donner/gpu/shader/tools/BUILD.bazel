@@ -19,6 +19,7 @@ donner_cc_binary(
         "//donner/gpu/shader",
         "//donner/gpu/shader:module_interface",
         "//donner/gpu/shader:programs",
+        "//donner/gpu/shader:wgsl_emitter",
     ],
 )
 
