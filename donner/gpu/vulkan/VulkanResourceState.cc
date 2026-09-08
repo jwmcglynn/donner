@@ -7,11 +7,10 @@ namespace donner::gpu::vulkan {
 
 namespace {
 
-/// The stages a sampled read can happen in. A sampled texture is readable from the fragment
-/// stage of a render pass and from a compute dispatch, and the backend does not record which of
-/// the two a given binding will be read from, so the destination scope names both.
-constexpr VkPipelineStageFlags kSampledReadStages =
-    VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
+/// Sampled bindings can be visible in every supported shader stage.
+constexpr VkPipelineStageFlags kSampledReadStages = VK_PIPELINE_STAGE_VERTEX_SHADER_BIT |
+                                                    VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
+                                                    VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
 
 /// The access bits that need an availability operation. Only writes have to be made available;
 /// a read that happened before needs no flushing, so naming it in a source scope would order

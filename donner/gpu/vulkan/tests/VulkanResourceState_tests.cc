@@ -16,7 +16,8 @@ namespace donner::gpu::vulkan {
 namespace {
 
 constexpr VkPipelineStageFlags kSampledReadStages =
-    VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
+    VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
+    VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
 
 TEST(VulkanResourceStateTests, UploadVisibilityIncludesVertexTextureReads) {
   const ImageBarrierParams barrier = TransitionFor(StateAfterUsage(TextureUsageKind::TransferWrite),
