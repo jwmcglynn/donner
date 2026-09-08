@@ -103,7 +103,7 @@ class RunnerScenarioTest(unittest.TestCase):
         )
         cases = {"donner-svg2/ro": {"expectation": "render-only"}}
         run = self._run([entry], cases=cases)
-        self.assertEqual(self._statuses(run), {"donner-svg2/ro": "render-only"})
+        self.assertEqual(self._statuses(run), {"donner-svg2/ro": "render-only"}, run.results)
         self.assertTrue(run.ok)
 
     def test_pass_fail_skip_are_separated(self):
