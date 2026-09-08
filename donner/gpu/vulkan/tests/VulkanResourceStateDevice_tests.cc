@@ -83,6 +83,20 @@ protected:
   std::unique_ptr<VulkanDevice> device_;
 };
 
+TEST_F(VulkanResourceStateDeviceTest, BarrierHistoryIsDisabledByDefault) {
+  device_ = VulkanDevice::Create();
+  ASSERT_NE(device_, nullptr);
+  Texture texture = makeTexture("uploaded", TextureUsage::CopyDst);
+  for (int upload = 0; upload < 2; ++upload) {
+    Status status =
+        device_->writeTexture(texture, uploadBytes(), uploadLayout(), Extent2d{kExtent, kExtent});
+    ASSERT_FALSE(status.hasError()) << status.error();
+  }
+  EXPECT_EQ(unwrap(device_->trackedTextureLayoutForTest(texture), "uploaded layout"),
+            VulkanDevice::TrackedTextureLayout::TransferDst);
+  EXPECT_THAT(device_->recordedImageBarriersForTest(), testing::IsEmpty());
+}
+
 TEST_F(VulkanResourceStateDeviceTest, AFailedUploadLeavesNoStateForALaterSubmitToPromote) {
   // Not Sampled, so a completed upload would leave this texture in the transfer-destination
   // layout and a failed one must leave it untouched - a difference the tracker can show.
@@ -184,7 +198,8 @@ TEST_F(VulkanResourceStateDeviceTest, ThePassEntryEdgeCoversAnAttachmentThatIsNo
   ASSERT_FALSE(commands.hasError()) << commands.error();
   Result<uint64_t> serial = device_->submit(std::move(commands).result());
   ASSERT_FALSE(serial.hasError()) << serial.error();
-  ASSERT_TRUE(device_->waitForSerial(serial.result(), /*timeoutSeconds=*/30.0));
+  ASSERT_TRUE(device_->waitForSerial(serial.result(), /*timeoutSeconds=*/30.0))
+      << device_->lastErrorForTest();
 
   const VulkanDevice::RecordedSubpassDependencyForTest entry =
       unwrap(device_->lastRenderPassEntryDependencyForTest(), "entry dependency");
