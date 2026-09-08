@@ -165,9 +165,9 @@ donner_cc_fuzzer(
     corpus = "soak_probe_corpus",
 )
 
-alias(
+test_suite(
     name = "fuzzer_soak_integration_tests",
-    actual = ":soak_probe_fuzzer_soak",
+    tests = [":soak_probe_fuzzer_soak"],
 )
 
 py_test(
