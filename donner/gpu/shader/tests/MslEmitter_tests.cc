@@ -11,6 +11,7 @@
 #include <array>
 #include <cstdlib>
 #include <fstream>
+#include <limits>
 #include <sstream>
 #include <string>
 
@@ -209,6 +210,87 @@ TEST(MslEmitterTests, RejectsBufferBindingsCollidingWithVertexBufferIndex) {
   EXPECT_THAT(EmitMsl(module.result()),
               IsShaderError(HasSubstr("collides with or exceeds the reserved stage-in vertex "
                                       "buffer index")));
+}
+
+TEST(MslEmitterTests, RejectsBufferBindingBeforeItsIndexCanWrap) {
+  ModuleBuilder builder;
+  const IrType params =
+      GetShaderResultOrFail(IrType::Struct("Params", {{"x", IrType::F32()}}), IrType::F32());
+  ASSERT_THAT(builder.addUniformBuffer(0, std::numeric_limits<uint32_t>::max(), "params", params),
+              IsShaderOk());
+  auto module = builder.build();
+  ASSERT_THAT(module, HasShaderResult());
+  EXPECT_THAT(EmitMsl(module.result()), IsShaderError(HasSubstr("buffer binding")));
+}
+
+TEST(MslEmitterTests, RejectsSamplerBeyondTheNativeArgumentTable) {
+  ModuleBuilder builder;
+  ASSERT_THAT(builder.addSampler(0, 16, "filterSampler"), IsShaderOk());
+  auto module = builder.build();
+  ASSERT_THAT(module, HasShaderResult());
+  EXPECT_THAT(EmitMsl(module.result()), IsShaderError(HasSubstr("sampler binding")));
+}
+
+TEST(MslEmitterTests, RejectsTextureBeyondTheNativeArgumentTable) {
+  ModuleBuilder builder;
+  ASSERT_THAT(builder.addTexture2d(0, 128, "sourceTexture"), IsShaderOk());
+  auto module = builder.build();
+  ASSERT_THAT(module, HasShaderResult());
+  EXPECT_THAT(EmitMsl(module.result()), IsShaderError(HasSubstr("texture binding")));
+}
+
+TEST(MslEmitterTests, AcceptsTheLastSupportedArgumentIndices) {
+  ModuleBuilder builder;
+  const IrType params =
+      GetShaderResultOrFail(IrType::Struct("Params", {{"x", IrType::F32()}}), IrType::F32());
+  ASSERT_THAT(builder.addUniformBuffer(0, 28, "params", params), IsShaderOk());
+  ASSERT_THAT(builder.addSampler(0, 15, "filterSampler"), IsShaderOk());
+  ASSERT_THAT(builder.addTexture2d(0, 127, "sourceTexture"), IsShaderOk());
+  auto module = builder.build();
+  ASSERT_THAT(module, HasShaderResult());
+  EXPECT_THAT(EmitMsl(module.result()), HasShaderResult());
+}
+
+TEST(MslEmitterTests, ReservesGeneratedRuntimeArrayIdentifiers) {
+  ModuleBuilder builder;
+  ASSERT_THAT(builder.addConstant("donner_msl_read", LiteralU32(1)), IsShaderOk());
+  auto module = builder.build();
+  ASSERT_THAT(module, HasShaderResult());
+  EXPECT_THAT(EmitMsl(module.result()), IsShaderError(HasSubstr("not a valid identifier")));
+}
+
+TEST(MslEmitterTests, RejectsDirectArrayValuedRuntimeElements) {
+  ModuleBuilder builder;
+  const IrType pair = GetShaderResultOrFail(IrType::SizedArray(IrType::Vec4f(), 2), IrType::F32());
+  const IrType values = GetShaderResultOrFail(IrType::RuntimeArray(pair), IrType::F32());
+  ASSERT_THAT(builder.addReadOnlyStorageBuffer(0, 0, "values", values), IsShaderOk());
+  auto module = builder.build();
+  ASSERT_THAT(module, HasShaderResult());
+  EXPECT_THAT(EmitMsl(module.result()), IsShaderError(HasSubstr("nested array")));
+}
+
+TEST(MslEmitterTests, RejectsNestedSizedArrayDeclarations) {
+  ModuleBuilder builder;
+  const IrType pair = GetShaderResultOrFail(IrType::SizedArray(IrType::Vec4f(), 2), IrType::F32());
+  const IrType grid = GetShaderResultOrFail(IrType::SizedArray(pair, 2), IrType::F32());
+  const IrType values =
+      GetShaderResultOrFail(IrType::Struct("Values", {{"grid", grid}}), IrType::F32());
+  ASSERT_THAT(builder.addReadOnlyStorageBuffer(0, 0, "values", values), IsShaderOk());
+  auto module = builder.build();
+  ASSERT_THAT(module, HasShaderResult());
+  EXPECT_THAT(EmitMsl(module.result()), IsShaderError(HasSubstr("nested array")));
+}
+
+TEST(MslEmitterTests, RuntimeStructElementsMayContainArrayMembers) {
+  ModuleBuilder builder;
+  const IrType pair = GetShaderResultOrFail(IrType::SizedArray(IrType::Vec4f(), 2), IrType::F32());
+  const IrType element =
+      GetShaderResultOrFail(IrType::Struct("Value", {{"pair", pair}}), IrType::F32());
+  const IrType values = GetShaderResultOrFail(IrType::RuntimeArray(element), IrType::F32());
+  ASSERT_THAT(builder.addReadOnlyStorageBuffer(0, 0, "values", values), IsShaderOk());
+  auto module = builder.build();
+  ASSERT_THAT(module, HasShaderResult());
+  EXPECT_THAT(EmitMsl(module.result()), HasShaderResult());
 }
 
 TEST(MslEmitterTests, RejectsBindingsOutsideGroupZero) {
