@@ -18,6 +18,20 @@ namespace {
 constexpr VkPipelineStageFlags kSampledReadStages =
     VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
 
+TEST(VulkanResourceStateTests, UploadVisibilityIncludesVertexTextureReads) {
+  const ImageBarrierParams barrier = TransitionFor(StateAfterUsage(TextureUsageKind::TransferWrite),
+                                                   TextureUsageKind::SampledRead);
+  EXPECT_EQ(barrier.dstStage & VK_PIPELINE_STAGE_VERTEX_SHADER_BIT,
+            VkPipelineStageFlags{VK_PIPELINE_STAGE_VERTEX_SHADER_BIT});
+}
+
+TEST(VulkanResourceStateTests, ATransferWriteWaitsForEarlierVertexTextureReads) {
+  const ImageBarrierParams barrier = TransitionFor(StateAfterUsage(TextureUsageKind::SampledRead),
+                                                   TextureUsageKind::TransferWrite);
+  EXPECT_EQ(barrier.srcStage & VK_PIPELINE_STAGE_VERTEX_SHADER_BIT,
+            VkPipelineStageFlags{VK_PIPELINE_STAGE_VERTEX_SHADER_BIT});
+}
+
 TEST(VulkanResourceStateTests, AttachmentTransitionCoversLoadsAndWrites) {
   const ImageBarrierParams barrier = TransitionFor(StateAfterUsage(TextureUsageKind::TransferWrite),
                                                    TextureUsageKind::ColorAttachment);
