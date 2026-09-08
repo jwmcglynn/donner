@@ -28,23 +28,32 @@ struct VulkanApi;
  * SPIR-V binding decorations (the SPIR-V emitter uses DescriptorSet 0 / Binding b).
  *
  * Targets Vulkan 1.1 core only: classic VkRenderPass + VkFramebuffer (no dynamic rendering),
- * per-submission VkFence completion tracking (no timeline semaphores), and the core
- * negative-viewport-height feature (VK_KHR_maintenance1, promoted to 1.1) to present WebGPU
- * clip-space semantics - identical SPIR-V positions land on identical pixels as the wgpu
- * baseline.
+ * per-submission VkFence completion tracking, and the core negative-viewport-height feature
+ * (VK_KHR_maintenance1, promoted to 1.1) to present WebGPU clip-space semantics - identical
+ * SPIR-V positions land on identical pixels as the wgpu baseline. No device extension is
+ * enabled on any production path; the sole exception is VK_KHR_timeline_semaphore, which
+ * \ref CreateWithTimelineSemaphoreForTest requests so a test can hold a submission open.
  *
  * Memory model (documented simplification for this slice): every buffer lives in
  * HOST_VISIBLE | HOST_COHERENT memory and stays persistently mapped. Queue writes wait up to
- * five seconds for that buffer's prior submission before copying; timeout leaves its bytes
- * unchanged. Idle buffers copy directly, and readback needs no staging. Which allocation a buffer
- * is bound into is the allocator's decision, behind the seam in VulkanBufferAllocator.h: one
- * dedicated allocation per buffer today, with a suballocating implementation replaceable there
- * rather than at every call site, once measurement says the driver's allocation-count cap is the
- * constraint worth spending complexity on. Such a memory type is guaranteed by the Vulkan
- * specification ("Device Memory": at least one memory type has both HOST_VISIBLE and
- * HOST_COHERENT), and both the CI software rasterizer and desktop GPUs expose it. Textures are
- * DEVICE_LOCAL (when available) with staged uploads through a transient host-visible buffer and
- * explicit image layout transitions.
+ * five seconds for that buffer's prior submission before copying; timeout refuses the write and
+ * leaves its bytes unchanged. Idle buffers copy directly.
+ *
+ * Two consequences of that simplification are worth stating, because callers cannot see them:
+ * this backend refuses a write to a busy buffer where MetalDevice queues an equivalent aligned
+ * write and returns success, so \ref donner::gpu::Device::writeBuffer can fail here and succeed
+ * there for the same call; and \ref readBackBuffer copies the mapping without consulting the
+ * buffer's last use, so a caller reading a buffer an unfinished submission still writes must
+ * wait for that submission itself. Both are tracked follow-ups, not intended end states.
+ *
+ * Which allocation a buffer is bound into is the allocator's decision, behind the seam in
+ * VulkanBufferAllocator.h: one dedicated allocation per buffer today, with a suballocating
+ * implementation replaceable there rather than at every call site, once measurement says the
+ * driver's allocation-count cap is the constraint worth spending complexity on. Such a memory type
+ * is guaranteed by the Vulkan specification ("Device Memory": at least one memory type has both
+ * HOST_VISIBLE and HOST_COHERENT), and both the CI software rasterizer and desktop GPUs expose it.
+ * Textures are DEVICE_LOCAL (when available) with staged uploads through a transient host-visible
+ * buffer and explicit image layout transitions.
  *
  * Synchronization is tracked per image: barriers before and after render passes, dispatches,
  * and copies come from VulkanResourceState.h. Render-pass attachment layouts stay fixed, so

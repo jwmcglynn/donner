@@ -479,6 +479,13 @@ public:
    * Writes \p data into \p buffer at \p offsetBytes. Fails closed if the range does not fit
    * (checked arithmetic) or the buffer lacks \ref BufferUsage::CopyDst.
    *
+   * A write never changes bytes an already submitted command still reads, but backends reach
+   * that guarantee differently and the difference is visible to callers. MetalDevice queues an
+   * aligned write to a busy buffer behind the outstanding submission and returns success;
+   * VulkanDevice waits for that buffer's submission and returns a GpuErrorType::InvalidState
+   * error if the wait times out. Portable callers should either write buffers no in-flight
+   * submission references, or handle the busy-buffer failure.
+   *
    * @param buffer Destination buffer.
    * @param offsetBytes Destination byte offset.
    * @param data Payload bytes.
