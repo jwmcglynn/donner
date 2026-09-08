@@ -1548,7 +1548,7 @@ bool WaitForStyleSourceDecorations(EditorShell& shell) {
 }
 
 void DriveGlobalShortcut(EditorShell& shell, const std::vector<ImGuiKey>& keys, bool ctrl = false,
-                         bool shift = false, bool super = false) {
+                         bool shift = false, bool super = false, bool textInputActive = false) {
   ImGuiIO& io = ImGui::GetIO();
   io.DisplaySize = ImVec2(640.0f, 480.0f);
   io.ConfigMacOSXBehaviors = false;
@@ -1569,6 +1569,9 @@ void DriveGlobalShortcut(EditorShell& shell, const std::vector<ImGuiKey>& keys, 
   }
 
   ImGui::NewFrame();
+  if (textInputActive) {
+    io.WantTextInput = true;
+  }
   EditorShellTestAccess::HandleGlobalShortcuts(shell);
   ImGui::Render();
 
@@ -3886,6 +3889,25 @@ TEST(EditorShellTest, SelectAllCanvasAndTextSelectionPreconditions) {
   EXPECT_FALSE(EditorShellTestAccess::CanvasHasSelectableElements(invalidShell));
   EditorShellTestAccess::SelectAllCanvasElements(invalidShell);
   EXPECT_TRUE(EditorShellTestAccess::App(invalidShell).selectedElements().empty());
+}
+
+TEST(EditorShellTest, InspectorTextInputKeepsSelectAllFromChangingCanvasSelection) {
+  gui::EditorWindow window = MakeHiddenWindow();
+  if (!window.valid()) {
+    GTEST_SKIP() << "GL-backed hidden editor window is unavailable on this host";
+  }
+  EditorShell shell(window, OptionsWithSource(kInitialSvg, "initial.svg"));
+  ASSERT_TRUE(shell.valid());
+  EditorApp& app = EditorShellTestAccess::App(shell);
+  const auto target = app.document().document().querySelector("#target");
+  ASSERT_TRUE(target.has_value());
+  app.setSelection(*target);
+
+  DriveGlobalShortcut(shell, {ImGuiKey_A}, /*ctrl=*/false, /*shift=*/false, /*super=*/true,
+                      /*textInputActive=*/true);
+
+  ASSERT_THAT(app.selectedElements(), testing::SizeIs(1));
+  EXPECT_THAT(app.selectedElement()->id(), testing::Eq("target"));
 }
 
 TEST(EditorShellTest, ConvertSelectedTextToOutlinesGuardsNonTextSelection) {
