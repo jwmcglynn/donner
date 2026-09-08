@@ -176,11 +176,18 @@ protected:
   void SetUp() override {
     device_ = VulkanDevice::CreateWithTimelineSemaphoreForTest();
     if (!device_) {
+      // DONNER_REQUIRE_VULKAN asserts that a baseline Vulkan 1.1 device exists, which is what the
+      // sibling targets need. This one additionally needs VK_KHR_timeline_semaphore to hold a
+      // submission open, and that extension is optional on a conforming 1.1 driver, so a device
+      // that runs every other Vulkan target may legitimately not offer it. Distinguish the two:
+      // no baseline device on a required runner is a failure, the missing extension is a skip.
       const char* required = std::getenv("DONNER_REQUIRE_VULKAN");
-      if (required && std::string_view(required) == "1") {
-        FAIL() << "A Vulkan 1.1 device with the test timeline-semaphore extension is required";
+      const bool requireVulkan = required != nullptr && std::string_view(required) == "1";
+      if (requireVulkan && VulkanDevice::Create() == nullptr) {
+        FAIL() << "DONNER_REQUIRE_VULKAN=1 but no Vulkan 1.1 device could be created";
       }
-      GTEST_SKIP() << "No Vulkan 1.1 device with test timeline-semaphore support available";
+      GTEST_SKIP() << "Vulkan device does not support the test-only VK_KHR_timeline_semaphore "
+                      "extension this deterministic ordering regression needs";
     }
     auto ir = BuildUniformReadModule();
     ASSERT_FALSE(ir.hasError()) << ir.error();
