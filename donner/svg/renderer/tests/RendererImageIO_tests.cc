@@ -64,6 +64,12 @@ TEST(RendererImageIOTests, PaddedRowsWithoutFinalPaddingRoundTripToMemory) {
   ExpectPng(filename, ExpectedCorners());
 }
 
+TEST(RendererImageIOTests, RejectsUnrepresentableEncoderFilterScores) {
+  constexpr int kWidth = std::numeric_limits<int>::max() / (4 * 128) + 1;
+  const std::vector<uint8_t> pixels(static_cast<size_t>(kWidth) * 4, 128);
+  EXPECT_THAT(RendererImageIO::writeRgbaPixelsToPngMemory(pixels, kWidth, 1), testing::IsEmpty());
+}
+
 TEST(RendererImageIOTests, RejectsInvalidLayoutsBeforeOpeningAFile) {
   struct Layout {
     int width;
