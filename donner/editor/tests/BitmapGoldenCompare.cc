@@ -138,7 +138,8 @@ void CompareBitmapToGolden(const svg::RendererBitmap& bitmap, std::string_view g
     svg::RendererImageIO::writeRgbaPixelsToPngFile(diffPath.string().c_str(), diffImage, width,
                                                    height, strideInPixels);
     svg::RendererImageIO::writeRgbaPixelsToPngFile(sideBySidePath.string().c_str(), sideBySide,
-                                                   width * 2, height, strideInPixels * 2u);
+                                                   width * 2, height,
+                                                   static_cast<size_t>(width) * 2u);
     ADD_FAILURE() << "[" << testLabel << "] " << mismatched
                   << " pixels differ (max allowed: " << params.maxMismatchedPixels
                   << "). Golden: " << goldenPath << ". Actual: " << actualPath.string()
@@ -214,7 +215,8 @@ void CompareBitmapToBitmap(const svg::RendererBitmap& actual, const svg::Rendere
     svg::RendererImageIO::writeRgbaPixelsToPngFile(diffPath.string().c_str(), diffImage, width,
                                                    height, strideInPixels);
     svg::RendererImageIO::writeRgbaPixelsToPngFile(sideBySidePath.string().c_str(), sideBySide,
-                                                   width * 2, height, strideInPixels * 2u);
+                                                   width * 2, height,
+                                                   static_cast<size_t>(width) * 2u);
     ADD_FAILURE() << "[" << testLabel << "] " << mismatched
                   << " pixels differ (max allowed: " << params.maxMismatchedPixels
                   << "). Actual: " << actualPath.string() << ". Expected: " << expectedPath.string()
