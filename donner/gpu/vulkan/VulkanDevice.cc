@@ -11,6 +11,7 @@
 #include <vulkan/vulkan.h>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cstddef>
 #include <cstdio>
@@ -1037,7 +1038,8 @@ struct VulkanDevice::Impl {
     const RenderPipelineRecord* currentPipeline = nullptr;  //!< Pipeline bound in the pass.
     /// Compute pipeline bound in the active compute pass.
     const ComputePipelineRecord* currentComputePipeline = nullptr;
-    std::vector<VkDescriptorSet> boundSets;  //!< Descriptor sets bound by index.
+    /// Groups bound by index; their records remain live throughout command encoding.
+    std::array<const BindGroupRecord*, kMaxBindGroups> boundGroups = {};
   };
 
   /// Records the barrier that puts \p textureSlot into \p usage, if one is needed, and stages
@@ -1059,15 +1061,19 @@ struct VulkanDevice::Impl {
   /// @param state Encoding state.
   void destroyTransientEncodingObjects(EncodingState& state);
 
-  /// Transitions every texture the upcoming pass binds to the layout its descriptors declare:
-  /// sampled textures to SHADER_READ_ONLY_OPTIMAL and storage textures to GENERAL. Barriers are
-  /// illegal inside a render pass, so this pre-scans the pass's commands and records the
-  /// transitions before the pass begins.
+  /// Transitions the textures in one bind group to their descriptor layouts.
+  /// @param state Encoding state.
+  /// @param group Bind group whose textures are about to be used.
+  void transitionBoundTextures(EncodingState& state, const BindGroupRecord& group);
+
+  /// Transitions every texture the upcoming render pass binds to its descriptor layout:
+  /// sampled textures to SHADER_READ_ONLY_OPTIMAL and storage textures to GENERAL. These layout
+  /// changes must precede vkCmdBeginRenderPass, so the render commands are scanned in advance.
   /// @param state Encoding state.
   /// @param commands Full command stream.
   /// @param beginIndex Index of the begin-pass command.
-  void transitionPassBoundTextures(EncodingState& state, std::span<const Command> commands,
-                                   size_t beginIndex);
+  void transitionRenderPassBoundTextures(EncodingState& state, std::span<const Command> commands,
+                                         size_t beginIndex);
 
   /// Creates the pass's render pass and framebuffer, transitions its attachments, and begins it
   /// with the WebGPU-style full-attachment viewport and scissor.
@@ -1162,10 +1168,8 @@ struct VulkanDevice::Impl {
   /// only once its submission reached the queue.
   TextureSyncStateTable syncStates;
 
-  /// Every image barrier recorded, and the most recent render pass's entry dependency. Test
-  /// observation only; nothing in the backend reads these back.
-  std::vector<RecordedImageBarrierForTest> recordedBarriers;
-  std::optional<RecordedSubpassDependencyForTest> lastEntryDependency;
+  /// Opt-in image barrier history. Disengaged during normal device use.
+  std::optional<std::vector<RecordedImageBarrierForTest>> recordedBarriers;
   /// Set by the test seam; makes the next internal upload report failure at the named point.
   std::optional<UploadFailureModeForTest> uploadFailureMode;
 
@@ -1450,17 +1454,17 @@ Result<VulkanDevice::TrackedTextureLayout> VulkanDevice::trackedTextureLayoutFor
   }
 }
 
-std::vector<VulkanDevice::RecordedImageBarrierForTest> VulkanDevice::recordedImageBarriersForTest()
-    const {
-  return impl_->recordedBarriers;
+void VulkanDevice::setImageBarrierRecordingForTest(bool enabled) {
+  if (enabled) {
+    impl_->recordedBarriers.emplace();
+  } else {
+    impl_->recordedBarriers.reset();
+  }
 }
 
-Result<VulkanDevice::RecordedSubpassDependencyForTest>
-VulkanDevice::lastRenderPassEntryDependencyForTest() const {
-  if (!impl_->lastEntryDependency.has_value()) {
-    return GpuError{GpuErrorType::InvalidState, "no render pass has been created"};
-  }
-  return *impl_->lastEntryDependency;
+std::vector<VulkanDevice::RecordedImageBarrierForTest> VulkanDevice::recordedImageBarriersForTest()
+    const {
+  return impl_->recordedBarriers.value_or(std::vector<RecordedImageBarrierForTest>{});
 }
 
 void VulkanDevice::failNextTextureUploadForTest(UploadFailureModeForTest mode) {
@@ -2353,10 +2357,12 @@ void VulkanDevice::Impl::transitionTexture(VkCommandBuffer commandBuffer, uint32
     return;  // Same layout and nothing to make available: no hazard to order.
   }
   RecordImageBarrier(*api, commandBuffer, record.image, params);
-  recordedBarriers.push_back(RecordedImageBarrierForTest{
-      textureSlot, static_cast<uint32_t>(params.srcStage), static_cast<uint32_t>(params.dstStage),
-      static_cast<uint32_t>(params.srcAccess), static_cast<uint32_t>(params.dstAccess),
-      static_cast<int32_t>(params.oldLayout), static_cast<int32_t>(params.newLayout)});
+  if (recordedBarriers) {
+    recordedBarriers->push_back(RecordedImageBarrierForTest{
+        textureSlot, static_cast<uint32_t>(params.srcStage), static_cast<uint32_t>(params.dstStage),
+        static_cast<uint32_t>(params.srcAccess), static_cast<uint32_t>(params.dstAccess),
+        static_cast<int32_t>(params.oldLayout), static_cast<int32_t>(params.newLayout)});
+  }
   syncStates.stage(textureSlot, StateAfterUsage(usage));
 }
 
@@ -2371,22 +2377,26 @@ void VulkanDevice::Impl::destroyTransientEncodingObjects(EncodingState& state) {
   api->vkFreeCommandBuffers(device, commandPool, 1, &state.commandBuffer);
 }
 
-void VulkanDevice::Impl::transitionPassBoundTextures(EncodingState& state,
-                                                     std::span<const Command> commands,
-                                                     size_t beginIndex) {
-  // An UNDEFINED oldLayout for a never-written texture is valid; its contents are undefined
-  // either way.
+void VulkanDevice::Impl::transitionBoundTextures(EncodingState& state,
+                                                 const BindGroupRecord& group) {
   const auto transitionTo = [&](uint32_t textureSlot, TextureUsageKind usage) {
-    const TextureRecord* texture = FindRecord(textures, textureSlot);
-    if (texture == nullptr) {
-      return;  // Submit-time re-validation makes this unreachable.
+    if (const TextureRecord* texture = FindRecord(textures, textureSlot)) {
+      transitionTexture(state.commandBuffer, textureSlot, *texture, usage);
     }
-    transitionTexture(state.commandBuffer, textureSlot, *texture, usage);
   };
+  for (const uint32_t sampledSlot : group.sampledTextureSlots) {
+    transitionTo(sampledSlot, TextureUsageKind::SampledRead);
+  }
+  for (const uint32_t storageSlot : group.storageTextureSlots) {
+    transitionTo(storageSlot, TextureUsageKind::StorageWrite);
+  }
+}
 
+void VulkanDevice::Impl::transitionRenderPassBoundTextures(EncodingState& state,
+                                                           std::span<const Command> commands,
+                                                           size_t beginIndex) {
   for (size_t scanIndex = beginIndex + 1; scanIndex < commands.size(); ++scanIndex) {
-    if (std::get_if<EndRenderPassCommand>(&commands[scanIndex]) != nullptr ||
-        std::get_if<EndComputePassCommand>(&commands[scanIndex]) != nullptr) {
+    if (std::get_if<EndRenderPassCommand>(&commands[scanIndex]) != nullptr) {
       break;
     }
     const auto* scannedBindGroup = std::get_if<SetBindGroupCommand>(&commands[scanIndex]);
@@ -2398,12 +2408,7 @@ void VulkanDevice::Impl::transitionPassBoundTextures(EncodingState& state,
     if (scannedGroup == nullptr) {
       continue;  // The SetBindGroupCommand handler below fails closed on this.
     }
-    for (const uint32_t sampledSlot : scannedGroup->sampledTextureSlots) {
-      transitionTo(sampledSlot, TextureUsageKind::SampledRead);
-    }
-    for (const uint32_t storageSlot : scannedGroup->storageTextureSlots) {
-      transitionTo(storageSlot, TextureUsageKind::StorageWrite);
-    }
+    transitionBoundTextures(state, *scannedGroup);
   }
 }
 
@@ -2416,13 +2421,6 @@ Status VulkanDevice::Impl::beginEncodedRenderPass(EncodingState& state,
   std::vector<VkAttachmentReference> colorRefs;
   std::vector<VkImageView> attachmentViews;
   std::vector<VkClearValue> clearValues;
-  // The pass's external dependencies are derived from the same model the barriers are: what last
-  // touched the attachments on the way in, and what their declared usage says can consume them on
-  // the way out. One edge serves every attachment, so every attachment's prior state feeds it -
-  // keeping only the last one's would let a pass that loads an attachment a dispatch wrote be
-  // ordered as though nothing had ever written it.
-  std::vector<TextureSyncState> entryStates;
-  TextureUsage attachmentUsage = TextureUsage::None;
 
   for (size_t i = 0; i < attachmentDescriptors.size(); ++i) {
     const RenderPassColorAttachment& attachment = attachmentDescriptors[i];
@@ -2436,8 +2434,6 @@ Status VulkanDevice::Impl::beginEncodedRenderPass(EncodingState& state,
 
     // Explicit transition to the attachment layout; the pass then begins and ends in
     // COLOR_ATTACHMENT_OPTIMAL, so the pass itself performs no layout transition.
-    entryStates.push_back(syncStates.stateOf(view->textureSlot));
-    attachmentUsage = attachmentUsage | texture->usage;
     transitionTexture(state.commandBuffer, view->textureSlot, *texture,
                       TextureUsageKind::ColorAttachment);
 
@@ -2472,38 +2468,13 @@ Status VulkanDevice::Impl::beginEncodedRenderPass(EncodingState& state,
   subpass.colorAttachmentCount = static_cast<uint32_t>(colorRefs.size());
   subpass.pColorAttachments = colorRefs.data();
 
-  // Explicit external dependencies; the implicit defaults do not cover memory access. Both come
-  // from the resource-state model, because a precise image barrier behind a pass edge that still
-  // said ALL_COMMANDS would order nothing narrower than before.
-  const SubpassDependencyParams entryDependency = AttachmentEntryDependency(entryStates);
-  lastEntryDependency =
-      RecordedSubpassDependencyForTest{static_cast<uint32_t>(entryDependency.srcStage),
-                                       static_cast<uint32_t>(entryDependency.dstStage),
-                                       static_cast<uint32_t>(entryDependency.srcAccess),
-                                       static_cast<uint32_t>(entryDependency.dstAccess)};
-  const SubpassDependencyParams exitDependency = AttachmentExitDependency(attachmentUsage);
-  VkSubpassDependency dependencies[2] = {};
-  dependencies[0].srcSubpass = VK_SUBPASS_EXTERNAL;
-  dependencies[0].dstSubpass = 0;
-  dependencies[0].srcStageMask = entryDependency.srcStage;
-  dependencies[0].srcAccessMask = entryDependency.srcAccess;
-  dependencies[0].dstStageMask = entryDependency.dstStage;
-  dependencies[0].dstAccessMask = entryDependency.dstAccess;
-  dependencies[1].srcSubpass = 0;
-  dependencies[1].dstSubpass = VK_SUBPASS_EXTERNAL;
-  dependencies[1].srcStageMask = exitDependency.srcStage;
-  dependencies[1].srcAccessMask = exitDependency.srcAccess;
-  dependencies[1].dstStageMask = exitDependency.dstStage;
-  dependencies[1].dstAccessMask = exitDependency.dstAccess;
-
+  // Per-image barriers provide synchronization without changing pipeline render-pass compatibility.
   VkRenderPassCreateInfo renderPassInfo = {};
   renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
   renderPassInfo.attachmentCount = static_cast<uint32_t>(attachments.size());
   renderPassInfo.pAttachments = attachments.data();
   renderPassInfo.subpassCount = 1;
   renderPassInfo.pSubpasses = &subpass;
-  renderPassInfo.dependencyCount = 2;
-  renderPassInfo.pDependencies = dependencies;
 
   VkRenderPass renderPass = VK_NULL_HANDLE;
   if (const VkResult result =
@@ -2555,7 +2526,7 @@ Status VulkanDevice::Impl::beginEncodedRenderPass(EncodingState& state,
 
   // Fresh pass state, matching WebGPU render pass semantics.
   state.currentPipeline = nullptr;
-  std::fill(state.boundSets.begin(), state.boundSets.end(), VK_NULL_HANDLE);
+  state.boundGroups.fill(nullptr);
   return OkStatus();
 }
 
@@ -2584,7 +2555,7 @@ Status VulkanDevice::Impl::encodeSetBindGroup(EncodingState& state,
   }
   // Descriptor sets bind lazily at draw: vkCmdBindDescriptorSets needs the pipeline layout,
   // and the RHI allows setBindGroup before setPipeline.
-  state.boundSets[setBindGroup.index] = bindGroup->set;
+  state.boundGroups[setBindGroup.index] = bindGroup;
   return OkStatus();
 }
 
@@ -2639,14 +2610,15 @@ Status VulkanDevice::Impl::encodeDraw(EncodingState& state, const DrawCommand& d
   // guarantees each declared group index is bound; this re-check fails closed anyway.
   for (uint32_t setIndex = 0; setIndex < state.currentPipeline->layout->descriptorSetCount;
        ++setIndex) {
-    if (state.boundSets[setIndex] == VK_NULL_HANDLE) {
+    const BindGroupRecord* group = state.boundGroups[setIndex];
+    if (group == nullptr) {
       return GpuError{
           GpuErrorType::InvalidState,
           std::format("draw: pipeline layout requires bind group {} but none is bound", setIndex)};
     }
     api->vkCmdBindDescriptorSets(state.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                 state.currentPipeline->layout->layout, setIndex, 1,
-                                 &state.boundSets[setIndex], 0, nullptr);
+                                 state.currentPipeline->layout->layout, setIndex, 1, &group->set, 0,
+                                 nullptr);
   }
   api->vkCmdDraw(state.commandBuffer, draw.vertexCount, draw.instanceCount, draw.firstVertex,
                  draw.firstInstance);
@@ -2660,7 +2632,7 @@ Status VulkanDevice::Impl::encodeEndRenderPass(EncodingState& state) {
   api->vkCmdEndRenderPass(state.commandBuffer);
   state.inRenderPass = false;
   state.currentPipeline = nullptr;
-  std::fill(state.boundSets.begin(), state.boundSets.end(), VK_NULL_HANDLE);
+  state.boundGroups.fill(nullptr);
   return OkStatus();
 }
 
@@ -2723,7 +2695,7 @@ std::optional<Status> VulkanDevice::Impl::encodeRenderCommand(EncodingState& sta
                                                               size_t commandIndex) {
   const Command& command = commands[commandIndex];
   if (const auto* beginPass = std::get_if<BeginRenderPassCommand>(&command)) {
-    transitionPassBoundTextures(state, commands, commandIndex);
+    transitionRenderPassBoundTextures(state, commands, commandIndex);
     return beginEncodedRenderPass(state, *beginPass);
   } else if (const auto* setPipeline = std::get_if<SetPipelineCommand>(&command)) {
     return encodeSetPipeline(state, *setPipeline);
@@ -2746,7 +2718,7 @@ std::optional<Status> VulkanDevice::Impl::encodeRenderCommand(EncodingState& sta
 Status VulkanDevice::Impl::beginEncodedComputePass(EncodingState& state) {
   state.inComputePass = true;
   state.currentComputePipeline = nullptr;
-  std::fill(state.boundSets.begin(), state.boundSets.end(), VK_NULL_HANDLE);
+  state.boundGroups.fill(nullptr);
   return OkStatus();
 }
 
@@ -2774,15 +2746,17 @@ Status VulkanDevice::Impl::encodeDispatchWorkgroups(EncodingState& state,
   // guarantees each declared group index is bound; this re-check fails closed anyway.
   for (uint32_t setIndex = 0; setIndex < state.currentComputePipeline->layout->descriptorSetCount;
        ++setIndex) {
-    if (state.boundSets[setIndex] == VK_NULL_HANDLE) {
+    const BindGroupRecord* group = state.boundGroups[setIndex];
+    if (group == nullptr) {
       return GpuError{GpuErrorType::InvalidState,
                       std::format("dispatchWorkgroups: pipeline layout requires bind group {} but "
                                   "none is bound",
                                   setIndex)};
     }
+    transitionBoundTextures(state, *group);
     api->vkCmdBindDescriptorSets(state.commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE,
                                  state.currentComputePipeline->layout->layout, setIndex, 1,
-                                 &state.boundSets[setIndex], 0, nullptr);
+                                 &group->set, 0, nullptr);
   }
   api->vkCmdDispatch(state.commandBuffer, dispatch.workgroupCountX, dispatch.workgroupCountY,
                      dispatch.workgroupCountZ);
@@ -2815,7 +2789,7 @@ Status VulkanDevice::Impl::encodeEndComputePass(EncodingState& state) {
 
   state.inComputePass = false;
   state.currentComputePipeline = nullptr;
-  std::fill(state.boundSets.begin(), state.boundSets.end(), VK_NULL_HANDLE);
+  state.boundGroups.fill(nullptr);
   return OkStatus();
 }
 
@@ -2824,9 +2798,6 @@ std::optional<Status> VulkanDevice::Impl::encodeComputeCommand(EncodingState& st
                                                                size_t commandIndex) {
   const Command& command = commands[commandIndex];
   if (std::get_if<BeginComputePassCommand>(&command) != nullptr) {
-    // Symmetric with the render path: barriers cannot be recorded inside a pass, so the textures
-    // this pass binds are transitioned into the layouts its descriptors declare before it opens.
-    transitionPassBoundTextures(state, commands, commandIndex);
     return beginEncodedComputePass(state);
   } else if (const auto* setPipeline = std::get_if<SetComputePipelineCommand>(&command)) {
     return encodeSetComputePipeline(state, *setPipeline);
@@ -2909,7 +2880,6 @@ Status VulkanDevice::onSubmit(uint64_t submissionSerial, uint32_t commandBufferS
   // and are destroyed when the fence signals, on failure they are destroyed here.
   Impl::EncodingState state;
   state.commandBuffer = commandBufferResult.result();
-  state.boundSets.assign(kMaxBindGroups, VK_NULL_HANDLE);
   const auto failEncoding = [&](Status error) -> Status {
     // Nothing recorded into this command buffer will execute, so the transitions staged while
     // encoding it must not survive into the tracked state.

@@ -101,6 +101,12 @@ protected:
     }
   }
 
+  void TearDown() override {
+    if (device_) {
+      EXPECT_THAT(device_->lastErrorForTest(), testing::IsEmpty());
+    }
+  }
+
   /// Unwraps an RHI result, failing the test on error.
   template <typename T>
   T unwrap(Result<T>&& result, const char* what) {
@@ -228,6 +234,7 @@ protected:
     if (HasFatalFailure() || IsSkipped()) {
       return;
     }
+    device_->setImageBarrierRecordingForTest(true);
 
     shader::ShaderResult<shader::IrModule> module = shader::programs::BuildColorMatrixModule();
     ASSERT_FALSE(module.hasError()) << module.error();

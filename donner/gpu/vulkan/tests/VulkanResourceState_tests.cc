@@ -1,6 +1,6 @@
 /// @file
 /// Model tests for the Vulkan backend's tracked resource-state machine: the exact barriers and
-/// subpass dependencies each recorded usage pattern produces, the conservative fallback for
+/// transitions each recorded usage pattern produces, the conservative fallback for
 /// patterns outside the tracked set, and the staged-then-committed discipline that keeps the
 /// table from claiming transitions the GPU never ran.
 ///
@@ -11,8 +11,6 @@
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
-
-#include <array>
 
 namespace donner::gpu::vulkan {
 namespace {
@@ -132,52 +130,6 @@ TEST(VulkanResourceStateTests, EveryTrackedUsageRoundTripsThroughItsLayout) {
   }
 }
 
-TEST(VulkanResourceStateTests, ThePassEntryEdgeNamesWhatLastTouchedTheAttachment) {
-  const std::array<TextureSyncState, 1> attachments = {
-      StateAfterUsage(TextureUsageKind::TransferWrite)};
-  const SubpassDependencyParams entry = AttachmentEntryDependency(attachments);
-
-  EXPECT_EQ(entry.srcStage, VK_PIPELINE_STAGE_TRANSFER_BIT);
-  EXPECT_EQ(entry.srcAccess, VK_ACCESS_TRANSFER_WRITE_BIT);
-  EXPECT_EQ(entry.dstStage, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
-  EXPECT_FALSE(entry.conservative);
-}
-
-TEST(VulkanResourceStateTests, ThePassEntryEdgeCoversEveryAttachmentNotJustOne) {
-  // The shape the backend actually produces: one attachment a compute dispatch wrote and is
-  // about to be loaded, and one fresh attachment that will simply be cleared. A single edge
-  // serves both, so it has to wait for the dispatch even though the other attachment has never
-  // been touched.
-  const std::array<TextureSyncState, 2> attachments = {
-      StateAfterUsage(TextureUsageKind::StorageWrite), TextureSyncState{}};
-  const SubpassDependencyParams entry = AttachmentEntryDependency(attachments);
-
-  EXPECT_TRUE((entry.srcStage & VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT) != 0)
-      << "the load of the written attachment must be ordered after the dispatch that wrote it";
-  EXPECT_TRUE((entry.srcAccess & VK_ACCESS_SHADER_WRITE_BIT) != 0)
-      << "the dispatch's write must be made available to that load";
-  EXPECT_EQ(entry.dstStage, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
-  EXPECT_FALSE(entry.conservative);
-
-  // Order must not matter: the union is the same whichever attachment comes first.
-  const std::array<TextureSyncState, 2> reversed = {
-      TextureSyncState{}, StateAfterUsage(TextureUsageKind::StorageWrite)};
-  EXPECT_EQ(AttachmentEntryDependency(reversed), entry);
-}
-
-TEST(VulkanResourceStateTests, ThePassEntryEdgeIsMaximalWhenAnyAttachmentIsUnmodelled) {
-  TextureSyncState fromElsewhere;
-  fromElsewhere.layout = VK_IMAGE_LAYOUT_PREINITIALIZED;
-  const std::array<TextureSyncState, 2> attachments = {
-      StateAfterUsage(TextureUsageKind::ColorAttachment), fromElsewhere};
-
-  EXPECT_TRUE(AttachmentEntryDependency(attachments).conservative)
-      << "one attachment the model cannot describe makes the whole edge unnarrowable";
-
-  const std::array<TextureSyncState, 0> none = {};
-  EXPECT_TRUE(AttachmentEntryDependency(none).conservative);
-}
-
 TEST(VulkanResourceStateTests, WritingAStorageTextureTwiceStillNeedsABarrier) {
   // Both dispatches leave the image in GENERAL, so a layout-only comparison would see no change
   // and order nothing between them.
@@ -191,32 +143,6 @@ TEST(VulkanResourceStateTests, WritingAStorageTextureTwiceStillNeedsABarrier) {
   EXPECT_EQ(barrier.dstStage, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
   EXPECT_EQ(barrier.dstAccess, VK_ACCESS_SHADER_WRITE_BIT);
   EXPECT_FALSE(barrier.conservative);
-}
-
-TEST(VulkanResourceStateTests, ThePassExitEdgeComesFromTheAttachmentsDeclaredConsumers) {
-  const SubpassDependencyParams sampled =
-      AttachmentExitDependency(TextureUsage::RenderAttachment | TextureUsage::Sampled);
-  EXPECT_EQ(sampled.srcStage, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
-  EXPECT_EQ(sampled.srcAccess, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT);
-  EXPECT_EQ(sampled.dstStage, kSampledReadStages | VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
-  EXPECT_EQ(sampled.dstAccess, VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_READ_BIT |
-                                   VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT);
-  EXPECT_FALSE(sampled.conservative)
-      << "a precise barrier behind an ALL_COMMANDS pass edge would buy nothing";
-
-  const SubpassDependencyParams readback =
-      AttachmentExitDependency(TextureUsage::RenderAttachment | TextureUsage::CopySrc);
-  EXPECT_TRUE((readback.dstStage & VK_PIPELINE_STAGE_TRANSFER_BIT) != 0);
-  EXPECT_TRUE((readback.dstAccess & VK_ACCESS_TRANSFER_READ_BIT) != 0);
-  EXPECT_FALSE(readback.conservative);
-}
-
-TEST(VulkanResourceStateTests, AnAttachmentWithNoModelledConsumerFallsBackToTheMaximalEdge) {
-  const SubpassDependencyParams edge = AttachmentExitDependency(TextureUsage::None);
-
-  EXPECT_TRUE(edge.conservative);
-  EXPECT_EQ(edge.dstStage, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
-  EXPECT_EQ(edge.dstAccess, VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT);
 }
 
 // ----------------------------------------------------------------------------

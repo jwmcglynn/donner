@@ -43,12 +43,11 @@ namespace donner::gpu::vulkan {
  * DEVICE_LOCAL (when available) with staged uploads through a transient host-visible buffer and
  * explicit image layout transitions.
  *
- * Synchronization is tracked per resource rather than assumed: every image barrier and both of
- * every render pass's external dependencies are derived from the state model in
- * VulkanResourceState.h, which records the stage and access that last touched each texture and
- * names both ends of the transition to whatever uses it next. A pattern the model does not
- * describe falls back to the maximal ALL_COMMANDS barrier, so an unrecognised usage costs
- * precision and never correctness. Readback copies still end in a HOST-domain buffer barrier.
+ * Synchronization is tracked per image: barriers before and after render passes, dispatches,
+ * and copies come from VulkanResourceState.h. Render-pass attachment layouts stay fixed, so
+ * explicit image barriers provide the dependencies without varying render-pass compatibility.
+ * Unknown usage falls back to an ALL_COMMANDS barrier. Readback copies also end in a HOST-domain
+ * buffer barrier.
  *
  * Barrier elision - dropping a barrier the model says is needed - is still not attempted; that
  * would need counter and timing evidence naming the bottleneck it removes.
@@ -141,21 +140,13 @@ public:
     int32_t newLayout = 0;     //!< Layout the image moved to.
   };
 
-  /// Every image barrier recorded since the device was created, oldest first. Test accessor.
+  /// Enables an empty barrier history or disables recording and releases the history.
+  /// Recording is disabled by default.
+  /// @param enabled Whether subsequent image barriers should be retained for inspection.
+  void setImageBarrierRecordingForTest(bool enabled);
+
+  /// Image barriers since recording was last enabled, oldest first; empty while disabled.
   [[nodiscard]] std::vector<RecordedImageBarrierForTest> recordedImageBarriersForTest() const;
-
-  /// The two halves of a render pass external dependency, as plain numbers. Test accessor.
-  struct RecordedSubpassDependencyForTest {
-    uint32_t srcStage = 0;   //!< Source pipeline stage mask.
-    uint32_t dstStage = 0;   //!< Destination pipeline stage mask.
-    uint32_t srcAccess = 0;  //!< Access made available.
-    uint32_t dstAccess = 0;  //!< Access made visible.
-  };
-
-  /// The entry-side external dependency of the most recently created render pass. Fails closed
-  /// when no render pass has been created. Test accessor.
-  [[nodiscard]] Result<RecordedSubpassDependencyForTest> lastRenderPassEntryDependencyForTest()
-      const;
 
   /// Where an injected upload failure happens, which is what decides whether the transitions it
   /// recorded describe anything the GPU will run.
