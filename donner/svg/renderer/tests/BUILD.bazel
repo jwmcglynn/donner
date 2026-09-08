@@ -17,6 +17,17 @@ filegroup(
     visibility = ["//tools/resvg_parity:__pkg__"],
 )
 
+donner_cc_test(
+    name = "renderer_image_io_tests",
+    srcs = ["RendererImageIO_tests.cc"],
+    deps = [
+        ":renderer_image_test_utils",
+        "//donner/editor/tests:bitmap_golden_compare",
+        "//donner/svg/renderer:renderer_image_io",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
 donner_cc_library(
     name = "rgba_test_matchers",
     testonly = 1,
