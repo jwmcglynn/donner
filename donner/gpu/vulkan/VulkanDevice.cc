@@ -43,6 +43,11 @@ constexpr uint32_t kTargetApiVersion = VK_API_VERSION_1_1;
 /// stuck driver fails closed with an error instead of hanging the caller forever.
 constexpr uint64_t kUploadFenceTimeoutNs = 60ull * 1000ull * 1000ull * 1000ull;
 
+/// How long \ref VulkanDevice::onWriteBuffer waits for a buffer's outstanding submission before
+/// refusing the write. Long enough for any legitimate frame, short enough to leave the device
+/// recoverable rather than wedging the calling thread.
+constexpr double kBusyBufferWriteTimeoutSeconds = 5.0;
+
 /// Validation layer enabled when the loader enumerates it (CI installs it explicitly; plain
 /// driver installs usually do not have it, and it is skipped silently then).
 constexpr const char* kValidationLayerName = "VK_LAYER_KHRONOS_validation";
@@ -1308,6 +1313,14 @@ struct VulkanDevice::Impl {
 };
 
 std::unique_ptr<VulkanDevice> VulkanDevice::Create() {
+  return CreateImpl(false);
+}
+
+std::unique_ptr<VulkanDevice> VulkanDevice::CreateWithTimelineSemaphoreForTest() {
+  return CreateImpl(true);
+}
+
+std::unique_ptr<VulkanDevice> VulkanDevice::CreateImpl(bool enableTimelineSemaphoreForTest) {
   InstanceSetup setup = CreateInstance();
   if (setup.loader == nullptr) {
     return nullptr;
@@ -1344,14 +1357,30 @@ std::unique_ptr<VulkanDevice> VulkanDevice::Create() {
   queueInfo.queueCount = 1;
   queueInfo.pQueuePriorities = &queuePriority;
 
-  // Vulkan 1.1 core only: no device extensions, and no optional features beyond the mandatory
-  // robustBufferAccess (read-only storage buffer access in the fragment stage and
-  // negative-height viewports are core).
+  // Vulkan 1.1 core for every production path: no device extensions, and no optional features
+  // beyond the mandatory robustBufferAccess (read-only storage buffer access in the fragment
+  // stage and negative-height viewports are core). Tests that need to hold a submission open ask
+  // for VK_KHR_timeline_semaphore through CreateWithTimelineSemaphoreForTest; that is the only
+  // extension this backend ever enables, and it is never enabled for a device the product uses.
   VkDeviceCreateInfo deviceInfo = {};
   deviceInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
   deviceInfo.queueCreateInfoCount = 1;
   deviceInfo.pQueueCreateInfos = &queueInfo;
   deviceInfo.pEnabledFeatures = &enabledFeatures;
+
+  // Accumulate rather than assign, so enabling a second extension or chaining a second features
+  // struct later cannot silently drop the test-only one (or be dropped by it).
+  std::vector<const char*> deviceExtensions;
+  VkPhysicalDeviceTimelineSemaphoreFeaturesKHR timelineFeatures = {};
+  timelineFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TIMELINE_SEMAPHORE_FEATURES_KHR;
+  timelineFeatures.timelineSemaphore = VK_TRUE;
+  if (enableTimelineSemaphoreForTest) {
+    deviceExtensions.push_back(VK_KHR_TIMELINE_SEMAPHORE_EXTENSION_NAME);
+    timelineFeatures.pNext = const_cast<void*>(deviceInfo.pNext);
+    deviceInfo.pNext = &timelineFeatures;
+  }
+  deviceInfo.enabledExtensionCount = static_cast<uint32_t>(deviceExtensions.size());
+  deviceInfo.ppEnabledExtensionNames = deviceExtensions.empty() ? nullptr : deviceExtensions.data();
 
   VkDevice device = VK_NULL_HANDLE;
   if (api.vkCreateDevice(selectedDevice, &deviceInfo, nullptr, &device) != VK_SUCCESS) {
@@ -1416,6 +1445,10 @@ VulkanDevice::~VulkanDevice() {
     poll();
   }
   impl_->teardown();
+}
+
+VulkanDevice::NativeContextForTest VulkanDevice::nativeContextForTest() const {
+  return {impl_->api, impl_->device, impl_->queue, impl_->queueFamilyIndex};
 }
 
 uint64_t VulkanDevice::completedSerial() const {
@@ -2212,10 +2245,22 @@ Status VulkanDevice::onWriteBuffer(uint32_t slotIndex, uint64_t offsetBytes,
     return GpuError{GpuErrorType::InvalidState,
                     std::format("buffer slot {} has no Vulkan buffer", slotIndex)};
   }
-  if (!data.empty()) {
-    std::memcpy(static_cast<uint8_t*>(record->allocation.mapped) + offsetBytes, data.data(),
-                data.size());
+  if (data.empty()) {
+    return OkStatus();
   }
+  // A latched device failure is reported through waitForSerial below, which fails closed on it.
+  // Writes to idle buffers stay unaffected by an unrelated earlier failure, exactly as before.
+  const uint64_t lastUse = bufferLastUseSerial(slotIndex);
+  if (lastUse > impl_->completedSerialValue &&
+      !waitForSerial(lastUse, kBusyBufferWriteTimeoutSeconds)) {
+    const std::string error = lastErrorForTest();
+    return GpuError{GpuErrorType::InvalidState,
+                    error.empty()
+                        ? std::format("writeBuffer timed out waiting for submission {}", lastUse)
+                        : error};
+  }
+  std::memcpy(static_cast<uint8_t*>(record->allocation.mapped) + offsetBytes, data.data(),
+              data.size());
   return OkStatus();
 }
 
