@@ -192,8 +192,9 @@ struct CompletionState {
 /// Objective-C++ state of a MetalDevice: the Metal device and queue plus per-resource slot
 /// tables mirroring the validated slot indices handed to the `on*` hooks.
 struct MetalDevice::Impl {
-  id<MTLDevice> device = nil;              //!< The Metal device; set by Create.
-  id<MTLCommandQueue> commandQueue = nil;  //!< Lazily created on first submit.
+  id<MTLDevice> device = nil;               //!< The Metal device; set by Create.
+  id<MTLCommandQueue> commandQueue = nil;   //!< Lazily created on first submit.
+  id<MTLSharedEvent> submissionGate = nil;  //!< Optional test-controlled execution pause.
 
   /// A bind group plus the layout slot it was created against (for per-binding visibility).
   struct BindGroupRecord {
@@ -416,7 +417,26 @@ uint64_t MetalDevice::deviceWritePublishCountForTest() const {
 
 MetalDevice::MetalDevice() : impl_(std::make_unique<Impl>()) {}
 
+Status MetalDevice::pauseSubmissionsForTest() {
+  if (impl_->submissionGate != nil) {
+    return GpuError{GpuErrorType::InvalidState, "a Metal submission pause is already active"};
+  }
+  impl_->submissionGate = [impl_->device newSharedEvent];
+  if (impl_->submissionGate == nil) {
+    return GpuError{GpuErrorType::Unsupported, "Metal shared events are unavailable"};
+  }
+  return OkStatus();
+}
+
+void MetalDevice::resumeSubmissionsForTest() {
+  if (impl_->submissionGate != nil) {
+    impl_->submissionGate.signaledValue = 1;
+    impl_->submissionGate = nil;
+  }
+}
+
 MetalDevice::~MetalDevice() {
+  resumeSubmissionsForTest();
   // Wait for in-flight submissions so deferred destructions drain before Impl teardown releases
   // the remaining Metal objects. On timeout (a hung submission) teardown proceeds anyway: Metal
   // itself retains every resource referenced by a committed command buffer until it completes,
@@ -1265,6 +1285,10 @@ Status MetalDevice::onSubmit(uint64_t submissionSerial, uint32_t commandBufferSl
   state.commandBuffer = [impl_->commandQueue commandBuffer];
   if (state.commandBuffer == nil) {
     return GpuError{GpuErrorType::InvalidState, "Metal command buffer creation failed"};
+  }
+
+  if (impl_->submissionGate != nil) {
+    [state.commandBuffer encodeWaitForEvent:impl_->submissionGate value:1];
   }
 
   // On any encoding failure, close an open encoder before returning so the un-committed command

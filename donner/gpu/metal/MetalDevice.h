@@ -84,6 +84,13 @@ public:
   /// accessor, for the same reason as above but in the other direction.
   [[nodiscard]] uint64_t deviceWritePublishCountForTest() const;
 
+  /// Pauses submitted GPU work at a shared event until \ref resumeSubmissionsForTest is called.
+  /// A deterministic test seam for writes issued while an earlier submission is in flight.
+  Status pauseSubmissionsForTest();
+
+  /// Releases the event installed by \ref pauseSubmissionsForTest. Safe when no pause is active.
+  void resumeSubmissionsForTest();
+
   /// Destructor; releases all Metal objects still alive.
   ~MetalDevice() override;
 
