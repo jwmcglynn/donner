@@ -131,4 +131,26 @@ donner_cc_test(
     ],
 )
 
+donner_cc_test(
+    name = "metal_queue_writes_tests",
+    srcs = ["MetalQueueWrites_tests.cc"],
+    env = {
+        "MTL_DEBUG_LAYER": "1",
+        "MTL_SHADER_VALIDATION": "1",
+    },
+    env_inherit = [
+        "DONNER_BASELINE_REQUIRE_FROZEN_ADAPTER",
+        "GITHUB_ACTIONS",
+    ],
+    target_compatible_with = ["@platforms//os:macos"],
+    deps = [
+        ":metal_device_gate",
+        "//donner/editor/tests:bitmap_golden_compare",
+        "//donner/gpu",
+        "//donner/gpu:gpu_test_utils",
+        "//donner/gpu/metal:metal_device",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
 donner_package()

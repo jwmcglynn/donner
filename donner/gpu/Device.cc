@@ -423,7 +423,16 @@ void Device::recycleRetiredSlot(ResourceKind kind, uint32_t slotIndex) {
   }
 }
 
+void Device::onRetireBuffer(uint32_t) {}
+
+void Device::onRetireTexture(uint32_t) {}
+
 void Device::retireResource(ResourceKind kind, uint32_t slotIndex, uint64_t lastUseSerial) {
+  if (kind == ResourceKind::Buffer) {
+    onRetireBuffer(slotIndex);
+  } else if (kind == ResourceKind::Texture) {
+    onRetireTexture(slotIndex);
+  }
   if (lastUseSerial <= completedSerial()) {
     recycleRetiredSlot(kind, slotIndex);
   } else {
@@ -1838,6 +1847,14 @@ void Device::markSubmissionUses(std::span<const SubmissionUse> uses, uint64_t su
   for (const SubmissionUse& use : uses) {
     markResourceUsed(use.kind, use.slotIndex, submissionSerial);
   }
+}
+
+uint64_t Device::bufferLastUseSerial(uint32_t slotIndex) const {
+  return buffers_.lastUseOf(slotIndex);
+}
+
+uint64_t Device::textureLastUseSerial(uint32_t slotIndex) const {
+  return textures_.lastUseOf(slotIndex);
 }
 
 Status Device::validateBufferHandleForBackend(const Buffer& buffer) const {

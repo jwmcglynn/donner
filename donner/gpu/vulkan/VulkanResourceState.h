@@ -3,11 +3,8 @@
 /// \c donner::gpu::vulkan::VulkanResourceState - the tracked per-texture synchronization state
 /// the Vulkan backend derives its barriers from.
 ///
-/// Every barrier this backend records, and every render pass external dependency it declares,
-/// is derived here from one table so the two cannot disagree. A precise image barrier sitting
-/// behind a render pass dependency that still says ALL_COMMANDS buys nothing: the dependency is
-/// the edge that orders an attachment write against whatever reads it next, so both halves read
-/// from the same source of truth.
+/// Each barrier names the stage and access that last touched the image and its next use.
+/// Render passes keep attachment layouts fixed; the barriers around them carry synchronization.
 ///
 /// This is pure state machinery over Vulkan enums: it opens no device, calls no entry point, and
 /// records nothing. That keeps it testable on every platform the project builds on, rather than
@@ -23,9 +20,6 @@
 #include <cstdint>
 #include <map>
 #include <ostream>
-#include <span>
-
-#include "donner/gpu/Descriptors.h"
 
 namespace donner::gpu::vulkan {
 
@@ -38,7 +32,7 @@ namespace donner::gpu::vulkan {
 /// host-mapped and a kernel write to one would otherwise be invisible to the mapping.
 enum class TextureUsageKind : uint8_t {
   Undefined,        //!< Never used; contents undefined.
-  ColorAttachment,  //!< Written as a render pass color attachment.
+  ColorAttachment,  //!< Read and written as a render pass color attachment.
   SampledRead,      //!< Read through a sampled-texture binding.
   StorageWrite,     //!< Written through a write-only storage-texture binding.
   TransferRead,     //!< Read as the source of a copy.
@@ -84,22 +78,6 @@ struct ImageBarrierParams {
 /// Ostream output operator. @param os Output stream. @param value Value to output.
 std::ostream& operator<<(std::ostream& os, const ImageBarrierParams& value);
 
-/// The two halves of a render pass external subpass dependency.
-struct SubpassDependencyParams {
-  VkPipelineStageFlags srcStage = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;  //!< Source stage scope.
-  VkPipelineStageFlags dstStage = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;  //!< Destination scope.
-  VkAccessFlags srcAccess = 0;                                         //!< Access made available.
-  VkAccessFlags dstAccess = 0;                                         //!< Access made visible.
-  /// True when the declared usage implied nothing tracked and the maximal edge was used.
-  bool conservative = false;
-
-  /// Equality operator. @param other Parameters to compare against.
-  bool operator==(const SubpassDependencyParams& other) const = default;
-};
-
-/// Ostream output operator. @param os Output stream. @param value Value to output.
-std::ostream& operator<<(std::ostream& os, const SubpassDependencyParams& value);
-
 /// The maximal barrier: ALL_COMMANDS to ALL_COMMANDS with memory availability and visibility.
 ///
 /// The fallback for any usage pair the table does not name. VK_ACCESS_MEMORY_* is valid with any
@@ -129,30 +107,6 @@ std::ostream& operator<<(std::ostream& os, const SubpassDependencyParams& value)
 /// @param usage Usage the texture is about to be put to.
 [[nodiscard]] ImageBarrierParams TransitionFor(const TextureSyncState& current,
                                                TextureUsageKind usage);
-
-/// The external dependency into a render pass, ordering whatever touched the attachments before
-/// it against the pass's color output.
-///
-/// One edge covers every attachment, so the source scope is the union across all of them: a pass
-/// that loads one attachment a compute dispatch wrote and clears another must still wait for
-/// that write, and taking any single attachment's prior state would lose it. A pass with no
-/// attachments, or one whose attachment reached its layout through a path the model does not
-/// describe, falls back to the maximal edge.
-///
-/// @param attachmentStates State each attachment texture is tracked in, in any order.
-[[nodiscard]] SubpassDependencyParams AttachmentEntryDependency(
-    std::span<const TextureSyncState> attachmentStates);
-
-/// The external dependency out of a render pass, ordering the pass's color output against
-/// whatever the attachment's declared usage says can consume it next.
-///
-/// The consumer is read from the texture's declared usage set rather than by scanning ahead: a
-/// texture declared Sampled gets the shader-read edge, one declared CopySrc the transfer-read
-/// edge, and one declaring several gets their union. A usage set naming no tracked consumer
-/// falls back to the maximal edge.
-///
-/// @param declaredUsage Usage flags the attachment texture was created with.
-[[nodiscard]] SubpassDependencyParams AttachmentExitDependency(TextureUsage declaredUsage);
 
 /**
  * Tracked state for a set of textures, under the discipline the backend records against.
