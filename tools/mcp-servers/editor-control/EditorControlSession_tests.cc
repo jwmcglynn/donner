@@ -1562,6 +1562,7 @@ TEST(EditorControlSessionTest, InspectorTextInputReplay) {
   replay.metadata.windowWidth = 1100;
   replay.metadata.windowHeight = 720;
   replay.metadata.displayScale = 1.0;
+  const int selectAllModifiers = ImGuiIO{}.ConfigMacOSXBehaviors ? (1 << 3) : (1 << 0);
   for (std::uint64_t index = 0; index <= 44; ++index) {
     repro::ReproFrame frame;
     frame.index = index;
@@ -1579,7 +1580,7 @@ TEST(EditorControlSessionTest, InspectorTextInputReplay) {
     } else if (index == 11 || index == 22 || index == 24) {
       frame.events.push_back({.kind = repro::ReproEvent::Kind::MouseUp});
     } else if (index == 28) {
-      frame.modifiers = 1 << 3;
+      frame.modifiers = selectAllModifiers;
       frame.events.push_back({.kind = repro::ReproEvent::Kind::KeyDown, .key = ImGuiKey_A});
     } else if (index == 29) {
       frame.events.push_back({.kind = repro::ReproEvent::Kind::KeyUp, .key = ImGuiKey_A});
