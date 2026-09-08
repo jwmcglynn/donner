@@ -414,6 +414,39 @@ TEST_F(CommandEncoderTests, DuplicateAttachmentViewFails) {
                                     HasSubstr("multiple color attachments")));
 }
 
+TEST_F(CommandEncoderTests, DistinctViewsOfOneAttachmentTextureFail) {
+  const TextureView secondView =
+      GetResultOrFail(device_.createTextureView(target_, TextureViewDescriptor{"secondView"}));
+  EXPECT_THAT(encoder_->beginRenderPass(RenderPassDescriptor{
+                  "aliasedPass",
+                  {RenderPassColorAttachment{targetView_, LoadOp::Clear, StoreOp::Store},
+                   RenderPassColorAttachment{secondView, LoadOp::Load, StoreOp::Store}}}),
+              IsGpuErrorWithMessage(GpuErrorType::InvalidDescriptor,
+                                    HasSubstr("multiple color attachments")));
+}
+
+TEST_F(CommandEncoderTests, SamplingAnotherViewOfAnActiveAttachmentFails) {
+  const Texture texture = GetResultOrFail(device_.createTexture(
+      TextureDescriptor{"feedback", Extent2d{4, 4}, TextureFormat::RGBA8Unorm,
+                        TextureUsage::RenderAttachment | TextureUsage::Sampled}));
+  const TextureView attachmentView =
+      GetResultOrFail(device_.createTextureView(texture, TextureViewDescriptor{"attachment"}));
+  const TextureView sampledView =
+      GetResultOrFail(device_.createTextureView(texture, TextureViewDescriptor{"sampled"}));
+  const BindGroupLayout layout =
+      GetResultOrFail(device_.createBindGroupLayout(BindGroupLayoutDescriptor{
+          "feedbackLayout",
+          {BindGroupLayoutEntry{0, ShaderStage::Fragment, BindingType::SampledTexture2dFloat}}}));
+  const BindGroup group = GetResultOrFail(device_.createBindGroup(BindGroupDescriptor{
+      "feedbackGroup", layout, {BindGroupEntry{0, TextureViewBinding{sampledView}}}}));
+  RenderPassEncoder* pass = GetResultOrFail(encoder_->beginRenderPass(RenderPassDescriptor{
+      "feedbackPass", {RenderPassColorAttachment{attachmentView, LoadOp::Clear, StoreOp::Store}}}));
+  ASSERT_NE(pass, nullptr);
+  EXPECT_THAT(
+      pass->setBindGroup(0, group),
+      IsGpuErrorWithMessage(GpuErrorType::UsageMismatch, HasSubstr("active color attachment")));
+}
+
 TEST_F(CommandEncoderTests, CopyTextureToBufferRejectsMisalignedOffset) {
   EXPECT_THAT(encoder_->copyTextureToBuffer(TexelCopyTextureInfo{target_}, readbackBuffer_,
                                             TexelCopyBufferLayout{2, 256, 4}, Extent2d{4, 4}),
