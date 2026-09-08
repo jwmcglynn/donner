@@ -809,6 +809,8 @@ struct VulkanDevice::Impl {
 
   std::vector<PendingUpload> pendingUploads;  //!< Uploads awaiting fence-confirmed cleanup.
 
+  bool deferUploadPolling = false;  //!< Test-only deferral of upload completion observations.
+
   /// Releases one completed upload and its optional retired destination.
   void releaseUpload(PendingUpload& upload) {
     destroyUploadObjects(upload.fence, upload.commandBuffer, upload.staging);
@@ -819,6 +821,9 @@ struct VulkanDevice::Impl {
 
   /// Reclaims completed upload objects without waiting or advancing public submission serials.
   void pollUploads() {
+    if (deferUploadPolling) {
+      return;
+    }
     auto it = pendingUploads.begin();
     while (it != pendingUploads.end()) {
       const VkResult status = api->vkGetFenceStatus(device, it->fence);
@@ -1514,6 +1519,10 @@ void VulkanDevice::failNextTextureUploadForTest(UploadFailureModeForTest mode) {
 
 size_t VulkanDevice::pendingTextureUploadCountForTest() const {
   return impl_->pendingUploads.size();
+}
+
+void VulkanDevice::deferTextureUploadPollingForTest(bool defer) {
+  impl_->deferUploadPolling = defer;
 }
 
 std::string VulkanDevice::lastErrorForTest() const {

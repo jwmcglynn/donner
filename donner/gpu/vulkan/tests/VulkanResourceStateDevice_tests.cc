@@ -196,6 +196,7 @@ TEST_F(VulkanResourceStateDeviceTest, AnUploadTheQueueTookKeepsItsStateWhenTheWa
 }
 
 TEST_F(VulkanResourceStateDeviceTest, TimedOutUploadsRetainReleasedTexturesUntilTeardown) {
+  device_->deferTextureUploadPollingForTest(true);
   for (int upload = 0; upload < 3; ++upload) {
     Texture texture = makeTexture("retired upload", TextureUsage::CopyDst);
     device_->failNextTextureUploadForTest(VulkanDevice::UploadFailureModeForTest::AfterSubmit);

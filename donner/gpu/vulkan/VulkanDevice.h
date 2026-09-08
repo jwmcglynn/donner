@@ -168,6 +168,9 @@ public:
   /// Returns the number of timed-out uploads still owned by the device, without polling.
   size_t pendingTextureUploadCountForTest() const;
 
+  /// Defers upload fence polling to exercise ownership before device teardown.
+  void deferTextureUploadPollingForTest(bool defer);
+
   /// Message of the most recent asynchronous Vulkan failure observed while polling or waiting
   /// on fences (e.g. VK_ERROR_DEVICE_LOST), or an empty string if none occurred.
   /// Test/diagnostic accessor.
