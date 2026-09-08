@@ -11,6 +11,8 @@
 
 namespace donner::gpu::vulkan {
 
+struct VulkanApi;
+
 /**
  * Vulkan backend of the Donner GPU runtime.
  *
@@ -70,6 +72,10 @@ public:
    * Vulkan 1.1 instance or graphics-capable physical device is available.
    */
   static std::unique_ptr<VulkanDevice> Create();
+
+  /// Creates a device with VK_KHR_timeline_semaphore enabled solely for test-owned host gates.
+  /// Returns nullptr if the test extension/feature is unavailable; ordinary Create needs neither.
+  static std::unique_ptr<VulkanDevice> CreateWithTimelineSemaphoreForTest();
 
   /// Destructor; waits for in-flight submissions (vkDeviceWaitIdle), drains deferred
   /// destructions, then destroys all remaining Vulkan objects in dependency-safe order.
@@ -172,6 +178,19 @@ public:
   /// @param defer Whether to postpone upload completion observations.
   void deferTextureUploadPollingForTest(bool defer);
 
+  /// Borrowed native objects for tests that submit their own synchronization gate. Valid only
+  /// until this device is destroyed; callers must use the owning thread, release every gate, and
+  /// finish their native work before destroying any of these objects or the device.
+  struct NativeContextForTest {
+    const VulkanApi* api;       //!< Device entry points, owned by this device.
+    void* device;               //!< Borrowed VkDevice.
+    void* queue;                //!< Borrowed VkQueue.
+    uint32_t queueFamilyIndex;  //!< Family of the borrowed queue.
+  };
+
+  /// Returns borrowed native objects solely for deterministic backend synchronization tests.
+  NativeContextForTest nativeContextForTest() const;
+
   /// Message of the most recent asynchronous Vulkan failure observed while polling or waiting
   /// on fences (e.g. VK_ERROR_DEVICE_LOST), or an empty string if none occurred.
   /// Test/diagnostic accessor.
@@ -204,6 +223,9 @@ protected:
                   std::span<const Command> commands) override;
 
 private:
+  /// Creates the common backend, optionally enabling the extension used by native test gates.
+  static std::unique_ptr<VulkanDevice> CreateImpl(bool enableTimelineSemaphoreForTest);
+
   /// Constructs an empty device; \ref Create attaches the Vulkan instance/device.
   VulkanDevice();
 

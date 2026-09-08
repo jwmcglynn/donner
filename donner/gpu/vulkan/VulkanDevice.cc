@@ -1308,6 +1308,14 @@ struct VulkanDevice::Impl {
 };
 
 std::unique_ptr<VulkanDevice> VulkanDevice::Create() {
+  return CreateImpl(false);
+}
+
+std::unique_ptr<VulkanDevice> VulkanDevice::CreateWithTimelineSemaphoreForTest() {
+  return CreateImpl(true);
+}
+
+std::unique_ptr<VulkanDevice> VulkanDevice::CreateImpl(bool enableTimelineSemaphoreForTest) {
   InstanceSetup setup = CreateInstance();
   if (setup.loader == nullptr) {
     return nullptr;
@@ -1352,6 +1360,16 @@ std::unique_ptr<VulkanDevice> VulkanDevice::Create() {
   deviceInfo.queueCreateInfoCount = 1;
   deviceInfo.pQueueCreateInfos = &queueInfo;
   deviceInfo.pEnabledFeatures = &enabledFeatures;
+
+  const char* timelineExtension = VK_KHR_TIMELINE_SEMAPHORE_EXTENSION_NAME;
+  VkPhysicalDeviceTimelineSemaphoreFeaturesKHR timelineFeatures = {};
+  timelineFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TIMELINE_SEMAPHORE_FEATURES_KHR;
+  timelineFeatures.timelineSemaphore = VK_TRUE;
+  if (enableTimelineSemaphoreForTest) {
+    deviceInfo.enabledExtensionCount = 1;
+    deviceInfo.ppEnabledExtensionNames = &timelineExtension;
+    deviceInfo.pNext = &timelineFeatures;
+  }
 
   VkDevice device = VK_NULL_HANDLE;
   if (api.vkCreateDevice(selectedDevice, &deviceInfo, nullptr, &device) != VK_SUCCESS) {
@@ -1416,6 +1434,10 @@ VulkanDevice::~VulkanDevice() {
     poll();
   }
   impl_->teardown();
+}
+
+VulkanDevice::NativeContextForTest VulkanDevice::nativeContextForTest() const {
+  return {impl_->api, impl_->device, impl_->queue, impl_->queueFamilyIndex};
 }
 
 uint64_t VulkanDevice::completedSerial() const {
