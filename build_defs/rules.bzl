@@ -4,6 +4,7 @@ Helper rules, such as for building fuzzers.
 
 load("@bazel_tools//tools/cpp:toolchain_utils.bzl", "find_cpp_toolchain")
 load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_library", "cc_test")
+load("@rules_python//python:defs.bzl", "py_test")
 
 def _banned_patterns_lint_test(name, srcs, hdrs, tags = [], **_kwargs):
     """Emits nothing. The banned-patterns check is now one repo-wide scan.
@@ -851,24 +852,18 @@ def donner_cc_fuzzer(
         "//conditions:default": ["-max_total_time=2"],
     })
 
-    donner_cc_test(
+    py_test(
         name = name + "_soak",
-        additional_linker_inputs = fuzzer_additional_linker_inputs,
-        linkopts = fuzzer_runtime_linkopts,
-        args = fuzz_time_args + [
+        srcs = ["//build_defs:fuzzer_soak.py"],
+        main = "//build_defs:fuzzer_soak.py",
+        args = ["$(location :%s_bin)" % name] + fuzz_time_args + [
             "-timeout=%d" % per_input_timeout_seconds,
             "$(locations %s)" % corpus_name,
         ],
-        linkstatic = 1,
-        deps = deps,
         target_compatible_with = fuzzer_compatible_with(),
         size = "small",
-        data = [corpus_name] + select({
-            "@platforms//os:macos": ["@llvm_toolchain//:linker-components-aarch64-darwin"],
-            "//conditions:default": [],
-        }),
+        data = [":" + name + "_bin", corpus_name],
         tags = common_target_tags,
-        **kwargs
     )
 
     donner_cc_test(

@@ -165,6 +165,9 @@ public:
   /// @param mode Where the injected failure happens.
   void failNextTextureUploadForTest(UploadFailureModeForTest mode);
 
+  /// Returns the number of timed-out uploads still owned by the device, without polling.
+  size_t pendingTextureUploadCountForTest() const;
+
   /// Message of the most recent asynchronous Vulkan failure observed while polling or waiting
   /// on fences (e.g. VK_ERROR_DEVICE_LOST), or an empty string if none occurred.
   /// Test/diagnostic accessor.

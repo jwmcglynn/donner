@@ -395,6 +395,8 @@ common:fuzz-soak --//build_defs:fuzz_soak=true
 
 # Fuzzing builds
 build:asan-fuzzer --config=asan
+# Keep assertions and sanitizer coverage while bounding synthetic resource-limit seed work.
+build:asan-fuzzer --copt=-O1
 build:asan-fuzzer --copt=-fsanitize=fuzzer-no-link
 build:asan-fuzzer --define=FUZZING_ENGINE=libfuzzer
 build:asan-fuzzer --copt=-fno-omit-frame-pointer

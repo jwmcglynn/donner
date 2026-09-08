@@ -6,6 +6,7 @@ load("//build_defs:rules.bzl", "donner_cc_fuzzer", "fuzzer_compatible_with")
 
 exports_files(
     [
+        "fuzzer_soak.py",
         "check_banned_patterns.py",
         "rules.bzl",
     ],
@@ -158,7 +159,6 @@ donner_package(gpu_inventory_globs = [
     "BUILD.bazel",
 ])
 
-
 donner_cc_fuzzer(
     name = "soak_probe",
     srcs = ["SoakProbe.cc"],
@@ -172,4 +172,13 @@ py_test(
     args = ["$(location :soak_probe_soak)"],
     data = [":soak_probe_soak"],
     target_compatible_with = fuzzer_compatible_with(),
+)
+
+py_test(
+    name = "fuzzer_soak_tests",
+    size = "small",
+    srcs = [
+        "fuzzer_soak.py",
+        "fuzzer_soak_tests.py",
+    ],
 )

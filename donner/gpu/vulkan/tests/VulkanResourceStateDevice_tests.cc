@@ -164,6 +164,8 @@ TEST_F(VulkanResourceStateDeviceTest, AnUploadTheQueueTookKeepsItsStateWhenTheWa
           .hasError())
       << "the seam must report the wait over an accepted submission as having timed out";
 
+  EXPECT_EQ(device_->pendingTextureUploadCountForTest(), 1u);
+
   const size_t before = barriersFor(written.slotIndex()).size();
 
   // A later submission reading that image. The queue is in order, so this meets the layout the
@@ -180,6 +182,8 @@ TEST_F(VulkanResourceStateDeviceTest, AnUploadTheQueueTookKeepsItsStateWhenTheWa
   ASSERT_FALSE(serial.hasError()) << serial.error();
   ASSERT_TRUE(device_->waitForSerial(serial.result(), /*timeoutSeconds=*/30.0));
 
+  EXPECT_EQ(device_->pendingTextureUploadCountForTest(), 0u);
+
   const std::vector<VulkanDevice::RecordedImageBarrierForTest> barriers =
       barriersFor(written.slotIndex());
   ASSERT_GT(barriers.size(), before);
@@ -189,6 +193,19 @@ TEST_F(VulkanResourceStateDeviceTest, AnUploadTheQueueTookKeepsItsStateWhenTheWa
   EXPECT_TRUE((next.srcAccess & VK_ACCESS_TRANSFER_WRITE_BIT) != 0)
       << "the upload's write still has to be made available to the copy that reads it";
   EXPECT_EQ(next.srcStage, uint32_t{VK_PIPELINE_STAGE_TRANSFER_BIT});
+}
+
+TEST_F(VulkanResourceStateDeviceTest, TimedOutUploadsRetainReleasedTexturesUntilTeardown) {
+  for (int upload = 0; upload < 3; ++upload) {
+    Texture texture = makeTexture("retired upload", TextureUsage::CopyDst);
+    device_->failNextTextureUploadForTest(VulkanDevice::UploadFailureModeForTest::AfterSubmit);
+    Status status =
+        device_->writeTexture(texture, uploadBytes(), uploadLayout(), Extent2d{kExtent, kExtent});
+    ASSERT_TRUE(status.hasError());
+    EXPECT_EQ(device_->pendingTextureUploadCountForTest(), size_t(upload + 1));
+  }
+  // Device teardown must reclaim the fences and staging allocations with leak detection enabled.
+  device_.reset();
 }
 
 TEST_F(VulkanResourceStateDeviceTest, AttachmentTransitionsCoverEveryAttachment) {

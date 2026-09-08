@@ -798,6 +798,42 @@ struct VulkanDevice::Impl {
     std::vector<VkFramebuffer> framebuffers;         //!< Transient per-pass framebuffers.
   };
 
+  /// Upload objects retained when the queue accepted the copy but its wait timed out.
+  struct PendingUpload {
+    VkFence fence = VK_NULL_HANDLE;                  //!< Completion fence.
+    VkCommandBuffer commandBuffer = VK_NULL_HANDLE;  //!< Copy commands.
+    BufferRecord staging;                            //!< Host-visible upload memory.
+    uint32_t textureSlot = 0;  //!< Destination slot, until its texture is retired.
+    std::optional<TextureRecord> retiredTexture;  //!< Destination released by the caller.
+  };
+
+  std::vector<PendingUpload> pendingUploads;  //!< Uploads awaiting fence-confirmed cleanup.
+
+  /// Releases one completed upload and its optional retired destination.
+  void releaseUpload(PendingUpload& upload) {
+    destroyUploadObjects(upload.fence, upload.commandBuffer, upload.staging);
+    if (upload.retiredTexture) {
+      destroyTextureRecord(*upload.retiredTexture);
+    }
+  }
+
+  /// Reclaims completed upload objects without waiting or advancing public submission serials.
+  void pollUploads() {
+    auto it = pendingUploads.begin();
+    while (it != pendingUploads.end()) {
+      const VkResult status = api->vkGetFenceStatus(device, it->fence);
+      if (status != VK_SUCCESS) {
+        if (status != VK_NOT_READY) {
+          recordError(
+              std::format("vkGetFenceStatus (upload) failed with {}", VkResultToString(status)));
+        }
+        break;
+      }
+      releaseUpload(*it);
+      it = pendingUploads.erase(it);
+    }
+  }
+
   std::vector<InFlightSubmission> inFlight;  //!< Pending submissions, ascending serial.
   uint64_t completedSerialValue = 0;         //!< Highest fence-confirmed completed serial.
 
@@ -845,6 +881,7 @@ struct VulkanDevice::Impl {
   /// the monotonic completed-serial counter. Stops at the first unsignaled fence (fences on one
   /// queue signal in submission order).
   void pollCompleted() {
+    pollUploads();
     size_t releasedCount = 0;
     for (InFlightSubmission& submission : inFlight) {
       const VkResult status = api->vkGetFenceStatus(device, submission.fence);
@@ -948,6 +985,10 @@ struct VulkanDevice::Impl {
       releaseSubmission(submission);
     }
     inFlight.clear();
+    for (PendingUpload& upload : pendingUploads) {
+      releaseUpload(upload);
+    }
+    pendingUploads.clear();
 
     for (std::optional<RenderPipelineRecord>& record : renderPipelines) {
       if (record.has_value()) {
@@ -1469,6 +1510,10 @@ std::vector<VulkanDevice::RecordedImageBarrierForTest> VulkanDevice::recordedIma
 
 void VulkanDevice::failNextTextureUploadForTest(UploadFailureModeForTest mode) {
   impl_->uploadFailureMode = mode;
+}
+
+size_t VulkanDevice::pendingTextureUploadCountForTest() const {
+  return impl_->pendingUploads.size();
 }
 
 std::string VulkanDevice::lastErrorForTest() const {
@@ -1998,7 +2043,16 @@ void VulkanDevice::Impl::destroyBufferSlot(uint32_t slotIndex) {
 
 void VulkanDevice::Impl::destroyTextureSlot(uint32_t slotIndex) {
   if (TextureRecord* record = FindRecord(textures, slotIndex)) {
-    destroyTextureRecord(*record);
+    // The latest queued upload covers earlier copies on this in-order queue.
+    auto pending = std::find_if(pendingUploads.rbegin(), pendingUploads.rend(),
+                                [slotIndex](const PendingUpload& upload) {
+                                  return upload.textureSlot == slotIndex && !upload.retiredTexture;
+                                });
+    if (pending != pendingUploads.rend()) {
+      pending->retiredTexture = *record;
+    } else {
+      destroyTextureRecord(*record);
+    }
     textures[slotIndex].reset();
     // The slot is recyclable now, and a new image in it has touched nothing; leaving this
     // texture's state behind would have the next one's first barrier wait on work that ran
@@ -2224,13 +2278,9 @@ Status VulkanDevice::Impl::submitAndWaitTextureUpload(VkCommandBuffer commandBuf
           api->vkWaitForFences(device, 1, &fence, VK_TRUE, kUploadFenceTimeoutNs);
       result != VK_SUCCESS) {
     if (result == VK_TIMEOUT) {
-      // The submission is still pending: destroying its fence, command buffer, or staging
-      // buffer now would violate their in-use requirements, trading a clean failure for
-      // undefined behavior. Deliberately leak them and fail closed; the device destructor's
-      // vkDeviceWaitIdle is the backstop before final teardown.
+      // Retain all upload objects until the fence completes or device teardown waits idle.
       objectsStillInUse = true;
-      return VkError("vkWaitForFences (writeTexture, still pending; leaking upload objects)",
-                     result);
+      return VkError("vkWaitForFences (writeTexture, still pending)", result);
     }
     return VkError("vkWaitForFences (writeTexture)", result);
   }
@@ -2336,7 +2386,9 @@ Status VulkanDevice::onWriteTexture(uint32_t slotIndex, std::span<const uint8_t>
   const Status submitStatus = impl.submitAndWaitTextureUpload(
       commandBuffer, fence, objectsStillInUse, stagedUploadGuard.reachedQueue);
   if (submitStatus.hasError()) {
-    if (!objectsStillInUse) {
+    if (objectsStillInUse) {
+      impl.pendingUploads.push_back({fence, commandBuffer, staging, slotIndex, std::nullopt});
+    } else {
       cleanup();
     }
     return submitStatus;

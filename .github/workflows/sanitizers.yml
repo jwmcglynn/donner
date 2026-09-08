@@ -120,6 +120,12 @@ jobs:
             //donner/svg/renderer/tests:renderer_geode_golden_tests \
             //donner/svg/renderer/tests:renderer_geode_tests
 
+      - name: Retain failed test evidence
+        if: failure()
+        uses: ./.github/actions/upload-bazel-test-artifacts
+        with:
+          name: sanitizers-${{ github.job }}-${{ runner.os }}
+
   ubsan:
     runs-on: ubuntu-24.04
     needs: gatekeeper
@@ -191,3 +197,9 @@ jobs:
             --test_tag_filters=fuzz_ubsan_geode \
             --build_tag_filters=fuzz_ubsan_geode \
             //...
+
+      - name: Retain failed test evidence
+        if: failure()
+        uses: ./.github/actions/upload-bazel-test-artifacts
+        with:
+          name: sanitizers-${{ github.job }}-${{ runner.os }}
