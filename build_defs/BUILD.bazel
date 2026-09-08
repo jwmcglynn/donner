@@ -2,6 +2,7 @@ load("@bazel_skylib//rules:common_settings.bzl", "bool_flag", "string_flag")
 load("@rules_python//python:defs.bzl", "py_test")
 load("//build_defs:banned_deps.bzl", "banned_deps_test")
 load("//build_defs:package.bzl", "donner_package")
+load("//build_defs:rules.bzl", "donner_cc_fuzzer", "fuzzer_compatible_with")
 
 exports_files(
     [
@@ -156,3 +157,19 @@ donner_package(gpu_inventory_globs = [
     "**/*.bzl",
     "BUILD.bazel",
 ])
+
+
+donner_cc_fuzzer(
+    name = "soak_probe",
+    srcs = ["SoakProbe.cc"],
+    corpus = "soak_probe_corpus",
+)
+
+py_test(
+    name = "fuzzer_soak_integration_tests",
+    size = "small",
+    srcs = ["fuzzer_soak_integration_tests.py"],
+    args = ["$(location :soak_probe_soak)"],
+    data = [":soak_probe_soak"],
+    target_compatible_with = fuzzer_compatible_with(),
+)
