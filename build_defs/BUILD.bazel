@@ -177,4 +177,5 @@ py_test(
         "fuzzer_soak.py",
         "fuzzer_soak_tests.py",
     ],
+    imports = ["."],
 )

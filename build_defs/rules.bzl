@@ -862,7 +862,10 @@ def donner_cc_fuzzer(
         ],
         target_compatible_with = fuzzer_compatible_with(),
         size = "small",
-        data = [":" + name + "_bin", corpus_name],
+        data = [":" + name + "_bin", corpus_name] + select({
+            "@platforms//os:macos": ["@llvm_toolchain//:linker-components-aarch64-darwin"],
+            "//conditions:default": [],
+        }),
         tags = common_target_tags,
     )
 
