@@ -131,6 +131,9 @@ Status CommandEncoder::validateBoundBindGroups(std::string_view operation) {
 
 Status CommandEncoder::validateBoundBufferRanges(std::string_view operation) {
   for (const auto& requirement : currentPipeline_->bufferRequirements) {
+    // Engaged: createRenderPipeline and createComputePipeline bound requirement.group against
+    // the pipeline layout's group count, and validateBoundBindGroups has already returned an
+    // error for any group in that range that is unbound, so this optional cannot be empty here.
     const ResourceIdentity identity = boundBindGroups_[requirement.group]->identity;
     const auto* group = device_->bindGroups_.find(identity.slotIndex, identity.generation);
     if (group == nullptr) {
