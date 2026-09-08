@@ -2648,6 +2648,11 @@ void EditorShell::handleGlobalShortcuts() {
     }
   }
 
+  // Active inspector fields own editing shortcuts, including select-all, clipboard, and undo.
+  if (ImGui::GetIO().WantTextInput && !sourcePaneFocused) {
+    return;
+  }
+
   if (!sourcePaneFocused) {
     if (pressedZ && cmd && !shift) {
       requestHistoryAction(HistoryAction::Undo);
