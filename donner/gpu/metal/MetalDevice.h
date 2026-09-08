@@ -36,8 +36,10 @@ namespace donner::gpu::metal {
  * allocation and no queue submission; Metal retains the staging buffer and destinations until
  * completion. Queued and in-flight uploads share a configurable byte budget, defaulting to
  * \ref kMaxBufferByteSize; at most 16,384 writes may await submission. Excess writes return
- * `LimitExceeded` without changing the batch. The budget counts logical upload bytes; packing
- * temporarily retains both the host payload and native staging buffer. Managed resources may
+ * `LimitExceeded` without changing the batch. The budget counts logical upload bytes, excluding
+ * row and alignment padding. Combined queued and in-flight packed staging also stays within
+ * the larger of this budget and \ref kMaxBufferByteSize. Packing temporarily retains both the
+ * host payload and native staging buffer. Managed resources may
  * have separate host and device backing, so physical RAM/VRAM usage also includes those copies
  * and driver overhead. Destroyed destinations drop unsubmitted writes; completion returns the
  * in-flight byte reservation.
@@ -76,7 +78,7 @@ public:
    *
    * @param memoryModel Which memory model to build resources for; production leaves this
    *   detected, and a test forces the non-unified path to cover it on unified hardware.
-   * @param uploadStagingByteBudget Maximum combined queued and in-flight upload staging bytes.
+   * @param uploadStagingByteBudget Maximum combined queued and in-flight logical payload bytes.
    *   Zero is invalid and returns nullptr. Each individual batch also fits \ref kMaxBufferByteSize.
    * @param unalignedWriteTimeout Maximum CPU wait for an unaligned write to a busy buffer.
    *   Must be between zero and five seconds; invalid budgets return nullptr.
@@ -106,7 +108,7 @@ public:
   /// Snapshot of upload bookkeeping for tests and performance measurements.
   struct WriteStats {
     size_t pendingWrites = 0;             //!< Coalesced writes awaiting a normal submission.
-    uint64_t inFlightStagingBytes = 0;    //!< Upload bytes reserved until GPU completion.
+    uint64_t inFlightStagingBytes = 0;    //!< Packed staging bytes retained until GPU completion.
     uint64_t pendingStagingBytes = 0;     //!< Packed staging bytes reserved for those writes.
     uint64_t stagingAllocations = 0;      //!< Native upload staging allocations attempted.
     uint64_t submittedUploadBatches = 0;  //!< Ordinary submissions containing queued writes.
@@ -182,6 +184,8 @@ protected:
                                 const RenderPipelineDescriptor& descriptor) override;
   Status onCreateComputePipeline(uint32_t slotIndex,
                                  const ComputePipelineDescriptor& descriptor) override;
+  void onRetireBuffer(uint32_t slotIndex) override;
+  void onRetireTexture(uint32_t slotIndex) override;
   void onDestroyResource(std::string_view resourceName, uint32_t slotIndex) override;
   Status onWriteBuffer(uint32_t slotIndex, uint64_t offsetBytes,
                        std::span<const uint8_t> data) override;

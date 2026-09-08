@@ -185,6 +185,7 @@ MTLPrimitiveType ToMtlPrimitiveType(PrimitiveTopology topology) {
 struct CompletionState {
   std::atomic<uint64_t> completedSerial{0};       //!< Highest completed submission serial.
   std::atomic<uint64_t> inFlightStagingBytes{0};  //!< Accepted uploads awaiting completion.
+  std::atomic<uint64_t> inFlightPayloadBytes{0};  //!< Logical bytes charged to the upload budget.
   std::atomic<bool> hadError{false};  //!< True once any command buffer reported an error.
   std::mutex mutex;                   //!< Guards errorMessage.
   std::string errorMessage;           //!< Message of the first captured execution error.
@@ -245,6 +246,7 @@ struct MetalDevice::Impl {
     uint64_t offsetBytes = 0;
     Extent2d size;
     uint32_t bytesPerRow = 0;
+    uint64_t payloadBytes = 0;
     std::vector<uint8_t> bytes;
   };
 
@@ -254,6 +256,7 @@ struct MetalDevice::Impl {
   uint64_t uploadStagingByteBudget = kMaxBufferByteSize;
   std::chrono::milliseconds unalignedWriteTimeout = std::chrono::seconds(5);
   uint64_t pendingStagingBytes = 0;
+  uint64_t pendingPayloadBytes = 0;
   uint64_t stagingAllocations = 0;
   uint64_t submittedUploadBatches = 0;
   uint64_t unalignedWriteWaits = 0;
@@ -275,26 +278,38 @@ struct MetalDevice::Impl {
              pending.offsetBytes == write.offsetBytes && pending.size == write.size &&
              pending.bytes.size() == byteCount;
     });
-    const uint64_t replacedBytes =
+    const uint64_t replacedStagingBytes =
         previous == pendingWrites.end() ? 0 : StagingSize(previous->bytes.size());
-    const uint64_t queuedBytes = pendingStagingBytes - replacedBytes + StagingSize(byteCount);
-    const uint64_t inFlightBytes =
+    const uint64_t replacedPayloadBytes =
+        previous == pendingWrites.end() ? 0 : previous->payloadBytes;
+    const uint64_t queuedStagingBytes =
+        pendingStagingBytes - replacedStagingBytes + StagingSize(byteCount);
+    const uint64_t queuedPayloadBytes =
+        pendingPayloadBytes - replacedPayloadBytes + write.payloadBytes;
+    const uint64_t inFlightPayloadBytes =
+        completionState->inFlightPayloadBytes.load(std::memory_order_acquire);
+    const uint64_t inFlightStagingBytes =
         completionState->inFlightStagingBytes.load(std::memory_order_acquire);
-    if (queuedBytes > kMaxBufferByteSize || queuedBytes > uploadStagingByteBudget ||
-        inFlightBytes > uploadStagingByteBudget - queuedBytes ||
+    const uint64_t packedBudget = std::max(kMaxBufferByteSize, uploadStagingByteBudget);
+    if (queuedStagingBytes > kMaxBufferByteSize || queuedPayloadBytes > uploadStagingByteBudget ||
+        inFlightPayloadBytes > uploadStagingByteBudget - queuedPayloadBytes ||
+        inFlightStagingBytes > packedBudget - queuedStagingBytes ||
         (previous == pendingWrites.end() && pendingWrites.size() >= 16'384)) {
       return GpuError{
           GpuErrorType::LimitExceeded,
-          std::format("Metal upload budget exceeded: {} queued bytes, {} in-flight "
-                      "bytes, {} byte budget, {} pending writes",
-                      queuedBytes, inFlightBytes, uploadStagingByteBudget, pendingWrites.size())};
+          std::format(
+              "Metal upload budget exceeded: {} queued / {} in-flight payload bytes "
+              "(limit {}), {} queued / {} in-flight packed bytes (limit {}), {} pending writes",
+              queuedPayloadBytes, inFlightPayloadBytes, uploadStagingByteBudget, queuedStagingBytes,
+              inFlightStagingBytes, packedBudget, pendingWrites.size())};
     }
     if (previous != pendingWrites.end()) {
       write.bytes = std::move(previous->bytes);
       pendingWrites.erase(previous);
     }
     write.bytes.resize(byteCount);
-    pendingStagingBytes = pendingStagingBytes - replacedBytes + StagingSize(byteCount);
+    pendingStagingBytes = queuedStagingBytes;
+    pendingPayloadBytes = queuedPayloadBytes;
     pendingWrites.push_back(std::move(write));
     return &pendingWrites.back();
   }
@@ -305,6 +320,7 @@ struct MetalDevice::Impl {
         return false;
       }
       pendingStagingBytes -= StagingSize(write.bytes.size());
+      pendingPayloadBytes -= write.payloadBytes;
       return true;
     });
   }
@@ -875,14 +891,20 @@ Status MetalDevice::onCreateComputePipeline(uint32_t slotIndex,
   return OkStatus();
 }
 
+void MetalDevice::onRetireBuffer(uint32_t slotIndex) {
+  impl_->discardPendingWrites(GetSlot(impl_->buffers, slotIndex), nil);
+}
+
+void MetalDevice::onRetireTexture(uint32_t slotIndex) {
+  impl_->discardPendingWrites(nil, GetSlot(impl_->textures, slotIndex));
+}
+
 void MetalDevice::onDestroyResource(std::string_view resourceName, uint32_t slotIndex) {
   // Clearing a slot to nil / nullopt releases the ObjC object under ARC. Unknown resource names
   // are ignored; the base class owns their bookkeeping.
   if (resourceName == "buffer") {
-    impl_->discardPendingWrites(GetSlot(impl_->buffers, slotIndex), nil);
     SetSlot(impl_->buffers, slotIndex, id<MTLBuffer>(nil));
   } else if (resourceName == "texture") {
-    impl_->discardPendingWrites(nil, GetSlot(impl_->textures, slotIndex));
     SetSlot(impl_->textures, slotIndex, id<MTLTexture>(nil));
   } else if (resourceName == "textureView") {
     SetSlot(impl_->textureViewToTexture, slotIndex, std::optional<uint32_t>());
@@ -936,9 +958,11 @@ Status MetalDevice::onWriteBuffer(uint32_t slotIndex, uint64_t offsetBytes,
       std::max(bufferLastUseSerial(slotIndex), GetSlot(impl_->bufferUploadSerials, slotIndex));
   if (lastUse > completedSerial() || impl_->hasPendingWrite(buffer, nil)) {
     if (offsetBytes % 4 == 0 && data.size() % 4 == 0) {
-      auto queued = impl_->queueWrite(
-          Impl::PendingWrite{.slotIndex = slotIndex, .buffer = buffer, .offsetBytes = offsetBytes},
-          data.size());
+      auto queued = impl_->queueWrite(Impl::PendingWrite{.slotIndex = slotIndex,
+                                                         .buffer = buffer,
+                                                         .offsetBytes = offsetBytes,
+                                                         .payloadBytes = data.size()},
+                                      data.size());
       if (queued.hasError()) {
         return std::move(queued).error();
       }
@@ -975,10 +999,13 @@ Status MetalDevice::onWriteTexture(uint32_t slotIndex, std::span<const uint8_t> 
     const uint32_t texelBytes = texture.pixelFormat == MTLPixelFormatR8Unorm ? 1 : 4;
     const uint32_t rowBytes = writeSize.width * texelBytes;
     const uint32_t rowPitch = static_cast<uint32_t>(Impl::StagingSize(rowBytes));
-    auto queued = impl_->queueWrite(
-        Impl::PendingWrite{
-            .slotIndex = slotIndex, .texture = texture, .size = writeSize, .bytesPerRow = rowPitch},
-        uint64_t{rowPitch} * writeSize.height);
+    auto queued =
+        impl_->queueWrite(Impl::PendingWrite{.slotIndex = slotIndex,
+                                             .texture = texture,
+                                             .size = writeSize,
+                                             .bytesPerRow = rowPitch,
+                                             .payloadBytes = uint64_t{rowBytes} * writeSize.height},
+                          uint64_t{rowPitch} * writeSize.height);
     if (queued.hasError()) {
       return std::move(queued).error();
     }
@@ -1401,7 +1428,9 @@ Status MetalDevice::Impl::encodeCommand(EncodingState& state, const Command& com
 void MetalDevice::Impl::attachCompletionHandler(EncodingState& state, uint64_t submissionSerial) {
   std::shared_ptr<CompletionState> sharedState = completionState;
   const uint64_t uploadBytes = pendingStagingBytes;
+  const uint64_t payloadBytes = pendingPayloadBytes;
   sharedState->inFlightStagingBytes.fetch_add(uploadBytes, std::memory_order_relaxed);
+  sharedState->inFlightPayloadBytes.fetch_add(payloadBytes, std::memory_order_relaxed);
   [state.commandBuffer addCompletedHandler:^(id<MTLCommandBuffer> completedBuffer) {
     if (completedBuffer.error != nil) {
       sharedState->hadError.store(true, std::memory_order_release);
@@ -1414,6 +1443,7 @@ void MetalDevice::Impl::attachCompletionHandler(EncodingState& state, uint64_t s
 
     // Make the reservation available before a completion waiter observes this serial.
     sharedState->inFlightStagingBytes.fetch_sub(uploadBytes, std::memory_order_release);
+    sharedState->inFlightPayloadBytes.fetch_sub(payloadBytes, std::memory_order_release);
 
     // Monotonic max: handlers may complete out of order across command buffers.
     uint64_t previous = sharedState->completedSerial.load(std::memory_order_relaxed);
@@ -1528,6 +1558,7 @@ void MetalDevice::Impl::didSubmitWrites(uint64_t submissionSerial) {
     ++submittedUploadBatches;
     pendingWrites.clear();
     pendingStagingBytes = 0;
+    pendingPayloadBytes = 0;
   }
 }
 

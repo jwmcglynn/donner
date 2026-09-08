@@ -581,7 +581,15 @@ protected:
   virtual Status onCreateComputePipeline(uint32_t slotIndex,
                                          const ComputePipelineDescriptor& descriptor) = 0;
 
-  /// Backend hook: a validated resource was destroyed.
+  /// Backend hook: a buffer handle was retired. Discard unsubmitted work, but keep native
+  /// resources alive until \ref onDestroyResource. @param slotIndex Retired buffer slot.
+  virtual void onRetireBuffer(uint32_t slotIndex);
+
+  /// Backend hook: a texture handle was retired. Discard unsubmitted work, but keep native
+  /// resources alive until \ref onDestroyResource. @param slotIndex Retired texture slot.
+  virtual void onRetireTexture(uint32_t slotIndex);
+
+  /// Backend hook: a retired resource is no longer used by submitted work and can be released.
   /// @param resourceName Resource type name, e.g. `"buffer"`.
   /// @param slotIndex Slot index of the destroyed resource.
   virtual void onDestroyResource(std::string_view resourceName, uint32_t slotIndex) = 0;
