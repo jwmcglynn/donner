@@ -174,7 +174,7 @@ single_version_override(
     version = "2026.1",
 )
 
-bazel_dep(name = "aspect_rules_js", version = "2.1.2", dev_dependency = True)
+bazel_dep(name = "aspect_rules_js", version = "2.9.3", dev_dependency = True)
 bazel_dep(name = "rules_playwright", version = "0.5.3", dev_dependency = True)
 
 playwright = use_extension(
