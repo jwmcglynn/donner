@@ -275,7 +275,7 @@ private:
   };
   /// Draw-time validation state for one bound bind group index.
   struct BoundBindGroup {
-    uint32_t bindGroupSlot = 0;       //!< Bind group slot index.
+    ResourceIdentity identity;        //!< Bound group slot and generation.
     ResourceIdentity layoutIdentity;  //!< Layout the group was created against.
   };
 
@@ -292,6 +292,12 @@ private:
   /// created against the same layout. Shared by draw and dispatch.
   /// @param operation Operation name for diagnostics, e.g. `"draw"`.
   Status validateBoundBindGroups(std::string_view operation);
+
+  /// Resolves one required group and its dependencies for this draw or dispatch.
+  /// The returned record remains live during validation under the device's thread affinity.
+  /// @param index Required group index. @param operation Operation name for diagnostics.
+  Result<const Device::BindGroupRecord*> validateBoundBindGroup(uint32_t index,
+                                                                std::string_view operation);
 
   /// Resets the per-pass binding state a begin or end transitions through.
   void resetPassBindings();
@@ -359,6 +365,7 @@ private:
 
   Extent2d passExtent_;
   std::vector<TextureFormat> passAttachmentFormats_;
+  std::vector<ResourceIdentity> passAttachmentTextures_;
   std::optional<BoundPipeline> currentPipeline_;
   std::array<std::optional<BoundVertexBuffer>, kMaxVertexBuffers> boundVertexBuffers_;
   std::array<std::optional<BoundBindGroup>, kMaxBindGroups> boundBindGroups_;
