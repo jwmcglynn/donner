@@ -34,12 +34,13 @@ struct VulkanApi;
  * baseline.
  *
  * Memory model (documented simplification for this slice): every buffer lives in
- * HOST_VISIBLE | HOST_COHERENT memory and stays persistently mapped, so queue writes are a
- * `memcpy` and readback needs no staging. Which allocation a buffer is bound into is the
- * allocator's decision, behind the seam in VulkanBufferAllocator.h: one dedicated allocation per
- * buffer today, with a suballocating implementation replaceable there rather than at every call
- * site, once measurement says the driver's allocation-count cap is the constraint worth spending
- * complexity on. Such a memory type is guaranteed by the Vulkan
+ * HOST_VISIBLE | HOST_COHERENT memory and stays persistently mapped. Queue writes wait up to
+ * five seconds for that buffer's prior submission before copying; timeout leaves its bytes
+ * unchanged. Idle buffers copy directly, and readback needs no staging. Which allocation a buffer
+ * is bound into is the allocator's decision, behind the seam in VulkanBufferAllocator.h: one
+ * dedicated allocation per buffer today, with a suballocating implementation replaceable there
+ * rather than at every call site, once measurement says the driver's allocation-count cap is the
+ * constraint worth spending complexity on. Such a memory type is guaranteed by the Vulkan
  * specification ("Device Memory": at least one memory type has both HOST_VISIBLE and
  * HOST_COHERENT), and both the CI software rasterizer and desktop GPUs expose it. Textures are
  * DEVICE_LOCAL (when available) with staged uploads through a transient host-visible buffer and

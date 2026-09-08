@@ -2234,10 +2234,22 @@ Status VulkanDevice::onWriteBuffer(uint32_t slotIndex, uint64_t offsetBytes,
     return GpuError{GpuErrorType::InvalidState,
                     std::format("buffer slot {} has no Vulkan buffer", slotIndex)};
   }
-  if (!data.empty()) {
-    std::memcpy(static_cast<uint8_t*>(record->allocation.mapped) + offsetBytes, data.data(),
-                data.size());
+  if (impl_->hasError()) {
+    return GpuError{GpuErrorType::InvalidState, lastErrorForTest()};
   }
+  if (data.empty()) {
+    return OkStatus();
+  }
+  const uint64_t lastUse = bufferLastUseSerial(slotIndex);
+  if (lastUse > impl_->completedSerialValue && !waitForSerial(lastUse, 5.0)) {
+    const std::string error = lastErrorForTest();
+    return GpuError{GpuErrorType::InvalidState,
+                    error.empty()
+                        ? std::format("writeBuffer timed out waiting for submission {}", lastUse)
+                        : error};
+  }
+  std::memcpy(static_cast<uint8_t*>(record->allocation.mapped) + offsetBytes, data.data(),
+              data.size());
   return OkStatus();
 }
 
