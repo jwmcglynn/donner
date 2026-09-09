@@ -1786,6 +1786,12 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   /// never on hit. Returns an invalid texture on device failure.
   gpu::Texture acquireTexture(const gpu::TextureDescriptor& desc) {
     if (!texturePool || !reserveTextureSurface(desc.size, desc.format)) {
+      std::cerr << "Filter surface refused label=" << desc.label.str()
+                << " width=" << desc.size.width << " height=" << desc.size.height
+                << " texelBytes=" << gpu::TextureFormatBytesPerTexel(desc.format)
+                << " retained=" << surfaceBudget->bytes() << " count=" << surfaceBudget->surfaces()
+                << " filterRetained=" << filterExecutionBudget->retainedBytes()
+                << " filterActive=" << filterExecutionBudget->activeGpuReservations() << std::endl;
       return gpu::Texture{};
     }
     return texturePool->acquire(desc);
