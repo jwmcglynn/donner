@@ -995,9 +995,9 @@ std::vector<uint8_t> RunInputOutputUniformProgram(const wgpu::Device& device,
   const std::span<const uint8_t> clipBytes(reinterpret_cast<const uint8_t*>(clip), sizeof(clip));
   if (!RecordInputOutputUniformProgram(device, queue, encoder, wgsl, source, intermediate, uniforms,
                                        workgroupSize, transferSamples) ||
-      !RecordInputOutputUniformProgram(device, queue, encoder, resolveWgsl.result(), intermediate,
-                                       destination, clipBytes,
-                                       programs::kSubregionClipWorkgroupSize)) {
+      !RecordInputOutputUniformProgram(
+          device, queue, encoder, resolveWgsl.result(), intermediate, destination, clipBytes,
+          programs::kSubregionClipWorkgroupSize, programs::ColorTransferSamples())) {
     return {};
   }
 

@@ -657,7 +657,12 @@ enum class FilterMemoryModel : std::uint8_t {
  *
  * This rejects attacker-controlled graphs before allocating per-node buffers or starting
  * convolution loops. The estimate is intentionally conservative: GPU primitives may need up to
- * four intermediate RGBA textures, while the CPU backend retains every named float result.
+ * reusable float working textures, while the CPU backend retains every named float result.
+ * @param graph Ordered graph. @param pixelCount Total pixels visited, including repeated halos.
+ * @param memoryModel Backend retention model. @param workUnitsOut Receives bounded work.
+ * @param intermediateBytesOut Receives allocation-byte bound, excluding caller-owned captures.
+ * @param memoryPixels Working surface pixels; defaults to pixelCount for untiled execution.
+ * @param executions Repetitions sharing working textures but consuming distinct parameter slots.
  */
 inline bool FilterGraphExecutionCost(const FilterGraph& graph, std::uint64_t pixelCount,
                                      FilterMemoryModel memoryModel, std::uint64_t& workUnitsOut,
