@@ -230,7 +230,9 @@ struct FilterResourceArena {
             return (value.srgb == texture || value.linear == texture) &&
                    (live(value.srgb) || live(value.linear));
           });
-      owned.available = !live(texture) && !representationIsLive;
+      // Queue uploads can precede earlier reads still recorded in the host encoder.
+      owned.available = !gpu::HasAllFlags(owned.desc.usage, gpu::TextureUsage::CopyDst) &&
+                        !live(texture) && !representationIsLive;
     }
   }
 
@@ -3188,13 +3190,18 @@ wgpu::Texture GeodeFilterEngine::applyMorphology(
   constexpr int kMaximumRadiusPerPass = 31;
   const std::array<int, 2> radii{std::max(pixelRadiusX, 0), std::max(pixelRadiusY, 0)};
   constexpr const char* kLabels[] = {"FilterMorphologyPassX", "FilterMorphologyPassY"};
+  std::array<wgpu::Texture, 2> scratch{};
+  size_t scratchIndex = 0;
   wgpu::Texture current = input;
   for (uint32_t axis = 0; axis < radii.size(); ++axis) {
     int remaining = radii[axis];
     while (remaining > 0) {
       const int radius = std::min(remaining, kMaximumRadiusPerPass);
-      wgpu::Texture output = createIntermediateTexture(arena, device_.device(), width, height,
-                                                       "FilterMorphologyOutput");
+      wgpu::Texture& output = scratch[scratchIndex];
+      if (!output) {
+        output = createIntermediateTexture(arena, device_.device(), width, height,
+                                           "FilterMorphologyOutput");
+      }
       if (!output) {
         return {};
       }
@@ -3208,6 +3215,7 @@ wgpu::Texture GeodeFilterEngine::applyMorphology(
                                  morphologyPipeline_.get(), current, output, uniform.buffer,
                                  uniform.offset, sizeof(params), kLabels[axis]);
       current = output;
+      scratchIndex = (scratchIndex + 1) % scratch.size();
       remaining -= radius;
     }
   }

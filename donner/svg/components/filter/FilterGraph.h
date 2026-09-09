@@ -2,6 +2,7 @@
 /// @file
 
 #include <algorithm>
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -517,10 +518,147 @@ struct FilterGraph {
   [[nodiscard]] bool empty() const { return nodes.empty(); }
 };
 
+/// Conservative resource layout for the live float filter execution strategy.
+struct GpuFilterWorkingSet {
+  std::uint64_t floatTextures = 0;
+  std::uint64_t imageBytes = 0;
+  std::uint64_t uniformBytes = 0;
+  std::uint64_t runtimeUniformBytes = 0;
+  std::uint64_t standaloneBufferBytes = 0;
+};
+
+/// Minimum allocation of each persistent parameter arena.
+inline constexpr std::uint64_t kGpuFilterParameterBlockBytes = 64 * 1024;
+/// Two 4096-entry float transfer tables retained by the filter engine.
+inline constexpr std::uint64_t kGpuFilterTransferTableBytes = 2 * 4096 * sizeof(float);
+
+/// Bounds all allocations when a growable parameter arena consumes a batch of slots.
+/// @param capacity Current block size. @param used Bytes already used in that block.
+/// @param requested Conservative byte demand including slot-boundary padding.
+inline std::uint64_t GpuFilterParameterGrowthBound(std::uint64_t capacity, std::uint64_t used,
+                                                   std::uint64_t requested) {
+  if (requested == 0 || (used <= capacity && requested <= capacity - used)) {
+    return 0;
+  }
+  if (capacity > kMaximumFilterFrameBytes / 2 || requested > kMaximumFilterFrameBytes) {
+    return kMaximumFilterFrameBytes + 1;
+  }
+  std::uint64_t largest = std::max(capacity * 2, kGpuFilterParameterBlockBytes);
+  while (largest < requested) {
+    if (largest > kMaximumFilterFrameBytes / 2) {
+      return kMaximumFilterFrameBytes + 1;
+    }
+    largest *= 2;
+  }
+  // Every earlier block in geometric growth totals less than the largest block.
+  return largest > kMaximumFilterFrameBytes / 2 ? kMaximumFilterFrameBytes + 1 : largest * 2;
+}
+
+/// Derives a byte-format-aware bound without allocating or changing the CPU filter model.
+/// @param graph Ordered filter graph. @param result Receives the resource layout on success.
+inline bool ComputeGpuFilterWorkingSet(const FilterGraph& graph, GpuFilterWorkingSet& result) {
+  if (graph.nodes.size() > kMaximumFilterGraphNodes) {
+    return false;
+  }
+  result = {};
+  std::array<std::size_t, kMaximumFilterGraphNodes> lastUse{};
+  std::array<std::size_t, kMaximumFilterGraphNodes> nextDefinition{};
+  nextDefinition.fill(graph.nodes.size());
+  bool sourceAlpha = false;
+  for (std::size_t producer = 0; producer < graph.nodes.size(); ++producer) {
+    const auto& name = graph.nodes[producer].result;
+    for (const FilterInput& input : graph.nodes[producer].inputs) {
+      const auto* standard = std::get_if<FilterStandardInput>(&input.value);
+      sourceAlpha |= standard && *standard == FilterStandardInput::SourceAlpha;
+    }
+    if (!name) {
+      continue;
+    }
+    for (std::size_t consumer = producer + 1; consumer < graph.nodes.size(); ++consumer) {
+      const FilterNode& node = graph.nodes[consumer];
+      if (node.result == name && nextDefinition[producer] == graph.nodes.size()) {
+        nextDefinition[producer] = consumer;
+      }
+      for (const FilterInput& input : node.inputs) {
+        if (const auto* named = std::get_if<FilterInput::Named>(&input.value);
+            named && named->name == *name) {
+          lastUse[producer] = consumer;
+        }
+      }
+    }
+  }
+
+  namespace fp = filter_primitive;
+  for (std::size_t index = 0; index < graph.nodes.size(); ++index) {
+    const FilterNode& node = graph.nodes[index];
+    std::uint64_t namedValues = 0;
+    for (std::size_t prior = 0; prior < index; ++prior) {
+      namedValues +=
+          graph.nodes[prior].result && lastUse[prior] >= index && nextDefinition[prior] >= index;
+    }
+    std::uint64_t scratch = 2;  // Primitive output and node clip.
+    if (std::holds_alternative<fp::GaussianBlur>(node.primitive) ||
+        std::holds_alternative<fp::Morphology>(node.primitive)) {
+      scratch = 3;  // Two ping-pong textures and a possible separate clip.
+    } else if (std::holds_alternative<fp::DropShadow>(node.primitive)) {
+      scratch = 4;  // Blur pair, shadow composition, and clip.
+    } else if (std::holds_alternative<fp::Merge>(node.primitive)) {
+      if (node.inputs.size() > kMaximumFilterMergeInputs) {
+        return false;
+      }
+      scratch = std::max<std::uint64_t>(2, node.inputs.size());
+    }
+    // SourceGraphic may need one float representation; SourceAlpha and retained logical values
+    // may need both color representations. The previous output can also be unnamed.
+    result.floatTextures =
+        std::max(result.floatTextures,
+                 1 + (sourceAlpha ? 2u : 0u) + namedValues * 2 + (index ? 2u : 0u) + scratch);
+    result.runtimeUniformBytes += 8192;
+    const bool rawUniform = std::holds_alternative<fp::GaussianBlur>(node.primitive) ||
+                            std::holds_alternative<fp::Blend>(node.primitive) ||
+                            std::holds_alternative<fp::Morphology>(node.primitive) ||
+                            std::holds_alternative<fp::ComponentTransfer>(node.primitive) ||
+                            std::holds_alternative<fp::DisplacementMap>(node.primitive) ||
+                            std::holds_alternative<fp::DropShadow>(node.primitive) ||
+                            std::holds_alternative<fp::Image>(node.primitive) ||
+                            std::holds_alternative<fp::Tile>(node.primitive);
+    if (rawUniform) {
+      result.uniformBytes += 8192;
+    }
+    if (const auto* transfer = std::get_if<fp::ComponentTransfer>(&node.primitive)) {
+      for (const auto* function :
+           {&transfer->funcR, &transfer->funcG, &transfer->funcB, &transfer->funcA}) {
+        if (function->tableValues.size() > kMaximumFilterTableValues) {
+          return false;
+        }
+        result.uniformBytes += function->tableValues.size() * sizeof(float) * 2;
+      }
+    }
+    if (const auto* image = std::get_if<fp::Image>(&node.primitive)) {
+      const std::uint64_t bytes = std::max<std::uint64_t>(4, image->imageDataSize());
+      if (bytes > kMaximumFilterIntermediateBytes - result.imageBytes) {
+        return false;
+      }
+      result.imageBytes += bytes;
+    }
+    if (std::holds_alternative<fp::Turbulence>(node.primitive)) {
+      result.standaloneBufferBytes += 64 * 1024;
+    } else if (std::holds_alternative<fp::ConvolveMatrix>(node.primitive) ||
+               std::holds_alternative<fp::DiffuseLighting>(node.primitive) ||
+               std::holds_alternative<fp::SpecularLighting>(node.primitive)) {
+      result.standaloneBufferBytes += 1024;
+    }
+  }
+  if (!graph.empty()) {
+    result.runtimeUniformBytes += 1024;  // SourceAlpha and final conversion/resolve parameters.
+  }
+  return true;
+}
+
 /// Intermediate-retention behavior used to estimate backend memory before filter execution.
 enum class FilterMemoryModel : std::uint8_t {
   CpuFloatNamedResults,  ///< TinySkia retains named float RGBA results (16 bytes per pixel).
-  GpuAllNodes,           ///< Geode may retain several RGBA textures for every graph node.
+  GpuAllNodes,           ///< Geode retains live float values and reusable node scratch.
 };
 
 /**
@@ -666,33 +804,28 @@ inline bool FilterGraphExecutionCost(const FilterGraph& graph, std::uint64_t pix
       priorNamedResults += namedResultCopy;
     }
   } else {
-    // Geode's arena retains per-node textures and every merge conversion and accumulator until
-    // execution completes.
-    retainedBuffers = 2 + totalMergeInputs * 2;
-    for (const FilterNode& node : graph.nodes) {
-      if (std::holds_alternative<filter_primitive::GaussianBlur>(node.primitive)) {
-        const bool linearRgb =
-            node.colorInterpolationFilters.value_or(graph.colorInterpolationFilters) !=
-            ColorInterpolationFilters::SRGB;
-        // A two-axis box blur retains up to six pass textures. The default linearRGB path also
-        // retains its input and output color-conversion textures, and every node retains its
-        // subregion-clipped output in the frame arena.
-        retainedBuffers += linearRgb ? 9 : 7;
-      } else if (std::holds_alternative<filter_primitive::DropShadow>(node.primitive)) {
-        retainedBuffers += 8;
-      } else if (const auto* morphology =
-                     std::get_if<filter_primitive::Morphology>(&node.primitive);
-                 morphology && (morphology->radiusX > 0.0 || morphology->radiusY > 0.0)) {
-        retainedBuffers += kMaximumFilterMorphologyRetainedBuffers;
-      } else {
-        // Linear two-input primitives retain up to four conversion/primitive textures, followed
-        // by the mandatory per-node subregion clip.
-        retainedBuffers += 5;
-      }
+    GpuFilterWorkingSet layout;
+    if (!ComputeGpuFilterWorkingSet(graph, layout)) {
+      return false;
     }
+    const std::uint64_t bytesPerPixel = layout.floatTextures * 16 + (graph.empty() ? 0 : 4);
+    const std::uint64_t parameters =
+        GpuFilterParameterGrowthBound(0, 0, layout.uniformBytes) +
+        GpuFilterParameterGrowthBound(0, 0, layout.runtimeUniformBytes) +
+        layout.standaloneBufferBytes + kGpuFilterTransferTableBytes;
+    if (parameters > kMaximumFilterIntermediateBytes ||
+        layout.imageBytes > kMaximumFilterIntermediateBytes - parameters ||
+        (bytesPerPixel &&
+         pixelCount >
+             (kMaximumFilterIntermediateBytes - parameters - layout.imageBytes) / bytesPerPixel)) {
+      return false;
+    }
+    workUnitsOut = workUnits;
+    intermediateBytesOut =
+        pixelCount == 0 ? 0 : pixelCount * bytesPerPixel + layout.imageBytes + parameters;
+    return true;
   }
-  const std::uint64_t bytesPerPixel =
-      memoryModel == FilterMemoryModel::CpuFloatNamedResults ? 16 : 4;
+  constexpr std::uint64_t bytesPerPixel = 16;
   if (retainedBuffers != 0 &&
       (pixelCount > kMaximumFilterIntermediateBytes / bytesPerPixel / retainedBuffers)) {
     return false;
