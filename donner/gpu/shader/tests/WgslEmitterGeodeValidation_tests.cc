@@ -962,9 +962,20 @@ TEST(WgslEmitterGeodeValidation, OffsetRunsOnTheDeviceAndMatchesTheCpuPath) {
     float dx;
     float dy;
   };
-  const Shift shifts[] = {{0.0f, 0.0f},    {2.0f, -3.0f},  {0.5f, -0.5f}, {-0.5f, 0.5f},
-                          {2.5f, -2.5f},   {-2.5f, 2.5f},  {3.5f, -3.5f}, {0.4999f, -0.4999f},
-                          {0.5001f, 1.5f}, {-1.5f, -0.5f}, {12.5f, 0.0f}, {0.0f, -12.5f}};
+  const Shift shifts[] = {{0.0f, 0.0f},
+                          {2.0f, -3.0f},
+                          {0.5f, -0.5f},
+                          {-0.5f, 0.5f},
+                          {2.5f, -2.5f},
+                          {-2.5f, 2.5f},
+                          {3.5f, -3.5f},
+                          {0.4999f, -0.4999f},
+                          {0.5001f, 1.5f},
+                          {-1.5f, -0.5f},
+                          {12.5f, 0.0f},
+                          {0.0f, -12.5f},
+                          {std::nextafter(0.5f, 0.0f), std::nextafter(-0.5f, 0.0f)},
+                          {std::nextafter(-0.5f, 0.0f), std::nextafter(0.5f, 0.0f)}};
 
   for (const Shift& shift : shifts) {
     const std::vector<uint8_t> texels = RunOffsetProgram(
