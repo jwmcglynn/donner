@@ -200,6 +200,20 @@ TEST_F(GeodeFilterEngineTest, UnusedNamedResultsDoNotRetainTheirIntermediates) {
   EXPECT_THAT(allocator_->retainedTextureBytes, testing::Le(16u * (3u * 16u + 4u)));
 }
 
+TEST_F(GeodeFilterEngineTest, LargeMorphologyUsesTwoScratchTextures) {
+  svg::components::FilterGraph graph;
+  graph.colorInterpolationFilters = svg::ColorInterpolationFilters::SRGB;
+  svg::components::FilterNode node;
+  node.primitive = svg::components::filter_primitive::Morphology{
+      .op = svg::components::filter_primitive::Morphology::Operator::Dilate,
+      .radiusX = 255,
+      .radiusY = 255};
+  graph.nodes.push_back(node);
+  runGraph(graph, "");
+  EXPECT_THAT(allocator_->allocations, testing::Le(4u));
+  EXPECT_THAT(allocator_->retainedTextureBytes, testing::Le(16u * (3u * 16u + 4u)));
+}
+
 TEST_F(GeodeFilterEngineTest, GpuPreflightCoversTheTexturesActuallyRetained) {
   const auto graph = MakeGraph(false);
   runGraph(graph, "");

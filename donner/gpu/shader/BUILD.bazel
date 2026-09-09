@@ -396,6 +396,7 @@ donner_cc_test(
         "//donner/base",
         "//donner/base:gtest_timeout_main",
         "//donner/editor/tests:bitmap_golden_compare",
+        "//donner/svg/components/filter:components",
         "//donner/svg/parser",
         "//donner/svg/renderer:renderer_geode",
         "//donner/svg/renderer:renderer_tiny_skia",
