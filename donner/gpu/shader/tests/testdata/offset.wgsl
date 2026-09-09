@@ -14,10 +14,11 @@ struct OffsetParams {
 fn round_half_away_from_zero(x: f32) -> f32 {
   let magnitude = abs(x);
   let integral = floor(magnitude);
+  let direction = sign(x);
   if (((magnitude - integral) >= 0.5f)) {
-    return (sign(x) * (integral + 1f));
+    return (direction * (integral + 1f));
   }
-  return (sign(x) * integral);
+  return (direction * integral);
 }
 
 @compute @workgroup_size(8, 8, 1)
