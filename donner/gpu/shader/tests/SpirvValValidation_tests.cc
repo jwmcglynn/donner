@@ -27,6 +27,7 @@
 #include "donner/gpu/shader/programs/SnapshotUnpremultiply.h"
 #include "donner/gpu/shader/programs/SolidFill.h"
 #include "donner/gpu/shader/programs/SubregionClip.h"
+#include "donner/gpu/shader/tests/FloatStorageModule.h"
 #include "donner/gpu/shader/tests/MathPrimitiveCoverageModule.h"
 #include "donner/gpu/shader/tests/ReductionCoverageModule.h"
 #include "donner/gpu/shader/tests/ShaderTestUtils.h"
@@ -248,6 +249,10 @@ TEST(SpirvValValidation, EmittedMathPrimitivesPassVulkan11Validation) {
   // types the extended instruction set actually declares for them.
   const std::string spirvVal = SpirvVal();
   ExpectValidatesForVulkan11(spirvVal, BuildMathPrimitiveModule(), "math_primitives.spv");
+}
+
+TEST(SpirvValValidation, FloatStorageTexturePassesVulkan11Validation) {
+  ExpectValidatesForVulkan11(SpirvVal(), BuildFloatStorageModule(), "float_storage.spv");
 }
 
 TEST(SpirvValValidation, NegativeControlDetectsAMalformedModule) {

@@ -29,6 +29,7 @@
 #include "donner/gpu/shader/programs/Offset.h"
 #include "donner/gpu/shader/programs/SolidFill.h"
 #include "donner/gpu/shader/programs/SubregionClip.h"
+#include "donner/gpu/shader/tests/FloatStorageModule.h"
 #include "donner/gpu/shader/tests/MathPrimitiveCoverageModule.h"
 #include "donner/gpu/shader/tests/ShaderTestUtils.h"
 #include "donner/svg/renderer/geode/GeodeCallbackState.h"
@@ -217,6 +218,27 @@ void CreateSolidFillPipeline(const wgpu::Device& device, const wgpu::ShaderModul
     // observes failure through the uncaptured-error marker instead.
     EXPECT_TRUE(static_cast<bool>(pipeline)) << "Render pipeline creation returned null";
   }
+}
+
+TEST(WgslEmitterGeodeValidation, FloatStorageTexturePassesRendererPipelineValidation) {
+  auto device = donner::geode::GeodeDevice::CreateHeadless();
+  ASSERT_THAT(device, testing::NotNull());
+  const auto module = BuildFloatStorageModule();
+  ASSERT_THAT(module, HasShaderResult());
+  const auto wgsl = EmitWgsl(module.result());
+  ASSERT_THAT(wgsl, HasShaderResult());
+  testing::internal::CaptureStderr();
+  donner::geode::ScopedWgpuHandle<wgpu::ShaderModule> shader(
+      CreateModuleFromWgsl(device->device(), wgsl.result()));
+  wgpu::ComputePipelineDescriptor descriptor{};
+  descriptor.compute.module = shader.get();
+  descriptor.compute.entryPoint = donner::geode::wgpuLabel("cs_main");
+  donner::geode::ScopedWgpuHandle<wgpu::ComputePipeline> pipeline(
+      device->device().createComputePipeline(descriptor));
+  const std::string errors = testing::internal::GetCapturedStderr();
+  EXPECT_THAT(static_cast<bool>(shader.get()), testing::IsTrue());
+  EXPECT_THAT(static_cast<bool>(pipeline.get()), testing::IsTrue());
+  EXPECT_THAT(errors, Not(HasSubstr(kErrorMarker)));
 }
 
 TEST(WgslEmitterGeodeValidation, EmittedSolidFillPassesRendererValidation) {

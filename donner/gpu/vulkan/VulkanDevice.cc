@@ -82,6 +82,7 @@ VkFormat ToVkFormat(TextureFormat format) {
     case TextureFormat::RGBA8Unorm: return VK_FORMAT_R8G8B8A8_UNORM;
     case TextureFormat::BGRA8Unorm: return VK_FORMAT_B8G8R8A8_UNORM;
     case TextureFormat::R8Unorm: return VK_FORMAT_R8_UNORM;
+    case TextureFormat::RGBA32Float: return VK_FORMAT_R32G32B32A32_SFLOAT;
   }
   UTILS_RELEASE_ASSERT_MSG(false, "validated TextureFormat out of range");
   return VK_FORMAT_R8G8B8A8_UNORM;
@@ -202,7 +203,8 @@ VkDescriptorType ToVkDescriptorType(BindingType type) {
   switch (type) {
     case BindingType::UniformBuffer: return VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     case BindingType::ReadOnlyStorageBuffer: return VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    case BindingType::SampledTexture2dFloat: return VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+    case BindingType::SampledTexture2dFloat:
+    case BindingType::SampledTexture2dUnfilterableFloat: return VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
     case BindingType::FilteringSampler: return VK_DESCRIPTOR_TYPE_SAMPLER;
     case BindingType::WriteOnlyStorageTexture2d: return VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
   }

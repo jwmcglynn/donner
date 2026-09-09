@@ -315,6 +315,17 @@ function fsMain stage=fragment
   EXPECT_THAT(module.serialize(), testing::Eq(kExpected));
 }
 
+TEST(IrSerializationTests, RecordsFloatStorageWithoutLosingItsFormat) {
+  ModuleBuilder builder;
+  EXPECT_THAT(
+      builder.addWriteOnlyStorageTexture2d(0, 0, "output", StorageTextureFormat::Rgba32Float),
+      IsShaderOk());
+  const auto module = builder.build();
+  ASSERT_THAT(module, HasShaderResult());
+  EXPECT_THAT(module.result().serialize(),
+              testing::HasSubstr("output: texture_storage_2d<rgba32float, write>"));
+}
+
 TEST(IrSerializationTests, ComputeEntryPointRecordsStageWorkgroupSizeAndTextureStore) {
   ModuleBuilder builder;
   EXPECT_THAT(

@@ -80,9 +80,10 @@ constexpr bool HasAllFlags(T value, T flags) {
 
 /// Texture formats used by Donner render targets, masks, and image uploads.
 enum class TextureFormat : uint8_t {
-  RGBA8Unorm,  //!< 8-bit RGBA, unsigned normalized. Default render target format.
-  BGRA8Unorm,  //!< 8-bit BGRA, unsigned normalized. Editor surface format.
-  R8Unorm,     //!< 8-bit single channel. Coverage / clip-mask textures.
+  RGBA8Unorm,   //!< 8-bit RGBA, unsigned normalized. Default render target format.
+  BGRA8Unorm,   //!< 8-bit BGRA, unsigned normalized. Editor surface format.
+  R8Unorm,      //!< 8-bit single channel. Coverage / clip-mask textures.
+  RGBA32Float,  //!< 32-bit float RGBA. Filter intermediates.
 };
 
 /// Texture usage flags. Combinable with `|`.
@@ -292,6 +293,7 @@ enum class BindingType : uint8_t {
   SampledTexture2dFloat,      //!< Sampled 2D float texture binding.
   FilteringSampler,           //!< Filtering sampler binding.
   WriteOnlyStorageTexture2d,  //!< Write-only 2D storage texture binding (compute stage only).
+  SampledTexture2dUnfilterableFloat,  //!< Float texture read with texel loads, without filtering.
 };
 
 /// Load operation for a render pass color attachment.

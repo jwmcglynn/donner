@@ -9,6 +9,7 @@
 #include <array>
 #include <chrono>
 #include <cstdint>
+#include <cstring>
 #include <memory>
 #include <span>
 #include <utility>
@@ -235,6 +236,45 @@ TEST_F(MetalQueueWritesTest, PartialTextureUploadsPreserveOtherPixelsAndCallerPi
                                            0, 0, 255, 255, 255, 0, 0, 255};
   expectPixels(first, red, "partial_texture_before_update");
   expectPixels(second, columns, "partial_texture_after_update");
+}
+
+TEST_F(MetalQueueWritesTest, StagedFloatTextureUploadsPreserveAllChannelsAndCallerPitch) {
+  const Texture texture = GetResultOrFail(device_->createTexture(TextureDescriptor{
+      "float", {2, 2}, TextureFormat::RGBA32Float, TextureUsage::CopySrc | TextureUsage::CopyDst}));
+  const std::array<float, 4> initialColor{0.125f, 0.25f, 0.5f, 0.75f};
+  const std::array<float, 4> updateColor{0.25f, 0.375f, 0.625f, 0.875f};
+  std::array<uint8_t, 512> initial{};
+  for (size_t offset : {0u, 16u, 256u, 272u}) {
+    std::memcpy(initial.data() + offset, initialColor.data(), sizeof(initialColor));
+  }
+  ASSERT_THAT(device_->writeTexture(texture, initial, {0, 256, 2}, {2, 2}), IsOk());
+  ASSERT_THAT(device_->pauseSubmissionsForTest(), IsOk());
+  const Capture first = captureTexture(texture, {2, 2});
+  std::array<uint8_t, 1024> update{};
+  for (size_t offset : {16u, 528u}) {
+    std::memcpy(update.data() + offset, updateColor.data(), sizeof(updateColor));
+  }
+  ASSERT_THAT(device_->writeTexture(texture, update, {16, 512, 2}, {1, 2}), IsOk());
+  const Capture second = captureTexture(texture, {2, 2});
+  device_->resumeSubmissionsForTest();
+  ASSERT_THAT(device_->waitForSerial(second.serial, 5.0), testing::IsTrue());
+  const auto beforeBytes = device_->readBackBuffer(first.readback);
+  const auto afterBytes = device_->readBackBuffer(second.readback);
+  ASSERT_THAT(beforeBytes, HasResult());
+  ASSERT_THAT(afterBytes, HasResult());
+  ASSERT_THAT(beforeBytes.result(), testing::SizeIs(testing::Ge(288u)));
+  ASSERT_THAT(afterBytes.result(), testing::SizeIs(testing::Ge(288u)));
+  std::array<float, 16> before{};
+  std::array<float, 16> after{};
+  for (size_t row = 0; row < 2; ++row) {
+    std::memcpy(before.data() + row * 8, beforeBytes.result().data() + row * 256, 32);
+    std::memcpy(after.data() + row * 8, afterBytes.result().data() + row * 256, 32);
+  }
+  EXPECT_THAT(before, testing::ElementsAre(0.125f, 0.25f, 0.5f, 0.75f, 0.125f, 0.25f, 0.5f, 0.75f,
+                                           0.125f, 0.25f, 0.5f, 0.75f, 0.125f, 0.25f, 0.5f, 0.75f));
+  EXPECT_THAT(after,
+              testing::ElementsAre(0.25f, 0.375f, 0.625f, 0.875f, 0.125f, 0.25f, 0.5f, 0.75f, 0.25f,
+                                   0.375f, 0.625f, 0.875f, 0.125f, 0.25f, 0.5f, 0.75f));
 }
 
 TEST_F(MetalQueueWritesTest, AnUploadOnlySubmissionStillProtectsItsDestination) {

@@ -93,6 +93,20 @@ TEST_F(DeviceValidationTests, CreateTextureRejectsMultisample) {
               IsGpuErrorWithMessage(GpuErrorType::Unsupported, HasSubstr("sampleCount 4")));
 }
 
+TEST_F(DeviceValidationTests, FloatTexturesSupportComputeAndCopiesButNotRenderAttachments) {
+  EXPECT_THAT(device_.createTexture({"float",
+                                     {16, 16},
+                                     TextureFormat::RGBA32Float,
+                                     TextureUsage::Sampled | TextureUsage::StorageBinding |
+                                         TextureUsage::CopySrc | TextureUsage::CopyDst}),
+              HasResult());
+  EXPECT_THAT(device_.createTexture({"float",
+                                     {16, 16},
+                                     TextureFormat::RGBA32Float,
+                                     TextureUsage::RenderAttachment | TextureUsage::Sampled}),
+              IsGpuError(GpuErrorType::Unsupported));
+}
+
 TEST_F(DeviceValidationTests, CreateTextureRejectsUnknownFormat) {
   // An out-of-range format enum must fail closed instead of flowing into copy-size math
   // (TextureFormatBytesPerTexel returns 0 for unknown formats).
@@ -192,6 +206,32 @@ TEST_F(DeviceValidationTests, CreateBindGroupLayoutRejectsOutOfRangeBindingIndex
           "outOfRange",
           {BindGroupLayoutEntry{kMaxBindings, ShaderStage::Fragment, BindingType::UniformBuffer}}}),
       IsGpuError(GpuErrorType::LimitExceeded));
+}
+
+TEST_F(DeviceValidationTests, StorageTextureWritesAreComputeOnly) {
+  for (const ShaderStage visibility :
+       {ShaderStage::Vertex, ShaderStage::Fragment, ShaderStage::Vertex | ShaderStage::Compute,
+        ShaderStage::Fragment | ShaderStage::Compute}) {
+    SCOPED_TRACE(visibility);
+    EXPECT_THAT(device_.createBindGroupLayout(
+                    {"storage", {{0, visibility, BindingType::WriteOnlyStorageTexture2d}}}),
+                IsGpuErrorWithMessage(GpuErrorType::Unsupported, HasSubstr("compute-only")));
+  }
+  EXPECT_THAT(device_.createBindGroupLayout(
+                  {"storage", {{0, ShaderStage::Compute, BindingType::WriteOnlyStorageTexture2d}}}),
+              HasResult());
+}
+
+TEST_F(DeviceValidationTests, SampledTexturesRemainAvailableInEveryShaderStage) {
+  for (const BindingType type :
+       {BindingType::SampledTexture2dFloat, BindingType::SampledTexture2dUnfilterableFloat}) {
+    for (const ShaderStage visibility :
+         {ShaderStage::Vertex, ShaderStage::Fragment, ShaderStage::Compute}) {
+      SCOPED_TRACE(type);
+      SCOPED_TRACE(visibility);
+      EXPECT_THAT(device_.createBindGroupLayout({"sampled", {{0, visibility, type}}}), HasResult());
+    }
+  }
 }
 
 TEST_F(DeviceValidationTests, CreateBindGroupLayoutRejectsEmptyVisibility) {
@@ -394,6 +434,78 @@ TEST_F(BindGroupValidationTests, RejectsTextureViewWithoutSampledUsage) {
 
 // == createRenderPipeline =====================================================================
 
+class SampledTextureFormatTests : public DeviceValidationTests {
+protected:
+  BindGroupLayout makeLayout(BindingType type) {
+    return GetResultOrFail(
+        device_.createBindGroupLayout({"sampled", {{0, ShaderStage::Compute, type}}}));
+  }
+
+  Texture makeTexture(TextureFormat format, TextureUsage usage = TextureUsage::Sampled) {
+    return GetResultOrFail(device_.createTexture({"sampled", {4, 4}, format, usage}));
+  }
+};
+
+TEST_F(SampledTextureFormatTests, UnfilterableBindingAcceptsFloatAndNormalizedFormats) {
+  const BindGroupLayout layout = makeLayout(BindingType::SampledTexture2dUnfilterableFloat);
+  for (const TextureFormat format : {TextureFormat::RGBA32Float, TextureFormat::RGBA8Unorm,
+                                     TextureFormat::BGRA8Unorm, TextureFormat::R8Unorm}) {
+    SCOPED_TRACE(format);
+    const Texture texture = makeTexture(format);
+    const TextureView view = GetResultOrFail(device_.createTextureView(texture, {}));
+    EXPECT_THAT(device_.createBindGroup({"sampled", layout, {{0, TextureViewBinding{view}}}}),
+                HasResult());
+  }
+}
+
+TEST_F(SampledTextureFormatTests, FilteringFloatBindingRejectsFloat32Textures) {
+  const BindGroupLayout layout = makeLayout(BindingType::SampledTexture2dFloat);
+  const Texture texture = makeTexture(TextureFormat::RGBA32Float);
+  const TextureView view = GetResultOrFail(device_.createTextureView(texture, {}));
+  EXPECT_THAT(device_.createBindGroup({"sampled", layout, {{0, TextureViewBinding{view}}}}),
+              IsGpuErrorWithMessage(GpuErrorType::InvalidDescriptor, HasSubstr("unfilterable")));
+}
+
+TEST_F(SampledTextureFormatTests, UnfilterableBindingStillValidatesResourceKindAndUsage) {
+  const BindGroupLayout layout = makeLayout(BindingType::SampledTexture2dUnfilterableFloat);
+  const Buffer buffer = createUniformBuffer();
+  EXPECT_THAT(device_.createBindGroup({"sampled", layout, {{0, BufferBinding{buffer, 0, 16}}}}),
+              IsGpuError(GpuErrorType::InvalidDescriptor));
+  const Texture texture = makeTexture(TextureFormat::RGBA32Float, TextureUsage::StorageBinding);
+  const TextureView view = GetResultOrFail(device_.createTextureView(texture, {}));
+  EXPECT_THAT(device_.createBindGroup({"sampled", layout, {{0, TextureViewBinding{view}}}}),
+              IsGpuError(GpuErrorType::UsageMismatch));
+}
+
+TEST_F(SampledTextureFormatTests, UnfilterableBindingRejectsADestroyedTextureView) {
+  const BindGroupLayout layout = makeLayout(BindingType::SampledTexture2dUnfilterableFloat);
+  const Texture texture = makeTexture(TextureFormat::RGBA32Float);
+  TextureView view = GetResultOrFail(device_.createTextureView(texture, {}));
+  const TextureViewRef stale = view;
+  ASSERT_THAT(device_.destroyTextureView(std::move(view)), IsOk());
+  const TextureView replacement = GetResultOrFail(device_.createTextureView(texture, {}));
+  ASSERT_EQ(replacement.slotIndex(), stale.slotIndex());
+  ASSERT_NE(replacement.generation(), stale.generation());
+  EXPECT_THAT(device_.createBindGroup({"sampled", layout, {{0, TextureViewBinding{stale}}}}),
+              IsGpuError(GpuErrorType::InvalidHandle));
+}
+
+TEST_F(SampledTextureFormatTests, UnfilterableAndStorageBindingsCannotAliasOneTexture) {
+  const BindGroupLayout layout = GetResultOrFail(device_.createBindGroupLayout(
+      {"alias",
+       {{0, ShaderStage::Compute, BindingType::SampledTexture2dUnfilterableFloat},
+        {1, ShaderStage::Compute, BindingType::WriteOnlyStorageTexture2d,
+         TextureFormat::RGBA32Float}}}));
+  const Texture texture =
+      makeTexture(TextureFormat::RGBA32Float, TextureUsage::Sampled | TextureUsage::StorageBinding);
+  const TextureView sampled = GetResultOrFail(device_.createTextureView(texture, {}));
+  const TextureView storage = GetResultOrFail(device_.createTextureView(texture, {}));
+  EXPECT_THAT(
+      device_.createBindGroup(
+          {"alias", layout, {{0, TextureViewBinding{sampled}}, {1, TextureViewBinding{storage}}}}),
+      IsGpuError(GpuErrorType::InvalidDescriptor));
+}
+
 class RenderPipelineValidationTests : public DeviceValidationTests {
 protected:
   void SetUp() override {
@@ -419,6 +531,12 @@ protected:
 
 TEST_F(RenderPipelineValidationTests, AcceptsValidDescriptor) {
   EXPECT_THAT(device_.createRenderPipeline(validDescriptor()), HasResult());
+}
+
+TEST_F(RenderPipelineValidationTests, FloatRenderTargetsAreUnsupported) {
+  RenderPipelineDescriptor descriptor = validDescriptor();
+  descriptor.fragment.targets[0].format = TextureFormat::RGBA32Float;
+  EXPECT_THAT(device_.createRenderPipeline(descriptor), IsGpuError(GpuErrorType::Unsupported));
 }
 
 TEST_F(RenderPipelineValidationTests, RejectsAttributeBeyondStride) {
@@ -579,6 +697,27 @@ TEST_F(WriteTextureTests, AcceptsAlignedFullWrite) {
   EXPECT_THAT(device_.writeTexture(texture_, MakeBytes(kPaddedByteCount),
                                    TexelCopyBufferLayout{0, 256, 4}, Extent2d{4, 4}),
               IsOk());
+}
+
+TEST_F(WriteTextureTests, FloatTexelsUseTheirFullRowWidthAndAlignment) {
+  const Texture texture = GetResultOrFail(device_.createTexture(TextureDescriptor{
+      "float", Extent2d{17, 2}, TextureFormat::RGBA32Float, TextureUsage::CopyDst}));
+  // Two rows contain 272 bytes each, separated by a 512-byte aligned pitch.
+  constexpr size_t kBytes = 512 + 272;
+  EXPECT_THAT(device_.writeTexture(texture, MakeBytes(kBytes), TexelCopyBufferLayout{0, 512, 2},
+                                   Extent2d{17, 2}),
+              IsOk());
+  EXPECT_THAT(
+      device_.writeTexture(texture, MakeBytes(kBytes), TexelCopyBufferLayout{0, 256, 2},
+                           Extent2d{17, 2}),
+      IsGpuErrorWithMessage(GpuErrorType::InvalidDescriptor, HasSubstr("does not cover one row")));
+  EXPECT_THAT(device_.writeTexture(texture, MakeBytes(kBytes - 1), TexelCopyBufferLayout{0, 512, 2},
+                                   Extent2d{17, 2}),
+              IsGpuError(GpuErrorType::OutOfBounds));
+  EXPECT_THAT(device_.writeTexture(texture, MakeBytes(kBytes + 4), TexelCopyBufferLayout{4, 512, 2},
+                                   Extent2d{17, 2}),
+              IsGpuErrorWithMessage(GpuErrorType::InvalidDescriptor,
+                                    HasSubstr("not aligned to the 16-byte texel size")));
 }
 
 TEST_F(WriteTextureTests, RejectsMisalignedBytesPerRow) {
@@ -1143,6 +1282,13 @@ TEST_F(SurfaceTests, CapabilitiesComeFromTheSurface) {
   const SurfaceCapabilities caps = GetResultOrFail(device_.surfaceCapabilities(surface));
   EXPECT_THAT(caps.formats, testing::ElementsAre(TextureFormat::BGRA8Unorm));
   EXPECT_THAT(caps.presentModes, testing::ElementsAre(PresentMode::Fifo));
+}
+
+TEST_F(SurfaceTests, FloatFormatDoesNotBecomeAPresentationFormat) {
+  const Surface surface = metalSurface();
+  SurfaceConfiguration config = configuration();
+  config.format = TextureFormat::RGBA32Float;
+  EXPECT_THAT(device_.configureSurface(surface, config), IsGpuError(GpuErrorType::Unsupported));
 }
 
 TEST_F(SurfaceTests, ABackendWithoutPresentationReportsItUnsupported) {

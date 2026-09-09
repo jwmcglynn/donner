@@ -86,6 +86,15 @@ Status ValidateSamplerDescriptor(const SamplerDescriptor& descriptor) {
   return OkStatus();
 }
 
+/// Keeps floating-point filter intermediates out of rendering and presentation.
+Status ValidateRenderTargetFormat(TextureFormat format) {
+  if (format == TextureFormat::RGBA32Float) {
+    return Err(GpuErrorType::Unsupported,
+               "RGBA32Float supports sampled/storage textures and copies, not render targets");
+  }
+  return OkStatus();
+}
+
 /// Validates a \ref TextureDescriptor.
 Status ValidateTextureDescriptor(const TextureDescriptor& descriptor) {
   if (Status status = CheckEnum(descriptor.format, "TextureDescriptor.format"); status.hasError()) {
@@ -94,6 +103,11 @@ Status ValidateTextureDescriptor(const TextureDescriptor& descriptor) {
   if (Status status = CheckBitmask(descriptor.usage, "TextureDescriptor.usage");
       status.hasError()) {
     return status;
+  }
+  if (HasAllFlags(descriptor.usage, TextureUsage::RenderAttachment)) {
+    if (Status status = ValidateRenderTargetFormat(descriptor.format); status.hasError()) {
+      return status;
+    }
   }
   if (descriptor.size.width == 0 || descriptor.size.height == 0) {
     return Err(GpuErrorType::InvalidDescriptor,
@@ -202,6 +216,9 @@ Status ValidateColorTargets(const std::vector<ColorTargetState>& targets) {
   for (const ColorTargetState& target : targets) {
     if (Status status = CheckEnum(target.format, "ColorTargetState.format"); status.hasError()) {
       return std::move(status).error();
+    }
+    if (Status status = ValidateRenderTargetFormat(target.format); status.hasError()) {
+      return status;
     }
     if (Status status = CheckBitmask(target.writeMask, "ColorTargetState.writeMask");
         status.hasError()) {
@@ -837,12 +854,13 @@ Status Device::validateBufferBindingEntry(const BindGroupLayoutEntry& layoutEntr
                                     bufferRecord.result()->descriptor.byteSize);
 }
 
-Status Device::validateSampledTextureBindingEntry(const BindGroupEntry& entry) const {
+Status Device::validateSampledTextureBindingEntry(const BindGroupLayoutEntry& layoutEntry,
+                                                  const BindGroupEntry& entry) const {
   const TextureViewBinding* viewBinding = std::get_if<TextureViewBinding>(&entry.resource);
   if (viewBinding == nullptr) {
     return Err(GpuErrorType::InvalidDescriptor,
                std::format("BindGroupEntry binding {} must bind a texture view to match "
-                           "the layout type SampledTexture2dFloat",
+                           "the sampled-texture layout type",
                            entry.binding));
   }
   auto viewRecord = resolve(textureViews_, viewBinding->view, TextureViewTag::kName);
@@ -858,6 +876,13 @@ Status Device::validateSampledTextureBindingEntry(const BindGroupEntry& entry) c
                std::format("BindGroupEntry binding {}: texture view \"{}\" lacks the "
                            "Sampled usage",
                            entry.binding, viewRecord.result()->descriptor.label.str()));
+  }
+  if (viewedTexture.result()->descriptor.format == TextureFormat::RGBA32Float &&
+      layoutEntry.type != BindingType::SampledTexture2dUnfilterableFloat) {
+    return Err(GpuErrorType::InvalidDescriptor,
+               std::format("BindGroupEntry binding {}: RGBA32Float requires an unfilterable "
+                           "sampled-texture binding",
+                           entry.binding));
   }
   return OkStatus();
 }
@@ -919,7 +944,9 @@ Status Device::validateBindGroupEntryForLayout(const BindGroupLayoutEntry& layou
   switch (layoutEntry.type) {
     case BindingType::UniformBuffer:
     case BindingType::ReadOnlyStorageBuffer: return validateBufferBindingEntry(layoutEntry, entry);
-    case BindingType::SampledTexture2dFloat: return validateSampledTextureBindingEntry(entry);
+    case BindingType::SampledTexture2dFloat:
+    case BindingType::SampledTexture2dUnfilterableFloat:
+      return validateSampledTextureBindingEntry(layoutEntry, entry);
     case BindingType::WriteOnlyStorageTexture2d:
       return validateStorageTextureBindingEntry(layoutEntry, entry);
     case BindingType::FilteringSampler: return validateSamplerBindingEntry(entry);
@@ -932,7 +959,8 @@ void Device::collectBoundTextures(
     SmallVector<BoundTextureBinding, kMaxBindings>& sampledOut,
     SmallVector<BoundTextureBinding, kMaxBindings>& storageOut) const {
   for (const BindGroupLayoutEntry& layoutEntry : layoutEntries) {
-    const bool sampled = layoutEntry.type == BindingType::SampledTexture2dFloat;
+    const bool sampled = layoutEntry.type == BindingType::SampledTexture2dFloat ||
+                         layoutEntry.type == BindingType::SampledTexture2dUnfilterableFloat;
     const bool storage = layoutEntry.type == BindingType::WriteOnlyStorageTexture2d;
     if (!sampled && !storage) {
       continue;
@@ -955,31 +983,6 @@ void Device::collectBoundTextures(
   }
 }
 
-std::vector<Device::BoundTextureBinding> Device::collectBoundTextures(
-    const BindGroupDescriptor& descriptor, const std::vector<BindGroupLayoutEntry>& layoutEntries,
-    BindingType type) const {
-  std::vector<BoundTextureBinding> bound;
-  for (const BindGroupLayoutEntry& layoutEntry : layoutEntries) {
-    if (layoutEntry.type != type) {
-      continue;
-    }
-    const BindGroupEntry* entry = nullptr;
-    if (findBindGroupEntryForBinding(descriptor, layoutEntry, entry).hasError()) {
-      continue;  // Already reported by the per-binding pass.
-    }
-    const TextureViewBinding* viewBinding = std::get_if<TextureViewBinding>(&entry->resource);
-    if (viewBinding == nullptr) {
-      continue;  // Already reported by the per-binding pass.
-    }
-    const TextureViewRecord* view =
-        textureViews_.find(viewBinding->view.slotIndex(), viewBinding->view.generation());
-    if (view != nullptr) {
-      bound.push_back(BoundTextureBinding{layoutEntry.binding, view->textureIdentity});
-    }
-  }
-  return bound;
-}
-
 Status Device::validateNoTextureAliasing(
     const BindGroupDescriptor& descriptor,
     const std::vector<BindGroupLayoutEntry>& layoutEntries) const {
@@ -987,10 +990,9 @@ Status Device::validateNoTextureAliasing(
   // layout at a time, so a texture named by both a sampled and a storage-write binding is in the
   // wrong layout for one of them however the backend transitions it. Nothing this runtime serves
   // aliases a texture both ways inside one group, so the shape is rejected rather than modeled.
-  const std::vector<BoundTextureBinding> sampled =
-      collectBoundTextures(descriptor, layoutEntries, BindingType::SampledTexture2dFloat);
-  const std::vector<BoundTextureBinding> storage =
-      collectBoundTextures(descriptor, layoutEntries, BindingType::WriteOnlyStorageTexture2d);
+  SmallVector<BoundTextureBinding, kMaxBindings> sampled;
+  SmallVector<BoundTextureBinding, kMaxBindings> storage;
+  collectBoundTextures(descriptor, layoutEntries, sampled, storage);
 
   for (const BoundTextureBinding& sampledBinding : sampled) {
     for (const BoundTextureBinding& storageBinding : storage) {
@@ -1504,6 +1506,9 @@ Status ValidateNativeSurfaceHandle(const NativeSurfaceHandle& native) {
 Status ValidateSurfaceConfiguration(const SurfaceConfiguration& configuration) {
   if (Status status = CheckEnum(configuration.format, "SurfaceConfiguration.format");
       status.hasError()) {
+    return status;
+  }
+  if (Status status = ValidateRenderTargetFormat(configuration.format); status.hasError()) {
     return status;
   }
   if (Status status = CheckBitmask(configuration.usage, "SurfaceConfiguration.usage");

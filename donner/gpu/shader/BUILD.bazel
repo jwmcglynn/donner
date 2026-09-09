@@ -147,6 +147,17 @@ donner_cc_library(
     ],
 )
 
+donner_cc_library(
+    name = "float_storage_test_module",
+    testonly = 1,
+    hdrs = ["tests/FloatStorageModule.h"],
+    visibility = donner_internal_visibility(),
+    deps = [
+        ":programs",
+        ":shader",
+    ],
+)
+
 donner_cc_test(
     name = "shader_tests",
     srcs = [
@@ -197,6 +208,7 @@ donner_cc_test(
         "tests/testdata/subregion_clip.wgsl",
     ],
     deps = [
+        ":float_storage_test_module",
         ":module_interface",
         ":msl_emitter",
         ":programs",
@@ -260,6 +272,7 @@ donner_cc_test(
     target_compatible_with = ["@platforms//os:macos"],
     deps = [
         ":external_tool_gate",
+        ":float_storage_test_module",
         ":msl_emitter",
         ":programs",
         ":shader",
@@ -283,6 +296,7 @@ donner_cc_test(
     ],
     data = ["@spirv_tools//:spirv-val"],
     deps = [
+        ":float_storage_test_module",
         ":programs",
         ":shader",
         ":spirv_emitter",
@@ -308,6 +322,7 @@ donner_cc_test(
         "//conditions:default": ["@platforms//:incompatible"],
     }),
     deps = [
+        ":float_storage_test_module",
         ":programs",
         ":shader",
         ":wgsl_emitter",

@@ -193,8 +193,8 @@ constexpr uint32_t kCapabilityImageQuery = 50;
 constexpr uint32_t kImageOperandsLodMask = 0x2;
 constexpr uint32_t kDim2D = 1;
 constexpr uint32_t kImageFormatUnknown = 0;
-// Rgba8 is one of the storage-image formats every Vulkan implementation must support without
-// the StorageImageExtendedFormats capability.
+// These storage-image formats do not require StorageImageExtendedFormats.
+constexpr uint32_t kImageFormatRgba32f = 1;
 constexpr uint32_t kImageFormatRgba8 = 4;
 constexpr uint32_t kFunctionControlNone = 0;
 constexpr uint32_t kSelectionControlNone = 0;
@@ -734,6 +734,7 @@ uint32_t Emitter::typeStorageImage2d(StorageTextureFormat format) {
   uint32_t imageFormat = kImageFormatRgba8;
   switch (format) {
     case StorageTextureFormat::Rgba8Unorm: imageFormat = kImageFormatRgba8; break;
+    case StorageTextureFormat::Rgba32Float: imageFormat = kImageFormatRgba32f; break;
   }
   const std::string key = std::format("storageimage2d|{}", imageFormat);
   if (const uint32_t id = cached(key)) return id;
