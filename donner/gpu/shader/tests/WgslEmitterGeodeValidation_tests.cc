@@ -21,6 +21,7 @@
 #include <string>
 #include <vector>
 
+#include "donner/editor/tests/BitmapGoldenCompare.h"
 #include "donner/gpu/shader/WgslEmitter.h"
 #include "donner/gpu/shader/programs/ColorMatrix.h"
 #include "donner/gpu/shader/programs/FilterColorMatrix.h"
@@ -908,8 +909,9 @@ std::vector<uint8_t> RunOffsetProgram(const wgpu::Device& device, const wgpu::Qu
     wgpu::ComputePassEncoder pass = encoder.beginComputePass(passDesc);
     pass.setPipeline(pipeline);
     pass.setBindGroup(0, bindGroup, 0, nullptr);
-    pass.dispatchWorkgroups(kOffsetExtent / programs::kOffsetWorkgroupSize,
-                            kOffsetExtent / programs::kOffsetWorkgroupSize, 1);
+    const uint32_t groups =
+        (kOffsetExtent + programs::kOffsetWorkgroupSize - 1) / programs::kOffsetWorkgroupSize;
+    pass.dispatchWorkgroups(groups, groups, 1);
     pass.end();
   }
 
@@ -977,14 +979,19 @@ TEST(WgslEmitterGeodeValidation, OffsetRunsOnTheDeviceAndMatchesTheCpuPath) {
                           {std::nextafter(0.5f, 0.0f), std::nextafter(-0.5f, 0.0f)},
                           {std::nextafter(-0.5f, 0.0f), std::nextafter(0.5f, 0.0f)}};
 
+  size_t caseIndex = 0;
   for (const Shift& shift : shifts) {
     const std::vector<uint8_t> texels = RunOffsetProgram(
         geodeDevice->device(), geodeDevice->queue(), wgsl.result(), shift.dx, shift.dy);
     ASSERT_THAT(texels, testing::SizeIs(size_t{kOffsetExtent} * kOffsetExtent * 4u))
         << "dispatch failed for shift (" << shift.dx << ", " << shift.dy << ")";
-    EXPECT_THAT(texels, testing::ElementsAreArray(OffsetExpectedTexels(shift.dx, shift.dy)))
-        << "the device diverges from the CPU path for shift (" << shift.dx << ", " << shift.dy
-        << ")";
+    SCOPED_TRACE(testing::Message() << "shift (" << shift.dx << ", " << shift.dy << ")");
+    const svg::RendererBitmap actual{Vector2i(kOffsetExtent, kOffsetExtent), texels};
+    const svg::RendererBitmap expected{Vector2i(kOffsetExtent, kOffsetExtent),
+                                       OffsetExpectedTexels(shift.dx, shift.dy)};
+    editor::tests::CompareBitmapToBitmap(actual, expected,
+                                         "offset_case_" + std::to_string(caseIndex++),
+                                         editor::tests::PixelmatchIdentityParams());
   }
 }
 

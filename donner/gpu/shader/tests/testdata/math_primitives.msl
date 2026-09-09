@@ -10,7 +10,12 @@ T donner_msl_read(device const T* values, uint index, uint count) {
 }
 
 float round_half_away_from_zero(texture2d<float, access::write> outputTexture, device const float* values, constant uint* donner_msl_lengths, float x) {
-  return (sign(x) * floor((abs(x) + 0.5f)));
+  const float magnitude = abs(x);
+  const float integral = floor(magnitude);
+  if (((magnitude - integral) >= 0.5f)) {
+    return (sign(x) * (integral + 1.0f));
+  }
+  return (sign(x) * integral);
 }
 
 kernel void cs_main(uint3 gid [[thread_position_in_grid]], texture2d<float, access::write> outputTexture [[texture(0)]], device const float* values [[buffer(2)]], constant uint* donner_msl_lengths [[buffer(0)]]) {

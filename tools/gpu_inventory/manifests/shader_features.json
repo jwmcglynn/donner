@@ -252,6 +252,7 @@
         "abs",
         "array",
         "floor",
+        "if",
         "let",
         "pow",
         "return",
