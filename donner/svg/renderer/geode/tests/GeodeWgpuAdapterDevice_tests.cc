@@ -191,6 +191,25 @@ ComputeScene MakeComputeScene(GeodeWgpuAdapterDevice& adapter, const char* label
   return scene;
 }
 
+/// Replays a real clear into a selected host; its resources retire through the returned serial.
+uint64_t ReplayHostClear(GeodeWgpuAdapterDevice& adapter, wgpu::CommandEncoder host) {
+  adapter.setHostCommandEncoder(host);
+  const gpu::Texture target = gpu::GetResultOrFail(adapter.createTexture(
+      gpu::TextureDescriptor{"hostClear", gpu::Extent2d{4, 4}, gpu::TextureFormat::RGBA8Unorm,
+                             gpu::TextureUsage::RenderAttachment}));
+  const gpu::TextureView view = gpu::GetResultOrFail(
+      adapter.createTextureView(target, gpu::TextureViewDescriptor{"hostClearView"}));
+  std::unique_ptr<gpu::CommandEncoder> encoder =
+      gpu::GetResultOrFail(adapter.createCommandEncoder());
+  gpu::RenderPassEncoder* pass =
+      gpu::GetResultOrFail(encoder->beginRenderPass(gpu::RenderPassDescriptor{
+          "hostClear",
+          {gpu::RenderPassColorAttachment{
+              view, gpu::LoadOp::Clear, gpu::StoreOp::Store, {0, 0, 1, 1}}}}));
+  EXPECT_THAT(pass->end(), gpu::IsOk());
+  return gpu::GetResultOrFail(adapter.submit(gpu::GetResultOrFail(encoder->finish())));
+}
+
 class GeodeWgpuAdapterDeviceTests : public testing::Test {
 protected:
   void SetUp() override {
@@ -974,6 +993,49 @@ TEST_F(GeodeWgpuAdapterDeviceTests, AStandaloneSubmitDoesNotCompleteTheOpenFrame
       << "after the frame's submit everything must complete; completedSerial="
       << adapter_->completedSerial();
   EXPECT_THAT(adapter_->completedSerial(), Ge(standaloneSerial));
+}
+
+TEST_F(GeodeWgpuAdapterDeviceTests, SubmittingOneHostCannotCompleteAnotherUnsubmittedHost) {
+  ScopedWgpuHandle<wgpu::CommandEncoder> parent(geodeDevice_->device().createCommandEncoder());
+  ScopedWgpuHandle<wgpu::CommandEncoder> sibling(geodeDevice_->device().createCommandEncoder());
+  const uint64_t parentSerial = ReplayHostClear(*adapter_, parent.get());
+  const uint64_t siblingSerial = ReplayHostClear(*adapter_, sibling.get());
+  ScopedWgpuHandle<wgpu::CommandBuffer> siblingCommands(sibling.get().finish());
+  geodeDevice_->queue().submit(1, &siblingCommands.get());
+  adapter_->notifyHostSubmitted();
+  ASSERT_THAT(geodeDevice_->waitForQueueIdle(std::chrono::seconds(2)),
+              testing::Eq(GpuWaitResult::Complete));
+  EXPECT_THAT(adapter_->completedSerial(), Lt(parentSerial));
+
+  adapter_->setHostCommandEncoder(parent.get());
+  ScopedWgpuHandle<wgpu::CommandBuffer> parentCommands(parent.get().finish());
+  geodeDevice_->queue().submit(1, &parentCommands.get());
+  adapter_->notifyHostSubmitted();
+  adapter_->clearHostCommandEncoder();
+  EXPECT_THAT(adapter_->waitForSerial(siblingSerial, 2.0), testing::IsTrue());
+}
+
+TEST_F(GeodeWgpuAdapterDeviceTests, InterleavedHostSerialsCompleteOnlyThroughTheFirstGap) {
+  ScopedWgpuHandle<wgpu::CommandEncoder> parent(geodeDevice_->device().createCommandEncoder());
+  ScopedWgpuHandle<wgpu::CommandEncoder> sibling(geodeDevice_->device().createCommandEncoder());
+  const uint64_t parentFirst = ReplayHostClear(*adapter_, parent.get());
+  const uint64_t siblingSerial = ReplayHostClear(*adapter_, sibling.get());
+  const uint64_t parentLast = ReplayHostClear(*adapter_, parent.get());
+  ASSERT_THAT(siblingSerial, testing::Eq(parentFirst + 1));
+  ASSERT_THAT(parentLast, testing::Eq(siblingSerial + 1));
+  ScopedWgpuHandle<wgpu::CommandBuffer> parentCommands(parent.get().finish());
+  geodeDevice_->queue().submit(1, &parentCommands.get());
+  adapter_->notifyHostSubmitted();
+  ASSERT_THAT(geodeDevice_->waitForQueueIdle(std::chrono::seconds(2)),
+              testing::Eq(GpuWaitResult::Complete));
+  EXPECT_THAT(adapter_->completedSerial(), testing::Eq(parentFirst));
+
+  adapter_->setHostCommandEncoder(sibling.get());
+  ScopedWgpuHandle<wgpu::CommandBuffer> siblingCommands(sibling.get().finish());
+  geodeDevice_->queue().submit(1, &siblingCommands.get());
+  adapter_->notifyHostSubmitted();
+  adapter_->clearHostCommandEncoder();
+  EXPECT_THAT(adapter_->waitForSerial(parentLast, 2.0), testing::IsTrue());
 }
 
 /// The adapter presents to a Metal layer; the other platform surfaces are still created by the
