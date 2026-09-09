@@ -1504,59 +1504,76 @@ bool GeodeWgpuAdapterDevice::hasHostCommandEncoder() const {
   return static_cast<bool>(hostCommandEncoder_);
 }
 
-void GeodeWgpuAdapterDevice::notifyHostSubmitted() {
-  if (hostPendingSerial_ == 0) {
-    return;
+void GeodeWgpuAdapterDevice::CompletionState::record(WGPUCommandEncoder host, uint64_t serial) {
+  std::scoped_lock lock(mutex);
+  if (host != nullptr) {
+    for (Pending& range : pending) {
+      if (range.host == host) {
+        range.lastSerial = serial;
+        return;
+      }
+    }
   }
-  // Anything a standalone submit queued while this frame was pending is older than the frame's
-  // own submit on the same queue, so it has certainly finished by the time this one does. Its
-  // completion was capped below the frame's unqueued serials and reported less than its own
-  // serial - possibly nothing at all - so the flush is what finally covers it.
-  const uint64_t serial = std::max(hostPendingSerial_, standaloneWhilePendingSerial_);
-  hostPendingSerial_ = 0;
-  hostFirstPendingSerial_ = 0;
-  standaloneWhilePendingSerial_ = 0;
-  advanceCompletedSerialWhenQueueDrains(serial);
+  pending.push_back(Pending{host, serial, serial});
 }
 
-void GeodeWgpuAdapterDevice::advanceCompletedSerialWhenQueueDrains(uint64_t serial) {
-  // Completion must stay below the first serial still waiting on the host's submit: those are
-  // recorded but not queued, and `completedSerial` is read by the deferred-destroy sweep and
-  // every wait, so reporting past them retires resources the open frame still uses. Capping at
-  // report time is free: the callback it would otherwise run in may land after the frame's flush.
-  const uint64_t cappedSerial =
-      hostFirstPendingSerial_ == 0 ? serial : std::min(serial, hostFirstPendingSerial_ - 1);
-  if (cappedSerial == 0) {
+uint64_t GeodeWgpuAdapterDevice::CompletionState::closeHost(WGPUCommandEncoder host) {
+  std::scoped_lock lock(mutex);
+  if (host != nullptr) {
+    for (Pending& range : pending) {
+      if (range.host == host) {
+        range.host = nullptr;
+        return range.firstSerial;
+      }
+    }
+  }
+  return 0;
+}
+
+void GeodeWgpuAdapterDevice::CompletionState::complete(uint64_t ticket) {
+  std::scoped_lock lock(mutex);
+  const auto range = std::find_if(pending.begin(), pending.end(), [ticket](const Pending& entry) {
+    return entry.firstSerial == ticket && entry.host == nullptr;
+  });
+  if (range == pending.end()) {
     return;
   }
+  completedHighWater = std::max(completedHighWater, range->lastSerial);
+  *range = pending.back();
+  pending.pop_back();
+  uint64_t prefix = completedHighWater;
+  for (const Pending& unfinished : pending) {
+    prefix = std::min(prefix, unfinished.firstSerial - 1);
+  }
+  completedSerial.store(prefix, std::memory_order_release);
+}
 
-  // Callback-mode handling (wgpu-native vs emdawnwebgpu) is centralized in
-  // notifyWhenSubmittedWorkDone; waitForSerial's poll loop drives delivery.
+void GeodeWgpuAdapterDevice::notifyHostSubmitted(wgpu::CommandEncoder encoder) {
+  const uint64_t ticket = completionState_->closeHost(static_cast<WGPUCommandEncoder>(encoder));
+  if (ticket != 0) {
+    completeWhenQueueDrains(ticket);
+  }
+}
+
+void GeodeWgpuAdapterDevice::notifyHostDiscarded(wgpu::CommandEncoder encoder) {
+  // A discarded range still waits for older queue work before its resources may retire.
+  notifyHostSubmitted(encoder);
+  if (hostCommandEncoderIs(encoder)) {
+    clearHostCommandEncoder();
+  }
+}
+
+void GeodeWgpuAdapterDevice::completeWhenQueueDrains(uint64_t ticket) {
   struct WorkDoneState {
-    std::shared_ptr<CompletionState> completion;  //!< Shared completion counter.
-    uint64_t serial = 0;                          //!< Serial this callback completes.
+    std::shared_ptr<CompletionState> completion;  //!< State independent of adapter lifetime.
+    uint64_t ticket = 0;                          //!< Unique range completed by this callback.
 
-    /// Monotonic max: callbacks may complete out of order across submissions.
-    void onWorkDone() {
-      uint64_t previous = completion->completedSerial.load(std::memory_order_relaxed);
-      while (previous < serial &&
-             !completion->completedSerial.compare_exchange_weak(
-                 previous, serial, std::memory_order_release, std::memory_order_relaxed)) {}
-    }
+    void onWorkDone() { completion->complete(ticket); }
   };
   auto workDoneState = std::make_shared<WorkDoneState>();
   workDoneState->completion = completionState_;
-  workDoneState->serial = cappedSerial;
+  workDoneState->ticket = ticket;
   notifyWhenSubmittedWorkDone(geodeDevice_.queue(), workDoneState);
-}
-
-void GeodeWgpuAdapterDevice::recordPendingHostSerial(uint64_t submissionSerial) {
-  // The oldest of these is the cap every completion respects, so it is remembered separately
-  // from the newest, which is what the eventual flush reports.
-  if (hostFirstPendingSerial_ == 0) {
-    hostFirstPendingSerial_ = submissionSerial;
-  }
-  hostPendingSerial_ = std::max(hostPendingSerial_, submissionSerial);
 }
 
 bool GeodeWgpuAdapterDevice::replaysIntoHostEncoder() const {
@@ -1571,11 +1588,6 @@ gpu::Result<uint64_t> GeodeWgpuAdapterDevice::submitStandalone(gpu::CommandBuffe
   gpu::Result<uint64_t> serial = submit(std::move(commands));
   bypassHostEncoderForSubmit_ = previous;
 
-  // Remember it so the host's eventual flush reports it. Its own completion cannot: it is capped
-  // below the frame's unqueued serials, which are lower than this one.
-  if (serial.hasResult() && hostPendingSerial_ != 0) {
-    standaloneWhilePendingSerial_ = std::max(standaloneWhilePendingSerial_, serial.result());
-  }
   return serial;
 }
 
@@ -1630,7 +1642,7 @@ gpu::Status GeodeWgpuAdapterDevice::onSubmit(uint64_t submissionSerial,
     // The host owns finish + submit for its encoder. Hold the serial back until it reports that
     // submit: reporting completion before the work is even submitted would be a lie the deferred
     // destruction and wait paths both act on.
-    recordPendingHostSerial(submissionSerial);
+    completionState_->record(static_cast<WGPUCommandEncoder>(state.encoder), submissionSerial);
     return OkStatus();
   }
 
@@ -1638,10 +1650,11 @@ gpu::Status GeodeWgpuAdapterDevice::onSubmit(uint64_t submissionSerial,
   if (!commandBuffer) {
     return GpuError{GpuErrorType::InvalidState, "wgpu command buffer finish failed"};
   }
+  completionState_->record(nullptr, submissionSerial);
   geodeDevice_.queue().submit(1, &commandBuffer.get());
   geodeDevice_.countSubmit();
 
-  advanceCompletedSerialWhenQueueDrains(submissionSerial);
+  completeWhenQueueDrains(submissionSerial);
   return OkStatus();
 }
 

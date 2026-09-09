@@ -30,6 +30,12 @@ using testing::Lt;
 using testing::Not;
 
 namespace donner::geode {
+
+/// Exposes only the real completion state for deterministic callback-order tests.
+struct GeodeWgpuAdapterDeviceTestAccess {
+  using CompletionState = GeodeWgpuAdapterDevice::CompletionState;
+};
+
 namespace {
 
 /// Minimal compute WGSL writing a constant color into a write-only storage texture, matching the
@@ -192,6 +198,8 @@ ComputeScene MakeComputeScene(GeodeWgpuAdapterDevice& adapter, const char* label
 }
 
 /// Replays a real clear into a selected host; its resources retire through the returned serial.
+/// @param adapter Device recording the clear.
+/// @param host Encoder receiving the clear.
 uint64_t ReplayHostClear(GeodeWgpuAdapterDevice& adapter, wgpu::CommandEncoder host) {
   adapter.setHostCommandEncoder(host);
   const gpu::Texture target = gpu::GetResultOrFail(adapter.createTexture(
@@ -435,7 +443,7 @@ TEST_F(GeodeWgpuAdapterDeviceTests, HostEncoderReplayInterleavesInOneBufferAndDe
     ASSERT_TRUE(static_cast<bool>(hostCommands.get()));
     geodeDevice_->queue().submit(1, &hostCommands.get());
   }
-  adapter_->notifyHostSubmitted();
+  adapter_->notifyHostSubmitted(hostEncoder.get());
   adapter_->clearHostCommandEncoder();
 
   ASSERT_TRUE(adapter_->waitForSerial(serial, /*timeoutSeconds=*/30.0))
@@ -556,7 +564,7 @@ TEST_F(GeodeWgpuAdapterDeviceTests, SubRectangleCopyHonorsBothOriginsWhenReplaye
     ASSERT_TRUE(static_cast<bool>(hostCommands.get()));
     geodeDevice_->queue().submit(1, &hostCommands.get());
   }
-  adapter_->notifyHostSubmitted();
+  adapter_->notifyHostSubmitted(hostEncoder.get());
   adapter_->clearHostCommandEncoder();
 
   ASSERT_TRUE(adapter_->waitForSerial(serial, /*timeoutSeconds=*/30.0))
@@ -687,7 +695,7 @@ TEST_F(GeodeWgpuAdapterDeviceTests, HostEncoderReplaysAComputePassAheadOfHostRec
     ASSERT_TRUE(static_cast<bool>(hostCommands.get()));
     geodeDevice_->queue().submit(1, &hostCommands.get());
   }
-  adapter_->notifyHostSubmitted();
+  adapter_->notifyHostSubmitted(hostEncoder.get());
   adapter_->clearHostCommandEncoder();
 
   ASSERT_TRUE(adapter_->waitForSerial(serial, /*timeoutSeconds=*/30.0))
@@ -986,7 +994,7 @@ TEST_F(GeodeWgpuAdapterDeviceTests, AStandaloneSubmitDoesNotCompleteTheOpenFrame
     ASSERT_TRUE(static_cast<bool>(hostCommands.get()));
     geodeDevice_->queue().submit(1, &hostCommands.get());
   }
-  adapter_->notifyHostSubmitted();
+  adapter_->notifyHostSubmitted(hostEncoder.get());
   adapter_->clearHostCommandEncoder();
 
   ASSERT_TRUE(adapter_->waitForSerial(standaloneSerial, /*timeoutSeconds=*/30.0))
@@ -1002,7 +1010,7 @@ TEST_F(GeodeWgpuAdapterDeviceTests, SubmittingOneHostCannotCompleteAnotherUnsubm
   const uint64_t siblingSerial = ReplayHostClear(*adapter_, sibling.get());
   ScopedWgpuHandle<wgpu::CommandBuffer> siblingCommands(sibling.get().finish());
   geodeDevice_->queue().submit(1, &siblingCommands.get());
-  adapter_->notifyHostSubmitted();
+  adapter_->notifyHostSubmitted(sibling.get());
   ASSERT_THAT(geodeDevice_->waitForQueueIdle(std::chrono::seconds(2)),
               testing::Eq(GpuWaitResult::Complete));
   EXPECT_THAT(adapter_->completedSerial(), Lt(parentSerial));
@@ -1010,7 +1018,7 @@ TEST_F(GeodeWgpuAdapterDeviceTests, SubmittingOneHostCannotCompleteAnotherUnsubm
   adapter_->setHostCommandEncoder(parent.get());
   ScopedWgpuHandle<wgpu::CommandBuffer> parentCommands(parent.get().finish());
   geodeDevice_->queue().submit(1, &parentCommands.get());
-  adapter_->notifyHostSubmitted();
+  adapter_->notifyHostSubmitted(parent.get());
   adapter_->clearHostCommandEncoder();
   EXPECT_THAT(adapter_->waitForSerial(siblingSerial, 2.0), testing::IsTrue());
 }
@@ -1025,7 +1033,7 @@ TEST_F(GeodeWgpuAdapterDeviceTests, InterleavedHostSerialsCompleteOnlyThroughThe
   ASSERT_THAT(parentLast, testing::Eq(siblingSerial + 1));
   ScopedWgpuHandle<wgpu::CommandBuffer> parentCommands(parent.get().finish());
   geodeDevice_->queue().submit(1, &parentCommands.get());
-  adapter_->notifyHostSubmitted();
+  adapter_->notifyHostSubmitted(parent.get());
   ASSERT_THAT(geodeDevice_->waitForQueueIdle(std::chrono::seconds(2)),
               testing::Eq(GpuWaitResult::Complete));
   EXPECT_THAT(adapter_->completedSerial(), testing::Eq(parentFirst));
@@ -1033,9 +1041,77 @@ TEST_F(GeodeWgpuAdapterDeviceTests, InterleavedHostSerialsCompleteOnlyThroughThe
   adapter_->setHostCommandEncoder(sibling.get());
   ScopedWgpuHandle<wgpu::CommandBuffer> siblingCommands(sibling.get().finish());
   geodeDevice_->queue().submit(1, &siblingCommands.get());
-  adapter_->notifyHostSubmitted();
+  adapter_->notifyHostSubmitted(sibling.get());
   adapter_->clearHostCommandEncoder();
   EXPECT_THAT(adapter_->waitForSerial(parentLast, 2.0), testing::IsTrue());
+}
+
+TEST_F(GeodeWgpuAdapterDeviceTests, ACallbackCannotPassAnEarlierSerialAlreadyQueuedByAnotherHost) {
+  ScopedWgpuHandle<wgpu::CommandEncoder> parent(geodeDevice_->device().createCommandEncoder());
+  ScopedWgpuHandle<wgpu::CommandEncoder> sibling(geodeDevice_->device().createCommandEncoder());
+  GeodeWgpuAdapterDeviceTestAccess::CompletionState completion;
+  completion.record(parent.get(), 1);
+  completion.record(sibling.get(), 2);
+  completion.record(parent.get(), 3);
+  const uint64_t parentTicket = completion.closeHost(parent.get());
+  const uint64_t siblingTicket = completion.closeHost(sibling.get());
+  ASSERT_THAT(parentTicket, testing::Eq(1u));
+  ASSERT_THAT(siblingTicket, testing::Eq(2u));
+
+  completion.complete(parentTicket);
+  EXPECT_THAT(completion.completedSerial.load(), testing::Eq(1u));
+  completion.complete(siblingTicket);
+  EXPECT_THAT(completion.completedSerial.load(), testing::Eq(3u));
+  EXPECT_THAT(completion.pending.size(), testing::Eq(0u));
+}
+
+TEST_F(GeodeWgpuAdapterDeviceTests, ReusedHostIdentityDoesNotRetargetAnOlderCallbackTicket) {
+  ScopedWgpuHandle<wgpu::CommandEncoder> host(geodeDevice_->device().createCommandEncoder());
+  GeodeWgpuAdapterDeviceTestAccess::CompletionState completion;
+  completion.record(host.get(), 1);
+  const uint64_t oldTicket = completion.closeHost(host.get());
+  completion.record(host.get(), 2);
+  const uint64_t newTicket = completion.closeHost(host.get());
+  ASSERT_THAT(oldTicket, testing::Ne(newTicket));
+  completion.complete(oldTicket);
+  EXPECT_THAT(completion.completedSerial.load(), testing::Eq(1u));
+  completion.complete(oldTicket);
+  EXPECT_THAT(completion.completedSerial.load(), testing::Eq(1u));
+  completion.complete(newTicket);
+  EXPECT_THAT(completion.completedSerial.load(), testing::Eq(2u));
+}
+
+TEST_F(GeodeWgpuAdapterDeviceTests, CompletedHighWaterWaitsForQueuedStandaloneCallbacks) {
+  ScopedWgpuHandle<wgpu::CommandEncoder> host(geodeDevice_->device().createCommandEncoder());
+  GeodeWgpuAdapterDeviceTestAccess::CompletionState completion;
+  completion.record(host.get(), 1);
+  completion.record(nullptr, 2);
+  completion.record(nullptr, 3);
+  completion.complete(3);
+  EXPECT_THAT(completion.completedSerial.load(), testing::Eq(0u));
+  completion.complete(completion.closeHost(host.get()));
+  EXPECT_THAT(completion.completedSerial.load(), testing::Eq(1u));
+  completion.complete(2);
+  EXPECT_THAT(completion.completedSerial.load(), testing::Eq(3u));
+}
+
+TEST_F(GeodeWgpuAdapterDeviceTests, DiscardingOneHostCannotCompleteAnotherPendingHost) {
+  ScopedWgpuHandle<wgpu::CommandEncoder> parent(geodeDevice_->device().createCommandEncoder());
+  ScopedWgpuHandle<wgpu::CommandEncoder> sibling(geodeDevice_->device().createCommandEncoder());
+  const uint64_t parentSerial = ReplayHostClear(*adapter_, parent.get());
+  const uint64_t siblingSerial = ReplayHostClear(*adapter_, sibling.get());
+  adapter_->notifyHostDiscarded(parent.get());
+  parent.reset();
+  ASSERT_THAT(geodeDevice_->waitForQueueIdle(std::chrono::seconds(2)),
+              testing::Eq(GpuWaitResult::Complete));
+  EXPECT_THAT(adapter_->completedSerial(), testing::Eq(parentSerial));
+  EXPECT_THAT(adapter_->hostCommandEncoderIs(sibling.get()), testing::IsTrue());
+
+  ScopedWgpuHandle<wgpu::CommandBuffer> siblingCommands(sibling.get().finish());
+  geodeDevice_->queue().submit(1, &siblingCommands.get());
+  adapter_->notifyHostSubmitted(sibling.get());
+  adapter_->clearHostCommandEncoder();
+  EXPECT_THAT(adapter_->waitForSerial(siblingSerial, 2.0), testing::IsTrue());
 }
 
 /// The adapter presents to a Metal layer; the other platform surfaces are still created by the

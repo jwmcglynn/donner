@@ -1559,8 +1559,20 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
   void closeFrameGpuEncoderAfterSubmit() {
     frameGpuEncoders.clear();
     frameGpuEncoder = nullptr;
-    device->adapterDevice().notifyHostSubmitted();
-    device->adapterDevice().clearHostCommandEncoder();
+    device->adapterDevice().notifyHostSubmitted(frameCommandEncoder.get());
+    if (device->adapterDevice().hostCommandEncoderIs(frameCommandEncoder.get())) {
+      device->adapterDevice().clearHostCommandEncoder();
+    }
+  }
+
+  /// Abandon this frame without completing any other renderer's recorded work.
+  void discardFrameGpuEncoder() {
+    if (device && frameCommandEncoder) {
+      device->adapterDevice().notifyHostDiscarded(frameCommandEncoder.get());
+    }
+    frameGpuEncoders.clear();
+    frameGpuEncoder = nullptr;
+    frameCommandEncoder.reset();
   }
 
   std::unique_ptr<geode::GeoEncoder> encoder;
@@ -4432,6 +4444,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     paint = PaintParams();
     encoder.reset();
     frameFinishedEncoders.clear();
+    discardFrameGpuEncoder();
     geometryDebugEdges.clear();
     rejectedFilterDepth = 0;
     if (frameResourceScopeDepth == 0) {
@@ -4568,8 +4581,8 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
 
   ~Impl() {
     encoder.reset();
-    frameCommandEncoder.reset();
     frameFinishedEncoders.clear();
+    discardFrameGpuEncoder();
 
     if (device && device->device()) {
       // Bounded drain before releasing frame resources; skips (and stays

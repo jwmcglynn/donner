@@ -403,13 +403,7 @@ struct FilterResourceArena {
       if (cmd) {
         device_.queue().submit(1, &cmd.get());
         device_.countSubmit();
-        if (replayingIntoThisEncoder) {
-          // The runtime holds completion of anything it replayed into this encoder until the
-          // submit of the buffer finished from it is reported, and this is that submit. Reporting
-          // it anywhere later would either retire the replayed work before it reached the queue or
-          // strand it as never complete.
-          device_.adapterDevice().notifyHostSubmitted();
-        }
+        device_.adapterDevice().notifyHostSubmitted(encoderSlot_->get());
       } else {
         // Nothing recorded into this encoder can reach the queue now, so the frame's output is
         // undefined and the pending serials must not be reported as submitted. Declaring the loss
