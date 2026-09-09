@@ -14,6 +14,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <bit>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -1286,7 +1287,7 @@ TEST(WgslEmitterGeodeValidation, ColorSpaceConvertRunsOnTheDeviceAndMatchesTheCp
   }
 }
 
-TEST(WgslEmitterGeodeValidation, ColorTransferMatchesFloatPixmapAtSampleBoundaries) {
+void ExpectColorTransferBoundaries(bool resolve) {
   constexpr uint32_t kWidth = programs::kColorTransferSampleCount;
   constexpr uint32_t kHeight = 16;
   const float alphas[] = {1.0f, 0.7f, 0.1f, 1.0e-20f};
@@ -1307,7 +1308,8 @@ TEST(WgslEmitterGeodeValidation, ColorTransferMatchesFloatPixmapAtSampleBoundari
   }
   auto geode = donner::geode::GeodeDevice::CreateHeadless();
   ASSERT_THAT(geode, testing::NotNull());
-  const auto module = programs::BuildColorSpaceConvertModule();
+  const auto module =
+      resolve ? programs::BuildFilterResolveModule() : programs::BuildColorSpaceConvertModule();
   ASSERT_THAT(module, HasShaderResult());
   const auto wgsl = EmitWgsl(module.result());
   ASSERT_THAT(wgsl, HasShaderResult());
@@ -1324,6 +1326,7 @@ TEST(WgslEmitterGeodeValidation, ColorTransferMatchesFloatPixmapAtSampleBoundari
   desc.dimension = wgpu::TextureDimension::_2D;
   const wgpu::Texture source = device.createTexture(desc);
   desc.usage = wgpu::TextureUsage::StorageBinding | wgpu::TextureUsage::CopySrc;
+  desc.format = resolve ? wgpu::TextureFormat::RGBA8Unorm : wgpu::TextureFormat::RGBA32Float;
   const wgpu::Texture destination = device.createTexture(desc);
   wgpu::TexelCopyTextureInfo sourceCopy = {};
   sourceCopy.texture = source;
@@ -1334,6 +1337,9 @@ TEST(WgslEmitterGeodeValidation, ColorTransferMatchesFloatPixmapAtSampleBoundari
   queue.writeTexture(sourceCopy, pixels->data().data(), sizeBytes, sourceLayout, extent);
   for (uint32_t direction :
        {programs::kColorSpaceConvertSrgbToLinear, programs::kColorSpaceConvertLinearToSrgb}) {
+    if (resolve && direction != programs::kColorSpaceConvertLinearToSrgb) {
+      continue;
+    }
     auto expected = *pixels;
     if (direction == programs::kColorSpaceConvertSrgbToLinear) {
       tiny_skia::filter::srgbToLinear(expected);
@@ -1341,31 +1347,58 @@ TEST(WgslEmitterGeodeValidation, ColorTransferMatchesFloatPixmapAtSampleBoundari
       tiny_skia::filter::linearToSrgb(expected);
     }
     wgpu::BufferDescriptor readbackDesc = {};
-    readbackDesc.size = sizeBytes;
+    const uint32_t readbackRowBytes = resolve ? kWidth * 4 : kRowBytes;
+    const size_t readbackSize = size_t{readbackRowBytes} * kHeight;
+    readbackDesc.size = readbackSize;
     readbackDesc.usage = wgpu::BufferUsage::CopyDst | wgpu::BufferUsage::MapRead;
     const wgpu::Buffer readback = device.createBuffer(readbackDesc);
     wgpu::CommandEncoder encoder = device.createCommandEncoder();
     const uint32_t params[] = {direction, 0, 0, 0};
+    const float clip[] = {
+        1, 0, 0, 1, 0, 0, 0, 0, float(kWidth), float(kHeight), std::bit_cast<float>(uint32_t{1}),
+        0};
+    const std::span<const uint8_t> uniforms =
+        resolve
+            ? std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(clip), sizeof(clip))
+            : std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(params), sizeof(params));
     ASSERT_THAT(RecordInputOutputUniformProgram(
-                    device, queue, encoder, wgsl.result(), source, destination,
-                    {reinterpret_cast<const uint8_t*>(params), sizeof(params)},
+                    device, queue, encoder, wgsl.result(), source, destination, uniforms,
                     programs::kColorSpaceConvertWorkgroupSize, programs::ColorTransferSamples()),
                 testing::IsTrue());
     wgpu::TexelCopyTextureInfo outputCopy = {};
     outputCopy.texture = destination;
     wgpu::TexelCopyBufferInfo bufferCopy = {};
     bufferCopy.buffer = readback;
-    bufferCopy.layout.bytesPerRow = kRowBytes;
+    bufferCopy.layout.bytesPerRow = readbackRowBytes;
     bufferCopy.layout.rowsPerImage = kHeight;
     encoder.copyTextureToBuffer(outputCopy, bufferCopy, extent);
     wgpu::CommandBuffer commands = encoder.finish();
     queue.submit(1, &commands);
-    const auto bytes = MapAndReadBack(device, readback, sizeBytes);
-    ASSERT_THAT(bytes.size(), testing::Eq(sizeBytes));
+    const auto bytes = MapAndReadBack(device, readback, readbackSize);
+    ASSERT_THAT(bytes.size(), testing::Eq(readbackSize));
+    if (resolve) {
+      const auto expectedPixmap = expected.toPixmap();
+      const svg::RendererBitmap actualBitmap{Vector2i(kWidth, kHeight), bytes, readbackRowBytes};
+      const svg::RendererBitmap expectedBitmap{
+          Vector2i(kWidth, kHeight),
+          std::vector<uint8_t>(expectedPixmap.data().begin(), expectedPixmap.data().end()),
+          readbackRowBytes};
+      editor::tests::CompareBitmapToBitmap(actualBitmap, expectedBitmap, "fused_resolve_boundaries",
+                                           editor::tests::PixelmatchIdentityParams());
+      continue;
+    }
     std::vector<float> actual(expected.data().size());
     std::memcpy(actual.data(), bytes.data(), sizeBytes);
     EXPECT_THAT(actual, testing::ElementsAreArray(expected.data())) << "direction=" << direction;
   }
+}
+
+TEST(WgslEmitterGeodeValidation, ColorTransferMatchesFloatPixmapAtSampleBoundaries) {
+  ExpectColorTransferBoundaries(false);
+}
+
+TEST(WgslEmitterGeodeValidation, FusedResolveMatchesFloatPixmapAtSampleBoundaries) {
+  ExpectColorTransferBoundaries(true);
 }
 
 TEST(WgslEmitterGeodeValidation, ColorSpaceConvertLeavesATransparentTexelTransparent) {
