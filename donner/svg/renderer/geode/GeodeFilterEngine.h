@@ -113,6 +113,8 @@ struct FilterExecutionMemory {
   uint64_t standaloneBuffers = 0;  //!< Per-execution buffers retained until submission.
   uint64_t persistentBuffers = 0;  //!< Parameter arenas and immutable transfer tables.
 
+  uint64_t tileExecutions = 0;  //!< Complete graph evaluations, including sampling halos.
+
   /// Total retained allocation bytes.
   uint64_t total() const { return textures + standaloneBuffers + persistentBuffers; }
 };

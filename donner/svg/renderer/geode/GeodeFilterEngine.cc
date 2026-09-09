@@ -411,6 +411,9 @@ struct FilterResourceArena {
                    gpu::Extent2d size, gpu::Origin2d sourceOrigin,
                    gpu::Origin2d destinationOrigin) {
     (void)commandEncoder();
+    UTILS_RELEASE_ASSERT_MSG(
+        *encoderSlot_ && device_.adapterDevice().hostCommandEncoderIs(encoderSlot_->get()),
+        "filter copy replayed into a command encoder the arena does not own");
     const gpu::Texture* src = importRuntimeTexture(source);
     const gpu::Texture* dst = importRuntimeTexture(destination);
     if (!src || !dst) {
@@ -2386,6 +2389,7 @@ struct FilterGraphExecution {
   std::unordered_map<std::string, wgpu::Texture> namedBuffers;
   std::unordered_map<std::string, size_t> lastNamedUse;
   bool axisAligned;
+  uint64_t executedTiles = 0;
 };
 
 /// The primitive visitor owns node-local conversion and clip decisions.
@@ -2536,6 +2540,7 @@ wgpu::Texture GeodeFilterEngine::execute(const svg::components::FilterGraph& gra
   const wgpu::Texture output = execution.run();
   lastExecutionMemory_ = execution.arena.memory();
   lastExecutionMemory_.persistentBuffers = retainedBufferBytes();
+  lastExecutionMemory_.tileExecutions = execution.executedTiles;
   return output;
 }
 
@@ -2664,6 +2669,7 @@ wgpu::Texture FilterGraphExecution::runTiled(const FilterTilePlan& plan) {
 
 wgpu::Texture FilterGraphExecution::runNodes() {
   using namespace svg::components;
+  ++executedTiles;
   if (graphUsesStandardInput(graph, FilterStandardInput::SourceAlpha)) {
     sourceAlpha = engine.applySourceAlpha(arena, sourceGraphic);
     if (!*sourceAlpha) {
@@ -2724,8 +2730,10 @@ std::optional<Box2d> FilterNodeExecution::blurClip(double sx, double sy) const {
     return std::nullopt;
   }
   const Box2d pixels = coordinates.deviceFromFilter.transformBox(subregion);
-  const Box2d rounded(Vector2d(std::floor(pixels.topLeft.x), std::floor(pixels.topLeft.y)),
-                      Vector2d(std::ceil(pixels.bottomRight.x), std::ceil(pixels.bottomRight.y)));
+  const Box2d rounded(Vector2d(std::floor(pixels.topLeft.x) - execution.tileOrigin.x,
+                               std::floor(pixels.topLeft.y) - execution.tileOrigin.y),
+                      Vector2d(std::ceil(pixels.bottomRight.x) - execution.tileOrigin.x,
+                               std::ceil(pixels.bottomRight.y) - execution.tileOrigin.y));
   const std::array<double, 4> corners{rounded.topLeft.x, rounded.topLeft.y, rounded.bottomRight.x,
                                       rounded.bottomRight.y};
   // The folded clip uses i32 uniforms; extreme and NaN corners retain the separate float clip.
@@ -2735,7 +2743,7 @@ std::optional<Box2d> FilterNodeExecution::blurClip(double sx, double sy) const {
       })) {
     return std::nullopt;
   }
-  return Box2d(rounded.topLeft - execution.tileOrigin, rounded.bottomRight - execution.tileOrigin);
+  return rounded;
 }
 
 wgpu::Texture FilterNodeExecution::apply(const fp::GaussianBlur& primitive) {

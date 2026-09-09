@@ -355,6 +355,8 @@ TEST_F(RendererGeodeTest, FilterTilesPreservePixelsAcrossSamplingAndClipBoundari
     RendererGeode tiled(tiledDevice);
     reference.draw(referenceDocument.result());
     tiled.draw(tiledDocument.result());
+    ASSERT_GT(tiledDevice->filterEngine().lastExecutionMemory().tileExecutions, 1u);
+    ASSERT_EQ(referenceDevice->filterEngine().lastExecutionMemory().tileExecutions, 1u);
     editor::tests::CompareBitmapToBitmap(tiled.takeSnapshot(), reference.takeSnapshot(),
                                          "filter_tile_boundaries_" + std::to_string(index),
                                          editor::tests::PixelmatchIdentityParams());
