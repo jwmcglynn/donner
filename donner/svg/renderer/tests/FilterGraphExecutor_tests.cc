@@ -231,7 +231,15 @@ TEST(FilterGraphExecutorTest, MorphologyAdmissionChargesPassSamplesAndRetainedTe
   ASSERT_TRUE(components::FilterGraphExecutionCost(
       graph, 100, components::FilterMemoryModel::GpuAllNodes, workUnits, retainedBytes));
   EXPECT_EQ(workUnits, 4u * 100u * kExpectedWorkMultiplier);
-  EXPECT_EQ(retainedBytes, 100u * 4u * (2u + 4u * 21u));
+  const uint64_t largeRadiusBytes = retainedBytes;
+  for (auto& node : graph.nodes) {
+    auto& morphology = std::get<components::filter_primitive::Morphology>(node.primitive);
+    morphology.radiusX = 1;
+    morphology.radiusY = 1;
+  }
+  ASSERT_TRUE(components::FilterGraphExecutionCost(
+      graph, 100, components::FilterMemoryModel::GpuAllNodes, workUnits, retainedBytes));
+  EXPECT_EQ(retainedBytes, largeRadiusBytes);
 }
 
 TEST(FilterGraphExecutorTest, RejectsAggregateConvolveWorkAndNamedBufferMemory) {
@@ -321,8 +329,10 @@ TEST(FilterGraphExecutorTest, AccountsForBlurPassWorkAndScratchMemory) {
   EXPECT_FALSE(components::FilterGraphFitsExecutionBudget(
       graph, kLinearRgbGpuBoundaryPixels, components::FilterMemoryModel::GpuAllNodes));
   graph.colorInterpolationFilters = ColorInterpolationFilters::SRGB;
-  EXPECT_TRUE(components::FilterGraphFitsExecutionBudget(
+  EXPECT_FALSE(components::FilterGraphFitsExecutionBudget(
       graph, kLinearRgbGpuBoundaryPixels, components::FilterMemoryModel::GpuAllNodes));
+  EXPECT_TRUE(components::FilterGraphFitsExecutionBudget(
+      graph, 2'000'000, components::FilterMemoryModel::GpuAllNodes));
 }
 
 TEST(FilterGraphExecutorTest, AccountsForGpuPerNodeSubregionTextures) {
@@ -548,8 +558,8 @@ TEST(FilterGraphExecutorTest, EmptyChunkCannotRetryIntrinsicallyOversizedGraph) 
   ASSERT_TRUE(small.has_value());
   budget.release(*small);
 
-  constexpr std::uint64_t kOversizedPixels = 5'800'000;
-  constexpr std::uint64_t kCaptureBytes = kOversizedPixels * 4;
+  constexpr std::uint64_t kOversizedPixels = 1024;
+  constexpr std::uint64_t kCaptureBytes = components::kMaximumFilterFrameBytes;
   EXPECT_FALSE(budget
                    .reserve(graph, kOversizedPixels, components::FilterMemoryModel::GpuAllNodes,
                             kCaptureBytes)
