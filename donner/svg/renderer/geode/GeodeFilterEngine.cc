@@ -2125,6 +2125,30 @@ void GeodeFilterEngine::beginFrame() {
   }
 }
 
+namespace {
+
+double FilterDeviceScaleX(const Transform2d& transform) {
+  return std::max(transform.transformVector(Vector2d(1.0, 0.0)).length(), 1e-12);
+}
+
+double FilterDeviceScaleY(const Transform2d& transform, double scaleX) {
+  return NearZero(scaleX, 1e-12) ? std::abs(transform.data[3])
+                                 : std::max(std::abs(transform.determinant()) / scaleX, 1e-12);
+}
+
+double FilterLengthInPixels(double value, double bound, double scale, bool objectBounds) {
+  return std::abs(objectBounds ? value * bound : value) * scale;
+}
+
+Vector2d FilterOffsetInPixels(Vector2d offset, Vector2d bounds, bool objectBounds,
+                              const Transform2d& transform) {
+  const Vector2d userOffset =
+      objectBounds ? Vector2d(offset.x * bounds.x, offset.y * bounds.y) : offset;
+  return transform.transformVector(userOffset);
+}
+
+}  // namespace
+
 struct FilterExecutionCoordinates {
   using FilterGraph = svg::components::FilterGraph;
   using FilterInput = svg::components::FilterInput;
@@ -2135,10 +2159,8 @@ struct FilterExecutionCoordinates {
       : graph(graph),
         filterRegion(filterRegion),
         deviceFromFilter(deviceFromFilter),
-        scaleX(std::max(deviceFromFilter.transformVector(Vector2d(1.0, 0.0)).length(), 1e-12)),
-        scaleY(NearZero(scaleX, 1e-12)
-                   ? std::abs(deviceFromFilter.data[3])
-                   : std::max(std::abs(deviceFromFilter.determinant()) / scaleX, 1e-12)),
+        scaleX(FilterDeviceScaleX(deviceFromFilter)),
+        scaleY(FilterDeviceScaleY(deviceFromFilter, scaleX)),
         isObjectBoundingBox(graph.primitiveUnits == svg::PrimitiveUnits::ObjectBoundingBox),
         boundingBoxWidth(graph.elementBoundingBox.has_value() ? graph.elementBoundingBox->width()
                                                               : 1.0),
@@ -2153,18 +2175,16 @@ struct FilterExecutionCoordinates {
         previousOutputSubregion(filterRegion) {}
 
   double toPixelX(double value) const {
-    return std::abs(isObjectBoundingBox ? value * boundingBoxWidth : value) * scaleX;
+    return FilterLengthInPixels(value, boundingBoxWidth, scaleX, isObjectBoundingBox);
   }
 
   double toPixelY(double value) const {
-    return std::abs(isObjectBoundingBox ? value * boundingBoxHeight : value) * scaleY;
+    return FilterLengthInPixels(value, boundingBoxHeight, scaleY, isObjectBoundingBox);
   }
 
   Vector2d toPixelOffset(double dx, double dy) const {
-    const Vector2d userOffset = isObjectBoundingBox
-                                    ? Vector2d(dx * boundingBoxWidth, dy * boundingBoxHeight)
-                                    : Vector2d(dx, dy);
-    return deviceFromFilter.transformVector(userOffset);
+    return FilterOffsetInPixels({dx, dy}, {boundingBoxWidth, boundingBoxHeight},
+                                isObjectBoundingBox, deviceFromFilter);
   }
 
   Box2d resolveInputSubregion(const FilterInput& input) const {
@@ -2498,13 +2518,21 @@ BoxBlurPlan computeBoxPasses(double sigma) {
 /// Conservative sampling support of one graph in device pixels.
 struct FilterSamplingHalo {
   Vector2d scale;
+  Vector2d bounds;
+  Transform2d transform;
+  bool objectBounds = false;
   Vector2d halo = Vector2d::Zero();
 
-  static double blur(double sigma, double scale) {
-    if (!(sigma > 0)) {
+  double deviation(double value, double bound, double pixelScale) const {
+    return value >= 0 ? boundedPositiveFilterPixels(
+                            FilterLengthInPixels(value, bound, pixelScale, objectBounds))
+                      : 0;
+  }
+
+  static double blur(double deviation) {
+    if (!(deviation > 0)) {
       return 0;
     }
-    const double deviation = boundedPositiveFilterPixels(sigma * scale);
     const BoxBlurPlan boxes = deviation >= 2.0 ? computeBoxPasses(deviation) : BoxBlurPlan{};
     if (boxes.numPasses != 0) {
       int left = 0;
@@ -2522,25 +2550,32 @@ struct FilterSamplingHalo {
     if (value.edgeMode == fp::GaussianBlur::EdgeMode::Wrap) {
       return false;
     }
-    halo += Vector2d(blur(value.stdDeviationX, scale.x), blur(value.stdDeviationY, scale.y));
+    halo += Vector2d(blur(deviation(value.stdDeviationX, bounds.x, scale.x)),
+                     blur(deviation(value.stdDeviationY, bounds.y, scale.y)));
     return true;
   }
 
   bool add(const fp::Morphology& value) {
-    halo += Vector2d(std::ceil(boundedPositiveFilterPixels(value.radiusX * scale.x)),
-                     std::ceil(boundedPositiveFilterPixels(value.radiusY * scale.y)));
+    if (value.radiusX < 0 || value.radiusY < 0) {
+      return true;
+    }
+    halo += Vector2d(std::ceil(deviation(value.radiusX, bounds.x, scale.x)),
+                     std::ceil(deviation(value.radiusY, bounds.y, scale.y)));
     return true;
   }
 
   bool add(const fp::Offset& value) {
-    halo += Vector2d(std::ceil(std::abs(boundedSignedFilterPixels(value.dx * scale.x))),
-                     std::ceil(std::abs(boundedSignedFilterPixels(value.dy * scale.y))));
+    const Vector2d offset =
+        FilterOffsetInPixels({value.dx, value.dy}, bounds, objectBounds, transform);
+    halo += Vector2d(std::ceil(std::abs(boundedSignedFilterPixels(offset.x))),
+                     std::ceil(std::abs(boundedSignedFilterPixels(offset.y))));
     return true;
   }
 
   bool add(const fp::DropShadow& value) {
     add(fp::Offset{value.dx, value.dy});
-    halo += Vector2d(blur(value.stdDeviationX, scale.x), blur(value.stdDeviationY, scale.y));
+    halo += Vector2d(blur(deviation(value.stdDeviationX, bounds.x, scale.x)),
+                     blur(deviation(value.stdDeviationY, bounds.y, scale.y)));
     return true;
   }
 
@@ -2563,14 +2598,12 @@ struct FilterSamplingHalo {
 
 std::optional<Vector2d> ComputeFilterSamplingHalo(const svg::components::FilterGraph& graph,
                                                   const Transform2d& transform) {
-  const bool objectBounds = graph.primitiveUnits == svg::PrimitiveUnits::ObjectBoundingBox;
-  const double scaleX =
-      std::abs(transform.data[0]) *
-      (objectBounds && graph.elementBoundingBox ? graph.elementBoundingBox->width() : 1.0);
-  const double scaleY =
-      std::abs(transform.data[3]) *
-      (objectBounds && graph.elementBoundingBox ? graph.elementBoundingBox->height() : 1.0);
-  FilterSamplingHalo support{Vector2d(scaleX, scaleY)};
+  const double scaleX = FilterDeviceScaleX(transform);
+  const double scaleY = FilterDeviceScaleY(transform, scaleX);
+  const Vector2d bounds =
+      graph.elementBoundingBox ? graph.elementBoundingBox->size() : Vector2d(1.0, 1.0);
+  FilterSamplingHalo support{Vector2d(scaleX, scaleY), bounds, transform,
+                             graph.primitiveUnits == svg::PrimitiveUnits::ObjectBoundingBox};
   for (const auto& node : graph.nodes) {
     if (!std::visit([&](const auto& primitive) { return support.add(primitive); },
                     node.primitive) ||

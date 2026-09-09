@@ -276,10 +276,11 @@ TEST(FilterCompositingRefusal, ARefusedFilterPreservesTheParentLayer) {
   renderer.draw(background.result());
   const svg::RendererBitmap expected = renderer.takeSnapshot();
   ASSERT_THAT(expected.dimensions, testing::Eq(Vector2i(13, 11)));
-  // The parent, capture, flood and its clip fit; the merge output is the next surface.
+  // Admission refuses the forecast without poisoning capacity needed by the parent.
   renderer.setSurfaceBudgetForTesting(4, svg::RendererSurfaceBudget::kMaximumBytes);
   renderer.draw(filtered.result());
-  EXPECT_THAT(renderer.resourceStats().surfaceBudgetRejected, testing::IsTrue());
+  EXPECT_THAT(renderer.resourceStats().filterBudgetRejected, testing::IsTrue());
+  EXPECT_THAT(renderer.resourceStats().surfaceBudgetRejected, testing::IsFalse());
   const svg::RendererBitmap actual = renderer.takeSnapshot();
   editor::tests::CompareBitmapToBitmap(actual, expected, "refused_filter_parent",
                                        editor::tests::PixelmatchIdentityParams());
