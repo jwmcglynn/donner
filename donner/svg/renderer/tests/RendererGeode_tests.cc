@@ -339,7 +339,7 @@ TEST_F(RendererGeodeTest, FilterTilesPreservePixelsAcrossSamplingAndClipBoundari
     SCOPED_TRACE(index);
     const std::string source =
         std::string(R"svg(<svg xmlns="http://www.w3.org/2000/svg"
-        width="141" height="117" viewBox="0 0 100 83"><defs><filter id="f"
+        width="141" height="117" viewBox="0 0 100 70" preserveAspectRatio="none"><defs><filter id="f"
         filterUnits="userSpaceOnUse" x="0" y="0" width="100" height="83">)svg") +
         graphs[index] +
         R"svg(</filter></defs><g filter="url(#f)"><rect x="0" y="0" width="30.3" height="83"

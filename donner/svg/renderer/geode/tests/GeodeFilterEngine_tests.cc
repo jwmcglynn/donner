@@ -479,6 +479,17 @@ TEST_F(GeodeFilterEngineTest, Dpr2PlanChargesAllTileWorkUnderTheWasmMemoryCap) {
   EXPECT_EQ(engine_->executionPlan(graph, 2000, 1600, Transform2d()).tiles, 1u);
 }
 
+TEST_F(GeodeFilterEngineTest, RefusedTileSurfacesStopBeforeFurtherAllocation) {
+  source_ = gpu::GetResultOrFail(device_->adapterDevice().createTexture(
+      gpu::TextureDescriptor{"tiled source",
+                             {32, 32},
+                             gpu::TextureFormat::RGBA8Unorm,
+                             gpu::TextureUsage::Sampled | gpu::TextureUsage::CopySrc}));
+  engine_->setMaximumTileExtentForTesting(16);
+  runGraph(MakeGraph(true), "FilterTiledOutput");
+  runGraph(MakeGraph(true), "FilterTileInput");
+}
+
 INSTANTIATE_TEST_SUITE_P(EveryActivePath, FilterAllocationRefusal,
                          testing::ValuesIn(AllocationRefusalCases()),
                          [](const testing::TestParamInfo<AllocationRefusalCase>& info) {

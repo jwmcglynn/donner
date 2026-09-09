@@ -2607,8 +2607,11 @@ void FilterGraphExecution::record(const svg::components::FilterNode& node, const
 
 wgpu::Texture FilterGraphExecution::run() {
   using namespace svg::components;
-  const FilterTilePlan plan = engine.executionPlan(
+  FilterTilePlan plan = engine.executionPlan(
       graph, sourceGraphic.getWidth(), sourceGraphic.getHeight(), coordinates.deviceFromFilter);
+  if (plan.tiles > 1 && !(sourceGraphic.getUsage() & wgpu::TextureUsage::CopySrc)) {
+    plan = {plan.width, plan.height, plan.width, plan.height, plan.width, plan.height, 1};
+  }
   FilterExecutionBudget localBudget;
   FilterExecutionBudget& budget = executionBudget ? *executionBudget : localBudget;
   auto reservation = budget.reserve(graph, plan.workPixels(), FilterMemoryModel::GpuAllNodes,

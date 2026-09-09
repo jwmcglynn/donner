@@ -12,6 +12,7 @@
 #include "donner/svg/renderer/RendererGeode.h"
 #include "donner/svg/renderer/RendererTinySkia.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
+#include "donner/svg/renderer/geode/GeodeFilterEngine.h"
 
 namespace donner::gpu::shader {
 namespace {
@@ -114,10 +115,15 @@ TEST(FilterChainPrecision, Dpr2FullViewportCompositingFitsTheExistingMemoryCap) 
   ASSERT_TRUE(gpuDocument.hasResult());
   ASSERT_TRUE(cpuDocument.hasResult());
   ASSERT_THAT(warnings.warnings(), testing::IsEmpty());
-  svg::RendererGeode gpuRenderer;
+  std::shared_ptr<geode::GeodeDevice> device = geode::GeodeDevice::CreateHeadless();
+  ASSERT_TRUE(device);
+  svg::RendererGeode gpuRenderer(device);
   svg::RendererTinySkia cpuRenderer;
   gpuRenderer.draw(gpuDocument.result());
   cpuRenderer.draw(cpuDocument.result());
+  const auto memory = device->filterEngine().lastExecutionMemory();
+  EXPECT_GT(memory.tileExecutions, 1u);
+  EXPECT_LT(memory.total() + 2000u * 1600u * 4, 128u * 1024u * 1024u);
   const auto actual = gpuRenderer.takeSnapshot();
   const auto referencePixel = cpuRenderer.takeSnapshot();
   ASSERT_EQ(referencePixel.dimensions, Vector2i(1, 1));
