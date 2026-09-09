@@ -21,7 +21,7 @@ ShaderStatus AddRoundHalfAwayFromZero(ModuleBuilder& builder) {
   const IrExpr x = e(fn.ref("x"));
   const IrExpr magnitude = e(fn.addLet("magnitude", e(CallBuiltin(BuiltinFn::Abs, {x}))));
   const IrExpr integral = e(fn.addLet("integral", e(CallBuiltin(BuiltinFn::Floor, {magnitude}))));
-  const IrExpr sign = e(CallBuiltin(BuiltinFn::Sign, {x}));
+  const IrExpr sign = e(fn.addLet("direction", e(CallBuiltin(BuiltinFn::Sign, {x}))));
   // Adding 0.5 first can round an input immediately below a half to the next integer.
   e.ok(fn.beginIf(e(Ge(e(Sub(magnitude, integral)), LiteralF32(0.5f)))));
   e.ok(fn.returnValue(e(Mul(sign, e(Add(integral, LiteralF32(1.0f)))))));
