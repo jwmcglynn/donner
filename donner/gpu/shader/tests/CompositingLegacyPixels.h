@@ -1,6 +1,9 @@
 #pragma once
 /// @file
 /// Reference RGBA8 pixels for the fixed legacy GPU compositing corpus.
+/// Captured with the legacy renderer at 003c395d37c34391ed8b422a721ee51decd0cdee by rendering the
+/// SVG cases in FilterCompositingLegacy_tests.cc and recording snapshot RGBA bytes. Every pixel
+/// in each 13x11 image matched the listed texel; Metal and Vulkan captures matched exactly.
 
 #include <array>
 #include <cstdint>
