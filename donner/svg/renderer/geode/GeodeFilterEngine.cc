@@ -2411,6 +2411,7 @@ struct FilterGraphExecution {
   std::unordered_map<std::string, size_t> lastNamedUse;
   bool axisAligned;
   uint64_t executedTiles = 0;
+  uint64_t admittedWorkUnits = 0;
 };
 
 /// The primitive visitor owns node-local conversion and clip decisions.
@@ -2715,6 +2716,7 @@ wgpu::Texture GeodeFilterEngine::execute(const svg::components::FilterGraph& gra
   lastExecutionMemory_ = execution.arena.memory();
   lastExecutionMemory_.persistentBuffers = retainedBufferBytes();
   lastExecutionMemory_.tileExecutions = execution.executedTiles;
+  lastExecutionMemory_.workUnits = execution.admittedWorkUnits;
   return output;
 }
 
@@ -2786,12 +2788,14 @@ wgpu::Texture FilterGraphExecution::run() {
   }
   FilterExecutionBudget localBudget;
   FilterExecutionBudget& budget = executionBudget ? *executionBudget : localBudget;
+  const uint64_t workBefore = budget.workUnits();
   auto reservation = budget.reserve(graph, plan.workPixels(), FilterMemoryModel::GpuAllNodes,
                                     plan.additionalTextureBytes(), engine.retainedBufferBytes(),
                                     plan.pixels(), plan.tiles);
   if (!reservation) {
     return sourceGraphic;
   }
+  admittedWorkUnits = budget.workUnits() - workBefore;
   const wgpu::Texture result = plan.tiles > 1 ? runTiled(plan) : runNodes();
   budget.release(*reservation);
   return result;
