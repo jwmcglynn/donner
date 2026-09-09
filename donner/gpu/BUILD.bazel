@@ -117,4 +117,22 @@ donner_cc_test(
     ],
 )
 
+# Separate binary because AllocationTracker.h defines global replacement operator new/delete,
+# which take precedence over the sanitizers' interceptors. Linking it into gpu_tests would weaken
+# the ASan and UBSan lanes for every other test in that binary, so this target is excluded from
+# them instead (.github/workflows/sanitizers.yml).
+donner_cc_test(
+    name = "gpu_allocation_tests",
+    srcs = [
+        "tests/EncoderAllocation_tests.cc",
+        "//donner/svg/renderer/benchmarks:AllocationTracker.h",
+    ],
+    deps = [
+        ":gpu",
+        ":gpu_test_utils",
+        ":recording_device",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
 donner_package()

@@ -795,6 +795,34 @@ Status Device::validateBindGroupEntryForLayout(const BindGroupLayoutEntry& layou
   return OkStatus();
 }
 
+void Device::collectBoundTextures(
+    const BindGroupDescriptor& descriptor, const std::vector<BindGroupLayoutEntry>& layoutEntries,
+    SmallVector<BoundTextureBinding, kMaxBindings>& sampledOut,
+    SmallVector<BoundTextureBinding, kMaxBindings>& storageOut) const {
+  for (const BindGroupLayoutEntry& layoutEntry : layoutEntries) {
+    const bool sampled = layoutEntry.type == BindingType::SampledTexture2dFloat;
+    const bool storage = layoutEntry.type == BindingType::WriteOnlyStorageTexture2d;
+    if (!sampled && !storage) {
+      continue;
+    }
+    const BindGroupEntry* entry = nullptr;
+    if (findBindGroupEntryForBinding(descriptor, layoutEntry, entry).hasError()) {
+      continue;  // Already reported by the per-binding pass.
+    }
+    const TextureViewBinding* viewBinding = std::get_if<TextureViewBinding>(&entry->resource);
+    if (viewBinding == nullptr) {
+      continue;  // Already reported by the per-binding pass.
+    }
+    const TextureViewRecord* view =
+        textureViews_.find(viewBinding->view.slotIndex(), viewBinding->view.generation());
+    if (view == nullptr) {
+      continue;
+    }
+    (sampled ? sampledOut : storageOut)
+        .push_back(BoundTextureBinding{layoutEntry.binding, view->textureIdentity});
+  }
+}
+
 std::vector<Device::BoundTextureBinding> Device::collectBoundTextures(
     const BindGroupDescriptor& descriptor, const std::vector<BindGroupLayoutEntry>& layoutEntries,
     BindingType type) const {

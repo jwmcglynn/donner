@@ -15,6 +15,7 @@
 #include "donner/gpu/shader/IrModule.h"
 #include "donner/gpu/tests/GpuTestUtils.h"
 
+using testing::AllOf;
 using testing::HasSubstr;
 
 namespace donner::gpu {
@@ -386,6 +387,158 @@ TEST_F(ComputePassTests, BindGroupAcceptsDistinctSampledAndStorageTextures) {
   EXPECT_THAT(device_.createBindGroup(
                   BindGroupDescriptor{"distinct", bindGroupLayout_, bindGroupEntries(outputView_)}),
               HasResult());
+}
+
+class ActiveTextureBindingsTests : public ComputePassTests {
+protected:
+  void SetUp() override {
+    ComputePassTests::SetUp();
+    texture_ = GetResultOrFail(device_.createTexture(
+        TextureDescriptor{"shared",
+                          {16, 16},
+                          TextureFormat::RGBA8Unorm,
+                          TextureUsage::Sampled | TextureUsage::StorageBinding}));
+    view_ = GetResultOrFail(device_.createTextureView(texture_, {"sharedView"}));
+    sampledLayout_ = GetResultOrFail(device_.createBindGroupLayout(
+        {"sampled", {{0, ShaderStage::Compute, BindingType::SampledTexture2dFloat}}}));
+    storageLayout_ = GetResultOrFail(device_.createBindGroupLayout(
+        {"storage", {{0, ShaderStage::Compute, BindingType::WriteOnlyStorageTexture2d}}}));
+    sampled_ = makeGroup(sampledLayout_, view_);
+    storage_ = makeGroup(storageLayout_, view_);
+  }
+
+  BindGroup makeGroup(const BindGroupLayout& layout, const TextureView& view) {
+    return GetResultOrFail(
+        device_.createBindGroup({"textureGroup", layout, {{0, TextureViewBinding{view}}}}));
+  }
+
+  ComputePipeline makePipeline(std::vector<BindGroupLayoutRef> groups) {
+    const PipelineLayout layout =
+        GetResultOrFail(device_.createPipelineLayout({"activeGroups", std::move(groups)}));
+    return GetResultOrFail(
+        device_.createComputePipeline({"activeGroups", layout, {shader_, "csMain"}, {8, 8, 1}}));
+  }
+
+  Texture texture_;
+  TextureView view_;
+  BindGroupLayout sampledLayout_;
+  BindGroupLayout storageLayout_;
+  BindGroup sampled_;
+  BindGroup storage_;
+};
+
+TEST_F(ActiveTextureBindingsTests, RejectsSampledStorageAliasesInEitherGroupOrder) {
+  for (const bool sampledFirst : {true, false}) {
+    SCOPED_TRACE(sampledFirst);
+    encoder_ = GetResultOrFail(device_.createCommandEncoder());
+    const ComputePipeline pipeline = makePipeline(
+        sampledFirst ? std::vector<BindGroupLayoutRef>{sampledLayout_, storageLayout_}
+                     : std::vector<BindGroupLayoutRef>{storageLayout_, sampledLayout_});
+    ComputePassEncoder* pass = beginComputePass();
+    ASSERT_THAT(pass->setPipeline(pipeline), IsOk());
+    ASSERT_THAT(pass->setBindGroup(0, sampledFirst ? sampled_ : storage_), IsOk());
+    ASSERT_THAT(pass->setBindGroup(1, sampledFirst ? storage_ : sampled_), IsOk());
+    EXPECT_THAT(pass->dispatchWorkgroups(1),
+                IsGpuErrorWithMessage(
+                    GpuErrorType::UsageMismatch,
+                    AllOf(HasSubstr("sampled binding (0)"), HasSubstr("storage-write binding (0)"),
+                          HasSubstr("texture slot"))));
+    EXPECT_THAT(encoder_->finish(), IsGpuError(GpuErrorType::UsageMismatch));
+  }
+}
+
+TEST_F(ActiveTextureBindingsTests, AllowsTheSameTextureInReadOnlyGroups) {
+  const ComputePipeline pipeline = makePipeline({sampledLayout_, sampledLayout_});
+  ComputePassEncoder* pass = beginComputePass();
+  ASSERT_THAT(pass->setPipeline(pipeline), IsOk());
+  ASSERT_THAT(pass->setBindGroup(0, sampled_), IsOk());
+  ASSERT_THAT(pass->setBindGroup(1, sampled_), IsOk());
+  EXPECT_THAT(pass->dispatchWorkgroups(1), IsOk());
+}
+
+TEST_F(ActiveTextureBindingsTests, IgnoresGroupsOutsideTheCurrentPipelineLayout) {
+  const ComputePipeline pipeline = makePipeline({sampledLayout_});
+  ComputePassEncoder* pass = beginComputePass();
+  ASSERT_THAT(pass->setPipeline(pipeline), IsOk());
+  ASSERT_THAT(pass->setBindGroup(0, sampled_), IsOk());
+  ASSERT_THAT(pass->setBindGroup(1, storage_), IsOk());
+  EXPECT_THAT(pass->dispatchWorkgroups(1), IsOk());
+}
+
+TEST_F(ActiveTextureBindingsTests, ReplacedGroupsDoNotLeaveTextureAliases) {
+  const ComputePipeline pipeline = makePipeline({sampledLayout_, storageLayout_});
+  const BindGroup replacement = makeGroup(storageLayout_, outputView_);
+  ComputePassEncoder* pass = beginComputePass();
+  ASSERT_THAT(pass->setPipeline(pipeline), IsOk());
+  ASSERT_THAT(pass->setBindGroup(0, sampled_), IsOk());
+  ASSERT_THAT(pass->setBindGroup(1, storage_), IsOk());
+  ASSERT_THAT(pass->setBindGroup(1, replacement), IsOk());
+  EXPECT_THAT(pass->dispatchWorkgroups(1), IsOk());
+}
+
+TEST_F(ActiveTextureBindingsTests, PipelineChangesUseOnlyTheNewDeclaredGroups) {
+  const ComputePipeline both = makePipeline({sampledLayout_, storageLayout_});
+  const ComputePipeline sampledOnly = makePipeline({sampledLayout_});
+  ComputePassEncoder* pass = beginComputePass();
+  ASSERT_THAT(pass->setPipeline(both), IsOk());
+  ASSERT_THAT(pass->setBindGroup(0, sampled_), IsOk());
+  ASSERT_THAT(pass->setBindGroup(1, storage_), IsOk());
+  ASSERT_THAT(pass->setPipeline(sampledOnly), IsOk());
+  EXPECT_THAT(pass->dispatchWorkgroups(1), IsOk());
+}
+
+TEST_F(ActiveTextureBindingsTests, ATextureCanChangeRolesBetweenDispatches) {
+  const ComputePipeline pipeline = makePipeline({sampledLayout_, storageLayout_});
+  const BindGroup unrelatedSample = makeGroup(sampledLayout_, inputView_);
+  const BindGroup unrelatedStorage = makeGroup(storageLayout_, outputView_);
+  ComputePassEncoder* pass = beginComputePass();
+  ASSERT_THAT(pass->setPipeline(pipeline), IsOk());
+  ASSERT_THAT(pass->setBindGroup(0, sampled_), IsOk());
+  ASSERT_THAT(pass->setBindGroup(1, unrelatedStorage), IsOk());
+  ASSERT_THAT(pass->dispatchWorkgroups(1), IsOk());
+  ASSERT_THAT(pass->setBindGroup(0, unrelatedSample), IsOk());
+  ASSERT_THAT(pass->setBindGroup(1, storage_), IsOk());
+  EXPECT_THAT(pass->dispatchWorkgroups(1), IsOk());
+}
+
+TEST_F(ActiveTextureBindingsTests, DestroyedBoundGroupCannotResolveToItsReplacement) {
+  const ComputePipeline pipeline = makePipeline({sampledLayout_});
+  ComputePassEncoder* pass = beginComputePass();
+  ASSERT_THAT(pass->setPipeline(pipeline), IsOk());
+  ASSERT_THAT(pass->setBindGroup(0, sampled_), IsOk());
+  const uint32_t oldSlot = sampled_.slotIndex();
+  const uint32_t oldGeneration = sampled_.generation();
+  ASSERT_THAT(device_.destroyBindGroup(std::move(sampled_)), IsOk());
+  const BindGroup replacement = makeGroup(sampledLayout_, inputView_);
+  ASSERT_EQ(replacement.slotIndex(), oldSlot);
+  ASSERT_NE(replacement.generation(), oldGeneration);
+  EXPECT_THAT(pass->dispatchWorkgroups(1), IsGpuError(GpuErrorType::InvalidHandle));
+}
+
+TEST_F(ActiveTextureBindingsTests, DestroyedBoundTextureCannotResolveToItsReplacement) {
+  const ComputePipeline pipeline = makePipeline({sampledLayout_});
+  ComputePassEncoder* pass = beginComputePass();
+  ASSERT_THAT(pass->setPipeline(pipeline), IsOk());
+  ASSERT_THAT(pass->setBindGroup(0, sampled_), IsOk());
+  const uint32_t oldSlot = texture_.slotIndex();
+  ASSERT_THAT(device_.destroyTexture(std::move(texture_)), IsOk());
+  const Texture replacement = GetResultOrFail(device_.createTexture(
+      {"replacement", {16, 16}, TextureFormat::RGBA8Unorm, TextureUsage::Sampled}));
+  ASSERT_EQ(replacement.slotIndex(), oldSlot);
+  EXPECT_THAT(pass->dispatchWorkgroups(1), IsGpuError(GpuErrorType::InvalidHandle));
+}
+
+TEST_F(ActiveTextureBindingsTests, DestroyedBoundLayoutCannotResolveToItsReplacement) {
+  const ComputePipeline pipeline = makePipeline({sampledLayout_});
+  ComputePassEncoder* pass = beginComputePass();
+  ASSERT_THAT(pass->setPipeline(pipeline), IsOk());
+  ASSERT_THAT(pass->setBindGroup(0, sampled_), IsOk());
+  const uint32_t oldSlot = sampledLayout_.slotIndex();
+  ASSERT_THAT(device_.destroyBindGroupLayout(std::move(sampledLayout_)), IsOk());
+  const BindGroupLayout replacement = GetResultOrFail(device_.createBindGroupLayout(
+      {"replacement", {{0, ShaderStage::Compute, BindingType::SampledTexture2dFloat}}}));
+  ASSERT_EQ(replacement.slotIndex(), oldSlot);
+  EXPECT_THAT(pass->dispatchWorkgroups(1), IsGpuError(GpuErrorType::InvalidHandle));
 }
 
 TEST_F(ComputePassTests, StorageTextureBindingRejectsANonTextureResource) {

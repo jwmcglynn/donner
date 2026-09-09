@@ -414,6 +414,79 @@ TEST_F(CommandEncoderTests, DuplicateAttachmentViewFails) {
                                     HasSubstr("multiple color attachments")));
 }
 
+TEST_F(CommandEncoderTests, DistinctViewsOfOneAttachmentTextureFail) {
+  const TextureView secondView =
+      GetResultOrFail(device_.createTextureView(target_, TextureViewDescriptor{"secondView"}));
+  EXPECT_THAT(encoder_->beginRenderPass(RenderPassDescriptor{
+                  "aliasedPass",
+                  {RenderPassColorAttachment{targetView_, LoadOp::Clear, StoreOp::Store},
+                   RenderPassColorAttachment{secondView, LoadOp::Load, StoreOp::Store}}}),
+              IsGpuErrorWithMessage(GpuErrorType::InvalidDescriptor,
+                                    HasSubstr("multiple color attachments")));
+}
+
+TEST_F(CommandEncoderTests, SamplingAnotherViewOfAnActiveAttachmentFails) {
+  // The alias is rejected when the draw uses the group, not when the group is bound: binding is
+  // not using, and the encoder must not be poisoned by a group the eventual pipeline never reads.
+  const Texture texture = GetResultOrFail(device_.createTexture(
+      TextureDescriptor{"feedback", Extent2d{4, 4}, TextureFormat::RGBA8Unorm,
+                        TextureUsage::RenderAttachment | TextureUsage::Sampled}));
+  const TextureView attachmentView =
+      GetResultOrFail(device_.createTextureView(texture, TextureViewDescriptor{"attachment"}));
+  const TextureView sampledView =
+      GetResultOrFail(device_.createTextureView(texture, TextureViewDescriptor{"sampled"}));
+  const BindGroupLayout layout =
+      GetResultOrFail(device_.createBindGroupLayout(BindGroupLayoutDescriptor{
+          "feedbackLayout",
+          {BindGroupLayoutEntry{0, ShaderStage::Fragment, BindingType::SampledTexture2dFloat}}}));
+  const BindGroup group = GetResultOrFail(device_.createBindGroup(BindGroupDescriptor{
+      "feedbackGroup", layout, {BindGroupEntry{0, TextureViewBinding{sampledView}}}}));
+  const PipelineLayout feedbackPipelineLayout = GetResultOrFail(
+      device_.createPipelineLayout(PipelineLayoutDescriptor{"feedbackPipelineLayout", {layout}}));
+  RenderPipelineDescriptor pipelineDescriptor = solidPipelineDescriptor();
+  pipelineDescriptor.layout = feedbackPipelineLayout;
+  const RenderPipeline feedbackPipeline =
+      GetResultOrFail(device_.createRenderPipeline(pipelineDescriptor));
+
+  RenderPassEncoder* pass = GetResultOrFail(encoder_->beginRenderPass(RenderPassDescriptor{
+      "feedbackPass", {RenderPassColorAttachment{attachmentView, LoadOp::Clear, StoreOp::Store}}}));
+  ASSERT_NE(pass, nullptr);
+  EXPECT_THAT(pass->setPipeline(feedbackPipeline), IsOk());
+  EXPECT_THAT(pass->setBindGroup(0, group), IsOk());
+  EXPECT_THAT(pass->setVertexBuffer(0, vertexBuffer_), IsOk());
+  EXPECT_THAT(pass->draw(3), IsGpuErrorWithMessage(GpuErrorType::UsageMismatch,
+                                                   HasSubstr("active color attachment")));
+}
+
+TEST_F(CommandEncoderTests, AGroupOutsideThePipelineLayoutMayReferenceAnAttachment) {
+  // A group bound at an index the active pipeline layout does not declare is never read, so it
+  // cannot alias anything. Rejecting it would fail an ordinary pre-bind or replace sequence.
+  const Texture texture = GetResultOrFail(device_.createTexture(
+      TextureDescriptor{"feedback", Extent2d{4, 4}, TextureFormat::RGBA8Unorm,
+                        TextureUsage::RenderAttachment | TextureUsage::Sampled}));
+  const TextureView attachmentView =
+      GetResultOrFail(device_.createTextureView(texture, TextureViewDescriptor{"attachment"}));
+  const TextureView sampledView =
+      GetResultOrFail(device_.createTextureView(texture, TextureViewDescriptor{"sampled"}));
+  const BindGroupLayout unusedLayout =
+      GetResultOrFail(device_.createBindGroupLayout(BindGroupLayoutDescriptor{
+          "unusedLayout",
+          {BindGroupLayoutEntry{0, ShaderStage::Fragment, BindingType::SampledTexture2dFloat}}}));
+  const BindGroup unusedGroup = GetResultOrFail(device_.createBindGroup(BindGroupDescriptor{
+      "unusedGroup", unusedLayout, {BindGroupEntry{0, TextureViewBinding{sampledView}}}}));
+
+  RenderPassEncoder* pass = GetResultOrFail(encoder_->beginRenderPass(RenderPassDescriptor{
+      "feedbackPass", {RenderPassColorAttachment{attachmentView, LoadOp::Clear, StoreOp::Store}}}));
+  ASSERT_NE(pass, nullptr);
+  // pipeline_ declares one bind group layout, so index 1 is outside what the draw reads.
+  EXPECT_THAT(pass->setPipeline(pipeline_), IsOk());
+  EXPECT_THAT(pass->setBindGroup(1, unusedGroup), IsOk());
+  EXPECT_THAT(pass->setBindGroup(0, bindGroup_), IsOk());
+  EXPECT_THAT(pass->setVertexBuffer(0, vertexBuffer_), IsOk());
+  EXPECT_THAT(pass->draw(3), IsOk());
+  EXPECT_THAT(pass->end(), IsOk());
+}
+
 TEST_F(CommandEncoderTests, CopyTextureToBufferRejectsMisalignedOffset) {
   EXPECT_THAT(encoder_->copyTextureToBuffer(TexelCopyTextureInfo{target_}, readbackBuffer_,
                                             TexelCopyBufferLayout{2, 256, 4}, Extent2d{4, 4}),

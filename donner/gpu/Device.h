@@ -13,8 +13,10 @@
 #include <utility>
 #include <vector>
 
+#include "donner/base/SmallVector.h"
 #include "donner/gpu/Commands.h"
 #include "donner/gpu/Descriptors.h"
+#include "donner/gpu/GpuLimits.h"
 #include "donner/gpu/GpuResult.h"
 #include "donner/gpu/Handles.h"
 
@@ -991,6 +993,20 @@ private:
   std::vector<BoundTextureBinding> collectBoundTextures(
       const BindGroupDescriptor& descriptor, const std::vector<BindGroupLayoutEntry>& layoutEntries,
       BindingType type) const;
+
+  /// Collects sampled and storage-write texture bindings in one walk of \p layoutEntries,
+  /// appending to caller-owned storage. The draw and dispatch path calls this once per bound
+  /// group, so it allocates nothing while the outputs stay inside their inline capacity, which
+  /// bounds the total across every bound group rather than the largest single one. Two passes
+  /// over the layout and two returned vectors showed up as avoidable per-draw work.
+  /// @param descriptor Bind group descriptor being validated.
+  /// @param layoutEntries Layout the group was created against.
+  /// @param sampledOut Receives every sampled-texture binding that resolves to a live view.
+  /// @param storageOut Receives every storage-write binding that resolves to a live view.
+  void collectBoundTextures(const BindGroupDescriptor& descriptor,
+                            const std::vector<BindGroupLayoutEntry>& layoutEntries,
+                            SmallVector<BoundTextureBinding, kMaxBindings>& sampledOut,
+                            SmallVector<BoundTextureBinding, kMaxBindings>& storageOut) const;
 
   /// Rejects a bind group that names one texture through both a sampled and a storage-write
   /// binding: the two declare different layouts for one image, so neither backend transition can

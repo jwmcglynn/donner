@@ -1,5 +1,6 @@
 #include "donner/gpu/CommandEncoder.h"
 
+#include <algorithm>
 #include <cmath>
 #include <format>
 #include <sstream>
@@ -93,24 +94,72 @@ void CommandEncoder::resetPassBindings() {
   currentPipeline_.reset();
   boundVertexBuffers_.fill(std::nullopt);
   boundBindGroups_.fill(std::nullopt);
+  passAttachmentTextures_.clear();
 }
 
 Status CommandEncoder::validateBoundBindGroups(std::string_view operation) {
-  for (size_t index = 0; index < currentPipeline_->bindGroupLayoutIds.size(); ++index) {
-    if (!boundBindGroups_[index]) {
-      return fail(Err(GpuErrorType::InvalidState,
-                      std::format("{}: the pipeline layout requires a bind group at index {} "
-                                  "but none is bound",
-                                  operation, index)));
+  // Called once per draw and per dispatch, on the path the Geode renderer runs through, so the
+  // collectors are encoder-owned and reused rather than allocated here. They are cleared, not
+  // shrunk, and they accumulate across every bound group, so a pass allocates at most once for
+  // the largest total those groups reach.
+  sampledTextureScratch_.clear();
+  storageTextureScratch_.clear();
+  for (uint32_t index = 0; index < currentPipeline_->bindGroupLayoutIds.size(); ++index) {
+    auto group = validateBoundBindGroup(index, operation);
+    if (group.hasError()) {
+      return fail(std::move(group).error());
     }
-    if (!(boundBindGroups_[index]->layoutIdentity == currentPipeline_->bindGroupLayoutIds[index])) {
-      return fail(Err(GpuErrorType::InvalidState,
-                      std::format("{}: the bind group at index {} was created against a "
-                                  "different layout than the pipeline expects",
-                                  operation, index)));
+    device_->collectBoundTextures(group.result().group->descriptor,
+                                  group.result().layout->descriptor.entries, sampledTextureScratch_,
+                                  storageTextureScratch_);
+  }
+  for (const auto& sampled : sampledTextureScratch_) {
+    for (const auto& storage : storageTextureScratch_) {
+      if (sampled.textureIdentity == storage.textureIdentity) {
+        return fail(Err(
+            GpuErrorType::UsageMismatch,
+            std::format("{}: active bind groups use one texture as both a sampled "
+                        "binding ({}) and a storage-write binding ({}) (texture slot "
+                        "{}, generation {})",
+                        operation, sampled.binding, storage.binding,
+                        sampled.textureIdentity.slotIndex, sampled.textureIdentity.generation)));
+      }
     }
   }
   return OkStatus();
+}
+
+Result<CommandEncoder::ResolvedBindGroup> CommandEncoder::validateBoundBindGroup(
+    uint32_t index, std::string_view operation) {
+  if (!boundBindGroups_[index]) {
+    return Err(GpuErrorType::InvalidState,
+               std::format("{}: the pipeline layout requires a bind group at index {} but none "
+                           "is bound",
+                           operation, index));
+  }
+  const BoundBindGroup& bound = *boundBindGroups_[index];
+  if (bound.layoutIdentity != currentPipeline_->bindGroupLayoutIds[index]) {
+    return Err(GpuErrorType::InvalidState,
+               std::format("{}: the bind group at index {} was created against a different "
+                           "layout than the pipeline expects",
+                           operation, index));
+  }
+  const auto* group =
+      device_->bindGroups_.find(bound.identity.slotIndex, bound.identity.generation);
+  const auto* layout = device_->bindGroupLayouts_.find(bound.layoutIdentity.slotIndex,
+                                                       bound.layoutIdentity.generation);
+  if (group == nullptr || layout == nullptr) {
+    return Err(GpuErrorType::InvalidHandle,
+               std::format("{}: the bind group at index {} or its layout was destroyed", operation,
+                           index));
+  }
+  for (const BindGroupEntry& entry : group->descriptor.entries) {
+    if (Status status = revalidateBindGroupEntry(entry, operation, AttachmentAliasPolicy::Reject);
+        status.hasError()) {
+      return std::move(status).error();
+    }
+  }
+  return ResolvedBindGroup{group, layout};
 }
 
 Result<RenderPassEncoder*> CommandEncoder::beginRenderPass(const RenderPassDescriptor& descriptor) {
@@ -137,8 +186,8 @@ Result<RenderPassEncoder*> CommandEncoder::beginRenderPass(const RenderPassDescr
   Extent2d passExtent;
   std::vector<TextureFormat> attachmentFormats;
   attachmentFormats.reserve(descriptor.colorAttachments.size());
-  std::vector<ResourceIdentity> seenViews;
-  seenViews.reserve(descriptor.colorAttachments.size());
+  std::vector<ResourceIdentity> seenTextures;
+  seenTextures.reserve(descriptor.colorAttachments.size());
   for (size_t i = 0; i < descriptor.colorAttachments.size(); ++i) {
     const RenderPassColorAttachment& attachment = descriptor.colorAttachments[i];
     auto viewRecord =
@@ -147,17 +196,18 @@ Result<RenderPassEncoder*> CommandEncoder::beginRenderPass(const RenderPassDescr
       return fail(std::move(viewRecord).error()).error();
     }
 
-    const ResourceIdentity viewIdentity{attachment.view.slotIndex(), attachment.view.generation()};
-    for (const ResourceIdentity& seenView : seenViews) {
-      if (seenView == viewIdentity) {
+    const ResourceIdentity textureIdentity = viewRecord.result()->textureIdentity;
+    for (const ResourceIdentity& seenTexture : seenTextures) {
+      if (seenTexture == textureIdentity) {
         return fail(Err(GpuErrorType::InvalidDescriptor,
-                        std::format("beginRenderPass: attachment {} view \"{}\" appears in "
-                                    "multiple color attachments of the same pass",
-                                    i, viewRecord.result()->descriptor.label.str())))
+                        std::format(
+                            "beginRenderPass: attachment {} texture viewed by \"{}\" appears in "
+                            "multiple color attachments of the same pass",
+                            i, viewRecord.result()->descriptor.label.str())))
             .error();
       }
     }
-    seenViews.push_back(viewIdentity);
+    seenTextures.push_back(textureIdentity);
 
     if (!IsKnownEnumValue(attachment.loadOp)) {
       return fail(Err(GpuErrorType::InvalidDescriptor,
@@ -211,6 +261,7 @@ Result<RenderPassEncoder*> CommandEncoder::beginRenderPass(const RenderPassDescr
   passExtent_ = passExtent;
   passAttachmentFormats_ = std::move(attachmentFormats);
   resetPassBindings();
+  passAttachmentTextures_ = std::move(seenTextures);
   commands_.push_back(BeginRenderPassCommand{descriptor});
   return &passEncoder_;
 }
@@ -286,19 +337,27 @@ Status CommandEncoder::passSetBindGroup(uint32_t index, const BindGroup& bindGro
                                 record.result()->layoutIdentity.slotIndex)));
   }
   for (const BindGroupEntry& entry : record.result()->descriptor.entries) {
-    const Status entryStatus = revalidateBindGroupEntry(entry);
+    // Binding a group is not using it. A group bound at an index the eventual pipeline layout
+    // does not declare, or replaced before the draw, never reaches the backend, so rejecting an
+    // attachment alias here would fail sequences that are harmless. The draw and dispatch path
+    // applies the check to exactly the groups the active pipeline uses.
+    const Status entryStatus =
+        revalidateBindGroupEntry(entry, "setBindGroup", AttachmentAliasPolicy::Ignore);
     if (entryStatus.hasError()) {
       return entryStatus;
     }
   }
 
-  boundBindGroups_[index] = BoundBindGroup{bindGroup.slotIndex(), record.result()->layoutIdentity};
+  boundBindGroups_[index] = BoundBindGroup{{bindGroup.slotIndex(), bindGroup.generation()},
+                                           record.result()->layoutIdentity};
   commands_.push_back(
       SetBindGroupCommand{index, ResourceIdentity{bindGroup.slotIndex(), bindGroup.generation()}});
   return OkStatus();
 }
 
-Status CommandEncoder::revalidateBindGroupEntry(const BindGroupEntry& entry) {
+Status CommandEncoder::revalidateBindGroupEntry(const BindGroupEntry& entry,
+                                                std::string_view operation,
+                                                AttachmentAliasPolicy attachmentAlias) {
   if (const BufferBinding* bufferBinding = std::get_if<BufferBinding>(&entry.resource)) {
     auto bufferRecord =
         device_->resolve(device_->buffers_, bufferBinding->buffer, BufferTag::kName);
@@ -315,6 +374,13 @@ Status CommandEncoder::revalidateBindGroupEntry(const BindGroupEntry& entry) {
     auto viewedTexture = device_->resolveViewedTexture(*viewRecord.result());
     if (viewedTexture.hasError()) {
       return fail(std::move(viewedTexture).error());
+    }
+    if (attachmentAlias == AttachmentAliasPolicy::Reject &&
+        std::ranges::find(passAttachmentTextures_, viewRecord.result()->textureIdentity) !=
+            passAttachmentTextures_.end()) {
+      return fail(
+          Err(GpuErrorType::UsageMismatch,
+              std::format("{}: a texture binding aliases an active color attachment", operation)));
     }
   } else if (const SamplerBinding* samplerBinding = std::get_if<SamplerBinding>(&entry.resource)) {
     auto samplerRecord =
