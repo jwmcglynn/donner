@@ -317,6 +317,35 @@ protected:
 
 // ----------------------------------------------------------------------------
 
+TEST_F(RendererGeodeTest, RefusalAfterAdmissionPreservesTheParentPixels) {
+  RendererGeode renderer = createRenderer();
+  beginFrame(renderer);
+  renderer.setPaint(solidFill(css::RGBA(255, 0, 255, 255)));
+  const Box2d region({0, 0}, {kViewportSize, kViewportSize});
+  renderer.drawRect(region, StrokeParams{});
+  components::FilterGraph graph;
+  components::FilterNode flood;
+  flood.primitive =
+      components::filter_primitive::Flood{.floodColor = css::Color(css::RGBA(0, 0, 255, 255))};
+  graph.nodes.push_back(flood);
+  renderer.pushFilterLayer(graph, region);
+  ASSERT_EQ(renderer.resourceStats().filterExecutions, 1u);
+  // Lowering the limit after admission forces the actual allocation-refusal path.
+  renderer.setSurfaceBudgetForTesting(2, RendererSurfaceBudget::kMaximumBytes);
+  renderer.popFilterLayer();
+  renderer.endFrame();
+  EXPECT_TRUE(renderer.resourceStats().surfaceBudgetRejected);
+  const size_t width = static_cast<size_t>(kViewportSize);
+  RendererBitmap expected{Vector2i(kViewportSize, kViewportSize),
+                          std::vector<uint8_t>(width * width * 4), width * 4};
+  for (size_t offset = 0; offset < expected.pixels.size(); offset += 4) {
+    expected.pixels[offset] = expected.pixels[offset + 2] = expected.pixels[offset + 3] = 255;
+  }
+  editor::tests::CompareBitmapToBitmap(renderer.takeSnapshot(), expected,
+                                       "late_filter_refusal_parent",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
 TEST_F(RendererGeodeTest, ObjectBoundingBoxHaloUsesTheExecutedScalingOrder) {
   using namespace components;
   for (bool nearAxisShear : {false, true}) {
@@ -346,6 +375,12 @@ TEST_F(RendererGeodeTest, ObjectBoundingBoxHaloUsesTheExecutedScalingOrder) {
         transform.data[0] = 1e-9;
         transform.data[1] = 5e-7;
         transform.data[3] = 1;
+      }
+      if (device == tiledDevice) {
+        const auto plan =
+            device->filterEngine().executionPlan(graph, kViewportSize, kViewportSize, transform);
+        // Three radius-two box passes require six source pixels on either side.
+        EXPECT_GE((plan.tileWidth - plan.coreWidth) / 2, 6u);
       }
       renderer.setTransform(transform);
       renderer.pushFilterLayer(
