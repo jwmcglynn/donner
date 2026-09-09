@@ -387,7 +387,7 @@ std::vector<std::string> combineColumns(const std::vector<std::string>& left,
   return combined;
 }
 
-/// Directory for parity diff dumps: `$TEST_UNDECLARED_OUTPUTS_DIR` when set
+/// Directory for comparison diff dumps: `$TEST_UNDECLARED_OUTPUTS_DIR` when set
 /// (Bazel collects it), else the system temp dir.
 std::filesystem::path parityOutputDir() {
   if (const char* dir = std::getenv("TEST_UNDECLARED_OUTPUTS_DIR")) {
@@ -881,12 +881,12 @@ void ImageComparisonTestFixture::renderAndCompare(SVGDocument& document,
               << " max)\n";
 
     const std::filesystem::path actualImagePath =
-        TestTempDir() / escapeFilename(effectiveGoldenFilename);
+        parityOutputDir() / escapeFilename(effectiveGoldenFilename);
     RendererImageIO::writeRgbaPixelsToPngFile(actualImagePath.string().c_str(), snapshot.pixels,
                                               width, height, strideInPixels);
 
     const std::filesystem::path diffFilePath =
-        TestTempDir() / ("diff_" + escapeFilename(effectiveGoldenFilename));
+        parityOutputDir() / ("diff_" + escapeFilename(effectiveGoldenFilename));
     RendererImageIO::writeRgbaPixelsToPngFile(diffFilePath.string().c_str(), diffImage, width,
                                               height, strideInPixels);
 
