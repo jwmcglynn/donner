@@ -4452,13 +4452,14 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     if (frameResourceScopeDepth == 0) {
       resetOwnedFrameBudgets();
     }
-    if (device) {
+    closeFrameGeneration();
+    // A sibling renderer may still have unsubmitted reads of the shared filter scratch.
+    if (device && device->oldestOpenFrameGeneration() == std::numeric_limits<uint64_t>::max()) {
       device->filterEngine().beginFrame();
     }
     if (texturePool) {
       texturePool->beginFrame();
     }
-    closeFrameGeneration();
     if (device) {
       currentFrameIndex = device->beginFrameGeneration();
       frameGenerationOpen = true;
@@ -4585,6 +4586,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     encoder.reset();
     frameFinishedEncoders.clear();
     discardFrameGpuEncoder();
+    closeFrameGeneration();
 
     if (device && device->device()) {
       // Bounded drain before releasing frame resources; skips (and stays
@@ -4849,9 +4851,6 @@ RendererGeode::~RendererGeode() {
   // `initPipelines`, and the first one destroyed leaves `counters_` dangling for the others.
   if (impl_ && impl_->device && impl_->device->counters() == &impl_->counters) {
     impl_->device->setCounters(nullptr);
-  }
-  if (impl_) {
-    impl_->closeFrameGeneration();
   }
 }
 RendererGeode::RendererGeode(RendererGeode&&) noexcept = default;

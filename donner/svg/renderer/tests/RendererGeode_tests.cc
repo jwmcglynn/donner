@@ -315,6 +315,80 @@ protected:
 
 // ----------------------------------------------------------------------------
 
+TEST_F(RendererGeodeTest, SettledFilterFramesReuseParameterScratch) {
+  for (const bool replaceOpenFrame : {false, true}) {
+    SCOPED_TRACE(replaceOpenFrame);
+    const std::shared_ptr<geode::GeodeDevice> device = geode::GeodeDevice::CreateHeadless();
+    ASSERT_THAT(device, testing::NotNull());
+    RendererGeode renderer(device);
+    if (replaceOpenFrame) {
+      beginFrame(renderer);
+      renderer = RendererGeode(device);
+      EXPECT_EQ(device->oldestOpenFrameGeneration(), std::numeric_limits<uint64_t>::max());
+    }
+    components::FilterGraph graph;
+    graph.colorInterpolationFilters = ColorInterpolationFilters::SRGB;
+    for (size_t index = 0; index < components::kMaximumFilterGraphNodes; ++index) {
+      components::FilterNode node;
+      node.primitive =
+          components::filter_primitive::Flood{.floodColor = css::Color(css::RGBA(255, 0, 0, 255))};
+      graph.nodes.push_back(node);
+    }
+    for (int frame = 0; frame < 16; ++frame) {
+      SCOPED_TRACE(frame);
+      beginFrame(renderer);
+      renderer.pushFilterLayer(graph, Box2d({0, 0}, {kViewportSize, kViewportSize}));
+      renderer.popFilterLayer();
+      renderer.endFrame();
+      const RendererBitmap pixels = renderer.takeSnapshot();
+      ASSERT_THAT(pixels.dimensions, testing::Eq(Vector2i(kViewportSize, kViewportSize)));
+      EXPECT_THAT(pixelAt(pixels, 32, 32), Rgba(255, 0, 0, 255));
+      if (frame >= 2) {
+        EXPECT_EQ(renderer.lastFrameTimings().counters.bufferCreates, 0u);
+      }
+    }
+  }
+}
+
+TEST_F(RendererGeodeTest, OverlappingFiltersPreserveEachFramesParameters) {
+  for (const bool parentFirst : {false, true}) {
+    SCOPED_TRACE(parentFirst);
+    const std::shared_ptr<geode::GeodeDevice> device = geode::GeodeDevice::CreateHeadless();
+    ASSERT_THAT(device, testing::NotNull());
+    RendererGeode parent(device);
+    RendererGeode sibling(device);
+    const auto drawFlood = [](RendererGeode& renderer, css::RGBA color) {
+      components::FilterGraph graph;
+      graph.colorInterpolationFilters = ColorInterpolationFilters::SRGB;
+      components::FilterNode node;
+      node.primitive = components::filter_primitive::Flood{.floodColor = css::Color(color)};
+      graph.nodes.push_back(node);
+      renderer.pushFilterLayer(graph, Box2d({0, 0}, {kViewportSize, kViewportSize}));
+      renderer.popFilterLayer();
+    };
+    beginFrame(parent);
+    drawFlood(parent, css::RGBA(255, 0, 0, 255));
+    beginFrame(sibling);
+    drawFlood(sibling, css::RGBA(0, 0, 255, 255));
+    if (parentFirst) {
+      parent.endFrame();
+      sibling.endFrame();
+    } else {
+      sibling.endFrame();
+      parent.endFrame();
+    }
+    const RendererBitmap parentPixels = parent.takeSnapshot();
+    const RendererBitmap siblingPixels = sibling.takeSnapshot();
+    ASSERT_THAT(parentPixels.dimensions, testing::Eq(Vector2i(kViewportSize, kViewportSize)));
+    ASSERT_THAT(siblingPixels.dimensions, testing::Eq(parentPixels.dimensions));
+    for (const int coordinate : {1, 32, 62}) {
+      SCOPED_TRACE(coordinate);
+      EXPECT_THAT(pixelAt(parentPixels, coordinate, coordinate), Rgba(255, 0, 0, 255));
+      EXPECT_THAT(pixelAt(siblingPixels, coordinate, coordinate), Rgba(0, 0, 255, 255));
+    }
+  }
+}
+
 TEST_F(RendererGeodeTest, OverlappingFramesKeepReplayWithTheirOwner) {
   const std::shared_ptr<geode::GeodeDevice> device = geode::GeodeDevice::CreateHeadless();
   ASSERT_THAT(device, testing::NotNull());
