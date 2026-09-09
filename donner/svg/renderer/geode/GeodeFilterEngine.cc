@@ -2575,6 +2575,22 @@ wgpu::Texture GeodeFilterEngine::execute(const svg::components::FilterGraph& gra
   FilterGraphExecution execution(*this, graph, sourceGraphic, filterRegion, deviceFromFilter,
                                  textureAllocator, commandEncoder, executionBudget);
   const wgpu::Texture output = execution.run();
+  if (!output) {
+    const auto plan =
+        executionPlan(graph, sourceGraphic.getWidth(), sourceGraphic.getHeight(), deviceFromFilter);
+    const auto halo = ComputeFilterSamplingHalo(graph, deviceFromFilter);
+    std::cerr << "Filter failed source=" << sourceGraphic.getWidth() << "x"
+              << sourceGraphic.getHeight() << " transform=" << deviceFromFilter.data[0] << ","
+              << deviceFromFilter.data[1] << "," << deviceFromFilter.data[2] << ","
+              << deviceFromFilter.data[3] << " tiles=" << plan.tiles
+              << " halo=" << (halo ? halo->x : -1) << "," << (halo ? halo->y : -1) << std::endl;
+    for (const auto& node : graph.nodes) {
+      if (const auto* blur = std::get_if<fp::GaussianBlur>(&node.primitive)) {
+        std::cerr << "Blur deviation=" << blur->stdDeviationX << "," << blur->stdDeviationY
+                  << std::endl;
+      }
+    }
+  }
   lastExecutionMemory_ = execution.arena.memory();
   lastExecutionMemory_.persistentBuffers = retainedBufferBytes();
   lastExecutionMemory_.tileExecutions = execution.executedTiles;
