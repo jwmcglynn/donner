@@ -438,6 +438,30 @@ TEST_F(GeodeFilterEngineTest, MaximumTablesAndNamedRedefinitionsStayWithinPrefli
   EXPECT_GE(estimated + retainedBefore, engine_->lastExecutionMemory().total());
 }
 
+TEST_F(GeodeFilterEngineTest, ParameterGrowthIsBoundedAfterEarlierExecutions) {
+  using namespace svg::components;
+  FilterGraph graph;
+  filter_primitive::ComponentTransfer transfer;
+  for (auto* function : {&transfer.funcR, &transfer.funcG, &transfer.funcB, &transfer.funcA}) {
+    function->type = filter_primitive::ComponentTransfer::FuncType::Table;
+    function->tableValues.resize(kMaximumFilterTableValues, 0.5);
+  }
+  FilterNode node;
+  node.primitive = transfer;
+  graph.nodes.resize(kMaximumFilterGraphNodes, node);
+  uint64_t work = 0;
+  uint64_t estimated = 0;
+  ASSERT_TRUE(FilterGraphExecutionCost(graph, 16, FilterMemoryModel::GpuAllNodes, work, estimated));
+  std::vector<std::unique_ptr<RefusingTextureAllocator>> retained;
+  for (size_t index = 0; index < 16; ++index) {
+    SCOPED_TRACE(index);
+    const uint64_t before = engine_->retainedBufferBytes();
+    runGraph(graph, "");
+    EXPECT_LE(engine_->lastExecutionMemory().total(), before + estimated);
+    retained.push_back(std::move(allocator_));
+  }
+}
+
 INSTANTIATE_TEST_SUITE_P(EveryActivePath, FilterAllocationRefusal,
                          testing::ValuesIn(AllocationRefusalCases()),
                          [](const testing::TestParamInfo<AllocationRefusalCase>& info) {
