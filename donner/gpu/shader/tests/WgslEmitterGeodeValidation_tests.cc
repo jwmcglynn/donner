@@ -1289,8 +1289,9 @@ TEST(WgslEmitterGeodeValidation, ColorSpaceConvertRunsOnTheDeviceAndMatchesTheCp
 
 void ExpectColorTransferBoundaries(bool resolve) {
   constexpr uint32_t kWidth = programs::kColorTransferSampleCount;
-  constexpr uint32_t kHeight = 16;
-  const float alphas[] = {1.0f, 0.7f, 0.1f, 1.0e-20f};
+  constexpr float alphas[] = {1.0f,        0.7f,        0.1f,        1.0e-20f,    7.0f / 128,
+                              11.0f / 128, 12.0f / 128, 13.0f / 128, 14.0f / 128, 21.0f / 128};
+  constexpr uint32_t kHeight = std::size(alphas) * 4;
   auto pixels = tiny_skia::filter::FloatPixmap::fromSize(kWidth, kHeight);
   ASSERT_THAT(pixels.has_value(), testing::IsTrue());
   for (uint32_t y = 0; y < kHeight; ++y) {
