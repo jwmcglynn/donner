@@ -726,6 +726,7 @@
         "Texture",
         "TextureFormat",
         "TextureSampleType",
+        "TextureUsage",
         "TextureView",
         "TextureViewDimension"
       ]
