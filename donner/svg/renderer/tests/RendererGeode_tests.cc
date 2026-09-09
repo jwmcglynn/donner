@@ -324,9 +324,14 @@ TEST_F(RendererGeodeTest, ObjectBoundingBoxHaloUsesTheExecutedScalingOrder) {
     FilterGraph graph;
     graph.primitiveUnits = PrimitiveUnits::ObjectBoundingBox;
     graph.elementBoundingBox = Box2d({0, 0}, nearAxisShear ? Vector2d(1e7, 1) : Vector2d(1.1, 1.1));
+    FilterNode fill;
+    fill.primitive =
+        filter_primitive::Flood{.floodColor = css::Color(css::RGBA(255, 255, 255, 255))};
+    graph.nodes.push_back(fill);
     FilterNode blur;
-    blur.primitive = filter_primitive::GaussianBlur{.stdDeviationX = 1.9782261838087567,
-                                                    .stdDeviationY = 1.9782261838087567};
+    blur.primitive =
+        filter_primitive::GaussianBlur{.stdDeviationX = nearAxisShear ? 0.5 : 1.9782261838087567,
+                                       .stdDeviationY = nearAxisShear ? 0.0 : 1.9782261838087567};
     graph.nodes.push_back(blur);
     std::shared_ptr<geode::GeodeDevice> referenceDevice = geode::GeodeDevice::CreateHeadless();
     std::shared_ptr<geode::GeodeDevice> tiledDevice = geode::GeodeDevice::CreateHeadless();
@@ -355,6 +360,7 @@ TEST_F(RendererGeodeTest, ObjectBoundingBoxHaloUsesTheExecutedScalingOrder) {
     };
     const auto expected = render(referenceDevice);
     const auto actual = render(tiledDevice);
+    ASSERT_THAT(pixelAt(expected, 32, 32), Rgba(255, 255, 255, 255));
     ASSERT_EQ(referenceDevice->filterEngine().lastExecutionMemory().tileExecutions, 1u);
     ASSERT_GT(tiledDevice->filterEngine().lastExecutionMemory().tileExecutions, 1u);
     editor::tests::CompareBitmapToBitmap(actual, expected, "object_bounds_halo_rounding",
