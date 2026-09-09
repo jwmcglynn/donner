@@ -406,6 +406,34 @@ struct FilterResourceArena {
     return !device_.adapterDevice().submit(std::move(commandBuffer).result()).hasError();
   }
 
+  /// Copies through the runtime into the owning host encoder, preserving order with filter passes.
+  bool copyTexture(const wgpu::Texture& source, const wgpu::Texture& destination,
+                   gpu::Extent2d size, gpu::Origin2d sourceOrigin,
+                   gpu::Origin2d destinationOrigin) {
+    (void)commandEncoder();
+    const gpu::Texture* src = importRuntimeTexture(source);
+    const gpu::Texture* dst = importRuntimeTexture(destination);
+    if (!src || !dst) {
+      return false;
+    }
+    auto encoder = device_.adapterDevice().createCommandEncoder();
+    if (!encoder.hasResult() ||
+        encoder.result()
+            ->copyTextureToTexture(*src, *dst, size, sourceOrigin, destinationOrigin)
+            .hasError()) {
+      return false;
+    }
+    auto commands = encoder.result()->finish();
+    return commands.hasResult() &&
+           !device_.adapterDevice().submit(std::move(commands).result()).hasError();
+  }
+
+  /// A rewritten tile source is a new logical value even though its storage is unchanged.
+  void resetLogicalValues() {
+    colorValues_.clear();
+    retainValues({});
+  }
+
   FilterExecutionMemory memory() const { return {textureBytes, standaloneBufferBytes, 0}; }
 
   wgpu::Buffer createBuffer(const wgpu::Device& device, const wgpu::BufferDescriptor& desc) {
@@ -2336,6 +2364,8 @@ struct FilterGraphExecution {
                     NearZero(deviceFromFilter.data[2], 1e-6)) {}
 
   wgpu::Texture run();
+  wgpu::Texture runNodes();
+  wgpu::Texture runTiled(const FilterTilePlan& plan);
   wgpu::Texture inputFor(const svg::components::FilterNode& node, size_t index) const;
   wgpu::Texture clip(const wgpu::Texture& input, const Box2d& region, bool transformed,
                      bool resolve = false);
@@ -2346,7 +2376,8 @@ struct FilterGraphExecution {
 
   GeodeFilterEngine& engine;
   const svg::components::FilterGraph& graph;
-  const wgpu::Texture& sourceGraphic;
+  wgpu::Texture sourceGraphic;
+  Vector2d tileOrigin = Vector2d::Zero();
   svg::components::FilterExecutionBudget* executionBudget;
   FilterResourceArena arena;
   FilterExecutionCoordinates coordinates;
@@ -2406,6 +2437,87 @@ struct FilterNodeExecution {
   bool clipMergedIntoBlur = false;
 };
 
+FilterTilePlan GeodeFilterEngine::executionPlan(const svg::components::FilterGraph& graph,
+                                                uint32_t width, uint32_t height,
+                                                const Transform2d& deviceFromFilter) const {
+  FilterTilePlan plan{width, height, width, height, width, height, 1};
+  if (graph.empty() || !width || !height || width > 4096 || height > 4096 ||
+      !NearZero(deviceFromFilter.data[1], 1e-6) || !NearZero(deviceFromFilter.data[2], 1e-6)) {
+    return plan;
+  }
+  const bool objectBounds = graph.primitiveUnits == svg::PrimitiveUnits::ObjectBoundingBox;
+  const double scaleX =
+      std::abs(deviceFromFilter.data[0]) *
+      (objectBounds && graph.elementBoundingBox ? graph.elementBoundingBox->width() : 1.0);
+  const double scaleY =
+      std::abs(deviceFromFilter.data[3]) *
+      (objectBounds && graph.elementBoundingBox ? graph.elementBoundingBox->height() : 1.0);
+  double haloX = 0;
+  double haloY = 0;
+  const auto blurHalo = [](double sigma, double scale) {
+    return sigma > 0 ? std::ceil(4 * boundedPositiveFilterPixels(sigma * scale)) + 4 : 0.0;
+  };
+  for (const auto& node : graph.nodes) {
+    const bool local = std::visit(
+        [&](const auto& primitive) {
+          using T = std::decay_t<decltype(primitive)>;
+          if constexpr (std::is_same_v<T, fp::GaussianBlur>) {
+            if (primitive.edgeMode == fp::GaussianBlur::EdgeMode::Wrap) {
+              return false;
+            }
+            haloX += blurHalo(primitive.stdDeviationX, scaleX);
+            haloY += blurHalo(primitive.stdDeviationY, scaleY);
+          } else if constexpr (std::is_same_v<T, fp::Morphology>) {
+            haloX += std::ceil(boundedPositiveFilterPixels(primitive.radiusX * scaleX));
+            haloY += std::ceil(boundedPositiveFilterPixels(primitive.radiusY * scaleY));
+          } else if constexpr (std::is_same_v<T, fp::Offset> || std::is_same_v<T, fp::DropShadow>) {
+            haloX += std::ceil(std::abs(boundedSignedFilterPixels(primitive.dx * scaleX)));
+            haloY += std::ceil(std::abs(boundedSignedFilterPixels(primitive.dy * scaleY)));
+            if constexpr (std::is_same_v<T, fp::DropShadow>) {
+              haloX += blurHalo(primitive.stdDeviationX, scaleX);
+              haloY += blurHalo(primitive.stdDeviationY, scaleY);
+            }
+          } else if constexpr (std::is_same_v<T, fp::ConvolveMatrix>) {
+            if (primitive.edgeMode == fp::ConvolveMatrix::EdgeMode::Wrap || primitive.orderX <= 0 ||
+                primitive.orderY <= 0 || primitive.orderX > 25 || primitive.orderY > 25) {
+              return false;
+            }
+            haloX += primitive.orderX;
+            haloY += primitive.orderY;
+          } else if constexpr (!(std::is_same_v<T, fp::Flood> ||
+                                 std::is_same_v<T, fp::ColorMatrix> ||
+                                 std::is_same_v<T, fp::ComponentTransfer> ||
+                                 std::is_same_v<T, fp::Blend> || std::is_same_v<T, fp::Composite> ||
+                                 std::is_same_v<T, fp::Merge>)) {
+            return false;
+          }
+          return true;
+        },
+        node.primitive);
+    if (!local || !std::isfinite(haloX) || !std::isfinite(haloY)) {
+      return plan;
+    }
+  }
+  const uint32_t tileWidth = std::min(width, maximumTileExtent_);
+  const uint32_t tileHeight = std::min(height, maximumTileExtent_);
+  if ((tileWidth < width && haloX * 2 >= tileWidth) ||
+      (tileHeight < height && haloY * 2 >= tileHeight)) {
+    return plan;
+  }
+  plan.tileWidth = tileWidth;
+  plan.tileHeight = tileHeight;
+  plan.coreWidth = tileWidth == width ? width : tileWidth - 2 * static_cast<uint32_t>(haloX);
+  plan.coreHeight = tileHeight == height ? height : tileHeight - 2 * static_cast<uint32_t>(haloY);
+  plan.tiles = uint64_t{(width + plan.coreWidth - 1) / plan.coreWidth} *
+               ((height + plan.coreHeight - 1) / plan.coreHeight);
+  return plan;
+}
+
+void GeodeFilterEngine::setMaximumTileExtentForTesting(uint32_t extent) {
+  UTILS_RELEASE_ASSERT(extent >= 16 && extent <= 512);
+  maximumTileExtent_ = extent;
+}
+
 uint64_t GeodeFilterEngine::retainedBufferBytes() const {
   std::lock_guard<std::mutex> lock(resourceCache_->mutex);
   return resourceCache_->retainedBytes +
@@ -2441,9 +2553,11 @@ wgpu::Texture FilterGraphExecution::clip(const wgpu::Texture& input, const Box2d
                                      resolve);
   }
   const Box2d pixelAABB = coordinates.deviceFromFilter.transformBox(region);
-  return engine.applySubregionClip(
-      arena, input, Transform2d(), std::floor(pixelAABB.topLeft.x), std::floor(pixelAABB.topLeft.y),
-      std::ceil(pixelAABB.bottomRight.x), std::ceil(pixelAABB.bottomRight.y), resolve);
+  return engine.applySubregionClip(arena, input, Transform2d(),
+                                   std::floor(pixelAABB.topLeft.x) - tileOrigin.x,
+                                   std::floor(pixelAABB.topLeft.y) - tileOrigin.y,
+                                   std::ceil(pixelAABB.bottomRight.x) - tileOrigin.x,
+                                   std::ceil(pixelAABB.bottomRight.y) - tileOrigin.y, resolve);
 }
 
 void FilterGraphExecution::findLastNamedUses() {
@@ -2486,15 +2600,70 @@ void FilterGraphExecution::record(const svg::components::FilterNode& node, const
 
 wgpu::Texture FilterGraphExecution::run() {
   using namespace svg::components;
-  const uint64_t pixelCount = uint64_t{sourceGraphic.getWidth()} * sourceGraphic.getHeight();
-  const bool fitsBudget =
-      executionBudget != nullptr
-          ? executionBudget->consume(graph, pixelCount, FilterMemoryModel::GpuAllNodes,
-                                     engine.retainedBufferBytes())
-          : FilterGraphFitsExecutionBudget(graph, pixelCount, FilterMemoryModel::GpuAllNodes);
-  if (!fitsBudget) {
+  const FilterTilePlan plan = engine.executionPlan(
+      graph, sourceGraphic.getWidth(), sourceGraphic.getHeight(), coordinates.deviceFromFilter);
+  FilterExecutionBudget localBudget;
+  FilterExecutionBudget& budget = executionBudget ? *executionBudget : localBudget;
+  auto reservation = budget.reserve(graph, plan.workPixels(), FilterMemoryModel::GpuAllNodes,
+                                    plan.additionalTextureBytes(), engine.retainedBufferBytes(),
+                                    plan.pixels(), plan.tiles);
+  if (!reservation) {
     return sourceGraphic;
   }
+  const wgpu::Texture result = plan.tiles > 1 ? runTiled(plan) : runNodes();
+  budget.release(*reservation);
+  return result;
+}
+
+wgpu::Texture FilterGraphExecution::runTiled(const FilterTilePlan& plan) {
+  const wgpu::Texture fullSource = sourceGraphic;
+  const wgpu::Texture output = arena.createTexture(
+      {"FilterTiledOutput",
+       {plan.width, plan.height},
+       gpu::TextureFormat::RGBA8Unorm,
+       gpu::TextureUsage::Sampled | gpu::TextureUsage::CopySrc | gpu::TextureUsage::CopyDst});
+  if (!output) {
+    return {};
+  }
+  const wgpu::Texture tileInput =
+      arena.createTexture({"FilterTileInput",
+                           {plan.tileWidth, plan.tileHeight},
+                           gpu::TextureFormat::RGBA8Unorm,
+                           gpu::TextureUsage::Sampled | gpu::TextureUsage::CopyDst});
+  if (!tileInput) {
+    return {};
+  }
+  const uint32_t haloX = (plan.tileWidth - plan.coreWidth) / 2;
+  const uint32_t haloY = (plan.tileHeight - plan.coreHeight) / 2;
+  for (uint32_t y = 0; y < plan.height; y += plan.coreHeight) {
+    for (uint32_t x = 0; x < plan.width; x += plan.coreWidth) {
+      const uint32_t originX = std::min(x > haloX ? x - haloX : 0, plan.width - plan.tileWidth);
+      const uint32_t originY = std::min(y > haloY ? y - haloY : 0, plan.height - plan.tileHeight);
+      if (!arena.copyTexture(fullSource, tileInput, {plan.tileWidth, plan.tileHeight},
+                             {originX, originY}, {})) {
+        return {};
+      }
+      arena.resetLogicalValues();
+      sourceGraphic = currentBuffer = tileInput;
+      sourceAlpha.reset();
+      namedBuffers.clear();
+      coordinates.namedSubregions.clear();
+      coordinates.previousOutputSubregion = coordinates.filterRegion;
+      tileOrigin = Vector2d(originX, originY);
+      const wgpu::Texture result = runNodes();
+      if (!result || !arena.copyTexture(result, output,
+                                        {std::min(plan.coreWidth, plan.width - x),
+                                         std::min(plan.coreHeight, plan.height - y)},
+                                        {x - originX, y - originY}, {x, y})) {
+        return {};
+      }
+    }
+  }
+  return output;
+}
+
+wgpu::Texture FilterGraphExecution::runNodes() {
+  using namespace svg::components;
   if (graphUsesStandardInput(graph, FilterStandardInput::SourceAlpha)) {
     sourceAlpha = engine.applySourceAlpha(arena, sourceGraphic);
     if (!*sourceAlpha) {
@@ -2566,7 +2735,7 @@ std::optional<Box2d> FilterNodeExecution::blurClip(double sx, double sy) const {
       })) {
     return std::nullopt;
   }
-  return rounded;
+  return Box2d(rounded.topLeft - execution.tileOrigin, rounded.bottomRight - execution.tileOrigin);
 }
 
 wgpu::Texture FilterNodeExecution::apply(const fp::GaussianBlur& primitive) {

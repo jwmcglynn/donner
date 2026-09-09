@@ -661,11 +661,20 @@ enum class FilterMemoryModel : std::uint8_t {
  */
 inline bool FilterGraphExecutionCost(const FilterGraph& graph, std::uint64_t pixelCount,
                                      FilterMemoryModel memoryModel, std::uint64_t& workUnitsOut,
-                                     std::uint64_t& intermediateBytesOut) {
+                                     std::uint64_t& intermediateBytesOut,
+                                     std::uint64_t memoryPixels = UINT64_MAX,
+                                     std::uint64_t executions = 1) {
   if (pixelCount > kMaximumFilterSurfacePixels || graph.nodes.size() > kMaximumFilterGraphNodes) {
     return false;
   }
 
+  if (memoryPixels == UINT64_MAX) {
+    memoryPixels = pixelCount;
+  }
+  if (memoryPixels > kMaximumFilterSurfacePixels || executions == 0 ||
+      executions > kMaximumFilterSurfacePixels) {
+    return false;
+  }
   std::uint64_t workUnits = 0;
   for (const FilterNode& node : graph.nodes) {
     // Every executed node performs its primitive pass plus a mandatory subregion clip. Default
@@ -798,19 +807,21 @@ inline bool FilterGraphExecutionCost(const FilterGraph& graph, std::uint64_t pix
       return false;
     }
     const std::uint64_t bytesPerPixel = layout.floatTextures * 16 + (graph.empty() ? 0 : 4);
-    const std::uint64_t parameters = GpuFilterParameterAllocationBound(layout.uniformBytes) +
-                                     GpuFilterParameterAllocationBound(layout.runtimeUniformBytes) +
-                                     layout.standaloneBufferBytes + kGpuFilterTransferTableBytes;
+    const std::uint64_t parameters =
+        GpuFilterParameterAllocationBound(layout.uniformBytes * executions) +
+        GpuFilterParameterAllocationBound(layout.runtimeUniformBytes * executions) +
+        layout.standaloneBufferBytes * executions + kGpuFilterTransferTableBytes;
+    const uint64_t imageBytes = layout.imageBytes * executions;
     if (parameters > kMaximumFilterIntermediateBytes ||
-        layout.imageBytes > kMaximumFilterIntermediateBytes - parameters ||
+        imageBytes > kMaximumFilterIntermediateBytes - parameters ||
         (bytesPerPixel &&
-         pixelCount >
-             (kMaximumFilterIntermediateBytes - parameters - layout.imageBytes) / bytesPerPixel)) {
+         memoryPixels >
+             (kMaximumFilterIntermediateBytes - parameters - imageBytes) / bytesPerPixel)) {
       return false;
     }
     workUnitsOut = workUnits;
     intermediateBytesOut =
-        pixelCount == 0 ? 0 : pixelCount * bytesPerPixel + layout.imageBytes + parameters;
+        memoryPixels == 0 ? 0 : memoryPixels * bytesPerPixel + imageBytes + parameters;
     return true;
   }
   constexpr std::uint64_t bytesPerPixel = 16;
@@ -896,14 +907,16 @@ public:
    */
   std::optional<Reservation> reserve(const FilterGraph& graph, std::uint64_t pixelCount,
                                      FilterMemoryModel memoryModel, std::uint64_t captureBytes,
-                                     std::uint64_t retainedGpuBufferBytes = 0) {
+                                     std::uint64_t retainedGpuBufferBytes = 0,
+                                     std::uint64_t memoryPixels = UINT64_MAX,
+                                     std::uint64_t executions = 1) {
     std::uint64_t graphWorkUnits = 0;
     std::uint64_t graphIntermediateBytes = 0;
     if (rejected_) {
       return std::nullopt;
     }
     if (!FilterGraphExecutionCost(graph, pixelCount, memoryModel, graphWorkUnits,
-                                  graphIntermediateBytes)) {
+                                  graphIntermediateBytes, memoryPixels, executions)) {
       rejectionReason_ = RejectionReason::InvalidGraph;
       rejected_ = true;
       return std::nullopt;

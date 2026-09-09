@@ -21,6 +21,7 @@
 #include "donner/base/Transform.h"
 #include "donner/base/Vector2.h"
 #include "donner/css/Color.h"
+#include "donner/editor/tests/BitmapGoldenCompare.h"
 #include "donner/svg/components/filter/FilterGraph.h"
 #include "donner/svg/parser/SVGParser.h"
 #include "donner/svg/properties/PaintServer.h"
@@ -31,6 +32,7 @@
 #include "donner/svg/renderer/StrokeParams.h"
 #include "donner/svg/renderer/geode/GeodeCheckerboardPipeline.h"
 #include "donner/svg/renderer/geode/GeodeDevice.h"
+#include "donner/svg/renderer/geode/GeodeFilterEngine.h"
 #include "donner/svg/renderer/geode/GeodeGpuContext.h"
 #include "donner/svg/renderer/geode/GeodePathCacheComponent.h"
 #include "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h"
@@ -314,6 +316,50 @@ protected:
 };
 
 // ----------------------------------------------------------------------------
+
+TEST_F(RendererGeodeTest, FilterTilesPreservePixelsAcrossSamplingAndClipBoundaries) {
+  const std::array<const char*, 7> graphs = {
+      R"(<feGaussianBlur stdDeviation="0.7 1.2"/>)",
+      R"(<feGaussianBlur stdDeviation="3.4 2.3"/>)",
+      R"(<feMorphology operator="dilate" radius="4 3"/><feOffset dx="-1.3" dy="2.7"/>)",
+      R"(<feGaussianBlur stdDeviation="1.1" result="blurred"/>
+          <feComposite in="SourceGraphic" in2="blurred" operator="arithmetic" k2="0.4" k3="0.6"/>)",
+      R"(<feColorMatrix type="saturate" values="0.7" result="color"/>
+          <feOffset dx="3.3" dy="-2.2" x="5.2" y="4.1" width="52.4" height="45.3"/>
+          <feMerge color-interpolation-filters="sRGB"><feMergeNode/><feMergeNode in="color"/></feMerge>)",
+      R"(<feDropShadow dx="2" dy="-1" stdDeviation="1.2" flood-opacity="0.7"/>)",
+      R"(<feConvolveMatrix order="3" kernelMatrix="0 1 0 1 4 1 0 1 0" divisor="8" edgeMode="duplicate"/>)",
+  };
+  auto referenceDevice = geode::GeodeDevice::CreateHeadless();
+  auto tiledDevice = geode::GeodeDevice::CreateHeadless();
+  ASSERT_TRUE(referenceDevice);
+  ASSERT_TRUE(tiledDevice);
+  tiledDevice->filterEngine().setMaximumTileExtentForTesting(64);
+  for (size_t index = 0; index < graphs.size(); ++index) {
+    SCOPED_TRACE(index);
+    const std::string source =
+        std::string(R"svg(<svg xmlns="http://www.w3.org/2000/svg"
+        width="141" height="117" viewBox="0 0 100 83"><defs><filter id="f"
+        filterUnits="userSpaceOnUse" x="0" y="0" width="100" height="83">)svg") +
+        graphs[index] +
+        R"svg(</filter></defs><g filter="url(#f)"><rect x="0" y="0" width="30.3" height="83"
+        fill="#3973ad" opacity="0.7"/><rect x="28" y="14" width="65" height="31"
+        fill="#b75d23" opacity="0.4"/><circle cx="70" cy="68" r="14" fill="#31ba55"/></g></svg>)svg";
+    ParseWarningSink warnings;
+    auto referenceDocument = parser::SVGParser::ParseSVG(source, warnings);
+    auto tiledDocument = parser::SVGParser::ParseSVG(source, warnings);
+    ASSERT_TRUE(referenceDocument.hasResult());
+    ASSERT_TRUE(tiledDocument.hasResult());
+    ASSERT_THAT(warnings.warnings(), testing::IsEmpty());
+    RendererGeode reference(referenceDevice);
+    RendererGeode tiled(tiledDevice);
+    reference.draw(referenceDocument.result());
+    tiled.draw(tiledDocument.result());
+    editor::tests::CompareBitmapToBitmap(tiled.takeSnapshot(), reference.takeSnapshot(),
+                                         "filter_tile_boundaries_" + std::to_string(index),
+                                         editor::tests::PixelmatchIdentityParams());
+  }
+}
 
 TEST_F(RendererGeodeTest, SettledFilterFramesReuseParameterScratch) {
   for (const bool replaceOpenFrame : {false, true}) {

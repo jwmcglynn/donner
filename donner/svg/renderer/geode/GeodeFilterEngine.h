@@ -91,6 +91,22 @@ public:
                                               const gpu::TextureDescriptor& desc) = 0;
 };
 
+/// Exact-resolution tile layout with overlapping sampling halos.
+struct FilterTilePlan {
+  uint32_t width = 0;       //!< Full source/output width.
+  uint32_t height = 0;      //!< Full source/output height.
+  uint32_t tileWidth = 0;   //!< Fixed working width, including halos.
+  uint32_t tileHeight = 0;  //!< Fixed working height, including halos.
+  uint32_t coreWidth = 0;   //!< Non-overlapping output step.
+  uint32_t coreHeight = 0;  //!< Non-overlapping output step.
+  uint64_t tiles = 1;       //!< Number of complete graph executions.
+  uint64_t pixels() const { return uint64_t{tileWidth} * tileHeight; }
+  uint64_t workPixels() const { return pixels() * tiles; }
+  uint64_t additionalTextureBytes() const {
+    return tiles > 1 ? (uint64_t{width} * height + pixels()) * 4 : 0;
+  }
+};
+
 /// GPU allocation bytes retained by an execution, excluding the caller's source/capture.
 struct FilterExecutionMemory {
   uint64_t textures = 0;           //!< Texture descriptors, including dead reusable scratch.
@@ -196,6 +212,16 @@ public:
 
   /// Current parameter/table allocation bytes, including buffers awaiting frame completion.
   uint64_t retainedBufferBytes() const;
+
+  /// Plans bounded working textures without changing sample coordinates or resolution.
+  /// @param graph Graph to execute. @param width Source width. @param height Source height.
+  /// @param deviceFromFilter Original filter-to-device transform.
+  FilterTilePlan executionPlan(const svg::components::FilterGraph& graph, uint32_t width,
+                               uint32_t height, const Transform2d& deviceFromFilter) const;
+
+  /// Lower the working extent for deterministic tile-boundary tests.
+  /// @param extent Maximum dimension, between 16 and 512 pixels.
+  void setMaximumTileExtentForTesting(uint32_t extent);
 
   /// Observed allocation footprint of the most recent execution; does not own resources.
   FilterExecutionMemory lastExecutionMemory() const { return lastExecutionMemory_; }
@@ -539,6 +565,7 @@ private:
   /// identities are not stable cache keys.
   std::unique_ptr<FilterResourceCache> resourceCache_;
   FilterExecutionMemory lastExecutionMemory_;
+  uint32_t maximumTileExtent_ = 512;
 };
 
 }  // namespace donner::geode

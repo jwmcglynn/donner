@@ -462,6 +462,23 @@ TEST_F(GeodeFilterEngineTest, ParameterGrowthIsBoundedAfterEarlierExecutions) {
   }
 }
 
+TEST_F(GeodeFilterEngineTest, Dpr2PlanChargesAllTileWorkUnderTheWasmMemoryCap) {
+  using namespace svg::components;
+  auto graph = MakeGraph(true);
+  const auto plan = engine_->executionPlan(graph, 2000, 1600, Transform2d::Scale(2));
+  ASSERT_GT(plan.tiles, 1u);
+  EXPECT_LE(plan.tileWidth, 512u);
+  EXPECT_LE(plan.tileHeight, 512u);
+  EXPECT_GE(plan.workPixels(), 2000u * 1600u);
+  uint64_t work = 0;
+  uint64_t bytes = 0;
+  ASSERT_TRUE(FilterGraphExecutionCost(graph, plan.workPixels(), FilterMemoryModel::GpuAllNodes,
+                                       work, bytes, plan.pixels(), plan.tiles));
+  EXPECT_LT(bytes + plan.additionalTextureBytes() + 2000u * 1600u * 4, 128u * 1024u * 1024u);
+  graph.nodes[0].primitive = filter_primitive::Tile{};
+  EXPECT_EQ(engine_->executionPlan(graph, 2000, 1600, Transform2d()).tiles, 1u);
+}
+
 INSTANTIATE_TEST_SUITE_P(EveryActivePath, FilterAllocationRefusal,
                          testing::ValuesIn(AllocationRefusalCases()),
                          [](const testing::TestParamInfo<AllocationRefusalCase>& info) {
