@@ -18,6 +18,15 @@ filegroup(
 )
 
 donner_cc_test(
+    name = "pixel_format_utils_tests",
+    srcs = ["PixelFormatUtils_tests.cc"],
+    deps = [
+        "//donner/svg/renderer:pixel_format_utils",
+        "@com_google_gtest//:gtest_main",
+    ],
+)
+
+donner_cc_test(
     name = "renderer_image_io_tests",
     srcs = ["RendererImageIO_tests.cc"],
     deps = [
@@ -184,7 +193,9 @@ donner_cc_test(
     ],
     deps = [
         ":image_comparison_test_fixture",
+        "//donner/base",
         "//donner/base:base_test_utils",
+        "//donner/svg/renderer:renderer_image_io",
         "@com_google_gtest//:gtest_main",
     ],
 )
