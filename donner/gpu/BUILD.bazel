@@ -11,10 +11,20 @@ load("//build_defs:package.bzl", "donner_package")
 # Geode path until each family is migrated.
 
 donner_cc_library(
+    name = "descriptors",
+    srcs = ["Descriptors.cc"],
+    hdrs = [
+        "Descriptors.h",
+        "Handles.h",
+    ],
+    visibility = donner_internal_visibility(),
+    deps = ["//donner/base"],
+)
+
+donner_cc_library(
     name = "gpu",
     srcs = [
         "CommandEncoder.cc",
-        "Descriptors.cc",
         "Device.cc",
         "GpuError.cc",
     ],
@@ -22,15 +32,14 @@ donner_cc_library(
         "CheckedArithmetic.h",
         "CommandEncoder.h",
         "Commands.h",
-        "Descriptors.h",
         "Device.h",
         "GpuError.h",
         "GpuLimits.h",
         "GpuResult.h",
-        "Handles.h",
     ],
     visibility = donner_internal_visibility(),
     deps = [
+        ":descriptors",
         "//donner/base",
     ],
 )
