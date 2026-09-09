@@ -1792,6 +1792,20 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
                 << " retained=" << surfaceBudget->bytes() << " count=" << surfaceBudget->surfaces()
                 << " filterRetained=" << filterExecutionBudget->retainedBytes()
                 << " filterActive=" << filterExecutionBudget->activeGpuReservations() << std::endl;
+      if (!filterStack.empty()) {
+        const auto& frame = filterStack.back();
+        std::cerr << "Filter transform=" << frame.deviceFromFilter.data[0] << ","
+                  << frame.deviceFromFilter.data[1] << "," << frame.deviceFromFilter.data[2] << ","
+                  << frame.deviceFromFilter.data[3] << " nodes=" << frame.filterGraph.nodes.size()
+                  << " local=" << frame.transformedCaptureReserved << std::endl;
+        for (const auto& node : frame.filterGraph.nodes) {
+          if (const auto* blur =
+                  std::get_if<components::filter_primitive::GaussianBlur>(&node.primitive)) {
+            std::cerr << "Blur deviation=" << blur->stdDeviationX << "," << blur->stdDeviationY
+                      << std::endl;
+          }
+        }
+      }
       return gpu::Texture{};
     }
     return texturePool->acquire(desc);
