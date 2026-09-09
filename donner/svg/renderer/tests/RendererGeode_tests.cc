@@ -330,8 +330,8 @@ TEST_F(RendererGeodeTest, FilterTilesPreservePixelsAcrossSamplingAndClipBoundari
       R"(<feDropShadow dx="2" dy="-1" stdDeviation="1.2" flood-opacity="0.7"/>)",
       R"(<feConvolveMatrix order="3" kernelMatrix="0 1 0 1 4 1 0 1 0" divisor="8" edgeMode="duplicate"/>)",
   };
-  auto referenceDevice = geode::GeodeDevice::CreateHeadless();
-  auto tiledDevice = geode::GeodeDevice::CreateHeadless();
+  std::shared_ptr<geode::GeodeDevice> referenceDevice = geode::GeodeDevice::CreateHeadless();
+  std::shared_ptr<geode::GeodeDevice> tiledDevice = geode::GeodeDevice::CreateHeadless();
   ASSERT_TRUE(referenceDevice);
   ASSERT_TRUE(tiledDevice);
   tiledDevice->filterEngine().setMaximumTileExtentForTesting(64);
