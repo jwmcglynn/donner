@@ -153,6 +153,7 @@ donner_cc_test(
         "tests/IrSerialization_tests.cc",
         "tests/MathPrimitiveCoverageModule.h",
         "tests/MathPrimitives_tests.cc",
+        "tests/ModuleInterface_tests.cc",
         "tests/MslEmitter_tests.cc",
         "tests/ReductionCoverageModule.h",
         "tests/ShaderGoldenUtils.h",
@@ -187,6 +188,7 @@ donner_cc_test(
         "tests/testdata/subregion_clip.wgsl",
     ],
     deps = [
+        ":module_interface",
         ":msl_emitter",
         ":programs",
         ":shader",
