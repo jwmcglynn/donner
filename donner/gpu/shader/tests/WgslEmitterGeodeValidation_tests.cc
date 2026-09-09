@@ -986,9 +986,11 @@ TEST(WgslEmitterGeodeValidation, OffsetRunsOnTheDeviceAndMatchesTheCpuPath) {
     ASSERT_THAT(texels, testing::SizeIs(size_t{kOffsetExtent} * kOffsetExtent * 4u))
         << "dispatch failed for shift (" << shift.dx << ", " << shift.dy << ")";
     SCOPED_TRACE(testing::Message() << "shift (" << shift.dx << ", " << shift.dy << ")");
-    const svg::RendererBitmap actual{Vector2i(kOffsetExtent, kOffsetExtent), texels};
+    const svg::RendererBitmap actual{Vector2i(kOffsetExtent, kOffsetExtent), texels,
+                                     size_t{kOffsetExtent} * 4};
     const svg::RendererBitmap expected{Vector2i(kOffsetExtent, kOffsetExtent),
-                                       OffsetExpectedTexels(shift.dx, shift.dy)};
+                                       OffsetExpectedTexels(shift.dx, shift.dy),
+                                       size_t{kOffsetExtent} * 4};
     editor::tests::CompareBitmapToBitmap(actual, expected,
                                          "offset_case_" + std::to_string(caseIndex++),
                                          editor::tests::PixelmatchIdentityParams());
