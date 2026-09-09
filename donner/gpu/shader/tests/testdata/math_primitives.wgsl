@@ -4,7 +4,13 @@
 @group(0) @binding(1) var<storage, read> values: array<f32>;
 
 fn round_half_away_from_zero(x: f32) -> f32 {
-  return (sign(x) * floor((abs(x) + 0.5f)));
+  let magnitude = abs(x);
+  let integral = floor(magnitude);
+  let direction = sign(x);
+  if (((magnitude - integral) >= 0.5f)) {
+    return (direction * (integral + 1f));
+  }
+  return (direction * integral);
 }
 
 @compute @workgroup_size(8, 1, 1)
