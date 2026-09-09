@@ -171,6 +171,7 @@ public:
   }
 
   /// Tests additional capacity without changing counters or latching a rejection.
+  /// @param bytes Additional allocation bytes. @param surfaces Additional texture count.
   [[nodiscard]] bool canReserveBytes(std::uint64_t bytes, std::size_t surfaces) const {
     return !rejected_ && bytes_ <= limits_.bytes && bytes <= limits_.bytes - bytes_ &&
            surfaces_ <= limits_.surfaces && surfaces <= limits_.surfaces - surfaces_;

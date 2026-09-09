@@ -317,6 +317,62 @@ protected:
 
 // ----------------------------------------------------------------------------
 
+TEST_F(RendererGeodeTest, NestedParameterGrowthPreservesOuterStripAdmission) {
+  using namespace components;
+  constexpr uint32_t kWidth = 1024;
+  constexpr uint32_t kHeight = 768;
+  std::shared_ptr<geode::GeodeDevice> device = geode::GeodeDevice::CreateHeadless();
+  ASSERT_TRUE(device);
+  RendererGeode renderer(device);
+  RenderViewport viewport;
+  viewport.size = Vector2d(kWidth, kHeight);
+  renderer.beginFrame(viewport);
+  FilterGraph outer;
+  FilterNode blur;
+  blur.primitive = filter_primitive::GaussianBlur{
+      .stdDeviationX = 96,
+      .stdDeviationY = 96,
+      .edgeMode = filter_primitive::GaussianBlur::EdgeMode::Duplicate};
+  outer.nodes.push_back(blur);
+  FilterGraph inner;
+  filter_primitive::ComponentTransfer transfer;
+  transfer.funcR.type = transfer.funcG.type = transfer.funcB.type =
+      filter_primitive::ComponentTransfer::FuncType::Table;
+  transfer.funcR.tableValues.resize(kMaximumFilterTableValues, 1.0);
+  transfer.funcG.tableValues.resize(kMaximumFilterTableValues, 0.0);
+  transfer.funcB.tableValues.resize(kMaximumFilterTableValues, 0.0);
+  FilterNode color;
+  color.primitive = transfer;
+  inner.nodes.resize(kMaximumFilterGraphNodes, color);
+  const Box2d region({0, 0}, {kWidth, kHeight});
+  const auto admitted = device->filterEngine().executionPlan(outer, kWidth, kHeight, Transform2d());
+  ASSERT_GT(admitted.tiles, 1u);
+  renderer.pushFilterLayer(outer, region);
+  const uint64_t before = device->filterEngine().retainedBufferBytes();
+  renderer.pushFilterLayer(inner, region);
+  renderer.setPaint(solidFill(css::RGBA(255, 255, 255, 255)));
+  renderer.drawRect(region, StrokeParams{});
+  renderer.popFilterLayer();
+  ASSERT_GT(device->filterEngine().retainedBufferBytes(), before);
+  const auto replanned =
+      device->filterEngine().executionPlan(outer, kWidth, kHeight, Transform2d());
+  EXPECT_EQ(replanned.tileWidth, admitted.tileWidth);
+  EXPECT_EQ(replanned.tileHeight, admitted.tileHeight);
+  EXPECT_EQ(replanned.tiles, admitted.tiles);
+  renderer.popFilterLayer();
+  EXPECT_EQ(device->filterEngine().lastExecutionMemory().tileExecutions, admitted.tiles);
+  renderer.endFrame();
+  EXPECT_FALSE(renderer.resourceStats().filterBudgetRejected);
+  EXPECT_FALSE(renderer.resourceStats().surfaceBudgetRejected);
+  RendererBitmap expected{Vector2i(kWidth, kHeight), std::vector<uint8_t>(kWidth * kHeight * 4),
+                          kWidth * 4};
+  for (size_t offset = 0; offset < expected.pixels.size(); offset += 4) {
+    expected.pixels[offset] = expected.pixels[offset + 3] = 255;
+  }
+  editor::tests::CompareBitmapToBitmap(renderer.takeSnapshot(), expected, "nested_parameter_growth",
+                                       editor::tests::PixelmatchIdentityParams());
+}
+
 TEST_F(RendererGeodeTest, LargeBlurStripTilesMatchUntiledPixels) {
   const std::string source = R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="768" height="640">
     <defs><filter id="f" filterUnits="userSpaceOnUse" x="0" y="0" width="768" height="640">
