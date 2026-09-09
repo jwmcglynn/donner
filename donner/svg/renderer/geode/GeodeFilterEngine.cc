@@ -430,6 +430,8 @@ struct FilterResourceArena {
     return !device_.adapterDevice().submit(std::move(commandBuffer).result()).hasError();
   }
 
+  FilterExecutionMemory memory() const { return {textureBytes, standaloneBufferBytes, 0}; }
+
   wgpu::Buffer createBuffer(const wgpu::Device& device, const wgpu::BufferDescriptor& desc) {
     ScopedWgpuHandle<wgpu::Buffer> buffer(device.createBuffer(desc));
     if (!buffer) {
@@ -2442,8 +2444,8 @@ wgpu::Texture GeodeFilterEngine::execute(const svg::components::FilterGraph& gra
   FilterGraphExecution execution(*this, graph, sourceGraphic, filterRegion, deviceFromFilter,
                                  textureAllocator, commandEncoder, executionBudget);
   const wgpu::Texture output = execution.run();
-  lastExecutionMemory_ = {execution.arena.textureBytes, execution.arena.standaloneBufferBytes,
-                          retainedBufferBytes()};
+  lastExecutionMemory_ = execution.arena.memory();
+  lastExecutionMemory_.persistentBuffers = retainedBufferBytes();
   return output;
 }
 
