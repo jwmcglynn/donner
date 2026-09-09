@@ -17,7 +17,7 @@ namespace donner::gpu::tests {
 /// Runs the shared float-storage module and checks all four returned float values exactly.
 /// @param device Native device with bounded wait/readback support.
 /// @param shaderDescriptor Backend-emitted module with the shared cs_main entry point.
-/// @param readback Reads the submitted buffer through the backend's host mapping API.
+/// @param readbackBuffer Reads the submitted buffer through the backend's host mapping API.
 template <typename DeviceType, typename Readback>
 void CheckFloatTextureStorage(DeviceType& device, const ShaderModuleDescriptor& shaderDescriptor,
                               Readback readbackBuffer) {
