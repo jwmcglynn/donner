@@ -18,6 +18,8 @@ namespace donner::gpu::shader::programs {
  * the whole primitive a pixel away from the reference. The rounding is the shared recipe rather
  * than a composition written here.
  *
+ * Callers provide finite pixel shifts in [-4096, 4096], matching the filter execution bounds.
+ *
  * Source texels outside the sampled texture produce transparent black. The specification defines
  * no edge behaviour for this primitive, so there is no mode to select.
  *

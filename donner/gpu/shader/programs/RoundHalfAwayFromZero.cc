@@ -19,10 +19,14 @@ ShaderStatus AddRoundHalfAwayFromZero(ModuleBuilder& builder) {
   FunctionBuilder fn = std::move(rounder).result();
 
   const IrExpr x = e(fn.ref("x"));
-  const IrExpr magnitude = e(CallBuiltin(BuiltinFn::Abs, {x}));
-  const IrExpr shifted = e(Add(magnitude, LiteralF32(0.5f)));
-  const IrExpr truncated = e(CallBuiltin(BuiltinFn::Floor, {shifted}));
-  e.ok(fn.returnValue(e(Mul(e(CallBuiltin(BuiltinFn::Sign, {x})), truncated))));
+  const IrExpr magnitude = e(fn.addLet("magnitude", e(CallBuiltin(BuiltinFn::Abs, {x}))));
+  const IrExpr integral = e(fn.addLet("integral", e(CallBuiltin(BuiltinFn::Floor, {magnitude}))));
+  const IrExpr sign = e(CallBuiltin(BuiltinFn::Sign, {x}));
+  // Adding 0.5 first can round an input immediately below a half to the next integer.
+  e.ok(fn.beginIf(e(Ge(e(Sub(magnitude, integral)), LiteralF32(0.5f)))));
+  e.ok(fn.returnValue(e(Mul(sign, e(Add(integral, LiteralF32(1.0f)))))));
+  e.ok(fn.endIf());
+  e.ok(fn.returnValue(e(Mul(sign, integral))));
   e.ok(fn.finish());
 
   if (e.error) {

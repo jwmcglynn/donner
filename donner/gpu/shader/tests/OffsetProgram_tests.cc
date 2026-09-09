@@ -93,9 +93,9 @@ TEST(OffsetProgramTests, WgslRoundsHalvesAwayFromZeroRatherThanToEven) {
 
   // The recipe is declared once and called twice. WGSL's own round() is round-half-to-even, so
   // its appearance anywhere in this program would be the rounding rule silently changing.
-  EXPECT_THAT(wgsl, HasSubstr("fn round_half_away_from_zero(x: f32) -> f32 {\n"
-                              "  return (sign(x) * floor((abs(x) + 0.5f)));\n"
-                              "}"));
+  EXPECT_THAT(wgsl, HasSubstr("fn round_half_away_from_zero(x: f32) -> f32"));
+  EXPECT_THAT(wgsl, HasSubstr("if (((magnitude - integral) >= 0.5f))"));
+  EXPECT_THAT(wgsl, HasSubstr("return (sign(x) * integral);"));
   EXPECT_THAT(wgsl, HasSubstr("round_half_away_from_zero(params.dx)"));
   EXPECT_THAT(wgsl, HasSubstr("round_half_away_from_zero(params.dy)"));
   EXPECT_THAT(wgsl, testing::Not(HasSubstr("round(")));

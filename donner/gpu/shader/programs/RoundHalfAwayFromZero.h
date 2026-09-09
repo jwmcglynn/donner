@@ -3,9 +3,8 @@
 /// The round-half-away-from-zero recipe, as a function any IR program can declare.
 ///
 /// WGSL's `round` is round-half-to-even, so it disagrees with the CPU filter path's `std::round`
-/// on every exact half. `sign(x) * floor(abs(x) + 0.5)` is the composition that agrees, and it is
-/// declared here once so a program that needs it calls the same three opcodes in the same order
-/// rather than re-deriving the rule.
+/// on exact half values. Comparing the fractional magnitude with 0.5 avoids rounding the
+/// preceding representable value upward while computing the rounding decision.
 
 #include <string_view>
 

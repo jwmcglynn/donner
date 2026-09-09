@@ -64,7 +64,7 @@ TEST(MathPrimitiveTests, EmitsDeterministically) {
 TEST(MathPrimitiveTests, WgslSpellsScalarAndVectorFormsOfEachOpcode) {
   const std::string wgsl = EmitMathPrimitiveWgsl();
 
-  EXPECT_THAT(wgsl, HasSubstr("return (sign(x) * floor((abs(x) + 0.5f)));"));
+  EXPECT_THAT(wgsl, HasSubstr("if (((magnitude - integral) >= 0.5f))"));
   EXPECT_THAT(wgsl, HasSubstr("let axisSigns = sign(axes);"));
   EXPECT_THAT(wgsl, HasSubstr("let axisFloors = floor(axes);"));
   EXPECT_THAT(wgsl, HasSubstr("let linearized = pow(((straight + 0.055f) / 1.055f), 2.4f);"));
@@ -77,7 +77,7 @@ TEST(MathPrimitiveTests, MslSpellsScalarAndVectorFormsOfEachOpcode) {
 
   // MSL names all three the same as WGSL, so the emitter routes them through the shared name
   // table rather than a special case; this is what fails if one gains a wrong special case.
-  EXPECT_THAT(msl, HasSubstr("return (sign(x) * floor((abs(x) + 0.5f)));"));
+  EXPECT_THAT(msl, HasSubstr("if (((magnitude - integral) >= 0.5f))"));
   EXPECT_THAT(msl, HasSubstr("float2 axisSigns = sign(axes);"));
   EXPECT_THAT(msl, HasSubstr("float2 axisFloors = floor(axes);"));
   EXPECT_THAT(msl, HasSubstr("float linearized = pow(((straight + 0.055f) / 1.055f), 2.4f);"));
