@@ -1,15 +1,12 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
-#include <array>
 #include <memory>
 #include <string>
 #include <tuple>
-#include <vector>
 
 #include "donner/base/ParseWarningSink.h"
 #include "donner/editor/tests/BitmapGoldenCompare.h"
-#include "donner/svg/components/filter/FilterGraph.h"
 #include "donner/svg/parser/SVGParser.h"
 #include "donner/svg/renderer/RendererGeode.h"
 #include "donner/svg/renderer/RendererTinySkia.h"
@@ -148,57 +145,28 @@ TEST(FilterChainPrecision, PixelMoversPreserveAFilteredValueAndItsColorSpace) {
 }
 
 TEST(FilterChainPrecision, ImageUploadsRemainDistinctBeforeSubmission) {
+  constexpr const char* kRed =
+      "data:image/"
+      "png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/"
+      "iZk9HQAAAABJRU5ErkJggg==";
+  constexpr const char* kBlue =
+      "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYPj/"
+      "HwADAgH/5ncLrgAAAABJRU5ErkJggg==";
   for (const bool transparentSecond : {false, true}) {
     SCOPED_TRACE(transparentSecond);
-    svg::components::FilterGraph graph;
-    graph.colorInterpolationFilters = svg::ColorInterpolationFilters::SRGB;
-    const auto imageNode = [](std::vector<uint8_t> pixels, const char* name) {
-      svg::components::filter_primitive::Image image;
-      image.imageData = std::make_shared<const std::vector<uint8_t>>(std::move(pixels));
-      image.imageWidth = 1;
-      image.imageHeight = 1;
-      image.imageRendering = svg::ImageRendering::Pixelated;
-      image.preserveAspectRatio = svg::PreserveAspectRatio::None();
-      svg::components::FilterNode node;
-      node.primitive = std::move(image);
-      node.result = RcString(name);
-      return node;
-    };
-    graph.nodes.push_back(imageNode({255, 0, 0, 255}, "red"));
-    if (transparentSecond) {
-      svg::components::FilterNode empty;
-      empty.primitive = svg::components::filter_primitive::Image{};
-      empty.result = RcString("blue");
-      graph.nodes.push_back(empty);
-    } else {
-      graph.nodes.push_back(imageNode({0, 0, 255, 255}, "blue"));
-    }
-    svg::components::FilterNode composite;
-    svg::components::filter_primitive::Composite operation;
-    operation.op = svg::components::filter_primitive::Composite::Operator::Arithmetic;
-    operation.k2 = 0.5;
-    operation.k3 = 0.5;
-    composite.primitive = operation;
-    composite.inputs = {svg::components::FilterInput::Named{RcString("red")},
-                        svg::components::FilterInput::Named{RcString("blue")}};
-    graph.nodes.push_back(composite);
-    svg::RendererGeode gpuRenderer;
-    svg::RendererTinySkia cpuRenderer;
-    for (svg::RendererInterface* renderer :
-         std::array<svg::RendererInterface*, 2>{&gpuRenderer, &cpuRenderer}) {
-      renderer->beginFrame(svg::RenderViewport{.size = Vector2d(13, 11)});
-      renderer->pushFilterLayer(graph, Box2d::FromXYWH(0, 0, 13, 11));
-      renderer->popFilterLayer();
-      renderer->endFrame();
-    }
-    const svg::RendererBitmap actual = gpuRenderer.takeSnapshot();
-    const svg::RendererBitmap expected = cpuRenderer.takeSnapshot();
-    ASSERT_THAT(actual.dimensions, testing::Eq(Vector2i(13, 11)));
-    ASSERT_THAT(expected.dimensions, testing::Eq(actual.dimensions));
-    editor::tests::CompareBitmapToBitmap(
-        actual, expected,
-        transparentSecond ? "image_upload_then_transparent" : "distinct_image_uploads",
-        editor::tests::PixelmatchIdentityParams());
+    const std::string second =
+        transparentSecond
+            ? R"svg(<feImage result="blue"/>)svg"
+            : std::string(R"svg(<feImage href=")svg") + kBlue +
+                  R"svg(" preserveAspectRatio="none" image-rendering="pixelated" result="blue"/>)svg";
+    const std::string images =
+        std::string(R"svg(<feImage href=")svg") + kRed +
+        R"svg(" preserveAspectRatio="none" image-rendering="pixelated" result="red"/>)svg" +
+        second +
+        R"svg(<feComposite in="red" in2="blue" operator="arithmetic" k2="0.5" k3="0.5"
+                 color-interpolation-filters="sRGB"/>)svg";
+    ExpectFilterChainMatches(
+        images, transparentSecond ? "image_upload_then_transparent" : "distinct_image_uploads");
   }
 }
 
