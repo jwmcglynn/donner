@@ -914,6 +914,9 @@
         "wgpuTextureOf",
         "wgpuTextureViewOf"
       ],
+      "wgpuCTypes": [
+        "WGPUCommandEncoder"
+      ],
       "wgpuCppTokens": [
         "BindGroup",
         "BindGroupLayout",

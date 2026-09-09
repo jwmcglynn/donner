@@ -33,6 +33,7 @@
 #include "donner/svg/renderer/geode/GeodeDevice.h"
 #include "donner/svg/renderer/geode/GeodeGpuContext.h"
 #include "donner/svg/renderer/geode/GeodePathCacheComponent.h"
+#include "donner/svg/renderer/geode/GeodeWgpuAdapterDevice.h"
 #include "donner/svg/renderer/tests/RgbaTestMatchers.h"
 #include "donner/svg/resources/ImageResource.h"
 #include "tiny_skia/Pixmap.h"
@@ -313,6 +314,64 @@ protected:
 };
 
 // ----------------------------------------------------------------------------
+
+TEST_F(RendererGeodeTest, OverlappingFramesKeepReplayWithTheirOwner) {
+  const std::shared_ptr<geode::GeodeDevice> device = geode::GeodeDevice::CreateHeadless();
+  ASSERT_THAT(device, testing::NotNull());
+  RendererGeode parent(device);
+  RendererGeode sibling(device);
+  beginFrame(parent);
+  parent.setPaint(solidFill(css::RGBA(255, 0, 0, 255)));
+  parent.drawRect(Box2d({0, 0}, {kViewportSize, kViewportSize}), StrokeParams{});
+  beginFrame(sibling);
+  sibling.setPaint(solidFill(css::RGBA(0, 0, 255, 255)));
+  sibling.drawRect(Box2d({0, 0}, {kViewportSize, kViewportSize}), StrokeParams{});
+  parent.endFrame();
+  const RendererBitmap parentPixels = parent.takeSnapshot();
+  ASSERT_THAT(parentPixels.dimensions, testing::Eq(Vector2i(kViewportSize, kViewportSize)));
+  EXPECT_THAT(pixelAt(parentPixels, 32, 32), Rgba(255, 0, 0, 255));
+  sibling.endFrame();
+  const RendererBitmap siblingPixels = sibling.takeSnapshot();
+  ASSERT_THAT(siblingPixels.dimensions, testing::Eq(parentPixels.dimensions));
+  EXPECT_THAT(pixelAt(siblingPixels, 32, 32), Rgba(0, 0, 255, 255));
+}
+
+TEST_F(RendererGeodeTest, AbandoningOneFramePreservesItsUnsubmittedSibling) {
+  for (const bool destroy : {false, true}) {
+    SCOPED_TRACE(destroy);
+    const std::shared_ptr<geode::GeodeDevice> device = geode::GeodeDevice::CreateHeadless();
+    ASSERT_THAT(device, testing::NotNull());
+    auto parent = std::make_unique<RendererGeode>(device);
+    RendererGeode sibling(device);
+    const auto drawFlood = [](RendererGeode& renderer, css::RGBA color) {
+      components::FilterGraph graph;
+      graph.colorInterpolationFilters = ColorInterpolationFilters::SRGB;
+      components::FilterNode node;
+      node.primitive = components::filter_primitive::Flood{.floodColor = css::Color(color)};
+      graph.nodes.push_back(node);
+      renderer.pushFilterLayer(graph, Box2d({0, 0}, {kViewportSize, kViewportSize}));
+      renderer.popFilterLayer();
+    };
+    beginFrame(*parent);
+    drawFlood(*parent, css::RGBA(255, 0, 0, 255));
+    const uint64_t parentSerial = device->adapterDevice().lastSubmittedSerial();
+    beginFrame(sibling);
+    drawFlood(sibling, css::RGBA(0, 0, 255, 255));
+    const uint64_t siblingSerial = device->adapterDevice().lastSubmittedSerial();
+    ASSERT_THAT(siblingSerial, testing::Gt(parentSerial));
+    if (destroy) {
+      parent.reset();
+    } else {
+      beginFrame(*parent);
+    }
+    ASSERT_THAT(device->adapterDevice().waitForSerial(parentSerial, 2.0), testing::IsTrue());
+    EXPECT_THAT(device->adapterDevice().completedSerial(), testing::Lt(siblingSerial));
+    sibling.endFrame();
+    const RendererBitmap pixels = sibling.takeSnapshot();
+    ASSERT_THAT(pixels.dimensions, testing::Eq(Vector2i(kViewportSize, kViewportSize)));
+    EXPECT_THAT(pixelAt(pixels, 32, 32), Rgba(0, 0, 255, 255));
+  }
+}
 
 /// Smoke test: empty frame should snap to a fully transparent bitmap.
 TEST_F(RendererGeodeTest, EmptyFrameIsTransparent) {
