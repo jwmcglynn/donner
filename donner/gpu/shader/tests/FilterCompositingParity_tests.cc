@@ -1,6 +1,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <memory>
 #include <string>
 #include <tuple>
@@ -96,7 +97,11 @@ TEST(FilterChainPrecision, Dpr2FullViewportCompositingFitsTheExistingMemoryCap) 
   </svg>)svg";
   ParseWarningSink warnings;
   auto gpuDocument = svg::parser::SVGParser::ParseSVG(source, warnings);
-  auto cpuDocument = svg::parser::SVGParser::ParseSVG(source, warnings);
+  std::string reference = source;
+  reference.replace(reference.find("width=\"2000\" height=\"1600\""),
+                    std::string("width=\"2000\" height=\"1600\"").size(),
+                    "width=\"1\" height=\"1\"");
+  auto cpuDocument = svg::parser::SVGParser::ParseSVG(reference, warnings);
   ASSERT_TRUE(gpuDocument.hasResult());
   ASSERT_TRUE(cpuDocument.hasResult());
   ASSERT_THAT(warnings.warnings(), testing::IsEmpty());
@@ -105,9 +110,18 @@ TEST(FilterChainPrecision, Dpr2FullViewportCompositingFitsTheExistingMemoryCap) 
   gpuRenderer.draw(gpuDocument.result());
   cpuRenderer.draw(cpuDocument.result());
   const auto actual = gpuRenderer.takeSnapshot();
-  const auto expected = cpuRenderer.takeSnapshot();
+  const auto referencePixel = cpuRenderer.takeSnapshot();
+  ASSERT_EQ(referencePixel.dimensions, Vector2i(1, 1));
   ASSERT_EQ(actual.dimensions, Vector2i(2000, 1600));
-  ASSERT_EQ(expected.dimensions, actual.dimensions);
+  // Flood-only arithmetic is spatially uniform; construct the full reference from its CPU pixel.
+  svg::RendererBitmap expected;
+  expected.dimensions = actual.dimensions;
+  expected.rowBytes = 2000 * 4;
+  expected.alphaType = referencePixel.alphaType;
+  expected.pixels.resize(expected.rowBytes * 1600);
+  for (size_t offset = 0; offset < expected.pixels.size(); offset += 4) {
+    std::copy_n(referencePixel.pixels.begin(), 4, expected.pixels.begin() + offset);
+  }
   editor::tests::CompareBitmapToBitmap(actual, expected, "dpr2_full_viewport_compositing",
                                        editor::tests::PixelmatchIdentityParams());
 }
