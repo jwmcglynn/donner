@@ -13,6 +13,7 @@
 /// `feDropShadow`, `feImage`, `feTile`. The primitive visitor is exhaustive.
 
 #include <memory>
+#include <optional>
 #include <webgpu/webgpu.hpp>
 
 #include "donner/base/Box.h"
@@ -186,6 +187,9 @@ public:
    *   keep the two-submissions-per-frame shape.
    * @param executionBudget Optional shared per-frame budget. Direct callers may omit it to apply
    *   only the graph-local limit.
+   * @param admittedPlan Optional immutable plan already reserved by the caller. Execution keeps
+   *   this layout even if shared scratch state or planning preferences change. Invalid plans or
+   *   failed execution-time budgets return an empty texture instead of bypassing the filter.
    * @return The filtered output texture (RGBA8Unorm, TextureBinding | CopySrc).
    */
   wgpu::Texture execute(const svg::components::FilterGraph& graph,
@@ -193,7 +197,8 @@ public:
                         const Transform2d& deviceFromFilter,
                         FilterTextureAllocator& textureAllocator,
                         ScopedWgpuHandle<wgpu::CommandEncoder>& commandEncoder,
-                        svg::components::FilterExecutionBudget* executionBudget = nullptr);
+                        svg::components::FilterExecutionBudget* executionBudget = nullptr,
+                        std::optional<FilterTilePlan> admittedPlan = std::nullopt);
 
   /**
    * Begin a new frame for this engine: reset the frame-scoped chunk pass

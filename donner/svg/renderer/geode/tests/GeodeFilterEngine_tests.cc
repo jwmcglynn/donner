@@ -507,6 +507,59 @@ TEST_F(GeodeFilterEngineTest, LargeBlurHalosUseBoundedStripsAtHighDprZoom) {
             128u * 1024u * 1024u);
 }
 
+TEST_F(GeodeFilterEngineTest, InvalidAdmittedPlansFailBeforeAllocation) {
+  using namespace svg::components;
+  source_ = gpu::GetResultOrFail(device_->adapterDevice().createTexture(
+      gpu::TextureDescriptor{"admitted source",
+                             {4, 4},
+                             gpu::TextureFormat::RGBA8Unorm,
+                             gpu::TextureUsage::Sampled | gpu::TextureUsage::CopySrc}));
+  FilterGraph graph;
+  FilterNode blur;
+  blur.primitive = filter_primitive::GaussianBlur{.stdDeviationX = 1, .stdDeviationY = 1};
+  graph.nodes.push_back(blur);
+  const auto valid = engine_->executionPlan(graph, 4, 4, Transform2d());
+  for (int invalid = 0; invalid < 4; ++invalid) {
+    SCOPED_TRACE(invalid);
+    auto plan = valid;
+    if (invalid == 0) {
+      plan.coreWidth = 0;
+    }
+    if (invalid == 1) {
+      plan.width = 5;
+    }
+    if (invalid == 2) {
+      plan.tiles = 0;
+    }
+    if (invalid == 3) {
+      plan.tileWidth = plan.tileHeight = 2;
+      plan.coreWidth = plan.coreHeight = 1;
+      plan.tiles = 16;
+    }
+    RefusingTextureAllocator allocator(device_->adapterDevice(), "");
+    const auto output =
+        engine_->execute(graph, device_->adapterDevice().wgpuTextureOf(source_),
+                         Box2d({0, 0}, {4, 4}), Transform2d(), allocator, encoder_, nullptr, plan);
+    EXPECT_FALSE(output);
+    EXPECT_EQ(allocator.allocations, 0u);
+  }
+}
+
+TEST_F(GeodeFilterEngineTest, FailedAdmittedBudgetDoesNotBypassTheFilter) {
+  using namespace svg::components;
+  const auto graph = MakeGraph(true);
+  const auto plan = engine_->executionPlan(graph, 4, 4, Transform2d());
+  FilterExecutionBudget budget;
+  budget.reject();
+  RefusingTextureAllocator allocator(device_->adapterDevice(), "");
+  const auto output =
+      engine_->execute(graph, device_->adapterDevice().wgpuTextureOf(source_),
+                       Box2d({0, 0}, {4, 4}), Transform2d(), allocator, encoder_, &budget, plan);
+  EXPECT_FALSE(output);
+  EXPECT_EQ(allocator.allocations, 0u);
+  EXPECT_EQ(engine_->lastExecutionMemory().tileExecutions, 0u);
+}
+
 INSTANTIATE_TEST_SUITE_P(EveryActivePath, FilterAllocationRefusal,
                          testing::ValuesIn(AllocationRefusalCases()),
                          [](const testing::TestParamInfo<AllocationRefusalCase>& info) {
