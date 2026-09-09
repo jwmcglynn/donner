@@ -4586,6 +4586,7 @@ struct RendererGeode::Impl : public geode::GeometryDebugSink,
     encoder.reset();
     frameFinishedEncoders.clear();
     discardFrameGpuEncoder();
+    closeFrameGeneration();
 
     if (device && device->device()) {
       // Bounded drain before releasing frame resources; skips (and stays
@@ -4850,9 +4851,6 @@ RendererGeode::~RendererGeode() {
   // `initPipelines`, and the first one destroyed leaves `counters_` dangling for the others.
   if (impl_ && impl_->device && impl_->device->counters() == &impl_->counters) {
     impl_->device->setCounters(nullptr);
-  }
-  if (impl_) {
-    impl_->closeFrameGeneration();
   }
 }
 RendererGeode::RendererGeode(RendererGeode&&) noexcept = default;
